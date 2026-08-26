@@ -258,28 +258,93 @@ the two harnesses demonstrably do not agree on Be. **Do not carry that claim for
 `tests/pyscf/.venv/bin/python`, not the default interpreter. A `pyscf not importable` skip looks
 identical to a pass in the summary line.
 
-##### R4.2 — compare the emitted kernel against the Python residual at identical amplitudes (~M)
+##### R4.2 — diff the residual across the boundary, in five steps
 
-R4.1 already gave the *energy*-level comparison (Python −0.0517702744 vs C++ −0.0139349127 on
-Be). This step goes one level down, to the residual, because an energy difference does not say
-which tensor element is wrong.
+R4.1 gave the *energy*-level comparison (Python −0.0517702744 vs C++ −0.0139349127 on Be). This
+goes one level down: an energy difference does not say which tensor element is wrong.
 
-Take one fixed, non-trivial amplitude set; evaluate the triples residual two ways — through
-`residual_eval.residual_einsum` on the generated Python terms, and through the emitted C++ kernel
-— and diff element-wise. Use the **converged Python amplitudes** from R4.1's Be solve as the
-input, so both sides are evaluated at a point where the correct residual is known to be ~0: any
-non-zero element on the C++ side is then directly the defect, with no solver dynamics in the way.
+**The experiment.** Evaluate the triples residual at the **converged Python amplitudes**, on both
+sides. At that point the correct residual is ~0 by construction, so any non-zero element on the
+C++ side *is* the defect — no solver dynamics, no basin question, no convergence threshold.
 
-`1986d0c` claims these are "BITWISE IDENTICAL across both harnesses at identical inputs". **That
-claim is now suspect and must be re-measured, not inherited** — R3's converged-but-wrong result is
-evidence against it.
+**What already exists, so nothing needs inventing:**
 
-Precedent for the C++ side: `PLANCK_CC_T3_TIME` (`tensor_backend.cpp:2350`) already reaches into
-the residual evaluation behind an env var, and the B5 work used a "fixed-point probe" that
-injected known-correct amplitudes into live C++ state and evaluated once. Reuse that shape.
+| need | have |
+|---|---|
+| converged Be amplitudes from the generated equations | `ccgen_iterate_amps(...)` returns `(e_corr, amps, mf, nocc, nvir)` |
+| one-shot C++ residual, no solver | `evaluate_generated_arbitrary_order_residuals(state, kernels)` — public, `generated_arbitrary_runtime.h:172` |
+| inject amplitudes into C++ state | `seed_arbitrary_order_amplitudes(state, seed)` — validates per-rank dims |
+| Python-side residual at the same point | `residual_eval.residual_einsum` |
 
-*Verify:* either a maximum element-wise difference at machine precision (layers b+c clean, defect
-is elsewhere), or the disagreeing elements localised by index block.
+The B5 investigation built exactly this shape (`PLANCK_CC_FIXTURE_DIR` + `fixture_probe.{cpp,h}`,
+injecting FCI-correct amplitudes and evaluating once) and it **found two coupled defects that way**
+— a chemists/physicist convention error and an invalid ERI permutation set. That probe was
+uncommitted debug and is **no longer in the tree**; this rebuilds it against a public entry point
+rather than a private one.
+
+###### R4.2a — dump converged Be amplitudes AND their tensors from Python (~S)
+
+Run `ccgen_iterate_amps("ccsdt", "Be 0 0 0", "sto-3g", ["singles","doubles","triples"])` under
+`tests/pyscf/.venv/bin/python`. **Started 2026-08-26**, and it converges:
+
+```
+E_corr = -0.0517702744    no=4  nv=6
+t1 (6,4)   t2 (6,6,4,4)   t3 (6,6,6,4,4,4)
+```
+
+matching hand-written C++ to 1.4e-08.
+
+**One gap found while doing it:** `ccgen_iterate_amps` returns
+`(e_corr, amps, mf, nocc, nvir)` — the amplitudes but **not** the `v`/`f` tensors it built
+internally. Those are needed on both sides: `residual_of` cannot be evaluated without them, and
+the C++ side must be fed the *same* integrals or the comparison comes apart for a reason unrelated
+to the kernel. So R4.2a is "export the amplitudes **and the tensors**", which means either a small
+change to that helper or rebuilding the same MO integrals from `mf` in the dump script.
+
+Amplitudes are spin-orbital, `(nvir,)*r + (nocc,)*r`. The C++ side is spatial — a layout the seed
+hook validates per-rank dims against, so a mismatch will be caught loudly rather than silently
+mis-fed. **Expect this to be the fiddly part of R4.2, not the probe.**
+
+*Verify:* the Python residual evaluated at those amplitudes is ~0 (`residual_of`, max element
+< 1e-10). **If it is not, stop** — the fixture is not a fixed point and everything downstream
+measures nothing. This is the vacuity check the ladder cannot skip.
+
+###### R4.2b — an env-gated C++ probe that evaluates once (~M)
+
+`PLANCK_CC_FIXTURE_DIR=<dir>`: load the fixture, `seed_arbitrary_order_amplitudes` it into the
+prepared state, call `evaluate_generated_arbitrary_order_residuals` **once**, dump per-rank
+residuals, exit. No iteration, no DIIS, no denominators.
+
+Keep it out of the normal path: inert when the env var is unset, and it must not change the
+default build's behaviour.
+
+*Verify:* with the probe inert, `ch4_rccsdt_generated_sto3g` still passes exactly as before
+(340 s, same four assertions). A probe that perturbs the thing it measures is worthless.
+
+###### R4.2c — the diff (~S, the answer)
+
+Compare per rank: max absolute element, and its index.
+
+- **All ranks ~0** → the kernel is correct at a correct fixed point, and the defect is in what
+  feeds it (block binding) or how amplitudes move (packing). Go to R4.3/R4.4.
+- **Some rank non-zero** → that rank's kernel is wrong, and the index localises it. Go to R4.3.
+
+*Verify:* a per-rank table with the max element and its index, not a single norm.
+
+###### R4.2d — cross-check against rank 2, which works (~S)
+
+Run the same probe at rank 2 on the same system. Rank 2 converges correctly, so its residual at
+its own converged amplitudes **must** be ~0 through the identical code path.
+
+*Verify:* rank 2 clean. If it is not, the probe itself is wrong and R4.2c's result is void — this
+is the control, and it is cheap.
+
+###### R4.2e — record, then hand to R4.3 (~S)
+
+*Verify:* the finding written down with its numbers, and `1986d0c`'s "BITWISE IDENTICAL"
+claim explicitly resolved — R4.1 already refuted it at the energy level; R4.2 either confirms the
+refutation at the residual level or discovers the residuals *do* agree, which would move the
+defect entirely into binding/packing and is itself a sharp result.
 
 ##### R4.3 — if they disagree, which BLOCK? (~M)
 
