@@ -242,25 +242,76 @@ that left the hand-written tensor solver ungated for its entire life.
 
 #### Steps
 
-##### W4.1 — pin the baseline (~S)
+##### W4.1 — DONE (2026-08-26): baseline pinned, and W4 has a build blocker
 
-Record the current energies for the cases that reach the tensor path, with the kernels production
-emits today.
+Baseline for `ch4_rccsdt_sto3g`, the only case that reaches the tensor path:
 
-Measured while scoping: `python tests/run_regressions.py --suite extended --case ch4_rccsdt_sto3g`
-→ **PASS in 1.00s**. Note the `--suite extended`: a bare `--case` selects nothing, silently
-("no cases selected"), which is its own small trap.
+```
+RHF   Total Energy   -39.7267328271
+CCSDT Energy         -39.8058445095      converged in 24 steps, 0.18 s
+```
 
-*Verify:* baseline energies recorded to the case's own asserted precision, and the command that
-produced them written down.
+Run as `python tests/run_regressions.py --suite extended --case ch4_rccsdt_sto3g` → PASS in
+1.00 s. The `--suite extended` is required; a bare `--case` prints only "no cases selected".
 
-##### W4.2 — regenerate with `--dressing derived` and rebuild (~M)
+**The blocker: this case does not use generated kernels today, and cannot in the current build.**
 
-Kernels are generated at configure time (`CMakeLists.txt:519`). Rebuild with W3.2's flag set.
+Its own assertion says so — the case pins the string `kernels=hand-optimized` — and the run
+confirms it: `Stage-1 RCCSD warm start dimensions: nocc=10 nvirt=8 (kernels=hand-optimized)`,
+with every iteration logging `kernel=native`. It reaches the **tensor backend** (correctly, being
+above the determinant backstop) but the *hand-written* one.
 
-*Verify:* the build succeeds and the generated TU actually changed — diff the emitted file, do
-not assume a flag took effect. A silently-ignored flag would make W4.3 pass vacuously, which is
-the failure mode this ladder keeps hitting.
+Forcing the generated path fails with an actionable error:
+
+```
+$ PLANCK_RCCSDT_BACKEND=optimized ./build/hartree-fock ...ch4_rccsdt_sto3g.hfinp
+[ERR] run_tensor_optimized_rccsdt: the generated rank-3 CCSDT kernel runs only in the
+      arbitrary-order harness, which needs -DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON.
+```
+
+`build/CMakeCache.txt` confirms `PLANCK_CC_ARBITRARY_LOWER_RANKS:BOOL=OFF` (as are
+`PLANCK_CC_UCC` and `PLANCK_CC_DRESS_OPERATORS`).
+
+**Consequence for W4.** The comparison is not "current kernels vs derivation-emitted kernels" on
+one binary. It needs a **reconfigured build** with `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON`, and
+the comparison is then three-way:
+
+| path | reachable today |
+|---|---|
+| hand-written tensor (`kernels=hand-optimized`) | yes — this is the baseline above |
+| generated, undressed (arbitrary-order harness) | needs the reconfigure |
+| generated, **derivation-dressed** (W3.2) | needs the reconfigure **and** W3.2 |
+
+So W4.2's rebuild is not optional plumbing — it is the step that makes W4 possible at all, and it
+must set that option. Worth noting the baseline is the *hand-written* path: a W4 disagreement
+could mean the derivation route is wrong, **or** that generated-undressed already differs from
+hand-written. Establishing the middle row first separates those two, and is cheaper than
+debugging them together.
+
+##### W4.2 — split by W4.1 into two rebuilds, because there are two questions
+
+**W4.2a — reconfigure with `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` and rerun, undressed.**
+
+This establishes the *middle* row of W4.1's table: does the generated, undressed kernel reproduce
+the hand-written one? It needs nothing from W3, so it can be done now, and it is the cheaper
+half.
+
+*Verify:* `ch4_rccsdt_sto3g` under `PLANCK_RCCSDT_BACKEND=optimized` matches the W4.1 baseline
+(CCSDT `-39.8058445095`) to the case's 1e-07 tolerance — and the run logs the generated path
+rather than `kernels=hand-optimized`, positively identified, not inferred.
+
+A disagreement here is a finding about the **generated kernel or the arbitrary-order harness**,
+not about dressing, and it stops the ladder — the derivation route cannot be judged against a
+baseline that already disagrees.
+
+**W4.2b — rebuild again with W3.2's `--dressing derived`.**
+
+*Verify:* the build succeeds, and the emitted TU **actually changed** — diff it, do not assume the
+flag took effect. A silently-ignored flag makes W4.3 pass vacuously, which is the failure mode
+this ladder keeps hitting.
+
+Kernels are generated at configure time (`CMakeLists.txt:519`), so each of these is a
+reconfigure-and-rebuild, not an incremental compile. Budget accordingly.
 
 ##### W4.3 — rerun and compare (~S, the gate)
 
