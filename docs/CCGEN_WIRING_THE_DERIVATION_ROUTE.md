@@ -1,6 +1,10 @@
 # How does the derivation route reach production?
 
-**Scope for in-flight work. W1-W2 landed; W3-W5 open.** Opened by
+**Scope for in-flight work. W1-W2 landed; W4.2a and W4.5 landed 2026-08-26; W3, W4.2b-W4.4 and W5 open.**
+**W4 is no longer blocked** — its blocker was `PLANCK_CC_SPIN_ADAPT=OFF`, not a kernel defect
+(`docs/CCGEN_SPIN_ADAPT_DEFAULT.md`); the flag now defaults ON and the generated undressed kernel
+matches the hand-written baseline to 3e-10. **What blocks the rest of W4 is W3**: `--dressing` is
+not implemented, so there is no derivation-dressed TU to compare against. Opened by
 `docs/CCGEN_TWO_DRESSING_ROUTES.md`, which established that ccgen's *derivation* route (operators
 from each term's contraction tree) is value-preserving at ranks 2-4, worth 2.0x-7.1x, and **has no
 production caller** — deferred in its own commit (`f68f7e2`, "CCSD dressing stays D7.3's job") and
@@ -240,9 +244,18 @@ So a W4 that runs "the CC cases" and reports green has, for nine of ten, proven 
 derivation route. `ch4_rccsdt_sto3g` is the only in-tree case that exercises it — the same fact
 that left the hand-written tensor solver ungated for its entire life.
 
+**Narrowed 2026-08-26 (W4.5):** this constraint binds the **hand-written tensor** path, not the
+generated one. `choose_determinant_backstop` is consulted inside `run_tensor_rccsdt`; the
+`optimized` backend routes through `rccgen.cpp` to the arbitrary-order harness, which never calls
+it. So a small case CAN exercise the generated route — LiH/STO-3G (`nso=12`, `ndet=495`) does,
+matching hand-written to ten digits. The table above remains correct for the default routing.
+
 #### Steps
 
 ##### W4.1 — DONE (2026-08-26): baseline pinned, and W4 has a build blocker
+
+*(The "blocker" below — needing `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` — still holds. The
+separate `PLANCK_CC_SPIN_ADAPT` blocker found later is resolved; see W4.2a.)*
 
 Baseline for `ch4_rccsdt_sto3g`, the only case that reaches the tensor path:
 
@@ -288,24 +301,42 @@ could mean the derivation route is wrong, **or** that generated-undressed alread
 hand-written. Establishing the middle row first separates those two, and is cheaper than
 debugging them together.
 
-##### W4.2a — DONE (2026-08-26): the generated path does not converge; W4 is BLOCKED
+##### W4.2a — DONE (2026-08-26): the generated undressed kernel MATCHES the baseline
 
-Ran with `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` and `PLANCK_RCCSDT_BACKEND=optimized`:
+**This section previously read "the generated path does not converge; W4 is BLOCKED". That is
+retracted.** The non-convergence was not a kernel defect: the build carried
+`PLANCK_CC_SPIN_ADAPT=OFF`, the historical spin-orbital emit that `CMakeLists.txt` itself
+documented as making the generated correlation energy ~4x wrong. **That flag now defaults ON**
+(2026-08-26). Full answer: `docs/CCGEN_SPIN_ADAPT_DEFAULT.md`.
 
-| path | E_corr | outcome |
+Re-run with `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` (`SPIN_ADAPT=ON` now comes from the default),
+`PLANCK_RCCSDT_BACKEND=optimized`:
+
+```
+[INF] RCCSDT[OPT] : Routing the ccgen-generated rank-3 CCSDT kernels through the
+                    arbitrary-order harness (the representation they are emitted for).
+[INF] RCCSDT     : Generated RCCSDT iterations ran 35 steps, E_corr=-0.0791116827
+       Total RCCSDT Energy   -39.8058445098
+```
+
+| path | CCSDT total | vs baseline |
 |---|---|---|
-| hand-written tensor (W4.1 baseline) | −0.0791116825 | converged, 24 iters |
-| generated, arbitrary harness | **−0.0565650696** | **never converges** |
+| hand-written tensor (W4.1 baseline) | −39.8058445095 | — |
+| **generated, undressed** | **−39.8058445098** | **3e-10** |
 
-Gap 2.26e-02 against a 1e-07 tolerance. Not DIIS (both settings reach it), not the iteration cap
-(`E_corr` is flat from iteration 45 while only the residual decays), and **not a regression** —
-commit `1986d0c`, which claimed this path works, reproduces the failure bit-identically.
+Well inside the case's 1e-07 tolerance, and the **middle row of W4.1's table is established**: the
+generated undressed kernel reproduces the hand-written one, so a later W4.3 disagreement can be
+attributed to dressing rather than to the generated kernel or the harness. That separation was the
+whole point of splitting W4.2.
 
-Rank 2 and rank 4 both work through the same harness, so the defect is local to the rank-3 kernel.
-Full record and the fix ladder: **`docs/CCGEN_RANK3_ARBITRARY_KERNEL_DEFECT.md`**.
+The generated path is **positively identified**, not inferred — the run logs the `Routing …`
+line, and `kernels=hand-optimized` does not appear. Gated by `ch4_rccsdt_generated_sto3g`, which
+now asserts the correct energy (it previously pinned the broken behaviour) and requires **both**
+`PLANCK_CC_ARBITRARY_LOWER_RANKS` and `PLANCK_CC_SPIN_ADAPT`, so it can never again run under the
+defective emit.
 
-**W4.2b must not run until that is fixed** — dressing cannot be evaluated against a baseline path
-that does not converge.
+Two further systems confirm the generated rank-3 kernel independently, both matching hand-written
+to all ten digits: Be −0.0517702884 and LiH −0.0204594700.
 
 ##### W4.2 — split by W4.1 into two rebuilds, because there are two questions
 
@@ -346,20 +377,40 @@ backstop.
 
 *Verify:* a positive identification of the code path taken, not an inference from a green tick.
 
-##### W4.5 — widen the ladder, or record that it cannot be widened (~M)
+##### W4.5 — DONE (2026-08-26): the ladder IS widened, via `optimized` not `tensor`
 
-One case is thin evidence for a production route. Options, in order of value:
+One case is thin evidence for a production route. This step asked whether the suite can provide a
+second, and **it can** — but not by the mechanism this section proposed.
 
-- a second rank-3 case above the backstop threshold (needs `nso > 16 || ndet > 10000`);
-- `be_rccsdtq_sto3g` — rank 4, but check the backstop first: at nso=10/ndet=210 it is *below* the
-  threshold, so it likely needs a larger system to be useful here;
-- `PLANCK_RCCSDT_BACKEND=tensor` (`ccsdt.cpp:22`) to force the tensor path on a case that would
-  otherwise take the backstop — cheapest way to widen coverage, and worth checking whether it
-  overrides the backstop or only the backend *within* the tensor path.
+**Measured: `PLANCK_RCCSDT_BACKEND=tensor` does NOT bypass the determinant backstop.**
+`choose_determinant_backstop` is called *inside* `run_tensor_rccsdt`
+(`tensor_backend.cpp:2996`) off the reference size alone; the env var selects among three
+backends (`ccsdt.cpp:22`), not whether the backstop fires. So forcing `tensor` on a small case
+still lands in the determinant-space teaching backstop, and still yields nothing for this route.
 
-*Verify:* either a second case exercising the route end to end, or a written statement of why the
-suite cannot currently provide one — which is itself a finding worth recording, since it means
-the production route rests on a single regression case.
+**But `optimized` does bypass it.** That backend routes to the arbitrary-order harness via
+`rccgen.cpp`, which never consults `choose_determinant_backstop` at all. So the `nso > 16 ||
+ndet > 10000` constraint — recorded across several ccgen scopes as a hard ladder-design
+limit — **does not apply to the generated path**, only to the hand-written tensor one.
+
+Demonstrated end to end on **LiH/STO-3G** (`nso=12`, `ndet=495` — far below the threshold):
+
+| LiH/STO-3G CCSDT | E_corr |
+|---|---|
+| hand-written | −0.0204594700 |
+| **generated, via `optimized`** | **−0.0204594700** — all ten digits |
+
+Input at `tests/inputs/regression/post_hf/lih_rccsdt_generated_sto3g.hfinp`, and it runs at
+0.04 s/iteration against CH4's ~7 minutes, so it is also the cheaper development fixture.
+
+**Landed:** `lih_rccsdt_generated_sto3g` is now a regression case — same `env` and
+`requires_build_option` pair as the CH4 one, asserting `rccsdt_total_energy == -7.8823242576`
+(1e-07) and `rhf_total_energy == -7.8618647876` (1e-08), and positively identifying the generated
+path by its routing line. **PASS in 5.3 s**, and verified falsifiable (perturbing the expected
+energy fails it).
+
+So the generated route no longer rests on a single case, and the second one runs in seconds rather
+than minutes — the fragility this step exists to flag is closed rather than merely recorded.
 
 ### W5 — cost, measured rather than modelled (~M)
 

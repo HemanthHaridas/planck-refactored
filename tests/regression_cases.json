@@ -1628,6 +1628,41 @@
       ]
     },
     {
+      "id": "lih_rccsdt_generated_sto3g",
+      "input": "tests/inputs/regression/post_hf/lih_rccsdt_generated_sto3g.hfinp",
+      "tags": [
+        "extended",
+        "generated-kernel"
+      ],
+      "timeout_s": 300,
+      "requires_build_option": [
+        "PLANCK_CC_ARBITRARY_LOWER_RANKS",
+        "PLANCK_CC_SPIN_ADAPT"
+      ],
+      "env": {
+        "PLANCK_RCCSDT_BACKEND": "optimized"
+      },
+      "contains": [
+        "Routing the ccgen-generated rank-3 CCSDT kernels through the arbitrary-order harness",
+        "Running generated arbitrary-order RCC tensor kernels (rank=3"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -7.8618647876,
+          "atol": 1e-08
+        },
+        {
+          "type": "metric_close",
+          "metric": "rccsdt_total_energy",
+          "expected": -7.8823242576,
+          "atol": 1e-07
+        }
+      ],
+      "_note": "W4.5: the SECOND case exercising the ccgen-generated rank-3 route, so it no longer rests on ch4_rccsdt_generated_sto3g alone. Reaches the generated kernel despite nso=12/ndet=495 being far below choose_determinant_backstop's nso>16||ndet>10000 threshold, because PLANCK_RCCSDT_BACKEND=optimized routes through rccgen.cpp to the arbitrary-order harness, which never consults the backstop -- that constraint binds the HAND-WRITTEN tensor path only. Matches the hand-written CCSDT (-7.8823242576) to all ten digits, and runs at 0.04 s/iter against CH4's ~7 min. Requires PLANCK_CC_SPIN_ADAPT: without it the generated emit is the ~4x-wrong historical one (docs/CCGEN_SPIN_ADAPT_DEFAULT.md). Distinct from lih_rccsdt_sto3g, which is 1.595 A with DIIS on and gates the hand-written path."
+    },
+    {
       "id": "b_uccsd_sto3g",
       "input": "tests/inputs/regression/post_hf/b_uccsd_sto3g.hfinp",
       "tags": [
