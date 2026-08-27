@@ -76,6 +76,22 @@ option(PLANCK_CC_ARBITRARY_LOWER_RANKS
 # link-and-run validation is the open V1.3 work.
 option(PLANCK_CC_DRESS_OPERATORS
     "Emit dressed CC kernels (W/tau intermediates) instead of the flat residual" OFF)
+# W4.2b: WHICH dressed-operator route, when dressing is on. Mirrors the emitter's
+# one --dressing axis rather than adding a second boolean here:
+#   recognized -- hand-seeded Stanton-Gauss fingerprints (retired route)
+#   derived    -- the factorizer, deriving operators from each term's own
+#                 contraction tree (docs/CCGEN_TWO_DRESSING_ROUTES.md)
+# Ignored unless PLANCK_CC_DRESS_OPERATORS=ON. `recognized` is the default so
+# enabling dressing alone keeps its historical meaning.
+set(PLANCK_CC_DRESSING "recognized" CACHE STRING
+    "Dressed-operator route when PLANCK_CC_DRESS_OPERATORS=ON (recognized|derived)")
+set_property(CACHE PLANCK_CC_DRESSING PROPERTY STRINGS recognized derived)
+if(PLANCK_CC_DRESS_OPERATORS AND
+   NOT PLANCK_CC_DRESSING STREQUAL "recognized" AND
+   NOT PLANCK_CC_DRESSING STREQUAL "derived")
+    message(FATAL_ERROR
+        "PLANCK_CC_DRESSING must be 'recognized' or 'derived', got '${PLANCK_CC_DRESSING}'")
+endif()
 set(PLANCK_CC_INTERMEDIATE_THRESHOLD "5" CACHE STRING
     "Min usage count for extracted ccgen intermediates")
 # ccgen equation-generation engine. 'diagram' is canonical-by-construction and
@@ -515,7 +531,7 @@ if(Python3_Interpreter_FOUND)
     # configure. `derived` (the factorizer route) is not selectable yet; it is
     # refused by the emitter until W3.2 wires it.
     if(PLANCK_CC_DRESS_OPERATORS)
-        list(APPEND _ccgen_planck_kernel_args --dressing recognized)
+        list(APPEND _ccgen_planck_kernel_args --dressing ${PLANCK_CC_DRESSING})
     endif()
 
     # The UCC emit is a SECOND invocation, not a flag on the first: --ucc and
