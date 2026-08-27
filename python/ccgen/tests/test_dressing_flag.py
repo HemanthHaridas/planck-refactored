@@ -6,8 +6,9 @@ the default must remain the undressed emit. Silently changing what an existing
 flag emits would make an old command line reproduce different kernels -- the
 failure this enum was chosen to avoid.
 
-`derived` is accepted by the parser but refused at runtime until W3.2 wires it,
-so the flag cannot silently no-op.
+All three values emit, and all three differ: `derived` was refused at W3.1 and
+wired at W3.2, so the assertion here is that it produces its own translation
+unit rather than silently falling back to another route.
 """
 import pathlib
 import subprocess
@@ -53,10 +54,16 @@ class DressingFlagTests(unittest.TestCase):
         self.assertNotEqual(self._emit("e", "--dressing", "none"),
                             self._emit("f", "--dressing", "recognized"))
 
-    def test_derived_is_refused_until_wired(self):
-        proc = _run(self.tmp / "g", "--dressing", "derived")
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("not yet wired", proc.stderr)
+    def test_derived_emits_its_own_translation_unit(self):
+        """W3.2 wired `derived`; it was refused at W3.1.
+
+        This test previously asserted the refusal. That assertion was correct
+        for W3.1 and is exactly what caught the behaviour change when W3.2
+        landed -- kept as a positive assertion rather than deleted, so the route
+        cannot silently regress to a no-op.
+        """
+        self.assertNotEqual(self._emit("g", "--dressing", "derived"),
+                            self._emit("j", "--dressing", "none"))
 
     def test_both_spellings_together_is_an_error(self):
         proc = _run(self.tmp / "h", "--dressing", "recognized", "--dress-operators")

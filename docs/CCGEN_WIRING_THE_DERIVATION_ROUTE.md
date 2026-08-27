@@ -1,6 +1,6 @@
 # How does the derivation route reach production?
 
-**Scope for in-flight work. W1-W2 and W3.1 landed; W4.2a and W4.5 landed 2026-08-26; W3.2-W3.3, W4.2b-W4.4 and W5 open.**
+**Scope for in-flight work. W1-W2, W3.1-W3.2, W4.2a and W4.5 landed 2026-08-26; W3.3, W4.2b-W4.4 and W5 open.**
 **W4 is no longer blocked** — its blocker was `PLANCK_CC_SPIN_ADAPT=OFF`, not a kernel defect
 (`docs/CCGEN_SPIN_ADAPT_DEFAULT.md`); the flag now defaults ON and the generated undressed kernel
 matches the hand-written baseline to 3e-10. **What blocks the rest of W4 is W3**: `--dressing` is
@@ -217,10 +217,44 @@ fewer parameters than the sum of today's two.
   build's. Gated by `python/ccgen/tests/test_dressing_flag.py` (6 tests), which pins the alias
   equality, the default, **that `recognized` actually changes the output** (so the enum cannot be
   accepted and then ignored), and the three error paths.
-- **W3.2** — implement `derived` inside `print_cpp_planck`'s existing dressing branch, feeding the
-  adapted manifold to `emit_factorized_from_equations`. *Verify:* value gate 0/0; spatial TU
-  compiles (W2's gate, now through the production entry); the three interaction points behave as
-  they do for `recognized`.
+- **W3.2 — DONE (2026-08-26).** `dressing="derived"` is wired into `print_cpp_planck`, so the
+  derivation route has a **production caller** for the first time.
+
+  **The blocker was a seam, not an algorithm.** `emit_factorized_from_equations` called the
+  emitter itself, so it could not feed `print_cpp_planck`'s single downstream emit. Split out
+  `factorize_equations(eqs, ...) -> (rewritten_eqs, kept_specs)` — exactly the
+  `(eqs, intermediates)` pair the recognition route already threads — and made the old entry a
+  thin delegate. **Verified byte-identical before and after the split** (sha `3e50fa4c`), so it
+  is one mechanism with a seam rather than a parallel copy.
+
+  **The two routes run at different points, and that is structural.** `recognized` dresses
+  BEFORE spin-adaptation, because its hand-seeded specs declare GCC layouts that
+  `adapt_intermediate_spec` must then transform. `derived` factorizes AFTER, because it derives
+  operators FROM whatever manifold reaches it, so its specs are already in the adapted layout and
+  need no adaptation pass. Putting `derived` in the early branch would declare one layout and
+  build another — the V1.2.2 defect class the surrounding comments warn about. Same emit path,
+  different operator source.
+
+  *Verified:* `print_cpp_planck(dressing="derived")` is **byte-identical** to the standalone
+  bridge, so production adds no behaviour the value gate never covered; default ==
+  `dressing="none"`; legacy `dress_operators=True` == `"recognized"`; all three routes emit
+  DISTINCT TUs (35431 / 28188 / 53060 bytes on `ccsd`); composes with `spin_adapt` (59 builders
+  on spatial `ccsd`, matching W2's un-merged figure); and all three interaction points
+  (`factorize_tau` exclusion, CSE force-off, engine/canonical-Fock override) behave exactly as
+  for `recognized` — they are properties of *dressing*, not of the route.
+
+  The CLI's W3.1 refusal is lifted, so `--dressing derived` works end to end. Gated by
+  `python/ccgen/tests/test_dressing_derived.py` (7 tests). W3.1's
+  `test_derived_is_refused_until_wired` **caught this change** and is rewritten as a positive
+  assertion rather than deleted, so the route cannot regress to a silent no-op.
+
+  *Not threaded:* `merge_transposes`, so `derived` emits the un-merged 59 builders rather than
+  31. Deliberate — W3 says the merge is the end state and warns against absorbing the
+  factorizer's seven selection knobs before W4/W5 prove the route. W3.3 is where they land.
+
+  *Unchanged:* the same **6 selection-model failures** (M2.0, M2.2, M2.3, M4, F3, E1) in
+  `test_factorize*`. Confirmed pre-existing by running the same suite on a stashed clean tree:
+  93 tests, 6 failures, both before and after.
 - **W3.3** — *after W4/W5 pass:* delete `emit_factorized_translation_unit` and the recognition
   emit path, leaving one emitter. *Verify:* net negative diff, and no parameter added to
   `print_cpp_planck` that a caller does not use.

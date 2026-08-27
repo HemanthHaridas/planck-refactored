@@ -1028,6 +1028,7 @@ def print_cpp_planck(
     intermediate_peak_memory_budget_bytes: int | None = None,
     factorize_tau: bool = False,
     dress_operators: bool = False,
+    dressing: str | None = None,
     force_arbitrary: bool = False,
     spin_adapt: bool = False,
     ucc: bool = False,
@@ -1042,6 +1043,14 @@ def print_cpp_planck(
     cc_canonical_fock_only) and is exact vs the undressed residual.  Supersedes
     ``factorize_tau`` (which only collapses tau); the two are mutually exclusive.
     Default off -> byte-identical to the undressed emit.
+
+    ``dressing`` (W3.2) selects WHICH route derives the dressed operators:
+    ``"none"``, ``"recognized"`` (the hand-seeded fingerprints ``dress_operators``
+    has always meant), or ``"derived"`` (the factorizer, deriving operators from
+    each term's own contraction tree). ``dress_operators=True`` is the legacy
+    spelling of ``"recognized"``. One axis, not two booleans: the routes are
+    alternatives, never combined, and both feed the SAME downstream emit path so
+    the composition with spin_adapt / ucc / force_arbitrary stays single.
     """
     # V1.2.4: dressing supersedes tau collapse -- dressing already recognizes tau/tau_c as
     # pseudo-amplitudes, so running `factorize_tau` too would materialize tau twice through
@@ -1049,6 +1058,19 @@ def print_cpp_planck(
     # early return fired first), which is why the parent scope recorded it as "already
     # mutually exclusive" -- it was unreachable, not guarded. Raise rather than pick a
     # winner: silent precedence is exactly what disguised the hazard.
+    # W3.2: resolve the legacy boolean onto the one axis FIRST, so every check
+    # below reads a single variable. `dress_operators=True` is `"recognized"`.
+    if dressing is not None and dress_operators:
+        raise ValueError(
+            "dress_operators is the legacy spelling of dressing='recognized'; pass "
+            "one or the other, not both.")
+    if dressing is None:
+        dressing = "recognized" if dress_operators else "none"
+    if dressing not in ("none", "recognized", "derived"):
+        raise ValueError(
+            f"dressing must be one of none/recognized/derived, got {dressing!r}")
+    dress_operators = dressing != "none"
+
     if dress_operators and factorize_tau:
         raise ValueError(
             "dress_operators and factorize_tau are mutually exclusive: dressing already "
@@ -1069,8 +1091,17 @@ def print_cpp_planck(
         dress_kwargs.pop("canonical_fock", None)
         eqs = generate_cc_equations(
             method, engine="diagram", canonical_fock=True, **dress_kwargs)
-        eqs, dressed_intermediates = _dress_operator_equations(eqs)
-        dressed_intermediates = dressed_intermediates or None
+        if dressing == "derived":
+            # W3.2: the factorizer derives operators from each term's own
+            # contraction tree instead of matching hand-seeded fingerprints. It
+            # is deliberately NOT applied here -- it runs AFTER spin_adapt below,
+            # because it keys on contraction structure and the adapted manifold is
+            # the one that reaches the emitter. `recognized` dresses here because
+            # its specs must then be adapted alongside the terms.
+            pass
+        else:
+            eqs, dressed_intermediates = _dress_operator_equations(eqs)
+            dressed_intermediates = dressed_intermediates or None
     else:
         eqs = generate_cc_equations(method, **kwargs)
 
@@ -1191,6 +1222,19 @@ def print_cpp_planck(
     # unchanged. Dressing and CSE are mutually exclusive (V1.2.4), so there is nothing
     # to merge here -- but assert rather than assume, since a silent overwrite would
     # drop one set of builders and only show up as a link error.
+    if dressing == "derived":
+        # W3.2: factorize LAST, on whatever manifold the composition above
+        # produced (GCC, spin-adapted, or UCC). The factorizer keys on
+        # contraction structure and does not care how a factor is named, so it
+        # takes the adapted terms directly -- which also means its specs need no
+        # adapt_intermediate_spec pass, because they are derived FROM the adapted
+        # layout rather than declared against the GCC one. That is the structural
+        # difference from `recognized`, and the reason the two run at different
+        # points rather than sharing one call site.
+        from .optimization.factorize import factorize_equations
+        eqs, dressed_intermediates = factorize_equations(eqs, spatial=spin_adapt)
+        dressed_intermediates = dressed_intermediates or None
+
     if dressed_intermediates is not None:
         assert not intermediates, (
             "dressed operators and CSE/tau intermediates both populated; "

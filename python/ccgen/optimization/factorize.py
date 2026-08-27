@@ -1012,6 +1012,30 @@ def emit_factorized_from_equations(method: str, eqs, *,
     """
     from ..emit.planck_tensor_cpp import emit_planck_translation_unit
 
+    rewritten, kept = factorize_equations(
+        eqs, top_k=top_k, savings_fraction=savings_fraction,
+        max_operator_bytes=max_operator_bytes,
+        memory_budget_bytes=memory_budget_bytes,
+        merge_transposes=merge_transposes, spatial=spatial,
+        n_occ=n_occ, n_vir=n_vir)
+    return emit_planck_translation_unit(
+        method, rewritten, intermediates=kept,
+        factor_builder_bodies=factor_builder_bodies)
+
+
+def factorize_equations(eqs, *, top_k=None, savings_fraction=None,
+                        max_operator_bytes=None, memory_budget_bytes=None,
+                        merge_transposes=False, spatial=True,
+                        n_occ=30, n_vir=100):
+    """W3.2: derive operators from `eqs` and rewrite it against them.
+
+    The factorize half of `emit_factorized_from_equations`, split out so a
+    caller that owns its own emit path can use the derivation route without a
+    second emit call site. Returns `(rewritten_eqs, kept_specs)` -- exactly the
+    `(eqs, intermediates)` pair `print_cpp_planck` already threads to the
+    emitter for the recognition route, so `derived` slots into the same shared
+    path rather than forking it.
+    """
     substitutable = [
         t for m, terms in eqs.items()
         if m not in ("energy", "reference")
@@ -1036,9 +1060,7 @@ def emit_factorized_from_equations(method: str, eqs, *,
                                     merge_plan_map=plan) for t in terms]
         for m, terms in eqs.items()
     }
-    return emit_planck_translation_unit(
-        method, rewritten, intermediates=kept,
-        factor_builder_bodies=factor_builder_bodies)
+    return rewritten, kept
 
 
 # ── M3.0: factor an operator's OWN builder body ────────────────────

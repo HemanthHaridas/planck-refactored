@@ -140,16 +140,9 @@ def main() -> None:
     if args.dress_operators:
         print("[ccgen] --dress-operators is deprecated; use --dressing recognized",
               file=sys.stderr)
-    if dressing == "derived":
+    if dressing != "none" and args.factorize_tau:
         parser.error(
-            "--dressing derived is not yet wired (W3.2). The factorizer route is "
-            "value-gated and its emit bridge exists, but production still emits "
-            "through print_cpp_planck's recognition branch; see "
-            "docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md")
-
-    if dressing == "recognized" and args.factorize_tau:
-        parser.error(
-            "--dressing recognized and --factorize-tau are mutually exclusive: dressing "
+            f"--dressing {dressing} and --factorize-tau are mutually exclusive: dressing "
             "already recognizes tau/tau_c, so factorize_tau would materialize it twice")
 
     output_dir = args.output_dir.resolve()
@@ -172,16 +165,18 @@ def main() -> None:
         # redefinitions). V1.3.2 removed that collision by method-suffixing every builder
         # (`build_tau_ccsdtq`), so the suppression now only prevents dressing from reaching
         # the one path that runs. Gated by test_dressed_tu_coinclusion.
-        dress_operators = dressing == "recognized"
-        # `dress_operators` supersedes tau collapse and forces CSE off inside
+        # W3.2: pass the AXIS, not a boolean -- print_cpp_planck routes
+        # `recognized` and `derived` to different operator sources but the same
+        # downstream emit, so the caller does not need to know which.
+        # Dressing supersedes tau collapse and forces CSE off inside
         # print_cpp_planck; passing factorize_tau alongside it raises, so drop it here
         # (the CLI already rejects the combination outright).
         return print_cpp_planck(
             method.lower(),
             engine=args.engine,
             include_intermediates=include_intermediates,
-            factorize_tau=args.factorize_tau and not dress_operators,
-            dress_operators=dress_operators,
+            factorize_tau=args.factorize_tau and dressing == "none",
+            dressing=dressing,
             spin_adapt=args.spin_adapt,
             ucc=args.ucc,
             force_arbitrary=force_arbitrary,
