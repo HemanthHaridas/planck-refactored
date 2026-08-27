@@ -170,7 +170,11 @@ compares against an independent oracle.
 **Wire the derivation route.** It is value-gated at ranks 2-4, it merges end to end into the
 emitted C++ (27 → 19 builders on `ccsd`, 254 → 69 at rank 4), and it is worth 2-7x. It is already
 the route `CCGEN_HIGHER_OPERATOR_REUSE.md` builds on. This is a wiring task, scoped in
-**`docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md`** (W1-W5).
+**`docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md`** — which is now the ANSWER to that
+question, not scope: the route was wired, went red on its first end-to-end energy
+comparison, and the cause was an invalid ERI symmetry table on the lowering path
+(the same class of mistake as the 52 % defect recorded here). Fixed; CH4 and LiH
+both match the undressed baseline.
 
 The gap is narrower than it sounds and wider than one flag: there are **two emitters** sharing
 exactly one parameter, and production calls the other one.

@@ -1,513 +1,229 @@
-# How does the derivation route reach production?
+# How does a derived-operator CC kernel reach production, and what was wrong with it?
 
-**Scope for in-flight work. W1-W2, W3.1-W3.2, W4.2a and W4.5 landed 2026-08-26; W3.3, W4.2b-W4.4 and W5 open.**
-**W4 is no longer blocked** — its blocker was `PLANCK_CC_SPIN_ADAPT=OFF`, not a kernel defect
-(`docs/CCGEN_SPIN_ADAPT_DEFAULT.md`); the flag now defaults ON and the generated undressed kernel
-matches the hand-written baseline to 3e-10. **What blocks the rest of W4 is W3**: `--dressing` is
-not implemented, so there is no derivation-dressed TU to compare against. Opened by
-`docs/CCGEN_TWO_DRESSING_ROUTES.md`, which established that ccgen's *derivation* route (operators
-from each term's contraction tree) is value-preserving at ranks 2-4, worth 2.0x-7.1x, and **has no
-production caller** — deferred in its own commit (`f68f7e2`, "CCSD dressing stays D7.3's job") and
-never revisited.
+*Successor to the W1-W5 scope of the same name, rewritten as an answer once W4.3
+went green (the scope's exemption expires when the work lands). Opened by
+`CCGEN_TWO_DRESSING_ROUTES.md`, which established that the derivation route was
+value-gated, worth 2-7x, and had no production caller — and recommended wiring
+it. This is what that took.*
 
-It is not a research question: the algebra is gated, the merge is implemented, and the emit bridge
-exists. What is missing is that **there are two emitters** and production uses the other one.
+ccgen has two routes that produce dressed CC operators. **Recognition** matches
+hand-seeded Stanton-Gauss fingerprints; it is retired, 52 % short on Be.
+**Derivation** builds operators from each term's own contraction tree; it was
+value-gated, worth 2-7x, and for months had **no production caller** — deferred
+in its own commit and never revisited.
 
-**Where it stands.** The technical blocker is gone — the pipeline now accepts adapted equations
-(W1) and the spatial TU compiles merged and un-merged, 59 → 31 builders (W2).
+It has one now. This answers what wiring it took, the correctness defect that
+wiring exposed, and how a defect of that size survived every gate the project
+had.
 
-W3 was a decision, and it has been taken under the constraint *"the code should not be
-spaghetti"*: **one `--dressing {none,recognized,derived}` axis, not a fourth boolean**, with the
-emitters merged afterwards as a deletion rather than beforehand as an accumulation. The earlier
-"new flag now, merge later" recommendation is withdrawn — see W3 for what the code itself says
-about that. W4 (regression energies) and W5 (wall-clock) still gate it.
+## The wiring
 
-Retire this file when W1-W5 land; the answer belongs in `CCGEN_TWO_DRESSING_ROUTES.md`.
-
----
-
-## The actual gap
-
-Two parallel emitters that share exactly one parameter (`method`):
-
-| | production | factorizer |
-|---|---|---|
-| entry | `print_cpp_planck` (`generate.py`) | `emit_factorized_translation_unit` (`factorize.py`) |
-| called by | `generate_planck_cc_kernels.py` | **nothing** (this is W3) |
-| dressing | `dress_operators=True` → the **retired** recognition route | derivation, merged |
-| spin adaptation | `spin_adapt=`, `ucc=` | **none** |
-| intermediates | `include_intermediates=`, three memory-budget knobs | `top_k` / `savings_fraction` / `memory_budget_bytes` |
+**One dressing axis with a value, not a second boolean.**
 
 ```
-production-only: dress_operators, factorize_tau, force_arbitrary, include_intermediates,
-                 intermediate_{memory,peak_memory}_budget_bytes, intermediate_threshold,
-                 spin_adapt, ucc
-factorizer-only: canonical_fock, engine, factor_builder_bodies, max_operator_bytes,
-                 memory_budget_bytes, merge_transposes, n_occ, n_vir, savings_fraction,
-                 spatial, top_k
+--dressing {none,recognized,derived}        default: none
+--dress-operators                           deprecated alias -> recognized
+PLANCK_CC_DRESSING={recognized,derived}     the CMake side
 ```
 
-### The structural blocker, and the good news
+The alternative — a `--derive-operators` flag beside `--dress-operators` — was
+rejected on evidence in the tree, not taste. `print_cpp_planck` already carries
+16 branches, `dress_operators` interacts at three separate points
+(`generate.py:1052/1064/1152`), and a comment at `generate.py:1060` records that
+a second emit call site had already forced UCC to be wired twice. A fourth
+dressing-ish axis makes every pairwise combination a question with no meaningful
+answer.
 
-**Removed by W1.** `emit_factorized_translation_unit` used to call
-`generate_cc_equations(method, ...)` internally, so it could not be handed an already-adapted
-manifold and could never emit spatial or UCC kernels — which is most of what production emits.
-It is now a thin wrapper over `emit_factorized_from_equations`, which takes the equations.
+**The blocker was a seam, not an algorithm.** `emit_factorized_from_equations`
+called the emitter itself, so it could not feed `print_cpp_planck`'s single
+downstream emit. Splitting out `factorize_equations(eqs, ...) -> (rewritten_eqs,
+kept_specs)` — exactly the `(eqs, intermediates)` pair the recognition route
+already threads — made `derived` a branch rather than a fork. The old entry
+became a thin delegate, byte-identical before and after.
 
-The machinery underneath never had that limit, which is why W1 was a signature change rather than
-new algebra. Measured on adapted input:
+**The two routes run at different points, and that is structural.** `recognized`
+dresses BEFORE spin-adaptation, because its hand-seeded specs declare GCC layouts
+that `adapt_intermediate_spec` must then transform. `derived` factorizes AFTER,
+because it derives operators FROM whatever manifold reaches it, so its specs are
+already in the adapted layout. Putting `derived` early would declare one layout
+and build another.
 
-| input | merged operators | terms rewritten |
-|---|---|---|
-| spatial `ccsd` doubles | 31 | 64 |
-| UCC `ccsd` doubles_abab | 86 | 71 |
+## The defect it exposed
 
-Spatial now emits and compiles end to end. **UCC still does not**: the emitter rejects the
-spin-blocked manifold names (`ValueError: Unknown manifold 'singles_aa'`). That is emitter work
-downstream of O6 and deliberately out of scope here — see *What NOT to do*.
+With the route wired, the first end-to-end energy comparison went red:
 
-## Steps
-
-Each step keeps `test_factorize_value_preservation` at 0/0 on both bases and both
-`canonical_fock` settings. That gate, not the operator count or the TU size, is the acceptance
-criterion throughout — a step that improves the numbers and reddens it has failed.
-
-### W1 — LANDED (2026-08-25): the pipeline takes equations; the blocker is gone
-
-`emit_factorized_from_equations(method, eqs, **selection)` is the pipeline body;
-`emit_factorized_translation_unit` is now a thin wrapper that generates and delegates.
-
-**Byte-identical**, verified by sha256 over six configurations before and after the split
-(`ccsd`, `ccsd top_k=8`, `ccsd merge_transposes`, `ccsdt`, `ccsdt top_k=5`,
-`ccsdt memory_budget`). No behaviour change.
-
-**The blocker is lifted.** Handed `spin_adapt_equations(...)` output the new entry emits a
-spatial TU: 82,793 chars, **31 builders**, braces balanced, each builder defined exactly once.
-Previously impossible — the wrapper called `generate_cc_equations` internally and could only ever
-emit GCC.
-
-**UCC still fails, and deliberately so:** `ValueError: Unknown manifold 'singles_aa'`. The
-emitter's manifold vocabulary does not include the spin-blocked names. That is emitter work
-downstream of O6 (recognition finds zero operators on spin-tagged factors, and the tag-blind fix
-is unsound), so it is out of scope here rather than patched.
-
-*Gates:* `test_emit_from_equations_is_byte_identical` (wrapper == direct, four configurations)
-and `test_emit_from_equations_accepts_a_spin_adapted_manifold`.
-
-*Falsifiability:* dropping a kwarg from the wrapper fails 1 test; making the pipeline ignore the
-caller's `eqs` fails 5.
-
-Full suite after: 101 tests, the same 6 selection-model failures. No new breakage.
-
-### W2 — LANDED (2026-08-26): the spatial TU compiles, merged and un-merged
-
-Both halves answered, and both **actually run** here rather than skipping — Eigen and a C++23
-compiler are present in this tree.
-
-**It compiles.** `-fsyntax-only` against the real CC headers, exit 0 both ways:
-
-| | builders | compiles |
-|---|---|---|
-| spatial, un-merged | 59 | yes |
-| spatial, **merged** | **31** | yes |
-
-Merging nearly halves the generated builder count and the TU still type-checks — so the merged
-call sites really do resolve against the representative's `build_W`, not just in the algebra.
-This is the check neither the value gate (symbolic, never compiles) nor W1's emit check (counted
-builders and braces) could make.
-
-**The ERI parity contract holds.** `_ERI_SYMMETRY_PERMUTATIONS` is exactly the four parity-`+1`
-relations, each carrying an explicit `+1` sign, and the set is identical to
-`_ERI_PERMUTATIONS_SPATIAL`. Worth re-checking rather than assuming, because the merge now runs
-inside the emit path: this is the contract whose violation let a 52 % energy defect pass every
-symbolic check, and the same one that produced two false operator merges in O1.
-
-*Gates:* `test_spatial_factorized_tu_compiles` (both variants, skips without a toolchain) and
-`test_emitter_folds_only_sign_preserving_eri_symmetries`.
-
-*Falsifiability:* adding a `-1` permutation to the emitter's set fails the parity gate.
-
-Full suite: 126 tests, the same 6 selection-model failures. No new breakage.
-
-### W3 — RESCOPED (2026-08-26) under "the code should not be spaghetti"
-
-The earlier framing offered three options and recommended "new flag now, merge later". **That
-recommendation is withdrawn.** The constraint rules it out, and the codebase already contains the
-evidence for why.
-
-#### What the code says about adding a fourth flag
-
-`print_cpp_planck` carries **16 branches**, and `dress_operators` interacts at three separate
-points:
-
-| where | interaction |
-|---|---|
-| `generate.py:1052` | mutually exclusive with `factorize_tau` — raises |
-| `generate.py:1064` | overrides caller `engine` / `canonical_fock` kwargs |
-| `generate.py:1152` | silently forces `include_intermediates=False` |
-
-and the CLI carries a further comment reconciling the same pair. A `--derive-operators` flag adds
-a **fourth** dressing-ish axis to a function that already needs prose to explain the three it has.
-Every pairwise combination becomes a question someone has to answer, and most of them are
-meaningless.
-
-The decisive line is a comment already in the tree at `generate.py:1060`:
-
-> `spin_adapt / factorize_tau / force_arbitrary silently unreachable under dressing; composing
-> them is the point of V1.2, and **a second emit call site would fork the composition so V5 (UCC)
-> had to be wired twice**.`
-
-That is this exact mistake, already made once and already paid for. A parallel
-`--derive-operators` path is a second emit call site by construction.
-
-#### The shape that is not spaghetti
-
-**One dressing axis with a value, not two booleans.**
-
-```
---dressing {none,recognized,derived}      default: none
-```
-
-- `none` — today's undressed emit, byte-identical.
-- `recognized` — what `--dress-operators` means now. Retired, kept only so old invocations
-  reproduce; can print a deprecation line.
-- `derived` — the factorizer route.
-
-One parameter, three values, mutually exclusive by construction. The interactions above stay
-exactly as many as they are today because there is still one dressing axis — `derived` inherits
-`recognized`'s answers to all three (diagram engine, canonical Fock, no CSE) since they are
-properties of *dressing*, not of which route derived the operators.
-
-Internally this is one call site, not two: `print_cpp_planck` chooses which operator set to hand
-the emitter and keeps a single composition path. The factorizer already exposes the right seam —
-`emit_factorized_from_equations` takes equations (W1), so it can be fed the same adapted manifold
-`print_cpp_planck` already builds.
-
-`--dress-operators` becomes an alias for `--dressing recognized`, so nothing that exists today
-changes meaning. That is what the earlier "repoint the flag" option got wrong: silently changing
-what an existing flag emits would make an old command line reproduce different kernels.
-
-#### Why not "merge the emitters" as a first step
-
-It is the right end state and the wrong first move. Merging means `print_cpp_planck` absorbs the
-factorizer's selection knobs (`top_k`, `savings_fraction`, `memory_budget_bytes`,
-`max_operator_bytes`, `merge_transposes`, `n_occ`, `n_vir`) — seven more parameters on a
-16-branch function, landed **before** W4 has shown the route produces correct energies.
-
-Do it after W4/W5, when the route has earned it, and do it as a deletion: `print_cpp_planck` calls
-`emit_factorized_from_equations` and `emit_factorized_translation_unit` goes away. One emitter,
-fewer parameters than the sum of today's two.
-
-#### Steps
-
-- **W3.1 — DONE (2026-08-26).** `--dressing {none,recognized,derived}` added to
-  `python/generate_planck_cc_kernels.py`, with `--dress-operators` kept as a deprecated alias that
-  resolves onto it before anything reads it (one source of truth for "which dressing"). `derived`
-  parses but is refused with a message naming W3.2, so the flag cannot silently no-op. Passing both
-  spellings is an error rather than a silent precedence rule, and the `--factorize-tau` mutual
-  exclusion is preserved on the new spelling.
-
-  `CMakeLists.txt:517` now passes `--dressing recognized` under the unchanged
-  `PLANCK_CC_DRESS_OPERATORS` option — the alias still works, but using it there would print the
-  deprecation on every configure.
-
-  *Verified byte-identical:* default vs explicit `--dressing none`; `--dress-operators` vs
-  `--dressing recognized`; and end to end through CMake, where a fresh default tree's
-  `ccsd_planck_generated.cpp` / `ccsdt_planck_generated.cpp` are `cmp`-identical to the existing
-  build's. Gated by `python/ccgen/tests/test_dressing_flag.py` (6 tests), which pins the alias
-  equality, the default, **that `recognized` actually changes the output** (so the enum cannot be
-  accepted and then ignored), and the three error paths.
-- **W3.2 — DONE (2026-08-26).** `dressing="derived"` is wired into `print_cpp_planck`, so the
-  derivation route has a **production caller** for the first time.
-
-  **The blocker was a seam, not an algorithm.** `emit_factorized_from_equations` called the
-  emitter itself, so it could not feed `print_cpp_planck`'s single downstream emit. Split out
-  `factorize_equations(eqs, ...) -> (rewritten_eqs, kept_specs)` — exactly the
-  `(eqs, intermediates)` pair the recognition route already threads — and made the old entry a
-  thin delegate. **Verified byte-identical before and after the split** (sha `3e50fa4c`), so it
-  is one mechanism with a seam rather than a parallel copy.
-
-  **The two routes run at different points, and that is structural.** `recognized` dresses
-  BEFORE spin-adaptation, because its hand-seeded specs declare GCC layouts that
-  `adapt_intermediate_spec` must then transform. `derived` factorizes AFTER, because it derives
-  operators FROM whatever manifold reaches it, so its specs are already in the adapted layout and
-  need no adaptation pass. Putting `derived` in the early branch would declare one layout and
-  build another — the V1.2.2 defect class the surrounding comments warn about. Same emit path,
-  different operator source.
-
-  *Verified:* `print_cpp_planck(dressing="derived")` is **byte-identical** to the standalone
-  bridge, so production adds no behaviour the value gate never covered; default ==
-  `dressing="none"`; legacy `dress_operators=True` == `"recognized"`; all three routes emit
-  DISTINCT TUs (35431 / 28188 / 53060 bytes on `ccsd`); composes with `spin_adapt` (59 builders
-  on spatial `ccsd`, matching W2's un-merged figure); and all three interaction points
-  (`factorize_tau` exclusion, CSE force-off, engine/canonical-Fock override) behave exactly as
-  for `recognized` — they are properties of *dressing*, not of the route.
-
-  The CLI's W3.1 refusal is lifted, so `--dressing derived` works end to end. Gated by
-  `python/ccgen/tests/test_dressing_derived.py` (7 tests). W3.1's
-  `test_derived_is_refused_until_wired` **caught this change** and is rewritten as a positive
-  assertion rather than deleted, so the route cannot regress to a silent no-op.
-
-  *Not threaded:* `merge_transposes`, so `derived` emits the un-merged 59 builders rather than
-  31. Deliberate — W3 says the merge is the end state and warns against absorbing the
-  factorizer's seven selection knobs before W4/W5 prove the route. W3.3 is where they land.
-
-  *Unchanged:* the same **6 selection-model failures** (M2.0, M2.2, M2.3, M4, F3, E1) in
-  `test_factorize*`. Confirmed pre-existing by running the same suite on a stashed clean tree:
-  93 tests, 6 failures, both before and after.
-- **W3.3** — *after W4/W5 pass:* delete `emit_factorized_translation_unit` and the recognition
-  emit path, leaving one emitter. *Verify:* net negative diff, and no parameter added to
-  `print_cpp_planck` that a caller does not use.
-
-**W3.3 is the step that keeps this honest.** W3.1 alone is "new flag with no follow-through",
-which is exactly how the derivation route was orphaned the first time. If W3.3 is not going to
-happen, do not start W3.1.
-
-### W4 — do derivation-emitted kernels compute the right energies? (~M, five steps)
-
-**This is the step that can still find a correctness defect.** Everything before it is symbolic
-or syntactic: the value gate evaluates a rewrite and never compiles, W2 compiles but never runs.
-Nothing so far has executed a generated kernel and compared an energy.
-
-Both prior CC defects on this branch were invisible to exactly the gates that precede W4 — the
-rank-3 kernel was correct while its *solver* was wrong, and the 52 % dressed defect passed five
-structural gates. Treat a W4 disagreement as outranking every performance claim in this document.
-
-#### The trap this step must not fall into
-
-Of the ten CC regression cases, **nine never reach a generated kernel.**
-`choose_determinant_backstop` (`tensor_backend.cpp:243`) routes `nso <= 16 && ndet <= 10000` to
-the determinant-space teaching backstop, which calls no generated code at all. Computed for
-STO-3G:
-
-| case | nso | ndet | path |
+| system | undressed | derivation-dressed | Δ |
 |---|---|---|---|
-| `h2_rccsdt` | 4 | 6 | determinant |
-| `be_rccsdtq` | 10 | 210 | determinant |
-| `lih_rccsdt` | 12 | 495 | determinant |
-| `water_rccsdt` | 14 | 1001 | determinant — and it *asserts* the handoff |
-| **`ch4_rccsdt`** | **18** | **43758** | **tensor (generated)** |
+| CH4/STO-3G | −39.8058445098 | −39.8058606381 | **−1.61e-05** |
+| LiH/STO-3G | −7.8823242576 | −7.8823350582 | **−1.08e-05** |
 
-So a W4 that runs "the CC cases" and reports green has, for nine of ten, proven nothing about the
-derivation route. `ch4_rccsdt_sto3g` is the only in-tree case that exercises it — the same fact
-that left the hand-written tensor solver ungated for its entire life.
+161x the tolerance, on two independent systems, **both converging cleanly**
+(`rms(res)` 8.7e-11). A converged-but-wrong answer — the same signature as the
+`SPIN_ADAPT` defect and the 52 % recognition defect before it.
 
-**Narrowed 2026-08-26 (W4.5):** this constraint binds the **hand-written tensor** path, not the
-generated one. `choose_determinant_backstop` is consulted inside `run_tensor_rccsdt`; the
-`optimized` backend routes through `rccgen.cpp` to the arbitrary-order harness, which never calls
-it. So a small case CAN exercise the generated route — LiH/STO-3G (`nso=12`, `ndet=495`) does,
-matching hand-written to ten digits. The table above remains correct for the default routing.
+**Root cause: two ERI symmetry tables, one of them invalid.**
 
-#### Steps
+A spatial physicist `<pq|rs>` over real orbitals has exactly four index
+symmetries, all `+1`. The four single-swap relations `<qp|rs> = -<pq|rs>` and
+`<pq|sr> = -<pq|rs>` hold **only** for the antisymmetrized `<pq||rs>`.
 
-##### W4.1 — DONE (2026-08-26): baseline pinned, and W4 has a build blocker
-
-*(The "blocker" below — needing `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` — still holds. The
-separate `PLANCK_CC_SPIN_ADAPT` blocker found later is resolved; see W4.2a.)*
-
-Baseline for `ch4_rccsdt_sto3g`, the only case that reaches the tensor path:
+`lowering/restricted_closed_shell.py` carried the full 8-fold group. Its phase
+reaches the emitted C++ directly — `_map_eri_tensor` returns
+`LoweredTensorFactor.phase` without re-deriving it — so the four invalid
+relations became wrong ERI reads with a bogus sign in **41 of 288** emitted
+operator builders:
 
 ```
-RHF   Total Energy   -39.7267328271
-CCSDT Energy         -39.8058445095      converged in 24 steps, 0.18 s
+spec    : t1(c,j) v(i,c,a,k)               <ic|ak> = ovvo(i,c,a,k)
+emitted : acc += -t1({j,c}) * mo_blocks.ovov(i, c, k, a);
+fixed   : acc +=  t1({j,c}) * mo_blocks.ovvo(i, c, a, k);
 ```
 
-Run as `python tests/run_regressions.py --suite extended --case ch4_rccsdt_sto3g` → PASS in
-1.00 s. The `--suite extended` is required; a bare `--case` prints only "no cases selected".
+`ovov` and `ovvo` differ by 3.9e-01 on the fixture; relative errors reached 8.8 —
+larger than the quantity being computed.
 
-**The blocker: this case does not use generated kernels today, and cannot in the current build.**
+**The fix:** `SPATIAL_ERI_SYMMETRIES` and `ANTISYMMETRIZED_ERI_SYMMETRIES` now
+live once, in `ccgen/tensors.py` (a leaf both consumers import; `emit` imports
+`lowering`, so the shared home cannot be either of them). Both bind to the
+spatial set.
 
-Its own assertion says so — the case pins the string `kernels=hand-optimized` — and the run
-confirms it: `Stage-1 RCCSD warm start dimensions: nocc=10 nvirt=8 (kernels=hand-optimized)`,
-with every iteration logging `kernel=native`. It reaches the **tensor backend** (correctly, being
-above the determinant backstop) but the *hand-written* one.
-
-Forcing the generated path fails with an actionable error:
-
-```
-$ PLANCK_RCCSDT_BACKEND=optimized ./build/hartree-fock ...ch4_rccsdt_sto3g.hfinp
-[ERR] run_tensor_optimized_rccsdt: the generated rank-3 CCSDT kernel runs only in the
-      arbitrary-order harness, which needs -DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON.
-```
-
-`build/CMakeCache.txt` confirms `PLANCK_CC_ARBITRARY_LOWER_RANKS:BOOL=OFF` (as are
-`PLANCK_CC_UCC` and `PLANCK_CC_DRESS_OPERATORS`).
-
-**Consequence for W4.** The comparison is not "current kernels vs derivation-emitted kernels" on
-one binary. It needs a **reconfigured build** with `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON`, and
-the comparison is then three-way:
-
-| path | reachable today |
-|---|---|
-| hand-written tensor (`kernels=hand-optimized`) | yes — this is the baseline above |
-| generated, undressed (arbitrary-order harness) | needs the reconfigure |
-| generated, **derivation-dressed** (W3.2) | needs the reconfigure **and** W3.2 |
-
-So W4.2's rebuild is not optional plumbing — it is the step that makes W4 possible at all, and it
-must set that option. Worth noting the baseline is the *hand-written* path: a W4 disagreement
-could mean the derivation route is wrong, **or** that generated-undressed already differs from
-hand-written. Establishing the middle row first separates those two, and is cheaper than
-debugging them together.
-
-##### W4.2a — DONE (2026-08-26): the generated undressed kernel MATCHES the baseline
-
-**This section previously read "the generated path does not converge; W4 is BLOCKED". That is
-retracted.** The non-convergence was not a kernel defect: the build carried
-`PLANCK_CC_SPIN_ADAPT=OFF`, the historical spin-orbital emit that `CMakeLists.txt` itself
-documented as making the generated correlation energy ~4x wrong. **That flag now defaults ON**
-(2026-08-26). Full answer: `docs/CCGEN_SPIN_ADAPT_DEFAULT.md`.
-
-Re-run with `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` (`SPIN_ADAPT=ON` now comes from the default),
-`PLANCK_RCCSDT_BACKEND=optimized`:
-
-```
-[INF] RCCSDT[OPT] : Routing the ccgen-generated rank-3 CCSDT kernels through the
-                    arbitrary-order harness (the representation they are emitted for).
-[INF] RCCSDT     : Generated RCCSDT iterations ran 35 steps, E_corr=-0.0791116827
-       Total RCCSDT Energy   -39.8058445098
-```
-
-| path | CCSDT total | vs baseline |
+| system | after the fix | Δ vs undressed |
 |---|---|---|
-| hand-written tensor (W4.1 baseline) | −39.8058445095 | — |
-| **generated, undressed** | **−39.8058445098** | **3e-10** |
+| CH4 | −39.8058445096 | **2e-10** |
+| LiH | −7.8823242576 | **exact, ten digits** |
 
-Well inside the case's 1e-07 tolerance, and the **middle row of W4.1's table is established**: the
-generated undressed kernel reproduces the hand-written one, so a later W4.3 disagreement can be
-attributed to dressing rather than to the generated kernel or the harness. That separation was the
-whole point of splitting W4.2.
+CH4 also converges in 15 steps against 26 — the wrong fixed point took longer to
+reach. The fix additionally repairs the retired `recognized` route, which shared
+the table and had no builder-level gate.
 
-The generated path is **positively identified**, not inferred — the run logs the `Routing …`
-line, and `kernels=hand-optimized` does not appear. Gated by `ch4_rccsdt_generated_sto3g`, which
-now asserts the correct energy (it previously pinned the broken behaviour) and requires **both**
-`PLANCK_CC_ARBITRARY_LOWER_RANKS` and `PLANCK_CC_SPIN_ADAPT`, so it can never again run under the
-defective emit.
+## Why every existing gate missed it
 
-Two further systems confirm the generated rank-3 kernel independently, both matching hand-written
-to all ten digits: Be −0.0517702884 and LiH −0.0204594700.
+**The value gate never emits C++.** `grep -c "emit_planck\|print_cpp" on
+test_factorize_value_preservation.py` returns **0**. It validates Python objects
+— and the rewrite, the specs, the operator reuse and the per-term algebra were
+each *exact* as objects while the rendered C++ computed a different tensor.
 
-##### W4.2 — split by W4.1 into two rebuilds, because there are two questions
+Two further reasons it could not have caught this:
 
-**W4.2a — reconfigure with `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` and rerun, undressed.**
+- **It compares terms individually and skips single-step terms.** On the
+  manifolds the kernel runs, it covers 4/36 singles, **27/142 doubles**, 589/806
+  triples. The skip is correct — a single-step term has no operator to hoist —
+  but "value-preserving" covers under a fifth of the doubles manifold.
+- **Its fixture antisymmetrizes `v`.** `random_tensors` produces an
+  antisymmetric ERI, under which the invalid relation is **TRUE**. Measured:
+  0/288 builders disagree on an antisymmetrized fixture, 41/288 on a spatial one.
+  Any gate reusing that fixture passes while the defect is fully present.
 
-This establishes the *middle* row of W4.1's table: does the generated, undressed kernel reproduce
-the hand-written one? It needs nothing from W3, so it can be done now, and it is the cheaper
-half.
+That last point is the sharpest lesson here: **a fixture with more symmetry than
+the real object cannot see a defect that abuses symmetry.**
 
-*Verify:* `ch4_rccsdt_sto3g` under `PLANCK_RCCSDT_BACKEND=optimized` matches the W4.1 baseline
-(CCSDT `-39.8058445095`) to the case's 1e-07 tolerance — and the run logs the generated path
-rather than `kernels=hand-optimized`, positively identified, not inferred.
+## How it was found: five eliminations
 
-A disagreement here is a finding about the **generated kernel or the arbitrary-order harness**,
-not about dressing, and it stops the ladder — the derivation route cannot be judged against a
-baseline that already disagrees.
+Each step removed a layer, and the order was cheapest-first. Two of them refuted
+hypotheses that looked decisive.
 
-**W4.2b — rebuild again with W3.2's `--dressing derived`.**
-
-*Verify:* the build succeeds, and the emitted TU **actually changed** — diff it, do not assume the
-flag took effect. A silently-ignored flag makes W4.3 pass vacuously, which is the failure mode
-this ladder keeps hitting.
-
-Kernels are generated at configure time (`CMakeLists.txt:519`), so each of these is a
-reconfigure-and-rebuild, not an incremental compile. Budget accordingly.
-
-##### W4.3 — rerun and compare (~S, the gate)
-
-*Verify:* `ch4_rccsdt_sto3g` energy matches W4.1 to the tolerance the case already asserts. **Any
-disagreement is a correctness finding and stops the ladder** — it is not a tolerance to widen.
-
-##### W4.4 — prove the comparison was not vacuous (~S)
-
-W4.3 passing is only meaningful if the run actually used derivation-emitted kernels. Confirm it
-did: check the emitted TU contains the merged operator names (`W_..._<shape-tag>`, and builder
-count 19 rather than 27 on `ccsd`), and that the case did not silently take the determinant
-backstop.
-
-*Verify:* a positive identification of the code path taken, not an inference from a green tick.
-
-##### W4.5 — DONE (2026-08-26): the ladder IS widened, via `optimized` not `tensor`
-
-One case is thin evidence for a production route. This step asked whether the suite can provide a
-second, and **it can** — but not by the mechanism this section proposed.
-
-**Measured: `PLANCK_RCCSDT_BACKEND=tensor` does NOT bypass the determinant backstop.**
-`choose_determinant_backstop` is called *inside* `run_tensor_rccsdt`
-(`tensor_backend.cpp:2996`) off the reference size alone; the env var selects among three
-backends (`ccsdt.cpp:22`), not whether the backstop fires. So forcing `tensor` on a small case
-still lands in the determinant-space teaching backstop, and still yields nothing for this route.
-
-**But `optimized` does bypass it.** That backend routes to the arbitrary-order harness via
-`rccgen.cpp`, which never consults `choose_determinant_backstop` at all. So the `nso > 16 ||
-ndet > 10000` constraint — recorded across several ccgen scopes as a hard ladder-design
-limit — **does not apply to the generated path**, only to the hand-written tensor one.
-
-Demonstrated end to end on **LiH/STO-3G** (`nso=12`, `ndet=495` — far below the threshold):
-
-| LiH/STO-3G CCSDT | E_corr |
+| step | result |
 |---|---|
-| hand-written | −0.0204594700 |
-| **generated, via `optimized`** | **−0.0204594700** — all ten digits |
+| **D1** algebra | rewritten manifold SUM vs unrewritten: spatial doubles **exactly 0.0**, triples 1.4e-15. Clean. |
+| **D2** per-term emit | one term rebuilt from its emitted loop: **3.6e-16**. Clean. The `canonical_fock` term-count gap (148 vs 142) is a red herring — `max\|f_ov\| = 7.8e-17`. |
+| **D3** operator reuse | 616 rewritten terms through the shared-operator path: worst **2.5e-16**. Clean. |
+| **D4** emitted text | **interpreting the emitted C++ in Python reproduced the disagreement** (5.06e-05 vs C++ 5.99e-05). Defect is in the emitter's rendering. |
+| **D5** the table | one patched constant: **41/288 -> 0/288**. |
 
-Input at `tests/inputs/regression/post_hf/lih_rccsdt_generated_sto3g.hfinp`, and it runs at
-0.04 s/iteration against CH4's ~7 minutes, so it is also the cheaper development fixture.
+**Two operator censuses looked decisive and were each refuted by direct numeric
+test.** First: the defect appeared to track operators over more than one distinct
+amplitude kind (singles 0, doubles 15, triples 91). Filtering all 106 of them out
+changed rank 2 by **nothing**. Second: it appeared to track operators read
+through more than one index binding — a **perfect** correlation across three
+manifolds (singles 0 and correct; doubles 10 and wrong; triples 175 and wrong).
+Direct evaluation of all 616 terms refuted it too.
 
-**Landed:** `lih_rccsdt_generated_sto3g` is now a regression case — same `env` and
-`requires_build_option` pair as the CH4 one, asserting `rccsdt_total_energy == -7.8823242576`
-(1e-07) and `rhf_total_energy == -7.8618647876` (1e-08), and positively identifying the generated
-path by its routing line. **PASS in 5.3 s**, and verified falsifiable (perturbing the expected
-energy fails it).
+Both were real correlations and neither was causal. Treat a third census
+correlation with suspicion.
 
-So the generated route no longer rests on a single case, and the second one runs in seconds rather
-than minutes — the fragility this step exists to flag is closed rather than merely recorded.
+## What now guards it
 
-### W5 — cost, measured rather than modelled (~M)
-
-Everything claimed for this route so far is `operator_savings` / `build_cost`, a FLOP model.
-`CCGEN_KERNEL_SCALING_SCOPE.md` measured the generated-vs-hand gap as a **scaling** defect
-(21.8x → 50.1x, no plateau) that no current cost model predicts.
-
-*Verify:* wall-clock for a derivation-emitted kernel against the current one on a case that
-actually reaches the tensor path — note `choose_determinant_backstop`
-(`tensor_backend.cpp:243`) routes `nso <= 16 && ndet <= 10000` to the determinant backstop, which
-never calls the generated kernel, so most small cases yield **no timing at all**. `ch4_rccsdt_sto3g`
-is the known-good rank-3 point.
-
-Expect the modelled 2-7x not to survive intact. That is worth knowing either way; it is the
-first wall-clock number this route will ever have had.
-
-## What NOT to do
-
-- **Do not un-retire the recognition route.** Nothing here touches it. It is 52 % short on Be
-  with five failed fix attempts behind it, and its seven `expectedFailure` gates stay as the
-  tripwire.
-- **Do not trust the value gate as a correctness gate for kernels.** It evaluates the symbolic
-  rewrite; it never compiles or runs anything. W2's compile check and W4's energies are separate
-  instruments for a reason.
-- **Do not wire UCC in this pass.** The machinery runs on UCC input (86 merged operators), but
-  recognition finds **zero** operators there and the obvious tag-blind fix is measured and
-  unsound — it collapses 12 spin-tagged contractions onto one `Wmbej`. That is O6 in
-  `CCGEN_OPERATOR_IDENTITY_AND_REUSE.md` and needs its own numeric gate first.
-- **Do not re-pin the six failing selection-model gates as part of this.** They need their claims
-  restated, not their constants moved, and the merge changes the distribution again. Separate
-  work, tracked in `CCGEN_OPERATOR_IDENTITY_AND_REUSE.md` (O4.6).
-
-## Key code locations
-
-| what | where |
+| gate | pins |
 |---|---|
-| factorizer pipeline (W1) — takes equations | `emit_factorized_from_equations`, `python/ccgen/optimization/factorize.py:993` |
-| its generating wrapper, still no caller | `emit_factorized_translation_unit`, same file `:948` |
-| ~~internal generate call — the blocker~~ | removed by W1; the wrapper now delegates |
-| production emitter | `print_cpp_planck`, `python/ccgen/generate.py:1023` |
-| the CLI that chooses | `python/generate_planck_cc_kernels.py` (`--dress-operators`, `:114-147`) |
-| merged operators + call-site plan | `manifold_operators_with_plan`, `factorize.py` |
-| **the value gate** | `python/ccgen/tests/test_factorize_value_preservation.py` |
-| spatial ERI symmetry contract | `_ERI_SYMMETRY_PERMUTATIONS`, `python/ccgen/emit/planck_tensor_cpp.py` |
-| why this route, and what it is worth | `docs/CCGEN_TWO_DRESSING_ROUTES.md` |
-| operator granularity and the merge | `docs/CCGEN_OPERATOR_IDENTITY_AND_REUSE.md` |
-| unmodelled cost | `docs/CCGEN_KERNEL_SCALING_SCOPE.md` |
+| `test_emitted_builder_matches_spec.py` | every `build_W_*` computes its own spec, **by evaluating the emitted C++ text**; ships a vacuity control asserting the fixture is spatial and NOT antisymmetric |
+| `test_eri_symmetry_tables.py` | the relations verified on a real tensor; the odd ones verified FALSE on a spatial integral; no module redefines a signed table (matched on **shape**, so renaming does not evade); both consumers bind the shared object; `dressing.py`'s unsigned sets agree |
+| `ch4_rccsdt_generated_sto3g`, `lih_rccsdt_generated_sto3g` | the generated route end to end, both requiring `PLANCK_CC_SPIN_ADAPT` |
+
+**Why tests and not comments.** Two warning comments already existed —
+`planck_tensor_cpp.py` ("Do NOT re-add the -1 perms") and `dressing.py`,
+recording that folding all 8 caused a **52 % energy defect** that "passed every
+symbolic check". Neither prevented a third module from carrying the bad set.
+Comments document an invariant; only a test enforces one.
+
+Writing the guard then found a **third** copy — `dressing.py`'s own
+`_ERI_PERMUTATIONS` pair. Those are sign-free permutation *sets* used for
+canonicalization, with parity computed separately, so they are deliberately not
+merged: different shape, and merging would be a false unification. What they must
+share is which permutations belong to which basis, and that is gated.
+
+## Facts worth carrying
+
+- **`choose_determinant_backstop` binds the hand-written tensor path only.**
+  `PLANCK_RCCSDT_BACKEND=tensor` does not bypass it (it is called inside
+  `run_tensor_rccsdt` off reference size), but `optimized` does — it routes
+  through `rccgen.cpp` to the arbitrary-order harness, which never consults it.
+  So the `nso > 16 || ndet > 10000` limit recorded across several ccgen scopes
+  does **not** constrain generated-route test cases. LiH/STO-3G (nso=12,
+  ndet=495) exercises the generated route in 5 s.
+- **The generated undressed kernel reproduces the hand-written baseline** to
+  3e-10 on CH4, which is what makes a dressing disagreement attributable.
+- The six failing selection-model gates (`test_savings_concentration` and five
+  others) are pre-existing and unrelated; baselined on a clean worktree, before
+  and after.
+
+## What it is worth: the first wall-clock numbers
+
+Everything previously claimed for this route (2.0x-7.1x) was a FLOP model.
+Measured, same input, same binary configuration apart from `--dressing`:
+
+| system | no/nv | undressed | derivation-dressed | speedup |
+|---|---|---|---|---|
+| LiH/STO-3G | 4/8 | 5.12 s | **1.64 s** | **3.12x** |
+| CH4/STO-3G | 5/4 | 104.56 s | **28.94 s** | **3.61x** |
+
+Medians of 3 and 2 runs; spreads 0.03-0.10 s (LiH) and 0.3-0.4 s (CH4).
+**Energies identical to all printed digits on both**, and CH4 takes 15 steps
+either way — so this is per-iteration work, not fewer iterations.
+
+Both land inside the modelled range, which is worth stating plainly because
+`CCGEN_KERNEL_SCALING_SCOPE.md` gave good reason to expect otherwise: it measured
+the generated-vs-hand-written gap as a *scaling* defect that no cost model
+predicts. The model survived contact here; two points is not enough to say it
+survives generally, and the ratio does grow between them (3.12 -> 3.61).
+
+## One emitter
+
+`emit_factorized_translation_unit` is deleted (-45 lines). It had **no production
+caller** — 25 references, all tests — so the "two emitters" problem was already
+one emitter plus dead weight by the time W3.3 came due.
+
+The generate-then-emit convenience now lives in `test_factorize.py`, its only
+consumer. Inlining `generate_cc_equations` at all 25 call sites would have been a
+net *positive* diff to remove 13 lines, which is not what "delete the second
+emitter" was for.
+
+`print_cpp_planck` gained exactly one parameter (`dressing`) and none of the
+factorizer's seven selection knobs — the condition W3 set for doing the merge
+after W4/W5 rather than before.
+
+## What remains
+
+- **`merge_transposes` is not threaded** on the production path, so `derived`
+  emits the un-merged 59 builders on spatial `ccsd` rather than 31. W3 deferred
+  this deliberately; with W4/W5 now green it is the obvious next lever, and
+  `CCGEN_OPERATOR_IDENTITY_AND_REUSE.md` measures the merge ratio growing with
+  rank (1.4x -> 2.1x -> 3.7x).
+- **UCC** is out of scope: the emitter rejects spin-blocked manifold names
+  (`Unknown manifold 'singles_aa'`), and recognition finds zero operators there.
+  Needs O6 in `CCGEN_OPERATOR_IDENTITY_AND_REUSE.md` first.
+- The six failing selection-model gates are unrelated and pre-existing.
 
 ---
 
-Status (what is landed, what is open) lives in `vault/Status/Completion.md` and
-`vault/Status/Open Work.md`, which are canonical.
+Status lives in `vault/Status/Completion.md` and `vault/Status/Open Work.md`,
+which are canonical.
