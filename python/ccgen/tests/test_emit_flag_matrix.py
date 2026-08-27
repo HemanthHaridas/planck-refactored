@@ -78,8 +78,22 @@ BASELINES = (
     # while its builder is still called. The only emitted difference is the count in
     # `// Intermediate tau (oovv, usage=N)`: 1 -> 3, a comment. Byte length is identical,
     # which is why `test_byte_lengths_are_unchanged` did not move and this digest did.
+    #
+    # RE-PINNED 2026-08-26 (D5): the digest moved again, for a CORRECTNESS fix.
+    # `lowering/restricted_closed_shell.py` carried the full 8-fold symmetry
+    # group of the ANTISYMMETRIZED <pq||rs>, four members of which are false for
+    # the spatial blocks these kernels index. Its phase reaches the emitted text
+    # directly, so those four produced wrong ERI reads with a bogus sign. Exactly
+    # 8 lines changed here, all of that shape, e.g.
+    #     -  result(m, j, b, e) += -mo_blocks.ovov(m, b, j, e);
+    #     +  result(m, j, b, e) +=  mo_blocks.ovvo(m, b, e, j);
+    # Verified against the operator SPEC, not merely observed: for the `Wabef`
+    # definition term `-1 t1(b,m) v(a,m,e,f)`, the new emission reproduces it to
+    # 0.000e+00 while the old was off by 1.4e+01. Byte length is unchanged (the
+    # edits are in place), which is why only this digest moved.
+    # See docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md, D4/D5.
     ("dress_operators", {"dress_operators": True}, 28187,
-     "03871d2557945049d0890975c73116b698e61bcef8012edcbf986600791375be"),
+     "49d24c2724e73e5dd0e3625bb2e21367b17db58f68374e97c4c2fa91ee756f05"),
 )
 
 

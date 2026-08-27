@@ -19,7 +19,7 @@ from typing import Literal, Sequence
 
 from ..indices import Index
 from ..project import AlgebraTerm, manifold_rank
-from ..tensors import Tensor
+from ..tensors import SPATIAL_ERI_SYMMETRIES, Tensor
 
 OrbitalModel = Literal["restricted_closed_shell"]
 
@@ -33,16 +33,14 @@ _CANONICAL_ERI_BLOCKS: dict[str, tuple[str, str, str, str]] = {
     "vvvv": ("vir", "vir", "vir", "vir"),
 }
 
-_ERI_SYMMETRY_PERMUTATIONS: tuple[tuple[tuple[int, int, int, int], int], ...] = (
-    ((0, 1, 2, 3), +1),
-    ((1, 0, 2, 3), -1),
-    ((0, 1, 3, 2), -1),
-    ((1, 0, 3, 2), +1),
-    ((2, 3, 0, 1), +1),
-    ((3, 2, 0, 1), -1),
-    ((2, 3, 1, 0), -1),
-    ((3, 2, 1, 0), +1),
-)
+# THE FIX (D5): this module lowers to SPATIAL blocks, so only the four +1
+# relations apply. It previously carried the full 8-fold group of the
+# ANTISYMMETRIZED <pq||rs>, whose four odd-parity members are false here -- the
+# phase computed below reaches the emitted C++ directly (`_map_eri_tensor`
+# returns `LoweredTensorFactor.phase` without re-deriving it), so an invalid
+# relation became a wrong ERI read with a bogus sign in 41 of 288 emitted
+# operator builders. Shared definition, not a fourth copy.
+_ERI_SYMMETRY_PERMUTATIONS = SPATIAL_ERI_SYMMETRIES
 
 
 def _space_priority(space: str) -> int:

@@ -27,7 +27,7 @@ from ..lowering import (
 )
 from ..project import AlgebraTerm
 from ..spin import ucc_term_index_spins
-from ..tensors import Tensor
+from ..tensors import SPATIAL_ERI_SYMMETRIES, Tensor
 
 if TYPE_CHECKING:
     from ..optimization.intermediates import IntermediateSpec
@@ -58,12 +58,9 @@ _CANONICAL_ERI_BLOCKS: dict[str, tuple[str, str, str, str]] = {
 # `oovv(l,k,c,d)` with a bogus sign, which was the residual-emit defect: the
 # energy kernel (identity-perm oovv reads only) was exact while the doubles/
 # quadruples residuals were wrong. Do NOT re-add the -1 perms.
-_ERI_SYMMETRY_PERMUTATIONS: tuple[tuple[tuple[int, int, int, int], int], ...] = (
-    ((0, 1, 2, 3), +1),
-    ((1, 0, 3, 2), +1),
-    ((2, 3, 0, 1), +1),
-    ((3, 2, 1, 0), +1),
-)
+# Shared with the lowering path (D5): both resolve SPATIAL blocks, and keeping
+# two copies is what let one of them carry the invalid -1 relations.
+_ERI_SYMMETRY_PERMUTATIONS = SPATIAL_ERI_SYMMETRIES
 
 
 def eri_permutation_preserves_block(block_tag: str, perm: tuple[int, ...]) -> bool:
