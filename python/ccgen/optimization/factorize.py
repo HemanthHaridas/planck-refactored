@@ -945,51 +945,6 @@ def select_best_of_both(specs, total_bytes, n_occ=30, n_vir=100):
 # ── E0.3: emit a factorized translation unit ───────────────────────
 
 
-def emit_factorized_translation_unit(method: str, engine: str = "diagram",
-                                     canonical_fock: bool = True,
-                                     top_k=None, savings_fraction=None,
-                                     max_operator_bytes=None,
-                                     memory_budget_bytes=None,
-                                     factor_builder_bodies=False,
-                                     merge_transposes=False, spatial=True,
-                                     n_occ=30, n_vir=100):
-    """E0.3 + E1 + M1 + M2: emit a Planck C++ TU whose kernels reference the
-    factorizer's derived operators, with a `build_W` for each KEPT operator.
-
-    Pipeline: generate the residual, collect the manifold's derived operators
-    (`manifold_operators`, `include_reuse=False`), select which to materialize,
-    rewrite every term hoisting only the kept operators (the rest stay inline,
-    along with the CCSD/Reuse children which are always inlined — D7.3's job), and
-    hand the rewritten equations + kept specs to `emit_planck_translation_unit`.
-
-    Selection precedence:
-    - `memory_budget_bytes` (M2): joint FLOP/memory selection under a TOTAL
-      footprint budget via `select_best_of_both` (best of the savings- and
-      density-greedy fills). Takes precedence over the E1/M1 knobs.
-    - else `top_k` / `savings_fraction` (E1) under the optional `max_operator_bytes`
-      per-operator guard (M1).
-
-    Non-selected operators inline via the E1 keep-set path. Returns the TU string.
-
-    Generates its own equations, so it can only emit the GCC manifold this call
-    produces. To factorize an ALREADY-ADAPTED manifold (spin-adapted or UCC),
-    call `emit_factorized_from_equations` directly — that is the entry the
-    production wiring needs (W1 in `docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md`).
-    """
-    from ..generate import generate_cc_equations
-
-    return emit_factorized_from_equations(
-        method,
-        generate_cc_equations(method, engine=engine,
-                              canonical_fock=canonical_fock),
-        top_k=top_k, savings_fraction=savings_fraction,
-        max_operator_bytes=max_operator_bytes,
-        memory_budget_bytes=memory_budget_bytes,
-        factor_builder_bodies=factor_builder_bodies,
-        merge_transposes=merge_transposes, spatial=spatial,
-        n_occ=n_occ, n_vir=n_vir)
-
-
 def emit_factorized_from_equations(method: str, eqs, *,
                                    top_k=None, savings_fraction=None,
                                    max_operator_bytes=None,
@@ -999,12 +954,13 @@ def emit_factorized_from_equations(method: str, eqs, *,
                                    n_occ=30, n_vir=100):
     """W1: the factorize-and-emit pipeline, over equations the caller supplies.
 
-    Same body as `emit_factorized_translation_unit`, which is now a thin wrapper
-    that generates and delegates — split so an already-adapted manifold can be
-    factorized. `spin_adapt_equations(...)` and `ucc_adapt_equations(...)` output
-    both work: the factorizer keys on contraction structure and does not care how
-    a factor is named. Measured on adapted input, 31 merged operators on spatial
-    `ccsd` doubles and 86 on UCC `doubles_abab`.
+    THE factorize-and-emit entry (W3.3 deleted the generate-then-emit wrapper
+    that used to sit beside it: it generated its own equations, so it could only
+    emit the GCC manifold, while production needs an already-adapted one).
+    `spin_adapt_equations(...)` and `ucc_adapt_equations(...)` output both work:
+    the factorizer keys on contraction structure and does not care how a factor
+    is named. Measured on adapted input, 31 merged operators on spatial `ccsd`
+    doubles and 86 on UCC `doubles_abab`.
 
     `spatial` selects the symmetry table the transpose-equivalence uses; it is
     about the ERI's symmetries, NOT about whether `eqs` is spin-adapted. Leave it

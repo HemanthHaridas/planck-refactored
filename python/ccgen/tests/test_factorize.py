@@ -51,6 +51,27 @@ from ccgen.optimization.factorize import (  # noqa: E402
 )
 
 
+def emit_factorized_translation_unit(method: str, engine: str = "diagram",
+                                     canonical_fock: bool = True, **kwargs):
+    """Generate `method`'s equations and factorize-and-emit them.
+
+    W3.3: this used to be a production entry in `optimization/factorize.py`. It
+    was deleted there — it generated its own equations, so it could only ever
+    emit the GCC manifold, and production needs to factorize an ALREADY-ADAPTED
+    one (`emit_factorized_from_equations`, which `print_cpp_planck` now calls).
+    Keeping a second production emit path alive for tests is exactly the fork
+    W3 set out to remove, so the generate-then-emit convenience lives here, with
+    its only remaining callers.
+    """
+    from ccgen.optimization.factorize import emit_factorized_from_equations
+
+    return emit_factorized_from_equations(
+        method,
+        generate_cc_equations(method, engine=engine,
+                              canonical_fock=canonical_fock),
+        **kwargs)
+
+
 class CostModelTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -499,7 +520,6 @@ class CostModelTests(unittest.TestCase):
         build_W per derived operator and no un-emittable CCSD-operator factors
         (those stay inline; dressing is D7.3's job)."""
         import re
-        from ccgen.optimization.factorize import emit_factorized_translation_unit
         tu = emit_factorized_translation_unit("ccsdt")
         self.assertEqual(tu.count("{"), tu.count("}"))
         builders = set(re.findall(r"build_(W_\w+)\(", tu))
@@ -532,7 +552,6 @@ class CostModelTests(unittest.TestCase):
         if not eigen.is_dir():
             self.skipTest("Eigen fetch not present (configure the build first)")
 
-        from ccgen.optimization.factorize import emit_factorized_translation_unit
         code = emit_factorized_translation_unit("ccsdt")
         with tempfile.NamedTemporaryFile(
             suffix=".cpp", mode="w", delete=False
@@ -604,7 +623,6 @@ class CostModelTests(unittest.TestCase):
         """E1 gate: emitting with top_k=5 produces exactly 5 build_W functions
         (the long tail is inlined)."""
         import re
-        from ccgen.optimization.factorize import emit_factorized_translation_unit
         tu = emit_factorized_translation_unit("ccsdt", top_k=5)
         self.assertEqual(len(set(re.findall(r"build_(W_\w+)\(", tu))), 5)
         self.assertEqual(tu.count("{"), tu.count("}"))
@@ -693,7 +711,6 @@ class CostModelTests(unittest.TestCase):
         if not eigen.is_dir():
             self.skipTest("Eigen fetch not present")
 
-        from ccgen.optimization.factorize import emit_factorized_translation_unit
         code = emit_factorized_translation_unit("ccsdt", max_operator_bytes=10**9)
         self.assertTrue(re.search(r"build_W_\w+\(", code))
         with tempfile.NamedTemporaryFile(
@@ -762,7 +779,6 @@ class CostModelTests(unittest.TestCase):
         """M2.2 gate: emit_factorized_translation_unit(memory_budget_bytes=B)
         emits exactly the best-of-both selection at B, and Σ footprint ≤ B."""
         import re
-        from ccgen.optimization.factorize import emit_factorized_translation_unit
         budget = 10**9
         tu = emit_factorized_translation_unit("ccsdt", memory_budget_bytes=budget)
         # V1.3.2: builder symbols are method-suffixed (`build_W_oo_ccsdt`), so strip the
@@ -802,7 +818,7 @@ class CostModelTests(unittest.TestCase):
         """
         import re
         from ccgen.optimization.factorize import (
-            emit_factorized_translation_unit, manifold_operators_with_plan)
+            manifold_operators_with_plan)
 
         eqs = generate_cc_equations("ccsd", engine="diagram", canonical_fock=True)
         sub = [t for m, ts in eqs.items()
@@ -869,7 +885,7 @@ class CostModelTests(unittest.TestCase):
         import hashlib
         from ccgen.generate import generate_cc_equations
         from ccgen.optimization.factorize import (
-            emit_factorized_from_equations, emit_factorized_translation_unit)
+            emit_factorized_from_equations)
 
         for method, kwargs in (
             ("ccsd", {}),
@@ -1001,7 +1017,6 @@ class CostModelTests(unittest.TestCase):
         if not eigen.is_dir():
             self.skipTest("Eigen fetch not present")
 
-        from ccgen.optimization.factorize import emit_factorized_translation_unit
         code = emit_factorized_translation_unit("ccsdt", memory_budget_bytes=10**9)
         with tempfile.NamedTemporaryFile(
             suffix=".cpp", mode="w", delete=False
@@ -1075,7 +1090,6 @@ class CostModelTests(unittest.TestCase):
         if not eigen.is_dir():
             self.skipTest("Eigen fetch not present")
 
-        from ccgen.optimization.factorize import emit_factorized_translation_unit
         code = emit_factorized_translation_unit("ccsdt", factor_builder_bodies=True)
         self.assertTrue(re.search(r"Tensor\dD X\d\(", code))  # scratch emitted
         with tempfile.NamedTemporaryFile(
@@ -1191,7 +1205,6 @@ class CostModelTests(unittest.TestCase):
         if not eigen.is_dir():
             self.skipTest("Eigen fetch not present")
 
-        from ccgen.optimization.factorize import emit_factorized_translation_unit
         code = emit_factorized_translation_unit("ccsdt", factor_builder_bodies=True)
         with tempfile.NamedTemporaryFile(
             suffix=".cpp", mode="w", delete=False
