@@ -26,21 +26,22 @@ transform acts correctly on unit-normalized components. Applied to L = 3,4,5.
   suite (be_ccsd/be_fci/water_rhf_freq/geomoptfreq spherical) all pass.
 - Spherical transform + density-lift unit tests still pass.
 
-**Test gap (why it shipped, G4):** the `spherical_density_lift` test checks the
-lift identity `tr(M_sph·X_sph) = tr(M_cart·X_cart)` — which holds for ANY C
-(it is `tr(C M Cᵀ · C X Cᵀ)` self-consistency), so it passes for a wrong subspace.
-The `spherical_transform` test checks harmonic purity only for L ≤ 2 and rank for
-L ≥ 3. Neither checks that the L ≥ 3 spherical functions are pure harmonics in the
-PHYSICAL (unit-normalized-component) basis. TODO: add a test that the production
-`cart_to_sph_block(L)`, acting on unit-normalized Cartesian components, yields rows
-whose Laplacian (in raw monomials) is 0 for all L ≤ 6 — the check that would have
-caught this. Also add a cross-code f-shell energy gate (water/cc-pVTZ spherical RHF
-vs PySCF ~1e-8); the existing high-L gates are cross-ENGINE (all engines share the
-transform, so they agreed while wrong).
+**Test gap (why it shipped, G4) — now closed.** The `spherical_density_lift` test
+checks the lift identity `tr(M_sph·X_sph) = tr(M_cart·X_cart)` — which holds for ANY C
+(it is `tr(C M Cᵀ · C X Cᵀ)` self-consistency), so it passes for a wrong subspace. The
+`spherical_transform` test checked harmonic purity only for L ≤ 2 and rank for L ≥ 3.
+Neither asked whether the L ≥ 3 spherical functions are pure harmonics in the PHYSICAL
+(unit-normalized-component) basis, and neither was energy-relevant there.
+
+Both gaps are now closed: FU3 added the physical-monomial Laplacian check and the
+span-equality check (mutation-verified — see below), and FU4 added the cross-CODE
+f/g/h energy gates. The pre-existing high-L gates were cross-ENGINE and Cartesian, so
+all engines agreed with each other while all were wrong, and none of them touched the
+spherical transform at all.
 
 ---
 
-## Follow-ups (scoped, not done)
+## Follow-ups — FU1, FU3, FU4 LANDED (2026-08-28); FU2 open
 
 The f fix (`62b7ec5`) routes **L = 3 (f), 4 (g), 5 (h)** through
 `normalized_pseudoinverse`. **L = 6 (i)** already used the recurrence oracle
@@ -53,52 +54,71 @@ before the fix these spans genuinely differed). The raw matrices still differ
 (~0.7) — that is only the intra-span basis/ m-ordering convention, which is
 energy-invariant.
 
-### FU1 — Validate g and h shells end-to-end (~S)
+### FU1 + FU4 — cross-CODE energy gates at f, g, h — **DONE**
 
-f (L=3) is validated by water/cc-pVTZ. g (L=4) and h (L=5) are routed through the
-same fixed path and span-match the oracle, but have **no end-to-end energy test**.
-Planck ships cc-pVQZ (g) and cc-pV5Z (h). Run a small RHF (e.g. Ne or water) in
-cc-pVQZ and cc-pV5Z, spherical, vs PySCF with matched basis coefficients; expect
-~1e-9 (the d/f floor). This closes the L ≤ 5 production range. NB: high-L bases are
-near-linear-dependent — use spherical (not Cartesian), and allow generous cycles.
+Three PySCF-anchored spherical RHF gates, `extended`+`spherical`:
 
-### FU2 — Check the i-shell (L=6) oracle path end-to-end (~S)
+| shell | case | PySCF | Planck | Δ | iters |
+|---|---|---|---|---|---|
+| f (L=3) | `water_rhf_spherical_ccpvtz_fshell` | −76.0571274203 | −76.0571274250 | **4.7e-9** | 19 |
+| g (L=4) | `ne_rhf_spherical_ccpvqz_gshell` | −128.5434696591 | all 10 digits | **0.0e+00** | 11 |
+| h (L=5) | `ne_rhf_spherical_ccpv5z_hshell` | −128.5467701295 | all 10 digits | **0.0e+00** | 12 |
 
-L = 6 uses the oracle directly and the oracle is normalization-correct by
-inspection, but it has **never been exercised end-to-end** against another code
-(no i-shell basis is in the regression suite; the transform test only checks the
-oracle is *valid harmonics*, not a cross-code energy). Planck ships cc-pV6Z (i).
-Confirm a spherical RHF matches PySCF ~1e-9. If the engine stack buffers (MAX_L=6)
-are the ceiling, this is the top of the supported range and worth a gate.
+The f case is the tripwire this scope said was missing: pre-fix it gave
+−76.0571775438 in 83–142 iterations. g and h close FU1 — they had ridden the fixed
+path on a span-match argument with no end-to-end number.
 
-### FU3 — The missing convention-invariant transform test (~S)
+**References were built from Planck's own GBS** via `pyscf.gto.basis.parse_gaussian`,
+so the basis-coefficient confound is removed rather than assumed away; they agree
+with PySCF's built-in cc-pVTZ/QZ/5Z, which is the check that the two sets match.
+Note Planck's GBS is Gaussian94 format — `gto.basis.parse` (NWChem) raises
+`BasisNotFoundError` on it, and PySCF 2.13.0 has no built-in cc-pV6Z at all.
 
-`spherical_transform.cpp` checks harmonic purity only for L ≤ 2 (collinearity) and
-rank for L ≥ 3; `spherical_density_lift.cpp` checks a lift identity that holds for
-ANY C. Neither is energy-relevant for L ≥ 3, which is why the bug shipped. Add,
-for all L ≤ 6, a check that is convention-invariant and energy-relevant:
+### FU2 — the i-shell (L=6) oracle path — **OPEN**
 
-- **Harmonic-purity in physical monomials.** Take `cart_to_sph_block(L)` (rows =
-  coefficients on unit-normalized Cartesian components), convert each row back to
-  raw-monomial coefficients (multiply column `i` by `1/√s_i`), and assert the
-  Laplacian of each resulting polynomial is 0. This directly catches the
-  normalization bug (pre-fix the raw Laplacian was ~0.9; post-fix it is 0).
-- **OR span-equality with the oracle.** Assert the row-space projector of the
-  production block equals that of `cart_to_sph_block_recurrence(L)` to ~1e-14 for
-  all L ≤ 5 (the oracle is the trusted reference; L = 6 is already byte-identical).
-  This is the cheapest correct check and is exactly what confirmed the fix.
+`tests/inputs/regression/spherical/ne_rhf_spherical_ccpv6z_ishell.hfinp` exists and
+carries its reference inline, but is **deliberately not registered**: Ne/cc-pV6Z is
+140 spherical AOs, and the conventional `nb⁴` ERI build makes it far too heavy for
+the suite (h, at 91 AOs, already takes ~37 s).
 
-Do NOT compare production vs oracle element-wise — they are different valid bases
-of the same space (raw diff ~0.7), so element-wise would false-fail.
+```
+PySCF 2.13.0 RHF/cc-pV6Z spherical, Ne:  -128.5470611007 Eh
+```
 
-### FU4 — Cross-code f/g/h/i energy gates (~S)
+Expect ~1e-9, as measured for f/g/h. **L = 6 is a different code path** — it
+delegates to the recurrence oracle and never touches `normalized_pseudoinverse` — so
+a disagreement implicates `spherical_recurrence.cpp`, not the pseudoinverse fix.
+`MAX_L = 6` makes this the top of the supported range.
 
-The existing high-L regression gates (e.g. `ne_rhf_ccpvqz_highL_*`) are
-cross-**ENGINE** (`os_vs_rys`) — all engines share the same transform, so they
-agreed with each other while all being wrong vs an external reference. Add
-cross-**CODE** (PySCF-anchored, ~1e-8) spherical RHF gates at f (cc-pVTZ), g
-(cc-pVQZ), h (cc-pV5Z), and i (cc-pV6Z). The f gate is the tripwire that would have
-caught this defect; the g/h/i gates guard FU1/FU2.
+### FU3 — the convention-invariant transform test — **DONE**
+
+Two checks added to `tests/spherical_transform.cpp`, both applied for all L ≤ 6:
+
+- **harmonic purity in the PHYSICAL monomials.** `max_laplacian` already undid the
+  unit-normalization weighting before differentiating — it was only ever pointed at
+  the oracle, never at production.
+- **row-space projector equality with the oracle.** Compares the selected subspace
+  while staying invariant to the m-ordering convention. Do **not** compare the
+  matrices element-wise; they are different valid bases of the same space.
+
+**Both verified falsifiable in situ**, by dropping the row scaling in
+`normalized_pseudoinverse` and rebuilding:
+
+| L | max\|∇²\| | max\|ΔP\| |
+|---|---|---|
+| 0–2 | 0 | 0 (unaffected — these bake normalization into the hand-derived blocks) |
+| 3 | **2.2e-1** | **3.4e-1** |
+| 4 | **1.8e-1** | **3.0e-1** |
+| 5 | **8.4e-2** | **2.7e-1** |
+| 6 | 0 | 0 (unaffected — delegates to the oracle) |
+
+Post-fix all of L ≤ 6 sits at ~1e-16. The failures land on exactly the three shells
+the fix touched, and the pre-existing shape/rank check stayed green throughout —
+which is precisely why the defect shipped.
+
+This also corrected a false statement in that file's own header: it claimed the
+L ≥ 3 pseudoinverse "legitimately carries r²-contamination". That described the
+**defect**, not a property of the transform.
 
 ---
 

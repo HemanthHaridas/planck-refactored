@@ -28,6 +28,18 @@ truth for what remains.
   D3h, Oh, linear-group interplay, and lone-atom behavior
 - Revalidate the CASSCF/PySCF gate suite after future optimizer work; the current tree matches the documented state, but the 11/11 suite was not freshly rerun during the May 25 consolidation review
 - Keep documentation comments aligned with the implemented spherical symmetry representation; stale comments have already drifted once
+- **FU2 — the i-shell (L=6) spherical path has never been checked against another
+  code.** L=6 is the only production angular momentum that bypasses
+  `normalized_pseudoinverse` entirely and delegates to the recurrence oracle
+  (`cart_to_sph_block_recurrence`), so it is a distinct code path from the f/g/h
+  gates landed 2026-08-28. The input and its reference are committed but
+  **deliberately unregistered** — Ne/cc-pV6Z is 140 spherical AOs and the
+  conventional `nb⁴` ERI build makes it far too heavy for the suite (h, at 91 AOs,
+  already takes ~37 s):
+  `tests/inputs/regression/spherical/ne_rhf_spherical_ccpv6z_ishell.hfinp`,
+  PySCF 2.13.0 RHF/cc-pV6Z spherical Ne = `-128.5470611007` Eh, expect ~1e-9.
+  A disagreement implicates `spherical_recurrence.cpp`, not the pseudoinverse fix.
+  See `docs/SPHERICAL_F_SHELL_ACCURACY_SCOPE.md` FU2.
 
 ## docs/ hygiene — two ccgen scope docs still owe an architecture rewrite
 

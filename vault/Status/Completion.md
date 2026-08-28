@@ -90,6 +90,29 @@ historical design context, but they are no longer the source of truth for
   geomopt,freq,geomoptfreq}_631gd`), with unsupported workflows hard-gated
   rather than allowed to return wrong answers (boundary markers:
   `water_rmp2_spherical_{gradient,geomopt}_rejected`)
+- High angular momentum (f/g/h) spherical transform validated **cross-CODE**
+  (2026-08-28). The `L >= 3` `cart_to_sph_block` matrices carried integer
+  coefficients for RAW Cartesian monomials while the integral engine feeds
+  **unit-normalized** components, so the spherical functions were not pure
+  harmonics in the physical monomials — a contaminated l-subspace that put
+  water/cc-pVTZ 2.14e-5 **below** the variational minimum in a same-spanning
+  basis. Fixed earlier by `normalized_pseudoinverse` (`src/basis/spherical.cpp`);
+  what landed now is the coverage that was missing, and the reason it shipped:
+  every high-L gate was **Cartesian and cross-ENGINE**, and since all engines
+  share the transform they agreed with each other while all being wrong.
+  Three PySCF-anchored spherical RHF gates close it —
+  `water_rhf_spherical_ccpvtz_fshell` (f, 4.7e-9, 19 iters against 83-142
+  pre-fix), `ne_rhf_spherical_ccpvqz_gshell` (g) and
+  `ne_rhf_spherical_ccpv5z_hshell` (h), the latter two matching PySCF to all ten
+  printed digits. References were built from Planck's **own** GBS via
+  `pyscf.gto.basis.parse_gaussian`, removing the basis-coefficient confound
+  rather than assuming it away. `tests/spherical_transform.cpp` additionally
+  pins the two convention-invariant properties the old shape/rank check could
+  not see — harmonic purity in the physical monomials, and row-space equality
+  with the recurrence oracle — both mutation-verified: re-introducing the defect
+  fails exactly L = 3,4,5 (max|∇²| 2.2e-1/1.8e-1/8.4e-2) while L <= 2 and L = 6
+  stay green. The i-shell (L=6) path bypasses the pseudoinverse for the
+  recurrence oracle and remains unchecked cross-code; see `vault/Status/Open Work.md`.
 
 ### Post-HF methods
 
