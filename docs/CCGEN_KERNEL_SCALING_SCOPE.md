@@ -4,6 +4,11 @@
 implicated (and not testable on this ladder). The ratio rises from 21.8× to 34.2× across the
 measured range and both indices contribute.
 
+**Revisited 2026-08-26** — H3's fix now has a second mechanism (derivation dressing, wired and
+measured at 3.12×/3.61× end-to-end) which this ladder has not yet been re-run against. See the
+"Revisited" section before acting on the recommendation below; the two candidate fixes may
+overlap.
+
 ## The answer
 
 Five ladder points, rank-3 triples residual, `-O3`, single-threaded, repeats averaged, generated
@@ -102,6 +107,54 @@ on `bh3`" folklore figure can be neither explained nor dismissed from this data.
 - **The generated kernel does not obey a single power law** (21.4% residual, concentrated at high
   `v`) while the hand-written one does. Evidence of multiple contraction regimes in the generated
   code — see above.
+
+## Revisited 2026-08-26: H3's fix has been partly measured, by a different mechanism
+
+This document names one fix for H3 — consume `_optimal_contraction_order` in the emitter. A
+**second** mechanism addresses the same hypothesis and has since been wired and measured:
+**derivation dressing** factorizes each term's n-ary contraction into a binary tree, which is
+contraction-order optimization arrived at from the operator side rather than the loop side.
+
+H3 is stated here as: *"the generated kernels evaluate each term n-arily in emission order;
+`t2·t3·v` is `o⁵v⁵` n-ary against `o³v⁴` if `v·t3` is factored first."* Factoring `v·t3` first is
+exactly what a derived operator does.
+
+Measured (`docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md`), generated-undressed vs
+generated-derivation-dressed, same binary configuration apart from `--dressing`:
+
+| system | o | v | undressed | dressed | speedup |
+|---|---|---|---|---|---|
+| LiH/STO-3G | 4 | 8 | 5.12 s | 1.64 s | **3.12x** |
+| CH4/STO-3G | 5 | 4 | 104.56 s | 28.94 s | **3.61x** |
+
+Energies identical to all printed digits; CH4 takes 15 iterations either way, so this is
+per-iteration work.
+
+**What that does and does not establish.**
+
+- It is **consistent with H3** and with this document's answer: if the gap is a contraction-order
+  defect, factoring the contractions should close part of it, and it does.
+- It is **not** a measurement on this ladder. These are end-to-end solve times on two systems, not
+  the isolated triples-residual timings the six points above use, and the two systems are not on
+  the ladder (LiH is not; CH4 is, at `o=5 v=4`). **The two sets of numbers are not comparable and
+  must not be combined into one ratio.**
+- Two points cannot give exponents. Whether dressing reduces the *scaling* or only the *constant*
+  is unmeasured — and that is precisely the distinction this document exists to make. The ratio
+  grew slightly between the two (3.12 → 3.61) but with `o` and `v` both changing, which is exactly
+  the degenerate-ladder trap recorded above.
+
+**The obvious follow-on: re-run this ladder's six points with `--dressing derived`.** The
+infrastructure now exists (`PLANCK_CC_DRESSING`, and `PLANCK_CC_T3_TIME` for the isolated residual
+timing). That would answer, on the ladder that was designed for it, whether the generated-vs-hand
+exponents `o^0.93 v^0.34` shrink under dressing or merely shift. **Do that before consuming
+`_optimal_contraction_order`** — if dressing already flattens the exponents, the two fixes overlap
+and the emitter change may be redundant rather than additive.
+
+**One constraint carries over unchanged.** `choose_determinant_backstop` still gates which systems
+reach a generated kernel *by the hand-written route* — but not the generated one. `optimized`
+routes through `rccgen.cpp` to the arbitrary-order harness, which never consults the backstop, so
+the `nso > 16 || ndet > 10000` requirement recorded below applies to the hand-written arm of the
+comparison only. That widens the set of usable ladder points on the generated side.
 
 ## What this makes worth doing
 

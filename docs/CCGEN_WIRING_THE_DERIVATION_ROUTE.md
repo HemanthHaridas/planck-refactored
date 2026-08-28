@@ -214,10 +214,17 @@ after W4/W5 rather than before.
 ## What remains
 
 - **`merge_transposes` is not threaded** on the production path, so `derived`
-  emits the un-merged 59 builders on spatial `ccsd` rather than 31. W3 deferred
-  this deliberately; with W4/W5 now green it is the obvious next lever, and
-  `CCGEN_OPERATOR_IDENTITY_AND_REUSE.md` measures the merge ratio growing with
-  rank (1.4x -> 2.1x -> 3.7x).
+  emits the un-merged 59 builders on spatial `ccsd` rather than 31. Scoped in
+  `docs/CCGEN_MERGE_TRANSPOSES_SCOPE.md` — which also corrects a reading this
+  document invited: the 1.4x -> 2.1x -> 3.7x figures are an **operator count**
+  reduction, while the modelled FLOP saving is 1.02x-1.20x. The likely win is
+  compile time, not speed, and that should be measured before wiring.
+- **The scaling ladder has not been re-run under dressing.**
+  `CCGEN_KERNEL_SCALING_SCOPE.md` attributes the generated-vs-hand gap to H3
+  (n-ary contraction order) and recommends consuming
+  `_optimal_contraction_order`. Dressing addresses the same hypothesis by a
+  different mechanism, so the two fixes may overlap; its six-point ladder should
+  be re-run with `--dressing derived` before the emitter change is attempted.
 - **UCC** is out of scope: the emitter rejects spin-blocked manifold names
   (`Unknown manifold 'singles_aa'`), and recognition finds zero operators there.
   Needs O6 in `CCGEN_OPERATOR_IDENTITY_AND_REUSE.md` first.
