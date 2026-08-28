@@ -136,7 +136,10 @@ rank's output re-arms the defect at every other rank.
   Since then, **derivation dressing** has been wired and measured at 3.12×/3.61× end-to-end. It
   addresses the same H3 by a different mechanism than the `_optimal_contraction_order`
   consumption that document recommends, so **re-run that ladder under `--dressing derived` before
-  attempting the emitter change** — the two fixes may overlap.
+  attempting the emitter change** — the two fixes may overlap. **That re-run is BLOCKED as of
+  2026-08-28**: the dressed rank-3 kernel has no reachable caller and `PLANCK_CC_T3_TIME` sits on
+  the orphaned path — see `docs/CCGEN_DRESSED_LADDER_BLOCKED.md`, which also raises a question over
+  where the 3.12x/3.61x came from.
 - **Rank 4 is still subject to the `-O1` registry pin** (`CMakeLists.txt:402`), which the rank-3
   path is not. Now that the accessor no longer dominates, that asymmetry is worth re-checking —
   the pin exists because a ~230k-line TU is super-linear to optimize at `-O3`, and the standing
