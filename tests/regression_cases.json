@@ -3742,6 +3742,72 @@
       ]
     },
     {
+      "id": "water_rhf_spherical_ccpvtz_fshell",
+      "input": "tests/inputs/regression/spherical/water_rhf_spherical_ccpvtz_fshell.hfinp",
+      "executable": "hartree-fock",
+      "tags": [
+        "extended",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -76.0571274203,
+          "atol": 1e-07
+        }
+      ],
+      "_pyscf_reference": "Cross-CODE spherical gate for the L>=3 cart->sph transform (docs/SPHERICAL_F_SHELL_ACCURACY_SCOPE.md FU1/FU4). The pre-existing high-L gate ne_rhf_ccpvqz_highL_* is CARTESIAN and cross-ENGINE, so it never touches this transform and all engines agreed while all were wrong. Reference from PySCF 2.13.0 RHF, mol.cart=False, built from Planck's own GBS via pyscf.gto.basis.parse_gaussian so the basis coefficients match exactly. f-shell (L=3): PySCF -76.0571274203, Planck -76.0571274250 (4.7e-9), 19 iterations. THIS IS THE TRIPWIRE for the normalization defect: pre-fix Planck gave -76.0571775438, i.e. 2.14e-5 BELOW PySCF -- below the variational minimum in a same-spanning basis -- and took 83-142 iterations."
+    },
+    {
+      "id": "ne_rhf_spherical_ccpvqz_gshell",
+      "input": "tests/inputs/regression/spherical/ne_rhf_spherical_ccpvqz_gshell.hfinp",
+      "executable": "hartree-fock",
+      "tags": [
+        "extended",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -128.5434696591,
+          "atol": 1e-07
+        }
+      ],
+      "_pyscf_reference": "Cross-CODE spherical gate for the L>=3 cart->sph transform (docs/SPHERICAL_F_SHELL_ACCURACY_SCOPE.md FU1/FU4). The pre-existing high-L gate ne_rhf_ccpvqz_highL_* is CARTESIAN and cross-ENGINE, so it never touches this transform and all engines agreed while all were wrong. Reference from PySCF 2.13.0 RHF, mol.cart=False, built from Planck's own GBS via pyscf.gto.basis.parse_gaussian so the basis coefficients match exactly. g-shell (L=4): PySCF -128.5434696591, Planck matches to all 10 printed digits (0.0e+00), 11 iterations. Closes FU1 for g, which rode the fixed normalized_pseudoinverse path on a span-match argument with no end-to-end number."
+    },
+    {
+      "id": "ne_rhf_spherical_ccpv5z_hshell",
+      "input": "tests/inputs/regression/spherical/ne_rhf_spherical_ccpv5z_hshell.hfinp",
+      "executable": "hartree-fock",
+      "tags": [
+        "extended",
+        "spherical"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "rhf_total_energy",
+          "expected": -128.5467701295,
+          "atol": 1e-07
+        }
+      ],
+      "_pyscf_reference": "Cross-CODE spherical gate for the L>=3 cart->sph transform (docs/SPHERICAL_F_SHELL_ACCURACY_SCOPE.md FU1/FU4). The pre-existing high-L gate ne_rhf_ccpvqz_highL_* is CARTESIAN and cross-ENGINE, so it never touches this transform and all engines agreed while all were wrong. Reference from PySCF 2.13.0 RHF, mol.cart=False, built from Planck's own GBS via pyscf.gto.basis.parse_gaussian so the basis coefficients match exactly. h-shell (L=5): PySCF -128.5467701295, Planck matches to all 10 printed digits (0.0e+00), 12 iterations, ~41 s. Top of the pseudoinverse range; L=6 delegates to the recurrence oracle instead. Closes FU1 for h."
+    },
+    {
       "id": "oh_rohf_gradient_sto3g",
       "input": "tests/inputs/regression/open_shell/oh_rohf_gradient_sto3g.hfinp",
       "executable": "tests/hf_gradient_fd.py",

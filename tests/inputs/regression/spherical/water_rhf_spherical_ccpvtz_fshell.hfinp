@@ -1,0 +1,36 @@
+# f-shell (L=3) cross-CODE gate for the spherical Cartesian->spherical transform.
+# This is the case the L>=3 normalization defect was found on: pre-fix Planck gave
+# -76.0571775438, which is 2.14e-5 BELOW PySCF -- below the variational minimum in a
+# same-spanning basis, the signature of a metric-inconsistent S_sph/H_sph pair.
+# The existing high-L gates are cross-ENGINE (all engines share the transform, so
+# they agreed with each other while all being wrong). This one is cross-CODE.
+# See docs/SPHERICAL_F_SHELL_ACCURACY_SCOPE.md FU4.
+%begin_control
+    basis       cc-pVTZ
+    calculation energy
+    basis_type  spherical
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    8
+    guess       hcore
+    max_cycles  200
+    tol_energy  1.0e-10
+    tol_density 1.0e-10
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000     0.000000     0.117300
+H     0.000000     0.757200    -0.469200
+H     0.000000    -0.757200    -0.469200
+%end_coords
