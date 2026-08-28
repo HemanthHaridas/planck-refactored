@@ -139,7 +139,7 @@ rank's output re-arms the defect at every other rank.
   attempting the emitter change** — the two fixes may overlap. **That re-run is BLOCKED as of
   2026-08-28**, on probe placement alone: `PLANCK_CC_T3_TIME` sits on the code path the rank-3
   representation fix rerouted away from, so it cannot fire in any build. Moving it into the
-  arbitrary-order harness unblocks it — see `docs/CCGEN_DRESSED_LADDER_BLOCKED.md`. The 3.12×/3.61×
+  arbitrary-order harness unblocks it — see `docs/CCGEN_DRESSED_LADDER_SCOPE.md`. The 3.12×/3.61×
   stand as measured; dressing does reach the arbitrary TU that harness runs.
 - **Rank 4 is still subject to the `-O1` registry pin** (`CMakeLists.txt:402`), which the rank-3
   path is not. Now that the accessor no longer dominates, that asymmetry is worth re-checking —

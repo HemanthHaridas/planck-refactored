@@ -144,10 +144,14 @@ per-iteration work.
   the degenerate-ladder trap recorded above.
 
 **The obvious follow-on: re-run this ladder's six points with `--dressing derived`.**
-**BLOCKED as of 2026-08-28 — read `docs/CCGEN_DRESSED_LADDER_BLOCKED.md`
+**BLOCKED as of 2026-08-28 — read `docs/CCGEN_DRESSED_LADDER_SCOPE.md`
 first.** Not for an architectural reason: `PLANCK_CC_T3_TIME` simply sits on the
 code path the rank-3 representation fix rerouted away from, so it cannot fire in
-any build. Moving the probe into the arbitrary-order harness unblocks it. The
+any build. It needs a THREE-armed probe in the arbitrary-order harness
+(generated-dressed / generated-undressed / hand-written): a two-armed
+dressed-vs-undressed retarget would drop the hand-written column, which is the
+known-good asymptotic standard this ladder measures excess scaling against, not
+merely a baseline. Scoped in that document, T1-T5. The
 3.12x/3.61x quoted just above **stand as measured** — dressing does reach the
 arbitrary TU that harness runs (verified 0 -> 119 `build_W` sites), contrary to a
 stale CMake comment that briefly suggested otherwise.

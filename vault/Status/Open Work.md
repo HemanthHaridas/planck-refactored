@@ -245,32 +245,31 @@ not block this. Full measured rescope in `docs/HPC_REMAINING_SCOPE.md`.
 
 ## ccgen generated-kernel performance
 
-**BLOCKED (2026-08-28), on a probe-placement problem only.** Both
+**SCOPED, not started (2026-08-28): a three-armed ladder probe.** Both
 `CCGEN_KERNEL_SCALING_SCOPE` and `CCGEN_KERNEL_PERFORMANCE` say to re-run the
 six-point ladder under `--dressing derived` before consuming
-`_optimal_contraction_order`. `PLANCK_CC_T3_TIME` lives in `tensor_backend.cpp`'s
-`use_generated_kernels` branch, which the rank-3 representation fix rerouted away
-from: with `ARBITRARY_LOWER_RANKS=OFF` the `optimized` backend hard-errors, and
-with it ON it routes to `run_rccgen`, which has no probe. Both branches run, not
-inferred. **Fix: move the probe into the arbitrary-order harness**, where the
-generated residual is actually evaluated (`PLANCK_CC_FIXTURE_DIR` already hooks
-that path), then run the six points in both arms.
+`_optimal_contraction_order`, since the two fixes may overlap. The question is
+**not** "is dressing faster" (measured: 3.12x/3.61x) but **does dressing reduce
+the generated kernel's scaling EXPONENTS or only its CONSTANT** — opposite next
+steps.
 
-**A wrong claim was made and retracted in the same session, worth keeping.** The
-first version of this entry said the arbitrary-order companion TUs "stay
-undressed" and therefore the dressed rank-3 kernel had no reachable caller,
-casting doubt on W5's 3.12x/3.61x. **That was wrong** — it trusted a stale
-`CMakeLists.txt` comment (describing a V1.3.1 suppression that V1.3.2 removed)
-plus `build_W:0` in two trees that had `ARBITRARY_LOWER_RANKS=OFF`, where no
-companion TU is emitted at all. Measured directly, one flag varied: the
-companion goes 0 -> 119 `build_W` call sites under `--dressing derived`, same as
-the plain TU. **Dressing reaches the path that runs, and W5's numbers stand as
-measured.** The CMake comment has been corrected. A comment is not a gate --
-third instance in this subsystem, and the first where a stale one invented a
-defect rather than hiding one.
+Two obstacles, both verified rather than assumed: `PLANCK_CC_T3_TIME` sits in the
+`tensor_backend.cpp` branch the rank-3 representation fix rerouted away from, so
+it cannot fire in any build; and a naive retarget to dressed-vs-undressed **loses
+the standard** — the hand-written kernel is the known-good asymptotic reference
+(`o^3.94 v^4.18` at 4.5%), not just a baseline. Hence three arms
+(generated-dressed / generated-undressed / hand-written) in one binary from one
+fixture, rather than reusing a recorded column across builds.
 
-Full record and the reusable ladder setup:
-`docs/CCGEN_DRESSED_LADDER_BLOCKED.md`.
+The load-bearing risk is that the two arms use **different amplitude types**
+(`RCCSDTAmplitudes` vs `ArbitraryOrderRCCAmplitudes`) with no existing conversion,
+and the hand-written kernel is file-local to `tensor_backend.cpp`. T2's
+agreement gate (all three residuals to ~1e-12 before any timing) is what stops
+this from timing two different equations — the same mismatch that produced the
+`-7.56e-05` defect.
+
+Steps T1-T5, the retracted "arbitrary TUs are undressed" claim, and the reusable
+ladder setup: `docs/CCGEN_DRESSED_LADDER_SCOPE.md`.
 
 
 The dominant cost — the out-of-line, allocating tensor accessors — is fixed (see Completion).
