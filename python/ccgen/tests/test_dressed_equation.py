@@ -24,7 +24,9 @@ from ccgen.optimization.dressed_equation import (  # noqa: E402
     ccsd_dressed_r2,
     dressed_multiset,
     expand_dressed_term,
+    expand_then_adapt,
     raw_multiset,
+    verify_adapted_dressed_equation,
     verify_dressed_equation,
 )
 
@@ -290,6 +292,186 @@ class GeneratedResidualIntegrityTests(unittest.TestCase):
                             fac.indices[0].name, fac.indices[1].name,
                             f"diagonal Fock in {manifold}: {t!r}",
                         )
+
+
+class PartialCoverageRemainderTests(unittest.TestCase):
+    """`assemble_dressed_equation` must keep the UNCOVERED part of a raw term whose
+    key the operator expansions supply only partially.
+
+    The bare/dressed partition used to be an all-or-nothing membership test on the
+    expansion footprint: a key any expansion touched was dropped entirely. In CCSD
+    singles the raw term `t1(b,j) t2(a,c,i,k) v(b,c,j,k)` has coefficient 1 while
+    Wmbej's textbook `-1/2 t2*v` definition supplies only 1/2 of it through
+    `Wmbej*t1`, so the missing 1/2 vanished -- the one mismatch in the GCC singles
+    baseline. It is now emitted as a scaled remainder.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from ccgen.generate import _dress_operator_equations, generate_cc_equations
+
+        cls.raw = generate_cc_equations(
+            "ccsd", engine="diagram", canonical_fock=True)
+        cls.dressed, _ = _dress_operator_equations(cls.raw)
+
+    def test_every_manifold_reexpands_exactly(self):
+        """The headline: the dressed CCSD equation is exact on ALL manifolds. Singles
+        was 1 mismatch before this fix; energy and doubles were already 0 and must
+        stay there."""
+        for manifold in self.raw:
+            with self.subTest(manifold=manifold):
+                ok, diff = verify_dressed_equation(
+                    self.dressed[manifold], self.raw[manifold])
+                self.assertTrue(ok, f"{manifold}: {len(diff)} mismatch(es): {diff}")
+
+    def test_ccd_reexpands_exactly(self):
+        """A second method, to pin that the remainder logic is not CCSD-shaped."""
+        from ccgen.generate import _dress_operator_equations, generate_cc_equations
+
+        raw = generate_cc_equations("ccd", engine="diagram", canonical_fock=True)
+        dressed, _ = _dress_operator_equations(raw)
+        for manifold in raw:
+            with self.subTest(manifold=manifold):
+                ok, diff = verify_dressed_equation(dressed[manifold], raw[manifold])
+                self.assertTrue(ok, f"{manifold}: {diff}")
+
+    def test_the_partial_term_is_actually_emitted(self):
+        """Pin the mechanism, not just the outcome: the recovered remainder appears
+        in the dressed singles manifold as a t1*t2*v term at +1/2. If a future
+        refactor makes the totals balance some other way, this says whether the
+        remainder path is still the reason."""
+        from fractions import Fraction
+
+        found = [
+            t for t in self.dressed["singles"]
+            if tuple(sorted(f.name for f in t.factors)) == ("t1", "t2", "v")
+            and t.coeff == Fraction(1, 2)
+        ]
+        self.assertTrue(
+            found, "the +1/2 t1*t2*v remainder is missing from dressed singles")
+
+    def test_fully_covered_keys_are_not_duplicated(self):
+        """The other side of the remainder: a key the expansions cover EXACTLY must
+        contribute no bare term. Otherwise every dressed term would be double
+        counted -- which would show up as a mismatch above, but assert the count
+        directly so the failure is legible."""
+        ok, diff = verify_dressed_equation(
+            self.dressed["doubles"], self.raw["doubles"])
+        self.assertTrue(ok)
+        # doubles carries the tau/tau_c overlap corrections; if the remainder logic
+        # ignored them it would re-add their share (measured: -1/8 and -1/4).
+        self.assertEqual(len(diff), 0)
+
+
+class AdaptedExpansionOrderTests(unittest.TestCase):
+    """V1.1e.1: the pinned order for validating a dressed SPATIAL equation.
+
+    Expand the dressed manifold to primitives in GCC, then spin-adapt -- the order
+    Decision 5 implies (`GCC -> dress -> adapt`). The alternative (adapt the operator
+    definitions and the residual separately, then verify against an adapted operator
+    table) is measurably worse and is pinned here as rejected.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from ccgen.generate import _dress_operator_equations, generate_cc_equations
+
+        cls.raw = generate_cc_equations(
+            "ccsd", engine="diagram", canonical_fock=True)
+        cls.dressed, _ = _dress_operator_equations(cls.raw)
+
+    def test_expansion_order_is_pinned(self):
+        """V1.1e.1: expand-in-GCC-THEN-adapt is the validated order, and the
+        alternative is measurably worse. Pinning both numbers is what stops the
+        ordering being silently revisited later.
+
+        Measured on dressed CCSD (mismatches vs the adapted raw residual):
+
+            adapt-then-verify (REJECTED)   energy 0  singles 13  doubles 61
+            expand-then-adapt (CHOSEN)     energy 0  singles  0  doubles 14
+
+        The doubles=14 is a real open defect (V1.1e.2: `v` bra<->ket orientation
+        sensitivity in the adapter), NOT a property of this ordering -- which is
+        exactly why the order is pinned first, so that residue is one reproducible
+        number.
+        """
+        from dataclasses import replace
+
+        from ccgen.optimization.dressing import seeded_operators
+        from ccgen.spin import spin_adapt_equations
+        from ccgen.tensors import Tensor
+
+        # (a) the chosen order
+        chosen = verify_adapted_dressed_equation(self.dressed, self.raw)
+        self.assertEqual({m: len(d) for m, d in chosen.items()}, {"doubles": 14})
+        self.assertNotIn("energy", chosen)
+        self.assertNotIn("singles", chosen)
+
+        # (b) the rejected order, for contrast: adapt the operator definitions and
+        # the residual separately, then verify against an adapted operator table
+        table = {}
+        for op in seeded_operators():
+            adapted = spin_adapt_equations(
+                {op.name: list(op.definition_terms)},
+                templates={op.name: Tensor(op.name, tuple(op.block))},
+            )
+            table[op.name] = replace(
+                op, definition_terms=tuple(adapted[op.name]))
+        adapted_raw = spin_adapt_equations(self.raw)
+        adapted_dressed = spin_adapt_equations(self.dressed)
+        rejected = {}
+        for manifold in self.raw:
+            _ok, diff = verify_dressed_equation(
+                adapted_dressed[manifold], adapted_raw[manifold], table)
+            if diff:
+                rejected[manifold] = len(diff)
+        self.assertEqual(rejected, {"singles": 13, "doubles": 61})
+
+        # the chosen order must be strictly better on every manifold
+        for manifold in self.raw:
+            self.assertLessEqual(
+                len(chosen.get(manifold, {})), rejected.get(manifold, 0),
+                f"{manifold}: chosen order is not better than the rejected one")
+
+    def test_expand_then_adapt_is_additive(self):
+        """The ordering is only meaningful if adaptation is linear over term
+        partitions -- otherwise no expansion order could be correct. Measured: it is
+        (0 mismatches splitting doubles in half), which is why the residue is a
+        write-order sensitivity rather than a merge failure."""
+        from ccgen.spin import _residual_template, spin_adapt_equations
+
+        raw = self.raw["doubles"]
+        template = _residual_template("doubles", raw)
+        whole = raw_multiset(
+            spin_adapt_equations({"doubles": list(raw)},
+                                 templates={"doubles": template})["doubles"])
+        halves: dict = {}
+        mid = len(raw) // 2
+        for part in (raw[:mid], raw[mid:]):
+            got = raw_multiset(
+                spin_adapt_equations({"doubles": list(part)},
+                                     templates={"doubles": template})["doubles"])
+            for key, coeff in got.items():
+                halves[key] = halves.get(key, 0) + coeff
+        mismatched = {
+            k for k in set(whole) | set(halves)
+            if whole.get(k, 0) != halves.get(k, 0)
+        }
+        self.assertEqual(mismatched, set())
+
+    def test_expand_then_adapt_keeps_operators_out_of_the_adapter(self):
+        """The mechanical reason for the order: expansion is what introduces the
+        operator-internal dummies (__Wmnij_e, __Wabef_m). Doing it in GCC means the
+        adapter only ever sees primitive factors."""
+        adapted = expand_then_adapt(self.dressed, operators=None)
+        operator_names = {"Wmnij", "Wabef", "Wmbej", "Fme", "Fae", "Fmi",
+                          "tau", "tau_c", "tau_tilde"}
+        for manifold, terms in adapted.items():
+            for term in terms:
+                for factor in term.factors:
+                    self.assertNotIn(
+                        factor.name, operator_names,
+                        f"{manifold}: unexpanded {factor.name} reached the adapter")
 
 
 if __name__ == "__main__":

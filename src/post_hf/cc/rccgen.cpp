@@ -1,8 +1,11 @@
-#include "post_hf/cc/ccsdtq.h"
+#include "post_hf/cc/rccgen.h"
 
 #include <algorithm>
 #include <filesystem>
+#include <cstdlib>
 #include <format>
+#include <fstream>
+#include <iomanip>
 
 #include "io/logging.h"
 #include "post_hf/cc/cc_amplitude_checkpoint.h"
@@ -17,6 +20,171 @@ namespace HartreeFock::Correlation::CC
 {
     namespace
     {
+
+        // Fixture probe (docs/CCGEN_SPIN_ADAPT_DEFAULT.md): with
+        // PLANCK_CC_FIXTURE_DIR set, load amplitudes from <dir>/t<r>.txt, seed
+        // them, evaluate the generated residuals ONCE and report per-rank max
+        // |R| with its index -- then stop. No iteration, no DIIS, no
+        // denominators, so a non-zero element IS the defect: at a true fixed
+        // point the correct residual is ~0 by construction.
+        //
+        // Fixture layout is the C++ one, (occ..., virt...) row-major -- NOT
+        // ccgen's Python (vir..., occ...). The dumper transposes; a mismatch is
+        // caught by seed_arbitrary_order_amplitudes' exact dims check.
+        //
+        // File format, whitespace-separated: rank, ndim, dims..., then values.
+        // ponytail: plain text, not binary. These fixtures are <= a few MB and
+        // being able to eyeball one is worth more than the parse time here.
+        std::expected<TensorND, std::string>
+        read_fixture_tensor(const std::filesystem::path &path, int expect_rank)
+        {
+            std::ifstream in(path);
+            if (!in)
+                return std::unexpected(std::format("cannot open fixture '{}'.", path.string()));
+
+            int rank = 0;
+            int ndim = 0;
+            if (!(in >> rank >> ndim))
+                return std::unexpected(std::format("fixture '{}': bad header.", path.string()));
+            if (rank != expect_rank)
+                return std::unexpected(std::format(
+                    "fixture '{}': holds rank {} but rank {} was asked for.",
+                    path.string(), rank, expect_rank));
+            if (ndim != 2 * expect_rank)
+                return std::unexpected(std::format(
+                    "fixture '{}': ndim {} but rank {} needs {}.",
+                    path.string(), ndim, expect_rank, 2 * expect_rank));
+
+            std::vector<int> dims(static_cast<std::size_t>(ndim));
+            std::size_t count = 1;
+            for (int d = 0; d < ndim; ++d)
+            {
+                if (!(in >> dims[static_cast<std::size_t>(d)]) || dims[static_cast<std::size_t>(d)] <= 0)
+                    return std::unexpected(std::format("fixture '{}': bad dim {}.", path.string(), d));
+                count *= static_cast<std::size_t>(dims[static_cast<std::size_t>(d)]);
+            }
+
+            TensorND tensor(dims, 0.0);
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                if (!(in >> tensor.data[i]))
+                    return std::unexpected(std::format(
+                        "fixture '{}': ran out of values at {} of {}.", path.string(), i, count));
+            }
+            double trailing = 0.0;
+            if (in >> trailing)
+                return std::unexpected(std::format(
+                    "fixture '{}': more values than the {} dims declare.", path.string(), count));
+            return tensor;
+        }
+
+        // Returns true when the probe ran (caller must stop).
+        bool run_fixture_probe(
+            ArbitraryOrderTensorCCState &state,
+            const GeneratedArbitraryOrderKernels &kernels,
+            int rank,
+            const std::string &tag)
+        {
+            const char *dir_env = std::getenv("PLANCK_CC_FIXTURE_DIR");
+            if (dir_env == nullptr || *dir_env == '\0')
+                return false;
+
+            const std::filesystem::path dir(dir_env);
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, tag,
+                std::format("R4.2b fixture probe: seeding from '{}', one residual "
+                            "evaluation, no iteration.", dir.string()));
+
+            ArbitraryOrderRCCAmplitudes seed;
+            for (int r = 1; r <= rank; ++r)
+            {
+                auto tensor = read_fixture_tensor(dir / std::format("t{}.txt", r), r);
+                if (!tensor)
+                {
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Error, tag,
+                        std::format("R4.2b fixture probe: {}", tensor.error()));
+                    return true;
+                }
+                seed.by_rank.push_back(std::move(*tensor));
+            }
+
+            if (auto applied = seed_arbitrary_order_amplitudes(state, seed); !applied)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Error, tag,
+                    std::format("R4.2b fixture probe: {}", applied.error()));
+                return true;
+            }
+
+            auto residuals = evaluate_generated_arbitrary_order_residuals(state, kernels);
+            if (!residuals)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Error, tag,
+                    std::format("R4.2b fixture probe: {}", residuals.error()));
+                return true;
+            }
+
+            // Per-rank max |R| AND its index: a single norm cannot localise the
+            // defect, and localising is the entire point of R4.2c.
+            for (int r = 1; r <= residuals->max_rank(); ++r)
+            {
+                auto view = residuals->tensor(r);
+                if (!view)
+                {
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Error, tag,
+                        std::format("R4.2b fixture probe: rank {}: {}", r, view.error()));
+                    continue;
+                }
+                const TensorND &t = residuals->by_rank[static_cast<std::size_t>(r - 1)];
+                std::size_t argmax = 0;
+                double best = 0.0;
+                for (std::size_t i = 0; i < t.data.size(); ++i)
+                {
+                    const double mag = std::abs(t.data[i]);
+                    if (mag > best)
+                    {
+                        best = mag;
+                        argmax = i;
+                    }
+                }
+                // Unflatten row-major so the index is readable as (i,j,..,a,b,..).
+                std::string index;
+                std::size_t remainder = argmax;
+                std::vector<std::size_t> coords(t.dims.size());
+                for (std::size_t d = t.dims.size(); d-- > 0;)
+                {
+                    coords[d] = remainder % static_cast<std::size_t>(t.dims[d]);
+                    remainder /= static_cast<std::size_t>(t.dims[d]);
+                }
+                for (std::size_t d = 0; d < coords.size(); ++d)
+                    index += std::format("{}{}", d == 0 ? "" : ",", coords[d]);
+
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info, tag,
+                    std::format("R4.2b probe: rank {} max|R|={:.6e} at ({}) n={}",
+                                r, best, index, t.data.size()));
+
+                // R4.2c: a scalar max cannot tell "wrong values" from "right
+                // values in a different index order". Dump the whole tensor so
+                // the comparison can be elementwise, and so a permutation
+                // hypothesis is testable rather than guessed at.
+                const std::filesystem::path out = dir / std::format("r{}_cpp.txt", r);
+                if (std::ofstream fh(out); fh)
+                {
+                    fh << r << ' ' << t.dims.size() << '\n';
+                    for (std::size_t d = 0; d < t.dims.size(); ++d)
+                        fh << t.dims[d] << (d + 1 == t.dims.size() ? '\n' : ' ');
+                    fh << std::setprecision(17);
+                    for (const double value : t.data)
+                        fh << value << '\n';
+                }
+            }
+            return true;
+        }
+
         // Solve the generated arbitrary-order RCC path at `rank`, returning the
         // full solve result (state carries the converged amplitudes). When
         // `warm_start` and a lower generated rank exists (the registry floors at
@@ -131,6 +299,13 @@ namespace HartreeFock::Correlation::CC
                                 rank, rank - 1, rank - 1));
             }
 
+            if (run_fixture_probe(*state_res, *kernels_res, rank, tag))
+            {
+                return std::unexpected(
+                    "R4.2b fixture probe ran (PLANCK_CC_FIXTURE_DIR set); "
+                    "no solve was attempted.");
+            }
+
             const unsigned int max_iter =
                 std::max(calculator._scf.get_max_cycles(calculator._shells.nbasis()), 100u);
             const double tol_energy = calculator._scf._tol_energy;
@@ -156,12 +331,29 @@ namespace HartreeFock::Correlation::CC
         }
     } // namespace
 
-    std::expected<void, std::string> run_rccsdtq(
+    std::string rcc_method_label(int rank)
+    {
+        switch (rank)
+        {
+        case 2:
+            return "RCCSD";
+        case 3:
+            return "RCCSDT";
+        case 4:
+            return "RCCSDTQ";
+        default:
+            return std::format("RCC{}", rank);
+        }
+    }
+
+    std::expected<void, std::string> run_rccgen(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs)
     {
         if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
-            return std::unexpected("run_rccsdtq: RCCSDTQ is currently available only for single-point calculations.");
+            return std::unexpected(
+                "run_rccgen: the generated RCC path is currently available only for "
+                "single-point calculations.");
 
         calculator._have_ccsd_reference_energy = false;
         calculator._ccsd_reference_correlation_energy = 0.0;
@@ -176,28 +368,33 @@ namespace HartreeFock::Correlation::CC
         const int rank = calculator._scf._cc_generated_rank;
         if (rank < generated_floor)
             return std::unexpected(std::format(
-                "run_rccsdtq: generated arbitrary-order RCC path requires rank >= {}, got {}.",
+                "run_rccgen: generated arbitrary-order RCC path requires rank >= {}, got {}.",
                 generated_floor, rank));
+
+        const std::string method = rcc_method_label(rank);
+        const std::string tag = method + " :";
 
         const bool warm_start = calculator._scf._cc_warm_start;
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Info,
-            "RCCSDTQ :",
+            tag,
             std::format(
                 "Running generated arbitrary-order RCC tensor kernels (rank={}, warm_start={}).",
                 rank, warm_start ? "on" : "off"));
 
         auto solve_res = solve_generated_rcc(
-            calculator, shell_pairs, rank, warm_start, /*try_restart=*/true, "RCCSDTQ[TENSOR] :");
+            calculator, shell_pairs, rank, warm_start, /*try_restart=*/true,
+            method + "[TENSOR] :");
         if (!solve_res)
-            return std::unexpected("run_rccsdtq: " + solve_res.error());
+            return std::unexpected("run_rccgen: " + solve_res.error());
 
         HartreeFock::Logger::blank();
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Info,
-            "RCCSDTQ :",
+            tag,
             std::format(
-                "Generated RCCSDTQ iterations ran {} steps, E_corr={:.10f}, dE={:+.3e}, rms(res)={:.3e}, rms(step)={:.3e}.",
+                "Generated {} iterations ran {} steps, E_corr={:.10f}, dE={:+.3e}, rms(res)={:.3e}, rms(step)={:.3e}.",
+                method,
                 solve_res->iterations,
                 solve_res->correlation_energy,
                 solve_res->energy_change,
@@ -208,7 +405,8 @@ namespace HartreeFock::Correlation::CC
         {
             return std::unexpected(
                 std::format(
-                    "Generated RCCSDTQ kernels did not converge within {} iterations (last dE={:+.3e}, rms(res)={:.3e}).",
+                    "Generated {} kernels did not converge within {} iterations (last dE={:+.3e}, rms(res)={:.3e}).",
+                    method,
                     solve_res->iterations,
                     solve_res->energy_change,
                     solve_res->metrics.residual_rms));
@@ -234,11 +432,11 @@ namespace HartreeFock::Correlation::CC
             auto saved = save_cc_amplitudes(ccamp_path, solve_res->state.amplitudes, meta);
             if (!saved)
                 HartreeFock::Logger::logging(
-                    HartreeFock::LogLevel::Warning, "RCCSDTQ :",
+                    HartreeFock::LogLevel::Warning, tag,
                     std::format("Could not write CC amplitude checkpoint: {}", saved.error()));
             else
                 HartreeFock::Logger::logging(
-                    HartreeFock::LogLevel::Info, "RCCSDTQ :",
+                    HartreeFock::LogLevel::Info, tag,
                     std::format("Wrote CC amplitude checkpoint '{}' (rank {}).", ccamp_path, rank));
         }
 

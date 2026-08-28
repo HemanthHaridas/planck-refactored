@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -31,6 +32,14 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     ),
     "rccsdtq_total_energy": re.compile(
         r"^\s*Total RCCSDTQ Energy\s+([-+0-9Ee\.]+)",
+        re.MULTILINE,
+    ),
+    # The generated UCC path (correlation ucc2/ucc3/...) reports through the
+    # generic label: PostHF::UCCGEN is not in hf_driver.cpp's method_label chain,
+    # so it falls through to "Correlated". Kept generic on purpose -- naming it
+    # UCC-specifically is a driver change, not a runner one.
+    "correlated_total_energy": re.compile(
+        r"^\s*Total Correlated Energy\s+([-+0-9Ee\.]+)",
         re.MULTILINE,
     ),
     "casscf_corr_energy": re.compile(r"^\s*CASSCF Correlation Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
@@ -291,12 +300,19 @@ def run_case(
         )
 
     try:
+        # A case may declare `env`: extra environment variables for this run only.
+        # Needed where a code path is reachable only by env override and has no
+        # input keyword -- PLANCK_RCCSDT_BACKEND being the case in point. Layered
+        # over the inherited environment so the basis path and toolchain survive.
+        case_env = case.get("env")
+        run_env = {**os.environ, **case_env} if case_env else None
         proc = subprocess.run(
             build_command(executable, input_path),
             cwd=repo_root,
             text=True,
             capture_output=True,
             timeout=timeout_s,
+            env=run_env,
         )
     except subprocess.TimeoutExpired as exc:
         duration_s = time.perf_counter() - start
@@ -459,6 +475,53 @@ def apply_cross_case_checks(
                 )
 
 
+def cmake_build_options(repo_root: Path, build_dir: str) -> dict[str, str] | None:
+    """The BOOL options a build tree was configured with, from its CMakeCache.txt.
+
+    Returns None when there is no cache to read (an --executable pointing outside
+    a build tree, say), which callers treat as "cannot tell" rather than "off".
+
+    Used by `requires_build_option` so a case that needs an opt-in feature is
+    SKIPPED in a build without it rather than failing. Reading the cache is the
+    only honest source: the option is a compile-time define, so the binary's own
+    behaviour is what a case would otherwise have to infer from an error string.
+    """
+    cache = repo_root / build_dir / "CMakeCache.txt"
+    if not cache.is_file():
+        return None
+    options: dict[str, str] = {}
+    for line in cache.read_text(errors="replace").splitlines():
+        name, sep, value = line.partition(":BOOL=")
+        if sep:
+            options[name.strip()] = value.strip().upper()
+    return options
+
+
+def missing_build_option(
+    case: dict[str, Any],
+    build_options: dict[str, str] | None,
+) -> str | None:
+    """The build option this case needs but the tree does not have, if any.
+
+    Accepts a string or a list: some cases need MORE than one option ON, and
+    depend on every one of them. `PLANCK_CC_SPIN_ADAPT` is the motivating case
+    -- the generated CC kernels are only correct with it ON (CMakeLists.txt
+    documents OFF as the ~4x-wrong historical emit), so a generated-kernel case
+    run without it silently measures the defective emit rather than the kernel
+    it means to gate. That cost a full investigation before it was noticed.
+    """
+    required = case.get("requires_build_option")
+    if not required:
+        return None
+    if build_options is None:
+        return None
+    names = [required] if isinstance(required, str) else list(required)
+    for name in names:
+        if build_options.get(name) != "ON":
+            return name
+    return None
+
+
 def should_run(case: dict[str, Any], suite: str, selected_cases: set[str]) -> bool:
     if selected_cases and case["id"] not in selected_cases:
         return False
@@ -497,11 +560,25 @@ def main() -> int:
 
     selected_cases = set(args.case)
     chosen = [case for case in cases if should_run(case, args.suite, selected_cases)]
-    if not chosen:
+
+    # A case may declare `requires_build_option`: a CMake BOOL that must be ON in
+    # the tree under test. Opt-in features (PLANCK_CC_UCC) are OFF by default, so
+    # such a case would otherwise FAIL in a default build for a configuration
+    # reason rather than a correctness one. Skipped, and reported separately so a
+    # skip can never be mistaken for a pass.
+    build_options = cmake_build_options(repo_root, args.build_dir)
+    skipped = [(case, opt) for case in chosen
+               if (opt := missing_build_option(case, build_options)) is not None]
+    skipped_ids = {case["id"] for case, _ in skipped}
+    chosen = [case for case in chosen if case["id"] not in skipped_ids]
+
+    if not chosen and not skipped:
         print("no cases selected", file=sys.stderr)
         return 2
 
     print(f"Running {len(chosen)} regression case(s) from {manifest_path}")
+    for case, option in skipped:
+        print(f"[SKIP] {case['id']} (needs -D{option}=ON)")
     failures = 0
     total_start = time.perf_counter()
     results: list[CaseResult] = []
@@ -521,9 +598,10 @@ def main() -> int:
             failures += 1
 
     total_duration = time.perf_counter() - total_start
+    skip_note = f", {len(skipped)} skipped" if skipped else ""
     print(
         f"Completed {len(chosen)} case(s) in {total_duration:.2f}s: "
-        f"{len(chosen) - failures} passed, {failures} failed"
+        f"{len(chosen) - failures} passed, {failures} failed{skip_note}"
     )
     return 1 if failures else 0
 

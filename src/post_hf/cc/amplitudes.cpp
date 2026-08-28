@@ -1,5 +1,6 @@
 #include "post_hf/cc/amplitudes.h"
 
+#include <format>
 #include <vector>
 
 namespace HartreeFock::Correlation::CC
@@ -148,6 +149,19 @@ namespace HartreeFock::Correlation::CC
         return make_tensor_view(by_rank[static_cast<std::size_t>(excitation_rank - 1)]);
     }
 
+    std::expected<ConstDenseTensorView, std::string>
+    ArbitraryOrderDenominatorCache::sector_tensor(
+        int excitation_rank, const std::string &tag) const
+    {
+        for (const auto &entry : sectors)
+            if (entry.first.first == excitation_rank && entry.first.second == tag)
+                return make_tensor_view(entry.second);
+        // No per-block entry: an RHF reference, where alpha and beta orbital
+        // energies coincide and every block of a rank shares one denominator.
+        // Falling back keeps the RHF path byte-identical; see the header.
+        return tensor(excitation_rank);
+    }
+
     int ArbitraryOrderRCCAmplitudes::max_rank() const noexcept
     {
         return static_cast<int>(by_rank.size());
@@ -288,6 +302,161 @@ namespace HartreeFock::Correlation::CC
         catch (const std::exception &ex)
         {
             return std::unexpected("build_arbitrary_order_denominator_cache: " + std::string(ex.what()));
+        }
+    }
+
+    std::vector<std::string> ucc_amplitude_blocks(int excitation_rank)
+    {
+        std::vector<std::string> blocks;
+        if (excitation_rank < 1)
+            return blocks;
+
+        // Sector k has k alpha slots and (rank - k) beta slots in EACH half, and
+        // the tag is alpha-before-beta per half (the within-half antisymmetry
+        // folds slot permutations, so only the count matters). Both halves carry
+        // the same string, hence the doubling.
+        //
+        // Every k from 0..rank is independent: unlike the closed-shell case there
+        // is no global a<->b flip to fold k against rank-k, because alpha and beta
+        // are different orbitals.
+        blocks.reserve(static_cast<std::size_t>(excitation_rank) + 1);
+        for (int alpha_count = excitation_rank; alpha_count >= 0; --alpha_count)
+        {
+            const std::string half =
+                std::string(static_cast<std::size_t>(alpha_count), 'a') +
+                std::string(static_cast<std::size_t>(excitation_rank - alpha_count), 'b');
+            blocks.push_back(half + half);
+        }
+        return blocks;
+    }
+
+    std::expected<ArbitraryOrderDenominatorCache, std::string>
+    build_ucc_denominator_cache(
+        const UHFReference &reference,
+        const std::vector<std::pair<int, std::string>> &blocks)
+    {
+        ArbitraryOrderDenominatorCache cache;
+        cache.sectors.reserve(blocks.size());
+
+        for (const auto &[rank, tag] : blocks)
+        {
+            if (rank < 1)
+                return std::unexpected(std::format(
+                    "build_ucc_denominator_cache: block '{}' has non-positive rank {}.",
+                    tag, rank));
+            // The tag carries the rank (one spin per slot, 2*rank slots), and so
+            // does the key. Disagreement means the caller built the pair from two
+            // sources; that is a routing bug and it would otherwise surface as a
+            // shape mismatch deep in the solver.
+            if (tag.size() != static_cast<std::size_t>(2 * rank))
+                return std::unexpected(std::format(
+                    "build_ucc_denominator_cache: block tag '{}' has {} slots but is "
+                    "keyed at rank {} ({} slots expected).",
+                    tag, tag.size(), rank, 2 * rank));
+
+            auto block = build_ucc_block_denominator(reference, tag);
+            if (!block)
+                return std::unexpected(block.error());
+            cache.sectors.push_back({{rank, tag}, std::move(*block)});
+        }
+
+        return cache;
+    }
+
+    std::expected<TensorND, std::string> build_ucc_block_denominator(
+        const UHFReference &reference,
+        const std::string &block_tag)
+    {
+        if (block_tag.empty() || block_tag.size() % 2 != 0)
+            return std::unexpected(
+                "build_ucc_block_denominator: block tag must have an even, non-zero "
+                "length (one spin per slot, occ half then vir half); got '" + block_tag + "'.");
+
+        const int rank = static_cast<int>(block_tag.size()) / 2;
+
+        for (char spin : block_tag)
+            if (spin != 'a' && spin != 'b')
+                return std::unexpected(
+                    "build_ucc_block_denominator: block tag '" + block_tag +
+                    "' contains a slot that is neither 'a' nor 'b'.");
+
+        // A slot's dimension and its orbital energy both come from its own spin.
+        // Occupied slots index [0, n_occ_s); virtual slots index the virtual part
+        // of the same spin's eps vector, which starts at n_occ_s.
+        const auto occ_count = [&](char spin) {
+            return spin == 'a' ? reference.n_occ_alpha : reference.n_occ_beta;
+        };
+        const auto virt_count = [&](char spin) {
+            return spin == 'a' ? reference.n_virt_alpha : reference.n_virt_beta;
+        };
+        // By value, not `const auto &`: binding a reference to a temporary
+        // lambda leaves it dangling once the full-expression ends.
+        const auto eps = [&](char spin) -> const Eigen::VectorXd & {
+            return spin == 'a' ? reference.eps_alpha : reference.eps_beta;
+        };
+
+        for (int slot = 0; slot < 2 * rank; ++slot)
+        {
+            const char spin = block_tag[static_cast<std::size_t>(slot)];
+            const int needed = occ_count(spin) + virt_count(spin);
+            if (eps(spin).size() < needed)
+                return std::unexpected(
+                    "build_ucc_block_denominator: the reference's eps vector for spin '" +
+                    std::string(1, spin) + "' has " + std::to_string(eps(spin).size()) +
+                    " entries but the partition needs " + std::to_string(needed) + ".");
+        }
+
+        try
+        {
+            std::vector<int> dims;
+            dims.reserve(static_cast<std::size_t>(2 * rank));
+            for (int slot = 0; slot < rank; ++slot)
+                dims.push_back(occ_count(block_tag[static_cast<std::size_t>(slot)]));
+            for (int slot = rank; slot < 2 * rank; ++slot)
+                dims.push_back(virt_count(block_tag[static_cast<std::size_t>(slot)]));
+
+            for (int dim : dims)
+                if (dim <= 0)
+                    return std::unexpected(
+                        "build_ucc_block_denominator: block '" + block_tag +
+                        "' has an empty slot; the reference cannot host it.");
+
+            TensorND tensor(dims, 0.0);
+            std::vector<int> indices(static_cast<std::size_t>(2 * rank), 0);
+
+            const std::size_t total = tensor.size();
+            for (std::size_t linear = 0; linear < total; ++linear)
+            {
+                std::size_t cursor = linear;
+                for (int pos = 2 * rank - 1; pos >= 0; --pos)
+                {
+                    const int dim = tensor.dims[static_cast<std::size_t>(pos)];
+                    indices[static_cast<std::size_t>(pos)] =
+                        static_cast<int>(cursor % static_cast<std::size_t>(dim));
+                    cursor /= static_cast<std::size_t>(dim);
+                }
+
+                double denom = 0.0;
+                for (int occ = 0; occ < rank; ++occ)
+                {
+                    const char spin = block_tag[static_cast<std::size_t>(occ)];
+                    denom += eps(spin)(indices[static_cast<std::size_t>(occ)]);
+                }
+                for (int vir = 0; vir < rank; ++vir)
+                {
+                    const char spin = block_tag[static_cast<std::size_t>(rank + vir)];
+                    const int offset = occ_count(spin) + indices[static_cast<std::size_t>(rank + vir)];
+                    denom -= eps(spin)(offset);
+                }
+
+                tensor(indices) = denom;
+            }
+
+            return tensor;
+        }
+        catch (const std::exception &ex)
+        {
+            return std::unexpected("build_ucc_block_denominator: " + std::string(ex.what()));
         }
     }
 

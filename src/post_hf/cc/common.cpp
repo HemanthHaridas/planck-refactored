@@ -82,24 +82,6 @@ namespace
         return offset;
     }
 
-    std::vector<int> to_vector(std::initializer_list<int> values)
-    {
-        return std::vector<int>(values.begin(), values.end());
-    }
-
-    std::expected<std::size_t, std::string> checked_fixed_rank_index(
-        const std::vector<int> &dims,
-        const std::vector<int> &indices,
-        std::size_t data_size,
-        const char *label)
-    {
-        auto offset = flatten_index(dims, indices, label);
-        if (!offset)
-            return std::unexpected(offset.error());
-        if (*offset >= data_size)
-            return std::unexpected(std::string(label) + ": tensor storage is smaller than the declared dimensions");
-        return offset;
-    }
 } // namespace
 
 namespace HartreeFock::Correlation::CC
@@ -148,27 +130,7 @@ namespace HartreeFock::Correlation::CC
         return data.size();
     }
 
-    double &Tensor2D::operator()(int i, int j) noexcept
-    {
-        auto offset = checked_fixed_rank_index({dim1, dim2}, {i, j}, data.size(), "Tensor2D");
-        if (!offset)
-        {
-            assert(false && "Tensor2D index validation failed");
-            return tensor_error_slot();
-        }
-        return data[*offset];
-    }
-
-    const double &Tensor2D::operator()(int i, int j) const noexcept
-    {
-        auto offset = checked_fixed_rank_index({dim1, dim2}, {i, j}, data.size(), "Tensor2D");
-        if (!offset)
-        {
-            assert(false && "Tensor2D index validation failed");
-            return const_tensor_error_slot();
-        }
-        return data[*offset];
-    }
+    // Tensor2D::operator() is inlined in common.h (hot path; see the note there).
 
     Tensor4D::Tensor4D(int d1, int d2, int d3, int d4, double value)
         : dim1(d1), dim2(d2), dim3(d3), dim4(d4)
@@ -206,27 +168,7 @@ namespace HartreeFock::Correlation::CC
         return data.size();
     }
 
-    double &Tensor4D::operator()(int i, int j, int k, int l) noexcept
-    {
-        auto offset = checked_fixed_rank_index({dim1, dim2, dim3, dim4}, {i, j, k, l}, data.size(), "Tensor4D");
-        if (!offset)
-        {
-            assert(false && "Tensor4D index validation failed");
-            return tensor_error_slot();
-        }
-        return data[*offset];
-    }
-
-    const double &Tensor4D::operator()(int i, int j, int k, int l) const noexcept
-    {
-        auto offset = checked_fixed_rank_index({dim1, dim2, dim3, dim4}, {i, j, k, l}, data.size(), "Tensor4D");
-        if (!offset)
-        {
-            assert(false && "Tensor4D index validation failed");
-            return const_tensor_error_slot();
-        }
-        return data[*offset];
-    }
+    // Tensor4D::operator() is inlined in common.h (hot path; see the note there).
 
     Tensor6D::Tensor6D(int d1, int d2, int d3, int d4, int d5, int d6, double value)
         : dim1(d1), dim2(d2), dim3(d3), dim4(d4), dim5(d5), dim6(d6)
@@ -268,35 +210,7 @@ namespace HartreeFock::Correlation::CC
         return data.size();
     }
 
-    double &Tensor6D::operator()(int i, int j, int k, int l, int m, int n) noexcept
-    {
-        auto offset = checked_fixed_rank_index(
-            {dim1, dim2, dim3, dim4, dim5, dim6},
-            {i, j, k, l, m, n},
-            data.size(),
-            "Tensor6D");
-        if (!offset)
-        {
-            assert(false && "Tensor6D index validation failed");
-            return tensor_error_slot();
-        }
-        return data[*offset];
-    }
-
-    const double &Tensor6D::operator()(int i, int j, int k, int l, int m, int n) const noexcept
-    {
-        auto offset = checked_fixed_rank_index(
-            {dim1, dim2, dim3, dim4, dim5, dim6},
-            {i, j, k, l, m, n},
-            data.size(),
-            "Tensor6D");
-        if (!offset)
-        {
-            assert(false && "Tensor6D index validation failed");
-            return const_tensor_error_slot();
-        }
-        return data[*offset];
-    }
+    // Tensor6D::operator() is inlined in common.h (hot path; see the note there).
 
     TensorND::TensorND(std::vector<int> dims_in, double value)
         : dims(std::move(dims_in))
@@ -333,15 +247,7 @@ namespace HartreeFock::Correlation::CC
         return static_cast<int>(dims.size());
     }
 
-    double &TensorND::operator()(std::initializer_list<int> indices)
-    {
-        return (*this)(to_vector(indices));
-    }
-
-    const double &TensorND::operator()(std::initializer_list<int> indices) const
-    {
-        return (*this)(to_vector(indices));
-    }
+    // TensorND::operator()(initializer_list) is inlined in common.h (hot path).
 
     double &TensorND::operator()(const std::vector<int> &indices)
     {
@@ -381,15 +287,7 @@ namespace HartreeFock::Correlation::CC
         return static_cast<int>(dims.size());
     }
 
-    double &DenseTensorView::operator()(std::initializer_list<int> indices)
-    {
-        return (*this)(to_vector(indices));
-    }
-
-    const double &DenseTensorView::operator()(std::initializer_list<int> indices) const
-    {
-        return (*this)(to_vector(indices));
-    }
+    // DenseTensorView::operator()(initializer_list) is inlined in common.h (hot path).
 
     double &DenseTensorView::operator()(const std::vector<int> &indices)
     {
@@ -429,10 +327,7 @@ namespace HartreeFock::Correlation::CC
         return static_cast<int>(dims.size());
     }
 
-    const double &ConstDenseTensorView::operator()(std::initializer_list<int> indices) const
-    {
-        return (*this)(to_vector(indices));
-    }
+    // ConstDenseTensorView::operator()(initializer_list) is inlined in common.h (hot path).
 
     const double &ConstDenseTensorView::operator()(const std::vector<int> &indices) const
     {

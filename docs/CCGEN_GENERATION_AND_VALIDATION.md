@@ -1,13 +1,7 @@
-# ccgen CC-Equation Generation and Validation
+# How does ccgen generate coupled-cluster equations, and how do we know they are correct?
 
-Deeper design of the diagram front end lives in:
-
-- `docs/CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md`
-
-This file answers one architecture question:
-
-**How does ccgen generate coupled-cluster equations, and how do we know they are
-correct?**
+Deeper design of the diagram front end lives in
+`docs/CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md`.
 
 ## The two generation engines
 
@@ -96,9 +90,14 @@ path (the arbitrary-order solver, the diagram front end), not any production
 energy.
 
 **That is the current state, not the end state.** The generated kernels are
-intended to replace the hand-written solvers in production, gated on the D7
-dressing work (an undressed kernel has the wrong FLOP scaling to ship) and the
-spin-adaptation layer (production RHF/UHF CC needs spatial RCC/UCC kernels; the
-generated path is spin-orbital). Once that lands, generator correctness — which
-this document establishes through CCSDTQ — becomes production-load-bearing, which
-is exactly why the validation here is built to the standard it is.
+intended to replace the hand-written solvers in production. Two of the three
+things that used to gate that have moved: **spin adaptation landed** (spatial RCC
+kernels, validated to FCI at rank 4 — `CCGEN_CCSDTQ_MULTISECTOR.md`), and the
+**dressing route was retired**, so FLOP scaling is now owned by the contraction-order
+work rather than by dressed operators (`CCGEN_DRESSING_AND_SPIN_ADAPTATION.md`,
+`CCGEN_KERNEL_SCALING_SCOPE.md`). What remains is cost: the generated path is
+~500× slower than the hand-written one at rank 3
+(`CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md`). Generator correctness — which this
+document establishes through CCSDTQ — is therefore already load-bearing for the
+generated production route, which is why the validation here is built to the
+standard it is.

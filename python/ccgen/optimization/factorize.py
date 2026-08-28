@@ -71,6 +71,18 @@ def nary_cost(term: AlgebraTerm) -> Cost:
     return _cost_of_indices(set(term.free_indices) | set(term.summed_indices))
 
 
+def build_cost(term: AlgebraTerm) -> Cost:
+    """Cost of actually BUILDING this operator once — its contraction TREE
+    cost, not its n-ary cost. A two-factor operator is one step, so the two
+    coincide; a multi-factor one (W_t2t2v, W_t1t2t2v) is emitted as a nested
+    contraction (`emit_intermediate_steps`), and pricing it as a single flat
+    loop nest overstates it badly — measured 500x on W_t2t2v_oooovv
+    (625G n-ary vs 1.25G tree)."""
+    if len(term.factors) < 2:
+        return nary_cost(term)
+    return best_contraction_tree_full(term)[0]
+
+
 # ── F1: binary contraction tree search ─────────────────────────────
 
 
@@ -229,8 +241,16 @@ def _leaf_tensors(node: Node) -> tuple[Tensor, ...]:
 
 def node_to_term(node: Node) -> AlgebraTerm:
     """The AlgebraTerm this internal node computes: its subtree's leaf factors,
-    with `summed` = indices consumed AT this step and `free` = its output block.
-    Coefficient is 1 — F2 keying (`_eri_canonical`) is structure-only.
+    with `free` = its output block and `summed` = EVERY index its factors use
+    that is not free. Coefficient is 1 — F2 keying (`_eri_canonical`) is
+    structure-only.
+
+    `node.summed` alone is only the indices consumed at THIS step; a subtree's
+    inner contractions are summed at descendant nodes. Since the factors here
+    are the whole subtree's leaves, using `node.summed` leaves those inner
+    indices bound to nothing — a spec whose definition references an index that
+    is neither a slot nor a declared loop, and whose emitted `build_W` has no
+    loop for it (D4; measured 20/52 derived ccsd-doubles specs).
     ponytail: a leaf has no contraction of its own, so it is not a term."""
     if node.is_leaf:
         raise ValueError("a leaf node is a bare tensor, not a contraction term")
@@ -239,7 +259,8 @@ def node_to_term(node: Node) -> AlgebraTerm:
     from ..indices import canonical_index_order
     factors = _leaf_tensors(node)
     free = tuple(canonical_index_order(list(node.block)))
-    summed = tuple(canonical_index_order(list(node.summed)))
+    used = {i for f in factors for i in f.indices}
+    summed = tuple(canonical_index_order(list(used - set(free))))
     return AlgebraTerm(
         coeff=Fraction(1),
         factors=factors,
@@ -370,12 +391,98 @@ class Derived:
         return self.spec.name
 
 
+def _contraction_shape(node_term: AlgebraTerm) -> tuple:
+    """D6: the operator's contraction shape — what makes two call sites the SAME
+    operator rather than merely the same-looking one.
+
+    Each factor slot becomes either its OUTPUT SLOT POSITION (an int, as a str)
+    or a canonically-renumbered internal summed index (``S0``, ``S1``, …). Factor
+    order is preserved.
+
+    All three properties are load-bearing, each measured on GCC ccsd doubles
+    (41 rewritten terms, value-checked against the source via `residual_einsum`):
+
+    - **slot POSITION, not F/S** — marking a slot merely "free" conflates
+      `t1(c,j) v(i,c,k,a)` with `t1(c,i) v(j,c,k,a)`: same shape, `i`/`j`
+      swapped between the two factors. 21 -> 13 disagreements.
+    - **positions, not names** — `(i,j,k,a)` and `(i,j,k,b)` are one operator
+      called at two sites; keying on names would split them pointlessly.
+      13 -> 6.
+    - **same-tensor copies kept DISTINCT** — with two factors of the same tensor
+      (`t1 … t1`), collapsing them loses which copy carries which slot:
+      `t1(d,j) t1(c,i)` vs `t1(d,i) t1(c,j)`. 6 -> 0.
+
+    The per-factor entries are sorted AFTER slot substitution, so the key is a
+    function of the contraction and not of factor INPUT order (`f·t3` and `t3·f`
+    are one operator) — while still separating same-name copies, because by then
+    they carry different slot tuples. Sorting the raw factors instead would
+    destroy exactly the distinction the third property needs.
+
+    Cost, recorded because it is real and matters to the reuse case: on spatial
+    ccsd doubles this splits 14 names into 61 keys, dropping sites-at-a-reused-
+    operator from 76 to 31. That is the price of correctness here, not a
+    regression — the coarser key was binding definitions that do not compute the
+    term at their call site.
+    """
+    pos = {idx: str(k) for k, idx in enumerate(node_term.free_indices)}
+
+    def entries(renamed):
+        out = []
+        for f in node_term.factors:
+            out.append((f.name, tuple(
+                pos[x] if x in pos else renamed[x] for x in f.indices)))
+        return tuple(sorted(out))
+
+    # Summed indices carry no identity of their own, so they must be renumbered
+    # canonically -- but "first appearance while walking factors" depends on
+    # factor INPUT order, which is exactly what this key must not see. Choose the
+    # numbering that minimizes the sorted entry list: a well-defined function of
+    # the contraction alone. The summed count is tiny (<= 4 here), so the
+    # permutation sweep is cheap.
+    import itertools
+
+    summed = [x for x in node_term.summed_indices if x not in pos]
+    best = None
+    for perm in itertools.permutations(range(len(summed))):
+        cand = entries({idx: f"S{perm[k]}" for k, idx in enumerate(summed)})
+        if best is None or cand < best:
+            best = cand
+    return best if best is not None else entries({})
+
+
 def _derived_name(node_term: AlgebraTerm) -> str:
     """Stable name for a derived operator from its factor set + block sig,
     e.g. W_t3v_ooov. Factor names are SORTED so the name is invariant under
-    factor input order (f·t3 and t3·f are one operator, W_ft3v)."""
+    factor input order (f·t3 and t3·f are one operator, W_ft3v).
+
+    NOTE: the name alone does NOT identify an operator — two call sites can
+    share it and need different definitions. `manifold_operators` dedups on
+    (name, `_contraction_shape`) and disambiguates collisions with a suffix.
+    """
     facs = "".join(sorted(f.name for f in node_term.factors if f.name != "v"))
-    return f"W_{facs}v_{block_signature(node_term)}"
+    base = f"W_{facs}v_{block_signature(node_term)}"
+    return f"{base}_{_shape_tag(node_term)}"
+
+
+def _shape_tag(node_term: AlgebraTerm) -> str:
+    """Short stable discriminator for an operator's contraction shape.
+
+    Folded into the NAME rather than kept beside it so a name can never denote
+    two definitions anywhere downstream — the emitter keys `build_W` functions
+    by name, so a collision there silently emits one builder for two different
+    contractions. Deriving it from the shape keeps it deterministic across runs
+    (unlike `hash()`, which is salted per process).
+
+    NOT canonicalized over transpose-equivalence — see O4 in
+    `docs/CCGEN_OPERATOR_IDENTITY_AND_REUSE.md`. Merging those names requires the
+    REWRITE to permute each call site's indices into the shared operator's slot
+    order; doing it here alone reintroduces the D6 defect (measured: 11 GCC terms
+    stop reproducing their source).
+    """
+    import hashlib
+
+    raw = repr(_contraction_shape(node_term)).encode()
+    return hashlib.blake2s(raw, digest_size=2).hexdigest()
 
 
 def identify_node(node_or_term, fingerprints=None, usage_count: int = 1):
@@ -454,7 +561,7 @@ def _node_operator_name(node: Node, fingerprints) -> str:
 
 def rewrite_term_factorized(
     term: AlgebraTerm, fingerprints=None, derived_only: bool = True,
-    keep_operators=None,
+    keep_operators=None, merge_plan_map=None,
 ) -> AlgebraTerm:
     """Rewrite a term into its ROOT contraction step: the root's children as
     factors, each internal child replaced by a reference to the operator it
@@ -495,11 +602,40 @@ def rewrite_term_factorized(
         #  - Reuse (CCSD) children are always inlined (dressing is D7.3's job,
         #    their definitions need tau/tau_tilde builders the factorizer lacks);
         #  - a Derived child not in `keep_operators` (E1 budget) is inlined too.
+        # Under merging, `keep_operators` holds REPRESENTATIVE names — the
+        # merged-away members no longer exist as specs — so the budget check
+        # must ask about the representative, not this member. Testing `name`
+        # rejects every merged call site before its permutation is applied,
+        # which silently un-does O4.2 (found by O4.5: no read order changed in
+        # the emitted TU).
+        kept_name = (merge_plan_map or {}).get(name, (name, None))[0]
         hoist = (not isinstance(r, Reuse)) and (
-            keep_operators is None or name in keep_operators
+            keep_operators is None or kept_name in keep_operators
         )
         if hoist:
             block = tuple(canonical_index_order(list(child.block)))
+            if merge_plan_map is not None:
+                # O4.2: read the operator in its class REPRESENTATIVE's slot
+                # order. `perm[k] = j` means slot k here is slot j of the rep,
+                # so the index at position k moves to position j.
+                #
+                # Landing this BEFORE the names merge (O4.3) is deliberate: it
+                # exercises the new index order while every operator still owns
+                # its own array, so a wrong permutation surfaces as a value
+                # failure that cannot be blamed on sharing. Doing both at once
+                # was tried and reverted — 11 GCC terms broke and the value gate
+                # could not say which half was at fault.
+                _rep, perm = merge_plan_map.get(
+                    name, (name, tuple(range(len(block)))))
+                if perm != tuple(range(len(block))):
+                    reordered = [None] * len(block)
+                    for k, j in enumerate(perm):
+                        reordered[j] = block[k]
+                    block = tuple(reordered)
+                # ...and under the REPRESENTATIVE's name: it is the only spec
+                # emitted, so referencing the member would call a `build_W`
+                # that does not exist.
+                name = kept_name
             new_factors.append(Tensor(name, block))
             hoisted_any = True
         else:
@@ -529,26 +665,8 @@ def rewrite_term_factorized(
 # ── E0.2: dedup operators across a manifold ────────────────────────
 
 
-def _complete_definition_summation(defn: AlgebraTerm) -> AlgebraTerm:
-    """Return `defn` with summed_indices = every index used by its factors that
-    is NOT a free (block) index. `node_to_term` records only the top tree step's
-    summed index; a standalone builder needs the FULL internal summation so no
-    contraction loop variable is left undeclared."""
-    from ..indices import canonical_index_order
-    free = set(defn.free_indices)
-    used = {i for f in defn.factors for i in f.indices}
-    summed = canonical_index_order(list(used - free))
-    return AlgebraTerm(
-        coeff=defn.coeff,
-        factors=defn.factors,
-        free_indices=defn.free_indices,
-        summed_indices=tuple(summed),
-        connected=defn.connected,
-        provenance=defn.provenance,
-    )
-
-
-def manifold_operators(terms, fingerprints=None, include_reuse=True):
+def manifold_operators(terms, fingerprints=None, include_reuse=True,
+                       merge_transposes=False, spatial=True):
     """The distinct derived operators to emit for a manifold, one per operator
     NAME, with `usage_count` = number of reference sites across all terms.
 
@@ -568,7 +686,35 @@ def manifold_operators(terms, fingerprints=None, include_reuse=True):
     needs a spec for every factor a rewritten term names — a `Reuse` child (e.g.
     `t1·v` recognized as Fme) appears as an `Fme(...)` factor, so its builder
     must be materialized. Set False to emit only the newly-derived operators.
+
+    ``merge_transposes`` (O4.3) collapses operators that are one contraction up
+    to a permutation of their own slots, keeping the class representative and
+    summing the members' usage counts. Off by default: a merged operator is only
+    correct if every CALL SITE reads it in the representative's slot order, so a
+    caller that sets this MUST also pass the returned plan to
+    ``rewrite_term_factorized(..., merge_plan_map=...)``. Use
+    ``manifold_operators_with_plan`` to get both together rather than wiring the
+    two halves by hand — landing them separately is what broke 11 GCC terms.
     """
+    return _manifold_operators_impl(
+        terms, fingerprints, include_reuse, merge_transposes, spatial)[0]
+
+
+def manifold_operators_with_plan(terms, fingerprints=None, include_reuse=True,
+                                 spatial=True):
+    """O4.3: the merged operator set AND the call-site plan that makes it valid.
+
+    Returns ``(specs, plan)``. The two are only correct together — emitting the
+    merged specs while call sites still read in their own slot order is exactly
+    the reverted first attempt (11 GCC doubles terms stopped reproducing their
+    source). Handing them back as a pair is what stops them being separated.
+    """
+    return _manifold_operators_impl(
+        terms, fingerprints, include_reuse, True, spatial)
+
+
+def _manifold_operators_impl(terms, fingerprints, include_reuse,
+                             merge_transposes, spatial):
     from .intermediates import IntermediateSpec
     from .dressing import seeded_operators, operator_to_intermediate_spec
 
@@ -585,13 +731,7 @@ def manifold_operators(terms, fingerprints=None, include_reuse=True):
     out = []
     for name, specs in derived.items():
         rep = specs[0]  # any instance defines the operator (all same shape)
-        # A multi-factor operator (e.g. W_t2t2v) is itself a multi-step
-        # contraction; node_to_term recorded only the TOP step's summed index,
-        # but a STANDALONE build_W must declare EVERY internal contraction index
-        # as a loop. Recompute the full summation = (all indices used by the
-        # def-term's factors) - (the operator's block/free), else the emitted
-        # builder references undeclared loop vars.
-        rep_def = _complete_definition_summation(rep.definition_terms[0])
+        rep_def = rep.definition_terms[0]
         out.append(IntermediateSpec(
             name=name,
             indices=rep.indices,
@@ -599,6 +739,27 @@ def manifold_operators(terms, fingerprints=None, include_reuse=True):
             usage_count=len(specs),
             index_space_sig=rep.index_space_sig,
         ))
+    plan = None
+    if merge_transposes:
+        from .operator_identity import merge_plan
+
+        plan = merge_plan(out, spatial=spatial)
+        by_rep: dict[str, list] = {}
+        for spec in out:
+            by_rep.setdefault(plan[spec.name][0], []).append(spec)
+        merged = []
+        for rep_name, members in by_rep.items():
+            rep = next(m for m in members if m.name == rep_name)
+            # one array per class; every member's call sites reference it
+            merged.append(IntermediateSpec(
+                name=rep.name,
+                indices=rep.indices,
+                definition_terms=rep.definition_terms,
+                usage_count=sum(m.usage_count for m in members),
+                index_space_sig=rep.index_space_sig,
+            ))
+        out = merged
+
     if include_reuse and reuse_counts:
         by_op = {o.name: o for o in seeded_operators()}
         for op_name, count in reuse_counts.items():
@@ -611,7 +772,7 @@ def manifold_operators(terms, fingerprints=None, include_reuse=True):
                 usage_count=count,
                 index_space_sig=spec.index_space_sig,
             ))
-    return out
+    return out, plan
 
 
 # ── E1: savings-budgeted operator selection ────────────────────────
@@ -621,7 +782,7 @@ def operator_savings(spec, n_occ: int = 10, n_vir: int = 50) -> int:
     """Savings of materializing an emittable operator once vs rebuilding it at
     every reference site: (usage_count - 1) × build_flops, where build_flops is
     the scaling-dominated flop magnitude of the operator's own contraction."""
-    build = nary_cost(spec.definition_terms[0]).flops(n_occ, n_vir)
+    build = build_cost(spec.definition_terms[0]).flops(n_occ, n_vir)
     return max(0, spec.usage_count - 1) * build
 
 
@@ -784,40 +945,65 @@ def select_best_of_both(specs, total_bytes, n_occ=30, n_vir=100):
 # ── E0.3: emit a factorized translation unit ───────────────────────
 
 
-def emit_factorized_translation_unit(method: str, engine: str = "diagram",
-                                     canonical_fock: bool = True,
-                                     top_k=None, savings_fraction=None,
-                                     max_operator_bytes=None,
-                                     memory_budget_bytes=None,
-                                     factor_builder_bodies=False,
-                                     n_occ=30, n_vir=100):
-    """E0.3 + E1 + M1 + M2: emit a Planck C++ TU whose kernels reference the
-    factorizer's derived operators, with a `build_W` for each KEPT operator.
+def emit_factorized_from_equations(method: str, eqs, *,
+                                   top_k=None, savings_fraction=None,
+                                   max_operator_bytes=None,
+                                   memory_budget_bytes=None,
+                                   factor_builder_bodies=False,
+                                   merge_transposes=False, spatial=True,
+                                   n_occ=30, n_vir=100):
+    """W1: the factorize-and-emit pipeline, over equations the caller supplies.
 
-    Pipeline: generate the residual, collect the manifold's derived operators
-    (`manifold_operators`, `include_reuse=False`), select which to materialize,
-    rewrite every term hoisting only the kept operators (the rest stay inline,
-    along with the CCSD/Reuse children which are always inlined — D7.3's job), and
-    hand the rewritten equations + kept specs to `emit_planck_translation_unit`.
+    THE factorize-and-emit entry (W3.3 deleted the generate-then-emit wrapper
+    that used to sit beside it: it generated its own equations, so it could only
+    emit the GCC manifold, while production needs an already-adapted one).
+    `spin_adapt_equations(...)` and `ucc_adapt_equations(...)` output both work:
+    the factorizer keys on contraction structure and does not care how a factor
+    is named. Measured on adapted input, 31 merged operators on spatial `ccsd`
+    doubles and 86 on UCC `doubles_abab`.
 
-    Selection precedence:
-    - `memory_budget_bytes` (M2): joint FLOP/memory selection under a TOTAL
-      footprint budget via `select_best_of_both` (best of the savings- and
-      density-greedy fills). Takes precedence over the E1/M1 knobs.
-    - else `top_k` / `savings_fraction` (E1) under the optional `max_operator_bytes`
-      per-operator guard (M1).
-
-    Non-selected operators inline via the E1 keep-set path. Returns the TU string."""
-    from ..generate import generate_cc_equations
+    `spatial` selects the symmetry table the transpose-equivalence uses; it is
+    about the ERI's symmetries, NOT about whether `eqs` is spin-adapted. Leave it
+    True unless the manifold is GCC-only — it is the smaller, always-sound set.
+    """
     from ..emit.planck_tensor_cpp import emit_planck_translation_unit
 
-    eqs = generate_cc_equations(method, engine=engine, canonical_fock=canonical_fock)
+    rewritten, kept = factorize_equations(
+        eqs, top_k=top_k, savings_fraction=savings_fraction,
+        max_operator_bytes=max_operator_bytes,
+        memory_budget_bytes=memory_budget_bytes,
+        merge_transposes=merge_transposes, spatial=spatial,
+        n_occ=n_occ, n_vir=n_vir)
+    return emit_planck_translation_unit(
+        method, rewritten, intermediates=kept,
+        factor_builder_bodies=factor_builder_bodies)
+
+
+def factorize_equations(eqs, *, top_k=None, savings_fraction=None,
+                        max_operator_bytes=None, memory_budget_bytes=None,
+                        merge_transposes=False, spatial=True,
+                        n_occ=30, n_vir=100):
+    """W3.2: derive operators from `eqs` and rewrite it against them.
+
+    The factorize half of `emit_factorized_from_equations`, split out so a
+    caller that owns its own emit path can use the derivation route without a
+    second emit call site. Returns `(rewritten_eqs, kept_specs)` -- exactly the
+    `(eqs, intermediates)` pair `print_cpp_planck` already threads to the
+    emitter for the recognition route, so `derived` slots into the same shared
+    path rather than forking it.
+    """
     substitutable = [
         t for m, terms in eqs.items()
         if m not in ("energy", "reference")
         for t in terms
     ]
-    all_ops = manifold_operators(substitutable, include_reuse=False)
+    if merge_transposes:
+        # O4.5: merged specs and the call-site plan come from ONE call, so the
+        # emitter cannot end up with one without the other.
+        all_ops, plan = manifold_operators_with_plan(
+            substitutable, include_reuse=False, spatial=spatial)
+    else:
+        all_ops, plan = manifold_operators(substitutable, include_reuse=False), None
     if memory_budget_bytes is not None:
         kept, keep_names = select_best_of_both(
             all_ops, memory_budget_bytes, n_occ=n_occ, n_vir=n_vir)
@@ -826,12 +1012,11 @@ def emit_factorized_translation_unit(method: str, engine: str = "diagram",
             all_ops, top_k=top_k, savings_fraction=savings_fraction,
             max_operator_bytes=max_operator_bytes, n_occ=n_occ, n_vir=n_vir)
     rewritten = {
-        m: [rewrite_term_factorized(t, keep_operators=keep_names) for t in terms]
+        m: [rewrite_term_factorized(t, keep_operators=keep_names,
+                                    merge_plan_map=plan) for t in terms]
         for m, terms in eqs.items()
     }
-    return emit_planck_translation_unit(
-        method, rewritten, intermediates=kept,
-        factor_builder_bodies=factor_builder_bodies)
+    return rewritten, kept
 
 
 # ── M3.0: factor an operator's OWN builder body ────────────────────
@@ -852,9 +1037,9 @@ def factored_builder_steps(spec, scratch_prefix="X", stride_order=False):
     single-step (≤2-factor) definition returns one ("result", def) step — no
     change from the flat emit.
 
-    The builder body was emitted flat by E0.3's `_complete_definition_summation`;
-    this factors it. Measured: cuts 3/8 top CCSDT builders from over-cost to
-    their tree cost (e.g. W_t1t2v_oooovv o⁵v³→o⁵v²), and the largest scratch is
+    The builder body is emitted flat (one loop nest over the definition's full
+    summation); this factors it. Measured: cuts 3/8 top CCSDT builders from
+    over-cost to their tree cost (e.g. W_t1t2v_oooovv o⁵v³→o⁵v²), and the largest scratch is
     ~0.3× the operator's own footprint — a FLOP win at no peak-memory cost.
     """
     from fractions import Fraction
@@ -997,7 +1182,7 @@ class OperatorValue:
     name: str
     kind: str               # "reuse" | "derived"
     uses: int
-    build_step: Cost        # n-ary cost of building the operator once
+    build_step: Cost        # tree cost of building the operator once
     n_occ: int = 10
     n_vir: int = 50
 
@@ -1025,11 +1210,15 @@ def value_operators(terms, fingerprints=None, n_occ=10, n_vir=50):
     kind = {}
     build = {}
     for t in terms:
-        for nt, r in identify_tree(t, fingerprints):
+        # emittable_operators, NOT identify_tree: the latter includes the ROOT
+        # node, whose contraction IS the residual term. A root is never
+        # materializable as a build_W (naming it collapses the term to one
+        # operator instead of factoring it), so ranking it is meaningless.
+        for nt, r in emittable_operators(t, fingerprints):
             name = r.op_name if isinstance(r, Reuse) else r.name
             uses[name] += 1
             kind[name] = "reuse" if isinstance(r, Reuse) else "derived"
-            build[name] = nary_cost(nt)  # cost of building this node once
+            build[name] = build_cost(nt)  # tree cost of building this node once
     vals = [
         OperatorValue(
             name=name, kind=kind[name], uses=uses[name],

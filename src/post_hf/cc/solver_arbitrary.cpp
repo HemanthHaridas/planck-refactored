@@ -256,12 +256,19 @@ namespace HartreeFock::Correlation::CC
         }
 
         // Gap B4: Jacobi-update each higher Sz sector block against its own
-        // residual, with the SAME denominator as its rank's reference block (B2:
-        // for an RHF reference the orbital energies are spin-free, so a sector
-        // reuses denominators.tensor(rank)). amps.sectors and residuals.sectors
-        // are in the same (rank, tag) order (both from the bundle's sector list),
-        // so they line up index-for-index; the offset continues past the packed
-        // reference blocks into the sector region.
+        // residual. amps.sectors and residuals.sectors are in the same (rank, tag)
+        // order (both from the bundle's sector list), so they line up
+        // index-for-index; the offset continues past the packed reference blocks
+        // into the sector region.
+        //
+        // U2.2: the denominator comes from `sector_tensor(rank, tag)`, NOT
+        // `tensor(rank)`. B2 could reuse the rank's reference denominator because
+        // an RHF reference has spin-free orbital energies, so every Sz sector of a
+        // rank shares one denominator. Under an unrestricted reference that is
+        // false -- eps_alpha != eps_beta -- so a block like `abab` needs its own.
+        // `sector_tensor` falls back to `tensor(rank)` when no per-block entry is
+        // stored, which is exactly the RHF case, so this stays one code path and
+        // the RHF numbers are unchanged.
         if (amps.sectors.size() != residuals.sectors.size())
             return std::unexpected(
                 "update_amplitudes_with_jacobi_diis: amplitude and residual sector counts differ.");
@@ -272,7 +279,7 @@ namespace HartreeFock::Correlation::CC
             if (amp_key != res_key)
                 return std::unexpected(
                     "update_amplitudes_with_jacobi_diis: sector (rank, tag) order mismatch between amplitudes and residuals.");
-            auto denom = denominators.tensor(amp_key.first);
+            auto denom = denominators.sector_tensor(amp_key.first, amp_key.second);
             if (!denom)
                 return std::unexpected("update_amplitudes_with_jacobi_diis: " + denom.error());
             if (amp_block.dims != res_block.dims || amp_block.dims != denom->dims)

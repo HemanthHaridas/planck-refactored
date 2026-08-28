@@ -717,17 +717,28 @@ def _rest_variants(rest, op_indices=None, summed=None):
 # does.
 
 
-def hypothesis_is_consistent(hyp, residual_terms, operators=None) -> bool:
+def hypothesis_is_consistent(hyp, residual_terms, operators=None, raw=None) -> bool:
     """D7.2.3c-1: is the dressed term ``hyp`` consistent with ``residual_terms``?
 
     Expands ``hyp`` to primitives and requires every ERI-canonical key to be
     present in the residual with the same sign and ``|hyp_coeff| <= |raw_coeff|``.
     True for the correct ``W*rest``, False for a wrong orientation / rest (a key
-    absent from the residual or of the wrong sign)."""
+    absent from the residual or of the wrong sign).
+
+    ``raw`` optionally supplies the precomputed ``raw_multiset(residual_terms)``.
+    That multiset is INVARIANT across a hypothesis search -- ``residual_terms`` is
+    the whole manifold and never changes -- but it used to be rebuilt on every
+    call: 7461 calls on ccsdt triples at ~0.036 s each, i.e. ~270 s of a ~300 s
+    manifold recomputing a fixed value. The ``n_hypotheses x n_terms`` product was
+    the super-linear term in dressing, and both factors grow with rank. Callers in
+    a loop should hoist it (see :func:`find_operator_occurrences`); ``None`` keeps
+    the standalone behaviour for one-off callers and tests.
+    """
     from fractions import Fraction
     from .dressed_equation import expand_dressed_term, raw_multiset
     ops = operators or {hyp.factors[0].name: _seeded_by_name(hyp.factors[0].name)}
-    raw = raw_multiset(residual_terms)
+    if raw is None:
+        raw = raw_multiset(residual_terms)
     acc: dict[tuple, Fraction] = {}
     for prim in expand_dressed_term(hyp, ops):
         key, coeff = _eri_canonical(prim)
@@ -858,7 +869,7 @@ def _dressed_canonical_key(term: AlgebraTerm) -> tuple:
     return _canonical_key(_canonical_fixed_point(_free_order_normalized(folded)))
 
 
-def find_operator_occurrences(op: "DressedOperator", terms) -> list[dict]:
+def find_operator_occurrences(op: "DressedOperator", terms, raw=None) -> list[dict]:
     """D7.2.3d: the verified occurrences of ``op`` in ``terms``.
 
     Enumerates every anchor's hypotheses (D7.2.3c-0), keeps the consistent ones
@@ -869,11 +880,21 @@ def find_operator_occurrences(op: "DressedOperator", terms) -> list[dict]:
     folded via :func:`_dressed_canonical_key` so each instance is one
     occurrence.  Each returned occurrence is a dict
     ``{"term": AlgebraTerm, "cover": frozenset}`` -- the dressed ``W*rest`` term
-    for D7.3 to rewrite, plus the residual primitives it accounts for."""
+    for D7.3 to rewrite, plus the residual primitives it accounts for.
+
+    ``raw`` optionally supplies a precomputed ``raw_multiset(terms)``; when omitted it
+    is computed ONCE here and shared across every hypothesis check below (D1). It was
+    previously rebuilt per check, which made recognition scale as
+    ``n_hypotheses x n_terms`` -- ~270 s of the ~300 s ccsdt-triples cost. Pure
+    function of ``terms``, so sharing it cannot change which hypotheses pass."""
+    from .dressed_equation import raw_multiset
+
+    if raw is None:
+        raw = raw_multiset(terms)
     consistent = []
     for anchor in collect_fragment_occurrences(op, terms):
         for hyp in enumerate_hypotheses(op, anchor, terms[anchor["term_id"]]):
-            if hypothesis_is_consistent(hyp, terms):
+            if hypothesis_is_consistent(hyp, terms, raw=raw):
                 consistent.append((hyp, _hypothesis_cover(hyp, op)))
 
     # keep only maximal covers (drop any strictly contained in another)
@@ -1099,12 +1120,24 @@ def assemble_dressed_equation(operators, terms):
     that re-expands to ``terms`` (the raw residual) exactly.
 
     Result = bare + dressed:
-    - **bare**: every raw term whose ERI-canonical key is NOT in any operator
-      occurrence's EXPANSION FOOTPRINT (the keys the ``W*rest`` term actually
-      produces).  NOTE: this uses the expansion footprint, NOT the occurrence
-      ``cover`` -- the cover was antisym-closed for dedup (D7.2.5.2 W3) and
+    - **bare**: the part of each raw term the operator expansions do NOT already
+      supply.  Computed as a per-key REMAINDER (raw coefficient minus the
+      coefficient the scaled ``W*rest`` expansions contribute), not as an
+      all-or-nothing membership test on the EXPANSION FOOTPRINT.  A key the
+      expansions cover exactly drops out (remainder 0, the common case); a key they
+      cover only PARTIALLY keeps a scaled copy carrying the difference.
+
+      The partial case is real, not hypothetical: in CCSD singles the raw term
+      ``t1(b,j) t2(a,c,i,k) v(b,c,j,k)`` has coefficient 1, while ``Wmbej``'s
+      textbook ``-1/2 t2*v`` definition term supplies only 1/2 of it through
+      ``Wmbej*t1``.  Under the old membership test the whole term was dropped as
+      "covered" and the missing 1/2 silently vanished -- the single mismatch in the
+      GCC singles baseline.
+
+      NOTE on why the footprint (not the occurrence ``cover``) is the right basis
+      for this: the cover was antisym-closed for dedup (D7.2.5.2 W3) and
       over-claims antisym-partner keys the single written ``W*rest`` form does not
-      emit; partitioning on ``cover`` would drop those partner terms.
+      emit; keying on ``cover`` would drop those partner terms entirely.
     - **dressed**: each recognized ``W*rest`` occurrence term, scaled by the
       per-operator nesting scale (0c-1, ``reconcile_operator_scales``), plus the
       τ/τ_c overlap corrections (0c-2, ``tau_overlap_corrections``) materialized
@@ -1119,19 +1152,56 @@ def assemble_dressed_equation(operators, terms):
     scale = reconcile_operator_scales(operators, terms)
     corr = tau_overlap_corrections(operators, terms, scale)
 
-    footprint: set = set()
+    # Coefficient each key receives from the dressed side. Accumulated from the
+    # SCALED occurrence term (what actually lands in `dressed`), so the remainder
+    # below is computed against what the assembled equation really contributes --
+    # expanding the unscaled term would misstate it whenever scale != 1.
+    covered: dict = {}
     dressed: list = []
     for op in operators:
         for occ in find_operator_occurrences(op, terms):
             t = occ["term"]
             s = scale[op.name]
-            dressed.append(t.scaled(s) if s != 1 else t)
-            for prim in expand_dressed_term(t, {op.name: op}):
+            scaled = t.scaled(s) if s != 1 else t
+            dressed.append(scaled)
+            for prim in expand_dressed_term(scaled, {op.name: op}):
                 key, coeff = _eri_canonical(prim)
                 if coeff:
-                    footprint.add(key)
+                    covered[key] = covered.get(key, Fraction(0)) + coeff
 
-    bare = [t for t in terms if _eri_canonical(t)[0] not in footprint]
+    # The τ/τ_c overlap corrections (below) also land on specific keys, as scaled
+    # copies of a raw representative. Count them as covered too, so a key that is
+    # exactly accounted for by expansion + correction leaves no remainder -- without
+    # this the remainder double-counts the correction's share and reintroduces the
+    # very overlap `tau_overlap_corrections` exists to remove.
+    for key, delta in corr.items():
+        covered[key] = covered.get(key, Fraction(0)) + delta
+
+    # Raw coefficient per key, and one representative term to anchor a remainder on.
+    raw_total: dict = {}
+    raw_first: dict = {}
+    for t in terms:
+        key, coeff = _eri_canonical(t)
+        raw_total[key] = raw_total.get(key, Fraction(0)) + coeff
+        raw_first.setdefault(key, t)
+
+    bare: list = []
+    emitted: set = set()
+    for t in terms:
+        key, coeff = _eri_canonical(t)
+        if key not in covered:
+            bare.append(t)                       # untouched by any operator
+            continue
+        if key in emitted:
+            continue                             # remainder is per KEY, not per term
+        emitted.add(key)
+        remainder = raw_total[key] - covered[key]
+        if remainder == 0:
+            continue                             # fully supplied by the expansions
+        rep = raw_first[key]
+        rc = _eri_canonical(rep)[1]
+        if rc:
+            bare.append(rep.scaled(remainder / rc))
 
     # Materialize each 0c-2 correction as a scaled copy of a raw term carrying the
     # same canonical key (delta = scale * raw_coeff, so the copy contributes delta).
@@ -1827,6 +1897,24 @@ _ERI_PERMUTATIONS: tuple[tuple[int, int, int, int], ...] = (
     (2, 3, 0, 1), (3, 2, 0, 1), (2, 3, 1, 0), (3, 2, 1, 0),
 )
 
+# The subset valid for a SPATIAL (non-antisymmetrized) <pq|rs>.
+#
+# The 8-fold set above is the symmetry group of the ANTISYMMETRIZED <pq||rs>. Four of
+# its members are reached by an odd number of intra-pair swaps and rely on
+# <qp|rs> = -<pq|rs>, which holds only for the antisymmetrized integral. A spatial
+# block has just the four +1 relations -- identity, particle swap <qp|sr>, bra<->ket
+# <rs|pq>, and their product <sr|qp> -- the same four
+# `emit/planck_tensor_cpp.py::_ERI_SYMMETRY_PERMUTATIONS` allows, and they are exactly
+# the parity-+1 members here (verified).
+#
+# Folding the full 8 on spatial terms equates terms that are NOT equal: measured on
+# spin-adapted ccsd doubles, `verify_dressed_equation` reported 0 mismatches while the
+# two manifolds evaluated to 983.79 and 1412.22. That blind spot is why a 52 % energy
+# defect passed every symbolic check -- see CCGEN_DRESSING_AND_SPIN_ADAPTATION.md.
+_ERI_PERMUTATIONS_SPATIAL: tuple[tuple[int, int, int, int], ...] = (
+    (0, 1, 2, 3), (1, 0, 3, 2), (2, 3, 0, 1), (3, 2, 1, 0),
+)
+
 
 def _perm_parity(perm: tuple[int, ...]) -> int:
     """Sign (+1/-1) of a permutation given as the image tuple perm[i] = source
@@ -1839,7 +1927,7 @@ def _perm_parity(perm: tuple[int, ...]) -> int:
     return -1 if inv & 1 else 1
 
 
-def _eri_normalize_factor(factor: Tensor) -> tuple[Tensor, int]:
+def _eri_normalize_factor(factor: Tensor, spatial: bool = False) -> tuple[Tensor, int]:
     """Reorder a v factor's indices to a canonical arrangement under 8-fold ERI
     symmetry, returning ``(reordered_factor, sign)``.  Non-v factors are
     returned unchanged with sign +1.
@@ -1858,8 +1946,9 @@ def _eri_normalize_factor(factor: Tensor) -> tuple[Tensor, int]:
     """
     if factor.name != "v" or len(factor.indices) != 4:
         return factor, 1
+    perms = _ERI_PERMUTATIONS_SPATIAL if spatial else _ERI_PERMUTATIONS
     best = None
-    for perm in _ERI_PERMUTATIONS:
+    for perm in perms:
         order = tuple(factor.indices[p] for p in perm)
         sig = tuple((x.space, x.name) for x in order)
         if best is None or sig < best[0]:
@@ -1867,13 +1956,17 @@ def _eri_normalize_factor(factor: Tensor) -> tuple[Tensor, int]:
     return factor.with_indices(best[1]), best[2]
 
 
-def _eri_normalize_term(term: AlgebraTerm) -> AlgebraTerm:
+def _eri_normalize_term(term: AlgebraTerm, spatial: bool = False) -> AlgebraTerm:
     """Normalize every v factor in a term to its canonical ERI arrangement,
-    folding each reordering's antisymmetry parity into the coefficient."""
+    folding each reordering's antisymmetry parity into the coefficient.
+
+    ``spatial=True`` restricts the fold to the four relations a non-antisymmetrized
+    <pq|rs> actually has; the default keeps the 8-fold <pq||rs> group.
+    """
     new_factors = []
     sign = 1
     for f in term.factors:
-        nf, s = _eri_normalize_factor(f)
+        nf, s = _eri_normalize_factor(f, spatial=spatial)
         new_factors.append(nf)
         sign *= s
     out = term.with_factors(tuple(new_factors))
@@ -1905,7 +1998,7 @@ def _free_order_normalized(term: AlgebraTerm) -> AlgebraTerm:
     )
 
 
-def _eri_canonical(term: AlgebraTerm) -> tuple[tuple, Fraction]:
+def _eri_canonical(term: AlgebraTerm, spatial: bool = False) -> tuple[tuple, Fraction]:
     """(ERI-canonical key, signed coefficient) for a term.
 
     Folds v's bra<->ket exchange symmetry (which _canonical_key alone does not,
@@ -1926,7 +2019,7 @@ def _eri_canonical(term: AlgebraTerm) -> tuple[tuple, Fraction]:
     normalization-induced sign/relabel.
     """
     settled = _canonical_fixed_point(_free_order_normalized(term))
-    folded = _eri_normalize_term(settled)
+    folded = _eri_normalize_term(settled, spatial=spatial)
     cf = _canonical_fixed_point(folded)
     return _canonical_key(cf), cf.coeff
 

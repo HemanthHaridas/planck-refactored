@@ -1,3 +1,12 @@
+> **SUPERSEDED 2026-08-26.** This diagnosis is complete, and the fix it produced
+> shipped behind `PLANCK_CC_SPIN_ADAPT` — which then defaulted **OFF**, so the
+> defect described below remained the default build's behaviour for months and
+> cost a second full investigation. **The flag now defaults ON.**
+>
+> For what the defect was, why the default hid it, and what gates it now:
+> **`docs/CCGEN_SPIN_ADAPT_DEFAULT.md`**. Kept for the derivation history the
+> answer deliberately drops.
+
 # Scope of the generated-CC spin-adaptation defect
 
 The generated arbitrary-order CC kernels compute a **wrong energy** — for Be/STO-3G

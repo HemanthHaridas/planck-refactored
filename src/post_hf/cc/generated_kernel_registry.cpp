@@ -36,8 +36,84 @@
 #include "generated/cc/cc6_planck_generated.cpp"
 #endif
 
+// U5.3: the UCC translation units, emitted only under -DPLANCK_CC_UCC=ON. They
+// define make_generated_ucc_<method>_kernels(), distinct from their RCC siblings
+// (U5.0) so both can link into one binary.
+#ifndef PLANCK_CC_UCC
+#define PLANCK_CC_UCC 0
+#endif
+#if PLANCK_CC_UCC
+#include "generated/cc/ccsd_ucc_planck_generated.cpp"
+#if PLANCK_CC_MAXORDER >= 3
+#include "generated/cc/ccsdt_ucc_planck_generated.cpp"
+#endif
+#if PLANCK_CC_MAXORDER >= 4
+#include "generated/cc/ccsdtq_ucc_planck_generated.cpp"
+#endif
+#if PLANCK_CC_MAXORDER >= 5
+#include "generated/cc/cc5_ucc_planck_generated.cpp"
+#endif
+#if PLANCK_CC_MAXORDER >= 6
+#include "generated/cc/cc6_ucc_planck_generated.cpp"
+#endif
+#endif
+
 namespace HartreeFock::Correlation::CC
 {
+    bool generated_ucc_kernels_available() noexcept
+    {
+        return PLANCK_CC_UCC != 0;
+    }
+
+    std::expected<GeneratedArbitraryOrderKernels, std::string>
+    make_generated_ucc_kernels(int rank)
+    {
+        if (rank < 2)
+            return std::unexpected(std::format(
+                "make_generated_ucc_kernels: rank {} is below the smallest UCC "
+                "method (rank 2, uccsd).", rank));
+
+#if !PLANCK_CC_UCC
+        // Deliberately an ERROR, not a fall-back to the RCC bundle: running a
+        // restricted kernel against an unrestricted reference compiles, runs, and
+        // returns a plausible wrong number.
+        return std::unexpected(std::format(
+            "make_generated_ucc_kernels: this build carries no UCC kernels "
+            "(rank {} requested). Reconfigure with -DPLANCK_CC_UCC=ON.", rank));
+#else
+        switch (rank)
+        {
+        case 2:
+            return make_generated_ucc_ccsd_kernels();
+#if PLANCK_CC_MAXORDER >= 3
+        case 3:
+            return make_generated_ucc_ccsdt_kernels();
+#endif
+#if PLANCK_CC_MAXORDER >= 4
+        case 4:
+            return make_generated_ucc_ccsdtq_kernels();
+#endif
+        // U5.3c: the rank-4 ceiling here was a hand-written limit, not a real
+        // one -- the emitter is rank-generic and PLANCK_CC_METHODS is derived
+        // from PLANCK_CC_MAXORDER, so the UCC translation units are emitted at
+        // ranks 5 and 6 exactly when the RCC ones are.
+#if PLANCK_CC_MAXORDER >= 5
+        case 5:
+            return make_generated_ucc_cc5_kernels();
+#endif
+#if PLANCK_CC_MAXORDER >= 6
+        case 6:
+            return make_generated_ucc_cc6_kernels();
+#endif
+        default:
+            return std::unexpected(std::format(
+                "make_generated_ucc_kernels: rank {} exceeds this build's "
+                "PLANCK_CC_MAXORDER ({}). Reconfigure with a higher value.",
+                rank, PLANCK_CC_MAXORDER));
+        }
+#endif
+    }
+
     std::expected<GeneratedArbitraryOrderKernels, std::string>
     make_generated_rcc_kernels(int rank)
     {
@@ -86,7 +162,7 @@ namespace HartreeFock::Correlation::CC
     std::expected<GeneratedArbitraryOrderKernels, std::string>
     make_generated_rccsdtq_kernels()
     {
-        // Rank-4 alias, kept for the existing run_rccsdtq call site.
+        // Rank-4 alias, kept for the existing run_rccgen call site.
         return make_generated_rcc_kernels(4);
     }
 } // namespace HartreeFock::Correlation::CC

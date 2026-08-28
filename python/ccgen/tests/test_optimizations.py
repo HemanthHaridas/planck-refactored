@@ -762,13 +762,18 @@ class EmissionTests(unittest.TestCase):
             include_intermediates=True,
             intermediate_threshold=10,
         )
+        # Compare the FULL emitted symbol on both sides. V1.3.2 method-suffixes builders
+        # (`build_W_oo_ccsdt`) while the local it is assigned to keeps the bare operator name
+        # (`const auto W_oo = build_W_oo_ccsdt(...)`), so stripping the suffix from only one
+        # side compares two different things -- and a non-greedy strip also eats part of any
+        # operator name that itself contains `_`.
         build_defs = set(re.findall(
-            r"^(?:double|Tensor2D|Tensor4D|Tensor6D|TensorND) build_(W_[A-Za-z0-9_]+)\(",
+            r"^(?:double|Tensor2D|Tensor4D|Tensor6D|TensorND) (build_W_[A-Za-z0-9_]+)\(",
             code,
             re.MULTILINE,
         ))
         build_calls = set(re.findall(
-            r"const auto (W_[A-Za-z0-9_]+) = build_",
+            r"const auto W_[A-Za-z0-9_]+ = (build_W_[A-Za-z0-9_]+)\(",
             code,
         ))
         self.assertTrue(build_calls, "Expected rewritten kernels to build intermediates")

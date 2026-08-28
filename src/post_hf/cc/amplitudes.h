@@ -3,6 +3,7 @@
 
 #include <expected>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "post_hf/cc/common.h"
@@ -51,10 +52,32 @@ namespace HartreeFock::Correlation::CC
     {
         std::vector<TensorND> by_rank; // rank r stored at by_rank[r-1]
 
+        // U2.2: per-block denominators, keyed (rank, tag) exactly like
+        // ArbitraryOrderRCCAmplitudes::sectors. Populated only on the UCC path,
+        // where alpha and beta orbital energies differ and a block therefore
+        // CANNOT reuse its rank's reference denominator.
+        //
+        // The RHF path leaves this empty and keeps reading `by_rank`, so its
+        // behavior is byte-identical. That fallback is deliberate and not merely
+        // a convenience: for an RHF reference the orbital energies really are
+        // spin-free, so every Sz sector of a rank shares one denominator -- which
+        // is exactly why the B4 sector update could reuse `tensor(rank)` and why
+        // that reuse is wrong the moment the reference is unrestricted.
+        std::vector<std::pair<std::pair<int, std::string>, TensorND>> sectors;
+
         [[nodiscard]] int max_rank() const noexcept;
         [[nodiscard]] bool has_rank(int excitation_rank) const noexcept;
         [[nodiscard]] std::expected<DenseTensorView, std::string> tensor(int excitation_rank);
         [[nodiscard]] std::expected<ConstDenseTensorView, std::string> tensor(int excitation_rank) const;
+
+        // The denominator a (rank, tag) block must be divided by. Returns the
+        // block's own entry when one is stored (UCC), otherwise falls back to the
+        // rank's reference denominator (RHF, where they coincide). Callers use
+        // this rather than `tensor(rank)` so the RHF and UCC paths stay ONE code
+        // path -- a second sector-update loop would be a second thing to keep in
+        // sync with ensure_amplitude_sectors.
+        [[nodiscard]] std::expected<ConstDenseTensorView, std::string>
+        sector_tensor(int excitation_rank, const std::string &tag) const;
     };
 
     struct ArbitraryOrderRCCAmplitudes
@@ -93,6 +116,54 @@ namespace HartreeFock::Correlation::CC
     std::expected<ArbitraryOrderDenominatorCache, std::string> build_arbitrary_order_denominator_cache(
         const RHFReference &reference,
         int max_excitation_rank);
+
+    // U2: the UCC (spin-blocked) denominator for one amplitude block.
+    //
+    // `block_tag` is the per-slot spin string in the SAME order as the tensor's
+    // indices, which is occ-first then vir (`rank_dims`): a rank-2n block tagged
+    // "aab" + "aab" has occ slots (a,a,b) and vir slots (a,a,b). This mirrors
+    // ccgen's UCC tags, whose halves are bra(vir)-then-ket(occ) -- so the caller
+    // converts, and the tag handed here is always occ-half-first.
+    //
+    // Each slot draws its orbital energy from its own spin's set, so a mixed
+    // block's denominator is genuinely spin-resolved rather than a relabeling.
+    // U5.1b: the UCC amplitude blocks of one excitation rank, as occ-half-first
+    // spin tags. A rank-n block has n+1 independent alpha-count sectors and no
+    // a<->b fold is available (alpha and beta are different orbitals), so rank 1
+    // gives {aa, bb} and rank 2 gives {aaaa, abab, bbbb}.
+    //
+    // The C++ mirror of ccgen's `ucc_independent_blocks`, and derivable from the
+    // rank alone -- which is what lets `prepare_generated_ucc_state` build the
+    // denominators BEFORE the kernel bundle is known. That ordering is forced:
+    // `ensure_amplitude_sectors` sizes each amplitude block from its own
+    // denominator (U2.2), so the denominators must already be there.
+    [[nodiscard]] std::vector<std::string> ucc_amplitude_blocks(int excitation_rank);
+
+    // U2.2: the whole UCC denominator cache, one entry per (rank, tag) block the
+    // kernel bundle declares. Drives build_ucc_block_denominator over `blocks`.
+    //
+    // `blocks` is taken from the bundle's `sector_tags` rather than enumerated
+    // here, so the cache carries exactly the blocks the generated kernels will
+    // ask for -- one vocabulary, defined in ccgen, not two that can drift.
+    //
+    // TAG ORDER, and it is the thing a caller gets wrong: the tag handed to this
+    // function is per-slot spin in the TENSOR's index order, occ-half first
+    // (`rank_dims`). ccgen's UCC tags are bra(vir)-half-then-ket(occ), so a
+    // caller passing ccgen tags straight through gets a silently transposed
+    // denominator whenever the two halves differ (`abba` vs `baab`). Convert at
+    // the boundary; see build_ucc_block_denominator's own note.
+    //
+    // `by_rank` is left EMPTY: a UCC method has no privileged reference sector
+    // (every target is block-tagged), so there is no rank whose denominator is
+    // the unqualified one. Callers must reach blocks through `sector_tensor`.
+    std::expected<ArbitraryOrderDenominatorCache, std::string>
+    build_ucc_denominator_cache(
+        const UHFReference &reference,
+        const std::vector<std::pair<int, std::string>> &blocks);
+
+    std::expected<TensorND, std::string> build_ucc_block_denominator(
+        const UHFReference &reference,
+        const std::string &block_tag);
 
     RCCSDAmplitudes make_zero_rccsd_amplitudes(const RHFReference &reference);
 

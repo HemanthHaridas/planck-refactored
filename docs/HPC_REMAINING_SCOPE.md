@@ -197,6 +197,69 @@ tripwire — not a speed measurement, which CI cannot do reliably anyway.
 
 ---
 
+## Gap 5 — post-HF is serial on BOTH axes (~M, medium risk)
+
+The campaign's whole SCF/DFT story rides two parallel axes — OpenMP within a
+rank (the `_compute_fock_rhf` pragmas, always on) and MPI across ranks (the
+stripe + `nb²`-Allreduce of Tiers 1/2). **Post-HF has neither.** Confirmed
+in-tree: every `src/post_hf/cc/*.cpp` backend and every ccgen-generated kernel
+(`build/generated/cc/*.cpp`) has **zero** `#pragma omp`, and no post-HF path is
+MPI-striped. Under the campaign's `threads_per_rank:1` model this compounds:
+`mpirun -n 32 planck-mpi` on a CCSD input uses **one core** — no threads, no
+ranks. This is why `scale.json` never surfaced it: it measures HF/DFT SCF at 1
+thread/rank, where post-HF's missing OpenMP is invisible.
+
+Two independent pieces, different gates:
+
+### 5a — OpenMP within-rank (NO RI gate; the higher rung, do first)
+
+`#pragma omp parallel for` on the outer contraction index of the hand-written
+`tensor_backend.cpp` loops and in the `planck_tensor_cpp.py` term emitter,
+mirroring the blessed `HartreeFock::ObaraSaika::_compute_fock_rhf` pattern.
+Disjoint output slabs (each thread owns a slice of the residual tensor), so no
+cross-thread summation for the tensor-result terms — the same shape as the
+landed ERI/transform parallelization.
+
+**Determinism constraint is load-bearing** (same discipline as Gap 2's DFT XC
+reduction): the scalar-accumulator terms (`double acc; ... acc += ...; result
++= acc;` — roughly half the generated terms, all the energy-kernel and
+fully-contracted terms) are **not** bitwise thread-count-invariant under a
+naive `reduction(+:acc)`. Keep those serial or sum fixed-order partials; never
+`omp critical`, never completion-order. Interacts with the `_partN` chunking
+(the chunk sub-functions must each parallelize independently).
+
+- **No RI dependency:** this is thread parallelism on the existing dense
+  tensors, unrelated to the RI memory strategy. Lands now, independent of
+  Tier 2.
+- **Profile first:** which post-HF path is the actual wall-time sink at a
+  realistic size (MP2 energy? CCSD iteration? CCSDTQ?) picks 5a's first target.
+  Don't parallelize cold code.
+- **Verify:** `energy(threads N) == energy(threads 1)` bitwise across
+  N ∈ {1,2,4,8}, extending `mpi_smoke_compare.py`.
+
+### 5b — MPI rank-split (= Tier 2 front half; reclassify the RI gate)
+
+Stripe the dense contraction outer index across ranks + one fixed-order
+`Mpi::allreduce_inplace` on the residual tensor, exactly the Fock/grid pattern.
+
+**Reclassification:** the campaign parks "Tier 2 (distributed RI post-HF)"
+entirely behind RI. But RI is a *memory* strategy (it shrinks the `nb⁴` tensor
+to fit per-rank), not a *distribution* prerequisite — the **dense** MP2/CC
+contractions can be rank-striped on the outer MO index today, with no RI. RI
+gates only the *memory* ceiling, not the ability to distribute. So 5b is
+dense-post-HF distribution; RI-post-HF distribution stays the separate,
+memory-motivated Tier 2 tail.
+
+- **Verify:** `energy(-n N) == energy(-n 1)` bitwise — the Gap 3 fixture
+  pattern at a post-HF case.
+
+**Dead code to leave dead:** `python/ccgen/emit/cpp_loops.py` carries an
+unused OpenMP + GEMM emitter. The live Planck path is `planck_tensor_cpp.py`;
+5a's pragmas go there. Do not resurrect the parallel emitter — that is a second
+implementation, not a smaller diff.
+
+---
+
 ## What the laptop cannot answer
 
 The scaling numbers in this doc all come from Notchpeak (`scale.json`), never a
@@ -228,8 +291,12 @@ post-HF track:
 3. Gap 1 (HGP/Rys stripe OR reject)   ~S — decide which; do not leave silent
 4. DFT nb=416 convergence             ~S–M — separate from HPC; the largest
                                           case fails to converge, not to scale
-5. Tier 2 (distributed RI post-HF)    — the only large remaining item; gated
-                                          behind RI, a second release
+5. Gap 5a (post-HF OpenMP)            ~M — post-HF is 1-core/rank today; thread
+                                          the CC/MP2 hot loops, no RI gate
+6. Gap 5b (dense post-HF MPI stripe)  ~M — rank-split the dense contractions;
+                                          NOT RI-gated (reclassified)
+7. Tier 2 (distributed RI post-HF)    — the memory-motivated tail; the only
+                                          item still atop RI, a second release
 ```
 
 Gap 3 is now **#1** because it is the only thing standing between "DFT scales"
@@ -271,8 +338,13 @@ Remaining, in value order:
   on them. Not silent replication.
 - **DFT nb=416 convergence** — a robustness item, not HPC: the largest case
   fails `RKS did not converge`, not memory and not scaling.
-- **Tier 2** — distributed RI post-HF, the one large item left, still atop RI
-  and still a second release.
+- **Gap 5** — post-HF parallelization, both axes. 5a (OpenMP, no RI gate) makes
+  post-HF use more than one core per rank at all; 5b (dense MPI stripe,
+  reclassified out from behind RI) distributes it. Do 5a first — higher rung,
+  no RI, delivers single-node scaling immediately, and its determinism gate is
+  the one 5b reuses.
+- **Tier 2** — distributed **RI** post-HF: the memory-motivated tail after 5b,
+  the one item genuinely still atop RI, still a second release.
 
 ## Risks, revised
 

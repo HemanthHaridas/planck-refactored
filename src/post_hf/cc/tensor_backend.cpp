@@ -4,14 +4,19 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <exception>
 #include <format>
 #include <limits>
 #include <stdexcept>
 
 #include "io/logging.h"
+// run_rccgen: the arbitrary-order harness, where the generated kernels are correct.
+#include "post_hf/cc/rccgen.h"
 #include "post_hf/cc/determinant_space.h"
 #include "post_hf/cc/diis.h"
+// rebind_physicist: generated kernels index physicist <pq|rs> (T1b).
+#include "post_hf/cc/generated_arbitrary_runtime.h"
 #include "post_hf/integrals.h"
 
 #include "generated/cc/ccsdt_planck_generated.cpp"
@@ -2262,7 +2267,8 @@ namespace
         const ProductionSpinOrbitalChemistsSystem &system,
         const RHFReference &reference,
         RCCSDTAmplitudes &amps,
-        bool use_generated_kernels)
+        bool use_generated_kernels,
+        const TensorCCBlockCache &physicist_blocks)
     {
         RestrictedRCCSDTUpdateMetrics metrics;
         RCCSDResiduals residuals;
@@ -2320,8 +2326,165 @@ namespace
 
         if (use_generated_kernels)
         {
+            // T1b: ccgen emits against the physicist <pq|rs> convention, but `state.mo_blocks`
+            // holds chemists' (pq|rs). The arbitrary-order path has always rebound before
+            // calling a generated kernel; this path did not, so the first execution of
+            // `compute_ccsdt_triples_residual` read permuted integrals -- a wrong-but-plausible
+            // T3 that still converged, 1.8e-4 Eh off.
+            //
+            // `physicist_blocks` is rebound ONCE by the caller and passed in, not cached here:
+            // this function runs every iteration, and a function-local static would both repeat
+            // the transform and (worse) leak one molecule's integrals into the next run in the
+            // same process. The shared `state.mo_blocks` stays chemists', because the
+            // hand-written branch below and `build_spin_orbital_blocks` read it.
             triples_residual = HartreeFock::Correlation::CC::compute_ccsdt_triples_residual(
-                state.reference, state.mo_blocks, state.denominators, amps);
+                state.reference, physicist_blocks, state.denominators, amps);
+
+            // P3 probe (PLANCK_CC_T3_TIME=N, N>=1 repeats): time the generated and hand-written
+            // T3 residual evaluations from identical amplitudes and report the ratio alongside
+            // o, v and the t3 working-set size. Separate from T3_DIFF because P3 wants the
+            // timing on cases where the value comparison is uninteresting, and because at post-
+            // accessor-fix speeds (~1e-3 s) a single shot is noise; N repeats are averaged.
+            // Diagnostic only -- it re-evaluates into scratch and does not touch
+            // `triples_residual`. See docs/CCGEN_KERNEL_SCALING_SCOPE.md.
+            if (const char *timing = std::getenv("PLANCK_CC_T3_TIME");
+                timing != nullptr && timing[0] != '\0' && timing[0] != '0')
+            {
+                const int repeats = std::max(1, std::atoi(timing));
+                const int no = state.reference.orbital_partition.n_occ;
+                const int nv = state.reference.orbital_partition.n_virt;
+
+                double gen_seconds = 0.0;
+                for (int r = 0; r < repeats; ++r)
+                {
+                    const auto t0 = std::chrono::steady_clock::now();
+                    auto scratch = HartreeFock::Correlation::CC::compute_ccsdt_triples_residual(
+                        state.reference, physicist_blocks, state.denominators, amps);
+                    gen_seconds +=
+                        std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - t0).count();
+                    HartreeFock::Correlation::CC::Tensor6D sink = std::move(scratch);
+                    (void)sink;
+                }
+                gen_seconds /= repeats;
+
+                // Intermediates are built once outside the timed loop: the generated kernel
+                // builds none, so charging their cost per-repeat to the hand-written side
+                // would overstate it. Their one-off cost is reported separately.
+                const auto ti = std::chrono::steady_clock::now();
+                const DressedSinglesDoublesIntermediates time_sd =
+                    build_dressed_sd_intermediates(system, dressed, amps.t2);
+                DressedTriplesIntermediates time_ints =
+                    build_dressed_triples_intermediates(system, dressed, time_sd, amps.t2);
+                add_dressed_triples_feedback_into_triples_intermediates(
+                    system, dressed, amps.t3, time_ints);
+                const double int_seconds =
+                    std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - ti).count();
+
+                TensorTriplesWorkspace time_ws{
+                    .amplitudes = clone_rccsdt_amplitudes(amps),
+                    .r3 = Tensor6D(
+                        amps.t3.dim1, amps.t3.dim2, amps.t3.dim3,
+                        amps.t3.dim4, amps.t3.dim5, amps.t3.dim6, 0.0),
+                    .allocated = true,
+                };
+                double hand_seconds = 0.0;
+                for (int r = 0; r < repeats; ++r)
+                {
+                    const auto t0 = std::chrono::steady_clock::now();
+                    build_dressed_triples_residual(system, time_ints, amps, time_ws);
+                    hand_seconds +=
+                        std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - t0).count();
+                }
+                hand_seconds /= repeats;
+
+                const double t3_mib =
+                    static_cast<double>(amps.t3.data.size() * sizeof(double)) / (1024.0 * 1024.0);
+
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info,
+                    "RCCSDT[T3-TIME] :",
+                    std::format(
+                        "no={} nv={} o/v={:.3f} t3={:.3f}MiB reps={} "
+                        "gen={:.6f}s hand={:.6f}s ints={:.6f}s ratio={:.1f}x",
+                        no, nv,
+                        nv > 0 ? static_cast<double>(no) / nv : 0.0,
+                        t3_mib, repeats,
+                        gen_seconds, hand_seconds, int_seconds,
+                        gen_seconds / std::max(hand_seconds, 1e-12)));
+            }
+
+            // T0 probe (PLANCK_CC_T3_DIFF=1): compute the HAND-WRITTEN residual from the same
+            // amplitudes and report the elementwise difference, both before and after
+            // `restore_restricted_t3_structure`. One evaluation, not a ~21-minute solve, and it
+            // separates "the generated residual value is wrong" from "the values agree but the
+            // solver path diverges". The before/after pair additionally says whether the
+            // restricted-T3 convention is the remaining gap. Diagnostic only -- off by default,
+            // and it does not alter `triples_residual`.
+            if (const char *probe = std::getenv("PLANCK_CC_T3_DIFF");
+                probe != nullptr && probe[0] == '1')
+            {
+                Tensor6D raw_generated(
+                    triples_residual.dim1, triples_residual.dim2, triples_residual.dim3,
+                    triples_residual.dim4, triples_residual.dim5, triples_residual.dim6, 0.0);
+                raw_generated.data = triples_residual.data;
+
+                const DressedSinglesDoublesIntermediates probe_sd =
+                    build_dressed_sd_intermediates(system, dressed, amps.t2);
+                DressedTriplesIntermediates probe_ints =
+                    build_dressed_triples_intermediates(system, dressed, probe_sd, amps.t2);
+                add_dressed_triples_feedback_into_triples_intermediates(
+                    system, dressed, amps.t3, probe_ints);
+                TensorTriplesWorkspace probe_ws{
+                    .amplitudes = clone_rccsdt_amplitudes(amps),
+                    .r3 = Tensor6D(
+                        amps.t3.dim1, amps.t3.dim2, amps.t3.dim3,
+                        amps.t3.dim4, amps.t3.dim5, amps.t3.dim6, 0.0),
+                    .allocated = true,
+                };
+                build_dressed_triples_residual(system, probe_ints, amps, probe_ws);
+
+                const auto report = [](const char *label,
+                                       const Tensor6D &a, const Tensor6D &b) {
+                    double max_abs = 0.0, sum_sq = 0.0, ref_max = 0.0;
+                    for (std::size_t i = 0; i < a.data.size(); ++i)
+                    {
+                        const double d = a.data[i] - b.data[i];
+                        max_abs = std::max(max_abs, std::abs(d));
+                        sum_sq += d * d;
+                        ref_max = std::max(ref_max, std::abs(b.data[i]));
+                    }
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Info,
+                        "RCCSDT[T3-DIFF] :",
+                        std::format("{}: max|gen-hand|={:.6e} rms={:.6e} max|hand|={:.6e}",
+                                    label, max_abs,
+                                    std::sqrt(sum_sq / static_cast<double>(a.data.size())),
+                                    ref_max));
+                };
+
+                report("raw (no restore)", raw_generated, probe_ws.r3);
+                Tensor6D restored_generated(
+                    raw_generated.dim1, raw_generated.dim2, raw_generated.dim3,
+                    raw_generated.dim4, raw_generated.dim5, raw_generated.dim6, 0.0);
+                restored_generated.data = raw_generated.data;
+                restore_restricted_t3_structure(restored_generated);
+                Tensor6D restored_hand(
+                    probe_ws.r3.dim1, probe_ws.r3.dim2, probe_ws.r3.dim3,
+                    probe_ws.r3.dim4, probe_ws.r3.dim5, probe_ws.r3.dim6, 0.0);
+                restored_hand.data = probe_ws.r3.data;
+                restore_restricted_t3_structure(restored_hand);
+                report("after restore   ", restored_generated, restored_hand);
+            }
+
+            // `restore` is REQUIRED here, and is not optional: this solver's DIIS packs only
+            // the unique wedge (i<=j<=k) and rebuilds the rest via
+            // restore_restricted_t3_from_unique, which is information-preserving only if the
+            // amplitudes carry full permutational symmetry. Removing this call diverges --
+            // measured, with both hand-written and generated residual sources. See
+            // docs/CCGEN_RANK3_KERNEL_AND_SOLVER.md.
             restore_restricted_t3_structure(triples_residual);
             metrics.r3_residual_rms = triples_residual_rms(triples_residual);
         }
@@ -2420,13 +2583,22 @@ namespace
         double previous_energy =
             compute_restricted_rccsdt_correlation_energy(system, amps);
 
+        // T1b: rebind ONCE, outside the loop. ccgen kernels index physicist <pq|rs> while
+        // `state.mo_blocks` is chemists' (pq|rs); only the generated branch consumes this, and
+        // the shared cache must stay chemists' for the hand-written branch. Built
+        // unconditionally (a few tensor transposes) rather than lazily, to keep the loop body
+        // free of a first-iteration special case.
+        const TensorCCBlockCache physicist_blocks =
+            HartreeFock::Correlation::CC::rebind_physicist(state.mo_blocks);
+
         for (unsigned int iter = 1; iter <= max_iter; ++iter)
         {
             const Eigen::VectorXd unique_before =
                 pack_restricted_unique_rccsdt_amplitudes(amps);
             const RestrictedRCCSDTUpdateMetrics update_metrics =
                 update_restricted_rccsdt_amplitudes_once(
-                    state, system, reference, amps, use_generated_kernels);
+                    state, system, reference, amps, use_generated_kernels,
+                    physicist_blocks);
             Eigen::VectorXd unique_after =
                 pack_restricted_unique_rccsdt_amplitudes(amps);
             const Eigen::VectorXd unique_step = unique_after - unique_before;
@@ -2739,6 +2911,20 @@ namespace HartreeFock::Correlation::CC
         constexpr int kPrototypeMaxSpinOrbitals = 12;
         constexpr std::size_t kPrototypeMaxDeterminants = 1200;
 
+        // TensorOptimized is the only backend that runs the ccgen-GENERATED restricted
+        // triples kernel; the other two run hand-written residuals. It is therefore what a
+        // build configured with -DPLANCK_CC_DRESS_OPERATORS=ON is asking for: dressing
+        // rewrites the generated kernel, so selecting a hand-written backend would silently
+        // ignore the option and report numbers from code the flag never touched.
+        //
+        // Selected by build configuration rather than by system size, because it is a
+        // statement about which kernel to exercise, not about cost. Without the option the
+        // size-based choice below is unchanged, so default builds do not move.
+#ifdef PLANCK_CC_DRESS_OPERATORS
+        if constexpr (PLANCK_CC_DRESS_OPERATORS)
+            return RCCSDTBackend::TensorOptimized;
+#endif
+
         const int n_spin_orb = 2 * reference.n_mo;
         const int n_electrons = 2 * reference.n_occ;
         const std::size_t ndet = binomial(
@@ -2950,10 +3136,51 @@ namespace HartreeFock::Correlation::CC
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs)
     {
-        HartreeFock::Logger::logging(
-            HartreeFock::LogLevel::Info,
-            "RCCSDT[OPT] :",
-            "Using the Planck-style ccgen RCCSD warm start with the native restricted CCSDT triples solver. The generated restricted triples kernel remains experimental until a restricted derivation is available.");
-        return run_tensor_rccsdt_impl(calculator, shell_pairs, true, false);
+        // This backend used to call `run_tensor_rccsdt_impl(..., true, true)`: the generated
+        // triples kernel inside `tensor_backend`'s solver. That combination is WRONG -- it
+        // converges to a self-consistent but incorrect fixed point (CH4/STO-3G: -39.8059200873
+        // against PySCF rccsdt -39.8058445240, i.e. -7.56e-05, recovering more correlation than
+        // CCSDTQ, which is variationally impossible).
+        //
+        // The cause is a representation mismatch, not a bad kernel. `tensor_backend`'s solver
+        // is built around a SYMMETRY-PACKED amplitude representation: its DIIS packs only the
+        // unique wedge (i<=j for t2, i<=j<=k for t3) and rebuilds the rest on unpack via
+        // `restore_restricted_t{2,3}_from_unique`, which is information-preserving only if the
+        // amplitudes carry full permutational symmetry -- the property
+        // `restore_restricted_t3_structure` imposes on the residual each iteration. The ccgen
+        // kernels instead emit every index permutation explicitly, so they do not produce
+        // residuals in that representation. `restore` and the wedge DIIS are one coupled
+        // convention: removing either half diverges, and no combination of the two residual
+        // sources converges to the right answer. Measured, all on CH4/STO-3G:
+        //
+        //   r1/r2 hand + r3 gen + restore  -> converges, -7.56e-05   (the old behavior)
+        //   r1/r2 gen  + r3 gen + restore  -> converges, +8.23e-05
+        //   r1/r2 gen  + r3 gen, no restore-> diverges
+        //   arbitrary harness (dense pack) -> +1.49e-08   <- correct
+        //
+        // The arbitrary-order harness is the generated kernels' native home: it packs dense
+        // tensors, needs no symmetrization step, and reproduces PySCF. So route there instead
+        // of maintaining a second, subtly-incompatible solver around the same kernels.
+        //
+        // Full record: docs/CCGEN_RANK3_KERNEL_AND_SOLVER.md.
+        constexpr int kArbitraryLowerRanks = PLANCK_CC_ARBITRARY_LOWER_RANKS;
+        if constexpr (kArbitraryLowerRanks == 0)
+        {
+            return std::unexpected(
+                "run_tensor_optimized_rccsdt: the generated rank-3 CCSDT kernel runs only in the "
+                "arbitrary-order harness, which needs -DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON. "
+                "Reconfigure with that option, or use the hand-written tensor backend "
+                "(PLANCK_RCCSDT_BACKEND=tensor), which is PySCF-validated by ch4_rccsdt_sto3g.");
+        }
+        else
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                "RCCSDT[OPT] :",
+                "Routing the ccgen-generated rank-3 CCSDT kernels through the arbitrary-order "
+                "harness (the representation they are emitted for).");
+            calculator._scf._cc_generated_rank = 3;
+            return run_rccgen(calculator, shell_pairs);
+        }
     }
 } // namespace HartreeFock::Correlation::CC

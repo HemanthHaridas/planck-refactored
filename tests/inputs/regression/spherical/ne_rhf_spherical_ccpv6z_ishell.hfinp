@@ -1,0 +1,47 @@
+# i-shell (L=6) cross-CODE reference input for the Cartesian->spherical transform.
+# Guards FU2: L=6 uses the recurrence oracle directly and has never been exercised
+# end-to-end against another code. MAX_L=6 makes this the top of the supported range.
+# The pre-existing high-L gates are cross-ENGINE (all engines share the transform,
+# so they agreed with each other while all being wrong vs an external reference).
+# See docs/SPHERICAL_F_SHELL_ACCURACY_SCOPE.md FU1/FU2/FU4.
+# NB high-L bases are near-linear-dependent: spherical only, generous cycles.
+#
+# NOT REGISTERED as a regression case: cc-pV6Z on Ne is 140 spherical AOs, and the
+# conventional nb^4 ERI build makes this far too heavy for the suite (cc-pV5Z, at 91
+# AOs, already takes 41 s). Kept as a runnable input so FU2 -- the first end-to-end
+# exercise of the L=6 recurrence-oracle path against another code -- can be done
+# deliberately rather than re-derived. The PySCF reference, computed from Planck's
+# own cc-pV6Z GBS via parse_gaussian (so the basis coefficients match exactly), is:
+#
+#     PySCF 2.13.0 RHF/cc-pV6Z spherical, Ne:  -128.5470611007 Eh
+#
+# Expect ~1e-9 agreement, as measured for f/g/h. If it disagrees, the suspect is the
+# oracle path (spherical_recurrence.cpp), NOT normalized_pseudoinverse -- L=6
+# delegates to the oracle and never touches the pseudoinverse.
+%begin_control
+    basis       cc-pV6Z
+    calculation energy
+    basis_type  spherical
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    8
+    guess       hcore
+    max_cycles  300
+    tol_energy  1.0e-10
+    tol_density 1.0e-10
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+1
+0   1
+Ne    0.000000     0.000000     0.000000
+%end_coords

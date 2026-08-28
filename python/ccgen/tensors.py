@@ -166,3 +166,49 @@ def reindex_tensors(
     if updated is None:
         return tensors
     return tuple(updated)
+
+
+# ── ERI index symmetries, defined ONCE ────────────────────────────────────
+#
+# A spatial (NON-antisymmetrized) physicist integral <pq|rs> over real orbitals
+# has exactly four index symmetries, all carrying +1:
+#
+#     identity <pq|rs>,  particle swap <qp|sr>,
+#     bra<->ket <rs|pq>, and their product <sr|qp>
+#
+# They cover all 16 four-index o/v patterns, so nothing is lost by restricting
+# to them.
+#
+# The four SINGLE-swap relations <qp|rs> = -<pq|rs> and <pq|sr> = -<pq|rs> hold
+# only for the ANTISYMMETRIZED <pq||rs> that spin-orbital equations use. Applying
+# them to a spatial block reads a different integral with a bogus sign.
+#
+# THIS LIVES IN ONE PLACE ON PURPOSE. Three modules have independently needed
+# this distinction -- emit/planck_tensor_cpp.py, optimization/dressing.py and
+# lowering/restricted_closed_shell.py -- and each wrote its own table. Two got it
+# right and wrote a warning comment; the third kept the 8-fold set, and that is
+# how 41 of 288 emitted operator builders came to read the wrong ERI block
+# (docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md, D4/D5). Two warning comments did
+# not prevent a third copy from being wrong, so the table is shared and gated
+# rather than restated.
+SPATIAL_ERI_SYMMETRIES: tuple[tuple[tuple[int, int, int, int], int], ...] = (
+    ((0, 1, 2, 3), +1),
+    ((1, 0, 3, 2), +1),
+    ((2, 3, 0, 1), +1),
+    ((3, 2, 1, 0), +1),
+)
+
+# The full 8-fold group of the ANTISYMMETRIZED <pq||rs>. Valid ONLY on
+# antisymmetrized integrals; the four members absent from the spatial set above
+# are the odd-parity ones. Kept here beside the spatial set so the difference is
+# visible rather than rediscovered.
+ANTISYMMETRIZED_ERI_SYMMETRIES: tuple[tuple[tuple[int, int, int, int], int], ...] = (
+    ((0, 1, 2, 3), +1),
+    ((1, 0, 2, 3), -1),
+    ((0, 1, 3, 2), -1),
+    ((1, 0, 3, 2), +1),
+    ((2, 3, 0, 1), +1),
+    ((3, 2, 0, 1), -1),
+    ((2, 3, 1, 0), -1),
+    ((3, 2, 1, 0), +1),
+)

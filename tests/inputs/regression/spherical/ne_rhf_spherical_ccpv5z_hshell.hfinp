@@ -1,0 +1,33 @@
+# h-shell (L=5) cross-CODE gate for the Cartesian->spherical transform.
+# Guards FU1: h is the top of the pseudoinverse range (L=6 delegates to the oracle).
+# The pre-existing high-L gates are cross-ENGINE (all engines share the transform,
+# so they agreed with each other while all being wrong vs an external reference).
+# See docs/SPHERICAL_F_SHELL_ACCURACY_SCOPE.md FU1/FU2/FU4.
+# NB high-L bases are near-linear-dependent: spherical only, generous cycles.
+%begin_control
+    basis       cc-pV5Z
+    calculation energy
+    basis_type  spherical
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    8
+    guess       hcore
+    max_cycles  300
+    tol_energy  1.0e-10
+    tol_density 1.0e-10
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+1
+0   1
+Ne    0.000000     0.000000     0.000000
+%end_coords

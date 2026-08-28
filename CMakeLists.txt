@@ -29,21 +29,75 @@ option(USE_CUDA "Enable CUDA GPU acceleration (requires CUDA toolkit)" OFF)
 set(PLANCK_CC_MAXORDER "3" CACHE STRING
     "Max CC excitation rank to generate Planck kernels for (2=CCSD, 3=CCSDT, 4=CCSDTQ, 5=CC5, 6=CC6)")
 option(PLANCK_CC_INCLUDE_INTERMEDIATES
-    "Emit ccgen intermediate builders in generated CC kernels" ON)
+    "Emit ccgen intermediate builders in generated CC kernels" OFF)
 # Emit genuine spatial (restricted) RCC kernels via the R1.0 spin-adaptation
 # instead of raw spin-orbital algebra bound to spatial storage. Without this the
 # generated energy carries the 0.25*t2*oovv defect and the correlation energy is
-# ~4x wrong (the Be-CCSDTQ defect). For CCSDT (rank 3, single Sz sector) the
-# spin-adapted path is complete and correct; for CCSDTQ (rank 4) it additionally
-# emits the t4 second-Sz-sector kernels, whose full multi-sector SOLVE is the
-# still-open runtime work (Gap B, docs/CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md).
-# Default OFF for byte-compatibility with the historical (defective) emit until
-# Gap B lands; opt in with -DPLANCK_CC_SPIN_ADAPT=ON.
+# ~4x wrong (the Be-CCSDTQ defect).
+#
+# DEFAULT ON since 2026-08-26. It was OFF "for byte-compatibility with the
+# historical (defective) emit until Gap B lands" -- Gap B (the rank-4 multi-sector
+# t4 SOLVE) has landed and is gated end to end by `be_rccsdtq_sto3g`, so that
+# condition is satisfied and the old default only preserved a known-wrong emit.
+#
+# Leaving it OFF cost a full investigation: every generated-kernel measurement in
+# docs/CCGEN_SPIN_ADAPT_DEFAULT.md was taken under the defective emit
+# and read as a rank-3 kernel defect. With it ON the generated rank-3 CCSDT kernel
+# matches the hand-written path to all ten digits on Be, LiH and CH4. The
+# generated-kernel regression cases now require this option, so they skip rather
+# than silently measure the defective emit.
+#
+# Set -DPLANCK_CC_SPIN_ADAPT=OFF only to reproduce that historical emit.
 option(PLANCK_CC_SPIN_ADAPT
-    "Emit spatial (spin-adapted) RCC kernels instead of the raw spin-orbital defect" OFF)
+    "Emit spatial (spin-adapted) RCC kernels instead of the raw spin-orbital defect" ON)
+# U5.3: also emit UNRESTRICTED (spin-block resolved) CC kernels alongside the
+# restricted ones, as <method>_ucc_planck_generated.cpp. They define distinct
+# symbols (U5.0) so both link into one binary, and are reached through
+# make_generated_ucc_kernels() rather than the RCC registry.
+#
+# Default OFF: the UCC TUs roughly triple the generated-kernel compile time (one
+# residual per spin block instead of one per rank) and nothing in the default
+# build reaches them. Opt in with -DPLANCK_CC_UCC=ON.
+option(PLANCK_CC_UCC
+    "Also emit unrestricted (spin-blocked) UCC kernels alongside the RCC ones" OFF)
 option(PLANCK_CC_ARBITRARY_LOWER_RANKS
     "Also emit rank<4 methods (ccsd/ccsdt) in arbitrary-order spatial form as \
 <method>_arbitrary_planck_generated.cpp, for cross-rank .ccamp restart seeds" OFF)
+# Rewrite the generated residual to reference dressed CC intermediates and emit
+# their build_<name> functions, instead of the flat undressed residual. WHICH
+# intermediates is PLANCK_CC_DRESSING's job, below. Costs ~9s at rank 3 / ~62s at
+# rank 4 of extra generation time. Forces intermediates off (CSE and dressing share one emission
+# channel), and is rejected by the generator alongside --factorize-tau (which no
+# CMake option currently sets, so there is nothing to guard here at configure time).
+# Applies only to the plain per-method TUs: the arbitrary-order companions emitted by
+# PLANCK_CC_ARBITRARY_LOWER_RANKS stay undressed, because every method's dressed
+# builders would then share one signature and collide in the co-including registry.
+# Default OFF so the default build stays byte-identical. The `derived` route is
+# validated end to end (CH4 2e-10, LiH exact, 3.12x/3.61x wall-clock -- W4/W5,
+# docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md); `recognized` is retired and wrong.
+option(PLANCK_CC_DRESS_OPERATORS
+    "Emit dressed CC kernels (W/tau intermediates) instead of the flat residual" OFF)
+# W4.2b: WHICH dressed-operator route, when dressing is on. Mirrors the emitter's
+# one --dressing axis rather than adding a second boolean here:
+#   recognized -- hand-seeded Stanton-Gauss fingerprints (retired route)
+#   derived    -- the factorizer, deriving operators from each term's own
+#                 contraction tree (docs/CCGEN_TWO_DRESSING_ROUTES.md)
+# Ignored unless PLANCK_CC_DRESS_OPERATORS=ON. `derived` is the default because
+# `recognized` is RETIRED and produces wrong kernels (52% short on Be/STO-3G, five
+# failed fix attempts -- docs/CCGEN_DRESSING_AND_SPIN_ADAPTATION.md). It defaulted
+# to `recognized` "to keep dressing's historical meaning" until 2026-08-28, which is
+# the same reasoning that made PLANCK_CC_SPIN_ADAPT=OFF ship a ~4x wrong energy:
+# a default preserving historical rather than correct behaviour. Set
+# -DPLANCK_CC_DRESSING=recognized only to reproduce that retired emit.
+set(PLANCK_CC_DRESSING "derived" CACHE STRING
+    "Dressed-operator route when PLANCK_CC_DRESS_OPERATORS=ON (recognized|derived)")
+set_property(CACHE PLANCK_CC_DRESSING PROPERTY STRINGS recognized derived)
+if(PLANCK_CC_DRESS_OPERATORS AND
+   NOT PLANCK_CC_DRESSING STREQUAL "recognized" AND
+   NOT PLANCK_CC_DRESSING STREQUAL "derived")
+    message(FATAL_ERROR
+        "PLANCK_CC_DRESSING must be 'recognized' or 'derived', got '${PLANCK_CC_DRESSING}'")
+endif()
 set(PLANCK_CC_INTERMEDIATE_THRESHOLD "5" CACHE STRING
     "Min usage count for extracted ccgen intermediates")
 # ccgen equation-generation engine. 'diagram' is canonical-by-construction and
@@ -405,6 +459,21 @@ else()
 endif()
 target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER})
 target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower})
+# Reaches choose_rccsdt_backend: a dressed build must select the TensorOptimized backend,
+# since that is the only one that runs the ccgen-generated triples kernel dressing rewrites.
+if(PLANCK_CC_DRESS_OPERATORS)
+    set(_planck_cc_dressed 1)
+else()
+    set(_planck_cc_dressed 0)
+endif()
+target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_DRESS_OPERATORS=${_planck_cc_dressed})
+
+if(PLANCK_CC_UCC)
+    set(_planck_cc_ucc 1)
+else()
+    set(_planck_cc_ucc 0)
+endif()
+target_compile_definitions(hartree-fock PRIVATE PLANCK_CC_UCC=${_planck_cc_ucc})
 
 add_executable(planck-dft
     ${BASE_SRC}
@@ -461,6 +530,25 @@ if(Python3_Interpreter_FOUND)
     if(PLANCK_CC_SPIN_ADAPT)
         list(APPEND _ccgen_planck_kernel_args --spin-adapt)
     endif()
+    # W3.1: the emitter now takes one dressing axis with a value. The option name
+    # stays PLANCK_CC_DRESS_OPERATORS (an existing, documented switch), but the
+    # flag it passes is the current spelling -- `--dress-operators` still works as
+    # a deprecated alias, and passing it here would print that warning on every
+    # configure. `derived` (the factorizer route) is not selectable yet; it is
+    # refused by the emitter until W3.2 wires it.
+    if(PLANCK_CC_DRESS_OPERATORS)
+        list(APPEND _ccgen_planck_kernel_args --dressing ${PLANCK_CC_DRESSING})
+    endif()
+
+    # The UCC emit is a SECOND invocation, not a flag on the first: --ucc and
+    # --spin-adapt are mutually exclusive (they resolve spin in opposite
+    # directions), and the RCC translation units must still be emitted either way.
+    set(_ccgen_ucc_kernel_args
+        --output-dir ${CMAKE_BINARY_DIR}/generated/cc
+        --methods ${PLANCK_CC_METHODS}
+        --engine ${PLANCK_CC_ENGINE}
+        --ucc
+    )
 
     add_custom_target(ccgen-planck-kernels
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
@@ -470,6 +558,19 @@ if(Python3_Interpreter_FOUND)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
         COMMENT "Generating Planck-compatible CC kernels with ccgen (up to rank ${PLANCK_CC_MAXORDER}: ${PLANCK_CC_METHODS})"
     )
+
+    # A conditional COMMAND inside add_custom_target cannot be expressed with a
+    # generator expression: an empty $<...:COMMAND> expands to a bare newline and
+    # the shell fails to parse it. Append the UCC pass as a separate POST_BUILD
+    # step instead, which is also clearer about it being a second invocation.
+    if(PLANCK_CC_UCC)
+        add_custom_command(TARGET ccgen-planck-kernels POST_BUILD
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+                    ${_ccgen_ucc_kernel_args}
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
+            COMMENT "Generating unrestricted (UCC) CC kernels with ccgen")
+    endif()
 
     message(STATUS "ccgen     : emitting Planck CC kernels up to rank ${PLANCK_CC_MAXORDER} [${PLANCK_CC_METHODS}] via ${PLANCK_CC_ENGINE} engine")
 endif()
@@ -497,7 +598,7 @@ if(Python3_Interpreter_FOUND)
     add_dependencies(planck-dft ccgen-spinorbital-warm-start)
     add_dependencies(planck-dft ccgen-planck-kernels)
 endif()
-target_compile_definitions(planck-dft PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER} PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower})
+target_compile_definitions(planck-dft PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER} PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower} PLANCK_CC_DRESS_OPERATORS=${_planck_cc_dressed})
 
 if(USE_OPENMP AND OpenMP_CXX_FOUND)
     target_link_libraries(planck-dft OpenMP::OpenMP_CXX)
@@ -789,6 +890,64 @@ if(BUILD_TESTING)
         ${SRC_DIR}/post_hf/cc/diis.cpp
         ${SRC_DIR}/post_hf/cc/generated_arbitrary_runtime.cpp
         ${SRC_DIR}/post_hf/cc/solver_arbitrary.cpp
+    )
+
+    add_executable(planck-cc-tensor-index
+        ${CMAKE_SOURCE_DIR}/tests/cc_tensor_index.cpp
+        ${SRC_DIR}/post_hf/cc/common.cpp
+    )
+
+    add_executable(planck-cc-ucc-denominator
+        ${CMAKE_SOURCE_DIR}/tests/cc_ucc_denominator.cpp
+        ${SRC_DIR}/post_hf/cc/common.cpp
+        ${SRC_DIR}/post_hf/cc/amplitudes.cpp
+    )
+
+    # U3.1 spin-blocked ERI cache. ucc_blocks.cpp needs only transform_eri, but
+    # integrals.cpp shares a TU with ensure_eri/_compute_2e, so the integral and
+    # basis sources come along -- the same reason and the same list as
+    # planck-transform-eri above. tensor_backend_state.cpp supplies
+    # detail::append_block_memory.
+    add_executable(planck-cc-ucc-spin-blocks
+        ${CMAKE_SOURCE_DIR}/tests/cc_ucc_spin_blocks.cpp
+        ${SRC_DIR}/post_hf/cc/common.cpp
+        ${SRC_DIR}/post_hf/cc/amplitudes.cpp
+        ${SRC_DIR}/post_hf/cc/ucc_blocks.cpp
+        ${SRC_DIR}/post_hf/cc/tensor_backend_state.cpp
+        ${SRC_DIR}/post_hf/cc/mo_blocks.cpp
+        ${SRC_DIR}/post_hf/integrals.cpp
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
+    add_executable(planck-cc-all-sectors-bundle
+        ${CMAKE_SOURCE_DIR}/tests/cc_all_sectors_bundle.cpp
+        ${SRC_DIR}/post_hf/cc/common.cpp
+        ${SRC_DIR}/post_hf/cc/amplitudes.cpp
+        ${SRC_DIR}/post_hf/cc/solver_arbitrary.cpp
+        ${SRC_DIR}/post_hf/cc/diis.cpp
+        ${SRC_DIR}/post_hf/cc/generated_arbitrary_runtime.cpp
+        ${SRC_DIR}/post_hf/cc/generated_arbitrary_prepare.cpp
+        ${SRC_DIR}/post_hf/cc/ucc_blocks.cpp
+        ${SRC_DIR}/post_hf/cc/tensor_backend_state.cpp
+        ${SRC_DIR}/post_hf/cc/mo_blocks.cpp
+        ${SRC_DIR}/post_hf/integrals.cpp
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
     )
 
     add_executable(planck-cc-amplitude-checkpoint
@@ -1247,6 +1406,26 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-cc-tensor-index PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-cc-ucc-denominator PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-cc-ucc-spin-blocks PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-cc-all-sectors-bundle PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-cc-amplitude-checkpoint PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -1460,6 +1639,30 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-cc-arbitrary-solver PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-cc-tensor-index PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-cc-ucc-denominator PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-cc-ucc-spin-blocks PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-cc-all-sectors-bundle PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -1704,6 +1907,26 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-cc-arbitrary-solver
         COMMAND planck-cc-arbitrary-solver
+    )
+
+    add_test(
+        NAME planck-cc-tensor-index
+        COMMAND planck-cc-tensor-index
+    )
+
+    add_test(
+        NAME planck-cc-ucc-denominator
+        COMMAND planck-cc-ucc-denominator
+    )
+
+    add_test(
+        NAME planck-cc-ucc-spin-blocks
+        COMMAND planck-cc-ucc-spin-blocks
+    )
+
+    add_test(
+        NAME planck-cc-all-sectors-bundle
+        COMMAND planck-cc-all-sectors-bundle
     )
 
     add_test(

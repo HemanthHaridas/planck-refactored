@@ -644,7 +644,7 @@ def _closed_shell_tensors(no, nv, seed):
     # the closed-shell relation v[aaaa] = v[abab] - P(v[abab]); that relation
     # needs the exchange term, which a per-line-spin-conserving v lacks (the
     # ket-swapped abab entry is spin-forbidden -> zero here). See the S2.2c note
-    # in CCGEN_SPIN_ADAPTATION_SCOPE.md.
+    # in CCGEN_SPIN_ADAPTATION.md.
     v = np.zeros((n, n, n, n))
     for p in range(n):
         for q in range(n):
@@ -887,7 +887,7 @@ class S22cIntegralCollapseStructureTests(unittest.TestCase):
     v[aaaa] would collapse to just v[abab], not the antisymmetrized combination).
     The exchange term the relation needs lives in separate ccgen terms, not in v.
     So the numeric no-op belongs to a later step with real (chemist 2J-K)
-    integrals -- see the S2.2c note in CCGEN_SPIN_ADAPTATION_SCOPE.md and S2.2d.
+    integrals -- see the S2.2c note in CCGEN_SPIN_ADAPTATION.md and S2.2d.
     Here we pin the rewrite's STRUCTURE: after S2.2a->b->c every doubles factor is
     a single spatial block, the v split fires, and tag/spin stays consistent.
     """
@@ -2514,7 +2514,7 @@ class S4dRank8IdentityTests(unittest.TestCase):
         # `t4_aaabaaab` (abbbabbb folds onto it via the existing flip), and the
         # solve reads that block from its own stored tensor. Rank-8, ~30s -- iterate
         # here, not the ~15min Be CCSDTQ solve. See
-        # docs/CCGEN_R3_HIGHER_RANK_BRIDGE_SCOPE.md (R3.1.3).
+        # docs/CCGEN_CCSDTQ_MULTISECTOR.md (R3.1.3).
         import numpy as np
         from ccgen.spin import (ucc_integrate_term_antisym,
                                 canonicalize_spin_blocks, collapse_amplitudes,
@@ -2899,3 +2899,1303 @@ class S4a2ArbitraryOrderTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class U11BlockResolvedFactorNamesTests(unittest.TestCase):
+    """U1.1 -- under UCC every block-stored amplitude factor must reach the emit
+    layer with its OWN name and its OWN slot order.
+
+    Two mechanisms conspire against that, and both were measured on the tree
+    before this gate existed (see docs/CCGEN_UNRESTRICTED_CC.md):
+
+    1. `_factor_tensor_name`'s gate is `len(block) >= 8`, so t1/t2/t3 can never
+       receive a block tag -- `t2[aaaa]` and `t2[bbbb]` both emit as bare `t2`.
+    2. `_canonicalize_amplitude_factor` reorders every rank >= 2 amplitude onto
+       one reference layout, because the RCC bridge drops the spin label and all
+       blocks must index one stored spatial tensor. Under UCC they are separate
+       arrays, so that reordering reads the wrong array's layout.
+
+    Naming alone is not enough: fixing (1) without (2) leaves the name right and
+    the slots permuted. These assertions need no solve and no C++.
+    """
+
+    @staticmethod
+    def _t2(block, spins):
+        from ccgen.spin import SpinFactor, SpinIndex
+        bases = (make_occ("i"), make_occ("j"), make_vir("a"), make_vir("b"))
+        return SpinFactor(name="t2", block=block,
+                          indices=tuple(SpinIndex(b, s) for b, s in zip(bases, spins)))
+
+    def _bridged_names(self, factor):
+        from ccgen.spin import SpinTerm, ucc_spinterm_to_algebraterm
+        from fractions import Fraction
+        term = SpinTerm(coeff=Fraction(1), external_block=factor.block,
+                        factors=(factor,))
+        at = ucc_spinterm_to_algebraterm(term, {"i", "j", "a", "b"})
+        return [f.name for f in at.factors], [t.indices for t in at.factors]
+
+    def test_same_spin_blocks_get_distinct_names(self):
+        """t2aa and t2bb are different arrays under UCC; a bare `t2` for both
+        silently sums them into one tensor."""
+        aa_names, _ = self._bridged_names(self._t2("aaaa", "aaaa"))
+        bb_names, _ = self._bridged_names(self._t2("bbbb", "bbbb"))
+        self.assertNotEqual(aa_names, bb_names,
+                            "t2[aaaa] and t2[bbbb] emit the same tensor name")
+        for names in (aa_names, bb_names):
+            self.assertTrue(all("_" in n for n in names),
+                            f"UCC factor emitted without a block tag: {names}")
+
+    def test_mixed_block_slots_are_not_reordered(self):
+        """`baba` must keep its own slot order. The RCC canonicalizer maps it to
+        [j,i,b,a] so it can index the single stored `abab` tensor -- correct
+        there, wrong when `baba`'s own array is what is being read."""
+        _, idx = self._bridged_names(self._t2("baba", "baba"))
+        self.assertEqual([i.name for i in idx[0]], ["i", "j", "a", "b"],
+                         "UCC bridge permuted a block's slots onto another layout")
+
+    def test_rcc_bridge_is_unchanged(self):
+        """The RCC path must stay byte-identical: same names, same slot order."""
+        from ccgen.spin import SpinTerm, spinterm_to_algebraterm
+        from fractions import Fraction
+        f = self._t2("abab", "abab")
+        term = SpinTerm(coeff=Fraction(1), external_block="abab", factors=(f,))
+        at = spinterm_to_algebraterm(term, {"i", "j", "a", "b"})
+        self.assertEqual([t.name for t in at.factors], ["t2"],
+                         "RCC bridge naming changed")
+
+
+class U10UccAdaptEntryTests(unittest.TestCase):
+    """U1.0 -- the no-collapse driver: one residual per UCC block, keyed
+    `{target}_{tag}`.
+
+    RCC drives `_adapt_on_block` once per *Sz sector* and runs three collapse
+    steps that fold spin blocks into one spatial tensor. UCC drives the same
+    integrate/merge/bridge pipeline once per *stored block* from
+    `ucc_independent_blocks` and runs none of them.
+    """
+
+    def _eqs(self, method="ccsd"):
+        return generate_cc_equations(method, engine="diagram", canonical_fock=True)
+
+    def test_every_ucc_block_gets_a_nonempty_residual(self):
+        """A block that integrates to nothing is a routing bug, not a physical
+        result -- the same failure mode spin_adapt_equations guards with its
+        'adapted to ZERO' raise."""
+        from ccgen.spin import ucc_adapt_equations
+        out = ucc_adapt_equations(self._eqs())
+        self.assertIn("doubles_aaaa", out)
+        self.assertIn("doubles_abab", out)
+        self.assertIn("doubles_bbbb", out)
+        for key, terms in out.items():
+            self.assertTrue(terms, f"UCC target {key!r} adapted to zero terms")
+
+    def test_same_spin_blocks_have_equal_term_counts(self):
+        """alpha<->beta is a symmetry of the equations, so aaaa and bbbb must
+        produce the same number of terms. Cheap, and it catches a block-routing
+        bug that a single-block smoke test cannot."""
+        from ccgen.spin import ucc_adapt_equations
+        out = ucc_adapt_equations(self._eqs())
+        self.assertEqual(len(out["doubles_aaaa"]), len(out["doubles_bbbb"]),
+                         "aaaa/bbbb term counts differ -- blocks are misrouted")
+        self.assertEqual(len(out["singles_aa"]), len(out["singles_bb"]),
+                         "singles aa/bb term counts differ")
+
+    def test_factor_names_are_block_resolved(self):
+        """U1.0 must bridge through the UCC bridge (U1.1), not the RCC one."""
+        from ccgen.spin import ucc_adapt_equations
+        out = ucc_adapt_equations(self._eqs())
+        for key, terms in out.items():
+            if key.startswith("energy"):
+                continue
+            for t in terms:
+                for f in t.factors:
+                    if f.name.startswith("t"):
+                        self.assertIn("_", f.name,
+                                      f"{key}: bare amplitude name {f.name!r}")
+
+    def test_rcc_is_untouched(self):
+        """spin_adapt_equations must be byte-identical -- UCC is a sibling, not a
+        modification."""
+        from ccgen.spin import spin_adapt_equations
+        eqs = self._eqs()
+        adapted = spin_adapt_equations(eqs)
+        self.assertEqual(sorted(adapted.keys()), ["doubles", "energy", "singles"])
+        self.assertEqual({k: len(v) for k, v in adapted.items()},
+                         {"singles": 30, "doubles": 113, "energy": 4})
+
+
+class F1UccRandomTensorsTests(unittest.TestCase):
+    """F1 -- the spin-resolved tensor bundle for the UCC numeric gate.
+
+    The RCC fixture (`random_tensors`) carries ONE (no, nv) pair and one
+    spin-free `v`. UCC needs per-spin spaces of DIFFERENT sizes (CH3/STO-3G:
+    noa=5 nva=4, nob=4 nvb=5) and per-block ERIs, so it gets its own bundle
+    rather than a parameter on the shared one -- seven consumers call the RCC
+    fixture and its signature must not move.
+
+    Layout contract, read off the bridge's own output: amplitudes are
+    (vir..., occ...) like RCC, and a block tag's FIRST half indexes the virtual
+    slots, its SECOND half the occupied ones.
+    """
+
+    DIMS = dict(noa=5, nva=4, nob=4, nvb=5)   # non-square in both spins
+
+    def test_amplitude_shapes_match_the_block_tag(self):
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        t = ucc_random_tensors(**self.DIMS, seed=0)
+        noa, nva, nob, nvb = (self.DIMS[k] for k in ("noa", "nva", "nob", "nvb"))
+        self.assertEqual(t["t1_aa"].shape, (nva, noa))
+        self.assertEqual(t["t1_bb"].shape, (nvb, nob))
+        self.assertEqual(t["t2_aaaa"].shape, (nva, nva, noa, noa))
+        self.assertEqual(t["t2_abab"].shape, (nva, nvb, noa, nob))
+        self.assertEqual(t["t2_bbbb"].shape, (nvb, nvb, nob, nob))
+
+    def test_same_spin_blocks_are_antisymmetric(self):
+        """aaaa/bbbb are antisymmetric within bra and within ket independently."""
+        import numpy as np
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        t = ucc_random_tensors(**self.DIMS, seed=0)
+        for name in ("t2_aaaa", "t2_bbbb"):
+            a = t[name]
+            self.assertLess(np.abs(a + a.transpose(1, 0, 2, 3)).max(), 1e-14,
+                            f"{name} not antisymmetric in its virtual pair")
+            self.assertLess(np.abs(a + a.transpose(0, 1, 3, 2)).max(), 1e-14,
+                            f"{name} not antisymmetric in its occupied pair")
+
+    def test_mixed_block_is_NOT_antisymmetrized(self):
+        """t2_abab's two halves are different spin spaces, so swapping them is
+        not a symmetry. Antisymmetrizing it is the easiest way to build a fixture
+        that silently disagrees with PySCF -- and on a non-square case the
+        transpose is not even shape-legal, which is what makes this assertable."""
+        import numpy as np
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        t = ucc_random_tensors(**self.DIMS, seed=0)
+        a = t["t2_abab"]
+        # non-square in BOTH pairs, so a spin-swap transpose is not shape-legal --
+        # which is precisely why an accidental antisymmetrization cannot hide here.
+        self.assertNotEqual(a.shape[0], a.shape[1],
+                            "fixture dims must be non-square to make this check bite")
+        self.assertNotEqual(a.shape[2], a.shape[3])
+        self.assertGreater(np.abs(a).max(), 0.0, "t2_abab is all zeros")
+        # the aa/bb blocks ARE antisymmetric; abab must not have inherited it by
+        # being built from the same code path.
+        self.assertGreater(np.abs(a + a.transpose(0, 1, 2, 3)).max(), 0.0)
+
+    def test_eri_blocks_have_the_right_shapes_and_symmetry(self):
+        """UCC needs per-block ERIs. <pq||rs> antisymmetry holds WITHIN a spin
+        (aaaa/bbbb); the mixed block only carries bra<->ket."""
+        import numpy as np
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        t = ucc_random_tensors(**self.DIMS, seed=0)
+        na = self.DIMS["noa"] + self.DIMS["nva"]
+        nb = self.DIMS["nob"] + self.DIMS["nvb"]
+        self.assertEqual(t["v_aaaa"].shape, (na, na, na, na))
+        self.assertEqual(t["v_bbbb"].shape, (nb, nb, nb, nb))
+        self.assertEqual(t["v_abab"].shape, (na, nb, na, nb))
+        for name in ("v_aaaa", "v_bbbb"):
+            v = t[name]
+            self.assertLess(np.abs(v + v.transpose(1, 0, 2, 3)).max(), 1e-12,
+                            f"{name} missing bra antisymmetry")
+            self.assertLess(np.abs(v - v.transpose(2, 3, 0, 1)).max(), 1e-12,
+                            f"{name} missing bra<->ket symmetry")
+        vab = t["v_abab"]
+        self.assertLess(np.abs(vab - vab.transpose(2, 3, 0, 1)).max(), 1e-12,
+                        "v_abab missing bra<->ket symmetry")
+
+    def test_fock_is_per_spin(self):
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        t = ucc_random_tensors(**self.DIMS, seed=0)
+        na = self.DIMS["noa"] + self.DIMS["nva"]
+        nb = self.DIMS["nob"] + self.DIMS["nvb"]
+        self.assertEqual(t["f_aa"].shape, (na, na))
+        self.assertEqual(t["f_bb"].shape, (nb, nb))
+
+    def test_rcc_fixture_is_unchanged(self):
+        """The seven existing consumers must see byte-identical output."""
+        import numpy as np
+        from ccgen.tests.residual_eval import random_tensors
+        t = random_tensors(3, 4, seed=0)
+        self.assertEqual(sorted(t.keys()), ["f", "t1", "t2", "t3", "t4", "v"])
+        self.assertEqual(t["t2"].shape, (4, 4, 3, 3))
+        self.assertLess(np.abs(t["v"] - t["v"].transpose(2, 3, 0, 1)).max(), 1e-12)
+
+
+class F20bBlockTaggedEriTests(unittest.TestCase):
+    """F2.0b -- v/f carry their spin block on the UCC path, and the emitter
+    accepts the tag.
+
+    U1.1 block-tagged the amplitudes; v/f were left bare, so the evaluator has no
+    way to pick between v_aaaa / v_abab / v_bbbb (different shapes). Inference
+    from term context is not available: on doubles_abab, 51 of 82 terms have a
+    v/f index that appears on no amplitude factor.
+
+    The emitter dispatches on the EXACT strings "v" and "f", while its amplitude
+    branch already tolerates a `_<tag>` suffix. So tagging v/f without loosening
+    those two branches would emit a name that falls through to
+    NotImplementedError -- which is why the two edits are one step.
+    """
+
+    def _ucc(self, method="ccsd"):
+        from ccgen.spin import ucc_adapt_equations
+        return ucc_adapt_equations(
+            generate_cc_equations(method, engine="diagram", canonical_fock=True))
+
+    def test_ucc_eri_and_fock_factors_carry_a_block_tag(self):
+        out = self._ucc()
+        bare = set()
+        tagged = set()
+        for key, terms in out.items():
+            for t in terms:
+                for f in t.factors:
+                    root = f.name.split("_", 1)[0]
+                    if root in ("v", "f"):
+                        (tagged if "_" in f.name else bare).add(f.name)
+        self.assertFalse(bare, f"UCC emitted untagged integral factors: {sorted(bare)}")
+        self.assertTrue(tagged, "no tagged v/f factors emitted at all")
+        # every tag must be drawn from U0's vocabulary (a/b strings only)
+        for name in tagged:
+            tag = name.split("_", 1)[1]
+            self.assertTrue(set(tag) <= {"a", "b"},
+                            f"non-spin tag on integral factor: {name!r}")
+
+    def test_rcc_still_emits_bare_v_and_f(self):
+        """The superset claim: the RCC bridge is untouched, so its integral
+        factors must still be exactly `v` and `f`."""
+        from ccgen.spin import spin_adapt_equations
+        out = spin_adapt_equations(
+            generate_cc_equations("ccsd", engine="diagram", canonical_fock=True))
+        seen = set()
+        for terms in out.values():
+            for t in terms:
+                for f in t.factors:
+                    if f.name.split("_", 1)[0] in ("v", "f"):
+                        seen.add(f.name)
+        self.assertEqual(seen, {"v", "f"},
+                         f"RCC integral factor names changed: {sorted(seen)}")
+
+    def test_emitter_accepts_a_tagged_eri_and_is_unchanged_on_bare(self):
+        """Both halves of the emitter gate: a bare name must map EXACTLY as
+        before, and a tagged one must reach its OWN array.
+
+        UPDATED FOR U3.2 (`8e4bb0c`). This test previously asserted that a tagged
+        `v` resolves to the same expression as a bare one -- "the tag routes
+        storage, it does not change the block". U3.2 deliberately inverted that:
+        under UHF `<aa|aa>`, `<ab|ab>` and `<bb|bb>` are three DIFFERENT
+        integrals, so `v_abab` must reach `v_abab_oovv`, bound per kernel from
+        `mo_blocks.spin_block("oovv", "abab")`. Collapsing them onto one array was
+        the defect U3.2 fixed, and U3.2's own commit message calls out the comment
+        carrying this belief -- but it never updated this assertion, which had been
+        failing ever since.
+
+        The bare half is unchanged and still pinned: the RCC path must not move.
+
+        The Fock half moved the same way, in U3.3: a tagged `f_aa` reaches
+        `f_aa_oo`, not `reference.f_oo`. Asserting otherwise was this test's
+        second stale claim, and it survived the first fix attempt because the
+        `v` assertion failed first and masked it.
+        """
+        from ccgen.emit.planck_tensor_cpp import _map_factor
+        from ccgen.tensors import Tensor, Index
+        ijab = (Index("i", "occ"), Index("j", "occ"),
+                Index("a", "vir"), Index("b", "vir"))
+        sign_bare, expr_bare = _map_factor(Tensor("v", ijab), None, False)
+        sign_tag, expr_tag = _map_factor(Tensor("v_abab", ijab), None, False)
+        self.assertEqual(expr_bare, "mo_blocks.oovv(i, j, a, b)",
+                         "bare v no longer emits what it emitted before")
+        self.assertEqual(sign_bare, sign_tag)
+        self.assertEqual(expr_tag, "v_abab_oovv(i, j, a, b)",
+                         "tagged v must reach its OWN array (U3.2); collapsing it "
+                         "onto the bare block is the three-integrals-as-one defect")
+        self.assertNotEqual(
+            expr_bare, expr_tag,
+            "a tagged and a bare v resolving to the same array IS the collapse")
+        oo = (Index("i", "occ"), Index("j", "occ"))
+        self.assertEqual(_map_factor(Tensor("f", oo), None, False)[1],
+                         "reference.f_oo(i, j)")
+        self.assertEqual(_map_factor(Tensor("f_aa", oo), None, False)[1],
+                         "f_aa_oo(i, j)")
+
+
+class F21FactorResolutionTests(unittest.TestCase):
+    """F2.1 -- resolve ONE factor to its array: pick the block by name, slice
+    each axis by (space, spin).
+
+    Isolated from einsum and from terms on purpose. A slice-assignment bug lives
+    exactly here, and debugging it through a full residual is what the scope
+    warns against.
+
+    The tag is POSITIONAL: character k of the block tag is slot k's spin,
+    independent of that slot's space. Verified on the emitted vocabulary --
+    v_abab appears with (occ,occ,vir,vir), (occ,vir,vir,occ), (vir,occ,vir,vir)
+    and 10 other space patterns, all sharing the one tag.
+    """
+
+    DIMS = dict(noa=5, nva=4, nob=4, nvb=5)   # non-square, and noa != nob
+
+    def _tensors(self):
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        return ucc_random_tensors(**self.DIMS, seed=0)
+
+    def _resolve(self, name, spaces):
+        from ccgen.tests.residual_eval import ucc_resolve_factor
+        from ccgen.tensors import Tensor, Index
+        idx = tuple(Index(f"x{k}", sp) for k, sp in enumerate(spaces))
+        return ucc_resolve_factor(Tensor(name, idx), self._tensors(), self.DIMS)
+
+    def test_amplitude_blocks_resolve_to_their_own_shape(self):
+        noa, nva, nob, nvb = (self.DIMS[k] for k in ("noa", "nva", "nob", "nvb"))
+        self.assertEqual(self._resolve("t1_aa", ("vir", "occ")).shape, (nva, noa))
+        self.assertEqual(self._resolve("t1_bb", ("vir", "occ")).shape, (nvb, nob))
+        self.assertEqual(
+            self._resolve("t2_abab", ("vir", "vir", "occ", "occ")).shape,
+            (nva, nvb, noa, nob))
+        self.assertEqual(
+            self._resolve("t2_bbbb", ("vir", "vir", "occ", "occ")).shape,
+            (nvb, nvb, nob, nob))
+
+    def test_eri_slice_follows_space_AND_spin_per_slot(self):
+        """v_abab with (occ,vir,occ,vir) must slice [occ_a, vir_b, occ_a, vir_b]
+        of the v_abab block -- alpha slots from the alpha space, beta from beta."""
+        noa, nva, nob, nvb = (self.DIMS[k] for k in ("noa", "nva", "nob", "nvb"))
+        got = self._resolve("v_abab", ("occ", "vir", "occ", "vir"))
+        self.assertEqual(got.shape, (noa, nvb, noa, nvb))
+        # and the same block under a different space pattern
+        got2 = self._resolve("v_abab", ("occ", "occ", "vir", "vir"))
+        self.assertEqual(got2.shape, (noa, nob, nva, nvb))
+
+    def test_same_spin_eri_uses_its_own_space(self):
+        noa, nva, nob, nvb = (self.DIMS[k] for k in ("noa", "nva", "nob", "nvb"))
+        self.assertEqual(
+            self._resolve("v_aaaa", ("occ", "occ", "vir", "vir")).shape,
+            (noa, noa, nva, nva))
+        self.assertEqual(
+            self._resolve("v_bbbb", ("occ", "vir", "vir", "occ")).shape,
+            (nob, nvb, nvb, nob))
+
+    def test_fock_blocks(self):
+        noa, nva, nob, nvb = (self.DIMS[k] for k in ("noa", "nva", "nob", "nvb"))
+        self.assertEqual(self._resolve("f_aa", ("occ", "occ")).shape, (noa, noa))
+        self.assertEqual(self._resolve("f_bb", ("vir", "vir")).shape, (nvb, nvb))
+        self.assertEqual(self._resolve("f_aa", ("occ", "vir")).shape, (noa, nva))
+
+    def test_slice_values_match_a_hand_written_index(self):
+        """Shape agreement is necessary, not sufficient: a wrong offset keeps the
+        shape. Pin the actual elements against an explicit slice."""
+        import numpy as np
+        t = self._tensors()
+        noa, nvb = self.DIMS["noa"], self.DIMS["nvb"]
+        got = self._resolve("v_abab", ("occ", "vir", "occ", "vir"))
+        ref = t["v_abab"][0:noa, self.DIMS["nob"]:, 0:noa, self.DIMS["nob"]:]
+        self.assertLess(np.abs(got - ref).max(), 1e-15)
+
+    def test_unknown_block_raises(self):
+        """A missing block must fail loudly, not fall back to a spin-free array."""
+        with self.assertRaises((KeyError, ValueError)):
+            self._resolve("v_aabb", ("occ", "occ", "vir", "vir"))
+
+
+class F22aTermSpinMapTests(unittest.TestCase):
+    """F2.2a -- the per-term spin map: {index_name: 'a'|'b'}, read positionally
+    off each factor's block tag.
+
+    Measured before writing this, on the emitted manifolds:
+
+        ccsd     328 terms   0 spin-clashes   0 untagged
+        ccsdt   2490 terms   0 spin-clashes   0 untagged
+        ccsdtq 18137 terms   0 spin-clashes   0 untagged   0 tag-length mismatches
+
+    So the map is well-defined today at every rank the generator reaches. The
+    clash and tag-length branches are asserted anyway: they are the invariant the
+    rest of F2.2 rests on, and rank 8 -- where RCC's beta-majority fold lost a
+    sector -- is exactly where a future change would break them first.
+
+    Note UCC cannot repeat that RCC defect by construction: ucc_independent_blocks
+    enumerates every alpha-count sector separately (rank 8: five blocks, including
+    aaabaaab and the beta-majority abbbabbb) rather than folding them.
+    """
+
+    def _ucc(self, method):
+        from ccgen.spin import ucc_adapt_equations
+        return ucc_adapt_equations(
+            generate_cc_equations(method, engine="diagram", canonical_fock=True))
+
+    def test_map_is_total_over_every_index(self):
+        from ccgen.spin import ucc_term_spins
+        out = self._ucc("ccsd")
+        for key, terms in out.items():
+            for t in terms:
+                spins = ucc_term_spins(t)
+                for idx in list(t.free_indices) + list(t.summed_indices):
+                    self.assertIn(idx.name, spins,
+                                  f"{key}: index {idx.name!r} has no spin")
+                    self.assertIn(spins[idx.name], ("a", "b"))
+
+    def test_free_index_spins_match_the_target_block(self):
+        """doubles_abab's free indices must resolve to (a,b,a,b) -- the map has to
+        agree with the block the residual is keyed by, or the output shape is wrong."""
+        from ccgen.spin import ucc_term_spins
+        out = self._ucc("ccsd")
+        for key in ("doubles_aaaa", "doubles_abab", "doubles_bbbb"):
+            tag = key.split("_", 1)[1]
+            for t in out[key]:
+                spins = ucc_term_spins(t)
+                # free indices are occ-first; the target tag is bra-half then
+                # ket-half, so compare as a multiset per space
+                occ = [spins[i.name] for i in t.free_indices if i.space == "occ"]
+                vir = [spins[i.name] for i in t.free_indices if i.space == "vir"]
+                n = len(tag) // 2
+                self.assertEqual(sorted(occ), sorted(tag[n:]),
+                                 f"{key}: occ free-index spins {occ} != {tag[n:]}")
+                self.assertEqual(sorted(vir), sorted(tag[:n]),
+                                 f"{key}: vir free-index spins {vir} != {tag[:n]}")
+
+    def test_raises_when_one_index_would_get_two_spins(self):
+        """Unreachable on today's equations (0/18137 at ccsdtq). Asserted because
+        it is the invariant F2.2b/c rest on -- a silent last-write-wins here would
+        surface as a wrong slice much later."""
+        from ccgen.spin import ucc_term_spins
+        from ccgen.project import AlgebraTerm
+        from ccgen.tensors import Tensor, Index
+        from fractions import Fraction
+        i, a = Index("i", "occ"), Index("a", "vir")
+        clash = AlgebraTerm(
+            Fraction(1),
+            (Tensor("t1_aa", (a, i)), Tensor("t1_bb", (a, i))),  # 'a' is both spins
+            (), (a, i), True)
+        with self.assertRaises(ValueError):
+            ucc_term_spins(clash)
+
+    def test_raises_on_tag_length_mismatch(self):
+        """A tag whose length differs from the slot count is an off-by-one in the
+        naming, and rank 8 (eight-character tags) is where it would first appear."""
+        from ccgen.spin import ucc_term_spins
+        from ccgen.project import AlgebraTerm
+        from ccgen.tensors import Tensor, Index
+        from fractions import Fraction
+        i, a = Index("i", "occ"), Index("a", "vir")
+        bad = AlgebraTerm(Fraction(1), (Tensor("t1_aaa", (a, i)),), (), (a, i), True)
+        with self.assertRaises(ValueError):
+            ucc_term_spins(bad)
+
+    def test_raises_on_an_untagged_factor(self):
+        from ccgen.spin import ucc_term_spins
+        from ccgen.project import AlgebraTerm
+        from ccgen.tensors import Tensor, Index
+        from fractions import Fraction
+        i, a = Index("i", "occ"), Index("a", "vir")
+        bare = AlgebraTerm(Fraction(1), (Tensor("t1", (a, i)),), (), (a, i), True)
+        with self.assertRaises(ValueError):
+            ucc_term_spins(bare)
+
+
+class F22bcUccResidualEinsumTests(unittest.TestCase):
+    """F2.2b+c -- assemble the operands and lay out the result.
+
+    Scoped as two steps, landed as one: F2.2c is a single line of free-index
+    ordering INSIDE F2.2b's function body, with no state between them where a
+    separate gate would localize anything.
+
+    Dims are non-square AND asymmetric -- noa != nva, nob != nvb, and noa != nob.
+    A square case hides a transposed axis (the trap recorded in
+    CCGEN_RANK3_KERNEL_AND_SOLVER.md); a spin-symmetric one additionally hides a
+    swapped alpha/beta slot, which is the failure this step can introduce.
+    """
+
+    DIMS = dict(noa=5, nva=4, nob=4, nvb=5)
+
+    def _tensors(self):
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        return ucc_random_tensors(**self.DIMS, seed=0)
+
+    def _ucc(self, method="ccsd"):
+        from ccgen.spin import ucc_adapt_equations
+        return ucc_adapt_equations(
+            generate_cc_equations(method, engine="diagram", canonical_fock=True))
+
+    def _eval(self, terms):
+        from ccgen.tests.residual_eval import ucc_residual_einsum
+        tensors, out = self._tensors(), None
+        for t in terms:
+            r = ucc_residual_einsum(t, self.DIMS, tensors)
+            out = r if out is None else out + r
+        return out
+
+    def test_one_code_path_yields_different_shapes_per_block(self):
+        """The point of the whole step: doubles_abab and doubles_bbbb go through
+        identical code and come out different shapes, each axis sized from its own
+        index's spin."""
+        noa, nva, nob, nvb = (self.DIMS[k] for k in ("noa", "nva", "nob", "nvb"))
+        out = self._ucc()
+        self.assertEqual(self._eval(out["doubles_abab"]).shape, (nva, nvb, noa, nob))
+        self.assertEqual(self._eval(out["doubles_bbbb"]).shape, (nvb, nvb, nob, nob))
+        self.assertEqual(self._eval(out["doubles_aaaa"]).shape, (nva, nva, noa, noa))
+        self.assertEqual(self._eval(out["singles_aa"]).shape, (nva, noa))
+        self.assertEqual(self._eval(out["singles_bb"]).shape, (nvb, nob))
+
+    def test_layout_is_virtuals_first_like_the_rcc_evaluator(self):
+        """F2.2c. The output layout must be R[vir_ext..., occ_ext...], the same
+        convention residual_einsum uses -- F2.3's oracle compares the two arrays
+        directly, so an occ-first layout would make every element disagree.
+
+        Shape alone does NOT pin this: a doubles block is (vir,vir,occ,occ) and
+        the occ-first swap gives (occ,occ,vir,vir), which at spin-symmetric dims
+        can collide in shape. So this asserts on VALUES, against an independently
+        constructed einsum, on a term whose four free-index axes have four
+        DISTINCT lengths.
+        """
+        import string
+        import numpy as np
+        from ccgen.tests.residual_eval import ucc_residual_einsum, ucc_resolve_factor
+
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        out = self._ucc()
+        # the class DIMS give free axes (4,5,5,4) -- not distinct enough to pin a
+        # permuted layout by shape, so use dims where all four differ
+        dims = dict(noa=6, nva=3, nob=5, nvb=4)
+        tensors = ucc_random_tensors(**dims, seed=1)
+
+        for t in out["doubles_abab"][:12]:
+            with self.subTest(term=str(t)[:60]):
+                letters, pool = {}, iter(string.ascii_lowercase + string.ascii_uppercase)
+                for idx in list(t.free_indices) + list(t.summed_indices):
+                    letters[idx] = next(pool)
+                subs = ["".join(letters[i] for i in f.indices)
+                        for f in t.factors]
+                ops = [ucc_resolve_factor(f, tensors, dims) for f in t.factors]
+                ext = [i for i in t.free_indices if i.space == "vir"] + \
+                      [i for i in t.free_indices if i.space == "occ"]
+                want = np.einsum(
+                    ",".join(subs) + "->" + "".join(letters[i] for i in ext),
+                    *ops, optimize=True) * float(t.coeff)
+                got = ucc_residual_einsum(t, dims, tensors)
+                self.assertEqual(got.shape, want.shape)
+                np.testing.assert_allclose(got, want, rtol=0, atol=1e-13)
+
+    def test_free_axes_are_sized_from_their_own_spin(self):
+        """The four free axes of doubles_abab must take four DIFFERENT lengths at
+        dims where noa/nva/nob/nvb are all distinct. This is what a swapped
+        alpha/beta slot breaks, and what the symmetric fixture cannot see."""
+        from ccgen.tests.residual_eval import ucc_random_tensors, ucc_residual_einsum
+        dims = dict(noa=6, nva=3, nob=5, nvb=4)
+        tensors = ucc_random_tensors(**dims, seed=1)
+        acc = None
+        for t in self._ucc()["doubles_abab"]:
+            r = ucc_residual_einsum(t, dims, tensors)
+            acc = r if acc is None else acc + r
+        self.assertEqual(acc.shape, (3, 4, 6, 5))   # (nva, nvb, noa, nob)
+
+    def test_full_manifold_evaluates_without_raising(self):
+        """F2.2d -- every term of every target on F1's fixture. Explicitly NOT a
+        correctness gate: a wrong slice that keeps its shape passes here. F2.3's
+        closed-shell oracle is what catches that, and this split exists so a
+        failure localizes to assembly rather than to physics."""
+        import numpy as np
+        noa, nva, nob, nvb = (self.DIMS[k] for k in ("noa", "nva", "nob", "nvb"))
+        expected = {
+            "energy": (),
+            "singles_aa": (nva, noa), "singles_bb": (nvb, nob),
+            "doubles_aaaa": (nva, nva, noa, noa),
+            "doubles_abab": (nva, nvb, noa, nob),
+            "doubles_bbbb": (nvb, nvb, nob, nob),
+        }
+        out = self._ucc()
+        self.assertEqual(set(out), set(expected))
+        for key, terms in out.items():
+            with self.subTest(target=key):
+                got = self._eval(terms)
+                self.assertEqual(np.asarray(got).shape, expected[key])
+                self.assertTrue(np.all(np.isfinite(got)))
+
+    def test_rejects_a_term_whose_spins_disagree(self):
+        """The evaluator calls ucc_term_spins for its consistency check even
+        though it does not slice by it -- so an unevaluable term is refused here,
+        not silently contracted into a plausible-looking array."""
+        from fractions import Fraction
+        from ccgen.project import AlgebraTerm
+        from ccgen.tensors import Tensor, Index
+        from ccgen.tests.residual_eval import ucc_residual_einsum
+        # Shape-legal on purpose: at noa == nob and nva == nvb the two blocks
+        # contract without complaint, so einsum CANNOT catch this. Only the
+        # ucc_term_spins call refuses it -- which is why the check earns its
+        # place in a function that does not slice by the map.
+        dims = dict(noa=5, nva=4, nob=5, nvb=4)
+        from ccgen.tests.residual_eval import ucc_random_tensors
+        i, a = Index("i", "occ"), Index("a", "vir")
+        clash = AlgebraTerm(
+            Fraction(1),
+            (Tensor("t1_aa", (a, i)), Tensor("t1_bb", (a, i))),
+            (), (a, i), True)
+        with self.assertRaises(ValueError):
+            ucc_residual_einsum(clash, dims, ucc_random_tensors(**dims, seed=0))
+
+
+class F23ClosedShellOracleTests(unittest.TestCase):
+    """F2.3 -- the load-bearing gate: at closed shell the UCC residual must
+    reproduce the EXISTING RCC residual for the same equations.
+
+    Cheap, and it needs no PySCF, no open-shell reference and no converged
+    amplitudes -- both sides compute the same physical quantity by different
+    routes, so a slice-assignment or block-routing error shows up immediately.
+
+    Two things the scope originally got wrong about this, both found by
+    prototyping the comparison before writing it:
+
+    1. It is a PER-TARGET PAIRING, not a sum over blocks. RCC adapts on the
+       closed-shell representative external block (spin.py, the S3/R1.0 note),
+       which for doubles is `abab`. So `doubles_abab` pairs with `doubles`, and
+       `doubles_aaaa` / `doubles_bbbb` have NO RCC counterpart at all --
+       collapse_amplitudes splits the all-alpha sector away rather than storing
+       it. Those two are covered by F2.2d's shape smoke and by F3, not here.
+
+    2. It is not free, and F1's fixture cannot serve it. The UCC blocks must be
+       built FROM the spatial ones through the closure relations -- see
+       ucc_closed_shell_tensors, which exists for exactly this.
+
+    Tolerance is 1e-11, not 1e-12: the measured `doubles` difference is ~1.8e-12
+    over a residual of norm ~1.6e3, so the tighter bound would flake on a
+    contraction this deep.
+    """
+
+    PAIRS = (("energy", "energy"),
+             ("singles_aa", "singles"),
+             ("doubles_abab", "doubles"))
+
+    NO, NV = 5, 4          # non-square: a square case hides a transposed axis
+    ATOL = 1e-11
+
+    def _manifolds(self):
+        from ccgen.spin import ucc_adapt_equations, spin_adapt_equations
+        eqs = generate_cc_equations("ccsd", engine="diagram", canonical_fock=True)
+        return ucc_adapt_equations(eqs), spin_adapt_equations(eqs)
+
+    def _compare(self, ucc_blocks, spatial):
+        """Return {pair: max abs difference} for the three paired targets."""
+        import numpy as np
+        from ccgen.tests.residual_eval import ucc_residual_einsum, residual_einsum
+        u_eqs, r_eqs = self._manifolds()
+        dims = dict(noa=self.NO, nva=self.NV, nob=self.NO, nvb=self.NV)
+        out = {}
+        for ukey, rkey in self.PAIRS:
+            U = sum(ucc_residual_einsum(t, dims, ucc_blocks) for t in u_eqs[ukey])
+            R = sum(residual_einsum(t, self.NO, self.NV, tensors=spatial)
+                    for t in r_eqs[rkey])
+            self.assertEqual(np.asarray(U).shape, np.asarray(R).shape,
+                             f"{ukey} vs {rkey}: shape disagreement")
+            out[(ukey, rkey)] = float(np.abs(np.asarray(U) - np.asarray(R)).max())
+        return out
+
+    def test_ucc_reproduces_rcc_at_closed_shell(self):
+        from ccgen.tests.residual_eval import ucc_closed_shell_tensors
+        ucc_blocks, spatial = ucc_closed_shell_tensors(self.NO, self.NV, seed=7)
+        for pair, diff in self._compare(ucc_blocks, spatial).items():
+            with self.subTest(pair=pair):
+                self.assertLess(diff, self.ATOL,
+                                f"{pair[0]} != {pair[1]} at closed shell: {diff:.3e}")
+
+    def test_the_oracle_is_falsifiable(self):
+        """Committed WITH the gate, not instead of it. A gate that cannot fail is
+        indistinguishable from one that passes, and this one compares two long
+        contractions where an accidental agreement is easy to believe in.
+
+        Transposing one axis of t2_abab must break every paired target by
+        O(||R||) -- measured 1.06e2 / 1.47e3 and the energy off by 4.4, against
+        residual norms ~1.1e3 / 1.6e3.
+        """
+        from ccgen.tests.residual_eval import ucc_closed_shell_tensors
+        ucc_blocks, spatial = ucc_closed_shell_tensors(self.NO, self.NV, seed=7)
+        ucc_blocks = dict(ucc_blocks)
+        ucc_blocks["t2_abab"] = ucc_blocks["t2_abab"].transpose(1, 0, 2, 3)
+        for pair, diff in self._compare(ucc_blocks, spatial).items():
+            with self.subTest(pair=pair):
+                self.assertGreater(diff, 1.0,
+                                   f"{pair[0]}: a corrupted block still agreed "
+                                   f"to {diff:.3e} -- the oracle is vacuous")
+
+    def test_the_independent_fixture_does_NOT_satisfy_the_oracle(self):
+        """Why ucc_closed_shell_tensors exists at all. F1's ucc_random_tensors
+        draws each block independently, so it violates the closure relations and
+        the comparison fails -- for a fixture reason, not an evaluator one.
+
+        Asserted so that a future 'simplification' that reuses the F1 fixture
+        here fails loudly instead of appearing to weaken the tolerance.
+        """
+        from ccgen.tests.residual_eval import ucc_random_tensors, random_tensors
+        ucc_blocks = ucc_random_tensors(noa=self.NO, nva=self.NV,
+                                        nob=self.NO, nvb=self.NV, seed=0)
+        spatial = random_tensors(self.NO, self.NV, seed=0)
+        diffs = self._compare(ucc_blocks, spatial)
+        self.assertTrue(any(d > 1.0 for d in diffs.values()),
+                        "the independent fixture agreed; the closure relations "
+                        "are apparently not needed, which contradicts the scope")
+
+
+class U14RankSixSpinFlipSymmetryTests(unittest.TestCase):
+    """U1.4 — alpha<->beta symmetry of the UCC residual manifold.
+
+    A CC residual manifold must be invariant under a global spin flip: feed
+    alpha-equal-beta tensors and the `_aa` target must equal its `_bb` partner,
+    `aaaa` must equal `bbbb`. This needs no PySCF, no converged amplitudes and no
+    oracle — it is a symmetry of the equations themselves, and it is the cheapest
+    check that exists on a block-resolved manifold. Both ranks pass: ~1e-13 at
+    rank 4, ~7e-16 at rank 6.
+
+    **This test was committed for one commit asserting the opposite** — rank 6
+    `expectedFailure`, on the conclusion that the landed rank-6 UCC equations were
+    defective at ~1e-1 relative. That conclusion was wrong, and the way it was
+    wrong is worth keeping, because the false signal was strong and specific:
+    singles, doubles AND triples all broke together, at a magnitude far above
+    noise, reproducible with no PySCF involved.
+
+    **The actual defect was in this test's own fixture**, in one line. `abbabb` is
+    the spin flip of `aabaab`, and the flip is NOT the identity: flipping
+    `aab` -> `bba` leaves slots `(b,b,a | b,b,a)`, which must then be re-expressed
+    in `abbabb`'s own `(a,b,b | a,b,b)` order — a slot reversal within each half.
+    Setting the two blocks equal produces an array that violates `abbabb`'s own
+    antisymmetry (it is antisym in vir slots 1,2 and occ 4,5, not 0,1 and 3,4).
+
+    What made it look like an equation defect, and the check that settled it:
+
+    * The manifold IS structurally symmetric — the factor vocabularies of every
+      spin-flip pair are exact mirrors, term counts match (`ccsdt`: 579/579
+      triples, 469/469 mixed, 25/25 singles), and every emitted factor's slot
+      spins equal its own tag (0 mismatches across all 2490 terms).
+    * Three hypotheses were falsified before the fixture was suspected at all: a
+      wrong block name, the `v_abab` orientation (forcing `v[p,q,r,s]=v[q,p,s,r]`
+      left the relative error unchanged), and the evaluator (exact at rank 4, and
+      gated against PySCF UCCSD at ~6e-16 in `test_ucc_vs_pyscf`).
+    * **The check that would have found it first: does each fixture block satisfy
+      its OWN antisymmetry?** `abbabb` is antisym in (1,2)/(4,5); the wrong block
+      failed that by 1.5e-2 while the right one gives exactly 0. That is a
+      property of one array, needs no equations, and is the same class of check
+      F1 already applies to the rank-4 blocks.
+
+    A corollary that also has to be right, and was not: the PySCF `bba` block does
+    NOT map to `abbabb` by the same axis permutation `aab` maps to `aabaab`. An
+    exhaustive 720-permutation search matched `bba` to `aab` and that match is
+    real — but matching `aabaab` is not the same as BEING `abbabb`, and the search
+    never checked the target block's symmetry. See the U1.4 section of
+    `docs/CCGEN_GCC_TO_UCC_BRIDGE.md`.
+    """
+    NO, NV = 4, 3       # non-square
+
+    def _tensors(self):
+        import numpy as np
+        import itertools
+        no, nv, n = self.NO, self.NV, self.NO + self.NV
+        rng = np.random.default_rng(1)
+
+        def anti(x, ax):
+            out = np.zeros_like(x)
+            for p in itertools.permutations(range(len(ax))):
+                sg, pl = 1, list(p)
+                for i in range(len(pl)):
+                    for j in range(i + 1, len(pl)):
+                        if pl[i] > pl[j]:
+                            sg = -sg
+                order = list(range(x.ndim))
+                for s, a in enumerate(ax):
+                    order[a] = ax[p[s]]
+                out = out + sg * x.transpose(order)
+            return out
+
+        def a4(x):
+            x = x - x.transpose(1, 0, 2, 3)
+            return x - x.transpose(0, 1, 3, 2)
+
+        t1 = rng.random((nv, no))
+        t2 = rng.random((nv, nv, no, no))
+        t2 = t2 + t2.transpose(1, 0, 3, 2)
+        t3m = rng.random((nv, nv, nv, no, no, no))
+        t3m = t3m - t3m.transpose(1, 0, 2, 3, 4, 5)
+        t3m = t3m - t3m.transpose(0, 1, 2, 4, 3, 5)
+        t3s = anti(anti(rng.random((nv, nv, nv, no, no, no)), (0, 1, 2)), (3, 4, 5))
+        v = rng.random((n, n, n, n))
+        v = v + v.transpose(1, 0, 3, 2)
+        v = v + v.transpose(2, 3, 0, 1)
+        f = rng.random((n, n))
+        f = f + f.T
+        f[:no, no:] = f[no:, :no] = 0.0        # canonical Fock, as every CC kernel gets
+        return {
+            "t1_aa": t1, "t1_bb": t1,
+            "t2_abab": t2, "t2_aaaa": a4(t2), "t2_bbbb": a4(t2),
+            "t3_aaaaaa": t3s, "t3_bbbbbb": t3s,
+            # abbabb is the SPIN FLIP of aabaab, and a flip is not the identity
+            # here: flipping aab->bba leaves slots (b,b,a|b,b,a), which must be
+            # re-expressed in this block's own (a,b,b|a,b,b) order -- a slot
+            # reversal within each half. Setting them equal (the first thing
+            # tried) gives a block violating abbabb's OWN antisymmetry (antisym
+            # in vir slots 1,2 and occ 4,5, not 0,1 / 3,4), and shows up as a
+            # ~1e-1 spin-flip asymmetry in the residual.
+            "t3_aabaab": t3m, "t3_abbabb": t3m.transpose(2, 1, 0, 5, 4, 3),
+            "v_abab": v,
+            "v_aaaa": v - v.transpose(0, 1, 3, 2),
+            "v_bbbb": v - v.transpose(0, 1, 3, 2),
+            "f_aa": f, "f_bb": f,
+        }
+
+    def _worst_asymmetry(self, method, pairs):
+        import numpy as np
+        from ccgen.spin import ucc_adapt_equations
+        from ccgen.tests.residual_eval import ucc_residual_einsum
+        T = self._tensors()
+        dims = dict(noa=self.NO, nva=self.NV, nob=self.NO, nvb=self.NV)
+        u = ucc_adapt_equations(
+            generate_cc_equations(method, engine="diagram", canonical_fock=True))
+        worst = {}
+        for a, b in pairs:
+            A = np.asarray(sum(ucc_residual_einsum(t, dims, T) for t in u[a]))
+            B = np.asarray(sum(ucc_residual_einsum(t, dims, T) for t in u[b]))
+            worst[(a, b)] = (float(np.abs(A - B).max()), float(np.abs(A).max()))
+        return worst
+
+    def test_rank4_is_spin_flip_symmetric(self):
+        """ccsd. Passes — and pins that the fixture and evaluator are not the
+        cause of the rank-6 failure below."""
+        pairs = (("singles_aa", "singles_bb"), ("doubles_aaaa", "doubles_bbbb"))
+        for pair, (diff, scale) in self._worst_asymmetry("ccsd", pairs).items():
+            with self.subTest(pair=pair):
+                self.assertGreater(scale, 1.0, "residual is ~zero; vacuous")
+                self.assertLess(diff / scale, 1e-12,
+                                f"{pair[0]} != {pair[1]}: {diff:.3e} vs |R| {scale:.3e}")
+
+    def test_rank6_is_spin_flip_symmetric(self):
+        """ccsdt. Passes at ~7e-16 once the fixture's `abbabb` block carries the
+        correct flip relation — see `_tensors`. It was an `expectedFailure` for
+        exactly one commit, on the belief that the equations were defective; they
+        are not, and the record of that is in this class's docstring."""
+        pairs = (("singles_aa", "singles_bb"),
+                 ("doubles_aaaa", "doubles_bbbb"),
+                 ("triples_aaaaaa", "triples_bbbbbb"))
+        for pair, (diff, scale) in self._worst_asymmetry("ccsdt", pairs).items():
+            with self.subTest(pair=pair):
+                self.assertGreater(scale, 1.0, "residual is ~zero; vacuous")
+                self.assertLess(diff / scale, 1e-12,
+                                f"{pair[0]} != {pair[1]}: {diff:.3e} vs |R| {scale:.3e}")
+
+    def test_every_fixture_block_satisfies_its_own_antisymmetry(self):
+        """The check that would have found the `abbabb` defect immediately, and
+        did not exist when it was needed.
+
+        A spin block's antisymmetric slot pairs are determined by its tag: slots
+        sharing a spin within a half are interchangeable, so the block must be
+        antisymmetric in them. `aabaab` is antisym in vir (0,1) and occ (3,4);
+        `abbabb` in vir (1,2) and occ (4,5) — DIFFERENT pairs, which is exactly
+        what makes setting the two blocks equal wrong.
+
+        This is a property of one array. It needs no equations, no evaluator and
+        no oracle, and it localizes to the fixture rather than to the physics.
+        """
+        import numpy as np
+        T = self._tensors()
+        for name, tag in (("t3_aaaaaa", "aaaaaa"), ("t3_bbbbbb", "bbbbbb"),
+                          ("t3_aabaab", "aabaab"), ("t3_abbabb", "abbabb"),
+                          ("t2_aaaa", "aaaa"), ("t2_bbbb", "bbbb")):
+            arr, n = T[name], len(tag) // 2
+            for half in (0, n):                       # bra half, then ket half
+                for p in range(half, half + n - 1):
+                    for q in range(p + 1, half + n):
+                        if tag[p] != tag[q]:
+                            continue                  # different spins: no symmetry
+                        order = list(range(len(tag)))
+                        order[p], order[q] = order[q], order[p]
+                        with self.subTest(block=name, swap=(p, q)):
+                            self.assertLess(
+                                np.abs(arr + arr.transpose(order)).max(), 1e-12,
+                                f"{name}: not antisymmetric in slots {p},{q} — "
+                                f"the block violates its own tag")
+
+
+class U14c2RankSixClosedShellOracleTests(unittest.TestCase):
+    """U1.4c.2 — the rank-6 closed-shell oracle, on PERTURBED amplitudes.
+
+    F2.3 one rank up, and the decisive instrument for the open rank-6 triples
+    discrepancy. On a closed-shell system the UCC residual must reproduce ccgen's
+    own RCC residual for the same equations — a third source independent of both
+    the UCC bridge and PySCF's `uccsdt`.
+
+    **Result: all three targets agree to ~1.5e-12 against ||R|| ~1e2-1e3.** So
+    ccgen's rank-6 T3 is SELF-CONSISTENT, and the ~1.1e-2 disagreement with PySCF
+    (`test_ucc_rank6_vs_pyscf`) is in how that gate reads PySCF's `r3aaa`, not in
+    the equations.
+
+    Needs no PySCF: it runs on `ucc_closed_shell_tensors` plus a random spatial
+    `t3`, so it is the cheap localizing gate F2.3 is at rank 4.
+
+    Both closure relations are load-bearing here, which is what makes this a real
+    test rather than a tautology — RCC reads ONE spatial `t3` while UCC's
+    `triples_aabaab` needs all four blocks:
+
+        t3_aaaaaa = sum_q sign(q) * t3_aabaab[bra axes by inverse(order_q)]
+        t3_abbabb = t3_aabaab.transpose(2, 0, 1, 5, 3, 4)
+
+    The first is `_split_same_spin_amplitude` read as arrays (its base reordering
+    is the INVERSE permutation on axes -- see `T3ClosureRelationTests`). The
+    second moves the beta slot to the front of each half, i.e. the alpha-first
+    resort of the global spin flip; it was verified exhaustively over all signed
+    permutations against PySCF's `bba` block.
+
+    Corrupting either breaks the oracle by O(||R||) -- measured 89.0 and 51.3
+    respectively -- so neither is a free parameter, and a wrong closure here is
+    indistinguishable from an equation defect. That is precisely the trap that
+    produced the retracted "rank-6 spin-flip defect" earlier in this ladder, and
+    why the closures had to be derived (U1.4c.1) before this gate could mean
+    anything.
+    """
+
+    NO, NV = 4, 3        # non-square
+
+    @staticmethod
+    def _parity(p):
+        s, pl = 1, list(p)
+        for i in range(len(pl)):
+            for j in range(i + 1, len(pl)):
+                if pl[i] > pl[j]:
+                    s = -s
+        return s
+
+    @classmethod
+    def _same_spin_from_mixed(cls, M, n=3):
+        out = None
+        for q in range(n - 1, -1, -1):
+            order = [x for x in range(n) if x != q] + [q]
+            inv = [order.index(x) for x in range(n)]
+            term = cls._parity(order) * M.transpose(tuple(inv) + tuple(range(n, 2 * n)))
+            out = term if out is None else out + term
+        return out
+
+    def _bundles(self, seed=11):
+        import numpy as np
+        from ccgen.tests.residual_eval import ucc_closed_shell_tensors
+        no, nv = self.NO, self.NV
+        ucc, spatial = ucc_closed_shell_tensors(no, nv, seed=7)
+        ucc, spatial = dict(ucc), dict(spatial)
+        rng = np.random.default_rng(seed)
+        t3 = rng.random((nv, nv, nv, no, no, no))
+        t3 = t3 - t3.transpose(1, 0, 2, 3, 4, 5)      # aabaab: antisym in the
+        t3 = t3 - t3.transpose(0, 1, 2, 4, 3, 5)      # alpha bra / ket pairs
+        ucc["t3_aabaab"] = t3
+        ucc["t3_aaaaaa"] = self._same_spin_from_mixed(t3)
+        ucc["t3_bbbbbb"] = self._same_spin_from_mixed(t3)
+        ucc["t3_abbabb"] = t3.transpose(2, 0, 1, 5, 3, 4)
+        spatial["t3"] = t3
+        return ucc, spatial
+
+    def _diffs(self, ucc, spatial):
+        import numpy as np
+        from ccgen.spin import ucc_adapt_equations, spin_adapt_equations
+        from ccgen.tests.residual_eval import ucc_residual_einsum, residual_einsum
+        eqs = generate_cc_equations("ccsdt", engine="diagram", canonical_fock=True)
+        u, r = ucc_adapt_equations(eqs), spin_adapt_equations(eqs)
+        dims = dict(noa=self.NO, nva=self.NV, nob=self.NO, nvb=self.NV)
+        out = {}
+        for uk, rk in (("singles_aa", "singles"), ("doubles_abab", "doubles"),
+                       ("triples_aabaab", "triples")):
+            U = np.asarray(sum(ucc_residual_einsum(t, dims, ucc) for t in u[uk]))
+            R = np.asarray(sum(residual_einsum(t, self.NO, self.NV, tensors=spatial)
+                               for t in r[rk]))
+            self.assertEqual(U.shape, R.shape, f"{uk} vs {rk}: shape disagreement")
+            out[(uk, rk)] = (float(np.abs(U - R).max()), float(np.abs(R).max()))
+        return out
+
+    def test_ucc_reproduces_rcc_at_rank_six(self):
+        """The gate. Tolerance 1e-10 against ||R|| ~1e2-1e3; measured ~1.5e-12."""
+        for pair, (diff, scale) in self._diffs(*self._bundles()).items():
+            with self.subTest(pair=pair):
+                self.assertGreater(scale, 1.0, "residual is ~zero; vacuous")
+                self.assertLess(diff, 1e-10,
+                                f"{pair[0]} != {pair[1]}: {diff:.3e} vs |R| {scale:.3e}")
+
+    def test_both_closures_are_load_bearing(self):
+        """Committed WITH the gate. If either closure could be corrupted without
+        breaking it, the gate would be measuring the fixture rather than the
+        equations -- and a wrong closure is exactly what a real defect looks like
+        here."""
+        for name, corrupt in (
+                ("t3_abbabb", lambda u: u.update(t3_abbabb=u["t3_aabaab"])),
+                ("t3_aaaaaa", lambda u: u.update(t3_aaaaaa=u["t3_aabaab"]))):
+            ucc, spatial = self._bundles()
+            corrupt(ucc)
+            worst = max(d for d, _ in self._diffs(ucc, spatial).values())
+            with self.subTest(corrupted=name):
+                self.assertGreater(worst, 1.0,
+                                   f"corrupting {name} left the oracle passing "
+                                   f"({worst:.3e}); it is not load-bearing")
+
+
+def _antisymmetrize_so(x, axes):
+    """Antisymmetrize a spin-orbital tensor over `axes` (used to keep a perturbed
+    t3 valid by construction)."""
+    import itertools as _it
+
+    import numpy as np
+    out = np.zeros_like(x)
+    for p in _it.permutations(range(len(axes))):
+        sign, pl = 1, list(p)
+        for i in range(len(pl)):
+            for j in range(i + 1, len(pl)):
+                if pl[i] > pl[j]:
+                    sign = -sign
+        order = list(range(x.ndim))
+        for s, a in enumerate(axes):
+            order[a] = axes[p[s]]
+        out = out + sign * x.transpose(order)
+    return out
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class U14c3UccIsGccSlicedAtRankSixTests(unittest.TestCase):
+    """U1.4c.3 — the UCC adaptation reproduces the GCC residual, SLICED, at rank 6.
+
+    The third reference, and the one that closes the rank-6 question. The chain:
+
+    1. ccgen's GCC CCSDT reaches the FCI limit exactly for a 3-electron system
+       (`test_reference_vs_pyscf`, three separate gates including the
+       `engine="diagram"` path this manifold is generated through). So the GCC
+       triples equations are correct, independently of anything here.
+    2. The UCC manifold is by definition the GCC one resolved into spin blocks.
+       This test checks that directly: evaluate the GCC triples residual on
+       spin-orbital tensors, slice the all-alpha block, and require the UCC
+       `triples_aaaaaa` residual to equal it.
+
+    Together those make ccgen's rank-6 UCC T3 correct, which is what the standing
+    ~2e-3 disagreement with PySCF in `test_ucc_rank6_vs_pyscf` needed adjudicating
+    against. **22 call sites of `ucc_adapt_equations` existed before this and NONE
+    was gated against an energy or an independent residual** — the adaptation was
+    checked structurally at rank 6 and never numerically.
+
+    Two fixture requirements, both learned the hard way:
+
+    * The spin-orbital tensors must have the real even=alpha/odd=beta interleaved
+      structure (`_uccsdt_so_tensors`). `random_tensors` is spin-FREE, and slicing
+      it by that convention is meaningless — it produces disagreements of order
+      the residual itself, which look exactly like an adaptation defect.
+    * The comparison must be perturbed off convergence. At the converged
+      amplitudes every residual is ~1e-13 and the test passes vacuously. The t3
+      perturbation is applied to the SPIN-ORBITAL tensor and re-antisymmetrized
+      there, so it is valid by construction and both sides see the same tensor.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import numpy as np
+        cls.T, cls.no, cls.nv, _cc = _uccsdt_so_tensors()
+        cls.T = dict(cls.T)
+        rng = np.random.default_rng(9)
+        d3 = _antisymmetrize_so(_antisymmetrize_so(
+            rng.random(cls.T["t3"].shape), (0, 1, 2)), (3, 4, 5))
+        cls.T["t3"] = cls.T["t3"] + 0.002 * d3 / max(np.abs(d3).max(), 1e-30)
+
+    def _blocks(self):
+        import numpy as np
+        no, nv, T = self.no, self.nv, self.T
+        n = no + nv
+
+        def amp(name, spins, nslot):
+            arr = T[name]
+            sets = []
+            for k, sp in enumerate(spins):
+                want = 0 if sp == "a" else 1
+                sets.append([p for p in range(arr.shape[k]) if p % 2 == want])
+            return arr[np.ix_(*sets)]
+
+        def comb(name, spins):
+            arr = T[name]
+            sets = []
+            for sp in spins:
+                want = 0 if sp == "a" else 1
+                occ = [p for p in range(0, no) if p % 2 == want]
+                vir = [p for p in range(no, n) if (p - no) % 2 == want]
+                sets.append(occ + vir)
+            return arr[np.ix_(*sets)]
+
+        blocks = {}
+        for tag in ("aa", "bb"):
+            blocks[f"t1_{tag}"] = amp("t1", tag, 2)
+            blocks[f"f_{tag}"] = comb("f", tag)
+        for tag in ("aaaa", "abab", "bbbb"):
+            blocks[f"t2_{tag}"] = amp("t2", tag, 4)
+            blocks[f"v_{tag}"] = comb("v", tag)
+        for tag in ("aaaaaa", "aabaab", "abbabb", "bbbbbb"):
+            blocks[f"t3_{tag}"] = amp("t3", tag, 6)
+        return blocks
+
+    def test_ucc_equals_gcc_sliced(self):
+        import numpy as np
+        from ccgen.spin import ucc_adapt_equations
+        from ccgen.tests.residual_eval import residual_einsum, ucc_residual_einsum
+        no, nv = self.no, self.nv
+        eqs = generate_cc_equations("ccsdt", engine="diagram", canonical_fock=True)
+        u = ucc_adapt_equations(eqs)
+        blocks = self._blocks()
+        dims = dict(noa=no // 2, nva=nv // 2, nob=no // 2, nvb=nv // 2)
+        ea = list(range(0, nv, 2))
+        oa = list(range(0, no, 2))
+        cases = (("singles", "singles_aa", lambda G: G[np.ix_(ea, oa)]),
+                 ("doubles", "doubles_aaaa", lambda G: G[np.ix_(ea, ea, oa, oa)]),
+                 ("triples", "triples_aaaaaa",
+                  lambda G: G[np.ix_(ea, ea, ea, oa, oa, oa)]))
+        for gkey, ukey, slicer in cases:
+            with self.subTest(target=ukey):
+                G = np.asarray(sum(residual_einsum(t, no, nv, tensors=self.T)
+                                   for t in eqs[gkey]))
+                want = slicer(G)
+                got = np.asarray(sum(ucc_residual_einsum(t, dims, blocks)
+                                     for t in u[ukey]))
+                self.assertEqual(got.shape, want.shape)
+                self.assertGreater(np.abs(want).max(), 1e-5,
+                                   f"{ukey}: GCC slice is ~zero — vacuous")
+                self.assertLess(np.abs(got - want).max(), 1e-12,
+                                f"{ukey} != GCC {gkey} sliced")
+
+
+@unittest.skipUnless(_HAVE_PYSCF, "pyscf not importable in this interpreter")
+class U15UccReachesFciLimitTests(unittest.TestCase):
+    """The decisive UCC gate: solve the generated UCC equations to self-consistency
+    and require the energy to equal FCI.
+
+    **This is the first time the UCC manifold is solved to an ENERGY at all.**
+    Everything before it was either a residual comparison (`test_ucc_vs_pyscf`,
+    `test_ucc_rank6_vs_pyscf`) or a transitive argument -- ccgen's GCC CCSDT is
+    FCI-exact and `U14c3UccIsGccSlicedAtRankSixTests` shows UCC == GCC sliced, so
+    UCC "must" be right. That chain is sound but indirect: it never runs the UCC
+    equations as equations. This does, and it is the analogue of the closed-shell
+    `test_ccgen_ccsdt_reaches_fci_limit` that has anchored the GCC side all along.
+
+    For a 3-electron system CCSDT is exact, so UHF + E_corr must equal FCI.
+
+    **LiH+/6-31g, not Li/STO-3G, and the difference matters.** Both are
+    3-electron doublets and both pass -- but on Li/STO-3G the triples contribute
+    *nothing*: holding t3 at zero gives an energy identical to 3.8e-14, so the
+    test would pass with a completely broken T3. Li is nearly a one-electron
+    correlation problem and its `t3` blocks converge to ~1e-19. On LiH+/6-31g the
+    triples are worth 8.1e-8 -- 2000x the tolerance -- so T3 is genuinely
+    exercised. The `test_triples_are_load_bearing` case below pins that, because
+    without it this gate silently degrades to a UCCSD test.
+
+    Structural note on why 3 electrons still exercises a t3 block at all: with
+    `noa=2, nob=1` the same-spin blocks are empty (`aaaaaa` needs three distinct
+    alpha occupieds), but **`t3_aabaab` is not** -- it needs 2 alpha + 1 beta,
+    which is exactly what is available. That is the mixed-spin block, and it is
+    the same family implicated in the open rank-6 PySCF discrepancy
+    (`docs/CCGEN_UCC_RANK6_PYSCF_GAP_HANDOFF.md`).
+    """
+
+    ATOM = "Li 0 0 0; H 0 0 1.6"
+    BASIS = "6-31g"
+
+    @classmethod
+    def _solve(cls, freeze_triples=False):
+        import numpy as np
+        from pyscf import ao2mo
+        from ccgen.spin import ucc_adapt_equations
+        from ccgen.tests.residual_eval import ucc_residual_einsum
+
+        mol = gto.M(atom=cls.ATOM, basis=cls.BASIS, spin=1, charge=1, verbose=0)
+        mol.cart = True
+        mf = scf.UHF(mol)
+        mf.conv_tol = 1e-13
+        mf.run()
+        Ca, Cb = mf.mo_coeff
+        noa, nob = mol.nelec
+        nmo = Ca.shape[1]
+        nva, nvb = nmo - noa, nmo - nob
+
+        def eri_phys(C1, C2):
+            g = ao2mo.general(mol, (C1, C1, C2, C2), compact=False).reshape(
+                C1.shape[1], C1.shape[1], C2.shape[1], C2.shape[1])
+            return g.transpose(0, 2, 1, 3)              # chemist -> physicist
+
+        vaa, vbb = eri_phys(Ca, Ca), eri_phys(Cb, Cb)
+        fock = mf.get_fock()
+        fa = Ca.T @ fock[0] @ Ca
+        fb = Cb.T @ fock[1] @ Cb
+        integrals = {
+            "v_aaaa": vaa - vaa.transpose(0, 1, 3, 2),  # same spin: antisymmetrized
+            "v_bbbb": vbb - vbb.transpose(0, 1, 3, 2),
+            "v_abab": eri_phys(Ca, Cb),                 # mixed spin: not
+            "f_aa": fa, "f_bb": fb,
+        }
+        dims = dict(noa=noa, nva=nva, nob=nob, nvb=nvb)
+
+        # ccgen block tags are vir-half then occ-half.
+        def blk_dims(tag):
+            n = len(tag) // 2
+            return ([nva if s == "a" else nvb for s in tag[:n]]
+                    + [noa if s == "a" else nob for s in tag[n:]])
+
+        def denominator(tag):
+            n = len(tag) // 2
+            ea, eb = np.diag(fa), np.diag(fb)
+            d = np.zeros(blk_dims(tag))
+            idx = np.indices(d.shape)
+            for k in range(n):
+                d -= (ea[noa:] if tag[k] == "a" else eb[nob:])[idx[k]]
+            for k in range(n):
+                d += (ea[:noa] if tag[n + k] == "a" else eb[:nob])[idx[n + k]]
+            return d
+
+        eqs = ucc_adapt_equations(
+            generate_cc_equations("ccsdt", engine="diagram", canonical_fock=True))
+        targets = [k for k in eqs if k != "energy"]
+
+        def amp_name(target):
+            tag = target.split("_", 1)[1]
+            return f"t{len(tag) // 2}_{tag}", tag
+
+        amps, denoms = {}, {}
+        for target in targets:
+            name, tag = amp_name(target)
+            amps[name] = np.zeros(blk_dims(tag))
+            denoms[target] = denominator(tag)
+
+        delta = float("inf")
+        for _ in range(400):
+            tensors = {**integrals, **amps}
+            updates, delta = {}, 0.0
+            for target in targets:
+                if freeze_triples and target.startswith("triples"):
+                    continue
+                name, _tag = amp_name(target)
+                residual = np.asarray(
+                    sum(ucc_residual_einsum(t, dims, tensors) for t in eqs[target]))
+                nxt = amps[name] + residual / denoms[target]
+                updates[name] = nxt
+                delta = max(delta, float(np.abs(nxt - amps[name]).max()))
+            amps.update(updates)
+            if delta < 1e-11:
+                break
+
+        tensors = {**integrals, **amps}
+        e_corr = float(sum(np.asarray(ucc_residual_einsum(t, dims, tensors))
+                           for t in eqs["energy"]))
+        return mf, e_corr, delta, amps
+
+    @classmethod
+    def setUpClass(cls):
+        from pyscf import fci
+        cls.mf, cls.e_corr, cls.delta, cls.amps = cls._solve()
+        cls.e_fci = fci.FCI(cls.mf).kernel()[0]
+
+    def test_uccsdt_equals_fci(self):
+        """3 electrons => CCSDT is exact. Measured 3.7e-14."""
+        self.assertLess(self.delta, 1e-10, "the UCC Jacobi solve did not converge")
+        self.assertAlmostEqual(self.mf.e_tot + self.e_corr, self.e_fci, places=10)
+
+    def test_triples_are_load_bearing(self):
+        """Without this the gate above silently degrades to a UCCSD test -- which
+        is exactly what happens on Li/STO-3G, where the triples are worth 0 and a
+        broken T3 would pass. Here they are worth ~8e-8, 2000x the tolerance."""
+        _mf, e_sd, delta_sd, _amps = self._solve(freeze_triples=True)
+        self.assertLess(delta_sd, 1e-10)
+        gap = abs((self.mf.e_tot + e_sd) - self.e_fci)
+        self.assertGreater(gap, 1e-9,
+                           f"t3 contributes only {gap:.2e}; this system does not "
+                           f"exercise the triples and the FCI gate is vacuous")
+
+    def test_the_mixed_spin_t3_block_is_populated(self):
+        """With noa=2, nob=1 the same-spin t3 blocks are structurally empty (three
+        distinct same-spin occupieds do not exist), but `t3_aabaab` needs 2 alpha
+        + 1 beta and is populated. Asserted because it is the block the open
+        rank-6 PySCF discrepancy implicates."""
+        import numpy as np
+        self.assertGreater(np.abs(self.amps["t3_aabaab"]).max(), 1e-9)

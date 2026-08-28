@@ -21,16 +21,41 @@ namespace HartreeFock::Correlation::CC
                     "validate_kernel_bundle: kernel bundle and state must agree on max_excitation_rank.");
             if (!kernels.energy)
                 return std::unexpected("validate_kernel_bundle: energy kernel is missing.");
-            if (static_cast<int>(kernels.residuals_by_rank.size()) != kernels.max_excitation_rank)
+            // U4.0: an ALL-SECTORS bundle (UCC) carries no per-rank reference
+            // residuals -- every target is block-tagged. Accept an empty vector,
+            // but still require a FULL one otherwise: a partially-filled
+            // residuals_by_rank means a bundle lost a kernel, and that rank would
+            // otherwise contribute a silent zero.
+            if (!kernels.is_all_sectors() &&
+                static_cast<int>(kernels.residuals_by_rank.size()) != kernels.max_excitation_rank)
+            {
                 return std::unexpected(
-                    "validate_kernel_bundle: residual kernel count must match max_excitation_rank.");
-            if (state.denominators.max_rank() != state.max_excitation_rank ||
-                state.amplitudes.max_rank() != state.max_excitation_rank)
+                    "validate_kernel_bundle: residual kernel count must match max_excitation_rank "
+                    "(or be empty for an all-sectors bundle).");
+            }
+            // An all-sectors bundle with no sector residuals evaluates nothing at
+            // all and would converge instantly at the reference energy.
+            if (kernels.is_all_sectors() && kernels.sector_residuals.empty())
+            {
+                return std::unexpected(
+                    "validate_kernel_bundle: bundle declares no residual kernels of either kind "
+                    "(empty residuals_by_rank and empty sector_residuals).");
+            }
+            // U4.0: `max_rank()` counts the per-rank REFERENCE blocks, so an
+            // all-sectors state reports 0 by construction -- its excitations all
+            // live in `sectors`. Requiring coverage through max_excitation_rank
+            // is therefore an RCC-only invariant. The all-sectors equivalent (a
+            // stored amplitude block per declared sector) is enforced by the Gap
+            // B4 loop below, which is stricter: it checks per (rank, tag) rather
+            // than counting.
+            if (!kernels.is_all_sectors() &&
+                (state.denominators.max_rank() != state.max_excitation_rank ||
+                 state.amplitudes.max_rank() != state.max_excitation_rank))
             {
                 return std::unexpected(
                     "validate_kernel_bundle: amplitudes and denominators must be allocated through max_excitation_rank.");
             }
-            for (int rank = 1; rank <= kernels.max_excitation_rank; ++rank)
+            for (int rank = 1; !kernels.is_all_sectors() && rank <= kernels.max_excitation_rank; ++rank)
             {
                 if (!kernels.residuals_by_rank[static_cast<std::size_t>(rank - 1)])
                 {
@@ -112,12 +137,35 @@ namespace HartreeFock::Correlation::CC
                 { return entry.first.first == rank && entry.first.second == tag; });
             if (have)
                 continue;
-            // a sector block has the same occ/vir dims as its rank's reference
-            // block (the spin projection lives in the algebra, not the shape).
-            const auto &ref_dims =
-                state.amplitudes.by_rank[static_cast<std::size_t>(rank - 1)].dims;
+            // U2.2: take the block's shape from its own denominator when one is
+            // stored. For an RHF Sz sector the spin projection lives in the algebra
+            // and not the shape, so a sector really does share its rank's reference
+            // dims -- but for a UCC block it does not: with noa != nob, `abab` is
+            // (noa,nob,nva,nvb) while `aaaa` is (noa,noa,nva,nva). The denominator
+            // is already built per block (build_ucc_block_denominator), so it is
+            // the one place that shape is known; `sector_tensor` falls back to the
+            // rank's reference denominator on the RHF path, which reproduces the
+            // old `ref_dims` exactly.
+            //
+            // U4.2: the fallback indexes `by_rank[rank-1]`, which does not exist
+            // on an ALL-SECTORS state (no reference blocks at all). Reaching it
+            // there would be an out-of-bounds read returning plausible garbage
+            // dims, so the block is skipped instead and left unallocated -- which
+            // `validate_kernel_bundle`'s Gap B4 loop then rejects by name. A
+            // missing denominator on the UCC path is a build bug, and failing in
+            // the validator with the (rank, tag) in the message beats crashing or
+            // silently allocating the wrong shape here.
+            auto denom = state.denominators.sector_tensor(rank, tag);
+            const bool have_reference_rank =
+                rank >= 1 &&
+                static_cast<std::size_t>(rank) <= state.amplitudes.by_rank.size();
+            if (!denom && !have_reference_rank)
+                continue;
+            const auto &block_dims =
+                denom ? denom->dims
+                      : state.amplitudes.by_rank[static_cast<std::size_t>(rank - 1)].dims;
             state.amplitudes.sectors.push_back(
-                {{rank, tag}, TensorND(ref_dims, 0.0)});
+                {{rank, tag}, TensorND(block_dims, 0.0)});
         }
     }
 
@@ -131,8 +179,14 @@ namespace HartreeFock::Correlation::CC
             return std::unexpected(valid.error());
 
         ArbitraryOrderResiduals residuals;
-        residuals.by_rank.reserve(static_cast<std::size_t>(state.max_excitation_rank));
-        for (int rank = 1; rank <= state.max_excitation_rank; ++rank)
+        // U4.0: skipped entirely for an all-sectors bundle, which leaves
+        // `residuals.by_rank` empty to match the amplitudes it will be paired
+        // against. The sector loop below is then the whole evaluation.
+        residuals.by_rank.reserve(
+            kernels.is_all_sectors()
+                ? 0u
+                : static_cast<std::size_t>(state.max_excitation_rank));
+        for (int rank = 1; !kernels.is_all_sectors() && rank <= state.max_excitation_rank; ++rank)
         {
             const auto &kernel = kernels.residuals_by_rank[static_cast<std::size_t>(rank - 1)];
             TensorND tensor = kernel(
@@ -168,7 +222,12 @@ namespace HartreeFock::Correlation::CC
                 state.mo_blocks,
                 state.denominators,
                 state.amplitudes);
-            auto denominator = state.denominators.tensor(sr.excitation_rank);
+            // U2.2: validate against the BLOCK's denominator, not the rank's
+            // reference one -- under an unrestricted reference they have different
+            // shapes (see ensure_amplitude_sectors). Falls back to the rank's on
+            // the RHF path, where they are the same tensor.
+            auto denominator =
+                state.denominators.sector_tensor(sr.excitation_rank, sr.tag);
             if (!denominator)
                 return std::unexpected(
                     "evaluate_generated_arbitrary_order_residuals: " + denominator.error());

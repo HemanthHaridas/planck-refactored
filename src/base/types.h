@@ -80,6 +80,7 @@ namespace HartreeFock
         RCCSDT,  // Restricted CCSDT
         UCCSDT,  // Unrestricted CCSDT
         RCCSDTQ, // Restricted CCSDTQ
+        UCCGEN,  // Unrestricted generated CC (ucc2/ucc3/ucc4); rank on _cc_generated_rank
         CASSCF,  // Complete active space SCF
         RASSCF,  // Restricted active space SCF
         FCI      // Full configuration interaction (whole MO space, RHF reference)

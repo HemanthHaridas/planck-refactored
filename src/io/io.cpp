@@ -658,6 +658,34 @@ namespace HartreeFock::IO
                 {"ccsdtqp", HartreeFock::PostHF::RCCSDTQ},
                 {"cc5", HartreeFock::PostHF::RCCSDTQ},
                 {"cc6", HartreeFock::PostHF::RCCSDTQ},
+                // U5.3b: the generated UNRESTRICTED path. Same shape as the cc3..cc6
+                // spellings above -- one enum value with the excitation rank carried
+                // on _cc_generated_rank -- so higher ranks need no new enum member
+                // and no new driver branch. Requires -DPLANCK_CC_UCC=ON; without it
+                // the registry errors rather than falling back to the RCC bundle.
+                // U5.3c: the method-named aliases now cover ranks 3-4 as the RCC
+                // side does (`ccsdt_gen` / `ccsdtq`), and the numeric spellings run
+                // to 6. The rank-4 ceiling was a hand-written switch in the
+                // registry, not a real limit -- the emitter is rank-generic
+                // (verified: `ucc_independent_blocks(2 * rank)` yields 6 and 7 spin
+                // sectors at excitation ranks 5 and 6; note it takes the AMPLITUDE
+                // rank, which is twice the excitation rank) -- so ucc5/ucc6 follow
+                // PLANCK_CC_MAXORDER exactly as cc5/cc6 do.
+                //
+                // RCC having no rank-2 generated keyword while UCC has `ucc2` is
+                // NOT an asymmetry to fix: RCC's generated_floor is 4 (3 with
+                // PLANCK_CC_ARBITRARY_LOWER_RANKS) because the hand-written solvers
+                // already cover ranks 2-3, so a generated rank-2 RCC path would
+                // have no consumer. `ucc2` exists because U5.4 needs it as the
+                // comparison against hand-written UCCSD.
+                {"ucc2", HartreeFock::PostHF::UCCGEN},
+                {"uccsd_gen", HartreeFock::PostHF::UCCGEN},
+                {"ucc3", HartreeFock::PostHF::UCCGEN},
+                {"uccsdt_gen", HartreeFock::PostHF::UCCGEN},
+                {"ucc4", HartreeFock::PostHF::UCCGEN},
+                {"uccsdtq_gen", HartreeFock::PostHF::UCCGEN},
+                {"ucc5", HartreeFock::PostHF::UCCGEN},
+                {"ucc6", HartreeFock::PostHF::UCCGEN},
                 {"casscf", HartreeFock::PostHF::CASSCF},
                 {"rasscf", HartreeFock::PostHF::RASSCF},
                 {"fci", HartreeFock::PostHF::FCI},
@@ -743,6 +771,22 @@ namespace HartreeFock::IO
                                  {"cc6", 6},
                              };
                          if (auto it = _cc_rank.find(value); it != _cc_rank.end())
+                             scf._cc_generated_rank = it->second;
+                     }
+                     // U5.3b: the same mechanism for the generated unrestricted
+                     // path. Its floor is rank 2 (uccsd), not 4 -- unlike RCC there
+                     // is no hand-written generated-path predecessor to defer to.
+                     if (*parsed == HartreeFock::PostHF::UCCGEN)
+                     {
+                         static const std::unordered_map<std::string, int> _ucc_rank =
+                             {
+                                 {"ucc2", 2}, {"uccsd_gen", 2},
+                                 {"ucc3", 3}, {"uccsdt_gen", 3},
+                                 {"ucc4", 4}, {"uccsdtq_gen", 4},
+                                 {"ucc5", 5},
+                                 {"ucc6", 6},
+                             };
+                         if (auto it = _ucc_rank.find(value); it != _ucc_rank.end())
                              scf._cc_generated_rank = it->second;
                      }
                      return std::expected<void, std::string>{};

@@ -907,10 +907,16 @@ def print_cpp_blas(
     )
 
 
-def _dress_operator_equations(eqs):
+def _dress_operator_equations(eqs, operators=None):
     """D7.3.2d: rewrite each manifold of ``eqs`` into its dressed form (recognized
     W/F operators + tau/tau_c pseudo-amplitudes + bare remainder) and return
     ``(dressed_eqs, ordered_intermediates)``.
+
+    ``operators`` selects which dressed operators to recognize; ``None`` (default)
+    uses the full seeded CCSD family, so every existing caller is unchanged. Passing
+    a subset dresses only those operators and leaves the rest bare -- used by the
+    V1.1e.3 per-operator gate so a regression names one operator rather than a whole
+    manifold.
 
     The intermediates list is dependency-ordered (D7.3.3): the tau/tau_c
     pseudo-amplitude specs come first, then the operator specs that reference
@@ -934,19 +940,47 @@ def _dress_operator_equations(eqs):
     )
     from .optimization.intermediates import IntermediateSpec
 
-    ops = seeded_operators()
+    ops = seeded_operators() if operators is None else list(operators)
     dressed = {m: assemble_dressed_equation(ops, terms) for m, terms in eqs.items()}
 
     # which intermediates does the dressed equation actually reference?
+    #
+    # The residual is not the only consumer. An operator's own DEFINITION can reference
+    # a pseudo-amplitude (`Wmnij` and `Wabef` are both defined in terms of `tau`), so a
+    # name can be needed by the emitted code while appearing nowhere in the residual.
+    # Scanning only the residual then emits an operator whose builder calls `build_tau`
+    # with no `tau` spec to emit it -- a dangling reference.
+    #
+    # It happens not to bite on the GCC path, where `tau` also appears in the residual
+    # directly, but it does on a spatial (already-adapted) input where those residual
+    # uses have been collapsed away. Closing over definitions rather than special-casing
+    # that input keeps one rule for both.
     primitives = {"t1", "t2", "v", "f"}
-    referenced: set = set()
-    for terms in dressed.values():
-        for t in terms:
-            for f in t.factors:
-                if f.name not in primitives:
-                    referenced.add(f.name)
+    op_definitions = {op.name: op.definition_terms for op in ops}
 
-    # usage: count references and record manifolds, per referenced intermediate
+    def _names_in(terms):
+        return {f.name for t in terms for f in t.factors if f.name not in primitives}
+
+    referenced: set = set()
+    frontier = set()
+    for terms in dressed.values():
+        frontier |= _names_in(terms)
+    while frontier:
+        name = frontier.pop()
+        if name in referenced:
+            continue
+        referenced.add(name)
+        # follow into the operator's definition, so its dependencies are emitted too
+        frontier |= _names_in(op_definitions.get(name, ()))
+
+    # usage: count references and record manifolds, per referenced intermediate.
+    #
+    # Counts definition-site uses alongside residual ones, matching the closure above.
+    # Without this a pseudo-amplitude referenced ONLY by an operator definition gets
+    # usage_count=0, which `recount_intermediate_usage` rejects as an orphan -- so the
+    # emitted spec would be dropped for being unused while its builder is still called.
+    # The target list stays residual-only: `usage_targets` names the residual manifolds
+    # a spec serves, and a definition-site use belongs to no manifold.
     def usage(name):
         count = 0
         targets = []
@@ -955,6 +989,9 @@ def _dress_operator_equations(eqs):
             if n:
                 count += n
                 targets.append(m)
+        for owner, terms in op_definitions.items():
+            if owner in referenced:
+                count += sum(1 for t in terms for f in t.factors if f.name == name)
         return count, tuple(targets)
 
     pseudo_specs = []
@@ -991,8 +1028,10 @@ def print_cpp_planck(
     intermediate_peak_memory_budget_bytes: int | None = None,
     factorize_tau: bool = False,
     dress_operators: bool = False,
+    dressing: str | None = None,
     force_arbitrary: bool = False,
     spin_adapt: bool = False,
+    ucc: bool = False,
     **kwargs: Any,
 ) -> str:
     """Generate Planck-compatible C++ tensor kernels.
@@ -1004,7 +1043,46 @@ def print_cpp_planck(
     cc_canonical_fock_only) and is exact vs the undressed residual.  Supersedes
     ``factorize_tau`` (which only collapses tau); the two are mutually exclusive.
     Default off -> byte-identical to the undressed emit.
+
+    ``dressing`` (W3.2) selects WHICH route derives the dressed operators:
+    ``"none"``, ``"recognized"`` (the hand-seeded fingerprints ``dress_operators``
+    has always meant), or ``"derived"`` (the factorizer, deriving operators from
+    each term's own contraction tree). ``dress_operators=True`` is the legacy
+    spelling of ``"recognized"``. One axis, not two booleans: the routes are
+    alternatives, never combined, and both feed the SAME downstream emit path so
+    the composition with spin_adapt / ucc / force_arbitrary stays single.
     """
+    # V1.2.4: dressing supersedes tau collapse -- dressing already recognizes tau/tau_c as
+    # pseudo-amplitudes, so running `factorize_tau` too would materialize tau twice through
+    # two different code paths. Before V1.2.1 this combination was silently ignored (the
+    # early return fired first), which is why the parent scope recorded it as "already
+    # mutually exclusive" -- it was unreachable, not guarded. Raise rather than pick a
+    # winner: silent precedence is exactly what disguised the hazard.
+    # W3.2: resolve the legacy boolean onto the one axis FIRST, so every check
+    # below reads a single variable. `dress_operators=True` is `"recognized"`.
+    if dressing is not None and dress_operators:
+        raise ValueError(
+            "dress_operators is the legacy spelling of dressing='recognized'; pass "
+            "one or the other, not both.")
+    if dressing is None:
+        dressing = "recognized" if dress_operators else "none"
+    if dressing not in ("none", "recognized", "derived"):
+        raise ValueError(
+            f"dressing must be one of none/recognized/derived, got {dressing!r}")
+    dress_operators = dressing != "none"
+
+    if dress_operators and factorize_tau:
+        raise ValueError(
+            "dress_operators and factorize_tau are mutually exclusive: dressing already "
+            "recognizes tau/tau_c, so factorize_tau would materialize it twice. Pass only "
+            "dress_operators=True.")
+
+    # V1.2.1: dressing feeds the SAME downstream path as every other flag (one exit at
+    # the bottom of this function) rather than returning early. The early return made
+    # spin_adapt / factorize_tau / force_arbitrary silently unreachable under dressing;
+    # composing them is the point of V1.2, and a second emit call site would fork the
+    # composition so V5 (UCC) had to be wired twice.
+    dressed_intermediates = None
     if dress_operators:
         # Dressing requires the diagram engine + canonical Fock; override any
         # conflicting caller kwargs rather than error on a duplicate.
@@ -1013,11 +1091,39 @@ def print_cpp_planck(
         dress_kwargs.pop("canonical_fock", None)
         eqs = generate_cc_equations(
             method, engine="diagram", canonical_fock=True, **dress_kwargs)
-        eqs, intermediates = _dress_operator_equations(eqs)
-        return emit_planck_translation_unit(
-            method, eqs, intermediates=intermediates or None)
+        if dressing == "derived":
+            # W3.2: the factorizer derives operators from each term's own
+            # contraction tree instead of matching hand-seeded fingerprints. It
+            # is deliberately NOT applied here -- it runs AFTER spin_adapt below,
+            # because it keys on contraction structure and the adapted manifold is
+            # the one that reaches the emitter. `recognized` dresses here because
+            # its specs must then be adapted alongside the terms.
+            pass
+        else:
+            eqs, dressed_intermediates = _dress_operator_equations(eqs)
+            dressed_intermediates = dressed_intermediates or None
+    else:
+        eqs = generate_cc_equations(method, **kwargs)
 
-    eqs = generate_cc_equations(method, **kwargs)
+    if ucc and spin_adapt:
+        # Both resolve spin, in opposite directions: spin_adapt COLLAPSES the
+        # blocks into one spatial tensor per rank, ucc KEEPS them resolved. Running
+        # both would collapse and then attempt to re-resolve, which is not a
+        # composition -- raise rather than pick a winner, the same way
+        # dress_operators/factorize_tau do.
+        raise ValueError(
+            "ucc and spin_adapt are mutually exclusive: spin adaptation collapses "
+            "spin blocks into one spatial tensor per rank, while UCC keeps them "
+            "resolved. Pass only one.")
+
+    if ucc:
+        # U4: keep the spin blocks resolved instead of collapsing them, so an
+        # unrestricted reference drives one residual per stored block
+        # (`doubles_aaaa`, `doubles_abab`, ...). Every target is block-tagged, so
+        # the emitted bundle carries no per-rank reference residual at all -- an
+        # ALL-SECTORS bundle, which the runtime accepts as of U4.0.
+        from .spin import ucc_adapt_equations
+        eqs = ucc_adapt_equations(eqs)
 
     if spin_adapt:
         # R1.0: spin-adapt the GCC manifold to restricted (spatial) terms so the
@@ -1025,6 +1131,28 @@ def print_cpp_planck(
         # not spin-orbital algebra bound to spatial storage (the defect).
         from .spin import spin_adapt_equations
         eqs = spin_adapt_equations(eqs)
+
+        # V1.2.2: the dressed operator specs must be adapted TOO, not left in GCC form.
+        # Adaptation changes three of the five declared layouts (tau vvoo->oovv, tau_c
+        # vvoo->oovv, Wmbej ovvo->oovv), so emitting the GCC specs alongside a
+        # spin-adapted residual declares one layout and builds another -- the residual
+        # would reference spatially-adapted Wmbej while build_Wmbej built the GCC slot
+        # order. `adapter=` is left at its default here but kept a parameter of
+        # adapt_intermediate_spec so V5 (UCC) is a substitution, not a second path.
+        if dressed_intermediates is not None:
+            from .optimization.intermediates import validate_intermediate_specs
+            from .spin import adapt_intermediate_spec
+
+            dressed_intermediates = [
+                adapt_intermediate_spec(spec) for spec in dressed_intermediates]
+            # V1.1f as a wired assertion, not merely a test: this is the one place a
+            # declared-vs-built layout mismatch would be introduced, so the guard is
+            # load-bearing here rather than precautionary.
+            problems = validate_intermediate_specs(dressed_intermediates)
+            if problems:
+                raise ValueError(
+                    "adapted dressed intermediate specs are invalid: "
+                    + "; ".join(problems))
 
         # CSE intermediate detection (detect_intermediates / rewrite_equations)
         # was built for the raw occ-first spin-orbital layout and is NOT validated
@@ -1034,9 +1162,26 @@ def print_cpp_planck(
         # (~1544 build_W_* functions -> a ~26 min -O3 registry compile). So the
         # two are mutually exclusive: spin-adaptation forces intermediates OFF
         # until CSE is validated on the spatial layout. See
-        # docs/CCGEN_KERNEL_WIRING_MULTISECTOR_SCOPE.md.
+        # docs/CCGEN_CCSDTQ_MULTISECTOR.md.
         if include_intermediates:
             include_intermediates = False
+
+    if ucc and include_intermediates:
+        # Same reasoning as the spin_adapt force-off above: CSE was built for the
+        # raw occ-first spin-orbital layout and is not validated on spin-RESOLVED
+        # terms either, and UCC multiplies the term count by the block count, so
+        # the compile-time argument is strictly worse here.
+        include_intermediates = False
+
+    # V1.2.4: same force-off under dressing. CSE and dressing both materialize through the
+    # `intermediates` channel, so running both would need a merge the emitter has no
+    # ordering contract for. Kept off (not an error) to mirror the spin_adapt precedent
+    # above -- a caller passing the default-ish `include_intermediates` should not have a
+    # dressed build fail. V1.1f measured CSE specs clean on both the GCC and spin-adapted
+    # paths (23/23), so the remaining reasons are compile time (~1544 build_W_*, ~28 min at
+    # -O3) and the absence of a numeric gate, NOT a known index defect.
+    if dress_operators and include_intermediates:
+        include_intermediates = False
 
     tau_spec = None
     if factorize_tau:
@@ -1072,12 +1217,42 @@ def print_cpp_planck(
     if tau_spec is not None:
         intermediates = [tau_spec] + list(intermediates or [])
 
+    # V1.2.1: the dressed operator specs ride the same `intermediates` channel as CSE
+    # and tau, so the emitter's existing builder/local-resolution path handles them
+    # unchanged. Dressing and CSE are mutually exclusive (V1.2.4), so there is nothing
+    # to merge here -- but assert rather than assume, since a silent overwrite would
+    # drop one set of builders and only show up as a link error.
+    if dressing == "derived":
+        # W3.2: factorize LAST, on whatever manifold the composition above
+        # produced (GCC, spin-adapted, or UCC). The factorizer keys on
+        # contraction structure and does not care how a factor is named, so it
+        # takes the adapted terms directly -- which also means its specs need no
+        # adapt_intermediate_spec pass, because they are derived FROM the adapted
+        # layout rather than declared against the GCC one. That is the structural
+        # difference from `recognized`, and the reason the two run at different
+        # points rather than sharing one call site.
+        from .optimization.factorize import factorize_equations
+        eqs, dressed_intermediates = factorize_equations(eqs, spatial=spin_adapt)
+        dressed_intermediates = dressed_intermediates or None
+
+    if dressed_intermediates is not None:
+        assert not intermediates, (
+            "dressed operators and CSE/tau intermediates both populated; "
+            "V1.2.4's mutual exclusion is not holding")
+        intermediates = dressed_intermediates
+
     return emit_planck_translation_unit(
         method,
         eqs,
         intermediates=intermediates,
-        force_arbitrary=force_arbitrary,
-        spin_adapted=spin_adapt,
+        # UCC terms are already resolved AlgebraTerms, exactly like spin-adapted
+        # ones, so the closed-shell relabel-only lowering must not run on them
+        # either -- and it would crash on the block-tagged target names.
+        force_arbitrary=force_arbitrary or ucc,
+        spin_adapted=spin_adapt or ucc,
+        # U5.0: prefix the emitted SYMBOLS so a UCC TU can coexist with the RCC
+        # one for the same method (they collide otherwise).
+        ucc=ucc,
     )
 
 

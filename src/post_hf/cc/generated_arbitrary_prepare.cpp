@@ -33,8 +33,12 @@ namespace HartreeFock::Correlation::CC
             return out;
         }
 
-        TensorCCBlockCache rebind_physicist(TensorCCBlockCache chem)
-        {
+    } // namespace (anonymous)
+
+    // Declared in generated_arbitrary_runtime.h: every generated-kernel consumer needs this,
+    // not just the arbitrary-order path (V1.3/T1b).
+    TensorCCBlockCache rebind_physicist(TensorCCBlockCache chem)
+    {
             TensorCCBlockCache phys;
             phys.oooo = swap_mid_axes(chem.oooo); // <ij|kl> = (ik|jl)
             phys.ooov = swap_mid_axes(chem.ooov); // <ij|ka> = (ik|ja)
@@ -44,10 +48,9 @@ namespace HartreeFock::Correlation::CC
             phys.ovvv = swap_mid_axes(chem.ovvv); // <ia|bc> = (ib|ac)
             phys.vvvv = swap_mid_axes(chem.vvvv); // <ab|cd> = (ac|bd)
             phys.memory_report = std::move(chem.memory_report);
-            phys.total_bytes = chem.total_bytes;
-            return phys;
-        }
-    } // namespace
+        phys.total_bytes = chem.total_bytes;
+        return phys;
+    }
 
     std::expected<ArbitraryOrderTensorCCState, std::string>
     prepare_generated_arbitrary_order_state(
@@ -95,6 +98,79 @@ namespace HartreeFock::Correlation::CC
         {
             return std::unexpected(
                 "prepare_generated_arbitrary_order_state: " + std::string(ex.what()));
+        }
+    }
+
+    std::expected<ArbitraryOrderTensorCCState, std::string>
+    prepare_generated_ucc_state(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        int max_excitation_rank,
+        const std::string &tag)
+    {
+        if (max_excitation_rank < 1)
+        {
+            return std::unexpected(
+                "prepare_generated_ucc_state: max_excitation_rank must be at least 1.");
+        }
+
+        auto uhf_res = build_uhf_reference(calculator);
+        if (!uhf_res)
+            return std::unexpected(uhf_res.error());
+        const UHFReference &uhf = *uhf_res;
+
+        // The MO-basis spin Fock matrices. Both AO Fock matrices are persisted by
+        // the SCF (`_info._scf.{alpha,beta}.fock`), so this is a transform, not a
+        // rebuild. Each spin uses ITS OWN coefficients: for a UHF reference the
+        // two MO bases differ, which is the whole reason the blocks are split.
+        const Eigen::MatrixXd fock_alpha_mo =
+            uhf.C_alpha.transpose() * calculator._info._scf.alpha.fock * uhf.C_alpha;
+        const Eigen::MatrixXd fock_beta_mo =
+            uhf.C_beta.transpose() * calculator._info._scf.beta.fock * uhf.C_beta;
+
+        auto ref_res = build_ucc_fock_blocks(uhf, fock_alpha_mo, fock_beta_mo);
+        if (!ref_res)
+            return std::unexpected(ref_res.error());
+
+        auto blocks_res = build_ucc_spin_block_cache(
+            calculator, shell_pairs, uhf, ucc_canonical_blocks(), tag);
+        if (!blocks_res)
+            return std::unexpected(blocks_res.error());
+
+        // Denominators for every (rank, tag) up to max_excitation_rank. Built
+        // HERE and not later because ensure_amplitude_sectors sizes each amplitude
+        // block from its own denominator (U2.2); with these missing it would find
+        // no reference rank to fall back to either and skip the block silently.
+        std::vector<std::pair<int, std::string>> denominator_blocks;
+        for (int rank = 1; rank <= max_excitation_rank; ++rank)
+            for (const auto &block_tag : ucc_amplitude_blocks(rank))
+                denominator_blocks.push_back({rank, block_tag});
+
+        auto denom_res = build_ucc_denominator_cache(uhf, denominator_blocks);
+        if (!denom_res)
+            return std::unexpected(denom_res.error());
+
+        try
+        {
+            ArbitraryOrderTensorCCState state{
+                .reference = std::move(*ref_res),
+                // Rebound to the physicist <pq|rs| the generated kernels index.
+                // Every block is self-sourced: swap_mid_axes on the block stored
+                // under its own key. See rebind_physicist_ucc.
+                .mo_blocks = rebind_physicist_ucc(std::move(*blocks_res)),
+                .denominators = std::move(*denom_res),
+                // No amplitudes at all: `by_rank` stays empty (no privileged
+                // reference sector) and the sectors are filled by
+                // ensure_amplitude_sectors once the bundle is known.
+                .amplitudes = ArbitraryOrderRCCAmplitudes{},
+                .max_excitation_rank = max_excitation_rank,
+            };
+            return state;
+        }
+        catch (const std::exception &ex)
+        {
+            return std::unexpected(
+                "prepare_generated_ucc_state: " + std::string(ex.what()));
         }
     }
 
