@@ -63,17 +63,18 @@ option(PLANCK_CC_UCC
 option(PLANCK_CC_ARBITRARY_LOWER_RANKS
     "Also emit rank<4 methods (ccsd/ccsdt) in arbitrary-order spatial form as \
 <method>_arbitrary_planck_generated.cpp, for cross-rank .ccamp restart seeds" OFF)
-# Rewrite the generated residual to reference the recognized CC intermediates
-# (Wmnij/Wabef/Wmbej + tau/tau_c) and emit their build_<name> functions, instead of
-# the flat undressed residual. Costs ~9s at rank 3 / ~62s at rank 4 of extra
-# generation time. Forces intermediates off (CSE and dressing share one emission
+# Rewrite the generated residual to reference dressed CC intermediates and emit
+# their build_<name> functions, instead of the flat undressed residual. WHICH
+# intermediates is PLANCK_CC_DRESSING's job, below. Costs ~9s at rank 3 / ~62s at
+# rank 4 of extra generation time. Forces intermediates off (CSE and dressing share one emission
 # channel), and is rejected by the generator alongside --factorize-tau (which no
 # CMake option currently sets, so there is nothing to guard here at configure time).
 # Applies only to the plain per-method TUs: the arbitrary-order companions emitted by
 # PLANCK_CC_ARBITRARY_LOWER_RANKS stay undressed, because every method's dressed
 # builders would then share one signature and collide in the co-including registry.
-# Default OFF so the default build stays byte-identical; the dressed kernel's
-# link-and-run validation is the open V1.3 work.
+# Default OFF so the default build stays byte-identical. The `derived` route is
+# validated end to end (CH4 2e-10, LiH exact, 3.12x/3.61x wall-clock -- W4/W5,
+# docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md); `recognized` is retired and wrong.
 option(PLANCK_CC_DRESS_OPERATORS
     "Emit dressed CC kernels (W/tau intermediates) instead of the flat residual" OFF)
 # W4.2b: WHICH dressed-operator route, when dressing is on. Mirrors the emitter's
@@ -81,9 +82,14 @@ option(PLANCK_CC_DRESS_OPERATORS
 #   recognized -- hand-seeded Stanton-Gauss fingerprints (retired route)
 #   derived    -- the factorizer, deriving operators from each term's own
 #                 contraction tree (docs/CCGEN_TWO_DRESSING_ROUTES.md)
-# Ignored unless PLANCK_CC_DRESS_OPERATORS=ON. `recognized` is the default so
-# enabling dressing alone keeps its historical meaning.
-set(PLANCK_CC_DRESSING "recognized" CACHE STRING
+# Ignored unless PLANCK_CC_DRESS_OPERATORS=ON. `derived` is the default because
+# `recognized` is RETIRED and produces wrong kernels (52% short on Be/STO-3G, five
+# failed fix attempts -- docs/CCGEN_DRESSING_AND_SPIN_ADAPTATION.md). It defaulted
+# to `recognized` "to keep dressing's historical meaning" until 2026-08-28, which is
+# the same reasoning that made PLANCK_CC_SPIN_ADAPT=OFF ship a ~4x wrong energy:
+# a default preserving historical rather than correct behaviour. Set
+# -DPLANCK_CC_DRESSING=recognized only to reproduce that retired emit.
+set(PLANCK_CC_DRESSING "derived" CACHE STRING
     "Dressed-operator route when PLANCK_CC_DRESS_OPERATORS=ON (recognized|derived)")
 set_property(CACHE PLANCK_CC_DRESSING PROPERTY STRINGS recognized derived)
 if(PLANCK_CC_DRESS_OPERATORS AND
