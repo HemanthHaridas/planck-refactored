@@ -355,7 +355,7 @@ historical design context, but they are no longer the source of truth for
   needs `nso > 16 || ndet > 10000`; and the whole reachable ladder stays under
   0.85 MiB `t3`, inside L2, so the memory-bound hypothesis is untested rather
   than refuted. See `docs/CCGEN_KERNEL_SCALING_SCOPE.md` and
-  `docs/CCGEN_KERNEL_PERFORMANCE_SCOPE.md`.
+  `docs/CCGEN_KERNEL_PERFORMANCE.md`.
 - SAD isolated-atom false-convergence fixed in the SCF convergence gate
   (`is_converged`, `src/scf/scf.cpp`). For small lone closed-shell atoms
   (He/cc-pVDZ) the SAD guess drove DIIS to extrapolate a Fock whose

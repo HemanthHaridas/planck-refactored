@@ -1,7 +1,8 @@
 # Why do the generated CC kernels run slower than hand-written ones?
 
-**Status: measured, and the dominant cause is fixed.** The answer is the tensor accessor, not the
-loop structure.
+**Status: ANSWERED. The dominant cause was the tensor accessor, not the loop structure, and it is
+fixed.** The `_SCOPE` in this filename is historical — this is an answer, and the one item still
+genuinely open (the rank-4 `-O1` registry pin) is named at the bottom rather than scoped here.
 
 The carried figure was "~180× slower, attributed to intermediates rebuilt inside loops and CSE
 being disabled". Measured on a current build the gap was **~37.6×**, and both the number and the
@@ -126,9 +127,16 @@ rank's output re-arms the defect at every other rank.
 
 ## Still open
 
-- **P3 — ratio vs system size.** Scoped in `docs/CCGEN_KERNEL_SCALING_SCOPE.md`. All ratio numbers
-  above come from one point (`bh3`/STO-3G, `nocc=8 nvirt=8`, square), which cannot distinguish a
-  constant 22× tax from a scaling defect — and H1 and H3 make opposite predictions there.
+- ~~**P3 — ratio vs system size.**~~ **ANSWERED** in
+  `docs/CCGEN_KERNEL_SCALING_SCOPE.md`: it is a **scaling defect, not a constant tax** (21.8× →
+  50.1× over six ladder points, no plateau; H3 confirmed, H1 untested because the whole reachable
+  ladder stays inside L2). The caveat below the original bullet was right — one square point
+  cannot distinguish the two, and the ladder that could was built afterwards.
+
+  Since then, **derivation dressing** has been wired and measured at 3.12×/3.61× end-to-end. It
+  addresses the same H3 by a different mechanism than the `_optimal_contraction_order`
+  consumption that document recommends, so **re-run that ladder under `--dressing derived` before
+  attempting the emitter change** — the two fixes may overlap.
 - **Rank 4 is still subject to the `-O1` registry pin** (`CMakeLists.txt:402`), which the rank-3
   path is not. Now that the accessor no longer dominates, that asymmetry is worth re-checking —
   the pin exists because a ~230k-line TU is super-linear to optimize at `-O3`, and the standing

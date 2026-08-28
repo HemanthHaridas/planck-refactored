@@ -74,8 +74,24 @@ the per-target-pairing correction, the `(occ…,vir…)` vs `(vir…,occ…)` tr
 fixture-vacuity traps. Dropped: the F/U step numbering, per-step *Verify:* lines, the design tables
 for options already built, and every hypothesis a later step falsified.
 
-`CCGEN_SPIN_ADAPTATION_SCOPE.md` is the reference U1 works against, so rewriting it now risks
-discarding scope still load-bearing for unstarted work. Target questions:
+**Audit refresh 2026-08-26.** The deferral reason above has expired: it was "U1 works against
+it", and U1-U5.5 all landed. Both docs are now rewritable on the same terms as the others. Two
+further findings from the same pass:
+
+- **`CCGEN_DRESSING_AND_SPIN_ADAPTATION.md` was not merely scope-shaped — its CONCLUSION was
+  false as stated.** It answers "can dressing be combined with spin adaptation?" with "no, and
+  no", reasoning throughout about the **recognition** route only. The **derivation** route does
+  compose, is now wired into production, and measures 3.12x/3.61x. A superseded-conclusion header
+  was added rather than a rewrite, because its diagnosis of *why recognition* fails, its five
+  falsified fix attempts, and its 52 %-short measurement are all still accurate. **A reader
+  landing there previously got a wrong answer with no forward pointer** — worse than a stale
+  status line, which is why it was fixed immediately rather than queued.
+- **`CCGEN_KERNEL_PERFORMANCE_SCOPE.md` was an answer wearing a scope filename**, and its "Still
+  open" P3 bullet had since been answered by `CCGEN_KERNEL_SCALING_SCOPE`. Renamed to
+  `CCGEN_KERNEL_PERFORMANCE.md`, P3 marked answered with the pointer, and the genuinely-open item
+  (the rank-4 `-O1` registry pin) left named. Two inbound references updated.
+
+Still queued, both now unblocked. Target questions:
 
 - **`CCGEN_SPIN_ADAPTATION.md`** — how does a spin-orbital CC equation become a spatial one?
   (the rank-4 multi-sector half of this is already answered in `CCGEN_CCSDTQ_MULTISECTOR.md`)

@@ -1,12 +1,34 @@
 # Can ccgen's dressed-operator factorization be combined with spin adaptation, and is it worth doing?
 
-Short answer: **no, and no.** Each transform is correct alone and the composition is wrong in
-either order, for a structural reason. The measured FLOP payoff (~1.2–1.5× actual on
-spin-orbital, bounded ~2.8–4× spatial) does not justify the research needed to fix it.
+> **SUPERSEDED IN ITS CONCLUSION (2026-08-26). Read this header before the body.**
+>
+> This document answers the question for **one** of ccgen's two dressing routes —
+> **recognition**, which matches hand-seeded Stanton-Gauss fingerprints. For that route the
+> answer below is correct and it stays retired.
+>
+> It is **not** correct as a general claim, and the body reads as one. ccgen's other route,
+> **derivation** (`factorize.py`, operators from each term's own contraction tree), *does*
+> compose with spin adaptation. It is now wired into production, value-gated at ranks 2-4, and
+> measured at **3.12x (LiH) / 3.61x (CH4)** wall-clock with energies matching the undressed
+> baseline to 2e-10 and exactly, respectively.
+>
+> So "dressing and spin adaptation do not compose" is false as stated; what does not compose is
+> *recognition* and spin adaptation. See `CCGEN_TWO_DRESSING_ROUTES.md` (which found the second
+> route) and `CCGEN_WIRING_THE_DERIVATION_ROUTE.md` (which wired it, and records the ERI-symmetry
+> defect that wiring exposed).
+>
+> Kept because its diagnosis of *why recognition* fails, its five falsified fix attempts, and its
+> measured 52 %-short number are all still accurate and still useful.
 
-**Decision: dressing stays opt-in and OFF, and the spin-adapted dressed path is unsupported.**
-`-DPLANCK_CC_DRESS_OPERATORS=ON` generates and compiles, but its RCC kernels are wrong; the
-default build is unaffected and byte-identical.
+Short answer, **for the recognition route**: **no, and no.** Each transform is correct alone and
+the composition is wrong in either order, for a structural reason. The measured FLOP payoff
+(~1.2–1.5× actual on spin-orbital, bounded ~2.8–4× spatial) does not justify the research needed
+to fix it.
+
+**Decision: the RECOGNITION route stays opt-in and OFF, and the spin-adapted recognized path is
+unsupported.** `-DPLANCK_CC_DRESS_OPERATORS=ON -DPLANCK_CC_DRESSING=recognized` generates and
+compiles, but its RCC kernels are wrong. `-DPLANCK_CC_DRESSING=derived` is the supported dressed
+path.
 
 ---
 

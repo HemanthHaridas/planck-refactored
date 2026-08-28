@@ -318,4 +318,4 @@ The last row has a standing follow-on already recorded at `CMakeLists.txt:402`.
 | one-nest-per-term emission (H1's mechanism) | `python/ccgen/emit/planck_tensor_cpp.py:284`, `:443` |
 | unused contraction-order analysis (H3's fix) | `python/ccgen/tensor_ir.py:198,261,283` |
 | `-O1` registry pin (rank 4+ only) | `CMakeLists.txt:402` |
-| measurement record this continues | `docs/CCGEN_KERNEL_PERFORMANCE_SCOPE.md` |
+| measurement record this continues | `docs/CCGEN_KERNEL_PERFORMANCE.md` |
