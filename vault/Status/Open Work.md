@@ -245,25 +245,31 @@ not block this. Full measured rescope in `docs/HPC_REMAINING_SCOPE.md`.
 
 ## ccgen generated-kernel performance
 
-**BLOCKED (2026-08-28): the dressed rank-3 kernel has no reachable caller, so the
-ladder re-run cannot be done as scoped.** Both `CCGEN_KERNEL_SCALING_SCOPE` and
-`CCGEN_KERNEL_PERFORMANCE` say to re-run the six-point ladder under
-`--dressing derived` before consuming `_optimal_contraction_order`. Attempting it
-found: dressing reaches the **plain** per-method TU (measured — 1706 `build_W`
-call sites against 0 undressed), but the only backend that ever called that TU's
-residual was rerouted to the arbitrary-order harness by the rank-3 representation
-fix, and the arbitrary companion TU is **not** dressed (`CMakeLists.txt:72-74`).
-`PLANCK_CC_T3_TIME` sits on the orphaned path and cannot fire in any build.
+**BLOCKED (2026-08-28), on a probe-placement problem only.** Both
+`CCGEN_KERNEL_SCALING_SCOPE` and `CCGEN_KERNEL_PERFORMANCE` say to re-run the
+six-point ladder under `--dressing derived` before consuming
+`_optimal_contraction_order`. `PLANCK_CC_T3_TIME` lives in `tensor_backend.cpp`'s
+`use_generated_kernels` branch, which the rank-3 representation fix rerouted away
+from: with `ARBITRARY_LOWER_RANKS=OFF` the `optimized` backend hard-errors, and
+with it ON it routes to `run_rccgen`, which has no probe. Both branches run, not
+inferred. **Fix: move the probe into the arbitrary-order harness**, where the
+generated residual is actually evaluated (`PLANCK_CC_FIXTURE_DIR` already hooks
+that path), then run the six points in both arms.
 
-**This also puts a question over W5's 3.12x/3.61x**, which was measured through
-the arbitrary harness — by that table, an undressed TU. Either the CMake comment
-is wrong or the speedup came from something else; **one `nm`/breakpoint check
-settles it, and it is the first thing to do.** Do not quote those numbers as
-"dressing speeds up the generated kernel" until then, and do not treat them as
-retired either — they were measured twice with matching energies.
+**A wrong claim was made and retracted in the same session, worth keeping.** The
+first version of this entry said the arbitrary-order companion TUs "stay
+undressed" and therefore the dressed rank-3 kernel had no reachable caller,
+casting doubt on W5's 3.12x/3.61x. **That was wrong** — it trusted a stale
+`CMakeLists.txt` comment (describing a V1.3.1 suppression that V1.3.2 removed)
+plus `build_W:0` in two trees that had `ARBITRARY_LOWER_RANKS=OFF`, where no
+companion TU is emitted at all. Measured directly, one flag varied: the
+companion goes 0 -> 119 `build_W` call sites under `--dressing derived`, same as
+the plain TU. **Dressing reaches the path that runs, and W5's numbers stand as
+measured.** The CMake comment has been corrected. A comment is not a gate --
+third instance in this subsystem, and the first where a stale one invented a
+defect rather than hiding one.
 
-Third instance of the same defect class here (kernel compiles, links, never
-runs). Full record, with the reusable ladder setup:
+Full record and the reusable ladder setup:
 `docs/CCGEN_DRESSED_LADDER_BLOCKED.md`.
 
 

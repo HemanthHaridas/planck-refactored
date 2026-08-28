@@ -144,13 +144,13 @@ per-iteration work.
   the degenerate-ladder trap recorded above.
 
 **The obvious follow-on: re-run this ladder's six points with `--dressing derived`.**
-**BLOCKED as of 2026-08-28 — do not attempt this before reading
-`docs/CCGEN_DRESSED_LADDER_BLOCKED.md`.** The dressed rank-3 kernel has no
-reachable caller (dressing reaches the plain per-method TU; the backend that
-called it was rerouted to the arbitrary harness, which is not dressed), and
-`PLANCK_CC_T3_TIME` sits on the orphaned path. That note also raises a question
-over the 3.12x/3.61x quoted just above, which was measured through the
-arbitrary harness.
+**BLOCKED as of 2026-08-28 — read `docs/CCGEN_DRESSED_LADDER_BLOCKED.md`
+first.** Not for an architectural reason: `PLANCK_CC_T3_TIME` simply sits on the
+code path the rank-3 representation fix rerouted away from, so it cannot fire in
+any build. Moving the probe into the arbitrary-order harness unblocks it. The
+3.12x/3.61x quoted just above **stand as measured** — dressing does reach the
+arbitrary TU that harness runs (verified 0 -> 119 `build_W` sites), contrary to a
+stale CMake comment that briefly suggested otherwise.
  The
 infrastructure now exists (`PLANCK_CC_DRESSING`, and `PLANCK_CC_T3_TIME` for the isolated residual
 timing). That would answer, on the ladder that was designed for it, whether the generated-vs-hand

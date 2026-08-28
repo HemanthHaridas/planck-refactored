@@ -69,9 +69,14 @@ option(PLANCK_CC_ARBITRARY_LOWER_RANKS
 # rank 4 of extra generation time. Forces intermediates off (CSE and dressing share one emission
 # channel), and is rejected by the generator alongside --factorize-tau (which no
 # CMake option currently sets, so there is nothing to guard here at configure time).
-# Applies only to the plain per-method TUs: the arbitrary-order companions emitted by
-# PLANCK_CC_ARBITRARY_LOWER_RANKS stay undressed, because every method's dressed
-# builders would then share one signature and collide in the co-including registry.
+# Applies to BOTH the plain per-method TUs and the arbitrary-order companions
+# emitted by PLANCK_CC_ARBITRARY_LOWER_RANKS -- and it must, since the arbitrary
+# ones are what the registry actually executes (rank >= 4, or rank 3 with that
+# option). This comment previously claimed the companions "stay undressed",
+# describing a V1.3.1 suppression that V1.3.2 removed by method-suffixing every
+# builder (`build_tau_ccsdtq`); it was stale and cost an investigation. Verified
+# 2026-08-28: `--arbitrary-lower-ranks --dressing derived` emits 119 build_W call
+# sites into ccsd_arbitrary_planck_generated.cpp against 0 undressed.
 # Default OFF so the default build stays byte-identical. The `derived` route is
 # validated end to end (CH4 2e-10, LiH exact, 3.12x/3.61x wall-clock -- W4/W5,
 # docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md); `recognized` is retired and wrong.
