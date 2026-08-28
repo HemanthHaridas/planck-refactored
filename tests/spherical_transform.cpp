@@ -9,13 +9,20 @@
 //      not test orthonormality against the Gaussian Gram matrix.)
 //
 //   2. CROSS-CHECK against the hand-coded production matrices
-//      (src/basis/spherical.cpp). The production T⁺ is a pseudoinverse used for
-//      symmetry labeling; for L ≤ 2 its rows are pure harmonics and must be collinear
-//      with the oracle row-by-row. For L ≥ 3 the pseudoinverse legitimately carries
-//      r²-contamination (it is not the pure harmonic), so the row-equality check is
-//      not applied there — instead we verify the production rows still live in the
-//      degree-L polynomial space and have the right shape/rank. The oracle remains the
-//      source of mathematical truth; production is validated where the two must agree.
+//      (src/basis/spherical.cpp). For L ≤ 2 the production rows are collinear with the
+//      oracle row-by-row. For L ≥ 3 they are a DIFFERENT VALID BASIS of the same space
+//      (raw matrices differ by ~0.75, an m-ordering/scaling convention), so row-equality
+//      is not applied there — but two convention-invariant properties are, and they are
+//      the energy-relevant ones (FU3, section 3 below): the rows must be pure harmonics
+//      in the physical (unit-normalized-component) basis, and they must span the same
+//      subspace as the oracle. Those two are what the L ≥ 3 normalization defect
+//      violated; the older shape/rank check passed throughout while the energy was
+//      2.14e-5 wrong for water/cc-pVTZ.
+//
+//      Historical note: this file previously stated that the L ≥ 3 pseudoinverse
+//      "legitimately carries r²-contamination". That described the DEFECT, not a
+//      property of the transform — normalized_pseudoinverse removed it, and the
+//      checks below now pin its absence.
 //
 // The oracle is also exercised at L = 6, 7 (I, K), past the production ceiling, to
 // confirm it keeps producing valid harmonics.
@@ -164,9 +171,70 @@ namespace
         }
     }
 
-    // For all production L: structural sanity (shape + full spherical row rank). The
-    // production pseudoinverse legitimately carries r²-contamination for L ≥ 3, so we
-    // do not require its rows to equal the pure harmonics there.
+    // ── 3. Energy-relevant checks on the PRODUCTION transform (FU3) ──────────────
+    //
+    // These are the two checks whose absence let the L ≥ 3 normalization defect ship
+    // (docs/SPHERICAL_F_SHELL_ACCURACY_SCOPE.md). Both are convention-invariant, so
+    // they do not false-fail on the intra-span basis/m-ordering difference between
+    // production and oracle — whose raw matrices legitimately differ by ~0.75.
+    //
+    // (a) Harmonic purity in the PHYSICAL monomials. max_laplacian undoes the
+    //     unit-normalization weighting before differentiating, so it asks the
+    //     energy-relevant question: are the functions the integral engine actually
+    //     builds pure ℓ-harmonics? Pre-fix this read 2.2e-1 (L=3), 1.8e-1 (L=4) and
+    //     8.4e-2 (L=5), and 0 at L ≤ 2 and L = 6 — exactly the shells the fix touched.
+    void check_production_is_harmonic_in_physical_monomials(int L, double tol)
+    {
+        auto prod = HartreeFock::BasisFunctions::cart_to_sph_block(L);
+        if (!prod)
+        {
+            fail("production cart_to_sph_block failed at L=" + std::to_string(L));
+            return;
+        }
+        const double lap = max_laplacian(*prod, L);
+        if (lap > tol)
+        {
+            std::ostringstream oss;
+            oss << "production L=" << L
+                << ": rows are not pure harmonics in the physical (unit-normalized"
+                   " component) basis (max|∇²|=" << lap
+                << ") — the L>=3 normalization defect";
+            fail(oss.str());
+        }
+    }
+
+    // (b) Span equality with the oracle. The row-space projector is invariant under
+    //     any change of basis WITHIN the span, so it compares the only thing that is
+    //     energy-relevant: which subspace the transform selects. Do NOT compare the
+    //     matrices element-wise — they are different valid bases of the same space.
+    //     Pre-fix this read ~3e-1 for L = 3,4,5.
+    void check_production_spans_oracle_space(int L, double tol)
+    {
+        auto prod = HartreeFock::BasisFunctions::cart_to_sph_block(L);
+        auto rec = HartreeFock::BasisFunctions::cart_to_sph_block_recurrence(L);
+        if (!prod || !rec)
+        {
+            fail("L=" + std::to_string(L) + ": transform unavailable for span check");
+            return;
+        }
+        // Row-space projector P = U Uᵀ with U an orthonormal basis of the rows.
+        auto row_projector = [](const Eigen::MatrixXd &M) {
+            Eigen::JacobiSVD<Eigen::MatrixXd> svd(M.transpose(), Eigen::ComputeThinU);
+            return Eigen::MatrixXd(svd.matrixU() * svd.matrixU().transpose());
+        };
+        const double diff =
+            (row_projector(*prod) - row_projector(*rec)).cwiseAbs().maxCoeff();
+        if (diff > tol)
+        {
+            std::ostringstream oss;
+            oss << "production L=" << L
+                << ": row space differs from the oracle's (max|ΔP|=" << diff
+                << ") — production selects a different ℓ-subspace";
+            fail(oss.str());
+        }
+    }
+
+    // For all production L: structural sanity (shape + full spherical row rank).
     void check_production_structural(int L)
     {
         auto prod = HartreeFock::BasisFunctions::cart_to_sph_block(L);
@@ -204,6 +272,17 @@ int main()
         check_production_structural(L);
     for (int L = 0; L <= 2; ++L)
         check_production_matches_oracle_pure(L, tol);
+
+    // FU3: the energy-relevant checks. Post-fix these hold for the whole production
+    // range, INCLUDING L ≥ 3 — the pseudoinverse no longer carries r²-contamination
+    // once normalized_pseudoinverse scales each Cartesian row. Both are falsifiable:
+    // re-introducing the defect (dropping that row scaling) makes L = 3,4,5 fail with
+    // max|∇²| ~ 1e-1 and max|ΔP| ~ 3e-1 while L ≤ 2 and L = 6 stay green.
+    for (int L = 0; L <= 6; ++L)
+    {
+        check_production_is_harmonic_in_physical_monomials(L, tol);
+        check_production_spans_oracle_space(L, tol);
+    }
 
     // L = 6 production delegates to the recurrence oracle, so the two must be
     // byte-for-byte identical (not merely collinear).
