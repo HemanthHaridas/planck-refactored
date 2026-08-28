@@ -463,7 +463,7 @@ external oracles (PySCF, FCI) rather than to the generator itself.
 - `CCGEN_GENERATION_AND_VALIDATION.md` — generation engines and validation (§3, §4).
 - `CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md` — diagram front end, canonical Fock,
   dressed-operator recognition (§3, §5).
-- `CCGEN_SPIN_ADAPTATION_SCOPE.md` — GCC → RCC/UCC (§6).
+- `CCGEN_SPIN_ADAPTATION.md` — GCC → RCC/UCC (§6).
 - `CCGEN_HIGHER_OPERATOR_REUSE.md` — factorization and the rank-locality theorem (§7).
 - `CCGEN_INTERMEDIATE_MEMORY_LOCALITY_SCOPE.md` — memory-aware emission (§8).
 - `CCGEN_TEACHING_GUIDE.md` — module-level architecture (§2).

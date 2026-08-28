@@ -51,12 +51,8 @@ when both were closed. Verified before rewriting: 12 bridge tests pass, the Be C
 passes (12m01s), and `be_rccsdtq_sto3g` passes end-to-end. **Do not trust a status header without
 running its gate** — four such headers were found false in one session.
 
-Remaining, deliberately deferred until the UCC work (U1–U5) lands:
-
-| doc | lines | landed work |
-|---|---|---|
-| `CCGEN_SPIN_ADAPTATION_SCOPE.md` | 892 | S0–S4 |
-| `CCGEN_KERNEL_WIRING_AND_BENCHMARK_SCOPE.md` | 331 | kernel wiring + benchmarks |
+~~Remaining, deliberately deferred until the UCC work (U1–U5) lands:~~
+**Both retired 2026-08-26** — see the audit refresh below for what replaced them.
 
 **The four that became due 2026-08-22 are DONE (2026-08-25).** All the UCC work landed, so the
 exemption expired for every doc scoping it, and the merge planned here has been carried out:
@@ -74,34 +70,48 @@ the per-target-pairing correction, the `(occ…,vir…)` vs `(vir…,occ…)` tr
 fixture-vacuity traps. Dropped: the F/U step numbering, per-step *Verify:* lines, the design tables
 for options already built, and every hypothesis a later step falsified.
 
-**Audit refresh 2026-08-26.** The deferral reason above has expired: it was "U1 works against
-it", and U1-U5.5 all landed. Both docs are now rewritable on the same terms as the others. Two
-further findings from the same pass:
+**Audit refresh 2026-08-26 — and both remaining rewrites are now DONE.**
 
-- **`CCGEN_DRESSING_AND_SPIN_ADAPTATION.md` was not merely scope-shaped — its CONCLUSION was
-  false as stated.** It answers "can dressing be combined with spin adaptation?" with "no, and
-  no", reasoning throughout about the **recognition** route only. The **derivation** route does
-  compose, is now wired into production, and measures 3.12x/3.61x. A superseded-conclusion header
-  was added rather than a rewrite, because its diagnosis of *why recognition* fails, its five
-  falsified fix attempts, and its 52 %-short measurement are all still accurate. **A reader
-  landing there previously got a wrong answer with no forward pointer** — worse than a stale
-  status line, which is why it was fixed immediately rather than queued.
-- **`CCGEN_KERNEL_PERFORMANCE_SCOPE.md` was an answer wearing a scope filename**, and its "Still
-  open" P3 bullet had since been answered by `CCGEN_KERNEL_SCALING_SCOPE`. Renamed to
-  `CCGEN_KERNEL_PERFORMANCE.md`, P3 marked answered with the pointer, and the genuinely-open item
-  (the rank-4 `-O1` registry pin) left named. Two inbound references updated.
+| retired | into | lines |
+|---|---|---|
+| `CCGEN_SPIN_ADAPTATION_SCOPE.md` | `CCGEN_SPIN_ADAPTATION.md` | 892 -> 143 |
+| `CCGEN_KERNEL_WIRING_AND_BENCHMARK_SCOPE.md` | `CCGEN_KERNEL_WIRING.md` | 331 -> 143 |
 
-Still queued, both now unblocked. Target questions:
+The stated deferral reason — "U1 works against it" — had expired, since U1-U5.5
+all landed. Kept in both: every measured number, and the traps rather than a
+summary of them. `CCGEN_SPIN_ADAPTATION` keeps the finding that most resists
+intuition — **the layer exists for COST, not correctness**: GCC-on-RHF already
+gives the exact closed-shell energy (1e-8 vs PySCF RCCSD), and RCC/UCC exist only
+because the spin-orbital form is ~16x the `t2` storage and ~64x the doubles FLOPs
+— plus four traps that each passed a gate first, including the synthetic `v`
+whose forbidden blocks are zero so a filter "harmlessly" dropped the entire
+exchange. `CCGEN_KERNEL_WIRING` keeps the flag table with the note that **two
+flags have silently produced wrong answers**, both because a default preserved
+historical rather than correct behaviour, and the correction that
+`choose_determinant_backstop` binds the **hand-written path only** — several
+ccgen docs still record its `nso > 16` requirement as universal.
 
-- **`CCGEN_SPIN_ADAPTATION.md`** — how does a spin-orbital CC equation become a spatial one?
-  (the rank-4 multi-sector half of this is already answered in `CCGEN_CCSDTQ_MULTISECTOR.md`)
-- **`CCGEN_KERNEL_WIRING.md`** — how does a generated kernel reach a runnable binary, and what does
-  it cost?
+Part C of the wiring scope (a `benchmark_generated_kernels.py` driver) is
+retired unbuilt, deliberately: `run_regressions.py`'s `requires_build_option`,
+`PLANCK_CC_T3_TIME` and `PLANCK_CC_FIXTURE_DIR` already cover what it proposed,
+and the gap it existed to close — nothing proving the generated path ran — was
+closed by gates asserting the routing line.
 
-When doing it: read `CCGEN_SPIN_ADAPTATION_SCOPE.md` in full first, and move any still-live UCC
-scope into `CCGEN_GCC_TO_UCC_BRIDGE.md` rather than dropping it. Keep the measured numbers, the
-ruled-out hypotheses and the wrong turns — they are part of each answer. Drop step numbering,
-gates-to-write and sequencing diagrams.
+Two further findings from the same audit pass:
+
+- **`CCGEN_DRESSING_AND_SPIN_ADAPTATION.md` was not merely scope-shaped — its
+  CONCLUSION was false as stated.** It answers "can dressing be combined with
+  spin adaptation?" with "no, and no", reasoning throughout about the
+  **recognition** route only. The **derivation** route does compose, is wired
+  into production, and measures 3.12x/3.61x. A superseded-conclusion header was
+  added rather than a rewrite, because its diagnosis of *why recognition* fails,
+  its five falsified fix attempts and its 52 %-short measurement are all still
+  accurate. **A reader landing there previously got a wrong answer with no
+  forward pointer** — worse than a stale status line.
+- **`CCGEN_KERNEL_PERFORMANCE_SCOPE.md` was an answer wearing a scope filename**,
+  and its "Still open" P3 bullet had since been answered by
+  `CCGEN_KERNEL_SCALING_SCOPE`. Renamed to `CCGEN_KERNEL_PERFORMANCE.md`, P3
+  marked answered, the genuinely-open rank-4 `-O1` pin left named.
 
 Judged compliant in the same audit, for the record: `CCGEN_TEACHING_GUIDE`, `CCGEN_REPORT`,
 `CCGEN_GENERATION_AND_VALIDATION` (teaching/report); `CCGEN_HIGHER_OPERATOR_REUSE`,

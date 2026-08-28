@@ -644,7 +644,7 @@ def _closed_shell_tensors(no, nv, seed):
     # the closed-shell relation v[aaaa] = v[abab] - P(v[abab]); that relation
     # needs the exchange term, which a per-line-spin-conserving v lacks (the
     # ket-swapped abab entry is spin-forbidden -> zero here). See the S2.2c note
-    # in CCGEN_SPIN_ADAPTATION_SCOPE.md.
+    # in CCGEN_SPIN_ADAPTATION.md.
     v = np.zeros((n, n, n, n))
     for p in range(n):
         for q in range(n):
@@ -887,7 +887,7 @@ class S22cIntegralCollapseStructureTests(unittest.TestCase):
     v[aaaa] would collapse to just v[abab], not the antisymmetrized combination).
     The exchange term the relation needs lives in separate ccgen terms, not in v.
     So the numeric no-op belongs to a later step with real (chemist 2J-K)
-    integrals -- see the S2.2c note in CCGEN_SPIN_ADAPTATION_SCOPE.md and S2.2d.
+    integrals -- see the S2.2c note in CCGEN_SPIN_ADAPTATION.md and S2.2d.
     Here we pin the rewrite's STRUCTURE: after S2.2a->b->c every doubles factor is
     a single spatial block, the v split fires, and tag/spin stays consistent.
     """

@@ -654,7 +654,7 @@ def _is_same_spin_amplitude(f: SpinFactor) -> bool:
 # relation needs lives in separate ccgen terms, not folded into v. The numeric
 # gate for this collapse is the chemist 2J-K form at S2.2d against real
 # integrals; S2.2c is gated STRUCTURALLY (S22cIntegralCollapseStructureTests) +
-# proven correct by the S2.2d end-to-end residual. See CCGEN_SPIN_ADAPTATION_SCOPE.md.
+# proven correct by the S2.2d end-to-end residual. See CCGEN_SPIN_ADAPTATION.md.
 
 
 def _split_vaaaa(factor: SpinFactor) -> list[tuple[object, SpinFactor]]:
