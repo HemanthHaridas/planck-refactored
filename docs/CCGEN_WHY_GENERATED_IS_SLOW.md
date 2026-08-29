@@ -224,7 +224,7 @@ populated the list, and never re-measured.
 Fixed by building each operator once into a `<kernel>_ops` struct passed by
 `const&`. Measured on CH4: **29.59 s → 16.81 s (1.76x)**, `E_corr` **bitwise
 identical**, rank-4 TU 12.8 → 10.5 MB. Full record:
-`docs/CCGEN_ARBITRARY_HARNESS_COST.md` H5.
+`docs/CCGEN_ARBITRARY_HARNESS_COST.md`.
 
 **Cause 4 — no OpenMP (SCOPED, modelled 3.86x).** There is **zero OpenMP anywhere
 in CC** — not in `src/post_hf/cc/*.cpp`, not in the generated kernels, not in the

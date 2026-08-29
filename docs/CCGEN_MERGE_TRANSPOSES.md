@@ -1,230 +1,198 @@
-# Should `merge_transposes` be threaded into the production dressing path?
+# Should transpose-equivalent dressed operators share one array?
 
-**Scope for in-flight work. Not started — but RE-COSTED 2026-08-29 against a
-profile, and it is worth more than this document concluded.** Opened by
-`CCGEN_WIRING_THE_DERIVATION_ROUTE.md`, which wired the derivation route,
-measured it at 3.12x/3.61x, and left this as the one deferred lever.
+**Yes, and it is worth 1.42x-1.52x — three times what the model that deferred it
+predicted.** Landed 2026-08-29. `merge_transposes` is now unconditional for
+`--dressing derived`; there is no flag.
 
-## Re-costing (2026-08-29) — the original estimate was model-derived and low
+The transform folds operators that differ only by a permutation of their result
+slots onto one shared array, which the call sites then read through that
+permutation instead of each building its own copy. It was already implemented,
+symbolically exact, and value-gated 0/2536 at rank 4 — it simply had no
+production caller. Wiring it was **9 lines in one file, 8 of them comment**.
 
-This document deferred the merge on the grounds that the modelled FLOP saving is
-**1.02x-1.20x** and "the likely win is compile time, not speed". That figure came
-from an **operator-count model**. A profile of the post-H5 generated path
-(`CCGEN_ARBITRARY_HARNESS_COST.md`) contradicts it.
+## What it buys
 
-**Measured operator counts**, spin-adapted `ccsdt`, `factorize_equations(...,
-merge_transposes=True)` against `False`:
+| | rank 3 (`ccsdt`) | rank 4 (`ccsdtq`) |
+|---|---|---|
+| distinct builders | 288 -> **91** (3.2x) | 1615 -> **239** (6.8x) |
+| TU bytes | 802 K -> 523 K (1.53x) | 11.0 M -> 6.6 M (1.68x) |
 
-```
-288 -> 91 operators overall   (3.2x)
-```
+**Runtime, measured on the two generated-route cases** (3 runs each, spread
+±0.03 s, `PLANCK_RCCSDT_BACKEND=optimized`):
 
-**Weighted by measured runtime share** (HF/6-31G, 25 483 leaf samples; builders are
-39.0 % of runtime in total):
-
-| family | share of runtime | before | after | ratio | removable |
-|---|---|---|---|---|---|
-| `t2t2v_oooovv` | **20.4 %** | 38 | **4** | **9.5x** | 18.3 % |
-| `t1t3v_oooovv` | 8.9 % | 19 | 11 | 1.7x | 3.7 % |
-| `t1t1t2v_oooovv` | 5.6 % | 12 | 2 | 6.0x | 4.7 % |
-| **top 3** | **34.9 %** | | | | **26.7 %** |
-
-**Predicted speedup: 1.21x - 1.36x.**
-
-- Upper bound **1.36x** assumes builder cost scales with call count.
-- Lower bound **1.21x** applies H5's measured realization factor. H5 predicted 4x
-  on call count and delivered **2.64x** (0.66), because the eliminated builds were
-  cheaper than average. Assuming the same discount here is the conservative read.
-
-**Even the discounted floor sits at the old model's ceiling.** The operator-count
-model was not wrong about counts; it was wrong to treat operators as equal-cost.
-`t2t2v_oooovv` writes a **rank-6 result over a 9-deep nest** — it is one of the
-most expensive operator shapes emitted, and there are 38 of them that are **one
-contraction** differing only in index slots.
-
-**What this does not claim.** Merging cannot remove all of the 34.9 %: the merged
-operator is still built once, and the call sites still read it (transposed, by
-index, inside the loop nest — no copy). The 26.7 % is what the *duplicate builds*
-cost. Nor is this a measurement — it is a profile-weighted estimate, which is
-strictly better grounded than the operator-count model it replaces but still needs
-M2/M3 below to confirm.
-
-**Revised recommendation: do this next, ahead of the compile-time framing.** The
-mechanism is built, symbolically exact, and value-gated 0/2536 at rank 4. That is
-the position the derivation route was in before it proved worth 3.6x.
-
-
-
-W3 deferred it deliberately — the merge is the end state, and absorbing the
-factorizer's seven selection knobs before the route had proven correct was the
-accumulation W3 set out to avoid. The route is now proven: energies match the
-undressed baseline to 2e-10 (CH4) and exactly (LiH), and W5 gave it real
-wall-clock numbers. The deferral has expired.
-
-## The question, stated carefully
-
-`merge_transposes=True` folds transpose-equivalent operators onto one shared
-array. `CCGEN_OPERATOR_IDENTITY_AND_REUSE.md` measures it as:
-
-| manifold | operators | **modelled savings** | value gate |
+| case | before | after | speedup |
 |---|---|---|---|
-| `ccsd` doubles | 27 → 19 (1.4x) | **1.02x** | 0 / 45 |
-| `ccsdt` triples | 80 → 39 (2.1x) | **1.03x** | 0 / 345 |
-| `ccsdtq` quadruples | 254 → 69 (3.7x) | **1.20x** | 0 / 2536 |
+| `lih_rccsdt_generated_sto3g` | 1.02 s | **0.72 s** | **1.42x** |
+| `ch4_rccsdt_sto3g` | 16.65 s | **10.98 s** | **1.52x** |
 
-**Read those two numeric columns as different quantities, because they are.**
-The 1.4x-3.7x is an *operator count* reduction; the 1.02x-1.20x is the
-*modelled FLOP saving*. Only the second is a performance claim, and it is
-modest — 2-3 % at ranks 2-3.
+Energies are **bitwise identical** — LiH agrees on `E_corr`, `dE`, `rms(res)` and
+`rms(step)` at every one of 62 iterations; CH4's output diffs empty with timers
+stripped — and iteration counts are unchanged (62, 15). So this is per-iteration
+work removed, not faster convergence, which is how a builder-dedup should behave.
 
-So the honest framing is not "the merge is worth 3.7x" — an operator count is not
-a speedup. **But it is also not "probably compile time, not speed", which is what
-an earlier revision of this section concluded.** That reading treated all operators
-as equal-cost. The profile above shows they are not: the 38-member
-`t2t2v_oooovv` family is **20.4 % of runtime by itself**, because it writes a
-rank-6 result over a 9-deep nest, and it merges 38 → 4.
+Compile time and size improve too, though that is the smaller half: the
+`-O1`-pinned `generated_kernel_registry.cpp` 11.68 s -> 10.44 s with its object
+1.50x smaller, `tensor_backend.cpp` 38.86 s -> 35.80 s, binary 1.11x smaller.
 
-**Current best estimate: 1.21x - 1.36x of runtime, plus the compile-time and
-code-size win.** Still to be settled by measurement (M2/M3), but the prior is now
-profile-weighted rather than count-weighted.
+**Incidental, and worth knowing before costing generated-kernel compile time:**
+`generated_kernel_registry.cpp` is the `-O1`-pinned TU but **`tensor_backend.cpp`
+is the expensive one** — 38.9 s against 11.7 s, because it includes
+`ccsdt_planck_generated.cpp` at full `-O3` while the registry is pinned down.
+Timing only the pinned TU understates the cost 3x.
 
-## Why this is worth doing anyway
+## The estimate was wrong twice, in the same direction, for the same reason
 
-Three reasons that do not depend on the FLOP model:
-
-1. **Compile time is a real cost here.** `generated_kernel_registry.cpp` is
-   pinned to `-O1` (`CMakeLists.txt:408-415`) because it is otherwise
-   pathological, and the dressed CCSDTQ TU is 13 MB. 288 builders → fewer is a
-   direct reduction in what the compiler must chew.
-2. **Rank 4 is where the factorizer matters most** and where the merge ratio is
-   largest — and `CCGEN_OPERATOR_IDENTITY_AND_REUSE` records the merge's rank-4
-   value gate (0/2536) as the strongest single result in that document.
-3. **It is already implemented and value-gated.** This is a threading question,
-   not a research one.
-
-## Steps
-
-Ordered so the cheapest step can kill the expensive ones.
-
-### M1 — **DONE (2026-08-29). Confirms the re-cost; the parent doc's figure did not transfer.**
-
-Emitted the spatial `ccsdt` dressed arbitrary-order TU both ways by patching the
-single production `factorize_equations` call at runtime — **no production change**,
-since wiring is M4's job and pre-empting it here would make M2/M3 measure something
-other than what M4 will ship.
-
-| metric | unmerged | merged | ratio |
+| stage | basis | predicted | verdict |
 |---|---|---|---|
-| distinct `build_W_*` definitions | 288 | **91** | **3.16x** |
-| builder call sites | 338 | 127 | 2.66x |
-| TU bytes | 801 770 | 522 557 | 1.53x |
-| TU lines | 23 157 | 15 823 | 1.46x |
+| original | operator-count FLOP model | 1.02x-1.20x, "compile time, not speed" | too low |
+| re-cost | profile-weighted (runtime share x merge ratio) | 1.21x-1.36x | still low |
+| **measured** | **two systems, 3 runs each** | **1.42x / 1.52x** | — |
 
-**The profile's top three families, which is what the re-cost turns on:**
+Both models treated operators as **equal-cost**. They are not: the 38-member
+`t2t2v_oooovv` family was **20.4 % of runtime by itself**, because it writes a
+rank-6 result over a 9-deep nest — and it merges 38 -> 4.
 
-| family | runtime share | unmerged | merged | ratio |
-|---|---|---|---|---|
-| `t2t2v_oooovv` | **20.4 %** | 38 | **4** | **9.5x** |
-| `t1t3v_oooovv` | 8.9 % | 19 | 11 | 1.7x |
-| `t1t1t2v_oooovv` | 5.6 % | 12 | 2 | 6.0x |
+The re-cost additionally applied H5's measured **0.66 realization factor** (H5
+predicted 4x on call count and delivered 2.64x, because the builds it eliminated
+were cheaper than average). **That discount does not transfer, and assuming it
+was not the conservative choice it looked like.** The builds eliminated here are
+the *expensive* ones — the opposite selection bias. **A realization factor encodes
+which work a particular transform removed; it is not a general haircut to apply to
+the next estimate.**
 
-**The parent doc's "59 → 31 builders on spatial `ccsd`" did not transfer**, exactly
-as M1 was told not to assume. At rank 3 the reduction is **288 → 91**, a 3.16x
-ratio against `ccsd`'s 1.9x — the merge gets *better* with rank, consistent with
-`CCGEN_OPERATOR_IDENTITY_AND_REUSE`'s 1.4x → 2.1x → 3.7x trend.
+Two framings to avoid, both of which this document made at some point:
 
-**The merge is genuinely exploiting transposes, not just deduplicating.** One
-surviving operator, `W_t2t2v_oooovv_07fe`, is read at **12 distinct index orders**:
+- **An operator count is not a speedup.** The 1.4x -> 2.1x -> 3.7x figures in
+  `CCGEN_OPERATOR_IDENTITY_AND_REUSE` are counts. Quote the measured 1.42x/1.52x.
+- **"Probably compile time, not speed"** was a conclusion drawn from a model, not
+  a measurement, and it deferred a 1.5x lever for months.
+
+## The causal story was verified, not just the total
+
+Leaf-sample attribution on CH4 (`sample`, ~6700 leaf samples per arm):
+
+| family | merge ratio | before | after |
+|---|---|---|---|
+| `t2t2v_oooovv` | **9.5x** (38 -> 4) | **23.3 %** | **4.1 %** |
+| `t1t1t2v_oooovv` | 6.0x (12 -> 2) | 6.6 % | 1.7 % |
+| `t1t3v_oooovv` | 1.7x (19 -> 11) | 9.7 % | 9.4 % |
+
+The two families that merge hard collapse; the one that barely merges barely
+moves. **That negative control is what separates "the number moved" from "the
+number moved for the stated reason"** — a total can improve for an unrelated
+reason and look identical in a stopwatch.
+
+At rank 4 the same structure is more extreme: `t2t2v_ooooovvv` 95 -> 1,
+`t1t2t2v_ooooovvv` 68 -> 1, `t2t3v_ooooovvv` 313 -> 15.
+
+## Why a wrong merge is a correctness defect
+
+One array now serves many readings. `W_t2t2v_oooovv_07fe` is read at 8 distinct
+index orders and `..._16dd` at 12:
 
 ```
-(i, j, k, l, a, c)   (i, j, k, l, b, c)   (i, k, j, l, c, a)
-(i, k, j, l, c, b)   (j, i, k, l, a, c)   ...
+(i, j, k, l, a, b)  (i, j, k, l, b, a)  (i, k, j, l, a, c)
+(j, i, k, l, a, b)  (k, j, i, l, c, b)  ...
 ```
 
-**That is the property M5's call-site gate must protect**, and it is why a wrong
-merge is a correctness defect rather than a slowdown: one array now serves twelve
-readings, and a dropped or inverted permutation silently computes a different
-tensor.
+A dropped or inverted permutation at any one of them silently computes a
+different tensor while every builder still matches its own spec. That is exactly
+the D4 failure shape — all symbolic objects exact, the emitted C++ computing
+something else.
 
-**M1's verdict: proceed to M2/M3.** The counts support the profile-weighted
-1.21x-1.36x estimate rather than the operator-count model's 1.02x-1.20x, and the
-TU shrinking 1.53x is a real compile-time win on top — on a TU that is `-O1`-pinned
-precisely because it is pathological to compile.
+`test_emitted_builder_matches_spec` is **not vacuous** under merging (91 builders
+checked, 0 bad) but it is **definition-only** and cannot see this. The gate that
+can is `python/ccgen/tests/test_merged_call_sites.py`: it emits the residual
+**both ways and requires the evaluated arrays to agree**. Merging is a pure
+sharing transform, so any misapplied call-site permutation moves the residual
+regardless of which operator or term carries it. It runs at ranks 3 and 4 and is
+mutation-verified at both:
 
-### M2 — compile time and size, which is the likelier win (~M, one build each)
+| mutation | rank | response |
+|---|---|---|
+| swap free indices at a `t2t2v_oooovv` read (3-cycle) | 3 | RED 4.5e-03 |
+| invert a `t2v_ooov` permutation | 3 | RED 8.6e-03 |
+| swap last two indices of a `t1t3v_oooovv` read | 3 | RED 1.5e-03 |
+| swap two free indices of a `t2t3v_ooooovvv` read | 4 | RED 6.7e-03 |
+| swap last two indices of a `t2t2v_oooovv` read | 4 | RED 3.7e-03 |
 
-Build the dressed tree with and without the merge. Time
-`generated_kernel_registry.cpp` specifically — it is the pathological TU — and
-record binary size.
+Rank 3+ is required: every `ccsd` merge permutation is a **self-inverse
+two-element swap**, so applying one backwards is undetectable there. Rank 3 has
+genuine 3-cycles.
 
-*Verify:* a wall-clock compile delta and a byte delta. **If this is the only
-win, say so** and wire it on that basis rather than implying a speed claim the
-FLOP model does not support.
+## Four traps, each of which produced a gate that looked fine
 
-### M3 — runtime, measured not modelled (~S, reuses M2's binaries)
+**1. A fixture can be too GENERAL — the usual vacuity trap inverted.** The gate's
+first run went red at rel=6.4e-02 on 17 doubles terms, all `W_t2v_ooov`. The merge
+plan maps `a049 -> 85b9` at the **identity** permutation while their definitions
+differ:
 
-Run `lih_rccsdt_generated_sto3g` and `ch4_rccsdt_sto3g` on both, three runs
-each, against W5's baseline (LiH 1.64 s, CH4 28.94 s dressed).
+```
+85b9:  t2(c,b,l,j) v(i,c,k,l)
+a049:  t2(b,c,j,l) v(i,c,k,l)
+```
 
-*Verify:* medians and spread. **Expect 1.21x - 1.36x** from the profile-weighted
-re-cost above — not the ~1.03x the original operator-count model predicted, which
-this document now treats as superseded. Below ~1.05x means the profile weighting
-is also wrong and the merge really is a compile-time change; at or above 1.2x it
-is a speed lever and rank 4 deserves the same treatment immediately.
+They differ by a transpose of **`t2`**, not of the result — so the merge is valid
+exactly when `t2(a,b,i,j) == t2(b,a,j,i)`, which RCC amplitudes really satisfy.
+Measured on that pair: **9.3e-02** with a random `t2`, **2.8e-17** with a
+symmetric one. The builder gate withholds antisymmetry from `v` deliberately (an
+invalid ERI relation must not pass vacuously) and this gate inherited the fixture,
+but **withholding a symmetry the physical object HAS manufactures failures**. The
+end-to-end evidence agreed with that reading all along: no real permutation defect
+survives 62 bitwise-identical iterations.
 
-**Measure the `t2t2v_oooovv` family specifically**, via `PLANCK_CC_RANK_TIME` or a
-`sample` on the merged build. It is 20.4 % of runtime and merges 9.5x, so it
-carries most of the predicted effect; if the total moves but that family does not,
-the causal story is wrong even though the number looks right.
+**2. Covering only singles+doubles made the gate blind to the entire point.** H5
+splits the triples residual across `_partN` chunks accumulating into one shared
+`result`, so it is not a single parseable function and the convenient gate stops
+at doubles. But **all 56 `t2t2v_oooovv` reads live in those parts, none in
+doubles** — the family that is the whole reason to do this. A perturbation moved
+the singles+doubles-only gate by **2.2e-16**. The parts sum, so evaluating each
+and adding recovers the residual; they carry no `// Term N` markers, so they need
+their own splitter.
 
-*Energies must be bitwise-identical.* The merge shares arrays between call
-sites — exactly the class of change that was wrong in D4 — so a wrong merge is a
-correctness defect, not a slowdown.
+**3 and 4. Two rank-4-only emitter conventions, each failing with a message that
+names neither the rank nor the cause.** Rank >= 7 targets use the **braced**
+runtime-rank accessor, `result({i, j, k, l, a, b, c, d})`, so a paren capture
+keeps the braces and numpy rejects the einsum with "subscripts must be letters".
+And rank >= 7 builders return **`TensorND`**, not `Tensor<N>D`, so the shared
+`build_emitted_operators` cannot see them at all — a `ccsdtq` residual reads many
+(`W_t3v_ooooovvv_*`, `W_t1t4v_ooooovvv_*`) and fails as an unrelated-looking
+"unknown factor". Rank 4 also needs both `t4` Sz sectors in the fixture (`t4` and
+`t4_aaabaaab` are independent; aaab does not reduce to aabb).
 
-### M4 — thread it, if M2/M3 justify it (~S)
-
-`factorize_equations` already takes `merge_transposes`; `print_cpp_planck` does
-not pass it. The wiring question is whether it becomes a fourth `--dressing`
-value (`derived-merged`), a separate boolean, or simply the default for
-`derived`.
-
-**Prefer making it the default for `derived`** if M3 shows no regression: it
-avoids a fifth axis on a function that already carries 16 branches, and the
-un-merged form has no known advantage. A flag is only justified if M3 finds a
-case where merging loses.
-
-### M5 — extend the builder gate to the merged path (~S)
-
-`test_emitted_builder_matches_spec.py` checks every `build_W_*` against its
-spec. Under merging, several call sites read one array through a permutation, so
-the gate must also check that each *call site* reads its operator correctly —
-the property D3 verified by hand and D4's defect violated.
-
-*Verify:* the extended gate is red if a permutation is dropped at a call site.
-`CCGEN_OPERATOR_IDENTITY_AND_REUSE` warns that every `ccsd` merge permutation is
-a **self-inverse two-element swap**, so applying it backwards is undetectable on
-that manifold — use rank 3+, where 3-cycles exist.
-
-## What this must not do
+## Two constraints that still bind
 
 - **Do not absorb the factorizer's other six knobs.** `top_k`,
   `savings_fraction`, `memory_budget_bytes`, `max_operator_bytes`, `n_occ`,
   `n_vir` stay out of `print_cpp_planck`. W3's condition — one parameter, not
-  seven — is what made the W3.3 deletion possible.
-- **Do not quote 1.4x-3.7x as a speedup.** It is an operator count.
-- **Do not use `random_tensors` in any new gate.** It antisymmetrizes `v`, under
-  which invalid ERI relations are true; that fixture is why a 41/288 defect
+  seven — is what made the W3.3 deletion possible, and merging was added as a
+  fixed behaviour rather than a seventh knob for the same reason.
+- **Do not use `random_tensors` in any new gate here.** It antisymmetrizes `v`,
+  under which invalid ERI relations are true; that fixture is why a 41/288 defect
   passed every symbolic check.
+
+## What is left
+
+**A rank-4 end-to-end run.** The counts and the numeric gate are in hand; what has
+not been done is building the 6.6 MB dressed TU against the `-O1`-pinned registry
+and timing a solve. If one is built, check `be_rccsdtq_sto3g` against
+`-14.4036550465` (its manifest value `-14.4036551081` is a known pre-existing
+6.2e-08 discrepancy, independent of this work).
+
+Beyond that the ranking in `CCGEN_ARBITRARY_HARNESS_COST.md` puts the remaining
+weight on the two triples-residual parts, which no current lever addresses, and on
+H6 (OpenMP) — CC is still the only hot path in Planck with no threading.
 
 ## Key code locations
 
 | what | where |
 |---|---|
-| the merge, already implemented | `manifold_operators_with_plan`, `python/ccgen/optimization/factorize.py:703` |
-| the seam it would thread through | `factorize_equations`, same file |
-| the production caller that does not pass it | `print_cpp_planck`, `python/ccgen/generate.py` (the `dressing == "derived"` branch) |
-| the merge's measurements | `docs/CCGEN_OPERATOR_IDENTITY_AND_REUSE.md` |
-| W5's baseline timings | `docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md` |
+| the merge | `manifold_operators_with_plan`, `python/ccgen/optimization/factorize.py:703` |
+| where it is now switched on | `print_cpp_planck`, `python/ccgen/generate.py` (the `dressing == "derived"` branch) |
+| the call-site gate | `python/ccgen/tests/test_merged_call_sites.py` |
+| the definition-only gate it complements | `python/ccgen/tests/test_emitted_builder_matches_spec.py` |
+| the symbolic identity decision | `docs/CCGEN_OPERATOR_IDENTITY_AND_REUSE.md` |
+| the route this rides on | `docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md` |
 
 ---
 

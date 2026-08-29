@@ -215,7 +215,7 @@ after W4/W5 rather than before.
 
 - **`merge_transposes` is not threaded** on the production path, so `derived`
   emits the un-merged 59 builders on spatial `ccsd` rather than 31. Scoped in
-  `docs/CCGEN_MERGE_TRANSPOSES_SCOPE.md` — which also corrects a reading this
+  `docs/CCGEN_MERGE_TRANSPOSES.md` — which also corrects a reading this
   document invited: the 1.4x -> 2.1x -> 3.7x figures are an **operator count**
   reduction, while the modelled FLOP saving is 1.02x-1.20x. The likely win is
   compile time, not speed, and that should be measured before wiring.

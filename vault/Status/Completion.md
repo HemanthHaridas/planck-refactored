@@ -285,6 +285,71 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **ccgen `merge_transposes` threaded into production — 1.42x / 1.52x measured
+  (M1-M5, 2026-08-29).** Transpose-equivalent derived dressed operators now fold
+  onto one shared array, which the call sites read through a permutation instead
+  of each building its own copy. On spatial `ccsdt` that is **288 -> 91 builders
+  (3.16x)**, with the hottest family `t2t2v_oooovv` going **38 -> 4 (9.5x)**.
+  Unconditional for `--dressing derived`: no flag, no CMake option — the change is
+  **10 lines in one file, 8 of them comment**, since the mechanism was already
+  built, symbolically exact and value-gated 0/2536 at rank 4.
+
+  Measured on the two generated-route cases, 3 runs each: `lih_rccsdt_generated_sto3g`
+  **1.02 s -> 0.72 s (1.42x)**, `ch4_rccsdt_sto3g` **16.65 s -> 10.98 s (1.52x)**,
+  spread ±0.03 s. **Energies bitwise identical** — LiH agrees on `E_corr`, `dE`,
+  `rms(res)` and `rms(step)` at every one of 62 iterations, CH4's full output
+  diffs empty with timers stripped — and iteration counts are unchanged (62, 15),
+  so this is per-iteration work removed rather than faster convergence. Compile
+  time and size improve too: registry TU (`-O1`-pinned) 11.68 s -> 10.44 s and its
+  object 1.50x smaller, `tensor_backend.cpp` 38.86 s -> 35.80 s, binary 1.11x
+  smaller.
+
+  **The estimate was wrong twice, in the same direction, for the same reason.** An
+  operator-count FLOP model said 1.02x-1.20x ("compile time, not speed"); a
+  profile-weighted re-cost said 1.21x-1.36x; measurement said 1.42x-1.52x. Both
+  models treated operators as equal-cost. The re-cost additionally applied H5's
+  measured 0.66 realization factor, which does not transfer — H5's discount existed
+  because the builds *it* removed were cheaper than average, whereas the builds
+  removed here are the **expensive** ones (`t2t2v_oooovv` writes a rank-6 result
+  over a 9-deep nest). **A realization factor encodes which work a transform
+  removed; it is not a general haircut for the next estimate.**
+
+  **The causal story was verified, not just the total.** Leaf-sample attribution on
+  CH4: `t2t2v_oooovv` 23.3 % -> 4.1 % (merges 9.5x), `t1t1t2v_oooovv` 6.6 % -> 1.7 %
+  (6.0x), `t1t3v_oooovv` 9.7 % -> 9.4 % (1.7x). The families that merge hard
+  collapse and the one that barely merges barely moves — the negative control that
+  separates "the number moved" from "the number moved for the stated reason".
+
+  New gate `python/ccgen/tests/test_merged_call_sites.py`: the existing builder gate
+  is definition-only and cannot see a call site reading a merged array through the
+  wrong permutation (the D4 failure shape), so this one emits the residual **both
+  ways and requires equality**. Mutation-verified — three independent call-site
+  perturbations go red at 1.5e-03 to 8.6e-03. **Two defects in the gate itself are
+  worth carrying:** covering only singles+doubles made it blind to the entire point
+  (**all 56 `t2t2v_oooovv` reads live in the H5 `_partN` triples chunks**, none in
+  doubles; the perturbation moved it 2.2e-16), and a fixture can be too **general**
+  — a random `t2` made 17 doubles terms look broken at 6.4e-02, because the merge
+  is justified by `t2(a,b,i,j) == t2(b,a,j,i)`, a symmetry real amplitudes have
+  (2.8e-17 once imposed). Withholding a symmetry the physical object **has**
+  manufactures failures, the inverse of the usual vacuity trap.
+
+  **Rank 4 needed no new mechanism** — `-DPLANCK_CC_MAXORDER=4` appends `ccsdtq`
+  to the same method list through the same emit path, and merging is
+  unconditional, so it already applies. The reduction roughly **doubles** with
+  rank: **1615 -> 239 builders (6.8x)** against rank 3's 3.2x, TU 11.0 MB ->
+  6.6 MB, with families as extreme as `t2t2v_ooooovvv` 95 -> 1 and
+  `t2t3v_ooooovvv` 313 -> 15. The M5 gate runs at both ranks and is
+  mutation-verified at both (rank-4 perturbations red at 3.7e-03 / 6.7e-03).
+  Extending it exposed two rank-4-only emitter conventions, each failing with a
+  message naming neither the rank nor the cause: **rank >= 7 targets use the
+  BRACED runtime-rank accessor** (`result({i, j, ...})`, which numpy rejects as
+  non-letter subscripts) and **rank >= 7 builders return `TensorND`**, invisible
+  to `build_emitted_operators`'s fixed-rank regex, so a `ccsdtq` residual could
+  not be evaluated at all until a local pass materialized them. What remains
+  untried at rank 4 is only an end-to-end RUN — building the 6.6 MB dressed TU
+  against the `-O1`-pinned registry and timing a solve. Full record:
+  `docs/CCGEN_MERGE_TRANSPOSES.md`.
+
 - CC tensor element accessors inlined (`src/post_hf/cc/common.h`), the dominant
   cost in every CC kernel. `Tensor{2,4,6}D::operator()` and the runtime-rank
   `TensorND` / `DenseTensorView` / `ConstDenseTensorView` braced-index accessors
