@@ -135,15 +135,17 @@ rank's output re-arms the defect at every other rank.
 
   Since then, **derivation dressing** has been wired and measured at 3.12×/3.61× end-to-end. It
   addresses the same H3 by a different mechanism than the `_optimal_contraction_order`
-  consumption that document recommends, so **re-run that ladder under `--dressing derived` before
-  attempting the emitter change** — the two fixes may overlap. **That re-run is IN PROGRESS as of
-  2026-08-29** — see `docs/CCGEN_DRESSED_LADDER_SCOPE.md`. `PLANCK_CC_T3_TIME` sits on the code
-  path the rank-3 representation fix rerouted away from and cannot fire in any build; it is
-  replaced by a three-arm probe. Note two findings from that work: the arms have **no
-  residual-level agreement gate** (distinct solvers, distinct amplitude representations, both
-  correct), so the re-run times whole iterations and validates by converged energy; and its
-  exponents therefore describe *"solver iteration"* rather than *"triples kernel"*. The 3.12×/3.61×
-  stand as measured; dressing does reach the arbitrary TU that harness runs.
+  consumption that document recommends, so the two may overlap.
+
+  **Settling that by measurement was attempted and abandoned (2026-08-29).** `PLANCK_CC_T3_TIME`
+  cannot fire in any build (it is on the branch the rank-3 representation fix rerouted away from),
+  and a replacement probe established that the hand-written and generated arms have **no
+  residual-level agreement gate** — distinct solvers, distinct amplitude representations, both
+  correct, no shared state where residuals are elementwise comparable. What remains measurable is
+  whole-iteration timing, which describes *"solver iteration"* rather than *"triples kernel"*.
+  **Code-level comparison and FLOP estimates are the actionable levers; the measurement route is
+  closed.**
+
 - **Rank 4 is still subject to the `-O1` registry pin** (`CMakeLists.txt:402`), which the rank-3
   path is not. Now that the accessor no longer dominates, that asymmetry is worth re-checking —
   the pin exists because a ~230k-line TU is super-linear to optimize at `-O3`, and the standing

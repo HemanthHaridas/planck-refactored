@@ -143,30 +143,30 @@ per-iteration work.
   grew slightly between the two (3.12 → 3.61) but with `o` and `v` both changing, which is exactly
   the degenerate-ladder trap recorded above.
 
-**The obvious follow-on: re-run this ladder's six points with `--dressing derived`.**
-**BLOCKED as of 2026-08-28 — read `docs/CCGEN_DRESSED_LADDER_SCOPE.md`
-first.** Not for an architectural reason: `PLANCK_CC_T3_TIME` simply sits on the
-code path the rank-3 representation fix rerouted away from, so it cannot fire in
-any build, and it has been replaced by a three-arm probe (`PLANCK_CC_T3_LADDER`).
-Two further results from that work bear on this document. **(1)** A two-armed
-dressed-vs-undressed comparison would drop the hand-written column, which is the
-known-good asymptotic standard excess scaling is measured against, not merely a
-baseline — so the probe keeps three arms. **(2)** The arms have **no
-residual-level agreement gate**: they are distinct solvers with distinct amplitude
-representations, both individually correct, with no shared intermediate state
-where their residuals are elementwise comparable. The re-run therefore times whole
-iterations and validates by converged energy, and **its exponents describe "solver
-iteration" rather than "triples kernel" — do not quote them against the
-`o^4.87 v^4.52` fitted here.** The
-3.12x/3.61x quoted just above **stand as measured** — dressing does reach the
-arbitrary TU that harness runs (verified 0 -> 119 `build_W` sites), contrary to a
-stale CMake comment that briefly suggested otherwise.
- The
-infrastructure now exists (`PLANCK_CC_DRESSING`, and `PLANCK_CC_T3_TIME` for the isolated residual
-timing). That would answer, on the ladder that was designed for it, whether the generated-vs-hand
-exponents `o^0.93 v^0.34` shrink under dressing or merely shift. **Do that before consuming
-`_optimal_contraction_order`** — if dressing already flattens the exponents, the two fixes overlap
-and the emitter change may be redundant rather than additive.
+**A re-run of this ladder under `--dressing derived` was attempted and
+ABANDONED (2026-08-29).** The reason is worth recording, because it bounds what
+this ladder can ever deliver.
+
+`PLANCK_CC_T3_TIME` cannot fire in any build — it sits in the
+`use_generated_kernels` branch that the rank-3 representation fix rerouted away
+from. A replacement three-arm probe was built and it established something more
+basic: **the hand-written and generated arms have no residual-level agreement
+gate.** They are distinct solvers with distinct amplitude representations, both
+individually correct (each converges to `E_corr = -0.0791116825` on CH4, PySCF to
+1.4e-08), with no shared intermediate state where their residuals are elementwise
+comparable. Four framings were tried and all failed; `restore` in particular
+belongs to a wedge-packed *amplitude* and annihilates a raw residual (2.0e+05),
+which `CCGEN_RANK3_KERNEL_AND_SOLVER.md:21-24` had already established.
+
+The only remaining comparison is whole-iteration timing validated by converged
+energy — which measures *"solver iteration"*, not *"triples kernel"*, since each
+arm's own overhead is inside it. That does not answer this document's question,
+and it cannot be quoted against the `o^4.87 v^4.52` fitted here.
+
+**So the actionable levers here are code-level comparison and FLOP estimates, and
+the measurement route is closed.** The recommendation below stands on the fit
+already in this document; do not reopen the dressed re-run expecting it to
+adjudicate.
 
 **One constraint carries over unchanged.** `choose_determinant_backstop` still gates which systems
 reach a generated kernel *by the hand-written route* — but not the generated one. `optimized`
