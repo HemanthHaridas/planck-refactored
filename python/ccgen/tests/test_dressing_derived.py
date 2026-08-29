@@ -20,14 +20,36 @@ import unittest
 
 class DressingDerivedTests(unittest.TestCase):
     def test_production_matches_the_standalone_bridge(self):
-        """The whole point of W3.2: a caller, with no behaviour change."""
+        """The whole point of W3.2: a caller, with no behaviour change.
+
+        M4 made `merge_transposes` unconditional for `derived`, so the bridge --
+        which still defaults it False, and has no production caller -- must be
+        asked for the same setting or this compares two different emits. The
+        property under test is unchanged: production must not grow behaviour the
+        value gate never covered.
+        """
         from ccgen.generate import generate_cc_equations, print_cpp_planck
         from ccgen.optimization.factorize import emit_factorized_from_equations
 
         via_production = print_cpp_planck("ccsd", dressing="derived")
         eqs = generate_cc_equations("ccsd", engine="diagram", canonical_fock=True)
-        via_bridge = emit_factorized_from_equations("ccsd", eqs)
+        via_bridge = emit_factorized_from_equations("ccsd", eqs,
+                                                    merge_transposes=True)
         self.assertEqual(via_production, via_bridge)
+
+    def test_production_actually_merges(self):
+        """M4: guard the setting above from being silently relaxed.
+
+        If production stopped merging, the assertion above would still pass by
+        matching an unmerged bridge -- so pin the direction explicitly.
+        """
+        from ccgen.generate import generate_cc_equations, print_cpp_planck
+        from ccgen.optimization.factorize import emit_factorized_from_equations
+
+        eqs = generate_cc_equations("ccsd", engine="diagram", canonical_fock=True)
+        unmerged = emit_factorized_from_equations("ccsd", eqs,
+                                                  merge_transposes=False)
+        self.assertNotEqual(print_cpp_planck("ccsd", dressing="derived"), unmerged)
 
     def test_none_is_the_undressed_default(self):
         from ccgen.generate import print_cpp_planck
