@@ -120,32 +120,88 @@ fixed->arbitrary. **The arms must be seeded from one source and converted, or
 they are not evaluating the same amplitudes**, which would void the comparison
 entirely.
 
-Obstacle 2 is the load-bearing one. It is also exactly the mismatch that caused
-the `-7.56e-05` defect, so it must be handled explicitly rather than by
-convenience.
+**Both were resolved by T1, in the opposite direction to the one expected** —
+obstacle 1 by *not* exporting the kernel (the probe is hosted where it already
+lives), and obstacle 2 by the pre-existing `to_tensor_nd(const Tensor6D&)`, which
+is layout-preserving because the two types already share an occ-first axis order.
+See T1. They are left stated here because the reasoning that made them look
+expensive is what selected the design, and because obstacle 2 is the same
+representation mismatch that caused the `-7.56e-05` defect — the cheap conversion
+does not make the agreement gate optional.
 
 ## Steps
 
 Ordered so the cheapest step can kill the expensive ones.
 
-### T1 — decide the arm-hosting question (~S, no code)
+### T1 — decide the arm-hosting question — **DONE (2026-08-28)**
 
-Two options, and T1 is choosing between them, not building:
+**Decision: host the probe in `tensor_backend.cpp`, not the arbitrary harness.
+This reverses the recommendation this scope was written with**, on evidence
+gathered while doing T1. Nothing is exported and no existing signature changes.
 
-| | host in `tensor_backend.cpp` | host in the arbitrary harness |
-|---|---|---|
-| hand-written arm | already local | needs a header + conversion |
-| generated arm | needs the dressed arbitrary kernel reachable | already local |
-| dressed vs undressed | one binary per arm either way | same |
+The scope assumed exporting `build_dressed_triples_residual` would cost "a header
++ conversion". Measured, it costs far more, and the arbitrary-harness direction
+costs far less than assumed.
 
-**Prefer hosting in the arbitrary harness** and exporting the hand-written
-kernel: it is the path that actually runs, so timings there are the ones that
-matter, and the alternative resurrects the abandoned branch this whole problem
-came from.
+**Why not export the hand-written kernel.** Its signature names four types, and
+**three of them are also file-local to `tensor_backend.cpp`**:
 
-*Verify:* a written decision naming which file the probe lives in, and what has
-to be exported. If exporting `build_dressed_triples_residual` drags in more than
-its intermediates, stop and reconsider — that is a signal the seam is wrong.
+| type | declared in |
+|---|---|
+| `ProductionSpinOrbitalChemistsSystem` | `tensor_backend.cpp` |
+| `DressedTriplesIntermediates` | `tensor_backend.cpp` |
+| `DressedSinglesDoublesIntermediates` | `tensor_backend.cpp` |
+| `TensorTriplesWorkspace` | `tensor_backend.h` (already public) |
+
+Exporting the kernel means moving three internal types into a header — a wide
+diff, on types with existing in-file callers, to serve a diagnostic probe. That
+is precisely the "drags in more than its intermediates" signal T1 was told to
+stop on.
+
+**Why the arbitrary harness comes to us instead.** Its entire surface is
+*already public* in `generated_arbitrary_runtime.h`:
+`evaluate_generated_arbitrary_order_residuals` (`:172`),
+`ArbitraryOrderTensorCCState`, `GeneratedArbitraryOrderKernels`,
+`rebind_physicist`, and — decisively — `to_tensor_nd` overloads for
+`Tensor2D/4D/6D` (`:94-97`).
+
+**This dissolves obstacle 2.** `to_tensor_nd(const Tensor6D&)` is a pure
+reinterpretation: same `data` buffer, dims copied in order, **no permutation**
+(`generated_arbitrary_runtime.cpp:117`). It is exact because the two layouts
+already agree — `RCCSDTAmplitudes::t3` is documented `(i,j,k,a,b,c)` and
+allocated `(n_occ x3, n_virt x3)` (`amplitudes.h:43`, `amplitudes.cpp:478`),
+which is exactly `rank_dims`' occ-first order (`amplitudes.cpp:54-62`). **The
+`(vir...,occ...)` transpose recorded in `CCGEN_SPIN_ADAPT_DEFAULT.md` is a
+ccgen-Python-vs-C++ concern and does not apply between these two C++ types.**
+
+So the conversion T2 was scoped to build already exists, is one call, and is
+layout-preserving.
+
+**Downstream-caller impact: none.** Verified by grep over `src/` and `tests/`:
+
+- `build_dressed_triples_residual`, `build_dressed_triples_intermediates`,
+  `build_dressed_sd_intermediates` — **no callers outside `tensor_backend.cpp`**.
+  Nothing moves, so nothing can break.
+- `to_tensor_nd` — **no callers outside its own definition file**. Consuming it
+  adds a first caller rather than changing behaviour for an existing one.
+- `evaluate_generated_arbitrary_order_residuals` and `rebind_physicist` are
+  already public and already called by `rccgen.cpp`; the probe becomes an
+  additional caller of an unchanged signature.
+
+The one direction that does **not** exist is `TensorND -> Tensor6D`. The probe
+does not need it: it seeds *from* the hand-written amplitudes and converts
+forward, so all three arms read one source.
+
+*Verified:* the decision names its file (`tensor_backend.cpp`), exports nothing,
+and every symbol it consumes is either already public or has no external callers.
+
+**Consequence for T2**, which should be read with this: the agreement gate is
+unchanged and still mandatory, but its risk profile drops sharply — a
+layout-preserving conversion between two types that already share an axis order
+is far less likely to be wrong than the transpose the scope anticipated. Keep the
+gate; the reason it exists is that this codebase has twice timed two different
+equations, and a cheap gate against a now-unlikely failure is still worth its
+cost.
 
 ### T2 — one fixture, three arms, provably identical amplitudes (~M)
 
