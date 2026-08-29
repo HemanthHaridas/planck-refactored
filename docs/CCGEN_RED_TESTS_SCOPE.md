@@ -1,9 +1,12 @@
 # Scope: the nine red ccgen tests
 
-**Scope for in-flight work. Not started.** Written 2026-08-29 after the
-`merge_transposes` work found the suite at `862 passed, 10 failed`. One of those
-ten was caused by that work and is fixed; **the nine below were red before it and
-are red on a clean `HEAD`** (verified in a `git worktree` at HEAD, not inferred).
+**Scope for in-flight work. C and B are DONE (2026-08-29); A remains.** Written
+after the `merge_transposes` work found the suite at `862 passed, 10 failed`. One
+of those ten was caused by that work and is fixed; **the nine below were red
+before it and are red on a clean `HEAD`** (verified in a `git worktree` at HEAD,
+not inferred). C and B account for three of the nine and are now green/skipped,
+leaving **A's six**. A's blocking question — is it test debt or a live defect? —
+is answered: **test debt.** The value probe is green (see below).
 
 **None is a live product defect.** Every one is a *test* that outlived its
 premise, or an environment gap. That is the finding, and it is also the risk: a
@@ -19,12 +22,14 @@ explicitly skipped, not to keep explaining them.
 | B | 2 in `test_iterate_amps_fixed_point.py` | pyscf absent; the skip guard does not fire | environment |
 | C | 1 in `test_optimizations.py` | **asserts the antisymmetry defect W4.3 fixed** | `04a5ac2b` |
 
+**Status: C DONE, B DONE, A open.**
+
 Ordered below by cost, cheapest first. **C is the one to do first regardless** —
 it is a stale gate pinning a known-wrong phase, so it is actively misleading.
 
 ---
 
-## C — one test asserts a bug that was fixed (~XS, do this first)
+## C — **DONE (2026-08-29).** One test asserted a bug that was fixed
 
 `test_planck_term_uses_lowered_eri_block_and_phase` asserts that `v(a,i,j,b)`
 lowers to `-mo_blocks.ovov(i, a, j, b)`. The emitter now produces
@@ -46,20 +51,30 @@ read the wrong block with a bogus sign (see
 `CCGEN_WIRING_THE_DERIVATION_ROUTE.md`). The fix corrected the lowering and left
 this gate behind, still pinning the pre-fix phase.
 
-**The work:** update the assertion to `+mo_blocks.ovvo(i, a, b, j)` and put the
-numeric justification in the test body, so it reads as a claim about spatial ERI
-symmetry rather than a magic string. **Add the counter-assertion too** — that the
-antisymmetric form is NOT emitted — since that is the property W4.3 established
-and nothing else in this file pins it.
+**What landed.** The assertion is now `mo_blocks.ovvo(i, a, b, j)`, with the
+`-ovov` measurement above written into the docstring so the phase reads as a claim
+about spatial ERI symmetry rather than a magic string — the absence of any
+docstring is how the stale assertion survived a lowering rewrite. Two additions
+beyond the minimum:
 
-*Verify:* green, and re-introducing the antisymmetry relation in
-`lowering/restricted_closed_shell.py` turns it red.
+- **A counter-assertion**, `assertNotIn("ovov(i, a, j, b)")`. That is the property
+  W4.3 established and nothing else in the file pinned it; without it the gate
+  only checks that the right block appears, not that the wrong one is gone.
+- **A second test**, `test_spatial_eri_lacks_the_antisymmetry_the_lowering_must_not_use`,
+  which executes the numeric claim instead of quoting it. Its fixture carries only
+  the real spatial symmetries and is deliberately **not** antisymmetrized — under
+  an antisymmetric `v` the relation it rejects becomes true and it would pass
+  vacuously, which is the same trap that let the 41/288 defect through every
+  symbolic check.
 
-**Do not** "fix" this by making the emitter match the test.
+**Mutation-verified:** swapping `_ERI_SYMMETRY_PERMUTATIONS` back to
+`ANTISYMMETRIZED_ERI_SYMMETRIES` in `lowering/restricted_closed_shell.py`
+reproduces exactly the old `-mo_blocks.ovov(i, a, j, b)` and turns the gate red.
+So it fails for the defect it exists to catch, not merely for a changed string.
 
 ---
 
-## B — two tests cannot skip when pyscf is missing (~XS)
+## B — **DONE (2026-08-29).** Two tests could not skip when pyscf is missing
 
 `test_lih_is_a_fixed_point_with_live_triples` and `test_be_triples_are_inert`
 both intend to skip without pyscf — each wraps its call in
@@ -73,19 +88,31 @@ inheriting the decorator**, so it reaches `gto.M(...)` and raises
 `NameError: name 'gto' is not defined` — which `except ImportError` does not
 catch.
 
-**The work:** apply the same `skipUnless(_HAVE_PYSCF)` guard that
-`test_reference_vs_pyscf` already uses, importing that flag rather than
-re-deriving it. One decorator, two tests.
+**What landed.** A class-level
+`@unittest.skipUnless(T._HAVE_PYSCF, ...)`, reusing `test_reference_vs_pyscf`'s
+flag rather than re-deriving one so the two cannot disagree about what "have
+pyscf" means. The two per-test `except ImportError` handlers are **deleted**: they
+never fired, and leaving dead handlers beside a working guard invites the next
+reader to trust them.
 
-*Verify:* the two report SKIPPED (not passed, not failed) in an environment
-without pyscf, and still run where it is installed.
+*Verified both directions*, because a guard that always skips is worth nothing:
+
+- Without pyscf, both report **SKIPPED** — not passed, not failed.
+- With `_HAVE_PYSCF` forced true, both **run** and reach pyscf. So the decorator
+  gates on the right condition rather than disabling the tests.
+
+**Checked for the same pattern elsewhere.** `test_spatial_residual_vs_pyscf.py`
+also borrows those helpers with no `_HAVE_PYSCF` mention, but it is already
+correct for a different reason — it does its own `from pyscf import ...` **inside
+the test body**, so a genuine `ImportError` is raised and caught. Left alone.
 
 **Not in scope:** installing pyscf in the default dev environment. These are
-cross-code validation gates and are correctly optional; the defect is that a
-missing optional dependency reports as a failure. **Whether CI has pyscf is worth
-knowing** — if it does not, these two have never run anywhere, and the fixture
-they protect (LiH, because Be's t3 is inert and cannot validate a rank-3 kernel)
-is unguarded.
+cross-code validation gates and are correctly optional; the defect was that a
+missing optional dependency reported as a failure. **Whether CI has pyscf is still
+worth knowing** — if it does not, these two have never run anywhere, and the
+fixture they protect (LiH, because Be's t3 is inert and cannot validate a rank-3
+kernel) is unguarded. The skip now makes that visible instead of drowning it in a
+red count.
 
 ---
 
@@ -166,14 +193,46 @@ wrong invariant, since nothing requires one canonical tree.
    operator count, total savings, and *value preservation* — and drop the
    name-multiset equality.
 
-**Option 2 exposes the gap that most concerns me here.** The value gate
-(`test_factorize_value_preservation`) runs on the **unshuffled** manifold only. So
-whether a shuffled-order decomposition still reproduces its source terms is
-**untested**, at rank 3 and rank 4 alike. If factor order can steer the
-factorizer, value preservation under shuffling is exactly the property that must
-hold — and it is the one nobody has checked. **Measure that first**: it is cheap
-(the value harness exists), and a red result there would reclassify this whole
-item from "stale gate" to "live defect".
+### The value probe — **DONE (2026-08-29). It holds: 0 disagreements.**
+
+This was the measurement that could have reclassified the whole item from "stale
+gate" to "live defect", and it was sequenced first for that reason. The value gate
+(`test_factorize_value_preservation`) ran on the **unshuffled** manifold only, so
+whether a shuffled-order decomposition still reproduces its source terms was
+untested — and that is exactly the property that must hold if factor order can
+steer the factorizer.
+
+Reusing that file's own `_disagreements` oracle (each rewritten term compared
+against **its own** source via `residual_einsum`, so shuffled input is
+self-referencing and needs no new oracle):
+
+| basis | manifold | unshuffled | 4 shuffled seeds |
+|---|---|---|---|
+| GCC | doubles | 0 / 32 | **0** / 30-32 |
+| GCC | triples | 0 / 324 | **0** / 316-322 |
+| spatial | singles | 0 / 4 | **0** / 4 |
+| spatial | doubles | 0 / 21 | **0** / 18-22 |
+
+**Non-vacuity asserted, not assumed** — the shuffle must actually change the
+decomposition or this compares a tree against itself: measured **16-22 operator
+names differ per seed** while the operator count stays at exactly 963, and
+316-322 terms are rewritten and checked each seed. **Mutation-verified**: flipping
+the sign of the rewritten term's coefficient in `rewrite_term_factorized` fails
+all 16 subtests, so the gate detects value defects rather than merely running.
+
+**Conclusion: the factorizer reaches different but equally valid trees.** Factor
+order changes the decomposition, not the value. So the invariance gate asserts
+something **stronger than correctness requires**, and A stays test debt — no live
+defect. Landed as `FactorOrderValueTests` in
+`python/ccgen/tests/test_factorize_value_preservation.py`, covering GCC
+doubles+triples and spatial singles+doubles (spatial stops at `ccsd` because the
+spatial fixture carries no `t3`, the same limit
+`test_spatial_rewrite_is_value_preserving` works under).
+
+**What this does NOT settle:** which invariant the gate SHOULD assert. Option 1
+(canonical tie-break, so the multiset really is order-invariant) is still a
+legitimate choice on build-reproducibility grounds, and this probe does not argue
+against it — it only removes correctness as the reason to hurry.
 
 *Verify:* whichever option, the gate must fail if a real order-dependence is
 introduced — mutation-test it, as `test_merged_call_sites` was.
@@ -182,10 +241,10 @@ introduced — mutation-test it, as `test_merged_call_sites` was.
 
 ## Sequencing
 
-1. **C** (~XS) — stale gate asserting a fixed bug; actively misleading.
-2. **B** (~XS) — one decorator; also answers whether CI has ever run these.
-3. **A's value-preservation-under-shuffle probe** (~S) — the one measurement that
-   could turn this from test debt into a defect. Do it before the restatements.
+1. ~~**C**~~ — **DONE.** Stale gate asserting a fixed bug; was actively misleading.
+2. ~~**B**~~ — **DONE.** One decorator. Whether CI has pyscf is still unanswered.
+3. ~~**A's value-preservation-under-shuffle probe**~~ — **DONE.** 0 disagreements
+   across 4 seeds on both bases; A is test debt, not a defect.
 4. **A's five distributional gates** (~M) — restate claims against measured
    numbers.
 5. **A's invariance gate** (~M) — after the probe decides which invariant is the

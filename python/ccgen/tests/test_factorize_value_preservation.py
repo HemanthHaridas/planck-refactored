@@ -230,6 +230,117 @@ class FactorizedRewritePreservesValueTests(unittest.TestCase):
                                        eqs[manifold], spatial=True)
 
 
+class FactorOrderValueTests(unittest.TestCase):
+    """A's probe: shuffling FACTOR ORDER must not change what a rewrite computes.
+
+    `test_operator_set_invariant_under_factor_order` (test_factorize.py) asserts
+    that the derived operator MULTISET is a function of the terms alone. It has
+    been red since `7bdfdaf1`, and the reason is not a naming wobble: shuffling
+    factor order produces **genuinely different decompositions**. Measured on
+    rank-3 triples, the operator COUNT is invariant (963 every seed) but 16-22
+    operator names differ, and inspecting the specs they are different
+    contractions, not one contraction misnamed:
+
+        base:  t2(a,e,j,k) v(d,e,l,m) t1(b,l) t1(d,i)
+        shuf:  t2(a,e,i,j) v(d,e,l,m) t1(c,m) t1(d,k)
+
+    That raised the question this class answers, and it was the one that could
+    have reclassified those six red gates from test debt to a live defect: the
+    value gate above only ever runs on the UNSHUFFLED manifold, so whether a
+    shuffled decomposition still reproduces its source terms was unmeasured --
+    and that is precisely the property that must hold if factor order can steer
+    the factorizer.
+
+    **It holds. 0 disagreements across 4 seeds**, GCC doubles + triples and
+    spatial singles + doubles. So the factorizer reaches different but equally
+    valid trees, and the invariance gate is asserting something stronger than
+    correctness requires. Nothing here says which invariant SHOULD be asserted --
+    that is the open question in docs/CCGEN_RED_TESTS_SCOPE.md -- but it does say
+    the emitted values are not at risk either way.
+
+    Non-vacuity is asserted rather than assumed: the shuffle must actually change
+    the operator set, and terms must actually be rewritten. Without both, this
+    would compare a decomposition against itself and pass for free.
+    """
+
+    @staticmethod
+    def _shuffled(terms, seed):
+        import random
+
+        from ccgen.project import AlgebraTerm
+
+        random.seed(seed)
+        return [
+            AlgebraTerm(t.coeff,
+                        tuple(random.sample(list(t.factors), len(t.factors))),
+                        t.free_indices, t.summed_indices, t.connected,
+                        t.provenance)
+            for t in terms
+        ]
+
+    def _assert_order_invariant_value(self, label, terms, spatial):
+        for seed in range(4):
+            with self.subTest(label=label, seed=seed):
+                bad, total = _disagreements(self._shuffled(terms, seed),
+                                            spatial=spatial)
+                self.assertGreater(total, 0,
+                                   f"{label} seed {seed}: nothing was rewritten")
+                self.assertEqual(
+                    bad, [],
+                    f"{label} seed {seed}: {len(bad)}/{total} shuffled terms do "
+                    f"not reproduce their source -- factor order changes VALUE, "
+                    f"not just the decomposition:\n" +
+                    "\n".join(f"  {w}" for _t, w in bad[:5]))
+
+    def test_gcc_value_survives_factor_shuffling(self):
+        eqs = generate_cc_equations("ccsdt", engine="diagram",
+                                    canonical_fock=True)
+        for manifold in ("doubles", "triples"):
+            self._assert_order_invariant_value(f"GCC {manifold}", eqs[manifold],
+                                               spatial=False)
+
+    def test_spatial_value_survives_factor_shuffling(self):
+        """Spatial is what production emits, on the spatial fixture.
+
+        `ccsd` rather than `ccsdt`: the spatial fixture carries no `t3`, which is
+        the same limit `test_spatial_rewrite_is_value_preserving` works under.
+        """
+        from ccgen.spin import spin_adapt_equations
+
+        eqs = spin_adapt_equations(generate_cc_equations("ccsd",
+                                                         canonical_fock=True))
+        for manifold in ("singles", "doubles"):
+            self._assert_order_invariant_value(f"SPATIAL {manifold}",
+                                               eqs[manifold], spatial=True)
+
+    def test_the_shuffle_actually_changes_the_decomposition(self):
+        """Without this, the two gates above could pass on identical input."""
+        from collections import Counter
+
+        from ccgen.optimization.factorize import Reuse, identify_tree
+
+        def opset(terms):
+            c = Counter()
+            for t in terms:
+                for _n, r in identify_tree(t):
+                    c[r.op_name if isinstance(r, Reuse) else r.name] += 1
+            return c
+
+        terms = generate_cc_equations("ccsdt", engine="diagram",
+                                      canonical_fock=True)["triples"]
+        base = opset(terms)
+        moved = 0
+        for seed in range(4):
+            got = opset(self._shuffled(terms, seed))
+            self.assertEqual(sum(base.values()), sum(got.values()),
+                             f"seed {seed}: operator COUNT changed; the premise "
+                             "that only the decomposition differs is wrong")
+            moved += sum((got - base).values()) + sum((base - got).values())
+        self.assertGreater(moved, 0,
+                           "no seed changed the operator set -- the value gates "
+                           "above are comparing a decomposition against itself")
+
+
 class PermutedCallSiteTests(unittest.TestCase):
     """O4.2: with `merge_plan_map`, a call site reads its class REPRESENTATIVE's
     array through a permutation — and still reproduces its own term.

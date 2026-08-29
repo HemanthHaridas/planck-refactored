@@ -41,6 +41,16 @@ def _solve_with_matched_integrals(atom, basis, spin=0):
     return e_corr, amps, captured["r"]
 
 
+# Both tests here drive pyscf through `test_reference_vs_pyscf`'s helpers, but
+# that module keeps its pyscf import behind a try/except that leaves `gto`
+# UNBOUND and protects itself with a module-level `skipUnless(_HAVE_PYSCF)`.
+# Borrowing the helpers without inheriting the guard reaches `gto.M(...)` and
+# raises `NameError: name 'gto' is not defined` -- which the per-test
+# `except ImportError` these two used to carry could never catch, so a missing
+# OPTIONAL dependency reported as two hard failures. Those dead handlers are gone;
+# this decorator is what skips. It reuses that module's flag rather than deriving
+# a second one, so the two cannot disagree about what "have pyscf" means.
+@unittest.skipUnless(T._HAVE_PYSCF, "pyscf not importable in this interpreter")
 class IterateAmpsFixedPointTests(unittest.TestCase):
     def _residuals(self, amps, integrals):
         from ccgen.generate import generate_cc_equations
@@ -58,11 +68,8 @@ class IterateAmpsFixedPointTests(unittest.TestCase):
 
     def test_lih_is_a_fixed_point_with_live_triples(self):
         """The R4.2 fixture: converged AND t3 actually carries signal."""
-        try:
-            e_corr, amps, integrals = _solve_with_matched_integrals(
-                "Li 0 0 0; H 0 0 1.6", "sto-3g")
-        except ImportError as exc:  # pragma: no cover
-            self.skipTest(f"pyscf not importable: {exc}")
+        e_corr, amps, integrals = _solve_with_matched_integrals(
+            "Li 0 0 0; H 0 0 1.6", "sto-3g")
 
         # matches hand-written C++ RCCSDT (-0.0204594700) to ~2e-09
         self.assertAlmostEqual(e_corr, -0.020459472, places=7)
@@ -78,11 +85,8 @@ class IterateAmpsFixedPointTests(unittest.TestCase):
 
     def test_be_triples_are_inert(self):
         """Why Be must NOT be used for a rank-3 probe. Pins the trap itself."""
-        try:
-            _e, amps, _integrals = _solve_with_matched_integrals(
-                "Be 0 0 0", "sto-3g")
-        except ImportError as exc:  # pragma: no cover
-            self.skipTest(f"pyscf not importable: {exc}")
+        _e, amps, _integrals = _solve_with_matched_integrals(
+            "Be 0 0 0", "sto-3g")
 
         self.assertLess(float(np.max(np.abs(amps["t3"]))), 1e-12)
         self.assertLess(float(np.max(np.abs(amps["t1"]))), 1e-12)

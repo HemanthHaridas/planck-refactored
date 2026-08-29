@@ -889,6 +889,25 @@ class EmissionTests(unittest.TestCase):
         self.assertIn("result(i, j, a, b)", code)
 
     def test_planck_term_uses_lowered_eri_block_and_phase(self) -> None:
+        """`v(a,i,j,b)` lowers to `+ovvo(i,a,b,j)` -- NOT `-ovov(i,a,j,b)`.
+
+        The two differ by the ERI **antisymmetry** relation `<ic|ak> = -<ic|ka>`,
+        which holds for the antisymmetrized `<pq||rs>` and is **false for the
+        spatial, non-antisymmetrized blocks these kernels index**. Verified
+        against a fixture carrying only the symmetries a real spatial ERI has
+        (`<pq|rs> = <qp|sr> = <rs|pq>`):
+
+            max| v(a,i,j,b) - ( -ovov(i,a,j,b) ) | = 8.77e-01
+            max| v(a,i,j,b) - ( +ovvo(i,a,b,j) ) | = 0.00e+00
+
+        This test asserted the antisymmetric form until 2026-08-29. That was the
+        pre-W4.3 behaviour: `lowering/restricted_closed_shell.py` carried the full
+        8-fold group of the antisymmetrized integral, four members of which are
+        false for spatial blocks, and the phase reached the emitted C++ directly
+        -- 41 of 288 emitted builders read the wrong block with a bogus sign.
+        `04a5ac2b` fixed the lowering and left this gate behind, still pinning the
+        defect. See docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md.
+        """
         i = make_occ("i")
         j = make_occ("j")
         a = make_vir("a")
@@ -903,7 +922,38 @@ class EmissionTests(unittest.TestCase):
         lowered = lower_term_restricted_closed_shell(term, "doubles")
         code = emit_planck_term(lowered)
         self.assertIn("result(i, j, a, b)", code)
-        self.assertIn("-mo_blocks.ovov(i, a, j, b)", code)
+        self.assertIn("mo_blocks.ovvo(i, a, b, j)", code)
+        # The property W4.3 established, which nothing else in this file pins:
+        # the antisymmetric form must NOT be emitted for a spatial block.
+        self.assertNotIn("ovov(i, a, j, b)", code)
+
+    def test_spatial_eri_lacks_the_antisymmetry_the_lowering_must_not_use(
+            self) -> None:
+        """The numeric claim above, executable rather than quoted.
+
+        Without this, the phase in the previous test is a magic string and a
+        future reader has no way to tell the correct form from the defect it
+        replaced -- which is exactly how the stale assertion survived.
+        """
+        import numpy as np
+
+        rng = np.random.default_rng(7)
+        no, nv = 3, 4
+        nmo = no + nv
+        v = rng.standard_normal((nmo,) * 4) * 0.1
+        # ONLY the symmetries a real spatial ERI has. Deliberately not
+        # antisymmetrized: under an antisymmetric `v` the relation this test
+        # exists to reject becomes TRUE and the check passes vacuously.
+        v = v + v.transpose(1, 0, 3, 2)
+        v = v + v.transpose(2, 3, 0, 1)
+        o, w = slice(0, no), slice(no, nmo)
+
+        target = v[w, o, o, w]                              # v(a,i,j,b)
+        emitted = v[o, w, w, o].transpose(1, 0, 3, 2)       # +ovvo(i,a,b,j)
+        antisym = -v[o, w, o, w].transpose(1, 0, 2, 3)      # -ovov(i,a,j,b)
+
+        self.assertLess(float(np.abs(target - emitted).max()), 1e-12)
+        self.assertGreater(float(np.abs(target - antisym).max()), 1e-3)
 
     def test_planck_intermediate_builder_uses_lowered_layout(self) -> None:
         i = make_occ("i")
