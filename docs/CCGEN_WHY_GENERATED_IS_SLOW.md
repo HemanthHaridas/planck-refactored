@@ -1,19 +1,21 @@
 # What makes the generated CC kernels slower than the hand-written ones?
 
-**Two causes. The larger already ships; the next lever is loop fusion, worth 32x
-fewer passes over the result tensor.**
+**One confirmed lever, one refuted, and ~100x still unexplained.**
 
 | # | cause | status | size |
 |---|---|---|---|
 | 1 | **contraction order** — 391 of 824 terms evaluated n-arily at `o⁵v⁵` | **FIXED** by `--dressing derived` | modelled 10x–18x FLOPs; **measured 3.6x** wall-clock (F1) |
-| 2 | **one loop nest per term** — 414 nests, only 13 distinct inner loops | **OPEN — the next lever** | **32x** fewer `o³v³` traversals |
+| 2 | **one loop nest per term** — 806 nests, 15 distinct inner loops | **DONE, and worth ~0 % at runtime** | 54x fewer traversals; **no measurable speedup at 3 sizes** |
+| 3 | whatever accounts for the remaining **~100x** | **UNIDENTIFIED** | — |
 
 **F1 measured the end-to-end gap at 337x–547x, not the 21.8x–50.1x this document
 first cited** — that figure is from the isolated-triples-residual ladder, a
 different quantity. Dressing closes 3.6x of it, leaving **93x–151x**. And cause
-1's modelled 11.2x FLOP saving on CH4 realises as only 3.62x wall-clock, which is
-itself the evidence that **the generated path is not FLOP-bound** and that a
-traffic lever is the right next target.
+1's modelled 11.2x FLOP saving on CH4 realises as only 3.62x wall-clock, so **the
+generated path is not FLOP-bound**. That reasoning pointed at a traffic lever
+(cause 2) — which was then built, and **measured at ~0 %** (F4). Not FLOP-bound
+and not traffic-bound at these sizes: the remaining ~100x is unidentified, and
+this document no longer claims to explain it.
 
 Established by code-level census of the emitted C++ plus FLOP arithmetic, after
 the measurement route was closed (`CCGEN_KERNEL_SCALING_SCOPE.md`). No new
@@ -299,22 +301,61 @@ before trusting any number from a new tree.
 The correct manifold also fuses far better — 2.8x (806->286) against 1.4x
 (824->591) undressed.
 
-### F4 — fuse all 13 groups (~S once F3 works)
+### F4 — **DONE (2026-08-29). Fusion works and buys NOTHING. The traffic model is wrong.**
 
-*Verify:* 414 nests → 13; energies still bit-identical on both gates; TU line count
-and compile time recorded (the registry TU is `-O1`-pinned precisely because it is
-pathological, so this may be a compile-time win on its own).
+`CCGEN_FUSE_LOOPS=99` fuses every group. On the dressed manifold, triples:
+**806 -> 15 nests (54x)**, TU 22 607 -> 11 971 lines, binary 7.39 -> 6.55 MB.
+Both named gates pass; `E_corr` bit-identical at every fusion level.
 
-### F5 — measure against F1's baseline (~S)
+**And the timings do not move.** Best-of-2, same binary configuration apart from
+`CCGEN_FUSE_LOOPS`:
 
-Six ladder points, factorized-unfused vs factorized-fused.
+| case | `t3` | nofuse (806) | F3 (286) | F4 (15) |
+|---|---|---|---|---|
+| BH3/STO-3G | 0.031 MiB | 9.52 s | 9.73 s | 9.54 s |
+| CH4/STO-3G | 0.061 MiB | 29.59 s | 28.88 s | 28.60 s |
+| HF/6-31G | 0.21 MiB | **154.00 s** | — | **154.54 s** |
 
-*Verify:* the speedup, and whether it **grows with size** — that is the signature
-of the traffic model being right. Predicted: significant at `H2O/6-31G` and
-`C2H4/STO-3G` (202→6 MiB, 349→11 MiB), negligible at `BH3/STO-3G` (12.9→0.4 MiB,
-but all L1-resident anyway). **If the small case shows nothing and the large ones
-do, the mechanism is confirmed.** If nothing moves anywhere, the traffic model is
-wrong and that should be recorded rather than explained away.
+Three sizes, a 54x reduction in traversals, **0-3 % change — inside noise, and
+not monotonic.**
+
+**The traffic model predicted this wrong, and the prediction was specific.** It
+said the saving should be negligible at BH3 (L1-resident) but material at larger
+`t3`, with C2H4/STO-3G's 349 MiB -> 11 MiB the headline. HF/6-31G is 3.4x BH3's
+working set and shows **+0.35 %**. The model's own falsification criterion —
+"if the small case shows nothing and the large ones do, the mechanism is
+confirmed" — is not met.
+
+**Why the model was wrong.** It counted a full `o³v³` read+write per nest. That is
+not what the hardware does: consecutive nests over the *same* `result` tensor hit
+the same cache lines, and at these sizes `t3` never leaves L2 in the first place,
+so the "traffic" the model priced was already being served from cache. Fusing
+removes loop overhead and instruction count, not memory stalls that were not
+occurring.
+
+**This does not refute cause 2 as a description of the code** — 806 nests against
+the hand-written kernel's one is still the structural difference, and fusion still
+closes it. What is refuted is the claim that the difference is *worth 32x* by way
+of memory traffic. It is worth ~0 % at every size reachable here.
+
+**What F4 does buy, and it is not nothing:** TU size halves and the binary drops
+445-845 KB. `generated_kernel_registry.cpp` is `-O1`-pinned precisely because
+these TUs are pathological to compile, so fusion is a **compile-time and
+code-size** lever. That is worth having; it is not the runtime lever this document
+claimed.
+
+### F5 — **CANCELLED.** F4 already answered it, on three sizes rather than six.
+
+F5 was to measure fusion against F1's dressed baseline across the ladder and check
+whether the saving grows with size. F4 measured it at three sizes spanning a 7x
+range in `t3` and found no saving to grow. Running the remaining points (~6 h,
+see F1) would refine an exponent on an effect that is not there.
+
+**The residual 93x-151x gap is therefore NOT explained by this document.** Cause 1
+is real and measured (3.6x). Cause 2 is real as a code-structure difference but
+worth ~0 % in runtime. Whatever accounts for the remaining ~100x is unidentified,
+and the honest state is that the census-plus-FLOP-model approach has now produced
+one confirmed lever and one refuted one.
 
 ### Not in scope
 
