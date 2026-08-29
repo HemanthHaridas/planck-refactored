@@ -282,24 +282,28 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
 `docs/CCGEN_KERNEL_SCALING_SCOPE.md`.
 
 - **~~Enumerate the terms whose contraction order is wrong.~~ DONE (2026-08-29) —
-  `docs/CCGEN_WHY_GENERATED_IS_SLOW.md`.** The emitter gives every term its own full
-  `o³v³` nest and evaluates each n-arily: **824 nests, of which 391 carry a four-index
-  inner sum** (`o⁵v⁵` where a factored order is `o⁴v³`). Those 391 are **83–90 % of all
-  generated FLOPs**, in four families — `t1·t2·t2·oovv` (172), `t2·t3·oovv` (151),
-  `t1·t1·t3·oovv` (44), `t1·t1·t1·t2·oovv` (24). The `t2·t3·v` case
-  `CCGEN_HIGHER_OPERATOR_REUSE.md` predicted is confirmed present and counted.
-  Modelled saving from factoring them alone grows with size — **32x (BH3/STO-3G) to
-  165x (C2H4/STO-3G)** — which is the signature of a scaling fix. Validation that the
-  census is sound: it fits `o^4.92 v^4.94` against the ladder's measured
-  `o^4.87 v^4.52`, **the `o` exponent agreeing to 0.05**. Caveat recorded there: the
-  hand-written side is *not* FLOP-bound the same way (its nine fused accumulations per
-  inner loop reuse operands), so a modelled *ratio* overpredicts by 2 orders of
-  magnitude and must not be quoted — trust the generated-side model only.
-- **Then consume `_optimal_contraction_order` in the emitter.** `python/ccgen/tensor_ir.py`
-  defines `BLASHint` (`:66`), `_detect_gemm` (`:198`), and `_optimal_contraction_order` (`:283`),
-  and `grep BLASHint python/ccgen/emit/planck_tensor_cpp.py` returns nothing — the emitter computes
-  and discards all of it. This is the asymptotic fix. It outranks loop fusion, which was measured
-  at 0.62× (i.e. no gain) at small size.
+  `docs/CCGEN_WHY_GENERATED_IS_SLOW.md`.** Two causes, and **the larger one already
+  ships**. (1) *Contraction order:* the undressed emitter gives every term its own
+  `o³v³` nest evaluated n-arily; **391 of 824 terms carry a four-index inner sum**
+  (`o⁵v⁵` vs `o⁴v³` factored) = **83–90 % of generated FLOPs**, in four families
+  (`t1t2t2·oovv` 172, `t2t3·oovv` 151, `t1t1t3·oovv` 44, `t1t1t1t2·oovv` 24).
+  **The factorized emit (`--dressing derived`) eliminates all 391** — 824 nests →
+  414, zero four-deep — worth a modelled **10x→18x growing with size**, and it
+  moves the exponents (`o^4.92 v^4.94` → `o^4.42 v^4.40`), consistent with the
+  measured 3.12x/3.61x wall-clock. (2) *One nest per term, still open:* 414 nests
+  remain against the hand-written kernel's **one**, which fuses ~9 accumulations
+  per single-index inner loop — that is the residual gap to `o^3.94 v^4.18`.
+  Census validated against the ladder: undressed model `o^4.92 v^4.94` vs measured
+  `o^4.87 v^4.52`, **the `o` exponent agreeing to 0.05**. Caveat: the hand-written
+  side is not FLOP-bound the same way, so a modelled *ratio* overpredicts by 2
+  orders of magnitude — trust the generated-side model only.
+- **~~Then consume `_optimal_contraction_order` in the emitter.~~ PROBABLY
+  REDUNDANT.** It targets exactly the 391 terms `--dressing derived` already
+  eliminates. `python/ccgen/tensor_ir.py:283` still computes and discards it, and
+  `grep BLASHint python/ccgen/emit/planck_tensor_cpp.py` still returns nothing, so
+  the lever is real — but the work it would do is done by a route that is wired and
+  value-gated. **Measure the factorized kernel before building this.** The
+  remaining lever is loop FUSION (cause 2), which is a different change.
 - **Firm up the exponents.** `o` spans only 4→8 across six points and the fit still leans on its
   endpoints (leave-one-out moves `o` across +0.40..+1.18, though it keeps its sign in all six
   variants). Two or three points in `o=8..12` would settle it. Treat `o^0.9 v^0.3` as indicative,

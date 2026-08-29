@@ -1,13 +1,25 @@
 # What makes the generated CC kernels slower than the hand-written ones?
 
-**Answer: the emitter gives every residual term its own full `o³v³` loop nest and
-evaluates each one n-arily. 391 of 824 terms carry a four-index inner sum, making
-them `o⁵v⁵` where a factored order is `o⁴v³`. Those 391 terms are 83–90 % of all
-generated FLOPs.**
+**Two causes, and the larger one is already fixed by a route that ships.**
 
-Established by code-level comparison and FLOP estimates, after the measurement
-route was closed (see `CCGEN_KERNEL_SCALING_SCOPE.md`). No new instrumentation:
-this is a census of the emitted C++ plus arithmetic.
+1. **Contraction order (fixed).** The undressed emitter gives every term its own
+   full `o³v³` nest and evaluates it n-arily; 391 of 824 terms carry a four-index
+   inner sum (`o⁵v⁵` where factored is `o⁴v³`), accounting for **83–90 % of
+   generated FLOPs**. **The factorized/dressed emit (`--dressing derived`)
+   eliminates all 391** — 824 nests → 414, zero four-deep terms — worth a modelled
+   **10x–18x, growing with size**, and it moves the exponents (`o^4.92 v^4.94` →
+   `o^4.42 v^4.40`).
+2. **One nest per term (open).** Even factorized, 414 nests remain against the
+   hand-written kernel's **one**, which fuses ~9 accumulations into each
+   single-index inner loop. That is the residual gap to `o^3.94 v^4.18`.
+
+**Consequence: consuming `_optimal_contraction_order` — the standing
+recommendation in `CCGEN_KERNEL_SCALING_SCOPE.md` — targets terms the derivation
+route has already eliminated, and is probably redundant.** That was the exact
+question the abandoned ladder existed to settle.
+
+Established by code-level census and FLOP estimates, after the measurement route
+was closed. No new instrumentation: a count of the emitted C++ plus arithmetic.
 
 ## The census
 
@@ -103,36 +115,68 @@ accumulations per loop reuse operands already in registers and stream one `t3`
 pass, so its measured cost is far below its nominal FLOP count. **Trust the
 generated-side model; do not quote a modelled ratio.**
 
-## What to fix, in order
+## The factorized kernel already fixes this — measured, not assumed
 
-**1. Factor the 391 four-deep terms.** They are 83–90 % of generated FLOPs
-(83.2 % on BH3/STO-3G, 89.9 % on C2H4/STO-3G, 88.4 % on BH3/6-31G). Modelled
-saving from binary factorization alone:
+**An earlier revision of this document proposed factoring the 391 terms as the
+work to do. That work is already done**, and a factorized TU exists in the tree
+(`build-profile/`, whose builders are named `build_W_<blocks>_<n>_ccsdt` — the
+derivation route's block-signature naming, not Stanton-Gauss `Wmnij`/`tau`).
 
-| case | o | v | as emitted | factored | saving |
-|---|---|---|---|---|---|
-| BH3/STO-3G | 4 | 4 | 4.10e+08 | 1.28e+07 | **32x** |
-| CH4/STO-3G | 5 | 4 | 1.25e+09 | 2.82e+07 | **44x** |
-| HF/6-31G | 5 | 6 | 9.50e+09 | 1.16e+08 | **82x** |
-| H2O/6-31G | 5 | 8 | 4.00e+10 | 3.25e+08 | **123x** |
-| BH3/6-31G | 4 | 11 | 6.45e+10 | 5.00e+08 | **129x** |
-| C2H4/STO-3G | 8 | 6 | 9.96e+10 | 6.05e+08 | **165x** |
+Same census, run on both:
 
-**The saving grows with system size**, which is the signature of a scaling fix
-rather than a constant one — and it is why this outranks everything else on the
-list. These are modelled FLOP ratios, not predicted wall-clock.
+| | nests | four-deep (`o²v²`) terms |
+|---|---|---|
+| undressed | 824 | **391** |
+| factorized | **414** | **0** |
 
-The mechanism already exists: `_optimal_contraction_order` in
-`python/ccgen/tensor_ir.py:283` computes exactly this and the emitter discards it
-(`grep BLASHint python/ccgen/emit/planck_tensor_cpp.py` returns nothing).
-Derivation dressing (`--dressing derived`) addresses the same terms by a different
-route and is already wired.
+**Every `o⁵v⁵` term is gone**, and the nest count halves. Modelled FLOPs:
 
-**2. Fuse nests that share an outer index and an inner loop.** The hand-written
-kernel's nine-accumulations-per-`d`-loop pattern is unavailable to the emitter
-because it emits one nest per term. Secondary to (1) — it changes the constant,
-not the exponent, and the earlier measurement found loop fission itself is *not* a
-penalty at small size (0.62×, i.e. fissed was faster). Do (1) first.
+| case | undressed | factorized | saving |
+|---|---|---|---|
+| BH3/STO-3G | 4.93e+08 | 4.84e+07 | 10.2x |
+| CH4/STO-3G | 1.48e+09 | 1.31e+08 | 11.2x |
+| HF/6-31G | 1.09e+10 | 7.47e+08 | 14.5x |
+| H2O/6-31G | 4.51e+10 | 2.64e+09 | 17.1x |
+| BH3/6-31G | 7.30e+10 | 4.23e+09 | 17.2x |
+| C2H4/STO-3G | 1.11e+11 | 6.22e+09 | 17.8x |
+
+The saving **grows with size** (10x → 18x), confirming it is a scaling fix. Fitted:
+
+| | model | vs hand-written |
+|---|---|---|
+| undressed generated | `o^4.92 v^4.94` | — |
+| **factorized generated** | **`o^4.42 v^4.40`** | closes ~half the exponent gap |
+| hand-written (measured) | `o^3.94 v^4.18` | the target |
+
+**So factorization moves the exponents, not just the constant** — `o` drops 4.92 →
+4.42 against a hand-written 3.94. That is consistent with the measured
+3.12x/3.61x wall-clock for `--dressing derived`, and it is the first evidence in
+this repo that the two agree on *mechanism* and not only on direction.
+
+## What remains
+
+**Roughly half the exponent gap survives factorization** (`o^4.42 v^4.40` against
+`o^3.94 v^4.18`), so a second mechanism is still in play. The census locates it:
+414 nests remain, against the hand-written kernel's **one**.
+
+The hand-written form fuses ~9 accumulations into each single-index inner loop,
+reusing operands already in registers over one `t3` pass. The emitter cannot do
+this because it emits one nest per term, so 414 nests each re-stream their
+operands. That is a constant-factor and memory-traffic effect on top of the
+residual exponent gap.
+
+Note the earlier measurement that loop fission is *not* a penalty at `no=nv=4`
+(0.62x — the fissed form was faster) was taken at a size where the working set is
+32 KB and fully L1-resident. It does not generalize to the 414-nest form at
+production size, and that is the untested half of H1.
+
+**Recommendation: measure the factorized kernel before building anything else.**
+`--dressing derived` is wired and produces this TU. Consuming
+`_optimal_contraction_order` in the emitter — the standing recommendation in
+`CCGEN_KERNEL_SCALING_SCOPE.md` — targets the same 391 terms this route has
+already eliminated, so **the two overlap and it is probably redundant**. That was
+the exact question the abandoned ladder was meant to settle, and the census
+answers it without the measurement.
 
 ## What was checked and ruled out
 
