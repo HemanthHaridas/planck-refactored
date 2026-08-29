@@ -257,72 +257,71 @@ were tried by reading code and reasoning; all three missed. The rank-3
 investigation records five such hypotheses, all wrong, with every correct result
 coming from direct comparison. **From here, measure first and hypothesize second.**
 
-#### T2.1 — dump the hand-written arm, elementwise (~S)
+#### T2.1 + T2.2 — **DONE (2026-08-29). Neither branch; the framing was wrong.**
 
-The generated arm is already dumped: `PLANCK_CC_FIXTURE_DIR` writes the full
-residual to `r{rank}_cpp.txt`, added by R4.2c for precisely this reason — *"a
-scalar max cannot tell 'wrong values' from 'right values in a different index
-order'."* There is **no matching hand-written dump**.
+T2.1 added an opt-in dual dump (`PLANCK_CC_T3_LADDER_DUMP=<dir>`) writing
+`r3_gen_raw`, `r3_hand_raw` and `r3_hand_restored` in the same format
+`rccgen.cpp`'s R4.2c dump uses, so all three are directly comparable.
 
-Add one. The T2 probe already holds both tensors in scope, so this is a file write
-beside the comparison, not new plumbing.
+T2.2 then answered the branch question, and the answer is **neither**:
 
-*Verify:* two files of equal length whose sorted-|value| multisets can be compared
-in T2.2. Cheap, and it is the input to every step below.
+| tensor (CH4, n=8000) | max\|v\| |
+|---|---|
+| `r3_gen_raw` | 1.758e-03 |
+| `r3_hand_raw` | 7.001e-03 |
+| `r3_hand_restored` | **3.556e-08** |
 
-#### T2.2 — is it a permutation at all? (~S, decides the branch)
+**`restore` annihilates the hand-written residual — by a factor of 2.0e+05.**
+So the earlier "restore both -> rel = 3.6e-02, the closest framing" was not close
+at all: it was comparing the generated arm against a **near-zero tensor**, and the
+small number was the generated arm's own magnitude, not agreement. That reading is
+**refuted**, exactly as T2.2 was placed to do.
 
-Compare the two dumps as **multisets of values**, ignoring position.
+**Why, mechanically.** `restore_restricted_t3_structure` is three stages, and the
+second is a *projector that removes what the first creates*:
 
-*Verify — and this is the branch point:*
-- **multisets match** -> it is a pure index permutation. Go to T2.3.
-- **multisets differ** -> it is not a relabelling; some term differs in value.
-  Skip to T2.5. This would also mean restore-both's 3.6e-02 was coincidence, so
-  record it as refuted rather than carried forward.
+| stage | what it does | effect here |
+|---|---|---|
+| `apply_restricted_t3_permutation_symmetry` | unnormalized sum over the 6 SIMULTANEOUS occ+virt permutations | **x6** — output is fully symmetric under that permutation |
+| `apply_restricted_t3_p3_full` | `x - (mean over the 6 VIRT permutations)` | **annihilates** it: for a simultaneously-symmetric tensor that mean is itself |
+| `purify_restricted_t3` | zeroes `i==j==k` / `a==b==c` | negligible |
 
-Do not skip this step. Both later branches are expensive and this decides between
-them for the cost of a sort.
+Reproduced independently in Python from the dumps —
+`7.00e-03 -> 4.20e-02 -> 3.56e-08`, matching the C++ to all printed digits, so
+this is the mechanism and not a coincidence of one build.
 
-#### T2.3 — identify the permutation, do not guess it (~M, only if T2.2 says permutation)
+**What this means.** `restore` is not a symmetrizer that maps a residual into a
+comparable frame. It is only meaningful in its own solver, where it is applied to
+a wedge-packed amplitude carrying full permutational symmetry
+(`CCGEN_RANK3_KERNEL_AND_SOLVER.md`: the packing and `restore` are *one coupled
+convention*). **Applying it to a raw residual, in either arm, is a category
+error** — and all three framings tried in T2 did exactly that, which is why none
+of them worked.
 
-For a rank-3 residual `r(i,j,k,a,b,c)` there are at most 36 candidate axis
-permutations that preserve the occ/vir split (3! x 3!). Apply each to one arm and
-report `max|diff|` for all of them.
+The live comparison is therefore `r3_gen_raw` vs `r3_hand_raw`, with **neither**
+restored: elementwise max-diff 7.08e-03 against a hand magnitude of 7.00e-03, and
+multiset max-diff 5.24e-03. Since the multisets do **not** match, T2.3/T2.4 (the
+permutation branch) are **dead** — this is not a relabelling.
 
-*Verify:* exactly one permutation drives the difference to ~1e-12, or none does.
-A table of 36 numbers is a measurement; picking one and testing it is a guess.
+#### T2.3 / T2.4 — **DROPPED.** T2.2's multiset test refutes the permutation hypothesis, and the `restore` decomposition T2.4 would have performed is answered above.
 
-**If none works**, the difference is not a whole-tensor axis permutation — it may
-be a per-orbit scaling (the `purify`/`p3_full` halves of `restore`, which are not
-pure permutations). Report that and go to T2.4.
+#### T2.5 — which TERM differs (~M) — **NEXT, and now the only live branch**
 
-#### T2.4 — decompose `restore` (~S, only if T2.3 finds no clean permutation)
+The multisets differ, so the two arms genuinely compute different *values* at
+fixed amplitudes while both converging to the same energy. The standing
+hypothesis, unchanged and now the sole survivor: **they partition the same total
+differently.** The hand-written path adds T3->SD feedback through two separate
+calls (`add_dressed_triples_feedback_into_sd_residuals`,
+`add_dressed_triples_feedback_into_triples_intermediates`) while the generated
+kernel returns all ranks from one evaluation.
 
-`restore_restricted_t3_structure` is three operations:
-`apply_restricted_t3_permutation_symmetry`, `apply_restricted_t3_p3_full`,
-`purify_restricted_t3`. Apply them to the hand-written arm **one at a time**,
-cumulatively, reporting `rel` after each.
+*Verify:* evaluate the generated arm's rank-1 and rank-2 residuals alongside
+rank 3, and test whether `hand_r3 - gen_r3` is compensated at lower rank. The
+dumps make this elementwise.
 
-*Verify:* which single stage moves `rel` toward zero, and which moves it away.
-That names the convention difference in terms of an operation that already exists
-in the tree, instead of inventing a transform.
-
-#### T2.5 — the value branch: which TERM differs (~M, only if T2.2 says values differ)
-
-Both residuals are correct at convergence, so a value difference at fixed
-amplitudes means the two arms **partition the same total differently** — most
-likely the T3->SD feedback, which the hand-written path adds through
-`add_dressed_triples_feedback_into_sd_residuals` and
-`add_dressed_triples_feedback_into_triples_intermediates` while the generated
-kernel returns all ranks from one call.
-
-*Verify:* evaluate the generated arm's rank-1 and rank-2 residuals too, and check
-whether `hand_r3 - gen_r3` is compensated by a matching discrepancy at lower rank.
-If the totals agree while the per-rank split does not, the arms are not comparable
-**at rank 3 alone** and the gate must compare the full residual vector.
-
-That outcome would be a genuine finding, not a defect: it would mean the ladder's
-per-rank timing comparison needs restating.
+If the totals agree while the per-rank split does not, the arms are **not
+comparable at rank 3 alone**, and the ladder's per-rank timing comparison needs
+restating rather than fixing — a finding, not a defect.
 
 #### T2.6 — close the gate (~S)
 

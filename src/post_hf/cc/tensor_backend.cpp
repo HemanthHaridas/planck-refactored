@@ -6,6 +6,9 @@
 #include <cmath>
 #include <cstdlib>
 #include <exception>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
 #include <format>
 #include <limits>
 #include <stdexcept>
@@ -2441,14 +2444,28 @@ namespace
                     double max_abs_hand = 0.0;
                     if (comparable)
                     {
-                        // UNRESOLVED (see docs/CCGEN_DRESSED_LADDER_SCOPE.md T2): the two
-                        // arms disagree in a way no framing tried so far removes --
-                        // restore-both gives rel=3.6e-02, restore-hand-only 8.4e-01,
-                        // restore-neither 1.0e+00. Both residuals are individually
-                        // CORRECT (each converges to E_corr=-0.0791116825 on CH4,
-                        // matching PySCF to 1.4e-08), so this is a representation
-                        // mismatch, not a defect in either kernel. Do not "fix" it by
-                        // loosening the tolerance.
+                        // UNRESOLVED (see docs/CCGEN_DRESSED_LADDER_SCOPE.md T2.5).
+                        // Both residuals are individually CORRECT -- each converges to
+                        // E_corr=-0.0791116825 on CH4, matching PySCF to 1.4e-08 -- so
+                        // this is a representation mismatch, not a kernel defect. Do not
+                        // "fix" it by loosening the tolerance.
+                        //
+                        // NEITHER arm is restored here, and that is deliberate. T2.2
+                        // measured `restore` ANNIHILATING the hand-written residual by
+                        // 2.0e+05 (7.00e-03 -> 3.56e-08): its second stage,
+                        // apply_restricted_t3_p3_full, subtracts the virt-permutation
+                        // mean, which for the fully-symmetric tensor its first stage
+                        // produces is that tensor itself. `restore` is only meaningful on
+                        // a wedge-packed AMPLITUDE inside its own solver, where the
+                        // packing and restore are one coupled convention
+                        // (CCGEN_RANK3_KERNEL_AND_SOLVER.md). Applying it to a raw
+                        // residual is a category error.
+                        //
+                        // An earlier revision read "restore both -> rel=3.6e-02" as the
+                        // closest framing. It was comparing against a near-zero tensor;
+                        // the small number was the generated arm's own magnitude. The
+                        // multisets of |value| do not match (5.24e-03), so this is not an
+                        // index permutation either.
                         //
                         // The generated arm is NOT restored here: the arbitrary-order
                         // harness never calls restore (grep confirms zero call sites in
@@ -2469,6 +2486,51 @@ namespace
                             gate_ws.r3.dim4, gate_ws.r3.dim5, gate_ws.r3.dim6, 0.0);
                         sym_hand.data = gate_ws.r3.data;
                         restore_restricted_t3_structure(sym_hand);
+
+                        // T2.1: dump BOTH arms elementwise so T2.2 can compare them as
+                        // multisets of values. A scalar max cannot distinguish "wrong
+                        // values" from "right values in a different index order" -- the
+                        // same reason R4.2c added the generated-arm dump in rccgen.cpp,
+                        // whose format this matches byte-for-byte (rank ndims / dims /
+                        // one value per line at 17 digits) so the two are directly
+                        // comparable.
+                        //
+                        // Opt-in via PLANCK_CC_T3_LADDER_DUMP=<dir>; without it the probe
+                        // writes nothing. Written BEFORE the gate verdict, because the
+                        // dump is what diagnoses a failing gate.
+                        if (const char *dump_dir = std::getenv("PLANCK_CC_T3_LADDER_DUMP");
+                            dump_dir != nullptr && dump_dir[0] != '\0')
+                        {
+                            const std::filesystem::path dir(dump_dir);
+                            std::error_code ec;
+                            std::filesystem::create_directories(dir, ec);
+                            const auto emit = [&](const char *name, const Tensor6D &t) {
+                                if (std::ofstream fh(dir / name); fh)
+                                {
+                                    fh << 3 << ' ' << 6 << '\n';
+                                    fh << t.dim1 << ' ' << t.dim2 << ' ' << t.dim3 << ' '
+                                       << t.dim4 << ' ' << t.dim5 << ' ' << t.dim6 << '\n';
+                                    fh << std::setprecision(17);
+                                    for (const double value : t.data)
+                                        fh << value << '\n';
+                                }
+                            };
+                            // Both the raw and the restored hand-written arm: T2.4 needs
+                            // to decompose `restore`, and re-running to get the other one
+                            // would risk comparing two different amplitude states.
+                            Tensor6D raw_hand(
+                                gate_ws.r3.dim1, gate_ws.r3.dim2, gate_ws.r3.dim3,
+                                gate_ws.r3.dim4, gate_ws.r3.dim5, gate_ws.r3.dim6, 0.0);
+                            raw_hand.data = gate_ws.r3.data;
+                            emit("r3_gen_raw.txt", sym_gen);
+                            emit("r3_hand_raw.txt", raw_hand);
+                            emit("r3_hand_restored.txt", sym_hand);
+                            HartreeFock::Logger::logging(
+                                HartreeFock::LogLevel::Info, "RCCSDT[T3-LADDER] :",
+                                std::format("T2.1 dumped r3_gen_raw / r3_hand_raw / "
+                                            "r3_hand_restored to '{}' (n={})",
+                                            dir.string(), sym_hand.data.size()));
+                        }
 
                         for (std::size_t idx = 0; idx < sym_hand.data.size(); ++idx)
                         {
