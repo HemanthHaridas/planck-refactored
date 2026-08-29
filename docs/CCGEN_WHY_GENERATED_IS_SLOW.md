@@ -227,13 +227,32 @@ residual gap answers it at any size, and the four points would refine an exponen
 F1 does not need. They belong in F5, measured against the dressed baseline, where
 the size trend is the actual deliverable.
 
-### F2 — group the terms, emit nothing (~S)
+### F2 — **DONE (2026-08-29). Byte-identical, and the fusion ratio is larger than stated.**
 
-In the emitter, group `emitted_terms` by `(tuple(free), tuple(summed))` before the
-emit loop. Log the histogram; change no output.
+`term_loop_signature` / `group_terms_by_loop_signature` land beside
+`emit_planck_term`, with `python/ccgen/tests/test_loop_fusion_grouping.py`.
+Regenerating `ccsdt` with and without `--dressing derived` gives TUs
+**byte-identical** to the F1 trees on all four files; the SHA-pin suite is green.
 
-*Verify:* 13 groups on rank-3 triples, largest 81, and the emitted TU is
-**byte-identical** to before. A grouping pass that changes output has a bug.
+The load-bearing test is not the census but
+`test_signature_equals_the_loops_emit_planck_term_writes`, which re-derives the
+nests **by regex over the emitted text** and asserts the helper matches for every
+term. The grouping is only meaningful if it describes what is actually emitted.
+
+**A fixture correction the gate caught immediately.** The first version asserted
+this document's 13 signatures / largest 81 and **failed at 8**. That census was
+measured on the **factorized** TU; the undressed manifold is a different term set
+(factorization splits contractions and introduces `W_*` operands). Measured:
+
+| manifold | terms | signatures | largest | fusion ratio |
+|---|---|---|---|---|
+| undressed | 399 | **8** | 153 | **~50x** |
+| factorized | 414 | 13 | 81 | ~32x |
+
+**The undressed manifold fuses even more tightly**, so the 32x quoted above is the
+conservative end. Asserting one fixture's numbers against another's is the same
+class of mistake as the antisymmetrized-fixture traps recorded across ccgen; the
+test now names its fixture and why.
 
 ### F3 — fuse one group, behind a flag (~M)
 
