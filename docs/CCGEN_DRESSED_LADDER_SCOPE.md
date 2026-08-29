@@ -381,12 +381,35 @@ resulting ratio is **not** comparable to the original ladder's 21.8x-50.1x, whic
 timed isolated residual evaluations. Report it as its own quantity and do not
 combine the two.
 
-**What survives.** The exponent question -- does dressing change the SCALING or
-only the CONSTANT -- is still answerable, because it is a fit of arm-B against
-arm-C times across the six points, and both arms are measured the same way. That
-is the question T4/T5 exist for, and it does not require arm A. **Arm A is now
-optional**: it is the known-good asymptotic standard, and reporting it alongside
-remains useful, but it is no longer load-bearing for the dressing comparison.
+**What survives, stated more carefully than the first draft of this section.**
+
+A B-vs-C fit answers the LITERAL question -- did dressing move the exponents or
+only the prefactor -- because both arms are measured identically and differ only
+in `--dressing`. That much needs no arm A.
+
+**It does not tell you whether the dressed exponents are GOOD**, and that is the
+decision this ladder exists to inform. If dressing gives `o^4.4 v^4.3`, is that
+fixed? Only the hand-written `o^3.94 v^4.18` says. Without it, a partial
+improvement and a complete one look identical -- and they imply opposite answers
+on whether to build `_optimal_contraction_order`. So arm A is **not** optional for
+the decision; an earlier revision of this section said it was, and that was wrong.
+
+**A second caveat, which applies to B and C equally.** T2.7 times per-ITERATION
+solver work, not an isolated residual. Each arm carries its own overhead -- the
+hand-written path builds dressed intermediates, the generated one evaluates every
+rank -- and that overhead has its own `o,v` scaling sitting inside the
+measurement. So these exponents describe *"solver iteration"*, not *"triples
+kernel"*, and they are **not** the same quantity the original six-point ladder
+fitted. B-vs-C remains a fair comparison (identical overhead on both sides), but
+the absolute exponents from T2.7 must not be quoted against the original ladder's
+`o^4.87 v^4.52`.
+
+**Arm A is still available, and should be measured.** T2.5 killed the elementwise
+residual GATE between arms, not the timing of arm A: `PLANCK_RCCSDT_BACKEND=tensor`
+runs the hand-written solver end to end and its iterations can be timed exactly as
+B and C are. What changes is the validation -- from "residuals agree elementwise"
+to "all three converge to `-0.0791116825`", which is the check that the arms are
+the same calculation. Weaker, and sufficient.
 
 ### T3 — report shape (~S)
 
