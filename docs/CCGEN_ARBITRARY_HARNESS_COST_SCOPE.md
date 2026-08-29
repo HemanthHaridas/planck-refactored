@@ -1,7 +1,9 @@
 # What does the correct rank-3 CC path cost, and can it be made cheap?
 
-**Scope. H0 not started, but four of its premises have been settled since it was
-written — read "What changed" first.** Opened by the option-2 decision in
+**H0 is DONE (2026-08-29) and it retired most of this document.** The cost is
+**98.8 % one call to the generated rank-3 kernel**; the harness itself is ~1 %.
+H2, H3 and H4 are dead. What remains is H1, and the two obvious models of it are
+already spent — see "Where that leaves H1". Opened by the option-2 decision in
 `CCGEN_RANK3_KERNEL_AND_SOLVER.md`: the generated rank-3 kernels now run in the
 arbitrary-order harness, which is **correct** (CH4/STO-3G +1.49e-08 vs PySCF
 `rccsdt`) but far more expensive than the hand-written tensor backend.
@@ -93,55 +95,64 @@ H1 and H3 are not independent: absent intermediates *are* one reason the emitted
 
 ## The work
 
-### H0 — profile the harness (~S, blocking, no code change for step 1)
+### H0 — **DONE (2026-08-29). H2, H3 and H4 are all dead. It is H1.**
 
-**H0a — free attribution from what already exists (~S).** The iteration loop in
-`generated_arbitrary_runtime.cpp:277-320` has exactly three phases, already
-bracketed and already timed as a whole:
+Two bracket sets, ~20 lines, no sampling needed. CH4/STO-3G, Release,
+`PLANCK_RCCSDT_BACKEND=optimized`.
+
+**H0a — phase attribution.** Consistent across all 15 iterations:
 
 ```
-evaluate_generated_arbitrary_order_residuals(...)   <- H1/H2/H3 live here
-update_amplitudes_with_jacobi_diis(...)             <- H4 lives here
-evaluate_generated_arbitrary_order_energy(...)      <- unattributed today
+t=1.913s   t_res=1.913s   t_upd=0.000s   t_ene=0.000s
 ```
 
-Add two `steady_clock` brackets inside the existing `iter_start` block and extend
-the existing `Iter :` log line with `t_res=`, `t_upd=`, `t_ene=`. That is ~6 lines
-against a log line that already prints `t=`, and it splits H4 from the rest
-immediately.
+**The residual evaluation is ~100 % of the iteration.** The Jacobi/DIIS update and
+the energy evaluation are unmeasurable.
 
-*Verify:* the three shares sum to the printed `t=` within a few percent, on
-CH4/STO-3G. If `t_upd` is small, **H4 is dead** and the tail item can be dropped
-rather than carried.
+**H0b — per-rank attribution** (`PLANCK_CC_RANK_TIME=1`):
 
-**H0b — per-rank attribution (~S).** If `t_res` dominates (expected), bracket the
-`rank = 1..max` loop inside `evaluate_generated_arbitrary_order_residuals` and
-report per-rank seconds.
+| rank | elements | time | share |
+|---|---|---|---|
+| 1 | 20 | 0.0008 s | 0.04 % |
+| 2 | 400 | 0.0237 s | 1.1 % |
+| **3** | **8000** | **2.0775 s** | **98.8 %** |
 
-*Verify:* three numbers. **This is the measurement that separates H1 from H2**, and
-it is the whole point of H0:
+### What this kills
 
-| result | reading | what it makes worth doing |
-|---|---|---|
-| rank 3 >> rank 1 + rank 2 | H1 — the kernel dominates | the emitter still owns it; see "what changed", H1 is no longer a handoff |
-| rank 1 + rank 2 comparable to rank 3 | **H2 — the harness is paying for ranks it need not recompute** | caching / selective re-evaluation, which is solver work and belongs here |
-| neither dominates | cost is diffuse | go to H0c before writing anything |
+| hypothesis | verdict |
+|---|---|
+| **H2** — harness evaluates every rank each iteration | **DEAD.** Ranks 1+2 are ~1.2 % combined. Caching or skipping them buys at most 1 %. |
+| **H4** — dense vs wedge DIIS packing | **DEAD.** `t_upd` is 0.000 s. The ~6x data through DIIS costs nothing measurable. |
+| **H3** — intermediates for spin-adapted emission | **Not worth pursuing as stated.** Its value was in reducing recomputation across the residual; that recomputation is entirely inside the rank-3 kernel, so H3 collapses into H1. |
+| **H1** — the rank-3 kernel itself | **CONFIRMED, and it is the whole cost.** |
 
-**H0c — sampling profile, only if H0a/H0b are inconclusive (~S).** `sample` is
-available (`/usr/bin/sample`, no `perf` on this platform, and `xctrace` needs more
-setup than this warrants). `sample <pid> 30 -f out.txt` on a running CH4 solve
-attributes to symbols and was already used successfully in the rank-3
-investigation.
+**This retires the framing this document was opened with.** It is not an
+arbitrary-harness cost problem: the harness is ~1 %. The 2.08 s is one call to one
+generated kernel, and everything else in the iteration is free.
 
-*Verify:* a symbol table whose top entries are consistent with H0a/H0b. If it
-disagrees with them, **the bracket timings are wrong, not the profile** — check
-that the build has an explicit `CMAKE_BUILD_TYPE` first.
+### Where that leaves H1 — awkwardly, and honestly
 
-**Why brackets before sampling.** The three phases are already delimited by
-function calls; a sampling profile would spend its resolution rediscovering a
-boundary the source states exactly. Brackets also survive in the log, so any later
-run is self-documenting. Sampling earns its place only when the question becomes
-"where *inside* the residual evaluation", which is H0c.
+`docs/CCGEN_WHY_GENERATED_IS_SLOW.md` has already measured the two obvious levers
+**on that exact kernel**:
+
+- **not FLOP-bound** — a modelled 11.2x FLOP reduction (`--dressing derived`)
+  realised as 3.62x;
+- **not traffic-bound** — fusing 806 loop nests to 15 changed runtime by ~0 %.
+
+So H0 has localized the cost precisely (one kernel, 98.8 %) while both models of
+*why that kernel is expensive* are spent. **The next step is H0c — sample inside
+the rank-3 kernel** — and it is now well-posed in a way it was not before: a
+30-second `sample` on a CH4 solve spends essentially all its samples in the
+kernel, so the profile is not diluted by harness noise.
+
+*Verify:* a symbol/line attribution within `compute_ccsdt_triples_residual`. What
+to look for, given what is already excluded: instruction-level stalls that neither
+a FLOP count nor a traffic count models — dependency chains on the accumulator,
+failure to vectorize the inner contraction, or register pressure from the
+generated form's operand count.
+
+**Do not build another cost model first.** The record on this kernel is 1-for-2,
+and the two failures were both models applied where a measurement was available.
 
 ### The measurement discipline this must follow
 
@@ -180,35 +191,7 @@ model captured, and the next step is H0c — sampling **inside** the residual
 evaluation — not another cost model. `docs/CCGEN_WHY_GENERATED_IS_SLOW.md` records
 that the modelling approach went 1-for-2.
 
-### H2-path — if the lower-rank kernels are a large share (~M)
-
-`tensor_backend` demonstrates that r1/r2 do not need a generated kernel per iteration to be correct
-— but it demonstrates it in a *scheme* that is incompatible with the generated representation, which
-is precisely the defect option 2 stepped away from. So the options are narrower than they look:
-
-- **Cache what is rank-independent** across iterations inside the harness. Requires knowing what the
-  generated kernels re-derive per call — an emitter question, not a solver one.
-- **Emit intermediates for the spin-adapted path** (H3), which is the same lever seen from the other
-  side.
-
-Explicitly **rejected**: reintroducing hand-written r1/r2 alongside generated r3. That is the hybrid
-that produced a self-consistent wrong answer (−7.56e-05), and it is rejected on correctness, not
-cost.
-
-### H3-path — intermediates for spin-adapted emission (~L, research)
-
-`ccgen_spin_adapt_no_intermediates` records why they are off: CSE mislabels occ/vir on spatial
-spin-adapted terms (unvalidated), and ~1544 `build_W_*` functions made the registry TU compile in
-~28 min at `-O3`. Both are real, and the second interacts with the `-O1` registry pin
-(`CMakeLists.txt:402`).
-
-So this is not "turn the flag on". It needs the CSE labelling validated for spatial terms first, and
-a compile-time story. Sequence it behind H0 and only if the profile says intermediates would matter.
-
-### H4-path — dense vs wedge DIIS (~S, tail)
-
-Only worth doing once the residual cost is addressed; ~6× on a component that is not the bottleneck
-changes nothing.
+### H2-path / H3-path / H4-path — **REMOVED.** H0 measured all three at ~1 % or less; see above. The reasoning they contained (do not reintroduce the hand-written r1/r2 hybrid — it produced a self-consistent wrong answer at −7.56e-05) is preserved under Constraints.
 
 ## Acceptance
 
