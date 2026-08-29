@@ -1,9 +1,11 @@
 # What does the correct rank-3 CC path cost, and can it be made cheap?
 
-**H0 is DONE (2026-08-29) and it retired most of this document.** The cost is
-**98.8 % one call to the generated rank-3 kernel**; the harness itself is ~1 %.
-H2, H3 and H4 are dead. What remains is H1, and the two obvious models of it are
-already spent — see "Where that leaves H1". Opened by the option-2 decision in
+**H0 is DONE (2026-08-29), and it found an actionable defect.** The cost is
+**98.8 % one call to the generated rank-3 kernel** (H2/H3/H4 dead, harness ~1 %),
+and inside that call **67.7 % is `build_W_*` operator builders being rebuilt once
+per `_partN` chunk** — 1418 builder calls against 288 distinct operators. The
+emitter assumed those rebuilds were "cheap"; they are two thirds of the runtime.
+Fix scoped as **H5** below: hoist them, expect ~2x. Opened by the option-2 decision in
 `CCGEN_RANK3_KERNEL_AND_SOLVER.md`: the generated rank-3 kernels now run in the
 arbitrary-order harness, which is **correct** (CH4/STO-3G +1.49e-08 vs PySCF
 `rccsdt`) but far more expensive than the hand-written tensor backend.
@@ -130,29 +132,67 @@ the energy evaluation are unmeasurable.
 arbitrary-harness cost problem: the harness is ~1 %. The 2.08 s is one call to one
 generated kernel, and everything else in the iteration is free.
 
-### Where that leaves H1 — awkwardly, and honestly
+### H0c — **DONE (2026-08-29). 67.7 % is redundant operator rebuilds, not the residual.**
 
-`docs/CCGEN_WHY_GENERATED_IS_SLOW.md` has already measured the two obvious levers
-**on that exact kernel**:
+`sample` on a running CH4 solve, 20 s, leaf attribution over 16 882 samples:
 
-- **not FLOP-bound** — a modelled 11.2x FLOP reduction (`--dressing derived`)
-  realised as 3.62x;
-- **not traffic-bound** — fusing 806 loop nests to 15 changed runtime by ~0 %.
+| | samples | share |
+|---|---|---|
+| `build_W_*` operator builders (165 distinct in the profile) | **11 422** | **67.7 %** |
+| `compute_ccsdt_triples_residual_part*` | 5 334 | 31.6 % |
+| everything else | 126 | 0.7 % |
 
-So H0 has localized the cost precisely (one kernel, 98.8 %) while both models of
-*why that kernel is expensive* are spent. **The next step is H0c — sample inside
-the rank-3 kernel** — and it is now well-posed in a way it was not before: a
-30-second `sample` on a CH4 solve spends essentially all its samples in the
-kernel, so the profile is not diluted by harness noise.
+Dominant builder families: `t2t2v_oooovv` **33.9 %**, `t1t3v_oooovv` 14.7 %,
+`t1t1t2v_oooovv` 9.5 %.
 
-*Verify:* a symbol/line attribution within `compute_ccsdt_triples_residual`. What
-to look for, given what is already excluded: instruction-level stalls that neither
-a FLOP count nor a traffic count models — dependency chains on the accumulator,
-failure to vectorize the inner contraction, or register pressure from the
-generated form's operand count.
+**The cause is chunking.** The dressed kernel is split into `_partN` functions,
+and **each part rebuilds every operator it uses from scratch**:
 
-**Do not build another cost model first.** The record on this kernel is 1-for-2,
-and the two failures were both models applied where a measurement was available.
+```
+1418 builder CALLS   against   288 distinct builders     (~5x duplication)
+270 calls in part0,  270 in part1,  ... across 4 parts
+```
+
+`planck_tensor_cpp.py:1193` states the assumption directly — *"the intermediate
+builds and amplitude-view bindings are re-emitted per part — **cheap**, local, and
+keeps each part self-contained."* **They are 67.7 % of runtime.** The assumption
+was reasonable when chunking was introduced for an *undressed* emit, where there
+are no operators to rebuild; dressing made it false, and nothing re-examined it.
+
+### What to do — H5: hoist the builders out of the parts (~M)
+
+Build each operator **once** per kernel invocation and pass it into the parts,
+instead of rebuilding per part. The parts already take `result` by reference; the
+operators can travel the same way (a small struct, or by-reference parameters).
+
+*Verify, in order:*
+1. **Builder call count drops from 1418 to 288** in the emitted TU. Mechanical, and
+   checkable without running anything.
+2. **`ch4_rccsdt_generated_sto3g` / `lih_rccsdt_generated_sto3g` pass with
+   bit-identical `E_corr`.** Hoisting does not reassociate anything — each operator
+   is built by the same code from the same inputs — so this should be exactly
+   bitwise, unlike fusion. **If it is not, stop:** something is being rebuilt from
+   state that differs between parts, which would be a correctness question.
+3. **Re-profile.** Expected: the 67.7 % falls toward ~1/5 of itself; total
+   iteration time falls by roughly 50 %. Predicted rather than assumed, so it can
+   be wrong.
+
+**Why this is worth doing where the previous two levers were not.** It is not a
+model: the profile measures redundant work directly, the redundancy is visible in
+the emitted text (`1418` vs `288`), and the fix removes work rather than
+rearranging it. The two refuted levers both *rearranged* work — different
+contraction order, different loop grouping — and ran into the fact that the
+hardware was not bound by what the models counted.
+
+**Caveat on the ceiling.** This is a ~2x lever on the generated path, not a
+recovery of the ~500x. That number is a ratio across a solver boundary and is not
+a defect size (see "What changed"). What H5 buys is a straightforward halving of
+the production generated path's cost.
+
+**Note the interaction with fusion.** `CCGEN_FUSE_LOOPS` reduces nest count within
+each part but does not change how many times operators are built, so the two are
+independent. Fusion's measured ~0 % is unaffected by this finding, and this finding
+is not an argument for revisiting it.
 
 ### The measurement discipline this must follow
 
@@ -171,25 +211,7 @@ what is measured has cost this project twice.
 
 **Energies bit-identical**, or the arms are not the same calculation.
 
-### H1-path — if the rank-3 kernel dominates (~L, and it is NO LONGER a handoff)
-
-This section previously said to record the share and hand off to
-`CCGEN_KERNEL_SCALING_SCOPE.md`. **That is no longer available**, and the change
-matters:
-
-- that document's measurement route is **closed** (its probe sits on a rerouted
-  code path; the two arms have no residual-level agreement gate), and
-- its lead item — consuming `_optimal_contraction_order` — is **largely redundant**,
-  because `--dressing derived` already eliminates the 391 four-deep terms it
-  targets.
-
-So if H0b says rank 3 dominates, the honest reading is that **the two obvious
-emitter levers are already spent**: the path is not FLOP-bound (a modelled 11.2x
-realised as 3.62x) and not traffic-bound (806 nests fused to 15 for ~0 %). A
-rank-3-dominant profile then means the kernel is expensive for a reason *neither*
-model captured, and the next step is H0c — sampling **inside** the residual
-evaluation — not another cost model. `docs/CCGEN_WHY_GENERATED_IS_SLOW.md` records
-that the modelling approach went 1-for-2.
+### H1-path — **SUPERSEDED by H0c.** "The rank-3 kernel dominates" was right, but the cost inside it is redundant operator rebuilds (67.7 %), not the residual arithmetic the emitter-side models targeted. See H0c and H5.
 
 ### H2-path / H3-path / H4-path — **REMOVED.** H0 measured all three at ~1 % or less; see above. The reasoning they contained (do not reintroduce the hand-written r1/r2 hybrid — it produced a self-consistent wrong answer at −7.56e-05) is preserved under Constraints.
 
