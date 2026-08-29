@@ -1,135 +1,51 @@
 # What makes the generated CC kernels slower than the hand-written ones?
 
-**Two causes, and the larger one is already fixed by a route that ships.**
+**Two causes. The larger already ships; the next lever is loop fusion, worth 32x
+fewer passes over the result tensor.**
 
-1. **Contraction order (fixed).** The undressed emitter gives every term its own
-   full `o³v³` nest and evaluates it n-arily; 391 of 824 terms carry a four-index
-   inner sum (`o⁵v⁵` where factored is `o⁴v³`), accounting for **83–90 % of
-   generated FLOPs**. **The factorized/dressed emit (`--dressing derived`)
-   eliminates all 391** — 824 nests → 414, zero four-deep terms — worth a modelled
-   **10x–18x, growing with size**, and it moves the exponents (`o^4.92 v^4.94` →
-   `o^4.42 v^4.40`).
-2. **One nest per term (open).** Even factorized, 414 nests remain against the
-   hand-written kernel's **one**, which fuses ~9 accumulations into each
-   single-index inner loop. That is the residual gap to `o^3.94 v^4.18`.
+| # | cause | status | size |
+|---|---|---|---|
+| 1 | **contraction order** — 391 of 824 terms evaluated n-arily at `o⁵v⁵` | **FIXED** by `--dressing derived` | 83–90 % of undressed FLOPs; modelled **10x–18x**, growing with size |
+| 2 | **one loop nest per term** — 414 nests, only 13 distinct inner loops | **OPEN — the next lever** | **32x** fewer `o³v³` traversals |
 
-**Consequence: consuming `_optimal_contraction_order` — the standing
-recommendation in `CCGEN_KERNEL_SCALING_SCOPE.md` — targets terms the derivation
-route has already eliminated, and is probably redundant.** That was the exact
-question the abandoned ladder existed to settle.
+Established by code-level census of the emitted C++ plus FLOP arithmetic, after
+the measurement route was closed (`CCGEN_KERNEL_SCALING_SCOPE.md`). No new
+instrumentation.
 
-Established by code-level census and FLOP estimates, after the measurement route
-was closed. No new instrumentation: a count of the emitted C++ plus arithmetic.
+**Immediate consequence: consuming `_optimal_contraction_order` — the standing
+recommendation in `CCGEN_KERNEL_SCALING_SCOPE.md` — is probably redundant.** It
+targets exactly the 391 terms the derivation route already eliminates. That was
+the precise question the abandoned ladder existed to settle, and the census
+answers it without a measurement. **Fusion is what remains.**
 
-## The census
+---
 
-`build/generated/cc/ccsdt_planck_generated.cpp`, the rank-3 triples residual
-(`compute_ccsdt_triples_residual_part{0,1,2}`): **824 separate `o³v³` loop nests**,
-one per term. Classified by the inner summation each carries:
+## Cause 1: contraction order — fixed, quantified
 
-| inner sum | terms | cost per term |
+The undressed emitter gives every residual term its own full `o³v³` nest and
+evaluates it n-arily. Census of `build/generated/cc/ccsdt_planck_generated.cpp`
+(`compute_ccsdt_triples_residual_part{0,1,2}`): **824 nests**, by inner summation:
+
+| inner sum | terms | cost each |
 |---|---|---|
-| `o² v²` | **391** | **o⁵v⁵** |
-| `o² v¹` | 144 | o⁵v⁴ |
-| `o¹ v²` | 140 | o⁴v⁵ |
-| `o¹ v¹` | 87 | o⁴v⁴ |
-| `o² v⁰` | 16 | o⁵v³ |
-| `o⁰ v²` | 16 | o³v⁵ |
-| `o¹ v⁰` | 15 | o⁴v³ |
-| `o⁰ v¹` | 15 | o³v⁴ |
+| `o²v²` | **391** | **o⁵v⁵** |
+| `o²v¹` | 144 | o⁵v⁴ |
+| `o¹v²` | 140 | o⁴v⁵ |
+| `o¹v¹` | 87 | o⁴v⁴ |
+| others | 62 | ≤o⁵v³ |
 
-The 391 four-deep terms are four families:
+The 391 four-deep terms are **83–90 % of all generated FLOPs** (83.2 % BH3/STO-3G,
+89.9 % C2H4/STO-3G, 88.4 % BH3/6-31G), in four families: `t1·t2·t2·oovv` (172),
+`t2·t3·oovv` (151), `t1·t1·t3·oovv` (44), `t1·t1·t1·t2·oovv` (24) — confirming the
+`t2·t3·v` case `CCGEN_HIGHER_OPERATOR_REUSE.md` predicted.
 
-```
-t1·t2·t2·oovv   x172
-t2·t3·oovv      x151
-t1·t1·t3·oovv   x 44
-t1·t1·t1·t2·oovv x 24
-```
+**The factorized emit eliminates all of them.** Same census on a factorized TU
+(`build-profile/`, builders named `build_W_<blocks>_<n>_ccsdt`):
 
-A representative, verbatim from the emitted file:
-
-```cpp
-for i,j,k,a,b,c {                       // o^3 v^3
-    double acc = 0.0;
-    for l, d, e, m                      // x o^2 v^2
-        acc += -0.5 * amplitudes.t2(i,l,a,b)
-                    * amplitudes.t3(j,m,k,d,e,c)
-                    * mo_blocks.oovv(l,m,d,e);
-    result(i,j,k,a,b,c) += acc;
-}
-```
-
-This is precisely the `t2·t3·v` case `CCGEN_HIGHER_OPERATOR_REUSE.md` predicted as
-`o⁵v⁵` n-ary against `o³v⁴` factored — now confirmed present, and counted.
-
-## Contrast: what the hand-written kernel does
-
-`build_dressed_triples_residual` (`tensor_backend.cpp`) is **103 lines and ONE
-loop nest**. Inside it, single-index loops carry ~9 fused accumulations each:
-
-```cpp
-for i,j,k,a,b,c {
-    double value = 0.0;
-    for (int d = 0; d < n_virt; ++d) {
-        value += ints.w_vvvo(a,b,d,j) * amps.t2(i,k,d,c);
-        value += ints.w_vvvo(a,c,d,k) * amps.t2(i,j,d,b);
-        ... 9 accumulations sharing this one loop ...
-    }
-    for (int l = 0; l < n_occ; ++l) { ... 9 more ... }
-}
-```
-
-Two differences, and both matter:
-
-1. **It contracts against precomputed intermediates** (`w_vvvo`, `w_vooo`,
-   `w_oooo`, `w_vvvv`, `w_ovov`, `w_ovvo`), built once per iteration by
-   `build_dressed_triples_intermediates`. The four-index sums are already done
-   there — that is what dressing *is*.
-2. **Terms share loop nests.** One `d` loop serves nine accumulations; the
-   generated form would emit nine separate `o³v³` nests.
-
-So the hand-written kernel is `o³v³ × (one summed index)` — textbook — while the
-generated one is `o³v³ × (up to o²v²)` per term, times 824 terms.
-
-## The FLOP estimate, and where it is trustworthy
-
-Summing the census gives a generated-side cost model. Fitted over the six ladder
-points:
-
-| | model (this census) | measured (the ladder) |
-|---|---|---|
-| generated | **`o^4.92 v^4.94`** | `o^4.87 v^4.52` |
-
-**The `o` exponent agrees to 0.05.** That is the load-bearing check: a pure
-code-level count of the emitted terms reproduces the measured scaling of the
-generated kernel. The `v` exponent runs ~0.4 high, consistent with the measured
-fit's own 21.4 % residual being concentrated at high `v`.
-
-**The ratio model does NOT reproduce the measured ratio**, and this should be
-stated plainly rather than tuned away: modelling the hand-written side as
-`o³v³·(o+v)` gives ratios of 5000–24000× against a measured 21.8–50.1×, i.e. two
-orders of magnitude too high, and the discrepancy is not flat (230× to 660×). The
-hand-written side is not FLOP-bound in the way the model assumes — its nine fused
-accumulations per loop reuse operands already in registers and stream one `t3`
-pass, so its measured cost is far below its nominal FLOP count. **Trust the
-generated-side model; do not quote a modelled ratio.**
-
-## The factorized kernel already fixes this — measured, not assumed
-
-**An earlier revision of this document proposed factoring the 391 terms as the
-work to do. That work is already done**, and a factorized TU exists in the tree
-(`build-profile/`, whose builders are named `build_W_<blocks>_<n>_ccsdt` — the
-derivation route's block-signature naming, not Stanton-Gauss `Wmnij`/`tau`).
-
-Same census, run on both:
-
-| | nests | four-deep (`o²v²`) terms |
+| | nests | four-deep |
 |---|---|---|
 | undressed | 824 | **391** |
 | factorized | **414** | **0** |
-
-**Every `o⁵v⁵` term is gone**, and the nest count halves. Modelled FLOPs:
 
 | case | undressed | factorized | saving |
 |---|---|---|---|
@@ -140,78 +56,154 @@ Same census, run on both:
 | BH3/6-31G | 7.30e+10 | 4.23e+09 | 17.2x |
 | C2H4/STO-3G | 1.11e+11 | 6.22e+09 | 17.8x |
 
-The saving **grows with size** (10x → 18x), confirming it is a scaling fix. Fitted:
+It moves the **exponents**, not the constant — `o^4.92 v^4.94` → `o^4.42 v^4.40`
+against a hand-written `o^3.94 v^4.18` — consistent with the measured 3.12x/3.61x
+wall-clock for `--dressing derived`, and the first evidence here that model and
+measurement agree on *mechanism* rather than only direction.
 
-| | model | vs hand-written |
-|---|---|---|
-| undressed generated | `o^4.92 v^4.94` | — |
-| **factorized generated** | **`o^4.42 v^4.40`** | closes ~half the exponent gap |
-| hand-written (measured) | `o^3.94 v^4.18` | the target |
+**Census validation:** the undressed model fits `o^4.92 v^4.94` against the
+ladder's measured `o^4.87 v^4.52` — **the `o` exponent agreeing to 0.05**. A pure
+code count reproduces the measured scaling.
 
-**So factorization moves the exponents, not just the constant** — `o` drops 4.92 →
-4.42 against a hand-written 3.94. That is consistent with the measured
-3.12x/3.61x wall-clock for `--dressing derived`, and it is the first evidence in
-this repo that the two agree on *mechanism* and not only on direction.
+**What the model cannot do, stated rather than tuned away:** modelling the
+hand-written side gives ratios of 5000–24000x against a measured 21.8–50.1x, two
+orders of magnitude high and not flat (230x–660x). That kernel is not FLOP-bound
+the way the model assumes. **Trust the generated-side model; never quote a
+modelled ratio.** Cause 2 is why.
 
-## What remains
+---
 
-**Roughly half the exponent gap survives factorization** (`o^4.42 v^4.40` against
-`o^3.94 v^4.18`), so a second mechanism is still in play. The census locates it:
-414 nests remain, against the hand-written kernel's **one**.
+## Cause 2: one nest per term — the next lever
 
-The hand-written form fuses ~9 accumulations into each single-index inner loop,
-reusing operands already in registers over one `t3` pass. The emitter cannot do
-this because it emits one nest per term, so 414 nests each re-stream their
-operands. That is a constant-factor and memory-traffic effect on top of the
-residual exponent gap.
+Even factorized, **414 nests remain against the hand-written kernel's one.**
 
-Note the earlier measurement that loop fission is *not* a penalty at `no=nv=4`
-(0.62x — the fissed form was faster) was taken at a size where the working set is
-32 KB and fully L1-resident. It does not generalize to the 414-nest form at
-production size, and that is the untested half of H1.
+The decisive number: those 414 nests have only **13 distinct inner-loop
+signatures**, and **every one of the 414 shares its signature with at least one
+other**.
 
-**Recommendation: measure the factorized kernel before building anything else.**
-`--dressing derived` is wired and produces this TU. Consuming
-`_optimal_contraction_order` in the emitter — the standing recommendation in
-`CCGEN_KERNEL_SCALING_SCOPE.md` — targets the same 391 terms this route has
-already eliminated, so **the two overlap and it is probably redundant**. That was
-the exact question the abandoned ladder was meant to settle, and the census
-answers it without the measurement.
+| inner loop | nests sharing it |
+|---|---|
+| `l, m, e` | **81** |
+| `l` | 54 |
+| `l, e` | 45 |
+| `d` | 42 |
+| `m, d, e` | 42 |
+| `m, d` | 36 |
+| `l, d` | 33 |
+| `l, m` | 21 |
+| (5 more) | ≤20 each |
 
-## What was checked and ruled out
+They are fusable in the literal sense — three of the 81 in the largest group,
+verbatim from the emitted file:
 
-- **Loop-invariant work.** Zero of 824 nests have an accumulation that ignores any
-  of `i,j,k,a,b,c`, so the compiler cannot hoist any nest out. The emitted FLOPs
-  are real work, not something `-O3` removes.
-- **Accessor overhead.** Fixed and gated (`CCGEN_TENSOR_ACCESSOR.md`, 206× on
-  rank 3). Not a current factor.
-- **Loop fission as the cause.** Measured 0.62× at `no=nv=4` — the fissed form is
-  *faster* there. It is not the mechanism.
+```cpp
+acc += 0.5  * W_oooovv_2(i,j,l,m,a,e) * amplitudes.t3(k,l,m,b,c,e);
+acc += -0.5 * W_oooovv_2(i,j,l,m,b,e) * amplitudes.t3(k,l,m,a,c,e);
+acc += 0.5  * W_oooovv_2(i,j,l,m,c,e) * amplitudes.t3(k,l,m,a,b,e);
+```
+
+Same operands, same loop, three separate `o³v³` traversals. **This is exactly the
+hand-written kernel's shape**, which writes precisely this pattern as one nest:
+
+```cpp
+for i,j,k,a,b,c {
+    double value = 0.0;
+    for (int d = 0; d < n_virt; ++d) {
+        value += ints.w_vvvo(a,b,d,j) * amps.t2(i,k,d,c);
+        value += ints.w_vvvo(a,c,d,k) * amps.t2(i,j,d,b);
+        ...  9 accumulations sharing this one loop ...
+    }
+    for (int l = 0; l < n_occ; ++l) { ... 9 more ... }
+}
+```
+
+### What fusion is worth
+
+**Fusion does not change FLOP count.** It changes how many times the `o³v³` result
+tensor is traversed and its operands re-streamed:
+
+- now: **414** traversals, one per nest
+- fused: **13**, one per distinct inner signature
+- **32x fewer passes over the result**
+
+| case | `t3` size | traffic now | fused |
+|---|---|---|---|
+| BH3/STO-3G | 0.031 MiB | 12.9 MiB | **0.4 MiB** |
+| CH4/STO-3G | 0.061 MiB | 25.3 MiB | **0.8 MiB** |
+| H2O/6-31G | 0.488 MiB | 202.1 MiB | **6.3 MiB** |
+| C2H4/STO-3G | 0.844 MiB | 349.3 MiB | **11.0 MiB** |
+
+**This is a memory-traffic lever, not a FLOP lever** — which is exactly why the
+FLOP model overpredicts the hand-written side by two orders of magnitude: that
+kernel gets its nine accumulations per loop nearly free on operands already in
+registers, while the generated form pays a full pass for each.
+
+It also explains the shape of the measured residual.
+`CCGEN_KERNEL_SCALING_SCOPE.md` records the generated fit's 21.4 % error as
+**concentrated at high `v`** — exactly where `o³v³` traffic dominates and 414
+passes hurt most.
+
+### The caveat worth respecting
+
+The earlier "loop fission is not a penalty" measurement (0.62x — the fissed form
+was *faster*) was taken at `no=nv=4`, where the whole residual is 32 KB and
+L1-resident. **At that size there is no traffic to save, so the result is real and
+simply does not generalize.** The table above shows traffic reaching 349 MiB at
+C2H4/STO-3G while `t3` itself stays under 1 MiB — the working set fits, the
+*traffic* does not.
+
+This is the untested half of H1 from the scaling scope, now with a concrete
+mechanism and a number rather than a hypothesis.
+
+---
+
+## What to do, in order
+
+1. **Measure the factorized kernel first, before any emitter work.**
+   `--dressing derived` is wired and produces the 414-nest TU, and its 3.12x/3.61x
+   is already measured end-to-end. Fusion must be measured against *that* baseline,
+   not the undressed one — otherwise cause 1's saving gets counted twice.
+2. **Fuse nests sharing an inner-loop signature.** 414 → ~13. The grouping is
+   mechanical (the signature is already implicit in the emitted structure) and the
+   target shape is the hand-written kernel's. Emitter-side:
+   `planck_tensor_cpp.py:284,443` emit one nest per term.
+3. **Do not consume `_optimal_contraction_order`** without re-checking — it targets
+   the 391 terms cause 1 already eliminates.
+
+## Ruled out
+
+- **Loop-invariant work.** Zero of 824 nests have an accumulation ignoring any of
+  `i,j,k,a,b,c`, so no nest can be hoisted out. The emitted FLOPs are real work.
+- **Accessor overhead.** Fixed and gated (`CCGEN_TENSOR_ACCESSOR.md`, 206x on
+  rank 3).
+- **Loop fission per se.** 0.62x at `no=nv=4` — see the caveat above; a
+  size-dependent result, not a refutation.
 
 ## Why this is code-level rather than measured
 
-`CCGEN_KERNEL_SCALING_SCOPE.md` records that the measurement route is closed: the
+`CCGEN_KERNEL_SCALING_SCOPE.md` records the measurement route as closed: the
 timing probe sits on a code path the rank-3 representation fix rerouted away from,
-and the hand-written and generated arms have no residual-level agreement gate
-(distinct solvers, distinct amplitude representations, both correct). Whole-
-iteration timing measures *"solver iteration"*, not *"triples kernel"*.
+and the two arms have no residual-level agreement gate (distinct solvers, distinct
+amplitude representations, both correct). Whole-iteration timing measures *"solver
+iteration"*, not *"triples kernel"*.
 
-This document is the answer that route was meant to produce, obtained instead by
-counting the emitted terms. It is sufficient to act on: the term census is exact,
-the generated-side model reproduces the measured `o` exponent, and the fix's
-target is identified to 391 specific terms in four named families.
+This document is the answer that route was meant to produce, obtained by counting
+emitted terms instead. It is sufficient to act on: the census is exact, the
+generated-side model reproduces the measured `o` exponent, and both levers are
+identified to specific term counts.
 
 ## Key locations
 
 | what | where |
 |---|---|
-| the 824 nests | `build/generated/cc/ccsdt_planck_generated.cpp`, `compute_ccsdt_triples_residual_part{0,1,2}` |
-| the hand-written contrast | `build_dressed_triples_residual`, `src/post_hf/cc/tensor_backend.cpp` |
-| the intermediates it contracts against | `build_dressed_triples_intermediates`, same file |
-| computed and discarded contraction order | `python/ccgen/tensor_ir.py:283` (`_optimal_contraction_order`) |
-| the emitter that ignores it | `python/ccgen/emit/planck_tensor_cpp.py:284,443` |
+| undressed kernel, 824 nests | `build/generated/cc/ccsdt_planck_generated.cpp` |
+| factorized kernel, 414 nests / 13 signatures | `build-profile/generated/cc/ccsdt_planck_generated.cpp` |
+| hand-written kernel, ONE nest | `build_dressed_triples_residual`, `src/post_hf/cc/tensor_backend.cpp` |
+| its intermediates | `build_dressed_triples_intermediates`, same file |
+| one-nest-per-term emission (the fusion target) | `python/ccgen/emit/planck_tensor_cpp.py:284,443` |
+| computed and discarded contraction order | `python/ccgen/tensor_ir.py:283` |
 | the measured ladder this explains | `docs/CCGEN_KERNEL_SCALING_SCOPE.md` |
-| the predicted `t2·t3·v` case, now confirmed | `docs/CCGEN_HIGHER_OPERATOR_REUSE.md` |
+| the predicted `t2·t3·v` case, confirmed | `docs/CCGEN_HIGHER_OPERATOR_REUSE.md` |
 
 ---
 

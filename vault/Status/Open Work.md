@@ -282,28 +282,38 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
 `docs/CCGEN_KERNEL_SCALING_SCOPE.md`.
 
 - **~~Enumerate the terms whose contraction order is wrong.~~ DONE (2026-08-29) —
-  `docs/CCGEN_WHY_GENERATED_IS_SLOW.md`.** Two causes, and **the larger one already
-  ships**. (1) *Contraction order:* the undressed emitter gives every term its own
-  `o³v³` nest evaluated n-arily; **391 of 824 terms carry a four-index inner sum**
-  (`o⁵v⁵` vs `o⁴v³` factored) = **83–90 % of generated FLOPs**, in four families
-  (`t1t2t2·oovv` 172, `t2t3·oovv` 151, `t1t1t3·oovv` 44, `t1t1t1t2·oovv` 24).
-  **The factorized emit (`--dressing derived`) eliminates all 391** — 824 nests →
-  414, zero four-deep — worth a modelled **10x→18x growing with size**, and it
-  moves the exponents (`o^4.92 v^4.94` → `o^4.42 v^4.40`), consistent with the
-  measured 3.12x/3.61x wall-clock. (2) *One nest per term, still open:* 414 nests
-  remain against the hand-written kernel's **one**, which fuses ~9 accumulations
-  per single-index inner loop — that is the residual gap to `o^3.94 v^4.18`.
+  `docs/CCGEN_WHY_GENERATED_IS_SLOW.md`.** Two causes; **the larger one already
+  ships.** *(1) Contraction order — FIXED.* The undressed emitter gives every term
+  its own `o³v³` nest evaluated n-arily; **391 of 824 terms carry a four-index
+  inner sum** (`o⁵v⁵` vs `o⁴v³` factored) = **83–90 % of generated FLOPs**.
+  **`--dressing derived` eliminates all 391** — 824 nests → 414, zero four-deep —
+  modelled **10x→18x growing with size**, moving the *exponents*
+  (`o^4.92 v^4.94` → `o^4.42 v^4.40`), consistent with the measured 3.12x/3.61x.
   Census validated against the ladder: undressed model `o^4.92 v^4.94` vs measured
-  `o^4.87 v^4.52`, **the `o` exponent agreeing to 0.05**. Caveat: the hand-written
-  side is not FLOP-bound the same way, so a modelled *ratio* overpredicts by 2
-  orders of magnitude — trust the generated-side model only.
+  `o^4.87 v^4.52`, **`o` agreeing to 0.05**. Caveat: the hand-written side is not
+  FLOP-bound the same way, so a modelled *ratio* overpredicts by 2 orders of
+  magnitude — trust the generated-side model only.
+- **THE NEXT LEVER: fuse loop nests sharing an inner-loop signature.** Even
+  factorized, **414 nests remain against the hand-written kernel's ONE** — and they
+  carry only **13 distinct inner-loop signatures**, with every one of the 414
+  sharing its signature with at least one other (largest group: 81 nests summing
+  `l,m,e`). Fusing them is **32x fewer passes over the `o³v³` result**: traffic on
+  C2H4/STO-3G drops **349 MiB → 11 MiB** while `t3` itself is under 1 MiB.
+  **This is a memory-traffic lever, not a FLOP lever**, which is why the FLOP model
+  overpredicts the hand-written side — that kernel gets 9 accumulations per loop
+  nearly free on registers. It also explains the measured fit's 21.4 % residual
+  being *concentrated at high `v`*, where `o³v³` traffic dominates. Emitter-side:
+  `planck_tensor_cpp.py:284,443`. **Measure the factorized kernel first** so
+  cause 1's saving is not counted twice. Note the old "fission is not a penalty"
+  result (0.62x) was taken at `no=nv=4` where the residual is 32 KB and
+  L1-resident — real, and it does not generalize; this is H1's untested half, now
+  with a mechanism and a number.
 - **~~Then consume `_optimal_contraction_order` in the emitter.~~ PROBABLY
   REDUNDANT.** It targets exactly the 391 terms `--dressing derived` already
-  eliminates. `python/ccgen/tensor_ir.py:283` still computes and discards it, and
+  eliminates. `tensor_ir.py:283` still computes and discards it and
   `grep BLASHint python/ccgen/emit/planck_tensor_cpp.py` still returns nothing, so
-  the lever is real — but the work it would do is done by a route that is wired and
-  value-gated. **Measure the factorized kernel before building this.** The
-  remaining lever is loop FUSION (cause 2), which is a different change.
+  the lever is real — but the work is done by a route that is wired and
+  value-gated. Re-check before building; fusion is the live lever.
 - **Firm up the exponents.** `o` spans only 4→8 across six points and the fit still leans on its
   endpoints (leave-one-out moves `o` across +0.40..+1.18, though it keeps its sign in all six
   variants). Two or three points in `o=8..12` would settle it. Treat `o^0.9 v^0.3` as indicative,
