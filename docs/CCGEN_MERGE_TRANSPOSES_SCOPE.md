@@ -106,14 +106,50 @@ Three reasons that do not depend on the FLOP model:
 
 Ordered so the cheapest step can kill the expensive ones.
 
-### M1 — measure before wiring (~S, no production change)
+### M1 — **DONE (2026-08-29). Confirms the re-cost; the parent doc's figure did not transfer.**
 
-Emit the spatial `ccsdt` dressed TU both ways by calling
-`factorize_equations(..., merge_transposes=True/False)` directly, and record:
-builder count, TU bytes, and distinct operator arrays.
+Emitted the spatial `ccsdt` dressed arbitrary-order TU both ways by patching the
+single production `factorize_equations` call at runtime — **no production change**,
+since wiring is M4's job and pre-empting it here would make M2/M3 measure something
+other than what M4 will ship.
 
-*Verify:* the numbers. The parent doc predicts 59 → 31 builders on spatial
-`ccsd`; confirm the rank-3 figure rather than assuming it transfers.
+| metric | unmerged | merged | ratio |
+|---|---|---|---|
+| distinct `build_W_*` definitions | 288 | **91** | **3.16x** |
+| builder call sites | 338 | 127 | 2.66x |
+| TU bytes | 801 770 | 522 557 | 1.53x |
+| TU lines | 23 157 | 15 823 | 1.46x |
+
+**The profile's top three families, which is what the re-cost turns on:**
+
+| family | runtime share | unmerged | merged | ratio |
+|---|---|---|---|---|
+| `t2t2v_oooovv` | **20.4 %** | 38 | **4** | **9.5x** |
+| `t1t3v_oooovv` | 8.9 % | 19 | 11 | 1.7x |
+| `t1t1t2v_oooovv` | 5.6 % | 12 | 2 | 6.0x |
+
+**The parent doc's "59 → 31 builders on spatial `ccsd`" did not transfer**, exactly
+as M1 was told not to assume. At rank 3 the reduction is **288 → 91**, a 3.16x
+ratio against `ccsd`'s 1.9x — the merge gets *better* with rank, consistent with
+`CCGEN_OPERATOR_IDENTITY_AND_REUSE`'s 1.4x → 2.1x → 3.7x trend.
+
+**The merge is genuinely exploiting transposes, not just deduplicating.** One
+surviving operator, `W_t2t2v_oooovv_07fe`, is read at **12 distinct index orders**:
+
+```
+(i, j, k, l, a, c)   (i, j, k, l, b, c)   (i, k, j, l, c, a)
+(i, k, j, l, c, b)   (j, i, k, l, a, c)   ...
+```
+
+**That is the property M5's call-site gate must protect**, and it is why a wrong
+merge is a correctness defect rather than a slowdown: one array now serves twelve
+readings, and a dropped or inverted permutation silently computes a different
+tensor.
+
+**M1's verdict: proceed to M2/M3.** The counts support the profile-weighted
+1.21x-1.36x estimate rather than the operator-count model's 1.02x-1.20x, and the
+TU shrinking 1.53x is a real compile-time win on top — on a TU that is `-O1`-pinned
+precisely because it is pathological to compile.
 
 ### M2 — compile time and size, which is the likelier win (~M, one build each)
 
