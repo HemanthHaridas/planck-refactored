@@ -309,6 +309,23 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
   code-size lever** (the registry TU is `-O1`-pinned because these are pathological
   to compile); it is not a speed lever.
 
+- **H5 LANDED (2026-08-29): dressed operator builds are hoisted out of the
+  `_partN` chunks — 1.76x at rank 3, 20.8x fewer builder calls at rank 4.**
+  `_emit_chunked_kernel` emitted every dressed operator inside *every* part, so the
+  duplication factor equalled the part count. Rank-3 triples: 1080 calls for 270
+  operators. **Rank-4 quadruples: 16 092 for 894** — 18 parts — so the defect scaled
+  with kernel size, worst at the production target. Now built once into a generated
+  `<kernel>_ops` struct and passed by `const&`.
+  Measured: CH4 29.59 s → **16.81 s (1.76x)**, BH3 1.71x, builder time 2.64x,
+  residual 1.04x (the check that the decomposition is sound). **`E_corr` bitwise
+  identical** on both generated gates — hoisting reassociates nothing. Rank-4 TU
+  12.8 → 10.5 MB with 48 170 fewer call sites, a compile-time win on an `-O1`-pinned
+  TU. Undressed path byte-identical. Not done: a rank-4 dressed end-to-end run
+  (10.5 MB TU + `-O1` registry); if one is ever built, check `be_rccsdtq_sto3g`
+  against `-14.4036550465`.
+  **What it leaves:** builders are still 45 % of rank-3 runtime after removing 75 %
+  of the calls, so further gain is about what a single build costs — which is H6.
+
 - **CC is the only hot path in Planck with NO OpenMP, and that is now the largest
   remaining lever (~3.9x modelled at 4 threads).** Measured: zero pragmas in
   `src/post_hf/cc/*.cpp`, in the generated kernels, or in the emitter; a CH4 solve

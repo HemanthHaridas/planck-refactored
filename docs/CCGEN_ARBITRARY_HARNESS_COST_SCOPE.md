@@ -290,14 +290,47 @@ functions.
 `parallel for` over the builder list, measured — not a threading strategy designed
 in advance.
 
-#### H5.4 — check the other kernels and ranks (~S)
+#### H5.4 — **DONE (2026-08-29). Rank 4 is 5x worse than rank 3, as predicted it might be.**
 
-The same chunking applies wherever `len(terms) > _KERNEL_CHUNK_TERMS`. Rank 4
-(CCSDTQ) is chunked far more aggressively and is the production target.
+The scope said *"do not assume the rank-3 ratio transfers"*. It does not — the
+rank-4 saving is **five times larger**:
 
-*Verify:* builder-call counts before/after for every chunked kernel in a rank-4
-dressed emit. **Do not assume the rank-3 ratio transfers** — this codebase has
-twice shown rank 3 is not a proxy for rank 4.
+| kernel | parts | distinct ops | pre-H5 calls | post-H5 | reduction |
+|---|---|---|---|---|---|
+| `ccsdt` triples | 4 | 278 | 1112 | 278 | 4.0x |
+| **`ccsdtq` quadruples** | **18** | **894** | **16 092** | **894** | **18.0x** |
+| ccsdtq TU total | — | — | **50 601** | **2431** | **20.8x** |
+
+**The mechanism is exact: the duplication factor equals the part count.** Every
+part emits the identical operator set, so waste is `n_parts x n_ops`. Quadruples
+chunks into 18 parts against triples' 4, so **the defect scales with kernel size —
+worst precisely at the production target.**
+
+Side effect worth having: the rank-4 TU shrinks **12.8 MB → 10.5 MB** with **48 170
+fewer call sites** for the optimizer, despite ~5k more lines from the struct
+definitions. `generated_kernel_registry.cpp` is `-O1`-pinned because these TUs are
+pathological to compile, so this is a compile-time win on top of the runtime one.
+
+**Not measured: a rank-4 dressed end-to-end run.** Building one means compiling a
+10.5 MB TU plus the `-O1` registry; the mechanical and structural evidence above is
+unambiguous and the rank-3 correctness gate already passed bitwise. Recorded as
+**not done** rather than implied — if rank-4 dressed is ever built for another
+reason, run `be_rccsdtq_sto3g` and check `E_corr` against `-14.4036550465`.
+
+### H5 — closed
+
+| step | result |
+|---|---|
+| H5.1 | 1418 → 338 TU calls at rank 3; 1080 → 0 inside parts |
+| H5.2 | both generated gates pass, `E_corr` **bitwise identical** |
+| H5.3 | CH4 **1.76x** (29.59 s → 16.81 s), BH3 1.71x; builder time 2.64x |
+| H5.4 | rank 4 **20.8x** fewer builder calls; TU 12.8 → 10.5 MB |
+
+**What H5 leaves behind:** builders are still **45 % of runtime** at rank 3 after
+removing 75 % of the calls. The remaining builds are each needed once, so further
+gain is about what a single build *costs*, not how often it runs — and the
+cheapest attack on that is **H6 (OpenMP)**, since 270 independent builds with no
+write sharing is the easiest parallel target in the whole path.
 
 #### What H5 does not do
 
