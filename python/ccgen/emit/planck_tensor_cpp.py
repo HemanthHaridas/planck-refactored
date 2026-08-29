@@ -1248,7 +1248,32 @@ def _emit_chunked_kernel(
 
     n_parts = (len(emitted_terms) + _KERNEL_CHUNK_TERMS - 1) // _KERNEL_CHUNK_TERMS
 
+    # H5 (docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md): build each dressed operator
+    # ONCE and pass it to the parts, instead of every part rebuilding the whole set.
+    #
+    # The comment this replaces called the per-part rebuild "cheap". It was, for an
+    # UNDRESSED emit, where `required_intermediates` is empty. Dressing populated
+    # that list and nobody re-measured: on the rank-3 triples kernel it emitted 1080
+    # builder calls for 270 distinct operators -- 75% duplication -- and a `sample`
+    # profile put 67.7% of total runtime in `build_W_*`.
+    #
+    # A struct rather than 270 parameters: it keeps each part's signature stable as
+    # the operator set changes, and one `const&` costs nothing at the call.
+    ops_struct = f"{kernel}_ops" if required_intermediates else None
     out: list[str] = []
+    if ops_struct:
+        out.append(f"struct {ops_struct}")
+        out.append("{")
+        for spec in required_intermediates:
+            # `_tensor_type(spec.rank)` is the same expression the builder's own
+            # definition uses for its return type (see `_emit_intermediate_builder`),
+            # so the struct member and the builder cannot drift. Preferred over
+            # `decltype(...)`, which would drag `<utility>` into every generated TU
+            # for no benefit.
+            out.append(f"    {_tensor_type(spec.rank)} {spec.name};")
+        out.append("};")
+        out.append("")
+
     for p in range(n_parts):
         chunk = emitted_terms[p * _KERNEL_CHUNK_TERMS:(p + 1) * _KERNEL_CHUNK_TERMS]
         out.append(f"static void {kernel}_part{p}(")
@@ -1256,7 +1281,9 @@ def _emit_chunked_kernel(
         out.append("    const CanonicalRHFCCReference &reference,")
         out.append("    const TensorCCBlockCache &mo_blocks,")
         out.append(f"    const {denominator_type} &denominators,")
-        out.append(f"    const {amplitude_type} &amplitudes)")
+        out.append(f"    const {amplitude_type} &amplitudes{',' if ops_struct else ')'}")
+        if ops_struct:
+            out.append(f"    const {ops_struct} &ops)")
         out.append("{")
         out.extend(_orbital_count_preamble(ucc))
         if ucc:
@@ -1264,10 +1291,10 @@ def _emit_chunked_kernel(
         else:
             out.append("    (void)no; (void)nv;")
         if required_intermediates:
+            # Bound as references into the hoisted struct: the term bodies below
+            # reference operators by bare name, so this keeps them unchanged.
             for spec in required_intermediates:
-                out.append(
-                    f"    const auto {spec.name} = {_builder_symbol(method, spec.name)}("
-                    "reference, mo_blocks, denominators, amplitudes);")
+                out.append(f"    const auto &{spec.name} = ops.{spec.name};")
         if arbitrary:
             bindings = (_amplitude_view_bindings(chunk)
                         + _eri_view_bindings(chunk)
@@ -1282,9 +1309,18 @@ def _emit_chunked_kernel(
     # the signature + result allocation already; strip its trailing setup we don't
     # reuse (the parts do their own no/nv + intermediates) by appending calls.
     body = list(header_lines)
+    if ops_struct:
+        body.append(f"    const {ops_struct} ops{{")
+        for spec in required_intermediates:
+            body.append(
+                f"        {_builder_symbol(method, spec.name)}("
+                "reference, mo_blocks, denominators, amplitudes),")
+        body.append("    };")
+    call_tail = ", ops);" if ops_struct else ");"
     for p in range(n_parts):
         body.append(
-            f"    {kernel}_part{p}(result, reference, mo_blocks, denominators, amplitudes);")
+            f"    {kernel}_part{p}(result, reference, mo_blocks, denominators, amplitudes"
+            f"{call_tail}")
     body.append("    return result;")
     body.append("}")
     return "\n".join(out + body)

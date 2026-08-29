@@ -181,42 +181,61 @@ waste is entirely the 4x duplication, not over-building. (An earlier reading of
 "270 built, 59 used in part0" as 78 % over-building was wrong — the other 211 are
 used by sibling parts.)
 
-#### H5.1 — emit the builds once, pass them in (~M)
+#### H5.1 / H5.2 / H5.3 — **DONE (2026-08-29). 1.76x, energies bitwise identical.**
 
-`_emit_chunked_kernel` currently emits `required_intermediates` inside every part
-(`planck_tensor_cpp.py:1266-1270`). Emit them once in the main kernel instead and
-pass them to the parts, exactly as `result` already travels by reference.
+`_emit_chunked_kernel` now emits each operator **once** in the main kernel into a
+generated `<kernel>_ops` struct, and passes it to the parts by `const&`. Each part
+binds `const auto &W_x = ops.W_x;` so every term body is unchanged.
 
-The parts' signature grows by one parameter — a struct of `const` operator
-references, or the operators individually. Prefer a struct: 270 parameters is not
-a signature, and a struct keeps the part signature stable as the operator set
-changes.
+Struct members are typed with `_tensor_type(spec.rank)` — the same expression the
+builder's own definition uses for its return type, so the two cannot drift.
+(`decltype(builder(std::declval<...>()))` also works but drags `<utility>` into
+every generated TU for nothing.)
 
-*Verify — mechanical, no run required:*
-- **builder calls in the emitted TU: 1080 → 270.** `grep -c "= build_W_"` on the
-  triples kernel.
-- every part still compiles (the operators it reads are now parameters).
+**H5.1 — mechanical gate, no run required:**
 
-#### H5.2 — correctness (~S)
+| | TU builder calls | inside triples parts |
+|---|---|---|
+| before | 1418 | **1080** |
+| after | **338** | **0** |
 
-*Verify:* `ch4_rccsdt_generated_sto3g` and `lih_rccsdt_generated_sto3g` pass with
-**bit-identical** `E_corr` against the pre-H5 numbers (`-0.0791116825`,
-and BH3 `-0.0533629208`).
+**H5.2 — correctness:** both generated gates pass with `E_corr` **bit-identical to
+all ten digits** (`-0.0533629208`, `-0.0791116825`). As predicted this is exactly
+bitwise — hoisting reassociates nothing.
 
-**This must be exactly bitwise, unlike fusion.** Hoisting reassociates nothing —
-each operator is built by the same code from the same `(reference, mo_blocks,
-denominators, amplitudes)`. **If the energies move, stop:** it means an operator
-was being built from state that differs between parts, which is a correctness
-question about the current emit, not a tolerance question about the new one.
+**H5.3 — measured (CH4, best-of-2, same binary configuration apart from H5):**
 
-#### H5.3 — measure (~S)
+| | before | after | |
+|---|---|---|---|
+| wall | 29.59 s | **16.81 s** | **1.76x** |
+| builder share | 67.7 % | 45.1 % | |
+| builder time | 20.03 s | **7.58 s** | **2.64x** |
+| residual time | 9.56 s | 9.23 s | 1.04x |
 
-*Verify:* re-run H0a/H0b (`t_res`) and the H0c `sample`.
+BH3: 9.52 s → 5.57 s (**1.71x**).
 
-Predicted: builders fall from 67.7 % toward ~17 % (a quarter of the calls),
-i.e. total iteration time down **~50 %**. Recorded as a prediction so it can be
-wrong — if the builders do not fall proportionally, the per-call cost is not
-uniform and the profile will say which family still dominates.
+**The residual at 1.04x is the check that the decomposition is sound** — H5 does
+not touch the residual, so it should be flat, and it is. That also invalidates a
+cross-run normalization attempted first: absolute sample counts between two
+`sample` runs of different duration are not comparable (it reported the residual
+"falling" 0.60x, which is impossible). **Use wall-clock times and within-run
+shares; do not compare absolute sample counts across runs.**
+
+#### What the prediction got wrong, and what that reveals
+
+Predicted: builders 67.7 % → ~17 %, total ~50 % faster. Measured: **45.1 %**, total
+**43 % faster**. The wall-clock prediction was close; the share prediction was not.
+
+Builder time fell **2.64x**, not the **4x** the call-count reduction implies. So
+the eliminated builds were **cheaper than average** — plausibly the small-rank
+operators, since a part's 270 builds span every rank while its 59-118 *used*
+operators skew toward the ones its terms actually need.
+
+**Builders are still 45 % of runtime after removing 75 % of the calls.** The 270
+remaining builds are irreducible in the sense that each is genuinely needed once —
+so further gain here is not about *how many times* operators are built but about
+*what a single build costs*. That is a different question, and this document does
+not have it scoped.
 
 #### H5.4 — check the other kernels and ranks (~S)
 
