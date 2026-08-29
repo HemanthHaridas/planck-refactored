@@ -354,11 +354,24 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
   **`merge_transposes` already solves this**: symbolic, exact against a numeric
   oracle, value-gated **0/2536 at rank 4** — and **not threaded into production**.
   `CCGEN_MERGE_TRANSPOSES_SCOPE.md` deferred it because an *operator-count* model
-  put the FLOP saving at 1.02x-1.20x. **This profile contradicts that estimate**:
-  the one family is 20.4 % of runtime and the top three mergeable families are
-  **34.9 % combined**. **Re-cost it against the profile before anything else** — a
-  built, gated, unthreaded mechanism is exactly the position the derivation route
-  was in before it proved worth 3.6x.
+  put the FLOP saving at 1.02x-1.20x.
+
+  **RE-COSTED against the profile (2026-08-29): 1.21x - 1.36x, so the old estimate
+  was low and its "compile time, not speed" conclusion is superseded.** Measured
+  operator counts, spin-adapted `ccsdt`: **288 → 91 overall (3.2x)**, and the hot
+  family **38 → 4 (9.5x)**. Weighted by measured runtime share, the top three
+  mergeable families are 34.9 % of runtime and 26.7 % is removable if builder cost
+  tracks call count; applying H5's measured realization factor (it predicted 4x on
+  counts and delivered 2.64x, because the eliminated builds were cheaper than
+  average) gives the 1.21x floor. **Even that floor sits at the old model's
+  ceiling.** The count model was not wrong about counts — it was wrong to treat
+  operators as equal-cost, and `t2t2v_oooovv` writes a rank-6 result over a 9-deep
+  nest. **Do this next.** A built, symbolically-exact, value-gated, unthreaded
+  mechanism is exactly the position the derivation route was in before it proved
+  worth 3.6x. Scoped M1-M5 in `docs/CCGEN_MERGE_TRANSPOSES_SCOPE.md`, with M3 now
+  expecting 1.21x-1.36x and instructed to check the `t2t2v_oooovv` family
+  specifically — if the total moves but that family does not, the causal story is
+  wrong even though the number looks right.
 
   Incidental finding: **chunking splits by term COUNT, not cost.** All three heavy
   parts hold 256 nests but differ 18x in modelled cost (`part1` collects the `o²v²`

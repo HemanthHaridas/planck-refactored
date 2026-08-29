@@ -1,8 +1,59 @@
 # Should `merge_transposes` be threaded into the production dressing path?
 
-**Scope for in-flight work. Not started.** Opened by
+**Scope for in-flight work. Not started — but RE-COSTED 2026-08-29 against a
+profile, and it is worth more than this document concluded.** Opened by
 `CCGEN_WIRING_THE_DERIVATION_ROUTE.md`, which wired the derivation route,
 measured it at 3.12x/3.61x, and left this as the one deferred lever.
+
+## Re-costing (2026-08-29) — the original estimate was model-derived and low
+
+This document deferred the merge on the grounds that the modelled FLOP saving is
+**1.02x-1.20x** and "the likely win is compile time, not speed". That figure came
+from an **operator-count model**. A profile of the post-H5 generated path
+(`CCGEN_ARBITRARY_HARNESS_COST.md`) contradicts it.
+
+**Measured operator counts**, spin-adapted `ccsdt`, `factorize_equations(...,
+merge_transposes=True)` against `False`:
+
+```
+288 -> 91 operators overall   (3.2x)
+```
+
+**Weighted by measured runtime share** (HF/6-31G, 25 483 leaf samples; builders are
+39.0 % of runtime in total):
+
+| family | share of runtime | before | after | ratio | removable |
+|---|---|---|---|---|---|
+| `t2t2v_oooovv` | **20.4 %** | 38 | **4** | **9.5x** | 18.3 % |
+| `t1t3v_oooovv` | 8.9 % | 19 | 11 | 1.7x | 3.7 % |
+| `t1t1t2v_oooovv` | 5.6 % | 12 | 2 | 6.0x | 4.7 % |
+| **top 3** | **34.9 %** | | | | **26.7 %** |
+
+**Predicted speedup: 1.21x - 1.36x.**
+
+- Upper bound **1.36x** assumes builder cost scales with call count.
+- Lower bound **1.21x** applies H5's measured realization factor. H5 predicted 4x
+  on call count and delivered **2.64x** (0.66), because the eliminated builds were
+  cheaper than average. Assuming the same discount here is the conservative read.
+
+**Even the discounted floor sits at the old model's ceiling.** The operator-count
+model was not wrong about counts; it was wrong to treat operators as equal-cost.
+`t2t2v_oooovv` writes a **rank-6 result over a 9-deep nest** — it is one of the
+most expensive operator shapes emitted, and there are 38 of them that are **one
+contraction** differing only in index slots.
+
+**What this does not claim.** Merging cannot remove all of the 34.9 %: the merged
+operator is still built once, and the call sites still read it (transposed, by
+index, inside the loop nest — no copy). The 26.7 % is what the *duplicate builds*
+cost. Nor is this a measurement — it is a profile-weighted estimate, which is
+strictly better grounded than the operator-count model it replaces but still needs
+M2/M3 below to confirm.
+
+**Revised recommendation: do this next, ahead of the compile-time framing.** The
+mechanism is built, symbolically exact, and value-gated 0/2536 at rank 4. That is
+the position the derivation route was in before it proved worth 3.6x.
+
+
 
 W3 deferred it deliberately — the merge is the end state, and absorbing the
 factorizer's seven selection knobs before the route had proven correct was the
@@ -26,12 +77,16 @@ The 1.4x-3.7x is an *operator count* reduction; the 1.02x-1.20x is the
 *modelled FLOP saving*. Only the second is a performance claim, and it is
 modest — 2-3 % at ranks 2-3.
 
-So the honest framing is not "the merge is worth 3.7x". It is: **the merge's
-value at rank 3 is probably compile time and code size, not speed**, and the
-speed case, if there is one, is at rank 4.
+So the honest framing is not "the merge is worth 3.7x" — an operator count is not
+a speedup. **But it is also not "probably compile time, not speed", which is what
+an earlier revision of this section concluded.** That reading treated all operators
+as equal-cost. The profile above shows they are not: the 38-member
+`t2t2v_oooovv` family is **20.4 % of runtime by itself**, because it writes a
+rank-6 result over a 9-deep nest, and it merges 38 → 4.
 
-That is a different proposition from the one the parent doc implies by quoting
-1.4x → 2.1x → 3.7x, and it should be settled by measurement before any wiring.
+**Current best estimate: 1.21x - 1.36x of runtime, plus the compile-time and
+code-size win.** Still to be settled by measurement (M2/M3), but the prior is now
+profile-weighted rather than count-weighted.
 
 ## Why this is worth doing anyway
 
@@ -75,10 +130,16 @@ FLOP model does not support.
 Run `lih_rccsdt_generated_sto3g` and `ch4_rccsdt_sto3g` on both, three runs
 each, against W5's baseline (LiH 1.64 s, CH4 28.94 s dressed).
 
-*Verify:* medians and spread. Expect ~1.03x at rank 3 from the model; a
-materially larger number means the FLOP model is wrong in the useful direction
-and rank 4 deserves the same treatment, while ~1.00x means the merge is a
-compile-time change and the docs should stop implying otherwise.
+*Verify:* medians and spread. **Expect 1.21x - 1.36x** from the profile-weighted
+re-cost above — not the ~1.03x the original operator-count model predicted, which
+this document now treats as superseded. Below ~1.05x means the profile weighting
+is also wrong and the merge really is a compile-time change; at or above 1.2x it
+is a speed lever and rank 4 deserves the same treatment immediately.
+
+**Measure the `t2t2v_oooovv` family specifically**, via `PLANCK_CC_RANK_TIME` or a
+`sample` on the merged build. It is 20.4 % of runtime and merges 9.5x, so it
+carries most of the predicted effect; if the total moves but that family does not,
+the causal story is wrong even though the number looks right.
 
 *Energies must be bitwise-identical.* The merge shares arrays between call
 sites — exactly the class of change that was wrong in D4 — so a wrong merge is a
