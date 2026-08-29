@@ -254,17 +254,50 @@ conservative end. Asserting one fixture's numbers against another's is the same
 class of mistake as the antisymmetrized-fixture traps recorded across ccgen; the
 test now names its fixture and why.
 
-### F3 — fuse one group, behind a flag (~M)
+### F3 — **DONE (2026-08-29). Fused, and energies are bit-identical.**
 
-Emit the shared loop header once per group, then each term's accumulation into the
-same `acc`. Start with the largest group (81 terms, summed `l,m,e`); leave the
-other 12 unfused. Default off.
+`emit_planck_fused_group` emits one nest header with N accumulations into a shared
+`acc`; `_term_coeff_product` is shared with the per-term emitter so a term
+contributes **identical text** either way, which makes fusion a pure regrouping
+rather than a re-derivation. Switch: `CCGEN_FUSE_LOOPS=N`, default 0.
 
-*Verify:* the TU compiles, and `ch4_rccsdt_generated_sto3g` /
-`lih_rccsdt_generated_sto3g` give **bit-identical energies**. Accumulation order
-within a group changes, so this is not automatically bitwise-safe — if energies
-move at all, stop and characterise before widening. Also confirm the nest count
-drops by exactly 80.
+On the **dressed** manifold (the F1 baseline):
+
+| | triples nests | fused groups | binary |
+|---|---|---|---|
+| nofuse | 806 | 0 | 7 391 056 B |
+| `FUSE=1` | **286** | 4 | 6 945 232 B |
+
+**Gate green.** `ch4_rccsdt_generated_sto3g` and `lih_rccsdt_generated_sto3g` pass
+on both arms, and `E_corr` matches to all ten printed digits
+(`-0.0533629208`, `-0.0791116825`). The default emit stays **byte-identical** on
+both the dressed and undressed paths.
+
+**Three things this step surfaced, each a real defect in the plan:**
+
+1. **The triples kernel does not use the emit path F2 wired.** It exceeds
+   `_KERNEL_CHUNK_TERMS` and goes through `_emit_chunked_kernel`, which had its own
+   term loop. The first wiring changed three small kernels and left triples at 824
+   nests — fusion "applied" and buying nothing.
+2. **Chunks are contiguous slices, so groups must be reordered before chunking**,
+   or a group straddles two `_partN` functions and silently un-fuses. Terms are now
+   sorted by group before the split. This changes floating-point accumulation
+   order, which is exactly what the gate exists to catch.
+3. **Routing the chunked path through the shared helper broke F2's byte-identity**
+   (that path never emitted `// Term N` or trailing blanks). Caught by re-running
+   F2's gate on the very next change, fixed with an `annotate` flag.
+
+**And a setup error worth recording, because it is a repeat.** The first F3 build
+was configured **without `PLANCK_CC_DRESS_OPERATORS=ON`**, so it fused the
+undressed manifold — wrong baseline (F1 says fusion must be measured against the
+dressed kernel or cause 1's 3.6x is double-counted) and a weaker gate. The flags
+were carried forward from the F1 command with the one that defines the manifold
+dropped. Same class as the `SPIN_ADAPT=OFF` investigation: **a build flag silently
+deciding what is under test.** Run `grep '^PLANCK_CC' <build>/CMakeCache.txt`
+before trusting any number from a new tree.
+
+The correct manifold also fuses far better — 2.8x (806->286) against 1.4x
+(824->591) undressed.
 
 ### F4 — fuse all 13 groups (~S once F3 works)
 

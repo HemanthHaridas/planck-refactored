@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from fractions import Fraction
 import itertools
+import os
 import re
 from typing import Sequence, TYPE_CHECKING
 
@@ -645,6 +646,198 @@ def _map_factor(
     raise NotImplementedError(f"Unsupported tensor factor {tensor_obj!r}")
 
 
+def _fuse_loops_setting() -> int:
+    """How many loop-signature groups to fuse, from `CCGEN_FUSE_LOOPS`.
+
+    An env var rather than a threaded parameter, deliberately and temporarily:
+    F3 is a mechanism landing behind a default-off switch, and `print_cpp_planck`
+    already carries 16 branches -- W3 set the precedent that a knob earns a
+    parameter only once it is staying. If F5 justifies fusion, this becomes a
+    proper `--fuse-loops` axis; if not, one function goes away.
+
+    Unset or 0 => one nest per term, byte-identical to the pre-F3 emit.
+    """
+    raw = os.environ.get("CCGEN_FUSE_LOOPS", "")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
+def _emit_terms(
+    emitted_terms,
+    intermediate_names,
+    arbitrary: bool,
+    ucc: bool,
+    fuse_loops: int = 0,
+    annotate: bool = True,
+) -> list[str]:
+    """Emit the term bodies of a residual kernel.
+
+    `fuse_loops` is the F3/F4 knob (docs/CCGEN_WHY_GENERATED_IS_SLOW.md): 0 emits
+    one nest per term (the default, byte-identical to before); N > 0 fuses the N
+    LARGEST loop-signature groups into one nest each and leaves the rest per-term.
+    F3 uses N=1 to land the mechanism against a bit-identical-energy gate before
+    F4 widens it.
+
+    Terms keep their original `// Term i` numbering wherever they are emitted, so
+    a fused TU can still be diffed against an unfused one term by term.
+    """
+    lines: list[str] = []
+    if fuse_loops <= 0:
+        for i, term in enumerate(emitted_terms, start=1):
+            # `annotate` is False on the chunked path, which historically emitted
+            # neither the `// Term N` comment nor a trailing blank. Kept exactly
+            # so the default emit stays BYTE-IDENTICAL -- F2's contract.
+            if annotate:
+                lines.append(f"    // Term {i}")
+            lines.append(emit_planck_term(
+                term, lhs="result", indent=4,
+                intermediate_names=intermediate_names,
+                arbitrary_amplitudes=arbitrary, ucc=ucc))
+            if annotate:
+                lines.append("")
+        return lines
+
+    groups = group_terms_by_loop_signature(emitted_terms)
+    # Largest first, ties broken by first appearance so the choice is
+    # deterministic and does not depend on dict iteration subtleties.
+    ranked = sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[1][0]))
+    fused_keys = {k for k, _ in ranked[:fuse_loops] if len(_) > 1}
+
+    emitted_positions: set[int] = set()
+    for key, positions in ranked:
+        if key not in fused_keys:
+            continue
+        terms = [emitted_terms[i] for i in positions]
+        numbers = ", ".join(str(i + 1) for i in positions)
+        lines.append(
+            f"    // Fused group: {len(positions)} terms sharing"
+            f" free{list(key[0])} summed{list(key[1])} -- Terms {numbers}")
+        lines.append(emit_planck_fused_group(
+            terms, lhs="result", indent=4,
+            intermediate_names=intermediate_names,
+            arbitrary_amplitudes=arbitrary, ucc=ucc))
+        lines.append("")
+        emitted_positions.update(positions)
+
+    for i, term in enumerate(emitted_terms, start=1):
+        if (i - 1) in emitted_positions:
+            continue
+        if annotate:
+            lines.append(f"    // Term {i}")
+        lines.append(emit_planck_term(
+            term, lhs="result", indent=4,
+            intermediate_names=intermediate_names,
+            arbitrary_amplitudes=arbitrary, ucc=ucc))
+        if annotate:
+            lines.append("")
+    return lines
+
+
+def _term_coeff_product(
+    term,
+    factors,
+    intermediate_names: frozenset[str] | None,
+    arbitrary_amplitudes: bool,
+) -> str:
+    """The `<coeff><factors>` accumulation expression for one term.
+
+    Shared by the per-term emitter and the fused one (F3) so a term contributes
+    the identical text either way -- which is what makes fusion a pure
+    regrouping of accumulations rather than a re-derivation.
+    """
+    sign = 1
+    factor_exprs: list[str] = []
+    for factor in factors:
+        factor_sign, factor_expr = _map_factor(
+            factor, intermediate_names, arbitrary_amplitudes)
+        sign *= factor_sign
+        factor_exprs.append(factor_expr)
+    coeff = term.coeff * sign
+    product = " * ".join(factor_exprs) if factor_exprs else "1.0"
+    return f"{_coeff_literal(coeff)}{product}"
+
+
+def emit_planck_fused_group(
+    terms: Sequence[AlgebraTerm | RestrictedClosedShellTerm],
+    lhs: str = "result",
+    indent: int = 4,
+    intermediate_names: frozenset[str] | None = None,
+    arbitrary_amplitudes: bool = False,
+    ucc: bool = False,
+) -> str:
+    """Emit several terms sharing a loop signature as ONE nest (F3).
+
+    Every term in `terms` must have the same `term_loop_signature`; the caller
+    guarantees this by construction (`group_terms_by_loop_signature`). The nest
+    header is emitted once and each term contributes one `acc +=` line, which is
+    the shape the hand-written kernel writes by hand (~9 accumulations per
+    single-index loop).
+
+    See docs/CCGEN_WHY_GENERATED_IS_SLOW.md: this does not change FLOP count. It
+    cuts how many times the o^3v^3 result is traversed and its operands
+    re-streamed -- 414 nests -> 13 on the factorized manifold, 399 -> 8 undressed.
+
+    NOT bitwise-neutral by construction: accumulation ORDER within the shared
+    `acc` changes relative to the per-term emit, so floating-point results may
+    differ in the last bits. The F3 gate is bit-identical CC energies on
+    ch4/lih_rccsdt_generated_sto3g; if they move, characterise before widening.
+    """
+    if not terms:
+        return ""
+    signatures = {term_loop_signature(t) for t in terms}
+    if len(signatures) != 1:
+        raise ValueError(
+            f"emit_planck_fused_group requires one loop signature, got {signatures}")
+
+    first = terms[0]
+    index_spins = ucc_term_index_spins(first) if ucc else {}
+    if isinstance(first, RestrictedClosedShellTerm):
+        free = list(first.canonical_free_indices)
+        summed = list(first.canonical_summed_indices)
+    else:
+        free = list(first.free_indices)
+        summed = list(first.summed_indices)
+
+    pad = " " * indent
+    lines: list[str] = []
+    for idx in free:
+        lines.append(
+            f"{pad}for (int {idx.name} = 0; {idx.name} < {_loop_bound(idx, index_spins.get(idx.name))}; ++{idx.name})"
+        )
+    lines.append(f"{pad}{{")
+
+    target = _target_expr(lhs, free)
+    exprs = [
+        _term_coeff_product(
+            t,
+            t.factors,
+            intermediate_names,
+            arbitrary_amplitudes,
+        )
+        for t in terms
+    ]
+
+    if summed:
+        lines.append(f"{pad}    double acc = 0.0;")
+        for idx in summed:
+            lines.append(
+                f"{pad}    for (int {idx.name} = 0; {idx.name} < {_loop_bound(idx, index_spins.get(idx.name))}; ++{idx.name})"
+            )
+        lines.append(f"{pad}    {{")
+        for expr in exprs:
+            lines.append(f"{pad}        acc += {expr};")
+        lines.append(f"{pad}    }}")
+        lines.append(f"{pad}    {target} += acc;")
+    else:
+        for expr in exprs:
+            lines.append(f"{pad}    {target} += {expr};")
+
+    lines.append(f"{pad}}}")
+    return "\n".join(lines)
+
+
 def term_loop_signature(
     term: AlgebraTerm | RestrictedClosedShellTerm,
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -738,16 +931,8 @@ def emit_planck_term(
 
     lines.append(f"{pad}{{")
 
-    sign = 1
-    factor_exprs: list[str] = []
-    for factor in factors:
-        factor_sign, factor_expr = _map_factor(
-            factor, intermediate_names, arbitrary_amplitudes)
-        sign *= factor_sign
-        factor_exprs.append(factor_expr)
-
-    coeff = term.coeff * sign
-    product = " * ".join(factor_exprs) if factor_exprs else "1.0"
+    coeff_product = _term_coeff_product(
+        term, factors, intermediate_names, arbitrary_amplitudes)
 
     target = _target_expr(lhs, free)
 
@@ -757,10 +942,10 @@ def emit_planck_term(
             lines.append(
                 f"{pad}    for (int {idx.name} = 0; {idx.name} < {_loop_bound(idx, index_spins.get(idx.name))}; ++{idx.name})"
             )
-        lines.append(f"{pad}        acc += {_coeff_literal(coeff)}{product};")
+        lines.append(f"{pad}        acc += {coeff_product};")
         lines.append(f"{pad}    {target} += acc;")
     else:
-        lines.append(f"{pad}    {target} += {_coeff_literal(coeff)}{product};")
+        lines.append(f"{pad}    {target} += {coeff_product};")
 
     lines.append(f"{pad}}}")
     return "\n".join(lines)
@@ -1021,13 +1206,8 @@ def _emit_kernel(
         if bindings:
             lines.append("")
             lines.extend(bindings)
-    for i, term in enumerate(emitted_terms, start=1):
-        lines.append(f"    // Term {i}")
-        lines.append(emit_planck_term(
-            term, lhs="result", indent=4,
-            intermediate_names=intermediate_names,
-            arbitrary_amplitudes=arbitrary, ucc=ucc))
-        lines.append("")
+    lines.extend(_emit_terms(
+        emitted_terms, intermediate_names, arbitrary, ucc, _fuse_loops_setting()))
     lines.append("    return result;")
     lines.append("}")
     return "\n".join(lines)
@@ -1051,6 +1231,21 @@ def _emit_chunked_kernel(
     each part, and returns it. Keeps per-function body size bounded so any -O
     level compiles in ~linear time. See _emit_kernel for why."""
     kernel = _kernel_name(method, target, ucc)
+
+    # F3: with fusion on, reorder so each loop-signature group is CONTIGUOUS
+    # before slicing into parts. Chunks are contiguous slices, so an unsorted
+    # order would split a group across two `_partN` functions and silently
+    # un-fuse most of it -- the fusion would still be "applied" and buy nothing.
+    # Reordering is safe because every term accumulates into `result` with `+=`;
+    # what it does change is floating-point accumulation order, which is exactly
+    # what the F3 bit-identical-energy gate is there to catch.
+    fuse = _fuse_loops_setting()
+    if fuse > 0:
+        groups = group_terms_by_loop_signature(emitted_terms)
+        ranked = sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[1][0]))
+        order = [i for _, positions in ranked for i in positions]
+        emitted_terms = [emitted_terms[i] for i in order]
+
     n_parts = (len(emitted_terms) + _KERNEL_CHUNK_TERMS - 1) // _KERNEL_CHUNK_TERMS
 
     out: list[str] = []
@@ -1078,11 +1273,8 @@ def _emit_chunked_kernel(
                         + _eri_view_bindings(chunk)
                         + _fock_view_bindings(chunk))
             out.extend(bindings)
-        for i, term in enumerate(chunk, start=1):
-            out.append(emit_planck_term(
-                term, lhs="result", indent=4,
-                intermediate_names=intermediate_names,
-                arbitrary_amplitudes=arbitrary, ucc=ucc))
+        out.extend(_emit_terms(
+            chunk, intermediate_names, arbitrary, ucc, fuse, annotate=False))
         out.append("}")
         out.append("")
 
