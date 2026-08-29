@@ -336,6 +336,35 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
   **What it leaves:** builders are still 45 % of rank-3 runtime after removing 75 %
   of the calls, so further gain is about what a single build costs — which is H6.
 
+- **HOTSPOTS RANKED (2026-08-29, post-H5, HF/6-31G).** Two categories, and one has
+  an unthreaded fix already sitting in the tree:
+
+  | hotspot | share | fixable |
+  |---|---|---|
+  | triples residual `part1` (`o²v²` terms) | **44.8 %** | hard — both models spent |
+  | **`build_W_t2t2v_oooovv`, 38 builders** | **20.4 %** | **YES — `merge_transposes`** |
+  | triples residual `part0` | 13.8 % | hard |
+  | `build_W_t1t3v_oooovv` | 8.9 % | yes, same lever |
+  | `build_W_t1t1t2v_oooovv` | 5.6 % | yes, same lever |
+  | everything, at once | 100 % | **H6 (OpenMP)** |
+
+  **The `t2t2v_oooovv` family is 38 emitted builders that are ONE contraction** —
+  index names normalized, all 38 are `t2(....) * t2(....) * oovv(....)`, differing
+  only in slot placement, each a rank-6 result over a 9-deep nest.
+  **`merge_transposes` already solves this**: symbolic, exact against a numeric
+  oracle, value-gated **0/2536 at rank 4** — and **not threaded into production**.
+  `CCGEN_MERGE_TRANSPOSES_SCOPE.md` deferred it because an *operator-count* model
+  put the FLOP saving at 1.02x-1.20x. **This profile contradicts that estimate**:
+  the one family is 20.4 % of runtime and the top three mergeable families are
+  **34.9 % combined**. **Re-cost it against the profile before anything else** — a
+  built, gated, unthreaded mechanism is exactly the position the derivation route
+  was in before it proved worth 3.6x.
+
+  Incidental finding: **chunking splits by term COUNT, not cost.** All three heavy
+  parts hold 256 nests but differ 18x in modelled cost (`part1` collects the `o²v²`
+  terms). Harmless today; it would make any per-part parallelism badly unbalanced,
+  and a cost-weighted split is the cheap fix if that is ever needed.
+
 - **CC is the only hot path in Planck with NO OpenMP, and that is now the largest
   remaining lever (~3.9x modelled at 4 threads).** Measured: zero pragmas in
   `src/post_hf/cc/*.cpp`, in the generated kernels, or in the emitter; a CH4 solve

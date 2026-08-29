@@ -153,6 +153,75 @@ and check `E_corr` against `-14.4036550465`.
 
 ---
 
+## Hotspot ranking (post-H5, HF/6-31G, 25 483 leaf samples)
+
+Profiled on the largest tractable case rather than CH4, so the shares reflect a
+size where the residual matters most.
+
+| # | hotspot | share | fixable? | lever |
+|---|---|---|---|---|
+| 1 | **triples residual, `part1`** | **44.8 %** | **hard** | it is the `o²v²`-deep terms; H1's two models are spent |
+| 2 | **`build_W_t2t2v_oooovv` (38 builders)** | **20.4 %** | **YES — mechanism exists** | `merge_transposes`, built and value-gated, **never threaded** |
+| 3 | triples residual, `part0` | 13.8 % | hard | same as (1) |
+| 4 | `build_W_t1t3v_oooovv` | 8.9 % | yes, same lever as (2) | |
+| 5 | `build_W_t1t1t2v_oooovv` | 5.6 % | yes, same lever as (2) | |
+| 6 | remaining builders (137 of 141) | 4.0 % | tail | |
+| 7 | singles/doubles residual | 1.0 % | no | already ~free |
+| — | **everything, at once** | **100 %** | **YES** | **H6 — no OpenMP anywhere in CC** |
+
+### Why the parts are unequal — it is not chunk size
+
+All three heavy parts hold **256 nests each**, but their modelled cost at `o=5 v=6`
+differs by 18x:
+
+| part | nests | modelled cost | deepest inner sum |
+|---|---|---|---|
+| part0 | 256 | 2.46e+08 | `o²v¹` |
+| **part1** | **256** | **6.68e+08** | **`o²v²`** |
+| part2 | 256 | 3.72e+07 | `o²v⁰` |
+| part3 | 38 | 5.13e+06 | `o¹v⁰` |
+
+**Chunking splits by term COUNT, not by cost.** `part1` collects the `o²v²` terms
+and is 2.7x `part0` and 18x `part2`. That is not itself a defect — the same total
+work is done — but it means any future per-part parallelism would be badly
+unbalanced, and a cost-weighted split is the cheap fix if that is ever needed.
+
+### Hotspot 2 is the actionable one: 38 builders, ONE contraction
+
+The `t2t2v_oooovv` family is **38 distinct emitted builders**, each writing a
+**rank-6 result over a 9-deep loop nest** (`i,j,k,l,b,c,m,d,e`). Normalizing index
+names away, **all 38 are the same contraction**:
+
+```
+t2(....) * t2(....) * mo_blocks.oovv(....)
+```
+
+They differ only in index placement:
+
+```
+t2({i,j,b,d}) * t2({m,k,e,c}) * oovv(l,m,d,e)
+t2({i,j,b,d}) * t2({m,k,e,c}) * oovv(l,m,e,d)
+t2({i,j,d,b}) * t2({m,k,e,c}) * oovv(l,m,d,e)
+t2({i,j,d,b}) * t2({m,k,e,c}) * oovv(l,m,e,d)
+```
+
+**`merge_transposes` already solves exactly this.** `operator_identity.py` decides
+transpose-equivalence symbolically, is exact against a numeric oracle, and is
+value-gated **0/2536 at rank 4**. It is **not threaded into the production dressing
+path** — `CCGEN_MERGE_TRANSPOSES_SCOPE.md` scopes the wiring and was deferred on
+the grounds that its modelled FLOP saving is only 1.02x-1.20x and the likely win is
+compile time.
+
+**That estimate now looks wrong, and this profile is why.** It was derived from an
+operator-count model. Measured, this one family is **20.4 % of runtime**, and the
+top three mergeable families are **34.9 % combined**. Merging cannot remove all of
+that — the merged operator must still be built once — but it can remove the
+duplicate builds, and 38→1 is the same shape of win H5 just delivered at 1.76x.
+
+**Recommended: re-cost `merge_transposes` against this profile before anything
+else**, because the mechanism is built, gated, and unthreaded. That is the same
+position the derivation route was in before it turned out to be worth 3.6x.
+
 ## H6 — OpenMP: the largest remaining lever (OPEN)
 
 **There is zero OpenMP anywhere in CC** — none in `src/post_hf/cc/*.cpp`, none in
