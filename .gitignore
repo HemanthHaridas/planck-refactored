@@ -100,8 +100,7 @@ build-mpi
 build-ccgen-test
 build-ucc*
 build-arb
-build-f*
-build-ladder-*
+build-[a-z0-9]*
 docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md
 
 # ccgen optimizer plot cache (regenerable)

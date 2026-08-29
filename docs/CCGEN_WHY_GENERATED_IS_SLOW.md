@@ -146,6 +146,35 @@ runtime:**
 
 0–3 %, inside noise, not monotonic. Energies bit-identical at every level.
 
+### Re-tested after H5, because H5 changed the composition
+
+**Question worth asking:** H5 removed 12.5 s of builder work, raising the
+residual's share of runtime from **32.3 % to 54.9 %**. Fusion only addresses the
+residual nests, so Amdahl alone nearly doubles its leverage. Does fusion become
+worth something now?
+
+There was also a mechanism, not just arithmetic: pre-H5 each part rebuilt 270
+operators immediately before running its terms, evicting whatever the residual
+wanted; post-H5 those operators are built once and stay resident across all four
+parts. Fusion's benefit is about how often operands are streamed past the loop, and
+the residency picture genuinely changed.
+
+**Measured (both optimizations active — 37 fused groups AND the hoist):**
+
+| case | H5 only | H5 + fusion | |
+|---|---|---|---|
+| BH3/STO-3G | 5.69 s | 5.49 s | −3.5 % |
+| CH4/STO-3G | 16.95 s | 17.01 s | +0.4 % |
+| HF/6-31G | 97.23 s | 96.19 s | −1.1 % |
+
+**Still ~0, and still non-monotonic** — the same signature as before H5. Energies
+bit-identical throughout.
+
+**Amdahl amplifies a real effect; it cannot amplify a null one.** F4 measured
+fusion at ~0 % of the residual itself, so doubling the residual's share doubles
+nothing. The refutation below stands, and it now stands under two different memory
+regimes rather than one.
+
 ### The traffic model, and why it was wrong
 
 The prediction was that fusion saves memory traffic: 414 traversals of the `o³v³`
