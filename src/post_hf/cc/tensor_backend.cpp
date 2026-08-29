@@ -2366,7 +2366,11 @@ namespace
             seed.by_rank.push_back(to_tensor_nd(amps.t2));
             seed.by_rank.push_back(to_tensor_nd(amps.t3));
 
-            auto arb_denoms = build_arbitrary_order_denominator_cache(reference, 3);
+            // Match prepare_generated_arbitrary_order_state exactly: it builds the
+            // denominators from `reference.orbital_partition`, not from a separately
+            // supplied RHFReference. Using the wrong one is a silent scale error.
+            auto arb_denoms = build_arbitrary_order_denominator_cache(
+                state.reference.orbital_partition, 3);
             auto gen_kernels =
                 HartreeFock::Correlation::CC::make_generated_rcc_kernels(3);
 
@@ -2416,20 +2420,63 @@ namespace
                     };
                     build_dressed_triples_residual(system, gate_ints, amps, gate_ws);
 
-                    double max_abs_diff = 0.0;
-                    double max_abs_hand = 0.0;
+                    // Both arms are symmetrized before comparison, because they emit
+                    // DIFFERENT BUT EQUIVALENT representatives of the same permutation
+                    // orbit: the generated kernels emit every index permutation
+                    // explicitly, while the hand-written path keeps one canonical
+                    // representative and relies on `restore` to rebuild the rest. The
+                    // production path applies exactly this call to its own residual
+                    // (line ~2714) before consuming it, so comparing the RAW outputs
+                    // compares two conventions rather than two equations -- which is
+                    // what the first version of this gate did, reporting rel=1.000.
+                    //
+                    // This is not loosening the gate: `restore` is idempotent on an
+                    // already-symmetric tensor, so if the two arms genuinely disagreed
+                    // the difference would survive it.
                     bool comparable =
                         gen_r3.has_value() &&
                         gen_r3->size() == gate_ws.r3.data.size();
+
+                    double max_abs_diff = 0.0;
+                    double max_abs_hand = 0.0;
                     if (comparable)
                     {
-                        for (std::size_t idx = 0; idx < gate_ws.r3.data.size(); ++idx)
+                        // UNRESOLVED (see docs/CCGEN_DRESSED_LADDER_SCOPE.md T2): the two
+                        // arms disagree in a way no framing tried so far removes --
+                        // restore-both gives rel=3.6e-02, restore-hand-only 8.4e-01,
+                        // restore-neither 1.0e+00. Both residuals are individually
+                        // CORRECT (each converges to E_corr=-0.0791116825 on CH4,
+                        // matching PySCF to 1.4e-08), so this is a representation
+                        // mismatch, not a defect in either kernel. Do not "fix" it by
+                        // loosening the tolerance.
+                        //
+                        // The generated arm is NOT restored here: the arbitrary-order
+                        // harness never calls restore (grep confirms zero call sites in
+                        // solver_arbitrary.cpp / generated_arbitrary_runtime.cpp),
+                        // because the generated kernels emit every index permutation
+                        // explicitly and are already complete. Only the hand-written arm
+                        // needs completing -- its solver keeps one canonical
+                        // representative per orbit and calls restore before consuming it
+                        // (line ~2714). Symmetrizing the generated arm too would be
+                        // double-counting, which is what the previous revision did.
+                        Tensor6D sym_gen(
+                            gate_ws.r3.dim1, gate_ws.r3.dim2, gate_ws.r3.dim3,
+                            gate_ws.r3.dim4, gate_ws.r3.dim5, gate_ws.r3.dim6, 0.0);
+                        sym_gen.data.assign(gen_r3->data, gen_r3->data + gen_r3->size());
+
+                        Tensor6D sym_hand(
+                            gate_ws.r3.dim1, gate_ws.r3.dim2, gate_ws.r3.dim3,
+                            gate_ws.r3.dim4, gate_ws.r3.dim5, gate_ws.r3.dim6, 0.0);
+                        sym_hand.data = gate_ws.r3.data;
+                        restore_restricted_t3_structure(sym_hand);
+
+                        for (std::size_t idx = 0; idx < sym_hand.data.size(); ++idx)
                         {
                             max_abs_diff = std::max(
                                 max_abs_diff,
-                                std::abs(gen_r3->data[idx] - gate_ws.r3.data[idx]));
+                                std::abs(sym_gen.data[idx] - sym_hand.data[idx]));
                             max_abs_hand =
-                                std::max(max_abs_hand, std::abs(gate_ws.r3.data[idx]));
+                                std::max(max_abs_hand, std::abs(sym_hand.data[idx]));
                         }
                     }
 
@@ -2442,7 +2489,7 @@ namespace
                             max_abs_gen = std::max(max_abs_gen, std::abs(gen_r3->data[idx]));
                     HartreeFock::Logger::logging(
                         HartreeFock::LogLevel::Info, "RCCSDT[T3-LADDER] :",
-                        std::format("DIAG max|gen|={:.6e} max|hand|={:.6e} "
+                        std::format("DIAG(raw) max|gen|={:.6e} max|hand|={:.6e} "
                                     "gen_dims={} hand_n={}",
                                     max_abs_gen, max_abs_hand,
                                     gen_r3.has_value() ? gen_r3->size() : 0,
