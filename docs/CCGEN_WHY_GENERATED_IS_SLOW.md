@@ -1,11 +1,19 @@
 # What makes the generated CC kernels slower than the hand-written ones?
 
-**Two levers examined: one confirmed (3.6x), one built and refuted (~0 %).**
+**Four causes examined. Two confirmed and fixed (3.6x and 1.76x, compounding to
+~6.4x), one built and refuted, one scoped and untouched.**
 
 | # | cause | status | worth |
 |---|---|---|---|
 | 1 | **contraction order** — 391 of 824 terms evaluated n-arily at `o⁵v⁵` | **FIXED**, `--dressing derived` | modelled 10x–18x FLOPs; **measured 3.6x** |
 | 2 | **one loop nest per term** — 806 nests vs the hand-written kernel's one | **BUILT** (`CCGEN_FUSE_LOOPS`), 806 → 15 | **~0 % runtime**; real compile-time/code-size win |
+| 3 | **operators rebuilt once per chunk** — 1080 builder calls for 270 operators | **FIXED** (H5) | **1.76x**; **20.8x** fewer calls at rank 4 |
+| 4 | **no OpenMP anywhere in CC** — 98.8 % CPU on 8 cores | **SCOPED** (H6) | modelled **3.86x** at 4 threads |
+
+**Cause 3 is the one this document's own method missed.** It was found by a
+`sample` profile in ~20 minutes, after two rounds of code-census-plus-FLOP-model
+had produced one hit and one miss. Cause 4 was found by asking whether the code was
+threaded at all. Neither needed a model.
 
 > **The "generated vs hand-written" ratio in this document is NOT a like-for-like
 > comparison, and an earlier revision wrongly treated it as one.** The two paths
@@ -167,42 +175,51 @@ fusion, not speed.
 
 ---
 
-## What the residual gap is, and is not
+## Causes 3 and 4: what profiling found that modelling did not
 
-After cause 1 (3.6x) the generated production path still costs ~93x-151x the
-hand-written one end to end. **That residual is not a codegen defect waiting to be
-found — most of it is the two paths being different algorithms**, and the
-measurements above are what show it:
+**Cause 3 — operators rebuilt once per chunk (FIXED, 1.76x).** A `sample` profile
+put **67.7 % of runtime in `build_W_*` builders**, not in the residual kernel at
+all. `_emit_chunked_kernel` emitted every dressed operator inside *every* `_partN`
+function, so the duplication factor equalled the part count:
 
-- The generated path is **not FLOP-bound**: cause 1's modelled 11.2x realises as
-  3.62x.
-- It is **not traffic-bound**: cause 2 cut traversals 54x for ~0 %.
+| kernel | parts | distinct ops | builder calls | after H5 |
+|---|---|---|---|---|
+| `ccsdt` triples | 4 | 278 | 1112 | 278 |
+| **`ccsdtq` quadruples** | **18** | **894** | **16 092** | **894** |
 
-Both of this document's codegen hypotheses are therefore spent, and what remains
-is dominated by *solver design* rather than emitted-code quality:
+**The waste scaled with kernel size — worst at the production target.** The
+emitter said the rebuilds were "cheap, local, and keeps each part self-contained";
+true for an *undressed* emit where there are no operators, false once dressing
+populated the list, and never re-measured.
 
-| | hand-written | generated |
+Fixed by building each operator once into a `<kernel>_ops` struct passed by
+`const&`. Measured on CH4: **29.59 s → 16.81 s (1.76x)**, `E_corr` **bitwise
+identical**, rank-4 TU 12.8 → 10.5 MB. Full record:
+`docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md` H5.
+
+**Cause 4 — no OpenMP (SCOPED, modelled 3.86x).** There is **zero OpenMP anywhere
+in CC** — not in `src/post_hf/cc/*.cpp`, not in the generated kernels, not in the
+emitter. A CH4 solve with `OMP_NUM_THREADS=8` runs at **98.8 % CPU**: one core,
+seven idle. Every other hot path in Planck is threaded. Amdahl on the post-H5 split
+(builders 45.1 %, residual 53.7 %) gives **3.86x at 4 threads**, and both sites are
+reduction-free — builders write private tensors, residual nests write disjoint
+`result(i,...)` slices. Scoped as H6.
+
+### What this says about method
+
+| lever | how found | outcome |
 |---|---|---|
-| r1/r2 per iteration | cheap dressed intermediates | a full generated kernel per rank |
-| amplitude storage | wedge-packed | dense (~6x the DIIS data) |
-| iterations (CH4) | 40 | 16 |
+| 1 contraction order | census + FLOP model | **hit** (3.6x) |
+| 2 loop fusion | census + traffic model | **miss** (~0 %) |
+| **3 chunk rebuilds** | **`sample` profile** | **hit** (1.76x) |
+| **4 no OpenMP** | **asking whether it was threaded** | **modelled 3.86x** |
 
-The generated path already wins on iteration count and loses far more on per-
-iteration cost. **The open question is therefore about the harness, not the
-emitter** — and it is scoped elsewhere:
-`docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md` lists four unmeasured hypotheses
-(every rank evaluated each iteration, no materialized intermediates, dense DIIS
-packing) with a blocking H0 profile.
+The two models cost days and went 1-for-2. The profile cost twenty minutes and
+found a defect neither model could see, because **neither modelled work that
+should not happen at all** — they both priced the arithmetic of the residual,
+while two thirds of the time was redundant operator construction outside it.
 
-**Do not treat that as a further ~100x of emitter headroom.** Closing it means
-making the arbitrary-order harness cheaper per iteration — reusing intermediates,
-not re-evaluating lower ranks — which is solver work. Whether the *emitter* has
-anything left to give is unmeasured, and this document's two attempts to find it
-by modelling went **1 for 2**.
-
-**If you profile anything, profile the harness**, and do it generated-vs-generated
-across a configuration change rather than against the hand-written path, whose
-timings are not commensurable.
+**Profile before modelling.** That is the transferable result here.
 
 ## Ruled out
 
@@ -245,15 +262,19 @@ previous command with the one defining the manifold dropped, exactly as in the
 `SPIN_ADAPT=OFF` investigation. **`grep '^PLANCK_CC' <build>/CMakeCache.txt`
 before trusting any number from a new tree.**
 
-## Why this is code-level rather than profiled
+## On the measurement constraint
 
-`CCGEN_KERNEL_SCALING_SCOPE.md` records the isolated-kernel measurement route as
-closed: the timing probe sits on a code path the rank-3 representation fix
-rerouted away from, and the two arms have no residual-level agreement gate
-(distinct solvers, distinct amplitude representations, both correct).
+`CCGEN_KERNEL_SCALING_SCOPE.md` records the *isolated-kernel* measurement route as
+closed: its timing probe sits on a code path the rank-3 representation fix rerouted
+away from, and the two arms have no residual-level agreement gate (distinct
+solvers, distinct amplitude representations, both correct).
 
-That constraint applies to *isolated residual* timing. It does **not** prevent
-profiling the whole solve, which is what the unexplained ~100x now needs.
+**That constraint is narrower than it was read as.** It forbids comparing the
+generated and hand-written *residuals*, and it makes their wall-clock ratio
+non-comparable. It never prevented profiling the generated path **against itself**
+— which is what found causes 3 and 4. An earlier revision of this document treated
+the constraint as a reason the whole question had to be answered by modelling. It
+was not.
 
 ## Key locations
 
@@ -264,7 +285,7 @@ profiling the whole solve, which is what the unexplained ~100x now needs.
 | hand-written kernel, ONE nest | `build_dressed_triples_residual`, `src/post_hf/cc/tensor_backend.cpp` |
 | fusion | `_emit_terms`, `emit_planck_fused_group`, `python/ccgen/emit/planck_tensor_cpp.py` |
 | the chunked path that also needed wiring | `_emit_chunked_kernel`, same file |
-| where the remaining ~100x probably lives | `docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md` |
+| causes 3 and 4 (chunk rebuilds, OpenMP) in full | `docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md` |
 | the isolated-kernel ladder | `docs/CCGEN_KERNEL_SCALING_SCOPE.md` |
 
 ---
