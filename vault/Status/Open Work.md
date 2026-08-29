@@ -309,19 +309,24 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
   code-size lever** (the registry TU is `-O1`-pinned because these are pathological
   to compile); it is not a speed lever.
 
-- **THE REMAINING ~100x IS UNIDENTIFIED, and that is the open item.** End to end
-  the generated path is **337x-547x** slower than hand-written (not the 21.8x-50.1x
-  from the isolated-residual ladder — different quantity, matching
-  `CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md`'s ~500x). Cause 1 accounts for 3.6x;
-  cause 2 for ~0 %. The path is measurably **neither FLOP-bound nor traffic-bound**,
-  which kills both hypotheses `docs/CCGEN_WHY_GENERATED_IS_SLOW.md` offered.
-  **Most likely home: the arbitrary-order HARNESS rather than the kernel** — it
-  evaluates every rank each iteration from a full generated kernel while the
-  hand-written path builds r1/r2 from cheap dressed intermediates. Four unmeasured
-  hypotheses and a blocking H0 profile are already scoped in
-  `docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md`. **Profile before modelling again:**
-  the census-and-FLOP-model method went 1-for-2 here (cause 1 right, cause 2
-  confidently wrong).
+- **The residual generated-vs-hand-written gap is mostly NOT a codegen defect.**
+  **The two paths are different solvers and their wall-clock is not a like-for-like
+  ratio** — wedge-packed vs dense amplitudes, cheap dressed intermediates vs a full
+  generated kernel per rank, and **40 vs 16 iterations on CH4**. The same reasoning
+  that forbids comparing their residuals elementwise
+  (`CCGEN_RANK3_KERNEL_AND_SOLVER.md`, and T2.5 of the retired ladder work) applies
+  to their timings. Quote it as "the generated production path costs Nx end to
+  end", never as "the generated kernel is Nx slower".
+
+  Both codegen hypotheses are spent: the path is **not FLOP-bound** (cause 1's
+  modelled 11.2x realised as 3.62x) and **not traffic-bound** (cause 2 cut
+  traversals 54x for ~0 %). What remains is dominated by **solver design**, scoped
+  in `docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md` — four unmeasured hypotheses
+  (every rank evaluated each iteration, no materialized intermediates, dense DIIS
+  packing) behind a blocking H0 profile. **That is harness work, not emitter work**,
+  and it should be profiled generated-vs-generated across a configuration change
+  rather than against the hand-written path. Whether the emitter has anything left
+  is unmeasured; two attempts to find it by modelling went 1-for-2.
 - **~~Then consume `_optimal_contraction_order` in the emitter.~~ PROBABLY
   REDUNDANT.** It targets exactly the 391 terms `--dressing derived` already
   eliminates. `tensor_ir.py:283` still computes and discards it and

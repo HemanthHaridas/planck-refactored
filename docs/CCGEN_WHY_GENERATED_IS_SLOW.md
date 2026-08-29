@@ -1,13 +1,31 @@
 # What makes the generated CC kernels slower than the hand-written ones?
 
-**Measured end to end: 337x–547x. One lever found and confirmed (3.6x), one built
-and refuted (~0 %), and roughly 100x still unexplained.**
+**Two levers examined: one confirmed (3.6x), one built and refuted (~0 %).**
 
 | # | cause | status | worth |
 |---|---|---|---|
 | 1 | **contraction order** — 391 of 824 terms evaluated n-arily at `o⁵v⁵` | **FIXED**, `--dressing derived` | modelled 10x–18x FLOPs; **measured 3.6x** |
 | 2 | **one loop nest per term** — 806 nests vs the hand-written kernel's one | **BUILT** (`CCGEN_FUSE_LOOPS`), 806 → 15 | **~0 % runtime**; real compile-time/code-size win |
-| 3 | the remaining **~100x** | **UNIDENTIFIED** | — |
+
+> **The "generated vs hand-written" ratio in this document is NOT a like-for-like
+> comparison, and an earlier revision wrongly treated it as one.** The two paths
+> are *different solvers*, not two implementations of one algorithm:
+>
+> | | hand-written (`tensor`) | generated (`optimized`) |
+> |---|---|---|
+> | amplitude storage | **wedge-packed** (`i<=j<=k`), rebuilt via `restore` | **dense**, every index stored |
+> | r1/r2 each iteration | cheap hand-written dressed intermediates | full generated kernels, every rank |
+> | iterations on CH4 | **40** | **16** |
+>
+> `CCGEN_RANK3_KERNEL_AND_SOLVER.md` establishes the storage difference is a
+> *coupled convention*, and the same reasoning that forbids comparing their
+> residuals elementwise applies to their wall-clock: **a ratio between them prices
+> two different algorithms, not two codegen strategies.** Quote it as "the
+> generated production path costs Nx the hand-written one end to end" — a real and
+> useful operational fact — never as "the generated kernel is Nx slower".
+>
+> Cause 1 and cause 2 are unaffected: both were measured **generated-vs-generated**,
+> one flag apart, same solver.**
 
 Established by code-level census of the emitted C++, a FLOP model, and end-to-end
 timing — after the isolated-kernel measurement route was closed
@@ -19,11 +37,16 @@ correct prediction (cause 1) and one confidently wrong one (cause 2 — predicte
 
 ---
 
-## The measured gap
+## The measured cost of each path
 
 `PLANCK_RCCSDT_BACKEND=optimized` (generated, arbitrary-order harness) against
 `tensor` (hand-written), same input, same binary configuration apart from
 dressing. Energies identical to all ten digits across all arms.
+
+**These are two solvers' end-to-end costs, not a codegen ratio** — see the caveat
+above. The undressed/dressed columns *are* like-for-like (one flag apart, same
+solver); the `dressed/hand` column is an operational fact about which production
+path is cheaper, not a measure of emitted-code quality.
 
 | case | undressed | dressed | hand-written | dressed/hand |
 |---|---|---|---|---|
@@ -144,27 +167,42 @@ fusion, not speed.
 
 ---
 
-## What is still unexplained
+## What the residual gap is, and is not
 
-**~100x.** Cause 1 accounts for 3.6x of the 337x–547x; cause 2 for ~0 %. The
-generated path is measurably **neither FLOP-bound nor traffic-bound** at these
-sizes, which rules out both of this document's hypotheses and leaves the dominant
-cost unidentified.
+After cause 1 (3.6x) the generated production path still costs ~93x-151x the
+hand-written one end to end. **That residual is not a codegen defect waiting to be
+found — most of it is the two paths being different algorithms**, and the
+measurements above are what show it:
 
-Not yet examined, in order of promise:
+- The generated path is **not FLOP-bound**: cause 1's modelled 11.2x realises as
+  3.62x.
+- It is **not traffic-bound**: cause 2 cut traversals 54x for ~0 %.
 
-- **The arbitrary-order harness itself**, rather than the kernel it calls.
-  `CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md` lists four unmeasured hypotheses — all
-  ranks evaluated every iteration, no materialized intermediates, dense DIIS
-  packing — and its H0 profile is still the blocking step. **That document, not
-  this one, is where the remaining 100x most likely lives:** the hand-written path
-  builds r1/r2 from cheap dressed intermediates while the generated path evaluates
-  every rank from a full kernel.
-- **A profile.** Every lever here was chosen by reading code and costing it
-  analytically, a method that went 1-for-2. A profile decides in one step what two
-  rounds of modelling could not.
+Both of this document's codegen hypotheses are therefore spent, and what remains
+is dominated by *solver design* rather than emitted-code quality:
 
----
+| | hand-written | generated |
+|---|---|---|
+| r1/r2 per iteration | cheap dressed intermediates | a full generated kernel per rank |
+| amplitude storage | wedge-packed | dense (~6x the DIIS data) |
+| iterations (CH4) | 40 | 16 |
+
+The generated path already wins on iteration count and loses far more on per-
+iteration cost. **The open question is therefore about the harness, not the
+emitter** — and it is scoped elsewhere:
+`docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md` lists four unmeasured hypotheses
+(every rank evaluated each iteration, no materialized intermediates, dense DIIS
+packing) with a blocking H0 profile.
+
+**Do not treat that as a further ~100x of emitter headroom.** Closing it means
+making the arbitrary-order harness cheaper per iteration — reusing intermediates,
+not re-evaluating lower ranks — which is solver work. Whether the *emitter* has
+anything left to give is unmeasured, and this document's two attempts to find it
+by modelling went **1 for 2**.
+
+**If you profile anything, profile the harness**, and do it generated-vs-generated
+across a configuration change rather than against the hand-written path, whose
+timings are not commensurable.
 
 ## Ruled out
 
