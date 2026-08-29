@@ -12,6 +12,8 @@
 
 #include "io/logging.h"
 // run_rccgen: the arbitrary-order harness, where the generated kernels are correct.
+#include "post_hf/cc/generated_arbitrary_runtime.h"
+#include "post_hf/cc/generated_kernel_registry.h"
 #include "post_hf/cc/rccgen.h"
 #include "post_hf/cc/determinant_space.h"
 #include "post_hf/cc/diis.h"
@@ -2323,6 +2325,209 @@ namespace
         metrics.r1_feedback_rms = tensor_rms(r1_feedback);
         metrics.r2_feedback_rms = tensor_rms(sym_r2_feedback);
         metrics.sd_residual_rms = rms_norm(pack_residuals(residuals));
+
+        // T2 probe (PLANCK_CC_T3_LADDER=N, N>=1 repeats): the THREE-armed ladder
+        // measurement scoped in docs/CCGEN_DRESSED_LADDER_SCOPE.md.
+        //
+        // Why it lives here and not beside PLANCK_CC_T3_TIME: that probe sits inside
+        // `if (use_generated_kernels)`, a branch the rank-3 representation fix rerouted
+        // away from, so it cannot fire in any build. This one runs unconditionally on
+        // the path that executes.
+        //
+        // Three arms, one binary, one fixture -- because the question is whether
+        // dressing changes the generated kernel's SCALING EXPONENTS or only its
+        // CONSTANT, and answering that needs the hand-written kernel as the known-good
+        // asymptotic standard (o^3.94 v^4.18), not merely as a baseline. Comparing two
+        // generated arms alone would measure dressing's speedup while saying nothing
+        // about whether the scaling is now correct.
+        //
+        //   arm A  hand-written    build_dressed_triples_residual
+        //   arm B  generated       via the arbitrary-order harness (the path that runs)
+        //   arm C  arm B again under a dressed build -- selected by PLANCK_CC_DRESSING
+        //          at CONFIGURE time, so B and C are the same call in two binaries.
+        //
+        // Diagnostic only: it evaluates into scratch and never touches
+        // `triples_residual`.
+        if (const char *ladder = std::getenv("PLANCK_CC_T3_LADDER");
+            ladder != nullptr && ladder[0] != '\0' && ladder[0] != '0')
+        {
+            const int repeats = std::max(1, std::atoi(ladder));
+            const int no = state.reference.orbital_partition.n_occ;
+            const int nv = state.reference.orbital_partition.n_virt;
+
+            // One amplitude source for both arms. to_tensor_nd is a pure
+            // reinterpretation (same buffer, dims in order, no permutation) and is exact
+            // because the layouts already agree: RCCSDTAmplitudes::t3 is (i,j,k,a,b,c)
+            // allocated (n_occ x3, n_virt x3), which is rank_dims' occ-first order. The
+            // (vir...,occ...) transpose recorded in CCGEN_SPIN_ADAPT_DEFAULT.md is a
+            // ccgen-Python-vs-C++ concern and does not apply between these two C++ types.
+            HartreeFock::Correlation::CC::ArbitraryOrderRCCAmplitudes seed;
+            seed.by_rank.push_back(to_tensor_nd(amps.t1));
+            seed.by_rank.push_back(to_tensor_nd(amps.t2));
+            seed.by_rank.push_back(to_tensor_nd(amps.t3));
+
+            auto arb_denoms = build_arbitrary_order_denominator_cache(reference, 3);
+            auto gen_kernels =
+                HartreeFock::Correlation::CC::make_generated_rcc_kernels(3);
+
+            if (!arb_denoms || !gen_kernels)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Error, "RCCSDT[T3-LADDER] :",
+                    std::format("setup failed: {}",
+                                !arb_denoms ? arb_denoms.error() : gen_kernels.error()));
+            }
+            else
+            {
+                HartreeFock::Correlation::CC::ArbitraryOrderTensorCCState gen_state{
+                    .reference = state.reference,
+                    .mo_blocks = physicist_blocks,
+                    .denominators = std::move(*arb_denoms),
+                    .amplitudes = std::move(seed),
+                    .max_excitation_rank = 3,
+                };
+
+                // --- the agreement gate, BEFORE any timing -----------------------
+                // A timing comparison across arms that are not evaluating the same
+                // equation is worthless, and this codebase has produced exactly that
+                // twice (the -7.56e-05 representation defect, and the 52% dressed
+                // defect). If this gate fires, the timings below are not reported.
+                auto gate = evaluate_generated_arbitrary_order_residuals(gen_state, *gen_kernels);
+                if (!gate)
+                {
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Error, "RCCSDT[T3-LADDER] :",
+                        std::format("generated residual failed: {}", gate.error()));
+                }
+                else
+                {
+                    auto gen_r3 = gate->tensor(3);
+
+                    DressedTriplesIntermediates gate_ints =
+                        build_dressed_triples_intermediates(system, dressed, sd_ints, amps.t2);
+                    add_dressed_triples_feedback_into_triples_intermediates(
+                        system, dressed, amps.t3, gate_ints);
+                    TensorTriplesWorkspace gate_ws{
+                        .amplitudes = clone_rccsdt_amplitudes(amps),
+                        .r3 = Tensor6D(
+                            amps.t3.dim1, amps.t3.dim2, amps.t3.dim3,
+                            amps.t3.dim4, amps.t3.dim5, amps.t3.dim6, 0.0),
+                        .allocated = true,
+                    };
+                    build_dressed_triples_residual(system, gate_ints, amps, gate_ws);
+
+                    double max_abs_diff = 0.0;
+                    double max_abs_hand = 0.0;
+                    bool comparable =
+                        gen_r3.has_value() &&
+                        gen_r3->size() == gate_ws.r3.data.size();
+                    if (comparable)
+                    {
+                        for (std::size_t idx = 0; idx < gate_ws.r3.data.size(); ++idx)
+                        {
+                            max_abs_diff = std::max(
+                                max_abs_diff,
+                                std::abs(gen_r3->data[idx] - gate_ws.r3.data[idx]));
+                            max_abs_hand =
+                                std::max(max_abs_hand, std::abs(gate_ws.r3.data[idx]));
+                        }
+                    }
+
+                    // Relative, because the residual magnitude varies by orders of
+                    // magnitude across the ladder; an absolute 1e-12 would be vacuous
+                    // at one end and unmeetable at the other.
+                    double max_abs_gen = 0.0;
+                    if (comparable)
+                        for (std::size_t idx = 0; idx < gen_r3->size(); ++idx)
+                            max_abs_gen = std::max(max_abs_gen, std::abs(gen_r3->data[idx]));
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Info, "RCCSDT[T3-LADDER] :",
+                        std::format("DIAG max|gen|={:.6e} max|hand|={:.6e} "
+                                    "gen_dims={} hand_n={}",
+                                    max_abs_gen, max_abs_hand,
+                                    gen_r3.has_value() ? gen_r3->size() : 0,
+                                    gate_ws.r3.data.size()));
+                    const double rel =
+                        max_abs_diff / std::max(max_abs_hand, 1e-30);
+                    constexpr double kAgreementTol = 1e-10;
+
+                    if (!comparable)
+                    {
+                        HartreeFock::Logger::logging(
+                            HartreeFock::LogLevel::Error, "RCCSDT[T3-LADDER] :",
+                            "AGREEMENT GATE FAILED: residual shapes differ; the two arms "
+                            "are not evaluating the same manifold. No timings reported.");
+                    }
+                    else if (!(rel <= kAgreementTol))
+                    {
+                        HartreeFock::Logger::logging(
+                            HartreeFock::LogLevel::Error, "RCCSDT[T3-LADDER] :",
+                            std::format(
+                                "AGREEMENT GATE FAILED: max|gen-hand|={:.3e} "
+                                "rel={:.3e} > {:.0e}. The arms are timing DIFFERENT "
+                                "equations; no timings reported.",
+                                max_abs_diff, rel, kAgreementTol));
+                    }
+                    else
+                    {
+                        // --- arms, timed only after the gate passes -------------
+                        double gen_seconds = 0.0;
+                        for (int r = 0; r < repeats; ++r)
+                        {
+                            const auto t0 = std::chrono::steady_clock::now();
+                            auto scratch = evaluate_generated_arbitrary_order_residuals(
+                                gen_state, *gen_kernels);
+                            gen_seconds += std::chrono::duration<double>(
+                                std::chrono::steady_clock::now() - t0).count();
+                            (void)scratch;
+                        }
+                        gen_seconds /= repeats;
+
+                        // Intermediates once, outside the loop: the generated kernel
+                        // builds none, so charging them per-repeat would overstate the
+                        // hand-written arm. Reported separately as ints=.
+                        const auto ti = std::chrono::steady_clock::now();
+                        DressedTriplesIntermediates time_ints =
+                            build_dressed_triples_intermediates(system, dressed, sd_ints, amps.t2);
+                        add_dressed_triples_feedback_into_triples_intermediates(
+                            system, dressed, amps.t3, time_ints);
+                        const double int_seconds = std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - ti).count();
+
+                        double hand_seconds = 0.0;
+                        for (int r = 0; r < repeats; ++r)
+                        {
+                            const auto t0 = std::chrono::steady_clock::now();
+                            build_dressed_triples_residual(system, time_ints, amps, gate_ws);
+                            hand_seconds += std::chrono::duration<double>(
+                                std::chrono::steady_clock::now() - t0).count();
+                        }
+                        hand_seconds /= repeats;
+
+                        const double t3_mib =
+                            static_cast<double>(amps.t3.data.size() * sizeof(double)) /
+                            (1024.0 * 1024.0);
+
+                        // t3 MiB is reported so an H1 cache transition is VISIBLE rather
+                        // than inferred; the whole reachable ladder sits under 0.85 MiB
+                        // (inside L2), which is why H1 stays untestable on it.
+                        HartreeFock::Logger::logging(
+                            HartreeFock::LogLevel::Info, "RCCSDT[T3-LADDER] :",
+                            std::format(
+                                "no={} nv={} o/v={:.3f} t3={:.3f}MiB reps={} "
+                                "dressing={} gen={:.6f}s hand={:.6f}s ints={:.6f}s "
+                                "ratio={:.1f}x gate_rel={:.2e}",
+                                no, nv,
+                                nv > 0 ? static_cast<double>(no) / nv : 0.0,
+                                t3_mib, repeats,
+                                PLANCK_CC_DRESS_OPERATORS ? "on" : "off",
+                                gen_seconds, hand_seconds, int_seconds,
+                                gen_seconds / std::max(hand_seconds, 1e-12),
+                                rel));
+                    }
+                }
+            }
+        }
 
         if (use_generated_kernels)
         {
