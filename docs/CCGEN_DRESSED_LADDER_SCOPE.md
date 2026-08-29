@@ -290,13 +290,25 @@ Reproduced independently in Python from the dumps —
 `7.00e-03 -> 4.20e-02 -> 3.56e-08`, matching the C++ to all printed digits, so
 this is the mechanism and not a coincidence of one build.
 
-**What this means.** `restore` is not a symmetrizer that maps a residual into a
-comparable frame. It is only meaningful in its own solver, where it is applied to
-a wedge-packed amplitude carrying full permutational symmetry
-(`CCGEN_RANK3_KERNEL_AND_SOLVER.md`: the packing and `restore` are *one coupled
-convention*). **Applying it to a raw residual, in either arm, is a category
-error** — and all three framings tried in T2 did exactly that, which is why none
-of them worked.
+**What this means — and this was ALREADY ESTABLISHED, not discovered here.**
+`restore` is not a symmetrizer that maps a residual into a comparable frame; it is
+only meaningful in its own solver, applied to a wedge-packed amplitude carrying
+full permutational symmetry. `CCGEN_RANK3_KERNEL_AND_SOLVER.md` states it
+outright — *"the wedge packing and `restore` are one coupled convention, not two
+independent choices"* (:21-24), with the two representations tabulated at :14-15
+and the coupling verified by measurement (deleting either half diverges).
+
+**The measurement above re-derives a documented result.** Its only new content is
+the *magnitude* (2.0e+05) and the *stage* (`p3_full` undoes
+`permutation_symmetry`), which pin the mechanism numerically. The conclusion was
+already in the tree, and consulting that document first would have skipped all
+three failed framings — the retired dressed-operator investigation had paid for
+this answer already.
+
+That is the second time in this session that an existing record would have
+prevented an investigation (the first being the stale CMake comment, which caused
+one in the opposite direction). **Read the retired investigations before
+re-measuring their subject.**
 
 The live comparison is therefore `r3_gen_raw` vs `r3_hand_raw`, with **neither**
 restored: elementwise max-diff 7.08e-03 against a hand magnitude of 7.00e-03, and
@@ -305,23 +317,47 @@ permutation branch) are **dead** — this is not a relabelling.
 
 #### T2.3 / T2.4 — **DROPPED.** T2.2's multiset test refutes the permutation hypothesis, and the `restore` decomposition T2.4 would have performed is answered above.
 
-#### T2.5 — which TERM differs (~M) — **NEXT, and now the only live branch**
+#### T2.5 — which TERM differs — **CHECK THE PRIOR RECORD FIRST**
 
 The multisets differ, so the two arms genuinely compute different *values* at
-fixed amplitudes while both converging to the same energy. The standing
-hypothesis, unchanged and now the sole survivor: **they partition the same total
-differently.** The hand-written path adds T3->SD feedback through two separate
-calls (`add_dressed_triples_feedback_into_sd_residuals`,
-`add_dressed_triples_feedback_into_triples_intermediates`) while the generated
-kernel returns all ranks from one evaluation.
+fixed amplitudes while both converging to the same energy.
+
+**But the obvious hypothesis is already refuted in the tree, and was before this
+scope was written.** `CCGEN_RANK3_KERNEL_AND_SOLVER.md`'s ruled-out table
+(:75-84) tested *"Pure double count of the T3->SD feedback"* and returned **No** —
+removing it overshoots to `+1.90e-04`, 2.5x worse. That is the same T3->SD
+partition this step was about to propose. It also rules out *"Double
+symmetrization"* and *"Stride mismatch"*, and records the discipline that produced
+those verdicts: five hypotheses formed by reading code, all five wrong, every
+correct result from direct comparison.
+
+So T2.5 must **start** from that table, not re-enter it. The hypotheses it has
+already killed are off the list:
+
+| already refuted there | verdict |
+|---|---|
+| double symmetrization (`restore` applied twice) | No — removing/halving made it worse |
+| pure double count of the T3->SD feedback | No — overshoots 2.5x the other way |
+| stride mismatch (spin-orbital vs spatial extents) | No |
+| unique-triangle DIIS pack/unpack lossy | Partly — half the coupled convention, not the discriminator |
+| block convention (`rebind_physicist`) | No — all seven ERI blocks bitwise identical |
+
+**What is genuinely open** is narrower than "which term differs": the two arms are
+*both correct* and *not related by a permutation or by any of the above*. The one
+framing that investigation did **not** test is the one this ladder actually needs
+— whether the per-rank residuals are comparable **at all** at fixed amplitudes,
+as opposed to only their converged fixed point being comparable.
 
 *Verify:* evaluate the generated arm's rank-1 and rank-2 residuals alongside
-rank 3, and test whether `hand_r3 - gen_r3` is compensated at lower rank. The
-dumps make this elementwise.
+rank 3 and test whether `hand_r3 - gen_r3` is compensated at lower rank. If the
+totals agree while the per-rank split does not, the arms are **not comparable at
+rank 3 alone** — which would mean the ladder's per-rank timing comparison needs
+restating rather than fixing.
 
-If the totals agree while the per-rank split does not, the arms are **not
-comparable at rank 3 alone**, and the ladder's per-rank timing comparison needs
-restating rather than fixing — a finding, not a defect.
+**That outcome is likely and would not be a defect.** Plan for it: the fallback is
+to time the *whole* residual evaluation per arm (all ranks, one call), which is
+what the arbitrary harness does natively anyway and what the end-to-end 3.12x/3.61x
+already measures. The three-arm design survives; only the per-rank slicing goes.
 
 #### T2.6 — close the gate (~S)
 

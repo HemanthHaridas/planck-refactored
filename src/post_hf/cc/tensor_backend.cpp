@@ -2450,16 +2450,18 @@ namespace
                         // this is a representation mismatch, not a kernel defect. Do not
                         // "fix" it by loosening the tolerance.
                         //
-                        // NEITHER arm is restored here, and that is deliberate. T2.2
-                        // measured `restore` ANNIHILATING the hand-written residual by
-                        // 2.0e+05 (7.00e-03 -> 3.56e-08): its second stage,
-                        // apply_restricted_t3_p3_full, subtracts the virt-permutation
-                        // mean, which for the fully-symmetric tensor its first stage
-                        // produces is that tensor itself. `restore` is only meaningful on
-                        // a wedge-packed AMPLITUDE inside its own solver, where the
-                        // packing and restore are one coupled convention
-                        // (CCGEN_RANK3_KERNEL_AND_SOLVER.md). Applying it to a raw
-                        // residual is a category error.
+                        // NEITHER arm is restored here, and that is deliberate.
+                        // `restore` belongs to a wedge-packed AMPLITUDE inside its own
+                        // solver -- the packing and restore are ONE COUPLED CONVENTION,
+                        // established in CCGEN_RANK3_KERNEL_AND_SOLVER.md (:21-24) during
+                        // the (now retired) dressed-operator work, not here. Applying it
+                        // to a raw residual is a category error.
+                        //
+                        // T2.2 only re-measured the magnitude: restore annihilates the
+                        // hand-written residual by 2.0e+05 (7.00e-03 -> 3.56e-08),
+                        // because stage 2 (apply_restricted_t3_p3_full) subtracts the
+                        // virt-permutation mean, which for the fully-symmetric tensor
+                        // stage 1 produces is that tensor itself.
                         //
                         // An earlier revision read "restore both -> rel=3.6e-02" as the
                         // closest framing. It was comparing against a near-zero tensor;
