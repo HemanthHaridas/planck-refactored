@@ -146,12 +146,17 @@ Dominant builder families: `t2t2v_oooovv` **33.9 %**, `t1t3v_oooovv` 14.7 %,
 `t1t1t2v_oooovv` 9.5 %.
 
 **The cause is chunking.** The dressed kernel is split into `_partN` functions,
-and **each part rebuilds every operator it uses from scratch**:
+and **each part rebuilds the entire operator set from scratch**. On the triples
+kernel specifically:
 
 ```
-1418 builder CALLS   against   288 distinct builders     (~5x duplication)
-270 calls in part0,  270 in part1,  ... across 4 parts
+1080 builder calls   (4 parts x an identical 270)
+ 270 distinct operators actually used
+ 810 calls are pure duplication          = 75% waste
 ```
+
+(TU-wide the count is 1418 calls across 288 distinct builders; the 1080/270 above
+is the triples kernel alone, which H0b showed is 98.8 % of the time.)
 
 `planck_tensor_cpp.py:1193` states the assumption directly — *"the intermediate
 builds and amplitude-view bindings are re-emitted per part — **cheap**, local, and
@@ -159,40 +164,87 @@ keeps each part self-contained."* **They are 67.7 % of runtime.** The assumption
 was reasonable when chunking was introduced for an *undressed* emit, where there
 are no operators to rebuild; dressing made it false, and nothing re-examined it.
 
-### What to do — H5: hoist the builders out of the parts (~M)
+### H5 — hoist the builders out of the parts
 
-Build each operator **once** per kernel invocation and pass it into the parts,
-instead of rebuilding per part. The parts already take `result` by reference; the
-operators can travel the same way (a small struct, or by-reference parameters).
+**The defect, measured exactly on the triples kernel:**
 
-*Verify, in order:*
-1. **Builder call count drops from 1418 to 288** in the emitted TU. Mechanical, and
-   checkable without running anything.
-2. **`ch4_rccsdt_generated_sto3g` / `lih_rccsdt_generated_sto3g` pass with
-   bit-identical `E_corr`.** Hoisting does not reassociate anything — each operator
-   is built by the same code from the same inputs — so this should be exactly
-   bitwise, unlike fusion. **If it is not, stop:** something is being rebuilt from
-   state that differs between parts, which would be a correctness question.
-3. **Re-profile.** Expected: the 67.7 % falls toward ~1/5 of itself; total
-   iteration time falls by roughly 50 %. Predicted rather than assumed, so it can
-   be wrong.
+```
+1080 builder calls   (4 parts x 270)
+ 270 distinct operators actually used
+ 810 calls are pure duplication          = 75% waste
+```
 
-**Why this is worth doing where the previous two levers were not.** It is not a
-model: the profile measures redundant work directly, the redundancy is visible in
-the emitted text (`1418` vs `288`), and the fix removes work rather than
-rearranging it. The two refuted levers both *rearranged* work — different
-contraction order, different loop grouping — and ran into the fact that the
-hardware was not bound by what the models counted.
+Every part emits the **identical** 270 builds — verified: the four parts' builder
+sets are set-equal. Per part only 59/81/118/21 are read, but the union over parts
+is exactly 270, so **there are no built-but-unused operators at kernel level**; the
+waste is entirely the 4x duplication, not over-building. (An earlier reading of
+"270 built, 59 used in part0" as 78 % over-building was wrong — the other 211 are
+used by sibling parts.)
 
-**Caveat on the ceiling.** This is a ~2x lever on the generated path, not a
-recovery of the ~500x. That number is a ratio across a solver boundary and is not
-a defect size (see "What changed"). What H5 buys is a straightforward halving of
-the production generated path's cost.
+#### H5.1 — emit the builds once, pass them in (~M)
 
-**Note the interaction with fusion.** `CCGEN_FUSE_LOOPS` reduces nest count within
-each part but does not change how many times operators are built, so the two are
-independent. Fusion's measured ~0 % is unaffected by this finding, and this finding
-is not an argument for revisiting it.
+`_emit_chunked_kernel` currently emits `required_intermediates` inside every part
+(`planck_tensor_cpp.py:1266-1270`). Emit them once in the main kernel instead and
+pass them to the parts, exactly as `result` already travels by reference.
+
+The parts' signature grows by one parameter — a struct of `const` operator
+references, or the operators individually. Prefer a struct: 270 parameters is not
+a signature, and a struct keeps the part signature stable as the operator set
+changes.
+
+*Verify — mechanical, no run required:*
+- **builder calls in the emitted TU: 1080 → 270.** `grep -c "= build_W_"` on the
+  triples kernel.
+- every part still compiles (the operators it reads are now parameters).
+
+#### H5.2 — correctness (~S)
+
+*Verify:* `ch4_rccsdt_generated_sto3g` and `lih_rccsdt_generated_sto3g` pass with
+**bit-identical** `E_corr` against the pre-H5 numbers (`-0.0791116825`,
+and BH3 `-0.0533629208`).
+
+**This must be exactly bitwise, unlike fusion.** Hoisting reassociates nothing —
+each operator is built by the same code from the same `(reference, mo_blocks,
+denominators, amplitudes)`. **If the energies move, stop:** it means an operator
+was being built from state that differs between parts, which is a correctness
+question about the current emit, not a tolerance question about the new one.
+
+#### H5.3 — measure (~S)
+
+*Verify:* re-run H0a/H0b (`t_res`) and the H0c `sample`.
+
+Predicted: builders fall from 67.7 % toward ~17 % (a quarter of the calls),
+i.e. total iteration time down **~50 %**. Recorded as a prediction so it can be
+wrong — if the builders do not fall proportionally, the per-call cost is not
+uniform and the profile will say which family still dominates.
+
+#### H5.4 — check the other kernels and ranks (~S)
+
+The same chunking applies wherever `len(terms) > _KERNEL_CHUNK_TERMS`. Rank 4
+(CCSDTQ) is chunked far more aggressively and is the production target.
+
+*Verify:* builder-call counts before/after for every chunked kernel in a rank-4
+dressed emit. **Do not assume the rank-3 ratio transfers** — this codebase has
+twice shown rank 3 is not a proxy for rank 4.
+
+#### What H5 does not do
+
+- It does not touch the undressed path (no operators to hoist), which stays
+  byte-identical.
+- It is independent of `CCGEN_FUSE_LOOPS`: fusion changes nest count within a
+  part, hoisting changes how many times operators are built. Fusion's measured
+  ~0 % stands and is not revisited by this.
+- It is a **~2x lever on the generated path**, not a recovery of the ~500x — that
+  is a ratio across a solver boundary, not a defect size.
+
+#### Why the chunking assumption was reasonable and became false
+
+`planck_tensor_cpp.py:1193`: *"the intermediate builds ... are re-emitted per part
+— cheap, local, and keeps each part self-contained."* True when chunking was
+introduced for an **undressed** emit, where `required_intermediates` is empty and
+the statement costs nothing. Dressing populated that list and nothing re-examined
+the claim. **Self-containment was the goal; the price was never measured until
+H0c.**
 
 ### The measurement discipline this must follow
 
