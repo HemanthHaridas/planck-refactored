@@ -2410,6 +2410,46 @@ namespace
                 {
                     auto gen_r3 = gate->tensor(3);
 
+                    // T2.5: is the disagreement CONFINED to rank 3, or does it appear at
+                    // every rank? This is the one framing the rank-3 investigation did
+                    // not test -- it compared converged energies and the rank-3 residual,
+                    // never the per-rank split at fixed amplitudes.
+                    //
+                    // `residuals` here is the hand-written r1/r2 AFTER
+                    // add_dressed_triples_feedback_into_sd_residuals, i.e. with the
+                    // T3->SD feedback already folded in. The generated arm returns all
+                    // ranks from one evaluation. If the arms differ at rank 1 and 2 as
+                    // well, the disagreement is not a rank-3 property at all and the
+                    // per-rank slicing is the wrong comparison.
+                    for (int rr = 1; rr <= 2; ++rr)
+                    {
+                        auto gen_lo = gate->tensor(rr);
+                        if (!gen_lo)
+                            continue;
+                        const std::vector<double> &hand_lo =
+                            (rr == 1) ? residuals.r1.data : residuals.r2.data;
+                        if (gen_lo->size() != hand_lo.size())
+                        {
+                            HartreeFock::Logger::logging(
+                                HartreeFock::LogLevel::Info, "RCCSDT[T3-LADDER] :",
+                                std::format("T2.5 rank {}: SHAPE differs gen={} hand={}",
+                                            rr, gen_lo->size(), hand_lo.size()));
+                            continue;
+                        }
+                        double d = 0.0;
+                        double m = 0.0;
+                        for (std::size_t idx = 0; idx < hand_lo.size(); ++idx)
+                        {
+                            d = std::max(d, std::abs(gen_lo->data[idx] - hand_lo[idx]));
+                            m = std::max(m, std::abs(hand_lo[idx]));
+                        }
+                        HartreeFock::Logger::logging(
+                            HartreeFock::LogLevel::Info, "RCCSDT[T3-LADDER] :",
+                            std::format("T2.5 rank {}: max|gen-hand|={:.6e} max|hand|={:.6e} "
+                                        "rel={:.3e}",
+                                        rr, d, m, d / std::max(m, 1e-30)));
+                    }
+
                     DressedTriplesIntermediates gate_ints =
                         build_dressed_triples_intermediates(system, dressed, sd_ints, amps.t2);
                     add_dressed_triples_feedback_into_triples_intermediates(

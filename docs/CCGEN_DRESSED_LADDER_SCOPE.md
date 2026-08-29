@@ -229,7 +229,7 @@ Note ccgen amplitudes are `(vir...,occ...)` while C++ `rank_dims` is
 `(occ...,virt...)` — the transpose is real and recorded in
 `CCGEN_SPIN_ADAPT_DEFAULT.md`.
 
-### T2.1-T2.6 — localize the frame mismatch (IN PROGRESS)
+### T2.1-T2.7 — localize the frame mismatch — **RESOLVED (2026-08-29): no residual-level gate is achievable; see T2.5**
 
 T2's gate is **red, and correctly so**. Both arms are individually correct — each
 converges to `E_corr = -0.0791116825` on CH4, identical to ten digits and 1.4e-08
@@ -317,57 +317,76 @@ permutation branch) are **dead** — this is not a relabelling.
 
 #### T2.3 / T2.4 — **DROPPED.** T2.2's multiset test refutes the permutation hypothesis, and the `restore` decomposition T2.4 would have performed is answered above.
 
-#### T2.5 — which TERM differs — **CHECK THE PRIOR RECORD FIRST**
+#### T2.5 — **DONE (2026-08-29). The arms are not comparable per-rank at fixed amplitudes.**
 
-The multisets differ, so the two arms genuinely compute different *values* at
-fixed amplitudes while both converging to the same energy.
+Measured on CH4 by evaluating the generated arm's rank-1 and rank-2 residuals
+alongside rank 3, against the hand-written `residuals.r1`/`.r2` taken **after**
+`add_dressed_triples_feedback_into_sd_residuals` (probe at :2332, feedback at
+:2298), so the T3->SD feedback is folded into both sides:
 
-**But the obvious hypothesis is already refuted in the tree, and was before this
-scope was written.** `CCGEN_RANK3_KERNEL_AND_SOLVER.md`'s ruled-out table
-(:75-84) tested *"Pure double count of the T3->SD feedback"* and returned **No** —
-removing it overshoots to `+1.90e-04`, 2.5x worse. That is the same T3->SD
-partition this step was about to propose. It also rules out *"Double
-symmetrization"* and *"Stride mismatch"*, and records the discipline that produced
-those verdicts: five hypotheses formed by reading code, all five wrong, every
-correct result from direct comparison.
+| iteration | rank 1 | rank 2 | rank 3 |
+|---|---|---|---|
+| 1 | rel 9.4e-06, but `max\|hand\|` = **7.8e-11** | rel 9.0e-08, `max\|hand\|` = 4.2e-09 | rel 8.4e-01 |
+| 2 | **rel 7.0e-01** | **rel 6.5e-01** | rel 9.9e-01 |
+| 3 | **rel 2.8e+00** | **rel 1.1e+00** | rel 1.0e+00 |
 
-So T2.5 must **start** from that table, not re-enter it. The hypotheses it has
-already killed are off the list:
+**Iteration 1's agreement is vacuous** — both arms are at ~1e-11, i.e. zero. That
+is the degenerate-probe trap recorded in `CCGEN_UNRESTRICTED_CC.md` ("a probe
+whose output is degenerate proves nothing"), and reading it as agreement would
+have been a false green.
 
-| already refuted there | verdict |
-|---|---|
-| double symmetrization (`restore` applied twice) | No — removing/halving made it worse |
-| pure double count of the T3->SD feedback | No — overshoots 2.5x the other way |
-| stride mismatch (spin-orbital vs spatial extents) | No |
-| unique-triangle DIIS pack/unpack lossy | Partly — half the coupled convention, not the discriminator |
-| block convention (`rebind_physicist`) | No — all seven ERI blocks bitwise identical |
+From iteration 2 the arms disagree **at every rank**, at the same order as rank 3.
 
-**What is genuinely open** is narrower than "which term differs": the two arms are
-*both correct* and *not related by a permutation or by any of the above*. The one
-framing that investigation did **not** test is the one this ladder actually needs
-— whether the per-rank residuals are comparable **at all** at fixed amplitudes,
-as opposed to only their converged fixed point being comparable.
+**So the disagreement is not a rank-3 property, and not a T3->SD partition** —
+which is consistent with `CCGEN_RANK3_KERNEL_AND_SOLVER.md` having already
+refuted that hypothesis (:75-84, "overshoots 2.5x the other way"). The
+hypothesis this step existed to test is dead by its own measurement as well as by
+the prior record.
 
-*Verify:* evaluate the generated arm's rank-1 and rank-2 residuals alongside
-rank 3 and test whether `hand_r3 - gen_r3` is compensated at lower rank. If the
-totals agree while the per-rank split does not, the arms are **not comparable at
-rank 3 alone** — which would mean the ladder's per-rank timing comparison needs
-restating rather than fixing.
+**The conclusion, and it is a finding rather than a defect.** The two arms are
+distinct solvers with distinct amplitude representations. Feeding the generated
+kernel the hand-written solver's mid-iteration amplitudes does not put the two in
+a common frame — it evaluates one solver's kernel at another solver's iterate.
+Both remain individually correct (each converges to `E_corr = -0.0791116825`,
+matching PySCF to 1.4e-08); what does not exist is a shared intermediate state at
+which their residuals are elementwise comparable.
 
-**That outcome is likely and would not be a defect.** Plan for it: the fallback is
-to time the *whole* residual evaluation per arm (all ranks, one call), which is
-what the arbitrary harness does natively anyway and what the end-to-end 3.12x/3.61x
-already measures. The three-arm design survives; only the per-rank slicing goes.
+**A residual-level agreement gate between these two arms is therefore not
+achievable**, and T2's original design — three arms compared elementwise before
+timing — cannot be completed as specified. That is worth stating plainly rather
+than engineering around: it took four framings and two refuted hypotheses to
+establish, and the next person will otherwise try the same four.
 
-#### T2.6 — close the gate (~S)
+#### T2.6 — **SUPERSEDED.** The gate cannot be made green; see T2.5. What replaces it is below.
 
-Whichever branch resolved it, encode the transform (or the widened comparison) in
-the gate with the measured numbers inline, and re-run all six ladder points.
+#### T2.7 — the fallback, which was planned for this outcome (~M) — **NEXT**
 
-*Verify:* the gate is green on **all six**, not just the one it was debugged on.
-`bh3` is `no == nv == 4`, where a wrong axis order stays in bounds and can agree by
-accident — so a green `bh3` alone proves nothing. `ch4` (`no=5 nv=4`) is the
-minimum honest check, and all six is the bar.
+Time the **whole residual evaluation per arm**, not a per-rank slice, and validate
+by **converged energy** rather than by elementwise residual agreement:
+
+- **arm A** hand-written: the existing `tensor` backend, timed per iteration.
+- **arm B/C** generated undressed / dressed: the arbitrary harness, timed per
+  iteration, selected by `PLANCK_CC_DRESSING` at configure time.
+
+*Verify:* each arm converges to `-0.0791116825` on CH4 (they already do -- this is
+the check that the arms are the same calculation), and report seconds per
+iteration. That is a legitimate comparison of two correct solvers doing the same
+job, which is what the ladder question actually asks.
+
+**What this costs.** The per-iteration time includes each solver's own overhead,
+not the isolated triples kernel. The hand-written arm builds intermediates the
+generated one does not; the generated arm evaluates all ranks where the
+hand-written path evaluates r1/r2 from cheap dressed intermediates. So the
+resulting ratio is **not** comparable to the original ladder's 21.8x-50.1x, which
+timed isolated residual evaluations. Report it as its own quantity and do not
+combine the two.
+
+**What survives.** The exponent question -- does dressing change the SCALING or
+only the CONSTANT -- is still answerable, because it is a fit of arm-B against
+arm-C times across the six points, and both arms are measured the same way. That
+is the question T4/T5 exist for, and it does not require arm A. **Arm A is now
+optional**: it is the known-good asymptotic standard, and reporting it alongside
+remains useful, but it is no longer load-bearing for the dressing comparison.
 
 ### T3 — report shape (~S)
 
