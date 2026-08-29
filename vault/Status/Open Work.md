@@ -23,6 +23,30 @@ truth for what remains.
 
 ## Verification and regression gaps
 
+- **The ccgen Python suite carries NINE standing failures** (`862 passed, 10
+  failed`; the tenth was introduced and fixed by the merge work). All nine were
+  verified red on a clean `HEAD` worktree, and **none is a live product defect** —
+  each is a test that outlived its premise, or a missing optional dependency.
+  Three causes: **(A)** six selection-model gates in `test_factorize.py` broke in
+  `7bdfdaf1`, which correctly split operators 26 -> 83 and thereby changed the
+  savings distribution they assert (measured: top-5 concentration 0.656 against an
+  asserted >0.98; the joint-vs-baseline divergence regime moved from 850 GB to a
+  ~4000 GB peak of +4.62 %, so it can no longer clear the >5 % the gate demands);
+  **(B)** two tests in `test_iterate_amps_fixed_point.py` mean to skip without
+  pyscf but their `except ImportError` cannot catch the `NameError: gto` they
+  actually raise, because they borrow `test_reference_vs_pyscf`'s helpers without
+  its `skipUnless(_HAVE_PYSCF)` guard; **(C)** one test in `test_optimizations.py`
+  **asserts the antisymmetry defect W4.3 fixed** — it demands
+  `-ovov(i,a,j,b)` where the emitter now correctly emits `+ovvo(i,a,b,j)`
+  (verified numerically on a spatial fixture: the asserted form is off by 8.8e-01,
+  the emitted one exact). The risk is not the individual failures but that nine
+  standing reds train everyone to read red as normal. **One item in A may be a
+  real defect rather than test debt**: the order-invariance gate fails because
+  shuffling factor order yields *genuinely different* decompositions (operator
+  count invariant at 963, but 8-10 operators are different contractions), and the
+  value gate only ever runs on the unshuffled manifold — so value preservation
+  under shuffling is unmeasured. Measure that first. Scoped C/B/A-by-cost in
+  `docs/CCGEN_RED_TESTS_SCOPE.md`.
 - Strengthen the end-to-end spherical full-symmetry direct-SCF regression ladder beyond the current focused infrastructure tests and committed NH3/CH4 ladder
 - Add durable regression coverage for remaining full-symmetry edge cases called out in the design notes:
   D3h, Oh, linear-group interplay, and lone-atom behavior
