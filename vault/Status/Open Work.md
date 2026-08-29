@@ -281,11 +281,20 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
 `o^a v^b` power law (21.4% residual, concentrated at high `v`). Full measurement in
 `docs/CCGEN_KERNEL_SCALING_SCOPE.md`.
 
-- **Enumerate the terms whose contraction order is wrong.** The high-`v` residual structure points
-  at multiple contraction regimes — different residual terms wanting different orders, with the
-  emitter picking none. `docs/CCGEN_HIGHER_OPERATOR_REUSE.md` already records `t2·t3·v` as `o⁵v⁵`
-  n-ary against `o³v⁴` factored, superlinear in both indices and consistent with the measured
-  `o^0.93 v^0.34`. Do this term-level enumeration **before** any emitter change.
+- **~~Enumerate the terms whose contraction order is wrong.~~ DONE (2026-08-29) —
+  `docs/CCGEN_WHY_GENERATED_IS_SLOW.md`.** The emitter gives every term its own full
+  `o³v³` nest and evaluates each n-arily: **824 nests, of which 391 carry a four-index
+  inner sum** (`o⁵v⁵` where a factored order is `o⁴v³`). Those 391 are **83–90 % of all
+  generated FLOPs**, in four families — `t1·t2·t2·oovv` (172), `t2·t3·oovv` (151),
+  `t1·t1·t3·oovv` (44), `t1·t1·t1·t2·oovv` (24). The `t2·t3·v` case
+  `CCGEN_HIGHER_OPERATOR_REUSE.md` predicted is confirmed present and counted.
+  Modelled saving from factoring them alone grows with size — **32x (BH3/STO-3G) to
+  165x (C2H4/STO-3G)** — which is the signature of a scaling fix. Validation that the
+  census is sound: it fits `o^4.92 v^4.94` against the ladder's measured
+  `o^4.87 v^4.52`, **the `o` exponent agreeing to 0.05**. Caveat recorded there: the
+  hand-written side is *not* FLOP-bound the same way (its nine fused accumulations per
+  inner loop reuse operands), so a modelled *ratio* overpredicts by 2 orders of
+  magnitude and must not be quoted — trust the generated-side model only.
 - **Then consume `_optimal_contraction_order` in the emitter.** `python/ccgen/tensor_ir.py`
   defines `BLASHint` (`:66`), `_detect_gemm` (`:198`), and `_optimal_contraction_order` (`:283`),
   and `grep BLASHint python/ccgen/emit/planck_tensor_cpp.py` returns nothing — the emitter computes
