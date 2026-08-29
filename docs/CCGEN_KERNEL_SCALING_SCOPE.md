@@ -147,11 +147,17 @@ per-iteration work.
 **BLOCKED as of 2026-08-28 — read `docs/CCGEN_DRESSED_LADDER_SCOPE.md`
 first.** Not for an architectural reason: `PLANCK_CC_T3_TIME` simply sits on the
 code path the rank-3 representation fix rerouted away from, so it cannot fire in
-any build. It needs a THREE-armed probe in the arbitrary-order harness
-(generated-dressed / generated-undressed / hand-written): a two-armed
-dressed-vs-undressed retarget would drop the hand-written column, which is the
-known-good asymptotic standard this ladder measures excess scaling against, not
-merely a baseline. Scoped in that document, T1-T5. The
+any build, and it has been replaced by a three-arm probe (`PLANCK_CC_T3_LADDER`).
+Two further results from that work bear on this document. **(1)** A two-armed
+dressed-vs-undressed comparison would drop the hand-written column, which is the
+known-good asymptotic standard excess scaling is measured against, not merely a
+baseline — so the probe keeps three arms. **(2)** The arms have **no
+residual-level agreement gate**: they are distinct solvers with distinct amplitude
+representations, both individually correct, with no shared intermediate state
+where their residuals are elementwise comparable. The re-run therefore times whole
+iterations and validates by converged energy, and **its exponents describe "solver
+iteration" rather than "triples kernel" — do not quote them against the
+`o^4.87 v^4.52` fitted here.** The
 3.12x/3.61x quoted just above **stand as measured** — dressing does reach the
 arbitrary TU that harness runs (verified 0 -> 119 `build_W` sites), contrary to a
 stale CMake comment that briefly suggested otherwise.

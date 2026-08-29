@@ -245,31 +245,45 @@ not block this. Full measured rescope in `docs/HPC_REMAINING_SCOPE.md`.
 
 ## ccgen generated-kernel performance
 
-**SCOPED, not started (2026-08-28): a three-armed ladder probe.** Both
+**IN PROGRESS (2026-08-29): three-armed ladder probe built; the elementwise gate
+is provably unachievable, and the measurement is rescoped around that.** Both
 `CCGEN_KERNEL_SCALING_SCOPE` and `CCGEN_KERNEL_PERFORMANCE` say to re-run the
 six-point ladder under `--dressing derived` before consuming
-`_optimal_contraction_order`, since the two fixes may overlap. The question is
-**not** "is dressing faster" (measured: 3.12x/3.61x) but **does dressing reduce
-the generated kernel's scaling EXPONENTS or only its CONSTANT** — opposite next
-steps.
+`_optimal_contraction_order`. The question is **not** "is dressing faster"
+(measured: 3.12x/3.61x) but **does dressing reduce the generated kernel's scaling
+EXPONENTS or only its CONSTANT** — opposite next steps.
 
-Two obstacles, both verified rather than assumed: `PLANCK_CC_T3_TIME` sits in the
-`tensor_backend.cpp` branch the rank-3 representation fix rerouted away from, so
-it cannot fire in any build; and a naive retarget to dressed-vs-undressed **loses
-the standard** — the hand-written kernel is the known-good asymptotic reference
-(`o^3.94 v^4.18` at 4.5%), not just a baseline. Hence three arms
-(generated-dressed / generated-undressed / hand-written) in one binary from one
-fixture, rather than reusing a recorded column across builds.
+**Landed:** `PLANCK_CC_T3_LADDER` (three-arm probe, inert when unset, energies
+bit-identical with it off) and `PLANCK_CC_T3_LADDER_DUMP` (elementwise dumps).
+Hosted in `tensor_backend.cpp` exporting nothing — the arbitrary harness is
+already fully public and `to_tensor_nd` is a layout-preserving conversion.
 
-The load-bearing risk is that the two arms use **different amplitude types**
-(`RCCSDTAmplitudes` vs `ArbitraryOrderRCCAmplitudes`) with no existing conversion,
-and the hand-written kernel is file-local to `tensor_backend.cpp`. T2's
-agreement gate (all three residuals to ~1e-12 before any timing) is what stops
-this from timing two different equations — the same mismatch that produced the
-`-7.56e-05` defect.
+**The load-bearing finding: there is NO residual-level agreement gate between the
+hand-written and generated arms.** Four framings failed (restore-both 3.6e-02,
+restore-hand 8.4e-01, restore-neither 1.0, per-rank 0.65-2.76 at *every* rank).
+`restore` annihilates the hand-written residual by **2.0e+05** — its stage 2
+subtracts the virt-permutation mean, which for the fully-symmetric tensor stage 1
+produces is that tensor itself — so `restore` belongs to a wedge-packed
+**amplitude**, never a raw residual. That was **already established** in
+`CCGEN_RANK3_KERNEL_AND_SOLVER.md:21-24`; only the magnitude and stage are new.
+The multisets also disagree (5.24e-03), so it is not a permutation. The arms are
+distinct solvers with distinct amplitude representations, both individually
+correct (each converges to `-0.0791116825`, PySCF to 1.4e-08) — there is simply no
+shared intermediate state where their residuals are comparable. **A finding, not a
+defect.**
 
-Steps T1-T5, the retracted "arbitrary TUs are undressed" claim, and the reusable
-ladder setup: `docs/CCGEN_DRESSED_LADDER_SCOPE.md`.
+**Rescoped to T6:** time whole iterations per arm, validate by converged energy
+rather than elementwise agreement. Arm A (hand-written) is **not** optional
+despite the gate loss — B-vs-C says whether dressing moved the exponents, but only
+A says whether the result is *good*, and a partial vs complete fix imply opposite
+answers on building `_optimal_contraction_order`. Caveat recorded: T6 times
+per-iteration solver work, so its exponents describe "solver iteration" not
+"triples kernel" and must not be quoted against the ladder's `o^4.87 v^4.52`.
+
+Two hypotheses were re-derived here at real cost after being refuted years-deep in
+`CCGEN_RANK3_KERNEL_AND_SOLVER.md:75-84`. **Read the retired investigations before
+re-measuring their subject.** Full record, the five dead hypotheses, and the
+reusable setup: `docs/CCGEN_DRESSED_LADDER_SCOPE.md`.
 
 
 The dominant cost — the out-of-line, allocating tensor accessors — is fixed (see Completion).

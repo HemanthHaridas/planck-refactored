@@ -136,10 +136,13 @@ rank's output re-arms the defect at every other rank.
   Since then, **derivation dressing** has been wired and measured at 3.12×/3.61× end-to-end. It
   addresses the same H3 by a different mechanism than the `_optimal_contraction_order`
   consumption that document recommends, so **re-run that ladder under `--dressing derived` before
-  attempting the emitter change** — the two fixes may overlap. **That re-run is BLOCKED as of
-  2026-08-28**, on probe placement alone: `PLANCK_CC_T3_TIME` sits on the code path the rank-3
-  representation fix rerouted away from, so it cannot fire in any build. Moving it into the
-  arbitrary-order harness unblocks it — see `docs/CCGEN_DRESSED_LADDER_SCOPE.md`. The 3.12×/3.61×
+  attempting the emitter change** — the two fixes may overlap. **That re-run is IN PROGRESS as of
+  2026-08-29** — see `docs/CCGEN_DRESSED_LADDER_SCOPE.md`. `PLANCK_CC_T3_TIME` sits on the code
+  path the rank-3 representation fix rerouted away from and cannot fire in any build; it is
+  replaced by a three-arm probe. Note two findings from that work: the arms have **no
+  residual-level agreement gate** (distinct solvers, distinct amplitude representations, both
+  correct), so the re-run times whole iterations and validates by converged energy; and its
+  exponents therefore describe *"solver iteration"* rather than *"triples kernel"*. The 3.12×/3.61×
   stand as measured; dressing does reach the arbitrary TU that harness runs.
 - **Rank 4 is still subject to the `-O1` registry pin** (`CMakeLists.txt:402`), which the rank-3
   path is not. Now that the accessor no longer dominates, that asymmetry is worth re-checking —
