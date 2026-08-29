@@ -293,21 +293,33 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
   `o^4.87 v^4.52`, **`o` agreeing to 0.05**. Caveat: the hand-written side is not
   FLOP-bound the same way, so a modelled *ratio* overpredicts by 2 orders of
   magnitude — trust the generated-side model only.
-- **THE NEXT LEVER: fuse loop nests sharing an inner-loop signature.** Even
-  factorized, **414 nests remain against the hand-written kernel's ONE** — and they
-  carry only **13 distinct inner-loop signatures**, with every one of the 414
-  sharing its signature with at least one other (largest group: 81 nests summing
-  `l,m,e`). Fusing them is **32x fewer passes over the `o³v³` result**: traffic on
-  C2H4/STO-3G drops **349 MiB → 11 MiB** while `t3` itself is under 1 MiB.
-  **This is a memory-traffic lever, not a FLOP lever**, which is why the FLOP model
-  overpredicts the hand-written side — that kernel gets 9 accumulations per loop
-  nearly free on registers. It also explains the measured fit's 21.4 % residual
-  being *concentrated at high `v`*, where `o³v³` traffic dominates. Emitter-side:
-  `planck_tensor_cpp.py:284,443`. **Measure the factorized kernel first** so
-  cause 1's saving is not counted twice. Note the old "fission is not a penalty"
-  result (0.62x) was taken at `no=nv=4` where the residual is 32 KB and
-  L1-resident — real, and it does not generalize; this is H1's untested half, now
-  with a mechanism and a number.
+- **THE NEXT LEVER: fuse loop nests sharing an inner-loop signature. Scoped F0-F5
+  in `docs/CCGEN_WHY_GENERATED_IS_SLOW.md`.** Even factorized, **414 nests remain
+  against the hand-written kernel's ONE**, and they carry only **13 distinct
+  `(free, summed)` signatures** — every one of the 414 shares its signature with at
+  least one other (largest group: 81 nests summing `l,m,e`, reading just 5 distinct
+  operands). Fusing them is **32x fewer passes over the `o³v³` result**: traffic on
+  C2H4/STO-3G drops **349 MiB → 11 MiB** while `t3` itself stays under 1 MiB.
+  **A memory-traffic lever, not a FLOP lever** — which is why the FLOP model
+  overpredicts the hand-written side by 2 orders of magnitude (9 accumulations per
+  loop, nearly free on registers), and why the measured fit's 21.4 % residual is
+  *concentrated at high `v`*.
+
+  Three properties make it tractable, each measured not assumed: **all 414 nests
+  share one free-index order** `(i,j,k,a,b,c)` so grouping needs no reordering; the
+  seam is a plain `for term in emitted_terms` loop
+  (`planck_tensor_cpp.py:980-985`); and no new operand plumbing is needed.
+
+  **F1 comes first and can kill the rest:** measure `--dressing derived` against
+  undressed on the six ladder points. If the factorized kernel is already near the
+  hand-written time, F2-F5 are dropped. **Fusion must be measured against the
+  FACTORIZED baseline, never the undressed one** — that double-counts cause 1.
+  F3's gate is bit-identical energies on `ch4_rccsdt_generated_sto3g` /
+  `lih_rccsdt_generated_sto3g`: accumulation order within a group changes, so this
+  is not automatically bitwise-safe. F5 checks the speedup **grows with size** —
+  predicted significant on H2O/6-31G and C2H4/STO-3G, negligible on BH3/STO-3G
+  where everything is L1-resident anyway; if the small case moves and the large
+  ones do not, the traffic model is wrong and should be recorded as such.
 - **~~Then consume `_optimal_contraction_order` in the emitter.~~ PROBABLY
   REDUNDANT.** It targets exactly the 391 terms `--dressing derived` already
   eliminates. `tensor_ir.py:283` still computes and discards it and

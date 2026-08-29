@@ -157,18 +157,85 @@ mechanism and a number rather than a hypothesis.
 
 ---
 
-## What to do, in order
+## The work, in small verifiable steps
 
-1. **Measure the factorized kernel first, before any emitter work.**
-   `--dressing derived` is wired and produces the 414-nest TU, and its 3.12x/3.61x
-   is already measured end-to-end. Fusion must be measured against *that* baseline,
-   not the undressed one — otherwise cause 1's saving gets counted twice.
-2. **Fuse nests sharing an inner-loop signature.** 414 → ~13. The grouping is
-   mechanical (the signature is already implicit in the emitted structure) and the
-   target shape is the hand-written kernel's. Emitter-side:
-   `planck_tensor_cpp.py:284,443` emit one nest per term.
-3. **Do not consume `_optimal_contraction_order`** without re-checking — it targets
-   the 391 terms cause 1 already eliminates.
+Ordered so the cheapest step can kill the expensive ones. **F1 is a measurement
+with no code change and it can invalidate everything after it.**
+
+### F0 — what makes this tractable, established before scoping
+
+Three properties of the emitted code, each checked rather than assumed:
+
+| property | measured | why it matters |
+|---|---|---|
+| free-index order | **1 distinct order** across all 414 nests: `(i,j,k,a,b,c)` | grouping needs no reordering; the key is just `(free, summed)` |
+| distinct `(free, summed)` groups | **13** | that is the fusion floor, directly |
+| operands in the largest group | 81 terms read **5** distinct operands | no new plumbing; everything is already in scope per nest |
+
+The emit seam is a plain `for term in emitted_terms: emit_planck_term(...)` loop
+(`planck_tensor_cpp.py:980-985`). `emit_planck_term` emits free loops, summed
+loops, then one accumulation — so fusion is *"group before the loop, emit the
+shared header once"*, not a rewrite.
+
+### F1 — measure the factorized kernel (~S, no code change) — **DO THIS FIRST**
+
+Time `--dressing derived` against undressed on the six ladder points, end to end,
+validated by converged energy.
+
+*Verify:* a per-point speedup. The model predicts 10x–18x from cause 1 alone.
+
+**This step can kill the rest.** If the factorized kernel is already at or near the
+hand-written kernel's time, cause 2 is not worth fixing and F2–F5 are dropped. If
+it is still 5–20x off, fusion is worth the work and F1's numbers are the baseline
+every later step is measured against. **Fusion must never be measured against the
+undressed kernel** — that double-counts cause 1's saving.
+
+### F2 — group the terms, emit nothing (~S)
+
+In the emitter, group `emitted_terms` by `(tuple(free), tuple(summed))` before the
+emit loop. Log the histogram; change no output.
+
+*Verify:* 13 groups on rank-3 triples, largest 81, and the emitted TU is
+**byte-identical** to before. A grouping pass that changes output has a bug.
+
+### F3 — fuse one group, behind a flag (~M)
+
+Emit the shared loop header once per group, then each term's accumulation into the
+same `acc`. Start with the largest group (81 terms, summed `l,m,e`); leave the
+other 12 unfused. Default off.
+
+*Verify:* the TU compiles, and `ch4_rccsdt_generated_sto3g` /
+`lih_rccsdt_generated_sto3g` give **bit-identical energies**. Accumulation order
+within a group changes, so this is not automatically bitwise-safe — if energies
+move at all, stop and characterise before widening. Also confirm the nest count
+drops by exactly 80.
+
+### F4 — fuse all 13 groups (~S once F3 works)
+
+*Verify:* 414 nests → 13; energies still bit-identical on both gates; TU line count
+and compile time recorded (the registry TU is `-O1`-pinned precisely because it is
+pathological, so this may be a compile-time win on its own).
+
+### F5 — measure against F1's baseline (~S)
+
+Six ladder points, factorized-unfused vs factorized-fused.
+
+*Verify:* the speedup, and whether it **grows with size** — that is the signature
+of the traffic model being right. Predicted: significant at `H2O/6-31G` and
+`C2H4/STO-3G` (202→6 MiB, 349→11 MiB), negligible at `BH3/STO-3G` (12.9→0.4 MiB,
+but all L1-resident anyway). **If the small case shows nothing and the large ones
+do, the mechanism is confirmed.** If nothing moves anywhere, the traffic model is
+wrong and that should be recorded rather than explained away.
+
+### Not in scope
+
+- **Do not consume `_optimal_contraction_order`.** It targets the 391 terms cause 1
+  already eliminates. Re-check only if F1 shows the factorized kernel is still
+  FLOP-bound.
+- **Do not reorder loops for stride.** A separate lever with its own risks; fusion
+  changes traversal count, not layout.
+- **Do not touch the undressed emit path.** It is the byte-identical default and
+  cause 1's fix is opt-in; fusion should ride the same flag.
 
 ## Ruled out
 
