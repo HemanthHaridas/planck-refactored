@@ -293,49 +293,35 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
   `o^4.87 v^4.52`, **`o` agreeing to 0.05**. Caveat: the hand-written side is not
   FLOP-bound the same way, so a modelled *ratio* overpredicts by 2 orders of
   magnitude — trust the generated-side model only.
-- **THE NEXT LEVER: fuse loop nests sharing an inner-loop signature. Scoped F0-F5
-  in `docs/CCGEN_WHY_GENERATED_IS_SLOW.md`.** Even factorized, **414 nests remain
-  against the hand-written kernel's ONE**, and they carry only **13 distinct
-  `(free, summed)` signatures** — every one of the 414 shares its signature with at
-  least one other (largest group: 81 nests summing `l,m,e`, reading just 5 distinct
-  operands). Fusing them is **32x fewer passes over the `o³v³` result**: traffic on
-  C2H4/STO-3G drops **349 MiB → 11 MiB** while `t3` itself stays under 1 MiB.
-  **A memory-traffic lever, not a FLOP lever** — which is why the FLOP model
-  overpredicts the hand-written side by 2 orders of magnitude (9 accumulations per
-  loop, nearly free on registers), and why the measured fit's 21.4 % residual is
-  *concentrated at high `v`*.
+- **~~THE NEXT LEVER: fuse loop nests.~~ BUILT AND REFUTED (2026-08-29).** Fusion
+  is implemented (`CCGEN_FUSE_LOOPS=N`, default 0, byte-identical when off) and
+  reduces the dressed rank-3 triples kernel **806 -> 15 nests (54x)**, halving the
+  TU and dropping 845 KB of binary. **It changes runtime by 0-3 %, inside noise, at
+  three sizes spanning 7x in `t3`** (BH3 9.52->9.54 s, CH4 29.59->28.60 s,
+  HF/6-31G 154.00->154.54 s). Energies bit-identical at every fusion level; both
+  generated-route gates pass.
 
-  Three properties make it tractable, each measured not assumed: **all 414 nests
-  share one free-index order** `(i,j,k,a,b,c)` so grouping needs no reordering; the
-  seam is a plain `for term in emitted_terms` loop
-  (`planck_tensor_cpp.py:980-985`); and no new operand plumbing is needed.
+  **The traffic model is refuted on its own stated criterion** ("negligible at BH3,
+  material at larger `t3`"): HF/6-31G is 3.4x BH3's working set and shows +0.35 %.
+  It counted a full `o³v³` read+write per nest, but consecutive nests over the same
+  `result` hit the same cache lines and `t3` never leaves L2 at reachable sizes —
+  it priced traffic already served from cache. **Keep fusion as a compile-time and
+  code-size lever** (the registry TU is `-O1`-pinned because these are pathological
+  to compile); it is not a speed lever.
 
-  **F1 IS DONE (2026-08-29) and did NOT kill the rest.** Measured, two trees one
-  flag apart, routing confirmed `RCCSDT[OPT]`, energies identical to ten digits
-  across all three arms:
-
-  | case | undressed | dressed | hand-written | dressed/hand |
-  |---|---|---|---|---|
-  | BH3/STO-3G | 33.70 s | 9.34 s | **0.10 s** | **93x** |
-  | CH4/STO-3G | 103.86 s | 28.67 s | **0.19 s** | **151x** |
-
-  Two corrections it forces. **(a) The end-to-end gap is 337x-547x, not the
-  21.8x-50.1x carried from the scaling ladder** — that ladder timed the isolated
-  triples residual, a different quantity; this matches
-  `CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md`'s ~500x. **(b) Cause 1's modelled 11.2x
-  FLOP saving on CH4 realises as only 3.62x wall-clock**, so two-thirds does not
-  translate — direct evidence the generated path is **not FLOP-bound**, and that a
-  traffic lever is the right next target rather than more FLOP reduction. Only 2 of
-  6 points were run; the other four were ~6 h of wall-clock and abandoned
-  deliberately, since a 93x-151x residual answers F1's question at any size. They
-  belong in F5 against the dressed baseline. **Fusion must be measured against the
-  FACTORIZED baseline, never the undressed one** — that double-counts cause 1.
-  F3's gate is bit-identical energies on `ch4_rccsdt_generated_sto3g` /
-  `lih_rccsdt_generated_sto3g`: accumulation order within a group changes, so this
-  is not automatically bitwise-safe. F5 checks the speedup **grows with size** —
-  predicted significant on H2O/6-31G and C2H4/STO-3G, negligible on BH3/STO-3G
-  where everything is L1-resident anyway; if the small case moves and the large
-  ones do not, the traffic model is wrong and should be recorded as such.
+- **THE REMAINING ~100x IS UNIDENTIFIED, and that is the open item.** End to end
+  the generated path is **337x-547x** slower than hand-written (not the 21.8x-50.1x
+  from the isolated-residual ladder — different quantity, matching
+  `CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md`'s ~500x). Cause 1 accounts for 3.6x;
+  cause 2 for ~0 %. The path is measurably **neither FLOP-bound nor traffic-bound**,
+  which kills both hypotheses `docs/CCGEN_WHY_GENERATED_IS_SLOW.md` offered.
+  **Most likely home: the arbitrary-order HARNESS rather than the kernel** — it
+  evaluates every rank each iteration from a full generated kernel while the
+  hand-written path builds r1/r2 from cheap dressed intermediates. Four unmeasured
+  hypotheses and a blocking H0 profile are already scoped in
+  `docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md`. **Profile before modelling again:**
+  the census-and-FLOP-model method went 1-for-2 here (cause 1 right, cause 2
+  confidently wrong).
 - **~~Then consume `_optimal_contraction_order` in the emitter.~~ PROBABLY
   REDUNDANT.** It targets exactly the 391 terms `--dressing derived` already
   eliminates. `tensor_ir.py:283` still computes and discards it and
