@@ -116,7 +116,13 @@ fixing only the fixed-rank accessors moved rank 3 by 76× and rank 4 by nothing 
    `docs/CCGEN_TENSOR_ACCESSOR.md` for the invariants it had to preserve.
 2. **Re-measure the ratio at production `o`/`v` (P3).** ← now the next step. With the accessor
    fixed, the remaining 22× is whatever is genuinely structural. H1 may reappear here.
-3. **Only then consider fusing / consuming the IR hints.** `tensor_ir.py` defines `BLASHint`
+3. **Only then consider fusing / consuming the IR hints.** **Both settled
+   2026-08-29** (`CCGEN_WHY_GENERATED_IS_SLOW.md`): fusion is built and measures
+   **~0 %** at three sizes, twice; and `--dressing derived` already eliminates the
+   terms `_optimal_contraction_order` targets, making it probably redundant. The
+   levers that did pay were found by profiling, not modelling — redundant operator
+   construction (67.7 % of the kernel, fixed for **1.76x**) and the absence of any
+   OpenMP in CC (modelled **3.86x**). Original text follows. `tensor_ir.py` defines `BLASHint`
    (`:66`), `_detect_gemm` (`:198`), and `_optimal_contraction_order` (`:283`), and
    `grep BLASHint python/ccgen/emit/planck_tensor_cpp.py` **returns nothing** — the emitter
    discards all of it. Real, but it was not the bottleneck, and the measurement above says fusion

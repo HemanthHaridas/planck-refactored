@@ -309,6 +309,16 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
   code-size lever** (the registry TU is `-O1`-pinned because these are pathological
   to compile); it is not a speed lever.
 
+  **Re-tested after H5 and still ~0** — BH3 5.69→5.49 s (−3.5 %), CH4 16.95→17.01 s
+  (+0.4 %), HF/6-31G 97.23→96.19 s (−1.1 %); non-monotonic, energies bit-identical.
+  Worth re-testing rather than citing the first result, because H5 raised the
+  residual's share of runtime **32.3 % → 54.9 %** (nearly doubling fusion's Amdahl
+  leverage) *and* changed operand residency during the nests — operators are now
+  built once and stay resident, instead of 270 being rebuilt immediately before each
+  part's terms. **Amdahl amplifies a real effect, not a null one.** The refutation
+  now holds under **two different memory regimes**, which is stronger than the
+  original single measurement.
+
 - **H5 LANDED (2026-08-29): dressed operator builds are hoisted out of the
   `_partN` chunks — 1.76x at rank 3, 20.8x fewer builder calls at rank 4.**
   `_emit_chunked_kernel` emitted every dressed operator inside *every* part, so the

@@ -176,6 +176,22 @@ comparison only. That widens the set of usable ladder points on the generated si
 
 ## What this makes worth doing
 
+**SETTLED 2026-08-29 — read this before acting on the paragraph below.** Both
+levers this document points at were built and measured
+(`CCGEN_WHY_GENERATED_IS_SLOW.md`):
+
+- **Contraction order is fixed by `--dressing derived`**, which eliminates the 391
+  four-deep `o⁵v⁵` terms `_optimal_contraction_order` would target — **measured
+  3.6x**. Consuming the IR hints is therefore **probably redundant**; re-check
+  before building it.
+- **Loop fusion is refuted at ~0 %**, twice: 806→15 nests changed runtime 0-3 %,
+  and again after a later fix raised the residual's share of runtime from 32 % to
+  55 %.
+
+What the profile found instead was **redundant operator construction** — 67.7 % of
+the kernel, fixed for **1.76x** — and that **CC has no OpenMP at all** (modelled
+3.86x). Neither was visible to a cost model.
+
 Per the outcome table below, this is the "grows polynomially" row: **consume
 `_optimal_contraction_order` in the emitter** (`python/ccgen/tensor_ir.py:283`, currently computed
 and discarded — `grep BLASHint python/ccgen/emit/planck_tensor_cpp.py` returns nothing). That is
