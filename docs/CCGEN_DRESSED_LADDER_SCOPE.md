@@ -203,7 +203,15 @@ gate; the reason it exists is that this codebase has twice timed two different
 equations, and a cheap gate against a now-unlikely failure is still worth its
 cost.
 
-### T2 — one fixture, three arms, provably identical amplitudes (~M)
+### T2 — one fixture, three arms, provably identical amplitudes — **BUILT; GATE RED**
+
+The probe is landed as `PLANCK_CC_T3_LADDER` (N repeats, inert when unset), hosted
+in `tensor_backend.cpp` per T1 and placed OUTSIDE `if (use_generated_kernels)` so
+it runs on the path that executes. Pure insertion; the probe-unset energy is
+bit-identical.
+
+**Its gate is red, and that is the deliverable working.** Localizing the mismatch
+is T2.1-T2.6 below.
 
 Seed from **one** `ArbitraryOrderRCCAmplitudes` (the `PLANCK_CC_FIXTURE_DIR`
 path already does this), convert to `RCCSDTAmplitudes` for the hand-written arm,
@@ -220,6 +228,111 @@ are never taken.**
 Note ccgen amplitudes are `(vir...,occ...)` while C++ `rank_dims` is
 `(occ...,virt...)` — the transpose is real and recorded in
 `CCGEN_SPIN_ADAPT_DEFAULT.md`.
+
+### T2.1-T2.6 — localize the frame mismatch (IN PROGRESS)
+
+T2's gate is **red, and correctly so**. Both arms are individually correct — each
+converges to `E_corr = -0.0791116825` on CH4, identical to ten digits and 1.4e-08
+from PySCF — so this is a representation mismatch, not a defect in either kernel.
+**Do not close it by loosening the tolerance.**
+
+What is already established, by measurement rather than inspection:
+
+| framing | `rel` on CH4 |
+|---|---|
+| restore both arms | **3.6e-02** (closest) |
+| restore hand only | 8.4e-01 |
+| restore neither | 1.0e+00 |
+
+and, by grep: the arbitrary-order harness calls `restore_restricted_t3_structure`
+**zero times** (`solver_arbitrary.cpp`, `generated_arbitrary_runtime.cpp`), while
+the hand-written solver calls it before consuming its residual
+(`tensor_backend.cpp:~2714`). Two self-consistent conventions.
+
+That restore-both is *close but not equal* is the key datum: the permutation-orbit
+convention is **part** of the difference and not all of it. Something else remains.
+
+**Method rule for this sub-investigation, earned twice already.** Three framings
+were tried by reading code and reasoning; all three missed. The rank-3
+investigation records five such hypotheses, all wrong, with every correct result
+coming from direct comparison. **From here, measure first and hypothesize second.**
+
+#### T2.1 — dump the hand-written arm, elementwise (~S)
+
+The generated arm is already dumped: `PLANCK_CC_FIXTURE_DIR` writes the full
+residual to `r{rank}_cpp.txt`, added by R4.2c for precisely this reason — *"a
+scalar max cannot tell 'wrong values' from 'right values in a different index
+order'."* There is **no matching hand-written dump**.
+
+Add one. The T2 probe already holds both tensors in scope, so this is a file write
+beside the comparison, not new plumbing.
+
+*Verify:* two files of equal length whose sorted-|value| multisets can be compared
+in T2.2. Cheap, and it is the input to every step below.
+
+#### T2.2 — is it a permutation at all? (~S, decides the branch)
+
+Compare the two dumps as **multisets of values**, ignoring position.
+
+*Verify — and this is the branch point:*
+- **multisets match** -> it is a pure index permutation. Go to T2.3.
+- **multisets differ** -> it is not a relabelling; some term differs in value.
+  Skip to T2.5. This would also mean restore-both's 3.6e-02 was coincidence, so
+  record it as refuted rather than carried forward.
+
+Do not skip this step. Both later branches are expensive and this decides between
+them for the cost of a sort.
+
+#### T2.3 — identify the permutation, do not guess it (~M, only if T2.2 says permutation)
+
+For a rank-3 residual `r(i,j,k,a,b,c)` there are at most 36 candidate axis
+permutations that preserve the occ/vir split (3! x 3!). Apply each to one arm and
+report `max|diff|` for all of them.
+
+*Verify:* exactly one permutation drives the difference to ~1e-12, or none does.
+A table of 36 numbers is a measurement; picking one and testing it is a guess.
+
+**If none works**, the difference is not a whole-tensor axis permutation — it may
+be a per-orbit scaling (the `purify`/`p3_full` halves of `restore`, which are not
+pure permutations). Report that and go to T2.4.
+
+#### T2.4 — decompose `restore` (~S, only if T2.3 finds no clean permutation)
+
+`restore_restricted_t3_structure` is three operations:
+`apply_restricted_t3_permutation_symmetry`, `apply_restricted_t3_p3_full`,
+`purify_restricted_t3`. Apply them to the hand-written arm **one at a time**,
+cumulatively, reporting `rel` after each.
+
+*Verify:* which single stage moves `rel` toward zero, and which moves it away.
+That names the convention difference in terms of an operation that already exists
+in the tree, instead of inventing a transform.
+
+#### T2.5 — the value branch: which TERM differs (~M, only if T2.2 says values differ)
+
+Both residuals are correct at convergence, so a value difference at fixed
+amplitudes means the two arms **partition the same total differently** — most
+likely the T3->SD feedback, which the hand-written path adds through
+`add_dressed_triples_feedback_into_sd_residuals` and
+`add_dressed_triples_feedback_into_triples_intermediates` while the generated
+kernel returns all ranks from one call.
+
+*Verify:* evaluate the generated arm's rank-1 and rank-2 residuals too, and check
+whether `hand_r3 - gen_r3` is compensated by a matching discrepancy at lower rank.
+If the totals agree while the per-rank split does not, the arms are not comparable
+**at rank 3 alone** and the gate must compare the full residual vector.
+
+That outcome would be a genuine finding, not a defect: it would mean the ladder's
+per-rank timing comparison needs restating.
+
+#### T2.6 — close the gate (~S)
+
+Whichever branch resolved it, encode the transform (or the widened comparison) in
+the gate with the measured numbers inline, and re-run all six ladder points.
+
+*Verify:* the gate is green on **all six**, not just the one it was debugged on.
+`bh3` is `no == nv == 4`, where a wrong axis order stays in bounds and can agree by
+accident — so a green `bh3` alone proves nothing. `ch4` (`no=5 nv=4`) is the
+minimum honest check, and all six is the bar.
 
 ### T3 — report shape (~S)
 
