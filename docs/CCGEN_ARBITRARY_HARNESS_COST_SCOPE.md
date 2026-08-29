@@ -1,9 +1,46 @@
 # What does the correct rank-3 CC path cost, and can it be made cheap?
 
-**Scope. Not started.** Opened by the option-2 decision in
+**Scope. H0 not started, but four of its premises have been settled since it was
+written — read "What changed" first.** Opened by the option-2 decision in
 `CCGEN_RANK3_KERNEL_AND_SOLVER.md`: the generated rank-3 kernels now run in the
-arbitrary-order harness, which is **correct** (CH4/STO-3G +1.49e-08 vs PySCF `rccsdt`) but
-**~500× slower** than the hand-written tensor backend. This doc is about closing that gap.
+arbitrary-order harness, which is **correct** (CH4/STO-3G +1.49e-08 vs PySCF
+`rccsdt`) but far more expensive than the hand-written tensor backend.
+
+## What changed (2026-08-29), before anything below is acted on
+
+`docs/CCGEN_WHY_GENERATED_IS_SLOW.md` measured the emitter-side levers and closed
+two of them. That moves this document from "one of several candidates" to **the
+only remaining lead**, and it invalidates parts of the framing below.
+
+**1. The ~500x is NOT a like-for-like ratio, and must not be treated as a defect
+size.** The two paths are different solvers: wedge-packed vs dense amplitudes,
+cheap dressed intermediates vs a full generated kernel per rank, and **40 vs 16
+iterations on CH4**. A ratio between them prices two algorithms. It is an
+operational fact about which production path is cheaper — not a measure of how
+much is recoverable. **Do not set a target from it.**
+
+**2. H1 can no longer "hand off to `CCGEN_KERNEL_SCALING_SCOPE.md`".** That
+document's measurement route is closed and its lead item is now known to be
+largely redundant: `--dressing derived` already eliminates the 391 four-deep terms
+`_optimal_contraction_order` would target. If H0 says the rank-3 kernel dominates,
+**that is a finding to act on here**, not a handoff.
+
+**3. H3 is partly answered, in the direction that matters.** Emitting dressed
+operators (`--dressing derived`) is the intermediates lever seen from the other
+side, and it is **wired, value-gated, and measured at 3.6x end to end**. So H3 is
+no longer "research behind a compile-time problem" — a working version exists.
+What remains unmeasured is whether *more* intermediates help beyond that.
+
+**4. The obvious codegen hypotheses are spent.** The generated path is measurably
+**not FLOP-bound** (a modelled 11.2x FLOP reduction realised as 3.62x) and **not
+traffic-bound** (fusing 806 loop nests to 15 changed runtime by ~0 %). Both were
+measured generated-vs-generated. That is the strongest available evidence that the
+remaining cost is in **the harness rather than the emitted kernel** — which is what
+this document is for.
+
+**Profile generated-vs-generated.** Every measurement here must compare
+configurations of the same solver, never against `tensor`. Two investigations have
+now been damaged by comparing across the solver boundary.
 
 ## The measurement, and what it does and does not say
 
@@ -56,27 +93,92 @@ H1 and H3 are not independent: absent intermediates *are* one reason the emitted
 
 ## The work
 
-### H0 — profile before touching anything (~S, blocking)
+### H0 — profile the harness (~S, blocking, no code change for step 1)
 
-Profile one converged CH4 rank-3 solve on the arbitrary harness (`correlation cc3`, Release,
-`-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON`) and attribute wall time to: the rank-1 kernel, the rank-2
-kernel, the rank-3 kernel, the Jacobi/DIIS update, and everything else.
+**H0a — free attribution from what already exists (~S).** The iteration loop in
+`generated_arbitrary_runtime.cpp:277-320` has exactly three phases, already
+bracketed and already timed as a whole:
 
-*Verify:* a table of measured shares that sums to the wall time. `sample(1)` on the running process
-is sufficient and was already used in this investigation to identify call sites correctly.
+```
+evaluate_generated_arbitrary_order_residuals(...)   <- H1/H2/H3 live here
+update_amplitudes_with_jacobi_diis(...)             <- H4 lives here
+evaluate_generated_arbitrary_order_energy(...)      <- unattributed today
+```
 
-**This is blocking.** H2 predicts rank-1+rank-2 are a large share; H1 predicts rank-3 dominates and
-the harness is incidental. They imply completely different work, and the profile separates them in
-one run.
+Add two `steady_clock` brackets inside the existing `iter_start` block and extend
+the existing `Iter :` log line with `t_res=`, `t_upd=`, `t_ene=`. That is ~6 lines
+against a log line that already prints `t=`, and it splits H4 from the rest
+immediately.
 
-### H1-path — if the rank-3 kernel dominates (~L, and already scoped elsewhere)
+*Verify:* the three shares sum to the printed `t=` within a few percent, on
+CH4/STO-3G. If `t_upd` is small, **H4 is dead** and the tail item can be dropped
+rather than carried.
 
-Then this is not an arbitrary-harness problem at all: it is the generated-kernel scaling defect, and
-`CCGEN_KERNEL_SCALING_SCOPE.md` owns it. The lead item there is consuming
-`_optimal_contraction_order` in the emitter (`python/ccgen/tensor_ir.py:283`, computed and
-discarded; `grep BLASHint python/ccgen/emit/planck_tensor_cpp.py` returns nothing).
+**H0b — per-rank attribution (~S).** If `t_res` dominates (expected), bracket the
+`rank = 1..max` loop inside `evaluate_generated_arbitrary_order_residuals` and
+report per-rank seconds.
 
-Do **not** duplicate that scope here. Record the profile share and hand off.
+*Verify:* three numbers. **This is the measurement that separates H1 from H2**, and
+it is the whole point of H0:
+
+| result | reading | what it makes worth doing |
+|---|---|---|
+| rank 3 >> rank 1 + rank 2 | H1 — the kernel dominates | the emitter still owns it; see "what changed", H1 is no longer a handoff |
+| rank 1 + rank 2 comparable to rank 3 | **H2 — the harness is paying for ranks it need not recompute** | caching / selective re-evaluation, which is solver work and belongs here |
+| neither dominates | cost is diffuse | go to H0c before writing anything |
+
+**H0c — sampling profile, only if H0a/H0b are inconclusive (~S).** `sample` is
+available (`/usr/bin/sample`, no `perf` on this platform, and `xctrace` needs more
+setup than this warrants). `sample <pid> 30 -f out.txt` on a running CH4 solve
+attributes to symbols and was already used successfully in the rank-3
+investigation.
+
+*Verify:* a symbol table whose top entries are consistent with H0a/H0b. If it
+disagrees with them, **the bracket timings are wrong, not the profile** — check
+that the build has an explicit `CMAKE_BUILD_TYPE` first.
+
+**Why brackets before sampling.** The three phases are already delimited by
+function calls; a sampling profile would spend its resolution rediscovering a
+boundary the source states exactly. Brackets also survive in the log, so any later
+run is self-documenting. Sampling earns its place only when the question becomes
+"where *inside* the residual evaluation", which is H0c.
+
+### The measurement discipline this must follow
+
+**Generated-vs-generated, always.** Compare configurations of the arbitrary
+harness against each other — dressing on/off, fusion on/off, intermediates on/off
+— never against `PLANCK_RCCSDT_BACKEND=tensor`. The two paths are different
+solvers with different amplitude storage and different iteration counts (40 vs 16
+on CH4); a ratio across that boundary prices two algorithms rather than one
+change. **Two investigations have already been damaged by ignoring this.**
+
+**Same-binary where possible.** H0a/H0b are internal brackets, so both arms are
+the same binary and the comparison is exact. Where a rebuild is unavoidable
+(intermediates, dressing), diff `grep '^PLANCK_CC' <build>/CMakeCache.txt` between
+the trees and confirm exactly one flag differs — a build flag silently deciding
+what is measured has cost this project twice.
+
+**Energies bit-identical**, or the arms are not the same calculation.
+
+### H1-path — if the rank-3 kernel dominates (~L, and it is NO LONGER a handoff)
+
+This section previously said to record the share and hand off to
+`CCGEN_KERNEL_SCALING_SCOPE.md`. **That is no longer available**, and the change
+matters:
+
+- that document's measurement route is **closed** (its probe sits on a rerouted
+  code path; the two arms have no residual-level agreement gate), and
+- its lead item — consuming `_optimal_contraction_order` — is **largely redundant**,
+  because `--dressing derived` already eliminates the 391 four-deep terms it
+  targets.
+
+So if H0b says rank 3 dominates, the honest reading is that **the two obvious
+emitter levers are already spent**: the path is not FLOP-bound (a modelled 11.2x
+realised as 3.62x) and not traffic-bound (806 nests fused to 15 for ~0 %). A
+rank-3-dominant profile then means the kernel is expensive for a reason *neither*
+model captured, and the next step is H0c — sampling **inside** the residual
+evaluation — not another cost model. `docs/CCGEN_WHY_GENERATED_IS_SLOW.md` records
+that the modelling approach went 1-for-2.
 
 ### H2-path — if the lower-rank kernels are a large share (~M)
 
@@ -110,14 +212,20 @@ changes nothing.
 
 ## Acceptance
 
-There is no target number yet, and inventing one before H0 would be arbitrary. What the work must
-produce:
+There is no target number, and **the ~500x must not be used as one** — it is a
+ratio across a solver boundary, not a defect size (see "What changed"). What the
+work must produce:
 
-- **A profile** (H0) with measured shares.
-- **A decision** recorded against that profile: which path is taken, and which are dropped.
-- **Correctness preserved bitwise**: `ch4_rccsdt_sto3g` in both modes must still pass. Any change
-  that reassociates floating-point accumulation is not evaluation-order-preserving and needs its own
-  justification rather than absorption into a tolerance.
+- **A profile** (H0a/H0b) with measured shares that sum to the printed iteration
+  time.
+- **A decision** recorded against that profile: which path is taken, which are
+  dropped. H0 is worth doing *even if every path is then dropped* — "the cost is
+  diffuse and there is no lever" is a legitimate and useful outcome, and cheaper
+  to establish than the two refuted models were.
+- **Correctness preserved bitwise**: `ch4_rccsdt_generated_sto3g` and
+  `lih_rccsdt_generated_sto3g` must still pass with identical `E_corr`. Any change
+  that reassociates floating-point accumulation is not evaluation-order-preserving
+  and needs its own justification rather than absorption into a tolerance.
 
 ## Constraints
 
