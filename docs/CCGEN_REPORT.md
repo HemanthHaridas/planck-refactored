@@ -848,7 +848,7 @@ alternatives were tried and each of them held while the answer was wrong.
 | `CCGEN_TENSOR_ACCESSOR.md`, `CCGEN_KERNEL_PERFORMANCE.md` | §10.1 |
 | `CCGEN_KERNEL_SCALING_SCOPE.md` | §10.2 |
 | `CCGEN_WIRING_THE_DERIVATION_ROUTE.md` | §2, §9.3, §10.3, §11 |
-| `CCGEN_RANK3_KERNEL_AND_SOLVER.md`, `CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md` | §10.4, §11 |
+| `CCGEN_RANK3_KERNEL_AND_SOLVER.md`, `CCGEN_ARBITRARY_HARNESS_COST.md` | §10.4, §11 |
 | `CCGEN_TEACHING_GUIDE.md` | §2 |
 
 ### Key references

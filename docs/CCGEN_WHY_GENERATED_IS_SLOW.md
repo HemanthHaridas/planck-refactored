@@ -63,7 +63,7 @@ path is cheaper, not a measure of emitted-code quality.
 
 **This is not the 21.8x–50.1x from `CCGEN_KERNEL_SCALING_SCOPE.md`** — that ladder
 timed the *isolated triples residual*. End to end the gap is 337x–547x, matching
-`CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md`'s independently recorded ~500x. Different
+`CCGEN_ARBITRARY_HARNESS_COST.md`'s independently recorded ~500x. Different
 quantities; do not quote them interchangeably.
 
 ---
@@ -195,7 +195,7 @@ populated the list, and never re-measured.
 Fixed by building each operator once into a `<kernel>_ops` struct passed by
 `const&`. Measured on CH4: **29.59 s → 16.81 s (1.76x)**, `E_corr` **bitwise
 identical**, rank-4 TU 12.8 → 10.5 MB. Full record:
-`docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md` H5.
+`docs/CCGEN_ARBITRARY_HARNESS_COST.md` H5.
 
 **Cause 4 — no OpenMP (SCOPED, modelled 3.86x).** There is **zero OpenMP anywhere
 in CC** — not in `src/post_hf/cc/*.cpp`, not in the generated kernels, not in the
@@ -285,7 +285,7 @@ was not.
 | hand-written kernel, ONE nest | `build_dressed_triples_residual`, `src/post_hf/cc/tensor_backend.cpp` |
 | fusion | `_emit_terms`, `emit_planck_fused_group`, `python/ccgen/emit/planck_tensor_cpp.py` |
 | the chunked path that also needed wiring | `_emit_chunked_kernel`, same file |
-| causes 3 and 4 (chunk rebuilds, OpenMP) in full | `docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md` |
+| causes 3 and 4 (chunk rebuilds, OpenMP) in full | `docs/CCGEN_ARBITRARY_HARNESS_COST.md` |
 | the isolated-kernel ladder | `docs/CCGEN_KERNEL_SCALING_SCOPE.md` |
 
 ---

@@ -354,7 +354,7 @@ historical design context, but they are no longer the source of truth for
   handoff, so the hand-written tensor solver had no regression gate for its entire
   life. Verified falsifiable before being trusted. Cost is not addressed: the
   correct path is ~500× slower (0.19 s vs ~100 s on CH4), per-iteration rather
-  than convergence; see `docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md`. Full answer,
+  than convergence; see `docs/CCGEN_ARBITRARY_HARNESS_COST.md`. Full answer,
   with the eight ruled-out hypotheses:
   `docs/CCGEN_RANK3_KERNEL_AND_SOLVER.md`.
 - The generated-vs-hand-written CC kernel gap is characterized: it is a
