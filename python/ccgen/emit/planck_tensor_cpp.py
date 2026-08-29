@@ -645,6 +645,50 @@ def _map_factor(
     raise NotImplementedError(f"Unsupported tensor factor {tensor_obj!r}")
 
 
+def term_loop_signature(
+    term: AlgebraTerm | RestrictedClosedShellTerm,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The `(free, summed)` index-name pair that defines a term's loop nest.
+
+    F2 (docs/CCGEN_WHY_GENERATED_IS_SLOW.md). Terms sharing this signature emit
+    IDENTICAL loop headers and differ only in the accumulated expression, so they
+    are exactly the candidates for fusing into one nest -- which is what the
+    hand-written kernel does by hand (~9 accumulations per single-index loop).
+
+    Measured on rank-3 spatial triples: 414 nests collapse to **13** signatures,
+    every nest sharing with at least one other, largest group 81. All 414 also
+    share ONE free-index order `(i,j,k,a,b,c)`, so the key needs no canonical
+    reordering -- but it is returned as an ordered tuple rather than a set,
+    deliberately: two terms whose free indices differ in ORDER emit different
+    headers and must not be fused.
+
+    This mirrors the extraction in `emit_planck_term` exactly. If that changes,
+    this must change with it, or the grouping will not describe what is emitted.
+    """
+    if isinstance(term, RestrictedClosedShellTerm):
+        free = term.canonical_free_indices
+        summed = term.canonical_summed_indices
+    else:
+        free = term.free_indices
+        summed = term.summed_indices
+    return tuple(i.name for i in free), tuple(i.name for i in summed)
+
+
+def group_terms_by_loop_signature(
+    terms: Sequence[AlgebraTerm | RestrictedClosedShellTerm],
+) -> dict[tuple[tuple[str, ...], tuple[str, ...]], list[int]]:
+    """Group term INDICES by loop signature, preserving emission order.
+
+    Returns positions rather than terms so a caller can fuse while keeping the
+    original `// Term N` numbering. Dict order is first-appearance, so iterating
+    the groups and then each group's members reproduces a deterministic emit.
+    """
+    groups: dict[tuple[tuple[str, ...], tuple[str, ...]], list[int]] = {}
+    for position, term in enumerate(terms):
+        groups.setdefault(term_loop_signature(term), []).append(position)
+    return groups
+
+
 def emit_planck_term(
     term: AlgebraTerm | RestrictedClosedShellTerm,
     lhs: str = "result",
