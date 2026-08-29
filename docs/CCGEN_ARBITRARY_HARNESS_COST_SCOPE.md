@@ -237,6 +237,59 @@ so further gain here is not about *how many times* operators are built but about
 *what a single build costs*. That is a different question, and this document does
 not have it scoped.
 
+#### H6 — OpenMP: the largest remaining lever, and it is untouched
+
+**Measured premise:** there is **zero OpenMP anywhere in CC** — none in
+`src/post_hf/cc/*.cpp`, none in the generated kernels, and the emitter never emits
+a pragma. Confirmed at runtime: a CH4 solve with `OMP_NUM_THREADS=8` on an 8-core
+machine runs at **98.8 % CPU** — one core busy, seven idle. Every other hot path in
+Planck (ERI, Fock builds, the 4-index transforms, the DFT J/K builds) is threaded;
+CC is the exception.
+
+**Amdahl on H5's measured split** (CH4 post-H5: builders 45.1 %, residual 53.7 %,
+other 1.2 %). This machine has 4 performance cores / 8 logical, so `n=4` is the
+realistic ceiling:
+
+| threads | both parallel | residual only | builders only |
+|---|---|---|---|
+| 2 | 1.98x | 1.37x | 1.29x |
+| **4** | **3.86x** | 1.67x | 1.51x |
+| 8 | 7.38x | 1.89x | 1.65x |
+
+**~3.9x at 4 threads is larger than every lever this investigation has found
+combined** (dressing 3.6x, H5 1.76x). It is also the only remaining item that
+addresses *both* halves of the split at once.
+
+**Both sites are cleanly parallel, and the builders are the better shape:**
+
+- **Builders (45.1 %) — embarrassingly parallel.** 270 independent calls, each
+  writing its own freshly-allocated tensor. **No write sharing at all.** A parallel
+  loop over the build list needs no reduction and no ordering.
+- **Residual nests (53.7 %) — parallel but coarser.** Each nest's outer `i` writes
+  disjoint `result(i,...)` slices, so no reduction is needed either. But the trip
+  count is `no` = 4-8, giving 1-2 iterations per thread at `n=4` — coarse and
+  unbalanced. **Collapse `i,j`** (`o²` = 16-64 trips) for a usable shape; writes
+  stay disjoint.
+
+**Why this is lower-risk than the DFT grid precedent.** The historical DFT jitter
+came from a **cross-thread reduction summed in completion order**
+(`dft_xc_reduction_determinism`). Neither site here has a reduction: builders write
+private tensors, residual nests write disjoint slices. That is the same property
+that made the DFT J/K builds bitwise-invariant across thread counts, and it should
+be **verified the same way — energies bitwise identical across `OMP_NUM_THREADS`
+= 1/2/4/8**, not assumed from the argument.
+
+**Sequencing:** do the builders first. Better granularity, no write sharing, 45 %
+of the time, and one `#pragma omp parallel for` over the emitted build list in the
+main kernel — where H5 has already collected them into one place. **H5 is what
+makes this easy**; before it the builds were scattered across four `_partN`
+functions.
+
+**Not yet measured:** whether thread overhead is amortized at these sizes. CH4's
+`o³v³` is 8000 elements; a per-builder task is small. The honest first step is one
+`parallel for` over the builder list, measured — not a threading strategy designed
+in advance.
+
 #### H5.4 — check the other kernels and ranks (~S)
 
 The same chunking applies wherever `len(terms) > _KERNEL_CHUNK_TERMS`. Rank 4

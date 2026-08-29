@@ -309,6 +309,21 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
   code-size lever** (the registry TU is `-O1`-pinned because these are pathological
   to compile); it is not a speed lever.
 
+- **CC is the only hot path in Planck with NO OpenMP, and that is now the largest
+  remaining lever (~3.9x modelled at 4 threads).** Measured: zero pragmas in
+  `src/post_hf/cc/*.cpp`, in the generated kernels, or in the emitter; a CH4 solve
+  with `OMP_NUM_THREADS=8` runs at **98.8 % CPU** — one core, seven idle. ERI, Fock,
+  the 4-index transforms and the DFT J/K builds are all threaded; CC is not.
+  Amdahl on H5's measured split (builders 45.1 %, residual 53.7 %) gives **3.86x at
+  4 threads** with both parallel — **larger than dressing (3.6x) and H5 (1.76x)
+  combined.** Both sites are reduction-free: builders write private tensors,
+  residual nests write disjoint `result(i,...)` slices, so this is the DFT J/K
+  shape (bitwise thread-invariant) rather than the DFT-grid shape that caused the
+  historical jitter — **but verify bitwise across `OMP_NUM_THREADS`=1/2/4/8 rather
+  than assuming it.** Start with the builders: 270 independent calls, no write
+  sharing, and H5 has already collected them into one place. Scoped as H6 in
+  `docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md`.
+
 - **The residual generated-vs-hand-written gap is mostly NOT a codegen defect.**
   **The two paths are different solvers and their wall-clock is not a like-for-like
   ratio** — wedge-packed vs dense amplitudes, cheap dressed intermediates vs a full
