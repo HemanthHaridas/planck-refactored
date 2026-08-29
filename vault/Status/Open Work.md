@@ -310,9 +310,25 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
   seam is a plain `for term in emitted_terms` loop
   (`planck_tensor_cpp.py:980-985`); and no new operand plumbing is needed.
 
-  **F1 comes first and can kill the rest:** measure `--dressing derived` against
-  undressed on the six ladder points. If the factorized kernel is already near the
-  hand-written time, F2-F5 are dropped. **Fusion must be measured against the
+  **F1 IS DONE (2026-08-29) and did NOT kill the rest.** Measured, two trees one
+  flag apart, routing confirmed `RCCSDT[OPT]`, energies identical to ten digits
+  across all three arms:
+
+  | case | undressed | dressed | hand-written | dressed/hand |
+  |---|---|---|---|---|
+  | BH3/STO-3G | 33.70 s | 9.34 s | **0.10 s** | **93x** |
+  | CH4/STO-3G | 103.86 s | 28.67 s | **0.19 s** | **151x** |
+
+  Two corrections it forces. **(a) The end-to-end gap is 337x-547x, not the
+  21.8x-50.1x carried from the scaling ladder** — that ladder timed the isolated
+  triples residual, a different quantity; this matches
+  `CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md`'s ~500x. **(b) Cause 1's modelled 11.2x
+  FLOP saving on CH4 realises as only 3.62x wall-clock**, so two-thirds does not
+  translate — direct evidence the generated path is **not FLOP-bound**, and that a
+  traffic lever is the right next target rather than more FLOP reduction. Only 2 of
+  6 points were run; the other four were ~6 h of wall-clock and abandoned
+  deliberately, since a 93x-151x residual answers F1's question at any size. They
+  belong in F5 against the dressed baseline. **Fusion must be measured against the
   FACTORIZED baseline, never the undressed one** — that double-counts cause 1.
   F3's gate is bit-identical energies on `ch4_rccsdt_generated_sto3g` /
   `lih_rccsdt_generated_sto3g`: accumulation order within a group changes, so this

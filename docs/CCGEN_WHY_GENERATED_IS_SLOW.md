@@ -5,8 +5,15 @@ fewer passes over the result tensor.**
 
 | # | cause | status | size |
 |---|---|---|---|
-| 1 | **contraction order** — 391 of 824 terms evaluated n-arily at `o⁵v⁵` | **FIXED** by `--dressing derived` | 83–90 % of undressed FLOPs; modelled **10x–18x**, growing with size |
+| 1 | **contraction order** — 391 of 824 terms evaluated n-arily at `o⁵v⁵` | **FIXED** by `--dressing derived` | modelled 10x–18x FLOPs; **measured 3.6x** wall-clock (F1) |
 | 2 | **one loop nest per term** — 414 nests, only 13 distinct inner loops | **OPEN — the next lever** | **32x** fewer `o³v³` traversals |
+
+**F1 measured the end-to-end gap at 337x–547x, not the 21.8x–50.1x this document
+first cited** — that figure is from the isolated-triples-residual ladder, a
+different quantity. Dressing closes 3.6x of it, leaving **93x–151x**. And cause
+1's modelled 11.2x FLOP saving on CH4 realises as only 3.62x wall-clock, which is
+itself the evidence that **the generated path is not FLOP-bound** and that a
+traffic lever is the right next target.
 
 Established by code-level census of the emitted C++ plus FLOP arithmetic, after
 the measurement route was closed (`CCGEN_KERNEL_SCALING_SCOPE.md`). No new
@@ -177,18 +184,48 @@ The emit seam is a plain `for term in emitted_terms: emit_planck_term(...)` loop
 loops, then one accumulation — so fusion is *"group before the loop, emit the
 shared header once"*, not a rewrite.
 
-### F1 — measure the factorized kernel (~S, no code change) — **DO THIS FIRST**
+### F1 — **DONE (2026-08-29). Fusion is NOT killed; the gap is far larger than modelled.**
 
-Time `--dressing derived` against undressed on the six ladder points, end to end,
-validated by converged energy.
+Two trees, cache-diffed to one differing flag, `ARBITRARY_LOWER_RANKS=ON`,
+`PLANCK_RCCSDT_BACKEND=optimized` (routing confirmed as `RCCSDT[OPT]` through the
+arbitrary harness on both):
 
-*Verify:* a per-point speedup. The model predicts 10x–18x from cause 1 alone.
+| case | undressed | dressed | hand-written | dressed/hand |
+|---|---|---|---|---|
+| BH3/STO-3G | 33.70 s | 9.34 s | **0.10 s** | **93x** |
+| CH4/STO-3G | 103.86 s | 28.67 s | **0.19 s** | **151x** |
 
-**This step can kill the rest.** If the factorized kernel is already at or near the
-hand-written kernel's time, cause 2 is not worth fixing and F2–F5 are dropped. If
-it is still 5–20x off, fusion is worth the work and F1's numbers are the baseline
-every later step is measured against. **Fusion must never be measured against the
-undressed kernel** — that double-counts cause 1's saving.
+**Energies identical to all ten digits across all three arms** (`-0.0533629208`,
+`-0.0791116825`), so dressing is a pure rewrite and the arms are the same
+calculation. CH4's 3.62x independently reproduces W5's recorded 3.61x from fresh
+trees.
+
+**Verdict: F2-F5 proceed.** The factorized kernel is nowhere near hand-written
+time — dressing closes 3.6x of a **337x-547x** gap, leaving **93x-151x**.
+
+**Two corrections this forces, and they matter more than the verdict:**
+
+1. **The gap is ~10x larger than this document assumed.** The header cited
+   21.8x-50.1x from `CCGEN_KERNEL_SCALING_SCOPE.md`, but that ladder timed the
+   *isolated triples residual*. End to end the generated path is **337x-547x**
+   slower, consistent with `CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md`'s recorded
+   ~500x. The two are different quantities and this document previously conflated
+   them.
+2. **Cause 1's saving does not translate.** The census predicted **11.2x** FLOPs
+   on CH4; measured wall-clock is **3.62x**. So roughly two-thirds of the modelled
+   FLOP win is not realised — which is itself evidence that the generated path is
+   **not FLOP-bound**, and therefore that a traffic lever (cause 2) is the right
+   next target rather than more FLOP reduction.
+
+**Baseline for F5: the DRESSED column** (9.34 s / 28.67 s), never the undressed
+one.
+
+**Scope note.** Only 2 of 6 ladder points were run. The remaining four were
+estimated at **~6 h** of wall-clock (`hf_631g` alone is ~13 min undressed) and
+abandoned deliberately: F1's question is "is cause 2 worth fixing", a 93x-151x
+residual gap answers it at any size, and the four points would refine an exponent
+F1 does not need. They belong in F5, measured against the dressed baseline, where
+the size trend is the actual deliverable.
 
 ### F2 — group the terms, emit nothing (~S)
 
