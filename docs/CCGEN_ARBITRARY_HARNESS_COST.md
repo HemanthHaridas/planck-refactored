@@ -10,7 +10,7 @@ Profiled 2026-08-29; two fixes have since landed and one lever remains.
 | one call to the rank-3 kernel | **98.8 %** | the whole cost |
 | …of which `build_W_*` operator builders | **67.7 %** | **fixed** — chunk rebuilds, 1.76x |
 | …of which duplicate transpose-equivalent builders | 34.9 % across 3 families | **fixed** — the merge, 1.42x-1.52x |
-| OpenMP anywhere in CC | **none**; 98.8 % CPU on 8 cores | **OPEN** — modelled 3.86x |
+| OpenMP anywhere in CC | **none** (0 pragmas in CC source and in the emitted kernels) | **OPEN** — modelled 2.74x on the triples parts |
 
 Opened by the option-2 decision in `CCGEN_RANK3_KERNEL_AND_SOLVER.md`: the
 generated rank-3 kernels run in the arbitrary-order harness, which is correct
@@ -169,51 +169,31 @@ unbalanced, and a cost-weighted split is the cheap fix if that is ever needed.
 
 ## What remains: CC has no OpenMP at all
 
-**There is zero OpenMP anywhere in CC** — none in `src/post_hf/cc/*.cpp`, none in
-the generated kernels, and the emitter never emits a pragma. Confirmed at runtime:
-a CH4 solve with `OMP_NUM_THREADS=8` on an 8-core machine runs at **98.8 % CPU** —
-one core busy, seven idle. Every other hot path in Planck (ERI, Fock builds, the
-4-index transforms, the DFT J/K builds) is threaded; **CC is the exception.**
+**There is zero OpenMP in CC** — 0 `pragma omp` in `src/post_hf/cc/*.{cpp,h}` and
+0 in the emitted kernels, against 8+ other files under `src/` that carry them.
+Every other hot path in Planck (ERI, Fock builds, the 4-index transforms, the DFT
+J/K builds) is threaded; **CC is the exception.**
 
-Amdahl on the post-fix-1 split (builders 45.1 %, residual 53.7 %, other 1.2 %).
-This machine has 4 performance cores / 8 logical, so `n=4` is the realistic
-ceiling:
+**Rescoped 2026-08-29 with fresh measurements — the estimate and the
+recommendation below both moved.** See `docs/CCGEN_CC_OPENMP_SCOPE.md`. Two
+things this section previously got wrong:
 
-| threads | both parallel | residual only | builders only |
-|---|---|---|---|
-| 2 | 1.98x | 1.37x | 1.29x |
-| **4** | **3.86x** | 1.67x | 1.51x |
-| 8 | 7.38x | 1.89x | 1.65x |
+- **It advised starting with the builders.** That was right at 45.1 %; after the
+  transpose merge they are **13.8 %** and cap at **1.12x**. The residual is now
+  **86.2 %**, concentrated in `triples_residual_part1` at **63.6 %**. Threading
+  the three triples parts models **2.74x at 4 threads**.
+- **Its "98.8 % CPU on 8 cores" evidence does not distinguish its own claim.**
+  That run used a tree where `OpenMP_CXX_FLAGS` is `NOTFOUND` and `-DUSE_OPENMP`
+  never reaches the compile line, so *every* Planck pragma was inert in it, not
+  just CC's absent ones. The claim survives — by `grep`, not by that number.
 
-**3.86x at 4 threads is larger than every lever found so far combined** (dressing
-3.6x, chunk hoist 1.76x, merge 1.5x), and it is the only remaining item addressing
-both halves of the split at once. Note the split has since shifted — the merge cut
-builder work further — so re-measure the shares before relying on these exact
-figures.
-
-**Both sites are reduction-free, and the builders are the better shape:**
-
-- **Builders — embarrassingly parallel.** Independent calls, each writing its own
-  freshly-allocated tensor. **No write sharing at all**, no reduction, no ordering.
-- **Residual nests — parallel but coarser.** Each nest's outer `i` writes disjoint
-  `result(i,...)` slices, so no reduction either. But the trip count is `no` = 4-8,
-  giving 1-2 iterations per thread at `n=4`. **Collapse `i,j`** (`o²` = 16-64
-  trips); writes stay disjoint.
-
-**Why this is lower-risk than the DFT precedent.** The historical DFT jitter came
-from a **cross-thread reduction summed in completion order**
-(`dft_xc_reduction_determinism`). Neither site here has a reduction — the same
-property that made the DFT J/K builds bitwise-invariant across thread counts.
-**Verify it the same way — energies bitwise identical across `OMP_NUM_THREADS` =
-1/2/4/8 — rather than assuming it from the argument.**
-
-**Start with the builders:** better granularity, no write sharing, and one
-`#pragma omp parallel for` over the emitted build list in the main kernel, where
-fix 1 has already collected them into one place. Before that fix they were
-scattered across four `_partN` functions. **Unmeasured:** whether thread overhead
-is amortized at these sizes — CH4's `o³v³` is 8000 elements and a per-builder task
-is small. The honest first step is one `parallel for` over the builder list,
-measured.
+The determinism argument stands unchanged and is the part worth keeping: neither
+site has a **cross-thread reduction** (builders write private tensors; residual
+nests accumulate into a thread-private `acc` and write disjoint `result(...)`
+slices), which is the property that made the DFT J/K builds bitwise
+thread-count-invariant, unlike the DFT grid reduction that summed in completion
+order. **That is a reason to expect determinism, not evidence of it — verify
+bitwise across `OMP_NUM_THREADS` = 1/2/4/8.**
 
 ## What this says about method
 
@@ -223,7 +203,7 @@ measured.
 | loop fusion | census + traffic model | **miss** (~0 %) |
 | chunk rebuilds | **`sample` profile** | **hit** (1.76x) |
 | duplicate transposes | **`sample` profile** | **hit** (1.5x) |
-| no OpenMP | **asking whether it was threaded** | modelled 3.86x |
+| no OpenMP | **asking whether it was threaded** | modelled 2.74x (rescoped) |
 
 The two models cost days and went 1-for-2. The profile cost ~20 minutes and found
 a defect neither model could see, because **neither modelled work that should not
