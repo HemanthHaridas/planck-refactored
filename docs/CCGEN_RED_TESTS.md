@@ -1,12 +1,18 @@
-# Scope: the nine red ccgen tests
+# Why were nine ccgen tests red, and what did fixing them find?
 
-**Scope for in-flight work. C and B are DONE (2026-08-29); A remains.** Written
+**DONE (2026-08-29). All nine are green or skipped; the suite is clean.** Written
 after the `merge_transposes` work found the suite at `862 passed, 10 failed`. One
-of those ten was caused by that work and is fixed; **the nine below were red
-before it and are red on a clean `HEAD`** (verified in a `git worktree` at HEAD,
-not inferred). C and B account for three of the nine and are now green/skipped,
-leaving **A's six**. A's blocking question — is it test debt or a live defect? —
-is answered: **test debt.** The value probe is green (see below).
+of those ten was caused by that work and was fixed with it; **the nine here were
+red before it and on a clean `HEAD`** (verified in a `git worktree`, not
+inferred).
+
+**None was a live product defect** — as suspected, though not for the reason
+assumed in every case. Seven were tests that outlived their premise, one was a
+missing optional dependency, and one (`emit_memory_budget_selects_best_of_both`)
+turned out to be a plain test bug this document had misfiled as distributional:
+its two sides generated equations with **different engines**. A's blocking
+question — test debt or live defect? — was settled first by the value probe:
+**test debt.**
 
 **None is a live product defect.** Every one is a *test* that outlived its
 premise, or an environment gap. That is the finding, and it is also the risk: a
@@ -22,7 +28,7 @@ explicitly skipped, not to keep explaining them.
 | B | 2 in `test_iterate_amps_fixed_point.py` | pyscf absent; the skip guard does not fire | environment |
 | C | 1 in `test_optimizations.py` | **asserts the antisymmetry defect W4.3 fixed** | `04a5ac2b` |
 
-**Status: C DONE, B DONE, A open.**
+**Status: all DONE.**
 
 Ordered below by cost, cheapest first. **C is the one to do first regardless** —
 it is a stale gate pinning a known-wrong phase, so it is actively misleading.
@@ -116,128 +122,75 @@ red count.
 
 ---
 
-## A — six selection-model gates outlived their premise (~M, the real work)
+## A — **DONE (2026-08-29).** Six gates, and one was not what this scope claimed
 
-All six broke in `7bdfdaf1`, whose own commit message names them:
+All six broke in `7bdfdaf1`, whose own commit message named them:
 
 > Six selection-model gates still fail; they assert properties of the savings
 > distribution that the split genuinely changed, and need their claims restated
 > rather than their constants moved.
 
-That commit fixed the factorizer's value preservation. Part of the fix folded the
-contraction **shape** into `_derived_name`, because one name had denoted several
-different contractions. That correctly **split** operators — 26 → 83 at rank 3 —
-and splitting one operator into several redistributes savings across more, smaller
-entries. Every one of the six asserts a property of that distribution.
+That commit fixed value preservation, and part of the fix folded contraction
+**shape** into `_derived_name` — correctly splitting operators 26 → 83 at rank 3,
+which redistributes savings across more, smaller entries.
 
-**Measured, so the restatement starts from numbers rather than a story:**
+**One correction to this document.** It classified all six as distributional.
+`test_emit_memory_budget_selects_best_of_both` is **not** — it is a plain test
+bug. Its emitter helper defaults `engine="diagram"` while its comparison side
+called `generate_cc_equations` without it, picking up the `"wick"` default: a
+different equation set, hence 26 selected operators against 24 emitted. The test
+even carries a comment warning about exactly this trap for `canonical_fock`, one
+argument over. Fixed by passing the engine.
 
-| test | asserts | measured now |
+**And one correction to this document's measurements.** It stated the joint
+selector "never" beats flops-only by the >5 % asserted. That was from a coarse
+scan. A 100 GB sweep finds **37 divergent budgets, peaking at +5.77 % at 3200 GB**
+— which *does* clear the bar the gate demands. The regime moved; it did not
+shrink below the claim.
+
+**What each gate now asserts, and why:**
+
+| gate | restated as | measured |
 |---|---|---|
-| `test_savings_concentration` | top 5 carry > 98 % of savings | **0.656** (0.863 even merged) |
-| `test_ccsdt_keys_barely_diverge` | savings- and density-greedy agree < 1 % | **0.210** |
-| `test_joint_beats_flops_only_baseline` | joint beats flops-only by > 5 % at 850 GB | **+0.00 %** at 850 GB |
-| `test_optimized_beats_baseline_all_axes` | same, all axes | same |
-| `test_emit_memory_budget_selects_best_of_both` | joint > baseline savings | **equal** |
-| `test_operator_set_invariant_under_factor_order` | see below — **different in kind** | 8-10 names differ |
+| `savings_concentration` | a **fraction** of the set, not a fixed top-5 | top ⅛ > 85 %, top ¼ > 92 %, bottom half < 5 % |
+| `ccsdt_keys_barely_diverge` | the **median** budget shows no divergence; exceptions stay a minority | median 0.0000, 15 of 133 budgets ≥ 1 % |
+| `joint_beats_flops_only_baseline` | **searches** the range for the divergence regime | peak +5.77 % at 3200 GB |
+| `optimized_beats_baseline_all_axes` | same search; stride axis pinned separately | stride holds at every budget tested |
+| `operator_set_invariant_under_factor_order` | **reference count** is invariant; savings drift < 1 % | 963 refs exactly, every seed |
+| `emit_memory_budget_selects_best_of_both` | unchanged — it was an engine mismatch | 24 = 24 |
 
-**The divergence regime moved rather than vanished**, which is why these need
-restating and not deleting. Scanning budgets on `ccsdtq` (264 operators):
+Three judgement calls worth recording:
 
-```
- 100-1200 GB   +0.00 %
-     1800 GB   +0.51 %
-     2500 GB   +1.09 %
-     4000 GB   +4.62 %   <- peak
-     6000 GB   +0.00 %
-```
+- **The +5.77 % peak is a knife edge** — +1.58 % at 3150 GB, +4.95 % at 3250 — so
+  pinning 3200 would swap one brittle constant for another and re-break on the
+  next legitimate change to operator identity. Both CCSDTQ gates therefore
+  **search** the range and assert that a qualifying regime exists, which is what
+  M2.3 actually claims.
+- **The stride axis (B3) was measured independent of the budget** (holds at both
+  850 and 3200 GB), so it stays pinned at a fixed budget rather than riding the
+  search. Binding it to the searched budget would hide which axis regressed.
+- **The invariance gate asserts what is invariant**, measured rather than assumed:
+  total operator **references** are exactly 963 under every shuffle, while
+  distinct names (484 → 485-488), operator count (80 → 81-84) and total savings
+  (within 0.17 %) all move. Every term is factored to the same depth regardless of
+  input order — the same work is hoisted, only the grouping differs. It also
+  fails loudly if shuffling ever *stops* changing the set, since that would mean
+  the open question below had been answered and multiset equality should return.
 
-So the joint selector still wins, but **never by the > 5 % the gate demands**, and
-the 850 GB the test hardcodes is now flat. Moving the constant to 4000 GB would
-make it pass at +4.62 % and still fail the `> 0.05` assertion — the *claim* has to
-change, which is what "restated rather than their constants moved" means.
+**Mutation-verified, each against the defect it claims to guard:**
 
-**The work for five of the six:** re-derive each property against the current
-operator set, then assert the property with a margin, not the historical number.
-Where a property is simply no longer true (concentration at 98 %), say so in the
-docstring and assert what IS true — a gate that pins today's measurement with no
-stated reason is a change-detector, not a property gate.
+| mutation | gate that caught it |
+|---|---|
+| reverse the density key ordering | `keys_barely_diverge` |
+| flatten `operator_savings` to a constant | `savings_concentration` |
+| make the joint selector ignore its density arm | both CCSDTQ gates |
+| make hoisting depth depend on factor order | `operator_set_invariant` |
 
-### `test_operator_set_invariant_under_factor_order` is different in kind — do it separately
-
-The other five are distributional claims. This one asserts a **genuine
-invariant**: the derived operator multiset must be a function of the terms, not of
-factor input order. That is a correctness property, and it is currently false.
-
-Measured on rank-3 triples, shuffling factor order across 4 seeds:
-
-- **The operator COUNT is invariant** — 963 both ways, every seed.
-- But **8-10 operators differ by name**, and inspecting them, they are **genuinely
-  different contractions**, not the same one misnamed:
-
-```
-base:  t2(a,e,j,k) v(d,e,l,m) t1(b,l) t1(d,i)
-shuf:  t2(a,e,i,j) v(d,e,l,m) t1(c,m) t1(d,k)
-```
-
-So factor order steers the factorizer to a **different, equally valid
-decomposition**. The invariant as written is not merely unmet — it may be the
-wrong invariant, since nothing requires one canonical tree.
-
-**Decide which before writing code:**
-
-1. **The multiset genuinely should be order-invariant** → the tie-break in tree
-   selection is incomplete and needs a canonical order over equal-cost
-   candidates. Real work, real payoff: build reproducibility.
-2. **Only the RESULT need be order-invariant** → assert what actually matters —
-   operator count, total savings, and *value preservation* — and drop the
-   name-multiset equality.
-
-### The value probe — **DONE (2026-08-29). It holds: 0 disagreements.**
-
-This was the measurement that could have reclassified the whole item from "stale
-gate" to "live defect", and it was sequenced first for that reason. The value gate
-(`test_factorize_value_preservation`) ran on the **unshuffled** manifold only, so
-whether a shuffled-order decomposition still reproduces its source terms was
-untested — and that is exactly the property that must hold if factor order can
-steer the factorizer.
-
-Reusing that file's own `_disagreements` oracle (each rewritten term compared
-against **its own** source via `residual_einsum`, so shuffled input is
-self-referencing and needs no new oracle):
-
-| basis | manifold | unshuffled | 4 shuffled seeds |
-|---|---|---|---|
-| GCC | doubles | 0 / 32 | **0** / 30-32 |
-| GCC | triples | 0 / 324 | **0** / 316-322 |
-| spatial | singles | 0 / 4 | **0** / 4 |
-| spatial | doubles | 0 / 21 | **0** / 18-22 |
-
-**Non-vacuity asserted, not assumed** — the shuffle must actually change the
-decomposition or this compares a tree against itself: measured **16-22 operator
-names differ per seed** while the operator count stays at exactly 963, and
-316-322 terms are rewritten and checked each seed. **Mutation-verified**: flipping
-the sign of the rewritten term's coefficient in `rewrite_term_factorized` fails
-all 16 subtests, so the gate detects value defects rather than merely running.
-
-**Conclusion: the factorizer reaches different but equally valid trees.** Factor
-order changes the decomposition, not the value. So the invariance gate asserts
-something **stronger than correctness requires**, and A stays test debt — no live
-defect. Landed as `FactorOrderValueTests` in
-`python/ccgen/tests/test_factorize_value_preservation.py`, covering GCC
-doubles+triples and spatial singles+doubles (spatial stops at `ccsd` because the
-spatial fixture carries no `t3`, the same limit
-`test_spatial_rewrite_is_value_preserving` works under).
-
-**What this does NOT settle:** which invariant the gate SHOULD assert. Option 1
-(canonical tie-break, so the multiset really is order-invariant) is still a
-legitimate choice on build-reproducibility grounds, and this probe does not argue
-against it — it only removes correctness as the reason to hurry.
-
-*Verify:* whichever option, the gate must fail if a real order-dependence is
-introduced — mutation-test it, as `test_merged_call_sites` was.
-
----
+**Still open, deliberately:** whether the factorizer *should* be made
+order-invariant by a canonical tie-break over equal-cost candidates. That is a
+build-reproducibility argument, not a correctness one — the value probe settled
+correctness — and it is recorded in the gate's own docstring so whoever does it
+knows to restore the stronger assertion.
 
 ## Sequencing
 
@@ -245,15 +198,21 @@ introduced — mutation-test it, as `test_merged_call_sites` was.
 2. ~~**B**~~ — **DONE.** One decorator. Whether CI has pyscf is still unanswered.
 3. ~~**A's value-preservation-under-shuffle probe**~~ — **DONE.** 0 disagreements
    across 4 seeds on both bases; A is test debt, not a defect.
-4. **A's five distributional gates** (~M) — restate claims against measured
-   numbers.
-5. **A's invariance gate** (~M) — after the probe decides which invariant is the
-   right one.
+4. ~~**A's five distributional gates**~~ — **DONE.** Four restated against
+   measured numbers; the fifth was an engine mismatch, not a distributional claim.
+5. ~~**A's invariance gate**~~ — **DONE.** Asserts the reference count, which is
+   exactly invariant, and fails loudly if shuffling ever stops mattering.
 
-**Acceptance for the whole item:** `python -m pytest ccgen/tests/ -q` reports zero
-failures, with skips only where an optional dependency is genuinely absent. That
-is the point — not the individual green ticks, but that the next real regression
-is visible instead of buried in nine standing failures.
+**Acceptance, met:** `python -m pytest ccgen/tests/ -q` reports zero failures,
+with skips only where an optional dependency is genuinely absent. That was the
+point — not the individual green ticks, but that the next real regression is
+visible instead of buried in nine standing failures.
+
+**The lesson worth carrying.** Two of the nine were misdiagnosed in this very
+document before anyone looked closely: one filed as a distributional claim was an
+engine mismatch, and the "never clears 5 %" measurement came from too coarse a
+scan and was wrong. A standing red is not just noise — it is a place where nobody
+has looked recently, and the reasons drift as much as the code.
 
 ## Traps
 

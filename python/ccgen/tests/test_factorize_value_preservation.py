@@ -255,7 +255,7 @@ class FactorOrderValueTests(unittest.TestCase):
     spatial singles + doubles. So the factorizer reaches different but equally
     valid trees, and the invariance gate is asserting something stronger than
     correctness requires. Nothing here says which invariant SHOULD be asserted --
-    that is the open question in docs/CCGEN_RED_TESTS_SCOPE.md -- but it does say
+    that is the open question in docs/CCGEN_RED_TESTS.md -- but it does say
     the emitted values are not at risk either way.
 
     Non-vacuity is asserted rather than assumed: the shuffle must actually change
