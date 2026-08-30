@@ -4,7 +4,9 @@
 #include <Eigen/QR>
 
 #include <algorithm>
+#include <array>
 #include <bit>
+#include <cassert>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -62,22 +64,51 @@ namespace HartreeFock::Correlation::CI
             return dets;
         }
 
-        std::pair<std::vector<int>, std::vector<int>> get_excitation(CIString bra, CIString ket)
+        // F1: the annihilation/creation orbital lists for one spin channel.
+        //
+        // Fixed capacity 2, and that is a bound rather than a guess: every caller
+        // is guarded by `n_diff_a`/`n_diff_b` in {1, 2} (computed at :246-247 as
+        // popcount(bra ^ ket) / 2), and a Slater-Condon element vanishes beyond a
+        // double excitation. `slater_condon_element` returns 0 for n_diff > 2
+        // before reaching any of these branches.
+        //
+        // This replaced `std::pair<std::vector<int>, std::vector<int>>` returned BY
+        // VALUE, which cost up to four heap allocations per matrix element -- and
+        // the sigma build calls it for both spin channels on every element. A
+        // profile put the malloc/free family at ~53 % of FCI runtime against 12.0 %
+        // in apply_ci_hamiltonian itself. See docs/FCI_OPENMP_SCOPE.md (F1).
+        struct Excitation
+        {
+            std::array<int, 2> ann{};
+            std::array<int, 2> cre{};
+            int n_ann = 0;
+            int n_cre = 0;
+        };
+
+        Excitation get_excitation(CIString bra, CIString ket)
         {
             // The symmetric difference identifies orbitals that changed occupation;
             // bits present in the bra are annihilations, the rest are creations.
-            std::vector<int> ann, cre;
+            Excitation e;
             CIString d = bra ^ ket;
             while (d)
             {
                 const int k = std::countr_zero(d);
                 if (bra & CASSCFInternal::single_bit_mask(k))
-                    ann.push_back(k);
+                {
+                    // Assert rather than truncate: silently dropping an orbital here
+                    // would return a WRONG matrix element, not a crash.
+                    assert(e.n_ann < 2 && "get_excitation: more than a double excitation");
+                    e.ann[e.n_ann++] = k;
+                }
                 else
-                    cre.push_back(k);
+                {
+                    assert(e.n_cre < 2 && "get_excitation: more than a double excitation");
+                    e.cre[e.n_cre++] = k;
+                }
                 d &= d - 1;
             }
-            return {ann, cre};
+            return e;
         }
 
         template <typename Apply>
@@ -292,8 +323,8 @@ namespace HartreeFock::Correlation::CI
         {
             // One alpha excitation: one-electron term plus Coulomb/exchange with the
             // untouched alpha and beta occupations.
-            auto [ann_a, cre_a] = get_excitation(bra_a, ket_a);
-            const int p = ann_a[0], q = cre_a[0];
+            const auto exc_a = get_excitation(bra_a, ket_a);
+            const int p = exc_a.ann[0], q = exc_a.cre[0];
             const int sgn = single_parity(ket_a, p, q);
             double val = h_eff(p, q) * sgn;
             for (int r = 0; r < n_act; ++r)
@@ -314,8 +345,8 @@ namespace HartreeFock::Correlation::CI
         if (n_diff_a == 0 && n_diff_b == 1)
         {
             // One beta excitation is the same algebra with the spin channels swapped.
-            auto [ann_b, cre_b] = get_excitation(bra_b, ket_b);
-            const int p = ann_b[0], q = cre_b[0];
+            const auto exc_b = get_excitation(bra_b, ket_b);
+            const int p = exc_b.ann[0], q = exc_b.cre[0];
             const int sgn = single_parity(ket_b, p, q);
             double val = h_eff(p, q) * sgn;
             for (int r = 0; r < n_act; ++r)
@@ -337,11 +368,11 @@ namespace HartreeFock::Correlation::CI
         {
             // Same-spin double excitations reduce to a pure antisymmetrized two-body
             // integral with the fermionic phase accumulated along the move.
-            auto [ann_a, cre_a] = get_excitation(bra_a, ket_a);
-            int p1 = ann_a[0], p2 = ann_a[1];
+            const auto exc_a = get_excitation(bra_a, ket_a);
+            int p1 = exc_a.ann[0], p2 = exc_a.ann[1];
             if (p1 > p2)
                 std::swap(p1, p2);
-            int q1 = cre_a[0], q2 = cre_a[1];
+            int q1 = exc_a.cre[0], q2 = exc_a.cre[1];
             if (q1 > q2)
                 std::swap(q1, q2);
             const CIString inter = (ket_a ^ CASSCFInternal::single_bit_mask(p1)) ^ CASSCFInternal::single_bit_mask(p2);
@@ -358,11 +389,11 @@ namespace HartreeFock::Correlation::CI
         if (n_diff_a == 0 && n_diff_b == 2)
         {
             // Beta-beta doubles follow the same pattern as the alpha-alpha branch.
-            auto [ann_b, cre_b] = get_excitation(bra_b, ket_b);
-            int p1 = ann_b[0], p2 = ann_b[1];
+            const auto exc_b = get_excitation(bra_b, ket_b);
+            int p1 = exc_b.ann[0], p2 = exc_b.ann[1];
             if (p1 > p2)
                 std::swap(p1, p2);
-            int q1 = cre_b[0], q2 = cre_b[1];
+            int q1 = exc_b.cre[0], q2 = exc_b.cre[1];
             if (q1 > q2)
                 std::swap(q1, q2);
             const CIString inter = (ket_b ^ CASSCFInternal::single_bit_mask(p1)) ^ CASSCFInternal::single_bit_mask(p2);
@@ -380,10 +411,10 @@ namespace HartreeFock::Correlation::CI
         {
             // Mixed-spin singles have no exchange term, only the direct two-electron
             // contribution with one excitation in each spin channel.
-            auto [ann_a, cre_a] = get_excitation(bra_a, ket_a);
-            auto [ann_b, cre_b] = get_excitation(bra_b, ket_b);
-            const int pa = ann_a[0], qa = cre_a[0];
-            const int pb = ann_b[0], qb = cre_b[0];
+            const auto exc_a = get_excitation(bra_a, ket_a);
+            const auto exc_b = get_excitation(bra_b, ket_b);
+            const int pa = exc_a.ann[0], qa = exc_a.cre[0];
+            const int pb = exc_b.ann[0], qb = exc_b.cre[0];
             return single_parity(ket_a, pa, qa) * single_parity(ket_b, pb, qb) * g_act(ga, pa, qa, pb, qb, n_act);
         }
 

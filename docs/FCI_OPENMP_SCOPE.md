@@ -114,7 +114,7 @@ step F1 and must stay green.
 Ordered so the cheapest step can kill the expensive ones, and so each is
 independently verifiable and independently revertible.
 
-### F1 — remove the `get_excitation` allocation (~S, no threading)
+### F1 — **DONE (2026-08-30). 4.8x, and the allocator is gone, not merely reduced.**
 
 Return a fixed-size result instead of two heap vectors: a small struct with
 `std::array<int,2> ann, cre;` plus `int n_ann, n_cre;`. A Slater-Condon element is
@@ -124,13 +124,36 @@ assumption here would produce a wrong matrix element rather than a crash.
 
 Update the six call sites; all are in `ci.cpp`.
 
-- **Verify (correctness):** all 7 FCI + 12 CASSCF/RASSCF regression cases green,
-  and the two iterative cases (`o2_fci_rohf_sto3g`, `be_fci_spherical_631gd`)
-  **bitwise identical** in energy to the pre-change binary. This is a pure
-  representation change with no reassociation, so bitwise is the right bar.
-- **Verify (the point):** N2/STO-3G wall time, 1 thread, against the 121.9 s
-  baseline. Expect a material drop; if it does not move, the profile attribution
-  was wrong and **stop before doing F2**.
+**Result.** `get_excitation` now returns a fixed-capacity `Excitation` struct
+(`std::array<int,2> ann, cre` plus counts) instead of a pair of heap vectors.
+Six call sites updated; all in `ci.cpp`.
+
+| | before | after |
+|---|---|---|
+| N2/STO-3G, 1 thread | 125.7 s | **26.3 s** (**4.8x**) |
+| `be_fci_spherical_631gd` | ~46.5 s | **7.6 s** |
+| `malloc`/`free` share of profile | ~53 % | **0.1 %** |
+
+**Correctness: bitwise identical.** `o2_fci_rohf_sto3g` `-147.7441885517` and
+`be_fci_spherical_631gd` `-14.6139425466` match the pre-change binary digit for
+digit, as does N2's correlation energy `-0.8864061248`. All 7 FCI and all 11
+CASSCF/RASSCF cases pass. The extended suite is 111/115 with the 4 failures being
+the pre-existing `PLANCK_CC_ARBITRARY_LOWER_RANKS=ON` determinant-routing
+interaction in the **CC** cases — verified identical on a default build, and
+untouched by a change confined to `ci.cpp`.
+
+**The 4.8x exceeded the profile's implication, and the reason is worth keeping.**
+A 53 % malloc share bounds the direct saving at ~2.1x by Amdahl. Getting 4.8x
+means the allocator was costing more than its own samples: per-element
+`malloc`/`free` churns the heap, and removing it also removed cache pressure and
+allocator bookkeeping attributed to *other* frames. **A profile share is a lower
+bound on what removing that work is worth, not an estimate of it** — the inverse
+of the CC merge, where an operator-count model *over*-promised because it treated
+unequal work as equal.
+
+The post-F1 profile is now what one would want: `apply_ci_hamiltonian` 55.0 %,
+`slater_condon_element` 19.6 %, `apply_creation` 10.2 %, `parity_between` 7.3 %,
+`apply_annihilation` 6.3 %. Real arithmetic, no allocator.
 
 ### F2 — remove the `occupied_orbitals` allocation (~S, no threading)
 
