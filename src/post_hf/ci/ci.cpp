@@ -10,6 +10,11 @@
 #include <cmath>
 #include <functional>
 #include <limits>
+#include <vector>
+
+#ifdef USE_OPENMP
+#include <omp.h>
+#endif
 
 namespace HartreeFock::Correlation::CI
 {
@@ -512,20 +517,52 @@ namespace HartreeFock::Correlation::CI
             return;
         }
 
-        auto accumulate = [&](CIString bra_a, CIString bra_b, CIString ket_a, CIString ket_b, double coeff)
-        {
-            const auto it = space.det_lookup.find(pack_spin_det(bra_a, bra_b, n_act));
-            if (it == space.det_lookup.end())
-                return;
+        // Threading note: the outer |c(j)| skip below is load-bearing -- it elides
+        // the whole enumeration for a negligible ket, and the trial vectors really
+        // are sparse (Davidson starts from unit vectors, and solve_ci reconstructs
+        // a dense H one Unit(dim, j) column at a time). Inverting this loop to a
+        // gather to get disjoint writes was built and measured at 2.2-2.4x SLOWER
+        // for exactly that reason; see docs/FCI_OPENMP_SCOPE.md. So we keep the
+        // scatter and accumulate into per-bin buffers, summed below in fixed bin
+        // order -- never omp atomic, never completion order, which is the DFT-grid
+        // jitter defect.
+        //
+        // Bin by a FIXED function of j, never by thread id. Indexing partials by
+        // omp_get_thread_num() makes each buffer's contents depend on the thread
+        // COUNT, so the sums inside it reassociate and sigma changes between 4 and
+        // 8 threads -- measured, last digit, before this. With a constant bin
+        // count, bin b always receives exactly the same j values in the same order
+        // no matter how many threads run, so every partial is bit-identical and so
+        // is the fixed-order reduction below.
+        //
+        // The loop is chunked so that one chunk == one bin, which is also what
+        // gives a thread exclusive access to its bin (no two threads share one).
+        constexpr int kBins = 64;
+        const int bin_size = (dim + kBins - 1) / kBins;
+        const int n_bins = (dim + bin_size - 1) / bin_size;
+        std::vector<Eigen::VectorXd> partials(n_bins, Eigen::VectorXd::Zero(dim));
 
-            const double hij = slater_condon_element(bra_a, bra_b, ket_a, ket_b, h_eff, ga, n_act);
-            if (std::abs(hij) < 1e-15)
-                return;
-            sigma(it->second) += hij * coeff;
-        };
-
+#ifdef USE_OPENMP
+        // schedule(static, bin_size): a deterministic j -> chunk map, and each
+        // chunk is exactly one bin. Never schedule(dynamic) here -- it was measured
+        // to move the last digit between identical 4-thread runs.
+#pragma omp parallel for schedule(static, bin_size)
+#endif
         for (int j = 0; j < dim; ++j)
         {
+            Eigen::VectorXd &sigma_local = partials[j / bin_size];
+            auto accumulate = [&](CIString bra_a, CIString bra_b, CIString ket_a, CIString ket_b, double coeff)
+            {
+                const auto it = space.det_lookup.find(pack_spin_det(bra_a, bra_b, n_act));
+                if (it == space.det_lookup.end())
+                    return;
+
+                const double hij = slater_condon_element(bra_a, bra_b, ket_a, ket_b, h_eff, ga, n_act);
+                if (std::abs(hij) < 1e-15)
+                    return;
+                sigma_local(it->second) += hij * coeff;
+            };
+
             const double cj = c(j);
             if (std::abs(cj) < 1e-15)
                 continue;
@@ -650,6 +687,11 @@ namespace HartreeFock::Correlation::CI
                         }
                     }
         }
+
+        // Fixed bin order, so sigma is bitwise identical regardless of how many
+        // threads ran or which finished first.
+        for (int b = 0; b < n_bins; ++b)
+            sigma += partials[b];
     }
 
     Eigen::VectorXd build_ci_diagonal(

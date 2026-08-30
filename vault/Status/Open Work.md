@@ -142,22 +142,68 @@ worth doing whether or not FCIQMC happens.
   fallback path (`:490`, unreachable because `det_lookup` is always populated at
   `:461`) stays serial.
 
-  **The scatter is avoidable, and the scope now recommends removing it rather
-  than mitigating it.** Inverting the loop to run over BRAS turns the write into
-  a gather, so each thread owns a disjoint slice of `sigma` — the CC-residual
-  shape, where a bare `parallel for` is correct with no reduction, no per-thread
-  buffers and no memory bound. Two facts make it exact, both already established
-  in-tree: the reachability relation is **symmetric** (the inverse excitation is
-  itself a <=2 excitation preserving the spin counts — verified by direct
-  enumeration, **0 asymmetric edges** across n_act 4/5/6 including an open-shell
-  case), and **`H` is real symmetric**, which `build_ci_hamiltonian_dense`
-  already depends on: it fills only the upper triangle and assigns
-  `H(i,j) = H(j,i) = v` (`ci.cpp:264`), so if the element were not symmetric the
-  dense path would already be wrong. The gather is therefore *simpler* than the
-  mitigation it replaces. **One deliberate consequence:** the `|c| < 1e-15` skip
-  moves inside the lambda, changing summation order, so the gather's serial
-  result is a new reference — it should agree with the current one to ~1e-12, and
-  that delta must be recorded rather than silently rebaselined.
+  **The gather route was BUILT AND MEASURED (2026-08-30), and it is REFUTED —
+  2.2-2.4x SLOWER. Do not build it again.** The scope recommended inverting the
+  loop to run over BRAS so each thread would own a disjoint slice of `sigma`. That
+  inversion is **numerically correct** — `o2_fci_rohf_sto3g` `-147.7441885517`,
+  `be_fci_spherical_631gd` `-14.6139425466` and N2's `-0.8864061248` all matched
+  the pre-change values to **every printed digit**, and the anticipated ~1e-12
+  summation-order delta never even appeared at print precision. It is simply much
+  slower: **Be 7.6 s -> 16.4 s, N2 26.3 s -> 63.3 s**. The scope's own stop
+  condition ("if it is materially slower, stop") fired; the change is stashed, not
+  committed.
+
+  **The cause is the one thing the design mis-classified.** The scope treated the
+  `|c| < 1e-15` skip as a summation-ORDER detail. It is not — it is a **sparsity
+  exploitation carrying asymptotic weight**, and the gather structurally cannot
+  keep it. In the scatter the test sits on the OUTER loop, so a negligible ket
+  skips the entire 126-line enumeration in one comparison; in the gather the outer
+  index is the bra, whose `sigma(i)` must be computed regardless of `c(i)`, so
+  every outer iteration runs the full enumeration. And the vectors really are
+  sparse: `davidson` starts from unit vectors on the lowest-diagonal determinants
+  (`ci.cpp:130-136`), and worse, `solve_ci` (`ci.cpp:743`) reconstructs a dense `H`
+  by calling `sigma_apply` with `Eigen::VectorXd::Unit(dim, j)` — **exactly one
+  nonzero** — once per column, which is O(dim) enumerations under the scatter and
+  **O(dim^2)** under the gather.
+
+  **What still holds:** both facts the inversion rested on were verified and are
+  fine — reachability is symmetric (**0 asymmetric edges** across n_act 4/5/6
+  including an open-shell case) and `H` is real symmetric, which
+  `build_ci_hamiltonian_dense` already depends on (`H(i,j) = H(j,i) = v` from one
+  evaluation, `ci.cpp:264`). A future attempt need not re-litigate symmetry; the
+  gather is correct, just slower.
+
+  **Generalizable lesson from the refutation: a cheap-looking guard on an outer
+  loop can be carrying asymptotic weight** — measure what fraction of outer
+  iterations it eliminates on the actual inputs before moving it inward to enable
+  a restructuring. No threading win (~3.7x ceiling at 4 threads) would have repaid
+  a 2.4x serial loss plus an asymptotic change.
+
+- **F3 LANDED (2026-08-30) via the fallback: 3.54x at 4 threads, bitwise
+  thread-count-invariant.** The scatter is kept (preserving the outer skip) and
+  accumulates into partial vectors summed in fixed order. Measured on N2/STO-3G
+  against the F1 serial 26.3 s: **27.59 s / 14.66 s / 7.79 s / 5.71 s** at 1/2/4/8
+  threads — **3.54x at 4**, against a modelled ~3.7x ceiling.
+  `be_fci_spherical_631gd` 7.6 s -> 3.42 s. Energies **byte-identical at 1/2/4/8
+  threads** on all three cases and equal to the F1 serial values
+  (`-107.6529998854`, `-14.6139425466`, `-147.7441885517`). The 126-line
+  enumeration is untouched — the only deleted lines are the old `accumulate`
+  lambda.
+
+  **Two determinism defects were found on the way, each ONLY by the byte-diff, and
+  the second is the one worth carrying: a fixed-order reduction is NECESSARY BUT
+  NOT SUFFICIENT.** (1) `schedule(dynamic)` — which `FCI_OPENMP_SCOPE` itself
+  recommended for load balance — gives a buffer a different *subset* of terms per
+  run, so its internal sums reassociate; measured as two different last digits
+  across 5 identical 4-thread runs. (2) Keying buffers by `omp_get_thread_num()`
+  makes their *contents* depend on the thread COUNT, so 8 threads disagreed with
+  1/2/4 even under `schedule(static)`. **What must be deterministic is the
+  partition of work into accumulators, not just the order they are summed.** The
+  fix bins by a fixed function of `j` (`partials[j / bin_size]`, `kBins = 64`) with
+  `schedule(static, bin_size)` so one chunk is exactly one bin. Memory is
+  `kBins x dim x 8` — **independent of thread count**, 7.4 MB at N2, so the
+  scope's `nthreads x dim x 8` bound (and its alarming 106 MB water/6-31G figure,
+  for a case priced elsewhere at tens to hundreds of hours) does not apply.
 
 - **Both are scoped in `docs/FCI_OPENMP_SCOPE.md`**, allocation before
   threading, each step independently verifiable and revertible. One finding there

@@ -1,7 +1,23 @@
 # Scope: threading the FCI sigma build
 
-**Scope for in-flight work. Not started.** Opened 2026-08-30 from a measurement,
-after answering "is FCI OpenMP enabled?" with "no, not on the path that matters".
+**DONE (2026-08-30). F1 landed 4.8x; F3 landed 3.54x at 4 threads.** Opened from a
+measurement, after answering "is FCI OpenMP enabled?" with "no, not on the path
+that matters". Two of the three steps are landed and measured; F2 (the
+`occupied_orbitals` allocation) is the only one left, and it is independent.
+
+**The two findings most worth carrying out of this document:**
+
+1. **The gather route this scope RECOMMENDED is refuted** — built, correct, and
+   2.2-2.4x slower, because the outer `|c| < 1e-15` skip is a sparsity
+   exploitation carrying asymptotic weight, not the summation-order detail R6
+   took it for. See the REFUTED banner below.
+2. **A fixed-order reduction is necessary but not sufficient for thread-count
+   invariance.** The *partition of work into accumulators* must also be
+   deterministic. Both the `schedule(dynamic)` this scope recommended and
+   thread-id-keyed buffers break it. See the fallback section.
+
+This doc keeps its scope shape because the F2 step is still open; when F2 lands it
+should be rewritten as an answer to "how was the FCI sigma build made fast?"
 
 ## The measurement
 
@@ -204,6 +220,67 @@ CASSCF/RASSCF regression cases exercise the CASSCF caller and are the gate for i
 **The only mutation in the loop body is `sigma(...) += ...`.** Everything else is
 read-only. That is a small and well-defined risk surface.
 
+#### MEASURED AND REFUTED (2026-08-30): the gather is 2.2-2.4x SLOWER. Do not build it.
+
+F3a was implemented exactly as specified below and **measured**. It is
+**numerically correct** — `o2_fci_rohf_sto3g` `-147.7441885517` and
+`be_fci_spherical_631gd` `-14.6139425466` and N2's `-0.8864061248` all match the
+pre-F3 values to **every printed digit** (the anticipated ~1e-12 summation-order
+delta did not even materialize at print precision). But it is far slower:
+
+| case | scatter (post-F1) | gather (F3a) | |
+|---|---|---|---|
+| `be_fci_spherical_631gd` | 7.6 s | **16.4 s** | 2.2x slower |
+| N2/STO-3G (ndet 14 400) | 26.3 s | **63.3 s** | 2.4x slower |
+
+The scope's own stop condition — *"if it is materially slower, stop"* — fired, and
+the work stopped there. The change is stashed, not committed.
+
+**Why: the `|c| < 1e-15` skip was not a summation-order detail. It was doing
+algorithmic work, and the gather structurally cannot keep it.**
+
+R6 below treats the moved skip purely as a reordering concern. That is wrong. In
+the scatter the test sits on the OUTER loop, so a negligible ket skips the entire
+126-line enumeration — hundreds of neighbours — in one comparison. In the gather
+the outer index is the bra, whose `sigma(i)` must be computed regardless of
+`c(i)`, so **every outer iteration runs the full enumeration** and the skip
+survives only as an inner-loop test that saves one `slater_condon_element` call.
+
+That matters because **the vectors this is applied to are extremely sparse**, which
+the design never checked:
+
+- `davidson` (`ci.cpp:130-136`) starts from unit vectors on the lowest-diagonal
+  determinants — `V(order(k), k) = 1.0`, i.e. `init_cols = max(2*nroots, 4)`
+  nonzeros in `dim`. The QR of already-orthonormal unit columns keeps them sparse.
+- Worse, `solve_ci` (`ci.cpp:743`) reconstructs a dense `H` by calling
+  `sigma_apply` with `Eigen::VectorXd::Unit(dim, j)` — **exactly one nonzero** —
+  once per column. Under the scatter that is O(dim) enumerations total; under the
+  gather it is O(dim^2).
+
+So the scatter is not merely a different traversal of the same work: on sparse
+input it does asymptotically less of it. The gather pays full price on every
+application.
+
+**What this does NOT invalidate.** The two facts the inversion rests on were
+verified and both hold — reachability is symmetric (0 asymmetric edges), and `H`
+is real symmetric (`build_ci_hamiltonian_dense` at `:264` already depends on it,
+assigning `H(i,j) = H(j,i)` from one evaluation). The gather is *correct*; it is
+just slower. Any future attempt does not need to re-litigate the symmetry.
+
+**Consequence for threading: the fallback is now the plan.** Threading the sigma
+build means the scatter with **per-thread partial vectors summed in fixed thread
+order** (see "If the gather turns out to be wrong" below), which preserves the
+outer skip. Its `nthreads x dim x 8` bytes is the price of keeping the sparsity
+exploitation. Note that the memory bound quoted there is a worst case over a dense
+`c`; with the outer skip intact, most threads touch few entries.
+
+**Generalizable lesson.** A cheap-looking guard on an outer loop can be carrying
+asymptotic weight. Before moving a skip inward to enable a restructuring, measure
+what fraction of the outer iterations it eliminates on the *actual* inputs — here
+the answer was "nearly all of them, in early Davidson iterations and in the entire
+dense-reconstruction path", and no amount of threading (max ~3.7x at 4 threads)
+would have repaid a 2.4x serial loss plus that asymptotic change.
+
 #### The route: invert the loop to a gather
 
 The loop currently pushes; invert it to pull:
@@ -320,23 +397,74 @@ sigma build now beats the dense path at some size, the constant should move — 
 **measure it, and change it in its own commit** so the suite attributes any
 behaviour change correctly.
 
-#### If the gather turns out to be wrong
+#### The fallback — BUILT AND LANDED (2026-08-30). 3.54x at 4 threads.
 
-The fallback is the scatter with **per-thread partial vectors summed in fixed
-thread order** — never `omp atomic`, never completion-order, which is the
-DFT-grid jitter defect. It costs `nthreads × dim × 8` bytes (0.9 MB at N2,
-106 MB at water/6-31G) and needs that bound made explicit. It is strictly more
-machinery than the gather, which is why it is the fallback and not the plan.
+The gather was refuted, so the fallback became the plan. It is the scatter with
+partial vectors summed in fixed order — never `omp atomic`, never
+completion-order, which is the DFT-grid jitter defect.
+
+**Measured** (N2/STO-3G, ndet 14 400, against the F1 serial 26.3 s):
+
+| threads | time | speedup |
+|---|---|---|
+| 1 | 27.59 s | 1.00x |
+| 2 | 14.66 s | 1.88x |
+| 4 | **7.79 s** | **3.54x** |
+| 8 | 5.71 s | 4.83x |
+
+3.54x at 4 threads against the modelled ~3.7x ceiling. `be_fci_spherical_631gd`
+7.6 s -> 3.42 s. Energies **byte-identical at 1/2/4/8 threads** on all three
+cases and equal to the F1 serial values (`-107.6529998854`, `-14.6139425466`,
+`-147.7441885517`).
+
+**This section previously said "per-thread partial vectors summed in fixed thread
+order". That design was built first and it is WRONG — it is not thread-count
+invariant.** Two separate determinism defects were found, each only by the
+byte-diff, neither by reasoning:
+
+1. **`schedule(dynamic)`** — which this scope recommended for load balance (R4).
+   Dynamic assignment gives a buffer a *different subset* of terms per run, so the
+   sums inside it reassociate. Measured: the same 4-thread config produced two
+   different last digits across 5 identical runs of Be/6-31g*.
+2. **Indexing the buffers by `omp_get_thread_num()`.** Even with
+   `schedule(static)`, each buffer's *contents* depend on the thread COUNT, so 8
+   threads disagreed with 1/2/4 in the last digit.
+
+**The generalizable half: a fixed-order reduction is necessary but NOT
+sufficient.** What has to be deterministic is the **partition of work into
+accumulators**, not merely the order they are summed. The first version had the
+fixed-order sum and was still non-deterministic.
+
+**What landed instead:** bin by a fixed function of `j` — `partials[j / bin_size]`
+with a constant `kBins = 64` — and `schedule(static, bin_size)` so one chunk is
+exactly one bin (which is also what gives a thread exclusive access to its bin).
+Bin `b` then receives exactly the same `j` values in the same order regardless of
+thread count, so every partial is bit-identical and so is the fixed-order sum over
+bins.
+
+Memory is `kBins x dim x 8` bytes — **independent of thread count**, 7.4 MB at N2.
+The earlier `nthreads x dim x 8` estimate (0.9 MB at N2, 106 MB at water/6-31G)
+does not apply; note also that the 106 MB figure was for water/6-31G at ndet 1.66M,
+which this scope elsewhere prices at tens to hundreds of hours for FCI, so it is
+not a case anyone runs.
 
 #### Acceptance
 
-- **Bitwise-identical energies across `OMP_NUM_THREADS` = 1/2/4/8**, against the
-  **F3a serial** result. This is the gate; a tolerance is not.
-- The F3a serial result agrees with the pre-F3 energies to ~1e-12, and the delta
-  is **recorded in the commit** rather than absorbed silently.
-- All 7 FCI + 11 CASSCF/RASSCF cases green.
-- The term-body code (`ci.cpp:527-652`) is **unchanged** — verifiable by diff.
-- No per-thread buffers, no new tunable, no second code path, no `omp atomic`.
+- **Bitwise-identical energies across `OMP_NUM_THREADS` = 1/2/4/8** — **MET**, on
+  all three cases, byte-compared. This is the gate; a tolerance is not.
+- Equal to the F1 serial energies — **MET exactly**, so the ~1e-12 allowance the
+  gather needed was not required here (the scatter preserves summation order
+  within a bin).
+- All 7 FCI + 11 CASSCF/RASSCF cases green — **MET, 19/19**. Every FCI, CASSCF,
+  RASSCF, FCIDUMP and RI case in the repo passes, including both iterative FCI
+  gates (`o2_fci_rohf_sto3g`, `be_fci_spherical_631gd`), all four SA-CASSCF cases
+  and the `water_casscf_sa2_sto3g_sad_guess_uphill` canary.
+- The term-body code is **unchanged** — **MET**, verifiable by
+  `git diff | grep '^-'`: the only deleted lines are the old `accumulate` lambda.
+- No new tunable, no second code path, no `omp atomic` — **MET**. (`kBins` is a
+  `constexpr` implementation detail, not a user-facing knob.) The "no per-thread
+  buffers" clause was written for the gather and does not survive: the fallback
+  necessarily has buffers, just keyed by bin rather than by thread.
 
 ## What this must not do
 

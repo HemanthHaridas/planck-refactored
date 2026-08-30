@@ -285,6 +285,58 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **FCI sigma build: 4.8x from removing the allocator, then 3.54x more from
+  threading it (2026-08-30).** The iterative `apply_ci_hamiltonian`
+  (`src/post_hf/ci/ci.cpp`) — the path taken by every determinant space above
+  `dense_threshold = 500` — was both allocation-bound and single-threaded.
+
+  **F1:** `get_excitation` returned a pair of heap vectors for values holding at
+  most two entries each (a Slater-Condon element vanishes beyond a double
+  excitation); it now returns a fixed-capacity struct. N2/STO-3G **125.7 s ->
+  26.3 s**, and the `malloc`/`free` profile share went **53 % -> 0.1 %** — the
+  allocator is eliminated, not reduced. Worth keeping: **the 4.8x exceeded what
+  the profile implied** (a 53 % share caps the direct saving at ~2.1x by Amdahl),
+  because per-element churn also cost cache pressure and bookkeeping attributed to
+  other frames. **A profile share is a lower bound on what removing that work is
+  worth.**
+
+  **F3:** the loop is now threaded, **3.54x at 4 threads** (N2 26.3 s -> 7.79 s;
+  1/2/4/8 threads = 27.59/14.66/7.79/5.71 s) against a modelled ~3.7x ceiling.
+  `be_fci_spherical_631gd` 7.6 s -> 3.42 s. Energies are **byte-identical across
+  `OMP_NUM_THREADS` = 1/2/4/8** and equal to the serial values
+  (`-107.6529998854`, `-14.6139425466`, `-147.7441885517`).
+
+  **The route the scope recommended — inverting the scatter to a gather — was
+  built, is numerically correct, and is 2.2-2.4x SLOWER.** The outer
+  `|c| < 1e-15` skip is not a summation-order detail but a sparsity exploitation
+  carrying asymptotic weight: in the scatter it elides the entire 126-line
+  enumeration for a negligible ket, and the trial vectors really are sparse
+  (Davidson starts from unit vectors; `solve_ci` reconstructs a dense `H` one
+  `Unit(dim, j)` column at a time, which is O(dim) enumerations scattered and
+  **O(dim^2)** gathered). The gather is stashed, not committed.
+
+  **So the scatter is kept, with partial vectors summed in fixed order — and the
+  determinism half is the part worth carrying: a fixed-order reduction is
+  NECESSARY BUT NOT SUFFICIENT.** Two defects, each caught only by byte-diffing
+  outputs across thread counts, neither by reasoning: `schedule(dynamic)` (which
+  the scope recommended for load balance) gives a buffer a different *subset* of
+  terms per run so its sums reassociate — two different last digits across 5
+  identical 4-thread runs; and keying buffers by `omp_get_thread_num()` makes their
+  *contents* depend on the thread count, so 8 threads disagreed with 1/2/4 even
+  under `schedule(static)`. **What must be deterministic is the partition of work
+  into accumulators, not merely the order they are summed.** The fix bins by a
+  fixed function of `j` (`partials[j / bin_size]`, `constexpr kBins = 64`) with
+  `schedule(static, bin_size)` so one chunk is exactly one bin. Memory is
+  `kBins x dim x 8`, **independent of thread count** (7.4 MB at N2). Never
+  `omp atomic`, never completion-order — the DFT-grid jitter defect.
+
+  **19/19 green** — every FCI, CASSCF, RASSCF, FCIDUMP and RI case in the repo,
+  including both iterative FCI gates and all four SA-CASSCF cases with the
+  `water_casscf_sa2_sto3g_sad_guess_uphill` canary. The 126-line excitation
+  enumeration is untouched; the only deleted lines are the old `accumulate`
+  lambda. See `docs/FCI_OPENMP_SCOPE.md`. F2 (the `occupied_orbitals` allocation)
+  remains open and independent.
+
 - **ccgen `merge_transposes` threaded into production — 1.42x / 1.52x measured
   (M1-M5, 2026-08-29).** Transpose-equivalent derived dressed operators now fold
   onto one shared array, which the call sites read through a permutation instead
