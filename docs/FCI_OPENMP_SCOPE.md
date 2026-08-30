@@ -167,40 +167,163 @@ plus a count is stack-friendly).
 done, and they should be landed and measured separately so each has its own
 number.
 
-### F3 — thread the sigma loop with per-thread partials (~M)
+### F3 — thread the sigma loop (~M) — **blast radius and risks inventoried first**
 
-Only after F1/F2, so the allocator is out of the hot path and threading is not
-fighting it.
+F1 changed the shape of this step. The allocator is gone (53 % -> 0.1 %), so the
+profile is now real arithmetic — `apply_ci_hamiltonian` 55.0 %,
+`slater_condon_element` 19.6 %, `apply_creation` 10.2 %, `parity_between` 7.3 %,
+`apply_annihilation` 6.3 % — and **all of it is inside the loop F3 threads**.
+Amdahl on ~98 % parallel gives ~3.7x at 4 threads. That is the target.
 
-`#pragma omp parallel for schedule(dynamic)` over `j`, each thread accumulating
-into its own `sigma_t`, then a **serial, fixed-order** sum over threads.
-`schedule(dynamic)` because the per-`j` work varies with occupation pattern.
+#### Blast radius — inventoried, not assumed
 
-- **Verify (correctness, non-negotiable):** `o2_fci_rohf_sto3g` and
-  `be_fci_spherical_631gd` produce **bitwise-identical** energies at
-  `OMP_NUM_THREADS` = 1/2/4/8 and against the serial baseline. Not "to 1e-10" —
-  bitwise, as the DFT J/K builds and the CC kernels were verified.
-- **Verify (the pragma fires):** CPU utilization above 100 % before any timing is
-  interpreted. The unthreaded baseline is exactly 100.0 %, so this is a free check
-  that costs one `ps` call and catches an inert pragma immediately.
-- **Verify (speed):** N2/STO-3G at 1/2/4/8 threads against the post-F2 serial
-  baseline.
+**Two callers, both outside any parallel region** (verified, because nested
+parallelism would silently oversubscribe):
 
-### F4 — decide about memory, and about `dense_threshold` (~S)
+| caller | site | enclosing `omp` region? |
+|---|---|---|
+| the internal Davidson driver | `ci.cpp:775` (`sigma_apply` lambda) | none |
+| CASSCF's `CISigmaApplier` | `casscf/casscf.cpp:894` | **no** — the nearest `parallel for` is at `:589` and closes at `:611` |
 
-The per-thread partials cost `nthreads × dim × 8` bytes. Record where that stops
-being acceptable and either cap the thread count for large `dim` or document the
-ceiling. **Do not silently allocate 64 MB of scratch at ndet = 10⁶.**
+That second one had to be checked rather than assumed: `casscf.cpp` *does* carry
+a `#pragma omp parallel for` over roots, and if it enclosed the sigma call this
+would be nested parallelism. It does not.
 
-Separately: `dense_threshold = 500` was chosen when nothing was threaded. If the
-threaded sigma build beats the dense path at some size, that constant should move
-— but **measure it, do not assume**, and change it in its own commit so the
-regression suite attributes any behaviour change correctly.
+**Downstream consumers of a changed `sigma`:** none directly — `sigma` is an
+out-parameter written by this function and consumed by Davidson. The 11
+CASSCF/RASSCF regression cases exercise the CASSCF caller and are the gate for it.
+
+**State the loop body touches, and its mutability:**
+
+| state | access | thread-safe as-is? |
+|---|---|---|
+| `space` (`dets`, `spin_dets`, `det_lookup`) | `const&`, read-only; `det_lookup.find` only | **yes** — concurrent `find` on `unordered_map` is safe; there is no `operator[]` |
+| `a_strs`, `b_strs`, `h_eff`, `ga`, `n_act` | `const&` / by value | yes |
+| `c` | `const&` | yes |
+| **`sigma`** | **`+=` at hash-lookup indices** | **NO — this is the entire problem** |
+
+**The only mutation in the loop body is `sigma(...) += ...`.** Everything else is
+read-only. That is a small and well-defined risk surface.
+
+#### The risks, in order
+
+**R1 — the scatter (the real one).** The loop runs over ket determinants `j` and
+writes `sigma(it->second)` where `it` comes from a hash lookup. Two threads on
+different `j` *will* target the same output element. This is **not** the
+disjoint-slice write the CC residual nests had, so the CC recipe does not
+transfer.
+
+**R2 — determinism.** Every other threaded path in Planck is bitwise
+thread-count-invariant, by design and by gate. A naive `reduction` or
+`omp atomic` gives completion-order summation and therefore thread-count-dependent
+rounding — the DFT-grid jitter defect exactly
+(`dft_xc_reduction_determinism`). **A tolerance-based gate would hide this**,
+which is why the acceptance below is bitwise.
+
+**R3 — memory.** Per-thread partial vectors cost `nthreads × dim × 8` bytes:
+
+| dim | 4 threads | 8 threads |
+|---|---|---|
+| 8 281 (`be_fci`) | 0.26 MB | 0.53 MB |
+| 14 400 (N2) | 0.46 MB | 0.92 MB |
+| 213 444 (HF/6-31G) | 6.8 MB | 13.7 MB |
+| 1 656 369 (water/6-31G) | 53 MB | **106 MB** |
+
+Free at every size the suite reaches; material only in the regime FCI cannot
+afford anyway. **It must still be bounded rather than discovered.**
+
+**R4 — load imbalance.** Work per `j` varies with occupation pattern and with the
+`|cj| < 1e-15` skip, so a static schedule would imbalance. `schedule(dynamic)` is
+the answer, and it is what the dense build at `:252` already uses.
+
+**R5 — the fallback path.** `ci.cpp:490-511` has a different structure (dense
+`O(dim²)`, inner loop over `i`). It is **effectively dead**: `det_lookup` is
+always populated at `:461`, so the guard `det_lookup.empty()` is false in normal
+operation. **Leave it serial.** Threading a dead path adds a second code shape to
+maintain for no measured benefit.
+
+#### The design — one shape, not a special case
+
+The constraint that keeps this from becoming spaghetti: **the term-body code must
+not change at all.** The 130 lines of excitation enumeration (`:527-652`) are the
+part a reader needs to follow, and they are already correct.
+
+So the entire change is a *wrapper* around them:
+
+```cpp
+// serial today:
+Eigen::VectorXd &target = sigma;
+for (int j = 0; j < dim; ++j) { ... accumulate(...) -> target(i) += ... }
+
+// threaded: the loop body is IDENTICAL; only what `accumulate` writes into,
+// and a fixed-order sum afterwards, are new.
+```
+
+Concretely: hoist the existing `accumulate` lambda to capture a
+`Eigen::VectorXd &out` instead of `sigma` directly, give each thread its own
+`out`, and sum them in **thread-index order** after the region. The 130 lines in
+between are untouched, and `accumulate` — which already exists as the single
+write point — is the natural and only seam. **That is why this is a small diff:
+the code already funnels every write through one lambda.**
+
+**What would be spaghetti, and is therefore excluded:**
+
+- a second copy of the excitation enumeration for the threaded case;
+- a `if (threaded) ... else ...` branch inside the term bodies;
+- threading the dead fallback path to make it "symmetric";
+- an `omp atomic` sprinkled at the write site (fast to type, breaks R2);
+- a tunable for the number of partial buffers.
+
+#### Steps
+
+**F3a — hoist the write target (~S, no threading, no behaviour change).**
+Change `accumulate` to write into a referenced accumulator that is `sigma` itself.
+Pure refactor.
+*Verify:* the two iterative cases bitwise identical; N2 timing unchanged within
+noise. **This step must measure as a no-op** — if it does not, stop.
+
+**F3b — add the parallel region (~M).**
+`#pragma omp parallel for schedule(dynamic)` over `j`, per-thread `out`, serial
+fixed-order sum.
+*Verify, in this order:*
+1. **CPU utilization > 100 %** at 4 threads. The serial baseline is exactly
+   100.0 %, so this costs one `ps` call and catches an inert pragma before any
+   timing is interpreted.
+2. **Bitwise-identical energies** at `OMP_NUM_THREADS` = 1/2/4/8 **and** against
+   the serial binary, on `o2_fci_rohf_sto3g` (`-147.7441885517`) and
+   `be_fci_spherical_631gd` (`-14.6139425466`). Not "to 1e-10".
+3. All 7 FCI + 11 CASSCF/RASSCF cases green.
+4. Speed: N2/STO-3G at 1/2/4/8 against the post-F1 26.3 s. Expect up to ~3.7x at
+   4; below ~2x, suspect imbalance and check the schedule before concluding.
+
+**F3c — bound the memory (~S).**
+Cap the partial-buffer count (fall back to serial, or to fewer threads) above a
+documented `dim`, so R3 is a decision rather than an accident.
+
+**F3d — revisit `dense_threshold` (~S, separate commit).**
+`dense_threshold = 500` was chosen when nothing was threaded. If the threaded
+sigma build now beats the dense path at some size, that constant should move —
+but **measure it, and change it in its own commit** so the suite attributes any
+behaviour change correctly.
+
+#### Acceptance
+
+- Bitwise-identical energies across `OMP_NUM_THREADS` = 1/2/4/8 and against
+  serial, on both iterative cases. **This is the gate; a tolerance is not.**
+- All 7 FCI + 11 CASSCF/RASSCF cases green.
+- The term-body code (`:527-652`) is **unchanged** — verifiable by diff.
+- No new tunable, no second code path, no `omp atomic`.
 
 ## What this must not do
 
-- **Do not thread before F1/F2.** Half the runtime is in the allocator; threading
-  that first parallelizes `malloc` contention and can scale *negatively*.
+- **Do not thread before F1.** (F1 is done; this stands as the reason the order
+  was chosen.) Half the runtime was in the allocator, and threading that first
+  parallelizes `malloc` contention, which is a known route to *negative* scaling.
+- **Do not touch the term bodies (`ci.cpp:527-652`).** The whole point of F3's
+  design is that the 130 lines of excitation enumeration are untouched and the
+  change is a wrapper around the single `accumulate` write point. A diff that
+  reaches into those lines has become the second implementation this scope exists
+  to avoid.
 - **Do not use `omp atomic` or a completion-order reduction on `sigma`.** The
   DFT-grid jitter defect is exactly this, and it is the one determinism failure
   this codebase has already paid for.

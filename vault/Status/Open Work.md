@@ -116,7 +116,34 @@ worth doing whether or not FCIQMC happens.
   also widens the ndet window where a deterministic FCI reference is affordable,
   which is exactly what the FCIQMC validation strategy is bounded by.
 
-- **Both are scoped F1-F4 in `docs/FCI_OPENMP_SCOPE.md`**, allocation before
+- **F1 LANDED (2026-08-30): 4.8x, bitwise identical.** `get_excitation` now
+  returns a fixed-capacity struct instead of a pair of heap vectors. N2/STO-3G
+  **125.7 s -> 26.3 s**, `be_fci_spherical_631gd` ~46.5 s -> 7.6 s, and the
+  malloc/free profile share **53 % -> 0.1 %** — the allocator is eliminated, not
+  reduced. Energies match the pre-change binary digit for digit on both iterative
+  cases and on N2; all 7 FCI and all 11 CASSCF/RASSCF cases pass. **The 4.8x
+  exceeded what the profile implied** (a 53 % share caps the direct saving at
+  ~2.1x by Amdahl), because per-element `malloc`/`free` also cost cache pressure
+  and bookkeeping attributed to other frames — **a profile share is a lower bound
+  on what removing that work is worth**, the inverse of the CC transpose merge
+  where an operator-count model over-promised.
+
+- **F3 (threading) is scoped with its blast radius inventoried**, in
+  `docs/FCI_OPENMP_SCOPE.md`. Post-F1 the profile is ~98 % inside the loop F3
+  threads, so Amdahl gives ~3.7x at 4 threads. Verified rather than assumed:
+  **two callers, both outside any parallel region** — the Davidson lambda
+  (`ci.cpp:775`) and CASSCF's `CISigmaApplier` (`casscf.cpp:894`, whose nearest
+  `parallel for` at `:589` closes at `:611`, so there is no nesting). The **only
+  mutation in the loop body is `sigma(...) +=`**; `space` is `const&` and
+  `det_lookup.find` is a concurrent-safe read. The design constraint that keeps
+  it from becoming spaghetti: **the 126 lines of excitation enumeration
+  (`ci.cpp:527-652`) must not change at all** — every write already funnels
+  through one `accumulate` lambda, which is the only seam needed. Per-thread
+  partials cost `nthreads x dim x 8` bytes (0.9 MB at N2, 106 MB at water/6-31G),
+  bounded explicitly rather than discovered. The dead fallback path (`:490`,
+  unreachable because `det_lookup` is always populated at `:461`) stays serial.
+
+- **Both are scoped in `docs/FCI_OPENMP_SCOPE.md`**, allocation before
   threading, each step independently verifiable and revertible. One finding there
   is worth repeating here because it decides how any gate must be written: of the
   seven committed FCI regression cases, **only two reach the iterative sigma path
