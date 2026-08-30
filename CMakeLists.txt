@@ -169,10 +169,10 @@ configure_file(
 )
 
 # Fetch Eigen
-fetchcontent_declare(
-  eigen
-  GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
-  GIT_TAG 3.4.0 # You can also use master
+FetchContent_Declare(
+    eigen
+    URL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 fetchcontent_makeavailable(eigen)
 

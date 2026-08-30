@@ -10,7 +10,7 @@ Profiled 2026-08-29; two fixes have since landed and one lever remains.
 | one call to the rank-3 kernel | **98.8 %** | the whole cost |
 | …of which `build_W_*` operator builders | **67.7 %** | **fixed** — chunk rebuilds, 1.76x |
 | …of which duplicate transpose-equivalent builders | 34.9 % across 3 families | **fixed** — the merge, 1.42x-1.52x |
-| OpenMP anywhere in CC | **none** (0 pragmas in CC source and in the emitted kernels) | **OPEN** — modelled 2.74x on the triples parts |
+| OpenMP anywhere in CC | **none** — flat 1->4 threads on an OpenMP build, while direct-SCF HF in the same binary goes 3.3x | **OPEN** — modelled 2.74x on the triples parts |
 
 Opened by the option-2 decision in `CCGEN_RANK3_KERNEL_AND_SOLVER.md`: the
 generated rank-3 kernels run in the arbitrary-order harness, which is correct
@@ -182,10 +182,15 @@ things this section previously got wrong:
   transpose merge they are **13.8 %** and cap at **1.12x**. The residual is now
   **86.2 %**, concentrated in `triples_residual_part1` at **63.6 %**. Threading
   the three triples parts models **2.74x at 4 threads**.
-- **Its "98.8 % CPU on 8 cores" evidence does not distinguish its own claim.**
+- **Its "98.8 % CPU on 8 cores" evidence did not distinguish its own claim.**
   That run used a tree where `OpenMP_CXX_FLAGS` is `NOTFOUND` and `-DUSE_OPENMP`
   never reaches the compile line, so *every* Planck pragma was inert in it, not
-  just CC's absent ones. The claim survives — by `grep`, not by that number.
+  just CC's absent ones. **Now measured properly** on `build-full`, which is
+  genuinely threaded: CC is flat from 1 to 4 threads (**78.03 s -> 78.49 s**,
+  99.1 % CPU at 8) while direct-SCF HF/cc-pVTZ in the **same binary** goes
+  **2.70 s -> 0.81 s (3.3x)**. The positive control is what turns the claim from
+  an inference into a measurement — and it has to be a case genuinely bound by a
+  threaded path, measured warm.
 
 The determinism argument stands unchanged and is the part worth keeping: neither
 site has a **cross-thread reduction** (builders write private tensors; residual

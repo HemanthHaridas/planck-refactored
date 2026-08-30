@@ -1,9 +1,16 @@
 # Scope: threading the generated CC path
 
-**Scope for in-flight work. Not started.** Re-measured 2026-08-29 against the
-post-merge tree, which **invalidated the estimate and the recommendation** carried
-in `CCGEN_ARBITRARY_HARNESS_COST.md`. That document told its reader to re-measure
-the split before relying on its figures; doing so changed the answer.
+**Scope for in-flight work. O1 done; O2-O4 open.** Re-measured 2026-08-29/30
+against the post-merge tree, which **invalidated the estimate and the
+recommendation** carried in `CCGEN_ARBITRARY_HARNESS_COST.md`. That document told
+its reader to re-measure the split before relying on its figures; doing so changed
+the answer.
+
+**The baseline is `build-full`** — an existing, genuinely OpenMP-enabled tree
+(g++-15, Release, MAXORDER=4, dressed + merged). On it, CC is measurably flat from
+1 to 4 threads (78.03 s -> 78.49 s) while direct-SCF HF in the *same binary* goes
+3.3x. That pairing is what makes "CC is unthreaded" a measurement rather than an
+inference.
 
 ## What changed, and why the old plan is now wrong
 
@@ -17,7 +24,11 @@ Measured now, on the same binary configuration:
 | `build_W_*` builders | 45.1 % | **13.8 %** |
 | residual nests | 53.7 % | **86.2 %** |
 
-(HF/6-31G, 21 341 leaf samples. CH4/STO-3G agrees: 17.2 % / 82.8 %.)
+(HF/6-31G, 21 341 leaf samples, AppleClang rank-3 build. **Confirmed across a
+different compiler and truncation** on `build-full` (g++-15, MAXORDER=4, 33 538
+samples): **12.1 % / 87.9 %**, with `part1` at 64.6 % against 63.6 %. CH4/STO-3G
+agrees too: 17.2 % / 82.8 %. The split is a property of the dressed+merged kernel,
+not of one toolchain.)
 
 **So threading only the builders now caps at 1.12x, not the 1.51x the old scope
 implied.** Amdahl on the measured split, 4 physical cores on this machine:
@@ -32,30 +43,50 @@ implied.** Amdahl on the measured split, 4 physical cores on this machine:
 
 | hotspot | share |
 |---|---|
-| `compute_ccsdt_triples_residual_part1` | **63.6 %** |
-| `compute_ccsdt_triples_residual_part0` | 19.6 % |
-| `..._part2` | 1.5 % |
-| doubles + singles residual | 1.2 % |
-| all 91 builders combined | 13.8 % |
+| `compute_ccsdt_triples_residual_part1` | **63.6 %** (64.6 % on `build-full`) |
+| `compute_ccsdt_triples_residual_part0` | 19.6 % (20.1 %) |
+| `..._part2` | 1.5 % (1.7 %) |
+| doubles + singles residual | 1.2 % (1.2 %) |
+| all builders combined | 13.8 % (12.1 %) |
 
 Threading the three triples parts (84.7 %) models **2.74x at 4 threads**; `part1`
 alone models 1.91x.
 
-## Two corrections to the prior scope's evidence
+## The claim, now measured on a genuinely OpenMP-enabled build
 
-**1. The "98.8 % CPU on 8 cores" observation does not prove what it was used for.**
-It was taken on a tree where `OpenMP_CXX_FLAGS:STRING=NOTFOUND` and `-DUSE_OPENMP`
-is absent from the compile line — **every OpenMP pragma in Planck is inert in that
-binary**, not just CC's absent ones. The default `build/` tree does have
-`-fopenmp`. The observation is therefore consistent with "CC has no pragmas" and
-equally with "this binary has no OpenMP at all", and cannot distinguish them.
+The prior scope's evidence was a "98.8 % CPU on 8 cores" run taken on a tree
+where `OpenMP_CXX_FLAGS:STRING=NOTFOUND` and `-DUSE_OPENMP` never reached the
+compile line — **every** Planck pragma was inert there, so the number was equally
+consistent with "CC has no pragmas" and "this binary has no OpenMP at all". It
+could not distinguish them.
 
-**The underlying claim is nevertheless true**, confirmed independently by
-inspection rather than by that measurement: **0 `pragma omp` in
-`src/post_hf/cc/*.{cpp,h}` and 0 in the emitted kernels**, against 8+ other files
-under `src/` that carry them. Re-verify with `grep`, not with a CPU-utilization
-number, and make sure any before/after timing uses a tree that actually found
-OpenMP.
+**Re-measured on `build-full`**, which is genuinely threaded — `-fopenmp` and
+`-DUSE_OPENMP` on the compile line, `libgomp` linked, g++-15, Release, MAXORDER=4,
+dressed + merged:
+
+| | `OMP_NUM_THREADS=1` | `=4` | |
+|---|---|---|---|
+| **CC** (HF/6-31G, generated rank-3 route) | 78.03 s | **78.49 s** | **no change** |
+| **HF/cc-pVTZ direct SCF** (same binary, ERI Fock build) | 2.70 s | **0.81 s** | **3.3x** |
+
+At `OMP_NUM_THREADS=8` the CC run sits at **99.1 % CPU** — one core of eight.
+
+**The second row is the control that the earlier attempt lacked.** It rules out
+the alternative explanation directly: threading demonstrably works in this binary,
+on this machine, at this thread count — the ERI Fock build scales 3.3x. CC alone is
+flat. That is now measured rather than asserted from `grep`.
+
+**Choose the control carefully.** A small DFT case is the wrong one: water/STO-3G
+B3LYP is 0.18 s -> 0.17 s (too small to thread), and even water/cc-pVDZ ultrafine
+is only 1.09x because it is **grid**-dominated, and the DFT grid layer is itself
+unthreaded (a separate open item). An early version of this section quoted "0.96 s
+-> 0.17 s, 5.6x" from that small case; the 0.96 s was a **cold-start** first run,
+and warm it is 0.18 s. A direct-SCF HF case in a real basis exercises the threaded
+ERI path and is the honest control.
+
+The static picture agrees and is still worth re-checking after any emitter change:
+**0 `pragma omp` in `src/post_hf/cc/*.{cpp,h}` and 0 in the emitted kernels**,
+against 8+ other files under `src/` that carry them.
 
 **2. "The emitter never emits a pragma" is false, and this reduces the work.**
 `python/ccgen/emit/cpp_loops.py:331` already emits
@@ -108,30 +139,46 @@ it** — the DFT J/K case was verified, and this must be too.
 
 Ordered so the cheapest step can kill the expensive ones.
 
-### O1 — establish a trustworthy baseline (~S)
+### O1 — **DONE.** The baseline exists: use `build-full`
 
-Build the dressed generated tree **with OpenMP actually found** (confirm
-`OpenMP_CXX_FLAGS` is not `NOTFOUND` and `-DUSE_OPENMP` reaches the compile line —
-the prior scope's baseline had neither). Record CH4 and HF/6-31G wall-clock at
-`OMP_NUM_THREADS=1`.
+`build-full` is already the tree this step called for — `-fopenmp` and
+`-DUSE_OPENMP` on the compile line, `libgomp` linked, `-O3 -DNDEBUG` (with the
+usual `-O1` pin on `generated_kernel_registry.cpp` only), g++-15, MAXORDER=4,
+`PLANCK_CC_DRESS_OPERATORS=ON`, `PLANCK_CC_DRESSING=derived`,
+`PLANCK_CC_ARBITRARY_LOWER_RANKS=ON`, `PLANCK_CC_SPIN_ADAPT=ON`.
 
-*Verify:* energies match the committed values (`ch4_rccsdt_generated_sto3g`
-`-0.0791116825`, HF/6-31G `-0.1319388410`) and the timings match the current
-single-threaded numbers, i.e. enabling OpenMP alone changes nothing.
+Baseline recorded, HF/6-31G through the generated rank-3 route
+(`PLANCK_RCCSDT_BACKEND=optimized`, `E_corr = -0.1319388410`, 15 iterations):
 
-**If enabling OpenMP moves the time at all, stop and explain that first** — it
-would mean some other pragma in the binary was previously inert and is now live,
-which changes what any later comparison measures.
+```
+OMP_NUM_THREADS=1    78.03 s
+OMP_NUM_THREADS=4    78.49 s     <- the number O2 must beat
+```
+
+Its check — *"if enabling OpenMP moves the time at all, stop and explain"* — is
+satisfied: enabling it moves nothing, because CC has no pragmas to activate. The
+same binary's direct-SCF HF path goes 2.70 s -> 0.81 s over the same thread range,
+so the baseline is threaded everywhere except here.
+
+**Do not re-derive this on a fresh tree.** Any O2 comparison must run against
+`build-full`'s 78.03 s / 78.49 s, on the same binary configuration, or it prices
+a compiler change as a threading win.
 
 ### O2 — thread `part1` only, measured (~S)
 
 One `#pragma omp parallel for collapse(2)` on the hottest part. Hand-edit the
 generated file first; do not touch the emitter until a number exists.
 
-*Verify:* wall-clock at 1/2/4/8 threads, and **energies bitwise identical at every
-thread count**. Expect ≤1.91x (part1 is 63.6 %). Below ~1.3x at 4 threads, suspect
-load imbalance or task granularity and try `collapse(3)` before concluding the
-lever is absent.
+*Verify:* wall-clock at 1/2/4/8 threads against the O1 baseline (78.03 s at
+`OMP_NUM_THREADS=1`), and **`E_corr = -0.1319388410` bitwise identical at every
+thread count**. Expect ≤1.91x (part1 is 64.6 % on this build). Below ~1.3x at 4
+threads, suspect load imbalance or task granularity and try `collapse(3)` before
+concluding the lever is absent.
+
+A useful early signal costing nothing: CPU utilization. The unthreaded baseline
+sits at **99.1 %** with `OMP_NUM_THREADS=8`. If a threaded `part1` does not move
+that well above 100 %, the pragma is not firing at all and no timing needs
+interpreting.
 
 ### O3 — extend to part0/part2 and the builders, if O2 justifies it (~S)
 
@@ -153,8 +200,14 @@ the O2/O3 numbers reproduce when it is on.
 - **Do not quote the 3.86x from the prior scope.** It came from the 45.1 %/53.7 %
   split, which no longer holds. The measured figure is **4.00x** for both sites at
   4 threads, but the achievable one is bounded by the residual's granularity.
-- **Do not use a CPU-utilization percentage as evidence that CC is unthreaded.**
-  Use `grep` for pragmas, and check the build actually found OpenMP.
+- **Do not use a CPU-utilization percentage alone as evidence that CC is
+  unthreaded.** It cannot distinguish "no pragmas here" from "no OpenMP in this
+  binary" — the prior scope's central number had exactly that ambiguity. Pair it
+  with a **positive control** on the same binary (direct-SCF HF/cc-pVTZ threads
+  3.3x), and confirm `-fopenmp` reaches the compile line. Pick a control that is
+  actually bound by a threaded path and measure it **warm** — a cold first run
+  inflates the ratio, which is how an earlier draft of this doc reported 5.6x for
+  what is really 1.06x.
 - **Do not thread the builders first.** 13.8 %, caps at 1.12x.
 - **Do not introduce a cross-thread reduction.** If a future term shape needs one,
   it must sum in fixed thread-index order, never completion order — that is the
@@ -173,6 +226,8 @@ the O2/O3 numbers reproduce when it is on.
 | the determinism precedent to imitate | DFT J/K builds, `src/dft/driver.cpp` |
 | the determinism defect to avoid | `dft_xc_reduction_determinism` note |
 | where the split came from | `docs/CCGEN_ARBITRARY_HARNESS_COST.md` |
+| the OpenMP-enabled baseline tree | `build-full` (g++-15, Release, MAXORDER=4, dressed+merged) |
+| the positive control | direct-SCF HF/cc-pVTZ via `build-full/hartree-fock` — 3.3x at 4 threads |
 
 ---
 

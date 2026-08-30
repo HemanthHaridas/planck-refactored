@@ -434,8 +434,14 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
   **Two evidence corrections.** (1) The "98.8 % CPU on 8 cores" observation was
   taken on a tree where `OpenMP_CXX_FLAGS` is `NOTFOUND` and `-DUSE_OPENMP` never
   reaches the compile line — **every** Planck pragma was inert in that binary, so
-  the number cannot distinguish "CC has no pragmas" from "this build has no
-  OpenMP". The claim survives by `grep`, not by that measurement. (2) "The emitter
+  the number could not distinguish "CC has no pragmas" from "this build has no
+  OpenMP". **Now measured on `build-full`**, which is genuinely threaded (`-fopenmp`,
+  libgomp linked, g++-15, Release, MAXORDER=4): CC is flat **78.03 s -> 78.49 s**
+  from 1 to 4 threads at 99.1 % CPU, while direct-SCF HF/cc-pVTZ in the **same
+  binary** goes **2.70 s -> 0.81 s (3.3x)**. That positive control is what makes it
+  a measurement rather than an inference, and `build-full` is the baseline O2 must
+  beat. (Pick the control carefully: a small DFT case shows nothing, and a larger
+  one is grid-bound because the DFT grid layer is itself unthreaded.) (2) "The emitter
   never emits a pragma" is false: `emit/cpp_loops.py:331` already emits
   `#pragma omp parallel for collapse(n) schedule(dynamic)`, and
   `print_cpp_optimized` defaults `use_openmp=True`. That is a *different* emit path
