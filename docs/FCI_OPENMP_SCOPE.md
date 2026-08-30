@@ -167,7 +167,7 @@ plus a count is stack-friendly).
 done, and they should be landed and measured separately so each has its own
 number.
 
-### F3 — thread the sigma loop (~M) — **blast radius and risks inventoried first**
+### F3 — thread the sigma loop (~M) — **invert it to a gather; the scatter is avoidable**
 
 F1 changed the shape of this step. The allocator is gone (53 % -> 0.1 %), so the
 profile is now real arithmetic — `apply_ci_hamiltonian` 55.0 %,
@@ -274,7 +274,110 @@ the code already funnels every write through one lambda.**
 - an `omp atomic` sprinkled at the write site (fast to type, breaks R2);
 - a tunable for the number of partial buffers.
 
-#### Steps
+#### Can the scatter be avoided entirely? **Yes — and it should be.**
+
+The per-thread-partials design above mitigates the scatter. A **gather**
+reformulation removes it, and with it R1, R2 and R3 together. This is the
+recommended route.
+
+**The transformation.** The loop currently runs over kets and pushes:
+
+```
+for j:  for each i reachable from j:   sigma(i) += H(i,j) * c(j)      // scatter
+```
+
+Invert it to run over bras and pull:
+
+```
+for i:  for each j reachable from i:   sigma(i) += H(i,j) * c(j)      // gather
+```
+
+Then **each thread owns a disjoint slice of `sigma`** — the CC-residual shape,
+where a bare `#pragma omp parallel for` is correct with no reduction, no partial
+buffers, and bitwise thread-count invariance for free.
+
+**Two facts make this exact, and both are already established in this codebase.**
+
+**1. The reachability relation is symmetric.** The enumeration generates every
+determinant reachable from the ket by ≤2 excitations preserving the alpha and
+beta counts. The inverse excitation (swap annihilated and created orbitals) maps
+`i` back to `j` and is itself a ≤2 excitation preserving those counts, so it lies
+in the set generated from `i`. Verified by direct enumeration on three cases,
+including an open-shell one:
+
+| n_act | na/nb | dim | edges | **asymmetric** |
+|---|---|---|---|---|
+| 4 | 2/2 | 36 | 972 | **0** |
+| 5 | 2/3 | 100 | 5 500 | **0** |
+| 6 | 3/3 | 400 | 47 200 | **0** |
+
+**2. `H` is real symmetric, and the codebase already depends on it.**
+`build_ci_hamiltonian_dense` (`ci.cpp:241-267`, the mirror at `:264`) computes only the upper triangle
+(`for j = i`) and assigns `H(i, j) = H(j, i) = v`. If `slater_condon_element`
+were not symmetric under bra/ket exchange, the **dense path would already be
+wrong** — and it is gated by every FCI and CASSCF case. So the gather reads the
+same value the scatter wrote.
+
+Together: `sigma_i = Σ_j H_ij c_j` can be computed by enumerating **from `i`** and
+gathering `c_j` — the same enumeration code, the same matrix element, a read
+where there was a write.
+
+**Why this is not more code, but less.** The 126-line loop body is unchanged; it
+already enumerates neighbours of one determinant. Only `accumulate` changes,
+from
+
+```cpp
+sigma(it->second) += hij * coeff;      // write to a looked-up index
+```
+
+to
+
+```cpp
+acc += hij * c(it->second);            // read from it; accumulate locally
+```
+
+with the caller writing `sigma(i) = acc` once per outer iteration. **The scatter
+lambda becomes a gather lambda; nothing else moves.** The per-thread buffers,
+their fixed-order reduction, and the memory bound (F3c) all disappear — so the
+gather is *simpler* than the mitigation it replaces, not a more ambitious
+alternative.
+
+**What it costs.** One semantic subtlety: the current loop skips kets with
+`|c_j| < 1e-15` before enumerating, which the gather cannot do (it does not know
+`c_j` until after the lookup). The skip moves inside, testing `c(it->second)`
+instead. That changes *which* elements are skipped and therefore the summation
+order, so **the gather is not expected to be bitwise identical to the current
+serial result** — it is a different, equally valid summation.
+
+**That is the one real risk, and it must be handled deliberately:** the gather's
+own serial result becomes the new reference, and thread-count invariance is
+verified against *that*. Establish the new serial baseline first (F3a), confirm
+it agrees with the current one to ~1e-12 on both iterative cases, and only then
+compare threaded runs bitwise against it. **Do not silently rebaseline** — record
+the delta from the pre-F3 energies in the commit.
+
+**Recommended sequence, replacing F3a/F3b/F3c above:**
+
+- **F3a — invert the loop, serial.** Same enumeration, `accumulate` becomes a
+  gather, no OpenMP yet.
+  *Verify:* both iterative cases agree with the pre-F3 energies to ~1e-12
+  (`o2_fci_rohf_sto3g` `-147.7441885517`, `be_fci_spherical_631gd`
+  `-14.6139425466`); all 7 FCI + 11 CASSCF/RASSCF cases green; N2 timing within
+  noise of 26.3 s. Record the exact serial energies — they are the new reference.
+- **F3b — add `#pragma omp parallel for schedule(dynamic)` over `i`.** No
+  buffers, no reduction.
+  *Verify:* CPU > 100 % at 4 threads before reading any timing; **bitwise
+  identical** to F3a's serial result at `OMP_NUM_THREADS` = 1/2/4/8; suite green;
+  N2 speedup against 26.3 s (expect up to ~3.7x at 4).
+- **F3c/F3d — deleted.** No partial buffers means no memory bound to set. The
+  `dense_threshold` question survives as its own step.
+
+**Keep the scatter design documented above** as the fallback if the symmetry
+argument turns out to have an exception this analysis missed — but the
+enumeration test and the dense builder's existing `H(i,j) = H(j,i)` are strong
+enough that the gather should be tried first.
+
+#### Steps (scatter-mitigation route — superseded by the gather above)
 
 **F3a — hoist the write target (~S, no threading, no behaviour change).**
 Change `accumulate` to write into a referenced accumulator that is `sigma` itself.
@@ -308,11 +411,15 @@ behaviour change correctly.
 
 #### Acceptance
 
-- Bitwise-identical energies across `OMP_NUM_THREADS` = 1/2/4/8 and against
-  serial, on both iterative cases. **This is the gate; a tolerance is not.**
+- **Bitwise-identical energies across `OMP_NUM_THREADS` = 1/2/4/8**, against the
+  **F3a serial** result. This is the gate; a tolerance is not.
+- The F3a serial result agrees with the pre-F3 energies to ~1e-12, and the delta
+  is **recorded in the commit** rather than absorbed silently. (The gather moves
+  the `|c| < 1e-15` skip, so it is a different summation order — expected, and
+  the one place this is not bitwise.)
 - All 7 FCI + 11 CASSCF/RASSCF cases green.
 - The term-body code (`:527-652`) is **unchanged** — verifiable by diff.
-- No new tunable, no second code path, no `omp atomic`.
+- No per-thread buffers, no new tunable, no second code path, no `omp atomic`.
 
 ## What this must not do
 
