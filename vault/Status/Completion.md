@@ -334,7 +334,7 @@ historical design context, but they are no longer the source of truth for
   including both iterative FCI gates and all four SA-CASSCF cases with the
   `water_casscf_sa2_sto3g_sad_guess_uphill` canary. The 126-line excitation
   enumeration is untouched; the only deleted lines are the old `accumulate`
-  lambda. See `docs/FCI_OPENMP_SCOPE.md`. F2 (the `occupied_orbitals` allocation)
+  lambda. See `docs/FCI_SIGMA_BUILD_PERFORMANCE.md`. F2 (the `occupied_orbitals` allocation)
   remains open and independent.
 
 - **ccgen `merge_transposes` threaded into production — 1.42x / 1.52x measured

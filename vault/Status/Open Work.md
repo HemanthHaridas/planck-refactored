@@ -129,7 +129,7 @@ worth doing whether or not FCIQMC happens.
   where an operator-count model over-promised.
 
 - **F3 (threading) is scoped with its blast radius inventoried**, in
-  `docs/FCI_OPENMP_SCOPE.md`. Post-F1 the profile is ~98 % inside the loop F3
+  `docs/FCI_SIGMA_BUILD_PERFORMANCE.md`. Post-F1 the profile is ~98 % inside the loop F3
   threads, so Amdahl gives ~3.7x at 4 threads. Verified rather than assumed:
   **two callers, both outside any parallel region** — the Davidson lambda
   (`ci.cpp:775`) and CASSCF's `CISigmaApplier` (`casscf.cpp:894`, whose nearest
@@ -192,7 +192,7 @@ worth doing whether or not FCIQMC happens.
 
   **Two determinism defects were found on the way, each ONLY by the byte-diff, and
   the second is the one worth carrying: a fixed-order reduction is NECESSARY BUT
-  NOT SUFFICIENT.** (1) `schedule(dynamic)` — which `FCI_OPENMP_SCOPE` itself
+  NOT SUFFICIENT.** (1) `schedule(dynamic)` — which the scope itself
   recommended for load balance — gives a buffer a different *subset* of terms per
   run, so its internal sums reassociate; measured as two different last digits
   across 5 identical 4-thread runs. (2) Keying buffers by `omp_get_thread_num()`
@@ -222,9 +222,11 @@ worth doing whether or not FCIQMC happens.
   worth doing on its own merits does not survive F1 having removed the allocator
   pressure that made it look expensive.
 
-- **Both are scoped in `docs/FCI_OPENMP_SCOPE.md`**, allocation before
-  threading, each step independently verifiable and revertible. One finding there
-  is worth repeating here because it decides how any gate must be written: of the
+- **Both are answered in `docs/FCI_SIGMA_BUILD_PERFORMANCE.md`** (allocation
+  before threading, which is the order that mattered: threading a loop that spent
+  half its time in the allocator would have parallelized `malloc` contention).
+  One finding there is worth repeating here because it decides how any gate must
+  be written: of the
   seven committed FCI regression cases, **only two reach the iterative sigma path
   at all** — `o2_fci_rohf_sto3g` (CI dim 1 200) and `be_fci_spherical_631gd`
   (8 281). The two smallest and most obvious (`h2_fci_sto3g` at 4,

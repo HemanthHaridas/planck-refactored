@@ -81,7 +81,7 @@ namespace HartreeFock::Correlation::CI
         // VALUE, which cost up to four heap allocations per matrix element -- and
         // the sigma build calls it for both spin channels on every element. A
         // profile put the malloc/free family at ~53 % of FCI runtime against 12.0 %
-        // in apply_ci_hamiltonian itself. See docs/FCI_OPENMP_SCOPE.md (F1).
+        // in apply_ci_hamiltonian itself. See docs/FCI_SIGMA_BUILD_PERFORMANCE.md.
         struct Excitation
         {
             std::array<int, 2> ann{};
@@ -522,8 +522,8 @@ namespace HartreeFock::Correlation::CI
         // are sparse (Davidson starts from unit vectors, and solve_ci reconstructs
         // a dense H one Unit(dim, j) column at a time). Inverting this loop to a
         // gather to get disjoint writes was built and measured at 2.2-2.4x SLOWER
-        // for exactly that reason; see docs/FCI_OPENMP_SCOPE.md. So we keep the
-        // scatter and accumulate into per-bin buffers, summed below in fixed bin
+        // for exactly that reason; see docs/FCI_SIGMA_BUILD_PERFORMANCE.md. So we
+        // keep the scatter and accumulate into per-bin buffers, summed in fixed bin
         // order -- never omp atomic, never completion order, which is the DFT-grid
         // jitter defect.
         //
