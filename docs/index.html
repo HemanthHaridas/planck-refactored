@@ -251,6 +251,9 @@
 <li class="toc-level-3"><a href="#rmp2-z-vector-method">RMP2 Z-Vector Method</a></li>
 <li class="toc-level-3"><a href="#ump2-gradient-intermediates">UMP2 Gradient Intermediates</a></li>
 <li class="toc-level-2"><a href="#16-coupled-cluster-in-planck">16. Coupled Cluster in Planck</a></li>
+<li class="toc-level-3"><a href="#the-hand-written-paths">The hand-written paths</a></li>
+<li class="toc-level-3"><a href="#the-generated-paths-and-how-to-ask-for-them">The generated paths, and how to ask for them</a></li>
+<li class="toc-level-3"><a href="#build-flags-that-change-what-cc-you-get">Build flags that change what CC you get</a></li>
 <li class="toc-level-3"><a href="#rccsd">RCCSD</a></li>
 <li class="toc-level-3"><a href="#worked-example-a-singles-residual-term">Worked Example: a Singles-Residual Term</a></li>
 <li class="toc-level-3"><a href="#worked-example-a-doubles-residual-term-with">Worked Example: a Doubles-Residual Term with <span class="math-inline">\(W_{mbej}\)</span></a></li>
@@ -355,7 +358,7 @@
 <li>Density-fitted (RI) integrals: RI-MP2 energies and gradients, an RI-JK Fock builder, and RI-routed CASSCF/FCI</li>
 <li>RCCSD for canonical closed-shell RHF references</li>
 <li>Small-system determinant-space teaching prototypes for RCCSDT, UCCSD, and UCCSDT</li>
-<li>Generated arbitrary-order restricted tensor kernels, including RCCSDTQ when built</li>
+<li>Coupled-cluster kernels <strong>generated at build time</strong> by <code>ccgen</code>, to arbitrary excitation rank: restricted (<code>cc3</code>-<code>cc6</code>) and, opt-in, unrestricted (<code>ucc2</code>-<code>ucc6</code>). Optionally dressed and OpenMP-threaded</li>
 <li>Analytic RHF, UHF, ROHF, RKS, UKS, RMP2, and UMP2 nuclear gradients</li>
 <li>Analytic RMP2 nuclear gradients include Z-vector / CPHF relaxation</li>
 <li>Geometry optimization in Cartesian and internal coordinates</li>
@@ -403,6 +406,15 @@ Input file (.hfinp)
   → frequency analysis (src/freq/)
   → checkpoint write (src/io/checkpoint.cpp)
 </code></pre>
+<p>One part of this is not in the repository. <strong>The coupled-cluster kernels above rank 3 are generated at build time</strong>, not written by hand:</p>
+<pre><code>
+CMake configure
+  → ccgen (python/ccgen/) derives the CC equations symbolically
+  → emits C++ into build/generated/cc/*_planck_generated.cpp
+  → those are #include&#x27;d by src/post_hf/cc/generated_kernel_registry.cpp
+  → compiled into hartree-fock like any other source
+</code></pre>
+<p>So <code>grep</code>ping <code>src/</code> for a quadruples residual finds nothing: it is emitted by <code>python/ccgen/emit/planck_tensor_cpp.py</code> during the build. §16 covers which methods come from where; <code>docs/CCGEN_TEACHING_GUIDE.md</code> covers the generator itself.</p>
 <h3 id="directory-summary">Directory Summary</h3>
 <div class="table-wrap"><table>
 <thead><tr>
@@ -429,6 +441,7 @@ Input file (.hfinp)
 <tr><td><code>src/dft/base</code></td><td>grid construction headers: radial (Treutler-Ahlrichs), angular (Lebedev), Becke partition, libxc wrapper</td></tr>
 <tr><td><code>src/mpi</code></td><td>the <code>planck-mpi</code> unified front end</td></tr>
 <tr><td><code>python/</code></td><td>the Python front end (<code>planck.py</code>) and <code>ccgen</code>, the CC equation generator</td></tr>
+<tr><td><code>build/generated/cc/</code></td><td><strong>not in the repository</strong> — the CC kernels ccgen emits at build time, compiled into the binary via <code>src/post_hf/cc/generated_kernel_registry.cpp</code></td></tr>
 </tbody></table></div>
 <h2 id="3-core-data-structures">3. Core Data Structures</h2>
 <h3 id="molecule"><code>Molecule</code></h3>
@@ -1969,14 +1982,64 @@ t^{ab}_{ij,\alpha\beta} =
 <p>These amplitudes populate spin-specific occupied/virtual 1-PDM corrections <span class="math-inline">\(D^\alpha\)</span> and <span class="math-inline">\(D^\beta\)</span>, an AO-space spin-summed energy-weighted density <span class="math-inline">\(W\)</span>, and an explicit AO pair-density correction <span class="math-inline">\(\Gamma^{MP2}\)</span>. The final gradient combines those objects with the UHF reference two-particle density expression and reuses the same derivative-integral contraction infrastructure as the RHF, UHF, and RMP2 gradients.</p>
 <hr>
 <h2 id="16-coupled-cluster-in-planck">16. Coupled Cluster in Planck</h2>
-<p>Planck currently contains five coupled-cluster paths:</p>
+<p>Planck&#x27;s coupled-cluster support comes from <strong>two independent sources</strong>, and keeping them apart is the first thing to understand about this section:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th></th>
+<th>hand-written</th>
+<th><strong>generated</strong></th>
+</tr></thead>
+<tbody>
+<tr><td>written by</td><td>a person, in <code>src/post_hf/cc/*.cpp</code></td><td><code>ccgen</code>, at build time</td></tr>
+<tr><td>covers</td><td>CCSD, CCSDT (R and U)</td><td>any rank up to <code>PLANCK_CC_MAXORDER</code></td></tr>
+<tr><td>lives in</td><td>the repository</td><td><code>build/generated/cc/*.cpp</code></td></tr>
+<tr><td>amplitudes</td><td>spin-orbital or wedge-packed</td><td>dense spatial (RCC) or spin-blocked (UCC)</td></tr>
+</tbody></table></div>
+<p>The hand-written solvers came first and are the teaching material — §16&#x27;s worked examples all use them. <strong>The generated path is what scales</strong>: the CC equations are derived symbolically in Python and emitted as C++ (see <code>docs/CCGEN_TEACHING_GUIDE.md</code>), so CCSDTQ and beyond exist without anyone typing a quadruples residual.</p>
+<h3 id="the-hand-written-paths">The hand-written paths</h3>
 <ul>
 <li><strong>RCCSD</strong> — a conventional iterative amplitude solver in the spin-orbital basis for canonical closed-shell RHF references</li>
-<li><strong>RCCSDT</strong> — dual-backend: a determinant-space teaching prototype for small systems and a staged tensor solver for larger systems; the default routing is chosen automatically by <code>choose_rccsdt_backend</code>, and an additional <code>TensorOptimized</code> entry point can be forced for development via <code>PLANCK_RCCSDT_BACKEND=optimized</code></li>
+<li><strong>RCCSDT</strong> — dual-backend: a determinant-space teaching prototype for small systems and a staged tensor solver for larger systems; the default routing is chosen automatically by <code>choose_rccsdt_backend</code>, and a <code>TensorOptimized</code> entry point routes to the generated kernels via <code>PLANCK_RCCSDT_BACKEND=optimized</code></li>
 <li><strong>UCCSD</strong> — a teaching-oriented small-system determinant-space solver for canonical UHF references</li>
 <li><strong>UCCSDT</strong> — the corresponding determinant-space triples extension for canonical UHF references</li>
-<li><strong>RCCSDTQ</strong> — generated arbitrary-order restricted tensor kernels, available for single-point calculations when Planck is built with CCSDTQ kernel support</li>
 </ul>
+<h3 id="the-generated-paths-and-how-to-ask-for-them">The generated paths, and how to ask for them</h3>
+<p>Every generated method maps to one enum value; the <strong>excitation rank rides separately</strong> on <code>OptionsSCF._cc_generated_rank</code>, so a new rank needs no new enum member and no new driver branch. The ceiling is <code>PLANCK_CC_MAXORDER</code> alone.</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th><code>correlation</code> keyword</th>
+<th>rank</th>
+<th>route</th>
+</tr></thead>
+<tbody>
+<tr><td><code>cc3</code> / <code>ccsdt_gen</code></td><td>3</td><td>generated <strong>R</strong>CC — needs <code>-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON</code></td></tr>
+<tr><td><code>ccsdtq</code> / <code>cc4</code></td><td>4</td><td>generated RCC (the usual entry)</td></tr>
+<tr><td><code>ccsdtqp</code> / <code>cc5</code>, <code>cc6</code></td><td>5, 6</td><td>generated RCC</td></tr>
+<tr><td><code>ucc2</code> / <code>uccsd_gen</code></td><td>2</td><td>generated <strong>U</strong>CC — needs <code>-DPLANCK_CC_UCC=ON</code></td></tr>
+<tr><td><code>ucc3</code> / <code>uccsdt_gen</code>, <code>ucc4</code> … <code>ucc6</code></td><td>3-6</td><td>generated UCC</td></tr>
+</tbody></table></div>
+<p>Two asymmetries that look like oversights and are not:</p>
+<ul>
+<li><strong>There is no generated rank-2 RCC keyword</strong>, because the hand-written RCCSD already covers it — a generated <code>cc2</code> would have no consumer. <code>ucc2</code> <em>does</em> exist, because it is the comparison against hand-written UCCSD that validated the UCC route (it matches exactly).</li>
+<li><strong><code>cc3</code> is not the same as <code>ccsdt</code>.</strong> <code>ccsdt</code> runs the hand-written solver; <code>cc3</code> runs the generated one, which produces <em>spatial</em> amplitudes and can therefore write a <code>.ccamp</code> seed that a later <code>cc4</code> run warm-starts from.</li>
+</ul>
+<p><strong>Validation.</strong> <code>ucc4</code> reproduces the in-tree FCI energy to all ten digits on an open-shell system (B/STO-3G) — the strongest single result on the generated path, because CCSDTQ is exact there for a structural reason (T5 is unreachable in the basis), not because the system is small.</p>
+<h3 id="build-flags-that-change-what-cc-you-get">Build flags that change what CC you get</h3>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>flag</th>
+<th>default</th>
+<th>effect</th>
+</tr></thead>
+<tbody>
+<tr><td><code>PLANCK_CC_MAXORDER</code></td><td><code>3</code></td><td>highest rank emitted (2-6)</td></tr>
+<tr><td><code>PLANCK_CC_SPIN_ADAPT</code></td><td><code>ON</code></td><td>emit spatial RCC. <strong>Off gives a ~4× wrong energy</strong> — it exists only to reproduce a historical emit</td></tr>
+<tr><td><code>PLANCK_CC_ARBITRARY_LOWER_RANKS</code></td><td><code>OFF</code></td><td>also emit rank &lt; 4 in arbitrary-order form, enabling <code>cc3</code></td></tr>
+<tr><td><code>PLANCK_CC_UCC</code></td><td><code>OFF</code></td><td>also emit the unrestricted kernels</td></tr>
+<tr><td><code>PLANCK_CC_DRESS_OPERATORS</code></td><td><code>OFF</code></td><td>dressed intermediates instead of the flat residual (~3.5× faster solves)</td></tr>
+<tr><td><code>CCGEN_OMP_COLLAPSE</code></td><td>unset</td><td>env var: thread the residual nests (3.22× at 4 threads)</td></tr>
+</tbody></table></div>
+<p>A case that needs a non-default flag <strong>skips</strong> in the regression runner rather than failing, and the skip names the flag.</p>
 <p>All paths live under <code>src/post_hf/cc/</code>. The shared setup pieces are intentionally kept separate from the actual solver loops:</p>
 <ul>
 <li><code>common.*</code> builds a validated canonical RHF occupied/virtual partition</li>
@@ -2204,10 +2267,12 @@ enum class RCCSDTBackend
 {
     DeterminantPrototype, // small systems: determinant-space teaching solver
     TensorProduction,     // larger systems: staged tensor contractions
-    TensorOptimized       // forced developer entry point with generated warm-start
+    TensorOptimized       // the ccgen-GENERATED kernels, via the arbitrary-order harness
 };
 </code></pre>
 <p>In the current code path, <code>choose_rccsdt_backend</code> itself only returns <code>DeterminantPrototype</code> or <code>TensorProduction</code> based on system size. The <code>TensorOptimized</code> variant is selected only through the <code>PLANCK_RCCSDT_BACKEND=optimized</code> / <code>tensor_optimized</code> environment override in <code>run_rccsdt</code>.</p>
+<p><strong><code>TensorOptimized</code> is not a developer scratch path</strong> — it routes the ccgen-generated rank-3 kernels through the arbitrary-order harness (the representation they are emitted for), and it is gated end to end by <code>lih_rccsdt_generated_sto3g</code> and <code>ch4_rccsdt_generated_sto3g</code>, matching the hand-written path to all ten digits. It is opt-in because it needs <code>-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON</code> at build time, not because it is experimental.</p>
+<p><strong>One routing constraint that costs people time:</strong> <code>choose_determinant_backstop</code> sends any case with <code>nso &lt;= 16</code> <strong>and</strong> <code>ndet &lt;= 10000</code> to the determinant prototype, which never calls a tensor kernel at all. A small system therefore produces <em>no tensor timing whatsoever</em>, silently, regardless of <code>PLANCK_RCCSDT_BACKEND</code>. Any benchmark of the tensor or generated paths needs <code>nso &gt; 16 || ndet &gt; 10000</code> — this is why CH4/STO-3G, not water, is the rank-3 benchmark case. Note the backstop binds the <strong>hand-written</strong> path only; the generated route reaches its kernels through <code>rccgen.cpp</code> and never consults it.</p>
 <p>If the backend is <code>TensorProduction</code>, <code>run_rccsdt</code> delegates to <code>run_tensor_rccsdt</code> in <code>tensor_backend.*</code>. If the override selects <code>TensorOptimized</code>, it delegates to <code>run_tensor_optimized_rccsdt</code>. Otherwise it falls through to the determinant-space prototype described below.</p>
 <p><code>run_tensor_rccsdt</code> is itself a staged pipeline:</p>
 <ol>
@@ -3836,6 +3901,11 @@ driver.cpp
 <tr><td>Tensor CC block cache</td><td><code>src/post_hf/cc/tensor_backend_state.cpp</code></td><td><code>build_canonical_rhf_cc_reference</code>, <code>format_tensor_memory_summary</code></td></tr>
 <tr><td>UCCSDT prototype</td><td><code>src/post_hf/cc/ccsdt.cpp</code></td><td><code>prepare_uccsdt</code>, <code>run_uccsdt</code></td></tr>
 <tr><td>RCCSDTQ generated tensor path</td><td><code>src/post_hf/cc/ccsdtq.cpp</code>, <code>src/post_hf/cc/solver_arbitrary.cpp</code></td><td><code>run_rccsdtq</code>, <code>solve_generated_arbitrary_order_cc</code></td></tr>
+<tr><td>Generated RCC driver (<code>cc3</code>-<code>cc6</code>)</td><td><code>src/post_hf/cc/rccgen.cpp</code></td><td><code>run_rccgen</code></td></tr>
+<tr><td>Generated UCC driver (<code>ucc2</code>-<code>ucc6</code>)</td><td><code>src/post_hf/cc/uccgen.cpp</code></td><td><code>run_uccgen</code></td></tr>
+<tr><td>Generated-kernel registry (what the emitted TUs plug into)</td><td><code>src/post_hf/cc/generated_kernel_registry.cpp</code></td><td><code>make_generated_*_kernels</code></td></tr>
+<tr><td>Arbitrary-order runtime (amplitudes, denominators, residual dispatch)</td><td><code>src/post_hf/cc/generated_arbitrary_runtime.cpp</code>, <code>generated_arbitrary_prepare.cpp</code></td><td><code>run_generated_arbitrary_order_iterations</code></td></tr>
+<tr><td>The CC equation generator itself</td><td><code>python/ccgen/</code></td><td>see <code>docs/CCGEN_TEACHING_GUIDE.md</code></td></tr>
 <tr><td>CC denominators/DIIS</td><td><code>src/post_hf/cc/amplitudes.cpp</code>, <code>src/post_hf/cc/diis.cpp</code></td><td><code>build_denominator_cache</code>, <code>AmplitudeDIIS</code></td></tr>
 <tr><td>CPHF Z-vector</td><td><code>src/post_hf/rhf_response.cpp</code></td><td><code>build_rhf_cphf_matrix</code></td></tr>
 <tr><td>RMP2 gradient</td><td><code>src/post_hf/mp2_gradient.cpp</code></td><td><code>compute_rmp2_gradient</code></td></tr>
@@ -3926,6 +3996,10 @@ driver.cpp
 <tr><td>RCCSDT single-point energy</td><td>Determinant prototype for tiny systems plus tensor production/optimized entry points for larger restricted references; size-based default selected by <code>choose_rccsdt_backend</code>, optional override via <code>PLANCK_RCCSDT_BACKEND</code></td></tr>
 <tr><td>UCCSDT single-point energy</td><td>Teaching-oriented small-system determinant-space prototype</td></tr>
 <tr><td>RCCSDTQ single-point energy</td><td>Generated restricted tensor kernels when built with CCSDTQ support</td></tr>
+<tr><td>Generated arbitrary-order RCC (<code>cc3</code>-<code>cc6</code>)</td><td>Complete. One enum value carrying the rank separately, so the ceiling is <code>PLANCK_CC_MAXORDER</code> alone. <code>cc3</code> needs <code>-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON</code>; gated by <code>lih_rccsdt_generated_sto3g</code>, <code>ch4_rccsdt_generated_sto3g</code>, <code>be_rccsdtq_sto3g</code></td></tr>
+<tr><td>Generated arbitrary-order UCC (<code>ucc2</code>-<code>ucc6</code>)</td><td>Complete behind <code>-DPLANCK_CC_UCC=ON</code> (default off: the UCC translation units roughly triple generated-kernel compile time). <code>ucc2</code> == hand-written UCCSD exactly; <code>ucc4</code> == in-tree FCI to all ten digits on open-shell B/STO-3G. Gated by <code>b_ucc{2,3,4}_sto3g</code>, which skip cleanly in a default build</td></tr>
+<tr><td>ccgen dressed-operator kernels</td><td>Complete for the <code>derived</code> route (<code>-DPLANCK_CC_DRESS_OPERATORS=ON</code>), measured ~3.5× faster solves. The <code>recognized</code> route is retired and produces wrong kernels</td></tr>
+<tr><td>OpenMP-threaded CC kernels</td><td>Complete behind <code>CCGEN_OMP_COLLAPSE=3</code> (default off). 3.22× at 4 threads with energies bitwise identical across thread counts. CC was the last hot path in Planck with no threading</td></tr>
 <tr><td>Analytic RHF gradient</td><td>Complete</td></tr>
 <tr><td>Analytic UHF gradient</td><td>Complete</td></tr>
 <tr><td>Analytic ROHF gradient</td><td>Complete (Cartesian and spherical; <code>W = P^α F^α P^α + P^β F^β P^β</code>, no Z-vector — SCF is variational)</td></tr>
@@ -3968,13 +4042,20 @@ driver.cpp
 <li><code>src/scf/scf.cpp</code> — the SCF iteration in detail</li>
 <li><code>src/gradient/gradient.cpp</code> — how analytic gradients are assembled</li>
 <li><code>src/post_hf/mp2_rmp2.cpp</code>, <code>src/post_hf/mp2_ump2.cpp</code>, and <code>src/post_hf/integrals.cpp</code> — MP2 energy. <code>src/post_hf/mp2_internal.cpp</code> holds the shared ERI-block and amplitude machinery both spin cases use</li>
-<li><code>src/post_hf/cc/</code> — RCCSD, the tensor RCCSDT backend, and the determinant-space restricted/unrestricted CC teaching prototypes</li>
+<li><code>src/post_hf/cc/</code> — RCCSD, the tensor RCCSDT backend, and the determinant-space restricted/unrestricted CC teaching prototypes. <strong>Read the hand-written solvers before the generated ones</strong>: <code>ccsd.cpp</code> shows what a CC residual <em>is</em>, which the emitted kernels assume you already know</li>
 <li><code>src/post_hf/ci/</code> — the shared CI engine: <code>strings.cpp</code> (determinant enumeration), <code>ci.cpp</code> (sigma build and Davidson), <code>rdm.cpp</code> (1- and 2-RDMs). Read this before CASSCF; both FCI and CASSCF consume it</li>
 <li><code>src/post_hf/fci.cpp</code> — the CI engine at its simplest, with no orbital optimization on top</li>
 <li><code>src/post_hf/casscf/</code> — the most complex module. <code>casscf.cpp</code> is the macro-iteration driver; <code>orbital.cpp</code> the orbital gradient and Hessian action; <code>response.cpp</code> the state-averaged coupled solve; <code>aug-hessian*.cpp</code> the augmented-Hessian step</li>
 <li><code>src/opt/geomopt.cpp</code> — L-BFGS and internal coordinate optimization</li>
 <li><code>src/freq/hessian.cpp</code> — finite-difference Hessian and normal modes</li>
 </ol>
+<p>Recommended reading order for the <strong>generated</strong> CC layer (read after item 8, and after <code>docs/CCGEN_TEACHING_GUIDE.md</code> for the Python side):</p>
+<ul>
+<li><code>src/post_hf/cc/rccgen.cpp</code> / <code>uccgen.cpp</code> — the drivers the <code>cc3</code>/<code>ucc3</code> keywords reach. Start here: they are small, and they show what the generated path needs that the hand-written one does not</li>
+<li><code>src/post_hf/cc/generated_kernel_registry.cpp</code> — the seam. This is where the emitted translation units are <code>#include</code>d into the build; reading it explains why <code>grep</code>ping <code>src/</code> for a quadruples residual finds nothing</li>
+<li><code>src/post_hf/cc/generated_arbitrary_runtime.cpp</code> — the solver loop the generated residuals plug into (amplitudes, denominators, DIIS, per-rank dispatch)</li>
+<li><code>build/generated/cc/ccsdt_arbitrary_planck_generated.cpp</code> — **read the emitted code itself**, after a build. It is the most direct way to see what the symbolic layer produces: one <code>_partN</code> function per chunk of terms, a <code>&lt;kernel&gt;_ops</code> struct of pre-built intermediates, and one loop nest per term</li>
+</ul>
 <p>Recommended reading order for the KS-DFT pipeline (read after items 1–5 above):</p>
 <ol>
 <li><code>src/dft/base/radial.h</code> — Treutler-Ahlrichs M4 radial grid</li>
