@@ -205,6 +205,23 @@ worth doing whether or not FCIQMC happens.
   scope's `nthreads x dim x 8` bound (and its alarming 106 MB water/6-31G figure,
   for a case priced elsewhere at tens to hundreds of hours) does not apply.
 
+  **Reprofiled after landing (N2/STO-3G, `sample`): nothing left worth taking.**
+  The serial profile is unchanged from post-F1 (`apply_ci_hamiltonian` 55.4 % vs
+  55.0 %, `slater_condon_element` 19.9 % vs 19.6 %, and so on), so the binning
+  costs nothing measurable. **The 7.4 MB per-call `partials` allocation was
+  suspected and is refuted** — the whole malloc family is 0.1 % and the `memset`
+  zeroing is 8 samples (0.0 %), even though Davidson calls the sigma build once
+  per subspace vector per iteration. At 4 threads the only new frame is the
+  barrier (`__psynch_cvwait`, 3.0 %); per-thread idle is 0.4 / 4.4 / 2.5 / 11.8 %,
+  i.e. **4.8 % total**, so removing the residual imbalance is worth only ~1.05x on
+  top of 3.54x. Not worth taking, and **if it ever is, the move is more bins
+  (smaller `kBins`) under static scheduling — never `dynamic`**, which breaks
+  thread-count invariance. **F2 (the `occupied_orbitals` allocation) is now the
+  only FCI item left, and the profile prices it at 0.1-0.2 %** — so it is a
+  code-hygiene item, not a performance one; the scope's expectation that it was
+  worth doing on its own merits does not survive F1 having removed the allocator
+  pressure that made it look expensive.
+
 - **Both are scoped in `docs/FCI_OPENMP_SCOPE.md`**, allocation before
   threading, each step independently verifiable and revertible. One finding there
   is worth repeating here because it decides how any gate must be written: of the

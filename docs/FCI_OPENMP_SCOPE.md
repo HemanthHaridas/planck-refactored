@@ -448,6 +448,42 @@ does not apply; note also that the 106 MB figure was for water/6-31G at ndet 1.6
 which this scope elsewhere prices at tens to hundreds of hours for FCI, so it is
 not a case anyone runs.
 
+#### Post-F3 profile (N2/STO-3G, `sample`, same tool as the numbers above)
+
+**Serial is unchanged from post-F1, so the binning costs nothing measurable:**
+
+| frame | post-F1 | post-F3, 1 thread |
+|---|---|---|
+| `apply_ci_hamiltonian` | 55.0 % | **55.4 %** |
+| `slater_condon_element` | 19.6 % | **19.9 %** |
+| `apply_creation` | 10.2 % | **9.9 %** |
+| `parity_between` | 7.3 % | **6.7 %** |
+| `apply_annihilation` | 6.3 % | **6.4 %** |
+
+**The 7.4 MB per-call `partials` allocation was suspected and is refuted**: the
+whole malloc family is **0.1 %** and `memset` (zeroing the buffers) is **8 samples,
+0.0 %**, despite Davidson calling `apply_ci_hamiltonian` once per subspace vector
+per iteration. Eigen reuses the allocation and the zeroing is trivial next to the
+enumeration. The serial reduction is likewise negligible — `n_bins x dim` = 921 600
+adds per call, under a millisecond against 7.79 s.
+
+**At 4 threads the only new frame is the barrier**, `__psynch_cvwait` at 3.0 %
+overall. Per-thread idle is uneven, which is the residual imbalance R4 predicted:
+
+| thread | idle | working |
+|---|---|---|
+| t0 | 0.4 % | 99.6 % |
+| t1 | 4.4 % | 95.6 % |
+| t2 | 2.5 % | 97.5 % |
+| t3 | **11.8 %** | 88.2 % |
+
+**4.8 % total idle across the four threads.** Removing the imbalance entirely would
+be worth only **~1.05x** on top of the current 3.54x, which is why `schedule(static,
+bin_size)` is left as-is: the determinism requirement forbids `dynamic`, and the
+balance it would buy is ~5 %. **If that is ever wanted, the move is more bins
+(smaller `kBins`) with static scheduling — never `dynamic`, which breaks
+thread-count invariance.**
+
 #### Acceptance
 
 - **Bitwise-identical energies across `OMP_NUM_THREADS` = 1/2/4/8** — **MET**, on
