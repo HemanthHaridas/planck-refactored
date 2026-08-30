@@ -51,7 +51,7 @@ is called twice per outer iteration of the sigma loop (`:504-505`). It
 `reserve`s `n_orb` and fills only `n_elec` — one allocation each, per
 determinant, per sigma application.
 
-## The loop structure, and why it is not the CC shape
+## The loop structure, and why it is not the CC shape *as written*
 
 ```cpp
 for (int j = 0; j < dim; ++j)          // over KET determinants
@@ -66,19 +66,18 @@ The outer loop is over **columns** (kets `j`), and each iteration scatters into
 scatter, not the disjoint-slice write the CC residual nests had.** Two threads
 processing different `j` can and will target the same `sigma(i)`.
 
-So the CC recipe does **not** transfer. The options, in order of preference:
+So the CC recipe does **not** transfer *to this loop as written*. Two options:
 
-- **Per-thread partial vectors, summed in fixed thread order.** Each thread owns
-  a private `sigma_t` of length `dim`; after the parallel region, sum them as
-  `for t in 0..nthreads: sigma += sigma_t`. **Fixed index order makes it bitwise
-  thread-count-invariant**, which is the DFT J/K discipline and the property every
-  other threaded path in Planck holds. Cost: `nthreads × dim × 8` bytes — at
-  ndet = 14 400 and 8 threads that is ~0.9 MB, trivial; at ndet = 10⁶ it is 64 MB,
-  which is the point where this stops being free.
-- **Gather (row-driven) reformulation.** Restructure so each thread *owns* a
-  slice of `sigma` and pulls contributions in. No reduction at all, and it scales
-  to any `dim` — but it is a genuine rewrite of the excitation enumeration, not a
-  pragma.
+- **Invert it to a gather** — run over bras and pull, so each thread owns a
+  disjoint slice of `sigma` and the CC recipe applies after all. **This is the
+  recommendation**; F3 below establishes that it is exact and that it costs less
+  code, not more. An earlier revision of this section called it "a genuine rewrite
+  of the excitation enumeration" — that was wrong: the enumeration is unchanged
+  and only the `accumulate` lambda flips from write to read.
+- **Keep the scatter and add per-thread partial vectors**, summed in fixed thread
+  order. Correct, and bitwise thread-count-invariant, but it needs
+  `nthreads × dim × 8` bytes of scratch and a reduction that the gather does not.
+  The fallback, not the plan.
 
 **Never `#pragma omp atomic` on `sigma(...)`, and never a completion-order
 reduction.** That is exactly the DFT-grid jitter defect
@@ -205,90 +204,12 @@ CASSCF/RASSCF regression cases exercise the CASSCF caller and are the gate for i
 **The only mutation in the loop body is `sigma(...) += ...`.** Everything else is
 read-only. That is a small and well-defined risk surface.
 
-#### The risks, in order
+#### The route: invert the loop to a gather
 
-**R1 — the scatter (the real one).** The loop runs over ket determinants `j` and
-writes `sigma(it->second)` where `it` comes from a hash lookup. Two threads on
-different `j` *will* target the same output element. This is **not** the
-disjoint-slice write the CC residual nests had, so the CC recipe does not
-transfer.
-
-**R2 — determinism.** Every other threaded path in Planck is bitwise
-thread-count-invariant, by design and by gate. A naive `reduction` or
-`omp atomic` gives completion-order summation and therefore thread-count-dependent
-rounding — the DFT-grid jitter defect exactly
-(`dft_xc_reduction_determinism`). **A tolerance-based gate would hide this**,
-which is why the acceptance below is bitwise.
-
-**R3 — memory.** Per-thread partial vectors cost `nthreads × dim × 8` bytes:
-
-| dim | 4 threads | 8 threads |
-|---|---|---|
-| 8 281 (`be_fci`) | 0.26 MB | 0.53 MB |
-| 14 400 (N2) | 0.46 MB | 0.92 MB |
-| 213 444 (HF/6-31G) | 6.8 MB | 13.7 MB |
-| 1 656 369 (water/6-31G) | 53 MB | **106 MB** |
-
-Free at every size the suite reaches; material only in the regime FCI cannot
-afford anyway. **It must still be bounded rather than discovered.**
-
-**R4 — load imbalance.** Work per `j` varies with occupation pattern and with the
-`|cj| < 1e-15` skip, so a static schedule would imbalance. `schedule(dynamic)` is
-the answer, and it is what the dense build at `:252` already uses.
-
-**R5 — the fallback path.** `ci.cpp:490-511` has a different structure (dense
-`O(dim²)`, inner loop over `i`). It is **effectively dead**: `det_lookup` is
-always populated at `:461`, so the guard `det_lookup.empty()` is false in normal
-operation. **Leave it serial.** Threading a dead path adds a second code shape to
-maintain for no measured benefit.
-
-#### The design — one shape, not a special case
-
-The constraint that keeps this from becoming spaghetti: **the term-body code must
-not change at all.** The 130 lines of excitation enumeration (`:527-652`) are the
-part a reader needs to follow, and they are already correct.
-
-So the entire change is a *wrapper* around them:
-
-```cpp
-// serial today:
-Eigen::VectorXd &target = sigma;
-for (int j = 0; j < dim; ++j) { ... accumulate(...) -> target(i) += ... }
-
-// threaded: the loop body is IDENTICAL; only what `accumulate` writes into,
-// and a fixed-order sum afterwards, are new.
-```
-
-Concretely: hoist the existing `accumulate` lambda to capture a
-`Eigen::VectorXd &out` instead of `sigma` directly, give each thread its own
-`out`, and sum them in **thread-index order** after the region. The 130 lines in
-between are untouched, and `accumulate` — which already exists as the single
-write point — is the natural and only seam. **That is why this is a small diff:
-the code already funnels every write through one lambda.**
-
-**What would be spaghetti, and is therefore excluded:**
-
-- a second copy of the excitation enumeration for the threaded case;
-- a `if (threaded) ... else ...` branch inside the term bodies;
-- threading the dead fallback path to make it "symmetric";
-- an `omp atomic` sprinkled at the write site (fast to type, breaks R2);
-- a tunable for the number of partial buffers.
-
-#### Can the scatter be avoided entirely? **Yes — and it should be.**
-
-The per-thread-partials design above mitigates the scatter. A **gather**
-reformulation removes it, and with it R1, R2 and R3 together. This is the
-recommended route.
-
-**The transformation.** The loop currently runs over kets and pushes:
+The loop currently pushes; invert it to pull:
 
 ```
 for j:  for each i reachable from j:   sigma(i) += H(i,j) * c(j)      // scatter
-```
-
-Invert it to run over bras and pull:
-
-```
 for i:  for each j reachable from i:   sigma(i) += H(i,j) * c(j)      // gather
 ```
 
@@ -299,11 +220,10 @@ buffers, and bitwise thread-count invariance for free.
 **Two facts make this exact, and both are already established in this codebase.**
 
 **1. The reachability relation is symmetric.** The enumeration generates every
-determinant reachable from the ket by ≤2 excitations preserving the alpha and
+determinant reachable from the ket by <=2 excitations preserving the alpha and
 beta counts. The inverse excitation (swap annihilated and created orbitals) maps
-`i` back to `j` and is itself a ≤2 excitation preserving those counts, so it lies
-in the set generated from `i`. Verified by direct enumeration on three cases,
-including an open-shell one:
+`i` back to `j` and is itself such an excitation, so it lies in the set generated
+from `i`. Verified by direct enumeration, including an open-shell case:
 
 | n_act | na/nb | dim | edges | **asymmetric** |
 |---|---|---|---|---|
@@ -312,113 +232,110 @@ including an open-shell one:
 | 6 | 3/3 | 400 | 47 200 | **0** |
 
 **2. `H` is real symmetric, and the codebase already depends on it.**
-`build_ci_hamiltonian_dense` (`ci.cpp:241-267`, the mirror at `:264`) computes only the upper triangle
-(`for j = i`) and assigns `H(i, j) = H(j, i) = v`. If `slater_condon_element`
-were not symmetric under bra/ket exchange, the **dense path would already be
-wrong** — and it is gated by every FCI and CASSCF case. So the gather reads the
-same value the scatter wrote.
+`build_ci_hamiltonian_dense` (`ci.cpp:241-267`) computes only the upper triangle
+and assigns `H(i, j) = H(j, i) = v` at `:264`. If `slater_condon_element` were
+not symmetric under bra/ket exchange, **the dense path would already be wrong** —
+and it is gated by every FCI and CASSCF case.
 
 Together: `sigma_i = Σ_j H_ij c_j` can be computed by enumerating **from `i`** and
-gathering `c_j` — the same enumeration code, the same matrix element, a read
-where there was a write.
+gathering `c_j` — same enumeration, same matrix element, a read where there was a
+write.
 
-**Why this is not more code, but less.** The 126-line loop body is unchanged; it
-already enumerates neighbours of one determinant. Only `accumulate` changes,
-from
+#### What the gather does to each risk
+
+| risk | under the gather |
+|---|---|
+| **R1 — the scatter** | **gone.** Disjoint slices; two threads never touch the same `sigma(i)` |
+| **R2 — determinism** | **gone.** No cross-thread reduction, so nothing to order. Still verified bitwise |
+| **R3 — memory** | **gone.** No per-thread buffers (the scatter route needed up to 106 MB at water/6-31G) |
+| **R4 — load imbalance** | **remains.** Work per `i` varies with occupation pattern; `schedule(dynamic)`, as the dense build at `:252` already uses |
+| **R5 — the fallback path** | **remains, and stays serial.** `ci.cpp:490-511` is effectively dead: `det_lookup` is always populated at `:461`, so the `empty()` guard is false in normal operation. Threading a dead path adds a second shape to maintain for no measured benefit |
+| **R6 — the moved skip** | **new, and the only real cost.** See below |
+
+**R6 — the `|c| < 1e-15` skip moves, changing summation order.** The current loop
+skips a ket *before* enumerating; a gather cannot, because it does not know `c_j`
+until after the lookup. The skip moves inside the lambda, testing `c(it->second)`.
+That changes *which* terms are skipped and therefore the order they are summed, so
+**the gather is not expected to be bitwise identical to today's serial result** —
+it is a different, equally valid summation.
+
+**This is the one place the usual bitwise discipline cannot apply, so it is
+handled explicitly rather than waived:** F3a establishes the gather's own serial
+result as the new reference, confirms it agrees with the current one to ~1e-12,
+and records the delta in the commit. Thread-count invariance is then verified
+bitwise against *that*. **Do not silently rebaseline.**
+
+#### Why this is less code, not more
+
+The 126-line loop body is unchanged — it already enumerates the neighbours of one
+determinant. Only `accumulate` changes:
 
 ```cpp
-sigma(it->second) += hij * coeff;      // write to a looked-up index
-```
-
-to
-
-```cpp
-acc += hij * c(it->second);            // read from it; accumulate locally
+sigma(it->second) += hij * coeff;      // scatter: write to a looked-up index
+acc              += hij * c(it->second);  // gather: read from it, accumulate locally
 ```
 
 with the caller writing `sigma(i) = acc` once per outer iteration. **The scatter
-lambda becomes a gather lambda; nothing else moves.** The per-thread buffers,
-their fixed-order reduction, and the memory bound (F3c) all disappear — so the
-gather is *simpler* than the mitigation it replaces, not a more ambitious
-alternative.
+lambda becomes a gather lambda; nothing else moves.** That the code already
+funnels every write through a single lambda is what keeps this a small diff.
 
-**What it costs.** One semantic subtlety: the current loop skips kets with
-`|c_j| < 1e-15` before enumerating, which the gather cannot do (it does not know
-`c_j` until after the lookup). The skip moves inside, testing `c(it->second)`
-instead. That changes *which* elements are skipped and therefore the summation
-order, so **the gather is not expected to be bitwise identical to the current
-serial result** — it is a different, equally valid summation.
+**Excluded shapes** — any of these means the change has gone wrong:
 
-**That is the one real risk, and it must be handled deliberately:** the gather's
-own serial result becomes the new reference, and thread-count invariance is
-verified against *that*. Establish the new serial baseline first (F3a), confirm
-it agrees with the current one to ~1e-12 on both iterative cases, and only then
-compare threaded runs bitwise against it. **Do not silently rebaseline** — record
-the delta from the pre-F3 energies in the commit.
+- a second copy of the excitation enumeration for the threaded case;
+- an `if (threaded) ... else ...` branch inside the term bodies;
+- threading the dead fallback path for symmetry;
+- an `omp atomic` at the write site;
+- a tunable for thread count or buffer size.
 
-**Recommended sequence, replacing F3a/F3b/F3c above:**
+#### Steps
 
-- **F3a — invert the loop, serial.** Same enumeration, `accumulate` becomes a
-  gather, no OpenMP yet.
-  *Verify:* both iterative cases agree with the pre-F3 energies to ~1e-12
+**F3a — invert the loop to a gather. Serial, no OpenMP.**
+Same enumeration; `accumulate` becomes a gather; the `|c|` skip moves inside.
+
+*Verify:*
+- both iterative cases agree with the pre-F3 energies to ~1e-12
   (`o2_fci_rohf_sto3g` `-147.7441885517`, `be_fci_spherical_631gd`
-  `-14.6139425466`); all 7 FCI + 11 CASSCF/RASSCF cases green; N2 timing within
-  noise of 26.3 s. Record the exact serial energies — they are the new reference.
-- **F3b — add `#pragma omp parallel for schedule(dynamic)` over `i`.** No
-  buffers, no reduction.
-  *Verify:* CPU > 100 % at 4 threads before reading any timing; **bitwise
-  identical** to F3a's serial result at `OMP_NUM_THREADS` = 1/2/4/8; suite green;
-  N2 speedup against 26.3 s (expect up to ~3.7x at 4).
-- **F3c/F3d — deleted.** No partial buffers means no memory bound to set. The
-  `dense_threshold` question survives as its own step.
+  `-14.6139425466`);
+- all 7 FCI + 11 CASSCF/RASSCF cases green;
+- N2/STO-3G within noise of 26.3 s — this step is a reformulation, not a
+  speed-up, and **if it is materially slower, stop**: the gather is doing more
+  lookups than the scatter did and that needs understanding before threading
+  hides it;
+- **record the exact serial energies.** They are the reference for F3b.
 
-**Keep the scatter design documented above** as the fallback if the symmetry
-argument turns out to have an exception this analysis missed — but the
-enumeration test and the dense builder's existing `H(i,j) = H(j,i)` are strong
-enough that the gather should be tried first.
+**F3b — add the parallel region.**
+`#pragma omp parallel for schedule(dynamic)` over `i`. No buffers, no reduction.
 
-#### Steps (scatter-mitigation route — superseded by the gather above)
-
-**F3a — hoist the write target (~S, no threading, no behaviour change).**
-Change `accumulate` to write into a referenced accumulator that is `sigma` itself.
-Pure refactor.
-*Verify:* the two iterative cases bitwise identical; N2 timing unchanged within
-noise. **This step must measure as a no-op** — if it does not, stop.
-
-**F3b — add the parallel region (~M).**
-`#pragma omp parallel for schedule(dynamic)` over `j`, per-thread `out`, serial
-fixed-order sum.
 *Verify, in this order:*
-1. **CPU utilization > 100 %** at 4 threads. The serial baseline is exactly
-   100.0 %, so this costs one `ps` call and catches an inert pragma before any
-   timing is interpreted.
-2. **Bitwise-identical energies** at `OMP_NUM_THREADS` = 1/2/4/8 **and** against
-   the serial binary, on `o2_fci_rohf_sto3g` (`-147.7441885517`) and
-   `be_fci_spherical_631gd` (`-14.6139425466`). Not "to 1e-10".
+1. **CPU > 100 % at 4 threads.** The serial baseline is exactly 100.0 %, so this
+   costs one `ps` call and catches an inert pragma before any timing is read.
+2. **Bitwise identical to F3a's serial result** at `OMP_NUM_THREADS` = 1/2/4/8.
 3. All 7 FCI + 11 CASSCF/RASSCF cases green.
-4. Speed: N2/STO-3G at 1/2/4/8 against the post-F1 26.3 s. Expect up to ~3.7x at
-   4; below ~2x, suspect imbalance and check the schedule before concluding.
+4. Speed against the post-F1 26.3 s. Expect up to ~3.7x at 4 threads; below ~2x,
+   check `schedule` and imbalance before concluding the lever is absent.
 
-**F3c — bound the memory (~S).**
-Cap the partial-buffer count (fall back to serial, or to fewer threads) above a
-documented `dim`, so R3 is a decision rather than an accident.
-
-**F3d — revisit `dense_threshold` (~S, separate commit).**
+**F3c — revisit `dense_threshold` (separate commit).**
 `dense_threshold = 500` was chosen when nothing was threaded. If the threaded
-sigma build now beats the dense path at some size, that constant should move —
-but **measure it, and change it in its own commit** so the suite attributes any
+sigma build now beats the dense path at some size, the constant should move — but
+**measure it, and change it in its own commit** so the suite attributes any
 behaviour change correctly.
+
+#### If the gather turns out to be wrong
+
+The fallback is the scatter with **per-thread partial vectors summed in fixed
+thread order** — never `omp atomic`, never completion-order, which is the
+DFT-grid jitter defect. It costs `nthreads × dim × 8` bytes (0.9 MB at N2,
+106 MB at water/6-31G) and needs that bound made explicit. It is strictly more
+machinery than the gather, which is why it is the fallback and not the plan.
 
 #### Acceptance
 
 - **Bitwise-identical energies across `OMP_NUM_THREADS` = 1/2/4/8**, against the
   **F3a serial** result. This is the gate; a tolerance is not.
 - The F3a serial result agrees with the pre-F3 energies to ~1e-12, and the delta
-  is **recorded in the commit** rather than absorbed silently. (The gather moves
-  the `|c| < 1e-15` skip, so it is a different summation order — expected, and
-  the one place this is not bitwise.)
+  is **recorded in the commit** rather than absorbed silently.
 - All 7 FCI + 11 CASSCF/RASSCF cases green.
-- The term-body code (`:527-652`) is **unchanged** — verifiable by diff.
+- The term-body code (`ci.cpp:527-652`) is **unchanged** — verifiable by diff.
 - No per-thread buffers, no new tunable, no second code path, no `omp atomic`.
 
 ## What this must not do
@@ -427,7 +344,7 @@ behaviour change correctly.
   was chosen.) Half the runtime was in the allocator, and threading that first
   parallelizes `malloc` contention, which is a known route to *negative* scaling.
 - **Do not touch the term bodies (`ci.cpp:527-652`).** The whole point of F3's
-  design is that the 130 lines of excitation enumeration are untouched and the
+  design is that the 126 lines of excitation enumeration are untouched and the
   change is a wrapper around the single `accumulate` write point. A diff that
   reaches into those lines has become the second implementation this scope exists
   to avoid.
@@ -436,10 +353,14 @@ behaviour change correctly.
   this codebase has already paid for.
 - **Do not gate on `h2_fci_sto3g` or `water_fci_sto3g`.** Both run the dense path
   and cannot see a defect in the threaded sigma build.
-- **Do not accept "energies match to 1e-10".** Every other threaded path here is
-  bitwise thread-count-invariant; there is no reason for this one to be the
-  exception, and accepting a tolerance hides exactly the reduction-order bug the
-  fixed-order sum exists to prevent.
+- **Do not accept "energies match to 1e-10" for the THREADING.** Every other
+  threaded path here is bitwise thread-count-invariant, and accepting a tolerance
+  would hide exactly the reduction-order bug the design exists to prevent. The one
+  documented exception is F3a's reformulation itself, where the moved `|c|` skip
+  changes summation order — that comparison is ~1e-12 against the *pre-F3* result,
+  once, with the delta recorded. Everything after F3a is bitwise against F3a.
+- **Do not silently rebaseline.** If F3a's serial energies differ from the pre-F3
+  ones by more than ~1e-12, that is a defect in the inversion, not a new normal.
 - **Do not change `slater_condon_element`'s signature.** It is public and CASSCF
   consumes it; F1 is an internal representation change behind it.
 
