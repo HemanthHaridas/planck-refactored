@@ -210,6 +210,32 @@ cmake -B build . \
 cmake --build build -j4
 ```
 
+##### Environment variables read at code-generation time
+
+<p align="justify">
+Two ccgen knobs are environment variables read when the kernels are generated,
+not CMake options. They must therefore be set on the <em>build</em> command, and
+changing one requires regenerating (touch a ccgen source, or delete
+<code>build/generated/cc/</code>).
+</p>
+
+| Variable | Default | Effect |
+|---|---|---|
+| `CCGEN_OMP_COLLAPSE` | unset (`0`) | Emit `#pragma omp parallel for collapse(N) schedule(static)` on each residual loop nest. **`3` is the measured value: 3.22× at 4 threads**, with energies bitwise identical across thread counts. `2` also works but is ~4 % slower. `0` emits no pragma. |
+| `CCGEN_FUSE_LOOPS` | unset (`0`) | Fuse the N largest loop-signature groups into one nest each. Measured ~0 % at every size tested; kept as a compile-time and code-size lever, not a speed one. |
+
+```bash
+CCGEN_OMP_COLLAPSE=3 cmake --build build -j4     # threaded CC kernels
+```
+
+<p align="justify">
+Threading the CC kernels needs OpenMP in the build (<code>USE_OPENMP=ON</code>,
+the default — but check the configure log actually found it). It is off by
+default because it is new; the generated kernels are otherwise byte-identical
+without it. Full measurements and the determinism verification are in
+<code>docs/CCGEN_CC_OPENMP.md</code>.
+</p>
+
 ### Offline or air-gapped builds
 
 <p align="justify">

@@ -10,7 +10,7 @@ Profiled 2026-08-29; two fixes have since landed and one lever remains.
 | one call to the rank-3 kernel | **98.8 %** | the whole cost |
 | …of which `build_W_*` operator builders | **67.7 %** | **fixed** — chunk rebuilds, 1.76x |
 | …of which duplicate transpose-equivalent builders | 34.9 % across 3 families | **fixed** — the merge, 1.42x-1.52x |
-| OpenMP anywhere in CC | **none** — flat 1->4 threads on an OpenMP build, while direct-SCF HF in the same binary goes 3.3x | **OPEN** — modelled 2.74x on the triples parts |
+| OpenMP anywhere in CC | **was none** — flat 1->4 threads on an OpenMP build, while direct-SCF HF in the same binary went 3.3x | **DONE** — 3.22x at 4 threads (`CCGEN_CC_OPENMP`) |
 
 Opened by the option-2 decision in `CCGEN_RANK3_KERNEL_AND_SOLVER.md`: the
 generated rank-3 kernels run in the arbitrary-order harness, which is correct
@@ -136,7 +136,7 @@ case, so the shares reflect a size where the residual matters most):
 | 5 | `build_W_t1t1t2v_oooovv` | 5.6 % | **FIXED** — 12 -> 2 |
 | 6 | remaining builders (137 of 141) | 4.0 % | tail |
 | 7 | singles/doubles residual | 1.0 % | already ~free |
-| — | **everything, at once** | **100 %** | **OPEN — no OpenMP anywhere in CC** |
+| — | **everything, at once** | **100 %** | **DONE — 3.22x, `CCGEN_CC_OPENMP`** |
 
 Hotspot 2 was **38 distinct emitted builders each writing a rank-6 result over a
 9-deep nest**, and with index names normalized away, **all 38 are the same
@@ -167,7 +167,7 @@ models priced operators as equal-cost.
 total work is done — but any future per-part parallelism would be badly
 unbalanced, and a cost-weighted split is the cheap fix if that is ever needed.
 
-## What remains: CC has no OpenMP at all
+## The last lever: CC had no OpenMP at all (now landed)
 
 **There is zero OpenMP in CC** — 0 `pragma omp` in `src/post_hf/cc/*.{cpp,h}` and
 0 in the emitted kernels, against 8+ other files under `src/` that carry them.
@@ -175,13 +175,16 @@ Every other hot path in Planck (ERI, Fock builds, the 4-index transforms, the DF
 J/K builds) is threaded; **CC is the exception.**
 
 **Rescoped 2026-08-29 with fresh measurements — the estimate and the
-recommendation below both moved.** See `docs/CCGEN_CC_OPENMP_SCOPE.md`. Two
+recommendation below both moved.** See `docs/CCGEN_CC_OPENMP.md`. Two
 things this section previously got wrong:
 
 - **It advised starting with the builders.** That was right at 45.1 %; after the
   transpose merge they are **13.8 %** and cap at **1.12x**. The residual is now
   **86.2 %**, concentrated in `triples_residual_part1` at **63.6 %**. Threading
-  the three triples parts models **2.74x at 4 threads**.
+  the triples parts modelled 2.74x and **measured 3.22x** once the emitter also
+  covered singles/doubles. The builders were never threaded at all: in the chunked
+  kernels they turned out to be **building every operator twice**, and deleting the
+  dead set beat threading it (2.6 % to every build, with no OpenMP).
 - **Its "98.8 % CPU on 8 cores" evidence did not distinguish its own claim.**
   That run used a tree where `OpenMP_CXX_FLAGS` is `NOTFOUND` and `-DUSE_OPENMP`
   never reaches the compile line, so *every* Planck pragma was inert in it, not
@@ -208,7 +211,7 @@ bitwise across `OMP_NUM_THREADS` = 1/2/4/8.**
 | loop fusion | census + traffic model | **miss** (~0 %) |
 | chunk rebuilds | **`sample` profile** | **hit** (1.76x) |
 | duplicate transposes | **`sample` profile** | **hit** (1.5x) |
-| no OpenMP | **asking whether it was threaded** | modelled 2.74x (rescoped) |
+| no OpenMP | **asking whether it was threaded** | **3.22x measured** |
 
 The two models cost days and went 1-for-2. The profile cost ~20 minutes and found
 a defect neither model could see, because **neither modelled work that should not

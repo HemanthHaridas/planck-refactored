@@ -656,9 +656,9 @@ def _omp_collapse_setting() -> int:
     The CMake option `PLANCK_CC_OMP_COLLAPSE` sets it for a build.
 
     Unset or 0 => no pragma, byte-identical to the unthreaded emit. **3 is the
-    measured value** (O2/O3, docs/CCGEN_CC_OPENMP_SCOPE.md): 3.11x at 4 threads on
-    HF/6-31G with the energy bitwise identical at 1/2/4/8 threads. 2 also works
-    but is ~4 % slower -- 25 chunks over 4 threads against 125.
+    measured value** (docs/CCGEN_CC_OPENMP.md): 3.22x at 4 threads on HF/6-31G
+    with the energy bitwise identical at 1/2/4/8 threads. 2 also works but is
+    ~4 % slower -- 25 chunks over 4 threads against 125.
     """
     raw = os.environ.get("CCGEN_OMP_COLLAPSE", "")
     try:
@@ -929,7 +929,7 @@ def emit_planck_term(
     **3 is the value that was MEASURED**, not the maximum available: the outer
     index alone has only ``no`` = 5 trips on every reachable system, so a bare
     ``parallel for`` gives 1-2 iterations per thread. collapse(3) gives 125
-    chunks against collapse(2)'s 25, worth a consistent ~4 percent (O2).
+    chunks against collapse(2)'s 25, worth a consistent ~4 percent (measured).
     Default 0 keeps the emit byte-identical.
     ``.tensor(rank)(...)`` for the arbitrary-order runtime type (rank ≥ 4)."""
     # U3b.2a: the per-index spin map, for spin-resolved loop bounds. An `Index`
@@ -1215,7 +1215,7 @@ def _emit_kernel(
     arbitrary = amplitude_type == "ArbitraryOrderRCCAmplitudes"
     chunked = result_rank > 0 and len(emitted_terms) > _KERNEL_CHUNK_TERMS
 
-    # O4: emit these ONLY on the inline path. The chunked path builds the same
+    # Emit these ONLY on the inline path. The chunked path builds the same
     # operators into the `<kernel>_ops` struct and passes that to the parts, so
     # emitting them here too built every operator TWICE -- and the locals were
     # then never referenced, because the parts read `ops`. Pure dead work: H5
