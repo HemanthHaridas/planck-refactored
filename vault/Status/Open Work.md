@@ -494,6 +494,25 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
   fix both**: emit the pragma, and skip the duplicate emission on the chunked path.
   The triples builders never needed threading — they needed deleting.
 
+  **O4 DONE (2026-08-30): both changes are in the emitter, and the default emit is
+  unchanged apart from the dead builds.** `_emit_kernel` now skips the
+  intermediate-build emission on the chunked path (the `ops` struct already
+  carries them), and `emit_planck_term` takes an `omp_collapse` threaded from
+  `CCGEN_OMP_COLLAPSE`, following `_fuse_loops_setting`'s env-var precedent rather
+  than adding a `print_cpp_planck` parameter. Measured HF/6-31G: the **shipping
+  default** gains **78.67 s -> 76.68 s (2.6 %)** from the dead-builder fix with no
+  threading at all, and `CCGEN_OMP_COLLAPSE=3` gives **74.37 s -> 23.11 s
+  (3.22x at 4 threads)**, slightly better than O3's hand-edit because the emitter
+  also annotates the singles/doubles residuals. Energies bitwise identical at
+  1/4/8 threads and against the unthreaded baseline; the pragma-disabled TU differs
+  from the pre-O4 emit ONLY by the 88 removed dead builder lines. Regression cases
+  `lih_rccsdt_generated_sto3g`, `ch4_rccsdt_generated_sto3g` and `be_rccsdtq_sto3g`
+  pass; ccgen suite 876/0 unchanged. **New gate `test_chunked_kernel_builds_once.py`**,
+  mutation-verified. The lesson worth keeping: the duplicate build was invisible to
+  every existing gate because it is semantically a **no-op** — every value gate was
+  correct while the work was done twice. Only wall-clock or reading the emitted text
+  could see it, which is why the new gate reads the text.
+
 - **The residual generated-vs-hand-written gap is mostly NOT a codegen defect.**
   **The two paths are different solvers and their wall-clock is not a like-for-like
   ratio** — wedge-packed vs dense amplitudes, cheap dressed intermediates vs a full

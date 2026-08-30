@@ -1,6 +1,6 @@
 # Scope: threading the generated CC path
 
-**Scope for in-flight work. O1-O3 done; O4 open.** Re-measured 2026-08-29/30
+**All four steps done (O1-O4), 2026-08-30.** Re-measured 2026-08-29/30
 against the post-merge tree, which **invalidated the estimate and the
 recommendation** carried in `CCGEN_ARBITRARY_HARNESS_COST.md`. That document told
 its reader to re-measure the split before relying on its figures; doing so changed
@@ -274,30 +274,53 @@ remaining serial work is the doubles/singles residuals (~1.2 %) and their
 standalone builders, which are genuinely used and genuinely small. **The builders
 inside the triples path never needed threading at all** — they needed deleting.
 
-### O4 — move it into the emitter (~M, only after O2/O3 measure well)
+### O4 — **DONE (2026-08-30). Both changes are in the emitter; default emit unchanged apart from the dead builds.**
 
-Teach `planck_tensor_cpp.py` to emit the pragma, borrowing the form already in
-`cpp_loops.py:331`. **One knob, not seven** — the same condition W3 set for the
-dressing axis. A build option defaulting OFF is acceptable while it is new; a
-per-nest tuning surface is not.
+**The duplicate-builder fix.** `_emit_kernel` now computes `chunked` before
+emitting the intermediate builds and skips them on that path
+(`planck_tensor_cpp.py`), because `_emit_chunked_kernel` builds the same
+operators into the `<kernel>_ops` struct that the parts actually read. The stale
+comment claiming "the intermediate builds and amplitude-view bindings are
+re-emitted per part" is corrected — H5 stopped that being true for the builds.
 
-**Two changes, and the second is not optional.** Emit the pragma on every triples
-nest, AND fix the duplicate-builder emission O3 found
-(`planck_tensor_cpp.py:1173-1178` emits intermediate builds that
-`_emit_chunked_kernel` then re-emits into the `ops` struct). The second is a
-one-condition change — skip the standalone emission when the chunked path is
-taken — and is worth ~6 % here with more expected at rank 4.
+**The pragma.** `emit_planck_term` takes `omp_collapse`, threaded through
+`_emit_terms` (both the fused and unfused paths) from a `CCGEN_OMP_COLLAPSE` env
+var, following `_fuse_loops_setting`'s established pattern — an env var rather
+than a `print_cpp_planck` parameter, since W3's condition is that a knob earns a
+parameter once it is staying. Default 0 emits no pragma. A guard
+(`len(free) >= omp_collapse`) means a nest that is too shallow is simply left
+alone; verified across all 948 emitted pragmas that none collapses more levels
+than it has.
 
-*Verify:* the emitted TU is byte-identical to today's when the pragma option is
-off **except** for the removed duplicate builds, and the O3 numbers reproduce when
-it is on (`collapse(3)` on all four parts, **23.70 s at 4 threads** on HF/6-31G,
-`E_corr = -0.1319388410`, bitwise identical at 1/2/4/8 threads).
+**Measured, HF/6-31G, generated rank-3 route:**
 
-**Emit `collapse(3)` specifically**, not `collapse(2)` and not a bare
-`parallel for`: the outer `i` alone is only `no` = 5 trips. The existing
-`cpp_loops.py` helper already takes an `omp_collapse` argument, so the form is
-there — but note it defaults to `min(len(free), 4)`, which is not the same choice,
-and O2 measured 3 as the right one here.
+| emit | 1t | 4t | 8t | **4t speedup** |
+|---|---|---|---|---|
+| default (`CCGEN_OMP_COLLAPSE` unset) | **76.68 s** | 75.82 s | — | 1.01x |
+| `CCGEN_OMP_COLLAPSE=3` | 74.37 s | **23.11 s** | 18.31 s | **3.22x** |
+
+The default row is the shipping path and carries the dead-builder fix alone:
+**78.67 s -> 76.68 s, 2.6 %, with no threading**. The threaded row reproduces O3's
+hand-edit and is slightly better (23.11 s against 23.70 s) because the emitter also
+annotates the singles/doubles residuals, which O3 did not hand-edit.
+
+**Correctness.** Energies bitwise identical at 1/4/8 threads and against the
+original unthreaded baseline, on both rows. The emitted TU with the pragma
+disabled differs from the pre-O4 emit **only** by the 88 removed dead builder
+lines (diff checked line by line: 91 removed lines, all `const auto W_... =
+build_W_...`, the section comment, and a blank). Regression cases
+`lih_rccsdt_generated_sto3g`, `ch4_rccsdt_generated_sto3g` and `be_rccsdtq_sto3g`
+all pass; the ccgen Python suite is 876 passed / 0 failed, unchanged.
+
+**New gate: `test_chunked_kernel_builds_once.py`.** The duplicate build was
+invisible to every existing gate, and that is the point worth carrying — it is
+semantically a **no-op**, so energies, residuals and every value gate were correct
+while the work was being done twice. Only wall-clock or a reading of the emitted
+text could see it. The gate reads the text: no operator built twice in a chunked
+entry point, and no `const auto` operator build before the `ops` aggregate (stated
+separately, because a future change could emit one *without* a matching struct
+entry and slip past the duplicate check). Mutation-verified — restoring the
+unconditional emission turns both red, while the vacuity check stays green.
 
 ## What this must not do
 

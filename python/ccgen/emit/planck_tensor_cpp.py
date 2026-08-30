@@ -646,6 +646,25 @@ def _map_factor(
     raise NotImplementedError(f"Unsupported tensor factor {tensor_obj!r}")
 
 
+def _omp_collapse_setting() -> int:
+    """How many loop levels to collapse in the emitted OpenMP pragma, from
+    `CCGEN_OMP_COLLAPSE`.
+
+    An env var rather than a threaded parameter, following `_fuse_loops_setting`
+    and for the same reason: `print_cpp_planck` already carries 16 branches, and
+    W3 set the precedent that a knob earns a parameter only once it is staying.
+    The CMake option `PLANCK_CC_OMP_COLLAPSE` sets it for a build.
+
+    Unset or 0 => no pragma, byte-identical to the unthreaded emit. **3 is the
+    measured value** (O2/O3, docs/CCGEN_CC_OPENMP_SCOPE.md): 3.11x at 4 threads on
+    HF/6-31G with the energy bitwise identical at 1/2/4/8 threads. 2 also works
+    but is ~4 % slower -- 25 chunks over 4 threads against 125.
+    """
+    raw = os.environ.get("CCGEN_OMP_COLLAPSE", "")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
 def _fuse_loops_setting() -> int:
     """How many loop-signature groups to fuse, from `CCGEN_FUSE_LOOPS`.
 
@@ -671,6 +690,7 @@ def _emit_terms(
     ucc: bool,
     fuse_loops: int = 0,
     annotate: bool = True,
+    omp_collapse: int = 0,
 ) -> list[str]:
     """Emit the term bodies of a residual kernel.
 
@@ -694,7 +714,8 @@ def _emit_terms(
             lines.append(emit_planck_term(
                 term, lhs="result", indent=4,
                 intermediate_names=intermediate_names,
-                arbitrary_amplitudes=arbitrary, ucc=ucc))
+                arbitrary_amplitudes=arbitrary, ucc=ucc,
+                omp_collapse=omp_collapse))
             if annotate:
                 lines.append("")
         return lines
@@ -729,7 +750,8 @@ def _emit_terms(
         lines.append(emit_planck_term(
             term, lhs="result", indent=4,
             intermediate_names=intermediate_names,
-            arbitrary_amplitudes=arbitrary, ucc=ucc))
+            arbitrary_amplitudes=arbitrary, ucc=ucc,
+            omp_collapse=omp_collapse))
         if annotate:
             lines.append("")
     return lines
@@ -889,12 +911,26 @@ def emit_planck_term(
     intermediate_names: frozenset[str] | None = None,
     arbitrary_amplitudes: bool = False,
     ucc: bool = False,
+    omp_collapse: int = 0,
 ) -> str:
     """Emit a single algebraic term using Planck tensor accessors.
 
     ``intermediate_names`` lists the materialized intermediates in scope (the
     kernel's specs) so their factors resolve as local references (D7.3).
     ``arbitrary_amplitudes`` routes t-amplitude accessors through
+
+    ``omp_collapse`` > 0 prefixes the free-index nest with
+    ``#pragma omp parallel for collapse(N) schedule(static)``. Safe because each
+    nest writes one disjoint ``result(free...)`` slice per iteration and
+    accumulates into a thread-private ``acc`` -- no cross-thread reduction, which
+    is what made the DFT J/K builds bitwise thread-invariant, and what the DFT
+    grid reduction (summed in completion order) did not have.
+
+    **3 is the value that was MEASURED**, not the maximum available: the outer
+    index alone has only ``no`` = 5 trips on every reachable system, so a bare
+    ``parallel for`` gives 1-2 iterations per thread. collapse(3) gives 125
+    chunks against collapse(2)'s 25, worth a consistent ~4 percent (O2).
+    Default 0 keeps the emit byte-identical.
     ``.tensor(rank)(...)`` for the arbitrary-order runtime type (rank ≥ 4)."""
     # U3b.2a: the per-index spin map, for spin-resolved loop bounds. An `Index`
     # carries only a space (occ/vir) -- the U1 bridge drops spin by design -- so
@@ -924,6 +960,10 @@ def emit_planck_term(
         summed = list(term.summed_indices)
         factors = term.factors
 
+    if omp_collapse > 0 and len(free) >= omp_collapse:
+        lines.append(
+            f"{pad}#pragma omp parallel for collapse({omp_collapse}) schedule(static)"
+        )
     for idx in free:
         lines.append(
             f"{pad}for (int {idx.name} = 0; {idx.name} < {_loop_bound(idx, index_spins.get(idx.name))}; ++{idx.name})"
@@ -1169,7 +1209,22 @@ def _emit_kernel(
             if factor.name in intermediate_map and factor.name not in seen_intermediates:
                 seen_intermediates.add(factor.name)
                 required_intermediates.append(intermediate_map[factor.name])
-    if required_intermediates:
+    emitted_terms: Sequence[AlgebraTerm | RestrictedClosedShellTerm]
+    emitted_terms = lowered_terms if lowered_terms else terms
+    intermediate_names = frozenset(intermediate_map)
+    arbitrary = amplitude_type == "ArbitraryOrderRCCAmplitudes"
+    chunked = result_rank > 0 and len(emitted_terms) > _KERNEL_CHUNK_TERMS
+
+    # O4: emit these ONLY on the inline path. The chunked path builds the same
+    # operators into the `<kernel>_ops` struct and passes that to the parts, so
+    # emitting them here too built every operator TWICE -- and the locals were
+    # then never referenced, because the parts read `ops`. Pure dead work: H5
+    # added the struct hoist without removing the emission it superseded.
+    # Measured on HF/6-31G rank 3 (88 operators): 4.9 s serial, 4.3 s at 4
+    # threads, ~6 % of the solve. It scales with operator count, so rank 4 (894)
+    # is worth more. Removing them changes no energy -- that they were unused is
+    # exactly why.
+    if required_intermediates and not chunked:
         lines.append("")
         lines.append("    // Build reused intermediates once for this kernel")
         for spec in required_intermediates:
@@ -1179,21 +1234,19 @@ def _emit_kernel(
             )
     lines.append("")
     lines.append(f"    // {target} kernel ({len(terms)} terms)")
-    emitted_terms: Sequence[AlgebraTerm | RestrictedClosedShellTerm]
-    emitted_terms = lowered_terms if lowered_terms else terms
-    intermediate_names = frozenset(intermediate_map)
-    arbitrary = amplitude_type == "ArbitraryOrderRCCAmplitudes"
 
     # Large kernels (the spin-adapted CCSDTQ quadruples residuals are ~5000
     # statements each) are super-linear to optimize as one function -- an -O3
     # compile of the containing TU takes 40+ min. Split them into `_partN`
     # sub-functions each accumulating a slice of the terms into `result` (passed
     # by reference); the compiler then optimizes N bounded functions in ~linear
-    # total time. Small kernels stay inline (byte-identical). The intermediate
-    # builds and amplitude-view bindings are re-emitted per part -- cheap, local,
-    # and keeps each part self-contained. `result_rank == 0` (energy) stays inline
+    # total time. Small kernels stay inline (byte-identical). Amplitude-view
+    # bindings are re-emitted per part -- cheap, local, and keeps each part
+    # self-contained; the intermediate BUILDS are not (H5 hoisted them into a
+    # `<kernel>_ops` struct built once and passed by `const&`).
+    # `result_rank == 0` (energy) stays inline
     # (a scalar accumulator can't be passed the same way and is always tiny).
-    if result_rank > 0 and len(emitted_terms) > _KERNEL_CHUNK_TERMS:
+    if chunked:
         return _emit_chunked_kernel(
             method, target, lines, emitted_terms, result_type, free_indices,
             denominator_type, amplitude_type, required_intermediates,
@@ -1207,7 +1260,8 @@ def _emit_kernel(
             lines.append("")
             lines.extend(bindings)
     lines.extend(_emit_terms(
-        emitted_terms, intermediate_names, arbitrary, ucc, _fuse_loops_setting()))
+        emitted_terms, intermediate_names, arbitrary, ucc, _fuse_loops_setting(),
+        omp_collapse=_omp_collapse_setting()))
     lines.append("    return result;")
     lines.append("}")
     return "\n".join(lines)
@@ -1301,7 +1355,8 @@ def _emit_chunked_kernel(
                         + _fock_view_bindings(chunk))
             out.extend(bindings)
         out.extend(_emit_terms(
-            chunk, intermediate_names, arbitrary, ucc, fuse, annotate=False))
+            chunk, intermediate_names, arbitrary, ucc, fuse, annotate=False,
+            omp_collapse=_omp_collapse_setting()))
         out.append("}")
         out.append("")
 
