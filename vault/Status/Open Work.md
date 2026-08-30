@@ -21,6 +21,28 @@ truth for what remains.
 - (none currently — the ROHF MO-energy bookkeeping inconsistency is resolved;
   see Completion)
 
+## Build and packaging
+
+- **The compiled-in default basis path has a spurious `install/` segment and
+  never resolves.** `CMakeLists.txt` sets
+  `BASIS_INSTALL_PATH = ${CMAKE_INSTALL_PREFIX}/install/share/basis-sets`, which
+  `basis.h.in` bakes into the binary as the fallback when `BASIS_PATH` is unset —
+  but `install(DIRECTORY basis-sets DESTINATION share)` puts them at
+  `${prefix}/share/basis-sets`, with no `install/` component. So a build that has
+  not had `BASIS_PATH` exported fails at basis loading:
+
+  ```
+  [ERR] Basis Parsing Failed : Cannot open basis file: /usr/local/install/share/basis-sets/sto-3g
+  ```
+
+  Reproduced 2026-08-30 on a clean default configure+build. It affects both the
+  uninstalled build tree and an installed prefix, and `tests/run_regressions.py`
+  does not export `BASIS_PATH` either, so **all 35 smoke cases fail without it**
+  and pass with it. Everyone working in the repo has an export in their shell,
+  which is why it has stayed invisible. Fix is one of: drop `/install` from
+  `BASIS_INSTALL_PATH`, or change the `install()` destination to match — they
+  must agree. Documented as a workaround in the README meanwhile.
+
 ## Verification and regression gaps
 
 - **The ccgen Python suite's NINE standing failures are FIXED (2026-08-29); the
