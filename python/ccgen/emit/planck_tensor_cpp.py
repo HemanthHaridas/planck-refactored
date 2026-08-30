@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from fractions import Fraction
 import itertools
+import os
 import re
 from typing import Sequence, TYPE_CHECKING
 
@@ -645,6 +646,264 @@ def _map_factor(
     raise NotImplementedError(f"Unsupported tensor factor {tensor_obj!r}")
 
 
+def _omp_collapse_setting() -> int:
+    """How many loop levels to collapse in the emitted OpenMP pragma, from
+    `CCGEN_OMP_COLLAPSE`.
+
+    An env var rather than a threaded parameter, following `_fuse_loops_setting`
+    and for the same reason: `print_cpp_planck` already carries 16 branches, and
+    W3 set the precedent that a knob earns a parameter only once it is staying.
+    The CMake option `PLANCK_CC_OMP_COLLAPSE` sets it for a build.
+
+    Unset or 0 => no pragma, byte-identical to the unthreaded emit. **3 is the
+    measured value** (docs/CCGEN_CC_OPENMP.md): 3.22x at 4 threads on HF/6-31G
+    with the energy bitwise identical at 1/2/4/8 threads. 2 also works but is
+    ~4 % slower -- 25 chunks over 4 threads against 125.
+    """
+    raw = os.environ.get("CCGEN_OMP_COLLAPSE", "")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+def _fuse_loops_setting() -> int:
+    """How many loop-signature groups to fuse, from `CCGEN_FUSE_LOOPS`.
+
+    An env var rather than a threaded parameter, deliberately and temporarily:
+    F3 is a mechanism landing behind a default-off switch, and `print_cpp_planck`
+    already carries 16 branches -- W3 set the precedent that a knob earns a
+    parameter only once it is staying. If F5 justifies fusion, this becomes a
+    proper `--fuse-loops` axis; if not, one function goes away.
+
+    Unset or 0 => one nest per term, byte-identical to the pre-F3 emit.
+    """
+    raw = os.environ.get("CCGEN_FUSE_LOOPS", "")
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return 0
+
+
+def _emit_terms(
+    emitted_terms,
+    intermediate_names,
+    arbitrary: bool,
+    ucc: bool,
+    fuse_loops: int = 0,
+    annotate: bool = True,
+    omp_collapse: int = 0,
+) -> list[str]:
+    """Emit the term bodies of a residual kernel.
+
+    `fuse_loops` is the F3/F4 knob (docs/CCGEN_WHY_GENERATED_IS_SLOW.md): 0 emits
+    one nest per term (the default, byte-identical to before); N > 0 fuses the N
+    LARGEST loop-signature groups into one nest each and leaves the rest per-term.
+    F3 uses N=1 to land the mechanism against a bit-identical-energy gate before
+    F4 widens it.
+
+    Terms keep their original `// Term i` numbering wherever they are emitted, so
+    a fused TU can still be diffed against an unfused one term by term.
+    """
+    lines: list[str] = []
+    if fuse_loops <= 0:
+        for i, term in enumerate(emitted_terms, start=1):
+            # `annotate` is False on the chunked path, which historically emitted
+            # neither the `// Term N` comment nor a trailing blank. Kept exactly
+            # so the default emit stays BYTE-IDENTICAL -- F2's contract.
+            if annotate:
+                lines.append(f"    // Term {i}")
+            lines.append(emit_planck_term(
+                term, lhs="result", indent=4,
+                intermediate_names=intermediate_names,
+                arbitrary_amplitudes=arbitrary, ucc=ucc,
+                omp_collapse=omp_collapse))
+            if annotate:
+                lines.append("")
+        return lines
+
+    groups = group_terms_by_loop_signature(emitted_terms)
+    # Largest first, ties broken by first appearance so the choice is
+    # deterministic and does not depend on dict iteration subtleties.
+    ranked = sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[1][0]))
+    fused_keys = {k for k, _ in ranked[:fuse_loops] if len(_) > 1}
+
+    emitted_positions: set[int] = set()
+    for key, positions in ranked:
+        if key not in fused_keys:
+            continue
+        terms = [emitted_terms[i] for i in positions]
+        numbers = ", ".join(str(i + 1) for i in positions)
+        lines.append(
+            f"    // Fused group: {len(positions)} terms sharing"
+            f" free{list(key[0])} summed{list(key[1])} -- Terms {numbers}")
+        lines.append(emit_planck_fused_group(
+            terms, lhs="result", indent=4,
+            intermediate_names=intermediate_names,
+            arbitrary_amplitudes=arbitrary, ucc=ucc))
+        lines.append("")
+        emitted_positions.update(positions)
+
+    for i, term in enumerate(emitted_terms, start=1):
+        if (i - 1) in emitted_positions:
+            continue
+        if annotate:
+            lines.append(f"    // Term {i}")
+        lines.append(emit_planck_term(
+            term, lhs="result", indent=4,
+            intermediate_names=intermediate_names,
+            arbitrary_amplitudes=arbitrary, ucc=ucc,
+            omp_collapse=omp_collapse))
+        if annotate:
+            lines.append("")
+    return lines
+
+
+def _term_coeff_product(
+    term,
+    factors,
+    intermediate_names: frozenset[str] | None,
+    arbitrary_amplitudes: bool,
+) -> str:
+    """The `<coeff><factors>` accumulation expression for one term.
+
+    Shared by the per-term emitter and the fused one (F3) so a term contributes
+    the identical text either way -- which is what makes fusion a pure
+    regrouping of accumulations rather than a re-derivation.
+    """
+    sign = 1
+    factor_exprs: list[str] = []
+    for factor in factors:
+        factor_sign, factor_expr = _map_factor(
+            factor, intermediate_names, arbitrary_amplitudes)
+        sign *= factor_sign
+        factor_exprs.append(factor_expr)
+    coeff = term.coeff * sign
+    product = " * ".join(factor_exprs) if factor_exprs else "1.0"
+    return f"{_coeff_literal(coeff)}{product}"
+
+
+def emit_planck_fused_group(
+    terms: Sequence[AlgebraTerm | RestrictedClosedShellTerm],
+    lhs: str = "result",
+    indent: int = 4,
+    intermediate_names: frozenset[str] | None = None,
+    arbitrary_amplitudes: bool = False,
+    ucc: bool = False,
+) -> str:
+    """Emit several terms sharing a loop signature as ONE nest (F3).
+
+    Every term in `terms` must have the same `term_loop_signature`; the caller
+    guarantees this by construction (`group_terms_by_loop_signature`). The nest
+    header is emitted once and each term contributes one `acc +=` line, which is
+    the shape the hand-written kernel writes by hand (~9 accumulations per
+    single-index loop).
+
+    See docs/CCGEN_WHY_GENERATED_IS_SLOW.md: this does not change FLOP count. It
+    cuts how many times the o^3v^3 result is traversed and its operands
+    re-streamed -- 414 nests -> 13 on the factorized manifold, 399 -> 8 undressed.
+
+    NOT bitwise-neutral by construction: accumulation ORDER within the shared
+    `acc` changes relative to the per-term emit, so floating-point results may
+    differ in the last bits. The F3 gate is bit-identical CC energies on
+    ch4/lih_rccsdt_generated_sto3g; if they move, characterise before widening.
+    """
+    if not terms:
+        return ""
+    signatures = {term_loop_signature(t) for t in terms}
+    if len(signatures) != 1:
+        raise ValueError(
+            f"emit_planck_fused_group requires one loop signature, got {signatures}")
+
+    first = terms[0]
+    index_spins = ucc_term_index_spins(first) if ucc else {}
+    if isinstance(first, RestrictedClosedShellTerm):
+        free = list(first.canonical_free_indices)
+        summed = list(first.canonical_summed_indices)
+    else:
+        free = list(first.free_indices)
+        summed = list(first.summed_indices)
+
+    pad = " " * indent
+    lines: list[str] = []
+    for idx in free:
+        lines.append(
+            f"{pad}for (int {idx.name} = 0; {idx.name} < {_loop_bound(idx, index_spins.get(idx.name))}; ++{idx.name})"
+        )
+    lines.append(f"{pad}{{")
+
+    target = _target_expr(lhs, free)
+    exprs = [
+        _term_coeff_product(
+            t,
+            t.factors,
+            intermediate_names,
+            arbitrary_amplitudes,
+        )
+        for t in terms
+    ]
+
+    if summed:
+        lines.append(f"{pad}    double acc = 0.0;")
+        for idx in summed:
+            lines.append(
+                f"{pad}    for (int {idx.name} = 0; {idx.name} < {_loop_bound(idx, index_spins.get(idx.name))}; ++{idx.name})"
+            )
+        lines.append(f"{pad}    {{")
+        for expr in exprs:
+            lines.append(f"{pad}        acc += {expr};")
+        lines.append(f"{pad}    }}")
+        lines.append(f"{pad}    {target} += acc;")
+    else:
+        for expr in exprs:
+            lines.append(f"{pad}    {target} += {expr};")
+
+    lines.append(f"{pad}}}")
+    return "\n".join(lines)
+
+
+def term_loop_signature(
+    term: AlgebraTerm | RestrictedClosedShellTerm,
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """The `(free, summed)` index-name pair that defines a term's loop nest.
+
+    F2 (docs/CCGEN_WHY_GENERATED_IS_SLOW.md). Terms sharing this signature emit
+    IDENTICAL loop headers and differ only in the accumulated expression, so they
+    are exactly the candidates for fusing into one nest -- which is what the
+    hand-written kernel does by hand (~9 accumulations per single-index loop).
+
+    Measured on rank-3 spatial triples: 414 nests collapse to **13** signatures,
+    every nest sharing with at least one other, largest group 81. All 414 also
+    share ONE free-index order `(i,j,k,a,b,c)`, so the key needs no canonical
+    reordering -- but it is returned as an ordered tuple rather than a set,
+    deliberately: two terms whose free indices differ in ORDER emit different
+    headers and must not be fused.
+
+    This mirrors the extraction in `emit_planck_term` exactly. If that changes,
+    this must change with it, or the grouping will not describe what is emitted.
+    """
+    if isinstance(term, RestrictedClosedShellTerm):
+        free = term.canonical_free_indices
+        summed = term.canonical_summed_indices
+    else:
+        free = term.free_indices
+        summed = term.summed_indices
+    return tuple(i.name for i in free), tuple(i.name for i in summed)
+
+
+def group_terms_by_loop_signature(
+    terms: Sequence[AlgebraTerm | RestrictedClosedShellTerm],
+) -> dict[tuple[tuple[str, ...], tuple[str, ...]], list[int]]:
+    """Group term INDICES by loop signature, preserving emission order.
+
+    Returns positions rather than terms so a caller can fuse while keeping the
+    original `// Term N` numbering. Dict order is first-appearance, so iterating
+    the groups and then each group's members reproduces a deterministic emit.
+    """
+    groups: dict[tuple[tuple[str, ...], tuple[str, ...]], list[int]] = {}
+    for position, term in enumerate(terms):
+        groups.setdefault(term_loop_signature(term), []).append(position)
+    return groups
+
+
 def emit_planck_term(
     term: AlgebraTerm | RestrictedClosedShellTerm,
     lhs: str = "result",
@@ -652,12 +911,26 @@ def emit_planck_term(
     intermediate_names: frozenset[str] | None = None,
     arbitrary_amplitudes: bool = False,
     ucc: bool = False,
+    omp_collapse: int = 0,
 ) -> str:
     """Emit a single algebraic term using Planck tensor accessors.
 
     ``intermediate_names`` lists the materialized intermediates in scope (the
     kernel's specs) so their factors resolve as local references (D7.3).
     ``arbitrary_amplitudes`` routes t-amplitude accessors through
+
+    ``omp_collapse`` > 0 prefixes the free-index nest with
+    ``#pragma omp parallel for collapse(N) schedule(static)``. Safe because each
+    nest writes one disjoint ``result(free...)`` slice per iteration and
+    accumulates into a thread-private ``acc`` -- no cross-thread reduction, which
+    is what made the DFT J/K builds bitwise thread-invariant, and what the DFT
+    grid reduction (summed in completion order) did not have.
+
+    **3 is the value that was MEASURED**, not the maximum available: the outer
+    index alone has only ``no`` = 5 trips on every reachable system, so a bare
+    ``parallel for`` gives 1-2 iterations per thread. collapse(3) gives 125
+    chunks against collapse(2)'s 25, worth a consistent ~4 percent (measured).
+    Default 0 keeps the emit byte-identical.
     ``.tensor(rank)(...)`` for the arbitrary-order runtime type (rank ≥ 4)."""
     # U3b.2a: the per-index spin map, for spin-resolved loop bounds. An `Index`
     # carries only a space (occ/vir) -- the U1 bridge drops spin by design -- so
@@ -687,6 +960,10 @@ def emit_planck_term(
         summed = list(term.summed_indices)
         factors = term.factors
 
+    if omp_collapse > 0 and len(free) >= omp_collapse:
+        lines.append(
+            f"{pad}#pragma omp parallel for collapse({omp_collapse}) schedule(static)"
+        )
     for idx in free:
         lines.append(
             f"{pad}for (int {idx.name} = 0; {idx.name} < {_loop_bound(idx, index_spins.get(idx.name))}; ++{idx.name})"
@@ -694,16 +971,8 @@ def emit_planck_term(
 
     lines.append(f"{pad}{{")
 
-    sign = 1
-    factor_exprs: list[str] = []
-    for factor in factors:
-        factor_sign, factor_expr = _map_factor(
-            factor, intermediate_names, arbitrary_amplitudes)
-        sign *= factor_sign
-        factor_exprs.append(factor_expr)
-
-    coeff = term.coeff * sign
-    product = " * ".join(factor_exprs) if factor_exprs else "1.0"
+    coeff_product = _term_coeff_product(
+        term, factors, intermediate_names, arbitrary_amplitudes)
 
     target = _target_expr(lhs, free)
 
@@ -713,10 +982,10 @@ def emit_planck_term(
             lines.append(
                 f"{pad}    for (int {idx.name} = 0; {idx.name} < {_loop_bound(idx, index_spins.get(idx.name))}; ++{idx.name})"
             )
-        lines.append(f"{pad}        acc += {_coeff_literal(coeff)}{product};")
+        lines.append(f"{pad}        acc += {coeff_product};")
         lines.append(f"{pad}    {target} += acc;")
     else:
-        lines.append(f"{pad}    {target} += {_coeff_literal(coeff)}{product};")
+        lines.append(f"{pad}    {target} += {coeff_product};")
 
     lines.append(f"{pad}}}")
     return "\n".join(lines)
@@ -940,7 +1209,22 @@ def _emit_kernel(
             if factor.name in intermediate_map and factor.name not in seen_intermediates:
                 seen_intermediates.add(factor.name)
                 required_intermediates.append(intermediate_map[factor.name])
-    if required_intermediates:
+    emitted_terms: Sequence[AlgebraTerm | RestrictedClosedShellTerm]
+    emitted_terms = lowered_terms if lowered_terms else terms
+    intermediate_names = frozenset(intermediate_map)
+    arbitrary = amplitude_type == "ArbitraryOrderRCCAmplitudes"
+    chunked = result_rank > 0 and len(emitted_terms) > _KERNEL_CHUNK_TERMS
+
+    # Emit these ONLY on the inline path. The chunked path builds the same
+    # operators into the `<kernel>_ops` struct and passes that to the parts, so
+    # emitting them here too built every operator TWICE -- and the locals were
+    # then never referenced, because the parts read `ops`. Pure dead work: H5
+    # added the struct hoist without removing the emission it superseded.
+    # Measured on HF/6-31G rank 3 (88 operators): 4.9 s serial, 4.3 s at 4
+    # threads, ~6 % of the solve. It scales with operator count, so rank 4 (894)
+    # is worth more. Removing them changes no energy -- that they were unused is
+    # exactly why.
+    if required_intermediates and not chunked:
         lines.append("")
         lines.append("    // Build reused intermediates once for this kernel")
         for spec in required_intermediates:
@@ -950,21 +1234,19 @@ def _emit_kernel(
             )
     lines.append("")
     lines.append(f"    // {target} kernel ({len(terms)} terms)")
-    emitted_terms: Sequence[AlgebraTerm | RestrictedClosedShellTerm]
-    emitted_terms = lowered_terms if lowered_terms else terms
-    intermediate_names = frozenset(intermediate_map)
-    arbitrary = amplitude_type == "ArbitraryOrderRCCAmplitudes"
 
     # Large kernels (the spin-adapted CCSDTQ quadruples residuals are ~5000
     # statements each) are super-linear to optimize as one function -- an -O3
     # compile of the containing TU takes 40+ min. Split them into `_partN`
     # sub-functions each accumulating a slice of the terms into `result` (passed
     # by reference); the compiler then optimizes N bounded functions in ~linear
-    # total time. Small kernels stay inline (byte-identical). The intermediate
-    # builds and amplitude-view bindings are re-emitted per part -- cheap, local,
-    # and keeps each part self-contained. `result_rank == 0` (energy) stays inline
+    # total time. Small kernels stay inline (byte-identical). Amplitude-view
+    # bindings are re-emitted per part -- cheap, local, and keeps each part
+    # self-contained; the intermediate BUILDS are not (H5 hoisted them into a
+    # `<kernel>_ops` struct built once and passed by `const&`).
+    # `result_rank == 0` (energy) stays inline
     # (a scalar accumulator can't be passed the same way and is always tiny).
-    if result_rank > 0 and len(emitted_terms) > _KERNEL_CHUNK_TERMS:
+    if chunked:
         return _emit_chunked_kernel(
             method, target, lines, emitted_terms, result_type, free_indices,
             denominator_type, amplitude_type, required_intermediates,
@@ -977,13 +1259,9 @@ def _emit_kernel(
         if bindings:
             lines.append("")
             lines.extend(bindings)
-    for i, term in enumerate(emitted_terms, start=1):
-        lines.append(f"    // Term {i}")
-        lines.append(emit_planck_term(
-            term, lhs="result", indent=4,
-            intermediate_names=intermediate_names,
-            arbitrary_amplitudes=arbitrary, ucc=ucc))
-        lines.append("")
+    lines.extend(_emit_terms(
+        emitted_terms, intermediate_names, arbitrary, ucc, _fuse_loops_setting(),
+        omp_collapse=_omp_collapse_setting()))
     lines.append("    return result;")
     lines.append("}")
     return "\n".join(lines)
@@ -1007,9 +1285,49 @@ def _emit_chunked_kernel(
     each part, and returns it. Keeps per-function body size bounded so any -O
     level compiles in ~linear time. See _emit_kernel for why."""
     kernel = _kernel_name(method, target, ucc)
+
+    # F3: with fusion on, reorder so each loop-signature group is CONTIGUOUS
+    # before slicing into parts. Chunks are contiguous slices, so an unsorted
+    # order would split a group across two `_partN` functions and silently
+    # un-fuse most of it -- the fusion would still be "applied" and buy nothing.
+    # Reordering is safe because every term accumulates into `result` with `+=`;
+    # what it does change is floating-point accumulation order, which is exactly
+    # what the F3 bit-identical-energy gate is there to catch.
+    fuse = _fuse_loops_setting()
+    if fuse > 0:
+        groups = group_terms_by_loop_signature(emitted_terms)
+        ranked = sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[1][0]))
+        order = [i for _, positions in ranked for i in positions]
+        emitted_terms = [emitted_terms[i] for i in order]
+
     n_parts = (len(emitted_terms) + _KERNEL_CHUNK_TERMS - 1) // _KERNEL_CHUNK_TERMS
 
+    # H5 (docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md): build each dressed operator
+    # ONCE and pass it to the parts, instead of every part rebuilding the whole set.
+    #
+    # The comment this replaces called the per-part rebuild "cheap". It was, for an
+    # UNDRESSED emit, where `required_intermediates` is empty. Dressing populated
+    # that list and nobody re-measured: on the rank-3 triples kernel it emitted 1080
+    # builder calls for 270 distinct operators -- 75% duplication -- and a `sample`
+    # profile put 67.7% of total runtime in `build_W_*`.
+    #
+    # A struct rather than 270 parameters: it keeps each part's signature stable as
+    # the operator set changes, and one `const&` costs nothing at the call.
+    ops_struct = f"{kernel}_ops" if required_intermediates else None
     out: list[str] = []
+    if ops_struct:
+        out.append(f"struct {ops_struct}")
+        out.append("{")
+        for spec in required_intermediates:
+            # `_tensor_type(spec.rank)` is the same expression the builder's own
+            # definition uses for its return type (see `_emit_intermediate_builder`),
+            # so the struct member and the builder cannot drift. Preferred over
+            # `decltype(...)`, which would drag `<utility>` into every generated TU
+            # for no benefit.
+            out.append(f"    {_tensor_type(spec.rank)} {spec.name};")
+        out.append("};")
+        out.append("")
+
     for p in range(n_parts):
         chunk = emitted_terms[p * _KERNEL_CHUNK_TERMS:(p + 1) * _KERNEL_CHUNK_TERMS]
         out.append(f"static void {kernel}_part{p}(")
@@ -1017,7 +1335,9 @@ def _emit_chunked_kernel(
         out.append("    const CanonicalRHFCCReference &reference,")
         out.append("    const TensorCCBlockCache &mo_blocks,")
         out.append(f"    const {denominator_type} &denominators,")
-        out.append(f"    const {amplitude_type} &amplitudes)")
+        out.append(f"    const {amplitude_type} &amplitudes{',' if ops_struct else ')'}")
+        if ops_struct:
+            out.append(f"    const {ops_struct} &ops)")
         out.append("{")
         out.extend(_orbital_count_preamble(ucc))
         if ucc:
@@ -1025,20 +1345,18 @@ def _emit_chunked_kernel(
         else:
             out.append("    (void)no; (void)nv;")
         if required_intermediates:
+            # Bound as references into the hoisted struct: the term bodies below
+            # reference operators by bare name, so this keeps them unchanged.
             for spec in required_intermediates:
-                out.append(
-                    f"    const auto {spec.name} = {_builder_symbol(method, spec.name)}("
-                    "reference, mo_blocks, denominators, amplitudes);")
+                out.append(f"    const auto &{spec.name} = ops.{spec.name};")
         if arbitrary:
             bindings = (_amplitude_view_bindings(chunk)
                         + _eri_view_bindings(chunk)
                         + _fock_view_bindings(chunk))
             out.extend(bindings)
-        for i, term in enumerate(chunk, start=1):
-            out.append(emit_planck_term(
-                term, lhs="result", indent=4,
-                intermediate_names=intermediate_names,
-                arbitrary_amplitudes=arbitrary, ucc=ucc))
+        out.extend(_emit_terms(
+            chunk, intermediate_names, arbitrary, ucc, fuse, annotate=False,
+            omp_collapse=_omp_collapse_setting()))
         out.append("}")
         out.append("")
 
@@ -1046,9 +1364,18 @@ def _emit_chunked_kernel(
     # the signature + result allocation already; strip its trailing setup we don't
     # reuse (the parts do their own no/nv + intermediates) by appending calls.
     body = list(header_lines)
+    if ops_struct:
+        body.append(f"    const {ops_struct} ops{{")
+        for spec in required_intermediates:
+            body.append(
+                f"        {_builder_symbol(method, spec.name)}("
+                "reference, mo_blocks, denominators, amplitudes),")
+        body.append("    };")
+    call_tail = ", ops);" if ops_struct else ");"
     for p in range(n_parts):
         body.append(
-            f"    {kernel}_part{p}(result, reference, mo_blocks, denominators, amplitudes);")
+            f"    {kernel}_part{p}(result, reference, mo_blocks, denominators, amplitudes"
+            f"{call_tail}")
     body.append("    return result;")
     body.append("}")
     return "\n".join(out + body)

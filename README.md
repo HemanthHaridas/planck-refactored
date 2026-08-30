@@ -55,13 +55,27 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 
 | Dependency | Version | Source |
 |---|---|---|
-| C++ compiler | C++23 | GCC ≥ 13 or Clang ≥ 17 |
-| CMake | ≥ 3.15 | System package manager |
-| Eigen | 3.4.0 | Fetched automatically |
+| C++ compiler | C++23 (`std::expected`) | GCC ≥ 13 or Clang ≥ 17; AppleClang 21 verified |
+| CMake | ≥ 3.5 | System package manager |
+| Python 3 | ≥ 3.10 | Optional but recommended — see below |
+| Eigen | 3.4.0 | Fetched automatically at configure time |
 | libmsym | latest | Fetched automatically |
-| libxc | latest | Fetched automatically (required for `planck-dft`) |
-| basis-set-exchange | any | `pip install basis-set-exchange` (required for basis set fetching) |
+| libxc | latest | Fetched automatically (`planck-dft` only) |
 | OpenMP | any | Optional; system package manager |
+
+<p align="justify">
+Python 3 is used at build time to run <code>ccgen</code>, which generates the
+coupled-cluster kernels. It needs only the standard library — no NumPy, no
+third-party packages. If CMake cannot find an interpreter the build still
+succeeds and everything except the generated CC kernels is available. The ccgen
+<em>test suite</em> has heavier optional dependencies (NumPy, and PySCF for the
+cross-code validation gates); those are for development, not for building.
+</p>
+
+<p align="justify">
+The first configure clones Eigen and libmsym over the network, so it is not
+offline-capable out of the box. See <em>Offline or air-gapped builds</em> below.
+</p>
 
 ### Installation
 
@@ -79,30 +93,35 @@ cmake -B build .
 ```
 
 <p align="justify">
-To disable OpenMP:
+A successful configure ends with a line reporting what ccgen will emit, for
+example:
 </p>
 
-```bash
-cmake -B build . -DUSE_OPENMP=OFF
 ```
-
-<p align="justify">
-To set a custom install prefix:
-</p>
-
-```bash
-cmake -B build . -DCMAKE_INSTALL_PREFIX=/path/to/prefix
+-- ccgen     : emitting Planck CC kernels up to rank 3 [ccsd;ccsdt] via diagram engine
 ```
 
 ### 3. Build
 
 ```bash
-cmake --build build
+cmake --build build -j4
 ```
 
 <p align="justify">
-The first build fetches and compiles Eigen and libmsym automatically. Subsequent builds are incremental.
+The first build also compiles Eigen, libmsym, and libxc. Subsequent builds are
+incremental. Use a modest job count: the generated coupled-cluster translation
+units are large, and a full-width build can be disruptive on a workstation.
 </p>
+
+<p align="justify">
+A default build produces three executables in <code>build/</code>:
+</p>
+
+| Binary | Purpose |
+|---|---|
+| `hartree-fock` | RHF/UHF/ROHF SCF, MP2, coupled cluster, CASSCF/RASSCF/FCI, gradients, geomopt, frequencies |
+| `planck-dft` | Kohn-Sham DFT (RKS/UKS), TDDFT, DFT gradients and frequencies |
+| `chkdump` | Checkpoint inspector (`BUILD_TOOLS=ON` by default) |
 
 ### 4. Install (optional)
 
@@ -111,14 +130,155 @@ cmake --install build
 ```
 
 <p align="justify">
-This installs the `hartree-fock` executable to `<prefix>/bin/` and the basis set files to `<prefix>/share/basis-sets/`.
+This installs the executables to <code>&lt;prefix&gt;/bin/</code> and the basis
+sets to <code>&lt;prefix&gt;/share/basis-sets/</code>. The default prefix is
+<code>/usr/local</code>; override it at configure time:
 </p>
+
+```bash
+cmake -B build . -DCMAKE_INSTALL_PREFIX=/path/to/prefix
+```
 
 ### 5. Run
 
 ```bash
-./build/hartree-fock molecule.hfinp   # HF / post-HF calculation
-./build/planck-dft   molecule.hfinp   # Kohn-Sham DFT calculation
+export BASIS_PATH=$PWD/basis-sets          # see the note below
+
+./build/hartree-fock molecule.hfinp        # HF / post-HF calculation
+./build/planck-dft   molecule.hfinp        # Kohn-Sham DFT calculation
+./build/chkdump      molecule.hfchk        # inspect a checkpoint
+```
+
+<p align="justify">
+<strong>Set <code>BASIS_PATH</code> when running from the build tree.</strong>
+The compiled-in default basis directory is derived from the install prefix, so
+an uninstalled binary looks under the prefix and reports:
+</p>
+
+```
+[ERR] Basis Parsing Failed : Cannot open basis file: /usr/local/install/share/basis-sets/sto-3g
+```
+
+<p align="justify">
+Setting <code>BASIS_PATH</code> to the in-tree <code>basis-sets/</code>
+directory overrides it. (Note the stray <code>install/</code> segment in that
+path: the compiled-in default and the <code>install()</code> destination do not
+currently agree, so <code>BASIS_PATH</code> is also the reliable route after
+<code>cmake --install</code>.)
+</p>
+
+### Build options
+
+<p align="justify">
+All options are set at configure time, e.g.
+<code>cmake -B build . -DPLANCK_CC_MAXORDER=4</code>. The defaults are the
+supported configuration; the coupled-cluster options mainly trade generation and
+compile time for higher excitation ranks.
+</p>
+
+| Option | Default | Effect |
+|---|---|---|
+| `USE_OPENMP` | `ON` | OpenMP parallelism. Falls back cleanly if the compiler has no OpenMP — check the configure log for `Could NOT find OpenMP`, since a silent fallback leaves every pragma inert. |
+| `USE_CUDA` | `OFF` | CUDA GPU acceleration (requires the CUDA toolkit). |
+| `BUILD_TOOLS` | `ON` | Build `chkdump`. |
+| `BUILD_MPI` | `OFF` | Build the unified `planck-mpi` front end. |
+| `CMAKE_BUILD_TYPE` | *(empty)* | **Set this explicitly to `Release` for any timing or production run.** An empty value drops `-DNDEBUG`, which re-enables the CC tensor bounds assertions and makes benchmarks meaningless. |
+
+#### Coupled-cluster kernel generation (ccgen)
+
+| Option | Default | Effect |
+|---|---|---|
+| `PLANCK_CC_MAXORDER` | `3` | Highest excitation rank to emit, 2–6 (2 = CCSD, 3 = CCSDT, 4 = CCSDTQ). Higher ranks cost substantial generation and compile time. |
+| `PLANCK_CC_ENGINE` | `diagram` | Equation generator: `diagram` (default, ~200× faster at high rank) or `wick` (textbook). Residual-equal; gated by a wick-vs-diagram equality test. |
+| `PLANCK_CC_SPIN_ADAPT` | `ON` | Emit spatial (spin-adapted) RCC kernels. **Leave this on.** With it off the generated correlation energy is ~4× wrong — the option exists only to reproduce that historical emit. |
+| `PLANCK_CC_DRESS_OPERATORS` | `OFF` | Emit dressed CC kernels (W/τ intermediates) instead of the flat residual. Measured 3.1–3.6× faster solves; costs ~9 s of generation at rank 3, ~62 s at rank 4. |
+| `PLANCK_CC_DRESSING` | `derived` | Which dressed-operator route, when dressing is on. `derived` is the validated one; `recognized` is retired and produces wrong kernels. Ignored unless `PLANCK_CC_DRESS_OPERATORS=ON`. |
+| `PLANCK_CC_ARBITRARY_LOWER_RANKS` | `OFF` | Also emit rank < 4 methods in arbitrary-order form, for cross-rank amplitude restart and the generated rank-3 route. |
+| `PLANCK_CC_UCC` | `OFF` | Also emit unrestricted (spin-blocked) UCC kernels. Roughly triples generated-kernel compile time. |
+| `PLANCK_CC_INCLUDE_INTERMEDIATES` | `OFF` | Emit ccgen CSE intermediate builders. Mutually exclusive with dressing. |
+| `PLANCK_CC_INTERMEDIATE_THRESHOLD` | `5` | Minimum usage count for an extracted intermediate. |
+
+<p align="justify">
+Example — the fastest validated generated coupled-cluster configuration:
+</p>
+
+```bash
+cmake -B build . \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DPLANCK_CC_DRESS_OPERATORS=ON \
+  -DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON
+cmake --build build -j4
+```
+
+##### Environment variables read at code-generation time
+
+<p align="justify">
+Two ccgen knobs are environment variables read when the kernels are generated,
+not CMake options. They must therefore be set on the <em>build</em> command, and
+changing one requires regenerating (touch a ccgen source, or delete
+<code>build/generated/cc/</code>).
+</p>
+
+| Variable | Default | Effect |
+|---|---|---|
+| `CCGEN_OMP_COLLAPSE` | unset (`0`) | Emit `#pragma omp parallel for collapse(N) schedule(static)` on each residual loop nest. **`3` is the measured value: 3.22× at 4 threads**, with energies bitwise identical across thread counts. `2` also works but is ~4 % slower. `0` emits no pragma. |
+| `CCGEN_FUSE_LOOPS` | unset (`0`) | Fuse the N largest loop-signature groups into one nest each. Measured ~0 % at every size tested; kept as a compile-time and code-size lever, not a speed one. |
+
+```bash
+CCGEN_OMP_COLLAPSE=3 cmake --build build -j4     # threaded CC kernels
+```
+
+<p align="justify">
+Threading the CC kernels needs OpenMP in the build (<code>USE_OPENMP=ON</code>,
+the default — but check the configure log actually found it). It is off by
+default because it is new; the generated kernels are otherwise byte-identical
+without it. Full measurements and the determinism verification are in
+<code>docs/CCGEN_CC_OPENMP.md</code>.
+</p>
+
+### Offline or air-gapped builds
+
+<p align="justify">
+The first configure clones Eigen from GitLab and libmsym from GitHub. If the
+network is unavailable — or the remote is temporarily refusing connections,
+which does happen — the configure fails with
+<code>Failed to clone repository</code>. Point CMake at a local Eigen checkout
+instead:
+</p>
+
+```bash
+cmake -B build . -DFETCHCONTENT_SOURCE_DIR_EIGEN=/path/to/eigen
+```
+
+<p align="justify">
+An Eigen tree from a previous build works, e.g.
+<code>-DFETCHCONTENT_SOURCE_DIR_EIGEN=$PWD/other-build/_deps/eigen-src</code>.
+</p>
+
+### Running the tests
+
+<p align="justify">
+The regression runner does not set <code>BASIS_PATH</code> itself, so export it
+first or every case fails at basis-set loading:
+</p>
+
+```bash
+export BASIS_PATH=$PWD/basis-sets
+
+python3 tests/run_regressions.py --build-dir build --suite smoke
+python3 tests/run_regressions.py --build-dir build --suite extended
+python3 tests/run_regressions.py --list                     # enumerate cases
+python3 tests/run_regressions.py --build-dir build --suite extended --case <id>
+```
+
+<p align="justify">
+Cases that need a non-default build option are skipped rather than failed, and
+the skip names the option. The ccgen Python suite is separate, and does not need
+a build:
+</p>
+
+```bash
+cd python && python3 -m pytest ccgen/tests/ -q
 ```
 
 ### Input File Format

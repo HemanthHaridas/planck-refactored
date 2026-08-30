@@ -95,9 +95,13 @@ things that used to gate that have moved: **spin adaptation landed** (spatial RC
 kernels, validated to FCI at rank 4 — `CCGEN_CCSDTQ_MULTISECTOR.md`), and the
 **dressing route was retired**, so FLOP scaling is now owned by the contraction-order
 work rather than by dressed operators (`CCGEN_DRESSING_AND_SPIN_ADAPTATION.md`,
-`CCGEN_KERNEL_SCALING_SCOPE.md`). What remains is cost: the generated path is
-~500× slower than the hand-written one at rank 3
-(`CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md`). Generator correctness — which this
+`CCGEN_KERNEL_SCALING_SCOPE.md`). What remains is cost, and it is smaller and better
+understood than the carried "~500x slower at rank 3" implies: that figure is a
+ratio across a **solver boundary** (different amplitude storage, 40 vs 16
+iterations on CH4), not a defect size. Profiling the generated path against itself
+found and fixed two thirds of its kernel time (redundant per-chunk operator
+rebuilds, 1.76x) and identified the largest remaining lever as CC having **no
+OpenMP at all** (modelled 3.86x). See `CCGEN_ARBITRARY_HARNESS_COST.md`. Generator correctness — which this
 document establishes through CCSDTQ — is therefore already load-bearing for the
 generated production route, which is why the validation here is built to the
 standard it is.

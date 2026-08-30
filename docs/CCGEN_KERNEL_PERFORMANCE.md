@@ -116,7 +116,13 @@ fixing only the fixed-rank accessors moved rank 3 by 76× and rank 4 by nothing 
    `docs/CCGEN_TENSOR_ACCESSOR.md` for the invariants it had to preserve.
 2. **Re-measure the ratio at production `o`/`v` (P3).** ← now the next step. With the accessor
    fixed, the remaining 22× is whatever is genuinely structural. H1 may reappear here.
-3. **Only then consider fusing / consuming the IR hints.** `tensor_ir.py` defines `BLASHint`
+3. **Only then consider fusing / consuming the IR hints.** **Both settled
+   2026-08-29** (`CCGEN_WHY_GENERATED_IS_SLOW.md`): fusion is built and measures
+   **~0 %** at three sizes, twice; and `--dressing derived` already eliminates the
+   terms `_optimal_contraction_order` targets, making it probably redundant. The
+   levers that did pay were found by profiling, not modelling — redundant operator
+   construction (67.7 % of the kernel, fixed for **1.76x**) and the absence of any
+   OpenMP in CC (modelled **3.86x**). Original text follows. `tensor_ir.py` defines `BLASHint`
    (`:66`), `_detect_gemm` (`:198`), and `_optimal_contraction_order` (`:283`), and
    `grep BLASHint python/ccgen/emit/planck_tensor_cpp.py` **returns nothing** — the emitter
    discards all of it. Real, but it was not the bottleneck, and the measurement above says fusion
@@ -135,8 +141,17 @@ rank's output re-arms the defect at every other rank.
 
   Since then, **derivation dressing** has been wired and measured at 3.12×/3.61× end-to-end. It
   addresses the same H3 by a different mechanism than the `_optimal_contraction_order`
-  consumption that document recommends, so **re-run that ladder under `--dressing derived` before
-  attempting the emitter change** — the two fixes may overlap.
+  consumption that document recommends, so the two may overlap.
+
+  **Settling that by measurement was attempted and abandoned (2026-08-29).** `PLANCK_CC_T3_TIME`
+  cannot fire in any build (it is on the branch the rank-3 representation fix rerouted away from),
+  and a replacement probe established that the hand-written and generated arms have **no
+  residual-level agreement gate** — distinct solvers, distinct amplitude representations, both
+  correct, no shared state where residuals are elementwise comparable. What remains measurable is
+  whole-iteration timing, which describes *"solver iteration"* rather than *"triples kernel"*.
+  **Code-level comparison and FLOP estimates are the actionable levers; the measurement route is
+  closed.**
+
 - **Rank 4 is still subject to the `-O1` registry pin** (`CMakeLists.txt:402`), which the rank-3
   path is not. Now that the accessor no longer dominates, that asymmetry is worth re-checking —
   the pin exists because a ~230k-line TU is super-linear to optimize at `-O3`, and the standing

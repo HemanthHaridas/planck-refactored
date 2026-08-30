@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <format>
 
@@ -186,14 +187,38 @@ namespace HartreeFock::Correlation::CC
             kernels.is_all_sectors()
                 ? 0u
                 : static_cast<std::size_t>(state.max_excitation_rank));
+        // H0b (docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md): per-rank attribution.
+        // H0a showed the residual evaluation is ~100% of the iteration; this says
+        // WHICH rank, which is what separates H1 (the rank-3 kernel dominates) from
+        // H2 (the harness pays for lower ranks it need not recompute).
+        //
+        // Behind PLANCK_CC_RANK_TIME because unlike H0a's three clock reads this
+        // one logs per rank per iteration -- useful while profiling, noise in a
+        // production log. Inert when unset.
+        const bool time_ranks = [] {
+            const char *v = std::getenv("PLANCK_CC_RANK_TIME");
+            return v != nullptr && v[0] != '\0' && v[0] != '0';
+        }();
         for (int rank = 1; !kernels.is_all_sectors() && rank <= state.max_excitation_rank; ++rank)
         {
+            const auto rank_start = std::chrono::steady_clock::now();
             const auto &kernel = kernels.residuals_by_rank[static_cast<std::size_t>(rank - 1)];
             TensorND tensor = kernel(
                 state.reference,
                 state.mo_blocks,
                 state.denominators,
                 state.amplitudes);
+            if (time_ranks)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info, "CC[RANK-TIME] :",
+                    std::format(
+                        "rank {} kernel t={:.4f}s elems={}",
+                        rank,
+                        std::chrono::duration<double>(
+                            std::chrono::steady_clock::now() - rank_start).count(),
+                        tensor.data.size()));
+            }
             auto denominator = state.denominators.tensor(rank);
             if (!denominator)
             {
@@ -278,10 +303,20 @@ namespace HartreeFock::Correlation::CC
         {
             const auto iter_start = std::chrono::steady_clock::now();
 
+            // H0a (docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md): attribute the
+            // iteration to its three phases. The loop already had exactly these
+            // three delimited calls and already reported the total as `t=`; these
+            // brackets only split what was being measured as one number.
+            //
+            // Always on, not behind an env var: three clock reads per iteration
+            // against a residual evaluation measured in SECONDS is unmeasurable
+            // overhead, and a profile that is present in every log is worth more
+            // than one that has to be re-enabled to answer the next question.
             auto residuals_res =
                 evaluate_generated_arbitrary_order_residuals(result.state, kernels);
             if (!residuals_res)
                 return std::unexpected(residuals_res.error());
+            const auto after_residuals = std::chrono::steady_clock::now();
 
             auto metrics_res = update_amplitudes_with_jacobi_diis(
                 result.state.amplitudes,
@@ -292,6 +327,7 @@ namespace HartreeFock::Correlation::CC
                 use_diis);
             if (!metrics_res)
                 return std::unexpected(metrics_res.error());
+            const auto after_update = std::chrono::steady_clock::now();
 
             auto energy_res = evaluate_generated_arbitrary_order_energy(
                 result.state,
@@ -299,6 +335,7 @@ namespace HartreeFock::Correlation::CC
                 "run_generated_arbitrary_order_iterations");
             if (!energy_res)
                 return std::unexpected(energy_res.error());
+            const auto after_energy = std::chrono::steady_clock::now();
             const double energy = *energy_res;
 
             result.iterations = iter;
@@ -314,9 +351,13 @@ namespace HartreeFock::Correlation::CC
                 HartreeFock::LogLevel::Info,
                 log_tag + " Iter :",
                 std::format(
-                    "{:3d}  E_corr={:.10f}  dE={:+.3e}  rms(res)={:.3e}  rms(step)={:.3e}  diis={}  t={:.3f}s",
+                    "{:3d}  E_corr={:.10f}  dE={:+.3e}  rms(res)={:.3e}  rms(step)={:.3e}  diis={}  "
+                    "t={:.3f}s  t_res={:.3f}s t_upd={:.3f}s t_ene={:.3f}s",
                     iter, energy, result.energy_change, result.metrics.residual_rms,
-                    result.metrics.update_rms, diis.size(), time_sec));
+                    result.metrics.update_rms, diis.size(), time_sec,
+                    std::chrono::duration<double>(after_residuals - iter_start).count(),
+                    std::chrono::duration<double>(after_update - after_residuals).count(),
+                    std::chrono::duration<double>(after_energy - after_update).count()));
 
             if (std::abs(result.energy_change) < tol_energy &&
                 result.metrics.residual_rms < tol_residual)

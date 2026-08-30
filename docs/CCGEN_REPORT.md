@@ -34,6 +34,16 @@ and *derives* the reused intermediates, which obey a rank-locality theorem and
 are cumulative across the CC hierarchy. (7) **Production:** the derived-operator
 route is wired end to end and measured at **3.12×/3.61× wall-clock** against the
 undressed generated kernel, with energies matching to 2e-10 and exactly.
+(8) **Where the production cost actually is:** profiling the generated path against
+itself put **98.8 %** of an iteration in a single kernel call and **67.7 %** of that
+in operator builders being rebuilt once per emitted chunk — fixed for a further
+**1.76×** with bitwise-identical energies — and identified the largest remaining
+lever as the fact that the coupled-cluster code carries **no OpenMP at all**.
+
+Two cost models built from a census of the emitted code preceded that profile and
+went **one for two**; the profile found in twenty minutes a defect neither could
+see, because neither modelled work that should not happen at all. *Profile before
+modelling* is the transferable result.
 
 A second thread runs through the whole record and is reported here as a result in
 its own right: **five separate defects in this system converged, self-consistently,
@@ -687,14 +697,49 @@ before that emitter change is attempted; the two fixes may overlap rather than a
 
 ### 10.4 What the production path still costs
 
-The generated arbitrary-order harness is **~500× slower per iteration** than the
-hand-written tensor backend at rank 3 (CH4: ~7.0 s against ~0.008 s), clawing back
-~1.7× by converging in fewer iterations (14 against 24). Four hypotheses are on
-record and **none is yet measured** — the emitted nest count, the harness
-evaluating every rank every iteration, the absence of intermediates on the
-spin-adapted path, and dense DIIS packing. A profile is the blocking step, on the
-rule that emerged from the rank-3 investigation: **a profile decides, not a
-reading** — five hypotheses formed by inspection there were all wrong.
+**Profiled 2026-08-29, and the four standing hypotheses resolved to one defect.**
+
+First, a framing correction the profiling forced: the carried "~500× slower per
+iteration" is **a ratio across a solver boundary, not a defect size.** The two
+paths are different algorithms — wedge-packed against dense amplitudes, cheap
+dressed intermediates against a full generated kernel per rank, **40 against 16
+iterations on CH4.** It states which production path is cheaper; it does not
+bound what is recoverable.
+
+Measured, generated-against-generated:
+
+| | share | outcome |
+|---|---|---|
+| the harness itself (all-rank loop, DIIS, energy) | **~1 %** | three of the four hypotheses **dead** |
+| one call to the rank-3 kernel | **98.8 %** | the fourth confirmed |
+| …of which `build_W_*` operator builders | **67.7 %** | **fixed — 1.76×** |
+
+The builders were being rebuilt **once per emitted chunk**: 1112 calls for 278
+distinct operators at rank 3, and **16 092 for 894 at rank 4**, the duplication
+factor equalling the part count — so the waste scaled with kernel size, worst at
+the production target. The emitter had recorded the rebuilds as "cheap, local, and
+keeps each part self-contained", which was true for an *undressed* emit with no
+operators to rebuild and was never re-examined once dressing populated the list.
+Hoisting them into a single per-kernel struct gives **CH4 29.59 s → 16.81 s**, with
+`E_corr` bitwise identical and the rank-4 translation unit down 12.8 → 10.5 MB.
+
+**The largest remaining lever is that CC has no OpenMP at all** — none in the
+hand-written solvers, none in the generated kernels, none emitted. A CH4 solve with
+`OMP_NUM_THREADS=8` runs at 98.8 % CPU: one core busy, seven idle, while every
+other hot path in the code is threaded. Amdahl on the measured split gives
+**3.86× at four cores**, and both sites are reduction-free — builders write private
+tensors, residual nests write disjoint slices — which is the shape that made the
+DFT J/K builds bitwise thread-invariant rather than the grid reduction that caused
+the historical jitter.
+
+**Method, stated because it is the transferable part.** Two cost models built from
+a census of the emitted C++ went **one for two**: contraction order was a real 3.6×,
+loop fusion was a confident 32× prediction that measured at ~0 % — twice, including
+after a later fix nearly doubled its Amdahl leverage. The profile cost about twenty
+minutes and found a defect neither model could see, because **neither modelled work
+that should not happen at all**: both priced the residual's arithmetic while two
+thirds of the time was redundant operator construction outside it. The rank-3
+investigation's rule — *a profile decides, not a reading* — held again.
 
 Compile time is a real cost of its own. `generated_kernel_registry.cpp` is pinned
 to `-O1` because a ~230k-line TU is super-linear to optimize; the dressed CCSDTQ TU
@@ -754,14 +799,20 @@ one step, after an entire investigation had assumed it.
 - **Symbolic cost models.** FLOP degree, memory footprint and the stride metric are
   computed from index-space sizes. §10.3 is the first wall-clock validation of any
   of it, on two points.
-- **The scaling ladder has not been re-run under dressing**, so whether the
-  derivation route flattens the exponents or shifts them is unknown, and the
-  emitter's discarded `_optimal_contraction_order` should not be consumed until it
-  is.
-- **The memory-bound hypothesis is untested, not refuted.** The whole reachable
-  ladder stays under 0.85 MiB `t3`, inside L2, so a cache transition cannot fire on
-  it. Testing needs cc-pVDZ-class systems; at ~50× slowdown that run should be
-  time-boxed.
+- **The scaling ladder was never re-run under dressing, and is now unlikely to be
+  worth it.** The question it would settle — does dressing flatten the exponents or
+  shift them — was overtaken: profiling found the dominant cost was neither
+  contraction order nor traffic but redundant operator construction (§10.4). The
+  emitter's discarded `_optimal_contraction_order` targets terms `--dressing
+  derived` already eliminates, so consuming it is **probably redundant**; re-check
+  against a profile rather than the ladder.
+- **The memory-bound hypothesis is refuted at reachable sizes, not merely
+  untested.** Reducing the residual from 806 loop nests to 15 — a 54× cut in
+  traversals of the `o³v³` result — changed runtime by 0–3 % at three sizes
+  spanning 7× in `t3`, and again after a later fix nearly doubled the residual's
+  share of runtime. Consecutive nests over the same result hit the same cache
+  lines, so the traffic being modelled was already served from cache. It remains
+  untested only *above* L2, which needs cc-pVDZ-class systems.
 - **Rank 4 has no point on the ladder**, and carries an `-O1` registry pin rank 3
   does not. §10.1 already demonstrated rank 3 is not a proxy for rank 4.
 - **Dressed UCC is unbuilt.** The emitter rejects spin-blocked manifold names and
@@ -843,12 +894,12 @@ alternatives were tried and each of them held while the answer was wrong.
 | `CCGEN_UNRESTRICTED_CC.md`, `CCGEN_UCC_ERI_ANTISYMMETRY.md`, `CCGEN_UCC_NUMERIC_VALIDATION.md`, `CCGEN_GCC_TO_UCC_BRIDGE.md` | §6.4, §8 |
 | `CCGEN_HIGHER_OPERATOR_REUSE.md` | §9.1, §9.2 |
 | `CCGEN_TWO_DRESSING_ROUTES.md`, `CCGEN_DRESSING_AND_SPIN_ADAPTATION.md`, `CCGEN_DRESSING_COST.md`, `CCGEN_DRESSED_KERNEL_PIPELINE.md` | §9.3 |
-| `CCGEN_OPERATOR_IDENTITY_AND_REUSE.md`, `CCGEN_MERGE_TRANSPOSES_SCOPE.md` | §9.4 |
+| `CCGEN_OPERATOR_IDENTITY_AND_REUSE.md`, `CCGEN_MERGE_TRANSPOSES.md` | §9.4 |
 | `CCGEN_INTERMEDIATE_MEMORY_LOCALITY_SCOPE.md` | §9.5 |
 | `CCGEN_TENSOR_ACCESSOR.md`, `CCGEN_KERNEL_PERFORMANCE.md` | §10.1 |
 | `CCGEN_KERNEL_SCALING_SCOPE.md` | §10.2 |
 | `CCGEN_WIRING_THE_DERIVATION_ROUTE.md` | §2, §9.3, §10.3, §11 |
-| `CCGEN_RANK3_KERNEL_AND_SOLVER.md`, `CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md` | §10.4, §11 |
+| `CCGEN_RANK3_KERNEL_AND_SOLVER.md`, `CCGEN_ARBITRARY_HARNESS_COST.md` | §10.4, §11 |
 | `CCGEN_TEACHING_GUIDE.md` | §2 |
 
 ### Key references

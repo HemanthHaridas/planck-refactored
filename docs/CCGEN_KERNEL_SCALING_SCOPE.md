@@ -143,12 +143,30 @@ per-iteration work.
   grew slightly between the two (3.12 → 3.61) but with `o` and `v` both changing, which is exactly
   the degenerate-ladder trap recorded above.
 
-**The obvious follow-on: re-run this ladder's six points with `--dressing derived`.** The
-infrastructure now exists (`PLANCK_CC_DRESSING`, and `PLANCK_CC_T3_TIME` for the isolated residual
-timing). That would answer, on the ladder that was designed for it, whether the generated-vs-hand
-exponents `o^0.93 v^0.34` shrink under dressing or merely shift. **Do that before consuming
-`_optimal_contraction_order`** — if dressing already flattens the exponents, the two fixes overlap
-and the emitter change may be redundant rather than additive.
+**A re-run of this ladder under `--dressing derived` was attempted and
+ABANDONED (2026-08-29).** The reason is worth recording, because it bounds what
+this ladder can ever deliver.
+
+`PLANCK_CC_T3_TIME` cannot fire in any build — it sits in the
+`use_generated_kernels` branch that the rank-3 representation fix rerouted away
+from. A replacement three-arm probe was built and it established something more
+basic: **the hand-written and generated arms have no residual-level agreement
+gate.** They are distinct solvers with distinct amplitude representations, both
+individually correct (each converges to `E_corr = -0.0791116825` on CH4, PySCF to
+1.4e-08), with no shared intermediate state where their residuals are elementwise
+comparable. Four framings were tried and all failed; `restore` in particular
+belongs to a wedge-packed *amplitude* and annihilates a raw residual (2.0e+05),
+which `CCGEN_RANK3_KERNEL_AND_SOLVER.md:21-24` had already established.
+
+The only remaining comparison is whole-iteration timing validated by converged
+energy — which measures *"solver iteration"*, not *"triples kernel"*, since each
+arm's own overhead is inside it. That does not answer this document's question,
+and it cannot be quoted against the `o^4.87 v^4.52` fitted here.
+
+**So the actionable levers here are code-level comparison and FLOP estimates, and
+the measurement route is closed.** The recommendation below stands on the fit
+already in this document; do not reopen the dressed re-run expecting it to
+adjudicate.
 
 **One constraint carries over unchanged.** `choose_determinant_backstop` still gates which systems
 reach a generated kernel *by the hand-written route* — but not the generated one. `optimized`
@@ -157,6 +175,22 @@ the `nso > 16 || ndet > 10000` requirement recorded below applies to the hand-wr
 comparison only. That widens the set of usable ladder points on the generated side.
 
 ## What this makes worth doing
+
+**SETTLED 2026-08-29 — read this before acting on the paragraph below.** Both
+levers this document points at were built and measured
+(`CCGEN_WHY_GENERATED_IS_SLOW.md`):
+
+- **Contraction order is fixed by `--dressing derived`**, which eliminates the 391
+  four-deep `o⁵v⁵` terms `_optimal_contraction_order` would target — **measured
+  3.6x**. Consuming the IR hints is therefore **probably redundant**; re-check
+  before building it.
+- **Loop fusion is refuted at ~0 %**, twice: 806→15 nests changed runtime 0-3 %,
+  and again after a later fix raised the residual's share of runtime from 32 % to
+  55 %.
+
+What the profile found instead was **redundant operator construction** — 67.7 % of
+the kernel, fixed for **1.76x** — and that **CC has no OpenMP at all** (modelled
+3.86x). Neither was visible to a cost model.
 
 Per the outcome table below, this is the "grows polynomially" row: **consume
 `_optimal_contraction_order` in the emitter** (`python/ccgen/tensor_ir.py:283`, currently computed

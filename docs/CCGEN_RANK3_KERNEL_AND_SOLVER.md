@@ -141,7 +141,7 @@ per-iteration rather than convergence — the arbitrary harness converges in *fe
 *generated* configurations and mislabelled one as the hand-written baseline; "~180×" predates the
 tensor-accessor fix and never recorded its dimensions.
 
-Open, with a blocking profile step: `docs/CCGEN_ARBITRARY_HARNESS_COST_SCOPE.md`.
+Open, with a blocking profile step: `docs/CCGEN_ARBITRARY_HARNESS_COST.md`.
 
 ## Key code locations
 

@@ -1232,7 +1232,15 @@ def print_cpp_planck(
         # difference from `recognized`, and the reason the two run at different
         # points rather than sharing one call site.
         from .optimization.factorize import factorize_equations
-        eqs, dressed_intermediates = factorize_equations(eqs, spatial=spin_adapt)
+        # M4: merge_transposes is ON, not a knob. Transpose-equivalent operators
+        # fold onto one shared array; the call sites read it through a permutation
+        # rather than each building its own copy. Measured 1.42x (LiH) / 1.52x
+        # (CH4) with energies bitwise identical and iteration counts unchanged,
+        # and it shrinks the -O1-pinned registry TU 1.5x. No case was found where
+        # the unmerged form wins, so it gets no flag. See
+        # docs/CCGEN_MERGE_TRANSPOSES.md.
+        eqs, dressed_intermediates = factorize_equations(
+            eqs, spatial=spin_adapt, merge_transposes=True)
         dressed_intermediates = dressed_intermediates or None
 
     if dressed_intermediates is not None:
