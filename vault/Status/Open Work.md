@@ -43,6 +43,40 @@ truth for what remains.
   `BASIS_INSTALL_PATH`, or change the `install()` destination to match — they
   must agree. Documented as a workaround in the README meanwhile.
 
+## SCF convergence — the unclaimed 3x
+
+- **Iteration count triples with system size, and nothing is attacking it.**
+  Measured in the committed `scale.json` (HF/6-31g water chains, serial, same
+  basis and guess throughout): **30 iterations at nb=104 rising to 91 at
+  nb=416**. At a flat 30, nb=416 would take ~2065 s instead of 6263 s — a **3x
+  multiplier on total cost that no parallel or kernel work touches**. DFT shows
+  the same cliff earlier (13 iterations to nb=208, then 51 at nb=312) and
+  **fails to converge entirely at nb=416**.
+
+  This is the cheapest large win available, because the other two axes are known
+  and expensive: the ERI Fock build is ~200x slower than libcint with four
+  candidate optimizations each disproven by measurement
+  (`docs/ERI_PERFORMANCE_SCOPE.md` — closing it needs a different engine), and
+  MPI scaling is already 42-46 % efficient at 32 ranks. Iteration count
+  multiplies with **every** method: HF, DFT, and every post-HF path sitting on a
+  converged SCF.
+
+  **Most of an SOSCF already exists**, which is what makes this tractable rather
+  than a research project. `src/post_hf/casscf/aug-hessian.h` is a *generic*
+  CIAH solver — the same algorithm PySCF's SOSCF uses — whose header states it is
+  callback-driven specifically so it is **not** coupled to CASSCF data
+  structures, and it is validated by the 11/11 CASSCF gate suite.
+  `build_rhf_cphf_matrix` (`src/post_hf/rhf_response.h`) is the RHF orbital
+  Hessian, with an RI form that avoids the `nao⁴` build; `uhf_response.h` is the
+  unrestricted sibling. **The work is writing the callbacks and deciding when to
+  switch, not deriving a Hessian or writing a trust-region eigensolver.**
+
+  The one genuinely non-mechanical part is the DIIS→SOSCF switch criterion:
+  second-order steps converge quadratically near a solution and can find a saddle
+  far from one, so switching too early is worse than not switching. Scoped S1-S5
+  in `docs/SOSCF_SCOPE.md`, starting from the `diis_error` already computed every
+  iteration.
+
 ## Verification and regression gaps
 
 - **The ccgen Python suite's NINE standing failures are FIXED (2026-08-29); the
