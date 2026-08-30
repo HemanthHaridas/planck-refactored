@@ -182,9 +182,9 @@ allocates per call would inherit a ~2x penalty at the outset. **Fix this before
 writing the spawn**, and the FCI reference gets faster at the same time — which
 directly widens the ndet window where a deterministic reference is affordable.
 
-Neither of these is scoped here. Both are recorded in
-`vault/Status/Open Work.md` as standalone items, because they are worth doing
-whether or not FCIQMC ever happens.
+**Both are now scoped separately in `docs/FCI_OPENMP_SCOPE.md`** (F1-F4:
+allocation first, then threading), because they are worth doing whether or not
+FCIQMC ever happens — and if it does, F1 is a prerequisite rather than a nicety.
 
 ## What already exists, and what does not
 

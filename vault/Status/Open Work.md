@@ -116,6 +116,16 @@ worth doing whether or not FCIQMC happens.
   also widens the ndet window where a deterministic FCI reference is affordable,
   which is exactly what the FCIQMC validation strategy is bounded by.
 
+- **Both are scoped F1-F4 in `docs/FCI_OPENMP_SCOPE.md`**, allocation before
+  threading, each step independently verifiable and revertible. One finding there
+  is worth repeating here because it decides how any gate must be written: of the
+  seven committed FCI regression cases, **only two reach the iterative sigma path
+  at all** — `o2_fci_rohf_sto3g` (CI dim 1 200) and `be_fci_spherical_631gd`
+  (8 281). The two smallest and most obvious (`h2_fci_sto3g` at 4,
+  `water_fci_sto3g` at 441) run the **dense** path and would pass a broken
+  threaded sigma build unchanged — the same trap that kept `ch4_rccsdt_sto3g`
+  green for its entire life while never running the kernel it protected.
+
 ## Research: FCIQMC (scoped, deliberately not started)
 
 - **Scoped as a research question, not a work item, because two prerequisites are
