@@ -1,6 +1,6 @@
 # Scope: threading the generated CC path
 
-**Scope for in-flight work. O1 done; O2-O4 open.** Re-measured 2026-08-29/30
+**Scope for in-flight work. O1 and O2 done; O3-O4 open.** Re-measured 2026-08-29/30
 against the post-merge tree, which **invalidated the estimate and the
 recommendation** carried in `CCGEN_ARBITRARY_HARNESS_COST.md`. That document told
 its reader to re-measure the split before relying on its figures; doing so changed
@@ -164,26 +164,83 @@ so the baseline is threaded everywhere except here.
 `build-full`'s 78.03 s / 78.49 s, on the same binary configuration, or it prices
 a compiler change as a threading win.
 
-### O2 — thread `part1` only, measured (~S)
+### O2 — **DONE (2026-08-30). 1.93x at 4 threads, bitwise deterministic, at the Amdahl ceiling.**
 
-One `#pragma omp parallel for collapse(2)` on the hottest part. Hand-edit the
-generated file first; do not touch the emitter until a number exists.
+One `#pragma omp parallel for collapse(N) schedule(static)` on each of the 256
+nests in `part1`, hand-edited into the generated file — the emitter was left
+alone, per this step's instruction to get a number first.
 
-*Verify:* wall-clock at 1/2/4/8 threads against the O1 baseline (78.03 s at
-`OMP_NUM_THREADS=1`), and **`E_corr = -0.1319388410` bitwise identical at every
-thread count**. Expect ≤1.91x (part1 is 64.6 % on this build). Below ~1.3x at 4
-threads, suspect load imbalance or task granularity and try `collapse(3)` before
-concluding the lever is absent.
+Measured on `build-full`, HF/6-31G through the generated rank-3 route:
 
-A useful early signal costing nothing: CPU utilization. The unthreaded baseline
-sits at **99.1 %** with `OMP_NUM_THREADS=8`. If a threaded `part1` does not move
-that well above 100 %, the pragma is not firing at all and no timing needs
-interpreting.
+| variant | 1t | 2t | 4t | 8t | **4t speedup** |
+|---|---|---|---|---|---|
+| `collapse(2)` | 79.52 s | 54.76 s | 42.63 s | 38.42 s | **1.87x** |
+| **`collapse(3)`** | 78.67 s | — | **40.85 s** | 37.37 s | **1.93x** |
 
-### O3 — extend to part0/part2 and the builders, if O2 justifies it (~S)
+**The Amdahl ceiling for a 64.6 % part at 4 threads is 1.94x.** `collapse(3)`
+reaches 1.93x of it, so `part1` is now essentially fully parallel and there is
+nothing further to win *inside it* — the remaining serial time is elsewhere, which
+is O3's subject. 8 threads adds little (2.11x) because this machine has 4
+performance cores.
 
-Same pragma shape. Models 2.74x combined for the three triples parts; the builders
-add at most 1.12x on their own and are the last thing to do, not the first.
+**`collapse(3)` is the better choice and the reason is granularity, as predicted.**
+`collapse(2)` gives 25 chunks over 4 threads; `collapse(3)` gives 125. The gap is
+small but consistent across repeats (40.83-41.00 s vs 42.58-42.67 s, ±0.1 s), and
+it costs nothing — the collapsed indices are all output indices, so writes stay
+disjoint either way.
+
+**Correctness: bitwise identical at every thread count**, for both variants and
+against the pre-O2 unthreaded baseline. Every `E_corr`, `dE`, `rms(res)` and
+`rms(step)` matches across all 15 iterations at `OMP_NUM_THREADS` = 1/2/4/8. The
+reduction-free argument holds in practice, not just on paper.
+
+**CPU utilization moved 99.1 % -> 160.6 %** at 4 threads, which is the cheap check
+that the pragma is firing at all before any timing is interpreted.
+
+#### Two build-mechanics traps worth carrying into O3/O4
+
+**1. `make hartree-fock` silently reverts the edit.** `ccgen-planck-kernels` is an
+unconditional dependency of the `hartree-fock` target, so any normal build
+regenerates the file and wipes hand-edits — 256 pragmas back to 0, with no error.
+Compile the object and link directly instead:
+
+```bash
+cd build-full
+rm -f CMakeFiles/hartree-fock.dir/src/post_hf/cc/generated_kernel_registry.cpp.o
+make -f CMakeFiles/hartree-fock.dir/build.make CMakeFiles/hartree-fock.dir/build
+```
+
+Verify the edit survived (`grep -c "pragma omp"`) **and** that it reached the
+object (`nm ... | grep -c GOMP_parallel`) before trusting a timing.
+
+**2. Do not copy the build tree.** `CMAKE_CACHEFILE_DIR` is absolute, so a copied
+tree rebuilds into the *original* — silently corrupting the baseline you are
+measuring against. Work in `build-full` with a backup of the generated file
+(`cp` it aside, restore when done).
+
+### O3 — extend to part0/part2 and the builders (~S) — **justified; do this next**
+
+O2 justifies it: the mechanism works, is deterministic, and saturates its own
+ceiling, so the only way further is to widen what is threaded.
+
+Use `collapse(3) schedule(static)`, the O2 winner, and the same object-only build
+recipe. Remaining serial share after O2, on the `build-full` profile:
+
+| target | share | worth |
+|---|---|---|
+| `part0` | 20.1 % | the next real one |
+| all builders | 12.1 % | ≤1.12x alone; do last |
+| `part2`, doubles, singles | ~3 % | rounding |
+
+Threading the three triples parts models **2.74x at 4 threads** combined against
+today's 1.93x. **The builders are a different shape** — independent calls rather
+than a loop nest, so they want `#pragma omp parallel` over the build list in the
+`<kernel>_ops` construction, not `collapse`. Their granularity is excellent but
+their share is small; do them last, and only if the number after `part0` still
+leaves them worth the code.
+
+*Verify:* as O2 — bitwise identical `E_corr` at 1/2/4/8 threads against the
+unthreaded baseline, and CPU utilization above 160 % before interpreting timings.
 
 ### O4 — move it into the emitter (~M, only after O2/O3 measure well)
 
@@ -193,13 +250,25 @@ dressing axis. A build option defaulting OFF is acceptable while it is new; a
 per-nest tuning surface is not.
 
 *Verify:* the emitted TU is byte-identical to today's when the option is off, and
-the O2/O3 numbers reproduce when it is on.
+the O2/O3 numbers reproduce when it is on (`collapse(3)`, 40.85 s at 4 threads on
+HF/6-31G, `E_corr = -0.1319388410`).
+
+**Emit `collapse(3)` specifically**, not `collapse(2)` and not a bare
+`parallel for`: the outer `i` alone is only `no` = 5 trips. The existing
+`cpp_loops.py` helper already takes an `omp_collapse` argument, so the form is
+there — but note it defaults to `min(len(free), 4)`, which is not the same choice,
+and O2 measured 3 as the right one here.
 
 ## What this must not do
 
 - **Do not quote the 3.86x from the prior scope.** It came from the 45.1 %/53.7 %
-  split, which no longer holds. The measured figure is **4.00x** for both sites at
-  4 threads, but the achievable one is bounded by the residual's granularity.
+  split, which no longer holds. Threading everything models 4.00x at 4 threads;
+  **measured so far is 1.93x from `part1` alone**, and the modelled combined figure
+  for the three triples parts is 2.74x.
+- **Quote the same-binary serial reference, not the pre-O2 baseline.** O2 is
+  1.93x against 78.67 s (the threaded binary at `OMP_NUM_THREADS=1`), which is the
+  honest comparison; against the 80.92 s pre-O2 binary it would read 1.98x and
+  would be pricing a rebuild as a threading win.
 - **Do not use a CPU-utilization percentage alone as evidence that CC is
   unthreaded.** It cannot distinguish "no pragmas here" from "no OpenMP in this
   binary" — the prior scope's central number had exactly that ambiguity. Pair it

@@ -458,6 +458,26 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
   indices. Verify bitwise across `OMP_NUM_THREADS`=1/2/4/8 rather than assuming it.
   Scoped O1-O4 in `docs/CCGEN_CC_OPENMP_SCOPE.md`.
 
+  **O2 DONE (2026-08-30): 1.93x at 4 threads, bitwise deterministic.** One
+  `#pragma omp parallel for collapse(3) schedule(static)` on each of `part1`'s 256
+  nests, hand-edited into the generated file (the emitter is O4's job). HF/6-31G
+  through the generated rank-3 route: **78.67 s -> 40.85 s at 4 threads**, 37.37 s
+  at 8, against an Amdahl ceiling of **1.94x** for a 64.6 % part — so `part1` is
+  now essentially fully parallel and nothing further is available inside it.
+  `collapse(3)` beats `collapse(2)` consistently (40.85 vs 42.63 s) because 125
+  chunks balance across 4 threads where 25 do not; both are bitwise identical.
+  **Correctness verified the way the DFT J/K builds were:** every `E_corr`, `dE`,
+  `rms(res)` and `rms(step)` matches across all 15 iterations at `OMP_NUM_THREADS`
+  = 1/2/4/8 and against the unthreaded baseline. CPU utilization moved 99.1 % ->
+  160.6 %, the cheap check that the pragma fires before any timing is read.
+  **Two build-mechanics traps recorded in the scope:** `make hartree-fock`
+  regenerates the file and silently wipes hand-edits (256 pragmas -> 0, no error),
+  so compile the object and link directly; and a copied build tree rebuilds into
+  the ORIGINAL, because `CMAKE_CACHEFILE_DIR` is absolute. **O3 next** —
+  `part0` is 20.1 %, the builders 12.1 % and a different shape (independent calls,
+  so `parallel` over the build list rather than `collapse`); the three triples
+  parts together model 2.74x.
+
 - **The residual generated-vs-hand-written gap is mostly NOT a codegen defect.**
   **The two paths are different solvers and their wall-clock is not a like-for-like
   ratio** — wedge-packed vs dense amplitudes, cheap dressed intermediates vs a full
