@@ -77,6 +77,43 @@ truth for what remains.
   in `docs/SOSCF_SCOPE.md`, starting from the `diis_error` already computed every
   iteration.
 
+## Research: FCIQMC (scoped, deliberately not started)
+
+- **Scoped as a research question, not a work item, because two prerequisites are
+  unanswered and either one kills it.** `docs/FCIQMC_RESEARCH_SCOPE.md`.
+
+  **Q1 — is there a target?** There IS a real window: `CIString` is a `uint64_t`
+  giving `kMaxPackedSpatialOrbitals = 31`, and at `n_act` 20-31 the determinant
+  count runs 3.4e10 to ~1e17 — addressable by the existing bitstring
+  representation but far beyond a stored CI vector. **But nothing currently wants
+  it**: CASSCF is validated at CAS(8,6) and smaller, and the regression suite tops
+  out at 6 atoms. Name a molecule and active space someone cannot run today, or
+  record that this is a capability looking for a use.
+
+  **Q2 — can a stochastic method live in this validation culture?** This is the
+  harder half and it is cultural, not technical. The suite carries **161
+  `metric_close` assertions**, the tightest at 1e-9, and every recent perf change
+  was gated on **bitwise identity** (the CC OpenMP work, the transpose merge, the
+  DFT J/K builds). There is **no RNG anywhere in `src/`**. An FCIQMC energy is a
+  mean with an error bar and cannot be gated that way; it needs a fixed-seed
+  reproducibility gate plus a statistical gate with a blocking analysis, neither
+  of which exists. **Answer Q2 by writing that gate against the existing FCI
+  before implementing anything** — if it cannot be made to pass where FCI gives
+  the exact answer, the method is not maintainable here.
+
+  **The reusable half is genuinely large**: bitstring determinants, occupation and
+  parity helpers, `slater_condon_element` (the spawn), `build_ci_diagonal` (the
+  death step), and pre-transformed active-space integrals all exist in
+  `src/post_hf/ci/`. Missing and real: an RNG policy, a dynamic sparse walker
+  container (the existing `det_lookup` indexes a fixed enumerated space), an
+  excitation generator with a consistent `p_gen`, and population control.
+
+  **One structural tension worth deciding explicitly rather than discovering:**
+  every parallel path in Planck is bitwise thread-count-invariant by design and by
+  gate. FCIQMC's natural parallelization is not — the annihilation sum depends on
+  arrival order. Either accept a fixed-order reduction, or document FCIQMC as the
+  one path where that rule does not hold. **Do not make that exception silently.**
+
 ## Verification and regression gaps
 
 - **The ccgen Python suite's NINE standing failures are FIXED (2026-08-29); the
