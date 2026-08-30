@@ -1,6 +1,6 @@
 # Scope: threading the generated CC path
 
-**Scope for in-flight work. O1 and O2 done; O3-O4 open.** Re-measured 2026-08-29/30
+**Scope for in-flight work. O1-O3 done; O4 open.** Re-measured 2026-08-29/30
 against the post-merge tree, which **invalidated the estimate and the
 recommendation** carried in `CCGEN_ARBITRARY_HARNESS_COST.md`. That document told
 its reader to re-measure the split before relying on its figures; doing so changed
@@ -218,29 +218,61 @@ tree rebuilds into the *original* — silently corrupting the baseline you are
 measuring against. Work in `build-full` with a backup of the generated file
 (`cp` it aside, restore when done).
 
-### O3 — extend to part0/part2 and the builders (~S) — **justified; do this next**
+### O3 — **DONE (2026-08-30). 3.11x at 4 threads — and it found a dead-work defect worth more than the threading of the builders.**
 
-O2 justifies it: the mechanism works, is deterministic, and saturates its own
-ceiling, so the only way further is to widen what is threaded.
+Two changes, measured separately.
 
-Use `collapse(3) schedule(static)`, the O2 winner, and the same object-only build
-recipe. Remaining serial share after O2, on the `build-full` profile:
+**O3a — thread all four triples parts.** Same `collapse(3) schedule(static)`, now
+on all 806 nests (`part0` 256, `part1` 256, `part2` 256, `part3` 38). Checked
+first, not assumed: every part opens with the same `i/j/k` header and every write
+is `result(i, j, k, a, b, c)`, so the collapse is valid and the writes stay
+disjoint everywhere.
 
-| target | share | worth |
-|---|---|---|
-| `part0` | 20.1 % | the next real one |
-| all builders | 12.1 % | ≤1.12x alone; do last |
-| `part2`, doubles, singles | ~3 % | rounding |
+**O3b — the builders turned out to be building everything twice.** Inspecting the
+triples entry point to thread the 88 operator builds revealed that
+`compute_ccsdt_triples_residual` emits them **twice**: once as 88 `const auto`
+locals, then again inside the `ops` aggregate initializer. The two sets are
+identical (verified by diffing the builder-symbol lists), and **the locals are
+never referenced** — only `ops` is passed to the parts. They were pure dead work.
 
-Threading the three triples parts models **2.74x at 4 threads** combined against
-today's 1.93x. **The builders are a different shape** — independent calls rather
-than a loop nest, so they want `#pragma omp parallel` over the build list in the
-`<kernel>_ops` construction, not `collapse`. Their granularity is excellent but
-their share is small; do them last, and only if the number after `part0` still
-leaves them worth the code.
+| step | 1t | 4t | 8t | **4t speedup** |
+|---|---|---|---|---|
+| O2 (`part1` only) | 78.67 s | 40.85 s | 37.37 s | 1.93x |
+| **O3a** (all 4 parts) | 78.67 s | **27.98 s** | 23.13 s | **2.81x** |
+| **O3b** (+ dead builders removed) | **73.79 s** | **23.70 s** | 18.80 s | **3.11x** |
 
-*Verify:* as O2 — bitwise identical `E_corr` at 1/2/4/8 threads against the
-unthreaded baseline, and CPU utilization above 160 % before interpreting timings.
+Against the original unthreaded binary (80.92 s), the combined result is **3.41x
+end to end**. CPU utilization went **99.1 % -> 359.9 %** at 4 threads — near-perfect
+use of the machine's 4 performance cores.
+
+**Correctness: bitwise identical throughout.** Every `E_corr`, `dE`, `rms(res)`
+and `rms(step)` matches across all 15 iterations at `OMP_NUM_THREADS` = 1/2/4/8
+and against the original unthreaded baseline, for both O3a and O3b. Removing the
+dead builders changes no number, which is itself the proof they were unused.
+
+O3a lands almost exactly on the modelled 2.74x for the three triples parts. The
+extra came from O3b, which the model did not know about.
+
+#### The dead-builder defect, for O4
+
+It is an **emitter** bug, not an artifact of this file.
+`planck_tensor_cpp.py:1173-1178` emits the `const auto` intermediate builds
+unconditionally, and *then* — for any kernel above `_KERNEL_CHUNK_TERMS` —
+delegates to `_emit_chunked_kernel`, which builds the same operators into the
+`<kernel>_ops` struct. H5 added the struct hoist but did not remove the emission
+it superseded, so **every chunked kernel builds its operators twice**.
+
+Worth 4.9 s serial / 4.3 s at 4 threads on HF/6-31G here — about **6 %** — and it
+should scale with operator count, so rank 4 (894 operators against 88) is likely
+to gain considerably more. **Fix it in the emitter as part of O4**, not as a
+separate hand-edit: the chunked path should skip the standalone emission entirely.
+
+#### What is left after O3
+
+At 359.9 % of 4 cores there is little parallel headroom left on this machine. The
+remaining serial work is the doubles/singles residuals (~1.2 %) and their
+standalone builders, which are genuinely used and genuinely small. **The builders
+inside the triples path never needed threading at all** — they needed deleting.
 
 ### O4 — move it into the emitter (~M, only after O2/O3 measure well)
 
@@ -249,9 +281,17 @@ Teach `planck_tensor_cpp.py` to emit the pragma, borrowing the form already in
 dressing axis. A build option defaulting OFF is acceptable while it is new; a
 per-nest tuning surface is not.
 
-*Verify:* the emitted TU is byte-identical to today's when the option is off, and
-the O2/O3 numbers reproduce when it is on (`collapse(3)`, 40.85 s at 4 threads on
-HF/6-31G, `E_corr = -0.1319388410`).
+**Two changes, and the second is not optional.** Emit the pragma on every triples
+nest, AND fix the duplicate-builder emission O3 found
+(`planck_tensor_cpp.py:1173-1178` emits intermediate builds that
+`_emit_chunked_kernel` then re-emits into the `ops` struct). The second is a
+one-condition change — skip the standalone emission when the chunked path is
+taken — and is worth ~6 % here with more expected at rank 4.
+
+*Verify:* the emitted TU is byte-identical to today's when the pragma option is
+off **except** for the removed duplicate builds, and the O3 numbers reproduce when
+it is on (`collapse(3)` on all four parts, **23.70 s at 4 threads** on HF/6-31G,
+`E_corr = -0.1319388410`, bitwise identical at 1/2/4/8 threads).
 
 **Emit `collapse(3)` specifically**, not `collapse(2)` and not a bare
 `parallel for`: the outer `i` alone is only `no` = 5 trips. The existing
