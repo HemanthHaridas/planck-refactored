@@ -473,10 +473,26 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
   **Two build-mechanics traps recorded in the scope:** `make hartree-fock`
   regenerates the file and silently wipes hand-edits (256 pragmas -> 0, no error),
   so compile the object and link directly; and a copied build tree rebuilds into
-  the ORIGINAL, because `CMAKE_CACHEFILE_DIR` is absolute. **O3 next** —
-  `part0` is 20.1 %, the builders 12.1 % and a different shape (independent calls,
-  so `parallel` over the build list rather than `collapse`); the three triples
-  parts together model 2.74x.
+  the ORIGINAL, because `CMAKE_CACHEFILE_DIR` is absolute.
+
+  **O3 DONE (2026-08-30): 3.11x at 4 threads**, and it found a dead-work defect
+  along the way. Threading all four triples parts (806 nests) gives **2.81x**,
+  landing almost exactly on the modelled 2.74x. Then, inspecting the triples entry
+  point in order to thread its 88 operator builds, it turned out
+  `compute_ccsdt_triples_residual` **builds every operator twice** — once as 88
+  `const auto` locals, then again inside the `ops` aggregate — and **the locals are
+  never referenced**. Deleting them is worth a further 4.9 s serial / 4.3 s at 4
+  threads (~6 %), taking the total to **73.79 s -> 23.70 s (3.11x)**, or **3.41x**
+  against the original unthreaded binary. CPU utilization went **99.1 % -> 359.9 %**
+  on 4 performance cores. Bitwise identical at 1/2/4/8 threads and against the
+  unthreaded baseline throughout — that removing dead builders changes no number is
+  itself the proof they were unused. **The defect is in the emitter**, not this
+  file: `planck_tensor_cpp.py:1173-1178` emits the intermediate builds
+  unconditionally and then `_emit_chunked_kernel` re-emits them into the struct —
+  H5 added the hoist without removing what it superseded, so every chunked kernel
+  pays twice. Expected to matter more at rank 4 (894 operators vs 88). **O4 must
+  fix both**: emit the pragma, and skip the duplicate emission on the chunked path.
+  The triples builders never needed threading — they needed deleting.
 
 - **The residual generated-vs-hand-written gap is mostly NOT a codegen defect.**
   **The two paths are different solvers and their wall-clock is not a like-for-like
