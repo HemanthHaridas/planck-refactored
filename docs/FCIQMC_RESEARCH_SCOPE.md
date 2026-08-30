@@ -71,6 +71,71 @@ fixed-seed + blocked-error gate cannot be made to pass reliably on a case where
 FCI gives the exact answer, the method will not be maintainable here regardless of
 how good the sampling is.
 
+## The validation fixture — measured, 2026-08-30
+
+Q2 needs a system where **both** methods run: FCI to give the exact answer, and
+FCIQMC on a determinant space large enough that sampling is meaningful. Those pull
+in opposite directions, so the window is narrow and worth pinning down before any
+code.
+
+**Measured on this machine** (`build/hartree-fock`, Release, serial):
+
+| system | norb | na/nb | ndet | FCI wall |
+|---|---|---|---|---|
+| H2/STO-3G | 2 | 1/1 | 4 | instant |
+| water/STO-3G | 7 | 5/5 | 441 | instant |
+| H2/cc-pVDZ | 10 | 1/1 | 100 | instant |
+| **Be/6-31g\*** | 14 | 2/2 | **8 281** | **46.5 s** |
+| **N2/STO-3G** | 10 | 7/7 | **14 400** | **124.4 s** |
+| C2/STO-3G | 10 | 6/6 | 44 100 | **> 10 min** (not run to completion) |
+| water/6-31G | 13 | 5/5 | 1 656 369 | hours — see below |
+
+**The recommendation: `N2/STO-3G` (ndet = 14 400, FCI in ~2 min).**
+
+It is the smallest system that satisfies both constraints:
+
+- **FCI is cheap enough to be a routine reference** — 2 minutes, so the gate can
+  recompute it rather than hard-coding a number.
+- **The determinant space is big enough for sampling to mean something.** This is
+  the constraint people miss. Below a few thousand determinants a walker
+  population of the usual size covers essentially the whole space, FCIQMC
+  degenerates into a noisy exact diagonalization, and the gate proves nothing
+  about sampling. At 14 400, a few-thousand-walker run is a genuine sample.
+- **It has 7α/7β electrons**, so the excitation generator is exercised properly.
+  Be/6-31g\* is comparable in ndet (8 281) but has only 2α/2β — a two-electron
+  system cannot exercise double excitations between different occupied pairs,
+  which is where `p_gen` bugs hide.
+
+`Be/6-31g*` is the useful *second* fixture precisely because it differs in that
+way: same order of ndet, very different electron count. If FCIQMC agrees on N2 and
+disagrees on Be (or vice versa), the difference isolates the excitation generator.
+
+**H2 and water/STO-3G are unsuitable as FCIQMC fixtures** despite being the
+existing FCI regression cases: at 4 and 441 determinants the walker population
+would exceed the space.
+
+### The FCI reference cost grows fast — do not plan on a large one
+
+Two measured points give an empirical **ndet^1.78** for the direct-sigma FCI, and
+C2/STO-3G at 44 100 determinants already exceeded 10 minutes, so **1.78 is a
+lower bound**. Extrapolating, water/6-31G (1.66 M determinants) is tens to
+hundreds of hours.
+
+**Consequence for the scope:** the deterministic reference is only available in
+the ndet ≲ 10⁵ window. Any FCIQMC validation above that has no exact answer to
+check against, which is exactly the regime FCIQMC exists for — and exactly why the
+fixed-seed reproducibility gate matters more than the statistical one. **The
+statistical gate can only ever run on small systems; the reproducibility gate runs
+everywhere.**
+
+Two caveats on those numbers, stated because the fit is thin: two points cannot
+establish an exponent, and the two systems differ in *electron count* as well as
+ndet (2+2 vs 7+7), so the fit conflates two variables. Treat it as
+order-of-magnitude. `ci_max_dim` also defaults to 10 000 and must be raised
+explicitly for anything larger — it fails loudly, which is correct.
+
+Candidate inputs are committed under `tests/inputs/exploratory/fciqmc/`.
+
 ## What already exists, and what does not
 
 Genuinely reusable:

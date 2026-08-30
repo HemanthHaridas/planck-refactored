@@ -108,6 +108,28 @@ truth for what remains.
   container (the existing `det_lookup` indexes a fixed enumerated space), an
   excitation generator with a consistent `p_gen`, and population control.
 
+  **The validation fixture is identified and measured: `N2/STO-3G`** (10 orbitals,
+  7α/7β, **ndet = 14 400**, FCI in **124 s** on this machine). It is the smallest
+  system satisfying both constraints — FCI cheap enough that a gate can recompute
+  the reference, and a determinant space large enough that a few-thousand-walker
+  population is a genuine *sample* rather than covering the whole space. The
+  existing FCI regression cases (H2/STO-3G at 4 determinants, water/STO-3G at 441)
+  are **unsuitable**: the walker population would exceed the space and the gate
+  would prove nothing about sampling. `Be/6-31g*` (ndet 8 281, FCI 46.5 s) is the
+  useful second fixture because it has only 2α/2β against N2's 7α/7β — a
+  two-electron system cannot exercise doubles between different occupied pairs,
+  which is where `p_gen` bugs hide, so disagreement between the two isolates the
+  excitation generator.
+
+  **The reference cost grows fast, which bounds the whole validation strategy.**
+  Two measured points give ~`ndet^1.78`, and C2/STO-3G (44 100 dets) already
+  exceeded 10 minutes, so that is a lower bound; water/6-31G (1.66 M) is tens to
+  hundreds of hours. So the deterministic reference exists only for ndet <~ 1e5 —
+  precisely *not* the regime FCIQMC is for. That is the argument for making the
+  **fixed-seed reproducibility gate** the primary one: it runs at any size, while
+  the statistical gate can only ever run where FCI is affordable. Candidate inputs
+  are committed under `tests/inputs/exploratory/fciqmc/`.
+
   **One structural tension worth deciding explicitly rather than discovering:**
   every parallel path in Planck is bitwise thread-count-invariant by design and by
   gate. FCIQMC's natural parallelization is not — the annihilation sum depends on
