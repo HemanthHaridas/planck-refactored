@@ -136,6 +136,56 @@ explicitly for anything larger — it fails loudly, which is correct.
 
 Candidate inputs are committed under `tests/inputs/exploratory/fciqmc/`.
 
+### The FCI reference is single-threaded, and half its time is `malloc`
+
+Measured while establishing the fixture, because it changes what the reference
+costs and it matters to FCIQMC directly (both share `slater_condon_element`).
+
+**FCI does not thread.** On `build-full` (genuinely OpenMP-enabled: `-fopenmp`,
+`-DUSE_OPENMP`, libgomp linked), N2/STO-3G:
+
+```
+OMP_NUM_THREADS=1    121.9 s
+OMP_NUM_THREADS=4    123.6 s      <- flat
+OMP_NUM_THREADS=8    100.0 % CPU  <- one core, seven idle
+```
+
+The code agrees: `apply_ci_hamiltonian` (`ci.cpp:437-622`) — the iterative
+sigma build, which is what runs for any space above `dense_threshold = 500` —
+contains **zero** `#pragma omp`. The one pragma in `ci.cpp` is on the **dense**
+Hamiltonian build (`:221`), which only runs *below* 500 determinants. `rdm.cpp`
+has six, so the RDM path is threaded; `fci.cpp` and `strings.cpp` have none.
+
+**So every FCI case large enough to matter runs single-threaded.**
+
+**And the hot path is allocation, not arithmetic.** Leaf-sample profile
+(21 048 samples, N2/STO-3G, 1 thread):
+
+| frame | share |
+|---|---|
+| `malloc`/`free` family combined | **~53 %** |
+| `apply_ci_hamiltonian` | 12.0 % |
+| `get_excitation` | 5.9 % |
+
+The cause is visible in the source: `get_excitation` (`ci.cpp:65`) returns
+`std::pair<std::vector<int>, std::vector<int>>` **by value**, and
+`slater_condon_element` calls it for both spin channels on **every matrix
+element**. That is up to four heap allocations per element — for vectors that
+hold **at most two entries each**, since a Slater-Condon element is zero beyond a
+double excitation. A `std::array<int,2>` plus a count removes the allocation
+entirely.
+
+**Why this belongs in an FCIQMC scope rather than a separate ticket:** FCIQMC's
+spawning step calls `slater_condon_element` in its innermost loop, far more often
+than FCI's sigma build does. Building FCIQMC on top of a function that heap-
+allocates per call would inherit a ~2x penalty at the outset. **Fix this before
+writing the spawn**, and the FCI reference gets faster at the same time — which
+directly widens the ndet window where a deterministic reference is affordable.
+
+Neither of these is scoped here. Both are recorded in
+`vault/Status/Open Work.md` as standalone items, because they are worth doing
+whether or not FCIQMC ever happens.
+
 ## What already exists, and what does not
 
 Genuinely reusable:

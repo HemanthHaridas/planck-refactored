@@ -77,6 +77,45 @@ truth for what remains.
   in `docs/SOSCF_SCOPE.md`, starting from the `diis_error` already computed every
   iteration.
 
+## FCI performance — two measured, independent items
+
+Found while sizing an FCIQMC validation fixture; both stand on their own and are
+worth doing whether or not FCIQMC happens.
+
+- **The FCI sigma build is single-threaded.** `apply_ci_hamiltonian`
+  (`src/post_hf/ci/ci.cpp:437-622`) — the iterative path taken by every space
+  above `dense_threshold = 500` — has **zero** `#pragma omp`. The one pragma in
+  the file is on the **dense** Hamiltonian build (`:221`), which runs only
+  *below* 500 determinants, so it never fires for a case big enough to care.
+  `rdm.cpp` is threaded (6 pragmas); `fci.cpp` and `strings.cpp` are not.
+  **Measured on `build-full`** (genuinely OpenMP-enabled), N2/STO-3G
+  (ndet = 14 400): **121.9 s at 1 thread, 123.6 s at 4 — flat**, and **100.0 %
+  CPU with `OMP_NUM_THREADS=8`**, one core of eight. Same signature CC had before
+  it was threaded. The outer determinant loop writes `sigma(i)` per determinant,
+  so it is a scatter rather than the disjoint-slice shape the CC nests had —
+  threading it needs either per-thread partial vectors summed in **fixed thread
+  order** (the DFT J/K discipline) or a gather formulation. **Do not use
+  `omp atomic` or completion-order accumulation**; that is the DFT-grid jitter
+  defect.
+
+- **~53 % of FCI runtime is `malloc`/`free`, not arithmetic.** Leaf-sample
+  profile (21 048 samples, N2/STO-3G, 1 thread): the malloc family is ~53 %,
+  `apply_ci_hamiltonian` itself 12.0 %, `get_excitation` 5.9 %. The cause is in
+  the source: `get_excitation` (`ci.cpp:65`) returns
+  `std::pair<std::vector<int>, std::vector<int>>` **by value**, and
+  `slater_condon_element` calls it for both spin channels on **every matrix
+  element** — up to four heap allocations per element, for vectors that hold **at
+  most two entries each** (a Slater-Condon element vanishes beyond a double
+  excitation). `std::array<int,2>` plus a count removes it. This looks like the
+  cheapest large win in the CI engine, and it compounds with the threading item
+  rather than competing with it.
+
+  **Do this one before any FCIQMC work**, if that ever starts: the spawning step
+  calls `slater_condon_element` in its innermost loop, far more often than FCI's
+  sigma build, so building on the allocating version inherits the penalty. It
+  also widens the ndet window where a deterministic FCI reference is affordable,
+  which is exactly what the FCIQMC validation strategy is bounded by.
+
 ## Research: FCIQMC (scoped, deliberately not started)
 
 - **Scoped as a research question, not a work item, because two prerequisites are
