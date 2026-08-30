@@ -138,10 +138,26 @@ worth doing whether or not FCIQMC happens.
   `det_lookup.find` is a concurrent-safe read. The design constraint that keeps
   it from becoming spaghetti: **the 126 lines of excitation enumeration
   (`ci.cpp:527-652`) must not change at all** — every write already funnels
-  through one `accumulate` lambda, which is the only seam needed. Per-thread
-  partials cost `nthreads x dim x 8` bytes (0.9 MB at N2, 106 MB at water/6-31G),
-  bounded explicitly rather than discovered. The dead fallback path (`:490`,
-  unreachable because `det_lookup` is always populated at `:461`) stays serial.
+  through one `accumulate` lambda, which is the only seam needed. The dead
+  fallback path (`:490`, unreachable because `det_lookup` is always populated at
+  `:461`) stays serial.
+
+  **The scatter is avoidable, and the scope now recommends removing it rather
+  than mitigating it.** Inverting the loop to run over BRAS turns the write into
+  a gather, so each thread owns a disjoint slice of `sigma` — the CC-residual
+  shape, where a bare `parallel for` is correct with no reduction, no per-thread
+  buffers and no memory bound. Two facts make it exact, both already established
+  in-tree: the reachability relation is **symmetric** (the inverse excitation is
+  itself a <=2 excitation preserving the spin counts — verified by direct
+  enumeration, **0 asymmetric edges** across n_act 4/5/6 including an open-shell
+  case), and **`H` is real symmetric**, which `build_ci_hamiltonian_dense`
+  already depends on: it fills only the upper triangle and assigns
+  `H(i,j) = H(j,i) = v` (`ci.cpp:264`), so if the element were not symmetric the
+  dense path would already be wrong. The gather is therefore *simpler* than the
+  mitigation it replaces. **One deliberate consequence:** the `|c| < 1e-15` skip
+  moves inside the lambda, changing summation order, so the gather's serial
+  result is a new reference — it should agree with the current one to ~1e-12, and
+  that delta must be recorded rather than silently rebaselined.
 
 - **Both are scoped in `docs/FCI_OPENMP_SCOPE.md`**, allocation before
   threading, each step independently verifiable and revertible. One finding there
