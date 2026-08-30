@@ -241,45 +241,62 @@ were corrected in the same pass: `CCGEN_UNRESTRICTED_CC` (U0) and
   now landed
 - Analytic Hessian remains unimplemented; frequencies are currently semi-numerical
 - DFT imaginary-mode following is not implemented
-### TICKET: MPI rank-split the DFT grid layer (Gap 2) — the measured DFT scaling cap
+### HPC campaign — what is left (verified against the tree 2026-08-30)
 
-**Priority: highest DFT-HPC item.** This is the single change that gives DFT
-HF-like MPI scaling.
+Full measured rescope in `docs/HPC_REMAINING_SCOPE.md`. **Tiers 3 and 1 are done
+and measured** for the default engine, HF and DFT: the `planck-mpi` front end, the
+distributed direct-SCF Fock build (#146), the DFT J/K build (#151), and the **DFT
+grid rank-split (#156 — Gap 2, CLOSED)**; `src/dft/driver.cpp` carries the
+`Mpi::rank`/`size`/`allreduce_inplace` split. This entry previously described Gap 2
+as the highest open DFT-HPC item and gave it a full ticket; it had already landed.
 
-**Measured problem** (`scale.json`, Notchpeak notch460, post-#151, 6-31g/os):
-DFT strong-scaling walls at **3.5× on 16 ranks (22% efficiency) at nb=208 and
-degrades to 20% at nb=312**, while HF on the same ladder holds **10× / 63% and
-rises with size**. The DFT/HF per-iteration ratio grows 4.8×→10× from nb=104 to
-416 — because #151 distributed the J/K but the grid is still replicated, so the
-grid's share of DFT wall time rises with both system size and rank count.
+Measured on `scale.json` (notch386, 6-31g, os, 1 thread/rank): HF 42-46 %
+efficiency at 32 ranks and near-linear to 16; DFT 46-65 % and **rising** with
+system size. Both DFT walls — memory and scaling — are closed.
 
-**Root cause:** `grep -rn "Mpi::\|USE_MPI" src/dft/` is empty. Every rank
-rebuilds the full grid and evaluates the full XC. The grid loops are
-OMP-parallel as of #152 (`xc_grid.cpp:83`, `if (!omp_in_parallel())`) but have
-**no MPI rank split** — OMP threads work within a rank; nothing distributes
-across ranks. (This supersedes the older "grid loops are still serial" note —
-they are threaded now; what's missing is the rank split.)
+Remaining, in the doc's value order:
 
-**The work:**
-- Partition grid points (or whole Becke atomic batches) by rank in
-  `evaluate_density_on_grid` / the `xc_grid.cpp` density+XC loops.
-- Reduce the XC matrix (`nb²`) across ranks with `Mpi::allreduce_inplace`,
-  alongside the existing Fock reduce — one more reduction, not a new pattern.
-- **Determinism constraint (load-bearing):** the DFT XC reduction is the
-  historical jitter site (see the DFT XC Reduction Determinism note). The
-  cross-rank sum MUST be in fixed rank order, never completion order, never
-  `omp critical`. This is the medium-risk part of an otherwise ~M change.
+- **Gap 3 — no scale-proving fixture in CI (~S, the #1 item).** Every regression
+  input is <= 6 atoms, so nothing fails if distribution silently regresses to
+  replication. The cheap fix is one 16-water/6-31g (nb=208) case asserting
+  `energy(-n 2) == energy(-n 4) == serial` **bitwise** — a correctness tripwire at
+  a size where a partition bug can actually manifest, not a speed measurement.
+  It is what stands between "DFT scales" (measured by a hand-run harness) and
+  "DFT scaling cannot silently regress".
+- **Gap 1 — two of four engines silently replicate (~S).** The one-shot
+  `_compute_2e` tensor builds in HGP and Rys are not MPI-distributed; both carry
+  an explicit in-tree admission (`hgp.cpp:1392`, `rys.cpp:1460`). `mpirun -n 8`
+  with `engine hgp` in conventional mode is *correct but pointless* — every rank
+  does 100 % of the work. OS already has the pattern (6 lines plus one
+  `allreduce_inplace`). **Decide one of two — stripe them, or reject `-n > 1` with
+  a clear message — but do not leave it silent.** Arguably YAGNI: HPC runs use
+  direct SCF, which is already striped for every engine.
+- **Gap 5a — post-HF OpenMP: PARTIALLY CLOSED (2026-08-30).** The gap was that
+  every `src/post_hf/cc/*.cpp` backend and every generated kernel had **zero**
+  `#pragma omp`. The **generated** side is now threaded: `planck_tensor_cpp.py`
+  emits `collapse(3)` behind `CCGEN_OMP_COLLAPSE`, measured **3.22x at 4 threads**
+  with energies bitwise identical across thread counts
+  (`docs/CCGEN_CC_OPENMP.md`). **Still open: the hand-written path** —
+  `tensor_backend.cpp` has 0 pragmas, and MP2 is unprofiled. The gap's own advice
+  still applies: profile first, because which post-HF path is the real wall-time
+  sink at a realistic size has never been measured. Its determinism constraint
+  (scalar-accumulator terms are not thread-invariant under a naive `reduction`)
+  was handled on the generated side by keeping the inner summed loop serial
+  within a thread.
+- **Gap 5b — dense post-HF MPI stripe (~M).** Untouched: `grep -rl "Mpi::"
+  src/post_hf/` is empty. The reclassification is the useful part — RI is a
+  *memory* strategy, not a distribution prerequisite, so the dense MP2/CC
+  contractions can be rank-striped on the outer MO index today. RI-post-HF
+  distribution stays the separate, memory-motivated tail (Tier 2).
+- **DFT nb=416 fails to CONVERGE, not OOM.** 32-water RKS hits max_cycles at the
+  serial baseline (4.8 GB, it ran and iterated). A convergence-robustness item
+  (guess/DIIS/damping at large water chains), **wholly separate from the HPC
+  track** — do not conflate it with a scaling defect.
 
-**Acceptance:**
-- `energy(-n k) == energy(serial)` bitwise across k ∈ {1,2,4,8,16} on a DFT
-  case at nb where a partition bug bites (16-water B3LYP, nb=208). This is also
-  Gap 3's missing CI tripwire — land them together.
-- DFT strong-scaling efficiency at 16 ranks rises materially off the measured
-  22% baseline; HF-like (>60%) is the target, grid being the last serial piece.
-
-**Not in scope:** grid layer already OMP-threaded (#152); this is MPI only.
-The `277ba10` (#151-only, pre-#152) attribution split is write-up-only and does
-not block this. Full measured rescope in `docs/HPC_REMAINING_SCOPE.md`.
+**Closed since that doc was written:** Gap 4 (`scale_bench.py`'s Q2 verdict now
+keys on the DFT RSS nb-exponent rather than a raw >50x ratio, `2b764b21`) and the
+Q1 verdict (Karp-Flatt serial fraction rather than efficiency-at-max-ranks,
+`ebf8ae5c`).
 - Coarse/low-quality DFT grids can still show noticeable orientation sensitivity
   under symmetry reorientation; the validated symmetry-on gradient regression is
   intentionally pinned to `grid ultrafine`
