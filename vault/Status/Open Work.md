@@ -313,6 +313,35 @@ worth doing whether or not FCIQMC happens.
   entire tree is `nactorb 6`, so nothing wants this: **a person must name a
   molecule and active space.**
 
+  **F1 LANDED (2026-08-31): walker container + RNG policy**
+  (`src/post_hf/ci/fciqmc.{h,cpp}`, gated by `planck-fciqmc-walkers`). State layer
+  only, no dynamics. The design point: **annihilation is not a separate pass** —
+  it is what accumulating signed weights into a determinant-keyed map already
+  does, which is also why the container is a map rather than a walker list.
+  `RandomSource::derive(index)` is deterministic in the run seed and independent of
+  how many shards were derived, which is what will keep a threaded run
+  thread-count-invariant. Mutation-verified with three defects, all caught:
+  round-to-nearest (biases the energy), overwrite-instead-of-accumulate (breaks
+  annihilation), and a call-order-dependent `derive()`.
+
+  **F2 SCOPED (2026-08-31) in `docs/FCIQMC_F2_EXCITATION_SCOPE.md`** — the
+  excitation generator and `p_gen`. It gets its own scope because **every other
+  step fails loudly and this one fails silently**: a `p_gen` disagreeing with the
+  sampler's actual distribution gives a plausible, converged, WRONG energy, the
+  same failure class as the spin-adapt default and the invalid ERI symmetry table.
+  Five steps: F2.1 brute-force oracle FIRST (the measuring instrument, so the
+  generator is never the only implementation of "what is connected"), F2.2 a slow
+  uniform generator as the reference distribution, F2.3 the O(1) production
+  generator, F2.4 mutation-verification of the gate itself, F2.5 spin/symmetry
+  constraints. **The gate tests agreement, never uniformity** — a two-stage
+  generator legitimately varies `p_gen` by 13.5x across connections on N2/STO-3G;
+  non-uniformity is not the bug, a mis-reported `p_gen` is. Connection counts
+  verified by independent brute force: H2/STO-3G **3** (small enough that the
+  oracle is exact, which is what makes the step gateable), water/STO-3G **140**,
+  N2/STO-3G **609**, Cr2 CAS(12,18) **7308**. **Support and frequency are separate
+  failure modes** — a generator that can never reach some excitations passes a
+  frequency-only gate, so both are required.
+
   **Q1 CANDIDATE FOUND (2026-08-31): Cr2, and it is TWO ATOMS.** Surveying the
   standard multireference benchmarks against the measured boundary, almost
   everything canonical is already reachable (N2/C2 full valence, benzene and
