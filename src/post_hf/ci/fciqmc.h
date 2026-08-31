@@ -137,6 +137,44 @@ namespace HartreeFock::Correlation::CI::QMC
         std::unordered_map<DetKey, Weight, DetKeyHash> _walkers;
     };
 
+    // ------------------------------------------------------------------
+    // Excitation layer (scope step F2)
+    // ------------------------------------------------------------------
+
+    // One excitation from a parent determinant.
+    //
+    // `phase` and `p_gen` are DIFFERENT quantities and must never be folded
+    // together: `phase` is the fermionic sign from operator ordering (+1/-1),
+    // `p_gen` is the probability that a draw produced this excitation. Conflating
+    // them turns a sign error into something that looks like sampling bias.
+    struct Excitation
+    {
+        DetKey det;
+        double phase = 0.0;
+        double p_gen = 0.0;
+        bool valid = false;
+    };
+
+    // Enumerate EVERY determinant connected to `parent` by a single or double
+    // excitation, with fermionic phases. This is the brute-force oracle.
+    //
+    // It is deliberately slow and obviously correct: nested loops over
+    // occupied/virtual pairs, no index arithmetic to get wrong. Its job is to be
+    // the measuring instrument for the sampling generator, so that the generator
+    // is never the only implementation of "what is connected to what".
+    //
+    // Only singles and doubles appear because a Slater-Condon matrix element
+    // vanishes beyond a double excitation -- the Hamiltonian is a two-body
+    // operator, so it cannot connect determinants differing in more than two
+    // orbitals. That is the fact the entire sparsity of the method rests on.
+    //
+    // Excludes the parent itself. `p_gen` is left at 0 -- enumeration is not
+    // sampling, and filling it in here would invite exactly the self-consistency
+    // check that F2's scope forbids.
+    std::vector<Excitation> enumerate_connections(
+        const DetKey &parent,
+        int n_act);
+
     // Seeded RNG with an explicit reproducibility contract.
     //
     // The contract: a run with the same seed must reproduce its trajectory
