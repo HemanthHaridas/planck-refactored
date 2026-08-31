@@ -313,6 +313,25 @@ worth doing whether or not FCIQMC happens.
   entire tree is `nactorb 6`, so nothing wants this: **a person must name a
   molecule and active space.**
 
+  **Q1 CANDIDATE FOUND (2026-08-31): Cr2, and it is TWO ATOMS.** Surveying the
+  standard multireference benchmarks against the measured boundary, almost
+  everything canonical is already reachable (N2/C2 full valence, benzene and
+  naphthalene pi, [Fe2S2], and Cr2 itself at the usual CAS(12,12), 1.3 h). The
+  smallest genuinely blocked case with real chemical standing is **Cr2 at
+  CAS(12,18)**: 344.6M determinants, ~2 yr of FCI, **2.76 GB per CI vector** and
+  ~22 GB for a Davidson subspace. The 12 active electrons are the 3d^5 4s^1
+  valence on each atom and the sextuple Cr-Cr bond is the textbook single-reference
+  failure, so the large active space is chemically motivated rather than invented.
+  **It is the first case where BOTH walls fail** — elsewhere the finding was that
+  time binds and memory does not (n_act 14 is a 0.09 GB vector) — and it is
+  **inside the existing representation** (`kMaxPackedSpatialOrbitals` = 31), so
+  only the determinant count blocks. Verified runnable: Cr is in sto-3g/6-31g/
+  cc-pVXZ, Cr2/STO-3G RHF converges in 44 iterations, and the CAS(12,12) rung runs.
+  Input committed at `tests/inputs/exploratory/fciqmc/cr2_casscf_target.hfinp`
+  (NOT a regression case). **This is a candidate, not a mandate** — it shows a real
+  blocked calculation exists on a molecule the code already handles; it does not
+  establish that anyone wants the Cr2 binding curve enough to justify the work.
+
   **Q2 ANSWERED YES (2026-08-31). G1-G4 are built and pass in 2.0 s as CTest
   `planck-statistical-gate`.** A stochastic method *can* be validated here: a
   `metric_within_sigma` runner assertion, a Flyvbjerg-Petersen blocking analysis

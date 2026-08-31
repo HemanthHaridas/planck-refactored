@@ -92,6 +92,53 @@ which strengthens Q1's technical case.
    (the ceiling went from ~11 to ~12), because the cost is exponential in `n_act`.
    That is the concrete form of "a faster exponential is still exponential".
 
+#### Q1 candidate, 2026-08-31: **Cr₂ — two atoms, and it breaks both walls**
+
+Surveying the standard multireference benchmarks against the measured boundary,
+almost everything canonical is **already reachable**: N₂ and C₂ full-valence
+dissociation, benzene π, naphthalene π, [Fe₂S₂], and even Cr₂ at the usual
+CAS(12,12) (1.3 h). The first genuinely blocked case with real chemical standing
+on a *large* molecule is anthracene π, CAS(14,14) at ~3 days — but that is a
+24-atom molecule.
+
+**Cr₂ is the better target because the molecule is as small as a molecule gets
+while the active space is not.** The 12 active electrons are the 3d⁵4s¹ valence on
+each atom; the sextuple Cr–Cr bond is the textbook case where single-reference
+methods get the binding curve qualitatively wrong, so the larger active spaces are
+chemically motivated rather than invented to be big:
+
+| active space | ndet | FCI | CI vector | status |
+|---|---|---|---|---|
+| CAS(12,12) | 853 776 | ~1.3 h | 7 MB | **reachable today** |
+| CAS(12,14) | 9 018 009 | ~2 d | 72 MB | painful |
+| CAS(12,16) | 64 128 064 | ~47 d | 513 MB | out of reach |
+| **CAS(12,18)** | **344 622 096** | **~2 yr** | **2.76 GB** | **out of reach** |
+
+**Why CAS(12,18) is the sharpest statement of the gap:** it is the first case
+where **both** walls fail at once. Elsewhere in this document the finding was that
+*time binds and memory does not* — at `n_act` 14 a CI vector is only 0.09 GB. Here
+one CI vector is **2.76 GB** and a Davidson subspace is **~22 GB**, so the case is
+unreachable on cost *and* on storage. That is precisely the regime FCIQMC is for:
+it never stores a CI vector.
+
+**And it is inside the existing representation.** `kMaxPackedSpatialOrbitals` is 31
+(`casscf_internal.h:27`), so 18 active orbitals need no new determinant layer —
+the bitstring machinery already handles it. **Only the determinant count blocks**,
+which is the cleanest possible form of the FCIQMC argument.
+
+**Verified runnable, not just arithmetic.** Cr is present in `sto-3g`, `6-31g` and
+`cc-pVDZ/TZ/QZ`; Cr₂/STO-3G RHF converges in 44 iterations, and the CAS(12,12) rung
+starts and runs long, consistent with the 1.3 h estimate. A committed input
+(`tests/inputs/exploratory/fciqmc/cr2_casscf_target.hfinp`, **not** a regression
+case) runs the reachable rung so the boundary can be checked rather than asserted;
+raising `nactorb` to 14/16/18 walks off the cliff.
+
+**This is a candidate, not a mandate.** It answers "is there a chemically real
+calculation, on a molecule this codebase can already handle, that is blocked only
+by determinant count?" — yes, and it needs two atoms. It does **not** establish
+that anyone wants the Cr₂ binding curve badly enough to justify the work. That
+remains a decision, not a derivation.
+
 **What this does NOT answer: whether anything wants `n_act` ≥ 13.** The largest
 active space in the entire tree is `nactorb 6` (CAS(8,6)); nothing committed comes
 within seven orbitals of the boundary. So the technical gap is real and now better
