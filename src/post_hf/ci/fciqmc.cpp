@@ -170,6 +170,18 @@ namespace HartreeFock::Correlation::CI::QMC
         return out;
     }
 
+    Excitation draw_uniform_excitation(const DetKey &parent, int n_act, RandomSource &rng)
+    {
+        const auto conns = enumerate_connections(parent, n_act);
+        if (conns.empty())
+            return {};
+
+        const int n = static_cast<int>(conns.size());
+        Excitation picked = conns[static_cast<std::size_t>(rng.uniform_int(n))];
+        picked.p_gen = 1.0 / static_cast<double>(n);
+        return picked;
+    }
+
     Weight WalkerPopulation::total_population() const noexcept
     {
         // Summed in hash order, which is not reproducible across rehashes. This is

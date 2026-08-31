@@ -371,6 +371,181 @@ static void test_operator_convention_matches_shared()
     }
 }
 
+// ---------------------------------------------------------------------------
+// F2.2 -- the slow uniform generator
+// ---------------------------------------------------------------------------
+
+static void test_uniform_generator_support()
+{
+    // SUPPORT: the generator must reach every connection the oracle knows about,
+    // and never produce one it does not.
+    //
+    // For THIS generator the support check is partly redundant: it is uniform, so
+    // a support hole necessarily redistributes probability and the frequency test
+    // sees it too (measured: dropping one of 140 connections shows up at ~54
+    // sigma). The check is kept because its necessity appears at F2.3, where the
+    // generator is WEIGHTED: a connection with p_gen ~ 1e-6 that is never
+    // generated deviates by ~0.6 sigma over 400k draws, which no frequency test
+    // will ever flag. Support and frequency are different failure modes, and the
+    // difference only bites once p_gen stops being constant.
+    const DetKey parent = make_det(5, 5);
+    const int n_act = 7;
+    const auto conns = enumerate_connections(parent, n_act);
+
+    std::map<std::pair<CIString, CIString>, int> oracle;
+    for (const auto &e : conns)
+        oracle[{e.det.alpha, e.det.beta}] = 0;
+
+    RandomSource rng(4242);
+    std::map<std::pair<CIString, CIString>, int> seen;
+    for (int i = 0; i < 200000; ++i)
+    {
+        const auto e = draw_uniform_excitation(parent, n_act, rng);
+        if (!e.valid)
+        {
+            check(false, "generator returned an invalid excitation on a connected parent");
+            return;
+        }
+        seen[{e.det.alpha, e.det.beta}]++;
+    }
+
+    check(seen.size() == oracle.size(),
+          "generator reaches exactly as many distinct determinants as the oracle");
+    for (const auto &[key, count] : seen)
+        if (oracle.find(key) == oracle.end())
+        {
+            check(false, "generator produced a determinant the oracle says is unconnected");
+            return;
+        }
+    for (const auto &[key, unused] : oracle)
+        if (seen.find(key) == seen.end())
+        {
+            check(false, "generator never reached a determinant the oracle lists");
+            return;
+        }
+}
+
+static void test_uniform_generator_frequencies()
+{
+    // FREQUENCY: the empirical frequency of each connection must match its
+    // returned p_gen. This is the assertion that catches a mis-reported p_gen --
+    // the failure mode that produces a plausible, converged, WRONG energy.
+    const DetKey parent = make_det(5, 5);
+    const int n_act = 7;
+    const auto conns = enumerate_connections(parent, n_act);
+    const std::size_t n_conn = conns.size();
+
+    RandomSource rng(31337);
+    const int n_draws = 400000;
+    std::map<std::pair<CIString, CIString>, int> counts;
+    double p_gen_seen = -1.0;
+    for (int i = 0; i < n_draws; ++i)
+    {
+        const auto e = draw_uniform_excitation(parent, n_act, rng);
+        counts[{e.det.alpha, e.det.beta}]++;
+        if (p_gen_seen < 0.0)
+            p_gen_seen = e.p_gen;
+        else if (e.p_gen != p_gen_seen)
+        {
+            check(false, "uniform generator must report a constant p_gen");
+            return;
+        }
+    }
+
+    check_close(p_gen_seen, 1.0 / static_cast<double>(n_conn), 1e-15,
+                "reported p_gen equals 1/|connections|");
+
+    // sum(p_gen) over the connection set is 1: the distribution is normalized.
+    check_close(p_gen_seen * static_cast<double>(n_conn), 1.0, 1e-12,
+                "p_gen sums to 1 over the connection set");
+
+    // Each connection should appear n_draws * p_gen times, +/- sampling error.
+    // Binomial sigma = sqrt(N p (1-p)); require every bin within 5 sigma, which
+    // for 140 bins is a ~1-in-3000 false-failure rate overall.
+    const double expected = n_draws * p_gen_seen;
+    const double sigma = std::sqrt(n_draws * p_gen_seen * (1.0 - p_gen_seen));
+    int worst_bin = 0;
+    double worst_dev = 0.0;
+    for (const auto &[key, c] : counts)
+    {
+        const double dev = std::abs(c - expected) / sigma;
+        if (dev > worst_dev)
+        {
+            worst_dev = dev;
+            worst_bin = c;
+        }
+    }
+    if (!(worst_dev <= 5.0))
+    {
+        std::printf("  [FAIL] frequency does not match p_gen: worst bin %d, "
+                    "expected %.1f +/- %.1f (%.1f sigma)\n",
+                    worst_bin, expected, sigma, worst_dev);
+        ++g_failures;
+    }
+}
+
+static void test_uniform_generator_h2_exact()
+{
+    // H2/STO-3G has exactly 3 connections, so this case needs no statistical
+    // argument at all: all three must appear, each about a third of the time.
+    const DetKey parent = make_det(1, 1);
+    const auto conns = enumerate_connections(parent, 2);
+    check(conns.size() == 3, "H2/STO-3G parent has 3 connections");
+
+    RandomSource rng(7);
+    std::map<std::pair<CIString, CIString>, int> counts;
+    const int n = 60000;
+    bool p_gen_ok = true;
+    for (int i = 0; i < n; ++i)
+    {
+        const auto e = draw_uniform_excitation(parent, 2, rng);
+        // Report a p_gen mismatch ONCE, not once per draw: a check inside a
+        // 60k-iteration loop turns a single defect into megabytes of output and
+        // buries every other failure.
+        if (p_gen_ok && std::abs(e.p_gen - 1.0 / 3.0) > 1e-15)
+        {
+            check_close(e.p_gen, 1.0 / 3.0, 1e-15, "H2 p_gen is exactly 1/3");
+            p_gen_ok = false;
+        }
+        counts[{e.det.alpha, e.det.beta}]++;
+    }
+    check(counts.size() == 3, "all three H2 connections are reached");
+    bool bins_ok = true;
+    for (const auto &[key, c] : counts)
+        if (!(c > n / 3 - 1500 && c < n / 3 + 1500))
+            bins_ok = false;
+    check(bins_ok, "each H2 connection appears about a third of the time");
+}
+
+static void test_uniform_generator_reproducible()
+{
+    // The generator draws through RandomSource, so it inherits F1's contract:
+    // the same seed must reproduce the same sequence of excitations bitwise.
+    const DetKey parent = make_det(5, 5);
+    RandomSource a(999), b(999);
+    for (int i = 0; i < 5000; ++i)
+    {
+        const auto ea = draw_uniform_excitation(parent, 7, a);
+        const auto eb = draw_uniform_excitation(parent, 7, b);
+        if (ea.det.alpha != eb.det.alpha || ea.det.beta != eb.det.beta
+            || ea.phase != eb.phase || ea.p_gen != eb.p_gen)
+        {
+            check(false, "same seed must reproduce the excitation sequence bitwise");
+            return;
+        }
+    }
+}
+
+static void test_uniform_generator_degenerate()
+{
+    // A one-determinant space has no connections; the generator must say so
+    // rather than returning a garbage excitation.
+    const DetKey parent = make_det(1, 1);
+    RandomSource rng(1);
+    const auto e = draw_uniform_excitation(parent, 1, rng);
+    check(!e.valid, "a parent with no connections yields an invalid excitation");
+}
+
 int main()
 {
     std::printf("F1 -- FCIQMC walker container and RNG policy\n");
@@ -389,6 +564,13 @@ int main()
     test_oracle_excitation_rank();
     test_oracle_phase_is_a_sign();
     test_operator_convention_matches_shared();
+
+    std::printf("F2.2 -- slow uniform generator\n");
+    test_uniform_generator_support();
+    test_uniform_generator_frequencies();
+    test_uniform_generator_h2_exact();
+    test_uniform_generator_reproducible();
+    test_uniform_generator_degenerate();
 
     if (g_failures == 0)
     {

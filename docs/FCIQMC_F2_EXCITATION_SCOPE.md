@@ -112,8 +112,17 @@ within it by direct index arithmetic — O(1) per draw, no enumeration.
 - **Also verify:** the connection *support* is identical to F2.1's oracle — nothing
   generated that is not connected, nothing connected that is never generated. A
   generator that silently cannot reach some excitations is the subtler half of this
-  bug class, and a frequency test alone will not catch it if the unreachable
-  connections are simply absent from both sides.
+  bug class.
+
+  **Quantified while building F2.2, because the first attempt to demonstrate this
+  failed.** For a *uniform* generator the support check is partly redundant: a
+  support hole redistributes probability, so the frequency test catches it too
+  (measured — dropping 1 of 140 connections showed up at **54σ**). The
+  independence appears only once `p_gen` is **non-uniform**: a connection with
+  `p_gen ≈ 1e-6` that is never generated deviates by **~0.6σ** over 400k draws,
+  which no frequency test will flag. **So the support check is load-bearing at
+  F2.3 specifically**, and a mutation test at F2.2 cannot demonstrate it — do not
+  conclude from an F2.2 run that the two checks are interchangeable.
 
 ### F2.4 — mutation-verify the gate itself
 

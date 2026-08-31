@@ -232,6 +232,33 @@ namespace HartreeFock::Correlation::CI::QMC
         std::uint64_t _seed;
     };
 
+    // Draw one excitation uniformly from the full connection set (scope step
+    // F2.2).
+    //
+    // This is the SLOW, obviously-correct sampler: it enumerates every connection
+    // on every call and picks one uniformly, so `p_gen = 1/|connections|`.
+    // Production must not do this -- the target case has 7308 connections per
+    // determinant and enumerating them per walker per iteration defeats the point
+    // of the method. It exists as the reference distribution the fast generator
+    // (F2.3) must reproduce, and as the thing a fast generator can be diffed
+    // against when it disagrees with the oracle.
+    //
+    // Returns `valid = false` only when the parent has no connections at all,
+    // which happens for a one-determinant space.
+    //
+    // TEACHING NOTE. `p_gen` is uniform HERE, and that is a property of this
+    // particular sampler, not a requirement. A production generator deliberately
+    // biases toward cheap or important excitations, so its p_gen varies -- by
+    // 13.5x across connections on N2/STO-3G, for instance. Non-uniformity is not
+    // the bug. The bug is a returned p_gen that disagrees with the sampler's
+    // actual distribution, because the spawn divides by it: |H_ij| / p_gen. An
+    // over-reported p_gen silently suppresses those spawns, an under-reported one
+    // inflates them, and neither is visible in the trajectory.
+    Excitation draw_uniform_excitation(
+        const DetKey &parent,
+        int n_act,
+        RandomSource &rng);
+
 } // namespace HartreeFock::Correlation::CI::QMC
 
 #endif
