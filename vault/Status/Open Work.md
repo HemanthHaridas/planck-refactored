@@ -313,7 +313,35 @@ worth doing whether or not FCIQMC happens.
   entire tree is `nactorb 6`, so nothing wants this: **a person must name a
   molecule and active space.**
 
-  **Q2 SCOPED as a four-step ladder (G1-G4) that writes the gate BEFORE any
+  **Q2 ANSWERED YES (2026-08-31). G1-G4 are built and pass in 2.0 s as CTest
+  `planck-statistical-gate`.** A stochastic method *can* be validated here: a
+  `metric_within_sigma` runner assertion, a Flyvbjerg-Petersen blocking analysis
+  that recovers a known tau across a 39x range, a bitwise fixed-seed harness with
+  working negative controls, and an end-to-end trivial estimator whose sigma
+  scales as N^-0.478 (theory -0.5) and is *calibrated* (rms(dev)/sigma ~ 1) rather
+  than merely conservative. **The machinery is reusable, not throwaway** —
+  `metric_within_sigma` is in the runner and `tests/{blocking,reproducibility,
+  mc_estimator}.py` are independent of FCIQMC by construction. **Q2 no longer
+  blocks; Q1 still does** — nothing in the tree wants n_act >= 13, and only a
+  person can name a target.
+
+  **Three findings, each of which cost a wrong result first:** (1) **a fixture can
+  be too STRUCTURELESS** — the first G4 population was i.i.d. Gaussian and a
+  mutation restricting the sampler to half the space came back GREEN, because with
+  i.i.d. values every sub-range has the same mean, so real sampler bias moved the
+  answer only 0.58 sigma; a trending population makes the same mutation 25.9 sigma
+  out and catches a subtler 90%-coverage one. This is the **inverse** of the
+  `CCGEN_MERGE_TRANSPOSES` trap where a fixture was too GENERAL — **a fixture must
+  share the structure whose violation you intend to detect.** (2) **Python bytecode
+  caching can invalidate a mutation test silently** — a `cp` restore preserving the
+  mtime left a stale `.pyc` running the MUTATED module while the file on disk was
+  correct, misleading in either direction; clear `__pycache__` between mutation
+  runs. (3) **The naive standard error understates sigma by up to 6.6x** on
+  correlated data, so every gate downstream of it would pass — which is why the
+  blocking analysis is gated on synthetic AR(1) with an analytic answer, never on
+  real output.
+
+  **Q2 was SCOPED as a four-step ladder (G1-G4) that writes the gate BEFORE any
   FCIQMC.** G1 a `metric_within_sigma` runner check (the runner today has only
   exact comparisons — `metric_close/le/ge/le_metric/close_case`, no way to express
   "within N sigma"); G2 a blocking analysis gated on **synthetic AR(1) series with
