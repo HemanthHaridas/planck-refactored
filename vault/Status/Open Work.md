@@ -286,15 +286,46 @@ worth doing whether or not FCIQMC happens.
   (2/2) and N2 (7/7) at N2's orbital count, so the three vary electron count
   against fixed orbitals rather than moving ndet and electron count at once.
 
-  Refit on three points: **`ndet^1.69`** (pairwise 2.01 / 1.71 / 1.56) against the
-  old two-point `ndet^1.78` — so **the speedup moved the constant, not the
-  scaling**, as expected from removing a per-element allocation and adding threads.
-  ndet ~1e5 is now ~3 min and water/6-31G (1.66 M) ~6 h. **The strategic conclusion
-  is unchanged**: FCIQMC targets 1e9+, which no deterministic reference reaches, so
-  the **fixed-seed reproducibility gate stays primary** and the statistical gate
-  stays restricted to small systems — that regime is just an order of magnitude
-  wider now. Candidate inputs are committed under
-  `tests/inputs/exploratory/fciqmc/`.
+  **A three-point fit gave `ndet^1.69`, and a fourth point falsified it by 4.3x.**
+  BeH2/6-31G (ndet 81 796) was run specifically to test the extrapolation:
+  predicted 2.6 min, **measured 36.7 s**. The cause is that per-determinant cost
+  tracks **electron count**, not ndet — it varies 3.3x across these systems at
+  comparable ndet (0.328 / 0.575 / 1.081 / 0.448 s per 1e3 det for Be 2e / N2 7e /
+  C2 6e / BeH2 3e). Fitting each regime separately: **6-7 electrons -> ndet^1.56,
+  2-3 electrons -> ndet^1.14**. This is the ORIGINAL two-point caveat (the fit
+  conflates ndet with electron count) **confirmed, not dissolved** — an earlier
+  revision of this entry claimed it was "partly addressed" because C2 and N2 have
+  similar electron counts, which was wrong: the low-electron systems still anchored
+  the other end of the same fit. **Quote the electron-resolved exponents, never the
+  pooled 1.69.** The strategic conclusion is unchanged: FCIQMC targets 1e9+, so the
+  **fixed-seed reproducibility gate stays primary** and the statistical gate stays
+  small-system-only. Candidate inputs, including the falsifying BeH2 point, are
+  committed under `tests/inputs/exploratory/fciqmc/`.
+
+  **Q1 ANSWERED technically, still open practically (2026-08-30).** Measured
+  against the post-speedup FCI, the scope's own `n_act` table was wrong: the
+  practical ceiling is **`n_act` ~= 12, not 16** (n_act 14 ~= 3 days, 16 ~= 208
+  days, 18 ~= 36 years at the 6-7 electron exponent). So the FCIQMC window opens
+  around **13**, wider than the claimed 18-31. Two corrections to the framing:
+  **time binds, not memory** (at n_act 14 a CI vector is 0.09 GB while the solve is
+  3 days — the "cannot store the vector" argument only bites at n_act 18), and the
+  **17x speedup bought about ONE n_act step**. But the largest active space in the
+  entire tree is `nactorb 6`, so nothing wants this: **a person must name a
+  molecule and active space.**
+
+  **Q2 SCOPED as a four-step ladder (G1-G4) that writes the gate BEFORE any
+  FCIQMC.** G1 a `metric_within_sigma` runner check (the runner today has only
+  exact comparisons — `metric_close/le/ge/le_metric/close_case`, no way to express
+  "within N sigma"); G2 a blocking analysis gated on **synthetic AR(1) series with
+  known tau**, never on real output, because a blocking analysis that under-reports
+  sigma makes every downstream gate pass; G3 a fixed-seed reproducibility harness
+  proven to FAIL on an injected seed perturbation before it is trusted; G4 a
+  deliberately trivial stochastic estimator end-to-end, asserting the mean is within
+  3 sigma **and that sigma shrinks as sqrt(N)** — the slope is what catches a biased
+  sampler that a mean-only check cannot. No walkers, no `p_gen`, no initiator
+  anywhere in G1-G4. If G2 or G4 cannot be made to pass, that kills the item before
+  a walker container exists; if they pass, the machinery is reusable rather than
+  thrown away.
 
   **The allocation prerequisite this scope named is now satisfied.** It warned that
   building the spawn on a `slater_condon_element` that heap-allocated per call

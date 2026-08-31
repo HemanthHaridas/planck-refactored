@@ -4,12 +4,24 @@
 whether to build it at all.** Opened 2026-08-30; **fixture costs and the
 prerequisite rescoped 2026-08-30** after the FCI sigma build got ~17x faster.
 
-**What the rescope changed, in one line:** the deterministic reference is now
-roughly an order of magnitude cheaper, so the small-system window where FCIQMC can
-be validated at all is wider (C2/STO-3G went from "abandoned at >10 min" to
+**Status of the two gating questions:**
+
+- **Q1 (is there a target?) — measured, still open, and it is not a question the
+  codebase can answer.** The `n_act` window is now quantified and is **wider than
+  this scope originally claimed**: the practical deterministic ceiling is `n_act`
+  ≈ 12, not 16, so the gap opens around 13. But nothing in the tree wants it — the
+  largest committed active space is CAS(8,6). **Someone must name a molecule and
+  active space.**
+- **Q2 (can a stochastic method be gated here?) — answerable, and scoped as a
+  four-step ladder** (G1-G4) that builds the gate against the *existing* FCI and
+  introduces no FCIQMC code at all. It is cheap, and a failure kills the item
+  before any walker exists.
+
+**What the earlier rescope changed:** the deterministic reference is roughly an
+order of magnitude cheaper (C2/STO-3G went from "abandoned at >10 min" to
 **47.7 s**), and the allocation prerequisite this scope named is **already
-satisfied**. Neither Q1 nor Q2 below is affected — the case for building FCIQMC at
-all is exactly as unproven as it was.
+satisfied**. The speedup does not strengthen the case for FCIQMC — it bought about
+**one** `n_act` step.
 
 FCIQMC (Booth/Thom/Alavi 2009) samples the FCI wavefunction with a population of
 signed walkers evolving under the imaginary-time Schrödinger equation, rather than
@@ -51,6 +63,43 @@ active space someone wants and cannot currently run. If the answer is "none yet"
 this is a capability looking for a use, and the right decision is to record that
 and stop.
 
+#### Q1, measured 2026-08-30 — the table above is WRONG, and the gap is wider
+
+The `n_act` table was written from storage estimates. Measured against the
+**post-speedup** FCI (`ndet^1.56` for the 6-7 electron regime, anchored on C2's
+47.7 s), the deterministic ceiling is **much lower than it claims**:
+
+| n_act | ndet (half filling) | scope said | **measured/extrapolated** |
+|---|---|---|---|
+| 10 | 63 504 | trivial | **1.4 min** |
+| 12 | 853 776 | — | **1.3 h** |
+| 14 | 11 778 624 | "feasible" | **~3 days** |
+| 16 | 165 636 900 | "hard, direct-sigma only" | **~208 days** |
+| 18 | 2.4 × 10⁹ | "out of reach" | **~36 years** |
+
+**The practical ceiling is `n_act` ≈ 12, not 16.** So the FCIQMC window is not
+`n_act` 18-31 — it opens at about **13**, and it is *wider* than the scope claimed,
+which strengthens Q1's technical case.
+
+**Two corrections to how the gap was framed:**
+
+1. **Time binds, not memory.** At `n_act` 14 one CI vector is only **0.09 GB** —
+   Davidson holds several, so call it under 1 GB — while the solve is ~3 days. The
+   "cannot store the CI vector" framing only starts to bite around `n_act` 18
+   (18.9 GB), by which point cost has been prohibitive for three `n_act` steps.
+   **FCIQMC's argument here is wall-clock, not storage.**
+2. **The 17x speedup does not move this.** It bought roughly **one** `n_act` step
+   (the ceiling went from ~11 to ~12), because the cost is exponential in `n_act`.
+   That is the concrete form of "a faster exponential is still exponential".
+
+**What this does NOT answer: whether anything wants `n_act` ≥ 13.** The largest
+active space in the entire tree is `nactorb 6` (CAS(8,6)); nothing committed comes
+within seven orbitals of the boundary. So the technical gap is real and now better
+quantified, but **Q1's actual question — name the calculation — remains open, and
+it is not a question the codebase can answer.** It needs a person to say "I want
+this molecule with this active space." Until then the honest status is: a
+well-characterized capability with no established use.
+
 ### Q2 — can a stochastic method live in this validation culture?
 
 **This is the real obstacle, and it is cultural more than technical.** Planck's
@@ -81,6 +130,76 @@ does not exist here:
 fixed-seed + blocked-error gate cannot be made to pass reliably on a case where
 FCI gives the exact answer, the method will not be maintainable here regardless of
 how good the sampling is.
+
+#### The Q2 ladder — build the gate before any FCIQMC
+
+Steps ordered so **the cheapest can kill the expensive ones**, and so nothing here
+requires a walker to exist. G1-G3 are pure test infrastructure against the FCI
+that already ships; only G4 introduces a stochastic estimator, and it uses a
+*trivial* one rather than FCIQMC so that a failure indicts the gate rather than the
+method.
+
+**The whole ladder is throwaway if it fails, and that is the point** — it costs a
+few days and it answers a question that would otherwise be discovered after the
+walker container, the excitation generator and the population control are written.
+
+**G1 — a `metric_within_sigma` check in the runner.** The runner has
+`metric_close`, `metric_le`, `metric_ge`, `metric_le_metric` and
+`metric_close_case` (`tests/run_regressions.py:375-458`) — **all exact-value
+comparisons; there is no assertion that can express "within N σ".** Add one taking
+a value metric, an uncertainty metric and a multiplier.
+
+- *Verify:* a hand-written pair of metrics passes at 3σ and fails at 0.1σ. No
+  FCIQMC involved. **If this cannot be expressed in the manifest cleanly, stop —
+  the gate has nowhere to live.**
+
+**G2 — a blocking-analysis implementation, gated against a known answer.** A naive
+standard error on a correlated series understates σ badly; Flyvbjerg-Petersen
+blocking is the standard fix. Implement it and validate it on **synthetic series
+with a known autocorrelation time**, not on FCIQMC output.
+
+- *Verify:* on an AR(1) series with known τ, blocked σ recovers the analytic value
+  within a few percent, and **the naive standard error visibly does not** — that
+  contrast is the test. On i.i.d. input, blocked σ agrees with the naive one.
+- *This is the step most likely to be quietly wrong*, because a blocking analysis
+  that under-reports σ makes every downstream gate pass. Gate it on synthetic data
+  where the answer is derivable, never on real output.
+
+**G3 — a fixed-seed reproducibility harness.** Same seed → bitwise-identical
+trajectory, across reruns and across `OMP_NUM_THREADS`. Demonstrate it on a
+**deterministic** stand-in first: run the existing FCI twice and assert
+byte-identical output, so the harness is proven before anything stochastic uses it.
+
+- *Verify:* the harness catches an injected perturbation (flip one seed bit → the
+  gate must fail). **A reproducibility gate that has never been shown to fail is
+  not evidence of anything** — this codebase has been bitten by exactly that
+  (`ch4_rccsdt_sto3g` sat green for its whole life without running its kernel).
+
+**G4 — a trivial stochastic estimator, end to end through G1-G3.** Not FCIQMC:
+something with a known exact answer and a tunable variance — e.g. a Monte-Carlo
+estimate of a CI-vector norm or an `H_ii` expectation over determinants sampled
+from the existing enumerated space. It must exercise the RNG policy, the blocking
+analysis, and both gates.
+
+- *Verify:* the estimator's mean sits within 3σ of the exact value; **σ shrinks as
+  √N** (assert the slope, not just the value — this is what catches a biased
+  sampler that a mean-only check cannot see); the fixed-seed gate reproduces
+  bitwise at 1/2/4/8 threads.
+
+**The verdict.** If G1-G4 pass, a stochastic method is maintainable in this
+codebase and the machinery FCIQMC needs already exists — **Q2 is answered yes and
+the ladder is reusable**, not thrown away. If G2 or G4 cannot be made to pass
+reliably, that is the finding, and it kills the item **before** a walker container,
+an excitation generator or population control has been written.
+
+**Scope discipline for this ladder:**
+
+- **No walkers, no spawning, no `p_gen`, no initiator.** Anything FCIQMC-specific
+  in G1-G4 means the ladder has stopped being a cheap probe.
+- **No new RNG policy beyond what G4 needs** — one seeded `std::mt19937_64` and a
+  documented rule that draw order must not depend on thread count.
+- **G4's estimator is deliberately useless physics.** If it starts looking like a
+  contribution, it has grown past its purpose.
 
 ## The validation fixture — measured, 2026-08-30
 
@@ -145,18 +264,38 @@ would exceed the space.
 
 ### The FCI reference cost grows fast — do not plan on a large one
 
-**Refit 2026-08-30 on three points** (Be 8 281 / 2.72 s, N2 14 400 / 8.28 s,
-C2 44 100 / 47.69 s, all at 4 threads): **ndet^1.69**, with pairwise slopes of
-2.01, 1.71 and 1.56. The old two-point figure was ndet^1.78, so the exponent is
-about where it was — **the speedup moved the constant, not the scaling**, which is
-what one expects from removing a per-element allocation and adding threads.
+**Refit 2026-08-30, then CORRECTED by a fourth point.** A three-point fit (Be
+8 281 / 2.72 s, N2 14 400 / 8.28 s, C2 44 100 / 47.69 s) gave **ndet^1.69**. A
+fourth point was then run specifically to test that extrapolation — **BeH2/6-31G,
+ndet 81 796, predicted 2.6 min, measured 36.7 s.** The fit was wrong by **4.3x, in
+the optimistic direction.**
 
-The fit is still thin, but one of the two original caveats is now partly
-addressed: C2 (6α/6β) and N2 (7α/7β) have similar electron counts at the same
-orbital count, so the Be↔N2 conflation of ndet with electron count no longer drives
-the fit alone. The declining pairwise slope (2.01 → 1.56) is the usual sign of
-fixed overhead being amortized, so **1.69 is more likely an over- than
-under-estimate at large ndet**.
+**The cause is electron count, and a single ndet exponent cannot express it:**
+
+| system | ndet | nα | wall | s per 10³ det |
+|---|---|---|---|---|
+| Be/6-31g\* | 8 281 | 2 | 2.7 s | **0.328** |
+| N2/STO-3G | 14 400 | 7 | 8.3 s | **0.575** |
+| C2/STO-3G | 44 100 | 6 | 47.7 s | **1.081** |
+| BeH2/6-31G | 81 796 | 3 | 36.7 s | **0.448** |
+
+Per-determinant cost varies **3.3x** at comparable ndet, ordered by electron count,
+not by ndet. Fitting each electron regime separately:
+
+- **6-7 electrons: ndet^1.56** (N2 → C2)
+- **2-3 electrons: ndet^1.14** (Be → BeH2)
+
+This is the original two-point caveat — that the fit conflates ndet with electron
+count — **confirmed rather than dissolved**. An earlier revision of this section
+claimed the caveat was "partly addressed" because C2 and N2 have similar electron
+counts; that reasoning was right about those two points and wrong to conclude the
+conflation was gone, because it left the low-electron systems anchoring the other
+end of the same fit. **Quote the electron-resolved exponents, never the pooled
+1.69.**
+
+More electrons means more excitations enumerated per determinant, which is exactly
+what the sigma build's inner loops do — so the direction is expected; only the
+size was not.
 
 **Consequence for the scope — this is the part that actually moved.** The
 deterministic reference used to be practical only below ndet ≈ 10⁵ *in principle*,
@@ -164,9 +303,9 @@ with C2 at 44 100 already unaffordable *in practice*. Now:
 
 | ndet | FCI reference cost |
 |---|---|
-| 44 100 (C2/STO-3G) | **47.7 s — measured** |
-| ~10⁵ | **~3 min — extrapolated** |
-| 1.66 M (water/6-31G) | ~6 h — extrapolated |
+| 44 100 (C2/STO-3G, 6α) | **47.7 s — measured** |
+| 81 796 (BeH2/6-31G, 3α) | **36.7 s — measured** |
+| 1.66 M (water/6-31G, 5α) | ~2-6 h — extrapolated, regime-dependent |
 
 So the window where a gate can *recompute* the exact answer rather than hard-code
 it now comfortably includes ndet ~10⁵. **That does not change the strategic
@@ -290,6 +429,11 @@ justify, not easier — the burden is now to show why FCIQMC cannot do what the
 sigma build did.
 
 ## If it proceeds: suggested first cut
+
+**Read the G1-G4 ladder under Q2 first — it supersedes step 2 of this list and
+should be done before any of it.** What follows assumes Q1 has been answered with
+a named target and G1-G4 have passed; it is the first cut of *FCIQMC itself*,
+which nothing above authorizes yet.
 
 Deliberately minimal, aimed at answering Q2 rather than at being useful.
 
