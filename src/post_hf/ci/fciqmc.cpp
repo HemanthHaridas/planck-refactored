@@ -314,6 +314,61 @@ namespace HartreeFock::Correlation::CI::QMC
         return {};
     }
 
+    Excitation draw_excitation_in_space(
+        const DetKey &parent,
+        int n_act,
+        RandomSource &rng,
+        const InSpacePredicate &in_space,
+        double p_accept,
+        int max_attempts)
+    {
+        // Rejection sampling. The correction to p_gen is the crux: an accepted
+        // draw happened with unrestricted probability p_gen, but CONDITIONED on
+        // acceptance it happened with p_gen / p_accept. Reporting the
+        // unrestricted value over-reports by 1/p_accept and silently suppresses
+        // every spawn out of a restricted space.
+        //
+        // p_accept is a CONSTANT supplied by the caller, never the attempt count
+        // of this call -- see the Jensen note in the header. An earlier draft used
+        // `p_gen * attempts`, which is unbiased for p_gen and biased by 1.72x
+        // (measured, at p_accept = 0.3) in the 1/p_gen the spawn actually uses.
+        if (!(p_accept > 0.0) || !(p_accept <= 1.0))
+            return {};
+
+        for (int i = 0; i < max_attempts; ++i)
+        {
+            const auto e = draw_excitation(parent, n_act, rng);
+            if (!e.valid)
+                continue;
+            if (!in_space(e.det))
+                continue;
+
+            Excitation accepted = e;
+            accepted.p_gen = e.p_gen / p_accept;
+            return accepted;
+        }
+        return {};
+    }
+
+    double measure_acceptance_rate(
+        const DetKey &parent,
+        int n_act,
+        RandomSource &rng,
+        const InSpacePredicate &in_space,
+        int n_samples)
+    {
+        if (n_samples <= 0)
+            return 0.0;
+        int accepted = 0;
+        for (int i = 0; i < n_samples; ++i)
+        {
+            const auto e = draw_excitation(parent, n_act, rng);
+            if (e.valid && in_space(e.det))
+                ++accepted;
+        }
+        return static_cast<double>(accepted) / static_cast<double>(n_samples);
+    }
+
     Weight WalkerPopulation::total_population() const noexcept
     {
         // Summed in hash order, which is not reproducible across rehashes. This is

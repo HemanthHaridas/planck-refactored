@@ -152,6 +152,27 @@ target irrep.
   silently while reporting the unrestricted `p_gen` is precisely the bias this scope
   exists to prevent.
 
+**A trap found while building this, which nearly shipped.** The natural correction
+is to divide `p_gen` by the acceptance rate, and the natural way to get that rate
+is the attempt count of the call that just succeeded. **That estimator is biased in
+the quantity that matters, and every obvious check of it passes.**
+
+`E[p_gen × attempts]` is exactly the conditional probability — the estimator is
+unbiased *for `p_gen`*. But the spawn uses `|H_ij| / p_gen`, and `E[1/X] ≠ 1/E[X]`
+(Jensen). Measured at `p_accept = 0.3`: the mean of `p_gen` is correct to 0.1 %,
+and the mean of `1/p_gen` is **1.72x too large** — every spawn out of a restricted
+space over-weighted, with `p_gen`'s own mean looking perfect.
+
+The fix is to measure the acceptance rate **once, separately** (`measure_acceptance_rate`)
+and pass it in as a constant, so the correction is not a random variable. A
+regression test pins both halves — that the per-call estimator *is* unbiased for
+`p_gen`, and that it *is* biased in `1/p_gen` — so nobody simplifies the separate
+measurement away on the grounds that the obvious check passes.
+
+**Generalizable: when a sampled quantity is used as a divisor, unbiasedness of the
+estimator is the wrong property to check.** Check the estimator of the quantity the
+consumer actually computes.
+
 ## What this must not do
 
 - **Do not gate `p_gen` by self-consistency.** Checking that the generator's own

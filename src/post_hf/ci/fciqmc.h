@@ -4,6 +4,7 @@
 #include "post_hf/ci/strings.h"
 
 #include <cstdint>
+#include <functional>
 #include <random>
 #include <unordered_map>
 #include <vector>
@@ -287,6 +288,76 @@ namespace HartreeFock::Correlation::CI::QMC
         const DetKey &parent,
         int n_act,
         RandomSource &rng);
+
+    // Is `det` inside the sampled space? (scope step F2.5)
+    //
+    // The generator conserves particle number per spin channel structurally --
+    // it annihilates and creates exactly once per spin -- so that constraint
+    // needs no filter, only a gate asserting it holds.
+    //
+    // SYMMETRY is different, and is the trap this step exists for. When the CI
+    // space is restricted (target irrep, or RAS occupancy limits) the generator
+    // will happily produce determinants outside it. Discarding those is
+    // legitimate -- but ONLY if the discard is reflected in the accepted
+    // determinants' p_gen, because the spawn divides by p_gen.
+    //
+    // Concretely: if a fraction f of draws is discarded, the surviving draws
+    // occur f-times less often than the unrestricted p_gen claims, so using the
+    // unrestricted p_gen over-reports and silently suppresses those spawns. That
+    // is a plausible, converged, WRONG energy -- the exact failure this scope
+    // exists to prevent.
+    //
+    // Two ways to stay honest, and the choice belongs to the caller:
+    //
+    //   (a) REJECTION SAMPLING -- redraw until the excitation is in-space, and
+    //       report p_gen / p_accept. Correct, and the acceptance rate is
+    //       measurable, but the cost grows as the space gets more restricted.
+    //   (b) DISCARD AND RENORMALIZE -- keep one draw, and let the discarded
+    //       weight be absorbed by the shift. Cheaper, but it changes the
+    //       normalization of the sampled operator, so it must be a deliberate
+    //       decision rather than an accident.
+    //
+    // Neither is implemented here: F2.5 provides the PREDICATE and the gate, so
+    // that whichever policy the spawn adopts can be checked. What is forbidden is
+    // discarding silently while reporting the unrestricted p_gen.
+    using InSpacePredicate = std::function<bool(const DetKey &)>;
+
+    // Draw an in-space excitation by rejection sampling, reporting a p_gen that
+    // accounts for the rejections (option (a) above).
+    //
+    // `p_accept` MUST be a fixed, pre-measured acceptance rate for this parent --
+    // NOT estimated from the attempts this call happened to take.
+    //
+    // That distinction is not pedantic; getting it wrong is a 1.7x bias, measured.
+    // Using the per-call attempt count gives an estimator that is unbiased for
+    // p_gen itself, but the spawn uses |H_ij| / p_gen, and E[1/X] != 1/E[X]
+    // (Jensen). With p_accept = 0.3 the per-call form over-weights spawns by 1.72x
+    // while looking correct in every check of p_gen's mean. Measure the acceptance
+    // rate once over many draws with measure_acceptance_rate() and pass it in.
+    //
+    // Returns valid = false if no in-space excitation was found within
+    // `max_attempts`, which the caller must handle rather than treating as "no
+    // connections".
+    Excitation draw_excitation_in_space(
+        const DetKey &parent,
+        int n_act,
+        RandomSource &rng,
+        const InSpacePredicate &in_space,
+        double p_accept,
+        int max_attempts = 100);
+
+    // Measure the fraction of draws from `parent` that land in-space.
+    //
+    // Run once per parent (or once per space, if the rate is uniform enough) and
+    // feed the result to draw_excitation_in_space. Separating measurement from
+    // sampling is what keeps the p_gen correction a constant rather than a
+    // random variable -- see the Jensen note above.
+    double measure_acceptance_rate(
+        const DetKey &parent,
+        int n_act,
+        RandomSource &rng,
+        const InSpacePredicate &in_space,
+        int n_samples = 10000);
 
 } // namespace HartreeFock::Correlation::CI::QMC
 

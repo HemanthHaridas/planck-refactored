@@ -821,6 +821,334 @@ static void test_production_generator_reproducible()
     }
 }
 
+// ---------------------------------------------------------------------------
+// F2.4 -- verify the GATE, by running it against deliberately broken generators
+// ---------------------------------------------------------------------------
+//
+// The scope asks for three injected defects that make the gate go red. Doing
+// that by editing the generator proves it once, on the day it is done, and then
+// the evidence evaporates -- a later change can weaken the gate and nothing
+// notices. Instead the broken generators live here as fixtures and the gate's
+// ABILITY TO FAIL is asserted on every run.
+//
+// This matters because a statistical gate that cannot fail is worse than no gate:
+// it produces a green tick that means nothing. The codebase has been bitten by
+// exactly that (ch4_rccsdt_sto3g sat green for its whole life while never running
+// the kernel it protected).
+
+// The defect each broken generator carries.
+enum class Defect
+{
+    PGenOffByConstant,   // reports p_gen/2 -- the classic mis-report
+    NoOppositeSpin,      // never generates ab doubles -- a support hole
+    ClassProbMismatch,   // draws with one class probability, reports another
+};
+
+static Excitation draw_broken(const DetKey &parent, int n_act, RandomSource &rng,
+                              Defect defect)
+{
+    if (defect == Defect::PGenOffByConstant)
+    {
+        auto e = draw_excitation(parent, n_act, rng);
+        e.p_gen *= 0.5;
+        return e;
+    }
+
+    if (defect == Defect::NoOppositeSpin)
+    {
+        // Redraw until the excitation is not an opposite-spin double. p_gen is
+        // left as the unrestricted generator reported it, so the frequencies of
+        // the remaining classes are inflated relative to their claimed p_gen --
+        // but the headline failure is that the ab connections are unreachable.
+        for (int attempt = 0; attempt < 1000; ++attempt)
+        {
+            const auto e = draw_excitation(parent, n_act, rng);
+            if (!e.valid)
+                return e;
+            const bool alpha_moved = e.det.alpha != parent.alpha;
+            const bool beta_moved = e.det.beta != parent.beta;
+            if (!(alpha_moved && beta_moved))
+                return e;
+        }
+        return {};
+    }
+
+    // ClassProbMismatch: draw singles far more often than reported. Implemented
+    // by biasing the draw and leaving p_gen untouched.
+    Excitation e = draw_excitation(parent, n_act, rng);
+    if (rng.uniform() < 0.5)
+    {
+        // Force a single roughly half the time, without touching p_gen.
+        for (int attempt = 0; attempt < 100; ++attempt)
+        {
+            const auto candidate = draw_excitation(parent, n_act, rng);
+            if (!candidate.valid)
+                break;
+            const bool alpha_moved = candidate.det.alpha != parent.alpha;
+            const bool beta_moved = candidate.det.beta != parent.beta;
+            const int rank = (std::popcount(candidate.det.alpha ^ parent.alpha)
+                              + std::popcount(candidate.det.beta ^ parent.beta)) / 2;
+            if (rank == 1 && !(alpha_moved && beta_moved))
+                return candidate;
+        }
+    }
+    return e;
+}
+
+// Re-run the F2.3 checks against a broken generator and report whether the gate
+// noticed. Returns true if the gate FAILED (which is the desired outcome here).
+static bool gate_rejects(Defect defect, const DetKey &parent, int n_act, int n_draws,
+                         bool &support_failed, bool &frequency_failed)
+{
+    const auto conns = enumerate_connections(parent, n_act);
+    std::map<std::pair<CIString, CIString>, int> oracle;
+    for (const auto &e : conns)
+        oracle[{e.det.alpha, e.det.beta}] = 0;
+
+    RandomSource rng(556677);
+    std::map<std::pair<CIString, CIString>, int> counts;
+    std::map<std::pair<CIString, CIString>, double> p_gen;
+    for (int i = 0; i < n_draws; ++i)
+    {
+        const auto e = draw_broken(parent, n_act, rng, defect);
+        if (!e.valid)
+            continue;
+        const auto key = std::make_pair(e.det.alpha, e.det.beta);
+        counts[key]++;
+        p_gen[key] = e.p_gen;
+    }
+
+    support_failed = (counts.size() != oracle.size());
+    for (const auto &[key, unused] : counts)
+        if (oracle.find(key) == oracle.end())
+            support_failed = true;
+
+    frequency_failed = false;
+    for (const auto &[key, count] : counts)
+    {
+        const double p = p_gen.at(key);
+        const double expected = n_draws * p;
+        const double sigma = std::sqrt(n_draws * p * (1.0 - p));
+        if (sigma > 0.0 && std::abs(count - expected) / sigma > 5.0)
+            frequency_failed = true;
+    }
+    return support_failed || frequency_failed;
+}
+
+static void test_gate_rejects_broken_generators()
+{
+    const DetKey parent = make_det(5, 5);
+    const int n_act = 7;
+    const int n_draws = 400000;
+
+    bool sup = false, freq = false;
+
+    // 1. p_gen off by a constant -> the FREQUENCY comparison must go red.
+    check(gate_rejects(Defect::PGenOffByConstant, parent, n_act, n_draws, sup, freq),
+          "gate rejects a generator whose p_gen is off by a constant factor");
+    check(freq, "  ...and it is the frequency check that catches it");
+
+    // 2. no opposite-spin doubles -> the SUPPORT comparison must go red. This is
+    //    the case the scope singles out: 100 of water's 140 connections are ab
+    //    doubles, so their absence is a gaping support hole.
+    check(gate_rejects(Defect::NoOppositeSpin, parent, n_act, n_draws, sup, freq),
+          "gate rejects a generator that never produces opposite-spin doubles");
+    check(sup, "  ...and it is the support check that catches it");
+
+    // 3. class-probability mismatch -> frequencies must go red.
+    check(gate_rejects(Defect::ClassProbMismatch, parent, n_act, n_draws, sup, freq),
+          "gate rejects a generator whose draw probability differs from its p_gen");
+    check(freq, "  ...and it is the frequency check that catches it");
+
+    // NEGATIVE CONTROL: the same machinery must ACCEPT the real generator.
+    // Without this, a gate_rejects() that always returned true would satisfy
+    // every check above.
+    {
+        const auto st = sample_generator(parent, n_act, n_draws, 556677);
+        bool ok = (st.counts.size() == enumerate_connections(parent, n_act).size());
+        double worst = 0.0;
+        for (const auto &[key, count] : st.counts)
+        {
+            const double p = st.p_gen.at(key);
+            const double expected = n_draws * p;
+            const double sigma = std::sqrt(n_draws * p * (1.0 - p));
+            worst = std::max(worst, std::abs(count - expected) / sigma);
+        }
+        check(ok && worst <= 5.0,
+              "the same gate ACCEPTS the real generator (else it rejects everything)");
+    }
+}
+
+// ---------------------------------------------------------------------------
+// F2.5 -- spin and symmetry constraints
+// ---------------------------------------------------------------------------
+
+static void test_particle_number_is_structural()
+{
+    // Per-spin particle number is conserved by CONSTRUCTION -- the generator
+    // annihilates once and creates once per spin channel -- so this needs no
+    // filter, only proof that the construction holds. Checked on open shell too,
+    // where an index bug would be most likely to break it.
+    struct Case { int n_act, na, nb; };
+    const Case cases[] = {{7, 5, 5}, {10, 7, 7}, {7, 5, 3}, {6, 4, 2}};
+    for (const auto &c : cases)
+    {
+        const DetKey parent = make_det(c.na, c.nb);
+        RandomSource rng(90210);
+        for (int i = 0; i < 50000; ++i)
+        {
+            const auto e = draw_excitation(parent, c.n_act, rng);
+            if (!e.valid)
+                continue;
+            if (std::popcount(e.det.alpha) != c.na || std::popcount(e.det.beta) != c.nb)
+            {
+                check(false, "generator conserves per-spin electron count");
+                return;
+            }
+        }
+    }
+}
+
+static void test_in_space_rejection_sampling()
+{
+    // A synthetic "symmetry" restriction: keep only determinants whose alpha
+    // string has even parity in the low 3 bits. Arbitrary, but it restricts the
+    // space the way a target irrep does, and its acceptance rate is measurable.
+    const DetKey parent = make_det(5, 5);
+    const int n_act = 7;
+    const auto in_space = [](const DetKey &d) {
+        return (std::popcount(d.alpha & CIString{0b111}) % 2) == 0;
+    };
+
+    RandomSource probe(11111);
+    const double p_accept = measure_acceptance_rate(parent, n_act, probe, in_space, 200000);
+    check(p_accept > 0.05 && p_accept < 0.95,
+          "the synthetic restriction actually restricts (else the test is vacuous)");
+
+    // Every accepted draw must be in-space.
+    RandomSource rng(22222);
+    int n_valid = 0;
+    for (int i = 0; i < 50000; ++i)
+    {
+        const auto e = draw_excitation_in_space(parent, n_act, rng, in_space, p_accept);
+        if (!e.valid)
+            continue;
+        ++n_valid;
+        if (!in_space(e.det))
+        {
+            check(false, "rejection sampling returns only in-space determinants");
+            return;
+        }
+    }
+    check(n_valid > 45000, "rejection sampling succeeds on most calls");
+}
+
+static void test_in_space_p_gen_is_corrected()
+{
+    // THE F2.5 assertion. A restricted draw happens LESS often than the
+    // unrestricted p_gen claims, so p_gen must be divided by the acceptance rate.
+    // Reporting the unrestricted value silently suppresses every spawn out of a
+    // restricted space -- a plausible, converged, wrong energy.
+    const DetKey parent = make_det(5, 5);
+    const int n_act = 7;
+    const auto in_space = [](const DetKey &d) {
+        return (std::popcount(d.alpha & CIString{0b111}) % 2) == 0;
+    };
+
+    RandomSource probe(33333);
+    const double p_accept = measure_acceptance_rate(parent, n_act, probe, in_space, 200000);
+
+    // Sample and check frequency against the CORRECTED p_gen.
+    RandomSource rng(44444);
+    const int n_draws = 800000;
+    std::map<std::pair<CIString, CIString>, int> counts;
+    std::map<std::pair<CIString, CIString>, double> p_gen;
+    int accepted = 0;
+    for (int i = 0; i < n_draws; ++i)
+    {
+        const auto e = draw_excitation_in_space(parent, n_act, rng, in_space, p_accept);
+        if (!e.valid)
+            continue;
+        ++accepted;
+        counts[{e.det.alpha, e.det.beta}]++;
+        p_gen[{e.det.alpha, e.det.beta}] = e.p_gen;
+    }
+
+    // Each in-space determinant appears accepted * p_gen_corrected times.
+    double worst = 0.0;
+    for (const auto &[key, count] : counts)
+    {
+        const double p = p_gen.at(key);
+        const double expected = accepted * p;
+        const double sigma = std::sqrt(accepted * p * (1.0 - p));
+        if (sigma > 0.0)
+            worst = std::max(worst, std::abs(count - expected) / sigma);
+    }
+    if (!(worst <= 5.0))
+    {
+        std::printf("  [FAIL] corrected p_gen does not match in-space frequency "
+                    "(worst %.1f sigma)\n", worst);
+        ++g_failures;
+    }
+
+    // The corrected p_gen must sum to 1 over the IN-SPACE set.
+    double total = 0.0;
+    for (const auto &[key, p] : p_gen)
+        total += p;
+    check_close(total, 1.0, 0.02, "corrected p_gen sums to 1 over the in-space set");
+
+    // And it must be strictly LARGER than the unrestricted value -- the whole
+    // point of the correction. A generator reporting the unrestricted p_gen
+    // would fail this.
+    check(p_accept < 1.0, "the restriction rejects some draws");
+    bool all_larger = true;
+    RandomSource unres(44444);
+    for (int i = 0; i < 200; ++i)
+    {
+        const auto e = draw_excitation(parent, n_act, unres);
+        if (!e.valid)
+            continue;
+        const auto it = p_gen.find({e.det.alpha, e.det.beta});
+        if (it != p_gen.end() && !(it->second > e.p_gen * 1.001))
+            all_larger = false;
+    }
+    check(all_larger, "corrected p_gen exceeds the unrestricted p_gen");
+}
+
+static void test_per_call_acceptance_estimate_is_biased()
+{
+    // A guard against the defect this step nearly shipped: estimating p_accept
+    // from the attempt count of the call itself.
+    //
+    // That estimator is UNBIASED for p_gen -- E[p_gen * attempts] is exactly the
+    // conditional probability -- but the spawn uses |H_ij| / p_gen, and
+    // E[1/X] != 1/E[X]. Measured at p_accept = 0.3: the mean of p_gen is right,
+    // and the mean of 1/p_gen is 1.72x too large. This test pins that so nobody
+    // "simplifies" measure_acceptance_rate away.
+    RandomSource rng(1234567);
+    const double p_accept = 0.3;
+    const double p_unres = 0.01;
+    const int n = 200000;
+
+    double sum_p = 0.0, sum_inv = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        int attempts = 1;
+        while (rng.uniform() >= p_accept)
+            ++attempts;
+        const double per_call = p_unres * attempts;
+        sum_p += per_call;
+        sum_inv += 1.0 / per_call;
+    }
+    const double true_cond = p_unres / p_accept;
+
+    check_close(sum_p / n, true_cond, true_cond * 0.05,
+                "per-call estimator IS unbiased for p_gen (which is why it looks fine)");
+    const double inv_ratio = (sum_inv / n) / (1.0 / true_cond);
+    check(inv_ratio > 1.3,
+          "per-call estimator is biased in 1/p_gen, which is what the spawn uses");
+}
+
 int main()
 {
     std::printf("F1 -- FCIQMC walker container and RNG policy\n");
@@ -855,6 +1183,15 @@ int main()
     test_production_matches_oracle_phases();
     test_production_generator_reproducible();
     test_open_shell_support_and_frequency();
+
+    std::printf("F2.4 -- the gate rejects broken generators\n");
+    test_gate_rejects_broken_generators();
+
+    std::printf("F2.5 -- spin and symmetry constraints\n");
+    test_particle_number_is_structural();
+    test_in_space_rejection_sampling();
+    test_in_space_p_gen_is_corrected();
+    test_per_call_acceptance_estimate_is_biased();
 
     if (g_failures == 0)
     {

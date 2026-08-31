@@ -342,6 +342,35 @@ worth doing whether or not FCIQMC happens.
   failure modes** — a generator that can never reach some excitations passes a
   frequency-only gate, so both are required.
 
+  **F2 COMPLETE (2026-08-31): F2.1-F2.5 all landed and gated**
+  (`planck-fciqmc-walkers`, 8 s). The oracle, the slow uniform reference
+  generator, the O(1) production generator with non-uniform `p_gen`, the
+  gate-rejects-broken-generators fixtures, and the spin/symmetry layer.
+
+  **Two findings worth carrying.** (1) **When a sampled quantity is used as a
+  DIVISOR, unbiasedness of the estimator is the wrong property to check.** F2.5's
+  rejection sampling nearly shipped a `p_gen` correction that estimated the
+  acceptance rate from the attempt count of the call itself. `E[p_gen x attempts]`
+  is exactly the conditional probability — unbiased *for `p_gen`* — but the spawn
+  uses `|H_ij| / p_gen` and `E[1/X] != 1/E[X]`. Measured at `p_accept = 0.3`: mean
+  of `p_gen` correct to 0.1 %, mean of `1/p_gen` **1.72x too large**. Fixed by
+  measuring the acceptance rate once and passing it as a constant; a regression
+  test pins both halves so nobody simplifies the separate measurement away because
+  the obvious check passes. (2) **An equivalent mutant did real work.** Swapping
+  the alpha-beta index split passed the gate, and investigation showed it is a
+  genuine relabeling (both forms are bijections onto the same product set when
+  `n_sa == n_sb`) — but it revealed every fixture was **closed-shell**, so an index
+  bug that only manifests when the spin counts differ had zero coverage. Three
+  open-shell cases added (3a/1b, 4a/2b, 5a/3b); a genuinely asymmetric mutation is
+  now caught **by the open-shell case alone**.
+
+  Also recorded, from F2.2: the scope's claim that a frequency-only gate cannot
+  catch a support hole is **false for a uniform generator** (a hole redistributes
+  probability and shows at ~54 sigma). The independence appears only once `p_gen`
+  is non-uniform, where a rare unreachable connection deviates by ~0.6 sigma —
+  invisible to frequencies. So the support check is load-bearing at F2.3
+  specifically, and no F2.2 mutation can demonstrate it.
+
   **Q1 CANDIDATE FOUND (2026-08-31): Cr2, and it is TWO ATOMS.** Surveying the
   standard multireference benchmarks against the measured boundary, almost
   everything canonical is already reachable (N2/C2 full valence, benzene and
