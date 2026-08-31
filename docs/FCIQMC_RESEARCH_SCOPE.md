@@ -1,7 +1,15 @@
 # Research scope: FCIQMC in Planck
 
 **Research scope. Not started, and not yet justified — the first step is deciding
-whether to build it at all.** Opened 2026-08-30.
+whether to build it at all.** Opened 2026-08-30; **fixture costs and the
+prerequisite rescoped 2026-08-30** after the FCI sigma build got ~17x faster.
+
+**What the rescope changed, in one line:** the deterministic reference is now
+roughly an order of magnitude cheaper, so the small-system window where FCIQMC can
+be validated at all is wider (C2/STO-3G went from "abandoned at >10 min" to
+**47.7 s**), and the allocation prerequisite this scope named is **already
+satisfied**. Neither Q1 nor Q2 below is affected — the case for building FCIQMC at
+all is exactly as unproven as it was.
 
 FCIQMC (Booth/Thom/Alavi 2009) samples the FCI wavefunction with a population of
 signed walkers evolving under the imaginary-time Schrödinger equation, rather than
@@ -51,7 +59,10 @@ regression discipline is built on exactness:
 - **161 `metric_close` assertions**, the tightest at `atol 1e-9`.
 - Every recent performance change in this codebase was gated on **bitwise
   identity** — the OpenMP work verified energies bit-for-bit across
-  `OMP_NUM_THREADS`, the transpose merge and the operator-hoist likewise.
+  `OMP_NUM_THREADS`, the transpose merge and the operator-hoist likewise. **The FCI
+  threading that prompted this rescope is one more instance**: it was held to
+  byte-identical output at 1/2/4/8 threads, and two determinism defects were
+  rejected on exactly that basis. This discipline is not softening.
 - There is **no RNG anywhere in `src/`** (`grep -rl "mt19937\|random_device"`
   returns nothing). FCIQMC would introduce the first stochastic component into a
   codebase with no precedent for testing one.
@@ -78,24 +89,34 @@ FCIQMC on a determinant space large enough that sampling is meaningful. Those pu
 in opposite directions, so the window is narrow and worth pinning down before any
 code.
 
-**Measured on this machine** (`build/hartree-fock`, Release, serial):
+**Remeasured 2026-08-30 after the FCI sigma build got ~17x faster**
+(`docs/FCI_SIGMA_BUILD_PERFORMANCE.md` — allocator removal 4.8x, then threading
+3.54x at 4 threads). The original serial column is kept because it is what the
+recommendation below was originally argued from, and the *ratios* between systems
+are unchanged:
 
-| system | norb | na/nb | ndet | FCI wall |
-|---|---|---|---|---|
-| H2/STO-3G | 2 | 1/1 | 4 | instant |
-| water/STO-3G | 7 | 5/5 | 441 | instant |
-| H2/cc-pVDZ | 10 | 1/1 | 100 | instant |
-| **Be/6-31g\*** | 14 | 2/2 | **8 281** | **46.5 s** |
-| **N2/STO-3G** | 10 | 7/7 | **14 400** | **124.4 s** |
-| C2/STO-3G | 10 | 6/6 | 44 100 | **> 10 min** (not run to completion) |
-| water/6-31G | 13 | 5/5 | 1 656 369 | hours — see below |
+| system | norb | na/nb | ndet | FCI, was (serial) | FCI, now (4 threads) |
+|---|---|---|---|---|---|
+| H2/STO-3G | 2 | 1/1 | 4 | instant | instant |
+| water/STO-3G | 7 | 5/5 | 441 | instant | instant |
+| H2/cc-pVDZ | 10 | 1/1 | 100 | instant | instant |
+| **Be/6-31g\*** | 14 | 2/2 | **8 281** | 46.5 s | **2.72 s** |
+| **N2/STO-3G** | 10 | 7/7 | **14 400** | 124.4 s | **8.28 s** |
+| **C2/STO-3G** | 10 | 6/6 | **44 100** | > 10 min (abandoned) | **47.7 s** |
+| water/6-31G | 13 | 5/5 | 1 656 369 | hours | ~6 h (extrapolated) |
 
-**The recommendation: `N2/STO-3G` (ndet = 14 400, FCI in ~2 min).**
+**C2/STO-3G is the headline change.** It was abandoned un-run at over ten minutes
+and is now a **47.7 s** reference, which roughly **triples the usable ndet** and
+makes it a viable fixture rather than an aspiration.
+
+**The recommendation is unchanged: `N2/STO-3G` (ndet = 14 400), now ~8 s.**
 
 It is the smallest system that satisfies both constraints:
 
-- **FCI is cheap enough to be a routine reference** — 2 minutes, so the gate can
-  recompute it rather than hard-coding a number.
+- **FCI is cheap enough to be a routine reference** — now ~8 s at 4 threads (was
+  2 minutes), so the gate can recompute it rather than hard-coding a number. It is
+  now cheap enough to sit in the regression suite outright, which the 2-minute
+  version was not.
 - **The determinant space is big enough for sampling to mean something.** This is
   the constraint people miss. Below a few thousand determinants a walker
   population of the usual size covers essentially the whole space, FCIQMC
@@ -110,81 +131,102 @@ It is the smallest system that satisfies both constraints:
 way: same order of ndet, very different electron count. If FCIQMC agrees on N2 and
 disagrees on Be (or vice versa), the difference isolates the excitation generator.
 
+**`C2/STO-3G` is now a viable *third* fixture** (44 100 determinants, 47.7 s),
+where before it was abandoned un-run. It is the most valuable of the three for a
+`p_gen` bug hunt: at 6α/6β it sits *between* Be (2/2) and N2 (7/7) at the same
+orbital count as N2, so the three together vary electron count against a fixed
+orbital count — three points to triangulate with, rather than a pair where ndet
+and electron count move at once. It also has 3x N2's determinant space, so a
+walker population that is a genuine sample on N2 is a sparser one there.
+
 **H2 and water/STO-3G are unsuitable as FCIQMC fixtures** despite being the
 existing FCI regression cases: at 4 and 441 determinants the walker population
 would exceed the space.
 
 ### The FCI reference cost grows fast — do not plan on a large one
 
-Two measured points give an empirical **ndet^1.78** for the direct-sigma FCI, and
-C2/STO-3G at 44 100 determinants already exceeded 10 minutes, so **1.78 is a
-lower bound**. Extrapolating, water/6-31G (1.66 M determinants) is tens to
-hundreds of hours.
+**Refit 2026-08-30 on three points** (Be 8 281 / 2.72 s, N2 14 400 / 8.28 s,
+C2 44 100 / 47.69 s, all at 4 threads): **ndet^1.69**, with pairwise slopes of
+2.01, 1.71 and 1.56. The old two-point figure was ndet^1.78, so the exponent is
+about where it was — **the speedup moved the constant, not the scaling**, which is
+what one expects from removing a per-element allocation and adding threads.
 
-**Consequence for the scope:** the deterministic reference is only available in
-the ndet ≲ 10⁵ window. Any FCIQMC validation above that has no exact answer to
-check against, which is exactly the regime FCIQMC exists for — and exactly why the
-fixed-seed reproducibility gate matters more than the statistical one. **The
-statistical gate can only ever run on small systems; the reproducibility gate runs
-everywhere.**
+The fit is still thin, but one of the two original caveats is now partly
+addressed: C2 (6α/6β) and N2 (7α/7β) have similar electron counts at the same
+orbital count, so the Be↔N2 conflation of ndet with electron count no longer drives
+the fit alone. The declining pairwise slope (2.01 → 1.56) is the usual sign of
+fixed overhead being amortized, so **1.69 is more likely an over- than
+under-estimate at large ndet**.
 
-Two caveats on those numbers, stated because the fit is thin: two points cannot
-establish an exponent, and the two systems differ in *electron count* as well as
-ndet (2+2 vs 7+7), so the fit conflates two variables. Treat it as
-order-of-magnitude. `ci_max_dim` also defaults to 10 000 and must be raised
-explicitly for anything larger — it fails loudly, which is correct.
+**Consequence for the scope — this is the part that actually moved.** The
+deterministic reference used to be practical only below ndet ≈ 10⁵ *in principle*,
+with C2 at 44 100 already unaffordable *in practice*. Now:
+
+| ndet | FCI reference cost |
+|---|---|
+| 44 100 (C2/STO-3G) | **47.7 s — measured** |
+| ~10⁵ | **~3 min — extrapolated** |
+| 1.66 M (water/6-31G) | ~6 h — extrapolated |
+
+So the window where a gate can *recompute* the exact answer rather than hard-code
+it now comfortably includes ndet ~10⁵. **That does not change the strategic
+conclusion**: FCIQMC exists for spaces of 10⁹ and beyond, which no deterministic
+reference will ever reach, so the **fixed-seed reproducibility gate remains the
+primary one** and the statistical gate remains restricted to small systems. What
+changed is that the small-system regime is now roughly an order of magnitude
+wider, and a *third* fixture (C2) is affordable — useful because it sits between
+Be and N2 in electron count, giving three points rather than a pair to triangulate
+an excitation-generator bug.
+
+`ci_max_dim` defaults to 10 000 and must be raised explicitly for anything larger —
+it fails loudly, which is correct.
 
 Candidate inputs are committed under `tests/inputs/exploratory/fciqmc/`.
 
-### The FCI reference is single-threaded, and half its time is `malloc`
+### The FCI reference used to be single-threaded and allocation-bound — both fixed
 
-Measured while establishing the fixture, because it changes what the reference
-costs and it matters to FCIQMC directly (both share `slater_condon_element`).
+**This section previously read "The FCI reference is single-threaded, and half its
+time is `malloc`". Both halves are now false**, and the fix landed 2026-08-30
+(`docs/FCI_SIGMA_BUILD_PERFORMANCE.md`). It is kept because the *reason* it
+mattered to FCIQMC still applies to the code FCIQMC would be built on.
 
-**FCI does not thread.** On `build-full` (genuinely OpenMP-enabled: `-fopenmp`,
-`-DUSE_OPENMP`, libgomp linked), N2/STO-3G:
+What was measured, and what it is now (N2/STO-3G):
 
-```
-OMP_NUM_THREADS=1    121.9 s
-OMP_NUM_THREADS=4    123.6 s      <- flat
-OMP_NUM_THREADS=8    100.0 % CPU  <- one core, seven idle
-```
+| | was | now |
+|---|---|---|
+| `malloc`/`free` share of profile | **~53 %** | **0.1 %** |
+| threading | none — flat 121.9 s → 123.6 s at 1→4 threads | **3.54x at 4 threads** |
+| wall | 124.4 s | **8.28 s** |
 
-The code agrees: `apply_ci_hamiltonian` (`ci.cpp:437-622`) — the iterative
-sigma build, which is what runs for any space above `dense_threshold = 500` —
-contains **zero** `#pragma omp`. The one pragma in `ci.cpp` is on the **dense**
-Hamiltonian build (`:221`), which only runs *below* 500 determinants. `rdm.cpp`
-has six, so the RDM path is threaded; `fci.cpp` and `strings.cpp` have none.
+`get_excitation` returned `std::pair<std::vector<int>, std::vector<int>>` **by
+value** for values holding at most two entries each; it now returns a
+fixed-capacity struct. `apply_ci_hamiltonian` is now parallel over the ket loop,
+with per-bin partial vectors summed in fixed order.
 
-**So every FCI case large enough to matter runs single-threaded.**
+**Why this still belongs in an FCIQMC scope.** FCIQMC's spawning step calls
+`slater_condon_element` in its innermost loop — far more often than FCI's sigma
+build does. That function is **shared**, so the allocation fix is inherited by any
+FCIQMC built on it: the ~2x penalty this scope warned about being baked in at the
+outset is no longer there to inherit. **The prerequisite this section used to
+name is satisfied.**
 
-**And the hot path is allocation, not arithmetic.** Leaf-sample profile
-(21 048 samples, N2/STO-3G, 1 thread):
+**Two constraints from that work bind any FCIQMC implementation here**, and they
+are the concrete form of the Q2 tension below:
 
-| frame | share |
-|---|---|
-| `malloc`/`free` family combined | **~53 %** |
-| `apply_ci_hamiltonian` | 12.0 % |
-| `get_excitation` | 5.9 % |
-
-The cause is visible in the source: `get_excitation` (`ci.cpp:65`) returns
-`std::pair<std::vector<int>, std::vector<int>>` **by value**, and
-`slater_condon_element` calls it for both spin channels on **every matrix
-element**. That is up to four heap allocations per element — for vectors that
-hold **at most two entries each**, since a Slater-Condon element is zero beyond a
-double excitation. A `std::array<int,2>` plus a count removes the allocation
-entirely.
-
-**Why this belongs in an FCIQMC scope rather than a separate ticket:** FCIQMC's
-spawning step calls `slater_condon_element` in its innermost loop, far more often
-than FCI's sigma build does. Building FCIQMC on top of a function that heap-
-allocates per call would inherit a ~2x penalty at the outset. **Fix this before
-writing the spawn**, and the FCI reference gets faster at the same time — which
-directly widens the ndet window where a deterministic reference is affordable.
-
-**Both are now scoped separately in `docs/FCI_SIGMA_BUILD_PERFORMANCE.md`** (F1-F4:
-allocation first, then threading), because they are worth doing whether or not
-FCIQMC ever happens — and if it does, F1 is a prerequisite rather than a nicety.
+1. **A fixed-order reduction is necessary but NOT sufficient** for bitwise
+   thread-count invariance. Two defects were found there, each only by byte-diffing
+   across thread counts: `schedule(dynamic)` gives an accumulator a different
+   *subset* of terms per run, and keying accumulators by `omp_get_thread_num()`
+   makes their contents depend on the thread *count*. **What must be deterministic
+   is the partition of work into accumulators, not merely the order they are
+   summed.** An FCIQMC annihilation step accumulating per-thread will hit exactly
+   this, and the working pattern is `partials[j / bin_size]` with a fixed bin count.
+2. **A cheap-looking guard on an outer loop can carry asymptotic weight.** The
+   recommended gather reformulation of the sigma build was built and was 2.2-2.4x
+   *slower*, because moving a `|c| < 1e-15` test inward destroyed a sparsity
+   exploitation. FCIQMC is built entirely on sparsity — walker lists are sparse by
+   construction — so before restructuring any loop that skips negligible weight,
+   measure what fraction of iterations the skip actually eliminates.
 
 ## What already exists, and what does not
 
@@ -237,6 +279,16 @@ this codebase has otherwise kept everywhere.
 **Do not make that exception silently.** It is the kind of thing that becomes an
 unpleasant surprise three investigations later.
 
+**The F3 threading work sharpens this rather than softening it.** It threaded
+`apply_ci_hamiltonian` — the closest analogue in the tree to what FCIQMC's spawn
+would do, a scatter into a shared vector — and **kept** bitwise thread-count
+invariance, at the cost of `kBins × dim × 8` bytes of fixed-partition
+accumulators. So the "costly fixed-order reduction" option above is not
+hypothetical: it has a worked precedent in this exact file, with a measured price
+(no serial cost, 4.8 % idle at 4 threads). That makes the exception **harder** to
+justify, not easier — the burden is now to show why FCIQMC cannot do what the
+sigma build did.
+
 ## If it proceeds: suggested first cut
 
 Deliberately minimal, aimed at answering Q2 rather than at being useful.
@@ -276,7 +328,12 @@ recording either way.
   against a brute-force enumeration on a tiny space before trusting any energy.
 - **Do not claim a speedup against FCI.** They compute different things: FCI gives
   the exact energy, FCIQMC gives an estimate with an error bar. The comparison is
-  *reachable system size*, not wall-clock.
+  *reachable system size*, not wall-clock. **Nor should the ~17x FCI speedup be
+  read as weakening the case for FCIQMC**: it moved the reference constant, not the
+  `ndet^1.7` scaling, and FCIQMC's argument was never about the constant. A 17x
+  faster exponential is still exponential — it buys roughly one more `n_act` step,
+  against the 18-31 window Q1 describes. What it genuinely changed is the
+  *validation* budget, which is the only reason this rescope touched anything.
 
 ## Prior art worth reading before starting
 

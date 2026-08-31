@@ -266,32 +266,52 @@ worth doing whether or not FCIQMC happens.
   excitation generator with a consistent `p_gen`, and population control.
 
   **The validation fixture is identified and measured: `N2/STO-3G`** (10 orbitals,
-  7α/7β, **ndet = 14 400**, FCI in **124 s** on this machine). It is the smallest
-  system satisfying both constraints — FCI cheap enough that a gate can recompute
-  the reference, and a determinant space large enough that a few-thousand-walker
-  population is a genuine *sample* rather than covering the whole space. The
-  existing FCI regression cases (H2/STO-3G at 4 determinants, water/STO-3G at 441)
-  are **unsuitable**: the walker population would exceed the space and the gate
-  would prove nothing about sampling. `Be/6-31g*` (ndet 8 281, FCI 46.5 s) is the
-  useful second fixture because it has only 2α/2β against N2's 7α/7β — a
-  two-electron system cannot exercise doubles between different occupied pairs,
-  which is where `p_gen` bugs hide, so disagreement between the two isolates the
-  excitation generator.
+  7α/7β, **ndet = 14 400**). It is the smallest system satisfying both constraints
+  — FCI cheap enough that a gate can recompute the reference, and a determinant
+  space large enough that a few-thousand-walker population is a genuine *sample*
+  rather than covering the whole space. The existing FCI regression cases
+  (H2/STO-3G at 4 determinants, water/STO-3G at 441) are **unsuitable**: the walker
+  population would exceed the space and the gate would prove nothing about
+  sampling. `Be/6-31g*` (ndet 8 281) is the useful second fixture because it has
+  only 2α/2β against N2's 7α/7β — a two-electron system cannot exercise doubles
+  between different occupied pairs, which is where `p_gen` bugs hide, so
+  disagreement between the two isolates the excitation generator.
 
-  **The reference cost grows fast, which bounds the whole validation strategy.**
-  Two measured points give ~`ndet^1.78`, and C2/STO-3G (44 100 dets) already
-  exceeded 10 minutes, so that is a lower bound; water/6-31G (1.66 M) is tens to
-  hundreds of hours. So the deterministic reference exists only for ndet <~ 1e5 —
-  precisely *not* the regime FCIQMC is for. That is the argument for making the
-  **fixed-seed reproducibility gate** the primary one: it runs at any size, while
-  the statistical gate can only ever run where FCI is affordable. Candidate inputs
-  are committed under `tests/inputs/exploratory/fciqmc/`.
+  **RESCOPED 2026-08-30 after the FCI sigma build got ~17x faster** (see the FCI
+  entry above and `docs/FCI_SIGMA_BUILD_PERFORMANCE.md`). Reference costs
+  remeasured at 4 threads: **Be 46.5 s -> 2.72 s, N2 124.4 s -> 8.28 s**, and the
+  headline — **C2/STO-3G went from ">10 min, abandoned un-run" to 47.7 s**, which
+  roughly **triples the usable ndet** and makes it a viable *third* fixture. C2 is
+  the most valuable of the three for a `p_gen` hunt: at 6α/6β it sits between Be
+  (2/2) and N2 (7/7) at N2's orbital count, so the three vary electron count
+  against fixed orbitals rather than moving ndet and electron count at once.
+
+  Refit on three points: **`ndet^1.69`** (pairwise 2.01 / 1.71 / 1.56) against the
+  old two-point `ndet^1.78` — so **the speedup moved the constant, not the
+  scaling**, as expected from removing a per-element allocation and adding threads.
+  ndet ~1e5 is now ~3 min and water/6-31G (1.66 M) ~6 h. **The strategic conclusion
+  is unchanged**: FCIQMC targets 1e9+, which no deterministic reference reaches, so
+  the **fixed-seed reproducibility gate stays primary** and the statistical gate
+  stays restricted to small systems — that regime is just an order of magnitude
+  wider now. Candidate inputs are committed under
+  `tests/inputs/exploratory/fciqmc/`.
+
+  **The allocation prerequisite this scope named is now satisfied.** It warned that
+  building the spawn on a `slater_condon_element` that heap-allocated per call
+  would inherit a ~2x penalty; that allocation is gone (53 % -> 0.1 % of profile),
+  and the function is shared, so any FCIQMC inherits the fix.
 
   **One structural tension worth deciding explicitly rather than discovering:**
   every parallel path in Planck is bitwise thread-count-invariant by design and by
   gate. FCIQMC's natural parallelization is not — the annihilation sum depends on
   arrival order. Either accept a fixed-order reduction, or document FCIQMC as the
   one path where that rule does not hold. **Do not make that exception silently.**
+  **F3 sharpens this rather than softening it:** it threaded a scatter into a
+  shared vector — the closest analogue in the tree to FCIQMC's spawn — and *kept*
+  bitwise invariance for `kBins x dim x 8` bytes of fixed-partition accumulators,
+  at no measurable serial cost and 4.8 % idle. The "costly fixed-order reduction"
+  option now has a worked precedent with a measured price, so the burden is to show
+  why FCIQMC cannot do what the sigma build did.
 
 ## Verification and regression gaps
 
