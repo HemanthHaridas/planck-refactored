@@ -1,7 +1,8 @@
 # Research scope: FCIQMC in Planck
 
-**Status: both gating questions are answered. Implementation is scoped below and
-not started.**
+**Status: both gating questions are answered. Implementation is under way — F1
+(walker state) and F2 (excitation generator) are landed and gated; F3 (dynamics)
+is scoped.**
 
 FCIQMC (Booth/Thom/Alavi, *JCP* **131**, 054106) samples the FCI wavefunction with
 a population of signed walkers evolving in imaginary time, instead of storing a CI
@@ -194,40 +195,64 @@ All four are mutation-verified.
 sigma-build work), so the spawn inherits it — **the allocation prerequisite this
 scope originally named is satisfied.**
 
-**Must be built:**
+**Built (F1, F2):**
 
-- **RNG policy.** Seeded, reproducible, per-shard. A rerun with the same seed must
-  reproduce the trajectory **bitwise**, which rules out any thread-count-dependent
-  draw order.
-- **Sparse walker container.** A dynamic map from determinant to signed weight,
-  with spawn / annihilate / compress each iteration. The existing `det_lookup`
-  indexes a *fixed enumerated* space; this one must grow and shrink.
-- **Excitation generator with a consistent `p_gen`.** The generation probability
-  matters as much as the excitation; an inconsistency produces a *plausible,
-  converged, wrong* energy.
+- **RNG policy** — `RandomSource`, seeded and per-shard, with `derive(index)`
+  independent of how many shards exist.
+- **Sparse walker container** — `WalkerPopulation`, a dynamic determinant-keyed map
+  of signed weights with `add` / `compress`. (The existing `det_lookup` indexes a
+  *fixed enumerated* space and cannot serve.)
+- **Excitation generator with a consistent `p_gen`** — the O(1) `draw_excitation`,
+  plus the brute-force oracle it is gated against and the in-space variant with a
+  corrected `p_gen`.
+
+**Still to build:**
+
+- **The dynamics** — spawn, death, annihilation on a fixed shift (F3).
 - **Population control.** Shift adjustment, walker targets, and the initiator
-  approximation (i-FCIQMC), which is effectively mandatory beyond toy systems.
+  approximation (i-FCIQMC), which is effectively mandatory beyond toy systems (F4).
+- **Parallelism**, and the determinism decision in §6 (F5).
 
 ## 5. Implementation ladder
 
 Ordered so the cheapest step can kill the expensive ones. Each is independently
 verifiable against machinery that already exists.
 
-**F1 — walker container + RNG policy.** The sparse map and a seeded generator, no
-dynamics. *Verify:* insert/annihilate/compress round-trips; G3's harness proves a
-fixed seed reproduces a draw sequence bitwise across reruns and thread counts.
+**F1 — walker container + RNG policy. LANDED 2026-08-31.**
+`src/post_hf/ci/fciqmc.{h,cpp}`. The sparse determinant-keyed map of signed
+weights, plus `RandomSource`. The design point: **annihilation is not a separate
+pass** — it is what accumulating signed weights into a map keyed by determinant
+already does, which is also why the container is a map rather than a walker list.
+`derive(index)` is deterministic in the run seed and independent of how many
+shards were derived. Mutation-verified against round-to-nearest (biases the
+energy), overwrite-instead-of-accumulate, and a call-order-dependent `derive()`.
 
-**F2 — excitation generator with `p_gen`.** Uniform single/double excitations from
-a determinant, returning the generation probability. *Verify:* **against
-brute-force enumeration on a tiny space** — every generated excitation is
-reachable, every reachable one is generated, and the empirical frequency matches
-the returned `p_gen`. This is the classic silent-bias site; gate it before it is
-used.
+**F2 — excitation generator with `p_gen`. LANDED 2026-08-31**, scoped separately
+in `FCIQMC_F2_EXCITATION_SCOPE.md` because it is the one step that fails
+*silently*. Five sub-steps: the brute-force oracle first (the measuring
+instrument), a slow uniform reference generator, the O(1) production generator
+with non-uniform `p_gen`, permanent broken-generator fixtures asserting the gate
+can fail, and the spin/symmetry layer. Connection counts verified by independent
+brute force: H2 3, water 140, N2 609.
+
+Three findings from it are worth carrying into F3:
+
+- **When a sampled quantity is used as a DIVISOR, unbiasedness of the estimator is
+  the wrong property to check.** F2.5 nearly shipped a `p_gen` correction using
+  the per-call attempt count: unbiased for `p_gen` (mean correct to 0.1 %), and
+  **1.72x wrong** in the `1/p_gen` the spawn actually uses. F3 divides by `p_gen`
+  on every spawn, so this is live there.
+- **Support and frequency are different failure modes, but only once `p_gen` is
+  non-uniform.** For a uniform generator a support hole also moves the frequencies
+  (~54σ); for a weighted one a rare unreachable connection is ~0.6σ, invisible.
+- **An equivalent mutant exposed a coverage hole.** Every fixture had been
+  closed-shell, so an index bug that only manifests when α and β counts differ had
+  zero coverage. F3's fixtures must include an open-shell case for the same reason.
 
 **F3 — spawn / death / annihilation on a fixed shift.** The core loop, no
-population control. *Verify:* on `h2_fci_sto3g` (4 determinants) the walker
-distribution converges to the known ground state; the projected energy is within 3σ
-via G1+G2.
+population control. Scoped in `FCIQMC_F3_DYNAMICS_SCOPE.md`. *Verify:* on
+`h2_fci_sto3g` (4 determinants) the walker distribution converges to the known
+ground state; the projected energy is within 3σ via G1+G2.
 
 **F4 — shift control and the initiator approximation.** *Verify:* population
 stabilises at the target; on N2/STO-3G the energy is within 3σ of the exact FCI, and
