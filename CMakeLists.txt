@@ -1869,6 +1869,16 @@ if(BUILD_TESTING)
         COMMAND planck-compute-2e
     )
 
+    # Gates the statistical-assertion machinery (metric_within_sigma + the
+    # blocking analysis), not any physics. Pure Python, no build dependency.
+    if(Python3_Interpreter_FOUND)
+        add_test(
+            NAME planck-statistical-gate
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/statistical_gate.py
+        )
+    endif()
+
     add_test(
         NAME planck-fock-accumulate
         COMMAND planck-fock-accumulate

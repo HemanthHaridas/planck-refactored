@@ -220,6 +220,39 @@ def resolve_metric_expectation(
     return float(override["expected"]), float(override.get("atol", check.get("atol", 1e-9)))
 
 
+def within_sigma_failure(
+    value: float | None,
+    sigma: float | None,
+    expected: float,
+    n_sigma: float,
+    metric: str,
+    sigma_metric: str,
+) -> str | None:
+    """Return a failure detail string, or None if the value is within n_sigma.
+
+    Split out from the check dispatch so it can be exercised directly: this is
+    the only assertion in the runner with arithmetic worth testing, and a
+    statistical gate that silently always passes is worse than no gate.
+    """
+    if value is None:
+        return f"missing metric: {metric}"
+    if sigma is None:
+        return f"missing uncertainty metric: {sigma_metric}"
+    if not math.isfinite(float(sigma)) or float(sigma) < 0.0:
+        return f"{sigma_metric} is not a usable uncertainty: {sigma}"
+    if not math.isfinite(float(value)):
+        return f"{metric} is not finite: {value}"
+    deviation = abs(float(value) - expected)
+    allowed = n_sigma * float(sigma)
+    if deviation <= allowed:
+        return None
+    return (
+        f"{metric} outside {n_sigma:g} sigma: got {float(value):.10f}, "
+        f"expected {expected:.10f}, deviation {deviation:.3e} "
+        f"> {allowed:.3e} ({sigma_metric}={float(sigma):.3e})"
+    )
+
+
 def checkpoint_path_for(input_path: Path) -> Path:
     # Mirror the driver's rule (src/driver.cpp): parent_dir / stem + ".hfchk".
     return input_path.with_suffix(".hfchk")
@@ -403,6 +436,30 @@ def run_case(
             if actual is None or not float(actual) >= threshold:
                 passed = False
                 details.append(f"{metric} expected >= {threshold}, got {actual}")
+
+        elif ctype == "metric_within_sigma":
+            # Statistical gate: |value - expected| <= n_sigma * uncertainty.
+            #
+            # Every other check here is an exact-value comparison, which a
+            # stochastic estimator cannot satisfy -- its answer is a mean with an
+            # error bar. This is the one assertion that can express "consistent
+            # with the reference, given the reported uncertainty".
+            #
+            # The uncertainty MUST come from the run itself (a blocked standard
+            # error, not a naive one -- see docs/FCIQMC_RESEARCH_SCOPE.md G2), so
+            # a run that under-reports its error bar fails this check rather than
+            # sliding under a hand-picked tolerance.
+            metric = check["metric"]
+            sigma_metric = check["sigma_metric"]
+            n_sigma = float(check.get("n_sigma", 3.0))
+            expected, _ = resolve_metric_expectation(case_id, metric, check, pyscf_references)
+            failure = within_sigma_failure(
+                metrics.get(metric), metrics.get(sigma_metric),
+                expected, n_sigma, metric, sigma_metric,
+            )
+            if failure is not None:
+                passed = False
+                details.append(failure)
 
         elif ctype == "metric_lt_metric":
             left = check["left"]

@@ -143,7 +143,25 @@ method.
 few days and it answers a question that would otherwise be discovered after the
 walker container, the excitation generator and the population control are written.
 
-**G1 — a `metric_within_sigma` check in the runner.** The runner has
+**G1 — DONE (2026-08-31).** `metric_within_sigma` added to
+`tests/run_regressions.py`, with the arithmetic split into a module-level
+`within_sigma_failure` so it can be exercised directly. Gated by
+`tests/statistical_gate.py` (CTest: `planck-statistical-gate`), which asserts a
+2σ deviation **passes at 3σ and fails at 0.1σ**, that the boundary is inclusive,
+and that the degenerate inputs a stochastic run can actually produce — σ = 0,
+negative σ, NaN value, NaN σ, **infinite σ** — all fail rather than silently
+passing everything. Mutation-verified: an always-pass body and an inverted
+comparison both go red.
+
+**A trap worth recording, because it invalidated a mutation run before it was
+caught:** restoring the source with `cp` preserved the mtime to within Python's
+bytecode-cache resolution, so a stale `.pyc` kept the *mutated* module live while
+the file on disk was correct. The gate reported on code that was no longer there,
+and it would have done so in either direction. `tests/statistical_gate.py` now
+sets `sys.dont_write_bytecode = True`; anyone mutation-testing Python here should
+clear `__pycache__` between runs regardless.
+
+**G1 (original text) — a `metric_within_sigma` check in the runner.** The runner has
 `metric_close`, `metric_le`, `metric_ge`, `metric_le_metric` and
 `metric_close_case` (`tests/run_regressions.py:375-458`) — **all exact-value
 comparisons; there is no assertion that can express "within N σ".** Add one taking
@@ -153,7 +171,33 @@ a value metric, an uncertainty metric and a multiplier.
   FCIQMC involved. **If this cannot be expressed in the manifest cleanly, stop —
   the gate has nowhere to live.**
 
-**G2 — a blocking-analysis implementation, gated against a known answer.** A naive
+**G2 — DONE (2026-08-31).** `tests/blocking.py` implements the
+Flyvbjerg-Petersen curve, a plateau estimate, and a τ_int estimate. Validated on
+synthetic AR(1) series with analytic τ_int = ½(1+φ)/(1−φ), **never on real
+output**:
+
+| φ | τ exact | τ blocked | naive SE | blocked SE | ratio | expected √(2τ) |
+|---|---|---|---|---|---|---|
+| 0.0 | 0.50 | 0.54 | 0.00223 | 0.00233 | 1.04 | 1.00 |
+| 0.5 | 1.50 | 1.60 | 0.00258 | 0.00462 | 1.79 | 1.73 |
+| 0.8 | 4.50 | 4.92 | 0.00373 | 0.01169 | 3.14 | 3.00 |
+| 0.9 | 9.50 | 10.39 | 0.00514 | 0.02343 | 4.56 | 4.36 |
+| 0.95 | 19.50 | 21.66 | 0.00719 | 0.04730 | 6.58 | 6.24 |
+
+It tracks the analytic value across a **39x range in τ**, running 5-10 % high —
+the conservative direction, which is deliberate: the plateau is taken as the
+**max** over the curve, so a short series overestimates σ (fails a gate loudly)
+rather than underestimating it (passes one silently). On i.i.d. input it does not
+inflate the error bar. **The naive estimate understates σ by up to 6.6x**, which
+is the whole reason this step exists.
+
+Mutation-verified with three defects, including the decisive one: **returning the
+naive error instead of the plateau** — the exact silent-failure mode — goes red at
+`τ_blocked/τ_exact = 0.111`. `min` instead of `max`, and decimating instead of
+averaging in the halving step, also go red.
+
+**G2 (original text) — a blocking-analysis implementation, gated against a known
+answer.** A naive
 standard error on a correlated series understates σ badly; Flyvbjerg-Petersen
 blocking is the standard fix. Implement it and validate it on **synthetic series
 with a known autocorrelation time**, not on FCIQMC output.
