@@ -28,6 +28,8 @@ within_sigma_failure = _rr.within_sigma_failure
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import blocking  # noqa: E402
+import mc_estimator  # noqa: E402
+import reproducibility  # noqa: E402
 
 
 def check(cond, msg):
@@ -142,11 +144,106 @@ def test_g2_blocking():
     return ok
 
 
+def test_g3_reproducibility():
+    """G3: same seed -> bitwise-identical trajectory, and it must be able to FAIL."""
+    ok = True
+    pop = mc_estimator.make_population(2000)
+
+    # Proven first on a DETERMINISTIC producer, before anything stochastic uses it.
+    r, detail = reproducibility.check_reproducible(lambda: list(pop), n_runs=3)
+    ok &= check(r, f"a constant producer must be reproducible: {detail}")
+
+    # A seeded stochastic producer.
+    r, detail = reproducibility.check_reproducible(
+        lambda: mc_estimator.sample_trajectory(pop, 4000, seed=42), n_runs=3)
+    ok &= check(r, f"fixed-seed trajectory must reproduce bitwise: {detail}")
+
+    # NEGATIVE CONTROL 1: an unseeded producer must be caught.
+    bad = random.Random()
+    r, _ = reproducibility.check_reproducible(
+        lambda: [bad.random() for _ in range(500)], n_runs=3)
+    ok &= check(not r, "an UNSEEDED producer must FAIL the reproducibility gate")
+
+    # NEGATIVE CONTROL 2: a producer that ignores its seed must be caught.
+    r, _ = reproducibility.check_seed_sensitivity(
+        lambda seed: mc_estimator.sample_trajectory(pop, 2000, seed=seed), 1, 2)
+    ok &= check(r, "different seeds must give different trajectories")
+    r, _ = reproducibility.check_seed_sensitivity(lambda seed: list(pop), 1, 2)
+    ok &= check(not r, "a seed-ignoring producer must FAIL seed sensitivity")
+
+    # The digest must be bit-sensitive, not print-precision-sensitive.
+    a = [1.0, 2.0, 3.0]
+    b = [1.0, 2.0, 3.0 + 4.4e-16]           # ~1 ulp
+    ok &= check(reproducibility.trajectory_digest(a) != reproducibility.trajectory_digest(b),
+                "digest must distinguish a 1-ulp difference")
+    return ok
+
+
+def test_g4_end_to_end():
+    """G4: a trivial stochastic estimator through the whole pipeline."""
+    ok = True
+    pop = mc_estimator.make_population(5000)
+    exact = mc_estimator.exact_mean(pop)
+
+    # --- the mean lands within 3 sigma of the exact answer, using the BLOCKED sigma
+    outside = 0
+    trials = 12
+    for seed in range(trials):
+        traj = mc_estimator.sample_trajectory(pop, 20_000, seed)
+        mean = sum(traj) / len(traj)
+        sigma = blocking.blocked_standard_error(traj)
+        if within_sigma_failure(mean, sigma, exact, 3.0, "mc_mean", "mc_sigma") is not None:
+            outside += 1
+    ok &= check(outside <= 1, f"{outside}/{trials} trials outside 3 sigma (expect ~0)")
+
+    # --- and the gate is NOT vacuous: the naive sigma understates badly enough
+    #     that the same trials fail against it. If this passes, the gate would
+    #     accept an under-reported error bar, which is the whole risk.
+    naive_outside = 0
+    for seed in range(trials):
+        traj = mc_estimator.sample_trajectory(pop, 20_000, seed)
+        mean = sum(traj) / len(traj)
+        naive = blocking.naive_standard_error(traj)
+        if within_sigma_failure(mean, naive, exact, 3.0, "mc_mean", "mc_sigma") is not None:
+            naive_outside += 1
+    ok &= check(naive_outside >= 3,
+                f"only {naive_outside}/{trials} failed with the NAIVE sigma -- "
+                "the fixture is not correlated enough to test anything")
+
+    # --- sigma shrinks as 1/sqrt(N). The SLOPE is what catches a biased sampler.
+    xs, ys = [], []
+    for n in (4_000, 16_000, 64_000, 256_000):
+        sigmas = [blocking.blocked_standard_error(mc_estimator.sample_trajectory(pop, n, s))
+                  for s in range(6)]
+        xs.append(math.log(n))
+        ys.append(math.log(sum(sigmas) / len(sigmas)))
+    mx = sum(xs) / len(xs)
+    my = sum(ys) / len(ys)
+    slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sum((x - mx) ** 2 for x in xs)
+    ok &= check(abs(slope + 0.5) <= 0.1, f"sigma ~ N^{slope:.3f}, want N^-0.5")
+
+    # --- the error bar is calibrated, not merely large: |deviation| ~ sigma
+    devs, sigs = [], []
+    for seed in range(10):
+        traj = mc_estimator.sample_trajectory(pop, 20_000, 500 + seed)
+        devs.append(abs(sum(traj) / len(traj) - exact))
+        sigs.append(blocking.blocked_standard_error(traj))
+    rms = math.sqrt(sum(d * d for d in devs) / len(devs))
+    ratio = rms / (sum(sigs) / len(sigs))
+    ok &= check(0.4 <= ratio <= 2.0,
+                f"rms(deviation)/mean(sigma) = {ratio:.2f}; sigma is not calibrated")
+    return ok
+
+
 if __name__ == "__main__":
     print("G1 -- metric_within_sigma")
     results = [test_g1_within_sigma()]
     print("G2 -- blocking analysis")
     results.append(test_g2_blocking())
+    print("G3 -- fixed-seed reproducibility")
+    results.append(test_g3_reproducibility())
+    print("G4 -- stochastic estimator, end to end")
+    results.append(test_g4_end_to_end())
     if all(results):
         print("\nAll statistical-gate checks passed.")
         sys.exit(0)

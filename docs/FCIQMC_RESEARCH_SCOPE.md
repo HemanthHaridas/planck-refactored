@@ -209,7 +209,45 @@ with a known autocorrelation time**, not on FCIQMC output.
   that under-reports σ makes every downstream gate pass. Gate it on synthetic data
   where the answer is derivable, never on real output.
 
-**G3 — a fixed-seed reproducibility harness.** Same seed → bitwise-identical
+**G3 — DONE (2026-08-31).** `tests/reproducibility.py`. The harness takes a
+*callable* rather than knowing anything about walkers, so it was proven against a
+deterministic producer before anything stochastic used it. The digest packs raw
+IEEE bits (`struct '<d'`), not text — a comparison at print precision would hide
+exactly the last-ulp reduction-order defects this codebase has been bitten by.
+
+Two negative controls, because a reproducibility gate that cannot fail proves
+nothing: an **unseeded** producer must fail, and a producer that **ignores its
+seed** must fail `check_seed_sensitivity`. Mutation-verified: digesting at print
+precision, and making the comparison always-pass, both go red.
+
+**G4 — DONE (2026-08-31), after the first version of it silently passed a
+genuinely biased sampler.** `tests/mc_estimator.py` is a deliberately trivial
+Markov-chain estimator of a synthetic population mean — no physics, exact answer
+in closed form, autocorrelated so the pipeline is exercised the way a real
+trajectory would exercise it. It runs end to end through G1's gate, G2's blocking
+and G3's harness, and asserts four things: the mean lands within 3σ, **σ shrinks
+as N^-0.478 against a theoretical N^-0.5**, the error bar is *calibrated*
+(`rms(deviation)/σ ≈ 1`, not merely large), and — the anti-vacuity check — that
+the same trials **fail** against the naive σ, so the gate is discriminating rather
+than accepting anything.
+
+**The fixture defect is the finding worth keeping.** The first population was
+i.i.d. Gaussian, and a mutation restricting the sampler to half the space came
+back **GREEN**. With an i.i.d. population every sub-range has the same mean, so
+that genuine sampler bias moved the answer by only **0.58σ** — inside the gate.
+The population now trends with index, which makes incomplete coverage show up as
+a mean shift: the same mutation is now **25.9σ** out, and a subtler **90 %
+coverage** mutation is caught too.
+
+This is the *inverse* of the fixture trap recorded in
+`CCGEN_MERGE_TRANSPOSES` — there a fixture was too **general** (withholding a
+symmetry the real object has, manufacturing failures); here it was too
+**structureless**, hiding a real one. **A fixture must share the structure whose
+violation you intend to detect.** Real `H_ii` values are not exchangeable across
+the determinant space either, so the trending population is closer to the target
+than i.i.d. was, not merely more convenient.
+
+**G3 (original text) — a fixed-seed reproducibility harness.** Same seed → bitwise-identical
 trajectory, across reruns and across `OMP_NUM_THREADS`. Demonstrate it on a
 **deterministic** stand-in first: run the existing FCI twice and assert
 byte-identical output, so the harness is proven before anything stochastic uses it.
@@ -219,7 +257,7 @@ byte-identical output, so the harness is proven before anything stochastic uses 
   not evidence of anything** — this codebase has been bitten by exactly that
   (`ch4_rccsdt_sto3g` sat green for its whole life without running its kernel).
 
-**G4 — a trivial stochastic estimator, end to end through G1-G3.** Not FCIQMC:
+**G4 (original text) — a trivial stochastic estimator, end to end through G1-G3.** Not FCIQMC:
 something with a known exact answer and a tunable variance — e.g. a Monte-Carlo
 estimate of a CI-vector norm or an `H_ii` expectation over determinants sampled
 from the existing enumerated space. It must exercise the RNG policy, the blocking
@@ -230,11 +268,34 @@ analysis, and both gates.
   sampler that a mean-only check cannot see); the fixed-seed gate reproduces
   bitwise at 1/2/4/8 threads.
 
-**The verdict.** If G1-G4 pass, a stochastic method is maintainable in this
-codebase and the machinery FCIQMC needs already exists — **Q2 is answered yes and
-the ladder is reusable**, not thrown away. If G2 or G4 cannot be made to pass
-reliably, that is the finding, and it kills the item **before** a walker container,
-an excitation generator or population control has been written.
+#### The verdict: Q2 is ANSWERED YES (2026-08-31)
+
+**G1-G4 all pass, in 2.0 s, as CTest `planck-statistical-gate`.** A stochastic
+method *can* be validated in this codebase: the within-σ assertion, a blocking
+analysis that recovers a known τ across a 39x range, a bitwise fixed-seed harness
+with working negative controls, and an end-to-end estimator whose σ scales as
+N^-0.478 and is calibrated rather than merely conservative.
+
+**The machinery is reusable, not throwaway** — `metric_within_sigma` is in the
+runner, and `blocking.py` / `reproducibility.py` are independent of FCIQMC by
+construction. **Q2 no longer blocks.**
+
+**Q1 still does.** Nothing in the tree wants `n_act` ≥ 13, and that remains a
+question only a person can answer. What the G-ladder changed is the *cost* of
+being wrong about Q1: the validation machinery now exists regardless, so an
+FCIQMC attempt would start from a working gate rather than building one — but
+that is an argument for lower risk, not for a target.
+
+**Three findings from building it, each of which cost a wrong result first:**
+
+1. **A fixture can be too structureless.** The i.i.d. population hid a real
+   sampler bias at 0.58σ. See G4 above.
+2. **Python bytecode caching can invalidate a mutation test silently.** A `cp`
+   restore preserving the mtime left a stale `.pyc` running the *mutated* module
+   while the file on disk was correct — misleading in either direction. See G1.
+3. **The naive standard error understates σ by up to 6.6x** on correlated data, so
+   every gate downstream of it would have passed. This is why G2 is gated on
+   synthetic series with an analytic answer rather than on real output.
 
 **Scope discipline for this ladder:**
 
