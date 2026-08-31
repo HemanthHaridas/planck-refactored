@@ -888,6 +888,11 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/diis_conditioning.cpp
     )
 
+    add_executable(planck-fciqmc-walkers
+        ${CMAKE_SOURCE_DIR}/tests/fciqmc_walkers.cpp
+        ${SRC_DIR}/post_hf/ci/fciqmc.cpp
+    )
+
     add_executable(planck-cc-arbitrary-solver
         ${CMAKE_SOURCE_DIR}/tests/cc_arbitrary_solver.cpp
         ${SRC_DIR}/post_hf/cc/common.cpp
@@ -1406,6 +1411,11 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-fciqmc-walkers PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-cc-arbitrary-solver PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -1867,6 +1877,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-compute-2e
         COMMAND planck-compute-2e
+    )
+
+    add_test(
+        NAME planck-fciqmc-walkers
+        COMMAND planck-fciqmc-walkers
     )
 
     # Gates the statistical-assertion machinery (metric_within_sigma + the
