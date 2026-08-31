@@ -2,6 +2,7 @@
 
 #include <bit>
 #include <cmath>
+#include <utility>
 #include <vector>
 
 namespace HartreeFock::Correlation::CI::QMC
@@ -180,6 +181,137 @@ namespace HartreeFock::Correlation::CI::QMC
         Excitation picked = conns[static_cast<std::size_t>(rng.uniform_int(n))];
         picked.p_gen = 1.0 / static_cast<double>(n);
         return picked;
+    }
+
+    namespace
+    {
+        // Unrank an unordered pair (i < j) from a linear index in [0, C(n,2)).
+        // Verified as a bijection for n = 4,5,7 before being written here: an
+        // off-by-one silently skips or duplicates orbital pairs, which is a
+        // support defect the frequency test would not reliably catch.
+        std::pair<int, int> unrank_pair(int k, int n)
+        {
+            int i = 0;
+            while (k >= n - 1 - i)
+            {
+                k -= (n - 1 - i);
+                ++i;
+            }
+            return {i, i + 1 + k};
+        }
+
+        // The five excitation classes. Kept as an enum rather than an int so a
+        // missing case in the switch is a compiler warning, not a silent zero.
+        enum class Klass
+        {
+            SingleA,
+            SingleB,
+            DoubleAA,
+            DoubleBB,
+            DoubleAB
+        };
+    } // namespace
+
+    Excitation draw_excitation(const DetKey &parent, int n_act, RandomSource &rng)
+    {
+        const std::vector<int> occ_a = occupied(parent.alpha, n_act);
+        const std::vector<int> occ_b = occupied(parent.beta, n_act);
+        const std::vector<int> vir_a = virtuals(parent.alpha, n_act);
+        const std::vector<int> vir_b = virtuals(parent.beta, n_act);
+
+        const int na = static_cast<int>(occ_a.size());
+        const int nb = static_cast<int>(occ_b.size());
+        const int va = static_cast<int>(vir_a.size());
+        const int vb = static_cast<int>(vir_b.size());
+
+        const int n_sa = na * va;
+        const int n_sb = nb * vb;
+        const int n_daa = (na >= 2 && va >= 2) ? (na * (na - 1) / 2) * (va * (va - 1) / 2) : 0;
+        const int n_dbb = (nb >= 2 && vb >= 2) ? (nb * (nb - 1) / 2) * (vb * (vb - 1) / 2) : 0;
+        const int n_dab = n_sa * n_sb;
+
+        // Only non-empty classes are candidates. Including an empty one would
+        // waste draws and, worse, make p_gen wrong for every other class.
+        std::vector<std::pair<Klass, int>> live;
+        if (n_sa > 0) live.push_back({Klass::SingleA, n_sa});
+        if (n_sb > 0) live.push_back({Klass::SingleB, n_sb});
+        if (n_daa > 0) live.push_back({Klass::DoubleAA, n_daa});
+        if (n_dbb > 0) live.push_back({Klass::DoubleBB, n_dbb});
+        if (n_dab > 0) live.push_back({Klass::DoubleAB, n_dab});
+        if (live.empty())
+            return {};
+
+        const int n_live = static_cast<int>(live.size());
+        const auto [klass, class_size] = live[static_cast<std::size_t>(rng.uniform_int(n_live))];
+        const double p_gen = (1.0 / static_cast<double>(n_live))
+                             / static_cast<double>(class_size);
+
+        const int k = rng.uniform_int(class_size);
+
+        switch (klass)
+        {
+        case Klass::SingleA:
+        {
+            const auto e = excite_one(parent.alpha, occ_a[static_cast<std::size_t>(k / va)],
+                                      vir_a[static_cast<std::size_t>(k % va)]);
+            if (!e.valid)
+                return {};
+            return {DetKey{e.det, parent.beta}, e.phase, p_gen, true};
+        }
+        case Klass::SingleB:
+        {
+            const auto e = excite_one(parent.beta, occ_b[static_cast<std::size_t>(k / vb)],
+                                      vir_b[static_cast<std::size_t>(k % vb)]);
+            if (!e.valid)
+                return {};
+            return {DetKey{parent.alpha, e.det}, e.phase, p_gen, true};
+        }
+        case Klass::DoubleAA:
+        {
+            const int n_occ_pairs = na * (na - 1) / 2;
+            const auto [i, j] = unrank_pair(k % n_occ_pairs, na);
+            const auto [a, b] = unrank_pair(k / n_occ_pairs, va);
+            const auto e1 = excite_one(parent.alpha, occ_a[static_cast<std::size_t>(i)],
+                                       vir_a[static_cast<std::size_t>(a)]);
+            if (!e1.valid)
+                return {};
+            const auto e2 = excite_one(e1.det, occ_a[static_cast<std::size_t>(j)],
+                                       vir_a[static_cast<std::size_t>(b)]);
+            if (!e2.valid)
+                return {};
+            return {DetKey{e2.det, parent.beta}, e1.phase * e2.phase, p_gen, true};
+        }
+        case Klass::DoubleBB:
+        {
+            const int n_occ_pairs = nb * (nb - 1) / 2;
+            const auto [i, j] = unrank_pair(k % n_occ_pairs, nb);
+            const auto [a, b] = unrank_pair(k / n_occ_pairs, vb);
+            const auto e1 = excite_one(parent.beta, occ_b[static_cast<std::size_t>(i)],
+                                       vir_b[static_cast<std::size_t>(a)]);
+            if (!e1.valid)
+                return {};
+            const auto e2 = excite_one(e1.det, occ_b[static_cast<std::size_t>(j)],
+                                       vir_b[static_cast<std::size_t>(b)]);
+            if (!e2.valid)
+                return {};
+            return {DetKey{parent.alpha, e2.det}, e1.phase * e2.phase, p_gen, true};
+        }
+        case Klass::DoubleAB:
+        {
+            const int ka = k % n_sa;
+            const int kb = k / n_sa;
+            const auto ea = excite_one(parent.alpha, occ_a[static_cast<std::size_t>(ka / va)],
+                                       vir_a[static_cast<std::size_t>(ka % va)]);
+            if (!ea.valid)
+                return {};
+            const auto eb = excite_one(parent.beta, occ_b[static_cast<std::size_t>(kb / vb)],
+                                       vir_b[static_cast<std::size_t>(kb % vb)]);
+            if (!eb.valid)
+                return {};
+            return {DetKey{ea.det, eb.det}, ea.phase * eb.phase, p_gen, true};
+        }
+        }
+        return {};
     }
 
     Weight WalkerPopulation::total_population() const noexcept

@@ -546,6 +546,281 @@ static void test_uniform_generator_degenerate()
     check(!e.valid, "a parent with no connections yields an invalid excitation");
 }
 
+// ---------------------------------------------------------------------------
+// F2.3 -- the O(1) production generator
+// ---------------------------------------------------------------------------
+
+struct SampleStats
+{
+    std::map<std::pair<CIString, CIString>, int> counts;
+    std::map<std::pair<CIString, CIString>, double> p_gen;
+    int n_draws = 0;
+    int n_invalid = 0;
+};
+
+static SampleStats sample_generator(const DetKey &parent, int n_act, int n_draws,
+                                    std::uint64_t seed)
+{
+    SampleStats st;
+    st.n_draws = n_draws;
+    RandomSource rng(seed);
+    for (int i = 0; i < n_draws; ++i)
+    {
+        const auto e = draw_excitation(parent, n_act, rng);
+        if (!e.valid)
+        {
+            ++st.n_invalid;
+            continue;
+        }
+        const auto key = std::make_pair(e.det.alpha, e.det.beta);
+        st.counts[key]++;
+        // Every draw of a given determinant must report the SAME p_gen. If two
+        // draws of the same determinant disagree, the generator's probability
+        // model is inconsistent with itself, which the frequency test would
+        // average over and hide.
+        const auto it = st.p_gen.find(key);
+        if (it == st.p_gen.end())
+            st.p_gen[key] = e.p_gen;
+        else if (std::abs(it->second - e.p_gen) > 1e-15)
+            st.p_gen[key] = -1.0; // poison: flagged by the caller
+    }
+    return st;
+}
+
+static void test_open_shell_support_and_frequency()
+{
+    // OPEN SHELL: na != nb. Every other fixture in this file is closed-shell, so
+    // an index bug that only manifests when the alpha and beta counts differ
+    // would go undetected. This was found by a mutation that swapped the
+    // alpha-beta index split (ka = k/n_sb, kb = k%n_sb): with n_sa == n_sb both
+    // forms are bijections onto the same product set, so the mutant is
+    // EQUIVALENT and the gate correctly passed it -- but it revealed that
+    // nothing here would catch the asymmetric case either.
+    struct Case { int n_act, na, nb, expected; const char *name; };
+    const Case cases[] = {
+        {4, 3, 1, 15, "n_act=4 3a/1b"},
+        {6, 4, 2, 92, "n_act=6 4a/2b"},
+        {7, 5, 3, 170, "n_act=7 5a/3b"},
+    };
+    for (const auto &c : cases)
+    {
+        const DetKey parent = make_det(c.na, c.nb);
+        const auto conns = enumerate_connections(parent, c.n_act);
+        if (static_cast<int>(conns.size()) != c.expected)
+        {
+            std::printf("  [FAIL] %s: oracle gives %zu connections, expected %d\n",
+                        c.name, conns.size(), c.expected);
+            ++g_failures;
+            continue;
+        }
+
+        std::map<std::pair<CIString, CIString>, int> oracle;
+        for (const auto &e : conns)
+            oracle[{e.det.alpha, e.det.beta}] = 0;
+
+        const int n_draws = 800000;
+        const auto st = sample_generator(parent, c.n_act, n_draws, 8675309);
+
+        if (st.counts.size() != oracle.size())
+        {
+            std::printf("  [FAIL] %s: generator reached %zu, oracle has %zu\n",
+                        c.name, st.counts.size(), oracle.size());
+            ++g_failures;
+            continue;
+        }
+        bool unconnected = false;
+        for (const auto &[key, unused] : st.counts)
+            if (oracle.find(key) == oracle.end())
+                unconnected = true;
+        if (unconnected)
+        {
+            std::printf("  [FAIL] %s: generated an unconnected determinant\n", c.name);
+            ++g_failures;
+            continue;
+        }
+
+        double worst = 0.0;
+        for (const auto &[key, count] : st.counts)
+        {
+            const double p = st.p_gen.at(key);
+            if (p < 0.0)
+            {
+                worst = 1e9;
+                break;
+            }
+            const double expected = n_draws * p;
+            const double sigma = std::sqrt(n_draws * p * (1.0 - p));
+            worst = std::max(worst, std::abs(count - expected) / sigma);
+        }
+        if (!(worst <= 5.0))
+        {
+            std::printf("  [FAIL] %s: frequency vs p_gen off by %.1f sigma\n", c.name, worst);
+            ++g_failures;
+        }
+    }
+}
+
+static void test_production_generator_support()
+{
+    // THE check that a frequency test cannot replace once p_gen is non-uniform.
+    // A rare connection that is never generated deviates by ~0.6 sigma over 400k
+    // draws -- invisible to frequencies, obvious here.
+    struct Case { int n_act, na, nb; const char *name; };
+    const Case cases[] = {
+        {2, 1, 1, "H2/STO-3G"},
+        {7, 5, 5, "water/STO-3G"},
+        {10, 7, 7, "N2/STO-3G"},
+    };
+    for (const auto &c : cases)
+    {
+        const DetKey parent = make_det(c.na, c.nb);
+        const auto conns = enumerate_connections(parent, c.n_act);
+        std::map<std::pair<CIString, CIString>, int> oracle;
+        for (const auto &e : conns)
+            oracle[{e.det.alpha, e.det.beta}] = 0;
+
+        const auto st = sample_generator(parent, c.n_act, 400000, 20250831);
+
+        if (st.counts.size() != oracle.size())
+        {
+            std::printf("  [FAIL] %s: generator reached %zu determinants, oracle has %zu\n",
+                        c.name, st.counts.size(), oracle.size());
+            ++g_failures;
+            continue;
+        }
+        for (const auto &[key, unused] : st.counts)
+            if (oracle.find(key) == oracle.end())
+            {
+                std::printf("  [FAIL] %s: generated a determinant the oracle says is unconnected\n",
+                            c.name);
+                ++g_failures;
+                break;
+            }
+    }
+}
+
+static void test_production_generator_frequencies()
+{
+    // FREQUENCY against a NON-UNIFORM p_gen: each determinant must appear
+    // n_draws * p_gen times. This is the assertion that catches a p_gen which
+    // does not match the sampler's real distribution.
+    struct Case { int n_act, na, nb; const char *name; };
+    const Case cases[] = {
+        {7, 5, 5, "water/STO-3G"},
+        {10, 7, 7, "N2/STO-3G"},
+    };
+    for (const auto &c : cases)
+    {
+        const DetKey parent = make_det(c.na, c.nb);
+        const int n_draws = 2000000;
+        const auto st = sample_generator(parent, c.n_act, n_draws, 12345);
+
+        double worst_dev = 0.0;
+        bool inconsistent = false;
+        for (const auto &[key, count] : st.counts)
+        {
+            const double p = st.p_gen.at(key);
+            if (p < 0.0)
+            {
+                inconsistent = true;
+                break;
+            }
+            const double expected = n_draws * p;
+            const double sigma = std::sqrt(n_draws * p * (1.0 - p));
+            worst_dev = std::max(worst_dev, std::abs(count - expected) / sigma);
+        }
+        if (inconsistent)
+        {
+            std::printf("  [FAIL] %s: the same determinant was reported with two "
+                        "different p_gen values\n", c.name);
+            ++g_failures;
+            continue;
+        }
+        // 5 sigma over ~600 bins is a ~1-in-3500 false-failure rate.
+        if (!(worst_dev <= 5.0))
+        {
+            std::printf("  [FAIL] %s: frequency does not match p_gen (worst %.1f sigma)\n",
+                        c.name, worst_dev);
+            ++g_failures;
+        }
+    }
+}
+
+static void test_production_generator_p_gen_normalizes()
+{
+    // sum over the connection set of p_gen must be 1: the generator's probability
+    // model must be a probability distribution. This is a necessary condition,
+    // not a sufficient one -- a generator can normalize correctly and still
+    // sample the wrong distribution, which is exactly why the frequency test
+    // above exists and why the scope forbids gating on self-consistency alone.
+    const DetKey parent = make_det(5, 5);
+    const auto st = sample_generator(parent, 7, 400000, 777);
+    double total = 0.0;
+    for (const auto &[key, p] : st.p_gen)
+        total += p;
+    check_close(total, 1.0, 1e-9, "p_gen sums to 1 over the reachable set");
+}
+
+static void test_production_generator_is_non_uniform()
+{
+    // Guard against the generator silently becoming uniform -- which would make
+    // it a slower rewrite of F2.2 and, more importantly, would make the support
+    // check redundant again without anyone noticing.
+    const auto st = sample_generator(make_det(7, 7), 10, 200000, 555);
+    double lo = 1e9, hi = 0.0;
+    for (const auto &[key, p] : st.p_gen)
+    {
+        lo = std::min(lo, p);
+        hi = std::max(hi, p);
+    }
+    check(hi / lo > 5.0, "p_gen is genuinely non-uniform on N2/STO-3G (expect ~21x)");
+}
+
+static void test_production_matches_oracle_phases()
+{
+    // The fast index arithmetic must produce the same phase as the oracle's
+    // explicit loops for the same determinant. A phase error here is a sign
+    // error in the Hamiltonian, not a sampling issue.
+    const DetKey parent = make_det(5, 5);
+    const auto conns = enumerate_connections(parent, 7);
+    std::map<std::pair<CIString, CIString>, double> oracle_phase;
+    for (const auto &e : conns)
+        oracle_phase[{e.det.alpha, e.det.beta}] = e.phase;
+
+    RandomSource rng(2468);
+    for (int i = 0; i < 100000; ++i)
+    {
+        const auto e = draw_excitation(parent, 7, rng);
+        if (!e.valid)
+            continue;
+        const auto it = oracle_phase.find({e.det.alpha, e.det.beta});
+        if (it == oracle_phase.end())
+            continue; // support failure, reported elsewhere
+        if (e.phase != it->second)
+        {
+            check(false, "generator phase disagrees with the oracle phase");
+            return;
+        }
+    }
+}
+
+static void test_production_generator_reproducible()
+{
+    const DetKey parent = make_det(5, 5);
+    RandomSource a(31415), b(31415);
+    for (int i = 0; i < 10000; ++i)
+    {
+        const auto ea = draw_excitation(parent, 7, a);
+        const auto eb = draw_excitation(parent, 7, b);
+        if (ea.det.alpha != eb.det.alpha || ea.det.beta != eb.det.beta
+            || ea.phase != eb.phase || ea.p_gen != eb.p_gen || ea.valid != eb.valid)
+        {
+            check(false, "same seed must reproduce the fast generator bitwise");
+            return;
+        }
+    }
+}
+
 int main()
 {
     std::printf("F1 -- FCIQMC walker container and RNG policy\n");
@@ -571,6 +846,15 @@ int main()
     test_uniform_generator_h2_exact();
     test_uniform_generator_reproducible();
     test_uniform_generator_degenerate();
+
+    std::printf("F2.3 -- O(1) production generator\n");
+    test_production_generator_support();
+    test_production_generator_frequencies();
+    test_production_generator_p_gen_normalizes();
+    test_production_generator_is_non_uniform();
+    test_production_matches_oracle_phases();
+    test_production_generator_reproducible();
+    test_open_shell_support_and_frequency();
 
     if (g_failures == 0)
     {

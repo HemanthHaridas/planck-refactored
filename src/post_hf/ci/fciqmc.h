@@ -259,6 +259,35 @@ namespace HartreeFock::Correlation::CI::QMC
         int n_act,
         RandomSource &rng);
 
+    // Draw one excitation in O(1) -- the production generator (scope step F2.3).
+    //
+    // Picks one of five classes (alpha single, beta single, alpha-alpha double,
+    // beta-beta double, alpha-beta double) with EQUAL probability among the
+    // non-empty ones, then picks uniformly within the chosen class by index
+    // arithmetic. No enumeration: cost is independent of the connection count,
+    // which is the whole point -- the Cr2 target has 7308 connections per
+    // determinant and F2.2's enumerate-per-call would dominate the run.
+    //
+    // The resulting `p_gen` is NON-UNIFORM: equal class probability over unequal
+    // class sizes means a connection in a small class is far likelier than one in
+    // a large class. Measured spread: 10x on water/STO-3G, 21x on N2/STO-3G. That
+    // is legitimate -- what matters is that the returned p_gen equals the true
+    // probability of this draw, which is what the F2.3 gate checks against
+    // measured frequencies.
+    //
+    //   p_gen = (1 / n_live_classes) * (1 / class_size)
+    //
+    // This is also where the SUPPORT check starts earning its place. With a
+    // uniform generator a support hole shows up in the frequencies anyway (~54
+    // sigma for 1 missing connection in 140). With a non-uniform one, a rare
+    // connection that is never generated deviates by ~0.6 sigma, which no
+    // frequency test will flag -- only comparing the reachable set against the
+    // oracle catches it.
+    Excitation draw_excitation(
+        const DetKey &parent,
+        int n_act,
+        RandomSource &rng);
+
 } // namespace HartreeFock::Correlation::CI::QMC
 
 #endif
