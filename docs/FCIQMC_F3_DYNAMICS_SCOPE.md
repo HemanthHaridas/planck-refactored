@@ -52,7 +52,34 @@ than quietly choosing a population where the bias is invisible.
 
 ## Steps
 
-### F3.1 — one iteration, deterministically
+### F3.1 — one iteration, deterministically — **DONE 2026-08-31**
+
+`propagate_deterministic` (`src/post_hf/ci/fciqmc.{h,cpp}`), gated by
+`planck-fciqmc-walkers`. Matches a hand-computed matvec to **1e-12** on three
+fixtures including an open-shell one. Also gated: the step touches only connected
+determinants, propagating `+c` and `−c` gives exactly opposite populations while
+their sum spawns nothing (annihilation survives the *propagation*, not just the
+container), the propagator is linear, and the toy `H` is symmetric.
+Mutation-verified against a spawn sign error, a dropped shift, and using the
+child's diagonal in place of `H_ij`.
+
+**Design note that made the check meaningful:** the Hamiltonian arrives as
+callbacks (`HamiltonianOps`), not as `h_eff`/`ga`. That lets the gate drive the
+dynamics with an *independently constructed* matrix — reusing
+`build_ci_hamiltonian_dense` would verify the dynamics agree with the same
+matrix-element code they call, which is consistency rather than correctness.
+
+**The one failure was the TEST, and the diagnosis is worth keeping.** The first
+run failed at 8.5e-2 on the closed-shell fixture while the 2-orbital case passed —
+a pattern that points at same-spin doubles. It was not that, and not duplicate
+connections either. The toy Hamiltonian filled **every** matrix entry, but a
+physical `H` is exactly zero between determinants differing by more than a double
+excitation, because it is a two-body operator. At `n_act=4, na=nb=2`, **9 of 35
+pairs are unconnected**, so the reference matvec summed 9 contributions the
+propagator correctly skipped. **A synthetic Hamiltonian must respect the sparsity
+of a real one, or it is not a Hamiltonian and no propagator will reproduce it.**
+
+### F3.1 (original text) — one iteration, deterministically
 
 Implement `spawn`, `death` and the accumulate, but drive them with an
 **enumerating** spawn (F2.2's `draw_uniform_excitation` over the full connection

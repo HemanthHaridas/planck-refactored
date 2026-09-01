@@ -371,6 +371,19 @@ worth doing whether or not FCIQMC happens.
   invisible to frequencies. So the support check is load-bearing at F2.3
   specifically, and no F2.2 mutation can demonstrate it.
 
+  **F3.1 LANDED (2026-08-31): deterministic propagation, exact against a matvec.**
+  `propagate_deterministic` visits every connection through the F2.1 oracle rather
+  than sampling, so one call is exactly `c <- c - dt*(H-S)*c` and matches a
+  hand-computed matvec to 1e-12. It exists to establish the DYNAMICS before
+  sampling enters, so a later failure is attributable to one or the other. The
+  Hamiltonian arrives as callbacks so the gate can drive it with an independently
+  built matrix — reusing `build_ci_hamiltonian_dense` would test consistency, not
+  correctness. **The one failure was the test:** the toy Hamiltonian filled every
+  entry, but a real `H` is zero beyond a double excitation (9 of 35 pairs
+  unconnected at n_act=4), so the reference matvec summed contributions the
+  propagator correctly skipped. **A synthetic Hamiltonian must respect the sparsity
+  of a real one.**
+
   **Q1 CANDIDATE FOUND (2026-08-31): Cr2, and it is TWO ATOMS.** Surveying the
   standard multireference benchmarks against the measured boundary, almost
   everything canonical is already reachable (N2/C2 full valence, benzene and
