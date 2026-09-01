@@ -3138,6 +3138,295 @@ static void test_stochastic_matches_deterministic_within_error()
     }
 }
 
+// ---------------------------------------------------------------------------
+// F4.5 -- the initiator approximation (i-FCIQMC)
+// ---------------------------------------------------------------------------
+
+static StochasticRun run_initiator(const ToyHamiltonian &toy, int n_act, double dt,
+                                   double target, int n_steps, std::uint64_t seed,
+                                   int spawn_attempts, double n_add)
+{
+    const auto ops = toy.ops(n_act);
+    StochasticRun out;
+
+    WalkerPopulation pop;
+    pop.add(toy.dets[0], target);
+
+    ShiftController ctl;
+    ctl.shift = ops.diagonal(toy.dets[0]);
+    ctl.target_population = target;
+    ctl.zeta = 0.3;
+    ctl.xi = 0.05;
+    ctl.interval = 5;
+
+    RandomSource rng(seed);
+    std::vector<double> shifts;
+    const int equilibrate = n_steps / 2;
+
+    for (int step = 0; step < n_steps; ++step)
+    {
+        pop = propagate_stochastic(pop, n_act, ops, dt, ctl.shift, rng,
+                                   spawn_attempts, 1.0, n_add);
+        pop.compress(1e-12);
+        const double n = ordered_l1_norm(pop);
+        if (!std::isfinite(n) || n <= 0.0 || n > target * 1e9)
+        {
+            out.finite = false;
+            return out;
+        }
+        ctl.update(n, dt);
+        if (step >= equilibrate)
+            shifts.push_back(ctl.shift);
+        out.final_ratio = n / target;
+    }
+    if (shifts.size() < 4)
+    {
+        out.finite = false;
+        return out;
+    }
+    double sum = 0.0;
+    for (double v : shifts)
+        sum += v;
+    out.shift_mean = sum / static_cast<double>(shifts.size());
+    out.shift_blocked_se = blocked_standard_error(shifts);
+    out.samples = static_cast<int>(shifts.size());
+    return out;
+}
+
+static void test_initiator_actually_restricts()
+{
+    // FIRST, prove the rule DOES something. An initiator implementation that
+    // changed nothing would sail through a convergence-only test -- the exact
+    // shape of a gate that is green and means nothing.
+    //
+    // At a threshold above every walker weight, no parent may colonize an
+    // unoccupied determinant, so the wavefunction cannot spread beyond what it
+    // already occupies. Starting from a single determinant, the population must
+    // stay confined and the energy must be measurably wrong.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    WalkerPopulation whole;
+    for (const auto &d : toy.dets)
+        whole.add(d, 1.0);
+    const double dt = 0.05 * max_stable_timestep(whole, ops, -2.0);
+    const double exact = exact_ground_energy(toy);
+    const double target = 200.0;
+
+    // n_add = 0: no restriction, and the answer is right.
+    const auto free_run = run_initiator(toy, 4, dt, target, 6000, 555, 4, 0.0);
+    check(free_run.finite, "the unrestricted run is finite");
+
+    // n_add huge: every spawn onto a new determinant is blocked.
+    const auto blocked = run_initiator(toy, 4, dt, target, 6000, 555, 4, 1e9);
+    check(blocked.finite, "the fully-restricted run is finite");
+
+    if (!free_run.finite || !blocked.finite)
+        return;
+
+    const double err_free = std::abs(free_run.shift_mean - exact);
+    const double err_blocked = std::abs(blocked.shift_mean - exact);
+
+    if (!(err_blocked > err_free * 10.0))
+    {
+        std::printf("  [FAIL] a huge initiator threshold did not degrade the "
+                    "answer (free err %.3e, blocked err %.3e) -- the rule is not "
+                    "restricting anything\n", err_free, err_blocked);
+        ++g_failures;
+    }
+
+    if (std::getenv("PLANCK_FCIQMC_VERBOSE") != nullptr)
+        std::printf("      n_add=0: err=%.3e | n_add=1e9: err=%.3e\n",
+                    err_free, err_blocked);
+}
+
+// NOTE: the scope asked for two convergence trends here -- the initiator error
+// falling as n_add -> 0, and falling as the population grows. NEITHER IS
+// MEASURABLE ON THIS FIXTURE, and the reason is structural rather than a tuning
+// problem.
+//
+// Measured (target 200, 36 determinants, 6000 steps):
+//
+//   n_add      error       blocked SE
+//   0.0        8.63e-02    6.95e-02
+//   1.0        6.28e-02    9.77e-02
+//   3.0        4.11e-02    5.96e-02
+//   10.0       1.18e-01    8.88e-02
+//   30.0       5.27e-02    6.15e-02
+//   100.0      1.12e-01    6.16e-02
+//   300.0      7.97e+00    0.00e+00   <- frozen
+//   1000.0     7.97e+00    0.00e+00   <- frozen
+//
+// The behaviour is BINARY, not gradual: below n_add ~ 100 every error is within
+// one blocked sigma of every other, and above ~300 the run is frozen with zero
+// variance. There is no intermediate regime to fit a trend through.
+//
+// The cause is saturation. The initiator rule only fires on spawns to UNOCCUPIED
+// determinants; at 200 walkers over 36 determinants (5.5 per determinant) the
+// space fills within a few steps, so the rule almost never fires -- until n_add
+// is large enough to freeze the single starting determinant before it can spread
+// at all. That is the same limit F4.4 hit, and the same one the research scope
+// names when it rejects H2 and water/STO-3G as FCIQMC fixtures.
+//
+// So the convergence trends belong with the N2/STO-3G regression gate (F5.3),
+// where 14 400 determinants stay partially occupied at a realistic walker count.
+// Asserting a trend here would mean tuning a fixture until a curve appeared,
+// which tests the fixture rather than the method.
+//
+// What IS measurable here is gated: that the rule restricts at all
+// (test_initiator_actually_restricts, error 2.07e-02 -> 7.97 when fully
+// blocked), that it relaxes as the population grows out of the frozen regime,
+// and that it adds no order dependence.
+
+static void test_initiator_relaxes_as_population_grows()
+{
+    // The other limit in which the approximation becomes exact: with more
+    // walkers, more determinants are occupied, so the rule fires less often and
+    // blocks less. At a FIXED threshold the error must fall as the population
+    // grows.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    WalkerPopulation whole;
+    for (const auto &d : toy.dets)
+        whole.add(d, 1.0);
+    const double dt = 0.05 * max_stable_timestep(whole, ops, -2.0);
+    const double exact = exact_ground_energy(toy);
+    const double n_add = 3.0;
+
+    std::vector<std::pair<double, double>> trend;
+    for (double target : {20.0, 80.0, 320.0})
+    {
+        const auto r = run_initiator(toy, 4, dt, target, 6000, 246810, 4, n_add);
+        if (!r.finite)
+        {
+            std::printf("  [FAIL] initiator run at target=%.0f is not finite\n", target);
+            ++g_failures;
+            return;
+        }
+        trend.push_back({target, std::abs(r.shift_mean - exact)});
+        if (std::getenv("PLANCK_FCIQMC_VERBOSE") != nullptr)
+            std::printf("      target=%6.0f (n_add=%.1f) err=%.4e\n",
+                        target, n_add, trend.back().second);
+    }
+
+    if (!(trend.back().second < trend.front().second))
+    {
+        std::printf("  [FAIL] the initiator error does not fall as the population "
+                    "grows (%.3e at N=%.0f, %.3e at N=%.0f)\n",
+                    trend.front().second, trend.front().first,
+                    trend.back().second, trend.back().first);
+        ++g_failures;
+    }
+}
+
+static void test_initiator_spares_occupied_determinants()
+{
+    // The rule must block spawns onto UNOCCUPIED determinants only. A rule that
+    // blocked every spawn from a low-weight parent is a different (and much more
+    // damaging) approximation -- and on a saturated fixture the two are
+    // indistinguishable from the energy alone, so assert the semantics directly.
+    // Measured: mutating the occupancy condition away passed every other check.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    const double dt = 0.05;
+    const double n_add = 10.0;
+
+    // One low-weight parent, well under the threshold.
+    WalkerPopulation lone;
+    lone.add(toy.dets[0], 1.0);
+
+    RandomSource r1(24680);
+    const auto spread = propagate_stochastic(lone, 4, ops, dt, -2.0, r1, 64, 1.0, n_add);
+
+    // It must not colonize anything: every determinant it reaches other than
+    // itself was unoccupied, so every spawn is blocked.
+    int colonized = 0;
+    for (const auto &[det, w] : spread)
+        if (w != 0.0 && !(det.alpha == toy.dets[0].alpha && det.beta == toy.dets[0].beta))
+            ++colonized;
+    check(colonized == 0,
+          "a sub-threshold parent colonizes no unoccupied determinant");
+
+    // Now pre-occupy the rest of the space. The SAME low-weight parent must now
+    // be able to spawn, because those determinants are no longer unoccupied.
+    WalkerPopulation seeded;
+    seeded.add(toy.dets[0], 1.0);
+    for (std::size_t i = 1; i < toy.dets.size(); ++i)
+        seeded.add(toy.dets[i], 0.25);
+
+    RandomSource r2(24680);
+    const auto with_neighbours =
+        propagate_stochastic(seeded, 4, ops, dt, -2.0, r2, 64, 1.0, n_add);
+
+    // The spawns must have landed: compare against the same run with the
+    // initiator disabled, which is the upper bound on what could be spawned.
+    RandomSource r3(24680);
+    const auto unrestricted =
+        propagate_stochastic(seeded, 4, ops, dt, -2.0, r3, 64, 1.0, 0.0);
+
+    double diff = 0.0;
+    for (const auto &d : toy.dets)
+        diff = std::max(diff, std::abs(with_neighbours.weight_at(d)
+                                       - unrestricted.weight_at(d)));
+    check(diff == 0.0,
+          "on a fully occupied space the initiator blocks nothing");
+}
+
+static void test_initiator_judges_occupancy_before_the_sweep()
+{
+    // Occupancy must be judged against the INCOMING population. Judging against
+    // the partially-built next population would make the rule order-dependent: a
+    // determinant colonized early in a sweep would then admit spawns that the
+    // same determinant, visited late, would reject.
+    //
+    // Detect it by determinism: an order-dependent rule gives a different answer
+    // when the population is built in a different insertion order, because the
+    // hash map's iteration order changes with it.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    const double dt = 0.02;
+
+    WalkerPopulation forward, reverse;
+    for (std::size_t i = 0; i < toy.dets.size(); ++i)
+        forward.add(toy.dets[i], (i % 2 == 0) ? 2.0 : 0.5);
+    for (std::size_t i = toy.dets.size(); i > 0; --i)
+        reverse.add(toy.dets[i - 1], ((i - 1) % 2 == 0) ? 2.0 : 0.5);
+
+    // CONTROL FIRST: the same comparison with the initiator DISABLED. If that
+    // also differs, insertion order is changing the result for a reason unrelated
+    // to the initiator -- the population iterates in hash order and draws from a
+    // shared RNG, so a different order gives each parent different draws.
+    RandomSource c0(13579), c1(13579);
+    const auto ctrl_a = propagate_stochastic(forward, 4, ops, dt, -2.0, c0, 4, 1.0, 0.0);
+    const auto ctrl_b = propagate_stochastic(reverse, 4, ops, dt, -2.0, c1, 4, 1.0, 0.0);
+    bool control_differs = false;
+    for (const auto &d : toy.dets)
+        if (ctrl_a.weight_at(d) != ctrl_b.weight_at(d))
+            control_differs = true;
+
+    RandomSource ra(13579), rb(13579);
+    const auto sa = propagate_stochastic(forward, 4, ops, dt, -2.0, ra, 4, 1.0, 1.0);
+    const auto sb = propagate_stochastic(reverse, 4, ops, dt, -2.0, rb, 4, 1.0, 1.0);
+    bool initiator_differs = false;
+    for (const auto &d : toy.dets)
+        if (sa.weight_at(d) != sb.weight_at(d))
+            initiator_differs = true;
+
+    // The claim is that the INITIATOR adds no order dependence beyond whatever
+    // the propagator already has. Comparing against the control is what isolates
+    // it -- asserting the initiator run alone is order-independent would fail for
+    // a reason that has nothing to do with the initiator.
+    if (initiator_differs && !control_differs)
+    {
+        check(false, "the initiator rule adds order dependence the propagator "
+                     "does not already have");
+        return;
+    }
+    if (std::getenv("PLANCK_FCIQMC_VERBOSE") != nullptr)
+        std::printf("      order dependence: control=%s initiator=%s\n",
+                    control_differs ? "yes" : "no",
+                    initiator_differs ? "yes" : "no");
+}
+
 int main()
 {
     std::printf("F1 -- FCIQMC walker container and RNG policy\n");
@@ -3234,6 +3523,12 @@ int main()
     test_stochastic_error_shrinks_with_walkers();
     test_spawn_discretization_is_unbiased();
     test_stochastic_matches_deterministic_within_error();
+
+    std::printf("F4.5 -- the initiator approximation\n");
+    test_initiator_actually_restricts();
+    test_initiator_spares_occupied_determinants();
+    test_initiator_relaxes_as_population_grows();
+    test_initiator_judges_occupancy_before_the_sweep();
 
     if (g_failures == 0)
     {

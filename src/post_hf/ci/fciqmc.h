@@ -442,6 +442,29 @@ namespace HartreeFock::Correlation::CI::QMC
     // relative noise falls. Rounding must be STOCHASTIC -- rounding to nearest
     // would systematically discard small spawns and bias the energy, which is why
     // RandomSource::stochastic_round is unbiased in expectation.
+    // `initiator_threshold` enables the initiator approximation (i-FCIQMC).
+    // Pass 0 to disable it.
+    //
+    // THE RULE: a spawn onto an UNOCCUPIED determinant is kept only if the parent's
+    // weight exceeds the threshold. Spawns onto already-occupied determinants are
+    // always kept, and so are spawns from high-weight parents.
+    //
+    // WHY IT EXISTS. In a space of 10^8+ determinants most of the sign problem
+    // comes from low-weight walkers scattering into determinants that should be
+    // empty; each such spawn is noise, and its sign is as likely wrong as right.
+    // Restricting who may COLONIZE new determinants suppresses that noise while
+    // leaving the already-established part of the wavefunction free to evolve.
+    //
+    // IT IS AN APPROXIMATION, and a biased one: the exact answer is recovered only
+    // as the threshold falls to zero or the population grows (at which point most
+    // determinants are occupied and the rule rarely fires). Never report an
+    // initiator energy without stating the threshold.
+    //
+    // Occupancy is judged against the population as it was BEFORE this iteration.
+    // Using the partially-built next population instead would make the rule depend
+    // on the order determinants happen to be visited -- a determinant colonized
+    // early in a sweep would then admit spawns that the same determinant, visited
+    // late, would reject.
     WalkerPopulation propagate_stochastic(
         const WalkerPopulation &population,
         int n_act,
@@ -450,7 +473,8 @@ namespace HartreeFock::Correlation::CI::QMC
         double shift,
         RandomSource &rng,
         int n_spawn_attempts = 1,
-        double granularity = 0.0);
+        double granularity = 0.0,
+        double initiator_threshold = 0.0);
 
     // A NECESSARY (not sufficient) timestep bound from the diagonal (F3.3).
     //

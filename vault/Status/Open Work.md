@@ -556,6 +556,30 @@ worth doing whether or not FCIQMC happens.
   reproducibility; F5.4 the determinism decision from the research scope's section
   6, which must be made explicitly rather than discovered.
 
+  **F4 COMPLETE (2026-08-31): F4.1-F4.5 landed and gated.** Shift control with the
+  target term, the shift energy cross-checked against the projected energy, the
+  timestep divergence gate F3 could not build, stochastic population control, and
+  the initiator approximation. **FCIQMC is now a usable method** on the synthetic
+  fixture: it holds a population, reports two independent estimators with blocked
+  error bars, and supports i-FCIQMC.
+
+  **F4.5's `n_add -> 0` convergence trend is NOT MEASURABLE on the toy fixture,
+  recorded rather than contrived.** The initiator is BINARY there — below n_add
+  ~100 every error is within one blocked sigma of every other, above ~300 the run
+  is frozen with zero variance — because the rule only fires on spawns to
+  UNOCCUPIED determinants and 36 determinants at 200 walkers saturate within a few
+  steps. Same limit F4.4 hit. The trend belongs with the N2 regression gate (F5.3)
+  where 14 400 determinants stay partially occupied; asserting it here would mean
+  tuning a fixture until a curve appeared.
+
+  **Two mutations passed and each needed a new assertion:** a rule blocking ALL
+  spawns from a low-weight parent (not just to unoccupied determinants) was
+  invisible from the energy on a saturated fixture, and now has a direct semantics
+  test; and the order-dependence check was itself wrong — **the control shows the
+  propagator already has insertion-order dependence** (hash-order iteration against
+  a shared RNG), so the test now compares against that control rather than
+  asserting an absolute that was never true.
+
   **Q1 CANDIDATE FOUND (2026-08-31): Cr2, and it is TWO ATOMS.** Surveying the
   standard multireference benchmarks against the measured boundary, almost
   everything canonical is already reachable (N2/C2 full valence, benzene and

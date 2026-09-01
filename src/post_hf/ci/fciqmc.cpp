@@ -416,7 +416,8 @@ namespace HartreeFock::Correlation::CI::QMC
         double shift,
         RandomSource &rng,
         int n_spawn_attempts,
-        double granularity)
+        double granularity,
+        double initiator_threshold)
     {
         WalkerPopulation next;
         if (n_spawn_attempts < 1)
@@ -447,6 +448,13 @@ namespace HartreeFock::Correlation::CI::QMC
 
                 const double h_ij = ham.off_diagonal(det, exc.det);
                 if (h_ij == 0.0)
+                    continue;
+                // Initiator rule. Occupancy is judged against the INCOMING
+                // population, not the partially-built `next` -- see the header
+                // note on why order-dependence would otherwise creep in.
+                if (initiator_threshold > 0.0
+                    && std::abs(weight) <= initiator_threshold
+                    && population.weight_at(exc.det) == 0.0)
                     continue;
 
                 // The 1/p_gen reweighting. p_gen here is a deterministic property

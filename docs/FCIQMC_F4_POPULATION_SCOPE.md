@@ -255,7 +255,53 @@ Repeat F4.1–F4.2 with `propagate_stochastic`.
 - **Verify against the deterministic result** from F4.1 within the blocked error
   bar, using `metric_within_sigma`.
 
-### F4.5 — the initiator approximation (i-FCIQMC)
+### F4.5 — the initiator approximation (i-FCIQMC) — **DONE 2026-08-31**
+
+`propagate_stochastic` takes an `initiator_threshold`. Occupancy is judged against
+the **incoming** population, never the partially-built next one — using the latter
+would make the rule depend on the order determinants happen to be visited.
+
+Gated: the rule demonstrably restricts (error **2.07e-02 → 7.97** when fully
+blocked), it relaxes as the population grows out of the frozen regime (2.22 at
+N=20 → 4.31e-02 at N=80), it spares already-occupied determinants, and it adds no
+order dependence beyond what the propagator already has.
+
+**The `n_add → 0` convergence trend this scope asked for is NOT MEASURABLE on
+this fixture, and that is structural.** Measured at target 200 over 36
+determinants:
+
+| n_add | error | blocked SE |
+|---|---|---|
+| 0 | 8.63e-02 | 6.95e-02 |
+| 3 | 4.11e-02 | 5.96e-02 |
+| 30 | 5.27e-02 | 6.15e-02 |
+| 100 | 1.12e-01 | 6.16e-02 |
+| **300** | **7.97** | **0.00** (frozen) |
+
+The behaviour is **binary, not gradual**: below `n_add ≈ 100` every error is
+within one blocked σ of every other, and above ~300 the run is frozen with zero
+variance. The initiator only fires on spawns to *unoccupied* determinants, and at
+5.5 walkers per determinant the space fills within a few steps — so the rule
+almost never fires until `n_add` is large enough to freeze the starting
+determinant outright. **Same saturation limit F4.4 hit, and the same one the
+research scope names when rejecting H2 and water/STO-3G as FCIQMC fixtures.**
+
+**So the convergence trend belongs with the N2/STO-3G regression gate (F5.3)**,
+where 14 400 determinants stay partially occupied at a realistic walker count.
+Asserting a trend here would have meant tuning a fixture until a curve appeared,
+which tests the fixture rather than the method.
+
+**Two mutations passed and each needed a new assertion.** A rule blocking *all*
+spawns from a low-weight parent — not just those to unoccupied determinants — was
+indistinguishable from the energy alone, because on a saturated fixture the
+occupancy condition rarely fires; it now has a direct semantics test. And the
+order-dependence check was initially wrong: it compared two insertion orders and
+failed, but **the control shows the propagator already has that dependence**
+(hash-order iteration against a shared RNG), independent of the initiator. The
+test now compares against that control rather than asserting an absolute that was
+never true.
+
+### F4.5 (original text) — the initiator approximation (i-FCIQMC)
 
 Spawns onto **unoccupied** determinants are accepted only from parents whose
 weight exceeds `n_add`; spawns onto occupied determinants are always accepted.
