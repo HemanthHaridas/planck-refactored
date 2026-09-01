@@ -433,6 +433,27 @@ worth doing whether or not FCIQMC happens.
   statistical gates instead, so it took a fourth to demonstrate the control is
   load-bearing rather than decorative.
 
+  **F4 SCOPED (2026-08-31) in `docs/FCIQMC_F4_POPULATION_SCOPE.md`** — shift
+  control and the initiator approximation, in five steps. Two numbers were measured
+  on a 20-determinant model before the scope was written. (1) **The damping
+  parameter zeta trades shift accuracy against population control, and both ends
+  fail:** at zeta = 0.02 the shift is accurate to 2.2e-5 but the population
+  overshoots 2062x; at zeta = 2.0 the population is held to 0.05x but the shift is
+  biased by 8.5e-3, 600x worse. The usable band is ~0.05-0.5, and the gate asserts
+  the **tradeoff** rather than pinning a value — a run insensitive to zeta is not
+  controlling anything. (2) **The shift energy and the projected energy agree to
+  2.0e-6 across a 100x range of target populations**, and they share no arithmetic
+  — one comes from the population growth rate, the other from a ratio of walker
+  weights. That makes it the strongest gate available at this step: a defect in one
+  would have to be exactly mirrored in the other to escape.
+
+  **F4.3 is the home for the timestep divergence gate F3 could not build.** With a
+  fixed shift, renormalizing turns the propagation into a power iteration whose
+  dominant eigenvector stays the ground state at every dt tried, so instability had
+  nowhere to show. With the population controlled it does — the shift cannot hold
+  the population steady. The scope says to record the outcome honestly if it still
+  does not work, rather than contriving a fixture.
+
   **Q1 CANDIDATE FOUND (2026-08-31): Cr2, and it is TWO ATOMS.** Surveying the
   standard multireference benchmarks against the measured boundary, almost
   everything canonical is already reachable (N2/C2 full valence, benzene and
