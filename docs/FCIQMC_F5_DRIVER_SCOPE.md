@@ -27,13 +27,15 @@ links one file. And 14 400 determinants is 400x the current fixture, which alrea
 uses the whole ~30 s budget. The honest home is a regression case driven by the
 real binary.
 
-## What must be built
+## What is built, and what remains
 
-The driver already has the shape to copy. `run_fci` (`src/post_hf/fci.h`) takes a
-`Calculator` and shell pairs, reads options from `calc._active_space`, and writes
-`_correlation_energy` / `_correlated_total_energy` back. `hf_driver.cpp:1401`
-dispatches it off `PostHF::FCI`. FCIQMC needs the same three pieces plus its own
-inputs.
+**Built (F5.1–F5.2).** `run_fciqmc` (`src/post_hf/fciqmc_driver.{h,cpp}`) mirrors
+`run_fci` and is dispatched from `hf_driver.cpp` on `correlation fciqmc`, with
+eleven input keywords. The integral transform is **shared, not copied** —
+`build_all_mo_ci_setup` was extracted from `run_fci` and both call it — so the two
+paths cannot disagree about the Hamiltonian, only about how they solve it.
+
+**Remaining.** The N2 gate (F5.3) and the determinism decision (F5.4).
 
 ## Steps
 
@@ -70,20 +72,6 @@ one minute, so the first run failed with "Invalid Correlation : fciqmc" against
 correct source. **Watching one file's timestamp does not prove the build included
 every edit** — check all of them.
 
-### F5.1 (original text) — the driver entry point
-
-`run_fciqmc(Calculator&, const std::vector<ShellPair>&)`, mirroring `run_fci`:
-build the determinant space's integrals the same way, run the propagator under
-shift control, report the shift and projected energies with blocked error bars.
-
-- **Verify:** on a system small enough to diagonalize (H2/STO-3G, 4 determinants)
-  the reported energy matches `run_fci` on the same input within its error bar.
-  This is the first time the two paths are compared on *real* integrals, so a
-  disagreement here is an integral-plumbing defect, not a sampling one.
-- **Do not reimplement the integral transform.** `run_fci` builds `h_eff` and `ga`
-  from the converged reference; factor that out and share it, or the two paths
-  will drift and every later comparison becomes ambiguous.
-
 ### F5.2 — input keywords — **DONE 2026-09-01**
 
 Eleven keywords in `_scf_map`, each validated at parse time so a bad value fails
@@ -115,18 +103,6 @@ the map key. An exact match (`grep -qx`) showed the keyword genuinely absent.
 > **A substring match on a binary is not evidence the symbol you care about is
 > there, and a timestamp is not evidence a build finished.** Test the actual
 > condition: build not running, *and* exact symbol present.
-
-### F5.2 (original text) — input keywords
-
-`correlation fciqmc` plus the parameters F4 established as load-bearing: walker
-target, `zeta`, `xi`, timestep, spawn granularity, equilibration length, run
-length, seed.
-
-- **Verify:** every parameter is reachable from an input file and changing it
-  changes the run. A keyword the parser accepts but ignores is worse than one it
-  rejects.
-- **The seed must be an input.** The reproducibility contract F3.5 established is
-  worthless if the seed is not user-visible and recorded in the output.
 
 ### F5.3 — the N2/STO-3G regression gate
 

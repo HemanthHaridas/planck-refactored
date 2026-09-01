@@ -1,8 +1,14 @@
 # Research scope: FCIQMC in Planck
 
-**Status: both gating questions are answered. Implementation is under way — F1
-(walker state) and F2 (excitation generator) are landed and gated; F3 (dynamics)
-is scoped.**
+**Status: both gating questions are answered, and FCIQMC runs from an input file.**
+F1–F4 are landed and gated (`planck-fciqmc-walkers`); F5.1–F5.2 wire it into the
+driver, so `correlation fciqmc` is a working calculation reproducing exact FCI on
+H2/STO-3G to within its own error bar.
+
+**What is not yet demonstrated: a chemically interesting answer.** Every gate
+above H2 runs on a synthetic Hamiltonian, and H2's 4 determinants are far below
+where sampling means anything. The N2/STO-3G gate (F5.3) is the first real test,
+and the determinism decision (F5.4) is still open.
 
 FCIQMC (Booth/Thom/Alavi, *JCP* **131**, 054106) samples the FCI wavefunction with
 a population of signed walkers evolving in imaginary time, instead of storing a CI
@@ -209,11 +215,15 @@ scope originally named is satisfied.**
 **Built (F3):** the dynamics — spawn, death, annihilation on a fixed shift, the
 projected energy, and the reproducibility gate.
 
+**Built (F4, F5.1–F5.2):** population control — shift adjustment with a restoring
+term, walker targets, the initiator approximation — plus the driver entry point,
+input keywords, and both energy estimators with blocked error bars.
+
 **Still to build:**
 
-- **Population control.** Shift adjustment, walker targets, and the initiator
-  approximation (i-FCIQMC), which is effectively mandatory beyond toy systems (F4).
-- **Parallelism**, and the determinism decision in §6 (F5).
+- **The N2/STO-3G gate (F5.3)**, the first validation on a system where sampling
+  is meaningful. Everything above H2 so far runs on a synthetic Hamiltonian.
+- **Parallelism**, and the determinism decision in §6 (F5.4).
 
 ## 5. Implementation ladder
 
@@ -275,8 +285,17 @@ Two findings that bind the remaining steps:
 stabilises at the target; on N2/STO-3G the energy is within 3σ of the exact FCI, and
 σ shrinks as √N — the **slope**, not just the value.
 
-**F5 — parallelism, and the determinism decision.** See §6. Do not start until F1-F4
-are green.
+**F5 — driver wiring, the N2 gate, and the determinism decision.** Scoped in
+`FCIQMC_F5_DRIVER_SCOPE.md`. **F5.1 and F5.2 are landed**: `run_fciqmc` shares
+`run_fci`'s integral transform (extracted, not copied, so a disagreement is
+attributable to sampling rather than plumbing), and eleven input keywords are live
+with the seed user-visible and echoed. On H2/STO-3G the shift energy sits 0.09σ
+from exact FCI and the projected energy 0.34σ.
+
+**F5.3 — the N2/STO-3G gate — is the deliverable that matters**, because it is the
+first system where the walker population is a genuine sample rather than covering
+the space. **F5.4 is the determinism decision** in §6, which must be made
+explicitly rather than discovered.
 
 **Only then** Cr₂: CAS(12,12) against the deterministic answer first, then walk out
 to CAS(12,18) where no reference exists.

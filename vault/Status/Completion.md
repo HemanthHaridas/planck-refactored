@@ -285,6 +285,44 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **FCIQMC: the method is implemented and runs from an input file (2026-08-31 to
+  2026-09-01).** `correlation fciqmc` is a working calculation. Walker state and
+  RNG, the excitation generator with a consistent `p_gen`, spawn/death/
+  annihilation, shift control with the initiator approximation, both energy
+  estimators with blocked error bars, and the driver entry point with eleven input
+  keywords. Gated by `planck-fciqmc-walkers` (~34 s) and the
+  `h2_fciqmc_sto3g` regression case.
+
+  **On H2/STO-3G against exact FCI `-1.1372744062`:** shift `-1.1375360199` ±
+  2.76e-03 (**0.09σ**), projected `-1.1373278832` ± 1.58e-04 (**0.34σ**).
+
+  **What is NOT yet demonstrated: a chemically interesting answer.** Every gate
+  above H2 runs on a *synthetic* Hamiltonian — one that respects a real
+  Hamiltonian's sparsity and is checked against exact diagonalization, but is not
+  a molecule. H2's 4 determinants are far below where sampling means anything
+  (the walker population covers the whole space). **The N2/STO-3G gate is the
+  first real test and is not built**; see `vault/Status/Open Work.md`.
+
+  **The design decision that makes future comparisons meaningful:**
+  `build_all_mo_ci_setup` was *extracted* from `run_fci` — a move, not a copy —
+  and both paths call it, with the Hamiltonian callbacks wrapping the same
+  `slater_condon_element`. The stochastic and deterministic paths therefore cannot
+  disagree about the Hamiltonian, only about how they solve it, so a disagreement
+  on a larger system is attributable to sampling rather than plumbing.
+
+  **Two prerequisites answered before any of it was written.** Q1 (is there a
+  calculation this codebase cannot do?) — yes, **Cr₂ CAS(12,18)**: two atoms,
+  344.6M determinants, 2.76 GB per CI vector, the first case where both the time
+  and memory walls fail, and inside the existing 31-orbital representation. Q2
+  (can a stochastic method be validated in a codebase gated on exactness?) — yes,
+  via the G1–G4 machinery (`metric_within_sigma`, a blocking analysis validated
+  against analytic AR(1), a fixed-seed harness, and an end-to-end estimator), all
+  built *before* any FCIQMC code and reusable independently of it.
+
+  Answers: `docs/FCIQMC_SAMPLING_AND_DYNAMICS.md`,
+  `docs/FCIQMC_POPULATION_CONTROL.md`. Open scope:
+  `docs/FCIQMC_F5_DRIVER_SCOPE.md`.
+
 - **FCI sigma build: 4.8x from removing the allocator, then 3.54x more from
   threading it (2026-08-30).** The iterative `apply_ci_hamiltonian`
   (`src/post_hf/ci/ci.cpp`) — the path taken by every determinant space above
