@@ -281,9 +281,31 @@ Two findings that bind the remaining steps:
   whose dominant eigenvector stays the ground state at every `dt` tried, so
   "unstable" has nowhere to show. With population control it does.
 
-**F4 — shift control and the initiator approximation.** *Verify:* population
-stabilises at the target; on N2/STO-3G the energy is within 3σ of the exact FCI, and
-σ shrinks as √N — the **slope**, not just the value.
+**F4 — shift control and the initiator approximation. LANDED 2026-08-31**,
+answered in `FCIQMC_POPULATION_CONTROL.md`. Shift control with a restoring term,
+the shift energy cross-checked against the projected energy, the timestep
+divergence gate F3 could not build, stochastic population control, and i-FCIQMC.
+
+Four findings that bind the remaining work:
+
+- **The textbook single-term shift update never targets a population.** It
+  responds to the growth *rate*, so it stops drift and then stabilises wherever
+  the run happened to be — measured, the final population is proportional to the
+  starting one (135.7x the target from every start across a 1000x range). A
+  second term `xi·ln(N/N_target)` supplies the restoring force at no cost to shift
+  accuracy (3.2e-13 either way).
+- **The two estimators share no arithmetic**, which is what makes their agreement
+  evidence rather than tautology — 0.00e+00 and 1.01e-09 across a 100x population
+  range. Both are still pinned to the exact energy separately, because they could
+  agree by sharing an upstream defect.
+- **Error bars must be blocked, never naive.** The blocked error exceeds the naive
+  one by 4.7x on a real trajectory here; understating σ makes every downstream
+  gate pass.
+- **The toy fixture saturates**, which is why two of this step's intended gates —
+  the initiator's `n_add → 0` trend and the population-noise trend — could not be
+  built on it. A space small enough to validate against exact diagonalization is
+  often too small to exhibit the sampling behaviour being validated. Both defer to
+  the N2 gate below.
 
 **F5 — driver wiring, the N2 gate, and the determinism decision.** Scoped in
 `FCIQMC_F5_DRIVER_SCOPE.md`. **F5.1 and F5.2 are landed**: `run_fciqmc` shares
