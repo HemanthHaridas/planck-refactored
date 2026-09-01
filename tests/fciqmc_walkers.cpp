@@ -2527,6 +2527,200 @@ static void test_shift_controller_primes_before_updating()
     check(d.shift == before, "degenerate populations leave the shift untouched");
 }
 
+// ---------------------------------------------------------------------------
+// F4.2 -- the shift energy, cross-checked against the projected energy
+// ---------------------------------------------------------------------------
+
+struct TwoEstimators
+{
+    double shift_energy = 0.0;
+    double projected_energy_mean = 0.0;
+    double shift_from_zero = 0.0;   // averaged WITHOUT discarding the transient
+    int shift_samples = 0;
+    bool finite = true;
+};
+
+static TwoEstimators run_both_estimators(const ToyHamiltonian &toy, int n_act,
+                                         double dt, double target,
+                                         double start_population, int n_steps)
+{
+    const auto ops = toy.ops(n_act);
+    TwoEstimators out;
+
+    WalkerPopulation pop;
+    pop.add(toy.dets[0], start_population);
+
+    ShiftController ctl;
+    ctl.shift = ops.diagonal(toy.dets[0]);
+    ctl.target_population = target;
+    ctl.zeta = 0.3;
+    ctl.xi = 0.05;
+    ctl.interval = 5;
+
+    const int equilibrate = n_steps / 2;
+    ShiftAverager avg(equilibrate);
+    ShiftAverager avg_from_zero(0);
+
+    double sum_proj = 0.0;
+    int n_proj = 0;
+
+    for (int step = 0; step < n_steps; ++step)
+    {
+        pop = propagate_deterministic(pop, n_act, ops, dt, ctl.shift);
+        const double n = ordered_l1_norm(pop);
+        if (!std::isfinite(n) || n <= 0.0)
+        {
+            out.finite = false;
+            return out;
+        }
+        ctl.update(n, dt);
+        avg.add(ctl.shift);
+        avg_from_zero.add(ctl.shift);
+
+        if (step >= equilibrate)
+        {
+            const auto pe = projected_energy(pop, toy.dets[0], n_act, ops);
+            if (pe.valid)
+            {
+                sum_proj += pe.energy;
+                ++n_proj;
+            }
+        }
+    }
+
+    out.shift_energy = avg.mean();
+    out.shift_from_zero = avg_from_zero.mean();
+    out.shift_samples = avg.samples();
+    out.projected_energy_mean = (n_proj > 0) ? sum_proj / n_proj : 0.0;
+    return out;
+}
+
+static void test_two_estimators_agree()
+{
+    // THE self-validating check for this step. The shift energy comes from the
+    // population growth rate; the projected energy from a ratio of walker weights
+    // on the reference. They share no arithmetic, so agreement is evidence for
+    // both -- a defect in one would have to be exactly mirrored in the other.
+    //
+    // Checked across a 100x range of target populations, because an estimator
+    // that agreed only at one population would be fitting rather than measuring.
+    struct Case { int n_act, na, nb; const char *name; };
+    const Case cases[] = {
+        {4, 2, 2, "4 orbitals closed shell"},
+        {5, 3, 2, "5 orbitals OPEN shell"},
+    };
+
+    for (const auto &c : cases)
+    {
+        const ToyHamiltonian toy(c.n_act, c.na, c.nb);
+        const auto ops = toy.ops(c.n_act);
+        WalkerPopulation whole;
+        for (const auto &d : toy.dets)
+            whole.add(d, 1.0);
+        const double dt = 0.05 * max_stable_timestep(whole, ops, -2.0);
+        const double exact = exact_ground_energy(toy);
+
+        for (double target : {100.0, 1000.0, 10000.0})
+        {
+            const auto r = run_both_estimators(toy, c.n_act, dt, target, target, 8000);
+            if (!r.finite)
+            {
+                std::printf("  [FAIL] %s at target %.0f: run did not stay finite\n",
+                            c.name, target);
+                ++g_failures;
+                continue;
+            }
+
+            const double gap = std::abs(r.shift_energy - r.projected_energy_mean);
+            if (!(gap < 1e-4))
+            {
+                std::printf("  [FAIL] %s at target %.0f: shift %.10f vs projected "
+                            "%.10f (gap %.3e)\n", c.name, target,
+                            r.shift_energy, r.projected_energy_mean, gap);
+                ++g_failures;
+            }
+
+            // Both must also be right, not merely equal to each other. Two
+            // estimators can agree by sharing a common upstream defect -- here
+            // the propagator -- so pin them to the exact energy too.
+            if (std::abs(r.shift_energy - exact) > 1e-3)
+            {
+                std::printf("  [FAIL] %s at target %.0f: shift energy %.10f vs "
+                            "exact %.10f\n", c.name, target, r.shift_energy, exact);
+                ++g_failures;
+            }
+
+            if (std::getenv("PLANCK_FCIQMC_VERBOSE") != nullptr)
+                std::printf("      %s target=%7.0f shift=%.8f proj=%.8f gap=%.2e\n",
+                            c.name, target, r.shift_energy,
+                            r.projected_energy_mean, gap);
+        }
+    }
+}
+
+static void test_equilibration_cut_matters()
+{
+    // Vacuity check on the fixture: if averaging from iteration 0 gives the same
+    // answer as averaging after equilibration, the run reached equilibrium
+    // immediately and the discard is not being tested at all.
+    //
+    // Start far off target so there IS a transient to discard.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    WalkerPopulation whole;
+    for (const auto &d : toy.dets)
+        whole.add(d, 1.0);
+    const double dt = 0.05 * max_stable_timestep(whole, ops, -2.0);
+    const double exact = exact_ground_energy(toy);
+
+    const auto r = run_both_estimators(toy, 4, dt, 1000.0, 1000.0 * 50.0, 8000);
+    check(r.finite, "the off-target run stays finite");
+    if (!r.finite)
+        return;
+
+    const double err_cut = std::abs(r.shift_energy - exact);
+    const double err_raw = std::abs(r.shift_from_zero - exact);
+
+    if (!(err_raw > err_cut * 2.0))
+    {
+        std::printf("  [FAIL] discarding the transient did not improve the shift "
+                    "energy (cut %.3e, raw %.3e) -- the fixture equilibrates too "
+                    "fast to test the discard\n", err_cut, err_raw);
+        ++g_failures;
+    }
+
+    if (std::getenv("PLANCK_FCIQMC_VERBOSE") != nullptr)
+        std::printf("      equilibration: err with cut=%.3e, without=%.3e\n",
+                    err_cut, err_raw);
+}
+
+static void test_shift_averager_semantics()
+{
+    ShiftAverager a(3);
+    for (int i = 0; i < 3; ++i)
+        a.add(100.0);            // discarded
+    check(!a.valid(), "an averager with only discarded samples is not valid");
+    check(a.discarded() == 3, "the averager reports how many it discarded");
+
+    a.add(1.0);
+    a.add(3.0);
+    check(a.valid(), "two kept samples make it valid");
+    check_close(a.mean(), 2.0, 1e-15, "the mean ignores the discarded transient");
+    check(a.samples() == 2, "sample count excludes the discarded ones");
+
+    // A constant series has zero standard error -- and must not produce NaN.
+    ShiftAverager c(0);
+    for (int i = 0; i < 10; ++i)
+        c.add(-5.0);
+    check_close(c.mean(), -5.0, 1e-15, "a constant series averages to itself");
+    check(c.naive_standard_error() == 0.0, "a constant series has zero standard error");
+
+    ShiftAverager one(0);
+    one.add(1.0);
+    check(!one.valid(), "a single sample is not enough for a standard error");
+    check(std::isnan(one.naive_standard_error()), "one sample gives NaN, not 0");
+}
+
 int main()
 {
     std::printf("F1 -- FCIQMC walker container and RNG policy\n");
@@ -2607,6 +2801,11 @@ int main()
     test_zeta_tradeoff_exists();
     test_shift_update_has_correct_units();
     test_target_term_is_required();
+
+    std::printf("F4.2 -- shift energy cross-checked against the projected energy\n");
+    test_shift_averager_semantics();
+    test_two_estimators_agree();
+    test_equilibration_cut_matters();
 
     if (g_failures == 0)
     {

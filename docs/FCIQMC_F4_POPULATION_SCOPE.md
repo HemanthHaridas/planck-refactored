@@ -112,7 +112,36 @@ loop is separated from sampling noise exactly as F3.1 separated the dynamics.
   population control, large ζ the reverse. Assert both ends, not a single value —
   otherwise a no-op implementation that ignores ζ passes.
 
-### F4.2 — the shift energy estimator, cross-checked against the projected energy
+### F4.2 — the shift energy estimator — **DONE 2026-08-31**
+
+`ShiftAverager` in `src/post_hf/ci/fciqmc.h`. Gated: the two estimators agree
+across a 100x range of target populations on closed and open shell, both match the
+exact energy, the equilibration cut demonstrably matters, and the averager's
+semantics (discard accounting, one-sample NaN, constant-series zero) hold.
+
+**Measured agreement** — gap between shift and projected energy:
+
+| fixture | target 100 | target 1000 | target 10000 |
+|---|---|---|---|
+| 4 orbitals closed shell | 0.00e+00 | 0.00e+00 | 0.00e+00 |
+| 5 orbitals open shell | 1.01e-09 | 1.01e-09 | 1.01e-09 |
+
+**A gap of exactly zero is suspicious, so independence was verified rather than
+assumed.** Perturbing *only* the projected energy by a factor of 1.0001 makes the
+cross-check fail at a 7.97e-04 gap while the shift stays correct — the two are
+genuinely separate computations, one from the population growth rate and one from
+a ratio of walker weights.
+
+Both are also pinned to the exact energy, not only to each other: two estimators
+can agree by sharing a common upstream defect (here, the propagator), which
+agreement alone would not reveal.
+
+**The equilibration check is doing real work**: starting 50x off target, the cut
+improves the shift energy from **1.14e-02 to 2.19e-13** — a factor of 5×10¹⁰. If
+that ratio ever collapses, the fixture has started equilibrating too fast to test
+the discard.
+
+### F4.2 (original text) — the shift energy estimator, cross-checked against the projected energy
 
 Report `E_shift` as the time-average of `S` after equilibration.
 

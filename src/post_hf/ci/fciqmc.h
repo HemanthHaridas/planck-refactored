@@ -3,8 +3,10 @@
 
 #include "post_hf/ci/strings.h"
 
+#include <cmath>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <random>
 #include <unordered_map>
 #include <vector>
@@ -587,6 +589,72 @@ namespace HartreeFock::Correlation::CI::QMC
         // no growth ratio to measure yet, and updating from a zero baseline would
         // send the shift to infinity.
         bool update(double population, double dt);
+    };
+
+    // Running average of the shift after equilibration -- the SHIFT ENERGY (F4.2).
+    //
+    // At a controlled population the shift fluctuates around the ground-state
+    // energy, so its time average estimates E0. This is the second standard
+    // estimator, and its value is that it shares NO ARITHMETIC with the projected
+    // energy: one comes from the population growth rate, the other from a ratio of
+    // walker weights on the reference determinant. A defect in one would have to
+    // be exactly mirrored in the other to escape a cross-check.
+    //
+    // EQUILIBRATION IS NOT OPTIONAL. The early trajectory is the controller
+    // driving the shift from its initial guess toward the energy, and averaging
+    // that transient in biases the result toward wherever the run started. The
+    // caller supplies the cut; `discarded` reports how many samples it removed so
+    // a caller can confirm the cut actually did something.
+    class ShiftAverager
+    {
+    public:
+        explicit ShiftAverager(int equilibration_steps) noexcept
+            : _equilibration(equilibration_steps) {}
+
+        void add(double shift) noexcept
+        {
+            if (_seen++ < _equilibration)
+            {
+                ++_discarded;
+                return;
+            }
+            _sum += shift;
+            _sumsq += shift * shift;
+            ++_count;
+        }
+
+        bool valid() const noexcept { return _count > 1; }
+        int samples() const noexcept { return _count; }
+        int discarded() const noexcept { return _discarded; }
+
+        double mean() const noexcept
+        {
+            return _count > 0 ? _sum / static_cast<double>(_count) : 0.0;
+        }
+
+        // Naive standard error. This UNDERSTATES the true uncertainty on a
+        // correlated series -- shift values from successive iterations are highly
+        // correlated -- by up to 6.6x in the measurements behind tests/blocking.py.
+        // Use it for a rough scale only; a reported error bar must come from a
+        // blocking analysis.
+        double naive_standard_error() const noexcept
+        {
+            if (_count < 2)
+                return std::numeric_limits<double>::quiet_NaN();
+            const double m = mean();
+            const double var =
+                (_sumsq / static_cast<double>(_count) - m * m)
+                * static_cast<double>(_count) / static_cast<double>(_count - 1);
+            return std::sqrt(std::max(0.0, var) / static_cast<double>(_count));
+        }
+
+    private:
+        int _equilibration = 0;
+        int _seen = 0;
+        int _discarded = 0;
+        int _count = 0;
+        double _sum = 0.0;
+        double _sumsq = 0.0;
     };
 
 } // namespace HartreeFock::Correlation::CI::QMC

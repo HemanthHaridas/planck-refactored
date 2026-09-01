@@ -477,6 +477,17 @@ worth doing whether or not FCIQMC happens.
   the scaling directly. **A parameter's units cannot be gated by a test that only
   asserts the shape of a tradeoff in that parameter.**
 
+  **F4.2 LANDED (2026-08-31): the shift energy, cross-checked against the
+  projected energy.** The two agree to 0.00e+00 (closed shell) and 1.01e-09 (open
+  shell) across a 100x range of target populations. **A gap of exactly zero is
+  suspicious, so independence was verified rather than assumed:** perturbing only
+  the projected energy by 1.0001 makes the cross-check fail at 7.97e-04 while the
+  shift stays correct. Both are also pinned to the exact energy, not only to each
+  other — two estimators can agree by sharing a common upstream defect (the
+  propagator), which agreement alone would not reveal. The equilibration-cut
+  vacuity check is load-bearing: starting 50x off target it improves the answer
+  from 1.14e-02 to 2.19e-13.
+
   **Q1 CANDIDATE FOUND (2026-08-31): Cr2, and it is TWO ATOMS.** Surveying the
   standard multireference benchmarks against the measured boundary, almost
   everything canonical is already reachable (N2/C2 full valence, benzene and
