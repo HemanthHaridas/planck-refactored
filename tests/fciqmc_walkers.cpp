@@ -238,7 +238,7 @@ static DetKey make_det(int n_occ_a, int n_occ_b)
 static void test_oracle_counts()
 {
     // Counts verified independently by brute-force enumeration in Python before
-    // being written here (see docs/FCIQMC_F2_EXCITATION_SCOPE.md). A Slater-Condon
+    // being written here (see docs/FCIQMC_SAMPLING_AND_DYNAMICS.md). A Slater-Condon
     // element vanishes beyond a double excitation, so these ARE all the
     // determinants the Hamiltonian connects to the parent.
     struct Case { int n_act, na, nb, expected; const char *name; };

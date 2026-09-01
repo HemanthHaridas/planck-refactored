@@ -230,7 +230,7 @@ shards were derived. Mutation-verified against round-to-nearest (biases the
 energy), overwrite-instead-of-accumulate, and a call-order-dependent `derive()`.
 
 **F2 — excitation generator with `p_gen`. LANDED 2026-08-31**, scoped separately
-in `FCIQMC_F2_EXCITATION_SCOPE.md` because it is the one step that fails
+in `FCIQMC_SAMPLING_AND_DYNAMICS.md` because it is the one step that fails
 *silently*. Five sub-steps: the brute-force oracle first (the measuring
 instrument), a slow uniform reference generator, the O(1) production generator
 with non-uniform `p_gen`, permanent broken-generator fixtures asserting the gate
@@ -252,7 +252,7 @@ Three findings from it are worth carrying into F3:
   zero coverage. F3's fixtures must include an open-shell case for the same reason.
 
 **F3 — spawn / death / annihilation on a fixed shift. LANDED 2026-08-31**, in
-`FCIQMC_F3_DYNAMICS_SCOPE.md`. Deterministic propagation exact against a matvec,
+`FCIQMC_SAMPLING_AND_DYNAMICS.md`. Deterministic propagation exact against a matvec,
 stochastic spawning mean-exact against that, convergence to the ground state
 (overlap > 0.9999), the projected energy with its finite-population bias
 characterized, and whole-trajectory fixed-seed reproducibility. **The method now

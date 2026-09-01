@@ -324,7 +324,7 @@ worth doing whether or not FCIQMC happens.
   round-to-nearest (biases the energy), overwrite-instead-of-accumulate (breaks
   annihilation), and a call-order-dependent `derive()`.
 
-  **F2 SCOPED (2026-08-31) in `docs/FCIQMC_F2_EXCITATION_SCOPE.md`** — the
+  **F2 SCOPED (2026-08-31) in `docs/FCIQMC_SAMPLING_AND_DYNAMICS.md`** — the
   excitation generator and `p_gen`. It gets its own scope because **every other
   step fails loudly and this one fails silently**: a `p_gen` disagreeing with the
   sampler's actual distribution gives a plausible, converged, WRONG energy, the
