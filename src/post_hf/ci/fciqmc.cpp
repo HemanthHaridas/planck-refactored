@@ -415,7 +415,8 @@ namespace HartreeFock::Correlation::CI::QMC
         double dt,
         double shift,
         RandomSource &rng,
-        int n_spawn_attempts)
+        int n_spawn_attempts,
+        double granularity)
     {
         WalkerPopulation next;
         if (n_spawn_attempts < 1)
@@ -451,7 +452,18 @@ namespace HartreeFock::Correlation::CI::QMC
                 // The 1/p_gen reweighting. p_gen here is a deterministic property
                 // of the draw, not an estimate -- see the header note on why that
                 // distinction is load-bearing.
-                next.add(exc.det, -dt * h_ij * per_attempt / exc.p_gen);
+                double child = -dt * h_ij * per_attempt / exc.p_gen;
+                if (granularity > 0.0)
+                {
+                    // Stochastic rounding to a multiple of `granularity`:
+                    // unbiased in expectation, so the mean step is unchanged
+                    // while the variance now depends on how large the spawn is
+                    // relative to one walker.
+                    child = granularity * rng.stochastic_round(child / granularity);
+                    if (child == 0.0)
+                        continue;
+                }
+                next.add(exc.det, child);
             }
         }
 
@@ -557,6 +569,47 @@ namespace HartreeFock::Correlation::CI::QMC
         last_population = population;
         steps_since_update = 0;
         return true;
+    }
+
+    double naive_standard_error(const std::vector<double> &series)
+    {
+        const std::size_t n = series.size();
+        if (n < 2)
+            return std::numeric_limits<double>::quiet_NaN();
+        double mean = 0.0;
+        for (double v : series)
+            mean += v;
+        mean /= static_cast<double>(n);
+        double var = 0.0;
+        for (double v : series)
+            var += (v - mean) * (v - mean);
+        var /= static_cast<double>(n - 1);
+        return std::sqrt(var / static_cast<double>(n));
+    }
+
+    double blocked_standard_error(const std::vector<double> &series)
+    {
+        std::vector<double> data = series;
+        double worst = 0.0;
+        bool any = false;
+
+        // Stop below 4 blocks: a standard error computed from 2 or 3 samples is
+        // itself so noisy that the plateau cannot be read from it.
+        while (data.size() >= 4)
+        {
+            const double se = naive_standard_error(data);
+            if (std::isfinite(se))
+            {
+                worst = std::max(worst, se);
+                any = true;
+            }
+            std::vector<double> next;
+            next.reserve(data.size() / 2);
+            for (std::size_t i = 0; i + 1 < data.size(); i += 2)
+                next.push_back(0.5 * (data[i] + data[i + 1]));
+            data.swap(next);
+        }
+        return any ? worst : std::numeric_limits<double>::quiet_NaN();
     }
 
     Weight WalkerPopulation::total_population() const noexcept

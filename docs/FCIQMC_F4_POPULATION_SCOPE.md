@@ -199,7 +199,52 @@ consequence: the shift cannot hold the population steady.
   settling). **This is the gate F3 could not construct** — record whether it works
   here, and if it still does not, say so rather than contriving a fixture.
 
-### F4.4 — stochastic population control
+### F4.4 — stochastic population control — **DONE 2026-08-31**
+
+Gated: the blocked error exceeds the naive one on the (correlated) shift
+trajectory by **4.7x**; the shift sits within 5 blocked σ of the exact energy on
+closed and open shell (1.8σ and 0.7σ measured); the blocked error shrinks with
+population; the stochastic result agrees with F4.1's deterministic one within its
+own error bar; and the discretized spawn is unbiased.
+
+`blocked_standard_error` was ported to C++ and **cross-checked against the
+validated `tests/blocking.py`** on AR(1) series at φ = 0, 0.5, 0.8, 0.9, 0.95 —
+identical to 1e-10 relative, so the two cannot drift apart.
+
+**This step exposed a real gap in F3.2, not a test problem.** `stochastic_round`
+was built in F1 and **never wired into the spawn**, leaving spawn weights
+continuous. That makes the propagator scale-invariant: multiplying the population
+by *k* multiplies every spawn by *k*, so relative noise is identical at any
+population. Measured — the blocked error was **4.2532e-02 at target populations of
+500, 2000, 8000 and 32000 alike**, to five significant figures across a 64x range.
+`propagate_stochastic` now takes a `granularity` and rounds each spawn
+stochastically.
+
+**Then the fixture had to move, for the reason the research scope predicted.**
+With discretization in, the error *rose* with population (3.87e-2 → 5.92e-2) —
+because 36 determinants with thousands of walkers means **14–889 walkers per
+determinant**, so the space is saturated and there is no sampling left to improve.
+That is the "walker population would exceed the space" trap the research scope
+names for H2 and water/STO-3G, reached from the other direction. Below ~1 walker
+per determinant the trend is clean:
+
+| target | walkers/det | blocked SE |
+|---|---|---|
+| 5 | 0.14 | 3.65e-1 |
+| 20 | 0.56 | 1.32e-1 |
+| 80 | 2.2 | 8.11e-2 |
+| 320 | 8.9 | 5.96e-2 |
+
+**Two mutations initially passed and each needed a new assertion.** Round-to-
+nearest instead of stochastic rounding was invisible — F1 gates that property on
+`stochastic_round` itself, but nothing checked the *spawn* uses it. And the new
+bias test was itself mis-sized first: at `dt = 0.001` the spawns were ~0.04
+walkers, so rounding was near-binary with only ~100 nonzero events in 200k runs
+and the measurement scattered **51 % on correct code**. Sizing the spawns to
+straddle the granularity (~0.5–1.5 walkers) makes it stable and catches the
+mutation at 43 %.
+
+### F4.4 (original text) — stochastic population control
 
 Repeat F4.1–F4.2 with `propagate_stochastic`.
 

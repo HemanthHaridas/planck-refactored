@@ -425,6 +425,23 @@ namespace HartreeFock::Correlation::CI::QMC
     // The DEATH step stays deterministic: it needs no sampling (there is one
     // diagonal element per determinant), so making it stochastic would add
     // variance for nothing.
+    // `granularity` discretizes each spawn to a multiple of that weight by
+    // STOCHASTIC ROUNDING (unbiased in expectation). Pass 0 to leave spawns
+    // continuous.
+    //
+    // THIS IS WHAT MAKES THE NOISE DEPEND ON POPULATION SIZE, and its absence is a
+    // real gap rather than a refinement. With continuous weights the propagator is
+    // scale-invariant: multiplying the whole population by k multiplies every
+    // spawn by k, so the RELATIVE noise is identical at any population. Measured
+    // before this was added -- the blocked error on the shift was 4.2532e-02 at
+    // target populations of 500, 2000, 8000 and 32000 alike, to five significant
+    // figures across a 64x range.
+    //
+    // Discretization breaks that invariance the way a real walker population does:
+    // with more walkers each spawn is a smaller fraction of the total, so the
+    // relative noise falls. Rounding must be STOCHASTIC -- rounding to nearest
+    // would systematically discard small spawns and bias the energy, which is why
+    // RandomSource::stochastic_round is unbiased in expectation.
     WalkerPopulation propagate_stochastic(
         const WalkerPopulation &population,
         int n_act,
@@ -432,7 +449,8 @@ namespace HartreeFock::Correlation::CI::QMC
         double dt,
         double shift,
         RandomSource &rng,
-        int n_spawn_attempts = 1);
+        int n_spawn_attempts = 1,
+        double granularity = 0.0);
 
     // A NECESSARY (not sufficient) timestep bound from the diagonal (F3.3).
     //
@@ -656,6 +674,34 @@ namespace HartreeFock::Correlation::CI::QMC
         double _sum = 0.0;
         double _sumsq = 0.0;
     };
+
+    // Flyvbjerg-Petersen blocked standard error of a correlated series (F4.4).
+    //
+    // A naive standard error assumes independent samples. A Monte Carlo trajectory
+    // is autocorrelated, so the naive estimate UNDERSTATES the uncertainty -- by up
+    // to 6.6x in the AR(1) measurements behind tests/blocking.py. Understating
+    // sigma makes every downstream statistical gate pass, which is the failure mode
+    // that matters.
+    //
+    // Blocking repeatedly halves the series by averaging adjacent pairs. Each
+    // transformation leaves the mean unchanged but decorrelates the samples; the
+    // blocked error rises with block size and plateaus once the block length
+    // exceeds the correlation time.
+    //
+    // Takes the MAXIMUM over the curve rather than fitting the plateau: the curve
+    // rises then goes noisy at large block size, so the max is simple and
+    // conservative. It can overestimate on a short series but never systematically
+    // underestimate -- and an overestimate fails a gate loudly, while an
+    // underestimate passes one silently.
+    //
+    // This mirrors tests/blocking.py, which is validated against AR(1) series with
+    // an analytic tau across a 39x range. The two are cross-checked so they cannot
+    // drift apart.
+    double blocked_standard_error(const std::vector<double> &series);
+
+    // Naive sigma/sqrt(N), for comparison only. Correct exclusively for
+    // independent samples; never report this as an error bar on a trajectory.
+    double naive_standard_error(const std::vector<double> &series);
 
 } // namespace HartreeFock::Correlation::CI::QMC
 

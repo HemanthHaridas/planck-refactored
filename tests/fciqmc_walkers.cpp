@@ -2856,6 +2856,288 @@ static void test_divergence_gate_is_not_vacuous()
           "the stable-timestep run also reaches the right energy");
 }
 
+// ---------------------------------------------------------------------------
+// F4.4 -- stochastic population control
+// ---------------------------------------------------------------------------
+
+struct StochasticRun
+{
+    double shift_mean = 0.0;
+    double shift_blocked_se = 0.0;
+    double shift_naive_se = 0.0;
+    double final_ratio = 0.0;
+    int samples = 0;
+    bool finite = true;
+};
+
+static StochasticRun run_stochastic_controlled(const ToyHamiltonian &toy, int n_act,
+                                               double dt, double target,
+                                               int n_steps, std::uint64_t seed,
+                                               int spawn_attempts,
+                                               double granularity = 1.0)
+{
+    const auto ops = toy.ops(n_act);
+    StochasticRun out;
+
+    WalkerPopulation pop;
+    pop.add(toy.dets[0], target);
+
+    ShiftController ctl;
+    ctl.shift = ops.diagonal(toy.dets[0]);
+    ctl.target_population = target;
+    ctl.zeta = 0.3;
+    ctl.xi = 0.05;
+    ctl.interval = 5;
+
+    RandomSource rng(seed);
+    std::vector<double> shifts;
+    const int equilibrate = n_steps / 2;
+
+    for (int step = 0; step < n_steps; ++step)
+    {
+        pop = propagate_stochastic(pop, n_act, ops, dt, ctl.shift, rng,
+                                   spawn_attempts, granularity);
+        pop.compress(1e-12);
+        const double n = ordered_l1_norm(pop);
+        if (!std::isfinite(n) || n <= 0.0 || n > target * 1e9)
+        {
+            out.finite = false;
+            return out;
+        }
+        ctl.update(n, dt);
+        if (step >= equilibrate)
+            shifts.push_back(ctl.shift);
+        out.final_ratio = n / target;
+    }
+
+    if (shifts.size() < 4)
+    {
+        out.finite = false;
+        return out;
+    }
+    double sum = 0.0;
+    for (double v : shifts)
+        sum += v;
+    out.shift_mean = sum / static_cast<double>(shifts.size());
+    out.shift_blocked_se = blocked_standard_error(shifts);
+    out.shift_naive_se = naive_standard_error(shifts);
+    out.samples = static_cast<int>(shifts.size());
+    return out;
+}
+
+static void test_blocked_error_exceeds_naive_on_a_trajectory()
+{
+    // A shift trajectory is strongly autocorrelated -- successive values differ by
+    // one controller update. So the blocked error must EXCEED the naive one; if it
+    // does not, either the series is not correlated (the fixture is wrong) or the
+    // blocking is not working (the analysis is wrong). Either way the error bars
+    // below would be understated, which makes every downstream gate pass.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    WalkerPopulation whole;
+    for (const auto &d : toy.dets)
+        whole.add(d, 1.0);
+    const double dt = 0.05 * max_stable_timestep(whole, ops, -2.0);
+
+    const auto r = run_stochastic_controlled(toy, 4, dt, 2000.0, 6000, 20250901, 4);
+    check(r.finite, "the stochastic controlled run stays finite");
+    if (!r.finite)
+        return;
+
+    check(r.shift_blocked_se > r.shift_naive_se * 1.5,
+          "the blocked error exceeds the naive one on a correlated trajectory");
+
+    if (std::getenv("PLANCK_FCIQMC_VERBOSE") != nullptr)
+        std::printf("      naive SE=%.3e blocked SE=%.3e ratio=%.2f (%d samples)\n",
+                    r.shift_naive_se, r.shift_blocked_se,
+                    r.shift_blocked_se / r.shift_naive_se, r.samples);
+}
+
+static void test_stochastic_shift_agrees_with_exact_within_error()
+{
+    // The shift must fluctuate AROUND the exact energy. Compared using the blocked
+    // error bar, which is the whole reason the blocking analysis exists here.
+    struct Case { int n_act, na, nb; const char *name; };
+    const Case cases[] = {
+        {4, 2, 2, "4 orbitals closed shell"},
+        {5, 3, 2, "5 orbitals OPEN shell"},
+    };
+
+    for (const auto &c : cases)
+    {
+        const ToyHamiltonian toy(c.n_act, c.na, c.nb);
+        const auto ops = toy.ops(c.n_act);
+        WalkerPopulation whole;
+        for (const auto &d : toy.dets)
+            whole.add(d, 1.0);
+        const double dt = 0.05 * max_stable_timestep(whole, ops, -2.0);
+        const double exact = exact_ground_energy(toy);
+
+        const auto r = run_stochastic_controlled(toy, c.n_act, dt, 4000.0, 8000,
+                                                 31337, 8);
+        if (!r.finite)
+        {
+            std::printf("  [FAIL] %s: stochastic run did not stay finite\n", c.name);
+            ++g_failures;
+            continue;
+        }
+
+        const double dev = std::abs(r.shift_mean - exact);
+        // 5 blocked sigma. A correlated trajectory's error bar is itself noisy,
+        // so 3 sigma would flake; 5 keeps the false-failure rate negligible while
+        // still rejecting a genuinely wrong mean.
+        if (!(dev <= 5.0 * r.shift_blocked_se))
+        {
+            std::printf("  [FAIL] %s: shift %.8f vs exact %.8f, deviation %.3e "
+                        "exceeds 5 blocked sigma (%.3e)\n",
+                        c.name, r.shift_mean, exact, dev, 5.0 * r.shift_blocked_se);
+            ++g_failures;
+        }
+
+        if (std::getenv("PLANCK_FCIQMC_VERBOSE") != nullptr)
+            std::printf("      %s: shift=%.8f exact=%.8f dev=%.2e blockedSE=%.2e "
+                        "(%.1f sigma)\n", c.name, r.shift_mean, exact, dev,
+                        r.shift_blocked_se, dev / r.shift_blocked_se);
+    }
+}
+
+static void test_stochastic_error_shrinks_with_walkers()
+{
+    // THE assertion the scope singles out: the SLOPE, not the value. A biased
+    // sampler can sit at a plausible mean with a plausible error bar; what it
+    // cannot do is have that error bar shrink correctly as the walker population
+    // grows. More walkers means less relative noise per iteration.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    WalkerPopulation whole;
+    for (const auto &d : toy.dets)
+        whole.add(d, 1.0);
+    const double dt = 0.05 * max_stable_timestep(whole, ops, -2.0);
+
+    // POPULATIONS MUST STAY BELOW SATURATION. This fixture has 36 determinants,
+    // so a few thousand walkers means hundreds per determinant: every determinant
+    // is occupied every step and there is no sampling left to improve. Measured in
+    // that regime the blocked error is flat or even rises slightly (3.87e-2 at
+    // N=500 through 5.92e-2 at N=32000), because the residual noise is the
+    // controller responding to rounding jitter rather than sampling error.
+    //
+    // This is the trap the research scope names for H2 and water/STO-3G as FCIQMC
+    // fixtures -- "the walker population would exceed the space" -- reached from
+    // the other direction. Below ~1 walker per determinant the sampling error is
+    // real and does shrink.
+    std::vector<std::pair<double, double>> trend;   // (target, blocked SE)
+    for (double target : {5.0, 20.0, 80.0, 320.0})
+    {
+        const auto r = run_stochastic_controlled(toy, 4, dt, target, 6000, 4242, 4);
+        if (!r.finite || !(r.shift_blocked_se > 0.0))
+        {
+            check(false, "each population size produces a usable error bar");
+            return;
+        }
+        trend.push_back({target, r.shift_blocked_se});
+        if (std::getenv("PLANCK_FCIQMC_VERBOSE") != nullptr)
+            std::printf("      target=%7.0f blockedSE=%.4e\n", target,
+                        r.shift_blocked_se);
+    }
+
+    // Across a 64x population range the error must fall substantially. Assert a
+    // clear decrease rather than fitting sqrt(N): the shift's noise also carries
+    // the controller's response, so the exponent is not 1/2 here and pinning one
+    // would pin an accident.
+    const double first = trend.front().second;
+    const double last = trend.back().second;
+    if (!(last < first * 0.5))
+    {
+        std::printf("  [FAIL] blocked error did not shrink with population "
+                    "(%.3e at N=%.0f, %.3e at N=%.0f)\n",
+                    first, trend.front().first, last, trend.back().first);
+        ++g_failures;
+    }
+}
+
+static void test_spawn_discretization_is_unbiased()
+{
+    // The spawn must round STOCHASTICALLY, not to nearest. Round-to-nearest
+    // systematically discards spawns smaller than half a walker, which biases the
+    // energy -- and F1 gates that property on RandomSource::stochastic_round
+    // itself, but nothing checked that the SPAWN uses it. Measured: swapping in
+    // std::round passed every other check in this file.
+    //
+    // Test it where the effect is largest: spawns much smaller than one walker,
+    // which round-to-nearest annihilates entirely.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    // Spawn sizes must STRADDLE the granularity: around 0.5-1.5 walkers, where
+    // stochastic and nearest rounding differ most and enough events land in each
+    // bin to measure. A first version used dt = 0.001 with one walker, giving
+    // spawns of ~0.04 -- rounding became near-binary with only ~100 nonzero events
+    // in 200k runs, so the measurement scattered by 51% on CORRECT code.
+    const double dt = 0.02;
+    const double shift = -2.0;
+
+    WalkerPopulation start;
+    start.add(toy.dets[0], 40.0);
+
+    const auto exact = propagate_deterministic(start, 4, ops, dt, shift);
+
+    RandomSource rng(20250901);
+    const int n_runs = 200000;
+    std::map<std::pair<CIString, CIString>, double> sum;
+    for (int r = 0; r < n_runs; ++r)
+    {
+        const auto step = propagate_stochastic(start, 4, ops, dt, shift, rng, 1, 1.0);
+        for (const auto &[det, w_exact] : exact)
+            sum[{det.alpha, det.beta}] += step.weight_at(det);
+    }
+
+    // The mean must still be the deterministic result. Round-to-nearest would
+    // send every sub-unit spawn to zero, leaving only the death term.
+    double worst_rel = 0.0;
+    for (const auto &[det, w_exact] : exact)
+    {
+        if (det.alpha == toy.dets[0].alpha && det.beta == toy.dets[0].beta)
+            continue;              // skip the parent: dominated by the death term
+        const double mean = sum[{det.alpha, det.beta}] / n_runs;
+        const double denom = std::max(std::abs(w_exact), 1e-12);
+        worst_rel = std::max(worst_rel, std::abs(mean - w_exact) / denom);
+    }
+    if (!(worst_rel < 0.1))
+    {
+        std::printf("  [FAIL] discretized spawn is biased: worst spawn off by "
+                    "%.1f%% of its deterministic value\n", 100.0 * worst_rel);
+        ++g_failures;
+    }
+}
+
+static void test_stochastic_matches_deterministic_within_error()
+{
+    // The stochastic result must agree with F4.1's deterministic one, within the
+    // blocked error bar. This is metric_within_sigma's contract expressed in C++:
+    // a stochastic answer is checked against a reference given its own reported
+    // uncertainty, never against a hand-picked tolerance.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    WalkerPopulation whole;
+    for (const auto &d : toy.dets)
+        whole.add(d, 1.0);
+    const double dt = 0.05 * max_stable_timestep(whole, ops, -2.0);
+
+    const auto det = run_both_estimators(toy, 4, dt, 4000.0, 4000.0, 8000);
+    const auto sto = run_stochastic_controlled(toy, 4, dt, 4000.0, 8000, 8675309, 8);
+    check(det.finite && sto.finite, "both the deterministic and stochastic runs are finite");
+    if (!det.finite || !sto.finite)
+        return;
+
+    const double dev = std::abs(sto.shift_mean - det.shift_energy);
+    if (!(dev <= 5.0 * sto.shift_blocked_se))
+    {
+        std::printf("  [FAIL] stochastic shift %.8f differs from deterministic "
+                    "%.8f by %.3e, beyond 5 blocked sigma (%.3e)\n",
+                    sto.shift_mean, det.shift_energy, dev, 5.0 * sto.shift_blocked_se);
+        ++g_failures;
+    }
+}
+
 int main()
 {
     std::printf("F1 -- FCIQMC walker container and RNG policy\n");
@@ -2945,6 +3227,13 @@ int main()
     std::printf("F4.3 -- timestep divergence, observable under population control\n");
     test_timestep_divergence_is_observable_under_control();
     test_divergence_gate_is_not_vacuous();
+
+    std::printf("F4.4 -- stochastic population control\n");
+    test_blocked_error_exceeds_naive_on_a_trajectory();
+    test_stochastic_shift_agrees_with_exact_within_error();
+    test_stochastic_error_shrinks_with_walkers();
+    test_spawn_discretization_is_unbiased();
+    test_stochastic_matches_deterministic_within_error();
 
     if (g_failures == 0)
     {

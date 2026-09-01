@@ -506,6 +506,31 @@ worth doing whether or not FCIQMC happens.
   mutated to a constant made the "must not settle" assertions unable to fail —
   that was a real gap.
 
+  **F4.4 LANDED (2026-08-31): stochastic population control — and it exposed a
+  real gap in F3.2.** `stochastic_round` was built in F1 and **never wired into
+  the spawn**, so spawn weights were continuous and the propagator scale-invariant:
+  the blocked error was **4.2532e-02 at target populations 500 / 2000 / 8000 /
+  32000 alike**, to five significant figures across a 64x range. Adding a
+  `granularity` that rounds each spawn stochastically fixes it.
+
+  **Then the fixture had to move, exactly as the research scope predicted.** With
+  discretization in, the error ROSE with population — 36 determinants at thousands
+  of walkers is 14-889 walkers per determinant, so the space is saturated and there
+  is no sampling left to improve. That is the "walker population would exceed the
+  space" trap named for H2/water, reached from the other direction. Below ~1 walker
+  per determinant the trend is clean: 3.65e-1 -> 5.96e-2 over a 64x range.
+
+  `blocked_standard_error` was ported to C++ and cross-checked against the
+  validated `tests/blocking.py` on AR(1) at five correlation strengths — identical
+  to 1e-10 relative, so the two cannot drift.
+
+  **Two mutations passed and each needed a new assertion:** round-to-nearest
+  instead of stochastic rounding was invisible (F1 gates that property on
+  `stochastic_round` itself, but nothing checked the SPAWN uses it), and the new
+  bias test was mis-sized first — at dt = 0.001 spawns were ~0.04 walkers, so
+  rounding was near-binary with ~100 nonzero events in 200k runs and it scattered
+  **51 % on correct code**. Sizing spawns to straddle the granularity fixes it.
+
   **Q1 CANDIDATE FOUND (2026-08-31): Cr2, and it is TWO ATOMS.** Surveying the
   standard multireference benchmarks against the measured boundary, almost
   everything canonical is already reachable (N2/C2 full valence, benzene and
