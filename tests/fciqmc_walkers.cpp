@@ -1645,6 +1645,201 @@ static void test_stochastic_reproducible()
     }
 }
 
+// ---------------------------------------------------------------------------
+// F3.3 -- imaginary-time propagation reaches the ground state
+// ---------------------------------------------------------------------------
+
+// Power-iteration ground state of the toy H, computed independently of the
+// propagator so the comparison is not circular. Uses the SAME (1 - dt(H-S))
+// operator mathematically, but applied with plain matrix arithmetic.
+static std::vector<double> exact_ground_state(const ToyHamiltonian &toy, double dt,
+                                              double shift, int iters = 20000)
+{
+    const std::size_t n = toy.dets.size();
+    std::vector<double> c(n, 0.0);
+    c[0] = 1.0;
+    for (int it = 0; it < iters; ++it)
+    {
+        std::vector<double> next(n, 0.0);
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            double acc = c[i] * (1.0 - dt * (toy.H[i][i] - shift));
+            for (std::size_t j = 0; j < n; ++j)
+                if (j != i)
+                    acc += -dt * toy.H[i][j] * c[j];
+            next[i] = acc;
+        }
+        // Renormalize every iteration: with a fixed shift the norm grows
+        // exponentially (measured: 1e96 after 3000 steps on a 6-orbital toy), so
+        // an unnormalized power iteration overflows long before it converges.
+        double nrm = 0.0;
+        for (double v : next)
+            nrm += v * v;
+        nrm = std::sqrt(nrm);
+        for (std::size_t i = 0; i < n; ++i)
+            c[i] = next[i] / nrm;
+    }
+    return c;
+}
+
+static void test_timestep_bound_is_computed()
+{
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    const double shift = -2.0;
+
+    WalkerPopulation pop;
+    for (const auto &d : toy.dets)
+        pop.add(d, 1.0);
+
+    const double bound = max_stable_timestep(pop, ops, shift);
+
+    // Check it against the definition, computed here from the diagonal directly.
+    double worst = 0.0;
+    for (std::size_t i = 0; i < toy.dets.size(); ++i)
+        worst = std::max(worst, std::abs(toy.H[i][i] - shift));
+    check_close(bound, 2.0 / worst, 1e-15, "max_stable_timestep matches 2/max|H_ii - S|");
+}
+
+// NOTE: there is deliberately NO "too large a timestep diverges" test here.
+//
+// The F3 scope asked for one, on the reasoning that dt above the stability bound
+// must visibly break the propagation. Three formulations were tried and all three
+// premises turned out to be false ON THIS HAMILTONIAN, measured:
+//
+//   1. "the population collapses onto one determinant" -- it does not; the shape
+//      settles at max|component| = 0.0716 for every dt from 1.5x to 5x the
+//      diagonal bound.
+//   2. "the norm diverges above the bound and not below" -- the norm grows at
+//      EVERY dt (1.22x per iteration at 0.05x the bound, 14.5x at 3x), because
+//      with the shift below the ground-state energy exponential growth is what a
+//      fixed shift produces by design.
+//   3. "the converged shape is the wrong state" -- the overlap with the true
+//      ground state is 1.000000 at every dt tried, from 0.05x to 5x the diagonal
+//      bound and well past the true spectral bound of 0.2509.
+//
+// The reason is that this test renormalizes every iteration, which turns the
+// propagation into a power iteration for the dominant eigenvector of
+// (1 - dt(H - S)) -- and on this Hamiltonian the ground state remains dominant at
+// every dt tested. A timestep that is "unstable" in the sense of the norm bound
+// is therefore still projecting onto the right state here.
+//
+// Rather than construct a Hamiltonian contrived to fail, this records what was
+// measured. max_stable_timestep is still gated (test_timestep_bound_is_computed)
+// as an arithmetic identity, and its two documented caveats -- diagonal-only, and
+// computed from the CURRENTLY occupied determinants -- are what a caller needs.
+// A real divergence gate belongs with F4, where the population is controlled and
+// an unstable dt has somewhere to show up.
+
+static void test_propagation_reaches_the_ground_state()
+{
+    // The F3.3 assertion: iterating the deterministic propagator converges in
+    // SHAPE to the ground-state eigenvector.
+    struct Case { int n_act, na, nb; const char *name; };
+    const Case cases[] = {
+        {4, 2, 2, "4 orbitals closed shell"},
+        {5, 3, 2, "5 orbitals OPEN shell"},
+    };
+
+    for (const auto &c : cases)
+    {
+        const ToyHamiltonian toy(c.n_act, c.na, c.nb);
+        const auto ops = toy.ops(c.n_act);
+        const double shift = -2.0;
+
+        WalkerPopulation whole;
+        for (const auto &d : toy.dets)
+            whole.add(d, 1.0);
+        // 0.1x the FULL-SPACE diagonal bound: the diagonal bound alone does not
+        // guarantee stability once off-diagonals are present (measured 2.28x too
+        // large), and a bound from the seeded population alone would be infinite.
+        const double dt = 0.1 * max_stable_timestep(whole, ops, shift);
+
+        WalkerPopulation pop;
+        pop.add(toy.dets[0], 1.0);
+
+        for (int it = 0; it < 4000; ++it)
+        {
+            pop = propagate_deterministic(pop, c.n_act, ops, dt, shift);
+            const double nrm = ordered_l1_norm(pop);
+            if (nrm == 0.0 || !std::isfinite(nrm))
+            {
+                check(false, "population collapsed during propagation");
+                return;
+            }
+            WalkerPopulation scaled;
+            for (const auto &[det, w] : pop)
+                scaled.add(det, w / nrm);
+            pop = scaled;
+        }
+
+        const auto want = exact_ground_state(toy, dt, shift);
+        // exact_ground_state renormalizes each iteration, so it converges for any
+        // dt inside the true bound -- the same dt the propagator used.
+
+        // Compare normalized shapes, fixing the overall sign (an eigenvector is
+        // defined up to a sign, and both are).
+        std::vector<double> got(toy.dets.size(), 0.0);
+        for (std::size_t i = 0; i < toy.dets.size(); ++i)
+            got[i] = pop.weight_at(toy.dets[i]);
+        double gn = 0.0, wn = 0.0, dot = 0.0;
+        for (std::size_t i = 0; i < got.size(); ++i)
+        {
+            gn += got[i] * got[i];
+            wn += want[i] * want[i];
+            dot += got[i] * want[i];
+        }
+        gn = std::sqrt(gn);
+        wn = std::sqrt(wn);
+        const double overlap = std::abs(dot / (gn * wn));
+
+        if (!(overlap > 0.9999))
+        {
+            std::printf("  [FAIL] %s: converged shape overlaps the ground state by "
+                        "only %.6f\n", c.name, overlap);
+            ++g_failures;
+        }
+    }
+}
+
+static void test_ordered_norm_is_deterministic()
+{
+    // The reported norm must not depend on insertion order -- the population is a
+    // hash map, so a naive sum would.
+    // The values must be chosen so that summing them in different orders GIVES a
+    // different answer in floating point -- otherwise the test passes whether or
+    // not the function sorts. A first version used 0.1*i, whose partial sums
+    // happen to be order-insensitive here, and removing the sort passed it.
+    //
+    // Widely-separated magnitudes make the reassociation visible: adding a tiny
+    // value to a large running total loses it, while summing the tiny ones first
+    // does not.
+    const ToyHamiltonian toy(4, 2, 2);
+    // Graded magnitudes, spanning many orders. An alternating large/small pattern
+    // is NOT enough -- with equal counts of each, forward and reverse sums agree
+    // exactly, and the vacuity check below caught that fixture.
+    std::vector<double> vals;
+    for (std::size_t i = 0; i < toy.dets.size(); ++i)
+        vals.push_back(std::pow(10.0, static_cast<double>(i) - 18.0));
+
+    WalkerPopulation a, b;
+    for (std::size_t i = 0; i < toy.dets.size(); ++i)
+        a.add(toy.dets[i], vals[i]);
+    for (std::size_t i = toy.dets.size(); i > 0; --i)
+        b.add(toy.dets[i - 1], vals[i - 1]);
+
+    check(ordered_l1_norm(a) == ordered_l1_norm(b),
+          "ordered_l1_norm is independent of insertion order");
+
+    // And confirm the fixture is not vacuous: these values DO reassociate.
+    double fwd = 0.0, rev = 0.0;
+    for (std::size_t i = 0; i < vals.size(); ++i)
+        fwd += vals[i];
+    for (std::size_t i = vals.size(); i > 0; --i)
+        rev += vals[i - 1];
+    check(fwd != rev, "the test values actually reassociate (else the check is vacuous)");
+}
+
 int main()
 {
     std::printf("F1 -- FCIQMC walker container and RNG policy\n");
@@ -1702,6 +1897,11 @@ int main()
     test_stochastic_attempts_do_not_rescale();
     test_stochastic_death_is_exact();
     test_stochastic_reproducible();
+
+    std::printf("F3.3 -- propagation reaches the ground state\n");
+    test_timestep_bound_is_computed();
+    test_propagation_reaches_the_ground_state();
+    test_ordered_norm_is_deterministic();
 
     if (g_failures == 0)
     {

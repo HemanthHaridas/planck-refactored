@@ -1,7 +1,9 @@
 #include "post_hf/ci/fciqmc.h"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -454,6 +456,40 @@ namespace HartreeFock::Correlation::CI::QMC
         }
 
         return next;
+    }
+
+    double max_stable_timestep(
+        const WalkerPopulation &population,
+        const HamiltonianOps &ham,
+        double shift)
+    {
+        double worst = 0.0;
+        for (const auto &[det, weight] : population)
+        {
+            (void)weight;
+            worst = std::max(worst, std::abs(ham.diagonal(det) - shift));
+        }
+        if (worst <= 0.0)
+            return std::numeric_limits<double>::infinity();
+        return 2.0 / worst;
+    }
+
+    Weight ordered_l1_norm(const WalkerPopulation &population)
+    {
+        // Sort by determinant key, then sum. Hash-order summation would make the
+        // reported value depend on insertion history -- the same discipline the
+        // FCI sigma build follows for its partial sums.
+        std::vector<std::pair<std::pair<CIString, CIString>, Weight>> entries;
+        entries.reserve(population.size());
+        for (const auto &[det, w] : population)
+            entries.push_back({{det.alpha, det.beta}, w});
+        std::sort(entries.begin(), entries.end(),
+                  [](const auto &a, const auto &b) { return a.first < b.first; });
+
+        Weight total = 0.0;
+        for (const auto &[key, w] : entries)
+            total += std::abs(w);
+        return total;
     }
 
     Weight WalkerPopulation::total_population() const noexcept

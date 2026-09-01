@@ -432,6 +432,51 @@ namespace HartreeFock::Correlation::CI::QMC
         RandomSource &rng,
         int n_spawn_attempts = 1);
 
+    // A NECESSARY (not sufficient) timestep bound from the diagonal (F3.3).
+    //
+    //   dt < 2 / max|H_ii - S|
+    //
+    // The iteration multiplies each determinant's own weight by
+    // (1 - dt*(H_ii - S)), so exceeding this makes that factor exceed 1 in
+    // magnitude and the propagation certainly diverges.
+    //
+    // BUT IT IS NOT SUFFICIENT, and the difference is not small. True stability
+    // needs the SPECTRAL radius of (H - S), which the off-diagonals contribute to:
+    //
+    //   dt < 2 / max|eig(H - S)|
+    //
+    // Measured on the 36-determinant test Hamiltonian: the diagonal bound is
+    // 0.5714 while the true spectral bound is 0.2509 -- the diagonal form is
+    // **2.28x too large**, and a run at "half the diagonal bound" still diverges.
+    //
+    // This function returns the cheap diagonal bound because that is what a real
+    // FCIQMC run can afford (the spectral radius of a 3e8-determinant Hamiltonian
+    // is not available). Callers must treat it as an upper limit to stay under by
+    // a safety factor, not as a value that is safe to approach. In practice
+    // FCIQMC chooses dt empirically from the observed population growth, which is
+    // F4's business.
+    //
+    // SECOND CAVEAT, and it bites hardest at the start of a run: the bound is
+    // computed from the determinants CURRENTLY occupied, but propagation spreads
+    // into determinants that are not. Seeded with a single reference determinant
+    // the bound is computed from one diagonal element -- and if that element
+    // equals the shift it returns INFINITY, which is not merely optimistic but
+    // useless. Pass the determinants the run can actually reach, or use a value
+    // derived from the full diagonal, whenever that is affordable.
+    double max_stable_timestep(
+        const WalkerPopulation &population,
+        const HamiltonianOps &ham,
+        double shift);
+
+    // Total weight in the population, summed in a DETERMINISTIC order.
+    //
+    // WalkerPopulation iterates in hash order, which is fine for accumulation but
+    // not for a reported quantity: the sum would depend on insertion history. This
+    // sorts by determinant key first, so the result is reproducible. Use it for
+    // anything that reaches a user or a gate; use total_population() only as a
+    // population-control input.
+    Weight ordered_l1_norm(const WalkerPopulation &population);
+
 } // namespace HartreeFock::Correlation::CI::QMC
 
 #endif

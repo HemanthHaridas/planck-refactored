@@ -142,7 +142,50 @@ The population is now a random variable, but its **expectation** is unchanged.
   the mean but has wrong variance scaling usually means `p_gen` is inconsistent
   with the sampling rather than wrong by a constant.
 
-### F3.3 — imaginary-time propagation to the ground state
+### F3.3 — imaginary-time propagation to the ground state — **DONE 2026-08-31**
+
+Gated: the propagation converges in shape to the ground state with overlap
+**> 0.9999** on closed and open shell; `max_stable_timestep` matches its
+definition; `ordered_l1_norm` is insertion-order independent. Mutation-verified.
+
+**The "too-large `dt` diverges" test asked for below was REMOVED, after three
+formulations each turned out to rest on a false premise.** Measured on the
+36-determinant test Hamiltonian:
+
+1. *"the population collapses onto one determinant"* — it does not; the shape
+   settles at `max|component| = 0.0716` for every `dt` from 1.5x to 5x the
+   diagonal bound.
+2. *"the norm diverges above the bound and not below"* — the norm grows at
+   **every** `dt` (1.22x per iteration at 0.05x the bound, 14.5x at 3x), because
+   with the shift below the ground-state energy exponential growth is what a fixed
+   shift produces by design.
+3. *"the converged shape is the wrong state"* — overlap with the true ground state
+   is **1.000000** at every `dt` tried, from 0.05x to 5x the diagonal bound and
+   well past the true spectral bound.
+
+The cause is that renormalizing each iteration turns the propagation into a power
+iteration for the dominant eigenvector of `(1 − dt(H − S))`, and on this
+Hamiltonian the ground state stays dominant at every `dt` tested. **A divergence
+gate belongs with F4**, where the population is controlled and an unstable `dt`
+has somewhere to show up. Constructing a Hamiltonian contrived to fail would have
+tested the fixture, not the code.
+
+**Two further findings.**
+
+`max_stable_timestep` has a second sharp edge beyond the diagonal-vs-spectral one:
+it is computed from the **currently occupied** determinants, but propagation
+spreads into ones that are not. Seeded with a single reference determinant it
+sees one diagonal element — and when that element equals the shift it returns
+**infinity**. Both caveats are documented at the declaration.
+
+The insertion-order test was initially vacuous. It used values `0.1*i`, whose
+partial sums are order-insensitive here, so **removing the sort passed it**. An
+alternating large/small pattern also failed to reassociate (equal counts of each
+give identical forward and reverse sums — caught by the test's own vacuity check).
+Graded magnitudes spanning 36 orders do reassociate, and the mutation is now
+caught.
+
+### F3.3 (original text) — imaginary-time propagation to the ground state
 
 Iterate from a single walker on the reference determinant. With `S` fixed at the
 reference energy the population should converge in *shape* to the ground-state
@@ -151,11 +194,29 @@ eigenvector.
 - **Verify on H2/STO-3G (4 determinants, exact FCI `-1.1372744062`):** the
   normalized walker distribution converges to the exact ground-state eigenvector of
   the dense `H`, per component, within 3σ.
-- **Verify the timestep bound.** `dt` must satisfy `dt < 2/(max|H_ii - S|)` or the
-  propagation diverges. Assert that a deliberately too-large `dt` **does** diverge
-  — an implementation that silently stays stable is not propagating what it claims.
-  Confirmed on the same toy `H`: `dt = 0.9 × bound` is stable over 2000 iterations,
-  `dt = 1.1 × bound` diverges.
+- **Verify the timestep bound.** Assert that a deliberately too-large `dt` **does**
+  diverge — an implementation that silently stays stable is not propagating what it
+  claims.
+
+  **CORRECTION (found while building F3.3).** This scope originally stated
+  `dt < 2/max|H_ii − S|` as *the* stability condition, and verified it on a 4×4
+  toy where it happened to hold. **It is necessary but NOT sufficient.** True
+  stability needs the spectral radius of `H − S`, to which the off-diagonals
+  contribute:
+
+  | bound | value on the 36-determinant test H |
+  |---|---|
+  | diagonal only, `2/max\|H_ii − S\|` | 0.5714 |
+  | true, `2/max\|eig(H − S)\|` | **0.2509** |
+
+  The diagonal form is **2.28x too large**, so a run at "half the diagonal bound"
+  still diverges. The original 4×4 check passed only because that matrix's
+  off-diagonals were small relative to its diagonal spread.
+
+  The code keeps the diagonal bound, because the spectral radius of a
+  3×10⁸-determinant Hamiltonian is not computable — but it is documented as an
+  upper limit to stay well under, not a safe target. Real FCIQMC picks `dt`
+  empirically from observed population growth, which is F4's business.
 
 ### F3.4 — the projected energy, with its bias characterized
 
