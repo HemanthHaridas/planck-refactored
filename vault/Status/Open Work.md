@@ -602,6 +602,26 @@ worth doing whether or not FCIQMC happens.
   failed against correct source — **watching one file does not prove the build
   included every edit.**
 
+  **F5.2 LANDED (2026-09-01): FCIQMC input keywords.** Eleven keywords, each
+  validated at parse time so a bad value fails naming the keyword. **Every
+  parameter verified to change the run** — nine immediately; the tenth
+  (`fciqmc_initiator`) looked inert until investigation showed the probe value was
+  **below the walker scale** (5000 walkers on 4 determinants means every parent is
+  ~1250, so a threshold of 2 never fires; at 100 and 1e9 it bites). Correctly
+  plumbed, same fixture-saturation limit F4.5 hit. **The reproducibility contract
+  holds through the real binary:** seed 4242 twice gives `-1.1382560651`
+  identically, seed 9999 gives `-1.1373518204`.
+
+  **A build-verification trap that DEFEATED the fix for the previous one.** F5.1's
+  lesson was to check every edited file's timestamp against the binary; that check
+  PASSED while the binary still lacked the change, because a relink during an
+  in-flight build can produce a binary newer than its own inputs. A
+  `strings | grep -c` then returned 2 and looked like confirmation — but it matched
+  the **error-message strings** I had written, not the map key. **A substring match
+  on a binary is not evidence the symbol is there, and a timestamp is not evidence
+  a build finished** — test the actual condition (build not running AND exact
+  symbol present, `grep -qx`).
+
   **Q1 CANDIDATE FOUND (2026-08-31): Cr2, and it is TWO ATOMS.** Surveying the
   standard multireference benchmarks against the measured boundary, almost
   everything canonical is already reachable (N2/C2 full valence, benzene and

@@ -84,7 +84,39 @@ shift control, report the shift and projected energies with blocked error bars.
   from the converged reference; factor that out and share it, or the two paths
   will drift and every later comparison becomes ambiguous.
 
-### F5.2 — input keywords
+### F5.2 — input keywords — **DONE 2026-09-01**
+
+Eleven keywords in `_scf_map`, each validated at parse time so a bad value fails
+naming the keyword (`fciqmc_walkers must be positive`, `fciqmc_steps must be at
+least 4`, …) rather than surfacing later as odd behaviour.
+
+**Every parameter verified to change the run**, by varying each against a baseline
+— nine moved the energy immediately. The tenth, `fciqmc_initiator`, appeared inert
+at `n_add = 2.0`; investigation showed it is correctly plumbed and the **probe
+value was below the walker scale**. With 5000 walkers on 4 determinants every
+parent weight is ~1250, so a threshold of 2 never fires. At `n_add = 100` and
+`1e9` it changes the answer as expected. Same fixture-saturation limit F4.5 hit.
+
+**The reproducibility contract holds end-to-end through the real binary:** seed
+4242 twice gives `-1.1382560651` identically, seed 9999 gives `-1.1373518204`.
+That is F3.5's property verified at the driver level rather than in a unit test.
+
+All parameters — seed included — are echoed to the output, so a result is
+reproducible from its own log.
+
+**A build-verification trap, and it defeated the fix for the previous one.**
+F5.1's lesson was to check every edited file's timestamp against the binary. That
+check *passed* while the binary still lacked the change, because a relink during
+an in-flight build can produce a binary newer than its own inputs. A
+`strings | grep -c` then returned 2 and looked like confirmation — but it was
+matching the **error-message strings** (`"fciqmc_walkers must be positive"`), not
+the map key. An exact match (`grep -qx`) showed the keyword genuinely absent.
+
+> **A substring match on a binary is not evidence the symbol you care about is
+> there, and a timestamp is not evidence a build finished.** Test the actual
+> condition: build not running, *and* exact symbol present.
+
+### F5.2 (original text) — input keywords
 
 `correlation fciqmc` plus the parameters F4 established as load-bearing: walker
 target, `zeta`, `xi`, timestep, spawn granularity, equilibration length, run

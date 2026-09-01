@@ -80,9 +80,24 @@ namespace HartreeFock::Correlation
                 std::format("Sampling {} orbitals, {} alpha / {} beta electrons  "
                             "(CI dim = {})",
                             setup->n_act, setup->n_alpha, setup->n_beta, setup->ci_dim));
+        // Every parameter that changes the answer is echoed, so a result can be
+        // reproduced from its own output alone. The seed especially: F3.5's
+        // contract is that the same seed gives the same trajectory bitwise, and
+        // that is unusable if the value is not recorded.
         logging(LogLevel::Info, tag + " :",
                 std::format("target walkers {:.0f}, dt {:g}, seed {}",
                             opt.target_walkers, opt.timestep, opt.seed));
+        logging(LogLevel::Info, tag + " :",
+                std::format("zeta {:g}, xi {:g}, interval {}, granularity {:g}, "
+                            "initiator {:g}",
+                            opt.shift_damping, opt.shift_restoring,
+                            opt.shift_interval, opt.walker_granularity,
+                            opt.initiator_threshold));
+        logging(LogLevel::Info, tag + " :",
+                std::format("{} equilibration + {} sampling steps, {} spawn "
+                            "attempts per walker",
+                            opt.equilibration_steps, opt.sampling_steps,
+                            opt.spawn_attempts));
 
         // ── Propagate ──────────────────────────────────────────────────────────
         WalkerPopulation pop;
