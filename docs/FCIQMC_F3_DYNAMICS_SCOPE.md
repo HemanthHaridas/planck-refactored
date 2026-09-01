@@ -95,7 +95,40 @@ exactly once and weighted by `H_ij`, one iteration is exactly `(1 - dt(H - S))c`
   wrong*. Every later failure can then be attributed. If F3.1 does not match a
   matrix-vector product exactly, nothing after it is worth debugging.
 
-### F3.2 — stochastic spawning, same fixed point
+### F3.2 — stochastic spawning, same fixed point — **DONE 2026-08-31**
+
+`propagate_stochastic`. Draws connections instead of enumerating them and
+reweights by `1/p_gen`; the death step stays deterministic (one diagonal element
+per determinant, so sampling it adds variance for nothing). Unbiasedness was
+verified numerically with a deliberately non-uniform `p_gen` before the code was
+written.
+
+Gated: the mean over 200k runs matches F3.1 within **5σ per component** on closed
+and open shell, variance falls as `1/n_attempts`, raising `n_spawn_attempts` does
+not change the expected step, death is exact, and a fixed seed reproduces bitwise.
+
+**THE GATE WAS INITIALLY VACUOUS, and this is the finding worth carrying.** The
+first version compared the mean against an absolute tolerance of `0.02`. Dropping
+the `1/p_gen` reweighting entirely — the exact defect this step exists to catch —
+**passed**, as did a 2x `p_gen` error. Spawn magnitudes here span **0.005 to 0.4**
+across excitation classes, so `0.02` sat right at the size of the effect.
+
+A fixed *relative* tolerance failed the other way: dominated by sampling noise on
+the smallest components, it rejected correct code at 51 %.
+
+The fix is to compare against each component's own **standard error**, accumulated
+during the run. It is the only scale correct for every component at once and
+requires no tolerance to be guessed. With it the two previously-passing mutations
+are caught at **5553σ** and **226σ**.
+
+**Generalizable: when the components of a checked quantity span orders of
+magnitude, neither an absolute nor a relative tolerance is safe** — the former is
+vacuous for the large components, the latter noise-dominated for the small ones.
+Measure the standard error and compare in units of it. **This applies directly to
+F3.3 and F3.4**, whose eigenvector components and energy contributions span a
+similar range.
+
+### F3.2 (original text) — stochastic spawning, same fixed point
 
 Replace the enumerating spawn with `draw_excitation` and the `1/p_gen` weighting.
 The population is now a random variable, but its **expectation** is unchanged.

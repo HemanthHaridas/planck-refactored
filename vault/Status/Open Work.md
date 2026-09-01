@@ -384,6 +384,20 @@ worth doing whether or not FCIQMC happens.
   propagator correctly skipped. **A synthetic Hamiltonian must respect the sparsity
   of a real one.**
 
+  **F3.2 LANDED (2026-08-31): stochastic spawning, mean-exact against F3.1.**
+  Draws connections and reweights by `1/p_gen`; death stays deterministic. The
+  mean over 200k runs matches the deterministic step within 5 sigma per component,
+  variance falls as 1/n_attempts, and more attempts do not rescale the step.
+  **The gate was initially VACUOUS and that is the finding:** an absolute
+  tolerance of 0.02 let through both dropping `1/p_gen` entirely and a 2x `p_gen`
+  error, because spawn magnitudes span 0.005-0.4 across excitation classes so the
+  tolerance sat at the effect size. A fixed RELATIVE tolerance failed the other
+  way, rejecting correct code at 51 % because it is noise-dominated on small
+  components. **Comparing against each component's own STANDARD ERROR is the only
+  scale correct for all of them at once** — the two mutations are then caught at
+  5553 and 226 sigma. **Generalizable: when the components of a checked quantity
+  span orders of magnitude, neither an absolute nor a relative tolerance is safe.**
+
   **Q1 CANDIDATE FOUND (2026-08-31): Cr2, and it is TWO ATOMS.** Surveying the
   standard multireference benchmarks against the measured boundary, almost
   everything canonical is already reachable (N2/C2 full valence, benzene and
