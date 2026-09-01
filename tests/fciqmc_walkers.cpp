@@ -2721,6 +2721,141 @@ static void test_shift_averager_semantics()
     check(std::isnan(one.naive_standard_error()), "one sample gives NaN, not 0");
 }
 
+// ---------------------------------------------------------------------------
+// F4.3 -- the timestep divergence gate F3 could not construct
+// ---------------------------------------------------------------------------
+//
+// F3 tried three times to assert that too large a dt breaks the propagation, and
+// every premise turned out false: the population does not collapse onto one
+// determinant, the norm grows at every dt by design, and the converged shape
+// overlaps the true ground state even at 5x the bound. The cause was that
+// renormalizing each iteration turns the propagation into a power iteration whose
+// dominant eigenvector stays the ground state -- instability had nowhere to show.
+//
+// With the population CONTROLLED it does, and the boundary is sharp. Measured on
+// the 36-determinant fixture (zeta = 0.3, xi = 0.05, target 1000, 8000 steps),
+// as a fraction of the diagonal timestep bound:
+//
+//   dt/bound   outcome
+//   0.10       settles, shift -9.971196
+//   0.26       settles, shift -9.971196
+//   0.30       DIVERGES
+//   0.60       DIVERGES
+//
+// WHAT THIS ACTUALLY DETECTS is worth stating precisely: the boundary at
+// 0.26-0.30 sits BELOW the true spectral stability limit of the propagator
+// (~0.44x the diagonal bound, since the diagonal form is 2.28x too large). So the
+// controller destabilises before the bare propagator would. That makes this a
+// gate on the CONTROLLED dynamics -- which is the thing a real run uses -- not a
+// measurement of the propagator's own stability limit. Do not quote the boundary
+// found here as the propagator's bound.
+
+// Returns the final population as a multiple of target, or infinity if the run
+// blew up.
+//
+// Returning the VALUE rather than a bool was a deliberate change: a boolean
+// predicate mutated to a constant made the "must not settle" assertions unable to
+// fail, and that mutation passed the whole gate. With the ratio exposed the
+// assertions compare numbers instead.
+//
+// HONEST LIMITATION, recorded rather than papered over: the two exit paths --
+// the in-loop blow-up check and the final-ratio return -- are REDUNDANT here.
+// Divergence on this fixture is violent enough to trip the in-loop check first,
+// so mutating the final return alone changes nothing (measured: 0.40x still
+// reports inf, from the early exit). Either path alone would catch the cases
+// tested. That is fine, but it means no single-line mutation of this helper can
+// demonstrate both paths are load-bearing -- do not read a passing mutation of
+// one of them as evidence the gate is weak.
+static double controlled_run_final_ratio(const ToyHamiltonian &toy, int n_act,
+                                         double dt, double target, int n_steps)
+{
+    const auto ops = toy.ops(n_act);
+    WalkerPopulation pop;
+    pop.add(toy.dets[0], target);
+
+    ShiftController ctl;
+    ctl.shift = ops.diagonal(toy.dets[0]);
+    ctl.target_population = target;
+    ctl.zeta = 0.3;
+    ctl.xi = 0.05;
+    ctl.interval = 5;
+
+    for (int step = 0; step < n_steps; ++step)
+    {
+        pop = propagate_deterministic(pop, n_act, ops, dt, ctl.shift);
+        const double n = ordered_l1_norm(pop);
+        if (!std::isfinite(n) || n <= 0.0 || n > target * 1e12)
+            return std::numeric_limits<double>::infinity();
+        ctl.update(n, dt);
+    }
+    const double final_n = ordered_l1_norm(pop);
+    if (!std::isfinite(final_n))
+        return std::numeric_limits<double>::infinity();
+    return final_n / target;
+}
+
+// A run "settles" when the controlled population is within two orders of the
+// target in either direction.
+static bool settled(double ratio)
+{
+    return std::isfinite(ratio) && ratio > 0.01 && ratio < 100.0;
+}
+
+static void test_timestep_divergence_is_observable_under_control()
+{
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    WalkerPopulation whole;
+    for (const auto &d : toy.dets)
+        whole.add(d, 1.0);
+    const double bound = max_stable_timestep(whole, ops, -2.0);
+
+    const double r_small = controlled_run_final_ratio(toy, 4, 0.10 * bound, 1000.0, 8000);
+    const double r_mid_lo = controlled_run_final_ratio(toy, 4, 0.20 * bound, 1000.0, 8000);
+    const double r_mid_hi = controlled_run_final_ratio(toy, 4, 0.40 * bound, 1000.0, 8000);
+    const double r_large = controlled_run_final_ratio(toy, 4, 0.60 * bound, 1000.0, 8000);
+
+    // Inside the stable region the controller holds the population AT target, not
+    // merely somewhere finite. Asserting the value is what makes a constant-return
+    // mutation of the helper detectable.
+    check(std::abs(r_small - 1.0) < 0.5,
+          "a small timestep holds the population at target");
+    check(std::abs(r_mid_lo - 1.0) < 0.5,
+          "0.20x the bound still holds the population at target");
+
+    // Outside it, the population leaves that window entirely.
+    check(!settled(r_mid_hi), "0.40x the bound fails to settle");
+    check(!settled(r_large), "0.60x the bound fails to settle");
+
+    // And the two regimes must be far apart, so the gate is measuring a
+    // transition rather than two points that happen to differ slightly.
+    check(!std::isfinite(r_large) || r_large > 100.0 * std::abs(r_small),
+          "the unstable regime is qualitatively different, not marginally so");
+
+    if (std::getenv("PLANCK_FCIQMC_VERBOSE") != nullptr)
+        std::printf("      final N/target: 0.10x=%.3f 0.20x=%.3f 0.40x=%.3g "
+                    "0.60x=%.3g\n", r_small, r_mid_lo, r_mid_hi, r_large);
+}
+
+static void test_divergence_gate_is_not_vacuous()
+{
+    // The gate above would pass trivially if EVERY run failed to settle -- so
+    // confirm the stable case is genuinely stable, by checking it reaches the
+    // right energy rather than merely staying finite.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    WalkerPopulation whole;
+    for (const auto &d : toy.dets)
+        whole.add(d, 1.0);
+    const double bound = max_stable_timestep(whole, ops, -2.0);
+    const double exact = exact_ground_energy(toy);
+
+    const auto r = run_both_estimators(toy, 4, 0.10 * bound, 1000.0, 1000.0, 8000);
+    check(r.finite, "the stable-timestep run is finite");
+    check(std::abs(r.shift_energy - exact) < 1e-3,
+          "the stable-timestep run also reaches the right energy");
+}
+
 int main()
 {
     std::printf("F1 -- FCIQMC walker container and RNG policy\n");
@@ -2806,6 +2941,10 @@ int main()
     test_shift_averager_semantics();
     test_two_estimators_agree();
     test_equilibration_cut_matters();
+
+    std::printf("F4.3 -- timestep divergence, observable under population control\n");
+    test_timestep_divergence_is_observable_under_control();
+    test_divergence_gate_is_not_vacuous();
 
     if (g_failures == 0)
     {

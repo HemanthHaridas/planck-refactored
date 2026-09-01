@@ -488,6 +488,24 @@ worth doing whether or not FCIQMC happens.
   vacuity check is load-bearing: starting 50x off target it improves the answer
   from 1.14e-02 to 2.19e-13.
 
+  **F4.3 LANDED (2026-08-31): the divergence gate F3 could not build now works.**
+  With the population controlled the boundary is sharp — dt <= 0.26x the diagonal
+  bound settles at target, dt >= 0.30x diverges — where F3's three attempts all
+  failed because renormalizing made it a power iteration whose dominant
+  eigenvector stays the ground state. **What it detects is the CONTROLLER
+  destabilising, not the propagator:** the boundary sits below the true spectral
+  limit (~0.44x), so this gates the controlled dynamics a real run uses, and the
+  number must not be quoted as the propagator's bound. Verified by isolating the
+  controller — with zeta = xi = 0 every timestep "diverges", which is just the
+  exponential growth a frozen shift produces by design.
+
+  **A mutation-testing limitation recorded rather than papered over:** the helper's
+  in-loop blow-up check and its final-ratio return are REDUNDANT on this fixture,
+  so mutating one alone changes nothing and a passing mutation is not evidence of
+  weakness. The helper was still changed from bool to ratio, because a boolean
+  mutated to a constant made the "must not settle" assertions unable to fail —
+  that was a real gap.
+
   **Q1 CANDIDATE FOUND (2026-08-31): Cr2, and it is TWO ATOMS.** Surveying the
   standard multireference benchmarks against the measured boundary, almost
   everything canonical is already reachable (N2/C2 full valence, benzene and

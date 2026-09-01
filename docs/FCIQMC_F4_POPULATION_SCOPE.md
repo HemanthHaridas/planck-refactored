@@ -152,7 +152,44 @@ Report `E_shift` as the time-average of `S` after equilibration.
   reached equilibrium immediately and the fixture is too easy to be testing
   anything.
 
-### F4.3 — the deferred timestep divergence gate
+### F4.3 — the deferred timestep divergence gate — **DONE 2026-08-31. It works.**
+
+**The premise held.** F3 tried three times to assert that too large a `dt` breaks
+the propagation and every formulation rested on a false premise, because
+renormalizing each iteration turned the propagation into a power iteration whose
+dominant eigenvector stays the ground state. With the population **controlled**,
+the boundary is sharp and observable:
+
+| dt / diagonal bound | outcome |
+|---|---|
+| 0.10 | settles, population at target, shift −9.971196 |
+| 0.20 | settles |
+| 0.26 | settles |
+| **0.30** | **diverges** |
+| 0.60 | diverges |
+
+**What this actually detects, stated precisely:** the boundary at 0.26–0.30 sits
+**below** the propagator's true spectral limit (~0.44x the diagonal bound, since
+that form is 2.28x too large). So the **controller** destabilises before the bare
+propagator would. This is a gate on the *controlled dynamics* — the thing a real
+run uses — not a measurement of the propagator's own stability. **Do not quote the
+boundary found here as the propagator's bound.**
+
+Confirmed by isolating the controller: with `zeta = xi = 0` (shift frozen) every
+timestep reports "diverged", which is just the unbounded exponential growth a
+fixed shift produces by design, not instability. The transition only exists when
+the controller is active.
+
+**A mutation-testing limitation, recorded rather than papered over.** The helper's
+two exit paths — the in-loop blow-up check and the final-ratio return — are
+redundant on this fixture: divergence is violent enough to trip the in-loop check
+first, so mutating the final return alone changes nothing. Either path alone would
+catch every case tested. A passing mutation of one of them is therefore **not**
+evidence the gate is weak. The helper was still changed from returning a bool to
+returning the ratio, because a boolean predicate mutated to a constant made the
+"must not settle" assertions unable to fail at all — that one *was* a real gap.
+
+### F4.3 (original text) — the deferred timestep divergence gate
 
 Now that the population is controlled, an unstable `dt` has an observable
 consequence: the shift cannot hold the population steady.
