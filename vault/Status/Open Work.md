@@ -433,7 +433,7 @@ worth doing whether or not FCIQMC happens.
   statistical gates instead, so it took a fourth to demonstrate the control is
   load-bearing rather than decorative.
 
-  **F4 SCOPED (2026-08-31) in `docs/FCIQMC_F4_POPULATION_SCOPE.md`** — shift
+  **F4 SCOPED (2026-08-31) in `docs/FCIQMC_POPULATION_CONTROL.md`** — shift
   control and the initiator approximation, in five steps. Two numbers were measured
   on a 20-determinant model before the scope was written. (1) **The damping
   parameter zeta trades shift accuracy against population control, and both ends

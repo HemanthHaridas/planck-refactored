@@ -131,7 +131,7 @@ burden is to show why FCIQMC cannot do what it did.
 | the `PostHF` enum | `src/base/types.h:73` |
 | within-σ assertion | `metric_within_sigma`, `tests/run_regressions.py` |
 | N2 input and its FCI reference | `tests/inputs/exploratory/fciqmc/n2_fci_sto3g.hfinp` |
-| what F1–F4 established, and their traps | `docs/FCIQMC_SAMPLING_AND_DYNAMICS.md`, `docs/FCIQMC_F4_POPULATION_SCOPE.md` |
+| what F1–F4 established, and their traps | `docs/FCIQMC_SAMPLING_AND_DYNAMICS.md`, `docs/FCIQMC_POPULATION_CONTROL.md` |
 
 ---
 
