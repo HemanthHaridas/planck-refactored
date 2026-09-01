@@ -531,6 +531,31 @@ worth doing whether or not FCIQMC happens.
   rounding was near-binary with ~100 nonzero events in 200k runs and it scattered
   **51 % on correct code**. Sizing spawns to straddle the granularity fixes it.
 
+  **F5 SCOPED (2026-08-31) in `docs/FCIQMC_F5_DRIVER_SCOPE.md`, around one
+  deliverable: a regression case reproducing N2/STO-3G deterministic FCI within
+  its own error bar.** Everything validated so far runs on a SYNTHETIC
+  Hamiltonian — `ToyHamiltonian` respects a real one's sparsity and is checked
+  against exact diagonalization, but it is not a molecule, so nothing yet shows
+  FCIQMC reproduces a chemical answer.
+
+  **Why N2 cannot be a unit test, checked rather than assumed:** it needs a
+  converged SCF for its integrals (`h_eff = C^T H_core C` plus the transformed
+  two-electron array), which means linking the basis/integral/SCF machinery into a
+  gate that currently links one file — and 14 400 determinants is 400x the current
+  fixture, which already uses the whole ~30 s budget. The honest home is a
+  regression case driven by the real binary, so F5 wires FCIQMC into the driver
+  first. Reference measured: **N2/STO-3G total FCI `-107.6529998854`** (~8 s at 4
+  threads).
+
+  Four steps: F5.1 a `run_fciqmc` entry mirroring `run_fci` (sharing its integral
+  transform rather than reimplementing it, or the paths drift); F5.2 input
+  keywords with the seed user-visible, since F3.5's reproducibility contract is
+  worthless otherwise; F5.3 the N2 gate using `metric_within_sigma` — which has
+  had **no production consumer** until now — asserting the error bar is blocked
+  rather than naive (a naive one understates by ~5x, measured) plus fixed-seed
+  reproducibility; F5.4 the determinism decision from the research scope's section
+  6, which must be made explicitly rather than discovered.
+
   **Q1 CANDIDATE FOUND (2026-08-31): Cr2, and it is TWO ATOMS.** Surveying the
   standard multireference benchmarks against the measured boundary, almost
   everything canonical is already reachable (N2/C2 full valence, benzene and
