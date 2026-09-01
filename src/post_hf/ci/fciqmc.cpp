@@ -525,6 +525,40 @@ namespace HartreeFock::Correlation::CI::QMC
         return out;
     }
 
+    bool ShiftController::update(double population, double dt)
+    {
+        if (!(population > 0.0) || !std::isfinite(population))
+            return false;   // a dead or diverged population carries no signal
+
+        if (!primed)
+        {
+            last_population = population;
+            steps_since_update = 0;
+            primed = true;
+            return false;
+        }
+
+        if (++steps_since_update < interval)
+            return false;
+
+        // S <- S - (zeta / (interval*dt)) * ln(N_now / N_prev).
+        //
+        // The log ratio is the growth RATE over the interval; dividing by
+        // interval*dt converts it to a rate per unit imaginary time, which is
+        // what has the units of an energy. Getting that denominator wrong scales
+        // the feedback and shows up as the shift converging to the wrong value,
+        // not as instability -- which is why the gate checks the converged shift
+        // against the exact energy rather than only that it settles.
+        double correction = zeta * std::log(population / last_population);
+        if (xi != 0.0 && target_population > 0.0)
+            correction += xi * std::log(population / target_population);
+        shift -= correction / (static_cast<double>(interval) * dt);
+
+        last_population = population;
+        steps_since_update = 0;
+        return true;
+    }
+
     Weight WalkerPopulation::total_population() const noexcept
     {
         // Summed in hash order, which is not reproducible across rehashes. This is

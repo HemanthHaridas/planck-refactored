@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <algorithm>
 #include <map>
 #include <tuple>
@@ -2207,6 +2208,325 @@ static void test_compression_does_not_break_reproducibility()
         }
 }
 
+// ---------------------------------------------------------------------------
+// F4.1 -- shift control holds the population and finds the ground-state energy
+// ---------------------------------------------------------------------------
+
+struct ShiftRun
+{
+    double mean_shift = 0.0;
+    double final_population = 0.0;
+    double peak_ratio = 0.0;     // worst |N/target| seen after equilibration
+    bool finite = true;
+};
+
+// Run the DETERMINISTIC propagator under shift control. Deterministic first, so
+// the control loop is separated from sampling noise exactly as F3.1 separated
+// the dynamics from the sampling.
+static ShiftRun run_with_shift_control(const ToyHamiltonian &toy, int n_act,
+                                       double dt, double zeta, double target,
+                                       double start_population, int n_steps,
+                                       int interval = 5)
+{
+    const auto ops = toy.ops(n_act);
+    ShiftRun out;
+
+    WalkerPopulation pop;
+    pop.add(toy.dets[0], start_population);
+
+    ShiftController ctl;
+    ctl.shift = ops.diagonal(toy.dets[0]);
+    ctl.target_population = target;
+    ctl.zeta = zeta;
+    ctl.interval = interval;
+
+    double sum_shift = 0.0;
+    int n_avg = 0;
+    const int equilibrate = n_steps / 2;
+
+    for (int step = 0; step < n_steps; ++step)
+    {
+        pop = propagate_deterministic(pop, n_act, ops, dt, ctl.shift);
+        const double n = ordered_l1_norm(pop);
+        if (!std::isfinite(n) || n <= 0.0)
+        {
+            out.finite = false;
+            return out;
+        }
+        ctl.update(n, dt);
+
+        if (step >= equilibrate)
+        {
+            sum_shift += ctl.shift;
+            ++n_avg;
+            out.peak_ratio = std::max(out.peak_ratio, n / target);
+        }
+        out.final_population = n;
+    }
+    out.mean_shift = (n_avg > 0) ? sum_shift / n_avg : 0.0;
+    return out;
+}
+
+static void test_shift_control_converges_to_target()
+{
+    // Starting far off target in BOTH directions, the population must come back.
+    // One direction alone would pass a controller that only ever shrinks (or only
+    // grows) the population.
+    const ToyHamiltonian toy(5, 3, 2);   // open shell, per F2's lesson
+    const auto ops = toy.ops(5);
+    WalkerPopulation whole;
+    for (const auto &d : toy.dets)
+        whole.add(d, 1.0);
+    const double dt = 0.05 * max_stable_timestep(whole, ops, -2.0);
+    const double target = 1000.0;
+
+    // zeta = 1.5, from the band measured on this Hamiltonian (see
+    // test_zeta_tradeoff_exists): at 0.3 the population is still 1200x high after
+    // 6000 steps -- converging, but not converged, which is a statement about the
+    // controller's time constant rather than about correctness.
+    for (double start : {target * 10.0, target / 10.0})
+    {
+        const auto r = run_with_shift_control(toy, 5, dt, 1.5, target, start, 12000);
+        check(r.finite, "shift-controlled run stays finite");
+        if (!r.finite)
+            continue;
+        const double ratio = r.final_population / target;
+        if (!(ratio > 0.2 && ratio < 5.0))
+        {
+            std::printf("  [FAIL] population did not return to target from %.0fx "
+                        "(ended at %.2fx)\n", start / target, ratio);
+            ++g_failures;
+        }
+    }
+}
+
+static void test_shift_converges_to_the_ground_state_energy()
+{
+    // The shift that holds the population steady IS an estimate of E0. This is a
+    // second, independent estimator: it comes from the population growth rate, not
+    // from any matrix element on the reference.
+    struct Case { int n_act, na, nb; const char *name; };
+    const Case cases[] = {
+        {4, 2, 2, "4 orbitals closed shell"},
+        {5, 3, 2, "5 orbitals OPEN shell"},
+    };
+
+    for (const auto &c : cases)
+    {
+        const ToyHamiltonian toy(c.n_act, c.na, c.nb);
+        const auto ops = toy.ops(c.n_act);
+        WalkerPopulation whole;
+        for (const auto &d : toy.dets)
+            whole.add(d, 1.0);
+        const double dt = 0.05 * max_stable_timestep(whole, ops, -2.0);
+
+        const auto r = run_with_shift_control(toy, c.n_act, dt, 0.3, 1000.0, 1000.0, 8000);
+        if (!r.finite)
+        {
+            check(false, "shift-controlled run stays finite");
+            continue;
+        }
+        const double exact = exact_ground_energy(toy);
+        if (std::abs(r.mean_shift - exact) > 1e-3)
+        {
+            std::printf("  [FAIL] %s: converged shift %.8f vs exact E0 %.8f\n",
+                        c.name, r.mean_shift, exact);
+            ++g_failures;
+        }
+    }
+}
+
+static void test_zeta_tradeoff_exists()
+{
+    // Assert the TRADEOFF, not a value -- and note WHAT is traded changed once the
+    // target term was added.
+    //
+    // With only the growth-rate term, zeta traded shift accuracy against
+    // population tightness. With both terms the xi term does the targeting, and
+    // zeta becomes a STABILITY parameter: too little leaves the shift oscillating,
+    // too much destabilises it. Measured on the 20-determinant scoping model
+    // (xi = 0.05, start 20x above target):
+    //
+    //   zeta   peak/target   shift error   shift stdev
+    //   0.0    20.36         4.6e-01       9.5e+00     (oscillates, never settles)
+    //   0.1     1.000        1.6e-10       3.9e-10
+    //   0.5     1.000        1.6e-10       3.9e-10
+    //   2.0     1.98         3.8e+00       2.8e+01     (destabilised)
+    //   5.0     DIVERGED
+    //
+    // So both ends fail, which is the evidence the feedback is real. A controller
+    // that ignored zeta would give identical results at every setting.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    WalkerPopulation whole;
+    for (const auto &d : toy.dets)
+        whole.add(d, 1.0);
+    const double dt = 0.05 * max_stable_timestep(whole, ops, -2.0);
+    const double target = 1000.0;
+    const double exact = exact_ground_energy(toy);
+
+    const auto none = run_with_shift_control(toy, 4, dt, 0.0, target, target * 20.0, 8000);
+    const auto good = run_with_shift_control(toy, 4, dt, 0.3, target, target * 20.0, 8000);
+    const auto heavy = run_with_shift_control(toy, 4, dt, 4.0, target, target * 20.0, 8000);
+
+    if (!none.finite || !good.finite)
+    {
+        check(false, "the zero- and mid-damping runs stay finite");
+        return;
+    }
+
+    const double err_none = std::abs(none.mean_shift - exact);
+    const double err_good = std::abs(good.mean_shift - exact);
+
+    // Too little damping: the shift does not settle on the energy.
+    if (!(err_none > err_good * 10.0))
+    {
+        std::printf("  [FAIL] zero damping did not degrade the shift "
+                    "(none %.3e, good %.3e)\n", err_none, err_good);
+        ++g_failures;
+    }
+
+    // Too much damping: the run either destabilises or its shift degrades. Accept
+    // either, because which one happens depends on dt and the spectrum -- pinning
+    // one would pin an accident.
+    const bool heavy_degraded =
+        !heavy.finite || std::abs(heavy.mean_shift - exact) > err_good * 10.0;
+    if (!heavy_degraded)
+    {
+        std::printf("  [FAIL] heavy damping neither destabilised nor degraded the "
+                    "shift (err %.3e vs %.3e)\n",
+                    std::abs(heavy.mean_shift - exact), err_good);
+        ++g_failures;
+    }
+
+    if (std::getenv("PLANCK_FCIQMC_VERBOSE") != nullptr)
+        std::printf("      zeta=0: err=%.3e | zeta=0.3: err=%.3e | zeta=4: %s\n",
+                    err_none, err_good,
+                    heavy.finite ? "finite" : "diverged");
+}
+
+static void test_shift_update_has_correct_units()
+{
+    // The interval*dt denominator makes zeta DIMENSIONLESS: the log-ratio is a
+    // growth over an interval, and dividing by the elapsed imaginary time turns it
+    // into a rate, which is what has the units of an energy.
+    //
+    // Without it, the same zeta means a different feedback gain at every dt --
+    // and the tradeoff tests cannot see that, because rescaling the denominator is
+    // equivalent to rescaling zeta, which they deliberately do not pin. Measured:
+    // dropping the denominator passed every other check in this file.
+    //
+    // So assert the scaling directly. Halving dt with interval fixed must halve
+    // the shift correction for the same observed population ratio.
+    auto correction_for = [](double dt, int interval) {
+        ShiftController c;
+        c.shift = 0.0;
+        c.zeta = 1.0;
+        c.xi = 0.0;                 // isolate the growth-rate term
+        c.interval = interval;
+        c.target_population = 1000.0;
+        c.update(1000.0, dt);                    // prime
+        for (int i = 0; i + 1 < interval; ++i)
+            c.update(2000.0, dt);
+        c.update(2000.0, dt);                    // triggers the update
+        return c.shift;
+    };
+
+    const double s1 = correction_for(0.01, 5);
+    const double s2 = correction_for(0.005, 5);
+    check(std::abs(s2 - 2.0 * s1) < 1e-12 * std::abs(s2),
+          "halving dt doubles the shift correction (zeta is a rate, not a step)");
+
+    const double s3 = correction_for(0.01, 10);
+    check(std::abs(s3 - 0.5 * s1) < 1e-12 * std::abs(s1),
+          "doubling the interval halves the shift correction");
+}
+
+static void test_target_term_is_required()
+{
+    // The growth-rate term alone stabilises the RATE but never targets a
+    // population: the final population comes out proportional to the starting one.
+    // Measured with xi = 0 on the scoping model: 135.7x the target from every
+    // start across a 1000x range. This pins that the target term is doing real
+    // work, so nobody removes it as redundant.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    WalkerPopulation whole;
+    for (const auto &d : toy.dets)
+        whole.add(d, 1.0);
+    const double dt = 0.05 * max_stable_timestep(whole, ops, -2.0);
+    const double target = 1000.0;
+
+    auto final_ratio = [&](double xi, double start) {
+        WalkerPopulation pop;
+        pop.add(toy.dets[0], start);
+        ShiftController ctl;
+        ctl.shift = ops.diagonal(toy.dets[0]);
+        ctl.target_population = target;
+        ctl.zeta = 0.3;
+        ctl.xi = xi;
+        ctl.interval = 5;
+        for (int step = 0; step < 12000; ++step)
+        {
+            pop = propagate_deterministic(pop, 4, ops, dt, ctl.shift);
+            const double n = ordered_l1_norm(pop);
+            if (!std::isfinite(n) || n <= 0.0)
+                return -1.0;
+            ctl.update(n, dt);
+        }
+        return ordered_l1_norm(pop) / target;
+    };
+
+    // With the target term: same answer from both directions.
+    const double hi_on = final_ratio(0.05, target * 20.0);
+    const double lo_on = final_ratio(0.05, target / 20.0);
+    check(hi_on > 0.5 && hi_on < 2.0, "with the target term, a high start lands on target");
+    check(lo_on > 0.5 && lo_on < 2.0, "with the target term, a low start lands on target");
+
+    // Without it: the final population tracks the start instead.
+    const double hi_off = final_ratio(0.0, target * 20.0);
+    const double lo_off = final_ratio(0.0, target / 20.0);
+    if (hi_off > 0.0 && lo_off > 0.0 && !(hi_off > lo_off * 10.0))
+    {
+        std::printf("  [FAIL] without the target term the final population should "
+                    "track the start (high %.2fx, low %.2fx)\n", hi_off, lo_off);
+        ++g_failures;
+    }
+}
+
+static void test_shift_controller_primes_before_updating()
+{
+    // The first interval only establishes a baseline. Updating from a zero or
+    // absent reference population would send the shift to infinity on step one.
+    ShiftController ctl;
+    ctl.shift = -2.0;
+    ctl.interval = 5;
+    ctl.zeta = 0.5;
+
+    check(!ctl.update(1000.0, 0.01), "the first call only primes, it does not update");
+    check(ctl.shift == -2.0, "priming leaves the shift untouched");
+
+    for (int i = 0; i < 4; ++i)
+        check(!ctl.update(1000.0, 0.01), "no update before the interval elapses");
+    check(ctl.update(1000.0, 0.01), "an update happens once the interval elapses");
+    check(ctl.shift == -2.0, "a steady population leaves the shift unchanged");
+
+    // A growing population must LOWER the shift (less growth next step).
+    ShiftController g = ctl;
+    g.update(2000.0, 0.01);
+    for (int i = 0; i < ctl.interval; ++i)
+        g.update(2000.0, 0.01);
+    check(g.shift < -2.0, "a growing population lowers the shift");
+
+    // Degenerate inputs must be ignored, not propagated as infinities.
+    ShiftController d = ctl;
+    const double before = d.shift;
+    check(!d.update(0.0, 0.01), "a dead population produces no update");
+    check(!d.update(std::numeric_limits<double>::infinity(), 0.01),
+          "a diverged population produces no update");
+    check(d.shift == before, "degenerate populations leave the shift untouched");
+}
+
 int main()
 {
     std::printf("F1 -- FCIQMC walker container and RNG policy\n");
@@ -2279,6 +2599,14 @@ int main()
     test_trajectory_is_reproducible();
     test_trajectory_digest_is_sensitive();
     test_compression_does_not_break_reproducibility();
+
+    std::printf("F4.1 -- shift control\n");
+    test_shift_controller_primes_before_updating();
+    test_shift_control_converges_to_target();
+    test_shift_converges_to_the_ground_state_energy();
+    test_zeta_tradeoff_exists();
+    test_shift_update_has_correct_units();
+    test_target_term_is_required();
 
     if (g_failures == 0)
     {

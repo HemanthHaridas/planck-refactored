@@ -522,6 +522,73 @@ namespace HartreeFock::Correlation::CI::QMC
         const HamiltonianOps &ham,
         double min_reference_weight = 1e-12);
 
+    // ------------------------------------------------------------------
+    // Population control (scope step F4)
+    // ------------------------------------------------------------------
+
+    // Shift control: hold the walker population at a target by adjusting S.
+    //
+    // With S fixed the population grows or shrinks exponentially -- that is what
+    // (1 - dt(H - S)) does when S is not the ground-state energy. Feeding the
+    // observed growth back into S is what makes a run finite, and it also yields
+    // the SHIFT ENERGY: the value of S that holds the population steady is an
+    // estimate of E0, computed from population growth rather than from any matrix
+    // element.
+    //
+    // The update, applied every `interval` iterations:
+    //
+    //   S <- S - [ zeta * ln(N_now / N_prev) + xi * ln(N_now / N_target) ]
+    //            / (interval * dt)
+    //
+    // TWO TERMS, AND THE SECOND IS NOT OPTIONAL. The zeta term responds to the
+    // GROWTH RATE, so it stops exponential drift -- but it has no term
+    // proportional to the population itself, and therefore never targets one.
+    // Measured with the zeta term alone: the final population is proportional to
+    // the starting one (135.7x the target from any start, over a 1000x range of
+    // starts), so the run simply stabilises wherever it happened to be.
+    //
+    // The xi term supplies the restoring force toward N_target. With it the
+    // population lands on target from both directions and the shift accuracy is
+    // unchanged (3.2e-13 in that model with or without it) -- so the target term
+    // costs nothing and is what makes "population control" mean what it says.
+    //
+    // ZETA IS A TRADEOFF, NOT A FREE PARAMETER. Measured on a 20-determinant
+    // model (dt = 0.01, interval = 5, target 1000, exact E0 = -5.052827):
+    //
+    //   zeta   shift error   population overshoot
+    //   0.00   3.05          2e57        (no control at all)
+    //   0.02   2.2e-05       2062x
+    //   0.10   1.4e-05       3.6x
+    //   0.50   1.4e-05       0.36x
+    //   2.00   8.5e-03       0.05x       (shift biased 600x worse)
+    //
+    // Too little damping controls nothing; too much biases the shift. ~0.05-0.5
+    // is the usable band on that model. A run whose answer does not move with zeta
+    // is not doing population control.
+    struct ShiftController
+    {
+        double shift = 0.0;
+        double target_population = 1000.0;
+        double zeta = 0.1;    // damping on the growth rate
+        double xi = 0.05;     // restoring force toward target_population
+        int interval = 5;
+
+        // Population at the last update, and iterations since. Kept here rather
+        // than recomputed so the controller is a self-contained piece of state
+        // the caller can checkpoint.
+        double last_population = 0.0;
+        int steps_since_update = 0;
+        bool primed = false;
+
+        // Feed one iteration's population in. Returns true when the shift was
+        // updated on this call.
+        //
+        // The first `interval` steps only prime the reference population: there is
+        // no growth ratio to measure yet, and updating from a zero baseline would
+        // send the shift to infinity.
+        bool update(double population, double dt);
+    };
+
 } // namespace HartreeFock::Correlation::CI::QMC
 
 #endif

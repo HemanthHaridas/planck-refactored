@@ -24,28 +24,42 @@ With `S` fixed the population is not stationary. Three consequences:
 
 ## The mechanism, and the number that decides whether it works
 
-The standard update, applied every `A` iterations:
+The update, applied every `A` iterations:
 
 ```
-S(t) = S(t - A) - (zeta / (A * dt)) * ln( N(t) / N(t - A) )
+S(t) = S(t-A) - [ zeta * ln(N(t)/N(t-A)) + xi * ln(N(t)/N_target) ] / (A * dt)
 ```
 
-`zeta` is a damping parameter, and **it trades shift accuracy against population
-control**. Measured on a 20-determinant model (`dt = 0.01`, `A = 5`, target
-N = 1000, 4000 iterations, exact `E0 = -5.052827`):
+**CORRECTION (found building F4.1). This scope originally gave only the first
+term, and that update never targets a population.** The `zeta` term responds to
+the growth *rate*, so it stops exponential drift — but it has no term proportional
+to the population itself, and the run simply stabilises wherever it happened to
+be. Measured: the final population is **proportional to the starting one**
+(135.7x the target from every start, across a 1000x range of starts).
 
-| ζ | converged S | error vs E₀ | population overshoot |
+The `xi` term supplies the restoring force. With it the population lands on target
+from both directions, and **the shift accuracy is unchanged** (3.2e-13 either
+way) — so the target term costs nothing and is what makes "population control"
+mean what it says.
+
+**What `zeta` trades depends on whether the target term is present**, which is the
+second correction. With `xi = 0` it trades shift accuracy against population
+tightness. With the target term doing the targeting, `zeta` becomes a **stability**
+parameter — too little leaves the shift oscillating, too much destabilises it:
+
+| ζ (with ξ = 0.05) | peak/target | shift error | shift stdev |
 |---|---|---|---|
-| 0 (no control) | −2.000000 | 3.05 | 2×10⁵⁷ |
-| 0.02 | −5.052804 | 2.2e-5 | 2062x |
-| 0.1 | −5.052812 | 1.4e-5 | 3.6x |
-| **0.5** | **−5.052813** | **1.4e-5** | **0.36x** |
-| 2.0 | −5.044363 | 8.5e-3 | 0.05x |
+| 0.0 | 20.36 | 4.6e-1 | 9.5 |
+| 0.1 | 1.000 | 1.6e-10 | 3.9e-10 |
+| 0.5 | 1.000 | 1.6e-10 | 3.9e-10 |
+| 2.0 | 1.98 | 3.8 | 27.7 |
+| 5.0 | **diverged** | | |
 
-Both ends fail in their own way: too little damping controls nothing, too much
-biases the shift by 600x. **ζ ≈ 0.05–0.5 is the usable band on this model**, and
-the gate should assert the tradeoff exists rather than pin one value — a run that
-is insensitive to ζ is not doing population control.
+Both ends still fail, which is the evidence the feedback is real — but the gate
+must assert *that*, not any value. **The usable band is system-specific**: it runs
+0.1–0.5 on the 20-determinant scoping model and much higher on the 36-determinant
+test Hamiltonian, because the feedback gain is `zeta/(A·dt)` and a different `dt`
+moves the whole band. A test pinned to one ζ pins an accident.
 
 ## The check that makes this step self-validating
 
@@ -67,7 +81,26 @@ what makes it usable as a gate rather than another bias trend to characterize.
 
 ## Steps
 
-### F4.1 — shift control on a fixed population
+### F4.1 — shift control on a fixed population — **DONE 2026-08-31**
+
+`ShiftController` in `src/post_hf/ci/fciqmc.{h,cpp}`. Gated: the population
+returns to target from 10x high and 10x low; the converged shift matches the exact
+ground-state energy; the ζ tradeoff fails at both ends; the target term is
+required; and the update has the right units.
+
+**Three things this step corrected**, all above: the single-term update never
+targets a population; what ζ trades depends on the target term's presence; and the
+usable band is system-specific.
+
+**A fourth, from mutation testing.** Dropping the `A·dt` denominator **passed every
+other check** — it is equivalent to rescaling ζ and ξ, which the tradeoff tests
+deliberately do not pin. The denominator is what makes ζ *dimensionless* and
+transferable across `dt`, so it now has its own gate asserting the scaling
+directly: halving `dt` doubles the correction, doubling the interval halves it.
+**A parameter's units cannot be gated by a test that only asserts the shape of a
+tradeoff in that parameter.**
+
+### F4.1 (original text) — shift control on a fixed population
 
 Implement the update above. Serial, deterministic propagator first, so the control
 loop is separated from sampling noise exactly as F3.1 separated the dynamics.

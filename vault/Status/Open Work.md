@@ -454,6 +454,29 @@ worth doing whether or not FCIQMC happens.
   the population steady. The scope says to record the outcome honestly if it still
   does not work, rather than contriving a fixture.
 
+  **F4.1 LANDED (2026-08-31): shift control — and the scoped update formula was
+  WRONG.** The scope gave the standard single-term update
+  `S -= zeta*ln(N/N_prev)/(A*dt)`, which responds to the growth RATE and therefore
+  **never targets a population**: measured, the final population comes out
+  proportional to the starting one (135.7x the target from every start across a
+  1000x range). A second term `xi*ln(N/N_target)` supplies the restoring force;
+  with it the population lands on target from both directions and **the shift
+  accuracy is unchanged** (3.2e-13 either way), so the target term costs nothing.
+
+  Two further corrections: **what zeta trades depends on whether the target term
+  is present** (without it, accuracy vs population tightness; with it, zeta becomes
+  a stability parameter — 0.0 leaves the shift oscillating at 4.6e-1 error, 2.0
+  destabilises it, 5.0 diverges), and **the usable band is system-specific**
+  because the gain is `zeta/(A*dt)` — 0.1-0.5 on the scoping model, much higher on
+  the test Hamiltonian.
+
+  **A mutation-testing finding worth carrying: dropping the `A*dt` denominator
+  PASSED every check**, because it is equivalent to rescaling zeta and xi, which
+  the tradeoff tests deliberately do not pin. The denominator is what makes zeta
+  dimensionless and transferable across dt, so it now has its own gate asserting
+  the scaling directly. **A parameter's units cannot be gated by a test that only
+  asserts the shape of a tradeoff in that parameter.**
+
   **Q1 CANDIDATE FOUND (2026-08-31): Cr2, and it is TWO ATOMS.** Surveying the
   standard multireference benchmarks against the measured boundary, almost
   everything canonical is already reachable (N2/C2 full valence, benzene and
