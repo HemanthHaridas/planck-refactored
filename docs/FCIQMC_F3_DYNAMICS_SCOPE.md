@@ -1,8 +1,17 @@
 # Scope: F3 — spawn, death, annihilation
 
-**Scope for in-flight work. Not started.** Step F3 of the ladder in
-`FCIQMC_RESEARCH_SCOPE.md`. F1 (walker state, RNG) and F2 (excitation generator,
-`p_gen`) are landed and gated.
+**DONE 2026-08-31. F3.1 through F3.5 are all landed and gated**
+(`planck-fciqmc-walkers`, ~11 s). Step F3 of the ladder in
+`FCIQMC_RESEARCH_SCOPE.md`; F1 (walker state, RNG) and F2 (excitation generator,
+`p_gen`) preceded it.
+
+**Four claims in this scope did not survive contact, and each is corrected in
+place below rather than quietly dropped:** the timestep bound stated here is
+necessary but not sufficient (2.28x too large); the "too-large `dt` diverges" test
+rests on three separately-false premises and was removed; the projected-energy
+population range initially measured the small-reference regime rather than the
+finite-population bias; and gate tolerances had to be derived from the measurement
+(a standard error) rather than chosen, twice, in opposite directions.
 
 This is the step where the pieces become a method. It is also the first step whose
 output is a **physical number**, so it is the first that can be wrong in a way
@@ -291,7 +300,34 @@ Report `E = Σ_j H_0j c_j / c_0`.
   blind to an index bug that only appears when α and β counts differ. F3 must
   include one open-shell case for the same reason.
 
-### F3.5 — determinism and the reproducibility gate
+### F3.5 — determinism and the reproducibility gate — **DONE 2026-08-31**
+
+Digests a **whole trajectory** — every determinant weight at every step, in
+determinant order, over the raw IEEE bits — and requires the same seed to
+reproduce it exactly while a different seed produces something else.
+
+**Why a trajectory and not a step.** F3.2 already checked single steps from a
+fixed start. That cannot see a defect which *accumulates*: a trajectory feeds each
+step's output into the next, so carried state — a stale buffer, a hash-order sum,
+a generator consulted a different number of times — drifts in over many steps
+while any single step still matches. Mutation-verified: an RNG that drifts between
+calls passes the single-step check and fails the trajectory digest.
+
+**The negative control is load-bearing, and it took a fourth mutation to prove
+it.** Three mutations were caught by the *statistical* gates rather than by
+F3.5 — resetting the RNG per call destroys the variance F3.2 measures, so it never
+reached the reproducibility check. The case that isolates the control is an RNG
+that **advances normally within a run but ignores its seed**: means are correct,
+variance is correct, `1/n_attempts` scaling is correct, and only "different seeds
+must give different trajectories" fails. Without that assertion, a propagator
+whose seed does nothing would be indistinguishable from a correct one.
+
+Also gated: the digest distinguishes a **one-ulp** difference (so "identical"
+means identical, not "similar enough"), and `compress()` — which erases from a
+hash map while iterating — leaves the same survivors regardless of insertion
+order.
+
+### F3.5 (original text) — determinism and the reproducibility gate
 
 - **Verify:** a fixed seed reproduces the entire trajectory bitwise (G3's harness),
   across reruns. Serial only — threading is F5, and §6 of the research scope is the

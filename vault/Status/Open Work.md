@@ -398,6 +398,41 @@ worth doing whether or not FCIQMC happens.
   5553 and 226 sigma. **Generalizable: when the components of a checked quantity
   span orders of magnitude, neither an absolute nor a relative tolerance is safe.**
 
+  **F3 COMPLETE (2026-08-31): F3.1-F3.5 landed and gated** (`planck-fciqmc-walkers`,
+  ~11 s). Deterministic propagation exact against a matvec, stochastic spawning
+  mean-exact against it, convergence to the ground state (overlap > 0.9999), the
+  projected energy with its finite-population bias characterized, and whole-
+  trajectory fixed-seed reproducibility. **FCIQMC now runs**: spawn, death and
+  annihilation compose into a working imaginary-time propagator on a fixed shift.
+  What remains is F4 (population control + initiator) and F5 (parallelism, and the
+  determinism decision in the research scope's section 6).
+
+  **Four scoped claims did not survive contact, all corrected in place:** (1) the
+  timestep bound `2/max|H_ii - S|` is NECESSARY BUT NOT SUFFICIENT — measured 2.28x
+  larger than the true spectral bound — and is additionally computed from the
+  CURRENTLY occupied determinants, returning INFINITY when seeded with a single
+  reference whose diagonal equals the shift. (2) The "too-large dt diverges" test
+  was **removed** after three formulations each rested on a false premise (the
+  population does not collapse, the norm grows at every dt by design, and the
+  converged shape overlaps the true ground state at 1.000000 even at 5x the bound);
+  renormalizing makes it a power iteration whose dominant eigenvector stays the
+  ground state, so a divergence gate belongs with F4. (3) The projected-energy
+  population range initially measured the small-reference regime (c_0 = 1 walker,
+  energies swinging -5.7 to -6.9 against an exact -10.0) rather than the
+  finite-population bias. (4) **Gate tolerances had to be DERIVED from the
+  measurement rather than chosen, twice in opposite directions** — F3.2's absolute
+  0.02 was vacuous (it sat at the effect size, letting a dropped `1/p_gen` through)
+  and a relative bound was noise-dominated, so the standard error is the only
+  correct scale; F3.4's floor is likewise the measurement's resolution, since the
+  apparent bias at the largest population is below what 3000 trials can resolve.
+
+  **One more lesson, from F3.5's negative control:** an RNG that advances normally
+  within a run but IGNORES ITS SEED passes every statistical check — means,
+  variance, `1/n_attempts` scaling — and is caught only by "different seeds must
+  give different trajectories". Three earlier mutations were caught by the
+  statistical gates instead, so it took a fourth to demonstrate the control is
+  load-bearing rather than decorative.
+
   **Q1 CANDIDATE FOUND (2026-08-31): Cr2, and it is TWO ATOMS.** Surveying the
   standard multireference benchmarks against the measured boundary, almost
   everything canonical is already reachable (N2/C2 full valence, benzene and

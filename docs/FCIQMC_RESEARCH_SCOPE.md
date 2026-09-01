@@ -206,9 +206,11 @@ scope originally named is satisfied.**
   plus the brute-force oracle it is gated against and the in-space variant with a
   corrected `p_gen`.
 
+**Built (F3):** the dynamics — spawn, death, annihilation on a fixed shift, the
+projected energy, and the reproducibility gate.
+
 **Still to build:**
 
-- **The dynamics** — spawn, death, annihilation on a fixed shift (F3).
 - **Population control.** Shift adjustment, walker targets, and the initiator
   approximation (i-FCIQMC), which is effectively mandatory beyond toy systems (F4).
 - **Parallelism**, and the determinism decision in §6 (F5).
@@ -249,10 +251,25 @@ Three findings from it are worth carrying into F3:
   closed-shell, so an index bug that only manifests when α and β counts differ had
   zero coverage. F3's fixtures must include an open-shell case for the same reason.
 
-**F3 — spawn / death / annihilation on a fixed shift.** The core loop, no
-population control. Scoped in `FCIQMC_F3_DYNAMICS_SCOPE.md`. *Verify:* on
-`h2_fci_sto3g` (4 determinants) the walker distribution converges to the known
-ground state; the projected energy is within 3σ via G1+G2.
+**F3 — spawn / death / annihilation on a fixed shift. LANDED 2026-08-31**, in
+`FCIQMC_F3_DYNAMICS_SCOPE.md`. Deterministic propagation exact against a matvec,
+stochastic spawning mean-exact against that, convergence to the ground state
+(overlap > 0.9999), the projected energy with its finite-population bias
+characterized, and whole-trajectory fixed-seed reproducibility. **The method now
+runs.**
+
+Two findings that bind the remaining steps:
+
+- **Gate tolerances must be derived from the measurement, not chosen.** F3.2's
+  absolute tolerance was vacuous (it sat at the effect size, letting a dropped
+  `1/p_gen` through); a relative one was noise-dominated. The standard error is
+  the only scale correct across components spanning orders of magnitude. F3.4 hit
+  the same wall from the other side — its apparent bias at the largest population
+  is below what the trial count can resolve.
+- **A divergence gate for the timestep belongs here, in F4.** F3 could not build
+  one: renormalizing each iteration turns the propagation into a power iteration
+  whose dominant eigenvector stays the ground state at every `dt` tried, so
+  "unstable" has nowhere to show. With population control it does.
 
 **F4 — shift control and the initiator approximation.** *Verify:* population
 stabilises at the target; on N2/STO-3G the energy is within 3σ of the exact FCI, and

@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <algorithm>
 #include <map>
 #include <tuple>
@@ -2072,6 +2073,140 @@ static void test_projected_energy_bias_shrinks_with_population()
     }
 }
 
+// ---------------------------------------------------------------------------
+// F3.5 -- fixed-seed reproducibility of a whole trajectory
+// ---------------------------------------------------------------------------
+//
+// test_stochastic_reproducible (F3.2) checks single steps from a FIXED start.
+// That cannot see a defect which accumulates: a trajectory feeds each step's
+// output into the next, so state carried between iterations -- a stale buffer, a
+// hash-order-dependent sum, a generator consulted a different number of times --
+// drifts in over many steps while any single step still matches.
+//
+// This is the gate the FCIQMC research scope names as PRIMARY, because it is the
+// one that survives at any system size: the statistical gate needs a deterministic
+// reference and so only ever runs on small systems, while a fixed seed can be
+// checked on Cr2 CAS(12,18) where no reference exists.
+
+// Run a trajectory and digest it: every determinant weight at every recorded
+// step, in a deterministic order. Returns a checksum over the raw bits.
+static std::uint64_t trajectory_digest(const ToyHamiltonian &toy, int n_act,
+                                       std::uint64_t seed, int n_steps,
+                                       double dt, double shift)
+{
+    const auto ops = toy.ops(n_act);
+    RandomSource rng(seed);
+    WalkerPopulation pop;
+    pop.add(toy.dets[0], 100.0);
+
+    std::uint64_t h = 0xcbf29ce484222325ULL;   // FNV-1a offset basis
+    auto mix_bits = [&h](double v) {
+        std::uint64_t bits = 0;
+        static_assert(sizeof(bits) == sizeof(v), "double must be 64-bit");
+        std::memcpy(&bits, &v, sizeof(bits));
+        h ^= bits;
+        h *= 0x100000001b3ULL;
+    };
+
+    for (int step = 0; step < n_steps; ++step)
+    {
+        pop = propagate_stochastic(pop, n_act, ops, dt, shift, rng);
+        pop.compress(1e-14);
+
+        // Digest in DETERMINANT order, not hash order -- otherwise the digest
+        // itself would be non-reproducible and the test would fail for a reason
+        // unrelated to the dynamics.
+        for (const auto &d : toy.dets)
+            mix_bits(pop.weight_at(d));
+    }
+    return h;
+}
+
+static void test_trajectory_is_reproducible()
+{
+    struct Case { int n_act, na, nb; const char *name; };
+    const Case cases[] = {
+        {4, 2, 2, "4 orbitals closed shell"},
+        {5, 3, 2, "5 orbitals OPEN shell"},
+    };
+
+    for (const auto &c : cases)
+    {
+        const ToyHamiltonian toy(c.n_act, c.na, c.nb);
+        const auto ops = toy.ops(c.n_act);
+        WalkerPopulation whole;
+        for (const auto &d : toy.dets)
+            whole.add(d, 1.0);
+        const double dt = 0.05 * max_stable_timestep(whole, ops, -2.0);
+
+        // Same seed, twice: bitwise identical over a long trajectory.
+        const auto d1 = trajectory_digest(toy, c.n_act, 12345, 300, dt, -2.0);
+        const auto d2 = trajectory_digest(toy, c.n_act, 12345, 300, dt, -2.0);
+        if (d1 != d2)
+        {
+            std::printf("  [FAIL] %s: same seed gave different trajectories\n", c.name);
+            ++g_failures;
+            continue;
+        }
+
+        // NEGATIVE CONTROL: a different seed must give a different trajectory.
+        // Without this, a propagator that ignored its RNG entirely would pass the
+        // check above trivially.
+        const auto d3 = trajectory_digest(toy, c.n_act, 54321, 300, dt, -2.0);
+        if (d1 == d3)
+        {
+            std::printf("  [FAIL] %s: different seeds gave the SAME trajectory "
+                        "(is the RNG consulted at all?)\n", c.name);
+            ++g_failures;
+        }
+    }
+}
+
+static void test_trajectory_digest_is_sensitive()
+{
+    // The digest must notice a single-ulp change in one weight at one step --
+    // otherwise "identical trajectories" means only "similar enough", which is
+    // exactly the tolerance this gate exists to avoid.
+    std::uint64_t h1 = 0xcbf29ce484222325ULL, h2 = 0xcbf29ce484222325ULL;
+    auto mix = [](std::uint64_t &h, double v) {
+        std::uint64_t bits = 0;
+        std::memcpy(&bits, &v, sizeof(bits));
+        h ^= bits;
+        h *= 0x100000001b3ULL;
+    };
+    mix(h1, 1.0);
+    mix(h1, 2.0);
+    mix(h2, 1.0);
+    mix(h2, std::nextafter(2.0, 3.0));   // one ulp away
+    check(h1 != h2, "the trajectory digest distinguishes a one-ulp difference");
+}
+
+static void test_compression_does_not_break_reproducibility()
+{
+    // compress() erases from a hash map while iterating. If that ever became
+    // order-dependent in a way that changed WHICH determinants survive, two runs
+    // with the same seed could diverge. Pin it: the surviving set must be
+    // identical regardless of insertion order.
+    const ToyHamiltonian toy(4, 2, 2);
+
+    WalkerPopulation a, b;
+    for (std::size_t i = 0; i < toy.dets.size(); ++i)
+        a.add(toy.dets[i], (i % 3 == 0) ? 1e-16 : 1.0);
+    for (std::size_t i = toy.dets.size(); i > 0; --i)
+        b.add(toy.dets[i - 1], ((i - 1) % 3 == 0) ? 1e-16 : 1.0);
+
+    const std::size_t removed_a = a.compress(1e-14);
+    const std::size_t removed_b = b.compress(1e-14);
+    check(removed_a == removed_b, "compress removes the same count regardless of order");
+
+    for (const auto &d : toy.dets)
+        if (a.weight_at(d) != b.weight_at(d))
+        {
+            check(false, "compress leaves the same survivors regardless of order");
+            return;
+        }
+}
+
 int main()
 {
     std::printf("F1 -- FCIQMC walker container and RNG policy\n");
@@ -2139,6 +2274,11 @@ int main()
     test_projected_energy_exact_on_converged_state();
     test_projected_energy_rejects_small_reference();
     test_projected_energy_bias_shrinks_with_population();
+
+    std::printf("F3.5 -- fixed-seed trajectory reproducibility\n");
+    test_trajectory_is_reproducible();
+    test_trajectory_digest_is_sensitive();
+    test_compression_does_not_break_reproducibility();
 
     if (g_failures == 0)
     {
