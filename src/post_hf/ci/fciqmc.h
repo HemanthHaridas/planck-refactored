@@ -397,6 +397,41 @@ namespace HartreeFock::Correlation::CI::QMC
         double dt,
         double shift);
 
+    // Apply one imaginary-time iteration with STOCHASTIC spawning (F3.2).
+    //
+    // Same dynamics as propagate_deterministic, but instead of visiting every
+    // connection it draws `n_spawn_attempts` of them per occupied determinant and
+    // reweights each by 1/p_gen. That is what makes the method scale: the cost per
+    // walker is independent of the connection count, which for the Cr2 target is
+    // 7308.
+    //
+    // WHY THIS IS UNBIASED. A child j is drawn with probability p_gen(j) and
+    // credited -dt * H_ij * c_i / p_gen(j), so its expected contribution is
+    // exactly -dt * H_ij * c_i -- the deterministic value. Verified numerically
+    // with a deliberately non-uniform p_gen before this was written.
+    //
+    // THE 1/p_gen DIVISION IS THE DANGEROUS PART, and F2.5 established why in a
+    // way that applies directly here: when a sampled quantity is used as a
+    // DIVISOR, checking that the estimator is unbiased is the wrong test, because
+    // E[1/X] != 1/E[X]. The per-call acceptance-rate estimate was unbiased for
+    // p_gen (mean correct to 0.1 %) and 1.72x wrong in the 1/p_gen the spawn uses.
+    // Here p_gen comes straight from the generator and is a deterministic function
+    // of the draw, not an estimate -- which is precisely what keeps this safe. Any
+    // future change that makes p_gen depend on a random measurement re-opens that
+    // trap.
+    //
+    // The DEATH step stays deterministic: it needs no sampling (there is one
+    // diagonal element per determinant), so making it stochastic would add
+    // variance for nothing.
+    WalkerPopulation propagate_stochastic(
+        const WalkerPopulation &population,
+        int n_act,
+        const HamiltonianOps &ham,
+        double dt,
+        double shift,
+        RandomSource &rng,
+        int n_spawn_attempts = 1);
+
 } // namespace HartreeFock::Correlation::CI::QMC
 
 #endif

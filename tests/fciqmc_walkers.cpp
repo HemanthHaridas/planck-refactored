@@ -1411,6 +1411,240 @@ static void test_deterministic_step_linear()
     check(worst < 1e-14, "the propagator is linear in the population");
 }
 
+// ---------------------------------------------------------------------------
+// F3.2 -- stochastic spawning; the MEAN must reproduce F3.1 exactly
+// ---------------------------------------------------------------------------
+
+static void test_stochastic_mean_matches_deterministic()
+{
+    // THE F3.2 assertion. The stochastic spawn draws one connection instead of
+    // visiting all, and reweights by 1/p_gen; its expectation is the deterministic
+    // result exactly. This is a mean of a LINEAR quantity, so -- unlike the
+    // projected energy -- it carries no ratio bias, which is what makes it a clean
+    // test of the 1/p_gen division.
+    struct Case { int n_act, na, nb; const char *name; };
+    const Case cases[] = {
+        {4, 2, 2, "4 orbitals closed shell"},
+        {5, 3, 2, "5 orbitals OPEN shell"},
+    };
+
+    for (const auto &c : cases)
+    {
+        const ToyHamiltonian toy(c.n_act, c.na, c.nb);
+        const auto ops = toy.ops(c.n_act);
+        const double dt = 0.01, shift = -2.0;
+
+        WalkerPopulation start;
+        start.add(toy.dets[0], 1.0);
+        start.add(toy.dets[1], -0.6);
+
+        const auto exact = propagate_deterministic(start, c.n_act, ops, dt, shift);
+
+        // Average the stochastic step over many independent runs.
+        const int n_runs = 200000;
+        std::map<std::pair<CIString, CIString>, double> sum, sumsq;
+        RandomSource rng(20250901);
+        for (int r = 0; r < n_runs; ++r)
+        {
+            const auto step = propagate_stochastic(start, c.n_act, ops, dt, shift, rng);
+            // Accumulate for EVERY determinant the deterministic step reaches, so
+            // a component that is zero in this draw still contributes a zero to
+            // its variance -- otherwise the standard error is computed from the
+            // wrong sample count.
+            for (const auto &[det, w_exact] : exact)
+            {
+                const double w = step.weight_at(det);
+                sum[{det.alpha, det.beta}] += w;
+                sumsq[{det.alpha, det.beta}] += w * w;
+            }
+        }
+
+        // Compare against each component's own STANDARD ERROR, not a fixed
+        // tolerance.
+        //
+        // A fixed absolute bound requires guessing the scale and getting it wrong
+        // makes the test vacuous: a first version used 0.02, which happened to sit
+        // right at the size of the effect from dropping 1/p_gen (spawn magnitudes
+        // here span 0.005 to 0.4 across classes), so that mutation PASSED. A fixed
+        // relative bound has the opposite problem -- it is dominated by sampling
+        // noise on the smallest components. The standard error is the only scale
+        // that is correct for every component at once.
+        double worst_sigma = 0.0;
+        for (const auto &[det, w_exact] : exact)
+        {
+            const auto key = std::make_pair(det.alpha, det.beta);
+            const double mean = sum[key] / n_runs;
+            const double var = std::max(0.0, sumsq[key] / n_runs - mean * mean);
+            const double stderr_ = std::sqrt(var / n_runs);
+            if (stderr_ <= 0.0)
+            {
+                // Deterministic component (the death term): must match exactly.
+                worst_sigma = std::max(worst_sigma,
+                                       std::abs(mean - w_exact) > 1e-12 ? 1e9 : 0.0);
+                continue;
+            }
+            worst_sigma = std::max(worst_sigma, std::abs(mean - w_exact) / stderr_);
+        }
+        // Every determinant the stochastic step reached must be one the
+        // deterministic step reaches too.
+        for (const auto &[key, total] : sum)
+        {
+            if (std::abs(total / n_runs) < 1e-9)
+                continue;
+            if (exact.weight_at(DetKey{key.first, key.second}) == 0.0)
+            {
+                std::printf("  [FAIL] %s: stochastic step reached a determinant the "
+                            "deterministic step does not\n", c.name);
+                ++g_failures;
+                break;
+            }
+        }
+        if (!(worst_sigma <= 5.0))
+        {
+            std::printf("  [FAIL] %s: stochastic mean differs from deterministic by "
+                        "%.1f sigma\n", c.name, worst_sigma);
+            ++g_failures;
+        }
+    }
+}
+
+static void test_stochastic_variance_falls_with_attempts()
+{
+    // More spawn attempts per parent must reduce the variance of the step, as
+    // 1/n_attempts. A spawn that is right in the mean but has wrong variance
+    // scaling usually means p_gen is inconsistent with the sampling rather than
+    // wrong by a constant factor -- so this catches a class the mean test does
+    // not.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    const double dt = 0.01, shift = -2.0;
+
+    WalkerPopulation start;
+    start.add(toy.dets[0], 1.0);
+
+    const auto target = toy.dets[3];   // watch one specific child
+
+    std::vector<double> variances;
+    for (int attempts : {1, 4, 16})
+    {
+        RandomSource rng(777);
+        const int n_runs = 20000;
+        double s1 = 0.0, s2 = 0.0;
+        for (int r = 0; r < n_runs; ++r)
+        {
+            const auto step = propagate_stochastic(start, 4, ops, dt, shift, rng, attempts);
+            const double w = step.weight_at(target);
+            s1 += w;
+            s2 += w * w;
+        }
+        const double mean = s1 / n_runs;
+        variances.push_back(s2 / n_runs - mean * mean);
+    }
+
+    // variance(1 attempt) / variance(4 attempts) should be ~4, and /16 ~16.
+    check(variances[0] > 0.0, "the stochastic step actually has variance");
+    const double r4 = variances[0] / variances[1];
+    const double r16 = variances[0] / variances[2];
+    if (!(r4 > 2.5 && r4 < 6.0) || !(r16 > 9.0 && r16 < 25.0))
+    {
+        std::printf("  [FAIL] variance does not fall as 1/n_attempts "
+                    "(ratios %.2f at 4, %.2f at 16; want ~4 and ~16)\n", r4, r16);
+        ++g_failures;
+    }
+}
+
+static void test_stochastic_attempts_do_not_rescale()
+{
+    // Raising n_spawn_attempts must not change the EXPECTED step -- only its
+    // variance. If the per-attempt weight split were missing, more attempts would
+    // silently multiply the off-diagonal part of H.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    const double dt = 0.01, shift = -2.0;
+
+    WalkerPopulation start;
+    start.add(toy.dets[0], 1.0);
+    const auto exact = propagate_deterministic(start, 4, ops, dt, shift);
+
+    for (int attempts : {1, 8})
+    {
+        RandomSource rng(31415);
+        const int n_runs = 200000;
+        std::map<std::pair<CIString, CIString>, double> sum, sumsq;
+        for (int r = 0; r < n_runs; ++r)
+        {
+            const auto step = propagate_stochastic(start, 4, ops, dt, shift, rng, attempts);
+            for (const auto &[det, w_exact] : exact)
+            {
+                const double w = step.weight_at(det);
+                sum[{det.alpha, det.beta}] += w;
+                sumsq[{det.alpha, det.beta}] += w * w;
+            }
+        }
+        // Standard-error comparison, for the same reason as the mean test above.
+        double worst = 0.0;
+        for (const auto &[det, w_exact] : exact)
+        {
+            const auto key = std::make_pair(det.alpha, det.beta);
+            const double mean = sum[key] / n_runs;
+            const double var = std::max(0.0, sumsq[key] / n_runs - mean * mean);
+            const double stderr_ = std::sqrt(var / n_runs);
+            if (stderr_ <= 0.0)
+                continue;
+            worst = std::max(worst, std::abs(mean - w_exact) / stderr_);
+        }
+        if (!(worst <= 5.0))
+        {
+            std::printf("  [FAIL] n_spawn_attempts=%d changes the expected step "
+                        "(off by %.1f sigma)\n", attempts, worst);
+            ++g_failures;
+        }
+    }
+}
+
+static void test_stochastic_death_is_exact()
+{
+    // The death step is deterministic even in the stochastic propagator, so a
+    // population with NO connections must evolve exactly. This isolates the
+    // diagonal from the sampling.
+    const ToyHamiltonian toy(2, 1, 1);
+    // Build ops whose off-diagonal is identically zero: only death remains.
+    HamiltonianOps death_only{
+        [](const DetKey &, const DetKey &) { return 0.0; },
+        toy.ops(2).diagonal};
+
+    WalkerPopulation start;
+    start.add(toy.dets[0], 3.0);
+    RandomSource rng(1);
+    const auto step = propagate_stochastic(start, 2, death_only, 0.01, -2.0, rng);
+
+    const double diag = death_only.diagonal(toy.dets[0]);
+    const double want = 3.0 * (1.0 - 0.01 * (diag - (-2.0)));
+    check_close(step.weight_at(toy.dets[0]), want, 1e-15,
+                "the death step is exact even in the stochastic propagator");
+}
+
+static void test_stochastic_reproducible()
+{
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    WalkerPopulation start;
+    start.add(toy.dets[0], 1.0);
+
+    RandomSource a(2718), b(2718);
+    for (int i = 0; i < 200; ++i)
+    {
+        const auto sa = propagate_stochastic(start, 4, ops, 0.01, -2.0, a);
+        const auto sb = propagate_stochastic(start, 4, ops, 0.01, -2.0, b);
+        for (const auto &[det, w] : sa)
+            if (w != sb.weight_at(det))
+            {
+                check(false, "same seed must reproduce the stochastic step bitwise");
+                return;
+            }
+    }
+}
+
 int main()
 {
     std::printf("F1 -- FCIQMC walker container and RNG policy\n");
@@ -1461,6 +1695,13 @@ int main()
     test_deterministic_step_only_visits_connections();
     test_deterministic_step_annihilates();
     test_deterministic_step_linear();
+
+    std::printf("F3.2 -- stochastic spawning reproduces the deterministic mean\n");
+    test_stochastic_mean_matches_deterministic();
+    test_stochastic_variance_falls_with_attempts();
+    test_stochastic_attempts_do_not_rescale();
+    test_stochastic_death_is_exact();
+    test_stochastic_reproducible();
 
     if (g_failures == 0)
     {

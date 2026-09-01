@@ -406,6 +406,56 @@ namespace HartreeFock::Correlation::CI::QMC
         return next;
     }
 
+    WalkerPopulation propagate_stochastic(
+        const WalkerPopulation &population,
+        int n_act,
+        const HamiltonianOps &ham,
+        double dt,
+        double shift,
+        RandomSource &rng,
+        int n_spawn_attempts)
+    {
+        WalkerPopulation next;
+        if (n_spawn_attempts < 1)
+            return next;
+
+        for (const auto &[det, weight] : population)
+        {
+            if (weight == 0.0)
+                continue;
+
+            // DEATH: deterministic, exactly as in propagate_deterministic. There
+            // is one diagonal element per determinant, so sampling it would add
+            // variance and buy nothing.
+            const double diag = ham.diagonal(det);
+            next.add(det, weight * (1.0 - dt * (diag - shift)));
+
+            // SPAWN: draw connections instead of enumerating them. Each attempt
+            // carries 1/n_spawn_attempts of the parent's weight so that the total
+            // expected spawn is independent of how many attempts are made --
+            // otherwise raising n_spawn_attempts would silently scale the
+            // Hamiltonian.
+            const double per_attempt = weight / static_cast<double>(n_spawn_attempts);
+            for (int attempt = 0; attempt < n_spawn_attempts; ++attempt)
+            {
+                const auto exc = draw_excitation(det, n_act, rng);
+                if (!exc.valid || exc.p_gen <= 0.0)
+                    continue;
+
+                const double h_ij = ham.off_diagonal(det, exc.det);
+                if (h_ij == 0.0)
+                    continue;
+
+                // The 1/p_gen reweighting. p_gen here is a deterministic property
+                // of the draw, not an estimate -- see the header note on why that
+                // distinction is load-bearing.
+                next.add(exc.det, -dt * h_ij * per_attempt / exc.p_gen);
+            }
+        }
+
+        return next;
+    }
+
     Weight WalkerPopulation::total_population() const noexcept
     {
         // Summed in hash order, which is not reproducible across rehashes. This is
