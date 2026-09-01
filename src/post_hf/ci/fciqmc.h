@@ -359,6 +359,44 @@ namespace HartreeFock::Correlation::CI::QMC
         const InSpacePredicate &in_space,
         int n_samples = 10000);
 
+    // ------------------------------------------------------------------
+    // Dynamics (scope step F3)
+    // ------------------------------------------------------------------
+
+    // The Hamiltonian the dynamics need, supplied as callbacks.
+    //
+    // Deliberately not tied to h_eff/ga: F3 needs only "give me H_ij" and "give
+    // me H_ii", and taking them as functions lets the gate drive the dynamics
+    // with an independently-constructed matrix. That independence is the point of
+    // F3.1 -- a test that shared the matrix-element code with the thing it checks
+    // would verify consistency rather than correctness.
+    struct HamiltonianOps
+    {
+        std::function<double(const DetKey &, const DetKey &)> off_diagonal;
+        std::function<double(const DetKey &)> diagonal;
+    };
+
+    // Apply one imaginary-time iteration: c <- c - dt * (H - S) * c.
+    //
+    // This is the DETERMINISTIC form (scope step F3.1). It visits every
+    // connection via the brute-force oracle rather than sampling, so one call is
+    // exactly a matrix-vector product and can be checked against a dense H to
+    // machine precision. Its job is to establish that the dynamics are right
+    // before the sampling is introduced, so that any later failure is
+    // attributable to one or the other.
+    //
+    // The three steps of the method appear here in order:
+    //   SPAWN     -- for each occupied i, add -dt * H_ij * c_i to every connected j
+    //   DEATH     -- scale c_i by (1 - dt * (H_ii - S))
+    //   ANNIHILATE -- implicit: children accumulate into a determinant-keyed map,
+    //                 so opposite signs on the same determinant cancel
+    WalkerPopulation propagate_deterministic(
+        const WalkerPopulation &population,
+        int n_act,
+        const HamiltonianOps &ham,
+        double dt,
+        double shift);
+
 } // namespace HartreeFock::Correlation::CI::QMC
 
 #endif

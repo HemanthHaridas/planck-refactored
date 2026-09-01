@@ -369,6 +369,43 @@ namespace HartreeFock::Correlation::CI::QMC
         return static_cast<double>(accepted) / static_cast<double>(n_samples);
     }
 
+    WalkerPopulation propagate_deterministic(
+        const WalkerPopulation &population,
+        int n_act,
+        const HamiltonianOps &ham,
+        double dt,
+        double shift)
+    {
+        WalkerPopulation next;
+
+        for (const auto &[det, weight] : population)
+        {
+            if (weight == 0.0)
+                continue;
+
+            // DEATH (and survival): the diagonal term. Written as a scaling of
+            // the parent's own weight rather than a separate subtraction, which
+            // is the same arithmetic and makes the (1 - dt*(H_ii - S)) factor
+            // visible.
+            const double diag = ham.diagonal(det);
+            next.add(det, weight * (1.0 - dt * (diag - shift)));
+
+            // SPAWN: every connection, weighted by the off-diagonal element.
+            // Enumerating rather than sampling is what makes this exact.
+            for (const auto &exc : enumerate_connections(det, n_act))
+            {
+                const double h_ij = ham.off_diagonal(det, exc.det);
+                if (h_ij == 0.0)
+                    continue;
+                // ANNIHILATION happens here, in add(): a child of opposite sign
+                // landing on an already-occupied determinant cancels against it.
+                next.add(exc.det, -dt * h_ij * weight);
+            }
+        }
+
+        return next;
+    }
+
     Weight WalkerPopulation::total_population() const noexcept
     {
         // Summed in hash order, which is not reproducible across rehashes. This is

@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <algorithm>
 #include <map>
+#include <tuple>
 #include <vector>
 
 using namespace HartreeFock::Correlation::CI::QMC;
@@ -1149,6 +1150,267 @@ static void test_per_call_acceptance_estimate_is_biased()
           "per-call estimator is biased in 1/p_gen, which is what the spawn uses");
 }
 
+// ---------------------------------------------------------------------------
+// F3.1 -- one deterministic iteration, checked against a dense matrix-vector
+//         product to machine precision
+// ---------------------------------------------------------------------------
+//
+// The reference Hamiltonian is built HERE, independently of the CI layer. A test
+// that reused build_ci_hamiltonian_dense would check that the dynamics agree with
+// the same matrix-element code they call -- consistency, not correctness. This
+// way the only shared thing is the determinant convention.
+
+// A small synthetic Hamiltonian over an explicitly enumerated determinant space.
+struct ToyHamiltonian
+{
+    std::vector<DetKey> dets;
+    std::map<std::pair<CIString, CIString>, int> index;
+    std::vector<std::vector<double>> H;
+
+    // Deterministic pseudo-random symmetric matrix: H_ij depends only on the
+    // determinant pair, so it is reproducible and order-independent.
+    static double element(const DetKey &a, const DetKey &b)
+    {
+        std::uint64_t x = a.alpha * 0x9e3779b97f4a7c15ULL + a.beta * 0xbf58476d1ce4e5b9ULL;
+        std::uint64_t y = b.alpha * 0x9e3779b97f4a7c15ULL + b.beta * 0xbf58476d1ce4e5b9ULL;
+        std::uint64_t s = x ^ y;   // symmetric in a,b
+        s = (s ^ (s >> 30)) * 0xbf58476d1ce4e5b9ULL;
+        s = (s ^ (s >> 27)) * 0x94d049bb133111ebULL;
+        s ^= (s >> 31);
+        return (static_cast<double>(s % 2000) / 1000.0) - 1.0;   // in [-1, 1)
+    }
+
+    ToyHamiltonian(int n_act, int na, int nb)
+    {
+        // Enumerate the full determinant space by brute force.
+        for (CIString a = 0; a < (CIString{1} << n_act); ++a)
+        {
+            if (std::popcount(a) != na)
+                continue;
+            for (CIString b = 0; b < (CIString{1} << n_act); ++b)
+            {
+                if (std::popcount(b) != nb)
+                    continue;
+                index[{a, b}] = static_cast<int>(dets.size());
+                dets.push_back(DetKey{a, b});
+            }
+        }
+        const std::size_t n = dets.size();
+        H.assign(n, std::vector<double>(n, 0.0));
+        // Fill ONLY connected pairs. A physical Hamiltonian is exactly zero
+        // between determinants differing by more than a double excitation -- it
+        // is a two-body operator. Filling every entry would not be a Hamiltonian
+        // at all, and a reference matvec built from it disagrees with any correct
+        // propagator (measured: 9 of 35 pairs unconnected at n_act=4, na=nb=2,
+        // giving an 8.5e-2 discrepancy).
+        for (std::size_t i = 0; i < n; ++i)
+            for (const auto &e : enumerate_connections(dets[i], n_act))
+            {
+                const auto it = index.find({e.det.alpha, e.det.beta});
+                if (it == index.end())
+                    continue;
+                H[i][static_cast<std::size_t>(it->second)] = element(dets[i], e.det);
+            }
+        // Diagonal made dominant and negative, as a real CI diagonal is.
+        for (std::size_t i = 0; i < n; ++i)
+            H[i][i] = -2.0 - 0.1 * static_cast<double>(i);
+    }
+
+    HamiltonianOps ops(int n_act) const
+    {
+        // Only elements between CONNECTED determinants are nonzero -- the
+        // Hamiltonian is a two-body operator. The oracle decides connectivity, so
+        // the ops agree with what propagate_deterministic will visit.
+        auto off = [this, n_act](const DetKey &i, const DetKey &j) -> double {
+            const auto ii = index.find({i.alpha, i.beta});
+            const auto jj = index.find({j.alpha, j.beta});
+            if (ii == index.end() || jj == index.end())
+                return 0.0;
+            if (ii->second == jj->second)
+                return 0.0;
+            return H[static_cast<std::size_t>(ii->second)][static_cast<std::size_t>(jj->second)];
+        };
+        auto diag = [this](const DetKey &i) -> double {
+            const auto ii = index.find({i.alpha, i.beta});
+            if (ii == index.end())
+                return 0.0;
+            return H[static_cast<std::size_t>(ii->second)][static_cast<std::size_t>(ii->second)];
+        };
+        return HamiltonianOps{off, diag};
+    }
+};
+
+static void test_toy_hamiltonian_is_symmetric()
+{
+    // The toy H is filled by walking each row's connections. Reachability is
+    // symmetric (established in the FCI sigma-build work), so the result should
+    // be symmetric -- but assert it, because an asymmetric "Hamiltonian" would
+    // make the matvec reference meaningless while every other check still passed.
+    for (const auto &[n_act, na, nb] : std::vector<std::tuple<int, int, int>>{
+             {4, 2, 2}, {5, 3, 2}})
+    {
+        const ToyHamiltonian toy(n_act, na, nb);
+        const std::size_t n = toy.dets.size();
+        double worst = 0.0;
+        for (std::size_t i = 0; i < n; ++i)
+            for (std::size_t j = 0; j < n; ++j)
+                worst = std::max(worst, std::abs(toy.H[i][j] - toy.H[j][i]));
+        check(worst < 1e-15, "the toy Hamiltonian is symmetric");
+    }
+}
+
+static void test_deterministic_step_is_a_matvec()
+{
+    // The core F3.1 assertion. One propagate_deterministic call must equal
+    // (1 - dt(H - S)) c computed by plain matrix arithmetic, to machine
+    // precision. No statistics: if this does not hold exactly, nothing built on
+    // top is worth debugging.
+    struct Case { int n_act, na, nb; const char *name; };
+    const Case cases[] = {
+        {2, 1, 1, "H2-like 2 orbitals"},
+        {4, 2, 2, "4 orbitals closed shell"},
+        {5, 3, 2, "5 orbitals OPEN shell"},   // F2's lesson: closed shell alone is blind
+    };
+
+    for (const auto &c : cases)
+    {
+        const ToyHamiltonian toy(c.n_act, c.na, c.nb);
+        const auto ops = toy.ops(c.n_act);
+        const std::size_t n = toy.dets.size();
+        const double dt = 0.01;
+        const double shift = -2.0;
+
+        // A start vector with mixed signs, so annihilation is exercised.
+        std::vector<double> c_vec(n);
+        for (std::size_t i = 0; i < n; ++i)
+            c_vec[i] = ((i % 3) == 0 ? 1.0 : -0.5) * (1.0 + 0.1 * static_cast<double>(i));
+
+        WalkerPopulation pop;
+        for (std::size_t i = 0; i < n; ++i)
+            pop.add(toy.dets[i], c_vec[i]);
+
+        const auto next = propagate_deterministic(pop, c.n_act, ops, dt, shift);
+
+        // Reference: (1 - dt(H - S)) c, by hand.
+        std::vector<double> want(n, 0.0);
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            double acc = c_vec[i] * (1.0 - dt * (toy.H[i][i] - shift));
+            for (std::size_t j = 0; j < n; ++j)
+            {
+                if (j == i)
+                    continue;
+                // Only connected pairs contribute -- the ops return 0 otherwise,
+                // and propagate_deterministic only visits connections.
+                const double h = ops.off_diagonal(toy.dets[j], toy.dets[i]);
+                if (h == 0.0)
+                    continue;
+                acc += -dt * h * c_vec[j];
+            }
+            want[i] = acc;
+        }
+
+        double worst = 0.0;
+        for (std::size_t i = 0; i < n; ++i)
+            worst = std::max(worst, std::abs(next.weight_at(toy.dets[i]) - want[i]));
+
+        if (!(worst < 1e-12))
+        {
+            std::printf("  [FAIL] %s: deterministic step differs from matvec by %.3e\n",
+                        c.name, worst);
+            ++g_failures;
+        }
+    }
+}
+
+static void test_deterministic_step_only_visits_connections()
+{
+    // A determinant unreachable in one step must receive nothing. If the spawn
+    // visited unconnected determinants the matvec check above would still pass
+    // whenever those elements happen to be zero -- so assert reachability
+    // directly.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+
+    WalkerPopulation pop;
+    pop.add(toy.dets[0], 1.0);
+    const auto next = propagate_deterministic(pop, 4, ops, 0.01, -2.0);
+
+    std::map<std::pair<CIString, CIString>, int> allowed;
+    allowed[{toy.dets[0].alpha, toy.dets[0].beta}] = 1;   // itself, via death
+    for (const auto &e : enumerate_connections(toy.dets[0], 4))
+        allowed[{e.det.alpha, e.det.beta}] = 1;
+
+    for (const auto &[det, w] : next)
+        if (w != 0.0 && allowed.find({det.alpha, det.beta}) == allowed.end())
+        {
+            check(false, "deterministic step touched an unconnected determinant");
+            return;
+        }
+}
+
+static void test_deterministic_step_annihilates()
+{
+    // Two parents spawning onto the same child with opposite signs must cancel.
+    // This is the property that makes FCIQMC work rather than merely sample, and
+    // it must survive the propagation, not just the container.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+
+    WalkerPopulation a;
+    a.add(toy.dets[0], 1.0);
+    const auto from_a = propagate_deterministic(a, 4, ops, 0.01, -2.0);
+
+    WalkerPopulation b;
+    b.add(toy.dets[0], -1.0);
+    const auto from_b = propagate_deterministic(b, 4, ops, 0.01, -2.0);
+
+    // Propagating (+1) and (-1) separately must give exactly opposite results;
+    // propagating their sum must give zero.
+    WalkerPopulation both;
+    both.add(toy.dets[0], 1.0);
+    both.add(toy.dets[0], -1.0);
+    const auto from_both = propagate_deterministic(both, 4, ops, 0.01, -2.0);
+
+    double worst_opposite = 0.0, worst_zero = 0.0;
+    for (const auto &[det, w] : from_a)
+    {
+        worst_opposite = std::max(worst_opposite, std::abs(w + from_b.weight_at(det)));
+        worst_zero = std::max(worst_zero, std::abs(from_both.weight_at(det)));
+    }
+    check(worst_opposite < 1e-15, "propagating +c and -c gives exactly opposite populations");
+    check(worst_zero < 1e-15, "a fully annihilated parent spawns nothing");
+}
+
+static void test_deterministic_step_linear()
+{
+    // The propagator is linear: P(a + b) == P(a) + P(b). A nonlinearity here
+    // would mean the dynamics depend on how walkers are grouped, which no correct
+    // implementation can.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    const double dt = 0.02, shift = -2.0;
+
+    WalkerPopulation a, b, sum;
+    a.add(toy.dets[0], 0.7);
+    a.add(toy.dets[1], -0.3);
+    b.add(toy.dets[1], 1.1);
+    b.add(toy.dets[2], 0.5);
+    for (const auto &[det, w] : a)
+        sum.add(det, w);
+    for (const auto &[det, w] : b)
+        sum.add(det, w);
+
+    const auto pa = propagate_deterministic(a, 4, ops, dt, shift);
+    const auto pb = propagate_deterministic(b, 4, ops, dt, shift);
+    const auto ps = propagate_deterministic(sum, 4, ops, dt, shift);
+
+    double worst = 0.0;
+    for (const auto &[det, w] : ps)
+        worst = std::max(worst, std::abs(w - (pa.weight_at(det) + pb.weight_at(det))));
+    check(worst < 1e-14, "the propagator is linear in the population");
+}
+
 int main()
 {
     std::printf("F1 -- FCIQMC walker container and RNG policy\n");
@@ -1192,6 +1454,13 @@ int main()
     test_in_space_rejection_sampling();
     test_in_space_p_gen_is_corrected();
     test_per_call_acceptance_estimate_is_biased();
+
+    std::printf("F3.1 -- deterministic propagation equals a matvec\n");
+    test_toy_hamiltonian_is_symmetric();
+    test_deterministic_step_is_a_matvec();
+    test_deterministic_step_only_visits_connections();
+    test_deterministic_step_annihilates();
+    test_deterministic_step_linear();
 
     if (g_failures == 0)
     {
