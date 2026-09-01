@@ -477,6 +477,51 @@ namespace HartreeFock::Correlation::CI::QMC
     // population-control input.
     Weight ordered_l1_norm(const WalkerPopulation &population);
 
+    // The projected energy (F3.4).
+    //
+    //   E = sum_j H_0j c_j / c_0
+    //
+    // where 0 is a chosen REFERENCE determinant. The sum runs over the reference's
+    // connections (H_0j vanishes elsewhere), so this costs one connection
+    // enumeration per call, not a pass over the population.
+    //
+    // TWO PROPERTIES A CALLER MUST KNOW.
+    //
+    // 1. IT IS BIASED AT FINITE POPULATION. This is a ratio of two stochastic
+    //    quantities, and E[A/B] != E[A]/E[B]. The bias falls roughly as 1/N_walkers
+    //    -- measured on a 4x4 model: -1.8e-3 at 20 walkers, -2.2e-5 at 5120, with
+    //    bias*N constant to within a factor of ~3 across that 256x range. It is a
+    //    known property of the estimator, not a defect to fix, but it means a
+    //    small-population result agreeing to 1e-6 is SUSPICIOUS rather than
+    //    reassuring. Gate the trend, never a single population.
+    //
+    //    The bias is NEGATIVE in that measurement -- the estimator sits below the
+    //    true value -- which is the direction that makes a result look more
+    //    convincingly variational than it is.
+    //
+    // 2. IT IS MEANINGLESS IF c_0 IS SMALL. The reference weight is the
+    //    denominator; if the population has drifted off the reference the ratio is
+    //    noise divided by noise. Returns false in `valid` when |c_0| is below
+    //    `min_reference_weight` rather than returning a number the caller cannot
+    //    distinguish from a good one.
+    //
+    // The other standard estimator -- the shift energy, the value of S that holds
+    // the population stationary -- needs population control and belongs to F4.
+    struct ProjectedEnergy
+    {
+        double numerator = 0.0;    // sum_j H_0j c_j
+        double reference_weight = 0.0;  // c_0
+        double energy = 0.0;       // numerator / c_0, plus H_00
+        bool valid = false;
+    };
+
+    ProjectedEnergy projected_energy(
+        const WalkerPopulation &population,
+        const DetKey &reference,
+        int n_act,
+        const HamiltonianOps &ham,
+        double min_reference_weight = 1e-12);
+
 } // namespace HartreeFock::Correlation::CI::QMC
 
 #endif

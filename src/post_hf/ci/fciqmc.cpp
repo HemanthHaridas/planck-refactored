@@ -492,6 +492,39 @@ namespace HartreeFock::Correlation::CI::QMC
         return total;
     }
 
+    ProjectedEnergy projected_energy(
+        const WalkerPopulation &population,
+        const DetKey &reference,
+        int n_act,
+        const HamiltonianOps &ham,
+        double min_reference_weight)
+    {
+        ProjectedEnergy out;
+        out.reference_weight = population.weight_at(reference);
+
+        if (std::abs(out.reference_weight) < min_reference_weight)
+            return out;   // valid stays false: noise over noise
+
+        // Sum over the reference's connections in a DETERMINISTIC order. The
+        // oracle returns them in a fixed order for a given parent, so this does
+        // not depend on hash iteration -- unlike a pass over the population would.
+        double numerator = 0.0;
+        for (const auto &exc : enumerate_connections(reference, n_act))
+        {
+            const double c_j = population.weight_at(exc.det);
+            if (c_j == 0.0)
+                continue;
+            numerator += ham.off_diagonal(reference, exc.det) * c_j;
+        }
+
+        out.numerator = numerator;
+        // E = H_00 + sum_j H_0j c_j / c_0. The diagonal term is separated because
+        // it is exact -- it carries no sampling noise at all.
+        out.energy = ham.diagonal(reference) + numerator / out.reference_weight;
+        out.valid = true;
+        return out;
+    }
+
     Weight WalkerPopulation::total_population() const noexcept
     {
         // Summed in hash order, which is not reproducible across rehashes. This is

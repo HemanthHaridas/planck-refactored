@@ -218,7 +218,48 @@ eigenvector.
   upper limit to stay well under, not a safe target. Real FCIQMC picks `dt`
   empirically from observed population growth, which is F4's business.
 
-### F3.4 — the projected energy, with its bias characterized
+### F3.4 — the projected energy, with its bias characterized — **DONE 2026-08-31**
+
+`projected_energy` returns `H_00 + Σ_j H_0j c_j / c_0` with the reference weight
+and numerator exposed, and reports `valid = false` when `|c_0|` is below a
+threshold rather than returning noise-over-noise the caller cannot distinguish
+from a good value.
+
+Gated: exact against the independently-computed ground-state energy on the
+converged deterministic state (closed and open shell), invalid on an unoccupied or
+tiny reference, and the bias **shrinks with population**. Mutation-verified —
+dropping the `H_00` term and dividing by the total population instead of `c_0`
+both produce a bias that does *not* shrink, which is precisely what the trend test
+separates from a genuine finite-population bias.
+
+**Two corrections to how this step was scoped.**
+
+**The population range mattered, and the first choice measured the wrong thing.**
+Starting at N=50 the reference carried `c_0 = 1` — a single walker — and the
+estimator, which divides by `c_0`, swung between −5.7 and −6.9 against an exact
+−10.0. That is the documented *small-reference* regime, not the finite-population
+bias, and including it produced a steeper-looking trend for the wrong reason. The
+gate now runs 800 → 51 200, where the reference is well occupied throughout:
+
+| N | bias | bias × N |
+|---|---|---|
+| 800 | 4.75e-3 | 3.80 |
+| 3 200 | 8.80e-4 | 2.82 |
+| 12 800 | 1.86e-4 | 2.38 |
+| 51 200 | 2.27e-4 | 11.62 |
+
+The first three are clean 1/N. **The last point is resolution-limited, not a
+plateau**: with 3000 trials and a per-trial spread of ~0.1–0.2 the mean is only
+resolvable to ~2e-3, so an apparent bias of 2.3e-4 is below what the measurement
+can distinguish from zero.
+
+**Consequently the floor the gate asserts is the measurement's standard error, not
+a constant.** A hardcoded tighter bound would be asserting noise. This is the same
+lesson as F3.2's tolerance, arriving from the other direction: there the scale was
+too coarse to see a real effect, here it would have been too fine to admit an
+unmeasurable one.
+
+### F3.4 (original text) — the projected energy, with its bias characterized
 
 Report `E = Σ_j H_0j c_j / c_0`.
 

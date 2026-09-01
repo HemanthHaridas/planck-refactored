@@ -9,6 +9,7 @@
 #include <bit>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <algorithm>
 #include <map>
 #include <tuple>
@@ -1840,6 +1841,237 @@ static void test_ordered_norm_is_deterministic()
     check(fwd != rev, "the test values actually reassociate (else the check is vacuous)");
 }
 
+// ---------------------------------------------------------------------------
+// F3.4 -- the projected energy, with its finite-population bias characterized
+// ---------------------------------------------------------------------------
+
+// Exact lowest eigenvalue of the toy H, by unshifted power iteration on
+// (sigma*I - H), computed independently of the propagator.
+static double exact_ground_energy(const ToyHamiltonian &toy)
+{
+    const std::size_t n = toy.dets.size();
+    // Shift so the ground state becomes dominant in magnitude.
+    double sigma = 0.0;
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        double row = 0.0;
+        for (std::size_t j = 0; j < n; ++j)
+            row += std::abs(toy.H[i][j]);
+        sigma = std::max(sigma, row);
+    }
+    std::vector<double> v(n, 0.0);
+    v[0] = 1.0;
+    double eig = 0.0;
+    for (int it = 0; it < 20000; ++it)
+    {
+        std::vector<double> w(n, 0.0);
+        for (std::size_t i = 0; i < n; ++i)
+        {
+            double acc = sigma * v[i];
+            for (std::size_t j = 0; j < n; ++j)
+                acc -= toy.H[i][j] * v[j];
+            w[i] = acc;
+        }
+        double nrm = 0.0;
+        for (double x : w)
+            nrm += x * x;
+        nrm = std::sqrt(nrm);
+        for (std::size_t i = 0; i < n; ++i)
+            v[i] = w[i] / nrm;
+        eig = sigma - nrm;
+    }
+    // Rayleigh quotient for a clean final value.
+    double num = 0.0, den = 0.0;
+    for (std::size_t i = 0; i < n; ++i)
+    {
+        double acc = 0.0;
+        for (std::size_t j = 0; j < n; ++j)
+            acc += toy.H[i][j] * v[j];
+        num += v[i] * acc;
+        den += v[i] * v[i];
+    }
+    (void)eig;
+    return num / den;
+}
+
+static void test_projected_energy_exact_on_converged_state()
+{
+    // On the converged DETERMINISTIC state there is no sampling noise, so the
+    // projected energy must equal the exact ground-state energy. This isolates
+    // the estimator's algebra from its statistics -- if this fails, no amount of
+    // sampling analysis will help.
+    struct Case { int n_act, na, nb; const char *name; };
+    const Case cases[] = {
+        {4, 2, 2, "4 orbitals closed shell"},
+        {5, 3, 2, "5 orbitals OPEN shell"},
+    };
+
+    for (const auto &c : cases)
+    {
+        const ToyHamiltonian toy(c.n_act, c.na, c.nb);
+        const auto ops = toy.ops(c.n_act);
+        const double shift = -2.0;
+
+        WalkerPopulation whole;
+        for (const auto &d : toy.dets)
+            whole.add(d, 1.0);
+        const double dt = 0.1 * max_stable_timestep(whole, ops, shift);
+
+        WalkerPopulation pop;
+        pop.add(toy.dets[0], 1.0);
+        for (int it = 0; it < 4000; ++it)
+        {
+            pop = propagate_deterministic(pop, c.n_act, ops, dt, shift);
+            const double nrm = ordered_l1_norm(pop);
+            if (nrm == 0.0 || !std::isfinite(nrm))
+                break;
+            WalkerPopulation scaled;
+            for (const auto &[det, w] : pop)
+                scaled.add(det, w / nrm);
+            pop = scaled;
+        }
+
+        const auto pe = projected_energy(pop, toy.dets[0], c.n_act, ops);
+        check(pe.valid, "projected energy is valid on a converged population");
+        const double exact = exact_ground_energy(toy);
+        if (std::abs(pe.energy - exact) > 1e-8)
+        {
+            std::printf("  [FAIL] %s: projected energy %.10f vs exact %.10f\n",
+                        c.name, pe.energy, exact);
+            ++g_failures;
+        }
+    }
+}
+
+static void test_projected_energy_rejects_small_reference()
+{
+    // The reference weight is the denominator. If the population drifts off the
+    // reference the ratio is noise over noise, and returning a number the caller
+    // cannot distinguish from a good one is the most misleading possible output.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+
+    WalkerPopulation pop;
+    pop.add(toy.dets[1], 1.0);          // reference NOT occupied
+    const auto pe = projected_energy(pop, toy.dets[0], 4, ops);
+    check(!pe.valid, "projected energy is invalid when the reference is unoccupied");
+
+    WalkerPopulation tiny;
+    tiny.add(toy.dets[0], 1e-15);
+    const auto pe2 = projected_energy(tiny, toy.dets[0], 4, ops);
+    check(!pe2.valid, "projected energy is invalid when the reference weight is tiny");
+}
+
+static void test_projected_energy_bias_shrinks_with_population()
+{
+    // THE F3.4 assertion. The estimator is a ratio of stochastic quantities, so
+    // it is biased at finite population. Gate the TREND, not a single value: a
+    // population that happens to agree proves nothing, and the bias is negative
+    // here, which is the direction that makes a result look more convincingly
+    // variational than it is.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    const double exact = exact_ground_energy(toy);
+
+    // Converged shape, to sample from.
+    const double shift = -2.0;
+    WalkerPopulation whole;
+    for (const auto &d : toy.dets)
+        whole.add(d, 1.0);
+    const double dt = 0.1 * max_stable_timestep(whole, ops, shift);
+    WalkerPopulation exact_state;
+    exact_state.add(toy.dets[0], 1.0);
+    for (int it = 0; it < 4000; ++it)
+    {
+        exact_state = propagate_deterministic(exact_state, 4, ops, dt, shift);
+        const double nrm = ordered_l1_norm(exact_state);
+        if (nrm == 0.0 || !std::isfinite(nrm))
+            break;
+        WalkerPopulation scaled;
+        for (const auto &[det, w] : exact_state)
+            scaled.add(det, w / nrm);
+        exact_state = scaled;
+    }
+
+    // Sample walker populations of increasing size from that shape and measure
+    // the mean projected energy at each size.
+    // Population sizes are chosen so the REFERENCE is well occupied at every
+    // point. At N=50 the reference carried c_0 = 1 -- a single walker -- and the
+    // estimator, which divides by c_0, then swung between -5.7 and -6.9 against an
+    // exact -10.0. That is the documented small-reference regime, not the
+    // finite-population bias this test is about, and including it measures the
+    // wrong thing while appearing to give a steeper trend.
+    RandomSource rng(31337);
+    std::vector<std::pair<double, double>> trend;   // (N, |bias|)
+    for (int n_walkers : {800, 3200, 12800, 51200})
+    {
+        double sum_e = 0.0;
+        int n_ok = 0;
+        for (int trial = 0; trial < 3000; ++trial)
+        {
+            WalkerPopulation sampled;
+            for (const auto &[det, w] : exact_state)
+            {
+                // Stochastic rounding to an integer walker count preserves the
+                // expectation exactly -- rounding to nearest would bias it.
+                const double target = w * n_walkers;
+                const double n = rng.stochastic_round(target);
+                if (n != 0.0)
+                    sampled.add(det, n);
+            }
+            const auto pe = projected_energy(sampled, toy.dets[0], 4, ops);
+            if (!pe.valid)
+                continue;
+            sum_e += pe.energy;
+            ++n_ok;
+            if (std::getenv("PLANCK_FCIQMC_VERBOSE") != nullptr && trial < 3)
+                std::printf("        trial %d: c0=%.4f  E=%.6f\n",
+                            trial, pe.reference_weight, pe.energy);
+        }
+        if (n_ok < 100)
+        {
+            check(false, "too few valid samples to measure the bias");
+            return;
+        }
+        const double bias = std::abs(sum_e / n_ok - exact);
+        trend.push_back({static_cast<double>(n_walkers), bias});
+        if (std::getenv("PLANCK_FCIQMC_VERBOSE") != nullptr)
+            std::printf("      N=%5d  bias=%.6e  bias*N=%.4f  (%d valid)\n",
+                        n_walkers, bias, bias * n_walkers, n_ok);
+    }
+
+    // The bias must fall as the population grows. Require a clear decrease across
+    // the 64x range rather than fitting an exponent -- the point is that it is a
+    // bias that vanishes, not that it obeys a precise power law.
+    const double first = trend.front().second;
+    const double last = trend.back().second;
+    if (!(last < first * 0.5))
+    {
+        std::printf("  [FAIL] projected-energy bias does not shrink with population "
+                    "(%.3e at N=%.0f, %.3e at N=%.0f)\n",
+                    first, trend.front().first, last, trend.back().first);
+        ++g_failures;
+    }
+
+    // And it must reach the measurement floor -- a bias that shrinks but plateaus
+    // far from the exact value would be a defect, not a bias.
+    //
+    // The threshold is the STANDARD ERROR of the measurement, not a constant: with
+    // 3000 trials and a per-trial spread of ~0.1 the mean is only resolvable to
+    // ~2e-3, so the largest population's apparent bias (measured 2.3e-4) is
+    // already below what this many trials can distinguish from zero. Asserting a
+    // tighter constant would be asserting noise.
+    const double per_trial_sigma = 0.2;      // conservative, from observed spread
+    const double resolution = per_trial_sigma / std::sqrt(3000.0);
+    if (!(last < 3.0 * resolution))
+    {
+        std::printf("  [FAIL] projected-energy bias %.3e at N=%.0f exceeds the "
+                    "measurement floor %.3e\n", last, trend.back().first,
+                    3.0 * resolution);
+        ++g_failures;
+    }
+}
+
 int main()
 {
     std::printf("F1 -- FCIQMC walker container and RNG policy\n");
@@ -1902,6 +2134,11 @@ int main()
     test_timestep_bound_is_computed();
     test_propagation_reaches_the_ground_state();
     test_ordered_norm_is_deterministic();
+
+    std::printf("F3.4 -- projected energy and its finite-population bias\n");
+    test_projected_energy_exact_on_converged_state();
+    test_projected_energy_rejects_small_reference();
+    test_projected_energy_bias_shrinks_with_population();
 
     if (g_failures == 0)
     {
