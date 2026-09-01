@@ -580,6 +580,28 @@ worth doing whether or not FCIQMC happens.
   a shared RNG), so the test now compares against that control rather than
   asserting an absolute that was never true.
 
+  **F5.1 LANDED (2026-09-01): FCIQMC runs on REAL molecular integrals.** Until now
+  every gate ran on a synthetic Hamiltonian. `run_fciqmc` is dispatched from the
+  driver on `correlation fciqmc`, and on H2/STO-3G both estimators agree with the
+  exact FCI `-1.1372744062`: shift `-1.1375360199` +/- 2.76e-03 (**0.09 sigma**),
+  projected `-1.1373278832` +/- 1.58e-04 (**0.34 sigma**).
+
+  **The integral transform is SHARED, not reimplemented.** `build_all_mo_ci_setup`
+  was extracted from `run_fci` (a move, not a copy) and both paths call it;
+  verified behaviour-neutral, with N2 still giving `-107.6529998854`
+  digit-identical. The Hamiltonian callbacks wrap `slater_condon_element`, so the
+  two paths cannot disagree about the Hamiltonian — only about how they solve it.
+  That is what makes a future disagreement attributable to sampling rather than
+  plumbing.
+
+  Gated by `h2_fciqmc_sto3g`, **the first production consumer of
+  `metric_within_sigma`** (built at G1 and unused until now): both estimators
+  asserted within 5 of their own blocked error bars, and verified non-vacuous
+  against a wrong reference. **Build-hygiene trap:** a monitor watching one file's
+  timestamp fired on a build predating another edit by a minute, so the first run
+  failed against correct source — **watching one file does not prove the build
+  included every edit.**
+
   **Q1 CANDIDATE FOUND (2026-08-31): Cr2, and it is TWO ATOMS.** Surveying the
   standard multireference benchmarks against the measured boundary, almost
   everything canonical is already reachable (N2/C2 full valence, benzene and

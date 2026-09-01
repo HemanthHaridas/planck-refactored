@@ -689,6 +689,7 @@ namespace HartreeFock::IO
                 {"casscf", HartreeFock::PostHF::CASSCF},
                 {"rasscf", HartreeFock::PostHF::RASSCF},
                 {"fci", HartreeFock::PostHF::FCI},
+                {"fciqmc", HartreeFock::PostHF::FCIQMC},
             };
 
         return lookup_enum(_table, value, "Invalid Correlation : ");

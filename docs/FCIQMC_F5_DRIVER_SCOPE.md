@@ -37,7 +37,40 @@ inputs.
 
 ## Steps
 
-### F5.1 — the driver entry point
+### F5.1 — the driver entry point — **DONE 2026-09-01. FCIQMC runs on real integrals.**
+
+`run_fciqmc` (`src/post_hf/fciqmc_driver.{h,cpp}`), dispatched from
+`hf_driver.cpp` on `correlation fciqmc`. Measured on H2/STO-3G against the exact
+FCI `-1.1372744062`:
+
+| estimator | value | blocked error | deviation |
+|---|---|---|---|
+| shift | −1.1375360199 | 2.76e-03 | **0.09σ** |
+| projected | −1.1373278832 | 1.58e-04 | **0.34σ** |
+
+**The integral transform is shared, not reimplemented.** `build_all_mo_ci_setup`
+was *extracted* from `run_fci` — validation, electron counts, the packed-orbital
+and `ci_max_dim` guards, `h_eff` and `ga` — and `run_fci` now calls it. Verified
+behaviour-neutral: the FCI regression cases pass and N2 still gives
+`-107.6529998854`, digit-identical. The Hamiltonian callbacks wrap
+`slater_condon_element`, the same routine the deterministic CI uses, so the two
+paths cannot disagree about the Hamiltonian — only about how they solve it.
+
+**Gated** by `h2_fciqmc_sto3g` (extended suite), the first production consumer of
+`metric_within_sigma`: both estimators asserted within 5 of their *own* blocked
+error bars. Verified non-vacuous — against a deliberately wrong reference it fails
+with the deviation reported in σ.
+
+A collapsed or diverged population is a hard error naming the likely cause, never
+a reported number.
+
+**A build-hygiene trap worth recording.** A monitor watching only
+`fciqmc_driver.cpp`'s timestamp fired on a build that predated the `io.cpp` edit by
+one minute, so the first run failed with "Invalid Correlation : fciqmc" against
+correct source. **Watching one file's timestamp does not prove the build included
+every edit** — check all of them.
+
+### F5.1 (original text) — the driver entry point
 
 `run_fciqmc(Calculator&, const std::vector<ShellPair>&)`, mirroring `run_fci`:
 build the determinant space's integrals the same way, run the propagator under

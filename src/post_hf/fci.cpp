@@ -22,34 +22,12 @@ namespace HartreeFock::Correlation
     using HartreeFock::Correlation::CI::CISolveResult;
     using HartreeFock::Correlation::CI::solve_ci;
 
-    std::expected<void, std::string> run_fci(
+    std::expected<AllMOCISetup, std::string> build_all_mo_ci_setup(
         HartreeFock::Calculator &calc,
-        const std::vector<HartreeFock::ShellPair> &shell_pairs)
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const std::string &tag)
     {
-        const std::string tag = "FCI";
-
-        // ── Reference and method guards ────────────────────────────────────────
-        // FCI here is CASCI over the whole basis; it reuses the spatial-orbital CI
-        // engine, which assumes a single common spatial-orbital set for both spins.
-        // Both RHF and ROHF satisfy that (ROHF stores one common orbital set for
-        // alpha and beta), so either can serve as the reference. The FCI energy is
-        // invariant to the orbital choice; only the correlation energy
-        // (E_FCI - E_ref) depends on which reference was used.
-        if (!calc._info._is_converged)
-            return std::unexpected(tag + ": requires a converged RHF or ROHF reference.");
-        if (calc._scf._scf != HartreeFock::SCFType::RHF &&
-            calc._scf._scf != HartreeFock::SCFType::ROHF)
-            return std::unexpected(tag + ": only RHF or ROHF references supported.");
-
-        // Spherical mode: the CI active space is the full MO space, whose dimension
-        // is the spherical working basis (working_nbasis()), not the larger Cartesian
-        // nbasis(). The cached ERI and MO coefficients are both spherical.
-        const int nbasis = static_cast<int>(calc.working_nbasis());
-        if (nbasis <= 0)
-            return std::unexpected(tag + ": empty basis.");
-
-        // The whole basis becomes the active space: no inactive core, no virtuals.
-        const int n_core = 0;
+        const int nbasis = static_cast<int>(calc._info._scf.alpha.mo_coefficients.rows());
         const int n_act = nbasis;
 
         // The packed alpha/beta determinant encoding caps how many spatial
@@ -97,8 +75,6 @@ namespace HartreeFock::Correlation
                 "Increase ci_max_dim in [scf] to run a larger FCI.",
                 tag, ci_dim_est, calc._active_space.ci_max_dim));
 
-        const int nroots = std::max(1, calc._active_space.nroots);
-
         // ── MO basis and effective integrals ───────────────────────────────────
         // For RHF the alpha channel holds the (only) MO set; for ROHF the alpha and
         // beta channels hold the same common spatial orbitals, so reading the alpha
@@ -131,6 +107,56 @@ namespace HartreeFock::Correlation
                 ensure_eri(calc, shell_pairs, eri_local, tag + " :");
             ga = transform_eri_internal(eri, nbasis, C);
         }
+
+        AllMOCISetup out;
+        out.n_act = n_act;
+        out.n_alpha = n_alpha;
+        out.n_beta = n_beta;
+        out.ci_dim = ci_dim_est;
+        out.h_eff = std::move(h_eff);
+        out.ga = std::move(ga);
+        return out;
+    }
+
+    std::expected<void, std::string> run_fci(
+        HartreeFock::Calculator &calc,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs)
+    {
+        const std::string tag = "FCI";
+
+        // ── Reference and method guards ────────────────────────────────────────
+        // FCI here is CASCI over the whole basis; it reuses the spatial-orbital CI
+        // engine, which assumes a single common spatial-orbital set for both spins.
+        // Both RHF and ROHF satisfy that (ROHF stores one common orbital set for
+        // alpha and beta), so either can serve as the reference. The FCI energy is
+        // invariant to the orbital choice; only the correlation energy
+        // (E_FCI - E_ref) depends on which reference was used.
+        if (!calc._info._is_converged)
+            return std::unexpected(tag + ": requires a converged RHF or ROHF reference.");
+        if (calc._scf._scf != HartreeFock::SCFType::RHF &&
+            calc._scf._scf != HartreeFock::SCFType::ROHF)
+            return std::unexpected(tag + ": only RHF or ROHF references supported.");
+
+        // Spherical mode: the CI active space is the full MO space, whose dimension
+        // is the spherical working basis (working_nbasis()), not the larger Cartesian
+        // nbasis(). The cached ERI and MO coefficients are both spherical.
+        const int nbasis = static_cast<int>(calc.working_nbasis());
+        if (nbasis <= 0)
+            return std::unexpected(tag + ": empty basis.");
+
+        // The whole basis becomes the active space: no inactive core, no virtuals.
+        const int n_core = 0;
+        const int n_act = nbasis;
+
+        auto setup = build_all_mo_ci_setup(calc, shell_pairs, tag);
+        if (!setup)
+            return std::unexpected(setup.error());
+        const int n_alpha = setup->n_alpha;
+        const int n_beta = setup->n_beta;
+        const long long ci_dim_est = setup->ci_dim;
+        const Eigen::MatrixXd &h_eff = setup->h_eff;
+        const std::vector<double> &ga = setup->ga;
+        const int nroots = std::max(1, calc._active_space.nroots);
 
         logging(LogLevel::Info, tag + " :",
                 std::format("Full CI over {} orbitals, {} alpha / {} beta electrons  (CI dim = {})",

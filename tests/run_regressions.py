@@ -45,6 +45,18 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     "casscf_corr_energy": re.compile(r"^\s*CASSCF Correlation Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "casscf_total_energy": re.compile(r"^\s*CASSCF Total Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "fci_total_energy": re.compile(r"^\s*Total FCI Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
+    # FCIQMC reports a MEAN and its blocked error bar. Both are extracted so a
+    # case can assert the energy within its own uncertainty (metric_within_sigma)
+    # rather than against a hand-picked tolerance -- a stochastic result compared
+    # with metric_close would be asserting noise.
+    "fciqmc_shift_energy": re.compile(
+        r"Shift energy\s+([-+0-9Ee\.]+)\s+\+/-", re.MULTILINE),
+    "fciqmc_shift_error": re.compile(
+        r"Shift energy\s+[-+0-9Ee\.]+\s+\+/-\s+([-+0-9Ee\.]+)", re.MULTILINE),
+    "fciqmc_projected_energy": re.compile(
+        r"Projected energy\s+([-+0-9Ee\.]+)\s+\+/-", re.MULTILINE),
+    "fciqmc_projected_error": re.compile(
+        r"Projected energy\s+[-+0-9Ee\.]+\s+\+/-\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "dft_total_energy": re.compile(r"^\s*(?:\[INF\]\s+)?DFT Energy\s*:\s*([-+0-9Ee\.]+)\s+Eh", re.MULTILINE),
     "lr_root1_energy_ev": re.compile(r"^\s*1\s+[-+0-9Ee\.]+\s+([-+0-9Ee\.]+)\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+", re.MULTILINE),
     "lr_root2_energy_ev": re.compile(r"^\s*2\s+[-+0-9Ee\.]+\s+([-+0-9Ee\.]+)\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+", re.MULTILINE),

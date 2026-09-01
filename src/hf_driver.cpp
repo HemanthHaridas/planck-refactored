@@ -30,6 +30,7 @@
 #include "post_hf/casscf.h"
 #include "post_hf/cc.h"
 #include "post_hf/fci.h"
+#include "post_hf/fciqmc_driver.h"
 #include "post_hf/mp2.h"
 #include "scf/scf.h"
 #include "scf/working_state.h"
@@ -1404,6 +1405,13 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag,
                                          "Computing full configuration interaction energy");
             corr_res = HartreeFock::Correlation::run_fci(calculator, shellpairs);
+        }
+        else if (calculator._correlation == HartreeFock::PostHF::FCIQMC)
+        {
+            corr_tag = "FCIQMC :";
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag,
+                                         "Sampling the full CI wavefunction stochastically");
+            corr_res = HartreeFock::Correlation::run_fciqmc(calculator, shellpairs);
         }
 
         if (corr_res.has_value() == false && !corr_tag.empty())
