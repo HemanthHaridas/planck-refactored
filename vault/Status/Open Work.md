@@ -622,6 +622,36 @@ worth doing whether or not FCIQMC happens.
   a build finished** — test the actual condition (build not running AND exact
   symbol present, `grep -qx`).
 
+  **F5.3 IN PROGRESS (2026-09-01): FCIQMC reproduces exact FCI on N2/STO-3G.**
+  The shift energy agrees across a 10x timestep range — 0.5 / 1.6 / 0.1 sigma at
+  dt = 0.001 / 0.005 / 0.010, recovering 98.6 / 92.4 / 100.5 % of correlation
+  against `-107.6529998854`. **The dt-independence is the evidence**, not any
+  single run. This is the first validation on a real molecule at a walker
+  population BELOW saturation (0.69 walkers/determinant), where sampling is
+  genuine rather than covering the space.
+
+  **Equilibration was the first error:** `dt = 0.001` with 2000 steps is tau = 2,
+  at which 14-82 % of an excited component survives; the shift recovered only
+  74.7 % of correlation. **A small timestep makes a given step count a SHORT time,
+  not a long one.**
+
+  **The projected energy had a real defect, and the first diagnosis was WRONG.**
+  Hypothesis was `c_0` collapse; a falsifiable prediction (raise the population and
+  it recovers) was made and **refuted** — 10x more walkers on the reference made it
+  worse (deviation 1.01 -> 1.98, error bar 0.34 -> 1.70), which no sampling-noise
+  problem does. **The real cause is averaging RATIOS instead of taking a RATIO OF
+  SUMS** — `E[A/B] != E[A]/E[B]`, **the same inequality this project has now hit
+  three times** (F2.5's acceptance-rate correction at 1.72x wrong, F3.4's
+  documented bias, and here). Written up twice, then implemented wrong anyway.
+  Proof from existing data: two runs at *identical config and seed* differing only
+  in the reference-weight threshold gave -99.19 and -106.64, a **7.5 Eh** move from
+  a threshold change — only a heavy-tailed distribution behaves that way.
+
+  **The fix (ratio of sums) is written and syntax-checked but NOT verified** — the
+  build was killed mid-flight, so the binary predates it. Next: re-run to confirm,
+  then add the regression case with `n_sigma` from observed error bars, a
+  fixed-seed reproducibility assertion, and a suite-placement decision from timing.
+
   **Q1 CANDIDATE FOUND (2026-08-31): Cr2, and it is TWO ATOMS.** Surveying the
   standard multireference benchmarks against the measured boundary, almost
   everything canonical is already reachable (N2/C2 full valence, benzene and

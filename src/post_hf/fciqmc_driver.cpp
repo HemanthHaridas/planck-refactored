@@ -7,6 +7,9 @@
 #include "post_hf/fci.h"
 
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <limits>
 #include <format>
 #include <vector>
 
@@ -111,6 +114,12 @@ namespace HartreeFock::Correlation
         ctl.interval = opt.shift_interval;
 
         RandomSource rng(opt.seed);
+        double proj_numerator_sum = 0.0;
+        double proj_denominator_sum = 0.0;
+        int proj_n = 0;
+        double ref_weight_sum = 0.0;
+        double ref_weight_min = std::numeric_limits<double>::infinity();
+        int ref_weight_n = 0;
         std::vector<double> shift_samples;
         std::vector<double> projected_samples;
         const int total_steps = opt.equilibration_steps + opt.sampling_steps;
@@ -142,9 +151,52 @@ namespace HartreeFock::Correlation
             if (step >= opt.equilibration_steps)
             {
                 shift_samples.push_back(ctl.shift);
-                const auto pe = projected_energy(pop, reference, setup->n_act, ops);
+                // THE REFERENCE WEIGHT THRESHOLD IS NOT 1e-12 HERE.
+                //
+                // projected_energy defaults to rejecting only c_0 == 0, which is
+                // enough to avoid dividing by zero but NOT enough for the ratio to
+                // be statistically meaningful. At c_0 = 1 walker, 1/c_0 swings by
+                // a factor of several between consecutive steps and E[1/X] !=
+                // 1/E[X] -- measured on N2/STO-3G, the projected energy came out
+                // at -99.19 +/- 6.63 against an exact -107.65 while the shift
+                // energy was correct to 0.14 sigma.
+                //
+                // Requiring several walkers on the reference makes the estimator
+                // usable or honestly absent. A run whose reference is chronically
+                // underpopulated reports no projected energy at all, which is the
+                // correct outcome: the shift energy is still valid, and a missing
+                // number is better than a wrong one.
+                const double min_ref = 3.0 * std::max(1.0, opt.walker_granularity);
+                const auto pe = projected_energy(pop, reference, setup->n_act, ops,
+                                                 min_ref);
                 if (pe.valid)
+                {
+                    // RATIO OF SUMS, not mean of ratios. Accumulate the numerator
+                    // and denominator separately and divide once at the end:
+                    //
+                    //   E = H_00 + (sum_t sum_j H_0j c_j) / (sum_t c_0)
+                    //
+                    // Averaging the per-step ratios instead is the E[A/B] vs
+                    // E[A]/E[B] error this project has now hit three times (F2.5's
+                    // acceptance-rate correction, F3.4's documented bias, and
+                    // here). The per-step ratio distribution is heavy-tailed --
+                    // rare small c_0 produce huge 1/c_0 spikes -- so its mean is
+                    // set by outliers. Measured on N2/STO-3G: changing only the
+                    // reference-weight threshold moved the mean-of-ratios by
+                    // 7.5 Eh (-99.19 to -106.64) at identical configuration and
+                    // seed, which no well-behaved estimator does.
+                    proj_numerator_sum += pe.numerator;
+                    proj_denominator_sum += pe.reference_weight;
+                    ++proj_n;
+
+                    // The per-step ratios are still collected, but ONLY to give
+                    // the ratio-of-sums an error bar via their scatter. They are
+                    // not the estimator.
                     projected_samples.push_back(pe.energy);
+                    ref_weight_sum += std::abs(pe.reference_weight);
+                    ref_weight_min = std::min(ref_weight_min, std::abs(pe.reference_weight));
+                    ++ref_weight_n;
+                }
             }
         }
 
@@ -166,9 +218,31 @@ namespace HartreeFock::Correlation
                 std::format("Shift energy     {:.10f} +/- {:.2e}  ({} samples)",
                             e_shift, shift_err, shift_samples.size()));
 
-        if (!projected_samples.empty())
+        if (ref_weight_n > 0)
+            logging(LogLevel::Info, tag + " :",
+                    std::format("reference weight: mean {:.2f}, min {:.2f} walkers",
+                                ref_weight_sum / ref_weight_n, ref_weight_min));
+
+        // Report the projected energy only if it was usable often enough to mean
+        // something. A handful of samples out of thousands is not an estimator.
+        const bool projected_usable =
+            projected_samples.size() >= static_cast<std::size_t>(shift_samples.size() / 4);
+        if (!projected_samples.empty() && !projected_usable)
+            logging(LogLevel::Warning, tag + " :",
+                    std::format("projected energy suppressed: the reference held "
+                                "enough walkers on only {} of {} steps. Raise "
+                                "fciqmc_walkers.",
+                                projected_samples.size(), shift_samples.size()));
+
+        if (projected_usable)
         {
-            const double e_proj = mean_of(projected_samples) + calc._nuclear_repulsion;
+            const double e_proj = ops.diagonal(reference)
+                                  + proj_numerator_sum / proj_denominator_sum
+                                  + calc._nuclear_repulsion;
+            // Error bar from a blocking analysis of the per-step ratios. This
+            // OVERSTATES the uncertainty on the ratio-of-sums (which averages the
+            // tails away), so it is conservative -- an overestimate fails a gate
+            // loudly, an underestimate passes one silently.
             const double proj_err = blocked_standard_error(projected_samples);
             logging(LogLevel::Info, tag + " :",
                     std::format("Projected energy {:.10f} +/- {:.2e}  ({} samples)",

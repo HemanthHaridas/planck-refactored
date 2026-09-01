@@ -104,7 +104,84 @@ the map key. An exact match (`grep -qx`) showed the keyword genuinely absent.
 > there, and a timestamp is not evidence a build finished.** Test the actual
 > condition: build not running, *and* exact symbol present.
 
-### F5.3 — the N2/STO-3G regression gate
+### F5.3 — the N2/STO-3G regression gate — **IN PROGRESS. The shift energy is validated; the projected energy had a real defect.**
+
+**The headline result: FCIQMC reproduces exact FCI on N2/STO-3G.** 10 orbitals,
+7α/7β, ndet = 14 400, at 0.69 walkers per determinant so the population is a
+genuine sample rather than covering the space. Against exact FCI
+`-107.6529998854`:
+
+| dt | τ_eq | shift energy | deviation | correlation recovered |
+|---|---|---|---|---|
+| 0.001 | 20 | −107.6407856 ± 2.34e-02 | **0.5σ** | 98.6 % |
+| 0.005 | 50 | −107.5855444 ± 4.19e-02 | 1.6σ | 92.4 % |
+| **0.010** | **50** | **−107.6575413 ± 3.15e-02** | **0.1σ** | **100.5 %** |
+
+**The dt-independence is the evidence**, not any single run: three different
+discretizations of the same imaginary-time evolution converging on the same
+answer.
+
+**Equilibration was the first thing to get wrong.** The initial attempt used
+`dt = 0.001` with 2000 equilibration steps — chosen conservatively for *stability*,
+without checking what it buys in **imaginary time**. That is τ = 2, at which an
+excited-state component of 14-82 % survives depending on the gap. The shift
+recovered only 74.7 % of correlation. Raising τ_eq to 20-50 fixed it. **A small
+timestep makes a given step count a *short* time, not a long one.**
+
+#### The projected energy: one wrong diagnosis, then the real cause
+
+The projected energy was badly wrong in every run (deviations 0.98-8.46 Eh,
+error bars up to 6.63 Eh) while the shift was correct. **The F4.2 cross-check
+caught it** — the driver warned that two estimators sharing no arithmetic
+disagreed by 0.42 Eh, rather than reporting a plausible number.
+
+**First diagnosis — `c_0` collapse — was WRONG, and a run refuted it.** The
+reasoning was that at 0.69 walkers/determinant the reference holds too few
+walkers for `1/c_0` to be stable. A falsifiable prediction was made (raise the
+population and it should recover) and it failed:
+
+| run | c₀ mean | projected | deviation | error bar |
+|---|---|---|---|---|
+| 10 000 walkers | 91.75 | −106.6445 | 1.01 | 0.34 |
+| 100 000 walkers | **572.63** | −109.6339 | **1.98** | **1.70** |
+
+Ten times more walkers on the reference made it **worse**, in both deviation and
+error bar. No sampling-noise problem behaves that way.
+
+**The real cause: averaging RATIOS instead of taking a RATIO OF SUMS.**
+
+```
+wrong:   E = H_00 + mean_t( sum_j H_0j c_j(t) / c_0(t) )
+right:   E = H_00 + ( sum_t sum_j H_0j c_j(t) ) / ( sum_t c_0(t) )
+```
+
+`E[A/B] != E[A]/E[B]` — **the same inequality this project has now hit three
+times**: F2.5's per-call acceptance-rate correction (1.72x wrong), F3.4's
+documented finite-population bias, and here. It was written up twice and then
+implemented in the wrong form anyway.
+
+**What proved it, from data already collected:** two runs with *identical
+configuration and seed*, differing only in the reference-weight threshold, gave
+−99.19 and −106.64 — a **7.5 Eh** shift from a threshold change. Only a
+heavy-tailed distribution does that, and the mean of such a distribution is set by
+its outliers. Deviations also scattered on both sides of exact (−2.51, −0.98,
++8.46, −1.01, +1.98), which is outlier-dominated noise rather than a systematic
+error.
+
+The ratio-of-sums form is what production FCIQMC codes use, and it is not a
+workaround: the numerator sum over the denominator sum converges to the true
+ratio, while the mean of per-step ratios does not.
+
+**Status: the fix is written and syntax-checked but NOT yet verified** — the build
+was killed mid-flight, so the committed binary predates it. The next run must
+confirm the projected energy converges near −107.65 *and* stops moving when the
+reference-weight threshold changes.
+
+**Still to do:** re-run to verify the fix, then add the regression case with
+`n_sigma` set from the observed error bars, plus a fixed-seed reproducibility
+assertion and a timing decision (default suite vs `extended`).
+
+### F5.3 (original text) — the N2/STO-3G regression gate
 
 The deliverable. Compare FCIQMC's energy against the deterministic FCI reference
 for the same input.

@@ -5,10 +5,15 @@ F1–F4 are landed and gated (`planck-fciqmc-walkers`); F5.1–F5.2 wire it into
 driver, so `correlation fciqmc` is a working calculation reproducing exact FCI on
 H2/STO-3G to within its own error bar.
 
-**What is not yet demonstrated: a chemically interesting answer.** Every gate
-above H2 runs on a synthetic Hamiltonian, and H2's 4 determinants are far below
-where sampling means anything. The N2/STO-3G gate (F5.3) is the first real test,
-and the determinism decision (F5.4) is still open.
+**FCIQMC reproduces exact FCI on N2/STO-3G** (2026-09-01): the shift energy agrees
+within 0.1-1.6σ across a 10x timestep range, at 0.69 walkers per determinant so
+the population is a genuine sample. That is the first validation on a real
+molecule at a meaningful system size.
+
+**Not yet finished:** the projected energy needed a correction (ratio of sums, not
+mean of ratios) that is written but unverified; the N2 regression case is not yet
+committed; and the determinism decision (F5.4) is open. See
+`FCIQMC_F5_DRIVER_SCOPE.md`.
 
 FCIQMC (Booth/Thom/Alavi, *JCP* **131**, 054106) samples the FCI wavefunction with
 a population of signed walkers evolving in imaginary time, instead of storing a CI

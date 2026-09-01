@@ -1,0 +1,86 @@
+# N2/STO-3G FCIQMC -- the first validation on a system where sampling is real.
+#
+# 10 orbitals, 7 alpha / 7 beta, ndet = 14400. This is the research scope's
+# primary fixture: FCI is affordable (~8 s at 4 threads) so the gate has an exact
+# reference, AND the determinant space is large enough that a few-thousand-walker
+# population is a genuine SAMPLE rather than covering the space.
+#
+#   RHF          -106.7665937606
+#   exact FCI    -107.6529998854   (correlation fci on this input)
+#
+# Every earlier FCIQMC gate ran either on a synthetic Hamiltonian or on H2/STO-3G,
+# whose 4 determinants are far below where sampling means anything. This is the
+# first case that tests the method rather than the plumbing.
+#
+# PARAMETER CHOICES, and why:
+#
+#   fciqmc_walkers 10000    0.7 walkers per determinant. Deliberately BELOW
+#                           saturation -- F4.4 and F4.5 both found that a
+#                           saturated space stops exhibiting the sampling
+#                           behaviour being validated. At 200000 (13.9/det) this
+#                           would cover the space and prove nothing.
+#
+#   fciqmc_timestep 0.001   Conservative. F4.3 put the controlled-dynamics
+#                           boundary at 0.26-0.30x the diagonal bound, and the
+#                           diagonal bound is itself 2.28x larger than the true
+#                           spectral one. A diverging population is a hard error
+#                           naming the timestep, not a wrong number.
+#
+#   zeta 0.3 / xi 0.05      Inside the band F4.1 measured. The usable band is
+#                           system-specific (the gain is zeta/(interval*dt)), so
+#                           these are a starting point, not a tuned optimum.
+#
+#   granularity 1.0         One walker. Without discretization the propagator is
+#                           scale-invariant and the noise does not depend on
+#                           population at all (F4.4).
+#
+#   initiator 0.0           OFF. The initiator is a biased approximation; this
+#                           gate validates the method against an exact answer, so
+#                           it must not be hidden behind one.
+#
+#   seed 20250901           Fixed, and echoed in the output. A rerun with the
+#                           same seed must reproduce the trajectory bitwise.
+
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation fciqmc
+    ci_max_dim  200000
+
+    fciqmc_walkers         10000
+    fciqmc_timestep        0.001
+    fciqmc_shift_damping   0.3
+    fciqmc_shift_restoring 0.05
+    fciqmc_shift_interval  5
+    fciqmc_granularity     1.0
+    fciqmc_initiator       0.0
+    fciqmc_equilibration   2000
+    fciqmc_steps           8000
+    fciqmc_spawn_attempts  1
+    fciqmc_seed            20250901
+
+    use_diis    .true.
+    diis_dim    8
+    save_checkpoint .false.
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+2
+0   1
+N     0.000000     0.000000     0.000000
+N     0.000000     0.000000     1.098000
+%end_coords
