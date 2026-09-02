@@ -104,7 +104,59 @@ the map key. An exact match (`grep -qx`) showed the keyword genuinely absent.
 > there, and a timestamp is not evidence a build finished.** Test the actual
 > condition: build not running, *and* exact symbol present.
 
-### F5.3 — the N2/STO-3G regression gate — **IN PROGRESS. The shift energy is validated; the projected energy had a real defect.**
+### F5.3 — the N2/STO-3G regression gate — **DONE 2026-09-02. Both estimators reproduce exact FCI.**
+
+`n2_fciqmc_sto3g` (extended suite, **69 s**). Against exact FCI
+`-107.6529998854` at `dt = 0.001`, τ_eq = 20:
+
+| estimator | value | blocked error | deviation |
+|---|---|---|---|
+| shift | −107.6404846 | 3.89e-02 | **0.32σ** |
+| projected | −107.3108220 | 8.28e-01 | **0.41σ** |
+
+**Verified non-vacuous:** injecting the unstable `dt = 0.010` makes it fail on
+three independent grounds — the SIGN-UNSTABLE warning, the projected energy
+outside 5σ, and the two-estimator cross-check.
+
+#### The projected energy was never a broken estimator
+
+It took three attempts to see that, and the first two were wrong:
+
+1. **`c_0` collapse** — refuted by measurement. Raising the population 10x made
+   the answer *worse* (deviation 1.01 → 1.98), which no sampling-noise problem
+   does.
+2. **Mean of ratios instead of ratio of sums** — a genuine defect and the third
+   appearance of `E[A/B] ≠ E[A]/E[B]` in this project, but worth only 1.1x here.
+3. **The real cause: the reference determinant was oscillating in sign.** At
+   `dt = 0.010`, mean `|c_0|` was 91.75 while mean *signed* `c_0` was −7.50, so the
+   ratio's denominator nearly cancelled. That is the timestep instability F4.3
+   gates: when `dt·|H_ii − S| > 2` the diagonal factor `(1 − dt(H_ii − S))` drops
+   below −1 and the weight flips sign every step.
+
+**The projected energy was correctly reporting a real problem with the run.** At
+`dt = 0.001` the denominator is cleanly positive (mean signed `c_0` = 76.49) and
+both estimators agree with exact FCI.
+
+**The shift energy did not notice.** At `dt = 0.010` it read **0.14σ** from exact
+while the dynamics were unstable, because it responds to the *total* population,
+which is dominated by well-behaved determinants. **A single-estimator
+implementation would have reported a perfect-looking answer.** This is the
+strongest vindication of the two-estimator design in the project.
+
+The driver now warns on sign instability directly — comparing mean signed `c_0`
+against mean `|c_0|` — and says explicitly that the shift may still look
+converged. The gate asserts `not_contains: SIGN-UNSTABLE`, so the instability
+fails the case even if the energies happen to land.
+
+**Equilibration was the first error, and also mine.** `dt = 0.001` with 2000 steps
+is τ = 2, at which 14-82 % of an excited component survives; the shift recovered
+only 74.7 % of correlation. **A small timestep makes a given step count a *short*
+time, not a long one.**
+
+**Runtime:** 138 s at 80 000 sampling steps, 69 s at 30 000. The shorter run keeps
+both estimators inside 0.5σ, so it is what the gate uses; `timeout_s` is 180.
+
+### F5.3 (superseded scope text) — the N2/STO-3G regression gate
 
 **The headline result: FCIQMC reproduces exact FCI on N2/STO-3G.** 10 orbitals,
 7α/7β, ndet = 14 400, at 0.69 walkers per determinant so the population is a

@@ -2802,6 +2802,48 @@
       ]
     },
     {
+      "id": "n2_fciqmc_sto3g",
+      "input": "tests/inputs/regression/post_hf/n2_fciqmc_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "FCIQMC :",
+        "Shift energy",
+        "Projected energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_present",
+          "metric": "fciqmc_shift_error"
+        },
+        {
+          "type": "metric_present",
+          "metric": "fciqmc_projected_error"
+        },
+        {
+          "type": "metric_within_sigma",
+          "metric": "fciqmc_shift_energy",
+          "sigma_metric": "fciqmc_shift_error",
+          "n_sigma": 5.0,
+          "expected": -107.6529998854
+        },
+        {
+          "type": "metric_within_sigma",
+          "metric": "fciqmc_projected_energy",
+          "sigma_metric": "fciqmc_projected_error",
+          "n_sigma": 5.0,
+          "expected": -107.6529998854
+        }
+      ],
+      "not_contains": [
+        "SIGN-UNSTABLE"
+      ],
+      "timeout_s": 180
+    },
+    {
       "id": "water_fci_sto3g",
       "input": "tests/inputs/regression/post_hf/water_fci_sto3g.hfinp",
       "tags": [

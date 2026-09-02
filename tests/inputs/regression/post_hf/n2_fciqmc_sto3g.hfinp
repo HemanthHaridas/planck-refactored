@@ -20,11 +20,24 @@
 #                           behaviour being validated. At 200000 (13.9/det) this
 #                           would cover the space and prove nothing.
 #
-#   fciqmc_timestep 0.001   Conservative. F4.3 put the controlled-dynamics
-#                           boundary at 0.26-0.30x the diagonal bound, and the
-#                           diagonal bound is itself 2.28x larger than the true
-#                           spectral one. A diverging population is a hard error
-#                           naming the timestep, not a wrong number.
+#   fciqmc_timestep 0.001   NOT merely conservative -- measured. At dt = 0.010
+#                           the reference determinant oscillates in sign (mean
+#                           |c_0| 91.75 but mean signed c_0 -7.50), because
+#                           dt*|H_ii - S| exceeds 2 for it and the diagonal
+#                           factor (1 - dt(H_ii - S)) drops below -1. The
+#                           projected energy then lands 2.7 sigma from exact.
+#                           At dt = 0.001 the sign is stable and BOTH estimators
+#                           agree with exact FCI.
+#
+#                           The shift energy does NOT detect this: at dt = 0.010
+#                           it read 0.14 sigma from exact while the dynamics were
+#                           unstable. That is why this input gates on both.
+#
+#   equilibration 20000     tau_eq = 20. An earlier attempt used 2000 steps at
+#   steps 30000             this dt, which is tau = 2 -- far too short, leaving
+#                           14-82% of an excited component alive and recovering
+#                           only 74.7% of correlation. A SMALL TIMESTEP MAKES A
+#                           GIVEN STEP COUNT A SHORT TIME, NOT A LONG ONE.
 #
 #   zeta 0.3 / xi 0.05      Inside the band F4.1 measured. The usable band is
 #                           system-specific (the gain is zeta/(interval*dt)), so
@@ -60,8 +73,8 @@
     fciqmc_shift_interval  5
     fciqmc_granularity     1.0
     fciqmc_initiator       0.0
-    fciqmc_equilibration   2000
-    fciqmc_steps           8000
+    fciqmc_equilibration   20000
+    fciqmc_steps           30000
     fciqmc_spawn_attempts  1
     fciqmc_seed            20250901
 

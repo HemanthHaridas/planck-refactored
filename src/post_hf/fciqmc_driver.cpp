@@ -218,6 +218,47 @@ namespace HartreeFock::Correlation
                 std::format("Shift energy     {:.10f} +/- {:.2e}  ({} samples)",
                             e_shift, shift_err, shift_samples.size()));
 
+        // THE SIGN OF THE DENOMINATOR IS A TIMESTEP-STABILITY DIAGNOSTIC, and it
+        // is cheaper and sharper than either energy.
+        //
+        // The reference determinant should hold a stable-signed weight. If
+        // dt*|H_ii - S| > 2 for it, the diagonal factor (1 - dt*(H_ii - S)) falls
+        // below -1 and the weight FLIPS SIGN every step -- the instability F4.3
+        // gates. The signed sum then nearly cancels while |c_0| stays large.
+        //
+        // Measured on N2/STO-3G: at dt = 0.010 the mean |c_0| was 91.75 while the
+        // mean signed c_0 was -7.50, and the projected energy came out 2.7 sigma
+        // from exact. At dt = 0.001 the denominator was cleanly positive and the
+        // projected energy landed within 0.6 sigma.
+        //
+        // THE SHIFT ENERGY DOES NOT NOTICE. It responds to the TOTAL population,
+        // which is dominated by well-behaved determinants -- at dt = 0.010 it read
+        // 0.14 sigma from exact while the dynamics were unstable. That asymmetry
+        // is the whole reason two independent estimators are worth their cost.
+        if (proj_n > 0)
+        {
+            const double mean_signed = proj_denominator_sum / proj_n;
+            logging(LogLevel::Info, tag + " :",
+                    std::format("projected numerator sum {:.6e}, denominator sum "
+                                "{:.6e}, mean signed c_0 {:.2f}",
+                                proj_numerator_sum, proj_denominator_sum,
+                                mean_signed));
+
+            // Compare the signed mean against the magnitude mean: they should be
+            // close. A large gap means the sign is oscillating.
+            const double mean_magnitude =
+                (ref_weight_n > 0) ? ref_weight_sum / ref_weight_n : 0.0;
+            if (mean_magnitude > 0.0
+                && std::abs(mean_signed) < 0.5 * mean_magnitude)
+                logging(LogLevel::Warning, tag + " :",
+                        std::format("the reference determinant is SIGN-UNSTABLE "
+                                    "(mean |c_0| {:.2f} but mean signed c_0 {:.2f}). "
+                                    "The timestep is above the stability bound for "
+                                    "this determinant; reduce fciqmc_timestep. The "
+                                    "shift energy may still look converged.",
+                                    mean_magnitude, mean_signed));
+        }
+
         if (ref_weight_n > 0)
             logging(LogLevel::Info, tag + " :",
                     std::format("reference weight: mean {:.2f}, min {:.2f} walkers",

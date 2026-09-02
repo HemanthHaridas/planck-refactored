@@ -622,7 +622,29 @@ worth doing whether or not FCIQMC happens.
   a build finished** — test the actual condition (build not running AND exact
   symbol present, `grep -qx`).
 
-  **F5.3 IN PROGRESS (2026-09-01): FCIQMC reproduces exact FCI on N2/STO-3G.**
+  **F5.3 LANDED (2026-09-02): both estimators reproduce exact FCI on N2/STO-3G**,
+  gated by `n2_fciqmc_sto3g` (extended, 69 s) — shift 0.32 sigma, projected 0.41
+  sigma against `-107.6529998854`. Verified non-vacuous: injecting `dt = 0.010`
+  fails on three independent grounds.
+
+  **The projected energy was NEVER a broken estimator, and it took three attempts
+  to see that.** (1) `c_0` collapse — refuted, raising the population 10x made it
+  worse. (2) Mean-of-ratios instead of ratio-of-sums — a real defect and the third
+  appearance of `E[A/B] != E[A]/E[B]` here, but worth only 1.1x. (3) **The real
+  cause: the reference determinant was oscillating in SIGN.** At dt = 0.010 mean
+  `|c_0|` was 91.75 while mean *signed* `c_0` was -7.50, so the denominator nearly
+  cancelled — the timestep instability F4.3 gates, where `(1 - dt(H_ii - S))` drops
+  below -1 and the weight flips every step. **The projected energy was correctly
+  reporting a real problem with the run.**
+
+  **THE SHIFT ENERGY DID NOT NOTICE:** at dt = 0.010 it read **0.14 sigma** from
+  exact while the dynamics were unstable, because it responds to the total
+  population. **A single-estimator implementation would have reported a
+  perfect-looking answer.** The driver now warns on sign instability directly and
+  says the shift may still look converged; the gate asserts
+  `not_contains: SIGN-UNSTABLE`.
+
+  **F5.3 (superseded note from 2026-09-01):**
   The shift energy agrees across a 10x timestep range — 0.5 / 1.6 / 0.1 sigma at
   dt = 0.001 / 0.005 / 0.010, recovering 98.6 / 92.4 / 100.5 % of correlation
   against `-107.6529998854`. **The dt-independence is the evidence**, not any
