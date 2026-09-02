@@ -201,6 +201,44 @@ measured rather than assumed (0.1 % there).
 - **Verify:** profile after T2 and only act if the merge is material. **Do not
   pre-optimize it.**
 
+### T4 — memoize the diagonal (independent of threading, do it whenever)
+
+**`slater_condon_element` at 53.1 % is dominated by the DIAGONAL branch, and that
+branch recomputes the same value every step.** `H_ii` is a pure function of the
+determinant: `ops.diagonal` captures pointers to `h_eff` and `ga`, both built once
+in `build_all_mo_ci_setup` and never mutated. Nothing about it depends on the
+iteration, the shift, or the population.
+
+The `n_diff == 0` branch is **O(n_act^2)** (a `p,q` double loop plus an `h_eff`
+pass) against **O(n_act)** for a single excitation and O(1) for a double, so on
+N2/STO-3G it is ~**86 %** of the function's work by operation count
+(120 vs 20 relative). It is called once per parent per iteration at
+`fciqmc.cpp:440`.
+
+Order of magnitude on the N2 gate case: ~9900 occupied determinants x 50 000 steps
+= **~5e8 calls**, each ~100 inner iterations, for a set of only ~9900 **distinct**
+determinants. That is a **~50 000x reuse factor** on a table holding one `double`
+per determinant — keys the walker map already stores.
+
+**Why this is not a threading item.** T2 parallelizes this work; T4 removes it.
+They compose, and T4 is the larger lever if it holds up. It is listed here because
+this is where the profile lives, not because it depends on T2.
+
+**Do not assume the win.** Two things to check before building it:
+
+1. **Hit rate.** The reuse factor above assumes the occupied set is nearly static
+   across steps. Measure the distinct-determinant count per step against the
+   cumulative set; a population churning through new determinants every step has a
+   worse rate than the naive ratio suggests.
+2. **Lookup vs recompute.** The memo is an `unordered_map` probe against ~100
+   flops. The walker map is already 4.1 % of self time, so hashing is not free —
+   the probe must beat the recompute, and at very small `n_act` it may not. Test at
+   `n_act` 10 (N2) and a larger case before concluding.
+
+**Determinism:** a memo is a pure cache of a pure function, so it cannot change any
+value. The gate is unchanged — **bitwise identical** output, and under threading
+the table must be either prefilled or per-bin, never a shared mutable map.
+
 ## What this must not do
 
 - **Do not thread before T1.** The recorded reason from the sigma build is that
