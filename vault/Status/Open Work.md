@@ -622,6 +622,25 @@ worth doing whether or not FCIQMC happens.
   a build finished** — test the actual condition (build not running AND exact
   symbol present, `grep -qx`).
 
+  **THREADING SCOPED (2026-09-02) in `docs/FCIQMC_THREADING_SCOPE.md`, and the
+  profile reorders the work.** FCIQMC is entirely serial today (zero pragmas). The
+  determinism policy is already decided and gated, so the open question was only
+  cost — and profiling the N2 gate case says **`malloc`/`free` is 29.5 % of
+  runtime** against `slater_condon_element` at 40.1 %. That is the FCI sigma
+  build's situation again (53 % malloc there), where the recorded lesson is that
+  **threading an allocation-bound loop parallelizes `malloc` contention**. So T1
+  removes the per-call allocations (`occupied`/`virtuals` return small heap vectors
+  ~1e9 times, for values bounded at 31 entries by `kMaxPackedSpatialOrbitals`),
+  and only T2 threads the spawn.
+
+  **Treat 29.5 % as a lower bound on T1's gain, not an estimate** — the sigma
+  build's identical fix returned 4.8x against a profile implying ~2.1x, because
+  per-element churn also costs cache pressure attributed to other frames.
+
+  **Value note carried in the scope: nothing needs this.** The N2 gate runs in 69 s
+  serial and the method is unused. T1 stands on its own as a serial speedup; T2 is
+  worth doing when a target exists.
+
   **F5 COMPLETE, and the whole F1-F5 ladder with it (2026-09-02).** FCIQMC runs
   from an input file and reproduces exact FCI on N2/STO-3G — shift 0.32 sigma,
   projected 0.41 sigma, gated by `n2_fciqmc_sto3g` (extended, 69 s). The scope
