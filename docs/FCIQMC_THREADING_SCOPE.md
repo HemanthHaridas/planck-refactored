@@ -1,9 +1,9 @@
 # Scope: threading FCIQMC
 
-**Scope for in-flight work. Not started.** FCIQMC is entirely serial today — zero
-`#pragma omp` in `fciqmc.{h,cpp}` or `fciqmc_driver.cpp`. The determinism policy is
-already decided (`FCIQMC_RESEARCH_SCOPE.md` §6): **no exception, bitwise
-thread-count invariance is kept**, and the gate for it exists.
+**Scope for in-flight work. T1 LANDED (`9ca61897`); T2 is next.** FCIQMC still has
+zero `#pragma omp`. The determinism policy is already decided
+(`FCIQMC_RESEARCH_SCOPE.md` §6): **no exception, bitwise thread-count invariance is
+kept**, and the gate for it exists.
 
 ## The measurement that orders the work
 
@@ -43,7 +43,25 @@ vector allocations for values that never exceed 31 entries — `n_act` is bounde
 
 ## Steps
 
-### T1 — remove the per-call allocations (no threading)
+### T1 — remove the per-call allocations (no threading) — **DONE, 1.76x**
+
+**Measured on N2/STO-3G at 1 thread: 71.63 s -> 40.81 s (1.76x), malloc share
+29.5 % -> 0.08 % (7 of 8539 samples).** The allocator is eliminated, not reduced.
+Output **bitwise identical** — every printed line, not only the energies — on both
+`n2_fciqmc_sto3g` and `h2_fciqmc_sto3g` against a pre-T1 binary from the same tree.
+
+**The "lower bound, not an estimate" instruction below held.** Amdahl on a 29.5 %
+share caps the direct saving at 1.42x; measured 1.76x, for the same reason the FCI
+sigma build over-delivered (4.8x against a profile implying ~2.1x): per-call churn
+also costs cache pressure attributed to other frames.
+
+**Build-hygiene trap, cost a wasted 25-minute build.** T1 was stashed to keep an
+unverified change out of a commit *while its build was still running*; `make` then
+compiled a file no longer in the tree and reported `MAKE_EXIT=0`. **A build in
+flight is not pinned to the working tree** — kill it before stashing.
+
+The original plan follows, unchanged.
+
 
 Return fixed-capacity types instead of `std::vector`: `std::array<int, 32>` plus a
 count for `occupied`/`virtuals`, a fixed array for the live-class list. The bound
@@ -66,11 +84,53 @@ calls against the spawn path's ~10⁹, so it is not where the allocator time is.
   per-element churn also costs cache pressure attributed to other frames — so
   **treat 29.5 % as a lower bound on the gain, not an estimate.**
 
-### T2 — thread the spawn loop
+### T2 — thread the spawn loop — **NEXT, ceiling 3.75x at 4 threads**
+
+**Re-profiled after T1 (N2/STO-3G, 1 thread, 10 160 samples), which is what sizes
+this step:** `propagate_stochastic` is **97.7 %** of `run_fciqmc` inclusive
+(8805 / 9008 samples). Amdahl on that share:
+
+| threads | ceiling |
+|---|---|
+| 2 | 1.96x |
+| 4 | **3.75x** |
+| 8 | 6.91x |
+
+The residual 2.3 % is the per-iteration serial tail — `ordered_l1_norm`'s sort,
+`ctl.update`, and `projected_energy` (which the scope explicitly leaves serial).
+**Do not thread those** to chase the last few percent; the determinism risk is not
+worth it and T3 covers the merge if it shows up.
 
 The design is already settled and verified on a model (§6 of the research scope):
 **partition the parents** by `hash(parent) % kBins`, each thread accumulating into
 its own bin, merged in fixed bin order at the end of the iteration.
+
+#### The loop as it actually stands (read this before writing the pragma)
+
+`propagate_stochastic` (`src/post_hf/ci/fciqmc.cpp`) iterates
+`for (const auto &[det, weight] : population)` and does three things per parent:
+a deterministic **death** write `next.add(det, ...)`, then `n_spawn_attempts`
+**spawn** draws each writing `next.add(exc.det, ...)`, with the **initiator** rule
+reading `population.weight_at(exc.det)`.
+
+Three properties decide the shape of the change, and each was checked in the
+source rather than assumed:
+
+1. **`next` is the only mutable shared state.** Every write goes through
+   `WalkerPopulation::add`, which is `_walkers[det] += w` on an
+   `unordered_map` — not thread-safe, and the accumulation order is exactly what
+   the bins exist to fix.
+2. **The initiator rule reads `population`, not `next`** (there is already a
+   comment saying why). `population` is `const&` throughout, so the rule is a
+   pure read and needs nothing.
+3. **`RandomSource &rng` is a single mutable object shared by every parent.**
+   This is the sharpest hazard in the step: threading the loop as written is not
+   merely non-deterministic, it is a data race on the generator state. Each bin
+   must take its own stream from `RandomSource::derive(bin_index)` — which is
+   already deterministic in the run seed and independent of how many shards are
+   derived, so **the mechanism exists and must simply be used**. Deriving per
+   *thread* instead of per *bin* would reintroduce thread-count dependence, the
+   exact defect the sigma build hit twice.
 
 - **`kBins` is a fixed constant, never tied to thread count.** The sigma build paid
   for this lesson twice: `schedule(dynamic)` gives an accumulator a different
@@ -91,8 +151,21 @@ its own bin, merged in fixed bin order at the end of the iteration.
      to 8, and add an N2 pair since a 4-determinant space may not exercise the
      partition at all.
   3. All FCIQMC and FCI regression cases green.
-  4. Speed. Amdahl on the post-T1 profile sets the ceiling; below ~2x at 4 threads,
-     check bin count and imbalance before concluding the lever is absent.
+  4. Speed. The post-T1 ceiling is **3.75x at 4 threads**; below ~2x, check bin
+     count and imbalance before concluding the lever is absent.
+
+- **One structural difference from the sigma build, in T2's favour.** That build
+  binned by *index range* (`partials[j / bin_size]`), so a determinant could move
+  between bins when the bin count changed. Here the key is the determinant itself
+  (`hash(parent) % kBins`), so a parent maps to the same bin **regardless of the
+  bin count** and its contributions accumulate in the same order. Invariance is
+  therefore robust even to changing `kBins`, which the sigma build's scheme was
+  not — recorded in `FCIQMC_RESEARCH_SCOPE.md` §6 and worth not rediscovering.
+
+- **Sizing `kBins`.** Memory is `kBins` partial maps, not `nthreads` — independent
+  of thread count by construction. Start at the sigma build's 64 and only revisit
+  if step 4 shows imbalance; **more bins under static scheduling** is the move,
+  never `schedule(dynamic)`, which breaks invariance.
 
 ### T3 — the merge, if it shows up
 
