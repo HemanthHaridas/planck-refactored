@@ -642,8 +642,7 @@ worth doing whether or not FCIQMC happens.
   worth doing when a target exists.
 
   **T1 LANDED (2026-09-02): 1.76x, bitwise identical, and the allocator is
-  ELIMINATED rather than reduced — 29.5 % -> 0.08 % of profile samples (7 of
-  8539).** N2/STO-3G **71.63 s -> 40.81 s** at 1 thread, with the **entire output
+  effectively ELIMINATED — 29.5 % -> 1.4 % of profile samples.** N2/STO-3G **71.63 s -> 40.81 s** at 1 thread, with the **entire output
   bitwise identical** on both `n2_fciqmc_sto3g` and `h2_fciqmc_sto3g` — not just
   the energies, every printed line. That is the correct gate for this change: it is
   a pure representation swap (heap `std::vector` -> fixed-capacity `std::array`)
@@ -678,8 +677,10 @@ worth doing whether or not FCIQMC happens.
   stashing, or the exit code describes source you no longer have.
 
   **T2 (threading the spawn) is now unblocked.** Post-T1 the profile is
-  `slater_condon_element`-dominated with the allocator gone, which is the shape the
-  scope wanted before threading — the whole reason for the T1-first ordering was
+  `slater_condon_element`-dominated — it **rose** from 40.1 % to **53.1 %** of self
+  time, which is the expected consequence of removing ~30 % allocation (the same
+  absolute work over a smaller total, `40.1/(1-0.295) = 56.9 %` predicted) rather
+  than anything new. That is the shape the scope wanted before threading — the whole reason for the T1-first ordering was
   that threading an allocation-bound loop parallelizes `malloc` contention. The
   determinism design is already decided and gated (`h2_fciqmc_threads1/4` at
   `atol = 0.0`): partition the PARENTS by `hash(parent) % kBins`, fixed bin count

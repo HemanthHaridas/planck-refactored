@@ -46,7 +46,7 @@ vector allocations for values that never exceed 31 entries — `n_act` is bounde
 ### T1 — remove the per-call allocations (no threading) — **DONE, 1.76x**
 
 **Measured on N2/STO-3G at 1 thread: 71.63 s -> 40.81 s (1.76x), malloc share
-29.5 % -> 0.08 % (7 of 8539 samples).** The allocator is eliminated, not reduced.
+29.5 % -> 1.4 %.** The allocator is effectively eliminated.
 Output **bitwise identical** — every printed line, not only the energies — on both
 `n2_fciqmc_sto3g` and `h2_fciqmc_sto3g` against a pre-T1 binary from the same tree.
 
@@ -86,9 +86,34 @@ calls against the spawn path's ~10⁹, so it is not where the allocator time is.
 
 ### T2 — thread the spawn loop — **NEXT, ceiling 3.75x at 4 threads**
 
-**Re-profiled after T1 (N2/STO-3G, 1 thread, 10 160 samples), which is what sizes
-this step:** `propagate_stochastic` is **97.7 %** of `run_fciqmc` inclusive
-(8805 / 9008 samples). Amdahl on that share:
+**Re-profiled after T1 (N2/STO-3G, 1 thread), which is what sizes this step.**
+Self time, 12 572 samples:
+
+| frame | self |
+|---|---|
+| `slater_condon_element` | **53.1 %** |
+| `draw_excitation` | 11.4 % |
+| walker `unordered_map` | 4.1 % |
+| sort (`ordered_l1_norm`) | 3.8 % |
+| malloc family | 1.4 % |
+
+**`slater_condon_element` ROSE from 40.1 % to 53.1 % as a share, and that is the
+expected result, not a surprise:** T1 removed ~30 % allocation, so the same
+absolute Hamiltonian work is now a larger fraction of a smaller total
+(`40.1 / (1 - 0.295) = 56.9 %` predicted). **It is the target for any future
+kernel work and is untouched by threading** — T2 parallelizes it rather than
+reducing it.
+
+**A profile-parsing trap worth carrying.** `sample` output is a CALL TREE whose
+lines carry `+ ! : |` prefixes before the count, and each count is INCLUSIVE. A
+naive `^\s*(\d+)` regex matches almost nothing, and summing the counts it does
+match double-counts parents. The first pass of this re-profile did exactly that
+and reported `slater_condon_element` at **0.2 %** — an obviously impossible number
+that was quoted before being sanity-checked. Strip the prefix, and compute self
+time as a node's count minus its direct children's.
+
+`propagate_stochastic` is **97.7 %** of `run_fciqmc` inclusive (8805 / 9008
+samples). Amdahl on that share:
 
 | threads | ceiling |
 |---|---|
