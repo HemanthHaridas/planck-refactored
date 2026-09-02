@@ -641,8 +641,23 @@ worth doing whether or not FCIQMC happens.
   serial and the method is unused. T1 stands on its own as a serial speedup; T2 is
   worth doing when a target exists.
 
-  **T1 STARTED, NOT LANDED (2026-09-02) — written, compiles clean, UNMEASURED, and
-  deliberately not committed.** `occupied`/`virtuals` return a fixed-capacity
+  **T1 LANDED (2026-09-02): 1.76x, bitwise identical, and the allocator is
+  ELIMINATED rather than reduced — 29.5 % -> 0.08 % of profile samples (7 of
+  8539).** N2/STO-3G **71.63 s -> 40.81 s** at 1 thread, with the **entire output
+  bitwise identical** on both `n2_fciqmc_sto3g` and `h2_fciqmc_sto3g` — not just
+  the energies, every printed line. That is the correct gate for this change: it is
+  a pure representation swap (heap `std::vector` -> fixed-capacity `std::array`)
+  with no arithmetic in it, so anything other than bitwise identity would be a
+  defect rather than a tolerance question.
+
+  **The scope's "treat 29.5 % as a lower bound, not an estimate" held.** Amdahl on
+  a 29.5 % share caps the direct saving at 1.42x; measured 1.76x. Same over-delivery
+  as the FCI sigma build's identical fix (4.8x against a profile implying ~2.1x),
+  and the same cause: per-call churn also costs cache pressure and bookkeeping
+  attributed to other frames. **A profile share is a lower bound on what removing
+  that work is worth.**
+
+  **Implementation, and the earlier not-landed note:** `occupied`/`virtuals` return a fixed-capacity
   `OrbitalList` (`std::array<int,32>` + count) and the five-entry excitation-class
   list is a `std::array` instead of a `std::vector`, removing all five heap
   allocations per spawn attempt. The capacity is a BOUND, not a guess:
@@ -655,15 +670,20 @@ worth doing whether or not FCIQMC happens.
   (its size is genuinely variable and it runs ~30 000 times against the spawn
   path's ~1e9).
 
-  **It is stashed rather than committed because the verification the scope demands
-  has not run**: energies **bitwise identical** on `h2_fciqmc_sto3g` and
-  `n2_fciqmc_sto3g` (this is a pure representation change with no arithmetic in it,
-  so anything else is a defect), plus the wall-clock delta and the malloc share.
-  A pre-T1 binary is saved for a clean A/B, since benchmarking against a stale
-  build tree is a recorded trap here.
+  **A build-hygiene trap worth carrying, because it cost a wasted 25-minute
+  build.** T1 was started, then STASHED to keep an unverified change out of a
+  commit — while its build was still running. `make` then compiled a file no longer
+  in the tree and reported `MAKE_EXIT=0`, which would have been a meaningless
+  green. **A build in flight is not pinned to the working tree**; kill it before
+  stashing, or the exit code describes source you no longer have.
 
-  **T2 stays blocked until T1 is measured**, because T1 changes what threading is
-  worth.
+  **T2 (threading the spawn) is now unblocked.** Post-T1 the profile is
+  `slater_condon_element`-dominated with the allocator gone, which is the shape the
+  scope wanted before threading — the whole reason for the T1-first ordering was
+  that threading an allocation-bound loop parallelizes `malloc` contention. The
+  determinism design is already decided and gated (`h2_fciqmc_threads1/4` at
+  `atol = 0.0`): partition the PARENTS by `hash(parent) % kBins`, fixed bin count
+  never tied to thread count, merged in fixed bin order.
 
   **F5 COMPLETE, and the whole F1-F5 ladder with it (2026-09-02).** FCIQMC runs
   from an input file and reproduces exact FCI on N2/STO-3G — shift 0.32 sigma,

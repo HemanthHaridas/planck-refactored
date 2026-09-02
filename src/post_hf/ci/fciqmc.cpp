@@ -1,5 +1,7 @@
 #include "post_hf/ci/fciqmc.h"
 
+#include <array>
+#include <cassert>
 #include <algorithm>
 #include <bit>
 #include <cmath>
@@ -72,21 +74,63 @@ namespace HartreeFock::Correlation::CI::QMC
             return {after_ann | to_bit, ph_ann * ph_cre, true};
         }
 
-        std::vector<int> occupied(CIString det, int n_act)
+        // Fixed-capacity orbital list (scope step T1).
+        //
+        // `occupied`/`virtuals` returned `std::vector<int>` BY VALUE, and
+        // `draw_excitation` calls both twice per spawn attempt. At ~14000 occupied
+        // determinants x 30000 iterations that is on the order of 1e9 heap
+        // allocations, and it showed: the malloc/free family was 29.5 % of the
+        // N2/STO-3G profile against slater_condon_element's 40.1 %.
+        //
+        // The capacity is a BOUND, not a guess. `build_all_mo_ci_setup` rejects
+        // any basis with n_act > kMaxPackedSpatialOrbitals (= (64-1)/2 = 31)
+        // before FCI or FCIQMC runs, so 32 entries can never overflow. The assert
+        // states that rather than trusting it.
+        //
+        // This is the same fix, on the same shape of defect, that the FCI sigma
+        // build took (`get_excitation` returning a pair of heap vectors for values
+        // bounded at two entries): 4.8x there, and the recorded lesson is that the
+        // gain EXCEEDED what the profile implied, because per-call churn also costs
+        // cache pressure attributed to other frames.
+        struct OrbitalList
         {
-            std::vector<int> occ;
+            std::array<int, 32> items{};
+            int count = 0;
+
+            void push(int p) noexcept
+            {
+                assert(count < static_cast<int>(items.size()));
+                items[static_cast<std::size_t>(count++)] = p;
+            }
+            int size() const noexcept { return count; }
+            int operator[](int i) const noexcept
+            {
+                assert(i >= 0 && i < count);
+                return items[static_cast<std::size_t>(i)];
+            }
+            // Range-for support: several call sites iterate the list directly.
+            const int *begin() const noexcept { return items.data(); }
+            const int *end() const noexcept
+            {
+                return items.data() + static_cast<std::size_t>(count);
+            }
+        };
+
+        OrbitalList occupied(CIString det, int n_act)
+        {
+            OrbitalList occ;
             for (int p = 0; p < n_act; ++p)
                 if (det & CASSCFInternal::single_bit_mask(p))
-                    occ.push_back(p);
+                    occ.push(p);
             return occ;
         }
 
-        std::vector<int> virtuals(CIString det, int n_act)
+        OrbitalList virtuals(CIString det, int n_act)
         {
-            std::vector<int> vir;
+            OrbitalList vir;
             for (int p = 0; p < n_act; ++p)
                 if (!(det & CASSCFInternal::single_bit_mask(p)))
-                    vir.push_back(p);
+                    vir.push(p);
             return vir;
         }
     } // namespace
@@ -95,10 +139,10 @@ namespace HartreeFock::Correlation::CI::QMC
     {
         std::vector<Excitation> out;
 
-        const std::vector<int> occ_a = occupied(parent.alpha, n_act);
-        const std::vector<int> occ_b = occupied(parent.beta, n_act);
-        const std::vector<int> vir_a = virtuals(parent.alpha, n_act);
-        const std::vector<int> vir_b = virtuals(parent.beta, n_act);
+        const auto occ_a = occupied(parent.alpha, n_act);
+        const auto occ_b = occupied(parent.beta, n_act);
+        const auto vir_a = virtuals(parent.alpha, n_act);
+        const auto vir_b = virtuals(parent.beta, n_act);
 
         // --- singles, alpha
         for (int i : occ_a)
@@ -122,10 +166,10 @@ namespace HartreeFock::Correlation::CI::QMC
         // orbitals is visited exactly once; visiting both orderings would emit
         // duplicate determinants (with opposite phases, which is worse than
         // merely redundant).
-        for (std::size_t ii = 0; ii + 1 < occ_a.size(); ++ii)
-            for (std::size_t jj = ii + 1; jj < occ_a.size(); ++jj)
-                for (std::size_t aa = 0; aa + 1 < vir_a.size(); ++aa)
-                    for (std::size_t bb = aa + 1; bb < vir_a.size(); ++bb)
+        for (int ii = 0; ii + 1 < occ_a.size(); ++ii)
+            for (int jj = ii + 1; jj < occ_a.size(); ++jj)
+                for (int aa = 0; aa + 1 < vir_a.size(); ++aa)
+                    for (int bb = aa + 1; bb < vir_a.size(); ++bb)
                     {
                         const auto e1 = excite_one(parent.alpha, occ_a[ii], vir_a[aa]);
                         if (!e1.valid)
@@ -137,10 +181,10 @@ namespace HartreeFock::Correlation::CI::QMC
                     }
 
         // --- same-spin doubles, beta
-        for (std::size_t ii = 0; ii + 1 < occ_b.size(); ++ii)
-            for (std::size_t jj = ii + 1; jj < occ_b.size(); ++jj)
-                for (std::size_t aa = 0; aa + 1 < vir_b.size(); ++aa)
-                    for (std::size_t bb = aa + 1; bb < vir_b.size(); ++bb)
+        for (int ii = 0; ii + 1 < occ_b.size(); ++ii)
+            for (int jj = ii + 1; jj < occ_b.size(); ++jj)
+                for (int aa = 0; aa + 1 < vir_b.size(); ++aa)
+                    for (int bb = aa + 1; bb < vir_b.size(); ++bb)
                     {
                         const auto e1 = excite_one(parent.beta, occ_b[ii], vir_b[aa]);
                         if (!e1.valid)
@@ -216,15 +260,15 @@ namespace HartreeFock::Correlation::CI::QMC
 
     Excitation draw_excitation(const DetKey &parent, int n_act, RandomSource &rng)
     {
-        const std::vector<int> occ_a = occupied(parent.alpha, n_act);
-        const std::vector<int> occ_b = occupied(parent.beta, n_act);
-        const std::vector<int> vir_a = virtuals(parent.alpha, n_act);
-        const std::vector<int> vir_b = virtuals(parent.beta, n_act);
+        const auto occ_a = occupied(parent.alpha, n_act);
+        const auto occ_b = occupied(parent.beta, n_act);
+        const auto vir_a = virtuals(parent.alpha, n_act);
+        const auto vir_b = virtuals(parent.beta, n_act);
 
-        const int na = static_cast<int>(occ_a.size());
-        const int nb = static_cast<int>(occ_b.size());
-        const int va = static_cast<int>(vir_a.size());
-        const int vb = static_cast<int>(vir_b.size());
+        const int na = occ_a.size();
+        const int nb = occ_b.size();
+        const int va = vir_a.size();
+        const int vb = vir_b.size();
 
         const int n_sa = na * va;
         const int n_sb = nb * vb;
@@ -234,16 +278,20 @@ namespace HartreeFock::Correlation::CI::QMC
 
         // Only non-empty classes are candidates. Including an empty one would
         // waste draws and, worse, make p_gen wrong for every other class.
-        std::vector<std::pair<Klass, int>> live;
-        if (n_sa > 0) live.push_back({Klass::SingleA, n_sa});
-        if (n_sb > 0) live.push_back({Klass::SingleB, n_sb});
-        if (n_daa > 0) live.push_back({Klass::DoubleAA, n_daa});
-        if (n_dbb > 0) live.push_back({Klass::DoubleBB, n_dbb});
-        if (n_dab > 0) live.push_back({Klass::DoubleAB, n_dab});
-        if (live.empty())
+        // Fixed capacity 5: there are exactly five excitation classes, so this
+        // is a bound rather than a guess. Was a heap `std::vector` allocated on
+        // every spawn attempt (T1).
+        std::array<std::pair<Klass, int>, 5> live{};
+        int n_live = 0;
+        auto add = [&](Klass c, int n) { if (n > 0) live[static_cast<std::size_t>(n_live++)] = {c, n}; };
+        add(Klass::SingleA, n_sa);
+        add(Klass::SingleB, n_sb);
+        add(Klass::DoubleAA, n_daa);
+        add(Klass::DoubleBB, n_dbb);
+        add(Klass::DoubleAB, n_dab);
+        if (n_live == 0)
             return {};
 
-        const int n_live = static_cast<int>(live.size());
         const auto [klass, class_size] = live[static_cast<std::size_t>(rng.uniform_int(n_live))];
         const double p_gen = (1.0 / static_cast<double>(n_live))
                              / static_cast<double>(class_size);
@@ -254,16 +302,16 @@ namespace HartreeFock::Correlation::CI::QMC
         {
         case Klass::SingleA:
         {
-            const auto e = excite_one(parent.alpha, occ_a[static_cast<std::size_t>(k / va)],
-                                      vir_a[static_cast<std::size_t>(k % va)]);
+            const auto e = excite_one(parent.alpha, occ_a[k / va],
+                                      vir_a[k % va]);
             if (!e.valid)
                 return {};
             return {DetKey{e.det, parent.beta}, e.phase, p_gen, true};
         }
         case Klass::SingleB:
         {
-            const auto e = excite_one(parent.beta, occ_b[static_cast<std::size_t>(k / vb)],
-                                      vir_b[static_cast<std::size_t>(k % vb)]);
+            const auto e = excite_one(parent.beta, occ_b[k / vb],
+                                      vir_b[k % vb]);
             if (!e.valid)
                 return {};
             return {DetKey{parent.alpha, e.det}, e.phase, p_gen, true};
@@ -273,12 +321,12 @@ namespace HartreeFock::Correlation::CI::QMC
             const int n_occ_pairs = na * (na - 1) / 2;
             const auto [i, j] = unrank_pair(k % n_occ_pairs, na);
             const auto [a, b] = unrank_pair(k / n_occ_pairs, va);
-            const auto e1 = excite_one(parent.alpha, occ_a[static_cast<std::size_t>(i)],
-                                       vir_a[static_cast<std::size_t>(a)]);
+            const auto e1 = excite_one(parent.alpha, occ_a[i],
+                                       vir_a[a]);
             if (!e1.valid)
                 return {};
-            const auto e2 = excite_one(e1.det, occ_a[static_cast<std::size_t>(j)],
-                                       vir_a[static_cast<std::size_t>(b)]);
+            const auto e2 = excite_one(e1.det, occ_a[j],
+                                       vir_a[b]);
             if (!e2.valid)
                 return {};
             return {DetKey{e2.det, parent.beta}, e1.phase * e2.phase, p_gen, true};
@@ -288,12 +336,12 @@ namespace HartreeFock::Correlation::CI::QMC
             const int n_occ_pairs = nb * (nb - 1) / 2;
             const auto [i, j] = unrank_pair(k % n_occ_pairs, nb);
             const auto [a, b] = unrank_pair(k / n_occ_pairs, vb);
-            const auto e1 = excite_one(parent.beta, occ_b[static_cast<std::size_t>(i)],
-                                       vir_b[static_cast<std::size_t>(a)]);
+            const auto e1 = excite_one(parent.beta, occ_b[i],
+                                       vir_b[a]);
             if (!e1.valid)
                 return {};
-            const auto e2 = excite_one(e1.det, occ_b[static_cast<std::size_t>(j)],
-                                       vir_b[static_cast<std::size_t>(b)]);
+            const auto e2 = excite_one(e1.det, occ_b[j],
+                                       vir_b[b]);
             if (!e2.valid)
                 return {};
             return {DetKey{parent.alpha, e2.det}, e1.phase * e2.phase, p_gen, true};
@@ -302,12 +350,12 @@ namespace HartreeFock::Correlation::CI::QMC
         {
             const int ka = k % n_sa;
             const int kb = k / n_sa;
-            const auto ea = excite_one(parent.alpha, occ_a[static_cast<std::size_t>(ka / va)],
-                                       vir_a[static_cast<std::size_t>(ka % va)]);
+            const auto ea = excite_one(parent.alpha, occ_a[ka / va],
+                                       vir_a[ka % va]);
             if (!ea.valid)
                 return {};
-            const auto eb = excite_one(parent.beta, occ_b[static_cast<std::size_t>(kb / vb)],
-                                       vir_b[static_cast<std::size_t>(kb % vb)]);
+            const auto eb = excite_one(parent.beta, occ_b[kb / vb],
+                                       vir_b[kb % vb]);
             if (!eb.valid)
                 return {};
             return {DetKey{ea.det, eb.det}, ea.phase * eb.phase, p_gen, true};
