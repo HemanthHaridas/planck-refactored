@@ -12,7 +12,7 @@ Code in `src/post_hf/ci/fciqmc.{h,cpp}`; the sampling layer beneath it is
 **Scope of validation:** everything here runs on a *synthetic* Hamiltonian that
 respects a real one's sparsity and is checked against exact diagonalization. It is
 not a molecule. Reproducing a chemical answer is F5's job
-(`FCIQMC_F5_DRIVER_SCOPE.md`).
+(`FCIQMC_DRIVER_AND_VALIDATION.md`).
 
 ## 1. Why a fixed shift is not enough
 
@@ -209,7 +209,7 @@ straddle the granularity fixed it, and it then caught the mutation at 43 %.
 | the gate | `tests/fciqmc_walkers.cpp` (`planck-fciqmc-walkers`) |
 | blocked error, cross-checked twin | `blocked_standard_error` / `tests/blocking.py` |
 | the sampling layer beneath | `docs/FCIQMC_SAMPLING_AND_DYNAMICS.md` |
-| the real-molecule gate this still needs | `docs/FCIQMC_F5_DRIVER_SCOPE.md` |
+| the real-molecule gate this still needs | `docs/FCIQMC_DRIVER_AND_VALIDATION.md` |
 
 ---
 

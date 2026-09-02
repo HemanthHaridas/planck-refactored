@@ -531,7 +531,7 @@ worth doing whether or not FCIQMC happens.
   rounding was near-binary with ~100 nonzero events in 200k runs and it scattered
   **51 % on correct code**. Sizing spawns to straddle the granularity fixes it.
 
-  **F5 SCOPED (2026-08-31) in `docs/FCIQMC_F5_DRIVER_SCOPE.md`, around one
+  **F5 SCOPED (2026-08-31) in `docs/FCIQMC_DRIVER_AND_VALIDATION.md`, around one
   deliverable: a regression case reproducing N2/STO-3G deterministic FCI within
   its own error bar.** Everything validated so far runs on a SYNTHETIC
   Hamiltonian — `ToyHamiltonian` respects a real one's sparsity and is checked
@@ -621,6 +621,21 @@ worth doing whether or not FCIQMC happens.
   on a binary is not evidence the symbol is there, and a timestamp is not evidence
   a build finished** — test the actual condition (build not running AND exact
   symbol present, `grep -qx`).
+
+  **F5 COMPLETE, and the whole F1-F5 ladder with it (2026-09-02).** FCIQMC runs
+  from an input file and reproduces exact FCI on N2/STO-3G — shift 0.32 sigma,
+  projected 0.41 sigma, gated by `n2_fciqmc_sto3g` (extended, 69 s). The scope
+  docs have been rewritten as answers: `FCIQMC_SAMPLING_AND_DYNAMICS.md`,
+  `FCIQMC_POPULATION_CONTROL.md`, `FCIQMC_DRIVER_AND_VALIDATION.md`, with
+  `FCIQMC_RESEARCH_SCOPE.md` keeping the case for the work and the measurements
+  bounding it.
+
+  **The method is implemented, validated, and UNUSED.** Q1's answer has not
+  changed: nothing in this repository wants the window FCIQMC opens. Cr2
+  CAS(12,18) is a real blocked calculation on a molecule the code already handles,
+  but nobody has asked for its binding curve. **Parallelism is scoped and its
+  determinism policy decided, and is worth building the day a target exists — not
+  before.**
 
   **F5.4 DECIDED (2026-09-02): no exception — FCIQMC keeps bitwise thread-count
   invariance.** The research scope's section 6 set the burden as "show why FCIQMC

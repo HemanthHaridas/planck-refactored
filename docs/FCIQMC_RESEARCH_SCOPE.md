@@ -1,19 +1,25 @@
 # Research scope: FCIQMC in Planck
 
-**Status: both gating questions are answered, and FCIQMC runs from an input file.**
-F1–F4 are landed and gated (`planck-fciqmc-walkers`); F5.1–F5.2 wire it into the
-driver, so `correlation fciqmc` is a working calculation reproducing exact FCI on
-H2/STO-3G to within its own error bar.
+**Status: COMPLETE. F1–F5 are landed and gated; FCIQMC runs from an input file
+and reproduces exact FCI on a real molecule.**
 
-**FCIQMC reproduces exact FCI on N2/STO-3G** (2026-09-01): the shift energy agrees
-within 0.1-1.6σ across a 10x timestep range, at 0.69 walkers per determinant so
-the population is a genuine sample. That is the first validation on a real
-molecule at a meaningful system size.
+`correlation fciqmc` on N2/STO-3G (14 400 determinants, 0.69 walkers per
+determinant) agrees with exact FCI `-107.6529998854` at **0.32σ** (shift) and
+**0.41σ** (projected), gated by `n2_fciqmc_sto3g`. Both prerequisite questions
+below were answered before any FCIQMC code was written, and both answers held.
 
-**Not yet finished:** the projected energy needed a correction (ratio of sums, not
-mean of ratios) that is written but unverified; the N2 regression case is not yet
-committed; and the determinism decision (F5.4) is open. See
-`FCIQMC_F5_DRIVER_SCOPE.md`.
+**What this document is now.** It opened as a decision — *should this be built at
+all?* — and the decision was yes on technical grounds, with one caveat that has
+not changed: **nothing in this repository wants the window FCIQMC opens.** The
+method is implemented, validated, and unused. The implementation details live in
+`FCIQMC_SAMPLING_AND_DYNAMICS.md`, `FCIQMC_POPULATION_CONTROL.md` and
+`FCIQMC_DRIVER_AND_VALIDATION.md`; this document keeps the *case* for the work and
+the measurements that bound it.
+
+**What remains is a target, not a task.** Cr₂ CAS(12,18) is a real blocked
+calculation on a molecule this code already handles (§1), but nobody has asked for
+its binding curve. Parallelism is scoped and its determinism policy decided (§6),
+and would be worth building the day a target exists.
 
 FCIQMC (Booth/Thom/Alavi, *JCP* **131**, 054106) samples the FCI wavefunction with
 a population of signed walkers evolving in imaginary time, instead of storing a CI
@@ -189,7 +195,7 @@ All four are mutation-verified.
 3. **The naive standard error understates σ by up to 6.6x**, so every gate
    downstream of it would have passed.
 
-## 4. What exists, and what must be built
+## 4. What the method reuses from the existing CI layer
 
 **Reusable as-is:**
 
@@ -217,117 +223,28 @@ scope originally named is satisfied.**
   plus the brute-force oracle it is gated against and the in-space variant with a
   corrected `p_gen`.
 
-**Built (F3):** the dynamics — spawn, death, annihilation on a fixed shift, the
-projected energy, and the reproducibility gate.
+**All of it is built.** See the answer docs listed in §5. The point of this
+section is the *reuse*: FCIQMC needed no new determinant layer, no new matrix
+elements, and no new integral transform — only walker state, an excitation
+generator, dynamics, and population control on top of what FCI already had.
 
-**Built (F4, F5.1–F5.2):** population control — shift adjustment with a restoring
-term, walker targets, the initiator approximation — plus the driver entry point,
-input keywords, and both energy estimators with blocked error bars.
+## 5. Implementation ladder — all landed
 
-**Still to build:**
+| step | what | answer doc |
+|---|---|---|
+| **F1** | walker container, RNG policy | `FCIQMC_SAMPLING_AND_DYNAMICS.md` |
+| **F2** | excitation generator with `p_gen` | same |
+| **F3** | spawn / death / annihilation | same |
+| **F4** | shift control, estimators, initiator | `FCIQMC_POPULATION_CONTROL.md` |
+| **F5** | driver, keywords, N2 gate, determinism | `FCIQMC_DRIVER_AND_VALIDATION.md` |
 
-- **The N2/STO-3G gate (F5.3)**, the first validation on a system where sampling
-  is meaningful. Everything above H2 so far runs on a synthetic Hamiltonian.
-- **Parallelism**, and the determinism decision in §6 (F5.4).
+Gated by `planck-fciqmc-walkers` (~34 s) plus the `h2_fciqmc_sto3g`,
+`n2_fciqmc_sto3g` and `h2_fciqmc_threads1/4` regression cases.
 
-## 5. Implementation ladder
+**The one thing the ladder did not do: run Cr₂.** That was and remains the target
+in §1, blocked on a person wanting it rather than on any missing capability.
 
-Ordered so the cheapest step can kill the expensive ones. Each is independently
-verifiable against machinery that already exists.
-
-**F1 — walker container + RNG policy. LANDED 2026-08-31.**
-`src/post_hf/ci/fciqmc.{h,cpp}`. The sparse determinant-keyed map of signed
-weights, plus `RandomSource`. The design point: **annihilation is not a separate
-pass** — it is what accumulating signed weights into a map keyed by determinant
-already does, which is also why the container is a map rather than a walker list.
-`derive(index)` is deterministic in the run seed and independent of how many
-shards were derived. Mutation-verified against round-to-nearest (biases the
-energy), overwrite-instead-of-accumulate, and a call-order-dependent `derive()`.
-
-**F2 — excitation generator with `p_gen`. LANDED 2026-08-31**, scoped separately
-in `FCIQMC_SAMPLING_AND_DYNAMICS.md` because it is the one step that fails
-*silently*. Five sub-steps: the brute-force oracle first (the measuring
-instrument), a slow uniform reference generator, the O(1) production generator
-with non-uniform `p_gen`, permanent broken-generator fixtures asserting the gate
-can fail, and the spin/symmetry layer. Connection counts verified by independent
-brute force: H2 3, water 140, N2 609.
-
-Three findings from it are worth carrying into F3:
-
-- **When a sampled quantity is used as a DIVISOR, unbiasedness of the estimator is
-  the wrong property to check.** F2.5 nearly shipped a `p_gen` correction using
-  the per-call attempt count: unbiased for `p_gen` (mean correct to 0.1 %), and
-  **1.72x wrong** in the `1/p_gen` the spawn actually uses. F3 divides by `p_gen`
-  on every spawn, so this is live there.
-- **Support and frequency are different failure modes, but only once `p_gen` is
-  non-uniform.** For a uniform generator a support hole also moves the frequencies
-  (~54σ); for a weighted one a rare unreachable connection is ~0.6σ, invisible.
-- **An equivalent mutant exposed a coverage hole.** Every fixture had been
-  closed-shell, so an index bug that only manifests when α and β counts differ had
-  zero coverage. F3's fixtures must include an open-shell case for the same reason.
-
-**F3 — spawn / death / annihilation on a fixed shift. LANDED 2026-08-31**, in
-`FCIQMC_SAMPLING_AND_DYNAMICS.md`. Deterministic propagation exact against a matvec,
-stochastic spawning mean-exact against that, convergence to the ground state
-(overlap > 0.9999), the projected energy with its finite-population bias
-characterized, and whole-trajectory fixed-seed reproducibility. **The method now
-runs.**
-
-Two findings that bind the remaining steps:
-
-- **Gate tolerances must be derived from the measurement, not chosen.** F3.2's
-  absolute tolerance was vacuous (it sat at the effect size, letting a dropped
-  `1/p_gen` through); a relative one was noise-dominated. The standard error is
-  the only scale correct across components spanning orders of magnitude. F3.4 hit
-  the same wall from the other side — its apparent bias at the largest population
-  is below what the trial count can resolve.
-- **A divergence gate for the timestep belongs here, in F4.** F3 could not build
-  one: renormalizing each iteration turns the propagation into a power iteration
-  whose dominant eigenvector stays the ground state at every `dt` tried, so
-  "unstable" has nowhere to show. With population control it does.
-
-**F4 — shift control and the initiator approximation. LANDED 2026-08-31**,
-answered in `FCIQMC_POPULATION_CONTROL.md`. Shift control with a restoring term,
-the shift energy cross-checked against the projected energy, the timestep
-divergence gate F3 could not build, stochastic population control, and i-FCIQMC.
-
-Four findings that bind the remaining work:
-
-- **The textbook single-term shift update never targets a population.** It
-  responds to the growth *rate*, so it stops drift and then stabilises wherever
-  the run happened to be — measured, the final population is proportional to the
-  starting one (135.7x the target from every start across a 1000x range). A
-  second term `xi·ln(N/N_target)` supplies the restoring force at no cost to shift
-  accuracy (3.2e-13 either way).
-- **The two estimators share no arithmetic**, which is what makes their agreement
-  evidence rather than tautology — 0.00e+00 and 1.01e-09 across a 100x population
-  range. Both are still pinned to the exact energy separately, because they could
-  agree by sharing an upstream defect.
-- **Error bars must be blocked, never naive.** The blocked error exceeds the naive
-  one by 4.7x on a real trajectory here; understating σ makes every downstream
-  gate pass.
-- **The toy fixture saturates**, which is why two of this step's intended gates —
-  the initiator's `n_add → 0` trend and the population-noise trend — could not be
-  built on it. A space small enough to validate against exact diagonalization is
-  often too small to exhibit the sampling behaviour being validated. Both defer to
-  the N2 gate below.
-
-**F5 — driver wiring, the N2 gate, and the determinism decision.** Scoped in
-`FCIQMC_F5_DRIVER_SCOPE.md`. **F5.1 and F5.2 are landed**: `run_fciqmc` shares
-`run_fci`'s integral transform (extracted, not copied, so a disagreement is
-attributable to sampling rather than plumbing), and eleven input keywords are live
-with the seed user-visible and echoed. On H2/STO-3G the shift energy sits 0.09σ
-from exact FCI and the projected energy 0.34σ.
-
-**F5.3 — the N2/STO-3G gate — is the deliverable that matters**, because it is the
-first system where the walker population is a genuine sample rather than covering
-the space. **F5.4 is the determinism decision** in §6, which must be made
-explicitly rather than discovered.
-
-**Only then** Cr₂: CAS(12,12) against the deterministic answer first, then walk out
-to CAS(12,18) where no reference exists.
-
-## 6. The determinism tension — decide it explicitly
+## 6. The determinism tension — decided
 
 Every parallel path in Planck is **bitwise thread-count-invariant**, by design and
 by gate: the DFT J/K builds, the CC kernels, the ERI transforms, and now the FCI

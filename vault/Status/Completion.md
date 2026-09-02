@@ -319,9 +319,29 @@ historical design context, but they are no longer the source of truth for
   against analytic AR(1), a fixed-seed harness, and an end-to-end estimator), all
   built *before* any FCIQMC code and reusable independently of it.
 
+  **N2/STO-3G validation landed (2026-09-02).** `n2_fciqmc_sto3g` (extended, 69 s)
+  gates both estimators against exact FCI `-107.6529998854` at **0.32 sigma**
+  (shift) and **0.41 sigma** (projected), at 0.69 walkers per determinant so the
+  population is a genuine sample. Verified non-vacuous: an unstable timestep fails
+  it on three independent grounds.
+
+  **The finding worth carrying: a good-looking number hid a broken run.** At
+  `dt = 0.010` the shift energy read 0.14 sigma from exact while the reference
+  determinant was oscillating in sign (mean `|c_0|` 91.75 against mean signed
+  `c_0` -7.50). The shift cannot see it — it responds to the total population —
+  so **a single-estimator implementation would have reported a perfect-looking
+  answer.** The projected energy and the cross-check caught it. The driver now
+  warns on sign instability directly and the gate asserts
+  `not_contains: SIGN-UNSTABLE`.
+
+  **Threading determinism decided, not discovered:** no exception. Partitioning the
+  parents by `hash(parent) % kBins` and merging in fixed bin order keeps bitwise
+  thread-count invariance, gated by `h2_fciqmc_threads1/4` before any threading
+  exists.
+
   Answers: `docs/FCIQMC_SAMPLING_AND_DYNAMICS.md`,
-  `docs/FCIQMC_POPULATION_CONTROL.md`. Open scope:
-  `docs/FCIQMC_F5_DRIVER_SCOPE.md`.
+  `docs/FCIQMC_POPULATION_CONTROL.md`,
+  `docs/FCIQMC_DRIVER_AND_VALIDATION.md`.
 
 - **FCI sigma build: 4.8x from removing the allocator, then 3.54x more from
   threading it (2026-08-30).** The iterative `apply_ci_hamiltonian`

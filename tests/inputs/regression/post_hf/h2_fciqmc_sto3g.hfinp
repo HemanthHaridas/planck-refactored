@@ -8,7 +8,7 @@
 #
 # NOT a regression case. 4 determinants is far below where sampling means
 # anything -- the walker population covers the whole space -- so this validates
-# plumbing only. The real gate is N2/STO-3G, see docs/FCIQMC_F5_DRIVER_SCOPE.md.
+# plumbing only. The real gate is N2/STO-3G, see docs/FCIQMC_DRIVER_AND_VALIDATION.md.
 
 %begin_control
     basis       sto-3g
