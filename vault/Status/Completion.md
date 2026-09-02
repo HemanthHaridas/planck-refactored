@@ -343,6 +343,82 @@ historical design context, but they are no longer the source of truth for
   `docs/FCIQMC_POPULATION_CONTROL.md`,
   `docs/FCIQMC_DRIVER_AND_VALIDATION.md`.
 
+- **FCIQMC: two estimator defects found and fixed by comparing the sampled
+  WAVEFUNCTION against deterministic FCI, not the energy (2026-09-02).** Both were
+  invisible to every existing gate, which compares energies only. The instrument
+  that found them is a coefficient-ratio dump on both paths: `run_fci` prints
+  `C_I/C_0` and `run_fciqmc` prints `<N_I>/<N_0>` over the accumulated SIGNED
+  per-determinant weight, in one format, at `verbosity verbose`.
+
+  **(1) The reference determinant was built by occupying the LOWEST-INDEX
+  orbitals, and index order is not energy order.** On N2/STO-3G the Aufbau
+  determinant is `0xbf` (orbitals [0,1,2,3,4,5,**7**]) because MO 6 lies above
+  MO 7 in the converged SCF ordering; the old code used `0x7f`. The true reference
+  carried **14.2x** the weight of the one everything was normalised against. It
+  survived because the failure is silent: the projected energy
+  `E = H_00 + (sum_j H_0j c_j)/c_0` anchors on it, so a weak anchor inflates the
+  VARIANCE rather than producing a wrong-looking number -- N2's projected error bar
+  ran ~20x the shift's and read as ordinary noise. Fixed by minimising
+  `ops.diagonal` over single occupied->virtual swaps from the Aufbau guess, using
+  the SAME `slater_condon_element` the propagator uses so the reference cannot
+  disagree with the Hamiltonian being sampled. Measured on N2: shared determinants
+  between the two dumps **0 -> 16**, projected error bar **3.27e-01 -> 1.34e-02
+  (24x tighter)**, shift **0.92 -> 0.11 sigma**.
+
+  **The bad reference corrupted the SHIFT too, indirectly** -- it is also the
+  starting population, so the run spent equilibration migrating away from a
+  near-empty determinant. An earlier note here claimed the shift "never touches the
+  reference, so this is a separate defect"; that was wrong.
+
+  **(2) On a DEGENERATE ground state the projected energy decays with sampling
+  time.** Any mixture of degenerate eigenstates is itself an eigenstate at the same
+  energy, so the imaginary-time dynamics apply **no restoring force** within the
+  manifold and the population random-walks between partners. Measured on
+  C2/STO-3G (FCI roots 0 and 1 both `-74.6406501646`, partners `0x3f/0x6f` and
+  `0x6f/0x3f` at +/-1.000000), varying ONLY the equilibration length:
+
+  | equil | partner/anchor | E_proj | sigma vs exact |
+  |---|---|---|---|
+  | 20000 | -0.861 | -74.6172886 | +2.62 |
+  | 40000 | -1.674 | -74.6413697 | -0.06 |
+  | 60000 | **-3.833** | **-74.7503958** | **-5.57** |
+
+  By 60000 the anchor holds a quarter of the partner's weight while the numerator
+  still samples the whole manifold, so the ratio inflates negatively and reports an
+  energy **5.6 sigma BELOW the variational minimum**. **Nothing is unstable** --
+  the sign is steady, the population is controlled, the reference holds 743
+  walkers. The run is fine and the ESTIMATOR is measuring the wrong thing.
+  **LONGER equilibration makes it WORSE**, inverting the usual intuition: more time
+  to converge is also more time to drift.
+
+  Fixed by warning on drift (>2x the seeded reference) and re-anchoring the
+  projection onto the largest-weight determinant **once**, at the end of
+  equilibration -- a reference that moved during sampling would change what the
+  accumulated ratio-of-sums means partway through. The scan breaks ties on the
+  bitstrings because the population is a hash map and an order-dependent anchor
+  would break fixed-seed reproducibility. Verified as a mutation test: the
+  known-broken `eq60` case goes **-5.57 -> +2.27 sigma** with the shift
+  **bit-identical** (proving only the projection changed), and non-degenerate N2 is
+  **bitwise unchanged** end to end -- inert where there is no drift.
+
+  **The shift is immune** (-1.05/-0.14/-0.49 sigma across the same three runs)
+  because it responds to total population growth, which is indifferent to how
+  weight is distributed inside the manifold. That is the **mirror image** of the N2
+  sign-instability finding, where the projected energy caught what the shift could
+  not. **Neither estimator dominates, which is the actual argument for computing
+  both.**
+
+  **Fixture consequence: C2/STO-3G is unsuitable for validating the projected
+  energy** and is replaced by **HF/6-31G** (11 orbitals, 5a/5b, **ndet = 213444**,
+  4.8x C2). Non-degeneracy was **measured, not assumed** -- roots 0 and 1 at
+  `-100.1156979102` / `-99.7369526906`, a **10.31 eV gap**, against C2's
+  `0.00e+00`. Inferring non-degeneracy from the "closed-shell singlet" label is
+  exactly the mistake C2 punished. A population sweep there spans 0.047-0.469
+  walkers/determinant, entirely below saturation (C2 saturates at 44100 walkers).
+  Fixtures and the sweep driver `tests/fciqmc_validation.py` are committed but
+  **deliberately unregistered**: each sweep is minutes-to-hours, which no CI budget
+  absorbs.
+
 - **FCI sigma build: 4.8x from removing the allocator, then 3.54x more from
   threading it (2026-08-30).** The iterative `apply_ci_hamiltonian`
   (`src/post_hf/ci/ci.cpp`) — the path taken by every determinant space above

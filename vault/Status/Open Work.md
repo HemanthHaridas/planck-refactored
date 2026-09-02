@@ -641,6 +641,30 @@ worth doing whether or not FCIQMC happens.
   serial and the method is unused. T1 stands on its own as a serial speedup; T2 is
   worth doing when a target exists.
 
+  **T1 STARTED, NOT LANDED (2026-09-02) — written, compiles clean, UNMEASURED, and
+  deliberately not committed.** `occupied`/`virtuals` return a fixed-capacity
+  `OrbitalList` (`std::array<int,32>` + count) and the five-entry excitation-class
+  list is a `std::array` instead of a `std::vector`, removing all five heap
+  allocations per spawn attempt. The capacity is a BOUND, not a guess:
+  `build_all_mo_ci_setup` rejects `n_act > kMaxPackedSpatialOrbitals` = `(64-1)/2`
+  = 31 before either FCI or FCIQMC runs.
+
+  Verified before writing it, rather than trusted from the scope:
+  `propagate_stochastic` calls `draw_excitation` and **never**
+  `enumerate_connections`, so the latter correctly keeps its `std::vector` return
+  (its size is genuinely variable and it runs ~30 000 times against the spawn
+  path's ~1e9).
+
+  **It is stashed rather than committed because the verification the scope demands
+  has not run**: energies **bitwise identical** on `h2_fciqmc_sto3g` and
+  `n2_fciqmc_sto3g` (this is a pure representation change with no arithmetic in it,
+  so anything else is a defect), plus the wall-clock delta and the malloc share.
+  A pre-T1 binary is saved for a clean A/B, since benchmarking against a stale
+  build tree is a recorded trap here.
+
+  **T2 stays blocked until T1 is measured**, because T1 changes what threading is
+  worth.
+
   **F5 COMPLETE, and the whole F1-F5 ladder with it (2026-09-02).** FCIQMC runs
   from an input file and reproduces exact FCI on N2/STO-3G — shift 0.32 sigma,
   projected 0.41 sigma, gated by `n2_fciqmc_sto3g` (extended, 69 s). The scope

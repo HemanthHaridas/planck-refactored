@@ -11,6 +11,8 @@
 #include <cstdlib>
 #include <limits>
 #include <format>
+#include <algorithm>
+#include <unordered_map>
 #include <vector>
 
 namespace HartreeFock::Correlation
@@ -44,17 +46,80 @@ namespace HartreeFock::Correlation
             return ops;
         }
 
-        // The lowest-energy determinant: alpha and beta electrons in the lowest
-        // orbitals. Used as both the starting population and the projection
-        // reference, matching how the deterministic path orders its determinants.
-        DetKey reference_determinant(int n_alpha, int n_beta)
+        // The reference determinant: the one with the LOWEST DIAGONAL ENERGY.
+        //
+        // NOT simply "occupy the lowest-index orbitals". That assumption was wrong
+        // and it was wrong on the gated fixture: on N2/STO-3G the Aufbau
+        // determinant is 0xbf (orbitals [0,1,2,3,4,5,7]) while the lowest-index
+        // form gives 0x7f ([0,1,2,3,4,5,6]). MO 6 lies ABOVE MO 7 in the converged
+        // SCF ordering, so index order is not energy order.
+        //
+        // The consequences were silent rather than loud, which is why it survived:
+        //   - the projected energy E = H_00 + (sum_j H_0j c_j)/c_0 anchors on this
+        //     determinant, so a weakly-occupied choice inflates its variance (N2's
+        //     projected error bar ran ~20x the shift's) and biases the ratio;
+        //   - <N_I>/<N_0> normalises by it, and the true reference carried 14.2x
+        //     the weight of the one being used as the unit.
+        // The SHIFT energy never touches it, which is exactly why the shift looked
+        // healthy throughout and hid the defect.
+        //
+        // Minimising ops.diagonal rather than reading SCF MO energies is
+        // deliberate: it uses the SAME slater_condon_element the propagator uses,
+        // so the reference cannot disagree with the Hamiltonian being sampled. The
+        // search is over single orbital swaps from the Aufbau guess (occupied ->
+        // virtual, one at a time, repeated until no swap lowers the diagonal),
+        // which is a hill-climb rather than an exhaustive scan -- exhaustive is
+        // C(n,k)^2 determinants and this runs once per calculation.
+        //
+        // ponytail: hill-climb, not exhaustive. A determinant that is lowest only
+        // via a simultaneous multi-orbital swap would be missed; if that ever
+        // matters, seed from the SCF occupation instead of searching from Aufbau.
+        DetKey reference_determinant(int n_alpha, int n_beta, int n_act,
+                                     const HamiltonianOps &ops)
         {
-            CIString a = 0, b = 0;
-            for (int i = 0; i < n_alpha; ++i)
-                a |= (CIString{1} << i);
-            for (int i = 0; i < n_beta; ++i)
-                b |= (CIString{1} << i);
-            return DetKey{a, b};
+            auto aufbau = [](int n) {
+                CIString s = 0;
+                for (int i = 0; i < n; ++i)
+                    s |= (CIString{1} << i);
+                return s;
+            };
+            DetKey best{aufbau(n_alpha), aufbau(n_beta)};
+            double best_e = ops.diagonal(best);
+
+            // Repeat until a full sweep finds no improvement: one pass fixes a
+            // single misordered pair, but several orbitals can be out of order.
+            bool improved = true;
+            while (improved)
+            {
+                improved = false;
+                for (int spin = 0; spin < 2; ++spin)
+                {
+                    CIString &str = (spin == 0) ? best.alpha : best.beta;
+                    for (int occ = 0; occ < n_act; ++occ)
+                    {
+                        if (!(str >> occ & 1))
+                            continue;
+                        for (int vir = 0; vir < n_act; ++vir)
+                        {
+                            if (str >> vir & 1)
+                                continue;
+                            const CIString saved = str;
+                            str = (str & ~(CIString{1} << occ)) | (CIString{1} << vir);
+                            const double e = ops.diagonal(best);
+                            if (e < best_e - 1e-12)
+                            {
+                                best_e = e;
+                                improved = true;
+                            }
+                            else
+                            {
+                                str = saved;
+                            }
+                        }
+                    }
+                }
+            }
+            return best;
         }
     } // namespace
 
@@ -77,7 +142,18 @@ namespace HartreeFock::Correlation
             return std::unexpected(tag + ": fciqmc_steps must be at least 4.");
 
         const auto ops = make_ops(*setup);
-        const DetKey reference = reference_determinant(setup->n_alpha, setup->n_beta);
+        DetKey reference = reference_determinant(setup->n_alpha, setup->n_beta,
+                                                 setup->n_act, ops);
+        // Print it. The wrong reference produced no error and no warning -- only a
+        // wide projected-energy error bar that read as ordinary noise -- so the
+        // determinant that everything is normalised against is now visible in the
+        // output and directly comparable with the FCI dump's reference line.
+        logging(LogLevel::Info, tag + " :",
+                std::format("reference determinant {:#018x}/{:#018x}, "
+                            "diagonal {:.10f} Eh",
+                            static_cast<unsigned long long>(reference.alpha),
+                            static_cast<unsigned long long>(reference.beta),
+                            ops.diagonal(reference)));
 
         logging(LogLevel::Info, tag + " :",
                 std::format("Sampling {} orbitals, {} alpha / {} beta electrons  "
@@ -122,6 +198,14 @@ namespace HartreeFock::Correlation
         int ref_weight_n = 0;
         std::vector<double> shift_samples;
         std::vector<double> projected_samples;
+        // Running sum of SIGNED weight per determinant over the sampling phase.
+        //
+        // Signed, and summed over steps rather than snapshotted: an instantaneous
+        // population is dominated by shot noise (many determinants hold a single
+        // walker whose sign flips step to step), while <N_I> converges to the
+        // wavefunction. The sign is the whole point -- a magnitude-only average
+        // would agree with a broken sampler that got every phase wrong.
+        std::unordered_map<DetKey, double, DetKeyHash> signed_population;
         const int total_steps = opt.equilibration_steps + opt.sampling_steps;
 
         for (int step = 0; step < total_steps; ++step)
@@ -148,9 +232,103 @@ namespace HartreeFock::Correlation
 
             ctl.update(n, opt.timestep);
 
+            // RE-ANCHOR THE PROJECTION REFERENCE ONCE, AT THE END OF EQUILIBRATION.
+            //
+            // The projected energy E = H_00 + (sum_j H_0j c_j)/c_0 assumes the
+            // reference carries a dominant share of the wavefunction. On a
+            // DEGENERATE ground state that assumption decays with time: any
+            // mixture of degenerate eigenstates is itself an eigenstate at the
+            // same energy, so the imaginary-time dynamics apply NO restoring
+            // force within the degenerate manifold and the population random-walks
+            // between the partners.
+            //
+            // Measured on C2/STO-3G, whose ground state is doubly degenerate (FCI
+            // roots 0 and 1 both -74.6406501646, partners 0x3f/0x6f and 0x6f/0x3f
+            // at +/-1.000000). Holding everything else fixed and varying only the
+            // equilibration length, the partner-to-anchor ratio and the projected
+            // energy degrade together:
+            //
+            //   equil    partner/anchor    E_proj          sigma vs exact
+            //   20000    -0.861            -74.6172886     +2.62
+            //   40000    -1.674            -74.6413697     -0.06
+            //   60000    -3.833            -74.7503958     -5.57
+            //
+            // By 60000 the anchor holds a quarter of the partner's weight, the
+            // numerator still samples the whole manifold, and the ratio inflates
+            // NEGATIVELY -- reporting an energy 5.6 sigma BELOW the variational
+            // minimum. Nothing is unstable: the sign is steady, the population is
+            // controlled, the reference holds 743 walkers. The run is fine and the
+            // ESTIMATOR is measuring the wrong thing.
+            //
+            // The shift energy is immune (-1.05/-0.14/-0.49 sigma across the same
+            // three runs) because it responds to total population growth, which is
+            // indifferent to how weight is distributed inside the manifold. That
+            // asymmetry is the mirror image of the N2 sign-instability finding,
+            // where the projected energy caught what the shift could not -- neither
+            // estimator dominates, which is why both are computed.
+            //
+            // Re-anchoring on the largest-weight determinant is what the
+            // deterministic FCI coefficient dump already does, for the same reason.
+            // Done ONCE rather than per step: a reference that moves during
+            // sampling would change what the accumulated ratio-of-sums means
+            // partway through, which is worse than a slightly suboptimal anchor.
+            if (step == opt.equilibration_steps)
+            {
+                const DetKey seeded = reference;
+                double best_w = std::abs(pop.weight_at(reference));
+                DetKey best = reference;
+                // Deterministic scan: the population is a hash map, so ties must
+                // break on the bitstrings or the anchor depends on iteration order
+                // and the run stops being reproducible at fixed seed.
+                for (const auto &[det, w] : pop)
+                {
+                    const double aw = std::abs(w);
+                    if (aw > best_w
+                        || (aw == best_w
+                            && (det.alpha < best.alpha
+                                || (det.alpha == best.alpha && det.beta < best.beta))))
+                    {
+                        best_w = aw;
+                        best = det;
+                    }
+                }
+
+                const double seeded_w = std::abs(pop.weight_at(seeded));
+                // Warn whenever the seeded reference has been overtaken by a
+                // margin, whether or not re-anchoring fixes it -- a large drift
+                // says the state is degenerate or near-degenerate, which the user
+                // should know regardless.
+                if (seeded_w > 0.0 && best_w > 2.0 * seeded_w)
+                    logging(LogLevel::Warning, tag + " :",
+                            std::format("REFERENCE DRIFT: determinant "
+                                        "{:#018x}/{:#018x} now carries {:.2f} walkers "
+                                        "against the seeded reference's {:.2f} "
+                                        "({:.1f}x). This is the signature of a "
+                                        "degenerate or near-degenerate ground state, "
+                                        "in which the population drifts freely "
+                                        "between partners. Re-anchoring the "
+                                        "projection; the shift energy is unaffected.",
+                                        static_cast<unsigned long long>(best.alpha),
+                                        static_cast<unsigned long long>(best.beta),
+                                        best_w, seeded_w, best_w / seeded_w));
+
+                if (!(best == reference))
+                {
+                    reference = best;
+                    logging(LogLevel::Info, tag + " :",
+                            std::format("projection re-anchored to {:#018x}/{:#018x} "
+                                        "({:.2f} walkers) after equilibration",
+                                        static_cast<unsigned long long>(best.alpha),
+                                        static_cast<unsigned long long>(best.beta),
+                                        best_w));
+                }
+            }
+
             if (step >= opt.equilibration_steps)
             {
                 shift_samples.push_back(ctl.shift);
+                for (const auto &[det, w] : pop)
+                    signed_population[det] += w;
                 // THE REFERENCE WEIGHT THRESHOLD IS NOT 1e-12 HERE.
                 //
                 // projected_energy defaults to rejecting only c_0 == 0, which is
@@ -297,6 +475,59 @@ namespace HartreeFock::Correlation
                         std::format("shift and projected energies differ by {:.3e}, "
                                     "beyond 5 sigma ({:.3e}) -- the run may not be "
                                     "equilibrated", gap, tol));
+        }
+
+        // ── Coefficient ratios <N_I>/<N_0> ─────────────────────────────────────
+        //
+        // The sampled wavefunction, in the form that can be compared directly
+        // against deterministic FCI's C_I/C_0 (printed by `correlation fci` on the
+        // same input at `verbosity verbose`). This is a stronger check than energy
+        // agreement: the energy is one scalar contracted over the whole vector, so
+        // errors in spawning phases, death/cloning and annihilation can cancel
+        // inside it. Ratios expose the vector, sign included.
+        //
+        // Ratios rather than raw populations because a walker population is
+        // normalised by its own target and an FCI eigenvector by its norm; only
+        // the ratio against the reference is common to both.
+        if (calc._output._verbosity >= Verbosity::Verbose && !signed_population.empty())
+        {
+            std::vector<std::pair<DetKey, double>> rows(signed_population.begin(),
+                                                        signed_population.end());
+            // Sort by magnitude, breaking ties on the bitstrings. The tie-break is
+            // load-bearing, not cosmetic: `signed_population` is a hash map, so
+            // without a total order the printed list depends on iteration order.
+            std::sort(rows.begin(), rows.end(), [](const auto &a, const auto &b) {
+                if (std::abs(a.second) != std::abs(b.second))
+                    return std::abs(a.second) > std::abs(b.second);
+                if (a.first.alpha != b.first.alpha)
+                    return a.first.alpha < b.first.alpha;
+                return a.first.beta < b.first.beta;
+            });
+
+            const double n0 = signed_population.count(reference)
+                                  ? signed_population.at(reference)
+                                  : 0.0;
+            if (n0 == 0.0)
+                logging(LogLevel::Warning, tag + " :",
+                        "reference determinant carries no accumulated weight; "
+                        "coefficient ratios are unavailable.");
+            else
+            {
+                logging(LogLevel::Info, tag + " :",
+                        std::format("Dominant determinants (alpha/beta bitstrings, "
+                                    "<N_I>/<N_0> against reference {:#018x}/{:#018x}, "
+                                    "{} occupied):",
+                                    static_cast<unsigned long long>(reference.alpha),
+                                    static_cast<unsigned long long>(reference.beta),
+                                    rows.size()));
+                const std::size_t n_show = std::min<std::size_t>(rows.size(), 20);
+                for (std::size_t k = 0; k < n_show; ++k)
+                    logging(LogLevel::Info, tag + " :",
+                            std::format("  det {:#018x}/{:#018x}  <N_I>/<N_0> {:+.6f}",
+                                        static_cast<unsigned long long>(rows[k].first.alpha),
+                                        static_cast<unsigned long long>(rows[k].first.beta),
+                                        rows[k].second / n0));
+            }
         }
 
         // The shift energy is the reported value: it is the estimator population

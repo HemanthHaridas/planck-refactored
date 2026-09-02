@@ -1,0 +1,82 @@
+# HF (hydrogen fluoride) / 6-31G -- the validation fixture for the three
+# convergence tests, replacing C2/STO-3G.
+#
+# 11 orbitals, 5 alpha / 5 beta, ndet = 213444.
+#
+# WHY NOT C2/STO-3G: its ground state is DOUBLY DEGENERATE (FCI roots 0 and 1
+# both -74.6406501646, partners 0x3f/0x6f and 0x6f/0x3f at +/-1.000000). Any
+# mixture of degenerate eigenstates is itself an eigenstate at the same energy,
+# so the imaginary-time dynamics apply no restoring force within the manifold
+# and the walker population random-walks between the partners. Measured, varying
+# only the equilibration length:
+#
+#   equil    partner/anchor    E_proj          sigma vs exact
+#   20000    -0.861            -74.6172886     +2.62
+#   40000    -1.674            -74.6413697     -0.06
+#   60000    -3.833            -74.7503958     -5.57
+#
+# The projected energy is therefore not measuring what it claims to on C2, and
+# LONGER equilibration makes it worse -- the opposite of the usual intuition.
+# A fixture whose estimator degrades with more sampling cannot validate
+# "production-length convergence" (test 1) or "walker-population convergence"
+# (test 2). The re-anchoring in the driver mitigates it but the fixture is still
+# the wrong instrument for the question.
+#
+# WHY HF/6-31G:
+#   - closed-shell singlet, strongly bound, NON-degenerate ground state
+#     (verified: roots 0 and 1 separated by a large gap, see below)
+#   - ndet = 213444, which is 14.8x N2/STO-3G and 4.8x C2 -- the population
+#     sweep spans 0.047-0.469 walkers/determinant, entirely below saturation
+#     (C2 saturated at 44100 walkers; HF does not until 213444)
+#   - FCI reference still affordable (~9 min), so all three tests keep the
+#     deterministic comparison they are defined against
+#   - heteronuclear, so no inversion symmetry to create accidental degeneracies
+#
+# MEASURED (2026-09-02), which is why this fixture is trusted rather than assumed:
+#
+#   RHF            -99.9834089314
+#   FCI root 0    -100.1156979102   <- the reference for all three tests
+#   FCI root 1     -99.7369526906
+#   gap             0.378745 Eh = 10.31 eV   -> NON-DEGENERATE
+#
+# Compare C2/STO-3G, whose roots 0 and 1 are separated by 0.00e+00 Eh. The
+# non-degeneracy was VERIFIED with nroots 2 rather than argued from chemical
+# intuition -- that is exactly the check C2 failed, and asserting it from the
+# closed-shell singlet label would have repeated the mistake.
+#
+# ndet = 213444; FCI reference cost ~9 min at 2 threads.
+#
+# Geometry: experimental r(H-F) = 0.917 Angstrom.
+
+%begin_control
+    basis       6-31g
+    calculation energy
+    verbosity   verbose
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation fci
+    ci_max_dim  400000
+    nroots      2
+
+    use_diis    .true.
+    diis_dim    8
+    save_checkpoint .false.
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+2
+0   1
+F     0.000000     0.000000     0.000000
+H     0.000000     0.000000     0.917000
+%end_coords

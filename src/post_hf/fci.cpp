@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <format>
+#include <numeric>
 
 namespace HartreeFock::Correlation
 {
@@ -195,6 +196,58 @@ namespace HartreeFock::Correlation
                 logging(LogLevel::Info, tag + " :",
                         std::format("  root {:2d}: {:.10f}",
                                     r, ci.energies(r) + calc._nuclear_repulsion));
+        }
+
+        // ── Coefficient ratios C_I / C_0 ───────────────────────────────────────
+        //
+        // The reference for a stochastic method to compare its sampled
+        // wavefunction against. Energy agreement is a weaker test: it is one
+        // scalar contracted over the whole vector, so errors in spawning phases,
+        // death/cloning and annihilation can cancel within it. Ratios expose the
+        // vector itself, sign included.
+        //
+        // Ratios rather than raw coefficients because the FCI eigenvector's
+        // overall phase and normalisation are both arbitrary, while a walker
+        // population is normalised by its own population and anchored on the
+        // reference. C_I/C_0 is the quantity both sides agree on.
+        //
+        // Printed at Verbose because it is a validation instrument, not part of a
+        // normal run's output.
+        if (calc._output._verbosity >= Verbosity::Verbose && ci.vectors.cols() > 0)
+        {
+            // The reference is the largest-weight determinant, not det 0: the
+            // enumeration order is not guaranteed to put the RHF determinant
+            // first, and a ratio against a near-zero denominator is noise.
+            const Eigen::VectorXd v = ci.vectors.col(0);
+            int i_ref = 0;
+            for (int i = 1; i < v.size(); ++i)
+                if (std::abs(v(i)) > std::abs(v(i_ref)))
+                    i_ref = i;
+
+            std::vector<int> order(static_cast<std::size_t>(v.size()));
+            std::iota(order.begin(), order.end(), 0);
+            std::sort(order.begin(), order.end(), [&](int a, int b) {
+                return std::abs(v(a)) > std::abs(v(b));
+            });
+
+            const double c0 = v(i_ref);
+            const std::size_t n_show =
+                std::min<std::size_t>(order.size(), 20);
+            logging(LogLevel::Info, tag + " :",
+                    std::format("Dominant determinants (alpha/beta bitstrings, "
+                                "C_I/C_0 against reference {:#018x}/{:#018x}):",
+                                static_cast<unsigned long long>(a_strs[ci_space.dets[i_ref].first]),
+                                static_cast<unsigned long long>(b_strs[ci_space.dets[i_ref].second])));
+            for (std::size_t k = 0; k < n_show; ++k)
+            {
+                const int i = order[k];
+                const auto &d = ci_space.dets[i];
+                logging(LogLevel::Info, tag + " :",
+                        std::format("  det {:#018x}/{:#018x}  C_I/C_0 {:+.6f}",
+                                    static_cast<unsigned long long>(a_strs[d.first]),
+                                    static_cast<unsigned long long>(b_strs[d.second]),
+                                    v(i) / c0));
+            }
         }
 
         return {};
