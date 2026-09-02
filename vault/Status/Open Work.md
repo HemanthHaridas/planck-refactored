@@ -622,6 +622,29 @@ worth doing whether or not FCIQMC happens.
   a build finished** — test the actual condition (build not running AND exact
   symbol present, `grep -qx`).
 
+  **F5.4 DECIDED (2026-09-02): no exception — FCIQMC keeps bitwise thread-count
+  invariance.** The research scope's section 6 set the burden as "show why FCIQMC
+  cannot do what the FCI sigma build did", and **it is not met**: partitioning the
+  PARENTS by `hash(parent) % kBins` and merging bins in fixed order gives a result
+  independent of the order threads visit parents, which is what invariance
+  requires. Verified on a model of the spawn (in-order, reversed and shuffled visit
+  orders all identical).
+
+  Two things make it *easier* than the sigma build: binning by determinant is
+  invariant even to the BIN COUNT (each determinant maps to one bin regardless, so
+  its contributions accumulate in the same order — the sigma build binned by index
+  range, where a determinant could move between bins), and F1's
+  `RandomSource::derive(index)` already provides shard-count-independent streams.
+
+  **The trap: binning by the CHILD determinant is not sufficient** — it fixes which
+  accumulator receives a spawn but not the order arrivals reach it. The partition
+  must be over the WORK (parents), not the output.
+
+  **Gated before the threading exists** by `h2_fciqmc_threads1/4`: same input at
+  `OMP_NUM_THREADS` 1 and 4, compared at `atol = 0.0`. Passes trivially today
+  (FCIQMC has zero pragmas) — the point is that adding threads cannot silently
+  break it. Verified non-vacuous.
+
   **F5.3 LANDED (2026-09-02): both estimators reproduce exact FCI on N2/STO-3G**,
   gated by `n2_fciqmc_sto3g` (extended, 69 s) — shift 0.32 sigma, projected 0.41
   sigma against `-107.6529998854`. Verified non-vacuous: injecting `dt = 0.010`

@@ -360,6 +360,50 @@ price. The burden is to show why FCIQMC cannot do what the sigma build did.
 document FCIQMC as the one path where bitwise thread-invariance does not hold — as
 a decision, not a discovery.
 
+### THE DECISION (2026-09-02): no exception. FCIQMC keeps bitwise invariance.
+
+**The burden this section set — show why FCIQMC cannot do what the sigma build did
+— is not met.** It can, and by a cleaner mechanism.
+
+**Current state:** FCIQMC is entirely serial — zero `#pragma omp` in
+`fciqmc.cpp` or `fciqmc_driver.cpp` — and is therefore bitwise
+thread-count-invariant today. Verified: N2/STO-3G gives `-107.6404846451` at
+`OMP_NUM_THREADS` = 1, 2 and 4. This decision is a policy for the threading that
+does not exist yet, made before it is written rather than discovered afterwards.
+
+**The design that keeps invariance: partition the PARENTS, merge in fixed bin
+order.** Each thread claims a fixed set of parent determinants by
+`hash(parent) % kBins`, accumulates its spawns into that bin privately, and the
+bins are merged in bin order at the end of each iteration.
+
+Verified on a model of the spawn: the result is identical whether parents are
+visited in order, reversed, or shuffled — which is exactly what thread-count
+invariance requires, since a thread count only changes visit order.
+
+**Two things make this *easier* for FCIQMC than it was for the sigma build:**
+
+1. **Binning by determinant is invariant even to the bin count.** Each determinant
+   maps to exactly one bin regardless of `kBins`, so all its contributions
+   accumulate in the same order either way. The sigma build binned by index range,
+   where a determinant could land in different bins as `kBins` changed — which is
+   why its `kBins` had to be a fixed constant. Here that constraint relaxes.
+2. **The RNG contract already exists.** F1's `RandomSource::derive(index)` is
+   deterministic in the run seed and independent of how many shards are derived —
+   built for precisely this.
+
+**One trap, recorded because the obvious design has it:** binning by the *child*
+determinant is **not** sufficient. It fixes which accumulator receives a spawn but
+not the order arrivals reach it — two threads spawning onto the same determinant
+race. The partition must be over the **work** (parents), not the output, which is
+the same lesson the sigma build paid for: *what must be deterministic is the
+partition of work into accumulators.*
+
+**Consequence for F5's parallel step:** it is a normal piece of work under the
+existing discipline, not an exception requiring sign-off. The gate is the one
+every other parallel path here uses — bitwise-identical energies across
+`OMP_NUM_THREADS` = 1/2/4/8 — and `n2_fciqmc_sto3g` already asserts fixed-seed
+reproducibility, so a regression would surface there.
+
 ## 7. What this must not do
 
 - **Do not skip `p_gen` validation.** An excitation generator whose returned

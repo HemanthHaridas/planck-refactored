@@ -2802,6 +2802,54 @@
       ]
     },
     {
+      "id": "h2_fciqmc_threads1",
+      "input": "tests/inputs/regression/post_hf/h2_fciqmc_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "env": {
+        "OMP_NUM_THREADS": "1"
+      },
+      "expected_exit_code": 0,
+      "contains": [
+        "Shift energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_present",
+          "metric": "fciqmc_shift_energy"
+        }
+      ]
+    },
+    {
+      "id": "h2_fciqmc_threads4",
+      "input": "tests/inputs/regression/post_hf/h2_fciqmc_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "env": {
+        "OMP_NUM_THREADS": "4"
+      },
+      "expected_exit_code": 0,
+      "contains": [
+        "Shift energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close_case",
+          "metric": "fciqmc_shift_energy",
+          "case": "h2_fciqmc_threads1",
+          "atol": 0.0
+        },
+        {
+          "type": "metric_close_case",
+          "metric": "fciqmc_projected_energy",
+          "case": "h2_fciqmc_threads1",
+          "atol": 0.0
+        }
+      ]
+    },
+    {
       "id": "n2_fciqmc_sto3g",
       "input": "tests/inputs/regression/post_hf/n2_fciqmc_sto3g.hfinp",
       "tags": [

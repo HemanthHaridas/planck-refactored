@@ -258,7 +258,31 @@ N2/STO-3G, 10 orbitals, 7 alpha / 7 beta, CI dim = 14400
 - **Budget it honestly.** If the run is too slow for the default suite, put it in
   `extended` — but measure first rather than assuming, and record the number.
 
-### F5.4 — the determinism decision
+### F5.4 — the determinism decision — **DONE 2026-09-02. No exception.**
+
+**The decision and its reasoning are in `FCIQMC_RESEARCH_SCOPE.md` §6**, where the
+tension was raised. Summary: the burden that section set — show why FCIQMC cannot
+do what the FCI sigma build did — **is not met**. FCIQMC can keep bitwise
+thread-count invariance, by partitioning the **parents** (`hash(parent) % kBins`)
+and merging bins in fixed order.
+
+Verified on a model of the spawn: identical results whether parents are visited in
+order, reversed, or shuffled — which is what thread-count invariance requires,
+since thread count only changes visit order.
+
+**Gated now, before the threading exists**, by `h2_fciqmc_threads1` /
+`h2_fciqmc_threads4`: the same input at `OMP_NUM_THREADS` = 1 and 4, compared at
+`atol = 0.0`. Today it passes trivially — FCIQMC has zero `#pragma omp` — and that
+is the point: the property is pinned so adding threads cannot silently break it.
+Verified non-vacuous by pointing one case at a different system, which fails.
+
+**The trap worth carrying:** binning by the **child** determinant is *not*
+sufficient. It fixes which accumulator receives a spawn but not the order arrivals
+reach it, so two threads spawning onto the same determinant still race. The
+partition must be over the **work**, not the output — the same lesson the sigma
+build paid for.
+
+### F5.4 (superseded scope text) — the determinism decision
 
 **Do not start until F5.1–F5.3 are green**, and read §6 of the research scope
 first. Every parallel path in Planck is bitwise thread-count-invariant, by design
