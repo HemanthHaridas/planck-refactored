@@ -123,6 +123,37 @@ from the serial tail.
 **Do not thread `ordered_l1_norm` itself.** Replace the sort; the determinism
 requirement is what motivated it and must survive.
 
+**DONE (2026-09-03): 17.0 % -> 0.9 % of runtime, and BITWISE IDENTICAL.** The sort
+is replaced by binning on `DetKeyHash{}(det) % 64` into fixed accumulators summed
+in bin order — O(n) instead of O(n log n), on a function called 50 000 times.
+N2/STO-3G **15.57 s -> 13.74 s (1.13x)**; cumulative with T1 and T4,
+**71.63 s -> 13.74 s (5.21x)**.
+
+**The wall-clock gain is smaller than the 17 % share implies, and that is Amdahl
+rather than a failed change** — the profile confirms the work is gone
+(17.0 % -> 0.9 %), but it is 17 % of an already-reduced total. **The right check
+for a change like this is the profile share, not only the clock.**
+
+**Bitwise identity was NOT expected and is worth understanding.** Regrouping a
+floating-point sum may legitimately shift the last digits, and the norm feeds a
+logarithm in `ctl.update`, so a shift would propagate. The stated gate was
+therefore run-to-run *reproducibility*, not bitwise identity. It came out bitwise
+identical anyway because a real population's weights are near-uniform in magnitude
+(`granularity 1.0` discretizes spawns to whole walkers), so the sum is
+well-conditioned and reassociation costs nothing at double precision. **The unit
+fixture spanning 18 orders of magnitude is adversarial by design; real populations
+are not** — which is exactly why that fixture, and not the end-to-end run, is what
+guards the property.
+
+Verified: identical across two runs, bitwise identical to the sorted version on
+both `n2_fciqmc_sto3g` and `h2_fciqmc_sto3g`, `planck-fciqmc-walkers` green
+(19.15 s) including the `independent of insertion order` check, and a standalone
+control confirming binning is stable across **200 shuffled insertion orders**
+where naive hash-order summation is **not** (the non-vacuity half).
+
+**T2's ceiling rises to 2.81x at 4 threads** (`propagate_stochastic` is now 85.8 %
+of `run_fciqmc`), up from 2.19x.
+
 Two profiling traps recorded from getting this wrong twice: depth-matching sibling
 nodes to compute an inclusive share gave **3909.9 %** (summing subtrees across
 different call paths), and taking the single largest root node gave **100.0 %**
