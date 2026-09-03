@@ -219,6 +219,11 @@ namespace HartreeFock::Correlation::CI::QMC
 
         std::uint64_t seed() const noexcept { return _seed; }
 
+        // A raw 64-bit draw, advancing this generator's own state. Used to seed
+        // a fresh, independent RandomSource per call site (scope step S1's
+        // per-bin streams) without exposing _engine directly.
+        std::uint64_t raw64() noexcept { return _engine(); }
+
         // Derive an independent generator for shard `index`. Deterministic in the
         // run seed, so the set of streams does not depend on how many shards
         // (threads) are used -- only which one draws which.

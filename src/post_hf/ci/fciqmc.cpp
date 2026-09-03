@@ -456,6 +456,38 @@ namespace HartreeFock::Correlation::CI::QMC
         return next;
     }
 
+    // T2 scope step S1: each PARENT draws from a RandomSource dedicated to its
+    // bin, `hash(parent) % kBins`, rather than from one RNG shared by the whole
+    // iteration. Still fully serial -- no pragma, one `next`, one thread -- this
+    // step exists only to prove the partition and the per-bin streams are correct
+    // before S2 (binning the accumulation) and S4 (the pragma) build on them.
+    //
+    // kBins is a FIXED constant, never tied to thread count -- the FCI sigma
+    // build's recorded lesson, twice over: `schedule(dynamic)` gives an
+    // accumulator a different *subset* of terms per run, and keying by
+    // `omp_get_thread_num()` makes contents depend on the thread count. Binning
+    // by `hash(parent) % kBins` additionally has a property that build's index-
+    // range binning did not: a determinant maps to the same bin regardless of
+    // kBins itself changing, so choosing a different bin count cannot move a
+    // parent's RNG stream.
+    //
+    // Each CALL to propagate_stochastic draws one raw 64-bit value from the
+    // caller's `rng` (this is what advances it across the driver's iteration
+    // loop) and derives the kBins per-bin streams from that single value. Within
+    // one call, bin_rngs[b] is a pure function of (that draw, b) -- bit-for-bit
+    // the same whether this call is later split across 1, 2, 4 or 8 threads,
+    // which is what S4 needs. Across calls, the draw itself differs, which is
+    // what keeps 50000 iterations from replaying the same trajectory (see the
+    // comment on call_source below for the bug this was until it did not).
+    //
+    // What changes here, deliberately: THIS run's numbers differ from every
+    // propagate_stochastic result before S1, because every parent now draws from
+    // a different stream than the single shared `rng` used to. That is not a
+    // regression -- it is a different, equally valid RNG trajectory, verified by
+    // reproducibility and by agreement with exact FCI, not by matching the old
+    // numbers.
+    constexpr std::size_t kBins = 64;
+
     WalkerPopulation propagate_stochastic(
         const WalkerPopulation &population,
         int n_act,
@@ -471,10 +503,38 @@ namespace HartreeFock::Correlation::CI::QMC
         if (n_spawn_attempts < 1)
             return next;
 
+        // BUG CAUGHT BY THE REPRODUCIBILITY CHECK ITSELF, worth recording: the
+        // first version of this derived bin_rngs directly from `rng` via the
+        // const `derive(b)`, which reads rng's state without advancing it. Since
+        // `rng` lives in the CALLER (fciqmc_driver.cpp constructs it once before
+        // the whole 50000-iteration loop) and every draw used to go through
+        // `rng` itself -- which DOES advance -- that meant every one of the
+        // 50000 calls to propagate_stochastic rebuilt the IDENTICAL 64 bin
+        // streams from scratch, and the run never left its initial state
+        // (reference weight exactly 10000.00 with zero variance, shift equal to
+        // the seed diagonal to 1e-13). Fixed-seed reproducibility PASSED on that
+        // version -- the same broken trajectory replayed twice is still
+        // "reproducible" -- so it took reading the walker population's own
+        // diagnostics, not the reproducibility gate, to catch it.
+        //
+        // The fix: draw ONE raw 64-bit value from `rng` per call (this is what
+        // actually advances the caller's stream across iterations), then derive
+        // the kBins per-bin streams from THAT. Within one call the bins are a
+        // pure function of (call_seed, bin index) -- independent of thread count,
+        // which is what S4 needs -- while across calls call_seed itself changes,
+        // because `rng.raw64()` consumes one step of the caller's engine.
+        RandomSource call_source(rng.raw64());
+        std::vector<RandomSource> bin_rngs;
+        bin_rngs.reserve(kBins);
+        for (std::size_t b = 0; b < kBins; ++b)
+            bin_rngs.push_back(call_source.derive(b));
+
         for (const auto &[det, weight] : population)
         {
             if (weight == 0.0)
                 continue;
+
+            RandomSource &bin_rng = bin_rngs[DetKeyHash{}(det) % kBins];
 
             // DEATH: deterministic, exactly as in propagate_deterministic. There
             // is one diagonal element per determinant, so sampling it would add
@@ -490,7 +550,7 @@ namespace HartreeFock::Correlation::CI::QMC
             const double per_attempt = weight / static_cast<double>(n_spawn_attempts);
             for (int attempt = 0; attempt < n_spawn_attempts; ++attempt)
             {
-                const auto exc = draw_excitation(det, n_act, rng);
+                const auto exc = draw_excitation(det, n_act, bin_rng);
                 if (!exc.valid || exc.p_gen <= 0.0)
                     continue;
 
@@ -515,7 +575,7 @@ namespace HartreeFock::Correlation::CI::QMC
                     // unbiased in expectation, so the mean step is unchanged
                     // while the variance now depends on how large the spawn is
                     // relative to one walker.
-                    child = granularity * rng.stochastic_round(child / granularity);
+                    child = granularity * bin_rng.stochastic_round(child / granularity);
                     if (child == 0.0)
                         continue;
                 }

@@ -164,23 +164,59 @@ in `FCIQMC_SERIAL_PERFORMANCE.md` — two different naive methods gave 3909.9 % 
   The serial baseline is now 13.74 s; a 1.5x on 11 s of threadable work is ~4 s
   saved on a method nothing currently uses.
 
-### S1 — make the RNG per-bin (serial, no pragma)
+### S1 — make the RNG per-bin (serial, no pragma) — **DONE, one bug caught and fixed**
 
-Restructure so each bin draws from its own `RandomSource`, derived once per bin
-per iteration via `rng.derive(bin_index)`. Still single-threaded.
+Each parent draws from a `RandomSource` dedicated to its bin
+(`hash(parent) % kBins`, `kBins = 64`) rather than from one RNG shared by the
+whole iteration. Still fully serial — no pragma, one `next`, one thread.
 
-`derive(index)` is already a pure function of the seed and index, independent of
-how many shards are taken — verified in `fciqmc.h:225`.
+**A bug in the first version made the run silently stuck, and the reproducibility
+check did not catch it.** The first implementation derived `bin_rngs[b]` directly
+from the caller's `rng` via `rng.derive(b)`. `derive` is `const` — it reads `rng`'s
+state without advancing it. `rng` itself lives in the driver, constructed ONCE
+before the whole 50 000-iteration loop and passed by reference into every
+`propagate_stochastic` call; the OLD code advanced it directly (every
+`draw_excitation`/`stochastic_round` call mutated `_engine` in place), which is
+what made 50 000 iterations sample 50 000 different points of the stream. With
+`derive(b)` reading unchanged state, every single call rebuilt the IDENTICAL 64 bin
+streams, and the walker population never left its initial condition — reference
+weight exactly `10000.00` with zero variance across all 30 000 sampling steps,
+shift equal to the seed diagonal to `1e-13`.
 
-- **This changes the numbers**, and that is expected: a different RNG stream is a
-  different trajectory. It is *not* a regression.
-- **Verify:** run-to-run reproducibility at a fixed seed (exact), and different
-  seeds still give different trajectories (the F3.5 negative control — an RNG that
-  ignores its seed passes every statistical check).
-- **Verify:** both estimators still agree with exact FCI within their error bars
-  on `n2_fciqmc_sto3g`. This is the only step whose values legitimately move, so it
-  is the only place that needs a statistical rather than exact check.
-- **Update** the `h2_fciqmc_threads1` reference values in the same commit.
+**Fixed-seed reproducibility passed on the broken version.** The same broken
+trajectory replayed twice is still "reproducible" by that check alone — it took
+reading the walker population's own diagnostics (`reference weight: mean X, min Y`)
+to see the population was frozen, not the reproducibility gate itself. Worth
+carrying: reproducibility proves a run is deterministic, not that it is doing
+anything.
+
+**The fix:** draw ONE raw 64-bit value from `rng` per call
+(`RandomSource::raw64()`, a new primitive — `_engine()` called directly, full
+64-bit entropy, no wasted bits from truncating a `[0,1)` double), then derive the
+`kBins` streams from THAT. Within one call the bins are a pure function of
+`(that one draw, bin index)` — independent of thread count, which is what S4
+needs — while the draw itself differs across calls, because `raw64()` genuinely
+advances the caller's engine. Verified with a standalone probe before touching the
+real binary: `derive(0)` on the same unchanged `rng` gives the identical value on
+every call (the bug, reproduced in isolation); seeding from `rng.raw64()` each time
+gives five different values across five calls (the fix).
+
+**Verified, all against the corrected version:**
+- **Fixed-seed reproducibility**: two full runs of `n2_fciqmc_sto3g`, byte-identical.
+- **Different seeds diverge** (the F3.5 negative control): seed `20250901` vs
+  `77777` give different shift energies.
+- **Agreement with exact FCI**: N2 shift `0.36σ`, projected `0.99σ`; H2 shift
+  `0.22σ`, projected `0.33σ` — both well inside the 5σ gate.
+- **All four FCIQMC regression cases pass** (`h2_fciqmc_sto3g`,
+  `h2_fciqmc_threads1/4`, `n2_fciqmc_sto3g`), and the full extended suite shows no
+  new failures (the 4 that fail are the pre-existing `rccsdt`/
+  `PLANCK_CC_ARBITRARY_LOWER_RANKS` cases, unrelated).
+- **`h2_fciqmc_threads1/4` needed no reference-value update**, contrary to what
+  this section originally said to do. Both gate on `metric_within_sigma` against
+  the exact FCI energy or `metric_close_case` against the paired live run — neither
+  is a hardcoded number from a specific RNG trajectory, so both tolerate S1's
+  changed stream by construction. The instruction to update them was written before
+  checking what they actually asserted.
 
 ### S2 — bin the accumulation (serial, no pragma)
 
