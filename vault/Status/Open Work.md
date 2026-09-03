@@ -622,94 +622,57 @@ worth doing whether or not FCIQMC happens.
   a build finished** — test the actual condition (build not running AND exact
   symbol present, `grep -qx`).
 
-  **THREADING SCOPED (2026-09-02) in `docs/FCIQMC_THREADING_SCOPE.md`, and the
-  profile reorders the work.** FCIQMC is entirely serial today (zero pragmas). The
-  determinism policy is already decided and gated, so the open question was only
-  cost — and profiling the N2 gate case says **`malloc`/`free` is 29.5 % of
-  runtime** against `slater_condon_element` at 40.1 %. That is the FCI sigma
-  build's situation again (53 % malloc there), where the recorded lesson is that
-  **threading an allocation-bound loop parallelizes `malloc` contention**. So T1
-  removes the per-call allocations (`occupied`/`virtuals` return small heap vectors
-  ~1e9 times, for values bounded at 31 entries by `kMaxPackedSpatialOrbitals`),
-  and only T2 threads the spawn.
+  **SERIAL PERFORMANCE ANSWERED (2026-09-03), and threading is still unbuilt:
+  `docs/FCIQMC_SERIAL_PERFORMANCE.md`.** Opened as "thread FCIQMC"; three SERIAL
+  changes took N2/STO-3G **71.63 s -> 13.74 s (5.21x)**, every one bitwise
+  identical, and FCIQMC still has zero `#pragma omp`. The scope's own ordering rule
+  produced that — *fix the allocation before threading, because threading an
+  allocation-bound loop parallelizes `malloc` contention* — and following it
+  exposed two further serial defects that threading would have hidden.
 
-  **Treat 29.5 % as a lower bound on T1's gain, not an estimate** — the sigma
-  build's identical fix returned 4.8x against a profile implying ~2.1x, because
-  per-element churn also costs cache pressure attributed to other frames.
+  | step | change | N2 | share removed |
+  |---|---|---|---|
+  | T1 | fixed-capacity orbital lists | 71.63 -> 40.66 s (1.76x) | malloc 29.5 % -> 1.4 % |
+  | T4 | memoize the diagonal | 40.66 -> 15.57 s (2.61x) | `slater_condon` 53.1 % -> 6.6 % |
+  | — | bin the L1 norm | 15.57 -> 13.74 s (1.13x) | `ordered_l1_norm` 17.0 % -> 0.9 % |
 
-  **Value note carried in the scope: nothing needs this.** The N2 gate runs in 69 s
-  serial and the method is unused. T1 stands on its own as a serial speedup; T2 is
-  worth doing when a target exists.
+  **T2 (threading the spawn) is the only step left**, ceiling **2.81x at 4
+  threads**. That ceiling has moved three times — 3.75x post-T1, 2.19x after T4
+  removed work from inside the loop T2 threads, 2.81x once the L1-norm sort left
+  the serial tail — so **re-measure before building rather than quoting it**. The
+  design is decided and gated before the code exists (`h2_fciqmc_threads1/4` at
+  `atol = 0.0`): partition the PARENTS by `hash(parent) % kBins`, fixed bin count,
+  merged in fixed bin order. Two hazards recorded there: `RandomSource` is a single
+  mutable object shared by every parent, so threading the loop as written is a
+  **data race on generator state**, not merely a determinism question; and the T4
+  memo is **not thread-safe** and must be prefilled or per-bin.
 
-  **T1 LANDED (2026-09-02): 1.76x, bitwise identical, and the allocator is
-  effectively ELIMINATED — 29.5 % -> 1.4 % of profile samples.** N2/STO-3G **71.63 s -> 40.81 s** at 1 thread, with the **entire output
-  bitwise identical** on both `n2_fciqmc_sto3g` and `h2_fciqmc_sto3g` — not just
-  the energies, every printed line. That is the correct gate for this change: it is
-  a pure representation swap (heap `std::vector` -> fixed-capacity `std::array`)
-  with no arithmetic in it, so anything other than bitwise identity would be a
-  defect rather than a tolerance question.
+  **Three lessons, each of which cost a wrong number first.** (1) **A profile share
+  is a lower bound on what removing that work is worth** — three for three now
+  (T1 1.76x against an Amdahl cap of 1.42x, T4 2.61x against 1.83x, the sigma
+  build 4.8x against ~2.1x). (2) **Judge such a change by the profile share it
+  removes, not only the clock** — the L1-norm binning bought 1.13x and looks like a
+  dud, while taking that work from 17.0 % to 0.9 %. (3) **A model of a workload is
+  not a measurement of it** — a churn model said the T4 memo needed an eviction
+  policy; measurement said 1820 entries and 85 KB.
 
-  **The scope's "treat 29.5 % as a lower bound, not an estimate" held.** Amdahl on
-  a 29.5 % share caps the direct saving at 1.42x; measured 1.76x. Same over-delivery
-  as the FCI sigma build's identical fix (4.8x against a profile implying ~2.1x),
-  and the same cause: per-call churn also costs cache pressure and bookkeeping
-  attributed to other frames. **A profile share is a lower bound on what removing
-  that work is worth.**
+  **Profile parsing produced two plausible-looking wrong numbers.** `sample` emits a
+  call tree with `+ ! : |` prefixes and *inclusive* counts: a naive `^\s*(\d+)`
+  regex reported `slater_condon_element` at **0.2 %** when it was the dominant frame
+  at 53.1 %, and computing an inclusive share by depth-matching siblings gave
+  **3909.9 %** while taking the largest root gave **100.0 %** (the window had caught
+  one phase). Build real parent links from the depth stack, exclude nodes nested
+  under another node of the same function, and sample the whole run.
 
-  **Implementation, and the earlier not-landed note:** `occupied`/`virtuals` return a fixed-capacity
-  `OrbitalList` (`std::array<int,32>` + count) and the five-entry excitation-class
-  list is a `std::array` instead of a `std::vector`, removing all five heap
-  allocations per spawn attempt. The capacity is a BOUND, not a guess:
-  `build_all_mo_ci_setup` rejects `n_act > kMaxPackedSpatialOrbitals` = `(64-1)/2`
-  = 31 before either FCI or FCIQMC runs.
+  **Value: nothing currently needs this.** The method is validated but unused —
+  Q1 remains unanswered in practice and the largest active space in the tree is
+  `nactorb 6`. The three serial changes stand on their own; **T2 is worth building
+  when a target exists**, and its ceiling re-measured then rather than quoted.
 
-  Verified before writing it, rather than trusted from the scope:
-  `propagate_stochastic` calls `draw_excitation` and **never**
-  `enumerate_connections`, so the latter correctly keeps its `std::vector` return
-  (its size is genuinely variable and it runs ~30 000 times against the spawn
-  path's ~1e9).
-
-  **A build-hygiene trap worth carrying, because it cost a wasted 25-minute
-  build.** T1 was started, then STASHED to keep an unverified change out of a
-  commit — while its build was still running. `make` then compiled a file no longer
-  in the tree and reported `MAKE_EXIT=0`, which would have been a meaningless
-  green. **A build in flight is not pinned to the working tree**; kill it before
-  stashing, or the exit code describes source you no longer have.
-
-  **T4 LANDED (2026-09-03): a further 2.61x, bitwise identical — the diagonal was
-  being recomputed ~37 745 times per determinant.** `H_ii` is a pure function of
-  the determinant (`h_eff` and `ga` are built once and never mutated), but the
-  spawn loop asks for it once per parent per iteration. Memoized in the
-  `ops.diagonal` lambda: N2/STO-3G **40.66 s -> 15.57 s**, output bitwise identical
-  on both gate cases (zero differing lines excluding `Wall Time`). **Cumulative
-  with T1: 71.63 s -> 15.57 s, 4.60x**, all serial.
-
-  **The hit rate was MEASURED before building it**, via a temporary env-gated
-  probe: **68 696 226 calls over 1820 DISTINCT determinants** — a 37 745x reuse
-  factor, 99.9974 % hit rate, **85 KB** table. A churn model had suggested the
-  table could reach hundreds of MB and need eviction; the real occupied set is
-  nearly static, so **no bound is needed** and the model was pessimistic by orders
-  of magnitude. **A model of a workload is not a measurement of it.** The probe was
-  removed once it had answered the question.
-
-  **The scoped caution that a hash probe might lose to recompute at small `n_act`
-  was wrong** — a microbenchmark on production shapes measured the memo **75x**
-  faster at `n_act = 10` and **226x** at 20, the gap widening because recompute is
-  O(n_act^2) against an O(1) probe.
-
-  **Third consecutive over-delivery against Amdahl:** ~45 % of runtime was in scope
-  (53.1 % `slater_condon_element` x ~86 % diagonal branch), capping the direct
-  saving at 1.83x; measured 2.61x.
-
-  **T2 (threading the spawn) is now unblocked.** Post-T1 the profile is
-  `slater_condon_element`-dominated — it **rose** from 40.1 % to **53.1 %** of self
-  time, which is the expected consequence of removing ~30 % allocation (the same
-  absolute work over a smaller total, `40.1/(1-0.295) = 56.9 %` predicted) rather
-  than anything new. That is the shape the scope wanted before threading — the whole reason for the T1-first ordering was
-  that threading an allocation-bound loop parallelizes `malloc` contention. The
-  determinism design is already decided and gated (`h2_fciqmc_threads1/4` at
-  `atol = 0.0`): partition the PARENTS by `hash(parent) % kBins`, fixed bin count
-  never tied to thread count, merged in fixed bin order.
+  **Build-hygiene trap, cost a wasted 25-minute build:** T1 was stashed to keep an
+  unverified change out of a commit *while its build was still running*, so `make`
+  compiled a file no longer in the tree and reported `MAKE_EXIT=0`. **A build in
+  flight is not pinned to the working tree** — kill it before stashing.
 
   **F5 COMPLETE, and the whole F1-F5 ladder with it (2026-09-02).** FCIQMC runs
   from an input file and reproduces exact FCI on N2/STO-3G — shift 0.32 sigma,
