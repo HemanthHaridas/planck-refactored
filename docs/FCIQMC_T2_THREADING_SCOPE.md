@@ -369,108 +369,144 @@ on top of it.
      this is far enough below the ceiling to investigate rather than accept:
      ~185 % CPU rather than ~400 % pointed at idle time, and a profile
      confirmed it — **56 % of all thread-samples are `__psynch_cvwait`**
-     (idle at the join barrier). Root-caused and scoped as **S4.5** rather
-     than accepted as "some overhead is normal": the partition is imbalanced
-     by a measured 3.2x between the busiest and idlest thread, not by a small
-     margin.
+     (idle at the join barrier). Root-caused as **S4.5**: NOT a bin-to-thread
+     imbalance (a first pass measured a 3.2x spread by summed `|weight|` per
+     bin, which turned out to be the wrong proxy — direct per-thread
+     `draw_excitation` counts are nearly identical across threads). The real
+     cause is per-call container churn (64 fresh `unordered_map`s + 64 fresh
+     `vector`s, every one of the 50 000 calls) costing ~123 us of the ~249
+     us/call average, entirely before the parallel region starts — see S4.5
+     for the corrected diagnosis and fix.
 
-### S4.5 — load-balance the bin-to-thread assignment (scoped, not built)
+### S4.5 — eliminate per-call container churn (rescoped: the first diagnosis
+was wrong)
 
-**S4 landed correct but far below its own ceiling: measured 1.51x at 4 threads
-against a re-measured 3.97x Amdahl ceiling.** Bitwise identity holds (1/2/4/8
-threads, both gate cases, verified before this gap was investigated), so this
-is a performance-only follow-on, not a correctness fix.
+**The original version of this section proposed LPT (greedy) bin-to-thread
+packing, built on a weight-imbalance measurement. That measurement was a red
+herring, and the LPT design would not have fixed the actual bottleneck --
+recorded here because catching that before writing code is the point of
+scoping, and the wrong turn is worth keeping so the next person does not
+retake it.**
 
-#### The measured cause
+#### Why the weight measurement was misleading
 
-CPU utilization at 4 threads is ~185%, not ~400% — profiling shows **56 % of
-all thread-samples are `__psynch_cvwait`** (idle at the join barrier). Direct
-measurement of one steady-state N2 iteration, aggregating the 64 bins into the
-4 consecutive-range groups `schedule(static)` currently assigns:
+The 3.2x-imbalance table (thread 3 = 4748.8 vs thread 0 = 1494.7) measured
+`sum(|weight|)` per bin, on the reasoning that per-parent cost scales with
+weight. It does not, for this input: `n_spawn_attempts` is a per-run constant
+(1, in the gated cases), so `draw_excitation` + `off_diagonal` + `add()` cost
+per parent is O(1) regardless of how much weight that parent carries. Weight
+was the wrong proxy for CPU cost, and nothing in the code path makes a
+heavier walker cost more to process.
 
-| thread | bins | work |
-|---|---|---|
-| 0 | 0-15 | 1494.7 |
-| 1 | 16-31 | 1985.3 |
-| 2 | 32-47 | 1739.3 |
-| **3** | **48-63** | **4748.8** |
+**Direct measurement of ACTUAL per-thread work (not the weight proxy)
+disproves the imbalance theory outright.** Re-profiled with per-thread
+attribution: `draw_excitation` self-time is **1018 samples on the "busy"
+thread vs 1048 on an "idle" one** -- statistically the same. The real,
+striking asymmetry is in `__psynch_cvwait` (barrier wait): one thread at
+4.5-8.4%, the other three at 66.7-74.5%. Every thread does nearly identical
+amounts of real work; the difference is almost entirely in how much of each
+thread's existence is spent waiting.
 
-Thread 3 carries **3.2x** thread 0's work. **Bin 63 alone — the bin holding the
-reference determinant — is 2108.2, or 21.1 % of the ENTIRE run's work in one
-bin.** Parent COUNT is well balanced (336-379 parents/thread, ~13 % spread);
-weight is not. Per-parent cost (`WalkerPopulation::add`, stochastic rounding,
-spawn draws) scales with how much weight a walker carries, and weight is
-sharply non-uniform — the reference is designed to carry substantial weight, so
-this is not a pathological input, it is the normal case.
+#### The actual root cause: per-call container reconstruction
 
-#### Why the obvious fixes do not work
+Isolated with a standalone microbenchmark rather than inferred from the
+profile alone. `propagate_stochastic` averages **~249 us/call** at 4 threads
+(12.46 s / 50 000 calls). A synthetic benchmark reproducing S1/S2/S3's exact
+per-call allocation pattern -- 64 fresh `unordered_map`s (`next_bins`) + 64
+fresh `vector`s (`bin_parents`), populated at the measured occupancy (~22
+parents/bin) -- measures **123 us/call**, roughly HALF the total, for pure
+container construction that happens whether or not any parallel region
+exists. A separate microbenchmark of `libgomp`'s bare fork/join (empty
+parallel loop) measures ~13 us/call. That leaves only **~113 us/call for the
+actual death+spawn work**, split across 4 threads -- ~28 us/thread of real
+parallel work surrounded by a much larger block of unavoidable-under-the-
+current-design serial setup. Threads are not waiting for an unevenly-sized
+partition; they are waiting for a short parallel section to even start,
+because most of the call's cost sits before the `#pragma omp` line runs at
+all.
 
-- **`schedule(dynamic)` instead of `schedule(static)`.** Already rejected by
-  this scope's own constraints: a dynamic schedule gives an accumulator a
-  different work *subset* depending on runtime timing, which breaks
-  thread-count invariance — the exact defect the FCI sigma build hit twice.
-- **More, smaller bins** (`kBins` 64 -> 256 or 1024). Reduces parent-COUNT
-  variance further but does nothing for a single dominant WEIGHT: the
-  reference determinant still hashes to exactly one bin regardless of
-  `kBins`, so whichever thread owns that bin still carries its share.
+**This is why LPT would not have helped.** Repartitioning which bins go to
+which thread cannot touch the ~123 us of serial allocation that happens
+before the parallel region begins -- that cost is paid once per call
+regardless of how the subsequent parallel work is distributed. Fixing the
+symptom (imbalanced-looking thread samples) without the cause (per-call
+`unordered_map`/`vector` churn) would have added complexity -- a bin-packing
+heuristic and its own verification burden -- for a gain the profiling
+already shows it cannot deliver.
 
-#### The fix: greedy (LPT) bin-to-thread assignment, computed serially
+#### The fix: reuse `next_bins` and `bin_parents` across calls instead of
+reconstructing them
 
-Longest-Processing-Time-first bin packing, computed once per call before the
-parallel region, replacing the compile-time consecutive-range split with a
-work-aware one:
+Persist both as state carried across iterations (owned by the caller in
+`fciqmc_driver.cpp`, passed in, or held as function-local `static` /
+member state -- the exact mechanism is an implementation choice, not a
+correctness one) and `.clear()` them at the top of each call instead of
+constructing fresh. A microbenchmark reusing just `bin_parents` (whose
+entries are write-once grouped input with no accumulation semantics, so
+reuse cannot affect correctness) measured 111 us/call against 123 us fresh
+-- most of the cost is the 64 `unordered_map`s, not the vectors, so
+`next_bins` reuse is the piece that actually matters and the piece that
+needs care.
 
-1. `bin_parents[64]` already exists (built serially in S4). Compute per-bin
-   work = `sum(|weight|)` over that bin's parents — an O(total parents) pass
-   over data already in hand.
-2. Sort the 64 bin indices by descending work (O(64 log 64), trivial).
-3. Greedily assign each bin, largest work first, to whichever THREAD currently
-   holds the smallest accumulated work (LPT). Deterministic given the bin work
-   values and the thread count.
-4. Replace `#pragma omp parallel for schedule(static)` over the bin *index*
-   with `#pragma omp parallel` over the *thread id*, each thread processing
-   its assigned bin *list* from step 3 rather than a fixed consecutive range.
+**A real invariance risk here, found by testing rather than assumed away.**
+A standalone test of `unordered_map::clear()`-and-reinsert against the SAME
+key sequence three times found: the first reuse cycle's iteration order
+differs from a matched fresh-construction map's order, AND differs from a
+second reuse cycle's order -- but the second and third reuse cycles agree
+with each other. In plain terms: a reused, cleared map does **not**
+reproduce the current fresh-construction bucket layout (so `next_bins`
+reuse changes the specific rounded output values, not just performance),
+but it **does** settle into a stable, repeatable layout after the first
+warm-up call. That second property -- stability run-to-run, once warmed up
+-- is what cross-thread-count invariance actually requires; bitwise match
+to the CURRENT fresh-construction numbers is not required and was never the
+real constraint (S1's RNG fix already established this: a legitimate
+reordering is not a regression, provided it is itself reproducible and
+still agrees with exact FCI).
 
-**Invariance argument, checked rather than assumed.** The assignment now
-depends on `omp_get_num_threads()` — by design, since fewer threads must each
-take on more bins — but NOT on `omp_get_thread_num()` at runtime or on
-completion order: it is computed once, serially, from the bin work values
-(themselves thread-count-independent, coming only from `pop`) and the
-requested thread count, which is a known fixed input to the call, not a race.
-Cross-thread-count bitwise identity survives because the **merge stays
-bin-index-ordered** (`for (auto &bin : next_bins) for (const auto &[det, w] :
-bin) next.add(det, w);`, unchanged from S2) — the merge never depended on
-*which thread* computed a bin, only on the fixed bin index order, so a
-different assignment across thread counts still produces the identical
-merged sum.
+**Consequence: this needs the same verification S1 used, not the "bitwise
+vs prior step" gate S2/S3/S4 used.** Reusing containers WILL change the
+committed S2/S3/S4 regression reference values (a real, deliberate
+re-baselining), because the reused-map bucket layout differs from fresh
+construction from the very first warmed-up call onward.
 
 #### Verify, in this order
 
-1. **Bitwise identical at `OMP_NUM_THREADS` = 1/2/4/8**, against S4's already-
-   verified serial result, on N2 and H2 — the assignment changed, the summed
-   values must not.
-2. **Re-measure the per-thread work distribution** the same way this gap was
-   found (steady-state iteration, aggregate by assignment instead of
-   consecutive range) — the spread should collapse toward the LPT bound
-   (worst case <= 4/3 of the ideal average for 4 threads, a standard LPT
-   guarantee) rather than the current 3.2x.
-3. **Speed against the 3.97x ceiling.** LPT does not reach the Amdahl bound
-   exactly (it is a bin-packing heuristic, not an optimal partition, and the
-   serial cost of computing the assignment is itself now inside the timed
-   region) — the honest target is "materially closer to 3.97x than the
-   current 1.51x," not an exact match.
-4. **All FCIQMC and FCI regression cases green.**
+1. **Self-reproducibility at fixed seed** (exact) -- the new, reused-container
+   trajectory must still be bitwise identical to itself run to run, at a
+   given thread count.
+2. **Agreement with exact FCI** on N2/H2, within each estimator's own error
+   bar -- the standard S1 used for its own legitimate reordering, since this
+   change is in that same category, not the S2/S3/S4 category.
+3. **Bitwise identical across `OMP_NUM_THREADS` = 1/2/4/8** at the NEW,
+   reused-container baseline -- this is the property that must not break,
+   even though the specific numbers are expected to differ from the old
+   S2/S3/S4 reference.
+4. **Update the `h2_fciqmc_threads1`/`n2_fciqmc_sto3g` regression references**
+   to the new numbers, in the same commit, with a note explaining why they
+   moved (mirroring how S1's RNG fix was handled).
+5. **Re-measure `__psynch_cvwait` share and wall-clock speed.** The honest
+   target: most of the ~123 us/call serial-allocation cost should disappear
+   from the SERIAL baseline too (not just the parallel one), so re-measure
+   the 1-thread wall clock as well as the 4-thread speedup -- a container-
+   reuse fix should help BOTH.
 
 #### What this must not do
 
-- **Do not let the assignment depend on anything computed DURING the parallel
-  region** (a running counter, `omp_get_thread_num()` inside the loop body,
-  timing) — that reintroduces the exact runtime-order dependence S1-S4 were
-  built to avoid. The assignment is entirely a pre-parallel-region, serial
-  computation.
-- **Do not skip the re-measurement in step 2.** LPT is a heuristic with a
-  known worst case, not a guarantee of perfect balance; confirm it actually
-  closes the gap on this workload before trusting the speed number in step 3.
+- **Do not assume `.clear()` resets a container to its fresh-construction
+  state.** It does not, for `unordered_map` (bucket count, and therefore
+  iteration order, can persist across a clear). Verify the actual behavior
+  of whatever STL implementation this ships against, the way the standalone
+  test above did, rather than trusting the standard's silence on bucket
+  retention as a "should be fine."
+- **Do not skip re-baselining the regression references.** Treating a
+  legitimate, expected value change as if it were a bitwise-identity
+  failure (or silently accepting new numbers without recording why) both
+  defeat the purpose of the gate.
+- **Do not fold this into the same commit as S4.** They are separately
+  verifiable changes with different correctness standards (bitwise-vs-prior
+  for S4, reproducibility-and-FCI-agreement for this step) and bundling them
+  would make a regression in either one harder to isolate.
 
 ### S5 — extend the gate
 
