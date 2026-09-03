@@ -201,7 +201,56 @@ measured rather than assumed (0.1 % there).
 - **Verify:** profile after T2 and only act if the merge is material. **Do not
   pre-optimize it.**
 
-### T4 — memoize the diagonal (independent of threading, do it whenever)
+### T4 — memoize the diagonal — **DONE, 2.61x, bitwise identical**
+
+**Both assumptions below were tested before building it, and both resolved in
+favour of the memo — one of them against the guess recorded here.**
+
+**Hit rate — MEASURED, not modelled.** An env-gated probe on the N2/STO-3G gate
+case counted **68 696 226 calls over 1820 DISTINCT determinants**: a **37 745x
+reuse factor**, a **99.9974 % hit rate**, and an **85 KB** table. The probe was
+removed once it had answered the question.
+
+**The churn worry recorded below was pessimistic by orders of magnitude.** A model
+sweeping 0-20 % determinant replacement per step suggested the table could reach
+~173 MB in 2000 steps and would need a bound or eviction policy. The real occupied
+set is nearly static, so **no bound is needed**. If a future system does churn, the
+fix is to clear alongside `pop.compress()` — only currently occupied determinants
+can ever be queried again. **A model of a workload is not a measurement of it.**
+
+**Lookup vs recompute — settled, and the caution below was wrong.** A microbenchmark
+on the production shapes (`DetKey` + the real splitmix64 hash, ~9900 entries,
+~5e7 calls) measured the memo at **75x** faster at `n_act = 10` and **226x** at
+`n_act = 20`. The gap *widens* with active space, because recompute is O(n_act^2)
+while the probe is O(1). The scoped caution that "at very small `n_act` it may not
+[win]" does not hold: 10 is already far past the crossover.
+
+**Implementation:** an `unordered_map<DetKey,double>` held by `shared_ptr` inside
+the `ops.diagonal` lambda in `make_ops` (`fciqmc_driver.cpp`). No signature change
+and no new state threaded through the propagators; `shared_ptr` because
+`HamiltonianOps` holds `std::function`, which must stay copyable, and every copy
+describes the same Hamiltonian so sharing the cache is correct.
+
+**Measured on N2/STO-3G at 1 thread: 40.66 s -> 15.57 s (2.61x)**, with output
+**bitwise identical** on both `n2_fciqmc_sto3g` and `h2_fciqmc_sto3g` — zero
+differing lines excluding the `Wall Time` line itself. That is the required gate:
+a memo is a pure cache of a pure function, so any value change would be a defect
+rather than a tolerance question.
+
+**Cumulative with T1: 71.63 s -> 15.57 s, 4.60x**, all of it serial and all of it
+bitwise identical to the original.
+
+**The gain again exceeded the Amdahl bound on the share it targets** — the third
+time in a row on this codebase. `slater_condon_element` was 53.1 % of self time
+and the diagonal branch ~86 % of that, so ~45 % was in scope, capping the direct
+saving at 1.83x; measured 2.61x. Same cause as T1 and the FCI sigma build:
+removing work also removes the cache pressure and bookkeeping attributed to other
+frames. **Treat a profile share as a lower bound on what removing that work is
+worth, not an estimate of it.**
+
+The original scoping follows.
+
+#### Original scoping
 
 **`slater_condon_element` at 53.1 % is dominated by the DIAGONAL branch, and that
 branch recomputes the same value every step.** `H_ii` is a pure function of the

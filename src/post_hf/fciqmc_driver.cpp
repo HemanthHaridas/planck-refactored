@@ -12,6 +12,7 @@
 #include <limits>
 #include <format>
 #include <algorithm>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -39,9 +40,45 @@ namespace HartreeFock::Correlation
                 return CI::slater_condon_element(i.alpha, i.beta, j.alpha, j.beta,
                                                  *h, *g, n_act);
             };
-            ops.diagonal = [h, g, n_act](const DetKey &i) {
-                return CI::slater_condon_element(i.alpha, i.beta, i.alpha, i.beta,
-                                                 *h, *g, n_act);
+            // MEMOIZED (scope step T4). H_ii is a pure function of the
+            // determinant -- `h_eff` and `ga` are built once in
+            // `build_all_mo_ci_setup` and never mutated -- but the spawn loop asks
+            // for it once per parent per iteration, so the same value is recomputed
+            // for the life of the run.
+            //
+            // MEASURED on the N2/STO-3G gate case: 68 696 226 calls over 1820
+            // DISTINCT determinants, a 37 745x reuse factor and a 99.9974 % hit
+            // rate on an 85 KB table. The diagonal branch is the expensive one --
+            // O(n_act^2) (a p,q double loop plus an h_eff pass) against O(n_act)
+            // for a single excitation and O(1) for a double, ~86 % of
+            // slater_condon_element's work by operation count, and that function
+            // was 53.1 % of self time.
+            //
+            // A bound or eviction policy was considered and is NOT needed: a churn
+            // model suggested the table could reach hundreds of MB, but the real
+            // occupied set is nearly static (1820 entries), so the model was
+            // pessimistic by orders of magnitude. If a future system does churn,
+            // the fix is to clear alongside `pop.compress()` -- only currently
+            // occupied determinants can ever be queried again.
+            //
+            // `shared_ptr` because HamiltonianOps holds std::function, which must
+            // stay copyable; the cache is shared by every copy, which is what we
+            // want since they all describe the same Hamiltonian.
+            //
+            // THREADING NOTE (T2): this map is NOT thread-safe. When the spawn loop
+            // is threaded it must be prefilled before the parallel region, or made
+            // per-bin -- never a shared mutable map. It cannot change any value
+            // either way: a memo is a pure cache of a pure function.
+            auto diag_cache =
+                std::make_shared<std::unordered_map<DetKey, double, DetKeyHash>>();
+            ops.diagonal = [h, g, n_act, diag_cache](const DetKey &i) {
+                if (const auto it = diag_cache->find(i); it != diag_cache->end())
+                    return it->second;
+                const double v = CI::slater_condon_element(i.alpha, i.beta,
+                                                           i.alpha, i.beta,
+                                                           *h, *g, n_act);
+                diag_cache->emplace(i, v);
+                return v;
             };
             return ops;
         }

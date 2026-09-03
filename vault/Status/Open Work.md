@@ -676,6 +676,31 @@ worth doing whether or not FCIQMC happens.
   green. **A build in flight is not pinned to the working tree**; kill it before
   stashing, or the exit code describes source you no longer have.
 
+  **T4 LANDED (2026-09-03): a further 2.61x, bitwise identical — the diagonal was
+  being recomputed ~37 745 times per determinant.** `H_ii` is a pure function of
+  the determinant (`h_eff` and `ga` are built once and never mutated), but the
+  spawn loop asks for it once per parent per iteration. Memoized in the
+  `ops.diagonal` lambda: N2/STO-3G **40.66 s -> 15.57 s**, output bitwise identical
+  on both gate cases (zero differing lines excluding `Wall Time`). **Cumulative
+  with T1: 71.63 s -> 15.57 s, 4.60x**, all serial.
+
+  **The hit rate was MEASURED before building it**, via a temporary env-gated
+  probe: **68 696 226 calls over 1820 DISTINCT determinants** — a 37 745x reuse
+  factor, 99.9974 % hit rate, **85 KB** table. A churn model had suggested the
+  table could reach hundreds of MB and need eviction; the real occupied set is
+  nearly static, so **no bound is needed** and the model was pessimistic by orders
+  of magnitude. **A model of a workload is not a measurement of it.** The probe was
+  removed once it had answered the question.
+
+  **The scoped caution that a hash probe might lose to recompute at small `n_act`
+  was wrong** — a microbenchmark on production shapes measured the memo **75x**
+  faster at `n_act = 10` and **226x** at 20, the gap widening because recompute is
+  O(n_act^2) against an O(1) probe.
+
+  **Third consecutive over-delivery against Amdahl:** ~45 % of runtime was in scope
+  (53.1 % `slater_condon_element` x ~86 % diagonal branch), capping the direct
+  saving at 1.83x; measured 2.61x.
+
   **T2 (threading the spawn) is now unblocked.** Post-T1 the profile is
   `slater_condon_element`-dominated — it **rose** from 40.1 % to **53.1 %** of self
   time, which is the expected consequence of removing ~30 % allocation (the same
