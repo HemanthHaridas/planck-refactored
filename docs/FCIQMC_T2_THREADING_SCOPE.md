@@ -326,7 +326,7 @@ determinant identity through both the write and the abort, rather than trusting
 that "a probe fired" meant "the code under test is broken," is what separated
 this from a false alarm that would have blocked S3 on a correct implementation.
 
-### S4 — add the pragma
+### S4 — add the pragma — DONE, correct but under-performing (see S4.5)
 
 **Re-profiled before starting, per the standing rule that every prior serial
 step here has moved the ceiling.** S1 (per-bin RNG derivation), S2 (64
@@ -357,15 +357,120 @@ on top of it.
 `#pragma omp parallel for schedule(static)` over the **bins**, not the parents.
 
 - **Verify, in this order:**
-  1. **CPU > 100 %** at 4 threads — one `ps` call, catches an inert pragma before
-     any timing is read. (The `build-full` tree is the OpenMP-enabled one;
-     `-DUSE_OPENMP` is absent from some trees and every pragma is then silently
-     inert.)
+  1. **CPU > 100 %** at 4 threads — measured ~185 % sustained. Not near 400 %,
+     which turned out to matter (see below), but well above 100 %, so the
+     pragma is genuinely firing.
   2. **Bitwise identical at `OMP_NUM_THREADS` = 1/2/4/8**, against the S3 serial
-     result, on **N2** as well as H2.
-  3. All FCIQMC and FCI regression cases green.
-  4. **Speed, against the re-measured 3.97x ceiling above** — S0's number is now
-     stale and must not be quoted as the target.
+     result, on **N2** as well as H2 — PASSES.
+  3. All FCIQMC and FCI regression cases green — PASSES, same 4 pre-existing
+     unrelated failures as every prior step.
+  4. **Speed, against the re-measured 3.97x ceiling above** — **measured
+     1.51x** (18.84 s -> 12.46 s at 4 threads). Correctness is unaffected, but
+     this is far enough below the ceiling to investigate rather than accept:
+     ~185 % CPU rather than ~400 % pointed at idle time, and a profile
+     confirmed it — **56 % of all thread-samples are `__psynch_cvwait`**
+     (idle at the join barrier). Root-caused and scoped as **S4.5** rather
+     than accepted as "some overhead is normal": the partition is imbalanced
+     by a measured 3.2x between the busiest and idlest thread, not by a small
+     margin.
+
+### S4.5 — load-balance the bin-to-thread assignment (scoped, not built)
+
+**S4 landed correct but far below its own ceiling: measured 1.51x at 4 threads
+against a re-measured 3.97x Amdahl ceiling.** Bitwise identity holds (1/2/4/8
+threads, both gate cases, verified before this gap was investigated), so this
+is a performance-only follow-on, not a correctness fix.
+
+#### The measured cause
+
+CPU utilization at 4 threads is ~185%, not ~400% — profiling shows **56 % of
+all thread-samples are `__psynch_cvwait`** (idle at the join barrier). Direct
+measurement of one steady-state N2 iteration, aggregating the 64 bins into the
+4 consecutive-range groups `schedule(static)` currently assigns:
+
+| thread | bins | work |
+|---|---|---|
+| 0 | 0-15 | 1494.7 |
+| 1 | 16-31 | 1985.3 |
+| 2 | 32-47 | 1739.3 |
+| **3** | **48-63** | **4748.8** |
+
+Thread 3 carries **3.2x** thread 0's work. **Bin 63 alone — the bin holding the
+reference determinant — is 2108.2, or 21.1 % of the ENTIRE run's work in one
+bin.** Parent COUNT is well balanced (336-379 parents/thread, ~13 % spread);
+weight is not. Per-parent cost (`WalkerPopulation::add`, stochastic rounding,
+spawn draws) scales with how much weight a walker carries, and weight is
+sharply non-uniform — the reference is designed to carry substantial weight, so
+this is not a pathological input, it is the normal case.
+
+#### Why the obvious fixes do not work
+
+- **`schedule(dynamic)` instead of `schedule(static)`.** Already rejected by
+  this scope's own constraints: a dynamic schedule gives an accumulator a
+  different work *subset* depending on runtime timing, which breaks
+  thread-count invariance — the exact defect the FCI sigma build hit twice.
+- **More, smaller bins** (`kBins` 64 -> 256 or 1024). Reduces parent-COUNT
+  variance further but does nothing for a single dominant WEIGHT: the
+  reference determinant still hashes to exactly one bin regardless of
+  `kBins`, so whichever thread owns that bin still carries its share.
+
+#### The fix: greedy (LPT) bin-to-thread assignment, computed serially
+
+Longest-Processing-Time-first bin packing, computed once per call before the
+parallel region, replacing the compile-time consecutive-range split with a
+work-aware one:
+
+1. `bin_parents[64]` already exists (built serially in S4). Compute per-bin
+   work = `sum(|weight|)` over that bin's parents — an O(total parents) pass
+   over data already in hand.
+2. Sort the 64 bin indices by descending work (O(64 log 64), trivial).
+3. Greedily assign each bin, largest work first, to whichever THREAD currently
+   holds the smallest accumulated work (LPT). Deterministic given the bin work
+   values and the thread count.
+4. Replace `#pragma omp parallel for schedule(static)` over the bin *index*
+   with `#pragma omp parallel` over the *thread id*, each thread processing
+   its assigned bin *list* from step 3 rather than a fixed consecutive range.
+
+**Invariance argument, checked rather than assumed.** The assignment now
+depends on `omp_get_num_threads()` — by design, since fewer threads must each
+take on more bins — but NOT on `omp_get_thread_num()` at runtime or on
+completion order: it is computed once, serially, from the bin work values
+(themselves thread-count-independent, coming only from `pop`) and the
+requested thread count, which is a known fixed input to the call, not a race.
+Cross-thread-count bitwise identity survives because the **merge stays
+bin-index-ordered** (`for (auto &bin : next_bins) for (const auto &[det, w] :
+bin) next.add(det, w);`, unchanged from S2) — the merge never depended on
+*which thread* computed a bin, only on the fixed bin index order, so a
+different assignment across thread counts still produces the identical
+merged sum.
+
+#### Verify, in this order
+
+1. **Bitwise identical at `OMP_NUM_THREADS` = 1/2/4/8**, against S4's already-
+   verified serial result, on N2 and H2 — the assignment changed, the summed
+   values must not.
+2. **Re-measure the per-thread work distribution** the same way this gap was
+   found (steady-state iteration, aggregate by assignment instead of
+   consecutive range) — the spread should collapse toward the LPT bound
+   (worst case <= 4/3 of the ideal average for 4 threads, a standard LPT
+   guarantee) rather than the current 3.2x.
+3. **Speed against the 3.97x ceiling.** LPT does not reach the Amdahl bound
+   exactly (it is a bin-packing heuristic, not an optimal partition, and the
+   serial cost of computing the assignment is itself now inside the timed
+   region) — the honest target is "materially closer to 3.97x than the
+   current 1.51x," not an exact match.
+4. **All FCIQMC and FCI regression cases green.**
+
+#### What this must not do
+
+- **Do not let the assignment depend on anything computed DURING the parallel
+  region** (a running counter, `omp_get_thread_num()` inside the loop body,
+  timing) — that reintroduces the exact runtime-order dependence S1-S4 were
+  built to avoid. The assignment is entirely a pre-parallel-region, serial
+  computation.
+- **Do not skip the re-measurement in step 2.** LPT is a heuristic with a
+  known worst case, not a guarantee of perfect balance; confirm it actually
+  closes the gap on this workload before trusting the speed number in step 3.
 
 ### S5 — extend the gate
 

@@ -548,59 +548,80 @@ namespace HartreeFock::Correlation::CI::QMC
         for (std::size_t b = 0; b < kBins; ++b)
             bin_rngs.push_back(call_source.derive(b));
 
+        // T2 scope step S4: partition `population` into its kBins buckets
+        // FIRST (serial -- this is one pass over an unordered_map, which OpenMP
+        // cannot parallelize directly since it has no random-access index), then
+        // run the per-bin work in parallel over the now-indexable bucket array.
+        //
+        // This is the only structural change S4 makes. Every write inside the
+        // parallel region targets ONLY that iteration's own `next_bins[bin]` and
+        // reads only that bin's `bin_rngs[bin]` -- both already partitioned by
+        // S1/S2 -- so there is no shared mutable state during the parallel
+        // region: no atomic, no critical section, no completion-order
+        // dependence. `population.weight_at(exc.det)` (the initiator check) is a
+        // read-only lookup into a `const&` that every thread shares safely.
+        std::vector<std::vector<std::pair<DetKey, Weight>>> bin_parents(kBins);
         for (const auto &[det, weight] : population)
         {
             if (weight == 0.0)
                 continue;
+            bin_parents[DetKeyHash{}(det) % kBins].push_back({det, weight});
+        }
 
-            const std::size_t bin = DetKeyHash{}(det) % kBins;
+#pragma omp parallel for schedule(static)
+        for (std::size_t bin = 0; bin < kBins; ++bin)
+        {
             RandomSource &bin_rng = bin_rngs[bin];
             WalkerPopulation &next_bin = next_bins[bin];
 
-            // DEATH: deterministic, exactly as in propagate_deterministic. There
-            // is one diagonal element per determinant, so sampling it would add
-            // variance and buy nothing.
-            const double diag = ham.diagonal(det);
-            next_bin.add(det, weight * (1.0 - dt * (diag - shift)));
-
-            // SPAWN: draw connections instead of enumerating them. Each attempt
-            // carries 1/n_spawn_attempts of the parent's weight so that the total
-            // expected spawn is independent of how many attempts are made --
-            // otherwise raising n_spawn_attempts would silently scale the
-            // Hamiltonian.
-            const double per_attempt = weight / static_cast<double>(n_spawn_attempts);
-            for (int attempt = 0; attempt < n_spawn_attempts; ++attempt)
+            for (const auto &[det, weight] : bin_parents[bin])
             {
-                const auto exc = draw_excitation(det, n_act, bin_rng);
-                if (!exc.valid || exc.p_gen <= 0.0)
-                    continue;
+                // DEATH: deterministic, exactly as in propagate_deterministic.
+                // There is one diagonal element per determinant, so sampling it
+                // would add variance and buy nothing.
+                const double diag = ham.diagonal(det);
+                next_bin.add(det, weight * (1.0 - dt * (diag - shift)));
 
-                const double h_ij = ham.off_diagonal(det, exc.det);
-                if (h_ij == 0.0)
-                    continue;
-                // Initiator rule. Occupancy is judged against the INCOMING
-                // population, not the partially-built `next` -- see the header
-                // note on why order-dependence would otherwise creep in.
-                if (initiator_threshold > 0.0
-                    && std::abs(weight) <= initiator_threshold
-                    && population.weight_at(exc.det) == 0.0)
-                    continue;
-
-                // The 1/p_gen reweighting. p_gen here is a deterministic property
-                // of the draw, not an estimate -- see the header note on why that
-                // distinction is load-bearing.
-                double child = -dt * h_ij * per_attempt / exc.p_gen;
-                if (granularity > 0.0)
+                // SPAWN: draw connections instead of enumerating them. Each
+                // attempt carries 1/n_spawn_attempts of the parent's weight so
+                // that the total expected spawn is independent of how many
+                // attempts are made -- otherwise raising n_spawn_attempts would
+                // silently scale the Hamiltonian.
+                const double per_attempt = weight / static_cast<double>(n_spawn_attempts);
+                for (int attempt = 0; attempt < n_spawn_attempts; ++attempt)
                 {
-                    // Stochastic rounding to a multiple of `granularity`:
-                    // unbiased in expectation, so the mean step is unchanged
-                    // while the variance now depends on how large the spawn is
-                    // relative to one walker.
-                    child = granularity * bin_rng.stochastic_round(child / granularity);
-                    if (child == 0.0)
+                    const auto exc = draw_excitation(det, n_act, bin_rng);
+                    if (!exc.valid || exc.p_gen <= 0.0)
                         continue;
+
+                    const double h_ij = ham.off_diagonal(det, exc.det);
+                    if (h_ij == 0.0)
+                        continue;
+                    // Initiator rule. Occupancy is judged against the INCOMING
+                    // population, not the partially-built `next` -- see the
+                    // header note on why order-dependence would otherwise creep
+                    // in. Read-only, safe under threading.
+                    if (initiator_threshold > 0.0
+                        && std::abs(weight) <= initiator_threshold
+                        && population.weight_at(exc.det) == 0.0)
+                        continue;
+
+                    // The 1/p_gen reweighting. p_gen here is a deterministic
+                    // property of the draw, not an estimate -- see the header
+                    // note on why that distinction is load-bearing.
+                    double child = -dt * h_ij * per_attempt / exc.p_gen;
+                    if (granularity > 0.0)
+                    {
+                        // Stochastic rounding to a multiple of `granularity`:
+                        // unbiased in expectation, so the mean step is unchanged
+                        // while the variance now depends on how large the spawn
+                        // is relative to one walker.
+                        child = granularity * bin_rng.stochastic_round(child / granularity);
+                        if (child == 0.0)
+                            continue;
+                    }
+                    next_bin.add(exc.det, child);
                 }
-                next_bin.add(exc.det, child);
             }
         }
 
