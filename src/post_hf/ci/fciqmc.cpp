@@ -499,6 +499,40 @@ namespace HartreeFock::Correlation::CI::QMC
         double granularity,
         double initiator_threshold)
     {
+        // T2 scope step S4.5/M1: TRIED AND REVERTED. `next` is this
+        // function's RETURN VALUE, unlike `next_bins`/`bin_parents` which are
+        // purely internal working state. Making it a function-local `static`
+        // (the same pattern R1/R2 used) disables NRVO on `return next;` --
+        // a static cannot be moved-from, so the compiler is forced to
+        // COPY-CONSTRUCT the return value every call instead of eliding the
+        // copy. Measured head-to-head in a standalone benchmark isolating
+        // exactly this difference (identical map contents and growth
+        // history, only fresh-local-with-NRVO vs static-with-forced-copy):
+        // 65.3 us/call vs 97.3 us/call -- the forced copy costs MORE than the
+        // map-reuse itself saves (the reuse alone, without the return-value
+        // problem, measured a real ~20-30% win). End to end on the real N2
+        // gate this made propagate_stochastic SLOWER, not faster
+        // (16.6s/10.6s at 1/4 threads before this attempt, 17.9s/11.8s
+        // after) -- confirmed reproducible across repeat runs, not noise.
+        //
+        // It ALSO turned out to be reordering-sensitive in exactly the R2
+        // sense (a claim the first version of this comment got wrong and
+        // trusted without bisecting): `next`'s bucket count grows in
+        // discrete steps as the walker population ramps up, a reused map
+        // retains its peak bucket count after `.clear()`, and a later call
+        // with fewer entries than a prior peak iterates in a different order
+        // than a fresh map with the same contents would -- reassociating
+        // sums for any determinant written more than once per call (routine:
+        // the death term and a spawn can share a target, or two bins can
+        // spawn onto the same child). Confirmed by bisection: an
+        // equilibration=0 A/B on N2 diverged starting between 70 and 80
+        // total calls.
+        //
+        // Both findings are independently sufficient to not do this. `next`
+        // stays a fresh local -- see FCIQMC_T2_THREADING.md M1 for the full
+        // record, including why the isolated map-reuse microbenchmark alone
+        // (which looked favorable) was not sufficient evidence for either
+        // question.
         WalkerPopulation next;
         if (n_spawn_attempts < 1)
             return next;
@@ -520,7 +554,21 @@ namespace HartreeFock::Correlation::CI::QMC
         // cross-bin annihilation (two parents in different bins spawning onto
         // the same child) is resolved once, in the merge below, not during the
         // parallel region.
-        std::vector<WalkerPopulation> next_bins(kBins);
+        //
+        // T2 scope step S4.5/R2: persisted across calls and `.clear()`-ed
+        // instead of fresh-constructed, the same reuse R1 applied to
+        // `bin_parents`. Unlike `bin_parents`, this DOES change output values:
+        // `unordered_map::clear()` does not reproduce fresh-construction's
+        // bucket layout (verified standalone -- see FCIQMC_T2_THREADING.md
+        // R2), so summing the SAME set of (det, weight) additions in a reused
+        // map's iteration order is a legitimate reassociation of IEEE double
+        // addition, not a defect -- the same category of change S1 made when it
+        // moved from one shared RNG to per-bin streams. Verified by
+        // self-reproducibility and agreement with exact FCI, never by matching
+        // the pre-R2 numbers.
+        static std::vector<WalkerPopulation> next_bins(kBins);
+        for (auto &bin : next_bins)
+            bin.clear();
 
         // BUG CAUGHT BY THE REPRODUCIBILITY CHECK ITSELF, worth recording: the
         // first version of this derived bin_rngs directly from `rng` via the
@@ -560,7 +608,16 @@ namespace HartreeFock::Correlation::CI::QMC
         // region: no atomic, no critical section, no completion-order
         // dependence. `population.weight_at(exc.det)` (the initiator check) is a
         // read-only lookup into a `const&` that every thread shares safely.
-        std::vector<std::vector<std::pair<DetKey, Weight>>> bin_parents(kBins);
+        // T2 scope step S4.5/R1: `bin_parents` is write-once grouped input --
+        // push_back order does not affect which parent ends up in which bin, and
+        // nothing sums or overwrites within it -- so persisting it across calls
+        // and `.clear()`-ing instead of fresh-constructing cannot change any
+        // output value (verified: bitwise identical to the fresh-construction
+        // S4 result). This removes 64 `vector` allocations per call; see
+        // FCIQMC_T2_THREADING.md R1 for the measured per-call cost.
+        static std::vector<std::vector<std::pair<DetKey, Weight>>> bin_parents(kBins);
+        for (auto &bin : bin_parents)
+            bin.clear();
         for (const auto &[det, weight] : population)
         {
             if (weight == 0.0)
@@ -627,12 +684,14 @@ namespace HartreeFock::Correlation::CI::QMC
 
         // Merge in FIXED bin order, 0..kBins-1, regardless of thread count --
         // never by completion order, which is the DFT-grid jitter defect this
-        // codebase specifically avoids elsewhere. Fixed order is what keeps this
-        // step bitwise identical to S1's single `next`: the same set of (det, w)
-        // additions happens here, just grouped and re-ordered by which bin
-        // computed them, and WalkerPopulation::add's accumulation is associative
-        // enough for IEEE double addition to reproduce exactly UNDER A FIXED
-        // ORDER (verified below, not assumed).
+        // codebase specifically avoids elsewhere. Fixed bin order is what makes
+        // one call's result reproducible under threading (S4/R3): the same
+        // kBins maps get merged in the same order regardless of how many
+        // threads computed them. It is NOT what makes this bitwise identical
+        // to an earlier step's `next` -- since R2, `next_bins[bin]`'s OWN
+        // internal iteration order (a reused, `.clear()`-ed unordered_map) is
+        // itself a source of reassociation relative to S1-S4/R1's fresh-
+        // construction order; see the R2 comment above.
         for (auto &bin : next_bins)
             for (const auto &[det, w] : bin)
                 next.add(det, w);

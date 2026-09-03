@@ -636,27 +636,126 @@ worth doing whether or not FCIQMC happens.
   | T4 | memoize the diagonal | 40.66 -> 15.57 s (2.61x) | `slater_condon` 53.1 % -> 6.6 % |
   | — | bin the L1 norm | 15.57 -> 13.74 s (1.13x) | `ordered_l1_norm` 17.0 % -> 0.9 % |
 
-  **T2 (threading the spawn) is the only step left**, ceiling **2.81x at 4
-  threads**, and it is now broken into six verifiable steps in
-  `docs/FCIQMC_T2_THREADING_SCOPE.md`: S0 re-measure the ceiling (no code, with a
-  stop condition), S1 per-bin RNG, S2 bin the accumulation, S3 prefill the T4 memo,
-  S4 add the pragma, S5 extend the gate. **S1-S3 are serial**, so by the time the
-  pragma goes in the partition, the RNG shards and the cache are each already
-  proven at one thread — if S4 breaks invariance the cause is the pragma and
-  nothing else. **S1 is the only step whose values legitimately move** (a per-bin
-  RNG is a different trajectory), and it is first, so every later step has an exact
-  predecessor to diff against. **S5 matters more than it looks:** the existing
-  `h2_fciqmc_threads1/4` gate runs on **4 determinants** against `kBins = 64`, so
-  at most one parent lands in each bin and a merge-order defect can never surface —
-  an N2 pair is needed, and must be shown to go red under a perturbed merge order. That ceiling has moved three times — 3.75x post-T1, 2.19x after T4
-  removed work from inside the loop T2 threads, 2.81x once the L1-norm sort left
-  the serial tail — so **re-measure before building rather than quoting it**. The
-  design is decided and gated before the code exists (`h2_fciqmc_threads1/4` at
-  `atol = 0.0`): partition the PARENTS by `hash(parent) % kBins`, fixed bin count,
-  merged in fixed bin order. Two hazards recorded there: `RandomSource` is a single
-  mutable object shared by every parent, so threading the loop as written is a
-  **data race on generator state**, not merely a determinism question; and the T4
-  memo is **not thread-safe** and must be prefilled or per-bin.
+  **T2 (threading the spawn) LANDED (2026-09-03): correct and invariant, 1.57x
+  at 4 threads against a 3.97x ceiling — the gap is diagnosed, not closed.**
+  Full record in `docs/FCIQMC_T2_THREADING.md` (rewritten from scope to answer).
+  Six steps: S1 per-bin RNG (one bug caught — `derive()` is const and does not
+  advance the caller's stream, so the first version replayed an identical
+  frozen trajectory every call; fixed-seed reproducibility PASSED on the
+  broken version, since a frozen run replayed twice is still "reproducible" —
+  it took reading the walker population's own diagnostics to catch it), S2 bin
+  the accumulation (the scope's own "bitwise vs S1" verification instruction
+  was wrong — IEEE double addition is not associative, so a reordering step's
+  correct gate is self-reproducibility + FCI agreement, never bitwise-vs-the-
+  previous-ordering), S3 prefill the T4 memo (bitwise identical, pure
+  mechanical move), S4 add the pragma (correct and invariant at
+  `OMP_NUM_THREADS` = 1/2/4/8, but only 1.51x at 4 threads against 3.97x), and
+  S4.5's R1-R3 (reuse `bin_parents`/`next_bins` instead of reconstructing them
+  every call, closing part of the gap to 1.57x).
+
+  **S4's shortfall was root-caused twice, and the first diagnosis was a red
+  herring caught before code was written on it.** ~185% CPU (not ~400%) and
+  56% of thread-samples in `__psynch_cvwait` pointed at imbalance; a 3.2x
+  spread in summed `|weight|` per bin looked like the cause, but direct
+  per-thread `draw_excitation` counts were nearly identical across threads —
+  weight does not predict per-parent cost when `n_spawn_attempts` is a
+  per-run constant. A greedy bin-to-thread packing scheme was scoped against
+  this false lead and never built. The real cause, isolated by a standalone
+  microbenchmark: ~123us of the ~249us/call average is pure container
+  construction (64 fresh `unordered_map`s + 64 fresh `vector`s) that happens
+  **before** the parallel region starts — no thread partitioning scheme can
+  touch cost paid once per call before any thread forks.
+
+  **R1/R2 fixed half of it, and the honest result is that the barrier-wait
+  share DID NOT MOVE.** Reusing `bin_parents` (write-once grouped input, so
+  bitwise identical to S4 — verified) and `next_bins` (reordering-sensitive,
+  since `unordered_map::clear()`-and-reuse does not reproduce fresh-
+  construction's bucket layout, verified standalone) as function-local
+  statics gave a real, measured 1.51x -> 1.57x gain (16.6s/10.6s at 1/4
+  threads on N2), but re-profiling still showed 56.4% `__psynch_cvwait` —
+  statistically unchanged.
+
+  **FOLLOW-UP INVESTIGATION (2026-09-03), fully diagnosed via an in-binary
+  phase probe rather than guessed from disjoint microbenchmarks.** A
+  temporary env-gated timer (`PLANCK_FCIQMC_PHASE_PROBE`, same
+  inert-unless-set / deleted-after-answering discipline as the S3 miss-probe)
+  split every remaining serial phase plus the parallel region on the real N2
+  gate. At 4 threads: `next_bins` clear 15.3us, `bin_rngs` construction
+  25.9us, `bin_parents` partition 5.9us, the parallel region itself 78.5us
+  (2.52x speedup over its 1-thread 197.6us — the threading works as
+  designed), and **the fixed-bin-order merge 48.2us — larger than any single
+  phase except the parallel region, and never targeted by R1/R2.** Summed,
+  serial-outside-the-pragma work (15.3+25.9+5.9+48.2 = 95.3us) now
+  **exceeds** the parallel region (78.5us), which structurally caps the
+  achievable speedup regardless of thread balance — this is why the barrier-
+  wait share cannot fall below ~50% at the current design. A secondary,
+  unexplained observation: merge time itself rose 41.5us -> 48.2us (+16%,
+  reproducible) from 1 to 4 threads on identical work, plausibly post-join
+  cache/NUMA locality loss — flagged, not chased. Full record in
+  `docs/FCIQMC_T2_THREADING.md`. Parallelizing the merge would reintroduce
+  the completion-order hazard the whole binning design exists to avoid (the
+  merge must stay in fixed bin order for invariance), so any further step
+  here is a smaller, careful target, not "thread more of it" — left unbuilt,
+  same Q1 rationale as everything else in this section.
+
+  Cross-thread-count invariance holds throughout at `atol = 0.0`
+  (`h2_fciqmc_threads1/4`, all four FCIQMC gates, all four non-QMC FCI gates
+  sharing `build_all_mo_ci_setup`). The ceiling itself moved three times as
+  serial steps landed — 2.86x (post-T4) -> 3.97x (post S1-S3) -> back through
+  the same numbers depending on measurement point — the standing lesson: **re-
+  measure the ceiling immediately before adding threads, never quote an
+  earlier number.**
+
+  **Both remaining levers were investigated (2026-09-03); one was tried and
+  reverted, one was ruled out before writing code.** Full record in
+  `docs/FCIQMC_T2_THREADING.md`.
+
+  **The merge (48.2us/call) was fixed the R1/R2 way and made things WORSE, on
+  two independent grounds neither of which a first-pass microbenchmark
+  caught.** Reused `next` (a static, `.clear()`-ed each call) the same way
+  `next_bins`/`bin_parents` were reused, reasoning it was reordering-safe
+  since `next`'s own bucket layout cannot affect the fixed sequence of
+  `.add()` calls into it. **That reasoning was wrong**, caught only by
+  bisecting the real binary (bitwise identical through 70 total
+  `propagate_stochastic` calls, diverging by 80): a reused map retains its
+  PEAK bucket count after `.clear()`, so a later call with fewer entries than
+  an earlier peak iterates in a different order than a fresh map with
+  identical contents — the same reassociation mechanism R2 already found,
+  misapplied here without re-checking it applied. **But correctness was never
+  the reason to revert — speed was, on a second and separate mechanism the
+  map-reuse benchmark also missed:** `next` is the function's RETURN VALUE,
+  unlike the purely-internal `next_bins`/`bin_parents`, so making it `static`
+  disables NRVO on `return next;` and forces a full copy every call. A
+  standalone benchmark isolating exactly that (fresh-local-with-NRVO vs
+  static-with-forced-copy, identical contents) measured 65.3us/call vs
+  97.3us/call — the forced copy costs more than the reuse saves. End to end
+  on N2: 16.6s/10.6s (1/4 threads) before, 17.9s/11.8s after, reproduced.
+  **Reverted — `next` stays a fresh local.**
+
+  **`bin_rngs` (25.9us/call) was measured and judged not worth fixing before
+  any code was written.** It is safe from both of the merge's hazards (a
+  `std::vector`, index-accessed, never returned), but a standalone
+  microbenchmark of persist-and-overwrite-by-index vs fresh-reserve-and-
+  push_back showed only ~4% (26.8 -> 25.8us/call) — the dominant cost is
+  constructing and seeding 64 `std::mt19937_64` engines from scratch, which
+  is unavoidable work given S1's own correctness requirement that each call's
+  64 bin streams be fresh and independent, not container overhead. Left
+  unfixed.
+
+  **S5 (extending the invariance gate to an N2-sized pair) is the one piece
+  still unbuilt.** `h2_fciqmc_threads1/4` runs on 4 determinants against
+  `kBins = 64`, so at most one parent lands in each bin and a merge-order
+  defect can never surface there — an N2 pair is needed, shown to go red
+  under a perturbed (reversed) merge order before it is trusted.
+
+  **Value, unchanged from the serial answer's own conclusion:** the payoff
+  scales with how much FCIQMC is run (proportional to total runtime, not
+  walker count), and nothing in the tree currently runs it at a size where the
+  3.97x-vs-1.57x gap matters. The threading is correct and available at
+  1.57x, and both further levers investigated here are dead ends for the
+  current design — closing the gap further would need a different mechanism,
+  not more of the R1/R2 pattern, and is a decision for when a real target
+  exists.
 
   **Three lessons, each of which cost a wrong number first.** (1) **A profile share
   is a lower bound on what removing that work is worth** — three for three now
