@@ -637,7 +637,18 @@ worth doing whether or not FCIQMC happens.
   | — | bin the L1 norm | 15.57 -> 13.74 s (1.13x) | `ordered_l1_norm` 17.0 % -> 0.9 % |
 
   **T2 (threading the spawn) is the only step left**, ceiling **2.81x at 4
-  threads**. That ceiling has moved three times — 3.75x post-T1, 2.19x after T4
+  threads**, and it is now broken into six verifiable steps in
+  `docs/FCIQMC_T2_THREADING_SCOPE.md`: S0 re-measure the ceiling (no code, with a
+  stop condition), S1 per-bin RNG, S2 bin the accumulation, S3 prefill the T4 memo,
+  S4 add the pragma, S5 extend the gate. **S1-S3 are serial**, so by the time the
+  pragma goes in the partition, the RNG shards and the cache are each already
+  proven at one thread — if S4 breaks invariance the cause is the pragma and
+  nothing else. **S1 is the only step whose values legitimately move** (a per-bin
+  RNG is a different trajectory), and it is first, so every later step has an exact
+  predecessor to diff against. **S5 matters more than it looks:** the existing
+  `h2_fciqmc_threads1/4` gate runs on **4 determinants** against `kBins = 64`, so
+  at most one parent lands in each bin and a merge-order defect can never surface —
+  an N2 pair is needed, and must be shown to go red under a perturbed merge order. That ceiling has moved three times — 3.75x post-T1, 2.19x after T4
   removed work from inside the loop T2 threads, 2.81x once the L1-norm sort left
   the serial tail — so **re-measure before building rather than quoting it**. The
   design is decided and gated before the code exists (`h2_fciqmc_threads1/4` at

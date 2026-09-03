@@ -1,0 +1,176 @@
+# Scope: T2, threading the FCIQMC spawn loop
+
+**Scope for in-flight work. Not started.** The serial work is answered in
+`FCIQMC_SERIAL_PERFORMANCE.md` (71.63 s -> 13.74 s, 5.21x, no threads). This is
+the one remaining step, broken into pieces that can each be verified on their own.
+
+**Ceiling 2.81x at 4 threads** — but that number has moved three times as each
+serial step landed (3.75x -> 2.19x -> 2.81x), so **S0 re-measures it before any
+code is written**, and the result decides whether the rest is worth doing.
+
+## The constraint that shapes everything
+
+Every parallel path in Planck is **bitwise thread-count invariant**, by design and
+by gate. FCIQMC keeps that (`FCIQMC_RESEARCH_SCOPE.md` §6, decided explicitly
+rather than discovered). The gate already exists at `atol = 0.0` and passes
+trivially today because there are no threads.
+
+The design, settled and verified on a model: **partition the parents** by
+`hash(parent) % kBins`, each bin accumulating into its own `WalkerPopulation`,
+merged in fixed bin order.
+
+## What the loop looks like now
+
+```cpp
+for (const auto &[det, weight] : population)   // <- the loop to partition
+{
+    if (weight == 0.0) continue;
+    const double diag = ham.diagonal(det);     // memoized (T4) -- NOT thread-safe
+    next.add(det, weight * (1.0 - dt * (diag - shift)));
+    for (int attempt = 0; attempt < n_spawn_attempts; ++attempt)
+    {
+        const auto exc = draw_excitation(det, n_act, rng);   // rng: 2 draws
+        ...
+        if (initiator_threshold > 0.0 && ... population.weight_at(exc.det) == 0.0)
+            continue;                                        // reads `population`
+        child = granularity * rng.stochastic_round(...);     // rng: 1 more draw
+        next.add(exc.det, child);
+    }
+}
+```
+
+Three properties, each checked in the source rather than assumed:
+
+1. **`next` is the only mutable shared state.** Every write is
+   `_walkers[det] += w` on an `unordered_map`.
+2. **The initiator rule reads `population`, not `next`** — a pure read on a
+   `const&`, safe to share.
+3. **`RandomSource &rng` is a single mutable object shared by every parent.**
+   Threading as written is a **data race on generator state**, not merely a
+   determinism question. This is the sharpest hazard in the step.
+
+**The T4 memo is also shared mutable state** (`unordered_map` behind a
+`shared_ptr` in `ops.diagonal`) and is not thread-safe.
+
+## Steps
+
+### S0 — re-measure the ceiling (no code)
+
+Profile the current binary on `n2_fciqmc_sto3g`, whole-run sample, and compute
+`propagate_stochastic` inclusive with **real parent links** (see the parsing traps
+in `FCIQMC_SERIAL_PERFORMANCE.md` — two different naive methods gave 3909.9 % and
+100.0 %).
+
+- **Verify:** the share and the implied Amdahl ceiling at 2/4/8 threads.
+- **Stop condition:** if the ceiling at 4 threads is below ~2x, say so and stop.
+  The serial baseline is now 13.74 s; a 1.5x on 11 s of threadable work is ~4 s
+  saved on a method nothing currently uses.
+
+### S1 — make the RNG per-bin (serial, no pragma)
+
+Restructure so each bin draws from its own `RandomSource`, derived once per bin
+per iteration via `rng.derive(bin_index)`. Still single-threaded.
+
+`derive(index)` is already a pure function of the seed and index, independent of
+how many shards are taken — verified in `fciqmc.h:225`.
+
+- **This changes the numbers**, and that is expected: a different RNG stream is a
+  different trajectory. It is *not* a regression.
+- **Verify:** run-to-run reproducibility at a fixed seed (exact), and different
+  seeds still give different trajectories (the F3.5 negative control — an RNG that
+  ignores its seed passes every statistical check).
+- **Verify:** both estimators still agree with exact FCI within their error bars
+  on `n2_fciqmc_sto3g`. This is the only step whose values legitimately move, so it
+  is the only place that needs a statistical rather than exact check.
+- **Update** the `h2_fciqmc_threads1` reference values in the same commit.
+
+### S2 — bin the accumulation (serial, no pragma)
+
+Replace the single `next` with `kBins` per-bin `WalkerPopulation`s, merged in
+fixed bin order at the end of the iteration. Parent `det` selects its bin;
+**spawned children go into the same bin as their parent**, not their own.
+
+- **Do not bin by the child determinant.** That fixes which accumulator receives a
+  spawn but not the order arrivals reach it, so two threads spawning onto the same
+  determinant still race. **The partition must be over the work.**
+- **Verify: bitwise identical to S1** at one thread. Binning changes the order
+  weights accumulate, so this is where any accumulation-order defect shows up —
+  with no threads present to confuse the diagnosis. If it is not bitwise identical
+  here, it never will be under threads.
+- **Verify:** memory is `kBins` maps, independent of thread count. Record the
+  footprint.
+
+### S3 — prefill the T4 memo
+
+Before the loop, walk the population and populate the diagonal cache, so the
+parallel region only ever reads it.
+
+- **Verify:** bitwise identical to S2, and the cache is not written inside the
+  loop (assert on its size before and after, or make the in-loop handle `const`).
+- **Alternative if prefill is measurably slow:** one cache per bin. Prefill is
+  preferred — it keeps a single table and costs one pass over an already-resident
+  map.
+
+### S4 — add the pragma
+
+`#pragma omp parallel for schedule(static)` over the **bins**, not the parents.
+
+- **Verify, in this order:**
+  1. **CPU > 100 %** at 4 threads — one `ps` call, catches an inert pragma before
+     any timing is read. (The `build-full` tree is the OpenMP-enabled one;
+     `-DUSE_OPENMP` is absent from some trees and every pragma is then silently
+     inert.)
+  2. **Bitwise identical at `OMP_NUM_THREADS` = 1/2/4/8**, against the S3 serial
+     result, on **N2** as well as H2.
+  3. All FCIQMC and FCI regression cases green.
+  4. Speed, against S0's ceiling.
+
+### S5 — extend the gate
+
+`h2_fciqmc_threads1/4` runs on **4 determinants**, which may not exercise the
+partition at all — a space smaller than `kBins` puts at most one parent in each
+bin and can never surface a merge-order defect.
+
+- Add an **N2 pair** (`n2_fciqmc_threads1` / `threads4`) at `atol = 0.0`, tagged
+  `extended`.
+- Extend the existing pair to 8 threads.
+- **Verify the gate is non-vacuous:** perturb the merge order (reverse the bin
+  loop) and confirm the N2 gate goes red. A gate that cannot fail is not a gate.
+
+## What this must not do
+
+- **Do not use `omp atomic` on the walker map, or a completion-order reduction.**
+  That is the DFT-grid jitter defect.
+- **Do not tie `kBins` to thread count.** The FCI sigma build paid for this twice:
+  `schedule(dynamic)` gives an accumulator a different *subset* per run, and keying
+  by `omp_get_thread_num()` makes contents depend on the thread *count*.
+- **Do not accept "energies agree to 1e-10".** The gate is `atol = 0.0`; a
+  tolerance would hide exactly the reduction-order defect the design prevents.
+- **Do not thread the estimators.** `projected_energy` is 1.9 %.
+- **Do not skip S0.** Every previous estimate for this step was wrong within a day.
+
+## Why this ordering
+
+S1-S3 are serial and each is independently verifiable; only S4 introduces
+concurrency. By the time the pragma goes in, the partition, the RNG shards and the
+cache are already proven at one thread — so if S4 breaks invariance, the cause is
+the pragma and nothing else. Debugging a partition defect and a race at the same
+time is what this ordering exists to avoid.
+
+The one step whose values legitimately change is S1, and it is first, so every
+later step has an exact predecessor to diff against.
+
+## Key locations
+
+| what | where |
+|---|---|
+| the loop | `propagate_stochastic`, `src/post_hf/ci/fciqmc.cpp` |
+| RNG shard derivation | `RandomSource::derive`, `fciqmc.h:225` |
+| the T4 memo | `make_ops`, `src/post_hf/fciqmc_driver.cpp` |
+| the walker map | `WalkerPopulation`, `fciqmc.h` |
+| the invariance gate | `h2_fciqmc_threads1/4`, `tests/regression_cases.json` |
+| the precedent and its traps | `docs/FCI_SIGMA_BUILD_PERFORMANCE.md` |
+
+---
+
+Status lives in `vault/Status/Completion.md` and `vault/Status/Open Work.md`.
