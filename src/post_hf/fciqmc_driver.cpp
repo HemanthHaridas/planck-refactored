@@ -255,6 +255,30 @@ namespace HartreeFock::Correlation
 
         for (int step = 0; step < total_steps; ++step)
         {
+            // T2 scope step S3. `ops.diagonal` is memoized (T4) behind an
+            // unordered_map that is NOT thread-safe -- every entry the parallel
+            // region (S4) could possibly need must already be resident before
+            // that region starts, so no thread ever writes to the shared cache.
+            //
+            // A prefill pass over the CURRENT population, calling ops.diagonal
+            // for every determinant it holds, is sufficient: propagate_stochastic
+            // only ever queries the diagonal of determinants already present in
+            // `pop` at the top of the call (the death term, `fciqmc.cpp` around
+            // the `ham.diagonal(det)` line) -- it never queries the diagonal of a
+            // freshly spawned child, only of that child's PARENT, which is always
+            // an existing member of `pop`. So walking `pop` once covers every
+            // query the call is about to make.
+            //
+            // This is a pure mechanical change: it does not add, remove, or
+            // reorder any arithmetic. Every one of these calls would have hit the
+            // cache anyway on its first in-loop use (that is what T4 already
+            // guarantees at the 99.9974 % measured hit rate) -- this only moves
+            // WHEN the entry gets computed, from "first read inside the call" to
+            // "explicitly, just before it". Output must therefore be bitwise
+            // identical to S2, unlike S1->S2 which genuinely reordered summation.
+            for (const auto &[det, w] : pop)
+                (void)ops.diagonal(det);
+
             pop = propagate_stochastic(pop, setup->n_act, ops, opt.timestep,
                                        ctl.shift, rng, opt.spawn_attempts,
                                        opt.walker_granularity,

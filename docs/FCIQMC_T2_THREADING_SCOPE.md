@@ -279,16 +279,52 @@ asks that the SAME S2 ordering is reproduced regardless of how many threads
 compute it, which is exactly what partitioning by parent (not by completion
 order) guarantees.
 
-### S3 — prefill the T4 memo
+### S3 — prefill the T4 memo — DONE, bitwise identical to S2
 
-Before the loop, walk the population and populate the diagonal cache, so the
-parallel region only ever reads it.
+Before each step, walk the population and populate the diagonal cache via
+`ops.diagonal(det)`, so `propagate_stochastic`'s parallel region (S4) only ever
+reads it. Every determinant `propagate_stochastic` queries the diagonal of is a
+member of `pop` at the top of the call (the death term is the only
+`ham.diagonal` site inside it — verified by re-reading the function
+line by line, since S2's own reordering finding made "confirm by re-checking the
+source, not by re-asserting a prior comment" the standing rule here), so walking
+`pop` once ahead of the call covers exactly what the call is about to need. This
+is a pure mechanical change with no arithmetic, so unlike S1->S2 the correct gate
+here really is bitwise identity, and it holds: N2 and H2 both bitwise identical
+to S2, full extended suite unchanged (same 4 pre-existing failures).
 
-- **Verify:** bitwise identical to S2, and the cache is not written inside the
-  loop (assert on its size before and after, or make the in-loop handle `const`).
-- **Alternative if prefill is measurably slow:** one cache per bin. Prefill is
-  preferred — it keeps a single table and costs one pass over an already-resident
-  map.
+**Verifying "the cache is not written inside the loop" needed a real mutation
+test, and the first version of that test was itself wrong.** Built a temporary
+env-gated probe (`PLANCK_FCIQMC_S3_MISS_PROBE`) that aborts `ops.diagonal` on a
+cache miss, meant to prove the prefill covers every query the protected call
+makes. The first version armed the probe once at step 0 and left it armed for
+the rest of the run — and it aborted at step 3, `cache_size=81`, on a genuine
+spawn target the prefill had not yet seen.
+
+That was **not** a defect in the prefill. It was a defect in the *test*: the
+prefill is explicitly supposed to write a new cache entry every time a
+previously-unseen determinant becomes a parent — that is the whole point of
+prefilling ahead of a growing population — and an "arm once, abort on any miss
+thereafter" probe cannot distinguish that legitimate write from the one thing S3
+actually promises, which is that `propagate_stochastic` itself never triggers a
+write. Diagnosed by tagging each prefill query individually and comparing
+against the abort's determinant: the first `[PREFILL] querying 39e/bf` line and
+the `S3 PROBE MISS: det 39e/bf` line named the identical determinant — the probe
+was catching its own permitted prefill write, not a violation.
+
+Fixed by bracketing the probe tightly around the `propagate_stochastic` call
+alone — armed immediately before it, disarmed immediately after — so the
+prefill loop always runs unarmed and free to populate new entries, while the
+protected call is the only place a miss is treated as a failure. With that
+fix the probe ran clean across all 50 000 iterations of both gate cases, then
+was deleted once it had answered the question, per the T4 precedent.
+
+**The lesson, stated plainly because it is easy to get backwards:** when a
+mutation test fires, the first question is whether the mutation-under-test or
+the test itself is wrong — not which one you expected to be wrong. Tracing the
+determinant identity through both the write and the abort, rather than trusting
+that "a probe fired" meant "the code under test is broken," is what separated
+this from a false alarm that would have blocked S3 on a correct implementation.
 
 ### S4 — add the pragma
 
