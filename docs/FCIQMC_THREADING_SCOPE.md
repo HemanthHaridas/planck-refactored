@@ -84,10 +84,57 @@ calls against the spawn path's ~10⁹, so it is not where the allocator time is.
   per-element churn also costs cache pressure attributed to other frames — so
   **treat 29.5 % as a lower bound on the gain, not an estimate.**
 
-### T2 — thread the spawn loop — **NEXT, ceiling 3.75x at 4 threads**
+### T2 — thread the spawn loop — **NEXT, ceiling 2.19x at 4 threads (re-measured)**
 
-**Re-profiled after T1 (N2/STO-3G, 1 thread), which is what sizes this step.**
-Self time, 12 572 samples:
+**RE-MEASURED AFTER T4 (2026-09-03) — the ceiling dropped from 3.75x to 2.19x at
+4 threads, and a new item appeared that must be decided first.** Full-run sample
+(14 s window over a 15.57 s run), inclusive shares under `run_fciqmc`:
+
+| phase | inclusive | note |
+|---|---|---|
+| `propagate_stochastic` | **72.5 %** | what T2 threads |
+| **`ordered_l1_norm`** | **17.0 %** | **a full sort, once per iteration, serial** |
+| `projected_energy` | 1.6 % | scope says leave serial |
+| `compress` | 1.3 % | |
+
+Children account for 92.4 % of the root; the rest is setup/SCF/integrals.
+
+**T2 ceiling on the post-T4 serial baseline: 1.57x / 2.19x / 2.73x at 2/4/8
+threads.** The absolute payoff has shrunk twice over — the serial baseline went
+71.63 s -> 15.57 s across T1 and T4, and the threadable *share* fell to 72.5 %
+because the work T4 removed was inside the loop T2 threads.
+
+**`ordered_l1_norm` is now the second-largest item and nobody scoped it.** It sorts
+the ENTIRE walker population every iteration (50 000 times) purely to fix
+summation order:
+
+```cpp
+std::sort(entries.begin(), entries.end(), ...);   // O(n log n), 50000x
+for (const auto &[key, w] : entries) total += std::abs(w);
+```
+
+The summands are `|w|`, all non-negative, so the only order-dependence is
+floating-point reassociation. **Binning by `hash(det) % kBins` into fixed
+accumulators and summing the bins in order is O(n) and equally deterministic** —
+and it is the *same partition mechanism T2 already needs*. Doing them together is
+cheaper than doing either alone, and it lifts T2's own ceiling by removing 17 %
+from the serial tail.
+
+**Do not thread `ordered_l1_norm` itself.** Replace the sort; the determinism
+requirement is what motivated it and must survive.
+
+Two profiling traps recorded from getting this wrong twice: depth-matching sibling
+nodes to compute an inclusive share gave **3909.9 %** (summing subtrees across
+different call paths), and taking the single largest root node gave **100.0 %**
+(the window had caught only one phase). **Build real parent links from the depth
+stack and exclude nodes nested under another node of the same function**, or the
+number is meaningless. A short sample window also biases toward whichever phase it
+lands in — sample the whole run.
+
+---
+
+The post-T1 profile that originally sized this step, self time over 12 572
+samples:
 
 | frame | self |
 |---|---|
