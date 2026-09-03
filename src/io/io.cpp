@@ -689,6 +689,7 @@ namespace HartreeFock::IO
                 {"casscf", HartreeFock::PostHF::CASSCF},
                 {"rasscf", HartreeFock::PostHF::RASSCF},
                 {"fci", HartreeFock::PostHF::FCI},
+                {"fciqmc", HartreeFock::PostHF::FCIQMC},
             };
 
         return lookup_enum(_table, value, "Invalid Correlation : ");
@@ -712,7 +713,7 @@ namespace HartreeFock::IO
         return lookup_enum(_table, value, "Invalid Correlation : ");
     }
 
-    std::expected<void, std::string> _parse_scf(const std::vector<std::string> &lines, HartreeFock::OptionsSCF &scf, HartreeFock::PostHF &correlation, HartreeFock::OptionsIntegral &integral, HartreeFock::OptionsActiveSpace &active_space, HartreeFock::OptionsMP2 &mp2)
+    std::expected<void, std::string> _parse_scf(const std::vector<std::string> &lines, HartreeFock::OptionsSCF &scf, HartreeFock::PostHF &correlation, HartreeFock::OptionsIntegral &integral, HartreeFock::OptionsActiveSpace &active_space, HartreeFock::OptionsMP2 &mp2, HartreeFock::OptionsFCIQMC &fciqmc)
     {
         // (key, value) pairs
         const std::unordered_map<std::string, ParseHandler> _scf_map =
@@ -951,6 +952,99 @@ namespace HartreeFock::IO
                 {"ci_max_dim", [&active_space](const std::string &v) -> std::expected<void, std::string>
                  {
                      active_space.ci_max_dim = static_cast<unsigned int>(std::stoi(v));
+                     return std::expected<void, std::string>{};
+                 }},
+
+                // ── FCIQMC ────────────────────────────────────────────────────
+                // Every one of these changes the answer, so every one is
+                // reachable. Values are validated here rather than at use, so a
+                // bad input fails at parse time with the keyword named.
+                {"fciqmc_walkers", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed > 0.0))
+                         return std::unexpected("fciqmc_walkers must be positive");
+                     fciqmc.target_walkers = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_timestep", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed > 0.0))
+                         return std::unexpected("fciqmc_timestep must be positive");
+                     fciqmc.timestep = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_shift_damping", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed >= 0.0))
+                         return std::unexpected("fciqmc_shift_damping must be non-negative");
+                     fciqmc.shift_damping = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_shift_restoring", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed >= 0.0))
+                         return std::unexpected("fciqmc_shift_restoring must be non-negative");
+                     fciqmc.shift_restoring = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_shift_interval", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const int parsed = std::stoi(v);
+                     if (parsed < 1)
+                         return std::unexpected("fciqmc_shift_interval must be at least 1");
+                     fciqmc.shift_interval = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_granularity", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed >= 0.0))
+                         return std::unexpected("fciqmc_granularity must be non-negative (0 disables discretization)");
+                     fciqmc.walker_granularity = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_initiator", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed >= 0.0))
+                         return std::unexpected("fciqmc_initiator must be non-negative (0 disables the initiator)");
+                     fciqmc.initiator_threshold = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_equilibration", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const int parsed = std::stoi(v);
+                     if (parsed < 0)
+                         return std::unexpected("fciqmc_equilibration must be non-negative");
+                     fciqmc.equilibration_steps = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_steps", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const int parsed = std::stoi(v);
+                     if (parsed < 4)
+                         return std::unexpected("fciqmc_steps must be at least 4");
+                     fciqmc.sampling_steps = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_spawn_attempts", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const int parsed = std::stoi(v);
+                     if (parsed < 1)
+                         return std::unexpected("fciqmc_spawn_attempts must be at least 1");
+                     fciqmc.spawn_attempts = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                // The seed is an input on purpose: the reproducibility contract
+                // (same seed -> same trajectory, bitwise) is worthless if it
+                // cannot be set and is not recorded in the output.
+                {"fciqmc_seed", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     fciqmc.seed = static_cast<unsigned long long>(std::stoull(v));
                      return std::expected<void, std::string>{};
                  }},
                 {"target_irrep", [&active_space](const std::string &v) -> std::expected<void, std::string>
@@ -1974,7 +2068,7 @@ namespace HartreeFock::IO
         // scf
         if (auto it = _sections.find("scf"); it != _sections.end())
         {
-            if (auto res = _parse_scf(it->second, calculator._scf, calculator._correlation, calculator._integral, calculator._active_space, calculator._mp2); !res)
+            if (auto res = _parse_scf(it->second, calculator._scf, calculator._correlation, calculator._integral, calculator._active_space, calculator._mp2, calculator._fciqmc); !res)
                 return std::unexpected(res.error());
         }
         else

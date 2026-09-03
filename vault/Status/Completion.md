@@ -285,6 +285,192 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **FCIQMC: the method is implemented and runs from an input file (2026-08-31 to
+  2026-09-01).** `correlation fciqmc` is a working calculation. Walker state and
+  RNG, the excitation generator with a consistent `p_gen`, spawn/death/
+  annihilation, shift control with the initiator approximation, both energy
+  estimators with blocked error bars, and the driver entry point with eleven input
+  keywords. Gated by `planck-fciqmc-walkers` (~34 s) and the
+  `h2_fciqmc_sto3g` regression case.
+
+  **On H2/STO-3G against exact FCI `-1.1372744062`:** shift `-1.1375360199` ±
+  2.76e-03 (**0.09σ**), projected `-1.1373278832` ± 1.58e-04 (**0.34σ**).
+
+  **What is NOT yet demonstrated: a chemically interesting answer.** Every gate
+  above H2 runs on a *synthetic* Hamiltonian — one that respects a real
+  Hamiltonian's sparsity and is checked against exact diagonalization, but is not
+  a molecule. H2's 4 determinants are far below where sampling means anything
+  (the walker population covers the whole space). **The N2/STO-3G gate is the
+  first real test and is not built**; see `vault/Status/Open Work.md`.
+
+  **The design decision that makes future comparisons meaningful:**
+  `build_all_mo_ci_setup` was *extracted* from `run_fci` — a move, not a copy —
+  and both paths call it, with the Hamiltonian callbacks wrapping the same
+  `slater_condon_element`. The stochastic and deterministic paths therefore cannot
+  disagree about the Hamiltonian, only about how they solve it, so a disagreement
+  on a larger system is attributable to sampling rather than plumbing.
+
+  **Two prerequisites answered before any of it was written.** Q1 (is there a
+  calculation this codebase cannot do?) — yes, **Cr₂ CAS(12,18)**: two atoms,
+  344.6M determinants, 2.76 GB per CI vector, the first case where both the time
+  and memory walls fail, and inside the existing 31-orbital representation. Q2
+  (can a stochastic method be validated in a codebase gated on exactness?) — yes,
+  via the G1–G4 machinery (`metric_within_sigma`, a blocking analysis validated
+  against analytic AR(1), a fixed-seed harness, and an end-to-end estimator), all
+  built *before* any FCIQMC code and reusable independently of it.
+
+  **N2/STO-3G validation landed (2026-09-02).** `n2_fciqmc_sto3g` (extended, 69 s)
+  gates both estimators against exact FCI `-107.6529998854` at **0.32 sigma**
+  (shift) and **0.41 sigma** (projected), at 0.69 walkers per determinant so the
+  population is a genuine sample. Verified non-vacuous: an unstable timestep fails
+  it on three independent grounds.
+
+  **The finding worth carrying: a good-looking number hid a broken run.** At
+  `dt = 0.010` the shift energy read 0.14 sigma from exact while the reference
+  determinant was oscillating in sign (mean `|c_0|` 91.75 against mean signed
+  `c_0` -7.50). The shift cannot see it — it responds to the total population —
+  so **a single-estimator implementation would have reported a perfect-looking
+  answer.** The projected energy and the cross-check caught it. The driver now
+  warns on sign instability directly and the gate asserts
+  `not_contains: SIGN-UNSTABLE`.
+
+  **Threading determinism decided, not discovered:** no exception. Partitioning the
+  parents by `hash(parent) % kBins` and merging in fixed bin order keeps bitwise
+  thread-count invariance, gated by `h2_fciqmc_threads1/4` before any threading
+  exists.
+
+  Answers: `docs/FCIQMC_SAMPLING_AND_DYNAMICS.md`,
+  `docs/FCIQMC_POPULATION_CONTROL.md`,
+  `docs/FCIQMC_DRIVER_AND_VALIDATION.md`.
+
+- **FCIQMC: two estimator defects found and fixed by comparing the sampled
+  WAVEFUNCTION against deterministic FCI, not the energy (2026-09-02).** Both were
+  invisible to every existing gate, which compares energies only. The instrument
+  that found them is a coefficient-ratio dump on both paths: `run_fci` prints
+  `C_I/C_0` and `run_fciqmc` prints `<N_I>/<N_0>` over the accumulated SIGNED
+  per-determinant weight, in one format, at `verbosity verbose`.
+
+  **(1) The reference determinant was built by occupying the LOWEST-INDEX
+  orbitals, and index order is not energy order.** On N2/STO-3G the Aufbau
+  determinant is `0xbf` (orbitals [0,1,2,3,4,5,**7**]) because MO 6 lies above
+  MO 7 in the converged SCF ordering; the old code used `0x7f`. The true reference
+  carried **14.2x** the weight of the one everything was normalised against. It
+  survived because the failure is silent: the projected energy
+  `E = H_00 + (sum_j H_0j c_j)/c_0` anchors on it, so a weak anchor inflates the
+  VARIANCE rather than producing a wrong-looking number -- N2's projected error bar
+  ran ~20x the shift's and read as ordinary noise. Fixed by minimising
+  `ops.diagonal` over single occupied->virtual swaps from the Aufbau guess, using
+  the SAME `slater_condon_element` the propagator uses so the reference cannot
+  disagree with the Hamiltonian being sampled. Measured on N2: shared determinants
+  between the two dumps **0 -> 16**, projected error bar **3.27e-01 -> 1.34e-02
+  (24x tighter)**, shift **0.92 -> 0.11 sigma**.
+
+  **The bad reference corrupted the SHIFT too, indirectly** -- it is also the
+  starting population, so the run spent equilibration migrating away from a
+  near-empty determinant. An earlier note here claimed the shift "never touches the
+  reference, so this is a separate defect"; that was wrong.
+
+  **(2) On a DEGENERATE ground state the projected energy decays with sampling
+  time.** Any mixture of degenerate eigenstates is itself an eigenstate at the same
+  energy, so the imaginary-time dynamics apply **no restoring force** within the
+  manifold and the population random-walks between partners. Measured on
+  C2/STO-3G (FCI roots 0 and 1 both `-74.6406501646`, partners `0x3f/0x6f` and
+  `0x6f/0x3f` at +/-1.000000), varying ONLY the equilibration length:
+
+  | equil | partner/anchor | E_proj | sigma vs exact |
+  |---|---|---|---|
+  | 20000 | -0.861 | -74.6172886 | +2.62 |
+  | 40000 | -1.674 | -74.6413697 | -0.06 |
+  | 60000 | **-3.833** | **-74.7503958** | **-5.57** |
+
+  By 60000 the anchor holds a quarter of the partner's weight while the numerator
+  still samples the whole manifold, so the ratio inflates negatively and reports an
+  energy **5.6 sigma BELOW the variational minimum**. **Nothing is unstable** --
+  the sign is steady, the population is controlled, the reference holds 743
+  walkers. The run is fine and the ESTIMATOR is measuring the wrong thing.
+  **LONGER equilibration makes it WORSE**, inverting the usual intuition: more time
+  to converge is also more time to drift.
+
+  Fixed by warning on drift (>2x the seeded reference) and re-anchoring the
+  projection onto the largest-weight determinant **once**, at the end of
+  equilibration -- a reference that moved during sampling would change what the
+  accumulated ratio-of-sums means partway through. The scan breaks ties on the
+  bitstrings because the population is a hash map and an order-dependent anchor
+  would break fixed-seed reproducibility. Verified as a mutation test: the
+  known-broken `eq60` case goes **-5.57 -> +2.27 sigma** with the shift
+  **bit-identical** (proving only the projection changed), and non-degenerate N2 is
+  **bitwise unchanged** end to end -- inert where there is no drift.
+
+  **The shift is immune** (-1.05/-0.14/-0.49 sigma across the same three runs)
+  because it responds to total population growth, which is indifferent to how
+  weight is distributed inside the manifold. That is the **mirror image** of the N2
+  sign-instability finding, where the projected energy caught what the shift could
+  not. **Neither estimator dominates, which is the actual argument for computing
+  both.**
+
+  **Fixture consequence: C2/STO-3G is unsuitable for validating the projected
+  energy** and is replaced by **HF/6-31G** (11 orbitals, 5a/5b, **ndet = 213444**,
+  4.8x C2). Non-degeneracy was **measured, not assumed** -- roots 0 and 1 at
+  `-100.1156979102` / `-99.7369526906`, a **10.31 eV gap**, against C2's
+  `0.00e+00`. Inferring non-degeneracy from the "closed-shell singlet" label is
+  exactly the mistake C2 punished. A population sweep there spans 0.047-0.469
+  walkers/determinant, entirely below saturation (C2 saturates at 44100 walkers).
+  Fixtures and the sweep driver `tests/fciqmc_validation.py` are committed but
+  **deliberately unregistered**: each sweep is minutes-to-hours, which no CI budget
+  absorbs.
+
+- **FCI sigma build: 4.8x from removing the allocator, then 3.54x more from
+  threading it (2026-08-30).** The iterative `apply_ci_hamiltonian`
+  (`src/post_hf/ci/ci.cpp`) — the path taken by every determinant space above
+  `dense_threshold = 500` — was both allocation-bound and single-threaded.
+
+  **F1:** `get_excitation` returned a pair of heap vectors for values holding at
+  most two entries each (a Slater-Condon element vanishes beyond a double
+  excitation); it now returns a fixed-capacity struct. N2/STO-3G **125.7 s ->
+  26.3 s**, and the `malloc`/`free` profile share went **53 % -> 0.1 %** — the
+  allocator is eliminated, not reduced. Worth keeping: **the 4.8x exceeded what
+  the profile implied** (a 53 % share caps the direct saving at ~2.1x by Amdahl),
+  because per-element churn also cost cache pressure and bookkeeping attributed to
+  other frames. **A profile share is a lower bound on what removing that work is
+  worth.**
+
+  **F3:** the loop is now threaded, **3.54x at 4 threads** (N2 26.3 s -> 7.79 s;
+  1/2/4/8 threads = 27.59/14.66/7.79/5.71 s) against a modelled ~3.7x ceiling.
+  `be_fci_spherical_631gd` 7.6 s -> 3.42 s. Energies are **byte-identical across
+  `OMP_NUM_THREADS` = 1/2/4/8** and equal to the serial values
+  (`-107.6529998854`, `-14.6139425466`, `-147.7441885517`).
+
+  **The route the scope recommended — inverting the scatter to a gather — was
+  built, is numerically correct, and is 2.2-2.4x SLOWER.** The outer
+  `|c| < 1e-15` skip is not a summation-order detail but a sparsity exploitation
+  carrying asymptotic weight: in the scatter it elides the entire 126-line
+  enumeration for a negligible ket, and the trial vectors really are sparse
+  (Davidson starts from unit vectors; `solve_ci` reconstructs a dense `H` one
+  `Unit(dim, j)` column at a time, which is O(dim) enumerations scattered and
+  **O(dim^2)** gathered). The gather is stashed, not committed.
+
+  **So the scatter is kept, with partial vectors summed in fixed order — and the
+  determinism half is the part worth carrying: a fixed-order reduction is
+  NECESSARY BUT NOT SUFFICIENT.** Two defects, each caught only by byte-diffing
+  outputs across thread counts, neither by reasoning: `schedule(dynamic)` (which
+  the scope recommended for load balance) gives a buffer a different *subset* of
+  terms per run so its sums reassociate — two different last digits across 5
+  identical 4-thread runs; and keying buffers by `omp_get_thread_num()` makes their
+  *contents* depend on the thread count, so 8 threads disagreed with 1/2/4 even
+  under `schedule(static)`. **What must be deterministic is the partition of work
+  into accumulators, not merely the order they are summed.** The fix bins by a
+  fixed function of `j` (`partials[j / bin_size]`, `constexpr kBins = 64`) with
+  `schedule(static, bin_size)` so one chunk is exactly one bin. Memory is
+  `kBins x dim x 8`, **independent of thread count** (7.4 MB at N2). Never
+  `omp atomic`, never completion-order — the DFT-grid jitter defect.
+
+  **19/19 green** — every FCI, CASSCF, RASSCF, FCIDUMP and RI case in the repo,
+  including both iterative FCI gates and all four SA-CASSCF cases with the
+  `water_casscf_sa2_sto3g_sad_guess_uphill` canary. The 126-line excitation
+  enumeration is untouched; the only deleted lines are the old `accumulate`
+  lambda. See `docs/FCI_SIGMA_BUILD_PERFORMANCE.md`. F2 (the `occupied_orbitals` allocation)
+  remains open and independent.
+
 - **ccgen `merge_transposes` threaded into production — 1.42x / 1.52x measured
   (M1-M5, 2026-08-29).** Transpose-equivalent derived dressed operators now fold
   onto one shared array, which the call sites read through a permutation instead

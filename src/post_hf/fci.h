@@ -6,6 +6,8 @@
 #include <vector>
 
 #include "base/types.h"
+
+#include <Eigen/Core>
 #include "integrals/shellpair.h"
 
 namespace HartreeFock::Correlation
@@ -32,6 +34,30 @@ namespace HartreeFock::Correlation
     //   calc._correlation_energy  — E_FCI - E_RHF
     //   calc._correlated_total_energy / _have_correlated_total_energy — E_FCI
     //
+    // Everything an all-MO CI needs from a converged reference, built once.
+    //
+    // Extracted so FCIQMC consumes the SAME integral transform run_fci does. If
+    // the two built h_eff/ga independently they would drift, and every comparison
+    // between the stochastic and deterministic answers would then be ambiguous:
+    // a disagreement could be sampling, or it could be plumbing.
+    struct AllMOCISetup
+    {
+        int n_act = 0;              // spatial orbitals = whole MO space
+        int n_alpha = 0;
+        int n_beta = 0;
+        long long ci_dim = 0;       // determinant count, for logging and guards
+        Eigen::MatrixXd h_eff;      // C^T H_core C  (no inactive core, so no folding)
+        std::vector<double> ga;     // transformed two-electron integrals
+    };
+
+    // Validate the reference, check the packed-orbital and ci_max_dim limits, and
+    // build h_eff / ga. `tag` prefixes error messages so the caller's method name
+    // appears in them.
+    std::expected<AllMOCISetup, std::string> build_all_mo_ci_setup(
+        HartreeFock::Calculator &calc,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const std::string &tag);
+
     std::expected<void, std::string> run_fci(
         HartreeFock::Calculator &calc,
         const std::vector<HartreeFock::ShellPair> &shell_pairs);

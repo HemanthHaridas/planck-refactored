@@ -45,6 +45,18 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     "casscf_corr_energy": re.compile(r"^\s*CASSCF Correlation Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "casscf_total_energy": re.compile(r"^\s*CASSCF Total Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "fci_total_energy": re.compile(r"^\s*Total FCI Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
+    # FCIQMC reports a MEAN and its blocked error bar. Both are extracted so a
+    # case can assert the energy within its own uncertainty (metric_within_sigma)
+    # rather than against a hand-picked tolerance -- a stochastic result compared
+    # with metric_close would be asserting noise.
+    "fciqmc_shift_energy": re.compile(
+        r"Shift energy\s+([-+0-9Ee\.]+)\s+\+/-", re.MULTILINE),
+    "fciqmc_shift_error": re.compile(
+        r"Shift energy\s+[-+0-9Ee\.]+\s+\+/-\s+([-+0-9Ee\.]+)", re.MULTILINE),
+    "fciqmc_projected_energy": re.compile(
+        r"Projected energy\s+([-+0-9Ee\.]+)\s+\+/-", re.MULTILINE),
+    "fciqmc_projected_error": re.compile(
+        r"Projected energy\s+[-+0-9Ee\.]+\s+\+/-\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "dft_total_energy": re.compile(r"^\s*(?:\[INF\]\s+)?DFT Energy\s*:\s*([-+0-9Ee\.]+)\s+Eh", re.MULTILINE),
     "lr_root1_energy_ev": re.compile(r"^\s*1\s+[-+0-9Ee\.]+\s+([-+0-9Ee\.]+)\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+", re.MULTILINE),
     "lr_root2_energy_ev": re.compile(r"^\s*2\s+[-+0-9Ee\.]+\s+([-+0-9Ee\.]+)\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+", re.MULTILINE),
@@ -218,6 +230,39 @@ def resolve_metric_expectation(
     if override is None:
         return float(check["expected"]), float(check.get("atol", 1e-9))
     return float(override["expected"]), float(override.get("atol", check.get("atol", 1e-9)))
+
+
+def within_sigma_failure(
+    value: float | None,
+    sigma: float | None,
+    expected: float,
+    n_sigma: float,
+    metric: str,
+    sigma_metric: str,
+) -> str | None:
+    """Return a failure detail string, or None if the value is within n_sigma.
+
+    Split out from the check dispatch so it can be exercised directly: this is
+    the only assertion in the runner with arithmetic worth testing, and a
+    statistical gate that silently always passes is worse than no gate.
+    """
+    if value is None:
+        return f"missing metric: {metric}"
+    if sigma is None:
+        return f"missing uncertainty metric: {sigma_metric}"
+    if not math.isfinite(float(sigma)) or float(sigma) < 0.0:
+        return f"{sigma_metric} is not a usable uncertainty: {sigma}"
+    if not math.isfinite(float(value)):
+        return f"{metric} is not finite: {value}"
+    deviation = abs(float(value) - expected)
+    allowed = n_sigma * float(sigma)
+    if deviation <= allowed:
+        return None
+    return (
+        f"{metric} outside {n_sigma:g} sigma: got {float(value):.10f}, "
+        f"expected {expected:.10f}, deviation {deviation:.3e} "
+        f"> {allowed:.3e} ({sigma_metric}={float(sigma):.3e})"
+    )
 
 
 def checkpoint_path_for(input_path: Path) -> Path:
@@ -403,6 +448,30 @@ def run_case(
             if actual is None or not float(actual) >= threshold:
                 passed = False
                 details.append(f"{metric} expected >= {threshold}, got {actual}")
+
+        elif ctype == "metric_within_sigma":
+            # Statistical gate: |value - expected| <= n_sigma * uncertainty.
+            #
+            # Every other check here is an exact-value comparison, which a
+            # stochastic estimator cannot satisfy -- its answer is a mean with an
+            # error bar. This is the one assertion that can express "consistent
+            # with the reference, given the reported uncertainty".
+            #
+            # The uncertainty MUST come from the run itself (a blocked standard
+            # error, not a naive one -- see docs/FCIQMC_RESEARCH_SCOPE.md G2), so
+            # a run that under-reports its error bar fails this check rather than
+            # sliding under a hand-picked tolerance.
+            metric = check["metric"]
+            sigma_metric = check["sigma_metric"]
+            n_sigma = float(check.get("n_sigma", 3.0))
+            expected, _ = resolve_metric_expectation(case_id, metric, check, pyscf_references)
+            failure = within_sigma_failure(
+                metrics.get(metric), metrics.get(sigma_metric),
+                expected, n_sigma, metric, sigma_metric,
+            )
+            if failure is not None:
+                passed = False
+                details.append(failure)
 
         elif ctype == "metric_lt_metric":
             left = check["left"]

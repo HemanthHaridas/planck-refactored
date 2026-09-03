@@ -1,0 +1,886 @@
+#include "post_hf/ci/fciqmc.h"
+
+#include <array>
+#include <cassert>
+#include <algorithm>
+#include <bit>
+#include <cmath>
+#include <limits>
+#include <utility>
+#include <vector>
+
+namespace HartreeFock::Correlation::CI::QMC
+{
+
+    std::size_t WalkerPopulation::compress(Weight threshold)
+    {
+        std::size_t removed = 0;
+        for (auto it = _walkers.begin(); it != _walkers.end();)
+        {
+            // <= so that threshold 0 still removes exact zeros, which is the
+            // common case: annihilation of equal and opposite weights.
+            if (std::abs(it->second) <= threshold)
+            {
+                it = _walkers.erase(it);
+                ++removed;
+            }
+            else
+            {
+                ++it;
+            }
+        }
+        return removed;
+    }
+
+    namespace
+    {
+        // Apply a->r within one spin string, returning the new string and phase.
+        // Uses the shared fermionic operators so the sign convention is the one
+        // the rest of the CI layer already uses -- a second convention here would
+        // be a sign bug waiting for the first open-shell case.
+        struct SpinExcitation
+        {
+            CIString det = 0;
+            double phase = 0.0;
+            bool valid = false;
+        };
+
+        // The fermionic sign: -1 when an odd number of occupied orbitals lie
+        // strictly below `orb`. This is the SAME convention as
+        // CI::apply_annihilation / apply_creation in strings.cpp, written here in
+        // terms of the header-inline bit helpers so this layer does not drag the
+        // symmetry/basis dependency chain into every consumer. The equivalence is
+        // asserted by the F2 gate (test_operator_convention_matches_shared), so
+        // the two cannot silently drift apart.
+        inline double parity_phase(CIString det, int orb)
+        {
+            const int below = std::popcount(det & CASSCFInternal::low_bit_mask(orb));
+            return (below % 2 == 0) ? 1.0 : -1.0;
+        }
+
+        SpinExcitation excite_one(CIString det, int from, int to)
+        {
+            const CIString from_bit = CASSCFInternal::single_bit_mask(from);
+            if (!(det & from_bit))
+                return {}; // not occupied: nothing to annihilate
+            const double ph_ann = parity_phase(det, from);
+            const CIString after_ann = det ^ from_bit;
+
+            const CIString to_bit = CASSCFInternal::single_bit_mask(to);
+            if (after_ann & to_bit)
+                return {}; // already occupied: cannot create
+            const double ph_cre = parity_phase(after_ann, to);
+
+            return {after_ann | to_bit, ph_ann * ph_cre, true};
+        }
+
+        // Fixed-capacity orbital list (scope step T1).
+        //
+        // `occupied`/`virtuals` returned `std::vector<int>` BY VALUE, and
+        // `draw_excitation` calls both twice per spawn attempt. At ~14000 occupied
+        // determinants x 30000 iterations that is on the order of 1e9 heap
+        // allocations, and it showed: the malloc/free family was 29.5 % of the
+        // N2/STO-3G profile against slater_condon_element's 40.1 %.
+        //
+        // The capacity is a BOUND, not a guess. `build_all_mo_ci_setup` rejects
+        // any basis with n_act > kMaxPackedSpatialOrbitals (= (64-1)/2 = 31)
+        // before FCI or FCIQMC runs, so 32 entries can never overflow. The assert
+        // states that rather than trusting it.
+        //
+        // This is the same fix, on the same shape of defect, that the FCI sigma
+        // build took (`get_excitation` returning a pair of heap vectors for values
+        // bounded at two entries): 4.8x there, and the recorded lesson is that the
+        // gain EXCEEDED what the profile implied, because per-call churn also costs
+        // cache pressure attributed to other frames.
+        struct OrbitalList
+        {
+            std::array<int, 32> items{};
+            int count = 0;
+
+            void push(int p) noexcept
+            {
+                assert(count < static_cast<int>(items.size()));
+                items[static_cast<std::size_t>(count++)] = p;
+            }
+            int size() const noexcept { return count; }
+            int operator[](int i) const noexcept
+            {
+                assert(i >= 0 && i < count);
+                return items[static_cast<std::size_t>(i)];
+            }
+            // Range-for support: several call sites iterate the list directly.
+            const int *begin() const noexcept { return items.data(); }
+            const int *end() const noexcept
+            {
+                return items.data() + static_cast<std::size_t>(count);
+            }
+        };
+
+        OrbitalList occupied(CIString det, int n_act)
+        {
+            OrbitalList occ;
+            for (int p = 0; p < n_act; ++p)
+                if (det & CASSCFInternal::single_bit_mask(p))
+                    occ.push(p);
+            return occ;
+        }
+
+        OrbitalList virtuals(CIString det, int n_act)
+        {
+            OrbitalList vir;
+            for (int p = 0; p < n_act; ++p)
+                if (!(det & CASSCFInternal::single_bit_mask(p)))
+                    vir.push(p);
+            return vir;
+        }
+    } // namespace
+
+    std::vector<Excitation> enumerate_connections(const DetKey &parent, int n_act)
+    {
+        std::vector<Excitation> out;
+
+        const auto occ_a = occupied(parent.alpha, n_act);
+        const auto occ_b = occupied(parent.beta, n_act);
+        const auto vir_a = virtuals(parent.alpha, n_act);
+        const auto vir_b = virtuals(parent.beta, n_act);
+
+        // --- singles, alpha
+        for (int i : occ_a)
+            for (int a : vir_a)
+            {
+                const auto e = excite_one(parent.alpha, i, a);
+                if (e.valid)
+                    out.push_back({DetKey{e.det, parent.beta}, e.phase, 0.0, true});
+            }
+
+        // --- singles, beta
+        for (int i : occ_b)
+            for (int a : vir_b)
+            {
+                const auto e = excite_one(parent.beta, i, a);
+                if (e.valid)
+                    out.push_back({DetKey{parent.alpha, e.det}, e.phase, 0.0, true});
+            }
+
+        // --- same-spin doubles, alpha. i<j and a<b so each unordered pair of
+        // orbitals is visited exactly once; visiting both orderings would emit
+        // duplicate determinants (with opposite phases, which is worse than
+        // merely redundant).
+        for (int ii = 0; ii + 1 < occ_a.size(); ++ii)
+            for (int jj = ii + 1; jj < occ_a.size(); ++jj)
+                for (int aa = 0; aa + 1 < vir_a.size(); ++aa)
+                    for (int bb = aa + 1; bb < vir_a.size(); ++bb)
+                    {
+                        const auto e1 = excite_one(parent.alpha, occ_a[ii], vir_a[aa]);
+                        if (!e1.valid)
+                            continue;
+                        const auto e2 = excite_one(e1.det, occ_a[jj], vir_a[bb]);
+                        if (!e2.valid)
+                            continue;
+                        out.push_back({DetKey{e2.det, parent.beta}, e1.phase * e2.phase, 0.0, true});
+                    }
+
+        // --- same-spin doubles, beta
+        for (int ii = 0; ii + 1 < occ_b.size(); ++ii)
+            for (int jj = ii + 1; jj < occ_b.size(); ++jj)
+                for (int aa = 0; aa + 1 < vir_b.size(); ++aa)
+                    for (int bb = aa + 1; bb < vir_b.size(); ++bb)
+                    {
+                        const auto e1 = excite_one(parent.beta, occ_b[ii], vir_b[aa]);
+                        if (!e1.valid)
+                            continue;
+                        const auto e2 = excite_one(e1.det, occ_b[jj], vir_b[bb]);
+                        if (!e2.valid)
+                            continue;
+                        out.push_back({DetKey{parent.alpha, e2.det}, e1.phase * e2.phase, 0.0, true});
+                    }
+
+        // --- opposite-spin doubles: one alpha excitation and one beta. No
+        // ordering restriction is needed because the two spin channels are
+        // independent -- every (i->a, j->b) pair gives a distinct determinant.
+        for (int i : occ_a)
+            for (int a : vir_a)
+            {
+                const auto ea = excite_one(parent.alpha, i, a);
+                if (!ea.valid)
+                    continue;
+                for (int j : occ_b)
+                    for (int b : vir_b)
+                    {
+                        const auto eb = excite_one(parent.beta, j, b);
+                        if (!eb.valid)
+                            continue;
+                        out.push_back({DetKey{ea.det, eb.det}, ea.phase * eb.phase, 0.0, true});
+                    }
+            }
+
+        return out;
+    }
+
+    Excitation draw_uniform_excitation(const DetKey &parent, int n_act, RandomSource &rng)
+    {
+        const auto conns = enumerate_connections(parent, n_act);
+        if (conns.empty())
+            return {};
+
+        const int n = static_cast<int>(conns.size());
+        Excitation picked = conns[static_cast<std::size_t>(rng.uniform_int(n))];
+        picked.p_gen = 1.0 / static_cast<double>(n);
+        return picked;
+    }
+
+    namespace
+    {
+        // Unrank an unordered pair (i < j) from a linear index in [0, C(n,2)).
+        // Verified as a bijection for n = 4,5,7 before being written here: an
+        // off-by-one silently skips or duplicates orbital pairs, which is a
+        // support defect the frequency test would not reliably catch.
+        std::pair<int, int> unrank_pair(int k, int n)
+        {
+            int i = 0;
+            while (k >= n - 1 - i)
+            {
+                k -= (n - 1 - i);
+                ++i;
+            }
+            return {i, i + 1 + k};
+        }
+
+        // The five excitation classes. Kept as an enum rather than an int so a
+        // missing case in the switch is a compiler warning, not a silent zero.
+        enum class Klass
+        {
+            SingleA,
+            SingleB,
+            DoubleAA,
+            DoubleBB,
+            DoubleAB
+        };
+    } // namespace
+
+    Excitation draw_excitation(const DetKey &parent, int n_act, RandomSource &rng)
+    {
+        const auto occ_a = occupied(parent.alpha, n_act);
+        const auto occ_b = occupied(parent.beta, n_act);
+        const auto vir_a = virtuals(parent.alpha, n_act);
+        const auto vir_b = virtuals(parent.beta, n_act);
+
+        const int na = occ_a.size();
+        const int nb = occ_b.size();
+        const int va = vir_a.size();
+        const int vb = vir_b.size();
+
+        const int n_sa = na * va;
+        const int n_sb = nb * vb;
+        const int n_daa = (na >= 2 && va >= 2) ? (na * (na - 1) / 2) * (va * (va - 1) / 2) : 0;
+        const int n_dbb = (nb >= 2 && vb >= 2) ? (nb * (nb - 1) / 2) * (vb * (vb - 1) / 2) : 0;
+        const int n_dab = n_sa * n_sb;
+
+        // Only non-empty classes are candidates. Including an empty one would
+        // waste draws and, worse, make p_gen wrong for every other class.
+        // Fixed capacity 5: there are exactly five excitation classes, so this
+        // is a bound rather than a guess. Was a heap `std::vector` allocated on
+        // every spawn attempt (T1).
+        std::array<std::pair<Klass, int>, 5> live{};
+        int n_live = 0;
+        auto add = [&](Klass c, int n) { if (n > 0) live[static_cast<std::size_t>(n_live++)] = {c, n}; };
+        add(Klass::SingleA, n_sa);
+        add(Klass::SingleB, n_sb);
+        add(Klass::DoubleAA, n_daa);
+        add(Klass::DoubleBB, n_dbb);
+        add(Klass::DoubleAB, n_dab);
+        if (n_live == 0)
+            return {};
+
+        const auto [klass, class_size] = live[static_cast<std::size_t>(rng.uniform_int(n_live))];
+        const double p_gen = (1.0 / static_cast<double>(n_live))
+                             / static_cast<double>(class_size);
+
+        const int k = rng.uniform_int(class_size);
+
+        switch (klass)
+        {
+        case Klass::SingleA:
+        {
+            const auto e = excite_one(parent.alpha, occ_a[k / va],
+                                      vir_a[k % va]);
+            if (!e.valid)
+                return {};
+            return {DetKey{e.det, parent.beta}, e.phase, p_gen, true};
+        }
+        case Klass::SingleB:
+        {
+            const auto e = excite_one(parent.beta, occ_b[k / vb],
+                                      vir_b[k % vb]);
+            if (!e.valid)
+                return {};
+            return {DetKey{parent.alpha, e.det}, e.phase, p_gen, true};
+        }
+        case Klass::DoubleAA:
+        {
+            const int n_occ_pairs = na * (na - 1) / 2;
+            const auto [i, j] = unrank_pair(k % n_occ_pairs, na);
+            const auto [a, b] = unrank_pair(k / n_occ_pairs, va);
+            const auto e1 = excite_one(parent.alpha, occ_a[i],
+                                       vir_a[a]);
+            if (!e1.valid)
+                return {};
+            const auto e2 = excite_one(e1.det, occ_a[j],
+                                       vir_a[b]);
+            if (!e2.valid)
+                return {};
+            return {DetKey{e2.det, parent.beta}, e1.phase * e2.phase, p_gen, true};
+        }
+        case Klass::DoubleBB:
+        {
+            const int n_occ_pairs = nb * (nb - 1) / 2;
+            const auto [i, j] = unrank_pair(k % n_occ_pairs, nb);
+            const auto [a, b] = unrank_pair(k / n_occ_pairs, vb);
+            const auto e1 = excite_one(parent.beta, occ_b[i],
+                                       vir_b[a]);
+            if (!e1.valid)
+                return {};
+            const auto e2 = excite_one(e1.det, occ_b[j],
+                                       vir_b[b]);
+            if (!e2.valid)
+                return {};
+            return {DetKey{parent.alpha, e2.det}, e1.phase * e2.phase, p_gen, true};
+        }
+        case Klass::DoubleAB:
+        {
+            const int ka = k % n_sa;
+            const int kb = k / n_sa;
+            const auto ea = excite_one(parent.alpha, occ_a[ka / va],
+                                       vir_a[ka % va]);
+            if (!ea.valid)
+                return {};
+            const auto eb = excite_one(parent.beta, occ_b[kb / vb],
+                                       vir_b[kb % vb]);
+            if (!eb.valid)
+                return {};
+            return {DetKey{ea.det, eb.det}, ea.phase * eb.phase, p_gen, true};
+        }
+        }
+        return {};
+    }
+
+    Excitation draw_excitation_in_space(
+        const DetKey &parent,
+        int n_act,
+        RandomSource &rng,
+        const InSpacePredicate &in_space,
+        double p_accept,
+        int max_attempts)
+    {
+        // Rejection sampling. The correction to p_gen is the crux: an accepted
+        // draw happened with unrestricted probability p_gen, but CONDITIONED on
+        // acceptance it happened with p_gen / p_accept. Reporting the
+        // unrestricted value over-reports by 1/p_accept and silently suppresses
+        // every spawn out of a restricted space.
+        //
+        // p_accept is a CONSTANT supplied by the caller, never the attempt count
+        // of this call -- see the Jensen note in the header. An earlier draft used
+        // `p_gen * attempts`, which is unbiased for p_gen and biased by 1.72x
+        // (measured, at p_accept = 0.3) in the 1/p_gen the spawn actually uses.
+        if (!(p_accept > 0.0) || !(p_accept <= 1.0))
+            return {};
+
+        for (int i = 0; i < max_attempts; ++i)
+        {
+            const auto e = draw_excitation(parent, n_act, rng);
+            if (!e.valid)
+                continue;
+            if (!in_space(e.det))
+                continue;
+
+            Excitation accepted = e;
+            accepted.p_gen = e.p_gen / p_accept;
+            return accepted;
+        }
+        return {};
+    }
+
+    double measure_acceptance_rate(
+        const DetKey &parent,
+        int n_act,
+        RandomSource &rng,
+        const InSpacePredicate &in_space,
+        int n_samples)
+    {
+        if (n_samples <= 0)
+            return 0.0;
+        int accepted = 0;
+        for (int i = 0; i < n_samples; ++i)
+        {
+            const auto e = draw_excitation(parent, n_act, rng);
+            if (e.valid && in_space(e.det))
+                ++accepted;
+        }
+        return static_cast<double>(accepted) / static_cast<double>(n_samples);
+    }
+
+    WalkerPopulation propagate_deterministic(
+        const WalkerPopulation &population,
+        int n_act,
+        const HamiltonianOps &ham,
+        double dt,
+        double shift)
+    {
+        WalkerPopulation next;
+
+        for (const auto &[det, weight] : population)
+        {
+            if (weight == 0.0)
+                continue;
+
+            // DEATH (and survival): the diagonal term. Written as a scaling of
+            // the parent's own weight rather than a separate subtraction, which
+            // is the same arithmetic and makes the (1 - dt*(H_ii - S)) factor
+            // visible.
+            const double diag = ham.diagonal(det);
+            next.add(det, weight * (1.0 - dt * (diag - shift)));
+
+            // SPAWN: every connection, weighted by the off-diagonal element.
+            // Enumerating rather than sampling is what makes this exact.
+            for (const auto &exc : enumerate_connections(det, n_act))
+            {
+                const double h_ij = ham.off_diagonal(det, exc.det);
+                if (h_ij == 0.0)
+                    continue;
+                // ANNIHILATION happens here, in add(): a child of opposite sign
+                // landing on an already-occupied determinant cancels against it.
+                next.add(exc.det, -dt * h_ij * weight);
+            }
+        }
+
+        return next;
+    }
+
+    // T2 scope step S1: each PARENT draws from a RandomSource dedicated to its
+    // bin, `hash(parent) % kBins`, rather than from one RNG shared by the whole
+    // iteration. Still fully serial -- no pragma, one `next`, one thread -- this
+    // step exists only to prove the partition and the per-bin streams are correct
+    // before S2 (binning the accumulation) and S4 (the pragma) build on them.
+    //
+    // kBins is a FIXED constant, never tied to thread count -- the FCI sigma
+    // build's recorded lesson, twice over: `schedule(dynamic)` gives an
+    // accumulator a different *subset* of terms per run, and keying by
+    // `omp_get_thread_num()` makes contents depend on the thread count. Binning
+    // by `hash(parent) % kBins` additionally has a property that build's index-
+    // range binning did not: a determinant maps to the same bin regardless of
+    // kBins itself changing, so choosing a different bin count cannot move a
+    // parent's RNG stream.
+    //
+    // Each CALL to propagate_stochastic draws one raw 64-bit value from the
+    // caller's `rng` (this is what advances it across the driver's iteration
+    // loop) and derives the kBins per-bin streams from that single value. Within
+    // one call, bin_rngs[b] is a pure function of (that draw, b) -- bit-for-bit
+    // the same whether this call is later split across 1, 2, 4 or 8 threads,
+    // which is what S4 needs. Across calls, the draw itself differs, which is
+    // what keeps 50000 iterations from replaying the same trajectory (see the
+    // comment on call_source below for the bug this was until it did not).
+    //
+    // What changes here, deliberately: THIS run's numbers differ from every
+    // propagate_stochastic result before S1, because every parent now draws from
+    // a different stream than the single shared `rng` used to. That is not a
+    // regression -- it is a different, equally valid RNG trajectory, verified by
+    // reproducibility and by agreement with exact FCI, not by matching the old
+    // numbers.
+    constexpr std::size_t kBins = 64;
+
+    WalkerPopulation propagate_stochastic(
+        const WalkerPopulation &population,
+        int n_act,
+        const HamiltonianOps &ham,
+        double dt,
+        double shift,
+        RandomSource &rng,
+        int n_spawn_attempts,
+        double granularity,
+        double initiator_threshold)
+    {
+        // T2 scope step S4.5/M1: TRIED AND REVERTED. `next` is this
+        // function's RETURN VALUE, unlike `next_bins`/`bin_parents` which are
+        // purely internal working state. Making it a function-local `static`
+        // (the same pattern R1/R2 used) disables NRVO on `return next;` --
+        // a static cannot be moved-from, so the compiler is forced to
+        // COPY-CONSTRUCT the return value every call instead of eliding the
+        // copy. Measured head-to-head in a standalone benchmark isolating
+        // exactly this difference (identical map contents and growth
+        // history, only fresh-local-with-NRVO vs static-with-forced-copy):
+        // 65.3 us/call vs 97.3 us/call -- the forced copy costs MORE than the
+        // map-reuse itself saves (the reuse alone, without the return-value
+        // problem, measured a real ~20-30% win). End to end on the real N2
+        // gate this made propagate_stochastic SLOWER, not faster
+        // (16.6s/10.6s at 1/4 threads before this attempt, 17.9s/11.8s
+        // after) -- confirmed reproducible across repeat runs, not noise.
+        //
+        // It ALSO turned out to be reordering-sensitive in exactly the R2
+        // sense (a claim the first version of this comment got wrong and
+        // trusted without bisecting): `next`'s bucket count grows in
+        // discrete steps as the walker population ramps up, a reused map
+        // retains its peak bucket count after `.clear()`, and a later call
+        // with fewer entries than a prior peak iterates in a different order
+        // than a fresh map with the same contents would -- reassociating
+        // sums for any determinant written more than once per call (routine:
+        // the death term and a spawn can share a target, or two bins can
+        // spawn onto the same child). Confirmed by bisection: an
+        // equilibration=0 A/B on N2 diverged starting between 70 and 80
+        // total calls.
+        //
+        // Both findings are independently sufficient to not do this. `next`
+        // stays a fresh local -- see FCIQMC_T2_THREADING.md M1 for the full
+        // record, including why the isolated map-reuse microbenchmark alone
+        // (which looked favorable) was not sufficient evidence for either
+        // question.
+        WalkerPopulation next;
+        if (n_spawn_attempts < 1)
+            return next;
+
+        // T2 scope step S2: kBins independent accumulators instead of one shared
+        // `next`. Still fully serial -- this is what S4 will later split across
+        // threads, one bin (or a fixed group of bins) per thread, with no shared
+        // mutable state during the parallel region.
+        //
+        // The parent's bin, not the child's. A spawn's destination bin is chosen
+        // by DetKeyHash(parent) -- the determinant that OWNS the spawn attempt --
+        // never by DetKeyHash(child). Binning by the child would fix which
+        // accumulator receives a given spawn but not the ORDER arrivals reach
+        // it: two different parents in two different bins could both spawn onto
+        // the same child determinant, and under threading that is exactly the
+        // unsynchronized-map write this design exists to avoid. Binning by
+        // parent means every write inside one bin's loop body targets only that
+        // bin's own map, with no cross-bin write during the per-parent work --
+        // cross-bin annihilation (two parents in different bins spawning onto
+        // the same child) is resolved once, in the merge below, not during the
+        // parallel region.
+        //
+        // T2 scope step S4.5/R2: persisted across calls and `.clear()`-ed
+        // instead of fresh-constructed, the same reuse R1 applied to
+        // `bin_parents`. Unlike `bin_parents`, this DOES change output values:
+        // `unordered_map::clear()` does not reproduce fresh-construction's
+        // bucket layout (verified standalone -- see FCIQMC_T2_THREADING.md
+        // R2), so summing the SAME set of (det, weight) additions in a reused
+        // map's iteration order is a legitimate reassociation of IEEE double
+        // addition, not a defect -- the same category of change S1 made when it
+        // moved from one shared RNG to per-bin streams. Verified by
+        // self-reproducibility and agreement with exact FCI, never by matching
+        // the pre-R2 numbers.
+        static std::vector<WalkerPopulation> next_bins(kBins);
+        for (auto &bin : next_bins)
+            bin.clear();
+
+        // BUG CAUGHT BY THE REPRODUCIBILITY CHECK ITSELF, worth recording: the
+        // first version of this derived bin_rngs directly from `rng` via the
+        // const `derive(b)`, which reads rng's state without advancing it. Since
+        // `rng` lives in the CALLER (fciqmc_driver.cpp constructs it once before
+        // the whole 50000-iteration loop) and every draw used to go through
+        // `rng` itself -- which DOES advance -- that meant every one of the
+        // 50000 calls to propagate_stochastic rebuilt the IDENTICAL 64 bin
+        // streams from scratch, and the run never left its initial state
+        // (reference weight exactly 10000.00 with zero variance, shift equal to
+        // the seed diagonal to 1e-13). Fixed-seed reproducibility PASSED on that
+        // version -- the same broken trajectory replayed twice is still
+        // "reproducible" -- so it took reading the walker population's own
+        // diagnostics, not the reproducibility gate, to catch it.
+        //
+        // The fix: draw ONE raw 64-bit value from `rng` per call (this is what
+        // actually advances the caller's stream across iterations), then derive
+        // the kBins per-bin streams from THAT. Within one call the bins are a
+        // pure function of (call_seed, bin index) -- independent of thread count,
+        // which is what S4 needs -- while across calls call_seed itself changes,
+        // because `rng.raw64()` consumes one step of the caller's engine.
+        RandomSource call_source(rng.raw64());
+        std::vector<RandomSource> bin_rngs;
+        bin_rngs.reserve(kBins);
+        for (std::size_t b = 0; b < kBins; ++b)
+            bin_rngs.push_back(call_source.derive(b));
+
+        // T2 scope step S4: partition `population` into its kBins buckets
+        // FIRST (serial -- this is one pass over an unordered_map, which OpenMP
+        // cannot parallelize directly since it has no random-access index), then
+        // run the per-bin work in parallel over the now-indexable bucket array.
+        //
+        // This is the only structural change S4 makes. Every write inside the
+        // parallel region targets ONLY that iteration's own `next_bins[bin]` and
+        // reads only that bin's `bin_rngs[bin]` -- both already partitioned by
+        // S1/S2 -- so there is no shared mutable state during the parallel
+        // region: no atomic, no critical section, no completion-order
+        // dependence. `population.weight_at(exc.det)` (the initiator check) is a
+        // read-only lookup into a `const&` that every thread shares safely.
+        // T2 scope step S4.5/R1: `bin_parents` is write-once grouped input --
+        // push_back order does not affect which parent ends up in which bin, and
+        // nothing sums or overwrites within it -- so persisting it across calls
+        // and `.clear()`-ing instead of fresh-constructing cannot change any
+        // output value (verified: bitwise identical to the fresh-construction
+        // S4 result). This removes 64 `vector` allocations per call; see
+        // FCIQMC_T2_THREADING.md R1 for the measured per-call cost.
+        static std::vector<std::vector<std::pair<DetKey, Weight>>> bin_parents(kBins);
+        for (auto &bin : bin_parents)
+            bin.clear();
+        for (const auto &[det, weight] : population)
+        {
+            if (weight == 0.0)
+                continue;
+            bin_parents[DetKeyHash{}(det) % kBins].push_back({det, weight});
+        }
+
+#pragma omp parallel for schedule(static)
+        for (std::size_t bin = 0; bin < kBins; ++bin)
+        {
+            RandomSource &bin_rng = bin_rngs[bin];
+            WalkerPopulation &next_bin = next_bins[bin];
+
+            for (const auto &[det, weight] : bin_parents[bin])
+            {
+                // DEATH: deterministic, exactly as in propagate_deterministic.
+                // There is one diagonal element per determinant, so sampling it
+                // would add variance and buy nothing.
+                const double diag = ham.diagonal(det);
+                next_bin.add(det, weight * (1.0 - dt * (diag - shift)));
+
+                // SPAWN: draw connections instead of enumerating them. Each
+                // attempt carries 1/n_spawn_attempts of the parent's weight so
+                // that the total expected spawn is independent of how many
+                // attempts are made -- otherwise raising n_spawn_attempts would
+                // silently scale the Hamiltonian.
+                const double per_attempt = weight / static_cast<double>(n_spawn_attempts);
+                for (int attempt = 0; attempt < n_spawn_attempts; ++attempt)
+                {
+                    const auto exc = draw_excitation(det, n_act, bin_rng);
+                    if (!exc.valid || exc.p_gen <= 0.0)
+                        continue;
+
+                    const double h_ij = ham.off_diagonal(det, exc.det);
+                    if (h_ij == 0.0)
+                        continue;
+                    // Initiator rule. Occupancy is judged against the INCOMING
+                    // population, not the partially-built `next` -- see the
+                    // header note on why order-dependence would otherwise creep
+                    // in. Read-only, safe under threading.
+                    if (initiator_threshold > 0.0
+                        && std::abs(weight) <= initiator_threshold
+                        && population.weight_at(exc.det) == 0.0)
+                        continue;
+
+                    // The 1/p_gen reweighting. p_gen here is a deterministic
+                    // property of the draw, not an estimate -- see the header
+                    // note on why that distinction is load-bearing.
+                    double child = -dt * h_ij * per_attempt / exc.p_gen;
+                    if (granularity > 0.0)
+                    {
+                        // Stochastic rounding to a multiple of `granularity`:
+                        // unbiased in expectation, so the mean step is unchanged
+                        // while the variance now depends on how large the spawn
+                        // is relative to one walker.
+                        child = granularity * bin_rng.stochastic_round(child / granularity);
+                        if (child == 0.0)
+                            continue;
+                    }
+                    next_bin.add(exc.det, child);
+                }
+            }
+        }
+
+        // Merge in FIXED bin order, 0..kBins-1, regardless of thread count --
+        // never by completion order, which is the DFT-grid jitter defect this
+        // codebase specifically avoids elsewhere. Fixed bin order is what makes
+        // one call's result reproducible under threading (S4/R3): the same
+        // kBins maps get merged in the same order regardless of how many
+        // threads computed them. It is NOT what makes this bitwise identical
+        // to an earlier step's `next` -- since R2, `next_bins[bin]`'s OWN
+        // internal iteration order (a reused, `.clear()`-ed unordered_map) is
+        // itself a source of reassociation relative to S1-S4/R1's fresh-
+        // construction order; see the R2 comment above.
+        for (auto &bin : next_bins)
+            for (const auto &[det, w] : bin)
+                next.add(det, w);
+
+        return next;
+    }
+
+    double max_stable_timestep(
+        const WalkerPopulation &population,
+        const HamiltonianOps &ham,
+        double shift)
+    {
+        double worst = 0.0;
+        for (const auto &[det, weight] : population)
+        {
+            (void)weight;
+            worst = std::max(worst, std::abs(ham.diagonal(det) - shift));
+        }
+        if (worst <= 0.0)
+            return std::numeric_limits<double>::infinity();
+        return 2.0 / worst;
+    }
+
+    Weight ordered_l1_norm(const WalkerPopulation &population)
+    {
+        // Bin by determinant, then sum the bins in fixed order. Hash-order
+        // summation would make the reported value depend on insertion history --
+        // the same discipline the FCI sigma build follows for its partial sums.
+        //
+        // WHY NOT A SORT. This used to build a vector of the whole population and
+        // `std::sort` it by determinant key, once per iteration. That is
+        // O(n log n) done 50 000 times, and it measured **17.0 % of total runtime**
+        // on the N2/STO-3G gate case -- the second-largest item in the profile
+        // after the spawn loop itself, and larger than every remaining Hamiltonian
+        // cost put together.
+        //
+        // The sort was never needed for its ordering. The summands are `|w|`, all
+        // non-negative, so the only order-dependence is floating-point
+        // reassociation; what the contract requires is a CANONICAL partition of
+        // the terms, not a sorted one. Binning on a fixed function of the
+        // determinant gives that in O(n):
+        //
+        //   - a determinant always lands in the same bin, whatever order it was
+        //     inserted in, so the bin contents are insertion-order independent;
+        //   - within a bin the terms still arrive in hash order, but they are the
+        //     SAME SET of terms every time, and floating-point addition of a fixed
+        //     multiset in hash order is only reproducible if that order is itself
+        //     reproducible -- which it is, because `unordered_map` iteration order
+        //     is a deterministic function of the contents and the bucket count,
+        //     both of which are identical between two populations holding the same
+        //     determinants.
+        //
+        // That last point is the subtle one and it is why the bin count is a fixed
+        // constant rather than anything derived from the population size: two
+        // populations with identical contents must produce identical bins, so the
+        // partition may not depend on capacity, load factor, or insertion history.
+        //
+        // Gated by the existing `ordered_l1_norm is independent of insertion order`
+        // check, whose fixture spans 18 orders of magnitude specifically so that
+        // reassociation is observable -- it is not a vacuous comparison.
+        constexpr std::size_t kNormBins = 64;
+        std::array<Weight, kNormBins> bins{};
+        for (const auto &[det, w] : population)
+            bins[DetKeyHash{}(det) % kNormBins] += std::abs(w);
+
+        Weight total = 0.0;
+        for (const Weight b : bins)
+            total += b;
+        return total;
+    }
+
+    ProjectedEnergy projected_energy(
+        const WalkerPopulation &population,
+        const DetKey &reference,
+        int n_act,
+        const HamiltonianOps &ham,
+        double min_reference_weight)
+    {
+        ProjectedEnergy out;
+        out.reference_weight = population.weight_at(reference);
+
+        if (std::abs(out.reference_weight) < min_reference_weight)
+            return out;   // valid stays false: noise over noise
+
+        // Sum over the reference's connections in a DETERMINISTIC order. The
+        // oracle returns them in a fixed order for a given parent, so this does
+        // not depend on hash iteration -- unlike a pass over the population would.
+        double numerator = 0.0;
+        for (const auto &exc : enumerate_connections(reference, n_act))
+        {
+            const double c_j = population.weight_at(exc.det);
+            if (c_j == 0.0)
+                continue;
+            numerator += ham.off_diagonal(reference, exc.det) * c_j;
+        }
+
+        out.numerator = numerator;
+        // E = H_00 + sum_j H_0j c_j / c_0. The diagonal term is separated because
+        // it is exact -- it carries no sampling noise at all.
+        out.energy = ham.diagonal(reference) + numerator / out.reference_weight;
+        out.valid = true;
+        return out;
+    }
+
+    bool ShiftController::update(double population, double dt)
+    {
+        if (!(population > 0.0) || !std::isfinite(population))
+            return false;   // a dead or diverged population carries no signal
+
+        if (!primed)
+        {
+            last_population = population;
+            steps_since_update = 0;
+            primed = true;
+            return false;
+        }
+
+        if (++steps_since_update < interval)
+            return false;
+
+        // S <- S - (zeta / (interval*dt)) * ln(N_now / N_prev).
+        //
+        // The log ratio is the growth RATE over the interval; dividing by
+        // interval*dt converts it to a rate per unit imaginary time, which is
+        // what has the units of an energy. Getting that denominator wrong scales
+        // the feedback and shows up as the shift converging to the wrong value,
+        // not as instability -- which is why the gate checks the converged shift
+        // against the exact energy rather than only that it settles.
+        double correction = zeta * std::log(population / last_population);
+        if (xi != 0.0 && target_population > 0.0)
+            correction += xi * std::log(population / target_population);
+        shift -= correction / (static_cast<double>(interval) * dt);
+
+        last_population = population;
+        steps_since_update = 0;
+        return true;
+    }
+
+    double naive_standard_error(const std::vector<double> &series)
+    {
+        const std::size_t n = series.size();
+        if (n < 2)
+            return std::numeric_limits<double>::quiet_NaN();
+        double mean = 0.0;
+        for (double v : series)
+            mean += v;
+        mean /= static_cast<double>(n);
+        double var = 0.0;
+        for (double v : series)
+            var += (v - mean) * (v - mean);
+        var /= static_cast<double>(n - 1);
+        return std::sqrt(var / static_cast<double>(n));
+    }
+
+    double blocked_standard_error(const std::vector<double> &series)
+    {
+        std::vector<double> data = series;
+        double worst = 0.0;
+        bool any = false;
+
+        // Stop below 4 blocks: a standard error computed from 2 or 3 samples is
+        // itself so noisy that the plateau cannot be read from it.
+        while (data.size() >= 4)
+        {
+            const double se = naive_standard_error(data);
+            if (std::isfinite(se))
+            {
+                worst = std::max(worst, se);
+                any = true;
+            }
+            std::vector<double> next;
+            next.reserve(data.size() / 2);
+            for (std::size_t i = 0; i + 1 < data.size(); i += 2)
+                next.push_back(0.5 * (data[i] + data[i + 1]));
+            data.swap(next);
+        }
+        return any ? worst : std::numeric_limits<double>::quiet_NaN();
+    }
+
+    Weight WalkerPopulation::total_population() const noexcept
+    {
+        // Summed in hash order, which is not reproducible across rehashes. This is
+        // a diagnostic and a population-control input, never an energy estimator;
+        // if it ever feeds a reported quantity it must be sorted first. See the
+        // determinism discussion in docs/FCIQMC_RESEARCH_SCOPE.md.
+        Weight total = 0.0;
+        for (const auto &[det, w] : _walkers)
+            total += std::abs(w);
+        return total;
+    }
+
+} // namespace HartreeFock::Correlation::CI::QMC

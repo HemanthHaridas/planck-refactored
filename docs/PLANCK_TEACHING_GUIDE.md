@@ -730,7 +730,7 @@ SAD but at the correct \(-2.85516\) Eh (matching PySCF to \(10^{-10}\)) from
 HCore, each "converging" in five iterations at a different HOMO energy. The SAD
 atomic-density seed apparently lands in the wrong basin for a single small atom.
 This matters directly for the isolated-monomer references in a counterpoise
-calculation ([§23](#23-basis-set-superposition-error-and-the-counterpoise-correction)),
+calculation ([§24](#24-basis-set-superposition-error-and-the-counterpoise-correction)),
 where a core-Hamiltonian guess is the safer choice for those small fragments. The
 lesson is not that one guess is universally safer — it is that the converged SCF
 solution should be sanity-checked (symmetry of degenerate orbitals, dipole of a
@@ -4607,7 +4607,7 @@ FCI is the conceptual hub of the correlated methods:
   ranks (CCSD → CCSDT → … → CCSDTQ… → FCI), trading the linear CI expansion for
   an exponential ansatz \(e^{\hat T}\) that restores size-extensivity at each
   truncation.
-- **CASSCF** (§18) is *FCI restricted to an active space* of chemically important
+- **CASSCF** (§19) is *FCI restricted to an active space* of chemically important
   orbitals, with the orbitals themselves variationally optimized. FCI is the
   special case in which the active space is the entire orbital basis and no
   orbital optimization is performed.
@@ -4618,7 +4618,290 @@ truncated, resummed, or restricted.
 
 ---
 
-## 18. CASSCF and RASSCF
+## 18. Full CI Quantum Monte Carlo (FCIQMC)
+
+### Why a Stochastic FCI
+
+§17 ended on FCI's virtue — it is exact within the basis — and its vice: the
+determinant count grows factorially. Planck's own measurements put the practical
+ceiling around \(n_{\text{act}} \approx 12\); at 14 active orbitals a full CI is
+roughly three days of compute, at 16 about 208 days, at 18 some 36 years. The
+wall is *time* long before it is memory: an \(n_{\text{act}} = 14\) CI vector is
+only 0.09 GB.
+
+FCIQMC attacks the same eigenvalue problem without ever storing the vector. The
+observation is that we rarely need every coefficient — we need the **energy**,
+and the energy is an average. So instead of solving for \(\mathbf{c}\), we
+maintain a *population of signed walkers* whose distribution over determinants is
+proportional to \(\mathbf{c}\), and read the energy off that population.
+
+The trade is exactness for a *statistical* answer: FCIQMC returns an energy with
+an error bar, and the error bar shrinks as \(1/\sqrt{N_{\text{samples}}}\).
+
+### Imaginary-Time Propagation
+
+The method rests on one idea. Take the Schrödinger equation and replace
+\(t \to -i\tau\):
+
+\[
+-\frac{\partial |\Psi(\tau)\rangle}{\partial \tau} = (\hat H - S) |\Psi(\tau)\rangle
+\qquad\Longrightarrow\qquad
+|\Psi(\tau)\rangle = e^{-\tau(\hat H - S)} |\Psi(0)\rangle .
+\]
+
+Expand the starting state in exact eigenstates,
+\(|\Psi(0)\rangle = \sum_i a_i |\phi_i\rangle\). Each component decays at its own
+rate:
+
+\[
+|\Psi(\tau)\rangle = \sum_i a_i e^{-\tau(E_i - S)} |\phi_i\rangle .
+\]
+
+Because \(E_0 < E_1 \le E_2 \le \dots\), every excited component decays *faster*
+than the ground state. Wait long enough and only \(|\phi_0\rangle\) survives —
+imaginary-time propagation is a filter that projects onto the ground state. The
+shift \(S\) is a free parameter fixing the overall normalization; when
+\(S = E_0\) the surviving component neither grows nor decays.
+
+In practice we take small finite steps, first order in \(\mathrm{d}\tau\):
+
+\[
+c_I(\tau + \mathrm{d}\tau) = c_I(\tau)
+  - \mathrm{d}\tau \sum_J (H_{IJ} - S\,\delta_{IJ})\, c_J(\tau) .
+\]
+
+Splitting the diagonal from the off-diagonal gives the algorithm's three moves:
+
+\[
+c_I \leftarrow \underbrace{c_I\,[\,1 - \mathrm{d}\tau (H_{II} - S)\,]}_{\text{death / cloning}}
+     \;\underbrace{-\;\mathrm{d}\tau \sum_{J \ne I} H_{IJ} c_J}_{\text{spawning}} .
+\]
+
+**Death** scales a determinant's own weight by its diagonal element. **Spawning**
+sends weight from occupied determinants to their connections. And when two spawns
+of *opposite sign* land on the same determinant they cancel — **annihilation** —
+which is what controls the sign problem.
+
+### Walkers, and Why Annihilation Is Free
+
+In Planck the walker population is a hash map from determinant to a signed real
+weight (`WalkerPopulation`, `src/post_hf/ci/fciqmc.h`):
+
+```cpp
+void add(const DetKey &det, Weight w)
+{
+    if (w == 0.0)
+        return;
+    _walkers[det] += w;
+}
+```
+
+That `+=` **is** the annihilation step. There is no separate pass: accumulating
+signed weights into a determinant-keyed map cancels opposite signs automatically.
+This is the single most important design consequence of choosing a map over a
+walker list.
+
+Two further points are easy to miss:
+
+- **Weights are real, not integer counts.** The original method used integer
+  walkers; real weights remove spawning discretization noise without changing the
+  structure. Planck still applies *stochastic rounding* to a `granularity`,
+  because without any discretization the propagator is scale-invariant and the
+  statistical error stops depending on population at all.
+- **The map holds only occupied determinants.** This is the whole point: the
+  memory footprint tracks the *occupied* space, not the enumerated one. For the
+  target regime the enumerated space would not fit in memory at all.
+
+### Sampling the Off-Diagonal: `p_gen`
+
+Spawning as written sums over *every* connection \(J\) of \(I\). For a real
+Hamiltonian that is hundreds of determinants per parent (N₂/STO-3G: 609), and
+enumerating them defeats the purpose. So we **sample**: draw one connection at
+random and reweight by the probability of having drawn it.
+
+\[
+\sum_{J \ne I} H_{IJ} c_J
+\;\approx\;
+\frac{H_{IJ}\, c_I}{p_{\text{gen}}(J \mid I)}
+\qquad\text{for a single draw } J .
+\]
+
+The estimator is unbiased **only if `p_gen` is the true probability the generator
+produced that excitation**. This is the most dangerous quantity in the method,
+and it is worth being explicit about why: every other step fails loudly, whereas
+a `p_gen` that disagrees with the sampler's actual distribution produces a
+plausible, converged, **wrong** energy.
+
+Planck's generator picks an excitation class uniformly among the non-empty ones,
+then picks uniformly within that class, giving
+
+\[
+p_{\text{gen}} = \frac{1}{n_{\text{live}}} \cdot \frac{1}{|{\text{class}}|} .
+\]
+
+Note this is deliberately **non-uniform** across connections — it varies by more
+than 10× on N₂/STO-3G. Non-uniformity is not a bug; a *mis-reported* `p_gen` is.
+The gate therefore tests agreement between the reported `p_gen` and the observed
+draw frequencies, never uniformity.
+
+Two lessons from building it are worth carrying:
+
+- **Support and frequency are separate failure modes.** A generator that can
+  *never* reach some excitation passes a frequency-only check.
+- **When a sampled quantity is used as a divisor, unbiasedness is the wrong
+  property to verify.** Estimating an acceptance rate from the same call that
+  uses it gives an unbiased estimate of \(p_{\text{gen}}\) — but the spawn needs
+  \(1/p_{\text{gen}}\), and \(\mathbb{E}[1/X] \neq 1/\mathbb{E}[X]\). Measured at
+  \(p_{\text{accept}} = 0.3\), the mean of \(1/p_{\text{gen}}\) came out 1.72×
+  too large while the mean of \(p_{\text{gen}}\) was correct to 0.1 %.
+
+### Population Control and the Shift
+
+Left alone the population grows or collapses exponentially. The shift \(S\) is
+fed back to hold it steady (`ShiftController`):
+
+\[
+S \leftarrow S - \frac{\zeta}{A\,\mathrm{d}\tau} \ln\frac{N}{N_{\text{prev}}}
+              - \frac{\xi}{A\,\mathrm{d}\tau} \ln\frac{N}{N_{\text{target}}} .
+\]
+
+The first term responds to the growth *rate*; the second supplies a restoring
+force toward the target. Both are needed — the textbook single-term form responds
+only to the rate and therefore **never targets a population**: measured, the final
+population came out proportional to the starting one across a 1000× range.
+
+The \(A\,\mathrm{d}\tau\) denominator is what makes \(\zeta\) dimensionless and
+transferable across timesteps. Dropping it is equivalent to rescaling \(\zeta\)
+and \(\xi\), which no tradeoff test detects — a parameter's *units* cannot be
+gated by a test that only asserts the shape of a tradeoff in that parameter.
+
+### Two Estimators, and Why Both
+
+Once the population is stationary, the shift fluctuates around the ground-state
+energy, so its running average is the **shift energy**.
+
+The **projected energy** is independent arithmetic on the same population:
+
+\[
+E_{\text{proj}} = H_{00} + \frac{\sum_{J \ne 0} H_{0J}\, c_J}{c_0},
+\]
+
+projecting the sampled wavefunction onto a chosen reference \(|D_0\rangle\).
+
+They share no arithmetic, which makes their agreement a strong check — and their
+*disagreement* diagnostic. **Neither dominates, and Planck computes both because
+each is blind to a failure the other catches:**
+
+- On N₂ at too large a timestep, the reference determinant oscillated in sign
+  (mean \(|c_0| = 91.75\) but mean signed \(c_0 = -7.50\)). The **shift read
+  0.14σ from exact** while the dynamics were unstable — a single-estimator
+  implementation would have reported a perfect-looking answer. The projected
+  energy caught it.
+- On C₂, whose ground state is **doubly degenerate**, the projected energy drifted
+  5.6σ *below* the variational minimum while the shift stayed within 1σ. Any
+  mixture of degenerate eigenstates is itself an eigenstate at the same energy, so
+  the dynamics apply **no restoring force** within the manifold and the population
+  random-walks between partners, starving the anchor. Nothing was unstable; the
+  estimator was measuring the wrong thing. Counter-intuitively, **longer
+  equilibration made it worse** — more time to converge is also more time to drift.
+
+Planck therefore warns on reference drift and re-anchors the projection onto the
+largest-weight determinant once, at the end of equilibration.
+
+### Choosing the Reference
+
+The projected energy anchors on \(|D_0\rangle\), so a poor choice inflates its
+variance. The reference must be the determinant of **lowest diagonal energy**, and
+that is *not* the one occupying the lowest-index orbitals: on N₂/STO-3G the Aufbau
+determinant is `0xbf` — orbitals [0,1,2,3,4,5,**7**] — because MO 6 lies above
+MO 7 in the converged SCF ordering.
+
+Planck finds it by minimizing `ops.diagonal` over single occupied→virtual swaps,
+using the **same** `slater_condon_element` the propagator uses, so the reference
+cannot disagree with the Hamiltonian being sampled.
+
+### Error Bars: Why the Naive One Is Wrong
+
+Successive iterations are **highly correlated** — the population changes only
+slightly per step — so the naive standard error \(\sigma/\sqrt{n}\) understates the
+true uncertainty by up to 6.6×, measured. Planck uses a Flyvbjerg–Petersen
+**blocking analysis**: repeatedly average adjacent pairs and watch the estimated
+error until it plateaus, taking the largest value across blocking levels
+(conservative by construction — an overestimate fails a gate loudly, an
+underestimate passes one silently).
+
+### The Initiator Approximation
+
+At low walker density, spawns onto empty determinants are mostly noise that
+annihilation has no partner to cancel. The **initiator** rule allows a spawn onto
+an *unoccupied* determinant only from a parent whose weight exceeds a threshold
+\(n_{\text{add}}\). This is a *biased* approximation, controlled by taking
+\(n_{\text{add}} \to 0\) or the population to infinity — so a run validating
+against an exact answer must switch it off.
+
+### Where It Lives
+
+| Concern | Location |
+|---|---|
+| Walker map, RNG, excitation generator, propagators, estimators | `src/post_hf/ci/fciqmc.{h,cpp}` |
+| Driver, input keywords, diagnostics | `src/post_hf/fciqmc_driver.cpp` |
+| Shared integral transform (`build_all_mo_ci_setup`) | `src/post_hf/fci.cpp` |
+| Slater–Condon matrix elements | `src/post_hf/ci/ci.cpp` |
+
+The integral transform was **extracted** from `run_fci` rather than copied, and
+both paths call it. The Hamiltonian callbacks wrap the same
+`slater_condon_element`. The two paths therefore cannot disagree about the
+*Hamiltonian* — only about how they solve it, which is what makes a disagreement
+on a larger system attributable to sampling rather than plumbing.
+
+Run it with `correlation fciqmc`; eleven `fciqmc_*` keywords control walkers,
+timestep, shift damping, equilibration, initiator, and the seed. The seed is
+user-visible on purpose: fixed-seed reproducibility is a contract, and it is
+worthless if the seed cannot be pinned from the input.
+
+### Validating a Stochastic Method
+
+Planck's regression suite is built on exact comparison — 161 `metric_close`
+assertions, the tightest at 1e-9, and every recent performance change gated on
+*bitwise* identity. An FCIQMC energy is a mean with an error bar and cannot be
+gated that way. The suite therefore gained:
+
+- `metric_within_sigma`, asserting a value lies within *N* of its own blocked
+  error bar;
+- a blocking analysis validated against synthetic AR(1) series with a *known*
+  autocorrelation time — never against real output, since an analysis that
+  under-reports σ makes every downstream gate pass;
+- fixed-seed reproducibility, proven to **fail** on an injected seed perturbation
+  before being trusted. An RNG that advances normally but *ignores its seed*
+  passes every statistical check — means, variance, \(1/\sqrt{n}\) scaling — and
+  is caught only by "different seeds must give different trajectories."
+
+On N₂/STO-3G against exact FCI \(-107.6529998854\), both estimators agree within
+half a sigma at 0.69 walkers per determinant — a genuine sample rather than
+coverage of the space.
+
+**One structural decision worth recording:** every parallel path in Planck is
+bitwise thread-count invariant, and FCIQMC keeps that property rather than taking
+an exception. Partitioning the *parents* by `hash(parent) % kBins` and merging in
+fixed bin order makes the result independent of the order threads visit parents.
+Binning by the *child* is not sufficient — it fixes which accumulator receives a
+spawn, but not the order arrivals reach it. **The partition must be over the
+work, not the output.**
+
+### Relationship to FCI
+
+FCIQMC and FCI solve the *same* eigenvalue problem in the *same* determinant
+space, and in Planck they share the same integrals and matrix elements. They
+differ only in the solver: FCI diagonalizes with Davidson and returns an exact
+number; FCIQMC samples and returns a distribution.
+
+That makes the comparison unusually sharp. Where FCI is affordable, it is the
+reference; where it is not, FCIQMC is the only route to the same answer. The
+crossover in Planck sits near \(n_{\text{act}} \approx 13\).
+
+---
+
+## 19. CASSCF and RASSCF
 
 ### Motivation
 
@@ -5041,7 +5324,7 @@ occupation restrictions via bitcount masks on the RAS1 and RAS3 blocks.
 
 ---
 
-## 19. Geometry Optimization
+## 20. Geometry Optimization
 
 ### L-BFGS (Cartesian Coordinates)
 
@@ -5376,7 +5659,7 @@ Ha/Bohr).
 
 ---
 
-## 20. Vibrational Analysis
+## 21. Vibrational Analysis
 
 ### Semi-Numerical Hessian
 
@@ -5438,7 +5721,7 @@ by projecting each normal mode onto the SAO blocks and determining its irrep.
 
 ---
 
-## 21. Kohn-Sham Density Functional Theory
+## 22. Kohn-Sham Density Functional Theory
 
 Most of this chapter is general KS-DFT theory. The explicit grid presets,
 supported-functional notes, and code maps are Planck-specific documentation.
@@ -5998,7 +6281,7 @@ peaks in energy and wavelength units.
 
 ---
 
-## 22. Polarizable Continuum Solvation (C-PCM)
+## 23. Polarizable Continuum Solvation (C-PCM)
 
 Planck implements a conductor-like polarizable continuum model (C-PCM) for
 single-point HF (RHF/UHF) and KS-DFT (RKS/UKS) calculations. The solvent is
@@ -6298,7 +6581,7 @@ reaction-field operator) are not implemented.
 
 ---
 
-## 23. Basis Set Superposition Error and the Counterpoise Correction
+## 24. Basis Set Superposition Error and the Counterpoise Correction
 
 When you compute the interaction energy of a dimer \(A\cdots B\) as
 
@@ -6433,7 +6716,7 @@ probe basis-set extension effects, build mixed-basis descriptions, or study how
 much a neighbor's functions improve a fragment — all without changing the
 physical system.
 
-## 24. Molecular Properties
+## 25. Molecular Properties
 
 After SCF convergence Planck can compute several molecular properties from the
 converged density matrix. Dipole and quadrupole moments are printed
@@ -6800,7 +7083,7 @@ If \(T^+\) is correct, the inner product \(\mathbf C_{sph}^\top \mathbf C_{sph}\
 
 ---
 
-## 25. Checkpoint and Restart
+## 26. Checkpoint and Restart
 
 This chapter mixes a general restart idea with concrete file-format details.
 The projection concept below is broadly applicable; the checkpoint layout is
@@ -6845,7 +7128,7 @@ new basis, significantly reducing the number of SCF iterations required.
 
 ---
 
-## 26. Execution Flow of a Typical Run
+## 27. Execution Flow of a Typical Run
 
 ```
 driver.cpp
@@ -6923,7 +7206,7 @@ driver.cpp
 
 ---
 
-## 27. Theory-to-Code Map
+## 28. Theory-to-Code Map
 
 | Theory concept | Primary file(s) | Key function(s) |
 |---|---|---|
@@ -7038,7 +7321,7 @@ driver.cpp
 
 ---
 
-## 28. Current Implementation Status
+## 29. Current Implementation Status
 
 | Feature | Status |
 |---|---|
@@ -7106,7 +7389,7 @@ driver.cpp
 
 ---
 
-## 29. How to Study This Codebase
+## 30. How to Study This Codebase
 
 Recommended reading order for the HF/post-HF pipeline:
 

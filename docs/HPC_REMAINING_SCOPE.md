@@ -211,7 +211,7 @@ thread/rank, where post-HF's missing OpenMP is invisible.
 
 Two independent pieces, different gates:
 
-### 5a — OpenMP within-rank (NO RI gate; the higher rung, do first)
+### 5a — OpenMP within-rank — **PARTIALLY CLOSED (2026-08-30)**
 
 `#pragma omp parallel for` on the outer contraction index of the hand-written
 `tensor_backend.cpp` loops and in the `planck_tensor_cpp.py` term emitter,
@@ -236,6 +236,26 @@ naive `reduction(+:acc)`. Keep those serial or sum fixed-order partials; never
   Don't parallelize cold code.
 - **Verify:** `energy(threads N) == energy(threads 1)` bitwise across
   N ∈ {1,2,4,8}, extending `mpi_smoke_compare.py`.
+
+**Status.** The **generated** half is done: `planck_tensor_cpp.py` emits
+`#pragma omp parallel for collapse(3) schedule(static)` on each residual nest
+behind `CCGEN_OMP_COLLAPSE` (default off), measured **3.22x at 4 threads** on
+HF/6-31G with energies bitwise identical at `OMP_NUM_THREADS` = 1/2/4/8 and
+against the unthreaded baseline. Full record: `docs/CCGEN_CC_OPENMP.md`.
+
+Three notes for whoever finishes this:
+
+1. **The hand-written path is still serial.** `tensor_backend.cpp` has 0 pragmas.
+2. **The determinism constraint above was real and was handled**, not dodged: the
+   inner summed loop stays serial *within* a thread, so `acc` accumulation order
+   is unchanged and no cross-thread reduction exists. Verified bitwise rather than
+   argued.
+3. **"Profile first" paid.** Doing so found that the builders — the obvious target
+   at 45 % of runtime when this gap was written — had fallen to 13 % after an
+   unrelated fix, and that a third of the remaining builder time was a **duplicate
+   build the emitter was emitting twice**. Deleting that beat threading it. The
+   advice in this section to profile before parallelizing is the reason that was
+   found at all.
 
 ### 5b — MPI rank-split (= Tier 2 front half; reclassify the RI gate)
 
@@ -286,17 +306,20 @@ post-HF track:
 ```
 1. Gap 3 (scale fixture in CI)        ~S — commit a >6-atom multi-rank bitwise
                                           gate; protects Gaps 1+2 from regressing
-2. Gap 4 (fix scale_bench Q2 cutoff)  ~S — >50x threshold false-positives at
-                                          large nb; key on nb^2-vs-nb^4 exponent
-3. Gap 1 (HGP/Rys stripe OR reject)   ~S — decide which; do not leave silent
-4. DFT nb=416 convergence             ~S–M — separate from HPC; the largest
+2. Gap 1 (HGP/Rys stripe OR reject)   ~S — decide which; do not leave silent
+3. DFT nb=416 convergence             ~S–M — separate from HPC; the largest
                                           case fails to converge, not to scale
-5. Gap 5a (post-HF OpenMP)            ~M — post-HF is 1-core/rank today; thread
-                                          the CC/MP2 hot loops, no RI gate
-6. Gap 5b (dense post-HF MPI stripe)  ~M — rank-split the dense contractions;
+4. Gap 5a tail (hand-written CC/MP2)  ~S–M — the GENERATED half is done (3.22x);
+                                          tensor_backend.cpp is still serial,
+                                          and MP2 is unprofiled. Profile first
+5. Gap 5b (dense post-HF MPI stripe)  ~M — rank-split the dense contractions;
                                           NOT RI-gated (reclassified)
-7. Tier 2 (distributed RI post-HF)    — the memory-motivated tail; the only
+6. Tier 2 (distributed RI post-HF)    — the memory-motivated tail; the only
                                           item still atop RI, a second release
+
+   DONE since this list was written:
+     Gap 4 (scale_bench Q2 exponent, 2b764b21) and the Q1 Karp-Flatt verdict
+     (ebf8ae5c); Gap 5a's generated half (CCGEN_OMP_COLLAPSE, 3.22x)
 ```
 
 Gap 3 is now **#1** because it is the only thing standing between "DFT scales"
@@ -308,7 +331,7 @@ proven; a fixture is what keeps it proven.
 #156 together. Isolating any one needs a run at its parent commit. The combined
 win is measured regardless.
 
-## Gap 4 — `scale_bench.py` Q2 cutoff false-positives at large nb (~S, no risk)
+## Gap 4 — **CLOSED (`2b764b21`).** `scale_bench.py` Q2 keyed on the nb exponent
 
 New, surfaced by `scale.json`. The Q2 memory read-out flags "fused path
 regressed" at `DFT/HF > 50×`. Measured healthy ratios are 22×→42× and **rising
@@ -317,6 +340,12 @@ the cutoff even though the memory wall is closed. The ratio is the wrong
 discriminator. Fix: compute the DFT RSS **exponent** across two sizes and flag
 only if it approaches nb⁴ (~4) rather than nb² (~2). One-line change to the
 verdict logic; the exponent is already derivable from the rows Q2 collects.
+
+**Done.** `scale_bench.py:533-546` fits the DFT RSS exponent across two sizes and
+flags only above `nb^3.0`. The Q1 verdict was corrected in the same pass
+(`ebf8ae5c`): it now keys on the **Karp-Flatt serial fraction** rather than
+efficiency-at-max-ranks, which had been flagging WEAK -> "load imbalance" for
+every case at 32 ranks and recommending a fix the measured data contradicts.
 
 ---
 

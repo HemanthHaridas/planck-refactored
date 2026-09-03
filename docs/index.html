@@ -273,7 +273,20 @@
 <li class="toc-level-3"><a href="#solving-the-eigenvalue-problem-davidson">Solving the Eigenvalue Problem: Davidson</a></li>
 <li class="toc-level-3"><a href="#correlation-energy-and-the-reference">Correlation Energy and the Reference</a></li>
 <li class="toc-level-3"><a href="#relationship-to-other-correlation-methods">Relationship to Other Correlation Methods</a></li>
-<li class="toc-level-2"><a href="#18-casscf-and-rasscf">18. CASSCF and RASSCF</a></li>
+<li class="toc-level-2"><a href="#18-full-ci-quantum-monte-carlo-fciqmc">18. Full CI Quantum Monte Carlo (FCIQMC)</a></li>
+<li class="toc-level-3"><a href="#why-a-stochastic-fci">Why a Stochastic FCI</a></li>
+<li class="toc-level-3"><a href="#imaginary-time-propagation">Imaginary-Time Propagation</a></li>
+<li class="toc-level-3"><a href="#walkers-and-why-annihilation-is-free">Walkers, and Why Annihilation Is Free</a></li>
+<li class="toc-level-3"><a href="#sampling-the-off-diagonal-p-gen">Sampling the Off-Diagonal: `p_gen`</a></li>
+<li class="toc-level-3"><a href="#population-control-and-the-shift">Population Control and the Shift</a></li>
+<li class="toc-level-3"><a href="#two-estimators-and-why-both">Two Estimators, and Why Both</a></li>
+<li class="toc-level-3"><a href="#choosing-the-reference">Choosing the Reference</a></li>
+<li class="toc-level-3"><a href="#error-bars-why-the-naive-one-is-wrong">Error Bars: Why the Naive One Is Wrong</a></li>
+<li class="toc-level-3"><a href="#the-initiator-approximation">The Initiator Approximation</a></li>
+<li class="toc-level-3"><a href="#where-it-lives">Where It Lives</a></li>
+<li class="toc-level-3"><a href="#validating-a-stochastic-method">Validating a Stochastic Method</a></li>
+<li class="toc-level-3"><a href="#relationship-to-fci">Relationship to FCI</a></li>
+<li class="toc-level-2"><a href="#19-casscf-and-rasscf">19. CASSCF and RASSCF</a></li>
 <li class="toc-level-3"><a href="#motivation">Motivation</a></li>
 <li class="toc-level-3"><a href="#reference-choice-rhf-or-rohf">Reference Choice: RHF or ROHF</a></li>
 <li class="toc-level-3"><a href="#determinant-representation">Determinant Representation</a></li>
@@ -286,7 +299,7 @@
 <li class="toc-level-3"><a href="#convergence-and-robustness">Convergence and Robustness</a></li>
 <li class="toc-level-3"><a href="#twisted-ethylene-a-canonical-casscf-example">Twisted Ethylene: A Canonical CASSCF Example</a></li>
 <li class="toc-level-3"><a href="#rasscf-extensions">RASSCF Extensions</a></li>
-<li class="toc-level-2"><a href="#19-geometry-optimization">19. Geometry Optimization</a></li>
+<li class="toc-level-2"><a href="#20-geometry-optimization">20. Geometry Optimization</a></li>
 <li class="toc-level-3"><a href="#l-bfgs-cartesian-coordinates">L-BFGS (Cartesian Coordinates)</a></li>
 <li class="toc-level-3"><a href="#z-matrices-and-internal-coordinates">Z-Matrices and Internal Coordinates</a></li>
 <li class="toc-level-3"><a href="#wilson-s-b-matrix">Wilson&#x27;s B-Matrix</a></li>
@@ -294,11 +307,11 @@
 <li class="toc-level-3"><a href="#planck-specific-note-generalized-internal-coordinates-for-optimization">Planck-Specific Note: Generalized Internal Coordinates for Optimization</a></li>
 <li class="toc-level-3"><a href="#planck-specific-note-permutation-invariance-of-the-ic-representation">Planck-Specific Note: Permutation Invariance of the IC Representation</a></li>
 <li class="toc-level-3"><a href="#internal-coordinate-optimization-bfgs">Internal Coordinate Optimization (BFGS)</a></li>
-<li class="toc-level-2"><a href="#20-vibrational-analysis">20. Vibrational Analysis</a></li>
+<li class="toc-level-2"><a href="#21-vibrational-analysis">21. Vibrational Analysis</a></li>
 <li class="toc-level-3"><a href="#semi-numerical-hessian">Semi-Numerical Hessian</a></li>
 <li class="toc-level-3"><a href="#mass-weighting-and-eckart-projection">Mass-Weighting and Eckart Projection</a></li>
 <li class="toc-level-3"><a href="#normal-mode-frequencies">Normal Mode Frequencies</a></li>
-<li class="toc-level-2"><a href="#21-kohn-sham-density-functional-theory">21. Kohn-Sham Density Functional Theory</a></li>
+<li class="toc-level-2"><a href="#22-kohn-sham-density-functional-theory">22. Kohn-Sham Density Functional Theory</a></li>
 <li class="toc-level-3"><a href="#the-kohn-sham-equations">The Kohn-Sham Equations</a></li>
 <li class="toc-level-3"><a href="#exchange-correlation-functional-families">Exchange-Correlation Functional Families</a></li>
 <li class="toc-level-3"><a href="#numerical-integration-molecular-grid">Numerical Integration: Molecular Grid</a></li>
@@ -308,7 +321,7 @@
 <li class="toc-level-3"><a href="#ks-dft-scf-loop">KS-DFT SCF Loop</a></li>
 <li class="toc-level-3"><a href="#dft-code-map">DFT Code Map</a></li>
 <li class="toc-level-3"><a href="#td-dft-linear-response">TD-DFT / Linear Response</a></li>
-<li class="toc-level-2"><a href="#22-polarizable-continuum-solvation-c-pcm">22. Polarizable Continuum Solvation (C-PCM)</a></li>
+<li class="toc-level-2"><a href="#23-polarizable-continuum-solvation-c-pcm">23. Polarizable Continuum Solvation (C-PCM)</a></li>
 <li class="toc-level-3"><a href="#the-apparent-surface-charge-picture">The Apparent-Surface-Charge Picture</a></li>
 <li class="toc-level-3"><a href="#cavity-construction-fibonacci-sphere-tessellation">Cavity Construction (Fibonacci-Sphere Tessellation)</a></li>
 <li class="toc-level-3"><a href="#the-surface-influence-matrix">The Surface Influence Matrix <span class="math-inline">\(\mathbf{D}\)</span></a></li>
@@ -318,13 +331,13 @@
 <li class="toc-level-3"><a href="#input-format-and-solvent-library">Input Format and Solvent Library</a></li>
 <li class="toc-level-3"><a href="#limitations-and-cost">Limitations and Cost</a></li>
 <li class="toc-level-3"><a href="#code-map">Code Map</a></li>
-<li class="toc-level-2"><a href="#23-basis-set-superposition-error-and-the-counterpoise-correction">23. Basis Set Superposition Error and the Counterpoise Correction</a></li>
+<li class="toc-level-2"><a href="#24-basis-set-superposition-error-and-the-counterpoise-correction">24. Basis Set Superposition Error and the Counterpoise Correction</a></li>
 <li class="toc-level-3"><a href="#ghost-atoms">Ghost atoms</a></li>
 <li class="toc-level-3"><a href="#the-five-counterpoise-energies">The five counterpoise energies</a></li>
 <li class="toc-level-3"><a href="#two-worked-examples">Two worked examples</a></li>
 <li class="toc-level-3"><a href="#implementation-note-the-initial-guess-and-the-monomer-references">Implementation Note: the initial guess and the monomer references</a></li>
 <li class="toc-level-3"><a href="#scope-and-generality">Scope and generality</a></li>
-<li class="toc-level-2"><a href="#24-molecular-properties">24. Molecular Properties</a></li>
+<li class="toc-level-2"><a href="#25-molecular-properties">25. Molecular Properties</a></li>
 <li class="toc-level-3"><a href="#mulliken-population-analysis">Mulliken Population Analysis</a></li>
 <li class="toc-level-3"><a href="#l-wdin-population-analysis">Löwdin Population Analysis</a></li>
 <li class="toc-level-3"><a href="#mayer-bond-orders">Mayer Bond Orders</a></li>
@@ -333,13 +346,13 @@
 <li class="toc-level-3"><a href="#rmp2-natural-orbitals">RMP2 Natural Orbitals</a></li>
 <li class="toc-level-3"><a href="#mo-symmetry-labels">MO Symmetry Labels</a></li>
 <li class="toc-level-3"><a href="#cartesian-to-spherical-mo-transformation">Cartesian-to-Spherical MO Transformation</a></li>
-<li class="toc-level-2"><a href="#25-checkpoint-and-restart">25. Checkpoint and Restart</a></li>
+<li class="toc-level-2"><a href="#26-checkpoint-and-restart">26. Checkpoint and Restart</a></li>
 <li class="toc-level-3"><a href="#binary-checkpoint-format">Binary Checkpoint Format</a></li>
 <li class="toc-level-3"><a href="#cross-basis-density-projection">Cross-Basis Density Projection</a></li>
-<li class="toc-level-2"><a href="#26-execution-flow-of-a-typical-run">26. Execution Flow of a Typical Run</a></li>
-<li class="toc-level-2"><a href="#27-theory-to-code-map">27. Theory-to-Code Map</a></li>
-<li class="toc-level-2"><a href="#28-current-implementation-status">28. Current Implementation Status</a></li>
-<li class="toc-level-2"><a href="#29-how-to-study-this-codebase">29. How to Study This Codebase</a></li>
+<li class="toc-level-2"><a href="#27-execution-flow-of-a-typical-run">27. Execution Flow of a Typical Run</a></li>
+<li class="toc-level-2"><a href="#28-theory-to-code-map">28. Theory-to-Code Map</a></li>
+<li class="toc-level-2"><a href="#29-current-implementation-status">29. Current Implementation Status</a></li>
+<li class="toc-level-2"><a href="#30-how-to-study-this-codebase">30. How to Study This Codebase</a></li>
 </ul>
         </nav>
       </aside> <main class="content">
@@ -769,7 +782,7 @@ P = 2 C_{\mathrm{occ}} C_{\mathrm{occ}}^T.
 </ul>
 <p>The deeper lesson is that broken-symmetry RHF stationary points are real features of the Hartree-Fock energy surface, not numerical artifacts. They become genuine ground states for stretched bonds (where RHF fails and UHF takes over). The instability we hit on equilibrium ethylene is the same mechanism that drives the well-known RHF <span class="math-inline">\(\to\)</span> UHF transition at bond dissociation. Treat HCore as a fine guess for asymmetric molecules and small clusters, but reach for SAD or <code>use_symm true</code> whenever the molecule has equivalent atoms.</p>
 <h4 id="current-planck-caveat-isolated-atom-sad">Current Planck Caveat: Isolated-Atom SAD</h4>
-<p>There is one known exception that runs the <em>other</em> way. For a small <strong>isolated closed-shell atom</strong> the SAD guess can itself false-converge to a wrong SCF stationary point: a lone helium atom in cc-pVDZ settles at <span class="math-inline">\(-2.85515\)</span> Eh from SAD but at the correct <span class="math-inline">\(-2.85516\)</span> Eh (matching PySCF to <span class="math-inline">\(10^{-10}\)</span>) from HCore, each &quot;converging&quot; in five iterations at a different HOMO energy. The SAD atomic-density seed apparently lands in the wrong basin for a single small atom. This matters directly for the isolated-monomer references in a counterpoise calculation (<a href="#23-basis-set-superposition-error-and-the-counterpoise-correction">§23</a>), where a core-Hamiltonian guess is the safer choice for those small fragments. The lesson is not that one guess is universally safer — it is that the converged SCF solution should be sanity-checked (symmetry of degenerate orbitals, dipole of a centrosymmetric system, agreement across guesses) rather than trusted because the iteration count looked reasonable.</p>
+<p>There is one known exception that runs the <em>other</em> way. For a small <strong>isolated closed-shell atom</strong> the SAD guess can itself false-converge to a wrong SCF stationary point: a lone helium atom in cc-pVDZ settles at <span class="math-inline">\(-2.85515\)</span> Eh from SAD but at the correct <span class="math-inline">\(-2.85516\)</span> Eh (matching PySCF to <span class="math-inline">\(10^{-10}\)</span>) from HCore, each &quot;converging&quot; in five iterations at a different HOMO energy. The SAD atomic-density seed apparently lands in the wrong basin for a single small atom. This matters directly for the isolated-monomer references in a counterpoise calculation (<a href="#24-basis-set-superposition-error-and-the-counterpoise-correction">§24</a>), where a core-Hamiltonian guess is the safer choice for those small fragments. The lesson is not that one guess is universally safer — it is that the converged SCF solution should be sanity-checked (symmetry of degenerate orbitals, dipole of a centrosymmetric system, agreement across guesses) rather than trusted because the iteration count looked reasonable.</p>
 <h3 id="wavefunction-stability-analysis">Wavefunction Stability Analysis</h3>
 <p>The case study above raises a concrete question: how can the SCF tell whether the converged solution is a global minimum, a broken-symmetry local minimum, or an unstable stationary point? The answer is <strong>stability analysis</strong> — diagonalizing the orbital Hessian (the second variation of the HF energy with respect to occupied-virtual orbital rotations) and checking its lowest eigenvalues. Negative eigenvalues mean an orbital rotation exists that lowers the energy.</p>
 <h4 id="planck-interface">Planck Interface</h4>
@@ -2602,11 +2615,129 @@ E_{\text{corr}}^{\text{FCI}} = E_{\text{FCI}} - E_{\text{RHF}} .
 <ul>
 <li><strong>MP2</strong> (§13) is the leading term of a perturbation series whose infinite resummation would give FCI; it captures dynamic correlation cheaply but perturbatively.</li>
 <li><strong>Coupled cluster</strong> (§16) reaches FCI in the limit of including all excitation ranks (CCSD → CCSDT → … → CCSDTQ… → FCI), trading the linear CI expansion for an exponential ansatz <span class="math-inline">\(e^{\hat T}\)</span> that restores size-extensivity at each truncation.</li>
-<li><strong>CASSCF</strong> (§18) is <em>FCI restricted to an active space</em> of chemically important orbitals, with the orbitals themselves variationally optimized. FCI is the special case in which the active space is the entire orbital basis and no orbital optimization is performed.</li>
+<li><strong>CASSCF</strong> (§19) is <em>FCI restricted to an active space</em> of chemically important orbitals, with the orbitals themselves variationally optimized. FCI is the special case in which the active space is the entire orbital basis and no orbital optimization is performed.</li>
 </ul>
 <p>All three share the same conceptual core — a determinant expansion diagonalized under the Slater-Condon rules — and differ only in how that expansion is truncated, resummed, or restricted.</p>
 <hr>
-<h2 id="18-casscf-and-rasscf">18. CASSCF and RASSCF</h2>
+<h2 id="18-full-ci-quantum-monte-carlo-fciqmc">18. Full CI Quantum Monte Carlo (FCIQMC)</h2>
+<h3 id="why-a-stochastic-fci">Why a Stochastic FCI</h3>
+<p>§17 ended on FCI&#x27;s virtue — it is exact within the basis — and its vice: the determinant count grows factorially. Planck&#x27;s own measurements put the practical ceiling around <span class="math-inline">\(n_{\text{act}} \approx 12\)</span>; at 14 active orbitals a full CI is roughly three days of compute, at 16 about 208 days, at 18 some 36 years. The wall is <em>time</em> long before it is memory: an <span class="math-inline">\(n_{\text{act}} = 14\)</span> CI vector is only 0.09 GB.</p>
+<p>FCIQMC attacks the same eigenvalue problem without ever storing the vector. The observation is that we rarely need every coefficient — we need the <strong>energy</strong>, and the energy is an average. So instead of solving for <span class="math-inline">\(\mathbf{c}\)</span>, we maintain a <em>population of signed walkers</em> whose distribution over determinants is proportional to <span class="math-inline">\(\mathbf{c}\)</span>, and read the energy off that population.</p>
+<p>The trade is exactness for a <em>statistical</em> answer: FCIQMC returns an energy with an error bar, and the error bar shrinks as <span class="math-inline">\(1/\sqrt{N_{\text{samples}}}\)</span>.</p>
+<h3 id="imaginary-time-propagation">Imaginary-Time Propagation</h3>
+<p>The method rests on one idea. Take the Schrödinger equation and replace <span class="math-inline">\(t \to -i\tau\)</span>:</p>
+<p><span class="math-display">\[
+-\frac{\partial |\Psi(\tau)\rangle}{\partial \tau} = (\hat H - S) |\Psi(\tau)\rangle
+\qquad\Longrightarrow\qquad
+|\Psi(\tau)\rangle = e^{-\tau(\hat H - S)} |\Psi(0)\rangle .
+\]</span></p>
+<p>Expand the starting state in exact eigenstates, <span class="math-inline">\(|\Psi(0)\rangle = \sum_i a_i |\phi_i\rangle\)</span>. Each component decays at its own rate:</p>
+<p><span class="math-display">\[
+|\Psi(\tau)\rangle = \sum_i a_i e^{-\tau(E_i - S)} |\phi_i\rangle .
+\]</span></p>
+<p>Because <span class="math-inline">\(E_0 < E_1 \le E_2 \le \dots\)</span>, every excited component decays <em>faster</em> than the ground state. Wait long enough and only <span class="math-inline">\(|\phi_0\rangle\)</span> survives — imaginary-time propagation is a filter that projects onto the ground state. The shift <span class="math-inline">\(S\)</span> is a free parameter fixing the overall normalization; when <span class="math-inline">\(S = E_0\)</span> the surviving component neither grows nor decays.</p>
+<p>In practice we take small finite steps, first order in <span class="math-inline">\(\mathrm{d}\tau\)</span>:</p>
+<p><span class="math-display">\[
+c_I(\tau + \mathrm{d}\tau) = c_I(\tau)
+  - \mathrm{d}\tau \sum_J (H_{IJ} - S\,\delta_{IJ})\, c_J(\tau) .
+\]</span></p>
+<p>Splitting the diagonal from the off-diagonal gives the algorithm&#x27;s three moves:</p>
+<p><span class="math-display">\[
+c_I \leftarrow \underbrace{c_I\,[\,1 - \mathrm{d}\tau (H_{II} - S)\,]}_{\text{death / cloning}}
+     \;\underbrace{-\;\mathrm{d}\tau \sum_{J \ne I} H_{IJ} c_J}_{\text{spawning}} .
+\]</span></p>
+<p><strong>Death</strong> scales a determinant&#x27;s own weight by its diagonal element. <strong>Spawning</strong> sends weight from occupied determinants to their connections. And when two spawns of <em>opposite sign</em> land on the same determinant they cancel — <strong>annihilation</strong> — which is what controls the sign problem.</p>
+<h3 id="walkers-and-why-annihilation-is-free">Walkers, and Why Annihilation Is Free</h3>
+<p>In Planck the walker population is a hash map from determinant to a signed real weight (<code>WalkerPopulation</code>, <code>src/post_hf/ci/fciqmc.h</code>):</p>
+<pre><code class="language-cpp">
+void add(const DetKey &amp;det, Weight w)
+{
+    if (w == 0.0)
+        return;
+    _walkers[det] += w;
+}
+</code></pre>
+<p>That <code>+=</code> <strong>is</strong> the annihilation step. There is no separate pass: accumulating signed weights into a determinant-keyed map cancels opposite signs automatically. This is the single most important design consequence of choosing a map over a walker list.</p>
+<p>Two further points are easy to miss:</p>
+<ul>
+<li><strong>Weights are real, not integer counts.</strong> The original method used integer walkers; real weights remove spawning discretization noise without changing the structure. Planck still applies <em>stochastic rounding</em> to a <code>granularity</code>, because without any discretization the propagator is scale-invariant and the statistical error stops depending on population at all.</li>
+<li><strong>The map holds only occupied determinants.</strong> This is the whole point: the memory footprint tracks the <em>occupied</em> space, not the enumerated one. For the target regime the enumerated space would not fit in memory at all.</li>
+</ul>
+<h3 id="sampling-the-off-diagonal-p-gen">Sampling the Off-Diagonal: <code>p_gen</code></h3>
+<p>Spawning as written sums over <em>every</em> connection <span class="math-inline">\(J\)</span> of <span class="math-inline">\(I\)</span>. For a real Hamiltonian that is hundreds of determinants per parent (N₂/STO-3G: 609), and enumerating them defeats the purpose. So we <strong>sample</strong>: draw one connection at random and reweight by the probability of having drawn it.</p>
+<p><span class="math-display">\[
+\sum_{J \ne I} H_{IJ} c_J
+\;\approx\;
+\frac{H_{IJ}\, c_I}{p_{\text{gen}}(J \mid I)}
+\qquad\text{for a single draw } J .
+\]</span></p>
+<p>The estimator is unbiased <strong>only if <code>p_gen</code> is the true probability the generator produced that excitation</strong>. This is the most dangerous quantity in the method, and it is worth being explicit about why: every other step fails loudly, whereas a <code>p_gen</code> that disagrees with the sampler&#x27;s actual distribution produces a plausible, converged, <strong>wrong</strong> energy.</p>
+<p>Planck&#x27;s generator picks an excitation class uniformly among the non-empty ones, then picks uniformly within that class, giving</p>
+<p><span class="math-display">\[
+p_{\text{gen}} = \frac{1}{n_{\text{live}}} \cdot \frac{1}{|{\text{class}}|} .
+\]</span></p>
+<p>Note this is deliberately <strong>non-uniform</strong> across connections — it varies by more than 10× on N₂/STO-3G. Non-uniformity is not a bug; a <em>mis-reported</em> <code>p_gen</code> is. The gate therefore tests agreement between the reported <code>p_gen</code> and the observed draw frequencies, never uniformity.</p>
+<p>Two lessons from building it are worth carrying:</p>
+<ul>
+<li><strong>Support and frequency are separate failure modes.</strong> A generator that can <em>never</em> reach some excitation passes a frequency-only check.</li>
+<li>**When a sampled quantity is used as a divisor, unbiasedness is the wrong property to verify.** Estimating an acceptance rate from the same call that uses it gives an unbiased estimate of <span class="math-inline">\(p_{\text{gen}}\)</span> — but the spawn needs <span class="math-inline">\(1/p_{\text{gen}}\)</span>, and <span class="math-inline">\(\mathbb{E}[1/X] \neq 1/\mathbb{E}[X]\)</span>. Measured at <span class="math-inline">\(p_{\text{accept}} = 0.3\)</span>, the mean of <span class="math-inline">\(1/p_{\text{gen}}\)</span> came out 1.72× too large while the mean of <span class="math-inline">\(p_{\text{gen}}\)</span> was correct to 0.1 %.</li>
+</ul>
+<h3 id="population-control-and-the-shift">Population Control and the Shift</h3>
+<p>Left alone the population grows or collapses exponentially. The shift <span class="math-inline">\(S\)</span> is fed back to hold it steady (<code>ShiftController</code>):</p>
+<p><span class="math-display">\[
+S \leftarrow S - \frac{\zeta}{A\,\mathrm{d}\tau} \ln\frac{N}{N_{\text{prev}}}
+              - \frac{\xi}{A\,\mathrm{d}\tau} \ln\frac{N}{N_{\text{target}}} .
+\]</span></p>
+<p>The first term responds to the growth <em>rate</em>; the second supplies a restoring force toward the target. Both are needed — the textbook single-term form responds only to the rate and therefore <strong>never targets a population</strong>: measured, the final population came out proportional to the starting one across a 1000× range.</p>
+<p>The <span class="math-inline">\(A\,\mathrm{d}\tau\)</span> denominator is what makes <span class="math-inline">\(\zeta\)</span> dimensionless and transferable across timesteps. Dropping it is equivalent to rescaling <span class="math-inline">\(\zeta\)</span> and <span class="math-inline">\(\xi\)</span>, which no tradeoff test detects — a parameter&#x27;s <em>units</em> cannot be gated by a test that only asserts the shape of a tradeoff in that parameter.</p>
+<h3 id="two-estimators-and-why-both">Two Estimators, and Why Both</h3>
+<p>Once the population is stationary, the shift fluctuates around the ground-state energy, so its running average is the <strong>shift energy</strong>.</p>
+<p>The <strong>projected energy</strong> is independent arithmetic on the same population:</p>
+<p><span class="math-display">\[
+E_{\text{proj}} = H_{00} + \frac{\sum_{J \ne 0} H_{0J}\, c_J}{c_0},
+\]</span></p>
+<p>projecting the sampled wavefunction onto a chosen reference <span class="math-inline">\(|D_0\rangle\)</span>.</p>
+<p>They share no arithmetic, which makes their agreement a strong check — and their <em>disagreement</em> diagnostic. <strong>Neither dominates, and Planck computes both because each is blind to a failure the other catches:</strong></p>
+<ul>
+<li>On N₂ at too large a timestep, the reference determinant oscillated in sign (mean <span class="math-inline">\(|c_0| = 91.75\)</span> but mean signed <span class="math-inline">\(c_0 = -7.50\)</span>). The **shift read 0.14σ from exact** while the dynamics were unstable — a single-estimator implementation would have reported a perfect-looking answer. The projected energy caught it.</li>
+<li>On C₂, whose ground state is <strong>doubly degenerate</strong>, the projected energy drifted 5.6σ <em>below</em> the variational minimum while the shift stayed within 1σ. Any mixture of degenerate eigenstates is itself an eigenstate at the same energy, so the dynamics apply <strong>no restoring force</strong> within the manifold and the population random-walks between partners, starving the anchor. Nothing was unstable; the estimator was measuring the wrong thing. Counter-intuitively, **longer equilibration made it worse** — more time to converge is also more time to drift.</li>
+</ul>
+<p>Planck therefore warns on reference drift and re-anchors the projection onto the largest-weight determinant once, at the end of equilibration.</p>
+<h3 id="choosing-the-reference">Choosing the Reference</h3>
+<p>The projected energy anchors on <span class="math-inline">\(|D_0\rangle\)</span>, so a poor choice inflates its variance. The reference must be the determinant of <strong>lowest diagonal energy</strong>, and that is <em>not</em> the one occupying the lowest-index orbitals: on N₂/STO-3G the Aufbau determinant is <code>0xbf</code> — orbitals [0,1,2,3,4,5,<strong>7</strong>] — because MO 6 lies above MO 7 in the converged SCF ordering.</p>
+<p>Planck finds it by minimizing <code>ops.diagonal</code> over single occupied→virtual swaps, using the <strong>same</strong> <code>slater_condon_element</code> the propagator uses, so the reference cannot disagree with the Hamiltonian being sampled.</p>
+<h3 id="error-bars-why-the-naive-one-is-wrong">Error Bars: Why the Naive One Is Wrong</h3>
+<p>Successive iterations are <strong>highly correlated</strong> — the population changes only slightly per step — so the naive standard error <span class="math-inline">\(\sigma/\sqrt{n}\)</span> understates the true uncertainty by up to 6.6×, measured. Planck uses a Flyvbjerg–Petersen <strong>blocking analysis</strong>: repeatedly average adjacent pairs and watch the estimated error until it plateaus, taking the largest value across blocking levels (conservative by construction — an overestimate fails a gate loudly, an underestimate passes one silently).</p>
+<h3 id="the-initiator-approximation">The Initiator Approximation</h3>
+<p>At low walker density, spawns onto empty determinants are mostly noise that annihilation has no partner to cancel. The <strong>initiator</strong> rule allows a spawn onto an <em>unoccupied</em> determinant only from a parent whose weight exceeds a threshold <span class="math-inline">\(n_{\text{add}}\)</span>. This is a <em>biased</em> approximation, controlled by taking <span class="math-inline">\(n_{\text{add}} \to 0\)</span> or the population to infinity — so a run validating against an exact answer must switch it off.</p>
+<h3 id="where-it-lives">Where It Lives</h3>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Concern</th>
+<th>Location</th>
+</tr></thead>
+<tbody>
+<tr><td>Walker map, RNG, excitation generator, propagators, estimators</td><td><code>src/post_hf/ci/fciqmc.{h,cpp}</code></td></tr>
+<tr><td>Driver, input keywords, diagnostics</td><td><code>src/post_hf/fciqmc_driver.cpp</code></td></tr>
+<tr><td>Shared integral transform (<code>build_all_mo_ci_setup</code>)</td><td><code>src/post_hf/fci.cpp</code></td></tr>
+<tr><td>Slater–Condon matrix elements</td><td><code>src/post_hf/ci/ci.cpp</code></td></tr>
+</tbody></table></div>
+<p>The integral transform was <strong>extracted</strong> from <code>run_fci</code> rather than copied, and both paths call it. The Hamiltonian callbacks wrap the same <code>slater_condon_element</code>. The two paths therefore cannot disagree about the <em>Hamiltonian</em> — only about how they solve it, which is what makes a disagreement on a larger system attributable to sampling rather than plumbing.</p>
+<p>Run it with <code>correlation fciqmc</code>; eleven <code>fciqmc_*</code> keywords control walkers, timestep, shift damping, equilibration, initiator, and the seed. The seed is user-visible on purpose: fixed-seed reproducibility is a contract, and it is worthless if the seed cannot be pinned from the input.</p>
+<h3 id="validating-a-stochastic-method">Validating a Stochastic Method</h3>
+<p>Planck&#x27;s regression suite is built on exact comparison — 161 <code>metric_close</code> assertions, the tightest at 1e-9, and every recent performance change gated on <em>bitwise</em> identity. An FCIQMC energy is a mean with an error bar and cannot be gated that way. The suite therefore gained:</p>
+<ul>
+<li><code>metric_within_sigma</code>, asserting a value lies within <em>N</em> of its own blocked error bar;</li>
+<li>a blocking analysis validated against synthetic AR(1) series with a <em>known</em> autocorrelation time — never against real output, since an analysis that under-reports σ makes every downstream gate pass;</li>
+<li>fixed-seed reproducibility, proven to <strong>fail</strong> on an injected seed perturbation before being trusted. An RNG that advances normally but <em>ignores its seed</em> passes every statistical check — means, variance, <span class="math-inline">\(1/\sqrt{n}\)</span> scaling — and is caught only by &quot;different seeds must give different trajectories.&quot;</li>
+</ul>
+<p>On N₂/STO-3G against exact FCI <span class="math-inline">\(-107.6529998854\)</span>, both estimators agree within half a sigma at 0.69 walkers per determinant — a genuine sample rather than coverage of the space.</p>
+<p><strong>One structural decision worth recording:</strong> every parallel path in Planck is bitwise thread-count invariant, and FCIQMC keeps that property rather than taking an exception. Partitioning the <em>parents</em> by <code>hash(parent) % kBins</code> and merging in fixed bin order makes the result independent of the order threads visit parents. Binning by the <em>child</em> is not sufficient — it fixes which accumulator receives a spawn, but not the order arrivals reach it. <strong>The partition must be over the work, not the output.</strong></p>
+<h3 id="relationship-to-fci">Relationship to FCI</h3>
+<p>FCIQMC and FCI solve the <em>same</em> eigenvalue problem in the <em>same</em> determinant space, and in Planck they share the same integrals and matrix elements. They differ only in the solver: FCI diagonalizes with Davidson and returns an exact number; FCIQMC samples and returns a distribution.</p>
+<p>That makes the comparison unusually sharp. Where FCI is affordable, it is the reference; where it is not, FCIQMC is the only route to the same answer. The crossover in Planck sits near <span class="math-inline">\(n_{\text{act}} \approx 13\)</span>.</p>
+<hr>
+<h2 id="19-casscf-and-rasscf">19. CASSCF and RASSCF</h2>
 <h3 id="motivation">Motivation</h3>
 <p>Hartree-Fock fails near bond breaking, in transition metal chemistry, and wherever a single Slater determinant is qualitatively wrong. CASSCF (Complete Active Space SCF) partitions orbitals into:</p>
 <ul>
@@ -2787,7 +2918,7 @@ H     1.233698    0.000000   -0.927942
 </ul>
 <p>The same CI machinery is used, but the string generation enforces the occupation restrictions via bitcount masks on the RAS1 and RAS3 blocks.</p>
 <hr>
-<h2 id="19-geometry-optimization">19. Geometry Optimization</h2>
+<h2 id="20-geometry-optimization">20. Geometry Optimization</h2>
 <h3 id="l-bfgs-cartesian-coordinates">L-BFGS (Cartesian Coordinates)</h3>
 <p>Cartesian L-BFGS minimizes <span class="math-inline">\(E(\mathbf x)\)</span> where <span class="math-inline">\(\mathbf x \in \mathbb{R}^{3N}\)</span> is the flattened nuclear coordinate vector. The quasi-Newton update direction is:</p>
 <p><span class="math-display">\[
@@ -2945,7 +3076,7 @@ R_{ij} = |\mathbf r_i - \mathbf r_j|,
 <p>A BFGS Hessian update is performed in the redundant internal-coordinate space described above. The back-transformation from internal to Cartesian steps uses the Schlegel microiterations of <code>ic_to_cart_step</code>. Geometry constraints (fixed bonds, angles, dihedrals, frozen atoms) are enforced by projecting out the constrained internal-coordinate contributions from the gradient before the BFGS step.</p>
 <p>Convergence criterion: maximum absolute gradient element <span class="math-inline">\(\max_i |\partial E / \partial X_i| < \epsilon_{grad}\)</span> (default <span class="math-inline">\(3 \times 10^{-4}\)</span> Ha/Bohr).</p>
 <hr>
-<h2 id="20-vibrational-analysis">20. Vibrational Analysis</h2>
+<h2 id="21-vibrational-analysis">21. Vibrational Analysis</h2>
 <h3 id="semi-numerical-hessian">Semi-Numerical Hessian</h3>
 <p>The Hessian matrix is computed by central finite differences of analytic gradients:</p>
 <p><span class="math-display">\[
@@ -2976,7 +3107,7 @@ E_{ZPE} = \frac{1}{2}\sum_{k=1}^{3N-6} h\nu_k
 \]</span></p>
 <p>Vibrational symmetry labels are assigned in <code>src/symmetry/vibrational_symmetry.cpp</code> by projecting each normal mode onto the SAO blocks and determining its irrep.</p>
 <hr>
-<h2 id="21-kohn-sham-density-functional-theory">21. Kohn-Sham Density Functional Theory</h2>
+<h2 id="22-kohn-sham-density-functional-theory">22. Kohn-Sham Density Functional Theory</h2>
 <p>Most of this chapter is general KS-DFT theory. The explicit grid presets, supported-functional notes, and code maps are Planck-specific documentation.</p>
 <h3 id="the-kohn-sham-equations">The Kohn-Sham Equations</h3>
 <p>Kohn-Sham DFT maps the interacting many-electron problem onto a fictitious system of non-interacting electrons moving in an effective potential <span class="math-inline">\(v_s(\mathbf r)\)</span> that yields the same ground-state density as the real system. The total electronic energy is:</p>
@@ -3312,7 +3443,7 @@ I_{\sigma}(E)
 </ol>
 <p>The report printed by <code>print_linear_response_report()</code> includes the root index, excitation energy in Hartree and eV, oscillator strength, Cartesian transition dipole components, the dipole norm in Debye, and the three largest configuration weights.  The UV-Vis helper <code>print_uvvis_spectrum_report()</code> then writes the broadened spectrum file and prints the strongest broadened peaks in energy and wavelength units.</p>
 <hr>
-<h2 id="22-polarizable-continuum-solvation-c-pcm">22. Polarizable Continuum Solvation (C-PCM)</h2>
+<h2 id="23-polarizable-continuum-solvation-c-pcm">23. Polarizable Continuum Solvation (C-PCM)</h2>
 <p>Planck implements a conductor-like polarizable continuum model (C-PCM) for single-point HF (RHF/UHF) and KS-DFT (RKS/UKS) calculations. The solvent is treated as a structureless dielectric medium of relative permittivity <span class="math-inline">\(\varepsilon\)</span> that surrounds a molecule-shaped cavity. The solute polarizes the dielectric; the polarized dielectric back-polarizes the solute via a <em>reaction field</em>, which is added self-consistently to the Fock or Kohn-Sham matrix during the SCF iterations.</p>
 <p>The electrostatic model and self-consistent coupling described below are general PCM ideas. The implementation-file list, input syntax, and current limitations remain Planck-specific.</p>
 <p>Implementation files:</p>
@@ -3460,7 +3591,7 @@ E^{\text{elec}} = E^{\text{gas}}_{\text{elec}} + G^{\text{rxn}},
 <tr><td>Single-point gating</td><td><code>src/io/io.cpp</code></td><td>check around line 1266</td></tr>
 </tbody></table></div>
 <hr>
-<h2 id="23-basis-set-superposition-error-and-the-counterpoise-correction">23. Basis Set Superposition Error and the Counterpoise Correction</h2>
+<h2 id="24-basis-set-superposition-error-and-the-counterpoise-correction">24. Basis Set Superposition Error and the Counterpoise Correction</h2>
 <p>When you compute the interaction energy of a dimer <span class="math-inline">\(A\cdots B\)</span> as</p>
 <p><span class="math-display">\[
 \Delta E_{\text{raw}} = E_{AB} - E_A - E_B,
@@ -3515,7 +3646,7 @@ E_A^{*} = E_B^{*} &= -2.85517107.
 <p>The monomer reference energies <span class="math-inline">\(E_A, E_B\)</span> must be the <em>true</em> SCF minima, or the BSSE is meaningless. This is a place where the choice of initial guess (<a href="#6-scf-algorithm">§6, &quot;When the Guess Matters&quot;</a>) bites. The superposition-of- atomic-densities (SAD) guess, normally the more robust choice for molecules with equivalent atoms, can itself <strong>false-converge for a small isolated closed-shell atom</strong>: a lone helium atom in cc-pVDZ settles at <span class="math-inline">\(-2.85515\)</span> Eh from SAD but at the correct <span class="math-inline">\(-2.85516\)</span> Eh from a core-Hamiltonian guess, each reporting convergence in five iterations at a different HOMO energy. A counterpoise study of small fragments should therefore verify its monomer references against a second guess (or a reference program) rather than trust the iteration count — the same &quot;sanity-check the converged solution, do not trust the loop&quot; lesson from the broken-symmetry case study in §6, now cutting the other way.</p>
 <h3 id="scope-and-generality">Scope and generality</h3>
 <p>The counterpoise method as described handles a <strong>dimer</strong> (two fragments) at the <strong>SCF level</strong>. The same construction extends naturally — though with more bookkeeping — to the site-site (Valiron-Mayer) <span class="math-inline">\(N\)</span>-body counterpoise for clusters, to correlated methods (one simply uses the correlated monomer and dimer energies in the same five-term expression), and to gradients (where the ghost basis functions also contribute Pulay terms). The ghost-atom primitive itself is more general than counterpoise: placing ghosts in any single calculation lets you probe basis-set extension effects, build mixed-basis descriptions, or study how much a neighbor&#x27;s functions improve a fragment — all without changing the physical system.</p>
-<h2 id="24-molecular-properties">24. Molecular Properties</h2>
+<h2 id="25-molecular-properties">25. Molecular Properties</h2>
 <p>After SCF convergence Planck can compute several molecular properties from the converged density matrix. Dipole and quadrupole moments are printed automatically; population and bond-order reports are printed when <code>print_populations true</code> or the output <code>verbosity</code> is <code>verbose</code> / <code>debug</code>. This section covers the theory behind each property and the code path that evaluates it.</p>
 <h3 id="mulliken-population-analysis">Mulliken Population Analysis</h3>
 <p><strong>Theory</strong></p>
@@ -3743,7 +3874,7 @@ T^+ \in \mathbb{R}^{N_{sph} \times N_{cart}}, \qquad N_{sph} = \sum_s (2L_s+1), 
 <p><strong>Verification tip</strong></p>
 <p>If <span class="math-inline">\(T^+\)</span> is correct, the inner product <span class="math-inline">\(\mathbf C_{sph}^\top \mathbf C_{sph}\)</span> restricted to the occupied block should equal the identity (orthonormal MOs), and the total norm of each MO column should be preserved.  Any error in the hardcoded <span class="math-inline">\(T^+\)</span> blocks shows up immediately as an MO being assigned to the wrong irrep (or split across two irreps).</p>
 <hr>
-<h2 id="25-checkpoint-and-restart">25. Checkpoint and Restart</h2>
+<h2 id="26-checkpoint-and-restart">26. Checkpoint and Restart</h2>
 <p>This chapter mixes a general restart idea with concrete file-format details. The projection concept below is broadly applicable; the checkpoint layout is Planck-specific.</p>
 <h3 id="binary-checkpoint-format">Binary Checkpoint Format</h3>
 <p>The checkpoint file (<code>*.hfchk</code>) stores:</p>
@@ -3769,7 +3900,7 @@ P^{small}_{\lambda'\sigma'}\, (S^{cross})^T_{\sigma'\mu}\,
 \]</span></p>
 <p>This is a Löwdin-style cross-basis projection. In Planck, the required cross-overlap matrix is computed by <code>_compute_cross_overlap</code> in <code>os.cpp</code>, and the projection itself is implemented in <code>src/io/checkpoint.cpp</code> via an SVD of the cross-overlap. This provides a physically motivated initial density for the new basis, significantly reducing the number of SCF iterations required.</p>
 <hr>
-<h2 id="26-execution-flow-of-a-typical-run">26. Execution Flow of a Typical Run</h2>
+<h2 id="27-execution-flow-of-a-typical-run">27. Execution Flow of a Typical Run</h2>
 <pre><code>
 driver.cpp
   parse_input()                → Calculator._scf, _basis, _geometry, etc.
@@ -3844,7 +3975,7 @@ driver.cpp
   save_checkpoint()
 </code></pre>
 <hr>
-<h2 id="27-theory-to-code-map">27. Theory-to-Code Map</h2>
+<h2 id="28-theory-to-code-map">28. Theory-to-Code Map</h2>
 <div class="table-wrap"><table>
 <thead><tr>
 <th>Theory concept</th>
@@ -3962,7 +4093,7 @@ driver.cpp
 <tr><td>Full-symmetry direct Fock, spherical basis</td><td><code>src/symmetry/{os_symm,rys_symm}.cpp</code></td><td><code>_compute_2e_fock_symm_spherical</code>, <code>spherical_fock_*_from_skeleton</code> (<code>skeleton_eri.h</code>)</td></tr>
 </tbody></table></div>
 <hr>
-<h2 id="28-current-implementation-status">28. Current Implementation Status</h2>
+<h2 id="29-current-implementation-status">29. Current Implementation Status</h2>
 <div class="table-wrap"><table>
 <thead><tr>
 <th>Feature</th>
@@ -4032,7 +4163,7 @@ driver.cpp
 <tr><td>BSSE for DFT / N-body / gradients / post-HF references</td><td>Not implemented</td></tr>
 </tbody></table></div>
 <hr>
-<h2 id="29-how-to-study-this-codebase">29. How to Study This Codebase</h2>
+<h2 id="30-how-to-study-this-codebase">30. How to Study This Codebase</h2>
 <p>Recommended reading order for the HF/post-HF pipeline:</p>
 <ol>
 <li><code>src/base/types.h</code> — understand every struct before reading any algorithm</li>

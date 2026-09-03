@@ -1,0 +1,73 @@
+# C2/STO-3G FCIQMC -- the validation fixture for the three convergence tests.
+#
+# 10 orbitals, 6 alpha / 6 beta, ndet = 44100. Chosen over N2/STO-3G (14400)
+# because the WALKER-POPULATION sweep needs room below saturation: at N2 a
+# 120k-walker point is 8.3 walkers/determinant, which covers the space and
+# stops exercising the sampling being validated (the trap F4.4 and F4.5 both
+# hit). At C2 the same sweep spans 0.11-0.91 walkers/det, entirely below 1.
+#
+# Chosen over N2/3-21g (1.01e9 determinants) because all three tests are
+# DEFINED as comparisons against deterministic FCI, and at 1e9 determinants
+# there is no reference to compare against -- 8.1 GB per CI vector, ~65 GB for
+# a Davidson subspace, and an extrapolated ~9.6 yr solve. The tests do not
+# degrade at that size; they stop existing.
+#
+# C2/STO-3G is also the most valuable of the cheap fixtures for a p_gen hunt:
+# at 6a/6b it sits between Be (2/2) and N2 (7/7) at N2's orbital count, so the
+# three vary ELECTRON COUNT against fixed orbitals rather than moving ndet and
+# electron count together.
+#
+# NOTE: C2/STO-3G is a genuinely multireference system -- the ground state has
+# substantial weight outside the RHF determinant. That is a FEATURE for test 3
+# (more determinants carry resolvable signed weight) but it means the reference
+# determinant holds a smaller share of the population than in N2, so the
+# projected energy needs a healthy walker count to stay usable.
+#
+# dt is NOT inherited from the N2 input. N2's 0.001 was measured there, against
+# a sign instability in ITS reference determinant; C2 has different diagonals
+# and must be checked on its own (the driver's SIGN-UNSTABLE warning is the
+# instrument). This value is a starting point pending that check.
+
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   verbose
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation fci
+    ci_max_dim  200000
+
+    fciqmc_walkers         20000
+    fciqmc_timestep        0.001
+    fciqmc_shift_damping   0.3
+    fciqmc_shift_restoring 0.05
+    fciqmc_shift_interval  5
+    fciqmc_granularity     1.0
+    fciqmc_initiator       0.0
+    fciqmc_equilibration   20000
+    fciqmc_steps           30000
+    fciqmc_spawn_attempts  1
+    fciqmc_seed            20250901
+
+    use_diis    .true.
+    diis_dim    8
+    save_checkpoint .false.
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+2
+0   1
+C     0.000000     0.000000     0.000000
+C     0.000000     0.000000     1.243000
+%end_coords

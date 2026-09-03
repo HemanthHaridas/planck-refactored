@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <format>
+#include <numeric>
 
 namespace HartreeFock::Correlation
 {
@@ -22,34 +23,12 @@ namespace HartreeFock::Correlation
     using HartreeFock::Correlation::CI::CISolveResult;
     using HartreeFock::Correlation::CI::solve_ci;
 
-    std::expected<void, std::string> run_fci(
+    std::expected<AllMOCISetup, std::string> build_all_mo_ci_setup(
         HartreeFock::Calculator &calc,
-        const std::vector<HartreeFock::ShellPair> &shell_pairs)
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const std::string &tag)
     {
-        const std::string tag = "FCI";
-
-        // ── Reference and method guards ────────────────────────────────────────
-        // FCI here is CASCI over the whole basis; it reuses the spatial-orbital CI
-        // engine, which assumes a single common spatial-orbital set for both spins.
-        // Both RHF and ROHF satisfy that (ROHF stores one common orbital set for
-        // alpha and beta), so either can serve as the reference. The FCI energy is
-        // invariant to the orbital choice; only the correlation energy
-        // (E_FCI - E_ref) depends on which reference was used.
-        if (!calc._info._is_converged)
-            return std::unexpected(tag + ": requires a converged RHF or ROHF reference.");
-        if (calc._scf._scf != HartreeFock::SCFType::RHF &&
-            calc._scf._scf != HartreeFock::SCFType::ROHF)
-            return std::unexpected(tag + ": only RHF or ROHF references supported.");
-
-        // Spherical mode: the CI active space is the full MO space, whose dimension
-        // is the spherical working basis (working_nbasis()), not the larger Cartesian
-        // nbasis(). The cached ERI and MO coefficients are both spherical.
-        const int nbasis = static_cast<int>(calc.working_nbasis());
-        if (nbasis <= 0)
-            return std::unexpected(tag + ": empty basis.");
-
-        // The whole basis becomes the active space: no inactive core, no virtuals.
-        const int n_core = 0;
+        const int nbasis = static_cast<int>(calc._info._scf.alpha.mo_coefficients.rows());
         const int n_act = nbasis;
 
         // The packed alpha/beta determinant encoding caps how many spatial
@@ -97,8 +76,6 @@ namespace HartreeFock::Correlation
                 "Increase ci_max_dim in [scf] to run a larger FCI.",
                 tag, ci_dim_est, calc._active_space.ci_max_dim));
 
-        const int nroots = std::max(1, calc._active_space.nroots);
-
         // ── MO basis and effective integrals ───────────────────────────────────
         // For RHF the alpha channel holds the (only) MO set; for ROHF the alpha and
         // beta channels hold the same common spatial orbitals, so reading the alpha
@@ -131,6 +108,56 @@ namespace HartreeFock::Correlation
                 ensure_eri(calc, shell_pairs, eri_local, tag + " :");
             ga = transform_eri_internal(eri, nbasis, C);
         }
+
+        AllMOCISetup out;
+        out.n_act = n_act;
+        out.n_alpha = n_alpha;
+        out.n_beta = n_beta;
+        out.ci_dim = ci_dim_est;
+        out.h_eff = std::move(h_eff);
+        out.ga = std::move(ga);
+        return out;
+    }
+
+    std::expected<void, std::string> run_fci(
+        HartreeFock::Calculator &calc,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs)
+    {
+        const std::string tag = "FCI";
+
+        // ── Reference and method guards ────────────────────────────────────────
+        // FCI here is CASCI over the whole basis; it reuses the spatial-orbital CI
+        // engine, which assumes a single common spatial-orbital set for both spins.
+        // Both RHF and ROHF satisfy that (ROHF stores one common orbital set for
+        // alpha and beta), so either can serve as the reference. The FCI energy is
+        // invariant to the orbital choice; only the correlation energy
+        // (E_FCI - E_ref) depends on which reference was used.
+        if (!calc._info._is_converged)
+            return std::unexpected(tag + ": requires a converged RHF or ROHF reference.");
+        if (calc._scf._scf != HartreeFock::SCFType::RHF &&
+            calc._scf._scf != HartreeFock::SCFType::ROHF)
+            return std::unexpected(tag + ": only RHF or ROHF references supported.");
+
+        // Spherical mode: the CI active space is the full MO space, whose dimension
+        // is the spherical working basis (working_nbasis()), not the larger Cartesian
+        // nbasis(). The cached ERI and MO coefficients are both spherical.
+        const int nbasis = static_cast<int>(calc.working_nbasis());
+        if (nbasis <= 0)
+            return std::unexpected(tag + ": empty basis.");
+
+        // The whole basis becomes the active space: no inactive core, no virtuals.
+        const int n_core = 0;
+        const int n_act = nbasis;
+
+        auto setup = build_all_mo_ci_setup(calc, shell_pairs, tag);
+        if (!setup)
+            return std::unexpected(setup.error());
+        const int n_alpha = setup->n_alpha;
+        const int n_beta = setup->n_beta;
+        const long long ci_dim_est = setup->ci_dim;
+        const Eigen::MatrixXd &h_eff = setup->h_eff;
+        const std::vector<double> &ga = setup->ga;
+        const int nroots = std::max(1, calc._active_space.nroots);
 
         logging(LogLevel::Info, tag + " :",
                 std::format("Full CI over {} orbitals, {} alpha / {} beta electrons  (CI dim = {})",
@@ -169,6 +196,58 @@ namespace HartreeFock::Correlation
                 logging(LogLevel::Info, tag + " :",
                         std::format("  root {:2d}: {:.10f}",
                                     r, ci.energies(r) + calc._nuclear_repulsion));
+        }
+
+        // ── Coefficient ratios C_I / C_0 ───────────────────────────────────────
+        //
+        // The reference for a stochastic method to compare its sampled
+        // wavefunction against. Energy agreement is a weaker test: it is one
+        // scalar contracted over the whole vector, so errors in spawning phases,
+        // death/cloning and annihilation can cancel within it. Ratios expose the
+        // vector itself, sign included.
+        //
+        // Ratios rather than raw coefficients because the FCI eigenvector's
+        // overall phase and normalisation are both arbitrary, while a walker
+        // population is normalised by its own population and anchored on the
+        // reference. C_I/C_0 is the quantity both sides agree on.
+        //
+        // Printed at Verbose because it is a validation instrument, not part of a
+        // normal run's output.
+        if (calc._output._verbosity >= Verbosity::Verbose && ci.vectors.cols() > 0)
+        {
+            // The reference is the largest-weight determinant, not det 0: the
+            // enumeration order is not guaranteed to put the RHF determinant
+            // first, and a ratio against a near-zero denominator is noise.
+            const Eigen::VectorXd v = ci.vectors.col(0);
+            int i_ref = 0;
+            for (int i = 1; i < v.size(); ++i)
+                if (std::abs(v(i)) > std::abs(v(i_ref)))
+                    i_ref = i;
+
+            std::vector<int> order(static_cast<std::size_t>(v.size()));
+            std::iota(order.begin(), order.end(), 0);
+            std::sort(order.begin(), order.end(), [&](int a, int b) {
+                return std::abs(v(a)) > std::abs(v(b));
+            });
+
+            const double c0 = v(i_ref);
+            const std::size_t n_show =
+                std::min<std::size_t>(order.size(), 20);
+            logging(LogLevel::Info, tag + " :",
+                    std::format("Dominant determinants (alpha/beta bitstrings, "
+                                "C_I/C_0 against reference {:#018x}/{:#018x}):",
+                                static_cast<unsigned long long>(a_strs[ci_space.dets[i_ref].first]),
+                                static_cast<unsigned long long>(b_strs[ci_space.dets[i_ref].second])));
+            for (std::size_t k = 0; k < n_show; ++k)
+            {
+                const int i = order[k];
+                const auto &d = ci_space.dets[i];
+                logging(LogLevel::Info, tag + " :",
+                        std::format("  det {:#018x}/{:#018x}  C_I/C_0 {:+.6f}",
+                                    static_cast<unsigned long long>(a_strs[d.first]),
+                                    static_cast<unsigned long long>(b_strs[d.second]),
+                                    v(i) / c0));
+            }
         }
 
         return {};

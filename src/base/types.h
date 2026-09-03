@@ -83,7 +83,8 @@ namespace HartreeFock
         UCCGEN,  // Unrestricted generated CC (ucc2/ucc3/ucc4); rank on _cc_generated_rank
         CASSCF,  // Complete active space SCF
         RASSCF,  // Restricted active space SCF
-        FCI      // Full configuration interaction (whole MO space, RHF reference)
+        FCI,     // Full configuration interaction (whole MO space, RHF reference)
+        FCIQMC   // Stochastic FCI by walker sampling (same space, same integrals)
     };
 
     enum class CalculationType
@@ -647,6 +648,31 @@ namespace HartreeFock
         // When mcscf_accept_uphill is on, this caps the largest uphill ΔE
         // (Hartree) the model-trust filter will tolerate per macro step.
         double mcscf_uphill_max_eh = 5e-3;
+    };
+
+    // FCIQMC sampling parameters.
+    //
+    // Every one of these changes the answer, so every one must be reachable from
+    // an input file -- a keyword the parser accepts but ignores is worse than one
+    // it rejects. Defaults are the values validated on the toy fixture; see
+    // docs/FCIQMC_POPULATION_CONTROL.md for what each trades.
+    struct OptionsFCIQMC
+    {
+        double target_walkers = 10000.0;   // population the shift steers toward
+        double timestep = 0.001;           // dt; must stay well under the stability bound
+        double shift_damping = 0.3;        // zeta -- stability of the shift feedback
+        double shift_restoring = 0.05;     // xi  -- restoring force toward the target
+        int shift_interval = 5;            // iterations between shift updates
+        double walker_granularity = 1.0;   // spawn discretization; 0 disables
+        double initiator_threshold = 0.0;  // n_add; 0 disables the initiator
+        int equilibration_steps = 2000;    // discarded before averaging
+        int sampling_steps = 8000;         // averaged
+        int spawn_attempts = 1;            // draws per walker per iteration
+
+        // The seed is USER-VISIBLE on purpose. The reproducibility contract --
+        // same seed reproduces the trajectory bitwise -- is worthless if the seed
+        // cannot be set and is not recorded in the output.
+        unsigned long long seed = 20250901ULL;
     };
 
     // MP2 options. Mirrors PySCF's mp.MP2Base attributes (frozen, level_shift,
@@ -1274,6 +1300,7 @@ namespace HartreeFock
 
         // CASSCF / RASSCF results
         OptionsActiveSpace _active_space;     // active space specification
+        OptionsFCIQMC _fciqmc;                // FCIQMC sampling parameters
         Eigen::VectorXd _cas_nat_occ;         // active natural occupation numbers
         Eigen::MatrixXd _cas_mo_coefficients; // converged CASSCF MO coefficients [nb×nb] in the optimization basis
         Eigen::VectorXd _cas_root_energies;   // per-root total CASSCF energies (length nroots; empty for SS-CASSCF)

@@ -43,6 +43,915 @@ truth for what remains.
   `BASIS_INSTALL_PATH`, or change the `install()` destination to match — they
   must agree. Documented as a workaround in the README meanwhile.
 
+## SCF convergence — the unclaimed 3x
+
+- **Iteration count triples with system size, and nothing is attacking it.**
+  Measured in the committed `scale.json` (HF/6-31g water chains, serial, same
+  basis and guess throughout): **30 iterations at nb=104 rising to 91 at
+  nb=416**. At a flat 30, nb=416 would take ~2065 s instead of 6263 s — a **3x
+  multiplier on total cost that no parallel or kernel work touches**. DFT shows
+  the same cliff earlier (13 iterations to nb=208, then 51 at nb=312) and
+  **fails to converge entirely at nb=416**.
+
+  This is the cheapest large win available, because the other two axes are known
+  and expensive: the ERI Fock build is ~200x slower than libcint with four
+  candidate optimizations each disproven by measurement
+  (`docs/ERI_PERFORMANCE_SCOPE.md` — closing it needs a different engine), and
+  MPI scaling is already 42-46 % efficient at 32 ranks. Iteration count
+  multiplies with **every** method: HF, DFT, and every post-HF path sitting on a
+  converged SCF.
+
+  **Most of an SOSCF already exists**, which is what makes this tractable rather
+  than a research project. `src/post_hf/casscf/aug-hessian.h` is a *generic*
+  CIAH solver — the same algorithm PySCF's SOSCF uses — whose header states it is
+  callback-driven specifically so it is **not** coupled to CASSCF data
+  structures, and it is validated by the 11/11 CASSCF gate suite.
+  `build_rhf_cphf_matrix` (`src/post_hf/rhf_response.h`) is the RHF orbital
+  Hessian, with an RI form that avoids the `nao⁴` build; `uhf_response.h` is the
+  unrestricted sibling. **The work is writing the callbacks and deciding when to
+  switch, not deriving a Hessian or writing a trust-region eigensolver.**
+
+  The one genuinely non-mechanical part is the DIIS→SOSCF switch criterion:
+  second-order steps converge quadratically near a solution and can find a saddle
+  far from one, so switching too early is worse than not switching. Scoped S1-S5
+  in `docs/SOSCF_SCOPE.md`, starting from the `diis_error` already computed every
+  iteration.
+
+## FCI performance — two measured, independent items
+
+Found while sizing an FCIQMC validation fixture; both stand on their own and are
+worth doing whether or not FCIQMC happens.
+
+- **The FCI sigma build is single-threaded.** `apply_ci_hamiltonian`
+  (`src/post_hf/ci/ci.cpp:437-622`) — the iterative path taken by every space
+  above `dense_threshold = 500` — has **zero** `#pragma omp`. The one pragma in
+  the file is on the **dense** Hamiltonian build (`:221`), which runs only
+  *below* 500 determinants, so it never fires for a case big enough to care.
+  `rdm.cpp` is threaded (6 pragmas); `fci.cpp` and `strings.cpp` are not.
+  **Measured on `build-full`** (genuinely OpenMP-enabled), N2/STO-3G
+  (ndet = 14 400): **121.9 s at 1 thread, 123.6 s at 4 — flat**, and **100.0 %
+  CPU with `OMP_NUM_THREADS=8`**, one core of eight. Same signature CC had before
+  it was threaded. The outer determinant loop writes `sigma(i)` per determinant,
+  so it is a scatter rather than the disjoint-slice shape the CC nests had —
+  threading it needs either per-thread partial vectors summed in **fixed thread
+  order** (the DFT J/K discipline) or a gather formulation. **Do not use
+  `omp atomic` or completion-order accumulation**; that is the DFT-grid jitter
+  defect.
+
+- **~53 % of FCI runtime is `malloc`/`free`, not arithmetic.** Leaf-sample
+  profile (21 048 samples, N2/STO-3G, 1 thread): the malloc family is ~53 %,
+  `apply_ci_hamiltonian` itself 12.0 %, `get_excitation` 5.9 %. The cause is in
+  the source: `get_excitation` (`ci.cpp:65`) returns
+  `std::pair<std::vector<int>, std::vector<int>>` **by value**, and
+  `slater_condon_element` calls it for both spin channels on **every matrix
+  element** — up to four heap allocations per element, for vectors that hold **at
+  most two entries each** (a Slater-Condon element vanishes beyond a double
+  excitation). `std::array<int,2>` plus a count removes it. This looks like the
+  cheapest large win in the CI engine, and it compounds with the threading item
+  rather than competing with it.
+
+  **Do this one before any FCIQMC work**, if that ever starts: the spawning step
+  calls `slater_condon_element` in its innermost loop, far more often than FCI's
+  sigma build, so building on the allocating version inherits the penalty. It
+  also widens the ndet window where a deterministic FCI reference is affordable,
+  which is exactly what the FCIQMC validation strategy is bounded by.
+
+- **F1 LANDED (2026-08-30): 4.8x, bitwise identical.** `get_excitation` now
+  returns a fixed-capacity struct instead of a pair of heap vectors. N2/STO-3G
+  **125.7 s -> 26.3 s**, `be_fci_spherical_631gd` ~46.5 s -> 7.6 s, and the
+  malloc/free profile share **53 % -> 0.1 %** — the allocator is eliminated, not
+  reduced. Energies match the pre-change binary digit for digit on both iterative
+  cases and on N2; all 7 FCI and all 11 CASSCF/RASSCF cases pass. **The 4.8x
+  exceeded what the profile implied** (a 53 % share caps the direct saving at
+  ~2.1x by Amdahl), because per-element `malloc`/`free` also cost cache pressure
+  and bookkeeping attributed to other frames — **a profile share is a lower bound
+  on what removing that work is worth**, the inverse of the CC transpose merge
+  where an operator-count model over-promised.
+
+- **F3 (threading) is scoped with its blast radius inventoried**, in
+  `docs/FCI_SIGMA_BUILD_PERFORMANCE.md`. Post-F1 the profile is ~98 % inside the loop F3
+  threads, so Amdahl gives ~3.7x at 4 threads. Verified rather than assumed:
+  **two callers, both outside any parallel region** — the Davidson lambda
+  (`ci.cpp:775`) and CASSCF's `CISigmaApplier` (`casscf.cpp:894`, whose nearest
+  `parallel for` at `:589` closes at `:611`, so there is no nesting). The **only
+  mutation in the loop body is `sigma(...) +=`**; `space` is `const&` and
+  `det_lookup.find` is a concurrent-safe read. The design constraint that keeps
+  it from becoming spaghetti: **the 126 lines of excitation enumeration
+  (`ci.cpp:527-652`) must not change at all** — every write already funnels
+  through one `accumulate` lambda, which is the only seam needed. The dead
+  fallback path (`:490`, unreachable because `det_lookup` is always populated at
+  `:461`) stays serial.
+
+  **The gather route was BUILT AND MEASURED (2026-08-30), and it is REFUTED —
+  2.2-2.4x SLOWER. Do not build it again.** The scope recommended inverting the
+  loop to run over BRAS so each thread would own a disjoint slice of `sigma`. That
+  inversion is **numerically correct** — `o2_fci_rohf_sto3g` `-147.7441885517`,
+  `be_fci_spherical_631gd` `-14.6139425466` and N2's `-0.8864061248` all matched
+  the pre-change values to **every printed digit**, and the anticipated ~1e-12
+  summation-order delta never even appeared at print precision. It is simply much
+  slower: **Be 7.6 s -> 16.4 s, N2 26.3 s -> 63.3 s**. The scope's own stop
+  condition ("if it is materially slower, stop") fired; the change is stashed, not
+  committed.
+
+  **The cause is the one thing the design mis-classified.** The scope treated the
+  `|c| < 1e-15` skip as a summation-ORDER detail. It is not — it is a **sparsity
+  exploitation carrying asymptotic weight**, and the gather structurally cannot
+  keep it. In the scatter the test sits on the OUTER loop, so a negligible ket
+  skips the entire 126-line enumeration in one comparison; in the gather the outer
+  index is the bra, whose `sigma(i)` must be computed regardless of `c(i)`, so
+  every outer iteration runs the full enumeration. And the vectors really are
+  sparse: `davidson` starts from unit vectors on the lowest-diagonal determinants
+  (`ci.cpp:130-136`), and worse, `solve_ci` (`ci.cpp:743`) reconstructs a dense `H`
+  by calling `sigma_apply` with `Eigen::VectorXd::Unit(dim, j)` — **exactly one
+  nonzero** — once per column, which is O(dim) enumerations under the scatter and
+  **O(dim^2)** under the gather.
+
+  **What still holds:** both facts the inversion rested on were verified and are
+  fine — reachability is symmetric (**0 asymmetric edges** across n_act 4/5/6
+  including an open-shell case) and `H` is real symmetric, which
+  `build_ci_hamiltonian_dense` already depends on (`H(i,j) = H(j,i) = v` from one
+  evaluation, `ci.cpp:264`). A future attempt need not re-litigate symmetry; the
+  gather is correct, just slower.
+
+  **Generalizable lesson from the refutation: a cheap-looking guard on an outer
+  loop can be carrying asymptotic weight** — measure what fraction of outer
+  iterations it eliminates on the actual inputs before moving it inward to enable
+  a restructuring. No threading win (~3.7x ceiling at 4 threads) would have repaid
+  a 2.4x serial loss plus an asymptotic change.
+
+- **F3 LANDED (2026-08-30) via the fallback: 3.54x at 4 threads, bitwise
+  thread-count-invariant.** The scatter is kept (preserving the outer skip) and
+  accumulates into partial vectors summed in fixed order. Measured on N2/STO-3G
+  against the F1 serial 26.3 s: **27.59 s / 14.66 s / 7.79 s / 5.71 s** at 1/2/4/8
+  threads — **3.54x at 4**, against a modelled ~3.7x ceiling.
+  `be_fci_spherical_631gd` 7.6 s -> 3.42 s. Energies **byte-identical at 1/2/4/8
+  threads** on all three cases and equal to the F1 serial values
+  (`-107.6529998854`, `-14.6139425466`, `-147.7441885517`). The 126-line
+  enumeration is untouched — the only deleted lines are the old `accumulate`
+  lambda.
+
+  **Two determinism defects were found on the way, each ONLY by the byte-diff, and
+  the second is the one worth carrying: a fixed-order reduction is NECESSARY BUT
+  NOT SUFFICIENT.** (1) `schedule(dynamic)` — which the scope itself
+  recommended for load balance — gives a buffer a different *subset* of terms per
+  run, so its internal sums reassociate; measured as two different last digits
+  across 5 identical 4-thread runs. (2) Keying buffers by `omp_get_thread_num()`
+  makes their *contents* depend on the thread COUNT, so 8 threads disagreed with
+  1/2/4 even under `schedule(static)`. **What must be deterministic is the
+  partition of work into accumulators, not just the order they are summed.** The
+  fix bins by a fixed function of `j` (`partials[j / bin_size]`, `kBins = 64`) with
+  `schedule(static, bin_size)` so one chunk is exactly one bin. Memory is
+  `kBins x dim x 8` — **independent of thread count**, 7.4 MB at N2, so the
+  scope's `nthreads x dim x 8` bound (and its alarming 106 MB water/6-31G figure,
+  for a case priced elsewhere at tens to hundreds of hours) does not apply.
+
+  **Reprofiled after landing (N2/STO-3G, `sample`): nothing left worth taking.**
+  The serial profile is unchanged from post-F1 (`apply_ci_hamiltonian` 55.4 % vs
+  55.0 %, `slater_condon_element` 19.9 % vs 19.6 %, and so on), so the binning
+  costs nothing measurable. **The 7.4 MB per-call `partials` allocation was
+  suspected and is refuted** — the whole malloc family is 0.1 % and the `memset`
+  zeroing is 8 samples (0.0 %), even though Davidson calls the sigma build once
+  per subspace vector per iteration. At 4 threads the only new frame is the
+  barrier (`__psynch_cvwait`, 3.0 %); per-thread idle is 0.4 / 4.4 / 2.5 / 11.8 %,
+  i.e. **4.8 % total**, so removing the residual imbalance is worth only ~1.05x on
+  top of 3.54x. Not worth taking, and **if it ever is, the move is more bins
+  (smaller `kBins`) under static scheduling — never `dynamic`**, which breaks
+  thread-count invariance. **F2 (the `occupied_orbitals` allocation) is now the
+  only FCI item left, and the profile prices it at 0.1-0.2 %** — so it is a
+  code-hygiene item, not a performance one; the scope's expectation that it was
+  worth doing on its own merits does not survive F1 having removed the allocator
+  pressure that made it look expensive.
+
+- **Both are answered in `docs/FCI_SIGMA_BUILD_PERFORMANCE.md`** (allocation
+  before threading, which is the order that mattered: threading a loop that spent
+  half its time in the allocator would have parallelized `malloc` contention).
+  One finding there is worth repeating here because it decides how any gate must
+  be written: of the
+  seven committed FCI regression cases, **only two reach the iterative sigma path
+  at all** — `o2_fci_rohf_sto3g` (CI dim 1 200) and `be_fci_spherical_631gd`
+  (8 281). The two smallest and most obvious (`h2_fci_sto3g` at 4,
+  `water_fci_sto3g` at 441) run the **dense** path and would pass a broken
+  threaded sigma build unchanged — the same trap that kept `ch4_rccsdt_sto3g`
+  green for its entire life while never running the kernel it protected.
+
+## Research: FCIQMC (scoped, deliberately not started)
+
+- **Scoped as a research question, not a work item, because two prerequisites are
+  unanswered and either one kills it.** `docs/FCIQMC_RESEARCH_SCOPE.md`.
+
+  **Q1 — is there a target?** There IS a real window: `CIString` is a `uint64_t`
+  giving `kMaxPackedSpatialOrbitals = 31`, and at `n_act` 20-31 the determinant
+  count runs 3.4e10 to ~1e17 — addressable by the existing bitstring
+  representation but far beyond a stored CI vector. **But nothing currently wants
+  it**: CASSCF is validated at CAS(8,6) and smaller, and the regression suite tops
+  out at 6 atoms. Name a molecule and active space someone cannot run today, or
+  record that this is a capability looking for a use.
+
+  **Q2 — can a stochastic method live in this validation culture?** This is the
+  harder half and it is cultural, not technical. The suite carries **161
+  `metric_close` assertions**, the tightest at 1e-9, and every recent perf change
+  was gated on **bitwise identity** (the CC OpenMP work, the transpose merge, the
+  DFT J/K builds). There is **no RNG anywhere in `src/`**. An FCIQMC energy is a
+  mean with an error bar and cannot be gated that way; it needs a fixed-seed
+  reproducibility gate plus a statistical gate with a blocking analysis, neither
+  of which exists. **Answer Q2 by writing that gate against the existing FCI
+  before implementing anything** — if it cannot be made to pass where FCI gives
+  the exact answer, the method is not maintainable here.
+
+  **The reusable half is genuinely large**: bitstring determinants, occupation and
+  parity helpers, `slater_condon_element` (the spawn), `build_ci_diagonal` (the
+  death step), and pre-transformed active-space integrals all exist in
+  `src/post_hf/ci/`. Missing and real: an RNG policy, a dynamic sparse walker
+  container (the existing `det_lookup` indexes a fixed enumerated space), an
+  excitation generator with a consistent `p_gen`, and population control.
+
+  **The validation fixture is identified and measured: `N2/STO-3G`** (10 orbitals,
+  7α/7β, **ndet = 14 400**). It is the smallest system satisfying both constraints
+  — FCI cheap enough that a gate can recompute the reference, and a determinant
+  space large enough that a few-thousand-walker population is a genuine *sample*
+  rather than covering the whole space. The existing FCI regression cases
+  (H2/STO-3G at 4 determinants, water/STO-3G at 441) are **unsuitable**: the walker
+  population would exceed the space and the gate would prove nothing about
+  sampling. `Be/6-31g*` (ndet 8 281) is the useful second fixture because it has
+  only 2α/2β against N2's 7α/7β — a two-electron system cannot exercise doubles
+  between different occupied pairs, which is where `p_gen` bugs hide, so
+  disagreement between the two isolates the excitation generator.
+
+  **RESCOPED 2026-08-30 after the FCI sigma build got ~17x faster** (see the FCI
+  entry above and `docs/FCI_SIGMA_BUILD_PERFORMANCE.md`). Reference costs
+  remeasured at 4 threads: **Be 46.5 s -> 2.72 s, N2 124.4 s -> 8.28 s**, and the
+  headline — **C2/STO-3G went from ">10 min, abandoned un-run" to 47.7 s**, which
+  roughly **triples the usable ndet** and makes it a viable *third* fixture. C2 is
+  the most valuable of the three for a `p_gen` hunt: at 6α/6β it sits between Be
+  (2/2) and N2 (7/7) at N2's orbital count, so the three vary electron count
+  against fixed orbitals rather than moving ndet and electron count at once.
+
+  **A three-point fit gave `ndet^1.69`, and a fourth point falsified it by 4.3x.**
+  BeH2/6-31G (ndet 81 796) was run specifically to test the extrapolation:
+  predicted 2.6 min, **measured 36.7 s**. The cause is that per-determinant cost
+  tracks **electron count**, not ndet — it varies 3.3x across these systems at
+  comparable ndet (0.328 / 0.575 / 1.081 / 0.448 s per 1e3 det for Be 2e / N2 7e /
+  C2 6e / BeH2 3e). Fitting each regime separately: **6-7 electrons -> ndet^1.56,
+  2-3 electrons -> ndet^1.14**. This is the ORIGINAL two-point caveat (the fit
+  conflates ndet with electron count) **confirmed, not dissolved** — an earlier
+  revision of this entry claimed it was "partly addressed" because C2 and N2 have
+  similar electron counts, which was wrong: the low-electron systems still anchored
+  the other end of the same fit. **Quote the electron-resolved exponents, never the
+  pooled 1.69.** The strategic conclusion is unchanged: FCIQMC targets 1e9+, so the
+  **fixed-seed reproducibility gate stays primary** and the statistical gate stays
+  small-system-only. Candidate inputs, including the falsifying BeH2 point, are
+  committed under `tests/inputs/exploratory/fciqmc/`.
+
+  **Q1 ANSWERED technically, still open practically (2026-08-30).** Measured
+  against the post-speedup FCI, the scope's own `n_act` table was wrong: the
+  practical ceiling is **`n_act` ~= 12, not 16** (n_act 14 ~= 3 days, 16 ~= 208
+  days, 18 ~= 36 years at the 6-7 electron exponent). So the FCIQMC window opens
+  around **13**, wider than the claimed 18-31. Two corrections to the framing:
+  **time binds, not memory** (at n_act 14 a CI vector is 0.09 GB while the solve is
+  3 days — the "cannot store the vector" argument only bites at n_act 18), and the
+  **17x speedup bought about ONE n_act step**. But the largest active space in the
+  entire tree is `nactorb 6`, so nothing wants this: **a person must name a
+  molecule and active space.**
+
+  **F1 LANDED (2026-08-31): walker container + RNG policy**
+  (`src/post_hf/ci/fciqmc.{h,cpp}`, gated by `planck-fciqmc-walkers`). State layer
+  only, no dynamics. The design point: **annihilation is not a separate pass** —
+  it is what accumulating signed weights into a determinant-keyed map already
+  does, which is also why the container is a map rather than a walker list.
+  `RandomSource::derive(index)` is deterministic in the run seed and independent of
+  how many shards were derived, which is what will keep a threaded run
+  thread-count-invariant. Mutation-verified with three defects, all caught:
+  round-to-nearest (biases the energy), overwrite-instead-of-accumulate (breaks
+  annihilation), and a call-order-dependent `derive()`.
+
+  **F2 SCOPED (2026-08-31) in `docs/FCIQMC_SAMPLING_AND_DYNAMICS.md`** — the
+  excitation generator and `p_gen`. It gets its own scope because **every other
+  step fails loudly and this one fails silently**: a `p_gen` disagreeing with the
+  sampler's actual distribution gives a plausible, converged, WRONG energy, the
+  same failure class as the spin-adapt default and the invalid ERI symmetry table.
+  Five steps: F2.1 brute-force oracle FIRST (the measuring instrument, so the
+  generator is never the only implementation of "what is connected"), F2.2 a slow
+  uniform generator as the reference distribution, F2.3 the O(1) production
+  generator, F2.4 mutation-verification of the gate itself, F2.5 spin/symmetry
+  constraints. **The gate tests agreement, never uniformity** — a two-stage
+  generator legitimately varies `p_gen` by 13.5x across connections on N2/STO-3G;
+  non-uniformity is not the bug, a mis-reported `p_gen` is. Connection counts
+  verified by independent brute force: H2/STO-3G **3** (small enough that the
+  oracle is exact, which is what makes the step gateable), water/STO-3G **140**,
+  N2/STO-3G **609**, Cr2 CAS(12,18) **7308**. **Support and frequency are separate
+  failure modes** — a generator that can never reach some excitations passes a
+  frequency-only gate, so both are required.
+
+  **F2 COMPLETE (2026-08-31): F2.1-F2.5 all landed and gated**
+  (`planck-fciqmc-walkers`, 8 s). The oracle, the slow uniform reference
+  generator, the O(1) production generator with non-uniform `p_gen`, the
+  gate-rejects-broken-generators fixtures, and the spin/symmetry layer.
+
+  **Two findings worth carrying.** (1) **When a sampled quantity is used as a
+  DIVISOR, unbiasedness of the estimator is the wrong property to check.** F2.5's
+  rejection sampling nearly shipped a `p_gen` correction that estimated the
+  acceptance rate from the attempt count of the call itself. `E[p_gen x attempts]`
+  is exactly the conditional probability — unbiased *for `p_gen`* — but the spawn
+  uses `|H_ij| / p_gen` and `E[1/X] != 1/E[X]`. Measured at `p_accept = 0.3`: mean
+  of `p_gen` correct to 0.1 %, mean of `1/p_gen` **1.72x too large**. Fixed by
+  measuring the acceptance rate once and passing it as a constant; a regression
+  test pins both halves so nobody simplifies the separate measurement away because
+  the obvious check passes. (2) **An equivalent mutant did real work.** Swapping
+  the alpha-beta index split passed the gate, and investigation showed it is a
+  genuine relabeling (both forms are bijections onto the same product set when
+  `n_sa == n_sb`) — but it revealed every fixture was **closed-shell**, so an index
+  bug that only manifests when the spin counts differ had zero coverage. Three
+  open-shell cases added (3a/1b, 4a/2b, 5a/3b); a genuinely asymmetric mutation is
+  now caught **by the open-shell case alone**.
+
+  Also recorded, from F2.2: the scope's claim that a frequency-only gate cannot
+  catch a support hole is **false for a uniform generator** (a hole redistributes
+  probability and shows at ~54 sigma). The independence appears only once `p_gen`
+  is non-uniform, where a rare unreachable connection deviates by ~0.6 sigma —
+  invisible to frequencies. So the support check is load-bearing at F2.3
+  specifically, and no F2.2 mutation can demonstrate it.
+
+  **F3.1 LANDED (2026-08-31): deterministic propagation, exact against a matvec.**
+  `propagate_deterministic` visits every connection through the F2.1 oracle rather
+  than sampling, so one call is exactly `c <- c - dt*(H-S)*c` and matches a
+  hand-computed matvec to 1e-12. It exists to establish the DYNAMICS before
+  sampling enters, so a later failure is attributable to one or the other. The
+  Hamiltonian arrives as callbacks so the gate can drive it with an independently
+  built matrix — reusing `build_ci_hamiltonian_dense` would test consistency, not
+  correctness. **The one failure was the test:** the toy Hamiltonian filled every
+  entry, but a real `H` is zero beyond a double excitation (9 of 35 pairs
+  unconnected at n_act=4), so the reference matvec summed contributions the
+  propagator correctly skipped. **A synthetic Hamiltonian must respect the sparsity
+  of a real one.**
+
+  **F3.2 LANDED (2026-08-31): stochastic spawning, mean-exact against F3.1.**
+  Draws connections and reweights by `1/p_gen`; death stays deterministic. The
+  mean over 200k runs matches the deterministic step within 5 sigma per component,
+  variance falls as 1/n_attempts, and more attempts do not rescale the step.
+  **The gate was initially VACUOUS and that is the finding:** an absolute
+  tolerance of 0.02 let through both dropping `1/p_gen` entirely and a 2x `p_gen`
+  error, because spawn magnitudes span 0.005-0.4 across excitation classes so the
+  tolerance sat at the effect size. A fixed RELATIVE tolerance failed the other
+  way, rejecting correct code at 51 % because it is noise-dominated on small
+  components. **Comparing against each component's own STANDARD ERROR is the only
+  scale correct for all of them at once** — the two mutations are then caught at
+  5553 and 226 sigma. **Generalizable: when the components of a checked quantity
+  span orders of magnitude, neither an absolute nor a relative tolerance is safe.**
+
+  **F3 COMPLETE (2026-08-31): F3.1-F3.5 landed and gated** (`planck-fciqmc-walkers`,
+  ~11 s). Deterministic propagation exact against a matvec, stochastic spawning
+  mean-exact against it, convergence to the ground state (overlap > 0.9999), the
+  projected energy with its finite-population bias characterized, and whole-
+  trajectory fixed-seed reproducibility. **FCIQMC now runs**: spawn, death and
+  annihilation compose into a working imaginary-time propagator on a fixed shift.
+  What remains is F4 (population control + initiator) and F5 (parallelism, and the
+  determinism decision in the research scope's section 6).
+
+  **Four scoped claims did not survive contact, all corrected in place:** (1) the
+  timestep bound `2/max|H_ii - S|` is NECESSARY BUT NOT SUFFICIENT — measured 2.28x
+  larger than the true spectral bound — and is additionally computed from the
+  CURRENTLY occupied determinants, returning INFINITY when seeded with a single
+  reference whose diagonal equals the shift. (2) The "too-large dt diverges" test
+  was **removed** after three formulations each rested on a false premise (the
+  population does not collapse, the norm grows at every dt by design, and the
+  converged shape overlaps the true ground state at 1.000000 even at 5x the bound);
+  renormalizing makes it a power iteration whose dominant eigenvector stays the
+  ground state, so a divergence gate belongs with F4. (3) The projected-energy
+  population range initially measured the small-reference regime (c_0 = 1 walker,
+  energies swinging -5.7 to -6.9 against an exact -10.0) rather than the
+  finite-population bias. (4) **Gate tolerances had to be DERIVED from the
+  measurement rather than chosen, twice in opposite directions** — F3.2's absolute
+  0.02 was vacuous (it sat at the effect size, letting a dropped `1/p_gen` through)
+  and a relative bound was noise-dominated, so the standard error is the only
+  correct scale; F3.4's floor is likewise the measurement's resolution, since the
+  apparent bias at the largest population is below what 3000 trials can resolve.
+
+  **One more lesson, from F3.5's negative control:** an RNG that advances normally
+  within a run but IGNORES ITS SEED passes every statistical check — means,
+  variance, `1/n_attempts` scaling — and is caught only by "different seeds must
+  give different trajectories". Three earlier mutations were caught by the
+  statistical gates instead, so it took a fourth to demonstrate the control is
+  load-bearing rather than decorative.
+
+  **F4 SCOPED (2026-08-31) in `docs/FCIQMC_POPULATION_CONTROL.md`** — shift
+  control and the initiator approximation, in five steps. Two numbers were measured
+  on a 20-determinant model before the scope was written. (1) **The damping
+  parameter zeta trades shift accuracy against population control, and both ends
+  fail:** at zeta = 0.02 the shift is accurate to 2.2e-5 but the population
+  overshoots 2062x; at zeta = 2.0 the population is held to 0.05x but the shift is
+  biased by 8.5e-3, 600x worse. The usable band is ~0.05-0.5, and the gate asserts
+  the **tradeoff** rather than pinning a value — a run insensitive to zeta is not
+  controlling anything. (2) **The shift energy and the projected energy agree to
+  2.0e-6 across a 100x range of target populations**, and they share no arithmetic
+  — one comes from the population growth rate, the other from a ratio of walker
+  weights. That makes it the strongest gate available at this step: a defect in one
+  would have to be exactly mirrored in the other to escape.
+
+  **F4.3 is the home for the timestep divergence gate F3 could not build.** With a
+  fixed shift, renormalizing turns the propagation into a power iteration whose
+  dominant eigenvector stays the ground state at every dt tried, so instability had
+  nowhere to show. With the population controlled it does — the shift cannot hold
+  the population steady. The scope says to record the outcome honestly if it still
+  does not work, rather than contriving a fixture.
+
+  **F4.1 LANDED (2026-08-31): shift control — and the scoped update formula was
+  WRONG.** The scope gave the standard single-term update
+  `S -= zeta*ln(N/N_prev)/(A*dt)`, which responds to the growth RATE and therefore
+  **never targets a population**: measured, the final population comes out
+  proportional to the starting one (135.7x the target from every start across a
+  1000x range). A second term `xi*ln(N/N_target)` supplies the restoring force;
+  with it the population lands on target from both directions and **the shift
+  accuracy is unchanged** (3.2e-13 either way), so the target term costs nothing.
+
+  Two further corrections: **what zeta trades depends on whether the target term
+  is present** (without it, accuracy vs population tightness; with it, zeta becomes
+  a stability parameter — 0.0 leaves the shift oscillating at 4.6e-1 error, 2.0
+  destabilises it, 5.0 diverges), and **the usable band is system-specific**
+  because the gain is `zeta/(A*dt)` — 0.1-0.5 on the scoping model, much higher on
+  the test Hamiltonian.
+
+  **A mutation-testing finding worth carrying: dropping the `A*dt` denominator
+  PASSED every check**, because it is equivalent to rescaling zeta and xi, which
+  the tradeoff tests deliberately do not pin. The denominator is what makes zeta
+  dimensionless and transferable across dt, so it now has its own gate asserting
+  the scaling directly. **A parameter's units cannot be gated by a test that only
+  asserts the shape of a tradeoff in that parameter.**
+
+  **F4.2 LANDED (2026-08-31): the shift energy, cross-checked against the
+  projected energy.** The two agree to 0.00e+00 (closed shell) and 1.01e-09 (open
+  shell) across a 100x range of target populations. **A gap of exactly zero is
+  suspicious, so independence was verified rather than assumed:** perturbing only
+  the projected energy by 1.0001 makes the cross-check fail at 7.97e-04 while the
+  shift stays correct. Both are also pinned to the exact energy, not only to each
+  other — two estimators can agree by sharing a common upstream defect (the
+  propagator), which agreement alone would not reveal. The equilibration-cut
+  vacuity check is load-bearing: starting 50x off target it improves the answer
+  from 1.14e-02 to 2.19e-13.
+
+  **F4.3 LANDED (2026-08-31): the divergence gate F3 could not build now works.**
+  With the population controlled the boundary is sharp — dt <= 0.26x the diagonal
+  bound settles at target, dt >= 0.30x diverges — where F3's three attempts all
+  failed because renormalizing made it a power iteration whose dominant
+  eigenvector stays the ground state. **What it detects is the CONTROLLER
+  destabilising, not the propagator:** the boundary sits below the true spectral
+  limit (~0.44x), so this gates the controlled dynamics a real run uses, and the
+  number must not be quoted as the propagator's bound. Verified by isolating the
+  controller — with zeta = xi = 0 every timestep "diverges", which is just the
+  exponential growth a frozen shift produces by design.
+
+  **A mutation-testing limitation recorded rather than papered over:** the helper's
+  in-loop blow-up check and its final-ratio return are REDUNDANT on this fixture,
+  so mutating one alone changes nothing and a passing mutation is not evidence of
+  weakness. The helper was still changed from bool to ratio, because a boolean
+  mutated to a constant made the "must not settle" assertions unable to fail —
+  that was a real gap.
+
+  **F4.4 LANDED (2026-08-31): stochastic population control — and it exposed a
+  real gap in F3.2.** `stochastic_round` was built in F1 and **never wired into
+  the spawn**, so spawn weights were continuous and the propagator scale-invariant:
+  the blocked error was **4.2532e-02 at target populations 500 / 2000 / 8000 /
+  32000 alike**, to five significant figures across a 64x range. Adding a
+  `granularity` that rounds each spawn stochastically fixes it.
+
+  **Then the fixture had to move, exactly as the research scope predicted.** With
+  discretization in, the error ROSE with population — 36 determinants at thousands
+  of walkers is 14-889 walkers per determinant, so the space is saturated and there
+  is no sampling left to improve. That is the "walker population would exceed the
+  space" trap named for H2/water, reached from the other direction. Below ~1 walker
+  per determinant the trend is clean: 3.65e-1 -> 5.96e-2 over a 64x range.
+
+  `blocked_standard_error` was ported to C++ and cross-checked against the
+  validated `tests/blocking.py` on AR(1) at five correlation strengths — identical
+  to 1e-10 relative, so the two cannot drift.
+
+  **Two mutations passed and each needed a new assertion:** round-to-nearest
+  instead of stochastic rounding was invisible (F1 gates that property on
+  `stochastic_round` itself, but nothing checked the SPAWN uses it), and the new
+  bias test was mis-sized first — at dt = 0.001 spawns were ~0.04 walkers, so
+  rounding was near-binary with ~100 nonzero events in 200k runs and it scattered
+  **51 % on correct code**. Sizing spawns to straddle the granularity fixes it.
+
+  **F5 SCOPED (2026-08-31) in `docs/FCIQMC_DRIVER_AND_VALIDATION.md`, around one
+  deliverable: a regression case reproducing N2/STO-3G deterministic FCI within
+  its own error bar.** Everything validated so far runs on a SYNTHETIC
+  Hamiltonian — `ToyHamiltonian` respects a real one's sparsity and is checked
+  against exact diagonalization, but it is not a molecule, so nothing yet shows
+  FCIQMC reproduces a chemical answer.
+
+  **Why N2 cannot be a unit test, checked rather than assumed:** it needs a
+  converged SCF for its integrals (`h_eff = C^T H_core C` plus the transformed
+  two-electron array), which means linking the basis/integral/SCF machinery into a
+  gate that currently links one file — and 14 400 determinants is 400x the current
+  fixture, which already uses the whole ~30 s budget. The honest home is a
+  regression case driven by the real binary, so F5 wires FCIQMC into the driver
+  first. Reference measured: **N2/STO-3G total FCI `-107.6529998854`** (~8 s at 4
+  threads).
+
+  Four steps: F5.1 a `run_fciqmc` entry mirroring `run_fci` (sharing its integral
+  transform rather than reimplementing it, or the paths drift); F5.2 input
+  keywords with the seed user-visible, since F3.5's reproducibility contract is
+  worthless otherwise; F5.3 the N2 gate using `metric_within_sigma` — which has
+  had **no production consumer** until now — asserting the error bar is blocked
+  rather than naive (a naive one understates by ~5x, measured) plus fixed-seed
+  reproducibility; F5.4 the determinism decision from the research scope's section
+  6, which must be made explicitly rather than discovered.
+
+  **F4 COMPLETE (2026-08-31): F4.1-F4.5 landed and gated.** Shift control with the
+  target term, the shift energy cross-checked against the projected energy, the
+  timestep divergence gate F3 could not build, stochastic population control, and
+  the initiator approximation. **FCIQMC is now a usable method** on the synthetic
+  fixture: it holds a population, reports two independent estimators with blocked
+  error bars, and supports i-FCIQMC.
+
+  **F4.5's `n_add -> 0` convergence trend is NOT MEASURABLE on the toy fixture,
+  recorded rather than contrived.** The initiator is BINARY there — below n_add
+  ~100 every error is within one blocked sigma of every other, above ~300 the run
+  is frozen with zero variance — because the rule only fires on spawns to
+  UNOCCUPIED determinants and 36 determinants at 200 walkers saturate within a few
+  steps. Same limit F4.4 hit. The trend belongs with the N2 regression gate (F5.3)
+  where 14 400 determinants stay partially occupied; asserting it here would mean
+  tuning a fixture until a curve appeared.
+
+  **Two mutations passed and each needed a new assertion:** a rule blocking ALL
+  spawns from a low-weight parent (not just to unoccupied determinants) was
+  invisible from the energy on a saturated fixture, and now has a direct semantics
+  test; and the order-dependence check was itself wrong — **the control shows the
+  propagator already has insertion-order dependence** (hash-order iteration against
+  a shared RNG), so the test now compares against that control rather than
+  asserting an absolute that was never true.
+
+  **F5.1 LANDED (2026-09-01): FCIQMC runs on REAL molecular integrals.** Until now
+  every gate ran on a synthetic Hamiltonian. `run_fciqmc` is dispatched from the
+  driver on `correlation fciqmc`, and on H2/STO-3G both estimators agree with the
+  exact FCI `-1.1372744062`: shift `-1.1375360199` +/- 2.76e-03 (**0.09 sigma**),
+  projected `-1.1373278832` +/- 1.58e-04 (**0.34 sigma**).
+
+  **The integral transform is SHARED, not reimplemented.** `build_all_mo_ci_setup`
+  was extracted from `run_fci` (a move, not a copy) and both paths call it;
+  verified behaviour-neutral, with N2 still giving `-107.6529998854`
+  digit-identical. The Hamiltonian callbacks wrap `slater_condon_element`, so the
+  two paths cannot disagree about the Hamiltonian — only about how they solve it.
+  That is what makes a future disagreement attributable to sampling rather than
+  plumbing.
+
+  Gated by `h2_fciqmc_sto3g`, **the first production consumer of
+  `metric_within_sigma`** (built at G1 and unused until now): both estimators
+  asserted within 5 of their own blocked error bars, and verified non-vacuous
+  against a wrong reference. **Build-hygiene trap:** a monitor watching one file's
+  timestamp fired on a build predating another edit by a minute, so the first run
+  failed against correct source — **watching one file does not prove the build
+  included every edit.**
+
+  **F5.2 LANDED (2026-09-01): FCIQMC input keywords.** Eleven keywords, each
+  validated at parse time so a bad value fails naming the keyword. **Every
+  parameter verified to change the run** — nine immediately; the tenth
+  (`fciqmc_initiator`) looked inert until investigation showed the probe value was
+  **below the walker scale** (5000 walkers on 4 determinants means every parent is
+  ~1250, so a threshold of 2 never fires; at 100 and 1e9 it bites). Correctly
+  plumbed, same fixture-saturation limit F4.5 hit. **The reproducibility contract
+  holds through the real binary:** seed 4242 twice gives `-1.1382560651`
+  identically, seed 9999 gives `-1.1373518204`.
+
+  **A build-verification trap that DEFEATED the fix for the previous one.** F5.1's
+  lesson was to check every edited file's timestamp against the binary; that check
+  PASSED while the binary still lacked the change, because a relink during an
+  in-flight build can produce a binary newer than its own inputs. A
+  `strings | grep -c` then returned 2 and looked like confirmation — but it matched
+  the **error-message strings** I had written, not the map key. **A substring match
+  on a binary is not evidence the symbol is there, and a timestamp is not evidence
+  a build finished** — test the actual condition (build not running AND exact
+  symbol present, `grep -qx`).
+
+  **SERIAL PERFORMANCE ANSWERED (2026-09-03), and threading is still unbuilt:
+  `docs/FCIQMC_SERIAL_PERFORMANCE.md`.** Opened as "thread FCIQMC"; three SERIAL
+  changes took N2/STO-3G **71.63 s -> 13.74 s (5.21x)**, every one bitwise
+  identical, and FCIQMC still has zero `#pragma omp`. The scope's own ordering rule
+  produced that — *fix the allocation before threading, because threading an
+  allocation-bound loop parallelizes `malloc` contention* — and following it
+  exposed two further serial defects that threading would have hidden.
+
+  | step | change | N2 | share removed |
+  |---|---|---|---|
+  | T1 | fixed-capacity orbital lists | 71.63 -> 40.66 s (1.76x) | malloc 29.5 % -> 1.4 % |
+  | T4 | memoize the diagonal | 40.66 -> 15.57 s (2.61x) | `slater_condon` 53.1 % -> 6.6 % |
+  | — | bin the L1 norm | 15.57 -> 13.74 s (1.13x) | `ordered_l1_norm` 17.0 % -> 0.9 % |
+
+  **T2 (threading the spawn) LANDED (2026-09-03): correct and invariant, 1.57x
+  at 4 threads against a 3.97x ceiling — the gap is diagnosed, not closed.**
+  Full record in `docs/FCIQMC_T2_THREADING.md` (rewritten from scope to answer).
+  Six steps: S1 per-bin RNG (one bug caught — `derive()` is const and does not
+  advance the caller's stream, so the first version replayed an identical
+  frozen trajectory every call; fixed-seed reproducibility PASSED on the
+  broken version, since a frozen run replayed twice is still "reproducible" —
+  it took reading the walker population's own diagnostics to catch it), S2 bin
+  the accumulation (the scope's own "bitwise vs S1" verification instruction
+  was wrong — IEEE double addition is not associative, so a reordering step's
+  correct gate is self-reproducibility + FCI agreement, never bitwise-vs-the-
+  previous-ordering), S3 prefill the T4 memo (bitwise identical, pure
+  mechanical move), S4 add the pragma (correct and invariant at
+  `OMP_NUM_THREADS` = 1/2/4/8, but only 1.51x at 4 threads against 3.97x), and
+  S4.5's R1-R3 (reuse `bin_parents`/`next_bins` instead of reconstructing them
+  every call, closing part of the gap to 1.57x).
+
+  **S4's shortfall was root-caused twice, and the first diagnosis was a red
+  herring caught before code was written on it.** ~185% CPU (not ~400%) and
+  56% of thread-samples in `__psynch_cvwait` pointed at imbalance; a 3.2x
+  spread in summed `|weight|` per bin looked like the cause, but direct
+  per-thread `draw_excitation` counts were nearly identical across threads —
+  weight does not predict per-parent cost when `n_spawn_attempts` is a
+  per-run constant. A greedy bin-to-thread packing scheme was scoped against
+  this false lead and never built. The real cause, isolated by a standalone
+  microbenchmark: ~123us of the ~249us/call average is pure container
+  construction (64 fresh `unordered_map`s + 64 fresh `vector`s) that happens
+  **before** the parallel region starts — no thread partitioning scheme can
+  touch cost paid once per call before any thread forks.
+
+  **R1/R2 fixed half of it, and the honest result is that the barrier-wait
+  share DID NOT MOVE.** Reusing `bin_parents` (write-once grouped input, so
+  bitwise identical to S4 — verified) and `next_bins` (reordering-sensitive,
+  since `unordered_map::clear()`-and-reuse does not reproduce fresh-
+  construction's bucket layout, verified standalone) as function-local
+  statics gave a real, measured 1.51x -> 1.57x gain (16.6s/10.6s at 1/4
+  threads on N2), but re-profiling still showed 56.4% `__psynch_cvwait` —
+  statistically unchanged.
+
+  **FOLLOW-UP INVESTIGATION (2026-09-03), fully diagnosed via an in-binary
+  phase probe rather than guessed from disjoint microbenchmarks.** A
+  temporary env-gated timer (`PLANCK_FCIQMC_PHASE_PROBE`, same
+  inert-unless-set / deleted-after-answering discipline as the S3 miss-probe)
+  split every remaining serial phase plus the parallel region on the real N2
+  gate. At 4 threads: `next_bins` clear 15.3us, `bin_rngs` construction
+  25.9us, `bin_parents` partition 5.9us, the parallel region itself 78.5us
+  (2.52x speedup over its 1-thread 197.6us — the threading works as
+  designed), and **the fixed-bin-order merge 48.2us — larger than any single
+  phase except the parallel region, and never targeted by R1/R2.** Summed,
+  serial-outside-the-pragma work (15.3+25.9+5.9+48.2 = 95.3us) now
+  **exceeds** the parallel region (78.5us), which structurally caps the
+  achievable speedup regardless of thread balance — this is why the barrier-
+  wait share cannot fall below ~50% at the current design. A secondary,
+  unexplained observation: merge time itself rose 41.5us -> 48.2us (+16%,
+  reproducible) from 1 to 4 threads on identical work, plausibly post-join
+  cache/NUMA locality loss — flagged, not chased. Full record in
+  `docs/FCIQMC_T2_THREADING.md`. Parallelizing the merge would reintroduce
+  the completion-order hazard the whole binning design exists to avoid (the
+  merge must stay in fixed bin order for invariance), so any further step
+  here is a smaller, careful target, not "thread more of it" — left unbuilt,
+  same Q1 rationale as everything else in this section.
+
+  Cross-thread-count invariance holds throughout at `atol = 0.0`
+  (`h2_fciqmc_threads1/4`, all four FCIQMC gates, all four non-QMC FCI gates
+  sharing `build_all_mo_ci_setup`). The ceiling itself moved three times as
+  serial steps landed — 2.86x (post-T4) -> 3.97x (post S1-S3) -> back through
+  the same numbers depending on measurement point — the standing lesson: **re-
+  measure the ceiling immediately before adding threads, never quote an
+  earlier number.**
+
+  **Both remaining levers were investigated (2026-09-03); one was tried and
+  reverted, one was ruled out before writing code.** Full record in
+  `docs/FCIQMC_T2_THREADING.md`.
+
+  **The merge (48.2us/call) was fixed the R1/R2 way and made things WORSE, on
+  two independent grounds neither of which a first-pass microbenchmark
+  caught.** Reused `next` (a static, `.clear()`-ed each call) the same way
+  `next_bins`/`bin_parents` were reused, reasoning it was reordering-safe
+  since `next`'s own bucket layout cannot affect the fixed sequence of
+  `.add()` calls into it. **That reasoning was wrong**, caught only by
+  bisecting the real binary (bitwise identical through 70 total
+  `propagate_stochastic` calls, diverging by 80): a reused map retains its
+  PEAK bucket count after `.clear()`, so a later call with fewer entries than
+  an earlier peak iterates in a different order than a fresh map with
+  identical contents — the same reassociation mechanism R2 already found,
+  misapplied here without re-checking it applied. **But correctness was never
+  the reason to revert — speed was, on a second and separate mechanism the
+  map-reuse benchmark also missed:** `next` is the function's RETURN VALUE,
+  unlike the purely-internal `next_bins`/`bin_parents`, so making it `static`
+  disables NRVO on `return next;` and forces a full copy every call. A
+  standalone benchmark isolating exactly that (fresh-local-with-NRVO vs
+  static-with-forced-copy, identical contents) measured 65.3us/call vs
+  97.3us/call — the forced copy costs more than the reuse saves. End to end
+  on N2: 16.6s/10.6s (1/4 threads) before, 17.9s/11.8s after, reproduced.
+  **Reverted — `next` stays a fresh local.**
+
+  **`bin_rngs` (25.9us/call) was measured and judged not worth fixing before
+  any code was written.** It is safe from both of the merge's hazards (a
+  `std::vector`, index-accessed, never returned), but a standalone
+  microbenchmark of persist-and-overwrite-by-index vs fresh-reserve-and-
+  push_back showed only ~4% (26.8 -> 25.8us/call) — the dominant cost is
+  constructing and seeding 64 `std::mt19937_64` engines from scratch, which
+  is unavoidable work given S1's own correctness requirement that each call's
+  64 bin streams be fresh and independent, not container overhead. Left
+  unfixed.
+
+  **S5 (extending the invariance gate to an N2-sized pair) is the one piece
+  still unbuilt.** `h2_fciqmc_threads1/4` runs on 4 determinants against
+  `kBins = 64`, so at most one parent lands in each bin and a merge-order
+  defect can never surface there — an N2 pair is needed, shown to go red
+  under a perturbed (reversed) merge order before it is trusted.
+
+  **Value, unchanged from the serial answer's own conclusion:** the payoff
+  scales with how much FCIQMC is run (proportional to total runtime, not
+  walker count), and nothing in the tree currently runs it at a size where the
+  3.97x-vs-1.57x gap matters. The threading is correct and available at
+  1.57x, and both further levers investigated here are dead ends for the
+  current design — closing the gap further would need a different mechanism,
+  not more of the R1/R2 pattern, and is a decision for when a real target
+  exists.
+
+  **Three lessons, each of which cost a wrong number first.** (1) **A profile share
+  is a lower bound on what removing that work is worth** — three for three now
+  (T1 1.76x against an Amdahl cap of 1.42x, T4 2.61x against 1.83x, the sigma
+  build 4.8x against ~2.1x). (2) **Judge such a change by the profile share it
+  removes, not only the clock** — the L1-norm binning bought 1.13x and looks like a
+  dud, while taking that work from 17.0 % to 0.9 %. (3) **A model of a workload is
+  not a measurement of it** — a churn model said the T4 memo needed an eviction
+  policy; measurement said 1820 entries and 85 KB.
+
+  **Profile parsing produced two plausible-looking wrong numbers.** `sample` emits a
+  call tree with `+ ! : |` prefixes and *inclusive* counts: a naive `^\s*(\d+)`
+  regex reported `slater_condon_element` at **0.2 %** when it was the dominant frame
+  at 53.1 %, and computing an inclusive share by depth-matching siblings gave
+  **3909.9 %** while taking the largest root gave **100.0 %** (the window had caught
+  one phase). Build real parent links from the depth stack, exclude nodes nested
+  under another node of the same function, and sample the whole run.
+
+  **Value: nothing currently needs this.** The method is validated but unused —
+  Q1 remains unanswered in practice and the largest active space in the tree is
+  `nactorb 6`. The three serial changes stand on their own; **T2 is worth building
+  when a target exists**, and its ceiling re-measured then rather than quoted.
+
+  **Build-hygiene trap, cost a wasted 25-minute build:** T1 was stashed to keep an
+  unverified change out of a commit *while its build was still running*, so `make`
+  compiled a file no longer in the tree and reported `MAKE_EXIT=0`. **A build in
+  flight is not pinned to the working tree** — kill it before stashing.
+
+  **F5 COMPLETE, and the whole F1-F5 ladder with it (2026-09-02).** FCIQMC runs
+  from an input file and reproduces exact FCI on N2/STO-3G — shift 0.32 sigma,
+  projected 0.41 sigma, gated by `n2_fciqmc_sto3g` (extended, 69 s). The scope
+  docs have been rewritten as answers: `FCIQMC_SAMPLING_AND_DYNAMICS.md`,
+  `FCIQMC_POPULATION_CONTROL.md`, `FCIQMC_DRIVER_AND_VALIDATION.md`, with
+  `FCIQMC_RESEARCH_SCOPE.md` keeping the case for the work and the measurements
+  bounding it.
+
+  **The method is implemented, validated, and UNUSED.** Q1's answer has not
+  changed: nothing in this repository wants the window FCIQMC opens. Cr2
+  CAS(12,18) is a real blocked calculation on a molecule the code already handles,
+  but nobody has asked for its binding curve. **Parallelism is scoped and its
+  determinism policy decided, and is worth building the day a target exists — not
+  before.**
+
+  **F5.4 DECIDED (2026-09-02): no exception — FCIQMC keeps bitwise thread-count
+  invariance.** The research scope's section 6 set the burden as "show why FCIQMC
+  cannot do what the FCI sigma build did", and **it is not met**: partitioning the
+  PARENTS by `hash(parent) % kBins` and merging bins in fixed order gives a result
+  independent of the order threads visit parents, which is what invariance
+  requires. Verified on a model of the spawn (in-order, reversed and shuffled visit
+  orders all identical).
+
+  Two things make it *easier* than the sigma build: binning by determinant is
+  invariant even to the BIN COUNT (each determinant maps to one bin regardless, so
+  its contributions accumulate in the same order — the sigma build binned by index
+  range, where a determinant could move between bins), and F1's
+  `RandomSource::derive(index)` already provides shard-count-independent streams.
+
+  **The trap: binning by the CHILD determinant is not sufficient** — it fixes which
+  accumulator receives a spawn but not the order arrivals reach it. The partition
+  must be over the WORK (parents), not the output.
+
+  **Gated before the threading exists** by `h2_fciqmc_threads1/4`: same input at
+  `OMP_NUM_THREADS` 1 and 4, compared at `atol = 0.0`. Passes trivially today
+  (FCIQMC has zero pragmas) — the point is that adding threads cannot silently
+  break it. Verified non-vacuous.
+
+  **F5.3 LANDED (2026-09-02): both estimators reproduce exact FCI on N2/STO-3G**,
+  gated by `n2_fciqmc_sto3g` (extended, 69 s) — shift 0.32 sigma, projected 0.41
+  sigma against `-107.6529998854`. Verified non-vacuous: injecting `dt = 0.010`
+  fails on three independent grounds.
+
+  **The projected energy was NEVER a broken estimator, and it took three attempts
+  to see that.** (1) `c_0` collapse — refuted, raising the population 10x made it
+  worse. (2) Mean-of-ratios instead of ratio-of-sums — a real defect and the third
+  appearance of `E[A/B] != E[A]/E[B]` here, but worth only 1.1x. (3) **The real
+  cause: the reference determinant was oscillating in SIGN.** At dt = 0.010 mean
+  `|c_0|` was 91.75 while mean *signed* `c_0` was -7.50, so the denominator nearly
+  cancelled — the timestep instability F4.3 gates, where `(1 - dt(H_ii - S))` drops
+  below -1 and the weight flips every step. **The projected energy was correctly
+  reporting a real problem with the run.**
+
+  **THE SHIFT ENERGY DID NOT NOTICE:** at dt = 0.010 it read **0.14 sigma** from
+  exact while the dynamics were unstable, because it responds to the total
+  population. **A single-estimator implementation would have reported a
+  perfect-looking answer.** The driver now warns on sign instability directly and
+  says the shift may still look converged; the gate asserts
+  `not_contains: SIGN-UNSTABLE`.
+
+  **F5.3 (superseded note from 2026-09-01):**
+  The shift energy agrees across a 10x timestep range — 0.5 / 1.6 / 0.1 sigma at
+  dt = 0.001 / 0.005 / 0.010, recovering 98.6 / 92.4 / 100.5 % of correlation
+  against `-107.6529998854`. **The dt-independence is the evidence**, not any
+  single run. This is the first validation on a real molecule at a walker
+  population BELOW saturation (0.69 walkers/determinant), where sampling is
+  genuine rather than covering the space.
+
+  **Equilibration was the first error:** `dt = 0.001` with 2000 steps is tau = 2,
+  at which 14-82 % of an excited component survives; the shift recovered only
+  74.7 % of correlation. **A small timestep makes a given step count a SHORT time,
+  not a long one.**
+
+  **The projected energy had a real defect, and the first diagnosis was WRONG.**
+  Hypothesis was `c_0` collapse; a falsifiable prediction (raise the population and
+  it recovers) was made and **refuted** — 10x more walkers on the reference made it
+  worse (deviation 1.01 -> 1.98, error bar 0.34 -> 1.70), which no sampling-noise
+  problem does. **The real cause is averaging RATIOS instead of taking a RATIO OF
+  SUMS** — `E[A/B] != E[A]/E[B]`, **the same inequality this project has now hit
+  three times** (F2.5's acceptance-rate correction at 1.72x wrong, F3.4's
+  documented bias, and here). Written up twice, then implemented wrong anyway.
+  Proof from existing data: two runs at *identical config and seed* differing only
+  in the reference-weight threshold gave -99.19 and -106.64, a **7.5 Eh** move from
+  a threshold change — only a heavy-tailed distribution behaves that way.
+
+  **The fix (ratio of sums) is written and syntax-checked but NOT verified** — the
+  build was killed mid-flight, so the binary predates it. Next: re-run to confirm,
+  then add the regression case with `n_sigma` from observed error bars, a
+  fixed-seed reproducibility assertion, and a suite-placement decision from timing.
+
+  **Q1 CANDIDATE FOUND (2026-08-31): Cr2, and it is TWO ATOMS.** Surveying the
+  standard multireference benchmarks against the measured boundary, almost
+  everything canonical is already reachable (N2/C2 full valence, benzene and
+  naphthalene pi, [Fe2S2], and Cr2 itself at the usual CAS(12,12), 1.3 h). The
+  smallest genuinely blocked case with real chemical standing is **Cr2 at
+  CAS(12,18)**: 344.6M determinants, ~2 yr of FCI, **2.76 GB per CI vector** and
+  ~22 GB for a Davidson subspace. The 12 active electrons are the 3d^5 4s^1
+  valence on each atom and the sextuple Cr-Cr bond is the textbook single-reference
+  failure, so the large active space is chemically motivated rather than invented.
+  **It is the first case where BOTH walls fail** — elsewhere the finding was that
+  time binds and memory does not (n_act 14 is a 0.09 GB vector) — and it is
+  **inside the existing representation** (`kMaxPackedSpatialOrbitals` = 31), so
+  only the determinant count blocks. Verified runnable: Cr is in sto-3g/6-31g/
+  cc-pVXZ, Cr2/STO-3G RHF converges in 44 iterations, and the CAS(12,12) rung runs.
+  Input committed at `tests/inputs/exploratory/fciqmc/cr2_casscf_target.hfinp`
+  (NOT a regression case). **This is a candidate, not a mandate** — it shows a real
+  blocked calculation exists on a molecule the code already handles; it does not
+  establish that anyone wants the Cr2 binding curve enough to justify the work.
+
+  **Q2 ANSWERED YES (2026-08-31). G1-G4 are built and pass in 2.0 s as CTest
+  `planck-statistical-gate`.** A stochastic method *can* be validated here: a
+  `metric_within_sigma` runner assertion, a Flyvbjerg-Petersen blocking analysis
+  that recovers a known tau across a 39x range, a bitwise fixed-seed harness with
+  working negative controls, and an end-to-end trivial estimator whose sigma
+  scales as N^-0.478 (theory -0.5) and is *calibrated* (rms(dev)/sigma ~ 1) rather
+  than merely conservative. **The machinery is reusable, not throwaway** —
+  `metric_within_sigma` is in the runner and `tests/{blocking,reproducibility,
+  mc_estimator}.py` are independent of FCIQMC by construction. **Q2 no longer
+  blocks; Q1 still does** — nothing in the tree wants n_act >= 13, and only a
+  person can name a target.
+
+  **Three findings, each of which cost a wrong result first:** (1) **a fixture can
+  be too STRUCTURELESS** — the first G4 population was i.i.d. Gaussian and a
+  mutation restricting the sampler to half the space came back GREEN, because with
+  i.i.d. values every sub-range has the same mean, so real sampler bias moved the
+  answer only 0.58 sigma; a trending population makes the same mutation 25.9 sigma
+  out and catches a subtler 90%-coverage one. This is the **inverse** of the
+  `CCGEN_MERGE_TRANSPOSES` trap where a fixture was too GENERAL — **a fixture must
+  share the structure whose violation you intend to detect.** (2) **Python bytecode
+  caching can invalidate a mutation test silently** — a `cp` restore preserving the
+  mtime left a stale `.pyc` running the MUTATED module while the file on disk was
+  correct, misleading in either direction; clear `__pycache__` between mutation
+  runs. (3) **The naive standard error understates sigma by up to 6.6x** on
+  correlated data, so every gate downstream of it would pass — which is why the
+  blocking analysis is gated on synthetic AR(1) with an analytic answer, never on
+  real output.
+
+  **Q2 was SCOPED as a four-step ladder (G1-G4) that writes the gate BEFORE any
+  FCIQMC.** G1 a `metric_within_sigma` runner check (the runner today has only
+  exact comparisons — `metric_close/le/ge/le_metric/close_case`, no way to express
+  "within N sigma"); G2 a blocking analysis gated on **synthetic AR(1) series with
+  known tau**, never on real output, because a blocking analysis that under-reports
+  sigma makes every downstream gate pass; G3 a fixed-seed reproducibility harness
+  proven to FAIL on an injected seed perturbation before it is trusted; G4 a
+  deliberately trivial stochastic estimator end-to-end, asserting the mean is within
+  3 sigma **and that sigma shrinks as sqrt(N)** — the slope is what catches a biased
+  sampler that a mean-only check cannot. No walkers, no `p_gen`, no initiator
+  anywhere in G1-G4. If G2 or G4 cannot be made to pass, that kills the item before
+  a walker container exists; if they pass, the machinery is reusable rather than
+  thrown away.
+
+  **The allocation prerequisite this scope named is now satisfied.** It warned that
+  building the spawn on a `slater_condon_element` that heap-allocated per call
+  would inherit a ~2x penalty; that allocation is gone (53 % -> 0.1 % of profile),
+  and the function is shared, so any FCIQMC inherits the fix.
+
+  **One structural tension worth deciding explicitly rather than discovering:**
+  every parallel path in Planck is bitwise thread-count-invariant by design and by
+  gate. FCIQMC's natural parallelization is not — the annihilation sum depends on
+  arrival order. Either accept a fixed-order reduction, or document FCIQMC as the
+  one path where that rule does not hold. **Do not make that exception silently.**
+  **F3 sharpens this rather than softening it:** it threaded a scatter into a
+  shared vector — the closest analogue in the tree to FCIQMC's spawn — and *kept*
+  bitwise invariance for `kBins x dim x 8` bytes of fixed-partition accumulators,
+  at no measurable serial cost and 4.8 % idle. The "costly fixed-order reduction"
+  option now has a worked precedent with a measured price, so the burden is to show
+  why FCIQMC cannot do what the sigma build did.
+
 ## Verification and regression gaps
 
 - **The ccgen Python suite's NINE standing failures are FIXED (2026-08-29); the
@@ -241,45 +1150,62 @@ were corrected in the same pass: `CCGEN_UNRESTRICTED_CC` (U0) and
   now landed
 - Analytic Hessian remains unimplemented; frequencies are currently semi-numerical
 - DFT imaginary-mode following is not implemented
-### TICKET: MPI rank-split the DFT grid layer (Gap 2) — the measured DFT scaling cap
+### HPC campaign — what is left (verified against the tree 2026-08-30)
 
-**Priority: highest DFT-HPC item.** This is the single change that gives DFT
-HF-like MPI scaling.
+Full measured rescope in `docs/HPC_REMAINING_SCOPE.md`. **Tiers 3 and 1 are done
+and measured** for the default engine, HF and DFT: the `planck-mpi` front end, the
+distributed direct-SCF Fock build (#146), the DFT J/K build (#151), and the **DFT
+grid rank-split (#156 — Gap 2, CLOSED)**; `src/dft/driver.cpp` carries the
+`Mpi::rank`/`size`/`allreduce_inplace` split. This entry previously described Gap 2
+as the highest open DFT-HPC item and gave it a full ticket; it had already landed.
 
-**Measured problem** (`scale.json`, Notchpeak notch460, post-#151, 6-31g/os):
-DFT strong-scaling walls at **3.5× on 16 ranks (22% efficiency) at nb=208 and
-degrades to 20% at nb=312**, while HF on the same ladder holds **10× / 63% and
-rises with size**. The DFT/HF per-iteration ratio grows 4.8×→10× from nb=104 to
-416 — because #151 distributed the J/K but the grid is still replicated, so the
-grid's share of DFT wall time rises with both system size and rank count.
+Measured on `scale.json` (notch386, 6-31g, os, 1 thread/rank): HF 42-46 %
+efficiency at 32 ranks and near-linear to 16; DFT 46-65 % and **rising** with
+system size. Both DFT walls — memory and scaling — are closed.
 
-**Root cause:** `grep -rn "Mpi::\|USE_MPI" src/dft/` is empty. Every rank
-rebuilds the full grid and evaluates the full XC. The grid loops are
-OMP-parallel as of #152 (`xc_grid.cpp:83`, `if (!omp_in_parallel())`) but have
-**no MPI rank split** — OMP threads work within a rank; nothing distributes
-across ranks. (This supersedes the older "grid loops are still serial" note —
-they are threaded now; what's missing is the rank split.)
+Remaining, in the doc's value order:
 
-**The work:**
-- Partition grid points (or whole Becke atomic batches) by rank in
-  `evaluate_density_on_grid` / the `xc_grid.cpp` density+XC loops.
-- Reduce the XC matrix (`nb²`) across ranks with `Mpi::allreduce_inplace`,
-  alongside the existing Fock reduce — one more reduction, not a new pattern.
-- **Determinism constraint (load-bearing):** the DFT XC reduction is the
-  historical jitter site (see the DFT XC Reduction Determinism note). The
-  cross-rank sum MUST be in fixed rank order, never completion order, never
-  `omp critical`. This is the medium-risk part of an otherwise ~M change.
+- **Gap 3 — no scale-proving fixture in CI (~S, the #1 item).** Every regression
+  input is <= 6 atoms, so nothing fails if distribution silently regresses to
+  replication. The cheap fix is one 16-water/6-31g (nb=208) case asserting
+  `energy(-n 2) == energy(-n 4) == serial` **bitwise** — a correctness tripwire at
+  a size where a partition bug can actually manifest, not a speed measurement.
+  It is what stands between "DFT scales" (measured by a hand-run harness) and
+  "DFT scaling cannot silently regress".
+- **Gap 1 — two of four engines silently replicate (~S).** The one-shot
+  `_compute_2e` tensor builds in HGP and Rys are not MPI-distributed; both carry
+  an explicit in-tree admission (`hgp.cpp:1392`, `rys.cpp:1460`). `mpirun -n 8`
+  with `engine hgp` in conventional mode is *correct but pointless* — every rank
+  does 100 % of the work. OS already has the pattern (6 lines plus one
+  `allreduce_inplace`). **Decide one of two — stripe them, or reject `-n > 1` with
+  a clear message — but do not leave it silent.** Arguably YAGNI: HPC runs use
+  direct SCF, which is already striped for every engine.
+- **Gap 5a — post-HF OpenMP: PARTIALLY CLOSED (2026-08-30).** The gap was that
+  every `src/post_hf/cc/*.cpp` backend and every generated kernel had **zero**
+  `#pragma omp`. The **generated** side is now threaded: `planck_tensor_cpp.py`
+  emits `collapse(3)` behind `CCGEN_OMP_COLLAPSE`, measured **3.22x at 4 threads**
+  with energies bitwise identical across thread counts
+  (`docs/CCGEN_CC_OPENMP.md`). **Still open: the hand-written path** —
+  `tensor_backend.cpp` has 0 pragmas, and MP2 is unprofiled. The gap's own advice
+  still applies: profile first, because which post-HF path is the real wall-time
+  sink at a realistic size has never been measured. Its determinism constraint
+  (scalar-accumulator terms are not thread-invariant under a naive `reduction`)
+  was handled on the generated side by keeping the inner summed loop serial
+  within a thread.
+- **Gap 5b — dense post-HF MPI stripe (~M).** Untouched: `grep -rl "Mpi::"
+  src/post_hf/` is empty. The reclassification is the useful part — RI is a
+  *memory* strategy, not a distribution prerequisite, so the dense MP2/CC
+  contractions can be rank-striped on the outer MO index today. RI-post-HF
+  distribution stays the separate, memory-motivated tail (Tier 2).
+- **DFT nb=416 fails to CONVERGE, not OOM.** 32-water RKS hits max_cycles at the
+  serial baseline (4.8 GB, it ran and iterated). A convergence-robustness item
+  (guess/DIIS/damping at large water chains), **wholly separate from the HPC
+  track** — do not conflate it with a scaling defect.
 
-**Acceptance:**
-- `energy(-n k) == energy(serial)` bitwise across k ∈ {1,2,4,8,16} on a DFT
-  case at nb where a partition bug bites (16-water B3LYP, nb=208). This is also
-  Gap 3's missing CI tripwire — land them together.
-- DFT strong-scaling efficiency at 16 ranks rises materially off the measured
-  22% baseline; HF-like (>60%) is the target, grid being the last serial piece.
-
-**Not in scope:** grid layer already OMP-threaded (#152); this is MPI only.
-The `277ba10` (#151-only, pre-#152) attribution split is write-up-only and does
-not block this. Full measured rescope in `docs/HPC_REMAINING_SCOPE.md`.
+**Closed since that doc was written:** Gap 4 (`scale_bench.py`'s Q2 verdict now
+keys on the DFT RSS nb-exponent rather than a raw >50x ratio, `2b764b21`) and the
+Q1 verdict (Karp-Flatt serial fraction rather than efficiency-at-max-ranks,
+`ebf8ae5c`).
 - Coarse/low-quality DFT grids can still show noticeable orientation sensitivity
   under symmetry reorientation; the validated symmetry-on gradient regression is
   intentionally pinned to `grid ultrafine`

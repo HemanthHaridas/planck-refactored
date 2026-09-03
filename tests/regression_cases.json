@@ -1321,7 +1321,7 @@
         "Zero-point energy :",
         "Converged :                   true"
       ],
-      "_pyscf_reference": "d-function guard for the range-separated (HSE06) Hessian/optimizer path. PySCF 2.13.0 RKS HSE06/6-31G* cart, geomTRIC opt + analytic Hessian, grids.level=4: freqs 1722.07/3794.20/3919.88 cm-1, E=-76.33242903 Eh. Planck (fine grid, semi-numerical Hessian): 1722.70/3789.39/3915.57 cm-1, E=-76.33235594 Eh -> max |Δfreq| 4.8 cm-1, ΔE ~7e-5 Eh (different grids/convergence, nearby stationary points). Confirms no d-function failure mode; smoke-gated only (semi-numerical freqs drift with grid/step, so no exact cm-1 pin)."
+      "_pyscf_reference": "d-function guard for the range-separated (HSE06) Hessian/optimizer path. PySCF 2.13.0 RKS HSE06/6-31G* cart, geomTRIC opt + analytic Hessian, grids.level=4: freqs 1722.07/3794.20/3919.88 cm-1, E=-76.33242903 Eh. Planck (fine grid, semi-numerical Hessian): 1722.70/3789.39/3915.57 cm-1, E=-76.33235594 Eh -> max |\u0394freq| 4.8 cm-1, \u0394E ~7e-5 Eh (different grids/convergence, nearby stationary points). Confirms no d-function failure mode; smoke-gated only (semi-numerical freqs drift with grid/step, so no exact cm-1 pin)."
     },
     {
       "id": "water_radical_cation_ump2_gradient_smoke",
@@ -2092,7 +2092,7 @@
       "contains": [
         "Point Group :                 C2v",
         "Vibrational Frequencies :",
-        "Mode    Symmetry    Frequency (cm⁻¹)",
+        "Mode    Symmetry    Frequency (cm\u207b\u00b9)",
         "1  A1",
         "2  A1",
         "3  B2",
@@ -2764,6 +2764,134 @@
       ]
     },
     {
+      "id": "h2_fciqmc_sto3g",
+      "input": "tests/inputs/regression/post_hf/h2_fciqmc_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "FCIQMC :",
+        "Shift energy",
+        "Projected energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_present",
+          "metric": "fciqmc_shift_error"
+        },
+        {
+          "type": "metric_present",
+          "metric": "fciqmc_projected_error"
+        },
+        {
+          "type": "metric_within_sigma",
+          "metric": "fciqmc_shift_energy",
+          "sigma_metric": "fciqmc_shift_error",
+          "n_sigma": 5.0,
+          "expected": -1.1372744062
+        },
+        {
+          "type": "metric_within_sigma",
+          "metric": "fciqmc_projected_energy",
+          "sigma_metric": "fciqmc_projected_error",
+          "n_sigma": 5.0,
+          "expected": -1.1372744062
+        }
+      ]
+    },
+    {
+      "id": "h2_fciqmc_threads1",
+      "input": "tests/inputs/regression/post_hf/h2_fciqmc_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "env": {
+        "OMP_NUM_THREADS": "1"
+      },
+      "expected_exit_code": 0,
+      "contains": [
+        "Shift energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_present",
+          "metric": "fciqmc_shift_energy"
+        }
+      ]
+    },
+    {
+      "id": "h2_fciqmc_threads4",
+      "input": "tests/inputs/regression/post_hf/h2_fciqmc_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "env": {
+        "OMP_NUM_THREADS": "4"
+      },
+      "expected_exit_code": 0,
+      "contains": [
+        "Shift energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close_case",
+          "metric": "fciqmc_shift_energy",
+          "case": "h2_fciqmc_threads1",
+          "atol": 0.0
+        },
+        {
+          "type": "metric_close_case",
+          "metric": "fciqmc_projected_energy",
+          "case": "h2_fciqmc_threads1",
+          "atol": 0.0
+        }
+      ]
+    },
+    {
+      "id": "n2_fciqmc_sto3g",
+      "input": "tests/inputs/regression/post_hf/n2_fciqmc_sto3g.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "expected_exit_code": 0,
+      "contains": [
+        "SCF Converged after",
+        "FCIQMC :",
+        "Shift energy",
+        "Projected energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_present",
+          "metric": "fciqmc_shift_error"
+        },
+        {
+          "type": "metric_present",
+          "metric": "fciqmc_projected_error"
+        },
+        {
+          "type": "metric_within_sigma",
+          "metric": "fciqmc_shift_energy",
+          "sigma_metric": "fciqmc_shift_error",
+          "n_sigma": 5.0,
+          "expected": -107.6529998854
+        },
+        {
+          "type": "metric_within_sigma",
+          "metric": "fciqmc_projected_energy",
+          "sigma_metric": "fciqmc_projected_error",
+          "n_sigma": 5.0,
+          "expected": -107.6529998854
+        }
+      ],
+      "not_contains": [
+        "SIGN-UNSTABLE"
+      ],
+      "timeout_s": 180
+    },
+    {
       "id": "water_fci_sto3g",
       "input": "tests/inputs/regression/post_hf/water_fci_sto3g.hfinp",
       "tags": [
@@ -2963,7 +3091,7 @@
         "Computing analytic nuclear gradient",
         "Nuclear Gradient (Ha/Bohr) :"
       ],
-      "_pyscf_reference": "PySCF 6-31g* RHF, mol.cart=False (spherical AO), water at the input geometry: E=-76.009125642007 Eh, gradient max|g|=1.47293665e-2 Ha/Bohr, rms|g|=6.9308072e-3 Ha/Bohr. Reference computed by tests/pyscf-style script; per-component values: O z = +0.0147293665, H y = ±0.0073107264, H z = -0.0073646832 Ha/Bohr.",
+      "_pyscf_reference": "PySCF 6-31g* RHF, mol.cart=False (spherical AO), water at the input geometry: E=-76.009125642007 Eh, gradient max|g|=1.47293665e-2 Ha/Bohr, rms|g|=6.9308072e-3 Ha/Bohr. Reference computed by tests/pyscf-style script; per-component values: O z = +0.0147293665, H y = \u00b10.0073107264, H z = -0.0073646832 Ha/Bohr.",
       "checks": [
         {
           "type": "metric_close",
