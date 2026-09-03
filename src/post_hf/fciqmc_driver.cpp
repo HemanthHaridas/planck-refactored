@@ -243,6 +243,14 @@ namespace HartreeFock::Correlation
         // wavefunction. The sign is the whole point -- a magnitude-only average
         // would agree with a broken sampler that got every phase wrong.
         std::unordered_map<DetKey, double, DetKeyHash> signed_population;
+        // Accumulating it is an O(n_occupied) map update on EVERY sampling step,
+        // and its only consumer is the `<N_I>/<N_0>` dump below, which prints at
+        // Verbose. Measured on N2/STO-3G it was a material part of the 9.4 % of
+        // runtime spent in this driver loop rather than in the propagator, so it
+        // is gated on the same condition the consumer uses -- not on a separate
+        // flag, which could drift out of agreement with it.
+        const bool want_coefficient_ratios =
+            calc._output._verbosity >= Verbosity::Verbose;
         const int total_steps = opt.equilibration_steps + opt.sampling_steps;
 
         for (int step = 0; step < total_steps; ++step)
@@ -364,8 +372,9 @@ namespace HartreeFock::Correlation
             if (step >= opt.equilibration_steps)
             {
                 shift_samples.push_back(ctl.shift);
-                for (const auto &[det, w] : pop)
-                    signed_population[det] += w;
+                if (want_coefficient_ratios)
+                    for (const auto &[det, w] : pop)
+                        signed_population[det] += w;
                 // THE REFERENCE WEIGHT THRESHOLD IS NOT 1e-12 HERE.
                 //
                 // projected_energy defaults to rejecting only c_0 == 0, which is
@@ -526,7 +535,7 @@ namespace HartreeFock::Correlation
         // Ratios rather than raw populations because a walker population is
         // normalised by its own target and an FCI eigenvector by its norm; only
         // the ratio against the reference is common to both.
-        if (calc._output._verbosity >= Verbosity::Verbose && !signed_population.empty())
+        if (want_coefficient_ratios && !signed_population.empty())
         {
             std::vector<std::pair<DetKey, double>> rows(signed_population.begin(),
                                                         signed_population.end());

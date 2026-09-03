@@ -116,15 +116,31 @@ accumulation). It grew 896 -> 1046 samples at 4x walkers, exactly as
 per-iteration work does. **The share is stable, not rising**, which is the
 opposite of what the argument predicted.
 
-**Where that 9.4 % actually goes, and a cheaper lever than threading.** The driver
+**Where that 9.4 % actually goes — DONE, and smaller than guessed.** The driver
 does two O(n_occupied) passes per sampling step: `ctl.update` on the norm, and
 `signed_population[det] += w` (`fciqmc_driver.cpp:368`), which accumulates the
 coefficient-ratio dump. **The second exists only to support the `<N_I>/<N_0>`
-diagnostic** and runs unconditionally on every sampling step of every run, even
-though the dump is printed only at `verbosity verbose`. Gating that accumulation
-on the verbosity would remove most of the 9.4 % outright — a smaller, serial,
-determinism-free change that raises T2's ceiling for free. **Check this before
-building S1.**
+diagnostic** and ran unconditionally on every sampling step of every run, even
+though the dump is printed only at `verbosity verbose`. Gated on the same
+predicate the dump's own printing condition uses (`want_coefficient_ratios`, one
+variable read at both sites so they cannot drift apart).
+
+**Measured, not guessed: ~2.3 %, not "most of 9.4 %".** My first estimate assumed
+this accumulation dominated the driver-loop bucket; it does not. Three repeat runs
+each, `normal` verbosity, old binary vs gated:
+
+| | mean wall |
+|---|---|
+| old (unconditional) | 13.00 s |
+| gated | **12.70 s** |
+
+A consistent but modest ~0.30 s / 2.3 % — real (faster on all three pairs), but
+the driver-loop bucket is dominated by something else, most likely `ctl.update`'s
+norm call, not by this accumulation. **Verified correct on both sides of the
+gate**, not just fast: `verbosity normal` output bitwise identical to the old
+binary with the dump absent, and `verbosity verbose` output bitwise identical with
+the 21-line `<N_I>/<N_0>` dump still printing — the case an incautious gate
+condition would silently break while still passing the `normal` check.
 
 **Consequence for the decision:** the ratio is roughly fixed near 3x, so the
 payoff is proportional to how much the method is actually run — 8 s on the N2
