@@ -54,7 +54,38 @@ Three properties, each checked in the source rather than assumed:
 
 ## Steps
 
-### S0 — re-measure the ceiling (no code)
+### S0 — re-measure the ceiling (no code) — **DONE: 2.86x at 4 threads, proceed**
+
+**Measured 2026-09-03** on the current binary, `n2_fciqmc_sto3g`, whole-run sample
+(13 s window over a 12.61 s run), inclusive shares under `run_fciqmc` via real
+parent links:
+
+| phase | inclusive |
+|---|---|
+| `propagate_stochastic` | **86.6 %** |
+| `projected_energy` | 1.7 % |
+| `WalkerPopulation::compress` | 1.5 % |
+| `ordered_l1_norm` | 0.7 % |
+| setup / SCF / integrals | 9.4 % |
+
+**Ceiling: 1.76x / 2.86x / 4.14x at 2/4/8 threads.** At 4 threads that is
+12.61 s -> 4.42 s, saving **8.2 s**.
+
+**Replicated** on a second run: p = 86.3 % against 86.6 %, ceiling 2.83x against
+2.86x — a 0.4-point spread, so the measurement is stable rather than a
+single-sample artifact. That check exists because this number has been wrong three
+times before.
+
+**Verdict: above the ~2x stop threshold, proceed to S1.** Note the threadable
+share went *up* (85.8 % -> 86.6 %) since the last measurement even though nothing
+changed in the loop — the L1-norm binning that landed between them removed serial
+work, which raises the share of what remains. The wall-clock saving is nonetheless
+the smallest it has ever been (8.2 s, against ~19 s when this was first scoped),
+because the serial baseline has fallen 5.2x.
+
+The original scoping follows.
+
+#### Original scoping
 
 Profile the current binary on `n2_fciqmc_sto3g`, whole-run sample, and compute
 `propagate_stochastic` inclusive with **real parent links** (see the parsing traps
