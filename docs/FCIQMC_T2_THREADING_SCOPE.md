@@ -470,26 +470,81 @@ committed S2/S3/S4 regression reference values (a real, deliberate
 re-baselining), because the reused-map bucket layout differs from fresh
 construction from the very first warmed-up call onward.
 
-#### Verify, in this order
+#### Steps
 
-1. **Self-reproducibility at fixed seed** (exact) -- the new, reused-container
-   trajectory must still be bitwise identical to itself run to run, at a
-   given thread count.
-2. **Agreement with exact FCI** on N2/H2, within each estimator's own error
-   bar -- the standard S1 used for its own legitimate reordering, since this
-   change is in that same category, not the S2/S3/S4 category.
-3. **Bitwise identical across `OMP_NUM_THREADS` = 1/2/4/8** at the NEW,
-   reused-container baseline -- this is the property that must not break,
-   even though the specific numbers are expected to differ from the old
-   S2/S3/S4 reference.
-4. **Update the `h2_fciqmc_threads1`/`n2_fciqmc_sto3g` regression references**
-   to the new numbers, in the same commit, with a note explaining why they
-   moved (mirroring how S1's RNG fix was handled).
-5. **Re-measure `__psynch_cvwait` share and wall-clock speed.** The honest
-   target: most of the ~123 us/call serial-allocation cost should disappear
-   from the SERIAL baseline too (not just the parallel one), so re-measure
-   the 1-thread wall clock as well as the 4-thread speedup -- a container-
-   reuse fix should help BOTH.
+Broken into pieces that can each be verified alone, in the same spirit as
+S1-S4: the reordering-sensitive change (reusing `next_bins`) is isolated from
+the reordering-safe one (reusing `bin_parents`), and the bitwise-identity
+checks happen before the reference-value update, not after, so a defect in
+the reuse mechanism is caught before it gets baked into a new baseline.
+
+##### R1 — reuse `bin_parents` only (no reordering risk, bitwise identical)
+
+`bin_parents` entries are write-once grouped input with no accumulation
+semantics — `push_back` order does not affect which parent ends up in which
+bin, and nothing sums or overwrites within it. Reuse (persist + `.clear()`
+each call) cannot change any output value, so this step's gate is the
+S2/S3/S4 standard, not the S1 standard.
+
+- **Verify: bitwise identical to S4** at `OMP_NUM_THREADS` = 1 (and, once
+  confirmed at 1, at 4) on N2 and H2 — if this is not bitwise identical,
+  something is wrong with the reuse mechanism itself (e.g. stale entries not
+  cleared), not with reordering, and must be fixed before proceeding.
+- **Record the wall-clock delta alone.** Measured standalone (microbenchmark,
+  not the full binary) at 111 us/call vs 123 us/call fresh — a modest,
+  bounded expectation. If the real-binary delta is far off this, that is a
+  signal worth stopping on before R2, not a reason to fold both changes
+  together to "see the combined effect."
+
+##### R2 — reuse `next_bins` (reordering-sensitive, needs the S1 standard)
+
+The step this scope exists for. Persist `next_bins` the same way as R1, but
+because `unordered_map::clear()`-and-reuse does not reproduce fresh-
+construction's iteration order (verified standalone, not assumed — see
+above), this changes actual output values from the very first warmed-up
+call onward.
+
+- **Verify: self-reproducibility at fixed seed**, `OMP_NUM_THREADS` = 1 —
+  two full runs, byte-identical to each other. This does NOT compare against
+  S4's numbers; it only proves the NEW behavior is itself deterministic.
+- **Verify: agreement with exact FCI** on N2 and H2, both estimators within
+  their own error bars — the same check S1 used for its own legitimate
+  reordering.
+- **Record the new reference values** alongside the old (S4) ones in the
+  scope doc, so the delta is visible and explained rather than silently
+  overwritten.
+
+##### R3 — cross-thread-count invariance on the new baseline
+
+- **Verify: bitwise identical at `OMP_NUM_THREADS` = 1/2/4/8**, using R2's
+  OWN output as the reference (not S4's) — this is the property that
+  actually matters for correctness under threading, and it is independent
+  of which specific numbers R2 produced.
+- **All FCIQMC and FCI regression cases green.**
+
+##### R4 — update the committed regression references
+
+- Update `h2_fciqmc_threads1` / `n2_fciqmc_sto3g` (and any other case whose
+  reference value is a raw FCIQMC output rather than a `metric_within_sigma`
+  check against exact FCI) to R2/R3's numbers, in the same commit as R2's
+  code, with a one-line note on why they moved — mirroring how S1's RNG
+  change was handled. Gates using `metric_within_sigma` against the exact
+  FCI energy need no update, since they were never pinned to a specific
+  RNG/ordering trajectory.
+
+##### R5 — re-measure serial and parallel speed
+
+- **1-thread wall clock**, N2 — the honest prediction is that MOST of the
+  ~123 us/call serial allocation cost disappears here too, since it was never
+  specific to the parallel region.
+- **4-thread wall clock and speedup ratio**, against the pre-R1 baseline
+  (18.84 s / 12.46 s / 1.51x) — re-measure rather than assume the fix
+  worked; a reuse mechanism that is correct but, say, still touches the heap
+  on every call (a bug in the reuse itself) would pass R1-R4 and still show
+  no speed improvement.
+- **Re-check `__psynch_cvwait` share** with per-thread profiling, the same
+  method that found the original problem — confirm the barrier-wait time
+  actually fell, not just that the wall clock moved for some other reason.
 
 #### What this must not do
 
@@ -503,10 +558,14 @@ construction from the very first warmed-up call onward.
   legitimate, expected value change as if it were a bitwise-identity
   failure (or silently accepting new numbers without recording why) both
   defeat the purpose of the gate.
-- **Do not fold this into the same commit as S4.** They are separately
-  verifiable changes with different correctness standards (bitwise-vs-prior
-  for S4, reproducibility-and-FCI-agreement for this step) and bundling them
-  would make a regression in either one harder to isolate.
+- **Do not fold R1 and R2 into one commit.** They have different correctness
+  standards (bitwise-vs-S4 for R1, reproducibility-and-FCI-agreement for R2)
+  precisely because R1 cannot change output values and R2 must. Bundling them
+  makes it impossible to tell, from a single commit, which standard applies
+  to which part of the diff.
+- **Do not fold R1/R2 into the same commit as S4.** S4 is already landed and
+  verified against its own gate; this is a separate, later change with a
+  different risk profile.
 
 ### S5 — extend the gate
 
