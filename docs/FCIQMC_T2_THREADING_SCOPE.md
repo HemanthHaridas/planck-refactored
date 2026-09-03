@@ -218,21 +218,66 @@ gives five different values across five calls (the fix).
   changed stream by construction. The instruction to update them was written before
   checking what they actually asserted.
 
-### S2 — bin the accumulation (serial, no pragma)
+### S2 — bin the accumulation (serial, no pragma) — DONE, and the scope's own
+verification instruction was wrong
 
-Replace the single `next` with `kBins` per-bin `WalkerPopulation`s, merged in
-fixed bin order at the end of the iteration. Parent `det` selects its bin;
-**spawned children go into the same bin as their parent**, not their own.
+`kBins` per-bin `WalkerPopulation`s replace the single `next`, merged in fixed bin
+order (0..kBins-1) at the end of the iteration. Parent `det` selects its bin;
+spawned children go into the same bin as their parent, never their own -- binning
+by the child would fix which accumulator receives a spawn but not the ORDER
+arrivals reach it, which is the actual race S2 exists to eliminate before S4.
 
-- **Do not bin by the child determinant.** That fixes which accumulator receives a
-  spawn but not the order arrivals reach it, so two threads spawning onto the same
-  determinant still race. **The partition must be over the work.**
-- **Verify: bitwise identical to S1** at one thread. Binning changes the order
-  weights accumulate, so this is where any accumulation-order defect shows up —
-  with no threads present to confuse the diagnosis. If it is not bitwise identical
-  here, it never will be under threads.
-- **Verify:** memory is `kBins` maps, independent of thread count. Record the
-  footprint.
+**"Bitwise identical to S1" is not achievable, and testing it caught that the
+instruction itself was wrong rather than the code.** IEEE double addition is not
+associative. S1 sums every parent's contributions in one pass, interleaved in
+`population`'s hash order; S2 sums each bin's contributions separately, then
+concatenates bin-by-bin. Whenever a determinant receives contributions from
+MULTIPLE parents in the SAME iteration -- which is the ordinary case once the
+walker population is large enough for the connectivity graph to overlap -- the
+two orderings sum the same set of terms in a different sequence, and the results
+can differ in low-order bits. Measured directly on N2/STO-3G rather than assumed:
+
+- **Iterations 1-52: bitwise identical to S1.** No multi-parent overlap yet at
+  that walker count.
+- **Iteration 53: first divergence**, and ONLY in the projected-energy numerator
+  (-5.516124e+02 vs -5.186120e+02) -- the reference weight (denominator) and
+  every quantity upstream of it (shift, total population) are still bit-identical
+  at that same step. That is the signature of reassociation of an identical term
+  set, not a missing, duplicated, or misrouted write: if the write pattern itself
+  were wrong, the population totals would have diverged too, not only a
+  downstream scalar reduction.
+- Confirmed the shift trajectory (and therefore the underlying walker weights)
+  eventually does diverge at longer run lengths (1000 steps: -108.8284 vs
+  -108.6837) -- exactly the butterfly-effect propagation expected once the
+  first-step reassociation feeds into every subsequent death/spawn calculation,
+  the same mechanism as running under a genuinely different RNG seed.
+
+**What was verified instead, since bitwise-vs-S1 is off the table:**
+- **S2 is bitwise identical to ITSELF**, run to run, at fixed seed and one
+  thread -- two full N2 runs, byte-identical. S2 introduces a DIFFERENT fixed
+  ordering, not a new source of nondeterminism.
+- **Agreement with exact FCI** on N2: shift 0.36 sigma, projected 0.58 sigma.
+  Both well inside the 5-sigma gate.
+- **All four FCIQMC regression cases pass**, full extended suite shows the same 4
+  pre-existing unrelated failures as before S1/S2.
+- **Memory: measured, not modelled.** Peak RSS on the N2 gate case:
+  S1 10.16 MB -> S2 10.29 MB, a 131 KB / 1.29 % delta. kBins = 64 is a fixed
+  constant, so this is the fixed per-map bucket-array overhead of 64 separate
+  unordered_maps rather than one, and it does not grow with walker population or
+  thread count.
+
+**The lesson for the rest of this scope:** an instruction to verify "bitwise
+identical" against a DIFFERENT accumulation order was written without checking
+whether floating-point addition permits it. It does not, in general. The correct
+standard for a reordering step is bitwise identity to ITSELF (proving the new
+order is at least fixed) plus agreement with an independent exact reference
+(proving the reordering is not hiding a real defect) -- never bitwise identity to
+the PREVIOUS ordering, which non-associativity rules out on its own. S4's gate
+(bitwise identical across thread counts, atol = 0.0) remains correct as stated,
+because S4 does not change WHICH ordering S2 produces at one thread -- it only
+asks that the SAME S2 ordering is reproduced regardless of how many threads
+compute it, which is exactly what partitioning by parent (not by completion
+order) guarantees.
 
 ### S3 — prefill the T4 memo
 

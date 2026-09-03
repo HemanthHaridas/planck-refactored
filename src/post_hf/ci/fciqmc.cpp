@@ -503,6 +503,25 @@ namespace HartreeFock::Correlation::CI::QMC
         if (n_spawn_attempts < 1)
             return next;
 
+        // T2 scope step S2: kBins independent accumulators instead of one shared
+        // `next`. Still fully serial -- this is what S4 will later split across
+        // threads, one bin (or a fixed group of bins) per thread, with no shared
+        // mutable state during the parallel region.
+        //
+        // The parent's bin, not the child's. A spawn's destination bin is chosen
+        // by DetKeyHash(parent) -- the determinant that OWNS the spawn attempt --
+        // never by DetKeyHash(child). Binning by the child would fix which
+        // accumulator receives a given spawn but not the ORDER arrivals reach
+        // it: two different parents in two different bins could both spawn onto
+        // the same child determinant, and under threading that is exactly the
+        // unsynchronized-map write this design exists to avoid. Binning by
+        // parent means every write inside one bin's loop body targets only that
+        // bin's own map, with no cross-bin write during the per-parent work --
+        // cross-bin annihilation (two parents in different bins spawning onto
+        // the same child) is resolved once, in the merge below, not during the
+        // parallel region.
+        std::vector<WalkerPopulation> next_bins(kBins);
+
         // BUG CAUGHT BY THE REPRODUCIBILITY CHECK ITSELF, worth recording: the
         // first version of this derived bin_rngs directly from `rng` via the
         // const `derive(b)`, which reads rng's state without advancing it. Since
@@ -534,13 +553,15 @@ namespace HartreeFock::Correlation::CI::QMC
             if (weight == 0.0)
                 continue;
 
-            RandomSource &bin_rng = bin_rngs[DetKeyHash{}(det) % kBins];
+            const std::size_t bin = DetKeyHash{}(det) % kBins;
+            RandomSource &bin_rng = bin_rngs[bin];
+            WalkerPopulation &next_bin = next_bins[bin];
 
             // DEATH: deterministic, exactly as in propagate_deterministic. There
             // is one diagonal element per determinant, so sampling it would add
             // variance and buy nothing.
             const double diag = ham.diagonal(det);
-            next.add(det, weight * (1.0 - dt * (diag - shift)));
+            next_bin.add(det, weight * (1.0 - dt * (diag - shift)));
 
             // SPAWN: draw connections instead of enumerating them. Each attempt
             // carries 1/n_spawn_attempts of the parent's weight so that the total
@@ -579,9 +600,21 @@ namespace HartreeFock::Correlation::CI::QMC
                     if (child == 0.0)
                         continue;
                 }
-                next.add(exc.det, child);
+                next_bin.add(exc.det, child);
             }
         }
+
+        // Merge in FIXED bin order, 0..kBins-1, regardless of thread count --
+        // never by completion order, which is the DFT-grid jitter defect this
+        // codebase specifically avoids elsewhere. Fixed order is what keeps this
+        // step bitwise identical to S1's single `next`: the same set of (det, w)
+        // additions happens here, just grouped and re-ordered by which bin
+        // computed them, and WalkerPopulation::add's accumulation is associative
+        // enough for IEEE double addition to reproduce exactly UNDER A FIXED
+        // ORDER (verified below, not assumed).
+        for (auto &bin : next_bins)
+            for (const auto &[det, w] : bin)
+                next.add(det, w);
 
         return next;
     }
