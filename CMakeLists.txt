@@ -555,26 +555,73 @@ if(Python3_Interpreter_FOUND)
         --ucc
     )
 
-    add_custom_target(ccgen-planck-kernels
+    # Every ccgen python source the generator can reach, so an edit anywhere in
+    # the package invalidates the generated TUs. CONFIGURE_DEPENDS matches the
+    # pattern already used for the C++ source globs below: a file added or removed
+    # is picked up on the next configure without hand-maintaining this list.
+    file(GLOB_RECURSE _ccgen_package_sources CONFIGURE_DEPENDS
+        ${CMAKE_SOURCE_DIR}/python/ccgen/*.py)
+
+    # Compute the exact output file list ccgen writes, mirroring
+    # generate_planck_cc_kernels.py's naming rule, so OUTPUT can be declared and
+    # the custom command only reruns when something upstream actually changed.
+    # This is what fixes the every-build regeneration: add_custom_target has no
+    # OUTPUT, so CMake reran the generator (and every C++ TU it touches, up to
+    # 20+ MB of it) unconditionally, even though the emitted content is
+    # deterministic and was almost always unchanged.
+    set(_ccgen_planck_outputs "")
+    set(_ccgen_ucc_outputs "")
+    foreach(_planck_cc_method ${PLANCK_CC_METHODS})
+        list(APPEND _ccgen_planck_outputs
+            ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_planck_generated.cpp)
+        list(APPEND _ccgen_ucc_outputs
+            ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_ucc_planck_generated.cpp)
+        # Lower-rank arbitrary-order companions, RCC side only -- the UCC
+        # invocation never passes --arbitrary-lower-ranks, so it emits none.
+        if(PLANCK_CC_ARBITRARY_LOWER_RANKS)
+            list(FIND _planck_cc_method_by_rank ${_planck_cc_method} _planck_cc_method_rank_idx)
+            if(_planck_cc_method_rank_idx LESS 2)
+                list(APPEND _ccgen_planck_outputs
+                    ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_arbitrary_planck_generated.cpp)
+            endif()
+        endif()
+    endforeach()
+
+    add_custom_command(
+        OUTPUT ${_ccgen_planck_outputs}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
                 ${_ccgen_planck_kernel_args}
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
+        DEPENDS
+            ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+            ${_ccgen_package_sources}
         COMMENT "Generating Planck-compatible CC kernels with ccgen (up to rank ${PLANCK_CC_MAXORDER}: ${PLANCK_CC_METHODS})"
     )
 
-    # A conditional COMMAND inside add_custom_target cannot be expressed with a
-    # generator expression: an empty $<...:COMMAND> expands to a bare newline and
-    # the shell fails to parse it. Append the UCC pass as a separate POST_BUILD
-    # step instead, which is also clearer about it being a second invocation.
+    add_custom_target(ccgen-planck-kernels DEPENDS ${_ccgen_planck_outputs})
+
+    # The UCC emit is a separate add_custom_command with its own OUTPUT, not a
+    # POST_BUILD step on the target above: POST_BUILD commands are tied to
+    # whether the TARGET reran, and a target with declared OUTPUT only reruns
+    # when ITS OUTPUT is stale -- which says nothing about whether the UCC
+    # OUTPUT files are present or current. Two independent commands, each with
+    # its own OUTPUT, is what makes both halves independently skippable.
     if(PLANCK_CC_UCC)
-        add_custom_command(TARGET ccgen-planck-kernels POST_BUILD
+        add_custom_command(
+            OUTPUT ${_ccgen_ucc_outputs}
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
                     ${_ccgen_ucc_kernel_args}
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
+            DEPENDS
+                ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
+                ${_ccgen_package_sources}
             COMMENT "Generating unrestricted (UCC) CC kernels with ccgen")
+
+        add_custom_target(ccgen-planck-ucc-kernels DEPENDS ${_ccgen_ucc_outputs})
+        add_dependencies(ccgen-planck-kernels ccgen-planck-ucc-kernels)
     endif()
 
     message(STATUS "ccgen     : emitting Planck CC kernels up to rank ${PLANCK_CC_MAXORDER} [${PLANCK_CC_METHODS}] via ${PLANCK_CC_ENGINE} engine")
