@@ -66,7 +66,7 @@ parent links:
 | `projected_energy` | 1.7 % |
 | `WalkerPopulation::compress` | 1.5 % |
 | `ordered_l1_norm` | 0.7 % |
-| setup / SCF / integrals | 9.4 % |
+| driver self time (per-iteration, **not** setup — see below) | 9.4 % |
 
 **Ceiling: 1.76x / 2.86x / 4.14x at 2/4/8 threads.** At 4 threads that is
 12.61 s -> 4.42 s, saving **8.2 s**.
@@ -82,6 +82,57 @@ changed in the loop — the L1-norm binning that landed between them removed ser
 work, which raises the share of what remains. The wall-clock saving is nonetheless
 the smallest it has ever been (8.2 s, against ~19 s when this was first scoped),
 because the serial baseline has fallen 5.2x.
+
+#### Does the saving scale with system size?
+
+**Yes, but the RATIO barely moves — what scales is the absolute saving, and it
+tracks total runtime.** Measured on two axes:
+
+| case | ndet | wall | threadable | ceiling @4 | saved @4 |
+|---|---|---|---|---|---|
+| N2/STO-3G, 10k walkers | 14 400 | 12.6 s | 86.6 % | 2.85x | **8.2 s** |
+| N2/STO-3G, 40k walkers | 14 400 | 14.7 s | 86.5 % | 2.85x | 9.5 s |
+| HF/6-31G, 50k walkers | 213 444 | 102.4 s | **89.8 %** | **3.07x** | **69.0 s** |
+
+**Walker count is NOT a scaling axis.** 4x the walkers left the share flat
+(86.6 % -> 86.5 %): everything in the iteration — the spawn loop *and* the serial
+tail — is proportional to the occupied population, so raising it scales both sides
+equally.
+
+**System size helps, modestly.** 15x the determinants moved the share to 89.8 %
+and the ceiling to 3.07x, because larger `n_act` means more work per parent
+(`draw_excitation` and the Slater-Condon element are both O(n_act)-ish) against a
+serial tail that grows more slowly. Extrapolating, the ceiling creeps toward 4x
+but will not exceed it at realistic sizes.
+
+**A predicted mechanism was falsified here, and the correction matters for anyone
+re-deriving this.** The 9.4 % remainder in the S0 table was labelled
+"setup / SCF / integrals" on the argument that it is fixed cost and would shrink
+as a fraction on longer runs — which would have made the share *rise* with run
+length. It is not setup: `run_fciqmc`'s direct children are almost entirely
+`propagate_stochastic` nodes, so that remainder is **self time inside the driver's
+own per-iteration loop** (`ctl.update`, sampling bookkeeping, `signed_population`
+accumulation). It grew 896 -> 1046 samples at 4x walkers, exactly as
+per-iteration work does. **The share is stable, not rising**, which is the
+opposite of what the argument predicted.
+
+**Where that 9.4 % actually goes, and a cheaper lever than threading.** The driver
+does two O(n_occupied) passes per sampling step: `ctl.update` on the norm, and
+`signed_population[det] += w` (`fciqmc_driver.cpp:368`), which accumulates the
+coefficient-ratio dump. **The second exists only to support the `<N_I>/<N_0>`
+diagnostic** and runs unconditionally on every sampling step of every run, even
+though the dump is printed only at `verbosity verbose`. Gating that accumulation
+on the verbosity would remove most of the 9.4 % outright — a smaller, serial,
+determinism-free change that raises T2's ceiling for free. **Check this before
+building S1.**
+
+**Consequence for the decision:** the ratio is roughly fixed near 3x, so the
+payoff is proportional to how much the method is actually run — 8 s on the N2
+gate, 69 s on a 102 s HF run, hours on a calculation in the regime FCIQMC exists
+for. That loops back to `FCIQMC_RESEARCH_SCOPE.md` Q1: **nothing in the tree
+currently runs FCIQMC at a size where 3x matters.** T2 is worth building when it
+does, and the ceiling should be re-measured on *that* system rather than taken
+from here.
 
 The original scoping follows.
 
