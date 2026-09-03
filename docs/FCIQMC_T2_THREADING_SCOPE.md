@@ -328,6 +328,32 @@ this from a false alarm that would have blocked S3 on a correct implementation.
 
 ### S4 — add the pragma
 
+**Re-profiled before starting, per the standing rule that every prior serial
+step here has moved the ceiling.** S1 (per-bin RNG derivation), S2 (64
+per-bin accumulator maps allocated every call), and S3 (the extra prefill
+pass) all added real serial cost inside `propagate_stochastic` itself --
+exactly the function S4 threads -- so the S0 measurement (taken right after
+T4, before any of S1-S3 existed) was stale.
+
+| | wall (N2, 1 thread) | threadable share | ceiling @4 |
+|---|---|---|---|
+| S0 (post-T4) | 12.61 s | 86.6 % | 2.86x |
+| **pre-S4 (post-S1/S2/S3)** | **17.17 s** | **99.7 %** | **3.97x** |
+
+The absolute serial tail (`ordered_l1_norm`, `compress`, `projected_energy`)
+barely changed in seconds (1.69 s -> ~0.05 s is noise-level at this sample
+count, not a real drop -- the point is it did NOT grow with S1-S3), while
+`propagate_stochastic` grew by ~4.56 s from the per-bin machinery. That is
+why the threadable SHARE rose to 99.7 % even though nothing about the serial
+tail improved: the denominator grew, not the numerator shrank. **This is the
+expected, and arguably necessary, shape for S4** -- S1-S3 exist only to make
+threading safe, and their cost is overhead that only pays for itself once S4
+parallelizes the code they were added to.
+
+Projected wall time at 4 threads: `17.17 / 3.97 ~= 4.32 s`, close to
+reclaiming S0's own baseline while genuinely parallelizing the original work
+on top of it.
+
 `#pragma omp parallel for schedule(static)` over the **bins**, not the parents.
 
 - **Verify, in this order:**
@@ -338,7 +364,8 @@ this from a false alarm that would have blocked S3 on a correct implementation.
   2. **Bitwise identical at `OMP_NUM_THREADS` = 1/2/4/8**, against the S3 serial
      result, on **N2** as well as H2.
   3. All FCIQMC and FCI regression cases green.
-  4. Speed, against S0's ceiling.
+  4. **Speed, against the re-measured 3.97x ceiling above** — S0's number is now
+     stale and must not be quoted as the target.
 
 ### S5 — extend the gate
 
