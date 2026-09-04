@@ -354,7 +354,7 @@ class ValidateTauMatchTests(unittest.TestCase):
     # generation (D4 landed), dressed-operator recognition is a topological
     # subgraph match (D7), so this index-binding approach is superseded and will
     # not be "flipped". Kept as the record of why the term-algebra route was
-    # abandoned. See CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md (D7) + Open Work.
+    # abandoned. See CCGEN_DIAGRAM_REPRESENTATION.md (D7) + Open Work.
     def test_energy_and_singles_matches_validate(self) -> None:
         # A1.3 detection and the A1.4 exact firewall agree wherever the written
         # t1t1 representative carries TAU_SPEC.written_t1t1_weight.
@@ -774,7 +774,7 @@ class ValidateEmbeddedTauMatchTests(unittest.TestCase):
     # dead end that diagrammatic generation (D4 landed) replaces -- dressed
     # operators are identifiable subgraphs (D7), not fragments to exact-cover.
     # Kept as the record of the abandoned route. See
-    # CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md (D7) + Open Work.
+    # CCGEN_DIAGRAM_REPRESENTATION.md (D7) + Open Work.
     def test_real_doubles_have_no_valid_embedded_tau(self) -> None:
         # THE A3.0 VERDICT: residue-based embedded-tau collapse is a dead end.
         # A3.0.b proposes 18 pairs on real CCSD doubles; A3.0.c's exact firewall

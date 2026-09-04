@@ -226,6 +226,50 @@ namespace HartreeFock::Correlation::CC
                 return false;
             }
 
+            // C1: load_cc_amplitudes deliberately does not validate against a
+            // live reference (its own header says so) -- it defers to the
+            // seed hook's per-rank DIM check. That catches a wrong SHAPE, not
+            // a wrong MEANING: two different bases (or two different
+            // molecules/geometries under the same basis) can produce
+            // identical n_occ/n_virt, in which case a stale-but-same-shaped
+            // sidecar seeds a wrong basin SILENTLY -- the seed hook has no
+            // way to tell that apart from a legitimate restart, and the
+            // energy from a wrong-basin warm start is still a plausible
+            // number, not an obvious failure.
+            //
+            // basis_name and n_occ/n_virt are exactly the metadata
+            // save_cc_amplitudes already writes from the SAME live sources
+            // compared here (calculator._basis._basis_name,
+            // state.reference.orbital_partition.n_occ/n_virt in the write
+            // site above) -- checking them is comparing a sidecar's own
+            // declared provenance against the run it is about to seed, not
+            // inventing new metadata. A mismatch degrades to cold-start with
+            // a warning, the same policy every other sidecar problem here
+            // uses -- restart is an optimization, never a correctness gate.
+            if (chk->meta.basis_name != calculator._basis._basis_name)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning, tag,
+                    std::format(
+                        "Ignoring CC amplitude checkpoint '{}': basis '{}' does not match "
+                        "this run's basis '{}'; cold-starting.",
+                        ccamp_path, chk->meta.basis_name, calculator._basis._basis_name));
+                return false;
+            }
+            if (chk->meta.n_occ != static_cast<std::uint64_t>(state.reference.orbital_partition.n_occ) ||
+                chk->meta.n_virt != static_cast<std::uint64_t>(state.reference.orbital_partition.n_virt))
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning, tag,
+                    std::format(
+                        "Ignoring CC amplitude checkpoint '{}': n_occ/n_virt "
+                        "{}/{} does not match this run's {}/{}; cold-starting.",
+                        ccamp_path, chk->meta.n_occ, chk->meta.n_virt,
+                        state.reference.orbital_partition.n_occ,
+                        state.reference.orbital_partition.n_virt));
+                return false;
+            }
+
             // The seed hook validates per-rank dims; a sidecar carrying more ranks
             // than this solve would over-fill, so cap it. Fewer ranks (e.g. a
             // ccsdt sidecar seeding a cc4 run) is exactly the intended partial seed.

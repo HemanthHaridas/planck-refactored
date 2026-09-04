@@ -5,10 +5,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <format>
 #include <limits>
 
 #include "io/logging.h"
+#include "post_hf/cc/cc_amplitude_checkpoint.h"
 #include "post_hf/cc/determinant_space.h"
 
 namespace
@@ -642,6 +644,53 @@ namespace HartreeFock::Correlation::CC
                     HartreeFock::LogLevel::Info,
                     "RCCSD :",
                     std::format("Converged in {} iterations.", iter));
+
+                // X5.1: persist the converged amplitudes to a .ccamp sidecar,
+                // projected to the spatial layout the generated arbitrary-order
+                // path and the sidecar format both use (X5.0). Gated on the
+                // same _save_checkpoint flag as the SCF checkpoint and the
+                // arbitrary-order write site (rccgen.cpp); a write failure is a
+                // warning, never a run failure -- the energy is already in
+                // hand. `run_rccsd` is the tensor-based solver (there is no
+                // determinant-space backend selector here, unlike run_rccsdt),
+                // so this always has dense so_amps to project.
+                if (calculator._scf._save_checkpoint && !calculator._checkpoint_path.empty())
+                {
+                    auto spatial = project_rccsd_amplitudes_to_spatial(so_amps);
+                    if (!spatial)
+                    {
+                        HartreeFock::Logger::logging(
+                            HartreeFock::LogLevel::Warning, "RCCSD :",
+                            std::format("Could not project amplitudes for checkpoint: {}",
+                                        spatial.error()));
+                    }
+                    else
+                    {
+                        const std::string ccamp_path =
+                            std::filesystem::path(calculator._checkpoint_path)
+                                .replace_extension(".ccamp")
+                                .string();
+                        CCAmplitudeCheckpointMeta meta{
+                            .max_rank = 2,
+                            .method = "ccsd",
+                            .basis_name = calculator._basis._basis_name,
+                            .n_occ = static_cast<std::uint64_t>(state.reference.n_occ),
+                            .n_virt = static_cast<std::uint64_t>(state.reference.n_virt),
+                        };
+                        auto saved = save_cc_amplitudes(ccamp_path, *spatial, meta);
+                        if (!saved)
+                            HartreeFock::Logger::logging(
+                                HartreeFock::LogLevel::Warning, "RCCSD :",
+                                std::format("Could not write CC amplitude checkpoint: {}",
+                                            saved.error()));
+                        else
+                            HartreeFock::Logger::logging(
+                                HartreeFock::LogLevel::Info, "RCCSD :",
+                                std::format("Wrote CC amplitude checkpoint '{}' (rank 2).",
+                                            ccamp_path));
+                    }
+                }
+
                 return {};
             }
         }

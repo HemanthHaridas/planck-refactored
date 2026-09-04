@@ -470,6 +470,53 @@ namespace HartreeFock::Correlation::CC
         };
     }
 
+    std::expected<ArbitraryOrderRCCAmplitudes, std::string>
+    project_rccsd_amplitudes_to_spatial(const RCCSDAmplitudes &so_amps)
+    {
+        const int n_occ_so = so_amps.t1.dim1;
+        const int n_virt_so = so_amps.t1.dim2;
+
+        if (n_occ_so % 2 != 0 || n_virt_so % 2 != 0)
+            return std::unexpected(std::format(
+                "project_rccsd_amplitudes_to_spatial: spin-orbital dims must be "
+                "even (n_occ_so={}, n_virt_so={}); every spatial orbital carries "
+                "both spin channels.",
+                n_occ_so, n_virt_so));
+        if (so_amps.t2.dim1 != n_occ_so || so_amps.t2.dim2 != n_occ_so ||
+            so_amps.t2.dim3 != n_virt_so || so_amps.t2.dim4 != n_virt_so)
+            return std::unexpected(
+                "project_rccsd_amplitudes_to_spatial: t1/t2 spin-orbital dims disagree.");
+
+        const int n_occ = n_occ_so / 2;
+        const int n_virt = n_virt_so / 2;
+
+        // Interleaved spin-orbital indexing: spatial orbital p occupies
+        // spin-orbital positions 2p (one channel) and 2p+1 (the other). Which
+        // channel is "alpha" is immaterial here -- at closed shell the two
+        // channels are numerically identical (verified: max|t1_alpha -
+        // t1_beta| ~ 1e-18 on BH3/STO-3G) -- so this reads channel 0 for t1
+        // and the cross-channel (0,1) block for t2, which IS the spatial RCC
+        // t2 (see the header comment for the closed-shell relation and how it
+        // was verified).
+        TensorND t1(std::vector<int>{n_occ, n_virt}, 0.0);
+        for (int i = 0; i < n_occ; ++i)
+            for (int a = 0; a < n_virt; ++a)
+                t1({i, a}) = so_amps.t1(2 * i, 2 * a);
+
+        TensorND t2(std::vector<int>{n_occ, n_occ, n_virt, n_virt}, 0.0);
+        for (int i = 0; i < n_occ; ++i)
+            for (int j = 0; j < n_occ; ++j)
+                for (int a = 0; a < n_virt; ++a)
+                    for (int b = 0; b < n_virt; ++b)
+                        t2({i, j, a, b}) = so_amps.t2(2 * i, 2 * j + 1, 2 * a, 2 * b + 1);
+
+        ArbitraryOrderRCCAmplitudes spatial;
+        spatial.by_rank.reserve(2);
+        spatial.by_rank.push_back(std::move(t1));
+        spatial.by_rank.push_back(std::move(t2));
+        return spatial;
+    }
+
     RCCSDTAmplitudes make_zero_rccsdt_amplitudes(const RHFReference &reference)
     {
         return RCCSDTAmplitudes{

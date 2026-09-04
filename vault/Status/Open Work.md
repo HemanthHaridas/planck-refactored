@@ -43,6 +43,36 @@ truth for what remains.
   `BASIS_INSTALL_PATH`, or change the `install()` destination to match — they
   must agree. Documented as a workaround in the README meanwhile.
 
+- **Release builds compile with `-DNDEBUG`, silently disabling every
+  `assert()`-based unit test in the suite (found 2026-09-04, while gating
+  X5.0/CC amplitude checkpoint work).** Every hand-rolled test binary in
+  `tests/` (`cc_amplitude_checkpoint.cpp`, `cc_spatial_amplitude_projection.cpp`,
+  `cc_amplitude_sector_seed.cpp`, and by extension every other `assert()`-based
+  gate in the tree) passes vacuously under the default `Release` build type —
+  `ctest` reports green regardless of whether the assertions inside actually
+  ran. Concretely reproduced: `cc_spatial_amplitude_projection` passed under
+  the normal `build-full` (`-DNDEBUG` set) while its underlying fixture had a
+  real bug that only surfaced when rebuilt standalone with `-UNDEBUG`. Every
+  gate built this session was independently re-verified with a `-UNDEBUG`
+  standalone compile plus a mutation test before being trusted — see the CC
+  amplitude checkpoint entry in Completion for the pattern. **Not fixed**:
+  either force `-UNDEBUG` for these hand-rolled test binaries specifically, or
+  replace `assert()` with a check that does not compile out in Release. Left
+  as a project-wide gap by explicit user decision (noted, not fixed, when
+  found).
+
+- **CI's `cmake-multi-platform.yml` builds only the `hartree-fock` target
+  before running `ctest`, never the test binaries themselves (found
+  2026-09-04, same session).** `ctest` runs against whatever binaries already
+  exist in the build tree; since the workflow's `Build` step passes
+  `--target hartree-fock` explicitly, none of the `add_executable(planck-*)`
+  test targets are ever built there. What `ctest --build-config Release` does
+  in CI as a result is unverified from this finding alone — it may pass
+  trivially (no test binaries found) or run stale binaries from a prior step,
+  neither of which is the intended coverage. **Not fixed**, same reasoning as
+  the NDEBUG gap above: real, project-wide, out of scope for the change that
+  surfaced it, left for a deliberate look rather than a byproduct fix.
+
 ## SCF convergence — the unclaimed 3x
 
 - **Iteration count triples with system size, and nothing is attacking it.**
@@ -1089,10 +1119,18 @@ Two further findings from the same audit pass:
   marked answered, the genuinely-open rank-4 `-O1` pin left named.
 
 Judged compliant in the same audit, for the record: `CCGEN_TEACHING_GUIDE`, `CCGEN_REPORT`,
-`CCGEN_GENERATION_AND_VALIDATION` (teaching/report); `CCGEN_HIGHER_OPERATOR_REUSE`,
-`CCGEN_DIAGRAM_REPRESENTATION_SCOPE`, `CCGEN_INTERMEDIATE_MEMORY_LOCALITY_SCOPE` (already
-question-shaped, work unstarted). `CCGEN_UNRESTRICTED_CC` and `CCGEN_GCC_TO_UCC_BRIDGE` were
-in-flight scope at the time and have since been rewritten as answers (2026-08-25).
+`CCGEN_GENERATION_AND_VALIDATION` (teaching/report); `CCGEN_HIGHER_OPERATOR_REUSE` (already
+question-shaped). `CCGEN_UNRESTRICTED_CC` and `CCGEN_GCC_TO_UCC_BRIDGE` were in-flight scope
+at the time and have since been rewritten as answers (2026-08-25).
+
+**Correction (2026-09-05): `CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md` and
+`CCGEN_INTERMEDIATE_MEMORY_LOCALITY_SCOPE.md` were misjudged "work unstarted" in that same
+audit — both were already finished answers when read in full** ("Everything below is either
+landed or has its rationale pinned to a measured result" / "Everything is landed... gated by
+`test_factorize.py`"). Renamed to `CCGEN_DIAGRAM_REPRESENTATION.md` and
+`CCGEN_INTERMEDIATE_MEMORY_LOCALITY.md` and reformatted into the standard answer-doc template;
+no content changed. **Lesson for future audits: a doc's own file suffix (`_SCOPE`) or a prior
+audit's one-line verdict is not a substitute for reading the doc's actual content.**
 
 `CCGEN_DRESSED_KERNEL_VALIDATION_SCOPE` was in that list and has been **deleted** (2026-08-16): it
 scoped V2–V6 for the dressed route, which is **retired** (see Completion — dressing and spin
@@ -1222,6 +1260,12 @@ Q1 verdict (Karp-Flatt serial fraction rather than efficiency-at-max-ranks,
   and the geomopt / frequency workflows built on them, are now landed
   Cartesian-side — see Completion)
 - The ccgen `TensorOptimized` RCCSDT backend is still treated in-tree as an experimental / phase-4 path
+- **CC amplitude checkpoint (`.ccamp`): DONE, nothing open here.** All of
+  X0-X5.1, the sector-drop and validation fixes, and the UCC sidecar (C4,
+  U0-U3) are landed. `run_rccsdt`'s hand-written rank-3 participation (C3)
+  was investigated and explicitly declined rather than left open — see
+  `docs/CC_AMPLITUDE_CHECKPOINT.md`, the single answer doc for this feature
+  area.
 
 ## ccgen generated-kernel performance
 

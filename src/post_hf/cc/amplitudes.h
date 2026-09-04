@@ -167,6 +167,44 @@ namespace HartreeFock::Correlation::CC
 
     RCCSDAmplitudes make_zero_rccsd_amplitudes(const RHFReference &reference);
 
+    // X5.0: project the hand-written RCCSD solver's spin-orbital amplitudes
+    // down to the spatial RCC layout the .ccamp sidecar and the generated
+    // arbitrary-order runtime both use (see cc_amplitude_checkpoint.h and
+    // ArbitraryOrderRCCAmplitudes above). `so_amps` is what `run_rccsd`
+    // converges internally -- interleaved spin-orbital indexing, spin-orbital
+    // p at spatial index p/2 and spin p%2 (see ccsd.cpp's spatial_index /
+    // spin_index) -- and is NOT the spatial layout by itself; a byte copy is
+    // silently wrong (roughly 2x too large in each dimension, and mixes
+    // same-spin/opposite-spin contributions that must first be combined).
+    //
+    // The relation used here is the standard closed-shell RHF-CCSD spin
+    // integration (e.g. Crawford & Schaefer's CC tutorial; Stanton et al.
+    // 1991), verified numerically against this codebase's own converged
+    // BH3/STO-3G amplitudes rather than trusted from memory:
+    //   t1_spatial(i,a)     = t1_so(2i,   2a)          (alpha channel; alpha
+    //                                                    == beta and the
+    //                                                    cross-spin blocks
+    //                                                    are exactly zero at
+    //                                                    closed shell)
+    //   t2_spatial(i,j,a,b) = t2_so(2i, 2j+1, 2a, 2b+1) (the opposite-spin
+    //                                                    block IS the spatial
+    //                                                    RCC t2; same-spin
+    //                                                    blocks are the
+    //                                                    dependent quantity
+    //                                                    t2_aa = t2_ab -
+    //                                                    t2_ab.swap(a,b),
+    //                                                    not independent
+    //                                                    information)
+    // Returns a rank-2 ArbitraryOrderRCCAmplitudes (by_rank[0] = t1,
+    // by_rank[1] = t2) with the same [n_occ, n_virt] / [n_occ, n_occ, n_virt,
+    // n_virt] shape `make_zero_rcc_amplitudes(reference, 2)` would produce, so
+    // it round-trips through save_cc_amplitudes / seed_arbitrary_order_amplitudes
+    // unchanged. Errors if `so_amps.t1`/`.t2` dims are not even (they must be
+    // 2*n_occ_spatial / 2*n_virt_spatial, since every spatial orbital carries
+    // both spin channels).
+    std::expected<ArbitraryOrderRCCAmplitudes, std::string>
+    project_rccsd_amplitudes_to_spatial(const RCCSDAmplitudes &so_amps);
+
     // The dense T3 container is kept for the future tensor-based CCSDT path. The
     // current determinant-space prototype does not allocate it eagerly inside the
     // top-level solver because that would dominate memory before any iterations.

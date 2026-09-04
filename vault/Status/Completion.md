@@ -285,6 +285,179 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **CC amplitude checkpoint (`.ccamp`): hand-written RCCSD can now write a
+  spatial sidecar, a sector-drop defect in the shipped format is fixed, and
+  UCC has full write/restart support (2026-09-04/05).**
+  `docs/CC_AMPLITUDE_CHECKPOINT.md` is the single answer doc for all of it
+  (the three prior scope docs it replaced are deleted). PR #164,
+  branch `ccamp-x5-spin-orbital-projection`.
+
+  **X5.0/X5.1 — spin-orbital -> spatial projection.**
+  `project_rccsd_amplitudes_to_spatial` (`amplitudes.{h,cpp}`) converts
+  `run_rccsd`'s converged spin-orbital `t1`/`t2` to the spatial RCC layout
+  the sidecar and generated arbitrary-order runtime both use. The
+  closed-shell relation -- `t1` is either spin channel (identical at closed
+  shell, cross-spin blocks exactly zero); `t2` is the opposite-spin
+  spin-orbital block (`t2_aa = t2_ab - t2_ab.swap(a,b)` is the dependent
+  same-spin combination, not independent data) -- was **numerically
+  verified against this codebase's own converged BH3/STO-3G amplitudes**
+  via a temporary probe, not trusted from memory. Gated by
+  `tests/cc_spatial_amplitude_projection.cpp`, mutation-verified. Caught a
+  real fixture bug along the way that Release's `-DNDEBUG` had made
+  invisible -- see Open Work for the NDEBUG gap this surfaced project-wide.
+  `run_rccsd` was worth doing because it has no generated-arbitrary-order
+  sibling (the registry floor is rank 3); verified end-to-end on
+  BH3/STO-3G, same energy, values read back bit-for-bit correct.
+
+  **C0 -- a real correctness defect in the already-shipped format, fixed on
+  both sides.** `save_cc_amplitudes` only ever wrote `amplitudes.by_rank`,
+  never `amplitudes.sectors` -- the independent higher Sz sector blocks a
+  rank->=4 amplitude set carries (e.g. `(4, "aaabaaab")` for CCSDTQ, proven
+  genuinely independent by R3.1.3). A `cc4` restart therefore always seeded
+  that sector at zero -- silent because it still converges (Jacobi/DIIS
+  pulls the zero sector up), so no energy-only gate ever caught it. Fixed
+  on the file-format side (`CCAMP_VERSION` bumped to 2, sectors appended via
+  a shared `write_tensor`/`read_tensor` codec, version-1 backward
+  compatibility preserved and correctly distinguished from mid-field
+  truncation) and on the seed-application side
+  (`seed_arbitrary_order_amplitudes` now applies sectors by `(rank, tag)`
+  key, skipping rather than failing on a shape mismatch or missing
+  counterpart) -- fixing only one side would have left the other silently
+  inert. Also folds in a one-byte `reference_type` field for a future UCC
+  sidecar, so it needs no version 3. Both halves independently
+  mutation-verified.
+
+  **C1 -- the sidecar is now validated against the live run before
+  seeding.** Previously only a per-rank shape check existed; two different
+  bases (or molecules) can share identical `n_occ`/`n_virt`, so a
+  same-shaped stale sidecar could silently seed a wrong basin. Now compares
+  `basis_name` and `n_occ`/`n_virt` at the read site, degrading to a warned
+  cold-start on mismatch -- the same policy every other sidecar problem
+  here uses. The validating function lives in an anonymous namespace and
+  cannot be unit-tested directly; verified end-to-end on LiH/STO-3G instead
+  (`ccsdt_gen`, rank 3): two independent hand-corrupted sidecars each
+  correctly cold-start at the same final energy a from-scratch run reaches,
+  while an untouched sidecar still warm-starts in 1 iteration.
+
+  **C2 -- the `ccsdt_gen`->`cc4` cross-rank restart, verified end to end.**
+  Ran the actual gate on Be/STO-3G at loose tolerance
+  (`PLANCK_CC_ARBITRARY_LOWER_RANKS=ON`), with `cc_warm_start .false.` on
+  every run to isolate the disk-restart claim from W6's in-memory
+  recursion (which otherwise recurses to a converged rank-3 in memory
+  regardless of whether a sidecar exists, making a "cold" comparison
+  meaningless without it). Genuinely cold `cc4`: 6 iterations,
+  `E_corr = -0.0518049788`. `ccsdt_gen` write (rank 3): 6 iterations,
+  `E_corr = -0.0517514344`. `cc4` restart from that sidecar: **1 iteration**,
+  `E_corr = -0.0517592490`, log line confirms
+  `Warm-started rank 4 from CC amplitude checkpoint ... (seeded 3 rank(s),
+  method 'cc3')`. No warnings during restart -- the empty-sectors-seed-
+  nothing path (a rank-3 source has no sectors of its own) is a silent
+  no-op exactly as reasoned, not an error. Both cold and restart runs land
+  within loose-tolerance spread of the tight-tolerance reference
+  `-14.4036551081` (`be_rccsdtq_sto3g`'s own committed value), confirming
+  the correct basin rather than a coincidentally-plausible wrong answer.
+  **X4 is formally closed.** Not added as a committed regression case (ad
+  hoc `.hfinp` files, not wired into `regression_cases.json` -- see the
+  REMAINING doc for what a permanent gate would need).
+
+  **C4 -- corrected finding, not fixed.** The REMAINING doc previously said
+  C4 was blocked on arbitrary-order UCC landing at all; that premise was
+  wrong -- UCC already exists in the tree, complete and validated
+  (`ucc2`/`ucc3`/`ucc4`, `-DPLANCK_CC_UCC=ON`). Reading `uccgen.cpp`
+  directly found its own comment already correctly diagnoses the real
+  blocker: `.ccamp` persistence was deliberately omitted because
+  `CCAmplitudeCheckpointMeta` carries one `n_occ`/`n_virt` pair, but
+  `UHFReference` needs four independent counts
+  (`n_occ_alpha`/`n_occ_beta`/`n_virt_alpha`/`n_virt_beta`) -- a shape gap
+  C0's `reference_type` byte does not fix (it lets a reader tell RHF from
+  UHF, not represent UHF's counts). Also confirmed: UCC leaves `by_rank`
+  empty entirely (`prepare_generated_ucc_state`'s own comment) and is
+  sectors-only, while its sector tags already fit C0's `(rank, tag)` keying
+  unchanged. This needs a version-3 header design decision, not a
+  mechanical write/read follow-on -- deliberately not built.
+
+  **C4 rescoped 2026-09-04 as U0-U3; ALL FOUR STEPS LANDED 2026-09-05.**
+  `.ccamp` bumped to version 3, adding
+  two independent things merged into one bump (a writer-only fix for the
+  first was tried and found broken on round-trip -- see below): an
+  `n_by_rank` field independent of `max_rank` (previously the reader
+  derived its `by_rank` read-loop trip count from `max_rank`, which held
+  for every RCC caller by construction but breaks the moment `by_rank` is
+  legitimately empty -- exactly UCC's shape), and UCC's four occupation
+  counts on `CCAmplitudeCheckpointMeta`, always written, defaulting to 0
+  for RHF -- following the precedent this codebase already used for the
+  identical problem at the state-struct level (`CanonicalRHFCCReference`
+  adds the same four fields alongside `orbital_partition` rather than
+  repurposing it). `save_cc_amplitudes`'s emptiness check moved to
+  `by_rank.empty() && sectors.empty()`, so a sectors-only write is no
+  longer rejected outright. Version-2 files load with `n_by_rank`
+  defaulted to that file's own `max_rank` (not 0 -- 0 would silently
+  discard every existing version-2 sidecar's `by_rank` data).
+
+  **The doc's own U0 plan was tried first and found broken by testing, not
+  by re-reading it.** A writer-only fix (accept an empty `by_rank`, switch
+  `max_rank`'s write-time source) compiled clean and the write call
+  succeeded, but a real save-then-load round-trip on the exact UCC shape
+  failed: the reader's `by_rank` loop was still silently coupled to
+  `max_rank`, corrupting on the very next field (`n_sectors`'s bytes read
+  as `by_rank` data). U0 and U1 were merged into one version-3 step as a
+  result -- both needed the same bump anyway.
+
+  **A second, independent bug was found and fixed while verifying, not
+  scoped.** The pre-existing version check (`version != 1 && version !=
+  CCAMP_VERSION`) rejected every version strictly between 1 and current --
+  harmless while only 1 and 2 existed, and silently broke every real
+  version-2 file the moment `CCAMP_VERSION` became 3. Caught by the new
+  hand-built version-2-file test, not by inspection. Fixed to accept the
+  full `1..CCAMP_VERSION` range.
+
+  Verified: byte-for-byte inertness on a real BH3/STO-3G RCC `.ccamp`
+  (every field through `reference_type` identical, only the version number
+  and the inserted 36-byte block differ, the entire `by_rank`/`sectors`
+  payload byte-identical); the UCC-shaped round-trip itself (empty
+  `by_rank`, two sectors, non-zero UHF counts, all bytewise-equal after
+  round-trip); three-tier version compatibility (1, 2, 3) in one test
+  binary; every new assertion mutation-verified (reverting the emptiness
+  check, the version-range check, or the `n_by_rank` default each makes
+  exactly the test built to catch it fail). End-to-end beyond the unit
+  gate: a real BH3/STO-3G RCCSD run still converges to the same energy and
+  writes a valid version-3 file; C2's `ccsdt_gen`->`cc4` cross-rank restart
+  on Be still warm-starts in 1 iteration at the same energy; C1's
+  basis-mismatch rejection still cold-starts correctly against a
+  hand-corrupted version-3 file.
+
+  **U2/U3 LANDED 2026-09-05, mechanical as predicted.** `run_uccgen`
+  (`uccgen.cpp`) now has a write site (`meta.reference_type = UHF`, the four
+  counts from `state.reference`, same `_save_checkpoint`/`_checkpoint_path`
+  gate and warn-not-fail policy as `run_rccgen`) and a restart site
+  (`try_restart_ucc_from_sidecar`, mirroring `try_restart_from_sidecar` with
+  a `reference_type` check ahead of the four-count comparison, wired in
+  *after* `ensure_amplitude_sectors` since seeding matches an incoming
+  sector to its live counterpart by key). `seed_arbitrary_order_amplitudes`
+  needed no change, confirmed rather than assumed. Verified end-to-end on
+  `b_ucc2_sto3g` (B/STO-3G doublet): a cold run converges in 12 iterations
+  and writes the sidecar; a `guess density` restart in the same directory
+  warm-starts and converges in **1 iteration** to the identical
+  `E_corr = -0.0402694793`. `b_ucc4_sto3g` (the `ucc4 == FCI` flagship gate)
+  also writes correctly, still converging to `-24.1892649766`. All three
+  negative cases verified against hand-byte-patched copies of a real written
+  sidecar: a corrupted `basis_name`, a corrupted occupation count, and a
+  flipped `reference_type` (UHF->RHF) each independently cold-start with a
+  warning naming the specific mismatch, never failing the run. **The whole
+  C4 UCC-sidecar arc (U0-U3) is complete.**
+
+  **C3 (`run_rccsdt`'s hand-written rank-3 participation) investigated and
+  declined 2026-09-05**, not merely deferred: only the tensor-production
+  backend ever holds dense amplitudes, and only when the system is large
+  enough to skip the determinant backstop (in-tree, only `ch4_rccsdt_sto3g`
+  qualifies) -- every other case re-solves via spin-orbital
+  determinant-space CC with no dense amplitudes surviving to project. Even
+  the qualifying case's amplitudes are spin-orbital and local to
+  `run_tensor_rccsdt_impl`, never returned to a caller. `ccsdt_gen` already
+  covers the gap through the route this project intends to keep long-term.
+  Full record in `docs/CC_AMPLITUDE_CHECKPOINT.md`, which also replaces the
+  three prior scope docs for this whole feature area (all deleted).
+
 - **FCIQMC: the method is implemented and runs from an input file (2026-08-31 to
   2026-09-01).** `correlation fciqmc` is a working calculation. Walker state and
   RNG, the excitation generator with a consistent `p_gen`, spawn/death/
