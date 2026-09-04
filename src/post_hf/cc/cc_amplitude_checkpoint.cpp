@@ -10,14 +10,14 @@ namespace HartreeFock::Correlation::CC
     namespace
     {
         constexpr char CCAMP_MAGIC[8] = {'P', 'L', 'N', 'K', 'C', 'C', 'A', '\0'};
-        // C0: version 2 appends a sector block after `by_rank` (see
-        // write_sectors/read_sectors below) plus a one-byte reference-type field
-        // in the header, folded in now per C4 so a future UCC sidecar does not
-        // need a version 3 -- "one spare byte in the header beats a second
-        // version bump." Version 1 sidecars (no sectors, no reference-type byte)
-        // still load: read_sectors on a truncated-at-EOF stream after `by_rank`
-        // is treated as "no sectors", not an error.
-        constexpr std::uint32_t CCAMP_VERSION = 2;
+        // U0/U1: version 3 adds n_by_rank (the by_rank tensor count,
+        // independent of max_rank -- what makes a sectors-only, empty-
+        // by_rank amplitude set like UCC's representable at all) and UCC's
+        // four occupation counts, both always-present. See the header's own
+        // layout comment for the full field list and the version-2 default
+        // for n_by_rank (that file's own max_rank, not 0 -- see there for
+        // why 0 would be a correctness regression on existing files).
+        constexpr std::uint32_t CCAMP_VERSION = 3;
         constexpr std::uint32_t MAX_TAG_BYTES = 4096;
         constexpr std::uint32_t MAX_SECTORS = 1u << 20; // generous; real counts are floor(n/2)
         // A single rank tensor is o^r v^r doubles; cap the per-rank element count
@@ -129,9 +129,16 @@ namespace HartreeFock::Correlation::CC
         const ArbitraryOrderRCCAmplitudes &amplitudes,
         const CCAmplitudeCheckpointMeta &meta)
     {
-        const int max_rank = static_cast<int>(amplitudes.by_rank.size());
-        if (max_rank < 1)
+        // U0/U1: a UCC amplitude set has an empty by_rank by construction
+        // (prepare_generated_ucc_state -- "No amplitudes at all: by_rank
+        // stays empty... the sectors are filled by ensure_amplitude_sectors")
+        // and carries its real data entirely in `sectors`. Rejecting on
+        // by_rank alone made that shape indistinguishable from a genuinely
+        // empty call; the file is meaningless only when BOTH are empty.
+        if (amplitudes.by_rank.empty() && amplitudes.sectors.empty())
             return std::unexpected("save_cc_amplitudes: amplitudes are empty.");
+        if (meta.max_rank < 1)
+            return std::unexpected("save_cc_amplitudes: meta.max_rank must be at least 1.");
 
         std::ofstream out(path, std::ios::binary | std::ios::trunc);
         if (!out)
@@ -144,7 +151,7 @@ namespace HartreeFock::Correlation::CC
 
         out.write(CCAMP_MAGIC, 8);
         out.write(reinterpret_cast<const char *>(&CCAMP_VERSION), 4);
-        const std::int32_t max_rank_i32 = max_rank;
+        const std::int32_t max_rank_i32 = meta.max_rank;
         out.write(reinterpret_cast<const char *>(&max_rank_i32), 4);
         write_string(out, meta.method);
         write_string(out, meta.basis_name);
@@ -152,6 +159,18 @@ namespace HartreeFock::Correlation::CC
         out.write(reinterpret_cast<const char *>(&meta.n_virt), 8);
         const std::uint8_t reference_type_u8 = static_cast<std::uint8_t>(meta.reference_type);
         out.write(reinterpret_cast<const char *>(&reference_type_u8), 1);
+
+        // U0/U1: n_by_rank is the actual by_rank tensor count, independent
+        // of max_rank -- this is what makes an empty by_rank (UCC's shape)
+        // distinguishable from "max_rank tensors were written". Every RCC
+        // caller has n_by_rank == max_rank by construction; a UCC caller
+        // legitimately writes n_by_rank == 0.
+        const std::int32_t n_by_rank = static_cast<std::int32_t>(amplitudes.by_rank.size());
+        out.write(reinterpret_cast<const char *>(&n_by_rank), 4);
+        out.write(reinterpret_cast<const char *>(&meta.n_occ_alpha), 8);
+        out.write(reinterpret_cast<const char *>(&meta.n_occ_beta), 8);
+        out.write(reinterpret_cast<const char *>(&meta.n_virt_alpha), 8);
+        out.write(reinterpret_cast<const char *>(&meta.n_virt_beta), 8);
 
         for (const TensorND &t : amplitudes.by_rank)
             write_tensor(out, t);
@@ -191,9 +210,18 @@ namespace HartreeFock::Correlation::CC
         std::uint32_t version = 0;
         if (auto r = read_exact(in, reinterpret_cast<char *>(&version), 4, "version"); !r)
             return std::unexpected(r.error());
-        if (version != 1 && version != CCAMP_VERSION)
+        // U0/U1: every version from 1 through CCAMP_VERSION is a valid,
+        // supported read -- not just 1 and the current version. Missed this
+        // on the first pass of this exact change: `version != 1 &&
+        // version != CCAMP_VERSION` rejected version 2 outright the moment
+        // CCAMP_VERSION became 3, which is precisely the "do not skip the
+        // version-2 compatibility branch" trap this format's own history
+        // warns about. Caught by testing the old (pre-this-change) binary's
+        // own version-2 output against the new reader, not by re-reading
+        // the diff.
+        if (version < 1 || version > CCAMP_VERSION)
             return std::unexpected(std::format(
-                "load_cc_amplitudes: version {} unsupported (expected 1 or {}).", version, CCAMP_VERSION));
+                "load_cc_amplitudes: version {} unsupported (expected 1..{}).", version, CCAMP_VERSION));
 
         CCAmplitudeCheckpoint chk;
         std::int32_t max_rank = 0;
@@ -236,8 +264,40 @@ namespace HartreeFock::Correlation::CC
             chk.meta.reference_type = CCReferenceType::RHF;
         }
 
-        chk.amplitudes.by_rank.reserve(static_cast<std::size_t>(max_rank));
-        for (int rank = 1; rank <= max_rank; ++rank)
+        // U0/U1: n_by_rank + the four UHF counts, present from version 3
+        // onward. Versions 1 and 2 never wrote n_by_rank because every file
+        // they ever produced satisfied n_by_rank == max_rank by construction
+        // (RCC-only; UCC's empty-by_rank shape did not exist yet) -- so
+        // defaulting to max_rank here is not a guess, it is reconstructing
+        // exactly the invariant those writers upheld. Defaulting to 0
+        // instead would silently discard every existing version-1/2
+        // sidecar's by_rank data on the next load, since the read loop
+        // below is driven by n_by_rank, not max_rank.
+        std::int32_t n_by_rank = max_rank;
+        if (version >= 3)
+        {
+            if (auto r = read_exact(in, reinterpret_cast<char *>(&n_by_rank), 4, "n_by_rank"); !r)
+                return std::unexpected(r.error());
+            if (n_by_rank < 0 || n_by_rank > max_rank)
+                return std::unexpected(std::format(
+                    "load_cc_amplitudes: n_by_rank {} is invalid for max_rank {}.",
+                    n_by_rank, max_rank));
+            if (auto r = read_exact(in, reinterpret_cast<char *>(&chk.meta.n_occ_alpha), 8,
+                                    "n_occ_alpha"); !r)
+                return std::unexpected(r.error());
+            if (auto r = read_exact(in, reinterpret_cast<char *>(&chk.meta.n_occ_beta), 8,
+                                    "n_occ_beta"); !r)
+                return std::unexpected(r.error());
+            if (auto r = read_exact(in, reinterpret_cast<char *>(&chk.meta.n_virt_alpha), 8,
+                                    "n_virt_alpha"); !r)
+                return std::unexpected(r.error());
+            if (auto r = read_exact(in, reinterpret_cast<char *>(&chk.meta.n_virt_beta), 8,
+                                    "n_virt_beta"); !r)
+                return std::unexpected(r.error());
+        }
+
+        chk.amplitudes.by_rank.reserve(static_cast<std::size_t>(n_by_rank));
+        for (int rank = 1; rank <= n_by_rank; ++rank)
         {
             auto tensor = read_tensor(in, std::format("rank-{}", rank), max_rank);
             if (!tensor)

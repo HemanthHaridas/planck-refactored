@@ -12,6 +12,17 @@
 // reading as "zero sectors" -- that distinction is the actual defect this
 // gate exists to catch, since "ends right after by_rank" and "ends partway
 // through n_sectors/a sector" must NOT be treated the same way.
+//
+// U0/U1: extended further to cover the version-3 fields (n_by_rank + UCC's
+// four occupation counts). Covers: a sectors-only amplitude set (empty
+// by_rank, the exact UCC shape) round-trips correctly, which the version-2
+// format could not represent at all -- a writer-only fix for this was tried
+// first and found broken on round-trip (see
+// docs/CC_AMPLITUDE_CHECKPOINT_UCC_SCOPE.md), so this test exists
+// specifically to keep that regression from recurring; a hand-built
+// version-2 file (no n_by_rank, no UHF counts in the byte stream) loads
+// with n_by_rank defaulted to THAT FILE'S OWN max_rank, not to 0 -- 0 would
+// silently discard every existing version-2 sidecar's by_rank data.
 
 #include <cassert>
 #include <cstdio>
@@ -61,6 +72,27 @@ namespace
         for (std::size_t i = 0; i < sector.data.size(); ++i)
             sector.data[i] = 7.0 - 0.003 * static_cast<double>(i); // distinct from by_rank[3]
         amps.sectors.push_back({{4, "aaabaaab"}, std::move(sector)});
+        return amps;
+    }
+
+    // U0/U1: the exact UCC shape -- by_rank EMPTY, all real data in sectors.
+    // Mirrors prepare_generated_ucc_state's own documented state ("No
+    // amplitudes at all: by_rank stays empty... the sectors are filled by
+    // ensure_amplitude_sectors"). Two rank-2 spin blocks, matching
+    // ucc_amplitude_blocks(2)'s tag shape ("aaaa"/"abab"/"bbbb"-style).
+    ArbitraryOrderRCCAmplitudes make_ucc_sample()
+    {
+        ArbitraryOrderRCCAmplitudes amps;
+        std::vector<int> dims{2, 2, 2, 2};
+        TensorND aaaa(dims, 0.0);
+        for (std::size_t i = 0; i < aaaa.data.size(); ++i)
+            aaaa.data[i] = 0.02 * static_cast<double>(i) - 0.1;
+        TensorND abab(dims, 0.0);
+        for (std::size_t i = 0; i < abab.data.size(); ++i)
+            abab.data[i] = 0.03 * static_cast<double>(i) + 0.4; // distinct from aaaa
+        amps.sectors.push_back({{2, "aaaa"}, std::move(aaaa)});
+        amps.sectors.push_back({{2, "abab"}, std::move(abab)});
+        // by_rank deliberately left empty.
         return amps;
     }
 
@@ -281,6 +313,122 @@ int main()
 
         std::filesystem::remove(zero_sector_path);
         std::filesystem::remove(trunc_n_sectors_path);
+    }
+
+    // U0/U1: the sectors-only (UCC) shape round-trips correctly -- empty
+    // by_rank, real data entirely in sectors, non-zero UHF occupation
+    // counts. This is the exact case a writer-only fix was tried and found
+    // broken on: save_cc_amplitudes succeeding is not evidence
+    // load_cc_amplitudes can read what it wrote back correctly, since the
+    // reader's by_rank loop trip count used to be silently coupled to
+    // max_rank rather than to an independent field.
+    {
+        const std::string ucc_path = temp_path("planck_ccamp_ucc_roundtrip.ccamp");
+        const ArbitraryOrderRCCAmplitudes original = make_ucc_sample();
+        CCAmplitudeCheckpointMeta meta{
+            .max_rank = 2,
+            .method = "ucc2",
+            .basis_name = "sto-3g",
+            .n_occ = 0,
+            .n_virt = 0,
+            .reference_type = CCReferenceType::UHF,
+            .n_occ_alpha = 3,
+            .n_occ_beta = 2,
+            .n_virt_alpha = 4,
+            .n_virt_beta = 5,
+        };
+
+        auto saved = save_cc_amplitudes(ucc_path, original, meta);
+        assert(saved && "save with an empty by_rank and populated sectors should succeed");
+
+        auto loaded = load_cc_amplitudes(ucc_path);
+        assert(loaded && "load of a sectors-only (UCC-shaped) file should succeed");
+
+        assert(loaded->meta.max_rank == 2);
+        assert(loaded->meta.method == "ucc2");
+        assert(loaded->meta.reference_type == CCReferenceType::UHF);
+        assert(loaded->meta.n_occ_alpha == 3);
+        assert(loaded->meta.n_occ_beta == 2);
+        assert(loaded->meta.n_virt_alpha == 4);
+        assert(loaded->meta.n_virt_beta == 5);
+
+        // The actual defect: by_rank must be genuinely empty, not
+        // reconstructed or padded from max_rank.
+        assert(loaded->amplitudes.by_rank.empty());
+
+        assert(loaded->amplitudes.sectors.size() == 2);
+        for (std::size_t s = 0; s < original.sectors.size(); ++s)
+        {
+            assert(loaded->amplitudes.sectors[s].first == original.sectors[s].first);
+            assert(loaded->amplitudes.sectors[s].second.dims == original.sectors[s].second.dims);
+            assert(loaded->amplitudes.sectors[s].second.data == original.sectors[s].second.data);
+        }
+        // The two sectors must be genuinely distinct in the round-tripped
+        // data -- catches an aliasing bug where both keys end up pointing
+        // at the same underlying tensor.
+        assert(loaded->amplitudes.sectors[0].second.data != loaded->amplitudes.sectors[1].second.data);
+
+        std::filesystem::remove(ucc_path);
+    }
+
+    // U0/U1: a hand-built version-2 file (no n_by_rank, no UHF counts in the
+    // byte stream -- the exact shape every sidecar written before this
+    // scope's fix has on disk) must still load, with n_by_rank defaulted to
+    // THAT FILE'S OWN max_rank (not 0 -- 0 would silently discard the
+    // by_rank data every existing version-2 sidecar actually carries) and
+    // the four UHF counts defaulted to 0.
+    {
+        const std::string v2_path = temp_path("planck_ccamp_v2_compat.ccamp");
+        {
+            std::ofstream out(v2_path, std::ios::binary | std::ios::trunc);
+            const char magic[8] = {'P', 'L', 'N', 'K', 'C', 'C', 'A', '\0'};
+            out.write(magic, 8);
+            const std::uint32_t version = 2;
+            out.write(reinterpret_cast<const char *>(&version), 4);
+            const std::int32_t max_rank = 1;
+            out.write(reinterpret_cast<const char *>(&max_rank), 4);
+            const std::uint32_t method_len = 3;
+            out.write(reinterpret_cast<const char *>(&method_len), 4);
+            out.write("cc1", 3);
+            const std::uint32_t basis_len = 6;
+            out.write(reinterpret_cast<const char *>(&basis_len), 4);
+            out.write("sto-3g", 6);
+            const std::uint64_t n_occ = 2, n_virt = 2;
+            out.write(reinterpret_cast<const char *>(&n_occ), 8);
+            out.write(reinterpret_cast<const char *>(&n_virt), 8);
+            const std::uint8_t reference_type_u8 = 0; // RHF
+            out.write(reinterpret_cast<const char *>(&reference_type_u8), 1);
+            // rank 1: order=2, dims=[2,2], count=4, data
+            const std::int32_t order = 2;
+            out.write(reinterpret_cast<const char *>(&order), 4);
+            const std::int32_t d0 = 2, d1 = 2;
+            out.write(reinterpret_cast<const char *>(&d0), 4);
+            out.write(reinterpret_cast<const char *>(&d1), 4);
+            const std::uint64_t count = 4;
+            out.write(reinterpret_cast<const char *>(&count), 8);
+            const double data[4] = {5.0, 6.0, 7.0, 8.0};
+            out.write(reinterpret_cast<const char *>(data), sizeof(data));
+            const std::int32_t n_sectors = 0;
+            out.write(reinterpret_cast<const char *>(&n_sectors), 4);
+            // File ends here -- no n_by_rank, no UHF counts.
+        }
+
+        auto loaded = load_cc_amplitudes(v2_path);
+        assert(loaded && "a version-2 file must still load");
+        assert(loaded->meta.method == "cc1");
+        assert(loaded->meta.reference_type == CCReferenceType::RHF);
+        // The default under test: n_by_rank must come from max_rank (1),
+        // not from a hardcoded 0.
+        assert(loaded->amplitudes.by_rank.size() == 1);
+        assert((loaded->amplitudes.by_rank[0].dims == std::vector<int>{2, 2}));
+        assert((loaded->amplitudes.by_rank[0].data == std::vector<double>{5.0, 6.0, 7.0, 8.0}));
+        assert(loaded->amplitudes.sectors.empty());
+        assert(loaded->meta.n_occ_alpha == 0);
+        assert(loaded->meta.n_occ_beta == 0);
+        assert(loaded->meta.n_virt_alpha == 0);
+        assert(loaded->meta.n_virt_beta == 0);
+
+        std::filesystem::remove(v2_path);
     }
 
     std::cout << "cc_amplitude_checkpoint: all round-trip and error cases passed\n";

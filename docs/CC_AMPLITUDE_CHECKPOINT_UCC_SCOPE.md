@@ -1,6 +1,6 @@
 # `.ccamp` support for UCC (C4)
 
-Scope for in-flight work. Not started. Follow-on to
+Scope for in-flight work. **U0/U1 landed**; U2/U3 not started. Follow-on to
 `CC_AMPLITUDE_CHECKPOINT_REMAINING_SCOPE.md`'s C4, which found the real
 blocker (not the premise that section originally stated) but did not build
 anything, deliberately, per the earlier decision to document rather than
@@ -88,7 +88,7 @@ that currently rejects this shape, not to the data model.
 
 ## Steps
 
-### U0/U1 merged — the version-3 header: `by_rank` count + four UHF counts, both additive (~S)
+### U0/U1 merged — the version-3 header: `by_rank` count + four UHF counts, both additive (~S) — DONE
 
 **U0 and U1 were originally scoped as separate, independently-landable
 steps. They are not.** Found by actually building U0 in isolation and
@@ -187,6 +187,60 @@ site's `by_rank.size()` does NOT already equal what becomes `n_by_rank`
 that actually drives the read loop instead of the field that only looked
 like it did.
 
+**All five verified, and a SECOND real bug found and fixed along the way —
+the version-check off-by-one, not the reader/writer coupling this step was
+scoped to fix.** `if (version != 1 && version != CCAMP_VERSION)` (the
+pre-existing check, unchanged since the version-1→2 jump) rejects every
+version strictly between 1 and the current one — harmless when only
+versions 1 and 2 existed, but the moment `CCAMP_VERSION` became 3 it
+silently rejected every real version-2 file on disk with "version 2
+unsupported." Caught by step 4's own hand-built version-2 file test, not by
+re-reading the diff — confirming exactly the failure mode step 1's
+byte-diff cannot see (byte-diff only proves an RCC WRITE stays inert; it
+says nothing about whether an OLD file can still be READ). Fixed by
+changing the check to `version < 1 || version > CCAMP_VERSION`, accepting
+every version from 1 through the current one, not just the endpoints.
+
+1. **Inertness** — confirmed byte-for-byte on a real BH3/STO-3G RCC
+   `.ccamp`: every field through `reference_type` identical; the only
+   differences are the version number (2→3) and the inserted 36-byte
+   `n_by_rank` + four-`u64` block; `n_by_rank` in the new file correctly
+   reads back as 2 (== `max_rank` == `by_rank.size()`); the entire remaining
+   payload (`by_rank` tensors, `n_sectors`, sector data) is byte-identical.
+2. **The exact failure round-tripped for real** — the empty-`by_rank`/
+   two-sector UCC-shaped fixture now saves and loads correctly: `by_rank`
+   comes back genuinely empty (not padded), both sectors round-trip
+   bytewise-equal and are confirmed distinct from each other (catches an
+   aliasing bug the earlier gate's own `sectors[0] != by_rank[3]` check
+   established as the right shape of assertion).
+3. **UHF counts round-trip** — confirmed on the same fixture:
+   `n_occ_alpha`/`n_occ_beta`/`n_virt_alpha`/`n_virt_beta` all bytewise-equal
+   after round-trip.
+4. **Version-2 compatibility** — confirmed on a hand-built version-2 file
+   (no `n_by_rank`, no UHF counts in the byte stream): `by_rank` correctly
+   defaults to that file's own `max_rank`-worth of tensors (not 0), UHF
+   counts default to 0. This is also the test that caught the version-check
+   bug above — before that fix, this case failed with `"version 2
+   unsupported"`, not a wrong default.
+5. **Version-1 compatibility** — confirmed unmodified, alongside the new
+   version-2 and version-3 cases in the same test binary.
+
+All five are also mutation-verified: reverting the emptiness-check fix,
+reverting the version-check fix, and reverting the `n_by_rank` version-2
+default (0 instead of `max_rank`) were each tested in isolation and each
+makes exactly the case built to catch it fail — the emptiness-check
+mutation fails the UCC round-trip test; the version-check mutation fails
+the version-2 compat test; the `n_by_rank`-default mutation fails the
+version-1 compat test (before even reaching version-2 — the shared default
+path is exercised by both, so a wrong default breaks the older tier first).
+
+End-to-end verified beyond the unit gate: a real BH3/STO-3G RCCSD run
+(X5.1's own write site) still converges to the same energy and writes a
+correct version-3 file; the C2 cross-rank `ccsdt_gen`→`cc4` restart on Be
+still warm-starts in 1 iteration at the same energy as before this change;
+C1's basis-mismatch rejection still correctly cold-starts with a warning
+against a hand-corrupted version-3 file.
+
 **Do not skip the version-2 compatibility branch, and do not default
 `n_by_rank` to anything but that file's own `max_rank` for a version-2
 read.** The version-1→2 jump already proved the general trap is real (a
@@ -264,17 +318,15 @@ work.
 
 ## Sequencing and risk
 
-U0/U1 (merged) is the one step with a real inertness risk — a byte-layout
-and write-time behavior change for every existing RCC caller, not just
-UCC — and must be verified byte-for-byte before anything downstream is
-trusted; its own history (planned as two separately-landable steps, found
-by testing to be one) is the reason to trust its "merge, don't split
-further" conclusion rather than re-attempt the split. U2 and U3 are
-mechanical once U0/U1 lands — they are the same write-site/read-site
-pattern C0/C1/C2 already established for RCC, applied to a second caller,
-and need no real UCC run to verify until U2 itself. Do not start U2 before
-U0/U1's own gates (including the version-2 default-`n_by_rank` case, which
-is the sharpest of the bunch) are green.
+**U0/U1 (merged) landed.** It was the one step with a real inertness risk —
+a byte-layout and write-time behavior change for every existing RCC caller,
+not just UCC — and is now verified byte-for-byte (see U0/U1's own verify
+section above for the results and the two real bugs the process caught: the
+reader/writer coupling the step was scoped to fix, and a version-check
+off-by-one found only by the version-2 hand-built test, not by inspection).
+U2 and U3 remain: mechanical now that U0/U1 has landed — they are the same
+write-site/read-site pattern C0/C1/C2 already established for RCC, applied
+to a second caller — and need no real UCC run to verify until U2 itself.
 
 ## What NOT to do
 
