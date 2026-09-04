@@ -1266,46 +1266,21 @@ Q1 verdict (Karp-Flatt serial fraction rather than efficiency-at-max-ranks,
     `project_rccsd_amplitudes_to_spatial`, plus excluding the
     determinant-space/tensor-optimized backends (only the tensor backend
     holds dense amplitudes) from the write path.
-  - **C4 — a UCC sidecar is NOT blocked on UCC landing (it already has);
-    it's blocked on a real metadata-shape decision.** Corrected finding:
-    the previous entry here said C4 was "blocked entirely on arbitrary-order
-    UCC landing," which is wrong — UCC already exists in the tree, complete
-    and validated (`ucc2`/`ucc3`/`ucc4`, `-DPLANCK_CC_UCC=ON`). The real
-    blocker was already diagnosed correctly by `uccgen.cpp`'s own in-tree
-    comment ("the sidecar's meta carries a single (n_occ, n_virt) pair,
-    which cannot describe a spin-resolved amplitude set... `.ccamp`
-    persistence" deliberately omitted) — confirmed independently by reading
-    `CCAmplitudeCheckpointMeta` (one `n_occ`/`n_virt` pair) against
-    `UHFReference` (four independent counts: `n_occ_alpha`, `n_occ_beta`,
-    `n_virt_alpha`, `n_virt_beta`). C0's `reference_type` byte lets a reader
-    tell a UHF sidecar from an RHF one but does nothing to fix the shape
-    underneath — even a correctly-tagged UHF file has nowhere to put its
-    real occupation counts today. This needs a version-3 header design
-    (how to carry four counts, and whether `by_rank` means anything for UCC
-    at all — confirmed this session it does not: `prepare_generated_ucc_state`
-    leaves it empty, UCC is sectors-only) before any write/read code is
-    worth writing. UCC's sector tags (`"aaaa"`/`"abab"`/`"bbbb"`-style,
-    `ucc_amplitude_blocks`) already fit C0's `(rank, tag)` keying without
-    change. Deliberately not built that session — a real design decision,
-    not a mechanical follow-on the way C0/C1/C2 were.
-
-    **Rescoped 2026-09-04 into `docs/CC_AMPLITUDE_CHECKPOINT_UCC_SCOPE.md`
-    as four small verifiable steps (U0-U3), not started.** Found a SECOND,
-    independent blocker while scoping: `save_cc_amplitudes` rejects a
-    sectors-only amplitude set outright (`by_rank.size() < 1` is checked
-    before any metadata question applies) — confirmed by compiling and
-    running a standalone probe against the real function with the exact
-    empty-`by_rank`/populated-`sectors` shape `prepare_generated_ucc_state`
-    produces, not just by reading the code. U0 fixes that (and a related
-    dead-field bug: `meta.max_rank` is silently ignored on write today,
-    always recomputed from `by_rank.size()`, which breaks the moment
-    `by_rank` can legitimately be empty). U1 is the version-3 header,
-    following the additive-fields precedent this codebase already used once
-    for the identically-shaped problem at the state-struct level
-    (`CanonicalRHFCCReference` added four UHF counts alongside
-    `orbital_partition` rather than repurposing it, specifically so RCC's
-    existing reads stay untouched). U2/U3 mirror C0/C1's own write-site/
-    read-site pattern, applied to `run_uccgen`.
+  - **C4 — a UCC sidecar. U0/U1 LANDED 2026-09-05 (the version-3 header);
+    U2/U3 (the write/restart sites) remain.** Full record and the two
+    corrections along the way are in Completion; summarized here as what's
+    still open. `run_uccgen` (`uccgen.cpp`) still has zero references to the
+    checkpoint machinery — U0/U1 made the format *capable* of representing a
+    UCC amplitude set (empty `by_rank`, sectors-only, four UHF occupation
+    counts), it did not wire anything into the UCC entry point itself.
+    **U2** (a write site mirroring `run_rccgen`'s, `reference_type = UHF`
+    and the four counts sourced from `state.reference`) and **U3** (a
+    restart site mirroring `try_restart_from_sidecar`, checking
+    `reference_type` before the occupation counts so a wrong-reference-type
+    file can't coincidentally pass a shape check) are scoped in
+    `docs/CC_AMPLITUDE_CHECKPOINT_UCC_SCOPE.md` and not started.
+    `seed_arbitrary_order_amplitudes` needs no change for U3 — confirmed by
+    reading it, already reference-kind-agnostic.
 
 ## ccgen generated-kernel performance
 

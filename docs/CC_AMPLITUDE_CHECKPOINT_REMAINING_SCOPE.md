@@ -1,10 +1,11 @@
 # `.ccamp` dumping and reading — what remains
 
 Follow-on scope to `CC_AMPLITUDE_CHECKPOINT_SCOPE.md`, which specified X0–X5.
-X0–X4.1 are landed. This file's own C0, C1, and C2 are now also landed and
-verified (PR #164, branch `ccamp-x5-spin-orbital-projection`). C3 and C4
-remain open; this revision sharpens each with the detail needed to pick it up
-without re-deriving context.
+X0–X4.1 are landed. This file's own C0, C1, and C2 are landed and verified
+(PR #164, branch `ccamp-x5-spin-orbital-projection`). C4 was rescoped into
+`CC_AMPLITUDE_CHECKPOINT_UCC_SCOPE.md`, whose U0/U1 has since landed there —
+see that doc for current status; this file's own C4 section stays as the
+historical record of how the blocker was found. C3 remains open here.
 
 Grounded in the current tree.
 
@@ -223,21 +224,18 @@ mechanical:
    repeat the exact mistake C0 was fixing (a sidecar that looks complete but
    silently discards or misrepresents real data).
 
-**Recommendation: still don't build this now.** It is a real design decision
-(the version-3 header shape) that deserves its own pass, not a same-session
-add-on the way C0/C1/C2 were. `uccgen.cpp`'s own comment is doing its job —
-it is accurate, and nothing here should be built until that comment's
-condition (a sidecar format that can actually hold UHF's occupation counts)
-is met.
-
-**Rescoped in small verifiable steps**: `CC_AMPLITUDE_CHECKPOINT_UCC_SCOPE.md`.
-That scope also found a SECOND, independent blocker this section did not —
-`save_cc_amplitudes` rejects a sectors-only amplitude set outright
-(`by_rank.size() < 1` is checked before any metadata question even applies),
-confirmed by actually running a standalone probe against the real function,
-not just by reading it. Both blockers, and the four-step U0-U3 plan to fix
-them, live in that doc now; this section stays as the historical record of
-how the metadata-shape blocker was found.
+**Update: the version-3 header this section said not to build without its
+own pass has since landed.** `CC_AMPLITUDE_CHECKPOINT_UCC_SCOPE.md`'s U0/U1
+is done (2026-09-05) — that scope also found a SECOND, independent blocker
+this section did not (`save_cc_amplitudes` rejected a sectors-only amplitude
+set outright, confirmed by running a probe against the real function, not
+just reading it). `uccgen.cpp`'s own comment, quoted above, is now
+out of date: the sidecar format it describes as unable to hold UHF's
+occupation counts can now hold them. What remains is U2/U3 — a UCC write
+site and restart site in `run_uccgen` itself, which still has zero
+references to the checkpoint machinery; see the UCC scope doc for detail.
+This section stays as the historical record of how the metadata-shape
+blocker was found, not as current status.
 
 ---
 
@@ -250,10 +248,9 @@ how the metadata-shape blocker was found.
    done. Revisit only if `run_rccsdt`'s hand-written backends stay production
    longer than `ccsdt_gen`'s adoption. ~M if picked up.
 5. **C4 (UCC sidecar)** — rescoped into `CC_AMPLITUDE_CHECKPOINT_UCC_SCOPE.md`
-   as U0-U3, small verifiable steps. U0 fixes a second confirmed blocker
-   (a sectors-only amplitude set is rejected outright, independent of the
-   metadata-shape question); U1 is the version-3 header; U2/U3 mirror C0/C1's
-   own write-site/read-site pattern for `run_uccgen`. Not started.
+   as U0-U3. **U0/U1 DONE** (the version-3 header: the sectors-only-write
+   fix plus the format shape for UHF's occupation counts). U2/U3 (mirroring
+   C0/C1's own write-site/read-site pattern for `run_uccgen`) remain.
 
 ---
 

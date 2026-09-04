@@ -376,10 +376,63 @@ historical design context, but they are no longer the source of truth for
   unchanged. This needs a version-3 header design decision, not a
   mechanical write/read follow-on -- deliberately not built.
 
-  **Still open, tracked in the REMAINING doc**: C3
-  (`run_rccsdt`'s hand-written rank-3 participation, deliberately deferred
-  since `ccsdt_gen` already covers the gap it would close) and C4 as
-  corrected above.
+  **C4 rescoped 2026-09-04 into `docs/CC_AMPLITUDE_CHECKPOINT_UCC_SCOPE.md`
+  as U0-U3; U0/U1 LANDED 2026-09-05.** `.ccamp` bumped to version 3, adding
+  two independent things merged into one bump (a writer-only fix for the
+  first was tried and found broken on round-trip -- see below): an
+  `n_by_rank` field independent of `max_rank` (previously the reader
+  derived its `by_rank` read-loop trip count from `max_rank`, which held
+  for every RCC caller by construction but breaks the moment `by_rank` is
+  legitimately empty -- exactly UCC's shape), and UCC's four occupation
+  counts on `CCAmplitudeCheckpointMeta`, always written, defaulting to 0
+  for RHF -- following the precedent this codebase already used for the
+  identical problem at the state-struct level (`CanonicalRHFCCReference`
+  adds the same four fields alongside `orbital_partition` rather than
+  repurposing it). `save_cc_amplitudes`'s emptiness check moved to
+  `by_rank.empty() && sectors.empty()`, so a sectors-only write is no
+  longer rejected outright. Version-2 files load with `n_by_rank`
+  defaulted to that file's own `max_rank` (not 0 -- 0 would silently
+  discard every existing version-2 sidecar's `by_rank` data).
+
+  **The doc's own U0 plan was tried first and found broken by testing, not
+  by re-reading it.** A writer-only fix (accept an empty `by_rank`, switch
+  `max_rank`'s write-time source) compiled clean and the write call
+  succeeded, but a real save-then-load round-trip on the exact UCC shape
+  failed: the reader's `by_rank` loop was still silently coupled to
+  `max_rank`, corrupting on the very next field (`n_sectors`'s bytes read
+  as `by_rank` data). U0 and U1 were merged into one version-3 step as a
+  result -- both needed the same bump anyway.
+
+  **A second, independent bug was found and fixed while verifying, not
+  scoped.** The pre-existing version check (`version != 1 && version !=
+  CCAMP_VERSION`) rejected every version strictly between 1 and current --
+  harmless while only 1 and 2 existed, and silently broke every real
+  version-2 file the moment `CCAMP_VERSION` became 3. Caught by the new
+  hand-built version-2-file test, not by inspection. Fixed to accept the
+  full `1..CCAMP_VERSION` range.
+
+  Verified: byte-for-byte inertness on a real BH3/STO-3G RCC `.ccamp`
+  (every field through `reference_type` identical, only the version number
+  and the inserted 36-byte block differ, the entire `by_rank`/`sectors`
+  payload byte-identical); the UCC-shaped round-trip itself (empty
+  `by_rank`, two sectors, non-zero UHF counts, all bytewise-equal after
+  round-trip); three-tier version compatibility (1, 2, 3) in one test
+  binary; every new assertion mutation-verified (reverting the emptiness
+  check, the version-range check, or the `n_by_rank` default each makes
+  exactly the test built to catch it fail). End-to-end beyond the unit
+  gate: a real BH3/STO-3G RCCSD run still converges to the same energy and
+  writes a valid version-3 file; C2's `ccsdt_gen`->`cc4` cross-rank restart
+  on Be still warm-starts in 1 iteration at the same energy; C1's
+  basis-mismatch rejection still cold-starts correctly against a
+  hand-corrupted version-3 file.
+
+  **Still open, tracked in the UCC scope doc**: U2 (a UCC write site in
+  `run_uccgen`, mirroring `run_rccgen`'s) and U3 (a UCC restart site,
+  mirroring `try_restart_from_sidecar` with a `reference_type` check ahead
+  of the occupation-count comparison). Also still open, tracked in the
+  REMAINING doc: C3 (`run_rccsdt`'s hand-written rank-3 participation,
+  deliberately deferred since `ccsdt_gen` already covers the gap it would
+  close).
 
 - **FCIQMC: the method is implemented and runs from an input file (2026-08-31 to
   2026-09-01).** `correlation fciqmc` is a working calculation. Walker state and

@@ -18,7 +18,7 @@ identically to a W6 in-memory seed.
 
 | Piece | Where | What it does |
 |---|---|---|
-| Format + writer/loader | `src/post_hf/cc/cc_amplitude_checkpoint.{h,cpp}` | Little-endian, magic+version framed, rank-generic. Now version 2 (a follow-on defect fix, see below) |
+| Format + writer/loader | `src/post_hf/cc/cc_amplitude_checkpoint.{h,cpp}` | Little-endian, magic+version framed, rank-generic. Now version 3 (two follow-on fixes: the version-2 sector-drop defect, and version-3's `n_by_rank`/UHF-count extension for UCC — see below) |
 | Write on a converged generated solve | `rccgen.cpp` (`run_rccgen`) | Gated on `_save_checkpoint && !_checkpoint_path.empty()`; write failure is a warning, never a run failure |
 | Read + seed on restart | `rccgen.cpp` (`try_restart_from_sidecar`) | `load_cc_amplitudes` → `seed_arbitrary_order_amplitudes`; any error falls through to cold/W6, never fails the run |
 | Rank-3 arbitrary emit | `PLANCK_CC_ARBITRARY_LOWER_RANKS` (CMake option) | Lowers the generated-kernel registry floor from 4 to 3, so `ccsdt_gen` can write a spatial rank-3 sidecar the same way `cc4`+ does |
@@ -41,12 +41,13 @@ mismatched sidecar degrades to a cold start (or W6's in-memory recursion)
 with a logged warning — it never fails the run. Every check added to this
 area since, including the two described next, follows this same rule.
 
-## Two defects found and fixed after the spine landed
+## Two defects, and one capability gap, found and fixed after the spine landed
 
-Both are documented in full, with the exact failure mode and how each was
-verified, in `CC_AMPLITUDE_CHECKPOINT_REMAINING_SCOPE.md` (its own C0/C1
-sections) — summarized here only so this file's own history is honest about
-what "landed" originally meant versus what it means now:
+Documented in full, with the exact failure mode and how each was verified,
+in `CC_AMPLITUDE_CHECKPOINT_REMAINING_SCOPE.md` (C0/C1) and
+`CC_AMPLITUDE_CHECKPOINT_UCC_SCOPE.md` (U0/U1) — summarized here only so
+this file's own history is honest about what "landed" originally meant
+versus what it means now:
 
 - **The original format silently dropped higher Sz sectors** for rank-≥4
   amplitude sets (the independent sector blocks a CCSDTQ+ solve carries
@@ -60,6 +61,15 @@ what "landed" originally meant versus what it means now:
   same-shaped sidecar from a different basis or molecule could silently seed
   a wrong basin. Fixed by comparing `basis_name` and `n_occ`/`n_virt` at the
   read site before seeding.
+- **The format could not represent a sectors-only amplitude set at all** —
+  not a defect in existing data, but a capability gap that blocked a UCC
+  sidecar from being written under any metadata scheme, since the reader's
+  `by_rank` loop trip count was coupled to `max_rank` with no independent
+  count. Fixed by bumping to version 3 and adding `n_by_rank`, alongside
+  UHF's four occupation counts the same bump needed anyway. A version-check
+  off-by-one (rejecting every version strictly between 1 and current) was
+  found and fixed in the same pass — harmless until the bump made it real,
+  caught by a version-2 compatibility test, not by inspection.
 
 ## The hand-written solvers
 
@@ -103,15 +113,15 @@ Tracked in `CC_AMPLITUDE_CHECKPOINT_REMAINING_SCOPE.md`:
   sidecar correctly seeds a `cc4` restart (1 iteration vs 6 cold, same
   basin), closing X4 formally.
 - **C3** — `run_rccsdt`'s hand-written participation, deferred as above.
-- **C4 is not blocked on UCC landing — arbitrary-order UCC already exists in
-  the tree.** The real blocker, found by reading `uccgen.cpp`'s own comment
-  (it already explains this correctly), is that `CCAmplitudeCheckpointMeta`
-  cannot represent a UHF reference's four occupation counts
-  (`n_occ_alpha`/`n_occ_beta`/`n_virt_alpha`/`n_virt_beta`) with its current
-  single `n_occ`/`n_virt` pair — the `reference_type` byte lets a reader
-  distinguish RHF from UHF but does not fix the shape underneath it. This
-  needs a version-3 design decision before any write/read code, not a
-  mechanical follow-on.
+- **C4's format blocker is fixed.** `CC_AMPLITUDE_CHECKPOINT_UCC_SCOPE.md`'s
+  U0/U1 landed: the sidecar is now version 3, carrying an `n_by_rank` field
+  independent of `max_rank` (so a sectors-only amplitude set — UCC's shape —
+  is representable and no longer rejected outright) and UHF's four
+  occupation counts, always-present and defaulting to 0 for RHF. What
+  remains is U2/U3 — a UCC write site and restart site in `run_uccgen`
+  itself, which still has zero references to the checkpoint machinery.
+  Mechanical now that the format exists, mirroring C0/C1's own
+  write-site/read-site pattern for a second caller.
 
 ## What this reuses
 
