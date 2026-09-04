@@ -65,6 +65,27 @@ Named method string ("ccd", "ccsd", "ccsdt")
       → C++ naive / tiled+OpenMP / BLAS-lowered (emit/cpp_loops.py)
 ```
 
+That is the **wick** path, and it is the one this guide walks through in detail.
+**Production takes a different route through the same pipeline**, and it is worth
+seeing early so the sections below have somewhere to attach:
+
+```text
+Named method string
+  → DIAGRAM enumeration (diagram.py)              §21   -- not BCH + Wick
+  → algebraic equations (generate.py)                     [GCC: spin orbitals]
+  → SPIN ADAPTATION (spin.py)                     §22
+      → spin_adapt_equations   -> RCC, spatial tensors    [PLANCK_CC_SPIN_ADAPT]
+      → ucc_adapt_equations    -> UCC, per-spin blocks    [PLANCK_CC_UCC]
+  → optional operator derivation (optimization/factorize.py)  §23
+  → Planck C++ emit (emit/planck_tensor_cpp.py)
+      → build/generated/cc/*_planck_generated.cpp
+```
+
+Two things a newcomer should take from this: the **engine** (§21) and the **spin
+representation** (§22) are independent axes — diagram-vs-wick does not change
+which of GCC/RCC/UCC you get — and `emit/planck_tensor_cpp.py`, not
+`emit/cpp_loops.py`, is what the build actually compiles.
+
 ### Directory Summary
 
 | File / Directory | Purpose |
@@ -82,9 +103,13 @@ Named method string ("ccd", "ccsd", "ccsdt")
 | `python/ccgen/canonicalize.py` | tensor antisymmetry normalization, dummy relabeling, duplicate merge, orbital energy denominator collection |
 | `python/ccgen/tensor_ir.py` | contraction IR: `BackendTerm` (basic) and `BackendTermEx` (extended with `BLASHint`, FLOP estimates, memory layout, tiling hints) |
 | `python/ccgen/generate.py` | top-level user API and `PipelineStats` instrumentation |
+| `python/ccgen/diagram.py` | **the diagram engine** (§21): Kállay–Surján triplet strings, topology enumeration, diagrammatic weights. The production generator |
+| `python/ccgen/spin.py` | **spin adaptation** (§22): GCC → RCC (`spin_adapt_equations`) and GCC → UCC (`ucc_adapt_equations`) |
 | `python/ccgen/bench.py` | performance benchmarking (`python -m ccgen.bench`) |
 | `python/ccgen/emit/` | emitters: pretty (with intermediates), einsum (with opt_einsum), C++ (naive / tiled+OpenMP / BLAS-lowered) |
+| `python/ccgen/emit/planck_tensor_cpp.py` | **the Planck emitter** — what the build compiles. Chunked `_partN` kernels, the `<kernel>_ops` struct, the OpenMP pragma |
 | `python/ccgen/optimization/` | post-canonicalization passes: intermediate detection, CSE, permutation grouping, antisymmetry exploitation |
+| `python/ccgen/optimization/factorize.py` | **operator derivation** (§23): contraction trees → dressed operators, transpose merging |
 | `python/ccgen/methods/` | small wrappers like `build_ccsd_equations()` |
 | `python/ccgen/tests/` | regression tests (stability, numerical, lowering) and optimization equivalence tests |
 
@@ -721,6 +746,18 @@ The optimization flags control post-canonicalization passes:
 - `exploit_symmetry=True`: exploit implicit antisymmetry (experimental)
 - `debug=True`: print term counts and timing to stderr; store in `last_stats`
 
+Other flags:
+
+- `engine="wick"` (default) or `"diagram"`: which generation engine to use. The
+  `"diagram"` engine builds equations from canonical Kállay–Surján diagrams
+  instead of BCH + Wick — same equations (residual-equal), far less work at high
+  rank. See section 21.
+- `canonical_fock=True`: drop terms whose Fock factor spans an occupied-virtual
+  block (`f_ov`/`f_vo` = 0 for a canonical HF reference).
+- `factorize_tau=True`: fold `t2 + ½P(t1t1)` groupings into a `τ` intermediate
+  (default off; the wider dressed-intermediate work is retired in favour of the
+  diagram representation — see section 21).
+
 ### `generate_cc_contractions()`
 
 Runs `generate_cc_equations()` and lowers the result into basic `BackendTerm`s
@@ -852,7 +889,10 @@ and the test suite cross-checks that formula numerically against local PySCF.
 
 ### 17. Testing and Regression Strategy
 
-The test suite lives in `python/ccgen/tests/` and is split across two modules.
+The test suite lives in `python/ccgen/tests/` and has grown well beyond the two
+core modules described here — it now also includes `test_diagram.py` (the diagram
+engine), `test_reference_vs_pyscf.py` (PySCF/FCI validation, run under the pyscf
+venv), and others. The two core modules:
 
 **`test_regressions.py`** covers core correctness:
 
@@ -879,15 +919,30 @@ something that looks plausible.
 
 ### 18. Current Limitations
 
-- It works in spin-orbital form only (no spin-adapted or spatial-orbital formulation).
-- The BCH layer still builds the full formal expansion before projection.
+- The symbolic derivation is spin-orbital (GCC). Two things then act on it, and
+  they are different: `lowering/restricted_closed_shell.py` *annotates* terms with
+  spatial-orbital layout, while `spin.py` (§22) performs a genuine spin-adapted
+  **derivation** to RCC or UCC. The latter is what production runs.
+- The wick (default) engine's BCH layer builds the full formal expansion before
+  projection — the reason the diagram engine (section 21) is far faster at high
+  rank.
 - Intermediate detection is heuristic-based (threshold on reuse count); it does
-  not yet perform global optimal factorization.
+  not perform global optimal factorization (which is NP-hard).
 - Implicit antisymmetry exploitation is experimental and requires extensive
   validation before production use.
-- There is no direct integration with Planck's production C++ coupled-cluster
-  solvers yet (the `TensorOptimized` backend is planned; see
-  `CCGEN_DEVELOPMENT_PLAN.md` Phase 4).
+- The generated kernels **are** compiled into the binary and run — this bullet
+  said otherwise until 2026-08-30, and it was the stalest claim in the guide. They
+  are emitted at build time into `build/generated/cc/`, validated against PySCF and
+  FCI through CCSDTQ, and gated end to end by `lih_rccsdt_generated_sto3g`,
+  `ch4_rccsdt_generated_sto3g` and `be_rccsdtq_sto3g`. The hand-written
+  `src/post_hf/cc/*.cpp` solvers still exist and still run for the non-generated
+  routes. Status: `docs/CCGEN_GENERATION_AND_VALIDATION.md` and
+  `vault/Status/Completion.md`.
+- The generated path is slower than the hand-written one, and the gap is a **real
+  open question**, not a constant tax: `docs/CCGEN_WHY_GENERATED_IS_SLOW.md`. Two
+  levers have landed since (dressed-operator derivation, ~3.5x; OpenMP, 3.22x) —
+  but note the two paths are different *solvers*, so their wall-clock is not a
+  like-for-like ratio.
 
 ### 19. How to Extend the Package
 
@@ -1027,7 +1082,314 @@ from ccgen.generate import print_cpp_blas
 print(print_cpp_blas("ccsd", use_blas=True))
 ```
 
-### 21. Mental Model for Contributors
+### 21. The Diagram Engine (`engine="diagram"`)
+
+Everything above describes the **wick engine**: build `H̄` by BCH, project,
+Wick-contract, canonicalize. It is pedagogically clear but does redundant work —
+it enumerates every algebraic term and dedups afterwards, and that redundancy
+grows fast with excitation rank (78× more terms are projected than survive at
+CCSDT; generating CCSDTQ takes ~600 s).
+
+`ccgen` has a second engine that produces the **same residual** a different way,
+and it is the **production default** (`PLANCK_CC_ENGINE=diagram` in
+`CMakeLists.txt`):
+
+```python
+eqs = generate_cc_equations("ccsdt", engine="diagram")
+```
+
+#### The idea: enumerate topologies, not terms
+
+The wick engine asks *"what terms survive?"* and discovers most do not. The
+diagram engine asks *"what topologies exist?"* and constructs only those. The
+representation is the Kállay–Surján integer triplet — one triplet per cluster
+operator in the diagram (`python/ccgen/diagram.py`):
+
+```python
+@dataclass(frozen=True)
+class DiagramString:
+    t_ops: tuple[tuple[int, int, int], ...]   # one (mu1, mu2, mu3) per T_n
+    bra_level: int                            # the projection manifold
+    ket_level: int
+```
+
+| field | meaning | range |
+|---|---|---|
+| `mu1` | excitation level of the operator (the *n* of `T_n`) | `>= 1` |
+| `mu2` | how many of its lines contract internally with the Hamiltonian | `0 .. 2*mu1` |
+| `mu3` | how many of those internal connections are **particle** lines | `0 .. mu1` |
+
+An operator of level `mu1` carries `mu1` particle and `mu1` hole lines, which is
+where those bounds come from. A `T_2` with both particle lines into the
+Hamiltonian and nothing else is `(2, 2, 2)`.
+
+**Why this representation is the whole point: diagrams are canonical by
+construction.** Two diagrams are equal iff their triplet strings are equal
+(`canonical`, `key`, `equivalent`), so duplicates are *never generated* — there is
+no dedup pass because there is nothing to dedup. Compare the wick path, where
+canonicalization (§9) is a substantial stage that exists precisely to collapse
+the redundancy enumeration created.
+
+#### The pipeline
+
+```
+enumerate_vertices(mu1)        # admissible (mu1, mu2, mu3) for one operator
+        |
+mu1_sum_range(...)             # which total excitation levels can reach bra_level
+        |
+enumerate_candidates(...)      # combinations of vertices
+        |
+is_wellformed / matches_manifold / closes_internally
+        |                      # topological admissibility, not algebraic survival
+enumerate_diagrams(...)        # the surviving DiagramStrings
+        |
+diagram_weights(...)           # sign x magnitude, from topology alone
+        |
+diagram_manifold_terms(...)    # expand into the AlgebraTerms the rest consumes
+```
+
+Driven from `_generate_diagram_equations` in `generate.py`; from
+`enumerate_diagrams` onward everything downstream (lowering, spin adaptation,
+emit) is shared with the wick path.
+
+#### The weight, derived from topology alone
+
+No BCH, no Wick contraction — the coefficient falls out of the diagram's shape:
+
+- **magnitude** = `equivalent_vertex_factor · ∏(1/n_ext!) / 2^(equivalent_line_pairs + vertex_pairs)`
+- **sign** = `(-1)^bra_level · external_pairing_parity · (-1)^loops · (-1 if the Fock line contracts a hole)`
+
+These are the standard diagrammatic rules (Crawford & Schaefer); the per-piece
+validation is in `docs/CCGEN_DIAGRAM_REPRESENTATION.md`. The practical
+consequence is that a diagram's coefficient is a *local* property — you can check
+one diagram in isolation, which is why the weight rules could be validated
+piecewise rather than only through the assembled residual.
+
+#### Why the two engines agree — and how it is checked
+
+**They emit different term multisets and the same residual tensor.** Measured on
+`ccsd` with a canonical Fock:
+
+| | wick | diagram |
+|---|---|---|
+| singles terms | 13 | 11 |
+| doubles terms | 66 | 64 |
+| generation time | 0.18 s | **0.01 s** |
+
+The difference is entirely how repeated-factor terms split: the wick path keeps
+`t1·t1·v` as two `±½` terms, the diagram path merges them into one. Both lower and
+emit to the same runtime accumulation.
+
+**This is the subtlety worth internalising: canonical-multiset equality is the
+wrong gate; residual equality is the right one.** The equivalence test evaluates
+both manifolds numerically and compares the arrays (~1e-13), never the term lists.
+A gate that diffed terms would fail on two engines that are both correct.
+
+#### When to use which
+
+| | wick | diagram (default) |
+|---|---|---|
+| clarity | textbook derivation, follow it term by term | canonical topologies, less obvious |
+| speed | slow at high rank (CCSDTQ ~600 s) | fast (CCSDTQ ~3 s, ~200×) |
+| status | the reference implementation | what the build uses |
+
+`wick` remains the reference: it is the independent derivation the diagram engine
+is checked *against*. Keep it working.
+
+#### The retired exact-cover route
+
+An earlier effort tried to recognize *dressed* intermediates (`Wmnij`, `Wabef`,
+τ) by index-binding + exact cover over the flat term list
+(`optimization/dressing.py`, `optimization/tau.py`). It was a dead end. The
+diagram representation makes each dressed operator an *identifiable subgraph*, so
+recognition becomes topological — that realization is `optimization/factorize.py`
+(§23). The exact-cover code and its `@expectedFailure` tests are kept only as the
+record of the abandoned route; see `docs/CCGEN_DRESSING_AND_SPIN_ADAPTATION.md`
+for why it was retired rather than fixed.
+
+### 22. Spin: the GCC → RCC / UCC pathways (`spin.py`)
+
+Everything to this point produces **GCC** equations — generalized (spin-orbital)
+coupled cluster, where every index runs over spin orbitals and the ERI is the
+antisymmetrized `<pq||rs>`. That is the mathematically clean form and it is
+**not** what production runs.
+
+#### Why this layer exists: cost, not correctness
+
+**GCC on a closed-shell reference already gives the exact answer** — 1e-8 against
+PySCF RCCSD. The spin layer buys nothing in accuracy. It exists because the
+spin-orbital representation is **~16× the `t2` storage and ~64× the
+doubles-contraction FLOPs** of the spatial one (water/STO-3G). Every alpha/beta
+combination is stored and contracted explicitly, and most of it is either zero by
+spin conservation or a copy of another block.
+
+This is worth stating plainly because the term counts point the other way:
+
+| manifold | GCC | RCC (spatial) | UCC (spin-blocked) |
+|---|---|---|---|
+| `energy` | 2 | 4 | 6 |
+| `singles` | 11 | 30 | 22 + 22 (`_aa`, `_bb`) |
+| `doubles` | 64 | 113 | 98 + 82 + 98 (`_aaaa`, `_abab`, `_bbbb`) |
+
+**Adaptation produces more terms, not fewer.** Each spin-orbital term splits into
+several spin cases. The win is that each resulting term contracts *much smaller
+tensors* — the term count goes up and the FLOP count goes down by ~64×.
+
+#### The two routes
+
+Both start from the same GCC manifold and are driven by sibling entry points in
+`python/ccgen/spin.py`:
+
+```python
+rcc = spin_adapt_equations(gcc_equations)   # restricted   -> spatial tensors
+ucc = ucc_adapt_equations(gcc_equations)    # unrestricted -> per-spin blocks
+```
+
+| | RCC (`spin_adapt_equations`) | UCC (`ucc_adapt_equations`) |
+|---|---|---|
+| reference | closed-shell (RHF) | open-shell (UHF) |
+| drives one residual per | **Sz sector** | **stored block** |
+| output tensors | one spatial `t2` | `t2aa`, `t2ab`, `t2bb` — separate arrays |
+| collapse steps | three (see below) | **none** |
+| target keys | `doubles`, `doubles_aaabaaab` … | `doubles_aaaa`, `doubles_abab`, … |
+| build flag | `PLANCK_CC_SPIN_ADAPT=ON` (default) | `PLANCK_CC_UCC=ON` (off by default) |
+
+**UCC is RCC minus the collapse.** That is the cleanest way to hold the two in
+mind: the same integration machinery runs, but UCC keeps the spin blocks resolved
+where RCC folds them into one spatial tensor. They are deliberately *not* one
+function with a flag — the drivers differ in what they iterate over.
+
+#### The RCC pipeline, per external block
+
+`_adapt_on_block` is the whole of it, and each step has a job:
+
+```
+ucc_integrate_target(terms, block)   # assign spins to every index; drop the
+        |                            # blocks that violate spin conservation
+canonicalize_spin_blocks             # map each block tag to its canonical form
+        |                            # (bbbb -> aaaa by a global flip, etc.)
+collapse_amplitudes                  # same-spin amplitudes -> spatial + exchange
+        |
+collapse_integrals                   # same-spin ERI -> spatial + exchange
+        |
+merge_terms                          # combine terms now identical
+        |
+spinterm_to_algebraterm              # back to the AlgebraTerm vocabulary
+```
+
+The integration step is `ucc_integrate_term_antisym`, and its name carries a
+lesson recorded in `docs/CCGEN_SPIN_ADAPTATION.md`: an earlier block filter
+dropped the **exchange** contribution, because the antisymmetrized `<pq||rs>`
+carries `J - K` in one object and a naive per-block filter keeps only `J`. The
+fix is to emit the bra/ket-swapped partner with a `-1` — that *is* the `-K`.
+
+#### Sectors: why a rank-2n residual can have more than one
+
+For rank `>= 4` a residual carries **more than one independent Sz sector**, and
+they are not reducible to each other. `t4` has two — `aabb` and `aaab` — so
+`spin_adapt_equations` emits `quadruples` *and* `quadruples_aaabaaab`, each
+integrated on its own representative block. The loop is
+`for k in range(ceil(n/2), max(ceil(n/2), n-1) + 1)`, and the tags come from
+`_amplitude_block_tag`. Getting this wrong was the rank-8 CCSDTQ defect.
+
+#### The trap this layer is full of, and the guard that catches it
+
+The external block is assigned **by slot position**, and lines pair slot `k` with
+slot `k+n`. A target whose own slot order is not virtuals-first therefore gets a
+block that violates spin conservation on every line and **integrates to zero** —
+producing a kernel that compiles, runs, and is silently wrong.
+
+`spin_adapt_equations` refuses to do that quietly:
+
+```python
+if terms and not adapted:
+    raise ValueError(f"target {key!r} has {len(terms)} GCC term(s) but "
+                     f"adapted to ZERO on block ...")
+```
+
+Dressed intermediates hit exactly this (`Wmbej` is `ovvo`, not virtuals-first),
+which is why `templates` exists — it lets a caller pass the operator's declared
+index order so its physical line pairing survives. Residual targets pass `None`
+and keep the virtuals-first convention the C++ runtime's `rank_dims` depends on.
+
+**Two conventions worth memorising**, both of which have cost investigations:
+
+- The spatial representative block is **`aabaab`**, not all-alpha.
+- ccgen amplitudes are `(vir..., occ...)`; the C++ runtime is `(occ..., vir...)`.
+  The bridge transposes.
+
+#### Where this sits in the build
+
+`PLANCK_CC_SPIN_ADAPT` defaults **ON**, and leaving it off is not a stylistic
+choice — the generated correlation energy is ~4× wrong, because the raw
+spin-orbital algebra gets bound to spatial storage. It shipped OFF for a while
+"for byte-compatibility with the historical emit", and the entire investigation in
+`docs/CCGEN_SPIN_ADAPT_DEFAULT.md` was conducted under that defective emit before
+anyone checked the flag. **A default that preserves historical rather than correct
+behaviour is a bug with a changelog entry.**
+
+Further reading: `docs/CCGEN_SPIN_ADAPTATION.md` (why the layer exists at all,
+and four traps that each passed a gate first), `docs/CCGEN_UNRESTRICTED_CC.md`
+(the UCC route end to end), `docs/CCGEN_GCC_TO_UCC_BRIDGE.md` (the term bridge),
+`docs/CCGEN_SPIN_ADAPTER_CONTRACT.md` (the slot/block contract).
+
+### 23. Factorization and Operator Derivation (`optimization/factorize.py`)
+
+Recognition (§11's intermediate detection) starts from a *curated* operator set
+and folds matching sub-contractions out. Factorization comes at the same
+operators from the other direction: **re-associate each residual contraction into
+the binary tree that minimizes the FLOP exponent; the reused sub-contractions
+those trees expose ARE the operators** — matched against the CCSD set when they
+coincide (reuse), recorded as new when they do not (derivation).
+
+#### The cost model
+
+A contraction term `c · f₁·f₂·…·fₖ` summed over its dummy indices is evaluated as
+one n-ary blob at a peak cost equal to the number of distinct occ/vir indices it
+touches. `Cost(n_occ, n_vir)` is that loop-nest exponent; `Cost.flops(o,v) =
+o^a·v^b` is its scaling-dominated magnitude (v>o, so scaling dominates — this is
+real path cost, unlike `IntermediateSpec.estimated_build_flops`, an element
+count). `best_contraction_tree(term)` searches all binary associations (≤5
+factors ⇒ exhaustive) for the minimum-peak tree. Example: `t2·t3·v` drops from
+`o⁵v⁵` (n-ary) to `o⁴v³` when `(t3·v)` is contracted first — the FLOP win and the
+intermediate are the same act of factoring.
+
+#### Tree → operator → classification
+
+`best_contraction_tree_full` returns the actual `Node` tree; each internal node
+is a sub-contraction. `node_to_term` lowers a node to an `AlgebraTerm` (its
+subtree's leaf factors, the indices consumed at that step, its output block), and
+`node_key` gives it a canonical, factor-order-independent key via
+`_eri_canonical`. `identify_node` compares the key against
+`seeded_fingerprints()` (the six CCSD operators' definition terms, block-signature
+prefiltered): a match is `Reuse(op)`, no match mints a `Derived(IntermediateSpec)`
+with a sorted order-invariant name. `identify_tree` classifies every node;
+`value_operators` ranks operators by `savings = (uses−1)·build_flops`;
+`recursion_summary` reports cross-rank containment.
+
+#### Two invariants that took work
+
+- **Exactness (`tree_preserves_term`).** A tree is valid iff every raw factor is
+  one leaf and every summed index is consumed at exactly one node — associativity
+  then guarantees it equals the raw n-ary contraction, coefficient untouched. All
+  399 CCSDT-triples and 2672 CCSDTQ-quadruples trees pass.
+- **Determinism.** 41% of triples terms admit more than one minimum-peak tree, so
+  the selection needs a *total order* —
+  `(peak.total, peak.n_vir, −max_intermediate_build_flops, canonical_tree_signature)`
+  — or operator identity would depend on factor input order. With sorted derived
+  names the operator multiset is a deterministic function of the terms.
+
+#### The result: rank locality
+
+Running this over CCSDT and CCSDTQ produces a rank-locality theorem: each
+excitation rank reuses every lower-rank operator verbatim and adds only its own
+`V·Tₙ` family (the `t3·v` operators at rank 3, `t4·v` at rank 4). A high-rank
+*term* can still reuse a *low-rank* operator (association order routes it through
+a low-rank intermediate first) — operator composition, operator reuse, and
+excitation rank are three distinct concepts. Full statement, proofs, and tables
+in `docs/CCGEN_HIGHER_OPERATOR_REUSE.md`; gated by `tests/test_factorize.py`.
+
+### 24. Mental Model for Contributors
 
 The easiest way to understand `ccgen` is to think of it as six stacked layers:
 

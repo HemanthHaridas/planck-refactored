@@ -798,6 +798,29 @@ namespace HartreeFock::Correlation::RI
         return out;
     }
 
+    // Single invalidation point for every RI cache. All four (aux basis,
+    // 2-center metric, its factorization, 3-center tensor) depend on the atom
+    // positions, so when _molecule._standard no longer matches the geometry the
+    // caches were built against, clear them all and restamp. ensure_ri_3c_ready
+    // calls ensure_ri_metric_ready first, so placing this at the top of the
+    // metric path covers both entry points. In the common case (geometry
+    // unchanged) it is a cheap matrix compare and a no-op.
+    void ri_invalidate_if_geometry_moved(HartreeFock::Calculator &calculator)
+    {
+        const Eigen::MatrixXd &geom = calculator._molecule._standard;
+        const Eigen::MatrixXd &stamp = calculator._ri_cache_geometry;
+        const bool same = stamp.rows() == geom.rows() &&
+                          stamp.cols() == geom.cols() && stamp == geom;
+        if (same)
+            return;
+
+        calculator._ri_aux_basis.reset();
+        calculator._ri_j2c.resize(0, 0);
+        calculator._ri_metric_factor.reset();
+        calculator._ri_j3c.resize(0, 0);
+        calculator._ri_cache_geometry = geom;
+    }
+
     std::expected<void, std::string> ensure_ri_metric_ready(
         HartreeFock::Calculator &calculator)
     {
@@ -806,6 +829,8 @@ namespace HartreeFock::Correlation::RI
             return std::unexpected("ensure_ri_metric_ready: MP2 RI is disabled.");
         if (opts.ri_basis_name.empty())
             return std::unexpected("ensure_ri_metric_ready: mp2_ri_basis must be set when mp2_use_ri is true.");
+
+        ri_invalidate_if_geometry_moved(calculator);
 
         if (!calculator._ri_aux_basis)
         {
@@ -903,6 +928,464 @@ namespace HartreeFock::Correlation::RI
         return unpack_transform_repack_3c(j3c_cart, calculator._shells._cart_to_sph);
     }
 
+    std::array<double, 9> compute_3c_deriv_elem(
+        const HartreeFock::ShellPair &spAB,
+        int lAx, int lAy, int lAz,
+        int lBx, int lBy, int lBz,
+        const HartreeFock::Shell &shellC,
+        int lCx, int lCy, int lCz)
+    {
+        std::array<double, 9> result{}; // zero-initialized
+
+        // Which primitive exponent (if any) weights the contraction by 2ζ for a
+        // derivative raise term: None (plain, the lower term), or the μ / ν / aux
+        // primitive. The μ and ν exponents (alpha, beta) are per-pair; the aux
+        // exponent varies per aux primitive, so its weight lives inside the ic
+        // loop.
+        enum class Weight { None, A, B, C };
+
+        // Contracted (μν|Q) at explicit Cartesian momenta. Folds the aux
+        // Cartesian norm (normC) the energy loop in compute_3c_eri applies; normC
+        // depends only on (cx,cy,cz). The μ/ν orbital norms are NOT applied at
+        // this level (they live in coeff_product / the OS primitive convention),
+        // so the 2ζ raise acts on the bare angular part — exactly the
+        // translational derivative identity. 3-center analog of the 4-center
+        // nceri / wceri_{A,B,C} helpers.
+        // The aux basis function's Cartesian normalization is fixed at its
+        // ORIGINAL momenta (lCx,lCy,lCz) — it is the normalization of the
+        // contracted d/f/… function, not of the raised/lowered angular part the
+        // derivative recurrence walks through. Recomputing it from the raised
+        // (cx,cy,cz) inside contract is wrong for the aux raise/lower (e.g. a
+        // d-aux raised to f uses cartesian_norm(3,0,0) instead of the correct
+        // cartesian_norm(2,0,0)) — it silently broke the Σ_center=0 identity for
+        // p/d-aux elements. Fix it here, once.
+        const double normC = cartesian_norm(lCx, lCy, lCz);
+
+        auto contract = [&](int ax, int ay, int az,
+                            int bx, int by, int bz,
+                            int cx, int cy, int cz,
+                            Weight w) -> double
+        {
+            double value = 0.0;
+            for (const auto &ppAB : spAB.primitive_pairs)
+            {
+                const double wAB = (w == Weight::A)   ? (2.0 * ppAB.alpha)
+                                   : (w == Weight::B) ? (2.0 * ppAB.beta)
+                                                      : 1.0;
+                for (Eigen::Index ic = 0; ic < shellC._primitives.size(); ++ic)
+                {
+                    const double wC = (w == Weight::C)
+                                          ? (2.0 * shellC._primitives(ic))
+                                          : 1.0;
+                    value += wAB * wC * ppAB.coeff_product *
+                             shellC._coefficients(ic) *
+                             shellC._normalizations(ic) *
+                             normC *
+                             _3c_eri_primitive(
+                                 ppAB, ax, ay, az, bx, by, bz, spAB.R,
+                                 shellC._center, shellC._primitives(ic),
+                                 cx, cy, cz);
+                }
+            }
+            return value;
+        };
+
+        for (int q = 0; q < 3; ++q)
+        {
+            // Centre μ (A): d/dA_q = 2α·(lA+ê_q) − lAq·(lA−ê_q).
+            {
+                const int lAq = (q == 0 ? lAx : q == 1 ? lAy : lAz);
+                double d = contract(lAx + (q == 0), lAy + (q == 1), lAz + (q == 2),
+                                    lBx, lBy, lBz, lCx, lCy, lCz, Weight::A);
+                if (lAq > 0)
+                    d -= static_cast<double>(lAq) *
+                         contract(lAx - (q == 0), lAy - (q == 1), lAz - (q == 2),
+                                  lBx, lBy, lBz, lCx, lCy, lCz, Weight::None);
+                result[0 * 3 + q] = d;
+            }
+            // Centre ν (B): d/dB_q = 2β·(lB+ê_q) − lBq·(lB−ê_q).
+            {
+                const int lBq = (q == 0 ? lBx : q == 1 ? lBy : lBz);
+                double d = contract(lAx, lAy, lAz,
+                                    lBx + (q == 0), lBy + (q == 1), lBz + (q == 2),
+                                    lCx, lCy, lCz, Weight::B);
+                if (lBq > 0)
+                    d -= static_cast<double>(lBq) *
+                         contract(lAx, lAy, lAz,
+                                  lBx - (q == 0), lBy - (q == 1), lBz - (q == 2),
+                                  lCx, lCy, lCz, Weight::None);
+                result[1 * 3 + q] = d;
+            }
+            // Centre aux (C): d/dC_q = 2γ·(lC+ê_q) − lCq·(lC−ê_q).
+            {
+                const int lCq = (q == 0 ? lCx : q == 1 ? lCy : lCz);
+                double d = contract(lAx, lAy, lAz, lBx, lBy, lBz,
+                                    lCx + (q == 0), lCy + (q == 1), lCz + (q == 2),
+                                    Weight::C);
+                if (lCq > 0)
+                    d -= static_cast<double>(lCq) *
+                         contract(lAx, lAy, lAz, lBx, lBy, lBz,
+                                  lCx - (q == 0), lCy - (q == 1), lCz - (q == 2),
+                                  Weight::None);
+                result[2 * 3 + q] = d;
+            }
+        }
+
+        return result;
+    }
+
+    std::expected<std::vector<Eigen::MatrixXd>, std::string>
+    compute_3c_eri_deriv(const HartreeFock::Calculator &calculator)
+    {
+        if (!calculator._mp2.use_ri)
+            return std::unexpected("compute_3c_eri_deriv: MP2 RI is disabled.");
+        if (!calculator._ri_aux_basis)
+            return std::unexpected("compute_3c_eri_deriv: RI auxiliary basis is not loaded.");
+        if (calculator._shells._spherical)
+            return std::unexpected("compute_3c_eri_deriv: spherical basis not supported yet "
+                                   "(Cartesian only; lift at the skin when a consumer needs it).");
+
+        const std::size_t natoms = calculator._molecule.natoms;
+        const std::size_t n_cart = calculator._shells.nbasis();
+        const std::size_t npair = n_cart * (n_cart + 1) / 2;
+        const std::size_t naux = calculator._ri_aux_basis->nfunctions;
+
+        // Output: natoms*3 packed derivative matrices, index = atom*3 + axis.
+        std::vector<Eigen::MatrixXd> dJ(
+            natoms * 3,
+            Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(npair),
+                                  static_cast<Eigen::Index>(naux)));
+
+        const auto shell_pairs = build_shellpairs(calculator._shells);
+
+        std::size_t aux_col = 0;
+        for (std::size_t shell_idx = 0; shell_idx < calculator._ri_aux_basis->shells.size(); ++shell_idx)
+        {
+            const auto &shellC = calculator._ri_aux_basis->shells[shell_idx];
+            const unsigned L = static_cast<unsigned>(shellC._shell);
+            const auto components = HartreeFock::BasisFunctions::_cartesian_shell_order(L);
+            const std::size_t atomC = shellC._atom_index;
+
+            for (const auto &amC : components)
+            {
+                const int lCx = amC[0], lCy = amC[1], lCz = amC[2];
+
+                for (const auto &spAB : shell_pairs)
+                {
+                    const std::size_t mu = spAB.A._index;
+                    const std::size_t nu = spAB.B._index;
+                    const std::size_t hi = std::max(mu, nu), lo = std::min(mu, nu);
+                    const Eigen::Index row = static_cast<Eigen::Index>(hi * (hi + 1) / 2 + lo);
+                    const std::size_t atomA = spAB.A._shell->_atom_index;
+                    const std::size_t atomB = spAB.B._shell->_atom_index;
+
+                    const auto d = compute_3c_deriv_elem(
+                        spAB,
+                        spAB.A._cartesian[0], spAB.A._cartesian[1], spAB.A._cartesian[2],
+                        spAB.B._cartesian[0], spAB.B._cartesian[1], spAB.B._cartesian[2],
+                        shellC, lCx, lCy, lCz);
+
+                    // Scatter the 9 components to the atoms their legs sit on.
+                    // Atoms may coincide (e.g. μ and ν on the same atom); the
+                    // += accumulates correctly, and translational invariance is
+                    // preserved because every leg's contribution is placed on its
+                    // own atom.
+                    for (int q = 0; q < 3; ++q)
+                    {
+                        dJ[atomA * 3 + q](row, static_cast<Eigen::Index>(aux_col)) += d[0 * 3 + q];
+                        dJ[atomB * 3 + q](row, static_cast<Eigen::Index>(aux_col)) += d[1 * 3 + q];
+                        dJ[atomC * 3 + q](row, static_cast<Eigen::Index>(aux_col)) += d[2 * 3 + q];
+                    }
+                }
+                ++aux_col;
+            }
+        }
+
+        return dJ;
+    }
+
+    std::array<double, 6> compute_2c_deriv_elem(
+        const HartreeFock::Shell &shellP, int lPx, int lPy, int lPz,
+        const HartreeFock::Shell &shellQ, int lQx, int lQy, int lQz)
+    {
+        std::array<double, 6> result{};
+
+        enum class Weight { None, P, Q };
+
+        // Both P and Q Cartesian norms are fixed at their ORIGINAL momenta — the
+        // contracted aux functions' normalizations, not the raised angular parts
+        // the derivative recurrence walks (the RG1a.3 normC lesson, on both legs).
+        const double normP = cartesian_norm(lPx, lPy, lPz);
+        const double normQ = cartesian_norm(lQx, lQy, lQz);
+
+        auto contract = [&](int px, int py, int pz,
+                            int qx, int qy, int qz,
+                            Weight w) -> double
+        {
+            double value = 0.0;
+            for (Eigen::Index ip = 0; ip < shellP._primitives.size(); ++ip)
+            {
+                const double wP = (w == Weight::P) ? (2.0 * shellP._primitives(ip)) : 1.0;
+                for (Eigen::Index iq = 0; iq < shellQ._primitives.size(); ++iq)
+                {
+                    const double wQ = (w == Weight::Q) ? (2.0 * shellQ._primitives(iq)) : 1.0;
+                    value += wP * wQ *
+                             shellP._coefficients(ip) * shellQ._coefficients(iq) *
+                             shellP._normalizations(ip) * shellQ._normalizations(iq) *
+                             normP * normQ *
+                             _2c_eri_primitive(
+                                 shellP._center, shellP._primitives(ip),
+                                 shellQ._center, shellQ._primitives(iq),
+                                 px, py, pz, qx, qy, qz);
+                }
+            }
+            return value;
+        };
+
+        for (int a = 0; a < 3; ++a)
+        {
+            // Centre P: d/dP_a = 2ζ_P·(lP+ê_a) − lPa·(lP−ê_a).
+            {
+                const int lPa = (a == 0 ? lPx : a == 1 ? lPy : lPz);
+                double d = contract(lPx + (a == 0), lPy + (a == 1), lPz + (a == 2),
+                                    lQx, lQy, lQz, Weight::P);
+                if (lPa > 0)
+                    d -= static_cast<double>(lPa) *
+                         contract(lPx - (a == 0), lPy - (a == 1), lPz - (a == 2),
+                                  lQx, lQy, lQz, Weight::None);
+                result[0 * 3 + a] = d;
+            }
+            // Centre Q: d/dQ_a = 2ζ_Q·(lQ+ê_a) − lQa·(lQ−ê_a).
+            {
+                const int lQa = (a == 0 ? lQx : a == 1 ? lQy : lQz);
+                double d = contract(lPx, lPy, lPz,
+                                    lQx + (a == 0), lQy + (a == 1), lQz + (a == 2), Weight::Q);
+                if (lQa > 0)
+                    d -= static_cast<double>(lQa) *
+                         contract(lPx, lPy, lPz,
+                                  lQx - (a == 0), lQy - (a == 1), lQz - (a == 2), Weight::None);
+                result[1 * 3 + a] = d;
+            }
+        }
+
+        return result;
+    }
+
+    std::expected<std::vector<Eigen::MatrixXd>, std::string>
+    compute_2c_eri_deriv(const HartreeFock::Calculator &calculator)
+    {
+        if (!calculator._ri_aux_basis)
+            return std::unexpected("compute_2c_eri_deriv: RI auxiliary basis is not loaded.");
+
+        const std::size_t natoms = calculator._molecule.natoms;
+        const HartreeFock::AuxBasis &aux = *calculator._ri_aux_basis;
+        const std::size_t naux = aux.nfunctions;
+
+        std::vector<Eigen::MatrixXd> dV(
+            natoms * 3,
+            Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(naux),
+                                  static_cast<Eigen::Index>(naux)));
+
+        const std::size_t nshells = aux.shells.size();
+        for (std::size_t K = 0; K < nshells; ++K)
+        {
+            const auto &shP = aux.shells[K];
+            const std::size_t off_K = aux.offsets[K];
+            const std::size_t atomP = shP._atom_index;
+            const auto compP = HartreeFock::BasisFunctions::_cartesian_shell_order(
+                static_cast<unsigned>(shP._shell));
+
+            for (std::size_t Lsh = 0; Lsh < nshells; ++Lsh)
+            {
+                const auto &shQ = aux.shells[Lsh];
+                const std::size_t off_L = aux.offsets[Lsh];
+                const std::size_t atomQ = shQ._atom_index;
+                const auto compQ = HartreeFock::BasisFunctions::_cartesian_shell_order(
+                    static_cast<unsigned>(shQ._shell));
+
+                for (std::size_t p = 0; p < compP.size(); ++p)
+                {
+                    for (std::size_t q = 0; q < compQ.size(); ++q)
+                    {
+                        const auto d = compute_2c_deriv_elem(
+                            shP, compP[p][0], compP[p][1], compP[p][2],
+                            shQ, compQ[q][0], compQ[q][1], compQ[q][2]);
+                        const Eigen::Index r = static_cast<Eigen::Index>(off_K + p);
+                        const Eigen::Index c = static_cast<Eigen::Index>(off_L + q);
+                        for (int a = 0; a < 3; ++a)
+                        {
+                            dV[atomP * 3 + a](r, c) += d[0 * 3 + a];
+                            dV[atomQ * 3 + a](r, c) += d[1 * 3 + a];
+                        }
+                    }
+                }
+            }
+        }
+
+        return dV;
+    }
+
+    Eigen::MatrixXd build_ri_gamma3_ov(
+        const Eigen::MatrixXd &D_ovov,
+        const Eigen::MatrixXd &b_ov)
+    {
+        // Γ3_{(ia),Q} = Σ_{jb} D_{(ia),(jb)} B_{(jb),Q}. Both index the ov space
+        // as i*nvirt+a; b_ov rows are that same packing (build_ri_mo_block with
+        // C_occ, C_virt). Plain matrix product.
+        return D_ovov * b_ov;
+    }
+
+    Eigen::MatrixXd build_ri_two_electron_gradient(
+        const Eigen::MatrixXd &gamma3,
+        const Eigen::MatrixXd &x_proj,
+        const std::vector<Eigen::MatrixXd> &dJ,
+        const std::vector<Eigen::MatrixXd> &dV,
+        std::size_t natoms,
+        std::size_t nb,
+        bool bra_prefolded)
+    {
+        const Eigen::Index npair = gamma3.rows();
+        const Eigen::Index naux = gamma3.cols();
+
+        // Bra pair weight. When gamma3's bra is a SINGLE ordering (μ≥ν only, e.g.
+        // a bra-symmetric density), off-diagonal packed pairs stand in for both
+        // (μν) and (νμ), so w=(μ==ν?1:2) recovers the full bra sum (build_ri_j
+        // convention). When gamma3 is already the sum of both orderings
+        // (bra_prefolded — the general non-bra-symmetric dm2buf case), w=1.
+        Eigen::VectorXd w(npair);
+        {
+            Eigen::Index row = 0;
+            for (std::size_t mu = 0; mu < nb; ++mu)
+                for (std::size_t nu = 0; nu <= mu; ++nu, ++row)
+                    w(row) = (bra_prefolded || mu == nu) ? 1.0 : 2.0;
+        }
+
+        // Both terms couple through V^{-1}, not V^{-1/2}: the fitted ERI is
+        // (μν|λσ) = J V^{-1} Jᵀ, so d(μν|λσ) pairs dJ with (V^{-1}Jᵀ) and dV with
+        // (J V^{-1})…(V^{-1}Jᵀ). gamma3 = Σ_{λσ} Γ·X (X = J V^{-1}) carries one
+        // V^{-1}; x_proj is the raw X factors (the other leg of the metric fold).
+        const Eigen::MatrixXd wg = w.asDiagonal() * gamma3; // w · Σ Γ·X, bra fold
+
+        // Metric-derivative charge γ_{PQ} = Σ_{(μν)} w·x_{(μν),P}·gamma3_{(μν),Q}.
+        const Eigen::MatrixXd wx = w.asDiagonal() * x_proj;    // npair × naux
+        const Eigen::MatrixXd gamma_pq = wx.transpose() * gamma3; // naux × naux
+
+        Eigen::MatrixXd two_e = Eigen::MatrixXd::Zero(
+            static_cast<Eigen::Index>(natoms), 3);
+        for (std::size_t a = 0; a < natoms * 3; ++a)
+        {
+            // 3-center: Σ_{(μν),Q} w·gamma3·dJ. Frobenius inner product. dJ
+            // scatters all three legs (μ, ν, aux) to their atoms, so one pass
+            // gives the full per-atom 3-center derivative.
+            const double j_term = (wg.cwiseProduct(dJ[a])).sum();
+            // 2-center metric correction: −½ Σ_{PQ} γ_{PQ}·dV. The ½ is real —
+            // it balances the metric leg against the (unfactored) 3-center leg,
+            // matching the dense two_e term to fitting accuracy (gated RG2.2).
+            const double v_term = -0.5 * (gamma_pq.cwiseProduct(dV[a])).sum();
+            two_e(static_cast<Eigen::Index>(a / 3),
+                  static_cast<Eigen::Index>(a % 3)) = j_term + v_term;
+        }
+        (void)naux;
+        return two_e;
+    }
+
+    namespace
+    {
+        // X = J V^{-1} in packed (μ≥ν) pair × aux form. B = J V^{-1/2} is the
+        // fitted pair factors; one more V^{-1/2} gives X. Built from the metric
+        // factorization the same way build_ri_pair_factors applies V^{-1/2}.
+        Eigen::MatrixXd build_ri_x_pair_factors(const HartreeFock::Calculator &calculator)
+        {
+            const Eigen::MatrixXd &J = calculator._ri_j3c;
+            const auto &metric = *calculator._ri_metric_factor;
+            Eigen::MatrixXd vhalf_inv; // X_metric with X V Xᵀ = I ⇒ V^{-1} = Xᵀ X
+            if (metric.method == MetricFactorization::Method::Eigen)
+                vhalf_inv = metric.transform;
+            else
+            {
+                const Eigen::MatrixXd I =
+                    Eigen::MatrixXd::Identity(J.cols(), J.cols());
+                vhalf_inv = metric.transform.triangularView<Eigen::Lower>().solve(I);
+            }
+            const Eigen::MatrixXd Vinv = vhalf_inv.transpose() * vhalf_inv;
+            return J * Vinv; // packed pair × aux
+        }
+    }
+
+    std::pair<Eigen::MatrixXd, Eigen::MatrixXd> build_ri_gamma3_from_ao_dm2(
+        const HartreeFock::Calculator &calculator,
+        const std::vector<double> &dm2buf,
+        int nao)
+    {
+        using RowMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+        const Eigen::MatrixXd x_pair = build_ri_x_pair_factors(calculator);
+        const Eigen::Index naux = x_pair.cols();
+        const Eigen::Index n = nao;
+        const Eigen::Index npair = n * (n + 1) / 2;
+
+        // Unpack X into per-aux nao×nao matrices X[Q](r,s) = X[Q](s,r).
+        std::vector<Eigen::MatrixXd> X(static_cast<std::size_t>(naux),
+                                       Eigen::MatrixXd::Zero(n, n));
+        {
+            std::size_t pr = 0;
+            for (Eigen::Index mu = 0; mu < n; ++mu)
+                for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pr)
+                    for (Eigen::Index Q = 0; Q < naux; ++Q)
+                    {
+                        const double v = x_pair(static_cast<Eigen::Index>(pr), Q);
+                        X[static_cast<std::size_t>(Q)](mu, nu) = v;
+                        X[static_cast<std::size_t>(Q)](nu, mu) = v;
+                    }
+        }
+
+        // dm2buf viewed as [(μ ν) full × (r s) full] row-major (μ,ν both full).
+        const Eigen::Map<const RowMat> D(dm2buf.data(), n * n, n * n);
+
+        // gamma3[(μν)packed, Q] = Σ_{rs} dm2buf[μ,ν,r,s] X[Q](r,s).
+        Eigen::MatrixXd gamma3 = Eigen::MatrixXd::Zero(npair, naux);
+        for (Eigen::Index Q = 0; Q < naux; ++Q)
+        {
+            const RowMat XQ = X[static_cast<std::size_t>(Q)];
+            const Eigen::Map<const Eigen::VectorXd> xvec(XQ.data(), n * n);
+            const Eigen::VectorXd wfull = D * xvec; // (μ*n+ν) full
+            const Eigen::Map<const RowMat> Wm(wfull.data(), n, n); // rows μ, cols ν
+            std::size_t pr = 0;
+            for (Eigen::Index mu = 0; mu < n; ++mu)
+                for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pr)
+                    // Packed bra folds μ<ν into μ≥ν: dm2buf[μν] + dm2buf[νμ].
+                    gamma3(static_cast<Eigen::Index>(pr), Q) =
+                        (mu == nu) ? Wm(mu, nu) : (Wm(mu, nu) + Wm(nu, mu));
+        }
+        return {gamma3, x_pair};
+    }
+
+    Eigen::MatrixXd build_ri_imat(
+        const HartreeFock::Calculator &calculator,
+        const std::vector<double> &dm2buf,
+        int nao)
+    {
+        using RowMat = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+        const std::vector<Eigen::MatrixXd> B = build_ri_3index_unpacked(calculator);
+        const Eigen::Index n = nao;
+
+        // dm2buf is row-major [p][v][r][s]; view as [(p v) × (r s)] row-major.
+        const Eigen::Map<const RowMat> M(dm2buf.data(), n * n, n * n);
+
+        Eigen::MatrixXd imat = Eigen::MatrixXd::Zero(n, n);
+        for (const Eigen::MatrixXd &BQ : B)
+        {
+            // vec(B[Q]) over (r,s) with r*n+s packing to match M's columns.
+            const RowMat BQr = BQ; // symmetric, but pack row-major to be exact
+            const Eigen::Map<const Eigen::VectorXd> bvec(BQr.data(), n * n);
+            // W[Q](p,v) = Σ_rs B[Q](r,s) dm2buf[p,v,r,s]; reshape the (pv)-vector.
+            const Eigen::VectorXd wcol = M * bvec;               // (p*n+v) row-major
+            const Eigen::Map<const RowMat> W(wcol.data(), n, n); // rows p, cols v
+            // imat(q,v) += Σ_p B[Q](p,q) W(p,v) = (B[Q]ᵀ W)(q,v).
+            imat.noalias() += BQ.transpose() * W;
+        }
+        return imat;
+    }
+
     std::expected<void, std::string> ensure_ri_3c_ready(
         HartreeFock::Calculator &calculator)
     {
@@ -922,5 +1405,176 @@ namespace HartreeFock::Correlation::RI
             return std::unexpected("ensure_ri_3c_ready: " + j3c_res.error());
         calculator._ri_j3c = std::move(*j3c_res);
         return {};
+    }
+
+    Eigen::MatrixXd build_ri_pair_factors(const HartreeFock::Calculator &calculator)
+    {
+        const Eigen::MatrixXd &j3c = calculator._ri_j3c;
+        const auto &metric = *calculator._ri_metric_factor;
+
+        if (metric.method == MetricFactorization::Method::Eigen)
+            return j3c * metric.transform.transpose();
+
+        const Eigen::MatrixXd &L = metric.transform;
+        Eigen::MatrixXd pair_factors_t = j3c.transpose();
+        pair_factors_t =
+            L.triangularView<Eigen::Lower>().solve(pair_factors_t);
+        return pair_factors_t.transpose();
+    }
+
+    Eigen::MatrixXd build_ri_mo_block(
+        const Eigen::MatrixXd &pair_factors,
+        const Eigen::MatrixXd &C_row,
+        const Eigen::MatrixXd &C_col)
+    {
+        const int nrow = static_cast<int>(C_row.cols());
+        const int ncol = static_cast<int>(C_col.cols());
+        const int nfit = static_cast<int>(pair_factors.cols());
+        const int npq = nrow * ncol;
+
+        Eigen::MatrixXd b_pq = Eigen::MatrixXd::Zero(npq, nfit);
+        std::size_t pair_row = 0;
+        for (Eigen::Index mu = 0; mu < C_row.rows(); ++mu)
+        {
+            const Eigen::RowVectorXd row_mu = C_row.row(mu);
+            const Eigen::RowVectorXd col_mu = C_col.row(mu);
+            for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pair_row)
+            {
+                const Eigen::RowVectorXd factors =
+                    pair_factors.row(static_cast<Eigen::Index>(pair_row));
+                const Eigen::RowVectorXd row_nu = C_row.row(nu);
+                const Eigen::RowVectorXd col_nu = C_col.row(nu);
+
+                int ia = 0;
+                for (int i = 0; i < nrow; ++i)
+                {
+                    const double cmi = row_mu(i);
+                    const double cni = row_nu(i);
+                    for (int a = 0; a < ncol; ++a, ++ia)
+                    {
+                        double weight = cmi * col_nu(a);
+                        if (mu != nu)
+                            weight += cni * col_mu(a);
+                        if (weight != 0.0)
+                            b_pq.row(ia).noalias() += weight * factors;
+                    }
+                }
+            }
+        }
+        return b_pq;
+    }
+
+    Eigen::MatrixXd build_ri_j(
+        const HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &D)
+    {
+        const Eigen::MatrixXd pair_factors = build_ri_pair_factors(calculator);
+        const Eigen::Index nb = D.rows();
+        const Eigen::Index nfit = pair_factors.cols();
+
+        // c_Q = Σ_{μν} B_{(μν),Q} D_{μν}. The packed factors store μ≥ν only, so
+        // off-diagonal pairs contribute twice (D symmetric): weight = (μ==ν?1:2).
+        Eigen::RowVectorXd c = Eigen::RowVectorXd::Zero(nfit);
+        std::size_t pair_row = 0;
+        for (Eigen::Index mu = 0; mu < nb; ++mu)
+            for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pair_row)
+            {
+                const double w = (mu == nu ? 1.0 : 2.0) * D(mu, nu);
+                if (w != 0.0)
+                    c.noalias() += w * pair_factors.row(static_cast<Eigen::Index>(pair_row));
+            }
+
+        // J_{μν} = Σ_Q B_{(μν),Q} c_Q; scatter to both (μ,ν) and (ν,μ).
+        Eigen::MatrixXd J = Eigen::MatrixXd::Zero(nb, nb);
+        pair_row = 0;
+        for (Eigen::Index mu = 0; mu < nb; ++mu)
+            for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pair_row)
+            {
+                const double val =
+                    pair_factors.row(static_cast<Eigen::Index>(pair_row)).dot(c);
+                J(mu, nu) = val;
+                J(nu, mu) = val;
+            }
+        return J;
+    }
+
+    std::vector<Eigen::MatrixXd> build_ri_3index_unpacked(
+        const HartreeFock::Calculator &calculator)
+    {
+        const Eigen::MatrixXd pair_factors = build_ri_pair_factors(calculator);
+        const Eigen::Index nb =
+            static_cast<Eigen::Index>(calculator.working_nbasis());
+        const Eigen::Index naux = pair_factors.cols();
+
+        std::vector<Eigen::MatrixXd> B(
+            static_cast<std::size_t>(naux), Eigen::MatrixXd::Zero(nb, nb));
+
+        std::size_t pair_row = 0;
+        for (Eigen::Index mu = 0; mu < nb; ++mu)
+            for (Eigen::Index nu = 0; nu <= mu; ++nu, ++pair_row)
+            {
+                const Eigen::RowVectorXd factors =
+                    pair_factors.row(static_cast<Eigen::Index>(pair_row));
+                for (Eigen::Index Q = 0; Q < naux; ++Q)
+                {
+                    const double v = factors(Q);
+                    B[static_cast<std::size_t>(Q)](mu, nu) = v;
+                    B[static_cast<std::size_t>(Q)](nu, mu) = v;
+                }
+            }
+        return B;
+    }
+
+    Eigen::MatrixXd build_ri_k(
+        const HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &D,
+        const std::vector<Eigen::MatrixXd> *unpacked)
+    {
+        std::vector<Eigen::MatrixXd> owned;
+        if (!unpacked)
+        {
+            owned = build_ri_3index_unpacked(calculator);
+            unpacked = &owned;
+        }
+        const auto &B = *unpacked;
+        const Eigen::Index nb = D.rows();
+
+        Eigen::MatrixXd K = Eigen::MatrixXd::Zero(nb, nb);
+        for (const Eigen::MatrixXd &BQ : B)
+        {
+            // H = B[Q] D ; K += H B[Q]ᵀ  ⇒  K_{μν} += Σ_{λσ} B_{μλ} D_{λσ} B_{νσ}.
+            const Eigen::MatrixXd H = BQ * D;
+            K.noalias() += H * BQ.transpose();
+        }
+        return K;
+    }
+
+    Eigen::MatrixXd build_ri_fock_rhf(
+        const HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &D)
+    {
+        // Share one unpacked tensor across J and K. J uses the packed factors
+        // (via build_ri_j), K uses the unpacked ones; build the latter once.
+        const std::vector<Eigen::MatrixXd> unpacked =
+            build_ri_3index_unpacked(calculator);
+        const Eigen::MatrixXd J = build_ri_j(calculator, D);
+        const Eigen::MatrixXd K = build_ri_k(calculator, D, &unpacked);
+        return J - 0.5 * K;
+    }
+
+    std::pair<Eigen::MatrixXd, Eigen::MatrixXd> build_ri_fock_uhf(
+        const HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &Pa,
+        const Eigen::MatrixXd &Pb)
+    {
+        // G_sigma = J(Pa + Pb) - K(P_sigma). Coulomb from the TOTAL density,
+        // exchange per-spin, no 1/2 (see the header note). One unpacked tensor
+        // shared across both exchange builds.
+        const std::vector<Eigen::MatrixXd> unpacked =
+            build_ri_3index_unpacked(calculator);
+        const Eigen::MatrixXd J = build_ri_j(calculator, Pa + Pb);
+        const Eigen::MatrixXd Ka = build_ri_k(calculator, Pa, &unpacked);
+        const Eigen::MatrixXd Kb = build_ri_k(calculator, Pb, &unpacked);
+        return {J - Ka, J - Kb};
     }
 } // namespace HartreeFock::Correlation::RI

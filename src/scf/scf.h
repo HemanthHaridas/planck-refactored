@@ -18,6 +18,7 @@ namespace HartreeFock
             double delta_energy = 0.0;
             double delta_density_max = 0.0;
             double delta_density_rms = 0.0;
+            double diis_error = 0.0;  // 0 when DIIS inactive; then not gated on
         };
 
         struct RestrictedIterationData

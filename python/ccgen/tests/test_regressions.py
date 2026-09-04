@@ -209,6 +209,44 @@ class RelabelingTests(unittest.TestCase):
         self.assertEqual(mapping[make_occ("m", dummy=True)].name, "j")
         self.assertEqual(mapping[make_vir("e", dummy=True)].name, "b")
 
+    def test_apply_deltas_does_not_collapse_dummies_onto_like_named_externals(
+        self,
+    ) -> None:
+        """A summation dummy must not be rewritten into a same-named external.
+
+        Cluster amplitudes use dummy index names (a, b, i, j) that collide with
+        the projector's external names.  ``apply_deltas`` used to key its
+        protected-external lookup on ``(space, name)`` alone, so ANY dummy
+        sharing a name with an external was silently rewritten into it -- even
+        with no delta relating them.  That collapsed summations into degenerate
+        terms (f(a,a), t2(b,b,i,j), t2(a,b,i,j)v(i,j,i,j)) and deleted the
+        genuine ladder contractions from every projected manifold.  Fixed by
+        matching on union-find COMPONENT rather than name.
+        """
+        from ccgen.wick import apply_deltas
+        from ccgen.tensors import f as fock, t2
+        from ccgen.indices import Index
+
+        ext_a = Index("a", "vir", False)
+        ext_b = Index("b", "vir", False)
+        dum_a = Index("a", "vir", True)
+        dum_b = Index("b", "vir", True)
+        i = Index("i", "occ", True)
+        j = Index("j", "occ", True)
+
+        tensors = (fock(ext_a, dum_a), t2(dum_a, dum_b, i, j))
+        out = apply_deltas(tensors, deltas=(), protected=(ext_a, ext_b))
+
+        self.assertIsNotNone(out)
+        # No delta relates them, so nothing may change at all.
+        self.assertEqual(out, tensors)
+        # In particular the dummies stay dummies (no f(a,a) / t2(a,b,..)).
+        fock_out = out[0]
+        self.assertTrue(fock_out.indices[1].is_dummy)
+        self.assertFalse(fock_out.indices[0].is_dummy)
+        for idx in out[1].indices:
+            self.assertTrue(idx.is_dummy)
+
 
 class EquationRegressionTests(unittest.TestCase):
     def test_restricted_closed_shell_lowering_preserves_ccsd_manifold_layout(
@@ -376,6 +414,114 @@ class EquationRegressionTests(unittest.TestCase):
 
         self.assertTrue(all(len(term.free_indices) == 2 for term in eqs["singles"]))
         self.assertTrue(all(len(term.free_indices) == 4 for term in eqs["doubles"]))
+
+    def test_ccsdt_reduces_to_ccsd_when_t3_dropped(self) -> None:
+        # AR3.1 cross-rank reduction: the CCSDT singles/doubles residuals, with
+        # every T3-containing term removed, must equal the CCSD singles/doubles
+        # residuals EXACTLY (canonical coefficient multiset). This is the strong,
+        # oracle-free way to validate higher-rank generation: it chains the
+        # PySCF-validated CCSD residual (test_reference_vs_pyscf) up to CCSDT
+        # without any per-term CCSDT oracle (PySCF ships no spin-orbital gccsdt).
+        # A wrong CCSDT singles/doubles term that survives T3=0 would break this.
+        from collections import Counter
+        from ccgen.canonicalize import (
+            canonicalize_term_to_fixed_point, merge_like_terms,
+        )
+
+        def multiset(terms):
+            c: Counter = Counter()
+            merged = merge_like_terms(
+                [canonicalize_term_to_fixed_point(t) for t in terms]
+            )
+            for t in merged:
+                names = tuple(sorted(f.name for f in t.factors))
+                c[(names, t.coeff)] += 1
+            return c
+
+        def has_t3(term):
+            return any(f.name == "t3" for f in term.factors)
+
+        ccsdt = generate_cc_equations("ccsdt")
+        ccsd = generate_cc_equations("ccsd")
+        for manifold in ("singles", "doubles"):
+            reduced = [t for t in ccsdt[manifold] if not has_t3(t)]
+            self.assertEqual(
+                multiset(reduced), multiset(ccsd[manifold]),
+                f"CCSDT {manifold} with T3=0 != CCSD {manifold}",
+            )
+
+    def test_diagram_engine_matches_wick_residual(self) -> None:
+        # D4.2 -- the load-bearing gate: generate_cc_equations(engine="diagram")
+        # produces equations whose per-manifold RESIDUAL equals the wick engine's,
+        # for ccsd and ccsdt. Residual equality (not canonical-multiset equality)
+        # is the correct gate: the two paths split repeated-factor terms
+        # differently (an exchange-symmetry representational choice), so the term
+        # multisets differ but the tensors are identical -- and it is the tensor
+        # the emitter accumulates. The diagram path is the solve-free front end,
+        # no BCH/Wick. Default engine="wick" is unchanged (asserted separately).
+        if np is None:
+            self.skipTest("numpy required")
+        from ccgen.tests.residual_eval import residual_einsum, random_tensors
+
+        no, nv = 4, 5
+        tn = random_tensors(no, nv, seed=7)
+        for method in ("ccsd", "ccsdt"):
+            wick = generate_cc_equations(method, engine="wick")
+            dia = generate_cc_equations(method, engine="diagram")
+            self.assertEqual(set(wick), set(dia))
+            for manifold in wick:
+                rw = sum(
+                    residual_einsum(t, no, nv, tensors=tn) for t in wick[manifold]
+                )
+                rd = sum(
+                    residual_einsum(t, no, nv, tensors=tn) for t in dia[manifold]
+                )
+                self.assertTrue(
+                    np.allclose(np.asarray(rw), np.asarray(rd), atol=1e-11),
+                    f"{method}/{manifold}: "
+                    f"{np.max(np.abs(np.asarray(rw) - np.asarray(rd))):.2e}",
+                )
+
+    def test_default_engine_is_wick(self) -> None:
+        # The diagram engine must be strictly opt-in: the default output is the
+        # wick path, byte-identical. (Guards against a default flip.)
+        a = generate_cc_equations("ccsd")
+        b = generate_cc_equations("ccsd", engine="wick")
+        self.assertEqual(
+            {m: [repr(t) for t in ts] for m, ts in a.items()},
+            {m: [repr(t) for t in ts] for m, ts in b.items()},
+        )
+
+    def test_diagram_engine_emits_equivalent_kernels(self) -> None:
+        # D5 kernel-equivalence: the einsum-EMITTED kernels of the diagram and
+        # wick engines compute the same residual AND in the same index LAYOUT
+        # (R1[occ,vir], R2[occ,occ,vir,vir]). Residual equality (D4.2) is at the
+        # AlgebraTerm level; this checks the whole generate->emit pipeline at the
+        # emitted-code level, exec'ing both and comparing arrays. This is the
+        # prerequisite evidence for ever flipping the default to "diagram":
+        # downstream solvers depend on the residual layout, and the diagram path
+        # is now made occ-first to match. No default flip / deletion here.
+        if np is None:
+            self.skipTest("numpy required")
+        from ccgen.generate import print_einsum
+        from ccgen.tests.residual_eval import random_tensors
+
+        no, nv = 4, 5
+        tn = random_tensors(no, nv, seed=9)
+
+        def run(code):
+            ns = {"np": np, "no": no, "nv": nv, "F": tn["f"], "V": tn["v"],
+                  "T1": tn["t1"], "T2": tn["t2"]}
+            exec(code, ns)
+            return ns["E_CC"], ns["R1"], ns["R2"]
+
+        ew, r1w, r2w = run(print_einsum("ccsd", engine="wick"))
+        ed, r1d, r2d = run(print_einsum("ccsd", engine="diagram"))
+        self.assertAlmostEqual(float(ew), float(ed), places=12)
+        self.assertEqual(r1w.shape, r1d.shape)
+        self.assertEqual(r2w.shape, r2d.shape)
+        self.assertTrue(np.allclose(r1w, r1d, atol=1e-11), np.max(np.abs(r1w - r1d)))
+        self.assertTrue(np.allclose(r2w, r2d, atol=1e-11), np.max(np.abs(r2w - r2d)))
 
     def test_ccsd_singles_linear_seed_matches_pyscf(self) -> None:
         if np is None:

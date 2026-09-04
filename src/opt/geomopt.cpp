@@ -122,7 +122,17 @@ static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFo
     }
     else if (calc._correlation == HartreeFock::PostHF::UMP2)
     {
-        return std::unexpected("GeomOpt UMP2 gradient is not implemented");
+        auto mp2_res = HartreeFock::Correlation::ump2_kernel(calc, shell_pairs, calc._mp2);
+        if (!mp2_res)
+            return std::unexpected("GeomOpt UMP2 failed: " + mp2_res.error());
+        if (auto corr_res = HartreeFock::Correlation::apply_ump2_result(calc, *mp2_res); !corr_res)
+            return std::unexpected("GeomOpt UMP2 failed: " + corr_res.error());
+        calc._correlated_total_energy = calc._total_energy + calc._correlation_energy;
+        calc._have_correlated_total_energy = true;
+        auto grad_res = HartreeFock::Gradient::compute_ump2_gradient(calc, shell_pairs);
+        if (!grad_res)
+            return std::unexpected("GeomOpt UMP2 gradient failed: " + grad_res.error());
+        grad_mat = std::move(*grad_res);
     }
     else if (calc._correlation == HartreeFock::PostHF::RCCSD ||
              calc._correlation == HartreeFock::PostHF::UCCSD ||
@@ -133,7 +143,10 @@ static std::expected<Eigen::VectorXd, std::string> _run_sp_gradient_hf(HartreeFo
     }
     else if (calc._scf._scf == HartreeFock::SCFType::ROHF)
     {
-        return std::unexpected("GeomOpt ROHF gradient is not implemented");
+        auto grad_res = HartreeFock::Gradient::compute_rohf_gradient(calc, shell_pairs);
+        if (!grad_res)
+            return std::unexpected("GeomOpt ROHF gradient failed: " + grad_res.error());
+        grad_mat = std::move(*grad_res);
     }
     else if (calc._scf._scf == HartreeFock::SCFType::UHF)
     {

@@ -12,6 +12,10 @@
 #include <utility>
 #include <vector>
 
+#ifdef USE_OPENMP
+#include <omp.h>
+#endif
+
 extern "C"
 {
 #include <xc.h>
@@ -26,6 +30,12 @@ namespace DFT
             Unpolarized = XC_UNPOLARIZED,
             Polarized = XC_POLARIZED
         };
+
+        // Grid points per libxc call when the exc_vxc evaluations are threaded.
+        // Large enough that the per-call setup inside libxc stays amortized,
+        // small enough to spread a typical molecular grid (~90k points at
+        // `grid normal`) over the available cores.
+        inline constexpr int xc_chunk_points = 4096;
 
         struct CAMCoefficients
         {
@@ -301,12 +311,26 @@ namespace DFT
 
                 exc.resize(static_cast<std::size_t>(npoints));
                 vrho.resize(static_cast<std::size_t>(npoints * spin_components()));
-                xc_lda_exc_vxc(
-                    &func_,
-                    npoints,
-                    const_cast<double *>(rho.data()),
-                    exc.data(),
-                    vrho.data());
+
+                // libxc's exc_vxc routines are a pointwise map: output at point i
+                // depends only on the inputs at point i.  Splitting the range into
+                // contiguous chunks is therefore an exact partition, not a
+                // reduction -- each chunk writes a disjoint output slice, so the
+                // result is independent of thread count and scheduling.
+                const int nspin = spin_components();
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static) if (!omp_in_parallel())
+#endif
+                for (int start = 0; start < npoints; start += xc_chunk_points)
+                {
+                    const int count = std::min(xc_chunk_points, npoints - start);
+                    xc_lda_exc_vxc(
+                        &func_,
+                        count,
+                        const_cast<double *>(rho.data()) + static_cast<std::size_t>(start) * nspin,
+                        exc.data() + static_cast<std::size_t>(start),
+                        vrho.data() + static_cast<std::size_t>(start) * nspin);
+                }
                 return {};
             }
 
@@ -330,14 +354,27 @@ namespace DFT
                 exc.resize(static_cast<std::size_t>(npoints));
                 vrho.resize(static_cast<std::size_t>(npoints * spin_components()));
                 vsigma.resize(static_cast<std::size_t>(npoints * sigma_components()));
-                xc_gga_exc_vxc(
-                    &func_,
-                    npoints,
-                    const_cast<double *>(rho.data()),
-                    const_cast<double *>(sigma.data()),
-                    exc.data(),
-                    vrho.data(),
-                    vsigma.data());
+
+                // Same pointwise-map partition as the LDA path above.  Note rho
+                // and sigma stride differently (nspin vs nsigma per point), so
+                // each chunk offsets its two input arrays by its own stride.
+                const int nspin = spin_components();
+                const int nsigma = sigma_components();
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static) if (!omp_in_parallel())
+#endif
+                for (int start = 0; start < npoints; start += xc_chunk_points)
+                {
+                    const int count = std::min(xc_chunk_points, npoints - start);
+                    xc_gga_exc_vxc(
+                        &func_,
+                        count,
+                        const_cast<double *>(rho.data()) + static_cast<std::size_t>(start) * nspin,
+                        const_cast<double *>(sigma.data()) + static_cast<std::size_t>(start) * nsigma,
+                        exc.data() + static_cast<std::size_t>(start),
+                        vrho.data() + static_cast<std::size_t>(start) * nspin,
+                        vsigma.data() + static_cast<std::size_t>(start) * nsigma);
+                }
                 return {};
             }
 

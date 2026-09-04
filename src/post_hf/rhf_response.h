@@ -17,6 +17,16 @@ namespace HartreeFock::Correlation
         const Eigen::MatrixXd &mo_coeff,
         const Eigen::VectorXd &mo_energy);
 
+    // RI-fitted RHF CPHF orbital Hessian (Step RG3.1). Same A as
+    // build_rhf_cphf_matrix but assembled from the RI 3-center factors, no nao⁴.
+    // build_rhf_cphf_matrix routes here under _mp2.use_ri; exposed for the gate.
+    std::expected<Eigen::MatrixXd, std::string> build_rhf_cphf_matrix_ri(
+        HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &mo_coeff,
+        const Eigen::VectorXd &mo_energy,
+        int n_occ,
+        int n_virt);
+
     std::expected<Eigen::MatrixXd, std::string> solve_rhf_cphf(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,

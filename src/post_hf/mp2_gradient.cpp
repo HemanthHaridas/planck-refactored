@@ -13,6 +13,7 @@
 #include "post_hf/mp2_internal.h"
 #include "post_hf/rhf_response.h"
 #include "post_hf/uhf_response.h"
+#include "post_hf/ri/ri_eri.h"
 
 namespace
 {
@@ -62,6 +63,12 @@ namespace
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const Eigen::MatrixXd &density)
     {
+        // RI-consistent veff G = J - 1/2 K when MP2 RI is enabled (Step RG3.2).
+        // build_ri_fock_rhf returns the same J - 1/2 K as _compute_2e_fock, so
+        // the caller factor (2· at veff_corr, projector sandwich at vhf_s1occ)
+        // is unchanged. Density is symmetric at both call sites.
+        if (calculator._mp2.use_ri)
+            return HartreeFock::Correlation::RI::build_ri_fock_rhf(calculator, density);
         return _compute_2e_fock(
             shell_pairs,
             density,
@@ -79,6 +86,14 @@ namespace
         const Eigen::MatrixXd &density_alpha,
         const Eigen::MatrixXd &density_beta)
     {
+        // RI-consistent unrestricted veff {J(Pa+Pb) - K(Pa), ... - K(Pb)} when
+        // MP2 RI is enabled (Step RG4.2). build_ri_fock_uhf returns the same
+        // quantity as _compute_2e_fock_uhf, so no caller factor changes. Both
+        // call sites pass symmetric densities (one symmetrizes explicitly, the
+        // other is C·(symmetric MO block)·Cᵀ), which build_ri_j requires.
+        if (calculator._mp2.use_ri)
+            return HartreeFock::Correlation::RI::build_ri_fock_uhf(
+                calculator, density_alpha, density_beta);
         return _compute_2e_fock_uhf(
             shell_pairs,
             density_alpha,
@@ -265,9 +280,15 @@ namespace HartreeFock::Correlation
         dm1_corr_mo.bottomRightCorner(nvirt, nvirt) = dvv + dvv.transpose();
         const Eigen::MatrixXd dm1_corr_ao = result.mo_coeff * dm1_corr_mo * result.mo_coeff.transpose();
 
+        // The dense nao⁴ ERI feeds only the Lagrangian imat below. Under RI that
+        // contraction runs through the 3-center factors (Step RG3.3), so the
+        // dense tensor is not built at all.
         std::vector<double> eri_local;
-        const std::vector<double> &eri = ensure_eri(
-            calculator, shell_pairs, eri_local, "RMP2 Gradient :");
+        static const std::vector<double> empty_eri;
+        const std::vector<double> &eri =
+            calculator._mp2.use_ri
+                ? empty_eri
+                : ensure_eri(calculator, shell_pairs, eri_local, "RMP2 Gradient :");
 
         std::vector<double> pair_dm2_ao(static_cast<std::size_t>(nao) * nao * nao * nao, 0.0);
         for (int mu = 0; mu < nao; ++mu)
@@ -373,20 +394,31 @@ namespace HartreeFock::Correlation
                             // PySCF contracts the pair density with the ERI derivative
                             // with an overall factor of 2 (grad/mp2.py: de -= ... * 2);
                             // dm2buf_full carries only one bra-derivative permutation here.
-                            const double dm2v = 2.0 * dm2buf_full[idx_dm2(p, q, r, s, nao)];
-                            for (int comp = 0; comp < 3; ++comp)
+                            // Under RI this 2e-term is built from the 3-center
+                            // derivative tensors after the loop (Step RG3.4), so skip
+                            // the dense derivative-ERI accumulation here.
+                            if (!calculator._mp2.use_ri)
                             {
-                                two_e_terms(atom, comp) += dI[comp] * dm2v;
-                                electronic(atom, comp) += dI[comp] * dm2v;
+                                const double dm2v = 2.0 * dm2buf_full[idx_dm2(p, q, r, s, nao)];
+                                for (int comp = 0; comp < 3; ++comp)
+                                {
+                                    two_e_terms(atom, comp) += dI[comp] * dm2v;
+                                    electronic(atom, comp) += dI[comp] * dm2v;
+                                }
                             }
 
                             // Imat(q,v) += sum_{p,r,s} (pq|rs) * dm2buf[p,v,r,s].
                             // dm2buf_full omits the r<->s symmetrization, so the
                             // full-ERI contraction matches PySCF's packed Imat with
-                            // factor 1 (verified element-wise: ratio 1.0).
-                            const double eri_pqrs = eri[idx_dm2(p, q, r, s, nao)];
-                            for (int v = 0; v < nao; ++v)
-                                imat_ao(q, v) += eri_pqrs * dm2buf_full[idx_dm2(p, v, r, s, nao)];
+                            // factor 1 (verified element-wise: ratio 1.0). Under RI
+                            // this is built once from the 3-center factors after the
+                            // loop (Step RG3.3), so skip the dense accumulation here.
+                            if (!calculator._mp2.use_ri)
+                            {
+                                const double eri_pqrs = eri[idx_dm2(p, q, r, s, nao)];
+                                for (int v = 0; v < nao; ++v)
+                                    imat_ao(q, v) += eri_pqrs * dm2buf_full[idx_dm2(p, v, r, s, nao)];
+                            }
 
                             for (int comp = 0; comp < 3; ++comp)
                             {
@@ -396,6 +428,36 @@ namespace HartreeFock::Correlation
                                 vhf1[atom][comp](p, s) -= 0.5 * dI[comp] * hf_dm1(q, r);
                             }
                         }
+        }
+        // RI Lagrangian: imat = Σ (pq|rs)·dm2buf[p,v,r,s] via the 3-center
+        // factors (Step RG3.3), replacing the dense nao⁴ contraction skipped in
+        // the loop above. Same quantity, before the −1 sign flip.
+        if (calculator._mp2.use_ri)
+            imat_ao = HartreeFock::Correlation::RI::build_ri_imat(
+                calculator, dm2buf_full, nao);
+
+        // RI 2e-gradient term (Step RG3.4): contract the fitted 3-index density
+        // against the RG1 derivative tensors instead of the dense 4-center
+        // derivative ERIs skipped in the loop. dm2buf's bra is non-symmetric, so
+        // gamma3 sums both orderings and the contraction runs bra_prefolded.
+        if (calculator._mp2.use_ri)
+        {
+            auto dJ = HartreeFock::Correlation::RI::compute_3c_eri_deriv(calculator);
+            auto dV = HartreeFock::Correlation::RI::compute_2c_eri_deriv(calculator);
+            if (!dJ)
+                return std::unexpected("RMP2 RI gradient: " + dJ.error());
+            if (!dV)
+                return std::unexpected("RMP2 RI gradient: " + dV.error());
+            auto [gamma3, x_proj] =
+                HartreeFock::Correlation::RI::build_ri_gamma3_from_ao_dm2(
+                    calculator, dm2buf_full, nao);
+            const Eigen::MatrixXd ri_two_e =
+                HartreeFock::Correlation::RI::build_ri_two_electron_gradient(
+                    gamma3, x_proj, *dJ, *dV,
+                    calculator._molecule.natoms, static_cast<std::size_t>(nao),
+                    /*bra_prefolded=*/true);
+            two_e_terms += ri_two_e;
+            electronic += ri_two_e;
         }
         imat_ao = -imat_ao;
         Eigen::MatrixXd imat_mo = result.mo_coeff.transpose() * imat_ao * calculator._overlap * result.mo_coeff;
@@ -673,9 +735,26 @@ namespace HartreeFock::Correlation
                     vhf1[atom][spin][comp] = Eigen::MatrixXd::Zero(nao, nao);
 
         Eigen::MatrixXd electronic = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
+        // The dense nao⁴ ERI feeds only the Lagrangian Imata/Imatb below. Under RI
+        // those contractions run through the 3-center factors (Step RG4.3), so the
+        // dense tensor is not built at all.
         std::vector<double> eri_local;
-        const std::vector<double> &eri = ensure_eri(
-            calculator, shell_pairs, eri_local, "UMP2 Gradient :");
+        static const std::vector<double> empty_eri;
+        const std::vector<double> &eri =
+            calculator._mp2.use_ri
+                ? empty_eri
+                : ensure_eri(calculator, shell_pairs, eri_local, "UMP2 Gradient :");
+        // Per-spin AO separable densities Dσ[p,v,r,s], the transitional nao⁴
+        // buffers the RI Lagrangian consumes (one build_ri_imat call each). Only
+        // materialized under RI; the dense path accumulates Imat in the loop.
+        const std::size_t nao4 =
+            static_cast<std::size_t>(nao) * nao * nao * nao;
+        std::vector<double> dm2a_ao, dm2b_ao;
+        if (calculator._mp2.use_ri)
+        {
+            dm2a_ao.assign(nao4, 0.0);
+            dm2b_ao.assign(nao4, 0.0);
+        }
         const auto &bfs = calculator._shells._basis_functions;
 
         for (std::size_t atom = 0; atom < atom_aos.size(); ++atom)
@@ -724,11 +803,19 @@ namespace HartreeFock::Correlation
 
                             const HartreeFock::ShellPair spAB(bfs[p], bfs[q]);
                             const HartreeFock::ShellPair spCD(bfs[r], bfs[s]);
+                            // dI is still needed by the vhf1 block below: the HF
+                            // reference is always dense (RI fits only the MP2
+                            // correlation), so those derivative terms stay dense.
                             const auto dI = HartreeFock::Gradient::compute_eri_deriv_dispatch(calculator, spAB, spCD);
-                            for (int comp = 0; comp < 3; ++comp)
-                                electronic(atom, comp) += dI[comp] * (dm2a + dm2b);
+                            // Under RI the correlation 2e-gradient term is built
+                            // from the 3-center derivative tensors after the loop
+                            // (RG4.3), so skip the dense 4-center contraction.
+                            if (!calculator._mp2.use_ri)
+                                for (int comp = 0; comp < 3; ++comp)
+                                    electronic(atom, comp) += dI[comp] * (dm2a + dm2b);
 
-                            const double eri_pqrs = eri[idx_dm2(p, q, r, s, nao)];
+                            const double eri_pqrs =
+                                calculator._mp2.use_ri ? 0.0 : eri[idx_dm2(p, q, r, s, nao)];
                             for (int v = 0; v < nao; ++v)
                             {
                                 double dm2av = 0.0;
@@ -766,8 +853,20 @@ namespace HartreeFock::Correlation
                                         dm2bv += Ca_occ(s, i) * part_dm2ab[idx_ab_part(i, r, v, j)] * Cb_occ(p, j);
                                         dm2bv += Ca_occ(s, i) * part_dm2ab[idx_ab_part(i, r, p, j)] * Cb_occ(v, j);
                                     }
-                                Imata(q, v) += 0.5 * eri_pqrs * dm2av;
-                                Imatb(q, v) += 0.5 * eri_pqrs * dm2bv;
+                                if (calculator._mp2.use_ri)
+                                {
+                                    // Capture the per-spin AO separable densities
+                                    // Dσ[p,v,r,s]. The q loop revisits the same
+                                    // (p,·,r,s) slice for every q, so assign (not
+                                    // +=) to avoid multiple-counting.
+                                    dm2a_ao[idx_dm2(p, v, r, s, nao)] = dm2av;
+                                    dm2b_ao[idx_dm2(p, v, r, s, nao)] = dm2bv;
+                                }
+                                else
+                                {
+                                    Imata(q, v) += 0.5 * eri_pqrs * dm2av;
+                                    Imatb(q, v) += 0.5 * eri_pqrs * dm2bv;
+                                }
                             }
 
                             for (int comp = 0; comp < 3; ++comp)
@@ -782,6 +881,44 @@ namespace HartreeFock::Correlation
                                 vhf1[atom][1][comp](p, s) -= dI[comp] * hf_dm1b(q, r);
                             }
                         }
+
+        if (calculator._mp2.use_ri)
+        {
+            // RI Lagrangians (Step RG4.3): Imat_σ(q,v) = ½ Σ_{p,r,s} (pq|rs)·Dσ[p,v,r,s]
+            // via the 3-center factors, replacing the dense nao⁴ contraction
+            // skipped in the loop. Same ½ the dense path carries.
+            Imata = 0.5 * HartreeFock::Correlation::RI::build_ri_imat(
+                              calculator, dm2a_ao, nao);
+            Imatb = 0.5 * HartreeFock::Correlation::RI::build_ri_imat(
+                              calculator, dm2b_ao, nao);
+
+            // RI 2e-gradient term (Step RG4.3): contract the fitted 3-index
+            // density built from the spin-summed AO separable density
+            // (pair_dm2_ao = Da + Db) against the RG1 derivative tensors. Same
+            // bra_prefolded=true convention as the RHF path — the packing sums
+            // both (μν) and (νμ) orderings.
+            //
+            // The ½ is a CONVENTION bridge, not physics. build_ri_two_electron_
+            // gradient reproduces the RHF dense convention, whose 2e term carries
+            // an explicit `2.0 * dm2buf` (PySCF grad/mp2.py: de -= ... * 2). The
+            // UMP2 dense term contracts `dm2a + dm2b` with NO factor 2, so feeding
+            // pair_dm2_ao straight in double-counts by exactly 2 — measured
+            // RI/dense = 2.0000 on every non-zero component, uniform across atoms
+            // and axes. Halving restores the UMP2 convention.
+            auto dJ = HartreeFock::Correlation::RI::compute_3c_eri_deriv(calculator);
+            auto dV = HartreeFock::Correlation::RI::compute_2c_eri_deriv(calculator);
+            if (!dJ)
+                return std::unexpected("UMP2 RI gradient: " + dJ.error());
+            if (!dV)
+                return std::unexpected("UMP2 RI gradient: " + dV.error());
+            auto [gamma3, x_proj] =
+                HartreeFock::Correlation::RI::build_ri_gamma3_from_ao_dm2(
+                    calculator, pair_dm2_ao, nao);
+            electronic += 0.5 * HartreeFock::Correlation::RI::build_ri_two_electron_gradient(
+                                    gamma3, x_proj, *dJ, *dV,
+                                    calculator._molecule.natoms, static_cast<std::size_t>(nao),
+                                    /*bra_prefolded=*/true);
+        }
 
         Imata = -result.mo_coeff_alpha.transpose() * Imata * calculator._overlap * result.mo_coeff_alpha;
         Imatb = -result.mo_coeff_beta.transpose() * Imatb * calculator._overlap * result.mo_coeff_beta;

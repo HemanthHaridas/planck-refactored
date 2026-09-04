@@ -21,6 +21,46 @@
 // correct is the one used in production for L = 6. The integral engines already
 // size their stack buffers off MAX_L = 6, so L = 6 needs no engine changes; L ≥ 7
 // would require raising MAX_L (and re-validating the recurrence buffers).
+namespace
+{
+    // Metric-aware pseudoinverse of a raw-monomial harmonic-combination matrix T
+    // ([n_cart × n_sph]). The T matrices for L ≥ 3 below carry integer coefficients
+    // for RAW Cartesian monomials x^lx y^ly z^lz. But the integral engine feeds
+    // UNIT-NORMALIZED Cartesian components (each x^lx y^ly z^lz is scaled by
+    // N = 1/sqrt((2lx-1)!! (2ly-1)!! (2lz-1)!!) so its self-overlap is 1). The
+    // per-component N differs across components (e.g. xxx vs xyz for f), so applying
+    // the raw-monomial coefficients directly to unit components yields spherical
+    // functions that are NOT pure harmonics in the physical monomials — a
+    // contaminated ℓ-subspace that shifts f-and-up energies (~2e-5 for cc-pVTZ,
+    // sitting below the variational minimum). The hand-derived L ≤ 2 blocks already
+    // bake this normalization in (their 1/√3 factors); this does the same for
+    // L ≥ 3: scale each Cartesian row of T by 1/N before the pseudoinverse.
+    Eigen::MatrixXd normalized_pseudoinverse(const Eigen::MatrixXd &T, int L)
+    {
+        auto dfac_odd = [](int n) {
+            double r = 1.0;
+            for (int m = n; m > 1; m -= 2)
+                r *= static_cast<double>(m);
+            return r;
+        };
+        // Cartesian component order: lx = L..0, ly = L-lx..0, lz = L-lx-ly.
+        Eigen::MatrixXd Tn = T;
+        int row = 0;
+        for (int lx = L; lx >= 0; --lx)
+            for (int ly = L - lx; ly >= 0; --ly, ++row)
+            {
+                const int lz = L - lx - ly;
+                const double inv_norm =
+                    std::sqrt(dfac_odd(2 * lx - 1) * dfac_odd(2 * ly - 1) *
+                              dfac_odd(2 * lz - 1));
+                // unit_i = raw_i / inv_norm  ⇒  coeff on unit_i = raw_coeff * inv_norm
+                // i.e. scale the raw-monomial row by its normalization factor.
+                Tn.row(row) *= inv_norm;
+            }
+        return Tn.completeOrthogonalDecomposition().pseudoInverse();
+    }
+} // namespace
+
 std::expected<Eigen::MatrixXd, std::string> HartreeFock::BasisFunctions::cart_to_sph_block(int L)
 {
     if (L == 0)
@@ -93,7 +133,7 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::BasisFunctions::cart_to
         T(7, 5) = -1; // m=+2: z(x²-y²)
         T(0, 6) = 1;
         T(3, 6) = -3; // m=+3: x(x²-3y²)
-        return T.completeOrthogonalDecomposition().pseudoInverse();
+        return normalized_pseudoinverse(T, L);
     }
 
     if (L == 4)
@@ -131,7 +171,7 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::BasisFunctions::cart_to
         T(0, 8) = 1;
         T(3, 8) = -6;
         T(10, 8) = 1; // m=+4: x⁴-6x²y²+y⁴
-        return T.completeOrthogonalDecomposition().pseudoInverse();
+        return normalized_pseudoinverse(T, L);
     }
 
     if (L == 5)
@@ -188,7 +228,7 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::BasisFunctions::cart_to
         T(0, 10) = 1;
         T(3, 10) = -10;
         T(10, 10) = 5; // m=+5: x(x⁴-10x²y²+5y⁴)
-        return T.completeOrthogonalDecomposition().pseudoInverse();
+        return normalized_pseudoinverse(T, L);
     }
 
     if (L == 6)

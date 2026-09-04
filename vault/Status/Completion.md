@@ -21,6 +21,16 @@ historical design context, but they are no longer the source of truth for
 ### HF / SCF core
 
 - RHF, UHF, and ROHF SCF with DIIS (`src/scf/scf.cpp`)
+- ROHF MO-energy bookkeeping is consistent: both spin channels store the
+  canonical per-spin Fock diagonals (`epsa`/`epsb`), a matched pair aligned to
+  the `C` column order that `_reorder_rohf_orbitals` sorts by `epsa`. Previously
+  the alpha slot held the effective Roothaan eigenvalues (a mislabeled pairing
+  with canonical `epsb`); the effective set was a convergence device only and is
+  not read after the reorder. The two ROHF-reachable consumers (CASSCF/FCI
+  active-space selection) use these energies for ordering only, so the change is
+  behavior-neutral for them; it fixes the user-facing MO-energy printout. Planck
+  now matches PySCF 2.13.0 ROHF `Cᵀ Fα C` (epsa) exactly. Gated by
+  `homo_energy`/`lumo_energy` `metric_close` on `water_radical_cation_rohf_sto3g`
 - H_core and SAD initial guesses
 - Same-basis checkpoint restart and density restart
 - Symmetry detection, MO irrep labeling, and SAO-blocked Fock diagonalization
@@ -52,14 +62,19 @@ historical design context, but they are no longer the source of truth for
 - Spherical property reporting
 - Same-basis and cross-basis checkpoint restart in the spherical working basis
 - Spherical MP2, CASSCF, RASSCF, FCI, FCIDUMP export, and coupled-cluster energies
-- Spherical analytic gradients for RHF and UHF, via the
+- Spherical analytic gradients for RHF, UHF, and ROHF, via the
   `lift_density_sph_to_cart` adapter that maps the spherical SCF density and
   energy-weighted density back to the Cartesian basis so the Cartesian
   derivative-integral engine can be reused unchanged (the energy is invariant
-  under the basis change, so the lift carries no approximation). PySCF-validated
-  to ~1e-7 Ha/Bohr on water/6-31g* and OH/STO-3G
+  under the basis change, so the lift carries no approximation). For ROHF the
+  energy-weighted density `W = Pa·Fa·Pa + Pb·Fb·Pb` is built in the spherical
+  basis and lifted **once** — never from separately-lifted factors, since the
+  cart←sph transform C is non-square (C·Cᵀ ≠ I), so
+  `lift(Pa·Fa·Pa) ≠ lift(Pa)·lift(Fa)·lift(Pa)`. PySCF-validated to ~1e-7
+  Ha/Bohr on water/6-31g* (RHF), OH/STO-3G (UHF), and the water-cation doublet
+  6-31g* (ROHF, `h2o_cation_rohf_spherical_gradient_631gd`)
 - Spherical geometry optimization (IC-BFGS + Cartesian L-BFGS) and
-  semi-numerical frequencies for RHF and UHF, plus geomopt+frequency and
+  semi-numerical frequencies for RHF, UHF, and ROHF, plus geomopt+frequency and
   imaginary-mode following. Driven by a shared
   `HartreeFock::SCF::rebuild_basis_dependent_state` helper that re-runs the
   spherical `_cart_to_sph` row-normalization and the `C·(T+V)·Cᵀ` working-basis
@@ -75,6 +90,29 @@ historical design context, but they are no longer the source of truth for
   geomopt,freq,geomoptfreq}_631gd`), with unsupported workflows hard-gated
   rather than allowed to return wrong answers (boundary markers:
   `water_rmp2_spherical_{gradient,geomopt}_rejected`)
+- High angular momentum (f/g/h) spherical transform validated **cross-CODE**
+  (2026-08-28). The `L >= 3` `cart_to_sph_block` matrices carried integer
+  coefficients for RAW Cartesian monomials while the integral engine feeds
+  **unit-normalized** components, so the spherical functions were not pure
+  harmonics in the physical monomials — a contaminated l-subspace that put
+  water/cc-pVTZ 2.14e-5 **below** the variational minimum in a same-spanning
+  basis. Fixed earlier by `normalized_pseudoinverse` (`src/basis/spherical.cpp`);
+  what landed now is the coverage that was missing, and the reason it shipped:
+  every high-L gate was **Cartesian and cross-ENGINE**, and since all engines
+  share the transform they agreed with each other while all being wrong.
+  Three PySCF-anchored spherical RHF gates close it —
+  `water_rhf_spherical_ccpvtz_fshell` (f, 4.7e-9, 19 iters against 83-142
+  pre-fix), `ne_rhf_spherical_ccpvqz_gshell` (g) and
+  `ne_rhf_spherical_ccpv5z_hshell` (h), the latter two matching PySCF to all ten
+  printed digits. References were built from Planck's **own** GBS via
+  `pyscf.gto.basis.parse_gaussian`, removing the basis-coefficient confound
+  rather than assuming it away. `tests/spherical_transform.cpp` additionally
+  pins the two convention-invariant properties the old shape/rank check could
+  not see — harmonic purity in the physical monomials, and row-space equality
+  with the recurrence oracle — both mutation-verified: re-introducing the defect
+  fails exactly L = 3,4,5 (max|∇²| 2.2e-1/1.8e-1/8.4e-2) while L <= 2 and L = 6
+  stay green. The i-shell (L=6) path bypasses the pseudoinverse for the
+  recurrence oracle and remains unchecked cross-code; see `vault/Status/Open Work.md`.
 
 ### Post-HF methods
 
@@ -87,8 +125,83 @@ historical design context, but they are no longer the source of truth for
   `oh_casscf_rohf_sto3g`)
 - Coupled-cluster support for RCCSD, UCCSD, RCCSDT, UCCSDT, RCCSDTQ
 - Arbitrary-order RCC solver via ccgen-generated residuals
+- **Arbitrary-order UNRESTRICTED CC (UCC) from ccgen-generated residuals**, behind
+  `-DPLANCK_CC_UCC=ON` (default OFF, so the default build is unaffected and emits no
+  UCC translation unit). Keywords `ucc2`…`ucc6` plus `uccsd_gen`/`uccsdt_gen`/
+  `uccsdtq_gen`, routing through `PostHF::UCCGEN` → `run_uccgen`. Validated against
+  three independent references on B/STO-3G (doublet, 3α/2β):
+
+  ```
+  ucc2  -24.1892581442   == hand-written UCCSD, exactly
+  ucc3  -24.1892636163   T3 recovers 80.1% of the UCCSD->FCI gap
+  ucc4  -24.1892649766   == in-tree FCI, all ten digits
+  ```
+
+  `ucc4 == FCI` on an **open-shell** system is the strongest UCC gate: CCSDTQ is exact
+  there because T5 is unreachable in the basis (only 2 alpha virtuals for 3 alpha
+  electrons), not because the electron count is small. Gated by `b_ucc{2,3,4}_sto3g`,
+  which skip cleanly in a default build via the runner's `requires_build_option`.
+
+  UCC is RCC minus the spatial collapse — the same generator, bridge, runtime and
+  sector machinery, with the spin blocks kept resolved. What that costs is one
+  vocabulary per layer instead of one object: 24 ERI arrays (7 `aaaa` / 10 `abab` /
+  7 `bbbb`), per-block denominators (`abab` differs in *shape*), per-spin Fock blocks,
+  four orbital counts, and a distinct kernel namespace so both sets link into one
+  binary. See `docs/CCGEN_UNRESTRICTED_CC.md` and
+  `docs/CCGEN_UCC_ERI_ANTISYMMETRY.md`.
 - Tensor-backed and determinant-space coupled-cluster paths, including the
   optimized RCCSDT warm-start route
+- **Dressed ccgen CC kernels — RETIRED as a production route, deliberately.**
+  The Stanton-Gauss `Wmnij`/`Wabef`/`Wmbej` + `tau`/`tau_c` operators are
+  recognized diagrammatically, generate from the build, compile, and link
+  (`-DPLANCK_CC_DRESS_OPERATORS=ON`; default OFF, so the default build is
+  byte-identical and unaffected).
+
+  **The spin-adapted dressed path is unsupported: its RCC kernels are wrong.**
+  Dressing and spin adaptation do not compose — each transform is correct alone
+  and the composition is wrong in **either** order, because recognition
+  subtracts what an operator absorbs against a term set that adaptation then
+  changes. Measured: dressed Be/STO-3G CCSDTQ `E_corr` = −0.0247182895 against
+  an exact −0.0517746319 (52 % short).
+
+  Retired rather than fixed because the payoff does not justify the work: the
+  measured saving is ~1.2–1.5× (spin-orbital, actual) against a research task —
+  deriving a spatial operator set plus a spatial-capable matcher — for a bounded
+  ~1.9–2.8× expected. The generated-vs-hand-written slowdown is a larger
+  untouched lever (this entry previously cited it as "~180×"; that figure never
+  carried its dimensions and did not reproduce — see the tensor-accessor entry
+  below for the measured numbers). Five fix attempts each passed their gate and
+  made the energy worse. Full answer, with the measurements and what was kept:
+  `docs/CCGEN_DRESSING_AND_SPIN_ADAPTATION.md`.
+
+  **The seven tests of this route are `@unittest.expectedFailure` as of
+  2026-08-22**, with the reason inline in each. Four are the composition defect
+  itself (`test_dressed_numeric_oracle`, `test_dressed_spatial_equivalence`);
+  three are the F0 builder-vs-usage layout defect on the mixed-space operators
+  `tau`/`Wmbej` (`test_intermediate_layout_agreement`). All seven were confirmed
+  pre-existing on a clean tree. They are marked rather than fixed (that means
+  investing in an abandoned route) and rather than deleted (they are numeric
+  instruments this note keeps deliberately). **An unexpected PASS is the signal
+  that the composition was genuinely fixed** — at which point this entry, and
+  the notes in those files, should be revisited.
+
+  **A second route exists and also fails, which the retirement never considered.**
+  `factorize.py` *derives* operators from contraction structure rather than
+  matching hand-seeded fingerprints, and is basis-agnostic (GCC and spatial
+  `ccsd` doubles both yield the same 20 operators). Measured 2026-08-22, it does
+  not preserve the residual's value either — **on GCC**, where there is no spin
+  adaptation to blame: 23 of 66 `ccsd` doubles terms disagree
+  (‖diff‖/‖R‖ = 3.73e-01). So the retirement's *decision* is better supported
+  than when it was taken, but its stated *reason* ("dressing and spin adaptation
+  do not compose") is not what the second route demonstrates. The factorizer has
+  **no numeric gate** — its 47 tests compare factor `Counter`s, which are blind
+  to index order by construction. Full record and the three discarded
+  hypotheses: `docs/CCGEN_TWO_DRESSING_ROUTES.md`.
+
+  An earlier version of this entry claimed a verified rank-3 equivalence
+  (`h2` 12/12, `lih` 16/16, `bh3` 26/26). That comparison never ran the
+  generated kernel — `compute_ccsdt_triples_residual` had no caller until
+  `64d0074`, so both builds executed hand-written code and agreed vacuously.
 
 ### CASSCF / SA-CASSCF status
 
@@ -100,14 +213,48 @@ historical design context, but they are no longer the source of truth for
 - SA diagnostics are parsed by the regression runner
 - SAD-start uphill-enabled water SA-2 basin is validated and retained as a separate
   regression mode
+- Plateau-escape convergence branch is hardened: the old rounding-sensitive
+  `100·tol_mcscf_grad` screen is replaced by an explicit `sa_g`-stationarity
+  bound `plateau_sa_g_bound = max(1e-6, tol_mcscf_grad)`, and a
+  `casscf_converged_via_plateau` diagnostic is emitted and asserted by the
+  runner — `false` for `water_casscf_sa2_sto3g`,
+  `water_casscf_sa2_sto3g_sad_guess`, and `ethylene_casscf_sa2_sto3g`; `true`
+  only for `water_casscf_sa2_sto3g_sad_guess_uphill` (all four green)
+- Stagnation-cascade trim: the per-root candidate steps (`root*-coupled` /
+  `root*-grad-fallback`) and their generator `build_root_resolved_coupled_step_set`
+  are removed. A suite-wide accepted-candidate sweep showed they never won a
+  merit selection while costing a per-root coupled solve every stagnant macro.
+  `numeric-newton` (dominant fallback) and single-pair probes (load-bearing on
+  the SAD-uphill SA-2 canary) are kept. Verified zero behavior change: 121/121
+  regressions green including all 11 PySCF CASSCF gates, and the SAD-uphill case
+  accepts the identical candidate sequence as before
 
 ### Gradients, optimization, and frequencies
 
-- Analytic gradients for RHF, UHF, RMP2, and UMP2
+- Analytic gradients for RHF, UHF, ROHF, RMP2, and UMP2
 - Geometry optimization in Cartesian and internal coordinates
 - Semi-numerical Hessian / vibrational frequencies
 - Imaginary-frequency following
 - Constrained geometry optimization
+- ROHF analytic gradients (Cartesian basis), plus the geometry-optimization
+  and frequency workflows built on them. The gradient is structurally the UHF
+  gradient — same Hellmann-Feynman + Pulay + 2e + Vnn terms over the alpha/beta
+  densities — with one ROHF-specific piece: the energy-weighted density
+  `W = Pa·Fa·Pa + Pb·Fb·Pb` (`build_rohf_energy_weighted_density` in
+  `src/gradient/gradient.cpp`, built from the spin Fock matrices the SCF already
+  persists). This is exactly PySCF's ROHF `make_rdm1e` (`W_a + W_b`) and is
+  required because ROHF orbitals are canonical for the effective Roothaan Fock,
+  not for the individual spin Focks, so the UHF `Σ ε_i C_i C_iᵀ` form is wrong.
+  No CPHF/Z-vector solve — ROHF SCF is variational, so the SCF gradient needs
+  none, same as RHF/UHF. PySCF-gated by `oh_rohf_gradient_sto3g`,
+  `ch3_radical_rohf_gradient_sto3g` (low-symmetry C1, all 12 gradient components
+  non-zero, matches PySCF analytic to ~8e-8), `oh_rohf_geomopt_sto3g`
+  (E_opt Δ ~2e-8 Eh), and `oh_rohf_freq_sto3g` (stretch Δ ~0.07 cm⁻¹ vs a
+  PySCF FD-of-analytic-gradient Hessian). Spherical ROHF gradients, geomopt,
+  and frequencies are also landed (same build-W-in-spherical-then-lift-once
+  pattern; PySCF-gated by `h2o_cation_rohf_spherical_{gradient,geomopt,freq}_631gd`
+  to ~1e-7 Ha/Bohr, ~1e-7 Eh, and <0.1 cm⁻¹). ROHF-MP2 gradients, ROHF
+  stability, and ROHF PCM remain out of scope.
 
 ### DFT
 
@@ -138,6 +285,536 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **CC amplitude checkpoint (`.ccamp`): hand-written RCCSD can now write a
+  spatial sidecar, a sector-drop defect in the shipped format is fixed, and
+  UCC has full write/restart support (2026-09-04/05).**
+  `docs/CC_AMPLITUDE_CHECKPOINT.md` is the single answer doc for all of it
+  (the three prior scope docs it replaced are deleted). PR #164,
+  branch `ccamp-x5-spin-orbital-projection`.
+
+  **X5.0/X5.1 — spin-orbital -> spatial projection.**
+  `project_rccsd_amplitudes_to_spatial` (`amplitudes.{h,cpp}`) converts
+  `run_rccsd`'s converged spin-orbital `t1`/`t2` to the spatial RCC layout
+  the sidecar and generated arbitrary-order runtime both use. The
+  closed-shell relation -- `t1` is either spin channel (identical at closed
+  shell, cross-spin blocks exactly zero); `t2` is the opposite-spin
+  spin-orbital block (`t2_aa = t2_ab - t2_ab.swap(a,b)` is the dependent
+  same-spin combination, not independent data) -- was **numerically
+  verified against this codebase's own converged BH3/STO-3G amplitudes**
+  via a temporary probe, not trusted from memory. Gated by
+  `tests/cc_spatial_amplitude_projection.cpp`, mutation-verified. Caught a
+  real fixture bug along the way that Release's `-DNDEBUG` had made
+  invisible -- see Open Work for the NDEBUG gap this surfaced project-wide.
+  `run_rccsd` was worth doing because it has no generated-arbitrary-order
+  sibling (the registry floor is rank 3); verified end-to-end on
+  BH3/STO-3G, same energy, values read back bit-for-bit correct.
+
+  **C0 -- a real correctness defect in the already-shipped format, fixed on
+  both sides.** `save_cc_amplitudes` only ever wrote `amplitudes.by_rank`,
+  never `amplitudes.sectors` -- the independent higher Sz sector blocks a
+  rank->=4 amplitude set carries (e.g. `(4, "aaabaaab")` for CCSDTQ, proven
+  genuinely independent by R3.1.3). A `cc4` restart therefore always seeded
+  that sector at zero -- silent because it still converges (Jacobi/DIIS
+  pulls the zero sector up), so no energy-only gate ever caught it. Fixed
+  on the file-format side (`CCAMP_VERSION` bumped to 2, sectors appended via
+  a shared `write_tensor`/`read_tensor` codec, version-1 backward
+  compatibility preserved and correctly distinguished from mid-field
+  truncation) and on the seed-application side
+  (`seed_arbitrary_order_amplitudes` now applies sectors by `(rank, tag)`
+  key, skipping rather than failing on a shape mismatch or missing
+  counterpart) -- fixing only one side would have left the other silently
+  inert. Also folds in a one-byte `reference_type` field for a future UCC
+  sidecar, so it needs no version 3. Both halves independently
+  mutation-verified.
+
+  **C1 -- the sidecar is now validated against the live run before
+  seeding.** Previously only a per-rank shape check existed; two different
+  bases (or molecules) can share identical `n_occ`/`n_virt`, so a
+  same-shaped stale sidecar could silently seed a wrong basin. Now compares
+  `basis_name` and `n_occ`/`n_virt` at the read site, degrading to a warned
+  cold-start on mismatch -- the same policy every other sidecar problem
+  here uses. The validating function lives in an anonymous namespace and
+  cannot be unit-tested directly; verified end-to-end on LiH/STO-3G instead
+  (`ccsdt_gen`, rank 3): two independent hand-corrupted sidecars each
+  correctly cold-start at the same final energy a from-scratch run reaches,
+  while an untouched sidecar still warm-starts in 1 iteration.
+
+  **C2 -- the `ccsdt_gen`->`cc4` cross-rank restart, verified end to end.**
+  Ran the actual gate on Be/STO-3G at loose tolerance
+  (`PLANCK_CC_ARBITRARY_LOWER_RANKS=ON`), with `cc_warm_start .false.` on
+  every run to isolate the disk-restart claim from W6's in-memory
+  recursion (which otherwise recurses to a converged rank-3 in memory
+  regardless of whether a sidecar exists, making a "cold" comparison
+  meaningless without it). Genuinely cold `cc4`: 6 iterations,
+  `E_corr = -0.0518049788`. `ccsdt_gen` write (rank 3): 6 iterations,
+  `E_corr = -0.0517514344`. `cc4` restart from that sidecar: **1 iteration**,
+  `E_corr = -0.0517592490`, log line confirms
+  `Warm-started rank 4 from CC amplitude checkpoint ... (seeded 3 rank(s),
+  method 'cc3')`. No warnings during restart -- the empty-sectors-seed-
+  nothing path (a rank-3 source has no sectors of its own) is a silent
+  no-op exactly as reasoned, not an error. Both cold and restart runs land
+  within loose-tolerance spread of the tight-tolerance reference
+  `-14.4036551081` (`be_rccsdtq_sto3g`'s own committed value), confirming
+  the correct basin rather than a coincidentally-plausible wrong answer.
+  **X4 is formally closed.** Not added as a committed regression case (ad
+  hoc `.hfinp` files, not wired into `regression_cases.json` -- see the
+  REMAINING doc for what a permanent gate would need).
+
+  **C4 -- corrected finding, not fixed.** The REMAINING doc previously said
+  C4 was blocked on arbitrary-order UCC landing at all; that premise was
+  wrong -- UCC already exists in the tree, complete and validated
+  (`ucc2`/`ucc3`/`ucc4`, `-DPLANCK_CC_UCC=ON`). Reading `uccgen.cpp`
+  directly found its own comment already correctly diagnoses the real
+  blocker: `.ccamp` persistence was deliberately omitted because
+  `CCAmplitudeCheckpointMeta` carries one `n_occ`/`n_virt` pair, but
+  `UHFReference` needs four independent counts
+  (`n_occ_alpha`/`n_occ_beta`/`n_virt_alpha`/`n_virt_beta`) -- a shape gap
+  C0's `reference_type` byte does not fix (it lets a reader tell RHF from
+  UHF, not represent UHF's counts). Also confirmed: UCC leaves `by_rank`
+  empty entirely (`prepare_generated_ucc_state`'s own comment) and is
+  sectors-only, while its sector tags already fit C0's `(rank, tag)` keying
+  unchanged. This needs a version-3 header design decision, not a
+  mechanical write/read follow-on -- deliberately not built.
+
+  **C4 rescoped 2026-09-04 as U0-U3; ALL FOUR STEPS LANDED 2026-09-05.**
+  `.ccamp` bumped to version 3, adding
+  two independent things merged into one bump (a writer-only fix for the
+  first was tried and found broken on round-trip -- see below): an
+  `n_by_rank` field independent of `max_rank` (previously the reader
+  derived its `by_rank` read-loop trip count from `max_rank`, which held
+  for every RCC caller by construction but breaks the moment `by_rank` is
+  legitimately empty -- exactly UCC's shape), and UCC's four occupation
+  counts on `CCAmplitudeCheckpointMeta`, always written, defaulting to 0
+  for RHF -- following the precedent this codebase already used for the
+  identical problem at the state-struct level (`CanonicalRHFCCReference`
+  adds the same four fields alongside `orbital_partition` rather than
+  repurposing it). `save_cc_amplitudes`'s emptiness check moved to
+  `by_rank.empty() && sectors.empty()`, so a sectors-only write is no
+  longer rejected outright. Version-2 files load with `n_by_rank`
+  defaulted to that file's own `max_rank` (not 0 -- 0 would silently
+  discard every existing version-2 sidecar's `by_rank` data).
+
+  **The doc's own U0 plan was tried first and found broken by testing, not
+  by re-reading it.** A writer-only fix (accept an empty `by_rank`, switch
+  `max_rank`'s write-time source) compiled clean and the write call
+  succeeded, but a real save-then-load round-trip on the exact UCC shape
+  failed: the reader's `by_rank` loop was still silently coupled to
+  `max_rank`, corrupting on the very next field (`n_sectors`'s bytes read
+  as `by_rank` data). U0 and U1 were merged into one version-3 step as a
+  result -- both needed the same bump anyway.
+
+  **A second, independent bug was found and fixed while verifying, not
+  scoped.** The pre-existing version check (`version != 1 && version !=
+  CCAMP_VERSION`) rejected every version strictly between 1 and current --
+  harmless while only 1 and 2 existed, and silently broke every real
+  version-2 file the moment `CCAMP_VERSION` became 3. Caught by the new
+  hand-built version-2-file test, not by inspection. Fixed to accept the
+  full `1..CCAMP_VERSION` range.
+
+  Verified: byte-for-byte inertness on a real BH3/STO-3G RCC `.ccamp`
+  (every field through `reference_type` identical, only the version number
+  and the inserted 36-byte block differ, the entire `by_rank`/`sectors`
+  payload byte-identical); the UCC-shaped round-trip itself (empty
+  `by_rank`, two sectors, non-zero UHF counts, all bytewise-equal after
+  round-trip); three-tier version compatibility (1, 2, 3) in one test
+  binary; every new assertion mutation-verified (reverting the emptiness
+  check, the version-range check, or the `n_by_rank` default each makes
+  exactly the test built to catch it fail). End-to-end beyond the unit
+  gate: a real BH3/STO-3G RCCSD run still converges to the same energy and
+  writes a valid version-3 file; C2's `ccsdt_gen`->`cc4` cross-rank restart
+  on Be still warm-starts in 1 iteration at the same energy; C1's
+  basis-mismatch rejection still cold-starts correctly against a
+  hand-corrupted version-3 file.
+
+  **U2/U3 LANDED 2026-09-05, mechanical as predicted.** `run_uccgen`
+  (`uccgen.cpp`) now has a write site (`meta.reference_type = UHF`, the four
+  counts from `state.reference`, same `_save_checkpoint`/`_checkpoint_path`
+  gate and warn-not-fail policy as `run_rccgen`) and a restart site
+  (`try_restart_ucc_from_sidecar`, mirroring `try_restart_from_sidecar` with
+  a `reference_type` check ahead of the four-count comparison, wired in
+  *after* `ensure_amplitude_sectors` since seeding matches an incoming
+  sector to its live counterpart by key). `seed_arbitrary_order_amplitudes`
+  needed no change, confirmed rather than assumed. Verified end-to-end on
+  `b_ucc2_sto3g` (B/STO-3G doublet): a cold run converges in 12 iterations
+  and writes the sidecar; a `guess density` restart in the same directory
+  warm-starts and converges in **1 iteration** to the identical
+  `E_corr = -0.0402694793`. `b_ucc4_sto3g` (the `ucc4 == FCI` flagship gate)
+  also writes correctly, still converging to `-24.1892649766`. All three
+  negative cases verified against hand-byte-patched copies of a real written
+  sidecar: a corrupted `basis_name`, a corrupted occupation count, and a
+  flipped `reference_type` (UHF->RHF) each independently cold-start with a
+  warning naming the specific mismatch, never failing the run. **The whole
+  C4 UCC-sidecar arc (U0-U3) is complete.**
+
+  **C3 (`run_rccsdt`'s hand-written rank-3 participation) investigated and
+  declined 2026-09-05**, not merely deferred: only the tensor-production
+  backend ever holds dense amplitudes, and only when the system is large
+  enough to skip the determinant backstop (in-tree, only `ch4_rccsdt_sto3g`
+  qualifies) -- every other case re-solves via spin-orbital
+  determinant-space CC with no dense amplitudes surviving to project. Even
+  the qualifying case's amplitudes are spin-orbital and local to
+  `run_tensor_rccsdt_impl`, never returned to a caller. `ccsdt_gen` already
+  covers the gap through the route this project intends to keep long-term.
+  Full record in `docs/CC_AMPLITUDE_CHECKPOINT.md`, which also replaces the
+  three prior scope docs for this whole feature area (all deleted).
+
+- **FCIQMC: the method is implemented and runs from an input file (2026-08-31 to
+  2026-09-01).** `correlation fciqmc` is a working calculation. Walker state and
+  RNG, the excitation generator with a consistent `p_gen`, spawn/death/
+  annihilation, shift control with the initiator approximation, both energy
+  estimators with blocked error bars, and the driver entry point with eleven input
+  keywords. Gated by `planck-fciqmc-walkers` (~34 s) and the
+  `h2_fciqmc_sto3g` regression case.
+
+  **On H2/STO-3G against exact FCI `-1.1372744062`:** shift `-1.1375360199` ±
+  2.76e-03 (**0.09σ**), projected `-1.1373278832` ± 1.58e-04 (**0.34σ**).
+
+  **What is NOT yet demonstrated: a chemically interesting answer.** Every gate
+  above H2 runs on a *synthetic* Hamiltonian — one that respects a real
+  Hamiltonian's sparsity and is checked against exact diagonalization, but is not
+  a molecule. H2's 4 determinants are far below where sampling means anything
+  (the walker population covers the whole space). **The N2/STO-3G gate is the
+  first real test and is not built**; see `vault/Status/Open Work.md`.
+
+  **The design decision that makes future comparisons meaningful:**
+  `build_all_mo_ci_setup` was *extracted* from `run_fci` — a move, not a copy —
+  and both paths call it, with the Hamiltonian callbacks wrapping the same
+  `slater_condon_element`. The stochastic and deterministic paths therefore cannot
+  disagree about the Hamiltonian, only about how they solve it, so a disagreement
+  on a larger system is attributable to sampling rather than plumbing.
+
+  **Two prerequisites answered before any of it was written.** Q1 (is there a
+  calculation this codebase cannot do?) — yes, **Cr₂ CAS(12,18)**: two atoms,
+  344.6M determinants, 2.76 GB per CI vector, the first case where both the time
+  and memory walls fail, and inside the existing 31-orbital representation. Q2
+  (can a stochastic method be validated in a codebase gated on exactness?) — yes,
+  via the G1–G4 machinery (`metric_within_sigma`, a blocking analysis validated
+  against analytic AR(1), a fixed-seed harness, and an end-to-end estimator), all
+  built *before* any FCIQMC code and reusable independently of it.
+
+  **N2/STO-3G validation landed (2026-09-02).** `n2_fciqmc_sto3g` (extended, 69 s)
+  gates both estimators against exact FCI `-107.6529998854` at **0.32 sigma**
+  (shift) and **0.41 sigma** (projected), at 0.69 walkers per determinant so the
+  population is a genuine sample. Verified non-vacuous: an unstable timestep fails
+  it on three independent grounds.
+
+  **The finding worth carrying: a good-looking number hid a broken run.** At
+  `dt = 0.010` the shift energy read 0.14 sigma from exact while the reference
+  determinant was oscillating in sign (mean `|c_0|` 91.75 against mean signed
+  `c_0` -7.50). The shift cannot see it — it responds to the total population —
+  so **a single-estimator implementation would have reported a perfect-looking
+  answer.** The projected energy and the cross-check caught it. The driver now
+  warns on sign instability directly and the gate asserts
+  `not_contains: SIGN-UNSTABLE`.
+
+  **Threading determinism decided, not discovered:** no exception. Partitioning the
+  parents by `hash(parent) % kBins` and merging in fixed bin order keeps bitwise
+  thread-count invariance, gated by `h2_fciqmc_threads1/4` before any threading
+  exists.
+
+  Answers: `docs/FCIQMC_SAMPLING_AND_DYNAMICS.md`,
+  `docs/FCIQMC_POPULATION_CONTROL.md`,
+  `docs/FCIQMC_DRIVER_AND_VALIDATION.md`.
+
+- **FCIQMC: two estimator defects found and fixed by comparing the sampled
+  WAVEFUNCTION against deterministic FCI, not the energy (2026-09-02).** Both were
+  invisible to every existing gate, which compares energies only. The instrument
+  that found them is a coefficient-ratio dump on both paths: `run_fci` prints
+  `C_I/C_0` and `run_fciqmc` prints `<N_I>/<N_0>` over the accumulated SIGNED
+  per-determinant weight, in one format, at `verbosity verbose`.
+
+  **(1) The reference determinant was built by occupying the LOWEST-INDEX
+  orbitals, and index order is not energy order.** On N2/STO-3G the Aufbau
+  determinant is `0xbf` (orbitals [0,1,2,3,4,5,**7**]) because MO 6 lies above
+  MO 7 in the converged SCF ordering; the old code used `0x7f`. The true reference
+  carried **14.2x** the weight of the one everything was normalised against. It
+  survived because the failure is silent: the projected energy
+  `E = H_00 + (sum_j H_0j c_j)/c_0` anchors on it, so a weak anchor inflates the
+  VARIANCE rather than producing a wrong-looking number -- N2's projected error bar
+  ran ~20x the shift's and read as ordinary noise. Fixed by minimising
+  `ops.diagonal` over single occupied->virtual swaps from the Aufbau guess, using
+  the SAME `slater_condon_element` the propagator uses so the reference cannot
+  disagree with the Hamiltonian being sampled. Measured on N2: shared determinants
+  between the two dumps **0 -> 16**, projected error bar **3.27e-01 -> 1.34e-02
+  (24x tighter)**, shift **0.92 -> 0.11 sigma**.
+
+  **The bad reference corrupted the SHIFT too, indirectly** -- it is also the
+  starting population, so the run spent equilibration migrating away from a
+  near-empty determinant. An earlier note here claimed the shift "never touches the
+  reference, so this is a separate defect"; that was wrong.
+
+  **(2) On a DEGENERATE ground state the projected energy decays with sampling
+  time.** Any mixture of degenerate eigenstates is itself an eigenstate at the same
+  energy, so the imaginary-time dynamics apply **no restoring force** within the
+  manifold and the population random-walks between partners. Measured on
+  C2/STO-3G (FCI roots 0 and 1 both `-74.6406501646`, partners `0x3f/0x6f` and
+  `0x6f/0x3f` at +/-1.000000), varying ONLY the equilibration length:
+
+  | equil | partner/anchor | E_proj | sigma vs exact |
+  |---|---|---|---|
+  | 20000 | -0.861 | -74.6172886 | +2.62 |
+  | 40000 | -1.674 | -74.6413697 | -0.06 |
+  | 60000 | **-3.833** | **-74.7503958** | **-5.57** |
+
+  By 60000 the anchor holds a quarter of the partner's weight while the numerator
+  still samples the whole manifold, so the ratio inflates negatively and reports an
+  energy **5.6 sigma BELOW the variational minimum**. **Nothing is unstable** --
+  the sign is steady, the population is controlled, the reference holds 743
+  walkers. The run is fine and the ESTIMATOR is measuring the wrong thing.
+  **LONGER equilibration makes it WORSE**, inverting the usual intuition: more time
+  to converge is also more time to drift.
+
+  Fixed by warning on drift (>2x the seeded reference) and re-anchoring the
+  projection onto the largest-weight determinant **once**, at the end of
+  equilibration -- a reference that moved during sampling would change what the
+  accumulated ratio-of-sums means partway through. The scan breaks ties on the
+  bitstrings because the population is a hash map and an order-dependent anchor
+  would break fixed-seed reproducibility. Verified as a mutation test: the
+  known-broken `eq60` case goes **-5.57 -> +2.27 sigma** with the shift
+  **bit-identical** (proving only the projection changed), and non-degenerate N2 is
+  **bitwise unchanged** end to end -- inert where there is no drift.
+
+  **The shift is immune** (-1.05/-0.14/-0.49 sigma across the same three runs)
+  because it responds to total population growth, which is indifferent to how
+  weight is distributed inside the manifold. That is the **mirror image** of the N2
+  sign-instability finding, where the projected energy caught what the shift could
+  not. **Neither estimator dominates, which is the actual argument for computing
+  both.**
+
+  **Fixture consequence: C2/STO-3G is unsuitable for validating the projected
+  energy** and is replaced by **HF/6-31G** (11 orbitals, 5a/5b, **ndet = 213444**,
+  4.8x C2). Non-degeneracy was **measured, not assumed** -- roots 0 and 1 at
+  `-100.1156979102` / `-99.7369526906`, a **10.31 eV gap**, against C2's
+  `0.00e+00`. Inferring non-degeneracy from the "closed-shell singlet" label is
+  exactly the mistake C2 punished. A population sweep there spans 0.047-0.469
+  walkers/determinant, entirely below saturation (C2 saturates at 44100 walkers).
+  Fixtures and the sweep driver `tests/fciqmc_validation.py` are committed but
+  **deliberately unregistered**: each sweep is minutes-to-hours, which no CI budget
+  absorbs.
+
+- **FCI sigma build: 4.8x from removing the allocator, then 3.54x more from
+  threading it (2026-08-30).** The iterative `apply_ci_hamiltonian`
+  (`src/post_hf/ci/ci.cpp`) — the path taken by every determinant space above
+  `dense_threshold = 500` — was both allocation-bound and single-threaded.
+
+  **F1:** `get_excitation` returned a pair of heap vectors for values holding at
+  most two entries each (a Slater-Condon element vanishes beyond a double
+  excitation); it now returns a fixed-capacity struct. N2/STO-3G **125.7 s ->
+  26.3 s**, and the `malloc`/`free` profile share went **53 % -> 0.1 %** — the
+  allocator is eliminated, not reduced. Worth keeping: **the 4.8x exceeded what
+  the profile implied** (a 53 % share caps the direct saving at ~2.1x by Amdahl),
+  because per-element churn also cost cache pressure and bookkeeping attributed to
+  other frames. **A profile share is a lower bound on what removing that work is
+  worth.**
+
+  **F3:** the loop is now threaded, **3.54x at 4 threads** (N2 26.3 s -> 7.79 s;
+  1/2/4/8 threads = 27.59/14.66/7.79/5.71 s) against a modelled ~3.7x ceiling.
+  `be_fci_spherical_631gd` 7.6 s -> 3.42 s. Energies are **byte-identical across
+  `OMP_NUM_THREADS` = 1/2/4/8** and equal to the serial values
+  (`-107.6529998854`, `-14.6139425466`, `-147.7441885517`).
+
+  **The route the scope recommended — inverting the scatter to a gather — was
+  built, is numerically correct, and is 2.2-2.4x SLOWER.** The outer
+  `|c| < 1e-15` skip is not a summation-order detail but a sparsity exploitation
+  carrying asymptotic weight: in the scatter it elides the entire 126-line
+  enumeration for a negligible ket, and the trial vectors really are sparse
+  (Davidson starts from unit vectors; `solve_ci` reconstructs a dense `H` one
+  `Unit(dim, j)` column at a time, which is O(dim) enumerations scattered and
+  **O(dim^2)** gathered). The gather is stashed, not committed.
+
+  **So the scatter is kept, with partial vectors summed in fixed order — and the
+  determinism half is the part worth carrying: a fixed-order reduction is
+  NECESSARY BUT NOT SUFFICIENT.** Two defects, each caught only by byte-diffing
+  outputs across thread counts, neither by reasoning: `schedule(dynamic)` (which
+  the scope recommended for load balance) gives a buffer a different *subset* of
+  terms per run so its sums reassociate — two different last digits across 5
+  identical 4-thread runs; and keying buffers by `omp_get_thread_num()` makes their
+  *contents* depend on the thread count, so 8 threads disagreed with 1/2/4 even
+  under `schedule(static)`. **What must be deterministic is the partition of work
+  into accumulators, not merely the order they are summed.** The fix bins by a
+  fixed function of `j` (`partials[j / bin_size]`, `constexpr kBins = 64`) with
+  `schedule(static, bin_size)` so one chunk is exactly one bin. Memory is
+  `kBins x dim x 8`, **independent of thread count** (7.4 MB at N2). Never
+  `omp atomic`, never completion-order — the DFT-grid jitter defect.
+
+  **19/19 green** — every FCI, CASSCF, RASSCF, FCIDUMP and RI case in the repo,
+  including both iterative FCI gates and all four SA-CASSCF cases with the
+  `water_casscf_sa2_sto3g_sad_guess_uphill` canary. The 126-line excitation
+  enumeration is untouched; the only deleted lines are the old `accumulate`
+  lambda. See `docs/FCI_SIGMA_BUILD_PERFORMANCE.md`. F2 (the `occupied_orbitals` allocation)
+  remains open and independent.
+
+- **ccgen `merge_transposes` threaded into production — 1.42x / 1.52x measured
+  (M1-M5, 2026-08-29).** Transpose-equivalent derived dressed operators now fold
+  onto one shared array, which the call sites read through a permutation instead
+  of each building its own copy. On spatial `ccsdt` that is **288 -> 91 builders
+  (3.16x)**, with the hottest family `t2t2v_oooovv` going **38 -> 4 (9.5x)**.
+  Unconditional for `--dressing derived`: no flag, no CMake option — the change is
+  **10 lines in one file, 8 of them comment**, since the mechanism was already
+  built, symbolically exact and value-gated 0/2536 at rank 4.
+
+  Measured on the two generated-route cases, 3 runs each: `lih_rccsdt_generated_sto3g`
+  **1.02 s -> 0.72 s (1.42x)**, `ch4_rccsdt_sto3g` **16.65 s -> 10.98 s (1.52x)**,
+  spread ±0.03 s. **Energies bitwise identical** — LiH agrees on `E_corr`, `dE`,
+  `rms(res)` and `rms(step)` at every one of 62 iterations, CH4's full output
+  diffs empty with timers stripped — and iteration counts are unchanged (62, 15),
+  so this is per-iteration work removed rather than faster convergence. Compile
+  time and size improve too: registry TU (`-O1`-pinned) 11.68 s -> 10.44 s and its
+  object 1.50x smaller, `tensor_backend.cpp` 38.86 s -> 35.80 s, binary 1.11x
+  smaller.
+
+  **The estimate was wrong twice, in the same direction, for the same reason.** An
+  operator-count FLOP model said 1.02x-1.20x ("compile time, not speed"); a
+  profile-weighted re-cost said 1.21x-1.36x; measurement said 1.42x-1.52x. Both
+  models treated operators as equal-cost. The re-cost additionally applied H5's
+  measured 0.66 realization factor, which does not transfer — H5's discount existed
+  because the builds *it* removed were cheaper than average, whereas the builds
+  removed here are the **expensive** ones (`t2t2v_oooovv` writes a rank-6 result
+  over a 9-deep nest). **A realization factor encodes which work a transform
+  removed; it is not a general haircut for the next estimate.**
+
+  **The causal story was verified, not just the total.** Leaf-sample attribution on
+  CH4: `t2t2v_oooovv` 23.3 % -> 4.1 % (merges 9.5x), `t1t1t2v_oooovv` 6.6 % -> 1.7 %
+  (6.0x), `t1t3v_oooovv` 9.7 % -> 9.4 % (1.7x). The families that merge hard
+  collapse and the one that barely merges barely moves — the negative control that
+  separates "the number moved" from "the number moved for the stated reason".
+
+  New gate `python/ccgen/tests/test_merged_call_sites.py`: the existing builder gate
+  is definition-only and cannot see a call site reading a merged array through the
+  wrong permutation (the D4 failure shape), so this one emits the residual **both
+  ways and requires equality**. Mutation-verified — three independent call-site
+  perturbations go red at 1.5e-03 to 8.6e-03. **Two defects in the gate itself are
+  worth carrying:** covering only singles+doubles made it blind to the entire point
+  (**all 56 `t2t2v_oooovv` reads live in the H5 `_partN` triples chunks**, none in
+  doubles; the perturbation moved it 2.2e-16), and a fixture can be too **general**
+  — a random `t2` made 17 doubles terms look broken at 6.4e-02, because the merge
+  is justified by `t2(a,b,i,j) == t2(b,a,j,i)`, a symmetry real amplitudes have
+  (2.8e-17 once imposed). Withholding a symmetry the physical object **has**
+  manufactures failures, the inverse of the usual vacuity trap.
+
+  **Rank 4 needed no new mechanism** — `-DPLANCK_CC_MAXORDER=4` appends `ccsdtq`
+  to the same method list through the same emit path, and merging is
+  unconditional, so it already applies. The reduction roughly **doubles** with
+  rank: **1615 -> 239 builders (6.8x)** against rank 3's 3.2x, TU 11.0 MB ->
+  6.6 MB, with families as extreme as `t2t2v_ooooovvv` 95 -> 1 and
+  `t2t3v_ooooovvv` 313 -> 15. The M5 gate runs at both ranks and is
+  mutation-verified at both (rank-4 perturbations red at 3.7e-03 / 6.7e-03).
+  Extending it exposed two rank-4-only emitter conventions, each failing with a
+  message naming neither the rank nor the cause: **rank >= 7 targets use the
+  BRACED runtime-rank accessor** (`result({i, j, ...})`, which numpy rejects as
+  non-letter subscripts) and **rank >= 7 builders return `TensorND`**, invisible
+  to `build_emitted_operators`'s fixed-rank regex, so a `ccsdtq` residual could
+  not be evaluated at all until a local pass materialized them. What remains
+  untried at rank 4 is only an end-to-end RUN — building the 6.6 MB dressed TU
+  against the `-O1`-pinned registry and timing a solve. Full record:
+  `docs/CCGEN_MERGE_TRANSPOSES.md`.
+
+- CC tensor element accessors inlined (`src/post_hf/cc/common.h`), the dominant
+  cost in every CC kernel. `Tensor{2,4,6}D::operator()` and the runtime-rank
+  `TensorND` / `DenseTensorView` / `ConstDenseTensorView` braced-index accessors
+  were defined out-of-line in `common.cpp`; with no LTO configured they could
+  not be inlined away, so each element access was a cross-TU call that
+  heap-allocated one or two `std::vector<int>` and built a `std::expected`
+  before indexing. The generated kernels are dominated by this — 3416 accessor
+  call sites in the rank-3 triples residual, 23338 braced-index accesses in the
+  rank-4 quadruples residual (where the `initializer_list` overload additionally
+  copied into a vector via `to_vector` first). Now flat row-major index
+  computations in the header, with the debug assert retaining both conditions
+  the old `checked_fixed_rank_index` enforced: per-index range **and**
+  `offset < data.size()`. The storage half is not redundant with the
+  constructors — `data` is a public member that call sites assign directly after
+  construction (`tensor_backend.cpp:197-198`), so the size invariant is
+  breakable post-construction by design. In release the check compiles out and
+  an out-of-bounds access becomes UB rather than returning a shared
+  `tensor_error_slot`; acceptable because that slot has no consumers anywhere in
+  `src/` or `tests/` and reaching it already fired `assert(false)`. Measured,
+  energies bitwise-identical throughout: rank-3 generated T3 residual 6.40 s →
+  0.031 s (206×), rank-3 hand-written 0.170 s → 0.0014 s (121×), rank-4 CCSDTQ
+  38.5 s → 11.4 s per iteration (3.4×), `water_rccsdt_sto3g` 44.6 s → 0.39 s.
+  **Fixing only the fixed-rank accessors left rank 4 completely unchanged** —
+  the rank ≥ 4 generated kernels index exclusively through the runtime-rank
+  types — so both halves were required; rank 3 is not a proxy for rank 4. Gated
+  by `planck-cc-tensor-index`, which pins the flat index against an independent
+  row-major reference on **non-square** shapes (a square fixture cannot catch a
+  transposed index), covers the permuted-dims `swap_mid_axes` pattern used by
+  `rebind_physicist`, and cross-checks the braced-index overload against the
+  still-out-of-line `vector<int>` one. Also drops the now-unused `to_vector` and
+  `checked_fixed_rank_index`. See `docs/CCGEN_TENSOR_ACCESSOR.md`.
+- Generated rank-3 CCSDT fixed, and the kernel was never the defect. The ccgen
+  rank-3 triples residual reproduces PySCF `rccsdt` to +1.49e-08 and is
+  **bitwise identical** across both harnesses at identical inputs; what was wrong
+  is the `tensor_backend` solver wrapped around it. That solver uses a
+  symmetry-packed amplitude representation — DIIS packs only the unique wedge
+  (`i<=j` for t2, `i<=j<=k` for t3) and rebuilds the rest via
+  `restore_restricted_t{2,3}_from_unique`, valid only if the amplitudes carry full
+  permutational symmetry, which `restore_restricted_t3_structure` imposes each
+  iteration. The ccgen kernels emit every index permutation explicitly instead, so
+  they never produce residuals in that representation. The wedge packing and
+  `restore` are one coupled convention: removing either half diverges (measured
+  with both residual sources), and no combination of residual sources inside
+  `tensor_backend` converges correctly — hand r1/r2 + gen r3 gives −7.56e-05, all
+  three generated gives +8.23e-05. Fixed by routing generated rank-3 to the
+  arbitrary-order harness, the representation the kernels are emitted for:
+  `optimized` was recorded as landing at +1.44e-08 (5247× error reduction), agreeing
+  with the hand-written path to 1.0e-10. **That does not reproduce (2026-08-26).**
+  Commit `1986d0c` was checked out, built with the same configuration and run on the
+  same input: `E_corr = -0.0565650696` against the hand-written `-0.0791116825`,
+  never converging within 100 iterations — **bit-identical to HEAD**, so this is not a
+  regression, the result was never reproducible. The gate that commit added,
+  `ch4_rccsdt_sto3g`, asserts `kernels=hand-optimized` and so has been green
+  throughout while never running the generated kernel it was added to protect.
+  Rank 2 and rank 4 both work through the same harness, localizing the defect to the
+  rank-3 kernel. Scoped in `docs/CCGEN_SPIN_ADAPT_DEFAULT.md`; it blocks
+  W4 and therefore the derivation-route wiring. Without
+  `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` it fails with an actionable message
+  instead of a wrong number. The hand-written path is untouched and bitwise
+  unchanged. **The rank-parity hypothesis is dead** — its premise (rank 3 is
+  wrong) was false; the arbitrary harness is correct at ranks 2, 3 and 4, and
+  ranks 5/6 still have no numeric gate. New gate `ch4_rccsdt_sto3g` (`nso=18
+  ndet=43758`, `no=5 != nv=4`, PySCF −39.8058445240) is the **only** in-tree
+  rank-3 case that clears `choose_determinant_backstop` and therefore the only one
+  that reaches the tensor path at all — every other CC case routes to the
+  determinant prototype, and `water_rccsdt_sto3g` even *asserts* the backstop
+  handoff, so the hand-written tensor solver had no regression gate for its entire
+  life. Verified falsifiable before being trusted. Cost is not addressed: the
+  correct path is ~500× slower (0.19 s vs ~100 s on CH4), per-iteration rather
+  than convergence; see `docs/CCGEN_ARBITRARY_HARNESS_COST.md`. Full answer,
+  with the eight ruled-out hypotheses:
+  `docs/CCGEN_RANK3_KERNEL_AND_SOLVER.md`.
+- The generated-vs-hand-written CC kernel gap is characterized: it is a
+  **scaling defect, not a constant tax**. Six rank-3 ladder points (BH3/STO-3G
+  21.8× → C2H4/STO-3G 50.1×, no plateau) with the generated and hand-written
+  residuals evaluated from identical amplitudes. Hand-written fits
+  `o^3.94 v^4.18` at 4.5% residual — textbook `o³v³` output × one contracted
+  index. Generated fits `o^4.87 v^4.52` but at 21.4%, and that residual is
+  **concentrated at high `v`** (the four lowest-`v` points fit to ≤5.5%; `v=8`
+  is +21%, `v=11` is −10%), so a single power law does not describe the
+  generated cost — evidence of multiple contraction regimes, consistent with
+  different residual terms having different optimal orders and the emitter
+  picking none of them. The earlier carried "~180× on `bh3`" figure never
+  recorded its dimensions and did not reproduce (measured 37.6× on actual `bh3`
+  pre-accessor-fix); it can be neither explained nor dismissed from this data,
+  and should not be cited. Adds the opt-in `PLANCK_CC_T3_TIME=N` probe (inert
+  when unset). Two constraints found and recorded: `choose_determinant_backstop`
+  (`tensor_backend.cpp:241`) routes `nso ≤ 16 && ndet ≤ 10000` to the
+  determinant-space backstop, which never calls the generated kernel — so
+  `water_rccsdt_sto3g` silently yields no timing at all and any ladder point
+  needs `nso > 16 || ndet > 10000`; and the whole reachable ladder stays under
+  0.85 MiB `t3`, inside L2, so the memory-bound hypothesis is untested rather
+  than refuted. See `docs/CCGEN_KERNEL_SCALING_SCOPE.md` and
+  `docs/CCGEN_KERNEL_PERFORMANCE.md`.
+- SAD isolated-atom false-convergence fixed in the SCF convergence gate
+  (`is_converged`, `src/scf/scf.cpp`). For small lone closed-shell atoms
+  (He/cc-pVDZ) the SAD guess drove DIIS to extrapolate a Fock whose
+  diagonalized density exactly reproduced the previous one (ΔP → 0) while the
+  DIIS residual FPS-SPF was still ~1e-3, so the ΔE+ΔP gate declared convergence
+  in a wrong basin (-2.8551548739 vs the true -2.8551604772). `is_converged`
+  now also requires the DIIS error below `_tol_density`; `IterationMetrics`
+  carries `diis_error` (set at the RHF/UHF/ROHF call sites from the already-
+  computed `diis_err`), and it is 0 when DIIS is inactive so non-DIIS paths are
+  unaffected. Full regression suite unchanged (71/71); new gate
+  `he_sad_ccpvdz` pins the He/cc-pVDZ SAD energy to -2.8551604772. The earlier
+  BSSE HCore workaround is no longer required for correctness.
 - Rys 6D ERI accumulator sized per quartet (PR #126). `_rys_sum_buf` in
   `src/integrals/rys.cpp` was a thread-local `double[2·MAX_L+1]^6 = [13]^6 =
   38.5 MB` sized off the global `MAX_L=6`; on the g++-15 / emulated-TLS build
@@ -181,6 +858,20 @@ historical design context, but they are no longer the source of truth for
   CASSCF orbital-action solver already warns and falls back to the diagonal
   preconditioner when >20% of orbital-Hessian eigenvalues are clamped
   (`src/post_hf/casscf/response.cpp`).
+- ccgen dressed-operator recognition was quadratic in manifold size and is fixed.
+  `hypothesis_is_consistent` rebuilt `raw_multiset(residual_terms)` on every call
+  — 7461 times on `ccsdt` triples, over an input that never changes — so the cost
+  was `n_hypotheses × n_terms`. Hoisted into `find_operator_occurrences` and
+  threaded down (not memoized: the redundancy is structural, and a cache keyed on
+  large term tuples would live for the process). Triples 94.7 s → 6.9 s with the
+  `raw_multiset` call count flat at ~19 regardless of term count; rank-3
+  end-to-end 293.7 s → 9.1 s, and rank 4 went from ">25 min, abandoned" to
+  61.6 s, which is what made rank-4 dressing viable at all. Output byte-identical.
+  Gated by `test_dressing_scaling` on the **call count**, not wall-clock —
+  deterministic, and it names this defect if it returns. Two dead ends recorded in
+  `docs/CCGEN_DRESSING_COST.md`: `_eri_canonical` showed the largest
+  profile number (864 s *cumulative*) but memoizing it bought 6 %, and the
+  self-time ranking is diffuse — the win was structural, not micro-optimization.
 - ERI / transform parallelization pass (profiled, all bitwise-verified):
   the two serial 4-index transforms (`Correlation::transform_eri`,
   `BasisFunctions::transform_eri_cart_to_sph`) are now parallel; the one-shot

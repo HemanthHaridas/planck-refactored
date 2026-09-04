@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -29,13 +30,38 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
         r"^\s*(?:Total UCCSDT Energy|\[INF\]\s+UCCSDT Energy)\s+([-+0-9Ee\.]+)",
         re.MULTILINE,
     ),
+    "rccsdtq_total_energy": re.compile(
+        r"^\s*Total RCCSDTQ Energy\s+([-+0-9Ee\.]+)",
+        re.MULTILINE,
+    ),
+    # The generated UCC path (correlation ucc2/ucc3/...) reports through the
+    # generic label: PostHF::UCCGEN is not in hf_driver.cpp's method_label chain,
+    # so it falls through to "Correlated". Kept generic on purpose -- naming it
+    # UCC-specifically is a driver change, not a runner one.
+    "correlated_total_energy": re.compile(
+        r"^\s*Total Correlated Energy\s+([-+0-9Ee\.]+)",
+        re.MULTILINE,
+    ),
     "casscf_corr_energy": re.compile(r"^\s*CASSCF Correlation Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "casscf_total_energy": re.compile(r"^\s*CASSCF Total Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "fci_total_energy": re.compile(r"^\s*Total FCI Energy\s+([-+0-9Ee\.]+)", re.MULTILINE),
+    # FCIQMC reports a MEAN and its blocked error bar. Both are extracted so a
+    # case can assert the energy within its own uncertainty (metric_within_sigma)
+    # rather than against a hand-picked tolerance -- a stochastic result compared
+    # with metric_close would be asserting noise.
+    "fciqmc_shift_energy": re.compile(
+        r"Shift energy\s+([-+0-9Ee\.]+)\s+\+/-", re.MULTILINE),
+    "fciqmc_shift_error": re.compile(
+        r"Shift energy\s+[-+0-9Ee\.]+\s+\+/-\s+([-+0-9Ee\.]+)", re.MULTILINE),
+    "fciqmc_projected_energy": re.compile(
+        r"Projected energy\s+([-+0-9Ee\.]+)\s+\+/-", re.MULTILINE),
+    "fciqmc_projected_error": re.compile(
+        r"Projected energy\s+[-+0-9Ee\.]+\s+\+/-\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "dft_total_energy": re.compile(r"^\s*(?:\[INF\]\s+)?DFT Energy\s*:\s*([-+0-9Ee\.]+)\s+Eh", re.MULTILINE),
     "lr_root1_energy_ev": re.compile(r"^\s*1\s+[-+0-9Ee\.]+\s+([-+0-9Ee\.]+)\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+", re.MULTILINE),
     "lr_root2_energy_ev": re.compile(r"^\s*2\s+[-+0-9Ee\.]+\s+([-+0-9Ee\.]+)\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+", re.MULTILINE),
     "lr_root3_energy_ev": re.compile(r"^\s*3\s+[-+0-9Ee\.]+\s+([-+0-9Ee\.]+)\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+\s+[-+0-9Ee\.]+", re.MULTILINE),
+    "casscf_converged_via_plateau": re.compile(r"casscf_converged_via_plateau=(true|false)"),
     "casscf_sa_gnorm": re.compile(r"sa_g=([-+0-9Ee\.]+)"),
     "casscf_root_screen_gnorm": re.compile(r"root_screen_g=([-+0-9Ee\.]+)"),
     "casscf_max_root_gnorm": re.compile(r"max_root_g=([-+0-9Ee\.]+)"),
@@ -46,6 +72,12 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     # a geomopt run, last-match is still the step-0 value because subsequent
     # steps print only "Opt Step N : ... max|g| = ..." without the full prefix).
     "geomopt_final_gradient_max": re.compile(r"Final max\|g\|\s*:\s*([-+0-9Ee\.]+)\s+Ha/Bohr"),
+    # Converged geomopt energy from the "Final Energy" summary line. For a
+    # correlated geomopt (correlation rmp2/ump2) this is the CORRELATED optimized
+    # energy — the quantity a PySCF MP2-geomopt reference pins. The post-opt
+    # "Final Symmetry SCF" prints only the SCF energy, so rhf_total_energy /
+    # uhf_total_energy cannot gate a correlated optimization.
+    "geomopt_final_energy": re.compile(r"Final Energy\s*:\s*([-+0-9Ee\.]+)\s+Eh"),
     # Vibrational frequencies from the freq table. The freq output is emitted
     # through the logger so each row carries an "[INF]" prefix; the MO energy
     # table (also indexed N) does NOT carry that prefix, so requiring it here
@@ -129,7 +161,7 @@ def extract_metrics(output: str) -> dict[str, Any]:
         if not matches:
             continue
         value = matches[-1]
-        if key == "point_group":
+        if key in ("point_group", "casscf_converged_via_plateau"):
             metrics[key] = value.strip()
         else:
             metrics[key] = float(value)
@@ -198,6 +230,39 @@ def resolve_metric_expectation(
     if override is None:
         return float(check["expected"]), float(check.get("atol", 1e-9))
     return float(override["expected"]), float(override.get("atol", check.get("atol", 1e-9)))
+
+
+def within_sigma_failure(
+    value: float | None,
+    sigma: float | None,
+    expected: float,
+    n_sigma: float,
+    metric: str,
+    sigma_metric: str,
+) -> str | None:
+    """Return a failure detail string, or None if the value is within n_sigma.
+
+    Split out from the check dispatch so it can be exercised directly: this is
+    the only assertion in the runner with arithmetic worth testing, and a
+    statistical gate that silently always passes is worse than no gate.
+    """
+    if value is None:
+        return f"missing metric: {metric}"
+    if sigma is None:
+        return f"missing uncertainty metric: {sigma_metric}"
+    if not math.isfinite(float(sigma)) or float(sigma) < 0.0:
+        return f"{sigma_metric} is not a usable uncertainty: {sigma}"
+    if not math.isfinite(float(value)):
+        return f"{metric} is not finite: {value}"
+    deviation = abs(float(value) - expected)
+    allowed = n_sigma * float(sigma)
+    if deviation <= allowed:
+        return None
+    return (
+        f"{metric} outside {n_sigma:g} sigma: got {float(value):.10f}, "
+        f"expected {expected:.10f}, deviation {deviation:.3e} "
+        f"> {allowed:.3e} ({sigma_metric}={float(sigma):.3e})"
+    )
 
 
 def checkpoint_path_for(input_path: Path) -> Path:
@@ -280,12 +345,19 @@ def run_case(
         )
 
     try:
+        # A case may declare `env`: extra environment variables for this run only.
+        # Needed where a code path is reachable only by env override and has no
+        # input keyword -- PLANCK_RCCSDT_BACKEND being the case in point. Layered
+        # over the inherited environment so the basis path and toolchain survive.
+        case_env = case.get("env")
+        run_env = {**os.environ, **case_env} if case_env else None
         proc = subprocess.run(
             build_command(executable, input_path),
             cwd=repo_root,
             text=True,
             capture_output=True,
             timeout=timeout_s,
+            env=run_env,
         )
     except subprocess.TimeoutExpired as exc:
         duration_s = time.perf_counter() - start
@@ -309,6 +381,21 @@ def run_case(
     metrics = extract_metrics(output)
     details: list[str] = []
     passed = True
+
+    # A case may declare `skip_if_contains`: if the run's output contains this
+    # text, the case is not applicable to this build and is reported as a PASS
+    # with a skip note (rather than a failure). Used by the generated-CCSDTQ case,
+    # which prints a "reconfigure with -DPLANCK_CC_MAXORDER=4" message when the
+    # binary was built at a lower rank — that build simply cannot run it.
+    skip_marker = case.get("skip_if_contains")
+    if skip_marker and skip_marker in output:
+        return CaseResult(
+            case_id=case_id,
+            passed=True,
+            duration_s=duration_s,
+            details=[f"skipped: output contained {skip_marker!r}"],
+            metrics=metrics,
+        )
 
     expected_exit = int(case.get("expected_exit_code", 0))
     if proc.returncode != expected_exit:
@@ -361,6 +448,30 @@ def run_case(
             if actual is None or not float(actual) >= threshold:
                 passed = False
                 details.append(f"{metric} expected >= {threshold}, got {actual}")
+
+        elif ctype == "metric_within_sigma":
+            # Statistical gate: |value - expected| <= n_sigma * uncertainty.
+            #
+            # Every other check here is an exact-value comparison, which a
+            # stochastic estimator cannot satisfy -- its answer is a mean with an
+            # error bar. This is the one assertion that can express "consistent
+            # with the reference, given the reported uncertainty".
+            #
+            # The uncertainty MUST come from the run itself (a blocked standard
+            # error, not a naive one -- see docs/FCIQMC_RESEARCH_SCOPE.md G2), so
+            # a run that under-reports its error bar fails this check rather than
+            # sliding under a hand-picked tolerance.
+            metric = check["metric"]
+            sigma_metric = check["sigma_metric"]
+            n_sigma = float(check.get("n_sigma", 3.0))
+            expected, _ = resolve_metric_expectation(case_id, metric, check, pyscf_references)
+            failure = within_sigma_failure(
+                metrics.get(metric), metrics.get(sigma_metric),
+                expected, n_sigma, metric, sigma_metric,
+            )
+            if failure is not None:
+                passed = False
+                details.append(failure)
 
         elif ctype == "metric_lt_metric":
             left = check["left"]
@@ -433,6 +544,53 @@ def apply_cross_case_checks(
                 )
 
 
+def cmake_build_options(repo_root: Path, build_dir: str) -> dict[str, str] | None:
+    """The BOOL options a build tree was configured with, from its CMakeCache.txt.
+
+    Returns None when there is no cache to read (an --executable pointing outside
+    a build tree, say), which callers treat as "cannot tell" rather than "off".
+
+    Used by `requires_build_option` so a case that needs an opt-in feature is
+    SKIPPED in a build without it rather than failing. Reading the cache is the
+    only honest source: the option is a compile-time define, so the binary's own
+    behaviour is what a case would otherwise have to infer from an error string.
+    """
+    cache = repo_root / build_dir / "CMakeCache.txt"
+    if not cache.is_file():
+        return None
+    options: dict[str, str] = {}
+    for line in cache.read_text(errors="replace").splitlines():
+        name, sep, value = line.partition(":BOOL=")
+        if sep:
+            options[name.strip()] = value.strip().upper()
+    return options
+
+
+def missing_build_option(
+    case: dict[str, Any],
+    build_options: dict[str, str] | None,
+) -> str | None:
+    """The build option this case needs but the tree does not have, if any.
+
+    Accepts a string or a list: some cases need MORE than one option ON, and
+    depend on every one of them. `PLANCK_CC_SPIN_ADAPT` is the motivating case
+    -- the generated CC kernels are only correct with it ON (CMakeLists.txt
+    documents OFF as the ~4x-wrong historical emit), so a generated-kernel case
+    run without it silently measures the defective emit rather than the kernel
+    it means to gate. That cost a full investigation before it was noticed.
+    """
+    required = case.get("requires_build_option")
+    if not required:
+        return None
+    if build_options is None:
+        return None
+    names = [required] if isinstance(required, str) else list(required)
+    for name in names:
+        if build_options.get(name) != "ON":
+            return name
+    return None
+
+
 def should_run(case: dict[str, Any], suite: str, selected_cases: set[str]) -> bool:
     if selected_cases and case["id"] not in selected_cases:
         return False
@@ -471,11 +629,25 @@ def main() -> int:
 
     selected_cases = set(args.case)
     chosen = [case for case in cases if should_run(case, args.suite, selected_cases)]
-    if not chosen:
+
+    # A case may declare `requires_build_option`: a CMake BOOL that must be ON in
+    # the tree under test. Opt-in features (PLANCK_CC_UCC) are OFF by default, so
+    # such a case would otherwise FAIL in a default build for a configuration
+    # reason rather than a correctness one. Skipped, and reported separately so a
+    # skip can never be mistaken for a pass.
+    build_options = cmake_build_options(repo_root, args.build_dir)
+    skipped = [(case, opt) for case in chosen
+               if (opt := missing_build_option(case, build_options)) is not None]
+    skipped_ids = {case["id"] for case, _ in skipped}
+    chosen = [case for case in chosen if case["id"] not in skipped_ids]
+
+    if not chosen and not skipped:
         print("no cases selected", file=sys.stderr)
         return 2
 
     print(f"Running {len(chosen)} regression case(s) from {manifest_path}")
+    for case, option in skipped:
+        print(f"[SKIP] {case['id']} (needs -D{option}=ON)")
     failures = 0
     total_start = time.perf_counter()
     results: list[CaseResult] = []
@@ -495,9 +667,10 @@ def main() -> int:
             failures += 1
 
     total_duration = time.perf_counter() - total_start
+    skip_note = f", {len(skipped)} skipped" if skipped else ""
     print(
         f"Completed {len(chosen)} case(s) in {total_duration:.2f}s: "
-        f"{len(chosen) - failures} passed, {failures} failed"
+        f"{len(chosen) - failures} passed, {failures} failed{skip_note}"
     )
     return 1 if failures else 0
 

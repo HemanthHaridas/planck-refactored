@@ -1,0 +1,463 @@
+// RI 3-center derivative FD oracle (Step RG0).
+//
+// The RI-MP2 gradient will contract a 2-particle density against the derivative
+// of the 3-center integrals, d/dR (μν|Q). Those analytic derivatives do not
+// exist yet (Step RG1). This test stands up the finite-difference reference
+// RG1 will be gated against:
+//
+//   dJ/dR_{Ac} ≈ [ J(R + δ e_{Ac}) - J(R - δ e_{Ac}) ] / (2δ)
+//
+// where J = compute_3c_eri (packed AO-pair × aux) and R_{Ac} is coordinate c of
+// atom A. Building basis + aux fresh at each displaced geometry is exactly how
+// the geomopt/freq loops re-run, so this mirrors production.
+//
+// At RG0 the analytic derivative is absent, so this test validates the oracle
+// itself, not an analytic-vs-FD match:
+//   (1) the FD derivative is finite and correctly shaped,
+//   (2) translational invariance — summing dJ/dR over all atoms for a fixed
+//       coordinate axis gives ~0 (rigidly translating the whole molecule leaves
+//       every integral unchanged). This is the strongest structural check
+//       available without the analytic form, and it catches a mis-centered or
+//       mis-signed FD.
+
+#include <Eigen/Dense>
+#include <cmath>
+#include <cstdlib>
+#include <expected>
+#include <algorithm>
+#include <filesystem>
+#include <iostream>
+#include <string>
+#include <vector>
+
+#include "base/types.h"
+#include "basis/basis.h"
+#include "basis/rifit.h"
+#include "integrals/shellpair.h"
+#include "post_hf/ri/ri_eri.h"
+
+namespace
+{
+    bool g_ok = true;
+    void fail(const std::string &m)
+    {
+        std::cerr << "FAIL: " << m << '\n';
+        g_ok = false;
+    }
+
+    std::filesystem::path repo_root()
+    {
+        if (const char *env = std::getenv("BASIS_PATH"); env && *env)
+            return std::filesystem::path(env).parent_path();
+        return std::filesystem::current_path();
+    }
+
+    // Water Calculator with basis + aux read fresh at the given standard (Bohr)
+    // geometry, ready for compute_3c_eri.
+    HartreeFock::Calculator make_calc(const std::filesystem::path &root,
+                                      const Eigen::MatrixXd &standard_bohr)
+    {
+        HartreeFock::Molecule mol;
+        mol.natoms = 3;
+        mol.atomic_numbers.resize(3);
+        mol.atomic_numbers << 8, 1, 1;
+        mol._standard = standard_bohr;
+        mol._standard_is_bohr = true;
+
+        HartreeFock::Calculator calc;
+        calc._molecule = mol;
+        calc._basis._basis_name = "cc-pVDZ";
+        calc._basis._basis_path = (root / "basis-sets").string();
+        calc._mp2.use_ri = true;
+        calc._mp2.ri_basis_name = "cc-pVDZ-RIFIT";
+        calc._mp2.ri_basis_path = (root / "basis-sets").string();
+        calc._mp2.ri_lindep = 1e-7;
+
+        auto basis_res = HartreeFock::BasisFunctions::read_gbs_basis(
+            (root / "basis-sets" / "cc-pVDZ").string(), mol, HartreeFock::BasisType::Cartesian);
+        if (basis_res)
+            calc._shells = std::move(*basis_res);
+        auto aux_res = HartreeFock::BasisFunctions::read_ri_basis(
+            (root / "basis-sets" / "cc-pVDZ-RIFIT").string(), mol);
+        if (aux_res)
+            calc._ri_aux_basis =
+                std::make_shared<HartreeFock::AuxBasis>(std::move(*aux_res));
+        return calc;
+    }
+
+    // J(geometry) = packed 3-center tensor.
+    std::expected<Eigen::MatrixXd, std::string> j3c_at(
+        const std::filesystem::path &root, const Eigen::MatrixXd &geom)
+    {
+        HartreeFock::Calculator calc = make_calc(root, geom);
+        return HartreeFock::Correlation::RI::compute_3c_eri(calc);
+    }
+
+    // V(geometry) = 2-center metric (P|Q).
+    std::expected<Eigen::MatrixXd, std::string> v2c_at(
+        const std::filesystem::path &root, const Eigen::MatrixXd &geom)
+    {
+        HartreeFock::Calculator calc = make_calc(root, geom);
+        return HartreeFock::Correlation::RI::compute_2c_eri(*calc._ri_aux_basis);
+    }
+
+    // Central-difference dV/dR for atom `a`, axis `c`.
+    std::expected<Eigen::MatrixXd, std::string> fd_v2c(
+        const std::filesystem::path &root, const Eigen::MatrixXd &geom,
+        int a, int c, double delta)
+    {
+        Eigen::MatrixXd gp = geom, gm = geom;
+        gp(a, c) += delta;
+        gm(a, c) -= delta;
+        auto Vp = v2c_at(root, gp);
+        if (!Vp) return std::unexpected(Vp.error());
+        auto Vm = v2c_at(root, gm);
+        if (!Vm) return std::unexpected(Vm.error());
+        return Eigen::MatrixXd((*Vp - *Vm) / (2.0 * delta));
+    }
+
+    // Central-difference dJ/dR for atom `a`, axis `c`.
+    std::expected<Eigen::MatrixXd, std::string> fd_derivative(
+        const std::filesystem::path &root, const Eigen::MatrixXd &geom,
+        int a, int c, double delta)
+    {
+        Eigen::MatrixXd gp = geom, gm = geom;
+        gp(a, c) += delta;
+        gm(a, c) -= delta;
+        auto Jp = j3c_at(root, gp);
+        if (!Jp) return std::unexpected(Jp.error());
+        auto Jm = j3c_at(root, gm);
+        if (!Jm) return std::unexpected(Jm.error());
+        return Eigen::MatrixXd((*Jp - *Jm) / (2.0 * delta));
+    }
+}
+
+int main()
+{
+    const auto root = repo_root();
+
+    Eigen::MatrixXd geom(3, 3);
+    geom << 0.0, 0.0, 0.117176,
+        0.0, 0.757005, -0.468704,
+        0.0, -0.757005, -0.468704;
+    geom *= 1.8897259886; // Angstrom -> Bohr
+
+    const double delta = 1e-4; // Bohr
+
+    // Base tensor, to size the invariance accumulator.
+    auto J0 = j3c_at(root, geom);
+    if (!J0)
+    {
+        fail("compute_3c_eri(base) failed: " + J0.error());
+        return 1;
+    }
+    const Eigen::Index rows = J0->rows(), cols = J0->cols();
+    std::cout << "j3c dims " << rows << "x" << cols << ", delta " << delta << " Bohr\n";
+
+    // Check (1): FD derivative for a representative (atom, axis) is finite and
+    // correctly shaped, and non-trivial (moving O actually changes the integrals).
+    auto dJ_O_z = fd_derivative(root, geom, 0, 2, delta);
+    if (!dJ_O_z)
+    {
+        fail("fd_derivative(O,z) failed: " + dJ_O_z.error());
+        return 1;
+    }
+    if (dJ_O_z->rows() != rows || dJ_O_z->cols() != cols)
+    {
+        fail("FD derivative has wrong shape");
+        return 1;
+    }
+    if (!dJ_O_z->allFinite())
+    {
+        fail("FD derivative has non-finite entries");
+        return 1;
+    }
+    const double dmax = dJ_O_z->cwiseAbs().maxCoeff();
+    std::cout << "max |dJ/dO_z| = " << dmax << '\n';
+    if (dmax < 1e-6)
+    {
+        fail("FD derivative w.r.t. O_z is ~0 — integrals did not respond to the "
+             "oxygen move; the oracle is not exercising the geometry dependence");
+        return 1;
+    }
+
+    // Check (2): translational invariance. Rigidly shifting the whole molecule
+    // along axis c leaves every (μν|Q) unchanged, so Σ_atoms dJ/dR_{atom,c} = 0.
+    for (int c = 0; c < 3; ++c)
+    {
+        Eigen::MatrixXd sum = Eigen::MatrixXd::Zero(rows, cols);
+        for (int a = 0; a < 3; ++a)
+        {
+            auto d = fd_derivative(root, geom, a, c, delta);
+            if (!d)
+            {
+                fail("fd_derivative failed in invariance loop: " + d.error());
+                return 1;
+            }
+            sum += *d;
+        }
+        const double resid = sum.cwiseAbs().maxCoeff();
+        std::cout << "axis " << c << " translational residual max = " << resid << '\n';
+        // FD truncation on a 1e-4 step over ~O(1) integrals leaves a small
+        // residual; 1e-5 comfortably separates "invariant" from a real bug.
+        if (resid > 1e-5)
+            fail("translational invariance violated on axis " + std::to_string(c) +
+                 " — FD oracle is mis-centered or mis-signed");
+    }
+
+    // ── RG1a.1: analytic μ-center derivative vs FD ────────────────────────────
+    // Pick an s-s AO pair whose two centers are on DIFFERENT atoms, with an
+    // s-type aux. Moving μ's atom then changes the integral (a spectator element
+    // where μ and everything else are on the same atom gives a trivially-zero
+    // μ-derivative by translational invariance — no test). The analytic μ-block
+    // for that element must match the FD of the corresponding packed tensor entry
+    // w.r.t. μ's atom coordinate.
+    //
+    // s-s-s exercises the 2α raise but not the lowering term (lAq = 0); the p/d
+    // sweep in RG1a.3 covers lowering.
+    {
+        HartreeFock::Calculator calc = make_calc(root, geom);
+        const auto shell_pairs = build_shellpairs(calc._shells);
+        const HartreeFock::Shell *auxC = nullptr;
+        for (const auto &sh : calc._ri_aux_basis->shells)
+            if (static_cast<int>(sh._shell) == 0) { auxC = &sh; break; }
+        if (!auxC)
+        {
+            fail("no s-type aux shell found");
+            return 1;
+        }
+        // aux column of that shell = number of aux functions before it.
+        std::size_t aux_col = 0;
+        for (const auto &sh : calc._ri_aux_basis->shells)
+        {
+            if (&sh == auxC) break;
+            aux_col += HartreeFock::BasisFunctions::_cartesian_shell_order(
+                           static_cast<unsigned>(sh._shell)).size();
+        }
+
+        // s-s pair where μ (A) is on an atom distinct from BOTH ν's atom and the
+        // aux's atom, so moving μ's atom perturbs only the μ leg and the FD
+        // isolates the analytic μ-derivative.
+        const HartreeFock::ShellPair *pair = nullptr;
+        for (const auto &sp : shell_pairs)
+        {
+            const bool s_s = sp.A._cartesian.sum() == 0 && sp.B._cartesian.sum() == 0;
+            const unsigned aA = sp.A._shell->_atom_index;
+            const unsigned aB = sp.B._shell->_atom_index;
+            if (s_s && aA != aB && aA != auxC->_atom_index) { pair = &sp; break; }
+        }
+        if (!pair)
+        {
+            fail("no suitable s-s pair (μ atom distinct from ν and aux) found");
+            return 1;
+        }
+
+        const std::size_t mu = pair->A._index, nu = pair->B._index;
+        const std::size_t hi = std::max(mu, nu), lo = std::min(mu, nu);
+        const Eigen::Index row = static_cast<Eigen::Index>(hi * (hi + 1) / 2 + lo);
+        const int move_atom = static_cast<int>(pair->A._shell->_atom_index);
+
+        const auto d = HartreeFock::Correlation::RI::compute_3c_deriv_elem(
+            *pair, 0, 0, 0, 0, 0, 0, *auxC, 0, 0, 0);
+
+        for (int q = 0; q < 3; ++q)
+        {
+            auto fd = fd_derivative(root, geom, move_atom, q, delta);
+            if (!fd)
+            {
+                fail("fd_derivative failed: " + fd.error());
+                return 1;
+            }
+            const double fdv = (*fd)(row, static_cast<Eigen::Index>(aux_col));
+            const double an = d[0 * 3 + q];
+            const double diff = std::abs(an - fdv);
+            std::cout << "  analytic dμ/dR_" << q << " = " << an
+                      << "  FD = " << fdv << "  |Δ| = " << diff << '\n';
+            if (diff > 1e-7)
+                fail("analytic μ-derivative disagrees with FD on axis " +
+                     std::to_string(q) + " (>1e-7)");
+        }
+
+        // ── RG1a.2: ν and aux blocks via translational invariance ─────────────
+        // For a single element, the three center-derivatives must sum to zero on
+        // each axis (rigidly translating all three centers leaves the integral
+        // unchanged). This is an analytic-only identity, so it gates the ν (B)
+        // and aux (C) blocks against the already-FD-validated μ (A) block to
+        // ~1e-10 — tighter than FD and needing no extra displaced-geometry runs.
+        for (int q = 0; q < 3; ++q)
+        {
+            const double sum = d[0 * 3 + q] + d[1 * 3 + q] + d[2 * 3 + q];
+            std::cout << "  Σ_center d/dR_" << q << " = " << sum << '\n';
+            if (std::abs(sum) > 1e-10)
+                fail("center-derivative sum ≠ 0 on axis " + std::to_string(q) +
+                     " (>1e-10) — ν or aux block is wrong");
+        }
+
+        // Direct FD cross-check of the ν block, but only when ν's atom is also
+        // distinct from the aux's atom (else moving it perturbs aux too and the
+        // FD would not isolate ν). When ν shares the aux atom, the Σ=0 check
+        // above already pins the ν+aux blocks jointly against μ.
+        if (pair->B._shell->_atom_index != auxC->_atom_index)
+        {
+            const int nu_atom = static_cast<int>(pair->B._shell->_atom_index);
+            for (int q = 0; q < 3; ++q)
+            {
+                auto fd = fd_derivative(root, geom, nu_atom, q, delta);
+                if (!fd) { fail("fd_derivative(ν) failed: " + fd.error()); return 1; }
+                const double fdv = (*fd)(row, static_cast<Eigen::Index>(aux_col));
+                const double an = d[1 * 3 + q];
+                if (std::abs(an - fdv) > 1e-7)
+                    fail("analytic ν-derivative disagrees with FD on axis " +
+                         std::to_string(q) + " (>1e-7)");
+            }
+        }
+    }
+
+    // ── RG1a.3: p/d element sweep — exercise the lowering term ────────────────
+    // build_shellpairs expands to per-Cartesian-component pairs (each pair's
+    // A/B carry specific _cartesian momenta and their AO _index). Sweep pairs
+    // whose μ leg has non-zero momentum (p or d) so the −l_Xq·I(l_X−ê_q) lowering
+    // term actually fires — the s-s-s case above never exercised it. For each,
+    // compare the analytic μ-block to FD, isolating μ by requiring its atom be
+    // distinct from ν's and the aux's. Also assert Σ_center = 0 per element.
+    {
+        HartreeFock::Calculator calc = make_calc(root, geom);
+        const auto shell_pairs = build_shellpairs(calc._shells);
+
+        // Precompute aux (shell, first-cartesian-momenta, column) list.
+        struct AuxElem { const HartreeFock::Shell *sh; int lx, ly, lz; std::size_t col; };
+        std::vector<AuxElem> aux_elems;
+        {
+            std::size_t col = 0;
+            for (const auto &sh : calc._ri_aux_basis->shells)
+            {
+                const auto comps = HartreeFock::BasisFunctions::_cartesian_shell_order(
+                    static_cast<unsigned>(sh._shell));
+                // Use the first component of each aux shell.
+                aux_elems.push_back({&sh, comps[0][0], comps[0][1], comps[0][2], col});
+                col += comps.size();
+            }
+        }
+
+        int checked = 0, lowering_hit = 0;
+        for (const auto &sp : shell_pairs)
+        {
+            if (checked >= 12) break; // a representative dozen is plenty
+            const int muL = sp.A._cartesian.sum();
+            if (muL == 0) continue; // want p/d on μ to fire the lowering term
+            const unsigned aMu = sp.A._shell->_atom_index;
+            const unsigned aNu = sp.B._shell->_atom_index;
+            if (aMu == aNu) continue; // need μ isolable from ν
+
+            for (const auto &ae : aux_elems)
+            {
+                if (aMu == ae.sh->_atom_index) continue; // μ isolable from aux
+                if (checked >= 12) break;
+
+                const std::size_t hi = std::max(sp.A._index, sp.B._index);
+                const std::size_t lo = std::min(sp.A._index, sp.B._index);
+                const Eigen::Index r = static_cast<Eigen::Index>(hi * (hi + 1) / 2 + lo);
+                const int move_atom = static_cast<int>(aMu);
+
+                const auto d = HartreeFock::Correlation::RI::compute_3c_deriv_elem(
+                    sp, sp.A._cartesian[0], sp.A._cartesian[1], sp.A._cartesian[2],
+                    sp.B._cartesian[0], sp.B._cartesian[1], sp.B._cartesian[2],
+                    *ae.sh, ae.lx, ae.ly, ae.lz);
+
+                for (int q = 0; q < 3; ++q)
+                {
+                    auto fd = fd_derivative(root, geom, move_atom, q, delta);
+                    if (!fd) { fail("sweep fd_derivative failed: " + fd.error()); return 1; }
+                    const double fdv = (*fd)(r, static_cast<Eigen::Index>(ae.col));
+                    if (std::abs(d[0 * 3 + q] - fdv) > 1e-7)
+                        fail("sweep: analytic μ-derivative ≠ FD (muL=" +
+                             std::to_string(muL) + ", axis " + std::to_string(q) + ")");
+                    // per-element translational sum
+                    const double s = d[0 * 3 + q] + d[1 * 3 + q] + d[2 * 3 + q];
+                    if (std::abs(s) > 1e-9)
+                        fail("sweep: Σ_center ≠ 0 (axis " + std::to_string(q) + ")");
+                }
+                if (muL > 0) ++lowering_hit;
+                ++checked;
+            }
+        }
+        std::cout << "  RG1a.3 sweep: " << checked << " p/d elements checked, "
+                  << lowering_hit << " with lowering term active\n";
+        if (checked == 0)
+            fail("RG1a.3 sweep checked no elements — the lowering term is untested");
+        if (lowering_hit == 0)
+            fail("RG1a.3 sweep never fired the lowering term");
+    }
+
+    // ── RG1b.1: packed dJ/dR driver vs the whole-tensor FD ────────────────────
+    // compute_3c_eri_deriv assembles the element helper and scatters to atoms.
+    // Its per-(atom,axis) matrix must equal the finite difference of the full
+    // packed tensor — a strict superset of the element checks above, since it
+    // also validates the scatter/assembly. Every entry, every atom, every axis.
+    {
+        HartreeFock::Calculator calc = make_calc(root, geom);
+        auto dJ = HartreeFock::Correlation::RI::compute_3c_eri_deriv(calc);
+        if (!dJ)
+        {
+            fail("compute_3c_eri_deriv failed: " + dJ.error());
+            return 1;
+        }
+        const std::size_t natoms = calc._molecule.natoms;
+        double worst = 0.0;
+        for (std::size_t a = 0; a < natoms; ++a)
+            for (int q = 0; q < 3; ++q)
+            {
+                auto fd = fd_derivative(root, geom, static_cast<int>(a), q, delta);
+                if (!fd)
+                {
+                    fail("RG1b.1 fd_derivative failed: " + fd.error());
+                    return 1;
+                }
+                const Eigen::MatrixXd &an = (*dJ)[a * 3 + static_cast<std::size_t>(q)];
+                const double diff = (an - *fd).cwiseAbs().maxCoeff();
+                worst = std::max(worst, diff);
+            }
+        std::cout << "  RG1b.1 packed dJ/dR vs FD: worst |Δ| over all atoms/axes = "
+                  << worst << '\n';
+        if (worst > 1e-7)
+            fail("packed dJ/dR disagrees with the whole-tensor FD (>1e-7)");
+    }
+
+    // ── RG1b.2: packed dV/dR metric derivative vs FD ──────────────────────────
+    // compute_2c_eri_deriv assembles the 2-center element helper. Its
+    // per-(atom,axis) matrix must equal the finite difference of the metric
+    // V = (P|Q) — validating both P and Q blocks (each with the double-normC
+    // fix) and the scatter, across every aux-aux entry / atom / axis.
+    {
+        HartreeFock::Calculator calc = make_calc(root, geom);
+        auto dV = HartreeFock::Correlation::RI::compute_2c_eri_deriv(calc);
+        if (!dV)
+        {
+            fail("compute_2c_eri_deriv failed: " + dV.error());
+            return 1;
+        }
+        const std::size_t natoms = calc._molecule.natoms;
+        double worst = 0.0;
+        for (std::size_t a = 0; a < natoms; ++a)
+            for (int q = 0; q < 3; ++q)
+            {
+                auto fd = fd_v2c(root, geom, static_cast<int>(a), q, delta);
+                if (!fd)
+                {
+                    fail("RG1b.2 fd_v2c failed: " + fd.error());
+                    return 1;
+                }
+                const Eigen::MatrixXd &an = (*dV)[a * 3 + static_cast<std::size_t>(q)];
+                const Eigen::MatrixXd diff = an - *fd;
+                worst = std::max(worst, diff.cwiseAbs().maxCoeff());
+            }
+        std::cout << "  RG1b.2 packed dV/dR vs FD: worst |Δ| over all atoms/axes = "
+                  << worst << '\n';
+        if (worst > 1e-7)
+            fail("packed dV/dR disagrees with the metric FD (>1e-7)");
+    }
+
+    if (g_ok)
+        std::cout << "PASS: ri_3c_derivative_fd\n";
+    return g_ok ? 0 : 1;
+}

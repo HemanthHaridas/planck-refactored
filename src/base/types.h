@@ -80,9 +80,11 @@ namespace HartreeFock
         RCCSDT,  // Restricted CCSDT
         UCCSDT,  // Unrestricted CCSDT
         RCCSDTQ, // Restricted CCSDTQ
+        UCCGEN,  // Unrestricted generated CC (ucc2/ucc3/ucc4); rank on _cc_generated_rank
         CASSCF,  // Complete active space SCF
         RASSCF,  // Restricted active space SCF
-        FCI      // Full configuration interaction (whole MO space, RHF reference)
+        FCI,     // Full configuration interaction (whole MO space, RHF reference)
+        FCIQMC   // Stochastic FCI by walker sampling (same space, same integrals)
     };
 
     enum class CalculationType
@@ -427,6 +429,8 @@ namespace HartreeFock
         double _diis_restart_factor = 2.0; // Restart DIIS when error grows by this factor (0 = off)
         double _cc_damping = 0.8;          // Coupled-cluster damping factor for tensor CC iterations
         double _cc_max_memory_gb = 4.0;    // Soft cap for large tensor-CC intermediates (0 = off)
+        int _cc_generated_rank = 4;        // Excitation rank for the generated arbitrary-order RCC path (cc4=4, cc5=5, cc6=6)
+        bool _cc_warm_start = true;        // Warm-start the generated arbitrary-order RCC path from a rank-(n-1) solve (cc_warm_start .false. = cold)
 
         SCFType _scf = SCFType::RHF;           // SCF Type (Default is RHF)
         SCFMode _mode = SCFMode::Conventional; // SCF Mode (Default is Conventional)
@@ -512,8 +516,15 @@ namespace HartreeFock
 
     struct OptionsIntegral
     {
-        double _tol_eri = 1E-10;                             // ERI tolerance for Schwarz screening
-        IntegralMethod _engine = IntegralMethod::ObaraSaika; // Integral Engine
+        double _tol_eri = 1E-10;                       // ERI tolerance for Schwarz screening
+        // Default to Auto: the SCF ERI/Fock builds dispatch per shell quartet
+        // through HGP, with a Rys tail for the lowest-angular-momentum quartets
+        // (L_AB+L_CD <= 1), which is faster across the mix than any single fixed
+        // engine. Gradient/geomopt/freq derivative ERIs do not recognize Auto and
+        // fall back to OS (see Gradient::compute_eri_deriv_dispatch); both engines
+        // are validated, so the fallback is correct, just not uniform within a
+        // gradient run. Set `engine os/rys/hgp` explicitly to override.
+        IntegralMethod _engine = IntegralMethod::Auto; // Integral Engine
     };
 
     struct OptionsDFT
@@ -637,6 +648,31 @@ namespace HartreeFock
         // When mcscf_accept_uphill is on, this caps the largest uphill ΔE
         // (Hartree) the model-trust filter will tolerate per macro step.
         double mcscf_uphill_max_eh = 5e-3;
+    };
+
+    // FCIQMC sampling parameters.
+    //
+    // Every one of these changes the answer, so every one must be reachable from
+    // an input file -- a keyword the parser accepts but ignores is worse than one
+    // it rejects. Defaults are the values validated on the toy fixture; see
+    // docs/FCIQMC_POPULATION_CONTROL.md for what each trades.
+    struct OptionsFCIQMC
+    {
+        double target_walkers = 10000.0;   // population the shift steers toward
+        double timestep = 0.001;           // dt; must stay well under the stability bound
+        double shift_damping = 0.3;        // zeta -- stability of the shift feedback
+        double shift_restoring = 0.05;     // xi  -- restoring force toward the target
+        int shift_interval = 5;            // iterations between shift updates
+        double walker_granularity = 1.0;   // spawn discretization; 0 disables
+        double initiator_threshold = 0.0;  // n_add; 0 disables the initiator
+        int equilibration_steps = 2000;    // discarded before averaging
+        int sampling_steps = 8000;         // averaged
+        int spawn_attempts = 1;            // draws per walker per iteration
+
+        // The seed is USER-VISIBLE on purpose. The reproducibility contract --
+        // same seed reproduces the trajectory bitwise -- is worthless if the seed
+        // cannot be set and is not recorded in the output.
+        unsigned long long seed = 20250901ULL;
     };
 
     // MP2 options. Mirrors PySCF's mp.MP2Base attributes (frozen, level_shift,
@@ -1257,34 +1293,48 @@ namespace HartreeFock
         Molecule _molecule;
         Basis _shells;
 
+        // Multipole moments (dipole/quadrupole), cached by the multipole report
+        // for the JSON results dump. _have_multipole guards whether it's valid.
+        MultipoleMoments _multipole;
+        bool _have_multipole = false;
+
         // CASSCF / RASSCF results
         OptionsActiveSpace _active_space;     // active space specification
+        OptionsFCIQMC _fciqmc;                // FCIQMC sampling parameters
         Eigen::VectorXd _cas_nat_occ;         // active natural occupation numbers
         Eigen::MatrixXd _cas_mo_coefficients; // converged CASSCF MO coefficients [nb×nb] in the optimization basis
         Eigen::VectorXd _cas_root_energies;   // per-root total CASSCF energies (length nroots; empty for SS-CASSCF)
 
         // MP2 options and cached results. _mp2 is the input-driven option block.
-        // The amplitude and active-orbital fields cache the last applied MP2
-        // kernel result so gradient and RDM consumers can reuse it without
-        // forcing the older driver-style run_* wrappers.
+        // _mp2_result caches the last applied MP2 kernel result (amplitudes,
+        // active-orbital masks, spin-resolved correlation energies) so gradient
+        // and RDM consumers can reuse it without forcing the older driver-style
+        // run_* wrappers.
         OptionsMP2 _mp2;
-        int _mp2_nocc = 0;
-        int _mp2_nvir = 0;
-        int _mp2_nocca = 0;
-        int _mp2_noccb = 0;
-        int _mp2_nvira = 0;
-        int _mp2_nvirb = 0;
-        std::vector<int> _mp2_active_mo;        // active (non-frozen) MO indices into the full MO list (RMP2)
-        std::vector<int> _mp2_active_mo_alpha;  // UMP2 alpha active mask
-        std::vector<int> _mp2_active_mo_beta;   // UMP2 beta active mask
-        std::vector<double> _mp2_t2;            // RMP2 T2[i,j,a,b] (row-major), empty if not computed
-        std::vector<double> _ump2_t2_aa;        // UMP2 αα block
-        std::vector<double> _ump2_t2_ab;        // UMP2 αβ block
-        std::vector<double> _ump2_t2_bb;        // UMP2 ββ block
-        double _mp2_e_corr_ss = 0.0;            // same-spin correlation energy
-        double _mp2_e_corr_os = 0.0;            // opposite-spin correlation energy
-        bool _mp2_converged = true;             // iterative MP2 convergence flag (true = canonical or converged)
-        int _mp2_n_iter = 0;                    // iterative MP2 cycles taken (0 for canonical kernel)
+
+        // Grouped "last computed MP2 result" state. Written once per kernel run
+        // in src/post_hf/mp2.cpp; read by the gradient/RDM reuse paths.
+        struct MP2Result
+        {
+            int nocc = 0;
+            int nvir = 0;
+            int nocca = 0;
+            int noccb = 0;
+            int nvira = 0;
+            int nvirb = 0;
+            std::vector<int> active_mo;        // active (non-frozen) MO indices into the full MO list (RMP2)
+            std::vector<int> active_mo_alpha;  // UMP2 alpha active mask
+            std::vector<int> active_mo_beta;   // UMP2 beta active mask
+            std::vector<double> t2;            // RMP2 T2[i,j,a,b] (row-major), empty if not computed
+            std::vector<double> ump2_t2_aa;    // UMP2 αα block
+            std::vector<double> ump2_t2_ab;    // UMP2 αβ block
+            std::vector<double> ump2_t2_bb;    // UMP2 ββ block
+            double e_corr_ss = 0.0;            // same-spin correlation energy
+            double e_corr_os = 0.0;            // opposite-spin correlation energy
+            bool converged = true;             // iterative MP2 convergence flag (true = canonical or converged)
+            int n_iter = 0;                    // iterative MP2 cycles taken (0 for canonical kernel)
+        };
+        MP2Result _mp2_result;
 
         Eigen::MatrixXd _overlap; // Overlap matrix S
         Eigen::MatrixXd _hcore;   // Core Hamiltonian H = T + V
@@ -1297,6 +1347,13 @@ namespace HartreeFock
         Eigen::MatrixXd _ri_j2c; // raw 2-center Coulomb metric (P|Q)
         Eigen::MatrixXd _ri_j3c; // packed 3-center tensor (AO-pair × aux), in working AO basis
         std::shared_ptr<Correlation::RI::MetricFactorization> _ri_metric_factor;
+        // Geometry (_molecule._standard) the RI caches above were built against.
+        // The aux basis / 2-center metric / 3-center tensor all sit on the atom
+        // centers, so they go stale when the geometry moves. Empty = never built.
+        // The RI ensure_* functions clear and rebuild all four caches when this
+        // no longer matches the current geometry (see ri_eri.cpp). Single
+        // invalidation key for every RI consumer (MP2/FCI/CASSCF).
+        Eigen::MatrixXd _ri_cache_geometry;
 
         std::string _checkpoint_path; // Path to checkpoint file (set by driver)
 
@@ -1359,11 +1416,18 @@ namespace HartreeFock
         bool _use_sao_blocking = false;
         bool _use_integral_symmetry = false;
         bool _use_full_symmetry = false; // full point-group direct-Fock reduction (os_symm/rys_symm)
+        bool _is_dft = false;            // set by the parser when a %begin_dft section is present
 
         double current_total_energy() const noexcept
         {
             return _have_correlated_total_energy ? _correlated_total_energy : _total_energy;
         }
+
+        // True when the input declared a DFT calculation (a %begin_dft section was
+        // present). The method is declared by the input, not by which binary ran,
+        // so a unified front end (planck-mpi) dispatches on this:
+        //   is_dft_run() ? DFT::Driver::run(...) : HartreeFock::Driver::run(...)
+        bool is_dft_run() const noexcept { return _is_dft; }
 
         // Working AO dimension the SCF operates in: the spherical count (2L+1 per
         // shell) when the basis is in spherical mode, else the Cartesian count. The

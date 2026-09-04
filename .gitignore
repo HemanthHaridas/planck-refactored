@@ -73,7 +73,7 @@ docs/BSSE_PLAN.md
 docs/RS_LONG_RANGE_DEBUG_HANDOFF.md
 docs/CASSCF_STATUS.md
 dist/planck-v4.1.0.tar.gz
-docs/timings.md
+docs/timings*.md
 docs/AUTO_DISPATCH_PLAN.md
 docs/wiki/_Footer.md
 docs/wiki/_Sidebar.md
@@ -94,3 +94,14 @@ build-profile
 build-test
 tests/avrr_x_simd_prototype.cpp
 ROHF_CASSCF_HANDOFF.md
+docs/HPC_MPI_EXECUTABLE_SCOPE.md
+docs/DFT_FUSED_JK_SCOPE.md
+build-mpi
+build-ccgen-test
+build-ucc*
+build-arb
+build-[a-z0-9]*
+docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md
+
+# ccgen optimizer plot cache (regenerable)
+python/.optimizer_hierarchy_cache.json

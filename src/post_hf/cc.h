@@ -7,6 +7,6 @@
 
 #include "post_hf/cc/ccsd.h"
 #include "post_hf/cc/ccsdt.h"
-#include "post_hf/cc/ccsdtq.h"
+#include "post_hf/cc/rccgen.h"
 
 #endif // HF_POSTHF_CC_H

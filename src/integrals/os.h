@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "base/types.h"
+#include "fock_accumulate.h"
 #include "shellpair.h"
 
 namespace HartreeFock
@@ -56,6 +57,20 @@ namespace HartreeFock
             HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
             double omega = 0.0);
 
+        // Shell-quartet block kernel (H-10 step 2a). Fills `block` with every
+        // Cartesian-component ERI of the quartet (A B | C D) in [a][b][c][d]
+        // row-major order (d fastest). `block` must hold at least
+        // gA.n_components * gB.n_components * gC.n_components * gD.n_components
+        // doubles. Bitwise-identical to per-component _contracted_eri_elem; not
+        // yet wired into the production entry points (see os.cpp).
+        void _contracted_eri_block(
+            const HartreeFock::Basis &basis,
+            const ShellGroup &gA, const ShellGroup &gB,
+            const ShellGroup &gC, const ShellGroup &gD,
+            HartreeFock::ERIKernel kernel,
+            double omega,
+            double *block);
+
         Eigen::MatrixXd _compute_fock_rhf(const std::vector<double> &_eri,
                                           const Eigen::MatrixXd &density,
                                           const std::size_t nbasis);
@@ -86,6 +101,48 @@ namespace HartreeFock
                              double omega = 0.0,
                              double tol_eri = 1e-10,
                              const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+
+        // ── Memory-direct Fock builders ─────────────────────────────────────
+        //
+        // Same result as _compute_2e_fock / _compute_2e_fock_uhf above, but each
+        // canonical quartet is contracted straight into G (nb^2) rather than
+        // scattered into an nb^4 tensor that is then contracted in a second
+        // sweep. The nb^4 array is never allocated — which is the whole point:
+        // the two-phase builders above allocate it on EVERY SCF iteration
+        // (0.8 GB at nb=100, 500 GB at nb=500), so "direct" mode currently costs
+        // more memory than conventional, not less.
+        //
+        // Equal to the two-phase builders to summation-order noise (~1e-14), not
+        // bitwise: the fused orbit accumulates in a different order than the nb^4
+        // sweep. Gated by planck-fock-accumulate and planck-fused-fock.
+        //
+        // Integral symmetry (sym_ops) is handled natively: the ERI is computed
+        // once per symmetry-orbit representative and replicated across the orbit
+        // with the accumulated AO sign. See the dedup argument in
+        // src/integrals/quartet_orbit.h.
+        Eigen::MatrixXd _compute_2e_fock_direct(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const Eigen::MatrixXd &density,
+            std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10,
+            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
+            HartreeFock::Integrals::FusedTerm term =
+                HartreeFock::Integrals::FusedTerm::Combined);
+
+        std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
+        _compute_2e_fock_uhf_direct(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const Eigen::MatrixXd &Pa,
+            const Eigen::MatrixXd &Pb,
+            std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10,
+            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
+            HartreeFock::Integrals::FusedTerm term =
+                HartreeFock::Integrals::FusedTerm::Combined);
 
         // ── Gradient derivative integrals ──────────────────────────────────────────
 

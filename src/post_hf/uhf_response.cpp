@@ -3,6 +3,7 @@
 #include <format>
 
 #include "integrals/base.h"
+#include "post_hf/ri/ri_eri.h"
 
 namespace HartreeFock::Correlation
 {
@@ -68,16 +69,24 @@ namespace HartreeFock::Correlation
             // materialize the full Jacobian column by column for transparency.
             const Eigen::MatrixXd dm1a = Ca_virt * xa * Ca_occ.transpose();
             const Eigen::MatrixXd dm1b = Cb_virt * xb * Cb_occ.transpose();
-            const auto [va_ao, vb_ao] = _compute_2e_fock_uhf(
-                shell_pairs,
-                dm1a + dm1a.transpose(),
-                dm1b + dm1b.transpose(),
-                static_cast<std::size_t>(nb),
-                calculator._integral._engine,
-                HartreeFock::ERIKernel::Coulomb,
-                0.0,
-                calculator._integral._tol_eri,
-                calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+            const Eigen::MatrixXd dm1a_sym = dm1a + dm1a.transpose();
+            const Eigen::MatrixXd dm1b_sym = dm1b + dm1b.transpose();
+            // RI-consistent CPHF operator under MP2 RI (Step RG4.2): the induced
+            // Coulomb/exchange response is the same {J(Pa+Pb) - K(P_sigma)}
+            // quantity, built from the 3-center factors instead of the dense ERI.
+            const auto [va_ao, vb_ao] =
+                calculator._mp2.use_ri
+                    ? RI::build_ri_fock_uhf(calculator, dm1a_sym, dm1b_sym)
+                    : _compute_2e_fock_uhf(
+                          shell_pairs,
+                          dm1a_sym,
+                          dm1b_sym,
+                          static_cast<std::size_t>(nb),
+                          calculator._integral._engine,
+                          HartreeFock::ERIKernel::Coulomb,
+                          0.0,
+                          calculator._integral._tol_eri,
+                          calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
 
             const Eigen::MatrixXd va = Ca_virt.transpose() * va_ao * Ca_occ;
             const Eigen::MatrixXd vb = Cb_virt.transpose() * vb_ao * Cb_occ;

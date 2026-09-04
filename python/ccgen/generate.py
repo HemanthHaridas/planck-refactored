@@ -24,6 +24,7 @@ from .project import (
 )
 from .canonicalize import (
     canonicalize_term,
+    canonicalize_term_to_fixed_point,
     merge_exact_term_into_buckets,
     merge_term_into_buckets,
     term_is_zero_before_canonicalization,
@@ -121,6 +122,53 @@ def targets_for_method(method: str) -> list[str]:
     return ["energy"] + [manifold_name(r) for r in ranks]
 
 
+def _generate_diagram_equations(
+    method: str,
+    targets: list[str],
+    canonical_fock: bool,
+) -> dict[str, list[AlgebraTerm]]:
+    """The DIAGRAM engine (D4.2): build each residual manifold from the
+    solve-free diagram weights instead of BCH + Wick projection.
+
+    Each manifold's terms are the signed AlgebraTerm orbit of every enumerated
+    diagram (``diagram_manifold_terms``) plus the bare Hamiltonian term, then run
+    through the SAME finalization the wick path uses
+    (``canonicalize_term_to_fixed_point`` + ``merge_term_into_buckets``). The
+    result is EQUIVALENT to the wick output -- verified by residual equality (the
+    correct gate; canonical-multiset equality is NOT expected, because the two
+    paths split repeated-factor terms differently, an exchange-symmetry
+    representational choice that lowers/emits to the same kernel).
+    """
+    from .canonicalize import (
+        canonicalize_term_to_fixed_point, merge_term_into_buckets,
+    )
+    from .diagram import diagram_manifold_terms
+    from .project import _NAME_TO_RANK
+
+    ranks = parse_cc_level(method)
+
+    def finalize(raw_terms):
+        buckets: dict = {}
+        order: list = []
+        for t in raw_terms:
+            merge_term_into_buckets(
+                canonicalize_term_to_fixed_point(t), buckets, order
+            )
+        return [buckets[s] for s in order if buckets[s].coeff != 0]
+
+    equations: dict[str, list[AlgebraTerm]] = {}
+    for manifold in targets:
+        bra = _NAME_TO_RANK[manifold]  # energy=0, singles=1, ...
+        equations[manifold] = finalize(diagram_manifold_terms(ranks, bra))
+
+    if canonical_fock:
+        equations = {
+            manifold: [t for t in terms if not _drops_under_canonical_fock(t)]
+            for manifold, terms in equations.items()
+        }
+    return equations
+
+
 def _resolve_parallel_workers(parallel_workers: int | None) -> int:
     if parallel_workers is not None:
         return max(1, parallel_workers)
@@ -200,7 +248,12 @@ def _process_term_chunk(
         # algebraically equivalent terms acquire the same signature and can be
         # merged into a single bucket.
         t1 = time.monotonic()
-        canonical = canonicalize_term(raw_term)
+        # Fixed-point, not a single pass: canonicalize_term is not idempotent
+        # (an antisym-factor swap induced by the dummy relabel leaves a residual
+        # sign un-folded), so a single pass gives equivalent terms different
+        # canonical forms and they fail to merge. See
+        # canonicalize_term_to_fixed_point.
+        canonical = canonicalize_term_to_fixed_point(raw_term)
         canonicalization_time += time.monotonic() - t1
         canonicalized_count += 1
         merge_term_into_buckets(canonical, buckets, order)
@@ -477,6 +530,25 @@ def _store_cached_manifold(
         pickle.dump((mstats, canonical), handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
+def _drops_under_canonical_fock(term: AlgebraTerm) -> bool:
+    """Whether *term* vanishes for a canonical HF reference.
+
+    A canonical Hartree-Fock reference diagonalizes the Fock matrix, so its
+    occupied-virtual blocks are zero: ``f_ov = f_vo = 0``. Any term carrying an
+    ``f`` factor whose two indices span one occupied and one virtual space is
+    therefore identically zero and must be dropped. Diagonal ``f_oo`` / ``f_vv``
+    terms survive (they contribute the orbital energies via ``t2 * Fae`` /
+    ``t2 * Fmi``), matching the hand-written GCCSD reference in
+    ``src/post_hf/cc/ccsd.cpp``, which uses only ``eps_occ`` / ``eps_virt``.
+    """
+    for fac in term.factors:
+        if fac.name == "f" and len(fac.indices) == 2:
+            p, q = fac.indices
+            if {p.space, q.space} == {"occ", "vir"}:
+                return True
+    return False
+
+
 def generate_cc_equations(
     method: str,
     targets: list[str] | None = None,
@@ -484,9 +556,11 @@ def generate_cc_equations(
     collect_denominators: bool = False,
     permutation_grouping: bool = False,
     exploit_symmetry: bool = False,
+    canonical_fock: bool = False,
     debug: bool = False,
     parallel_workers: int | None = None,
     cache_dir: str | None = None,
+    engine: str = "wick",
 ) -> dict[str, list[AlgebraTerm]]:
     """Generate coupled-cluster equations for a given method.
 
@@ -503,6 +577,12 @@ def generate_cc_equations(
     exploit_symmetry : bool
         If True, apply implicit antisymmetry exploitation to reduce
         term count (Phase 3, experimental).
+    canonical_fock : bool
+        If True, drop terms that vanish for a canonical HF reference --
+        those carrying an ``f`` factor with an occupied-virtual block
+        (``f_ov`` / ``f_vo`` = 0). Matches the hand-written GCCSD reference,
+        which uses only diagonal orbital energies. Default False keeps the
+        general (Brillouin-incomplete) Fock so the output is unchanged.
     debug : bool
         If True, print term counts and timing at each pipeline stage
         to stderr.  Statistics are also stored in ``ccgen.generate.last_stats``.
@@ -512,6 +592,11 @@ def generate_cc_equations(
     method = canonicalize_cc_level(method.lower())
     if targets is None:
         targets = targets_for_method(method)
+
+    if engine == "diagram":
+        return _generate_diagram_equations(method, targets, canonical_fock)
+    if engine != "wick":
+        raise ValueError(f"unknown engine {engine!r}; expected 'wick' or 'diagram'")
 
     # Build the symbolic Hamiltonian H and cluster operator T once, then reuse
     # them throughout the pipeline.  Everything below transforms or projects
@@ -675,6 +760,14 @@ def generate_cc_equations(
         for manifold in target_tuple
     }
 
+    if canonical_fock:
+        equations = {
+            manifold: [
+                t for t in terms if not _drops_under_canonical_fock(t)
+            ]
+            for manifold, terms in equations.items()
+        }
+
     last_stats = stats
 
     if debug:
@@ -814,16 +907,290 @@ def print_cpp_blas(
     )
 
 
+def _dress_operator_equations(eqs, operators=None):
+    """D7.3.2d: rewrite each manifold of ``eqs`` into its dressed form (recognized
+    W/F operators + tau/tau_c pseudo-amplitudes + bare remainder) and return
+    ``(dressed_eqs, ordered_intermediates)``.
+
+    ``operators`` selects which dressed operators to recognize; ``None`` (default)
+    uses the full seeded CCSD family, so every existing caller is unchanged. Passing
+    a subset dresses only those operators and leaves the rest bare -- used by the
+    V1.1e.3 per-operator gate so a regression names one operator rather than a whole
+    manifold.
+
+    The intermediates list is dependency-ordered (D7.3.3): the tau/tau_c
+    pseudo-amplitude specs come first, then the operator specs that reference
+    them, so the emitter materializes ``build_tau``/``build_tau_c`` before
+    ``build_Wmnij`` etc. -- no forward reference.
+
+    Assumes ``eqs`` was generated with ``canonical_fock=True`` (Planck feeds only
+    a canonical Fock; f_ov terms are runtime-inert -- see cc_canonical_fock_only).
+    """
+    from .optimization.dressing import (
+        seeded_operators,
+        assemble_dressed_equation,
+        operator_to_intermediate_spec,
+        intermediate_dependencies,
+        TAU_NAME,
+        TAU_CONTRACTED_NAME,
+    )
+    from .optimization.tau import (
+        tau_intermediate_spec,
+        tau_contracted_intermediate_spec,
+    )
+    from .optimization.intermediates import IntermediateSpec
+
+    ops = seeded_operators() if operators is None else list(operators)
+    dressed = {m: assemble_dressed_equation(ops, terms) for m, terms in eqs.items()}
+
+    # which intermediates does the dressed equation actually reference?
+    #
+    # The residual is not the only consumer. An operator's own DEFINITION can reference
+    # a pseudo-amplitude (`Wmnij` and `Wabef` are both defined in terms of `tau`), so a
+    # name can be needed by the emitted code while appearing nowhere in the residual.
+    # Scanning only the residual then emits an operator whose builder calls `build_tau`
+    # with no `tau` spec to emit it -- a dangling reference.
+    #
+    # It happens not to bite on the GCC path, where `tau` also appears in the residual
+    # directly, but it does on a spatial (already-adapted) input where those residual
+    # uses have been collapsed away. Closing over definitions rather than special-casing
+    # that input keeps one rule for both.
+    primitives = {"t1", "t2", "v", "f"}
+    op_definitions = {op.name: op.definition_terms for op in ops}
+
+    def _names_in(terms):
+        return {f.name for t in terms for f in t.factors if f.name not in primitives}
+
+    referenced: set = set()
+    frontier = set()
+    for terms in dressed.values():
+        frontier |= _names_in(terms)
+    while frontier:
+        name = frontier.pop()
+        if name in referenced:
+            continue
+        referenced.add(name)
+        # follow into the operator's definition, so its dependencies are emitted too
+        frontier |= _names_in(op_definitions.get(name, ()))
+
+    # usage: count references and record manifolds, per referenced intermediate.
+    #
+    # Counts definition-site uses alongside residual ones, matching the closure above.
+    # Without this a pseudo-amplitude referenced ONLY by an operator definition gets
+    # usage_count=0, which `recount_intermediate_usage` rejects as an orphan -- so the
+    # emitted spec would be dropped for being unused while its builder is still called.
+    # The target list stays residual-only: `usage_targets` names the residual manifolds
+    # a spec serves, and a definition-site use belongs to no manifold.
+    def usage(name):
+        count = 0
+        targets = []
+        for m, terms in dressed.items():
+            n = sum(1 for t in terms for f in t.factors if f.name == name)
+            if n:
+                count += n
+                targets.append(m)
+        for owner, terms in op_definitions.items():
+            if owner in referenced:
+                count += sum(1 for t in terms for f in t.factors if f.name == name)
+        return count, tuple(targets)
+
+    pseudo_specs = []
+    if TAU_NAME in referenced:
+        pseudo_specs.append(tau_intermediate_spec(*usage(TAU_NAME)))
+    if TAU_CONTRACTED_NAME in referenced:
+        pseudo_specs.append(tau_contracted_intermediate_spec(*usage(TAU_CONTRACTED_NAME)))
+
+    op_specs = []
+    for op in ops:
+        if op.name in referenced:
+            c, tg = usage(op.name)
+            spec = operator_to_intermediate_spec(op, canonical_fock=True)
+            op_specs.append(
+                IntermediateSpec(
+                    name=spec.name, indices=spec.indices,
+                    definition_terms=spec.definition_terms,
+                    usage_count=c, index_space_sig=spec.index_space_sig,
+                    usage_targets=tg,
+                )
+            )
+
+    # pseudo (tau/tau_c) have no operator deps -> first; operators after.
+    # (An operator's intermediate_dependencies are all pseudo, so this two-level
+    # order is a valid topological sort of the whole DAG.)
+    return dressed, pseudo_specs + op_specs
+
+
 def print_cpp_planck(
     method: str,
     include_intermediates: bool = False,
     intermediate_threshold: int = 5,
     intermediate_memory_budget_bytes: int | None = None,
     intermediate_peak_memory_budget_bytes: int | None = None,
+    factorize_tau: bool = False,
+    dress_operators: bool = False,
+    dressing: str | None = None,
+    force_arbitrary: bool = False,
+    spin_adapt: bool = False,
+    ucc: bool = False,
     **kwargs: Any,
 ) -> str:
-    """Generate Planck-compatible C++ tensor kernels."""
-    eqs = generate_cc_equations(method, **kwargs)
+    """Generate Planck-compatible C++ tensor kernels.
+
+    ``dress_operators=True`` (D7.3) rewrites the residual to reference the
+    recognized CC intermediates (Wmnij/Wabef/Wmbej + tau/tau_c) and emits their
+    ``build_<name>`` functions, dependency-ordered.  It generates against the
+    CANONICAL-Fock residual (Planck feeds only a canonical Fock; see
+    cc_canonical_fock_only) and is exact vs the undressed residual.  Supersedes
+    ``factorize_tau`` (which only collapses tau); the two are mutually exclusive.
+    Default off -> byte-identical to the undressed emit.
+
+    ``dressing`` (W3.2) selects WHICH route derives the dressed operators:
+    ``"none"``, ``"recognized"`` (the hand-seeded fingerprints ``dress_operators``
+    has always meant), or ``"derived"`` (the factorizer, deriving operators from
+    each term's own contraction tree). ``dress_operators=True`` is the legacy
+    spelling of ``"recognized"``. One axis, not two booleans: the routes are
+    alternatives, never combined, and both feed the SAME downstream emit path so
+    the composition with spin_adapt / ucc / force_arbitrary stays single.
+    """
+    # V1.2.4: dressing supersedes tau collapse -- dressing already recognizes tau/tau_c as
+    # pseudo-amplitudes, so running `factorize_tau` too would materialize tau twice through
+    # two different code paths. Before V1.2.1 this combination was silently ignored (the
+    # early return fired first), which is why the parent scope recorded it as "already
+    # mutually exclusive" -- it was unreachable, not guarded. Raise rather than pick a
+    # winner: silent precedence is exactly what disguised the hazard.
+    # W3.2: resolve the legacy boolean onto the one axis FIRST, so every check
+    # below reads a single variable. `dress_operators=True` is `"recognized"`.
+    if dressing is not None and dress_operators:
+        raise ValueError(
+            "dress_operators is the legacy spelling of dressing='recognized'; pass "
+            "one or the other, not both.")
+    if dressing is None:
+        dressing = "recognized" if dress_operators else "none"
+    if dressing not in ("none", "recognized", "derived"):
+        raise ValueError(
+            f"dressing must be one of none/recognized/derived, got {dressing!r}")
+    dress_operators = dressing != "none"
+
+    if dress_operators and factorize_tau:
+        raise ValueError(
+            "dress_operators and factorize_tau are mutually exclusive: dressing already "
+            "recognizes tau/tau_c, so factorize_tau would materialize it twice. Pass only "
+            "dress_operators=True.")
+
+    # V1.2.1: dressing feeds the SAME downstream path as every other flag (one exit at
+    # the bottom of this function) rather than returning early. The early return made
+    # spin_adapt / factorize_tau / force_arbitrary silently unreachable under dressing;
+    # composing them is the point of V1.2, and a second emit call site would fork the
+    # composition so V5 (UCC) had to be wired twice.
+    dressed_intermediates = None
+    if dress_operators:
+        # Dressing requires the diagram engine + canonical Fock; override any
+        # conflicting caller kwargs rather than error on a duplicate.
+        dress_kwargs = dict(kwargs)
+        dress_kwargs.pop("engine", None)
+        dress_kwargs.pop("canonical_fock", None)
+        eqs = generate_cc_equations(
+            method, engine="diagram", canonical_fock=True, **dress_kwargs)
+        if dressing == "derived":
+            # W3.2: the factorizer derives operators from each term's own
+            # contraction tree instead of matching hand-seeded fingerprints. It
+            # is deliberately NOT applied here -- it runs AFTER spin_adapt below,
+            # because it keys on contraction structure and the adapted manifold is
+            # the one that reaches the emitter. `recognized` dresses here because
+            # its specs must then be adapted alongside the terms.
+            pass
+        else:
+            eqs, dressed_intermediates = _dress_operator_equations(eqs)
+            dressed_intermediates = dressed_intermediates or None
+    else:
+        eqs = generate_cc_equations(method, **kwargs)
+
+    if ucc and spin_adapt:
+        # Both resolve spin, in opposite directions: spin_adapt COLLAPSES the
+        # blocks into one spatial tensor per rank, ucc KEEPS them resolved. Running
+        # both would collapse and then attempt to re-resolve, which is not a
+        # composition -- raise rather than pick a winner, the same way
+        # dress_operators/factorize_tau do.
+        raise ValueError(
+            "ucc and spin_adapt are mutually exclusive: spin adaptation collapses "
+            "spin blocks into one spatial tensor per rank, while UCC keeps them "
+            "resolved. Pass only one.")
+
+    if ucc:
+        # U4: keep the spin blocks resolved instead of collapsing them, so an
+        # unrestricted reference drives one residual per stored block
+        # (`doubles_aaaa`, `doubles_abab`, ...). Every target is block-tagged, so
+        # the emitted bundle carries no per-rank reference residual at all -- an
+        # ALL-SECTORS bundle, which the runtime accepts as of U4.0.
+        from .spin import ucc_adapt_equations
+        eqs = ucc_adapt_equations(eqs)
+
+    if spin_adapt:
+        # R1.0: spin-adapt the GCC manifold to restricted (spatial) terms so the
+        # emitted kernel is a genuine spatial contraction (2*(direct)-(exchange)),
+        # not spin-orbital algebra bound to spatial storage (the defect).
+        from .spin import spin_adapt_equations
+        eqs = spin_adapt_equations(eqs)
+
+        # V1.2.2: the dressed operator specs must be adapted TOO, not left in GCC form.
+        # Adaptation changes three of the five declared layouts (tau vvoo->oovv, tau_c
+        # vvoo->oovv, Wmbej ovvo->oovv), so emitting the GCC specs alongside a
+        # spin-adapted residual declares one layout and builds another -- the residual
+        # would reference spatially-adapted Wmbej while build_Wmbej built the GCC slot
+        # order. `adapter=` is left at its default here but kept a parameter of
+        # adapt_intermediate_spec so V5 (UCC) is a substitution, not a second path.
+        if dressed_intermediates is not None:
+            from .optimization.intermediates import validate_intermediate_specs
+            from .spin import adapt_intermediate_spec
+
+            dressed_intermediates = [
+                adapt_intermediate_spec(spec) for spec in dressed_intermediates]
+            # V1.1f as a wired assertion, not merely a test: this is the one place a
+            # declared-vs-built layout mismatch would be introduced, so the guard is
+            # load-bearing here rather than precautionary.
+            problems = validate_intermediate_specs(dressed_intermediates)
+            if problems:
+                raise ValueError(
+                    "adapted dressed intermediate specs are invalid: "
+                    + "; ".join(problems))
+
+        # CSE intermediate detection (detect_intermediates / rewrite_equations)
+        # was built for the raw occ-first spin-orbital layout and is NOT validated
+        # on spin-adapted spatial terms: rewriting mislabels indices (occ/vir size
+        # mismatch), and the combination has no numeric gate (the validated V4
+        # CCSDTQ==FCI path used no intermediates). It also explodes compile time
+        # (~1544 build_W_* functions -> a ~26 min -O3 registry compile). So the
+        # two are mutually exclusive: spin-adaptation forces intermediates OFF
+        # until CSE is validated on the spatial layout. See
+        # docs/CCGEN_CCSDTQ_MULTISECTOR.md.
+        if include_intermediates:
+            include_intermediates = False
+
+    if ucc and include_intermediates:
+        # Same reasoning as the spin_adapt force-off above: CSE was built for the
+        # raw occ-first spin-orbital layout and is not validated on spin-RESOLVED
+        # terms either, and UCC multiplies the term count by the block count, so
+        # the compile-time argument is strictly worse here.
+        include_intermediates = False
+
+    # V1.2.4: same force-off under dressing. CSE and dressing both materialize through the
+    # `intermediates` channel, so running both would need a merge the emitter has no
+    # ordering contract for. Kept off (not an error) to mirror the spin_adapt precedent
+    # above -- a caller passing the default-ish `include_intermediates` should not have a
+    # dressed build fail. V1.1f measured CSE specs clean on both the GCC and spin-adapted
+    # paths (23/23), so the remaining reasons are compile time (~1544 build_W_*, ~28 min at
+    # -O3) and the absence of a numeric gate, NOT a known index defect.
+    if dress_operators and include_intermediates:
+        include_intermediates = False
+
+    tau_spec = None
+    if factorize_tau:
+        # Collapse validated t2 + t1t1 pairs into the tau pseudo-amplitude
+        # before CSE. Algebra-preserving by construction (apply_tau only
+        # collapses A1.4-validated pairs; A1.6 gates it offline).
+        from .optimization.tau import factorize_tau_equations
+        eqs, tau_spec = factorize_tau_equations(eqs)
+
     intermediates = None
     if include_intermediates:
         from .optimization.intermediates import (
@@ -844,10 +1211,56 @@ def print_cpp_planck(
         intermediates = annotate_layout_hints(supported) if supported else None
         if intermediates:
             eqs = rewrite_equations(eqs, list(intermediates))
+
+    # tau is materialized through the same intermediate machinery; prepend it so
+    # its builder is emitted and residual `tau` factors resolve to the local.
+    if tau_spec is not None:
+        intermediates = [tau_spec] + list(intermediates or [])
+
+    # V1.2.1: the dressed operator specs ride the same `intermediates` channel as CSE
+    # and tau, so the emitter's existing builder/local-resolution path handles them
+    # unchanged. Dressing and CSE are mutually exclusive (V1.2.4), so there is nothing
+    # to merge here -- but assert rather than assume, since a silent overwrite would
+    # drop one set of builders and only show up as a link error.
+    if dressing == "derived":
+        # W3.2: factorize LAST, on whatever manifold the composition above
+        # produced (GCC, spin-adapted, or UCC). The factorizer keys on
+        # contraction structure and does not care how a factor is named, so it
+        # takes the adapted terms directly -- which also means its specs need no
+        # adapt_intermediate_spec pass, because they are derived FROM the adapted
+        # layout rather than declared against the GCC one. That is the structural
+        # difference from `recognized`, and the reason the two run at different
+        # points rather than sharing one call site.
+        from .optimization.factorize import factorize_equations
+        # M4: merge_transposes is ON, not a knob. Transpose-equivalent operators
+        # fold onto one shared array; the call sites read it through a permutation
+        # rather than each building its own copy. Measured 1.42x (LiH) / 1.52x
+        # (CH4) with energies bitwise identical and iteration counts unchanged,
+        # and it shrinks the -O1-pinned registry TU 1.5x. No case was found where
+        # the unmerged form wins, so it gets no flag. See
+        # docs/CCGEN_MERGE_TRANSPOSES.md.
+        eqs, dressed_intermediates = factorize_equations(
+            eqs, spatial=spin_adapt, merge_transposes=True)
+        dressed_intermediates = dressed_intermediates or None
+
+    if dressed_intermediates is not None:
+        assert not intermediates, (
+            "dressed operators and CSE/tau intermediates both populated; "
+            "V1.2.4's mutual exclusion is not holding")
+        intermediates = dressed_intermediates
+
     return emit_planck_translation_unit(
         method,
         eqs,
         intermediates=intermediates,
+        # UCC terms are already resolved AlgebraTerms, exactly like spin-adapted
+        # ones, so the closed-shell relabel-only lowering must not run on them
+        # either -- and it would crash on the block-tagged target names.
+        force_arbitrary=force_arbitrary or ucc,
+        spin_adapted=spin_adapt or ucc,
+        # U5.0: prefix the emitted SYMBOLS so a UCC TU can coexist with the RCC
+        # one for the same method (they collide otherwise).
+        ucc=ucc,
     )
 
 

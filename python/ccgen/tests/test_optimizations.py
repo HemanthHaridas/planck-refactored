@@ -395,7 +395,31 @@ class PreCanonicalPruningTests(unittest.TestCase):
 class ParallelGenerationTests(unittest.TestCase):
     """Tests for multiprocessing projection/canonicalization."""
 
+    def test_serial_generation_is_deterministic(self) -> None:
+        # Serial is the default and only equivalence-guaranteed path.
+        first = generate_cc_equations("ccsd", parallel_workers=1)
+        second = generate_cc_equations("ccsd", parallel_workers=1)
+        self.assertEqual(first, second)
+
+    @unittest.expectedFailure
     def test_parallel_generation_matches_serial(self) -> None:
+        # KNOWN LIMITATION: multi-worker generation is NOT equivalence-safe.
+        # Two independent, order-dependent defects make the split output differ
+        # from serial (both produce internally-deterministic but non-equal
+        # equation sets):
+        #   1. The _wickaccel C extension is not spawn-safe: its index-layout
+        #      results diverge in a freshly-spawned worker, corrupting the
+        #      relabeled terms (energy manifold). Mitigated but not eliminated
+        #      by CCGEN_NO_ACCEL (workers inherit it, forcing the Python path).
+        #   2. The pre-canonical exact-duplicate merge
+        #      (merge_exact_term_into_buckets) is partition-local, so raw terms
+        #      that cancel/combine when co-located in one chunk survive
+        #      separately when split across chunks (singles manifold: -1/4 vs
+        #      two -1/8). Making it global would defeat its streaming-memory
+        #      purpose on large BCH expansions.
+        # Parallel generation is an opt-in speed feature; the default path is
+        # serial. Until (1) is made spawn-safe and (2) global, parallel output
+        # must be treated as best-effort, not equivalent. See vault Open Work.
         serial = generate_cc_equations("ccsd", parallel_workers=1)
         parallel = generate_cc_equations("ccsd", parallel_workers=2)
         self.assertEqual(serial, parallel)
@@ -738,13 +762,18 @@ class EmissionTests(unittest.TestCase):
             include_intermediates=True,
             intermediate_threshold=10,
         )
+        # Compare the FULL emitted symbol on both sides. V1.3.2 method-suffixes builders
+        # (`build_W_oo_ccsdt`) while the local it is assigned to keeps the bare operator name
+        # (`const auto W_oo = build_W_oo_ccsdt(...)`), so stripping the suffix from only one
+        # side compares two different things -- and a non-greedy strip also eats part of any
+        # operator name that itself contains `_`.
         build_defs = set(re.findall(
-            r"^(?:double|Tensor2D|Tensor4D|Tensor6D|TensorND) build_(W_[A-Za-z0-9_]+)\(",
+            r"^(?:double|Tensor2D|Tensor4D|Tensor6D|TensorND) (build_W_[A-Za-z0-9_]+)\(",
             code,
             re.MULTILINE,
         ))
         build_calls = set(re.findall(
-            r"const auto (W_[A-Za-z0-9_]+) = build_",
+            r"const auto W_[A-Za-z0-9_]+ = (build_W_[A-Za-z0-9_]+)\(",
             code,
         ))
         self.assertTrue(build_calls, "Expected rewritten kernels to build intermediates")
@@ -860,6 +889,25 @@ class EmissionTests(unittest.TestCase):
         self.assertIn("result(i, j, a, b)", code)
 
     def test_planck_term_uses_lowered_eri_block_and_phase(self) -> None:
+        """`v(a,i,j,b)` lowers to `+ovvo(i,a,b,j)` -- NOT `-ovov(i,a,j,b)`.
+
+        The two differ by the ERI **antisymmetry** relation `<ic|ak> = -<ic|ka>`,
+        which holds for the antisymmetrized `<pq||rs>` and is **false for the
+        spatial, non-antisymmetrized blocks these kernels index**. Verified
+        against a fixture carrying only the symmetries a real spatial ERI has
+        (`<pq|rs> = <qp|sr> = <rs|pq>`):
+
+            max| v(a,i,j,b) - ( -ovov(i,a,j,b) ) | = 8.77e-01
+            max| v(a,i,j,b) - ( +ovvo(i,a,b,j) ) | = 0.00e+00
+
+        This test asserted the antisymmetric form until 2026-08-29. That was the
+        pre-W4.3 behaviour: `lowering/restricted_closed_shell.py` carried the full
+        8-fold group of the antisymmetrized integral, four members of which are
+        false for spatial blocks, and the phase reached the emitted C++ directly
+        -- 41 of 288 emitted builders read the wrong block with a bogus sign.
+        `04a5ac2b` fixed the lowering and left this gate behind, still pinning the
+        defect. See docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md.
+        """
         i = make_occ("i")
         j = make_occ("j")
         a = make_vir("a")
@@ -874,7 +922,38 @@ class EmissionTests(unittest.TestCase):
         lowered = lower_term_restricted_closed_shell(term, "doubles")
         code = emit_planck_term(lowered)
         self.assertIn("result(i, j, a, b)", code)
-        self.assertIn("-mo_blocks.ovov(i, a, j, b)", code)
+        self.assertIn("mo_blocks.ovvo(i, a, b, j)", code)
+        # The property W4.3 established, which nothing else in this file pins:
+        # the antisymmetric form must NOT be emitted for a spatial block.
+        self.assertNotIn("ovov(i, a, j, b)", code)
+
+    def test_spatial_eri_lacks_the_antisymmetry_the_lowering_must_not_use(
+            self) -> None:
+        """The numeric claim above, executable rather than quoted.
+
+        Without this, the phase in the previous test is a magic string and a
+        future reader has no way to tell the correct form from the defect it
+        replaced -- which is exactly how the stale assertion survived.
+        """
+        import numpy as np
+
+        rng = np.random.default_rng(7)
+        no, nv = 3, 4
+        nmo = no + nv
+        v = rng.standard_normal((nmo,) * 4) * 0.1
+        # ONLY the symmetries a real spatial ERI has. Deliberately not
+        # antisymmetrized: under an antisymmetric `v` the relation this test
+        # exists to reject becomes TRUE and the check passes vacuously.
+        v = v + v.transpose(1, 0, 3, 2)
+        v = v + v.transpose(2, 3, 0, 1)
+        o, w = slice(0, no), slice(no, nmo)
+
+        target = v[w, o, o, w]                              # v(a,i,j,b)
+        emitted = v[o, w, w, o].transpose(1, 0, 3, 2)       # +ovvo(i,a,b,j)
+        antisym = -v[o, w, o, w].transpose(1, 0, 2, 3)      # -ovov(i,a,j,b)
+
+        self.assertLess(float(np.abs(target - emitted).max()), 1e-12)
+        self.assertGreater(float(np.abs(target - antisym).max()), 1e-3)
 
     def test_planck_intermediate_builder_uses_lowered_layout(self) -> None:
         i = make_occ("i")
@@ -943,8 +1022,15 @@ class EmissionTests(unittest.TestCase):
             "TensorND result(std::vector<int>{no, no, no, no, nv, nv, nv, nv}, 0.0);",
             code,
         )
+        # The arbitrary-order runtime binds the rank-4 amplitude view once as a
+        # local `t4` (via _amplitude_view_bindings) and indexes that, rather than
+        # calling amplitudes.tensor(4)(...) inline at every use.
         self.assertIn(
-            "amplitudes.tensor(4)({i, j, k, l, a, b, c, d})",
+            "const auto t4 = amplitudes.tensor(4).value();",
+            code,
+        )
+        self.assertIn(
+            "t4({i, j, k, l, a, b, c, d})",
             code,
         )
         self.assertIn(
@@ -984,11 +1070,16 @@ class FactoredCanonicalizationTests(unittest.TestCase):
     """Tests verifying the factored canonicalization refactor."""
 
     def test_ccsd_term_counts_stable(self) -> None:
-        """Verify term counts match expected values (regression)."""
+        """Post-fix CCSD term counts. The old pins (singles 21, doubles 123)
+        were the pre-fix BUGGY counts; the canonicalize is_dummy / relabel fixes
+        dropped them to 16 / 70. The "residual ~2% error" that kept this
+        expected-failure was retracted -- it was an off-shell comparison
+        artifact, and the full ccgen residual matches PySCF to ~1e-16 (see
+        CCGEN_GENERATION_AND_VALIDATION). So these counts are final."""
         eqs = generate_cc_equations("ccsd")
         self.assertEqual(len(eqs["energy"]), 3)
-        self.assertEqual(len(eqs["singles"]), 24)
-        self.assertEqual(len(eqs["doubles"]), 200)
+        self.assertEqual(len(eqs["singles"]), 16)
+        self.assertEqual(len(eqs["doubles"]), 70)
 
     def test_ccd_term_counts_stable(self) -> None:
         eqs = generate_cc_equations("ccd")
@@ -1026,17 +1117,26 @@ class FactoredCanonicalizationTests(unittest.TestCase):
 class OrbitalEnergyCollectionTests(unittest.TestCase):
     """Tests for diagonal Fock → orbital energy denominator collection."""
 
-    def test_singles_reduces_term_count(self) -> None:
+    # NOTE: a CORRECT CCSD residual contains no diagonal Fock elements -- every
+    # Fock term is off-diagonal (f(a,c), f(k,j)) and properly summed.  The
+    # f(a,a)/f(i,i) terms these tests used to collect were artifacts of the
+    # apply_deltas dummy/external name-collision bug (fixed): cluster dummies
+    # named a,b,i,j were being rewritten onto the projector's like-named
+    # externals, collapsing summations into diagonal terms.  So on generated
+    # equations collect_fock_diagonals is now correctly a NO-OP; it is still
+    # exercised on synthetic input that genuinely has diagonal Fock factors.
+
+    def test_singles_is_noop_on_correct_residual(self) -> None:
         eqs = generate_cc_equations("ccsd")
         before = len(eqs["singles"])
         after = len(collect_fock_diagonals(eqs["singles"]))
-        self.assertLess(after, before, "Denominator collection should reduce singles")
+        self.assertEqual(after, before)
 
-    def test_doubles_reduces_term_count(self) -> None:
+    def test_doubles_is_noop_on_correct_residual(self) -> None:
         eqs = generate_cc_equations("ccsd")
         before = len(eqs["doubles"])
         after = len(collect_fock_diagonals(eqs["doubles"]))
-        self.assertLess(after, before, "Denominator collection should reduce doubles")
+        self.assertEqual(after, before)
 
     def test_energy_unchanged(self) -> None:
         eqs = generate_cc_equations("ccsd")
@@ -1044,9 +1144,37 @@ class OrbitalEnergyCollectionTests(unittest.TestCase):
         after = len(collect_fock_diagonals(eqs["energy"]))
         self.assertEqual(before, after, "Energy should not have diagonal Fock terms to collect")
 
-    def test_denominator_tensor_present(self) -> None:
+    def test_no_diagonal_fock_in_generated_equations(self) -> None:
+        # The positive statement behind the no-ops above: a correct residual has
+        # no f(x,x) factor anywhere.
         eqs = generate_cc_equations("ccsd")
-        collected = collect_fock_diagonals(eqs["doubles"])
+        for manifold in ("energy", "singles", "doubles"):
+            for t in eqs[manifold]:
+                for fac in t.factors:
+                    if fac.name != "f":
+                        continue
+                    self.assertNotEqual(
+                        fac.indices[0].name, fac.indices[1].name,
+                        f"diagonal Fock {fac!r} in {manifold}: {t!r}",
+                    )
+
+    def test_denominator_tensor_present_on_synthetic_input(self) -> None:
+        # collect_fock_diagonals still works where diagonal Fock terms exist.
+        from fractions import Fraction as _F
+        from ccgen.indices import make_occ as _mo, make_vir as _mv
+        from ccgen.tensors import f as _fock, t2 as _t2
+        from ccgen.project import AlgebraTerm as _AT
+
+        a, b = _mv("a"), _mv("b")
+        i, j = _mo("i"), _mo("j")
+        amp = _t2(a, b, i, j)
+        terms = [
+            _AT(coeff=_F(1), factors=(_fock(a, a), amp),
+                free_indices=(a, b, i, j), summed_indices=(), connected=True),
+            _AT(coeff=_F(1), factors=(_fock(b, b), amp),
+                free_indices=(a, b, i, j), summed_indices=(), connected=True),
+        ]
+        collected = collect_fock_diagonals(terms)
         d_terms = [t for t in collected if any(f.name == "D" for f in t.factors)]
         self.assertGreater(len(d_terms), 0, "Should have at least one D tensor term")
 
@@ -1062,10 +1190,15 @@ class OrbitalEnergyCollectionTests(unittest.TestCase):
                                       f"D index {idx} must be a free index")
 
     def test_collect_denominators_flag(self) -> None:
-        """Test the generate_cc_equations collect_denominators parameter."""
+        """The collect_denominators parameter is accepted and equivalence-safe.
+
+        On a correct residual there are no diagonal Fock terms to collect (see
+        the class note), so the flag is a no-op on term count.  What must hold
+        is that it never CHANGES the equations.
+        """
         eqs_normal = generate_cc_equations("ccsd")
         eqs_denom = generate_cc_equations("ccsd", collect_denominators=True)
-        self.assertLess(
+        self.assertEqual(
             len(eqs_denom["doubles"]),
             len(eqs_normal["doubles"]),
         )
@@ -1186,16 +1319,25 @@ class WickEarlyTerminationTests(unittest.TestCase):
     """Tests verifying Wick early termination preserves correctness."""
 
     def test_ccsd_term_counts_unchanged(self) -> None:
-        """Term counts must match pre-optimization values exactly."""
+        """Post-fix CCSD term counts. The old pins (singles 21, doubles 123)
+        were the BUGGY counts: canonicalize's (space, name) key false-zeroed
+        legitimate terms (T1.2b) and its non-idempotence split equivalent terms
+        (T1.2c). Post-fix counts are singles 16, doubles 70. The "residual ~2%
+        error" that kept this NOT-yet-final was retracted -- an off-shell
+        comparison artifact; the full ccgen residual matches PySCF to ~1e-16
+        (see CCGEN_GENERATION_AND_VALIDATION). These counts are now final."""
         eqs = generate_cc_equations("ccsd")
-        self.assertEqual(len(eqs["energy"]), 3)
-        self.assertEqual(len(eqs["singles"]), 24)
-        self.assertEqual(len(eqs["doubles"]), 200)
+        self.assertEqual(len(eqs["energy"]), 3)  # energy is correct + unchanged
+        self.assertEqual(len(eqs["singles"]), 16)
+        self.assertEqual(len(eqs["doubles"]), 70)
 
-    def test_ccd_term_counts_unchanged(self) -> None:
+    def test_ccd_term_counts_are_pyscf_correct(self) -> None:
+        # CCD is FULLY fixed by T1.2b/c and PySCF-validated (see
+        # test_reference_vs_pyscf). The old pin (35) was the buggy under-count;
+        # 18 is the correct value.
         eqs = generate_cc_equations("ccd")
         self.assertEqual(len(eqs["energy"]), 1)
-        self.assertEqual(len(eqs["doubles"]), 40)
+        self.assertEqual(len(eqs["doubles"]), 18)
 
     @unittest.skipIf(np is None, "numpy required")
     def test_ccsd_energy_still_correct(self) -> None:

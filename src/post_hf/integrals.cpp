@@ -5,6 +5,7 @@
 #include "integrals.h"
 #include "integrals/base.h"
 #include "io/logging.h"
+#include "post_hf/ri/ri_eri.h"
 
 namespace
 {
@@ -105,16 +106,22 @@ namespace HartreeFock::Correlation
 
         // T1[i,ν,λ,σ] = Σ_μ C1(μ,i) * eri[μνλσ]   shape: n1 × nb × nb × nb
         //
-        // Each quarter transform is parallelized over its leading index, which
-        // strides whole disjoint output slices (T1[i*...], T2[i*...], ...). No
-        // thread shares a write target and the inner accumulation order is
-        // unchanged, so the result is identical to the serial version — this is
-        // a scheduling change only. transform_eri is never called from inside an
-        // OpenMP parallel region (all call sites are serial), so there is no
-        // nesting / over-subscription concern.
+        // Each quarter transform is parallelized over its two leading indices,
+        // which stride whole disjoint output slices. No thread shares a write
+        // target and the inner accumulation order is unchanged, so the result is
+        // identical to the serial version — this is a scheduling change only.
+        // transform_eri is never called from inside an OpenMP parallel region
+        // (all call sites are serial), so there is no nesting / over-subscription
+        // concern.
+        //
+        // collapse(2) + schedule(dynamic): the leading index alone is the number
+        // of occupied MOs (n1), which is O(10) — too few work units to fill 8+
+        // threads without leaving cores idle at the barrier (profiled at ~38% idle
+        // on the MP2 transform). Collapsing the first two loops widens the
+        // iteration space (n1·n2, n1·nb, …) so dynamic scheduling can balance it.
         std::vector<double> T1(n1 * nb * nb * nb, 0.0);
 #ifdef USE_OPENMP
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for collapse(2) schedule(dynamic)
 #endif
         for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t nu = 0; nu < nb; ++nu)
@@ -127,7 +134,7 @@ namespace HartreeFock::Correlation
         // T2[i,a,λ,σ] = Σ_ν C2(ν,a) * T1[i,ν,λ,σ]   shape: n1 × n2 × nb × nb
         std::vector<double> T2(n1 * n2 * nb * nb, 0.0);
 #ifdef USE_OPENMP
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for collapse(2) schedule(dynamic)
 #endif
         for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t a = 0; a < n2; ++a)
@@ -143,7 +150,7 @@ namespace HartreeFock::Correlation
         // T3[i,a,j,σ] = Σ_λ C3(λ,j) * T2[i,a,λ,σ]   shape: n1 × n2 × n3 × nb
         std::vector<double> T3(n1 * n2 * n3 * nb, 0.0);
 #ifdef USE_OPENMP
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for collapse(2) schedule(dynamic)
 #endif
         for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t a = 0; a < n2; ++a)
@@ -159,7 +166,7 @@ namespace HartreeFock::Correlation
         // out[i,a,j,b] = Σ_σ C4(σ,b) * T3[i,a,j,σ]   shape: n1 × n2 × n3 × n4
         std::vector<double> out(n1 * n2 * n3 * n4, 0.0);
 #ifdef USE_OPENMP
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for collapse(2) schedule(dynamic)
 #endif
         for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t a = 0; a < n2; ++a)
@@ -169,6 +176,49 @@ namespace HartreeFock::Correlation
                             out[i * n2 * n3 * n4 + a * n3 * n4 + j * n4 + b] +=
                                 C4(sig, b) * T3[i * n2 * n3 * nb + a * n3 * nb + j * nb + sig];
 
+        return out;
+    }
+
+    // ── transform_eri_ri ──────────────────────────────────────────────────────────
+
+    std::expected<std::vector<double>, std::string> transform_eri_ri(
+        HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &C1,
+        const Eigen::MatrixXd &C2,
+        const Eigen::MatrixXd &C3,
+        const Eigen::MatrixXd &C4)
+    {
+        auto ri_ready = HartreeFock::Correlation::RI::ensure_ri_3c_ready(calculator);
+        if (!ri_ready)
+            return std::unexpected("transform_eri_ri: " + ri_ready.error());
+        if (!calculator._ri_metric_factor)
+            return std::unexpected("transform_eri_ri: RI metric factorization is missing.");
+
+        // B_{(ia),Q} and B_{(jb),Q} share the same fitted AO-pair factors; the
+        // two bra/ket blocks only differ in which MO coefficients project them.
+        const Eigen::MatrixXd pair_factors =
+            HartreeFock::Correlation::RI::build_ri_pair_factors(calculator);
+        const Eigen::MatrixXd b_bra =
+            HartreeFock::Correlation::RI::build_ri_mo_block(pair_factors, C1, C2);
+        const Eigen::MatrixXd b_ket =
+            HartreeFock::Correlation::RI::build_ri_mo_block(pair_factors, C3, C4);
+
+        // (ia|jb) = Σ_Q B_bra(ia,Q) B_ket(jb,Q); rows of b_bra are i*n2+a,
+        // rows of b_ket are j*n4+b — exactly the transform_eri row-major layout.
+        const Eigen::MatrixXd gram = b_bra * b_ket.transpose();
+
+        const std::size_t n1 = static_cast<std::size_t>(C1.cols());
+        const std::size_t n2 = static_cast<std::size_t>(C2.cols());
+        const std::size_t n3 = static_cast<std::size_t>(C3.cols());
+        const std::size_t n4 = static_cast<std::size_t>(C4.cols());
+        std::vector<double> out(n1 * n2 * n3 * n4, 0.0);
+        for (std::size_t i = 0; i < n1; ++i)
+            for (std::size_t a = 0; a < n2; ++a)
+                for (std::size_t j = 0; j < n3; ++j)
+                    for (std::size_t b = 0; b < n4; ++b)
+                        out[i * n2 * n3 * n4 + a * n3 * n4 + j * n4 + b] =
+                            gram(static_cast<Eigen::Index>(i * n2 + a),
+                                 static_cast<Eigen::Index>(j * n4 + b));
         return out;
     }
 
@@ -294,6 +344,23 @@ namespace HartreeFock::Correlation
         // The internal-space helper is just the generic quarter-transform with the
         // same matrix on all four legs.
         return transform_eri(eri, nb, C_int, C_int, C_int, C_int);
+    }
+
+    std::expected<std::vector<double>, std::string> transform_eri_internal_ri(
+        HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &C_int)
+    {
+        return transform_eri_ri(calculator, C_int, C_int, C_int, C_int);
+    }
+
+    std::expected<std::vector<double>, std::string> transform_eri_active_cache_ri(
+        HartreeFock::Calculator &calculator,
+        const Eigen::MatrixXd &C,
+        const Eigen::MatrixXd &C_act)
+    {
+        // _active_cache produces out[p,u,v,w] = (p u | v w), p full-MO, uvw
+        // active — exactly transform_eri_ri with legs (C, C_act, C_act, C_act).
+        return transform_eri_ri(calculator, C, C_act, C_act, C_act);
     }
 
 } // namespace HartreeFock::Correlation

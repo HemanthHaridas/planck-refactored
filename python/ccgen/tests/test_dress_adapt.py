@@ -1,0 +1,544 @@
+"""Gates for the dress/adapt boundary: V1.0 (slot-ordering contract) and V1.1a-d
+(adapting a dressed intermediate's spec).
+
+V1.0 -- `spin_adapt_equations` assigns an external spin block by slot POSITION, and
+`_line_pairs` pairs slot k with slot k+n. The default template
+(`_residual_template`) reorders free indices virtuals-first, which is the
+convention the C++ runtime's `rank_dims` depends on -- correct for residual
+targets, WRONG for a dressed intermediate whose own slot order differs.
+
+`Wmbej` is the case that forces this. Its `ovvo` slots are [m,b,e,j] with physical
+lines m-e and b-j; virtuals-first reorders them to [b,e,m,j], so the external block
+is assigned as b=a, e=b, m=a, j=b. That block is spin-valid *on the reordered
+output*, but it is applied to FACTORS carrying the operator's real pairing: the bare
+integral `v(m,b,e,j)` then gets tag `aabb`, whose m-e line has m=a/e=b, and is
+rejected. Every spin case of every term dies the same way, so the operator adapts to
+ZERO terms -- silently, since dropping a forbidden block is the normal discard path.
+Same silent-wrong-answer class as the R3.1.2 bridge and B5 ERI-convention defects.
+
+These tests pin the fix (`intermediate_template` + the `templates` override) and
+the guard that makes a zero adaptation loud instead of silent.
+
+V1.1a-d build on that: adapt a spec's definition terms (a), re-derive its declared
+layout from the emitter's own normalization (b), block-key its identity so UCC's
+per-block variants cannot collide (c), and recount usage against the adapted
+residual with bidirectional closure (d).
+"""
+
+from __future__ import annotations
+
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from ccgen.optimization.dressing import (  # noqa: E402
+    operator_to_intermediate_spec,
+    seeded_operators,
+)
+from ccgen.spin import (  # noqa: E402
+    _residual_template,
+    adapt_intermediate_spec,
+    block_keyed_intermediate_name,
+    intermediate_template,
+    recount_intermediate_usage,
+    spin_adapt_equations,
+)
+
+# The operators the assembled dressed CCSD residual actually references (V1.1
+# Finding A). Fme/Fae/Fmi are recognized but fold away under canonical Fock, so
+# they are out of V1.1's scope -- adapting them would be dead code.
+REFERENCED = ("Wmnij", "Wabef", "Wmbej")
+
+# Adapted definition-term counts for the referenced operators (V1.1 Finding D).
+# Wmbej's 5 -> 8 growth is the adapter splitting terms across spin cases.
+ADAPTED_TERM_COUNTS = {"Wmnij": 4, "Wabef": 4, "Wmbej": 8}
+
+
+def _specs():
+    """The six seeded CCSD operators as canonical-Fock IntermediateSpecs."""
+    return [operator_to_intermediate_spec(op, canonical_fock=True)
+            for op in seeded_operators()]
+
+
+def _spec(name):
+    return next(s for s in _specs() if s.name == name)
+
+
+class DressedIntermediateAdaptationTests(unittest.TestCase):
+    """Every seeded operator must adapt to a non-empty spatial term list when
+    adapted on its OWN slot order."""
+
+    def test_all_seeded_operators_adapt_nonempty(self):
+        for spec in _specs():
+            with self.subTest(operator=spec.name):
+                got = spin_adapt_equations(
+                    {spec.name: list(spec.definition_terms)},
+                    templates={spec.name: intermediate_template(spec)},
+                )
+                self.assertIn(spec.name, got)
+                self.assertGreater(
+                    len(got[spec.name]), 0,
+                    f"{spec.name} ({spec.index_space_sig}) adapted to zero terms")
+
+    def test_wmbej_is_the_regression_case(self):
+        """Wmbej specifically: zero on the virtuals-first default, non-zero on its
+        own slot order. This is the measured defect V1.0 fixes -- if the default
+        ever stops zeroing it, the override may no longer be load-bearing."""
+        spec = next(s for s in _specs() if s.name == "Wmbej")
+        self.assertEqual(spec.index_space_sig, "ovvo")
+
+        # the operator's own order preserves the m-e / b-j line pairing
+        own = spin_adapt_equations(
+            {spec.name: list(spec.definition_terms)},
+            templates={spec.name: intermediate_template(spec)},
+        )
+        self.assertGreater(len(own[spec.name]), 0)
+
+        # the virtuals-first default reorders [m,b,e,j] -> [b,e,m,j] and zeroes it,
+        # which the V1.0 guard now raises on rather than returning silently
+        default_tpl = _residual_template(spec.name, list(spec.definition_terms))
+        self.assertNotEqual(
+            [i.name for i in default_tpl.indices],
+            [i.name for i in spec.indices],
+            "Wmbej's virtuals-first template no longer differs from its own order")
+        with self.assertRaises(ValueError) as ctx:
+            spin_adapt_equations({spec.name: list(spec.definition_terms)})
+        self.assertIn("ZERO", str(ctx.exception))
+
+    def test_representative_block_conserves_spin_on_own_order(self):
+        """The contract behind the fix, stated as the adapter actually enforces it:
+        on a spec's own slot order the representative external block must be
+        spin-CONSERVING along every line (slot k with slot k+n) -- exactly what
+        `block_exists` checks and what decides whether any term survives.
+
+        Nothing is asserted about the two ends' index SPACES: a line can join an occ
+        to a vir (`Wmbej` `ovvo`: m-e, b-j) or two of a kind (`Wabef` `vvvv`: a-e,
+        b-f). What must hold is that the pairing the adapter uses is the operator's
+        real one, which is what the own-order template guarantees and what the
+        virtuals-first reorder destroys for `Wmbej`."""
+        from ccgen.spin import _representative_block_for_sector, block_exists
+
+        for spec in _specs():
+            n = len(spec.indices) // 2
+            tpl = intermediate_template(spec)
+            block = _representative_block_for_sector(tpl, -(-n // 2))
+            label = {i.name: type("L", (), {"spin": block[i.name]})()
+                     for i in spec.indices}
+            with self.subTest(operator=spec.name):
+                self.assertTrue(
+                    block_exists(tpl, label),
+                    f"{spec.name}: representative block "
+                    f"{''.join(block[i.name] for i in spec.indices)!r} does not "
+                    f"conserve spin on its own slot order")
+
+    def test_virtuals_first_breaks_wmbej_factor_blocks(self):
+        """The mechanism behind the zero, pinned precisely.
+
+        The virtuals-first OUTPUT block is itself spin-valid (slots [b,e,m,j] with
+        b=a,e=b,m=a,j=b conserves on the pairing b-m, e-j). The failure is one level
+        down, in the FACTORS: the same external assignment gives the bare integral
+        `v(m,b,e,j)` the tag `aabb`, and `v`'s own lines are m-e and b-j, so m=a/e=b
+        violates conservation. Every spin case of every term dies this way, so the
+        operator integrates to zero -- silently, since a dropped block is the normal
+        way a forbidden term is discarded."""
+        from ccgen.spin import (_representative_block_for_sector, block_exists,
+                                resolve_block, spin_label_cases)
+
+        spec = next(s for s in _specs() if s.name == "Wmbej")
+        terms = list(spec.definition_terms)
+        tpl = _residual_template(spec.name, terms)
+        block = _representative_block_for_sector(tpl, 1)
+
+        # the output template block IS valid -- the defect is not here
+        out_label = {i.name: type("L", (), {"spin": block[i.name]})()
+                     for i in tpl.indices}
+        self.assertTrue(block_exists(tpl, out_label))
+
+        # ...but the bare-integral factor is rejected in every spin case
+        bare = next(t for t in terms if len(t.factors) == 1)
+        tags = set()
+        for label in spin_label_cases(bare, block):
+            for f in bare.factors:
+                tag, exists = resolve_block(f, label)
+                tags.add((f.name, tag, exists))
+        self.assertTrue(tags, "no spin cases enumerated")
+        self.assertTrue(
+            all(not exists for _, _, exists in tags),
+            f"expected every factor block forbidden, got {sorted(tags)}")
+        self.assertIn(("v", "aabb", False), tags)
+
+    def test_space_homogeneous_operators_agree_by_coincidence(self):
+        """Documents WHY the defect hid: the four space-homogeneous operators
+        (oooo/vvvv/vv/oo) have identical default and own orders, so only the two
+        mixed-space ones (Fme `ov`, Wmbej `ovvo`) are reordered at all."""
+        reordered = set()
+        for spec in _specs():
+            default_tpl = _residual_template(spec.name, list(spec.definition_terms))
+            if [i.name for i in default_tpl.indices] != [i.name for i in spec.indices]:
+                reordered.add(spec.name)
+        self.assertEqual(reordered, {"Fme", "Wmbej"})
+
+
+class ZeroAdaptationGuardTests(unittest.TestCase):
+    """A non-empty GCC manifold adapting to nothing must raise, not return {}."""
+
+    def test_guard_fires_on_zero_adaptation(self):
+        spec = next(s for s in _specs() if s.name == "Wmbej")
+        with self.assertRaises(ValueError) as ctx:
+            spin_adapt_equations({spec.name: list(spec.definition_terms)})
+        msg = str(ctx.exception)
+        self.assertIn("Wmbej", msg)
+        self.assertIn("templates", msg, "the error should name the fix")
+
+    def test_guard_does_not_fire_on_a_genuinely_empty_manifold(self):
+        """An empty input is not a bug -- only a non-empty one that vanishes is."""
+        got = spin_adapt_equations({"singles": []})
+        self.assertEqual(got.get("singles"), [])
+
+
+class ResidualPathUnchangedTests(unittest.TestCase):
+    """V1.0 must not move the residual layout contract (R3.1.2 half (ii),
+    02364db) that the C++ runtime's `rank_dims` depends on."""
+
+    def test_residual_adaptation_is_identical_without_templates(self):
+        from ccgen.generate import generate_cc_equations
+
+        eqs = generate_cc_equations("ccsd")
+        base = spin_adapt_equations(eqs)
+        with_empty = spin_adapt_equations(eqs, templates={})
+        with_none = spin_adapt_equations(eqs, templates=None)
+        self.assertEqual(list(base), list(with_empty))
+        self.assertEqual(list(base), list(with_none))
+        for key in base:
+            self.assertEqual(len(base[key]), len(with_empty[key]))
+            self.assertEqual([str(t) for t in base[key]],
+                             [str(t) for t in with_empty[key]])
+
+
+class SpecAdaptationTests(unittest.TestCase):
+    """V1.1a: a dressed intermediate's definition terms adapt to spatial form.
+
+    Scope is the three REFERENCED operators (Finding A). V1.1a's only claim is that
+    the terms adapt at the expected counts -- re-deriving indices/sig is V1.1b,
+    block-keying the name V1.1c, recounting usage V1.1d, and the faithfulness gate
+    V1.1e.
+    """
+
+    def test_referenced_operators_adapt_at_expected_counts(self):
+        for name in REFERENCED:
+            with self.subTest(operator=name):
+                adapted = adapt_intermediate_spec(_spec(name))
+                self.assertEqual(len(adapted.definition_terms),
+                                 ADAPTED_TERM_COUNTS[name])
+
+    def test_adaptation_never_empties_a_referenced_operator(self):
+        """The V1.0 guard makes a silent vanish impossible, but assert the outcome
+        directly too -- an empty builder compiles and computes zero."""
+        for name in REFERENCED:
+            with self.subTest(operator=name):
+                self.assertGreater(
+                    len(adapt_intermediate_spec(_spec(name)).definition_terms), 0)
+
+    def test_metadata_is_carried_through_unchanged(self):
+        """V1.1a (relayout=False) changes ONLY definition_terms. If a later step
+        starts moving name/usage, it should do so deliberately, not as a side effect
+        of V1.1a."""
+        for name in REFERENCED:
+            with self.subTest(operator=name):
+                spec = _spec(name)
+                adapted = adapt_intermediate_spec(spec, relayout=False)
+                self.assertEqual(adapted.name, spec.name)
+                self.assertEqual(adapted.indices, spec.indices)
+                self.assertEqual(adapted.index_space_sig, spec.index_space_sig)
+                self.assertEqual(adapted.usage_count, spec.usage_count)
+                self.assertEqual(adapted.usage_targets, spec.usage_targets)
+                self.assertNotEqual(adapted.definition_terms,
+                                    spec.definition_terms)
+
+    def test_adapted_terms_are_spatial(self):
+        """The adapted terms must be plain AlgebraTerms (bridged out of SpinTerm),
+        which is what the lowering/emit layers consume."""
+        from ccgen.project import AlgebraTerm
+
+        for name in REFERENCED:
+            with self.subTest(operator=name):
+                for term in adapt_intermediate_spec(_spec(name)).definition_terms:
+                    self.assertIsInstance(term, AlgebraTerm)
+
+    def test_all_six_adapt_even_though_three_are_unreferenced(self):
+        """Fme/Fae/Fmi are out of scope but must not be BROKEN -- a later method may
+        reference them, and V1.1a should apply unchanged when it does."""
+        for spec in _specs():
+            with self.subTest(operator=spec.name):
+                self.assertGreater(
+                    len(adapt_intermediate_spec(spec).definition_terms), 0)
+
+    def test_adapter_is_injectable(self):
+        """The `adapter` parameter is what makes V5 (UCC) a substitution rather
+        than a second code path, so pin that it is actually used."""
+        calls = []
+
+        def fake(equations, templates=None):
+            calls.append((sorted(equations), sorted(templates or {})))
+            return {k: list(v) for k, v in equations.items()}
+
+        spec = _spec("Wmnij")
+        out = adapt_intermediate_spec(spec, adapter=fake)
+        self.assertEqual(calls, [(["Wmnij"], ["Wmnij"])])
+        self.assertEqual(out.definition_terms, spec.definition_terms)
+
+    def test_adapter_returning_a_split_manifold_is_an_error(self):
+        """A dressed intermediate has exactly one target. If an adapter splits it
+        into sectors (the multi-Sz residual path), that is a bug, not a result."""
+        def splitter(equations, templates=None):
+            return {f"{k}_aaabaaab": list(v) for k, v in equations.items()}
+
+        with self.assertRaises(ValueError) as ctx:
+            adapt_intermediate_spec(_spec("Wmnij"), adapter=splitter)
+        self.assertIn("Wmnij", str(ctx.exception))
+
+
+class SpecRelayoutTests(unittest.TestCase):
+    """V1.1b: the adapted spec's declared layout must be what the EMITTER builds.
+
+    `_emit_intermediate_builder` shapes `build_<op>`'s result from
+    `lower_term_restricted_closed_shell(definition_terms[0]).canonical_free_indices`,
+    not from `spec.indices`. Asserting equality against that exact expression is the
+    check whose absence let the declared order drift.
+    """
+
+    def _builder_layout(self, spec):
+        """Recompute what the emitter will do, from the emitter's own source of
+        truth -- deliberately not routed through emitted_intermediate_layout, so
+        this gate would catch that helper drifting."""
+        from ccgen.lowering.restricted_closed_shell import (
+            lower_term_restricted_closed_shell,
+        )
+
+        lowered = lower_term_restricted_closed_shell(
+            spec.definition_terms[0], "reference")
+        return tuple(lowered.canonical_free_indices)
+
+    def test_declared_indices_equal_builder_indices(self):
+        for name in REFERENCED:
+            with self.subTest(operator=name):
+                adapted = adapt_intermediate_spec(_spec(name))
+                self.assertEqual(adapted.indices, self._builder_layout(adapted))
+
+    def test_sig_matches_declared_indices(self):
+        for name in REFERENCED:
+            with self.subTest(operator=name):
+                adapted = adapt_intermediate_spec(_spec(name))
+                expected = "".join(
+                    "o" if i.space == "occ" else "v" for i in adapted.indices)
+                self.assertEqual(adapted.index_space_sig, expected)
+
+    def test_relayout_fixes_the_three_mismatched_operators(self):
+        """The measured mismatch set is Fmi/Wmnij/Wmbej -- NOT the mixed-space
+        operators (Fme, `ov`, agrees). Pin both halves: these three are corrected by
+        relayout, and the set is what it is for the reason recorded (the adapter's
+        relabeling, not space homogeneity)."""
+        mismatched = set()
+        for spec in _specs():
+            raw = adapt_intermediate_spec(spec, relayout=False)
+            if raw.indices != self._builder_layout(raw):
+                mismatched.add(spec.name)
+        self.assertEqual(mismatched, {"Fmi", "Wmnij", "Wmbej"})
+
+        # ...and relayout makes every one of them agree
+        for name in sorted(mismatched):
+            with self.subTest(operator=name):
+                fixed = adapt_intermediate_spec(_spec(name))
+                self.assertEqual(fixed.indices, self._builder_layout(fixed))
+
+    def test_wmbej_signature_is_corrected_not_just_permuted(self):
+        """Wmbej is the case where the declared SIG is wrong, not merely reordered:
+        `ovvo` declared vs `oovv` emitted. So relayout corrects which spaces sit
+        where, which is what a downstream consumer of index_space_sig would get
+        wrong."""
+        spec = _spec("Wmbej")
+        self.assertEqual(spec.index_space_sig, "ovvo")
+        self.assertEqual(adapt_intermediate_spec(spec).index_space_sig, "oovv")
+
+    def test_relayout_preserves_rank_and_index_identity(self):
+        """Relayout permutes slots; it must never add, drop, or substitute an
+        index."""
+        for name in REFERENCED:
+            with self.subTest(operator=name):
+                spec = _spec(name)
+                adapted = adapt_intermediate_spec(spec)
+                self.assertEqual(adapted.rank, spec.rank)
+                self.assertEqual({i.name for i in adapted.indices},
+                                 {i.name for i in spec.indices})
+                self.assertEqual(len({i.name for i in adapted.indices}),
+                                 len(adapted.indices), "duplicate slot")
+
+    def test_rank_change_is_rejected(self):
+        """An adapter that alters the external slot count is a bug; relayout must
+        not silently accept the new rank."""
+        def rank_bender(equations, templates=None):
+            from dataclasses import replace
+
+            from ccgen.indices import make_occ
+            return {
+                k: [replace(t, free_indices=t.free_indices + (make_occ("zz"),))
+                    for t in terms]
+                for k, terms in equations.items()
+            }
+
+        with self.assertRaises(ValueError) as ctx:
+            adapt_intermediate_spec(_spec("Wmnij"), adapter=rank_bender)
+        self.assertIn("rank", str(ctx.exception))
+
+
+class BlockKeyedIdentityTests(unittest.TestCase):
+    """V1.1c: distinct spin blocks of one operator must be distinct specs.
+
+    `IntermediateSpec` hashes/compares on (name, indices, index_space_sig). Under
+    RCC each operator adapts to a single spec so nothing collides; under UCC one
+    `Wmnij` becomes several block-variants that WOULD collide into one.
+    """
+
+    def test_reference_block_keeps_the_bare_name(self):
+        self.assertEqual(block_keyed_intermediate_name("Wmnij"), "Wmnij")
+        self.assertEqual(block_keyed_intermediate_name("Wmnij", None), "Wmnij")
+
+    def test_non_reference_block_is_tagged(self):
+        self.assertEqual(
+            block_keyed_intermediate_name("Wmnij", "abab"), "Wmnij_abab")
+
+    def test_naming_matches_the_amplitude_sector_convention(self):
+        """Same f"{name}_{tag}" shape the bridge uses for t4_aaabaaab (R3.1.3c) and
+        U1.1 will use for t2_aaaa -- one mechanism, not three."""
+        self.assertEqual(block_keyed_intermediate_name("t4", "aaabaaab"),
+                         "t4_aaabaaab")
+
+    def test_rcc_default_is_byte_identical_to_v11b(self):
+        """V1.1c must not change the RCC path: block=None reproduces V1.1b exactly."""
+        for name in REFERENCED:
+            with self.subTest(operator=name):
+                spec = _spec(name)
+                self.assertEqual(adapt_intermediate_spec(spec),
+                                 adapt_intermediate_spec(spec, block=None))
+                self.assertEqual(adapt_intermediate_spec(spec).name, name)
+
+    def test_distinct_blocks_do_not_collide(self):
+        """The actual point: two blocks of one operator must be unequal AND hash
+        differently, so a dict/set of specs keeps both."""
+        spec = _spec("Wmnij")
+        a = adapt_intermediate_spec(spec, block="abab")
+        b = adapt_intermediate_spec(spec, block="aabb")
+        self.assertNotEqual(a, b)
+        self.assertNotEqual(hash(a), hash(b))
+        self.assertEqual(len({a, b}), 2)
+
+    def test_block_variant_is_distinct_from_the_reference(self):
+        spec = _spec("Wmbej")
+        ref = adapt_intermediate_spec(spec)
+        tagged = adapt_intermediate_spec(spec, block="abab")
+        self.assertNotEqual(ref, tagged)
+        self.assertEqual(len({ref, tagged}), 2)
+
+    def test_tagging_changes_only_the_name(self):
+        """A tag routes storage; it must not perturb the adapted algebra or layout."""
+        spec = _spec("Wmbej")
+        ref = adapt_intermediate_spec(spec)
+        tagged = adapt_intermediate_spec(spec, block="abab")
+        self.assertEqual(tagged.name, "Wmbej_abab")
+        self.assertEqual(tagged.indices, ref.indices)
+        self.assertEqual(tagged.index_space_sig, ref.index_space_sig)
+        self.assertEqual(tagged.definition_terms, ref.definition_terms)
+
+    def test_tagging_applies_without_relayout_too(self):
+        """The two flags are independent; V1.1c should not be entangled with V1.1b."""
+        spec = _spec("Wmnij")
+        out = adapt_intermediate_spec(spec, relayout=False, block="abab")
+        self.assertEqual(out.name, "Wmnij_abab")
+        self.assertEqual(out.indices, spec.indices)
+
+
+class UsageRecountTests(unittest.TestCase):
+    """V1.1d: usage counts must describe the ADAPTED residual, not the GCC one."""
+
+    @classmethod
+    def setUpClass(cls):
+        from ccgen.generate import _dress_operator_equations, generate_cc_equations
+
+        eqs = generate_cc_equations("ccsd", engine="diagram", canonical_fock=True)
+        cls.dressed, cls.specs = _dress_operator_equations(eqs)
+        cls.adapted = spin_adapt_equations(cls.dressed)
+
+    def test_wmbej_count_is_recounted(self):
+        """The measured drift: adaptation splits Wmbej's usage sites across spin
+        cases, 5 -> 10, which is the main reason the recount is not a no-op.
+
+        `tau` also moves, for an unrelated reason: `_dress_operator_equations` counts
+        DEFINITION-site uses (`Wmnij`/`Wabef` both read `tau`) so a definition-only
+        pseudo-amplitude is not dropped as an orphan, giving 3. `recount_intermediate_usage`
+        counts against the adapted RESIDUAL only, where `tau` appears once. Both counts are
+        correct for what they measure; only `Wmbej`'s change is caused by adaptation.
+        """
+        before = {s.name: s.usage_count for s in self.specs}
+        after = {s.name: s.usage_count
+                 for s in recount_intermediate_usage(self.specs, self.adapted)}
+        self.assertEqual(before["Wmbej"], 5)
+        self.assertEqual(after["Wmbej"], 10)
+        self.assertEqual(before["tau"], 3)      # includes Wmnij + Wabef definition uses
+        self.assertEqual(after["tau"], 1)       # residual-only
+        for name in ("tau_c", "Wmnij", "Wabef"):
+            self.assertEqual(after[name], before[name], name)
+
+    def test_every_spec_is_referenced(self):
+        for spec in recount_intermediate_usage(self.specs, self.adapted):
+            with self.subTest(operator=spec.name):
+                self.assertGreater(spec.usage_count, 0)
+                self.assertTrue(spec.usage_targets)
+
+    def test_targets_are_real_manifolds(self):
+        for spec in recount_intermediate_usage(self.specs, self.adapted):
+            with self.subTest(operator=spec.name):
+                for target in spec.usage_targets:
+                    self.assertIn(target, self.adapted)
+
+    def test_recount_changes_only_usage_fields(self):
+        for old, new in zip(self.specs,
+                            recount_intermediate_usage(self.specs, self.adapted)):
+            with self.subTest(operator=old.name):
+                self.assertEqual(new.name, old.name)
+                self.assertEqual(new.indices, old.indices)
+                self.assertEqual(new.index_space_sig, old.index_space_sig)
+                self.assertEqual(new.definition_terms, old.definition_terms)
+
+    def test_dangling_reference_is_an_error(self):
+        """A one-sided rename — the failure mode V1.1c's tagging could introduce —
+        leaves the residual referencing a name no spec provides."""
+        with self.assertRaises(ValueError) as ctx:
+            recount_intermediate_usage(
+                [s for s in self.specs if s.name != "Wmbej"], self.adapted)
+        self.assertIn("Wmbej", str(ctx.exception))
+
+    def test_orphan_spec_is_an_error(self):
+        """The other direction: a spec nothing references would emit an unused
+        build_<op>, or its name drifted away from the usage sites."""
+        from dataclasses import replace
+
+        orphan = replace(self.specs[0], name="Wnope")
+        with self.assertRaises(ValueError) as ctx:
+            recount_intermediate_usage(list(self.specs) + [orphan], self.adapted)
+        self.assertIn("Wnope", str(ctx.exception))
+
+    def test_amplitudes_are_not_mistaken_for_intermediates(self):
+        """t1/t2 and sector-tagged t4_aaabaaab are runtime state, so they must not
+        register as dangling intermediate references."""
+        specs = recount_intermediate_usage(self.specs, self.adapted)
+        self.assertNotIn("t1", {s.name for s in specs})
+        # closure held despite t1/t2 appearing all over the adapted residual
+        self.assertTrue(specs)
+
+
+if __name__ == "__main__":
+    unittest.main()

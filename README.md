@@ -29,13 +29,14 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 - **MO symmetry** — irreducible representation labels assigned to each converged orbital; non-Abelian groups automatically use the largest Abelian subgroup; linear molecules handled separately
 - **Symmetry-adapted orbital (SAO) blocking** — the Fock matrix is block-diagonalized per irrep during SCF (RHF/UHF/ROHF and RKS/UKS), reducing diagonalization cost and giving clean per-orbital irrep labels
 - **Full point-group ERI reduction** — direct-SCF Fock builds exploit the *entire* molecular point group (not just its D2h subgroup) via a petite-list / skeleton-Fock symmetrization scheme: only orbit-representative shell quartets are computed, then the skeleton Fock is projected back to the totally-symmetric component. Available for RHF, UHF, and ROHF in both the Cartesian and real-spherical-harmonic basis, OpenMP-parallel and Schwarz-screened, with the density-independent skeleton persisted across SCF iterations. Validated through d-shells (C2v→C3v→Td) with symmetry-on energies matching symmetry-off
-- **Post-HF** — RMP2 and UMP2 correlation energy corrections; RMP2 natural orbital analysis; analytic RMP2 and UMP2 nuclear gradients; RCCSD for canonical closed-shell RHF references; teaching-oriented determinant-space UCCSD/UCCSDT prototypes for small UHF systems; RCCSDT with automatic backend dispatch across three tiers (determinant-space prototype, tensor production solver, tensor-optimized ccgen-driven backend); CASSCF and RASSCF multireference active-space calculations; full configuration interaction (FCI) over the entire MO space for small RHF references
-- **Coupled cluster** — `RCCSD` is an iterative spin-orbital amplitude solver for canonical RHF references. `RCCSDT` automatically selects between (1) a determinant-space teaching prototype (≤12 spin orbitals and ≤1200 determinants), (2) a tensor production backend (dressed-intermediate CCSD + staged T3 amplitude updates), and (3) a tensor-optimized backend that consumes ccgen-generated warm-start kernels for restricted references. The backend can be forced via the `PLANCK_RCCSDT_BACKEND` environment variable (`determinant`, `tensor`, or `optimized`). `UCCSD` and `UCCSDT` currently use determinant-space prototypes aimed at small teaching examples and validation studies.
-- **ccgen — symbolic coupled-cluster equation generator** — a Python package (`python/ccgen/`) that derives spin-orbital CC residual equations at arbitrary truncation order (CCD through CC6) directly from the normal-ordered Hamiltonian via Baker-Campbell-Hausdorff expansion, Wick contraction, canonicalization, and connectivity filtering. Supports algebraic optimizations (orbital-energy denominator collection, permutation-based term grouping, implicit antisymmetry exploitation), intermediate tensor extraction with layout hints, and four tiers of C++ emission including a Planck-specific tensor emitter that targets `Tensor2D`/`Tensor4D`/`Tensor6D` and the production CC infrastructure in `src/post_hf/cc/`. Used to generate the warm-start kernels consumed by the tensor-optimized RCCSDT backend.
+- **Post-HF** — RMP2 and UMP2 correlation energy corrections; RMP2 natural orbital analysis; analytic RMP2 and UMP2 nuclear gradients; RCCSD for canonical closed-shell RHF references; teaching-oriented determinant-space UCCSD/UCCSDT prototypes for small UHF systems; RCCSDT with automatic backend dispatch across three tiers (determinant-space prototype, tensor production solver, tensor-optimized ccgen-driven backend); RCCSDTQ (`correlation ccsdtq`/`cc4`) via the ccgen-generated arbitrary-order solver; unrestricted generated CC (`ucc2`/`ucc3`/`ucc4`, spin-block-resolved) behind `-DPLANCK_CC_UCC=ON`; CASSCF and RASSCF multireference active-space calculations; full configuration interaction (FCI) over the entire MO space for small RHF/ROHF references; FCIQMC (stochastic FCI by walker sampling) for systems beyond exact diagonalization
+- **Coupled cluster** — `RCCSD` is an iterative spin-orbital amplitude solver for canonical RHF references. `RCCSDT` automatically selects between (1) a determinant-space teaching prototype (≤12 spin orbitals and ≤1200 determinants), (2) a tensor production backend (dressed-intermediate CCSD + staged T3 amplitude updates), and (3) a tensor-optimized backend that consumes ccgen-generated warm-start kernels for restricted references. The backend can be forced via the `PLANCK_RCCSDT_BACKEND` environment variable (`determinant`, `tensor`, or `optimized`). `UCCSD` and `UCCSDT` currently use determinant-space prototypes aimed at small teaching examples and validation studies. **`RCCSDTQ`** (`correlation ccsdtq`, `cc4`, or `ccsdt_gen`) routes through the ccgen-generated arbitrary-order RCC solver (Jacobi + DIIS on `ArbitraryOrderResiduals`), validated against FCI to all ten printed digits on small closed-shell systems. **Unrestricted generated CC** (`ucc2`/`ucc3`/`ucc4`, one residual per stored spin block — `aaaa`/`abab`/`bbbb` — rather than one per rank) is available behind the opt-in `-DPLANCK_CC_UCC=ON` build flag (default off, zero footprint on a default build); `ucc4` matches FCI to all ten digits on an open-shell doublet.
+- **ccgen — symbolic coupled-cluster equation generator** — a Python package (`python/ccgen/`) that derives spin-orbital CC residual equations at arbitrary truncation order (CCD through CC6) directly from the normal-ordered Hamiltonian via Baker-Campbell-Hausdorff expansion, Wick contraction, canonicalization, and connectivity filtering. Supports algebraic optimizations (orbital-energy denominator collection, permutation-based term grouping, implicit antisymmetry exploitation), intermediate tensor extraction with layout hints, a contraction-path factorizer that mechanically derives the dressed-operator set for each rank (see below), and four tiers of C++ emission including a Planck-specific tensor emitter that targets `Tensor2D`/`Tensor4D`/`Tensor6D` and the production CC infrastructure in `src/post_hf/cc/`. Used to generate the warm-start kernels consumed by the tensor-optimized RCCSDT backend.
 - **RMP2 natural orbitals** — natural orbital occupation numbers and coefficients printed after a single-point RMP2 run
 - **CASSCF** — Complete Active Space SCF with full-CI, state-averaged (SA-CASSCF) roots, matrix-free second-order orbital optimization, and a dedicated active-integral-cache transform for the orbital-gradient/response hot path. Runs from either an RHF or an ROHF reference; open-shell (high-spin) systems are supported as long as the unpaired electrons live inside the active space, so the inactive core stays closed-shell and doubly occupied
 - **RASSCF** — Restricted Active Space SCF extending CASSCF with RAS1/RAS2/RAS3 subspace partitioning and configurable hole/electron occupation restrictions; shares the CASSCF reference handling, so it also accepts RHF and ROHF references under the same closed-inactive-core condition
 - **FCI** — Full Configuration Interaction: exact diagonalization of the electronic Hamiltonian in the determinant basis spanned by the *entire* MO space (no active-space truncation), built on the same determinant-string/Slater-Condon/Davidson engine as CASSCF. Works from a converged RHF or ROHF reference (open-shell included) and is single-point only. Because FCI spans the complete determinant space, its total energy is invariant to the choice of reference orbitals. Intended for small systems (the determinant count grows combinatorially); guarded by `ci_max_dim` and the packed-determinant orbital limit
+- **FCIQMC** — stochastic Full CI by imaginary-time walker sampling (`correlation fciqmc`), for determinant spaces too large for exact diagonalization. Shares the same integral transform, determinant strings, and Slater-Condon matrix elements as FCI, so the two cannot disagree about the Hamiltonian being sampled — only about how it is solved. Two independent energy estimators (population-control shift energy and a projected energy against the dominant determinant) with Flyvbjerg-Petersen blocked error bars; population control with a target-tracking shift; optional initiator approximation; fixed-seed reproducibility. Eleven `fciqmc_*` input keywords control the walker population, timestep, shift damping/restoring, equilibration length, initiator threshold, spawn attempts, and RNG seed
 - **Analytic nuclear gradients** — RHF, UHF, RMP2, and UMP2 analytic nuclear gradients
 - **Geometry optimization** — optimizer in Cartesian coordinates or redundant generalized internal coordinates (GIC); optional constraints (fixed bonds, angles, dihedrals, frozen atoms) via `%begin_constraints`
 - **Vibrational frequency analysis** — semi-numerical Hessian from finite differences of analytic gradients; mass-weighted normal mode analysis with translational/rotational projection; frequencies in cm⁻¹ and zero-point energy
@@ -55,13 +56,27 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 
 | Dependency | Version | Source |
 |---|---|---|
-| C++ compiler | C++23 | GCC ≥ 13 or Clang ≥ 17 |
-| CMake | ≥ 3.15 | System package manager |
-| Eigen | 3.4.0 | Fetched automatically |
+| C++ compiler | C++23 (`std::expected`) | GCC ≥ 13 or Clang ≥ 17; AppleClang 21 verified |
+| CMake | ≥ 3.5 | System package manager |
+| Python 3 | ≥ 3.10 | Optional but recommended — see below |
+| Eigen | 3.4.0 | Fetched automatically at configure time |
 | libmsym | latest | Fetched automatically |
-| libxc | latest | Fetched automatically (required for `planck-dft`) |
-| basis-set-exchange | any | `pip install basis-set-exchange` (required for basis set fetching) |
+| libxc | latest | Fetched automatically (`planck-dft` only) |
 | OpenMP | any | Optional; system package manager |
+
+<p align="justify">
+Python 3 is used at build time to run <code>ccgen</code>, which generates the
+coupled-cluster kernels. It needs only the standard library — no NumPy, no
+third-party packages. If CMake cannot find an interpreter the build still
+succeeds and everything except the generated CC kernels is available. The ccgen
+<em>test suite</em> has heavier optional dependencies (NumPy, and PySCF for the
+cross-code validation gates); those are for development, not for building.
+</p>
+
+<p align="justify">
+The first configure clones Eigen and libmsym over the network, so it is not
+offline-capable out of the box. See <em>Offline or air-gapped builds</em> below.
+</p>
 
 ### Installation
 
@@ -79,30 +94,35 @@ cmake -B build .
 ```
 
 <p align="justify">
-To disable OpenMP:
+A successful configure ends with a line reporting what ccgen will emit, for
+example:
 </p>
 
-```bash
-cmake -B build . -DUSE_OPENMP=OFF
 ```
-
-<p align="justify">
-To set a custom install prefix:
-</p>
-
-```bash
-cmake -B build . -DCMAKE_INSTALL_PREFIX=/path/to/prefix
+-- ccgen     : emitting Planck CC kernels up to rank 3 [ccsd;ccsdt] via diagram engine
 ```
 
 ### 3. Build
 
 ```bash
-cmake --build build
+cmake --build build -j4
 ```
 
 <p align="justify">
-The first build fetches and compiles Eigen and libmsym automatically. Subsequent builds are incremental.
+The first build also compiles Eigen, libmsym, and libxc. Subsequent builds are
+incremental. Use a modest job count: the generated coupled-cluster translation
+units are large, and a full-width build can be disruptive on a workstation.
 </p>
+
+<p align="justify">
+A default build produces three executables in <code>build/</code>:
+</p>
+
+| Binary | Purpose |
+|---|---|
+| `hartree-fock` | RHF/UHF/ROHF SCF, MP2, coupled cluster, CASSCF/RASSCF/FCI, gradients, geomopt, frequencies |
+| `planck-dft` | Kohn-Sham DFT (RKS/UKS), TDDFT, DFT gradients and frequencies |
+| `chkdump` | Checkpoint inspector (`BUILD_TOOLS=ON` by default) |
 
 ### 4. Install (optional)
 
@@ -111,14 +131,155 @@ cmake --install build
 ```
 
 <p align="justify">
-This installs the `hartree-fock` executable to `<prefix>/bin/` and the basis set files to `<prefix>/share/basis-sets/`.
+This installs the executables to <code>&lt;prefix&gt;/bin/</code> and the basis
+sets to <code>&lt;prefix&gt;/share/basis-sets/</code>. The default prefix is
+<code>/usr/local</code>; override it at configure time:
 </p>
+
+```bash
+cmake -B build . -DCMAKE_INSTALL_PREFIX=/path/to/prefix
+```
 
 ### 5. Run
 
 ```bash
-./build/hartree-fock molecule.hfinp   # HF / post-HF calculation
-./build/planck-dft   molecule.hfinp   # Kohn-Sham DFT calculation
+export BASIS_PATH=$PWD/basis-sets          # see the note below
+
+./build/hartree-fock molecule.hfinp        # HF / post-HF calculation
+./build/planck-dft   molecule.hfinp        # Kohn-Sham DFT calculation
+./build/chkdump      molecule.hfchk        # inspect a checkpoint
+```
+
+<p align="justify">
+<strong>Set <code>BASIS_PATH</code> when running from the build tree.</strong>
+The compiled-in default basis directory is derived from the install prefix, so
+an uninstalled binary looks under the prefix and reports:
+</p>
+
+```
+[ERR] Basis Parsing Failed : Cannot open basis file: /usr/local/install/share/basis-sets/sto-3g
+```
+
+<p align="justify">
+Setting <code>BASIS_PATH</code> to the in-tree <code>basis-sets/</code>
+directory overrides it. (Note the stray <code>install/</code> segment in that
+path: the compiled-in default and the <code>install()</code> destination do not
+currently agree, so <code>BASIS_PATH</code> is also the reliable route after
+<code>cmake --install</code>.)
+</p>
+
+### Build options
+
+<p align="justify">
+All options are set at configure time, e.g.
+<code>cmake -B build . -DPLANCK_CC_MAXORDER=4</code>. The defaults are the
+supported configuration; the coupled-cluster options mainly trade generation and
+compile time for higher excitation ranks.
+</p>
+
+| Option | Default | Effect |
+|---|---|---|
+| `USE_OPENMP` | `ON` | OpenMP parallelism. Falls back cleanly if the compiler has no OpenMP — check the configure log for `Could NOT find OpenMP`, since a silent fallback leaves every pragma inert. |
+| `USE_CUDA` | `OFF` | CUDA GPU acceleration (requires the CUDA toolkit). |
+| `BUILD_TOOLS` | `ON` | Build `chkdump`. |
+| `BUILD_MPI` | `OFF` | Build the unified `planck-mpi` front end. |
+| `CMAKE_BUILD_TYPE` | *(empty)* | **Set this explicitly to `Release` for any timing or production run.** An empty value drops `-DNDEBUG`, which re-enables the CC tensor bounds assertions and makes benchmarks meaningless. |
+
+#### Coupled-cluster kernel generation (ccgen)
+
+| Option | Default | Effect |
+|---|---|---|
+| `PLANCK_CC_MAXORDER` | `3` | Highest excitation rank to emit, 2–6 (2 = CCSD, 3 = CCSDT, 4 = CCSDTQ). Higher ranks cost substantial generation and compile time. |
+| `PLANCK_CC_ENGINE` | `diagram` | Equation generator: `diagram` (default, ~200× faster at high rank) or `wick` (textbook). Residual-equal; gated by a wick-vs-diagram equality test. |
+| `PLANCK_CC_SPIN_ADAPT` | `ON` | Emit spatial (spin-adapted) RCC kernels. **Leave this on.** With it off the generated correlation energy is ~4× wrong — the option exists only to reproduce that historical emit. |
+| `PLANCK_CC_DRESS_OPERATORS` | `OFF` | Emit dressed CC kernels (W/τ intermediates) instead of the flat residual. Measured 3.1–3.6× faster solves; costs ~9 s of generation at rank 3, ~62 s at rank 4. |
+| `PLANCK_CC_DRESSING` | `derived` | Which dressed-operator route, when dressing is on. `derived` is the validated one; `recognized` is retired and produces wrong kernels. Ignored unless `PLANCK_CC_DRESS_OPERATORS=ON`. |
+| `PLANCK_CC_ARBITRARY_LOWER_RANKS` | `OFF` | Also emit rank < 4 methods in arbitrary-order form, for cross-rank amplitude restart and the generated rank-3 route. |
+| `PLANCK_CC_UCC` | `OFF` | Also emit unrestricted (spin-blocked) UCC kernels. Roughly triples generated-kernel compile time. |
+| `PLANCK_CC_INCLUDE_INTERMEDIATES` | `OFF` | Emit ccgen CSE intermediate builders. Mutually exclusive with dressing. |
+| `PLANCK_CC_INTERMEDIATE_THRESHOLD` | `5` | Minimum usage count for an extracted intermediate. |
+
+<p align="justify">
+Example — the fastest validated generated coupled-cluster configuration:
+</p>
+
+```bash
+cmake -B build . \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DPLANCK_CC_DRESS_OPERATORS=ON \
+  -DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON
+cmake --build build -j4
+```
+
+##### Environment variables read at code-generation time
+
+<p align="justify">
+Two ccgen knobs are environment variables read when the kernels are generated,
+not CMake options. They must therefore be set on the <em>build</em> command, and
+changing one requires regenerating (touch a ccgen source, or delete
+<code>build/generated/cc/</code>).
+</p>
+
+| Variable | Default | Effect |
+|---|---|---|
+| `CCGEN_OMP_COLLAPSE` | unset (`0`) | Emit `#pragma omp parallel for collapse(N) schedule(static)` on each residual loop nest. **`3` is the measured value: 3.22× at 4 threads**, with energies bitwise identical across thread counts. `2` also works but is ~4 % slower. `0` emits no pragma. |
+| `CCGEN_FUSE_LOOPS` | unset (`0`) | Fuse the N largest loop-signature groups into one nest each. Measured ~0 % at every size tested; kept as a compile-time and code-size lever, not a speed one. |
+
+```bash
+CCGEN_OMP_COLLAPSE=3 cmake --build build -j4     # threaded CC kernels
+```
+
+<p align="justify">
+Threading the CC kernels needs OpenMP in the build (<code>USE_OPENMP=ON</code>,
+the default — but check the configure log actually found it). It is off by
+default because it is new; the generated kernels are otherwise byte-identical
+without it. Full measurements and the determinism verification are in
+<code>docs/CCGEN_CC_OPENMP.md</code>.
+</p>
+
+### Offline or air-gapped builds
+
+<p align="justify">
+The first configure clones Eigen from GitLab and libmsym from GitHub. If the
+network is unavailable — or the remote is temporarily refusing connections,
+which does happen — the configure fails with
+<code>Failed to clone repository</code>. Point CMake at a local Eigen checkout
+instead:
+</p>
+
+```bash
+cmake -B build . -DFETCHCONTENT_SOURCE_DIR_EIGEN=/path/to/eigen
+```
+
+<p align="justify">
+An Eigen tree from a previous build works, e.g.
+<code>-DFETCHCONTENT_SOURCE_DIR_EIGEN=$PWD/other-build/_deps/eigen-src</code>.
+</p>
+
+### Running the tests
+
+<p align="justify">
+The regression runner does not set <code>BASIS_PATH</code> itself, so export it
+first or every case fails at basis-set loading:
+</p>
+
+```bash
+export BASIS_PATH=$PWD/basis-sets
+
+python3 tests/run_regressions.py --build-dir build --suite smoke
+python3 tests/run_regressions.py --build-dir build --suite extended
+python3 tests/run_regressions.py --list                     # enumerate cases
+python3 tests/run_regressions.py --build-dir build --suite extended --case <id>
+```
+
+<p align="justify">
+Cases that need a non-default build option are skipped rather than failed, and
+the skip names the option. The ccgen Python suite is separate, and does not need
+a build:
+</p>
+
+```bash
+cd python && python3 -m pytest ccgen/tests/ -q
 ```
 
 ### Input File Format
@@ -187,7 +348,7 @@ SCF procedure and convergence settings.
 
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
-| `scf_type` | enum | `rhf`/`rks`, `rohf`, `uhf`/`uks` | `rhf` | Wavefunction type. `rks`/`uks` are aliases for `rhf`/`uhf` when using `planck-dft`. `rohf`: restricted open-shell HF (Roothaan effective Fock with SAO blocking and full point-group ERI reduction). FCI, CASSCF, and RASSCF run from an ROHF reference (the MCSCF methods require the unpaired electrons to sit inside the active space so the inactive core stays closed-shell); other post-HF methods, analytic gradients, stability analysis, and PCM are not yet supported for ROHF. |
+| `scf_type` | enum | `rhf`/`rks`, `rohf`, `uhf`/`uks` | `rhf` | Wavefunction type. `rks`/`uks` are aliases for `rhf`/`uhf` when using `planck-dft`. `rohf`: restricted open-shell HF (Roothaan effective Fock with SAO blocking and full point-group ERI reduction). Analytic nuclear gradients, geometry optimization, and vibrational frequencies are supported for ROHF in both the Cartesian and spherical basis. FCI, CASSCF, and RASSCF run from an ROHF reference (the MCSCF methods require the unpaired electrons to sit inside the active space so the inactive core stays closed-shell). ROHF-MP2/coupled-cluster, stability analysis, and PCM are not yet supported for ROHF. |
 | `engine` | enum | `os` / `obara-saika`, `hgp` / `head-gordon-pople`, `rys` / `rys-quadrature`, `auto` | `os` | Two-electron integral engine. `os`: Obara-Saika algorithm. `hgp`: Head-Gordon-Pople (HRR factored outside the primitive contraction loops; best per-quartet cost for routine contracted bases through 6-31G(d,p)). `rys`: Rys quadrature (preferred at high angular momentum). `auto`: selects the engine per shell quartet based on angular momentum. |
 | `correlation` | enum | `rmp2`, `ump2`, `ccsd`, `uccsd`, `ccsdt`, `uccsdt`, `ccsdtq`, `casscf`, `rasscf`, `fci` | none | Post-HF method. `rmp2`/`ump2`: Møller-Plesset second-order correction; both support `calculation gradient` for analytic MP2 nuclear gradients (`rmp2` with RHF, `ump2` with UHF). `ccsd`: restricted coupled cluster with singles and doubles for canonical RHF references. `uccsd`: unrestricted coupled cluster with singles and doubles for canonical UHF references; currently implemented as a determinant-space teaching prototype for small systems. `ccsdt`: restricted coupled cluster with singles, doubles, and triples; automatically dispatches to a determinant-space teaching prototype for tiny RHF systems (≤12 spin orbitals and ≤1200 determinants) or to a tensor production backend (dressed-intermediate CCSD followed by staged T3 amplitude updates) for larger systems. A third tensor-optimized backend driven by ccgen-generated warm-start kernels can be forced via the `PLANCK_RCCSDT_BACKEND=optimized` environment variable. `uccsdt`: unrestricted coupled cluster with singles, doubles, and triples for canonical UHF references; currently implemented as a determinant-space teaching prototype for small systems. `ccsdtq` (alias `cc4`): restricted coupled cluster through quadruples for canonical RHF references, driven by the arbitrary-order solver consuming ccgen-generated residuals; single-point energies only. `casscf`: Complete Active Space SCF (requires `nactele`, `nactorb`); runs from an RHF or ROHF reference, with high-spin open-shell systems supported when the unpaired electrons are in the active space (closed, doubly-occupied inactive core). `rasscf`: Restricted Active Space SCF (requires `nactele`, `nactorb`, `nras1`, `nras2`, `nras3`); same RHF/ROHF reference handling as `casscf`. `fci`: Full Configuration Interaction over the whole MO space for a converged RHF or ROHF reference (open-shell supported); single-point only. The FCI total energy is invariant to the reference orbitals. Honors `nroots` (lowest roots to report), `ci_max_dim` (determinant-count cap), and `target_irrep`. No active-space keywords are needed. |
 | `nactele` | int | ≥ 1 | — | Number of active electrons for CASSCF/RASSCF |
@@ -1034,7 +1195,116 @@ The two active π-type orbitals are exactly degenerate at the 90° twisted geome
 The two orbitals are degenerate at the 90° twisted geometry and together span the active space of the CAS(2,2) wavefunction. Visualized from a CASSCF/STO-3G checkpoint using `chkdump --casscf-active` and rendered in VMD.
 </p>
 
-### Coupled cluster — RCCSDT on a small closed-shell system
+### Full Configuration Interaction — water, STO-3G
+
+<p align="justify">
+Set <code>correlation fci</code> on a converged RHF or ROHF reference. FCI diagonalizes the electronic Hamiltonian exactly within the <em>entire</em> MO space — no active-space truncation — using the same determinant-string / Slater-Condon / Davidson engine CASSCF uses internally. It is single-point only, and the determinant count grows combinatorially, so it is intended for small systems; `ci_max_dim` and the packed-determinant orbital limit (31 spatial orbitals) guard against attempting a run that would not fit in memory.
+</p>
+
+```
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation fci
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+0   1
+O    0.000000    0.000000    0.117176
+H    0.000000    0.757005   -0.468704
+H    0.000000   -0.757005   -0.468704
+%end_coords
+```
+
+<p align="justify">
+Expected energy: `E(FCI) = -75.0124130264 Eh` for H₂O/STO-3G — the exact ground-state energy in this basis, lower than the RHF energy by construction.
+</p>
+
+### FCIQMC — stochastic FCI on a system beyond exact diagonalization
+
+<p align="justify">
+Set <code>correlation fciqmc</code> to sample the FCI wavefunction with a population of signed walkers instead of diagonalizing the Hamiltonian directly. The propagator, excitation generator, and Slater-Condon matrix elements are shared with the deterministic FCI path, so a comparison between the two is a test of sampling, not of two different physics engines. Two independent estimators are printed at the end of the run — a population-control **shift energy** and a **projected energy** against the dominant determinant — each with a blocked (Flyvbjerg-Petersen) standard error, because successive Monte Carlo iterations are correlated and a naive `σ/√n` understates the true uncertainty.
+</p>
+
+```
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation fciqmc
+    ci_max_dim  200000
+
+    fciqmc_walkers         10000
+    fciqmc_timestep        0.001
+    fciqmc_shift_damping   0.3
+    fciqmc_shift_restoring 0.05
+    fciqmc_shift_interval  5
+    fciqmc_granularity     1.0
+    fciqmc_initiator       0.0
+    fciqmc_equilibration   20000
+    fciqmc_steps           30000
+    fciqmc_spawn_attempts  1
+    fciqmc_seed            20250901
+
+    use_diis    .true.
+    diis_dim    8
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+2
+0   1
+N     0.000000     0.000000     0.000000
+N     0.000000     0.000000     1.098000
+%end_coords
+```
+
+<p align="justify">
+On N₂/STO-3G (10 orbitals, 7α/7β, 14 400 determinants — large enough that a 10 000-walker population is a genuine statistical sample rather than coverage of the whole space), both estimators agree with the exact FCI energy `-107.6529998854 Eh` to within half a standard deviation. <code>fciqmc_seed</code> is user-visible on purpose: a run with the same seed reproduces its trajectory bitwise, which is the contract the fixed-seed regression gate checks.
+</p>
+
+| Keyword | Meaning |
+|---|---|
+| `fciqmc_walkers` | target total walker population held by shift feedback |
+| `fciqmc_timestep` | imaginary-time step Δτ |
+| `fciqmc_shift_damping` / `fciqmc_shift_restoring` | population-control feedback gains |
+| `fciqmc_shift_interval` | steps between shift updates |
+| `fciqmc_granularity` | stochastic-rounding quantum for spawned weights (0 disables discretization) |
+| `fciqmc_initiator` | initiator weight threshold (0 disables the initiator approximation) |
+| `fciqmc_equilibration` / `fciqmc_steps` | steps discarded before sampling / steps sampled |
+| `fciqmc_spawn_attempts` | spawn draws per walker per step |
+| `fciqmc_seed` | RNG seed; fixed-seed runs are bitwise reproducible |
+
+### Coupled cluster — RCCSDT, RCCSDTQ, and UCC on small systems
 
 <p align="justify">
 Enable restricted CCSDT by setting <code>correlation ccsdt</code> on a converged RHF reference. The solver automatically picks the determinant-space prototype for tiny systems (≤12 spin orbitals and ≤1200 determinants) and the tensor production backend for larger ones. After convergence the CCSD reference correlation energy, the CCSDT correlation increment, and the total CCSDT energy are printed together.
@@ -1085,6 +1355,34 @@ The automatic dispatch can be overridden at runtime by exporting <code>PLANCK_RC
 
 ```bash
 PLANCK_RCCSDT_BACKEND=optimized ./build/hartree-fock mol.hfinp
+```
+
+#### RCCSDTQ and arbitrary-order UCC
+
+<p align="justify">
+Beyond RCCSDT, <code>correlation ccsdtq</code> (aliases <code>cc4</code>, <code>ccsdt_gen</code>) routes through the ccgen-generated arbitrary-order RCC solver — the same generator, bridge, and runtime machinery, extended to rank 4 rather than a separately hand-written solver. On the same reference this reproduces exact FCI to all ten printed digits on small closed-shell systems.
+</p>
+
+<p align="justify">
+Unrestricted generated CC (<code>ucc2</code>/<code>ucc3</code>/<code>ucc4</code>, one residual per stored spin block — <code>aaaa</code>/<code>abab</code>/<code>bbbb</code> — rather than one per rank) is available behind the opt-in <code>-DPLANCK_CC_UCC=ON</code> build flag; the default build carries no UCC translation unit. Validated on B/STO-3G (open-shell doublet, 3α/2β) against three independent references:
+</p>
+
+```
+ucc2  -24.1892581442   == hand-written UCCSD, exactly
+ucc3  -24.1892636163   T3 recovers 80.1% of the UCCSD→FCI gap
+ucc4  -24.1892649766   == in-tree FCI, all ten digits
+```
+
+<p align="justify">
+<code>ucc4 == FCI</code> on an <em>open-shell</em> system is the strongest available UCC gate: CCSDTQ is exact there because T5 is unreachable in a basis with only 2 alpha virtuals for 3 alpha electrons, not because the electron count is small.
+</p>
+
+```
+%begin_scf
+    scf_type    uhf
+    correlation ucc4
+    ...
+%end_scf
 ```
 
 ### Symbolic CC equation generation — `ccgen`
@@ -1139,6 +1437,24 @@ print(print_equations("ccsd"))
 print(print_cpp_planck("ccsdt", include_intermediates=True))
 ```
 
+#### Contraction-path factorization — deriving the dressed operators
+
+<p align="justify">
+<code>ccgen.optimization.factorize</code> re-associates each residual contraction
+into the binary tree that minimizes the FLOP exponent, and in the same step
+<em>derives</em> the dressed operators as the reused sub-contractions those trees
+expose — no hand-seeding per rank. Over the diagram-generated, canonical-Fock
+residuals it (1) lowers the peak exponent on every multi-factor <code>Tₙ·V</code>
+term (e.g. <code>t2·t3·v</code> from <code>o⁵v⁵</code> to <code>o⁴v³</code>,
+<code>t2·t4·v</code> from <code>o⁶v⁶</code> to <code>o⁵v⁴</code>), (2) classifies
+each intermediate as a reuse of a CCSD operator or a newly-derived one, and
+(3) ranks operators by <em>savings</em> = (uses−1)·build-flops rather than raw
+frequency. The result is a rank-locality theorem: each excitation rank reuses
+every lower-rank operator verbatim and adds only its own <code>V·Tₙ</code>
+family. See <code>docs/CCGEN_HIGHER_OPERATOR_REUSE.md</code> for the theorem,
+proofs, and measured tables.
+</p>
+
 ### Cross-basis restart — STO-3G → 6-31G
 
 <p align="justify">
@@ -1183,7 +1499,7 @@ The program prints a structured log to standard output. Key sections:
 - **Quadrupole Moment** — printed automatically after the dipole block; includes electronic, nuclear, and total components of the traceless Cartesian tensor (`XX`, `XY`, `XZ`, `YY`, `YZ`, `ZZ`) in atomic units
 - **Mulliken Population Analysis** — printed when `print_populations true` or verbosity is `verbose`/`debug`; shows AO gross populations, net atomic charges, and spin populations (UHF/ROHF)
 - **RMP2 Natural Orbitals** — occupation numbers and natural orbital coefficients printed after single-point RMP2
-- **Nuclear Gradient** — printed when `calculation gradient` or `calculation geomopt`; one row per atom showing ∂E/∂x, ∂E/∂y, ∂E/∂z in Ha/Bohr, followed by max and RMS norms. Supported analytic gradients include RHF, UHF, RMP2, and UMP2.
+- **Nuclear Gradient** — printed when `calculation gradient` or `calculation geomopt`; one row per atom showing ∂E/∂x, ∂E/∂y, ∂E/∂z in Ha/Bohr, followed by max and RMS norms. Supported analytic gradients include RHF, UHF, ROHF, RMP2, and UMP2.
 - **IC System** — when `opt_coords internal`, logs the count of stretches, bends, and torsions in the redundant GIC set
 - **Opt Step N** — per-step log line: energy, max Cartesian gradient, and RMS IC gradient (IC mode) or RMS Cartesian gradient (Cartesian mode)
 - **Optimized Geometry** — final Cartesian coordinates in Bohr after convergence

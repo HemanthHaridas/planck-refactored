@@ -1,6 +1,7 @@
 #include "post_hf/cc/solver_arbitrary.h"
 
 #include <cmath>
+#include <format>
 
 namespace HartreeFock::Correlation::CC
 {
@@ -103,6 +104,12 @@ namespace HartreeFock::Correlation::CC
         std::size_t total_size = 0;
         for (const auto &tensor : amps.by_rank)
             total_size += tensor.size();
+        // Gap B4: the higher Sz sectors are packed AFTER the per-rank reference
+        // blocks, in their stored order, so DIIS mixes every amplitude block
+        // (reference + sectors) as one vector -- the same coherent extrapolation
+        // the Python V3 reference relies on.
+        for (const auto &sector : amps.sectors)
+            total_size += sector.second.size();
 
         // DIIS operates on flat vectors rather than ragged tensor collections.
         // We therefore serialize the rank-1, rank-2, ... amplitude blocks into
@@ -111,6 +118,9 @@ namespace HartreeFock::Correlation::CC
         Eigen::Index offset = 0;
         for (const auto &tensor : amps.by_rank)
             for (const double value : tensor.data)
+                packed(offset++) = value;
+        for (const auto &sector : amps.sectors)
+            for (const double value : sector.second.data)
                 packed(offset++) = value;
         return packed;
     }
@@ -126,9 +136,13 @@ namespace HartreeFock::Correlation::CC
 
         Eigen::Index offset = 0;
         // The inverse of pack_amplitudes(): restore the solver state back into
-        // the per-rank tensors after Jacobi updates and optional DIIS mixing.
+        // the per-rank tensors (then the sector blocks) after Jacobi updates and
+        // optional DIIS mixing.
         for (auto &tensor : amps.by_rank)
             for (double &value : tensor.data)
+                value = packed(offset++);
+        for (auto &sector : amps.sectors)
+            for (double &value : sector.second.data)
                 value = packed(offset++);
         return {};
     }
@@ -138,11 +152,16 @@ namespace HartreeFock::Correlation::CC
         std::size_t total_size = 0;
         for (const auto &tensor : residuals.by_rank)
             total_size += tensor.size();
+        for (const auto &sector : residuals.sectors)
+            total_size += sector.second.size();
 
         Eigen::VectorXd packed(static_cast<Eigen::Index>(total_size));
         Eigen::Index offset = 0;
         for (const auto &tensor : residuals.by_rank)
             for (const double value : tensor.data)
+                packed(offset++) = value;
+        for (const auto &sector : residuals.sectors)
+            for (const double value : sector.second.data)
                 packed(offset++) = value;
         return packed;
     }
@@ -234,6 +253,50 @@ namespace HartreeFock::Correlation::CC
                 amp->size() == 0 ? 0.0 : std::sqrt(step_sum_sq / static_cast<double>(amp->size()));
             metrics.step_rms_by_rank.push_back(rank_rms);
             offset += static_cast<Eigen::Index>(amp->size());
+        }
+
+        // Gap B4: Jacobi-update each higher Sz sector block against its own
+        // residual. amps.sectors and residuals.sectors are in the same (rank, tag)
+        // order (both from the bundle's sector list), so they line up
+        // index-for-index; the offset continues past the packed reference blocks
+        // into the sector region.
+        //
+        // U2.2: the denominator comes from `sector_tensor(rank, tag)`, NOT
+        // `tensor(rank)`. B2 could reuse the rank's reference denominator because
+        // an RHF reference has spin-free orbital energies, so every Sz sector of a
+        // rank shares one denominator. Under an unrestricted reference that is
+        // false -- eps_alpha != eps_beta -- so a block like `abab` needs its own.
+        // `sector_tensor` falls back to `tensor(rank)` when no per-block entry is
+        // stored, which is exactly the RHF case, so this stays one code path and
+        // the RHF numbers are unchanged.
+        if (amps.sectors.size() != residuals.sectors.size())
+            return std::unexpected(
+                "update_amplitudes_with_jacobi_diis: amplitude and residual sector counts differ.");
+        for (std::size_t s = 0; s < amps.sectors.size(); ++s)
+        {
+            const auto &[amp_key, amp_block] = amps.sectors[s];
+            const auto &[res_key, res_block] = residuals.sectors[s];
+            if (amp_key != res_key)
+                return std::unexpected(
+                    "update_amplitudes_with_jacobi_diis: sector (rank, tag) order mismatch between amplitudes and residuals.");
+            auto denom = denominators.sector_tensor(amp_key.first, amp_key.second);
+            if (!denom)
+                return std::unexpected("update_amplitudes_with_jacobi_diis: " + denom.error());
+            if (amp_block.dims != res_block.dims || amp_block.dims != denom->dims)
+                return std::unexpected(std::format(
+                    "update_amplitudes_with_jacobi_diis: sector (rank {}, tag {}) block/denominator shape mismatch.",
+                    amp_key.first, amp_key.second));
+
+            double step_sum_sq = 0.0;
+            for (std::size_t idx = 0; idx < amp_block.size(); ++idx)
+            {
+                double delta = 0.0;
+                if (std::abs(denom->data[idx]) >= 1e-12)
+                    delta = damping * res_block.data[idx] / denom->data[idx];
+                updated(offset + static_cast<Eigen::Index>(idx)) += delta;
+                step_sum_sq += delta * delta;
+            }
+            offset += static_cast<Eigen::Index>(amp_block.size());
         }
 
         // DIIS sees the fully packed amplitude/residual vectors so it can mix

@@ -376,4 +376,18 @@ namespace HartreeFock::Correlation::CC
 
         return state;
     }
+
+    std::expected<TensorCCBlockCache, std::string> build_ucc_spin_block_cache(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const UHFReference &reference,
+        const std::vector<std::pair<std::string, std::string>> &blocks,
+        const std::string &tag)
+    {
+        std::vector<double> eri_local;
+        const std::vector<double> &eri = HartreeFock::Correlation::ensure_eri(
+            calculator, shell_pairs, eri_local, tag);
+        return build_ucc_spin_block_cache_from_eri(
+            eri, static_cast<std::size_t>(reference.n_ao), reference, blocks);
+    }
 } // namespace HartreeFock::Correlation::CC

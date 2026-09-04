@@ -14,6 +14,7 @@
 #include <numeric>
 #include <string>
 
+#include "base/mpi_env.h"
 #include "base/wrapper.h"
 #include "basis/basis.h"
 #include "dft_gradient.h"
@@ -23,6 +24,7 @@
 #include "integrals/os.h"
 #include "io/checkpoint.h"
 #include "io/logging.h"
+#include "io/results_json.h"
 #include "opt/geomopt.h"
 #include "populations/multipole.h"
 #include "post_hf/integrals.h"
@@ -34,6 +36,45 @@
 
 namespace DFT::Driver
 {
+
+    // MPI grid partition: this rank's contiguous slice [begin, end) of the
+    // npoints grid points, split as evenly as possible. Serial builds get
+    // rank 0 / size 1 => [0, npoints), i.e. all points, so the sliced grid
+    // calls degrade to the whole-grid form. The remainder (npoints % size) is
+    // spread one-per-rank across the low ranks so slices differ by at most one
+    // point. Contiguous (not strided) keeps each rank's points spatially
+    // coherent for AO screening; the reduce is a sum so order does not matter.
+    inline std::pair<Eigen::Index, Eigen::Index>
+    mpi_grid_slice(Eigen::Index npoints)
+    {
+        const Eigen::Index size = static_cast<Eigen::Index>(HartreeFock::Mpi::size());
+        const Eigen::Index rank = static_cast<Eigen::Index>(HartreeFock::Mpi::rank());
+        if (size <= 1)
+            return {0, npoints};
+        const Eigen::Index base = npoints / size;
+        const Eigen::Index rem = npoints % size;
+        const Eigen::Index begin = rank * base + std::min(rank, rem);
+        const Eigen::Index end = begin + base + (rank < rem ? 1 : 0);
+        return {begin, end};
+    }
+
+    // Sum the slice-local XC energy scalars across ranks so the full-grid totals
+    // feed the SCF energy and the electron-count check. Per-point arrays inside
+    // xc_grid stay slice-local (each rank only assembles its own points), so
+    // ONLY these reduced scalars are touched. No-op when serial.
+    inline void reduce_partial_xc_scalars(XCGridEvaluation &xc_grid)
+    {
+        if (!HartreeFock::Mpi::distributed())
+            return;
+        double scalars[4] = {
+            xc_grid.total_energy, xc_grid.exchange_energy,
+            xc_grid.correlation_energy, xc_grid.integrated_electrons};
+        HartreeFock::Mpi::allreduce_inplace(scalars, 4);
+        xc_grid.total_energy = scalars[0];
+        xc_grid.exchange_energy = scalars[1];
+        xc_grid.correlation_energy = scalars[2];
+        xc_grid.integrated_electrons = scalars[3];
+    }
 
     namespace
     {
@@ -474,6 +515,25 @@ namespace DFT::Driver
                 calculator._molecule._point_group.find("inf") != std::string::npos)
                 return;
 
+            // Suppressed under PCM: the cavity is tessellated with a Fibonacci
+            // (golden-angle) sphere (src/solvation/pcm.cpp) and carries no
+            // point-group symmetry, so V_pcm is not symmetry-adapted. Block
+            // diagonalization reads only the diagonal irrep blocks of the KS
+            // matrix and silently discards the off-block reaction-field elements,
+            // converging to a symmetry-projected solution. Unlike HF (whose DIIS
+            // gate catches it) the KS convergence test would report success on
+            // the wrong energy: water/STO-3G/PBE/C-PCM gave -75.2062610742
+            // (projected) vs the true -75.2062005342.
+            if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning, "DFT SAO :",
+                    "Disabled: the PCM cavity tessellation is not symmetry-adapted, "
+                    "so symmetry-blocked diagonalization would project away part of "
+                    "the reaction field. Running without SAO blocking.");
+                return;
+            }
+
             auto sao = HartreeFock::Symmetry::build_sao_basis(calculator);
             if (!sao)
             {
@@ -716,64 +776,6 @@ namespace DFT::Driver
             calculator._scf._guess = HartreeFock::SCFGuess::HCore;
             return RestartState{};
         }
-
-        Eigen::MatrixXd build_coulomb_from_eri(
-            const std::vector<double> &eri,
-            const Eigen::Ref<const Eigen::MatrixXd> &density,
-            std::size_t nbasis)
-        {
-            const std::size_t nb = nbasis;
-            const std::size_t nb2 = nb * nb;
-            const std::size_t nb3 = nb * nb * nb;
-
-            Eigen::MatrixXd coulomb = Eigen::MatrixXd::Zero(
-                static_cast<Eigen::Index>(nb),
-                static_cast<Eigen::Index>(nb));
-
-            // Parallelize over the outer mu, which strides whole disjoint output
-            // rows: no shared writes, no reduction, inner accumulation order
-            // unchanged, so the result is identical to the serial version. This
-            // mirrors HartreeFock::ObaraSaika::_compute_fock_rhf and runs once
-            // per KS-SCF iteration; leaving it serial idled all but one thread.
-#ifdef USE_OPENMP
-#pragma omp parallel for schedule(static)
-#endif
-            for (std::size_t mu = 0; mu < nb; ++mu)
-                for (std::size_t nu = 0; nu < nb; ++nu)
-                    for (std::size_t lam = 0; lam < nb; ++lam)
-                        for (std::size_t sig = 0; sig < nb; ++sig)
-                            coulomb(mu, nu) += density(lam, sig) * eri[mu * nb3 + nu * nb2 + lam * nb + sig];
-
-            return coulomb;
-        }
-
-        Eigen::MatrixXd build_exchange_from_eri(
-            const std::vector<double> &eri,
-            const Eigen::Ref<const Eigen::MatrixXd> &density,
-            std::size_t nbasis)
-        {
-            const std::size_t nb = nbasis;
-            const std::size_t nb2 = nb * nb;
-            const std::size_t nb3 = nb * nb * nb;
-
-            Eigen::MatrixXd exchange = Eigen::MatrixXd::Zero(
-                static_cast<Eigen::Index>(nb),
-                static_cast<Eigen::Index>(nb));
-
-            // Parallel over the outer mu (disjoint output rows); see
-            // build_coulomb_from_eri. Bitwise-identical to the serial version.
-#ifdef USE_OPENMP
-#pragma omp parallel for schedule(static)
-#endif
-            for (std::size_t mu = 0; mu < nb; ++mu)
-                for (std::size_t nu = 0; nu < nb; ++nu)
-                    for (std::size_t lam = 0; lam < nb; ++lam)
-                        for (std::size_t sig = 0; sig < nb; ++sig)
-                            exchange(mu, nu) += density(lam, sig) * eri[mu * nb3 + lam * nb2 + nu * nb + sig];
-
-            return exchange;
-        }
-
         double density_trace_product(
             const Eigen::Ref<const Eigen::MatrixXd> &density,
             const Eigen::Ref<const Eigen::MatrixXd> &matrix)
@@ -781,81 +783,6 @@ namespace DFT::Driver
             return (density.array() * matrix.array()).sum();
         }
 
-        std::expected<void, std::string> ensure_eri_tensor(
-            HartreeFock::Calculator &calculator,
-            const PreparedSystem &prepared)
-        {
-            const std::size_t nbasis = calculator._shells.nbasis();
-            const std::size_t expected_size = nbasis * nbasis * nbasis * nbasis;
-            if (calculator._eri.size() == expected_size)
-                return {};
-
-            try
-            {
-                HartreeFock::Logger::logging(
-                    HartreeFock::LogLevel::Info,
-                    "DFT 2e Integrals :",
-                    std::format("Building ERI tensor for KS Coulomb term ({:.1f} MB)",
-                                expected_size * 8.0 / 1e6));
-                calculator._eri = _compute_2e(
-                    prepared.shell_pairs,
-                    nbasis,
-                    calculator._integral._engine,
-                    HartreeFock::ERIKernel::Coulomb,
-                    0.0,
-                    calculator._integral._tol_eri,
-                    calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
-            }
-            catch (const std::exception &e)
-            {
-                return std::unexpected("Failed to build ERI tensor for KS Coulomb term: " + std::string(e.what()));
-            }
-
-            return {};
-        }
-
-        std::expected<void, std::string> ensure_short_range_eri_tensor(
-            HartreeFock::Calculator &calculator,
-            PreparedSystem &prepared,
-            double omega)
-        {
-            if (omega <= 0.0)
-                return {};
-
-            const std::size_t nbasis = calculator._shells.nbasis();
-            const std::size_t expected_size = nbasis * nbasis * nbasis * nbasis;
-            if (prepared.short_range_eri_omega == omega &&
-                prepared.short_range_eri.size() == expected_size)
-            {
-                return {};
-            }
-
-            try
-            {
-                HartreeFock::Logger::logging(
-                    HartreeFock::LogLevel::Info,
-                    "DFT 2e Integrals :",
-                    std::format("Building short-range ERI tensor for omega = {:.6f} ({:.1f} MB)",
-                                omega,
-                                expected_size * 8.0 / 1e6));
-                prepared.short_range_eri = _compute_2e(
-                    prepared.shell_pairs,
-                    nbasis,
-                    calculator._integral._engine,
-                    HartreeFock::ERIKernel::ShortRange,
-                    omega,
-                    calculator._integral._tol_eri,
-                    calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
-                prepared.short_range_eri_omega = omega;
-            }
-            catch (const std::exception &e)
-            {
-                return std::unexpected(
-                    "Failed to build short-range ERI tensor for KS exchange: " + std::string(e.what()));
-            }
-
-            return {};
-        }
 
         struct DiagonalizationResult
         {
@@ -2096,15 +2023,27 @@ namespace DFT::Driver
                     // loop that evaluates the current density, queries libxc
                     // for the semilocal derivatives, and assembles the AO-space
                     // KS potential for the present density matrix.
+                    // MPI: this rank's grid-point slice, shared by the density/XC
+                    // eval and the XC matrix assembly. Serial => whole grid.
+                    const auto [xc_lo, xc_hi] =
+                        mpi_grid_slice(prepared.molecular_grid.points.rows());
+
                     auto xc_grid = evaluate_current_density_and_xc(
                         calculator,
                         prepared,
                         x_functional,
-                        c_functional);
+                        c_functional,
+                        xc_lo, xc_hi);
                     if (!xc_grid)
                         return std::unexpected("DFT density/XC evaluation failed: " + xc_grid.error());
 
-                    auto ks_potential = assemble_current_ks_potential(calculator, prepared, *xc_grid);
+                    // xc_grid's energy/electron scalars are this rank's slice
+                    // only; sum them across ranks before they feed the SCF energy
+                    // and the electron-count check below.
+                    reduce_partial_xc_scalars(*xc_grid);
+
+                    auto ks_potential =
+                        assemble_current_ks_potential(calculator, prepared, *xc_grid, xc_lo, xc_hi);
                     if (!ks_potential)
                         return std::unexpected("DFT KS potential assembly failed: " + ks_potential.error());
 
@@ -2249,15 +2188,22 @@ namespace DFT::Driver
                 calculator._info._scf.alpha.density = alpha_density;
                 calculator._info._scf.beta.density = beta_density;
 
+                const auto [xc_lo, xc_hi] =
+                    mpi_grid_slice(prepared.molecular_grid.points.rows());
+
                 auto xc_grid = evaluate_current_density_and_xc(
                     calculator,
                     prepared,
                     x_functional,
-                    c_functional);
+                    c_functional,
+                    xc_lo, xc_hi);
                 if (!xc_grid)
                     return std::unexpected("DFT density/XC evaluation failed: " + xc_grid.error());
 
-                auto ks_potential = assemble_current_ks_potential(calculator, prepared, *xc_grid);
+                reduce_partial_xc_scalars(*xc_grid);
+
+                auto ks_potential =
+                    assemble_current_ks_potential(calculator, prepared, *xc_grid, xc_lo, xc_hi);
                 if (!ks_potential)
                     return std::unexpected("DFT KS potential assembly failed: " + ks_potential.error());
 
@@ -3258,7 +3204,9 @@ namespace DFT::Driver
         const HartreeFock::Calculator &calculator,
         const PreparedSystem &prepared,
         const XC::Functional &exchange_functional,
-        const XC::Functional &correlation_functional)
+        const XC::Functional &correlation_functional,
+        Eigen::Index slice_begin,
+        Eigen::Index slice_end)
     {
         if (prepared.ao_grid.npoints() != prepared.molecular_grid.points.rows())
             return std::unexpected("AO grid and molecular grid point counts do not match");
@@ -3283,7 +3231,9 @@ namespace DFT::Driver
                 alpha_density,
                 beta_density,
                 exchange_functional,
-                correlation_functional);
+                correlation_functional,
+                slice_begin,
+                slice_end);
         }
 
         return evaluate_xc_on_grid(
@@ -3291,7 +3241,9 @@ namespace DFT::Driver
             prepared.ao_grid,
             alpha_density,
             exchange_functional,
-            correlation_functional);
+            correlation_functional,
+            slice_begin,
+            slice_end);
     }
 
     namespace
@@ -3415,20 +3367,45 @@ namespace DFT::Driver
     assemble_current_ks_potential(
         HartreeFock::Calculator &calculator,
         PreparedSystem &prepared,
-        const XCGridEvaluation &xc_grid)
+        const XCGridEvaluation &xc_grid,
+        Eigen::Index xc_point_begin,
+        Eigen::Index xc_point_end)
     {
         if (prepared.ao_grid.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
             return std::unexpected("AO grid basis dimension does not match the calculator basis");
 
-        if (auto eri_ready = ensure_eri_tensor(calculator, prepared); !eri_ready)
-            return std::unexpected(eri_ready.error());
+        // No ERI tensor is built here any more: the J and K builds below are
+        // memory-direct. calculator._eri stays in the Calculator because TDDFT
+        // still needs the dense tensor for its AO->MO transform, but it is no
+        // longer populated for the SCF loop.
 
+        // MPI grid partition: assemble only this rank's XC point slice, then
+        // reduce the nb^2 XC contribution HERE -- before J/K are built and
+        // combined below. J/K are already MPI-reduced inside their own direct
+        // builders, so reducing the whole KS potential later would double-count
+        // them; reducing XC in isolation at the point of assembly avoids that.
+        // xc_point_end < 0 (default) = whole grid, so the gradient/TDDFT callers
+        // that pass no slice are byte-identical.
         auto xc_matrix = assemble_xc_matrix(
             prepared.molecular_grid,
             prepared.ao_grid,
-            xc_grid);
+            xc_grid,
+            xc_point_begin,
+            xc_point_end);
         if (!xc_matrix)
             return std::unexpected(xc_matrix.error());
+
+        if (xc_point_end >= 0 && HartreeFock::Mpi::distributed())
+        {
+            // Disjoint point slices => MPI_SUM reassembles the full XC matrix.
+            // Same reduce pattern as the Fock build (fused_fock.h), already
+            // gated bitwise across ranks. Both spin channels always exist
+            // (beta == alpha shape for RKS), so reduce both unconditionally.
+            HartreeFock::Mpi::allreduce_inplace(
+                xc_matrix->alpha.data(), static_cast<std::size_t>(xc_matrix->alpha.size()));
+            HartreeFock::Mpi::allreduce_inplace(
+                xc_matrix->beta.data(), static_cast<std::size_t>(xc_matrix->beta.size()));
+        }
 
         const Eigen::Index nbasis = prepared.ao_grid.nbasis();
         const auto &alpha_density = calculator._info._scf.alpha.density;
@@ -3445,10 +3422,22 @@ namespace DFT::Driver
             total_density += beta_density;
         }
 
-        const Eigen::MatrixXd coulomb = build_coulomb_from_eri(
-            calculator._eri,
+        // Memory-direct Coulomb: contract each canonical quartet straight into
+        // J instead of sweeping the nb^4 tensor. Same loop the HF Fock build
+        // uses, so this inherits block-level Schwarz, the fixed-order OpenMP
+        // reduction, the MPI bra-stripe, and native sym_ops handling.
+        //
+        // Raw J — no coefficient. See the prefactor contract in
+        // fock_accumulate.h.
+        const Eigen::MatrixXd coulomb = _compute_2e_j_direct(
+            prepared.shell_pairs,
             total_density,
-            calculator._shells.nbasis());
+            calculator._shells.nbasis(),
+            calculator._integral._engine,
+            HartreeFock::ERIKernel::Coulomb,
+            0.0,
+            calculator._integral._tol_eri,
+            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
 
         const double full_range_exchange_coefficient = xc_grid.full_range_exchange_coefficient;
         const double short_range_exchange_coefficient = xc_grid.short_range_exchange_coefficient;
@@ -3458,15 +3447,9 @@ namespace DFT::Driver
         Eigen::MatrixXd exact_exchange_beta;
         double exact_exchange_energy = 0.0;
 
-        if (std::abs(short_range_exchange_coefficient) > 1.0e-14)
-        {
-            if (auto screened_eri_ready =
-                    ensure_short_range_eri_tensor(calculator, prepared, xc_grid.range_separation_omega);
-                !screened_eri_ready)
-            {
-                return std::unexpected(screened_eri_ready.error());
-            }
-        }
+        // Range-separated functionals no longer build a SECOND nb^4 tensor at
+        // the screened omega either — the short-range K calls below pass the
+        // omega straight to the fused loop.
 
         if (std::abs(exact_exchange_coefficient) > 1.0e-14)
         {
@@ -3475,24 +3458,32 @@ namespace DFT::Driver
                 Eigen::MatrixXd exchange_alpha = Eigen::MatrixXd::Zero(nbasis, nbasis);
                 Eigen::MatrixXd exchange_beta = Eigen::MatrixXd::Zero(nbasis, nbasis);
 
+                // Both spin channels from ONE quartet sweep per kernel — the UHF
+                // entry fills K_alpha from Pa and K_beta from Pb together, so a
+                // UKS hybrid does not pay the traversal twice.
                 if (std::abs(full_range_exchange_coefficient) > 1.0e-14)
                 {
-                    exchange_alpha.noalias() +=
-                        full_range_exchange_coefficient *
-                        build_exchange_from_eri(calculator._eri, alpha_density, calculator._shells.nbasis());
-                    exchange_beta.noalias() +=
-                        full_range_exchange_coefficient *
-                        build_exchange_from_eri(calculator._eri, beta_density, calculator._shells.nbasis());
+                    const auto [Ka, Kb] = _compute_2e_k_uhf_direct(
+                        prepared.shell_pairs, alpha_density, beta_density,
+                        calculator._shells.nbasis(), calculator._integral._engine,
+                        HartreeFock::ERIKernel::Coulomb, 0.0,
+                        calculator._integral._tol_eri,
+                        calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+                    exchange_alpha.noalias() += full_range_exchange_coefficient * Ka;
+                    exchange_beta.noalias() += full_range_exchange_coefficient * Kb;
                 }
 
                 if (std::abs(short_range_exchange_coefficient) > 1.0e-14)
                 {
-                    exchange_alpha.noalias() +=
-                        short_range_exchange_coefficient *
-                        build_exchange_from_eri(prepared.short_range_eri, alpha_density, calculator._shells.nbasis());
-                    exchange_beta.noalias() +=
-                        short_range_exchange_coefficient *
-                        build_exchange_from_eri(prepared.short_range_eri, beta_density, calculator._shells.nbasis());
+                    const auto [Ka, Kb] = _compute_2e_k_uhf_direct(
+                        prepared.shell_pairs, alpha_density, beta_density,
+                        calculator._shells.nbasis(), calculator._integral._engine,
+                        HartreeFock::ERIKernel::ShortRange,
+                        xc_grid.range_separation_omega,
+                        calculator._integral._tol_eri,
+                        calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+                    exchange_alpha.noalias() += short_range_exchange_coefficient * Ka;
+                    exchange_beta.noalias() += short_range_exchange_coefficient * Kb;
                 }
 
                 exact_exchange_alpha = -exchange_alpha;
@@ -3509,13 +3500,24 @@ namespace DFT::Driver
                 {
                     exchange.noalias() +=
                         full_range_exchange_coefficient *
-                        build_exchange_from_eri(calculator._eri, alpha_density, calculator._shells.nbasis());
+                        _compute_2e_k_direct(
+                            prepared.shell_pairs, alpha_density,
+                            calculator._shells.nbasis(), calculator._integral._engine,
+                            HartreeFock::ERIKernel::Coulomb, 0.0,
+                            calculator._integral._tol_eri,
+                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
                 }
                 if (std::abs(short_range_exchange_coefficient) > 1.0e-14)
                 {
                     exchange.noalias() +=
                         short_range_exchange_coefficient *
-                        build_exchange_from_eri(prepared.short_range_eri, alpha_density, calculator._shells.nbasis());
+                        _compute_2e_k_direct(
+                            prepared.shell_pairs, alpha_density,
+                            calculator._shells.nbasis(), calculator._integral._engine,
+                            HartreeFock::ERIKernel::ShortRange,
+                            xc_grid.range_separation_omega,
+                            calculator._integral._tol_eri,
+                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
                 }
 
                 exact_exchange_alpha = -0.5 * exchange;
@@ -3758,6 +3760,127 @@ namespace DFT::Driver
         }
 
         return std::unexpected("Unsupported DFT calculation type");
+    }
+
+    // ── CLI entry (peer of HartreeFock::Driver::run) ──────────────────────────
+    namespace
+    {
+        using CliSystemClock = std::chrono::system_clock;
+
+        std::string cli_format_time(CliSystemClock::time_point tp)
+        {
+            const std::time_t t = CliSystemClock::to_time_t(tp);
+            std::tm tm{};
+#if defined(_WIN32)
+            localtime_s(&tm, &t);
+#else
+            localtime_r(&t, &tm);
+#endif
+            std::ostringstream os;
+            os << std::put_time(&tm, "%Y-%m-%d %H:%M:%S");
+            return os.str();
+        }
+
+        std::string dft_reference_label(HartreeFock::SCFType scf_type)
+        {
+            switch (scf_type)
+            {
+            case HartreeFock::SCFType::RHF:
+                return "RKS";
+            case HartreeFock::SCFType::ROHF:
+                return "ROKS";
+            case HartreeFock::SCFType::UHF:
+                return "UKS";
+            }
+            return "Unknown";
+        }
+
+        void log_multipole_report(HartreeFock::Calculator &calculator)
+        {
+            auto shell_pairs = build_shellpairs(calculator._shells);
+            auto moments = HartreeFock::ObaraSaika::_compute_multipole_moments(
+                calculator, shell_pairs, Eigen::Vector3d::Zero());
+            if (!moments)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning, "Multipole Moments :",
+                    "Unavailable: " + moments.error());
+                HartreeFock::Logger::blank();
+                return;
+            }
+            calculator._multipole = *moments; // cache for the JSON results dump
+            calculator._have_multipole = true;
+            HartreeFock::Logger::multipole_moments(*moments);
+            HartreeFock::Logger::blank();
+        }
+    } // namespace
+
+    std::expected<int, std::string> run(
+        HartreeFock::Calculator &calculator,
+        [[maybe_unused]] const std::string &input_file,
+        const std::string &json_path)
+    {
+        const auto program_start = CliSystemClock::now();
+
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Input Parsing :", "Successful");
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Calculation Type :", map_enum(calculator._calculation));
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Theory :", "Kohn-Sham DFT");
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Reference :", dft_reference_label(calculator._scf._scf));
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Basis :", calculator._basis._basis_name);
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "DFT Grid :", map_enum(calculator._dft._grid));
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Exchange :", map_enum(calculator._dft._exchange));
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Correlation :", map_enum(calculator._dft._correlation));
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Charge :", calculator._molecule.charge);
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Multiplicity :", calculator._molecule.multiplicity);
+        if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, "Solvation :",
+                std::format("PCM (epsilon = {:.4f}, points/atom = {})",
+                            calculator._solvation._dielectric,
+                            calculator._solvation._surface_points_per_atom));
+        }
+        HartreeFock::Logger::blank();
+
+        const auto result = run(calculator);
+        if (!result)
+            return std::unexpected(result.error());
+
+        if (result->converged)
+            log_multipole_report(calculator);
+
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "DFT Energy :",
+            std::format("{:.10f} Eh", result->total_energy));
+        if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, "PCM Solvation Energy :",
+                std::format("{:.10f} Eh", result->solvation_energy));
+        }
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "Converged :",
+            result->converged ? "true" : "false");
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "Wall Time :",
+            std::format("{} ({} seconds)",
+                        cli_format_time(CliSystemClock::now()),
+                        std::chrono::duration<double>(CliSystemClock::now() - program_start).count()));
+
+        if (!json_path.empty())
+        {
+            // The DFT total lives in the driver Result, not on the Calculator;
+            // copy it in so the shared serializer reports the log's energy.
+            calculator._total_energy = result->total_energy;
+            if (auto res = HartreeFock::IO::dump_results_json(calculator, json_path); !res)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Error, "JSON Output Failed :", res.error());
+                return EXIT_FAILURE;
+            }
+        }
+
+        return EXIT_SUCCESS;
     }
 
 } // namespace DFT::Driver

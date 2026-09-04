@@ -12,6 +12,7 @@
 #include "post_hf/casscf/response.h"
 #include "post_hf/ci/strings.h"
 #include "post_hf/integrals.h"
+#include "post_hf/ri/ri_eri.h"
 
 #include <algorithm>
 #include <chrono>
@@ -26,7 +27,6 @@ namespace
 {
 
     using HartreeFock::Correlation::CASSCF::append_candidate_step;
-    using HartreeFock::Correlation::CASSCF::append_root_candidate_steps;
     using HartreeFock::Correlation::CASSCF::build_weighted_root_quadratic_model_prediction;
     using HartreeFock::Correlation::CASSCF::CandidateSelection;
     using HartreeFock::Correlation::CASSCF::CandidateStep;
@@ -41,7 +41,6 @@ namespace
     using HartreeFock::Correlation::CASSCF::ResponseMode;
     using HartreeFock::Correlation::CASSCF::ResponseRHSMode;
     using HartreeFock::Correlation::CASSCF::RootReference;
-    using HartreeFock::Correlation::CASSCF::RootResolvedCoupledStepSet;
     using HartreeFock::Correlation::CASSCF::RootResolvedGradientScreen;
     using HartreeFock::Correlation::CASSCF::RootResolvedOrbitalStepSet;
     using HartreeFock::Correlation::CASSCF::RotPair;
@@ -454,9 +453,23 @@ namespace HartreeFock::Correlation::CASSCF
                                                tag, as.target_irrep));
         const int target_irr = *target_irr_opt;
 
+        // RI path: prepare the density-fitting cache once up front (metric +
+        // 3-center) and skip the dense nb^4 build entirely — the eri reference
+        // below stays empty and is never read on the RI branch. Dense path:
+        // materialize the AO tensor as before.
         std::vector<double> eri_local;
-        const std::vector<double> &eri = HartreeFock::Correlation::ensure_eri(
-            calc, shell_pairs, eri_local, tag + " :");
+        if (calc._mp2.use_ri)
+        {
+            auto ri_ready = HartreeFock::Correlation::RI::ensure_ri_3c_ready(calc);
+            if (!ri_ready)
+                return std::unexpected(tag + ": " + ri_ready.error());
+            if (!calc._ri_metric_factor)
+                return std::unexpected(tag + ": RI metric factorization is missing.");
+        }
+        const std::vector<double> &eri =
+            calc._mp2.use_ri
+                ? eri_local // empty; RI branch never dereferences it
+                : HartreeFock::Correlation::ensure_eri(calc, shell_pairs, eri_local, tag + " :");
 
         std::vector<CIString> a_strs;
         std::vector<CIString> b_strs;
@@ -469,7 +482,15 @@ namespace HartreeFock::Correlation::CASSCF
                 ? ResponseRHSMode::CommutatorOnlyApproximate
                 : ResponseRHSMode::ExactActiveSpaceOrbitalDerivative;
         const bool use_numeric_newton_debug = as.mcscf_debug_numeric_newton;
-        const int numeric_newton_pair_limit = 64;
+        // Exact-FD-Hessian escape from optimizer stalls (fires only under
+        // stagnation, not every macro). Costs 2*npairs CI re-evaluations, so the
+        // cap is a runtime guard, not a correctness one. It was 64, which is
+        // smaller than a realistic C1 active space: water/cc-pVDZ CAS(4,4) has
+        // n_core=3/n_act=4/n_virt=18 => 138 rotation pairs, so the escape hatch
+        // was unavailable exactly where the flat-valley stall occurs (symmetry-on
+        // blocks most pairs and stays under the old cap; symmetry-off does not).
+        // 256 covers common CAS spaces at <=512 evals/attempt when stalled.
+        const int numeric_newton_pair_limit = 256;
         const int ci_dense_threshold = 500;
         const double max_rot = (as.mcscf_max_rot > 0.0) ? as.mcscf_max_rot : 0.20;
         const double trust_radius_frob = 4.0 * max_rot;
@@ -515,11 +536,26 @@ namespace HartreeFock::Correlation::CASSCF
             // basis imply?". Every candidate orbital step and every final accepted
             // macroiteration comes back through this full reevaluation path.
             McscfState st;
-            st.F_I_mo = build_inactive_fock_mo(C_trial, calc._hcore, eri, n_core, nbasis);
+            // Density-fitted path: when mp2_use_ri is set, the four ERI-dependent
+            // pieces (inactive Fock, active-space transform, active cache, and the
+            // active Fock built later) all route through the validated RI builders
+            // so the whole CASSCF evaluation is RI-consistent.
+            HartreeFock::Calculator *ri_calc = calc._mp2.use_ri ? &calc : nullptr;
+            st.F_I_mo = build_inactive_fock_mo(C_trial, calc._hcore, eri, n_core, nbasis, ri_calc);
             st.h_eff = st.F_I_mo.block(n_core, n_core, n_act, n_act);
             const Eigen::MatrixXd C_act = C_trial.middleCols(n_core, n_act);
-            st.ga = HartreeFock::Correlation::transform_eri_internal(eri, nbasis, C_act);
-            st.active_integrals = build_active_integral_cache(eri, C_trial, n_core, n_act, nbasis);
+            if (ri_calc)
+            {
+                auto ga_ri = HartreeFock::Correlation::transform_eri_internal_ri(*ri_calc, C_act);
+                if (!ga_ri)
+                    return std::unexpected(tag + ": " + ga_ri.error());
+                st.ga = std::move(*ga_ri);
+            }
+            else
+            {
+                st.ga = HartreeFock::Correlation::transform_eri_internal(eri, nbasis, C_act);
+            }
+            st.active_integrals = build_active_integral_cache(eri, C_trial, n_core, n_act, nbasis, ri_calc);
 
             st.ci_space = build_ci_space(
                 a_strs, b_strs, ras, st.h_eff, st.ga, n_act,
@@ -566,7 +602,7 @@ namespace HartreeFock::Correlation::CASSCF
                     ci_vec, single_weight(1.0), a_strs, b_strs, st.dets, n_act);
                 root.Gamma_vec = compute_2rdm(
                     ci_vec, single_weight(1.0), a_strs, b_strs, st.dets, n_act);
-                root.F_A_mo = build_active_fock_mo(C_trial, root.gamma, eri, n_core, n_act, nbasis);
+                root.F_A_mo = build_active_fock_mo(C_trial, root.gamma, eri, n_core, n_act, nbasis, ri_calc);
                 root.Q = compute_Q_matrix(st.active_integrals, root.Gamma_vec);
                 root.g_orb = compute_orbital_gradient(
                     st.F_I_mo, root.F_A_mo, root.Q, root.gamma,
@@ -763,6 +799,7 @@ namespace HartreeFock::Correlation::CASSCF
         double E_prev = 0.0;
         double prev_sa_gnorm = std::numeric_limits<double>::infinity();
         bool converged = false;
+        bool converged_via_plateau = false;
         double level_shift = 0.2;
         int rejected_streak = 0;
         int stagnation_streak = 0;
@@ -860,75 +897,6 @@ namespace HartreeFock::Correlation::CASSCF
                     vec, sigma_vec);
             };
 
-            auto build_root_resolved_coupled_step_set =
-                [&](const std::vector<StateSpecificData> &roots,
-                    double level_shift_local)
-            {
-                RootResolvedCoupledStepSet steps;
-                steps.orbital_steps.weighted = Eigen::MatrixXd::Zero(nbasis, nbasis);
-                steps.orbital_steps.per_root.reserve(roots.size());
-
-                for (const auto &root : roots)
-                {
-                    Eigen::MatrixXd root_step = Eigen::MatrixXd::Zero(nbasis, nbasis);
-                    if (root.weight == 0.0)
-                    {
-                        steps.orbital_steps.per_root.push_back(std::move(root_step));
-                        continue;
-                    }
-
-                    const OrbitalHessianContext root_hessian_ctx{
-                        .C = &C,
-                        .S = &calc._overlap,
-                        .H_core = &calc._hcore,
-                        .eri = &eri,
-                        .gamma = &root.gamma,
-                        .Gamma_vec = &root.Gamma_vec,
-                    };
-                    const CoupledStepSolveResult result =
-                        solve_coupled_orbital_ci_step(
-                            configured_rhs_mode,
-                            root.g_orb,
-                            st_current.F_I_mo,
-                            root.F_A_mo,
-                            st_current.h_eff,
-                            st_current.ga,
-                            st_current.ci_space,
-                            a_strs,
-                            b_strs,
-                            st_current.dets,
-                            st_current.active_integrals,
-                            ci_apply,
-                            root.ci_vector,
-                            root.ci_energy,
-                            st_current.H_CI_diag,
-                            nbasis,
-                            n_core,
-                            n_act,
-                            n_virt,
-                            level_shift_local,
-                            max_rot,
-                            all_mo_irr,
-                            use_sym,
-                            &root_hessian_ctx);
-
-                    steps.converged = steps.converged && result.converged;
-                    steps.max_orbital_residual =
-                        std::max(steps.max_orbital_residual, result.orbital_residual_max);
-                    steps.max_ci_residual =
-                        std::max(steps.max_ci_residual, result.ci_residual_norm);
-                    steps.max_iterations =
-                        std::max(steps.max_iterations, result.iterations);
-
-                    root_step = cap_orbital_step(result.orbital_step);
-                    steps.orbital_steps.weighted.noalias() += root.weight * root_step;
-                    steps.orbital_steps.per_root.push_back(std::move(root_step));
-                }
-
-                steps.orbital_steps.weighted = cap_orbital_step(std::move(steps.orbital_steps.weighted));
-                return steps;
-            };
-
             std::vector<StateAveragedCoupledRoot> sa_coupled_roots;
             sa_coupled_roots.reserve(st_current.roots.size());
             for (const auto &root : st_current.roots)
@@ -941,6 +909,9 @@ namespace HartreeFock::Correlation::CASSCF
                 .eri = &eri,
                 .gamma = &st_current.gamma,
                 .Gamma_vec = &st_current.Gamma_vec,
+                // Keep the FD Hessian on the same (RI or dense) integrals the
+                // energy/gradient used, so the curvature is consistent.
+                .ri_calc = calc._mp2.use_ri ? &calc : nullptr,
             };
 
             const SACoupledStepSolveResult sa_coupled_result =
@@ -1090,18 +1061,16 @@ namespace HartreeFock::Correlation::CASSCF
                 append_candidate_step(step_candidates, kappa_total, "sa-diag-fallback");
             append_candidate_step(step_candidates, kappa_grad, "sa-grad-fallback");
 
+            // Per-root candidate steps (coupled + grad-fallback, one per root)
+            // were removed here: a suite-wide sweep of every CAS input showed
+            // they were accepted zero times, while each stagnant macro paid a
+            // full per-root coupled solve (build_root_resolved_coupled_step_set)
+            // to generate them. Single-pair probes are kept — the SAD-uphill
+            // SA-2 canary accepts one (probe-pair6-favored[uphill]), so they are
+            // load-bearing on that basin. numeric-newton is kept (the dominant
+            // accepted fallback). See the cascade-trim spike.
             if (stagnation_streak >= 2 && probe_signal.weighted_abs.size() > 0)
             {
-                if (nroots > 1)
-                {
-                    const RootResolvedCoupledStepSet root_resolved_coupled_step_set =
-                        build_root_resolved_coupled_step_set(st_current.roots, level_shift);
-                    append_root_candidate_steps(
-                        step_candidates, root_resolved_coupled_step_set.orbital_steps.per_root, "coupled", false);
-                    append_root_candidate_steps(
-                        step_candidates, kappa_grad_step_set.per_root, "grad-fallback", false);
-                }
-
                 std::vector<int> ranked_pairs(static_cast<std::size_t>(probe_signal.weighted_abs.size()));
                 std::iota(ranked_pairs.begin(), ranked_pairs.end(), 0);
                 std::partial_sort(
@@ -1186,9 +1155,26 @@ namespace HartreeFock::Correlation::CASSCF
                 sa_gradient_progress_flat(reported_gnorm, prev_sa_gnorm);
             const bool accepted_micro_step_plateau =
                 diag.step_accepted && diag.accepted_step_norm < 5e-5;
+            // A flat gradient that is still well above tolerance is itself a stall
+            // signal, independent of the energy drift and step size. A healthy
+            // macroiteration drives the gradient down fast (so it is NOT flat
+            // within 5% macro-over-macro), and near a true stationary point the
+            // gradient is already below tolerance — so requiring gnorm to be an
+            // order of magnitude above tol keeps this from mis-firing during a
+            // legitimate finish. This is the C1 flat-valley crawl: without
+            // symmetry blocking the rotation space, aug-Hessian keeps taking
+            // O(1e-4) steps that shave ~2e-7 off the energy but leave the
+            // gradient frozen at ~1.5e-3, and dE stays just above the
+            // small_energy_change floor so the first two clauses never fire.
+            // water/cc-pVDZ CAS(4,4) burned all 100 macros here; symmetry-on
+            // converges in ~16.
+            const bool flat_gradient_stall =
+                little_gradient_progress && reported_gnorm > 10.0 * as.tol_mcscf_grad;
             // Track repeated "flat" iterations separately from hard rejections so
             // we can switch to more exploratory probes before declaring failure.
-            if ((!diag.step_accepted && rejected_streak >= 2) || (small_energy_change && little_gradient_progress))
+            if ((!diag.step_accepted && rejected_streak >= 2) ||
+                (small_energy_change && little_gradient_progress) ||
+                flat_gradient_stall)
                 ++stagnation_streak;
             else
                 stagnation_streak = 0;
@@ -1235,14 +1221,23 @@ namespace HartreeFock::Correlation::CASSCF
                 logging(LogLevel::Warning, tag + " :",
                         "CI response Davidson solve did not fully converge for at least one root; using single-step fallback.");
 
+            // Plateau-exit stationarity bound. `reported_gnorm` is ‖sa_g‖∞ (the
+            // weighted SA orbital gradient), so this gates the exit on the SA
+            // gradient genuinely being at a stationary point. The bound is
+            // max(1e-6, tol_mcscf_grad): the uphill SA-2 case reaches the plateau
+            // at sa_g≈3.4e-10, ~1e4 below this floor, so the exit decision is
+            // deterministic w.r.t. ~1e-16 integral rounding (B-2.5a). The old
+            // 100·tol≈1e-3 screen passed trivially and was rounding-sensitive.
+            const double plateau_sa_g_bound = std::max(1e-6, as.tol_mcscf_grad);
             if (stagnation_streak >= 2 &&
                 small_energy_change &&
                 accepted_micro_step_plateau &&
-                reported_gnorm < 100.0 * as.tol_mcscf_grad)
+                reported_gnorm <= plateau_sa_g_bound)
             {
                 logging(LogLevel::Warning, tag + " :",
                         "Treating the stationary orbital plateau as converged: the CASSCF energy and accepted orbital step are flat, while the weighted and max-root orbital-gradient screens are no longer improving.");
                 converged = true;
+                converged_via_plateau = true;
                 break;
             }
 
@@ -1267,6 +1262,9 @@ namespace HartreeFock::Correlation::CASSCF
 
         HartreeFock::Logger::blank();
         logging(LogLevel::Info, tag + " :", "Converged.");
+        logging(LogLevel::Info, tag + " :",
+                std::format("casscf_converged_via_plateau={}",
+                            converged_via_plateau ? "true" : "false"));
 
         auto final_res = evaluate(C, root_reference.valid ? &root_reference : nullptr, false);
         if (!final_res)

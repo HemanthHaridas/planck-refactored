@@ -1,5 +1,6 @@
 #include "post_hf/cc/amplitudes.h"
 
+#include <format>
 #include <vector>
 
 namespace HartreeFock::Correlation::CC
@@ -148,6 +149,19 @@ namespace HartreeFock::Correlation::CC
         return make_tensor_view(by_rank[static_cast<std::size_t>(excitation_rank - 1)]);
     }
 
+    std::expected<ConstDenseTensorView, std::string>
+    ArbitraryOrderDenominatorCache::sector_tensor(
+        int excitation_rank, const std::string &tag) const
+    {
+        for (const auto &entry : sectors)
+            if (entry.first.first == excitation_rank && entry.first.second == tag)
+                return make_tensor_view(entry.second);
+        // No per-block entry: an RHF reference, where alpha and beta orbital
+        // energies coincide and every block of a rank shares one denominator.
+        // Falling back keeps the RHF path byte-identical; see the header.
+        return tensor(excitation_rank);
+    }
+
     int ArbitraryOrderRCCAmplitudes::max_rank() const noexcept
     {
         return static_cast<int>(by_rank.size());
@@ -170,6 +184,31 @@ namespace HartreeFock::Correlation::CC
         if (!has_rank(excitation_rank))
             return std::unexpected("Requested amplitude rank is not available");
         return make_tensor_view(by_rank[static_cast<std::size_t>(excitation_rank - 1)]);
+    }
+
+    // R3.1.3d: a higher Sz sector's dense view, looked up by (rank, tag). Errors
+    // if not allocated (reference-only / CCSDT runs never populate `sectors`, and
+    // never ask). Linear scan is fine: at most floor(n/2)-1 extra sectors per rank.
+    std::expected<DenseTensorView, std::string>
+    ArbitraryOrderRCCAmplitudes::sector_tensor(int excitation_rank, const std::string &tag)
+    {
+        for (auto &entry : sectors)
+            if (entry.first.first == excitation_rank && entry.first.second == tag)
+                return make_tensor_view(entry.second);
+        return std::unexpected(
+            "Requested amplitude Sz sector (" + std::to_string(excitation_rank) +
+            ", " + tag + ") is not allocated");
+    }
+
+    std::expected<ConstDenseTensorView, std::string>
+    ArbitraryOrderRCCAmplitudes::sector_tensor(int excitation_rank, const std::string &tag) const
+    {
+        for (const auto &entry : sectors)
+            if (entry.first.first == excitation_rank && entry.first.second == tag)
+                return make_tensor_view(entry.second);
+        return std::unexpected(
+            "Requested amplitude Sz sector (" + std::to_string(excitation_rank) +
+            ", " + tag + ") is not allocated");
     }
 
     std::expected<DenominatorCache, std::string> build_denominator_cache(
@@ -266,6 +305,161 @@ namespace HartreeFock::Correlation::CC
         }
     }
 
+    std::vector<std::string> ucc_amplitude_blocks(int excitation_rank)
+    {
+        std::vector<std::string> blocks;
+        if (excitation_rank < 1)
+            return blocks;
+
+        // Sector k has k alpha slots and (rank - k) beta slots in EACH half, and
+        // the tag is alpha-before-beta per half (the within-half antisymmetry
+        // folds slot permutations, so only the count matters). Both halves carry
+        // the same string, hence the doubling.
+        //
+        // Every k from 0..rank is independent: unlike the closed-shell case there
+        // is no global a<->b flip to fold k against rank-k, because alpha and beta
+        // are different orbitals.
+        blocks.reserve(static_cast<std::size_t>(excitation_rank) + 1);
+        for (int alpha_count = excitation_rank; alpha_count >= 0; --alpha_count)
+        {
+            const std::string half =
+                std::string(static_cast<std::size_t>(alpha_count), 'a') +
+                std::string(static_cast<std::size_t>(excitation_rank - alpha_count), 'b');
+            blocks.push_back(half + half);
+        }
+        return blocks;
+    }
+
+    std::expected<ArbitraryOrderDenominatorCache, std::string>
+    build_ucc_denominator_cache(
+        const UHFReference &reference,
+        const std::vector<std::pair<int, std::string>> &blocks)
+    {
+        ArbitraryOrderDenominatorCache cache;
+        cache.sectors.reserve(blocks.size());
+
+        for (const auto &[rank, tag] : blocks)
+        {
+            if (rank < 1)
+                return std::unexpected(std::format(
+                    "build_ucc_denominator_cache: block '{}' has non-positive rank {}.",
+                    tag, rank));
+            // The tag carries the rank (one spin per slot, 2*rank slots), and so
+            // does the key. Disagreement means the caller built the pair from two
+            // sources; that is a routing bug and it would otherwise surface as a
+            // shape mismatch deep in the solver.
+            if (tag.size() != static_cast<std::size_t>(2 * rank))
+                return std::unexpected(std::format(
+                    "build_ucc_denominator_cache: block tag '{}' has {} slots but is "
+                    "keyed at rank {} ({} slots expected).",
+                    tag, tag.size(), rank, 2 * rank));
+
+            auto block = build_ucc_block_denominator(reference, tag);
+            if (!block)
+                return std::unexpected(block.error());
+            cache.sectors.push_back({{rank, tag}, std::move(*block)});
+        }
+
+        return cache;
+    }
+
+    std::expected<TensorND, std::string> build_ucc_block_denominator(
+        const UHFReference &reference,
+        const std::string &block_tag)
+    {
+        if (block_tag.empty() || block_tag.size() % 2 != 0)
+            return std::unexpected(
+                "build_ucc_block_denominator: block tag must have an even, non-zero "
+                "length (one spin per slot, occ half then vir half); got '" + block_tag + "'.");
+
+        const int rank = static_cast<int>(block_tag.size()) / 2;
+
+        for (char spin : block_tag)
+            if (spin != 'a' && spin != 'b')
+                return std::unexpected(
+                    "build_ucc_block_denominator: block tag '" + block_tag +
+                    "' contains a slot that is neither 'a' nor 'b'.");
+
+        // A slot's dimension and its orbital energy both come from its own spin.
+        // Occupied slots index [0, n_occ_s); virtual slots index the virtual part
+        // of the same spin's eps vector, which starts at n_occ_s.
+        const auto occ_count = [&](char spin) {
+            return spin == 'a' ? reference.n_occ_alpha : reference.n_occ_beta;
+        };
+        const auto virt_count = [&](char spin) {
+            return spin == 'a' ? reference.n_virt_alpha : reference.n_virt_beta;
+        };
+        // By value, not `const auto &`: binding a reference to a temporary
+        // lambda leaves it dangling once the full-expression ends.
+        const auto eps = [&](char spin) -> const Eigen::VectorXd & {
+            return spin == 'a' ? reference.eps_alpha : reference.eps_beta;
+        };
+
+        for (int slot = 0; slot < 2 * rank; ++slot)
+        {
+            const char spin = block_tag[static_cast<std::size_t>(slot)];
+            const int needed = occ_count(spin) + virt_count(spin);
+            if (eps(spin).size() < needed)
+                return std::unexpected(
+                    "build_ucc_block_denominator: the reference's eps vector for spin '" +
+                    std::string(1, spin) + "' has " + std::to_string(eps(spin).size()) +
+                    " entries but the partition needs " + std::to_string(needed) + ".");
+        }
+
+        try
+        {
+            std::vector<int> dims;
+            dims.reserve(static_cast<std::size_t>(2 * rank));
+            for (int slot = 0; slot < rank; ++slot)
+                dims.push_back(occ_count(block_tag[static_cast<std::size_t>(slot)]));
+            for (int slot = rank; slot < 2 * rank; ++slot)
+                dims.push_back(virt_count(block_tag[static_cast<std::size_t>(slot)]));
+
+            for (int dim : dims)
+                if (dim <= 0)
+                    return std::unexpected(
+                        "build_ucc_block_denominator: block '" + block_tag +
+                        "' has an empty slot; the reference cannot host it.");
+
+            TensorND tensor(dims, 0.0);
+            std::vector<int> indices(static_cast<std::size_t>(2 * rank), 0);
+
+            const std::size_t total = tensor.size();
+            for (std::size_t linear = 0; linear < total; ++linear)
+            {
+                std::size_t cursor = linear;
+                for (int pos = 2 * rank - 1; pos >= 0; --pos)
+                {
+                    const int dim = tensor.dims[static_cast<std::size_t>(pos)];
+                    indices[static_cast<std::size_t>(pos)] =
+                        static_cast<int>(cursor % static_cast<std::size_t>(dim));
+                    cursor /= static_cast<std::size_t>(dim);
+                }
+
+                double denom = 0.0;
+                for (int occ = 0; occ < rank; ++occ)
+                {
+                    const char spin = block_tag[static_cast<std::size_t>(occ)];
+                    denom += eps(spin)(indices[static_cast<std::size_t>(occ)]);
+                }
+                for (int vir = 0; vir < rank; ++vir)
+                {
+                    const char spin = block_tag[static_cast<std::size_t>(rank + vir)];
+                    const int offset = occ_count(spin) + indices[static_cast<std::size_t>(rank + vir)];
+                    denom -= eps(spin)(offset);
+                }
+
+                tensor(indices) = denom;
+            }
+
+            return tensor;
+        }
+        catch (const std::exception &ex)
+        {
+            return std::unexpected("build_ucc_block_denominator: " + std::string(ex.what()));
+        }
+    }
+
     RCCSDAmplitudes make_zero_rccsd_amplitudes(const RHFReference &reference)
     {
         // The tensor dimensions follow the conventional CC index order `(i,j,a,b)`
@@ -274,6 +468,53 @@ namespace HartreeFock::Correlation::CC
             .t1 = Tensor2D(reference.n_occ, reference.n_virt, 0.0),
             .t2 = Tensor4D(reference.n_occ, reference.n_occ, reference.n_virt, reference.n_virt, 0.0),
         };
+    }
+
+    std::expected<ArbitraryOrderRCCAmplitudes, std::string>
+    project_rccsd_amplitudes_to_spatial(const RCCSDAmplitudes &so_amps)
+    {
+        const int n_occ_so = so_amps.t1.dim1;
+        const int n_virt_so = so_amps.t1.dim2;
+
+        if (n_occ_so % 2 != 0 || n_virt_so % 2 != 0)
+            return std::unexpected(std::format(
+                "project_rccsd_amplitudes_to_spatial: spin-orbital dims must be "
+                "even (n_occ_so={}, n_virt_so={}); every spatial orbital carries "
+                "both spin channels.",
+                n_occ_so, n_virt_so));
+        if (so_amps.t2.dim1 != n_occ_so || so_amps.t2.dim2 != n_occ_so ||
+            so_amps.t2.dim3 != n_virt_so || so_amps.t2.dim4 != n_virt_so)
+            return std::unexpected(
+                "project_rccsd_amplitudes_to_spatial: t1/t2 spin-orbital dims disagree.");
+
+        const int n_occ = n_occ_so / 2;
+        const int n_virt = n_virt_so / 2;
+
+        // Interleaved spin-orbital indexing: spatial orbital p occupies
+        // spin-orbital positions 2p (one channel) and 2p+1 (the other). Which
+        // channel is "alpha" is immaterial here -- at closed shell the two
+        // channels are numerically identical (verified: max|t1_alpha -
+        // t1_beta| ~ 1e-18 on BH3/STO-3G) -- so this reads channel 0 for t1
+        // and the cross-channel (0,1) block for t2, which IS the spatial RCC
+        // t2 (see the header comment for the closed-shell relation and how it
+        // was verified).
+        TensorND t1(std::vector<int>{n_occ, n_virt}, 0.0);
+        for (int i = 0; i < n_occ; ++i)
+            for (int a = 0; a < n_virt; ++a)
+                t1({i, a}) = so_amps.t1(2 * i, 2 * a);
+
+        TensorND t2(std::vector<int>{n_occ, n_occ, n_virt, n_virt}, 0.0);
+        for (int i = 0; i < n_occ; ++i)
+            for (int j = 0; j < n_occ; ++j)
+                for (int a = 0; a < n_virt; ++a)
+                    for (int b = 0; b < n_virt; ++b)
+                        t2({i, j, a, b}) = so_amps.t2(2 * i, 2 * j + 1, 2 * a, 2 * b + 1);
+
+        ArbitraryOrderRCCAmplitudes spatial;
+        spatial.by_rank.reserve(2);
+        spatial.by_rank.push_back(std::move(t1));
+        spatial.by_rank.push_back(std::move(t2));
+        return spatial;
     }
 
     RCCSDTAmplitudes make_zero_rccsdt_amplitudes(const RHFReference &reference)
@@ -290,10 +531,27 @@ namespace HartreeFock::Correlation::CC
         const RHFReference &reference,
         int max_excitation_rank)
     {
+        return make_zero_rcc_amplitudes(reference, max_excitation_rank, {});
+    }
+
+    ArbitraryOrderRCCAmplitudes make_zero_rcc_amplitudes(
+        const RHFReference &reference,
+        int max_excitation_rank,
+        const std::vector<std::pair<int, std::string>> &sectors)
+    {
         ArbitraryOrderRCCAmplitudes amps;
         amps.by_rank.reserve(static_cast<std::size_t>(max_excitation_rank));
         for (int rank = 1; rank <= max_excitation_rank; ++rank)
             amps.by_rank.emplace_back(rank_dims(reference, rank), 0.0);
+
+        // Gap B1: each higher Sz sector is a zero block with the same occ/vir
+        // dims as its rank's reference (the spin projection lives in the algebra,
+        // not the shape). Ranks are bounded by max_excitation_rank so a sector
+        // never references an unallocated reference rank.
+        amps.sectors.reserve(sectors.size());
+        for (const auto &[rank, tag] : sectors)
+            amps.sectors.push_back(
+                {{rank, tag}, TensorND(rank_dims(reference, rank), 0.0)});
         return amps;
     }
 } // namespace HartreeFock::Correlation::CC

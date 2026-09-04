@@ -16,22 +16,39 @@ self-consistent field theory. It implements:
 - Conventional (stored ERI tensor) and direct (on-the-fly Fock build) SCF
 - Point-group detection, symmetry-adapted orbitals, and MO irrep labeling
 - RMP2 and UMP2 correlation energies with RMP2 natural orbital analysis
+- Density-fitted (RI) integrals: RI-MP2 energies and gradients, an RI-JK Fock builder, and RI-routed CASSCF/FCI
 - RCCSD for canonical closed-shell RHF references
 - Small-system determinant-space teaching prototypes for RCCSDT, UCCSD, and UCCSDT
-- Generated arbitrary-order restricted tensor kernels, including RCCSDTQ when built
-- Analytic RHF, UHF, RKS, UKS, RMP2, and UMP2 nuclear gradients
+- Coupled-cluster kernels **generated at build time** by `ccgen`, to arbitrary
+  excitation rank: restricted (`cc3`-`cc6`) and, opt-in, unrestricted
+  (`ucc2`-`ucc6`). Optionally dressed and OpenMP-threaded
+- Analytic RHF, UHF, ROHF, RKS, UKS, RMP2, and UMP2 nuclear gradients
 - Analytic RMP2 nuclear gradients include Z-vector / CPHF relaxation
 - Geometry optimization in Cartesian and internal coordinates
 - Semi-numerical Hessians and harmonic vibrational analysis
-- CASSCF and RASSCF active-space multiconfigurational SCF
+- CASSCF and RASSCF active-space multiconfigurational SCF, and full CI
 - Binary checkpoint save/restart with cross-basis Löwdin projection
+- A memory-direct Fock build that never allocates the \(n_b^4\) ERI tensor, shared by all four integral engines
+- Optional MPI distribution of the direct-SCF Fock build
 
-The HF/post-HF calculation is coordinated by `src/driver.cpp`. The Kohn-Sham
-DFT calculation uses the separate entry point `src/dft/main.cpp` and the
-`DFT::Driver` pipeline in `src/dft/driver.cpp`. The central data object is
-`HartreeFock::Calculator` in `src/base/types.h`, which is shared by both
-pipelines and carries all options, molecular data, basis data, SCF state, and
-results.
+### The three binaries
+
+| Binary | Entry point | Purpose |
+|---|---|---|
+| `hartree-fock` | `src/driver.cpp` → `HartreeFock::Driver::run` (`src/hf_driver.cpp`) | HF, post-HF, gradients, geomopt, frequencies |
+| `planck-dft` | `src/dft/main.cpp` → `DFT::Driver::run` (`src/dft/driver.cpp`) | Kohn-Sham DFT and TD-DFT |
+| `planck-mpi` | `src/mpi/main.cpp` | Unified MPI front end; dispatches to *either* of the above based on `Calculator::is_dft_run()`. Built only with `-DBUILD_MPI=ON` |
+
+All three share the same compute layer. The central data object is
+`HartreeFock::Calculator` in `src/base/types.h`, which carries all options,
+molecular data, basis data, SCF state, and results, and is common to every
+pipeline. The MPI surface is confined to `src/base/mpi_env.h`, which compiles to
+no-ops in the two serial binaries — so the integral and SCF kernels carry
+identical source in all three, with no runtime cost off the MPI path.
+
+A Python front end (`python/planck.py`) drives either serial binary and returns
+results as a dict, parsed from the binary's `--json` dump rather than scraped
+from the human-readable log.
 
 ## 2. Architecture Overview
 
@@ -47,31 +64,59 @@ Input file (.hfinp)
   → one-electron integrals S, T, V (src/integrals/os.cpp)
   → optional SAO basis construction (src/symmetry/mo_symmetry.cpp)
   → SCF loop (src/scf/scf.cpp)
-       ├── conventional:  build ERI tensor once, reuse
-       └── direct:        rebuild G(P) from scratch each iteration
-  → post-HF: MP2, coupled cluster, or CASSCF (src/post_hf/)
+       ├── conventional:  build the full ERI tensor once, reuse it
+       ├── direct:        rebuild G(P) each iteration, memory-direct — each
+       │                  quartet is contracted straight into F and the nb^4
+       │                  tensor is never allocated (src/integrals/fused_fock.h)
+       └── RI:            fitted 3-center factors instead of 4-center ERIs
+                          (src/post_hf/ri/ri_eri.cpp)
+  → post-HF: MP2, coupled cluster, FCI, or CASSCF (src/post_hf/)
   → gradient (src/gradient/)
   → geometry optimization (src/opt/)
   → frequency analysis (src/freq/)
   → checkpoint write (src/io/checkpoint.cpp)
 ```
 
+One part of this is not in the repository. **The coupled-cluster kernels above
+rank 3 are generated at build time**, not written by hand:
+
+```
+CMake configure
+  → ccgen (python/ccgen/) derives the CC equations symbolically
+  → emits C++ into build/generated/cc/*_planck_generated.cpp
+  → those are #include'd by src/post_hf/cc/generated_kernel_registry.cpp
+  → compiled into hartree-fock like any other source
+```
+
+So `grep`ping `src/` for a quadruples residual finds nothing: it is emitted by
+`python/ccgen/emit/planck_tensor_cpp.py` during the build. §16 covers which
+methods come from where; `docs/CCGEN_TEACHING_GUIDE.md` covers the generator
+itself.
+
 ### Directory Summary
 
 | Directory | Contents |
 |---|---|
-| `src/base` | `types.h` (all structs/enums/Calculator), `tables.h`, `basis.h` |
-| `src/io` | input parsing, checkpoint I/O, logging |
-| `src/basis` | GBS file reading, primitive normalization, contraction |
-| `src/integrals` | shell pairs, Obara-Saika OS engine, Head-Gordon-Pople (HGP) engine, Rys quadrature engine |
-| `src/scf` | orthogonalizer, initial guess, RHF/UHF SCF loops |
-| `src/symmetry` | libmsym wrapper, SAO basis, MO labeling, integral sym ops |
-| `src/post_hf` | MP2 energy/gradient, RCCSD/UCCSD/RCCSDT/UCCSDT, CASSCF/RASSCF, AO→MO transforms, CPHF |
-| `src/gradient` | analytic RHF, UHF, RMP2, and UMP2 gradients |
+| `src/base` | `types.h` (all structs/enums/Calculator), `tables.h`, `basis.h`, `mpi_env.h` (the whole MPI surface) |
+| `src/io` | input parsing, checkpoint I/O, logging, FCIDUMP export, JSON results |
+| `src/basis` | GBS file reading, primitive normalization, contraction, cart→spherical transform, RI auxiliary-basis loading |
+| `src/integrals` | shell pairs, Obara-Saika OS engine, Head-Gordon-Pople (HGP) engine, Rys quadrature engine, and the shared memory-direct fused Fock loop (`fused_fock.h`, `fock_accumulate.h`) |
+| `src/scf` | orthogonalizer, initial guess (H\(_{core}\)/SAD), RHF/UHF/ROHF SCF loops, DIIS, stability analysis |
+| `src/symmetry` | libmsym wrapper, SAO basis, MO labeling, integral sym ops, full point-group ERI reduction |
+| `src/post_hf` | MP2 energy/gradient, RCCSD/UCCSD/RCCSDT/UCCSDT/RCCSDTQ, FCI, CASSCF/RASSCF, AO→MO transforms, CPHF |
+| `src/post_hf/ci` | the shared CI engine (determinant strings, sigma build, Davidson, RDMs) used by both FCI and CASSCF |
+| `src/post_hf/ri` | density fitting: 2c/3c integrals, metric factorization, fitted factors, RI-JK, RI derivative integrals and gradient |
+| `src/gradient` | analytic RHF, UHF, ROHF, RMP2, and UMP2 gradients |
 | `src/opt` | L-BFGS/BFGS optimizer, internal coordinates, constraints |
 | `src/freq` | finite-difference Hessian, vibrational analysis |
-| `src/dft` | Kohn-Sham DFT pipeline: molecular grid, AO evaluation, XC matrix, analytic KS gradients, KS driver |
+| `src/solvation` | C-PCM cavity, influence matrix, reaction-field operator (shared by HF and DFT) |
+| `src/bsse` | ghost atoms and the counterpoise driver |
+| `src/populations` | Mulliken, Löwdin, Mayer bond orders |
+| `src/dft` | Kohn-Sham DFT pipeline: molecular grid, AO evaluation, XC matrix, analytic KS gradients, TD-DFT, KS driver |
 | `src/dft/base` | grid construction headers: radial (Treutler-Ahlrichs), angular (Lebedev), Becke partition, libxc wrapper |
+| `src/mpi` | the `planck-mpi` unified front end |
+| `python/` | the Python front end (`planck.py`) and `ccgen`, the CC equation generator |
+| `build/generated/cc/` | **not in the repository** — the CC kernels ccgen emits at build time, compiled into the binary via `src/post_hf/cc/generated_kernel_registry.cpp` |
 
 ## 3. Core Data Structures
 
@@ -685,7 +730,7 @@ SAD but at the correct \(-2.85516\) Eh (matching PySCF to \(10^{-10}\)) from
 HCore, each "converging" in five iterations at a different HOMO energy. The SAD
 atomic-density seed apparently lands in the wrong basin for a single small atom.
 This matters directly for the isolated-monomer references in a counterpoise
-calculation ([§23](#23-basis-set-superposition-error-and-the-counterpoise-correction)),
+calculation ([§24](#24-basis-set-superposition-error-and-the-counterpoise-correction)),
 where a core-Hamiltonian guess is the safer choice for those small fragments. The
 lesson is not that one guess is universally safer — it is that the converged SCF
 solution should be sanity-checked (symmetry of degenerate orbitals, dipole of a
@@ -847,7 +892,7 @@ spurious low UHF.
 
 A clean illustration of how guess choice, basis flexibility, and the follow
 machinery interact comes from running 90°-twisted ethylene
-(`tests/benchmarks/scf/ethylene_rhf_stability_unstable.hfinp`) across four
+(`tests/inputs/regression/hf/ethylene_rhf_stability_unstable.hfinp`) across four
 basis sets with two guesses each (HCore vs SAD), once with
 `stability_follow .false.` and once with `.true.` and `max_cycles 300`.
 
@@ -1569,6 +1614,104 @@ symmetry is also used, one computes only the canonical representative of each
 symmetry orbit and writes the value back to the remaining orbit elements with
 the appropriate phase factors.
 
+### The Memory-Direct Fock Build
+
+The scatter just described has an obvious flaw for direct SCF, where the only
+consumer of the ERIs is the Fock matrix. The two-phase build computes a quartet,
+scatters it into eight slots of an \(n_b^4\) array, and then, in a second
+\(n_b^4\) sweep, contracts that array back down against the density into an
+\(n_b^2\) matrix. The tensor is a write-only staging area: every value is stored
+once and read once. For \(n_b = 200\) it is 12 GB of allocation to carry
+information that never needed to be held.
+
+The **memory-direct** (or *fused*) build eliminates it. As soon as a canonical
+quartet's contracted value is known, it is accumulated directly into \(\mathbf
+F\) along every element of its permutational orbit:
+
+\[
+G_{\mu\nu} \mathrel{+}= P_{\lambda\sigma}(\mu\nu|\lambda\sigma), \qquad
+G_{\mu\lambda} \mathrel{-}= \tfrac{1}{2} P_{\nu\sigma}(\mu\nu|\lambda\sigma),
+\qquad \dots
+\]
+
+applied for each of the (up to eight) distinct index tuples in the orbit.
+Nothing larger than \(n_b^2\) is ever allocated, and the second \(n_b^4\) sweep
+disappears entirely.
+
+#### Why there are no degeneracy factors
+
+This build is notoriously easy to get wrong, and the usual bug is in the
+bookkeeping. When indices coincide — \(\mu = \nu\), or \(\lambda = \sigma\), or
+\((\mu\nu) = (\lambda\sigma)\) — the eight-element orbit *collapses*: several of
+the eight tuples name the same physical slot. The textbook fix is a table of
+hand-derived degeneracy weights (\(\tfrac{1}{2}\), \(\tfrac{1}{4}\), …) covering
+each collapse case, and getting one wrong produces an error that is small,
+geometry-dependent, and miserable to find.
+
+Planck sidesteps the whole issue. Instead of weighting, it **enumerates the
+orbit's distinct tuples** and applies one unweighted contribution per distinct
+tuple (`distinct_eri_orbit` in `src/integrals/fock_accumulate.h`). Deduplication
+then handles every collapse case automatically — and it reproduces the two-phase
+result *by construction*, because a Phase-2 sweep over the tensor also reads
+each distinct slot exactly once. There is no case analysis to get wrong.
+
+This is correct only if the quartet loop visits each canonical \((\mu\nu|\lambda
+\sigma)\) exactly once, which the canonical filter (\(\nu\ge\mu\), \(\sigma\ge
+\lambda\), \((\lambda\sigma) \ge_{\text{lex}} (\mu\nu)\)) guarantees. The two
+invariants are load-bearing together: dedup without the filter would
+double-count, and the filter without dedup would miss the collapse cases.
+
+Point-group symmetry composes on top without double-counting: the ERI is
+computed once at each symmetry-orbit representative and replicated across the
+orbit with the accumulated AO sign, exactly as the tensor scatter does.
+
+#### One loop, four engines
+
+OS, HGP, Rys, and Rys-Auto had four copies of the identical two-phase builder.
+They differ in exactly one expression — which per-quartet function returns the
+contracted ERI — and all four of those have the same signature. So the engine
+enters as a callable and the loop is written once, in
+`src/integrals/fused_fock.h`. The engine-specific recurrences stay in their own
+files; the traversal, screening, threading, and accumulation are shared.
+
+Screening happens at the block level: a Schwarz bound is computed per
+shell-group pair and whole quartet blocks are rejected before any primitive work
+is done.
+
+#### Threading: why the reduction order is fixed
+
+The accumulations into \(\mathbf F\) are **read-modify-write**, unlike the
+store-only scatter of the tensor build. That difference matters. A store-only
+scatter is order-independent — every writer stores the same value, so the result
+is bitwise-identical no matter how threads interleave. A summation is not:
+floating-point addition is not associative, so summing partials in completion
+order makes the result drift with thread count.
+
+Planck therefore gives each thread its own \(\mathbf G\) partial and sums the
+partials in **fixed thread-index order**, under `schedule(static)`. Never `omp
+atomic`, never `omp critical`, never `schedule(dynamic)` — each of those
+reintroduces the drift. The result is bitwise-invariant to `OMP_NUM_THREADS`.
+This is not a hypothetical concern: it is exactly the bug that produced the
+historical \(\sim10^{-10}\) jitter in the DFT XC grid reduction.
+
+#### MPI distribution
+
+Because the loop already accumulates into a small matrix, distributing it is
+almost free. Ranks stripe over the bra shell-pair index, each computing a
+disjoint subset of quartets into its own local \(\mathbf G\), and a single
+`Allreduce` at the end sums the \(n_b^2\) matrices. The communication volume is
+\(O(n_b^2)\) per SCF iteration — not \(O(n_b^4)\), which is the whole point: no
+integrals cross the wire, only the Fock matrix does.
+
+The MPI surface is confined to `src/base/mpi_env.h`, which compiles to rank 0 /
+size 1 / no-op reductions in the serial binaries. So the stride degrades to the
+full loop, the reduce touches nothing, and the serial and MPI builds are
+bitwise-identical — verified by `water_rhf_mpi_smoke` and `water_dft_mpi_smoke`.
+
+Implementation: `src/integrals/fused_fock.h` (loop),
+`src/integrals/fock_accumulate.h` (orbit accumulation),
+`src/integrals/quartet_orbit.h` (symmetry-orbit dedup), `src/base/mpi_env.h`.
+
 ---
 
 ## 10. Spherical Harmonic Basis Functions
@@ -2037,55 +2180,32 @@ using the same HRR as the OS path, first on the bra pair and then on the ket
 pair. The contracted ERI is obtained by summing the primitive results over all
 \((\alpha, \beta)\) and \((\gamma, \delta)\) primitive pairs.
 
-### Auto-Dispatch: Calibrated HGP / Rys Selection
+### Auto-Dispatch: Calibrated Per-Bucket Engine Selection
 
 When the user requests `engine auto`, every contracted shell quartet is routed
-to whichever of HGP or Rys is empirically faster for that quartet's angular-
-momentum bucket. OS is intentionally **not** in the auto menu — it is available
-only via the explicit `engine os` selection, because the calibration below
-shows it is dominated by HGP across the entire bucket range used in practice.
+to whichever integral engine is empirically fastest for that quartet's
+angular-momentum bucket \((L_{AB}, L_{CD})\), where
+\(L_{AB} = l_A + l_B\) and \(L_{CD} = l_C + l_D\). Which engine that is has
+changed twice as the engines themselves were optimized, and the calibration
+machinery is built so the rule tracks those changes automatically rather than
+being hand-maintained. This section describes both the current data and how the
+rule is derived from it.
 
-#### The original analytic model (superseded)
+#### Why a fitted rule and not an analytic flop count
 
-Older auto-dispatch schemes select OS-vs-Rys per quartet using an analytic
-operation-count estimate. With
+The textbook approach picks OS-vs-Rys per quartet from an analytic operation
+count: Rys overhead is fixed per root (\(n = \lfloor L/2\rfloor + 1\) roots),
+while the OS auxiliary stack grows with total angular momentum, so the two
+cross somewhere in the middle. That picture is *qualitatively* right but
+quantitatively useless once a third engine (HGP) and two rounds of engine
+optimization enter, because the real cost surface is set by memory-traffic and
+loop-structure effects (HRR hoisted out of the primitive loop, per-quartet
+scratch reuse) that a flop count does not model. Planck therefore **measures**
+the cost surface and fits the dispatch rule to it.
 
-\[
-\text{six\_d} = (l_{AB,x}+1)(l_{AB,y}+1)(l_{AB,z}+1)
-                (l_{CD,x}+1)(l_{CD,y}+1)(l_{CD,z}+1),
-\]
-
-the predicted flop counts are
-
-\[
-W_{\text{OS}}  = \text{six\_d}\cdot(L+1)
-               + (l_B + l_D + 1)\cdot\text{six\_d}\cdot 0.25,
-\quad
-W_{\text{Rys}} = \text{six\_d}\cdot n
-               + (l_B + l_D + 1)\cdot\text{six\_d}\cdot 0.20
-               + 24\cdot n,
-\]
-
-where \(n = \lfloor L/2 \rfloor + 1\) is the number of Rys roots. Rys is
-preferred when \(W_{\text{Rys}} < W_{\text{OS}}\). This model is included
-here as historical context: the cost surface it describes is qualitatively
-correct (Rys overhead is fixed per-root, OS scratch grows with auxiliary
-order), but quantitatively it is no longer what Planck's `_auto_prefers_rys`
-predicate evaluates. With HGP available, the OS branch is dominated almost
-everywhere and the analytic fit collapses to a much simpler integer rule.
-
-#### Empirical calibration with HGP
-
-The actual rule in `src/integrals/rys.cpp::_auto_prefers_rys` is
-
-```cpp
-return (L_AB + L_CD) <= 1;
-```
-
-— pick Rys at \(L_{AB} + L_{CD} \in \{0, 1\}\) (the three buckets
-\((0,0)\), \((0,1)\), \((1,0)\)), and pick HGP everywhere else. This is the
-output of a calibration sweep run by `tests/auto_dispatch_benchmark.cpp` over
-238 distinct (case, bucket) entries spanning
+The harness `tests/auto_dispatch_benchmark.cpp` times all three engines on
+every populated bucket across six (molecule, basis) cases, writing
+`docs/auto_dispatch_timings.csv`:
 
 | Case | Buckets | Reach |
 |---|---|---|
@@ -2096,99 +2216,134 @@ output of a calibration sweep run by `tests/auto_dispatch_benchmark.cpp` over
 | helium / cc-pVQZ | 49 | \(L_{AB} + L_{CD} \le 12\) |
 | helium / cc-pV5Z | 81 | \(L_{AB} + L_{CD} \le 16\) |
 
-The output curves are emitted to `docs/auto_dispatch_curves.svg`; the raw
-per-bucket medians are in `docs/auto_dispatch_fit.json`, and the underlying
-timings in `docs/auto_dispatch_timings.csv`. The fitter script is
-`scripts/fit_auto_dispatch.py`.
+`scripts/fit_auto_dispatch.py` then derives the rule **directly from the data**:
+for each \((L_{AB}, L_{CD})\) bucket it takes the median per-quartet time across
+the six cases and assigns the bucket to the engine with the lowest median. There
+are no hard-coded angular-momentum inequalities — the region map *is* the
+per-bucket median-winner table. The fitter emits `docs/auto_dispatch_fit.json`
+(the `region_table`, the per-bucket medians, and a generated C++ lookup) and
+`docs/auto_dispatch_curves.svg`. When an engine is later optimized, re-running
+the benchmark and the fitter moves the region boundaries on their own; the
+self-deriving fitter was introduced precisely so the rule survives engine work
+without manual edits.
 
 ![Per-quartet build time (ms) versus L_AB + L_CD for HGP, Rys, and OS, across the six calibration cases.](auto_dispatch_curves.svg)
 
-Cross-case median per-quartet build times (microseconds, computed as the
-median across the six (molecule, basis) cases for each \((L_{AB}, L_{CD})\)
-bucket; lower is faster):
+#### The current cost surface (three-way)
 
-| \(L_{AB}, L_{CD}\) | HGP / µs | Rys / µs | OS / µs | Per-bucket winner |
+The data below is the median of 9 benchmark runs at 10 000 sampled quartets per
+bucket, taken after both HGP and OS had their HRR hoisted to the contracted
+shell-quartet level (the "A4" rearrangement — VRR per primitive pair, HRR once
+per quartet; see §12). Cross-case median per-quartet build times, in
+microseconds (lower is faster), with the engine the fitted rule assigns:
+
+| \(L_{AB}, L_{CD}\) | HGP / µs | Rys / µs | OS / µs | Rule pick |
 |---|---:|---:|---:|---|
-| 0, 0 | 67.0 | **23.5** | 50.9 | Rys |
-| 0, 1 / 1, 0 | 59.3 / 59.9 | **22.4 / 22.5** | 48.3 / 49.5 | Rys |
-| 0, 2 / 1, 1 / 2, 0 | 36.2 / 31.1 / 37.8 | 219 / 185 / 223 | **34.8 / 29.3 / 34.1** | OS (tie with HGP) |
-| 1, 2 / 2, 1 / 2, 2 | **20.4 / 20.7** / 14.1 | 112 / 114 / 144 | 21.9 / 21.8 / 18.6 | HGP |
-| 3, 3 | 7.2 | 73.6 | 16.1 | HGP |
-| 4, 4 | 5.3 | 38.1 | 14.5 | HGP |
-| 5, 5 | 10.0 | 53.7 | 35.9 | HGP |
-| 6, 6 | 20.3 | 76.0 | 82.2 | HGP |
-| 7, 7 | 30.4 | 107.0 | 135.0 | HGP |
-| 8, 8 | 81.5 | 170.7 | 354.0 | HGP |
+| 0, 0 | **1.0** | 4.0 | 1.3 | HGP |
+| 0, 1 / 1, 0 | **1.1 / 1.0** | 3.1 / 3.1 | 1.3 / 1.3 | HGP |
+| 1, 1 / 2, 0 | **0.9** / **0.9** | 9.0 / 10.2 | 1.0 / 1.1 | HGP |
+| 2, 2 | **0.7** | 6.8 | 0.8 | HGP |
+| 3, 3 | **0.6** | 3.6 | 0.7 | HGP |
+| 4, 4 | **0.6** | 1.8 | **0.6** | HGP |
+| 5, 5 | **1.3** | 3.0 | 1.4 | HGP |
+| 6, 6 | 2.8 | 4.4 | **2.8** | OS |
+| 7, 7 | 6.4 | 6.9 | **5.8** | OS |
+| 7, 8 | 9.0 | **7.6** | 8.1 | Rys |
+| 8, 8 | 12.8 | **10.5** | 11.0 | Rys |
 
-Three things to notice in the table and curves:
+Across all 81 buckets the median-winner counts are **HGP 66, OS 13, Rys 2**.
+The three regions are:
 
-1. **Rys owns only the bottom band**, \(L_{AB} + L_{CD} \le 1\). At
-   \((0,0)\) Rys is roughly 2.9× faster than HGP because the entire 6D OS
-   stack is overkill for \((ss|ss)\); the one Rys root plus its weight
-   delivers the same value with less arithmetic. By \((0,2)\) / \((1,1)\)
-   the second Rys root has to fire and the per-root overhead (root finding
-   + 1D coefficient build) buries the savings — Rys loses to both HGP and
-   OS by 6–7×.
-2. **The OS-wins band is one bucket wide** and the margin over HGP is in
-   single-µs territory (HGP within ~10% of OS at \((0,2)\)/(1,1)/(2,0)).
-   Because Lsum = 2 there is no clean integer separator between an "OS
-   strip" and the HGP region; the calibration deliberately rounds Lsum = 2
-   into the HGP camp and accepts a measured maximum overhead of zero against
-   the per-bucket winner across the calibration set (see the per-case stats
-   below). The simpler rule beats a three-way table here precisely because
-   the OS / HGP gap at Lsum = 2 is within the noise of repeated benchmark
-   runs.
-3. **For Lsum \(\ge\) 3, HGP wins by a wide and growing margin**. At Lsum
-   = 6 (so e.g. \((3,3)\)) HGP is \(\sim\)10× faster than Rys and \(\sim\)2.2×
-   faster than OS; at the high-L helium tail (Lsum = 16, \((8,8)\) on
-   cc-pV5Z) HGP is \(\sim\)2.1× faster than Rys and \(\sim\)4.3× faster
-   than OS. The HRR-outside-the-primitive-loop factorization compounds
-   precisely where it should.
+1. **HGP wins the entire low- and mid-L bulk** (66 buckets), including the
+   \(L_{AB}+L_{CD}\le 1\) corner — \((0,0)\), \((0,1)\), \((1,0)\) — that older
+   schemes handed to Rys. The HGP HRR-outside-the-primitive-loop factorization
+   makes it the fastest engine at low L *and* keeps it competitive far up the
+   ladder. At the d-shell sweet spot (e.g. \((2,2)\)) HGP is ~9× faster than
+   Rys and ~15% faster than OS.
+2. **OS re-enters in a high-L corner** (13 buckets:
+   \((6,6)\), \((6,7)\), \((6,8)\), \((7,6)\), \((7,7)\), \((8,5)\), \((8,6)\),
+   \((8,7)\), \((5,7)\), \((5,8)\), \((4,7)\), \((4,8)\), \((3,8)\)). Once total
+   angular momentum is large enough, HGP's per-shell-quartet HRR bookkeeping
+   overhead overtakes its primitive-loop savings and plain OS wins — but only by
+   single-digit percent (e.g. \((6,6)\): OS 2.79 vs HGP 2.81 µs). This corner
+   exists *because* OS itself was given the A4 hoist; before that optimization
+   OS was dominated almost everywhere and was not in the auto menu at all.
+3. **Rys survives only in the extreme corner**, \((7,8)\) and \((8,8)\), where
+   its quadrature cost grows more slowly than the OS/HGP recurrence tables
+   (\((8,8)\): Rys 10.5 vs OS 11.0 vs HGP 12.8 µs).
 
-Per-case sanity stats from `docs/auto_dispatch_fit.json`:
+The median gate is clean: the fitted rule disagrees with the per-bucket median
+winner in **0 of 81** buckets, and the single per-case disagreement out of 238
+case-rows (water/cc-pVTZ \((5,6)\)) is an OS/HGP tie at **0.25%** — a noise-floor
+straddle, correctly not flipped. Earlier single-run benchmarks showed up to ~8%
+per-case overhead and a dozen disagreements; the median-of-9 data confirms those
+were run-to-run noise on near-tie boundary buckets, not real structure.
 
-| Case | Buckets | Disagreements vs per-bucket winner | Max overhead |
-|---|---:|---:|---:|
-| helium / cc-pV5Z | 81 | 0 | 0.000 |
-| helium / cc-pVQZ | 49 | 0 | 0.000 |
-| water / 6-31G(d) | 25 | 0 | 0.000 |
-| water / cc-pVDZ | 25 | 0 | 0.000 |
-| water / cc-pVTZ | 49 | 0 | 0.000 |
-| water / STO-3G | 9 | 0 | 0.000 |
-| **total** | **238** | **0** | **0.000** |
+#### How the rule evolved (and why this matters pedagogically)
 
-"Disagreements" counts buckets where the rule picks a different engine than
-the per-case timed winner; "max overhead" is the worst-case extra wall-clock
-time at any bucket relative to that local winner. Both are zero on every
-case, so the integer rule **reproduces the per-case optimum exactly** across
-the calibration set — there is no headroom left for a more elaborate model
-on these molecules and bases.
+This is a good illustration of why a dispatch rule must be re-measured, not
+reasoned about once:
 
-#### Why this rule and not the analytic flop count
+- **Two engines, pre-HGP-A4.** OS-vs-Rys only; Rys won the very-low-L corner and
+  the rule was an analytic crossover.
+- **Two engines, post-HGP-A4.** HGP's HRR hoist made it the broad winner and
+  *took the low-L corner away from Rys*. The rule collapsed to "Rys iff
+  \(L_{AB}+L_{CD}\le 1\), else HGP"; OS dropped out of the menu.
+- **Three engines, post-OS-A4 (current data).** The same A4 hoist applied to OS
+  made OS competitive again in the high-L corner, so OS re-enters with 13
+  buckets, and re-measurement showed HGP — not Rys — is actually fastest at
+  \((0,0)/(0,1)/(1,0)\). The rule is now genuinely three-way.
 
-The analytic model in the previous subsection predicts a smooth crossover
-where Rys overtakes OS as \(L\) grows. The measured curves do show a crossover,
-but it is sharp and it is HGP rather than OS that defines the right edge —
-once HGP enters the menu, the predicted "Rys at high \(L\)" regime evaporates
-because HGP is faster than Rys at every Lsum \(\ge\) 2 in the calibration
-set. The fit therefore collapses to a single integer threshold; the runtime
-predicate compiles to a single add and compare, no table lookup, no branch
-mispredict from a complicated cost expression. When the calibration covers
-the entire angular-momentum range the user will actually request, this is
-the right shape of model.
+Each transition moved the boundaries in a way the previous analytic argument did
+not predict, which is exactly why the fitter derives the regions from measured
+medians rather than from a formula.
 
-Stored-ERI (`_compute_2e_auto`) and direct-Fock (`_compute_2e_fock_auto`,
-`_compute_2e_fock_uhf_auto`) variants both consult the same per-quartet
-predicate, so the auto-dispatch decision is consistent across both code
-paths. The surrounding Schwarz screening, canonical-quartet iteration, and
-tensor/Fock contraction patterns are unchanged from the per-engine path.
+#### Runtime implementation
+
+The runtime consumes the fitted three-way `region_table` directly.
+`src/integrals/rys.cpp` holds it as a dense constexpr lookup
+`kAutoEngine[L_AB][L_CD]` — copied verbatim from the fitter's generated C++ in
+`docs/auto_dispatch_fit.json` — and `_auto_engine(L_AB, L_CD)` indexes it
+(clamping \(L\) beyond the benchmarked reach to the table edge). The
+per-component dispatcher `_auto_contracted_eri` switches on the result and calls
+the OS, HGP, or Rys contracted-ERI entry accordingly:
+
+```cpp
+switch (_auto_engine(L_AB, L_CD)) {
+case IntegralMethod::RysQuadrature:  return RysQuad::_rys_contracted_eri(...);
+case IntegralMethod::ObaraSaika:     return ObaraSaika::_contracted_eri_elem(...);
+default:                             return HeadGordonPople::_contracted_eri_elem(...);
+}
+```
+
+In the stored-ERI sweep `_compute_2e_auto`, the HGP block-hoist fast path fires
+only when `_auto_engine` returns HGP for the shell-group bucket; OS- and
+Rys-chosen quartets fall to the per-component path (which re-dispatches through
+`_auto_contracted_eri`). The direct-Fock variants (`_compute_2e_fock_auto`,
+`_compute_2e_fock_uhf_auto`) reuse `_compute_2e_auto`, so the same per-quartet
+rule applies across stored-ERI and direct-Fock paths. Schwarz screening,
+canonical-quartet iteration, and the tensor/Fock contraction patterns are
+unchanged from the per-engine path.
+
+The dispatch is purely a *which-engine* choice — all three engines return
+bitwise-identical integrals — so `engine auto` always matches any single
+explicit engine to machine precision. This is verified by the
+`engine_scf_energy_compare.py` comparator (OS == HGP == Rys == Auto to
+`0.000e+00 Eh`), including a He₂/cc-pV5Z case that reaches the high-L corner
+where Auto actually selects OS (Lsum ≳ 11) and Rys (\((7,8)\)/\((8,8)\)).
+
+When an engine is re-optimized: re-run `planck-auto-dispatch-benchmark`, re-run
+`scripts/fit_auto_dispatch.py`, then paste the regenerated table from
+`docs/auto_dispatch_fit.json`'s `rule_in_code` into `kAutoEngine`. The table is
+kept verbatim (not reduced to inequalities) precisely so this step is a
+mechanical copy with no risk of drift.
 
 ### Implementation Files
 
 | File | Role |
 |---|---|
 | `src/integrals/rys.h` | Public API: `_compute_2e`, `_compute_2e_fock`, `_compute_2e_fock_uhf`, and `_auto` variants |
-| `src/integrals/rys.cpp` | VRR (`_rys_vrr_1d`), HRR (`_rys_hrr_ab`, `_rys_hrr_cd`), primitive and contracted ERI, Schwarz table, Fock builders, auto-dispatch predicate (`_auto_prefers_rys`) |
+| `src/integrals/rys.cpp` | VRR (`_rys_vrr_1d`), HRR (`_rys_hrr_ab`, `_rys_hrr_cd`), primitive and contracted ERI, Schwarz table, Fock builders, three-way auto-dispatch table + selector (`kAutoEngine`, `_auto_engine`) |
 | `src/integrals/rys_roots.h` | `rys_roots_weights` declaration; exact 1-point formula `rys_1pt` |
 | `src/integrals/rys_roots.cpp` | Pre-tabulated GL rules; Boys moment recursion; Stieltjes–Jacobi Gram-Schmidt + Eigen eigendecomposition |
 | `tests/auto_dispatch_benchmark.cpp` | Per-bucket timing harness that produces `docs/auto_dispatch_timings.csv` |
@@ -2374,148 +2529,123 @@ Cartesian and spherical-harmonic bases — the spherical path inserts the
 \(C\)-to-spherical transform on the contracted block just before the scatter,
 exactly as in the OS and Rys symmetry-reduced variants.
 
-### Why HGP Wins in Practice — Measured Timings
+### HGP vs OS vs Rys in Practice — Measured Timings
 
 The theoretical argument above (HRR factored *outside* the primitive contraction
-loops, smaller VRR scratch than Rys at low-to-medium \(L\)) is confirmed by a
-direct head-to-head benchmark of all three engines (OS, Rys, HGP) on the same
-molecules and bases inside this codebase. The table below reports wall-clock time per ERI build (in
-milliseconds, lower is better) for the three engines, in three modes: no
-symmetry (`nosym`), the legacy D2h coordinate-axis reduction (`d2h`), and the
-full point-group reduction (`full`). All runs use the same shell-pair list,
-Schwarz screening, and OpenMP settings; only the contracted-quartet kernel and
-the symmetry walker change.
+loops) explains why HGP is fast, but it does **not** imply HGP wins by a wide
+margin, because the same factorization can be applied to OS. Once it was (the
+OS-A4 rearrangement — see §11 and the OS engine notes — builds the VRR `(a0|c0)`
+block per primitive pair and runs HRR once per shell quartet, exactly as HGP
+does), the OS/HGP gap narrowed sharply: HGP still leads on the workload that
+matters — the full point-group path — but only by ~1.1–1.2×, not the ~1.5–2× an
+earlier build showed. The benchmark below is a head-to-head of all three engines
+on the same molecules and bases, in three symmetry modes — no symmetry
+(`nosym`), the legacy D2h coordinate-axis reduction (`d2h`), and the full
+point-group reduction (`full`). All runs share the shell-pair list, Schwarz
+screening, and OpenMP settings; only the contracted-quartet kernel and the
+symmetry walker change.
 
-The numbers below are the median of 7 repetitions per configuration, from a
-**`-O3`-compiled, OpenMP-enabled** binary; `nbasis` is the number of basis
-functions, `|G|` the full point-group order, and "D2h ops" the number of those
-operations the legacy coordinate-axis reduction can actually use. An earlier
-version of this section was timed from a **`-O0` (unoptimized) serial** build;
-the engine *ordering* differs between the two — see pattern 2 below — so these
-numbers should not be compared directly against that older run.
+The numbers are the **median of 9 repetitions** per configuration, OpenMP
+enabled, **on an otherwise-idle machine** (an earlier run was contaminated by
+competing background load and is not reported here; repeated idle-machine runs
+agreed on every ordering and differed only in the third significant figure).
+They were taken after both HGP and OS had the A4 HRR hoist, reproducible from the
+full-symmetry direct-Fock benchmark harness (`tests/`, the same one summarized in
+the gitignored scratch `docs/timings.md`). `|G|` is the full point-group order;
+"D2h ops" is how many of those operations the legacy coordinate-axis reduction
+can actually use. The fastest engine in each (case, mode) cell is **bold**.
 
 | Molecule / basis | nbasis | Engine | nosym ms | d2h ms | full ms |
 |---|---|---|---|---|---|
-| H₂O / STO-3G (C2v, order(G)=4) | 7 | OS | 0.739 | 0.381 | 0.531 |
-| H₂O / STO-3G (C2v, order(G)=4) | 7 | Rys | 3.034 | 1.502 | 2.394 |
-| H₂O / STO-3G (C2v, order(G)=4) | 7 | **HGP** | **0.376** | **0.239** | **0.322** |
-| H₂O / STO-3G (C2v, order(G)=4) | 7 | Auto | 0.455 | 0.284 | **0.322** |
-| NH₃ / STO-3G (C3v, order(G)=6) | 8 | OS | 0.833 | 0.573 | 0.530 |
-| NH₃ / STO-3G (C3v, order(G)=6) | 8 | Rys | 3.999 | 2.569 | 2.683 |
-| NH₃ / STO-3G (C3v, order(G)=6) | 8 | **HGP** | **0.473** | **0.354** | **0.346** |
-| NH₃ / STO-3G (C3v, order(G)=6) | 8 | Auto | 0.684 | 0.471 | **0.346** |
-| CH₄ / STO-3G (Td, order(G)=24) | 9 | OS | 1.134 | 0.506 | 0.575 |
-| CH₄ / STO-3G (Td, order(G)=24) | 9 | Rys | 5.474 | 2.045 | 2.782 |
-| CH₄ / STO-3G (Td, order(G)=24) | 9 | **HGP** | **0.620** | **0.316** | **0.361** |
-| CH₄ / STO-3G (Td, order(G)=24) | 9 | Auto | 0.983 | 0.437 | **0.361** |
-| H₂O / `6-31G**` (C2v, order(G)=4) | 25 | OS | 8.837 | 4.010 | 6.711 |
-| H₂O / `6-31G**` (C2v, order(G)=4) | 25 | Rys | 53.027 | 17.695 | 37.180 |
-| H₂O / `6-31G**` (C2v, order(G)=4) | 25 | **HGP** | **6.214** | **2.996** | **4.437** |
-| H₂O / `6-31G**` (C2v, order(G)=4) | 25 | Auto | 6.345 | 3.176 | **4.437** |
-| NH₃ / 6-31G (C3v, order(G)=6) | 15 | OS | 2.688 | 1.790 | 1.619 |
-| NH₃ / 6-31G (C3v, order(G)=6) | 15 | Rys | 13.176 | 7.788 | 7.377 |
-| NH₃ / 6-31G (C3v, order(G)=6) | 15 | **HGP** | **1.270** | **0.946** | **0.836** |
-| NH₃ / 6-31G (C3v, order(G)=6) | 15 | Auto | 2.226 | 1.510 | **0.836** |
-| NH₃ / `6-31G*` (C3v, order(G)=6) | 21 | OS | 6.393 | 4.161 | 4.135 |
-| NH₃ / `6-31G*` (C3v, order(G)=6) | 21 | Rys | 38.083 | 23.032 | 22.801 |
-| NH₃ / `6-31G*` (C3v, order(G)=6) | 21 | **HGP** | **3.697** | **2.558** | **2.532** |
-| NH₃ / `6-31G*` (C3v, order(G)=6) | 21 | Auto | 4.673 | 3.079 | **2.532** |
-| NH₃ / `6-31G**` (C3v, order(G)=6) | 30 | OS | 14.494 | 9.490 | 7.127 |
-| NH₃ / `6-31G**` (C3v, order(G)=6) | 30 | Rys | 97.369 | 53.524 | 39.379 |
-| NH₃ / `6-31G**` (C3v, order(G)=6) | 30 | **HGP** | **9.274** | **6.879** | **4.753** |
-| NH₃ / `6-31G**` (C3v, order(G)=6) | 30 | Auto | 10.637 | 7.660 | **4.753** |
-| CH₄ / `6-31G**` (Td, order(G)=24) | 35 | OS | 22.981 | 10.391 | 8.160 |
-| CH₄ / `6-31G**` (Td, order(G)=24) | 35 | Rys | 155.936 | 44.731 | 40.797 |
-| CH₄ / `6-31G**` (Td, order(G)=24) | 35 | **HGP** | **14.824** | **8.572** | **5.871** |
-| CH₄ / `6-31G**` (Td, order(G)=24) | 35 | Auto | 17.490 | 8.749 | **5.871** |
+| H₂O / STO-3G (C2v, \|G\|=4) | 7 | **OS** | **0.946** | **0.501** | 0.371 |
+| H₂O / STO-3G | 7 | Rys | 3.925 | 1.863 | 2.762 |
+| H₂O / STO-3G | 7 | **HGP** | 1.081 | 0.807 | **0.340** |
+| H₂O / STO-3G | 7 | Auto | 1.092 | 0.795 | **0.340** |
+| NH₃ / STO-3G (C3v, \|G\|=6) | 8 | **OS** | **1.218** | **0.822** | 0.413 |
+| NH₃ / STO-3G | 8 | Rys | 4.900 | 3.177 | 2.859 |
+| NH₃ / STO-3G | 8 | **HGP** | 1.590 | 1.237 | **0.360** |
+| NH₃ / STO-3G | 8 | Auto | 1.604 | 1.216 | **0.360** |
+| CH₄ / STO-3G (Td, \|G\|=24) | 9 | **OS** | **1.790** | **0.813** | 0.452 |
+| CH₄ / STO-3G | 9 | Rys | 6.284 | 2.266 | 2.988 |
+| CH₄ / STO-3G | 9 | **HGP** | 2.058 | 1.221 | **0.388** |
+| CH₄ / STO-3G | 9 | Auto | 2.034 | 1.201 | **0.388** |
+| H₂O / `6-31G**` (C2v, \|G\|=4) | 25 | **OS** | 12.850 | **6.463** | 5.691 |
+| H₂O / `6-31G**` | 25 | Rys | 58.597 | 18.773 | 38.293 |
+| H₂O / `6-31G**` | 25 | **HGP** | **11.835** | 8.886 | **5.065** |
+| H₂O / `6-31G**` | 25 | Auto | 11.904 | 9.233 | **5.065** |
+| NH₃ / `6-31G` (C3v, \|G\|=6) | 15 | **OS** | 3.378 | **2.303** | 1.048 |
+| NH₃ / `6-31G` | 15 | Rys | 11.329 | 7.362 | 7.228 |
+| NH₃ / `6-31G` | 15 | **HGP** | **2.769** | 2.388 | **0.918** |
+| NH₃ / `6-31G` | 15 | Auto | 2.776 | 2.500 | **0.918** |
+| NH₃ / `6-31G*` (C3v, \|G\|=6) | 21 | **OS** | 8.746 | **5.545** | 2.901 |
+| NH₃ / `6-31G*` | 21 | Rys | 33.220 | 19.045 | 19.590 |
+| NH₃ / `6-31G*` | 21 | **HGP** | **7.640** | 6.560 | **2.521** |
+| NH₃ / `6-31G*` | 21 | Auto | 7.524 | 6.728 | **2.521** |
+| NH₃ / `6-31G**` (C3v, \|G\|=6) | 30 | OS | 18.896 | 12.952 | 5.076 |
+| NH₃ / `6-31G**` | 30 | Rys | 92.177 | 50.980 | 36.201 |
+| NH₃ / `6-31G**` | 30 | **HGP** | **16.332** | **12.708** | **4.714** |
+| NH₃ / `6-31G**` | 30 | Auto | 17.114 | 13.173 | **4.714** |
+| CH₄ / `6-31G**` (Td, \|G\|=24) | 35 | OS | 33.109 | 14.945 | 6.546 |
+| CH₄ / `6-31G**` | 35 | Rys | 143.254 | 42.482 | 37.544 |
+| CH₄ / `6-31G**` | 35 | **HGP** | **23.256** | **14.936** | **5.840** |
+| CH₄ / `6-31G**` | 35 | Auto | 24.176 | 16.291 | **5.840** |
 
 Reading the table, four patterns stand out.
 
-**1. Rys is dominated by both HGP and OS across the bulk of these bases.** On
-6-31G(d,p) / CH₄ (Td) the spread reaches \(\sim\)10.5× over HGP on `nosym` and
-\(\sim\)5.2× on `d2h`; Rys is not a competitor across the medium-\(L\) bulk.
-Note that Planck's *calibrated* auto-dispatch (§11) does **not** match the
-textbook "Rys wins at high \(L\)" intuition: the measured per-bucket sweep
-picks Rys only at the very bottom, \(L_{AB}+L_{CD} \le 1\) (the
-\((ss|ss)\)/\((ss|sp)\) buckets), where Rys's 1–2 roots undercut HGP's
-HRR-outside setup cost; everywhere above that HGP wins. So in this codebase
-Rys's empirical niche is the low-\(L\) corner, not the high-\(L\) tail — see
-§11 and `_auto_prefers_rys`. (The asymptotic flop-count argument that Rys's
-fixed root count eventually beats the growing OS/HGP scratch extents is still
-true in the limit, but that crossover sits beyond the angular momenta any
-shipped basis reaches, so it does not drive the dispatch decision in practice.)
+**1. Rys is dominated by both HGP and OS across this entire set.** Every case
+here tops out at d functions, and Rys loses in every cell — by up to ~6.2× (CH₄ /
+6-31G(d,p), `nosym`: Rys 143.3 vs HGP 23.3 ms). This is consistent with the
+per-bucket calibration in §11: Rys's empirical niche is the high-\(L\) tail
+(f/g/h, the \((7,8)\)/\((8,8)\) buckets), which none of these Pople bases reach.
+The asymptotic flop-count argument that Rys's fixed root count eventually beats
+the growing OS/HGP recurrence stacks holds, but only at angular momenta past
+where these bases live.
 
-**2. HGP is the fastest engine on every case in the table.** Unlike an earlier
-`-O0` serial run of this same benchmark — where HGP and OS were within a few
-percent of each other on STO-3G and OS actually edged ahead on the larger
-NH₃ basis — the `-O3` build here puts HGP clearly in front everywhere, by
-roughly 1.4–2.0× over OS on `nosym`. The optimization level matters because
-HGP's hot loop is the tight per-primitive VRR into a small \((a0|c0)\) block
-with the HRR hoisted out; `-O3` vectorizes and unrolls that kernel
-aggressively, whereas OS's larger per-primitive scratch traffic leaves less
-on the table. At `-O0` those advantages are masked, which is why the ordering
-flips:
+**2. HGP wins the mode that matters — `full` symmetry — on every case, but only
+narrowly.** In the full point-group mode (the one you actually run when symmetry
+is available) HGP is fastest in all 8 cases, by 1.08–1.16× over OS (e.g. CH₄ /
+6-31G(d,p): HGP 5.840 vs OS 6.546 ms, 1.12×; NH₃ / 6-31G(d,p): 4.714 vs 5.076,
+1.08×). The HRR-outside factorization still pays off, but after OS-A4 the lead is
+small — a far cry from the ~1.5–2× HGP showed before OS got the same hoist. This
+is why the section is no longer titled "Why HGP Wins": HGP is the right default,
+but the honest reason is "consistently a little faster on the symmetry path," not
+"dominant."
 
-| Case | OS `nosym` | HGP `nosym` | OS / HGP |
-|---|---|---|---|
-| H₂O / STO-3G | 0.739 | 0.376 | 1.97× |
-| CH₄ / STO-3G | 1.134 | 0.620 | 1.83× |
-| H₂O / `6-31G**` | 8.837 | 6.214 | 1.42× |
-| NH₃ / `6-31G*` | 6.393 | 3.697 | 1.73× |
-| NH₃ / `6-31G**` | 14.494 | 9.274 | 1.56× |
-| CH₄ / `6-31G**` | 22.981 | 14.824 | 1.55× |
+**3. Without full symmetry the ranking is mixed and near-tied.** In `nosym` HGP
+leads on the larger / polarized cases (H₂O and CH₄ / 6-31G(d,p), all three NH₃
+bases) while OS edges ahead on the small STO-3G systems (H₂O, NH₃, CH₄). In the
+legacy `d2h` mode OS is faster in most cells — but `d2h` is the partial
+coordinate-axis reduction, frequently *slower* than full symmetry and sometimes
+barely better than `nosym`, because its limited orbit walk adds bookkeeping it
+cannot fully amortize. The practical reading is that the `nosym`/`d2h` orderings
+sit within the noise of which engine's loop structure the build happens to favor;
+they should not drive the default, because the recommended path is full symmetry,
+where HGP wins cleanly.
 
-That is exactly the regime where the HGP analysis predicts wins: the HRR is
-removed from the \(K^4\) primitive loop, and at the same time the larger
-\((a0|c0)\) reduced block being VRR'd inside the loop avoids materializing the
-full \((ab|cd)\) tensor at every primitive step. The win even holds on STO-3G
-(\(K = 3\) primitives, \(s/p\) only), where the earlier `-O0` serial
-measurement had shown essentially no gap.
+**4. Full point-group symmetry is the larger lever by far, and both engines
+exploit it well.** The `nosym`→`full` speedup dwarfs the OS-vs-HGP kernel gap: on
+CH₄ / 6-31G(d,p) (Td) HGP goes 23.256→5.840 ms (4.0×) and OS 33.109→6.546 ms
+(5.1×); on NH₃ / 6-31G(d,p) HGP goes 16.332→4.714 ms (3.5×). Whichever engine you
+fix, turning on the full reduction (§8) buys 3–5× here — several times more than
+the ~1.12× difference between engines. `d2h` captures only part of that and can
+even regress relative to `nosym`; it is the wrong mode to use when the full group
+is available.
 
-**3. The NH₃ / 6-31G(d,p) "OS beats HGP" outlier is gone — but read the build
-flags first.** A prior `-O0` serial version of this benchmark recorded HGP as
-\(\sim\)37% *slower* than OS on NH₃ / 6-31G(d,p) in every symmetry mode, and the
-guide kept that case pinned as a counter-example to "HGP \(\leq\) OS everywhere."
-On the current `-O3` build HGP is the fastest engine on that case in all three
-modes (`nosym` 9.274 vs 14.494, `d2h` 6.879 vs 9.490, `full` 4.753 vs 7.127 ms).
-So the counter-example did not vanish because the kernel changed — it vanished
-because the optimizer closed the gap that the unoptimized build had exposed. The
-honest takeaway is that "HGP at least matches OS" holds across this benchmark set
-**when compiled `-O3`**; at `-O0` the ordering is implementation-traffic-bound
-and can reverse, so the engine default should be reasoned about on optimized
-builds only.
+**Auto-dispatch under `full` symmetry equals HGP** in every case — the `Auto
+full` and `HGP full` cells match exactly — because these bases live in the
+low-to-medium-\(L\) region where the §11 three-way rule selects HGP, which is also
+the per-cell `full` winner here, so Auto inherits the right choice. (Auto keys on
+per-quartet buckets; OS's standalone wins in this table are confined to the
+small-system `nosym`/`d2h` cells, not the `full` path Auto is compared on, so
+there is no conflict in this set.)
 
-**4. HGP cooperates with symmetry well, with the largest absolute wins on the
-biggest polarized bases.** On CH₄ / 6-31G(d,p) under Td (\(|G|=24\)), HGP `full`
-runs at 5.871 ms vs OS `full` at 8.160 ms (a 1.39× HGP-over-OS win), and the
-within-engine symmetry speedup (`nosym`→`full`) is 2.52× for HGP and 2.82× for
-OS — both engines amortize the orbit walk well, and the kernel-level HGP
-advantage carries through to the final time. On H₂O / 6-31G(d,p) under C2v the
-same pattern holds (HGP `full` 4.437 ms vs OS `full` 6.711 ms; 1.51× faster).
-NH₃ / 6-31G(d,p) now agrees: HGP `full` 4.753 ms vs OS `full` 7.127 ms, a 1.50×
-HGP win that tracks the `nosym` ordering rather than reversing it.
-
-Auto-dispatch follows HGP exactly under `full` symmetry — for every case in
-the table the `Auto full` column matches `HGP full` to the millisecond, because
-the dispatch logic in §11 picks HGP for the low-to-medium-\(L\) blocks that
-dominate these bases. Without symmetry, `Auto` is consistently slower than
-HGP alone (e.g. H₂O / 6-31G(d,p) `nosym`: Auto 6.345 vs HGP 6.214 ms; CH₄ /
-6-31G(d,p) `nosym`: Auto 17.490 vs HGP 14.824 ms): the dispatch overhead is
-real, and it pays off only once the orbit walk amortizes it across the
-symmetry-reduced quartet set.
-
-Putting these together: **for the routine quantum-chemistry case — Pople-style
-contracted bases up through 6-31G(d,p) and similar valence-double/triple-zeta
-sets with d polarization — HGP is the engine to default to**, and on this
-`-O3` build it is the fastest engine on every case in the table, including the
-tiny STO-3G systems where the `-O0` gap had been negligible. OS remains a
-reasonable fallback for tiny, lightly contracted bases where the HGP/OS gap
-narrows, and Rys is reserved for high-\(L\) work (f/g/h) where the OS-and-HGP
-recurrence stacks would otherwise dominate. The OS-vs-Rys auto-dispatch model
-in §11 applies essentially unchanged to HGP-vs-Rys; HGP simply lowers the OS
-flop estimate further, which is why the auto-dispatch threshold moves toward
-higher \(L\)
-once HGP is the low-L path.
+Putting these together: **for routine Pople-style bases up through 6-31G(d,p),
+run with full point-group symmetry and let Auto pick the engine — it lands on HGP,
+which is the fastest engine on the full-symmetry path for every case here.** OS is
+now close enough that on small systems or the legacy `d2h` mode it can edge ahead,
+so it is a perfectly reasonable explicit choice; Rys stays reserved for genuine
+high-\(L\) work (f/g/h) where the per-bucket rule (§11) actually routes quartets
+to it. The dominant performance decision is the symmetry mode, not the kernel.
 
 ### Implementation Files
 
@@ -2746,6 +2876,113 @@ So the theory-to-code map is:
 E_{MP2}
 \]
 
+Everything is enabled by the `mp2_use_ri` keyword, with the auxiliary basis
+named by `mp2_ri_basis`. Implementation: `src/post_hf/ri/ri_eri.cpp`, with the
+auxiliary-basis loader in `src/basis/rifit.cpp`.
+
+### RI Beyond MP2: the JK Builder, CASSCF, and FCI
+
+Nothing in the RI factorization is specific to MP2. Once the fitted pair factors
+\(\widetilde B_{\mu\nu}^{Q}\) exist, *any* consumer of a four-center ERI can be
+re-expressed in terms of them. Planck exploits this in three further places.
+
+#### The RI-JK Fock builder
+
+The Coulomb and exchange matrices are contractions of the ERI tensor against the
+density, so both factor through the fitted three-index quantities. For Coulomb,
+contract the density into an auxiliary-space vector first:
+
+\[
+d_Q = \sum_{\lambda\sigma} \widetilde B_{\lambda\sigma}^{Q} P_{\lambda\sigma}
+\qquad\Longrightarrow\qquad
+J_{\mu\nu} = \sum_Q \widetilde B_{\mu\nu}^{Q}\, d_Q
+\]
+
+This is two \(O(N^2 N_{\text{aux}})\) passes; the \(N^4\) tensor never appears.
+Exchange needs the density factorized into occupied orbitals rather than
+contracted away, because its index pattern entangles the bra and ket:
+
+\[
+K_{\mu\nu} = \sum_{Q}\sum_{i} \widetilde B_{\mu i}^{Q}\, \widetilde B_{\nu i}^{Q},
+\qquad
+\widetilde B_{\mu i}^{Q} = \sum_{\lambda} C_{\lambda i}\, \widetilde B_{\mu\lambda}^{Q}
+\]
+
+so \(K\) costs a half-transform into the occupied space followed by a Gram
+product. This is the standard reason RI helps Coulomb more than exchange.
+Functions: `build_ri_j`, `build_ri_k`, and the assembled `build_ri_fock_rhf` /
+`build_ri_fock_uhf`.
+
+#### RI-routed CASSCF and FCI
+
+Both CASSCF and FCI need the ERIs transformed into the active MO space. That
+transform is just a four-index contraction against \(\mathbf C\), so it too can
+run off the fitted factors: transform each three-index factor into the MO legs
+and take the Gram product, instead of building the AO ERI tensor and
+transforming it. The seam is `transform_eri_ri` in `src/post_hf/integrals.cpp`,
+which the active-space transform routes through whenever `mp2_use_ri` is set.
+The CI engine downstream is unchanged — it consumes an MO integral list and
+neither knows nor cares that the list was fitted.
+
+Both are gated against PySCF's own density-fitted CASSCF and FCI (not its
+conventional ones) to \(\sim10^{-9}\) Eh. That is the correct comparison: a
+fitted calculation should reproduce a *fitted* reference exactly, and would
+differ from a conventional one by the fitting error, which is a property of the
+auxiliary basis, not a bug.
+
+#### The RI gradient, and the term with no dense analog
+
+The subtle part is the gradient. It is not enough to compute an RI energy and
+then differentiate it with the dense gradient code — that would be
+differentiating one function while evaluating the derivative of another. To be
+a true derivative of the RI energy, *every* stage of the gradient must be
+fitted: the derivative integrals, the two-particle density, and the CPHF
+response.
+
+Differentiating the fitted ERI \((\mu\nu|\lambda\sigma) = \mathbf J \mathbf
+V^{-1} \mathbf J^{T}\) by the product rule gives two terms, because the metric
+\(\mathbf V\) is itself geometry-dependent:
+
+\[
+\frac{\partial E_2}{\partial R}
+=
+\underbrace{\sum_{(\mu\nu),P} w\,\Gamma^3_{(\mu\nu),P}\,
+\frac{\partial J_{(\mu\nu),P}}{\partial R}}_{\text{3-center derivative}}
+\;-\;
+\underbrace{\tfrac{1}{2}\sum_{PQ}\gamma_{PQ}\,
+\frac{\partial V_{PQ}}{\partial R}}_{\text{metric derivative}}
+\]
+
+The second term **has no counterpart in the dense four-center gradient**. It
+exists purely because RI factors through \(\mathbf V\), and dropping it — an
+easy and tempting mistake, since it looks like a fitting detail rather than
+physics — leaves a gradient that is not the derivative of anything. Note also
+that both terms couple through \(\mathbf V^{-1}\), not \(\mathbf V^{-1/2}\):
+the symmetric half-metric is a convenience for building the *energy*'s Gram
+form, but the gradient sees the full inverse.
+
+\(\Gamma^3\) is the fitted three-index two-particle density, the RI analog of
+the dense \(n_{ao}^4\) pair density:
+
+\[
+\Gamma^3_{(ia),Q} = \sum_{jb} D_{(ia),(jb)}\, \widetilde B_{(jb),Q}
+\]
+
+which stays in the \(N^2 N_{\text{aux}}\) working set. The orbital-response
+half (§15) is fitted the same way: `build_rhf_cphf_matrix` routes to
+`build_rhf_cphf_matrix_ri` under `mp2_use_ri`, assembling the CPHF orbital
+Hessian from the three-center factors, and the Lagrangian `imat` is built by
+`build_ri_imat` through an \(N^2 N_{\text{aux}}\) intermediate rather than an
+\(N^4\) ERI.
+
+The payoff is that RI-MP2 gradients and geometry optimizations are available for
+both RHF and UHF references. RI-MP2 *frequencies* are not implemented and are
+explicitly rejected rather than silently computed from a mismatched Hessian.
+
+Functions: `compute_3c_eri_deriv`, `compute_2c_eri_deriv`, `build_ri_gamma3_ov`,
+`build_ri_gamma3_from_ao_dm2`, `build_ri_two_electron_gradient`,
+`build_ri_imat`, all in `src/post_hf/ri/ri_eri.cpp`.
+
 ### RMP2 Natural Orbitals
 
 Once the correlation energy is in hand, the unrelaxed RMP2 one-particle density matrix can be diagonalized to produce **natural orbitals** (NOs) and their occupation numbers. The unrelaxed density is block-diagonal in the canonical MO basis:
@@ -2827,6 +3064,52 @@ The UHF gradient has the same structure but uses the total density
 W_{\mu\nu} = \sum_{i}^{\alpha,occ} \varepsilon^\alpha_i C^\alpha_{\mu i} C^\alpha_{\nu i}
            + \sum_{i}^{\beta,occ}  \varepsilon^\beta_i  C^\beta_{\mu i}  C^\beta_{\nu i}
 \]
+
+### ROHF Gradient
+
+The ROHF gradient is *structurally* identical to the UHF gradient — the same
+Hellmann-Feynman + Pulay terms, contracted over the alpha/beta densities
+\(P^\alpha, P^\beta\) that ROHF supplies just like UHF. Only the
+energy-weighted density changes, and that change is instructive.
+
+The forms above, \(W = \sum_i \varepsilon_i C_i C_i^{\mathsf T}\), are only
+valid because the orbitals **diagonalize the Fock matrix whose eigenvalues
+appear in the sum** — true for RHF and UHF, where \(C^{\mathsf T} F C\) is
+diagonal. ROHF orbitals do *not* have this property: they diagonalize the
+effective *Roothaan* Fock, so \(C^{\mathsf T} F^\alpha C\) and
+\(C^{\mathsf T} F^\beta C\) carry non-zero closed–open and open–virtual
+off-diagonal blocks. Dropping those blocks (which the naive \(\sum_i \varepsilon_i\)
+form silently does) gives the wrong Pulay term.
+
+The correct ROHF energy-weighted density is built directly in the AO basis from
+the two spin densities and the two converged spin Fock matrices:
+
+\[
+W = P^\alpha F^\alpha P^\alpha + P^\beta F^\beta P^\beta
+\]
+
+This is exactly PySCF's ROHF `make_rdm1e` (\(W_a + W_b\)), and it reduces to the
+RHF/UHF forms above in the closed-shell and unrestricted limits. All four
+matrices are already stored by the ROHF SCF, so no Fock rebuild is needed at
+gradient time. Note that **no CPHF / Z-vector solve is involved** — ROHF SCF is
+variational, so its orbital-response gradient term vanishes at the minimum, the
+same reason the RHF/UHF *SCF* gradients need no response solve. (A Z-vector
+solve only re-enters for a future ROHF-*MP2* gradient, which is a separate,
+non-variational problem.) Implemented in `build_rohf_energy_weighted_density`
+and `compute_rohf_gradient` in `src/gradient/gradient.cpp`.
+
+**Spherical basis caveat.** When the AO matrices live in the spherical
+(real-solid-harmonic) basis, they are mapped back to the Cartesian basis with a
+lift \(M_{\text{cart}} = C^{\mathsf T} M_{\text{sph}} C\) so the Cartesian
+derivative-integral engine can be reused. Because that transform \(C\) is
+non-square (\(n_{\text{sph}} \times n_{\text{cart}}\), so \(C C^{\mathsf T} \ne
+I\)), it does **not** distribute through the triple product:
+\(\text{lift}(P F P) \ne \text{lift}(P)\,\text{lift}(F)\,\text{lift}(P)\). \(W\)
+must therefore be built in the spherical basis *first* and lifted **once** — the
+same one-shot lift the RHF/UHF paths apply to their MO-built \(W\). Building it
+from separately-lifted factors is a subtle, silent error that only shows up on
+shells with \(L \ge 2\) (where the Cartesian and spherical function counts
+differ).
 
 ### Analytic Kohn-Sham DFT Gradients
 
@@ -3095,21 +3378,77 @@ as the RHF, UHF, and RMP2 gradients.
 
 ## 16. Coupled Cluster in Planck
 
-Planck currently contains five coupled-cluster paths:
+Planck's coupled-cluster support comes from **two independent sources**, and
+keeping them apart is the first thing to understand about this section:
+
+| | hand-written | **generated** |
+|---|---|---|
+| written by | a person, in `src/post_hf/cc/*.cpp` | `ccgen`, at build time |
+| covers | CCSD, CCSDT (R and U) | any rank up to `PLANCK_CC_MAXORDER` |
+| lives in | the repository | `build/generated/cc/*.cpp` |
+| amplitudes | spin-orbital or wedge-packed | dense spatial (RCC) or spin-blocked (UCC) |
+
+The hand-written solvers came first and are the teaching material — §16's worked
+examples all use them. **The generated path is what scales**: the CC equations
+are derived symbolically in Python and emitted as C++ (see
+`docs/CCGEN_TEACHING_GUIDE.md`), so CCSDTQ and beyond exist without anyone
+typing a quadruples residual.
+
+### The hand-written paths
 
 - **RCCSD** — a conventional iterative amplitude solver in the spin-orbital
   basis for canonical closed-shell RHF references
 - **RCCSDT** — dual-backend: a determinant-space teaching prototype for small
   systems and a staged tensor solver for larger systems; the default routing is
-  chosen automatically by `choose_rccsdt_backend`, and an additional
-  `TensorOptimized` entry point can be forced for development via
-  `PLANCK_RCCSDT_BACKEND=optimized`
+  chosen automatically by `choose_rccsdt_backend`, and a `TensorOptimized` entry
+  point routes to the generated kernels via `PLANCK_RCCSDT_BACKEND=optimized`
 - **UCCSD** — a teaching-oriented small-system determinant-space solver for
   canonical UHF references
 - **UCCSDT** — the corresponding determinant-space triples extension for
   canonical UHF references
-- **RCCSDTQ** — generated arbitrary-order restricted tensor kernels, available
-  for single-point calculations when Planck is built with CCSDTQ kernel support
+
+### The generated paths, and how to ask for them
+
+Every generated method maps to one enum value; the **excitation rank rides
+separately** on `OptionsSCF._cc_generated_rank`, so a new rank needs no new enum
+member and no new driver branch. The ceiling is `PLANCK_CC_MAXORDER` alone.
+
+| `correlation` keyword | rank | route |
+|---|---|---|
+| `cc3` / `ccsdt_gen` | 3 | generated **R**CC — needs `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` |
+| `ccsdtq` / `cc4` | 4 | generated RCC (the usual entry) |
+| `ccsdtqp` / `cc5`, `cc6` | 5, 6 | generated RCC |
+| `ucc2` / `uccsd_gen` | 2 | generated **U**CC — needs `-DPLANCK_CC_UCC=ON` |
+| `ucc3` / `uccsdt_gen`, `ucc4` … `ucc6` | 3-6 | generated UCC |
+
+Two asymmetries that look like oversights and are not:
+
+- **There is no generated rank-2 RCC keyword**, because the hand-written RCCSD
+  already covers it — a generated `cc2` would have no consumer. `ucc2` *does*
+  exist, because it is the comparison against hand-written UCCSD that validated
+  the UCC route (it matches exactly).
+- **`cc3` is not the same as `ccsdt`.** `ccsdt` runs the hand-written solver;
+  `cc3` runs the generated one, which produces *spatial* amplitudes and can
+  therefore write a `.ccamp` seed that a later `cc4` run warm-starts from.
+
+**Validation.** `ucc4` reproduces the in-tree FCI energy to all ten digits on an
+open-shell system (B/STO-3G) — the strongest single result on the generated path,
+because CCSDTQ is exact there for a structural reason (T5 is unreachable in the
+basis), not because the system is small.
+
+### Build flags that change what CC you get
+
+| flag | default | effect |
+|---|---|---|
+| `PLANCK_CC_MAXORDER` | `3` | highest rank emitted (2-6) |
+| `PLANCK_CC_SPIN_ADAPT` | `ON` | emit spatial RCC. **Off gives a ~4× wrong energy** — it exists only to reproduce a historical emit |
+| `PLANCK_CC_ARBITRARY_LOWER_RANKS` | `OFF` | also emit rank < 4 in arbitrary-order form, enabling `cc3` |
+| `PLANCK_CC_UCC` | `OFF` | also emit the unrestricted kernels |
+| `PLANCK_CC_DRESS_OPERATORS` | `OFF` | dressed intermediates instead of the flat residual (~3.5× faster solves) |
+| `CCGEN_OMP_COLLAPSE` | unset | env var: thread the residual nests (3.22× at 4 threads) |
+
+A case that needs a non-default flag **skips** in the regression runner rather
+than failing, and the skip names the flag.
 
 All paths live under `src/post_hf/cc/`. The shared setup pieces are
 intentionally kept separate from the actual solver loops:
@@ -3502,7 +3841,7 @@ enum class RCCSDTBackend
 {
     DeterminantPrototype, // small systems: determinant-space teaching solver
     TensorProduction,     // larger systems: staged tensor contractions
-    TensorOptimized       // forced developer entry point with generated warm-start
+    TensorOptimized       // the ccgen-GENERATED kernels, via the arbitrary-order harness
 };
 ```
 
@@ -3511,6 +3850,23 @@ In the current code path, `choose_rccsdt_backend` itself only returns
 `TensorOptimized` variant is selected only through the
 `PLANCK_RCCSDT_BACKEND=optimized` / `tensor_optimized` environment override in
 `run_rccsdt`.
+
+**`TensorOptimized` is not a developer scratch path** — it routes the
+ccgen-generated rank-3 kernels through the arbitrary-order harness (the
+representation they are emitted for), and it is gated end to end by
+`lih_rccsdt_generated_sto3g` and `ch4_rccsdt_generated_sto3g`, matching the
+hand-written path to all ten digits. It is opt-in because it needs
+`-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON` at build time, not because it is
+experimental.
+
+**One routing constraint that costs people time:** `choose_determinant_backstop`
+sends any case with `nso <= 16` **and** `ndet <= 10000` to the determinant
+prototype, which never calls a tensor kernel at all. A small system therefore
+produces *no tensor timing whatsoever*, silently, regardless of
+`PLANCK_RCCSDT_BACKEND`. Any benchmark of the tensor or generated paths needs
+`nso > 16 || ndet > 10000` — this is why CH4/STO-3G, not water, is the rank-3
+benchmark case. Note the backstop binds the **hand-written** path only; the
+generated route reaches its kernels through `rccgen.cpp` and never consults it.
 
 If the backend is `TensorProduction`, `run_rccsdt` delegates to
 `run_tensor_rccsdt` in `tensor_backend.*`. If the override selects
@@ -4251,7 +4607,7 @@ FCI is the conceptual hub of the correlated methods:
   ranks (CCSD → CCSDT → … → CCSDTQ… → FCI), trading the linear CI expansion for
   an exponential ansatz \(e^{\hat T}\) that restores size-extensivity at each
   truncation.
-- **CASSCF** (§18) is *FCI restricted to an active space* of chemically important
+- **CASSCF** (§19) is *FCI restricted to an active space* of chemically important
   orbitals, with the orbitals themselves variationally optimized. FCI is the
   special case in which the active space is the entire orbital basis and no
   orbital optimization is performed.
@@ -4262,7 +4618,290 @@ truncated, resummed, or restricted.
 
 ---
 
-## 18. CASSCF and RASSCF
+## 18. Full CI Quantum Monte Carlo (FCIQMC)
+
+### Why a Stochastic FCI
+
+§17 ended on FCI's virtue — it is exact within the basis — and its vice: the
+determinant count grows factorially. Planck's own measurements put the practical
+ceiling around \(n_{\text{act}} \approx 12\); at 14 active orbitals a full CI is
+roughly three days of compute, at 16 about 208 days, at 18 some 36 years. The
+wall is *time* long before it is memory: an \(n_{\text{act}} = 14\) CI vector is
+only 0.09 GB.
+
+FCIQMC attacks the same eigenvalue problem without ever storing the vector. The
+observation is that we rarely need every coefficient — we need the **energy**,
+and the energy is an average. So instead of solving for \(\mathbf{c}\), we
+maintain a *population of signed walkers* whose distribution over determinants is
+proportional to \(\mathbf{c}\), and read the energy off that population.
+
+The trade is exactness for a *statistical* answer: FCIQMC returns an energy with
+an error bar, and the error bar shrinks as \(1/\sqrt{N_{\text{samples}}}\).
+
+### Imaginary-Time Propagation
+
+The method rests on one idea. Take the Schrödinger equation and replace
+\(t \to -i\tau\):
+
+\[
+-\frac{\partial |\Psi(\tau)\rangle}{\partial \tau} = (\hat H - S) |\Psi(\tau)\rangle
+\qquad\Longrightarrow\qquad
+|\Psi(\tau)\rangle = e^{-\tau(\hat H - S)} |\Psi(0)\rangle .
+\]
+
+Expand the starting state in exact eigenstates,
+\(|\Psi(0)\rangle = \sum_i a_i |\phi_i\rangle\). Each component decays at its own
+rate:
+
+\[
+|\Psi(\tau)\rangle = \sum_i a_i e^{-\tau(E_i - S)} |\phi_i\rangle .
+\]
+
+Because \(E_0 < E_1 \le E_2 \le \dots\), every excited component decays *faster*
+than the ground state. Wait long enough and only \(|\phi_0\rangle\) survives —
+imaginary-time propagation is a filter that projects onto the ground state. The
+shift \(S\) is a free parameter fixing the overall normalization; when
+\(S = E_0\) the surviving component neither grows nor decays.
+
+In practice we take small finite steps, first order in \(\mathrm{d}\tau\):
+
+\[
+c_I(\tau + \mathrm{d}\tau) = c_I(\tau)
+  - \mathrm{d}\tau \sum_J (H_{IJ} - S\,\delta_{IJ})\, c_J(\tau) .
+\]
+
+Splitting the diagonal from the off-diagonal gives the algorithm's three moves:
+
+\[
+c_I \leftarrow \underbrace{c_I\,[\,1 - \mathrm{d}\tau (H_{II} - S)\,]}_{\text{death / cloning}}
+     \;\underbrace{-\;\mathrm{d}\tau \sum_{J \ne I} H_{IJ} c_J}_{\text{spawning}} .
+\]
+
+**Death** scales a determinant's own weight by its diagonal element. **Spawning**
+sends weight from occupied determinants to their connections. And when two spawns
+of *opposite sign* land on the same determinant they cancel — **annihilation** —
+which is what controls the sign problem.
+
+### Walkers, and Why Annihilation Is Free
+
+In Planck the walker population is a hash map from determinant to a signed real
+weight (`WalkerPopulation`, `src/post_hf/ci/fciqmc.h`):
+
+```cpp
+void add(const DetKey &det, Weight w)
+{
+    if (w == 0.0)
+        return;
+    _walkers[det] += w;
+}
+```
+
+That `+=` **is** the annihilation step. There is no separate pass: accumulating
+signed weights into a determinant-keyed map cancels opposite signs automatically.
+This is the single most important design consequence of choosing a map over a
+walker list.
+
+Two further points are easy to miss:
+
+- **Weights are real, not integer counts.** The original method used integer
+  walkers; real weights remove spawning discretization noise without changing the
+  structure. Planck still applies *stochastic rounding* to a `granularity`,
+  because without any discretization the propagator is scale-invariant and the
+  statistical error stops depending on population at all.
+- **The map holds only occupied determinants.** This is the whole point: the
+  memory footprint tracks the *occupied* space, not the enumerated one. For the
+  target regime the enumerated space would not fit in memory at all.
+
+### Sampling the Off-Diagonal: `p_gen`
+
+Spawning as written sums over *every* connection \(J\) of \(I\). For a real
+Hamiltonian that is hundreds of determinants per parent (N₂/STO-3G: 609), and
+enumerating them defeats the purpose. So we **sample**: draw one connection at
+random and reweight by the probability of having drawn it.
+
+\[
+\sum_{J \ne I} H_{IJ} c_J
+\;\approx\;
+\frac{H_{IJ}\, c_I}{p_{\text{gen}}(J \mid I)}
+\qquad\text{for a single draw } J .
+\]
+
+The estimator is unbiased **only if `p_gen` is the true probability the generator
+produced that excitation**. This is the most dangerous quantity in the method,
+and it is worth being explicit about why: every other step fails loudly, whereas
+a `p_gen` that disagrees with the sampler's actual distribution produces a
+plausible, converged, **wrong** energy.
+
+Planck's generator picks an excitation class uniformly among the non-empty ones,
+then picks uniformly within that class, giving
+
+\[
+p_{\text{gen}} = \frac{1}{n_{\text{live}}} \cdot \frac{1}{|{\text{class}}|} .
+\]
+
+Note this is deliberately **non-uniform** across connections — it varies by more
+than 10× on N₂/STO-3G. Non-uniformity is not a bug; a *mis-reported* `p_gen` is.
+The gate therefore tests agreement between the reported `p_gen` and the observed
+draw frequencies, never uniformity.
+
+Two lessons from building it are worth carrying:
+
+- **Support and frequency are separate failure modes.** A generator that can
+  *never* reach some excitation passes a frequency-only check.
+- **When a sampled quantity is used as a divisor, unbiasedness is the wrong
+  property to verify.** Estimating an acceptance rate from the same call that
+  uses it gives an unbiased estimate of \(p_{\text{gen}}\) — but the spawn needs
+  \(1/p_{\text{gen}}\), and \(\mathbb{E}[1/X] \neq 1/\mathbb{E}[X]\). Measured at
+  \(p_{\text{accept}} = 0.3\), the mean of \(1/p_{\text{gen}}\) came out 1.72×
+  too large while the mean of \(p_{\text{gen}}\) was correct to 0.1 %.
+
+### Population Control and the Shift
+
+Left alone the population grows or collapses exponentially. The shift \(S\) is
+fed back to hold it steady (`ShiftController`):
+
+\[
+S \leftarrow S - \frac{\zeta}{A\,\mathrm{d}\tau} \ln\frac{N}{N_{\text{prev}}}
+              - \frac{\xi}{A\,\mathrm{d}\tau} \ln\frac{N}{N_{\text{target}}} .
+\]
+
+The first term responds to the growth *rate*; the second supplies a restoring
+force toward the target. Both are needed — the textbook single-term form responds
+only to the rate and therefore **never targets a population**: measured, the final
+population came out proportional to the starting one across a 1000× range.
+
+The \(A\,\mathrm{d}\tau\) denominator is what makes \(\zeta\) dimensionless and
+transferable across timesteps. Dropping it is equivalent to rescaling \(\zeta\)
+and \(\xi\), which no tradeoff test detects — a parameter's *units* cannot be
+gated by a test that only asserts the shape of a tradeoff in that parameter.
+
+### Two Estimators, and Why Both
+
+Once the population is stationary, the shift fluctuates around the ground-state
+energy, so its running average is the **shift energy**.
+
+The **projected energy** is independent arithmetic on the same population:
+
+\[
+E_{\text{proj}} = H_{00} + \frac{\sum_{J \ne 0} H_{0J}\, c_J}{c_0},
+\]
+
+projecting the sampled wavefunction onto a chosen reference \(|D_0\rangle\).
+
+They share no arithmetic, which makes their agreement a strong check — and their
+*disagreement* diagnostic. **Neither dominates, and Planck computes both because
+each is blind to a failure the other catches:**
+
+- On N₂ at too large a timestep, the reference determinant oscillated in sign
+  (mean \(|c_0| = 91.75\) but mean signed \(c_0 = -7.50\)). The **shift read
+  0.14σ from exact** while the dynamics were unstable — a single-estimator
+  implementation would have reported a perfect-looking answer. The projected
+  energy caught it.
+- On C₂, whose ground state is **doubly degenerate**, the projected energy drifted
+  5.6σ *below* the variational minimum while the shift stayed within 1σ. Any
+  mixture of degenerate eigenstates is itself an eigenstate at the same energy, so
+  the dynamics apply **no restoring force** within the manifold and the population
+  random-walks between partners, starving the anchor. Nothing was unstable; the
+  estimator was measuring the wrong thing. Counter-intuitively, **longer
+  equilibration made it worse** — more time to converge is also more time to drift.
+
+Planck therefore warns on reference drift and re-anchors the projection onto the
+largest-weight determinant once, at the end of equilibration.
+
+### Choosing the Reference
+
+The projected energy anchors on \(|D_0\rangle\), so a poor choice inflates its
+variance. The reference must be the determinant of **lowest diagonal energy**, and
+that is *not* the one occupying the lowest-index orbitals: on N₂/STO-3G the Aufbau
+determinant is `0xbf` — orbitals [0,1,2,3,4,5,**7**] — because MO 6 lies above
+MO 7 in the converged SCF ordering.
+
+Planck finds it by minimizing `ops.diagonal` over single occupied→virtual swaps,
+using the **same** `slater_condon_element` the propagator uses, so the reference
+cannot disagree with the Hamiltonian being sampled.
+
+### Error Bars: Why the Naive One Is Wrong
+
+Successive iterations are **highly correlated** — the population changes only
+slightly per step — so the naive standard error \(\sigma/\sqrt{n}\) understates the
+true uncertainty by up to 6.6×, measured. Planck uses a Flyvbjerg–Petersen
+**blocking analysis**: repeatedly average adjacent pairs and watch the estimated
+error until it plateaus, taking the largest value across blocking levels
+(conservative by construction — an overestimate fails a gate loudly, an
+underestimate passes one silently).
+
+### The Initiator Approximation
+
+At low walker density, spawns onto empty determinants are mostly noise that
+annihilation has no partner to cancel. The **initiator** rule allows a spawn onto
+an *unoccupied* determinant only from a parent whose weight exceeds a threshold
+\(n_{\text{add}}\). This is a *biased* approximation, controlled by taking
+\(n_{\text{add}} \to 0\) or the population to infinity — so a run validating
+against an exact answer must switch it off.
+
+### Where It Lives
+
+| Concern | Location |
+|---|---|
+| Walker map, RNG, excitation generator, propagators, estimators | `src/post_hf/ci/fciqmc.{h,cpp}` |
+| Driver, input keywords, diagnostics | `src/post_hf/fciqmc_driver.cpp` |
+| Shared integral transform (`build_all_mo_ci_setup`) | `src/post_hf/fci.cpp` |
+| Slater–Condon matrix elements | `src/post_hf/ci/ci.cpp` |
+
+The integral transform was **extracted** from `run_fci` rather than copied, and
+both paths call it. The Hamiltonian callbacks wrap the same
+`slater_condon_element`. The two paths therefore cannot disagree about the
+*Hamiltonian* — only about how they solve it, which is what makes a disagreement
+on a larger system attributable to sampling rather than plumbing.
+
+Run it with `correlation fciqmc`; eleven `fciqmc_*` keywords control walkers,
+timestep, shift damping, equilibration, initiator, and the seed. The seed is
+user-visible on purpose: fixed-seed reproducibility is a contract, and it is
+worthless if the seed cannot be pinned from the input.
+
+### Validating a Stochastic Method
+
+Planck's regression suite is built on exact comparison — 161 `metric_close`
+assertions, the tightest at 1e-9, and every recent performance change gated on
+*bitwise* identity. An FCIQMC energy is a mean with an error bar and cannot be
+gated that way. The suite therefore gained:
+
+- `metric_within_sigma`, asserting a value lies within *N* of its own blocked
+  error bar;
+- a blocking analysis validated against synthetic AR(1) series with a *known*
+  autocorrelation time — never against real output, since an analysis that
+  under-reports σ makes every downstream gate pass;
+- fixed-seed reproducibility, proven to **fail** on an injected seed perturbation
+  before being trusted. An RNG that advances normally but *ignores its seed*
+  passes every statistical check — means, variance, \(1/\sqrt{n}\) scaling — and
+  is caught only by "different seeds must give different trajectories."
+
+On N₂/STO-3G against exact FCI \(-107.6529998854\), both estimators agree within
+half a sigma at 0.69 walkers per determinant — a genuine sample rather than
+coverage of the space.
+
+**One structural decision worth recording:** every parallel path in Planck is
+bitwise thread-count invariant, and FCIQMC keeps that property rather than taking
+an exception. Partitioning the *parents* by `hash(parent) % kBins` and merging in
+fixed bin order makes the result independent of the order threads visit parents.
+Binning by the *child* is not sufficient — it fixes which accumulator receives a
+spawn, but not the order arrivals reach it. **The partition must be over the
+work, not the output.**
+
+### Relationship to FCI
+
+FCIQMC and FCI solve the *same* eigenvalue problem in the *same* determinant
+space, and in Planck they share the same integrals and matrix elements. They
+differ only in the solver: FCI diagonalizes with Davidson and returns an exact
+number; FCIQMC samples and returns a distribution.
+
+That makes the comparison unusually sharp. Where FCI is affordable, it is the
+reference; where it is not, FCIQMC is the only route to the same answer. The
+crossover in Planck sits near \(n_{\text{act}} \approx 13\).
+
+---
+
+## 19. CASSCF and RASSCF
 
 ### Motivation
 
@@ -4685,7 +5324,7 @@ occupation restrictions via bitcount masks on the RAS1 and RAS3 blocks.
 
 ---
 
-## 19. Geometry Optimization
+## 20. Geometry Optimization
 
 ### L-BFGS (Cartesian Coordinates)
 
@@ -5020,7 +5659,7 @@ Ha/Bohr).
 
 ---
 
-## 20. Vibrational Analysis
+## 21. Vibrational Analysis
 
 ### Semi-Numerical Hessian
 
@@ -5082,7 +5721,7 @@ by projecting each normal mode onto the SAO blocks and determining its irrep.
 
 ---
 
-## 21. Kohn-Sham Density Functional Theory
+## 22. Kohn-Sham Density Functional Theory
 
 Most of this chapter is general KS-DFT theory. The explicit grid presets,
 supported-functional notes, and code maps are Planck-specific documentation.
@@ -5642,7 +6281,7 @@ peaks in energy and wavelength units.
 
 ---
 
-## 22. Polarizable Continuum Solvation (C-PCM)
+## 23. Polarizable Continuum Solvation (C-PCM)
 
 Planck implements a conductor-like polarizable continuum model (C-PCM) for
 single-point HF (RHF/UHF) and KS-DFT (RKS/UKS) calculations. The solvent is
@@ -5942,7 +6581,7 @@ reaction-field operator) are not implemented.
 
 ---
 
-## 23. Basis Set Superposition Error and the Counterpoise Correction
+## 24. Basis Set Superposition Error and the Counterpoise Correction
 
 When you compute the interaction energy of a dimer \(A\cdots B\) as
 
@@ -6077,7 +6716,7 @@ probe basis-set extension effects, build mixed-basis descriptions, or study how
 much a neighbor's functions improve a fragment — all without changing the
 physical system.
 
-## 24. Molecular Properties
+## 25. Molecular Properties
 
 After SCF convergence Planck can compute several molecular properties from the
 converged density matrix. Dipole and quadrupole moments are printed
@@ -6444,7 +7083,7 @@ If \(T^+\) is correct, the inner product \(\mathbf C_{sph}^\top \mathbf C_{sph}\
 
 ---
 
-## 25. Checkpoint and Restart
+## 26. Checkpoint and Restart
 
 This chapter mixes a general restart idea with concrete file-format details.
 The projection concept below is broadly applicable; the checkpoint layout is
@@ -6489,7 +7128,7 @@ new basis, significantly reducing the number of SCF iterations required.
 
 ---
 
-## 26. Execution Flow of a Typical Run
+## 27. Execution Flow of a Typical Run
 
 ```
 driver.cpp
@@ -6567,7 +7206,7 @@ driver.cpp
 
 ---
 
-## 27. Theory-to-Code Map
+## 28. Theory-to-Code Map
 
 | Theory concept | Primary file(s) | Key function(s) |
 |---|---|---|
@@ -6580,6 +7219,14 @@ driver.cpp
 | Nuclear attraction | `src/integrals/os.cpp` | `_compute_nuclear_attraction` |
 | ERI tensor | `src/integrals/os.cpp` | `_compute_2e`, `_contracted_eri` |
 | Direct Fock build | `src/integrals/os.cpp` | `_compute_2e_fock`, `_compute_2e_fock_uhf` |
+| Memory-direct fused Fock loop (all engines) | `src/integrals/fused_fock.h` | `fused_fock_build`, `fused_shell_groups` |
+| Fused Fock orbit accumulation | `src/integrals/fock_accumulate.h` | `distinct_eri_orbit`, `fock_accumulate_rhf`, `fock_accumulate_uhf` |
+| Symmetry-orbit dedup for the fused loop | `src/integrals/quartet_orbit.h` | `canonicalize_orbit_quartet`, `QuartetOrbitElem` |
+| Shared per-quartet scratch layout | `src/integrals/quartet_layout.h` | `SpatialQuartetLayout::configure`, `spatial_index` |
+| MPI environment (rank, size, Allreduce) | `src/base/mpi_env.h` | `Mpi::rank`, `Mpi::size`, `Mpi::allreduce_inplace` |
+| `planck-mpi` unified front end | `src/mpi/main.cpp` | rank-gated dispatch to `HartreeFock::Driver::run` / `DFT::Driver::run` |
+| Python front end | `python/planck.py` | `planck.run` (drives the binaries' `--json` dump) |
+| JSON results contract | `src/io/results_json.h` | machine-readable result schema |
 | Rys quadrature | `src/integrals/rys.cpp` | `_rys_eri_primitive`, `_rys_contracted_eri` |
 | Head-Gordon-Pople (HGP) ERI engine | `src/integrals/hgp.cpp` | `hgp_vrr`, `hgp_hrr_ab`, `hgp_hrr_cd`, `_contracted_eri_elem`, `_compute_2e`, `_compute_2e_fock`, `_compute_2e_fock_uhf` |
 | HGP full-symmetry direct Fock | `src/symmetry/hgp_symm.cpp` | `_build_skeleton_eri_symm`, `_compute_2e_fock_symm`, `_compute_2e_fock_uhf_symm`, spherical-basis variants |
@@ -6593,12 +7240,17 @@ driver.cpp
 | MO irrep labels | `src/symmetry/mo_symmetry.cpp` | `assign_mo_symmetry` |
 | Integral symmetry ops | `src/symmetry/integral_symmetry.cpp` | `update_integral_symmetry` |
 | AO→MO transform | `src/post_hf/integrals.cpp` | half-transformation functions |
-| RMP2 energy | `src/post_hf/mp2.cpp` | `run_rmp2` |
-| UMP2 energy | `src/post_hf/mp2.cpp` | `run_ump2` |
+| RMP2 energy | `src/post_hf/mp2_rmp2.cpp` | `rmp2_kernel`, `apply_rmp2_result` |
+| UMP2 energy | `src/post_hf/mp2_ump2.cpp` | `ump2_kernel`, `apply_ump2_result` |
+| MP2 shared internals (ERI blocks, amplitudes) | `src/post_hf/mp2_internal.cpp` | `make_eris_rmp2`, `make_eris_ump2` |
 | RI auxiliary-basis loader | `src/basis/rifit.cpp` | `read_ri_basis` |
-| RI 2c / 3c integrals + metric factorization | `src/post_hf/ri/ri_eri.cpp` | `compute_2c_eri`, `compute_3c_eri`, `factorize_2c_metric`, `ensure_ri_3c_ready` |
-| RI-backed MP2 ERI builders | `src/post_hf/mp2_internal.cpp` | `build_ri_pair_factors`, `build_ri_ov_block`, `make_eris_rmp2`, `make_eris_ump2` |
-| MP2 amplitudes | `src/post_hf/mp2.cpp` | `build_rmp2_amplitudes` |
+| RI 2c / 3c integrals + metric factorization | `src/post_hf/ri/ri_eri.cpp` | `compute_2c_eri`, `compute_3c_eri`, `factorize_2c_metric`, `ensure_ri_metric_ready`, `ensure_ri_3c_ready` |
+| RI fitted pair / MO factors | `src/post_hf/ri/ri_eri.cpp` | `build_ri_pair_factors`, `build_ri_mo_block`, `build_ri_3index_unpacked` |
+| RI-backed AO→MO transform (CASSCF / FCI) | `src/post_hf/integrals.cpp` | `transform_eri_ri` |
+| RI-JK Fock builder | `src/post_hf/ri/ri_eri.cpp` | `build_ri_j`, `build_ri_k`, `build_ri_fock_rhf`, `build_ri_fock_uhf` |
+| RI derivative integrals (3c / 2c) | `src/post_hf/ri/ri_eri.cpp` | `compute_3c_eri_deriv`, `compute_2c_eri_deriv` |
+| RI 2-particle density and gradient | `src/post_hf/ri/ri_eri.cpp` | `build_ri_gamma3_ov`, `build_ri_gamma3_from_ao_dm2`, `build_ri_two_electron_gradient`, `build_ri_imat` |
+| RI-fitted CPHF orbital Hessian | `src/post_hf/rhf_response.cpp` | `build_rhf_cphf_matrix_ri` |
 | RCCSD setup/solve | `src/post_hf/cc/ccsd.cpp` | `prepare_rccsd`, `run_rccsd` |
 | UCCSD setup/solve | `src/post_hf/cc/ccsd.cpp` | `prepare_uccsd`, `run_uccsd` |
 | Determinant-space CC backend | `src/post_hf/cc/determinant_space.cpp` | `build_rhf_spin_orbital_system`, `build_uhf_spin_orbital_system`, `solve_determinant_cc` |
@@ -6607,17 +7259,29 @@ driver.cpp
 | Tensor CC block cache | `src/post_hf/cc/tensor_backend_state.cpp` | `build_canonical_rhf_cc_reference`, `format_tensor_memory_summary` |
 | UCCSDT prototype | `src/post_hf/cc/ccsdt.cpp` | `prepare_uccsdt`, `run_uccsdt` |
 | RCCSDTQ generated tensor path | `src/post_hf/cc/ccsdtq.cpp`, `src/post_hf/cc/solver_arbitrary.cpp` | `run_rccsdtq`, `solve_generated_arbitrary_order_cc` |
+| Generated RCC driver (`cc3`-`cc6`) | `src/post_hf/cc/rccgen.cpp` | `run_rccgen` |
+| Generated UCC driver (`ucc2`-`ucc6`) | `src/post_hf/cc/uccgen.cpp` | `run_uccgen` |
+| Generated-kernel registry (what the emitted TUs plug into) | `src/post_hf/cc/generated_kernel_registry.cpp` | `make_generated_*_kernels` |
+| Arbitrary-order runtime (amplitudes, denominators, residual dispatch) | `src/post_hf/cc/generated_arbitrary_runtime.cpp`, `generated_arbitrary_prepare.cpp` | `run_generated_arbitrary_order_iterations` |
+| The CC equation generator itself | `python/ccgen/` | see `docs/CCGEN_TEACHING_GUIDE.md` |
 | CC denominators/DIIS | `src/post_hf/cc/amplitudes.cpp`, `src/post_hf/cc/diis.cpp` | `build_denominator_cache`, `AmplitudeDIIS` |
 | CPHF Z-vector | `src/post_hf/rhf_response.cpp` | `build_rhf_cphf_matrix` |
 | RMP2 gradient | `src/post_hf/mp2_gradient.cpp` | `compute_rmp2_gradient` |
 | UMP2 gradient intermediates | `src/post_hf/mp2_gradient.cpp` | `build_ump2_gradient_intermediates` |
-| CI string generation | `src/post_hf/casscf.cpp` | Gosper enumeration |
-| CI solve (Davidson) | `src/post_hf/casscf.cpp` | Davidson solver |
-| 1-RDM, 2-RDM | `src/post_hf/casscf.cpp` | `compute_1rdm`, `compute_2rdm` |
-| Orbital gradient | `src/post_hf/casscf.cpp` | generalized Fock matrix |
-| Orbital update | `src/post_hf/casscf.cpp` | Cayley transform |
+| CI string generation | `src/post_hf/ci/strings.cpp` | `generate_strings`, `parity_between`, `select_active_orbitals` |
+| CI determinant space + sigma | `src/post_hf/ci/ci.cpp` | `build_ci_space`, `apply_ci_hamiltonian`, `slater_condon_element` |
+| CI solve (Davidson) | `src/post_hf/ci/ci.cpp` | `solve_ci`, `solve_ci_dense`, `build_ci_diagonal` |
+| 1-RDM, 2-RDM | `src/post_hf/ci/rdm.cpp` | `compute_1rdm`, `compute_2rdm`, `compute_2rdm_bilinear` |
+| FCI driver | `src/post_hf/fci.cpp` | `run_fci` |
+| CASSCF / RASSCF macro-iteration | `src/post_hf/casscf/casscf.cpp` | `run_mcscf_loop` |
+| CASSCF root tracking, SA helpers | `src/post_hf/casscf/casscf_driver_internal.cpp` | `build_weighted_root_orbital_gradient`, candidate-step assembly |
+| Orbital gradient (generalized Fock) | `src/post_hf/casscf/orbital.cpp` | `compute_orbital_gradient`, `build_inactive_fock_mo`, `build_active_fock_mo`, `compute_Q_matrix` |
+| Orbital Hessian action | `src/post_hf/casscf/orbital.cpp` | `hessian_action`, `fixed_ci_orbital_gradient` |
+| Augmented-Hessian orbital step | `src/post_hf/casscf/aug-hessian.cpp`, `src/post_hf/casscf/aug-hessian-orbital.cpp` | `solve_augmented_hessian`, `solve_orbital_augmented_hessian_step` |
+| SA coupled orbital/CI solve | `src/post_hf/casscf/response.cpp` | `solve_sa_coupled_orbital_ci_step` |
 | RHF gradient | `src/gradient/gradient.cpp` | `compute_rhf_gradient` |
 | UHF gradient | `src/gradient/gradient.cpp` | `compute_uhf_gradient` |
+| ROHF gradient | `src/gradient/gradient.cpp` | `compute_rohf_gradient`, `build_rohf_energy_weighted_density` |
 | UMP2 gradient | `src/gradient/gradient.cpp` | `compute_ump2_gradient` |
 | Derivative integrals | `src/integrals/os.cpp` | `_compute_1e_deriv_A`, `_compute_eri_deriv_elem` |
 | L-BFGS optimizer | `src/opt/geomopt.cpp` | `run_geomopt` |
@@ -6657,12 +7321,12 @@ driver.cpp
 
 ---
 
-## 28. Current Implementation Status
+## 29. Current Implementation Status
 
 | Feature | Status |
 |---|---|
 | RHF and UHF SCF | Complete |
-| ROHF SCF | Complete (Guest–Saunders effective Fock with SAD guess; post-HF not yet supported from ROHF reference) |
+| ROHF SCF | Complete (Guest–Saunders effective Fock with SAD guess). FCI, CASSCF, and RASSCF run from an ROHF reference; analytic gradients / geomopt / frequencies are supported (Cartesian and spherical). ROHF-MP2/CC, stability, and PCM are not yet supported |
 | Obara-Saika 1e and 2e integrals | Complete |
 | Rys quadrature ERIs | Complete |
 | Head-Gordon-Pople (HGP) ERI engine | Complete (VRR-inside / HRR-outside factorization; Cartesian and full-symmetry direct-Fock variants in `src/symmetry/hgp_symm.cpp`) |
@@ -6673,18 +7337,32 @@ driver.cpp
 | Point group detection and SAO blocking | Complete |
 | MO irrep labeling | Complete |
 | Full point-group ERI reduction (direct SCF, RHF/UHF) | Complete (Cartesian and spherical-harmonic basis; petite list + skeleton-Fock symmetrization; OpenMP + Schwarz screened; metric-correct spherical \(\mathbf O_R\); validated through \(d\)-shells, C2v→C3v→Td) |
+| Memory-direct fused Fock build | Complete (one shared quartet loop for OS / HGP / Rys / Auto; contracts each canonical quartet straight into \(\mathbf F\), so no \(n_b^4\) tensor is ever allocated; block-level Schwarz prescreen; handles integral symmetry natively; OpenMP with a fixed-order reduction, so it is bitwise thread-count-invariant) |
+| MPI-distributed direct SCF (`planck-mpi`) | Complete (bra-triangle stripe over the fused Fock loop, one \(n_b^2\) Allreduce per iteration; unified front end dispatching to both HF and DFT; bitwise-identical to the serial build, gated by `water_rhf_mpi_smoke` and `water_dft_mpi_smoke`). Build with `-DBUILD_MPI=ON` |
+| Python front end | Complete (`python/planck.py`; drives either binary and returns a results dict parsed from the binary's own `--json` dump, not from scraping the log) |
 | RMP2 and UMP2 energy | Complete |
+| RI-MP2 / DF-MP2 energy (RHF and UHF references) | Complete (auxiliary basis, 2c metric with linear-dependence filtering, packed 3c tensor, fitted \(ov\) factors). Enable with `mp2_use_ri`; auxiliary basis via `mp2_ri_basis` |
+| RI-JK Fock builder | Complete (`build_ri_j`, `build_ri_k`, `build_ri_fock_rhf/uhf`) |
+| RI-routed CASSCF and FCI | Complete (the active-space transform routes through `transform_eri_ri` under `mp2_use_ri`; PySCF DF-CASSCF and DF-FCI gated to \(\sim10^{-9}\) Eh) |
+| RI-consistent analytic MP2 gradient (RMP2 and UMP2) | Complete (3-center and 2-center derivative integrals, fitted 3-index 2-particle density \(\Gamma^3\), RI-fitted CPHF orbital Hessian, RI Lagrangian; every stage of the gradient is fitted, so the gradient is the exact derivative of the RI energy). Finite-difference gated to \(\sim3\times10^{-7}\) |
+| RI-MP2 geometry optimization (RHF and UHF references) | Complete |
+| RI-MP2 frequencies | Not implemented (explicitly rejected; boundary marker `water_ri_rmp2_freq_rejected`) |
 | RCCSD single-point energy | Complete |
 | UCCSD single-point energy | Teaching-oriented small-system determinant-space prototype |
 | RCCSDT single-point energy | Determinant prototype for tiny systems plus tensor production/optimized entry points for larger restricted references; size-based default selected by `choose_rccsdt_backend`, optional override via `PLANCK_RCCSDT_BACKEND` |
 | UCCSDT single-point energy | Teaching-oriented small-system determinant-space prototype |
 | RCCSDTQ single-point energy | Generated restricted tensor kernels when built with CCSDTQ support |
+| Generated arbitrary-order RCC (`cc3`-`cc6`) | Complete. One enum value carrying the rank separately, so the ceiling is `PLANCK_CC_MAXORDER` alone. `cc3` needs `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON`; gated by `lih_rccsdt_generated_sto3g`, `ch4_rccsdt_generated_sto3g`, `be_rccsdtq_sto3g` |
+| Generated arbitrary-order UCC (`ucc2`-`ucc6`) | Complete behind `-DPLANCK_CC_UCC=ON` (default off: the UCC translation units roughly triple generated-kernel compile time). `ucc2` == hand-written UCCSD exactly; `ucc4` == in-tree FCI to all ten digits on open-shell B/STO-3G. Gated by `b_ucc{2,3,4}_sto3g`, which skip cleanly in a default build |
+| ccgen dressed-operator kernels | Complete for the `derived` route (`-DPLANCK_CC_DRESS_OPERATORS=ON`), measured ~3.5× faster solves. The `recognized` route is retired and produces wrong kernels |
+| OpenMP-threaded CC kernels | Complete behind `CCGEN_OMP_COLLAPSE=3` (default off). 3.22× at 4 threads with energies bitwise identical across thread counts. CC was the last hot path in Planck with no threading |
 | Analytic RHF gradient | Complete |
 | Analytic UHF gradient | Complete |
+| Analytic ROHF gradient | Complete (Cartesian and spherical; `W = P^α F^α P^α + P^β F^β P^β`, no Z-vector — SCF is variational) |
 | Analytic RMP2 gradient (Z-vector) | Complete |
 | Analytic UMP2 gradient | Complete |
 | CASSCF / RASSCF | Complete |
-| Geometry optimization (RHF/UHF/RMP2/UMP2) | Complete |
+| Geometry optimization (RHF/UHF/ROHF/RMP2/UMP2) | Complete |
 | Semi-numerical Hessian | Complete |
 | Harmonic vibrational analysis | Complete |
 | Checkpoint save/restart | Complete |
@@ -6711,33 +7389,64 @@ driver.cpp
 
 ---
 
-## 29. How to Study This Codebase
+## 30. How to Study This Codebase
 
 Recommended reading order for the HF/post-HF pipeline:
 
 1. `src/base/types.h` — understand every struct before reading any algorithm
-2. `src/driver.cpp` — the control flow map for one complete calculation
+2. `src/driver.cpp` and `src/hf_driver.cpp` — the control flow map for one complete calculation. `src/driver.h` declares `HartreeFock::Driver::run`, the entry the three binaries all funnel through
 3. `src/io/io.cpp` — how input files become a Calculator
 4. `src/integrals/os.cpp` — the Obara-Saika integral engine top to bottom
 5. `src/scf/scf.cpp` — the SCF iteration in detail
 6. `src/gradient/gradient.cpp` — how analytic gradients are assembled
-7. `src/post_hf/mp2.cpp` and `src/post_hf/integrals.cpp` — MP2 energy
-8. `src/post_hf/cc/` — RCCSD, the tensor RCCSDT backend, and the determinant-space restricted/unrestricted CC teaching prototypes
-9. `src/post_hf/casscf.cpp` — the most complex module: CI, RDMs, orbital update
-10. `src/opt/geomopt.cpp` — L-BFGS and internal coordinate optimization
-11. `src/freq/hessian.cpp` — finite-difference Hessian and normal modes
+7. `src/post_hf/mp2_rmp2.cpp`, `src/post_hf/mp2_ump2.cpp`, and `src/post_hf/integrals.cpp` — MP2 energy. `src/post_hf/mp2_internal.cpp` holds the shared ERI-block and amplitude machinery both spin cases use
+8. `src/post_hf/cc/` — RCCSD, the tensor RCCSDT backend, and the determinant-space restricted/unrestricted CC teaching prototypes. **Read the hand-written solvers before the generated ones**: `ccsd.cpp` shows what a CC residual *is*, which the emitted kernels assume you already know
+9. `src/post_hf/ci/` — the shared CI engine: `strings.cpp` (determinant enumeration), `ci.cpp` (sigma build and Davidson), `rdm.cpp` (1- and 2-RDMs). Read this before CASSCF; both FCI and CASSCF consume it
+10. `src/post_hf/fci.cpp` — the CI engine at its simplest, with no orbital optimization on top
+11. `src/post_hf/casscf/` — the most complex module. `casscf.cpp` is the macro-iteration driver; `orbital.cpp` the orbital gradient and Hessian action; `response.cpp` the state-averaged coupled solve; `aug-hessian*.cpp` the augmented-Hessian step
+12. `src/opt/geomopt.cpp` — L-BFGS and internal coordinate optimization
+13. `src/freq/hessian.cpp` — finite-difference Hessian and normal modes
+
+Recommended reading order for the **generated** CC layer (read after item 8, and
+after `docs/CCGEN_TEACHING_GUIDE.md` for the Python side):
+
+- `src/post_hf/cc/rccgen.cpp` / `uccgen.cpp` — the drivers the `cc3`/`ucc3`
+  keywords reach. Start here: they are small, and they show what the generated
+  path needs that the hand-written one does not
+- `src/post_hf/cc/generated_kernel_registry.cpp` — the seam. This is where the
+  emitted translation units are `#include`d into the build; reading it explains
+  why `grep`ping `src/` for a quadruples residual finds nothing
+- `src/post_hf/cc/generated_arbitrary_runtime.cpp` — the solver loop the
+  generated residuals plug into (amplitudes, denominators, DIIS, per-rank
+  dispatch)
+- `build/generated/cc/ccsdt_arbitrary_planck_generated.cpp` — **read the emitted
+  code itself**, after a build. It is the most direct way to see what the
+  symbolic layer produces: one `_partN` function per chunk of terms, a
+  `<kernel>_ops` struct of pre-built intermediates, and one loop nest per term
 
 Recommended reading order for the KS-DFT pipeline (read after items 1–5 above):
 
-12. `src/dft/base/radial.h` — Treutler-Ahlrichs M4 radial grid
-13. `src/dft/base/angular.h` — Lebedev angular quadrature
-14. `src/dft/base/grid.h` — Becke partitioning, pruning, molecular grid assembly
-15. `src/dft/ao_grid.h` — AO and gradient evaluation at grid points
-16. `src/dft/xc_grid.cpp` — density, XC energy and potentials on the grid
-17. `src/dft/ks_matrix.cpp` — \(V^{xc}_{\mu\nu}\) and full KS potential matrices
-18. `src/dft/dft_gradient.cpp` — analytic KS gradient assembly, including moving-grid response
-19. `src/dft/driver.cpp` — the KS-DFT SCF loop end to end
+14. `src/dft/base/radial.h` — Treutler-Ahlrichs M4 radial grid
+15. `src/dft/base/angular.h` — Lebedev angular quadrature
+16. `src/dft/base/grid.h` — Becke partitioning, pruning, molecular grid assembly
+17. `src/dft/ao_grid.h` — AO and gradient evaluation at grid points
+18. `src/dft/xc_grid.cpp` — density, XC energy and potentials on the grid
+19. `src/dft/ks_matrix.cpp` — \(V^{xc}_{\mu\nu}\) and full KS potential matrices
+20. `src/dft/dft_gradient.cpp` — analytic KS gradient assembly, including moving-grid response
+21. `src/dft/driver.cpp` — the KS-DFT SCF loop end to end
+
+Recommended reading order for the density-fitting (RI) and HPC layers. These are
+orthogonal to the method chapters above — they change how the two-electron
+integrals are assembled and distributed, not what is computed from them, so read
+them once the conventional path makes sense:
+
+22. `src/basis/rifit.cpp` — loading the auxiliary basis
+23. `src/post_hf/ri/ri_eri.cpp` — the whole RI subsystem in one file: 2c/3c integrals, metric factorization, fitted pair factors, the JK builder, and the derivative/gradient machinery. Read it against [§13](#resolution-of-the-identity-mp2-ri-mp2--df-mp2)
+24. `src/integrals/fock_accumulate.h` — how one canonical quartet is contracted straight into the Fock matrix. The header comment explains why there are no degeneracy factors; this is the subtlest reasoning in the integral layer
+25. `src/integrals/fused_fock.h` — the shared memory-direct Fock loop that all four engines route through, including the OpenMP reduction and the MPI stripe
+26. `src/base/mpi_env.h` and `src/mpi/main.cpp` — the entire MPI surface, which is deliberately tiny
 
 This order follows the dependency graph: basic state and types first, then
 integral machinery, then the SCF loop that uses those integrals, then the
-higher-level methods that build on SCF.
+higher-level methods that build on SCF, and finally the RI and HPC layers that
+re-implement the integral assembly underneath all of it.

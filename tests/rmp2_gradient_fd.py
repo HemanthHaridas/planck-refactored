@@ -23,6 +23,9 @@ ANGSTROM_TO_BOHR = 1.8897261254535
 ATOM_LINE_RE = re.compile(
     r"Atom\s+(\d+)\s*:\s*([-+0-9Ee\.]+)\s+([-+0-9Ee\.]+)\s+([-+0-9Ee\.]+)"
 )
+# Both RMP2 and UMP2 print this line: hf_driver.cpp maps PostHF::RMP2 and
+# PostHF::UMP2 to the same "MP2" method_label, which Logger::correlation_energy
+# renders as "Total <label> Energy". Restricted and unrestricted, dense and RI.
 MP2_ENERGY_RE = re.compile(
     r"^\s*Total MP2 Energy\s+([-+0-9Ee\.]+)",
     re.MULTILINE,

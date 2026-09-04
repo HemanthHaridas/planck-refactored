@@ -1,0 +1,51 @@
+# Cr2 -- the Q1 target case for FCIQMC (docs/FCIQMC_RESEARCH_SCOPE.md).
+#
+# NOT a regression case. Two atoms, and the active space is what blocks it:
+#
+#   CAS(12,12)  853,776 dets      ~1.3 h   reachable today
+#   CAS(12,14)    9.0M dets       ~2 d     painful
+#   CAS(12,16)   64.1M dets       ~47 d    out of reach
+#   CAS(12,18)  344.6M dets       ~2 yr    out of reach, AND 2.76 GB per CI
+#                                          vector (~22 GB for a Davidson subspace)
+#
+# The 12 active electrons are the 3d^5 4s^1 valence on each Cr. The sextuple
+# Cr-Cr bond is the textbook hard multireference case -- single-reference methods
+# get the binding curve qualitatively wrong -- so the larger active spaces are
+# chemically motivated, not invented to be big.
+#
+# As committed this runs CAS(12,12), which SHOULD complete: it is the reachable
+# rung, and it exists so the boundary can be verified rather than asserted.
+# Raise nactorb to 14/16/18 to walk off the cliff.
+
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation casscf
+    nactele     12
+    nactorb     12
+    ci_max_dim  1000000
+    use_diis    .true.
+    diis_dim    8
+    save_checkpoint .false.
+    engine      os
+    guess       sad
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+2
+0   1
+Cr    0.000000     0.000000     0.000000
+Cr    0.000000     0.000000     1.680000
+%end_coords

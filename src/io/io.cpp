@@ -641,11 +641,55 @@ namespace HartreeFock::IO
                 {"uccsd", HartreeFock::PostHF::UCCSD},
                 {"ccsdt", HartreeFock::PostHF::RCCSDT},
                 {"uccsdt", HartreeFock::PostHF::UCCSDT},
+                // The generated arbitrary-order RCC path. All of these map to the
+                // single RCCSDTQ enum value; the excitation rank is carried
+                // separately on OptionsSCF._cc_generated_rank (set in the
+                // "correlation" handler), so higher ranks need no new enum member
+                // or driver branch — the ceiling is PLANCK_CC_MAXORDER alone.
+                // cc3 / ccsdt_gen route CCSDT through the GENERATED arbitrary path
+                // (not the hand-written run_rccsdt) so it produces spatial
+                // amplitudes and can write a .ccamp seed for a later cc4 run
+                // (Route B). Only usable when the rank-3 companion is built
+                // (-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON).
+                {"cc3", HartreeFock::PostHF::RCCSDTQ},
+                {"ccsdt_gen", HartreeFock::PostHF::RCCSDTQ},
                 {"ccsdtq", HartreeFock::PostHF::RCCSDTQ},
                 {"cc4", HartreeFock::PostHF::RCCSDTQ},
+                {"ccsdtqp", HartreeFock::PostHF::RCCSDTQ},
+                {"cc5", HartreeFock::PostHF::RCCSDTQ},
+                {"cc6", HartreeFock::PostHF::RCCSDTQ},
+                // U5.3b: the generated UNRESTRICTED path. Same shape as the cc3..cc6
+                // spellings above -- one enum value with the excitation rank carried
+                // on _cc_generated_rank -- so higher ranks need no new enum member
+                // and no new driver branch. Requires -DPLANCK_CC_UCC=ON; without it
+                // the registry errors rather than falling back to the RCC bundle.
+                // U5.3c: the method-named aliases now cover ranks 3-4 as the RCC
+                // side does (`ccsdt_gen` / `ccsdtq`), and the numeric spellings run
+                // to 6. The rank-4 ceiling was a hand-written switch in the
+                // registry, not a real limit -- the emitter is rank-generic
+                // (verified: `ucc_independent_blocks(2 * rank)` yields 6 and 7 spin
+                // sectors at excitation ranks 5 and 6; note it takes the AMPLITUDE
+                // rank, which is twice the excitation rank) -- so ucc5/ucc6 follow
+                // PLANCK_CC_MAXORDER exactly as cc5/cc6 do.
+                //
+                // RCC having no rank-2 generated keyword while UCC has `ucc2` is
+                // NOT an asymmetry to fix: RCC's generated_floor is 4 (3 with
+                // PLANCK_CC_ARBITRARY_LOWER_RANKS) because the hand-written solvers
+                // already cover ranks 2-3, so a generated rank-2 RCC path would
+                // have no consumer. `ucc2` exists because U5.4 needs it as the
+                // comparison against hand-written UCCSD.
+                {"ucc2", HartreeFock::PostHF::UCCGEN},
+                {"uccsd_gen", HartreeFock::PostHF::UCCGEN},
+                {"ucc3", HartreeFock::PostHF::UCCGEN},
+                {"uccsdt_gen", HartreeFock::PostHF::UCCGEN},
+                {"ucc4", HartreeFock::PostHF::UCCGEN},
+                {"uccsdtq_gen", HartreeFock::PostHF::UCCGEN},
+                {"ucc5", HartreeFock::PostHF::UCCGEN},
+                {"ucc6", HartreeFock::PostHF::UCCGEN},
                 {"casscf", HartreeFock::PostHF::CASSCF},
                 {"rasscf", HartreeFock::PostHF::RASSCF},
                 {"fci", HartreeFock::PostHF::FCI},
+                {"fciqmc", HartreeFock::PostHF::FCIQMC},
             };
 
         return lookup_enum(_table, value, "Invalid Correlation : ");
@@ -669,7 +713,7 @@ namespace HartreeFock::IO
         return lookup_enum(_table, value, "Invalid Correlation : ");
     }
 
-    std::expected<void, std::string> _parse_scf(const std::vector<std::string> &lines, HartreeFock::OptionsSCF &scf, HartreeFock::PostHF &correlation, HartreeFock::OptionsIntegral &integral, HartreeFock::OptionsActiveSpace &active_space, HartreeFock::OptionsMP2 &mp2)
+    std::expected<void, std::string> _parse_scf(const std::vector<std::string> &lines, HartreeFock::OptionsSCF &scf, HartreeFock::PostHF &correlation, HartreeFock::OptionsIntegral &integral, HartreeFock::OptionsActiveSpace &active_space, HartreeFock::OptionsMP2 &mp2, HartreeFock::OptionsFCIQMC &fciqmc)
     {
         // (key, value) pairs
         const std::unordered_map<std::string, ParseHandler> _scf_map =
@@ -708,12 +752,44 @@ namespace HartreeFock::IO
                      return std::expected<void, std::string>{};
                  }},
 
-                {"correlation", [&correlation](const std::string &value) -> std::expected<void, std::string>
+                {"correlation", [&correlation, &scf](const std::string &value) -> std::expected<void, std::string>
                  {
                      auto parsed = map_string_enum<HartreeFock::PostHF>(value);
                      if (!parsed)
                          return std::unexpected(parsed.error());
                      correlation = *parsed;
+                     // For the generated arbitrary-order RCC path (all spellings
+                     // map to RCCSDTQ), carry the requested excitation rank so the
+                     // driver dispatches to the right generated kernel without a
+                     // per-rank enum/branch. Ranks not listed keep the default (4).
+                     if (*parsed == HartreeFock::PostHF::RCCSDTQ)
+                     {
+                         static const std::unordered_map<std::string, int> _cc_rank =
+                             {
+                                 {"cc3", 3}, {"ccsdt_gen", 3},
+                                 {"ccsdtq", 4}, {"cc4", 4},
+                                 {"ccsdtqp", 5}, {"cc5", 5},
+                                 {"cc6", 6},
+                             };
+                         if (auto it = _cc_rank.find(value); it != _cc_rank.end())
+                             scf._cc_generated_rank = it->second;
+                     }
+                     // U5.3b: the same mechanism for the generated unrestricted
+                     // path. Its floor is rank 2 (uccsd), not 4 -- unlike RCC there
+                     // is no hand-written generated-path predecessor to defer to.
+                     if (*parsed == HartreeFock::PostHF::UCCGEN)
+                     {
+                         static const std::unordered_map<std::string, int> _ucc_rank =
+                             {
+                                 {"ucc2", 2}, {"uccsd_gen", 2},
+                                 {"ucc3", 3}, {"uccsdt_gen", 3},
+                                 {"ucc4", 4}, {"uccsdtq_gen", 4},
+                                 {"ucc5", 5},
+                                 {"ucc6", 6},
+                             };
+                         if (auto it = _ucc_rank.find(value); it != _ucc_rank.end())
+                             scf._cc_generated_rank = it->second;
+                     }
                      return std::expected<void, std::string>{};
                  }},
                 {"engine", [&integral](const std::string &value) -> std::expected<void, std::string>
@@ -751,6 +827,14 @@ namespace HartreeFock::IO
                 {"cc_max_memory_gb", [&scf](const std::string &value) -> std::expected<void, std::string>
                  {
                      scf._cc_max_memory_gb = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"cc_warm_start", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     auto parsed = toBool(value);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     scf._cc_warm_start = *parsed;
                      return std::expected<void, std::string>{};
                  }},
                 {"mp2_ri_basis", [&mp2](const std::string &value) -> std::expected<void, std::string>
@@ -868,6 +952,99 @@ namespace HartreeFock::IO
                 {"ci_max_dim", [&active_space](const std::string &v) -> std::expected<void, std::string>
                  {
                      active_space.ci_max_dim = static_cast<unsigned int>(std::stoi(v));
+                     return std::expected<void, std::string>{};
+                 }},
+
+                // ── FCIQMC ────────────────────────────────────────────────────
+                // Every one of these changes the answer, so every one is
+                // reachable. Values are validated here rather than at use, so a
+                // bad input fails at parse time with the keyword named.
+                {"fciqmc_walkers", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed > 0.0))
+                         return std::unexpected("fciqmc_walkers must be positive");
+                     fciqmc.target_walkers = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_timestep", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed > 0.0))
+                         return std::unexpected("fciqmc_timestep must be positive");
+                     fciqmc.timestep = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_shift_damping", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed >= 0.0))
+                         return std::unexpected("fciqmc_shift_damping must be non-negative");
+                     fciqmc.shift_damping = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_shift_restoring", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed >= 0.0))
+                         return std::unexpected("fciqmc_shift_restoring must be non-negative");
+                     fciqmc.shift_restoring = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_shift_interval", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const int parsed = std::stoi(v);
+                     if (parsed < 1)
+                         return std::unexpected("fciqmc_shift_interval must be at least 1");
+                     fciqmc.shift_interval = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_granularity", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed >= 0.0))
+                         return std::unexpected("fciqmc_granularity must be non-negative (0 disables discretization)");
+                     fciqmc.walker_granularity = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_initiator", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const double parsed = std::stod(v);
+                     if (!(parsed >= 0.0))
+                         return std::unexpected("fciqmc_initiator must be non-negative (0 disables the initiator)");
+                     fciqmc.initiator_threshold = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_equilibration", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const int parsed = std::stoi(v);
+                     if (parsed < 0)
+                         return std::unexpected("fciqmc_equilibration must be non-negative");
+                     fciqmc.equilibration_steps = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_steps", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const int parsed = std::stoi(v);
+                     if (parsed < 4)
+                         return std::unexpected("fciqmc_steps must be at least 4");
+                     fciqmc.sampling_steps = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                {"fciqmc_spawn_attempts", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     const int parsed = std::stoi(v);
+                     if (parsed < 1)
+                         return std::unexpected("fciqmc_spawn_attempts must be at least 1");
+                     fciqmc.spawn_attempts = parsed;
+                     return std::expected<void, std::string>{};
+                 }},
+                // The seed is an input on purpose: the reproducibility contract
+                // (same seed -> same trajectory, bitwise) is worthless if it
+                // cannot be set and is not recorded in the output.
+                {"fciqmc_seed", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     fciqmc.seed = static_cast<unsigned long long>(std::stoull(v));
                      return std::expected<void, std::string>{};
                  }},
                 {"target_irrep", [&active_space](const std::string &v) -> std::expected<void, std::string>
@@ -1891,7 +2068,7 @@ namespace HartreeFock::IO
         // scf
         if (auto it = _sections.find("scf"); it != _sections.end())
         {
-            if (auto res = _parse_scf(it->second, calculator._scf, calculator._correlation, calculator._integral, calculator._active_space, calculator._mp2); !res)
+            if (auto res = _parse_scf(it->second, calculator._scf, calculator._correlation, calculator._integral, calculator._active_space, calculator._mp2, calculator._fciqmc); !res)
                 return std::unexpected(res.error());
         }
         else
@@ -1902,6 +2079,7 @@ namespace HartreeFock::IO
         // dft (optional)
         if (auto it = _sections.find("dft"); it != _sections.end())
         {
+            calculator._is_dft = true; // a %begin_dft section declares a DFT run
             if (auto res = _parse_dft(it->second, calculator._dft); !res)
                 return std::unexpected(res.error());
         }

@@ -1,11 +1,14 @@
 #include <Eigen/Eigenvalues>
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <format>
 #include <limits>
 #include <numeric>
 #include <tuple>
 
+#include "base/mpi_env.h"
 #include "basis/spherical.h"
 #include "integrals/base.h"
 #include "io/logging.h"
@@ -353,10 +356,19 @@ bool HartreeFock::SCF::is_converged(
     const IterationMetrics &metrics,
     unsigned int iteration) noexcept
 {
+    // DIIS can extrapolate a Fock whose diagonalized density exactly
+    // reproduces the previous one (ΔP → 0) while the DIIS residual FPS-SPF is
+    // still large — a stalled step, not convergence. Gate on the DIIS error too
+    // so we don't declare convergence in a wrong basin (seen with SAD guess on
+    // lone closed-shell atoms). diis_error is 0 when DIIS is inactive, so this
+    // is a no-op for non-DIIS runs. See SAD isolated-atom bug.
+    const bool diis_residual_ok =
+        metrics.diis_error <= 0.0 || metrics.diis_error < scf_options._tol_density;
     return iteration > 1 &&
            metrics.delta_energy < scf_options._tol_energy &&
            metrics.delta_density_rms < scf_options._tol_density &&
-           metrics.delta_density_max < scf_options._tol_density;
+           metrics.delta_density_max < scf_options._tol_density &&
+           diis_residual_ok;
 }
 
 void HartreeFock::SCF::store_restricted_iteration(
@@ -601,6 +613,11 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
                                  calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
         }
 
+        // ponytail: phase timers, env-gated, RHF only -- the Amdahl probe for
+        // MPI strong scaling (what fraction of the iteration is replicated).
+        // Three clock reads; the print is behind PLANCK_PHASE_TIMING.
+        const auto t_fock_end = std::chrono::steady_clock::now();
+
         Eigen::MatrixXd V_pcm = Eigen::MatrixXd::Zero(nbasis, nbasis);
         double pcm_energy = 0.0;
         if (pcm != nullptr && pcm->enabled())
@@ -635,6 +652,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
         // Once DIIS has ≥2 vectors, use the extrapolated Fock; otherwise plain F.
         const bool do_diis = use_diis && diis.ready();
         const Eigen::MatrixXd F_diag = do_diis ? diis.extrapolate() : F;
+
+        const auto t_diis_end = std::chrono::steady_clock::now();
 
         // ── Diagonalize Fock matrix ───────────────────────────────────────────
         Eigen::MatrixXd C(nbasis, nbasis);
@@ -705,18 +724,39 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
             calculator._info._scf.alpha.mo_symmetry = std::move(mo_sym);
         }
 
+        const auto t_diag_end = std::chrono::steady_clock::now();
+
         const Eigen::MatrixXd C_occ = C.leftCols(n_occ);
 
         // ── Next density ──────────────────────────────────────────────────────
         const Eigen::MatrixXd density_next = 2.0 * C_occ * C_occ.transpose();
 
         // ── Convergence checks ────────────────────────────────────────────────
-        const IterationMetrics metrics =
+        IterationMetrics metrics =
             restricted_iteration_metrics(P, density_next, E_prev, E_total);
+        metrics.diis_error = diis_err;
 
-        const double iter_time = std::chrono::duration<double>(
-                                     std::chrono::steady_clock::now() - iter_start)
-                                     .count();
+        const auto iter_end = std::chrono::steady_clock::now();
+        const double iter_time = std::chrono::duration<double>(iter_end - iter_start).count();
+
+        // ponytail: one line per iteration per rank, scraped by phase_bench.py.
+        // "rest" = everything not Fock/DIIS/diag (density build, metrics, PCM):
+        // by construction the four buckets sum to iter_s, so no phase hides.
+        if (std::getenv("PLANCK_PHASE_TIMING"))
+        {
+            const auto sec = [](auto a, auto b)
+            { return std::chrono::duration<double>(b - a).count(); };
+            const double t_fock = sec(iter_start, t_fock_end);
+            const double t_diis = sec(t_fock_end, t_diis_end);
+            const double t_diag = sec(t_diis_end, t_diag_end);
+            std::printf(
+                "PLANCK_PHASE rank=%d iter=%u fock_s=%.6f diis_s=%.6f "
+                "diag_s=%.6f rest_s=%.6f iter_s=%.6f\n",
+                HartreeFock::Mpi::rank(), iter, t_fock, t_diis, t_diag,
+                iter_time - t_fock - t_diis - t_diag, iter_time);
+            std::fflush(stdout);
+        }
+
         HartreeFock::Logger::scf_iteration(
             iter,
             E_total,
@@ -1136,8 +1176,9 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             Cb.leftCols(n_beta) * Cb.leftCols(n_beta).transpose();
 
         // ── Convergence on total density ──────────────────────────────────────
-        const IterationMetrics metrics = unrestricted_iteration_metrics(
+        IterationMetrics metrics = unrestricted_iteration_metrics(
             Pa, Pb, density_alpha_next, density_beta_next, E_prev, E_total);
+        metrics.diis_error = diis_err;
 
         const double iter_time = std::chrono::duration<double>(
                                      std::chrono::steady_clock::now() - iter_start)
@@ -1614,8 +1655,9 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
         const Eigen::MatrixXd density_beta_next =
             C.leftCols(n_beta) * C.leftCols(n_beta).transpose();
 
-        const IterationMetrics metrics = unrestricted_iteration_metrics(
+        IterationMetrics metrics = unrestricted_iteration_metrics(
             Pa, Pb, density_alpha_next, density_beta_next, E_prev, E_total);
+        metrics.diis_error = diis_err;
 
         const double iter_time = std::chrono::duration<double>(
                                      std::chrono::steady_clock::now() - iter_start)
@@ -1644,7 +1686,16 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
                 .beta_density = Pb,
                 .alpha_fock = Fa,
                 .beta_fock = Fb,
-                .alpha_mo_energies = eps,
+                // Store the canonical alpha-Fock diagonal (epsa), not the
+                // effective Roothaan eigenvalues (eps). epsa is the physically
+                // meaningful per-spin orbital energy and is what the MO-energy
+                // printout should show; _reorder_rohf_orbitals already sorts the
+                // columns by epsa, so the stored energies stay monotonic with
+                // the column order and the downstream ordering consumers
+                // (CASSCF/FCI active-space selection) are unaffected. The
+                // effective eps was a convergence device only and is not read
+                // after the reorder.
+                .alpha_mo_energies = epsa,
                 .beta_mo_energies = epsb,
                 .alpha_mo_coefficients = C,
                 .beta_mo_coefficients = C,
