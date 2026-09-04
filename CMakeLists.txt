@@ -1014,6 +1014,12 @@ if(BUILD_TESTING)
         ${SRC_DIR}/post_hf/cc/cc_amplitude_checkpoint.cpp
     )
 
+    add_executable(planck-cc-spatial-amplitude-projection
+        ${CMAKE_SOURCE_DIR}/tests/cc_spatial_amplitude_projection.cpp
+        ${SRC_DIR}/post_hf/cc/common.cpp
+        ${SRC_DIR}/post_hf/cc/amplitudes.cpp
+    )
+
     add_executable(planck-spherical-transform
         ${CMAKE_SOURCE_DIR}/tests/spherical_transform.cpp
         ${SRC_DIR}/basis/spherical.cpp
@@ -1493,6 +1499,11 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-cc-spatial-amplitude-projection PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-group-operations PRIVATE
         ${SRC_DIR}
         ${MSYM_INSTALL_DIR}/include
@@ -1731,6 +1742,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-cc-amplitude-checkpoint PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-cc-spatial-amplitude-projection PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -2009,6 +2026,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-cc-amplitude-checkpoint
         COMMAND planck-cc-amplitude-checkpoint
+    )
+
+    add_test(
+        NAME planck-cc-spatial-amplitude-projection
+        COMMAND planck-cc-spatial-amplitude-projection
     )
 
     add_test(
