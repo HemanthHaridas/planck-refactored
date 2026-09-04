@@ -99,15 +99,19 @@ the REMAINING doc's C3 section.
 
 Tracked in `CC_AMPLITUDE_CHECKPOINT_REMAINING_SCOPE.md`:
 
-- **C2** — the `ccsdt_gen`→`cc4` cross-rank restart is reasoned to be correct
-  by construction (given how C0's fix and the existing seeding order
-  compose) but has never been run end to end. This is the one piece worth
-  picking up first: it is cheap to check and would formally close X4.
+- **C2 is done.** Verified end-to-end on Be/STO-3G: a rank-3 `ccsdt_gen`
+  sidecar correctly seeds a `cc4` restart (1 iteration vs 6 cold, same
+  basin), closing X4 formally.
 - **C3** — `run_rccsdt`'s hand-written participation, deferred as above.
-- **C4** — a UCC sidecar. The header has a spare reference-type byte
-  reserved for it (added while C0's version bump was already in flight, to
-  avoid a second bump later), but no UCC write or read site exists yet;
-  blocked on arbitrary-order UCC landing at all.
+- **C4 is not blocked on UCC landing — arbitrary-order UCC already exists in
+  the tree.** The real blocker, found by reading `uccgen.cpp`'s own comment
+  (it already explains this correctly), is that `CCAmplitudeCheckpointMeta`
+  cannot represent a UHF reference's four occupation counts
+  (`n_occ_alpha`/`n_occ_beta`/`n_virt_alpha`/`n_virt_beta`) with its current
+  single `n_occ`/`n_virt` pair — the `reference_type` byte lets a reader
+  distinguish RHF from UHF but does not fix the shape underneath it. This
+  needs a version-3 design decision before any write/read code, not a
+  mechanical follow-on.
 
 ## What this reuses
 

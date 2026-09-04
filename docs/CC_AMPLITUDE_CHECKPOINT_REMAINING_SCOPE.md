@@ -1,10 +1,10 @@
 # `.ccamp` dumping and reading — what remains
 
 Follow-on scope to `CC_AMPLITUDE_CHECKPOINT_SCOPE.md`, which specified X0–X5.
-X0–X4.1 are landed. This file's own C0 and C1 are now also landed (PR #164,
-branch `ccamp-x5-spin-orbital-projection`, commits `c83b4bd7` / `d5d68314` /
-`c610fe12`). C2, C3, C4 remain open; this revision sharpens each with the
-detail needed to pick it up without re-deriving context.
+X0–X4.1 are landed. This file's own C0, C1, and C2 are now also landed and
+verified (PR #164, branch `ccamp-x5-spin-orbital-projection`). C3 and C4
+remain open; this revision sharpens each with the detail needed to pick it up
+without re-deriving context.
 
 Grounded in the current tree.
 
@@ -19,12 +19,12 @@ Grounded in the current tree.
 | X2 write on success | `rccgen.cpp:415-445` (`run_rccgen`), gated on `_save_checkpoint && !_checkpoint_path.empty()`, path = `<stem>.ccamp`, write failure is a **warning** | landed |
 | X3 read + seed | `rccgen.cpp:203-250` (`try_restart_from_sidecar`), `load_cc_amplitudes` → `seed_arbitrary_order_amplitudes`, falls through to cold/W6 on any error | landed |
 | X4.0 rank-3 arbitrary emit | `PLANCK_CC_ARBITRARY_LOWER_RANKS` lowers the registry floor 4→3 (`rccgen.cpp:284`) | landed |
-| X4.1 `ccsdt_gen`→`cc4` write | Same write site as X2, rank-generic (comment at `rccgen.cpp:420-421` names this explicitly) | landed, **but see C2 — never actually run end to end** |
+| X4.1 `ccsdt_gen`→`cc4` write + cross-rank restart | Same write site as X2, rank-generic (comment at `rccgen.cpp:420-421` names this explicitly) | landed and verified end-to-end (C2) |
 | X5.0 spin-orbital→spatial projection | `project_rccsd_amplitudes_to_spatial`, `amplitudes.{h,cpp}:474-...`, gated by `tests/cc_spatial_amplitude_projection.cpp` | landed |
 | X5.1 hand-written `run_rccsd` write | `ccsd.cpp:648-...`, same gating/degradation policy as X2 | landed, verified end-to-end on BH3/STO-3G |
 | C0 sector round-trip (format) | `cc_amplitude_checkpoint.{h,cpp}`, `CCAMP_VERSION = 2`, shared `write_tensor`/`read_tensor` | landed, mutation-verified |
 | C0 sector application (seed) | `seed_arbitrary_order_amplitudes`, `generated_arbitrary_prepare.cpp` | landed, mutation-verified |
-| C4's reference-type byte | Folded into C0's version-2 header (`CCReferenceType`, `cc_amplitude_checkpoint.h`) — **only the byte is landed, not UCC wiring; see C4 below** | partial |
+| C4's reference-type byte | Folded into C0's version-2 header (`CCReferenceType`, `cc_amplitude_checkpoint.h`) | landed, but **not sufficient for a UCC sidecar on its own — see C4 below**, the metadata shape itself (a single `n_occ`/`n_virt` pair) still cannot represent UHF's four occupation counts |
 | C1 basis/dims validation | `try_restart_from_sidecar`, `rccgen.cpp:229-...` | landed, verified end-to-end on LiH/STO-3G (two independent corruption cases + the positive case) |
 
 Memory records the X0–X3 validation: Be cc4 cold = 18 iterations → restart = 1
@@ -44,7 +44,7 @@ project-wide, not fixed here.
 
 ---
 
-## C2 — sector-aware cross-rank restart: STILL UNVERIFIED, now that C0 is done
+## C2 — sector-aware cross-rank restart: VERIFIED end to end, X4 closed
 
 **Status changed by C0 landing: this is no longer "should already work,"
 it is "now testable and still untested."** Before C0, the sector-drop defect
@@ -57,47 +57,45 @@ whose kernel bundle *does* have sectors, with the seed hook's own
 `:279` — leaving the target's sectors at their pre-allocated zero rather than
 erroring or crashing) has never been exercised by an actual run.
 
-**What to check first, before writing new code — this may already be correct
-by construction:**
+**Verified 2026-09-04, and the reasoning above held exactly.** Ran the actual
+gate on Be/STO-3G at loose tolerance (`tol_energy 1e-4`, `tol_density 1e-3`,
+`PLANCK_CC_ARBITRARY_LOWER_RANKS=ON`), with `cc_warm_start .false.` on every
+run to isolate the disk-restart claim from W6's in-memory recursion (which
+would otherwise mask a broken disk path — a `cc4` run with `warm_start=on`
+recurses to a converged rank-3 in memory regardless of whether a sidecar
+exists, so a genuinely cold rank-4 baseline needs W6 off too):
 
-1. `ensure_amplitude_sectors(*state_res, *kernels_res)` runs at
-   `rccgen.cpp:273`, before `try_restart_from_sidecar` at `:279` — so
-   `state.amplitudes.sectors` is populated with zero-valued tensors at the
-   right `(rank, tag)` keys before the seed ever runs, for a rank-4 target.
-2. A rank-3 sidecar's `chk->amplitudes.sectors` is empty (rank 3 has no
-   sectors — CCSDTQ is the first rank with an independent second sector; see
-   `amplitudes.h:87-92`), so `seed_arbitrary_order_amplitudes`'s
-   `for (const auto &[seed_key, seed_tensor] : seed.sectors)` loop
-   (`generated_arbitrary_prepare.cpp`, C0's fix) simply does nothing — no
-   live sector is touched, none is expected to be.
-3. This reasoning was NOT verified against a real run this session. The unit
-   tests built for C0 (`tests/cc_amplitude_sector_seed.cpp`) construct the
-   scenario synthetically; they do not exercise the real
-   `ensure_amplitude_sectors` → `try_restart_from_sidecar` ordering inside
-   `solve_generated_rcc`, and they do not use a real rank-3-sourced,
-   rank-4-target pair.
+| run | iterations | E_corr | total energy |
+|---|---|---|---|
+| cold `cc4` (W6 off, no sidecar) | **6** | -0.0518049788 | -14.4036853795 |
+| `ccsdt_gen` write (rank 3) | 6 | -0.0517514344 | -14.4035... |
+| `cc4` restart from the rank-3 sidecar (W6 off) | **1** | -0.0517592490 | -14.4036396497 |
 
-**Gate** (per the original scope, unchanged): a `ccsdt_gen` → `cc4` two-run
-test on Be — write via `ccsdt_gen` (rank 3), restart via `cc4`
-(`PLANCK_CC_ARBITRARY_LOWER_RANKS=ON` required), assert the same FCI energy
-and fewer T4-dominated iterations than a cold `cc4` run. This is X4.1's own
-gate and closes X4 formally once it passes. Given the build-cost lesson from
-this session (a `cc4`/rank-4 solve on Be is the expensive case flagged
-repeatedly in project memory), size the gate at loose tolerance first, the
-same way the original X0–X3 validation did (`tol_energy 1e-4`,
-`tol_density 1e-3`), before attempting a tight-tolerance version.
+- **1 iteration vs 6** — fewer, as the gate requires.
+- **`Warm-started rank 4 from CC amplitude checkpoint '...' (seeded 3 rank(s), method 'cc3')`**
+  logged, confirming the disk path fired, not W6 (which was off).
+- No warnings emitted during the restart — the empty-sectors-seed-nothing
+  path is a silent no-op, exactly as reasoned, not an error.
+- Both the cold and restart runs land within loose-tolerance spread
+  (~1.5e-5 to ~4.5e-5) of the tight-tolerance reference `-14.4036551081`
+  (`be_rccsdtq_sto3g`'s own committed value) — confirming both are in the
+  correct basin, not a coincidentally-plausible wrong answer.
 
-**If it passes as-is**: record the result here and in
-`CC_AMPLITUDE_CHECKPOINT_SCOPE.md`, mark X4 closed, done. **If it does not
-pass**: the most likely failure mode, given the code above, is an ordering or
-dims mismatch between what `ensure_amplitude_sectors` allocates for the
-*target* kernel bundle and what a rank-3 *source* sidecar's `by_rank` caps to
-via the `chk->amplitudes.by_rank.resize(rank)` line at
-`rccgen.cpp:232-233` (unchanged by C0/C1) — that resize only touches
-`by_rank`, never `sectors`, which is fine for a rank-3→rank-4 seed (the
-source genuinely has none) but worth re-checking for a rank-4→rank-5+ seed
-where the source DOES carry sectors that could outnumber or mis-key against
-the target's.
+The predicted failure mode (an ordering/dims mismatch between
+`ensure_amplitude_sectors`'s target allocation and the source sidecar's
+`by_rank.resize(rank)` cap) did not occur. **X4 is formally closed.**
+
+**Not added as a committed regression case.** This was run as an ad hoc
+verification (three hand-built `.hfinp` files, not committed) rather than
+wired into `tests/regression_cases.json` — the loose-tolerance energies
+above are not stable enough across engine/compiler changes to pin as exact
+`metric_close` values without re-deriving the tolerance the way the original
+X0–X3 validation did. If this is worth a permanent gate, the shape to copy is
+`be_rccsdtq_sto3g`'s own tight-tolerance form, extended to a three-run
+(write, cold, restart) comparison with `cc_warm_start .false.` on the cold
+and restart legs — the single `cc_warm_start .false.` flag is what makes the
+comparison mean anything; without it the "cold" baseline is silently warm
+via W6 and the iteration-count comparison is vacuous.
 
 ---
 
@@ -150,35 +148,87 @@ route. `run_rccsdt` does not have that gap: `ccsdt_gen` already covers it.
 
 ---
 
-## C4 — UCC sidecar: the header byte is landed, nothing else is
+## C4 — UCC sidecar: NOT blocked on UCC landing (it already has). The real
+blocker is the metadata SHAPE, and UCC's own author already said so.
 
-**Only the metadata field landed, not any UCC wiring — worth stating plainly
-since "C4 done" would be the wrong read of the current tree.** C0 added
-`CCReferenceType` (`RHF = 0, UHF = 1`) to `CCAmplitudeCheckpointMeta` and the
-version-2 header writes/reads it. Every current write site
-(`rccgen.cpp`'s X2/X4.1, `ccsd.cpp`'s X5.1) leaves it at the default `RHF`,
-because no UCC write path exists yet — `save_cc_amplitudes` has never been
-called with `reference_type = UHF` in this tree.
+**This section was wrong in the previous revision and is corrected here.**
+It previously said C4 was "blocked on arbitrary-order UCC landing at all."
+**That premise is false — arbitrary-order UCC is already in the tree**,
+complete and validated (`ucc2`/`ucc3`/`ucc4`, behind `-DPLANCK_CC_UCC=ON`;
+see `vault/Status/Completion.md` and `CCGEN_UNRESTRICTED_CC.md`). The actual
+blocker was found by reading `uccgen.cpp` (the UCC entry point) directly,
+where its own author already diagnosed and documented it — this section had
+simply never been checked against that file:
 
-**What actually remains, once arbitrary-order UCC lands**
-(tracked separately in `CCGEN_UNRESTRICTED_CC.md`):
+```
+// Deliberately NOT carried over from the RCC path:
+//   ...
+//   - .ccamp persistence. The sidecar's meta carries a single (n_occ, n_virt)
+//     pair, which cannot describe a spin-resolved amplitude set. Writing one
+//     would produce a file that reloads into the wrong shape.
+```
 
-1. A UCC write site must set `meta.reference_type = CCReferenceType::UHF`
-   explicitly — nothing does this automatically today.
-2. `try_restart_from_sidecar` (or its UCC-path sibling, once one exists) must
-   **check** `chk->meta.reference_type` against the live reference kind and
-   reject a mismatch the same way C1 rejects a basis/dims mismatch — this
-   check does **not exist yet**. C1's basis/dims validation added this
-   session says nothing about `reference_type`; a UHF sidecar seeding an RCC
-   run (or vice versa) would currently pass C1's checks (if `n_occ`/`n_virt`
-   happen to agree) and only fail, if at all, deeper in the seed hook's dims
-   check — which is exactly the "wrong-basin silent seed" failure mode C1
-   was built to close, reopened for this one axis.
-3. UCC's `sectors` machinery is confirmed to reuse the same `(rank, tag)`
-   keying (per the original C4 note and confirmed unchanged by this
-   session's read of `amplitudes.h`), so C0's sector format needs no further
-   change — only the write/read *call sites* are UCC's remaining work, not
-   the file format.
+**Confirmed independently by reading the two structs.**
+`CCAmplitudeCheckpointMeta` (`cc_amplitude_checkpoint.h`) carries exactly one
+`n_occ`/`n_virt` pair. `UHFReference` (`common.h`) carries **four**:
+`n_occ_alpha`, `n_occ_beta`, `n_virt_alpha`, `n_virt_beta` — genuinely
+independent counts for an open-shell or spin-polarized system, not
+derivable from each other or from a single pair. **C0's `reference_type` byte
+does not fix this.** It lets a reader distinguish "this file claims to be
+RHF" from "this file claims to be UHF," but even a correctly-tagged UHF
+sidecar has nowhere in the current format to store its real occupation
+counts — `n_occ` would have to silently mean something different
+(alpha-only? total? a lossy sum?) depending on `reference_type`, which is
+exactly the kind of format ambiguity a version field exists to prevent, not
+create.
+
+**So C4 is not "write the UCC call sites," it is "design the metadata
+extension first."** Concretely unresolved, and each is a real decision, not
+mechanical:
+
+1. **How to represent four occupation counts.** The direct fix is adding
+   `n_occ_alpha`/`n_occ_beta`/`n_virt_alpha`/`n_virt_beta` alongside (or
+   instead of) the existing `n_occ`/`n_virt` pair, discriminated by
+   `reference_type` at read time — an RHF sidecar keeps using the existing
+   two fields, a UHF sidecar uses the new four. This needs another version
+   bump (to 3), since version 2's header layout has no room for the extra
+   fields and no version-1-style "read what's there, default the rest"
+   compatibility path is possible without knowing in advance how many extra
+   u64s to expect.
+2. **Whether `by_rank` means anything for UCC at all.** Confirmed this
+   session: `prepare_generated_ucc_state` explicitly leaves
+   `state.amplitudes.by_rank` empty (comment: "No amplitudes at all... the
+   sectors are filled by `ensure_amplitude_sectors`") — UCC has no privileged
+   "balanced reference sector" the way RCC's `by_rank` is. So a UCC sidecar
+   is **sectors-only**; a write site would emit `max_rank` and an empty (or
+   omitted) `by_rank` loop, all real data living in the sector block C0
+   already built. Worth confirming the loader's `max_rank < 1` rejection
+   (`load_cc_amplitudes`, unchanged since X1) doesn't need an exception for
+   this — a UCC file having zero-length `by_rank` but a real `max_rank` may
+   already trip that check, since `max_rank` today is read as `by_rank.size()`
+   equivalent at write time (`rccgen.cpp`'s write sites set
+   `meta.max_rank = rank`, independent of `by_rank`'s actual length) —
+   worth re-reading `save_cc_amplitudes`/`load_cc_amplitudes` against a
+   UCC-shaped input specifically before assuming this composes for free.
+3. **UCC's sector tags are confirmed compatible with C0's format as-is.**
+   `ucc_amplitude_blocks(rank)` produces tags like `"aaaa"`, `"abab"`,
+   `"bbbb"` (rank 2) via the same `(rank, tag) -> TensorND` keying C0's
+   sector block already writes/reads — this part of the original note holds
+   and needs no format change.
+4. **The write/read call sites themselves** (setting `reference_type`,
+   validating it symmetrically to C1's basis/dims check) are the easy,
+   mechanical remainder, but they should come **after** items 1–2 are
+   decided, not before — writing UCC-shaped data into a format that cannot
+   yet represent it correctly is worse than not writing at all, and would
+   repeat the exact mistake C0 was fixing (a sidecar that looks complete but
+   silently discards or misrepresents real data).
+
+**Recommendation: still don't build this now.** It is a real design decision
+(the version-3 header shape) that deserves its own pass, not a same-session
+add-on the way C0/C1/C2 were. `uccgen.cpp`'s own comment is doing its job —
+it is accurate, and nothing here should be built until that comment's
+condition (a sidecar format that can actually hold UHF's occupation counts)
+is met.
 
 ---
 
@@ -186,15 +236,16 @@ called with `reference_type = UHF` in this tree.
 
 1. ~~C0~~ — **DONE.**
 2. ~~C1~~ — **DONE.**
-3. **C2** — verify the `ccsdt_gen`→`cc4` cross-rank restart gate on Be at
-   loose tolerance; likely correct by construction (see the reasoning above)
-   but genuinely unverified. Closes X4 formally. ~S.
+3. ~~C2~~ — **DONE. X4 formally closed.**
 4. **C3 (ccsdt half only)** — still recommended deferred; the rank-2 half is
    done. Revisit only if `run_rccsdt`'s hand-written backends stay production
    longer than `ccsdt_gen`'s adoption. ~M if picked up.
-5. **C4 (UCC wiring)** — blocked on arbitrary-order UCC landing at all; the
-   header byte is ready, the write-site and read-site work is not started.
-   ~S once UCC exists.
+5. **C4 (UCC sidecar)** — NOT blocked on UCC landing (it already has); blocked
+   on a real metadata-format decision (`CCAmplitudeCheckpointMeta` cannot
+   represent UHF's four occupation counts, `uccgen.cpp`'s own comment says so
+   correctly). Needs a version-3 design pass before any write/read code, not
+   a mechanical follow-on to C0/C1/C2. ~S once the format question is
+   answered; the format question itself is not ~S.
 
 ---
 

@@ -339,13 +339,47 @@ historical design context, but they are no longer the source of truth for
   correctly cold-start at the same final energy a from-scratch run reaches,
   while an untouched sidecar still warm-starts in 1 iteration.
 
-  **Still open, tracked in the REMAINING doc**: C2 (verify the
-  `ccsdt_gen`->`cc4` cross-rank restart end to end -- reasoned correct by
-  construction but never actually run; closes X4 formally), C3
+  **C2 -- the `ccsdt_gen`->`cc4` cross-rank restart, verified end to end.**
+  Ran the actual gate on Be/STO-3G at loose tolerance
+  (`PLANCK_CC_ARBITRARY_LOWER_RANKS=ON`), with `cc_warm_start .false.` on
+  every run to isolate the disk-restart claim from W6's in-memory
+  recursion (which otherwise recurses to a converged rank-3 in memory
+  regardless of whether a sidecar exists, making a "cold" comparison
+  meaningless without it). Genuinely cold `cc4`: 6 iterations,
+  `E_corr = -0.0518049788`. `ccsdt_gen` write (rank 3): 6 iterations,
+  `E_corr = -0.0517514344`. `cc4` restart from that sidecar: **1 iteration**,
+  `E_corr = -0.0517592490`, log line confirms
+  `Warm-started rank 4 from CC amplitude checkpoint ... (seeded 3 rank(s),
+  method 'cc3')`. No warnings during restart -- the empty-sectors-seed-
+  nothing path (a rank-3 source has no sectors of its own) is a silent
+  no-op exactly as reasoned, not an error. Both cold and restart runs land
+  within loose-tolerance spread of the tight-tolerance reference
+  `-14.4036551081` (`be_rccsdtq_sto3g`'s own committed value), confirming
+  the correct basin rather than a coincidentally-plausible wrong answer.
+  **X4 is formally closed.** Not added as a committed regression case (ad
+  hoc `.hfinp` files, not wired into `regression_cases.json` -- see the
+  REMAINING doc for what a permanent gate would need).
+
+  **C4 -- corrected finding, not fixed.** The REMAINING doc previously said
+  C4 was blocked on arbitrary-order UCC landing at all; that premise was
+  wrong -- UCC already exists in the tree, complete and validated
+  (`ucc2`/`ucc3`/`ucc4`, `-DPLANCK_CC_UCC=ON`). Reading `uccgen.cpp`
+  directly found its own comment already correctly diagnoses the real
+  blocker: `.ccamp` persistence was deliberately omitted because
+  `CCAmplitudeCheckpointMeta` carries one `n_occ`/`n_virt` pair, but
+  `UHFReference` needs four independent counts
+  (`n_occ_alpha`/`n_occ_beta`/`n_virt_alpha`/`n_virt_beta`) -- a shape gap
+  C0's `reference_type` byte does not fix (it lets a reader tell RHF from
+  UHF, not represent UHF's counts). Also confirmed: UCC leaves `by_rank`
+  empty entirely (`prepare_generated_ucc_state`'s own comment) and is
+  sectors-only, while its sector tags already fit C0's `(rank, tag)` keying
+  unchanged. This needs a version-3 header design decision, not a
+  mechanical write/read follow-on -- deliberately not built.
+
+  **Still open, tracked in the REMAINING doc**: C3
   (`run_rccsdt`'s hand-written rank-3 participation, deliberately deferred
-  since `ccsdt_gen` already covers the gap it would close), C4 (a UCC
-  sidecar -- only the header byte exists, blocked on arbitrary-order UCC
-  landing).
+  since `ccsdt_gen` already covers the gap it would close) and C4 as
+  corrected above.
 
 - **FCIQMC: the method is implemented and runs from an input file (2026-08-31 to
   2026-09-01).** `correlation fciqmc` is a working calculation. Walker state and

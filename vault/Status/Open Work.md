@@ -1253,16 +1253,8 @@ Q1 verdict (Karp-Flatt serial fraction rather than efficiency-at-max-ranks,
   Cartesian-side — see Completion)
 - The ccgen `TensorOptimized` RCCSDT backend is still treated in-tree as an experimental / phase-4 path
 - **CC amplitude checkpoint (`.ccamp`) follow-ups, from
-  `docs/CC_AMPLITUDE_CHECKPOINT_REMAINING_SCOPE.md`** (X5.0/X5.1 and the C0/C1
-  fixes landed 2026-09-04, see Completion):
-  - **C2 — the `ccsdt_gen`->`cc4` cross-rank restart is reasoned correct by
-    construction but has never actually been run end to end.** Now that C0's
-    sector fix landed, this is genuinely testable and genuinely untested — not
-    "should already work" but "now checkable and still unchecked." Gate: a
-    `ccsdt_gen`->`cc4` two-run test on Be at loose tolerance (write via rank 3,
-    restart via rank 4, same FCI energy, fewer T4-dominated iterations than
-    cold `cc4`); this is X4.1's own gate and formally closes X4 once it
-    passes. Cheap to check; do this first among the three.
+  `docs/CC_AMPLITUDE_CHECKPOINT_REMAINING_SCOPE.md`** (X5.0/X5.1 and the
+  C0/C1/C2 work landed 2026-09-04, see Completion):
   - **C3 — `run_rccsdt`'s hand-written rank-3 solver still cannot
     read/write a `.ccamp`.** Deliberately deferred: `ccsdt_gen` already
     reaches rank 3 through the generated arbitrary-order runtime and already
@@ -1274,17 +1266,28 @@ Q1 verdict (Karp-Flatt serial fraction rather than efficiency-at-max-ranks,
     `project_rccsd_amplitudes_to_spatial`, plus excluding the
     determinant-space/tensor-optimized backends (only the tensor backend
     holds dense amplitudes) from the write path.
-  - **C4 — a UCC sidecar has a reserved header byte and nothing else.** C0
-    folded a `reference_type` (RHF/UHF) byte into the version-2 header
-    while it was already being changed, but no UCC write site sets it and
-    no read site checks it — blocked entirely on arbitrary-order UCC
-    landing (`CCGEN_UNRESTRICTED_CC.md`). When it does: a UCC write site
-    must set the byte explicitly, and `try_restart_from_sidecar` (or its
-    UCC-path sibling) must reject a `reference_type` mismatch the same way
-    C1 rejects a basis/dims mismatch — this check does not exist yet, so
-    today a UHF sidecar could pass C1's checks if `n_occ`/`n_virt` happen to
-    agree, reopening the "wrong-basin silent seed" failure mode C1 was
-    built to close, for this one axis.
+  - **C4 — a UCC sidecar is NOT blocked on UCC landing (it already has);
+    it's blocked on a real metadata-shape decision.** Corrected finding:
+    the previous entry here said C4 was "blocked entirely on arbitrary-order
+    UCC landing," which is wrong — UCC already exists in the tree, complete
+    and validated (`ucc2`/`ucc3`/`ucc4`, `-DPLANCK_CC_UCC=ON`). The real
+    blocker was already diagnosed correctly by `uccgen.cpp`'s own in-tree
+    comment ("the sidecar's meta carries a single (n_occ, n_virt) pair,
+    which cannot describe a spin-resolved amplitude set... `.ccamp`
+    persistence" deliberately omitted) — confirmed independently by reading
+    `CCAmplitudeCheckpointMeta` (one `n_occ`/`n_virt` pair) against
+    `UHFReference` (four independent counts: `n_occ_alpha`, `n_occ_beta`,
+    `n_virt_alpha`, `n_virt_beta`). C0's `reference_type` byte lets a reader
+    tell a UHF sidecar from an RHF one but does nothing to fix the shape
+    underneath — even a correctly-tagged UHF file has nowhere to put its
+    real occupation counts today. This needs a version-3 header design
+    (how to carry four counts, and whether `by_rank` means anything for UCC
+    at all — confirmed this session it does not: `prepare_generated_ucc_state`
+    leaves it empty, UCC is sectors-only) before any write/read code is
+    worth writing. UCC's sector tags (`"aaaa"`/`"abab"`/`"bbbb"`-style,
+    `ucc_amplitude_blocks`) already fit C0's `(rank, tag)` keying without
+    change. Deliberately not built this session — a real design decision,
+    not a mechanical follow-on the way C0/C1/C2 were.
 
 ## ccgen generated-kernel performance
 
