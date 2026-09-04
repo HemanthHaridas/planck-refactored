@@ -48,7 +48,7 @@ Instead of enumerating labeled terms, enumerate **diagrams** — the Kállay–S
 
 The diagram is then expanded into the same `AlgebraTerm`s the rest of the pipeline consumes. The two engines emit different term *multisets* (the diagram path merges repeated-factor exchange pairs the wick path keeps split) but the same *residual tensor* — so they are compared by residual equality, and the diagram path emits slightly fewer terms.
 
-The design and full validation are in `docs/CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md` and `docs/CCGEN_GENERATION_AND_VALIDATION.md`; a teaching walkthrough of both engines is `docs/CCGEN_TEACHING_GUIDE.md`.
+The design and full validation are in `docs/CCGEN_DIAGRAM_REPRESENTATION.md` and `docs/CCGEN_GENERATION_AND_VALIDATION.md`; a teaching walkthrough of both engines is `docs/CCGEN_TEACHING_GUIDE.md`.
 
 ## Installation
 

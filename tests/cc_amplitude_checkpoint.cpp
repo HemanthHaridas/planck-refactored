@@ -17,8 +17,8 @@
 // four occupation counts). Covers: a sectors-only amplitude set (empty
 // by_rank, the exact UCC shape) round-trips correctly, which the version-2
 // format could not represent at all -- a writer-only fix for this was tried
-// first and found broken on round-trip (see
-// docs/CC_AMPLITUDE_CHECKPOINT_UCC_SCOPE.md), so this test exists
+// first and found broken on round-trip (see docs/CC_AMPLITUDE_CHECKPOINT.md,
+// "History: two defects and one capability gap"), so this test exists
 // specifically to keep that regression from recurring; a hand-built
 // version-2 file (no n_by_rank, no UHF counts in the byte stream) loads
 // with n_by_rank defaulted to THAT FILE'S OWN max_rank, not to 0 -- 0 would

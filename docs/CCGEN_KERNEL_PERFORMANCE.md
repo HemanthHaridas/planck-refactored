@@ -1,8 +1,19 @@
-# Why do the generated CC kernels run slower than hand-written ones?
+# ccgen Generated Kernel Performance vs Hand-Written
+
+Canonical status now lives in:
+
+- `vault/Status/Completion.md`
+- `vault/Status/Open Work.md`
+
+This file answers a narrower architecture question:
+
+**Why do the generated CC kernels run slower than hand-written ones?**
 
 **Status: ANSWERED. The dominant cause was the tensor accessor, not the loop structure, and it is
 fixed.** The `_SCOPE` in this filename is historical — this is an answer, and the one item still
 genuinely open (the rank-4 `-O1` registry pin) is named at the bottom rather than scoped here.
+
+## Short answer
 
 The carried figure was "~180× slower, attributed to intermediates rebuilt inside loops and CSE
 being disabled". Measured on a current build the gap was **~37.6×**, and both the number and the
@@ -30,11 +41,64 @@ each one allocating a `std::vector<int>` via `to_vector` *before* the out-of-lin
 strictly worse than the fixed-rank path. Excluding them as "not on the hot path" was a reading of
 signatures, not a measurement, and it was wrong.
 
-## P1 — the number
+## Where the logic lives
 
-`bh3` RCCSDT / STO-3G, `no=4 nv=4`, Release `-O3`, `OMP_NUM_THREADS=1`, clang (Darwin 25.5.0).
-Both residuals evaluated from identical amplitudes in one pass via the existing
-`PLANCK_CC_T3_DIFF=1` probe, six consecutive iterations:
+- `src/post_hf/cc/common.h` — the accessors, now inlined (`detail::fixed_rank_index_valid`,
+  `nd_flat_index`)
+- `tests/cc_tensor_index.cpp` — layout gate (`planck-cc-tensor-index`)
+- `src/post_hf/cc/tensor_backend.cpp:1800` — hand-written triples (1-nest reference)
+- `src/post_hf/cc/tensor_backend.cpp:2324` — generated-vs-hand branch (+ `T3_DIFF` probe)
+- `src/post_hf/cc/tensor_backend.cpp:19` — rank-3 triples TU (`-O3`, via `#include`)
+- `CMakeLists.txt:402` — `-O1` pin (rank 4+ registry only)
+- `python/ccgen/emit/planck_tensor_cpp.py:284`, `:443` — one-nest-per-term emission
+- `python/ccgen/tensor_ir.py:66,198,261,283` — unused GEMM / contraction-order analysis
+
+## What invariants matter
+
+### 1. Fix the emitter, not the emitted files
+
+The generated translation units are build artifacts, not source. A patch to one rank's output
+re-arms the defect at every other rank the next time that TU is regenerated.
+
+Design rule:
+
+- Any fix for a generated-kernel performance defect belongs in the emitter
+  (`python/ccgen/emit/planck_tensor_cpp.py` and related), never as a hand-edit to a generated
+  `.cpp` file.
+
+### 2. Never A/B a performance claim against a stale or mismatched build tree
+
+Both misreads during this investigation came from comparing binaries built from different source
+states or different `CMAKE_BUILD_TYPE`s — an `ethylene_rhf_stability_unstable` failure initially
+attributed to the accessor change turned out to reproduce with the change reverted, and a reported
+CCSDTQ non-convergence turned out to be a build with `spin_adapt` *and* intermediates on (the known
+0.25 defect; see the `ccgen_spin_adapt_no_intermediates` note).
+
+Design rule:
+
+- A/B performance or correctness claims in one configure, rebuilding both arms from the same
+  source state.
+
+### 3. A hypothesis about cost must be checked against the actual working-set size
+
+This doc originally hypothesized the kernel was **memory-bound by loop fission** — 1063 sweeps
+each streaming the residual from RAM. That is falsified: at `no=nv=4` the residual is 4096 doubles
+= **32 KB, fully L1-resident**, so there is no RAM traffic to save, and the fissed form actually
+vectorizes better. The hypothesis reasoned about traffic without checking the working-set size
+against cache.
+
+Design rule:
+
+- Before attributing a slowdown to a memory-traffic mechanism, compute the actual working-set size
+  and compare it against cache. The hypothesis may still hold at a size where the working set
+  leaves cache (that is what P3/the scaling investigation tests) — it does not hold universally
+  just because it is plausible.
+
+## What was measured
+
+**P1 — the headline ratio.** `bh3` RCCSDT / STO-3G, `no=4 nv=4`, Release `-O3`, `OMP_NUM_THREADS=1`,
+clang (Darwin 25.5.0). Both residuals evaluated from identical amplitudes in one pass via the
+existing `PLANCK_CC_T3_DIFF=1` probe, six consecutive iterations:
 
 | | generated | hand-written | + its intermediates | ratio |
 |---|---|---|---|---|
@@ -50,11 +114,10 @@ reaches BLAS/Eigen, so parallelism and vendor-BLAS are not variables. The `-O1` 
 TU is `#include`d into `tensor_backend.cpp:19`, so **both kernels are `-O3`**. The optimization
 asymmetry is real for rank 4+, but it does not confound this measurement.
 
-## P2 — which mechanism
+**P2 — which mechanism.** Two microbenchmarks at the real kernel's size (`no=nv=4`, 1063 sweeps),
+isolating one variable each.
 
-Two microbenchmarks at the real kernel's size (`no=nv=4`, 1063 sweeps), isolating one variable each.
-
-**The accessor (dominant, 13.5×).** Replicating `common.cpp`'s implementation exactly —
+The accessor (dominant, 13.5×). Replicating `common.cpp`'s implementation exactly —
 out-of-line call, two `std::vector<int>` constructed per access, `std::expected` returned — against
 a plain inlined flat index:
 
@@ -64,7 +127,7 @@ a plain inlined flat index:
 | inlined flat index | 0.0033 s |
 | | **13.5×** |
 
-**Loop fission (not a penalty, 0.62×).** Same inlined accessor for both, differing *only* in 1063
+Loop fission (not a penalty, 0.62×). Same inlined accessor for both, differing *only* in 1063
 separate `o³v³` sweeps vs one fused sweep:
 
 | shape | time |
@@ -75,18 +138,8 @@ separate `o³v³` sweeps vs one fused sweep:
 
 13.5× (accessor) × ~2.8× (residual structural factor) ≈ the observed 37.6×.
 
-### H1 was wrong, and why
-
-This doc originally hypothesized the kernel was **memory-bound by loop fission** — 1063 sweeps
-each streaming the residual from RAM. That is falsified: at `no=nv=4` the residual is 4096 doubles
-= **32 KB, fully L1-resident**, so there is no RAM traffic to save, and the fissed form actually
-vectorizes better. The hypothesis reasoned about traffic without checking the working-set size
-against cache. H1 may still hold at production `o`/`v` where the working set leaves cache — that
-is exactly what P3 tests — but it is not what makes `bh3` slow.
-
-### The real mechanism
-
-Both kernels called the same expensive accessor; the generated one just called it far more often.
+**The real mechanism.** Both kernels called the same expensive accessor; the generated one just
+called it far more often.
 
 | | generated triples | hand-written triples |
 |---|---|---|
@@ -109,53 +162,48 @@ The runtime-rank path was worse still: `TensorND::operator()(initializer_list)` 
 `flatten_index` call. That is the path the rank ≥ 4 generated kernels use exclusively, which is why
 fixing only the fixed-rank accessors moved rank 3 by 76× and rank 4 by nothing at all.
 
-## What to do, in ladder order
+## What was fixed
 
 1. ~~**Make the accessor cheap.**~~ **Done** — inlined in `common.h`, fixed-rank *and* runtime-rank.
    One mechanism covering every rank and both kernel families at once. See
    `docs/CCGEN_TENSOR_ACCESSOR.md` for the invariants it had to preserve.
-2. **Re-measure the ratio at production `o`/`v` (P3).** ← now the next step. With the accessor
-   fixed, the remaining 22× is whatever is genuinely structural. H1 may reappear here.
-3. **Only then consider fusing / consuming the IR hints.** **Both settled
-   2026-08-29** (`CCGEN_WHY_GENERATED_IS_SLOW.md`): fusion is built and measures
-   **~0 %** at three sizes, twice; and `--dressing derived` already eliminates the
-   terms `_optimal_contraction_order` targets, making it probably redundant. The
+2. **P3 — re-measured the ratio at production `o`/`v`.** **ANSWERED** in
+   `docs/CCGEN_KERNEL_SCALING_SCOPE.md`: it is a **scaling defect, not a constant tax** (21.8× →
+   50.1× over six ladder points, no plateau; H3 confirmed, H1 untested because the whole reachable
+   ladder stays inside L2). The caveat originally attached here was right — one square point
+   cannot distinguish the two, and the ladder that could was built afterwards.
+
+   Since then, **derivation dressing** has been wired and measured at 3.12×/3.61× end-to-end. It
+   addresses the same H3 by a different mechanism than the `_optimal_contraction_order`
+   consumption originally recommended, so the two may overlap.
+
+   **Settling that by measurement was attempted and abandoned (2026-08-29).** `PLANCK_CC_T3_TIME`
+   cannot fire in any build (it is on the branch the rank-3 representation fix rerouted away from),
+   and a replacement probe established that the hand-written and generated arms have **no
+   residual-level agreement gate** — distinct solvers, distinct amplitude representations, both
+   correct, no shared state where residuals are elementwise comparable. What remains measurable is
+   whole-iteration timing, which describes *"solver iteration"* rather than *"triples kernel"*.
+   **Code-level comparison and FLOP estimates are the actionable levers; the measurement route is
+   closed.**
+3. **Fusing / consuming the IR hints. Both settled 2026-08-29** (`CCGEN_WHY_GENERATED_IS_SLOW.md`):
+   fusion is built and measures **~0 %** at three sizes, twice; and `--dressing derived` already
+   eliminates the terms `_optimal_contraction_order` targets, making it probably redundant. The
    levers that did pay were found by profiling, not modelling — redundant operator
    construction (67.7 % of the kernel, fixed for **1.76x**) and the absence of any
-   OpenMP in CC (modelled **3.86x**). Original text follows. `tensor_ir.py` defines `BLASHint`
+   OpenMP in CC (modelled **3.86x**). `tensor_ir.py` defines `BLASHint`
    (`:66`), `_detect_gemm` (`:198`), and `_optimal_contraction_order` (`:283`), and
    `grep BLASHint python/ccgen/emit/planck_tensor_cpp.py` **returns nothing** — the emitter
    discards all of it. Real, but it was not the bottleneck, and the measurement above says fusion
    alone would buy nothing at small size.
 
-Fix the emitter, not the emitted files — the generated TUs are build artifacts, and a patch to one
-rank's output re-arms the defect at every other rank.
+## Validation strategy that should remain in place
 
-## Still open
-
-- ~~**P3 — ratio vs system size.**~~ **ANSWERED** in
-  `docs/CCGEN_KERNEL_SCALING_SCOPE.md`: it is a **scaling defect, not a constant tax** (21.8× →
-  50.1× over six ladder points, no plateau; H3 confirmed, H1 untested because the whole reachable
-  ladder stays inside L2). The caveat below the original bullet was right — one square point
-  cannot distinguish the two, and the ladder that could was built afterwards.
-
-  Since then, **derivation dressing** has been wired and measured at 3.12×/3.61× end-to-end. It
-  addresses the same H3 by a different mechanism than the `_optimal_contraction_order`
-  consumption that document recommends, so the two may overlap.
-
-  **Settling that by measurement was attempted and abandoned (2026-08-29).** `PLANCK_CC_T3_TIME`
-  cannot fire in any build (it is on the branch the rank-3 representation fix rerouted away from),
-  and a replacement probe established that the hand-written and generated arms have **no
-  residual-level agreement gate** — distinct solvers, distinct amplitude representations, both
-  correct, no shared state where residuals are elementwise comparable. What remains measurable is
-  whole-iteration timing, which describes *"solver iteration"* rather than *"triples kernel"*.
-  **Code-level comparison and FLOP estimates are the actionable levers; the measurement route is
-  closed.**
-
-- **Rank 4 is still subject to the `-O1` registry pin** (`CMakeLists.txt:402`), which the rank-3
-  path is not. Now that the accessor no longer dominates, that asymmetry is worth re-checking —
-  the pin exists because a ~230k-line TU is super-linear to optimize at `-O3`, and the standing
-  follow-on is to chunk the giant residual kernels in the emit so any level stays cheap.
+- Both residuals must be evaluated from identical amplitudes in one pass (the `PLANCK_CC_T3_DIFF=1`
+  probe pattern), never compared across separately-run binaries.
+- `tests/cc_tensor_index.cpp` (`planck-cc-tensor-index`) as the layout gate for the accessor fix.
+- Re-measure rather than cite a carried number — the 180× figure and the original H1 hypothesis
+  both failed to reproduce under direct measurement.
+- A/B any future performance claim in one configure, both arms rebuilt from the same source state.
 
 ## Reproducing
 
@@ -176,32 +224,19 @@ full-width build is disruptive.
 The P1/P2 numbers were taken with temporary timing instrumentation hung off the pre-existing
 `PLANCK_CC_T3_DIFF=1` probe (which already evaluates the generated and hand-written residuals once
 each from identical amplitudes). That instrumentation has been removed; re-add it the same way if
-the comparison is needed again. The two microbenchmarks are throwaway and described inline in P2.
+the comparison is needed again. The two microbenchmarks are throwaway and described inline above.
 
-**Do not benchmark against a stale build tree.** Both misreads during this investigation came from
-comparing binaries built from different source states or different `CMAKE_BUILD_TYPE`s — an
-`ethylene_rhf_stability_unstable` failure initially attributed to the accessor change turned out to
-reproduce with the change reverted, and a reported CCSDTQ non-convergence turned out to be a build
-with `spin_adapt` *and* intermediates on (the known 0.25 defect; see
-[[ccgen_spin_adapt_no_intermediates]]). A/B in one configure, rebuilding both arms.
+## Remaining architecture concern
 
-## Key code locations
+- **Rank 4 is still subject to the `-O1` registry pin** (`CMakeLists.txt:402`), which the rank-3
+  path is not. Now that the accessor no longer dominates, that asymmetry is worth re-checking —
+  the pin exists because a ~230k-line TU is super-linear to optimize at `-O3`, and the standing
+  follow-on is to chunk the giant residual kernels in the emit so any level stays cheap.
 
-| what | where |
-|---|---|
-| the accessors (now inlined) | `src/post_hf/cc/common.h` (`detail::fixed_rank_index_valid`, `nd_flat_index`) |
-| layout gate | `tests/cc_tensor_index.cpp` (`planck-cc-tensor-index`) |
-| hand-written triples (1-nest reference) | `src/post_hf/cc/tensor_backend.cpp:1800` |
-| generated-vs-hand branch (+ `T3_DIFF` probe) | `src/post_hf/cc/tensor_backend.cpp:2324` |
-| rank-3 triples TU (`-O3`, via `#include`) | `src/post_hf/cc/tensor_backend.cpp:19` |
-| `-O1` pin (rank 4+ registry only) | `CMakeLists.txt:402` |
-| one-nest-per-term emission | `python/ccgen/emit/planck_tensor_cpp.py:284`, `:443` |
-| unused GEMM / contraction-order analysis | `python/ccgen/tensor_ir.py:66,198,261,283` |
-
-## Related, deliberately separate
+## Related but separate outcome: adjacent documents
 
 - `CCGEN_HIGHER_OPERATOR_REUSE.md` — factorizing contractions to cut FLOP *scaling*. Changes the
   asymptotics; this doc's finding changes a constant factor.
-- `CCGEN_INTERMEDIATE_MEMORY_LOCALITY_SCOPE.md` — locality of *materialized intermediates*. Landed,
+- `CCGEN_INTERMEDIATE_MEMORY_LOCALITY.md` — locality of *materialized intermediates*. Landed,
   and orthogonal: the default triples emit materializes none, which is also why the old
   "intermediates rebuilt inside loops" attribution could not have been right.

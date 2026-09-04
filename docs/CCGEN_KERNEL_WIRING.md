@@ -1,13 +1,35 @@
-# How does a generated CC kernel reach a runnable binary, and what does it cost?
+# ccgen Generated Kernel Wiring
+
+Canonical status now lives in:
+
+- `vault/Status/Completion.md`
+- `vault/Status/Open Work.md`
+
+This file answers a narrower architecture question:
+
+**How does a generated CC kernel reach a runnable binary, and what does it cost?**
+
+## Short answer
 
 A ccgen-emitted kernel is a `.cpp` file. Getting it *executed* is a separate
 problem from getting it *emitted*, and for a long time the two were confused —
-kernels existed, compiled, and were never called.
+kernels existed, compiled, and were never called. Three generated artifacts enter a binary three
+different ways, only one of which runs in production today; two build flags have silently produced
+wrong answers because their defaults preserved historical rather than correct behaviour; and a
+determinant-space backstop hides which regression cases actually exercise generated code at all.
 
-This answers the route from emitted file to running code, the flags that gate
-each stage, and what the path costs measured rather than modelled.
+## Where the logic lives
 
-## The route
+- `src/post_hf/cc/generated_kernel_registry.cpp` — the registry
+- `make_generated_rcc_kernels` (same file) — the generated-rank floor
+- `src/post_hf/cc/rccgen.cpp` — the production entry
+- `src/post_hf/cc/ccsdt.cpp:22` — backend selection
+- `src/post_hf/cc/tensor_backend.cpp:243` — the backstop (hand-written path only)
+- `CMakeLists.txt` (`ccgen-planck-kernels`) — codegen invocation
+
+## What invariants matter
+
+### 1. The route from emitted file to running code
 
 ```
 ccgen emit  ->  #include or registry  ->  backend selection  ->  solver harness
@@ -25,7 +47,12 @@ Three generated artifacts enter a binary three different ways:
 are compiled but their residual kernels have no caller at ranks 2-3 — the
 registry says so outright: "rank 2 and 3 use the hand-written backends".
 
-## The flags, and what each actually gates
+Design rule:
+
+- Do not assume a `#include`d generated TU is executed. Check which backend selection path actually
+  calls its residual kernel before trusting a change to it.
+
+### 2. Check the build cache before the code
 
 | flag | gates |
 |---|---|
@@ -46,11 +73,13 @@ preserved historical behaviour rather than correct behaviour:
   derivation route was unreachable from a build
   (`CCGEN_WIRING_THE_DERIVATION_ROUTE.md`).
 
-**The lesson both times: check the build cache before the code.** `grep '^PLANCK_CC'
-<build>/CMakeCache.txt` and diff it against a known-good tree. Two separate
-investigations lost days to a flag nobody had verified.
+Design rule:
 
-## The trap that hid all of this
+- Before debugging a suspiciously wrong generated-kernel result, `grep '^PLANCK_CC'
+  <build>/CMakeCache.txt` and diff it against a known-good tree. Two separate investigations lost
+  days to a flag nobody had verified.
+
+### 3. The determinant backstop binds the hand-written path only
 
 `choose_determinant_backstop` (`tensor_backend.cpp:243`) routes any case with
 `nso <= 16 && ndet <= 10000` to the determinant-space teaching backstop, which
@@ -64,13 +93,28 @@ never executing the generated kernel it was added to protect.
 `PLANCK_RCCSDT_BACKEND=optimized` routes through `rccgen.cpp` to the
 arbitrary-order harness, which never consults it. So a small case *can* exercise
 the generated route — `lih_rccsdt_generated_sto3g` (nso=12, ndet=495) does, in
-5 s against CH4's ~250 s. Several ccgen documents still record the
-`nso > 16 || ndet > 10000` requirement as universal; it is not.
+5 s against CH4's ~250 s.
 
-## What it costs
+Design rule:
 
-Measured, not modelled. Same input, same binary configuration apart from the
-flag under test.
+- Several ccgen documents still record the `nso > 16 || ndet > 10000` requirement as universal; it
+  is not. When adding a new generated-route regression case, check which backend it will use before
+  applying that constraint.
+
+### 4. Two measurement sets from different harnesses are not comparable
+
+**Generated vs hand-written** (`CCGEN_KERNEL_SCALING_SCOPE.md`, six-point ladder,
+isolated triples residual) and **undressed vs derivation-dressed**
+(`CCGEN_WIRING_THE_DERIVATION_ROUTE.md`, end-to-end solve) measure different things — one an
+isolated residual evaluation on a designed ladder, the other end-to-end solve time on two systems,
+one of them off that ladder.
+
+Design rule:
+
+- Do not combine these two measurement sets into a single ratio. The scaling ladder has not yet
+  been re-run under dressing, and until it is, the two numbers must be quoted separately.
+
+## What was measured
 
 **Generated vs hand-written** (`CCGEN_KERNEL_SCALING_SCOPE.md`, six-point ladder,
 isolated triples residual): the generated kernel is **21.8x to 50.1x slower**,
@@ -88,18 +132,13 @@ end-to-end solve):
 
 Energies identical, iteration counts unchanged — per-iteration work.
 
-**These two sets are not comparable.** The first is an isolated residual
-evaluation on a designed ladder; the second is end-to-end solve time on two
-systems, one of them off that ladder. Combining them into a single ratio would be
-wrong, and the scaling ladder has not yet been re-run under dressing.
-
 **Compile time is a real cost.** `generated_kernel_registry.cpp` is pinned to
 `-O1` (`CMakeLists.txt:408-415`) because a ~230k-line TU is super-linear to
 optimize; under `SPIN_ADAPT=ON` with dressing it takes minutes on its own, and
 the dressed CCSDTQ TU is 13 MB. Budget for it, and build with `make -j4` — a
 full-width build on these TUs is disruptive.
 
-## Benchmarking
+## What was built (benchmarking infrastructure)
 
 There is no `benchmark_generated_kernels.py`, and the scope that proposed one is
 retired with this rewrite. What replaced it, and works:
@@ -117,7 +156,15 @@ A driver script would have added a fourth harness over three that already work.
 The gap it was meant to fill — *nothing proves the generated path ran* — was
 closed by gates that assert the routing line instead.
 
-## Related
+## Validation strategy that should remain in place
+
+- `run_regressions.py`'s `requires_build_option` on every case that depends on a non-default
+  `PLANCK_CC_*` flag
+- Gates asserting the routing line (which backend/kernel actually ran), not just the final energy
+- `PLANCK_CC_T3_TIME` for isolated triples-residual timing
+- `PLANCK_CC_FIXTURE_DIR` for per-rank tensor diagnosis without a full solve
+
+## Related but separate outcome: adjacent documents
 
 | doc | question |
 |---|---|
@@ -126,18 +173,3 @@ closed by gates that assert the routing line instead.
 | `CCGEN_KERNEL_SCALING_SCOPE.md` | why generated is slower than hand-written, and by how much |
 | `CCGEN_KERNEL_PERFORMANCE.md` | the accessor fix, the dominant constant factor |
 | `CCGEN_GCC_TO_UCC_BRIDGE.md` | how adapted terms become runtime tensors |
-
-## Key code locations
-
-| what | where |
-|---|---|
-| the registry | `src/post_hf/cc/generated_kernel_registry.cpp` |
-| the generated-rank floor | `make_generated_rcc_kernels`, same file |
-| the production entry | `src/post_hf/cc/rccgen.cpp` |
-| backend selection | `src/post_hf/cc/ccsdt.cpp:22` |
-| the backstop (hand-written path only) | `src/post_hf/cc/tensor_backend.cpp:243` |
-| codegen invocation | `CMakeLists.txt` (`ccgen-planck-kernels`) |
-
----
-
-Status lives in `vault/Status/Completion.md` and `vault/Status/Open Work.md`.

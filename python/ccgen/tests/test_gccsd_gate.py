@@ -13,7 +13,7 @@ that reference is the Stanton-Gauss dressed form, which equals the raw projectio
 ccgen emits only ON-SHELL and in its antisymmetric projection -- NOT term-by-term
 on arbitrary OFF-SHELL random amplitudes. The earlier "known t1*t2 bug" pinned by
 `@expectedFailure` here was that off-shell comparison artifact, not a real defect
-(see the 2026-07-27 correction in docs/CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md).
+(see the 2026-07-27 correction in docs/CCGEN_DIAGRAM_REPRESENTATION.md).
 """
 
 from __future__ import annotations

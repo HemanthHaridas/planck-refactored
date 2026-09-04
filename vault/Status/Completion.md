@@ -286,10 +286,10 @@ historical design context, but they are no longer the source of truth for
 ### Recent fixes now considered landed
 
 - **CC amplitude checkpoint (`.ccamp`): hand-written RCCSD can now write a
-  spatial sidecar, and a sector-drop defect in the shipped format is fixed
-  (2026-09-04).** `docs/CC_AMPLITUDE_CHECKPOINT_SCOPE.md` (rewritten from
-  scope to answer) and `docs/CC_AMPLITUDE_CHECKPOINT_REMAINING_SCOPE.md`
-  (rescoped against the landed tree). PR #164,
+  spatial sidecar, a sector-drop defect in the shipped format is fixed, and
+  UCC has full write/restart support (2026-09-04/05).**
+  `docs/CC_AMPLITUDE_CHECKPOINT.md` is the single answer doc for all of it
+  (the three prior scope docs it replaced are deleted). PR #164,
   branch `ccamp-x5-spin-orbital-projection`.
 
   **X5.0/X5.1 — spin-orbital -> spatial projection.**
@@ -376,8 +376,8 @@ historical design context, but they are no longer the source of truth for
   unchanged. This needs a version-3 header design decision, not a
   mechanical write/read follow-on -- deliberately not built.
 
-  **C4 rescoped 2026-09-04 into `docs/CC_AMPLITUDE_CHECKPOINT_UCC_SCOPE.md`
-  as U0-U3; U0/U1 LANDED 2026-09-05.** `.ccamp` bumped to version 3, adding
+  **C4 rescoped 2026-09-04 as U0-U3; ALL FOUR STEPS LANDED 2026-09-05.**
+  `.ccamp` bumped to version 3, adding
   two independent things merged into one bump (a writer-only fix for the
   first was tried and found broken on round-trip -- see below): an
   `n_by_rank` field independent of `max_rank` (previously the reader
@@ -426,13 +426,37 @@ historical design context, but they are no longer the source of truth for
   basis-mismatch rejection still cold-starts correctly against a
   hand-corrupted version-3 file.
 
-  **Still open, tracked in the UCC scope doc**: U2 (a UCC write site in
-  `run_uccgen`, mirroring `run_rccgen`'s) and U3 (a UCC restart site,
-  mirroring `try_restart_from_sidecar` with a `reference_type` check ahead
-  of the occupation-count comparison). Also still open, tracked in the
-  REMAINING doc: C3 (`run_rccsdt`'s hand-written rank-3 participation,
-  deliberately deferred since `ccsdt_gen` already covers the gap it would
-  close).
+  **U2/U3 LANDED 2026-09-05, mechanical as predicted.** `run_uccgen`
+  (`uccgen.cpp`) now has a write site (`meta.reference_type = UHF`, the four
+  counts from `state.reference`, same `_save_checkpoint`/`_checkpoint_path`
+  gate and warn-not-fail policy as `run_rccgen`) and a restart site
+  (`try_restart_ucc_from_sidecar`, mirroring `try_restart_from_sidecar` with
+  a `reference_type` check ahead of the four-count comparison, wired in
+  *after* `ensure_amplitude_sectors` since seeding matches an incoming
+  sector to its live counterpart by key). `seed_arbitrary_order_amplitudes`
+  needed no change, confirmed rather than assumed. Verified end-to-end on
+  `b_ucc2_sto3g` (B/STO-3G doublet): a cold run converges in 12 iterations
+  and writes the sidecar; a `guess density` restart in the same directory
+  warm-starts and converges in **1 iteration** to the identical
+  `E_corr = -0.0402694793`. `b_ucc4_sto3g` (the `ucc4 == FCI` flagship gate)
+  also writes correctly, still converging to `-24.1892649766`. All three
+  negative cases verified against hand-byte-patched copies of a real written
+  sidecar: a corrupted `basis_name`, a corrupted occupation count, and a
+  flipped `reference_type` (UHF->RHF) each independently cold-start with a
+  warning naming the specific mismatch, never failing the run. **The whole
+  C4 UCC-sidecar arc (U0-U3) is complete.**
+
+  **C3 (`run_rccsdt`'s hand-written rank-3 participation) investigated and
+  declined 2026-09-05**, not merely deferred: only the tensor-production
+  backend ever holds dense amplitudes, and only when the system is large
+  enough to skip the determinant backstop (in-tree, only `ch4_rccsdt_sto3g`
+  qualifies) -- every other case re-solves via spin-orbital
+  determinant-space CC with no dense amplitudes surviving to project. Even
+  the qualifying case's amplitudes are spin-orbital and local to
+  `run_tensor_rccsdt_impl`, never returned to a caller. `ccsdt_gen` already
+  covers the gap through the route this project intends to keep long-term.
+  Full record in `docs/CC_AMPLITUDE_CHECKPOINT.md`, which also replaces the
+  three prior scope docs for this whole feature area (all deleted).
 
 - **FCIQMC: the method is implemented and runs from an input file (2026-08-31 to
   2026-09-01).** `correlation fciqmc` is a working calculation. Walker state and

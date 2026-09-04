@@ -4,7 +4,8 @@
 //
 // The relation this pins was derived by numerically inspecting this
 // codebase's own converged BH3/STO-3G RCCSD amplitudes (see
-// docs/CC_AMPLITUDE_CHECKPOINT_SCOPE.md X5.0), not assumed from theory alone:
+// docs/CC_AMPLITUDE_CHECKPOINT.md, "The hand-written solvers"), not assumed
+// from theory alone:
 //   t1_spatial(i,a)     = t1_so(2i,   2a)
 //   t2_spatial(i,j,a,b) = t2_so(2i, 2j+1, 2a, 2b+1)
 // with the closed-shell identities t1_alpha == t1_beta, cross-spin t1 blocks

@@ -1119,10 +1119,18 @@ Two further findings from the same audit pass:
   marked answered, the genuinely-open rank-4 `-O1` pin left named.
 
 Judged compliant in the same audit, for the record: `CCGEN_TEACHING_GUIDE`, `CCGEN_REPORT`,
-`CCGEN_GENERATION_AND_VALIDATION` (teaching/report); `CCGEN_HIGHER_OPERATOR_REUSE`,
-`CCGEN_DIAGRAM_REPRESENTATION_SCOPE`, `CCGEN_INTERMEDIATE_MEMORY_LOCALITY_SCOPE` (already
-question-shaped, work unstarted). `CCGEN_UNRESTRICTED_CC` and `CCGEN_GCC_TO_UCC_BRIDGE` were
-in-flight scope at the time and have since been rewritten as answers (2026-08-25).
+`CCGEN_GENERATION_AND_VALIDATION` (teaching/report); `CCGEN_HIGHER_OPERATOR_REUSE` (already
+question-shaped). `CCGEN_UNRESTRICTED_CC` and `CCGEN_GCC_TO_UCC_BRIDGE` were in-flight scope
+at the time and have since been rewritten as answers (2026-08-25).
+
+**Correction (2026-09-05): `CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md` and
+`CCGEN_INTERMEDIATE_MEMORY_LOCALITY_SCOPE.md` were misjudged "work unstarted" in that same
+audit — both were already finished answers when read in full** ("Everything below is either
+landed or has its rationale pinned to a measured result" / "Everything is landed... gated by
+`test_factorize.py`"). Renamed to `CCGEN_DIAGRAM_REPRESENTATION.md` and
+`CCGEN_INTERMEDIATE_MEMORY_LOCALITY.md` and reformatted into the standard answer-doc template;
+no content changed. **Lesson for future audits: a doc's own file suffix (`_SCOPE`) or a prior
+audit's one-line verdict is not a substitute for reading the doc's actual content.**
 
 `CCGEN_DRESSED_KERNEL_VALIDATION_SCOPE` was in that list and has been **deleted** (2026-08-16): it
 scoped V2–V6 for the dressed route, which is **retired** (see Completion — dressing and spin
@@ -1252,35 +1260,12 @@ Q1 verdict (Karp-Flatt serial fraction rather than efficiency-at-max-ranks,
   and the geomopt / frequency workflows built on them, are now landed
   Cartesian-side — see Completion)
 - The ccgen `TensorOptimized` RCCSDT backend is still treated in-tree as an experimental / phase-4 path
-- **CC amplitude checkpoint (`.ccamp`) follow-ups, from
-  `docs/CC_AMPLITUDE_CHECKPOINT_REMAINING_SCOPE.md`** (X5.0/X5.1 and the
-  C0/C1/C2 work landed 2026-09-04, see Completion):
-  - **C3 — `run_rccsdt`'s hand-written rank-3 solver still cannot
-    read/write a `.ccamp`.** Deliberately deferred: `ccsdt_gen` already
-    reaches rank 3 through the generated arbitrary-order runtime and already
-    writes a spatial sidecar, so the gap this would close is already closed
-    by a route more aligned with the project's stated long-term intent
-    (generated kernels replacing hand-written solvers). Revisit only if
-    `run_rccsdt`'s hand-written backends stay production longer than
-    `ccsdt_gen`'s adoption. Would need a rank-3 sibling to
-    `project_rccsd_amplitudes_to_spatial`, plus excluding the
-    determinant-space/tensor-optimized backends (only the tensor backend
-    holds dense amplitudes) from the write path.
-  - **C4 — a UCC sidecar. U0/U1 LANDED 2026-09-05 (the version-3 header);
-    U2/U3 (the write/restart sites) remain.** Full record and the two
-    corrections along the way are in Completion; summarized here as what's
-    still open. `run_uccgen` (`uccgen.cpp`) still has zero references to the
-    checkpoint machinery — U0/U1 made the format *capable* of representing a
-    UCC amplitude set (empty `by_rank`, sectors-only, four UHF occupation
-    counts), it did not wire anything into the UCC entry point itself.
-    **U2** (a write site mirroring `run_rccgen`'s, `reference_type = UHF`
-    and the four counts sourced from `state.reference`) and **U3** (a
-    restart site mirroring `try_restart_from_sidecar`, checking
-    `reference_type` before the occupation counts so a wrong-reference-type
-    file can't coincidentally pass a shape check) are scoped in
-    `docs/CC_AMPLITUDE_CHECKPOINT_UCC_SCOPE.md` and not started.
-    `seed_arbitrary_order_amplitudes` needs no change for U3 — confirmed by
-    reading it, already reference-kind-agnostic.
+- **CC amplitude checkpoint (`.ccamp`): DONE, nothing open here.** All of
+  X0-X5.1, the sector-drop and validation fixes, and the UCC sidecar (C4,
+  U0-U3) are landed. `run_rccsdt`'s hand-written rank-3 participation (C3)
+  was investigated and explicitly declined rather than left open — see
+  `docs/CC_AMPLITUDE_CHECKPOINT.md`, the single answer doc for this feature
+  area.
 
 ## ccgen generated-kernel performance
 

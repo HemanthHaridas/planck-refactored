@@ -17,7 +17,7 @@ This module is step D1: the encoding and its canonical form, nothing else.
 
 Later steps (D2 enumeration, D3 the AlgebraTerm bridge) build on this.  Nothing
 here is imported by the generator, so generated code is untouched.  See
-``docs/CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md`` for the full plan.
+``docs/CCGEN_DIAGRAM_REPRESENTATION.md`` for the full plan.
 
 ponytail: canonical form is a sort, not a graph-isomorphism search -- that is
 the whole point of the encoding.  If a future step reaches for isomorphism

@@ -1160,7 +1160,7 @@ No BCH, no Wick contraction — the coefficient falls out of the diagram's shape
 - **sign** = `(-1)^bra_level · external_pairing_parity · (-1)^loops · (-1 if the Fock line contracts a hole)`
 
 These are the standard diagrammatic rules (Crawford & Schaefer); the per-piece
-validation is in `docs/CCGEN_DIAGRAM_REPRESENTATION_SCOPE.md`. The practical
+validation is in `docs/CCGEN_DIAGRAM_REPRESENTATION.md`. The practical
 consequence is that a diagram's coefficient is a *local* property — you can check
 one diagram in isolation, which is why the weight rules could be validated
 piecewise rather than only through the assembled residual.

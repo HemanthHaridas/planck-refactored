@@ -1,269 +1,109 @@
-# f-shell (L≥3) Spherical Accuracy Defect — FIXED
+# f/g/h-Shell (L>=3) Spherical Accuracy Fix
 
-## Status: ROOT CAUSE FOUND + FIXED (2026-08-09)
+Canonical status now lives in:
 
-**Root cause:** the `cart_to_sph_block` harmonic-combination matrices for L ≥ 3 carry
-integer coefficients for RAW Cartesian monomials `x^lx y^ly z^lz`, but the integral
-engine feeds **unit-normalized** Cartesian components (each scaled by
-`N = 1/√((2lx-1)!!(2ly-1)!!(2lz-1)!!)`). The per-component N differs across components
-(e.g. `xxx` vs `xyz` for f), so applying raw-monomial coefficients directly to unit
-components produces spherical functions that are NOT pure harmonics in the physical
-monomials — a contaminated ℓ-subspace. This shifted f-and-up energies (~2.14e-5 for
-water/cc-pVTZ, *below* the variational minimum) and stressed SCF convergence
-(83–142 iters). The hand-derived L ≤ 2 blocks already baked the normalization in
-(their 1/√3 factors); L = 3,4,5 (raw `pinv`) did not. The recurrence oracle (L ≥ 6)
-was not exercised by the tested basis but should be checked separately.
+- `vault/Status/Completion.md`
+- `vault/Status/Open Work.md`
 
-**Fix** (`src/basis/spherical.cpp`): `normalized_pseudoinverse(T, L)` scales each
-Cartesian row of T by its normalization factor before the pseudoinverse, so the
-transform acts correctly on unit-normalized components. Applied to L = 3,4,5.
+This file answers a narrower architecture question:
 
-**Validation:**
-- water/cc-pVTZ RHF: −76.0571775438 → **−76.0571561532** (PySCF −76.0571561486,
-  diff **4.6e-9**; was 2.14e-5 — a 4600× improvement).
-- Convergence: 90 iters, stable across guesses (was 83–142, unstable).
-- No d-shell regression: cc-pVDZ unchanged at 3.3e-9; spherical 6-31g* regression
-  suite (be_ccsd/be_fci/water_rhf_freq/geomoptfreq spherical) all pass.
-- Spherical transform + density-lift unit tests still pass.
+**Why did spherical RHF energies for f-and-higher shells (L>=3) disagree with PySCF by ~2e-5 Eh (below the variational minimum), and what fixed it?**
 
-**Test gap (why it shipped, G4) — now closed.** The `spherical_density_lift` test
-checks the lift identity `tr(M_sph·X_sph) = tr(M_cart·X_cart)` — which holds for ANY C
-(it is `tr(C M Cᵀ · C X Cᵀ)` self-consistency), so it passes for a wrong subspace. The
-`spherical_transform` test checked harmonic purity only for L ≤ 2 and rank for L ≥ 3.
-Neither asked whether the L ≥ 3 spherical functions are pure harmonics in the PHYSICAL
-(unit-normalized-component) basis, and neither was energy-relevant there.
+## Short answer
 
-Both gaps are now closed: FU3 added the physical-monomial Laplacian check and the
-span-equality check (mutation-verified — see below), and FU4 added the cross-CODE
-f/g/h energy gates. The pre-existing high-L gates were cross-ENGINE and Cartesian, so
-all engines agreed with each other while all were wrong, and none of them touched the
-spherical transform at all.
+The `cart_to_sph_block` harmonic-combination matrices for L >= 3 carried integer coefficients for raw Cartesian monomials `x^lx y^ly z^lz`, but the integral engine feeds unit-normalized Cartesian components (each scaled by `N = 1/sqrt((2lx-1)!!(2ly-1)!!(2lz-1)!!)`). Since that per-component normalization differs across components (e.g. `xxx` vs `xyz` for f), applying raw-monomial coefficients directly to unit-normalized components produced spherical functions that were not pure harmonics in the physical monomials — a contaminated l-subspace. The fix, `normalized_pseudoinverse(T, L)` in `src/basis/spherical.cpp`, scales each Cartesian row of `T` by its normalization factor before the pseudoinverse, applied to L = 3, 4, 5. Water/cc-pVTZ RHF moved from -76.0571775438 to -76.0571561532 against PySCF's -76.0571561486 (diff 4.6e-9, a 4600x improvement over the prior 2.14e-5), and iteration count stabilized from an unstable 83-142 down to 90.
 
----
+## Where the logic lives
 
-## Follow-ups — FU1, FU3, FU4 LANDED (2026-08-28); FU2 open
+- `src/basis/spherical.cpp` — `normalized_pseudoinverse`, `cart_to_sph_block` (production transform, L = 3, 4, 5)
+- `src/basis/spherical_recurrence.cpp` — `cart_to_sph_block_recurrence` (independent oracle, all L, and the sole production path for L = 6)
+- `tests/spherical_transform.cpp` — harmonic-purity and row-space-projector checks
+- `tests/spherical_density_lift.cpp` — lift-identity unit test
+- Regression cases: `water_rhf_spherical_ccpvtz_fshell`, `ne_rhf_spherical_ccpvqz_gshell`, `ne_rhf_spherical_ccpv5z_hshell`
+- Unregistered exploratory input: `tests/inputs/regression/spherical/ne_rhf_spherical_ccpv6z_ishell.hfinp`
 
-The f fix (`62b7ec5`) routes **L = 3 (f), 4 (g), 5 (h)** through
-`normalized_pseudoinverse`. **L = 6 (i)** already used the recurrence oracle
-(`cart_to_sph_block_recurrence`), which was ALREADY normalization-correct
-(`spherical_recurrence.cpp:279-296` does the same `c_bare·√s` scaling + row
-unit-normalization). So the fix makes the L = 3,4,5 production path consistent with
-the oracle it is cross-checked against. Confirmed: after the fix, production and
-oracle **span the identical space** for L = 3,4,5 (row-space projector diff ~1e-16;
-before the fix these spans genuinely differed). The raw matrices still differ
-(~0.7) — that is only the intra-span basis/ m-ordering convention, which is
-energy-invariant.
+## What invariants matter
 
-### FU1 + FU4 — cross-CODE energy gates at f, g, h — **DONE**
+### 1. A cart-to-spherical transform must act on the same normalization convention the integral engine feeds it
 
-Three PySCF-anchored spherical RHF gates, `extended`+`spherical`:
+The integral engine emits unit-normalized Cartesian components, not raw monomials. Any transform matrix built from raw-monomial harmonic coefficients (as opposed to hand-derived blocks that already bake normalization in, true only for L <= 2) must rescale each Cartesian row by its own normalization factor before use. Skipping this silently produces spherical functions that are valid in *span* but impure in *harmonic content* — a defect invisible to shape/rank checks and even to the density-lift identity test, since that identity holds for any consistent basis, including a wrong one.
 
-| shell | case | PySCF | Planck | Δ | iters |
-|---|---|---|---|---|---|
-| f (L=3) | `water_rhf_spherical_ccpvtz_fshell` | −76.0571274203 | −76.0571274250 | **4.7e-9** | 19 |
-| g (L=4) | `ne_rhf_spherical_ccpvqz_gshell` | −128.5434696591 | all 10 digits | **0.0e+00** | 11 |
-| h (L=5) | `ne_rhf_spherical_ccpv5z_hshell` | −128.5467701295 | all 10 digits | **0.0e+00** | 12 |
+Design rule:
 
-The f case is the tripwire this scope said was missing: pre-fix it gave
-−76.0571775438 in 83–142 iterations. g and h close FU1 — they had ridden the fixed
-path on a span-match argument with no end-to-end number.
+- Any new or edited cart-to-sph block must be checked for harmonic purity in the *physical* (unit-normalized-component) basis, not just algebraic rank or span.
 
-**References were built from Planck's own GBS** via `pyscf.gto.basis.parse_gaussian`,
-so the basis-coefficient confound is removed rather than assumed away; they agree
-with PySCF's built-in cc-pVTZ/QZ/5Z, which is the check that the two sets match.
-Note Planck's GBS is Gaussian94 format — `gto.basis.parse` (NWChem) raises
-`BasisNotFoundError` on it, and PySCF 2.13.0 has no built-in cc-pV6Z at all.
+### 2. Convention differences between codes make raw-matrix comparison meaningless
 
-### FU2 — the i-shell (L=6) oracle path — **OPEN**
+Planck and PySCF normalize real solid harmonics differently, so raw spherical matrices (S_sph eigenvalues, `tr(H_sph)`) can differ by O(1) while being physically equivalent — confirmed on cc-pVDZ, where a large S_sph-eigenvalue difference (0.73) coexists with matching energy. Only convention-invariant quantities are valid cross-code comparisons: generalized eigenvalue spectra, `tr(P.H)` for a fixed physical density, or the total energy itself.
 
-`tests/inputs/regression/spherical/ne_rhf_spherical_ccpv6z_ishell.hfinp` exists and
-carries its reference inline, but is **deliberately not registered**: Ne/cc-pV6Z is
-140 spherical AOs, and the conventional `nb⁴` ERI build makes it far too heavy for
-the suite (h, at 91 AOs, already takes ~37 s).
+Design rule:
 
-```
-PySCF 2.13.0 RHF/cc-pV6Z spherical, Ne:  -128.5470611007 Eh
-```
+- Never diff raw AO matrices across codes as a correctness check. Compare generalized-eigenvalue spectra or the energy.
 
-Expect ~1e-9, as measured for f/g/h. **L = 6 is a different code path** — it
-delegates to the recurrence oracle and never touches `normalized_pseudoinverse` — so
-a disagreement implicates `spherical_recurrence.cpp`, not the pseudoinverse fix.
-`MAX_L = 6` makes this the top of the supported range.
+### 3. "Below the variational minimum in a same-spanning basis" is a specific, diagnostic anomaly
 
-### FU3 — the convention-invariant transform test — **DONE**
+An energy that is *lower* than a reference in a basis that spans the same space (rather than merely different) means the integrals fed to SCF are internally inconsistent, not just a different valid orthonormal choice — SCF cannot vary itself below the true minimum on a consistent `tr(P.H)`/`S` pair. This was the signal that distinguished "wrong basis choice" (energy-invariant) from "corrupted integrals" (not invariant) early in the investigation.
 
-Two checks added to `tests/spherical_transform.cpp`, both applied for all L ≤ 6:
+Design rule:
 
-- **harmonic purity in the PHYSICAL monomials.** `max_laplacian` already undid the
-  unit-normalization weighting before differentiating — it was only ever pointed at
-  the oracle, never at production.
-- **row-space projector equality with the oracle.** Compares the selected subspace
-  while staying invariant to the m-ordering convention. Do **not** compare the
-  matrices element-wise; they are different valid bases of the same space.
+- Treat any spherical-basis energy that lands below a same-span reference as evidence of an integral/metric inconsistency, not a legitimate alternate stationary point.
 
-**Both verified falsifiable in situ**, by dropping the row scaling in
-`normalized_pseudoinverse` and rebuilding:
+### 4. A span-correct, harmonic-pure transform is not automatically metric-consistent with runtime row-normalization
 
-| L | max\|∇²\| | max\|ΔP\| |
-|---|---|---|
-| 0–2 | 0 | 0 (unaffected — these bake normalization into the hand-derived blocks) |
-| 3 | **2.2e-1** | **3.4e-1** |
-| 4 | **1.8e-1** | **3.0e-1** |
-| 5 | **8.4e-2** | **2.7e-1** |
-| 6 | 0 | 0 (unaffected — delegates to the oracle) |
+An earlier metric-correct (Loewdin) rewrite of the transform was a no-op for the energy because the runtime row-normalization step re-imposed its own scaling afterward, undoing the change. The eventual fix worked specifically because `normalized_pseudoinverse` corrects the transform at the point where it is built, before the pseudoinverse, rather than trying to patch the result post hoc.
 
-Post-fix all of L ≤ 6 sits at ~1e-16. The failures land on exactly the three shells
-the fix touched, and the pre-existing shape/rank check stayed green throughout —
-which is precisely why the defect shipped.
+Design rule:
 
-This also corrected a false statement in that file's own header: it claimed the
-L ≥ 3 pseudoinverse "legitimately carries r²-contamination". That described the
-**defect**, not a property of the transform.
+- When fixing a transform-metric defect, verify the fix survives any downstream re-normalization step; a change that a later normalization silently undoes will look like a no-op and can be mistaken for evidence the hypothesis was wrong.
 
----
+## What was fixed
 
-## (Historical, resolved) Investigation trail
+1. `normalized_pseudoinverse(T, L)` added to `src/basis/spherical.cpp`: scales each Cartesian row of `T` by its normalization factor before the pseudoinverse, applied to L = 3 (f), 4 (g), 5 (h). L <= 2 already baked normalization into their hand-derived blocks and needed no change. L = 6 (i) already used the recurrence oracle (`cart_to_sph_block_recurrence`), which was already normalization-correct (`spherical_recurrence.cpp:279-296` performs the same `c_bare*sqrt(s)` scaling plus row unit-normalization) — so the fix makes the L = 3,4,5 production path consistent with the oracle it is cross-checked against, rather than changing the oracle.
+2. Confirmed post-fix that production and oracle span the identical space for L = 3,4,5 (row-space projector diff ~1e-16); the raw matrices still differ by ~0.7, which is only the intra-span basis/m-ordering convention and is energy-invariant.
+3. **FU1 + FU4 — cross-code energy gates at f, g, h added.** Three PySCF-anchored spherical RHF gates (`extended`+`spherical` suite):
 
-Two prior hypotheses were **falsified** (see history at the bottom). This v2 rescopes
-against what is now proven, with a clean entry point.
+   | shell | case | PySCF | Planck | delta | iters |
+   |---|---|---|---|---|---|
+   | f (L=3) | `water_rhf_spherical_ccpvtz_fshell` | -76.0571274203 | -76.0571274250 | **4.7e-9** | 19 |
+   | g (L=4) | `ne_rhf_spherical_ccpvqz_gshell` | -128.5434696591 | all 10 digits | **0.0e+00** | 11 |
+   | h (L=5) | `ne_rhf_spherical_ccpv5z_hshell` | -128.5467701295 | all 10 digits | **0.0e+00** | 12 |
 
-## The defect (unchanged, reconfirmed)
+   The f case is the tripwire that was previously missing: pre-fix it gave -76.0571775438 in 83-142 iterations. The g and h cases close FU1 — they had ridden the fixed path on a span-match argument with no end-to-end number until this landed. References were built from Planck's own GBS via `pyscf.gto.basis.parse_gaussian`, removing the basis-coefficient confound rather than assuming it away; they agree with PySCF's built-in cc-pVTZ/QZ/5Z, which is the check that the two basis sets match. Note: Planck's GBS is Gaussian94 format, so `gto.basis.parse` (NWChem) raises `BasisNotFoundError` on it directly, and PySCF 2.13.0 has no built-in cc-pV6Z at all.
+4. **FU3 — convention-invariant transform tests added to `tests/spherical_transform.cpp`, applied for all L <= 6:**
+   - Harmonic purity in the physical monomials: `max_laplacian` already undid the unit-normalization weighting before differentiating, but it had only ever been pointed at the oracle, never at production.
+   - Row-space projector equality with the oracle, invariant to the m-ordering convention. The matrices are not compared element-wise, since they are different valid bases of the same space.
 
-Water RHF, identical geometry, matched basis coefficients:
+   Both checks were verified falsifiable in situ, by deliberately dropping the row scaling in `normalized_pseudoinverse` and rebuilding:
 
-| Basis | shells | Planck vs PySCF |
-|---|---|---|
-| STO-3G, 6-31G*, cc-pVDZ | ≤ d | ~1e-9 (clean) |
-| **cc-pVTZ** | +**f** | **2.14e-5** |
+   | L | max|laplacian| | max|delta projector| |
+   |---|---|---|
+   | 0-2 | 0 | 0 (unaffected — normalization is baked into the hand-derived blocks) |
+   | 3 | **2.2e-1** | **3.4e-1** |
+   | 4 | **1.8e-1** | **3.0e-1** |
+   | 5 | **8.4e-2** | **2.7e-1** |
+   | 6 | 0 | 0 (unaffected — delegates to the oracle) |
 
-Planck's cc-pVTZ RHF = −76.0571775438 is **stable** (identical across hcore/SAD
-guess and DIIS dim ∈ {8,12}) and **2.14e-5 BELOW** PySCF's −76.0571561486.
-**Below the variational minimum** in a same-spanning basis is the key anomaly — it
-means the energy is not a consistent `tr(P·H)` with a matching `S`; the integrals
-Planck feeds SCF are subtly inconsistent, not merely a different valid basis.
+   Post-fix, all of L <= 6 sits at ~1e-16. The failures land on exactly the three shells the fix touched, and the pre-existing shape/rank check stayed green throughout, which is precisely why the defect shipped originally. This also corrected a false statement in the file's own prior header, which claimed the L >= 3 pseudoinverse "legitimately carries r^2-contamination" — that described the defect itself, not a property of the transform.
 
-## What is PROVEN (do not re-litigate)
+## Validation strategy that should remain in place
 
-1. **The f cart→sph transform is correct.** Planck's f-shell span is identical to
-   PySCF's (row-space projector difference 1e-16); its transform rows are pure ℓ=3
-   harmonics (Laplacian = 0); and the transform choice is energy-INVARIANT (SCF
-   re-orthogonalizes via S). The `C·M·Cᵀ ≠ I` non-orthonormality measured earlier
-   is a valid non-orthonormal basis of the CORRECT space — SCF handles it. A
-   metric-correct (Löwdin) rewrite of the transform was implemented and is a
-   **no-op for the energy** (reverted).
+- `water_rhf_spherical_ccpvtz_fshell`, `ne_rhf_spherical_ccpvqz_gshell`, `ne_rhf_spherical_ccpv5z_hshell` (PySCF-anchored, `extended`+`spherical` suite)
+- `tests/spherical_transform.cpp` harmonic-purity and row-space-projector checks for all L <= 6, mutation-verified against the deliberately-broken transform
+- `tests/spherical_density_lift.cpp` lift-identity check (necessary but not sufficient on its own — see invariant 1)
+- No-regression checks on d-shell and below: cc-pVDZ unchanged at 3.3e-9; spherical 6-31g* regression suite (`be_ccsd`/`be_fci`/`water_rhf_freq`/`geomoptfreq` spherical) all pass
 
-2. **The Cartesian 1e integrals are correct.** Planck-vs-PySCF Cartesian `S⁻¹T`,
-   `S⁻¹V`, `S⁻¹H_core` generalized eigenvalue spectra (normalization-invariant)
-   agree to ~1e-6.
+## Remaining architecture concern: FU2, the i-shell (L=6) oracle path is unchecked against another code
 
-3. **The defect is already in the 1-ELECTRON spherical problem.** Solving the core
-   generalized problem `H_core c = ε S c` in Python from Planck's dumped SPHERICAL
-   S and H_core:
-   - core-guess 1e energy `tr(P·H)`: Planck −138.72298678 vs PySCF −138.72300069
-     → **1.4e-5 off, before any 2e or SCF**.
-   - core orbital-energy spectrum: ~3e-5 on occupied levels, up to 3e-2 on
-     f-heavy virtuals.
-   - Planck's S is positive-definite (min eig 2.6e-3, well-conditioned) — not a
-     linear-dependence artifact.
+`tests/inputs/regression/spherical/ne_rhf_spherical_ccpv6z_ishell.hfinp` exists and carries its reference inline (PySCF 2.13.0 RHF/cc-pV6Z spherical Ne = -128.5470611007 Eh), but is deliberately not registered as a regression case: Ne/cc-pV6Z is 140 spherical AOs, and the conventional `nb^4` ERI build makes it far too heavy for the suite (the h case, at only 91 AOs, already takes ~37 s).
 
-So: **Cartesian integrals correct + transform span-correct, but the SPHERICAL
-1e matrices are off ~1e-4/1.4e-5.** The inconsistency is introduced between the
-(correct) Cartesian integrals and the (correct-span) transform — most likely in
-HOW the transform is applied/normalized at runtime, in a way that makes S_sph and
-H_sph mutually inconsistent for f.
+L = 6 is a structurally different code path from the L = 3,4,5 fix: it delegates entirely to the recurrence oracle (`cart_to_sph_block_recurrence`) and never touches `normalized_pseudoinverse`. A disagreement there would implicate `spherical_recurrence.cpp`, not the pseudoinverse fix this document describes. `MAX_L = 6` makes this the top of the currently supported angular-momentum range, so closing FU2 would complete cross-code validation across the entire supported range. Expected accuracy, by analogy with f/g/h, is ~1e-9.
 
-## The measurement confound to respect
+## Historical investigation trail (falsified hypotheses, kept as guardrails)
 
-Raw-matrix cross-code comparisons (S_sph eigenvalues, tr(H_sph)) are **confounded**
-by the spherical-harmonic normalization CONVENTION: Planck and PySCF normalize the
-real solid harmonics differently, so raw matrices differ by O(1) while being
-physically equivalent. Confirmed: cc-pVDZ shows a large S_sph-eigenvalue difference
-(0.73) yet matching energy. ONLY convention-invariant quantities are valid:
-generalized eigenvalue spectra, `tr(P·H)` for a FIXED physical density, or the
-energy itself. Do NOT diff raw AO matrices across codes.
+Two earlier hypotheses were investigated and disproven before the root cause above was found. They are kept here because they name traps worth avoiding on any future spherical-basis defect.
 
-## Investigation steps
+**H1: basis coefficient precision.** True only for STO-3G (10-digit GBS vs 8-digit PySCF coefficients), and proven benign by coefficient-matching to 1.8e-14. Not the f-shell bug.
 
-### G1 — Isolate: does Planck's SPHERICAL S,H reproduce its own energy, and is it self-consistent? (~S)
+**H2: cart-to-sph transform contamination / metric-free pseudoinverse.** The measurement that `C.M.C^T != I` (the transform is not metric-orthonormal under the Cartesian metric) was real, but energy-irrelevant: the transform is span-preserving and SCF re-orthogonalizes via `S`. The transform was independently proven span-correct and pure-harmonic under the projector/Laplacian checks. A metric-correct (Loewdin) rewrite of `cart_to_sph_block` was implemented and found to be a no-op for the energy (see invariant 4), because the runtime row-normalization step re-imposes its own scaling and undoes it. The lesson: check energy-relevance (span, invariant spectrum) before trusting a raw-matrix "defect" as the cause.
 
-The 1e core spectrum already shows the ~1.4e-5 (step 3 above). Extend it: verify
-`S_sph = C · S_cart · Cᵀ` and `H_sph = C · H_cart · Cᵀ` with the SAME runtime C,
-by recomputing both in Python from Planck's dumped Cartesian S/H and Planck's C
-(dump `_cart_to_sph` too), and comparing to Planck's dumped S_sph/H_sph.
-- **If the recomputed S_sph/H_sph match Planck's dumped ones** → the transform is
-  applied consistently; the error is in the Cartesian→spherical mapping being
-  metric-inconsistent for f (see G2).
-- **If they DON'T match** → the runtime applies C differently to S vs H (e.g. the
-  row-normalization at `hf_driver.cpp:656` scales S but not H consistently). That
-  would be the bug directly.
-
-### G2 — The metric-inconsistency test (~S, the likely core)
-
-The runtime row-normalizes C so `diag(C·S_cart·Cᵀ) = 1` (`hf_driver.cpp:652-660`:
-`norm2 = (C S_cart Cᵀ)_mm`, then `C.row(m) /= sqrt(norm2)`). This normalizes each
-spherical function against the CARTESIAN overlap. But the f cart→sph rows are NOT
-orthogonal in the Cartesian metric (the `C·M·Cᵀ` off-diagonals ≠ 0, proven). So
-after per-row normalization, `S_sph` has unit diagonal but **off-diagonal f-f
-overlaps that a metric-correct spherical basis would not have** — and crucially,
-the SAME C applied to H_cart gives an H_sph that is NOT the H of an orthonormal
-spherical basis. The generalized problem `H_sph c = ε S_sph c` is still solvable,
-but `tr(P·H_sph)` is taken against this metric-inconsistent pair.
-
-- **Test:** build the CORRECT spherical S,H by transforming Planck's Cartesian
-  S,H with the METRIC-correct C (Löwdin under the Cartesian metric M, computed in
-  Python), solve the core problem, and check the 1e spectrum now matches PySCF
-  ~1e-9. If yes: the fix is to apply the metric-correct C **to the integrals**
-  (not the energy-invariant basis choice tried in the reverted F3 — the
-  difference is that here it changes the actual S_sph/H_sph fed to SCF, not just
-  the intra-span orthogonalization).
-- This reconciles the F3 "no-op" result: F3 changed `_cart_to_sph` but the runtime
-  RE-normalized it back via `hf_driver.cpp:656`, undoing the fix. The real fix
-  must survive (or replace) that row-normalization.
-
-### G3 — Confirm end-to-end + fix (~M)
-
-Once G1/G2 name the exact inconsistency (transform application vs row-normalization
-vs metric), fix it and verify:
-- water/cc-pVTZ RHF matches PySCF ~1e-9 (from 2.14e-5).
-- Planck cc-pVTZ converges in ~normal iteration count (currently 83–142, a sign of
-  the metric inconsistency stressing DIIS).
-- No regression on d-shell spherical cases (6-31g*, cc-pVDZ) or the spherical
-  regression suite.
-
-### G4 — Tests (~S)
-
-- The spherical transform tests (`tests/spherical_transform.cpp`) only check
-  harmonic purity (L≤2) + rank (L≥3) — too weak. Add a check that the PRODUCTION
-  transform, applied to a reference Cartesian overlap, yields an S_sph whose
-  generalized spectrum matches the recurrence-oracle transform's (an
-  energy-relevant, convention-invariant check).
-- Add a cross-code f-shell energy gate: water/cc-pVTZ spherical RHF PySCF-anchored
-  to ~1e-8. Currently the spherical gates stop at d, and the high-L gates are
-  cross-ENGINE (all engines share the transform, so they agree while wrong) —
-  a cross-CODE f gate is the missing tripwire.
-
-## Prime hypothesis (to confirm/kill in G2)
-
-The runtime per-row normalization of `_cart_to_sph` against the Cartesian overlap
-(`hf_driver.cpp:656`) makes `diag(S_sph)=1` but leaves the f functions
-metric-inconsistent — H_sph and S_sph are transformed by a C that is not a proper
-metric-orthonormal map, so the 1e problem they define sits ~1e-5 off (and below
-variational). The fix operates on the integral transform, and must not be undone
-by the row-normalization — which is exactly why the earlier `cart_to_sph_block`
-edit (F3) was a no-op.
-
-## Non-goals
-
-- Re-testing the transform's span/harmonic purity — proven correct.
-- The cc-pVTZ Cartesian non-convergence (separate near-linear-dependence issue).
-
-## History (falsified hypotheses, kept as guardrails)
-
-- **H1: basis coefficient precision** — true for STO-3G only (10-digit GBS vs
-  8-digit PySCF), proven benign by coefficient-matching to 1.8e-14. NOT the f bug.
-- **H2: cart→sph transform contamination / metric-free pinv** — the `C·M·Cᵀ≠I`
-  measurement was real but energy-IRRELEVANT (span-preserving; SCF re-orthogonalizes).
-  The transform is span-correct and pure-harmonic. A metric-correct rewrite of
-  `cart_to_sph_block` was a no-op (reverted) because the runtime row-normalization
-  re-imposes its own scaling. The lesson: check energy-RELEVANCE (span, invariant
-  spectrum) before trusting a raw-matrix "defect".
+Two other facts established along the way, proven and not to be re-litigated: the Cartesian one-electron integrals were always correct (Planck-vs-PySCF Cartesian `S^-1 T`, `S^-1 V`, `S^-1 H_core` generalized eigenvalue spectra agree to ~1e-6), and Planck's spherical overlap `S` was always positive-definite and well-conditioned (min eigenvalue 2.6e-3), ruling out a linear-dependence artifact as the cause.
