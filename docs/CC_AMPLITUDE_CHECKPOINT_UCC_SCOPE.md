@@ -6,9 +6,21 @@ blocker (not the premise that section originally stated) but did not build
 anything, deliberately, per the earlier decision to document rather than
 build a version-3 header change without its own pass.
 
-Everything below was re-verified against the current tree while writing this
-scope, not carried over from memory — one of the two blockers this doc
-describes was confirmed by actually running code, not by reading it.
+**Revised once already, mid-attempt at U0, before this scope had shipped
+anything.** The original version planned U0 (accept an empty `by_rank`) and
+U1 (add UHF's four counts) as two separately-landable steps. Starting U0
+found — by building it and testing a real round-trip, not by re-reading the
+plan — that it does not work in isolation: the reader's `by_rank` loop trip
+count was still silently coupled to `max_rank`, a coupling that held for
+every caller before this scope and breaks the moment it doesn't. U0 and U1
+are now one merged step; the "Steps" section below reflects that, and the
+finding itself is kept inline rather than edited away, since it is the
+concrete demonstration of the doc's own closing rule: verify the reader,
+not just the writer, every time either side's assumptions change.
+
+Everything below was re-verified against the current tree while writing
+this scope, not carried over from memory — several of the claims here were
+confirmed by actually running code, not by reading it alone.
 
 ---
 
@@ -76,75 +88,115 @@ that currently rejects this shape, not to the data model.
 
 ## Steps
 
-### U0 — fix Blocker 1: let `save_cc_amplitudes` accept a sectors-only amplitude set (~S)
+### U0/U1 merged — the version-3 header: `by_rank` count + four UHF counts, both additive (~S)
 
-Change the emptiness check from `by_rank.size() < 1` to
-`by_rank.size() + sectors.size() < 1` (or equivalently, reject only when
-*both* are empty) — the file is meaningless with literally nothing in it,
-but a `by_rank`-empty/`sectors`-populated set is real data, not an
-accidental empty call.
+**U0 and U1 were originally scoped as separate, independently-landable
+steps. They are not.** Found by actually building U0 in isolation and
+testing round-trip on a real sectors-only amplitude set, not by inspection:
+a writer-only fix (accept an empty `by_rank`, switch `max_rank`'s source to
+`meta.max_rank`) compiles clean and *appears* to work (the write call
+succeeds), but the **reader** still derives its `by_rank` read-loop trip
+count from `max_rank` (`cc_amplitude_checkpoint.cpp:239-240` as of the
+version-2 format: `for (int rank = 1; rank <= max_rank; ++rank)`), with no
+independent count of how many `by_rank` tensors were actually written. For
+every caller before this scope, `max_rank == by_rank.size()` held by
+construction, so this coupling was invisible. The moment `max_rank` can
+legitimately exceed `by_rank.size()` (a UCC file: `max_rank = 2`,
+`by_rank.size() = 0`), the reader tries to read tensors that were never
+written and corrupts on the very next field it touches — reproduced with a
+save-then-load probe: `save_cc_amplitudes` succeeds, `load_cc_amplitudes`
+fails with `"rank-1 count 7016996763659665412 disagrees with dims product
+2"` (garbage read from bytes that actually belong to `n_sectors`).
 
-`max_rank`'s write-time source needs a decision at the same time, since it
-currently comes from `by_rank.size()` which will now legitimately be 0 for a
-UCC file: switch it to `meta.max_rank` (the field that is already threaded
-through every call site today, just silently ignored on write) rather than
-inferring it from either container. This also fixes the pre-existing dead
-field — `meta.max_rank` stops being ignored on write, for every caller, not
-just UCC's.
+**So the actual fix needs a new field, not a new interpretation of an old
+one**: an explicit `by_rank` count, independent of `max_rank`. Since that is
+a byte-layout change requiring a version bump, and U1's own UHF-count
+addition already needed the identical bump, **the two are merged into one
+version-3 step** rather than landed as two separate bumps in a row — a
+second bump immediately after the first would mean the version-2→3
+compatibility work gets partially superseded before anyone reads a
+version-3 file in practice.
 
-*Verify:* extend `tests/cc_amplitude_checkpoint.cpp` with a case
-constructing an `ArbitraryOrderRCCAmplitudes` with empty `by_rank` and one
-`sectors` entry, `meta.max_rank` set explicitly (not derivable from
-`by_rank`), and assert `save_cc_amplitudes` succeeds and the round-tripped
-`chk.meta.max_rank` matches what was supplied. Re-run the existing
-RCC-shaped round-trip case unchanged — `meta.max_rank` there already equals
-`by_rank.size()` by construction in every existing caller, so switching the
-source must be bitwise-inert for every RCC write site
-(`rccgen.cpp`'s two write sites, `ccsd.cpp`'s X5.1 write site) — verify by
-diffing a real RCC `.ccamp` byte-for-byte before/after this change, the same
-way X5.1's own verification worked, not just by re-running the unit test.
+**What version 3 adds, both unconditionally present (matching the
+already-decided "additive, always-present, no per-`reference_type`
+encoding" design above):**
 
-**Stop condition:** if any existing RCC call site's `meta.max_rank` does NOT
-already equal its `by_rank.size()` (i.e., the switch is not actually inert),
-stop and re-scope — that would mean some caller relies on the old
-derived-from-`by_rank` behavior, and this step needs a compatibility shim
-before proceeding, not a silent behavior change.
+- `[4] n_by_rank i32` — the actual number of `by_rank` tensors that follow,
+  written right after `max_rank` (which stays as the informational
+  "highest excitation rank represented" field it always was — `read_tensor`'s
+  bounds-check argument still wants it, and `chk.meta.max_rank` is still a
+  meaningful field to round-trip). For every existing RCC caller
+  `n_by_rank == max_rank` by construction, so this is bitwise-inert for them
+  in the same sense the original U0 write reasoned about `meta.max_rank` —
+  now verify it for the actual new field, not the old proxy.
+- The four UHF counts (`n_occ_alpha`, `n_occ_beta`, `n_virt_alpha`,
+  `n_virt_beta`), unconditionally present as in the original U1 plan,
+  unchanged.
 
-### U1 — the version-3 header: four UHF counts, additive (~S given U0)
+The `save_cc_amplitudes` emptiness check moves to
+`by_rank.empty() && sectors.empty()` as originally planned in U0 — that part
+of the original U0 reasoning was correct, only the "switch `max_rank`'s
+source and stop there" part was incomplete.
 
-Bump `CCAMP_VERSION` to 3. Append four `u64` fields
-(`n_occ_alpha`, `n_occ_beta`, `n_virt_alpha`, `n_virt_beta`) to
-`CCAmplitudeCheckpointMeta`, written unconditionally right after the
-existing `reference_type` byte (matching the "additive, always-present"
-decision above). `CCAmplitudeCheckpointMeta` itself gains the four fields as
-plain `std::uint64_t = 0` members, same style as the existing `n_occ`/
-`n_virt`.
+Loader must accept versions 1, 2, and 3, extending the existing
+`if (version >= 2)` tiering with one more branch — version 1 has no
+`reference_type` and no sector block (already handled); version 2 has
+`reference_type` and sectors but no `n_by_rank`/UHF counts (**for a
+version-2 file, `n_by_rank` must default to `max_rank`** — this is the one
+place version 2's old coupling has to be reconstructed explicitly, since
+every version-2 file on disk was written under the old assumption); version
+3 has everything explicit. This is the same "read what's there, default the
+rest" contract C0 established for the version-1→2 jump, and the version-2→3
+default is not a guess — it is recovering exactly the invariant every
+version-2 writer actually upheld.
 
-Loader must accept versions 1, 2, and 3 — version 1 has no `reference_type`
-byte and no sector block (already handled); version 2 has `reference_type`
-but no UHF counts (new: must default the four counts to 0, matching what an
-RHF-only version-2 file always implicitly meant); version 3 has everything.
-This is the same "read what's there, default the rest" contract U0's
-predecessor (C0) already established for the version-1→2 jump — extend the
-existing `if (version >= 2)` branching pattern with one more tier rather
-than inventing a new one.
+*Verify, in order:*
 
-*Verify:* extend `tests/cc_amplitude_checkpoint.cpp` with (a) a round-trip of
-a version-3 file with non-zero UHF counts, asserting bytewise-equal
-metadata; (b) a hand-built version-2 file (no UHF counts in the byte
-stream — construct it the same way the existing version-1-compat test
-hand-builds a version-1 file) loads with the four counts defaulted to 0 and
-`reference_type` whatever the file specified; (c) the existing version-1
-compat test still passes unmodified — proving three-tier compatibility, not
-just the new tier in isolation.
+1. **Byte-for-byte inertness for every existing RCC caller.** Diff a real
+   RCC `.ccamp` (from `rccgen.cpp`'s or `ccsd.cpp`'s write sites) before and
+   after this change — the emptiness-check and `max_rank`-source changes
+   from the original U0 plan, plus this step's new `n_by_rank` field, must
+   not perturb a single byte an RCC caller produces beyond the version
+   number and the new field itself. This is the check the original U0 scope
+   called for; it still applies, now against the merged step.
+2. **The exact failure this step exists to fix, round-tripped for real.**
+   Extend `tests/cc_amplitude_checkpoint.cpp` with a case constructing an
+   `ArbitraryOrderRCCAmplitudes` with **empty `by_rank` and one populated
+   `sectors` entry** (not a synthetic non-empty `by_rank` — the actual UCC
+   shape), `meta.max_rank` set explicitly, save, load, and assert the
+   round-tripped `by_rank` is empty, `sectors` has the one entry with
+   bytewise-equal `dims`/`data`, and `meta.max_rank` matches. This is the
+   test that would have caught U0's own incompleteness had it existed
+   first — write it before trusting the fix this time.
+3. **UHF counts round-trip** (the original U1 gate, unchanged): a
+   version-3 file with non-zero UHF counts round-trips bytewise-equal
+   metadata.
+4. **Version-2 compatibility, both fields.** A hand-built version-2 file
+   (no `n_by_rank`, no UHF counts in the byte stream — construct the same
+   way the existing version-1-compat test hand-builds a version-1 file)
+   loads with `n_by_rank` defaulted to that file's own `max_rank` (not to
+   0 — 0 would silently discard every version-2 RCC file's `by_rank` data)
+   and the four UHF counts defaulted to 0.
+5. **Version-1 compatibility still holds**, unmodified, proving three-tier
+   compatibility rather than just the newest tier in isolation.
 
-**Do not skip the version-2 compatibility branch.** The version-1→2 jump
-already proved this trap is real (a version-2 file with zero sectors and a
-version-1 file both end the stream at the same logical point, and getting
-that distinction wrong was the actual defect C0 fixed, not a hypothetical
-risk) — the version-2→3 jump has an analogous edge (a version-2 file
-correctly has no UHF-count bytes at all, which must read as "0, valid"
-rather than "truncated, error").
+**Stop condition, restated for the merged step:** if any existing RCC call
+site's `by_rank.size()` does NOT already equal what becomes `n_by_rank`
+(i.e., step 1's byte-diff finds a real behavior change), stop and re-scope
+— exactly the original U0 stop condition, now checked against the field
+that actually drives the read loop instead of the field that only looked
+like it did.
+
+**Do not skip the version-2 compatibility branch, and do not default
+`n_by_rank` to anything but that file's own `max_rank` for a version-2
+read.** The version-1→2 jump already proved the general trap is real (a
+version-2 file with zero sectors and a version-1 file both end the stream
+at the same logical point, and getting that distinction wrong was the
+actual defect C0 fixed). The version-2→3 jump's specific edge is sharper:
+defaulting `n_by_rank` to 0 instead of `max_rank` would not just misread a
+file, it would silently discard every existing version-2 sidecar's
+`by_rank` amplitudes on the next load — a correctness regression on
+already-shipped data, not merely a new format's own bug.
 
 ### U2 — a UCC write site (~S given U0/U1)
 
@@ -212,16 +264,17 @@ work.
 
 ## Sequencing and risk
 
-U0 is the only step with a real inertness risk (a write-time behavior change
-for every existing RCC caller, not just UCC) and must be verified byte-for-
-byte before anything downstream is trusted. U1 is pure format-and-loader
-work, independently testable with hand-built fixtures, no real UCC run
-required. U2 and U3 are mechanical once U0/U1 land — they are the same
-write-site/read-site pattern C0/C1/C2 already established for RCC, applied
-to a second caller. Do U0 and U1 fully (including their own gates) before
-starting U2; do not interleave, for the same reason the earlier C0 work
-kept its reordering-sensitive and reordering-safe pieces in separate,
-individually-verified commits.
+U0/U1 (merged) is the one step with a real inertness risk — a byte-layout
+and write-time behavior change for every existing RCC caller, not just
+UCC — and must be verified byte-for-byte before anything downstream is
+trusted; its own history (planned as two separately-landable steps, found
+by testing to be one) is the reason to trust its "merge, don't split
+further" conclusion rather than re-attempt the split. U2 and U3 are
+mechanical once U0/U1 lands — they are the same write-site/read-site
+pattern C0/C1/C2 already established for RCC, applied to a second caller,
+and need no real UCC run to verify until U2 itself. Do not start U2 before
+U0/U1's own gates (including the version-2 default-`n_by_rank` case, which
+is the sharpest of the bunch) are green.
 
 ## What NOT to do
 
@@ -243,16 +296,24 @@ individually-verified commits.
 - **Do not fail a run on a missing, stale, or corrupt UCC sidecar.**
   Restart is an optimization for UCC exactly as it is for RCC — U3 must
   degrade the same way U0-U3 of the original scope and C0-C2 all did.
-- **Do not build U2/U3 before U0/U1 are individually verified.** U0's own
-  stop condition exists because a write-time behavior change that turns out
-  not to be inert would silently corrupt every existing RCC caller's
-  checkpoints, not just fail to help UCC.
+- **Do not build U2/U3 before U0/U1's own gates are green.** A byte-layout
+  change that turns out not to be inert would silently corrupt every
+  existing RCC caller's checkpoints, not just fail to help UCC.
+- **Do not trust a writer-only fix without testing the full round-trip
+  against the reader.** This is not a hypothetical — the original two-step
+  U0/U1 plan looked correct on inspection (the writer compiled, the write
+  call succeeded) and was only found broken by actually saving and loading
+  a UCC-shaped file. `save_cc_amplitudes` succeeding is not evidence that
+  `load_cc_amplitudes` can read what it wrote; the two functions were
+  written together but must be *verified* together, every time either one's
+  assumptions about the byte layout change.
 
 ## Key locations
 
 | what | where |
 |---|---|
 | Blocker 1 (empty check) | `save_cc_amplitudes`, `cc_amplitude_checkpoint.cpp:132-134` |
+| Blocker 1's reader-side twin (the `by_rank` read-loop trip count, coupled to `max_rank` with no independent `n_by_rank`) | `load_cc_amplitudes`, `cc_amplitude_checkpoint.cpp:239-240` |
 | Blocker 2 (metadata shape) | `CCAmplitudeCheckpointMeta`, `cc_amplitude_checkpoint.h:67-75` |
 | The precedent for the additive-fields pattern | `CanonicalRHFCCReference`, `tensor_backend.h:35-83`, and its own comment explaining exactly why it's additive |
 | Where UCC's real occupation counts already live | `UHFReference`, `common.h`; threaded into `CanonicalRHFCCReference` via `build_ucc_fock_blocks`, `ucc_blocks.cpp:194-` |
