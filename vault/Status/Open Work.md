@@ -1286,8 +1286,26 @@ Q1 verdict (Karp-Flatt serial fraction rather than efficiency-at-max-ranks,
     leaves it empty, UCC is sectors-only) before any write/read code is
     worth writing. UCC's sector tags (`"aaaa"`/`"abab"`/`"bbbb"`-style,
     `ucc_amplitude_blocks`) already fit C0's `(rank, tag)` keying without
-    change. Deliberately not built this session — a real design decision,
+    change. Deliberately not built that session — a real design decision,
     not a mechanical follow-on the way C0/C1/C2 were.
+
+    **Rescoped 2026-09-04 into `docs/CC_AMPLITUDE_CHECKPOINT_UCC_SCOPE.md`
+    as four small verifiable steps (U0-U3), not started.** Found a SECOND,
+    independent blocker while scoping: `save_cc_amplitudes` rejects a
+    sectors-only amplitude set outright (`by_rank.size() < 1` is checked
+    before any metadata question applies) — confirmed by compiling and
+    running a standalone probe against the real function with the exact
+    empty-`by_rank`/populated-`sectors` shape `prepare_generated_ucc_state`
+    produces, not just by reading the code. U0 fixes that (and a related
+    dead-field bug: `meta.max_rank` is silently ignored on write today,
+    always recomputed from `by_rank.size()`, which breaks the moment
+    `by_rank` can legitimately be empty). U1 is the version-3 header,
+    following the additive-fields precedent this codebase already used once
+    for the identically-shaped problem at the state-struct level
+    (`CanonicalRHFCCReference` added four UHF counts alongside
+    `orbital_partition` rather than repurposing it, specifically so RCC's
+    existing reads stay untouched). U2/U3 mirror C0/C1's own write-site/
+    read-site pattern, applied to `run_uccgen`.
 
 ## ccgen generated-kernel performance
 

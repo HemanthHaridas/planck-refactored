@@ -230,6 +230,15 @@ it is accurate, and nothing here should be built until that comment's
 condition (a sidecar format that can actually hold UHF's occupation counts)
 is met.
 
+**Rescoped in small verifiable steps**: `CC_AMPLITUDE_CHECKPOINT_UCC_SCOPE.md`.
+That scope also found a SECOND, independent blocker this section did not —
+`save_cc_amplitudes` rejects a sectors-only amplitude set outright
+(`by_rank.size() < 1` is checked before any metadata question even applies),
+confirmed by actually running a standalone probe against the real function,
+not just by reading it. Both blockers, and the four-step U0-U3 plan to fix
+them, live in that doc now; this section stays as the historical record of
+how the metadata-shape blocker was found.
+
 ---
 
 ## Recommended order, revised
@@ -240,12 +249,11 @@ is met.
 4. **C3 (ccsdt half only)** — still recommended deferred; the rank-2 half is
    done. Revisit only if `run_rccsdt`'s hand-written backends stay production
    longer than `ccsdt_gen`'s adoption. ~M if picked up.
-5. **C4 (UCC sidecar)** — NOT blocked on UCC landing (it already has); blocked
-   on a real metadata-format decision (`CCAmplitudeCheckpointMeta` cannot
-   represent UHF's four occupation counts, `uccgen.cpp`'s own comment says so
-   correctly). Needs a version-3 design pass before any write/read code, not
-   a mechanical follow-on to C0/C1/C2. ~S once the format question is
-   answered; the format question itself is not ~S.
+5. **C4 (UCC sidecar)** — rescoped into `CC_AMPLITUDE_CHECKPOINT_UCC_SCOPE.md`
+   as U0-U3, small verifiable steps. U0 fixes a second confirmed blocker
+   (a sectors-only amplitude set is rejected outright, independent of the
+   metadata-shape question); U1 is the version-3 header; U2/U3 mirror C0/C1's
+   own write-site/read-site pattern for `run_uccgen`. Not started.
 
 ---
 
