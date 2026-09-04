@@ -43,6 +43,36 @@ truth for what remains.
   `BASIS_INSTALL_PATH`, or change the `install()` destination to match — they
   must agree. Documented as a workaround in the README meanwhile.
 
+- **Release builds compile with `-DNDEBUG`, silently disabling every
+  `assert()`-based unit test in the suite (found 2026-09-04, while gating
+  X5.0/CC amplitude checkpoint work).** Every hand-rolled test binary in
+  `tests/` (`cc_amplitude_checkpoint.cpp`, `cc_spatial_amplitude_projection.cpp`,
+  `cc_amplitude_sector_seed.cpp`, and by extension every other `assert()`-based
+  gate in the tree) passes vacuously under the default `Release` build type —
+  `ctest` reports green regardless of whether the assertions inside actually
+  ran. Concretely reproduced: `cc_spatial_amplitude_projection` passed under
+  the normal `build-full` (`-DNDEBUG` set) while its underlying fixture had a
+  real bug that only surfaced when rebuilt standalone with `-UNDEBUG`. Every
+  gate built this session was independently re-verified with a `-UNDEBUG`
+  standalone compile plus a mutation test before being trusted — see the CC
+  amplitude checkpoint entry in Completion for the pattern. **Not fixed**:
+  either force `-UNDEBUG` for these hand-rolled test binaries specifically, or
+  replace `assert()` with a check that does not compile out in Release. Left
+  as a project-wide gap by explicit user decision (noted, not fixed, when
+  found).
+
+- **CI's `cmake-multi-platform.yml` builds only the `hartree-fock` target
+  before running `ctest`, never the test binaries themselves (found
+  2026-09-04, same session).** `ctest` runs against whatever binaries already
+  exist in the build tree; since the workflow's `Build` step passes
+  `--target hartree-fock` explicitly, none of the `add_executable(planck-*)`
+  test targets are ever built there. What `ctest --build-config Release` does
+  in CI as a result is unverified from this finding alone — it may pass
+  trivially (no test binaries found) or run stale binaries from a prior step,
+  neither of which is the intended coverage. **Not fixed**, same reasoning as
+  the NDEBUG gap above: real, project-wide, out of scope for the change that
+  surfaced it, left for a deliberate look rather than a byproduct fix.
+
 ## SCF convergence — the unclaimed 3x
 
 - **Iteration count triples with system size, and nothing is attacking it.**
@@ -1222,6 +1252,39 @@ Q1 verdict (Karp-Flatt serial fraction rather than efficiency-at-max-ranks,
   and the geomopt / frequency workflows built on them, are now landed
   Cartesian-side — see Completion)
 - The ccgen `TensorOptimized` RCCSDT backend is still treated in-tree as an experimental / phase-4 path
+- **CC amplitude checkpoint (`.ccamp`) follow-ups, from
+  `docs/CC_AMPLITUDE_CHECKPOINT_REMAINING_SCOPE.md`** (X5.0/X5.1 and the C0/C1
+  fixes landed 2026-09-04, see Completion):
+  - **C2 — the `ccsdt_gen`->`cc4` cross-rank restart is reasoned correct by
+    construction but has never actually been run end to end.** Now that C0's
+    sector fix landed, this is genuinely testable and genuinely untested — not
+    "should already work" but "now checkable and still unchecked." Gate: a
+    `ccsdt_gen`->`cc4` two-run test on Be at loose tolerance (write via rank 3,
+    restart via rank 4, same FCI energy, fewer T4-dominated iterations than
+    cold `cc4`); this is X4.1's own gate and formally closes X4 once it
+    passes. Cheap to check; do this first among the three.
+  - **C3 — `run_rccsdt`'s hand-written rank-3 solver still cannot
+    read/write a `.ccamp`.** Deliberately deferred: `ccsdt_gen` already
+    reaches rank 3 through the generated arbitrary-order runtime and already
+    writes a spatial sidecar, so the gap this would close is already closed
+    by a route more aligned with the project's stated long-term intent
+    (generated kernels replacing hand-written solvers). Revisit only if
+    `run_rccsdt`'s hand-written backends stay production longer than
+    `ccsdt_gen`'s adoption. Would need a rank-3 sibling to
+    `project_rccsd_amplitudes_to_spatial`, plus excluding the
+    determinant-space/tensor-optimized backends (only the tensor backend
+    holds dense amplitudes) from the write path.
+  - **C4 — a UCC sidecar has a reserved header byte and nothing else.** C0
+    folded a `reference_type` (RHF/UHF) byte into the version-2 header
+    while it was already being changed, but no UCC write site sets it and
+    no read site checks it — blocked entirely on arbitrary-order UCC
+    landing (`CCGEN_UNRESTRICTED_CC.md`). When it does: a UCC write site
+    must set the byte explicitly, and `try_restart_from_sidecar` (or its
+    UCC-path sibling) must reject a `reference_type` mismatch the same way
+    C1 rejects a basis/dims mismatch — this check does not exist yet, so
+    today a UHF sidecar could pass C1's checks if `n_occ`/`n_virt` happen to
+    agree, reopening the "wrong-basin silent seed" failure mode C1 was
+    built to close, for this one axis.
 
 ## ccgen generated-kernel performance
 

@@ -285,6 +285,68 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **CC amplitude checkpoint (`.ccamp`): hand-written RCCSD can now write a
+  spatial sidecar, and a sector-drop defect in the shipped format is fixed
+  (2026-09-04).** `docs/CC_AMPLITUDE_CHECKPOINT_SCOPE.md` (rewritten from
+  scope to answer) and `docs/CC_AMPLITUDE_CHECKPOINT_REMAINING_SCOPE.md`
+  (rescoped against the landed tree). PR #164,
+  branch `ccamp-x5-spin-orbital-projection`.
+
+  **X5.0/X5.1 — spin-orbital -> spatial projection.**
+  `project_rccsd_amplitudes_to_spatial` (`amplitudes.{h,cpp}`) converts
+  `run_rccsd`'s converged spin-orbital `t1`/`t2` to the spatial RCC layout
+  the sidecar and generated arbitrary-order runtime both use. The
+  closed-shell relation -- `t1` is either spin channel (identical at closed
+  shell, cross-spin blocks exactly zero); `t2` is the opposite-spin
+  spin-orbital block (`t2_aa = t2_ab - t2_ab.swap(a,b)` is the dependent
+  same-spin combination, not independent data) -- was **numerically
+  verified against this codebase's own converged BH3/STO-3G amplitudes**
+  via a temporary probe, not trusted from memory. Gated by
+  `tests/cc_spatial_amplitude_projection.cpp`, mutation-verified. Caught a
+  real fixture bug along the way that Release's `-DNDEBUG` had made
+  invisible -- see Open Work for the NDEBUG gap this surfaced project-wide.
+  `run_rccsd` was worth doing because it has no generated-arbitrary-order
+  sibling (the registry floor is rank 3); verified end-to-end on
+  BH3/STO-3G, same energy, values read back bit-for-bit correct.
+
+  **C0 -- a real correctness defect in the already-shipped format, fixed on
+  both sides.** `save_cc_amplitudes` only ever wrote `amplitudes.by_rank`,
+  never `amplitudes.sectors` -- the independent higher Sz sector blocks a
+  rank->=4 amplitude set carries (e.g. `(4, "aaabaaab")` for CCSDTQ, proven
+  genuinely independent by R3.1.3). A `cc4` restart therefore always seeded
+  that sector at zero -- silent because it still converges (Jacobi/DIIS
+  pulls the zero sector up), so no energy-only gate ever caught it. Fixed
+  on the file-format side (`CCAMP_VERSION` bumped to 2, sectors appended via
+  a shared `write_tensor`/`read_tensor` codec, version-1 backward
+  compatibility preserved and correctly distinguished from mid-field
+  truncation) and on the seed-application side
+  (`seed_arbitrary_order_amplitudes` now applies sectors by `(rank, tag)`
+  key, skipping rather than failing on a shape mismatch or missing
+  counterpart) -- fixing only one side would have left the other silently
+  inert. Also folds in a one-byte `reference_type` field for a future UCC
+  sidecar, so it needs no version 3. Both halves independently
+  mutation-verified.
+
+  **C1 -- the sidecar is now validated against the live run before
+  seeding.** Previously only a per-rank shape check existed; two different
+  bases (or molecules) can share identical `n_occ`/`n_virt`, so a
+  same-shaped stale sidecar could silently seed a wrong basin. Now compares
+  `basis_name` and `n_occ`/`n_virt` at the read site, degrading to a warned
+  cold-start on mismatch -- the same policy every other sidecar problem
+  here uses. The validating function lives in an anonymous namespace and
+  cannot be unit-tested directly; verified end-to-end on LiH/STO-3G instead
+  (`ccsdt_gen`, rank 3): two independent hand-corrupted sidecars each
+  correctly cold-start at the same final energy a from-scratch run reaches,
+  while an untouched sidecar still warm-starts in 1 iteration.
+
+  **Still open, tracked in the REMAINING doc**: C2 (verify the
+  `ccsdt_gen`->`cc4` cross-rank restart end to end -- reasoned correct by
+  construction but never actually run; closes X4 formally), C3
+  (`run_rccsdt`'s hand-written rank-3 participation, deliberately deferred
+  since `ccsdt_gen` already covers the gap it would close), C4 (a UCC
+  sidecar -- only the header byte exists, blocked on arbitrary-order UCC
+  landing).
+
 - **FCIQMC: the method is implemented and runs from an input file (2026-08-31 to
   2026-09-01).** `correlation fciqmc` is a working calculation. Walker state and
   RNG, the excitation generator with a consistent `p_gen`, spawn/death/
