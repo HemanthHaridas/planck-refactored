@@ -2,6 +2,16 @@
 // Builds a small 2-rank ArbitraryOrderRCCAmplitudes, saves it, loads it back,
 // and asserts bytewise-equal dims/data plus metadata. Also checks that a bad
 // magic and a truncated file are rejected (errored, not crashed).
+//
+// C0: extended to cover the version-2 sector block -- the higher independent
+// Sz sectors (amplitudes.sectors) that version 1 silently dropped on write.
+// Covers: a sector round-trips bytewise identically to by_rank; a version-1
+// file (no sector block, no reference_type byte) still loads with zero
+// sectors and RHF defaulted; a version-2 file with a TRUNCATED sector block
+// (as opposed to no sector block at all) still errors rather than silently
+// reading as "zero sectors" -- that distinction is the actual defect this
+// gate exists to catch, since "ends right after by_rank" and "ends partway
+// through n_sectors/a sector" must NOT be treated the same way.
 
 #include <cassert>
 #include <cstdio>
@@ -27,6 +37,30 @@ namespace
             t2.data[i] = -0.05 * static_cast<double>(i) + 1.7;
         amps.by_rank.push_back(std::move(t1));
         amps.by_rank.push_back(std::move(t2));
+        return amps;
+    }
+
+    // A rank-4 amplitude set carrying one higher Sz sector, mirroring the
+    // real CCSDTQ shape this defect was found on: by_rank[3] is the balanced
+    // t4 sector, sectors holds the independent (4, "aaabaaab") block.
+    ArbitraryOrderRCCAmplitudes make_sample_with_sector()
+    {
+        ArbitraryOrderRCCAmplitudes amps;
+        // Ranks 1-4, tiny dims so the test stays fast: [n_occ=2, n_virt=2]
+        // per excitation, i.e. rank r has dims [2]*r + [2]*r.
+        for (int rank = 1; rank <= 4; ++rank)
+        {
+            std::vector<int> dims(static_cast<std::size_t>(2 * rank), 2);
+            TensorND t(dims, 0.0);
+            for (std::size_t i = 0; i < t.data.size(); ++i)
+                t.data[i] = 0.01 * static_cast<double>(rank) * static_cast<double>(i) - 0.5;
+            amps.by_rank.push_back(std::move(t));
+        }
+        std::vector<int> sector_dims(8, 2); // rank-4 shape, same as by_rank[3]
+        TensorND sector(sector_dims, 0.0);
+        for (std::size_t i = 0; i < sector.data.size(); ++i)
+            sector.data[i] = 7.0 - 0.003 * static_cast<double>(i); // distinct from by_rank[3]
+        amps.sectors.push_back({{4, "aaabaaab"}, std::move(sector)});
         return amps;
     }
 
@@ -97,6 +131,158 @@ int main()
     }
 
     std::filesystem::remove(path);
+
+    // C0: a sector round-trips bytewise identically to by_rank, and RHF is
+    // the correct default reference_type when none is set explicitly.
+    {
+        const std::string sector_path = temp_path("planck_ccamp_sector_roundtrip.ccamp");
+        const ArbitraryOrderRCCAmplitudes original = make_sample_with_sector();
+        CCAmplitudeCheckpointMeta meta{
+            .max_rank = 4, .method = "cc4", .basis_name = "sto-3g", .n_occ = 2, .n_virt = 2};
+
+        auto saved = save_cc_amplitudes(sector_path, original, meta);
+        assert(saved && "save with a sector should succeed");
+
+        auto loaded = load_cc_amplitudes(sector_path);
+        assert(loaded && "load with a sector should succeed");
+        assert(loaded->meta.reference_type == CCReferenceType::RHF);
+
+        assert(loaded->amplitudes.by_rank.size() == original.by_rank.size());
+        for (std::size_t r = 0; r < original.by_rank.size(); ++r)
+        {
+            assert(loaded->amplitudes.by_rank[r].dims == original.by_rank[r].dims);
+            assert(loaded->amplitudes.by_rank[r].data == original.by_rank[r].data);
+        }
+
+        assert(loaded->amplitudes.sectors.size() == 1);
+        assert(loaded->amplitudes.sectors[0].first.first == 4);
+        assert(loaded->amplitudes.sectors[0].first.second == "aaabaaab");
+        assert(loaded->amplitudes.sectors[0].second.dims == original.sectors[0].second.dims);
+        assert(loaded->amplitudes.sectors[0].second.data == original.sectors[0].second.data);
+        // The sector must be genuinely distinct from by_rank[3] in the
+        // round-tripped data too -- otherwise this gate could pass even if
+        // the loader accidentally aliased the two.
+        assert(loaded->amplitudes.sectors[0].second.data != loaded->amplitudes.by_rank[3].data);
+
+        std::filesystem::remove(sector_path);
+    }
+
+    // C0: a hand-built version-1 file (no reference_type byte, no sector
+    // block -- the exact shape every sidecar written before this fix has on
+    // disk) still loads: zero sectors, RHF reference_type, by_rank intact.
+    // This is the compatibility contract the whole point of versioning is
+    // for; if this regresses, every pre-existing .ccamp becomes unreadable.
+    {
+        const std::string v1_path = temp_path("planck_ccamp_v1_compat.ccamp");
+        {
+            std::ofstream out(v1_path, std::ios::binary | std::ios::trunc);
+            const char magic[8] = {'P', 'L', 'N', 'K', 'C', 'C', 'A', '\0'};
+            out.write(magic, 8);
+            const std::uint32_t version = 1;
+            out.write(reinterpret_cast<const char *>(&version), 4);
+            const std::int32_t max_rank = 1;
+            out.write(reinterpret_cast<const char *>(&max_rank), 4);
+            const std::uint32_t method_len = 3;
+            out.write(reinterpret_cast<const char *>(&method_len), 4);
+            out.write("cc1", 3);
+            const std::uint32_t basis_len = 6;
+            out.write(reinterpret_cast<const char *>(&basis_len), 4);
+            out.write("sto-3g", 6);
+            const std::uint64_t n_occ = 2, n_virt = 2;
+            out.write(reinterpret_cast<const char *>(&n_occ), 8);
+            out.write(reinterpret_cast<const char *>(&n_virt), 8);
+            // rank 1: order=2, dims=[2,2], count=4, data
+            const std::int32_t order = 2;
+            out.write(reinterpret_cast<const char *>(&order), 4);
+            const std::int32_t d0 = 2, d1 = 2;
+            out.write(reinterpret_cast<const char *>(&d0), 4);
+            out.write(reinterpret_cast<const char *>(&d1), 4);
+            const std::uint64_t count = 4;
+            out.write(reinterpret_cast<const char *>(&count), 8);
+            const double data[4] = {1.0, 2.0, 3.0, 4.0};
+            out.write(reinterpret_cast<const char *>(data), sizeof(data));
+            // File ends here -- no reference_type byte, no sector block.
+        }
+
+        auto loaded = load_cc_amplitudes(v1_path);
+        assert(loaded && "a version-1 file must still load");
+        assert(loaded->meta.method == "cc1");
+        assert(loaded->meta.reference_type == CCReferenceType::RHF);
+        assert(loaded->amplitudes.by_rank.size() == 1);
+        assert((loaded->amplitudes.by_rank[0].dims == std::vector<int>{2, 2}));
+        assert((loaded->amplitudes.by_rank[0].data == std::vector<double>{1.0, 2.0, 3.0, 4.0}));
+        assert(loaded->amplitudes.sectors.empty());
+
+        std::filesystem::remove(v1_path);
+    }
+
+    // C0: a version-2 file truncated PARTWAY THROUGH the sector block (as
+    // opposed to a version-1 file, which correctly ends with no sector block
+    // at all) must still error. This is the mutation the "no sector block"
+    // vs "truncated sector block" distinction exists to catch: a naive
+    // "stream ended, so zero sectors" rule would silently accept this too.
+    {
+        const std::string sector_path = temp_path("planck_ccamp_sector_trunc_src.ccamp");
+        const ArbitraryOrderRCCAmplitudes original = make_sample_with_sector();
+        CCAmplitudeCheckpointMeta meta{
+            .max_rank = 4, .method = "cc4", .basis_name = "sto-3g", .n_occ = 2, .n_virt = 2};
+        auto saved = save_cc_amplitudes(sector_path, original, meta);
+        assert(saved && "save should succeed");
+
+        const std::string trunc_path = temp_path("planck_ccamp_sector_trunc.ccamp");
+        {
+            std::ifstream in(sector_path, std::ios::binary);
+            std::string bytes((std::istreambuf_iterator<char>(in)), {});
+            // Drop only the final few bytes -- deep enough to land inside the
+            // sector's tag string or tensor body, never at the exact
+            // by_rank/sector boundary (which would just look like a
+            // version-1 file and is correctly accepted elsewhere).
+            std::ofstream out(trunc_path, std::ios::binary | std::ios::trunc);
+            out.write(bytes.data(), static_cast<std::streamsize>(bytes.size() - 5));
+        }
+
+        auto r = load_cc_amplitudes(trunc_path);
+        assert(!r && "a sector block truncated mid-way must error, not read as zero sectors");
+
+        std::filesystem::remove(sector_path);
+        std::filesystem::remove(trunc_path);
+    }
+
+    // C0: the sharpest form of the same distinction -- truncated 2 of 4 bytes
+    // into `n_sectors` ITSELF (not deeper inside a sector). A version-2 file
+    // with NO sectors ends with exactly this 4-byte field; a version-1 file
+    // ends without it at all. Those two "the stream ended" cases must be
+    // told apart: the first is truncation (error), the second is the normal
+    // version-1 shape (fine). A mutation that swallows a failed n_sectors
+    // read as "zero sectors" passes every other test in this file (the
+    // deep-truncation case above never reaches that code path) and is caught
+    // only here.
+    {
+        const std::string zero_sector_path = temp_path("planck_ccamp_zero_sector_v2.ccamp");
+        const ArbitraryOrderRCCAmplitudes original = make_sample(); // no sectors
+        CCAmplitudeCheckpointMeta meta{
+            .max_rank = 2, .method = "cc2", .basis_name = "sto-3g", .n_occ = 2, .n_virt = 3};
+        auto saved = save_cc_amplitudes(zero_sector_path, original, meta);
+        assert(saved && "save should succeed");
+
+        const std::string trunc_n_sectors_path = temp_path("planck_ccamp_trunc_n_sectors.ccamp");
+        {
+            std::ifstream in(zero_sector_path, std::ios::binary);
+            std::string bytes((std::istreambuf_iterator<char>(in)), {});
+            // The file ends with the 4-byte n_sectors=0 field (no sectors
+            // present). Drop the last 2 of those 4 bytes -- the file now
+            // ends partway through n_sectors, not before it.
+            std::ofstream out(trunc_n_sectors_path, std::ios::binary | std::ios::trunc);
+            out.write(bytes.data(), static_cast<std::streamsize>(bytes.size() - 2));
+        }
+
+        auto r = load_cc_amplitudes(trunc_n_sectors_path);
+        assert(!r && "truncation partway through n_sectors itself must error");
+
+        std::filesystem::remove(zero_sector_path);
+        std::filesystem::remove(trunc_n_sectors_path);
+    }
+
     std::cout << "cc_amplitude_checkpoint: all round-trip and error cases passed\n";
     return 0;
 }

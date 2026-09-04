@@ -1,5 +1,6 @@
 #include "post_hf/cc/generated_arbitrary_runtime.h"
 
+#include <algorithm>
 #include <exception>
 #include <format>
 
@@ -191,6 +192,33 @@ namespace HartreeFock::Correlation::CC
                     "seed_arbitrary_order_amplitudes: rank-{} dim mismatch.", r + 1));
             state.amplitudes.by_rank[r] = seed.by_rank[r];
         }
+
+        // C0: apply the seed's higher Sz sectors too. Before this, only
+        // by_rank was seeded -- a cc4 restart from a sidecar carrying the
+        // independent (4, "aaabaaab") block silently left that sector at
+        // zero, a partially-seeded state that still converges (Jacobi/DIIS
+        // pulls the zero sector up) but is weaker than the "warm-started"
+        // log line reports.
+        //
+        // A seed sector with no live counterpart (or vice versa) is skipped,
+        // not an error -- same degradation policy as by_rank's per-rank
+        // dim check being fatal only for a SHAPE mismatch, never for a
+        // seed that simply carries less than the live state supports.
+        // Matching is by the (rank, tag) key, not position, since sector
+        // order is not part of the format's contract.
+        for (const auto &[seed_key, seed_tensor] : seed.sectors)
+        {
+            const auto it = std::find_if(
+                state.amplitudes.sectors.begin(), state.amplitudes.sectors.end(),
+                [&](const auto &entry) { return entry.first == seed_key; });
+            if (it == state.amplitudes.sectors.end())
+                continue; // live state has no matching sector; skip, do not fail
+            if (it->second.dims != seed_tensor.dims)
+                continue; // shape mismatch on a sector alone should not abort
+                          // the whole restart when by_rank already matched
+            it->second = seed_tensor;
+        }
+
         return {};
     }
 } // namespace HartreeFock::Correlation::CC

@@ -1007,6 +1007,33 @@ if(BUILD_TESTING)
         ${LOOKUP_SRC}
     )
 
+    # C0: seed_arbitrary_order_amplitudes must apply a seed's higher Sz
+    # sectors, not just by_rank -- same dependency list as
+    # planck-cc-all-sectors-bundle, since both need the full
+    # generated-arbitrary-order state machinery to link.
+    add_executable(planck-cc-amplitude-sector-seed
+        ${CMAKE_SOURCE_DIR}/tests/cc_amplitude_sector_seed.cpp
+        ${SRC_DIR}/post_hf/cc/common.cpp
+        ${SRC_DIR}/post_hf/cc/amplitudes.cpp
+        ${SRC_DIR}/post_hf/cc/solver_arbitrary.cpp
+        ${SRC_DIR}/post_hf/cc/diis.cpp
+        ${SRC_DIR}/post_hf/cc/generated_arbitrary_runtime.cpp
+        ${SRC_DIR}/post_hf/cc/generated_arbitrary_prepare.cpp
+        ${SRC_DIR}/post_hf/cc/ucc_blocks.cpp
+        ${SRC_DIR}/post_hf/cc/tensor_backend_state.cpp
+        ${SRC_DIR}/post_hf/cc/mo_blocks.cpp
+        ${SRC_DIR}/post_hf/integrals.cpp
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
     add_executable(planck-cc-amplitude-checkpoint
         ${CMAKE_SOURCE_DIR}/tests/cc_amplitude_checkpoint.cpp
         ${SRC_DIR}/post_hf/cc/common.cpp
@@ -1494,6 +1521,11 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-cc-amplitude-sector-seed PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-cc-amplitude-checkpoint PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -1736,6 +1768,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-cc-all-sectors-bundle PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-cc-amplitude-sector-seed PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -2021,6 +2059,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-cc-all-sectors-bundle
         COMMAND planck-cc-all-sectors-bundle
+    )
+
+    add_test(
+        NAME planck-cc-amplitude-sector-seed
+        COMMAND planck-cc-amplitude-sector-seed
     )
 
     add_test(
