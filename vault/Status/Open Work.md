@@ -73,39 +73,49 @@ truth for what remains.
   the NDEBUG gap above: real, project-wide, out of scope for the change that
   surfaced it, left for a deliberate look rather than a byproduct fix.
 
-## SCF convergence — the unclaimed 3x
+## SCF convergence — RHF SOSCF landed; UHF/ROHF/DFT and the full baseline remain
 
-- **Iteration count triples with system size, and nothing is attacking it.**
-  Measured in the committed `scale.json` (HF/6-31g water chains, serial, same
-  basis and guess throughout): **30 iterations at nb=104 rising to 91 at
-  nb=416**. At a flat 30, nb=416 would take ~2065 s instead of 6263 s — a **3x
-  multiplier on total cost that no parallel or kernel work touches**. DFT shows
-  the same cliff earlier (13 iterations to nb=208, then 51 at nb=312) and
-  **fails to converge entirely at nb=416**.
+- **RHF SOSCF is done, in `docs/SOSCF.md` (PR #167, merged into `devel`).**
+  Reuses the existing CASSCF augmented-Hessian (CIAH) solver and the
+  existing RHF orbital Hessian (`build_rhf_cphf_matrix`) completely
+  unchanged. Three real defects were found and fixed by direct measurement
+  (double-stepping against DIIS, a gradient/Hessian scale mismatch settled
+  by a finite-difference check against the true `E(kappa)`, and a
+  CASSCF-tuned AH solver tolerance mismatched to RHF's much smaller
+  gradient scale — this last one is why pure unbounded SOSCF converged only
+  linearly instead of superlinearly before the fix). Verified to reach the
+  identical energy as DIIS to all 10 digits on water/6-31G and H2/6-31G, in
+  every mode (fixed-iteration window, DIIS-error-criterion window, pure
+  unbounded). Composes cleanly with the SAD initial guess (verified, no
+  interaction). Off by default; smoke suite unaffected (33/35, matching the
+  pre-existing baseline).
 
-  This is the cheapest large win available, because the other two axes are known
-  and expensive: the ERI Fock build is ~200x slower than libcint with four
-  candidate optimizations each disproven by measurement
-  (`docs/ERI_PERFORMANCE_SCOPE.md` — closing it needs a different engine), and
-  MPI scaling is already 42-46 % efficient at 32 ranks. Iteration count
-  multiplies with **every** method: HF, DFT, and every post-HF path sitting on a
-  converged SCF.
-
-  **Most of an SOSCF already exists**, which is what makes this tractable rather
-  than a research project. `src/post_hf/casscf/aug-hessian.h` is a *generic*
-  CIAH solver — the same algorithm PySCF's SOSCF uses — whose header states it is
-  callback-driven specifically so it is **not** coupled to CASSCF data
-  structures, and it is validated by the 11/11 CASSCF gate suite.
-  `build_rhf_cphf_matrix` (`src/post_hf/rhf_response.h`) is the RHF orbital
-  Hessian, with an RI form that avoids the `nao⁴` build; `uhf_response.h` is the
-  unrestricted sibling. **The work is writing the callbacks and deciding when to
-  switch, not deriving a Hessian or writing a trust-region eigensolver.**
-
-  The one genuinely non-mechanical part is the DIIS→SOSCF switch criterion:
-  second-order steps converge quadratically near a solution and can find a saddle
-  far from one, so switching too early is worse than not switching. Scoped S1-S5
-  in `docs/SOSCF_SCOPE.md`, starting from the `diis_error` already computed every
-  iteration.
+  **Not done, and not a simple continuation of what landed:**
+  - **The original motivating measurement (the `scale.json` iteration-count
+    cliff at large `nb`) was never reproduced this session** — the ladder's
+    largest points need cluster access (32-core `notch386`), not available
+    on the laptop this landed on. Correctness was verified against finite
+    differences and exact DIIS-energy agreement instead, which doesn't
+    depend on the cluster ladder. The large-`nb` win this work was
+    originally motivated by is therefore still unmeasured.
+  - **UHF** is a mechanical port: `solve_uhf_cphf`
+    (`src/post_hf/uhf_response.cpp`) already builds the full dense coupled
+    α/β Jacobian internally, just wrapped inside a Z-vector solve rather
+    than exposed as a standalone builder the way `build_rhf_cphf_matrix`
+    is for RHF.
+  - **ROHF needs new theory, not a port** — there is no ROHF
+    orbital-response/CPHF machinery anywhere in this codebase, the same gap
+    behind ROHF-MP2/stability/PCM all being unsupported. ROHF orbitals
+    diagonalize the effective Roothaan Fock, not separate per-spin Focks —
+    the same subtlety that already forced the ROHF analytic gradient to use
+    its own `W = P^α F^α P^α + P^β F^β P^β` instead of reusing UHF's.
+  - **DFT** needs the KS SCF loop (a separate implementation in
+    `src/dft/driver.cpp`, not routed through `run_rhf`) wired through a
+    shared SOSCF path, plus the XC kernel contribution added to the
+    Hessian-vector product. The XC kernel builder itself already exists
+    in-tree (`build_closed_shell_xc_kernel_blocks` /
+    `build_unrestricted_xc_kernel_blocks`, built for TDDFT) — the gap is
+    integration, not derivation.
 
 ## FCI performance — two measured, independent items
 

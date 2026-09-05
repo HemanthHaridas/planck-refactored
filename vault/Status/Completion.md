@@ -37,6 +37,13 @@ historical design context, but they are no longer the source of truth for
 - Wavefunction stability analysis for RHF/UHF, plus optional instability following
 - Mulliken, Lowdin, Mayer, dipole, quadrupole, and related property reporting
 - PCM solvation for single-point RHF/UHF runs
+- **RHF SOSCF** (second-order, augmented-Hessian orbital step convergence
+  acceleration), reusing the CASSCF CIAH solver and RHF orbital Hessian
+  unchanged. Runs as a transient window that hands back to DIIS by default
+  (matching ORCA's own handoff), or to full unbounded convergence (same
+  energy, slower in practice). Switch trigger is a fixed iteration or the
+  DIIS error norm. Off by default; composes cleanly with SAD (verified).
+  Not yet extended to UHF, ROHF, or DFT — see `docs/SOSCF.md` and Open Work
 
 ### Direct SCF and full point-group symmetry
 

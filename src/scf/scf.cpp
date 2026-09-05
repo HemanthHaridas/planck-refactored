@@ -554,7 +554,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
     const bool use_diis = calculator._scf._use_DIIS;
     double E_prev = 0.0;
 
-    // SOSCF (docs/SOSCF_SCOPE.md, S2) reference orbitals, persisted across
+    // SOSCF (docs/SOSCF.md, S2) reference orbitals, persisted across
     // iterations. Empty until SOSCF's first active iteration, then holds the
     // MO basis the NEXT iteration's orbital gradient/Hessian are expressed
     // in -- see the note at the SOSCF branch below for why this must be the
@@ -720,7 +720,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
 
         if (soscf_active)
         {
-            // ── SOSCF (docs/SOSCF_SCOPE.md, S2) ───────────────────────────────
+            // ── SOSCF (docs/SOSCF.md, S2) ───────────────────────────────
             // RHF-only, fixed-iteration switch, no fallback logic, no
             // SAO/PCM coverage (S4+) -- S2's job is to prove the
             // augmented-Hessian step is correct, not to make the switch
