@@ -265,10 +265,34 @@ RHF Hessian than to writing the RHF SOSCF callbacks." Build the contraction
 that takes a trial rotation `x` (packed the same `(a,i)` way U1/U2 do for
 UHF, or the RHF single-channel way for RKS) and returns `H·x`.
 
+**Broken into five sub-steps (F3.1–F3.5) rather than attempted as one
+piece**, each independently buildable and independently verified against
+D1's FD oracle before the next is attempted — the same discipline U1→U2
+used (prove the isolated piece correct before composing it into anything
+larger). The natural fault lines are the same ones F1 already found
+matter: LDA is strictly simpler than GGA (no gradient coupling at all),
+and unpolarized is simpler than polarized (no cross-spin terms). Each step
+below produces a real, checkable intermediate — never "trust the algebra
+and find out at the end whether the whole thing works."
+
+| Step | Adds | New algebra | Verifies against |
+|---|---|---|---|
+| F3.1 | LDA, unpolarized `δV_xc` | `v2rho2·δρ` only | FD oracle, LDA unpolarized |
+| F3.2 | LDA, polarized `δV_xc` | spin-resolved `v2rho2` (aa/ab/bb) | FD oracle, LDA polarized |
+| F3.3 | GGA, unpolarized `δV_xc` | `v2rhosigma`/`v2sigma2` gradient coupling | FD oracle, GGA unpolarized |
+| F3.4 | GGA, polarized `δV_xc` | cross-spin gradient coupling | FD oracle, GGA polarized |
+| F3.5 | MO projection + `(a,i)` packing | none (pure plumbing) | FD oracle, full `H·x` in packed form |
+
+Each step's own verification is a closed loop: build `δV_xc` (or, for
+F3.5, the packed `H·x`) both the new way and via the FD oracle on the
+same `x` direction(s), and require agreement before moving on. **If any
+step disagrees with the oracle, stop there** — do not attempt the next,
+harder case on top of an unverified simpler one.
+
 #### What F3 needs from the D series — nothing (confirmed by reading the call site, not assumed)
 
-**F3's own verification does not depend on D2, D3, or D4 landing.** The
-existing FD-kernel oracle (`build_unrestricted_xc_kernel_blocks` /
+**None of F3.1–F3.5 depends on D2, D3, or D4 landing.** The existing
+FD-kernel oracle (`build_unrestricted_xc_kernel_blocks` /
 `build_closed_shell_xc_kernel_blocks`, `src/dft/driver.cpp`) is TDDFT
 machinery that already runs entirely **after** a converged SCF, using
 whatever ground-state density the `Calculator` already holds
@@ -281,7 +305,7 @@ or any SOSCF-window state. Both are usable today, before D2/D3/D4 write a
 single line, because TDDFT is already a landed, working feature that calls
 this exact function.
 
-Concretely, F3's verification step (below) needs only:
+Concretely, every one of F3.1–F3.5 needs only:
 - a converged DFT single-point calculation (any existing regression case
   will do — `h2_dft_pbe_sto3g` or `h2_dft_b3lyp_sto3g` are already in the
   suite),
@@ -298,82 +322,154 @@ separate, later concern from proving the Hessian is correct in the first
 place. D1 is the only D-series item F3 (and this whole doc) already
 depends on, and it is done.
 
-#### The contraction itself
+#### F3.1 — LDA, unpolarized: `δV_xc = v2rho2·δρ` (~S)
 
-1. Build `δP` from `x` (as in F2, e.g. `Ca_virt·x·Ca_occᵀ + h.c.` — the
-   same symmetric shape F2's own test fixtures already used).
-2. Evaluate `δρ` (and `δ∇ρ` for GGA) on the grid from `δP` (F2's confirmed
-   linear map — literally the same `evaluate_density_on_grid(δP)` call F2
-   verified, no new evaluator).
-3. Contract the analytic second-derivative kernel from F1
-   (`v2rho2`, `v2rhosigma`, `v2sigma2`) against `δρ`/`δ∇ρ` to produce the
-   **induced XC potential** `δV_xc` at each grid point — the genuinely new
-   algebra, structurally the second-order term in a Taylor expansion of
-   `V_xc[ρ + δρ]` around `ρ`. Derived by differentiating the existing
-   first-derivative contraction in `assemble_xc_matrix`
-   (`src/dft/ks_matrix.cpp:160-220`) one more time with respect to the
-   density, rather than guessing from a paper's notation — that existing
-   code is the concrete reference for Planck's own conventions (spin
-   layout, grid weight placement, the `2·vsigma·∇ρ` factor-of-2
-   convention already baked into `gradient_projection`'s callers). For a
-   spin-unpolarized GGA (`xc_grid.vsigma.cols() == 1` in the existing
-   code), the first-derivative potential term is
-   `V_xc += vrho·φ_μφ_ν + [2·vsigma·∇ρ]·(φ_μ∇φ_ν + ∇φ_μφ_ν)`; the induced
-   term F3 needs is this expression's own derivative with respect to `ρ`
-   and `∇ρ`, i.e. it involves `v2rho2·δρ`, `v2rhosigma·(∇ρ·δ∇ρ + δρ`-
-   weighted terms), and `v2sigma2·(∇ρ·δ∇ρ)` acting through the same
-   `2·[...]·∇ρ` structure the existing `coefficient_alpha`/
-   `coefficient_beta` computation already uses. **Work out the polarized
-   case (`xc_grid.vsigma.cols() == 3`, lines 194-206) explicitly before
-   trusting the unpolarized form generalizes** — the existing code's own
-   cross-spin `vsigma(point,1)` term shows the polarized case is not a
-   simple duplication of the unpolarized one.
-4. Project `δV_xc` back into the `(a,i)` MO block the same way
-   `assemble_xc_matrix`'s output is projected in the KS build:
-   `H·x = C_occᵀ · δV_xc(AO basis) · C_virt`.
+The simplest possible case, with zero gradient-coupling algebra: for an
+LDA functional the induced XC potential at each grid point is exactly
+`δV_xc(r) = v2rho2(r)·δρ(r)` — no `∇ρ`, no `v2rhosigma`/`v2sigma2` at all,
+since those only exist for GGA. This isolates "is the point-wise
+second-derivative contraction itself correct" from every gradient-coupling
+question F3.3/F3.4 raise.
 
-#### Verification
+Build:
+1. `δP` from a trial `x` (F2's shape).
+2. `δρ` on the grid via `evaluate_density_on_grid(δP)` (F2, unchanged).
+3. `v2rho2` on the grid via `evaluate_lda_fxc` (F1, unchanged) evaluated
+   at the GROUND-STATE density (not `δρ` — `v2rho2` is a property of the
+   point where the Taylor expansion is centered, `ρ`, not of the
+   perturbation).
+4. `δV_xc(r) = v2rho2(r)·δρ(r)`, pointwise.
+5. Project into AO basis the same way `assemble_xc_matrix`'s LDA-only
+   term does (`accumulate_local_potential`'s `phi_μ φ_ν` rank-1 update,
+   `src/dft/ks_matrix.cpp:79-93`) — reuse that pattern, do not invent a
+   new AO contraction.
 
-**Verify against D1's oracle, not against a hand-derivation alone.** On a
-small closed-shell system (an existing regression case's converged
-density is enough — no new SCF machinery needed), compute `H·x` for a
-handful of `x` directions both via this analytic path and via the existing
-`build_unrestricted_xc_kernel_blocks` FD path (feeding it a
-`ResponseExcitationSpace` covering the same directions). They must agree to
-the precision the FD path's own step size allows. **This is the load-
-bearing check for the entire step — RHF SOSCF's own history is the direct
-precedent for why**: a gradient/Hessian pairing that looks individually
-correct on each side (right functional form, right units) was still
-silently wrong by a factor of 2/4 until checked directly against the true
-`E(κ)`. Here the FD-kernel oracle plays the role the finite-difference-of-
-`E(κ)` probe played for RHF/UHF — do not skip straight to comparing energies
-after a full SOSCF run; a wrong Hessian that happens to still converge (to
-a linear rate, say) can hide for a long time, exactly as pure-unbounded RHF
-SOSCF's own scale-mismatch bug did before it was checked directly.
+*Verify:* on an LDA-only functional (e.g. Slater exchange, `lda_x` — same
+functional F1's own selfcheck used), compare `δV_xc` at every grid point
+against the FD oracle's induced potential (`build_closed_shell_xc_kernel_blocks`
+run with an `lda_x` exchange functional, LDA-only correlation set to a
+matching zero/consistent choice) for a single `(i,a)` direction on a small
+molecule (H2/STO-3G is enough — no gradient terms to exercise yet).
+Agreement to the FD path's own step-size precision.
 
-**This verification is structurally independent, not merely
-independently-run, per F2's own finding.** F2 discovered that a finite-
-difference self-consistency check cannot see a bug shared by both sides of
-the comparison (e.g. a uniform scale error). F3's comparison does not have
-this weakness: the FD-kernel oracle perturbs the density and re-evaluates
-the FULL XC potential from scratch through the ordinary first-derivative
-`exc_vxc` path, while the analytic path contracts a second-derivative
-kernel through entirely different code (`evaluate_lda_fxc`/
-`evaluate_gga_fxc`). The two share no common formula that could be wrong
-in the same way on both sides — worth stating explicitly rather than
-assuming the parallel to F1/F2's own verification style is automatically
-safe, since F2 showed that assumption can fail.
+**If this disagrees, stop before attempting F3.2.** LDA unpolarized is the
+floor — if the basic pointwise contraction is wrong here, every later step
+inherits the same defect plus its own new algebra, compounding the search.
 
-Test at least: LDA (unpolarized and polarized), GGA (unpolarized and
-polarized, to exercise the harder cross-spin `v2rhosigma`/`v2sigma2`
-terms found in F1), and both a diagonal-dominant `x` direction and one
-mixing multiple `(i,a)` pairs (F1's own sweep finding — a single clean
-direction can hide a bug an off-diagonal-heavy direction would catch,
-the same lesson U1's UHF Hessian-diagonal sweep already demonstrated).
+#### F3.2 — LDA, polarized: spin-resolved `v2rho2` (~S, after F3.1)
 
-**If this disagrees with the FD oracle, stop.** Do not wire a Hessian into
-the SOSCF loop that has not been checked against the FD reference D1 built
-for exactly this purpose.
+Same contraction, but now `v2rho2` carries the `aa`/`ab`/`bb` packing F1
+already measured and gated (3 components, not 2). The induced potential
+per spin channel becomes
+`δV_xc^α(r) = v2rho2_aa(r)·δρ_α(r) + v2rho2_ab(r)·δρ_β(r)` (and the
+mirrored `β` form) — a real new step because it is the first place the
+cross-spin coupling F1's own `lda_c_pw` mutation-check exercised actually
+enters a Hessian, not just a diagnostic.
+
+*Verify:* same shape as F3.1, on a functional with genuine cross-spin
+coupling (`lda_c_pw`, matching F1's own choice for exactly this reason —
+`lda_x`'s cross term is near-zero and would not meaningfully exercise
+this step), spin-unrestricted trial `x` (both an alpha-only and a mixed
+alpha/beta perturbation, since an alpha-only `x` cannot by itself catch a
+bug in reading `v2rho2_ab`).
+
+#### F3.3 — GGA, unpolarized: gradient coupling via `v2rhosigma`/`v2sigma2` (~M, after F3.2)
+
+The genuinely new algebra. Derive `δV_xc` for GGA by differentiating the
+existing first-derivative contraction in `assemble_xc_matrix`
+(`src/dft/ks_matrix.cpp:171-188`, the unpolarized branch) one more time
+with respect to the density — do not guess it from a paper's notation
+without checking it reduces to that existing code's own structure at
+zeroth order. The existing unpolarized potential term is
+`V_xc += vrho·φ_μφ_ν + [2·vsigma·∇ρ]·(φ_μ∇φ_ν + ∇φ_μφ_ν)`; the induced
+term is this expression's own derivative, which needs `δρ`, `δ∇ρ`
+(both from F2, unchanged), and the three grid-pointwise kernels
+`v2rho2`, `v2rhosigma`, `v2sigma2` (F1, unchanged) contracted against
+`∇ρ·δ∇ρ` the same way the existing `2·vsigma·∇ρ` coefficient already
+couples the gradient into the AO product.
+
+*Verify:* on PBE (matching F1's own GGA choice), unpolarized, with `x`
+directions chosen to have a genuinely non-uniform density gradient at the
+test geometry (a bent triatomic like water rather than a homonuclear
+diatomic, so `∇ρ` does not vanish by symmetry along the direction being
+probed) — agreement with the FD oracle to its own step-size precision.
+
+**If this disagrees, stop before attempting F3.4.** The polarized GGA case
+adds cross-spin coupling on top of this gradient algebra; debugging both
+new pieces at once from a single failure is exactly the compounding this
+ladder exists to avoid.
+
+#### F3.4 — GGA, polarized: cross-spin gradient coupling (~M, after F3.3)
+
+**Work out this case explicitly before trusting F3.3's unpolarized form
+generalizes.** The existing first-derivative polarized branch
+(`src/dft/ks_matrix.cpp:194-206`) is not a simple duplication of the
+unpolarized one — `coefficient_alpha` already mixes `vsigma(point,1)`
+(the cross density-gradient term) into the alpha channel, and the induced
+term inherits that same cross-coupling one derivative order higher,
+through `v2rhosigma`'s own 6-component polarized packing (F1's own
+finding: `2 rho-channels × 3 sigma-channels`, not a simple per-spin
+duplication).
+
+*Verify:* PBE, polarized, on a genuinely open-shell system (matching the
+"do not test only closed-shell" lesson U1 already learned the hard way for
+UHF) — a doublet or triplet small molecule, both a same-spin and a
+cross-spin `x` direction, against the FD oracle.
+
+#### F3.5 — MO projection and `(a,i)` packing (~S, after F3.4)
+
+Pure plumbing, no new physics: project the verified `δV_xc` (whichever of
+F3.1–F3.4's cases applies) into the `(a,i)` MO block the same way
+`assemble_xc_matrix`'s output is projected in the KS build —
+`H·x = C_occᵀ · δV_xc(AO basis) · C_virt` — and pack the result into the
+same flat `(a,i)` vector layout U1/U2 already use for the UHF CPHF
+matrix, so the eventual F4/F5 wiring can hand this directly to
+`solve_augmented_hessian` without another translation layer.
+
+*Verify:* the packed, projected `H·x` from this step matches a
+*full end-to-end* FD-oracle comparison (build the FD oracle's own
+`ResponseExcitationSpace`-packed kernel block and compare element-by-
+element, not just the raw AO-basis `δV_xc` from the earlier steps) — this
+is the first point where a packing-index bug (row/column transposition,
+`(a,i)` vs `(i,a)` ordering) could hide independently of every earlier
+step's own correctness, so it needs its own dedicated check.
+
+#### Cross-cutting notes (apply to all of F3.1–F3.5)
+
+**Verify against D1's oracle at every step, not against a hand-derivation
+alone, and not only once at the end.** This is the load-bearing discipline
+for all five sub-steps — RHF SOSCF's own history is the direct precedent
+for why: a gradient/Hessian pairing that looked individually correct on
+each side (right functional form, right units) was still silently wrong by
+a factor of 2/4 until checked directly against the true `E(κ)`. Here the
+FD-kernel oracle plays the role the finite-difference-of-`E(κ)` probe
+played for RHF/UHF. Do not skip straight to comparing full-SOSCF-run
+energies once F3.5 lands; a wrong Hessian that happens to still converge
+(to a linear rate, say) can hide for a long time, exactly as pure-unbounded
+RHF SOSCF's own scale-mismatch bug did before it was checked directly. The
+five-step ladder exists specifically so a defect is caught at the smallest
+sub-step that can exhibit it, rather than surfacing only once every piece
+is assembled.
+
+**Each sub-step's own oracle comparison is structurally independent, not
+merely independently-run, per F2's own finding.** F2 discovered that a
+finite-difference self-consistency check cannot see a bug shared by both
+sides of the comparison (e.g. a uniform scale error, mutation-verified
+there). F3's comparisons do not have this weakness: the FD-kernel oracle
+perturbs the density and re-evaluates the FULL XC potential from scratch
+through the ordinary first-derivative `exc_vxc` path, while the analytic
+path contracts a second-derivative kernel through entirely different code
+(`evaluate_lda_fxc`/`evaluate_gga_fxc`). The two share no common formula
+that could be wrong in the same way on both sides — worth stating
+explicitly rather than assuming the parallel to F1/F2's own verification
+style is automatically safe, since F2 showed that assumption can fail in
+general.
+
+**Within each sub-step, test more than one `x` direction.** A single
+diagonal-dominant direction can hide a bug an off-diagonal-heavy direction
+would catch — F1's own full-index sweep and U1's UHF Hessian-diagonal
+sweep both found exactly this shape of gap when they moved from one probed
+direction to many.
 
 ### F4 — RKS wiring, mirroring D2 (~M, after F3's Hessian-vector product is verified)
 
