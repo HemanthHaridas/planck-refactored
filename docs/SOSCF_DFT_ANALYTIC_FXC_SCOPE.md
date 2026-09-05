@@ -322,7 +322,7 @@ separate, later concern from proving the Hessian is correct in the first
 place. D1 is the only D-series item F3 (and this whole doc) already
 depends on, and it is done.
 
-#### F3.1 — LDA, unpolarized: `δV_xc = v2rho2·δρ` (~S)
+#### F3.1 — LDA, unpolarized: `δV_xc = v2rho2·δρ` (~S) — DONE
 
 The simplest possible case, with zero gradient-coupling algebra: for an
 LDA functional the induced XC potential at each grid point is exactly
@@ -355,6 +355,69 @@ Agreement to the FD path's own step-size precision.
 **If this disagrees, stop before attempting F3.2.** LDA unpolarized is the
 floor — if the basic pointwise contraction is wrong here, every later step
 inherits the same defect plus its own new algebra, compounding the search.
+
+**Landed. Result: `δV_xc = v2rho2·δρ` matches the FD oracle to
+`~2e-10`–`~3e-11` on two independent systems (H2/STO-3G, water/STO-3G) and
+two different `(i,a)` directions**, once two real bugs — one in the plan,
+one pre-existing and unrelated — were found and fixed.
+
+**Prerequisite fix, not anticipated by the scope: `build_closed_shell_xc_kernel_blocks`
+and `ResponseExcitationSpace` had internal linkage** (defined inside
+`driver.cpp`'s file-spanning anonymous namespace), so the FD-kernel oracle
+was not callable from outside `driver.cpp` at all — confirmed before
+writing any verification code, not assumed from the doc's own plan. Fixed
+by moving `ResponseExcitationSpace`, `ResponseEigenpair`,
+`transition_density_matrix`, `evaluate_xc_matrix_from_spin_densities`,
+`build_unrestricted_xc_kernel_blocks`, and `build_closed_shell_xc_kernel_blocks`
+out of the anonymous namespace (declared in `driver.h`, bodies relocated to
+just after the namespace closes, mirroring the existing
+`evaluate_current_density_and_xc` placement) — a pure move, no logic
+changed. Verified behavior-neutral: all 4 TDDFT regression cases and the
+full core (71) + smoke (35) suites pass unchanged.
+
+**A second, pre-existing and unrelated bug was found while building a
+test fixture, before any comparison ran: `correlation vwn5` never
+resolved to a real functional.** `driver.cpp` mapped `VWN5` to the libxc
+name `"lda_c_vwn_5"`, which does not exist in libxc's functional table at
+all (`src/external/libxc/install/include/xc_funcs.h` has `lda_c_vwn` for
+VWN5 and separately-numbered `lda_c_vwn_{1,2,3,4}` for VWN1-4 — VWN5 alone
+carries no numeric suffix). Zero regression coverage exercises VWN5, so
+this had never been caught. Fixed the one-line mapping; verified the
+functional now resolves and a real LDA (Slater + VWN5) single point
+converges correctly.
+
+**The real finding, once both of the above were out of the way: the
+oracle's `.first` alone is not the correct RHF-orbital-rotation quantity —
+`.first + .second` (same-spin plus cross-spin) is.** First measurement
+disagreed by `1.989e-02` (~15% relative) using `oracle_blocks->first`
+alone (the `aa` block only). Root-caused by reading the real TDDFT call
+site rather than guessing: the singlet-response path there computes
+`kxc = kxc_same + kxc_cross`, never `kxc_same` alone, because a real
+orbital rotation in the closed-shell (RKS) formalism moves both spin
+channels identically — exactly the singlet case, not the triplet (which
+subtracts). Switching to `.first + .second` brought the two probed
+directions to `2.6e-11` and `1.8e-10` agreement respectively. This is the
+quantity F3.5's own MO-projection/packing step must carry forward — not
+`.first` alone.
+
+**One more thing verified along the way and worth recording as a negative
+result: an apparent large second-direction disagreement (`7.9e-2`,
+sign-flipped) was traced to a test-harness bug in the debug probe itself
+(a stale, un-updated column index left over from probing a second
+`(a,i)` pair), not a code defect** — re-checked by fixing the stale index
+and re-running, which brought that direction to `1.8e-10` agreement too.
+Recorded here because it is exactly the kind of false alarm this ladder's
+"stop and investigate" discipline exists to filter correctly: a
+disagreement is not evidence of a wrong formula until the comparison
+harness itself has been checked for the more mundane failure mode first.
+
+Landed as an env-gated debug probe (`PLANCK_FXC_F3_1_CHECK`, inert by
+default, same shape as the `PLANCK_SOSCF_FD_CHECK` probes in
+`src/scf/scf.cpp`) inside `run_ks_scf_scaffold`'s RKS convergence branch in
+`src/dft/driver.cpp` — not yet a permanent ctest, since F3.1 is one step
+in an ongoing ladder and the probe will need generalizing (spin, GGA) as
+F3.2–F3.5 land; a committed regression gate is better added once the full
+`H·x` (F3.5) exists to gate on, rather than one per sub-step.
 
 #### F3.2 — LDA, polarized: spin-resolved `v2rho2` (~S, after F3.1)
 

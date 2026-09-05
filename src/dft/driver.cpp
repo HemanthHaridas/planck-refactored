@@ -357,7 +357,15 @@ namespace DFT::Driver
             case HartreeFock::XCCorrelationFunctional::Custom:
                 return std::unexpected("No explicit libxc correlation functional id was provided for Custom correlation");
             case HartreeFock::XCCorrelationFunctional::VWN5:
-                functional_name = "lda_c_vwn_5";
+                // libxc names VWN5 plain "lda_c_vwn" (id 7); "lda_c_vwn_5"
+                // does not exist in libxc's functional table at all (verified
+                // against src/external/libxc/install/include/xc_funcs.h --
+                // VWN1-4 are lda_c_vwn_{1,2,3,4}, VWN5 has no numeric suffix).
+                // Found while building the F3.1 verification probe
+                // (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): `correlation vwn5`
+                // has never resolved to a real functional, and nothing in the
+                // regression suite exercises VWN5 to have caught it.
+                functional_name = "lda_c_vwn";
                 break;
             case HartreeFock::XCCorrelationFunctional::LYP:
                 functional_name = "gga_c_lyp";
@@ -880,35 +888,13 @@ namespace DFT::Driver
             return occupancy * occupied * occupied.transpose();
         }
 
-        struct ResponseExcitationSpace
-        {
-            std::string spin_label;
-            int n_occ = 0;
-            int n_virt = 0;
-            int mo_offset = 0;
-            Eigen::MatrixXd C_occ;
-            Eigen::MatrixXd C_virt;
-            Eigen::VectorXd occ_energies;
-            Eigen::VectorXd virt_energies;
-            std::vector<std::string> mo_symmetry;
-
-            [[nodiscard]] int nov() const noexcept
-            {
-                return n_occ * n_virt;
-            }
-
-            [[nodiscard]] int flat_index(int i, int a) const noexcept
-            {
-                return i * n_virt + a;
-            }
-        };
-
-        struct ResponseEigenpair
-        {
-            double omega = 0.0;
-            Eigen::VectorXd x;
-            Eigen::VectorXd y;
-        };
+        // ResponseExcitationSpace, ResponseEigenpair, transition_density_matrix,
+        // evaluate_xc_matrix_from_spin_densities, build_unrestricted_xc_kernel_blocks,
+        // and build_closed_shell_xc_kernel_blocks moved to driver.h/below the
+        // anonymous namespace (F3.1, docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md) so
+        // F3's verification can call the FD-kernel oracle from a standalone
+        // test binary. driver.h is included at the top of this file, so their
+        // declarations are visible here unchanged.
 
         std::string linear_response_method_label(HartreeFock::LinearResponseMethod method)
         {
@@ -1128,156 +1114,6 @@ namespace DFT::Driver
             }
             std::cout << std::string(66, '-') << "\n";
             HartreeFock::Logger::blank();
-        }
-
-        Eigen::MatrixXd transition_density_matrix(
-            const Eigen::Ref<const Eigen::VectorXd> &occupied,
-            const Eigen::Ref<const Eigen::VectorXd> &virtual_orbital)
-        {
-            const Eigen::MatrixXd unsymmetrized = occupied * virtual_orbital.transpose();
-            return (0.5 * (unsymmetrized + unsymmetrized.transpose())).eval();
-        }
-
-        std::expected<XCMatrixContribution, std::string> evaluate_xc_matrix_from_spin_densities(
-            const PreparedSystem &prepared,
-            const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
-            const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
-            const DFT::XC::Functional &exchange_functional,
-            const DFT::XC::Functional &correlation_functional)
-        {
-            auto xc_grid = evaluate_xc_on_grid(
-                prepared.molecular_grid,
-                prepared.ao_grid,
-                alpha_density,
-                beta_density,
-                exchange_functional,
-                correlation_functional);
-            if (!xc_grid)
-                return std::unexpected(xc_grid.error());
-
-            auto xc_matrix = assemble_xc_matrix(
-                prepared.molecular_grid,
-                prepared.ao_grid,
-                *xc_grid);
-            if (!xc_matrix)
-                return std::unexpected(xc_matrix.error());
-
-            return *xc_matrix;
-        }
-
-        std::expected<std::vector<std::vector<Eigen::MatrixXd>>, std::string> build_unrestricted_xc_kernel_blocks(
-            const PreparedSystem &prepared,
-            const std::vector<ResponseExcitationSpace> &spaces,
-            const Eigen::Ref<const Eigen::MatrixXd> &ground_alpha_density,
-            const Eigen::Ref<const Eigen::MatrixXd> &ground_beta_density,
-            const DFT::XC::Functional &exchange_functional,
-            const DFT::XC::Functional &correlation_functional)
-        {
-            const int nspaces = static_cast<int>(spaces.size());
-            std::vector<std::vector<Eigen::MatrixXd>> blocks(
-                static_cast<std::size_t>(nspaces),
-                std::vector<Eigen::MatrixXd>(static_cast<std::size_t>(nspaces)));
-
-            for (int target = 0; target < nspaces; ++target)
-                for (int source = 0; source < nspaces; ++source)
-                    blocks[static_cast<std::size_t>(target)][static_cast<std::size_t>(source)] =
-                        Eigen::MatrixXd::Zero(spaces[static_cast<std::size_t>(target)].nov(),
-                                              spaces[static_cast<std::size_t>(source)].nov());
-
-            for (int source = 0; source < nspaces; ++source)
-            {
-                const ResponseExcitationSpace &source_space = spaces[static_cast<std::size_t>(source)];
-                for (int j = 0; j < source_space.n_occ; ++j)
-                    for (int b = 0; b < source_space.n_virt; ++b)
-                    {
-                        const Eigen::MatrixXd delta_density =
-                            transition_density_matrix(source_space.C_occ.col(j), source_space.C_virt.col(b));
-                        const double delta_scale = std::max(1.0, delta_density.cwiseAbs().maxCoeff());
-                        const double step = 1.0e-5 / delta_scale;
-
-                        Eigen::MatrixXd alpha_plus = ground_alpha_density;
-                        Eigen::MatrixXd alpha_minus = ground_alpha_density;
-                        Eigen::MatrixXd beta_plus = ground_beta_density;
-                        Eigen::MatrixXd beta_minus = ground_beta_density;
-
-                        if (source == 0)
-                        {
-                            alpha_plus += step * delta_density;
-                            alpha_minus -= step * delta_density;
-                        }
-                        else
-                        {
-                            beta_plus += step * delta_density;
-                            beta_minus -= step * delta_density;
-                        }
-
-                        auto plus = evaluate_xc_matrix_from_spin_densities(
-                            prepared,
-                            alpha_plus,
-                            beta_plus,
-                            exchange_functional,
-                            correlation_functional);
-                        if (!plus)
-                            return std::unexpected("TDDFT XC kernel (+) evaluation failed: " + plus.error());
-
-                        auto minus = evaluate_xc_matrix_from_spin_densities(
-                            prepared,
-                            alpha_minus,
-                            beta_minus,
-                            exchange_functional,
-                            correlation_functional);
-                        if (!minus)
-                            return std::unexpected("TDDFT XC kernel (-) evaluation failed: " + minus.error());
-
-                        const Eigen::MatrixXd delta_v_alpha =
-                            (plus->alpha - minus->alpha) / (2.0 * step);
-                        const Eigen::MatrixXd delta_v_beta =
-                            (plus->beta - minus->beta) / (2.0 * step);
-
-                        const int source_column = source_space.flat_index(j, b);
-                        for (int target = 0; target < nspaces; ++target)
-                        {
-                            const ResponseExcitationSpace &target_space = spaces[static_cast<std::size_t>(target)];
-                            const Eigen::MatrixXd &delta_v = (target == 0) ? delta_v_alpha : delta_v_beta;
-                            const Eigen::MatrixXd projected =
-                                target_space.C_occ.transpose() * delta_v * target_space.C_virt;
-
-                            for (int i = 0; i < target_space.n_occ; ++i)
-                                for (int a = 0; a < target_space.n_virt; ++a)
-                                    blocks[static_cast<std::size_t>(target)][static_cast<std::size_t>(source)](
-                                        target_space.flat_index(i, a),
-                                        source_column) = projected(i, a);
-                        }
-                    }
-            }
-
-            return blocks;
-        }
-
-        std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string> build_closed_shell_xc_kernel_blocks(
-            const PreparedSystem &prepared,
-            const ResponseExcitationSpace &space,
-            const Eigen::Ref<const Eigen::MatrixXd> &restricted_density,
-            const DFT::XC::Functional &exchange_functional,
-            const DFT::XC::Functional &correlation_functional)
-        {
-            const Eigen::MatrixXd ground_alpha = 0.5 * restricted_density;
-            const Eigen::MatrixXd ground_beta = 0.5 * restricted_density;
-            const std::vector<ResponseExcitationSpace> duplicated_spaces = {space, space};
-
-            auto blocks = build_unrestricted_xc_kernel_blocks(
-                prepared,
-                duplicated_spaces,
-                ground_alpha,
-                ground_beta,
-                exchange_functional,
-                correlation_functional);
-            if (!blocks)
-                return std::unexpected(blocks.error());
-
-            return std::make_pair(
-                (*blocks)[0][0],
-                (*blocks)[0][1]);
         }
 
         std::expected<std::vector<ResponseEigenpair>, std::string> solve_response_problem(
@@ -2146,6 +1982,176 @@ namespace DFT::Driver
                             "RKS Converged :",
                             std::format("E = {:.10f} Eh after {} iterations", total_energy, iter));
                         HartreeFock::Logger::blank();
+
+                        // F3.1 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): LDA
+                        // unpolarized Hessian-vector product, verified against
+                        // the FD-kernel oracle. Env-gated debug probe, same
+                        // shape as the PLANCK_SOSCF_FD_CHECK probes in
+                        // src/scf/scf.cpp -- never runs in a normal build.
+                        // LDA-only guard: this is F3.1's own scope, not GGA
+                        // (that is F3.3).
+                        if (std::getenv("PLANCK_FXC_F3_1_CHECK") && x_functional.is_lda_like() &&
+                            c_functional.is_lda_like())
+                        {
+                            const int n_virt = static_cast<int>(nbasis) - static_cast<int>(n_occ);
+                            if (n_virt > 0)
+                            {
+                                const Eigen::MatrixXd &C = diagonalization->coefficients;
+                                const Eigen::MatrixXd C_occ = C.leftCols(static_cast<Eigen::Index>(n_occ));
+                                const Eigen::MatrixXd C_virt = C.rightCols(n_virt);
+
+                                // Trial rotation on (a=0, i=0): dP = C_virt x C_occ^T + h.c.
+                                const Eigen::MatrixXd dP =
+                                    (C_virt.col(0) * C_occ.col(0).transpose() +
+                                     C_occ.col(0) * C_virt.col(0).transpose())
+                                        .eval();
+
+                                auto drho = evaluate_density_on_grid(prepared.ao_grid, dP);
+                                if (!drho)
+                                {
+                                    HartreeFock::Logger::logging(
+                                        HartreeFock::LogLevel::Info, "F3.1[FD] :",
+                                        "evaluate_density_on_grid(dP) failed: " + drho.error());
+                                }
+                                else
+                                {
+                                    // rho at the GROUND-STATE density (Taylor
+                                    // expansion center), not dP.
+                                    auto ground_density_on_grid =
+                                        evaluate_density_on_grid(prepared.ao_grid, density);
+                                    if (!ground_density_on_grid)
+                                    {
+                                        HartreeFock::Logger::logging(
+                                            HartreeFock::LogLevel::Info, "F3.1[FD] :",
+                                            "evaluate_density_on_grid(P) failed: " + ground_density_on_grid.error());
+                                    }
+                                    else
+                                    {
+                                        const Eigen::Index npoints = prepared.ao_grid.npoints();
+                                        std::vector<double> rho_vec(static_cast<std::size_t>(npoints));
+                                        for (Eigen::Index p = 0; p < npoints; ++p)
+                                            rho_vec[static_cast<std::size_t>(p)] = ground_density_on_grid->total.rho(p);
+
+                                        std::vector<double> v2rho2;
+                                        auto fxc = x_functional.evaluate_lda_fxc(
+                                            rho_vec, static_cast<int>(npoints), v2rho2);
+                                        if (!fxc)
+                                        {
+                                            HartreeFock::Logger::logging(
+                                                HartreeFock::LogLevel::Info, "F3.1[FD] :",
+                                                "evaluate_lda_fxc failed: " + fxc.error());
+                                        }
+                                        else
+                                        {
+                                            // Correlation contributes too (both
+                                            // exchange and correlation are
+                                            // LDA-like here), so v2rho2 is the
+                                            // SUM of both functionals' second
+                                            // derivatives -- the same additivity
+                                            // the first-derivative KS build
+                                            // already relies on (vrho =
+                                            // exchange.vrho + correlation.vrho).
+                                            std::vector<double> v2rho2_c;
+                                            auto fxc_c = c_functional.evaluate_lda_fxc(
+                                                rho_vec, static_cast<int>(npoints), v2rho2_c);
+                                            if (!fxc_c)
+                                            {
+                                                HartreeFock::Logger::logging(
+                                                    HartreeFock::LogLevel::Info, "F3.1[FD] :",
+                                                    "evaluate_lda_fxc (correlation) failed: " + fxc_c.error());
+                                            }
+                                            else
+                                            {
+                                                // delta_V_xc(r) = v2rho2(r) * delta_rho(r), pointwise --
+                                                // then projected into the AO basis the same rank-1 way
+                                                // assemble_xc_matrix's LDA-only term does.
+                                                Eigen::MatrixXd delta_V_ao =
+                                                    Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(nbasis),
+                                                                         static_cast<Eigen::Index>(nbasis));
+                                                for (Eigen::Index p = 0; p < npoints; ++p)
+                                                {
+                                                    const double weight = prepared.molecular_grid.points(p, 3);
+                                                    if (weight == 0.0)
+                                                        continue;
+                                                    const double v2rho2_total =
+                                                        v2rho2[static_cast<std::size_t>(p)] +
+                                                        v2rho2_c[static_cast<std::size_t>(p)];
+                                                    const double delta_v = v2rho2_total * drho->total.rho(p);
+                                                    const auto phi = prepared.ao_grid.values.row(p).transpose();
+                                                    delta_V_ao.noalias() += (weight * delta_v) * (phi * phi.transpose());
+                                                }
+
+                                                const double Hx_analytic =
+                                                    (C_occ.col(0).transpose() * delta_V_ao * C_virt.col(0))(0, 0);
+
+                                                // FD oracle: build_closed_shell_xc_kernel_blocks on the
+                                                // SAME (a=0,i=0) direction. The oracle is spin-resolved
+                                                // internally (it calls build_unrestricted_xc_kernel_blocks),
+                                                // so it needs its OWN Polarized functionals, not the
+                                                // Unpolarized ones the RKS ground-state loop uses -- the
+                                                // exact convention the real TDDFT call site already
+                                                // follows (fresh Functional::create(..., Polarized) from
+                                                // the same functional id, not a reuse of x_functional/
+                                                // c_functional).
+                                                ResponseExcitationSpace space;
+                                                space.spin_label = "closed-shell";
+                                                space.n_occ = static_cast<int>(n_occ);
+                                                space.n_virt = n_virt;
+                                                space.C_occ = C_occ;
+                                                space.C_virt = C_virt;
+
+                                                auto oracle_exchange = DFT::XC::Functional::create(
+                                                    calculator._dft._exchange_id, DFT::XC::Spin::Polarized);
+                                                auto oracle_correlation = DFT::XC::Functional::create(
+                                                    calculator._dft._correlation_id, DFT::XC::Spin::Polarized);
+                                                if (!oracle_exchange || !oracle_correlation)
+                                                {
+                                                    HartreeFock::Logger::logging(
+                                                        HartreeFock::LogLevel::Info, "F3.1[FD] :",
+                                                        "polarized oracle functional init failed");
+                                                    return result;
+                                                }
+
+                                                auto oracle_blocks = build_closed_shell_xc_kernel_blocks(
+                                                    prepared, space, density, *oracle_exchange, *oracle_correlation);
+                                                if (!oracle_blocks)
+                                                {
+                                                    HartreeFock::Logger::logging(
+                                                        HartreeFock::LogLevel::Info, "F3.1[FD] :",
+                                                        "build_closed_shell_xc_kernel_blocks failed: " +
+                                                            oracle_blocks.error());
+                                                }
+                                                else
+                                                {
+                                                    // The real TDDFT singlet-response call site sums
+                                                    // kxc_same + kxc_cross (src/dft/driver.cpp, the
+                                                    // "kxc = kxc_same + kxc_cross" line) -- a real,
+                                                    // in-place SOSCF orbital rotation moves BOTH spin
+                                                    // channels identically in the closed-shell (RKS)
+                                                    // formalism, exactly the singlet-response case, not
+                                                    // the triplet (which subtracts). oracle_blocks->first
+                                                    // ALONE (verified directly: 1.989e-02 disagreement,
+                                                    // ~15% relative) is not the physically correct
+                                                    // quantity.
+                                                    const double Hx_oracle =
+                                                        oracle_blocks->first(
+                                                            space.flat_index(0, 0), space.flat_index(0, 0)) +
+                                                        oracle_blocks->second(
+                                                            space.flat_index(0, 0), space.flat_index(0, 0));
+                                                    HartreeFock::Logger::logging(
+                                                        HartreeFock::LogLevel::Info, "F3.1[FD] :",
+                                                        std::format(
+                                                            "Hx_analytic={:.10f} Hx_oracle={:.10f} diff={:.3e}",
+                                                            Hx_analytic, Hx_oracle,
+                                                            std::abs(Hx_analytic - Hx_oracle)));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         return result;
                     }
                 }
@@ -3198,6 +3204,161 @@ namespace DFT::Driver
         }
 
     } // namespace
+
+    // Moved out of the anonymous namespace above (F3.1,
+    // docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md) so F3's own Hessian-vector-
+    // product verification can call the FD-kernel oracle directly from a
+    // standalone test binary. Declared in driver.h; bodies unchanged from
+    // their original internal-linkage form.
+    Eigen::MatrixXd transition_density_matrix(
+        const Eigen::Ref<const Eigen::VectorXd> &occupied,
+        const Eigen::Ref<const Eigen::VectorXd> &virtual_orbital)
+    {
+        const Eigen::MatrixXd unsymmetrized = occupied * virtual_orbital.transpose();
+        return (0.5 * (unsymmetrized + unsymmetrized.transpose())).eval();
+    }
+
+    std::expected<XCMatrixContribution, std::string> evaluate_xc_matrix_from_spin_densities(
+        const PreparedSystem &prepared,
+        const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
+        const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
+        const DFT::XC::Functional &exchange_functional,
+        const DFT::XC::Functional &correlation_functional)
+    {
+        auto xc_grid = evaluate_xc_on_grid(
+            prepared.molecular_grid,
+            prepared.ao_grid,
+            alpha_density,
+            beta_density,
+            exchange_functional,
+            correlation_functional);
+        if (!xc_grid)
+            return std::unexpected(xc_grid.error());
+
+        auto xc_matrix = assemble_xc_matrix(
+            prepared.molecular_grid,
+            prepared.ao_grid,
+            *xc_grid);
+        if (!xc_matrix)
+            return std::unexpected(xc_matrix.error());
+
+        return *xc_matrix;
+    }
+
+    std::expected<std::vector<std::vector<Eigen::MatrixXd>>, std::string> build_unrestricted_xc_kernel_blocks(
+        const PreparedSystem &prepared,
+        const std::vector<ResponseExcitationSpace> &spaces,
+        const Eigen::Ref<const Eigen::MatrixXd> &ground_alpha_density,
+        const Eigen::Ref<const Eigen::MatrixXd> &ground_beta_density,
+        const DFT::XC::Functional &exchange_functional,
+        const DFT::XC::Functional &correlation_functional)
+    {
+        const int nspaces = static_cast<int>(spaces.size());
+        std::vector<std::vector<Eigen::MatrixXd>> blocks(
+            static_cast<std::size_t>(nspaces),
+            std::vector<Eigen::MatrixXd>(static_cast<std::size_t>(nspaces)));
+
+        for (int target = 0; target < nspaces; ++target)
+            for (int source = 0; source < nspaces; ++source)
+                blocks[static_cast<std::size_t>(target)][static_cast<std::size_t>(source)] =
+                    Eigen::MatrixXd::Zero(spaces[static_cast<std::size_t>(target)].nov(),
+                                          spaces[static_cast<std::size_t>(source)].nov());
+
+        for (int source = 0; source < nspaces; ++source)
+        {
+            const ResponseExcitationSpace &source_space = spaces[static_cast<std::size_t>(source)];
+            for (int j = 0; j < source_space.n_occ; ++j)
+                for (int b = 0; b < source_space.n_virt; ++b)
+                {
+                    const Eigen::MatrixXd delta_density =
+                        transition_density_matrix(source_space.C_occ.col(j), source_space.C_virt.col(b));
+                    const double delta_scale = std::max(1.0, delta_density.cwiseAbs().maxCoeff());
+                    const double step = 1.0e-5 / delta_scale;
+
+                    Eigen::MatrixXd alpha_plus = ground_alpha_density;
+                    Eigen::MatrixXd alpha_minus = ground_alpha_density;
+                    Eigen::MatrixXd beta_plus = ground_beta_density;
+                    Eigen::MatrixXd beta_minus = ground_beta_density;
+
+                    if (source == 0)
+                    {
+                        alpha_plus += step * delta_density;
+                        alpha_minus -= step * delta_density;
+                    }
+                    else
+                    {
+                        beta_plus += step * delta_density;
+                        beta_minus -= step * delta_density;
+                    }
+
+                    auto plus = evaluate_xc_matrix_from_spin_densities(
+                        prepared,
+                        alpha_plus,
+                        beta_plus,
+                        exchange_functional,
+                        correlation_functional);
+                    if (!plus)
+                        return std::unexpected("TDDFT XC kernel (+) evaluation failed: " + plus.error());
+
+                    auto minus = evaluate_xc_matrix_from_spin_densities(
+                        prepared,
+                        alpha_minus,
+                        beta_minus,
+                        exchange_functional,
+                        correlation_functional);
+                    if (!minus)
+                        return std::unexpected("TDDFT XC kernel (-) evaluation failed: " + minus.error());
+
+                    const Eigen::MatrixXd delta_v_alpha =
+                        (plus->alpha - minus->alpha) / (2.0 * step);
+                    const Eigen::MatrixXd delta_v_beta =
+                        (plus->beta - minus->beta) / (2.0 * step);
+
+                    const int source_column = source_space.flat_index(j, b);
+                    for (int target = 0; target < nspaces; ++target)
+                    {
+                        const ResponseExcitationSpace &target_space = spaces[static_cast<std::size_t>(target)];
+                        const Eigen::MatrixXd &delta_v = (target == 0) ? delta_v_alpha : delta_v_beta;
+                        const Eigen::MatrixXd projected =
+                            target_space.C_occ.transpose() * delta_v * target_space.C_virt;
+
+                        for (int i = 0; i < target_space.n_occ; ++i)
+                            for (int a = 0; a < target_space.n_virt; ++a)
+                                blocks[static_cast<std::size_t>(target)][static_cast<std::size_t>(source)](
+                                    target_space.flat_index(i, a),
+                                    source_column) = projected(i, a);
+                    }
+                }
+        }
+
+        return blocks;
+    }
+
+    std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string> build_closed_shell_xc_kernel_blocks(
+        const PreparedSystem &prepared,
+        const ResponseExcitationSpace &space,
+        const Eigen::Ref<const Eigen::MatrixXd> &restricted_density,
+        const DFT::XC::Functional &exchange_functional,
+        const DFT::XC::Functional &correlation_functional)
+    {
+        const Eigen::MatrixXd ground_alpha = 0.5 * restricted_density;
+        const Eigen::MatrixXd ground_beta = 0.5 * restricted_density;
+        const std::vector<ResponseExcitationSpace> duplicated_spaces = {space, space};
+
+        auto blocks = build_unrestricted_xc_kernel_blocks(
+            prepared,
+            duplicated_spaces,
+            ground_alpha,
+            ground_beta,
+            exchange_functional,
+            correlation_functional);
+        if (!blocks)
+            return std::unexpected(blocks.error());
+
+        return std::make_pair(
+            (*blocks)[0][0],
+            (*blocks)[0][1]);
+    }
 
     std::expected<XCGridEvaluation, std::string>
     evaluate_current_density_and_xc(
