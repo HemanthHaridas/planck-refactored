@@ -263,33 +263,81 @@ assuming the parallel is safe.
 This is the step the doc's framing calls "closer in kind to deriving the
 RHF Hessian than to writing the RHF SOSCF callbacks." Build the contraction
 that takes a trial rotation `x` (packed the same `(a,i)` way U1/U2 do for
-UHF, or the RHF single-channel way for RKS) and returns `H·x`:
+UHF, or the RHF single-channel way for RKS) and returns `H·x`.
 
-1. Build `δP` from `x` (as in F2).
-2. Evaluate `δρ` (and `δ∇ρ` for GGA) on the grid from `δP` (F2's linear
-   map).
+#### What F3 needs from the D series — nothing (confirmed by reading the call site, not assumed)
+
+**F3's own verification does not depend on D2, D3, or D4 landing.** The
+existing FD-kernel oracle (`build_unrestricted_xc_kernel_blocks` /
+`build_closed_shell_xc_kernel_blocks`, `src/dft/driver.cpp`) is TDDFT
+machinery that already runs entirely **after** a converged SCF, using
+whatever ground-state density the `Calculator` already holds
+(`calculator._info._scf.alpha.density` / `.beta.density`) and a
+`PreparedSystem` built once via the existing standalone
+`DFT::Driver::prepare(calculator, options)` — confirmed by reading the
+real TDDFT call site (`src/dft/driver.cpp`, the `kxc_blocks` construction
+inside the linear-response block), which never touches `run_rhf`/`run_uhf`
+or any SOSCF-window state. Both are usable today, before D2/D3/D4 write a
+single line, because TDDFT is already a landed, working feature that calls
+this exact function.
+
+Concretely, F3's verification step (below) needs only:
+- a converged DFT single-point calculation (any existing regression case
+  will do — `h2_dft_pbe_sto3g` or `h2_dft_b3lyp_sto3g` are already in the
+  suite),
+- the `PreparedSystem` and `ResponseExcitationSpace` that calculation
+  already builds for TDDFT-shaped work, spanning a handful of `(i,a)`
+  directions rather than a full TDDFT root search,
+- and F1's new `evaluate_lda_fxc`/`evaluate_gga_fxc` plus F2's confirmed-
+  linear density evaluator.
+
+None of that is gated on the SOSCF loop itself. **D2 (RKS SOSCF insertion
+point) and D3 (UKS generalization) are F4/F5's prerequisites, not F3's** —
+they wire the *verified* Hessian into the running SCF loop, which is a
+separate, later concern from proving the Hessian is correct in the first
+place. D1 is the only D-series item F3 (and this whole doc) already
+depends on, and it is done.
+
+#### The contraction itself
+
+1. Build `δP` from `x` (as in F2, e.g. `Ca_virt·x·Ca_occᵀ + h.c.` — the
+   same symmetric shape F2's own test fixtures already used).
+2. Evaluate `δρ` (and `δ∇ρ` for GGA) on the grid from `δP` (F2's confirmed
+   linear map — literally the same `evaluate_density_on_grid(δP)` call F2
+   verified, no new evaluator).
 3. Contract the analytic second-derivative kernel from F1
    (`v2rho2`, `v2rhosigma`, `v2sigma2`) against `δρ`/`δ∇ρ` to produce the
    **induced XC potential** `δV_xc` at each grid point — the genuinely new
    algebra, structurally the second-order term in a Taylor expansion of
-   `V_xc[ρ + δρ]` around `ρ`:
-   ```
-   δV_xc(r) = v2rho2(r)·δρ(r) + v2rhosigma(r)·[2∇ρ(r)·δ∇ρ(r)]   (LDA term + GGA cross term)
-            + [GGA-only terms coupling δ∇ρ through v2rhosigma/v2sigma2 the same
-               way the existing vsigma term in assemble_xc_matrix couples ∇ρ]
-   ```
-   The exact GGA form needs to be derived carefully by differentiating the
-   existing first-derivative `assemble_xc_matrix` gradient term
-   (`src/dft/ks_matrix.cpp:97-179`) with respect to the density one more
-   time — do not guess it from a paper's notation without checking it
-   reduces to the existing `vsigma` term's own structure at zeroth order.
+   `V_xc[ρ + δρ]` around `ρ`. Derived by differentiating the existing
+   first-derivative contraction in `assemble_xc_matrix`
+   (`src/dft/ks_matrix.cpp:160-220`) one more time with respect to the
+   density, rather than guessing from a paper's notation — that existing
+   code is the concrete reference for Planck's own conventions (spin
+   layout, grid weight placement, the `2·vsigma·∇ρ` factor-of-2
+   convention already baked into `gradient_projection`'s callers). For a
+   spin-unpolarized GGA (`xc_grid.vsigma.cols() == 1` in the existing
+   code), the first-derivative potential term is
+   `V_xc += vrho·φ_μφ_ν + [2·vsigma·∇ρ]·(φ_μ∇φ_ν + ∇φ_μφ_ν)`; the induced
+   term F3 needs is this expression's own derivative with respect to `ρ`
+   and `∇ρ`, i.e. it involves `v2rho2·δρ`, `v2rhosigma·(∇ρ·δ∇ρ + δρ`-
+   weighted terms), and `v2sigma2·(∇ρ·δ∇ρ)` acting through the same
+   `2·[...]·∇ρ` structure the existing `coefficient_alpha`/
+   `coefficient_beta` computation already uses. **Work out the polarized
+   case (`xc_grid.vsigma.cols() == 3`, lines 194-206) explicitly before
+   trusting the unpolarized form generalizes** — the existing code's own
+   cross-spin `vsigma(point,1)` term shows the polarized case is not a
+   simple duplication of the unpolarized one.
 4. Project `δV_xc` back into the `(a,i)` MO block the same way
    `assemble_xc_matrix`'s output is projected in the KS build:
    `H·x = C_occᵀ · δV_xc(AO basis) · C_virt`.
 
+#### Verification
+
 **Verify against D1's oracle, not against a hand-derivation alone.** On a
-small closed-shell system, compute `H·x` for a handful of `x` directions
-both via this analytic path and via the existing
+small closed-shell system (an existing regression case's converged
+density is enough — no new SCF machinery needed), compute `H·x` for a
+handful of `x` directions both via this analytic path and via the existing
 `build_unrestricted_xc_kernel_blocks` FD path (feeding it a
 `ResponseExcitationSpace` covering the same directions). They must agree to
 the precision the FD path's own step size allows. **This is the load-
@@ -302,6 +350,26 @@ silently wrong by a factor of 2/4 until checked directly against the true
 after a full SOSCF run; a wrong Hessian that happens to still converge (to
 a linear rate, say) can hide for a long time, exactly as pure-unbounded RHF
 SOSCF's own scale-mismatch bug did before it was checked directly.
+
+**This verification is structurally independent, not merely
+independently-run, per F2's own finding.** F2 discovered that a finite-
+difference self-consistency check cannot see a bug shared by both sides of
+the comparison (e.g. a uniform scale error). F3's comparison does not have
+this weakness: the FD-kernel oracle perturbs the density and re-evaluates
+the FULL XC potential from scratch through the ordinary first-derivative
+`exc_vxc` path, while the analytic path contracts a second-derivative
+kernel through entirely different code (`evaluate_lda_fxc`/
+`evaluate_gga_fxc`). The two share no common formula that could be wrong
+in the same way on both sides — worth stating explicitly rather than
+assuming the parallel to F1/F2's own verification style is automatically
+safe, since F2 showed that assumption can fail.
+
+Test at least: LDA (unpolarized and polarized), GGA (unpolarized and
+polarized, to exercise the harder cross-spin `v2rhosigma`/`v2sigma2`
+terms found in F1), and both a diagonal-dominant `x` direction and one
+mixing multiple `(i,a)` pairs (F1's own sweep finding — a single clean
+direction can hide a bug an off-diagonal-heavy direction would catch,
+the same lesson U1's UHF Hessian-diagonal sweep already demonstrated).
 
 **If this disagrees with the FD oracle, stop.** Do not wire a Hessian into
 the SOSCF loop that has not been checked against the FD reference D1 built
