@@ -12,6 +12,7 @@
 #include <iomanip>
 #include <limits>
 #include <numeric>
+#include <sstream>
 #include <string>
 
 #include "base/mpi_env.h"
@@ -2335,6 +2336,215 @@ namespace DFT::Driver
                         "UKS Converged :",
                         std::format("E = {:.10f} Eh after {} iterations", total_energy, iter));
                     HartreeFock::Logger::blank();
+
+                    // F3.2 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): LDA
+                    // polarized Hessian-vector product, verified against the
+                    // FD-kernel oracle. Env-gated debug probe, same shape as
+                    // F3.1's PLANCK_FXC_F3_1_CHECK. LDA-only guard: GGA is
+                    // F3.4's scope, not this one.
+                    if (std::getenv("PLANCK_FXC_F3_2_CHECK") && x_functional.is_lda_like() &&
+                        c_functional.is_lda_like())
+                    {
+                        const int n_virt_a = static_cast<int>(nbasis) - static_cast<int>(n_alpha);
+                        const int n_virt_b = static_cast<int>(nbasis) - static_cast<int>(n_beta);
+                        if (n_virt_a > 0 && n_virt_b > 0)
+                        {
+                            const Eigen::MatrixXd &Ca = alpha_diagonalization->coefficients;
+                            const Eigen::MatrixXd &Cb = beta_diagonalization->coefficients;
+                            const Eigen::MatrixXd Ca_occ = Ca.leftCols(static_cast<Eigen::Index>(n_alpha));
+                            const Eigen::MatrixXd Ca_virt = Ca.rightCols(n_virt_a);
+                            const Eigen::MatrixXd Cb_occ = Cb.leftCols(static_cast<Eigen::Index>(n_beta));
+                            const Eigen::MatrixXd Cb_virt = Cb.rightCols(n_virt_b);
+
+                            // Two trial directions on the doc's own
+                            // instruction: alpha-only (x_beta = 0) and mixed
+                            // alpha/beta, since an alpha-only x cannot by
+                            // itself catch a bug reading v2rho2_ab.
+                            struct Probe
+                            {
+                                const char *label;
+                                double scale_a;
+                                double scale_b;
+                            };
+                            const Probe probes[] = {
+                                {"alpha-only", 1.0, 0.0},
+                                {"mixed", 1.0, 1.0},
+                            };
+
+                            auto ground_alpha_on_grid = evaluate_density_on_grid(prepared.ao_grid, alpha_density);
+                            auto ground_beta_on_grid = evaluate_density_on_grid(prepared.ao_grid, beta_density);
+                            if (!ground_alpha_on_grid || !ground_beta_on_grid)
+                            {
+                                HartreeFock::Logger::logging(
+                                    HartreeFock::LogLevel::Info, "F3.2[FD] :",
+                                    "ground-state evaluate_density_on_grid failed");
+                            }
+                            else
+                            {
+                                const Eigen::Index npoints = prepared.ao_grid.npoints();
+                                std::vector<double> rho_polarized(static_cast<std::size_t>(2 * npoints));
+                                for (Eigen::Index p = 0; p < npoints; ++p)
+                                {
+                                    rho_polarized[static_cast<std::size_t>(2 * p)] = ground_alpha_on_grid->total.rho(p);
+                                    rho_polarized[static_cast<std::size_t>(2 * p + 1)] = ground_beta_on_grid->total.rho(p);
+                                }
+
+                                auto oracle_exchange = DFT::XC::Functional::create(
+                                    calculator._dft._exchange_id, DFT::XC::Spin::Polarized);
+                                auto oracle_correlation = DFT::XC::Functional::create(
+                                    calculator._dft._correlation_id, DFT::XC::Spin::Polarized);
+                                if (!oracle_exchange || !oracle_correlation)
+                                {
+                                    HartreeFock::Logger::logging(
+                                        HartreeFock::LogLevel::Info, "F3.2[FD] :",
+                                        "polarized functional init failed");
+                                }
+                                else
+                                {
+                                    std::vector<double> v2rho2_x, v2rho2_c;
+                                    auto fxc_x = oracle_exchange->evaluate_lda_fxc(
+                                        rho_polarized, static_cast<int>(npoints), v2rho2_x);
+                                    auto fxc_c = oracle_correlation->evaluate_lda_fxc(
+                                        rho_polarized, static_cast<int>(npoints), v2rho2_c);
+                                    if (!fxc_x || !fxc_c)
+                                    {
+                                        HartreeFock::Logger::logging(
+                                            HartreeFock::LogLevel::Info, "F3.2[FD] :",
+                                            "evaluate_lda_fxc (polarized) failed");
+                                    }
+                                    else
+                                    {
+                                        for (const auto &p : probes)
+                                        {
+                                            // dP_alpha on (a=0, i=0). dP_beta
+                                            // on (a=b_beta, i=0) -- (a=0,i=0)
+                                            // for beta was TRIED FIRST and
+                                            // measured to be a real, near-
+                                            // exact symmetry-suppressed
+                                            // direction for this system (the
+                                            // oracle's own [0][1](0,0) element
+                                            // reads 7.9e-14, while other
+                                            // columns in the same row are
+                                            // O(1e-4) to O(1e-3) -- confirmed
+                                            // by printing the whole row, not
+                                            // assumed), so it cannot exercise
+                                            // cross-spin coupling at all and
+                                            // is not a fair test of this step.
+                                            // 0.5-scaled symmetrization, matching the oracle's OWN
+                                            // transition_density_matrix convention exactly (measured:
+                                            // the unscaled form used here first read a clean factor-of-2
+                                            // high against Hx_oracle in both probes, e.g. alpha-only
+                                            // -0.0258175070 vs -0.0129087535 -- tracked to this scale
+                                            // mismatch, not a Hessian-formula defect. F3.1's RKS
+                                            // comparison used the unscaled form too, but its own
+                                            // .first+.second summing happened to restore the missing
+                                            // factor of 2 by a different route, which masked this until
+                                            // UKS's single-block alpha-only case exposed it directly.)
+                                            const int b_beta = (n_virt_b > 2) ? 2 : 0;
+                                            const Eigen::MatrixXd dPa =
+                                                0.5 * p.scale_a *
+                                                (Ca_virt.col(0) * Ca_occ.col(0).transpose() +
+                                                 Ca_occ.col(0) * Ca_virt.col(0).transpose());
+                                            const Eigen::MatrixXd dPb =
+                                                0.5 * p.scale_b *
+                                                (Cb_virt.col(b_beta) * Cb_occ.col(0).transpose() +
+                                                 Cb_occ.col(0) * Cb_virt.col(b_beta).transpose());
+
+                                            auto drho_a = evaluate_density_on_grid(prepared.ao_grid, dPa);
+                                            auto drho_b = evaluate_density_on_grid(prepared.ao_grid, dPb);
+                                            if (!drho_a || !drho_b)
+                                            {
+                                                HartreeFock::Logger::logging(
+                                                    HartreeFock::LogLevel::Info, "F3.2[FD] :",
+                                                    std::format("{}: evaluate_density_on_grid(dP) failed", p.label));
+                                                continue;
+                                            }
+
+                                            // delta_V_xc^alpha(r) = v2rho2_aa*drho_a + v2rho2_ab*drho_b
+                                            // delta_V_xc^beta(r)  = v2rho2_ab*drho_a + v2rho2_bb*drho_b
+                                            // v2rho2 packs [aa, ab, bb] per point (F1's own finding).
+                                            Eigen::MatrixXd delta_V_ao_alpha =
+                                                Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(nbasis),
+                                                                     static_cast<Eigen::Index>(nbasis));
+                                            for (Eigen::Index pt = 0; pt < npoints; ++pt)
+                                            {
+                                                const double weight = prepared.molecular_grid.points(pt, 3);
+                                                if (weight == 0.0)
+                                                    continue;
+                                                const std::size_t base = static_cast<std::size_t>(3 * pt);
+                                                const double v2rho2_aa = v2rho2_x[base + 0] + v2rho2_c[base + 0];
+                                                const double v2rho2_ab = v2rho2_x[base + 1] + v2rho2_c[base + 1];
+                                                const double delta_v_alpha =
+                                                    v2rho2_aa * drho_a->total.rho(pt) +
+                                                    v2rho2_ab * drho_b->total.rho(pt);
+                                                const auto phi = prepared.ao_grid.values.row(pt).transpose();
+                                                delta_V_ao_alpha.noalias() +=
+                                                    (weight * delta_v_alpha) * (phi * phi.transpose());
+                                            }
+
+                                            const double Hx_analytic =
+                                                (Ca_occ.col(0).transpose() * delta_V_ao_alpha * Ca_virt.col(0))(0, 0);
+
+                                            // FD oracle, both spins as one ResponseExcitationSpace vector.
+                                            ResponseExcitationSpace space_a;
+                                            space_a.spin_label = "alpha";
+                                            space_a.n_occ = static_cast<int>(n_alpha);
+                                            space_a.n_virt = n_virt_a;
+                                            space_a.mo_offset = 0;
+                                            space_a.C_occ = Ca_occ;
+                                            space_a.C_virt = Ca_virt;
+
+                                            ResponseExcitationSpace space_b;
+                                            space_b.spin_label = "beta";
+                                            space_b.n_occ = static_cast<int>(n_beta);
+                                            space_b.n_virt = n_virt_b;
+                                            space_b.mo_offset = space_a.nov();
+                                            space_b.C_occ = Cb_occ;
+                                            space_b.C_virt = Cb_virt;
+
+                                            const std::vector<ResponseExcitationSpace> spaces = {space_a, space_b};
+                                            auto oracle_blocks = build_unrestricted_xc_kernel_blocks(
+                                                prepared, spaces, alpha_density, beta_density,
+                                                *oracle_exchange, *oracle_correlation);
+                                            if (!oracle_blocks)
+                                            {
+                                                HartreeFock::Logger::logging(
+                                                    HartreeFock::LogLevel::Info, "F3.2[FD] :",
+                                                    std::format("{}: build_unrestricted_xc_kernel_blocks failed: {}",
+                                                               p.label, oracle_blocks.error()));
+                                                continue;
+                                            }
+
+                                            // H*x for the alpha-channel output row: linearity means the
+                                            // response to a trial x = (scale_a*x_a, scale_b*x_b) is the
+                                            // sum of the response to each spin's perturbation alone --
+                                            // scale_a*kxc_aa (alpha's own response to the alpha
+                                            // perturbation) plus scale_b*kxc_ab (alpha's response to the
+                                            // beta perturbation). This is a different reason to sum two
+                                            // blocks than F3.1's RKS .first+.second (that summed same-spin
+                                            // and cross-spin for a SINGLE spin-restricted perturbation
+                                            // that moves both channels together; here the two terms
+                                            // correspond to two INDEPENDENT UKS perturbations).
+                                            const double kxc_aa = (*oracle_blocks)[0][0](
+                                                space_a.flat_index(0, 0), space_a.flat_index(0, 0));
+                                            const double kxc_ab = (*oracle_blocks)[0][1](
+                                                space_a.flat_index(0, 0), space_b.flat_index(0, b_beta));
+                                            const double Hx_oracle =
+                                                p.scale_a * kxc_aa + p.scale_b * kxc_ab;
+
+                                            HartreeFock::Logger::logging(
+                                                HartreeFock::LogLevel::Info, "F3.2[FD] :",
+                                                std::format(
+                                                    "{}: Hx_analytic={:.10f} Hx_oracle={:.10f} diff={:.3e}",
+                                                    p.label, Hx_analytic, Hx_oracle,
+                                                    std::abs(Hx_analytic - Hx_oracle)));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     return result;
                 }
             }

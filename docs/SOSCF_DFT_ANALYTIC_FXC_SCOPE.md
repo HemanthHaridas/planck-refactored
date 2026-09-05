@@ -419,7 +419,7 @@ in an ongoing ladder and the probe will need generalizing (spin, GGA) as
 F3.2–F3.5 land; a committed regression gate is better added once the full
 `H·x` (F3.5) exists to gate on, rather than one per sub-step.
 
-#### F3.2 — LDA, polarized: spin-resolved `v2rho2` (~S, after F3.1)
+#### F3.2 — LDA, polarized: spin-resolved `v2rho2` (~S, after F3.1) — DONE
 
 Same contraction, but now `v2rho2` carries the `aa`/`ab`/`bb` packing F1
 already measured and gated (3 components, not 2). The induced potential
@@ -435,6 +435,73 @@ coupling (`lda_c_pw`, matching F1's own choice for exactly this reason —
 this step), spin-unrestricted trial `x` (both an alpha-only and a mixed
 alpha/beta perturbation, since an alpha-only `x` cannot by itself catch a
 bug in reading `v2rho2_ab`).
+
+**Landed. Result: `δV_xc^α = v2rho2_aa·δρ_α + v2rho2_ab·δρ_β`
+(and the mirrored β form) matches the FD oracle to `~4e-12`–`~8e-11`**
+on two systems (triplet water/STO-3G with `lda_c_pw`, the water-cation
+doublet/STO-3G) and both trial directions the doc's own spec asked for
+(alpha-only and mixed), once three real issues — two genuine findings, one
+of them non-obvious enough to be worth carrying forward, one test-harness
+artifact — were found and resolved.
+
+**Finding 1, real and non-obvious: the oracle's own `transition_density_matrix`
+scales the symmetrized trial density by `0.5`
+(`0.5·(occ·virtᵀ + virt·occᵀ)`), and F3.2's probe must build its own `δP`
+with the SAME `0.5` factor to compare like with like.** First measurement
+(unscaled `δP = C_virt·x·C_occᵀ + C_occ·x·C_virtᵀ`, matching F3.1's own
+convention exactly) gave a clean, consistent factor of ~2 too high in
+**both** probed directions (`alpha-only`: analytic `-0.0258175070` vs
+oracle `-0.0129087535`; `mixed`: `-0.0239204728` vs `-0.0119602364` — the
+ratio is `2.0000` to five figures in both, not noise). Scaling `δP` by
+`0.5` to match `transition_density_matrix` brought both to `~1e-11`
+agreement.
+
+**This does not contradict F3.1 — it is a genuinely different oracle
+composition, verified by re-running F3.1's own probe unchanged and
+confirming it still agrees to `2.6e-11`.** F3.1's RKS oracle
+(`build_closed_shell_xc_kernel_blocks`) duplicates one `space` into both
+"source" slots and returns `.first + .second` — summing two `0.5`-scaled
+blocks built from the identical construction restores the missing factor
+of 2 by addition, which is why F3.1's own unscaled `δP` happened to match
+without needing this scale fix. F3.2's UKS oracle
+(`build_unrestricted_xc_kernel_blocks`) is read as a single block per spin
+(`kxc_aa`, `kxc_ab`, never doubled by construction), so it has no
+compensating sum and needs the `0.5` applied directly to `δP` instead.
+**Both are correct; they are not the same convention, and F3.5 (packing
+the general `H·x`, which must handle both the RKS-doubled and UKS-single-
+block shapes) needs to get this right for each case rather than assuming
+one scale rule covers both** — flagged explicitly so F3.5 does not
+rediscover this by another factor-of-2 debugging pass.
+
+**Finding 2, a real physical effect initially mistaken for a bug: the
+first cross-spin probe direction `(i=0,a=0)` for beta was symmetry-
+suppressed to `~8e-14`, not merely small.** Debugging the first
+disagreement (before finding the `0.5` scale issue) included printing the
+oracle's raw cross-spin kernel row directly; element `(0,0)` read
+`7.87e-14` while adjacent elements in the same row read `9.5e-4` to
+`2.9e-4` — a genuine near-exact cancellation for that specific
+occupied-virtual pair on the triplet-water test geometry, not a
+degenerate or unreachable direction chosen by mistake. Confirmed distinct
+from a bug by checking neighboring elements were large: this is a
+legitimate reason a *specific* direction can look wrong. Fixed by probing
+`(i=0, a=2)` for beta instead (a nonzero column), landing the real,
+non-degenerate cross-spin measurement.
+
+**Finding 3, a pure test-harness bug, not a code defect: an intermediate
+measurement with `alpha-only` and `mixed` giving bit-identical results was
+traced to `Hx_oracle`'s cross-spin element being read from the
+symmetry-suppressed `(0,0)` column (Finding 2, above) — the `scale_b`
+weighting in the formula was always correct, but `kxc_ab` itself was
+reading a near-zero value regardless of the trial direction, making
+`scale_b`'s effect invisible.** Verified as resolved by the same
+`(i=0,a=2)` fix: `alpha-only` and `mixed` now give genuinely different
+`Hx_analytic`/`Hx_oracle` pairs, both self-consistent, confirming
+`scale_b` was never the problem.
+
+All 4 TDDFT regressions plus the full core (71) and smoke (35) suites
+pass unchanged. Landed as `PLANCK_FXC_F3_2_CHECK`, same inert-by-default
+shape as F3.1's probe, in the UKS convergence branch of
+`run_ks_scf_scaffold`.
 
 #### F3.3 — GGA, unpolarized: gradient coupling via `v2rhosigma`/`v2sigma2` (~M, after F3.2)
 
