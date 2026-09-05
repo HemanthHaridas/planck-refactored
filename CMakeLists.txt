@@ -402,6 +402,8 @@ set(HF_MAIN_SRC
 # DFT compute/CLI sources without the entry point, so multiple front ends
 # (planck-dft, planck-mpi) can share the DFT driver.
 set(DFT_LIB_SRC
+    ${SRC_DIR}/dft/analytic_hessian.cpp
+    ${SRC_DIR}/dft/analytic_hessian.h
     ${SRC_DIR}/dft/ao_grid.h
     ${SRC_DIR}/dft/dft_gradient.cpp
     ${SRC_DIR}/dft/dft_gradient.h
@@ -849,6 +851,18 @@ if(BUILD_TESTING)
     add_executable(planck-dft-hessian-vector-packing
         ${CMAKE_SOURCE_DIR}/tests/dft_hessian_vector_packing.cpp
         ${SRC_DIR}/dft/response_packing.cpp
+    )
+
+    # D2.0 (docs/SOSCF_UHF_DFT_SCOPE.md): verifies
+    # compute_analytic_xc_hessian_vector_product (the production function
+    # promoting F3's point-level algebra) against F3's own formulas, called
+    # through the new function's actual signature on a synthetic single-
+    # point grid. Needs xc_grid.cpp (density-on-grid evaluator) alongside
+    # analytic_hessian.cpp, same as the other DFT grid-consuming tests.
+    add_executable(planck-dft-analytic-hessian-production
+        ${CMAKE_SOURCE_DIR}/tests/dft_analytic_hessian_production.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
     )
 
     # F2 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): confirms the existing
@@ -1518,6 +1532,12 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-dft-analytic-hessian-production PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-dft-density-response-linearity PRIVATE
         ${SRC_DIR}
         ${LIBXC_INSTALL_DIR}/include
@@ -1788,6 +1808,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-dft-hessian-vector-packing PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dft-analytic-hessian-production PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -2115,6 +2141,15 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-dft-density-response-linearity PRIVATE USE_OPENMP)
     endif()
 
+    target_link_libraries(planck-dft-analytic-hessian-production
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-analytic-hessian-production libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-dft-analytic-hessian-production OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-dft-analytic-hessian-production PRIVATE USE_OPENMP)
+    endif()
+
     add_test(
         NAME planck-casscf-internal
         COMMAND planck-casscf-internal
@@ -2153,6 +2188,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-dft-hessian-vector-packing
         COMMAND planck-dft-hessian-vector-packing
+    )
+
+    add_test(
+        NAME planck-dft-analytic-hessian-production
+        COMMAND planck-dft-analytic-hessian-production
     )
 
     add_test(

@@ -406,7 +406,7 @@ from production; converting them was found impractical, so they were
 deleted with no replacement). `docs/SOSCF.md` needs a note added when D2
 lands, so it stops recommending a probe that no longer exists.
 
-##### D2.0 — promote F3's algebra into a real production function (~M)
+##### D2.0 — promote F3's algebra into a real production function (~M) — DONE
 
 Write `compute_analytic_xc_hessian_vector_product` (or similarly named,
 in a small dedicated file the way F3.5's `response_packing.{h,cpp}` was
@@ -436,6 +436,58 @@ serve. Per F3.4.5's own resolution of this exact tension: decide
 explicitly whether this whole-molecule check becomes a kept regression
 case or a one-time derivation-time verification, rather than defaulting
 to whichever is easier to write first.
+
+**Landed as `compute_analytic_xc_hessian_vector_product`
+(`src/dft/analytic_hessian.{h,cpp}`), RKS LDA and GGA unpolarized, kept
+out of `driver.cpp` in its own translation unit depending only on
+`xc_grid.h`** (Eigen + the functional wrapper + AO/grid types), the same
+link-cost reasoning F3.5's `response_packing.h` used. Reuses
+`evaluate_lda_fxc`/`evaluate_gga_fxc` (F1) and `evaluate_density_on_grid`
+(F2) unchanged; the GGA branch is F3.3.3's own `T1+T2+T3` decomposition
+ported line-for-line from the (now-deleted) F3.3.4 whole-molecule probe.
+
+**Layer (1) landed as `planck-dft-hessian-vector-packing`'s sibling
+ctest, `planck-dft-analytic-hessian-production`
+(`tests/dft_analytic_hessian_production.cpp`), on a synthetic 3-AO
+single-point grid** (no real basis/molecule, following F2's own
+precedent). **A real fixture-design defect was found and fixed before
+any comparison meant anything:** the first version tried to *solve* for a
+density matrix `P` that would hit pre-chosen `(ρ, ∇ρ)` target values
+(reproducing F3.3.3's own numeric test points) — this is structurally
+over-constrained and impossible in general, confirmed both algebraically
+and numerically (a 3×3 symmetric `P`, 6 free parameters, against 4
+targets `(ρ, gx, gy, gz)`, gives a linear system of rank ≤ 3 on every AO
+gradient choice tried, including random ones): at a single point both
+`ρ = φᵀPφ` and `∇ρ_k = 2·(∇φ_k)ᵀPφ` depend on `P` only through the single
+3-vector `Pφ`, so no size of `P` can reach 4 independent targets from one
+point. **Fixed by inverting the construction**: pick `P`/`δP` freely
+(arbitrary, non-degenerate, non-diagonal symmetric matrices) and read off
+whatever `(ρ, ∇ρ, δρ, δ∇ρ)` actually result from the real AO contraction,
+feeding those into F3.3.3's reference formula — still a fully
+non-degenerate check (arbitrary `P`/`δP` are themselves legitimate
+inputs), just not reproducing F3.3.3's specific prior numbers. Result:
+matches to `~1e-8`–`~1e-10` on two independent `(P, δP)` pairs, both LDA
+(`lda_x`) and GGA (`pbe`). Mutation-verified three ways: dropping the
+GGA cross term (`2·v2rhosigma·(∇ρ·δ∇ρ)`), dropping T3
+(`2·vsigma·(δ∇ρ·AG)`, bundled into the shared gradient-coupling
+projection), and swapping the LDA branch's `trial` density for `ground`
+— all three caught cleanly, reverted after verification.
+
+**Layer (2) run once as a temporary debug probe
+(`PLANCK_D2_0_CHECK`) in `driver.cpp`'s RKS convergence branch, confirmed,
+then deleted** — the explicit decision this step's own text asked for,
+made the same way as F3.4.5: a one-time derivation-time verification, not
+kept production code, since a whole-molecule check needing real converged
+SCF state cannot cheaply become a link-light standalone test (the same
+reasoning that made F3.1/F3.2/F3.3.4/F3.4.5 impractical to keep). Result:
+`Hx_analytic` matches `Hx_oracle` to `1.0e-10` on H2/PBE/STO-3G and
+`5.6e-10` on water/PBE/STO-3G — the identical two systems and identical
+precision F3.3.4's own now-deleted probe measured, confirming the
+transcription into a real function preserved the algebra exactly.
+Mutation-verified: dropping the GGA cross term is caught at the
+whole-molecule level too (`diff` jumps from `5.6e-10` to `4.1e-3`),
+reverted after verification. Full smoke suite (35/35) and all 10
+`planck-dft`-prefixed ctest gates pass with the temporary probe removed.
 
 ##### D2.1 — confirm the packed Hessian-vector product against the true energy (~S, after D2.0)
 

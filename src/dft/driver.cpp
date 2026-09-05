@@ -1,5 +1,7 @@
 #include "driver.h"
 
+#include "analytic_hessian.h"
+
 #include <Eigen/QR>
 
 #include <cstdlib>
