@@ -813,6 +813,14 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/dft_fxc_selfcheck.cpp
     )
 
+    # F3.3 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): the GGA analytic
+    # Hessian-vector product's T1/T2/T3 terms, verified as isolated
+    # point-level checks against libxc's own finite difference. Header-only
+    # wrapper, same as the fxc selfcheck above.
+    add_executable(planck-dft-gga-hessian-selfcheck
+        ${CMAKE_SOURCE_DIR}/tests/dft_gga_hessian_selfcheck.cpp
+    )
+
     # F2 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): confirms the existing
     # density-on-grid evaluator (xc_grid.cpp) is exactly linear in the
     # density matrix, so it needs no changes to serve a Hessian-vector
@@ -1460,6 +1468,11 @@ if(BUILD_TESTING)
         ${LIBXC_INSTALL_DIR}/include
     )
 
+    target_include_directories(planck-dft-gga-hessian-selfcheck PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+    )
+
     target_include_directories(planck-dft-density-response-linearity PRIVATE
         ${SRC_DIR}
         ${LIBXC_INSTALL_DIR}/include
@@ -1706,6 +1719,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-dft-fxc-selfcheck PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dft-gga-hessian-selfcheck PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -2009,6 +2028,11 @@ if(BUILD_TESTING)
     )
     add_dependencies(planck-dft-fxc-selfcheck libxc)
 
+    target_link_libraries(planck-dft-gga-hessian-selfcheck
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-gga-hessian-selfcheck libxc)
+
     target_link_libraries(planck-dft-density-response-linearity
         ${LIBXC_INSTALL_DIR}/lib/libxc.a
     )
@@ -2036,6 +2060,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-dft-fxc-selfcheck
         COMMAND planck-dft-fxc-selfcheck
+    )
+
+    add_test(
+        NAME planck-dft-gga-hessian-selfcheck
+        COMMAND planck-dft-gga-hessian-selfcheck
     )
 
     add_test(

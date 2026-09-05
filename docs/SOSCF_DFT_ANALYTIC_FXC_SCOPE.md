@@ -560,7 +560,7 @@ real libxc functionals, and exactly what F3.3.4 re-exercises through the
 full contraction). With a Maxwell-consistent toy functional, `T1+T2+T3`
 matched the true numeric derivative to `~7e-18` (floating-point noise).
 
-##### F3.3.1 — T1 alone: `[v2rho2·δρ + 2·v2rhosigma·(∇ρ·δ∇ρ)]·AA` (~S)
+##### F3.3.1 — T1 alone: `[v2rho2·δρ + 2·v2rhosigma·(∇ρ·δ∇ρ)]·AA` (~S) — DONE
 
 Build only T1, with T2 and T3 forced to zero. **Sanity check before any
 FD-oracle comparison**: at a point where `∇ρ` (or the probed `δ∇ρ`
@@ -580,6 +580,41 @@ a partial match against the full oracle, since T2/T3 could cancel T1's own
 error there). **If this disagrees, stop before F3.3.2** — the plain-AO
 term is the simplest of the three and any defect here recurs in T1's own
 contribution to the combined sum.
+
+**Implemented as a synthetic-point unit check
+(`planck-dft-gga-hessian-selfcheck`, `tests/dft_gga_hessian_selfcheck.cpp`),
+not a real-molecule grid search — decided explicitly rather than pursued
+as originally sketched.** The original plan (search a real molecule's
+grid for a point with negligible `∇ρ`, then compare the whole-molecule
+projected `H·x` there) has a problem the doc's own text did not catch
+until implementation was attempted: F3.1/F3.2's verification compares a
+*projected, grid-integrated* MO matrix element, so making T2/T3
+negligible *there* requires `∇ρ ≈ 0` at essentially every grid point along
+the probed direction, not just one — true only for a trivial system (a
+single spherically symmetric atom has zero *angular* gradient, but not
+zero *radial* gradient in general, so even that does not give a clean
+whole-grid cancellation). Switched to F1/F2's own successful pattern
+instead: a point-level check against libxc's own finite difference,
+exactly analogous to F1's `evaluate_lda_fxc` selfcheck extended to GGA.
+This tests T1's coefficient formula (`δ[vrho] = v2rho2·δρ +
+2·v2rhosigma·(∇ρ·δ∇ρ)`) directly against a raw central difference of
+`vrho` under the correctly-substituted joint `(δρ, δσ=2∇ρ·δ∇ρ)`
+perturbation — the AO-projection wiring itself is exercised later, in
+F3.3.4/F3.5's whole-molecule comparisons, once the point-level formula is
+trusted.
+
+**Result: matches to the FD path's own step-size precision at every
+tested point** (four points spanning nonzero and exactly-zero `∇ρ`,
+`δ∇ρ` parallel and non-parallel to `∇ρ`), on PBE (matching F1's own GGA
+choice). The exact-`∇ρ=0` point additionally confirmed T1's coefficient
+reduces EXACTLY (not merely approximately) to F3.1's own `v2rho2·δρ` LDA
+term there, since `∇ρ·δ∇ρ` vanishes identically when `∇ρ=0` regardless of
+`δ∇ρ`. Mutation-verified: dropping the `2·` factor on the
+`v2rhosigma·(∇ρ·δ∇ρ)` piece is caught cleanly at `h=1e-3`/`1e-4` (not
+`h=1e-2`, whose own looser FD-truncation tolerance happened to absorb
+that particular mutation's size at the tested points — expected, not a
+gap, since `h=1e-2` is the least precise of the three step sizes by
+design).
 
 ##### F3.3.2 — add T2: `2·[v2rhosigma·δρ + 2·v2sigma2·(∇ρ·δ∇ρ)]·(∇ρ·AG)` (~S, after F3.3.1)
 
