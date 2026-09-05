@@ -1,8 +1,8 @@
 // F3.3 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): the GGA unpolarized analytic
-// Hessian-vector product, broken into F3.3.1 (T1), F3.3.2 (T2), F3.3.3 (T3),
-// verified as an isolated point-level check against libxc's own finite
-// difference -- the same pattern F1's dft_fxc_selfcheck.cpp used, extended
-// from LDA to GGA.
+// Hessian-vector product, broken into F3.3.1 (T1), F3.3.2 (T2), F3.3.3
+// (T1+T2+T3), verified as an isolated point-level check against libxc's own
+// finite difference -- the same pattern F1's dft_fxc_selfcheck.cpp used,
+// extended from LDA to GGA.
 //
 // Notation (matches the scope doc exactly):
 //   AA  = phi_mu * phi_nu                          (plain AO product)
@@ -226,6 +226,74 @@ namespace
         require_near(delta_vsigma_analytic, delta_vsigma_lda_only, 1e-15,
                      name + ": T2 coefficient must reduce EXACTLY to v2rhosigma*drho when grad_rho=0");
     }
+
+    // F3.3.3 -- add T3 = 2*vsigma*(dg.AG), the full T1+T2+T3 sum.
+    //
+    // Unlike T1/T2 (pure coefficients, checkable against a scalar FD of
+    // vrho/vsigma alone), T3 involves the point-local AO vector AG and the
+    // *existing*, unchanged ground-state vsigma -- so isolating it means
+    // building the actual V_xc = vrho*AA + 2*vsigma*(g.AG) scalar and
+    // finite-differencing THAT (not just its vrho/vsigma coefficients)
+    // under a joint (drho, dg) perturbation, exactly matching what the real
+    // FD-kernel oracle does at the grid level (perturb the density, rebuild
+    // the full first-derivative V_xc from scratch). AA/AG are fixed
+    // synthetic numbers/vectors here, per the file's own point-check
+    // convention -- no real basis set needed to test the algebra.
+    struct AOFactors
+    {
+        double AA;
+        double AGx, AGy, AGz;
+    };
+
+    double eval_vxc_scalar(const DFT::XC::Functional &f, double rho, double gx, double gy, double gz,
+                            const AOFactors &ao)
+    {
+        const double sigma = dot(gx, gy, gz, gx, gy, gz);
+        std::vector<double> exc, vrho, vsigma;
+        f.evaluate_gga_exc_vxc({rho}, {sigma}, 1, exc, vrho, vsigma);
+        const double g_dot_AG = dot(gx, gy, gz, ao.AGx, ao.AGy, ao.AGz);
+        return vrho[0] * ao.AA + 2.0 * vsigma[0] * g_dot_AG;
+    }
+
+    // FD of the full V_xc scalar under the joint (drho, dg) perturbation --
+    // the direct analogue of what build_closed_shell_xc_kernel_blocks does
+    // at the grid level, done here at a single synthetic point.
+    double fd_delta_vxc(const DFT::XC::Functional &f, const Point &p, const Perturbation &d,
+                         const AOFactors &ao, double h)
+    {
+        const double vp = eval_vxc_scalar(f, p.rho + h * d.drho, p.gx + h * d.dgx, p.gy + h * d.dgy,
+                                           p.gz + h * d.dgz, ao);
+        const double vm = eval_vxc_scalar(f, p.rho - h * d.drho, p.gx - h * d.dgx, p.gy - h * d.dgy,
+                                           p.gz - h * d.dgz, ao);
+        return (vp - vm) / (2.0 * h);
+    }
+
+    void check_T1_T2_T3(const std::string &name, const Point &p, const Perturbation &d, const AOFactors &ao)
+    {
+        auto f = require_functional(name);
+        const Fxc fxc = evaluate_fxc_at(f, p);
+
+        std::vector<double> exc0, vrho0, vsigma0;
+        const double sigma0 = dot(p.gx, p.gy, p.gz, p.gx, p.gy, p.gz);
+        f.evaluate_gga_exc_vxc({p.rho}, {sigma0}, 1, exc0, vrho0, vsigma0);
+
+        const double g_dot_dg = dot(p.gx, p.gy, p.gz, d.dgx, d.dgy, d.dgz);
+        const double g_dot_AG = dot(p.gx, p.gy, p.gz, ao.AGx, ao.AGy, ao.AGz);
+        const double dg_dot_AG = dot(d.dgx, d.dgy, d.dgz, ao.AGx, ao.AGy, ao.AGz);
+
+        const double T1 = (fxc.v2rho2 * d.drho + 2.0 * fxc.v2rhosigma * g_dot_dg) * ao.AA;
+        const double T2 = 2.0 * (fxc.v2rhosigma * d.drho + 2.0 * fxc.v2sigma2 * g_dot_dg) * g_dot_AG;
+        const double T3 = 2.0 * vsigma0[0] * dg_dot_AG;
+        const double delta_vxc_analytic = T1 + T2 + T3;
+
+        for (double h : {1e-2, 1e-3, 1e-4})
+        {
+            const double delta_vxc_fd = fd_delta_vxc(f, p, d, ao, h);
+            const double tol = 50.0 * h * h + 1e-6;
+            require_near(delta_vxc_analytic, delta_vxc_fd, tol,
+                         name + " T1+T2+T3 (delta[V_xc]) vs FD, h=" + std::to_string(h));
+        }
+    }
 } // namespace
 
 int main()
@@ -252,6 +320,23 @@ int main()
 
     check_T2_reduces_at_zero_gradient("pbe", 0.3);
     check_T2_reduces_at_zero_gradient("pbe", 1.2);
+
+    // F3.3.3: full T1+T2+T3 sum. AA/AG are fixed synthetic point-local AO
+    // factors (not tied to a real basis) chosen so dg.AG is genuinely
+    // nonzero at every point -- otherwise T3 would vanish and this would
+    // silently degrade into re-testing F3.3.2 with an extra unused term.
+    const AOFactors ao1{0.7, 0.4, -0.3, 0.2};
+    check_T1_T2_T3("pbe", {0.3, 0.1, 0.05, -0.02}, {0.01, 0.02, -0.01, 0.005}, ao1);
+    check_T1_T2_T3("pbe", {1.0, 0.5, -0.3, 0.2}, {0.05, -0.1, 0.08, -0.04}, ao1);
+    check_T1_T2_T3("pbe", {0.15, 0.0, 0.0, 0.0}, {0.02, 0.3, -0.2, 0.1}, ao1); // grad_rho=0 point
+    check_T1_T2_T3("pbe", {0.6, 0.2, 0.2, 0.2}, {-0.03, 0.1, 0.1, 0.1}, ao1);  // dg parallel to g
+
+    // Second AO-factor choice, since AA/AG are point-local and a single
+    // fixed choice could accidentally hide a sign/index error in how T1's
+    // AA-weighting and T2/T3's AG-weighting combine.
+    const AOFactors ao2{-0.2, -0.1, 0.5, -0.4};
+    check_T1_T2_T3("pbe", {0.3, 0.1, 0.05, -0.02}, {0.01, 0.02, -0.01, 0.005}, ao2);
+    check_T1_T2_T3("pbe", {0.6, 0.2, 0.2, 0.2}, {-0.03, 0.1, 0.1, 0.1}, ao2);
 
     return g_ok ? 0 : 1;
 }

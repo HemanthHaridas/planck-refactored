@@ -662,7 +662,7 @@ Mutation-verified: dropping the `2·` factor on the `v2sigma2·(∇ρ·δ∇ρ)`
 is caught cleanly at `h=1e-3`/`1e-4` (not `h=1e-2`, same expected gap as
 T1's own mutation check), reverted after verification.
 
-##### F3.3.3 — add T3: `2·vsigma·(δ∇ρ·AG)` (~S, after F3.3.2)
+##### F3.3.3 — add T3: `2·vsigma·(δ∇ρ·AG)` (~S, after F3.3.2) — DONE
 
 Add the term most likely to be silently dropped: the ground-state `vsigma`
 (unchanged, already computed for the SCF's own converged KS potential)
@@ -686,6 +686,44 @@ where to look** — do not re-derive from scratch; check whether F3.3.1's or
 F3.3.2's own isolated agreement was itself compromised by an
 uncompensated T3 leaking through (the risk F3.3.1/F3.3.2's own verify
 notes flag), before assuming a new defect in T3 itself.
+
+**Landed as `check_T1_T2_T3` in `tests/dft_gga_hessian_selfcheck.cpp`,
+continuing F3.3.1/F3.3.2's point-level pattern rather than the
+whole-molecule search the "bent triatomic" verify note originally
+suggested** — T1/T2 were already verified at synthetic points with no real
+basis set, and T3 is the term that finally needs a real AO vector (`AG`,
+not just a scalar coefficient), so the natural next step is a **fixed
+synthetic** `AG` at the same synthetic points, not a jump to a real
+molecule's grid. `AA`/`AG` are two independently-chosen fixed vectors,
+neither special-cased to make `δ∇ρ·AG` vanish (the failure mode the doc's
+"bent triatomic, not a diatomic" note was guarding against, addressed here
+by picking `AG` directly rather than relying on molecular symmetry to avoid
+it) — this is a stronger guarantee than a real geometry gives, since a real
+`AG` at a badly-chosen grid point could still accidentally be
+near-orthogonal to `δ∇ρ`.
+
+**The comparison target is the full `V_xc = vrho·AA + 2·vsigma·(∇ρ·AG)`
+scalar, finite-differenced directly under the joint `(δρ, δ∇ρ)`
+perturbation** — not a further per-coefficient FD the way T1/T2 checked
+`δ[vrho]`/`δ[vsigma]` alone, because T3 is not a coefficient times a fixed
+factor; it is `vsigma` (unchanged) times a *new* factor (`δ∇ρ·AG` instead
+of `∇ρ·AG`), so there is no single scalar libxc output to FD against in
+isolation. Finite-differencing the whole `V_xc` scalar is the direct
+single-point analogue of what the real FD-kernel oracle does at the grid
+level (perturb the density, rebuild `V_xc` from scratch via the ordinary
+first-derivative path) — the same structural independence F2's own note
+already established applies here unchanged.
+
+**Result: `T1+T2+T3` matches the FD path's own step-size precision at
+every tested point** (the same four `(ρ,∇ρ,δρ,δ∇ρ)` points F3.3.1/F3.3.2
+used, plus two of them re-run with a second, independent `AA`/`AG` choice
+to rule out an accidental cancellation hiding a sign error specific to one
+AO-factor choice). Mutation-verified two ways: dropping T3 entirely (set
+to `0`) is caught cleanly at every step size and every point, including the
+`∇ρ=0` point (where `δ∇ρ·AG` is still genuinely nonzero even though
+`∇ρ·δ∇ρ=0`, so T3 is exercised there too, unlike T1/T2's own `g_dot_dg`
+term); and dropping the factor of `2` on T3 alone is also caught cleanly.
+Both mutations reverted after verification.
 
 ##### F3.3.4 — cross-check against F1/F3.1's own `v2rhosigma` equivalence finding (~S, after F3.3.3)
 
