@@ -192,7 +192,7 @@ end-to-end (H2/STO-3G B3LYP, `-1.1654185791` Eh, converged), the full
 smoke suite (35/35) and extended suite (114/114, 5 pre-existing skips)
 both pass, and `hartree-fock` still builds unaffected.
 
-### F2 — density-response-on-grid: reuse, don't rebuild (~S)
+### F2 — density-response-on-grid: reuse, don't rebuild (~S) — DONE
 
 Confirm (not assume) that the existing density-evaluation machinery
 (`src/dft/xc_grid.cpp`) already produces exactly what a Hessian-vector
@@ -211,6 +211,52 @@ equals `ρ(P + εδP) - ρ(P)` divided by `ε` in the limit `ε → 0`, for both
 LDA and GGA density fields. This is a linearity check, not a new derivative
 — cheap, and it rules out a whole class of subtle bugs before the real
 Hessian contraction is built on top of it.
+
+**Confirmed: zero new code needed.** `evaluate_density_on_grid`
+(`src/dft/xc_grid.cpp`) computes `rho(r) = phi(r)ᵀ P phi(r)` and
+`grad_x(r) = 2·phi(r)ᵀ P ∇phi_x(r)` — both are exact quadratic forms in the
+matrix `P` for fixed `phi(r)`, hence exactly linear in `P`, not merely
+linear in the small-`ε` limit. New isolated ctest
+(`planck-dft-density-response-linearity`,
+`tests/dft_density_response_linearity.cpp`) verifies this against a
+synthetic AO grid (random `values`/`grad_{x,y,z}`, no real basis/molecule
+needed — F2 only tests the evaluator's linearity in `P`, not physical
+correctness) for both the restricted (`evaluate_density_on_grid(P)`) and
+unrestricted (`evaluate_density_on_grid(Pa, Pb)`) overloads, using the same
+symmetric `δP` shape (`dm1a + dm1a.transpose()`) U1's real trial-orbital-
+rotation density already produces. All checks pass.
+
+**A real gap was found and fixed in the test design, not the production
+code: a finite-difference self-consistency check cannot see a uniform
+scale bug, because both sides of the comparison go through the same
+(possibly wrong) formula.** Mutation-verified directly: scaling the
+`grad_x` term's leading factor from `2.0` to `1.5` in
+`evaluate_density_channel` passed every FD-based linearity check
+unchanged (the `+h`/`-h` evaluations and the standalone `δP`-only
+evaluation all use the same mutated formula, so the comparison stays
+internally consistent even though the *absolute* value is wrong). Fixed
+by adding an independent check
+(`check_against_hand_computed_reference`) that hand-computes
+`phi(r)ᵀ P phi(r)` and `2·phi(r)ᵀ P ∇phi_x(r)` directly from the raw AO
+arrays in the test itself, bypassing `evaluate_density_channel`'s own
+contraction order entirely — this caught the same mutation immediately.
+A second mutation (a spurious `+0.01·rho²` term, a genuine non-linearity
+rather than a uniform scale) was caught by nearly every check, including
+the FD-based ones, confirming those checks are not vacuous in general —
+they specifically cannot see a *uniform, self-consistent* scale error,
+which is exactly why the independent reference check was needed as a
+second, structurally different verification path rather than a
+redundant one. Both mutations reverted after verification.
+
+**This finding generalizes to F3.** The Hessian-vector product's own
+verification (against D1's FD-kernel oracle) has the same shape as an
+internal-consistency check only if the FD-kernel oracle and the analytic
+path could ever share a common upstream bug; they do not (D1's oracle
+perturbs the density and re-evaluates the full XC potential from scratch,
+while F3's analytic path contracts a second-derivative kernel directly),
+so F3's planned verification is already structurally independent in the
+way this finding says is required — worth stating explicitly rather than
+assuming the parallel is safe.
 
 ### F3 — the Hessian-vector product itself (~L, the actual research)
 

@@ -813,6 +813,16 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/dft_fxc_selfcheck.cpp
     )
 
+    # F2 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): confirms the existing
+    # density-on-grid evaluator (xc_grid.cpp) is exactly linear in the
+    # density matrix, so it needs no changes to serve a Hessian-vector
+    # product's response-density input. Needs xc_grid.cpp itself (which
+    # transitively pulls in libxc via wrapper.h, same as the fxc selfcheck).
+    add_executable(planck-dft-density-response-linearity
+        ${CMAKE_SOURCE_DIR}/tests/dft_density_response_linearity.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+    )
+
     add_executable(planck-eri-derivative-kernels
         ${CMAKE_SOURCE_DIR}/tests/eri_derivative_kernels.cpp
         ${SRC_DIR}/basis/basis.cpp
@@ -1450,6 +1460,12 @@ if(BUILD_TESTING)
         ${LIBXC_INSTALL_DIR}/include
     )
 
+    target_include_directories(planck-dft-density-response-linearity PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-eri-derivative-kernels PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -1690,6 +1706,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-dft-fxc-selfcheck PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dft-density-response-linearity PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -1987,6 +2009,15 @@ if(BUILD_TESTING)
     )
     add_dependencies(planck-dft-fxc-selfcheck libxc)
 
+    target_link_libraries(planck-dft-density-response-linearity
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-density-response-linearity libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-dft-density-response-linearity OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-dft-density-response-linearity PRIVATE USE_OPENMP)
+    endif()
+
     add_test(
         NAME planck-casscf-internal
         COMMAND planck-casscf-internal
@@ -2005,6 +2036,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-dft-fxc-selfcheck
         COMMAND planck-dft-fxc-selfcheck
+    )
+
+    add_test(
+        NAME planck-dft-density-response-linearity
+        COMMAND planck-dft-density-response-linearity
     )
 
     add_test(
