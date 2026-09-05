@@ -122,6 +122,31 @@ namespace DFT
                 return (spin_ == Spin::Polarized) ? 3 : 1;
             }
 
+            // Per-point component counts for libxc's SECOND derivative arrays
+            // (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md, F1). These are NOT the same
+            // as spin_components()/sigma_components() -- libxc's internal
+            // counters (src/util.c, internal_counters_set_lda/gga) size the
+            // second-derivative blocks per the number of INDEPENDENT symmetric
+            // pairs, not the number of spin/sigma channels themselves:
+            // v2rho2 packs (aa,ab,bb) = 3 (not nspin=2), v2rhosigma packs the
+            // 2 rho-channels x 3 sigma-channels = 6 (not nspin*nsigma
+            // naively reduced), v2sigma2 packs the 6 independent
+            // sigma-sigma pairs. Unpolarized: all three are 1 (nothing to pack).
+            int v2rho2_components() const noexcept
+            {
+                return (spin_ == Spin::Polarized) ? 3 : 1;
+            }
+
+            int v2rhosigma_components() const noexcept
+            {
+                return (spin_ == Spin::Polarized) ? 6 : 1;
+            }
+
+            int v2sigma2_components() const noexcept
+            {
+                return (spin_ == Spin::Polarized) ? 6 : 1;
+            }
+
             int kind() const noexcept
             {
                 return func_.info ? func_.info->kind : XC_EXCHANGE_CORRELATION;
@@ -374,6 +399,85 @@ namespace DFT
                         exc.data() + static_cast<std::size_t>(start),
                         vrho.data() + static_cast<std::size_t>(start) * nspin,
                         vsigma.data() + static_cast<std::size_t>(start) * nsigma);
+                }
+                return {};
+            }
+
+            // Analytic XC second derivative (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md,
+            // F1). Mirrors evaluate_lda_exc_vxc exactly -- same chunked/threaded
+            // shape, same guards, same pointwise-map argument for thread-count
+            // invariance (output at point i depends only on input at point i).
+            std::expected<void, std::string> evaluate_lda_fxc(
+                const std::vector<double> &rho,
+                int npoints,
+                std::vector<double> &v2rho2) const
+            {
+                if (!is_lda_like())
+                    return std::unexpected("evaluate_lda_fxc requires an LDA functional");
+                if (npoints <= 0)
+                    return std::unexpected("evaluate_lda_fxc requires at least one grid point");
+                if (rho.size() != static_cast<std::size_t>(npoints * spin_components()))
+                    return std::unexpected("evaluate_lda_fxc received an invalid rho array size");
+
+                v2rho2.resize(static_cast<std::size_t>(npoints * v2rho2_components()));
+
+                const int nspin = spin_components();
+                const int nv2rho2 = v2rho2_components();
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static) if (!omp_in_parallel())
+#endif
+                for (int start = 0; start < npoints; start += xc_chunk_points)
+                {
+                    const int count = std::min(xc_chunk_points, npoints - start);
+                    xc_lda_fxc(
+                        &func_,
+                        count,
+                        const_cast<double *>(rho.data()) + static_cast<std::size_t>(start) * nspin,
+                        v2rho2.data() + static_cast<std::size_t>(start) * nv2rho2);
+                }
+                return {};
+            }
+
+            std::expected<void, std::string> evaluate_gga_fxc(
+                const std::vector<double> &rho,
+                const std::vector<double> &sigma,
+                int npoints,
+                std::vector<double> &v2rho2,
+                std::vector<double> &v2rhosigma,
+                std::vector<double> &v2sigma2) const
+            {
+                if (!is_gga_like())
+                    return std::unexpected("evaluate_gga_fxc requires a GGA-like functional");
+                if (npoints <= 0)
+                    return std::unexpected("evaluate_gga_fxc requires at least one grid point");
+                if (rho.size() != static_cast<std::size_t>(npoints * spin_components()))
+                    return std::unexpected("evaluate_gga_fxc received an invalid rho array size");
+                if (sigma.size() != static_cast<std::size_t>(npoints * sigma_components()))
+                    return std::unexpected("evaluate_gga_fxc received an invalid sigma array size");
+
+                v2rho2.resize(static_cast<std::size_t>(npoints * v2rho2_components()));
+                v2rhosigma.resize(static_cast<std::size_t>(npoints * v2rhosigma_components()));
+                v2sigma2.resize(static_cast<std::size_t>(npoints * v2sigma2_components()));
+
+                const int nspin = spin_components();
+                const int nsigma = sigma_components();
+                const int nv2rho2 = v2rho2_components();
+                const int nv2rhosigma = v2rhosigma_components();
+                const int nv2sigma2 = v2sigma2_components();
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static) if (!omp_in_parallel())
+#endif
+                for (int start = 0; start < npoints; start += xc_chunk_points)
+                {
+                    const int count = std::min(xc_chunk_points, npoints - start);
+                    xc_gga_fxc(
+                        &func_,
+                        count,
+                        const_cast<double *>(rho.data()) + static_cast<std::size_t>(start) * nspin,
+                        const_cast<double *>(sigma.data()) + static_cast<std::size_t>(start) * nsigma,
+                        v2rho2.data() + static_cast<std::size_t>(start) * nv2rho2,
+                        v2rhosigma.data() + static_cast<std::size_t>(start) * nv2rhosigma,
+                        v2sigma2.data() + static_cast<std::size_t>(start) * nv2sigma2);
                 }
                 return {};
             }

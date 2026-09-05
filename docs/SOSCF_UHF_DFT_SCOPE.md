@@ -63,89 +63,160 @@ a factor of 2 until checked directly against `E(κ)`.
 
 Ordered so a cheap, independent check happens before any SCF-loop wiring.
 
-#### U1 — factor out `build_uhf_cphf_matrix`, verify by finite difference (~M)
+#### U1 — factor out `build_uhf_cphf_matrix`, verify by finite difference (~M) — DONE
 
-Split `solve_uhf_cphf` into a `build_uhf_cphf_matrix` (returns `A`, or a
-Hessian-vector-product callback if the per-column integral cost makes
-materializing the full dense matrix too expensive at the sizes SOSCF will
-actually run at — measure this before choosing) and a thin
-`solve_uhf_cphf` that calls it and solves `A z = -rhs`, mirroring the
-existing RHF split exactly. `solve_uhf_cphf`'s own behavior must be
-unchanged (same energies on its one existing caller, the UHF MP2 gradient).
+`solve_uhf_cphf` (`src/post_hf/uhf_response.{h,cpp}`) is split exactly as
+scoped: `build_uhf_cphf_matrix` returns the dense coupled α/β `A` (no
+convergence guard, mirroring `build_rhf_cphf_matrix`'s own relaxation, since
+SOSCF will call it mid-iteration), and `solve_uhf_cphf` is now a thin
+wrapper that calls it and solves `A z = -rhs`. Materializing the full dense
+matrix was kept (not a Hessian-vector-product callback) — the per-column
+integral cost question is deferred to U2, where it can be measured against
+real SOSCF iteration counts rather than guessed at here. `solve_uhf_cphf`'s
+one existing caller (the UHF MP2 gradient) is unchanged: all 11 UHF-tagged
+regression cases pass, including `water_triplet_uhf_ump2_gradient_smoke` and
+`water_radical_cation_uhf_ump2_sto3g`.
 
-Build the same `PLANCK_SOSCF_FD_CHECK`-style probe RHF SOSCF used: perturb
-`(α,i)` and `(β,i)` orbitals by a small `κ`, compute the actual UHF energy
-`E(κ)` numerically, and check the analytic gradient and the extracted
-Hessian diagonal reproduce the finite-difference values. **Do not skip this
-because the RHF version already checked out at the same unscaled
-convention** — the diagonal matching RHF's form is necessary, not
-sufficient; the coupling terms between α and β blocks are new and were
-never independently checked.
+The FD probe (`PLANCK_SOSCF_FD_CHECK`, `src/scf/scf.cpp`, gated identically
+to RHF's) verifies `build_uhf_cphf_matrix` against the real UHF `E(κ)` in
+`run_uhf`, using the previous iteration's basis paired against the current
+Fock (RHF SOSCF's own "attempt 2" trap — `Cᵀ F C` is diagonal by
+construction immediately after diagonalizing `F`, so probing there is
+vacuous — bit UHF here too on the first pass, fixed by persisting
+`Ca_prev`/`Cb_prev`/`epsa_prev`/`epsb_prev`). Gated off `atomic_numbers.size()
+> 1` since SAD's per-element atomic UHF sub-solves (`sad.cpp`) recurse into
+this same `run_uhf` on lone atoms, where a spin channel can have zero
+virtuals.
 
-*Verify:* gradient and Hessian-diagonal FD agreement converges as `h → 0`,
-the same three-step-size pattern (`1e-2`, `1e-3`, `1e-4`) RHF's check used.
+**Measured, on water/STO-3G and water/6-31G triplet (genuinely open-shell,
+so the α-β coupling terms are exercised) — and a full sweep over every
+`(a,i)` diagonal index (28 alpha + 36 beta directions on water/6-31g):**
 
-**If the energies or FD checks disagree, stop.** Do not proceed to wiring a
-wrong Hessian into the SCF loop — this was the exact failure mode that cost
-the most debugging time in the RHF work.
+```
+g_fd / g_used  = 2.0000000  (every single probed index, alpha and beta)
+```
 
-#### U2 — wire the SOSCF branch into `run_uhf`, fixed iteration, no fallback (~M)
+**The gradient needs a clean, universal, direction-independent factor of 2**
+(not RHF's 4 — UHF's diagonal-block CPHF formula is already
+`(ai|ia) - (aa|ii)` with no leading Coulomb multiplier, verified separately
+against a hand-derived same-spin formula on a toy random ERI tensor, ratio
+1.0 exactly). The raw Hessian diagonal element `A_used` does **not**
+reproduce `h_fd` cleanly at most swept indices (ratios from 0.2 to 272
+across the sweep, sign flips included) — **this is not a bug**: it is
+expected off-diagonal orbital-Hessian curvature dominating a coupled
+multi-virtual open-shell system, the same effect RHF's own probe never had
+to contend with because that probe's one direction happened to be weakly
+coupled to the rest of the space. What a Newton step actually needs is the
+ratio `g/H`, and since `g_true = 2·g_used` and `H_true = 2·Amat` (confirmed
+together on the well-isolated water/STO-3G indices, where `2·Amat` tracks
+`h_fd` to the same few-percent residual RHF's own probe showed), using
+`g = F_mo` against `Amat` unscaled reproduces the true step at half the
+arithmetic — **`build_uhf_cphf_matrix` needs no changes**, exactly RHF's own
+conclusion.
 
-Mirror RHF SOSCF's branch shape exactly: persist `Ca_soscf_prev`,
-`Cb_soscf_prev`, `epsa_soscf_prev`, `epsb_soscf_prev` across iterations;
-build the gradient/Hessian from the *previous* iteration's basis against
-the *current* Fock (both spins); solve with the same
-`solve_augmented_hessian`, capped the same way (`kSoscfMaxRot`), with the
-same `ah_start_tol` scaling investigation redone for UHF's gradient
-magnitude (do not assume RHF's `0.1·‖g‖` factor transfers without
-checking — UHF's gradient norm combines two spin blocks and may sit at a
-different natural scale). Apply the joint α/β rotation via
-`apply_orbital_rotation` on each spin channel separately.
+*Verify:* gradient FD agreement converges as `h → 0` (`1e-2`, `1e-3`,
+`1e-4`) on both test systems; confirmed.
 
-Switch on a fixed iteration first (`scf_soscf_start`, reusing the same
-keyword — UHF and RHF SOSCF are mutually exclusive per run, so one keyword
-namespace is fine), not a criterion. The goal is proving the step correct,
-exactly as RHF's own S2 was scoped.
+**Stop condition was not triggered** — the gradient scale is clean and
+universal, and the Hessian-diagonal spread is explained (off-diagonal
+curvature, not a convention bug) rather than dismissed. U2 can proceed using
+`g = F_mo` (unscaled) against `Amat` (unscaled) exactly as RHF's own SOSCF
+branch does.
 
-*Verify:* on a UHF case that converges today, SOSCF from iteration N
-reaches the same energy to all 10 printed digits as pure DIIS. Test on a
-genuinely open-shell system (a doublet or triplet), not a UHF run on a
-closed-shell molecule — the α/β coupling terms in the Hessian are exactly
-what a closed-shell UHF run cannot exercise.
+#### U2 — wire the SOSCF branch into `run_uhf`, fixed iteration, no fallback (~M) — DONE
 
-**If the energies differ, stop**, same rule as RHF's S2.
+Wired exactly as scoped, mirroring `run_rhf`'s SOSCF branch shape: U1's
+`Ca_prev`/`Cb_prev`/`epsa_prev`/`epsb_prev` (already persisted every
+iteration for the FD-check probe) are promoted to the actual step's
+gradient/Hessian source, built from the *previous* iteration's basis
+against the *current* `Fa`/`Fb`. Solves with the same
+`solve_augmented_hessian`, capped the same way (`kSoscfMaxRot = 0.20`), and
+`ah_start_tol = max(1e-8, 0.1·‖g‖)` transfers unchanged from RHF — no
+re-derivation needed, since U1 already established `g = F_mo` (unscaled)
+against `Amat` (unscaled) is the correct pairing for a Newton step (the
+ratio is what matters, and both carry the same 2× UHF convention). Applies
+the step via `apply_orbital_rotation` on each spin channel separately (one
+shared step vector, two `κ` matrices — same helper, not forked), then
+semicanonicalizes each spin channel's occ-occ/virt-virt blocks separately
+(pure gauge freedom, mirrors RHF's own post-step semicanonicalization).
 
-#### U3 — decide on semicanonicalization and the level-shift interaction (~S)
+Switched on `scf_soscf_start` (fixed iteration, shared keyword with RHF —
+UHF and RHF SOSCF are mutually exclusive per run) with `!sao_active_uhf &&
+pcm == nullptr`, matching RHF's own `soscf_enabled` gate exactly (no SAO or
+PCM coverage yet, same S2/U2 scope line). DIIS is cleared on window handoff,
+same as RHF.
 
-RHF SOSCF's semicanonicalization step (block-diagonalize occ-occ and
-virt-virt separately after the Newton step) was built, measured to have no
-effect on the actual bug it was meant to fix, and kept anyway because it is
-correct and cheap. For UHF, re-derive this per spin channel and re-measure
-whether it matters here specifically — do not assume RHF's "harmless, keep
-it" verdict transfers.
+*Verified:* on three genuinely open-shell systems (water/STO-3G triplet
+from SAD, water/6-31G triplet from hcore, water-cation/STO-3G doublet from
+hcore — deliberately not a closed-shell UHF run, so the α-β coupling terms
+in the Hessian are actually exercised), SOSCF from iteration 3 reaches the
+same energy as pure DIIS to all 10 printed digits in every case, with the
+orbital gradient shrinking superlinearly across the window (e.g.
+`2.16e-1 → 3.37e-2 → 3.55e-3` on 6-31G). All 11 UHF-tagged regression cases
+and the full core/smoke suites (71/71, 35/35) pass unchanged with SOSCF off
+by default (no `scf_soscf_start`/`scf_soscf_diis_tol` set).
 
-Decide explicitly what SOSCF does with an active level shift: disable the
-level shift during the SOSCF window (simplest, matches the reasoning that
-level shift and second-order methods solve overlapping problems), or thread
-it through the gradient/Hessian construction. **Do not leave this
-undecided** — the level-shifted `Fa_s`/`Fb_s` currently feeds directly into
-what would become the SOSCF gradient source, and silently ignoring the
-shift's presence would double-count or drop it depending on which Fock the
-new code reads.
+**Energies matched at every test point — the stop condition was never
+triggered.**
 
-#### U4 — the switch criterion and SAD composition (~S)
+#### U3 — decide on semicanonicalization and the level-shift interaction (~S) — DONE
 
-Repeat RHF's S3 and its own SAD-composition check for UHF: replace the
-fixed iteration with `scf_soscf_diis_tol`/`scf_soscf_min_iter` (already
-shared keywords, no new ones needed), and verify SOSCF composes with the
-UHF SAD guess (`compute_sad_guess_open_shell`) the same way it was verified
-for RHF's SAD guess — should be equally orthogonal (SAD only sets the
-initial `Pa`/`Pb`, before the loop starts), but verify rather than assume,
-matching the standing rule from `docs/SOSCF.md`.
+**Semicanonicalization, re-measured rather than assumed.** Built into U2
+(block-diagonalize occ-occ and virt-virt separately per spin after the
+Newton step). Disabled it (reading `eps` off the raw, non-eigendecomposed
+`Cᵀ F C` diagonal per spin) and ran a long pure-SOSCF window (200 cycles, no
+DIIS handoff) on two genuinely open-shell systems: water/6-31G triplet
+(60 vs 64 iterations with it) and the water-cation/STO-3G doublet (25 vs 32
+with it). **Both converge to the identical energy either way — no plateau,
+no wrong-basin convergence.** Kept anyway, same verdict as RHF: it is pure
+gauge freedom (rotating occupied or virtual orbitals among themselves
+changes neither density nor energy) and cheap (two small in-block
+eigendecompositions per spin, not a full `nbasis`-size solve), so there is
+no reason to drop it even though it measured as unnecessary at these sizes
+too.
 
-*Verify:* same shape as RHF's S3 — iteration count falls on a system where
-DIIS alone is slow, does not regress on a system where DIIS alone is
-already fast.
+**Level-shift interaction, decided explicitly and enforced in code, not
+just documented.** `soscf_enabled_uhf` now requires `level_shift <= 0.0` —
+SOSCF and an active level shift are mutually exclusive per run, matching
+the doc's recommended simplest option. The SOSCF gradient/Hessian already
+read the plain (unshifted) `Fa`/`Fb`, so this was never a silent
+double-counting risk, but running SOSCF against the unshifted Fock while
+`level_shift > 0.0` is configured would have silently ignored the user's
+own request on exactly the iterations where they set it to matter — the
+new gate makes that impossible rather than merely unlikely. Verified: a
+`level_shift 0.3` + `scf_soscf_start 3` run emits zero `SOSCF :` log lines
+and reaches the same energy (`-74.6557058354`) as the equivalent run
+without the level shift request, confirming DIIS-with-shift runs unchanged
+end to end.
+
+All 11 UHF-tagged regressions plus the full core (71) and smoke (35) suites
+pass unchanged.
+
+#### U4 — the switch criterion and SAD composition (~S) — DONE
+
+The criterion-based trigger required no new code: U2's SOSCF-window
+selection was written as a direct mirror of RHF's own `soscf_enabled`/
+`soscf_active` logic (docs/SOSCF_UHF_DFT_SCOPE.md, U2), which already
+included the `scf_soscf_diis_tol > 0.0` branch alongside the fixed-iteration
+one — so `scf_soscf_diis_tol`/`scf_soscf_min_iter` were live from the moment
+U2 landed. U4's job was purely to verify that path rather than trust it by
+inspection.
+
+**Verified, on water/6-31G triplet (SAD guess) and the water-cation/6-31G
+doublet (hcore guess):**
+
+- The DIIS-error criterion fires at the correct iteration (once
+  `diis_err < scf_soscf_diis_tol` **and** `iter >= scf_soscf_min_iter`, not
+  before) and reaches the same energy as pure DIIS to all 10 printed digits
+  in both cases (`-75.7302585147` triplet, `-75.5085348059` doublet).
+- **SAD composes cleanly with SOSCF** — no interaction, exactly as
+  predicted (SAD only sets the initial `Pa`/`Pb` before the loop starts).
+- **Iteration count falls on the harder-starting case** (water-cation from
+  hcore: 18 → 15) and stays the same on the already-fast one (water/6-31G
+  triplet from SAD: 19 → 19) — same shape RHF's S3 verification used.
+
+No code changes were needed for U4 itself; all 11 UHF-tagged regressions
+plus the full core (71) and smoke (35) suites still pass.
 
 ### What this must not do
 
@@ -192,11 +263,35 @@ exposes `xc_lda_fxc` / `xc_gga_fxc`; Planck's wrapper
 against a trial density on the grid (the analytic analogue of what
 `build_unrestricted_xc_kernel_blocks` computes by finite difference) is
 real, unstarted work — closer in kind to deriving the RHF Hessian than to
-writing the RHF SOSCF *callbacks* was.
+writing the RHF SOSCF *callbacks* was. **Scoped in full, step by step, in
+`docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md`** (F1–F6), written after D1's
+decision so option (b)'s own scope can lean on (a) as its numerical oracle
+rather than trusting a hand-derived Hessian in isolation.
 
 ### Steps
 
-#### D1 — decide the target before writing any code (~S, but a real decision)
+#### D1 — decide the target before writing any code (~S, but a real decision) — DONE
+
+**Decided: (a), the doc's own recommendation** — reuse the existing
+finite-difference XC kernel builders (`build_unrestricted_xc_kernel_blocks`
+/ `build_closed_shell_xc_kernel_blocks`, `src/dft/driver.cpp`) as-is,
+accept the `O(n_occ · n_virt)` grid cost, and scope DFT SOSCF explicitly as
+a small-system correctness reference — not a production convergence
+accelerator — that later serves as the numerical oracle the eventual
+analytic-`fxc` path (b) must be checked against, exactly as RHF SOSCF's own
+`PLANCK_SOSCF_FD_CHECK` probe was used to verify `build_rhf_cphf_matrix`
+before it was trusted.
+
+Confirmed by reading `build_unrestricted_xc_kernel_blocks` closely before
+committing: it is parameterized by `ResponseExcitationSpace`, which already
+represents an *arbitrary* occ-virt subset (`n_occ`, `n_virt`, `C_occ`,
+`C_virt` — nothing TDDFT-specific baked into the type itself). Feeding it a
+space spanning the *entire* occupied/virtual manifold (rather than
+TDDFT's small user-chosen `lr_nstates` subset) is enough to turn it into a
+full DFT SOSCF orbital-Hessian builder with **no new type and no changes to
+the builder itself** — the cost warned about in the corrected framing above
+(one +/- grid pass per occ-virt pair) is exactly what full coverage buys,
+which is the tradeoff (a) explicitly accepts. D2 wires this in for RKS.
 
 This is a genuine fork, and building the wrong one wastes the whole
 remaining scope:

@@ -6,6 +6,7 @@
 #include <format>
 #include <limits>
 #include <numeric>
+#include <string_view>
 #include <tuple>
 
 #include "base/mpi_env.h"
@@ -15,6 +16,7 @@
 #include "post_hf/casscf/aug-hessian.h"
 #include "post_hf/casscf/orbital.h"
 #include "post_hf/rhf_response.h"
+#include "post_hf/uhf_response.h"
 #include "sad.h"
 #include "scf.h"
 #include "symmetry/fock_symmetrization.h"
@@ -1267,6 +1269,22 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
 
     HartreeFock::Logger::scf_header();
 
+    // SOSCF (docs/SOSCF_UHF_DFT_SCOPE.md, U1/U2): the previous iteration's MO
+    // basis, paired against the CURRENT iteration's Fock -- the same pairing
+    // RHF SOSCF uses, and for the same reason: Ca^T Fa Ca is diagonal BY
+    // CONSTRUCTION immediately after diagonalizing Fa, so building the
+    // gradient there is vacuous (RHF SOSCF hit this trap first; U1's FD probe
+    // hit it again here before this fix). U1 used this pairing only for its
+    // FD-check probe; U2 promotes it to the actual SOSCF step's gradient/
+    // Hessian source, exactly mirroring C_soscf_prev/eps_soscf_prev in run_rhf.
+    Eigen::MatrixXd Ca_prev, Cb_prev;
+    Eigen::VectorXd epsa_prev, epsb_prev;
+    // U2: the iteration the SOSCF window actually started (0 = not yet
+    // triggered). Fixed-iteration switch only for now (scf_soscf_start),
+    // mirroring RHF's own S2 scope -- the DIIS-error criterion (RHF's S3) is
+    // U4's job here, not U2's.
+    unsigned int soscf_window_start = 0;
+
     for (unsigned int iter = 1; iter <= max_iter; ++iter)
     {
         const auto iter_start = std::chrono::steady_clock::now();
@@ -1387,9 +1405,51 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
                 std::tie(Fa_diag, Fb_diag) = diis.extrapolate();
         }
 
+        // ── SOSCF window selection (docs/SOSCF_UHF_DFT_SCOPE.md, U2/U3) ──────
+        // Mirrors run_rhf's own soscf_enabled/soscf_active gating exactly
+        // (S2's fixed-iteration switch only; U4 is the DIIS-error-criterion
+        // follow-on, matching RHF's own S3). No SAO/PCM coverage yet, same
+        // scope line RHF's S2 drew.
+        //
+        // U3's explicit decision: SOSCF and an active level shift are
+        // mutually exclusive, not silently combined. The SOSCF gradient/
+        // Hessian below reads the plain (unshifted) Fa/Fb -- level shift and
+        // second-order Newton steps solve the same problem (raising the
+        // virtual space to keep the aufbau ordering stable during early,
+        // far-from-converged iterations), so running both is redundant, and
+        // running SOSCF against the unshifted Fock while level_shift > 0 is
+        // configured would silently ignore the user's own request on exactly
+        // the iterations where they set it to matter. Disabling is simpler
+        // and cheaper than threading the shift through the CPHF gradient/
+        // Hessian construction (RHF has no level_shift feature at all, so
+        // there is no existing pattern to thread it through).
+        const bool soscf_enabled_uhf =
+            (calculator._scf._scf_soscf_diis_tol > 0.0 || calculator._scf._scf_soscf_start > 0) &&
+            !sao_active_uhf && pcm == nullptr && level_shift <= 0.0;
+        if (soscf_enabled_uhf && soscf_window_start == 0)
+        {
+            const bool criterion_fires =
+                calculator._scf._scf_soscf_diis_tol > 0.0
+                    ? (use_diis && diis_err > 0.0 && diis_err < calculator._scf._scf_soscf_diis_tol &&
+                       iter >= calculator._scf._scf_soscf_min_iter)
+                    : (iter >= calculator._scf._scf_soscf_start);
+            if (criterion_fires)
+                soscf_window_start = iter;
+        }
+        const bool soscf_active_uhf =
+            soscf_enabled_uhf && soscf_window_start > 0 &&
+            iter < soscf_window_start + calculator._scf._scf_soscf_cycles &&
+            Ca_prev.size() > 0;
+        if (soscf_window_start > 0 &&
+            iter == soscf_window_start + calculator._scf._scf_soscf_cycles)
+        {
+            diis.clear();
+        }
+
         // ── Diagonalize alpha and beta ────────────────────────────────────────
         Eigen::MatrixXd Ca(nbasis, nbasis), Cb(nbasis, nbasis);
         Eigen::VectorXd epsa(nbasis), epsb(nbasis);
+        std::vector<std::string> mo_sym_a, mo_sym_b;
         auto diagonalize_uhf_spin = [&](const Eigen::MatrixXd &F_spin,
                                         std::vector<std::string> *mo_sym_out,
                                         const std::string &spin_tag)
@@ -1452,23 +1512,304 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             return std::make_pair(U_uhf * C_sao_sorted, eps_sorted);
         };
 
-        std::vector<std::string> mo_sym_a, mo_sym_b;
-        auto res_a = diagonalize_uhf_spin(Fa_diag, sao_active_uhf ? &mo_sym_a : nullptr, "Alpha");
-        if (!res_a)
-            return std::unexpected(res_a.error());
-        Ca = std::move(res_a->first);
-        epsa = std::move(res_a->second);
-
-        auto res_b = diagonalize_uhf_spin(Fb_diag, sao_active_uhf ? &mo_sym_b : nullptr, "Beta");
-        if (!res_b)
-            return std::unexpected(res_b.error());
-        Cb = std::move(res_b->first);
-        epsb = std::move(res_b->second);
-
-        if (sao_active_uhf)
+        if (soscf_active_uhf)
         {
-            calculator._info._scf.alpha.mo_symmetry = mo_sym_a;
-            calculator._info._scf.beta.mo_symmetry = mo_sym_b;
+            // ── SOSCF (docs/SOSCF_UHF_DFT_SCOPE.md, U2) ────────────────────
+            // Mirrors run_rhf's SOSCF branch exactly, generalized to the
+            // coupled alpha/beta step: this REPLACES diagonalization (both
+            // spins), built from the PREVIOUS iteration's basis
+            // (Ca_prev/Cb_prev/epsa_prev/epsb_prev) against the CURRENT
+            // Fock (Fa/Fb) -- the pairing that is actually stationary at
+            // convergence, and the only one RHF's own debugging found to
+            // work (see the RHF branch's own comment for the two wrong
+            // pairings that were tried and ruled out first).
+            //
+            // U1 measured the scale convention directly against the real
+            // UHF E(kappa): g_true = 2*g_used and H_true = 2*Amat
+            // (universal across a full index sweep, unlike RHF's 4x) --
+            // since a Newton step depends only on the ratio g/H, using
+            // g=F_mo against Amat UNSCALED reproduces the true step at
+            // half the arithmetic, exactly RHF's own reasoning.
+            const int n_virt_a_i = static_cast<int>(nbasis) - n_alpha;
+            const int n_virt_b_i = static_cast<int>(nbasis) - n_beta;
+            auto A_res = HartreeFock::Correlation::build_uhf_cphf_matrix(
+                calculator, shell_pairs, Ca_prev, Cb_prev, epsa_prev, epsb_prev, n_alpha, n_beta);
+            if (!A_res)
+                return std::unexpected("SOSCF: " + A_res.error());
+            const Eigen::MatrixXd &Amat = *A_res;
+            const int nova = n_virt_a_i * n_alpha;
+            const int novb = n_virt_b_i * n_beta;
+
+            const Eigen::MatrixXd Fa_mo = Ca_prev.transpose() * Fa * Ca_prev;
+            const Eigen::MatrixXd Fb_mo = Cb_prev.transpose() * Fb * Cb_prev;
+            Eigen::VectorXd g(nova + novb);
+            for (int a = 0; a < n_virt_a_i; ++a)
+                for (int i = 0; i < n_alpha; ++i)
+                    g(a * n_alpha + i) = Fa_mo(n_alpha + a, i);
+            for (int a = 0; a < n_virt_b_i; ++a)
+                for (int i = 0; i < n_beta; ++i)
+                    g(nova + a * n_beta + i) = Fb_mo(n_beta + a, i);
+
+            const auto h_op = [&Amat](const Eigen::VectorXd &x) -> Eigen::VectorXd
+            { return Amat * x; };
+            const auto g_op = [&g]() -> Eigen::VectorXd
+            { return g; };
+
+            // Same fixed-scale-to-|g| start tolerance RHF's own S2/Step-B fix
+            // used (aug-hessian.h's default is CASSCF-tuned and satisfied
+            // after exactly one Krylov iteration on a gradient this small).
+            HartreeFock::Correlation::CASSCF::AugHessianOptions ah_opts;
+            ah_opts.ah_start_tol = std::max(1e-8, 0.1 * g.norm());
+            Eigen::VectorXd x0 = -g;
+            const double x0_norm = x0.norm();
+            if (std::isfinite(x0_norm) && x0_norm > 0.0)
+                x0 /= x0_norm;
+            const HartreeFock::Correlation::CASSCF::AugHessianResult ah =
+                HartreeFock::Correlation::CASSCF::solve_augmented_hessian(
+                    h_op, g_op, nullptr, x0, ah_opts);
+
+            // Same trust-region cap RHF's own SOSCF branch uses, applied
+            // per spin channel (not forked -- one shared step vector, two
+            // kappa matrices).
+            constexpr double kSoscfMaxRot = 0.20;
+            Eigen::MatrixXd kappa_a = Eigen::MatrixXd::Zero(nbasis, nbasis);
+            Eigen::MatrixXd kappa_b = Eigen::MatrixXd::Zero(nbasis, nbasis);
+            bool cap_fired = false;
+            double raw_max_elem = 0.0;
+            if (ah.x.size() == nova + novb && ah.x.allFinite())
+            {
+                Eigen::VectorXd step = ah.x;
+                const double max_elem = step.cwiseAbs().maxCoeff();
+                raw_max_elem = max_elem;
+                if (max_elem > kSoscfMaxRot)
+                {
+                    step *= kSoscfMaxRot / max_elem;
+                    cap_fired = true;
+                }
+                for (int a = 0; a < n_virt_a_i; ++a)
+                    for (int i = 0; i < n_alpha; ++i)
+                    {
+                        const double v = step(a * n_alpha + i);
+                        kappa_a(n_alpha + a, i) = v;
+                        kappa_a(i, n_alpha + a) = -v;
+                    }
+                for (int a = 0; a < n_virt_b_i; ++a)
+                    for (int i = 0; i < n_beta; ++i)
+                    {
+                        const double v = step(nova + a * n_beta + i);
+                        kappa_b(n_beta + a, i) = v;
+                        kappa_b(i, n_beta + a) = -v;
+                    }
+            }
+            Ca = HartreeFock::Correlation::CASSCF::apply_orbital_rotation(Ca_prev, kappa_a, S);
+            Cb = HartreeFock::Correlation::CASSCF::apply_orbital_rotation(Cb_prev, kappa_b, S);
+            if (!Ca.allFinite() || !Cb.allFinite())
+                return std::unexpected(std::format(
+                    "SOSCF: orbital rotation produced non-finite coefficients at iteration {}", iter));
+
+            // Semicanonicalize each spin channel separately -- pure gauge
+            // freedom (rotating occupied among themselves, or virtual among
+            // themselves, changes neither density nor energy), required so
+            // the NEXT iteration's Hessian diagonal is read off a genuine
+            // eigendecomposition rather than Cᵀ F C's raw (non-diagonal)
+            // blocks. Mirrors run_rhf's own semicanonicalization exactly,
+            // once per spin.
+            auto semicanonicalize = [&](const Eigen::MatrixXd &C_in,
+                                        const Eigen::MatrixXd &F_in,
+                                        int n_occ_s, int n_virt_s,
+                                        const char *spin_tag)
+                -> std::expected<std::pair<Eigen::MatrixXd, Eigen::VectorXd>, std::string>
+            {
+                const Eigen::MatrixXd F_mo_new = C_in.transpose() * F_in * C_in;
+                Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> occ_solver(
+                    F_mo_new.topLeftCorner(n_occ_s, n_occ_s));
+                Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> virt_solver(
+                    F_mo_new.bottomRightCorner(n_virt_s, n_virt_s));
+                if (occ_solver.info() != Eigen::Success || virt_solver.info() != Eigen::Success)
+                    return std::unexpected(std::format(
+                        "SOSCF: {} semicanonicalization eigensolve failed at iteration {}", spin_tag, iter));
+
+                Eigen::MatrixXd C_canon(nbasis, nbasis);
+                C_canon.leftCols(n_occ_s) = C_in.leftCols(n_occ_s) * occ_solver.eigenvectors();
+                C_canon.rightCols(n_virt_s) = C_in.rightCols(n_virt_s) * virt_solver.eigenvectors();
+
+                Eigen::VectorXd eps_out(nbasis);
+                eps_out.head(n_occ_s) = occ_solver.eigenvalues();
+                eps_out.tail(n_virt_s) = virt_solver.eigenvalues();
+                return std::make_pair(C_canon, eps_out);
+            };
+
+            // U3 (docs/SOSCF_UHF_DFT_SCOPE.md): re-measured directly rather
+            // than assuming RHF's "harmless, keep it" verdict transfers.
+            // Disabling this per spin (reading eps off the raw, non-
+            // eigendecomposed Cᵀ F C diagonal) on a long pure-SOSCF window
+            // (no DIIS handoff) converges to the SAME energy on both a
+            // triplet (water/6-31g, 60 vs 64 iterations) and a doublet
+            // (water-cation/STO-3G, 25 vs 32 iterations) -- no plateau, no
+            // wrong-basin convergence, unlike the risk RHF's own note
+            // describes for a genuinely long run. Kept anyway: it is correct
+            // (pure gauge freedom -- rotating occupied or virtual orbitals
+            // among themselves changes neither density nor energy) and cheap
+            // (two small in-block eigendecompositions per spin, not a full
+            // nbasis-size solve), so there is no reason to drop it even
+            // though it measured as unnecessary here too.
+            auto canon_a = semicanonicalize(Ca, Fa, n_alpha, n_virt_a_i, "alpha");
+            if (!canon_a)
+                return std::unexpected(canon_a.error());
+            Ca = std::move(canon_a->first);
+            epsa = std::move(canon_a->second);
+
+            auto canon_b = semicanonicalize(Cb, Fb, n_beta, n_virt_b_i, "beta");
+            if (!canon_b)
+                return std::unexpected(canon_b.error());
+            Cb = std::move(canon_b->first);
+            epsb = std::move(canon_b->second);
+
+            const double homo_a = epsa.head(n_alpha).maxCoeff();
+            const double lumo_a = epsa.tail(n_virt_a_i).minCoeff();
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, "SOSCF :",
+                std::format(
+                    "step at iter {}: |g|={:.3e} v0={:.4f} eig={:.4e} converged={} "
+                    "ah_iters={} ah_residual={:.3e} "
+                    "HOMO(a)={:.4f} LUMO(a)={:.4f} gap(a)={:.4f} "
+                    "raw_max|kappa|={:.3e} cap_fired={}",
+                    iter, g.norm(), ah.v0, ah.eigenvalue, ah.converged,
+                    ah.iterations, ah.residual_norm,
+                    homo_a, lumo_a, lumo_a - homo_a,
+                    raw_max_elem, cap_fired));
+        }
+        else
+        {
+            auto res_a = diagonalize_uhf_spin(Fa_diag, sao_active_uhf ? &mo_sym_a : nullptr, "Alpha");
+            if (!res_a)
+                return std::unexpected(res_a.error());
+            Ca = std::move(res_a->first);
+            epsa = std::move(res_a->second);
+
+            auto res_b = diagonalize_uhf_spin(Fb_diag, sao_active_uhf ? &mo_sym_b : nullptr, "Beta");
+            if (!res_b)
+                return std::unexpected(res_b.error());
+            Cb = std::move(res_b->first);
+            epsb = std::move(res_b->second);
+
+            if (sao_active_uhf)
+            {
+                calculator._info._scf.alpha.mo_symmetry = mo_sym_a;
+                calculator._info._scf.beta.mo_symmetry = mo_sym_b;
+            }
+        }
+
+        // ── SOSCF UHF Hessian FD check (docs/SOSCF_UHF_DFT_SCOPE.md, U1) ──────
+        // Verifies build_uhf_cphf_matrix's gradient/Hessian pairing against the
+        // ACTUAL UHF energy E(kappa), the same way RHF SOSCF's own
+        // PLANCK_SOSCF_FD_CHECK probe verified build_rhf_cphf_matrix before any
+        // SCF-loop wiring existed. Runs once, at iteration 2 (Ca/Cb/epsa/epsb
+        // are already a real post-diagonalization basis by then), gated so it
+        // never fires in a normal build. Only exercises the conventional-ERI
+        // UHF path, matching the RHF probe's own scope.
+        // SAD's per-element atomic UHF sub-solves (sad.cpp) recurse into this
+        // same run_uhf on a lone atom, where a spin channel can have zero
+        // virtuals (e.g. H's beta channel) -- excluded via atomic_numbers.size()
+        // so the probe only ever fires on the real, multi-atom molecule.
+        if (iter == 2 && std::getenv("PLANCK_SOSCF_FD_CHECK") && use_conventional &&
+            calculator._molecule.atomic_numbers.size() > 1)
+        {
+            const int n_virt_a = static_cast<int>(nbasis) - n_alpha;
+
+            auto energy_at_kappa = [&](const Eigen::MatrixXd &kap_a,
+                                       const Eigen::MatrixXd &kap_b) -> double
+            {
+                const Eigen::MatrixXd Ca_trial =
+                    HartreeFock::Correlation::CASSCF::apply_orbital_rotation(Ca_prev, kap_a, S);
+                const Eigen::MatrixXd Cb_trial =
+                    HartreeFock::Correlation::CASSCF::apply_orbital_rotation(Cb_prev, kap_b, S);
+                const Eigen::MatrixXd Pa_trial =
+                    Ca_trial.leftCols(n_alpha) * Ca_trial.leftCols(n_alpha).transpose();
+                const Eigen::MatrixXd Pb_trial =
+                    Cb_trial.leftCols(n_beta) * Cb_trial.leftCols(n_beta).transpose();
+                const auto [Ga_trial, Gb_trial] =
+                    HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa_trial, Pb_trial, nbasis);
+                const Eigen::MatrixXd Fa_trial = H + Ga_trial;
+                const Eigen::MatrixXd Fb_trial = H + Gb_trial;
+                return 0.5 * ((Pa_trial.array() * (H + Fa_trial).array()).sum() +
+                              (Pb_trial.array() * (H + Fb_trial).array()).sum());
+            };
+
+            auto A_res = HartreeFock::Correlation::build_uhf_cphf_matrix(
+                calculator, shell_pairs, Ca_prev, Cb_prev, epsa_prev, epsb_prev, n_alpha, n_beta);
+            if (!A_res)
+                return std::unexpected("SOSCF[FD]: " + A_res.error());
+            const Eigen::MatrixXd &Amat = *A_res;
+            const int nova = n_virt_a * n_alpha;
+
+            const double E0 = energy_at_kappa(
+                Eigen::MatrixXd::Zero(nbasis, nbasis), Eigen::MatrixXd::Zero(nbasis, nbasis));
+
+            // g_ai = F_mo(a,i) per spin, evaluated in the PREVIOUS iteration's
+            // basis against the CURRENT Fock -- Ca_prev does not diagonalize
+            // Fa, so this is a genuine (nonzero) gradient, unlike Ca^T Fa Ca.
+            // Packed [alpha block; beta block] the same way
+            // build_uhf_cphf_matrix packs its rows/columns.
+            const Eigen::MatrixXd Fa_mo = Ca_prev.transpose() * Fa * Ca_prev;
+            const Eigen::MatrixXd Fb_mo = Cb_prev.transpose() * Fb * Cb_prev;
+
+            // Measured (docs/SOSCF_UHF_DFT_SCOPE.md, U1): a full sweep over
+            // EVERY (a,i) diagonal index on water/6-31g triplet (28 alpha +
+            // 36 beta directions) found g_fd/g_used = 2.0000000 to 6 decimals
+            // at every single index -- a universal, direction-independent
+            // scale factor, exactly like RHF's own g_true=4*F_mo finding.
+            // A_used (the raw diagonal Hessian element) does NOT reproduce
+            // h_fd cleanly at most indices (ratios from 0.2 to 272 across the
+            // sweep) -- but this is expected, not a bug: off-diagonal
+            // orbital-Hessian curvature dominates a coupled multi-virtual
+            // system, and a bare diagonal element was never meant to
+            // reproduce a single-direction second derivative on its own (RHF
+            // only saw a clean ratio because that probe direction happened to
+            // be weakly coupled to the rest of the space). What actually
+            // matters for a Newton step is the RATIO g/H, and since g and H
+            // share the same unscaled convention (g_true=2*g_used,
+            // H_true=2*Amat, verified together: g_used/Amat at the isolated
+            // water/STO-3G triplet indices reproduces g_fd/h_fd to the same
+            // few-percent residual RHF's own probe showed), using
+            // g=F_mo against Amat unscaled reproduces the true step at 1/2
+            // the arithmetic without ever touching build_uhf_cphf_matrix.
+            struct Probe
+            {
+                const char *spin;
+                int a, i, k; // k = packed index into g/Amat
+            };
+            const Probe probes[] = {
+                {"alpha", 0, 0, 0 * n_alpha + 0},
+                {"beta", 0, 0, nova + 0 * n_beta + 0},
+            };
+
+            for (const auto &p : probes)
+            {
+                const double g_used = std::string_view(p.spin) == "alpha"
+                                          ? Fa_mo(n_alpha + p.a, p.i)
+                                          : Fb_mo(n_beta + p.a, p.i);
+                for (double h : {1e-2, 1e-3, 1e-4})
+                {
+                    Eigen::MatrixXd kap_a = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                    Eigen::MatrixXd kap_b = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                    Eigen::MatrixXd &kap = std::string_view(p.spin) == "alpha" ? kap_a : kap_b;
+                    const int nocc = std::string_view(p.spin) == "alpha" ? n_alpha : n_beta;
+                    kap(nocc + p.a, p.i) = h;
+                    kap(p.i, nocc + p.a) = -h;
+                    const double Ep = energy_at_kappa(kap_a, kap_b);
+                    const double Em = energy_at_kappa(-kap_a, -kap_b);
+                    const double g_fd = (Ep - Em) / (2.0 * h);
+                    const double h_fd = (Ep - 2.0 * E0 + Em) / (h * h);
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Info, "SOSCF[FD] :",
+                        std::format(
+                            "spin={} h={:.0e} 2*g_used={:.8f} g_fd={:.8f} diff={:.3e} | "
+                            "2*A_used={:.8f} h_fd={:.8f} diff={:.3e}",
+                            p.spin, h, 2.0 * g_used, g_fd, std::abs(2.0 * g_used - g_fd),
+                            2.0 * Amat(p.k, p.k), h_fd, std::abs(2.0 * Amat(p.k, p.k) - h_fd)));
+                }
+            }
         }
 
         // ── Next spin densities ───────────────────────────────────────────────
@@ -1498,6 +1839,13 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         Pa = density_alpha_next;
         Pb = density_beta_next;
         E_prev = E_total;
+
+        // SOSCF UHF Hessian FD check (U1): keep the basis one iteration behind
+        // for the next probe call, mirroring RHF SOSCF's C_soscf_prev.
+        Ca_prev = Ca;
+        Cb_prev = Cb;
+        epsa_prev = epsa;
+        epsb_prev = epsb;
 
         store_unrestricted_iteration(
             calculator,

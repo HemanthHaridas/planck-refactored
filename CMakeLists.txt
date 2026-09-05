@@ -325,7 +325,18 @@ list(REMOVE_ITEM POSTHF_SRC ${SRC_DIR}/post_hf/casscf.cpp)
 #   mp2_gradient.cpp     — RMP2/UMP2 gradient intermediates, referenced from
 #                          gradient/gradient.cpp
 #   rhf_response.cpp     — solve_rhf_cphf, used by mp2_gradient.cpp
-# CASSCF, RASSCF, and coupled-cluster sources are intentionally excluded.
+#   casscf/orbital.cpp, casscf/aug-hessian.cpp,
+#   casscf/aug-hessian-orbital.cpp — apply_orbital_rotation /
+#                          solve_augmented_hessian, called unconditionally
+#                          from run_rhf's/run_uhf's SOSCF branch (scf/scf.cpp,
+#                          which planck-dft links for its shared SAD/DIIS
+#                          helpers even though it never calls run_rhf/run_uhf
+#                          itself). Their own includes are limited to
+#                          integrals/os.h, post_hf/integrals.h, and
+#                          post_hf/ri/ri_eri.h, all already listed above, so
+#                          this pulls in no other CASSCF machinery.
+# The rest of CASSCF, RASSCF, and coupled-cluster sources are intentionally
+# still excluded.
 set(POSTHF_DFT_SRC
     ${SRC_DIR}/post_hf/integrals.h
     ${SRC_DIR}/post_hf/integrals.cpp
@@ -345,6 +356,12 @@ set(POSTHF_DFT_SRC
     ${SRC_DIR}/post_hf/rhf_response.cpp
     ${SRC_DIR}/post_hf/uhf_response.h
     ${SRC_DIR}/post_hf/uhf_response.cpp
+    ${SRC_DIR}/post_hf/casscf/orbital.h
+    ${SRC_DIR}/post_hf/casscf/orbital.cpp
+    ${SRC_DIR}/post_hf/casscf/aug-hessian.h
+    ${SRC_DIR}/post_hf/casscf/aug-hessian.cpp
+    ${SRC_DIR}/post_hf/casscf/aug-hessian-orbital.h
+    ${SRC_DIR}/post_hf/casscf/aug-hessian-orbital.cpp
 )
 
 file(GLOB GRADIENT_SRC CONFIGURE_DEPENDS
@@ -786,6 +803,14 @@ if(BUILD_TESTING)
 
     add_executable(planck-dft-functional-support
         ${CMAKE_SOURCE_DIR}/tests/dft_functional_support.cpp
+    )
+
+    # F1 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): isolated check that libxc's
+    # own analytic second derivative (xc_lda_fxc/xc_gga_fxc) agrees with a
+    # finite difference of libxc's own first derivative (vrho/vsigma).
+    # Header-only wrapper, so no src/ sources beyond libxc itself.
+    add_executable(planck-dft-fxc-selfcheck
+        ${CMAKE_SOURCE_DIR}/tests/dft_fxc_selfcheck.cpp
     )
 
     add_executable(planck-eri-derivative-kernels
@@ -1420,6 +1445,11 @@ if(BUILD_TESTING)
         ${LIBXC_INSTALL_DIR}/include
     )
 
+    target_include_directories(planck-dft-fxc-selfcheck PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+    )
+
     target_include_directories(planck-eri-derivative-kernels PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -1654,6 +1684,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-dft-functional-support PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dft-fxc-selfcheck PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -1946,6 +1982,11 @@ if(BUILD_TESTING)
     )
     add_dependencies(planck-dft-functional-support libxc)
 
+    target_link_libraries(planck-dft-fxc-selfcheck
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-fxc-selfcheck libxc)
+
     add_test(
         NAME planck-casscf-internal
         COMMAND planck-casscf-internal
@@ -1959,6 +2000,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-dft-functional-support
         COMMAND planck-dft-functional-support
+    )
+
+    add_test(
+        NAME planck-dft-fxc-selfcheck
+        COMMAND planck-dft-fxc-selfcheck
     )
 
     add_test(

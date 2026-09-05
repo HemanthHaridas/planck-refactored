@@ -7,7 +7,14 @@
 
 namespace HartreeFock::Correlation
 {
-    std::expected<UHFCphfSolution, std::string> solve_uhf_cphf(
+    // Coupled alpha/beta orbital-Hessian matrix (docs/SOSCF_UHF_DFT_SCOPE.md,
+    // U1). Split out of solve_uhf_cphf so SOSCF can call it directly with the
+    // CURRENT (not yet converged) MO coefficients/energies, mirroring
+    // build_rhf_cphf_matrix's own convergence-guard relaxation. Its one
+    // pre-SOSCF caller (solve_uhf_cphf, used by the UHF MP2 gradient) always
+    // runs post-convergence anyway, so dropping the guard here is
+    // behavior-neutral for it.
+    std::expected<Eigen::MatrixXd, std::string> build_uhf_cphf_matrix(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const Eigen::MatrixXd &coeff_alpha,
@@ -15,20 +22,16 @@ namespace HartreeFock::Correlation
         const Eigen::VectorXd &energy_alpha,
         const Eigen::VectorXd &energy_beta,
         int nocc_alpha,
-        int nocc_beta,
-        const Eigen::MatrixXd &rhs_alpha,
-        const Eigen::MatrixXd &rhs_beta)
+        int nocc_beta)
     {
-        if (!calculator._info._is_converged)
-            return std::unexpected("solve_uhf_cphf: SCF not converged.");
         if (calculator._scf._scf != HartreeFock::SCFType::UHF || !calculator._info._scf.is_uhf)
-            return std::unexpected("solve_uhf_cphf: UHF reference required.");
+            return std::unexpected("build_uhf_cphf_matrix: UHF reference required.");
 
         const int nb = static_cast<int>(calculator._shells.nbasis());
         const int nva = static_cast<int>(coeff_alpha.cols()) - nocc_alpha;
         const int nvb = static_cast<int>(coeff_beta.cols()) - nocc_beta;
         if (nocc_alpha <= 0 || nocc_beta < 0 || nva <= 0 || nvb <= 0)
-            return std::unexpected("solve_uhf_cphf: invalid occupied/virtual dimensions.");
+            return std::unexpected("build_uhf_cphf_matrix: invalid occupied/virtual dimensions.");
 
         const Eigen::MatrixXd Ca_occ = coeff_alpha.leftCols(nocc_alpha);
         const Eigen::MatrixXd Ca_virt = coeff_alpha.middleCols(nocc_alpha, nva);
@@ -97,6 +100,36 @@ namespace HartreeFock::Correlation
                 for (int i = 0; i < nocc_beta; ++i)
                     A(nova + a * nocc_beta + i, col) += vb(a, i);
         }
+
+        return A;
+    }
+
+    std::expected<UHFCphfSolution, std::string> solve_uhf_cphf(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const Eigen::MatrixXd &coeff_alpha,
+        const Eigen::MatrixXd &coeff_beta,
+        const Eigen::VectorXd &energy_alpha,
+        const Eigen::VectorXd &energy_beta,
+        int nocc_alpha,
+        int nocc_beta,
+        const Eigen::MatrixXd &rhs_alpha,
+        const Eigen::MatrixXd &rhs_beta)
+    {
+        if (!calculator._info._is_converged)
+            return std::unexpected("solve_uhf_cphf: SCF not converged.");
+
+        auto A_res = build_uhf_cphf_matrix(
+            calculator, shell_pairs, coeff_alpha, coeff_beta,
+            energy_alpha, energy_beta, nocc_alpha, nocc_beta);
+        if (!A_res)
+            return std::unexpected(A_res.error());
+        const Eigen::MatrixXd &A = *A_res;
+
+        const int nva = static_cast<int>(coeff_alpha.cols()) - nocc_alpha;
+        const int nvb = static_cast<int>(coeff_beta.cols()) - nocc_beta;
+        const int nova = nva * nocc_alpha;
+        const int novb = nvb * nocc_beta;
 
         Eigen::VectorXd rhs(nova + novb);
         for (int a = 0; a < nva; ++a)
