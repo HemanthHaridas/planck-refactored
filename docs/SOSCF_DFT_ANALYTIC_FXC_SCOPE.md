@@ -808,6 +808,148 @@ duplication).
 UHF) — a doublet or triplet small molecule, both a same-spin and a
 cross-spin `x` direction, against the FD oracle.
 
+**Broken into five sub-steps (F3.4.1–F3.4.5), same discipline as F3.3.**
+The new risk here is not new calculus (the chain rule is the same one
+F3.3 already derived and verified) but **index bookkeeping**: three arrays
+(`sigma` input, `v2rhosigma` output, `v2sigma2` output) each pack a
+different number of components (3, 6, 6) in an order libxc's own public
+header does not document — confirmed by reading
+`src/external/libxc/install/include/xc.h` directly, not assumed absent
+evidence to the contrary. F1 already found the *component counts* by
+reading libxc's `util.c` rather than guessing from
+`spin_components()`/`sigma_components()`; F3.4.1 below is the same
+discipline applied to the *component ordering*, which F1 did not need
+(its own polarized check only needed `v2rho2`'s 3 components, whose
+`aa/ab/bb` order was inferred from the existing `sigma[]` packing
+convention at `xc_grid.cpp:166-168` and never independently confirmed for
+`v2rhosigma`/`v2sigma2`'s larger 6-component arrays). This is exactly the
+class of defect F3.2's own `(i=0,a=0)` symmetry-suppressed direction and
+F3.3's "T3 is easy to miss" already warned about: a plausible-looking
+formula that reads the wrong slot of a packed array and still nearly
+agrees, because the misread component is small or the test direction
+doesn't excite it.
+
+| Step | Adds | New risk | Verifies against |
+|---|---|---|---|
+| F3.4.1 | Confirm `v2rhosigma`/`v2sigma2` component ordering | none (pure measurement) | libxc's own FD, mirroring F1's `v2rhosigma` equivalence check but for ALL 6+6 slots individually |
+| F3.4.2 | Same-spin polarized `δV_xc^α` (`x_β=0`, cross-spin density response held at zero) | spin-resolved coefficients, same-spin slots only | FD oracle, PBE polarized, same-spin trial `x` |
+| F3.4.3 | Add cross-spin coupling: `δρ_β`, `δ∇ρ_β` feeding into `δV_xc^α` | cross-spin slots of `v2rhosigma`/`v2sigma2`, plus the existing first-derivative cross term `vsigma(point,1)` seeing a NEW `δ∇ρ_β` (T3's cross-spin analogue) | FD oracle, PBE polarized, mixed alpha/beta trial `x` |
+| F3.4.4 | `δV_xc^β` (mirror of F3.4.2/F3.4.3) | none new — same formula with α/β swapped, checked independently rather than assumed symmetric | FD oracle, PBE polarized, same-spin and mixed trial `x` |
+| F3.4.5 | Whole-molecule, AO-projected cross-check (F3.3.4's analogue) on a genuinely open-shell system | none new — composition with the real UKS AO-projection machinery | FD oracle, UKS branch, `(a,i)` directions on both spins |
+
+Each step's own verification is a closed loop, same as F3.3: **if a step
+disagrees, stop before the next** — do not attempt cross-spin coupling
+(F3.4.3) on top of an unverified same-spin base (F3.4.2), and do not
+attempt the whole-molecule check (F3.4.5) before both spin channels agree
+at the point level.
+
+##### F3.4.1 — confirm `v2rhosigma`/`v2sigma2` component ordering (~S)
+
+Before writing any Hessian-vector algebra for the polarized GGA case,
+settle what each of `v2rhosigma`'s 6 slots and `v2sigma2`'s 6 slots
+actually means, the same way F1 settled the *counts* by reading libxc's
+source rather than guessing. `sigma_components()=3` is confirmed to pack
+`(aa, ab, bb)` (`src/dft/xc_grid.cpp:166-168`, and the existing
+first-derivative `coefficient_alpha`/`coefficient_beta` construction at
+`ks_matrix.cpp:199-202` already depends on that exact order). The natural
+guess is `v2rhosigma[rho_channel][sigma_channel]` flattened as
+`rho ∈ {α,β} × sigma ∈ {aa,ab,bb}` (6 = 2×3) and `v2sigma2` as the 6
+independent pairs among `{aa,ab,bb}` (`aa-aa, aa-ab, aa-bb, ab-ab, ab-bb,
+bb-bb`) — but **a guess is not a measurement**, and this is exactly the
+kind of assumption F1's own polarized `v2rho2` finding (`aa`, `ab`, `bb`,
+not `nspin=2`) already showed does not follow mechanically from the
+component *count* alone.
+
+Verify each slot independently via the same central-difference technique
+F1's own selfcheck used: perturb `rho_α`, `rho_β`, `sigma_aa`, `sigma_ab`,
+`sigma_bb` one at a time (not jointly — a joint perturbation cannot
+attribute a disagreement to a specific slot), finite-difference the
+corresponding first-derivative output (`vrho_α`, `vrho_β`, `vsigma_aa`,
+`vsigma_ab`, `vsigma_bb`), and match each result against exactly one
+`v2rhosigma`/`v2sigma2` slot. This produces a full 2×3 map for
+`v2rhosigma` and a full 6-slot map for `v2sigma2`, pinned by measurement
+rather than assumed from the guessed layout above.
+
+*Verify:* on PBE (polarized), every one of the 2×3=6 `v2rhosigma` slots
+and 6 `v2sigma2` slots individually matches its corresponding single-
+variable finite difference, at the FD path's own step-size precision.
+**If any slot's guessed position disagrees with its measured position,
+stop and correct the indexing before F3.4.2** — every later sub-step reads
+these arrays, so an ordering bug here silently corrupts everything built
+on top of it, the same failure mode F1's own polarized-count finding
+exists to prevent one level up.
+
+##### F3.4.2 — same-spin polarized `δV_xc^α` (~S, after F3.4.1)
+
+With F3.4.1's ordering confirmed, build the alpha-channel induced
+potential for a trial rotation confined to the alpha spin only
+(`x_β = 0`, so `δρ_β = δ∇ρ_β = 0` identically). This isolates the
+same-spin diagonal terms — `v2rho2_aa`, the `aa`-rooted `v2rhosigma`
+slots, `v2sigma2_aa-aa` — from the cross-spin coupling F3.4.3 adds,
+mirroring how F3.2 isolated LDA's same-spin term before its own
+cross-spin step.
+
+*Verify:* PBE, polarized, alpha-only trial `x`, on a genuinely open-shell
+system (not closed-shell — an alpha-only perturbation on a closed-shell
+reference cannot distinguish a same-spin bug from a mishandled restricted
+collapse). Point-level check against a joint `(δρ_α, δ∇ρ_α)` finite
+difference of the real `vrho_α`/`vsigma_aa` outputs, same structural
+pattern as F3.3.3's `check_T1_T2_T3` but with `δρ_β=δ∇ρ_β=0` substituted
+throughout.
+
+##### F3.4.3 — add cross-spin coupling to `δV_xc^α` (~M, after F3.4.2)
+
+Add a nonzero `δρ_β`/`δ∇ρ_β`. This is the step the doc's own framing
+calls out specifically: **the existing first-derivative `coefficient_alpha`
+already mixes `vsigma_ab·∇ρ_β` into the alpha channel**
+(`ks_matrix.cpp:200`), so differentiating it introduces not only the
+`v2rhosigma`/`v2sigma2` cross-spin coefficient terms (F3.3's T1/T2
+analogues) but also a **new T3-shaped term**: the unchanged, ground-state
+`vsigma_ab` now contracted against `δ∇ρ_β` (not `δ∇ρ_α`) — the cross-spin
+sibling of F3.3.3's T3, easy to miss for the same reason T3 itself was
+(differentiating only the coefficients and forgetting `∇ρ_β` is itself an
+argument of the existing coupling term).
+
+*Verify:* PBE, polarized, mixed alpha/beta trial `x` (matching F3.2's own
+"an alpha-only x cannot by itself catch a bug reading the cross-spin
+slot" lesson), against the FD oracle. Choose a direction and geometry
+where the cross-spin gradient term is not symmetry-suppressed — check
+this directly (print the raw cross-spin contribution and confirm it is
+not near-zero) rather than assuming a doublet/triplet system is safe by
+construction, the exact trap F3.2's own `(i=0,a=0)` direction fell into
+for LDA.
+
+##### F3.4.4 — `δV_xc^β` (~S, after F3.4.3)
+
+Mirror F3.4.2/F3.4.3 for the beta channel. **Not assumed symmetric with
+alpha and copy-pasted** — checked independently, since a transposed-index
+bug in the `v2rhosigma`/`v2sigma2` cross-spin slots could easily satisfy
+one spin channel's formula while breaking the other (the same asymmetry
+risk the existing first-derivative `coefficient_beta` already encodes:
+its `v2sigma2`-analogue term uses the `bb` slot and `2.0·`, not `aa` and
+`2.0·`, mirroring `coefficient_alpha`'s own asymmetric weighting).
+
+*Verify:* same shape as F3.4.2/F3.4.3, beta-only and mixed trial `x`,
+against the FD oracle.
+
+##### F3.4.5 — whole-molecule cross-check (~S, after F3.4.4)
+
+F3.3.4's analogue for the polarized case: build the full AO-projected
+`H·x` for both spin channels on a real open-shell molecule and compare
+against `build_unrestricted_xc_kernel_blocks` directly (not
+`build_closed_shell_xc_kernel_blocks` — polarized is the UKS oracle's
+native case, so no `.first + .second` singlet-recombination convention
+is needed here; read the spin-resolved blocks directly, the same way
+F3.2's own LDA polarized probe already does for `PLANCK_FXC_F3_2_CHECK`).
+
+*Verify:* PBE, a genuinely open-shell system (doublet or triplet, per the
+doc's own instruction above), same-spin and mixed `(a,i)` directions on
+both alpha and beta, against the FD oracle. **If this disagrees, the
+earlier sub-steps already isolate where to look** — check whether
+F3.4.1's ordering, F3.4.2/F3.4.4's same-spin terms, or F3.4.3's cross-spin
+T3-analogue was itself compromised by an interaction only the full
+AO-projected sum exposes, before assuming a new defect.
+
 #### F3.5 — MO projection and `(a,i)` packing (~S, after F3.4)
 
 Pure plumbing, no new physics: project the verified `δV_xc` (whichever of
