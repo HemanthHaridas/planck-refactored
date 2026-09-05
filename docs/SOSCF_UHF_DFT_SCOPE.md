@@ -331,19 +331,70 @@ much larger refactor with its own risk, out of scope here.
 *Verify:* whichever kernel path D1 chose, the same-energy-as-DIIS check
 RHF's S2 used, on a small closed-shell KS case first.
 
-**Broken into four sub-steps (D2.1–D2.4), mirroring U1→U2→U3→U4's own
-discipline (build and verify the Hessian source in isolation before
-wiring it into the SCF loop; wire fixed-iteration with no fallback; settle
-the remaining design decisions; verify the switch criterion) — not
-attempted as one piece.** The FD-kernel oracle D1 chose
-(`build_closed_shell_xc_kernel_blocks`) is architecturally the easiest of
-the three Hessian sources built so far to wire: unlike U1 (which had to
-*factor out* a Hessian builder that did not yet exist standalone from
-`solve_uhf_cphf`), `build_closed_shell_xc_kernel_blocks` already returns a
-dense matrix from a single call, so D2.1 is confirmation-and-adaptation,
-not new construction — but it must still be checked directly, not assumed,
-since RHF SOSCF's own history is the standing counter-example to "looks
-right on paper."
+**RESCOPED after D1's own recommendation went stale.** D1 (above) chose
+"(a) first" — the FD-kernel oracle, with the analytic `fxc` path (b)
+explicitly deferred as harder, unstarted work to be scoped later "in
+`docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md` (F1–F6)... written after D1's
+decision." **F1–F5 have since landed in full** (see that file): the
+analytic Hessian-vector product is derived, verified point-by-point
+against the FD-kernel oracle for every term (LDA/GGA, unpolarized and
+polarized), verified once against the oracle at the whole-molecule
+AO-projected level for both RKS and UKS, and the MO-projection/packing
+step (F3.5) is real, kept production code
+(`pack_hessian_vector_product_cphf_order`,
+`src/dft/response_packing.{h,cpp}`). D1's premise — "(b) is unstarted and
+harder, so build the cheap oracle first and let it serve as (b)'s
+eventual numerical reference" — is no longer true: the reference has
+already been built and consumed. Building a *second*, dense,
+`O(n_occ·n_virt)`-grid-pass Hessian source now, when a verified `O(1)`
+analytic one already exists, would be solving a problem F3 already
+solved, and would leave the actual point of D1's option (b) — the
+production speedup — undelivered. **D2 is rescoped to wire F3's analytic
+Hessian-vector product into the RKS SOSCF loop directly.** The FD-kernel
+oracle is not thrown away: it remains available as an independent
+correctness check for D2's own wiring (mirroring how RHF/UHF SOSCF each
+had a `PLANCK_SOSCF_FD_CHECK`-style verification step before being
+trusted), not as the production Hessian source itself.
+
+**What F3 actually left runnable, checked directly rather than assumed:**
+F3.1–F3.4 verified the T1..T5 algebra at isolated grid points (synthetic
+`ρ`/`∇ρ`/`δρ`/`δ∇ρ` values, no real molecule) and, at F3.3.4/F3.4.5, once
+each verified that the algebra composes correctly with a real converged
+SCF's AO-projection machinery — **but those whole-molecule probes were
+themselves removed from `driver.cpp` afterward** (per the
+debug-probes-must-become-tests-or-be-deleted decision), and **the T1..T5
+contraction itself was never promoted into a standalone, callable
+production function** — it only ever existed inline inside test files and
+the now-deleted probes. So D2 cannot skip straight to "call the existing
+analytic Hessian-vector function"; that function does not exist yet as
+production code. **D2.0 below is a new, necessary step this rescoping
+adds**, not present in the pre-F3 D2 draft, because the pre-F3 draft
+assumed (correctly, at the time) that D2 would be wiring the *already
+production-shaped* FD-kernel oracle, not promoting research-stage
+point-level algebra into a first production entry point.
+
+Broken into five sub-steps (D2.0–D2.4), extending U1→U2→U3→U4's own
+discipline (build and verify the Hessian source as a real, standalone
+function before wiring it into the SCF loop; wire fixed-iteration with no
+fallback; settle the remaining design decisions; verify the switch
+criterion):
+
+| Step | Adds | Verifies against |
+|---|---|---|
+| D2.0 | Promote F3's T1..T5 algebra into a real production function computing `δV_xc(AO basis)` from a trial `δP`, for RKS LDA/GGA | F3's own already-verified point-level formulas (this step is transcription into a proper function signature, not new derivation) plus one fresh whole-molecule check against the FD-kernel oracle, since the composition-with-real-AO-projection check was deleted along with the probe that ran it |
+| D2.1 | Confirm the new function's Hessian-vector product, called at full occ-virt width via F3.5's packing, reproduces the true RKS `E(κ)` directly | Finite difference of the real RKS energy, the same `energy_at_kappa` shape `PLANCK_SOSCF_FD_CHECK` used |
+| D2.2 | Wire the SOSCF branch into the RKS loop, fixed iteration, no fallback, mirroring `run_rhf`'s S2/`run_uhf`'s U2 shape exactly | Same-energy-as-DIIS to all 10 printed digits, superlinear gradient shrinkage across the window |
+| D2.3 | Decide semicanonicalization and level-shift interaction for RKS SOSCF (does DFT's KS loop even have a level-shift knob to conflict with? — check, do not assume it mirrors RHF/UHF) | Re-measured with semicanonicalization on/off on a real system, same discipline S3/U3 used |
+| D2.4 | Verify the DIIS-error switch criterion (`scf_soscf_diis_tol`) fires correctly for RKS, not just the fixed-iteration path | Correct trigger iteration, same energy either way, on at least one small closed-shell KS case |
+
+Each step's own verification gates the next — **if D2.0 or D2.1 disagrees,
+stop before D2.2**; wiring an unverified Hessian source into a live SCF
+loop is exactly the failure mode RHF SOSCF's own scale-mismatch bug
+demonstrated once already, and F3's own point-level verification does not
+by itself prove the *assembled, callable* function is correct — a
+transcription slip while promoting inline test algebra into a real
+function signature is a new, distinct risk this rescoping introduces and
+must gate on its own.
 
 **A stale reference to correct while doing this work:** `docs/SOSCF.md`'s
 own "Validation strategy that should remain in place" section says to
@@ -355,64 +406,72 @@ from production; converting them was found impractical, so they were
 deleted with no replacement). `docs/SOSCF.md` needs a note added when D2
 lands, so it stops recommending a probe that no longer exists.
 
-| Step | Adds | Verifies against |
-|---|---|---|
-| D2.1 | Confirm `build_closed_shell_xc_kernel_blocks` gives the right thing when spanning the FULL occ-virt space (not TDDFT's small subset), in isolation, no SCF-loop wiring | A standalone build (real converged RKS, full-space `ResponseExcitationSpace`), diagonal-scale sanity check against the plain KS orbital-energy gaps |
-| D2.2 | Wire the SOSCF branch into the RKS loop, fixed iteration, no fallback, mirroring `run_rhf`'s S2/`run_uhf`'s U2 shape exactly | Same-energy-as-DIIS to all 10 printed digits, on a small closed-shell KS case, superlinear gradient shrinkage across the window |
-| D2.3 | Decide semicanonicalization and level-shift interaction for RKS SOSCF (does DFT's KS loop even have a level-shift knob to conflict with? — check, do not assume it mirrors RHF/UHF) | Re-measured with semicanonicalization on/off on a real system, same discipline S3/U3 used |
-| D2.4 | Verify the DIIS-error switch criterion (`scf_soscf_diis_tol`) fires correctly for RKS, not just the fixed-iteration path | Correct trigger iteration, same energy either way, on at least one small closed-shell KS case |
+##### D2.0 — promote F3's algebra into a real production function (~M)
 
-Each step's own verification gates the next — **if D2.1 disagrees with
-the sanity check, stop before D2.2**; wiring an unverified Hessian source
-into a live SCF loop is exactly the failure mode RHF SOSCF's own
-scale-mismatch bug demonstrated once already.
+Write `compute_analytic_xc_hessian_vector_product` (or similarly named,
+in a small dedicated file the way F3.5's `response_packing.{h,cpp}` was
+kept out of `driver.cpp` specifically so later tests do not need to link
+the whole KS-loop driver) taking the ground-state density/grid state, a
+trial `δP` (or a pre-built `δρ`/`δ∇ρ` pair), and the functional(s), and
+returning `δV_xc` in the AO basis — RKS, LDA and GGA, unpolarized only
+(UKS is D3's job). This is transcription of F3.1/F3.3.3's own
+already-verified `T1`/`T1+T2+T3` formulas into one real function, reusing
+`evaluate_lda_fxc`/`evaluate_gga_fxc` (F1) and the confirmed-linear
+`evaluate_density_on_grid` (F2) exactly as those steps already established
+— **no new algebra, but a new place for a transcription bug to hide** that
+F3's own point-level tests cannot see, since they never called a function
+shaped like this one.
 
-##### D2.1 — confirm the FD-kernel oracle in isolation, full occ-virt space (~S)
+*Verify:* two layers, deliberately not skipped even though F3 already
+verified the underlying formulas. (1) Re-run F3's own point-level
+comparisons — but through the NEW function's actual call signature, not
+by re-deriving inline — so a shape/signature bug (wrong argument order, a
+dropped functional contribution) cannot hide behind "the formula was
+already checked once." (2) One fresh whole-molecule check against
+`build_closed_shell_xc_kernel_blocks` (the FD-kernel oracle, still
+available and still correct — D1's original oracle, now serving exactly
+the role it was always meant for) on a real converged RKS calculation,
+replacing the composition-check role F3.3.4's now-deleted probe used to
+serve. Per F3.4.5's own resolution of this exact tension: decide
+explicitly whether this whole-molecule check becomes a kept regression
+case or a one-time derivation-time verification, rather than defaulting
+to whichever is easier to write first.
 
-Build a standalone check (own file, not inside `run_ks_scf_scaffold`) that
-calls `build_closed_shell_xc_kernel_blocks` with a `ResponseExcitationSpace`
-spanning the **entire** occupied/virtual manifold of a small, real,
-converged RKS calculation (not TDDFT's small `lr_nstates` subset) — this is
-D1's own "no new type, no changes to the builder" claim, exercised for the
-first time at full width rather than assumed to scale up cleanly from the
-TDDFT case.
+##### D2.1 — confirm the packed Hessian-vector product against the true energy (~S, after D2.0)
 
-Given F3.4.5's own lesson (a whole-molecule check needing real converged
-SCF state cannot cheaply become a link-light standalone `ctest`), this
-should follow the SAME resolution F3.4.5 landed on: either (a) accept this
-check as a one-time, real-binary-driven verification during derivation
-that is not kept as permanent production code afterward, or (b) find that
-D2.1's check is cheap enough to keep as a real regression case because —
-unlike F3's point-level algebra checks — there is no cheaper synthetic
-substitute for "does the full-space kernel look like a sane orbital
-Hessian." Decide which, explicitly, rather than defaulting to whichever is
-easier to write first.
+With D2.0's function and F3.5's `pack_hessian_vector_product_cphf_order`
+composed together, confirm the result — at full occ-virt width, on a real
+converged RKS calculation — reproduces the true RKS `E(κ)`'s second
+derivative directly, the same `energy_at_kappa` finite-difference shape
+`PLANCK_SOSCF_FD_CHECK` used for RHF. This is the step that plays
+`PLANCK_SOSCF_FD_CHECK`'s own role for DFT: RHF SOSCF's gradient/Hessian
+pairing looked individually correct and was still wrong by a factor of
+2/4 until checked directly against `E(κ)`, and neither F3's own point-
+level checks nor D2.0's oracle comparison checks this specific thing —
+composing the Hessian-vector product with the packing convention
+`solve_augmented_hessian` will actually consume.
 
-*Verify:* the returned dense kernel's diagonal is a plausible orbital
-Hessian diagonal — compare its order of magnitude against the plain
-`ε_a - ε_i` orbital-energy gaps the same way RHF/UHF's own `Amat` diagonal
-was sanity-checked before any FD-vs-`E(κ)` comparison was attempted (not a
-substitute for that comparison, a cheap first filter before it). Then the
-real check: pick a handful of `(a,i)` directions, finite-difference the
-TRUE RKS `E(κ)` directly (the same `energy_at_kappa` closure shape
-`PLANCK_SOSCF_FD_CHECK` used, rebuilding the KS Fock at ±κ), and confirm
-the oracle's own diagonal element at that direction reproduces the second
-derivative — this is checking the ORACLE against the true energy, a
-distinct question from F3's "does the analytic Hessian match the oracle,"
-since D1 chose to skip the analytic Hessian and use the oracle directly as
-production input.
+*Verify:* on at least one small closed-shell KS system, a handful of
+`(a,i)` directions' analytic second derivative (via D2.0+F3.5) matches a
+finite difference of the real DFT `E(κ)` to the FD path's own precision.
+**If this disagrees, stop before D2.2** — do not wire an unverified
+gradient/Hessian pairing into a live SCF loop.
 
 ##### D2.2 — wire the SOSCF branch into the RKS loop, fixed iteration (~M, after D2.1)
 
 Mirror `run_rhf`'s S2 / `run_uhf`'s U2 shape as closely as the KS loop's
-own structure allows: persist `C_soscf_prev`/`eps_soscf_prev` (or DFT's own
-equivalently-named state) every iteration, gate on
+own structure allows: persist `C_soscf_prev`/`eps_soscf_prev` (or DFT's
+own equivalently-named state) every iteration, gate on
 `scf_soscf_start`/`soscf_window_start` exactly like RHF/UHF already do
 (shared keyword, mutually exclusive with RHF/UHF SOSCF per run — one
 active SOSCF path per calculation), build the gradient as
-`F_mo(a,i) = (Cᵀ_prev · F · C_prev)(a,i)` over the full occ-virt space
-against D2.1's verified oracle as `Amat`, solve with the unmodified
-`solve_augmented_hessian`, cap the step the same way
+`F_mo(a,i) = (Cᵀ_prev · F · C_prev)(a,i)` over the full occ-virt space,
+`h_op` from D2.0+F3.5 (an actual `O(1)`-grid-pass Hessian-VECTOR product
+now, not a materialized dense matrix — this is the whole point of
+choosing F3 over the FD-kernel oracle, and it changes the shape of
+`h_op` from RHF/UHF's `Amat * x` matrix-multiply into a genuine callback
+that re-evaluates the grid contraction per call), solve with the
+unmodified `solve_augmented_hessian`, cap the step the same way
 (`kSoscfMaxRot = 0.20`), apply via the unmodified `apply_orbital_rotation`.
 **Do not build a second AH solver or a second Cayley helper** — same
 constraint U2 already enforced, restated here because it is exactly as
@@ -457,14 +516,39 @@ where DIIS alone needs enough iterations for a criterion-based switch to
 plausibly help (matching D4's own later, separate question about whether
 DFT needs a different default entirely).
 
+##### D2.5 — measure the actual speedup (~S, after D2.4)
+
+**The entire reason D2 was rescoped around F3's analytic path instead of
+the FD-kernel oracle.** Measure wall-clock per SOSCF iteration for D2's
+analytic path vs. what the FD-kernel-oracle path (the originally-scoped
+D2) would have cost, on at least one system large enough that the
+`O(n_occ·n_virt)` grid-pass cost is not trivial. If the analytic path is
+not meaningfully cheaper per iteration in practice — matching
+`SOSCF_DFT_ANALYTIC_FXC_SCOPE.md`'s own F6 caution — say so explicitly
+rather than assuming the asymptotic argument transfers to a real
+wall-clock win at the sizes that matter. This is the DFT-SOSCF-specific
+instance of F6, run once D2's wiring exists rather than deferred
+indefinitely.
+
 #### D3 — UKS (~M, after D2's RKS path is verified)
 
-Repeat the RHF→UHF generalization (Track 1) for the KS analogue: separate
-α/β kernel blocks, the DFT equivalent of `build_uhf_cphf_matrix`. Do this
-after D2's restricted KS path works, not in parallel with it — DFT already
-has more moving parts (grid, XC functional selection, hybrid exact-exchange
-fraction) than either RHF or UHF SOSCF did, and stacking the UKS
-generalization on an unverified RKS base compounds the debugging surface.
+Repeat the RHF→UHF generalization (Track 1) for the KS analogue. **Updated
+alongside D2's own rescoping**: since D2 wires F3's analytic Hessian-vector
+product rather than a dense FD-kernel matrix, D3 is NOT "build the DFT
+equivalent of `build_uhf_cphf_matrix`" (a dense coupled α/β matrix) —
+F3.4's own T1..T5 polarized algebra (same-spin plus the T4/T5 cross-spin
+terms) is already derived and point-level-verified for exactly this case.
+D3's job mirrors D2.0-D2.5 for the polarized functional/UKS SCF loop: promote
+F3.4's algebra into a real production function (the polarized analogue of
+D2.0), confirm it against the true UKS `E(κ)` (D2.1's analogue), wire it
+into `run_ks_scf_scaffold`'s UKS branch (D2.2's analogue), then the
+semicanonicalization/level-shift and switch-criterion questions (D2.3/D2.4's
+analogues, now for two coupled spin channels), then measure the speedup
+(D2.5's analogue). Do this after D2's restricted KS path works, not in
+parallel with it — DFT already has more moving parts (grid, XC functional
+selection, hybrid exact-exchange fraction) than either RHF or UHF SOSCF
+did, and stacking the UKS generalization on an unverified RKS base
+compounds the debugging surface.
 
 #### D4 — the switch criterion, and whether it should differ from HF's (~S)
 
