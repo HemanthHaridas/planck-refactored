@@ -928,7 +928,7 @@ mutation coverage for `v2rhosigma` uses `1↔3` (`a-ab` ↔ `b-aa`), which
 Full smoke suite (35/35) and all four standalone fxc/Hessian ctest gates
 pass unchanged.
 
-##### F3.4.2 — same-spin polarized `δV_xc^α` (~S, after F3.4.1)
+##### F3.4.2 — same-spin polarized `δV_xc^α` (~S, after F3.4.1) — DONE
 
 With F3.4.1's ordering confirmed, build the alpha-channel induced
 potential for a trial rotation confined to the alpha spin only
@@ -946,6 +946,56 @@ difference of the real `vrho_α`/`vsigma_aa` outputs, same structural
 pattern as F3.3.3's `check_T1_T2_T3` but with `δρ_β=δ∇ρ_β=0` substituted
 throughout.
 
+**Landed as `planck-dft-gga-polarized-hessian-selfcheck`
+(`tests/dft_gga_polarized_hessian_selfcheck.cpp`), and F3.4.2 turned out
+to need a FOURTH term beyond the T1/T2/T3 pattern F3.3 established.**
+Resolved before writing any code: an "alpha-only `x`" input still drives
+the CROSS coefficient `vsigma_αβ` (which depends on `ρ_α`/`σ_aa` too, not
+only `ρ_β`/`σ_bb`), contracted against the *unchanged* ground-state
+`∇ρ_β·AG` — split by input direction, not by which coefficient slot is
+touched (confirmed with the user before implementing, since the doc's own
+"same-spin diagonal terms" framing could be read either way). This is
+`T4 = δ[vsigma_αβ]·(∇ρ_β·AG)`, on top of the direct T1/T2/T3 analogues
+built from `vrho_α`/`vsigma_αα`.
+
+**A second, more subtle issue was found only by direct debugging, not
+anticipated by the doc's own framing: "alpha-only x" does NOT mean
+`δσ_ab = 0`.** `σ_ab = ∇ρ_α·∇ρ_β` is *linear* in `∇ρ_α` (unlike `σ_aa`,
+which is quadratic in `∇ρ_α` alone), so it still responds to `δ∇ρ_α` even
+with `∇ρ_β` held fixed: `δσ_aa = 2·(∇ρ_α·δ∇ρ_α)` but
+`δσ_ab = δ∇ρ_α·∇ρ_β` (no factor of 2) and only `δσ_bb = 0` genuinely
+vanishes. A first version of the point-level check assumed `δσ_ab = 0`
+alongside `δσ_bb = 0` and disagreed with a raw FD of the full `V_xc^α`
+scalar by an amount that did **not** shrink with `h` (off by more than
+100% of the expected value at `h=1e-3`/`1e-4`) — the signature of a
+missing algebraic term, not FD truncation noise. Isolated by checking
+`δ[vsigma_αβ]`'s own coefficient against a direct FD before trusting the
+combined sum (the same "isolate before combining" discipline F3.3 already
+used), which immediately showed the coefficient itself was wrong, not
+just its projection. Every coefficient reading a `σ_ab`-rooted
+`v2rhosigma`/`v2sigma2` slot needs the `δσ_ab` term:
+
+```
+δ[vrho_α]    = v2rho2_aa·δρ_α    + v2rhosigma[a-aa]·δσ_aa + v2rhosigma[a-ab]·δσ_ab
+δ[vsigma_αα] = v2rhosigma[a-aa]·δρ_α + v2sigma2[aa-aa]·δσ_aa + v2sigma2[aa-ab]·δσ_ab
+δ[vsigma_αβ] = v2rhosigma[a-ab]·δρ_α + v2sigma2[aa-ab]·δσ_aa + v2sigma2[ab-ab]·δσ_ab
+```
+
+Once corrected, `T1+T2+T3+T4` matched a raw FD of the full `V_xc^α`
+scalar to `~1e-13` (floating-point noise) at every step size — confirming
+the disagreement was exactly this missing term, not a deeper formula
+error.
+
+**Result: matches the FD path's own step-size precision at every tested
+point** (two points with genuinely non-uniform, non-parallel alpha/beta
+gradients, two independent AO-factor choices), on `gga_c_pbe` (per
+F3.4.1's own finding that PBE exchange's near-zero cross-spin coupling
+would leave T4 untested). Mutation-verified two ways: reproducing the
+original `δσ_ab = 0` bug is caught cleanly (disagreement well above the FD
+tolerance at every step size), and dropping T4 entirely is also caught
+cleanly. Both reverted after verification. Full smoke suite (35/35) and
+all five standalone fxc/Hessian ctest gates pass unchanged.
+
 ##### F3.4.3 — add cross-spin coupling to `δV_xc^α` (~M, after F3.4.2)
 
 Add a nonzero `δρ_β`/`δ∇ρ_β`. This is the step the doc's own framing
@@ -958,6 +1008,17 @@ analogues) but also a **new T3-shaped term**: the unchanged, ground-state
 sibling of F3.3.3's T3, easy to miss for the same reason T3 itself was
 (differentiating only the coefficients and forgetting `∇ρ_β` is itself an
 argument of the existing coupling term).
+
+**Carry forward from F3.4.2, do not re-derive from scratch and hit the
+same bug again:** `δσ_ab = ∇ρ_β·δ∇ρ_α + ∇ρ_α·δ∇ρ_β` in the general
+(both-spin) case — F3.4.2 only exercised the first half of this sum
+(`∇ρ_β·δ∇ρ_α`, with `δ∇ρ_β=0`); F3.4.3's genuinely new piece is the
+second half (`∇ρ_α·δ∇ρ_β`). Every coefficient formula from F3.4.2
+(`δ[vrho_α]`, `δ[vsigma_αα]`, `δ[vsigma_αβ]`) needs `δρ_β` and `δσ_bb`
+terms added on top of the already-verified `δρ_α`/`δσ_aa`/`δσ_ab` terms,
+using the FULL `δσ_ab` above — not a second, independent rediscovery of
+the same "does alpha-only imply this is zero" question F3.4.2 already
+answered "no" to once.
 
 *Verify:* PBE, polarized, mixed alpha/beta trial `x` (matching F3.2's own
 "an alpha-only x cannot by itself catch a bug reading the cross-spin

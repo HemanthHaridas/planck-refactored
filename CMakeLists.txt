@@ -830,6 +830,15 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/dft_gga_polarized_fxc_ordering.cpp
     )
 
+    # F3.4.2 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): the polarized-GGA
+    # analytic Hessian-vector product's alpha-channel, alpha-only-trial
+    # T1+T2+T3+T4 terms, verified as an isolated point-level check against
+    # libxc's own finite difference. Header-only wrapper, same as the other
+    # fxc selfchecks.
+    add_executable(planck-dft-gga-polarized-hessian-selfcheck
+        ${CMAKE_SOURCE_DIR}/tests/dft_gga_polarized_hessian_selfcheck.cpp
+    )
+
     # F2 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): confirms the existing
     # density-on-grid evaluator (xc_grid.cpp) is exactly linear in the
     # density matrix, so it needs no changes to serve a Hessian-vector
@@ -1487,6 +1496,11 @@ if(BUILD_TESTING)
         ${LIBXC_INSTALL_DIR}/include
     )
 
+    target_include_directories(planck-dft-gga-polarized-hessian-selfcheck PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+    )
+
     target_include_directories(planck-dft-density-response-linearity PRIVATE
         ${SRC_DIR}
         ${LIBXC_INSTALL_DIR}/include
@@ -1745,6 +1759,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-dft-gga-polarized-fxc-ordering PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dft-gga-polarized-hessian-selfcheck PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -2058,6 +2078,11 @@ if(BUILD_TESTING)
     )
     add_dependencies(planck-dft-gga-polarized-fxc-ordering libxc)
 
+    target_link_libraries(planck-dft-gga-polarized-hessian-selfcheck
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-gga-polarized-hessian-selfcheck libxc)
+
     target_link_libraries(planck-dft-density-response-linearity
         ${LIBXC_INSTALL_DIR}/lib/libxc.a
     )
@@ -2095,6 +2120,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-dft-gga-polarized-fxc-ordering
         COMMAND planck-dft-gga-polarized-fxc-ordering
+    )
+
+    add_test(
+        NAME planck-dft-gga-polarized-hessian-selfcheck
+        COMMAND planck-dft-gga-polarized-hessian-selfcheck
     )
 
     add_test(
