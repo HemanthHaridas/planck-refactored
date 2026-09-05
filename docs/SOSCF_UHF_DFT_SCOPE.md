@@ -489,7 +489,7 @@ whole-molecule level too (`diff` jumps from `5.6e-10` to `4.1e-3`),
 reverted after verification. Full smoke suite (35/35) and all 10
 `planck-dft`-prefixed ctest gates pass with the temporary probe removed.
 
-##### D2.1 — confirm the packed Hessian-vector product against the true energy (~S, after D2.0)
+##### D2.1 — confirm the packed Hessian-vector product against the true energy (~S, after D2.0) — BLOCKED, open finding
 
 With D2.0's function and F3.5's `pack_hessian_vector_product_cphf_order`
 composed together, confirm the result — at full occ-virt width, on a real
@@ -508,6 +508,105 @@ composing the Hessian-vector product with the packing convention
 finite difference of the real DFT `E(κ)` to the FD path's own precision.
 **If this disagrees, stop before D2.2** — do not wire an unverified
 gradient/Hessian pairing into a live SCF loop.
+
+**Attempted, found a real and only partially-resolved scale issue, then
+hit a second, larger, unresolved disagreement — stopped per this step's
+own "if this disagrees, stop before D2.2" rule. D2.2 must NOT proceed
+until this is understood.** Full investigation recorded here so the next
+attempt does not repeat the ruled-out hypotheses. All probe code used for
+this investigation was temporary (`PLANCK_D2_1_CHECK` in
+`driver.cpp`) and has been reverted — nothing from this step landed in
+the tree.
+
+**Finding 1 (resolved): a real, previously-undocumented density-scale
+convention gap between UHF's response-density convention and RKS's.**
+F3.5's own `pack_hessian_vector_product_cphf_order` and
+`build_uhf_cphf_matrix`'s `dm1a_sym = C_virt·x·C_occᵀ + C_occ·xᵀ·C_virtᵀ`
+convention are unscaled — correct for UHF, where each spin channel has
+single occupancy (`P^σ = C_occ^σ·C_occ^σᵀ`). RKS uses the closed-shell
+`P = 2·C_occ·C_occᵀ`, so the TRUE response density is
+`∂P/∂κ_ai = 2·(C_virt·C_occᵀ + C_occ·C_virtᵀ)` — verified directly by
+finite-differencing `apply_orbital_rotation`'s own output against this
+formula (`‖dP_fd - dP_assumed‖ = 2.8e-8` on real H2/PBE, essentially
+machine precision at `h=1e-4`). Feeding the doubled `δP` into
+`compute_analytic_xc_hessian_vector_product` and reading
+`packed(k) = (C_occᵀ·δV_xc·C_virt)_{ia}` gives
+`Tr(δP_true·δV_xc(δP_true)) = 4·packed(k)` exactly (verified numerically
+on both a synthetic point and the real H2 system, ratio reads `4.0000` to
+4 decimal places both times) — a clean, understood, reproducible relation
+that is NOT itself the source of the remaining disagreement (it was
+checked directly via the trace identity, independent of the `packed`
+shortcut).
+
+**Finding 2 (UNRESOLVED): the trace identity
+`Tr(δP_true·δV_xc(δP_true)) = ∂²E_xc/∂κ²` — which should hold exactly by
+the Hellmann-Feynman argument (`V_xc = δE_xc/δP` by construction, so its
+own directional derivative contracted against `δP` again is definitionally
+the second derivative) — does NOT hold on either real molecule tested,
+and the size/character of the disagreement changes qualitatively between
+them in a way that rules out a single clean scale-factor explanation:**
+
+| System | Functional | `h_fd_xc` (FD of true `E_xc(κ)`) | `Tr(δP·δV_xc(δP))` | Disagreement |
+|---|---|---|---|---|
+| H2/STO-3G | PBE (GGA) | `-1.19190632` | `-1.14109052` | `5.08e-2` (4.3% relative) |
+| H2/STO-3G | LDA (`lda_x`+`lda_c_pw`) | `-1.14395476` | `-1.11428798` | `2.97e-2` (2.6% relative) |
+| water/STO-3G | PBE (GGA), `(i=0,a=0)` | `+9.66211839` | `-0.15799791` | `9.82e+0`, **sign-flipped** |
+
+**What was ruled out, each checked directly rather than assumed:**
+- **Not FD truncation**: `h_fd_xc` is converged across `h={1e-2,1e-3,1e-4}` in every row (agrees to 4+ significant figures at the tightest two step sizes).
+- **Not the packing scale (Finding 1)**: checked via the direct trace identity, which bypasses `packed` entirely; the `4×` relation between the trace and `packed(k)` remains exactly `4.0000` in every case, including the sign-flipped water case, so `packed`'s own arithmetic is not where the sign flip enters.
+- **Not `energy_at_kappa`'s baseline**: `E0.first` (the `κ=0` total energy from the probe's own reconstruction) matches the real, independently-converged `total_energy` to all 10 printed digits on both H2 and water — the Coulomb+hcore+nuclear-repulsion assembly and the `apply_orbital_rotation`/`P_trial` construction are correct at `κ=0`.
+- **Not the density-response linearity assumption**: directly finite-differenced `apply_orbital_rotation`'s actual `P(κ)` output against the assumed `∂P/∂κ` formula; agreement to `2.8e-8`–`3.4e-8` on both systems (Finding 1's own verification).
+- **Not a GGA-specific defect**: the disagreement is present, with a similar (though not identical) relative size, on a pure LDA functional too (row 2) — ruling out anything specific to the T2/T3 gradient-coupling terms.
+- **Not the XC energy-density convention** (`E_xc = Σ_p w_p·ρ_p·ε_xc(ρ_p)`, libxc's `zk` being per-particle rather than a density): this exact convention was already used, unmodified, by the ONE case that DOES match — the isolated synthetic single-point grid (see below) — so it is not the discriminating factor between the passing and failing cases.
+- **Not `x_functional`/`c_functional`'s spin type**: confirmed `Unpolarized` for RKS at the call site, matching what the function expects.
+
+**What DOES match, exactly, and is the strongest clue for whoever
+continues this**: the identical trace identity
+`Tr(δP·δV_xc(δP)) = ∂²E_xc/∂κ²`, computed via a raw finite difference of
+`evaluate_xc_on_grid`'s own `total_energy` on a **synthetic single-point
+grid** (3 hand-picked AOs, no real basis or molecule, the same fixture
+D2.0's own `planck-dft-analytic-hessian-production` ctest uses), matches
+to 5+ significant figures with NO scale correction needed at all (not
+even Finding 1's `4×`, since that check used a bare unscaled `dP` on both
+sides of the identity consistently). **The bug, whatever it is, is
+specific to composing with a REAL, multi-point molecular grid and a real
+converged SCF density/orbital set — it does not reproduce on an isolated
+point**, which is the opposite lesson from D2.0's own fixture-design
+mistake (there, the synthetic fixture was WRONG and the real-molecule
+composition was eventually shown correct; here, the synthetic fixture
+passes cleanly and something about the real multi-point composition does
+not).
+
+**Concrete hypotheses NOT yet tried, for the next attempt:**
+- Test a non-core, valence-orbital `(a,i)` direction on water (the tested
+  direction, `i=0`, is oxygen's tightly-bound `1s` core orbital in
+  STO-3G — untested whether a HOMO-based direction behaves differently,
+  which would point at core-orbital-specific numerical sensitivity in
+  either the Cayley transform or the grid integration rather than an
+  algebraic defect).
+- Check whether `evaluate_density_on_grid`'s linearity (F2's own verified
+  property, but verified there on a **synthetic** grid) still holds
+  exactly on the **real** AO grid under a rotated `C` — F2 never
+  re-verified this on a real molecule's actual basis functions, only on
+  hand-built synthetic arrays.
+- Check whether MPI grid-slicing state (`mpi_grid_slice`,
+  `reduce_partial_xc_scalars`) has any serial-but-still-active code path
+  that behaves differently between `evaluate_current_density_and_xc`'s
+  call inside the main SCF loop vs. inside the probe's `energy_at_kappa`
+  closure, even though both are nominally serial runs.
+- Compare the **first**-derivative side directly: does
+  `Tr(δP · V_xc_ground)` (a first-order, not second-order, quantity)
+  reproduce the correct linear term of `E_xc(κ)` on the real grid? If the
+  first derivative already disagrees, the bug is upstream of anything
+  D2.0 built (e.g., in how `V_xc` itself is assembled for a *rotated*
+  density specifically) rather than in the new Hessian-vector code.
+
+**D2.2 (RKS wiring) MUST NOT proceed until this is resolved** — wiring an
+unverified, and in the water case actively WRONG-SIGNED, gradient/Hessian
+pairing into a live SCF loop risks silently converging to a wrong basin
+or diverging, the exact failure mode this step's own text and RHF SOSCF's
+own history both warn against.
 
 ##### D2.2 — wire the SOSCF branch into the RKS loop, fixed iteration (~M, after D2.1)
 
