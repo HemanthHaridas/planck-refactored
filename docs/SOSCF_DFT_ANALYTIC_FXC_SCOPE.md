@@ -996,7 +996,7 @@ tolerance at every step size), and dropping T4 entirely is also caught
 cleanly. Both reverted after verification. Full smoke suite (35/35) and
 all five standalone fxc/Hessian ctest gates pass unchanged.
 
-##### F3.4.3 — add cross-spin coupling to `δV_xc^α` (~M, after F3.4.2)
+##### F3.4.3 — add cross-spin coupling to `δV_xc^α` (~M, after F3.4.2) — DONE
 
 Add a nonzero `δρ_β`/`δ∇ρ_β`. This is the step the doc's own framing
 calls out specifically: **the existing first-derivative `coefficient_alpha`
@@ -1028,6 +1028,47 @@ this directly (print the raw cross-spin contribution and confirm it is
 not near-zero) rather than assuming a doublet/triplet system is safe by
 construction, the exact trap F3.2's own `(i=0,a=0)` direction fell into
 for LDA.
+
+**Landed in the same file as F3.4.2 (`check_mixed` in
+`tests/dft_gga_polarized_hessian_selfcheck.cpp`), and the carry-forward
+discipline paid off: matched the FD oracle on the FIRST attempt, no
+repeat of F3.4.2's debugging pass.** The general
+`δσ_ab = ∇ρ_β·δ∇ρ_α + ∇ρ_α·δ∇ρ_β` (both halves nonzero now, vs F3.4.2's
+alpha-only case where only the first half survived) was substituted into
+every F3.4.2 coefficient formula, plus `δρ_β` and `δσ_bb` terms, exactly
+per the plan recorded at the end of F3.4.2. The genuinely new term
+predicted by the doc materialized exactly as described:
+`T5 = vsigma_αβ·(δ∇ρ_β·AG)` (no factor of 2, matching
+`coefficient_alpha`'s own asymmetric `2·vsigma_αα·∇ρ_α + vsigma_αβ·∇ρ_β`
+weighting) — from differentiating the *argument* `∇ρ_β` inside the
+already-existing cross coupling term, the cross-spin sibling of F3.3.3's
+T3.
+
+**One scope question was resolved with the user before implementation,
+since the doc's own text could be read either way:** whether an
+alpha-only `x` (F3.4.2) should include the response of the cross
+coefficient `vsigma_αβ` at all, given the section is titled "same-spin."
+Resolved as "split by input direction, not by which coefficient slot is
+touched" — confirmed necessary in practice, since F3.4.2's T4 term (built
+on exactly this resolution) is real and non-negligible (13.5% of the
+total at the first test point) and dropping it fails the FD check
+immediately.
+
+**Result: `T1+T2+T3+T4+T5` matches the FD path's own step-size precision
+at every tested point** (the same two `(ρ,∇ρ)` points as F3.4.2, two new
+mixed alpha/beta perturbations, two AO-factor choices), on `gga_c_pbe`.
+Both T4 and T5 confirmed non-negligible at the primary test point before
+trusting the check (T4 = 13.5%, T5 = 67% of the total) — though noted
+honestly rather than glossed over: at the second point/perturbation pair
+T5 is still healthy (18%) but T4 is small (−0.16%), so that direction
+alone would not have caught a T4-specific bug; T4 is exercised by the
+fixture set as a whole (via the first point), not by every direction in
+it. Mutation-verified two ways: dropping T5 entirely is caught cleanly,
+and dropping only the newly-added second half of `δσ_ab`
+(`∇ρ_α·δ∇ρ_β`) — the piece that is genuinely new relative to F3.4.2,
+as opposed to T5's own contraction — is also caught cleanly. Both
+reverted after verification. Full smoke suite (35/35) and all five
+standalone fxc/Hessian ctest gates pass unchanged.
 
 ##### F3.4.4 — `δV_xc^β` (~S, after F3.4.3)
 
