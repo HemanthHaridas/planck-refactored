@@ -843,7 +843,7 @@ disagrees, stop before the next** — do not attempt cross-spin coupling
 attempt the whole-molecule check (F3.4.5) before both spin channels agree
 at the point level.
 
-##### F3.4.1 — confirm `v2rhosigma`/`v2sigma2` component ordering (~S)
+##### F3.4.1 — confirm `v2rhosigma`/`v2sigma2` component ordering (~S) — DONE
 
 Before writing any Hessian-vector algebra for the polarized GGA case,
 settle what each of `v2rhosigma`'s 6 slots and `v2sigma2`'s 6 slots
@@ -878,6 +878,55 @@ stop and correct the indexing before F3.4.2** — every later sub-step reads
 these arrays, so an ordering bug here silently corrupts everything built
 on top of it, the same failure mode F1's own polarized-count finding
 exists to prevent one level up.
+
+**Landed as `planck-dft-gga-polarized-fxc-ordering`
+(`tests/dft_gga_polarized_fxc_ordering.cpp`). Result: the guessed layout is
+correct** — `v2rhosigma` flattened rho-channel-major as
+`[a-aa, a-ab, a-bb, b-aa, b-ab, b-bb]` and `v2sigma2` as the 6 independent
+sigma-sigma pairs `[aa-aa, aa-ab, aa-bb, ab-ab, ab-bb, bb-bb]` — matches
+libxc's actual output at every slot, both via `d(vrho)/d(sigma)` and the
+mixed-partial `d(vsigma)/d(rho)` cross-check, on two points with distinct
+non-degenerate spin densities and gradients.
+
+**The functional choice mattered and cost a debugging pass, the same class
+of trap F1's own `lda_x`/`lda_c_pw` finding already flagged one level
+down.** The first version tested against `"pbe"` (the combined exchange
+functional), matching F1's own GGA choice for the *unpolarized* checks —
+but PBE **exchange** has near-zero cross-spin `v2rhosigma`/`v2sigma2`
+slots (measured directly: `a-ab` and `b-aa` both read `~1e-18`), the exact
+GGA analogue of F1's own `lda_x` finding (exchange carries no cross-spin
+coupling by construction). A slot-swap mutation between exactly those two
+near-zero cross-spin slots passed silently. Switched to `gga_c_pbe` (PBE
+correlation alone, the same functional name `src/dft/driver.cpp:381`
+already uses in production), whose cross-spin slots are large and
+genuinely distinct (`a-ab=-0.051`, `b-aa=-0.022` at the first test point) —
+the same fix pattern F1 used (`lda_x` → `lda_c_pw`) applied one derivative
+order higher. `"pbe"` is kept as a secondary coverage point for the
+same-spin `v2rho2` slots only, since that is the functional this scope
+will actually run against in F3.4.2 onward.
+
+**A second, genuinely physical degeneracy was found and is now documented
+in the test rather than silently limiting its coverage: `gga_c_pbe`'s
+`v2sigma2[aa-ab]` and `v2sigma2[ab-bb]` are numerically IDENTICAL at every
+point tested, including a deliberately wildly asymmetric one
+(`ρ_α=2.0, ρ_β=0.05, σ_αα=0.01, σ_αβ=0.3, σ_ββ=5.0`), and this survives an
+`α↔β` input relabeling too — confirmed as a real property of this
+functional's second derivative, not a coincidence of the chosen test
+points.** (Slots `aa-aa`/`ab-ab`/`bb-bb`, i.e. `0`/`3`/`5`, are also
+mutually equal in the same data — a separate observation, not
+investigated further since a `0↔3` swap already gives a clean mutation
+signal.) This means a slot-swap mutation between the degenerate pair is
+*structurally* invisible for this functional, independent of test
+quality — discovered by direct investigation of the raw libxc output
+during mutation-testing, not assumed safe. Mutation coverage for
+`v2sigma2` instead uses the non-degenerate `0↔3` (`aa-aa` ↔ `ab-ab`) swap;
+mutation coverage for `v2rhosigma` uses `1↔3` (`a-ab` ↔ `b-aa`), which
+*is* cleanly non-degenerate for this array. Both mutations caught cleanly
+(the `v2rhosigma` swap fails 16 assertions across both points; the
+`v2sigma2` swap fails 8), both reverted after verification.
+
+Full smoke suite (35/35) and all four standalone fxc/Hessian ctest gates
+pass unchanged.
 
 ##### F3.4.2 — same-spin polarized `δV_xc^α` (~S, after F3.4.1)
 
