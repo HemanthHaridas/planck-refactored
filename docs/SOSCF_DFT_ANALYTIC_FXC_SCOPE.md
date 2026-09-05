@@ -725,7 +725,7 @@ to `0`) is caught cleanly at every step size and every point, including the
 term); and dropping the factor of `2` on T3 alone is also caught cleanly.
 Both mutations reverted after verification.
 
-##### F3.3.4 — cross-check against F1/F3.1's own `v2rhosigma` equivalence finding (~S, after F3.3.3)
+##### F3.3.4 — cross-check against F1/F3.1's own `v2rhosigma` equivalence finding (~S, after F3.3.3) — DONE
 
 F1's own selfcheck verified `v2rhosigma` satisfies
 `d(vrho)/d(sigma) == d(vsigma)/d(rho)` as two independently-measured
@@ -748,6 +748,48 @@ precision, same as F3.3.3.
 adds cross-spin coupling on top of this gradient algebra; debugging both
 new pieces at once from a single failure is exactly the compounding this
 ladder exists to avoid.
+
+**Landed as `PLANCK_FXC_F3_3_4_CHECK`, the first *whole-molecule,
+AO-projected* driver-level probe for GGA — the comparison F3.3.1 deferred
+here specifically, rather than another synthetic point** (`src/dft/driver.cpp`,
+inside the RKS convergence branch, immediately after F3.1's own probe block).
+Unlike F3.3.1–3's isolated-point unit test, this exercises the actual
+`evaluate_density_on_grid` response density, the real `evaluate_gga_fxc`/
+`evaluate_gga_exc_vxc` calls on a converged SCF density, and an AO
+projection built to mirror `accumulate_local_potential`'s own
+`V_xc = vrho·(φφᵀ) + sym(φ, gradient_term)` decomposition exactly:
+differentiating that construction gives `T1 = δ[vrho]·(φφᵀ)` from the first
+piece, and `δ[gradient_term] = 2·δ[vsigma]·∇ρ + 2·vsigma·δ∇ρ` from the
+second — which is T2's and T3's contributions folded into one projected
+vector, confirming the point-level T1/T2/T3 split composes correctly with
+the real AO-projection machinery rather than needing separate treatment.
+
+**Result: `Hx_analytic` matches `Hx_oracle`
+(`build_closed_shell_xc_kernel_blocks`'s `.first + .second`, the same
+singlet-response convention F3.1 established) to `5.6e-10` on water/PBE/
+STO-3G and `1.0e-10` on H2/PBE/STO-3G**, both on the `(i=0, a=0)` direction.
+Two systems chosen deliberately: H2 was already used by F3.1's own LDA
+probe (linear, so `∇ρ` vanishes by symmetry along the bond axis at some
+points but not radially — the same non-triviality F3.3.1's own note already
+established for a single atom), and water is a genuinely bent, no-symmetry
+(`use_symm .false.`) system with a non-uniform `∇ρ`, closer to the "bent
+triatomic, not a diatomic" case the doc's original verify note called for.
+
+**`gradient_projection` (ks_matrix.cpp) has internal linkage**, so the
+probe inlines the same one-line formula
+(`coefficient.x()·grad_x.row(p) + ...`) rather than exposing it — a
+narrower version of the same visibility issue F3.3.1 already found and
+fixed for `build_closed_shell_xc_kernel_blocks` and friends; not fixed here
+since inlining a three-line dot product is cheaper than another
+namespace-visibility change for a debug-only probe.
+
+Mutation-verified: zeroing the `2·vsigma·δ∇ρ` (T3) contribution inside the
+probe's own `delta_gradient_term` construction moves the water/PBE
+disagreement from `5.6e-10` to `8.3e-03` — cleanly caught, confirming the
+probe is not vacuously agreeing regardless of the formula. Reverted after
+verification. Full smoke suite (35/35) and the three standalone fxc/Hessian
+ctest gates pass unchanged; the probe is a strict no-op with the env var
+unset (confirmed: no `F3.3.4` log line appears in a normal run).
 
 #### F3.4 — GGA, polarized: cross-spin gradient coupling (~M, after F3.3)
 

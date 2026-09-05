@@ -2153,6 +2153,204 @@ namespace DFT::Driver
                             }
                         }
 
+                        // F3.3.4 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): the
+                        // GGA unpolarized T1+T2+T3 sum, verified for the
+                        // first time at the whole-molecule/AO-projected
+                        // level against the FD-kernel oracle -- deferred
+                        // from F3.3.1 (see that step's own note: a
+                        // grid-integrated MO element can't isolate a single
+                        // term, so T1/T2/T3 were proven individually via a
+                        // synthetic-point unit test instead, and this is
+                        // where the real driver-level comparison finally
+                        // happens, on the now-trusted full sum). Env-gated
+                        // debug probe, same shape as PLANCK_FXC_F3_1_CHECK.
+                        // GGA-only guard: this exercises T1+T2+T3, not F3.1's
+                        // own LDA-only scope.
+                        if (std::getenv("PLANCK_FXC_F3_3_4_CHECK") && x_functional.is_gga_like() &&
+                            c_functional.is_gga_like())
+                        {
+                            const int n_virt = static_cast<int>(nbasis) - static_cast<int>(n_occ);
+                            if (n_virt > 0)
+                            {
+                                const Eigen::MatrixXd &C = diagonalization->coefficients;
+                                const Eigen::MatrixXd C_occ = C.leftCols(static_cast<Eigen::Index>(n_occ));
+                                const Eigen::MatrixXd C_virt = C.rightCols(n_virt);
+
+                                // Trial rotation on (a=0, i=0): dP = C_virt x C_occ^T + h.c.
+                                const Eigen::MatrixXd dP =
+                                    (C_virt.col(0) * C_occ.col(0).transpose() +
+                                     C_occ.col(0) * C_virt.col(0).transpose())
+                                        .eval();
+
+                                auto ground = evaluate_density_on_grid(prepared.ao_grid, density);
+                                auto perturbed_channel = evaluate_density_on_grid(prepared.ao_grid, dP);
+                                if (!ground || !perturbed_channel)
+                                {
+                                    HartreeFock::Logger::logging(
+                                        HartreeFock::LogLevel::Info, "F3.3.4[FD] :",
+                                        "evaluate_density_on_grid failed: " +
+                                            (!ground ? ground.error() : perturbed_channel.error()));
+                                }
+                                else
+                                {
+                                    const Eigen::Index npoints = prepared.ao_grid.npoints();
+                                    std::vector<double> rho_vec(static_cast<std::size_t>(npoints));
+                                    std::vector<double> sigma_vec(static_cast<std::size_t>(npoints));
+                                    for (Eigen::Index p = 0; p < npoints; ++p)
+                                    {
+                                        rho_vec[static_cast<std::size_t>(p)] = ground->total.rho(p);
+                                        sigma_vec[static_cast<std::size_t>(p)] =
+                                            ground->total.gradient_squared()(p);
+                                    }
+
+                                    // Ground-state vsigma (unchanged, T3's
+                                    // own coefficient) via the ordinary
+                                    // first-derivative call, plus v2rho2/
+                                    // v2rhosigma/v2sigma2 (T1/T2's
+                                    // coefficients) via the new F1 fxc call
+                                    // -- both exchange and correlation
+                                    // contribute additively, same convention
+                                    // F3.1 already used for v2rho2.
+                                    std::vector<double> exc_x, vrho_x, vsigma_x;
+                                    std::vector<double> exc_c, vrho_c, vsigma_c;
+                                    auto vxc_x = x_functional.evaluate_gga_exc_vxc(
+                                        rho_vec, sigma_vec, static_cast<int>(npoints), exc_x, vrho_x, vsigma_x);
+                                    auto vxc_c = c_functional.evaluate_gga_exc_vxc(
+                                        rho_vec, sigma_vec, static_cast<int>(npoints), exc_c, vrho_c, vsigma_c);
+                                    std::vector<double> v2rho2_x, v2rhosigma_x, v2sigma2_x;
+                                    std::vector<double> v2rho2_c, v2rhosigma_c, v2sigma2_c;
+                                    auto fxc_x = x_functional.evaluate_gga_fxc(
+                                        rho_vec, sigma_vec, static_cast<int>(npoints), v2rho2_x, v2rhosigma_x,
+                                        v2sigma2_x);
+                                    auto fxc_c = c_functional.evaluate_gga_fxc(
+                                        rho_vec, sigma_vec, static_cast<int>(npoints), v2rho2_c, v2rhosigma_c,
+                                        v2sigma2_c);
+                                    if (!vxc_x || !vxc_c || !fxc_x || !fxc_c)
+                                    {
+                                        HartreeFock::Logger::logging(
+                                            HartreeFock::LogLevel::Info, "F3.3.4[FD] :",
+                                            "GGA exc_vxc/fxc evaluation failed");
+                                    }
+                                    else
+                                    {
+                                        // delta_V_xc(r) = T1*AA + (T2+T3 bundled as a
+                                        // gradient_projection term), matching
+                                        // accumulate_local_potential's own
+                                        // decomposition of V_xc = vrho*AA +
+                                        // sym(phi, gradient_term) exactly:
+                                        // differentiating vrho*AA gives T1 = delta[vrho]*AA;
+                                        // differentiating gradient_term =
+                                        // 2*vsigma*grad_rho gives
+                                        // delta[gradient_term] = 2*delta[vsigma]*grad_rho
+                                        // + 2*vsigma*delta_grad_rho, which is exactly
+                                        // T2's (g.AG) and T3's (dg.AG) pieces folded
+                                        // into one projected vector.
+                                        Eigen::MatrixXd delta_V_ao =
+                                            Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(nbasis),
+                                                                  static_cast<Eigen::Index>(nbasis));
+                                        for (Eigen::Index p = 0; p < npoints; ++p)
+                                        {
+                                            const double weight = prepared.molecular_grid.points(p, 3);
+                                            if (weight == 0.0)
+                                                continue;
+
+                                            const std::size_t pi = static_cast<std::size_t>(p);
+                                            const double g_dot_dg =
+                                                ground->total.grad_x(p) * perturbed_channel->total.grad_x(p) +
+                                                ground->total.grad_y(p) * perturbed_channel->total.grad_y(p) +
+                                                ground->total.grad_z(p) * perturbed_channel->total.grad_z(p);
+                                            const double drho = perturbed_channel->total.rho(p);
+
+                                            const double v2rho2_total = v2rho2_x[pi] + v2rho2_c[pi];
+                                            const double v2rhosigma_total = v2rhosigma_x[pi] + v2rhosigma_c[pi];
+                                            const double v2sigma2_total = v2sigma2_x[pi] + v2sigma2_c[pi];
+                                            const double vsigma_total = vsigma_x[pi] + vsigma_c[pi];
+
+                                            const double delta_vrho =
+                                                v2rho2_total * drho + 2.0 * v2rhosigma_total * g_dot_dg;
+                                            const double delta_vsigma =
+                                                v2rhosigma_total * drho + 2.0 * v2sigma2_total * g_dot_dg;
+
+                                            const Eigen::Vector3d grad_rho{
+                                                ground->total.grad_x(p), ground->total.grad_y(p),
+                                                ground->total.grad_z(p)};
+                                            const Eigen::Vector3d delta_grad_rho{
+                                                perturbed_channel->total.grad_x(p),
+                                                perturbed_channel->total.grad_y(p),
+                                                perturbed_channel->total.grad_z(p)};
+
+                                            const Eigen::Vector3d delta_gradient_term =
+                                                2.0 * delta_vsigma * grad_rho + 2.0 * vsigma_total * delta_grad_rho;
+
+                                            const auto phi = prepared.ao_grid.values.row(p).transpose();
+                                            // ks_matrix.cpp's gradient_projection has internal
+                                            // linkage; inlined here rather than exposing it
+                                            // (same formula: coefficient . (grad_x,grad_y,grad_z)
+                                            // row at this point).
+                                            const Eigen::VectorXd projected =
+                                                delta_gradient_term.x() * prepared.ao_grid.grad_x.row(p).transpose() +
+                                                delta_gradient_term.y() * prepared.ao_grid.grad_y.row(p).transpose() +
+                                                delta_gradient_term.z() * prepared.ao_grid.grad_z.row(p).transpose();
+
+                                            delta_V_ao.noalias() +=
+                                                (weight * delta_vrho) * (phi * phi.transpose());
+                                            delta_V_ao.noalias() +=
+                                                weight * (phi * projected.transpose() + projected * phi.transpose());
+                                        }
+
+                                        const double Hx_analytic =
+                                            (C_occ.col(0).transpose() * delta_V_ao * C_virt.col(0))(0, 0);
+
+                                        ResponseExcitationSpace space;
+                                        space.spin_label = "closed-shell";
+                                        space.n_occ = static_cast<int>(n_occ);
+                                        space.n_virt = n_virt;
+                                        space.C_occ = C_occ;
+                                        space.C_virt = C_virt;
+
+                                        auto oracle_exchange = DFT::XC::Functional::create(
+                                            calculator._dft._exchange_id, DFT::XC::Spin::Polarized);
+                                        auto oracle_correlation = DFT::XC::Functional::create(
+                                            calculator._dft._correlation_id, DFT::XC::Spin::Polarized);
+                                        if (!oracle_exchange || !oracle_correlation)
+                                        {
+                                            HartreeFock::Logger::logging(
+                                                HartreeFock::LogLevel::Info, "F3.3.4[FD] :",
+                                                "polarized oracle functional init failed");
+                                        }
+                                        else
+                                        {
+                                            auto oracle_blocks = build_closed_shell_xc_kernel_blocks(
+                                                prepared, space, density, *oracle_exchange, *oracle_correlation);
+                                            if (!oracle_blocks)
+                                            {
+                                                HartreeFock::Logger::logging(
+                                                    HartreeFock::LogLevel::Info, "F3.3.4[FD] :",
+                                                    "build_closed_shell_xc_kernel_blocks failed: " +
+                                                        oracle_blocks.error());
+                                            }
+                                            else
+                                            {
+                                                // Same .first + .second singlet-response
+                                                // convention F3.1 established.
+                                                const double Hx_oracle =
+                                                    oracle_blocks->first(
+                                                        space.flat_index(0, 0), space.flat_index(0, 0)) +
+                                                    oracle_blocks->second(
+                                                        space.flat_index(0, 0), space.flat_index(0, 0));
+                                                HartreeFock::Logger::logging(
+                                                    HartreeFock::LogLevel::Info, "F3.3.4[FD] :",
+                                                    std::format(
+                                                        "Hx_analytic={:.10f} Hx_oracle={:.10f} diff={:.3e}",
+                                                        Hx_analytic, Hx_oracle,
+                                                        std::abs(Hx_analytic - Hx_oracle)));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         return result;
                     }
                 }
