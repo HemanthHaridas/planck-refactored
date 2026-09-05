@@ -331,6 +331,132 @@ much larger refactor with its own risk, out of scope here.
 *Verify:* whichever kernel path D1 chose, the same-energy-as-DIIS check
 RHF's S2 used, on a small closed-shell KS case first.
 
+**Broken into four sub-steps (D2.1–D2.4), mirroring U1→U2→U3→U4's own
+discipline (build and verify the Hessian source in isolation before
+wiring it into the SCF loop; wire fixed-iteration with no fallback; settle
+the remaining design decisions; verify the switch criterion) — not
+attempted as one piece.** The FD-kernel oracle D1 chose
+(`build_closed_shell_xc_kernel_blocks`) is architecturally the easiest of
+the three Hessian sources built so far to wire: unlike U1 (which had to
+*factor out* a Hessian builder that did not yet exist standalone from
+`solve_uhf_cphf`), `build_closed_shell_xc_kernel_blocks` already returns a
+dense matrix from a single call, so D2.1 is confirmation-and-adaptation,
+not new construction — but it must still be checked directly, not assumed,
+since RHF SOSCF's own history is the standing counter-example to "looks
+right on paper."
+
+**A stale reference to correct while doing this work:** `docs/SOSCF.md`'s
+own "Validation strategy that should remain in place" section says to
+*keep* `PLANCK_SOSCF_FD_CHECK` "now that the defect is fixed" — that probe
+(and its UHF sibling) were removed outright per the later, explicit
+project-wide decision recorded in `docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md`'s
+F3.4.5 section (debug probes must become standalone tests or be deleted
+from production; converting them was found impractical, so they were
+deleted with no replacement). `docs/SOSCF.md` needs a note added when D2
+lands, so it stops recommending a probe that no longer exists.
+
+| Step | Adds | Verifies against |
+|---|---|---|
+| D2.1 | Confirm `build_closed_shell_xc_kernel_blocks` gives the right thing when spanning the FULL occ-virt space (not TDDFT's small subset), in isolation, no SCF-loop wiring | A standalone build (real converged RKS, full-space `ResponseExcitationSpace`), diagonal-scale sanity check against the plain KS orbital-energy gaps |
+| D2.2 | Wire the SOSCF branch into the RKS loop, fixed iteration, no fallback, mirroring `run_rhf`'s S2/`run_uhf`'s U2 shape exactly | Same-energy-as-DIIS to all 10 printed digits, on a small closed-shell KS case, superlinear gradient shrinkage across the window |
+| D2.3 | Decide semicanonicalization and level-shift interaction for RKS SOSCF (does DFT's KS loop even have a level-shift knob to conflict with? — check, do not assume it mirrors RHF/UHF) | Re-measured with semicanonicalization on/off on a real system, same discipline S3/U3 used |
+| D2.4 | Verify the DIIS-error switch criterion (`scf_soscf_diis_tol`) fires correctly for RKS, not just the fixed-iteration path | Correct trigger iteration, same energy either way, on at least one small closed-shell KS case |
+
+Each step's own verification gates the next — **if D2.1 disagrees with
+the sanity check, stop before D2.2**; wiring an unverified Hessian source
+into a live SCF loop is exactly the failure mode RHF SOSCF's own
+scale-mismatch bug demonstrated once already.
+
+##### D2.1 — confirm the FD-kernel oracle in isolation, full occ-virt space (~S)
+
+Build a standalone check (own file, not inside `run_ks_scf_scaffold`) that
+calls `build_closed_shell_xc_kernel_blocks` with a `ResponseExcitationSpace`
+spanning the **entire** occupied/virtual manifold of a small, real,
+converged RKS calculation (not TDDFT's small `lr_nstates` subset) — this is
+D1's own "no new type, no changes to the builder" claim, exercised for the
+first time at full width rather than assumed to scale up cleanly from the
+TDDFT case.
+
+Given F3.4.5's own lesson (a whole-molecule check needing real converged
+SCF state cannot cheaply become a link-light standalone `ctest`), this
+should follow the SAME resolution F3.4.5 landed on: either (a) accept this
+check as a one-time, real-binary-driven verification during derivation
+that is not kept as permanent production code afterward, or (b) find that
+D2.1's check is cheap enough to keep as a real regression case because —
+unlike F3's point-level algebra checks — there is no cheaper synthetic
+substitute for "does the full-space kernel look like a sane orbital
+Hessian." Decide which, explicitly, rather than defaulting to whichever is
+easier to write first.
+
+*Verify:* the returned dense kernel's diagonal is a plausible orbital
+Hessian diagonal — compare its order of magnitude against the plain
+`ε_a - ε_i` orbital-energy gaps the same way RHF/UHF's own `Amat` diagonal
+was sanity-checked before any FD-vs-`E(κ)` comparison was attempted (not a
+substitute for that comparison, a cheap first filter before it). Then the
+real check: pick a handful of `(a,i)` directions, finite-difference the
+TRUE RKS `E(κ)` directly (the same `energy_at_kappa` closure shape
+`PLANCK_SOSCF_FD_CHECK` used, rebuilding the KS Fock at ±κ), and confirm
+the oracle's own diagonal element at that direction reproduces the second
+derivative — this is checking the ORACLE against the true energy, a
+distinct question from F3's "does the analytic Hessian match the oracle,"
+since D1 chose to skip the analytic Hessian and use the oracle directly as
+production input.
+
+##### D2.2 — wire the SOSCF branch into the RKS loop, fixed iteration (~M, after D2.1)
+
+Mirror `run_rhf`'s S2 / `run_uhf`'s U2 shape as closely as the KS loop's
+own structure allows: persist `C_soscf_prev`/`eps_soscf_prev` (or DFT's own
+equivalently-named state) every iteration, gate on
+`scf_soscf_start`/`soscf_window_start` exactly like RHF/UHF already do
+(shared keyword, mutually exclusive with RHF/UHF SOSCF per run — one
+active SOSCF path per calculation), build the gradient as
+`F_mo(a,i) = (Cᵀ_prev · F · C_prev)(a,i)` over the full occ-virt space
+against D2.1's verified oracle as `Amat`, solve with the unmodified
+`solve_augmented_hessian`, cap the step the same way
+(`kSoscfMaxRot = 0.20`), apply via the unmodified `apply_orbital_rotation`.
+**Do not build a second AH solver or a second Cayley helper** — same
+constraint U2 already enforced, restated here because it is exactly as
+applicable to DFT.
+
+*Verify:* on at least one small, genuinely non-trivial closed-shell KS
+system (not H2/STO-3G alone — pick something with a non-trivial `nb` the
+way U2's three water systems were chosen to actually exercise the
+Hessian), SOSCF from a fixed iteration reaches the identical DFT total
+energy as pure DIIS to all 10 printed digits, with the orbital gradient
+shrinking superlinearly across the window. Full smoke/core suites unchanged
+with SOSCF off by default.
+
+##### D2.3 — semicanonicalization and level-shift interaction for RKS (~S, after D2.2)
+
+**Do not assume RHF/UHF's answers transfer without checking DFT's own KS
+loop for the equivalent knobs.** Confirm first whether the RKS loop even
+has a level-shift mechanism analogous to RHF/UHF's — if it does not, this
+sub-step is a documented no-op rather than a designed interaction; if it
+does, apply the same "SOSCF requires level_shift <= 0" rule U3 landed,
+re-derived for the actual KS code, not copy-pasted from the doc.
+
+Semicanonicalization: re-measure the same way S3/U3 did (disable it, run a
+long pure-SOSCF window, compare iteration counts and confirm identical
+final energy) rather than assuming RHF/UHF's "no measurable difference,
+kept anyway for cheap gauge-fixing" conclusion carries over unchanged —
+DFT's grid-dependent Fock build could in principle interact differently,
+though there is no a priori reason to expect it; state the measured
+result either way.
+
+##### D2.4 — verify the DIIS-error switch criterion for RKS (~S, after D2.3)
+
+Confirm `scf_soscf_diis_tol`/`scf_soscf_min_iter` fire at the correct
+iteration for the RKS loop specifically (U4 found this needed zero new
+code for UHF because U2's gate already included the criterion branch —
+check whether the same is true here before assuming it, since D2.2's own
+gate is a fresh KS-loop implementation, not a copy of U2's).
+
+*Verify:* same shape as U4 — correct trigger iteration, identical final
+energy either way, on at least one small closed-shell KS case, ideally one
+where DIIS alone needs enough iterations for a criterion-based switch to
+plausibly help (matching D4's own later, separate question about whether
+DFT needs a different default entirely).
+
 #### D3 — UKS (~M, after D2's RKS path is verified)
 
 Repeat the RHF→UHF generalization (Track 1) for the KS analogue: separate
