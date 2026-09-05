@@ -6,7 +6,7 @@
 [![pages-build-deployment](https://github.com/HemanthHaridas/planck-refactored/actions/workflows/pages/pages-build-deployment/badge.svg)](https://github.com/HemanthHaridas/planck-refactored/actions/workflows/pages/pages-build-deployment)
 
 <p align="justify">
-A quantum chemistry program implementing restricted, unrestricted, and restricted open-shell Hartree-Fock SCF and Kohn-Sham DFT with dipole and quadrupole moment analysis, Mulliken population analysis, analytic nuclear gradients, geometry optimization, vibrational frequency analysis, DIIS convergence acceleration, symmetry detection, and binary checkpoint support.
+A quantum chemistry program implementing restricted, unrestricted, and restricted open-shell Hartree-Fock SCF and Kohn-Sham DFT with dipole and quadrupole moment analysis, Mulliken population analysis, analytic nuclear gradients, geometry optimization, vibrational frequency analysis, DIIS and SOSCF convergence acceleration, symmetry detection, and binary checkpoint support.
 </p>
 
 ### Features
@@ -23,6 +23,7 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 - **Mulliken population analysis** — atomic gross populations, net charges, and (for UHF/ROHF) spin populations; printed when `print_populations true` or verbosity is `verbose`/`debug`
 - **Conventional and Direct SCF** — ERI tensor stored once (conventional) or recomputed per iteration (direct); auto-selection based on system size
 - **DIIS** — convergence acceleration with optional automatic subspace restart
+- **SOSCF** — second-order (augmented-Hessian Newton) RHF convergence acceleration. Runs as a transient window (default 3 iterations) that hands back to DIIS to finish, matching the ORCA-style DIIS/SOSCF handoff, though a full unbounded SOSCF run converges to the same energy on its own. The switch from DIIS to SOSCF can be triggered at a fixed iteration or by the DIIS error norm dropping below a threshold. Off by default
 - **Level shifting** — virtual orbital energy raising for open-shell convergence
 - **Wavefunction stability analysis** — orbital-Hessian eigenvalue check after SCF for three RHF channels (real-internal singlet `A+B`, complex-internal singlet `A−B`, and external triplet `A^T−B^T` for RHF→UHF) and two UHF channels (spin-conserving internal and a diagonal-approximation external GHF check). When an instability is detected, optional detect-and-follow rotates the orbitals along the lowest unstable mode (using a two-step broken-symmetry guess for triplet RHF→UHF: π/8 β HOMO–LUMO mix + adaptive eigenvector rotation) and re-converges SCF
 - **Symmetry detection** — point group via libmsym; standard-orientation coordinates
@@ -375,6 +376,10 @@ SCF procedure and convergence settings.
 | `use_diis` | bool | `.true.`, `.false.` | `.true.` | Enable DIIS convergence acceleration |
 | `diis_dim` | int | ≥ 2 | `8` | Maximum DIIS subspace size |
 | `diis_restart` | float | ≥ 0 | `2.0` | Clear the DIIS subspace when the error grows by more than this factor relative to the previous iteration. Set to `0` to disable. |
+| `scf_soscf_start` | int | ≥ 0 | `0` | RHF only. Fixed iteration at which SCF switches from DIIS to a second-order (SOSCF) augmented-Hessian orbital step. `0` disables SOSCF entirely (pure DIIS). Superseded by `scf_soscf_diis_tol` when that is nonzero. |
+| `scf_soscf_cycles` | int | ≥ 1 | `3` | RHF only. Number of consecutive SOSCF iterations before handing control back to DIIS (the DIIS subspace is cleared on handoff). SOSCF run to full, unbounded convergence with no handoff reaches the same energy but converges more slowly in practice than the default transient-window handoff. |
+| `scf_soscf_diis_tol` | float | ≥ 0 | `0.0` | RHF only. Switch from DIIS to SOSCF once the DIIS error norm (‖FPS−SPF‖) drops below this value and `scf_soscf_min_iter` iterations have passed. `0` disables the criterion, falling back to the fixed `scf_soscf_start` iteration. |
+| `scf_soscf_min_iter` | int | ≥ 0 | `2` | RHF only. Minimum iteration count before `scf_soscf_diis_tol` is allowed to trigger the switch to SOSCF. |
 | `level_shift` | float | ≥ 0.0 | `0.0` | Virtual orbital level shift in Hartree. Raises virtual MO energies to widen the HOMO–LUMO gap and suppress orbital swapping. Recommended `0.2`–`0.5` for open-shell systems. Set to `0` to disable. |
 | `max_cycles` | int | ≥ 1 | auto | Maximum SCF iterations |
 | `tol_energy` | float | > 0 | `1e-10` | Energy convergence threshold in Hartree |
@@ -721,6 +726,45 @@ H     0.000000   -0.756950    -0.468703
 <p align="justify">
 After the converged energy table, Planck prints a dipole and quadrupole report automatically. The dipole block includes electronic, nuclear, and total components in atomic units and Debye. The quadrupole block reports the traceless Cartesian tensor in atomic units.
 </p>
+
+### RHF single point with SOSCF — water, 6-31G
+
+<p align="justify">
+Switches from DIIS to a second-order (augmented-Hessian) orbital step once the DIIS error drops below <code>scf_soscf_diis_tol</code>, runs <code>scf_soscf_cycles</code> SOSCF iterations, then hands back to DIIS to finish. Converges to the same energy as pure DIIS, typically in fewer iterations on systems where DIIS alone needs many cycles to close the last few digits.
+</p>
+
+```
+%begin_control
+    basis       6-31g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type          rhf
+    use_diis          .true.
+    diis_dim          8
+    scf_soscf_diis_tol 0.05
+    scf_soscf_min_iter 2
+    scf_soscf_cycles   3
+    engine            os
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000    0.000000     0.117176
+H     0.000000    0.756950    -0.468703
+H     0.000000   -0.756950    -0.468703
+%end_coords
+```
 
 ### RKS single point — water, PBE/STO-3G
 
