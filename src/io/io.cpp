@@ -837,6 +837,26 @@ namespace HartreeFock::IO
                      scf._cc_warm_start = *parsed;
                      return std::expected<void, std::string>{};
                  }},
+                {"scf_soscf_start", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._scf_soscf_start = static_cast<unsigned int>(std::stoul(value));
+                     return std::expected<void, std::string>{};
+                 }},
+                {"scf_soscf_cycles", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._scf_soscf_cycles = static_cast<unsigned int>(std::stoul(value));
+                     return std::expected<void, std::string>{};
+                 }},
+                {"scf_soscf_diis_tol", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._scf_soscf_diis_tol = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                {"scf_soscf_min_iter", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._scf_soscf_min_iter = static_cast<unsigned int>(std::stoul(value));
+                     return std::expected<void, std::string>{};
+                 }},
                 {"mp2_ri_basis", [&mp2](const std::string &value) -> std::expected<void, std::string>
                  {
                      mp2.ri_basis_name = value;

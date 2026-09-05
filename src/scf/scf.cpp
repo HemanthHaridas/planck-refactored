@@ -12,6 +12,9 @@
 #include "basis/spherical.h"
 #include "integrals/base.h"
 #include "io/logging.h"
+#include "post_hf/casscf/aug-hessian.h"
+#include "post_hf/casscf/orbital.h"
+#include "post_hf/rhf_response.h"
 #include "sad.h"
 #include "scf.h"
 #include "symmetry/fock_symmetrization.h"
@@ -551,6 +554,19 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
     const bool use_diis = calculator._scf._use_DIIS;
     double E_prev = 0.0;
 
+    // SOSCF (docs/SOSCF_SCOPE.md, S2) reference orbitals, persisted across
+    // iterations. Empty until SOSCF's first active iteration, then holds the
+    // MO basis the NEXT iteration's orbital gradient/Hessian are expressed
+    // in -- see the note at the SOSCF branch below for why this must be the
+    // PREVIOUS iteration's C, not a fresh diagonalization of the current F.
+    Eigen::MatrixXd C_soscf_prev;
+    Eigen::VectorXd eps_soscf_prev;
+    // S3: the iteration the SOSCF window actually started, once the
+    // DIIS-error criterion fires (0 = not yet triggered). Needed because
+    // with a criterion-based trigger the start iteration isn't known in
+    // advance the way the fixed scf_soscf_start knob is.
+    unsigned int soscf_window_start = 0;
+
     HartreeFock::Logger::scf_header();
 
     for (unsigned int iter = 1; iter <= max_iter; iter++)
@@ -650,7 +666,50 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
 
         // ── Select Fock matrix for diagonalization ────────────────────────────
         // Once DIIS has ≥2 vectors, use the extrapolated Fock; otherwise plain F.
-        const bool do_diis = use_diis && diis.ready();
+        // SOSCF is a transient accelerator, not a permanent replacement --
+        // matching ORCA's own handoff: run a small fixed window of
+        // second-order steps, then hand back to DIIS to finish. (Pure SOSCF
+        // run to full convergence with no handoff DOES reach the same
+        // minimum -- verified on water/6-31g and H2/6-31g -- but converges
+        // linearly rather than DIIS's faster practical rate, so the
+        // transient-window default remains faster in practice.)
+        //
+        // S3: the window's START is now criterion-based when
+        // scf_soscf_diis_tol > 0 (the scope doc's explicit instruction: use
+        // the DIIS error norm already computed above, not an invented
+        // criterion), falling back to the fixed scf_soscf_start iteration
+        // when the criterion is off (0). The window's DURATION stays the
+        // fixed scf_soscf_cycles either way -- S3 only replaces the entry
+        // trigger, not the transient-window design S2 established.
+        const bool soscf_enabled =
+            (calculator._scf._scf_soscf_diis_tol > 0.0 || calculator._scf._scf_soscf_start > 0) &&
+            !sao_active && pcm == nullptr;
+        if (soscf_enabled && soscf_window_start == 0)
+        {
+            const bool criterion_fires =
+                calculator._scf._scf_soscf_diis_tol > 0.0
+                    ? (use_diis && diis_err > 0.0 && diis_err < calculator._scf._scf_soscf_diis_tol &&
+                       iter >= calculator._scf._scf_soscf_min_iter)
+                    : (iter >= calculator._scf._scf_soscf_start);
+            if (criterion_fires)
+                soscf_window_start = iter;
+        }
+        const bool soscf_active =
+            soscf_enabled && soscf_window_start > 0 &&
+            iter < soscf_window_start + calculator._scf._scf_soscf_cycles &&
+            C_soscf_prev.size() > 0;
+        // The iteration right after the SOSCF window ends: DIIS's subspace
+        // (if any survived from before SOSCF started) was built in a basis
+        // several second-order steps removed from the current one, so its
+        // stored (F, error) pairs are stale and would corrupt the
+        // extrapolation. Clear it so DIIS restarts clean from the
+        // SOSCF-accelerated point, exactly like a diis_restart trigger.
+        if (soscf_window_start > 0 &&
+            iter == soscf_window_start + calculator._scf._scf_soscf_cycles)
+        {
+            diis.clear();
+        }
+        const bool do_diis = use_diis && diis.ready() && !soscf_active;
         const Eigen::MatrixXd F_diag = do_diis ? diis.extrapolate() : F;
 
         const auto t_diis_end = std::chrono::steady_clock::now();
@@ -659,7 +718,244 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
         Eigen::MatrixXd C(nbasis, nbasis);
         Eigen::VectorXd eps(nbasis);
 
-        if (!sao_active)
+        if (soscf_active)
+        {
+            // ── SOSCF (docs/SOSCF_SCOPE.md, S2) ───────────────────────────────
+            // RHF-only, fixed-iteration switch, no fallback logic, no
+            // SAO/PCM coverage (S4+) -- S2's job is to prove the
+            // augmented-Hessian step is correct, not to make the switch
+            // smart (S3).
+            //
+            // This REPLACES diagonalization, it does not follow it. The
+            // first two attempts at this step were both wrong, in ways only
+            // an actual run caught:
+            //   1. Diagonalizing F_diag (DIIS-extrapolated) for (C, eps) and
+            //      then building the gradient from plain F: the two
+            //      operators disagree, so the "gradient" never vanishes and
+            //      the run oscillates forever.
+            //   2. Diagonalizing plain F for (C, eps) and THEN computing
+            //      Cᵀ F C as the gradient: Cᵀ F C is diagonal BY
+            //      CONSTRUCTION (that is what diagonalizing F means), so
+            //      the gradient measured this way is ~1e-14 from the very
+            //      first SOSCF iteration regardless of how far from
+            //      converged the run actually is -- confirmed by a real
+            //      run where |g| hit machine epsilon at iteration 3 while
+            //      the energy was still 5 Hartree from converged. The
+            //      Newton step this produced was real but minuscule, so
+            //      the run "worked" (same energy as DIIS) but took MORE
+            //      iterations (39 vs 15) than plain DIIS, the opposite of
+            //      the point.
+            //
+            // The orbital gradient/Hessian must be evaluated in the
+            // PREVIOUS iteration's MO basis (C_soscf_prev/eps_soscf_prev),
+            // against THIS iteration's Fock -- that pairing is what is
+            // actually stationary at convergence, and it is what the
+            // Newton step corrects. The result is the NEW C directly; nb
+            // diagonalization of F happens on a SOSCF iteration at all.
+            const int n_occ_i = static_cast<int>(n_occ);
+            const int n_virt_i = static_cast<int>(nbasis) - n_occ_i;
+            auto A_res = HartreeFock::Correlation::build_rhf_cphf_matrix(
+                calculator, shell_pairs, C_soscf_prev, eps_soscf_prev);
+            if (!A_res)
+                return std::unexpected("SOSCF: " + A_res.error());
+            const Eigen::MatrixXd &Amat = *A_res;
+
+            // g_ai = F_mo(a,i), paired with Amat UNSCALED -- settled by a
+            // direct finite-difference measurement against the ACTUAL RHF
+            // energy E(kappa) (Step A of the systematic investigation,
+            // PLANCK_SOSCF_FD_CHECK probe), not by re-deriving from PySCF's
+            // source a third time. Measured, converged across h=1e-2/1e-3/1e-4:
+            //   g_fd  / g(2*F_mo)     = 2.00  =>  g_true = 4*F_mo
+            //   h_fd  / Amat_diagonal = 4.01  =>  H_true = 4*Amat
+            // A Newton step depends only on the RATIO g/H, and 4*F_mo/(4*Amat)
+            // = F_mo/Amat exactly -- so using g=F_mo against Amat unscaled
+            // reproduces the true step at 1/4 the arithmetic, without ever
+            // needing to touch build_rhf_cphf_matrix (which stays exactly
+            // the form the MP2 Z-vector path already depends on). The two
+            // earlier attempts (g=4*F_mo/Amat, ratio 4; g=2*F_mo/Amat, ratio
+            // 2) were both wrong because they were derived by pattern-matching
+            // PySCF's OWN (g,H) convention onto a DIFFERENT (unscaled) H --
+            // matching PySCF's g alone, without also matching PySCF's H
+            // scaling, does not preserve the ratio that actually matters.
+            const Eigen::MatrixXd F_mo = C_soscf_prev.transpose() * F * C_soscf_prev;
+            Eigen::VectorXd g(n_virt_i * n_occ_i);
+            for (int a = 0; a < n_virt_i; ++a)
+                for (int i = 0; i < n_occ_i; ++i)
+                    g(a * n_occ_i + i) = F_mo(n_occ_i + a, i);
+
+            // ponytail: debug probe (Step A of the systematic investigation) --
+            // finite-difference verification of g/Amat against the ACTUAL RHF
+            // energy E(kappa), independent of the AH solver, the trust-region
+            // cap, DIIS, or iteration counting. Gated on PLANCK_SOSCF_FD_CHECK
+            // so it never runs in a normal build. Only exercises the
+            // conventional-ERI RHF path (this water/6-31g test case), since
+            // that is the only Fock builder wired up here.
+            if (std::getenv("PLANCK_SOSCF_FD_CHECK") && use_conventional)
+            {
+                auto energy_at_kappa = [&](const Eigen::MatrixXd &kap) -> double
+                {
+                    const Eigen::MatrixXd C_trial =
+                        HartreeFock::Correlation::CASSCF::apply_orbital_rotation(
+                            C_soscf_prev, kap, S);
+                    const Eigen::MatrixXd C_occ_trial = C_trial.leftCols(n_occ_i);
+                    const Eigen::MatrixXd P_trial = 2.0 * C_occ_trial * C_occ_trial.transpose();
+                    const Eigen::MatrixXd G_trial =
+                        HartreeFock::ObaraSaika::_compute_fock_rhf(eri, P_trial, nbasis);
+                    const Eigen::MatrixXd F_gas_trial = H + G_trial;
+                    return 0.5 * (P_trial.array() * (H + F_gas_trial).array()).sum();
+                };
+
+                const double E0 = energy_at_kappa(Eigen::MatrixXd::Zero(nbasis, nbasis));
+
+                // Pick one random-ish (a,i) direction, not the full Newton
+                // step -- isolates whether g/A themselves are right, before
+                // asking anything about what the solver does with them.
+                const int a_probe = 0, i_probe = 0;
+                const int k_probe = a_probe * n_occ_i + i_probe;
+                for (double h : {1e-2, 1e-3, 1e-4})
+                {
+                    Eigen::MatrixXd kap = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                    kap(n_occ_i + a_probe, i_probe) = h;
+                    kap(i_probe, n_occ_i + a_probe) = -h;
+                    const double Ep = energy_at_kappa(kap);
+                    const double Em = energy_at_kappa(-kap);
+                    const double g_fd = (Ep - Em) / (2.0 * h);
+                    const double h_fd = (Ep - 2.0 * E0 + Em) / (h * h);
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Info, "SOSCF[FD] :",
+                        std::format(
+                            "h={:.0e} 4*g_used={:.8f} g_fd={:.8f} diff={:.3e} | "
+                            "4*A_used={:.8f} h_fd={:.8f} diff={:.3e}",
+                            h, 4.0 * g(k_probe), g_fd, std::abs(4.0 * g(k_probe) - g_fd),
+                            4.0 * Amat(k_probe, k_probe), h_fd,
+                            std::abs(4.0 * Amat(k_probe, k_probe) - h_fd)));
+                }
+            }
+
+            const auto h_op = [&Amat](const Eigen::VectorXd &x) -> Eigen::VectorXd
+            { return Amat * x; };
+            const auto g_op = [&g]() -> Eigen::VectorXd
+            { return g; };
+
+            // Step B of the linear-vs-quadratic-convergence investigation:
+            // aug-hessian.h's ah_start_tol default (2.5, PySCF's own CASSCF
+            // tuning) is a FIXED absolute residual threshold. CASSCF's own
+            // orbital gradients run O(1-10), so 2.5 is a meaningful "not
+            // converged enough yet" bar there; RHF SOSCF's |g| is typically
+            // O(0.001-1), so the same constant is satisfied after exactly
+            // ONE Krylov iteration every single time (measured directly:
+            // ah_iters=1 at every SOSCF call on water/6-31g, regardless of
+            // how far from converged the run was). That is why pure SOSCF
+            // converged only LINEARLY (dE ratio ~0.89/iteration, ~290
+            // iterations to match DIIS) instead of Newton's expected
+            // superlinear rate: every "Newton step" was actually a
+            // single-vector Krylov approximation, never refined. Scaling
+            // the tolerance to |g| itself restores the expected rate --
+            // measured, pure SOSCF now reaches DIIS's converged energy to
+            // all 10 digits by iteration 8 instead of iteration ~290.
+            HartreeFock::Correlation::CASSCF::AugHessianOptions ah_opts;
+            ah_opts.ah_start_tol = std::max(1e-8, 0.1 * g.norm());
+            Eigen::VectorXd x0 = -g;
+            const double x0_norm = x0.norm();
+            if (std::isfinite(x0_norm) && x0_norm > 0.0)
+                x0 /= x0_norm;
+            const HartreeFock::Correlation::CASSCF::AugHessianResult ah =
+                HartreeFock::Correlation::CASSCF::solve_augmented_hessian(
+                    h_op, g_op, nullptr, x0, ah_opts);
+
+            // Trust-region cap: EVERY CASSCF caller of solve_augmented_hessian
+            // caps the returned step (cap_packed_step / cap_step_norm at
+            // max_rot) before applying it -- the AH solver's own docstring
+            // notes the Krylov subspace can produce a large step where the
+            // local quadratic model is a poor approximation to the true
+            // surface, which is exactly early-iteration RHF far from
+            // convergence. Omitting the cap here let iterations 6-10 take
+            // unboundedly large uncapped rotations (|g| observed growing
+            // 0.04 -> 29 across five iterations instead of shrinking) --
+            // caught only by watching the eigenvalue estimate diverge more
+            // negative every step, never by a static code read.
+            constexpr double kSoscfMaxRot = 0.20; // matches CASSCF's mcscf_max_rot default
+            Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(nbasis, nbasis);
+            bool cap_fired = false;
+            double raw_max_elem = 0.0;
+            if (ah.x.size() == n_virt_i * n_occ_i && ah.x.allFinite())
+            {
+                Eigen::VectorXd step = ah.x;
+                const double max_elem = step.cwiseAbs().maxCoeff();
+                raw_max_elem = max_elem;
+                if (max_elem > kSoscfMaxRot)
+                {
+                    step *= kSoscfMaxRot / max_elem;
+                    cap_fired = true;
+                }
+                for (int a = 0; a < n_virt_i; ++a)
+                    for (int i = 0; i < n_occ_i; ++i)
+                    {
+                        const double v = step(a * n_occ_i + i);
+                        kappa(n_occ_i + a, i) = v;
+                        kappa(i, n_occ_i + a) = -v;
+                    }
+            }
+            C = HartreeFock::Correlation::CASSCF::apply_orbital_rotation(
+                C_soscf_prev, kappa, S);
+            if (!C.allFinite())
+                return std::unexpected(std::format(
+                    "SOSCF: orbital rotation produced non-finite coefficients at iteration {}", iter));
+
+            // Semicanonicalize: block-diagonalize the occ-occ and virt-virt
+            // blocks of Cᵀ F C separately and rotate C's occupied/virtual
+            // column GROUPS accordingly (never mixing occ with virt here --
+            // that mixing is exactly the Newton step already applied above).
+            // This is a pure gauge freedom: rotating occupied orbitals among
+            // themselves, or virtuals among themselves, changes neither the
+            // density nor the energy, so it costs nothing physically.
+            //
+            // Required because reading eps off Cᵀ F C's raw diagonal (the
+            // first version of this step) is not a real eigendecomposition,
+            // so the next iteration's Hessian diagonal (eps(a)-eps(i)) is
+            // built from a systematically approximate curvature estimate.
+            // That approximation is fine for a handful of steps -- it is
+            // what let the ORCA-style transient SOSCF window work -- but
+            // running pure SOSCF (no DIIS handoff) indefinitely on top of it
+            // plateaus at |g| ~ 0.09 well short of the true minimum, because
+            // the error compounds over many consecutive steps instead of
+            // being wiped out by DIIS's from-scratch diagonalization every
+            // iteration. Confirmed by direct measurement on water/6-31g
+            // before this fix.
+            const Eigen::MatrixXd F_mo_new = C.transpose() * F * C;
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> occ_solver(
+                F_mo_new.topLeftCorner(n_occ_i, n_occ_i));
+            Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> virt_solver(
+                F_mo_new.bottomRightCorner(n_virt_i, n_virt_i));
+            if (occ_solver.info() != Eigen::Success || virt_solver.info() != Eigen::Success)
+                return std::unexpected(std::format(
+                    "SOSCF: semicanonicalization eigensolve failed at iteration {}", iter));
+
+            Eigen::MatrixXd C_canon(nbasis, nbasis);
+            C_canon.leftCols(n_occ_i) = C.leftCols(n_occ_i) * occ_solver.eigenvectors();
+            C_canon.rightCols(n_virt_i) = C.rightCols(n_virt_i) * virt_solver.eigenvectors();
+            C = C_canon;
+
+            eps.head(n_occ_i) = occ_solver.eigenvalues();
+            eps.tail(n_virt_i) = virt_solver.eigenvalues();
+
+            const double homo = eps.head(n_occ_i).maxCoeff();
+            const double lumo = eps.tail(n_virt_i).minCoeff();
+            const double offdiag_ov_rms =
+                std::sqrt(F_mo_new.block(n_occ_i, 0, n_virt_i, n_occ_i).array().square().mean());
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, "SOSCF :",
+                std::format(
+                    "step at iter {}: |g|={:.3e} v0={:.4f} eig={:.4e} converged={} "
+                    "ah_iters={} ah_residual={:.3e} "
+                    "HOMO={:.4f} LUMO={:.4f} gap={:.4f} rms(F_mo_ov_after)={:.3e} "
+                    "raw_max|kappa|={:.3e} cap_fired={}",
+                    iter, g.norm(), ah.v0, ah.eigenvalue, ah.converged,
+                    ah.iterations, ah.residual_norm,
+                    homo, lumo, lumo - homo, offdiag_ov_rms,
+                    raw_max_elem, cap_fired));
+        }
+        else if (!sao_active)
         {
             // ── Full AO diagonalization (original path) ───────────────────────
             const Eigen::MatrixXd Fprime = X.transpose() * F_diag * X;
@@ -769,6 +1065,12 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
 
         P = density_next;
         E_prev = E_total;
+        // SOSCF (S2): keep the reference basis current every iteration, not
+        // just while SOSCF is active, so the switch iteration always has a
+        // valid C_soscf_prev the moment it fires (rather than needing a
+        // one-iteration warmup after scf_soscf_start).
+        C_soscf_prev = C;
+        eps_soscf_prev = eps;
 
         store_restricted_iteration(
             calculator,
