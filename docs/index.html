@@ -192,6 +192,7 @@
 <li class="toc-level-2"><a href="#7-diis-convergence-acceleration">7. DIIS Convergence Acceleration</a></li>
 <li class="toc-level-3"><a href="#error-metric">Error Metric</a></li>
 <li class="toc-level-3"><a href="#diis-linear-system">DIIS Linear System</a></li>
+<li class="toc-level-3"><a href="#soscf-second-order-scf">SOSCF: Second-Order SCF</a></li>
 <li class="toc-level-2"><a href="#8-symmetry">8. Symmetry</a></li>
 <li class="toc-level-3"><a href="#point-group-detection">Point Group Detection</a></li>
 <li class="toc-level-3"><a href="#symmetry-adapted-orbitals-sao-basis">Symmetry-Adapted Orbitals (SAO Basis)</a></li>
@@ -999,6 +1000,23 @@ F'_{ab} \leftarrow F'_{ab} + \Delta
 \]</span></p>
 <p>where <span class="math-inline">\(B_{ij} = \mathrm{Tr}(\mathbf e_i^T \mathbf e_j)\)</span>.</p>
 <p>In practice this constrained linear system is solved with a numerically stable factorization of the augmented matrix. The DIIS subspace is typically capped at a small fixed dimension, with the oldest vectors discarded when the subspace fills.</p>
+<h3 id="soscf-second-order-scf">SOSCF: Second-Order SCF</h3>
+<p>DIIS accelerates convergence by extrapolating the Fock matrix, but it is fundamentally a first-order method: each step still diagonalizes a Fock matrix, and near a stationary point the residual can decay only linearly. <strong>SOSCF</strong> (second-order SCF) instead takes a genuine Newton step in orbital rotation space, giving quadratic convergence near the minimum — the same kind of acceleration CASSCF&#x27;s orbital optimization already uses (§19), reused here for the much simpler unconstrained RHF case.</p>
+<h4 id="the-rhf-orbital-gradient-and-hessian">The RHF Orbital Gradient and Hessian</h4>
+<p>Parameterize a trial rotation of the current occupied/virtual orbitals by an antisymmetric matrix <span class="math-inline">\(\boldsymbol\kappa\)</span> restricted to the occupied-virtual block (<span class="math-inline">\(\kappa_{ai}\)</span>, rotations within the occupied or within the virtual block are a redundant gauge freedom that changes neither the density nor the energy). To second order in <span class="math-inline">\(\boldsymbol\kappa\)</span>, <span class="math-display">\[
+E(\boldsymbol\kappa) = E_0 + \mathbf g^T \boldsymbol\kappa_{\text{vec}}
+    + \tfrac12 \boldsymbol\kappa_{\text{vec}}^T \mathbf A\, \boldsymbol\kappa_{\text{vec}}
+    + O(\kappa^3),
+\]</span> where <span class="math-inline">\(\boldsymbol\kappa_{\text{vec}}\)</span> packs the independent <span class="math-inline">\(\kappa_{ai}\)</span> entries. The gradient is the occupied-virtual block of the Fock matrix in the MO basis, <span class="math-display">\[
+g_{ai} = F^{\text{MO}}_{ai},
+\]</span> which vanishes at the SCF stationary point exactly when <span class="math-inline">\(\mathbf F^{\text{MO}}\)</span> is diagonal — the same condition DIIS&#x27;s commutator error targets, seen from the orbital-rotation side instead of the AO-matrix side. The Hessian is the RHF orbital Hessian already used elsewhere in Planck for the MP2 Z-vector / CPHF equations (<code>build_rhf_cphf_matrix</code>, §15): <span class="math-display">\[
+A_{ai,bj} = (\varepsilon_a - \varepsilon_i)\,\delta_{ab}\delta_{ij}
+    + 4(ai|jb) - (ab|ji) - (aj|bi).
+\]</span> A Newton step solves <span class="math-inline">\(\mathbf A\, \boldsymbol\kappa_{\text{vec}} = -\mathbf g\)</span> and is applied with the same Cayley-transform-plus-Löwdin-cleanup map CASSCF uses to turn <span class="math-inline">\(\boldsymbol\kappa\)</span> into a new, still-orthonormal <span class="math-inline">\(\mathbf C\)</span> (§19). Reusing this existing machinery — the generic augmented-Hessian (CIAH) solver and the RHF orbital Hessian — meant SOSCF needed no new numerical solver of its own, only the callbacks that supply it with <span class="math-inline">\(\mathbf g\)</span> and <span class="math-inline">\(\mathbf A\cdot\mathbf x\)</span>.</p>
+<p><strong>A subtlety that only shows up by direct measurement:</strong> the gradient and Hessian must be evaluated in the basis that diagonalized the <em>previous</em> iteration&#x27;s Fock, contracted against the <em>current</em> iteration&#x27;s Fock — not recomputed after a fresh diagonalization of the current Fock. Diagonalizing first and then reading the occupied-virtual block off the result gives <span class="math-inline">\(\mathbf g \approx \mathbf 0\)</span> by construction (that is what diagonalizing means), regardless of how far the SCF actually is from convergence. This was found only by comparing the analytic <span class="math-inline">\(\mathbf g\)</span> and <span class="math-inline">\(\mathbf A\)</span> against a numerical finite difference of the true <span class="math-inline">\(E(\boldsymbol\kappa)\)</span> — the same oracle check any second-derivative implementation should be validated against before trusting it in a solver.</p>
+<h4 id="transient-window-not-a-permanent-replacement">Transient Window, Not a Permanent Replacement</h4>
+<p>Like PySCF and ORCA&#x27;s own SOSCF implementations, Planck runs the augmented- Hessian step as a <strong>transient accelerator</strong>: SCF starts with DIIS, switches to a small, fixed number of SOSCF iterations (<code>scf_soscf_cycles</code>, default 3) once triggered, then hands control back to DIIS to finish. The trigger can be a fixed iteration (<code>scf_soscf_start</code>) or, more usefully, the DIIS error norm <span class="math-inline">\(\|\mathbf e\|\)</span> (the same quantity defined above) dropping below a threshold (<code>scf_soscf_diis_tol</code>) after a minimum number of iterations (<code>scf_soscf_min_iter</code>) — the same &quot;gradient threshold plus minimum cycle count&quot; shape PySCF&#x27;s own switch criterion uses, rather than an invented one. DIIS&#x27;s subspace is cleared on handoff, since its stored history predates the orbital rotations SOSCF just applied.</p>
+<p>Run to full, unbounded convergence with no DIIS handoff at all, SOSCF does reach the same energy as DIIS — but the practical, transient-window default converges faster on the systems it has been checked against, so pure SOSCF is a correctness fallback rather than the recommended mode.</p>
 <hr>
 <h2 id="8-symmetry">8. Symmetry</h2>
 <p>This chapter mixes two scopes. The basic point-group and projection-operator ideas are general quantum-chemistry theory. The later sections on monomial D2h screening, full-group petite lists, metric-correct spherical operation matrices, and the exact density covariance requirement describe the particular symmetry machinery used in Planck&#x27;s integral and direct-SCF implementations.</p>
@@ -3924,9 +3942,15 @@ driver.cpp
           G = _compute_fock_rhf(eri, P) or _compute_2e_fock(shell_pairs, P)
           F = H_core + G
           DIIS.push(F, e)
-          F&#x27; = X^T F X
-          diagonalize F&#x27; → C&#x27;, ε
-          C = X C&#x27;
+          if SOSCF window active (RHF only, §7):
+              g, A = build orbital gradient/Hessian from PREVIOUS C, THIS F
+                     (build_rhf_cphf_matrix, rhf_response.cpp)
+              solve_augmented_hessian(g, A) → κ  (aug-hessian.h, shared with CASSCF)
+              C = apply_orbital_rotation(C_prev, κ)   → new C directly
+          else:
+              F&#x27; = X^T F X
+              diagonalize F&#x27; → C&#x27;, ε
+              C = X C&#x27;
           rebuild P
           check convergence
 
@@ -4008,6 +4032,7 @@ driver.cpp
 <tr><td>UHF SCF</td><td><code>src/scf/scf.cpp</code></td><td><code>run_uhf</code></td></tr>
 <tr><td>ROHF SCF</td><td><code>src/scf/scf.cpp</code></td><td><code>run_rohf</code>, <code>_rohf_effective_fock</code>, <code>_reorder_rohf_orbitals</code></td></tr>
 <tr><td>DIIS</td><td><code>src/base/types.h</code></td><td><code>DIISState::push</code>, <code>DIISState::extrapolate</code></td></tr>
+<tr><td>SOSCF (RHF augmented-Hessian orbital step)</td><td><code>src/scf/scf.cpp</code></td><td>the SOSCF branch inside <code>run_rhf</code>, using <code>build_rhf_cphf_matrix</code> and the shared <code>solve_augmented_hessian</code> / <code>apply_orbital_rotation</code> from CASSCF</td></tr>
 <tr><td>Symmetry detection</td><td><code>src/symmetry/symmetry.cpp</code></td><td><code>detectSymmetry</code></td></tr>
 <tr><td>SAO basis</td><td><code>src/symmetry/mo_symmetry.cpp</code></td><td><code>build_sao_basis</code></td></tr>
 <tr><td>MO irrep labels</td><td><code>src/symmetry/mo_symmetry.cpp</code></td><td><code>assign_mo_symmetry</code></td></tr>
@@ -4108,6 +4133,7 @@ driver.cpp
 <tr><td>Conventional and direct SCF</td><td>Complete</td></tr>
 <tr><td>Schwarz screening</td><td>Complete</td></tr>
 <tr><td>DIIS acceleration</td><td>Complete</td></tr>
+<tr><td>SOSCF (RHF, augmented-Hessian orbital step)</td><td>Complete. Runs as a transient window (default 3 iterations, <code>scf_soscf_cycles</code>) that hands back to DIIS; trigger by fixed iteration (<code>scf_soscf_start</code>) or DIIS-error threshold (<code>scf_soscf_diis_tol</code>/<code>scf_soscf_min_iter</code>). Reuses the CASSCF augmented-Hessian solver and the RHF CPHF orbital Hessian unchanged. Off by default. UHF/ROHF, SAO, and PCM not yet covered</td></tr>
 <tr><td>Level shifting</td><td>Complete</td></tr>
 <tr><td>Point group detection and SAO blocking</td><td>Complete</td></tr>
 <tr><td>MO irrep labeling</td><td>Complete</td></tr>

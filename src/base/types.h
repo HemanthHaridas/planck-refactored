@@ -432,6 +432,33 @@ namespace HartreeFock
         int _cc_generated_rank = 4;        // Excitation rank for the generated arbitrary-order RCC path (cc4=4, cc5=5, cc6=6)
         bool _cc_warm_start = true;        // Warm-start the generated arbitrary-order RCC path from a rank-(n-1) solve (cc_warm_start .false. = cold)
 
+        // SOSCF (docs/SOSCF_SCOPE.md, S2/S3): fixed-iteration switch,
+        // superseded by the DIIS-error criterion below once
+        // _scf_soscf_diis_tol > 0. 0 = SOSCF off entirely (pure DIIS, the
+        // unconditional default). Still honored directly when
+        // _scf_soscf_diis_tol == 0, for the S2 fixed-iteration mode the
+        // correctness work was originally verified against.
+        unsigned int _scf_soscf_start = 0;
+        // SOSCF is a transient accelerator, not a permanent replacement for
+        // DIIS -- matching ORCA's own SOSCF/DIIS handoff: take a small,
+        // fixed number of second-order steps to get close to the minimum,
+        // then hand back to DIIS to finish convergence. (Pure SOSCF run to
+        // full convergence with no handoff DOES reach the same minimum --
+        // verified on water/6-31g and H2/6-31g after the S2 gradient/Hessian
+        // scale fix -- but converges linearly rather than DIIS's faster
+        // practical rate, so the transient-window default remains faster in
+        // practice.)
+        unsigned int _scf_soscf_cycles = 3;
+        // S3: switch from DIIS to SOSCF once the DIIS error norm
+        // (‖FPS-SPF‖, IterationMetrics::diis_error -- the same quantity
+        // is_converged gates on) drops below this AND _scf_soscf_min_iter
+        // iterations have passed. 0 = criterion off, fall back to the fixed
+        // _scf_soscf_start trigger. Matches PySCF's own switch shape
+        // (gradient threshold + minimum cycle count) rather than inventing
+        // a new one, per the SOSCF scope doc's explicit instruction.
+        double _scf_soscf_diis_tol = 0.0;
+        unsigned int _scf_soscf_min_iter = 2;
+
         SCFType _scf = SCFType::RHF;           // SCF Type (Default is RHF)
         SCFMode _mode = SCFMode::Conventional; // SCF Mode (Default is Conventional)
         SCFGuess _guess = SCFGuess::HCore;     // Initial guess

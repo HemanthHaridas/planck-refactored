@@ -88,8 +88,15 @@ namespace HartreeFock::Correlation
         const Eigen::MatrixXd &mo_coeff,
         const Eigen::VectorXd &mo_energy)
     {
-        if (!calculator._info._is_converged)
-            return std::unexpected("build_rhf_cphf_matrix: SCF not converged.");
+        // SOSCF (docs/SOSCF_SCOPE.md, S2) calls this mid-iteration, before
+        // calculator._info._is_converged is ever set -- the whole point is an
+        // orbital Hessian built from the CURRENT (not yet converged) MO
+        // coefficients/energies. The function only ever reads mo_coeff/
+        // mo_energy (passed explicitly) plus _scf/_molecule/_shells, none of
+        // which depend on convergence, so a converged-only guard was
+        // protecting a precondition this function never actually needed;
+        // its one pre-SOSCF caller (the MP2 gradient) always ran
+        // post-convergence anyway, so relaxing this is behavior-neutral there.
         if (calculator._scf._scf != HartreeFock::SCFType::RHF || calculator._info._scf.is_uhf)
             return std::unexpected("build_rhf_cphf_matrix: RHF reference required.");
 
