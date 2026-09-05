@@ -1070,7 +1070,7 @@ as opposed to T5's own contraction — is also caught cleanly. Both
 reverted after verification. Full smoke suite (35/35) and all five
 standalone fxc/Hessian ctest gates pass unchanged.
 
-##### F3.4.4 — `δV_xc^β` (~S, after F3.4.3)
+##### F3.4.4 — `δV_xc^β` (~S, after F3.4.3) — DONE
 
 Mirror F3.4.2/F3.4.3 for the beta channel. **Not assumed symmetric with
 alpha and copy-pasted** — checked independently, since a transposed-index
@@ -1083,7 +1083,17 @@ its `v2sigma2`-analogue term uses the `bb` slot and `2.0·`, not `aa` and
 *Verify:* same shape as F3.4.2/F3.4.3, beta-only and mixed trial `x`,
 against the FD oracle.
 
-##### F3.4.5 — whole-molecule cross-check (~S, after F3.4.4)
+**Landed as `check_beta` in `tests/dft_gga_polarized_hessian_selfcheck.cpp`,
+taking a `MixedPerturbation` so both the beta-only case
+(`drho_a=dgrad_rho_a=0`) and the mixed case reuse one formula and one code
+path, rather than two separate functions.** Matched the FD oracle on the
+first attempt for both directions. Mutation-verified twice, both catching
+the exact asymmetry risk this step's own text names: dropping the `2.0·`
+on the beta self-term (`T2'`) is caught cleanly, and adding a spurious
+`2.0·` onto the shared cross term (`T4'`, which must NOT carry the self
+term's factor) is also caught cleanly. Both reverted after verification.
+
+##### F3.4.5 — whole-molecule cross-check — DONE, then REMOVED from production (~S, after F3.4.4)
 
 F3.3.4's analogue for the polarized case: build the full AO-projected
 `H·x` for both spin channels on a real open-shell molecule and compare
@@ -1100,6 +1110,77 @@ earlier sub-steps already isolate where to look** — check whether
 F3.4.1's ordering, F3.4.2/F3.4.4's same-spin terms, or F3.4.3's cross-spin
 T3-analogue was itself compromised by an interaction only the full
 AO-projected sum exposes, before assuming a new defect.
+
+**Landed as `PLANCK_FXC_F3_4_5_CHECK`, a whole-molecule probe on triplet
+water/PBE/STO-3G, combining F3.2's linearity decomposition
+(`Hx_oracle = scale_a·kxc_aa + scale_b·kxc_ab`) with F3.3.4's grid-level
+T1..T5 contraction. It found a real bug the point-level tests had already
+missed once (see below), then agreed with the oracle to `~1e-11` on
+alpha-only, beta-only, and mixed trial directions — and the whole probe
+was deleted from `driver.cpp` immediately afterward, per the project rule
+below.**
+
+**The bug it caught: F3.4.2/F3.4.3's own `δ[vrho_α]`/`δ[vsigma_αα]`/
+`δ[vsigma_αβ]` formulas are missing a `v2rhosigma`/`v2sigma2`-rooted
+`σ_bb` term whenever `δσ_bb ≠ 0` — but this file's own point-level tests
+had that term correctly, so the bug was specific to a fresh,
+independently-written copy of the same algebra in the whole-molecule
+probe, not a defect in F3.4.2/F3.4.3/F3.4.4 themselves.** First measured
+as a `beta-only` trial (`δρ_α=δ∇ρ_α=0` exactly) disagreeing with the
+oracle by `6.995e-4` — a large, non-shrinking-with-precision gap.
+Isolated by re-deriving the exact same `beta-only-driving-alpha-channel`
+point-level case that the whole-molecule probe was exercising and
+diffing it against a from-scratch re-implementation: the standalone test
+file's `check_mixed`/`check_beta` already carry the full 3-term chain
+rule (`δρ_α`, `δσ_aa`, `δσ_ab`, **and** `δσ_bb` — four terms, not three)
+for every coefficient, but the *fresh* grid-level code written for this
+probe only had three. This is exactly the trap the general chain rule
+warns about: `"alpha-only x implies δσ_bb=0"` is true, but the CONVERSE
+(`"δρ_β/δ∇ρ_β nonzero implies σ_bb-rooted terms matter"`) is a distinct
+fact that must be re-derived at every site independently, not inferred
+from one working implementation. Fixed by adding the missing
+`v2rhosigma[a-bb]·δσ_bb`, `v2sigma2[aa-bb]·δσ_bb`, `v2sigma2[ab-bb]·δσ_bb`
+terms; verified against a second, independent open-shell system (doublet
+OH/STO-3G) where the fallback `b_beta=0` column happened to be symmetry-
+suppressed to exactly zero on both sides (a genuine degenerate-direction
+finding, not a bug — the primary triplet-water result already exercises a
+non-degenerate cross term). Mutation-verified: dropping the newly-added
+`v2rhosigma[a-bb]·δσ_bb` term reproduces the original disagreement
+(`2.010e-4`) cleanly, on both `beta-only` and `mixed`, while leaving
+`alpha-only` untouched (correctly, since `δρ_β=0` there makes `δσ_bb`
+irrelevant regardless) — confirming the fix and the mutation target were
+correctly matched. Reverted after verification.
+
+**Then removed entirely, per an explicit project-wide decision made
+mid-session: "all debug probes must either become standalone unit tests
+or be removed from production code."** Converting F3.1/F3.2/F3.3.4/F3.4.5
+into standalone tests was investigated and found impractical without a
+much larger API change: each probe needs a real converged SCF's internal
+state (`PreparedSystem`, MO coefficients, ground-state density), and
+`DFT::Driver` exposes only one top-level `run()` entry point, not that
+intermediate state — turning any one of them into an isolated C++ test
+would mean exposing significant new internal API purely to serve a
+one-time verification step whose job is already done. The alternative (a
+Python script driving the real binary and parsing a log line) only works
+if the diagnostic print becomes permanent, always-on production output —
+rejected, since these checks are not something a normal user should pay
+runtime cost for or see in their logs. **Decision: all four whole-molecule
+probes (`PLANCK_FXC_F3_1_CHECK`, `PLANCK_FXC_F3_2_CHECK`,
+`PLANCK_FXC_F3_3_4_CHECK`, `PLANCK_FXC_F3_4_5_CHECK`) and both
+`PLANCK_SOSCF_FD_CHECK` probes in `src/scf/scf.cpp` (RHF and UHF) were
+deleted outright, with no replacement.** Their job — proving the analytic
+algebra composes correctly with the real AO-projection/grid machinery,
+once, during derivation — is done and is recorded here in this file's own
+commit history. The permanent, ongoing gate is the standalone point-level
+unit tests (`dft_fxc_selfcheck`, `dft_gga_hessian_selfcheck`,
+`dft_gga_polarized_fxc_ordering`, `dft_gga_polarized_hessian_selfcheck`),
+which are real, fast, always-run ctests with zero production code path —
+and, for the two SOSCF probes, the existing SOSCF-vs-DIIS energy-agreement
+regression cases, which already gate the fixed `g=F_mo`/`Amat`-unscaled
+convention those probes were built to find.
+
+Full smoke suite (35/35) and all five standalone fxc/Hessian ctest gates
+pass with every probe removed.
 
 #### F3.5 — MO projection and `(a,i)` packing (~S, after F3.4)
 
@@ -1240,7 +1321,7 @@ clock win at the sizes that matter.
 | `ResponseExcitationSpace` (shared occ-virt-subset type, reused unchanged) | `src/dft/driver.cpp:883` |
 | The RKS/UKS SOSCF insertion points this wiring targets (D2/D3, once built) | `src/dft/driver.cpp`, the `!unrestricted` KS loop branch |
 | The generic CIAH solver (reuse for F4/F5, do not rewrite) | `solve_augmented_hessian`, `src/post_hf/casscf/aug-hessian.h` |
-| The FD-verification-against-truth pattern this scope's F1/F3 both reuse | the `PLANCK_SOSCF_FD_CHECK` probes in RHF's and UHF's `run_rhf`/`run_uhf` branches, `src/scf/scf.cpp` |
+| The FD-verification-against-truth pattern this scope's F1/F3 both reused (probes since removed, see F3.4.5's own note) | historical: the `PLANCK_SOSCF_FD_CHECK` probes formerly in RHF's and UHF's `run_rhf`/`run_uhf` branches, `src/scf/scf.cpp` |
 
 ---
 

@@ -764,9 +764,9 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
 
             // g_ai = F_mo(a,i), paired with Amat UNSCALED -- settled by a
             // direct finite-difference measurement against the ACTUAL RHF
-            // energy E(kappa) (Step A of the systematic investigation,
-            // PLANCK_SOSCF_FD_CHECK probe), not by re-deriving from PySCF's
-            // source a third time. Measured, converged across h=1e-2/1e-3/1e-4:
+            // energy E(kappa) (Step A of the systematic investigation), not
+            // by re-deriving from PySCF's source a third time. Measured,
+            // converged across h=1e-2/1e-3/1e-4:
             //   g_fd  / g(2*F_mo)     = 2.00  =>  g_true = 4*F_mo
             //   h_fd  / Amat_diagonal = 4.01  =>  H_true = 4*Amat
             // A Newton step depends only on the RATIO g/H, and 4*F_mo/(4*Amat)
@@ -784,55 +784,6 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
             for (int a = 0; a < n_virt_i; ++a)
                 for (int i = 0; i < n_occ_i; ++i)
                     g(a * n_occ_i + i) = F_mo(n_occ_i + a, i);
-
-            // ponytail: debug probe (Step A of the systematic investigation) --
-            // finite-difference verification of g/Amat against the ACTUAL RHF
-            // energy E(kappa), independent of the AH solver, the trust-region
-            // cap, DIIS, or iteration counting. Gated on PLANCK_SOSCF_FD_CHECK
-            // so it never runs in a normal build. Only exercises the
-            // conventional-ERI RHF path (this water/6-31g test case), since
-            // that is the only Fock builder wired up here.
-            if (std::getenv("PLANCK_SOSCF_FD_CHECK") && use_conventional)
-            {
-                auto energy_at_kappa = [&](const Eigen::MatrixXd &kap) -> double
-                {
-                    const Eigen::MatrixXd C_trial =
-                        HartreeFock::Correlation::CASSCF::apply_orbital_rotation(
-                            C_soscf_prev, kap, S);
-                    const Eigen::MatrixXd C_occ_trial = C_trial.leftCols(n_occ_i);
-                    const Eigen::MatrixXd P_trial = 2.0 * C_occ_trial * C_occ_trial.transpose();
-                    const Eigen::MatrixXd G_trial =
-                        HartreeFock::ObaraSaika::_compute_fock_rhf(eri, P_trial, nbasis);
-                    const Eigen::MatrixXd F_gas_trial = H + G_trial;
-                    return 0.5 * (P_trial.array() * (H + F_gas_trial).array()).sum();
-                };
-
-                const double E0 = energy_at_kappa(Eigen::MatrixXd::Zero(nbasis, nbasis));
-
-                // Pick one random-ish (a,i) direction, not the full Newton
-                // step -- isolates whether g/A themselves are right, before
-                // asking anything about what the solver does with them.
-                const int a_probe = 0, i_probe = 0;
-                const int k_probe = a_probe * n_occ_i + i_probe;
-                for (double h : {1e-2, 1e-3, 1e-4})
-                {
-                    Eigen::MatrixXd kap = Eigen::MatrixXd::Zero(nbasis, nbasis);
-                    kap(n_occ_i + a_probe, i_probe) = h;
-                    kap(i_probe, n_occ_i + a_probe) = -h;
-                    const double Ep = energy_at_kappa(kap);
-                    const double Em = energy_at_kappa(-kap);
-                    const double g_fd = (Ep - Em) / (2.0 * h);
-                    const double h_fd = (Ep - 2.0 * E0 + Em) / (h * h);
-                    HartreeFock::Logger::logging(
-                        HartreeFock::LogLevel::Info, "SOSCF[FD] :",
-                        std::format(
-                            "h={:.0e} 4*g_used={:.8f} g_fd={:.8f} diff={:.3e} | "
-                            "4*A_used={:.8f} h_fd={:.8f} diff={:.3e}",
-                            h, 4.0 * g(k_probe), g_fd, std::abs(4.0 * g(k_probe) - g_fd),
-                            4.0 * Amat(k_probe, k_probe), h_fd,
-                            std::abs(4.0 * Amat(k_probe, k_probe) - h_fd)));
-                }
-            }
 
             const auto h_op = [&Amat](const Eigen::VectorXd &x) -> Eigen::VectorXd
             { return Amat * x; };
@@ -1697,118 +1648,6 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             {
                 calculator._info._scf.alpha.mo_symmetry = mo_sym_a;
                 calculator._info._scf.beta.mo_symmetry = mo_sym_b;
-            }
-        }
-
-        // ── SOSCF UHF Hessian FD check (docs/SOSCF_UHF_DFT_SCOPE.md, U1) ──────
-        // Verifies build_uhf_cphf_matrix's gradient/Hessian pairing against the
-        // ACTUAL UHF energy E(kappa), the same way RHF SOSCF's own
-        // PLANCK_SOSCF_FD_CHECK probe verified build_rhf_cphf_matrix before any
-        // SCF-loop wiring existed. Runs once, at iteration 2 (Ca/Cb/epsa/epsb
-        // are already a real post-diagonalization basis by then), gated so it
-        // never fires in a normal build. Only exercises the conventional-ERI
-        // UHF path, matching the RHF probe's own scope.
-        // SAD's per-element atomic UHF sub-solves (sad.cpp) recurse into this
-        // same run_uhf on a lone atom, where a spin channel can have zero
-        // virtuals (e.g. H's beta channel) -- excluded via atomic_numbers.size()
-        // so the probe only ever fires on the real, multi-atom molecule.
-        if (iter == 2 && std::getenv("PLANCK_SOSCF_FD_CHECK") && use_conventional &&
-            calculator._molecule.atomic_numbers.size() > 1)
-        {
-            const int n_virt_a = static_cast<int>(nbasis) - n_alpha;
-
-            auto energy_at_kappa = [&](const Eigen::MatrixXd &kap_a,
-                                       const Eigen::MatrixXd &kap_b) -> double
-            {
-                const Eigen::MatrixXd Ca_trial =
-                    HartreeFock::Correlation::CASSCF::apply_orbital_rotation(Ca_prev, kap_a, S);
-                const Eigen::MatrixXd Cb_trial =
-                    HartreeFock::Correlation::CASSCF::apply_orbital_rotation(Cb_prev, kap_b, S);
-                const Eigen::MatrixXd Pa_trial =
-                    Ca_trial.leftCols(n_alpha) * Ca_trial.leftCols(n_alpha).transpose();
-                const Eigen::MatrixXd Pb_trial =
-                    Cb_trial.leftCols(n_beta) * Cb_trial.leftCols(n_beta).transpose();
-                const auto [Ga_trial, Gb_trial] =
-                    HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa_trial, Pb_trial, nbasis);
-                const Eigen::MatrixXd Fa_trial = H + Ga_trial;
-                const Eigen::MatrixXd Fb_trial = H + Gb_trial;
-                return 0.5 * ((Pa_trial.array() * (H + Fa_trial).array()).sum() +
-                              (Pb_trial.array() * (H + Fb_trial).array()).sum());
-            };
-
-            auto A_res = HartreeFock::Correlation::build_uhf_cphf_matrix(
-                calculator, shell_pairs, Ca_prev, Cb_prev, epsa_prev, epsb_prev, n_alpha, n_beta);
-            if (!A_res)
-                return std::unexpected("SOSCF[FD]: " + A_res.error());
-            const Eigen::MatrixXd &Amat = *A_res;
-            const int nova = n_virt_a * n_alpha;
-
-            const double E0 = energy_at_kappa(
-                Eigen::MatrixXd::Zero(nbasis, nbasis), Eigen::MatrixXd::Zero(nbasis, nbasis));
-
-            // g_ai = F_mo(a,i) per spin, evaluated in the PREVIOUS iteration's
-            // basis against the CURRENT Fock -- Ca_prev does not diagonalize
-            // Fa, so this is a genuine (nonzero) gradient, unlike Ca^T Fa Ca.
-            // Packed [alpha block; beta block] the same way
-            // build_uhf_cphf_matrix packs its rows/columns.
-            const Eigen::MatrixXd Fa_mo = Ca_prev.transpose() * Fa * Ca_prev;
-            const Eigen::MatrixXd Fb_mo = Cb_prev.transpose() * Fb * Cb_prev;
-
-            // Measured (docs/SOSCF_UHF_DFT_SCOPE.md, U1): a full sweep over
-            // EVERY (a,i) diagonal index on water/6-31g triplet (28 alpha +
-            // 36 beta directions) found g_fd/g_used = 2.0000000 to 6 decimals
-            // at every single index -- a universal, direction-independent
-            // scale factor, exactly like RHF's own g_true=4*F_mo finding.
-            // A_used (the raw diagonal Hessian element) does NOT reproduce
-            // h_fd cleanly at most indices (ratios from 0.2 to 272 across the
-            // sweep) -- but this is expected, not a bug: off-diagonal
-            // orbital-Hessian curvature dominates a coupled multi-virtual
-            // system, and a bare diagonal element was never meant to
-            // reproduce a single-direction second derivative on its own (RHF
-            // only saw a clean ratio because that probe direction happened to
-            // be weakly coupled to the rest of the space). What actually
-            // matters for a Newton step is the RATIO g/H, and since g and H
-            // share the same unscaled convention (g_true=2*g_used,
-            // H_true=2*Amat, verified together: g_used/Amat at the isolated
-            // water/STO-3G triplet indices reproduces g_fd/h_fd to the same
-            // few-percent residual RHF's own probe showed), using
-            // g=F_mo against Amat unscaled reproduces the true step at 1/2
-            // the arithmetic without ever touching build_uhf_cphf_matrix.
-            struct Probe
-            {
-                const char *spin;
-                int a, i, k; // k = packed index into g/Amat
-            };
-            const Probe probes[] = {
-                {"alpha", 0, 0, 0 * n_alpha + 0},
-                {"beta", 0, 0, nova + 0 * n_beta + 0},
-            };
-
-            for (const auto &p : probes)
-            {
-                const double g_used = std::string_view(p.spin) == "alpha"
-                                          ? Fa_mo(n_alpha + p.a, p.i)
-                                          : Fb_mo(n_beta + p.a, p.i);
-                for (double h : {1e-2, 1e-3, 1e-4})
-                {
-                    Eigen::MatrixXd kap_a = Eigen::MatrixXd::Zero(nbasis, nbasis);
-                    Eigen::MatrixXd kap_b = Eigen::MatrixXd::Zero(nbasis, nbasis);
-                    Eigen::MatrixXd &kap = std::string_view(p.spin) == "alpha" ? kap_a : kap_b;
-                    const int nocc = std::string_view(p.spin) == "alpha" ? n_alpha : n_beta;
-                    kap(nocc + p.a, p.i) = h;
-                    kap(p.i, nocc + p.a) = -h;
-                    const double Ep = energy_at_kappa(kap_a, kap_b);
-                    const double Em = energy_at_kappa(-kap_a, -kap_b);
-                    const double g_fd = (Ep - Em) / (2.0 * h);
-                    const double h_fd = (Ep - 2.0 * E0 + Em) / (h * h);
-                    HartreeFock::Logger::logging(
-                        HartreeFock::LogLevel::Info, "SOSCF[FD] :",
-                        std::format(
-                            "spin={} h={:.0e} 2*g_used={:.8f} g_fd={:.8f} diff={:.3e} | "
-                            "2*A_used={:.8f} h_fd={:.8f} diff={:.3e}",
-                            p.spin, h, 2.0 * g_used, g_fd, std::abs(2.0 * g_used - g_fd),
-                            2.0 * Amat(p.k, p.k), h_fd, std::abs(2.0 * Amat(p.k, p.k) - h_fd)));
-                }
             }
         }
 

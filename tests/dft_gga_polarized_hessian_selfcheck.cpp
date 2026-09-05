@@ -84,6 +84,28 @@
 // rediscovered. T5 was also confirmed non-negligible before trusting the
 // check (measured: 67% of the total delta[V_xc^a] at the test point below,
 // not a symmetry-suppressed direction).
+//
+// F3.4.4 mirrors F3.4.2/F3.4.3 for the BETA channel, checked
+// INDEPENDENTLY rather than assumed symmetric and copy-pasted --
+// coefficient_beta's own asymmetric weighting (vsigma_ab*grad_rho_a +
+// 2*vsigma_bb*grad_rho_b, ks_matrix.cpp:201-202) is the alpha<->beta,
+// aa<->bb mirror of coefficient_alpha, with the SAME shared "ab" slot
+// (not mirrored -- there is only one cross-spin sigma channel). Mirroring
+// systematically gives:
+//   T1' = delta[vrho_b] * AA
+//   T2' = 2 * delta[vsigma_bb] * (grad_rho_b . AG)
+//   T3' = 2 * vsigma_bb * (delta_grad_rho_b . AG)
+//   T4' = delta[vsigma_ab] * (grad_rho_a . AG)
+//   T5' = vsigma_ab * (delta_grad_rho_a . AG)
+// where every coefficient rooted at "aa" in the alpha formulas becomes
+// "bb" here (v2rho2_bb instead of v2rho2_aa, v2rhosigma[b-bb]/[b-ab]/[b-aa]
+// instead of [a-aa]/[a-ab]/[a-bb], v2sigma2[bb-bb]/[ab-bb]/[aa-bb] instead
+// of [aa-aa]/[aa-ab]/[aa-bb]) while the "ab" cross-term itself is READ
+// FROM THE SAME v2rhosigma[a-ab]/[b-ab] and v2sigma2[ab-ab] slots the
+// alpha formulas already used -- not a second independent set. Verified
+// EXACT (to ~1e-11) against a raw FD of the full V_xc^b scalar on the
+// FIRST attempt, for both a beta-only trial (T5'=0 identically, since
+// delta_grad_rho_a=0) and a mixed trial (both T4'/T5' nonzero).
 #include <cmath>
 #include <iostream>
 #include <sstream>
@@ -157,7 +179,7 @@ namespace
 
     struct Fxc
     {
-        double v2rho2_aa, v2rho2_ab;
+        double v2rho2_aa, v2rho2_ab, v2rho2_bb;
         double v2rhosigma[6]; // [a-aa,a-ab,a-bb,b-aa,b-ab,b-bb]
         double v2sigma2[6];   // [aa-aa,aa-ab,aa-bb,ab-ab,ab-bb,bb-bb]
     };
@@ -179,6 +201,7 @@ namespace
         Fxc out{};
         out.v2rho2_aa = v2rho2[0];
         out.v2rho2_ab = v2rho2[1];
+        out.v2rho2_bb = v2rho2[2];
         for (int i = 0; i < 6; ++i)
         {
             out.v2rhosigma[i] = v2rhosigma[static_cast<std::size_t>(i)];
@@ -334,6 +357,95 @@ namespace
                          name + " T1+T2+T3+T4+T5 (delta[V_xc^a], mixed x) vs FD, h=" + std::to_string(h));
         }
     }
+
+    // F3.4.4: the beta-channel mirror. The full ground-state V_xc^b scalar,
+    // matching ks_matrix.cpp's coefficient_beta exactly (asymmetric: the
+    // "bb" self-term carries 2.0, the "ab" cross term does not, mirroring
+    // coefficient_alpha's own weighting with aa<->bb swapped).
+    double eval_vxc_beta_scalar(const DFT::XC::Functional &f, double rho_a, double rho_b, double gax, double gay,
+                                 double gaz, double gbx, double gby, double gbz, const AOFactors &ao)
+    {
+        const double sigma_aa = dot(gax, gay, gaz, gax, gay, gaz);
+        const double sigma_ab = dot(gax, gay, gaz, gbx, gby, gbz);
+        const double sigma_bb = dot(gbx, gby, gbz, gbx, gby, gbz);
+        std::vector<double> exc, vrho, vsigma;
+        f.evaluate_gga_exc_vxc({rho_a, rho_b}, {sigma_aa, sigma_ab, sigma_bb}, 1, exc, vrho, vsigma);
+
+        const double g_a_dot_AG = dot(gax, gay, gaz, ao.AGx, ao.AGy, ao.AGz);
+        const double g_b_dot_AG = dot(gbx, gby, gbz, ao.AGx, ao.AGy, ao.AGz);
+        // coefficient_beta = vsigma_ab*grad_rho_a + 2*vsigma_bb*grad_rho_b
+        return vrho[1] * ao.AA + vsigma[1] * g_a_dot_AG + 2.0 * vsigma[2] * g_b_dot_AG;
+    }
+
+    double fd_delta_vxc_beta(const DFT::XC::Functional &f, const Point &p, const MixedPerturbation &d,
+                              const AOFactors &ao, double h)
+    {
+        const double vp = eval_vxc_beta_scalar(f, p.rho_a + h * d.drho_a, p.rho_b + h * d.drho_b, p.gax + h * d.dgax,
+                                                p.gay + h * d.dgay, p.gaz + h * d.dgaz, p.gbx + h * d.dgbx,
+                                                p.gby + h * d.dgby, p.gbz + h * d.dgbz, ao);
+        const double vm = eval_vxc_beta_scalar(f, p.rho_a - h * d.drho_a, p.rho_b - h * d.drho_b, p.gax - h * d.dgax,
+                                                p.gay - h * d.dgay, p.gaz - h * d.dgaz, p.gbx - h * d.dgbx,
+                                                p.gby - h * d.dgby, p.gbz - h * d.dgbz, ao);
+        return (vp - vm) / (2.0 * h);
+    }
+
+    // General beta-channel check, taking a MixedPerturbation so both the
+    // beta-only case (drho_a=dgax=dgay=dgaz=0) and the mixed case (both
+    // nonzero) reuse the same formula and code path -- deliberately NOT
+    // copy-pasted from check_alpha_only/check_mixed with names swapped;
+    // every coefficient is re-read from its own (mirrored) slot below.
+    void check_beta(const std::string &name, const Point &p, const MixedPerturbation &d, const AOFactors &ao,
+                     const std::string &label)
+    {
+        auto f = require_functional(name);
+        const Fxc fxc = eval_fxc_at(f, p);
+
+        std::vector<double> exc0, vrho0, vsigma0;
+        const double sigma_aa0 = dot(p.gax, p.gay, p.gaz, p.gax, p.gay, p.gaz);
+        const double sigma_ab0 = dot(p.gax, p.gay, p.gaz, p.gbx, p.gby, p.gbz);
+        const double sigma_bb0 = dot(p.gbx, p.gby, p.gbz, p.gbx, p.gby, p.gbz);
+        f.evaluate_gga_exc_vxc({p.rho_a, p.rho_b}, {sigma_aa0, sigma_ab0, sigma_bb0}, 1, exc0, vrho0, vsigma0);
+        const double vsigma_bb0 = vsigma0[2];
+        const double vsigma_ab0 = vsigma0[1];
+
+        const double g_a_dot_AG = dot(p.gax, p.gay, p.gaz, ao.AGx, ao.AGy, ao.AGz);
+        const double g_b_dot_AG = dot(p.gbx, p.gby, p.gbz, ao.AGx, ao.AGy, ao.AGz);
+        const double dg_a_dot_AG = dot(d.dgax, d.dgay, d.dgaz, ao.AGx, ao.AGy, ao.AGz);
+        const double dg_b_dot_AG = dot(d.dgbx, d.dgby, d.dgbz, ao.AGx, ao.AGy, ao.AGz);
+
+        const double dsigma_aa = 2.0 * dot(p.gax, p.gay, p.gaz, d.dgax, d.dgay, d.dgaz);
+        const double dsigma_ab = dot(p.gbx, p.gby, p.gbz, d.dgax, d.dgay, d.dgaz) +
+                                  dot(p.gax, p.gay, p.gaz, d.dgbx, d.dgby, d.dgbz);
+        const double dsigma_bb = 2.0 * dot(p.gbx, p.gby, p.gbz, d.dgbx, d.dgby, d.dgbz);
+
+        // Every "aa"-rooted slot in the alpha formulas becomes "bb" here;
+        // the shared "ab" cross slots are read unchanged (there is only
+        // one cross-spin sigma channel, not a mirrored pair).
+        const double delta_vrho_b = fxc.v2rho2_bb * d.drho_b + fxc.v2rho2_ab * d.drho_a +
+                                     fxc.v2rhosigma[5] * dsigma_bb + fxc.v2rhosigma[4] * dsigma_ab +
+                                     fxc.v2rhosigma[3] * dsigma_aa;
+        const double delta_vsigma_bb = fxc.v2rhosigma[5] * d.drho_b + fxc.v2rhosigma[2] * d.drho_a +
+                                        fxc.v2sigma2[5] * dsigma_bb + fxc.v2sigma2[4] * dsigma_ab +
+                                        fxc.v2sigma2[2] * dsigma_aa;
+        const double delta_vsigma_ab = fxc.v2rhosigma[4] * d.drho_b + fxc.v2rhosigma[1] * d.drho_a +
+                                        fxc.v2sigma2[4] * dsigma_bb + fxc.v2sigma2[3] * dsigma_ab +
+                                        fxc.v2sigma2[1] * dsigma_aa;
+
+        const double T1 = delta_vrho_b * ao.AA;
+        const double T2 = 2.0 * delta_vsigma_bb * g_b_dot_AG;
+        const double T3 = 2.0 * vsigma_bb0 * dg_b_dot_AG;
+        const double T4 = delta_vsigma_ab * g_a_dot_AG;
+        const double T5 = vsigma_ab0 * dg_a_dot_AG;
+        const double delta_vxc_b_analytic = T1 + T2 + T3 + T4 + T5;
+
+        for (double h : {1e-2, 1e-3, 1e-4})
+        {
+            const double delta_vxc_b_fd = fd_delta_vxc_beta(f, p, d, ao, h);
+            const double tol = 50.0 * h * h + 1e-6;
+            require_near(delta_vxc_b_analytic, delta_vxc_b_fd, tol,
+                         name + " T1'+T2'+T3'+T4'+T5' (delta[V_xc^b], " + label + ") vs FD, h=" + std::to_string(h));
+        }
+    }
 } // namespace
 
 int main()
@@ -371,6 +483,23 @@ int main()
     check_mixed("gga_c_pbe", p2, md2, ao1);
     check_mixed("gga_c_pbe", p1, md1, ao2);
     check_mixed("gga_c_pbe", p2, md2, ao2);
+
+    // F3.4.4: beta channel, checked independently rather than assumed
+    // symmetric to alpha. Beta-only trials (drho_a=dgrad_rho_a=0, so T5'
+    // vanishes identically -- exercises T1'-T4' without T5') and the same
+    // mixed perturbations reused from F3.4.3 (both T4'/T5' nonzero there).
+    const MixedPerturbation bo1{0.0, 0.008, 0.0, 0.0, 0.0, -0.015, 0.01, -0.006};
+    const MixedPerturbation bo2{0.0, -0.03, 0.0, 0.0, 0.0, 0.06, -0.05, 0.02};
+
+    check_beta("gga_c_pbe", p1, bo1, ao1, "beta-only x");
+    check_beta("gga_c_pbe", p2, bo2, ao1, "beta-only x");
+    check_beta("gga_c_pbe", p1, bo1, ao2, "beta-only x");
+    check_beta("gga_c_pbe", p2, bo2, ao2, "beta-only x");
+
+    check_beta("gga_c_pbe", p1, md1, ao1, "mixed x");
+    check_beta("gga_c_pbe", p2, md2, ao1, "mixed x");
+    check_beta("gga_c_pbe", p1, md1, ao2, "mixed x");
+    check_beta("gga_c_pbe", p2, md2, ao2, "mixed x");
 
     return g_ok ? 0 : 1;
 }
