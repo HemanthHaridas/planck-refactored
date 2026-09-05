@@ -15,6 +15,7 @@
 #include "base/wrapper.h"
 #include "integrals/shellpair.h"
 #include "ks_matrix.h"
+#include "response_packing.h"
 #include "solvation/pcm.h"
 #include "xc_grid.h"
 

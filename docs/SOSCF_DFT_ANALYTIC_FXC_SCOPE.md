@@ -258,7 +258,7 @@ so F3's planned verification is already structurally independent in the
 way this finding says is required — worth stating explicitly rather than
 assuming the parallel is safe.
 
-### F3 — the Hessian-vector product itself (~L, the actual research)
+### F3 — the Hessian-vector product itself (~L, the actual research) — DONE (F3.1–F3.5 all landed)
 
 This is the step the doc's framing calls "closer in kind to deriving the
 RHF Hessian than to writing the RHF SOSCF callbacks." Build the contraction
@@ -1182,7 +1182,7 @@ convention those probes were built to find.
 Full smoke suite (35/35) and all five standalone fxc/Hessian ctest gates
 pass with every probe removed.
 
-#### F3.5 — MO projection and `(a,i)` packing (~S, after F3.4)
+#### F3.5 — MO projection and `(a,i)` packing (~S, after F3.4) — DONE
 
 Pure plumbing, no new physics: project the verified `δV_xc` (whichever of
 F3.1–F3.4's cases applies) into the `(a,i)` MO block the same way
@@ -1199,6 +1199,53 @@ element, not just the raw AO-basis `δV_xc` from the earlier steps) — this
 is the first point where a packing-index bug (row/column transposition,
 `(a,i)` vs `(i,a)` ordering) could hide independently of every earlier
 step's own correctness, so it needs its own dedicated check.
+
+**Confirmed a real convention mismatch this codebase already has, by
+reading both implementations rather than assuming they agree:**
+`HartreeFock::Correlation::build_rhf_cphf_matrix` /
+`build_uhf_cphf_matrix` (the orbital-Hessian linear part
+`solve_augmented_hessian`'s `h_op` must eventually match) pack
+`idx(a,i) = a·n_occ + i` — **virtual-major**. `ResponseExcitationSpace::
+flat_index(i,a) = i·n_virt + a` (`src/dft/driver.h`, the FD-kernel
+oracle's own packing, used by TDDFT and by every now-removed F3.1–4
+whole-molecule probe) — **occupied-major**. These are genuinely
+different orderings, not a documentation slip: F4/F5's eventual wiring
+must translate between them explicitly wherever an FD-oracle-packed
+block and a CPHF-convention gradient/Hessian meet, or every off-diagonal
+element silently lands in the wrong row/column.
+
+**Landed as `pack_hessian_vector_product_cphf_order`
+(`src/dft/response_packing.{h,cpp}`) — a small, real production
+function, not a debug probe — packing an AO-basis `δV_xc` into the CPHF
+(`a·n_occ+i`) convention.** Deliberately kept out of `driver.cpp`, in its
+own tiny translation unit with no dependency beyond Eigen, specifically
+so its own test does not need to link the whole KS-loop driver and its
+transitive SCF/post-HF/gradient dependencies — the exact link-cost
+problem that made F3.1/F3.2/F3.3.4/F3.4.5 impractical to convert into
+standalone tests (see F3.4.5's own note on why those were removed
+outright instead).
+
+**Verified as `planck-dft-hessian-vector-packing`
+(`tests/dft_hessian_vector_packing.cpp`)** against an independently
+written reference (a plain triple-nested-loop projection, not sharing
+the production function's own matrix-multiply call shape), on four
+**non-square** (`n_occ ≠ n_virt`) synthetic fixtures — square fixtures
+were deliberately avoided since a row/column transposition or an `i↔a`
+swap can hide behind a square matrix's own symmetry. A separate check
+confirms the two named conventions are genuinely numerically different
+at a hand-picked `(i,a)` pair (`(i=0,a=1)`: occupied-major gives `1`,
+virtual-major gives `2`), including a note on why `(i=1,a=2)` was
+rejected as a fixture (both conventions coincidentally give `5` there).
+
+Mutation-verified twice: swapping the packing formula to the wrong
+(occupied-major) convention is caught at every one of 60 flat indices
+across the four fixtures, and independently, swapping the MO-block read
+from `hx_mo(i,a)` to a transposed `hx_mo(a,i)` (guarded with a modulo so
+it does not simply crash on the non-square shapes, since Eigen's own
+bounds assertions compile out under the project's `Release` build type —
+worth noting as a real, if narrow, defense-in-depth gap) is also caught
+at every index. Both reverted after verification. Full smoke suite
+(35/35) and all 9 `planck-dft`-prefixed ctest gates pass.
 
 #### Cross-cutting notes (apply to all of F3.1–F3.5)
 

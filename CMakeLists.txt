@@ -409,6 +409,8 @@ set(DFT_LIB_SRC
     ${SRC_DIR}/dft/driver.h
     ${SRC_DIR}/dft/ks_matrix.cpp
     ${SRC_DIR}/dft/ks_matrix.h
+    ${SRC_DIR}/dft/response_packing.cpp
+    ${SRC_DIR}/dft/response_packing.h
     ${SRC_DIR}/dft/xc_grid.cpp
     ${SRC_DIR}/dft/xc_grid.h
     ${SRC_DIR}/dft/base/angular.h
@@ -837,6 +839,16 @@ if(BUILD_TESTING)
     # fxc selfchecks.
     add_executable(planck-dft-gga-polarized-hessian-selfcheck
         ${CMAKE_SOURCE_DIR}/tests/dft_gga_polarized_hessian_selfcheck.cpp
+    )
+
+    # F3.5 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): MO projection and (a,i)
+    # packing -- verifies pack_hessian_vector_product_cphf_order against an
+    # independent hand-computed reference. Needs only response_packing.cpp
+    # (Eigen only, no libxc), kept out of driver.cpp specifically so this
+    # test does not link the whole KS-loop driver.
+    add_executable(planck-dft-hessian-vector-packing
+        ${CMAKE_SOURCE_DIR}/tests/dft_hessian_vector_packing.cpp
+        ${SRC_DIR}/dft/response_packing.cpp
     )
 
     # F2 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): confirms the existing
@@ -1501,6 +1513,11 @@ if(BUILD_TESTING)
         ${LIBXC_INSTALL_DIR}/include
     )
 
+    target_include_directories(planck-dft-hessian-vector-packing PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-dft-density-response-linearity PRIVATE
         ${SRC_DIR}
         ${LIBXC_INSTALL_DIR}/include
@@ -1765,6 +1782,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-dft-gga-polarized-hessian-selfcheck PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dft-hessian-vector-packing PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -2125,6 +2148,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-dft-gga-polarized-hessian-selfcheck
         COMMAND planck-dft-gga-polarized-hessian-selfcheck
+    )
+
+    add_test(
+        NAME planck-dft-hessian-vector-packing
+        COMMAND planck-dft-hessian-vector-packing
     )
 
     add_test(
