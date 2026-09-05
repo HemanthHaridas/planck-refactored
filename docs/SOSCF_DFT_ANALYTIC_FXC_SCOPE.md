@@ -616,7 +616,7 @@ that particular mutation's size at the tested points — expected, not a
 gap, since `h=1e-2` is the least precise of the three step sizes by
 design).
 
-##### F3.3.2 — add T2: `2·[v2rhosigma·δρ + 2·v2sigma2·(∇ρ·δ∇ρ)]·(∇ρ·AG)` (~S, after F3.3.1)
+##### F3.3.2 — add T2: `2·[v2rhosigma·δρ + 2·v2sigma2·(∇ρ·δ∇ρ)]·(∇ρ·AG)` (~S, after F3.3.1) — DONE
 
 Add the second coefficient-substitution term, still with T3 (the
 `δ∇ρ`-argument term) forced to zero. This is the more delicate of the two
@@ -630,6 +630,37 @@ T3 is independently confirmed small** (e.g. a probe direction where
 assumed) — the same "isolate before combining" discipline F3.3.1 used, so
 a T1+T2 agreement here is not accidentally validated by an uncompensated
 T3 contribution hiding underneath it.
+
+**Landed as `check_T2` / `check_T2_reduces_at_zero_gradient` in
+`tests/dft_gga_hessian_selfcheck.cpp`, following F3.3.1's own decision to
+verify at the point level rather than search a real molecule's grid** — the
+same reasoning applies unchanged: T2's coefficient is `δ[vsigma]`, checked
+against a raw finite difference of libxc's own `vsigma` under the identical
+joint `(δρ, δσ=2·∇ρ·δ∇ρ)` perturbation `fd_delta_vrho` already used for T1,
+reusing the existing `fd_delta_vsigma` helper unchanged (it was already
+written, just unused, since T1's own `δ[vrho]` check needed only
+`fd_delta_vrho`). This checks `d(vsigma)/d(rho,sigma)` where T1 checked
+`d(vrho)/d(rho,sigma)` — the mixed-partial sibling — so no new FD machinery
+was needed, only a new comparison target.
+
+**This does not need the "T3 independently confirmed small" isolation the
+scope called for.** At the point level (not the grid-integrated level
+F3.1/F3.2 compare at), T1 and T2 are two *different scalar coefficients*
+(`δ[vrho]` and `δ[vsigma]`), not two terms summed into one number — so
+checking T2's coefficient alone against `δ[vsigma]` never combines with T1
+or T3 in the first place. The scope's isolation concern applies once these
+coefficients are contracted with their AO factors and summed into an actual
+`δV_xc`, which happens at F3.3.3 (T3 lands) and is fully resolved at F3.3.4
+(whole-sum cross-check) — not before.
+
+**Result: matches to the FD path's own step-size precision at every tested
+point** (the same four `(ρ, ∇ρ, δρ, δ∇ρ)` points F3.3.1 used, so the two
+checks share fixtures rather than needing new ones), on PBE. The exact-`∇ρ=0`
+point additionally confirms T2's coefficient reduces EXACTLY to the plain
+`v2rhosigma·δρ` piece there, mirroring T1's own zero-gradient reduction.
+Mutation-verified: dropping the `2·` factor on the `v2sigma2·(∇ρ·δ∇ρ)` piece
+is caught cleanly at `h=1e-3`/`1e-4` (not `h=1e-2`, same expected gap as
+T1's own mutation check), reverted after verification.
 
 ##### F3.3.3 — add T3: `2·vsigma·(δ∇ρ·AG)` (~S, after F3.3.2)
 

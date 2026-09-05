@@ -181,6 +181,51 @@ namespace
         require_near(delta_vrho_analytic, delta_vrho_lda_only, 1e-15,
                      name + ": T1 coefficient must reduce EXACTLY to v2rho2*drho when grad_rho=0");
     }
+
+    // F3.3.2 -- T2's coefficient alone: 2*[v2rhosigma*drho + 2*v2sigma2*(g.dg)].
+    // T2 = that coefficient times the *existing*, unchanged (g.AG) gradient-
+    // coupling factor -- so isolating T2 at the point level means verifying
+    // the coefficient itself, i.e. delta[vsigma], against a raw FD of vsigma
+    // under the same joint (drho, dsigma=2*g.dg) perturbation T1 used for
+    // vrho. This is the mixed-partial sibling of T1's check: T1 checked
+    // d(vrho)/d(rho,sigma), T2 checks d(vsigma)/d(rho,sigma).
+    void check_T2(const std::string &name, const Point &p, const Perturbation &d)
+    {
+        auto f = require_functional(name);
+        const Fxc fxc = evaluate_fxc_at(f, p);
+
+        const double g_dot_dg = dot(p.gx, p.gy, p.gz, d.dgx, d.dgy, d.dgz);
+        const double delta_vsigma_analytic = fxc.v2rhosigma * d.drho + 2.0 * fxc.v2sigma2 * g_dot_dg;
+
+        for (double h : {1e-2, 1e-3, 1e-4})
+        {
+            const double delta_vsigma_fd = fd_delta_vsigma(f, p, d, h);
+            const double tol = 50.0 * h * h + 1e-6;
+            require_near(delta_vsigma_analytic, delta_vsigma_fd, tol,
+                         name + " T2 coefficient (delta[vsigma]) vs FD, h=" + std::to_string(h) +
+                             (p.gx == 0.0 && p.gy == 0.0 && p.gz == 0.0 ? " [grad_rho=0 point]" : ""));
+        }
+    }
+
+    // At grad_rho=0 the g.dg term vanishes identically (same argument as
+    // T1's zero-gradient reduction), so T2's coefficient there must reduce
+    // EXACTLY to the plain v2rhosigma*drho piece -- no v2sigma2 contribution
+    // survives regardless of dg's own direction or size.
+    void check_T2_reduces_at_zero_gradient(const std::string &name, double rho0)
+    {
+        auto f = require_functional(name);
+        const Point p{rho0, 0.0, 0.0, 0.0};
+        const Perturbation d{0.01, 0.3, -0.2, 0.1};
+        const Fxc fxc = evaluate_fxc_at(f, p);
+
+        const double g_dot_dg = dot(p.gx, p.gy, p.gz, d.dgx, d.dgy, d.dgz);
+        require_near(g_dot_dg, 0.0, 1e-15, name + ": g.dg must be exactly 0 when g=0");
+
+        const double delta_vsigma_analytic = fxc.v2rhosigma * d.drho + 2.0 * fxc.v2sigma2 * g_dot_dg;
+        const double delta_vsigma_lda_only = fxc.v2rhosigma * d.drho;
+        require_near(delta_vsigma_analytic, delta_vsigma_lda_only, 1e-15,
+                     name + ": T2 coefficient must reduce EXACTLY to v2rhosigma*drho when grad_rho=0");
+    }
 } // namespace
 
 int main()
@@ -197,6 +242,16 @@ int main()
 
     check_T1_reduces_to_lda_at_zero_gradient("pbe", 0.3);
     check_T1_reduces_to_lda_at_zero_gradient("pbe", 1.2);
+
+    // F3.3.2: same four points, checking T2's coefficient (delta[vsigma])
+    // instead of T1's (delta[vrho]).
+    check_T2("pbe", {0.3, 0.1, 0.05, -0.02}, {0.01, 0.02, -0.01, 0.005});
+    check_T2("pbe", {1.0, 0.5, -0.3, 0.2}, {0.05, -0.1, 0.08, -0.04});
+    check_T2("pbe", {0.15, 0.0, 0.0, 0.0}, {0.02, 0.3, -0.2, 0.1}); // grad_rho=0 point
+    check_T2("pbe", {0.6, 0.2, 0.2, 0.2}, {-0.03, 0.1, 0.1, 0.1});  // dg parallel to g
+
+    check_T2_reduces_at_zero_gradient("pbe", 0.3);
+    check_T2_reduces_at_zero_gradient("pbe", 1.2);
 
     return g_ok ? 0 : 1;
 }
