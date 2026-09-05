@@ -505,24 +505,140 @@ shape as F3.1's probe, in the UKS convergence branch of
 
 #### F3.3 — GGA, unpolarized: gradient coupling via `v2rhosigma`/`v2sigma2` (~M, after F3.2)
 
-The genuinely new algebra. Derive `δV_xc` for GGA by differentiating the
-existing first-derivative contraction in `assemble_xc_matrix`
-(`src/dft/ks_matrix.cpp:171-188`, the unpolarized branch) one more time
-with respect to the density — do not guess it from a paper's notation
-without checking it reduces to that existing code's own structure at
-zeroth order. The existing unpolarized potential term is
-`V_xc += vrho·φ_μφ_ν + [2·vsigma·∇ρ]·(φ_μ∇φ_ν + ∇φ_μφ_ν)`; the induced
-term is this expression's own derivative, which needs `δρ`, `δ∇ρ`
-(both from F2, unchanged), and the three grid-pointwise kernels
-`v2rho2`, `v2rhosigma`, `v2sigma2` (F1, unchanged) contracted against
-`∇ρ·δ∇ρ` the same way the existing `2·vsigma·∇ρ` coefficient already
-couples the gradient into the AO product.
+The genuinely new algebra. Derived symbolically (not guessed from a paper's
+notation) by differentiating the existing first-derivative contraction in
+`assemble_xc_matrix` (`src/dft/ks_matrix.cpp:171-188`, the unpolarized
+branch) one more time with respect to the density. The existing
+unpolarized potential term is, in AO-product form (`AA = φ_μφ_ν`,
+`AG = φ_μ∇φ_ν + ∇φ_μφ_ν`, the vector the existing code builds via
+`gradient_projection`):
 
-*Verify:* on PBE (matching F1's own GGA choice), unpolarized, with `x`
-directions chosen to have a genuinely non-uniform density gradient at the
+```
+V_xc = vrho·AA + 2·vsigma·(∇ρ·AG)
+```
+
+Taylor-expanding `vrho`/`vsigma` to first order via the mixed second
+partials (`δ[vrho] = v2rho2·δρ + 2·v2rhosigma·(∇ρ·δ∇ρ)`,
+`δ[vsigma] = v2rhosigma·δρ + 2·v2sigma2·(∇ρ·δ∇ρ)`, using
+`δσ = 2∇ρ·δ∇ρ` since `σ = ∇ρ·∇ρ` is quadratic in `∇ρ`) and differentiating
+the `∇ρ` argument inside `AG`'s own coupling gives **three structurally
+distinct terms**, confirmed by symbolic differentiation rather than derived
+by hand alone:
+
+```
+δV_xc = [v2rho2·δρ + 2·v2rhosigma·(∇ρ·δ∇ρ)] · AA                        (T1: coefficient x plain AO product)
+      + 2·[v2rhosigma·δρ + 2·v2sigma2·(∇ρ·δ∇ρ)] · (∇ρ·AG)               (T2: coefficient x existing gradient-coupling vector)
+      + 2·vsigma · (δ∇ρ·AG)                                             (T3: UNCHANGED ground-state vsigma x a NEW delta-gradient-coupling vector)
+```
+
+**T3 is easy to miss**: differentiating only the coefficients (`vrho`,
+`vsigma`) and forgetting that `∇ρ` is itself an argument of the existing
+`AG`-coupling factor drops this term entirely, silently truncating the
+Taylor expansion. Broken into four sub-steps so a term-dropping bug shows
+up as a specific, isolated disagreement rather than one combined mismatch
+with no way to tell which piece is wrong — mirroring how F3 itself was
+broken into F3.1–F3.5 for the same reason.
+
+**This decomposition was checked independently before being written down,
+not just re-derived and trusted.** Verified two ways: (1) a direct
+multivariable chain-rule differentiation of
+`V = vrho(ρ,σ)·AA + 2·vsigma(ρ,σ)·(∇ρ·AG)` with `σ=∇ρ·∇ρ` substituted
+after differentiation (so the `∇ρ`-dependence of `σ` is captured
+correctly rather than assumed), which reproduced the same three-term
+structure; (2) a fully numeric check against a genuine, self-consistent
+toy energy density `E(ρ,σ) = ρ³σ + ρ²σ² + ρσ` (chosen specifically so
+`vrho=∂E/∂ρ` and `vsigma=∂E/∂σ` satisfy the Maxwell relation
+`∂vrho/∂σ = ∂vsigma/∂ρ` a real XC functional's derivatives must satisfy —
+an earlier attempt with two independently-picked, non-Maxwell-consistent
+toy `vrho`/`vsigma` functions gave a **real, nonzero** disagreement
+between the true chain-rule result and `T1+T2+T3`, which is not a flaw in
+the T1/T2/T3 formula itself but a reminder that this decomposition
+implicitly assumes `v2rhosigma` computed from `vrho`'s own `σ`-derivative
+equals the one computed from `vsigma`'s `ρ`-derivative — exactly the
+`v2rhosigma` equivalence F1's own selfcheck already verified holds for
+real libxc functionals, and exactly what F3.3.4 re-exercises through the
+full contraction). With a Maxwell-consistent toy functional, `T1+T2+T3`
+matched the true numeric derivative to `~7e-18` (floating-point noise).
+
+##### F3.3.1 — T1 alone: `[v2rho2·δρ + 2·v2rhosigma·(∇ρ·δ∇ρ)]·AA` (~S)
+
+Build only T1, with T2 and T3 forced to zero. **Sanity check before any
+FD-oracle comparison**: at a point where `∇ρ` (or the probed `δ∇ρ`
+component along the trial direction) is negligible, T1 alone should
+reduce toward F3.1's own LDA-only `v2rho2·δρ` term — not a formal proof
+(the `2·v2rhosigma·(∇ρ·δ∇ρ)` piece is still genuinely part of T1, not an
+LDA leftover), but a useful smoke check that the plain-AO-product half of
+the contraction machinery (reused unchanged from F3.1) still works when
+composed with a GGA functional's `v2rho2`/`v2rhosigma`.
+
+*Verify:* compare `T1` alone against the FD oracle's induced potential
+with `vsigma` and its derivatives artificially zeroed in the oracle's own
+evaluation path (or, more simply, verify T1's contribution algebraically
+matches the oracle's own decomposition by comparing at a probe direction
+where T2 and T3 are independently confirmed negligible — do not just trust
+a partial match against the full oracle, since T2/T3 could cancel T1's own
+error there). **If this disagrees, stop before F3.3.2** — the plain-AO
+term is the simplest of the three and any defect here recurs in T1's own
+contribution to the combined sum.
+
+##### F3.3.2 — add T2: `2·[v2rhosigma·δρ + 2·v2sigma2·(∇ρ·δ∇ρ)]·(∇ρ·AG)` (~S, after F3.3.1)
+
+Add the second coefficient-substitution term, still with T3 (the
+`δ∇ρ`-argument term) forced to zero. This is the more delicate of the two
+coefficient terms — it reuses the *existing* `∇ρ·AG` gradient-coupling
+factor (unchanged from the ground-state first-derivative code) but weights
+it by the *new*, second-derivative-sourced coefficient.
+
+*Verify:* `T1 + T2` (still without T3) against the FD oracle **only where
+T3 is independently confirmed small** (e.g. a probe direction where
+`δ∇ρ·AG` measures near-zero on its own, checked directly rather than
+assumed) — the same "isolate before combining" discipline F3.3.1 used, so
+a T1+T2 agreement here is not accidentally validated by an uncompensated
+T3 contribution hiding underneath it.
+
+##### F3.3.3 — add T3: `2·vsigma·(δ∇ρ·AG)` (~S, after F3.3.2)
+
+Add the term most likely to be silently dropped: the ground-state `vsigma`
+(unchanged, already computed for the SCF's own converged KS potential)
+contracted against a **new** gradient-coupling vector built from `δ∇ρ`
+(F2's confirmed-linear density-gradient response) instead of `∇ρ`. This
+needs no new kernel evaluation (`vsigma` is F1/production's existing
+first-derivative output, not a second derivative) — only a second call to
+`gradient_projection`-style AO coupling with `δ∇ρ` swapped in for `∇ρ`.
+
+*Verify:* `T1 + T2 + T3`, the full sum, against the FD oracle — this is
+the real F3.3 verification the original single-step scope asked for,
+reached in a way that isolates which term is responsible if it fails.
+Choose `x` directions with a genuinely non-uniform density gradient at the
 test geometry (a bent triatomic like water rather than a homonuclear
-diatomic, so `∇ρ` does not vanish by symmetry along the direction being
-probed) — agreement with the FD oracle to its own step-size precision.
+diatomic, so `∇ρ` does not vanish by symmetry along the probed direction —
+a diatomic's own axial symmetry would make `T3` trivially small along
+many directions and weaken this as a check of T3 specifically, the same
+class of trap F3.2's own symmetry-suppressed direction already
+demonstrated). **If this disagrees, the earlier sub-steps already isolate
+where to look** — do not re-derive from scratch; check whether F3.3.1's or
+F3.3.2's own isolated agreement was itself compromised by an
+uncompensated T3 leaking through (the risk F3.3.1/F3.3.2's own verify
+notes flag), before assuming a new defect in T3 itself.
+
+##### F3.3.4 — cross-check against F1/F3.1's own `v2rhosigma` equivalence finding (~S, after F3.3.3)
+
+F1's own selfcheck verified `v2rhosigma` satisfies
+`d(vrho)/d(sigma) == d(vsigma)/d(rho)` as two independently-measured
+finite differences of libxc's own first derivatives. This sub-step is the
+one place in F3.3 that specifically exercises whether that equivalence
+also holds *through* the contraction (i.e. whether T1's
+`2·v2rhosigma·(∇ρ·δ∇ρ)` piece and T2's `v2rhosigma·δρ` piece — which read
+the SAME `v2rhosigma` array but multiply it against structurally different
+factors — are both using it correctly, not just that the raw array value
+is right). Not a new formula; a targeted regression-style re-check using
+the already-verified full `T1+T2+T3` sum from F3.3.3, run once more on a
+second, independent system to confirm the agreement wasn't specific to the
+first test geometry.
+
+*Verify:* `T1+T2+T3` against the FD oracle on a second system (different
+molecule, same PBE functional) — agreement to the FD path's own step-size
+precision, same as F3.3.3.
 
 **If this disagrees, stop before attempting F3.4.** The polarized GGA case
 adds cross-spin coupling on top of this gradient algebra; debugging both
