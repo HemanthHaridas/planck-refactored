@@ -98,24 +98,34 @@ truth for what remains.
     differences and exact DIIS-energy agreement instead, which doesn't
     depend on the cluster ladder. The large-`nb` win this work was
     originally motivated by is therefore still unmeasured.
-  - **UHF** is a mechanical port: `solve_uhf_cphf`
-    (`src/post_hf/uhf_response.cpp`) already builds the full dense coupled
-    α/β Jacobian internally, just wrapped inside a Z-vector solve rather
-    than exposed as a standalone builder the way `build_rhf_cphf_matrix`
-    is for RHF.
+  - **UHF and DFT are now scoped in detail** (`docs/SOSCF_UHF_DFT_SCOPE.md`,
+    not started). **UHF** is a mechanical extension but not zero work:
+    `solve_uhf_cphf` (`src/post_hf/uhf_response.cpp`) already builds the
+    full dense coupled α/β Jacobian internally (same unscaled diagonal
+    convention as RHF's `build_rhf_cphf_matrix`), but builds it by column
+    via real per-trial-rotation Fock builds rather than one closed-form ERI
+    transform, so it is a more expensive construction to call every SOSCF
+    iteration, and it is currently wrapped inside a Z-vector solve rather
+    than exposed as a standalone builder. Needs its own
+    finite-difference verification, not just a diagonal-convention match.
   - **ROHF needs new theory, not a port** — there is no ROHF
     orbital-response/CPHF machinery anywhere in this codebase, the same gap
     behind ROHF-MP2/stability/PCM all being unsupported. ROHF orbitals
     diagonalize the effective Roothaan Fock, not separate per-spin Focks —
     the same subtlety that already forced the ROHF analytic gradient to use
     its own `W = P^α F^α P^α + P^β F^β P^β` instead of reusing UHF's.
-  - **DFT** needs the KS SCF loop (a separate implementation in
-    `src/dft/driver.cpp`, not routed through `run_rhf`) wired through a
-    shared SOSCF path, plus the XC kernel contribution added to the
-    Hessian-vector product. The XC kernel builder itself already exists
-    in-tree (`build_closed_shell_xc_kernel_blocks` /
-    `build_unrestricted_xc_kernel_blocks`, built for TDDFT) — the gap is
-    integration, not derivation.
+  - **DFT's gap was mis-scoped once already and is corrected in the new
+    doc.** The existing `build_closed_shell_xc_kernel_blocks` /
+    `build_unrestricted_xc_kernel_blocks` (`src/dft/driver.cpp`) looked like
+    a ready-to-reuse XC kernel from its name, but reading the body shows it
+    is a numerical finite-difference construction built for TDDFT's small
+    excitation spaces (two full grid XC evaluations per occ-virt pair).
+    Reused as a SOSCF Hessian directly, that is `O(n_occ·n_virt)` grid
+    evaluations per iteration — likely slower than DIIS at the sizes where
+    SOSCF would matter. The real production answer is an analytic XC
+    second derivative (`fxc`), which libxc exposes but Planck's wrapper
+    (`src/dft/base/wrapper.h`) never calls. This is a research question
+    (derive and verify a new analytic Hessian), not a wiring task.
 
 ## FCI performance — two measured, independent items
 

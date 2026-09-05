@@ -181,15 +181,22 @@ this work was originally motivated by has not been measured.
 
 Investigated directly by reading the relevant code, not assumed:
 
-- **UHF — a mechanical extension, not a new derivation.** `solve_uhf_cphf`
-  (`src/post_hf/uhf_response.cpp`) already materializes the full dense
-  coupled α/β Jacobian matrix internally — the same object
-  `build_rhf_cphf_matrix` is for RHF — but it is currently wrapped inside a
-  Z-vector solve (`A·z = -rhs` for the MP2 gradient) rather than exposed as
-  a standalone builder. The work is the same shape as the RHF split between
-  `build_rhf_cphf_matrix` and `solve_rhf_cphf`: factor the matrix build out,
-  then pack a joint α/β gradient and step. The Cayley rotation and
-  semicanonicalization would need separate α and β blocks throughout.
+Scoped in detail in `docs/SOSCF_UHF_DFT_SCOPE.md`:
+
+- **UHF — a mechanical extension, not a new derivation, but not zero
+  work.** `solve_uhf_cphf` (`src/post_hf/uhf_response.cpp`) already
+  materializes the full dense coupled α/β Jacobian matrix internally — the
+  same object `build_rhf_cphf_matrix` is for RHF — but it builds that
+  matrix by column via real per-trial-rotation integral-layer calls (a Fock
+  build per column), not a single closed-form ERI transform the way RHF's
+  builder does, so it is a more expensive construction to call every SOSCF
+  iteration. It is also currently wrapped inside a Z-vector solve
+  (`A·z = -rhs` for the MP2 gradient) rather than exposed as a standalone
+  builder. The work is the same shape as the RHF split between
+  `build_rhf_cphf_matrix` and `solve_rhf_cphf` — factor the matrix build
+  out, pack a joint α/β gradient and step — but needs its own
+  finite-difference verification (the RHF check's diagonal convention
+  matching is necessary, not sufficient; the α-β coupling terms are new).
 - **ROHF — new theory, not a port.** There is no ROHF orbital-response or
   CPHF machinery anywhere in this codebase (confirmed by direct search),
   consistent with ROHF-MP2, ROHF stability, and ROHF PCM all remaining
@@ -199,16 +206,24 @@ Investigated directly by reading the relevant code, not assumed:
   energy-weighted-density form (`W = P^α F^α P^α + P^β F^β P^β`) instead of
   reusing UHF's. A ROHF orbital Hessian needs its own derivation; nothing
   here transfers from RHF or UHF.
-- **DFT — the hardest missing piece already exists, but isn't wired in.**
-  The KS SCF loop (`src/dft/driver.cpp`) is a separate implementation with
-  its own DIIS state, not routed through `run_rhf`, so SOSCF is not
-  reachable there yet at all. But an XC kernel builder
-  (`build_closed_shell_xc_kernel_blocks` / `build_unrestricted_xc_kernel_blocks`)
-  already exists in-tree, built for TDDFT's linear response — it is exactly
-  the extra term a DFT orbital Hessian needs added to the RHF/UHF form. The
-  remaining work is wiring the KS loop through a shared SOSCF path (or
-  duplicating the branch there) and reusing this existing kernel, not
-  deriving a new one.
+- **DFT — genuinely open, corrected from an earlier wrong framing.** An
+  XC-kernel builder does exist in-tree
+  (`build_closed_shell_xc_kernel_blocks` / `build_unrestricted_xc_kernel_blocks`,
+  `src/dft/driver.cpp`), but reading its body (not just its name) shows it
+  is a *numerical finite-difference* construction built for TDDFT's small,
+  user-chosen excitation spaces — it re-evaluates the full grid XC pass
+  twice per occ-virt pair. Reused directly as a SOSCF orbital Hessian, that
+  is `O(n_occ · n_virt)` full-grid XC evaluations every iteration, which
+  likely makes DFT SOSCF slower than DIIS at the sizes where an
+  iteration-count win would matter. The production answer is an
+  **analytic** XC second derivative (`fxc`); libxc exposes it
+  (`xc_lda_fxc`/`xc_gga_fxc`) but Planck's wrapper
+  (`src/dft/base/wrapper.h`) only ever calls the first-derivative
+  `exc_vxc` family. This is closer to deriving a new Hessian than to
+  wiring RHF SOSCF's callbacks was — treat it as a research question, not
+  a mechanical follow-on, and use the existing FD-kernel builder as a
+  correctness oracle for whatever analytic path is eventually built, the
+  same role the `PLANCK_SOSCF_FD_CHECK` probe played here.
 
 ## What NOT to do
 
