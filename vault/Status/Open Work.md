@@ -822,9 +822,10 @@ worth doing whether or not FCIQMC happens.
   not more of the R1/R2 pattern, and is a decision for when a real target
   exists.
 
-  **A REWRITE (not more of the R1/R2 pattern) is scoped in
-  `docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md`. H1 is DONE (2026-09-06); H2/H3
-  are gated on a real target.**
+  **A REWRITE (not more of the R1/R2 pattern) was carried out; the full
+  answer is `docs/FCIQMC_PARALLELISM.md`. H1/H2/H2.8/H2.8.4 landed
+  2026-09-06 (bit-identical, on the `fciqmc-parallel-rewrite-scope`
+  branch); H3 (replica parallelism) is declined pending a real target.**
 
   **H1 -- measured on TWO fixtures, and its own N2-only first conclusion
   was a saturation artifact.** Per-parent work is ~148-202 ns and flat in
@@ -854,11 +855,9 @@ worth doing whether or not FCIQMC happens.
   threads on an unsaturated fixture. **Near-linear is now plausible, not a
   foregone no.**
 
-  **H2 -- DONE (H2.1-H2.7 in `docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md`).
+  **H2 -- DONE (H2.1-H2.7 in `docs/FCIQMC_PARALLELISM.md`).
   `SpawnWorkspace` / `SpawnAccumulator` / xoshiro256** rewrite landed;
-  PARTIAL WIN -- whole-call 2.24->2.42x/4t, 2.47->2.87x/8t on HF; the
-  ~1100us/call merge is the sole remaining serial cost and a separate
-  gated investigation.** **H2.1 landed** `n2_fciqmc_s5_threads1/4` (N2-sized SHORT run,
+  PARTIAL WIN -- whole-call 2.24->2.42x/4t, 2.47->2.87x/8t on HF.** **H2.1 landed** `n2_fciqmc_s5_threads1/4` (N2-sized SHORT run,
   ~9 parents/bin so cross-bin annihilation is exercised, unlike the
   4-determinant `h2_fciqmc_threads1/4`). Finding: **the `threads1` case
   must PIN both energies to fixed values, not just `metric_present`** --
@@ -921,16 +920,39 @@ worth doing whether or not FCIQMC happens.
   ~1100us/call of **merge** remains -- untouched by H2.4-H2.6, not threaded
   (must stay fixed bin order for invariance). H1's "~1.5ms serial drag"
   was construction + RNG + partition + merge; the rewrite removed the
-  first two, leaving the merge as almost the entire remainder. **The merge
-  is the last lever and a SEPARATE investigation** -- a fixed-order
-  parallel scatter (prefix-sum per-bin sizes, threaded scatter by offset,
-  ordering fixed by offsets so no completion-order hazard) -- not more of
-  H2, gated on a real workload (Q1). **H2 (H2.1-H2.7) is DONE.**
-  H2 does NOT touch `kBins`. **H2.0 (smaller
-  fixed `kBins`) -- reserve, N2-class only.** **H3 (replicas)** -- design
-  sketch only. **Fixture: HF/6-31G or larger for all parallel-FCIQMC
-  measurement; N2/STO-3G is the correctness gate only.** Deliverable
-  converts to `FCIQMC_PARALLELISM.md` when H3 resolves or is declined.
+  first two. **H2 (H2.1-H2.7) is DONE.** H2 does NOT touch `kBins`.
+
+  **H2.8 -- the fixed-order merge is NOT the bottleneck (2026-09-06).**
+  Sharding it (64 `hash(child) % 64` output shards) was built, verified
+  bit-identical, and measured **3-8 % SLOWER on HF/6-31G at every thread
+  count**; reverted. A `sample` reprofile showed the merge is **2.0 % of
+  self-time**, not the "37 %" an H2.7 phase probe implied -- the probe had
+  bracketed an *already-threaded* per-bin `finalize()` sort (5.5 %). The
+  real 1-thread hot path is **`draw_excitation` at 40.8 %**.
+
+  **H2.8.4-a -- `draw_excitation` rewritten off four `std::array<int,32>`
+  builds/call to `std::popcount` counts + a bounded `nth_set_bit` select.**
+  Bit-identical (pure-arithmetic refactor; S5 1/2/4/8 unchanged, `p_gen`
+  oracle passes, mutation-verified 19 failures). `draw_excitation`
+  self-time **40.8 % -> 27.1 %**; HF/6-31G 1-thread wall **-22 %**
+  (production verbosity); N2 gate -10 %.
+
+  **H2.8.4-b -- folded the serial per-step driver tail: 4 `pop` walks ->
+  2** (diagonal-prefill + partition merged via a `parents_prefilled` flag;
+  `compress` + `ordered_l1_norm` merged into `compress_with_l1_norm`, norm
+  byte-identical). Bit-identical, S5 non-vacuity re-verified. HF `hf_prof`
+  -5 %/1t, -6 %/4t; N2 gate -7 %/4t. Modest -- the merge is untouched and
+  does not shard for a win, so **step 3 (threading the fused pre-pass) was
+  declined**: folding the non-merge passes barely moved the 4-thread
+  number, so the pre-pass is not the dominant serial cost.
+
+  **H2.0 (smaller fixed `kBins`) -- reserve, N2-class only.** **H3
+  (replicas)** -- the one axis that gives near-linear scaling; a design
+  sketch, declined pending a real target (it tightens the error bar in
+  fixed wall-time, does not speed a single trajectory, multiplies memory
+  by R). **Fixture: HF/6-31G or larger for all parallel-FCIQMC
+  measurement; N2/STO-3G is the correctness gate only.** Full answer:
+  `docs/FCIQMC_PARALLELISM.md`.
 
   **Three lessons, each of which cost a wrong number first.** (1) **A profile share
   is a lower bound on what removing that work is worth** — three for three now

@@ -1,7 +1,7 @@
 #ifndef HARTREEFOCK_CI_SPAWN_ACCUMULATOR_H
 #define HARTREEFOCK_CI_SPAWN_ACCUMULATOR_H
 
-// H2.2 (docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md): a reuse-stable accumulator for
+// H2.2 (docs/FCIQMC_PARALLELISM.md): a reuse-stable accumulator for
 // the FCIQMC spawn loop's per-bin output, to replace the per-bin
 // `std::unordered_map<DetKey, Weight>` that H2.4 will drop.
 //
@@ -127,7 +127,7 @@ namespace HartreeFock::Correlation::CI::QMC
         static constexpr KeyWeightLess less_{};
     };
 
-    // H2.4/H2.5 (docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md): the persistent
+    // H2.4/H2.5 (docs/FCIQMC_PARALLELISM.md): the persistent
     // per-call scaffolding for propagate_stochastic, hoisted out of the
     // function so it is built ONCE (by the driver, or per test call) instead
     // of ~50,000 times. Holds the 64 per-bin accumulators, the 64 parent

@@ -1,5 +1,5 @@
 # N2/STO-3G FCIQMC, SHORT run -- the S5 thread-count-invariance gate for the
-# parallel spawn loop (docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md, H2.1).
+# parallel spawn loop (docs/FCIQMC_PARALLELISM.md, H2.1).
 #
 # WHY THIS EXISTS. h2_fciqmc_threads1/4 run on H2/STO-3G, whose 4 determinants
 # are fewer than kBins=64, so at most one parent ever lands in a bin and a

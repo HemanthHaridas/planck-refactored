@@ -203,7 +203,7 @@ namespace HartreeFock::Correlation::CI::QMC
     // generator seeded deterministically from the run seed satisfies this; drawing
     // from one shared generator across threads does not.
     //
-    // H2.5 (docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md): the engine is xoshiro256**,
+    // H2.5 (docs/FCIQMC_PARALLELISM.md): the engine is xoshiro256**,
     // not std::mt19937_64. H2.3 measured that mt19937_64::seed() is ~600 ns
     // each, so the 64 per-bin streams the spawn loop re-seeds every step cost
     // ~38 us/call and reusing the engine object cannot avoid it -- the state
@@ -538,7 +538,7 @@ namespace HartreeFock::Correlation::CI::QMC
     // on the order determinants happen to be visited -- a determinant colonized
     // early in a sweep would then admit spawns that the same determinant, visited
     // late, would reject.
-    // H2.4 (docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md): the production form takes a
+    // H2.4 (docs/FCIQMC_PARALLELISM.md): the production form takes a
     // caller-owned SpawnWorkspace (persistent per-call scaffolding, built once
     // by the driver) and writes into a caller-owned `out` -- no return value,
     // so no NRVO question (the M1 reversion). `out` is cleared first. The

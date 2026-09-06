@@ -586,7 +586,7 @@ namespace HartreeFock::Correlation::CI::QMC
         SpawnWorkspace &ws,
         WalkerPopulation &out)
     {
-        // H2.4/H2.5 (docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md): the per-call
+        // H2.4/H2.5 (docs/FCIQMC_PARALLELISM.md): the per-call
         // scaffolding -- 64 accumulators, 64 parent buckets, 64 RNG streams --
         // now lives in the caller-owned `ws`, built once (by the driver, or per
         // convenience-overload call) instead of ~50,000 times. `out` is

@@ -1,4 +1,4 @@
-// H2.2 (docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md): unit test for SpawnAccumulator,
+// H2.2 (docs/FCIQMC_PARALLELISM.md): unit test for SpawnAccumulator,
 // the reuse-stable replacement for the FCIQMC spawn loop's per-bin
 // std::unordered_map<DetKey, Weight>.
 //
