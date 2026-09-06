@@ -186,72 +186,77 @@ real target appearing (`FCIQMC_RESEARCH_SCOPE.md` Q1) — nothing in the
 tree runs FCIQMC long enough for even the current 2.24×/HF to matter —
 but the ceiling is now known to be high, not low.
 
-### H2 — the serial-per-call scaffolding is the ceiling, and it is eliminable by hoisting state out of the call
+### H2 — the serial-per-call scaffolding is the ceiling, and it is eliminable by hoisting state into a reusable workspace
 
-**Claim:** the per-parent work *does* parallelize fine (the T2 doc's own
-measurement: 197.6 µs → 78.5 µs, 2.52× inside the pragma), but 95 µs/call
-of serial setup/teardown drags the total to 1.57×. That setup is
-rebuilt-from-scratch state — 64 bins, 64 RNG engines, the partition, the
-merge target — and *all of it can be persistent across the 50,000 calls*
-because there is exactly one call site driven by one thread. A rewrite
-that hoists this state into a reusable `SpawnWorkspace` owned by the
-driver, threaded through by reference, removes the per-call construction
-cost entirely.
+**Claim:** the per-parent work parallelizes well on an unsaturated fixture
+(H1: HF/6-31G region 3.44×/4t, 4.47×/8t, still climbing), but the whole
+call is stuck at 2.24×/4t because ~1.5 ms/call of serial setup/teardown —
+64-bin construction, 64 `mt19937_64` engines, the parent partition, the
+fixed-order merge — is rebuilt every one of ~50,000 calls and does not
+thread. There is exactly one call site, driven by one thread across the
+whole outer loop, so *all of that state can be persistent*. Hoist it into
+a `SpawnWorkspace` owned by the driver and passed by reference, swap the
+per-bin `unordered_map` for a reuse-stable accumulator, and the whole call
+should track the region toward 3.5–4×+ at 4 threads.
 
-**Why the T2 work did not already do this:** it tried, partially (R1/R2
-made `next_bins` and `bin_parents` function-local `static`s) and got
-~5%, then hit two walls — `.clear()` does not restore bucket layout
-(invariant 3), and making the *return value* `static` loses NRVO
-(invariant 4). Both walls are consequences of keeping `unordered_map` as
-the accumulator and keeping the value-returning signature. **H2 says: fix
-both by changing the data structure, not by reusing the map.** Specifically:
+**Why the T2 work did not already do this:** R1/R2 tried the cheap version
+(function-local `static`s) and hit two walls — `unordered_map::clear()`
+does not restore bucket layout (T2 invariant 3), and making the
+value-returning result `static` loses NRVO (T2 invariant 4). Both are
+consequences of keeping `unordered_map` and the value-returning signature.
+H2 fixes the data structure and the signature, not the reuse mechanism.
 
-- **Replace the per-bin `unordered_map` accumulator with a structure whose
-  iteration order is defined and stable across reuse.** Candidates to
-  evaluate: a sorted `std::vector<std::pair<DetKey, Weight>>` merged with
-  `std::inplace_merge` (order is total and reuse-stable by construction);
-  a flat open-addressing hash table with a fixed capacity and a defined
-  probe order that `.clear()` genuinely resets (just memset the control
-  bytes); or a two-level structure (fixed bin array of small sorted
-  vectors). The requirement is: *summing the same set of `(det, weight)`
-  additions produces a bitwise-identical result on every call, regardless
-  of how many times the structure has been reused* — which is exactly what
-  `unordered_map` cannot give and is the root of the T2 reordering traps.
-- **Make `propagate_stochastic` write into a caller-owned output rather
-  than return one** — `void propagate_stochastic(..., SpawnWorkspace& ws,
-  WalkerPopulation& out)` — so there is no NRVO question at all.
-- **Hoist the 64 `mt19937_64` engines into the workspace**, re-seeded
-  per call from one `rng.raw64()` draw (the S1 correctness requirement:
-  each call's bin streams fresh and thread-count-independent). Measure
-  whether re-seeding 64 existing engines in place is materially cheaper
-  than constructing 64 — the T2 doc measured ~4% for the vector-reuse part
-  alone but explicitly did *not* separate "reuse the vector" from "the
-  seeding is unavoidable"; H2 needs that separated. If `mt19937_64`
-  re-seed is genuinely as expensive as construct, evaluate a cheaper
-  per-bin stream (a counter-based RNG — Philox/Threefry-style — is O(1) to
-  "seed" because seeding is just setting a key, and is the standard choice
-  for exactly this "N independent streams, re-derived every step" pattern;
-  `RandomSource` is currently mt19937 and there is no counter-based RNG in
-  the tree).
+**Ordered so each step is independently verifiable, and a wrong step is
+caught before the next.** Steps H2.1–H2.3 are prerequisites that land and
+gate on their own; H2.4–H2.6 are the rewrite proper; H2.7 is the
+measurement that decides whether it was worth it.
 
-**How to test:** build the `SpawnWorkspace` with a sorted-vector
-accumulator first (simplest reuse-stable option, and `std::inplace_merge`
-of two sorted ranges is a well-understood deterministic operation). Wire
-it in behind the same `atol = 0.0` invariance gate the T2 work uses
-(`h2_fciqmc_threads1/4` plus a new N2-sized pair — S5 from the T2 doc,
-still unbuilt, and a prerequisite here since H2 changes the merge). Re-run
-the phase probe: does serial-outside-the-pragma drop from 95 µs/call to
-near zero? Re-measure the ceiling and the achieved speedup on the N2 gate.
+| step | adds | verifies against | if it fails |
+|---|---|---|---|
+| **H2.1** | the S5 gate: an **N2-sized** `threads1`/`threads4` pair at `atol = 0.0`, made non-vacuous by a temporary reversed-bin-order mutation that must turn it red | the current tree (must pass as-is — S5 is testing infrastructure, not a code change) | S5 cannot be made to go red → the gate is vacuous; fix the gate before any H2 code, or every later "bitwise identical" claim is worthless |
+| **H2.2** | a standalone unit test (`fciqmc_accumulator`) for whatever reuse-stable accumulator H2.4 will use, checking: same `(det, weight)` multiset in any insertion order → **bitwise-identical** iterated sum; and **bitwise-identical after N reuse cycles** (the property `unordered_map` fails, T2 invariant 3) | an independent `std::map`-based reference sum on random `(det, weight)` fixtures with deliberate duplicate keys | the accumulator is not actually reuse-stable → pick a different structure (the three candidates below) before wiring it in |
+| **H2.3** | measure, in isolation, the cost of **re-seeding 64 `mt19937_64` engines in place** vs constructing 64 fresh — the number T2 flagged as unseparated | a microbenchmark of exactly that one difference, identical seed sequence | re-seed is ≈ as expensive as construct → H2.5 needs a counter-based RNG (Philox/Threefry), a bigger change; decide here, not mid-rewrite |
+| **H2.4** | `SpawnWorkspace` type + `void propagate_stochastic(..., SpawnWorkspace& ws, WalkerPopulation& out)` — the persistent bins (using H2.2's accumulator), partition buffer, and merge target live in `ws`; the output is caller-owned so there is no NRVO question | **bitwise identical to the pre-H2 tree at `OMP_NUM_THREADS` = 1** on `h2_fciqmc_sto3g` and `n2_fciqmc_sto3g` (serial, so no reordering — a swap of the accumulator that changes a serial result is a bug, not reassociation) | serial result changes → the accumulator swap reordered something it should not have; localize with H2.2's reference before proceeding |
+| **H2.5** | move the 64 RNG engines into `ws`, re-seeded per call from one `rng.raw64()` draw (the S1 contract: fresh, thread-count-independent bin streams). If H2.3 said re-seed is too costly, this step is instead "swap `RandomSource`'s engine for a counter-based one" — a deliberate, separately-recorded RNG change | self-reproducibility at fixed seed **plus** `metric_within_sigma` against exact FCI (T2 invariant 2 — never bitwise-vs-the-old-numbers, since changing the RNG or its call pattern is a reordering-class change) | reproducibility fails, or the FCI-agreement sigma blows past the gate → the bin-stream derivation is wrong (the S1 "frozen trajectory" trap: a `const derive()` that does not advance); check the population diagnostics, not just the gate |
+| **H2.6** | re-enable threading on H2.4's structure (`#pragma omp parallel for schedule(static)` over the persistent bins) and re-verify invariance | **bitwise identical across `OMP_NUM_THREADS` = 1/2/4/8** on `h2_fciqmc_threads1/4`, the new S5 N2-sized pair, `n2_fciqmc_sto3g`, and the four non-QMC FCI gates sharing `build_all_mo_ci_setup` | any thread count disagrees → the accumulator or the merge is not partition-deterministic after all; H2.2's reuse-stability test missed the threaded-write case, extend it |
+| **H2.7** | re-run the H1 probe on **HF/6-31G** (the unsaturated fixture — not N2): per-call parent count, region µs, whole-call µs at 1/2/4/8 threads, before/after the rewrite. Report serial-scaffolding µs/call (should drop from ~1.5 ms toward near zero) and whole-call speedup vs the region ceiling | the H1 numbers already recorded (`region 3.44×/4t, 4.47×/8t`; `whole 2.24×/4t`) | whole-call speedup does *not* move toward the region ceiling → the ~1.5 ms was not actually the bottleneck; re-profile with an in-binary phase probe (T2's `PLANCK_FCIQMC_PHASE_PROBE` pattern) before concluding |
 
-**If H2 holds** — serial scaffolding drops to near zero and the achieved
-speedup jumps toward the (re-measured) ceiling — this is the rewrite, and
-it is bounded: one new `SpawnWorkspace` type, one changed function
-signature, one accumulator data-structure swap, all behind the existing
-invariance discipline. Estimate the ceiling this exposes (the T2 doc's
-own numbers suggest the parallel region alone is ~2.5× at 4 threads, so
-removing the serial drag should land the *total* near there — but
-re-measure, per T2 invariant 5, every prior ceiling estimate in this area
-was wrong within a day).
+**The accumulator (H2.2/H2.4) — three candidates, evaluate in this order:**
+
+1. **Sorted `std::vector<std::pair<DetKey, Weight>>` + `std::inplace_merge`.**
+   Order is total and reuse-stable by construction; `.clear()` genuinely
+   resets a vector. The spawn appends unsorted, then one sort + a dedup
+   pass that sums equal keys. Simplest to reason about and to test; the
+   likely first choice.
+2. **Flat open-addressing hash table, fixed capacity, defined probe order,
+   `.clear()` = memset the control bytes.** Faster inserts than sort, and
+   `.clear()` is genuinely O(capacity) with no bucket-layout memory — but
+   it is a new data structure to get right, and the "defined probe order"
+   has to be actually defined (linear probing from `hash % cap`, no
+   Robin-Hood reordering).
+3. **Two-level: fixed bin array of small sorted vectors.** Only if 1 and 2
+   both measure poorly.
+
+**Non-negotiable across all of H2:**
+
+- The invariance gate is `atol = 0.0` and must be non-vacuous (H2.1). A
+  tolerance would hide the reduction-order defect the whole design exists
+  to prevent.
+- No `omp atomic` on the accumulator, no completion-order merge. Fixed bin
+  order, partition by `hash(parent) % kBins` with `kBins` a fixed count
+  (H2 does *not* change `kBins` — that is H2.0's job, and H1 showed it is
+  N2-class-only).
+- Any RNG change (H2.5's fallback) is recorded as a deliberate decision
+  with its own before/after `metric_within_sigma`, per
+  `FCIQMC_RESEARCH_SCOPE.md` §6 and T2 invariant 2 — not slipped in.
+
+**If H2 holds** (H2.7 shows the whole call tracking toward the region
+ceiling on HF): the rewrite is bounded — one new `SpawnWorkspace` type,
+one changed signature, one accumulator swap, one RNG hoist, all behind the
+existing invariance discipline. **If H2.7 shows the serial scaffolding was
+not the bottleneck**, the remaining cost is inside the merge itself (T2
+already found merge time *rising* with thread count, unexplained) and the
+next step is a merge-specific investigation, not more of H2.
 
 ### H3 — the outer step loop itself is not as sequential as it looks
 
@@ -328,14 +333,21 @@ conclusion `FCIQMC_RESEARCH_SCOPE.md` Q1 reaches for the method as a whole.
   flat in walker count) is real on both. **H1 is refuted as stated: the
   work is not too small on any non-saturated fixture, which is exactly the
   Q1 large-active-space case.**
-- **H2 — not started, but now clearly worth doing when a target appears.**
+- **H2 — SCOPED into seven verifiable steps (H2.1–H2.7), not started.**
   On HF the whole call is stuck at 2.24×/4 threads against a region
   ceiling of ≥ 4.5×, because the serial scaffolding is ~1.5 ms/call (30×
   N2's, since HF partitions/merges 30× more parents) and does not thread.
-  That ~1.5 ms is the `SpawnWorkspace` target. Measure against the HF
-  region ceiling, not N2.
+  The ladder: **H2.1** build a non-vacuous N2-sized invariance gate (S5),
+  **H2.2** unit-test a reuse-stable accumulator, **H2.3** measure the RNG
+  re-seed cost in isolation (decides whether H2.5 needs a counter-based
+  RNG), **H2.4** the `SpawnWorkspace` type + out-param signature +
+  accumulator swap (gated bitwise-serial), **H2.5** hoist the RNG engines
+  (gated by reproducibility + FCI-sigma), **H2.6** re-thread and re-verify
+  invariance at 1/2/4/8, **H2.7** re-measure on HF against the region
+  ceiling. Each step's own verification gates the next.
 - **H2.0 (smaller fixed `kBins`) — reserve, N2-class only.** Helps a
   saturation-starved fixture; on HF the bins are already large enough.
+  H2 does **not** touch `kBins`.
 - **H3 — not started.** Design sketch + memory estimate only.
 - **Fixture decision: use HF/6-31G (or larger) for all future parallel-
   FCIQMC measurement.** N2/STO-3G stays the *correctness* gate (small

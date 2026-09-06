@@ -854,14 +854,21 @@ worth doing whether or not FCIQMC happens.
   threads on an unsaturated fixture. **Near-linear is now plausible, not a
   foregone no.**
 
-  **H2 -- not started, worth doing when a target appears.** Measure against
-  the HF region ceiling, not N2. **H2.0 (smaller fixed `kBins`) -- reserve,
-  N2-class only** (helps a saturation-starved fixture; HF's bins are
-  already large enough). **H3 (replicas)** -- design sketch only.
-  **Fixture decision: HF/6-31G or larger for all future parallel-FCIQMC
-  measurement; N2/STO-3G stays the correctness gate but is a misleading
-  throughput fixture.** Deliverable converts to `FCIQMC_PARALLELISM.md`
-  when H2/H3 resolve or are declined.
+  **H2 -- SCOPED into 7 verifiable steps (H2.1-H2.7 in
+  `docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md`), not started.** H2.1 non-vacuous
+  N2-sized invariance gate (S5); H2.2 unit-test a reuse-stable accumulator
+  (the property `unordered_map` fails); H2.3 measure RNG re-seed cost in
+  isolation (decides whether H2.5 needs a counter-based RNG); H2.4
+  `SpawnWorkspace` + out-param signature + accumulator swap (gated
+  bitwise-serial); H2.5 hoist the RNG engines (gated by reproducibility +
+  FCI-sigma, never bitwise-vs-old); H2.6 re-thread + re-verify invariance
+  at 1/2/4/8; H2.7 re-measure on HF against the region ceiling. Each step
+  gates the next. Accumulator: sorted vector + `inplace_merge` first, flat
+  open-addressing table second. H2 does NOT touch `kBins`. **H2.0 (smaller
+  fixed `kBins`) -- reserve, N2-class only.** **H3 (replicas)** -- design
+  sketch only. **Fixture: HF/6-31G or larger for all parallel-FCIQMC
+  measurement; N2/STO-3G is the correctness gate only.** Deliverable
+  converts to `FCIQMC_PARALLELISM.md` when H2/H3 resolve or are declined.
 
   **Three lessons, each of which cost a wrong number first.** (1) **A profile share
   is a lower bound on what removing that work is worth** — three for three now
