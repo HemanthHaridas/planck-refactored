@@ -18,9 +18,17 @@ accumulator-vector allocation. The real hot path is **`draw_excitation` at
 driver passes (`ordered_l1_norm`, `compress`, `signed_population`, the
 diagonal prefill), none of them the merge. Full profile table in H2.8.3.
 
-H3 (replica parallelism) remains a design sketch. All of this is gated on
-a real FCIQMC workload appearing (`FCIQMC_RESEARCH_SCOPE.md` Q1) — nothing
-in the tree runs FCIQMC at a size where any of this matters.
+A 4-thread reprofile (H2.8.4) confirms `draw_excitation` stays ~40 % of
+*useful* work at 4 threads (it threads fine) while **46 % of the machine
+sits idle at the barrier** on the serial per-step driver tail. Two
+targets: `draw_excitation` serial efficiency (1-thread wall, scoped in
+H2.8.4-a — replace 4 unconditional 128-byte `OrbitalList` builds/call with
+`popcount` counts + a bounded `nth_set_bit` select, bit-identical refactor
+gated by the existing `p_gen` oracle) and collapsing the serial per-step
+map passes (4-thread wall). H3 (replica parallelism) remains a design
+sketch. All of this is gated on a real FCIQMC workload appearing
+(`FCIQMC_RESEARCH_SCOPE.md` Q1) — nothing in the tree runs FCIQMC at a
+size where any of it matters.
 
 Original framing follows.
 
@@ -861,6 +869,175 @@ three separate per-step `unordered_map` passes (`compress`,
 (c) gate `signed_population` off entirely unless `verbosity verbose`
 (it already is — confirm the guard covers the accumulation, not just the
 print). The merge is not on this list.
+
+#### H2.8.4 — 4-thread reprofile + `draw_excitation` serial-efficiency scope (2026-09-06)
+
+**4-thread `sample`** (HF/6-31G, `hf_prof` input, 30 s, ~100k samples
+across 4 cores):
+
+| category | 4t raw % | 4t % of *useful* (idle removed) | 1t % |
+|---|---|---|---|
+| **omp barrier / idle** | **46.4 %** | — | — |
+| `draw_excitation` | 21.8 % | **40.7 %** | 40.8 % |
+| `unordered_map::operator[]` | 6.6 % | 12.3 % | 11.3 % |
+| `slater_condon` | 5.9 % | 11.0 % | 11.1 % |
+| spawn loop body | 4.5 % | 8.5 % | 8.4 % |
+| diagonal memo | 3.7 % | 6.9 % | 6.7 % |
+| `finalize()` sort | 3.1 % | 5.8 % | 5.5 % |
+| serial merge/partition | 1.0 % | 1.9 % | 2.0 % |
+
+**`draw_excitation` does NOT shrink as a fraction of useful work at 4
+threads** — it is 40.7 % either way, because it is *inside* the parallel
+region and threads cleanly. What appears at 4 threads is the **46 % barrier
+idle**: three worker threads waiting while one runs the serial per-step
+driver tail (partition, `ordered_l1_norm`, `compress`, `signed_population`,
+`ShiftController`, `projected_energy`, diagonal prefill). That idle *is*
+the Amdahl tail the 1-thread profile's "~10–15 % serial" predicted, now
+paid across 4 cores.
+
+**So there are two independent targets, and the profile says which binds
+at which thread count:**
+
+- **1 thread:** `draw_excitation` (40.8 %) is the wall. Serial-efficiency
+  work pays directly.
+- **4+ threads:** the barrier idle (46 %) is the wall. The per-step serial
+  driver tail is what to cut (lever (b)/(c) above); `draw_excitation`
+  efficiency then only helps the ~22 % of machine-time still doing spawn
+  work.
+
+Both are worth doing for a real Q1 workload. This section scopes (a) —
+`draw_excitation` serial efficiency — because it is self-contained, has a
+unit gate already (`planck-fciqmc-walkers`), and is the 1-thread wall.
+
+##### Why `draw_excitation` costs 40.8 %: the disassembly
+
+`objdump` of `draw_excitation` (`build-full`, arm64) shows the function
+opens with **`sub sp, sp, #0x2a0`** (672-byte frame) and then, *before any
+random draw*:
+
+1. **Four `OrbitalList` constructions** — `occupied(alpha)`,
+   `occupied(beta)`, `virtuals(alpha)`, `virtuals(beta)`. Each
+   `OrbitalList` is `std::array<int,32>` + a count, value-initialized
+   (`items{}`), so each construction emits **4× `stp q31,q31`** = 128
+   bytes zeroed — **512 bytes of stack zeroing per call**.
+2. **Four bit-scan loops** of `n_act` iterations (11 for HF/6-31G, up to
+   31): `lsl` a 1 by `p`, `tst` against the determinant word, conditional
+   `str` of `p` and a count bump. **~44 iterations of branchy scalar code
+   per call.**
+
+Only *after* all that does the function compute the five class sizes, pick
+a class (`rng.uniform_int(n_live)`), pick an index (`rng.uniform_int(class_size)`),
+and do **one or two** `occ_x[k/vx]` / `unrank_pair` lookups for the chosen
+class. The `k/va`, `k%va` divides and `unrank_pair`'s `while` loop are
+real but downstream and single-class — small next to the four unconditional
+full builds.
+
+**The waste, precisely:** the picker needs only the four *counts*
+(`na,nb,va,vb`) to choose a class and its `p_gen`, then needs to map one
+integer `k` to specific orbital indices *within one spin channel*. It
+builds all four full index arrays, every call, every spawn attempt, to use
+at most two entries of one of them.
+
+##### The plan (H2.8.4-a), ladder order
+
+**Step 1 — stop building what isn't used. Counts, not lists.**
+`na/nb/va/vb` are just `popcount`:
+
+```cpp
+const int na = std::popcount(parent.alpha & act_mask);   // act_mask = low_bit_mask(n_act)
+const int va = n_act - na;
+// ...beta likewise
+```
+
+That replaces the two `occupied` builds with two `popcount` instructions
+and drops the two `virtuals` builds entirely (they were only ever used for
+their `.size()` plus indexed access). `act_mask` is loop-invariant across
+the whole run — compute once in `propagate_stochastic` (or pass `n_act`
+and mask inline; a `popcount` of an already-masked word is one instr).
+Expected: removes the 512-byte zeroing and 2 of the 4 scan loops
+outright.
+
+**Step 2 — index into the determinant directly, no materialized list.**
+The chosen class needs "the `i`-th occupied alpha orbital" and "the `a`-th
+virtual alpha orbital". That is a *select* on the bitmask, not an array
+lookup:
+
+```cpp
+// i-th set bit of x (0-indexed). arm64 has no PDEP; this is the portable form.
+inline int nth_set_bit(CIString x, int i) {
+    for (int b = 0; b < 64; ++b) {
+        if (x & (CIString(1) << b)) { if (i-- == 0) return b; }
+    }
+    return -1;   // caller guarantees i < popcount(x)
+}
+```
+
+Called **at most twice** per spawn (once per orbital of a double), on the
+one spin channel the class uses — versus the current **four** full scans.
+For a single excitation it is one `nth_set_bit(occ)` + one
+`nth_set_bit(vir)` where `vir = ~parent.alpha & act_mask`. The loop is
+bounded by `n_act ≤ 31` and hits its target at the k-th set bit, so it is
+~half the work of a full scan on average, done twice not four times.
+
+(If `x86_64` matters later, `nth_set_bit` has a 2-instruction `PDEP`+`TZCNT`
+form — but arm64 is the dev target and the portable loop is fine at
+`n_act ≤ 31`.)
+
+**Step 3 — hoist the class-size computation out of the attempt loop.**
+`propagate_stochastic`'s inner loop calls `draw_excitation(det, ...)`
+`n_spawn_attempts` times for the *same* `det`. `na/nb/va/vb` and the five
+class sizes and `n_live` and the per-class `p_gen` prefactor are identical
+across those attempts. With `n_spawn_attempts = 1` (both fixtures) this is
+a no-op; but the interface should let the caller pass a small precomputed
+`ParentClassInfo` so a run with `n_spawn_attempts > 1` computes it once.
+Shape:
+
+```cpp
+struct ParentClassInfo {           // ~6 ints, fits a register pair or two
+    int na, nb, va, vb;
+    std::array<std::pair<Klass,int>, 5> live;
+    int n_live;
+};
+ParentClassInfo classify(const DetKey&, int n_act);          // the popcounts + class sizes
+Excitation draw_excitation(const DetKey&, int n_act, const ParentClassInfo&, RandomSource&);
+```
+
+Keep the current 3-arg `draw_excitation` as a one-line wrapper
+(`classify` then the 4-arg form) so the ~20 test call sites and
+`draw_excitation_in_space` are untouched.
+
+##### Verify
+
+- **`planck-fciqmc-walkers`** (the F2/F3 unit suite) — the `p_gen`
+  agreement tests (`draw_excitation`'s distribution vs the brute-force
+  oracle, frequencies AND support, open-shell cases included) are the gate.
+  A `nth_set_bit` off-by-one or a wrong class-size is a `p_gen` mismatch
+  there. Mutation-verify: perturb `nth_set_bit` (`i-- == 0` → `i == 0`)
+  and confirm the support/frequency test goes red.
+- **Bitwise reproducibility + thread-count invariance** on
+  `n2_fciqmc_s5_short` 1/2/4/8 and `h2_fciqmc_threads1/4` — this is a pure
+  refactor of the *arithmetic*, not the RNG draw order, so it MUST stay
+  bit-identical to the current baseline. (Unlike the H2 accumulator/RNG
+  changes, there is no legitimate reassociation here — `uniform_int` is
+  called in the same order with the same arguments, and the orbital it
+  maps to is the same orbital. If S5 moves, something is wrong.)
+- **FCI agreement** `h2_fciqmc_sto3g`, `n2_fciqmc_sto3g` within 5σ
+  (should be unchanged, not just within-σ).
+- **Measure**: HF/6-31G `hf_prof` 1-thread wall before/after, and re-run
+  the `sample` self-time — the target is `draw_excitation` self-time
+  dropping from ~40 % toward ~15–20 % (removing ~half its scans and all
+  the zeroing). A 1-thread whole-run improvement of ~15–25 % is the
+  plausible range; the 4-thread number will move less (barrier idle
+  dominates there — that is lever (b), a separate step).
+
+##### Gate
+
+Same as everything in H2.8: **do not build until a real Q1 workload
+exists.** `draw_excitation` efficiency is the 1-thread wall, and nothing
+in the tree runs FCIQMC at 1 thread for long enough to care. This is the
+plan for when a target appears; it is self-contained and low-risk
+(bit-identical refactor, existing `p_gen` gate) so it is the first thing
+to do then.
 
 ### H3 — the outer step loop itself is not as sequential as it looks
 
