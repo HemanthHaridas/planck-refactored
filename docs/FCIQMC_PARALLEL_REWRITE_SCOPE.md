@@ -86,6 +86,88 @@ threading threshold at reachable system sizes; the 1.57× stands; revisit
 only if a target system with a much larger active space appears (see
 `FCIQMC_RESEARCH_SCOPE.md` Q1)." Do not build the rewrite.
 
+---
+
+#### H1 result (measured 2026-09-06): the per-parent work is real, but the *region* has a granularity ceiling of ~2.3–2.6× at 4 threads and regresses at 8 — so H2 alone cannot reach near-linear
+
+Probe (`PLANCK_FCIQMC_H1_PROBE`, added, measured, reverted — `grep`
+confirms clean) instrumenting `propagate_stochastic` on the real N2/STO-3G
+gate config: per-call parent count, spawn attempts, off-diagonal
+evaluations, wall-time of the pragma region in isolation, and wall-time of
+the whole call.
+
+**The per-parent cost is a fixed property of the system, flat in walker
+count.** Across an 80× walker sweep (2,000 → 160,000 walkers on N2/STO-3G,
+`ndet` = 14,400):
+
+| walkers | parents/call | ns/parent | region µs/call | whole µs/call | region share |
+|---|---|---|---|---|---|
+| 2,000 | 629 | 152 | 96 | 150 | 64 % |
+| 10,000 (gate) | 908 | 147 | 133 | 200 | 66 % |
+| 40,000 | 1,196 | 147 | 176 | 256 | 69 % |
+| 160,000 | 1,372 | 148 | 203 | 292 | 70 % |
+
+`ns/parent` is **146–152 ns across the whole range** — one `draw_excitation`
++ one `slater_condon_element` (off-diagonal branch) + one memoized diagonal
+lookup + two `unordered_map` inserts. `parents/call` grows only 2.2× for
+80× walkers because N2's 14,400-determinant space saturates. The T2 doc's
+"4× the walkers left the threadable share flat" is confirmed and extended:
+the *share* drifts 64 %→70 %, and `ns/parent` is dead flat.
+
+**The region does not thread well even isolated from the serial
+scaffolding.** Measuring the pragma region alone at 1/2/4/8 threads (gate
+config, 908 parents):
+
+| threads | region µs | region speedup | whole µs | whole speedup |
+|---|---|---|---|---|
+| 1 | 134.8 | 1.00× | 203.5 | 1.00× |
+| 2 | 89.8 | 1.50× | 162.2 | 1.25× |
+| 4 | 59.1 | **2.28×** | 133.0 | **1.53×** |
+| 8 | 71.4 | 1.89× (regresses) | 145.7 | 1.40× (regresses) |
+
+At 160,000 walkers (1,372 parents, more work per bin) the region reaches
+**2.60× at 4 threads** and still regresses at 8 (2.27×). The 8-thread
+regression reproduces exactly on repeat runs (70.7 µs twice at 10k).
+
+**The cause is bin granularity, not scaffolding.** 908 parents ÷ 64 fixed
+bins ≈ 14 parents/bin, ≈ 2.1 µs of arithmetic per bin, against fork/join
+plus each `next_bins[bin]` being an `unordered_map` the region touches.
+That is why 8 threads (≈ 8 bins each, ≈ 17 µs total) cannot cover the
+thread-spawn cost. The FCI sigma build threaded to 3.54× because its
+per-call work is `O(ndet)` full excitation enumerations (~600 connections
+per determinant) — roughly two orders of magnitude more arithmetic per
+outer-loop unit than FCIQMC's one sampled draw.
+
+**What this means for the rewrite:**
+
+- **H1 does not fully hold** — the per-parent work is not "10×+ too small";
+  the region *does* speed up, to ~2.3× at 4 threads. But it **bounds H2
+  hard**: even a perfect H2 (zero serial scaffolding) lands the whole call
+  at the region's own ceiling, ~2.3–2.6× at 4 threads, never near-linear,
+  and 8 threads is off the table at reachable system sizes.
+- The remaining ~0.7–1.0× between the current 1.57× and the region's 2.3×
+  is what H2's scaffolding removal can actually recover. That is real
+  (~35–45 % faster) but it is a bounded, one-time gain, not a
+  scaling-with-cores gain.
+- **The bin count is the lever H1 exposes that the scope did not name.**
+  `kBins = 64` was chosen for merge-order determinism, not throughput.
+  Fewer, larger bins (e.g. `kBins = 16` or `= n_threads`, keeping the
+  fixed-partition-by-parent-hash property) would raise per-bin work and
+  may push the 4-thread region past 2.6× — but `kBins` tied to thread
+  count is exactly the invariance hazard `FCI_SIGMA_BUILD_PERFORMANCE.md`
+  paid for twice, so this must stay a fixed count, just a smaller one, and
+  be re-gated. This is a cheaper experiment than the full H2 rewrite and
+  should be tried first (call it **H2.0**).
+
+**Recommendation:** H2 is worth doing for the bounded ~1.5× it recovers on
+top of the current 1.57× (≈ 2.3–2.5× total at 4 threads), *if and only if*
+a target system appears that runs FCIQMC long enough to care — the same
+Q1 gate as everything else in this area. Try H2.0 (smaller fixed `kBins`)
+first as a one-line experiment. Near-linear parallelism of a single
+trajectory is **not reachable** by any data-structure rewrite at reachable
+walker counts; that leaves H3 (replicas) as the only genuine
+scaling-with-cores axis, and H3 only tightens the error bar.
+
 ### H2 — the serial-per-call scaffolding is the ceiling, and it is eliminable by hoisting state out of the call
 
 **Claim:** the per-parent work *does* parallelize fine (the T2 doc's own
@@ -213,25 +295,44 @@ conclusion `FCIQMC_RESEARCH_SCOPE.md` Q1 reaches for the method as a whole.
 - **`slater_condon_element` is public** and consumed by CASSCF/RASSCF
   response code. Do not change its signature or semantics as a side effect.
 
+## Status
+
+- **H1 — DONE (2026-09-06).** Result inline above: the per-parent work is
+  ~148 ns and flat in walker count; the pragma region threads to only
+  ~2.3× at 4 threads (2.6× at 160k walkers) and regresses at 8, a bin-
+  granularity ceiling. H1 does not fully kill the rewrite but bounds it:
+  near-linear single-trajectory parallelism is unreachable, and H2's
+  realistic prize is ~1.5× on top of the current 1.57× (≈ 2.3–2.5× total
+  at 4 threads). A new cheaper experiment, **H2.0 (smaller fixed `kBins`)**,
+  falls out of H1 and should precede the full H2 rewrite.
+- **H2.0 / H2 — not started.** Gated on a real target appearing
+  (`FCIQMC_RESEARCH_SCOPE.md` Q1) — the bounded ~1.5× is not worth the
+  rewrite until FCIQMC runs somewhere long enough to care.
+- **H3 — not started.** Design sketch + memory estimate only; the honest
+  expected conclusion is "document as the right move when a target
+  appears".
+
 ## Deliverable
 
 A short answer doc (`FCIQMC_PARALLELISM.md`, house shape) recording:
 
-- H1's measured arithmetic intensity and whether the per-step work clears
-  the threading threshold — the single number that most determines the
-  outcome.
-- If H1 passes: H2's `SpawnWorkspace` rewrite, the accumulator structure
-  chosen and why, the before/after phase-probe breakdown, and the
-  re-measured achieved speedup vs ceiling.
+- H1's measured per-parent cost and region-vs-thread-count curve — done,
+  the numbers are in the H1 result section above and move into the answer
+  doc verbatim.
+- If H2.0/H2 are ever built: the `kBins` sweep, then (if that is not
+  enough) H2's `SpawnWorkspace` rewrite, the accumulator structure chosen
+  and why, the before/after phase-probe breakdown, and the re-measured
+  achieved speedup vs the H1 region ceiling.
 - H3's replica-parallel sketch and memory estimate, with an explicit
   build/don't-build recommendation tied to whether a target system exists.
 - The retired hypotheses, with their measurements, so the next person does
   not retake a turn (the T2 doc already has two of these — the bin-to-
   thread packing red herring, and the `next`-as-static reversion).
 
-If the investigation concludes "no rewrite" at H1, the deliverable is one
-paragraph in `FCIQMC_T2_THREADING.md`'s "Remaining architecture concern"
-section instead of a new doc, and this scope file is deleted.
+H1's finding is substantive enough that this scope file stays (as an
+answer-in-progress) rather than collapsing to one paragraph in the T2
+doc. It converts to `FCIQMC_PARALLELISM.md` when H2/H3 are resolved or
+explicitly declined.
 
 ## Key code locations
 

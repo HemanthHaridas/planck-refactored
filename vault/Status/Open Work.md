@@ -822,24 +822,41 @@ worth doing whether or not FCIQMC happens.
   not more of the R1/R2 pattern, and is a decision for when a real target
   exists.
 
-  **A REWRITE (not more of the R1/R2 pattern) is scoped as an open
-  investigation in `docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md`.** Three
-  independently-checkable hypotheses, cheapest first: **H1** — the per-step
-  work is too small to parallelize at reachable walker counts regardless of
-  shape (measure arithmetic intensity against the FCI sigma build's, which
-  threaded a structurally identical scatter to 3.54x; if H1 holds, the 1.57x
-  stands and there is no rewrite). **H2** — the ~95us/call serial
-  scaffolding is the ceiling and is eliminable by hoisting all per-call state
-  (64 bins, 64 RNG engines, the partition, the merge target) into a
-  driver-owned `SpawnWorkspace` and swapping `unordered_map` for a
-  reuse-stable accumulator (sorted vector + `inplace_merge`, or a flat table
-  whose `.clear()` genuinely resets) — which also dissolves every T2
-  determinism trap by construction. **H3** — run independent replicas
-  (different seeds, same Hamiltonian) as an embarrassingly-parallel axis;
-  near-linear in replica count, zero shared state, but only tightens the
-  error bar rather than converging one trajectory sooner, so build-or-not is
-  tied to a real target appearing. Deliverable is `FCIQMC_PARALLELISM.md`
-  (house shape) or, if H1 kills it, one paragraph here.
+  **A REWRITE (not more of the R1/R2 pattern) is scoped in
+  `docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md`. H1 is DONE (2026-09-06); H2/H3
+  are gated on a real target.**
+
+  **H1 — measured.** A probe on the real N2/STO-3G gate: per-parent work is
+  **~148 ns and dead flat across an 80x walker sweep** (2k->160k walkers;
+  `ns/parent` 146-152, one `draw_excitation` + one `slater_condon_element`
+  + one memoized diagonal + two map inserts). `parents/call` grows only
+  2.2x for 80x walkers because N2's 14,400-det space saturates. **The
+  pragma region, measured in isolation, threads to only ~2.28x at 4
+  threads (2.60x at 160k walkers) and REGRESSES at 8** (reproducible). The
+  cause is bin granularity: 908 parents / 64 fixed bins ~= 14 parents/bin,
+  ~= 2.1us arithmetic per bin, against fork/join + per-bin `unordered_map`
+  overhead. The FCI sigma build threaded to 3.54x because its per-outer-unit
+  work is ~600 excitation enumerations vs FCIQMC's one sampled draw --
+  ~2 orders of magnitude more arithmetic.
+
+  **Consequence.** H1 does not fully kill the rewrite but bounds it hard:
+  even a perfect H2 (zero serial scaffolding) lands the whole call at the
+  region ceiling, **~2.3-2.6x at 4 threads, never near-linear**, and 8
+  threads is off the table at reachable sizes. The realistic H2 prize is
+  the ~0.7-1.0x gap between the current 1.57x and the region's 2.3x -- a
+  bounded ~1.5x one-time gain, not scaling-with-cores. **A cheaper
+  experiment falls out: H2.0 -- shrink the fixed `kBins` (64 was chosen for
+  merge determinism, not throughput) to raise per-bin work; must stay a
+  fixed count (not thread-tied -- the invariance hazard the sigma build
+  paid for twice) and be re-gated.** Try H2.0 before the full
+  `SpawnWorkspace` rewrite.
+
+  **H2 / H2.0 -- not started**, gated on Q1: the bounded ~1.5x is not worth
+  the rewrite until FCIQMC runs somewhere long enough to care. **H3
+  (replicas)** is the only genuine scaling-with-cores axis and it only
+  tightens the error bar -- design sketch only, build-or-not tied to a
+  target appearing. Deliverable converts to `FCIQMC_PARALLELISM.md` when
+  H2/H3 resolve or are declined.
 
   **Three lessons, each of which cost a wrong number first.** (1) **A profile share
   is a lower bound on what removing that work is worth** — three for three now
