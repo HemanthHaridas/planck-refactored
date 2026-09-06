@@ -7,7 +7,7 @@
 
 namespace HartreeFock::Correlation
 {
-    // Coupled alpha/beta orbital-Hessian matrix (docs/SOSCF_UHF_DFT_SCOPE.md,
+    // Coupled alpha/beta orbital-Hessian matrix (docs/SOSCF_UHF.md,
     // U1). Split out of solve_uhf_cphf so SOSCF can call it directly with the
     // CURRENT (not yet converged) MO coefficients/energies, mirroring
     // build_rhf_cphf_matrix's own convergence-guard relaxation. Its one

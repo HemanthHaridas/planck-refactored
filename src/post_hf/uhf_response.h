@@ -17,7 +17,7 @@ namespace HartreeFock::Correlation
         Eigen::MatrixXd beta;
     };
 
-    // Coupled alpha/beta orbital-Hessian matrix (docs/SOSCF_UHF_DFT_SCOPE.md,
+    // Coupled alpha/beta orbital-Hessian matrix (docs/SOSCF_UHF.md,
     // U1). Same dense layout solve_uhf_cphf built inline; split out so SOSCF
     // can read it directly, mirroring build_rhf_cphf_matrix / solve_rhf_cphf.
     std::expected<Eigen::MatrixXd, std::string> build_uhf_cphf_matrix(

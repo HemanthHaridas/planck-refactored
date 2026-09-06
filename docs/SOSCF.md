@@ -70,8 +70,9 @@ Design rule:
   Hessian reproduce the finite-difference gradient and second derivative of
   that same numerical energy. This is the only check that cannot be fooled
   by two individually-plausible-looking but mutually-inconsistent
-  conventions. Kept as a permanent, opt-in regression probe
-  (`PLANCK_SOSCF_FD_CHECK`) rather than deleted after use.
+  conventions. Was an opt-in probe (`PLANCK_SOSCF_FD_CHECK`) during
+  derivation; since removed (see below) — its job was one-time and the
+  same-energy-vs-DIIS regressions carry the convention forward.
 
 ### 3. A generic solver's tuning defaults do not transfer across callers with different problem scales
 
@@ -150,9 +151,11 @@ slowly-converging run, not found by static code review:
 - Same-energy check to all 10 printed digits against pure DIIS, on every
   mode: fixed-iteration window, DIIS-error-criterion window, and pure
   unbounded SOSCF. Verified on water/6-31G and H2/6-31G.
-- The `PLANCK_SOSCF_FD_CHECK` finite-difference probe (invariant 2) — cheap,
-  opt-in, and the only check that would have caught the scale-mismatch
-  defect; keep it rather than deleting it now that the defect is fixed.
+- ~~The `PLANCK_SOSCF_FD_CHECK` finite-difference probe~~ — **removed** (see
+  "The `PLANCK_SOSCF_FD_CHECK` probe is gone" below). It was the only check
+  that would have caught the scale-mismatch defect during derivation; the
+  ongoing gate is the same-energy-vs-DIIS regression cases, which pin the
+  fixed convention the probe found.
 - Smoke regression suite unaffected with SOSCF off (`scf_soscf_start=0`,
   `scf_soscf_diis_tol=0.0`, the unconditional defaults): 33/35, matching the
   pre-existing baseline exactly (2 known unrelated CC/`rccsdt` routing
@@ -177,26 +180,20 @@ DIIS iterations) and H2/6-31G (5 vs 11) — satisfying the "does not regress
 small systems" requirement, but the large-`nb` iteration-count reduction
 this work was originally motivated by has not been measured.
 
-## What remains: UHF, ROHF, DFT
+## Extensions — UHF, RKS, UKS landed; ROHF remains
 
-Investigated directly by reading the relevant code, not assumed:
-
-Scoped in detail in `docs/SOSCF_UHF_DFT_SCOPE.md`:
-
-- **UHF — a mechanical extension, not a new derivation, but not zero
-  work.** `solve_uhf_cphf` (`src/post_hf/uhf_response.cpp`) already
-  materializes the full dense coupled α/β Jacobian matrix internally — the
-  same object `build_rhf_cphf_matrix` is for RHF — but it builds that
-  matrix by column via real per-trial-rotation integral-layer calls (a Fock
-  build per column), not a single closed-form ERI transform the way RHF's
-  builder does, so it is a more expensive construction to call every SOSCF
-  iteration. It is also currently wrapped inside a Z-vector solve
-  (`A·z = -rhs` for the MP2 gradient) rather than exposed as a standalone
-  builder. The work is the same shape as the RHF split between
-  `build_rhf_cphf_matrix` and `solve_rhf_cphf` — factor the matrix build
-  out, pack a joint α/β gradient and step — but needs its own
-  finite-difference verification (the RHF check's diagonal convention
-  matching is necessary, not sufficient; the α-β coupling terms are new).
+- **UHF SOSCF is done** — `docs/SOSCF_UHF.md`. `build_uhf_cphf_matrix`
+  split out of `solve_uhf_cphf`, per-spin Cayley rotation on one shared
+  step vector, `g_true = 2·g_used` / `H_true = 2·Amat` (a matching pair, so
+  unscaled `g=F_mo` against unscaled `Amat` is the true step — a different
+  constant from RHF's 4).
+- **RKS and UKS SOSCF are done** — `docs/SOSCF_DFT.md`. The KS orbital
+  Hessian has no single dense matrix; `h_op = diag_term⊙x + J_packed +
+  xc_packed`, where the XC piece is an **analytic** `fxc` contraction
+  (`docs/DFT_ANALYTIC_FXC_HESSIAN.md`), not the FD-kernel oracle. Pure
+  functionals only. UKS's analytic path is a measurable 3–5× per-Newton-step
+  win; RKS's is correct and correctly-scaling but roughly break-even at the
+  two modest sizes measured.
 - **ROHF — new theory, not a port.** There is no ROHF orbital-response or
   CPHF machinery anywhere in this codebase (confirmed by direct search),
   consistent with ROHF-MP2, ROHF stability, and ROHF PCM all remaining
@@ -206,24 +203,15 @@ Scoped in detail in `docs/SOSCF_UHF_DFT_SCOPE.md`:
   energy-weighted-density form (`W = P^α F^α P^α + P^β F^β P^β`) instead of
   reusing UHF's. A ROHF orbital Hessian needs its own derivation; nothing
   here transfers from RHF or UHF.
-- **DFT — genuinely open, corrected from an earlier wrong framing.** An
-  XC-kernel builder does exist in-tree
-  (`build_closed_shell_xc_kernel_blocks` / `build_unrestricted_xc_kernel_blocks`,
-  `src/dft/driver.cpp`), but reading its body (not just its name) shows it
-  is a *numerical finite-difference* construction built for TDDFT's small,
-  user-chosen excitation spaces — it re-evaluates the full grid XC pass
-  twice per occ-virt pair. Reused directly as a SOSCF orbital Hessian, that
-  is `O(n_occ · n_virt)` full-grid XC evaluations every iteration, which
-  likely makes DFT SOSCF slower than DIIS at the sizes where an
-  iteration-count win would matter. The production answer is an
-  **analytic** XC second derivative (`fxc`); libxc exposes it
-  (`xc_lda_fxc`/`xc_gga_fxc`) but Planck's wrapper
-  (`src/dft/base/wrapper.h`) only ever calls the first-derivative
-  `exc_vxc` family. This is closer to deriving a new Hessian than to
-  wiring RHF SOSCF's callbacks was — treat it as a research question, not
-  a mechanical follow-on, and use the existing FD-kernel builder as a
-  correctness oracle for whatever analytic path is eventually built, the
-  same role the `PLANCK_SOSCF_FD_CHECK` probe played here.
+
+### The `PLANCK_SOSCF_FD_CHECK` probe is gone
+
+This doc's "Validation strategy that should remain in place" advice to
+*keep* the probe is **stale**. The probe (RHF and UHF) was deleted outright
+per the project-wide decision that debug probes must become standalone
+tests or be removed — each needs a converged SCF's internal state the SCF
+loop does not expose. The ongoing gate is the SOSCF-vs-DIIS
+energy-agreement regression cases.
 
 ## What NOT to do
 

@@ -1,4 +1,4 @@
-// F1 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): isolated check that libxc's own
+// F1 (docs/DFT_ANALYTIC_FXC_HESSIAN.md): isolated check that libxc's own
 // analytic second derivative (xc_lda_fxc / xc_gga_fxc, via
 // DFT::XC::Functional::evaluate_{lda,gga}_fxc) agrees with a finite
 // difference of libxc's own first derivative (vrho / vsigma, via the
@@ -239,7 +239,7 @@ namespace
 int main()
 {
     // Slater (LDA exchange) and PBE (GGA), as named in
-    // docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md's F1 verification list -- both
+    // docs/DFT_ANALYTIC_FXC_HESSIAN.md's F1 verification list -- both
     // already used elsewhere in the tree's regression suite.
     check_lda_v2rho2_unpolarized("lda_x", 0.15);
     check_lda_v2rho2_unpolarized("lda_x", 1.0);

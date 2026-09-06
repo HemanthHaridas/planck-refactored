@@ -64,7 +64,7 @@ namespace DFT::Driver
         // GGA path: F3.3.3's own verified T1+T2+T3 decomposition, ported
         // verbatim from the (now-deleted) F3.3.4 whole-molecule probe that
         // first proved this composes correctly with real AO-projection
-        // machinery -- see docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md, F3.3.4 and
+        // machinery -- see docs/DFT_ANALYTIC_FXC_HESSIAN.md, F3.3.4 and
         // D2.0's own commit for the record of that verification.
         std::vector<double> sigma_vec(static_cast<std::size_t>(npoints));
         for (Eigen::Index p = 0; p < npoints; ++p)

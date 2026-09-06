@@ -46,14 +46,14 @@ historical design context, but they are no longer the source of truth for
   SAD. All four reach fully-converged DIIS's energy to all 10 digits on
   genuinely open-shell (UHF/UKS) or closed-shell (RHF/RKS) systems, with
   superlinear gradient shrinkage.
-  - **RHF/UHF** (`docs/SOSCF.md`, `docs/SOSCF_UHF_DFT_SCOPE.md` U1–U4):
+  - **RHF/UHF** (`docs/SOSCF.md`, `docs/SOSCF_UHF.md`):
     reuse `build_rhf_cphf_matrix` / `build_uhf_cphf_matrix` unchanged
     (`build_uhf_cphf_matrix` split out of `solve_uhf_cphf` for this). UHF
     is FD-verified `g_true=2·g_used`, `H_true=2·Amat`; per-spin Cayley
     rotation + semicanonicalization; mutually exclusive with an active
     level shift.
-  - **RKS/UKS** (`docs/SOSCF_UHF_DFT_SCOPE.md` D2–D3, built on F1–F5 of
-    `SOSCF_DFT_ANALYTIC_FXC_SCOPE.md`): the KS orbital Hessian's XC piece
+  - **RKS/UKS** (`docs/SOSCF_DFT.md`, built on `docs/DFT_ANALYTIC_FXC_HESSIAN.md`):
+    the KS orbital Hessian's XC piece
     is an **analytic** `fxc` Hessian-vector product
     (`compute_analytic_xc_hessian_vector_product{,_polarized}`,
     `src/dft/analytic_hessian.cpp`, LDA + GGA), NOT the

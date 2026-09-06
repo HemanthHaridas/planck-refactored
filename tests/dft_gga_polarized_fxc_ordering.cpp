@@ -1,4 +1,4 @@
-// F3.4.1 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): before any polarized-GGA
+// F3.4.1 (docs/DFT_ANALYTIC_FXC_HESSIAN.md): before any polarized-GGA
 // Hessian-vector algebra is written, confirm what each of v2rhosigma's 6
 // slots and v2sigma2's 6 slots actually means. libxc's public header
 // (src/external/libxc/install/include/xc.h) documents component COUNTS but

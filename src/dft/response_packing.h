@@ -5,7 +5,7 @@
 
 namespace DFT::Driver
 {
-    // F3.5 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): pure plumbing -- project
+    // F3.5 (docs/DFT_ANALYTIC_FXC_HESSIAN.md): pure plumbing -- project
     // an AO-basis induced XC potential into the (a,i) MO block and pack it
     // into the SAME flat layout HartreeFock::Correlation::build_rhf_cphf_matrix
     // / build_uhf_cphf_matrix already use for the orbital-Hessian linear

@@ -1,4 +1,4 @@
-// F2 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): confirm -- not assume -- that the
+// F2 (docs/DFT_ANALYTIC_FXC_HESSIAN.md): confirm -- not assume -- that the
 // existing density-on-grid evaluator (evaluate_density_on_grid, xc_grid.cpp)
 // already produces exactly what a Hessian-vector product needs when fed a
 // RESPONSE density (delta-P) instead of the ground-state density: rho(r) is

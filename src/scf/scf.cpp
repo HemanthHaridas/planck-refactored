@@ -1220,7 +1220,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
 
     HartreeFock::Logger::scf_header();
 
-    // SOSCF (docs/SOSCF_UHF_DFT_SCOPE.md, U1/U2): the previous iteration's MO
+    // SOSCF (docs/SOSCF_UHF.md, U1/U2): the previous iteration's MO
     // basis, paired against the CURRENT iteration's Fock -- the same pairing
     // RHF SOSCF uses, and for the same reason: Ca^T Fa Ca is diagonal BY
     // CONSTRUCTION immediately after diagonalizing Fa, so building the
@@ -1356,7 +1356,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
                 std::tie(Fa_diag, Fb_diag) = diis.extrapolate();
         }
 
-        // ── SOSCF window selection (docs/SOSCF_UHF_DFT_SCOPE.md, U2/U3) ──────
+        // ── SOSCF window selection (docs/SOSCF_UHF.md, U2/U3) ──────
         // Mirrors run_rhf's own soscf_enabled/soscf_active gating exactly
         // (S2's fixed-iteration switch only; U4 is the DIIS-error-criterion
         // follow-on, matching RHF's own S3). No SAO/PCM coverage yet, same
@@ -1465,7 +1465,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
 
         if (soscf_active_uhf)
         {
-            // ── SOSCF (docs/SOSCF_UHF_DFT_SCOPE.md, U2) ────────────────────
+            // ── SOSCF (docs/SOSCF_UHF.md, U2) ────────────────────
             // Mirrors run_rhf's SOSCF branch exactly, generalized to the
             // coupled alpha/beta step: this REPLACES diagonalization (both
             // spins), built from the PREVIOUS iteration's basis
@@ -1590,7 +1590,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
                 return std::make_pair(C_canon, eps_out);
             };
 
-            // U3 (docs/SOSCF_UHF_DFT_SCOPE.md): re-measured directly rather
+            // U3 (docs/SOSCF_UHF.md): re-measured directly rather
             // than assuming RHF's "harmless, keep it" verdict transfers.
             // Disabling this per spin (reading eps off the raw, non-
             // eigendecomposed Cᵀ F C diagonal) on a long pure-SOSCF window

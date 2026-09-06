@@ -81,7 +81,7 @@ truth for what remains.
   identical energy as DIIS to all 10 digits on water/6-31G and H2/6-31G, in
   every mode. Off by default; smoke suite unaffected.
 
-- **UHF SOSCF is done** (`docs/SOSCF_UHF_DFT_SCOPE.md`, U1–U4). Split
+- **UHF SOSCF is done** (`docs/SOSCF_UHF.md`). Split
   `build_uhf_cphf_matrix` out of `solve_uhf_cphf` (no convergence guard,
   mirroring RHF); FD-verified `g_true = 2·g_used` and `H_true = 2·Amat`
   (universal across a full index sweep, unlike RHF's 4×), so unscaled
@@ -91,11 +91,11 @@ truth for what remains.
   DIIS's energy to all 10 digits on three genuinely open-shell systems,
   superlinear gradient shrinkage.
 
-- **DFT RKS SOSCF is done** (`docs/SOSCF_UHF_DFT_SCOPE.md`, D1–D2.5). D2
+- **DFT RKS SOSCF is done** (`docs/SOSCF_DFT.md`). D2
   was rescoped to wire F3's *analytic* XC Hessian-vector product
   (`compute_analytic_xc_hessian_vector_product`, `src/dft/analytic_hessian.cpp`,
   LDA + GGA) rather than the `O(n_occ·n_virt)`-grid-pass FD-kernel oracle —
-  the analytic `fxc` path F1–F5 of `SOSCF_DFT_ANALYTIC_FXC_SCOPE.md` had
+  the analytic `fxc` path `docs/DFT_ANALYTIC_FXC_HESSIAN.md` had
   already built and verified. `h_op = diag_term⊙x + J_packed + xc_packed`,
   cross-checked against PySCF's `gen_g_hop_rhf` (`g_true=2·g_bare`,
   `H_true=4·H_bare`, a matching pair — unscaled ratio is the true step).
@@ -106,7 +106,7 @@ truth for what remains.
   Correct and correctly-scaling, but the wall-clock win needs a larger
   system.
 
-- **DFT UKS SOSCF is done** (`docs/SOSCF_UHF_DFT_SCOPE.md`, D3.0–D3.5).
+- **DFT UKS SOSCF is done** (`docs/SOSCF_DFT.md`).
   `compute_analytic_xc_hessian_vector_product_polarized`
   (`src/dft/analytic_hessian.cpp`, LDA + GGA, both spin channels
   independently transcribed) promoted from F3.4's point-level test algebra;

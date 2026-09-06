@@ -123,7 +123,7 @@ namespace DFT
             }
 
             // Per-point component counts for libxc's SECOND derivative arrays
-            // (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md, F1). These are NOT the same
+            // (docs/DFT_ANALYTIC_FXC_HESSIAN.md, F1). These are NOT the same
             // as spin_components()/sigma_components() -- libxc's internal
             // counters (src/util.c, internal_counters_set_lda/gga) size the
             // second-derivative blocks per the number of INDEPENDENT symmetric
@@ -403,7 +403,7 @@ namespace DFT
                 return {};
             }
 
-            // Analytic XC second derivative (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md,
+            // Analytic XC second derivative (docs/DFT_ANALYTIC_FXC_HESSIAN.md,
             // F1). Mirrors evaluate_lda_exc_vxc exactly -- same chunked/threaded
             // shape, same guards, same pointwise-map argument for thread-count
             // invariance (output at point i depends only on input at point i).

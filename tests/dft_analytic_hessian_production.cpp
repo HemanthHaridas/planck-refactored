@@ -1,4 +1,4 @@
-// D2.0 (docs/SOSCF_UHF_DFT_SCOPE.md): promotes F3's point-level-verified
+// D2.0 (docs/SOSCF_DFT.md): promotes F3's point-level-verified
 // T1(+T2+T3) algebra into a real production function,
 // compute_analytic_xc_hessian_vector_product (src/dft/analytic_hessian.{h,cpp}).
 //
@@ -229,7 +229,7 @@ namespace
                      name + ": compute_analytic_xc_hessian_vector_product(0,1) vs F3.1 reference formula (LDA)");
     }
 
-    // D2.2.0 (docs/SOSCF_UHF_DFT_SCOPE.md): orbital_energy_difference_diagonal
+    // D2.2.0 (docs/SOSCF_DFT.md): orbital_energy_difference_diagonal
     // is the RKS analogue of the single line
     // `A(ai,ai) += eps(n_occ+a) - eps(i)` inside
     // HartreeFock::Correlation::build_rhf_cphf_matrix

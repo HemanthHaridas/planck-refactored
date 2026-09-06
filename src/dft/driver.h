@@ -49,7 +49,7 @@ namespace DFT::Driver
     };
 
     // TDDFT excitation-space and finite-difference XC kernel machinery
-    // (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md, F3.1). These were originally
+    // (docs/DFT_ANALYTIC_FXC_HESSIAN.md, F3.1). These were originally
     // internal-linkage helpers inside driver.cpp's anonymous namespace; moved
     // here (definitions relocated in driver.cpp, unchanged otherwise) so F3's
     // own verification can call the existing FD-kernel oracle
@@ -101,7 +101,7 @@ namespace DFT::Driver
         const XC::Functional &correlation_functional);
 
     // The finite-difference XC kernel oracle (D1's chosen path,
-    // docs/SOSCF_UHF_DFT_SCOPE.md). Perturbs the density along each
+    // docs/SOSCF_DFT.md). Perturbs the density along each
     // (occ,virt) direction in `spaces` and finite-differences the full
     // first-derivative XC potential -- O(n_occ*n_virt) grid passes, the
     // correctness-only reference every analytic Hessian-vector product in

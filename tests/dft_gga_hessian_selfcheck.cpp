@@ -1,4 +1,4 @@
-// F3.3 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): the GGA unpolarized analytic
+// F3.3 (docs/DFT_ANALYTIC_FXC_HESSIAN.md): the GGA unpolarized analytic
 // Hessian-vector product, broken into F3.3.1 (T1), F3.3.2 (T2), F3.3.3
 // (T1+T2+T3), verified as an isolated point-level check against libxc's own
 // finite difference -- the same pattern F1's dft_fxc_selfcheck.cpp used,

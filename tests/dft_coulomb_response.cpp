@@ -1,4 +1,4 @@
-// D2.2.1 (docs/SOSCF_UHF_DFT_SCOPE.md): the Coulomb-response piece of the
+// D2.2.1 (docs/SOSCF_DFT.md): the Coulomb-response piece of the
 // RKS SOSCF orbital-Hessian-vector product h_op.
 //
 // Unlike D2.0's XC-kernel piece, no new production function is written

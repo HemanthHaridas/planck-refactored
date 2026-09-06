@@ -12,9 +12,9 @@
 
 namespace DFT::Driver
 {
-    // D2.0 (docs/SOSCF_UHF_DFT_SCOPE.md): promotes the analytic XC
+    // D2.0 (docs/SOSCF_DFT.md): promotes the analytic XC
     // Hessian-vector product derived and point-level-verified in
-    // docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md (F3.1 LDA, F3.3.1-F3.3.3 GGA
+    // docs/DFT_ANALYTIC_FXC_HESSIAN.md (F3.1 LDA, F3.3.1-F3.3.3 GGA
     // T1+T2+T3) into a real, callable production function. RKS, LDA and
     // GGA, unpolarized only -- UKS/polarized is D3's job (F3.4's own
     // T1..T5 algebra).
@@ -44,7 +44,7 @@ namespace DFT::Driver
         const XC::Functional &exchange_functional,
         const XC::Functional &correlation_functional);
 
-    // D2.2.0 (docs/SOSCF_UHF_DFT_SCOPE.md): the orbital-energy-difference
+    // D2.2.0 (docs/SOSCF_DFT.md): the orbital-energy-difference
     // diagonal eps(n_occ+a) - eps(i), flattened into the SAME (a,i)
     // virtual-major order pack_hessian_vector_product_cphf_order (F3.5)
     // already uses -- idx(a,i) = a*n_occ + i. This is the RKS analogue of
@@ -59,11 +59,11 @@ namespace DFT::Driver
         const Eigen::Ref<const Eigen::VectorXd> &eps,
         int n_occ);
 
-    // D3.0 (docs/SOSCF_UHF_DFT_SCOPE.md): the polarized (UKS) analogue of
+    // D3.0 (docs/SOSCF_DFT.md): the polarized (UKS) analogue of
     // compute_analytic_xc_hessian_vector_product above, promoting
     // tests/dft_gga_polarized_hessian_selfcheck.cpp's own verified T1..T5
     // point-level algebra (F3.4.2-F3.4.4,
-    // docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md) into a real production
+    // docs/DFT_ANALYTIC_FXC_HESSIAN.md) into a real production
     // function. LDA and GGA polarized both handled (LDA path added
     // alongside GGA -- see below), same is_lda_like()/is_gga_like()
     // dispatch compute_analytic_xc_hessian_vector_product already uses.

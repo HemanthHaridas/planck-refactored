@@ -1,6 +1,6 @@
-// D3.0 (docs/SOSCF_UHF_DFT_SCOPE.md): promotes
+// D3.0 (docs/SOSCF_DFT.md): promotes
 // tests/dft_gga_polarized_hessian_selfcheck.cpp's own verified T1..T5
-// point-level algebra (F3.4.2-F3.4.4, docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md)
+// point-level algebra (F3.4.2-F3.4.4, docs/DFT_ANALYTIC_FXC_HESSIAN.md)
 // into a real production function,
 // compute_analytic_xc_hessian_vector_product_polarized
 // (src/dft/analytic_hessian.{h,cpp}).

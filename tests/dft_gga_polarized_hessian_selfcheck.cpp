@@ -1,4 +1,4 @@
-// F3.4 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): the GGA polarized analytic
+// F3.4 (docs/DFT_ANALYTIC_FXC_HESSIAN.md): the GGA polarized analytic
 // Hessian-vector product, broken into F3.4.2 (same-spin alpha-only x),
 // F3.4.3 (add cross-spin coupling), F3.4.4 (beta channel). Point-level
 // checks against libxc's own finite difference, extending F3.3's unpolarized

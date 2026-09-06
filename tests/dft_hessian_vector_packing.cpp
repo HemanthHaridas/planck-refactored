@@ -1,4 +1,4 @@
-// F3.5 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): MO projection and (a,i)
+// F3.5 (docs/DFT_ANALYTIC_FXC_HESSIAN.md): MO projection and (a,i)
 // packing -- pure plumbing, no new physics, but a genuinely distinct
 // convention risk from F3.1-4's own algebra.
 //

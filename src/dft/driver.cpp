@@ -367,7 +367,7 @@ namespace DFT::Driver
                 // against src/external/libxc/install/include/xc_funcs.h --
                 // VWN1-4 are lda_c_vwn_{1,2,3,4}, VWN5 has no numeric suffix).
                 // Found while building the F3.1 verification probe
-                // (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): `correlation vwn5`
+                // (docs/DFT_ANALYTIC_FXC_HESSIAN.md): `correlation vwn5`
                 // has never resolved to a real functional, and nothing in the
                 // regression suite exercises VWN5 to have caught it.
                 functional_name = "lda_c_vwn";
@@ -896,7 +896,7 @@ namespace DFT::Driver
         // ResponseExcitationSpace, ResponseEigenpair, transition_density_matrix,
         // evaluate_xc_matrix_from_spin_densities, build_unrestricted_xc_kernel_blocks,
         // and build_closed_shell_xc_kernel_blocks moved to driver.h/below the
-        // anonymous namespace (F3.1, docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md) so
+        // anonymous namespace (F3.1, docs/DFT_ANALYTIC_FXC_HESSIAN.md) so
         // F3's verification can call the FD-kernel oracle from a standalone
         // test binary. driver.h is included at the top of this file, so their
         // declarations are visible here unchanged.
@@ -1855,7 +1855,7 @@ namespace DFT::Driver
                 const bool use_diis = calculator._scf._use_DIIS;
                 double previous_total_energy = 0.0;
 
-                // SOSCF (D2.2.3, docs/SOSCF_UHF_DFT_SCOPE.md): reference
+                // SOSCF (D2.2.3, docs/SOSCF_DFT.md): reference
                 // orbitals persisted across iterations, mirroring RHF's
                 // C_soscf_prev/eps_soscf_prev (src/scf/scf.cpp) exactly --
                 // the orbital gradient/Hessian at a SOSCF iteration are
@@ -2240,7 +2240,7 @@ namespace DFT::Driver
             const bool use_diis = calculator._scf._use_DIIS;
             double previous_total_energy = 0.0;
 
-            // SOSCF (D3.2, docs/SOSCF_UHF_DFT_SCOPE.md): the UKS analogue of
+            // SOSCF (D3.2, docs/SOSCF_DFT.md): the UKS analogue of
             // the RKS branch above, generalized to the coupled alpha/beta
             // step exactly the way U2 generalized S2 for UHF. Per-spin
             // reference orbitals persisted every iteration; the (a,i)
@@ -3539,7 +3539,7 @@ namespace DFT::Driver
     } // namespace
 
     // Moved out of the anonymous namespace above (F3.1,
-    // docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md) so F3's own Hessian-vector-
+    // docs/DFT_ANALYTIC_FXC_HESSIAN.md) so F3's own Hessian-vector-
     // product verification can call the FD-kernel oracle directly from a
     // standalone test binary. Declared in driver.h; bodies unchanged from
     // their original internal-linkage form.
