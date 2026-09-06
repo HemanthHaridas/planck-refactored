@@ -213,13 +213,51 @@ measurement that decides whether it was worth it.
 
 | step | adds | verifies against | if it fails |
 |---|---|---|---|
-| **H2.1** | the S5 gate: an **N2-sized** `threads1`/`threads4` pair at `atol = 0.0`, made non-vacuous by a temporary reversed-bin-order mutation that must turn it red | the current tree (must pass as-is — S5 is testing infrastructure, not a code change) | S5 cannot be made to go red → the gate is vacuous; fix the gate before any H2 code, or every later "bitwise identical" claim is worthless |
+| **H2.1 — DONE** (see below) | the S5 gate: an **N2-sized** `threads1`/`threads4` pair at `atol = 0.0`. **The `threads1` case PINS both energies to fixed values** (not just `metric_present`), because a merge-order defect is thread-count-invariant and a `threads4 == threads1` comparison alone cannot see it. | the current tree (passes as-is); non-vacuity verified with two mutation classes | — |
 | **H2.2** | a standalone unit test (`fciqmc_accumulator`) for whatever reuse-stable accumulator H2.4 will use, checking: same `(det, weight)` multiset in any insertion order → **bitwise-identical** iterated sum; and **bitwise-identical after N reuse cycles** (the property `unordered_map` fails, T2 invariant 3) | an independent `std::map`-based reference sum on random `(det, weight)` fixtures with deliberate duplicate keys | the accumulator is not actually reuse-stable → pick a different structure (the three candidates below) before wiring it in |
 | **H2.3** | measure, in isolation, the cost of **re-seeding 64 `mt19937_64` engines in place** vs constructing 64 fresh — the number T2 flagged as unseparated | a microbenchmark of exactly that one difference, identical seed sequence | re-seed is ≈ as expensive as construct → H2.5 needs a counter-based RNG (Philox/Threefry), a bigger change; decide here, not mid-rewrite |
 | **H2.4** | `SpawnWorkspace` type + `void propagate_stochastic(..., SpawnWorkspace& ws, WalkerPopulation& out)` — the persistent bins (using H2.2's accumulator), partition buffer, and merge target live in `ws`; the output is caller-owned so there is no NRVO question | **bitwise identical to the pre-H2 tree at `OMP_NUM_THREADS` = 1** on `h2_fciqmc_sto3g` and `n2_fciqmc_sto3g` (serial, so no reordering — a swap of the accumulator that changes a serial result is a bug, not reassociation) | serial result changes → the accumulator swap reordered something it should not have; localize with H2.2's reference before proceeding |
 | **H2.5** | move the 64 RNG engines into `ws`, re-seeded per call from one `rng.raw64()` draw (the S1 contract: fresh, thread-count-independent bin streams). If H2.3 said re-seed is too costly, this step is instead "swap `RandomSource`'s engine for a counter-based one" — a deliberate, separately-recorded RNG change | self-reproducibility at fixed seed **plus** `metric_within_sigma` against exact FCI (T2 invariant 2 — never bitwise-vs-the-old-numbers, since changing the RNG or its call pattern is a reordering-class change) | reproducibility fails, or the FCI-agreement sigma blows past the gate → the bin-stream derivation is wrong (the S1 "frozen trajectory" trap: a `const derive()` that does not advance); check the population diagnostics, not just the gate |
 | **H2.6** | re-enable threading on H2.4's structure (`#pragma omp parallel for schedule(static)` over the persistent bins) and re-verify invariance | **bitwise identical across `OMP_NUM_THREADS` = 1/2/4/8** on `h2_fciqmc_threads1/4`, the new S5 N2-sized pair, `n2_fciqmc_sto3g`, and the four non-QMC FCI gates sharing `build_all_mo_ci_setup` | any thread count disagrees → the accumulator or the merge is not partition-deterministic after all; H2.2's reuse-stability test missed the threaded-write case, extend it |
 | **H2.7** | re-run the H1 probe on **HF/6-31G** (the unsaturated fixture — not N2): per-call parent count, region µs, whole-call µs at 1/2/4/8 threads, before/after the rewrite. Report serial-scaffolding µs/call (should drop from ~1.5 ms toward near zero) and whole-call speedup vs the region ceiling | the H1 numbers already recorded (`region 3.44×/4t, 4.47×/8t`; `whole 2.24×/4t`) | whole-call speedup does *not* move toward the region ceiling → the ~1.5 ms was not actually the bottleneck; re-profile with an in-binary phase probe (T2's `PLANCK_FCIQMC_PHASE_PROBE` pattern) before concluding |
+
+#### H2.1 result (2026-09-06): the S5 gate needs a PINNED `threads1`, not just a `threads1`/`threads4` comparison
+
+Landed as `n2_fciqmc_s5_threads1` / `n2_fciqmc_s5_threads4`
+(`tests/inputs/regression/post_hf/n2_fciqmc_s5_short.hfinp` — N2/STO-3G,
+300 equil + 200 sampling, ~0.06 s/run, ~579 occupied determinants → ~9
+parents/bin, so cross-bin annihilation is genuinely exercised, unlike the
+`h2_fciqmc_threads1/4` case where 4 determinants < `kBins` = 64 means ≤ 1
+parent/bin). Both `extended`-tagged. Fully deterministic — bit-identical
+across 3 repeats at 1 thread and across `OMP_NUM_THREADS` = 1/2/4/8 on the
+clean tree:
+
+```
+fciqmc_shift_energy      -109.2733562973
+fciqmc_projected_energy  -107.5441088131
+```
+
+`n2_fciqmc_s5_threads1` `metric_close`s both at `atol = 0.0` to those
+values; `n2_fciqmc_s5_threads4` `metric_close_case`s both against
+`threads1` at `atol = 0.0`.
+
+**Non-vacuity verified with two mutation classes, and the finding is that
+the `threads1` pin is load-bearing on its own:**
+
+| mutation | effect | `threads1` pin | `threads4 == threads1` |
+|---|---|---|---|
+| **reverse the bin-merge order** (`next_bins.rbegin()..rend()`) | shift `-109.2733562973` → `-109.5354023681`; **thread-count-invariant** (T1 and T4 both move to the new value) | **RED** ✓ | green — cannot see it |
+| **`local_bin` per bin + `#pragma omp critical` completion-order merge** (the DFT-grid-jitter defect) | value changes AND T1 (`-108.7298896908`) ≠ T4 (`-109.5866265932`) | **RED** ✓ | **RED** ✓ |
+
+So a merge-order or accumulator-reassociation change that preserves
+thread-count invariance — which is exactly the failure mode H2.4's
+accumulator swap risks — is invisible to a `threads1`/`threads4`
+comparison and is caught **only** by pinning `threads1` to a known-good
+value. The existing `h2_fciqmc_threads1` case (`metric_present` only) does
+not have this property; the S5 pair is stricter on purpose.
+
+No production code changed for H2.1 — one new input file, two new JSON
+cases. All FCIQMC gates plus smoke (35/35) pass.
 
 **The accumulator (H2.2/H2.4) — three candidates, evaluate in this order:**
 
@@ -333,18 +371,23 @@ conclusion `FCIQMC_RESEARCH_SCOPE.md` Q1 reaches for the method as a whole.
   flat in walker count) is real on both. **H1 is refuted as stated: the
   work is not too small on any non-saturated fixture, which is exactly the
   Q1 large-active-space case.**
-- **H2 — SCOPED into seven verifiable steps (H2.1–H2.7), not started.**
+- **H2 — SCOPED into seven verifiable steps (H2.1–H2.7). H2.1 DONE; H2.2–H2.7
+  not started.**
   On HF the whole call is stuck at 2.24×/4 threads against a region
   ceiling of ≥ 4.5×, because the serial scaffolding is ~1.5 ms/call (30×
   N2's, since HF partitions/merges 30× more parents) and does not thread.
-  The ladder: **H2.1** build a non-vacuous N2-sized invariance gate (S5),
-  **H2.2** unit-test a reuse-stable accumulator, **H2.3** measure the RNG
-  re-seed cost in isolation (decides whether H2.5 needs a counter-based
-  RNG), **H2.4** the `SpawnWorkspace` type + out-param signature +
-  accumulator swap (gated bitwise-serial), **H2.5** hoist the RNG engines
-  (gated by reproducibility + FCI-sigma), **H2.6** re-thread and re-verify
-  invariance at 1/2/4/8, **H2.7** re-measure on HF against the region
-  ceiling. Each step's own verification gates the next.
+  The ladder: **H2.1 (DONE)** the S5 invariance gate —
+  `n2_fciqmc_s5_threads1/4`, N2-sized (~9 parents/bin), with `threads1`
+  **pinning both energies** because a merge-order defect is
+  thread-count-invariant and a `threads1`/`threads4` comparison alone
+  cannot see it (verified: reversing the bin-merge order is caught only by
+  the pin). **H2.2** unit-test a reuse-stable accumulator, **H2.3** measure
+  the RNG re-seed cost in isolation (decides whether H2.5 needs a
+  counter-based RNG), **H2.4** the `SpawnWorkspace` type + out-param
+  signature + accumulator swap (gated bitwise-serial), **H2.5** hoist the
+  RNG engines (gated by reproducibility + FCI-sigma), **H2.6** re-thread
+  and re-verify invariance at 1/2/4/8, **H2.7** re-measure on HF against
+  the region ceiling. Each step's own verification gates the next.
 - **H2.0 (smaller fixed `kBins`) — reserve, N2-class only.** Helps a
   saturation-starved fixture; on HF the bins are already large enough.
   H2 does **not** touch `kBins`.
