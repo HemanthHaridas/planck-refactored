@@ -60,6 +60,7 @@ tests/benchmarks/**/*.uvvis.dat
 tests/*/__pycache__
 *.hfchk
 *.fcidump
+*.ccamp
 __pycache__
 Testing/
 docs/RMP2_GRADIENT_FIX_SUMMARY.md

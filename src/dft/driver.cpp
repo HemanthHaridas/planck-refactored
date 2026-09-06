@@ -1,5 +1,9 @@
 #include "driver.h"
 
+#include "analytic_hessian.h"
+#include "post_hf/casscf/aug-hessian.h"
+#include "post_hf/casscf/orbital.h"
+
 #include <Eigen/QR>
 
 #include <cstdlib>
@@ -12,6 +16,7 @@
 #include <iomanip>
 #include <limits>
 #include <numeric>
+#include <sstream>
 #include <string>
 
 #include "base/mpi_env.h"
@@ -357,7 +362,15 @@ namespace DFT::Driver
             case HartreeFock::XCCorrelationFunctional::Custom:
                 return std::unexpected("No explicit libxc correlation functional id was provided for Custom correlation");
             case HartreeFock::XCCorrelationFunctional::VWN5:
-                functional_name = "lda_c_vwn_5";
+                // libxc names VWN5 plain "lda_c_vwn" (id 7); "lda_c_vwn_5"
+                // does not exist in libxc's functional table at all (verified
+                // against src/external/libxc/install/include/xc_funcs.h --
+                // VWN1-4 are lda_c_vwn_{1,2,3,4}, VWN5 has no numeric suffix).
+                // Found while building the F3.1 verification probe
+                // (docs/DFT_ANALYTIC_FXC_HESSIAN.md): `correlation vwn5`
+                // has never resolved to a real functional, and nothing in the
+                // regression suite exercises VWN5 to have caught it.
+                functional_name = "lda_c_vwn";
                 break;
             case HartreeFock::XCCorrelationFunctional::LYP:
                 functional_name = "gga_c_lyp";
@@ -880,35 +893,13 @@ namespace DFT::Driver
             return occupancy * occupied * occupied.transpose();
         }
 
-        struct ResponseExcitationSpace
-        {
-            std::string spin_label;
-            int n_occ = 0;
-            int n_virt = 0;
-            int mo_offset = 0;
-            Eigen::MatrixXd C_occ;
-            Eigen::MatrixXd C_virt;
-            Eigen::VectorXd occ_energies;
-            Eigen::VectorXd virt_energies;
-            std::vector<std::string> mo_symmetry;
-
-            [[nodiscard]] int nov() const noexcept
-            {
-                return n_occ * n_virt;
-            }
-
-            [[nodiscard]] int flat_index(int i, int a) const noexcept
-            {
-                return i * n_virt + a;
-            }
-        };
-
-        struct ResponseEigenpair
-        {
-            double omega = 0.0;
-            Eigen::VectorXd x;
-            Eigen::VectorXd y;
-        };
+        // ResponseExcitationSpace, ResponseEigenpair, transition_density_matrix,
+        // evaluate_xc_matrix_from_spin_densities, build_unrestricted_xc_kernel_blocks,
+        // and build_closed_shell_xc_kernel_blocks moved to driver.h/below the
+        // anonymous namespace (F3.1, docs/DFT_ANALYTIC_FXC_HESSIAN.md) so
+        // F3's verification can call the FD-kernel oracle from a standalone
+        // test binary. driver.h is included at the top of this file, so their
+        // declarations are visible here unchanged.
 
         std::string linear_response_method_label(HartreeFock::LinearResponseMethod method)
         {
@@ -1128,156 +1119,6 @@ namespace DFT::Driver
             }
             std::cout << std::string(66, '-') << "\n";
             HartreeFock::Logger::blank();
-        }
-
-        Eigen::MatrixXd transition_density_matrix(
-            const Eigen::Ref<const Eigen::VectorXd> &occupied,
-            const Eigen::Ref<const Eigen::VectorXd> &virtual_orbital)
-        {
-            const Eigen::MatrixXd unsymmetrized = occupied * virtual_orbital.transpose();
-            return (0.5 * (unsymmetrized + unsymmetrized.transpose())).eval();
-        }
-
-        std::expected<XCMatrixContribution, std::string> evaluate_xc_matrix_from_spin_densities(
-            const PreparedSystem &prepared,
-            const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
-            const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
-            const DFT::XC::Functional &exchange_functional,
-            const DFT::XC::Functional &correlation_functional)
-        {
-            auto xc_grid = evaluate_xc_on_grid(
-                prepared.molecular_grid,
-                prepared.ao_grid,
-                alpha_density,
-                beta_density,
-                exchange_functional,
-                correlation_functional);
-            if (!xc_grid)
-                return std::unexpected(xc_grid.error());
-
-            auto xc_matrix = assemble_xc_matrix(
-                prepared.molecular_grid,
-                prepared.ao_grid,
-                *xc_grid);
-            if (!xc_matrix)
-                return std::unexpected(xc_matrix.error());
-
-            return *xc_matrix;
-        }
-
-        std::expected<std::vector<std::vector<Eigen::MatrixXd>>, std::string> build_unrestricted_xc_kernel_blocks(
-            const PreparedSystem &prepared,
-            const std::vector<ResponseExcitationSpace> &spaces,
-            const Eigen::Ref<const Eigen::MatrixXd> &ground_alpha_density,
-            const Eigen::Ref<const Eigen::MatrixXd> &ground_beta_density,
-            const DFT::XC::Functional &exchange_functional,
-            const DFT::XC::Functional &correlation_functional)
-        {
-            const int nspaces = static_cast<int>(spaces.size());
-            std::vector<std::vector<Eigen::MatrixXd>> blocks(
-                static_cast<std::size_t>(nspaces),
-                std::vector<Eigen::MatrixXd>(static_cast<std::size_t>(nspaces)));
-
-            for (int target = 0; target < nspaces; ++target)
-                for (int source = 0; source < nspaces; ++source)
-                    blocks[static_cast<std::size_t>(target)][static_cast<std::size_t>(source)] =
-                        Eigen::MatrixXd::Zero(spaces[static_cast<std::size_t>(target)].nov(),
-                                              spaces[static_cast<std::size_t>(source)].nov());
-
-            for (int source = 0; source < nspaces; ++source)
-            {
-                const ResponseExcitationSpace &source_space = spaces[static_cast<std::size_t>(source)];
-                for (int j = 0; j < source_space.n_occ; ++j)
-                    for (int b = 0; b < source_space.n_virt; ++b)
-                    {
-                        const Eigen::MatrixXd delta_density =
-                            transition_density_matrix(source_space.C_occ.col(j), source_space.C_virt.col(b));
-                        const double delta_scale = std::max(1.0, delta_density.cwiseAbs().maxCoeff());
-                        const double step = 1.0e-5 / delta_scale;
-
-                        Eigen::MatrixXd alpha_plus = ground_alpha_density;
-                        Eigen::MatrixXd alpha_minus = ground_alpha_density;
-                        Eigen::MatrixXd beta_plus = ground_beta_density;
-                        Eigen::MatrixXd beta_minus = ground_beta_density;
-
-                        if (source == 0)
-                        {
-                            alpha_plus += step * delta_density;
-                            alpha_minus -= step * delta_density;
-                        }
-                        else
-                        {
-                            beta_plus += step * delta_density;
-                            beta_minus -= step * delta_density;
-                        }
-
-                        auto plus = evaluate_xc_matrix_from_spin_densities(
-                            prepared,
-                            alpha_plus,
-                            beta_plus,
-                            exchange_functional,
-                            correlation_functional);
-                        if (!plus)
-                            return std::unexpected("TDDFT XC kernel (+) evaluation failed: " + plus.error());
-
-                        auto minus = evaluate_xc_matrix_from_spin_densities(
-                            prepared,
-                            alpha_minus,
-                            beta_minus,
-                            exchange_functional,
-                            correlation_functional);
-                        if (!minus)
-                            return std::unexpected("TDDFT XC kernel (-) evaluation failed: " + minus.error());
-
-                        const Eigen::MatrixXd delta_v_alpha =
-                            (plus->alpha - minus->alpha) / (2.0 * step);
-                        const Eigen::MatrixXd delta_v_beta =
-                            (plus->beta - minus->beta) / (2.0 * step);
-
-                        const int source_column = source_space.flat_index(j, b);
-                        for (int target = 0; target < nspaces; ++target)
-                        {
-                            const ResponseExcitationSpace &target_space = spaces[static_cast<std::size_t>(target)];
-                            const Eigen::MatrixXd &delta_v = (target == 0) ? delta_v_alpha : delta_v_beta;
-                            const Eigen::MatrixXd projected =
-                                target_space.C_occ.transpose() * delta_v * target_space.C_virt;
-
-                            for (int i = 0; i < target_space.n_occ; ++i)
-                                for (int a = 0; a < target_space.n_virt; ++a)
-                                    blocks[static_cast<std::size_t>(target)][static_cast<std::size_t>(source)](
-                                        target_space.flat_index(i, a),
-                                        source_column) = projected(i, a);
-                        }
-                    }
-            }
-
-            return blocks;
-        }
-
-        std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string> build_closed_shell_xc_kernel_blocks(
-            const PreparedSystem &prepared,
-            const ResponseExcitationSpace &space,
-            const Eigen::Ref<const Eigen::MatrixXd> &restricted_density,
-            const DFT::XC::Functional &exchange_functional,
-            const DFT::XC::Functional &correlation_functional)
-        {
-            const Eigen::MatrixXd ground_alpha = 0.5 * restricted_density;
-            const Eigen::MatrixXd ground_beta = 0.5 * restricted_density;
-            const std::vector<ResponseExcitationSpace> duplicated_spaces = {space, space};
-
-            auto blocks = build_unrestricted_xc_kernel_blocks(
-                prepared,
-                duplicated_spaces,
-                ground_alpha,
-                ground_beta,
-                exchange_functional,
-                correlation_functional);
-            if (!blocks)
-                return std::unexpected(blocks.error());
-
-            return std::make_pair(
-                (*blocks)[0][0],
-                (*blocks)[0][1]);
         }
 
         std::expected<std::vector<ResponseEigenpair>, std::string> solve_response_problem(
@@ -2014,6 +1855,48 @@ namespace DFT::Driver
                 const bool use_diis = calculator._scf._use_DIIS;
                 double previous_total_energy = 0.0;
 
+                // SOSCF (D2.2.3, docs/SOSCF_DFT.md): reference
+                // orbitals persisted across iterations, mirroring RHF's
+                // C_soscf_prev/eps_soscf_prev (src/scf/scf.cpp) exactly --
+                // the orbital gradient/Hessian at a SOSCF iteration are
+                // evaluated in the PREVIOUS iteration's MO basis against
+                // THIS iteration's Fock, which is what is actually
+                // stationary at convergence.
+                Eigen::MatrixXd C_soscf_prev;
+                Eigen::VectorXd eps_soscf_prev;
+                unsigned int soscf_window_start = 0;
+                // D2.2's own scope cut: pure (non-hybrid) functionals only
+                // for this first landing -- a hybrid's exact-exchange
+                // response needs the same K-response machinery
+                // build_rhf_cphf_matrix already has, unbuilt here (D2.2.4
+                // enforces this as a real rejection, not silently ignored).
+                const bool soscf_dft_hybrid_blocked = x_functional.is_hybrid();
+                // D2.2.4: a user requesting SOSCF (either trigger keyword)
+                // must be told when the request cannot be honored, rather
+                // than silently running plain DIIS the whole time -- the
+                // exact failure mode this step exists to close. Emitted
+                // once, before the loop, so it is not spammy per-iteration.
+                if ((calculator._scf._scf_soscf_diis_tol > 0.0 ||
+                     calculator._scf._scf_soscf_start > 0))
+                {
+                    std::string reason;
+                    if (soscf_dft_hybrid_blocked)
+                        reason = "hybrid functional (exact-exchange response is not yet implemented "
+                                 "for DFT SOSCF)";
+                    else if (prepared.pcm)
+                        reason = "PCM solvation (not yet wired through DFT SOSCF)";
+                    else if (calculator._use_sao_blocking)
+                        reason = "SAO/symmetry blocking (not yet wired through DFT SOSCF)";
+                    if (!reason.empty())
+                        HartreeFock::Logger::logging(
+                            HartreeFock::LogLevel::Warning,
+                            "DFT SOSCF :",
+                            std::format(
+                                "scf_soscf_start/scf_soscf_diis_tol requested but disabled for this "
+                                "run: {} -- running with plain DIIS only",
+                                reason));
+                }
+
                 for (unsigned int iter = 1; iter <= max_iter; ++iter)
                 {
                     const auto iter_start = std::chrono::steady_clock::now();
@@ -2084,18 +1967,187 @@ namespace DFT::Driver
                         diis_error = diis.error_norm();
                     }
 
+                    // SOSCF (D2.2.3): same criterion-or-fixed-iteration gate
+                    // RHF/UHF already use (src/scf/scf.cpp), sharing the
+                    // scf_soscf_* keywords. SAO-active and PCM are excluded
+                    // exactly like RHF/UHF's own guard (neither is wired
+                    // through this Hessian yet); hybrids are excluded per
+                    // D2.2's own scope cut, enforced separately at D2.2.4.
+                    const bool sao_active_rks = calculator._use_sao_blocking &&
+                                                calculator._sao_transform.rows() ==
+                                                    static_cast<Eigen::Index>(nbasis) &&
+                                                calculator._sao_transform.cols() ==
+                                                    static_cast<Eigen::Index>(nbasis) &&
+                                                !calculator._sao_block_sizes.empty();
+                    const bool soscf_enabled =
+                        (calculator._scf._scf_soscf_diis_tol > 0.0 ||
+                         calculator._scf._scf_soscf_start > 0) &&
+                        !sao_active_rks && !prepared.pcm && !soscf_dft_hybrid_blocked;
+                    if (soscf_enabled && soscf_window_start == 0)
+                    {
+                        const bool criterion_fires =
+                            calculator._scf._scf_soscf_diis_tol > 0.0
+                                ? (use_diis && diis_error > 0.0 &&
+                                   diis_error < calculator._scf._scf_soscf_diis_tol &&
+                                   iter >= calculator._scf._scf_soscf_min_iter)
+                                : (iter >= calculator._scf._scf_soscf_start);
+                        if (criterion_fires)
+                            soscf_window_start = iter;
+                    }
+                    const bool soscf_active =
+                        soscf_enabled && soscf_window_start > 0 &&
+                        iter < soscf_window_start + calculator._scf._scf_soscf_cycles &&
+                        C_soscf_prev.size() > 0;
+                    if (soscf_window_start > 0 &&
+                        iter == soscf_window_start + calculator._scf._scf_soscf_cycles)
+                    {
+                        diis.clear();
+                    }
+                    const bool do_diis = use_diis && diis.ready() && !soscf_active;
                     const Eigen::MatrixXd fock_for_diagonalization =
-                        (use_diis && diis.ready()) ? diis.extrapolate() : fock;
-                    auto diagonalization = diagonalize_in_ao_basis(
-                        calculator,
-                        X,
-                        fock_for_diagonalization,
-                        "KS");
-                    if (!diagonalization)
-                        return std::unexpected(diagonalization.error());
+                        do_diis ? diis.extrapolate() : fock;
 
-                    const Eigen::MatrixXd next_density =
-                        density_from_orbitals(diagonalization->coefficients, n_occ, 2.0);
+                    Eigen::MatrixXd C_new;
+                    Eigen::VectorXd eps_new;
+                    if (soscf_active)
+                    {
+                        // ── SOSCF (D2.2.3) ──────────────────────────────────
+                        // g_ai = F_mo(a,i), paired with the composed h_op
+                        // UNSCALED -- D2.2.2's own cross-check against
+                        // PySCF's gen_g_hop_rhf confirmed g_true=2*g_bare and
+                        // H_true=4*H_bare, a MATCHING pair (like RHF's own
+                        // 4-and-4), so the unscaled ratio already reproduces
+                        // the true Newton step.
+                        const int n_occ_i = static_cast<int>(n_occ);
+                        const int n_virt_i = static_cast<int>(nbasis) - n_occ_i;
+                        const Eigen::MatrixXd C_occ_prev = C_soscf_prev.leftCols(n_occ_i);
+                        const Eigen::MatrixXd C_virt_prev = C_soscf_prev.rightCols(n_virt_i);
+
+                        const Eigen::MatrixXd F_mo = C_soscf_prev.transpose() * fock * C_soscf_prev;
+                        Eigen::VectorXd g(n_virt_i * n_occ_i);
+                        for (int a = 0; a < n_virt_i; ++a)
+                            for (int i = 0; i < n_occ_i; ++i)
+                                g(a * n_occ_i + i) = F_mo(n_occ_i + a, i);
+
+                        const Eigen::VectorXd diag_term =
+                            DFT::Driver::orbital_energy_difference_diagonal(eps_soscf_prev, n_occ_i);
+
+                        const auto h_op = [&](const Eigen::VectorXd &x) -> Eigen::VectorXd
+                        {
+                            // dP(x) = 2*(C_virt*unpack(x)*C_occ^T + h.c.), same
+                            // convention D2.2.2 verified.
+                            Eigen::MatrixXd x_mat(n_virt_i, n_occ_i);
+                            for (int a = 0; a < n_virt_i; ++a)
+                                for (int i = 0; i < n_occ_i; ++i)
+                                    x_mat(a, i) = x(a * n_occ_i + i);
+                            const Eigen::MatrixXd d1 = C_virt_prev * x_mat * C_occ_prev.transpose();
+                            const Eigen::MatrixXd dP = d1 + d1.transpose();
+
+                            const Eigen::MatrixXd dJ = _compute_2e_j_direct(
+                                prepared.shell_pairs, dP, calculator._shells.nbasis(),
+                                calculator._integral._engine, HartreeFock::ERIKernel::Coulomb,
+                                0.0, calculator._integral._tol_eri,
+                                calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
+                                                                   : nullptr);
+                            const Eigen::VectorXd J_packed = DFT::Driver::pack_hessian_vector_product_cphf_order(
+                                dJ, C_occ_prev, C_virt_prev);
+
+                            const auto dV_xc = DFT::Driver::compute_analytic_xc_hessian_vector_product(
+                                prepared.molecular_grid, prepared.ao_grid, density, dP,
+                                x_functional, c_functional);
+                            if (!dV_xc)
+                                return Eigen::VectorXd::Zero(x.size());
+                            const Eigen::VectorXd xc_packed = DFT::Driver::pack_hessian_vector_product_cphf_order(
+                                *dV_xc, C_occ_prev, C_virt_prev);
+
+                            return diag_term.cwiseProduct(x) + J_packed + xc_packed;
+                        };
+                        const auto g_op = [&g]() -> Eigen::VectorXd
+                        { return g; };
+
+                        HartreeFock::Correlation::CASSCF::AugHessianOptions ah_opts;
+                        ah_opts.ah_start_tol = std::max(1e-8, 0.1 * g.norm());
+                        Eigen::VectorXd x0 = -g;
+                        const double x0_norm = x0.norm();
+                        if (std::isfinite(x0_norm) && x0_norm > 0.0)
+                            x0 /= x0_norm;
+                        const HartreeFock::Correlation::CASSCF::AugHessianResult ah =
+                            HartreeFock::Correlation::CASSCF::solve_augmented_hessian(
+                                h_op, g_op, nullptr, x0, ah_opts);
+
+                        // Trust-region cap, same constant RHF/UHF SOSCF use.
+                        constexpr double kSoscfMaxRot = 0.20;
+                        Eigen::MatrixXd kappa = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                        bool cap_fired = false;
+                        if (ah.x.size() == n_virt_i * n_occ_i && ah.x.allFinite())
+                        {
+                            Eigen::VectorXd step = ah.x;
+                            const double max_elem = step.cwiseAbs().maxCoeff();
+                            if (max_elem > kSoscfMaxRot)
+                            {
+                                step *= kSoscfMaxRot / max_elem;
+                                cap_fired = true;
+                            }
+                            for (int a = 0; a < n_virt_i; ++a)
+                                for (int i = 0; i < n_occ_i; ++i)
+                                {
+                                    const double v = step(a * n_occ_i + i);
+                                    kappa(n_occ_i + a, i) = v;
+                                    kappa(i, n_occ_i + a) = -v;
+                                }
+                        }
+                        C_new = HartreeFock::Correlation::CASSCF::apply_orbital_rotation(
+                            C_soscf_prev, kappa, calculator._overlap);
+                        if (!C_new.allFinite())
+                            return std::unexpected(std::format(
+                                "DFT SOSCF: orbital rotation produced non-finite coefficients at "
+                                "iteration {}",
+                                iter));
+
+                        // Semicanonicalize occ-occ/virt-virt blocks separately
+                        // -- pure gauge freedom, same as RHF/UHF SOSCF.
+                        const Eigen::MatrixXd F_mo_new = C_new.transpose() * fock * C_new;
+                        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> occ_solver(
+                            F_mo_new.topLeftCorner(n_occ_i, n_occ_i));
+                        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> virt_solver(
+                            F_mo_new.bottomRightCorner(n_virt_i, n_virt_i));
+                        if (occ_solver.info() != Eigen::Success || virt_solver.info() != Eigen::Success)
+                            return std::unexpected(std::format(
+                                "DFT SOSCF: semicanonicalization eigensolve failed at iteration {}",
+                                iter));
+
+                        Eigen::MatrixXd C_canon(nbasis, nbasis);
+                        C_canon.leftCols(n_occ_i) = C_new.leftCols(n_occ_i) * occ_solver.eigenvectors();
+                        C_canon.rightCols(n_virt_i) = C_new.rightCols(n_virt_i) * virt_solver.eigenvectors();
+                        C_new = C_canon;
+
+                        eps_new.resize(nbasis);
+                        eps_new.head(n_occ_i) = occ_solver.eigenvalues();
+                        eps_new.tail(n_virt_i) = virt_solver.eigenvalues();
+
+                        HartreeFock::Logger::logging(
+                            HartreeFock::LogLevel::Info, "DFT SOSCF :",
+                            std::format(
+                                "step at iter {}: |g|={:.3e} v0={:.4f} eig={:.4e} converged={} "
+                                "ah_iters={} ah_residual={:.3e} cap_fired={}",
+                                iter, g.norm(), ah.v0, ah.eigenvalue, ah.converged, ah.iterations,
+                                ah.residual_norm, cap_fired));
+                    }
+                    else
+                    {
+                        auto diagonalization = diagonalize_in_ao_basis(
+                            calculator,
+                            X,
+                            fock_for_diagonalization,
+                            "KS");
+                        if (!diagonalization)
+                            return std::unexpected(diagonalization.error());
+                        C_new = diagonalization->coefficients;
+                        eps_new = diagonalization->energies;
+                        calculator._info._scf.alpha.mo_symmetry = diagonalization->mo_symmetry;
+                    }
+
+                    const Eigen::MatrixXd next_density = density_from_orbitals(C_new, n_occ, 2.0);
                     const auto metrics = HartreeFock::SCF::restricted_iteration_metrics(
                         density,
                         next_density,
@@ -2117,18 +2169,23 @@ namespace DFT::Driver
 
                     density = next_density;
                     previous_total_energy = total_energy;
+                    // SOSCF: keep the reference basis current every
+                    // iteration (not just while active), so the switch
+                    // iteration always has a valid C_soscf_prev the moment
+                    // it fires -- same discipline RHF/UHF SOSCF use.
+                    C_soscf_prev = C_new;
+                    eps_soscf_prev = eps_new;
 
                     HartreeFock::SCF::store_restricted_iteration(
                         calculator,
                         HartreeFock::SCF::RestrictedIterationData{
                             .density = density,
                             .fock = fock,
-                            .mo_energies = diagonalization->energies,
-                            .mo_coefficients = diagonalization->coefficients,
+                            .mo_energies = eps_new,
+                            .mo_coefficients = C_new,
                             .electronic_energy = electronic_energy,
                             .total_energy = total_energy},
                         metrics);
-                    calculator._info._scf.alpha.mo_symmetry = diagonalization->mo_symmetry;
 
                     result.total_energy = total_energy;
                     result.xc_energy = xc_grid->total_energy + ks_potential->exact_exchange_energy;
@@ -2146,6 +2203,7 @@ namespace DFT::Driver
                             "RKS Converged :",
                             std::format("E = {:.10f} Eh after {} iterations", total_energy, iter));
                         HartreeFock::Logger::blank();
+
                         return result;
                     }
                 }
@@ -2181,6 +2239,44 @@ namespace DFT::Driver
             diis_alpha.max_vecs = diis_beta.max_vecs = calculator._scf._DIIS_dim;
             const bool use_diis = calculator._scf._use_DIIS;
             double previous_total_energy = 0.0;
+
+            // SOSCF (D3.2, docs/SOSCF_DFT.md): the UKS analogue of
+            // the RKS branch above, generalized to the coupled alpha/beta
+            // step exactly the way U2 generalized S2 for UHF. Per-spin
+            // reference orbitals persisted every iteration; the (a,i)
+            // gradient/Hessian are evaluated in the PREVIOUS iteration's MO
+            // basis against THIS iteration's Fock. Packing convention:
+            // build_uhf_cphf_matrix's [0,nova) alpha + [nova,nova+novb)
+            // beta, virtual-major (a*n_occ + i) within each block -- NOT a
+            // third convention.
+            Eigen::MatrixXd Ca_soscf_prev, Cb_soscf_prev;
+            Eigen::VectorXd epsa_soscf_prev, epsb_soscf_prev;
+            unsigned int soscf_window_start = 0;
+            const bool soscf_uks_hybrid_blocked = x_functional.is_hybrid();
+            // D3.2.1: same one-time diagnostic D2.2.4 built for RKS -- a
+            // user requesting SOSCF (either trigger keyword) is told when
+            // the request cannot be honored rather than silently running
+            // plain DIIS.
+            if ((calculator._scf._scf_soscf_diis_tol > 0.0 ||
+                 calculator._scf._scf_soscf_start > 0))
+            {
+                std::string reason;
+                if (soscf_uks_hybrid_blocked)
+                    reason = "hybrid functional (exact-exchange response is not yet implemented "
+                             "for DFT SOSCF)";
+                else if (prepared.pcm)
+                    reason = "PCM solvation (not yet wired through DFT SOSCF)";
+                else if (calculator._use_sao_blocking)
+                    reason = "SAO/symmetry blocking (not yet wired through DFT SOSCF)";
+                if (!reason.empty())
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Warning,
+                        "DFT SOSCF :",
+                        std::format(
+                            "scf_soscf_start/scf_soscf_diis_tol requested but disabled for this "
+                            "run: {} -- running with plain DIIS only",
+                            reason));
+            }
 
             for (unsigned int iter = 1; iter <= max_iter; ++iter)
             {
@@ -2247,30 +2343,264 @@ namespace DFT::Driver
                     diis_error = std::max(diis_alpha.error_norm(), diis_beta.error_norm());
                 }
 
-                const Eigen::MatrixXd fock_alpha_diag =
-                    (use_diis && diis_alpha.ready()) ? diis_alpha.extrapolate() : fock_alpha;
-                const Eigen::MatrixXd fock_beta_diag =
-                    (use_diis && diis_beta.ready()) ? diis_beta.extrapolate() : fock_beta;
+                // ── SOSCF window selection (D3.2) ────────────────────────
+                // Structural copy of the RKS branch's own gate, which is
+                // itself a copy of RHF/UHF's -- same scf_soscf_* keywords,
+                // same criterion-or-fixed-iteration logic, same three
+                // exclusions (hybrid / PCM / SAO).
+                const bool sao_active_uks = calculator._use_sao_blocking &&
+                                            calculator._sao_transform.rows() ==
+                                                static_cast<Eigen::Index>(nbasis) &&
+                                            calculator._sao_transform.cols() ==
+                                                static_cast<Eigen::Index>(nbasis) &&
+                                            !calculator._sao_block_sizes.empty();
+                const bool soscf_enabled =
+                    (calculator._scf._scf_soscf_diis_tol > 0.0 ||
+                     calculator._scf._scf_soscf_start > 0) &&
+                    !sao_active_uks && !prepared.pcm && !soscf_uks_hybrid_blocked;
+                if (soscf_enabled && soscf_window_start == 0)
+                {
+                    const bool criterion_fires =
+                        calculator._scf._scf_soscf_diis_tol > 0.0
+                            ? (use_diis && diis_error > 0.0 &&
+                               diis_error < calculator._scf._scf_soscf_diis_tol &&
+                               iter >= calculator._scf._scf_soscf_min_iter)
+                            : (iter >= calculator._scf._scf_soscf_start);
+                    if (criterion_fires)
+                        soscf_window_start = iter;
+                }
+                const bool soscf_active =
+                    soscf_enabled && soscf_window_start > 0 &&
+                    iter < soscf_window_start + calculator._scf._scf_soscf_cycles &&
+                    Ca_soscf_prev.size() > 0;
+                if (soscf_window_start > 0 &&
+                    iter == soscf_window_start + calculator._scf._scf_soscf_cycles)
+                {
+                    diis_alpha.clear();
+                    diis_beta.clear();
+                }
 
-                auto alpha_diagonalization = diagonalize_in_ao_basis(
-                    calculator,
-                    X,
-                    fock_alpha_diag,
-                    "Alpha KS");
-                if (!alpha_diagonalization)
-                    return std::unexpected(alpha_diagonalization.error());
-                auto beta_diagonalization = diagonalize_in_ao_basis(
-                    calculator,
-                    X,
-                    fock_beta_diag,
-                    "Beta KS");
-                if (!beta_diagonalization)
-                    return std::unexpected(beta_diagonalization.error());
+                const bool do_diis_uks = use_diis && !soscf_active;
+                const Eigen::MatrixXd fock_alpha_diag =
+                    (do_diis_uks && diis_alpha.ready()) ? diis_alpha.extrapolate() : fock_alpha;
+                const Eigen::MatrixXd fock_beta_diag =
+                    (do_diis_uks && diis_beta.ready()) ? diis_beta.extrapolate() : fock_beta;
+
+                Eigen::MatrixXd Ca_new, Cb_new;
+                Eigen::VectorXd epsa_new, epsb_new;
+                std::vector<std::string> mo_sym_a_new, mo_sym_b_new;
+                if (soscf_active)
+                {
+                    // ── SOSCF (D3.2) ────────────────────────────────────
+                    // g_ai^sigma = F_mo^sigma(a,i), paired with the composed
+                    // polarized h_op UNSCALED. D3.1 measured the scale
+                    // convention against the true UKS E(kappa):
+                    // d2E_total/dkappa2 = 2 * H_bare_polarized with the
+                    // UHF-convention unscaled dP = C_a*C_i^T + C_i*C_a^T
+                    // (no closed-shell 2x). Since a Newton step depends only
+                    // on the ratio g/H and g_true = 2*g_bare, using
+                    // g = F_mo against the unscaled h_op reproduces the true
+                    // step -- exactly UHF's own conclusion.
+                    const int n_alpha_i = static_cast<int>(n_alpha);
+                    const int n_beta_i = static_cast<int>(n_beta);
+                    const int n_virt_a_i = static_cast<int>(nbasis) - n_alpha_i;
+                    const int n_virt_b_i = static_cast<int>(nbasis) - n_beta_i;
+                    const int nova = n_virt_a_i * n_alpha_i;
+                    const int novb = n_virt_b_i * n_beta_i;
+
+                    const Eigen::MatrixXd Ca_occ = Ca_soscf_prev.leftCols(n_alpha_i);
+                    const Eigen::MatrixXd Ca_virt = Ca_soscf_prev.rightCols(n_virt_a_i);
+                    const Eigen::MatrixXd Cb_occ = Cb_soscf_prev.leftCols(n_beta_i);
+                    const Eigen::MatrixXd Cb_virt = Cb_soscf_prev.rightCols(n_virt_b_i);
+
+                    const Eigen::MatrixXd Fa_mo =
+                        Ca_soscf_prev.transpose() * fock_alpha * Ca_soscf_prev;
+                    const Eigen::MatrixXd Fb_mo =
+                        Cb_soscf_prev.transpose() * fock_beta * Cb_soscf_prev;
+                    Eigen::VectorXd g(nova + novb);
+                    for (int a = 0; a < n_virt_a_i; ++a)
+                        for (int i = 0; i < n_alpha_i; ++i)
+                            g(a * n_alpha_i + i) = Fa_mo(n_alpha_i + a, i);
+                    for (int a = 0; a < n_virt_b_i; ++a)
+                        for (int i = 0; i < n_beta_i; ++i)
+                            g(nova + a * n_beta_i + i) = Fb_mo(n_beta_i + a, i);
+
+                    const Eigen::VectorXd diag_a =
+                        DFT::Driver::orbital_energy_difference_diagonal(epsa_soscf_prev, n_alpha_i);
+                    const Eigen::VectorXd diag_b =
+                        DFT::Driver::orbital_energy_difference_diagonal(epsb_soscf_prev, n_beta_i);
+
+                    const auto h_op = [&](const Eigen::VectorXd &x) -> Eigen::VectorXd
+                    {
+                        Eigen::MatrixXd xa_mat(n_virt_a_i, n_alpha_i);
+                        for (int a = 0; a < n_virt_a_i; ++a)
+                            for (int i = 0; i < n_alpha_i; ++i)
+                                xa_mat(a, i) = x(a * n_alpha_i + i);
+                        Eigen::MatrixXd xb_mat(n_virt_b_i, n_beta_i);
+                        for (int a = 0; a < n_virt_b_i; ++a)
+                            for (int i = 0; i < n_beta_i; ++i)
+                                xb_mat(a, i) = x(nova + a * n_beta_i + i);
+
+                        const Eigen::MatrixXd d1a = Ca_virt * xa_mat * Ca_occ.transpose();
+                        const Eigen::MatrixXd dPa = d1a + d1a.transpose();
+                        const Eigen::MatrixXd d1b = Cb_virt * xb_mat * Cb_occ.transpose();
+                        const Eigen::MatrixXd dPb = d1b + d1b.transpose();
+
+                        // J is built from the TOTAL trial density (same as
+                        // UKS's own per-iteration Coulomb build), one call.
+                        const Eigen::MatrixXd dJ = _compute_2e_j_direct(
+                            prepared.shell_pairs, dPa + dPb, calculator._shells.nbasis(),
+                            calculator._integral._engine, HartreeFock::ERIKernel::Coulomb,
+                            0.0, calculator._integral._tol_eri,
+                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
+                                                              : nullptr);
+                        const Eigen::VectorXd Ja_packed =
+                            DFT::Driver::pack_hessian_vector_product_cphf_order(dJ, Ca_occ, Ca_virt);
+                        const Eigen::VectorXd Jb_packed =
+                            DFT::Driver::pack_hessian_vector_product_cphf_order(dJ, Cb_occ, Cb_virt);
+
+                        const auto dV_xc = DFT::Driver::compute_analytic_xc_hessian_vector_product_polarized(
+                            prepared.molecular_grid, prepared.ao_grid,
+                            alpha_density, beta_density, dPa, dPb,
+                            x_functional, c_functional);
+                        if (!dV_xc)
+                            return Eigen::VectorXd::Zero(x.size());
+                        const Eigen::VectorXd xca_packed =
+                            DFT::Driver::pack_hessian_vector_product_cphf_order(
+                                dV_xc->first, Ca_occ, Ca_virt);
+                        const Eigen::VectorXd xcb_packed =
+                            DFT::Driver::pack_hessian_vector_product_cphf_order(
+                                dV_xc->second, Cb_occ, Cb_virt);
+
+                        Eigen::VectorXd out(nova + novb);
+                        out.head(nova) =
+                            diag_a.cwiseProduct(x.head(nova)) + Ja_packed + xca_packed;
+                        out.tail(novb) =
+                            diag_b.cwiseProduct(x.tail(novb)) + Jb_packed + xcb_packed;
+                        return out;
+                    };
+                    const auto g_op = [&g]() -> Eigen::VectorXd
+                    { return g; };
+
+                    HartreeFock::Correlation::CASSCF::AugHessianOptions ah_opts;
+                    ah_opts.ah_start_tol = std::max(1e-8, 0.1 * g.norm());
+                    Eigen::VectorXd x0 = -g;
+                    const double x0_norm = x0.norm();
+                    if (std::isfinite(x0_norm) && x0_norm > 0.0)
+                        x0 /= x0_norm;
+                    const HartreeFock::Correlation::CASSCF::AugHessianResult ah =
+                        HartreeFock::Correlation::CASSCF::solve_augmented_hessian(
+                            h_op, g_op, nullptr, x0, ah_opts);
+
+                    constexpr double kSoscfMaxRot = 0.20;
+                    Eigen::MatrixXd kappa_a = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                    Eigen::MatrixXd kappa_b = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                    bool cap_fired = false;
+                    if (ah.x.size() == nova + novb && ah.x.allFinite())
+                    {
+                        Eigen::VectorXd step = ah.x;
+                        const double max_elem = step.cwiseAbs().maxCoeff();
+                        if (max_elem > kSoscfMaxRot)
+                        {
+                            step *= kSoscfMaxRot / max_elem;
+                            cap_fired = true;
+                        }
+                        for (int a = 0; a < n_virt_a_i; ++a)
+                            for (int i = 0; i < n_alpha_i; ++i)
+                            {
+                                const double v = step(a * n_alpha_i + i);
+                                kappa_a(n_alpha_i + a, i) = v;
+                                kappa_a(i, n_alpha_i + a) = -v;
+                            }
+                        for (int a = 0; a < n_virt_b_i; ++a)
+                            for (int i = 0; i < n_beta_i; ++i)
+                            {
+                                const double v = step(nova + a * n_beta_i + i);
+                                kappa_b(n_beta_i + a, i) = v;
+                                kappa_b(i, n_beta_i + a) = -v;
+                            }
+                    }
+                    Ca_new = HartreeFock::Correlation::CASSCF::apply_orbital_rotation(
+                        Ca_soscf_prev, kappa_a, calculator._overlap);
+                    Cb_new = HartreeFock::Correlation::CASSCF::apply_orbital_rotation(
+                        Cb_soscf_prev, kappa_b, calculator._overlap);
+                    if (!Ca_new.allFinite() || !Cb_new.allFinite())
+                        return std::unexpected(std::format(
+                            "DFT UKS SOSCF: orbital rotation produced non-finite coefficients at "
+                            "iteration {}",
+                            iter));
+
+                    // Semicanonicalize each spin channel separately -- pure
+                    // gauge freedom, same as RHF/UHF/RKS SOSCF.
+                    auto semicanon = [&](const Eigen::MatrixXd &C_in, const Eigen::MatrixXd &F_in,
+                                         int n_occ_s, int n_virt_s, const char *tag)
+                        -> std::expected<std::pair<Eigen::MatrixXd, Eigen::VectorXd>, std::string>
+                    {
+                        const Eigen::MatrixXd F_mo_new = C_in.transpose() * F_in * C_in;
+                        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> occ_solver(
+                            F_mo_new.topLeftCorner(n_occ_s, n_occ_s));
+                        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> virt_solver(
+                            F_mo_new.bottomRightCorner(n_virt_s, n_virt_s));
+                        if (occ_solver.info() != Eigen::Success || virt_solver.info() != Eigen::Success)
+                            return std::unexpected(std::format(
+                                "DFT UKS SOSCF: {} semicanonicalization eigensolve failed at "
+                                "iteration {}",
+                                tag, iter));
+                        Eigen::MatrixXd C_canon(nbasis, nbasis);
+                        C_canon.leftCols(n_occ_s) = C_in.leftCols(n_occ_s) * occ_solver.eigenvectors();
+                        C_canon.rightCols(n_virt_s) = C_in.rightCols(n_virt_s) * virt_solver.eigenvectors();
+                        Eigen::VectorXd eps_out(nbasis);
+                        eps_out.head(n_occ_s) = occ_solver.eigenvalues();
+                        eps_out.tail(n_virt_s) = virt_solver.eigenvalues();
+                        return std::make_pair(C_canon, eps_out);
+                    };
+                    auto canon_a = semicanon(Ca_new, fock_alpha, n_alpha_i, n_virt_a_i, "alpha");
+                    if (!canon_a)
+                        return std::unexpected(canon_a.error());
+                    Ca_new = std::move(canon_a->first);
+                    epsa_new = std::move(canon_a->second);
+                    auto canon_b = semicanon(Cb_new, fock_beta, n_beta_i, n_virt_b_i, "beta");
+                    if (!canon_b)
+                        return std::unexpected(canon_b.error());
+                    Cb_new = std::move(canon_b->first);
+                    epsb_new = std::move(canon_b->second);
+
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Info, "DFT UKS SOSCF :",
+                        std::format(
+                            "step at iter {}: |g|={:.3e} v0={:.4f} eig={:.4e} converged={} "
+                            "ah_iters={} ah_residual={:.3e} cap_fired={}",
+                            iter, g.norm(), ah.v0, ah.eigenvalue, ah.converged, ah.iterations,
+                            ah.residual_norm, cap_fired));
+                }
+                else
+                {
+                    auto alpha_diagonalization = diagonalize_in_ao_basis(
+                        calculator,
+                        X,
+                        fock_alpha_diag,
+                        "Alpha KS");
+                    if (!alpha_diagonalization)
+                        return std::unexpected(alpha_diagonalization.error());
+                    auto beta_diagonalization = diagonalize_in_ao_basis(
+                        calculator,
+                        X,
+                        fock_beta_diag,
+                        "Beta KS");
+                    if (!beta_diagonalization)
+                        return std::unexpected(beta_diagonalization.error());
+                    Ca_new = std::move(alpha_diagonalization->coefficients);
+                    epsa_new = std::move(alpha_diagonalization->energies);
+                    Cb_new = std::move(beta_diagonalization->coefficients);
+                    epsb_new = std::move(beta_diagonalization->energies);
+                    mo_sym_a_new = std::move(alpha_diagonalization->mo_symmetry);
+                    mo_sym_b_new = std::move(beta_diagonalization->mo_symmetry);
+                }
 
                 const Eigen::MatrixXd next_alpha_density =
-                    density_from_orbitals(alpha_diagonalization->coefficients, n_alpha, 1.0);
+                    density_from_orbitals(Ca_new, n_alpha, 1.0);
                 const Eigen::MatrixXd next_beta_density =
-                    density_from_orbitals(beta_diagonalization->coefficients, n_beta, 1.0);
+                    density_from_orbitals(Cb_new, n_beta, 1.0);
                 const auto metrics = HartreeFock::SCF::unrestricted_iteration_metrics(
                     alpha_density,
                     beta_density,
@@ -2295,6 +2625,14 @@ namespace DFT::Driver
                 alpha_density = next_alpha_density;
                 beta_density = next_beta_density;
                 previous_total_energy = total_energy;
+                // SOSCF (D3.2): keep the per-spin reference basis current
+                // every iteration so the switch iteration always has a valid
+                // Ca_soscf_prev/Cb_soscf_prev the moment it fires -- same
+                // discipline RHF/UHF/RKS SOSCF use.
+                Ca_soscf_prev = Ca_new;
+                Cb_soscf_prev = Cb_new;
+                epsa_soscf_prev = epsa_new;
+                epsb_soscf_prev = epsb_new;
 
                 HartreeFock::SCF::store_unrestricted_iteration(
                     calculator,
@@ -2303,15 +2641,15 @@ namespace DFT::Driver
                         .beta_density = beta_density,
                         .alpha_fock = fock_alpha,
                         .beta_fock = fock_beta,
-                        .alpha_mo_energies = alpha_diagonalization->energies,
-                        .beta_mo_energies = beta_diagonalization->energies,
-                        .alpha_mo_coefficients = alpha_diagonalization->coefficients,
-                        .beta_mo_coefficients = beta_diagonalization->coefficients,
+                        .alpha_mo_energies = epsa_new,
+                        .beta_mo_energies = epsb_new,
+                        .alpha_mo_coefficients = Ca_new,
+                        .beta_mo_coefficients = Cb_new,
                         .electronic_energy = electronic_energy,
                         .total_energy = total_energy},
                     metrics);
-                calculator._info._scf.alpha.mo_symmetry = alpha_diagonalization->mo_symmetry;
-                calculator._info._scf.beta.mo_symmetry = beta_diagonalization->mo_symmetry;
+                calculator._info._scf.alpha.mo_symmetry = mo_sym_a_new;
+                calculator._info._scf.beta.mo_symmetry = mo_sym_b_new;
 
                 result.total_energy = total_energy;
                 result.xc_energy = xc_grid->total_energy + ks_potential->exact_exchange_energy;
@@ -2329,6 +2667,7 @@ namespace DFT::Driver
                         "UKS Converged :",
                         std::format("E = {:.10f} Eh after {} iterations", total_energy, iter));
                     HartreeFock::Logger::blank();
+
                     return result;
                 }
             }
@@ -3198,6 +3537,161 @@ namespace DFT::Driver
         }
 
     } // namespace
+
+    // Moved out of the anonymous namespace above (F3.1,
+    // docs/DFT_ANALYTIC_FXC_HESSIAN.md) so F3's own Hessian-vector-
+    // product verification can call the FD-kernel oracle directly from a
+    // standalone test binary. Declared in driver.h; bodies unchanged from
+    // their original internal-linkage form.
+    Eigen::MatrixXd transition_density_matrix(
+        const Eigen::Ref<const Eigen::VectorXd> &occupied,
+        const Eigen::Ref<const Eigen::VectorXd> &virtual_orbital)
+    {
+        const Eigen::MatrixXd unsymmetrized = occupied * virtual_orbital.transpose();
+        return (0.5 * (unsymmetrized + unsymmetrized.transpose())).eval();
+    }
+
+    std::expected<XCMatrixContribution, std::string> evaluate_xc_matrix_from_spin_densities(
+        const PreparedSystem &prepared,
+        const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
+        const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
+        const DFT::XC::Functional &exchange_functional,
+        const DFT::XC::Functional &correlation_functional)
+    {
+        auto xc_grid = evaluate_xc_on_grid(
+            prepared.molecular_grid,
+            prepared.ao_grid,
+            alpha_density,
+            beta_density,
+            exchange_functional,
+            correlation_functional);
+        if (!xc_grid)
+            return std::unexpected(xc_grid.error());
+
+        auto xc_matrix = assemble_xc_matrix(
+            prepared.molecular_grid,
+            prepared.ao_grid,
+            *xc_grid);
+        if (!xc_matrix)
+            return std::unexpected(xc_matrix.error());
+
+        return *xc_matrix;
+    }
+
+    std::expected<std::vector<std::vector<Eigen::MatrixXd>>, std::string> build_unrestricted_xc_kernel_blocks(
+        const PreparedSystem &prepared,
+        const std::vector<ResponseExcitationSpace> &spaces,
+        const Eigen::Ref<const Eigen::MatrixXd> &ground_alpha_density,
+        const Eigen::Ref<const Eigen::MatrixXd> &ground_beta_density,
+        const DFT::XC::Functional &exchange_functional,
+        const DFT::XC::Functional &correlation_functional)
+    {
+        const int nspaces = static_cast<int>(spaces.size());
+        std::vector<std::vector<Eigen::MatrixXd>> blocks(
+            static_cast<std::size_t>(nspaces),
+            std::vector<Eigen::MatrixXd>(static_cast<std::size_t>(nspaces)));
+
+        for (int target = 0; target < nspaces; ++target)
+            for (int source = 0; source < nspaces; ++source)
+                blocks[static_cast<std::size_t>(target)][static_cast<std::size_t>(source)] =
+                    Eigen::MatrixXd::Zero(spaces[static_cast<std::size_t>(target)].nov(),
+                                          spaces[static_cast<std::size_t>(source)].nov());
+
+        for (int source = 0; source < nspaces; ++source)
+        {
+            const ResponseExcitationSpace &source_space = spaces[static_cast<std::size_t>(source)];
+            for (int j = 0; j < source_space.n_occ; ++j)
+                for (int b = 0; b < source_space.n_virt; ++b)
+                {
+                    const Eigen::MatrixXd delta_density =
+                        transition_density_matrix(source_space.C_occ.col(j), source_space.C_virt.col(b));
+                    const double delta_scale = std::max(1.0, delta_density.cwiseAbs().maxCoeff());
+                    const double step = 1.0e-5 / delta_scale;
+
+                    Eigen::MatrixXd alpha_plus = ground_alpha_density;
+                    Eigen::MatrixXd alpha_minus = ground_alpha_density;
+                    Eigen::MatrixXd beta_plus = ground_beta_density;
+                    Eigen::MatrixXd beta_minus = ground_beta_density;
+
+                    if (source == 0)
+                    {
+                        alpha_plus += step * delta_density;
+                        alpha_minus -= step * delta_density;
+                    }
+                    else
+                    {
+                        beta_plus += step * delta_density;
+                        beta_minus -= step * delta_density;
+                    }
+
+                    auto plus = evaluate_xc_matrix_from_spin_densities(
+                        prepared,
+                        alpha_plus,
+                        beta_plus,
+                        exchange_functional,
+                        correlation_functional);
+                    if (!plus)
+                        return std::unexpected("TDDFT XC kernel (+) evaluation failed: " + plus.error());
+
+                    auto minus = evaluate_xc_matrix_from_spin_densities(
+                        prepared,
+                        alpha_minus,
+                        beta_minus,
+                        exchange_functional,
+                        correlation_functional);
+                    if (!minus)
+                        return std::unexpected("TDDFT XC kernel (-) evaluation failed: " + minus.error());
+
+                    const Eigen::MatrixXd delta_v_alpha =
+                        (plus->alpha - minus->alpha) / (2.0 * step);
+                    const Eigen::MatrixXd delta_v_beta =
+                        (plus->beta - minus->beta) / (2.0 * step);
+
+                    const int source_column = source_space.flat_index(j, b);
+                    for (int target = 0; target < nspaces; ++target)
+                    {
+                        const ResponseExcitationSpace &target_space = spaces[static_cast<std::size_t>(target)];
+                        const Eigen::MatrixXd &delta_v = (target == 0) ? delta_v_alpha : delta_v_beta;
+                        const Eigen::MatrixXd projected =
+                            target_space.C_occ.transpose() * delta_v * target_space.C_virt;
+
+                        for (int i = 0; i < target_space.n_occ; ++i)
+                            for (int a = 0; a < target_space.n_virt; ++a)
+                                blocks[static_cast<std::size_t>(target)][static_cast<std::size_t>(source)](
+                                    target_space.flat_index(i, a),
+                                    source_column) = projected(i, a);
+                    }
+                }
+        }
+
+        return blocks;
+    }
+
+    std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string> build_closed_shell_xc_kernel_blocks(
+        const PreparedSystem &prepared,
+        const ResponseExcitationSpace &space,
+        const Eigen::Ref<const Eigen::MatrixXd> &restricted_density,
+        const DFT::XC::Functional &exchange_functional,
+        const DFT::XC::Functional &correlation_functional)
+    {
+        const Eigen::MatrixXd ground_alpha = 0.5 * restricted_density;
+        const Eigen::MatrixXd ground_beta = 0.5 * restricted_density;
+        const std::vector<ResponseExcitationSpace> duplicated_spaces = {space, space};
+
+        auto blocks = build_unrestricted_xc_kernel_blocks(
+            prepared,
+            duplicated_spaces,
+            ground_alpha,
+            ground_beta,
+            exchange_functional,
+            correlation_functional);
+        if (!blocks)
+            return std::unexpected(blocks.error());
+
+        return std::make_pair(
+            (*blocks)[0][0],
+            (*blocks)[0][1]);
+    }
 
     std::expected<XCGridEvaluation, std::string>
     evaluate_current_density_and_xc(

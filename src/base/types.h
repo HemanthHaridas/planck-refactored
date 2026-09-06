@@ -432,7 +432,7 @@ namespace HartreeFock
         int _cc_generated_rank = 4;        // Excitation rank for the generated arbitrary-order RCC path (cc4=4, cc5=5, cc6=6)
         bool _cc_warm_start = true;        // Warm-start the generated arbitrary-order RCC path from a rank-(n-1) solve (cc_warm_start .false. = cold)
 
-        // SOSCF (docs/SOSCF_SCOPE.md, S2/S3): fixed-iteration switch,
+        // SOSCF (docs/SOSCF.md, S2/S3): fixed-iteration switch,
         // superseded by the DIIS-error criterion below once
         // _scf_soscf_diis_tol > 0. 0 = SOSCF off entirely (pure DIIS, the
         // unconditional default). Still honored directly when

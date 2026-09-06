@@ -9,7 +9,7 @@ reading the source, and researchers auditing the implementation.
 Planck is a compact electronic structure program built around Gaussian-basis
 self-consistent field theory. It implements:
 
-- Restricted and unrestricted Hartree-Fock (RHF/UHF) with DIIS acceleration
+- Restricted and unrestricted Hartree-Fock (RHF/UHF) with DIIS acceleration and optional second-order SCF (augmented-Hessian orbital step) for RHF, UHF, RKS, and UKS
 - Kohn-Sham DFT (RKS/UKS) with LDA, GGA, hybrid, range-separated-hybrid, and double-hybrid exchange-correlation functionals via libxc
 - Obara-Saika, Head-Gordon-Pople, and Rys-quadrature two-electron integral engines
 - Cartesian and real spherical-harmonic Gaussian basis functions
@@ -1213,6 +1213,95 @@ Run to full, unbounded convergence with no DIIS handoff at all, SOSCF does
 reach the same energy as DIIS — but the practical, transient-window default
 converges faster on the systems it has been checked against, so pure SOSCF
 is a correctness fallback rather than the recommended mode.
+
+#### UHF: the Same Newton Step, One Per Spin Channel
+
+The unrestricted case reuses the augmented-Hessian solver and the Cayley
+map unchanged; the only structural change is that the orbital gradient and
+Hessian are now two coupled blocks. The rotation matrix splits into a
+\(\boldsymbol\kappa^\alpha\) and a \(\boldsymbol\kappa^\beta\), the gradient
+is \((g^\alpha_{ai}, g^\beta_{ai}) = (F^{\text{MO},\alpha}_{ai},
+F^{\text{MO},\beta}_{ai})\) packed into one vector, and the Hessian is the
+coupled \(\alpha/\beta\) CPHF matrix `build_uhf_cphf_matrix` already builds
+for the UMP2 Z-vector equations — split out into a standalone builder so
+SOSCF can call it every iteration. One shared step vector comes back from
+the solver; it is unpacked into \(\boldsymbol\kappa^\alpha\) and
+\(\boldsymbol\kappa^\beta\) and `apply_orbital_rotation` is called once per
+spin channel (the same helper, not a forked copy).
+
+Two things had to be measured rather than assumed. First, the
+UHF gradient/Hessian scale: finite-differencing `build_uhf_cphf_matrix`
+against the true \(E(\boldsymbol\kappa)\) over a full sweep of every
+occupied-virtual direction gives a clean, universal
+\(g_{\text{FD}}/g_{\text{used}} = 2\) — *not* the factor of 4 that appears
+in RHF's Hessian formula from the Coulomb term's prefactor. Because a
+Newton step depends only on the ratio \(g/H\), and \(H_{\text{true}} =
+2\,\mathbf A\) matches, using the unscaled \(\mathbf g = \mathbf F^{\text{MO}}\)
+against the unscaled \(\mathbf A\) still reproduces the true step — the same
+conclusion as RHF, at a different constant. Second, the level shift: UHF's
+loop can stage a level-shifted Fock before diagonalizing, and the SOSCF
+gradient reads the *unshifted* Fock, so running both at once would silently
+ignore the user's level-shift request. Planck makes them mutually exclusive
+in code — requesting SOSCF with `level_shift > 0` simply keeps DIIS.
+
+`docs/SOSCF_UHF.md` records the full derivation and the finite-difference
+sweep.
+
+#### DFT: the Hessian Has No Single Matrix
+
+For Kohn-Sham DFT there is no `build_rhf_cphf_matrix` analogue — the KS
+orbital Hessian is assembled from three pieces every time it acts on a
+trial vector \(\mathbf x\):
+\[
+(\mathbf H\,\mathbf x)_{ai} =
+    (\varepsilon_a - \varepsilon_i)\,x_{ai}
+    \;+\; \big[\delta J(\delta P)\big]^{\text{MO}}_{ai}
+    \;+\; \big[\delta V_{xc}(\delta P)\big]^{\text{MO}}_{ai}.
+\]
+The first term is the orbital-energy difference (pure bookkeeping). The
+second is the Coulomb response: \(J\) is linear in the density, so
+\(\delta J(\delta P)\) is just the ordinary memory-direct Coulomb build
+called on the *trial* density \(\delta P\) instead of the SCF density — no
+new code. The third term is the one that needed real work.
+
+\(\delta V_{xc}\) is the directional derivative of the XC potential — the
+XC *kernel* \(f_{xc} = \delta^2 E_{xc}/\delta\rho^2\) contracted against
+the trial response density \(\delta\rho\) (and \(\delta\nabla\rho\) for a
+GGA) on the grid. libxc exposes analytic second derivatives
+(`xc_lda_fxc` / `xc_gga_fxc`), but Planck's wrapper had only ever called
+the first-derivative `exc_vxc` family. Wiring `f_{xc}` through and deriving
+the grid contraction — for a GGA it is a three-term chain rule, and the
+term most easily dropped comes from \(\nabla\rho\) itself being an argument
+of the existing gradient-coupling factor — is a genuine derivation, not a
+port. Each term was checked point-by-point against a finite-difference
+kernel (the same one TDDFT uses), and once end-to-end against PySCF's own
+`nr_rks_fxc`. `docs/DFT_ANALYTIC_FXC_HESSIAN.md` covers the algebra;
+`docs/SOSCF_DFT.md` covers wiring it into the RKS and UKS loops.
+
+Two teaching points fall out of this. **The right identity to test the
+Hessian against is not the obvious one.** The naive check
+\(\text{Tr}(\delta P\cdot\delta V_{xc}) = \partial^2 E_{xc}/\partial\kappa^2\)
+is *wrong* — it is missing a term, because the Cayley transform is
+nonlinear in \(\boldsymbol\kappa\), so \(P(\boldsymbol\kappa)\) has
+curvature (\(d^2P/d\kappa^2 \neq 0\)) and that curvature contracted against
+the ground-state \(V_{xc}\) is a real, separate contribution. It is exactly
+the orbital-energy-difference term every Newton/CPHF formulation already
+carries. The lesson: verify the *fully composed* \(\mathbf H\cdot\mathbf x\)
+against a finite difference of the *total* energy, never one piece of it
+against a piece of the energy. **And "pure functionals only" for now** —
+a hybrid's exact-exchange response needs the same \(K\)-response machinery
+`build_rhf_cphf_matrix` already has for HF but which is unbuilt for the KS
+path, so requesting SOSCF on a hybrid (or with PCM or symmetry blocking)
+prints a one-line warning and keeps DIIS rather than running an incomplete
+Hessian.
+
+On wall-clock: the analytic \(f_{xc}\) contraction is \(O(1)\) grid passes
+regardless of how many Krylov iterations the solver takes, versus
+\(O(n_{\text{occ}} n_{\text{virt}})\) grid passes to build the
+finite-difference kernel once. For UKS this is a measured 3–5× per-Newton-
+step win at every size tested; for RKS it is roughly break-even at the
+modest sizes measured, because the real Krylov iteration counts sit right
+at the crossover.
 
 ---
 
@@ -6000,6 +6089,16 @@ The KS SCF loop follows the same outer structure as the HF loop:
 
 For RKS the alpha and beta XC contributions are identical; for UKS they differ because \(\rho_\alpha \neq \rho_\beta\).
 
+Step 2f can optionally be replaced by a second-order Newton step in orbital
+rotation space (§7, SOSCF) for pure functionals. The only DFT-specific
+piece is the orbital Hessian's XC contribution: instead of a stored ERI
+transform, it is an analytic contraction of libxc's second-derivative
+kernel \(f_{xc}\) against the trial response density on the grid
+(`compute_analytic_xc_hessian_vector_product`,
+`src/dft/analytic_hessian.cpp`). Hybrids, PCM, and symmetry blocking fall
+back to DIIS with a warning. See §7's "DFT: the Hessian Has No Single
+Matrix".
+
 ### DFT Code Map
 
 | Task | File | Function/struct |
@@ -6014,7 +6113,9 @@ For RKS the alpha and beta XC contributions are identical; for UKS they differ b
 | XC energy and potential on grid | `src/dft/xc_grid.cpp` | `evaluate_xc_on_grid` |
 | XC matrix \(V^{xc}_{\mu\nu}\) | `src/dft/ks_matrix.cpp` | `assemble_xc_matrix` |
 | Full KS potential | `src/dft/ks_matrix.cpp` | `combine_ks_potential` |
-| KS-DFT main loop | `src/dft/driver.cpp` | `DFT::Driver::run` |
+| KS-DFT main loop | `src/dft/driver.cpp` | `DFT::Driver::run`, `run_ks_scf_scaffold` |
+| Analytic XC Hessian-vector product (`fxc`, for SOSCF) | `src/dft/analytic_hessian.cpp` | `compute_analytic_xc_hessian_vector_product{,_polarized}`, `orbital_energy_difference_diagonal` |
+| libxc `fxc` wrapper | `src/dft/base/wrapper.h` | `evaluate_{lda,gga}_fxc` |
 | DFT entry point | `src/dft/main.cpp` | `main` |
 
 ### TD-DFT / Linear Response
@@ -7229,11 +7330,11 @@ driver.cpp
           G = _compute_fock_rhf(eri, P) or _compute_2e_fock(shell_pairs, P)
           F = H_core + G
           DIIS.push(F, e)
-          if SOSCF window active (RHF only, §7):
+          if SOSCF window active (RHF or UHF, §7):
               g, A = build orbital gradient/Hessian from PREVIOUS C, THIS F
-                     (build_rhf_cphf_matrix, rhf_response.cpp)
+                     (build_rhf_cphf_matrix / build_uhf_cphf_matrix, {rhf,uhf}_response.cpp)
               solve_augmented_hessian(g, A) → κ  (aug-hessian.h, shared with CASSCF)
-              C = apply_orbital_rotation(C_prev, κ)   → new C directly
+              C = apply_orbital_rotation(C_prev, κ)   → new C directly (per spin for UHF)
           else:
               F' = X^T F X
               diagonalize F' → C', ε
@@ -7317,7 +7418,8 @@ driver.cpp
 | UHF SCF | `src/scf/scf.cpp` | `run_uhf` |
 | ROHF SCF | `src/scf/scf.cpp` | `run_rohf`, `_rohf_effective_fock`, `_reorder_rohf_orbitals` |
 | DIIS | `src/base/types.h` | `DIISState::push`, `DIISState::extrapolate` |
-| SOSCF (RHF augmented-Hessian orbital step) | `src/scf/scf.cpp` | the SOSCF branch inside `run_rhf`, using `build_rhf_cphf_matrix` and the shared `solve_augmented_hessian` / `apply_orbital_rotation` from CASSCF |
+| SOSCF (RHF/UHF augmented-Hessian orbital step) | `src/scf/scf.cpp` | the SOSCF branch inside `run_rhf` / `run_uhf`, using `build_rhf_cphf_matrix` / `build_uhf_cphf_matrix` and the shared `solve_augmented_hessian` / `apply_orbital_rotation` from CASSCF |
+| SOSCF (RKS/UKS analytic-`fxc` orbital step) | `src/dft/driver.cpp` | the SOSCF branch inside `run_ks_scf_scaffold`, composing `orbital_energy_difference_diagonal` + Coulomb response + `compute_analytic_xc_hessian_vector_product{,_polarized}` (`src/dft/analytic_hessian.cpp`) into `h_op` |
 | Symmetry detection | `src/symmetry/symmetry.cpp` | `detectSymmetry` |
 | SAO basis | `src/symmetry/mo_symmetry.cpp` | `build_sao_basis` |
 | MO irrep labels | `src/symmetry/mo_symmetry.cpp` | `assign_mo_symmetry` |
@@ -7416,7 +7518,8 @@ driver.cpp
 | Conventional and direct SCF | Complete |
 | Schwarz screening | Complete |
 | DIIS acceleration | Complete |
-| SOSCF (RHF, augmented-Hessian orbital step) | Complete. Runs as a transient window (default 3 iterations, `scf_soscf_cycles`) that hands back to DIIS; trigger by fixed iteration (`scf_soscf_start`) or DIIS-error threshold (`scf_soscf_diis_tol`/`scf_soscf_min_iter`). Reuses the CASSCF augmented-Hessian solver and the RHF CPHF orbital Hessian unchanged. Off by default. UHF/ROHF, SAO, and PCM not yet covered |
+| SOSCF (RHF/UHF, augmented-Hessian orbital step) | Complete. Runs as a transient window (default 3 iterations, `scf_soscf_cycles`) that hands back to DIIS; trigger by fixed iteration (`scf_soscf_start`) or DIIS-error threshold (`scf_soscf_diis_tol`/`scf_soscf_min_iter`). Reuses the CASSCF augmented-Hessian solver and the RHF/UHF CPHF orbital Hessian unchanged (UHF: `build_uhf_cphf_matrix` split out of `solve_uhf_cphf`, per-spin Cayley step). Off by default. ROHF, SAO, and PCM not yet covered; UHF and an active level shift are mutually exclusive |
+| SOSCF (RKS/UKS, analytic-`fxc` orbital step) | Complete for pure (non-hybrid) functionals. Same transient-window machinery. The KS orbital Hessian has no single matrix: `h_op` = orbital-energy diagonal + Coulomb response on the trial density + an analytic XC second-derivative contraction (`compute_analytic_xc_hessian_vector_product{,_polarized}`, LDA + GGA), wired through libxc's `xc_{lda,gga}_fxc`. Hybrid / range-separated functionals, PCM, and SAO blocking print a warning and fall back to DIIS. Off by default |
 | Level shifting | Complete |
 | Point group detection and SAO blocking | Complete |
 | MO irrep labeling | Complete |

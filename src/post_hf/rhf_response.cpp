@@ -88,7 +88,7 @@ namespace HartreeFock::Correlation
         const Eigen::MatrixXd &mo_coeff,
         const Eigen::VectorXd &mo_energy)
     {
-        // SOSCF (docs/SOSCF_SCOPE.md, S2) calls this mid-iteration, before
+        // SOSCF (docs/SOSCF.md, S2) calls this mid-iteration, before
         // calculator._info._is_converged is ever set -- the whole point is an
         // orbital Hessian built from the CURRENT (not yet converged) MO
         // coefficients/energies. The function only ever reads mo_coeff/

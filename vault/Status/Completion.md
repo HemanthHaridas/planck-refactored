@@ -37,6 +37,38 @@ historical design context, but they are no longer the source of truth for
 - Wavefunction stability analysis for RHF/UHF, plus optional instability following
 - Mulliken, Lowdin, Mayer, dipole, quadrupole, and related property reporting
 - PCM solvation for single-point RHF/UHF runs
+- **SOSCF for RHF, UHF, RKS, and UKS** (second-order, augmented-Hessian
+  orbital step convergence acceleration), reusing the CASSCF CIAH solver
+  and `apply_orbital_rotation` unchanged for all four. Runs as a transient
+  window that hands back to DIIS by default (matching ORCA's own handoff),
+  or to full unbounded convergence (same energy). Switch trigger is a fixed
+  iteration or the DIIS error norm. Off by default; composes cleanly with
+  SAD. All four reach fully-converged DIIS's energy to all 10 digits on
+  genuinely open-shell (UHF/UKS) or closed-shell (RHF/RKS) systems, with
+  superlinear gradient shrinkage.
+  - **RHF/UHF** (`docs/SOSCF.md`, `docs/SOSCF_UHF.md`):
+    reuse `build_rhf_cphf_matrix` / `build_uhf_cphf_matrix` unchanged
+    (`build_uhf_cphf_matrix` split out of `solve_uhf_cphf` for this). UHF
+    is FD-verified `g_true=2·g_used`, `H_true=2·Amat`; per-spin Cayley
+    rotation + semicanonicalization; mutually exclusive with an active
+    level shift.
+  - **RKS/UKS** (`docs/SOSCF_DFT.md`, built on `docs/DFT_ANALYTIC_FXC_HESSIAN.md`):
+    the KS orbital Hessian's XC piece
+    is an **analytic** `fxc` Hessian-vector product
+    (`compute_analytic_xc_hessian_vector_product{,_polarized}`,
+    `src/dft/analytic_hessian.cpp`, LDA + GGA), NOT the
+    `O(n_occ·n_virt)`-grid-pass FD-kernel oracle. `h_op` composes it with
+    the orbital-energy-difference diagonal and a Coulomb response from the
+    trial density; cross-checked against PySCF's `gen_g_hop_rhf`. **Pure
+    (non-hybrid) functionals only** — hybrid / PCM / SAO emit a one-time
+    warning and fall back to plain DIIS. The UKS analytic path is a
+    measurable 3–5× per-Newton-step wall-clock win at every size tested
+    (D3.5); the RKS path is correct and correctly-scaling but not reliably
+    faster than the FD-kernel alternative at the two modest sizes measured
+    (D2.5).
+  - **ROHF SOSCF is not done** — needs new ROHF orbital-response/CPHF
+    machinery (no such code in the tree), the same gap behind
+    ROHF-MP2/stability/PCM. See Open Work.
 
 ### Direct SCF and full point-group symmetry
 

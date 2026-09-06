@@ -325,7 +325,18 @@ list(REMOVE_ITEM POSTHF_SRC ${SRC_DIR}/post_hf/casscf.cpp)
 #   mp2_gradient.cpp     — RMP2/UMP2 gradient intermediates, referenced from
 #                          gradient/gradient.cpp
 #   rhf_response.cpp     — solve_rhf_cphf, used by mp2_gradient.cpp
-# CASSCF, RASSCF, and coupled-cluster sources are intentionally excluded.
+#   casscf/orbital.cpp, casscf/aug-hessian.cpp,
+#   casscf/aug-hessian-orbital.cpp — apply_orbital_rotation /
+#                          solve_augmented_hessian, called unconditionally
+#                          from run_rhf's/run_uhf's SOSCF branch (scf/scf.cpp,
+#                          which planck-dft links for its shared SAD/DIIS
+#                          helpers even though it never calls run_rhf/run_uhf
+#                          itself). Their own includes are limited to
+#                          integrals/os.h, post_hf/integrals.h, and
+#                          post_hf/ri/ri_eri.h, all already listed above, so
+#                          this pulls in no other CASSCF machinery.
+# The rest of CASSCF, RASSCF, and coupled-cluster sources are intentionally
+# still excluded.
 set(POSTHF_DFT_SRC
     ${SRC_DIR}/post_hf/integrals.h
     ${SRC_DIR}/post_hf/integrals.cpp
@@ -345,6 +356,12 @@ set(POSTHF_DFT_SRC
     ${SRC_DIR}/post_hf/rhf_response.cpp
     ${SRC_DIR}/post_hf/uhf_response.h
     ${SRC_DIR}/post_hf/uhf_response.cpp
+    ${SRC_DIR}/post_hf/casscf/orbital.h
+    ${SRC_DIR}/post_hf/casscf/orbital.cpp
+    ${SRC_DIR}/post_hf/casscf/aug-hessian.h
+    ${SRC_DIR}/post_hf/casscf/aug-hessian.cpp
+    ${SRC_DIR}/post_hf/casscf/aug-hessian-orbital.h
+    ${SRC_DIR}/post_hf/casscf/aug-hessian-orbital.cpp
 )
 
 file(GLOB GRADIENT_SRC CONFIGURE_DEPENDS
@@ -385,6 +402,8 @@ set(HF_MAIN_SRC
 # DFT compute/CLI sources without the entry point, so multiple front ends
 # (planck-dft, planck-mpi) can share the DFT driver.
 set(DFT_LIB_SRC
+    ${SRC_DIR}/dft/analytic_hessian.cpp
+    ${SRC_DIR}/dft/analytic_hessian.h
     ${SRC_DIR}/dft/ao_grid.h
     ${SRC_DIR}/dft/dft_gradient.cpp
     ${SRC_DIR}/dft/dft_gradient.h
@@ -392,6 +411,8 @@ set(DFT_LIB_SRC
     ${SRC_DIR}/dft/driver.h
     ${SRC_DIR}/dft/ks_matrix.cpp
     ${SRC_DIR}/dft/ks_matrix.h
+    ${SRC_DIR}/dft/response_packing.cpp
+    ${SRC_DIR}/dft/response_packing.h
     ${SRC_DIR}/dft/xc_grid.cpp
     ${SRC_DIR}/dft/xc_grid.h
     ${SRC_DIR}/dft/base/angular.h
@@ -788,6 +809,83 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/dft_functional_support.cpp
     )
 
+    # F1 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): isolated check that libxc's
+    # own analytic second derivative (xc_lda_fxc/xc_gga_fxc) agrees with a
+    # finite difference of libxc's own first derivative (vrho/vsigma).
+    # Header-only wrapper, so no src/ sources beyond libxc itself.
+    add_executable(planck-dft-fxc-selfcheck
+        ${CMAKE_SOURCE_DIR}/tests/dft_fxc_selfcheck.cpp
+    )
+
+    # F3.3 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): the GGA analytic
+    # Hessian-vector product's T1/T2/T3 terms, verified as isolated
+    # point-level checks against libxc's own finite difference. Header-only
+    # wrapper, same as the fxc selfcheck above.
+    add_executable(planck-dft-gga-hessian-selfcheck
+        ${CMAKE_SOURCE_DIR}/tests/dft_gga_hessian_selfcheck.cpp
+    )
+
+    # F3.4.1 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): confirms the component
+    # ORDERING of libxc's polarized-GGA v2rhosigma (6 slots) and v2sigma2 (6
+    # slots) arrays by individually finite-differencing each slot -- libxc's
+    # header documents component counts but not their order. Header-only
+    # wrapper, same as the other fxc selfchecks.
+    add_executable(planck-dft-gga-polarized-fxc-ordering
+        ${CMAKE_SOURCE_DIR}/tests/dft_gga_polarized_fxc_ordering.cpp
+    )
+
+    # F3.4.2 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): the polarized-GGA
+    # analytic Hessian-vector product's alpha-channel, alpha-only-trial
+    # T1+T2+T3+T4 terms, verified as an isolated point-level check against
+    # libxc's own finite difference. Header-only wrapper, same as the other
+    # fxc selfchecks.
+    add_executable(planck-dft-gga-polarized-hessian-selfcheck
+        ${CMAKE_SOURCE_DIR}/tests/dft_gga_polarized_hessian_selfcheck.cpp
+    )
+
+    # F3.5 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): MO projection and (a,i)
+    # packing -- verifies pack_hessian_vector_product_cphf_order against an
+    # independent hand-computed reference. Needs only response_packing.cpp
+    # (Eigen only, no libxc), kept out of driver.cpp specifically so this
+    # test does not link the whole KS-loop driver.
+    add_executable(planck-dft-hessian-vector-packing
+        ${CMAKE_SOURCE_DIR}/tests/dft_hessian_vector_packing.cpp
+        ${SRC_DIR}/dft/response_packing.cpp
+    )
+
+    # D2.0 (docs/SOSCF_UHF_DFT_SCOPE.md): verifies
+    # compute_analytic_xc_hessian_vector_product (the production function
+    # promoting F3's point-level algebra) against F3's own formulas, called
+    # through the new function's actual signature on a synthetic single-
+    # point grid. Needs xc_grid.cpp (density-on-grid evaluator) alongside
+    # analytic_hessian.cpp, same as the other DFT grid-consuming tests.
+    add_executable(planck-dft-analytic-hessian-production
+        ${CMAKE_SOURCE_DIR}/tests/dft_analytic_hessian_production.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+    )
+
+    # D3.0 (docs/SOSCF_UHF_DFT_SCOPE.md): the polarized (UKS) sibling of the
+    # above -- verifies compute_analytic_xc_hessian_vector_product_polarized
+    # against F3.4's own point-level formulas (check_mixed/check_beta,
+    # tests/dft_gga_polarized_hessian_selfcheck.cpp), called through the new
+    # function's actual signature on a synthetic single-point grid.
+    add_executable(planck-dft-analytic-hessian-polarized-production
+        ${CMAKE_SOURCE_DIR}/tests/dft_analytic_hessian_polarized_production.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+    )
+
+    # F2 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): confirms the existing
+    # density-on-grid evaluator (xc_grid.cpp) is exactly linear in the
+    # density matrix, so it needs no changes to serve a Hessian-vector
+    # product's response-density input. Needs xc_grid.cpp itself (which
+    # transitively pulls in libxc via wrapper.h, same as the fxc selfcheck).
+    add_executable(planck-dft-density-response-linearity
+        ${CMAKE_SOURCE_DIR}/tests/dft_density_response_linearity.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+    )
+
     add_executable(planck-eri-derivative-kernels
         ${CMAKE_SOURCE_DIR}/tests/eri_derivative_kernels.cpp
         ${SRC_DIR}/basis/basis.cpp
@@ -846,6 +944,25 @@ if(BUILD_TESTING)
 
     add_executable(planck-fock-accumulate
         ${CMAKE_SOURCE_DIR}/tests/fock_accumulate.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
+    # D2.2.1 (docs/SOSCF_UHF_DFT_SCOPE.md): the Coulomb-response piece of the
+    # RKS SOSCF h_op. No new production function -- J is linear in the
+    # density, so _compute_2e_j_direct(shell_pairs, dP, ...) (the same
+    # memory-direct builder the RKS loop's own per-iteration Coulomb term
+    # uses, src/integrals/base.h) IS delta_J(dP). This target only needs the
+    # non-DFT integral/basis machinery (no libxc, no grid) -- same source
+    # list as planck-fock-accumulate, which this file's fixture construction
+    # mirrors.
+    add_executable(planck-dft-coulomb-response
+        ${CMAKE_SOURCE_DIR}/tests/dft_coulomb_response.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
@@ -1420,6 +1537,49 @@ if(BUILD_TESTING)
         ${LIBXC_INSTALL_DIR}/include
     )
 
+    target_include_directories(planck-dft-fxc-selfcheck PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+    )
+
+    target_include_directories(planck-dft-gga-hessian-selfcheck PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+    )
+
+    target_include_directories(planck-dft-gga-polarized-fxc-ordering PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+    )
+
+    target_include_directories(planck-dft-gga-polarized-hessian-selfcheck PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+    )
+
+    target_include_directories(planck-dft-hessian-vector-packing PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-dft-analytic-hessian-production PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-dft-analytic-hessian-polarized-production PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-dft-density-response-linearity PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-eri-derivative-kernels PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -1441,6 +1601,11 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(planck-fock-accumulate PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-dft-coulomb-response PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
@@ -1659,6 +1824,54 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-dft-fxc-selfcheck PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dft-gga-hessian-selfcheck PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dft-gga-polarized-fxc-ordering PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dft-gga-polarized-hessian-selfcheck PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dft-hessian-vector-packing PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dft-analytic-hessian-production PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dft-analytic-hessian-polarized-production PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dft-density-response-linearity PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
     set_target_properties(planck-eri-derivative-kernels PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
@@ -1684,6 +1897,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-fock-accumulate PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dft-coulomb-response PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -1864,6 +2083,8 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-compute-2e PRIVATE USE_OPENMP)
         target_link_libraries(planck-fock-accumulate OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-fock-accumulate PRIVATE USE_OPENMP)
+        target_link_libraries(planck-dft-coulomb-response OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-dft-coulomb-response PRIVATE USE_OPENMP)
     endif()
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-hgp-quartet-validation OpenMP::OpenMP_CXX)
@@ -1946,6 +2167,53 @@ if(BUILD_TESTING)
     )
     add_dependencies(planck-dft-functional-support libxc)
 
+    target_link_libraries(planck-dft-fxc-selfcheck
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-fxc-selfcheck libxc)
+
+    target_link_libraries(planck-dft-gga-hessian-selfcheck
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-gga-hessian-selfcheck libxc)
+
+    target_link_libraries(planck-dft-gga-polarized-fxc-ordering
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-gga-polarized-fxc-ordering libxc)
+
+    target_link_libraries(planck-dft-gga-polarized-hessian-selfcheck
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-gga-polarized-hessian-selfcheck libxc)
+
+    target_link_libraries(planck-dft-density-response-linearity
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-density-response-linearity libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-dft-density-response-linearity OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-dft-density-response-linearity PRIVATE USE_OPENMP)
+    endif()
+
+    target_link_libraries(planck-dft-analytic-hessian-production
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-analytic-hessian-production libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-dft-analytic-hessian-production OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-dft-analytic-hessian-production PRIVATE USE_OPENMP)
+    endif()
+
+    target_link_libraries(planck-dft-analytic-hessian-polarized-production
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-analytic-hessian-polarized-production libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-dft-analytic-hessian-polarized-production OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-dft-analytic-hessian-polarized-production PRIVATE USE_OPENMP)
+    endif()
+
     add_test(
         NAME planck-casscf-internal
         COMMAND planck-casscf-internal
@@ -1959,6 +2227,46 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-dft-functional-support
         COMMAND planck-dft-functional-support
+    )
+
+    add_test(
+        NAME planck-dft-fxc-selfcheck
+        COMMAND planck-dft-fxc-selfcheck
+    )
+
+    add_test(
+        NAME planck-dft-gga-hessian-selfcheck
+        COMMAND planck-dft-gga-hessian-selfcheck
+    )
+
+    add_test(
+        NAME planck-dft-gga-polarized-fxc-ordering
+        COMMAND planck-dft-gga-polarized-fxc-ordering
+    )
+
+    add_test(
+        NAME planck-dft-gga-polarized-hessian-selfcheck
+        COMMAND planck-dft-gga-polarized-hessian-selfcheck
+    )
+
+    add_test(
+        NAME planck-dft-hessian-vector-packing
+        COMMAND planck-dft-hessian-vector-packing
+    )
+
+    add_test(
+        NAME planck-dft-analytic-hessian-production
+        COMMAND planck-dft-analytic-hessian-production
+    )
+
+    add_test(
+        NAME planck-dft-analytic-hessian-polarized-production
+        COMMAND planck-dft-analytic-hessian-polarized-production
+    )
+
+    add_test(
+        NAME planck-dft-density-response-linearity
+        COMMAND planck-dft-density-response-linearity
     )
 
     add_test(
@@ -1999,6 +2307,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-fock-accumulate
         COMMAND planck-fock-accumulate
+    )
+
+    add_test(
+        NAME planck-dft-coulomb-response
+        COMMAND planck-dft-coulomb-response
     )
 
     add_test(
