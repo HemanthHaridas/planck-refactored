@@ -117,6 +117,11 @@ def render_markdown(
     in_table = False
     in_quote = False
     pending_header: list[str] | None = None  # first row before separator
+    # Raw markdown fragments of the list item currently being collected, so a
+    # continuation line is joined BEFORE inline_format runs — otherwise a
+    # **bold** or `code` span that wraps across the line break is split and
+    # neither half matches its regex. ponytail: flushed by flush_list_item().
+    pending_li: list[str] | None = None
     paragraph: list[str] = []
     quote: list[str] = []
 
@@ -151,8 +156,16 @@ def render_markdown(
             quote = []
             in_quote = False
 
+    def flush_list_item() -> None:
+        nonlocal pending_li
+        if pending_li is not None:
+            joined = " ".join(f.strip() for f in pending_li if f.strip())
+            output.append(f"<li>{inline_format(joined)}</li>")
+            pending_li = None
+
     def close_list() -> None:
         nonlocal in_list, in_ordered_list
+        flush_list_item()
         if in_list:
             output.append("</ul>")
             in_list = False
@@ -248,15 +261,14 @@ def render_markdown(
         if re.match(r"^- ", line):
             flush_paragraph()
             close_table()
+            flush_list_item()
             if in_ordered_list:
                 output.append("</ol>")
                 in_ordered_list = False
             if not in_list:
                 output.append("<ul>")
                 in_list = True
-            output.append(
-                f"<li>{inline_format(line[2:].strip())}</li>"
-            )
+            pending_li = [line[2:].strip()]
             continue
 
         # ── Ordered list ──────────────────────────────────────────────
@@ -264,24 +276,22 @@ def render_markdown(
         if m_ol:
             flush_paragraph()
             close_table()
+            flush_list_item()
             if in_list:
                 output.append("</ul>")
                 in_list = False
             if not in_ordered_list:
                 output.append("<ol>")
                 in_ordered_list = True
-            output.append(
-                f"<li>{inline_format(m_ol.group(2).strip())}</li>"
-            )
+            pending_li = [m_ol.group(2).strip()]
             continue
 
         # ── List item continuation (indented line) ────────────────────
         if (in_list or in_ordered_list) and re.match(r"^ {2,}", line):
             flush_paragraph()
             close_table()
-            if output and output[-1].endswith("</li>"):
-                inner = output[-1][4:-5]  # strip <li> and </li>
-                output[-1] = f"<li>{inner} {inline_format(line.strip())}</li>"
+            if pending_li is not None:
+                pending_li.append(line.strip())
             continue
 
         # ── Table row ─────────────────────────────────────────────────
