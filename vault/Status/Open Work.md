@@ -855,8 +855,8 @@ worth doing whether or not FCIQMC happens.
   foregone no.**
 
   **H2 -- SCOPED into 7 verifiable steps (H2.1-H2.7 in
-  `docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md`). H2.1 + H2.2 + H2.3 + H2.4 + H2.5
-  DONE; H2.6-H2.7 not started.** **H2.1 landed** `n2_fciqmc_s5_threads1/4` (N2-sized SHORT run,
+  `docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md`). H2.1-H2.6 DONE; only H2.7 (the
+  payoff measurement on HF) remains.** **H2.1 landed** `n2_fciqmc_s5_threads1/4` (N2-sized SHORT run,
   ~9 parents/bin so cross-bin annihilation is exercised, unlike the
   4-determinant `h2_fciqmc_threads1/4`). Finding: **the `threads1` case
   must PIN both energies to fixed values, not just `metric_present`** --
@@ -904,9 +904,16 @@ worth doing whether or not FCIQMC happens.
   S5 re-pinned again; S5 non-vacuity re-verified. `planck-fciqmc-walkers`
   (all RNG-repro/statistical/`p_gen`/blocking tests) PASS. Incidental
   speedup confirming the H2.3 arithmetic: `n2_fciqmc_sto3g` 11.2s -> 9.2s,
-  `planck-fciqmc-walkers` 56s -> 24s. **H2.6** re-thread + re-verify
-  invariance at 1/2/4/8; **H2.7** re-measure on HF against the region
-  ceiling. Each step gates the next. H2 does NOT touch `kBins`. **H2.0 (smaller
+  `planck-fciqmc-walkers` 56s -> 24s. **H2.6 done, NO code change**: the
+  `#pragma omp` survived H2.4/H2.5 intact, so "re-enable" was a no-op;
+  thorough re-verification at 1/2/4/8 on the S5 pair, `h2_fciqmc_sto3g`,
+  `n2_fciqmc_sto3g` (50k steps), and the 4 non-QMC FCI gates -- all
+  bitwise-identical; `schedule(dynamic)` stays invariant too (accumulator
+  partition doesn't depend on the schedule, unlike the FCI sigma build).
+  H2.2's serial-only accumulator test is sufficient -- one thread per bin,
+  no threaded write to any accumulator. **Only H2.7 remains** -- re-measure
+  the scaffolding-removal payoff on HF/6-31G against the region ceiling.
+  H2 does NOT touch `kBins`. **H2.0 (smaller
   fixed `kBins`) -- reserve, N2-class only.** **H3 (replicas)** -- design
   sketch only. **Fixture: HF/6-31G or larger for all parallel-FCIQMC
   measurement; N2/STO-3G is the correctness gate only.** Deliverable

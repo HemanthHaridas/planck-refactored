@@ -218,7 +218,7 @@ measurement that decides whether it was worth it.
 | **H2.3 — DONE** (see below) | isolated microbenchmark of the 64 per-bin RNG streams three ways: (A) current fresh-vector + 64× `derive()`, (B) persistent vector + 64× `mt19937_64::seed()` in place, (C) persistent + a counter-based stream (`reseed` = set a key) | 200k iterations each, identical seed sequence | **RESULT: re-seed IS ≈ as expensive as construct** (A 42 µs, B 39 µs — the ~2 µs gap is only the vector alloc). **`mt19937_64::seed()` is ~600 ns each × 64 = ~38 µs/call, and reusing the engine object cannot avoid it.** C is ~74 ns. **H2.5 needs a counter-based RNG** — this was NOT a foregone conclusion, T2 called the state-fill "unavoidable" having only tried B |
 | **H2.4 — DONE** (see below) | `SpawnWorkspace` type (`spawn_accumulator.h`) + `void propagate_stochastic(..., SpawnWorkspace& ws, WalkerPopulation& out)` with the value-returning form kept as a thin convenience overload for the ~20 test call sites. Persistent bins (`SpawnAccumulator`), partition buffer, merge target in `ws`, built once by the driver. Output caller-owned → no NRVO question. RNG stays per-call (that is H2.5). | self-reproducibility at fixed seed **+** thread-count invariance at `atol = 0.0` (1/2/4/8) **+** `metric_within_sigma` vs exact FCI — **NOT bitwise-vs-the-pre-H2 numbers**: swapping `unordered_map` (bucket-order iteration) for `SpawnAccumulator` (canonical-sorted-order fold) is a legitimate reassociation, exactly the R2 category, so the S5 pin re-pins to the new value | reproducibility fails, or invariance breaks, or the FCI-sigma blows the gate → localize with `planck-fciqmc-accumulator`'s reference before proceeding |
 | **H2.5 — DONE** (see below) | `RandomSource`'s engine swapped `std::mt19937_64` → **xoshiro256\*\*** (256-bit state from a SplitMix64 fill, O(1) reseed). The 64 per-bin streams now live in `ws.bin_rngs` and are re-keyed per call by `ws.rekey_streams(rng.raw64())` — same `derive()` recipe, no 64 constructions. Public surface unchanged (`uniform`/`uniform_int`/`stochastic_round`/`raw64`/`derive`/`seed`). | self-reproducibility at fixed seed **+** thread-count invariance `atol=0.0` (1/2/4/8) **+** `metric_within_sigma` vs exact FCI — never bitwise-vs-old, the RNG swap changes every trajectory | reproducibility fails, or the FCI sigma blows the gate → the bin-stream derivation is wrong (the S1 "frozen trajectory" trap: a `const derive()` that does not advance); check the population diagnostics, not just the gate |
-| **H2.6** | re-enable threading on H2.4's structure (`#pragma omp parallel for schedule(static)` over the persistent bins) and re-verify invariance | **bitwise identical across `OMP_NUM_THREADS` = 1/2/4/8** on `h2_fciqmc_threads1/4`, the new S5 N2-sized pair, `n2_fciqmc_sto3g`, and the four non-QMC FCI gates sharing `build_all_mo_ci_setup` | any thread count disagrees → the accumulator or the merge is not partition-deterministic after all; H2.2's reuse-stability test missed the threaded-write case, extend it |
+| **H2.6 — DONE, NO CODE CHANGE** (see below) | verification only — the `#pragma omp parallel for schedule(static)` survived H2.4/H2.5 intact, so "re-enable" was a no-op; the threading was already correct on the new `SpawnWorkspace`/`SpawnAccumulator`/xoshiro structure. | **bitwise identical across `OMP_NUM_THREADS` = 1/2/4/8** on `h2_fciqmc_threads1/4`, the S5 N2 pair, `n2_fciqmc_sto3g` (50k steps, deepest multi-parent bins), and the four non-QMC FCI gates sharing `build_all_mo_ci_setup` — all pass; and `schedule(dynamic)` was checked too and *stays* invariant (unlike the FCI sigma build) because here the accumulator partition does not depend on the schedule | — |
 | **H2.7** | re-run the H1 probe on **HF/6-31G** (the unsaturated fixture — not N2): per-call parent count, region µs, whole-call µs at 1/2/4/8 threads, before/after the rewrite. Report serial-scaffolding µs/call (should drop from ~1.5 ms toward near zero) and whole-call speedup vs the region ceiling | the H1 numbers already recorded (`region 3.44×/4t, 4.47×/8t`; `whole 2.24×/4t`) | whole-call speedup does *not* move toward the region ceiling → the ~1.5 ms was not actually the bottleneck; re-profile with an in-binary phase probe (T2's `PLANCK_FCIQMC_PHASE_PROBE` pattern) before concluding |
 
 #### H2.1 result (2026-09-06): the S5 gate needs a PINNED `threads1`, not just a `threads1`/`threads4` comparison
@@ -446,6 +446,34 @@ of mt19937 seeding over ~50,000 calls — `n2_fciqmc_sto3g` **11.2 s →
 more often per unit work than the real driver). H2.7 measures the actual
 scaffolding-removal payoff on HF; this just confirms the H2.3 arithmetic.
 
+#### H2.6 result (2026-09-06): no code change — the `#pragma omp` was already correct on the new structure
+
+The `#pragma omp parallel for schedule(static)` over the 64 bins was never
+removed through H2.4 or H2.5, so "re-enable threading" was a no-op. Every
+invariance check at 1/2/4/8 through H2.4 and H2.5 already passed; H2.6 is
+the dedicated, thorough re-verification the ladder called for:
+
+| gate | 1/2/4/8 result |
+|---|---|
+| `n2_fciqmc_s5_short` (S5 pair) | bitwise-identical |
+| `h2_fciqmc_sto3g` | bitwise-identical |
+| `n2_fciqmc_sto3g` (50k steps, ~900 parents/call, deepest multi-parent bins — the strongest invariance evidence) | bitwise-identical |
+| `h2_fci_sto3g`, `water_fci_sto3g`, `o2_fci_rohf_sto3g`, `be_fci_spherical_631gd` (non-QMC, share `build_all_mo_ci_setup`) | bitwise-identical, and equal to their committed references |
+
+**H2.2's serial-only accumulator test is sufficient** — the parallel-for
+unit is one bin, `schedule(static)` gives each thread a disjoint
+contiguous range, and every write inside the region targets only
+`next_bins[bin]`/`bin_rngs[bin]`. No `SpawnAccumulator` is written by two
+threads, so there is no threaded-write case for the test to have missed.
+
+**`schedule(dynamic)` was checked and *stays* invariant** — bitwise-
+identical at 1/4/8 with `dynamic`. This is the opposite of the FCI sigma
+build, where `dynamic` broke invariance because *there* the accumulator
+partition depended on the schedule; here it does not (bin = fixed
+`hash(parent) % kBins`, merge = fixed bin order), so which thread computes
+which bin is irrelevant. `static` is kept anyway (locality, and the T2
+doc pins it).
+
 **The accumulator — remaining candidates, only if H2.7 shows the sort matters:**
 
 2. **Flat open-addressing hash table, fixed capacity, defined probe order,
@@ -553,8 +581,8 @@ conclusion `FCIQMC_RESEARCH_SCOPE.md` Q1 reaches for the method as a whole.
   flat in walker count) is real on both. **H1 is refuted as stated: the
   work is not too small on any non-saturated fixture, which is exactly the
   Q1 large-active-space case.**
-- **H2 — SCOPED into seven verifiable steps (H2.1–H2.7). H2.1 + H2.2 + H2.3
-  + H2.4 + H2.5 DONE; H2.6–H2.7 not started.**
+- **H2 — SCOPED into seven verifiable steps (H2.1–H2.7). H2.1–H2.6 DONE;
+  only H2.7 (the payoff measurement on HF) remains.**
   On HF the whole call is stuck at 2.24×/4 threads against a region
   ceiling of ≥ 4.5×, because the serial scaffolding is ~1.5 ms/call (30×
   N2's, since HF partitions/merges 30× more parents) and does not thread.
@@ -588,9 +616,13 @@ conclusion `FCIQMC_RESEARCH_SCOPE.md` Q1 reaches for the method as a whole.
   place. Same public surface, same 53-bit `uniform()`. Gated on
   reproducibility + invariance + FCI-sigma; S5 re-pinned again. Incidental:
   `n2_fciqmc_sto3g` 11.2 s → 9.2 s, `planck-fciqmc-walkers` 56 s → 24 s.
-  **H2.6** re-thread and re-verify invariance at 1/2/4/8, **H2.7**
-  re-measure on HF against the region ceiling. Each step's own
-  verification gates the next.
+  **H2.6 (DONE, no code change)** — the `#pragma omp` survived H2.4/H2.5
+  intact, so "re-enable" was a no-op; thorough re-verification at 1/2/4/8
+  on the S5 pair, `h2_fciqmc_sto3g`, `n2_fciqmc_sto3g` (50k steps), and the
+  4 non-QMC FCI gates all bitwise-identical, and `schedule(dynamic)` stays
+  invariant too (the accumulator partition does not depend on the
+  schedule, unlike the FCI sigma build). **H2.7** (the only step left)
+  re-measures on HF against the region ceiling.
 - **H2.0 (smaller fixed `kBins`) — reserve, N2-class only.** Helps a
   saturation-starved fixture; on HF the bins are already large enough.
   H2 does **not** touch `kBins`.
