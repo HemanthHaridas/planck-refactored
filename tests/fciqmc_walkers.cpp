@@ -1841,6 +1841,38 @@ static void test_ordered_norm_is_deterministic()
     for (std::size_t i = vals.size(); i > 0; --i)
         rev += vals[i - 1];
     check(fwd != rev, "the test values actually reassociate (else the check is vacuous)");
+
+    // H2.8.4-b (fold B): compress_with_l1_norm must return byte-for-byte what a
+    // plain compress() then ordered_l1_norm() would, on the same population.
+    // Includes entries straddling the threshold (erased) and entries that
+    // survive, at magnitudes spanning 18 orders so the bin sums reassociate.
+    {
+        const ToyHamiltonian t2(4, 2, 2);
+        auto build = [&](WalkerPopulation &p) {
+            for (std::size_t i = 0; i < t2.dets.size(); ++i)
+                p.add(t2.dets[i], std::pow(10.0, static_cast<double>(i) - 18.0));
+            // one entry exactly at, one just below, one just above the threshold
+            if (t2.dets.size() >= 3)
+            {
+                p.add(t2.dets[0], -std::pow(10.0, -18.0) + 1e-13); // net ~1e-13 < 1e-12
+            }
+        };
+        WalkerPopulation ref_pop, fused_pop;
+        build(ref_pop);
+        build(fused_pop);
+
+        const std::size_t ref_removed = ref_pop.compress(1e-12);
+        const double ref_norm = ordered_l1_norm(ref_pop);
+
+        const auto fused = fused_pop.compress_with_l1_norm(1e-12);
+
+        check(fused.removed == ref_removed,
+              "compress_with_l1_norm removes the same count as compress");
+        check(fused.l1_norm == ref_norm,
+              "compress_with_l1_norm norm is byte-identical to compress + ordered_l1_norm");
+        check(fused_pop.size() == ref_pop.size(),
+              "compress_with_l1_norm leaves the same survivors");
+    }
 }
 
 // ---------------------------------------------------------------------------

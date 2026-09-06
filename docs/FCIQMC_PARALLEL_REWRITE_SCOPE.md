@@ -34,16 +34,18 @@ normal` (production): 78.1 s → 60.5 s (−22 %)** (−20 % on the older
 12.86 s → 11.56 s; `draw_excitation` self-time **40.8 % → 27.1 %**.
 4-thread ~unchanged (barrier idle dominates).
 
-**H2.8.4-b SCOPED (2026-09-06), not started:** the serial per-step tail is
-**4–5 full traversals of the ~26k-entry walker hash map per step**
-(diagonal prefill, partition, merge, `compress`, `ordered_l1_norm`;
-+`signed_population` at `verbose`). Plan: fold the four
-`for (det,w) : pop)` passes into ONE — compute `hash(det)` once, do all
-per-entry work, hand `propagate_stochastic` a pre-partitioned
-`bin_parents` + the L1 norm + the compressed set; then thread that single
-pass with the same fixed-64-bin discipline the spawn region uses. Target:
-54 % idle → ~25–30 %. Section H2.8.4-b below. Step 2 (the `verbose`
-measurement correction) is already done.
+**H2.8.4-b — folds A+B LANDED (2026-09-06), bit-identical, ~5–7 % wall:**
+fold A merged the diagonal-prefill and partition passes (driver fills
+`SpawnWorkspace::parents`; `propagate_stochastic` skips its own partition
+via a `parents_prefilled` flag); fold B merged `compress` +
+`ordered_l1_norm` into `WalkerPopulation::compress_with_l1_norm` (norm
+byte-identical to the two-call form). S5 1/2/4/8 unchanged, non-vacuity
+verified, new unit test. Measured HF `hf_prof` −5 %/1t, −6 %/4t; N2 gate
+−7 %/4t. **Modest, and the merge — the biggest serial pass — is
+untouched**; step 3 (threading the fused pre-pass) is skipped because the
+4-thread number barely moved from folding the non-merge passes, and the
+merge does not shard (H2.8.1–3). Step 2 (the `verbose` measurement
+correction) is done. Section H2.8.4-b below.
 
 H3 (replica parallelism) remains a design sketch. All of it stays gated on
 a real FCIQMC workload appearing (`FCIQMC_RESEARCH_SCOPE.md` Q1) — nothing
@@ -1108,7 +1110,7 @@ work — nothing in the tree runs FCIQMC at 1 thread long enough for a
 20 % improvement to matter yet. It is low-risk (bit-identical, existing
 `p_gen` gate, mutation-verified) so it is ready when a target appears.
 
-#### H2.8.4-b — the serial per-step driver tail (scoped 2026-09-06, not started)
+#### H2.8.4-b — the serial per-step driver tail (scoped 2026-09-06; folds A+B LANDED same day — bit-identical, ~5–7 % wall; step 3 not done, and the merge is the real residual)
 
 **The 4-thread wall.** At 4 threads on HF/6-31G, `sample` shows **54 %
 idle** — three worker threads parked at the barrier while one thread runs
@@ -1211,14 +1213,69 @@ a real large-`ndet` workload where 26k → 260k changes the calculus).
   target is the 54 % idle dropping toward ~25–30 % (Amdahl with the
   serial tail cut from ~5 walks to ~1 walk + merge).
 
+##### H2.8.4-b result (2026-09-06): folds A + B landed, bit-identical, ~5–7 % wall. Step 3 skipped — the merge is the residual, and it does not shard.
+
+**Fold A** (pass 1 + pass 2): the driver's diagonal-prefill loop now also
+partitions `pop` into `SpawnWorkspace::parents` — same
+`DetKeyHash{}(det) % kFciqmcBins` binning, same `w == 0.0` skip. A new
+`SpawnWorkspace::parents_prefilled` flag tells `propagate_stochastic` to
+skip its internal partition loop (and not clear `parents`); it clears the
+flag + buckets on the way out. `kBins` moved to the header as
+`kFciqmcBins` so the two partitions provably match. `reset_for_call()`
+split into `clear_output()` (bins only) + `clear_parents()`.
+
+**Fold B** (pass 4 + pass 5): `WalkerPopulation::compress_with_l1_norm`
+does the compress erase-scan and the ordered-L1-norm bin-and-sum in one
+traversal. The norm is **byte-identical** to `compress()` then
+`ordered_l1_norm()` — same survivors (erased iff `|w| <= threshold`, and
+only survivors contribute to the norm either way), same fixed 64-bin
+partition (a pure function of `det`, so erasing other entries mid-scan
+cannot move a survivor's bin), same fixed 0..63 summation order. Gated by
+a new unit assertion in `test_ordered_norm_is_deterministic`: the fused
+result must equal the two-call result to the bit, on a fixture with
+threshold-straddling entries and 18-orders-of-magnitude magnitudes.
+
+**Bit-identical, verified:**
+
+| check | result |
+|---|---|
+| S5 `n2_fciqmc_s5_short` 1/2/4/8 `atol = 0.0` | bit-identical to the pre-fold pin `-108.5036712075` / `-107.5859595426` |
+| S5 non-vacuity | mutating fold A's partition to bin by `det.alpha` (not the full hash) shifts the S5 pin (`-109.833…`) while T1==T4 — caught **only** by the pinned `threads1`, the H2.1 property, on the new path ✓ |
+| `planck-fciqmc-walkers` (+ the new `compress_with_l1_norm` byte-identity test) | all pass |
+| `planck-fciqmc-accumulator` | all pass |
+| 4 non-QMC FCI gates | unchanged, equal to committed refs |
+| `h2_fciqmc_sto3g` 1t==4t, `n2_fciqmc_sto3g` 1/4/8 | bit-identical, unchanged from H2.8.4-a |
+
+**Measured (`build-full`, `verbosity normal`):**
+
+| fixture | H2.8.4-a | + folds A+B | Δ |
+|---|---|---|---|
+| HF/6-31G `hf_prof` 1t | 64.3 s | 61.0 s | **−5 %** |
+| HF/6-31G `hf_prof` 4t | 34.1 s | 32.1 s | **−6 %** |
+| N2/STO-3G gate 1t | 11.56 s | 11.33 s | −2 % |
+| N2/STO-3G gate 4t | 7.75 s | 7.23 s | **−7 %** |
+
+**Modest — and the scope's "54 % idle → ~25–30 %" did not happen**, because
+the fold removed ~1.5 of the ~5 serial walks and the **merge (pass 3) —
+the biggest one, `unordered_map::operator[]` latency on ~26k entries — is
+untouched**. HF 4t is still ~2×/4t.
+
+**Step 3 (thread the fused pre-pass) skipped.** The 4-thread number barely
+moved from folding the *non-merge* passes, so the pre-pass is not the
+dominant serial cost — the merge is. And H2.8.1–3 already established the
+merge does not shard for a win (an `O(n log n)` shard-sort loses to the
+`O(n)` warm-hash merge, measured slower on HF). Threading the pre-pass
+would chase the smaller half of a serial tail whose larger half has no
+known fix. Left for a real large-`ndet` Q1 workload, where 26k → 260k
+might change which half dominates.
+
 ##### Gate
 
-Same as everything in H2.8: **do not build until a real Q1 workload
-exists.** The 4-thread wall only bites when one trajectory takes
-minutes-to-hours, which nothing in the tree does. Step 2 (confirm the
-`verbosity verbose` measurement artifact and re-quote H2.8.4-a's number)
-is the one piece worth doing now — it is a measurement correction, not a
-code change.
+Folds A+B are landed on the branch (bit-identical, low-risk, the merge
+untouched). Like the rest of H2.8 they **stay gated on a real Q1
+workload** before leaving it — nothing in the tree runs FCIQMC long
+enough for 5–7 % to matter. Step 2 (the `verbosity` measurement
+correction) is done; step 3 is declined pending a target.
 
 ### H3 — the outer step loop itself is not as sequential as it looks
 

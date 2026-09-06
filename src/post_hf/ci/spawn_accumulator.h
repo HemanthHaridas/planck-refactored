@@ -151,6 +151,13 @@ namespace HartreeFock::Correlation::CI::QMC
         std::vector<std::vector<std::pair<DetKey, Weight>>> parents;
         std::vector<RandomSource> bin_rngs;
 
+        // H2.8.4-b: when true, `parents` was filled by the CALLER (the driver's
+        // fused per-step pre-pass) and propagate_stochastic must NOT run its own
+        // partition loop or clear `parents`. Reset to false by clear_output(),
+        // so a caller that does not prefill gets the old self-contained
+        // behaviour. The convenience overload never prefills.
+        bool parents_prefilled = false;
+
         void ready(std::size_t n_bins)
         {
             if (bins.size() != n_bins)
@@ -161,10 +168,25 @@ namespace HartreeFock::Correlation::CI::QMC
             }
         }
 
-        void reset_for_call()
+        // Clear only the spawn OUTPUT (per-bin accumulators). Leaves `parents`
+        // untouched so a caller can fill it before calling propagate_stochastic.
+        void clear_output()
         {
             for (auto &b : bins)
                 b.reset();
+            parents_prefilled = false;
+        }
+
+        // Clear everything, including `parents`. propagate_stochastic calls this
+        // only when the caller did NOT prefill.
+        void reset_for_call()
+        {
+            clear_output();
+            clear_parents();
+        }
+
+        void clear_parents()
+        {
             for (auto &p : parents)
                 p.clear();
         }

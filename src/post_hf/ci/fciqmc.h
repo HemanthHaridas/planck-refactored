@@ -126,6 +126,20 @@ namespace HartreeFock::Correlation::CI::QMC
         // footprint proportional to the OCCUPIED space rather than the visited one.
         std::size_t compress(Weight threshold = 0.0);
 
+        // H2.8.4-b (fold B): compress AND compute the ordered L1 norm of the
+        // SURVIVORS in a single traversal, so the driver does not walk this map
+        // twice per step (once to compress, once for ordered_l1_norm). The norm
+        // is binned by the identical fixed `hash(det) % kFciqmcBins` partition
+        // and summed in fixed bin order -- byte-for-byte the same value
+        // `ordered_l1_norm(*this)` would return AFTER a plain `compress`, because
+        // the erased entries carry `|w| <= threshold` and are excluded from both.
+        struct CompressResult
+        {
+            std::size_t removed = 0;
+            Weight l1_norm = 0.0;
+        };
+        CompressResult compress_with_l1_norm(Weight threshold = 0.0);
+
         // Sum of |weight| -- the walker number, the quantity population control
         // steers toward a target.
         Weight total_population() const noexcept;
@@ -532,6 +546,13 @@ namespace HartreeFock::Correlation::CI::QMC
     // value; it exists so the ~20 test call sites and any ad-hoc caller do not
     // have to thread a workspace.
     struct SpawnWorkspace; // defined in spawn_accumulator.h
+
+    // The fixed number of parent bins the spawn step partitions the walker
+    // population into (T2/S4). A FIXED constant, never tied to thread count --
+    // see the long note in fciqmc.cpp. Exposed here so the driver's fused
+    // per-step pre-pass (H2.8.4-b) can pre-partition into `SpawnWorkspace::parents`
+    // using the identical `DetKeyHash{}(det) % kFciqmcBins` binning.
+    inline constexpr std::size_t kFciqmcBins = 64;
 
     void propagate_stochastic(
         const WalkerPopulation &population,

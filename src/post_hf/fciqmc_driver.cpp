@@ -285,8 +285,28 @@ namespace HartreeFock::Correlation
             // WHEN the entry gets computed, from "first read inside the call" to
             // "explicitly, just before it". Output must therefore be bitwise
             // identical to S2, unlike S1->S2 which genuinely reordered summation.
+            //
+            // H2.8.4-b (fold A): this pass ALSO does propagate_stochastic's
+            // partition -- same `DetKeyHash{}(det) % kBins` binning, same
+            // `w == 0.0` skip -- so the propagator does not walk `pop` a second
+            // time to build `bin_parents`. `parents_prefilled` tells it to skip
+            // that loop; it clears the flag and the buckets when done. `pop` is
+            // an unordered_map, so this remains one traversal computing
+            // hash(det) once where it was computed twice (here + inside the
+            // propagator). Bitwise identical: the bin a determinant lands in is
+            // a pure function of the determinant, and the per-bin spawn work is
+            // order-independent within a bin.
+            spawn_ws.ready(kFciqmcBins);
+            spawn_ws.clear_parents();
             for (const auto &[det, w] : pop)
+            {
                 (void)ops.diagonal(det);
+                if (w == 0.0)
+                    continue;
+                spawn_ws.parents[DetKeyHash{}(det) % kFciqmcBins]
+                    .push_back({det, w});
+            }
+            spawn_ws.parents_prefilled = true;
 
             WalkerPopulation next_pop;
             propagate_stochastic(pop, setup->n_act, ops, opt.timestep,
@@ -294,9 +314,13 @@ namespace HartreeFock::Correlation
                                  opt.walker_granularity,
                                  opt.initiator_threshold, spawn_ws, next_pop);
             pop = std::move(next_pop);
-            pop.compress(1e-12);
 
-            const double n = ordered_l1_norm(pop);
+            // H2.8.4-b (fold B): compress + ordered L1 norm in one walk of the
+            // new `pop`, instead of `pop.compress(1e-12)` then a second full
+            // walk in `ordered_l1_norm(pop)`. The norm is byte-identical to the
+            // old two-call form (same survivors, same fixed 64-bin partition,
+            // same fixed summation order).
+            const double n = pop.compress_with_l1_norm(1e-12).l1_norm;
             // A collapsed or diverged population carries no energy. Reporting a
             // number from one would be the most misleading possible output, so
             // fail loudly instead.

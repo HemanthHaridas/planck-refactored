@@ -33,6 +33,41 @@ namespace HartreeFock::Correlation::CI::QMC
         return removed;
     }
 
+    WalkerPopulation::CompressResult
+    WalkerPopulation::compress_with_l1_norm(Weight threshold)
+    {
+        // Fold B: one traversal does the compress erase-scan AND the ordered
+        // L1-norm bin-and-sum. The norm is IDENTICAL to
+        // `ordered_l1_norm(*this)` called after a plain `compress(threshold)`:
+        //   - same survivors (an entry is erased iff |w| <= threshold, and only
+        //     survivors contribute to the norm in both forms);
+        //   - same 64-bin fixed partition (`hash(det) % kFciqmcBins`), a pure
+        //     function of the determinant, so erasing other entries mid-iteration
+        //     cannot move a survivor's bin;
+        //   - same within-bin order (surviving entries in this map's hash order,
+        //     which is what a post-compress ordered_l1_norm would also see);
+        //   - same fixed bin-summation order 0..kFciqmcBins-1.
+        CompressResult r;
+        std::array<Weight, kFciqmcBins> bins{};
+        for (auto it = _walkers.begin(); it != _walkers.end();)
+        {
+            const Weight aw = std::abs(it->second);
+            if (aw <= threshold)
+            {
+                it = _walkers.erase(it);
+                ++r.removed;
+            }
+            else
+            {
+                bins[DetKeyHash{}(it->first) % kFciqmcBins] += aw;
+                ++it;
+            }
+        }
+        for (const Weight b : bins)
+            r.l1_norm += b;
+        return r;
+    }
+
     namespace
     {
         // Apply a->r within one spin string, returning the new string and phase.
@@ -534,7 +569,9 @@ namespace HartreeFock::Correlation::CI::QMC
     // regression -- it is a different, equally valid RNG trajectory, verified by
     // reproducibility and by agreement with exact FCI, not by matching the old
     // numbers.
-    constexpr std::size_t kBins = 64;
+    // The value lives in the header now (kFciqmcBins) so the driver's
+    // H2.8.4-b pre-pass bins identically; this alias keeps the body readable.
+    constexpr std::size_t kBins = kFciqmcBins;
 
     void propagate_stochastic(
         const WalkerPopulation &population,
@@ -567,7 +604,16 @@ namespace HartreeFock::Correlation::CI::QMC
             return;
 
         ws.ready(kBins);
-        ws.reset_for_call();
+        // H2.8.4-b: if the caller pre-filled `ws.parents` (the driver's fused
+        // per-step pre-pass, which walks `pop` once for the diagonal prefill,
+        // the partition, and -- on the previous step's output -- compress and
+        // the L1 norm), skip the partition loop below and do not touch
+        // `parents`. Otherwise reset everything and partition here, as before.
+        const bool prefilled = ws.parents_prefilled;
+        if (prefilled)
+            ws.clear_output();
+        else
+            ws.reset_for_call();
         auto &next_bins = ws.bins;
         auto &bin_parents = ws.parents;
 
@@ -605,12 +651,21 @@ namespace HartreeFock::Correlation::CI::QMC
         // run the per-bin work in parallel over the now-indexable bucket array.
         // The parent's bin, not the child's -- see the header note; cross-bin
         // annihilation is resolved once, in the fixed-order merge below.
-        for (const auto &[det, weight] : population)
-        {
-            if (weight == 0.0)
-                continue;
-            bin_parents[DetKeyHash{}(det) % kBins].push_back({det, weight});
-        }
+        //
+        // H2.8.4-b: skipped entirely when the caller pre-filled `bin_parents`
+        // (same `DetKeyHash{}(det) % kBins` binning, same `weight == 0.0` skip
+        // -- see the driver's fused pre-pass). The bin a determinant lands in
+        // is a pure function of the determinant, so a caller-filled partition
+        // and this loop's partition are identical, and the per-bin spawn work
+        // below is order-independent within a bin (SpawnAccumulator canonicalises
+        // on finalize()).
+        if (!prefilled)
+            for (const auto &[det, weight] : population)
+            {
+                if (weight == 0.0)
+                    continue;
+                bin_parents[DetKeyHash{}(det) % kBins].push_back({det, weight});
+            }
 
 #pragma omp parallel for schedule(static)
         for (std::size_t bin = 0; bin < kBins; ++bin)
@@ -683,6 +738,12 @@ namespace HartreeFock::Correlation::CI::QMC
         for (auto &bin : next_bins)
             for (const auto &[det, w] : bin)
                 out.add(det, w);
+
+        // H2.8.4-b: the pre-fill was for THIS call only. Clear both the flag and
+        // the buckets so the next call -- prefilled or not -- starts clean.
+        if (prefilled)
+            ws.clear_parents();
+        ws.parents_prefilled = false;
     }
 
     // Convenience overload: builds a local workspace and returns a value. For
