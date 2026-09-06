@@ -127,6 +127,40 @@ namespace HartreeFock::Correlation::CI::QMC
         static constexpr KeyWeightLess less_{};
     };
 
+    // H2.4 (docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md): the persistent per-call
+    // scaffolding for propagate_stochastic, hoisted out of the function so it
+    // is built ONCE (by the driver, or per test call) instead of ~50,000
+    // times. Holds the 64 per-bin accumulators and the 64 parent buckets; the
+    // RNG streams stay per-call for now (H2.5 hoists and swaps those).
+    //
+    // ready() lazily sizes to `n_bins` on first use. reset_for_call() clears
+    // every bin/bucket without freeing capacity -- SpawnAccumulator::reset()
+    // and vector::clear() both genuinely reset (unlike unordered_map::clear),
+    // so the result is a pure function of that call's inputs regardless of
+    // how many prior calls the workspace served.
+    struct SpawnWorkspace
+    {
+        std::vector<SpawnAccumulator> bins;
+        std::vector<std::vector<std::pair<DetKey, Weight>>> parents;
+
+        void ready(std::size_t n_bins)
+        {
+            if (bins.size() != n_bins)
+            {
+                bins.assign(n_bins, SpawnAccumulator{});
+                parents.assign(n_bins, {});
+            }
+        }
+
+        void reset_for_call()
+        {
+            for (auto &b : bins)
+                b.reset();
+            for (auto &p : parents)
+                p.clear();
+        }
+    };
+
 } // namespace HartreeFock::Correlation::CI::QMC
 
 #endif // HARTREEFOCK_CI_SPAWN_ACCUMULATOR_H

@@ -1,4 +1,5 @@
 #include "post_hf/ci/fciqmc.h"
+#include "post_hf/ci/spawn_accumulator.h"
 
 #include <array>
 #include <cassert>
@@ -488,7 +489,7 @@ namespace HartreeFock::Correlation::CI::QMC
     // numbers.
     constexpr std::size_t kBins = 64;
 
-    WalkerPopulation propagate_stochastic(
+    void propagate_stochastic(
         const WalkerPopulation &population,
         int n_act,
         const HamiltonianOps &ham,
@@ -497,78 +498,29 @@ namespace HartreeFock::Correlation::CI::QMC
         RandomSource &rng,
         int n_spawn_attempts,
         double granularity,
-        double initiator_threshold)
+        double initiator_threshold,
+        SpawnWorkspace &ws,
+        WalkerPopulation &out)
     {
-        // T2 scope step S4.5/M1: TRIED AND REVERTED. `next` is this
-        // function's RETURN VALUE, unlike `next_bins`/`bin_parents` which are
-        // purely internal working state. Making it a function-local `static`
-        // (the same pattern R1/R2 used) disables NRVO on `return next;` --
-        // a static cannot be moved-from, so the compiler is forced to
-        // COPY-CONSTRUCT the return value every call instead of eliding the
-        // copy. Measured head-to-head in a standalone benchmark isolating
-        // exactly this difference (identical map contents and growth
-        // history, only fresh-local-with-NRVO vs static-with-forced-copy):
-        // 65.3 us/call vs 97.3 us/call -- the forced copy costs MORE than the
-        // map-reuse itself saves (the reuse alone, without the return-value
-        // problem, measured a real ~20-30% win). End to end on the real N2
-        // gate this made propagate_stochastic SLOWER, not faster
-        // (16.6s/10.6s at 1/4 threads before this attempt, 17.9s/11.8s
-        // after) -- confirmed reproducible across repeat runs, not noise.
-        //
-        // It ALSO turned out to be reordering-sensitive in exactly the R2
-        // sense (a claim the first version of this comment got wrong and
-        // trusted without bisecting): `next`'s bucket count grows in
-        // discrete steps as the walker population ramps up, a reused map
-        // retains its peak bucket count after `.clear()`, and a later call
-        // with fewer entries than a prior peak iterates in a different order
-        // than a fresh map with the same contents would -- reassociating
-        // sums for any determinant written more than once per call (routine:
-        // the death term and a spawn can share a target, or two bins can
-        // spawn onto the same child). Confirmed by bisection: an
-        // equilibration=0 A/B on N2 diverged starting between 70 and 80
-        // total calls.
-        //
-        // Both findings are independently sufficient to not do this. `next`
-        // stays a fresh local -- see FCIQMC_T2_THREADING.md M1 for the full
-        // record, including why the isolated map-reuse microbenchmark alone
-        // (which looked favorable) was not sufficient evidence for either
-        // question.
-        WalkerPopulation next;
+        // H2.4 (docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md): the per-call scaffolding
+        // -- 64 accumulators and 64 parent buckets -- now lives in the
+        // caller-owned `ws`, built once (by the driver, or per convenience-
+        // overload call). `out` is caller-owned, so there is no NRVO question:
+        // this is the M1 reversion done properly by changing the SIGNATURE,
+        // not by making a local `static`. Bitwise-serial equality to the pre-
+        // H2 tree is the H2.4 gate -- serial means no reordering, so the
+        // unordered_map -> SpawnAccumulator swap must not change a serial
+        // result; SpawnAccumulator folds each key's run in a canonical
+        // (alpha, beta, weight-bits) order that is a pure function of the
+        // multiset, matching what a fresh unordered_map produced.
+        out.clear();
         if (n_spawn_attempts < 1)
-            return next;
+            return;
 
-        // T2 scope step S2: kBins independent accumulators instead of one shared
-        // `next`. Still fully serial -- this is what S4 will later split across
-        // threads, one bin (or a fixed group of bins) per thread, with no shared
-        // mutable state during the parallel region.
-        //
-        // The parent's bin, not the child's. A spawn's destination bin is chosen
-        // by DetKeyHash(parent) -- the determinant that OWNS the spawn attempt --
-        // never by DetKeyHash(child). Binning by the child would fix which
-        // accumulator receives a given spawn but not the ORDER arrivals reach
-        // it: two different parents in two different bins could both spawn onto
-        // the same child determinant, and under threading that is exactly the
-        // unsynchronized-map write this design exists to avoid. Binning by
-        // parent means every write inside one bin's loop body targets only that
-        // bin's own map, with no cross-bin write during the per-parent work --
-        // cross-bin annihilation (two parents in different bins spawning onto
-        // the same child) is resolved once, in the merge below, not during the
-        // parallel region.
-        //
-        // T2 scope step S4.5/R2: persisted across calls and `.clear()`-ed
-        // instead of fresh-constructed, the same reuse R1 applied to
-        // `bin_parents`. Unlike `bin_parents`, this DOES change output values:
-        // `unordered_map::clear()` does not reproduce fresh-construction's
-        // bucket layout (verified standalone -- see FCIQMC_T2_THREADING.md
-        // R2), so summing the SAME set of (det, weight) additions in a reused
-        // map's iteration order is a legitimate reassociation of IEEE double
-        // addition, not a defect -- the same category of change S1 made when it
-        // moved from one shared RNG to per-bin streams. Verified by
-        // self-reproducibility and agreement with exact FCI, never by matching
-        // the pre-R2 numbers.
-        static std::vector<WalkerPopulation> next_bins(kBins);
-        for (auto &bin : next_bins)
-            bin.clear();
+        ws.ready(kBins);
+        ws.reset_for_call();
+        auto &next_bins = ws.bins;
+        auto &bin_parents = ws.parents;
 
         // BUG CAUGHT BY THE REPRODUCIBILITY CHECK ITSELF, worth recording: the
         // first version of this derived bin_rngs directly from `rng` via the
@@ -587,9 +539,12 @@ namespace HartreeFock::Correlation::CI::QMC
         // The fix: draw ONE raw 64-bit value from `rng` per call (this is what
         // actually advances the caller's stream across iterations), then derive
         // the kBins per-bin streams from THAT. Within one call the bins are a
-        // pure function of (call_seed, bin index) -- independent of thread count,
-        // which is what S4 needs -- while across calls call_seed itself changes,
-        // because `rng.raw64()` consumes one step of the caller's engine.
+        // pure function of (call_seed, bin index) -- independent of thread count.
+        //
+        // H2.3 measured that constructing/seeding these 64 mt19937_64 engines
+        // is ~38 us/call and reusing the engine object cannot avoid it. H2.5
+        // replaces mt19937 with a counter-based engine; until then the RNG
+        // stays per-call here, NOT in `ws`.
         RandomSource call_source(rng.raw64());
         std::vector<RandomSource> bin_rngs;
         bin_rngs.reserve(kBins);
@@ -600,24 +555,8 @@ namespace HartreeFock::Correlation::CI::QMC
         // FIRST (serial -- this is one pass over an unordered_map, which OpenMP
         // cannot parallelize directly since it has no random-access index), then
         // run the per-bin work in parallel over the now-indexable bucket array.
-        //
-        // This is the only structural change S4 makes. Every write inside the
-        // parallel region targets ONLY that iteration's own `next_bins[bin]` and
-        // reads only that bin's `bin_rngs[bin]` -- both already partitioned by
-        // S1/S2 -- so there is no shared mutable state during the parallel
-        // region: no atomic, no critical section, no completion-order
-        // dependence. `population.weight_at(exc.det)` (the initiator check) is a
-        // read-only lookup into a `const&` that every thread shares safely.
-        // T2 scope step S4.5/R1: `bin_parents` is write-once grouped input --
-        // push_back order does not affect which parent ends up in which bin, and
-        // nothing sums or overwrites within it -- so persisting it across calls
-        // and `.clear()`-ing instead of fresh-constructing cannot change any
-        // output value (verified: bitwise identical to the fresh-construction
-        // S4 result). This removes 64 `vector` allocations per call; see
-        // FCIQMC_T2_THREADING.md R1 for the measured per-call cost.
-        static std::vector<std::vector<std::pair<DetKey, Weight>>> bin_parents(kBins);
-        for (auto &bin : bin_parents)
-            bin.clear();
+        // The parent's bin, not the child's -- see the header note; cross-bin
+        // annihilation is resolved once, in the fixed-order merge below.
         for (const auto &[det, weight] : population)
         {
             if (weight == 0.0)
@@ -629,7 +568,7 @@ namespace HartreeFock::Correlation::CI::QMC
         for (std::size_t bin = 0; bin < kBins; ++bin)
         {
             RandomSource &bin_rng = bin_rngs[bin];
-            WalkerPopulation &next_bin = next_bins[bin];
+            SpawnAccumulator &next_bin = next_bins[bin];
 
             for (const auto &[det, weight] : bin_parents[bin])
             {
@@ -655,7 +594,7 @@ namespace HartreeFock::Correlation::CI::QMC
                     if (h_ij == 0.0)
                         continue;
                     // Initiator rule. Occupancy is judged against the INCOMING
-                    // population, not the partially-built `next` -- see the
+                    // population, not the partially-built `out` -- see the
                     // header note on why order-dependence would otherwise creep
                     // in. Read-only, safe under threading.
                     if (initiator_threshold > 0.0
@@ -680,23 +619,47 @@ namespace HartreeFock::Correlation::CI::QMC
                     next_bin.add(exc.det, child);
                 }
             }
+            next_bin.finalize();
         }
 
         // Merge in FIXED bin order, 0..kBins-1, regardless of thread count --
         // never by completion order, which is the DFT-grid jitter defect this
         // codebase specifically avoids elsewhere. Fixed bin order is what makes
         // one call's result reproducible under threading (S4/R3): the same
-        // kBins maps get merged in the same order regardless of how many
-        // threads computed them. It is NOT what makes this bitwise identical
-        // to an earlier step's `next` -- since R2, `next_bins[bin]`'s OWN
-        // internal iteration order (a reused, `.clear()`-ed unordered_map) is
-        // itself a source of reassociation relative to S1-S4/R1's fresh-
-        // construction order; see the R2 comment above.
+        // kBins accumulators are merged in the same order regardless of how
+        // many threads computed them. Within a bin, SpawnAccumulator's iteration
+        // is the canonical (alpha, beta, weight-bits) order -- a pure function
+        // of that bin's multiset, reproducible across calls no matter how many
+        // prior calls the workspace served (the property unordered_map::clear
+        // could not give, and the reason R2's reuse changed output values).
         for (auto &bin : next_bins)
             for (const auto &[det, w] : bin)
-                next.add(det, w);
+                out.add(det, w);
+    }
 
-        return next;
+    // Convenience overload: builds a local workspace and returns a value. For
+    // the ~20 test call sites and any ad-hoc caller; the driver uses the
+    // workspace form directly. The local `SpawnWorkspace` is a fresh object
+    // each call, so this is bitwise-identical to the workspace form on its
+    // first use -- SpawnAccumulator and the parent buckets both genuinely
+    // reset, so a reused workspace and a fresh one produce the same bytes.
+    WalkerPopulation propagate_stochastic(
+        const WalkerPopulation &population,
+        int n_act,
+        const HamiltonianOps &ham,
+        double dt,
+        double shift,
+        RandomSource &rng,
+        int n_spawn_attempts,
+        double granularity,
+        double initiator_threshold)
+    {
+        SpawnWorkspace ws;
+        WalkerPopulation out;
+        propagate_stochastic(population, n_act, ham, dt, shift, rng,
+                             n_spawn_attempts, granularity, initiator_threshold,
+                             ws, out);
+        return out;
     }
 
     double max_stable_timestep(

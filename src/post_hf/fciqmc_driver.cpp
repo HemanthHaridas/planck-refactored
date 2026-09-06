@@ -4,6 +4,7 @@
 #include "post_hf/casscf_internal.h"
 #include "post_hf/ci/ci.h"
 #include "post_hf/ci/fciqmc.h"
+#include "post_hf/ci/spawn_accumulator.h"
 #include "post_hf/fci.h"
 
 #include <cmath>
@@ -14,6 +15,7 @@
 #include <algorithm>
 #include <memory>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace HartreeFock::Correlation
@@ -253,6 +255,13 @@ namespace HartreeFock::Correlation
             calc._output._verbosity >= Verbosity::Verbose;
         const int total_steps = opt.equilibration_steps + opt.sampling_steps;
 
+        // H2.4: the propagator's per-call scaffolding (64 accumulators + 64
+        // parent buckets), built ONCE here instead of ~50,000 times inside
+        // propagate_stochastic. Reused across every step; a fresh workspace and
+        // a reused one produce the same bytes (SpawnAccumulator/vector reset
+        // genuinely, unlike unordered_map::clear).
+        SpawnWorkspace spawn_ws;
+
         for (int step = 0; step < total_steps; ++step)
         {
             // T2 scope step S3. `ops.diagonal` is memoized (T4) behind an
@@ -279,10 +288,12 @@ namespace HartreeFock::Correlation
             for (const auto &[det, w] : pop)
                 (void)ops.diagonal(det);
 
-            pop = propagate_stochastic(pop, setup->n_act, ops, opt.timestep,
-                                       ctl.shift, rng, opt.spawn_attempts,
-                                       opt.walker_granularity,
-                                       opt.initiator_threshold);
+            WalkerPopulation next_pop;
+            propagate_stochastic(pop, setup->n_act, ops, opt.timestep,
+                                 ctl.shift, rng, opt.spawn_attempts,
+                                 opt.walker_granularity,
+                                 opt.initiator_threshold, spawn_ws, next_pop);
+            pop = std::move(next_pop);
             pop.compress(1e-12);
 
             const double n = ordered_l1_norm(pop);

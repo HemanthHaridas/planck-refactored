@@ -470,6 +470,28 @@ namespace HartreeFock::Correlation::CI::QMC
     // on the order determinants happen to be visited -- a determinant colonized
     // early in a sweep would then admit spawns that the same determinant, visited
     // late, would reject.
+    // H2.4 (docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md): the production form takes a
+    // caller-owned SpawnWorkspace (persistent per-call scaffolding, built once
+    // by the driver) and writes into a caller-owned `out` -- no return value,
+    // so no NRVO question (the M1 reversion). `out` is cleared first. The
+    // convenience overload below constructs a local workspace and returns a
+    // value; it exists so the ~20 test call sites and any ad-hoc caller do not
+    // have to thread a workspace.
+    struct SpawnWorkspace; // defined in spawn_accumulator.h
+
+    void propagate_stochastic(
+        const WalkerPopulation &population,
+        int n_act,
+        const HamiltonianOps &ham,
+        double dt,
+        double shift,
+        RandomSource &rng,
+        int n_spawn_attempts,
+        double granularity,
+        double initiator_threshold,
+        SpawnWorkspace &ws,
+        WalkerPopulation &out);
+
     WalkerPopulation propagate_stochastic(
         const WalkerPopulation &population,
         int n_act,
