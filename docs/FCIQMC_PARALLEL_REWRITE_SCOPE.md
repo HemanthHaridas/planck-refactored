@@ -1,19 +1,28 @@
 # Scope: Can FCIQMC Be Rewritten to Be Genuinely Parallel?
 
-**Scope for an investigation. Not started.** This is a question, not a plan.
-The incremental threading of the spawn loop is done and measured
-(`docs/FCIQMC_T2_THREADING.md`): 1.57× at 4 threads against a ~3× ceiling,
-with the gap fully diagnosed as per-call serial scaffolding that now
-exceeds the parallel region. This scope asks the different question the
-T2 work deliberately did not: **is the 1.57× a property of FCIQMC, or a
-property of how this FCIQMC is shaped — and would a rewrite of the data
-structures and the call granularity get genuine (near-linear, or at least
-solidly super-2×) parallelism?**
+**Investigation DONE. H1 answered (fixture-dependent; the N2 ceiling was a
+saturation artifact), and H2's `SpawnWorkspace` / `SpawnAccumulator` /
+xoshiro rewrite LANDED (H2.1–H2.7).** Bottom line: on the interesting
+(unsaturated) fixture HF/6-31G the whole-call speedup went **2.24×→2.42×
+at 4 threads and 2.47×→2.87× at 8 threads**, the RNG hoist landed its full
+~38 µs/call, and the sole remaining serial cost is the **~1100 µs/call
+fixed-order merge**, which is its own gated investigation, not more of H2.
+H3 (replica parallelism) remains a design sketch. All of this is gated on
+a real FCIQMC workload appearing (`FCIQMC_RESEARCH_SCOPE.md` Q1) — nothing
+in the tree runs FCIQMC at a size where the remaining gap matters.
 
-The output of this investigation is a decision with evidence: either "yes,
-here is the shape that works and what it costs to build", or "no, and here
-is the structural reason, measured not asserted". It is explicitly allowed
-to conclude that the current 1.57× is the right stopping point.
+Original framing follows.
+
+---
+
+The incremental threading of the spawn loop was done and measured
+(`docs/FCIQMC_T2_THREADING.md`): 1.57× at 4 threads against a ~3× ceiling,
+with the gap diagnosed as per-call serial scaffolding that exceeds the
+parallel region. This scope asked the different question the T2 work
+deliberately did not: **is the 1.57× a property of FCIQMC, or a property
+of how this FCIQMC is shaped — and would a rewrite of the data structures
+and the call granularity get genuine (near-linear, or at least solidly
+super-2×) parallelism?**
 
 ## Why this is worth asking now
 
@@ -219,7 +228,7 @@ measurement that decides whether it was worth it.
 | **H2.4 — DONE** (see below) | `SpawnWorkspace` type (`spawn_accumulator.h`) + `void propagate_stochastic(..., SpawnWorkspace& ws, WalkerPopulation& out)` with the value-returning form kept as a thin convenience overload for the ~20 test call sites. Persistent bins (`SpawnAccumulator`), partition buffer, merge target in `ws`, built once by the driver. Output caller-owned → no NRVO question. RNG stays per-call (that is H2.5). | self-reproducibility at fixed seed **+** thread-count invariance at `atol = 0.0` (1/2/4/8) **+** `metric_within_sigma` vs exact FCI — **NOT bitwise-vs-the-pre-H2 numbers**: swapping `unordered_map` (bucket-order iteration) for `SpawnAccumulator` (canonical-sorted-order fold) is a legitimate reassociation, exactly the R2 category, so the S5 pin re-pins to the new value | reproducibility fails, or invariance breaks, or the FCI-sigma blows the gate → localize with `planck-fciqmc-accumulator`'s reference before proceeding |
 | **H2.5 — DONE** (see below) | `RandomSource`'s engine swapped `std::mt19937_64` → **xoshiro256\*\*** (256-bit state from a SplitMix64 fill, O(1) reseed). The 64 per-bin streams now live in `ws.bin_rngs` and are re-keyed per call by `ws.rekey_streams(rng.raw64())` — same `derive()` recipe, no 64 constructions. Public surface unchanged (`uniform`/`uniform_int`/`stochastic_round`/`raw64`/`derive`/`seed`). | self-reproducibility at fixed seed **+** thread-count invariance `atol=0.0` (1/2/4/8) **+** `metric_within_sigma` vs exact FCI — never bitwise-vs-old, the RNG swap changes every trajectory | reproducibility fails, or the FCI sigma blows the gate → the bin-stream derivation is wrong (the S1 "frozen trajectory" trap: a `const derive()` that does not advance); check the population diagnostics, not just the gate |
 | **H2.6 — DONE, NO CODE CHANGE** (see below) | verification only — the `#pragma omp parallel for schedule(static)` survived H2.4/H2.5 intact, so "re-enable" was a no-op; the threading was already correct on the new `SpawnWorkspace`/`SpawnAccumulator`/xoshiro structure. | **bitwise identical across `OMP_NUM_THREADS` = 1/2/4/8** on `h2_fciqmc_threads1/4`, the S5 N2 pair, `n2_fciqmc_sto3g` (50k steps, deepest multi-parent bins), and the four non-QMC FCI gates sharing `build_all_mo_ci_setup` — all pass; and `schedule(dynamic)` was checked too and *stays* invariant (unlike the FCI sigma build) because here the accumulator partition does not depend on the schedule | — |
-| **H2.7** | re-run the H1 probe on **HF/6-31G** (the unsaturated fixture — not N2): per-call parent count, region µs, whole-call µs at 1/2/4/8 threads, before/after the rewrite. Report serial-scaffolding µs/call (should drop from ~1.5 ms toward near zero) and whole-call speedup vs the region ceiling | the H1 numbers already recorded (`region 3.44×/4t, 4.47×/8t`; `whole 2.24×/4t`) | whole-call speedup does *not* move toward the region ceiling → the ~1.5 ms was not actually the bottleneck; re-profile with an in-binary phase probe (T2's `PLANCK_FCIQMC_PHASE_PROBE` pattern) before concluding |
+| **H2.7 — DONE** (see below) | re-ran the H1 probe on HF/6-31G, 50k walkers, at 1/2/4/8 threads, with a per-phase split | H1's numbers | **PARTIAL WIN.** whole-call 2.24×→**2.42×**/4t, 2.47×→**2.87×**/8t. The RNG hoist landed exactly as H2.3 predicted (rekey 38 µs → **0.14 µs**). But serial scaffolding is still ~1270 µs/call, and it is now **~1100 µs of merge** — untouched by H2.4–H2.6 and not threaded. The merge is the last lever. |
 
 #### H2.1 result (2026-09-06): the S5 gate needs a PINNED `threads1`, not just a `threads1`/`threads4` comparison
 
@@ -474,6 +483,55 @@ partition depended on the schedule; here it does not (bin = fixed
 which bin is irrelevant. `static` is kept anyway (locality, and the T2
 doc pins it).
 
+#### H2.7 result (2026-09-06): partial win — the RNG hoist landed, but the merge is now the whole serial ceiling
+
+Re-ran the H1 probe (`PLANCK_FCIQMC_H1_PROBE`, re-added, measured,
+reverted) on HF/6-31G, 50k walkers, with a per-phase split, at 1/2/4/8
+threads. Post-H2 rewrite vs the H1 baseline:
+
+| threads | region µs (H1 → now) | whole µs (H1 → now) | whole speedup (H1 → now) |
+|---|---|---|---|
+| 1 | 5569 → 5867 | 7039 → 7139 | 1.00× |
+| 2 | 3129 → 3062 | 4652 → 4311 | 1.51× → 1.66× |
+| 4 | 1617 → 1659 | 3139 → **2957** | 2.24× → **2.42×** |
+| 8 | 1245 → 1198 | 2849 → **2492** | 2.47× → **2.87×** |
+
+Per-phase, at 4 threads (µs/call):
+
+| phase | µs | scales with threads? |
+|---|---|---|
+| **rekey (RNG)** | **0.14** | — was ~38 µs pre-H2.5; **H2.3's arithmetic confirmed in the real binary** |
+| partition | ~170 | no |
+| **merge** (walk 64 finalized accumulators, `out.add` ~27,500 entries) | **~1100** | **no** |
+| region (the `#pragma omp` block) | 1659 | yes (3.54×/4t) |
+| serial-outside-region total | **~1270** | no |
+
+**What the rewrite bought:** the RNG hoist landed its full ~38 µs/call
+(rekey is now 0.14 µs — 270× cheaper), and removing the 64-bin
+construction moved the whole-call speedup 2.24→2.42×/4t and 2.47→2.87×/8t.
+The `n2_fciqmc_sto3g` gate dropped 11.2 s → 8.6 s along the way.
+
+**What it did NOT buy:** the whole-call speedup is still ~1.5× short of
+the region's 3.54×/4t, and the phase split shows why — **~1100 µs/call of
+that ~1270 µs serial scaffolding is the merge**, which H2.4–H2.6 never
+touched. H1's "~1.5 ms serial drag" was construction + RNG + partition +
+merge; the rewrite removed the first two, leaving the merge as almost the
+entire remainder, and it does not thread (it must stay in fixed bin order
+for invariance).
+
+**Verdict:** H2.7's stated failure criterion — "whole-call speedup does
+*not* move toward the region ceiling" — was NOT triggered: it *did* move
+(2.24→2.42, 2.47→2.87). But the move is bounded by the merge, which is now
+the sole remaining serial cost. **The merge is the last lever, and it is
+its own investigation, not more of H2** — parallelizing it reintroduces
+the completion-order hazard the whole binning design exists to avoid, so
+any approach has to keep the fixed bin order (e.g. a parallel prefix-sum
+over per-bin sizes into one flat output array, then a threaded scatter by
+precomputed offset — the scatter is disjoint by construction, the ordering
+is fixed by the offsets). That is a smaller, careful target for when a
+real FCIQMC workload exists (`FCIQMC_RESEARCH_SCOPE.md` Q1), the same gate
+as everything else here.
+
 **The accumulator — remaining candidates, only if H2.7 shows the sort matters:**
 
 2. **Flat open-addressing hash table, fixed capacity, defined probe order,
@@ -498,13 +556,17 @@ doc pins it).
   with its own before/after `metric_within_sigma`, per
   `FCIQMC_RESEARCH_SCOPE.md` §6 and T2 invariant 2 — not slipped in.
 
-**If H2 holds** (H2.7 shows the whole call tracking toward the region
-ceiling on HF): the rewrite is bounded — one new `SpawnWorkspace` type,
-one changed signature, one accumulator swap, one RNG hoist, all behind the
-existing invariance discipline. **If H2.7 shows the serial scaffolding was
-not the bottleneck**, the remaining cost is inside the merge itself (T2
-already found merge time *rising* with thread count, unexplained) and the
-next step is a merge-specific investigation, not more of H2.
+**H2 held partway** (H2.7 result above): the rewrite is bounded and
+landed — one new `SpawnWorkspace` type, one changed signature, one
+accumulator swap, one RNG engine swap — and moved the whole call
+2.24→2.42×/4t, 2.47→2.87×/8t. But **the serial scaffolding was only
+half the bottleneck**: H2.4–H2.6 removed the 64-bin construction and the
+~38 µs RNG seeding, but ~1100 µs/call of merge remains and does not
+thread. The merge is a merge-specific investigation (a fixed-order
+parallel scatter — prefix-sum the per-bin sizes, threaded scatter by
+offset, ordering fixed by the offsets so no completion-order hazard),
+not more of H2, and gated on a real workload (`FCIQMC_RESEARCH_SCOPE.md`
+Q1) the same as everything else.
 
 ### H3 — the outer step loop itself is not as sequential as it looks
 
@@ -581,8 +643,10 @@ conclusion `FCIQMC_RESEARCH_SCOPE.md` Q1 reaches for the method as a whole.
   flat in walker count) is real on both. **H1 is refuted as stated: the
   work is not too small on any non-saturated fixture, which is exactly the
   Q1 large-active-space case.**
-- **H2 — SCOPED into seven verifiable steps (H2.1–H2.7). H2.1–H2.6 DONE;
-  only H2.7 (the payoff measurement on HF) remains.**
+- **H2 — DONE (H2.1–H2.7). Landed: partial win — whole-call speedup
+  2.24→2.42×/4t, 2.47→2.87×/8t on HF. The RNG hoist landed its full
+  ~38 µs/call; the ~1100 µs/call merge is the sole remaining serial cost
+  and is a separate, gated investigation.**
   On HF the whole call is stuck at 2.24×/4 threads against a region
   ceiling of ≥ 4.5×, because the serial scaffolding is ~1.5 ms/call (30×
   N2's, since HF partitions/merges 30× more parents) and does not thread.
@@ -621,8 +685,16 @@ conclusion `FCIQMC_RESEARCH_SCOPE.md` Q1 reaches for the method as a whole.
   on the S5 pair, `h2_fciqmc_sto3g`, `n2_fciqmc_sto3g` (50k steps), and the
   4 non-QMC FCI gates all bitwise-identical, and `schedule(dynamic)` stays
   invariant too (the accumulator partition does not depend on the
-  schedule, unlike the FCI sigma build). **H2.7** (the only step left)
-  re-measures on HF against the region ceiling.
+  schedule, unlike the FCI sigma build). **H2.7 (DONE)** re-ran the H1
+  probe on HF/6-31G with a per-phase split: rekey 38 µs → **0.14 µs**
+  (H2.3's arithmetic confirmed live), 64-bin construction gone, whole-call
+  2.24→2.42×/4t and 2.47→2.87×/8t. But ~1100 µs/call of **merge** remains
+  — untouched by H2.4–H2.6, not threaded (must stay fixed bin order for
+  invariance). H1's "~1.5 ms serial drag" was construction + RNG +
+  partition + merge; the rewrite removed the first two. The merge is a
+  fixed-order parallel-scatter problem (prefix-sum bin sizes, threaded
+  scatter by offset), a separate careful target gated on a real workload —
+  not more of H2.
 - **H2.0 (smaller fixed `kBins`) — reserve, N2-class only.** Helps a
   saturation-starved fixture; on HF the bins are already large enough.
   H2 does **not** touch `kBins`.

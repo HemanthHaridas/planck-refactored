@@ -854,9 +854,11 @@ worth doing whether or not FCIQMC happens.
   threads on an unsaturated fixture. **Near-linear is now plausible, not a
   foregone no.**
 
-  **H2 -- SCOPED into 7 verifiable steps (H2.1-H2.7 in
-  `docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md`). H2.1-H2.6 DONE; only H2.7 (the
-  payoff measurement on HF) remains.** **H2.1 landed** `n2_fciqmc_s5_threads1/4` (N2-sized SHORT run,
+  **H2 -- DONE (H2.1-H2.7 in `docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md`).
+  `SpawnWorkspace` / `SpawnAccumulator` / xoshiro256** rewrite landed;
+  PARTIAL WIN -- whole-call 2.24->2.42x/4t, 2.47->2.87x/8t on HF; the
+  ~1100us/call merge is the sole remaining serial cost and a separate
+  gated investigation.** **H2.1 landed** `n2_fciqmc_s5_threads1/4` (N2-sized SHORT run,
   ~9 parents/bin so cross-bin annihilation is exercised, unlike the
   4-determinant `h2_fciqmc_threads1/4`). Finding: **the `threads1` case
   must PIN both energies to fixed values, not just `metric_present`** --
@@ -911,13 +913,24 @@ worth doing whether or not FCIQMC happens.
   bitwise-identical; `schedule(dynamic)` stays invariant too (accumulator
   partition doesn't depend on the schedule, unlike the FCI sigma build).
   H2.2's serial-only accumulator test is sufficient -- one thread per bin,
-  no threaded write to any accumulator. **Only H2.7 remains** -- re-measure
-  the scaffolding-removal payoff on HF/6-31G against the region ceiling.
+  no threaded write to any accumulator. **H2.7 done -- PARTIAL WIN.**
+  Re-ran the H1 probe on HF/6-31G, 50k walkers, with a per-phase split:
+  rekey (RNG) 38us -> **0.14us** (H2.3's arithmetic confirmed live),
+  64-bin construction gone, **whole-call speedup 2.24x -> 2.42x/4t,
+  2.47x -> 2.87x/8t**. `n2_fciqmc_sto3g` gate 11.2s -> 8.6s. BUT
+  ~1100us/call of **merge** remains -- untouched by H2.4-H2.6, not threaded
+  (must stay fixed bin order for invariance). H1's "~1.5ms serial drag"
+  was construction + RNG + partition + merge; the rewrite removed the
+  first two, leaving the merge as almost the entire remainder. **The merge
+  is the last lever and a SEPARATE investigation** -- a fixed-order
+  parallel scatter (prefix-sum per-bin sizes, threaded scatter by offset,
+  ordering fixed by offsets so no completion-order hazard) -- not more of
+  H2, gated on a real workload (Q1). **H2 (H2.1-H2.7) is DONE.**
   H2 does NOT touch `kBins`. **H2.0 (smaller
   fixed `kBins`) -- reserve, N2-class only.** **H3 (replicas)** -- design
   sketch only. **Fixture: HF/6-31G or larger for all parallel-FCIQMC
   measurement; N2/STO-3G is the correctness gate only.** Deliverable
-  converts to `FCIQMC_PARALLELISM.md` when H2/H3 resolve or are declined.
+  converts to `FCIQMC_PARALLELISM.md` when H3 resolves or is declined.
 
   **Three lessons, each of which cost a wrong number first.** (1) **A profile share
   is a lower bound on what removing that work is worth** — three for three now
