@@ -822,6 +822,25 @@ worth doing whether or not FCIQMC happens.
   not more of the R1/R2 pattern, and is a decision for when a real target
   exists.
 
+  **A REWRITE (not more of the R1/R2 pattern) is scoped as an open
+  investigation in `docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md`.** Three
+  independently-checkable hypotheses, cheapest first: **H1** — the per-step
+  work is too small to parallelize at reachable walker counts regardless of
+  shape (measure arithmetic intensity against the FCI sigma build's, which
+  threaded a structurally identical scatter to 3.54x; if H1 holds, the 1.57x
+  stands and there is no rewrite). **H2** — the ~95us/call serial
+  scaffolding is the ceiling and is eliminable by hoisting all per-call state
+  (64 bins, 64 RNG engines, the partition, the merge target) into a
+  driver-owned `SpawnWorkspace` and swapping `unordered_map` for a
+  reuse-stable accumulator (sorted vector + `inplace_merge`, or a flat table
+  whose `.clear()` genuinely resets) — which also dissolves every T2
+  determinism trap by construction. **H3** — run independent replicas
+  (different seeds, same Hamiltonian) as an embarrassingly-parallel axis;
+  near-linear in replica count, zero shared state, but only tightens the
+  error bar rather than converging one trajectory sooner, so build-or-not is
+  tied to a real target appearing. Deliverable is `FCIQMC_PARALLELISM.md`
+  (house shape) or, if H1 kills it, one paragraph here.
+
   **Three lessons, each of which cost a wrong number first.** (1) **A profile share
   is a lower bound on what removing that work is worth** — three for three now
   (T1 1.76x against an Amdahl cap of 1.42x, T4 2.61x against 1.83x, the sigma
