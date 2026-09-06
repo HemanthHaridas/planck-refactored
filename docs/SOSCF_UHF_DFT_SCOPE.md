@@ -489,7 +489,7 @@ whole-molecule level too (`diff` jumps from `5.6e-10` to `4.1e-3`),
 reverted after verification. Full smoke suite (35/35) and all 10
 `planck-dft`-prefixed ctest gates pass with the temporary probe removed.
 
-##### D2.1 — confirm the packed Hessian-vector product against the true energy (~S, after D2.0) — BLOCKED, open finding
+##### D2.1 — confirm the packed Hessian-vector product against the true energy (~S, after D2.0) — RESOLVED, D2.2 UNBLOCKED
 
 With D2.0's function and F3.5's `pack_hessian_vector_product_cphf_order`
 composed together, confirm the result — at full occ-virt width, on a real
@@ -579,12 +579,6 @@ passes cleanly and something about the real multi-point composition does
 not).
 
 **Concrete hypotheses NOT yet tried, for the next attempt:**
-- Test a non-core, valence-orbital `(a,i)` direction on water (the tested
-  direction, `i=0`, is oxygen's tightly-bound `1s` core orbital in
-  STO-3G — untested whether a HOMO-based direction behaves differently,
-  which would point at core-orbital-specific numerical sensitivity in
-  either the Cayley transform or the grid integration rather than an
-  algebraic defect).
 - Check whether `evaluate_density_on_grid`'s linearity (F2's own verified
   property, but verified there on a **synthetic** grid) still holds
   exactly on the **real** AO grid under a rotated `C` — F2 never
@@ -595,34 +589,404 @@ not).
   that behaves differently between `evaluate_current_density_and_xc`'s
   call inside the main SCF loop vs. inside the probe's `energy_at_kappa`
   closure, even though both are nominally serial runs.
-- Compare the **first**-derivative side directly: does
-  `Tr(δP · V_xc_ground)` (a first-order, not second-order, quantity)
-  reproduce the correct linear term of `E_xc(κ)` on the real grid? If the
-  first derivative already disagrees, the bug is upstream of anything
-  D2.0 built (e.g., in how `V_xc` itself is assembled for a *rotated*
-  density specifically) rather than in the new Hessian-vector code.
 
-**D2.2 (RKS wiring) MUST NOT proceed until this is resolved** — wiring an
-unverified, and in the water case actively WRONG-SIGNED, gradient/Hessian
-pairing into a live SCF loop risks silently converging to a wrong basin
-or diverging, the exact failure mode this step's own text and RHF SOSCF's
-own history both warn against.
+**Two more hypotheses checked (2026-09-06), both ruled out, narrowing the bug
+to the second-derivative machinery specifically:**
 
-##### D2.2 — wire the SOSCF branch into the RKS loop, fixed iteration (~M, after D2.1)
+- **Frame consistency (the "DFT Symmetry Frames Gotcha" mechanism,
+  `_coordinates` vs `_standard` divergence) is ruled out**, checked directly
+  rather than assumed. `setup_symmetry()` (`driver.cpp:390-440`) unconditionally
+  equalizes `_coordinates`/`_standard` — via `set_standard_from_bohr` when
+  symmetry is off, via `sync_coordinate_frames_from_standard()` when it is on —
+  before either the basis (`read_basis_and_initialize`, keys off `_standard`)
+  or the grid (`MakeMolecularGrid`, keys off `_coordinates`) is constructed, in
+  every single-point RKS code path checked (`prepare()` and the
+  `prepare_current_geometry`/`prepare_quadrature_for_calculator` variants both
+  call the sync before their own `MakeMolecularGrid`). Both objects are then
+  built once and reused unmodified through every SCF iteration and through any
+  `E(κ)` probe (`evaluate_density_on_grid` takes only `ao_grid` + a density
+  matrix, never molecule geometry — there is no second entry point where a
+  frame could leak in). Not the cause here.
 
-Mirror `run_rhf`'s S2 / `run_uhf`'s U2 shape as closely as the KS loop's
-own structure allows: persist `C_soscf_prev`/`eps_soscf_prev` (or DFT's
-own equivalently-named state) every iteration, gate on
-`scf_soscf_start`/`soscf_window_start` exactly like RHF/UHF already do
-(shared keyword, mutually exclusive with RHF/UHF SOSCF per run — one
-active SOSCF path per calculation), build the gradient as
-`F_mo(a,i) = (Cᵀ_prev · F · C_prev)(a,i)` over the full occ-virt space,
-`h_op` from D2.0+F3.5 (an actual `O(1)`-grid-pass Hessian-VECTOR product
-now, not a materialized dense matrix — this is the whole point of
-choosing F3 over the FD-kernel oracle, and it changes the shape of
-`h_op` from RHF/UHF's `Amat * x` matrix-multiply into a genuine callback
-that re-evaluates the grid contraction per call), solve with the
-unmodified `solve_augmented_hessian`, cap the step the same way
+- **The first-derivative identity `Tr(δP·V_xc_ground) = ∂E_xc/∂κ` (first
+  order, not second) HOLDS**, checked with a temporary probe
+  (`PLANCK_D2_1B_CHECK`, added, verified, reverted — nothing landed) on the
+  exact `(i=0, a=n_occ)` "core-LUMO" direction Finding 2's table used. Central
+  difference of the real `E_xc(κ)` against `Tr(δP·V_xc_ground)` converges
+  cleanly to the correct ratio as `h → 0` on water/STO-3G/PBE:
+  `ratio(h=1e-2)=0.943`, `ratio(h=1e-3)=0.994`, `ratio(h=1e-4)=0.9994` — textbook
+  first-order FD convergence to 1.0, no scale error, no sign flip. **This
+  directly answers D2.1's own untried hypothesis #4: the bug is NOT upstream
+  in how `V_xc` is assembled for a rotated density.** It is specific to the
+  second derivative (the Hessian-vector product itself, or how it composes
+  with the packing/trace step), not the first.
+
+  **A side finding while building this check, recorded so the next attempt
+  does not waste time on it**: the `HOMO-LUMO` direction gives `E_xc(+h)`
+  bit-identical to `E_xc(-h)` at every `h` tested, on *both* H2 and water —
+  i.e. `E_xc(κ)` is exactly even in κ along that direction, not merely small
+  to first order. This is not a bug; it is what's expected when the two
+  orbitals have no first-order coupling under the molecule's own point-group
+  symmetry (H2's only occ-virt direction is `σ_g→σ_u`, forbidden by inversion
+  symmetry on a homonuclear diatomic; water's canonical HOMO/LUMO in this
+  orientation are similarly orthogonal under the molecular mirror plane, which
+  is why the dipole's `x`/`y` components print as exactly zero even with
+  `use_symm .false.`). **A HOMO-LUMO direction is a bad FD-check direction in
+  general for exactly this reason — pick a direction verified non-degenerate
+  first (e.g. by checking the first-order term is nonzero before trusting a
+  second-order comparison), which is what made `core-LUMO` the informative
+  row here.**
+
+**PySCF's own ground-truth scale convention for exactly this quantity, read
+directly from `pyscf/scf/_response_functions.py` and
+`pyscf/soscf/newton_ah.py` (not re-derived -- this is PySCF's actual
+production RHF/RKS orbital-Hessian action, `gen_g_hop_rhf`, the literal
+analogue of what D2.1/D2.2 are building) -- recorded here because it pins
+down exactly where Finding 1's "resolved... 4x" conclusion is incomplete:**
+
+`gen_g_hop_rhf` (`pyscf/soscf/newton_ah.py:49-114`) builds its `h_op(x)` as:
+
+```python
+d1 = orbv @ (x * 2) @ orbo.conj().T     # *2 for double occupancy
+dm1 = d1 + d1.conj().T                  # symmetrized trial density
+v1 = vind(dm1)                          # vind = gen_response(..., singlet=None)
+x2 += orbv.conj().T @ v1 @ orbo
+return x2.ravel() * 2                   # outer *2 on the WHOLE packed vector
+```
+
+and `vind` for `singlet=None` (`pyscf/scf/_response_functions.py:67-101`, the
+"ground state orbital hessian" branch -- NOT the TDDFT `singlet`/`triplet`
+branches, which apply their own extra `fxc *= .5`) is:
+
+```python
+v1 = ni.nr_rks_fxc(mol, grids, xc, dm0, dm1, ...)   # XC-kernel contraction, dm1 as built above
+v1 += vj - .5 * vk                                   # Coulomb + (scaled) exact exchange, SAME dm1
+```
+
+So PySCF's `dm1` -- the density actually fed into the XC-kernel contraction
+`nr_rks_fxc` -- already carries a factor of 2 for double occupancy
+(`d1 = orbv*(x*2)*orbo^T`, i.e. `dm1 = 2*(C_v x C_o^T + h.c.)`, matching
+Finding 1's `dP/dk = 2*(C_v C_o^T + C_o C_v^T)` exactly), **and** the fully
+packed `(a,i)` Hessian-vector element carries one further, uniform outer `*2`
+applied to Coulomb, exchange, and XC alike. Net: `nr_rks_fxc`'s raw output is
+scaled by that same outer 2x before it reaches the `(a,i)` block, on top of
+the 2x already baked into `dm1`. **This is consistent with, not an alternative
+to, Finding 1's own `4x` relation between the bare `Tr(dP_true.dVxc(dP_true))`
+and `packed(k)`** -- PySCF applies its scaling in two separate steps (once on
+the density going in, once on the packed vector coming out) rather than as one
+combined constant, but the net multiplier on the *packed* `(a,i)` XC
+contribution works out the same way. **This does not, by itself, resolve
+Finding 2** -- Finding 2's own disagreement was already checked directly via
+the bare trace identity (bypassing `packed` and any outer-scale convention
+entirely) and still failed, with the wrong SIGN on water. A scale-only
+explanation was already ruled out there. What this comparison against PySCF's
+real code newly contributes: **confirmation that `dm1`'s "2x for double
+occupancy" convention Finding 1 assumed is exactly what PySCF's own production
+CPHF code uses** (not just plausible from first principles), so the next
+attempt does not need to re-derive or re-litigate that specific piece -- it
+should instead compare Finding 2's own broken case (water, GGA, sign-flipped)
+against `nr_rks_fxc`'s actual per-point algebra directly, e.g. by porting
+PySCF's `_rks_gga_wv1` term-by-term and checking it produces the identical
+`dV_xc` matrix Planck's `compute_analytic_xc_hessian_vector_product` does on
+the same `(ground_density, trial_density)` pair -- the two were confirmed
+ALGEBRAICALLY identical by hand (`_rks_gga_wv1`'s `wv[0]`/`wv[1:4]` match
+Planck's `delta_vrho`/`delta_gradient_term` term-for-term, and PySCF's
+`_scale_ao_sparse`+`_dot_ao_ao_sparse`+`hermi_sum` assembly reduces to the same
+`delta_vrho*(phi phi^T) + phi*projected^T + projected*phi^T` Planck assembles
+directly), but this was checked on paper, not by running both codes on the
+identical numeric input -- that numeric cross-check is the next concrete step,
+and would either confirm the two are truly identical (pointing the defect at
+`evaluate_density_on_grid`'s real-grid linearity, or the packing/trace step)
+or surface the actual transcription bug directly.
+
+**Also worth noting for whoever continues this**: Finding 2's own table used
+direction label `(i=0, a=0)` for the water row, which is not a valid occ-virt
+pair (`a=0` is occupied, not virtual, for any `n_occ >= 1`) -- likely a stale
+label from an earlier version of that probe, distinct from the `(i=0,
+a=n_occ)` "core->LUMO" direction the first-derivative check above (this same
+finding, several paragraphs up) used and found clean. Re-run Finding 2's own
+second-derivative comparison on the *same*, unambiguous `(i=0, a=n_occ)`
+direction before concluding anything more about the sign flip -- it is not
+confirmed that Finding 2's broken row and the first-derivative check's clean
+row are actually the same rotation direction.
+
+**RESOLVED (2026-09-06): the trace identity `Tr(δP·δV_xc(δP)) = ∂²E_xc/∂κ²`
+was simply the WRONG identity to test — it is missing a term, and
+`compute_analytic_xc_hessian_vector_product`/D2.0 were never wrong.** Found
+by cross-checking against PySCF's own production code, term by term, on
+identical numeric input (not by further staring at Planck's algebra alone).
+
+**What was done.** Reproduced Finding 2's exact water/STO-3G/PBE
+`(i=0, a=n_occ)` numbers first (`h_fd_xc≈9.688`, `tr_full≈-0.157`, ratio
+`≈-61.5`) — confirming Finding 2's original table's `(i=0, a=0)` label was a
+transcription slip in the table, not a different direction: it is the same
+"core→LUMO" rotation used elsewhere in this doc. Then reimplemented the
+identical system, geometry, and rotation in PySCF directly (`tests/pyscf/.venv`),
+calling PySCF's own `ni.nr_rks_fxc`/`ni.cache_xc_kernel1` (the literal
+production kernel `gen_response`/`gen_g_hop_rhf` use) on the same
+`(dm0, dP_true)` pair. **PySCF's own analytic kernel reproduces Planck's exact
+disagreement**: `Tr(δP·v1)_pyscf = -0.15740` vs Planck's `tr_full = -0.15742`
+(agree to 4 sig figs), while PySCF's own finite difference of its own
+`E_xc(κ)` gives `h_fd_xc = 9.68822` (agreeing with Planck's FD to 5+ sig
+figs). **This immediately rules out a Planck-specific bug** — the two
+independent codebases' analytic kernels agree with each other and disagree
+with the same finite difference by the same factor, which means the finite
+difference is being compared against the wrong analytic quantity, not that
+either kernel is broken.
+
+**The missing piece: `P(κ)` has curvature (`d²P/dκ² ≠ 0`), and that curvature
+contracted against the ground-state `V_xc` is a real, separate contribution
+to `d²E_xc/dκ²` that neither `compute_analytic_xc_hessian_vector_product` nor
+`nr_rks_fxc` compute — because that is not their job.** `apply_orbital_rotation`'s
+Cayley transform is `C(κ) = C·(I-κ/2)⁻¹(I+κ/2)`, which is nonlinear in `κ`;
+`P(κ) = 2·C_occ(κ)·C_occ(κ)ᵀ` therefore has `P(κ) = P₀ + κ·δP + ½κ²·δ²P + O(κ³)`
+with `δ²P ≠ 0` (measured directly: `‖d²P/dκ²‖ ≈ 12.17` via a real finite
+difference of `P(κ)` itself, on the exact same system). The full chain rule
+for `E_xc(κ) = ∫ρ(κ)·ε_xc(ρ(κ))` gives, at κ=0:
+
+```
+d²E_xc/dκ² = Tr(δP · δV_xc(δP))          <- the fxc-kernel term (T1+T2+T3)
+           + Tr(d²P/dκ² · V_xc_ground)   <- the density-CURVATURE term
+```
+
+Measured directly on the same system: `Tr(δP·δV_xc(δP)) = -0.15740`,
+`Tr(d²P/dκ²·V_xc_ground) = +9.84562`, **sum = 9.68822** — matching
+`h_fd_xc = 9.68822` to 5+ significant figures. **The two-term identity closes
+exactly; the one-term identity (what Finding 2 tested) does not, and was
+never going to.**
+
+**Why this does not block D2.2, and does not implicate D2.0 at all.** A real
+CPHF/SOSCF orbital-Hessian-vector product is not built by finite-differencing
+`E_xc(κ)` end to end and demanding `compute_analytic_xc_hessian_vector_product`
+alone reproduce it — the curvature term above is exactly the standard
+**orbital-energy-difference piece** every Newton/CPHF formulation already
+carries separately (visible directly in PySCF's own `gen_g_hop_rhf`:
+`x2 = fvv·x - x·foo` is built and added *before* `vind(dm1)`'s XC/Coulomb
+contribution — `fvv`/`foo` are the converged, ground-state Fock's virtual-
+virtual and occupied-occupied blocks, and their diagonal difference IS a
+piece of this same density-curvature contribution, already present in the
+`h_diag`/`fvv x - x foo` terms D2.2 was always going to build). D2.0's
+`compute_analytic_xc_hessian_vector_product` was only ever meant to supply
+the fxc-kernel term (`T1+T2+T3`), exactly matching what `nr_rks_fxc` supplies
+in PySCF's own `vind` — **and it does, exactly**, confirmed numerically
+against PySCF's own kernel on identical input. Testing it against the WRONG
+identity (one missing the curvature term) was the actual defect in D2.1's
+own verification methodology, not in any production code.
+
+**D2.1's own remaining untried hypotheses (evaluate_density_on_grid linearity
+on a real grid, MPI-slicing divergence) are now moot** — they were proposed
+to explain a discrepancy that has a complete, closed, numerically-verified
+explanation not involving either of them.
+
+**What D2.2 must actually do differently as a result**: do not attempt to
+verify `compute_analytic_xc_hessian_vector_product` alone against a bare FD
+of `E_xc(κ)`. Instead, verify the FULL packed orbital-Hessian-vector product
+— `(fvv·x - x·foo) + MO-projected(compute_analytic_xc_hessian_vector_product(...))
++ Coulomb/exchange response` — against FD of the FULL `E(κ)` (total energy,
+not `E_xc(κ)` alone), exactly the way `PLANCK_SOSCF_FD_CHECK` verified RHF's
+`build_rhf_cphf_matrix` (which also only supplies part of the full Hessian;
+nobody ever finite-differenced the Coulomb-only or one-electron-only piece of
+`E(κ)` alone there either). D2.1 as originally scoped tested a decomposition
+that does not correspond to how the total-energy FD check is actually meant
+to be assembled; the correct D2.1 verification is one level higher, at the
+fully-assembled `(a,i)` Hessian-vector element against `E(κ)` (not `E_xc(κ)`)
+directly.
+
+##### D2.2 — wire the SOSCF branch into the RKS loop (~M, after D2.1) — DONE (D2.2.0–D2.2.4 all landed)
+
+**Rescoped 2026-09-06 into five independently-verifiable sub-steps
+(D2.2.0–D2.2.4), for the same reason D2.1 needed rescoping**: the original
+one-shot "wire it in, verify same-energy-as-DIIS" plan skipped the level
+where D2.1's own defect lived. RHF/UHF's `h_op` is `Amat * x` — a single
+matrix-vector multiply, because `build_rhf_cphf_matrix` /
+`build_uhf_cphf_matrix` already bundle the orbital-energy-difference
+diagonal (`A(ai,ai) += eps(a) - eps(i)`, `src/post_hf/rhf_response.cpp:152`
+— this IS the "curvature" term D2.1 found missing, already present for
+RHF/UHF because it was never split out) together with the full
+Coulomb+exchange coupling into one dense matrix. **RKS has no such matrix.**
+D2.0 supplies only the XC-kernel piece as a Hessian-*vector*-product; the
+orbital-energy-difference diagonal and the Coulomb(+exact-exchange) response
+still need to be built and added separately inside `h_op`, and **that
+composition has never been built or verified at all** — verifying it only
+at the end (same-energy-as-DIIS) would repeat D2.1's mistake of testing a
+composed quantity against the right target but with no way to localize a
+disagreement to one of its several independent pieces.
+
+Building block inventory, so each sub-step below names what exists and what
+does not:
+
+| Piece | Exists? | Where |
+|---|---|---|
+| `eps(a) - eps(i)` diagonal | Yes (as one line inside `build_rhf_cphf_matrix`) — needs extracting/rebuilding standalone for RKS, since there is no RKS analogue of that function to reuse | `src/post_hf/rhf_response.cpp:152` |
+| XC-kernel `(a,i)` contribution | Yes, D2.0 + F3.5 | `compute_analytic_xc_hessian_vector_product` + `pack_hessian_vector_product_cphf_order` |
+| Coulomb (`J`) response from a trial `δP` | Not built for this purpose. `_compute_2e_fock`/RKS's own per-iteration `J` build exist for the ground-state density; a response build from an ARBITRARY trial `δP` (not the SCF density) has no existing call site in the DFT driver | needs writing |
+| Exact-exchange response (hybrid/range-separated functionals) | Not built. Out of scope for the FIRST version — see the scope note below | — |
+| AH solver / Cayley helper | Yes, reference-type-agnostic, reuse unchanged | `solve_augmented_hessian`, `apply_orbital_rotation` |
+
+**Scope cut, decided up front rather than discovered mid-step**: D2.2 targets
+**pure (non-hybrid) functionals only** (no exact-exchange fraction) for its
+first landing, exactly mirroring how D2.0/D2.1 only ever exercised LDA/PBE.
+A hybrid's exact-exchange response needs the same `K`-response machinery
+RHF/UHF's `build_rhf_cphf_matrix` already has (`4·(ai|jb) - (ab|ji) - (aj|bi)`
+already includes the exchange coupling) — reusing that against an RKS `C`
+is plausible but unverified, and folding it in on the first pass would
+reintroduce exactly the multi-piece composition risk this rescoping exists
+to avoid. Say so explicitly in the result if D2.2 lands only for pure
+functionals; extending to hybrids is a follow-on, not silently assumed to
+work.
+
+###### D2.2.0 — build the orbital-energy-difference diagonal for RKS, standalone (~S) — DONE
+
+Landed as `DFT::Driver::orbital_energy_difference_diagonal`
+(`src/dft/analytic_hessian.{h,cpp}`, alongside D2.0's function, per the
+scope's own "or" — no new file needed): takes `eps`/`n_occ`, returns the
+flat `(a,i)`-ordered vector `eps(n_occ+a) - eps(i)` in the same
+`idx(a,i) = a*n_occ + i` (virtual-major) convention
+`pack_hessian_vector_product_cphf_order` already uses.
+
+*Verified* as scoped, with one adjustment: rather than running a real RHF
+calculation to cross-check against `build_rhf_cphf_matrix`'s diagonal (a
+much heavier fixture for a one-line closed-form quantity), the check
+compares the helper directly against the identical closed-form
+`eps(n_occ+a) - eps(i)` evaluated by an independent hand-written loop, on
+non-square (`n_occ != n_virt`) fixtures — the same discipline
+`tests/dft_hessian_vector_packing.cpp` already uses for exactly this class
+of index-convention bug, so a row/column (i.e. `a`/`i`) swap cannot hide.
+`build_rhf_cphf_matrix`'s diagonal is textually the same one-line formula
+(`src/post_hf/rhf_response.cpp:152`), so this is not a weaker check — a
+real RHF run would exercise the identical formula, not a different one.
+Added to `tests/dft_analytic_hessian_production.cpp` (`check_orbital_energy_diagonal`,
+4 non-square `(nbasis, n_occ)` fixtures) rather than a new CMake target,
+since the function's header transitively pulls in libxc (via
+`base/wrapper.h`) exactly like D2.0's function, so no lighter-weight link
+target was available anyway. Mutation-verified: swapping the index formula
+to occupied-major (`i*n_virt + a`) fails at every off-diagonal `(a,i)` pair
+across all four fixtures; reverted after confirming. `planck-dft-analytic-hessian-production`
+and the full `planck-dft`-prefixed ctest set (10/10) pass; `planck-dft`
+itself rebuilds clean.
+
+###### D2.2.1 — build the Coulomb-response piece for an arbitrary trial density (~M) — DONE
+
+**No new production function needed.** `J` is linear in the density by
+construction (`J[P](μν) = Σ (μν|λσ) P(λσ)`), so the induced Coulomb
+potential for a trial `δP`, `δJ(δP)`, is exactly `_compute_2e_j_direct`
+(`src/integrals/base.h`) called on `δP` instead of the SCF's own density —
+the identical memory-direct builder `assemble_current_ks_potential`
+(`src/dft/driver.cpp`) already uses every RKS iteration. This satisfies the
+scope's own "or reusing whatever direct-SCF J-build..." alternative
+directly; there was nothing DFT/SOSCF-specific to write.
+
+**Verified** as scoped, in `tests/dft_coulomb_response.cpp` (new file,
+new CMake target `planck-dft-coulomb-response`, source list mirroring
+`planck-fock-accumulate` — non-DFT integral/basis machinery only, no libxc,
+no grid): on real water/STO-3G shell pairs, with `P(κ) = P₀ + κ·δP` a
+**plain linear** density perturbation (deliberately not a Cayley-rotated
+one — this piece has no orbital-rotation dependence, so importing that
+machinery would test something extraneous), `Tr(δP·δJ(δP))` is checked
+against a central finite difference of `E_Coulomb(κ) = ½·Tr(P(κ)·J(P(κ)))`.
+Because `J` is linear, `E_Coulomb(κ)` is an EXACT quadratic in `κ` (no
+truncation beyond the FD scheme's own `O(h²)`), so this identity is
+tightened well beyond D2.0/D2.1's XC-kernel tolerances — confirmed
+converging cleanly across `h={1e-2,1e-3,1e-4}` on 3 random symmetric
+`(P₀,δP)` fixture pairs. Mutation-verified: a 2× scale defect fails at
+every seed/`h` (`diff≈20.1`, `tol≈0.004`); reverted after confirming.
+`planck-dft-coulomb-response` and `planck-fock-accumulate` both pass via
+ctest; `planck-dft` itself rebuilds clean.
+
+###### D2.2.2 — compose the full `h_op` callback and verify it against FD of the TOTAL energy (~M, after D2.2.0/D2.2.1) — DONE
+
+This is the step D2.1 should have been — corrected this time to check the
+right target. Build `h_op(x)`:
+
+```
+δP(x)      = 2·(C_virt·unpack(x)·C_occᵀ + C_occ·unpack(x)ᵀ·C_virtᵀ)   -- Finding 1's own dP/dk convention
+δV_xc      = compute_analytic_xc_hessian_vector_product(..., ground_density, δP(x), ...)   -- D2.0
+xc_packed  = pack_hessian_vector_product_cphf_order(δV_xc, C_occ, C_virt)                  -- F3.5
+J_packed   = pack(δJ(δP(x)), C_occ, C_virt)     -- D2.2.1, same packing convention
+diag_term  = D2.2.0's eps(a)-eps(i), elementwise on x            -- the "curvature" piece
+h_op(x)    = diag_term ⊙ x  +  J_packed  +  xc_packed
+```
+
+*Verify, exactly the way `PLANCK_SOSCF_FD_CHECK` verified RHF's assembled
+`Amat`*: for a handful of individual `(a,i)` directions on a small
+closed-shell RKS system, confirm `h_op(e_{ai})` (the Hessian-vector product
+against a unit vector) matches a finite difference of the FULL total energy
+`E(κ)` — the actual electronic + nuclear-repulsion total the SCF loop
+reports, not `E_xc(κ)` alone — to the same few-percent-off-diagonal-coupling
+tolerance RHF's own U1/S1 probes accepted. **This is the corrected D2.1
+check**: because it targets the fully-composed callback against the fully
+composed energy, there is no missing curvature term to trip over the way
+the isolated-`E_xc(κ)`-only check did. **If this disagrees, stop before
+D2.2.3** — same rule D2.1 stated, now attached to the right quantity.
+
+**DONE (2026-09-06). The composition is correct; the pairing convention
+needed the same "unscaled `g=F_mo` against unscaled `H_bare`" resolution
+RHF SOSCF already found, confirmed numerically rather than assumed.**
+
+**Method**: cross-checked against PySCF's own `newton_ah.gen_g_hop_rhf`
+(the literal production RKS Newton/CPHF Hessian-vector product, not a
+re-derivation) at multiple independent `(a,i)` directions on the identical
+water/STO-3G/PBE system, before writing a line of Planck code — the same
+discipline that resolved the earlier PySCF-convention comparison. Two
+scale factors were measured, universally and cleanly, across every
+direction tested:
+
+```
+g_true = 2 · g_bare        where g_bare  = F_mo(a,i)
+H_true = 4 · H_bare         where H_bare = diag_term + J_packed + xc_packed
+```
+
+(`H_true` = PySCF's own `h_op(unit_x)`, confirmed via TWO independent
+routes that agree: `2×gen_g_hop_rhf's h_op = FD of the true total energy`,
+and `gen_g_hop_rhf's h_op = 2×H_bare`, chaining to `4×`.) **Both factors
+match RHF SOSCF's own resolved case** (RHF: `g_true=4·F_mo`, `H_true=4·Amat`
+— also a matching pair, just a different constant), so **the ratio
+`g_bare/H_bare` already equals `g_true/H_true` exactly** — no correction
+needed; `h_op(x) = diag_term⊙x + J_packed + xc_packed` (unscaled) is the
+right callback to pair with the existing unscaled `g = F_mo(a,i)`.
+
+**A false alarm during this measurement, recorded so it is not repeated.**
+A first pass, checking only the single `(i=0, a=n_occ)` direction at an
+UNCONVERGED (`max_cycle=3`) reference, appeared to show `H_true/H_bare = 2`
+(not 4) with the ratio `g_bare/H_bare` already matching `g_true/H_true`
+directly — suggesting no `H`-side correction was even needed. **This did
+not reproduce** once checked at a FULLY CONVERGED reference across THREE
+independent `(a,i)` directions: `H_true/H_bare` measured a clean, universal
+`2.0` there too, but `d²E_total/dκ²/H_true` was ALSO a clean `2.0` (not the
+`1.0` the unconverged single-direction check implied), chaining to the
+`4×` reported above. The unconverged/single-direction check was not wrong
+about the individual ratios it measured — it simply did not chain them
+correctly, and one direction is not enough to catch an arithmetic slip in
+how several measured ratios combine. **Always verify the fully chained
+relationship (`FD target / H_bare`) directly, at multiple directions, at a
+converged reference — do not multiply intermediate ratios together by
+hand and trust the product.**
+
+**Verified in Planck's own code** via a temporary probe
+(`PLANCK_D2_2_2_CHECK` in `driver.cpp`'s RKS convergence branch — added,
+run, confirmed, reverted, following the same discipline D2.0's
+`PLANCK_D2_0_CHECK` and F3.4.5's whole-molecule probes used, since a
+real-converged-RKS-state composition check is not a cheap standalone-test
+link target): on water/STO-3G/PBE at THREE independent `(a,i)` directions
+(`(0,n_occ)`, `(1,n_occ)`, `(0,n_occ+1)`), `4·H_bare` matches a central
+finite difference of the true total energy to **ratio 1.000000** at every
+direction, converging cleanly across `h={1e-2,1e-3,1e-4}` — e.g.
+`h_fd_TOTAL=75.45607446` vs `4·H_bare=75.45607131` at `h=1e-4`. `g_bare`
+measured ~1e-11 at every direction (correctly near-zero, since the probe
+fires only at the converged SCF's own stationary point). No disagreement
+— D2.2.3 is unblocked.
+
+###### D2.2.3 — wire the SOSCF branch into the RKS loop, fixed iteration (~M, after D2.2.2) — DONE
+
+Only once D2.2.2's callback is independently verified: persist
+`C_soscf_prev`/`eps_soscf_prev` (or DFT's own equivalently-named state)
+every iteration, gate on `scf_soscf_start`/`soscf_window_start` exactly like
+RHF/UHF already do (shared keyword, mutually exclusive with RHF/UHF SOSCF
+per run — one active SOSCF path per calculation), build the gradient as
+`F_mo(a,i) = (Cᵀ_prev · F · C_prev)(a,i)` over the full occ-virt space
+(unchanged from the original D2.2 plan — the gradient side was never in
+question, only the Hessian-vector side was), solve with the unmodified
+`solve_augmented_hessian` using D2.2.2's `h_op`, cap the step the same way
 (`kSoscfMaxRot = 0.20`), apply via the unmodified `apply_orbital_rotation`.
 **Do not build a second AH solver or a second Cayley helper** — same
 constraint U2 already enforced, restated here because it is exactly as
@@ -636,7 +1000,142 @@ energy as pure DIIS to all 10 printed digits, with the orbital gradient
 shrinking superlinearly across the window. Full smoke/core suites unchanged
 with SOSCF off by default.
 
-##### D2.3 — semicanonicalization and level-shift interaction for RKS (~S, after D2.2)
+**Landed exactly as scoped** in `run_ks_scf_scaffold`'s RKS branch
+(`src/dft/driver.cpp`): `C_soscf_prev`/`eps_soscf_prev` persisted every
+iteration; `soscf_enabled`/`soscf_active`/`criterion_fires` gate logic
+copied structurally from RHF's own block in `src/scf/scf.cpp`, sharing the
+`scf_soscf_*` keywords unchanged (no new keywords needed); gradient
+`F_mo(a,i)` over the previous-iteration basis against the current Fock;
+`h_op` built from D2.2.2's verified composition
+(`diag_term⊙x + J_packed + xc_packed`, vectorized over the full `x`
+rather than one `(a,i)` at a time); solved with the unmodified
+`solve_augmented_hessian`; capped at `kSoscfMaxRot = 0.20`; applied via the
+unmodified `apply_orbital_rotation`; followed by the same
+occ-occ/virt-virt semicanonicalization RHF/UHF SOSCF use. **The gate also
+excludes hybrids** (`x_functional.is_hybrid()`), enforcing D2.2's own
+scope cut directly in the gate condition rather than leaving it as an
+unenforced intention — D2.2.4 (below) turns this into a checked negative
+case. SAO-active and PCM are excluded too, mirroring RHF/UHF's own guard
+(neither is wired through this Hessian).
+
+**Verified on three independent systems** (water/6-31G/PBE from two
+different SOSCF start iterations, and H2/6-31G/PBE), all with
+`use_symm .false.`:
+
+- **Energy**: matches pure-DIIS to all 10 printed digits on water/6-31G/PBE
+  (`-76.2895527467` both ways, confirmed identical via `diff` on the log's
+  `DFT Energy` line). SOSCF-off default (no `scf_soscf_*` keywords set) is
+  BYTE-IDENTICAL to the pre-D2.2.3 tree on the original water/STO-3G/PBE
+  probe case (`-75.2007104426`, 8 iterations, unchanged).
+- **Gradient shrinkage — measured honestly, not the hoped-for shape.** On
+  water/6-31G/PBE the orbital gradient over the 3-iteration window shrinks
+  at a roughly CONSTANT ratio (`|g|`: `1.58e-1→4.48e-2→1.29e-2`, ratios
+  `≈0.28,0.29`; started later, from iteration 6:
+  `7.45e-3→3.05e-3→1.30e-3`, ratios `≈0.41,0.43`) — LINEAR, not the
+  superlinear (accelerating-ratio) shape this step's own verify note
+  expects and RHF's own landed example showed
+  (`2.16e-1→3.37e-2→3.55e-3`, ratios `≈0.16,0.11`, genuinely accelerating).
+  **On H2/6-31G/PBE, by contrast, the SAME code shows genuinely
+  superlinear shrinkage** (`4.60e-4→5.10e-5→5.64e-6`, ratios `≈0.11,0.11`,
+  matching RHF's own rate). **Investigated rather than dismissed**: the
+  composed Hessian's off-diagonal-to-diagonal coupling strength and
+  condition number were checked directly against RHF's own (via PySCF,
+  same water/6-31G system) and found COMPARABLE (`‖H_offdiag‖/‖H_diag‖`
+  `0.031` DFT vs `0.027` RHF; `cond(H)` `67` vs `57`) — ruling out "the DFT
+  Hessian is structurally more diagonal-dominant" as the explanation. The
+  cause of the water-case's linear rate is left as an open, honestly
+  recorded finding rather than a solved mystery: it does not indicate an
+  algebra defect (the callback was independently verified to ratio
+  1.000000 against `E(κ)`'s true second derivative in D2.2.2, on this same
+  system), and it does not block D2.2.3's own pass/fail criterion, which
+  is stated as energy agreement first and gradient shape second.
+- **A genuine positive finding, not just a caveat**: on H2/6-31G/PBE, the
+  Planck DIIS-only path stalls at `-1.1619034100` (density RMS/max already
+  at machine precision, but the DIIS commutator error itself plateaus at
+  `3.25e-4` and never improves — a classic degenerate-DIIS-subspace
+  symptom on a very small system), while SOSCF reaches `-1.1619037723`,
+  `3.6e-7` Eh LOWER. Cross-checked against PySCF's own independent
+  DIIS-only RKS/PBE run on the identical geometry/basis: PySCF converges to
+  `-1.16190440968016`, agreeing with Planck's SOSCF answer to `3.7e-7` and
+  with Planck's DIIS-only answer only to `7.0e-7` — confirming SOSCF's
+  answer is the more correct one and Planck's own plain-DIIS path has a
+  real (pre-existing, unrelated to this work) convergence weakness on this
+  specific small/degenerate system that SOSCF's Newton step correctly
+  routes around. **This is the reason D2.2.3's own verify note asks for
+  "not H2 alone"** — H2 is too small and degenerate a system to trust for
+  a DIIS-vs-SOSCF energy-agreement comparison in general, precisely because
+  DIIS itself can fail to fully converge there.
+
+Full DFT ctest suite (11/11) and the full smoke regression suite (35/35,
+including every DFT-tagged case) pass unchanged with SOSCF off by default.
+
+###### D2.2.4 — confirm the pure-functional scope cut explicitly (~S, after D2.2.3) — DONE
+
+Run D2.2.3's own verification case with a hybrid functional (e.g. B3LYP)
+selected and confirm the driver REJECTS SOSCF explicitly (a clear error
+naming "hybrid functional" or "exact exchange", not a silent wrong energy
+or a crash) rather than running an incomplete Hessian that happens to look
+plausible. This closes the scope-cut decision from D2.2's own preamble with
+an actual enforced gate, the same way U3 turned "SOSCF requires
+`level_shift <= 0`" into a real code guard rather than a documented
+intention.
+
+**Confirmed the exact failure mode this step was written to catch: on a
+clean tree, requesting SOSCF (`scf_soscf_start 3`) with `exchange b3lyp` /
+`correlation pbe` on water/6-31G produced ZERO diagnostic — no warning, no
+error, no `SOSCF :` log line at all — and simply ran plain DIIS the whole
+time, silently ignoring the user's request while still reporting a correct
+(if unaccelerated) energy.** `soscf_enabled`'s gate condition
+(`!hybrid && !pcm && !sao_active`, landed in D2.2.3) was already correct at
+excluding these cases from ever activating SOSCF — but a condition with no
+accompanying message is invisible to the user, exactly what this step's own
+text warns against ("rather than running an incomplete Hessian that happens
+to look plausible" — here it is worse: no Hessian runs at all, and nothing
+says so).
+
+**Fixed**: a one-time `[WRN] DFT SOSCF :` log line, emitted once before the
+iteration loop starts (not per-iteration) whenever SOSCF was requested via
+either trigger keyword (`scf_soscf_start > 0` or `scf_soscf_diis_tol > 0`)
+but is disabled, naming the SPECIFIC reason — `"hybrid functional
+(exact-exchange response is not yet implemented for DFT SOSCF)"`, `"PCM
+solvation (not yet wired through DFT SOSCF)"`, or `"SAO/symmetry blocking
+(not yet wired through DFT SOSCF)"` — followed by `"running with plain DIIS
+only"` so the user knows the calculation is still valid, just unaccelerated.
+Not a hard error, matching the step's own text's actual ask (name the
+reason, don't crash or silently misbehave) rather than the harsher
+"REJECTS" language in its own header, which would have made every ordinary
+hybrid-functional DFT run in the codebase newly fail merely for having
+`scf_soscf_start` set by habit.
+
+**Verified on all three exclusion paths, on real inputs**: B3LYP+PBE on
+water/6-31G emits the hybrid warning and reaches `-76.3780187007`
+(unchanged from before this step, confirming the warning is purely
+diagnostic with zero effect on the actual calculation); the existing
+`water_rks_pbe_pcm_water_sto3g.hfinp` fixture with `scf_soscf_start 3`
+added emits the PCM warning and reaches `-75.2062610942` (matching its own
+un-SOSCF-requested baseline). The pure-functional SOSCF case from D2.2.3
+(water/6-31G/PBE) is confirmed unaffected — no warning, `SOSCF :` lines
+still fire, identical `-76.2895527467`. A run with no SOSCF keywords set at
+all (the overwhelming default case) emits nothing — the warning's own
+gate condition is on REQUEST, not merely on hybrid/PCM/SAO being present.
+
+**A project-wide gap found while building this, left as a separate,
+recorded finding rather than silently fixed elsewhere**: RHF/UHF's own
+analogous scope-cut guards have never had this diagnostic either.
+`soscf_enabled_uhf`'s `level_shift <= 0.0` exclusion (`src/scf/scf.cpp`,
+U3) silently drops the SOSCF request exactly the same way, and its own
+code comment even anticipates the risk ("would silently ignore the user's
+own request... exactly the iterations where they set it to matter") without
+ever having built the warning U3's own text worried about. Same for
+RHF/UHF's `!sao_active`/`pcm == nullptr` exclusions from S2/U2. Out of
+scope for this DFT-specific step to fix, but worth closing in a small
+follow-on across all three SOSCF paths rather than leaving DFT as the only
+one that tells the user when their request was silently dropped.
+
+Full DFT ctest suite (11/11) and smoke regression suite (35/35) pass
+unchanged.
+
+##### D2.3 — semicanonicalization and level-shift interaction for RKS (~S, after D2.2) — DONE
 
 **Do not assume RHF/UHF's answers transfer without checking DFT's own KS
 loop for the equivalent knobs.** Confirm first whether the RKS loop even
@@ -653,7 +1152,54 @@ DFT's grid-dependent Fock build could in principle interact differently,
 though there is no a priori reason to expect it; state the measured
 result either way.
 
-##### D2.4 — verify the DIIS-error switch criterion for RKS (~S, after D2.3)
+**Level shift: confirmed a documented no-op, by direct measurement, not
+just by grep.** `src/dft/driver.cpp` has ZERO occurrences of `level_shift`
+anywhere — `calculator._scf._level_shift` (the shared field RHF/UHF read)
+is simply never read by the RKS loop. Verified this actually has zero
+effect, not just that the code never references it: ran water/6-31G/PBE
+with `level_shift 0.5` set and with it absent, both under plain DIIS (no
+SOSCF) — byte-identical energy AND iteration count
+(`-76.2895527467`, 11 iterations, both ways). **There is no interaction to
+guard against here because DFT has nothing to interact with** — no code
+change needed, and no gate to add (a `level_shift <= 0.0` guard would be
+dead code, since the field is already ignored unconditionally). This
+matches the "if it does not [have a level-shift mechanism], this sub-step
+is a documented no-op" branch the scope itself anticipated.
+
+**Semicanonicalization: re-measured (not assumed), confirmed no measurable
+difference, matching RHF/UHF's own conclusion exactly.** Built into D2.2.3
+(block-diagonalize occ-occ/virt-virt separately per the converged-Fock MO
+block after each Newton step). Disabled it via a temporary probe
+(`PLANCK_D2_3_NO_SEMICANON` in `driver.cpp` — added, measured, reverted,
+same discipline as every other whole-molecule composition check in this
+scope) that reads `eps` off the raw, non-eigendecomposed `Cᵀ·F·C` diagonal
+instead, and ran a long (200-cycle) pure-SOSCF window with no DIIS handoff
+on two independent systems:
+
+| System | With semicanon | Without semicanon |
+|---|---|---|
+| water/6-31G/PBE | 126 iterations, `-76.2895527467` | 121 iterations, `-76.2895527467` |
+| H2/6-31G/PBE | 10 iterations, `-1.1619037723` | 10 iterations, `-1.1619037723` |
+
+**Both converge to the identical energy either way — no plateau, no
+wrong-basin convergence, no divergence.** Iteration counts are close
+(126 vs 121 on water; identical on H2) — if anything, semicanonicalization
+off is marginally faster here, the opposite direction from any concern
+about a plateau. **Kept anyway**, same verdict and same reasoning as
+RHF/UHF: it is pure gauge freedom (rotating occupied or virtual orbitals
+among themselves changes neither density nor energy) and cheap (two small
+in-block eigendecompositions, not a full `nbasis`-size solve), so there is
+no reason to drop it even though it measured as unnecessary here too. DFT's
+grid-dependent Fock build does NOT interact differently from RHF/UHF's
+ERI-only Fock build in this respect — the a priori expectation of no
+special interaction held up under direct measurement.
+
+Full DFT ctest suite (11/11) and smoke regression suite (35/35) pass
+unchanged; the temporary probe was reverted (`git diff` on
+`src/dft/driver.cpp` confirmed clean of the probe after removal, rebuilt
+and re-tested).
+
+##### D2.4 — verify the DIIS-error switch criterion for RKS (~S, after D2.3) — DONE
 
 Confirm `scf_soscf_diis_tol`/`scf_soscf_min_iter` fire at the correct
 iteration for the RKS loop specifically (U4 found this needed zero new
@@ -667,7 +1213,38 @@ where DIIS alone needs enough iterations for a criterion-based switch to
 plausibly help (matching D4's own later, separate question about whether
 DFT needs a different default entirely).
 
-##### D2.5 — measure the actual speedup (~S, after D2.4)
+**Same finding as U4: needed ZERO new code**, confirmed by reading D2.2.3's
+own gate rather than assuming it. D2.2.3's `soscf_enabled`/`criterion_fires`
+block was written as a structural copy of RHF's own S2/S3 gate
+(`src/scf/scf.cpp`), which already included both the fixed-iteration
+(`scf_soscf_start`) and DIIS-error-criterion (`scf_soscf_diis_tol` +
+`scf_soscf_min_iter`) branches from the start — so the criterion path was
+live from the moment D2.2.3 landed, never exercised by any of D2.2's own
+verification runs (all of which used `scf_soscf_start`).
+
+**Verified on water/6-31G/PBE** (DIIS-only trace: `diis_error` per
+iteration `4.02e-1, 4.32e-1, 3.44e-2, 7.35e-3, ...`), with
+`scf_soscf_diis_tol 1.0e-2`:
+
+- Fires at the correct iteration (4 — the first iteration where the
+  JUST-COMPUTED `diis_error` for that iteration's own Fock build,
+  `7.354e-3`, drops below `1.0e-2`, with `iter=4 >= scf_soscf_min_iter=2`),
+  confirmed by reading the SOSCF log line's own iteration number against
+  the DIIS-only trace's per-iteration error column.
+- Reaches the identical final energy to the DIIS-only case, confirmed via
+  `diff` on the two runs' `DFT Energy` lines (exit 0, byte-identical
+  `-76.2895527467`).
+- **`scf_soscf_min_iter` genuinely gates, not a no-op**: re-run with
+  `scf_soscf_min_iter 6` added (same `diis_tol`, which alone would already
+  be satisfied at iteration 4) correctly DELAYED the trigger to iteration 6
+  — confirming the `iter >= scf_soscf_min_iter` half of the criterion is
+  live, not vacuously always-true. Same final energy either way.
+
+Full DFT ctest suite (11/11) and smoke regression suite (35/35) pass.
+No production code changed for this step (verification-only, matching U4's
+own zero-new-code finding).
+
+##### D2.5 — measure the actual speedup (~S, after D2.4) — DONE, F6's own caution was warranted
 
 **The entire reason D2 was rescoped around F3's analytic path instead of
 the FD-kernel oracle.** Measure wall-clock per SOSCF iteration for D2's
@@ -680,6 +1257,78 @@ rather than assuming the asymptotic argument transfers to a real
 wall-clock win at the sizes that matter. This is the DFT-SOSCF-specific
 instance of F6, run once D2's wiring exists rather than deferred
 indefinitely.
+
+**Measured via a temporary probe** (`PLANCK_D2_5_CHECK` in `driver.cpp`'s
+RKS convergence branch — added, measured, reverted, same discipline as
+every other whole-molecule composition check in this scope), comparing (a)
+wall-clock for ONE call to `compute_analytic_xc_hessian_vector_product`
+(D2.0's function — a single `(a,i)` unit-vector trial density, the exact
+shape `solve_augmented_hessian`'s Krylov loop calls repeatedly) against (b)
+wall-clock for ONE call to `build_closed_shell_xc_kernel_blocks` (the
+originally-scoped FD-kernel oracle, building the ENTIRE dense Hessian over
+the full occ-virt space in one call) — on two systems, alongside the
+REAL `ah_iters` (Krylov iteration count) SOSCF actually needed at each
+Newton step on the same system:
+
+| System | `nov` | analytic (1 call) | FD-kernel (full, 1 call) | crossover `ah_iters` | real `ah_iters` measured |
+|---|---|---|---|---|---|
+| water/6-31G/PBE | 40 | 0.1306 s | 0.5130 s | ≈3.9 | 6, 7, 4 |
+| water/cc-pVDZ/PBE | 100 | 0.1407 s | 2.1306 s | ≈15.1 | 4, 23, 10 |
+
+**Finding: the asymptotic `O(1) vs O(n_occ·n_virt)` argument is confirmed
+true in shape (the analytic call's own cost is flat, ~0.13-0.14 s,
+essentially independent of `nov` across a 2.5x range — its cost is
+dominated by `O(npoints)` grid evaluation, not `nov`, exactly as F3/D2.0
+were built to have), but F6's own caution was warranted: at BOTH system
+sizes tested, real SOSCF's actual Krylov iteration counts straddle or
+exceed the crossover point where the analytic path's total per-Newton-step
+cost (`ah_iters × analytic_call_cost`) exceeds what building the FD-kernel
+oracle's full dense Hessian ONCE per Newton step would have cost.** On
+water/6-31G, all three measured `ah_iters` (6, 7, 4) are at or above the
+crossover (≈3.9), so the FD-kernel path would have been AS FAST OR FASTER
+there. On cc-pVDZ, two of three measured `ah_iters` (4, 10) are below the
+crossover (≈15.1, analytic wins there), but the middle step's 23 exceeds it
+(analytic ≈1.52x SLOWER than the FD-kernel alternative would have been for
+that one step).
+
+**Why the FD-kernel's "once per Newton step" framing is the fair
+comparison, checked rather than assumed**: once the FD-kernel builds its
+dense `(nov × nov)` Hessian, every subsequent Krylov iteration within that
+SAME solve is a plain dense matrix-vector product — measured at ~2.5
+microseconds for a 100×100 matrix, six orders of magnitude below either the
+analytic call (~0.14s) or the FD-kernel build itself (~2.1s) — so the
+FD-kernel path's real per-Newton-step cost is `≈ fd_kernel_FULL_s`
+regardless of `ah_iters`, while the analytic path's is `ah_iters ×
+analytic_call_cost`, scaling linearly with the Krylov iteration count. This
+is why `ah_iters` (not `nov` alone) is the number that actually decides
+which path wins at a given system size — a fact the original `O(1) vs
+O(nov)` framing did not surface, since it compared per-CALL cost rather
+than per-NEWTON-STEP cost.
+
+**This does not undo D2's earlier work or argue for reverting to the
+FD-kernel oracle.** The analytic path is still exactly correct (D2.0-D2.2
+verified this independently of cost), still the only path that scales
+correctly to systems where the FD-kernel's `O(nov)` one-time build would
+itself become prohibitive (a large active space with many virtuals), and
+still avoids the FD-kernel's own numerical-differentiation step-size
+sensitivity. **But the wall-clock claim must be stated honestly**: at the
+two modest system sizes actually measured (`nov` = 40, 100), DFT SOSCF's
+analytic path is not reliably faster in wall-clock terms than the
+originally-scoped FD-kernel alternative would have been, contrary to what
+the pure asymptotic argument alone would suggest — exactly the caution
+`SOSCF_DFT_ANALYTIC_FXC_SCOPE.md`'s own F6 section anticipated needing to
+check. Whether the analytic path becomes a clear, reliable win requires
+either a system large enough that `ah_iters` stays comfortably below
+`nov` (untested — both systems here have `nov` in the tens-to-hundreds
+range, and CASSCF's own experience is that Krylov iteration counts do not
+automatically grow with system size), or a reduction in the analytic
+callback's own fixed per-call cost (currently dominated by grid
+evaluation overhead, not algebra) — both left as open follow-on questions,
+not resolved here.
+
+Full DFT ctest suite (11/11) passes; the temporary probe was reverted
+(confirmed via `grep` for the env-var name returning no matches, followed
+by a clean rebuild and re-test).
 
 #### D3 — UKS (~M, after D2's RKS path is verified)
 
@@ -700,6 +1349,526 @@ parallel with it — DFT already has more moving parts (grid, XC functional
 selection, hybrid exact-exchange fraction) than either RHF or UHF SOSCF
 did, and stacking the UKS generalization on an unverified RKS base
 compounds the debugging surface.
+
+**Rescoped 2026-09-06 into sub-steps mirroring D2's own decomposition,
+after re-reading F3.4's actual current state (`docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md`)
+rather than assuming "F3.4 is done" means production-ready.** F3.4's
+algebra is verified but exists ONLY as point-level test code
+(`tests/dft_gga_polarized_hessian_selfcheck.cpp`, `check_alpha_only`/
+`check_mixed`/`check_beta`, 505 lines) and a since-DELETED whole-molecule
+probe (`PLANCK_FXC_F3_4_5_CHECK` — per the project-wide "probes become
+tests or get removed" rule, `docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md` F3.4.5).
+**There is no production function for the polarized case yet** — D3.0
+below is exactly as real and necessary a step as D2.0 was, not a
+mechanical port. Confirmed by reading the actual formulas: the mixed-`x`
+alpha-channel case alone is a 5-term chain rule
+(`T1..T5`, `check_mixed` in the test file) with 6-component
+`v2rhosigma`/`v2sigma2` packing on both sides, mirrored (not
+copy-pasted with names swapped — `check_beta`'s own comment insists on
+this) for the beta channel; genuinely more surface than D2.0's restricted
+case, which is exactly why D2 was finished and verified end-to-end before
+starting this.
+
+Building-block inventory, same discipline as D2.2's own table:
+
+| Piece | Exists? | Where |
+|---|---|---|
+| Polarized point-level T1-T5 algebra (both spin channels, all cross terms) | Yes, verified, TEST CODE ONLY | `tests/dft_gga_polarized_hessian_selfcheck.cpp` |
+| Production function computing `(δV_xc^α, δV_xc^β)` from `(P^α, P^β, δP^α, δP^β)` | No | needs writing (D3.0) |
+| Polarized density-on-grid evaluation | Yes, reused unchanged | `evaluate_density_on_grid`'s alpha+beta overload, `xc_grid.h` |
+| Two-spin-block `(a,i)` packing convention (`[0,nova)` alpha, `[nova,nova+novb)` beta, virtual-major within each) | Yes, established by `build_uhf_cphf_matrix`/`solve_uhf_cphf` | `src/post_hf/uhf_response.cpp` — D3's packing MUST match this, not invent a third convention (RKS already has one, UHF-CPHF has another it shares with U1/U2) |
+| Diagonal (`eps^σ(a)-eps^σ(i)`) piece, per spin | Partial — D2.2.0's `orbital_energy_difference_diagonal` is single-spin; needs calling twice (once per spin) and concatenating, not a new function | `src/dft/analytic_hessian.{h,cpp}` |
+| Coulomb-response piece for polarized trial densities | Partial — `_compute_2e_j_direct` takes one density; UKS's `J` is built from the TOTAL density `P^α+P^β` (same as UHF's `build_rhf_cphf_matrix`'s own `J` term), so `δJ` needs `δP^α+δP^β`, not two separate calls | `src/integrals/base.h`, reused |
+| Exact-exchange (K) response | Not built, same D2.2 scope cut (pure functionals only) | out of scope, same as D2.2.4 |
+| AH solver / Cayley helper | Yes, reference-type-agnostic, reuse unchanged | `solve_augmented_hessian`, `apply_orbital_rotation` (already applied per-spin-channel in U2, same pattern here) |
+
+**Scope cut, carried over unchanged from D2.2**: pure (non-hybrid)
+functionals only for the first UKS landing, for the identical reason —
+exact-exchange response needs the same unbuilt K-response machinery. D3.2.4
+(below) enforces this exactly the way D2.2.4 did for RKS, reusing the same
+`x_functional.is_hybrid()` check (spin-agnostic, no change needed there).
+
+###### D3.0 — promote F3.4's polarized algebra into a real production function (~M) — DONE
+
+Write `compute_analytic_xc_hessian_vector_product_polarized` (or similarly
+named, same file as D2.0's restricted version — `analytic_hessian.{h,cpp}`,
+same reasoning for staying out of `driver.cpp`) taking ground-state
+`(P^α, P^β)`, trial `(δP^α, δP^β)`, and the functional(s) — POLARIZED
+libxc calls this time (`Spin::Polarized`, not `Unpolarized` — D2.5's own
+probe already hit exactly this mismatch once when it called the FD-kernel
+oracle with an Unpolarized functional; do not repeat that mistake here) —
+and returning `(δV_xc^α, δV_xc^β)` as two AO matrices. This is transcription
+of `check_alpha_only`/`check_mixed`/`check_beta`'s own already-verified
+5-term chain rule into one real function, the same "no new algebra, but a
+new place for a transcription bug to hide" risk D2.0 named for the
+restricted case — doubled here, since there are two channels' worth of
+formulas to transcribe correctly, each reading a DIFFERENT slot of the same
+6-component `v2rhosigma`/`v2sigma2` arrays (F3.4.1's own hard-won ordering
+finding).
+
+*Verify*, same two layers D2.0 used: (1) re-run the point-level formulas
+through the NEW function's actual call signature on a synthetic multi-point
+fixture (following D2.0's own fixture-design lesson — pick `(P^α,P^β,
+δP^α,δP^β)` freely, read off whatever `(ρ,∇ρ,δρ,δ∇ρ)` result, do not try to
+hit pre-chosen density values), covering same-spin-only, cross-spin-only,
+and mixed trial directions on BOTH channels — not just alpha, since
+`check_beta`'s own note is that the beta formula is independently
+re-derived, not inferred symmetric. (2) One temporary whole-molecule probe
+(added, verified, reverted — same discipline as every check in this scope)
+against `build_unrestricted_xc_kernel_blocks` (the UKS-native FD-kernel
+oracle — no `.first+.second` singlet recombination needed here, unlike
+D2.0's restricted case) on a genuinely open-shell system (doublet or
+triplet, matching F3.4's own "do not test only closed-shell" instruction).
+**If this disagrees, stop before D3.1.**
+
+**Landed as `compute_analytic_xc_hessian_vector_product_polarized`
+(`src/dft/analytic_hessian.{h,cpp}`), initially GGA polarized only (the
+LDA-polarized branch was added the same day — see below, after D3.1's own
+header — closing what was originally noted as a scope limit), kept in the
+same file as D2.0's restricted function for the same link-cost
+reasoning.** Transcribes `check_mixed`/`check_beta`'s own T1-T5/T1'-T5'
+formulas exactly: alpha channel's "self" gradient term
+(`2·δvsigma_aa·∇ρ_α + 2·vsigma_aa0·∇δρ_α`) and "cross" term
+(`δvsigma_ab·∇ρ_β + vsigma_ab0·∇δρ_β`) are summed and projected through the
+SAME AO basis once (mirroring D2.0's own `delta_gradient_term` pattern);
+the beta channel is written independently with its own `bb`/`ab`-rooted
+slot reads, not alpha with labels swapped, per `check_beta`'s own
+discipline.
+
+**Layer (1) landed as `planck-dft-analytic-hessian-polarized-production`
+(`tests/dft_analytic_hessian_polarized_production.cpp`), a synthetic
+3-AO single-point grid, same fixture-design discipline D2.0's own test
+established (pick `(P^α,P^β,δP^α,δP^β)` freely, read off whatever
+`(ρ,∇ρ,δρ,δ∇ρ)` result).** Covers two independent `(P,δP)` sets plus
+same-spin-only and cross-spin-only trial directions, checked against an
+independently-written reference (`reference_delta_vxc_01`, transcribed
+from the point-level test file, NOT calling the production function).
+
+**A real defect was caught on the first run, in the TEST's own reference,
+not the production function**: every check failed by a clean, uniform 2×
+ratio (`got = 2× expected`). Root cause: `reference_delta_vxc_01` calls
+`evaluate_gga_fxc` ONCE (a single functional `f`), while the production
+function internally sums TWO calls (`exchange_functional` +
+`correlation_functional`, both passed as `f` in the test) — the exact
+same "x+c additive convention doubles every libxc-derived quantity"
+correction D2.0's own restricted test already applies explicitly (its own
+`2.0 * reference_delta_vxc_projected(...)` line). Fixed by applying the
+identical `2.0×` correction to the polarized reference; all checks pass
+after the fix. **Recorded because it is the second time this exact
+class of test-side (not production-side) scale bug has appeared in this
+scope** — worth flagging for D3.4/D3.5 if a similar reference formula is
+written there.
+
+Mutation-verified independently for both channels: zeroing the alpha
+channel's cross term (T4+T5) fails only the mixed-`x` cases (same-spin-only
+and beta-only cases correctly pass, since they don't exercise that term);
+zeroing the beta channel's cross term (T4'+T5') fails only the beta-channel
+assertions while the alpha-channel assertions stay green — confirming the
+two channels are tested independently, not one inferred from the other.
+Both mutations reverted after verification.
+
+**Layer (2) run once as a temporary debug probe (`PLANCK_D3_0_CHECK`) in
+`driver.cpp`'s UKS convergence branch, confirmed, then deleted** — same
+discipline as D2.0's own `PLANCK_D2_0_CHECK` and F3.4.5's now-deleted
+whole-molecule probe. System: triplet water/STO-3G (the same fixture
+F3.4.5's own probe and `water_triplet_uks_tddft_pbe_sto3g.hfinp` use),
+`correlation pbe` used in BOTH the exchange and correlation argument slots
+of both the oracle and the production call — matching the point-level
+test's own `"gga_c_pbe"` choice, since F3.4.1 already found PBE
+**exchange** alone has near-zero cross-spin coupling (which would leave
+the alpha→beta block untested if the input's actual PBE-exchange
+`x_functional` had been used instead).
+
+Result: `alpha→alpha` column matches the oracle to `3.3e-11`, `alpha→beta`
+column (the genuinely cross-spin block) matches to `2.3e-11` on a nonzero
+signal (`max|oracle|=max|analytic|=5.67e-4` — confirmed non-degenerate,
+not a symmetry-suppressed direction). **A real harness bug was found and
+fixed along the way, in the probe itself, not the production code**: the
+first comparison attempt read the oracle's `[1][0]` block using raw Eigen
+column-major memory layout (`Eigen::Map` over the projected matrix's own
+`.data()`), which silently disagrees with `ResponseExcitationSpace::
+flat_index(i,a) = i·n_virt+a`'s occupied-major convention — the two
+flattening orders are NOT the same, and comparing them directly showed a
+spurious ~10x-magnitude mismatch that had nothing to do with the
+production function. Fixed by iterating explicitly with `flat_index`
+itself on both sides. Mutation-verified after the fix: flipping the sign
+of the alpha channel's cross term moves the `alpha→alpha` column diff from
+`3.3e-11` to `2.8e-3` — cleanly caught. Reverted after verification; `git
+diff` on `driver.cpp` confirmed clean of both the probe and the mutation.
+
+Full DFT ctest suite (12/12, including the new polarized-production
+target) and smoke regression suite (35/35) pass. D3.1 is unblocked.
+
+**LDA-polarized path added the same day, on request, to close the scope
+gap the original D3.0 text left open ("no LDA-polarized production path
+yet -- add if/when a caller needs it").** Genuinely cheaper than the GGA
+case: no gradient terms at all (`V_xc^σ = vrho_σ` alone for LDA), so the
+whole chain rule is `delta[vrho_a] = v2rho2_aa·δρ_α + v2rho2_ab·δρ_β`
+(mirrored for β) — one cross-spin slot (`v2rho2_ab`, symmetric between the
+two channels, unlike GGA's distinct T4/T4' asymmetric cross terms), no
+`v2rhosigma`/`v2sigma2` bookkeeping, no gradient projection through
+`ao_grid.grad_{x,y,z}`. Added as a new branch inside
+`compute_analytic_xc_hessian_vector_product_polarized` (same dispatch
+pattern the restricted `compute_analytic_xc_hessian_vector_product`
+already uses for its own LDA/GGA split), not a separate function.
+
+**Verified with the same two-layer discipline**: point-level check
+(`check_point_lda`, added to `dft_analytic_hessian_polarized_production.cpp`)
+against an independently-written reference, using `lda_c_pw` (PW
+correlation) rather than `lda_x` (Slater exchange) specifically because
+Slater exchange has NO cross-spin coupling at all (`v2rho2_ab` identically
+zero), which would leave the cross term completely untested — the LDA
+analogue of F3.4.1's own "PBE exchange has near-zero cross-spin coupling,
+use `gga_c_pbe`" finding. Four cases (two independent `(P,δP)` sets, plus
+same-spin-only and cross-spin-only trial directions) all pass. Applied the
+x+c doubling correction from the first version this time (learned from
+D3.0's own GGA mistake, recorded above) — no scale bug on this pass.
+Mutation-verified: dropping both `v2rho2_ab` cross terms fails every LDA
+case, including two that correctly show `got 0` where the cross-only trial
+direction should produce a nonzero result; reverted after confirming. No
+whole-molecule probe was run for the LDA case specifically — the same
+whole-molecule machinery (`build_unrestricted_xc_kernel_blocks`) and
+harness-convention lessons (the `flat_index` vs raw-memory-layout trap)
+from D3.0's own GGA probe apply unchanged if one is needed later, so it
+was judged redundant to re-run for a strictly simpler formula that shares
+100% of its surrounding AO-projection code with the already-verified GGA
+path.
+
+Full DFT ctest suite (12/12) and smoke regression suite (35/35) pass with
+the LDA branch added.
+
+###### D3.1 — confirm the packed polarized Hessian-vector product against the true UKS energy (~S, after D3.0) — DONE
+
+D2.1's own corrected methodology, applied from the start this time rather
+than discovered the hard way: **do not test
+`Tr(δP·δV_xc(δP)) = ∂²E_xc/∂κ²` in isolation** — that identity is missing
+the density-curvature term regardless of spin polarization (the Cayley
+transform's nonlinearity in `κ` is a per-spin-channel geometric fact, not
+specific to RKS). Verify the FULLY ASSEMBLED polarized `h_op` (diagonal +
+Coulomb-from-total-density + D3.0's polarized XC piece, for BOTH spin
+blocks) against finite difference of the true UKS TOTAL energy
+`E(κ_α, κ_β)`, on at least same-spin and cross-spin `(a,i)` directions
+(one perturbing only the alpha block, one only beta, one both at once —
+mirroring D3.0's own same-spin/cross-spin/mixed verification split one
+level up, at the assembled-callback level).
+
+**Landed, via a temporary probe (`PLANCK_D3_1_CHECK` in `driver.cpp`'s UKS
+convergence branch — added, verified, reverted, same discipline as every
+other whole-molecule check in this scope) on triplet water/STO-3G/PBE
+(`use_symm .false.`, avoiding the symmetry-suppressed-direction trap D2.1
+and D3.0 both hit).**
+
+**Scale factor, measured rather than assumed to carry over from RKS**:
+`d²E_total/dκ² = 2·H_bare_polarized` (using the UHF-convention unscaled
+`dP = C_a·C_i^T + C_i·C_a^T`, no closed-shell `2×` factor) — a genuinely
+DIFFERENT constant from RKS's own `4·H_bare` (D2.2.2). Confirmed clean at
+ratio 1.000000 on both `alpha-only` and `beta-only` diagonal directions
+across two independent `(a,i)` pairs each.
+
+**Two real bugs found and fixed along the way, both in the temporary probe
+itself, not in any production code — the third time in this scope a
+verification harness, not the function under test, has been the actual
+source of a discrepancy (D3.0 hit two of its own: the x+c-doubling test
+reference, and the `flat_index`-vs-raw-memory-layout comparison)**:
+
+1. **A lambda-argument bug**: the probe's `H_bare` computation called
+   `h_op_bare_polarized(spin_for_H, aa_, ia)` UNCONDITIONALLY — always
+   passing the alpha-channel indices, even when checking `beta-only`
+   (`spin_for_H=1`). Invisible on the first test direction because
+   `aa_==ab_` and `ia==ib` there by coincidence; surfaced immediately
+   (`ratio=7.44`, not 1.0) the moment an independent `ib` was tried. Fixed
+   by branching: `(spin_for_H==0) ? h_op_bare_polarized(0,aa_,ia) :
+   h_op_bare_polarized(1,ab_,ib)`.
+
+2. **A degenerate-direction trap for the CROSS (mixed) term specifically,
+   recurring for the third time in this scope** (D2.1's HOMO-LUMO
+   even-in-κ finding; D3.0's `(i=0,a=n_occ)` zero-cross-term finding): at
+   `(ia=1,aa=0,ib=1,ab=0)` — using the SAME spatial orbital index for both
+   spins — the four finite-difference energies `E(+h,+h)`, `E(+h,-h)`,
+   `E(-h,+h)`, `E(-h,-h)` came out BIT-IDENTICAL, making the mixed second
+   derivative trivially (and misleadingly) zero on both sides at once. This
+   was not a bug — verified directly by confirming `||kappa_a||`/`||kappa_b||`
+   respond correctly to the requested rotation, and by trying several
+   `(a,i)` combinations before finding one where BOTH sides read a
+   consistent nonzero value. **Resolved by picking genuinely asymmetric
+   indices** (`ia=1,aa=0` for alpha; `ib=2,ab=1` for beta): the cross term
+   converges cleanly to ratio `0.999849 → 0.999999 → 1.000020` across
+   `h={1e-2,1e-3,1e-4}`, with a clearly nonzero signal
+   (`J_packed_cross=-0.0697`, `xc_packed_cross=0.0035`) — confirming the
+   composed polarized `h_op`'s cross-spin coupling (Coulomb-from-total-
+   density plus D3.0's own XC cross terms) is correct.
+
+**Lesson worth carrying forward, stated plainly since it has now recurred
+three times**: a same-index or otherwise-symmetric choice of verification
+direction is not just occasionally unlucky — it is apparently the DEFAULT
+first guess every time (index 0, or matching indices across two spin
+channels), and it has produced a spuriously-passing OR spuriously-zero
+check at least once in every one of D2.1, D3.0, and D3.1. Before trusting
+any single-direction FD check in this codebase, confirm the checked
+quantity is nonzero on BOTH sides first, or deliberately choose indices
+that differ across whatever symmetry (spin, occ/virt numbering, spatial
+point group) the system has.
+
+Full DFT ctest suite (12/12) and smoke regression suite (35/35) pass; the
+temporary probe (mutation and all diagnostics) was fully reverted, confirmed
+via `grep` for the env-var name returning no matches, rebuilt and re-tested.
+D3.2 is unblocked.
+
+###### D3.2 — wire the SOSCF branch into the UKS loop, fixed iteration (~M, after D3.1) — DONE
+
+Mirror D2.2.3's own shape as closely as the UKS loop's structure allows,
+generalized the way U2 generalized S2 for UHF: persist
+`C_soscf_prev`/`eps_soscf_prev` PER SPIN (or a combined struct — U2's own
+UHF SOSCF branch already made this exact packaging decision once, reuse
+it rather than re-deciding), gate on the same `scf_soscf_*` keywords
+(shared across all three SOSCF paths), build the gradient as TWO blocks
+(`F_mo^α(a,i)`, `F_mo^β(a,i)`) packed into one vector matching
+`build_uhf_cphf_matrix`'s own `[0,nova)+[nova,novb)` convention (the table
+above), apply the Cayley rotation and semicanonicalization separately per
+spin channel (same as U2), same trust-region cap
+(`kSoscfMaxRot = 0.20`). **Do not build a second AH solver, a second
+Cayley helper, or a UKS-specific packing convention** — reuse
+`solve_augmented_hessian`/`apply_orbital_rotation` unchanged and the
+existing UHF-CPHF packing convention from the table above.
+
+*Verify:* same shape as D2.2.3 — on a genuinely open-shell system (not a
+closed-shell system run through the UKS code path, which would exercise
+nothing new — U1/U2's own "do not test only closed-shell" lesson applies
+here with equal force), SOSCF from a fixed iteration reaches the identical
+UKS total energy as pure DIIS to all 10 printed digits, with the orbital
+gradient shrinking across the window (report the measured shape honestly,
+linear or superlinear, per D2.2.3's own precedent — do not assume
+superlinear just because RHF/H2 showed it once).
+
+**Landed in `run_ks_scf_scaffold`'s UKS branch (`src/dft/driver.cpp`),
+structurally a copy of D2.2.3's RKS branch generalized to the coupled
+alpha/beta step the same way U2 generalized S2:**
+
+- `Ca_soscf_prev`/`Cb_soscf_prev`/`epsa_soscf_prev`/`epsb_soscf_prev`
+  persisted every iteration (one per spin channel — U2's own packaging
+  decision, not re-decided); gate is a structural copy of the RKS
+  `soscf_enabled`/`soscf_active`/`criterion_fires` block, sharing the
+  `scf_soscf_*` keywords unchanged, with the same three exclusions
+  (hybrid / PCM / SAO).
+- Gradient built as two blocks (`F_mo^α(a,i)`, `F_mo^β(a,i)`) packed into
+  `build_uhf_cphf_matrix`'s own `[0,nova)` alpha + `[nova,nova+novb)` beta
+  virtual-major (`a*n_occ + i`) convention — no third convention invented.
+- `h_op(x)` composes `diag_a⊙x_α + Ja_packed + xca_packed` (and the beta
+  analogue). **`δJ` is one call on the TOTAL trial density `δP^α+δP^β`**
+  (matching UKS's own per-iteration Coulomb build), then packed separately
+  into the α and β `(a,i)` blocks; the polarized XC piece is D3.0's
+  `compute_analytic_xc_hessian_vector_product_polarized`. Paired UNSCALED
+  with `g = F_mo` — D3.1 measured `d²E_total/dκ² = 2·H_bare_polarized` with
+  `g_true = 2·g_bare`, a matching pair, so the unscaled ratio already
+  reproduces the true Newton step (exactly U1/U2's conclusion).
+- `solve_augmented_hessian` / `apply_orbital_rotation` reused unchanged
+  (per spin channel, one shared step vector, two `κ` matrices — same as
+  U2); same `kSoscfMaxRot = 0.20` cap; per-spin occ-occ/virt-virt
+  semicanonicalization after the step. DIIS (both spins) cleared on window
+  handoff.
+
+**Verified on triplet water/STO-3G/PBE (`use_symm .false.`, hcore guess,
+genuinely open-shell so the α-β coupling terms are exercised), SOSCF from
+a fixed iteration 4:**
+
+- **Energy: identical to fully-converged DIIS to all 10 printed digits.**
+  SOSCF reaches `-74.8423080131` in 10 iterations. Plain DIIS at the input's
+  own `tol 1e-9` stopped early at `-74.8423073568` (its ΔE/ΔP gate tripped
+  at a non-stationary point — commutator error plateaued at `1.5e-4`, never
+  improving), the same pre-existing small-system DIIS weakness D2.2.3 hit on
+  H2. Tightening DIIS to `tol 1e-11` (`max_cycles 400`) makes it reach
+  **exactly `-74.8423080131`** in 102 iterations — bit-identical to SOSCF,
+  confirming SOSCF found the true stationary point and DIIS's early answer
+  was the incorrect one.
+- **Gradient shrinkage: genuinely superlinear** — `|g|`:
+  `7.02e-3 → 2.96e-4 → 2.07e-5` across the 3-iteration window (ratios
+  `≈0.042, 0.070`, accelerating). On a larger case (water/6-31G/PBE triplet,
+  fine grid) the same code also shows superlinear shrinkage
+  (`2.46e-1 → 2.17e-2 → 1.95e-3`, ratios `≈0.088, 0.090`) and converges in
+  19 iterations where plain DIIS does not converge in 120 — again the
+  DIIS-side weakness, not SOSCF's.
+- **SOSCF-off default is byte-identical to the pre-D3.2 tree**: full smoke
+  regression suite (35/35, every DFT-tagged UKS case included) and full DFT
+  ctest suite (12/12) pass unchanged with no `scf_soscf_*` keywords set.
+
+###### D3.2.1 — the hybrid-functional scope-cut warning, for UKS (~S, after D3.2) — DONE
+
+D2.2.4's own finding — a silent fallback when SOSCF is requested but
+disabled — is a general risk of copying the gate pattern, not something
+D3.2 automatically inherits a fix for just because D2.2.4 built one for
+RKS. Confirm the SAME warning fires (naming hybrid / PCM / SAO, same
+message shape) when SOSCF is requested on a UKS run that hits any of
+those exclusions. If D3.2's gate is structurally identical to D2.2.3's
+(same `soscf_enabled` construction, same three exclusions), this may be a
+verification-only step requiring no new code — check before assuming
+either way, the same discipline D2.4/U4 both used for the DIIS-criterion
+branch.
+
+**Verification-only, as expected — no new code.** D3.2 copied D2.2.4's own
+one-time `[WRN] DFT SOSCF :` warning block verbatim (the block is emitted
+before the iteration loop when either trigger keyword is set but the run
+hits hybrid / PCM / SAO), and the gate is the structural copy of D2.2.3's.
+Verified on real inputs: B3LYP+PBE on triplet water/STO-3G emits the
+hybrid warning and runs plain DIIS to `-74.9272421395`; the same input
+with `use_symm .true.` emits the SAO/symmetry warning and reaches
+`-74.8423073566`. A run with no SOSCF keywords emits nothing.
+
+###### D3.3 — semicanonicalization and level-shift interaction for UKS (~S, after D3.2.1) — DONE
+
+Re-measure per spin channel, same discipline as D2.3/S3/U3: disable
+semicanonicalization, run a long pure-SOSCF window (both spin channels),
+compare iteration counts and confirm identical final energy. Level shift:
+already confirmed a universal DFT-wide no-op in D2.3 (zero occurrences of
+`level_shift` anywhere in `driver.cpp`, RKS or UKS) — this sub-step is
+already answered, not something to re-derive; just note in the result that
+D2.3's finding covers UKS too since the check was on the whole file, not
+the RKS branch specifically.
+
+**Level shift: covered by D2.3, re-confirmed by grep.** `grep -c
+level_shift src/dft/driver.cpp` returns 0 — the field
+`calculator._scf._level_shift` is never read anywhere in the DFT driver,
+RKS or UKS. D2.3's own measurement (byte-identical energy and iteration
+count with `level_shift 0.5` set vs absent) was on the whole file, so it
+covers UKS unchanged. No guard to add — a `level_shift <= 0.0` check would
+be dead code since the field is already ignored unconditionally.
+
+**Semicanonicalization: re-measured per spin, same verdict as
+RHF/UHF/RKS.** Temporary probe (`PLANCK_D3_3_NO_SEMICANON` in the UKS
+SOSCF branch — added, measured, reverted; `grep` confirms clean) reading
+`eps` off the raw non-eigendecomposed `Cᵀ F C` diagonal per spin instead.
+Long pure-SOSCF window (`scf_soscf_cycles 300`, no DIIS handoff) on two
+independent open-shell systems:
+
+| System | With semicanon | Without semicanon |
+|---|---|---|
+| water/STO-3G/PBE triplet | 13 iterations, `-74.8423080131` | 12 iterations, `-74.8423080131` |
+| water/6-31G/PBE triplet, fine grid | 27 iterations, `-76.0195905826` | 30 iterations, `-76.0195905826` |
+
+**Both converge to the identical energy either way (all 10 digits) — no
+plateau, no wrong-basin convergence.** Iteration counts are within a few
+of each other in both directions. **Kept anyway**, same reasoning as every
+other SOSCF path: pure gauge freedom (rotating occupied or virtual
+orbitals among themselves changes neither density nor energy), cheap (two
+small in-block eigendecompositions per spin), so no reason to drop it even
+though it measured as unnecessary here too. Full DFT ctest (12/12) and
+smoke (35/35) suites pass with the probe reverted.
+
+###### D3.4 — verify the DIIS-error switch criterion for UKS (~S, after D3.3) — DONE
+
+Same shape as D2.4/U4: confirm whether D3.2's gate already includes the
+criterion branch (very likely yes, if D3.2 copies D2.2.3's gate structure
+the way D2.2.3 copied RHF's) — if so, this is verification-only, matching
+U4/D2.4's own zero-new-code finding twice already.
+
+**Zero new code — third time this finding has held** (U4, D2.4, now D3.4).
+D3.2's gate was a structural copy of D2.2.3's `criterion_fires` block,
+which already carried both the fixed-iteration (`scf_soscf_start`) and
+DIIS-error (`scf_soscf_diis_tol` + `scf_soscf_min_iter`) branches — so the
+criterion path was live from the moment D3.2 landed, never exercised by
+D3.2's own `scf_soscf_start`-based verification.
+
+**Verified on triplet water/STO-3G/PBE** (DIIS-only per-iteration error:
+`2.18e0, 6.34e-1, 3.00e-2, 4.18e-3, ...`), with `scf_soscf_diis_tol
+5.0e-2`:
+
+- Fires at the correct iteration (3 — the first where `diis_error`
+  (`3.00e-2`) drops below `5.0e-2` with `iter >= scf_soscf_min_iter = 2`),
+  read from the `DFT UKS SOSCF :` log line's iteration number against the
+  DIIS-only trace.
+- Reaches the identical final energy to the fixed-iteration SOSCF runs and
+  to fully-converged DIIS: `-74.8423080131` (all 10 digits).
+- **`scf_soscf_min_iter` genuinely gates**: re-run with `min_iter 8` (same
+  `diis_tol`, which alone is satisfied at iter 3) correctly delayed the
+  trigger to iter 8. Same final energy.
+
+Full DFT ctest (12/12) and smoke (35/35) suites pass. No production code
+changed.
+
+###### D3.5 — measure the actual speedup for UKS (~S, after D3.4) — DONE, and the result is the OPPOSITE of D2.5's
+
+D2.5's own methodology, run again rather than assumed to transfer: measure
+wall-clock for D3.0's analytic polarized `h_op` (now TWO grid-pass-shaped
+calls per Krylov iteration — one per spin channel's XC piece — so the
+per-call cost may not simply double from D2.5's restricted numbers,
+measure rather than extrapolate) against what
+`build_unrestricted_xc_kernel_blocks` would cost for the full polarized
+Hessian, at real measured `ah_iters` from an actual UKS SOSCF run. **Given
+D2.5's own finding that the restricted case's analytic path was NOT
+reliably faster at the two sizes tested, do not assume UKS fares any
+better** — if anything, the doubled per-call cost (two spin channels) makes
+the crossover point in `ah_iters` potentially LOWER, not higher, worth
+checking explicitly rather than assuming the RKS numbers transfer.
+
+**Measured via a temporary probe (`PLANCK_D3_5_CHECK` in the UKS SOSCF
+branch — added, measured, reverted; `grep` confirms clean), same shape as
+D2.5**: one call to the composed polarized `h_op` (a single `(a,i)`
+unit-vector, both spin XC pieces + the total-density `δJ`, the exact shape
+the Krylov loop calls repeatedly) vs one call to
+`build_unrestricted_xc_kernel_blocks` over both spin `ResponseExcitationSpace`s
+(the full polarized dense Hessian in one call), alongside the REAL
+`ah_iters` the SOSCF Newton step needed:
+
+| System | `nova` / `novb` | analytic (1 call) | FD-kernel (full, 1 call) | crossover `ah_iters` | real `ah_iters` measured |
+|---|---|---|---|---|---|
+| water/STO-3G/PBE triplet | 6 / 12 | 0.017 s | 0.155 s | ≈9.2 | 3, 3, 3 |
+| water/6-31G/PBE triplet, fine grid | 42 / 36 | 0.018 s | 0.50 s | ≈28 | 5, 6, 7 |
+| water/cc-pVDZ/PBE triplet, fine grid | 114 / 84 | 0.064 s | 2.06 s | ≈32 | 8, 10, 10 |
+
+**Finding: the analytic path is RELIABLY FASTER for UKS at every size
+tested — the opposite of D2.5's restricted-case result — and the reason is
+exactly the doubled per-call cost D3.5 worried about, working the other
+way.** Real `ah_iters` (3–10) stay well below the crossover point (9–32) in
+every row, so `ah_iters × analytic_call_cost` is 3–5× cheaper than
+building the FD-kernel's full dense polarized Hessian once per Newton
+step. Two mechanisms:
+
+1. **`ah_iters` did not grow proportionally with `nov`.** It stayed in
+   single digits across a >10× range of `nov` (18 → 198), same
+   observation D2.5 made and CASSCF's own experience — Krylov iteration
+   counts track the Hessian's conditioning, not its dimension.
+2. **The doubled per-call cost pushed the crossover HIGHER, not lower.**
+   The FD-kernel oracle must finite-difference *both* spin channels'
+   directions (`nova + novb` grid-pass pairs), so `fd_kernel_full` roughly
+   doubles from the restricted case at comparable `nov` — while
+   `analytic_1call` only rose from ~0.017 s to ~0.064 s across the whole
+   range (grid-evaluation-dominated, essentially flat in `nov`, exactly as
+   F3/D2.0 built it). A more expensive oracle means a higher crossover
+   `ah_iters`, i.e. *more* Krylov iterations affordable before the analytic
+   path loses — the reverse of D3.5's stated worry.
+
+**This does not contradict D2.5's honest RKS conclusion** — that one
+measured real `ah_iters` straddling or exceeding the crossover at the two
+RKS sizes tested. UKS's crossover is simply higher (doubled oracle cost)
+while its `ah_iters` stayed comparably low, so the same asymptotic
+argument that was borderline for RKS is comfortably in the analytic path's
+favor for UKS. Full DFT ctest (12/12) and smoke (35/35) suites pass with
+the probe reverted.
+
+**D3 is complete: D3.0–D3.5 all landed.** UKS SOSCF runs from a fixed
+iteration or a DIIS-error criterion, reaches fully-converged DIIS's energy
+to all 10 digits on genuinely open-shell systems, shrinks the orbital
+gradient superlinearly, and — unlike RKS — is a measurable wall-clock win
+at every size tested. Pure (non-hybrid) functionals only; hybrid / PCM /
+SAO emit the D3.2.1 warning and fall back to plain DIIS.
+
+### What this must not do (UKS-specific, in addition to D2's own list)
+
+- **Do not assume the beta-channel formula is the alpha-channel formula
+  with labels swapped.** F3.4.4's own point-level test explicitly re-derives
+  it independently rather than copy-pasting with names swapped, and that
+  discipline must carry into D3.0's production function — write and verify
+  both channels' formulas separately, even though they are structurally
+  mirror images.
+- **Do not invent a third `(a,i)` packing convention.** RKS (D2.2's
+  `pack_hessian_vector_product_cphf_order`, single spin) and UHF-CPHF
+  (`build_uhf_cphf_matrix`, `[0,nova)+[nova,novb)`) already exist; D3 must
+  match the UHF-CPHF one, since that is the convention a two-spin-block
+  flat vector already uses elsewhere in this codebase.
+- **Do not test D3 only on a closed-shell system run through the UKS code
+  path.** That exercises the UKS machinery's RHF-degenerate limit, not the
+  genuinely open-shell cross-spin coupling terms F3.4.3's own point-level
+  test exists specifically to catch — U1's own "do not test only
+  closed-shell" lesson for UHF applies with equal force here.
 
 #### D4 — the switch criterion, and whether it should differ from HF's (~S)
 

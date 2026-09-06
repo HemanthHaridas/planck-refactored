@@ -73,59 +73,74 @@ truth for what remains.
   the NDEBUG gap above: real, project-wide, out of scope for the change that
   surfaced it, left for a deliberate look rather than a byproduct fix.
 
-## SCF convergence — RHF SOSCF landed; UHF/ROHF/DFT and the full baseline remain
+## SCF convergence — RHF/UHF/RKS/UKS SOSCF all landed; ROHF and the large-`nb` measurement remain
 
 - **RHF SOSCF is done, in `docs/SOSCF.md` (PR #167, merged into `devel`).**
-  Reuses the existing CASSCF augmented-Hessian (CIAH) solver and the
-  existing RHF orbital Hessian (`build_rhf_cphf_matrix`) completely
-  unchanged. Three real defects were found and fixed by direct measurement
-  (double-stepping against DIIS, a gradient/Hessian scale mismatch settled
-  by a finite-difference check against the true `E(kappa)`, and a
-  CASSCF-tuned AH solver tolerance mismatched to RHF's much smaller
-  gradient scale — this last one is why pure unbounded SOSCF converged only
-  linearly instead of superlinearly before the fix). Verified to reach the
+  Reuses the CASSCF augmented-Hessian (CIAH) solver and the RHF orbital
+  Hessian (`build_rhf_cphf_matrix`) unchanged. Verified to reach the
   identical energy as DIIS to all 10 digits on water/6-31G and H2/6-31G, in
-  every mode (fixed-iteration window, DIIS-error-criterion window, pure
-  unbounded). Composes cleanly with the SAD initial guess (verified, no
-  interaction). Off by default; smoke suite unaffected (33/35, matching the
-  pre-existing baseline).
+  every mode. Off by default; smoke suite unaffected.
 
-  **Not done, and not a simple continuation of what landed:**
-  - **The original motivating measurement (the `scale.json` iteration-count
-    cliff at large `nb`) was never reproduced this session** — the ladder's
-    largest points need cluster access (32-core `notch386`), not available
-    on the laptop this landed on. Correctness was verified against finite
-    differences and exact DIIS-energy agreement instead, which doesn't
-    depend on the cluster ladder. The large-`nb` win this work was
-    originally motivated by is therefore still unmeasured.
-  - **UHF and DFT are now scoped in detail** (`docs/SOSCF_UHF_DFT_SCOPE.md`,
-    not started). **UHF** is a mechanical extension but not zero work:
-    `solve_uhf_cphf` (`src/post_hf/uhf_response.cpp`) already builds the
-    full dense coupled α/β Jacobian internally (same unscaled diagonal
-    convention as RHF's `build_rhf_cphf_matrix`), but builds it by column
-    via real per-trial-rotation Fock builds rather than one closed-form ERI
-    transform, so it is a more expensive construction to call every SOSCF
-    iteration, and it is currently wrapped inside a Z-vector solve rather
-    than exposed as a standalone builder. Needs its own
-    finite-difference verification, not just a diagonal-convention match.
-  - **ROHF needs new theory, not a port** — there is no ROHF
+- **UHF SOSCF is done** (`docs/SOSCF_UHF_DFT_SCOPE.md`, U1–U4). Split
+  `build_uhf_cphf_matrix` out of `solve_uhf_cphf` (no convergence guard,
+  mirroring RHF); FD-verified `g_true = 2·g_used` and `H_true = 2·Amat`
+  (universal across a full index sweep, unlike RHF's 4×), so unscaled
+  `g=F_mo` against unscaled `Amat` gives the true Newton step. Wired into
+  `run_uhf` with per-spin Cayley rotation + semicanonicalization; SOSCF
+  mutually exclusive with an active level shift (enforced in code). Reaches
+  DIIS's energy to all 10 digits on three genuinely open-shell systems,
+  superlinear gradient shrinkage.
+
+- **DFT RKS SOSCF is done** (`docs/SOSCF_UHF_DFT_SCOPE.md`, D1–D2.5). D2
+  was rescoped to wire F3's *analytic* XC Hessian-vector product
+  (`compute_analytic_xc_hessian_vector_product`, `src/dft/analytic_hessian.cpp`,
+  LDA + GGA) rather than the `O(n_occ·n_virt)`-grid-pass FD-kernel oracle —
+  the analytic `fxc` path F1–F5 of `SOSCF_DFT_ANALYTIC_FXC_SCOPE.md` had
+  already built and verified. `h_op = diag_term⊙x + J_packed + xc_packed`,
+  cross-checked against PySCF's `gen_g_hop_rhf` (`g_true=2·g_bare`,
+  `H_true=4·H_bare`, a matching pair — unscaled ratio is the true step).
+  Wired into `run_ks_scf_scaffold`'s RKS branch; hybrid / PCM / SAO emit a
+  one-time warning and fall back to DIIS. **D2.5 finding: the analytic path
+  is NOT reliably faster than the FD-kernel alternative at the two RKS
+  sizes measured** (`nov` 40, 100) — real `ah_iters` straddle the crossover.
+  Correct and correctly-scaling, but the wall-clock win needs a larger
+  system.
+
+- **DFT UKS SOSCF is done** (`docs/SOSCF_UHF_DFT_SCOPE.md`, D3.0–D3.5).
+  `compute_analytic_xc_hessian_vector_product_polarized`
+  (`src/dft/analytic_hessian.cpp`, LDA + GGA, both spin channels
+  independently transcribed) promoted from F3.4's point-level test algebra;
+  `d²E_total/dκ² = 2·H_bare_polarized` (unscaled per-spin `dP`, a
+  DIFFERENT constant from RKS's 4×). Wired into `run_ks_scf_scaffold`'s UKS
+  branch mirroring D2.2.3, `[0,nova)+[nova,novb)` packing (no third
+  convention). `δJ` from the total trial density (one call, packed
+  separately). Reaches fully-converged DIIS's energy to all 10 digits on
+  triplet water/STO-3G/PBE (SOSCF 10 iters vs DIIS 102 at tightened tol),
+  superlinear gradient shrinkage. **D3.5 finding: OPPOSITE of D2.5 — the
+  UKS analytic path IS reliably faster (3–5×) at every size tested**
+  (`nov` 18/78/198), because real `ah_iters` (3–10) stay well below the
+  crossover, and the doubled FD-kernel oracle cost (two spin channels)
+  pushes the crossover HIGHER, not lower.
+
+- **Not done:**
+  - **ROHF SOSCF needs new theory, not a port** — there is no ROHF
     orbital-response/CPHF machinery anywhere in this codebase, the same gap
     behind ROHF-MP2/stability/PCM all being unsupported. ROHF orbitals
     diagonalize the effective Roothaan Fock, not separate per-spin Focks —
-    the same subtlety that already forced the ROHF analytic gradient to use
-    its own `W = P^α F^α P^α + P^β F^β P^β` instead of reusing UHF's.
-  - **DFT's gap was mis-scoped once already and is corrected in the new
-    doc.** The existing `build_closed_shell_xc_kernel_blocks` /
-    `build_unrestricted_xc_kernel_blocks` (`src/dft/driver.cpp`) looked like
-    a ready-to-reuse XC kernel from its name, but reading the body shows it
-    is a numerical finite-difference construction built for TDDFT's small
-    excitation spaces (two full grid XC evaluations per occ-virt pair).
-    Reused as a SOSCF Hessian directly, that is `O(n_occ·n_virt)` grid
-    evaluations per iteration — likely slower than DIIS at the sizes where
-    SOSCF would matter. The real production answer is an analytic XC
-    second derivative (`fxc`), which libxc exposes but Planck's wrapper
-    (`src/dft/base/wrapper.h`) never calls. This is a research question
-    (derive and verify a new analytic Hessian), not a wiring task.
+    the same subtlety that forced the ROHF analytic gradient to use its own
+    `W = P^α F^α P^α + P^β F^β P^β` instead of reusing UHF's.
+  - **The original motivating measurement (the `scale.json` iteration-count
+    cliff at large `nb`) is still unreproduced** — the ladder's largest
+    points need cluster access (32-core `notch386`). All four landed SOSCF
+    paths were verified against finite differences and exact DIIS-energy
+    agreement instead, which doesn't depend on the cluster ladder. The
+    large-`nb` win this work was originally motivated by is unmeasured for
+    RHF/UHF/RKS; measured and positive for UKS at modest sizes (D3.5).
+  - **Hybrid / range-separated functionals** for DFT SOSCF — needs the
+    exact-exchange (K) response, the same machinery `build_rhf_cphf_matrix`
+    already has for HF but unbuilt for the KS path. Currently rejected with
+    a warning (D2.2.4 / D3.2.1).
+  - **PCM and SAO/symmetry** for DFT SOSCF — same, rejected with a warning.
 
 ## FCI performance — two measured, independent items
 

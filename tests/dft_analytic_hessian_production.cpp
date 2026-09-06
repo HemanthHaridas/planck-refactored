@@ -228,6 +228,44 @@ namespace
         require_near((*delta_v_xc)(0, 1), reference, 1e-10,
                      name + ": compute_analytic_xc_hessian_vector_product(0,1) vs F3.1 reference formula (LDA)");
     }
+
+    // D2.2.0 (docs/SOSCF_UHF_DFT_SCOPE.md): orbital_energy_difference_diagonal
+    // is the RKS analogue of the single line
+    // `A(ai,ai) += eps(n_occ+a) - eps(i)` inside
+    // HartreeFock::Correlation::build_rhf_cphf_matrix
+    // (src/post_hf/rhf_response.cpp) -- pure orbital-energy bookkeeping, no
+    // XC dependence, so it is correct for RHF and RKS alike given the same
+    // eps/n_occ. Verified against an independent hand-written loop (not the
+    // same code shape as the production one-liner) in the SAME virtual-major
+    // idx(a,i) = a*n_occ + i convention pack_hessian_vector_product_cphf_order
+    // already uses -- non-square (n_occ != n_virt) so a row/column swap in
+    // the index formula cannot hide.
+    void check_orbital_energy_diagonal(int nbasis, int n_occ)
+    {
+        Eigen::VectorXd eps(nbasis);
+        for (int p = 0; p < nbasis; ++p)
+            eps(p) = -5.0 + 0.37 * p; // arbitrary, strictly increasing, no accidental degeneracies
+
+        const Eigen::VectorXd diag = DFT::Driver::orbital_energy_difference_diagonal(eps, n_occ);
+
+        const int n_virt = nbasis - n_occ;
+        require_near(static_cast<double>(diag.size()), static_cast<double>(n_virt * n_occ), 0.0,
+                     "orbital_energy_difference_diagonal: wrong size for nbasis=" + std::to_string(nbasis) +
+                         " n_occ=" + std::to_string(n_occ));
+
+        for (int a = 0; a < n_virt; ++a)
+        {
+            for (int i = 0; i < n_occ; ++i)
+            {
+                const double expected = eps(n_occ + a) - eps(i);
+                const int flat = a * n_occ + i; // virtual-major, matching pack_hessian_vector_product_cphf_order
+                require_near(diag(flat), expected, 1e-14,
+                             "orbital_energy_difference_diagonal mismatch at (a=" + std::to_string(a) +
+                                 ",i=" + std::to_string(i) + ") nbasis=" + std::to_string(nbasis) +
+                                 " n_occ=" + std::to_string(n_occ));
+            }
+        }
+    }
 } // namespace
 
 int main()
@@ -251,6 +289,13 @@ int main()
 
     check_gga_point("pbe", P, dP);
     check_gga_point("pbe", P2, dP2);
+
+    // Non-square (n_occ != n_virt) in every case, per this codebase's own
+    // packing-test discipline (see tests/dft_hessian_vector_packing.cpp).
+    check_orbital_energy_diagonal(/*nbasis=*/7, /*n_occ=*/2);
+    check_orbital_energy_diagonal(/*nbasis=*/10, /*n_occ=*/6);
+    check_orbital_energy_diagonal(/*nbasis=*/6, /*n_occ=*/1);
+    check_orbital_energy_diagonal(/*nbasis=*/12, /*n_occ=*/4);
 
     return g_ok ? 0 : 1;
 }

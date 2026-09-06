@@ -865,6 +865,17 @@ if(BUILD_TESTING)
         ${SRC_DIR}/dft/xc_grid.cpp
     )
 
+    # D3.0 (docs/SOSCF_UHF_DFT_SCOPE.md): the polarized (UKS) sibling of the
+    # above -- verifies compute_analytic_xc_hessian_vector_product_polarized
+    # against F3.4's own point-level formulas (check_mixed/check_beta,
+    # tests/dft_gga_polarized_hessian_selfcheck.cpp), called through the new
+    # function's actual signature on a synthetic single-point grid.
+    add_executable(planck-dft-analytic-hessian-polarized-production
+        ${CMAKE_SOURCE_DIR}/tests/dft_analytic_hessian_polarized_production.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+    )
+
     # F2 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): confirms the existing
     # density-on-grid evaluator (xc_grid.cpp) is exactly linear in the
     # density matrix, so it needs no changes to serve a Hessian-vector
@@ -933,6 +944,25 @@ if(BUILD_TESTING)
 
     add_executable(planck-fock-accumulate
         ${CMAKE_SOURCE_DIR}/tests/fock_accumulate.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
+    # D2.2.1 (docs/SOSCF_UHF_DFT_SCOPE.md): the Coulomb-response piece of the
+    # RKS SOSCF h_op. No new production function -- J is linear in the
+    # density, so _compute_2e_j_direct(shell_pairs, dP, ...) (the same
+    # memory-direct builder the RKS loop's own per-iteration Coulomb term
+    # uses, src/integrals/base.h) IS delta_J(dP). This target only needs the
+    # non-DFT integral/basis machinery (no libxc, no grid) -- same source
+    # list as planck-fock-accumulate, which this file's fixture construction
+    # mirrors.
+    add_executable(planck-dft-coulomb-response
+        ${CMAKE_SOURCE_DIR}/tests/dft_coulomb_response.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
@@ -1538,6 +1568,12 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-dft-analytic-hessian-polarized-production PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-dft-density-response-linearity PRIVATE
         ${SRC_DIR}
         ${LIBXC_INSTALL_DIR}/include
@@ -1565,6 +1601,11 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(planck-fock-accumulate PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-dft-coulomb-response PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
@@ -1819,6 +1860,12 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-dft-analytic-hessian-polarized-production PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
     set_target_properties(planck-dft-density-response-linearity PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
@@ -1850,6 +1897,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-fock-accumulate PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dft-coulomb-response PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -2030,6 +2083,8 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-compute-2e PRIVATE USE_OPENMP)
         target_link_libraries(planck-fock-accumulate OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-fock-accumulate PRIVATE USE_OPENMP)
+        target_link_libraries(planck-dft-coulomb-response OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-dft-coulomb-response PRIVATE USE_OPENMP)
     endif()
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-hgp-quartet-validation OpenMP::OpenMP_CXX)
@@ -2150,6 +2205,15 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-dft-analytic-hessian-production PRIVATE USE_OPENMP)
     endif()
 
+    target_link_libraries(planck-dft-analytic-hessian-polarized-production
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-analytic-hessian-polarized-production libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-dft-analytic-hessian-polarized-production OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-dft-analytic-hessian-polarized-production PRIVATE USE_OPENMP)
+    endif()
+
     add_test(
         NAME planck-casscf-internal
         COMMAND planck-casscf-internal
@@ -2196,6 +2260,11 @@ if(BUILD_TESTING)
     )
 
     add_test(
+        NAME planck-dft-analytic-hessian-polarized-production
+        COMMAND planck-dft-analytic-hessian-polarized-production
+    )
+
+    add_test(
         NAME planck-dft-density-response-linearity
         COMMAND planck-dft-density-response-linearity
     )
@@ -2238,6 +2307,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-fock-accumulate
         COMMAND planck-fock-accumulate
+    )
+
+    add_test(
+        NAME planck-dft-coulomb-response
+        COMMAND planck-dft-coulomb-response
     )
 
     add_test(
