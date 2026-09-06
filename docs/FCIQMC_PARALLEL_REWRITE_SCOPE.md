@@ -5,16 +5,22 @@ saturation artifact), and H2's `SpawnWorkspace` / `SpawnAccumulator` /
 xoshiro rewrite LANDED (H2.1–H2.7).** Bottom line: on the interesting
 (unsaturated) fixture HF/6-31G the whole-call speedup went **2.24×→2.42×
 at 4 threads and 2.47×→2.87× at 8 threads**, the RNG hoist landed its full
-~38 µs/call, and the remaining serial cost is the fixed-order merge.
-**H2.8 tried to shard that merge — candidate 1 was built, verified
-correct, and measured 3–8 % SLOWER on HF/6-31G at every thread count
-(and +50 % on N2/1t). Genuine dead-end, reverted.** The `~1100 µs merge`
-phase-probe figure over-attributed cache-miss cost that downstream passes
-pay regardless; an `O(n log n)` shard-sort cannot beat the plain `O(n)`
-warm-hash merge. H2.0 (larger `kBins`) is the lever that might still help.
+~38 µs/call.
+
+**H2.8 tried to shard the "remaining serial merge" — built it, verified
+correct, measured 3–8 % SLOWER on HF/6-31G at every thread count, reverted,
+then reprofiled properly with `sample`. The H2.7 phase-probe diagnosis was
+wrong: the serial merge is 2.0 % of self-time, not 37 %.** What the probe
+bracketed was the per-bin `SpawnAccumulator::finalize()` sort (5.5 %) —
+which is already inside the `#pragma omp` region and already threads — plus
+accumulator-vector allocation. The real hot path is **`draw_excitation` at
+40.8 %** (in the region) and a ~10–15 % serial tail of small per-step
+driver passes (`ordered_l1_norm`, `compress`, `signed_population`, the
+diagonal prefill), none of them the merge. Full profile table in H2.8.3.
+
 H3 (replica parallelism) remains a design sketch. All of this is gated on
 a real FCIQMC workload appearing (`FCIQMC_RESEARCH_SCOPE.md` Q1) — nothing
-in the tree runs FCIQMC at a size where the remaining gap matters.
+in the tree runs FCIQMC at a size where any of this matters.
 
 Original framing follows.
 
@@ -573,7 +579,7 @@ candidate 1: 64 output shards keyed `hash(child) % 64`, threaded fill,
 serial fixed-order concat). Not built — gated on a real workload
 (`FCIQMC_RESEARCH_SCOPE.md` Q1) the same as everything else.
 
-### H2.8 — the fixed-order merge (scoped, collision rate measured, candidate 1 BUILT AND REVERTED 2026-09-06 — genuine dead-end: slower on HF/6-31G too, not just N2)
+### H2.8 — the fixed-order merge (scoped, built, reverted, THEN REPROFILED 2026-09-06 — the merge was never the bottleneck; H2.7's phase-probe diagnosis was wrong)
 
 **The one lever H2.7 left.** After H2.4–H2.6 the serial cost outside the
 `#pragma omp` region on HF/6-31G (50k walkers, 4 threads) is ~1270 µs/call,
@@ -767,45 +773,94 @@ The scope projected HF's merge `~1100 µs → ~200 µs` and whole-call
 `2.42× → ~3.1×`. **Neither happened.** HF got 3–8 % *slower* at every
 thread count.
 
-**Why the H2.7 diagnosis over-attributed.** The `~1100 µs merge` figure
-came from a phase probe timing "wall-clock inside the merge region". That
-region's cost is mostly **cache misses touching `out`'s hash map** — misses
-that happen on *any* merge structure, because the next step's partition
-pass and `compress()` walk the same ~26k entries regardless. Replacing the
-`O(n)` `out.add` loop with `O(n)` scatter + `O(n log n)` per-shard
-`std::sort` + a fork/join does not remove those misses; it *adds* the sort
-and the barrier on top. The plain warm-hash merge was already close to
-optimal for this access pattern — the serial cost H2.7 identified is real
-but is **not `O(n log n)`-replaceable-for-a-win**.
-
 **So H2.8 is a genuine dead-end**, not a "works on HF, gated on Q1" —
 confirmed slower on the fixture it was designed for. Candidate 2 (flat
 sorted `WalkerPopulation` via pairwise `inplace_merge`) is not worth
-attempting: it hits the same wall (an `O(n log n)` merge replacing an
-`O(n)` one) plus a whole-suite `WalkerPopulation`-becomes-a-vector change.
-Reverted; `git diff` is docs-only.
+attempting: same `O(n log n)`-replacing-`O(n)` wall plus a whole-suite
+`WalkerPopulation`-becomes-a-vector change. Reverted; `git diff` is
+docs-only.
 
-**What actually would move the merge**, if a real workload ever makes it
-worth more effort: not restructuring *how* the 26k entries are combined,
-but combining *fewer* of them — a larger `kBins` so each bin's
-`finalize()` (already parallel, already in the region) emits a smaller,
-more-deduplicated list, shrinking what the serial concat touches. That is
-H2.0's lever (`kBins` sweep), which H1 shelved as "N2-class only" but
-which H2.8.2 reframes: on HF the concat, not the bins, is the residual
-serial cost, and more bins is the one knob that shrinks the concat without
-adding a sort. Still gated on Q1 — but it is the lever to try, not this
-one.
+#### H2.8.3 — reprofiled with `sample` (leaf/self-time) + `xctrace CPU Counters`, and the H2.7 "~1100 µs merge" diagnosis was wrong
+
+Profiled the **baseline** (post-H2.7, no shards) on HF/6-31G, 1 thread,
+40 s of `sample` at 1 ms after equilibration. Self-time (top-of-stack),
+34,081 samples:
+
+| category | samples | % | where |
+|---|---|---|---|
+| **`draw_excitation`** | 13,916 | **40.8 %** | spawn RNG + class/index arithmetic — **inside the parallel region** |
+| `unordered_map::operator[]` | 3,841 | **11.3 %** | hash + bucket-walk + node-link; split across `out.add` (serial merge), `compress`, `signed_population`, diag memo |
+| `slater_condon_element` | 3,798 | 11.1 % | `H_ij` off-diagonal — in the region |
+| spawn-loop body (`._omp_fn.0`) | 2,868 | 8.4 % | per-attempt weight math, initiator check — in the region |
+| allocator + `memset` | 2,491 | 7.3 % | `SpawnAccumulator` vector growth, `next_pop`/`signed_population` |
+| diagonal memo lookup | 2,291 | 6.7 % | the T4 `unordered_map::find` — in the region |
+| **`SpawnAccumulator::finalize()` sort** (`__introsort_loop<KeyWeightLess>`) | 1,869 | **5.5 %** | the **per-bin** sort — **inside the parallel region** |
+| **serial merge + partition** (`propagate_stochastic` outer) | 686 | **2.0 %** | the `out.add(det,w)` concat loop + the parent-partition pass |
+| `compress()` | 619 | 1.8 % | post-step map prune |
+| `ordered_l1_norm()` | 608 | 1.8 % | per-step L1 norm |
+| `excite_one` / parity / popcount | 848 | 2.5 % | in the region |
+
+**What this overturns:**
+
+- **The serial merge is 2.0 % of self-time, not 37 %.** H2.7's "~1100 µs,
+  37 % of the whole call" came from a phase probe timing *wall-clock
+  bracketing the merge region*. That bracket was dominated by
+  `SpawnAccumulator::finalize()` — the **per-bin sort, 5.5 %, which is
+  already inside the `#pragma omp` region and already threads** — plus the
+  allocator churn of the accumulator vectors. The actual serial `out.add`
+  concat is 686 samples. **There was never 1100 µs of serial merge to
+  cut.** Candidate 1 replaced a 2 % serial loop with a 2 % serial scatter
+  + *another* copy of the 5.5 % sort (now 64 shard-sorts on top of the 64
+  bin-sorts) + a second fork/join — exactly why it measured slower.
+- **`unordered_map` cost is real (11.3 %) but spread**, and only ~2 % of it
+  is the merge. Cutting it means fewer maps, not a different merge:
+  `signed_population` (only consumed by the Verbose `<N_I>/<N_0>` dump) and
+  the separate `compress` pass are the removable ones.
+- **`rehash` is 0.2 %.** The map is warm across steps (reused capacity), so
+  the earlier "cache-miss-bound rehash" guess in H2.8.2 was also wrong —
+  the `operator[]` cost is steady-state hash+probe, not growth.
+
+**The `xctrace "CPU Counters"` run** (CPU-Bottlenecks mode, not raw
+cache-miss events — the CLI template does not expose per-symbol L1D/L2
+miss attribution) showed the hot path is **not** front-end / I-cache
+bound: the `draw_excitation` + `slater_condon` inner loop is
+compute-and-small-working-set bound (the `h_eff` matrix and `ga` vector
+for HF/6-31G are ~1 KB + ~2 KB, L1-resident), consistent with 40.8 % in a
+branchy integer-arithmetic function that does no large striding.
+
+**Where the real time is: `draw_excitation` at 40.8 %, in the parallel
+region.** The whole-call speedup ceiling (2.42×/4t) is set by everything
+*outside* that region — and the profile says that "outside" is **not the
+merge**; it is the per-step driver work that runs once per iteration on
+one thread: `ordered_l1_norm` (1.8 %), `compress` (1.8 %), the
+`signed_population` update, `projected_energy`, the `ShiftController`, and
+the diagonal-prefill pass — each small, none the "1.1 ms" the phase probe
+implied, summing to the ~10–15 % serial tail that caps Amdahl at ~2.5×.
 
 **Retired hypotheses, for the next person:**
 
-1. *"The ~1100 µs merge is `O(n log n)`-parallelizable serial work."* No —
-   it is `O(n)` hash inserts whose cost is cache-miss-bound, and those
-   misses are paid by downstream passes anyway. Sharding adds a sort and a
-   barrier for no win.
-2. *"N2 is saturated so its merge is negligible; it is only the
-   correctness fixture."* Measured false at 50k steps — N2's merge is
-   HF-scale by entry count (15k+). What makes N2 the correctness fixture
-   is its *determinant space* being small enough for real sampling.
+1. *"The merge is ~1100 µs / 37 % of the call and is the bottleneck."*
+   Measured false — the serial merge is **2.0 %** of self-time. The phase
+   probe bracketed the already-parallel per-bin `finalize()` sort (5.5 %)
+   and accumulator allocation, not serial work.
+2. *"The merge cost is cache-miss / rehash bound."* Rehash is 0.2 %; the
+   map is warm. `operator[]` self-time is steady-state hash+probe, spread
+   across four call sites, only ~2 % of it in the merge.
+3. *"N2 is saturated so its merge is negligible; it is only the
+   correctness fixture."* N2's merge is HF-scale by entry count (15k+),
+   but — per (1) — the merge is not where the time is on *either* fixture.
+   What makes N2 the correctness fixture is its determinant space being
+   small enough for real sampling.
+
+**If a real Q1 workload ever makes FCIQMC wall-time matter**, the levers
+in profile order are: (a) `draw_excitation` — 40.8 %, already threaded, so
+this is a *serial-efficiency* target (fewer branches, precompute the
+per-parent class sizes once instead of per-attempt); (b) collapse the
+three separate per-step `unordered_map` passes (`compress`,
+`signed_population`, the diagonal prefill) into one walk of `pop`;
+(c) gate `signed_population` off entirely unless `verbosity verbose`
+(it already is — confirm the guard covers the accumulation, not just the
+print). The merge is not on this list.
 
 ### H3 — the outer step loop itself is not as sequential as it looks
 
@@ -938,23 +993,23 @@ conclusion `FCIQMC_RESEARCH_SCOPE.md` Q1 reaches for the method as a whole.
   saturation-starved fixture; on HF the bins are already large enough.
   H2 does **not** touch `kBins`.
 - **H2.8 (the fixed-order merge) — candidate 1 BUILT, verified correct,
-  then REVERTED (2026-09-06). Genuine dead-end: slower on HF/6-31G too.**
-  Cross-bin collision rate probed on HF/6-31G: **0.73 %**. Candidate 1
-  (`SpawnWorkspace` gains 64 `hash(child) % 64` output shards, serial
-  `O(n)` scatter, parallel `finalize()`, serial fixed-order concat) was
-  implemented and passed **every** correctness gate. **But it was slower on
-  BOTH fixtures at every thread count:** N2/STO-3G 8.6 s → 12.9 s (1t),
-  and — decisively — **HF/6-31G 53.3 → 55.3 s (1t), 26.2 → 28.2 s (4t),
-  23.2 → 24.7 s (8t)**, i.e. 3–8 % slower on the very fixture the scope
-  projected `2.42× → ~3.1×` for. The H2.7 `~1100 µs merge` phase-probe
-  figure over-attributed: that region's cost is cache-miss-bound on `out`'s
-  hash map, and those misses are paid by the next step's partition and
-  `compress()` regardless — sharding adds an `O(n log n)` sort + a barrier
-  on top of misses it cannot remove. Candidate 2 not attempted (same wall +
-  a whole-suite change). Reverted; `git diff` docs-only. The lever that
-  *might* help a real workload is **H2.0** (larger `kBins` → smaller,
-  more-deduplicated per-bin lists → less for the serial concat to touch),
-  not this. Section H2.8.2 has the table and the two retired hypotheses.
+  REVERTED, then REPROFILED (2026-09-06). The merge was never the
+  bottleneck — H2.7's phase-probe diagnosis was wrong.** Candidate 1 (64
+  `hash(child) % 64` output shards, serial scatter, parallel `finalize()`,
+  serial concat) passed every correctness gate but measured 3–8 % *slower*
+  on HF/6-31G at every thread count. A proper `sample` reprofile of the
+  baseline (self-time, 34k samples, HF/6-31G 1t) shows why: **the serial
+  merge is 2.0 %**, not H2.7's "37 %". The phase probe had bracketed the
+  per-bin `SpawnAccumulator::finalize()` sort (5.5 %) — *already inside the
+  `#pragma omp` region, already threaded* — plus accumulator allocation.
+  Real hot path: **`draw_excitation` 40.8 %** (in the region), `H_ij`
+  11.1 %, `unordered_map::operator[]` 11.3 % (spread across 4 call sites,
+  ~2 % of it the merge), allocator 7.3 %. `rehash` is 0.2 % — the map is
+  warm, so the H2.8.2 "cache-miss/rehash bound" guess was also wrong. The
+  ~2.5× Amdahl ceiling is a ~10–15 % serial tail of *small* per-step driver
+  passes (`ordered_l1_norm`, `compress`, `signed_population`, diagonal
+  prefill), not the merge. Full table + three retired hypotheses + the real
+  lever list in H2.8.3. Reverted; `git diff` docs-only.
 - **H3 — not started.** Design sketch + memory estimate only.
 - **Fixture decision: use HF/6-31G (or larger) for all future parallel-
   FCIQMC measurement.** N2/STO-3G stays the *correctness* gate (small
