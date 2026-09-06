@@ -826,37 +826,42 @@ worth doing whether or not FCIQMC happens.
   `docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md`. H1 is DONE (2026-09-06); H2/H3
   are gated on a real target.**
 
-  **H1 — measured.** A probe on the real N2/STO-3G gate: per-parent work is
-  **~148 ns and dead flat across an 80x walker sweep** (2k->160k walkers;
-  `ns/parent` 146-152, one `draw_excitation` + one `slater_condon_element`
-  + one memoized diagonal + two map inserts). `parents/call` grows only
-  2.2x for 80x walkers because N2's 14,400-det space saturates. **The
-  pragma region, measured in isolation, threads to only ~2.28x at 4
-  threads (2.60x at 160k walkers) and REGRESSES at 8** (reproducible). The
-  cause is bin granularity: 908 parents / 64 fixed bins ~= 14 parents/bin,
-  ~= 2.1us arithmetic per bin, against fork/join + per-bin `unordered_map`
-  overhead. The FCI sigma build threaded to 3.54x because its per-outer-unit
-  work is ~600 excitation enumerations vs FCIQMC's one sampled draw --
-  ~2 orders of magnitude more arithmetic.
+  **H1 -- measured on TWO fixtures, and its own N2-only first conclusion
+  was a saturation artifact.** Per-parent work is ~148-202 ns and flat in
+  walker count on both (one `draw_excitation` + one `slater_condon_element`
+  + one memoized diagonal + two map inserts). But `parents/bin` -- and so
+  whether the region threads -- depends on whether the determinant space is
+  saturated:
 
-  **Consequence.** H1 does not fully kill the rewrite but bounds it hard:
-  even a perfect H2 (zero serial scaffolding) lands the whole call at the
-  region ceiling, **~2.3-2.6x at 4 threads, never near-linear**, and 8
-  threads is off the table at reachable sizes. The realistic H2 prize is
-  the ~0.7-1.0x gap between the current 1.57x and the region's 2.3x -- a
-  bounded ~1.5x one-time gain, not scaling-with-cores. **A cheaper
-  experiment falls out: H2.0 -- shrink the fixed `kBins` (64 was chosen for
-  merge determinism, not throughput) to raise per-bin work; must stay a
-  fixed count (not thread-tied -- the invariance hazard the sigma build
-  paid for twice) and be re-gated.** Try H2.0 before the full
-  `SpawnWorkspace` rewrite.
+  | fixture | ndet | walkers | parents/call | parents/bin | region @4t | region @8t |
+  |---|---|---|---|---|---|---|
+  | N2/STO-3G (gate) | 14,400 | 10,000 | 908 | ~14 | **2.28x** | 1.89x (regresses) |
+  | HF/6-31G | 213,444 | 50,000 | 27,505 | ~430 | **3.44x** | **4.47x (climbing)** |
 
-  **H2 / H2.0 -- not started**, gated on Q1: the bounded ~1.5x is not worth
-  the rewrite until FCIQMC runs somewhere long enough to care. **H3
-  (replicas)** is the only genuine scaling-with-cores axis and it only
-  tightens the error bar -- design sketch only, build-or-not tied to a
-  target appearing. Deliverable converts to `FCIQMC_PARALLELISM.md` when
-  H2/H3 resolve or are declined.
+  N2's 14,400-det space is FULL at gate walker counts, so bins are starved
+  (~14 parents each, ~2us arithmetic vs fork/join) -- that is the "ceiling"
+  the first pass found and misread as general. HF's space is 15x larger and
+  unsaturated, giving ~430 parents/bin and threading like the FCI sigma
+  build, no regression through 8 threads. **The interesting case
+  (Q1: large active spaces) is the unsaturated one, so H1 is refuted as
+  stated -- the per-step work is NOT too small to parallelize.**
+
+  **Consequence.** On HF the WHOLE call is stuck at 2.24x/4 threads against
+  a region ceiling of >=4.5x, because the serial scaffolding is ~1.5ms/call
+  (30x N2's absolute cost -- HF partitions/merges 30x more parents) and
+  does not thread. That ~1.5ms is exactly the `SpawnWorkspace` target: with
+  it removed the whole call should track the region toward 3.5-4x+ at 4
+  threads on an unsaturated fixture. **Near-linear is now plausible, not a
+  foregone no.**
+
+  **H2 -- not started, worth doing when a target appears.** Measure against
+  the HF region ceiling, not N2. **H2.0 (smaller fixed `kBins`) -- reserve,
+  N2-class only** (helps a saturation-starved fixture; HF's bins are
+  already large enough). **H3 (replicas)** -- design sketch only.
+  **Fixture decision: HF/6-31G or larger for all future parallel-FCIQMC
+  measurement; N2/STO-3G stays the correctness gate but is a misleading
+  throughput fixture.** Deliverable converts to `FCIQMC_PARALLELISM.md`
+  when H2/H3 resolve or are declined.
 
   **Three lessons, each of which cost a wrong number first.** (1) **A profile share
   is a lower bound on what removing that work is worth** — three for three now

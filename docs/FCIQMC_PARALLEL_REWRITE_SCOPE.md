@@ -88,85 +88,103 @@ only if a target system with a much larger active space appears (see
 
 ---
 
-#### H1 result (measured 2026-09-06): the per-parent work is real, but the *region* has a granularity ceiling of ~2.3–2.6× at 4 threads and regresses at 8 — so H2 alone cannot reach near-linear
+#### H1 result (measured 2026-09-06): the answer is fixture-dependent — on N2 the region has a granularity ceiling of ~2.3×, on HF/6-31G it threads to 4.5× at 8 threads and climbs. The N2 ceiling was a saturation artifact, not a property of FCIQMC.
 
 Probe (`PLANCK_FCIQMC_H1_PROBE`, added, measured, reverted — `grep`
-confirms clean) instrumenting `propagate_stochastic` on the real N2/STO-3G
-gate config: per-call parent count, spawn attempts, off-diagonal
-evaluations, wall-time of the pragma region in isolation, and wall-time of
-the whole call.
+confirms clean) instrumenting `propagate_stochastic` on two real fixtures:
+the N2/STO-3G gate and HF/6-31G (`tests/inputs/exploratory/fciqmc/
+validation/hf_base.hfinp` — `ndet` = 213,444, 14.8× N2, and it does NOT
+saturate until 213k walkers where N2 saturates around 44k).
 
 **The per-parent cost is a fixed property of the system, flat in walker
-count.** Across an 80× walker sweep (2,000 → 160,000 walkers on N2/STO-3G,
-`ndet` = 14,400):
+count — confirmed on both.** N2 `ns/parent` is **146–152** across a 2k→160k
+walker sweep; HF `ns/parent` is **~202 at 1 thread** (~58 at 4 threads,
+i.e. 202/3.44) and equally flat across 10k→100k walkers. It is one
+`draw_excitation` + one `slater_condon_element` (off-diagonal) + one
+memoized diagonal lookup + two `unordered_map` inserts; HF's is slightly
+higher because it has 6 virtuals/spin vs N2's 3.
 
-| walkers | parents/call | ns/parent | region µs/call | whole µs/call | region share |
-|---|---|---|---|---|---|
-| 2,000 | 629 | 152 | 96 | 150 | 64 % |
-| 10,000 (gate) | 908 | 147 | 133 | 200 | 66 % |
-| 40,000 | 1,196 | 147 | 176 | 256 | 69 % |
-| 160,000 | 1,372 | 148 | 203 | 292 | 70 % |
+**But `parents/call` — and therefore per-bin work — depends entirely on
+whether the determinant space is saturated:**
 
-`ns/parent` is **146–152 ns across the whole range** — one `draw_excitation`
-+ one `slater_condon_element` (off-diagonal branch) + one memoized diagonal
-lookup + two `unordered_map` inserts. `parents/call` grows only 2.2× for
-80× walkers because N2's 14,400-determinant space saturates. The T2 doc's
-"4× the walkers left the threadable share flat" is confirmed and extended:
-the *share* drifts 64 %→70 %, and `ns/parent` is dead flat.
+| fixture | ndet | walkers | parents/call | parents/bin |
+|---|---|---|---|---|
+| N2/STO-3G | 14,400 | 10,000 (gate) | 908 | ~14 |
+| N2/STO-3G | 14,400 | 160,000 | 1,372 | ~21 |
+| HF/6-31G | 213,444 | 10,000 | 15,867 | ~248 |
+| HF/6-31G | 213,444 | 50,000 (base) | 27,505 | ~430 |
 
-**The region does not thread well even isolated from the serial
-scaffolding.** Measuring the pragma region alone at 1/2/4/8 threads (gate
-config, 908 parents):
+N2's `parents/call` grows only 2.2× for 80× walkers because its space
+saturates — at that point every determinant is occupied and adding walkers
+just deepens weights. HF's space is 15× larger and stays unsaturated, so
+`parents/call` is 30× N2's at the same walker count.
+
+**The region-threading result splits cleanly on that:**
+
+*N2/STO-3G* (908 parents, ~14/bin) — **granularity-ceilinged**:
 
 | threads | region µs | region speedup | whole µs | whole speedup |
 |---|---|---|---|---|
 | 1 | 134.8 | 1.00× | 203.5 | 1.00× |
 | 2 | 89.8 | 1.50× | 162.2 | 1.25× |
-| 4 | 59.1 | **2.28×** | 133.0 | **1.53×** |
+| 4 | 59.1 | **2.28×** | 133.0 | 1.53× |
 | 8 | 71.4 | 1.89× (regresses) | 145.7 | 1.40× (regresses) |
 
-At 160,000 walkers (1,372 parents, more work per bin) the region reaches
-**2.60× at 4 threads** and still regresses at 8 (2.27×). The 8-thread
-regression reproduces exactly on repeat runs (70.7 µs twice at 10k).
+*HF/6-31G* (27,505 parents, ~430/bin) — **scales like the FCI sigma build**:
 
-**The cause is bin granularity, not scaffolding.** 908 parents ÷ 64 fixed
-bins ≈ 14 parents/bin, ≈ 2.1 µs of arithmetic per bin, against fork/join
-plus each `next_bins[bin]` being an `unordered_map` the region touches.
-That is why 8 threads (≈ 8 bins each, ≈ 17 µs total) cannot cover the
-thread-spawn cost. The FCI sigma build threaded to 3.54× because its
-per-call work is `O(ndet)` full excitation enumerations (~600 connections
-per determinant) — roughly two orders of magnitude more arithmetic per
-outer-loop unit than FCIQMC's one sampled draw.
+| threads | region µs | region speedup | whole µs | whole speedup |
+|---|---|---|---|---|
+| 1 | 5569 | 1.00× | 7039 | 1.00× |
+| 2 | 3129 | 1.78× | 4652 | 1.51× |
+| 4 | 1617 | **3.44×** | 3139 | **2.24×** |
+| 8 | 1245 | **4.47×** (still climbing) | 2849 | **2.47×** |
+
+**The cause is bin granularity, and it is a fixture property.** N2's 908
+parents ÷ 64 bins ≈ 14/bin ≈ 2.1 µs arithmetic per bin — fork/join plus
+each `next_bins[bin]` being an `unordered_map` the region touches
+dominates, and 8 threads (≈ 8 bins each) cannot cover the thread-spawn
+cost. HF's ~430 parents/bin ≈ 87 µs of arithmetic per bin — comfortably
+above the fork/join floor, so the region threads to 3.44×/4.47× with no
+regression, the same regime the FCI sigma build (~600 excitation
+enumerations per determinant, `O(ndet)` per call) sits in.
 
 **What this means for the rewrite:**
 
-- **H1 does not fully hold** — the per-parent work is not "10×+ too small";
-  the region *does* speed up, to ~2.3× at 4 threads. But it **bounds H2
-  hard**: even a perfect H2 (zero serial scaffolding) lands the whole call
-  at the region's own ceiling, ~2.3–2.6× at 4 threads, never near-linear,
-  and 8 threads is off the table at reachable system sizes.
-- The remaining ~0.7–1.0× between the current 1.57× and the region's 2.3×
-  is what H2's scaffolding removal can actually recover. That is real
-  (~35–45 % faster) but it is a bounded, one-time gain, not a
-  scaling-with-cores gain.
-- **The bin count is the lever H1 exposes that the scope did not name.**
-  `kBins = 64` was chosen for merge-order determinism, not throughput.
-  Fewer, larger bins (e.g. `kBins = 16` or `= n_threads`, keeping the
-  fixed-partition-by-parent-hash property) would raise per-bin work and
-  may push the 4-thread region past 2.6× — but `kBins` tied to thread
-  count is exactly the invariance hazard `FCI_SIGMA_BUILD_PERFORMANCE.md`
-  paid for twice, so this must stay a fixed count, just a smaller one, and
-  be re-gated. This is a cheaper experiment than the full H2 rewrite and
-  should be tried first (call it **H2.0**).
+- **H1 is refuted as stated.** The per-parent work is not too small in
+  general — on any fixture whose determinant space is not saturated
+  (which is the interesting case — `FCIQMC_RESEARCH_SCOPE.md` Q1 is about
+  large active spaces), the region threads to 3.4×+ at 4 threads and keeps
+  scaling. The N2 gate is a *saturated* fixture chosen deliberately so
+  sampling is a real sample of a small space; that same choice makes it a
+  bad throughput fixture. **Use HF/6-31G (or larger) for all future
+  parallel-FCIQMC measurement.**
+- **H2 becomes worth doing.** On HF the region ceiling is ≥ 4.5× at 8
+  threads, while the whole call is stuck at 2.24×/2.47× because the serial
+  scaffolding is ~1.5 ms/call (30× N2's absolute cost — HF partitions and
+  merges 30× more parents) and does not thread. That ~1.5 ms is exactly
+  the `SpawnWorkspace` target: hoist the 64-bin construction, the 64 RNG
+  engines, the partition, and the merge into reusable driver-owned state,
+  swap `unordered_map` for a reuse-stable accumulator, and the whole call
+  should track the region toward 3.5–4×+ at 4 threads on an unsaturated
+  fixture.
+- **H2.0 (smaller fixed `kBins`) is now specifically an N2-class fix, not
+  general.** It would help a saturated fixture where bins are starved; on
+  HF the bins are already large enough. If any real target is
+  saturation-limited it is worth trying, but the primary lever is H2's
+  scaffolding removal on the unsaturated case.
+- **Near-linear is plausible on a large unsaturated fixture** — HF's
+  region already does 4.47×/8 threads and had not plateaued. Whether the
+  *whole call* reaches near-linear depends on H2 killing the serial
+  scaffolding; that is now a measurable question with a fixture that can
+  answer it, not a foregone "no".
 
-**Recommendation:** H2 is worth doing for the bounded ~1.5× it recovers on
-top of the current 1.57× (≈ 2.3–2.5× total at 4 threads), *if and only if*
-a target system appears that runs FCIQMC long enough to care — the same
-Q1 gate as everything else in this area. Try H2.0 (smaller fixed `kBins`)
-first as a one-line experiment. Near-linear parallelism of a single
-trajectory is **not reachable** by any data-structure rewrite at reachable
-walker counts; that leaves H3 (replicas) as the only genuine
-scaling-with-cores axis, and H3 only tightens the error bar.
+**Recommendation:** H1 does not kill the rewrite — it relocates it. The
+work is: (1) adopt HF/6-31G as the parallel fixture, (2) build H2's
+`SpawnWorkspace`, measuring against the HF region ceiling (≥ 4.5×), (3)
+keep H2.0 in reserve for a saturation-limited target. Still gated on a
+real target appearing (`FCIQMC_RESEARCH_SCOPE.md` Q1) — nothing in the
+tree runs FCIQMC long enough for even the current 2.24×/HF to matter —
+but the ceiling is now known to be high, not low.
 
 ### H2 — the serial-per-call scaffolding is the ceiling, and it is eliminable by hoisting state out of the call
 
@@ -278,7 +296,9 @@ conclusion `FCIQMC_RESEARCH_SCOPE.md` Q1 reaches for the method as a whole.
   `OMP_NUM_THREADS` = 1/2/4/8. This is *easier* to guarantee with a
   reuse-stable structure than with the current `unordered_map`, which is
   the point — but it must be gated, and the gate must be non-vacuous
-  (S5: an N2-sized `threads1/threads4` pair that goes red when the merge
+  (S5: an N2-sized `threads1/threads4` pair — N2 is fine *here*, since the
+  invariance gate needs multi-parent bins, not throughput, and N2's 908
+  parents ÷ 64 bins already gives that — that goes red when the merge
   order is perturbed).
 - **Fixed-seed reproducibility** — `RandomSource`'s contract. A rewrite
   that changes the RNG (H2's counter-based option) changes every
@@ -297,20 +317,29 @@ conclusion `FCIQMC_RESEARCH_SCOPE.md` Q1 reaches for the method as a whole.
 
 ## Status
 
-- **H1 — DONE (2026-09-06).** Result inline above: the per-parent work is
-  ~148 ns and flat in walker count; the pragma region threads to only
-  ~2.3× at 4 threads (2.6× at 160k walkers) and regresses at 8, a bin-
-  granularity ceiling. H1 does not fully kill the rewrite but bounds it:
-  near-linear single-trajectory parallelism is unreachable, and H2's
-  realistic prize is ~1.5× on top of the current 1.57× (≈ 2.3–2.5× total
-  at 4 threads). A new cheaper experiment, **H2.0 (smaller fixed `kBins`)**,
-  falls out of H1 and should precede the full H2 rewrite.
-- **H2.0 / H2 — not started.** Gated on a real target appearing
-  (`FCIQMC_RESEARCH_SCOPE.md` Q1) — the bounded ~1.5× is not worth the
-  rewrite until FCIQMC runs somewhere long enough to care.
-- **H3 — not started.** Design sketch + memory estimate only; the honest
-  expected conclusion is "document as the right move when a target
-  appears".
+- **H1 — DONE (2026-09-06), and its own first conclusion was fixture-
+  bound and wrong.** Measured on N2/STO-3G first: region threads to only
+  2.3× at 4 threads and regresses at 8 — read as a general granularity
+  ceiling. Then measured on HF/6-31G (`ndet` = 213k, unsaturated): region
+  threads to **3.44× at 4 threads and 4.47× at 8, still climbing**. The N2
+  ceiling was a *saturation artifact* — N2's 14,400-det space is full at
+  gate walker counts, giving ~14 parents/bin; HF gives ~430/bin and
+  threads like the FCI sigma build. The per-parent work (~148–202 ns,
+  flat in walker count) is real on both. **H1 is refuted as stated: the
+  work is not too small on any non-saturated fixture, which is exactly the
+  Q1 large-active-space case.**
+- **H2 — not started, but now clearly worth doing when a target appears.**
+  On HF the whole call is stuck at 2.24×/4 threads against a region
+  ceiling of ≥ 4.5×, because the serial scaffolding is ~1.5 ms/call (30×
+  N2's, since HF partitions/merges 30× more parents) and does not thread.
+  That ~1.5 ms is the `SpawnWorkspace` target. Measure against the HF
+  region ceiling, not N2.
+- **H2.0 (smaller fixed `kBins`) — reserve, N2-class only.** Helps a
+  saturation-starved fixture; on HF the bins are already large enough.
+- **H3 — not started.** Design sketch + memory estimate only.
+- **Fixture decision: use HF/6-31G (or larger) for all future parallel-
+  FCIQMC measurement.** N2/STO-3G stays the *correctness* gate (small
+  space, real sampling) but is a misleading *throughput* fixture.
 
 ## Deliverable
 
