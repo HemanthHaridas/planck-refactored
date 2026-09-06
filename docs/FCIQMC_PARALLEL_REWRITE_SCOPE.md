@@ -214,7 +214,7 @@ measurement that decides whether it was worth it.
 | step | adds | verifies against | if it fails |
 |---|---|---|---|
 | **H2.1 — DONE** (see below) | the S5 gate: an **N2-sized** `threads1`/`threads4` pair at `atol = 0.0`. **The `threads1` case PINS both energies to fixed values** (not just `metric_present`), because a merge-order defect is thread-count-invariant and a `threads4 == threads1` comparison alone cannot see it. | the current tree (passes as-is); non-vacuity verified with two mutation classes | — |
-| **H2.2** | a standalone unit test (`fciqmc_accumulator`) for whatever reuse-stable accumulator H2.4 will use, checking: same `(det, weight)` multiset in any insertion order → **bitwise-identical** iterated sum; and **bitwise-identical after N reuse cycles** (the property `unordered_map` fails, T2 invariant 3) | an independent `std::map`-based reference sum on random `(det, weight)` fixtures with deliberate duplicate keys | the accumulator is not actually reuse-stable → pick a different structure (the three candidates below) before wiring it in |
+| **H2.2 — DONE** (see below) | `SpawnAccumulator` (`src/post_hf/ci/spawn_accumulator.h`, header-only) — candidate 1, a flat `vector<pair<DetKey,Weight>>` that `finalize()` sorts by a **total order on `(alpha, beta, bit-pattern-of-weight)`** then folds equal-key runs left-to-right, so the sum is a pure function of the multiset. Gated by `planck-fciqmc-accumulator` against an independent `std::map`-based reference. | insertion-order invariance (5 shuffles × 20 seeds), reuse stability (10 grow-then-shrink cycles), `finalize()` idempotence, and a non-vacuity check that the canonical fold actually differs from an insertion-order fold | — |
 | **H2.3** | measure, in isolation, the cost of **re-seeding 64 `mt19937_64` engines in place** vs constructing 64 fresh — the number T2 flagged as unseparated | a microbenchmark of exactly that one difference, identical seed sequence | re-seed is ≈ as expensive as construct → H2.5 needs a counter-based RNG (Philox/Threefry), a bigger change; decide here, not mid-rewrite |
 | **H2.4** | `SpawnWorkspace` type + `void propagate_stochastic(..., SpawnWorkspace& ws, WalkerPopulation& out)` — the persistent bins (using H2.2's accumulator), partition buffer, and merge target live in `ws`; the output is caller-owned so there is no NRVO question | **bitwise identical to the pre-H2 tree at `OMP_NUM_THREADS` = 1** on `h2_fciqmc_sto3g` and `n2_fciqmc_sto3g` (serial, so no reordering — a swap of the accumulator that changes a serial result is a bug, not reassociation) | serial result changes → the accumulator swap reordered something it should not have; localize with H2.2's reference before proceeding |
 | **H2.5** | move the 64 RNG engines into `ws`, re-seeded per call from one `rng.raw64()` draw (the S1 contract: fresh, thread-count-independent bin streams). If H2.3 said re-seed is too costly, this step is instead "swap `RandomSource`'s engine for a counter-based one" — a deliberate, separately-recorded RNG change | self-reproducibility at fixed seed **plus** `metric_within_sigma` against exact FCI (T2 invariant 2 — never bitwise-vs-the-old-numbers, since changing the RNG or its call pattern is a reordering-class change) | reproducibility fails, or the FCI-agreement sigma blows past the gate → the bin-stream derivation is wrong (the S1 "frozen trajectory" trap: a `const derive()` that does not advance); check the population diagnostics, not just the gate |
@@ -259,13 +259,56 @@ not have this property; the S5 pair is stricter on purpose.
 No production code changed for H2.1 — one new input file, two new JSON
 cases. All FCIQMC gates plus smoke (35/35) pass.
 
-**The accumulator (H2.2/H2.4) — three candidates, evaluate in this order:**
+#### H2.2 result (2026-09-06): candidate 1 (sorted vector) built and gated; the within-key fold order is the load-bearing detail
 
-1. **Sorted `std::vector<std::pair<DetKey, Weight>>` + `std::inplace_merge`.**
-   Order is total and reuse-stable by construction; `.clear()` genuinely
-   resets a vector. The spawn appends unsorted, then one sort + a dedup
-   pass that sums equal keys. Simplest to reason about and to test; the
-   likely first choice.
+`SpawnAccumulator` (`src/post_hf/ci/spawn_accumulator.h`, header-only,
+Eigen-free-under-test):
+
+- **`add(det, w)`** just appends `(det, w)` to a `std::vector` — order-
+  immaterial, cheap.
+- **`finalize()`** `std::sort`s the whole vector by a **total order on
+  `(alpha, beta, std::bit_cast<uint64_t>(weight))`**, then folds
+  consecutive equal-key runs left-to-right. The critical detail, found
+  while writing the test: sorting by key alone is **not** enough — a
+  `std::sort` is not stable, so a ≥ 3-long same-key run would fold in an
+  arbitrary order and the sum would still depend on the insertion order
+  (IEEE `+` is commutative but not associative). Adding the weight-bit
+  tiebreak makes the run's fold order `((w_a + w_b) + w_c)` with
+  `w_a ≤ w_b ≤ w_c` by bit pattern — a pure function of the multiset.
+- **`reset()`** is `vector::clear()` (keeps capacity, carries no bucket-
+  layout memory) — the genuine reset `unordered_map` cannot do.
+
+Gated by `planck-fciqmc-accumulator` (`tests/fciqmc_accumulator.cpp`)
+against an **independent** `std::map<DetKey, vector<double>>` reference
+that groups by key and folds each key's per-key vector in the same
+ascending-bit order — the same canonical sum arrived at a different way
+(per-key grouping vs. one global sort-and-scan). Checks:
+
+| test | what |
+|---|---|
+| insertion-order invariance | 20 structured multisets (40 keys, runs of 1–6, magnitudes 1 → 1e-9, exact-cancellation pairs), each shuffled 5 ways → all 5 finalized sums bitwise-identical to the reference |
+| reuse stability | 10 cycles of `reset()` → fill with a *larger* multiset → `reset()` → refill with the small one → require bitwise-identical to cycle 0 (the exact shape that made a reused `unordered_map` iterate differently) |
+| `finalize()` idempotent | second call does not change the bytes |
+| non-vacuity | assert the canonical fold *does* differ from an insertion-order fold on ≥ 1 of 50 seeds — so the invariance test is not silently untestable |
+| hand case | `add(1.0); add(1e-16); add(-1.0)` folds as `(1e-16 + 1.0) + (-1.0) == 0.0`, the 1e-16 lost — confirms the ascending-bit fold order concretely |
+
+**Mutation-verified both ways** on a throwaway edit: dropping the
+weight-bit tiebreak → 101 failures (insertion-order + reference); making
+`reset()` not clear `entries_` → 10 failures (small refill carries the big
+multiset). Reverted.
+
+`inplace_merge` (the scope's stated mechanism for candidate 1) was not
+used — a single `std::sort` + one dedup scan is simpler and the spawn
+never produces two pre-sorted halves to merge. Candidates 2 and 3 stay in
+reserve if H2.7 shows the sort cost matters (the sort is over ~430
+entries/bin on HF, `O(n log n)` with n ≈ 430, against the ~87 µs of
+arithmetic per bin — unlikely to dominate, but H2.7 measures it).
+
+No production code changed for H2.2 either — `SpawnAccumulator` has no
+caller until H2.4. All FCIQMC unit tests + smoke (35/35) pass.
+
+**The accumulator — remaining candidates, only if H2.7 shows the sort matters:**
+
 2. **Flat open-addressing hash table, fixed capacity, defined probe order,
    `.clear()` = memset the control bytes.** Faster inserts than sort, and
    `.clear()` is genuinely O(capacity) with no bucket-layout memory — but
@@ -371,8 +414,8 @@ conclusion `FCIQMC_RESEARCH_SCOPE.md` Q1 reaches for the method as a whole.
   flat in walker count) is real on both. **H1 is refuted as stated: the
   work is not too small on any non-saturated fixture, which is exactly the
   Q1 large-active-space case.**
-- **H2 — SCOPED into seven verifiable steps (H2.1–H2.7). H2.1 DONE; H2.2–H2.7
-  not started.**
+- **H2 — SCOPED into seven verifiable steps (H2.1–H2.7). H2.1 + H2.2 DONE;
+  H2.3–H2.7 not started.**
   On HF the whole call is stuck at 2.24×/4 threads against a region
   ceiling of ≥ 4.5×, because the serial scaffolding is ~1.5 ms/call (30×
   N2's, since HF partitions/merges 30× more parents) and does not thread.
@@ -380,14 +423,19 @@ conclusion `FCIQMC_RESEARCH_SCOPE.md` Q1 reaches for the method as a whole.
   `n2_fciqmc_s5_threads1/4`, N2-sized (~9 parents/bin), with `threads1`
   **pinning both energies** because a merge-order defect is
   thread-count-invariant and a `threads1`/`threads4` comparison alone
-  cannot see it (verified: reversing the bin-merge order is caught only by
-  the pin). **H2.2** unit-test a reuse-stable accumulator, **H2.3** measure
-  the RNG re-seed cost in isolation (decides whether H2.5 needs a
-  counter-based RNG), **H2.4** the `SpawnWorkspace` type + out-param
-  signature + accumulator swap (gated bitwise-serial), **H2.5** hoist the
-  RNG engines (gated by reproducibility + FCI-sigma), **H2.6** re-thread
-  and re-verify invariance at 1/2/4/8, **H2.7** re-measure on HF against
-  the region ceiling. Each step's own verification gates the next.
+  cannot see it. **H2.2 (DONE)** `SpawnAccumulator`
+  (`src/post_hf/ci/spawn_accumulator.h`) — a sorted `vector<pair<DetKey,
+  Weight>>` whose `finalize()` sorts by `(alpha, beta, weight-bits)` and
+  folds equal-key runs left-to-right, so the sum is a pure function of the
+  multiset. Gated by `planck-fciqmc-accumulator`, mutation-verified. The
+  weight-bit tiebreak is load-bearing: `std::sort` is not stable, so a
+  ≥ 3-long same-key run would otherwise still fold in insertion order.
+  **H2.3** measure the RNG re-seed cost in isolation (decides whether H2.5
+  needs a counter-based RNG), **H2.4** the `SpawnWorkspace` type +
+  out-param signature + accumulator swap (gated bitwise-serial), **H2.5**
+  hoist the RNG engines (gated by reproducibility + FCI-sigma), **H2.6**
+  re-thread and re-verify invariance at 1/2/4/8, **H2.7** re-measure on HF
+  against the region ceiling. Each step's own verification gates the next.
 - **H2.0 (smaller fixed `kBins`) — reserve, N2-class only.** Helps a
   saturation-starved fixture; on HF the bins are already large enough.
   H2 does **not** touch `kBins`.

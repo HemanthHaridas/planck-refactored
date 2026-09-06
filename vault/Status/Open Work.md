@@ -855,7 +855,7 @@ worth doing whether or not FCIQMC happens.
   foregone no.**
 
   **H2 -- SCOPED into 7 verifiable steps (H2.1-H2.7 in
-  `docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md`). H2.1 DONE; H2.2-H2.7 not
+  `docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md`). H2.1 + H2.2 DONE; H2.3-H2.7 not
   started.** **H2.1 landed** `n2_fciqmc_s5_threads1/4` (N2-sized SHORT run,
   ~9 parents/bin so cross-bin annihilation is exercised, unlike the
   4-determinant `h2_fciqmc_threads1/4`). Finding: **the `threads1` case
@@ -863,17 +863,25 @@ worth doing whether or not FCIQMC happens.
   a merge-order defect is thread-count-invariant, so a `threads1`/`threads4`
   comparison alone cannot see it. Verified non-vacuous with two mutation
   classes: reversing the bin-merge order (caught ONLY by the pin) and a
-  `local_bin`+`omp critical` completion-order merge (caught by both). No
-  production code changed -- one input file, two JSON cases. H2.2 unit-test
-  a reuse-stable accumulator (the property `unordered_map` fails); H2.3
-  measure RNG re-seed cost in isolation (decides whether H2.5 needs a
-  counter-based RNG); H2.4
+  `local_bin`+`omp critical` completion-order merge (caught by both).
+  **H2.2 landed** `SpawnAccumulator` (`src/post_hf/ci/spawn_accumulator.h`,
+  header-only) -- a sorted `vector<pair<DetKey,Weight>>` whose `finalize()`
+  sorts by `(alpha, beta, weight-bits)` then folds equal-key runs
+  left-to-right, so the sum is a pure function of the multiset (candidate
+  1; `inplace_merge` not needed, one `sort` + dedup scan). Gated by
+  `planck-fciqmc-accumulator` against an independent `std::map` reference;
+  insertion-order invariance, 10 grow-then-shrink reuse cycles, idempotent
+  `finalize()`, non-vacuity. Mutation-verified: dropping the weight-bit
+  tiebreak (std::sort is not stable, so a >=3-long same-key run would still
+  fold in insertion order) -> 101 failures; `reset()` not clearing -> 10
+  failures. No production code changed for either step -- `SpawnAccumulator`
+  has no caller until H2.4. **H2.3** measure RNG re-seed cost in isolation
+  (decides whether H2.5 needs a counter-based RNG); **H2.4**
   `SpawnWorkspace` + out-param signature + accumulator swap (gated
-  bitwise-serial); H2.5 hoist the RNG engines (gated by reproducibility +
-  FCI-sigma, never bitwise-vs-old); H2.6 re-thread + re-verify invariance
-  at 1/2/4/8; H2.7 re-measure on HF against the region ceiling. Each step
-  gates the next. Accumulator: sorted vector + `inplace_merge` first, flat
-  open-addressing table second. H2 does NOT touch `kBins`. **H2.0 (smaller
+  bitwise-serial); **H2.5** hoist the RNG engines (gated by reproducibility
+  + FCI-sigma, never bitwise-vs-old); **H2.6** re-thread + re-verify
+  invariance at 1/2/4/8; **H2.7** re-measure on HF against the region
+  ceiling. Each step gates the next. H2 does NOT touch `kBins`. **H2.0 (smaller
   fixed `kBins`) -- reserve, N2-class only.** **H3 (replicas)** -- design
   sketch only. **Fixture: HF/6-31G or larger for all parallel-FCIQMC
   measurement; N2/STO-3G is the correctness gate only.** Deliverable
