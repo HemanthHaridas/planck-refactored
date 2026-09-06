@@ -562,11 +562,168 @@ accumulator swap, one RNG engine swap — and moved the whole call
 2.24→2.42×/4t, 2.47→2.87×/8t. But **the serial scaffolding was only
 half the bottleneck**: H2.4–H2.6 removed the 64-bin construction and the
 ~38 µs RNG seeding, but ~1100 µs/call of merge remains and does not
-thread. The merge is a merge-specific investigation (a fixed-order
-parallel scatter — prefix-sum the per-bin sizes, threaded scatter by
-offset, ordering fixed by the offsets so no completion-order hazard),
-not more of H2, and gated on a real workload (`FCIQMC_RESEARCH_SCOPE.md`
-Q1) the same as everything else.
+thread. That merge is scoped and its collision rate measured as **H2.8**
+below (0.73 % on HF/6-31G → the merge is 99.27 % concatenation →
+candidate 1: 64 output shards keyed `hash(child) % 64`, threaded fill,
+serial fixed-order concat). Not built — gated on a real workload
+(`FCIQMC_RESEARCH_SCOPE.md` Q1) the same as everything else.
+
+### H2.8 — the fixed-order merge (scoped + collision rate measured 2026-09-06; candidate 1 chosen, build gated on Q1)
+
+**The one lever H2.7 left.** After H2.4–H2.6 the serial cost outside the
+`#pragma omp` region on HF/6-31G (50k walkers, 4 threads) is ~1270 µs/call,
+of which **~1100 µs is the merge** — `propagate_stochastic`, `fciqmc.cpp:636`:
+
+```cpp
+for (auto &bin : next_bins)             // 64 accumulators, fixed order
+    for (const auto &[det, w] : bin)    // ~430 finalized entries/bin on HF
+        out.add(det, w);                // fciqmc.h:107 — _walkers[det] += w
+```
+
+~27,500 `unordered_map<DetKey,Weight>::operator[] += ` per call, serial,
+~40 ns each. It is 37 % of the 2957 µs whole call and 87 % of the
+non-region serial cost; the region already threads to 3.54×/4t, so the
+merge is exactly what caps the whole call at 2.42×.
+
+#### Why it is not "just add a pragma"
+
+The merge **must** stay a pure function of the 64 finalized multisets,
+independent of thread count and completion order — that is the whole
+reason `SpawnAccumulator` exists and why every bin is keyed by
+`hash(parent) % kBins` and merged `0..63`. `#pragma omp` + `out.add`
+straight away reintroduces:
+
+- a data race on `_walkers` (concurrent `operator[]` + rehash), and
+- if fixed with `omp critical` / `omp atomic`, **completion-order
+  accumulation** — the DFT-grid-jitter defect this codebase specifically
+  refuses (`docs/DFT_XC_REDUCTION_DETERMINISM`), and the exact mutation
+  H2.1's S5 gate is built to catch.
+
+So the target is a **fixed-order parallel scatter**: the output order is
+fixed by precomputed offsets, not by which thread finishes first.
+
+#### The shape (H2.7's sketch, made concrete)
+
+`out` is `WalkerPopulation` = `unordered_map`. A cross-bin determinant
+(same child spawned from parents in different bins) appears in ≥ 2
+finalized accumulators, so the merge is genuinely a **reduction**, not a
+concatenation — a bare scatter-by-offset does not suffice on its own.
+
+Two candidate structures, in ladder order:
+
+1. **Keep `out` an `unordered_map`, thread only the per-bin `finalize()`
+   fan-in.** The bins are *already* deduplicated internally; only
+   cross-bin keys collide. If cross-bin collisions are rare on HF (needs
+   measuring — a probe counting `out.add` calls that hit an existing key
+   vs. a fresh one), then: parallel-insert the 64 bins into 64 disjoint
+   `unordered_map` shards keyed by `hash(child) % 64` (child, not parent —
+   a child lands in one output shard regardless of which bin spawned it),
+   each shard built by one thread, then a serial `0..63` shard walk into
+   `out`. The serial tail is then only the shard-count concatenation
+   (no per-key `+=`, the shards already reduced), and the fixed `0..63`
+   shard order keeps it deterministic. **This is the least new code** — it
+   reuses the binning discipline already in the file, one more `%`.
+
+2. **Flat sorted output.** `inplace_merge` the 64 already-sorted
+   accumulator entry vectors pairwise in a fixed tree (each is sorted by
+   `(alpha,beta,weight-bits)` post-`finalize()`), fold equal-key runs
+   left-to-right — same canonical fold `SpawnAccumulator::finalize` uses.
+   The pairwise merges parallelize (disjoint pairs), the fold is one
+   serial O(n) scan. `out` becomes a sorted `vector<pair<DetKey,Weight>>`
+   instead of a map — which **also** removes the hash cost from `compress`,
+   `ordered_l1_norm`, `weight_at`, and next step's partition, but is a
+   larger change (every `WalkerPopulation` consumer touched) and needs its
+   own before/after on those call sites.
+
+Ladder says: **measure cross-bin collision rate first** (one probe, same
+`PLANCK_FCIQMC_*_PROBE` inert-then-reverted discipline). If collisions are
+< a few %, candidate 1. If not, candidate 2, priced against the whole
+`WalkerPopulation`-becomes-a-vector change, not just the merge.
+
+#### H2.8.1 result (2026-09-06): collision rate measured — **0.73 %**, candidate 1 it is
+
+Probe (`PLANCK_FCIQMC_MERGE_PROBE`, added, measured, reverted — `git diff`
+clean), HF/6-31G short run (400 equil + 200 sampling), 4 threads: per
+merge, `entries` (summed `bin.size()` over all 64 finalized accumulators)
+vs `distinct` (`out.size()` after the merge). Steady across all 200
+sampling steps:
+
+```
+entries ~26,000   distinct ~25,800   collisions ~190   =>  0.73 %
+```
+
+So **99.27 % of the merge is a pure concatenation** — 64 already-deduplicated,
+already-sorted lists appended into `out`. Only ~190 entries/call actually
+`+=` onto an existing key.
+
+Candidate 1 is the build. Concretely:
+
+- `SpawnWorkspace` gains `std::vector<SpawnAccumulator> out_shards` (64,
+  keyed `hash(child) % 64`).
+- **After** the per-bin spawn region, a second `#pragma omp parallel for`
+  over the 64 output shards: shard `s` walks all 64 finalized `next_bins`
+  and pulls the entries whose `hash(child) % 64 == s` into `out_shards[s]`,
+  then `out_shards[s].finalize()`. Writes are disjoint by construction (a
+  child maps to exactly one shard), no lock. The 0.73 % cross-bin
+  collisions land in the same shard (same child hash), so `finalize()`'s
+  canonical fold resolves them — deterministically, same `(alpha, beta,
+  weight-bits)` order the per-bin accumulators already use.
+- Serial tail: `for (s = 0..63) for (entry : out_shards[s]) out.add(...)`.
+  Still `unordered_map::operator[]`, but now **one insert per distinct
+  child, never a collision** (shards are pre-reduced), and the 64-way
+  fixed shard order keeps it thread-count-independent.
+
+Cost: the shard-walk is `64 × entries` comparisons (`hash % 64` per entry
+per shard = 64× redundant scan) — ~1.7M `%` ops/call, but threaded 64-way
+and pure arithmetic. Cheaper alternative if that scan measures badly:
+one serial pass tagging each entry's shard + a counting-sort into shard
+ranges, then parallel `finalize()` per range. Start with the simple
+64×-scan; it is the least code and the `%` is ~1 ns.
+
+Two `#pragma omp` regions now (spawn, then shard-merge) with a serial
+partition-tag between if the simple scan is too slow — the outer step loop
+is unchanged, one more workspace vector.
+
+#### Verify
+
+Same gate as every H2 step, non-negotiable:
+
+- **`n2_fciqmc_s5_threads1`** re-pinned to whatever value the reassociation
+  lands on (candidate 2 folds in a *different* order than candidate 1's
+  shard walk, so both re-pin), + **`n2_fciqmc_s5_threads4` == threads1 at
+  `atol = 0.0`**.
+- **S5 non-vacuity re-checked on the new merge**: reversing the
+  bin/shard/merge-tree order must fail the pin while T1==T4 holds — the
+  H2.1 mutation, run against the new code path.
+- bitwise thread-count invariance 1/2/4/8 on `n2_fciqmc_sto3g` (50k
+  steps, deepest bins).
+- `metric_within_sigma` vs exact FCI on `h2_fciqmc_sto3g`,
+  `n2_fciqmc_sto3g`.
+- the 4 non-QMC FCI gates sharing `build_all_mo_ci_setup` unchanged.
+
+#### Fixture
+
+**HF/6-31G** (`tests/inputs/exploratory/fciqmc/validation/hf_base.hfinp`,
+`ndet` = 213k, unsaturated) for the phase-probe before/after — N2 is
+saturated and its merge is ~35 µs, too small to measure a change against.
+N2/STO-3G stays the *correctness* gate only.
+
+#### Gate
+
+**Do not build until a real FCIQMC workload exists**
+(`FCIQMC_RESEARCH_SCOPE.md` Q1). The current tree runs FCIQMC for seconds;
+2.42× vs a hypothetical 3.5× on HF buys nothing yet. This section is the
+plan for the day a target (Cr2 CAS(12,18) or similar) makes one
+trajectory take minutes-to-hours. Same gate as H3.
+
+#### Expected outcome
+
+Candidate 1, if collisions are rare: merge ~1100 µs → ~150–250 µs
+(serial shard concat only), whole call ~2957 µs → ~2100 µs, whole-call
+speedup 2.42× → ~3.1–3.3×/4t against the 3.54× region ceiling. Candidate
+2 could go slightly further (removes hash from downstream consumers too)
+but the honest estimate needs the downstream call-site measurements it
+has not had.
 
 ### H3 — the outer step loop itself is not as sequential as it looks
 
@@ -698,6 +855,18 @@ conclusion `FCIQMC_RESEARCH_SCOPE.md` Q1 reaches for the method as a whole.
 - **H2.0 (smaller fixed `kBins`) — reserve, N2-class only.** Helps a
   saturation-starved fixture; on HF the bins are already large enough.
   H2 does **not** touch `kBins`.
+- **H2.8 (the fixed-order merge) — SCOPED, collision rate MEASURED
+  (2026-09-06), build gated on Q1.** ~1100 µs/call, 37 % of the HF whole
+  call, the sole remaining serial cost. Cross-bin collision rate probed on
+  HF/6-31G: **0.73 %** — the merge is 99.27 % concatenation. So candidate
+  1: `SpawnWorkspace` gains 64 output shards keyed `hash(child) % 64`,
+  filled by a second `#pragma omp parallel for` (disjoint writes, no
+  lock), each `finalize()`d to resolve the 0.73 %, then a serial 64-way
+  fixed-order concat into `out` (one insert per distinct child, never a
+  collision). Candidate 2 (flat sorted `WalkerPopulation`) shelved — only
+  worth it for the downstream hash removal, needs its own call-site
+  measurements. Not built: gated on a real workload, same as H3. Section
+  above.
 - **H3 — not started.** Design sketch + memory estimate only.
 - **Fixture decision: use HF/6-31G (or larger) for all future parallel-
   FCIQMC measurement.** N2/STO-3G stays the *correctness* gate (small
