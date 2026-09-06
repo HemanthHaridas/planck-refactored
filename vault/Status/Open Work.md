@@ -822,6 +822,138 @@ worth doing whether or not FCIQMC happens.
   not more of the R1/R2 pattern, and is a decision for when a real target
   exists.
 
+  **A REWRITE (not more of the R1/R2 pattern) was carried out; the full
+  answer is `docs/FCIQMC_PARALLELISM.md`. H1/H2/H2.8/H2.8.4 landed
+  2026-09-06 (bit-identical, on the `fciqmc-parallel-rewrite-scope`
+  branch); H3 (replica parallelism) is declined pending a real target.**
+
+  **H1 -- measured on TWO fixtures, and its own N2-only first conclusion
+  was a saturation artifact.** Per-parent work is ~148-202 ns and flat in
+  walker count on both (one `draw_excitation` + one `slater_condon_element`
+  + one memoized diagonal + two map inserts). But `parents/bin` -- and so
+  whether the region threads -- depends on whether the determinant space is
+  saturated:
+
+  | fixture | ndet | walkers | parents/call | parents/bin | region @4t | region @8t |
+  |---|---|---|---|---|---|---|
+  | N2/STO-3G (gate) | 14,400 | 10,000 | 908 | ~14 | **2.28x** | 1.89x (regresses) |
+  | HF/6-31G | 213,444 | 50,000 | 27,505 | ~430 | **3.44x** | **4.47x (climbing)** |
+
+  N2's 14,400-det space is FULL at gate walker counts, so bins are starved
+  (~14 parents each, ~2us arithmetic vs fork/join) -- that is the "ceiling"
+  the first pass found and misread as general. HF's space is 15x larger and
+  unsaturated, giving ~430 parents/bin and threading like the FCI sigma
+  build, no regression through 8 threads. **The interesting case
+  (Q1: large active spaces) is the unsaturated one, so H1 is refuted as
+  stated -- the per-step work is NOT too small to parallelize.**
+
+  **Consequence.** On HF the WHOLE call is stuck at 2.24x/4 threads against
+  a region ceiling of >=4.5x, because the serial scaffolding is ~1.5ms/call
+  (30x N2's absolute cost -- HF partitions/merges 30x more parents) and
+  does not thread. That ~1.5ms is exactly the `SpawnWorkspace` target: with
+  it removed the whole call should track the region toward 3.5-4x+ at 4
+  threads on an unsaturated fixture. **Near-linear is now plausible, not a
+  foregone no.**
+
+  **H2 -- DONE (H2.1-H2.7 in `docs/FCIQMC_PARALLELISM.md`).
+  `SpawnWorkspace` / `SpawnAccumulator` / xoshiro256** rewrite landed;
+  PARTIAL WIN -- whole-call 2.24->2.42x/4t, 2.47->2.87x/8t on HF.** **H2.1 landed** `n2_fciqmc_s5_threads1/4` (N2-sized SHORT run,
+  ~9 parents/bin so cross-bin annihilation is exercised, unlike the
+  4-determinant `h2_fciqmc_threads1/4`). Finding: **the `threads1` case
+  must PIN both energies to fixed values, not just `metric_present`** --
+  a merge-order defect is thread-count-invariant, so a `threads1`/`threads4`
+  comparison alone cannot see it. Verified non-vacuous with two mutation
+  classes: reversing the bin-merge order (caught ONLY by the pin) and a
+  `local_bin`+`omp critical` completion-order merge (caught by both).
+  **H2.2 landed** `SpawnAccumulator` (`src/post_hf/ci/spawn_accumulator.h`,
+  header-only) -- a sorted `vector<pair<DetKey,Weight>>` whose `finalize()`
+  sorts by `(alpha, beta, weight-bits)` then folds equal-key runs
+  left-to-right, so the sum is a pure function of the multiset (candidate
+  1; `inplace_merge` not needed, one `sort` + dedup scan). Gated by
+  `planck-fciqmc-accumulator` against an independent `std::map` reference;
+  insertion-order invariance, 10 grow-then-shrink reuse cycles, idempotent
+  `finalize()`, non-vacuity. Mutation-verified: dropping the weight-bit
+  tiebreak (std::sort is not stable, so a >=3-long same-key run would still
+  fold in insertion order) -> 101 failures; `reset()` not clearing -> 10
+  failures. No production code changed for either step -- `SpawnAccumulator`
+  has no caller until H2.4. **H2.3 measured** the 64 per-bin RNG cost three
+  ways: fresh construct 42us, mt19937 reuse+`seed()` 39us (the ~2us gap is
+  only the vector alloc = R1/R2's "4%"), counter-based 74ns.
+  **`mt19937_64::seed()` is ~600ns x 64 ~= 38us/call and REUSING the engine
+  cannot avoid it -- T2's "unavoidable" was wrong, having only tried
+  reuse.** So **H2.5 = REPLACE `RandomSource`'s mt19937 with a
+  counter-based engine** (xoshiro256** / Philox), not just hoist it, gated
+  by reproducibility + FCI-sigma. **H2.4 landed** `SpawnWorkspace`
+  (`spawn_accumulator.h`) + `void propagate_stochastic(..., ws, out)`
+  (value-returning form kept as a thin overload -- zero test churn);
+  per-bin accumulator swapped `unordered_map` -> `SpawnAccumulator`; driver
+  builds one workspace before the step loop. **The scoped "bitwise-vs-pre-H2"
+  gate was WRONG** -- the accumulator swap reassociates the serial sum
+  (R2 category: `unordered_map` bucket order vs canonical sorted fold), N2
+  S5 shift moved -109.2733562973 -> -108.7582220854. Gated instead on
+  self-reproducibility (5 runs bit-identical) + thread-count invariance
+  1/2/4/8 at atol=0.0 + FCI agreement (`n2_fciqmc_sto3g` PASS); S5
+  re-pinned; S5 non-vacuity re-verified on the new path. Extended suite
+  116/116. Build-hygiene trap: a post-revert `cmake --build` gave a wrong
+  reproducible number; a forced clean recompile fixed it -- a build in
+  flight is not pinned to the working tree. **H2.5 landed**: `RandomSource`'s
+  engine swapped `std::mt19937_64` -> **xoshiro256\*\*** (256-bit state
+  filled from SplitMix64, O(1) reseed vs mt19937's ~600 ns state fill); the
+  64 per-bin streams hoisted into `ws.bin_rngs`, re-keyed in place each
+  call. Public surface unchanged, `uniform()` still 53-bit. Gated on
+  reproducibility (5 runs bit-identical) + invariance 1/2/4/8 + FCI-sigma;
+  S5 re-pinned again; S5 non-vacuity re-verified. `planck-fciqmc-walkers`
+  (all RNG-repro/statistical/`p_gen`/blocking tests) PASS. Incidental
+  speedup confirming the H2.3 arithmetic: `n2_fciqmc_sto3g` 11.2s -> 9.2s,
+  `planck-fciqmc-walkers` 56s -> 24s. **H2.6 done, NO code change**: the
+  `#pragma omp` survived H2.4/H2.5 intact, so "re-enable" was a no-op;
+  thorough re-verification at 1/2/4/8 on the S5 pair, `h2_fciqmc_sto3g`,
+  `n2_fciqmc_sto3g` (50k steps), and the 4 non-QMC FCI gates -- all
+  bitwise-identical; `schedule(dynamic)` stays invariant too (accumulator
+  partition doesn't depend on the schedule, unlike the FCI sigma build).
+  H2.2's serial-only accumulator test is sufficient -- one thread per bin,
+  no threaded write to any accumulator. **H2.7 done -- PARTIAL WIN.**
+  Re-ran the H1 probe on HF/6-31G, 50k walkers, with a per-phase split:
+  rekey (RNG) 38us -> **0.14us** (H2.3's arithmetic confirmed live),
+  64-bin construction gone, **whole-call speedup 2.24x -> 2.42x/4t,
+  2.47x -> 2.87x/8t**. `n2_fciqmc_sto3g` gate 11.2s -> 8.6s. BUT
+  ~1100us/call of **merge** remains -- untouched by H2.4-H2.6, not threaded
+  (must stay fixed bin order for invariance). H1's "~1.5ms serial drag"
+  was construction + RNG + partition + merge; the rewrite removed the
+  first two. **H2 (H2.1-H2.7) is DONE.** H2 does NOT touch `kBins`.
+
+  **H2.8 -- the fixed-order merge is NOT the bottleneck (2026-09-06).**
+  Sharding it (64 `hash(child) % 64` output shards) was built, verified
+  bit-identical, and measured **3-8 % SLOWER on HF/6-31G at every thread
+  count**; reverted. A `sample` reprofile showed the merge is **2.0 % of
+  self-time**, not the "37 %" an H2.7 phase probe implied -- the probe had
+  bracketed an *already-threaded* per-bin `finalize()` sort (5.5 %). The
+  real 1-thread hot path is **`draw_excitation` at 40.8 %**.
+
+  **H2.8.4-a -- `draw_excitation` rewritten off four `std::array<int,32>`
+  builds/call to `std::popcount` counts + a bounded `nth_set_bit` select.**
+  Bit-identical (pure-arithmetic refactor; S5 1/2/4/8 unchanged, `p_gen`
+  oracle passes, mutation-verified 19 failures). `draw_excitation`
+  self-time **40.8 % -> 27.1 %**; HF/6-31G 1-thread wall **-22 %**
+  (production verbosity); N2 gate -10 %.
+
+  **H2.8.4-b -- folded the serial per-step driver tail: 4 `pop` walks ->
+  2** (diagonal-prefill + partition merged via a `parents_prefilled` flag;
+  `compress` + `ordered_l1_norm` merged into `compress_with_l1_norm`, norm
+  byte-identical). Bit-identical, S5 non-vacuity re-verified. HF `hf_prof`
+  -5 %/1t, -6 %/4t; N2 gate -7 %/4t. Modest -- the merge is untouched and
+  does not shard for a win, so **step 3 (threading the fused pre-pass) was
+  declined**: folding the non-merge passes barely moved the 4-thread
+  number, so the pre-pass is not the dominant serial cost.
+
+  **H2.0 (smaller fixed `kBins`) -- reserve, N2-class only.** **H3
+  (replicas)** -- the one axis that gives near-linear scaling; a design
+  sketch, declined pending a real target (it tightens the error bar in
+  fixed wall-time, does not speed a single trajectory, multiplies memory
+  by R). **Fixture: HF/6-31G or larger for all parallel-FCIQMC
+  measurement; N2/STO-3G is the correctness gate only.** Full answer:
+  `docs/FCIQMC_PARALLELISM.md`.
+
   **Three lessons, each of which cost a wrong number first.** (1) **A profile share
   is a lower bound on what removing that work is worth** — three for three now
   (T1 1.76x against an Amdahl cap of 1.42x, T4 2.61x against 1.83x, the sigma

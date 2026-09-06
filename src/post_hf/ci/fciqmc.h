@@ -126,6 +126,20 @@ namespace HartreeFock::Correlation::CI::QMC
         // footprint proportional to the OCCUPIED space rather than the visited one.
         std::size_t compress(Weight threshold = 0.0);
 
+        // H2.8.4-b (fold B): compress AND compute the ordered L1 norm of the
+        // SURVIVORS in a single traversal, so the driver does not walk this map
+        // twice per step (once to compress, once for ordered_l1_norm). The norm
+        // is binned by the identical fixed `hash(det) % kFciqmcBins` partition
+        // and summed in fixed bin order -- byte-for-byte the same value
+        // `ordered_l1_norm(*this)` would return AFTER a plain `compress`, because
+        // the erased entries carry `|w| <= threshold` and are excluded from both.
+        struct CompressResult
+        {
+            std::size_t removed = 0;
+            Weight l1_norm = 0.0;
+        };
+        CompressResult compress_with_l1_norm(Weight threshold = 0.0);
+
         // Sum of |weight| -- the walker number, the quantity population control
         // steers toward a target.
         Weight total_population() const noexcept;
@@ -188,15 +202,52 @@ namespace HartreeFock::Correlation::CI::QMC
     // Consequently the draw order must not depend on thread count. A per-shard
     // generator seeded deterministically from the run seed satisfies this; drawing
     // from one shared generator across threads does not.
+    //
+    // H2.5 (docs/FCIQMC_PARALLELISM.md): the engine is xoshiro256**,
+    // not std::mt19937_64. H2.3 measured that mt19937_64::seed() is ~600 ns
+    // each, so the 64 per-bin streams the spawn loop re-seeds every step cost
+    // ~38 us/call and reusing the engine object cannot avoid it -- the state
+    // fill is the whole cost. xoshiro256**'s "seed" is filling a 256-bit
+    // state from a SplitMix64 stream (the canonical recipe), ~4 multiplies,
+    // O(1). Quality is more than adequate for MC: xoshiro256** passes
+    // BigCrush and is the standard choice for exactly this "many independent
+    // parallel streams, re-keyed often" pattern. This is a deliberate,
+    // recorded RNG change -- it alters every trajectory, so it is gated by
+    // self-reproducibility + metric_within_sigma vs exact FCI (T2 invariant
+    // 2), never by matching the pre-H2.5 numbers.
     class RandomSource
     {
     public:
-        explicit RandomSource(std::uint64_t seed) noexcept : _engine(seed), _seed(seed) {}
+        explicit RandomSource(std::uint64_t seed) noexcept : _seed(seed)
+        {
+            reseed(seed);
+        }
 
-        // Uniform in [0, 1).
+        // Re-key this stream in place from a 64-bit seed. No allocation, no
+        // 312-word fill -- four SplitMix64 outputs into the 256-bit state.
+        void reseed(std::uint64_t seed) noexcept
+        {
+            _seed = seed;
+            std::uint64_t sm = seed;
+            auto splitmix = [&sm]() noexcept -> std::uint64_t
+            {
+                sm += 0x9e3779b97f4a7c15ULL;
+                std::uint64_t z = sm;
+                z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+                z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+                return z ^ (z >> 31);
+            };
+            _s[0] = splitmix();
+            _s[1] = splitmix();
+            _s[2] = splitmix();
+            _s[3] = splitmix();
+        }
+
+        // Uniform in [0, 1). 53 bits of mantissa, same precision the old
+        // std::generate_canonical<double, 53> delivered.
         double uniform() noexcept
         {
-            return std::generate_canonical<double, 53>(_engine);
+            return static_cast<double>(next() >> 11) * 0x1.0p-53;
         }
 
         // Uniform integer in [0, n).
@@ -220,9 +271,8 @@ namespace HartreeFock::Correlation::CI::QMC
         std::uint64_t seed() const noexcept { return _seed; }
 
         // A raw 64-bit draw, advancing this generator's own state. Used to seed
-        // a fresh, independent RandomSource per call site (scope step S1's
-        // per-bin streams) without exposing _engine directly.
-        std::uint64_t raw64() noexcept { return _engine(); }
+        // a fresh, independent RandomSource per call site (S1's per-bin streams).
+        std::uint64_t raw64() noexcept { return next(); }
 
         // Derive an independent generator for shard `index`. Deterministic in the
         // run seed, so the set of streams does not depend on how many shards
@@ -236,7 +286,25 @@ namespace HartreeFock::Correlation::CI::QMC
         }
 
     private:
-        std::mt19937_64 _engine;
+        // xoshiro256** (Blackman & Vigna). state[0..3] from SplitMix64.
+        std::uint64_t next() noexcept
+        {
+            const std::uint64_t result = rotl(_s[1] * 5, 7) * 9;
+            const std::uint64_t t = _s[1] << 17;
+            _s[2] ^= _s[0];
+            _s[3] ^= _s[1];
+            _s[1] ^= _s[2];
+            _s[0] ^= _s[3];
+            _s[2] ^= t;
+            _s[3] = rotl(_s[3], 45);
+            return result;
+        }
+        static std::uint64_t rotl(std::uint64_t x, int k) noexcept
+        {
+            return (x << k) | (x >> (64 - k));
+        }
+
+        std::uint64_t _s[4]{};
         std::uint64_t _seed;
     };
 
@@ -470,6 +538,35 @@ namespace HartreeFock::Correlation::CI::QMC
     // on the order determinants happen to be visited -- a determinant colonized
     // early in a sweep would then admit spawns that the same determinant, visited
     // late, would reject.
+    // H2.4 (docs/FCIQMC_PARALLELISM.md): the production form takes a
+    // caller-owned SpawnWorkspace (persistent per-call scaffolding, built once
+    // by the driver) and writes into a caller-owned `out` -- no return value,
+    // so no NRVO question (the M1 reversion). `out` is cleared first. The
+    // convenience overload below constructs a local workspace and returns a
+    // value; it exists so the ~20 test call sites and any ad-hoc caller do not
+    // have to thread a workspace.
+    struct SpawnWorkspace; // defined in spawn_accumulator.h
+
+    // The fixed number of parent bins the spawn step partitions the walker
+    // population into (T2/S4). A FIXED constant, never tied to thread count --
+    // see the long note in fciqmc.cpp. Exposed here so the driver's fused
+    // per-step pre-pass (H2.8.4-b) can pre-partition into `SpawnWorkspace::parents`
+    // using the identical `DetKeyHash{}(det) % kFciqmcBins` binning.
+    inline constexpr std::size_t kFciqmcBins = 64;
+
+    void propagate_stochastic(
+        const WalkerPopulation &population,
+        int n_act,
+        const HamiltonianOps &ham,
+        double dt,
+        double shift,
+        RandomSource &rng,
+        int n_spawn_attempts,
+        double granularity,
+        double initiator_threshold,
+        SpawnWorkspace &ws,
+        WalkerPopulation &out);
+
     WalkerPopulation propagate_stochastic(
         const WalkerPopulation &population,
         int n_act,

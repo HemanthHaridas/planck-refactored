@@ -2892,6 +2892,64 @@
       "timeout_s": 180
     },
     {
+      "id": "n2_fciqmc_s5_threads1",
+      "input": "tests/inputs/regression/post_hf/n2_fciqmc_s5_short.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "env": {
+        "OMP_NUM_THREADS": "1"
+      },
+      "expected_exit_code": 0,
+      "contains": [
+        "Shift energy",
+        "Projected energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close",
+          "metric": "fciqmc_shift_energy",
+          "expected": -108.5036712075,
+          "atol": 0.0
+        },
+        {
+          "type": "metric_close",
+          "metric": "fciqmc_projected_energy",
+          "expected": -107.5859595426,
+          "atol": 0.0
+        }
+      ]
+    },
+    {
+      "id": "n2_fciqmc_s5_threads4",
+      "input": "tests/inputs/regression/post_hf/n2_fciqmc_s5_short.hfinp",
+      "tags": [
+        "extended"
+      ],
+      "env": {
+        "OMP_NUM_THREADS": "4"
+      },
+      "expected_exit_code": 0,
+      "contains": [
+        "Shift energy",
+        "Projected energy"
+      ],
+      "checks": [
+        {
+          "type": "metric_close_case",
+          "metric": "fciqmc_shift_energy",
+          "case": "n2_fciqmc_s5_threads1",
+          "atol": 0.0
+        },
+        {
+          "type": "metric_close_case",
+          "metric": "fciqmc_projected_energy",
+          "case": "n2_fciqmc_s5_threads1",
+          "atol": 0.0
+        }
+      ]
+    },
+    {
       "id": "water_fci_sto3g",
       "input": "tests/inputs/regression/post_hf/water_fci_sto3g.hfinp",
       "tags": [

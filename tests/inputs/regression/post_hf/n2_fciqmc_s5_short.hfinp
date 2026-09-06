@@ -1,0 +1,81 @@
+# N2/STO-3G FCIQMC, SHORT run -- the S5 thread-count-invariance gate for the
+# parallel spawn loop (docs/FCIQMC_PARALLELISM.md, H2.1).
+#
+# WHY THIS EXISTS. h2_fciqmc_threads1/4 run on H2/STO-3G, whose 4 determinants
+# are fewer than kBins=64, so at most one parent ever lands in a bin and a
+# merge-order or cross-bin-annihilation defect can never surface there. This
+# fixture is N2 (10 orbitals, 7a/7b, ndet=14400): a 500-step run reaches ~579
+# occupied determinants, ~9 parents per bin, so two parents in different bins
+# genuinely spawn onto the same child and the fixed-order merge is exercised.
+#
+# It is SHORT (300 equilibration + 200 sampling) purely so it fits the suite
+# budget -- ~0.1 s per run. The energies are physically noisy (fixed-seed, but
+# far from converged); that does not matter, because the S5 gate asserts
+# BITWISE reproducibility of a deterministic trajectory, not physical accuracy.
+# The physical validation of the method is n2_fciqmc_sto3g (the full 50k-step
+# gate against exact FCI).
+#
+# The paired cases:
+#   n2_fciqmc_s5_threads1  -- runs at OMP_NUM_THREADS=1, PINS both energies to
+#                             fixed values (atol 0.0). This is the tripwire for
+#                             a merge-order / accumulator-reassociation change
+#                             that is thread-count-invariant but still alters
+#                             the answer (verified at H2.1: reversing the
+#                             bin-merge order moved the shift by ~0.26 Eh while
+#                             T1==T4 still held, so only this pin caught it).
+#                             The pinned values change legitimately whenever the
+#                             accumulator's fold order or the RNG changes --
+#                             H2.4 swapped unordered_map for SpawnAccumulator,
+#                             H2.5 swapped mt19937_64 for xoshiro256**, each
+#                             re-pinned. Not regressions; the FCI-agreement
+#                             gates (n2_fciqmc_sto3g) guard the physics, this
+#                             pins the byte-level determinism.
+#   n2_fciqmc_s5_threads4  -- runs at OMP_NUM_THREADS=4, compares to threads1
+#                             at atol 0.0. Tripwire for a partition that depends
+#                             on thread count.
+#
+# Both are needed: neither catches the other's defect class.
+
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation fciqmc
+    ci_max_dim  200000
+
+    fciqmc_walkers         10000
+    fciqmc_timestep        0.001
+    fciqmc_shift_damping   0.3
+    fciqmc_shift_restoring 0.05
+    fciqmc_shift_interval  5
+    fciqmc_granularity     1.0
+    fciqmc_initiator       0.0
+    fciqmc_equilibration   300
+    fciqmc_steps           200
+    fciqmc_spawn_attempts  1
+    fciqmc_seed            20250901
+
+    use_diis    .true.
+    diis_dim    8
+    save_checkpoint .false.
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+2
+0   1
+N     0.000000     0.000000     0.000000
+N     0.000000     0.000000     1.098000
+%end_coords

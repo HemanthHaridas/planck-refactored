@@ -1057,6 +1057,14 @@ if(BUILD_TESTING)
         ${SRC_DIR}/post_hf/ci/fciqmc.cpp
     )
 
+    # H2.2 (docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md): SpawnAccumulator, the
+    # reuse-stable per-bin accumulator that replaces unordered_map in H2.4.
+    # Header-only under test -- no fciqmc.cpp, no Eigen library, just the
+    # header and its transitive Eigen/Core include.
+    add_executable(planck-fciqmc-accumulator
+        ${CMAKE_SOURCE_DIR}/tests/fciqmc_accumulator.cpp
+    )
+
     add_executable(planck-cc-arbitrary-solver
         ${CMAKE_SOURCE_DIR}/tests/cc_arbitrary_solver.cpp
         ${SRC_DIR}/post_hf/cc/common.cpp
@@ -1657,6 +1665,11 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(planck-fciqmc-walkers PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-fciqmc-accumulator PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
@@ -2292,6 +2305,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-fciqmc-walkers
         COMMAND planck-fciqmc-walkers
+    )
+
+    add_test(
+        NAME planck-fciqmc-accumulator
+        COMMAND planck-fciqmc-accumulator
     )
 
     # Gates the statistical-assertion machinery (metric_within_sigma + the
