@@ -215,9 +215,9 @@ measurement that decides whether it was worth it.
 |---|---|---|---|
 | **H2.1 — DONE** (see below) | the S5 gate: an **N2-sized** `threads1`/`threads4` pair at `atol = 0.0`. **The `threads1` case PINS both energies to fixed values** (not just `metric_present`), because a merge-order defect is thread-count-invariant and a `threads4 == threads1` comparison alone cannot see it. | the current tree (passes as-is); non-vacuity verified with two mutation classes | — |
 | **H2.2 — DONE** (see below) | `SpawnAccumulator` (`src/post_hf/ci/spawn_accumulator.h`, header-only) — candidate 1, a flat `vector<pair<DetKey,Weight>>` that `finalize()` sorts by a **total order on `(alpha, beta, bit-pattern-of-weight)`** then folds equal-key runs left-to-right, so the sum is a pure function of the multiset. Gated by `planck-fciqmc-accumulator` against an independent `std::map`-based reference. | insertion-order invariance (5 shuffles × 20 seeds), reuse stability (10 grow-then-shrink cycles), `finalize()` idempotence, and a non-vacuity check that the canonical fold actually differs from an insertion-order fold | — |
-| **H2.3** | measure, in isolation, the cost of **re-seeding 64 `mt19937_64` engines in place** vs constructing 64 fresh — the number T2 flagged as unseparated | a microbenchmark of exactly that one difference, identical seed sequence | re-seed is ≈ as expensive as construct → H2.5 needs a counter-based RNG (Philox/Threefry), a bigger change; decide here, not mid-rewrite |
+| **H2.3 — DONE** (see below) | isolated microbenchmark of the 64 per-bin RNG streams three ways: (A) current fresh-vector + 64× `derive()`, (B) persistent vector + 64× `mt19937_64::seed()` in place, (C) persistent + a counter-based stream (`reseed` = set a key) | 200k iterations each, identical seed sequence | **RESULT: re-seed IS ≈ as expensive as construct** (A 42 µs, B 39 µs — the ~2 µs gap is only the vector alloc). **`mt19937_64::seed()` is ~600 ns each × 64 = ~38 µs/call, and reusing the engine object cannot avoid it.** C is ~74 ns. **H2.5 needs a counter-based RNG** — this was NOT a foregone conclusion, T2 called the state-fill "unavoidable" having only tried B |
 | **H2.4** | `SpawnWorkspace` type + `void propagate_stochastic(..., SpawnWorkspace& ws, WalkerPopulation& out)` — the persistent bins (using H2.2's accumulator), partition buffer, and merge target live in `ws`; the output is caller-owned so there is no NRVO question | **bitwise identical to the pre-H2 tree at `OMP_NUM_THREADS` = 1** on `h2_fciqmc_sto3g` and `n2_fciqmc_sto3g` (serial, so no reordering — a swap of the accumulator that changes a serial result is a bug, not reassociation) | serial result changes → the accumulator swap reordered something it should not have; localize with H2.2's reference before proceeding |
-| **H2.5** | move the 64 RNG engines into `ws`, re-seeded per call from one `rng.raw64()` draw (the S1 contract: fresh, thread-count-independent bin streams). If H2.3 said re-seed is too costly, this step is instead "swap `RandomSource`'s engine for a counter-based one" — a deliberate, separately-recorded RNG change | self-reproducibility at fixed seed **plus** `metric_within_sigma` against exact FCI (T2 invariant 2 — never bitwise-vs-the-old-numbers, since changing the RNG or its call pattern is a reordering-class change) | reproducibility fails, or the FCI-agreement sigma blows past the gate → the bin-stream derivation is wrong (the S1 "frozen trajectory" trap: a `const derive()` that does not advance); check the population diagnostics, not just the gate |
+| **H2.5** | **H2.3 decided this: swap `RandomSource`'s `mt19937_64` for a counter-based engine** (xoshiro256** or Philox-4×64; SplitMix64 is the trivial-but-marginal option). Reusing the mt19937 engines in place saves nothing — the `seed()` state fill is the whole ~38 µs/call. Then the 64 per-bin streams live in `ws` and are re-keyed per call from one `rng.raw64()` draw (the S1 contract: fresh, thread-count-independent). Record the engine choice. | self-reproducibility at fixed seed **plus** `metric_within_sigma` against exact FCI (T2 invariant 2 — never bitwise-vs-the-old-numbers, since changing the RNG is a reordering-class change) | reproducibility fails, or the FCI-agreement sigma blows past the gate → the bin-stream derivation is wrong (the S1 "frozen trajectory" trap: a `const derive()` that does not advance); check the population diagnostics, not just the gate |
 | **H2.6** | re-enable threading on H2.4's structure (`#pragma omp parallel for schedule(static)` over the persistent bins) and re-verify invariance | **bitwise identical across `OMP_NUM_THREADS` = 1/2/4/8** on `h2_fciqmc_threads1/4`, the new S5 N2-sized pair, `n2_fciqmc_sto3g`, and the four non-QMC FCI gates sharing `build_all_mo_ci_setup` | any thread count disagrees → the accumulator or the merge is not partition-deterministic after all; H2.2's reuse-stability test missed the threaded-write case, extend it |
 | **H2.7** | re-run the H1 probe on **HF/6-31G** (the unsaturated fixture — not N2): per-call parent count, region µs, whole-call µs at 1/2/4/8 threads, before/after the rewrite. Report serial-scaffolding µs/call (should drop from ~1.5 ms toward near zero) and whole-call speedup vs the region ceiling | the H1 numbers already recorded (`region 3.44×/4t, 4.47×/8t`; `whole 2.24×/4t`) | whole-call speedup does *not* move toward the region ceiling → the ~1.5 ms was not actually the bottleneck; re-profile with an in-binary phase probe (T2's `PLANCK_FCIQMC_PHASE_PROBE` pattern) before concluding |
 
@@ -306,6 +306,58 @@ arithmetic per bin — unlikely to dominate, but H2.7 measures it).
 
 No production code changed for H2.2 either — `SpawnAccumulator` has no
 caller until H2.4. All FCIQMC unit tests + smoke (35/35) pass.
+
+#### H2.3 result (2026-09-06): reusing the mt19937 engines does NOT help — H2.5 needs a counter-based RNG
+
+The current per-call RNG setup (`propagate_stochastic`, `fciqmc.cpp`):
+`RandomSource call_source(rng.raw64())`, then a fresh
+`std::vector<RandomSource>` filled with 64× `call_source.derive(b)` —
+each `derive()` **constructs a fresh `RandomSource`**, which constructs a
+fresh `std::mt19937_64` (a 312×64-bit state fill).
+
+Standalone microbenchmark (`h23_rng_bench.cpp`, scratchpad — not a kept
+gate, like the H1 probe), mirroring `RandomSource`/`derive()` exactly,
+200k iterations, three ways:
+
+| way | per call | vs A |
+|---|---|---|
+| **A** current: fresh vector + 64× `derive()` (64 mt19937 constructions) | **~42 µs** | 1.00× |
+| **B** persistent `vector<RandomSource>(64)` + 64× `mt19937_64::seed()` in place (no vector alloc) | **~39 µs** | 0.93× |
+| **C** persistent + a counter-based stream (`reseed` = set a 64-bit key) | **~74 ns** | 0.002× |
+
+Breakdown:
+
+- **A − B ≈ 2 µs** — the vector allocation only. This is the ~4% R1/R2
+  measured (26.8 → 25.8 µs on N2) and correctly judged not worth a diff.
+- **B − C ≈ 38 µs** — the `mt19937_64` state fill. Isolated separately:
+  `std::mt19937_64::seed()` costs **~600 ns each** on libstdc++ (a 312-word
+  LCG fill), so 64 of them = ~38 µs, against a *draw* at ~1.4 ns.
+
+**T2 called this cost "real and unavoidable given S1's correctness
+requirement" — that was wrong.** T2 only tried option B (reuse the engine
+object), which still has to `seed()` it. S1's requirement is that each
+call's 64 bin streams be fresh, independent, and thread-count-independent
+— a counter-based generator satisfies that with an O(1) "seed" (set the
+key), which is option C. So **H2.5 is not "hoist the mt19937 engines into
+the `SpawnWorkspace`" — it is "replace `RandomSource`'s `mt19937_64` with a
+counter-based engine"**, a real (but small and self-contained) RNG change,
+gated by reproducibility + `metric_within_sigma` against exact FCI per
+T2 invariant 2.
+
+**Which counter-based engine, for H2.5 to decide:** SplitMix64 (already in
+this codebase, in `DetKeyHash` and `derive()`) is the trivial choice but
+is a 64-bit-state sequential generator — adequate for MC, marginal for
+millions of draws per stream. xoshiro256** or a Philox-4×64 counter mode
+are the defensible choices; xoshiro256** is ~10 lines, no `<random>`
+dependency, and its "seed" is a 256-bit state set. H2.5 picks one and
+records the choice.
+
+**Context for the payoff:** on HF/6-31G the whole call is ~7 ms at 1
+thread, so ~38 µs is ~0.5% there — but at 4 threads the parallel region
+drops to ~1.6 ms and the ~1.5 ms of serial scaffolding is the ceiling
+(H1), so removing ~38 µs is a real ~2.5% of *that*, and it removes a fixed
+per-call cost that does not shrink with threads. Worth doing as part of
+H2.5, not on its own.
 
 **The accumulator — remaining candidates, only if H2.7 shows the sort matters:**
 
@@ -414,8 +466,8 @@ conclusion `FCIQMC_RESEARCH_SCOPE.md` Q1 reaches for the method as a whole.
   flat in walker count) is real on both. **H1 is refuted as stated: the
   work is not too small on any non-saturated fixture, which is exactly the
   Q1 large-active-space case.**
-- **H2 — SCOPED into seven verifiable steps (H2.1–H2.7). H2.1 + H2.2 DONE;
-  H2.3–H2.7 not started.**
+- **H2 — SCOPED into seven verifiable steps (H2.1–H2.7). H2.1 + H2.2 + H2.3
+  DONE; H2.4–H2.7 not started.**
   On HF the whole call is stuck at 2.24×/4 threads against a region
   ceiling of ≥ 4.5×, because the serial scaffolding is ~1.5 ms/call (30×
   N2's, since HF partitions/merges 30× more parents) and does not thread.
@@ -430,10 +482,15 @@ conclusion `FCIQMC_RESEARCH_SCOPE.md` Q1 reaches for the method as a whole.
   multiset. Gated by `planck-fciqmc-accumulator`, mutation-verified. The
   weight-bit tiebreak is load-bearing: `std::sort` is not stable, so a
   ≥ 3-long same-key run would otherwise still fold in insertion order.
-  **H2.3** measure the RNG re-seed cost in isolation (decides whether H2.5
-  needs a counter-based RNG), **H2.4** the `SpawnWorkspace` type +
+  **H2.3 (DONE)** the 64 per-bin RNG cost, isolated three ways: fresh
+  construct 42 µs, mt19937 reuse+`seed()` 39 µs (the ~2 µs gap is only the
+  vector alloc — R1/R2's 4%), counter-based 74 ns. **`mt19937_64::seed()`
+  is ~600 ns × 64 ≈ 38 µs and reusing the engine cannot avoid it — T2's
+  "unavoidable" was wrong, having only tried reuse.** So **H2.5 = replace
+  `RandomSource`'s mt19937 with a counter-based engine** (xoshiro256** /
+  Philox), not just hoist it. **H2.4** the `SpawnWorkspace` type +
   out-param signature + accumulator swap (gated bitwise-serial), **H2.5**
-  hoist the RNG engines (gated by reproducibility + FCI-sigma), **H2.6**
+  the RNG swap + hoist (gated by reproducibility + FCI-sigma), **H2.6**
   re-thread and re-verify invariance at 1/2/4/8, **H2.7** re-measure on HF
   against the region ceiling. Each step's own verification gates the next.
 - **H2.0 (smaller fixed `kBins`) — reserve, N2-class only.** Helps a
