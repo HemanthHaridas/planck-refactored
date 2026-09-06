@@ -19,7 +19,7 @@ driver passes (`ordered_l1_norm`, `compress`, `signed_population`, the
 diagonal prefill), none of them the merge. Full profile table in H2.8.3.
 
 A 4-thread reprofile (H2.8.4) confirms `draw_excitation` stays ~40 % of
-*useful* work at 4 threads (it threads fine) while **46 % of the machine
+*useful* work at 4 threads (it threads fine) while **~54 % of the machine
 sits idle at the barrier** on the serial per-step driver tail. Two
 targets: `draw_excitation` serial efficiency (1-thread wall) and
 collapsing the serial per-step map passes (4-thread wall).
@@ -28,13 +28,27 @@ collapsing the serial per-step map passes (4-thread wall).
 builds four 128-byte `OrbitalList` per call — it works off four
 `std::popcount`s and a bounded `nth_set_bit` select. Bit-identical
 (pure-arithmetic refactor, S5 1/2/4/8 unchanged, `p_gen` oracle passes,
-mutation-verified 19 failures). Measured **HF/6-31G 1-thread 81.6 s →
-65.4 s (−20 %)**, N2 gate 12.86 s → 11.56 s; `draw_excitation` self-time
-**40.8 % → 27.1 %**. 4-thread ~unchanged (barrier idle dominates — that
-is the second target). H3 (replica parallelism) remains a design sketch.
-All of it stays gated on a real FCIQMC workload appearing
-(`FCIQMC_RESEARCH_SCOPE.md` Q1) — nothing in the tree runs FCIQMC at a
-size where it matters yet — but H2.8.4-a is on the branch and ready.
+mutation-verified 19 failures). Measured **HF/6-31G 1-thread, `verbosity
+normal` (production): 78.1 s → 60.5 s (−22 %)** (−20 % on the older
+`verbose` fixture, which pays an extra `signed_population` pass); N2 gate
+12.86 s → 11.56 s; `draw_excitation` self-time **40.8 % → 27.1 %**.
+4-thread ~unchanged (barrier idle dominates).
+
+**H2.8.4-b SCOPED (2026-09-06), not started:** the serial per-step tail is
+**4–5 full traversals of the ~26k-entry walker hash map per step**
+(diagonal prefill, partition, merge, `compress`, `ordered_l1_norm`;
++`signed_population` at `verbose`). Plan: fold the four
+`for (det,w) : pop)` passes into ONE — compute `hash(det)` once, do all
+per-entry work, hand `propagate_stochastic` a pre-partitioned
+`bin_parents` + the L1 norm + the compressed set; then thread that single
+pass with the same fixed-64-bin discipline the spawn region uses. Target:
+54 % idle → ~25–30 %. Section H2.8.4-b below. Step 2 (the `verbose`
+measurement correction) is already done.
+
+H3 (replica parallelism) remains a design sketch. All of it stays gated on
+a real FCIQMC workload appearing (`FCIQMC_RESEARCH_SCOPE.md` Q1) — nothing
+in the tree runs FCIQMC at a size where it matters yet — but H2.8.4-a is
+on the branch and ready.
 
 Original framing follows.
 
@@ -593,15 +607,17 @@ candidate 1: 64 output shards keyed `hash(child) % 64`, threaded fill,
 serial fixed-order concat). Not built — gated on a real workload
 (`FCIQMC_RESEARCH_SCOPE.md` Q1) the same as everything else.
 
-### H2.8 — the fixed-order merge (dead-end) → the real hot path is `draw_excitation`; H2.8.4-a landed it 40.8 %→27.1 %, HF 1t −20 %
+### H2.8 — the fixed-order merge (dead-end) → the real hot path is `draw_excitation`; H2.8.4-a landed it 40.8 %→27.1 %, HF 1t −22 % (production); H2.8.4-b scopes the 4-thread serial tail
 
 Scoped, built and reverted the merge shard (H2.8.1–H2.8.3), reprofiled
 properly (the merge was never the bottleneck — H2.7's phase probe was
-wrong, full record below), then scoped and **landed** the real
-1-thread lever: `draw_excitation` serial efficiency (H2.8.4-a — bit-
-identical, `draw_excitation` self-time 40.8 %→27.1 %, HF/6-31G 1-thread
-wall −20 %). Still gated on a real Q1 workload before it leaves the
-branch.
+wrong, full record below), then scoped and **landed** the real 1-thread
+lever: `draw_excitation` serial efficiency (H2.8.4-a — bit-identical,
+`draw_excitation` self-time 40.8 %→27.1 %, HF/6-31G 1-thread wall −22 %
+at production verbosity). The 4-thread wall — a ~54 % barrier idle on the
+serial per-step driver tail (4–5 walks of the walker hash map per step) —
+is scoped as **H2.8.4-b** below, not started. Still gated on a real Q1
+workload before any of it leaves the branch.
 
 **The one lever H2.7 left.** After H2.4–H2.6 the serial cost outside the
 `#pragma omp` region on HF/6-31G (50k walkers, 4 threads) is ~1270 µs/call,
@@ -1060,8 +1076,15 @@ gate is not silently passing.
 
 | fixture | baseline | H2.8.4-a | Δ |
 |---|---|---|---|
-| HF/6-31G `hf_prof` (3k eq + 4k sampling) | 81.6 s (80.68 / 81.77 / 82.43) | **65.4 s** | **−20 %** |
-| N2/STO-3G gate (20k eq + 30k sampling) | 12.86 s | **11.56 s** | **−10 %** |
+| HF/6-31G `hf_prof`, `verbosity verbose` (the original fixture) | 81.6 s (80.68 / 81.77 / 82.43) | **65.4 s** | **−20 %** |
+| HF/6-31G `hf_prof`, **`verbosity normal` (production)** | **78.1 s** | **60.5 s** | **−22 %** |
+| N2/STO-3G gate (`verbosity normal`) | 12.86 s | **11.56 s** | **−10 %** |
+
+The `verbose` fixture pays a 6th full `pop` walk per step
+(`signed_population[det] += w`, the `<N_I>/<N_0>` dump accumulator); a
+production run at `verbosity normal` skips it. The N2 gate already runs
+`normal`, so its number was always clean. The honest production HF figure
+is **−22 %**.
 
 **`draw_excitation` self-time (HF/6-31G, 1 thread, `sample`): 40.8 % →
 27.1 %** — a 13.7 pp drop. `nth_set_bit` inlined into `draw_excitation`
@@ -1073,9 +1096,9 @@ Everything else in the profile scaled up proportionally (same absolute
 time, smaller pie).
 
 **4-thread:** N2 7.75 s → 7.90 s, HF unchanged within noise — as
-predicted, the 4-thread wall is the 46 % barrier idle (the serial
-per-step driver tail), not `draw_excitation`. That is lever (b), a
-separate step.
+predicted, the 4-thread wall is the ~54 % barrier idle (the serial
+per-step driver tail), not `draw_excitation`. That is lever (b), scoped
+as **H2.8.4-b** below.
 
 ##### Gate (unchanged)
 
@@ -1084,6 +1107,118 @@ before it goes to `devel` alongside the rest of the FCIQMC parallelism
 work — nothing in the tree runs FCIQMC at 1 thread long enough for a
 20 % improvement to matter yet. It is low-risk (bit-identical, existing
 `p_gen` gate, mutation-verified) so it is ready when a target appears.
+
+#### H2.8.4-b — the serial per-step driver tail (scoped 2026-09-06, not started)
+
+**The 4-thread wall.** At 4 threads on HF/6-31G, `sample` shows **54 %
+idle** — three worker threads parked at the barrier while one thread runs
+the serial per-step driver work. `draw_excitation` efficiency (H2.8.4-a)
+does not touch this; it *widens* the relative gap, because a smaller
+parallel region against an unchanged serial tail is a worse Amdahl ratio.
+
+##### What runs serially, per step
+
+The outer `for (step ...)` loop in `fciqmc_driver.cpp` does, in order,
+between the `#pragma omp` regions of `propagate_stochastic`:
+
+| # | pass | code | walks | cost shape |
+|---|---|---|---|---|
+| 1 | **diagonal prefill** | `for (det,w) : pop) ops.diagonal(det)` (`:288`) | full `pop` + a `diag_cache` hash lookup per det | ~26k hash probes on `pop` + ~26k on `diag_cache` |
+| 2 | **partition** | inside `propagate_stochastic` head — `for (det,w) : population) bin_parents[hash % kBins].push_back(...)` | full `pop` | ~26k hash iterations + `hash % 64` + `push_back` |
+| 3 | **merge** | `propagate_stochastic` tail — `for (bin) for (e : bin) out.add(e)` | 64 accumulators → `out` (`unordered_map`) | ~26k `unordered_map::operator[] +=`, memory-latency-bound (this is the "~1100 µs" H2.7 mismeasured as the *whole* serial cost) |
+| 4 | **`compress(1e-12)`** | `pop.compress` (`fciqmc.cpp:16`) | full `_walkers`, conditional `erase` | ~26k iterations + erases |
+| 5 | **`ordered_l1_norm(pop)`** | (`fciqmc.cpp` `ordered_l1_norm`) | full `pop`, bin `|w|` into 64 | ~26k hash iterations + `hash % 64` |
+| 6 | **`signed_population[det] += w`** | driver `:411`, **`verbosity verbose` only, already guarded** | full `pop` | ~26k `unordered_map::operator[] +=` — absent at `verbosity normal` (the production path and the N2 gate); ~3.5–5 s/run of the HF `verbose` fixture, see the corrected table above |
+| 7 | `projected_energy` | `enumerate_connections(reference)` | ~600 connections, **not** `pop` | negligible (0.1 %) |
+| 8 | `ctl.update`, bounds checks, sample `push_back` | scalar | — | negligible |
+
+So the serial tail is **four to five full traversals of the ~26k-entry
+walker hash map per step** at `verbosity normal` (five to six at
+`verbose`), three of them (1, 3, 4) paying `unordered_map` node-chasing /
+`operator[]` latency, two (2, 5) at least iterating it. The 4-thread
+profile's 14 % of *useful* samples in `unordered_map::operator[]` + 8 % in
+the diagonal memo is the visible tip; the rest hides in memory-latency
+stalls that `sample` attributes elsewhere.
+
+##### The plan, ladder order
+
+**Step 1 — fold passes 1, 2, 4, 5 into ONE walk of `pop`.** They are all
+`for (det,w) : pop) { ... }` with independent per-entry work:
+
+- pass 1 wants `ops.diagonal(det)` resident → call it
+- pass 2 wants `det` in `bin_parents[hash(det) % kBins]` → push it
+- pass 4 wants small-`|w|` entries dropped → can't erase-while-iterating
+  the map being read, but *can* record which keys to drop (or build the
+  next `pop` filtered)
+- pass 5 wants `Σ|w|` binned → add `|w|` to `l1_bins[hash % kBins]`
+
+One pass computes the `hash(det)` **once** (currently 3–4× per det across
+the passes), does all four per-entry updates, and hands
+`propagate_stochastic` a *pre-partitioned* `bin_parents` plus the L1 norm
+plus the compressed set — so passes 2, 4, 5 disappear from
+`propagate_stochastic` and the driver entirely. The interface shift:
+`propagate_stochastic` takes `bin_parents` as an input (already filled)
+instead of building it, and the driver's `compress` + `ordered_l1_norm`
+calls move into the fused pre-pass.
+
+This is a **reassociation of the L1-norm sum** (same 64-bin fixed
+partition, but the bin a det lands in is now computed in the pre-pass, not
+in `ordered_l1_norm` — identical function of `det`, so identical result)
+and a **reassociation of nothing else** (prefill and partition are pure
+mechanical moves; compress just changes *when* the filter is applied).
+Expected `atol = 0.0` bitwise on S5 for prefill+partition; `ordered_l1_norm`
+must be checked — its existing "independent of insertion order" unit test
+already spans 18 orders of magnitude, and the bin function is unchanged,
+so it should hold, but verify.
+
+**Step 2 — DONE (2026-09-06): the `verbosity verbose` measurement
+artifact, confirmed and corrected.** Pass 6 (`signed_population[det] += w`)
+is already `want_coefficient_ratios`-guarded on both the accumulation
+(`:411`) and the consumption (`:573`) — no code change needed. But
+`hf_base.hfinp` sets `verbosity verbose`, so H2.8.4-a's 65.4 s **included**
+pass 6. Re-measured at `verbosity normal`: baseline **78.1 s**, H2.8.4-a
+**60.5 s** — the production improvement is **−22 %**, and the table above
+now carries both rows. Pass 6 costs ~3.5 s in the baseline / ~5 s in
+H2.8.4-a (relatively larger there, since the rest shrank). Nothing to
+build; the fix was to stop quoting a `verbose`-inflated number.
+
+**Step 3 — thread the fused pre-pass, if step 1 is not enough.** After
+step 1 the serial tail is one `pop` walk + the merge. That walk is a
+scatter into `bin_parents` (parent's bin) + `l1_bins` (child... no,
+parent's `|w|`) — both fixed 64-bin partitions, both the exact shape the
+spawn region already threads deterministically. So it can take the *same*
+`#pragma omp` treatment: partition `pop`'s buckets across threads, each
+thread fills its slice of `bin_parents` / `l1_bins`, fixed-order combine.
+The merge (pass 3) is the residual and is its own problem (H2.8.1–3
+showed sharding it does not pay — leave it serial, or revisit only with
+a real large-`ndet` workload where 26k → 260k changes the calculus).
+
+##### Verify
+
+- **S5 `n2_fciqmc_s5_short` 1/2/4/8 at `atol = 0.0`** — steps 1 and 3 are
+  mechanical moves + one sum reassociation (`ordered_l1_norm`'s bin fill).
+  Prefill/partition must stay bitwise; `ordered_l1_norm` re-pin only if
+  the bin-fill order genuinely changed (it should not — same
+  `hash % kBins`).
+- **S5 non-vacuity** — reversing the fused pre-pass's bin order (or the
+  `l1_bins` combine order) must break the pin while T1==T4, same as the
+  H2.1 property.
+- **`planck-fciqmc-walkers`** + **`ordered_l1_norm` insertion-order unit
+  test** unchanged.
+- **FCI agreement** `h2_fciqmc_sto3g`, `n2_fciqmc_sto3g` within 5σ.
+- **Measure**: 4-thread HF/6-31G `hf_prof` wall before/after (the target
+  metric — 1-thread will move less), and re-run `sample` at 4 threads —
+  target is the 54 % idle dropping toward ~25–30 % (Amdahl with the
+  serial tail cut from ~5 walks to ~1 walk + merge).
+
+##### Gate
+
+Same as everything in H2.8: **do not build until a real Q1 workload
+exists.** The 4-thread wall only bites when one trajectory takes
+minutes-to-hours, which nothing in the tree does. Step 2 (confirm the
+`verbosity verbose` measurement artifact and re-quote H2.8.4-a's number)
+is the one piece worth doing now — it is a measurement correction, not a
+code change.
 
 ### H3 — the outer step loop itself is not as sequential as it looks
 
