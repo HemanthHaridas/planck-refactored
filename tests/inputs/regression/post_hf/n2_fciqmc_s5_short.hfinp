@@ -24,11 +24,12 @@
 #                             bin-merge order moved the shift by ~0.26 Eh while
 #                             T1==T4 still held, so only this pin caught it).
 #                             The pinned values change legitimately whenever the
-#                             accumulator's fold order changes -- e.g. H2.4
-#                             swapped unordered_map for SpawnAccumulator and
-#                             re-pinned. That is not a regression; the FCI-
-#                             agreement gates (n2_fciqmc_sto3g) guard the
-#                             physics, this pins the byte-level determinism.
+#                             accumulator's fold order or the RNG changes --
+#                             H2.4 swapped unordered_map for SpawnAccumulator,
+#                             H2.5 swapped mt19937_64 for xoshiro256**, each
+#                             re-pinned. Not regressions; the FCI-agreement
+#                             gates (n2_fciqmc_sto3g) guard the physics, this
+#                             pins the byte-level determinism.
 #   n2_fciqmc_s5_threads4  -- runs at OMP_NUM_THREADS=4, compares to threads1
 #                             at atol 0.0. Tripwire for a partition that depends
 #                             on thread count.

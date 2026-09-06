@@ -127,21 +127,29 @@ namespace HartreeFock::Correlation::CI::QMC
         static constexpr KeyWeightLess less_{};
     };
 
-    // H2.4 (docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md): the persistent per-call
-    // scaffolding for propagate_stochastic, hoisted out of the function so it
-    // is built ONCE (by the driver, or per test call) instead of ~50,000
-    // times. Holds the 64 per-bin accumulators and the 64 parent buckets; the
-    // RNG streams stay per-call for now (H2.5 hoists and swaps those).
+    // H2.4/H2.5 (docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md): the persistent
+    // per-call scaffolding for propagate_stochastic, hoisted out of the
+    // function so it is built ONCE (by the driver, or per test call) instead
+    // of ~50,000 times. Holds the 64 per-bin accumulators, the 64 parent
+    // buckets, AND (H2.5) the 64 per-bin RNG streams -- which are re-keyed in
+    // place each call rather than reconstructed, now that RandomSource is
+    // counter-based (xoshiro256**, O(1) reseed) instead of mt19937_64
+    // (~600 ns state fill per stream, ~38 us/call for 64).
     //
     // ready() lazily sizes to `n_bins` on first use. reset_for_call() clears
     // every bin/bucket without freeing capacity -- SpawnAccumulator::reset()
     // and vector::clear() both genuinely reset (unlike unordered_map::clear),
     // so the result is a pure function of that call's inputs regardless of
-    // how many prior calls the workspace served.
+    // how many prior calls the workspace served. The RNG streams are re-keyed
+    // by rekey_streams(call_seed), a pure function of (call_seed, bin index)
+    // -- the same derive() recipe the old fresh-construction path used, so
+    // the per-bin stream a given (call_seed, bin) sees is unchanged by the
+    // hoist.
     struct SpawnWorkspace
     {
         std::vector<SpawnAccumulator> bins;
         std::vector<std::vector<std::pair<DetKey, Weight>>> parents;
+        std::vector<RandomSource> bin_rngs;
 
         void ready(std::size_t n_bins)
         {
@@ -149,6 +157,7 @@ namespace HartreeFock::Correlation::CI::QMC
             {
                 bins.assign(n_bins, SpawnAccumulator{});
                 parents.assign(n_bins, {});
+                bin_rngs.assign(n_bins, RandomSource{0});
             }
         }
 
@@ -158,6 +167,16 @@ namespace HartreeFock::Correlation::CI::QMC
                 b.reset();
             for (auto &p : parents)
                 p.clear();
+        }
+
+        // Re-key the 64 streams from this call's seed, exactly as the pre-H2.5
+        // `RandomSource call_source(call_seed); ... call_source.derive(b)` did
+        // -- but in place, no 64 constructions.
+        void rekey_streams(std::uint64_t call_seed)
+        {
+            RandomSource call_source(call_seed);
+            for (std::size_t b = 0; b < bin_rngs.size(); ++b)
+                bin_rngs[b] = call_source.derive(b);
         }
     };
 

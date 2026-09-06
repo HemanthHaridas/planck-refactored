@@ -855,8 +855,8 @@ worth doing whether or not FCIQMC happens.
   foregone no.**
 
   **H2 -- SCOPED into 7 verifiable steps (H2.1-H2.7 in
-  `docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md`). H2.1 + H2.2 + H2.3 + H2.4 DONE;
-  H2.5-H2.7 not started.** **H2.1 landed** `n2_fciqmc_s5_threads1/4` (N2-sized SHORT run,
+  `docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md`). H2.1 + H2.2 + H2.3 + H2.4 + H2.5
+  DONE; H2.6-H2.7 not started.** **H2.1 landed** `n2_fciqmc_s5_threads1/4` (N2-sized SHORT run,
   ~9 parents/bin so cross-bin annihilation is exercised, unlike the
   4-determinant `h2_fciqmc_threads1/4`). Finding: **the `threads1` case
   must PIN both energies to fixed values, not just `metric_present`** --
@@ -895,8 +895,16 @@ worth doing whether or not FCIQMC happens.
   re-pinned; S5 non-vacuity re-verified on the new path. Extended suite
   116/116. Build-hygiene trap: a post-revert `cmake --build` gave a wrong
   reproducible number; a forced clean recompile fixed it -- a build in
-  flight is not pinned to the working tree. **H2.5** RNG swap +
-  hoist (never bitwise-vs-old); **H2.6** re-thread + re-verify
+  flight is not pinned to the working tree. **H2.5 landed**: `RandomSource`'s
+  engine swapped `std::mt19937_64` -> **xoshiro256\*\*** (256-bit state
+  filled from SplitMix64, O(1) reseed vs mt19937's ~600 ns state fill); the
+  64 per-bin streams hoisted into `ws.bin_rngs`, re-keyed in place each
+  call. Public surface unchanged, `uniform()` still 53-bit. Gated on
+  reproducibility (5 runs bit-identical) + invariance 1/2/4/8 + FCI-sigma;
+  S5 re-pinned again; S5 non-vacuity re-verified. `planck-fciqmc-walkers`
+  (all RNG-repro/statistical/`p_gen`/blocking tests) PASS. Incidental
+  speedup confirming the H2.3 arithmetic: `n2_fciqmc_sto3g` 11.2s -> 9.2s,
+  `planck-fciqmc-walkers` 56s -> 24s. **H2.6** re-thread + re-verify
   invariance at 1/2/4/8; **H2.7** re-measure on HF against the region
   ceiling. Each step gates the next. H2 does NOT touch `kBins`. **H2.0 (smaller
   fixed `kBins`) -- reserve, N2-class only.** **H3 (replicas)** -- design

@@ -188,15 +188,52 @@ namespace HartreeFock::Correlation::CI::QMC
     // Consequently the draw order must not depend on thread count. A per-shard
     // generator seeded deterministically from the run seed satisfies this; drawing
     // from one shared generator across threads does not.
+    //
+    // H2.5 (docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md): the engine is xoshiro256**,
+    // not std::mt19937_64. H2.3 measured that mt19937_64::seed() is ~600 ns
+    // each, so the 64 per-bin streams the spawn loop re-seeds every step cost
+    // ~38 us/call and reusing the engine object cannot avoid it -- the state
+    // fill is the whole cost. xoshiro256**'s "seed" is filling a 256-bit
+    // state from a SplitMix64 stream (the canonical recipe), ~4 multiplies,
+    // O(1). Quality is more than adequate for MC: xoshiro256** passes
+    // BigCrush and is the standard choice for exactly this "many independent
+    // parallel streams, re-keyed often" pattern. This is a deliberate,
+    // recorded RNG change -- it alters every trajectory, so it is gated by
+    // self-reproducibility + metric_within_sigma vs exact FCI (T2 invariant
+    // 2), never by matching the pre-H2.5 numbers.
     class RandomSource
     {
     public:
-        explicit RandomSource(std::uint64_t seed) noexcept : _engine(seed), _seed(seed) {}
+        explicit RandomSource(std::uint64_t seed) noexcept : _seed(seed)
+        {
+            reseed(seed);
+        }
 
-        // Uniform in [0, 1).
+        // Re-key this stream in place from a 64-bit seed. No allocation, no
+        // 312-word fill -- four SplitMix64 outputs into the 256-bit state.
+        void reseed(std::uint64_t seed) noexcept
+        {
+            _seed = seed;
+            std::uint64_t sm = seed;
+            auto splitmix = [&sm]() noexcept -> std::uint64_t
+            {
+                sm += 0x9e3779b97f4a7c15ULL;
+                std::uint64_t z = sm;
+                z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
+                z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
+                return z ^ (z >> 31);
+            };
+            _s[0] = splitmix();
+            _s[1] = splitmix();
+            _s[2] = splitmix();
+            _s[3] = splitmix();
+        }
+
+        // Uniform in [0, 1). 53 bits of mantissa, same precision the old
+        // std::generate_canonical<double, 53> delivered.
         double uniform() noexcept
         {
-            return std::generate_canonical<double, 53>(_engine);
+            return static_cast<double>(next() >> 11) * 0x1.0p-53;
         }
 
         // Uniform integer in [0, n).
@@ -220,9 +257,8 @@ namespace HartreeFock::Correlation::CI::QMC
         std::uint64_t seed() const noexcept { return _seed; }
 
         // A raw 64-bit draw, advancing this generator's own state. Used to seed
-        // a fresh, independent RandomSource per call site (scope step S1's
-        // per-bin streams) without exposing _engine directly.
-        std::uint64_t raw64() noexcept { return _engine(); }
+        // a fresh, independent RandomSource per call site (S1's per-bin streams).
+        std::uint64_t raw64() noexcept { return next(); }
 
         // Derive an independent generator for shard `index`. Deterministic in the
         // run seed, so the set of streams does not depend on how many shards
@@ -236,7 +272,25 @@ namespace HartreeFock::Correlation::CI::QMC
         }
 
     private:
-        std::mt19937_64 _engine;
+        // xoshiro256** (Blackman & Vigna). state[0..3] from SplitMix64.
+        std::uint64_t next() noexcept
+        {
+            const std::uint64_t result = rotl(_s[1] * 5, 7) * 9;
+            const std::uint64_t t = _s[1] << 17;
+            _s[2] ^= _s[0];
+            _s[3] ^= _s[1];
+            _s[1] ^= _s[2];
+            _s[0] ^= _s[3];
+            _s[2] ^= t;
+            _s[3] = rotl(_s[3], 45);
+            return result;
+        }
+        static std::uint64_t rotl(std::uint64_t x, int k) noexcept
+        {
+            return (x << k) | (x >> (64 - k));
+        }
+
+        std::uint64_t _s[4]{};
         std::uint64_t _seed;
     };
 

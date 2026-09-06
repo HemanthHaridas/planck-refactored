@@ -2909,13 +2909,13 @@
         {
           "type": "metric_close",
           "metric": "fciqmc_shift_energy",
-          "expected": -108.7582220854,
+          "expected": -108.5036712075,
           "atol": 0.0
         },
         {
           "type": "metric_close",
           "metric": "fciqmc_projected_energy",
-          "expected": -107.6009067556,
+          "expected": -107.5859595426,
           "atol": 0.0
         }
       ]

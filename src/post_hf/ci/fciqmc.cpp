@@ -502,17 +502,19 @@ namespace HartreeFock::Correlation::CI::QMC
         SpawnWorkspace &ws,
         WalkerPopulation &out)
     {
-        // H2.4 (docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md): the per-call scaffolding
-        // -- 64 accumulators and 64 parent buckets -- now lives in the
-        // caller-owned `ws`, built once (by the driver, or per convenience-
-        // overload call). `out` is caller-owned, so there is no NRVO question:
-        // this is the M1 reversion done properly by changing the SIGNATURE,
-        // not by making a local `static`. Bitwise-serial equality to the pre-
-        // H2 tree is the H2.4 gate -- serial means no reordering, so the
-        // unordered_map -> SpawnAccumulator swap must not change a serial
-        // result; SpawnAccumulator folds each key's run in a canonical
-        // (alpha, beta, weight-bits) order that is a pure function of the
-        // multiset, matching what a fresh unordered_map produced.
+        // H2.4/H2.5 (docs/FCIQMC_PARALLEL_REWRITE_SCOPE.md): the per-call
+        // scaffolding -- 64 accumulators, 64 parent buckets, 64 RNG streams --
+        // now lives in the caller-owned `ws`, built once (by the driver, or per
+        // convenience-overload call) instead of ~50,000 times. `out` is
+        // caller-owned, so there is no NRVO question: the M1 reversion done
+        // properly by changing the SIGNATURE, not a local `static`.
+        //
+        // NOT gated bitwise-vs-the-pre-H2 numbers: the unordered_map ->
+        // SpawnAccumulator swap (H2.4) reassociates a fixed multiset's sum
+        // (R2 category), and the mt19937 -> xoshiro256** swap (H2.5) changes
+        // every trajectory outright. Both are gated by self-reproducibility +
+        // thread-count invariance (atol=0.0, 1/2/4/8) + metric_within_sigma
+        // vs exact FCI -- T2 invariant 2.
         out.clear();
         if (n_spawn_attempts < 1)
             return;
@@ -541,15 +543,14 @@ namespace HartreeFock::Correlation::CI::QMC
         // the kBins per-bin streams from THAT. Within one call the bins are a
         // pure function of (call_seed, bin index) -- independent of thread count.
         //
-        // H2.3 measured that constructing/seeding these 64 mt19937_64 engines
-        // is ~38 us/call and reusing the engine object cannot avoid it. H2.5
-        // replaces mt19937 with a counter-based engine; until then the RNG
-        // stays per-call here, NOT in `ws`.
-        RandomSource call_source(rng.raw64());
-        std::vector<RandomSource> bin_rngs;
-        bin_rngs.reserve(kBins);
-        for (std::size_t b = 0; b < kBins; ++b)
-            bin_rngs.push_back(call_source.derive(b));
+        // H2.5: `RandomSource` is now xoshiro256** (counter-based), so re-keying
+        // the 64 persistent `ws.bin_rngs` from this call's seed is ~4 multiplies
+        // each rather than a 312-word mt19937_64 state fill (~600 ns each,
+        // ~38 us/call for 64). The derivation recipe is unchanged, so the
+        // per-bin stream a given (call_seed, bin) sees is the same as the old
+        // fresh-construction path would have produced -- for the same engine.
+        ws.rekey_streams(rng.raw64());
+        auto &bin_rngs = ws.bin_rngs;
 
         // T2 scope step S4: partition `population` into its kBins buckets
         // FIRST (serial -- this is one pass over an unordered_map, which OpenMP
