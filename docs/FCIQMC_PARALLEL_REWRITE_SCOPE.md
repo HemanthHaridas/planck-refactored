@@ -21,14 +21,20 @@ diagonal prefill), none of them the merge. Full profile table in H2.8.3.
 A 4-thread reprofile (H2.8.4) confirms `draw_excitation` stays ~40 % of
 *useful* work at 4 threads (it threads fine) while **46 % of the machine
 sits idle at the barrier** on the serial per-step driver tail. Two
-targets: `draw_excitation` serial efficiency (1-thread wall, scoped in
-H2.8.4-a — replace 4 unconditional 128-byte `OrbitalList` builds/call with
-`popcount` counts + a bounded `nth_set_bit` select, bit-identical refactor
-gated by the existing `p_gen` oracle) and collapsing the serial per-step
-map passes (4-thread wall). H3 (replica parallelism) remains a design
-sketch. All of this is gated on a real FCIQMC workload appearing
+targets: `draw_excitation` serial efficiency (1-thread wall) and
+collapsing the serial per-step map passes (4-thread wall).
+
+**H2.8.4-a LANDED the first (2026-09-06):** `draw_excitation` no longer
+builds four 128-byte `OrbitalList` per call — it works off four
+`std::popcount`s and a bounded `nth_set_bit` select. Bit-identical
+(pure-arithmetic refactor, S5 1/2/4/8 unchanged, `p_gen` oracle passes,
+mutation-verified 19 failures). Measured **HF/6-31G 1-thread 81.6 s →
+65.4 s (−20 %)**, N2 gate 12.86 s → 11.56 s; `draw_excitation` self-time
+**40.8 % → 27.1 %**. 4-thread ~unchanged (barrier idle dominates — that
+is the second target). H3 (replica parallelism) remains a design sketch.
+All of it stays gated on a real FCIQMC workload appearing
 (`FCIQMC_RESEARCH_SCOPE.md` Q1) — nothing in the tree runs FCIQMC at a
-size where any of it matters.
+size where it matters yet — but H2.8.4-a is on the branch and ready.
 
 Original framing follows.
 
@@ -587,7 +593,15 @@ candidate 1: 64 output shards keyed `hash(child) % 64`, threaded fill,
 serial fixed-order concat). Not built — gated on a real workload
 (`FCIQMC_RESEARCH_SCOPE.md` Q1) the same as everything else.
 
-### H2.8 — the fixed-order merge (scoped, built, reverted, THEN REPROFILED 2026-09-06 — the merge was never the bottleneck; H2.7's phase-probe diagnosis was wrong)
+### H2.8 — the fixed-order merge (dead-end) → the real hot path is `draw_excitation`; H2.8.4-a landed it 40.8 %→27.1 %, HF 1t −20 %
+
+Scoped, built and reverted the merge shard (H2.8.1–H2.8.3), reprofiled
+properly (the merge was never the bottleneck — H2.7's phase probe was
+wrong, full record below), then scoped and **landed** the real
+1-thread lever: `draw_excitation` serial efficiency (H2.8.4-a — bit-
+identical, `draw_excitation` self-time 40.8 %→27.1 %, HF/6-31G 1-thread
+wall −20 %). Still gated on a real Q1 workload before it leaves the
+branch.
 
 **The one lever H2.7 left.** After H2.4–H2.6 the serial cost outside the
 `#pragma omp` region on HF/6-31G (50k walkers, 4 threads) is ~1270 µs/call,
@@ -964,9 +978,11 @@ lookup:
 
 ```cpp
 // i-th set bit of x (0-indexed). arm64 has no PDEP; this is the portable form.
+// (as landed: `if (i == 0) return b; --i;` inside the hit branch, and the
+// loop bound is `kCIStringBits`, not a literal 64.)
 inline int nth_set_bit(CIString x, int i) {
     for (int b = 0; b < 64; ++b) {
-        if (x & (CIString(1) << b)) { if (i-- == 0) return b; }
+        if (x & (CIString(1) << b)) { if (i == 0) return b; --i; }
     }
     return -1;   // caller guarantees i < popcount(x)
 }
@@ -1006,38 +1022,68 @@ Keep the current 3-arg `draw_excitation` as a one-line wrapper
 (`classify` then the 4-arg form) so the ~20 test call sites and
 `draw_excitation_in_space` are untouched.
 
-##### Verify
+##### H2.8.4-a result (2026-09-06): BUILT (steps 1+2), bit-identical, ~20 % faster on HF/6-31G at 1 thread
 
-- **`planck-fciqmc-walkers`** (the F2/F3 unit suite) — the `p_gen`
-  agreement tests (`draw_excitation`'s distribution vs the brute-force
-  oracle, frequencies AND support, open-shell cases included) are the gate.
-  A `nth_set_bit` off-by-one or a wrong class-size is a `p_gen` mismatch
-  there. Mutation-verify: perturb `nth_set_bit` (`i-- == 0` → `i == 0`)
-  and confirm the support/frequency test goes red.
-- **Bitwise reproducibility + thread-count invariance** on
-  `n2_fciqmc_s5_short` 1/2/4/8 and `h2_fciqmc_threads1/4` — this is a pure
-  refactor of the *arithmetic*, not the RNG draw order, so it MUST stay
-  bit-identical to the current baseline. (Unlike the H2 accumulator/RNG
-  changes, there is no legitimate reassociation here — `uniform_int` is
-  called in the same order with the same arguments, and the orbital it
-  maps to is the same orbital. If S5 moves, something is wrong.)
-- **FCI agreement** `h2_fciqmc_sto3g`, `n2_fciqmc_sto3g` within 5σ
-  (should be unchanged, not just within-σ).
-- **Measure**: HF/6-31G `hf_prof` 1-thread wall before/after, and re-run
-  the `sample` self-time — the target is `draw_excitation` self-time
-  dropping from ~40 % toward ~15–20 % (removing ~half its scans and all
-  the zeroing). A 1-thread whole-run improvement of ~15–25 % is the
-  plausible range; the 4-thread number will move less (barrier idle
-  dominates there — that is lever (b), a separate step).
+Steps 1 and 2 landed together in `draw_excitation` (`fciqmc.cpp`); step 3
+(the `n_spawn_attempts > 1` hoist) was **skipped** — YAGNI, both fixtures
+run `n_spawn_attempts = 1`, and the interface churn buys nothing until a
+workload needs it.
 
-##### Gate
+- The four `OrbitalList` builds became four masks + four `std::popcount`:
+  `occ_a = parent.alpha & act_mask`, `vir_a = ~parent.alpha & act_mask`,
+  `act_mask = low_bit_mask(n_act)`; `na = popcount(occ_a)`, etc.
+- Every `occ_x[idx]` / `vir_x[idx]` in the class switch became
+  `nth_set_bit(mask, idx)` — a bounded (`b < kCIStringBits`) scan that
+  exits at the idx-th set bit, called at most twice per spawn on the one
+  spin channel the drawn class uses.
+- `OrbitalList` / `occupied` / `virtuals` are kept — `enumerate_connections`
+  (the oracle, and the projected-energy sum) still uses them; both are
+  cold.
 
-Same as everything in H2.8: **do not build until a real Q1 workload
-exists.** `draw_excitation` efficiency is the 1-thread wall, and nothing
-in the tree runs FCIQMC at 1 thread for long enough to care. This is the
-plan for when a target appears; it is self-contained and low-risk
-(bit-identical refactor, existing `p_gen` gate) so it is the first thing
-to do then.
+**Bit-identical, as required for a pure-arithmetic refactor:**
+
+| check | result |
+|---|---|
+| `planck-fciqmc-walkers` (F2 `p_gen` oracle: frequency **and** support, open-shell cases) | all pass |
+| `planck-fciqmc-accumulator` | all pass |
+| S5 `n2_fciqmc_s5_short` 1/2/4/8 | bit-identical to baseline pin `-108.5036712075` / `-107.5859595426` |
+| `h2_fciqmc_sto3g` 1t vs 4t | bit-identical `-1.1375594170` / `-1.1373925711` |
+| `n2_fciqmc_sto3g` | bit-identical `-107.6433197414` / `-107.6448944489`, FCI 0.27σ |
+| 4 non-QMC FCI gates (`enumerate_connections` untouched) | unchanged, equal to committed refs |
+
+**Mutation-verified non-vacuous:** perturbing `nth_set_bit` (`i == 0` →
+`i == 1`) produces **19 failures** in `planck-fciqmc-walkers` (F3.3, F4.1,
+F4.2, F4.4, F4.5 — the `p_gen` corruption cascades through spawning). The
+gate is not silently passing.
+
+**Measured (`build-full`, this machine, 1 thread):**
+
+| fixture | baseline | H2.8.4-a | Δ |
+|---|---|---|---|
+| HF/6-31G `hf_prof` (3k eq + 4k sampling) | 81.6 s (80.68 / 81.77 / 82.43) | **65.4 s** | **−20 %** |
+| N2/STO-3G gate (20k eq + 30k sampling) | 12.86 s | **11.56 s** | **−10 %** |
+
+**`draw_excitation` self-time (HF/6-31G, 1 thread, `sample`): 40.8 % →
+27.1 %** — a 13.7 pp drop. `nth_set_bit` inlined into `draw_excitation`
+(no separate frame), so its cost is inside that 27.1 %. Not the ~15–20 %
+target — the residual is real arithmetic that stays: the five class-size
+products (`na*(na-1)/2 * va*(va-1)/2` for the doubles), two `uniform_int`
+calls, `unrank_pair`'s `while` loop, and the `k/va` / `k%va` divides.
+Everything else in the profile scaled up proportionally (same absolute
+time, smaller pie).
+
+**4-thread:** N2 7.75 s → 7.90 s, HF unchanged within noise — as
+predicted, the 4-thread wall is the 46 % barrier idle (the serial
+per-step driver tail), not `draw_excitation`. That is lever (b), a
+separate step.
+
+##### Gate (unchanged)
+
+This is landed on the branch but **stays gated on a real Q1 workload**
+before it goes to `devel` alongside the rest of the FCIQMC parallelism
+work — nothing in the tree runs FCIQMC at 1 thread long enough for a
+20 % improvement to matter yet. It is low-risk (bit-identical, existing
+`p_gen` gate, mutation-verified) so it is ready when a target appears.
 
 ### H3 — the outer step loop itself is not as sequential as it looks
 

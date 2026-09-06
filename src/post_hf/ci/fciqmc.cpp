@@ -77,11 +77,11 @@ namespace HartreeFock::Correlation::CI::QMC
 
         // Fixed-capacity orbital list (scope step T1).
         //
-        // `occupied`/`virtuals` returned `std::vector<int>` BY VALUE, and
-        // `draw_excitation` calls both twice per spawn attempt. At ~14000 occupied
-        // determinants x 30000 iterations that is on the order of 1e9 heap
-        // allocations, and it showed: the malloc/free family was 29.5 % of the
-        // N2/STO-3G profile against slater_condon_element's 40.1 %.
+        // `occupied`/`virtuals` returned `std::vector<int>` BY VALUE, and each
+        // was called per spawn attempt. At ~14000 occupied determinants x 30000
+        // iterations that is on the order of 1e9 heap allocations, and it
+        // showed: the malloc/free family was 29.5 % of the N2/STO-3G profile
+        // against slater_condon_element's 40.1 %.
         //
         // The capacity is a BOUND, not a guess. `build_all_mo_ci_setup` rejects
         // any basis with n_act > kMaxPackedSpatialOrbitals (= (64-1)/2 = 31)
@@ -93,6 +93,11 @@ namespace HartreeFock::Correlation::CI::QMC
         // bounded at two entries): 4.8x there, and the recorded lesson is that the
         // gain EXCEEDED what the profile implied, because per-call churn also costs
         // cache pressure attributed to other frames.
+        //
+        // H2.8.4-a: `draw_excitation` (the hot path) no longer builds these at
+        // all -- it works off popcounts and `nth_set_bit` directly on the
+        // determinant words. This struct now serves only `enumerate_connections`
+        // (the brute-force oracle and the projected-energy sum), which are cold.
         struct OrbitalList
         {
             std::array<int, 32> items{};
@@ -257,19 +262,61 @@ namespace HartreeFock::Correlation::CI::QMC
             DoubleBB,
             DoubleAB
         };
+
+        // Return the bit position of the i-th set bit of `x` (0-indexed).
+        //
+        // H2.8.4-a: this replaces materializing a full OrbitalList just to index
+        // it once or twice. `draw_excitation` used to build four
+        // std::array<int,32> lists per call (occ/vir x alpha/beta), zeroing
+        // 512 bytes of stack and scanning n_act bits four times, to then use at
+        // most two entries of one of them. It needs only the popcount of each
+        // mask to pick a class, and this select to map the drawn index k to an
+        // orbital.
+        //
+        // The caller guarantees 0 <= i < popcount(x & low n_act bits), so the
+        // loop always finds its target; the n_act bound keeps it to <= 31
+        // iterations and it exits at the i-th set bit (~half that on average).
+        // arm64 has no PDEP; this portable form is fine at this size. If x86_64
+        // ever matters, _pdep_u64(1ull<<i, x) then countr_zero is the 2-instr
+        // replacement.
+        inline int nth_set_bit(CIString x, int i) noexcept
+        {
+            for (int b = 0; b < CASSCFInternal::kCIStringBits; ++b)
+            {
+                if (x & (CIString(1) << b))
+                {
+                    if (i == 0)
+                        return b;
+                    --i;
+                }
+            }
+            return -1; // unreachable given the caller's contract
+        }
     } // namespace
 
     Excitation draw_excitation(const DetKey &parent, int n_act, RandomSource &rng)
     {
-        const auto occ_a = occupied(parent.alpha, n_act);
-        const auto occ_b = occupied(parent.beta, n_act);
-        const auto vir_a = virtuals(parent.alpha, n_act);
-        const auto vir_b = virtuals(parent.beta, n_act);
+        // H2.8.4-a: the four occ/vir bitmasks over the active window, plus their
+        // popcounts. This replaces materializing four OrbitalList
+        // (std::array<int,32>) per call -- 512 bytes of stack zeroing and four
+        // n_act-bit scans -- with four masks and four popcounts. Every orbital
+        // index the class dispatch needs is recovered from these with
+        // nth_set_bit, called at most twice per spawn on the one spin channel
+        // the drawn class uses. The i-th occupied orbital in the old
+        // `occupied()` (which scanned p in [0, n_act)) is exactly the i-th set
+        // bit of `occ_*`; the i-th virtual is the i-th set bit of `vir_*` =
+        // ~alpha within the same window -- so the orbital each drawn k maps to
+        // is unchanged and the run stays bit-identical.
+        const CIString act_mask = CASSCFInternal::low_bit_mask(n_act);
+        const CIString occ_a = parent.alpha & act_mask;
+        const CIString occ_b = parent.beta & act_mask;
+        const CIString vir_a = ~parent.alpha & act_mask;
+        const CIString vir_b = ~parent.beta & act_mask;
 
-        const int na = occ_a.size();
-        const int nb = occ_b.size();
-        const int va = vir_a.size();
-        const int vb = vir_b.size();
+        const int na = std::popcount(occ_a);
+        const int nb = std::popcount(occ_b);
+        const int va = std::popcount(vir_a);
+        const int vb = std::popcount(vir_b);
 
         const int n_sa = na * va;
         const int n_sb = nb * vb;
@@ -303,16 +350,16 @@ namespace HartreeFock::Correlation::CI::QMC
         {
         case Klass::SingleA:
         {
-            const auto e = excite_one(parent.alpha, occ_a[k / va],
-                                      vir_a[k % va]);
+            const auto e = excite_one(parent.alpha, nth_set_bit(occ_a, k / va),
+                                      nth_set_bit(vir_a, k % va));
             if (!e.valid)
                 return {};
             return {DetKey{e.det, parent.beta}, e.phase, p_gen, true};
         }
         case Klass::SingleB:
         {
-            const auto e = excite_one(parent.beta, occ_b[k / vb],
-                                      vir_b[k % vb]);
+            const auto e = excite_one(parent.beta, nth_set_bit(occ_b, k / vb),
+                                      nth_set_bit(vir_b, k % vb));
             if (!e.valid)
                 return {};
             return {DetKey{parent.alpha, e.det}, e.phase, p_gen, true};
@@ -322,12 +369,12 @@ namespace HartreeFock::Correlation::CI::QMC
             const int n_occ_pairs = na * (na - 1) / 2;
             const auto [i, j] = unrank_pair(k % n_occ_pairs, na);
             const auto [a, b] = unrank_pair(k / n_occ_pairs, va);
-            const auto e1 = excite_one(parent.alpha, occ_a[i],
-                                       vir_a[a]);
+            const auto e1 = excite_one(parent.alpha, nth_set_bit(occ_a, i),
+                                       nth_set_bit(vir_a, a));
             if (!e1.valid)
                 return {};
-            const auto e2 = excite_one(e1.det, occ_a[j],
-                                       vir_a[b]);
+            const auto e2 = excite_one(e1.det, nth_set_bit(occ_a, j),
+                                       nth_set_bit(vir_a, b));
             if (!e2.valid)
                 return {};
             return {DetKey{e2.det, parent.beta}, e1.phase * e2.phase, p_gen, true};
@@ -337,12 +384,12 @@ namespace HartreeFock::Correlation::CI::QMC
             const int n_occ_pairs = nb * (nb - 1) / 2;
             const auto [i, j] = unrank_pair(k % n_occ_pairs, nb);
             const auto [a, b] = unrank_pair(k / n_occ_pairs, vb);
-            const auto e1 = excite_one(parent.beta, occ_b[i],
-                                       vir_b[a]);
+            const auto e1 = excite_one(parent.beta, nth_set_bit(occ_b, i),
+                                       nth_set_bit(vir_b, a));
             if (!e1.valid)
                 return {};
-            const auto e2 = excite_one(e1.det, occ_b[j],
-                                       vir_b[b]);
+            const auto e2 = excite_one(e1.det, nth_set_bit(occ_b, j),
+                                       nth_set_bit(vir_b, b));
             if (!e2.valid)
                 return {};
             return {DetKey{parent.alpha, e2.det}, e1.phase * e2.phase, p_gen, true};
@@ -351,12 +398,12 @@ namespace HartreeFock::Correlation::CI::QMC
         {
             const int ka = k % n_sa;
             const int kb = k / n_sa;
-            const auto ea = excite_one(parent.alpha, occ_a[ka / va],
-                                       vir_a[ka % va]);
+            const auto ea = excite_one(parent.alpha, nth_set_bit(occ_a, ka / va),
+                                       nth_set_bit(vir_a, ka % va));
             if (!ea.valid)
                 return {};
-            const auto eb = excite_one(parent.beta, occ_b[kb / vb],
-                                       vir_b[kb % vb]);
+            const auto eb = excite_one(parent.beta, nth_set_bit(occ_b, kb / vb),
+                                       nth_set_bit(vir_b, kb % vb));
             if (!eb.valid)
                 return {};
             return {DetKey{ea.det, eb.det}, ea.phase * eb.phase, p_gen, true};
