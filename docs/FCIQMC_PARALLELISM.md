@@ -167,14 +167,14 @@ measurement.**
 
 ## H2 — the `SpawnWorkspace` rewrite
 
-**Claim:** the per-parent work threads fine on an unsaturated fixture; the
-whole call is stuck at 2.24x/4t because ~1.5 ms/call of serial setup — 64
-bin constructions, 64 `mt19937_64` engine seedings, the parent partition,
-the merge — is rebuilt every ~50,000 calls and does not thread. There is
-one call site, driven by one thread across the whole outer loop, so all of
-that state can be persistent.
+The per-parent work threads fine on an unsaturated fixture (H1). The whole
+call was stuck at 2.24x/4t because ~1.5 ms/call of serial setup — 64 bin
+constructions, 64 `mt19937_64` engine seedings, the parent partition, the
+merge — was rebuilt every ~50,000 calls and did not thread. There is one
+call site, driven by one thread across the whole outer loop, so all of
+that state is now persistent, in a caller-owned `SpawnWorkspace`.
 
-Landed, in order:
+Three pieces:
 
 - **`SpawnAccumulator`** (`spawn_accumulator.h`) — a `vector<pair<DetKey,
   Weight>>` whose `finalize()` sorts by a total order on `(alpha, beta,
@@ -355,12 +355,13 @@ shifts the pin while T1 == T4).
 | HF/6-31G `hf_prof` 4t | 34.1 s | 32.1 s | -6 % |
 | N2/STO-3G gate 4t | 7.75 s | 7.23 s | -7 % |
 
-**Modest, and the scope's "54 % idle -> ~25-30 %" did not happen**: the
-fold removed ~1.5 of the ~5 serial walks, but the **merge — the biggest
-one — is untouched**, and H2.8 proved it does not shard for a win.
-**Step 3 (threading the fused pre-pass) was declined**: the 4-thread
-number barely moved from folding the *non-merge* passes, so the pre-pass
-is not the dominant serial cost — the merge is, and it has no cheap fix.
+**Modest.** The fold removed ~1.5 of the ~5 serial walks, but the **merge
+— the biggest one — is untouched**, and H2.8 proved it does not shard for
+a win. Threading the fused pre-pass instead would chase the smaller half:
+the 4-thread number barely moved from folding the non-merge passes, so
+the pre-pass is not the dominant serial cost. That leaves the merge as
+the residual ceiling, with no cheap parallelization, and H3 as the only
+axis that would give genuine near-linear scaling.
 
 ## Retired hypotheses
 
