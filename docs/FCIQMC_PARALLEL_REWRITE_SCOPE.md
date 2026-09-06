@@ -568,7 +568,7 @@ candidate 1: 64 output shards keyed `hash(child) % 64`, threaded fill,
 serial fixed-order concat). Not built — gated on a real workload
 (`FCIQMC_RESEARCH_SCOPE.md` Q1) the same as everything else.
 
-### H2.8 — the fixed-order merge (scoped + collision rate measured 2026-09-06; candidate 1 chosen, build gated on Q1)
+### H2.8 — the fixed-order merge (scoped, collision rate measured, candidate 1 BUILT AND REVERTED 2026-09-06 — dead-end for the current suite; build gated on Q1)
 
 **The one lever H2.7 left.** After H2.4–H2.6 the serial cost outside the
 `#pragma omp` region on HF/6-31G (50k walkers, 4 threads) is ~1270 µs/call,
@@ -704,9 +704,12 @@ Same gate as every H2 step, non-negotiable:
 #### Fixture
 
 **HF/6-31G** (`tests/inputs/exploratory/fciqmc/validation/hf_base.hfinp`,
-`ndet` = 213k, unsaturated) for the phase-probe before/after — N2 is
-saturated and its merge is ~35 µs, too small to measure a change against.
-N2/STO-3G stays the *correctness* gate only.
+`ndet` = 213k, unsaturated) for the phase-probe before/after. ~~N2 is
+saturated and its merge is ~35 µs, too small to measure a change
+against.~~ **H2.8.2 refuted this** — over a 50k-step run N2/STO-3G's merge
+is 15,000+ entries, HF-scale, and the sharded path regresses it ~1.5×.
+N2/STO-3G is the correctness gate because its *determinant space* is small
+enough for real sampling, **not** because its merge is cheap.
 
 #### Gate
 
@@ -724,6 +727,69 @@ speedup 2.42× → ~3.1–3.3×/4t against the 3.54× region ceiling. Candidate
 2 could go slightly further (removes hash from downstream consumers too)
 but the honest estimate needs the downstream call-site measurements it
 has not had.
+
+#### H2.8.2 result (2026-09-06): BUILT, correct and deterministic, then REVERTED — no in-tree fixture it does not regress
+
+Candidate 1 was implemented in full:
+
+- `SpawnWorkspace` gained `std::vector<SpawnAccumulator> out_shards`,
+  sized and `reset()`-ed alongside the other per-call state.
+- The serial `out.add`-per-entry merge was replaced by: a serial
+  `O(entries)` scatter (one pass over the 64 finalized bins, appending
+  each entry to `out_shards[hash(child) % kBins]` — **not** the
+  64×-redundant scan the scope sketched; that alone regressed N2 ~2×), a
+  `#pragma omp parallel for` calling `finalize()` on the 64 shards, then a
+  serial fixed-order `0..63` concat into `out`.
+
+**Correctness held on every gate:**
+
+| check | result |
+|---|---|
+| S5 invariance 1/2/4/8 (`n2_fciqmc_s5_short`) | bit-identical at all four |
+| self-reproducibility (fixed seed, 2 runs each thread count) | bit-identical |
+| S5 non-vacuity (reverse the shard concat order) | shift `-109.16…` → `-108.08…`, T1 still == T4 — caught **only** by the pinned `threads1`, exactly the H2.1 property, on the new code path ✓ |
+| `n2_fciqmc_sto3g` 1/4/8 (50k steps) | bit-identical across thread counts |
+| FCI agreement — `h2_fciqmc_sto3g` (0.10σ / 0.67σ), `n2_fciqmc_sto3g` (0.32σ / 1.42σ) | both within the 5σ gate |
+| 4 non-QMC FCI gates | unchanged, equal to committed references |
+
+**But it regressed the one gate it touches.** `n2_fciqmc_sto3g` wall time
+(`build-full`, this machine): **H2 baseline 8.6 s → 12.9 s at 1 thread,
+7.6 s → 7.75 s at 4** — a ~1.5× serial regression, ~flat at 4 threads.
+
+**The cause, and why no threshold rescues it.** The sharded path trades an
+`O(n)` hash-insert loop for `O(n)` scatter + `O(n log n)` per-shard
+`std::sort` (inside `finalize()`) + a parallel-region fork/join. That only
+wins when the merge is a genuine serial bottleneck — HF/6-31G at 50k
+walkers, ~26,000 entries/merge, ~1100 µs. **N2/STO-3G is not that**, and
+the scope's own "N2's merge is ~35 µs" (from H1) turned out to
+under-measure it: over a full 50k-step run N2's population spreads across
+most of its 14,400-determinant space, and the summed `bin.size()` per
+merge climbs **past 15,000** — the same order as HF. A gate on
+`total_entries` was tried at 5,000 and 15,000; N2/STO-3G's 50k-step run
+crosses both partway through and lands on the sharded (slower, and
+value-reassociated) branch either way. There is no cutoff that keeps
+N2/STO-3G on the plain branch without disabling the optimization for
+everything N2-sized — and N2-sized is the entire in-tree FCIQMC suite.
+
+**So this is a measured dead-end for the current tree, not a landed
+step.** The sharded merge is correct, deterministic, and faster *only* on
+a fixture that runs for minutes — which, per the Gate above, does not
+exist here. Reverted (`git checkout src/post_hf/ci/fciqmc.cpp
+spawn_accumulator.h` — `git diff` is docs-only). The plan stands for the
+day a real workload appears; whoever builds it then should:
+
+- skip the `total_entries` threshold entirely and just always-shard —
+  the regression only matters at N2 scale, which by then is not what is
+  being run;
+- or, if a mixed workload needs both, gate on the *input* (`ndet`,
+  `target_walkers`) at driver setup, not on per-call `total_entries`
+  which is unstable across a run.
+
+**Retired hypothesis, for the next person:** "N2 is saturated so its merge
+is negligible and it is only the correctness fixture" — measured false at
+50k steps. N2/STO-3G's merge is HF-scale by entry count; what makes N2 the
+correctness fixture is its *determinant space* being small enough for real
+sampling, not its merge being cheap.
 
 ### H3 — the outer step loop itself is not as sequential as it looks
 
@@ -855,18 +921,27 @@ conclusion `FCIQMC_RESEARCH_SCOPE.md` Q1 reaches for the method as a whole.
 - **H2.0 (smaller fixed `kBins`) — reserve, N2-class only.** Helps a
   saturation-starved fixture; on HF the bins are already large enough.
   H2 does **not** touch `kBins`.
-- **H2.8 (the fixed-order merge) — SCOPED, collision rate MEASURED
-  (2026-09-06), build gated on Q1.** ~1100 µs/call, 37 % of the HF whole
-  call, the sole remaining serial cost. Cross-bin collision rate probed on
-  HF/6-31G: **0.73 %** — the merge is 99.27 % concatenation. So candidate
-  1: `SpawnWorkspace` gains 64 output shards keyed `hash(child) % 64`,
-  filled by a second `#pragma omp parallel for` (disjoint writes, no
-  lock), each `finalize()`d to resolve the 0.73 %, then a serial 64-way
-  fixed-order concat into `out` (one insert per distinct child, never a
-  collision). Candidate 2 (flat sorted `WalkerPopulation`) shelved — only
-  worth it for the downstream hash removal, needs its own call-site
-  measurements. Not built: gated on a real workload, same as H3. Section
-  above.
+- **H2.8 (the fixed-order merge) — candidate 1 BUILT, verified correct,
+  then REVERTED (2026-09-06). Dead-end for the current suite.** ~1100
+  µs/call, 37 % of the HF whole call. Cross-bin collision rate probed on
+  HF/6-31G: **0.73 %** — the merge is 99.27 % concatenation. Candidate 1
+  (`SpawnWorkspace` gains 64 `hash(child) % 64` output shards, serial
+  `O(n)` scatter, parallel `finalize()`, serial fixed-order concat) was
+  implemented and passed **every** gate — S5 invariance 1/2/4/8, S5
+  non-vacuity on the new path, `n2_fciqmc_sto3g` thread-count invariance,
+  FCI agreement, 4 non-QMC FCI gates unchanged. **But it regressed
+  `n2_fciqmc_sto3g` wall time ~1.5× at 1 thread** (8.6 s → 12.9 s): the
+  sharded path is `O(n log n)` (per-shard sort) + fork/join against an
+  `O(n)` loop, and only wins when the merge is a genuine bottleneck (HF
+  scale). The scope's "N2's merge is ~35 µs" was refuted — over 50k steps
+  N2's population spreads and the merge climbs past 15,000 entries,
+  HF-scale, so no `total_entries` threshold keeps N2 on the plain branch
+  without disabling the optimization for everything N2-sized (= the whole
+  in-tree FCIQMC suite). Reverted; `git diff` docs-only. Section H2.8.2
+  above has the full record and what to do differently when a real
+  minutes-to-hours workload exists (always-shard, or gate on `ndet` /
+  `target_walkers` at driver setup, not per-call). Candidate 2 (flat
+  sorted `WalkerPopulation`) never attempted — same wall it would hit.
 - **H3 — not started.** Design sketch + memory estimate only.
 - **Fixture decision: use HF/6-31G (or larger) for all future parallel-
   FCIQMC measurement.** N2/STO-3G stays the *correctness* gate (small
