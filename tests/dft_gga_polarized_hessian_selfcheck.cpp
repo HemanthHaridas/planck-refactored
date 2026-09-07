@@ -501,5 +501,21 @@ int main()
     check_beta("gga_c_pbe", p1, md1, ao2, "mixed x");
     check_beta("gga_c_pbe", p2, md2, ao2, "mixed x");
 
+    // B88 exchange and LYP correlation -- the components of B3LYP. These
+    // were previously unexercised at the point level (the whole suite only
+    // ran gga_c_pbe), which left a gap flagged during the DFT SOSCF hybrid work (docs/SOSCF_DFT.md)
+    // H4/H5: a whole-molecule FD probe on B3LYP UKS showed ~8e-4 scatter, and
+    // the question was whether the polarized fxc formula is wrong for
+    // B88/LYP or the whole-molecule FD is just noisy. It is the FD -- B88
+    // and LYP match the grid-level FD of V_xc to ~1e-10, same as PBE.
+    check_mixed("gga_x_b88", p1, md1, ao1);
+    check_mixed("gga_x_b88", p2, md2, ao2);
+    check_beta("gga_x_b88", p1, md1, ao1, "mixed x");
+    check_beta("gga_x_b88", p2, md2, ao2, "mixed x");
+    check_mixed("gga_c_lyp", p1, md1, ao1);
+    check_mixed("gga_c_lyp", p2, md2, ao2);
+    check_beta("gga_c_lyp", p1, md1, ao1, "mixed x");
+    check_beta("gga_c_lyp", p2, md2, ao2, "mixed x");
+
     return g_ok ? 0 : 1;
 }

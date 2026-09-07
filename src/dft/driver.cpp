@@ -1865,12 +1865,13 @@ namespace DFT::Driver
                 Eigen::MatrixXd C_soscf_prev;
                 Eigen::VectorXd eps_soscf_prev;
                 unsigned int soscf_window_start = 0;
-                // D2.2's own scope cut: pure (non-hybrid) functionals only
-                // for this first landing -- a hybrid's exact-exchange
-                // response needs the same K-response machinery
-                // build_rhf_cphf_matrix already has, unbuilt here (D2.2.4
-                // enforces this as a real rejection, not silently ignored).
-                const bool soscf_dft_hybrid_blocked = x_functional.is_hybrid();
+                // SOSCF_DFT.md invariant 3 (RKS hybrids): RKS hybrids -- global (B3LYP,
+                // PBE0) and range-separated (HSE06, CAM-B3LYP) -- are now
+                // supported. The exact-exchange (K) response is one more
+                // linear-in-density term in h_op (c_fr*Coulomb + c_sr*ShortRange,
+                // scaled -0.5 like the KS build); verified to ratio 1.000000 by
+                // the scale probe (LDA + combined-XC hard assertion). The only
+                // remaining RKS scope cuts are PCM and SAO, handled below.
                 // D2.2.4: a user requesting SOSCF (either trigger keyword)
                 // must be told when the request cannot be honored, rather
                 // than silently running plain DIIS the whole time -- the
@@ -1880,10 +1881,7 @@ namespace DFT::Driver
                      calculator._scf._scf_soscf_start > 0))
                 {
                     std::string reason;
-                    if (soscf_dft_hybrid_blocked)
-                        reason = "hybrid functional (exact-exchange response is not yet implemented "
-                                 "for DFT SOSCF)";
-                    else if (prepared.pcm)
+                    if (prepared.pcm)
                         reason = "PCM solvation (not yet wired through DFT SOSCF)";
                     else if (calculator._use_sao_blocking)
                         reason = "SAO/symmetry blocking (not yet wired through DFT SOSCF)";
@@ -1982,7 +1980,7 @@ namespace DFT::Driver
                     const bool soscf_enabled =
                         (calculator._scf._scf_soscf_diis_tol > 0.0 ||
                          calculator._scf._scf_soscf_start > 0) &&
-                        !sao_active_rks && !prepared.pcm && !soscf_dft_hybrid_blocked;
+                        !sao_active_rks && !prepared.pcm;
                     if (soscf_enabled && soscf_window_start == 0)
                     {
                         const bool criterion_fires =
@@ -2012,12 +2010,22 @@ namespace DFT::Driver
                     if (soscf_active)
                     {
                         // ── SOSCF (D2.2.3) ──────────────────────────────────
-                        // g_ai = F_mo(a,i), paired with the composed h_op
-                        // UNSCALED -- D2.2.2's own cross-check against
-                        // PySCF's gen_g_hop_rhf confirmed g_true=2*g_bare and
-                        // H_true=4*H_bare, a MATCHING pair (like RHF's own
-                        // 4-and-4), so the unscaled ratio already reproduces
-                        // the true Newton step.
+                        // Closed-shell RKS. The exact Newton step is
+                        // -H_true^-1 g_true with, in the kappa parametrization
+                        // (occupancy-2 density, dP/dkappa = [R,P0] = 2*dP):
+                        //   g_true      = 4 * F_mo(a,i)
+                        //   H_true * x  = 4 * diag(eps_a-eps_i) .* x
+                        //               + 8 * (J + V_xc + K)[dP]
+                        // Dividing both by 4: g = F_mo (unscaled, as before) and
+                        //   h_op(x) = diag .* x + 2 * (J + V_xc + K)[dP].
+                        // The old code used a bare (J+V_xc), i.e. the kernel was
+                        // half-weighted relative to the diagonal -- the Newton
+                        // DIRECTION was slightly wrong (magnitude was fine because
+                        // the diagonal dominates). See
+                        // docs/SOSCF_DFT.md (invariant 2); LDA-verified
+                        // to ratio 1.000000 by the S1 probe.
+                        // (UKS is unaffected -- occupancy-1 makes diag and kernel
+                        // scale identically there; do NOT add a 2x to UKS.)
                         const int n_occ_i = static_cast<int>(n_occ);
                         const int n_virt_i = static_cast<int>(nbasis) - n_occ_i;
                         const Eigen::MatrixXd C_occ_prev = C_soscf_prev.leftCols(n_occ_i);
@@ -2034,8 +2042,9 @@ namespace DFT::Driver
 
                         const auto h_op = [&](const Eigen::VectorXd &x) -> Eigen::VectorXd
                         {
-                            // dP(x) = 2*(C_virt*unpack(x)*C_occ^T + h.c.), same
-                            // convention D2.2.2 verified.
+                            // dP = C_virt*unpack(x)*C_occ^T + h.c. -- half of the
+                            // true dP/dt = [R,P0] = 2*dP (see the scale block
+                            // above). The 4x/8x split is applied at the return.
                             Eigen::MatrixXd x_mat(n_virt_i, n_occ_i);
                             for (int a = 0; a < n_virt_i; ++a)
                                 for (int i = 0; i < n_occ_i; ++i)
@@ -2060,7 +2069,47 @@ namespace DFT::Driver
                             const Eigen::VectorXd xc_packed = DFT::Driver::pack_hessian_vector_product_cphf_order(
                                 *dV_xc, C_occ_prev, C_virt_prev);
 
-                            return diag_term.cwiseProduct(x) + J_packed + xc_packed;
+                            // K response (SOSCF_DFT.md invariant 3): a hybrid's KS
+                            // Fock carries -0.5*(c_fr*K_Coulomb + c_sr*K_SR),
+                            // K linear in the density exactly like J, so the
+                            // Hessian gains delta of it on the trial dP with the
+                            // same coeff/sign/kernel decomposition the KS build
+                            // uses (src/dft/driver.cpp assemble_current_ks_potential,
+                            // the RKS unpolarized branch). H2 wired c_fr (global
+                            // hybrids); H3 adds the c_sr ShortRange branch and
+                            // lifts the gate for range-separated hybrids too.
+                            Eigen::VectorXd K_packed = Eigen::VectorXd::Zero(x.size());
+                            {
+                                const double c_fr = xc_grid->full_range_exchange_coefficient;
+                                const double c_sr = xc_grid->short_range_exchange_coefficient;
+                                if (c_fr != 0.0 || c_sr != 0.0)
+                                {
+                                    Eigen::MatrixXd dK = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                                    if (c_fr != 0.0)
+                                        dK.noalias() += c_fr * _compute_2e_k_direct(
+                                            prepared.shell_pairs, dP, calculator._shells.nbasis(),
+                                            calculator._integral._engine, HartreeFock::ERIKernel::Coulomb,
+                                            0.0, calculator._integral._tol_eri,
+                                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
+                                                                              : nullptr);
+                                    if (c_sr != 0.0)
+                                        dK.noalias() += c_sr * _compute_2e_k_direct(
+                                            prepared.shell_pairs, dP, calculator._shells.nbasis(),
+                                            calculator._integral._engine, HartreeFock::ERIKernel::ShortRange,
+                                            xc_grid->range_separation_omega, calculator._integral._tol_eri,
+                                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
+                                                                              : nullptr);
+                                    K_packed = DFT::Driver::pack_hessian_vector_product_cphf_order(
+                                        -0.5 * dK, C_occ_prev, C_virt_prev);
+                                }
+                            }
+
+                            // diag .* x + 2 * kernel  (see the scale block
+                            // above): the kernel carries twice the diagonal's
+                            // weight because dP/dkappa = 2*dP and the kernel is
+                            // bilinear. Paired with the unscaled g = F_mo.
+                            return diag_term.cwiseProduct(x) +
+                                   2.0 * (J_packed + xc_packed + K_packed);
                         };
                         const auto g_op = [&g]() -> Eigen::VectorXd
                         { return g; };
@@ -2074,6 +2123,28 @@ namespace DFT::Driver
                         const HartreeFock::Correlation::CASSCF::AugHessianResult ah =
                             HartreeFock::Correlation::CASSCF::solve_augmented_hessian(
                                 h_op, g_op, nullptr, x0, ah_opts);
+
+                        // Deadband: once the Newton step is at the density-tolerance
+                        // scale, applying it just cycles the density at ~1e-10 (the
+                        // AH solve returns a nonzero step for any g != 0, and a
+                        // full-convergence SOSCF window has no DIIS to damp it).
+                        // Pass the reference orbitals through unchanged so
+                        // next_density == density and is_converged can fire. The
+                        // DIIS-handoff mode never reaches this -- it hands back
+                        // long before. See SOSCF_DFT.md invariant 2.
+                        if (ah.x.allFinite() &&
+                            ah.x.cwiseAbs().maxCoeff() < calculator._scf._tol_density)
+                        {
+                            C_new = C_soscf_prev;
+                            eps_new = eps_soscf_prev;
+                            HartreeFock::Logger::logging(
+                                HartreeFock::LogLevel::Info, "DFT SOSCF :",
+                                std::format("step at iter {}: |g|={:.3e} step below tol_density "
+                                            "-- holding orbitals (deadband)",
+                                            iter, g.norm()));
+                        }
+                        else
+                        {
 
                         // Trust-region cap, same constant RHF/UHF SOSCF use.
                         constexpr double kSoscfMaxRot = 0.20;
@@ -2132,6 +2203,7 @@ namespace DFT::Driver
                                 "ah_iters={} ah_residual={:.3e} cap_fired={}",
                                 iter, g.norm(), ah.v0, ah.eigenvalue, ah.converged, ah.iterations,
                                 ah.residual_norm, cap_fired));
+                        } // end deadband else
                     }
                     else
                     {
@@ -2252,7 +2324,12 @@ namespace DFT::Driver
             Eigen::MatrixXd Ca_soscf_prev, Cb_soscf_prev;
             Eigen::VectorXd epsa_soscf_prev, epsb_soscf_prev;
             unsigned int soscf_window_start = 0;
-            const bool soscf_uks_hybrid_blocked = x_functional.is_hybrid();
+            // SOSCF_DFT.md invariant 3 (UKS hybrids): UKS hybrids -- global and
+            // range-separated -- are now supported. The polarized h_op gains
+            // the spin-resolved K response (-1*(c_fr*K_C + c_sr*K_SR) per
+            // spin, from _compute_2e_k_uhf_direct); UKS h_op stays uniform 1x
+            // (no RKS-style 2x on the kernel). Only PCM and SAO remain as UKS
+            // scope cuts.
             // D3.2.1: same one-time diagnostic D2.2.4 built for RKS -- a
             // user requesting SOSCF (either trigger keyword) is told when
             // the request cannot be honored rather than silently running
@@ -2261,10 +2338,7 @@ namespace DFT::Driver
                  calculator._scf._scf_soscf_start > 0))
             {
                 std::string reason;
-                if (soscf_uks_hybrid_blocked)
-                    reason = "hybrid functional (exact-exchange response is not yet implemented "
-                             "for DFT SOSCF)";
-                else if (prepared.pcm)
+                if (prepared.pcm)
                     reason = "PCM solvation (not yet wired through DFT SOSCF)";
                 else if (calculator._use_sao_blocking)
                     reason = "SAO/symmetry blocking (not yet wired through DFT SOSCF)";
@@ -2357,7 +2431,7 @@ namespace DFT::Driver
                 const bool soscf_enabled =
                     (calculator._scf._scf_soscf_diis_tol > 0.0 ||
                      calculator._scf._scf_soscf_start > 0) &&
-                    !sao_active_uks && !prepared.pcm && !soscf_uks_hybrid_blocked;
+                    !sao_active_uks && !prepared.pcm;
                 if (soscf_enabled && soscf_window_start == 0)
                 {
                     const bool criterion_fires =
@@ -2472,11 +2546,57 @@ namespace DFT::Driver
                             DFT::Driver::pack_hessian_vector_product_cphf_order(
                                 dV_xc->second, Cb_occ, Cb_virt);
 
+                        // K response (SOSCF_DFT.md invariant 3 (UKS hybrids)): the UKS KS
+                        // Fock carries -1*(c_fr*K_C + c_sr*K_SR) per spin from
+                        // _compute_2e_k_uhf_direct (K_alpha from Pa, K_beta from
+                        // Pb in ONE sweep per kernel) -- see
+                        // assemble_current_ks_potential's UHF branch. K linear in
+                        // the density like J, and UKS h_op is uniform 1x (no
+                        // RKS-style 2x on the kernel -- occupancy-1 makes diag and
+                        // kernel scale identically, docs/SOSCF_DFT.md invariant 2).
+                        Eigen::VectorXd Ka_packed = Eigen::VectorXd::Zero(nova);
+                        Eigen::VectorXd Kb_packed = Eigen::VectorXd::Zero(novb);
+                        {
+                            const double c_fr = xc_grid->full_range_exchange_coefficient;
+                            const double c_sr = xc_grid->short_range_exchange_coefficient;
+                            if (c_fr != 0.0 || c_sr != 0.0)
+                            {
+                                Eigen::MatrixXd dKa = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                                Eigen::MatrixXd dKb = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                                if (c_fr != 0.0)
+                                {
+                                    const auto [Ka, Kb] = _compute_2e_k_uhf_direct(
+                                        prepared.shell_pairs, dPa, dPb, calculator._shells.nbasis(),
+                                        calculator._integral._engine, HartreeFock::ERIKernel::Coulomb,
+                                        0.0, calculator._integral._tol_eri,
+                                        calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
+                                                                          : nullptr);
+                                    dKa.noalias() += c_fr * Ka;
+                                    dKb.noalias() += c_fr * Kb;
+                                }
+                                if (c_sr != 0.0)
+                                {
+                                    const auto [Ka, Kb] = _compute_2e_k_uhf_direct(
+                                        prepared.shell_pairs, dPa, dPb, calculator._shells.nbasis(),
+                                        calculator._integral._engine, HartreeFock::ERIKernel::ShortRange,
+                                        xc_grid->range_separation_omega, calculator._integral._tol_eri,
+                                        calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
+                                                                          : nullptr);
+                                    dKa.noalias() += c_sr * Ka;
+                                    dKb.noalias() += c_sr * Kb;
+                                }
+                                Ka_packed = DFT::Driver::pack_hessian_vector_product_cphf_order(
+                                    -1.0 * dKa, Ca_occ, Ca_virt);
+                                Kb_packed = DFT::Driver::pack_hessian_vector_product_cphf_order(
+                                    -1.0 * dKb, Cb_occ, Cb_virt);
+                            }
+                        }
+
                         Eigen::VectorXd out(nova + novb);
                         out.head(nova) =
-                            diag_a.cwiseProduct(x.head(nova)) + Ja_packed + xca_packed;
+                            diag_a.cwiseProduct(x.head(nova)) + Ja_packed + xca_packed + Ka_packed;
                         out.tail(novb) =
-                            diag_b.cwiseProduct(x.tail(novb)) + Jb_packed + xcb_packed;
+                            diag_b.cwiseProduct(x.tail(novb)) + Jb_packed + xcb_packed + Kb_packed;
                         return out;
                     };
                     const auto g_op = [&g]() -> Eigen::VectorXd

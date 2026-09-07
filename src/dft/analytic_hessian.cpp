@@ -1,7 +1,28 @@
 #include "analytic_hessian.h"
 
+#include <algorithm>
+
 namespace DFT::Driver
 {
+    namespace
+    {
+        // A combined exchange-correlation libxc entry (B3LYP, PBE0, HSE06,
+        // ...) already carries its correlation in the exchange slot, so
+        // summing a second fxc[correlation_functional] double-counts a
+        // correlation fxc -- the same reason the KS-matrix build guards on
+        // is_combined_exchange_correlation() ("configured correlation is
+        // ignored"). Zero the correlation second-derivative (and, for GGA,
+        // vsigma) arrays under that predicate. See
+        // docs/DFT_ANALYTIC_FXC_HESSIAN.md.
+        template <class... Vecs>
+        void drop_correlation_if_combined(const XC::Functional &exchange_functional, Vecs &...vecs)
+        {
+            if (!exchange_functional.is_combined_exchange_correlation())
+                return;
+            (std::fill(vecs.begin(), vecs.end(), 0.0), ...);
+        }
+    } // namespace
+
     std::expected<Eigen::MatrixXd, std::string> compute_analytic_xc_hessian_vector_product(
         const MolecularGrid &molecular_grid,
         const AOGridEvaluation &ao_grid,
@@ -42,6 +63,7 @@ namespace DFT::Driver
             auto fxc_c = correlation_functional.evaluate_lda_fxc(rho_vec, static_cast<int>(npoints), v2rho2_c);
             if (!fxc_c)
                 return std::unexpected("compute_analytic_xc_hessian_vector_product: " + fxc_c.error());
+            drop_correlation_if_combined(exchange_functional, v2rho2_c);
 
             for (Eigen::Index p = 0; p < npoints; ++p)
             {
@@ -91,6 +113,9 @@ namespace DFT::Driver
             rho_vec, sigma_vec, static_cast<int>(npoints), v2rho2_c, v2rhosigma_c, v2sigma2_c);
         if (!fxc_c)
             return std::unexpected("compute_analytic_xc_hessian_vector_product: " + fxc_c.error());
+        // vsigma_c feeds the GGA T3 term (2*vsigma*delta_grad_rho), so it must
+        // be dropped alongside the fxc_c arrays for a combined XC functional.
+        drop_correlation_if_combined(exchange_functional, v2rho2_c, v2rhosigma_c, v2sigma2_c, vsigma_c);
 
         for (Eigen::Index p = 0; p < npoints; ++p)
         {
@@ -200,6 +225,7 @@ namespace DFT::Driver
             if (!fxc_c)
                 return std::unexpected(
                     "compute_analytic_xc_hessian_vector_product_polarized: " + fxc_c.error());
+            drop_correlation_if_combined(exchange_functional, v2rho2_c);
 
             Eigen::MatrixXd delta_v_xc_a = Eigen::MatrixXd::Zero(nbasis, nbasis);
             Eigen::MatrixXd delta_v_xc_b = Eigen::MatrixXd::Zero(nbasis, nbasis);
@@ -278,6 +304,9 @@ namespace DFT::Driver
         if (!fxc_c)
             return std::unexpected(
                 "compute_analytic_xc_hessian_vector_product_polarized: " + fxc_c.error());
+        // vsigma_c feeds the polarized T2..T5 gradient-coupling terms, so it is
+        // dropped alongside the fxc_c arrays for a combined XC functional.
+        drop_correlation_if_combined(exchange_functional, v2rho2_c, v2rhosigma_c, v2sigma2_c, vsigma_c);
 
         Eigen::MatrixXd delta_v_xc_a = Eigen::MatrixXd::Zero(nbasis, nbasis);
         Eigen::MatrixXd delta_v_xc_b = Eigen::MatrixXd::Zero(nbasis, nbasis);

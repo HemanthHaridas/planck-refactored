@@ -65,6 +65,25 @@ namespace
         return std::move(*functional);
     }
 
+    DFT::XC::Functional require_functional_unpolarized(const std::string &name)
+    {
+        auto id = DFT::XC::functional_id(name);
+        if (!id)
+        {
+            std::cerr << "functional_id(" << name << ") failed: " << id.error() << '\n';
+            g_ok = false;
+            return DFT::XC::Functional::create(1, DFT::XC::Spin::Unpolarized).value();
+        }
+        auto functional = DFT::XC::Functional::create(*id, DFT::XC::Spin::Unpolarized);
+        if (!functional)
+        {
+            std::cerr << "Functional::create(" << name << ") failed: " << functional.error() << '\n';
+            g_ok = false;
+            return DFT::XC::Functional::create(1, DFT::XC::Spin::Unpolarized).value();
+        }
+        return std::move(*functional);
+    }
+
     // Single-point synthetic "grid", 3 AOs -- same rank-3 fixture-design
     // reasoning D2.0's own test used (P/dP freely chosen 3x3 symmetric
     // matrices, no attempt to hit pre-chosen density targets).
@@ -299,6 +318,77 @@ namespace
         require_near((delta_v_xc_b)(0, 1), ref_b, 1e-8,
                      name + ": delta_V_xc^b(0,1) vs F3.4 reference formula (check_beta)");
     }
+
+    // DFT_ANALYTIC_FXC_HESSIAN.md invariant 3a: for a combined exchange-
+    // correlation functional the exchange slot already carries the whole XC,
+    // so compute_analytic_xc_hessian_vector_product{,_polarized} must treat
+    // the correlation_functional argument as inert -- otherwise fxc[c] is
+    // double-counted. Assert both entries give the SAME result whether the
+    // second arg is an unrelated correlation functional or the combined
+    // functional itself. Mutation check: reverting the
+    // is_combined_exchange_correlation() guard makes these differ.
+    void check_combined_no_double_count(const std::string &combined_name)
+    {
+        auto combined = require_functional_unpolarized(combined_name);
+        if (!combined.is_combined_exchange_correlation())
+        {
+            std::cerr << combined_name << ": expected a combined XC functional\n";
+            g_ok = false;
+            return;
+        }
+        auto unrelated_c = require_functional_unpolarized("gga_c_pbe");
+
+        SyntheticPoint sp{
+            /*weight=*/1.0,
+            Eigen::Vector3d(1.3, 0.7, -0.4),
+            Eigen::Vector3d(0.4, -0.3, 0.2),
+            Eigen::Vector3d(-0.2, 0.5, 0.1),
+            Eigen::Vector3d(0.1, -0.1, 0.3)};
+        const DFT::MolecularGrid grid = make_grid(sp);
+        const DFT::AOGridEvaluation ao = make_ao_grid(sp);
+
+        Eigen::Matrix3d P, dP;
+        P << 0.9, 0.15, -0.05, 0.15, 0.6, 0.1, -0.05, 0.1, 0.4;
+        dP << 0.02, 0.01, -0.015, 0.01, -0.03, 0.005, -0.015, 0.005, 0.02;
+
+        // RKS entry.
+        auto r_unrelated = DFT::Driver::compute_analytic_xc_hessian_vector_product(
+            grid, ao, P, dP, combined, unrelated_c);
+        auto r_self = DFT::Driver::compute_analytic_xc_hessian_vector_product(
+            grid, ao, P, dP, combined, combined);
+        if (!r_unrelated || !r_self)
+        {
+            std::cerr << combined_name << ": RKS combined call failed: "
+                      << (r_unrelated ? r_self.error() : r_unrelated.error()) << '\n';
+            g_ok = false;
+            return;
+        }
+        require_near((*r_unrelated - *r_self).cwiseAbs().maxCoeff(), 0.0, 1e-12,
+                     combined_name + ": RKS correlation_functional arg must be inert for combined XC");
+
+        // Polarized entry.
+        Eigen::Matrix3d Pa, Pb, dPa, dPb;
+        Pa << 0.9, 0.15, -0.05, 0.15, 0.6, 0.1, -0.05, 0.1, 0.4;
+        Pb << 0.5, -0.1, 0.08, -0.1, 0.7, -0.05, 0.08, -0.05, 0.3;
+        dPa << 0.02, 0.01, -0.015, 0.01, -0.03, 0.005, -0.015, 0.005, 0.02;
+        dPb << -0.01, 0.02, 0.005, 0.02, 0.015, -0.01, 0.005, -0.01, -0.02;
+        auto combined_pol = require_functional(combined_name);
+        auto unrelated_c_pol = require_functional("gga_c_pbe");
+        auto p_unrelated = DFT::Driver::compute_analytic_xc_hessian_vector_product_polarized(
+            grid, ao, Pa, Pb, dPa, dPb, combined_pol, unrelated_c_pol);
+        auto p_self = DFT::Driver::compute_analytic_xc_hessian_vector_product_polarized(
+            grid, ao, Pa, Pb, dPa, dPb, combined_pol, combined_pol);
+        if (!p_unrelated || !p_self)
+        {
+            std::cerr << combined_name << ": polarized combined call failed\n";
+            g_ok = false;
+            return;
+        }
+        require_near((p_unrelated->first - p_self->first).cwiseAbs().maxCoeff(), 0.0, 1e-12,
+                     combined_name + ": polarized alpha correlation arg must be inert for combined XC");
+        require_near((p_unrelated->second - p_self->second).cwiseAbs().maxCoeff(), 0.0, 1e-12,
+                     combined_name + ": polarized beta correlation arg must be inert for combined XC");
+    }
 } // namespace
 
 int main()
@@ -339,6 +429,11 @@ int main()
     check_point_lda("lda_c_pw", Pa2, Pb2, dPa2, dPb2);
     check_point_lda("lda_c_pw", Pa, Pb, dPa, Eigen::Matrix3d::Zero());
     check_point_lda("lda_c_pw", Pa, Pb, Eigen::Matrix3d::Zero(), dPb);
+
+    // DFT_ANALYTIC_FXC_HESSIAN.md invariant 3a: combined XC must not double-count
+    // correlation. B3LYP is GGA-combined; PBE0 (pbeh) too.
+    check_combined_no_double_count("hyb_gga_xc_b3lyp");
+    check_combined_no_double_count("hyb_gga_xc_pbeh");
 
     return g_ok ? 0 : 1;
 }
