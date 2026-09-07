@@ -1,8 +1,18 @@
 # DFT SOSCF for hybrid and range-separated functionals — scope
 
-In-flight scope. Delete or fold into `docs/SOSCF_DFT.md` when it lands
-(per `docs/docs_answer_one_question.md`: a scope doc expires the instant
-the work does).
+**Status: H0–H2 landed (RKS global hybrids: B3LYP, PBE0).** H3–H6
+(range-separated RKS, then UKS) ahead. In-flight scope. Fold into
+`docs/SOSCF_DFT.md` when H6 lands (per `docs/docs_answer_one_question.md`).
+
+Two prerequisites surfaced and landed on the way, each with its own
+scope doc:
+- `docs/SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE.md` — the RKS `h_op` kernel term
+  needs `2×` the diagonal's weight (`4×` curvature / `8×` kernel in the
+  raw κ-parametrization); the old single factor half-weighted the kernel.
+- `docs/DFT_ANALYTIC_FXC_COMBINED_XC_SCOPE.md` — the analytic XC Hessian
+  double-counted correlation for a combined exchange-correlation
+  functional (every named hybrid). Guarded now.
+Both are the reason H1's B3LYP/PBE0 probe now lands on ratio `1.000000`.
 
 **Question this work answers:** what does it take to lift the
 pure-functional-only restriction on DFT SOSCF, so B3LYP / PBE0 / HSE06 /
@@ -123,7 +133,7 @@ non-hybrid functional has both coefficients zero.
 Each step is independently verifiable. Order matters: the RKS point-level
 check (H2) gates wiring the RKS branch (H3); same for UKS.
 
-### H0 — global-hybrid RKS: wire the `Coulomb`-kernel K term only
+### H0 — global-hybrid RKS: wire the `Coulomb`-kernel K term only  **[DONE]**
 
 Smallest possible first cut. In the RKS `h_op`, add only the `c_fr != 0`
 branch (global hybrids). Leave `soscf_dft_hybrid_blocked` in place — the
@@ -133,7 +143,7 @@ term is present but unreachable, so the tree is byte-identical.
 (the new code does not execute). `grep` confirms the `_compute_2e_k_direct`
 call compiles against the in-scope names.
 
-### H1 — global-hybrid RKS: env-gated point check of the composed `h_op`
+### H1 — global-hybrid RKS: env-gated point check of the composed `h_op`  **[DONE — B3LYP/PBE0 ratio 1.000000 once the two prereqs landed]**
 
 Add a `PLANCK_SOSCF_HYBRID_CHECK`-style probe (same discipline as
 `docs/SOSCF_DFT.md`'s "What was measured but is not kept" — env-gated,
@@ -148,16 +158,26 @@ wrong — fix before H2. This is the load-bearing correctness gate; it is
 the same probe `docs/SOSCF_DFT.md` invariant 2 mandates for the base
 composition, extended to the hybrid term.
 
-### H2 — global-hybrid RKS: flip the gate, add the permanent regression
+### H2 — global-hybrid RKS: flip the gate, add the permanent regression  **[DONE — gate `water_rks_b3lyp_soscf_631g`]**
 
-Remove `soscf_dft_hybrid_blocked` from `soscf_enabled` and the warning
-branch. Add one regression case: RKS B3LYP (or PBE0) small system,
-`scf_soscf_start` set, asserting SOSCF energy agrees with
-fully-converged plain DIIS to 10 digits, alongside `h2_dft_b3lyp_sto3g`.
+**As landed:** the gate is *narrowed*, not removed —
+`soscf_dft_hybrid_blocked = x_functional.is_hybrid() && x_functional.is_range_separated()`
+(RKS, `src/dft/driver.cpp` ~1873). Global hybrids pass; range-separated
+hybrids still hit it (H3 opens them) and the warning now names
+"range-separated hybrid". The `soscf_dft_hybrid_blocked` name is kept
+because it still guards something.
 
-**Verify:** the new case passes. `h2_dft_b3lyp_sto3g` (SOSCF off)
-byte-identical to pre-change. Full smoke + DFT ctest green. Warning no
-longer emitted for hybrid + `scf_soscf_start`.
+Regression `water_rks_b3lyp_soscf_631g` (extended): B3LYP RKS SOSCF,
+`scf_soscf_start 5` / `cycles 3`, asserts `dft_total_energy` matches the
+SOSCF-off DIIS value `-76.3781217832` to 1e-9, `not_contains` the
+hybrid-blocked warning, and `dft_soscf_last_gradient <= 1e-3` (superlinear
+window; ~1.7e-4 post-fix, ~8.7e-3 and linear if the RKS kernel weight or
+the combined-XC fxc guard regresses — the case gates both). Non-vacuity
+verified against the kernel-weight mutation.
+
+**Verified:** the new case passes. `h2_dft_b3lyp_sto3g` (SOSCF off)
+unchanged. Smoke 35/35, DFT ctest 12/12. HSE06 still warns
+(range-separated) and runs plain DIIS.
 
 ### H3 — range-separated RKS: add the `ShortRange`-kernel branch
 

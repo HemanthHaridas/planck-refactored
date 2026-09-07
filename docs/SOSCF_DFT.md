@@ -33,8 +33,15 @@ h_op(x) = diag_term ⊙ x  +  J_packed  +  xc_packed
 
 Everything else is reused: `solve_augmented_hessian`,
 `apply_orbital_rotation`, per-spin semicanonicalization, the `scf_soscf_*`
-window logic. Off by default. **Pure (non-hybrid) functionals only** —
-hybrid / PCM / SAO emit a one-time warning and fall back to plain DIIS.
+window logic. Off by default.
+
+`h_op` gains a fourth term for a **global hybrid** (B3LYP, PBE0):
+`K_packed`, the exact-exchange response, built with `_compute_2e_k_direct`
+on the trial `δP` and scaled `-0.5·c_fr` like the KS build — `K` is linear
+in the density exactly as `J` is (`docs/SOSCF_DFT_HYBRID_SCOPE.md`, H2).
+**RKS global hybrids are supported; RKS range-separated hybrids (HSE06,
+CAM-B3LYP), UKS hybrids, PCM, and SAO** emit a one-time warning and fall
+back to plain DIIS.
 
 ## Where the logic lives
 
@@ -134,12 +141,13 @@ Design rule:
 
 ### 5. A scope-cut gate needs a message, or the user's request is silently dropped
 
-`soscf_enabled` excludes hybrids (need the unbuilt `K`-response), PCM, and
-SAO. A user setting `scf_soscf_start` by habit on a B3LYP run got no
+`soscf_enabled` excludes range-separated hybrids (the short-range `K`
+response, H3), UKS hybrids (H4/H5), PCM, and SAO — RKS global hybrids are
+in (H2). A user setting `scf_soscf_start` by habit on such a run got no
 warning and silently ran plain DIIS. A one-time `[WRN] DFT SOSCF :` line is
 emitted before the loop when SOSCF is requested but disabled, naming the
 reason and confirming the calculation is still valid, just unaccelerated.
-Not a hard error — that would newly fail every ordinary hybrid DFT run with
+Not a hard error — that would newly fail every ordinary such DFT run with
 `scf_soscf_start` set.
 
 Design rule:
@@ -262,10 +270,22 @@ correctly-scaling in both, and is the only path that scales to a large
 active space where the FD oracle's one-time build itself becomes
 prohibitive.
 
+### Done since
+
+- **RKS global hybrids** (B3LYP, PBE0) — `h_op` gained the exact-exchange
+  `K` response (`docs/SOSCF_DFT_HYBRID_SCOPE.md` H2). This needed two
+  prerequisite fixes: the RKS `h_op` kernel-vs-diagonal scale
+  (`docs/SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE.md`) and the combined-XC `fxc`
+  double-count (`docs/DFT_ANALYTIC_FXC_COMBINED_XC_SCOPE.md`). Gate:
+  `water_rks_b3lyp_soscf_631g`.
+
 ### Not done
 
-- **Hybrid / range-separated functionals** — need the `K` response on top
-  of `fxc`. Rejected with a warning.
+- **RKS range-separated hybrids** (HSE06, CAM-B3LYP) — need the
+  short-range `K` branch (`ShortRange` kernel + `omega`),
+  `docs/SOSCF_DFT_HYBRID_SCOPE.md` H3. Rejected with a warning.
+- **UKS hybrids** (global and range-separated) — the polarized `h_op`'s
+  `K` term, H4/H5. Rejected with a warning.
 - **PCM, SAO/symmetry** — same.
 - **`scf_soscf_diis_tol` DFT-specific default** — not required. There is no
   hardcoded default to re-tune (`_scf_soscf_diis_tol = 0.0`, SOSCF is

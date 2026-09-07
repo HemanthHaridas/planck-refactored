@@ -1865,12 +1865,16 @@ namespace DFT::Driver
                 Eigen::MatrixXd C_soscf_prev;
                 Eigen::VectorXd eps_soscf_prev;
                 unsigned int soscf_window_start = 0;
-                // D2.2's own scope cut: pure (non-hybrid) functionals only
-                // for this first landing -- a hybrid's exact-exchange
-                // response needs the same K-response machinery
-                // build_rhf_cphf_matrix already has, unbuilt here (D2.2.4
-                // enforces this as a real rejection, not silently ignored).
-                const bool soscf_dft_hybrid_blocked = x_functional.is_hybrid();
+                // SOSCF_DFT_HYBRID_SCOPE H2: global hybrids (B3LYP, PBE0)
+                // are now supported -- the exact-exchange (K) response is one
+                // more linear-in-density term in h_op, built with
+                // _compute_2e_k_direct and scaled -0.5*c_fr like the KS build
+                // (H0/H1, verified to ratio 1.000000 by the scale probe once
+                // the combined-XC fxc guard is in). Range-separated hybrids
+                // still need the ShortRange-kernel branch (H3), so they stay
+                // blocked. This gate no longer covers a global hybrid.
+                const bool soscf_dft_hybrid_blocked =
+                    x_functional.is_hybrid() && x_functional.is_range_separated();
                 // D2.2.4: a user requesting SOSCF (either trigger keyword)
                 // must be told when the request cannot be honored, rather
                 // than silently running plain DIIS the whole time -- the
@@ -1881,8 +1885,8 @@ namespace DFT::Driver
                 {
                     std::string reason;
                     if (soscf_dft_hybrid_blocked)
-                        reason = "hybrid functional (exact-exchange response is not yet implemented "
-                                 "for DFT SOSCF)";
+                        reason = "range-separated hybrid (the short-range exact-exchange response "
+                                 "is not yet wired through DFT SOSCF)";
                     else if (prepared.pcm)
                         reason = "PCM solvation (not yet wired through DFT SOSCF)";
                     else if (calculator._use_sao_blocking)
@@ -2071,14 +2075,15 @@ namespace DFT::Driver
                             const Eigen::VectorXd xc_packed = DFT::Driver::pack_hessian_vector_product_cphf_order(
                                 *dV_xc, C_occ_prev, C_virt_prev);
 
-                            // K response (SOSCF_DFT_HYBRID_SCOPE H0): a hybrid's
-                            // KS Fock carries -0.5*(c_fr*K_Coulomb + c_sr*K_SR),
+                            // K response (SOSCF_DFT_HYBRID_SCOPE): a hybrid's KS
+                            // Fock carries -0.5*(c_fr*K_Coulomb + c_sr*K_SR),
                             // K linear in the density exactly like J, so the
                             // Hessian gains delta of it on the trial dP with the
                             // same coeff/sign as the KS build
                             // (src/dft/driver.cpp assemble_current_ks_potential).
-                            // H0 wires only the global-hybrid c_fr branch; still
-                            // unreachable (soscf_dft_hybrid_blocked gate stays).
+                            // H2 wires the global-hybrid c_fr branch and lifts
+                            // the gate for it; the c_sr (ShortRange) branch for
+                            // range-separated hybrids is H3, still gated off.
                             Eigen::VectorXd K_packed = Eigen::VectorXd::Zero(x.size());
                             {
                                 const double c_fr = xc_grid->full_range_exchange_coefficient;

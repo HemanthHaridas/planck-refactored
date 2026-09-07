@@ -1,10 +1,12 @@
 # Analytic XC Hessian double-counts correlation for combined-XC functionals — scope
 
-**Status (C1–C4, C6 landed; C5 blocked on `SOSCF_DFT_HYBRID_SCOPE` H2).**
-The fix and its unit gate are in; the finding is folded into
-`docs/DFT_ANALYTIC_FXC_HESSIAN.md` invariant 3a. This file stays only
-until C5 (the end-to-end hybrid SOSCF regression) can be added, which
-needs H2 to unblock hybrid DFT SOSCF first. Delete then.
+**Status: C1–C6 all landed.** The fix and its gates are in; the finding
+is folded into `docs/DFT_ANALYTIC_FXC_HESSIAN.md` invariant 3a. C5's
+end-to-end gate is `water_rks_b3lyp_soscf_631g` (added by
+`SOSCF_DFT_HYBRID_SCOPE` H2, which unblocked RKS global-hybrid DFT
+SOSCF) — it asserts B3LYP RKS SOSCF converges superlinearly, which fails
+if either this guard or the RKS Hessian-scale fix regresses. This file
+can be deleted; the substance lives in invariant 3a.
 
 In-flight scope. Found while verifying the RKS Hessian-scale fix
 (`docs/SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE.md`) against B3LYP / PBE0.
@@ -153,7 +155,7 @@ Mutation-verify: removing the guard makes the two results differ.
 **Verify:** the new ctest passes; reverting C2 fails it with a specific
 numeric gap.
 
-### C5 — end-to-end regression once H2 unblocks hybrid DFT SOSCF  **[BLOCKED on SOSCF_DFT_HYBRID_SCOPE H2]**
+### C5 — end-to-end regression once H2 unblocks hybrid DFT SOSCF  **[DONE — gate `water_rks_b3lyp_soscf_631g`, added by SOSCF_DFT_HYBRID_SCOPE H2]**
 
 This bug is currently *latent for production* — DFT SOSCF rejects hybrids
 (`soscf_dft_hybrid_blocked`), so no shipped SOSCF run reaches the combined-XC
