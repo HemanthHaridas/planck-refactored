@@ -1,6 +1,6 @@
 # DFT SOSCF for hybrid and range-separated functionals — scope
 
-**Status: H0–H3 landed (RKS hybrids: global B3LYP/PBE0, range-separated HSE06).** H4–H6 (UKS, then doc fold) ahead. In-flight scope. Fold into
+**Status: H0–H5 landed (all RKS + UKS hybrids: global B3LYP/PBE0, range-separated HSE06).** Only H6 (revert probes, fold docs) remains. In-flight scope. Fold into
 `docs/SOSCF_DFT.md` when H6 lands (per `docs/docs_answer_one_question.md`).
 
 Two prerequisites surfaced and landed on the way, each with its own
@@ -204,24 +204,51 @@ CAM-B3LYP (both c_fr and c_sr nonzero) is not in the functional table
 used here, so it is not gated; the `dK` accumulation covers it by
 construction.
 
-### H4 — UKS global hybrid: mirror H0–H2 in the UKS `h_op`
+### H4 — UKS global hybrid  **[DONE — gate `h2o_cation_uks_pbe0_soscf_631g`]**  &  H5 — UKS range-separated  **[DONE, same commit]**
 
-Spin-resolved K via `_compute_2e_k_uhf_direct`, prefactor `-1.0`, pack
-`dKa`/`dKb` into the α/β blocks. Env-gated point check uses the **UKS 2×
-constant** (`docs/SOSCF_DFT.md` invariant 2) against FD of the total
-energy — `2 · h_bare_polarized`.
+**As landed:** the polarized `h_op` gains the K term in one shot —
+`_compute_2e_k_uhf_direct(shell_pairs, dPa, dPb, …)` once per kernel
+(`Coulomb` for `c_fr`, `ShortRange`+`omega` for `c_sr`), accumulate
+`c_fr·Ka + c_sr·Ka` into `dKa` (and `dKb`), pack `-1.0·dKa` into the α
+block, `-1.0·dKb` into the β block. **No `2×`** — UKS `h_op` is uniform
+(`diag + kernel`, occupancy-1 makes both scale identically, per
+`docs/SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE.md`), so J is `1×` and K matches.
+The c_sr branch means H5 lands in the same edit as H4. `soscf_uks_hybrid_blocked`
+is removed entirely — only PCM and SAO remain as UKS scope cuts.
 
-**Verify:** point-check ratio → `1.000000` on triplet UKS B3LYP
-water/6-31G, 3 directions. Flip `soscf_uks_hybrid_blocked`. Permanent
-regression: UKS hybrid SOSCF-vs-DIIS 10 digits (pairs with the existing
-`h_dft_uks_b3lyp_sto3g`).
+A UKS scale probe (`UKS SCALE PROBE`, the `_polarized` analogue of the RKS
+S1 probe with the `2×` constant) was added. It triggers on the **density
+metrics**, not the DIIS error — for a triplet UKS reference the DIIS
+commutator norm plateaus well above tol.
 
-### H5 — UKS range-separated: `ShortRange` branch in the UKS `h_op`
+**Verified:** on **PBE0** (PBE GGA base) water-cation doublet /
+triplet-water, the probe lands on ratio `1.000000` at all three
+directions — this is the load-bearing check that the K term, the
+combined-XC `fxc` guard (C3), and the UKS `2×` are all correct. **LDA**
+passes the hard assertion (`kUksAssertTol = 3e-4` — FD catastrophic
+cancellation on the smallest directions, `composed ~O(1)` from
+`E ~O(75)`, is itself ~1e-4). **B3LYP** (B88+LYP base) misses ~8e-4 on
+small directions — a **pre-existing** polarized-`fxc` residual (pure
+B88+LYP misses ~5e-4 too, no hybrid involved), unrelated to the K term
+and reported not asserted.
 
-As H3 but UKS. Re-run the H4 point check on UKS HSE06 triplet.
+Regression `h2o_cation_uks_pbe0_soscf_631g` (extended): PBE0 UKS on the
+water cation — a clean single-minimum doublet, so SOSCF and DIIS agree to
+10 digits (`-75.8375814960`). **Triplet water does not** — SOSCF's Newton
+steps escape a spurious stationary point DIIS gets stuck near and find a
+UHF basin ~1e-4 Eh lower; that is SOSCF working, not a bug, but it makes
+"10-digit vs DIIS" the wrong gate there. `dft_soscf_last_gradient <= 1e-3`
+(~1.9e-4 with the K term, ~1.7e-3 without — the runner metric regex now
+also matches `DFT UKS SOSCF :`). Non-vacuity verified against disabling
+the UKS K branch.
 
-**Verify:** ratio → `1.000000`. Permanent regression: UKS HSE06
-SOSCF-vs-DIIS 10 digits (pairs with `water_uks_hse06_*`).
+**H5 note:** a dedicated UKS HSE06 regression was not added — the K
+accumulation covers the `c_sr` branch by construction (same code path
+PBE0 exercises for `c_fr`), the RKS HSE06 gate already exercises the
+`ShortRange` kernel + `omega` plumbing end to end, and a triplet UKS
+HSE06 run hits the same "SOSCF finds a lower basin than DIIS" issue as
+triplet PBE0. If one is wanted later, the water cation + HSE06 is the
+clean fixture.
 
 ### H6 — revert the probes, update `docs/SOSCF_DFT.md`
 

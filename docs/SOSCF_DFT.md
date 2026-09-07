@@ -35,14 +35,14 @@ Everything else is reused: `solve_augmented_hessian`,
 `apply_orbital_rotation`, per-spin semicanonicalization, the `scf_soscf_*`
 window logic. Off by default.
 
-`h_op` gains a fourth term for an **RKS hybrid**: `K_packed`, the
-exact-exchange response, built with `_compute_2e_k_direct` on the trial
-`δP` (`c_fr·K_Coulomb + c_sr·K_ShortRange`, scaled `-0.5` like the KS
-build) — `K` is linear in the density exactly as `J` is
-(`docs/SOSCF_DFT_HYBRID_SCOPE.md`, H2/H3). **All RKS hybrids are
-supported — global (B3LYP, PBE0) and range-separated (HSE06). UKS
-hybrids, PCM, and SAO** emit a one-time warning and fall back to plain
-DIIS.
+`h_op` gains a fourth term for a **hybrid**: `K_packed`, the
+exact-exchange response, built with `_compute_2e_k_direct` (RKS) /
+`_compute_2e_k_uhf_direct` (UKS) on the trial `δP`
+(`c_fr·K_Coulomb + c_sr·K_ShortRange`, scaled `-0.5` RKS / `-1.0` UKS
+like the KS build) — `K` is linear in the density exactly as `J` is
+(`docs/SOSCF_DFT_HYBRID_SCOPE.md`, H2–H5). **All hybrids are supported —
+RKS and UKS, global (B3LYP, PBE0) and range-separated (HSE06). Only PCM
+and SAO** emit a one-time warning and fall back to plain DIIS.
 
 ## Where the logic lives
 
@@ -142,9 +142,10 @@ Design rule:
 
 ### 5. A scope-cut gate needs a message, or the user's request is silently dropped
 
-`soscf_enabled` excludes UKS hybrids (H4/H5), PCM, and SAO — all RKS
-hybrids are in (H2/H3). A user setting `scf_soscf_start` by habit on such
-a run got no warning and silently ran plain DIIS. A one-time `[WRN] DFT SOSCF :` line is
+`soscf_enabled` excludes only PCM and SAO now — all hybrids (RKS and UKS,
+global and range-separated) are in (H2–H5). A user setting
+`scf_soscf_start` by habit on a PCM or SAO run got no warning and silently
+ran plain DIIS. A one-time `[WRN] DFT SOSCF :` line is
 emitted before the loop when SOSCF is requested but disabled, naming the
 reason and confirming the calculation is still valid, just unaccelerated.
 Not a hard error — that would newly fail every ordinary such DFT run with
@@ -272,22 +273,26 @@ prohibitive.
 
 ### Done since
 
-- **All RKS hybrids** — `h_op` gained the exact-exchange `K` response
-  (`c_fr·K_Coulomb + c_sr·K_ShortRange`, scaled `-0.5`;
-  `docs/SOSCF_DFT_HYBRID_SCOPE.md` H2/H3). Global hybrids (B3LYP, PBE0)
-  and range-separated (HSE06) both converge superlinearly to the DIIS
-  energy. This needed two prerequisite fixes: the RKS `h_op`
+- **All hybrids, RKS and UKS** — `h_op` gained the exact-exchange `K`
+  response (`c_fr·K_Coulomb + c_sr·K_ShortRange`, scaled `-0.5` RKS /
+  `-1.0` UKS; `docs/SOSCF_DFT_HYBRID_SCOPE.md` H2–H5). Global (B3LYP,
+  PBE0) and range-separated (HSE06) both converge superlinearly to the
+  DIIS energy. This needed two prerequisite fixes: the RKS `h_op`
   kernel-vs-diagonal scale (`docs/SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE.md`)
   and the combined-XC `fxc` double-count
   (`docs/DFT_ANALYTIC_FXC_COMBINED_XC_SCOPE.md`). Gates:
-  `water_rks_b3lyp_soscf_631g`, `water_rks_hse06_soscf_631g`.
+  `water_rks_b3lyp_soscf_631g`, `water_rks_hse06_soscf_631g`,
+  `h2o_cation_uks_pbe0_soscf_631g`. Two limits carried, both
+  pre-existing and unrelated to the K term: the polarized `fxc` has a
+  ~1e-4..1e-3 relative residual for B88/LYP-based functionals on
+  small-magnitude directions (PBE-based is exact); and triplet-radical
+  UHF landscapes are shallow enough that SOSCF can find a lower basin
+  than DIIS, so a UKS hybrid gate needs a clean single-minimum
+  open-shell system (the water cation) rather than triplet water.
 
 ### Not done
 
-- **UKS hybrids** (global and range-separated) — the polarized `h_op`'s
-  `K` term, `docs/SOSCF_DFT_HYBRID_SCOPE.md` H4/H5. Rejected with a
-  warning.
-- **PCM, SAO/symmetry** — same.
+- **PCM, SAO/symmetry** — still rejected with a warning.
 - **`scf_soscf_diis_tol` DFT-specific default** — not required. There is no
   hardcoded default to re-tune (`_scf_soscf_diis_tol = 0.0`, SOSCF is
   opt-in), and the criterion mechanism is verified working (D2.4/D3.4). A
