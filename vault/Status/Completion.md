@@ -58,14 +58,31 @@ historical design context, but they are no longer the source of truth for
     (`compute_analytic_xc_hessian_vector_product{,_polarized}`,
     `src/dft/analytic_hessian.cpp`, LDA + GGA), NOT the
     `O(n_occ·n_virt)`-grid-pass FD-kernel oracle. `h_op` composes it with
-    the orbital-energy-difference diagonal and a Coulomb response from the
-    trial density; cross-checked against PySCF's `gen_g_hop_rhf`. **Pure
-    (non-hybrid) functionals only** — hybrid / PCM / SAO emit a one-time
-    warning and fall back to plain DIIS. The UKS analytic path is a
-    measurable 3–5× per-Newton-step wall-clock win at every size tested
-    (D3.5); the RKS path is correct and correctly-scaling but not reliably
-    faster than the FD-kernel alternative at the two modest sizes measured
-    (D2.5).
+    the orbital-energy-difference diagonal, a Coulomb response, and — for
+    hybrids — an exact-exchange `K` response, all from the trial density.
+    **All hybrids are supported now — RKS and UKS, global (B3LYP, PBE0)
+    and range-separated (HSE06)**; only PCM and SAO fall back to plain
+    DIIS with a warning. Three related fixes landed alongside the hybrid
+    work: the RKS kernel term is scaled `2×` relative to the diagonal
+    (`4×`/`8×` in the raw κ-parametrization — the old single `4×`
+    half-weighted it and made RKS PBE/LDA converge *linearly*;
+    `SOSCF_DFT.md` invariant 2); the analytic XC Hessian was
+    double-counting a correlation `fxc` for combined exchange-correlation
+    functionals (`DFT_ANALYTIC_FXC_HESSIAN.md` invariant 3a); and a step
+    deadband lets pure-SOSCF terminate at tight `tol_density` instead of
+    hitting `max_cycles` on its limit cycle (invariant 7). Gates:
+    `water_rks_{lda,b3lyp,hse06,pbe_soscf_puredeadband}_soscf_631g`,
+    `h2o_cation_uks_pbe0_soscf_631g`. The UKS analytic path is a
+    measurable 3–5× per-Newton-step wall-clock win at every size tested;
+    the RKS path is correct and correctly-scaling but not reliably faster
+    than the FD-kernel alternative at the two modest sizes measured. Two
+    pre-existing limits carried, both unrelated to the K term: the
+    polarized GGA `fxc` for B88/LYP-based functionals shows ~1e-4..1e-3
+    FD scatter on small directions in a whole-molecule probe (the
+    point-level `δV_xc` is exact — `dft_gga_hessian_selfcheck` now covers
+    B88/LYP); and triplet-radical UHF landscapes are shallow enough that
+    SOSCF can find a lower basin than DIIS, so a UKS hybrid gate needs a
+    clean single-minimum open-shell system.
   - **ROHF SOSCF is not done** — needs new ROHF orbital-response/CPHF
     machinery (no such code in the tree), the same gap behind
     ROHF-MP2/stability/PCM. See Open Work.

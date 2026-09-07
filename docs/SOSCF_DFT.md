@@ -7,18 +7,19 @@ Canonical status now lives in:
 
 This file answers a narrower architecture question:
 
-**How does second-order SCF work for Kohn-Sham DFT, and why is its orbital
-Hessian composed from an analytic `fxc` contraction rather than the
-finite-difference XC kernel?**
+**How does second-order SCF work for Kohn-Sham DFT — how is the orbital
+Hessian composed (analytic `fxc` contraction, not the finite-difference XC
+kernel), how is each term scaled, and how do hybrids fit in?**
 
 ## Short answer
 
 DFT SOSCF is the RHF/UHF pattern (`docs/SOSCF.md`, `docs/SOSCF_UHF.md`) with
 one substitution: the KS orbital Hessian has no single dense matrix like
-`build_rhf_cphf_matrix`. Its `h_op` is composed inline:
+`build_rhf_cphf_matrix`. Its `h_op` is composed inline from four
+linear-in-density pieces:
 
 ```
-h_op(x) = diag_term ⊙ x  +  J_packed  +  xc_packed
+h_op(x) = diag_term ⊙ x  +  s · (J_packed + xc_packed + K_packed)
 ```
 
 - `diag_term` — the orbital-energy-difference diagonal `ε(n_occ+a) - ε(i)`,
@@ -30,19 +31,21 @@ h_op(x) = diag_term ⊙ x  +  J_packed  +  xc_packed
 - `xc_packed` — the analytic XC second-derivative contribution
   (`docs/DFT_ANALYTIC_FXC_HESSIAN.md`), then
   `pack_hessian_vector_product_cphf_order`.
+- `K_packed` — **hybrids only**, the exact-exchange response. `K` is linear
+  in the density exactly as `J` is, so this is just one more term of the
+  same shape (see invariant 3).
+- `s` — the kernel-vs-diagonal scale. **`s = 2` for RKS, `s = 1` for UKS**
+  (invariant 2). The old code used `s = 1` for RKS too, which
+  half-weighted the kernel and made the Newton *direction* slightly wrong;
+  fixing it is what turned RKS PBE/LDA from linear to superlinear.
 
 Everything else is reused: `solve_augmented_hessian`,
 `apply_orbital_rotation`, per-spin semicanonicalization, the `scf_soscf_*`
 window logic. Off by default.
 
-`h_op` gains a fourth term for a **hybrid**: `K_packed`, the
-exact-exchange response, built with `_compute_2e_k_direct` (RKS) /
-`_compute_2e_k_uhf_direct` (UKS) on the trial `δP`
-(`c_fr·K_Coulomb + c_sr·K_ShortRange`, scaled `-0.5` RKS / `-1.0` UKS
-like the KS build) — `K` is linear in the density exactly as `J` is
-(`docs/SOSCF_DFT_HYBRID_SCOPE.md`, H2–H5). **All hybrids are supported —
-RKS and UKS, global (B3LYP, PBE0) and range-separated (HSE06). Only PCM
-and SAO** emit a one-time warning and fall back to plain DIIS.
+**All hybrids are supported — RKS and UKS, global (B3LYP, PBE0) and
+range-separated (HSE06).** Only **PCM** and **SAO/symmetry** emit a
+one-time warning and fall back to plain DIIS.
 
 ## Where the logic lives
 
@@ -50,13 +53,15 @@ and SAO** emit a one-time warning and fall back to plain DIIS.
   `!unrestricted` loop, and the UKS SOSCF branch in the unrestricted loop;
   `C_soscf_prev`/`eps_soscf_prev` (RKS) and `Ca_soscf_prev`/`Cb_soscf_prev`/
   `epsa_soscf_prev`/`epsb_soscf_prev` (UKS) persisted every iteration;
-  `soscf_enabled` gate excluding `is_hybrid()` / `pcm` / SAO; the one-time
-  `[WRN] DFT SOSCF :` warning block
+  `soscf_enabled` gate excluding only `pcm` / SAO; the one-time
+  `[WRN] DFT SOSCF :` warning block; the step deadband (invariant 7)
 - `src/dft/analytic_hessian.{h,cpp}` — `orbital_energy_difference_diagonal`,
   and the `compute_analytic_xc_hessian_vector_product{,_polarized}`
-  functions (`docs/DFT_ANALYTIC_FXC_HESSIAN.md`)
+  functions (`docs/DFT_ANALYTIC_FXC_HESSIAN.md`, including invariant 3a
+  there — the combined-XC `fxc` guard)
 - `src/dft/response_packing.{h,cpp}` — `pack_hessian_vector_product_cphf_order`
-- `src/integrals/base.h` — `_compute_2e_j_direct`, reused for `δJ`
+- `src/integrals/base.h` — `_compute_2e_j_direct`, `_compute_2e_k_direct`,
+  `_compute_2e_k_uhf_direct`, reused for `δJ` / `δK`
 - `src/post_hf/casscf/aug-hessian.h` — `solve_augmented_hessian`, reused
 - `src/dft/driver.cpp` — `build_{closed_shell,unrestricted}_xc_kernel_blocks`,
   the FD-kernel oracle: verification only, not the production Hessian
@@ -78,40 +83,100 @@ Design rule:
 
 - DFT SOSCF wires `compute_analytic_xc_hessian_vector_product`. The FD
   oracle stays in-tree as an independent correctness check for the wiring
-  itself (the role a `PLANCK_SOSCF_FD_CHECK`-style probe played for RHF/UHF),
-  never as the runtime Hessian.
+  itself, never as the runtime Hessian.
 
-### 2. The scale convention is a matching pair, measured against PySCF — a different constant for RKS and UKS
+### 2. The kernel scales `s = 2` for RKS and `s = 1` for UKS — a curvature/kernel split, not a single constant
 
-Cross-checked against PySCF's `newton_ah.gen_g_hop_rhf` at multiple `(a,i)`
-directions on identical water/STO-3G/PBE input, before writing Planck code.
+The exact Newton step is `−H_true⁻¹ g_true`. In the κ-parametrization
+`E(κ)` uses (rotation `κ_{ai}` in the α/β blocks), for the **closed-shell
+RKS** density (occupancy 2, so `dP/dκ = [R, P₀] = 2·dP` where `dP` is the
+`C_v·e·C_oᵀ + h.c.` convention `h_op` and
+`compute_analytic_xc_hessian_vector_product` build):
 
-**RKS:** `g_true = 2·g_bare` (`g_bare = F_mo(a,i)`),
-`H_true = 4·H_bare` (`H_bare = diag_term + J_packed + xc_packed`). A
-matching pair like RHF's 4-and-4, so the unscaled ratio `g_bare/H_bare`
-already equals `g_true/H_true`. Verified in Planck's own code: `4·H_bare`
-matches a central FD of the true total energy to ratio `1.000000` at three
-directions, `h = {1e-2, 1e-3, 1e-4}`.
+- **curvature term** `Tr(d²P/dκ²·F₀)` with `F₀` diagonal → `4·(ε_a − ε_i)`
+  per unit direction. `h_op` supplies `diag_term ⊙ x`, so this wants `4×`.
+- **kernel term** `Tr(dP/dκ · δV(dP/dκ))` — bilinear in `dP/dκ = 2·dP`, so
+  `= 4·Tr(dP·δV(dP))`, and `pack(δV(dP))_{ai} = ⟨a|δV(dP)|i⟩` while
+  `Tr(dP·δV(dP)) = 2·⟨a|δV(dP)|i⟩`. So the true kernel is
+  `8·[J_packed + xc_packed + K_packed]_{ai}` — **`8×`, not `4×`**.
+- `g_true = ∂E/∂κ_{ai} = Tr(dP/dκ·F₀) = 4·F_mo(a,i)`.
 
-**UKS:** `d²E_total/dκ² = 2·H_bare_polarized` (unscaled per-spin
-`dP = C_a·C_iᵀ + C_i·C_aᵀ`, no closed-shell 2× factor), `g_true = 2·g_bare`.
-A **different constant from RKS's 4×**, measured not assumed to carry over.
-Same conclusion: unscaled `g = F_mo` against unscaled `h_op`.
+Divide `g_true` and `H_true` by 4: pair `g = F_mo` (unscaled) with
+`h_op(x) = diag ⊙ x + 2·(J + V_xc + K)`. That is `s = 2`.
+
+**The old code used a bare `(J + V_xc)` — `s = 1`.** Magnitude was fine
+(the diagonal dominates), but the kernel correction to the Newton
+*direction* was half-weighted, which is why RKS water/6-31G/PBE converged
+*linearly* under SOSCF where it should be superlinear (invariant 6 used to
+record this as an unexplained finding; it is the scale bug). Verified: on
+Slater/VWN5 (LDA — exact `δV_xc`) the composed `4·diag + 8·kernel` lands
+on a central FD of the true total energy to ratio `1.000000` at three
+directions as `h → 1e-4`, where the single `4×` misses by up to 1.8%.
+
+**UKS is uniform `s = 1`.** The occupancy-1 per-spin density gives
+`dP^σ/dκ = 1·dP^σ`, so both the curvature term (`2·(ε_a − ε_i)`) and the
+kernel term (`2·Tr(dP^σ·δV(dP^σ))`) scale by the **same** factor 2 —
+`H_true = 2·H_bare` with `H_bare = diag + kernel` uniform, `g_true = 2·g_bare`.
+No RKS-style split.
 
 Design rule:
 
 - Verify the composed `h_op` against a finite difference of the **total**
   energy `E(κ)`, never `compute_analytic_xc_hessian_vector_product` alone
   against `E_xc(κ)` — the latter is missing the density-curvature term
-  (`docs/DFT_ANALYTIC_FXC_HESSIAN.md`), which was D2.1's original mistake
-  (the one-term identity fails on water/GGA with the wrong sign).
+  (`docs/DFT_ANALYTIC_FXC_HESSIAN.md`), which was D2.1's original mistake.
+- RKS and UKS have different scale conventions — do NOT copy the RKS `2×`
+  kernel factor into the UKS branch, and do not copy the UKS uniform
+  scaling into RKS.
+- LDA is the load-bearing check: `δV_xc` is exact there, so a ratio ≠ 1
+  isolates a scale error. GGA has a small FD-cancellation floor on
+  small-magnitude directions (invariant 8).
 
-### 3. UKS packing matches build_uhf_cphf_matrix — not a third convention
+### 3. A hybrid's K response is one more linear-in-density term, matching the KS build's decomposition
+
+The KS potential build (`assemble_current_ks_potential`) adds
+`-0.5 · (c_fr·K_Coulomb[P] + c_sr·K_ShortRange[P, ω])` to the RKS Fock and
+`-1.0 · (c_fr·K_C[Pσ] + c_sr·K_SR[Pσ, ω])` per spin to the UKS Fock. `K` is
+linear in the density, so `h_op` gains the same term on the trial `δP`,
+same coefficients, same sign, same prefactor:
+
+- **RKS:** accumulate `c_fr·K_C[δP] + c_sr·K_SR[δP]` (both via
+  `_compute_2e_k_direct`, `Coulomb` and `ShortRange` kernels) into one
+  `dK`, pack `-0.5·dK`.
+- **UKS:** `_compute_2e_k_uhf_direct(shell_pairs, δPa, δPb, …)` once per
+  kernel gives `(δKa, δKb)`; accumulate `c_fr·δKa + c_sr·δKa` into `dKa`
+  (and `dKb`), pack `-1.0·dKa` into the α block, `-1.0·dKb` into the β
+  block.
+
+Global hybrids (B3LYP, PBE0): `c_sr == 0`. Pure short-range screened
+hybrids (HSE06): `c_fr == 0`. CAM-B3LYP: both nonzero — covered by the
+accumulation by construction.
+
+**No new integral code, no new CPHF matrix, no new scale convention** —
+the direct K builders are already in the tree and already
+screened-kernel-aware.
+
+Two prerequisites had to land first, each recorded elsewhere:
+
+- **The RKS kernel scale** (invariant 2 above). A hybrid's K term rides
+  the same `s = 2` as J and V_xc; before the scale fix it was
+  half-weighted along with them.
+- **The combined-XC `fxc` double-count**
+  (`docs/DFT_ANALYTIC_FXC_HESSIAN.md` invariant 3a). Every named hybrid
+  (B3LYP, PBE0, HSE06) is a *combined* exchange-correlation libxc entry,
+  so `compute_analytic_xc_hessian_vector_product{,_polarized}` was
+  double-counting a correlation `fxc` for them. Guarded now.
+
+Together those two are the reason the B3LYP/PBE0 scale probe went from a
+0.7–5.6% direction-dependent miss to ratio `1.000000`.
+
+### 4. UKS packing matches build_uhf_cphf_matrix — not a third convention
 
 Two blocks in one vector: `[0, nova)` alpha, `[nova, nova+novb)` beta,
 virtual-major within each. `δJ` is one call on the **total** trial density
 `δP^α + δP^β` (matching the KS loop's own Coulomb build), then packed
-separately into the α and β `(a,i)` blocks. Cayley rotation and
+separately into the α and β `(a,i)` blocks; `δK` is spin-resolved (α from
+`δPa`, β from `δPb`) via `_compute_2e_k_uhf_direct`. Cayley rotation and
 semicanonicalization run per spin channel — one shared step vector, two
 `κ` matrices.
 
@@ -123,33 +188,31 @@ Design rule:
   `ResponseExcitationSpace::flat_index`'s occupied-major); do not add a
   third.
 
-### 4. Level shift is a DFT-wide no-op; semicanonicalization is unnecessary but kept
+### 5. Level shift is a DFT-wide no-op; semicanonicalization is unnecessary but kept
 
 `grep -c level_shift src/dft/driver.cpp` returns 0 —
 `calculator._scf._level_shift` is never read by the KS loop, RKS or UKS.
 Verified: `level_shift 0.5` set vs absent gives byte-identical energy and
-iteration count under plain DIIS. No guard needed (a `level_shift <= 0`
-check would be dead code), unlike UHF where the field is live.
-Semicanonicalization disabled over a 200-cycle pure-SOSCF window: RKS
-water/6-31G/PBE 126 vs 121 iterations, UKS triplet water/6-31G 27 vs 30 —
-identical energy either way.
+iteration count under plain DIIS. No guard needed, unlike UHF where the
+field is live. Semicanonicalization disabled over a 200-cycle pure-SOSCF
+window: RKS water/6-31G/PBE 126 vs 121 iterations, UKS triplet
+water/6-31G 27 vs 30 — identical energy either way.
 
 Design rule:
 
-- Do not port RHF/UHF's level-shift guard to DFT — check the actual KS loop
-  for the knob first. Keep semicanonicalization: pure gauge freedom, cheap,
-  no reason to drop it even where it measures as unnecessary.
+- Do not port RHF/UHF's level-shift guard to DFT — check the actual KS
+  loop for the knob first. Keep semicanonicalization: pure gauge freedom,
+  cheap.
 
-### 5. A scope-cut gate needs a message, or the user's request is silently dropped
+### 6. A scope-cut gate needs a message, or the user's request is silently dropped
 
 `soscf_enabled` excludes only PCM and SAO now — all hybrids (RKS and UKS,
-global and range-separated) are in (H2–H5). A user setting
-`scf_soscf_start` by habit on a PCM or SAO run got no warning and silently
-ran plain DIIS. A one-time `[WRN] DFT SOSCF :` line is
-emitted before the loop when SOSCF is requested but disabled, naming the
-reason and confirming the calculation is still valid, just unaccelerated.
-Not a hard error — that would newly fail every ordinary such DFT run with
-`scf_soscf_start` set.
+global and range-separated) are in. A user setting `scf_soscf_start` by
+habit on a PCM or SAO run got no warning and silently ran plain DIIS. A
+one-time `[WRN] DFT SOSCF :` line is emitted before the loop when SOSCF is
+requested but disabled, naming the reason and confirming the calculation
+is still valid, just unaccelerated. Not a hard error — that would newly
+fail every ordinary such DFT run with `scf_soscf_start` set.
 
 Design rule:
 
@@ -157,77 +220,99 @@ Design rule:
   specific reason. (RHF/UHF's own analogous guards do not yet — a small
   follow-on across all three SOSCF paths.)
 
-### 6. The gradient-shrinkage shape is reported honestly, not assumed superlinear
+### 7. Pure-SOSCF has a limit cycle at the density noise floor; a step deadband gives it a termination
 
-On RKS water/6-31G/PBE the orbital gradient shrinks at a roughly constant
-ratio (`1.58e-1 → 4.48e-2 → 1.29e-2`, ≈0.28) — linear, not the accelerating
-ratio RHF/H2 showed. On H2/6-31G/PBE the same code is genuinely superlinear
-(`4.60e-4 → 5.10e-5 → 5.64e-6`, ≈0.11). Investigated: the composed Hessian's
-off-diagonal/diagonal coupling and condition number are comparable to RHF's
-own (`‖H_offdiag‖/‖H_diag‖` 0.031 DFT vs 0.027 RHF; `cond(H)` 67 vs 57),
-ruling out "the DFT Hessian is more diagonal-dominant". The water case's
-linear rate is an open, recorded finding — not an algebra defect (the
-callback was verified to ratio 1.000000 against `E(κ)`'s true second
-derivative on this same system).
+With no DIIS handoff (`scf_soscf_cycles` large), the augmented-Hessian
+solve returns a nonzero rotation for any `g ≠ 0`, so the Cayley transform
++ Löwdin cleanup keeps perturbing the density by `~1e-10` forever. At
+`tol_density ≲ 1e-11` the run then hits `max_cycles` without converging —
+this is **pre-existing** (the RKS scale fix improved the limit-cycle floor
+~15×, it did not create it) and **grid-independent** (identical at
+normal/fine/ultrafine).
+
+The deadband: when `max|step| < tol_density`, hold the reference orbitals
+(`C_new = C_soscf_prev`, `eps_new = eps_soscf_prev`), so
+`next_density == density`, `RMS(D) = Max(D) = 0`, and `is_converged` can
+fire. The DIIS-handoff mode (default `scf_soscf_cycles = 3`) never reaches
+this — it hands back long before the step gets that small. Gated by
+`water_rks_pbe_soscf_puredeadband_631g`.
+
+### 8. The gradient-shrinkage shape, and where it is genuinely limited
+
+Post the RKS scale fix, RKS PBE and LDA converge **superlinearly** (each
+SOSCF step drops `|g|` ~50×), which the old `s = 1` code did not. The
+recorded "linear on water/6-31G/PBE" finding was the scale bug.
+
+Two residual limits, both **pre-existing and unrelated to the K term**:
+
+- **The polarized GGA `fxc` for B88/LYP-based functionals** has a
+  ~1e-4..1e-3 relative residual on small-magnitude directions in a
+  whole-molecule FD probe. Verified this is **FD cancellation in the
+  probe**, not an algebra error: the point-level FD of `δV_xc` for
+  `gga_x_b88` / `gga_c_lyp` matches the analytic T1..T5 to ~1e-10, the
+  same as PBE (`dft_gga_hessian_selfcheck` and its polarized twin now
+  cover B88/LYP, closing the coverage gap that made this ambiguous). A
+  second difference of `E ~O(75)` resolving `composed ~O(1)` at `h = 1e-4`
+  carries ~1e-3 relative noise; PBE0 (analytic PBE grid) lands on
+  `1.000000`, B88/LYP grid sums scatter more.
+- **Triplet-radical UHF landscapes are shallow.** SOSCF's Newton steps
+  escape spurious stationary points DIIS gets stuck near and can land in a
+  UHF basin ~1e-4 Eh **lower** than DIIS's. That is SOSCF working, but it
+  means a UKS hybrid gate cannot assert "10-digit vs DIIS" on triplet
+  water — it needs a clean single-minimum open-shell system (the water
+  cation, `h2o_cation_uks_pbe0_soscf_631g`).
 
 Design rule:
 
-- DFT SOSCF's pass criterion is energy agreement with fully-converged DIIS
-  first, gradient shape second — report the measured shape, do not assume
-  superlinear because one system showed it.
+- DFT SOSCF's pass criterion is energy agreement with fully-converged
+  DIIS first (on a system where DIIS *has* a unique minimum), gradient
+  shape second. LDA is the exact reference; GGA carries a small FD floor
+  on small directions.
 
 ## What was fixed / built
 
 1. **`orbital_energy_difference_diagonal`** — the RKS/UKS analogue of the
    one line `A(ai,ai) += eps(a) - eps(i)` inside `build_rhf_cphf_matrix`,
-   standalone because DFT has no such matrix to reuse. Verified against an
-   independent hand-written loop on non-square fixtures.
+   standalone because DFT has no such matrix to reuse.
 
 2. **The RKS `h_op` composition and SOSCF branch** — `diag_term`,
-   `_compute_2e_j_direct` on `δP` for `J`, the analytic XC piece, packed
-   virtual-major; `solve_augmented_hessian`; `kSoscfMaxRot = 0.20`;
-   `apply_orbital_rotation`; occ-occ/virt-virt semicanonicalization. The
-   composed callback was verified against FD of the total energy at three
-   directions before the branch was wired.
+   `_compute_2e_j_direct` on `δP` for `J`, the analytic XC piece, the
+   hybrid K term, kernel-scaled `s = 2`, packed virtual-major;
+   `solve_augmented_hessian`; `kSoscfMaxRot = 0.20`;
+   `apply_orbital_rotation`; occ-occ/virt-virt semicanonicalization; the
+   step deadband.
 
-3. **The UKS SOSCF branch** — the polarized analogue, mirroring the RKS
-   branch the way `docs/SOSCF_UHF.md` mirrors `docs/SOSCF.md`. Per-spin
-   persisted state, `[0,nova)+[nova,novb)` packing, `δJ` from the total
-   trial density.
+3. **The UKS SOSCF branch** — the polarized analogue, uniform `s = 1`.
+   Per-spin persisted state, `[0,nova)+[nova,novb)` packing, `δJ` from the
+   total trial density, spin-resolved `δK`.
 
-4. **The one-time hybrid/PCM/SAO warning** — emitted before the loop in
-   both RKS and UKS branches when a trigger keyword is set but SOSCF is
-   disabled.
+4. **The RKS kernel-scale fix** — `s = 1 → 2`, split as `4·diag +
+   8·kernel` in the raw κ-parametrization. Superseded the old
+   `H_true = 4·H_bare` single constant.
 
-5. **Switch trigger — zero new code**, in both RKS and UKS. The gate was a
-   structural copy of RHF's, which already carried the DIIS-error-criterion
-   branch (third time this held: U4, D2.4, D3.4).
+5. **The combined-XC `fxc` guard** — `drop_correlation_if_combined` in
+   `analytic_hessian.cpp` (`DFT_ANALYTIC_FXC_HESSIAN.md` invariant 3a).
 
-## Validation strategy that should remain in place
+6. **The hybrid K term** — RKS `-0.5·(c_fr·K_C + c_sr·K_SR)`, UKS
+   `-1.0·(...)` per spin, all built from the direct K builders.
 
-- **RKS:** same-energy to all 10 digits vs pure DIIS on water/6-31G/PBE
-  (`-76.2895527467`); SOSCF-off default byte-identical to the pre-SOSCF
-  tree. H2/6-31G shows SOSCF reaching `-1.1619037723` where plain DIIS
-  stalls at `-1.1619034100` (cross-checked against PySCF's own DIIS run) —
-  SOSCF routes around a real pre-existing plain-DIIS weakness, which is why
-  "not H2 alone" is asked for.
-- **UKS:** triplet water/STO-3G/PBE — SOSCF reaches `-74.8423080131` in 10
-  iterations; plain DIIS at `tol 1e-9` stops early at `-74.8423073568`, and
-  at `tol 1e-11` reaches exactly `-74.8423080131` in 102 iterations
-  (bit-identical). Superlinear gradient shrinkage
-  (`7.02e-3 → 2.96e-4 → 2.07e-5`).
-- Full smoke (35/35) and DFT ctest (12/12) suites, SOSCF off by default.
+7. **The one-time PCM/SAO warning** and the **switch trigger** (zero new
+   code — structural copy of RHF's).
 
-## What was measured but is not kept
+## Regression gates
 
-Whole-molecule probes (`PLANCK_D2_0_CHECK`, `PLANCK_D2_1_CHECK`,
-`PLANCK_D2_2_2_CHECK`, `PLANCK_D2_3_NO_SEMICANON`, `PLANCK_D2_5_CHECK`,
-`PLANCK_D3_0_CHECK`, `PLANCK_D3_1_CHECK`, `PLANCK_D3_3_NO_SEMICANON`,
-`PLANCK_D3_5_CHECK`) verified each composition step against the true energy
-or the FD oracle, once, then were reverted — same discipline as
-`docs/DFT_ANALYTIC_FXC_HESSIAN.md`'s own probes. The permanent gates are the
-point-level ctests for the `fxc` piece and the SOSCF-vs-DIIS
-energy-agreement runs for the assembled `h_op`.
+| gate | what |
+|---|---|
+| `water_rks_lda_soscf_631g` | RKS LDA: SOSCF == DIIS to 1e-9; `dft_soscf_last_gradient ≤ 5e-4` (superlinear post-scale-fix, linear pre) |
+| `water_rks_pbe_soscf_puredeadband_631g` | pure-SOSCF PBE at `tol 1e-11` converges via the deadband, not `max_cycles` |
+| `water_rks_b3lyp_soscf_631g` | RKS global hybrid: energy == DIIS to 1e-9, no hybrid-blocked warning, superlinear |
+| `water_rks_hse06_soscf_631g` | RKS range-separated hybrid: same, `≤ 5e-5` (the c_sr K branch tightens it ~9×) |
+| `h2o_cation_uks_pbe0_soscf_631g` | UKS global hybrid on a clean single-minimum doublet: energy == DIIS to 1e-9, superlinear |
+| `dft_analytic_hessian_polarized_production` :: `check_combined_no_double_count` | the `correlation_functional` arg is inert for a combined XC functional (B3LYP, PBE0), RKS + polarized |
+| `dft_gga_hessian_selfcheck` + polarized twin | T1..T5 `δV_xc` vs grid-level FD for PBE, **B88, and LYP** |
+
+Every `dft_soscf_last_gradient` gate is non-vacuity-verified against the
+relevant mutation (kernel weight `2 → 1`, or dropping the c_sr K branch).
 
 ## Remaining architecture concern
 
@@ -236,8 +321,7 @@ energy-agreement runs for the assembled `h_op`.
 Measured one call to the analytic `h_op` (one `(a,i)` unit vector — the
 Krylov-loop shape) against one call to the FD-kernel oracle building the
 full dense Hessian, alongside real `ah_iters`. The FD oracle's
-per-Newton-step cost is `≈ fd_kernel_full` regardless of `ah_iters` (each
-subsequent Krylov iteration is a microsecond-scale dense matvec); the
+per-Newton-step cost is `≈ fd_kernel_full` regardless of `ah_iters`; the
 analytic path's is `ah_iters × analytic_call`.
 
 **RKS — not reliably faster at the two sizes measured:**
@@ -247,8 +331,6 @@ analytic path's is `ah_iters × analytic_call`.
 | water/6-31G/PBE | 40 | 0.131 s | 0.513 s | ≈3.9 | 6, 7, 4 |
 | water/cc-pVDZ/PBE | 100 | 0.141 s | 2.131 s | ≈15.1 | 4, 23, 10 |
 
-Real `ah_iters` straddle or exceed the crossover.
-
 **UKS — reliably 3–5× faster at every size, the opposite of RKS:**
 
 | system | `nova`/`novb` | analytic (1 call) | FD-kernel (full) | crossover `ah_iters` | real `ah_iters` |
@@ -257,46 +339,22 @@ Real `ah_iters` straddle or exceed the crossover.
 | water/6-31G/PBE triplet | 42 / 36 | 0.018 s | 0.50 s | ≈28 | 5, 6, 7 |
 | water/cc-pVDZ/PBE triplet | 114 / 84 | 0.064 s | 2.06 s | ≈32 | 8, 10, 10 |
 
-Real `ah_iters` (3–10) stayed in single digits across a >10× `nov` range
-(conditioning, not dimension), and the FD-kernel oracle must
-finite-difference both spin channels' directions, so its cost roughly
-doubles at comparable `nov` — pushing the crossover **higher**, the reverse
-of the worry that the doubled per-call cost would make UKS worse.
-
-Neither claim is contradicted. The `O(1)` vs `O(n_occ·n_virt)` asymptotic
-argument is real; whether it is a wall-clock win depends on `ah_iters` vs
-the crossover at the actual system size — comfortably favorable for UKS at
-modest sizes, borderline for RKS there. The analytic path is correct and
-correctly-scaling in both, and is the only path that scales to a large
-active space where the FD oracle's one-time build itself becomes
-prohibitive.
-
-### Done since
-
-- **All hybrids, RKS and UKS** — `h_op` gained the exact-exchange `K`
-  response (`c_fr·K_Coulomb + c_sr·K_ShortRange`, scaled `-0.5` RKS /
-  `-1.0` UKS; `docs/SOSCF_DFT_HYBRID_SCOPE.md` H2–H5). Global (B3LYP,
-  PBE0) and range-separated (HSE06) both converge superlinearly to the
-  DIIS energy. This needed two prerequisite fixes: the RKS `h_op`
-  kernel-vs-diagonal scale (`docs/SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE.md`)
-  and the combined-XC `fxc` double-count
-  (`docs/DFT_ANALYTIC_FXC_COMBINED_XC_SCOPE.md`). Gates:
-  `water_rks_b3lyp_soscf_631g`, `water_rks_hse06_soscf_631g`,
-  `h2o_cation_uks_pbe0_soscf_631g`. Two limits carried, both
-  pre-existing and unrelated to the K term: the polarized `fxc` has a
-  ~1e-4..1e-3 relative residual for B88/LYP-based functionals on
-  small-magnitude directions (PBE-based is exact); and triplet-radical
-  UHF landscapes are shallow enough that SOSCF can find a lower basin
-  than DIIS, so a UKS hybrid gate needs a clean single-minimum
-  open-shell system (the water cation) rather than triplet water.
+The `O(1)` vs `O(n_occ·n_virt)` asymptotic argument is real; whether it is
+a wall-clock win depends on `ah_iters` vs the crossover at the actual
+system size — comfortably favorable for UKS at modest sizes, borderline
+for RKS there. The analytic path is correct and correctly-scaling in
+both, and is the only path that scales to a large active space where the
+FD oracle's one-time build itself becomes prohibitive. The hybrid K term
+adds one direct sweep per Krylov iteration — same cost class as the `δJ`
+sweep already there; the table's numbers are not re-measured for hybrids.
 
 ### Not done
 
-- **PCM, SAO/symmetry** — still rejected with a warning.
-- **`scf_soscf_diis_tol` DFT-specific default** — not required. There is no
-  hardcoded default to re-tune (`_scf_soscf_diis_tol = 0.0`, SOSCF is
-  opt-in), and the criterion mechanism is verified working (D2.4/D3.4). A
-  DFT-tuned default is a sweep for when the large-`nb` cluster ladder is
-  available.
+- **PCM, SAO/symmetry** — still rejected with a warning. PCM needs the
+  reaction-field response; SAO needs the block-diagonal response.
+- **`scf_soscf_diis_tol` DFT-specific default** — not required
+  (`_scf_soscf_diis_tol = 0.0`, SOSCF is opt-in; the criterion mechanism
+  is verified working). A DFT-tuned default is a sweep for when the
+  large-`nb` cluster ladder is available.
 - **The large-`nb` motivation** is unreproduced for RKS (cluster access);
   measured and positive for UKS at modest sizes.

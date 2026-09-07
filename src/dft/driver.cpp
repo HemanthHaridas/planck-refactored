@@ -1865,7 +1865,7 @@ namespace DFT::Driver
                 Eigen::MatrixXd C_soscf_prev;
                 Eigen::VectorXd eps_soscf_prev;
                 unsigned int soscf_window_start = 0;
-                // SOSCF_DFT_HYBRID_SCOPE H2/H3: RKS hybrids -- global (B3LYP,
+                // SOSCF_DFT.md invariant 3 (RKS hybrids): RKS hybrids -- global (B3LYP,
                 // PBE0) and range-separated (HSE06, CAM-B3LYP) -- are now
                 // supported. The exact-exchange (K) response is one more
                 // linear-in-density term in h_op (c_fr*Coulomb + c_sr*ShortRange,
@@ -2022,7 +2022,7 @@ namespace DFT::Driver
                         // half-weighted relative to the diagonal -- the Newton
                         // DIRECTION was slightly wrong (magnitude was fine because
                         // the diagonal dominates). See
-                        // docs/SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE.md; LDA-verified
+                        // docs/SOSCF_DFT.md (invariant 2); LDA-verified
                         // to ratio 1.000000 by the S1 probe.
                         // (UKS is unaffected -- occupancy-1 makes diag and kernel
                         // scale identically there; do NOT add a 2x to UKS.)
@@ -2069,7 +2069,7 @@ namespace DFT::Driver
                             const Eigen::VectorXd xc_packed = DFT::Driver::pack_hessian_vector_product_cphf_order(
                                 *dV_xc, C_occ_prev, C_virt_prev);
 
-                            // K response (SOSCF_DFT_HYBRID_SCOPE): a hybrid's KS
+                            // K response (SOSCF_DFT.md invariant 3): a hybrid's KS
                             // Fock carries -0.5*(c_fr*K_Coulomb + c_sr*K_SR),
                             // K linear in the density exactly like J, so the
                             // Hessian gains delta of it on the trial dP with the
@@ -2131,7 +2131,7 @@ namespace DFT::Driver
                         // Pass the reference orbitals through unchanged so
                         // next_density == density and is_converged can fire. The
                         // DIIS-handoff mode never reaches this -- it hands back
-                        // long before. See SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE.
+                        // long before. See SOSCF_DFT.md invariant 2.
                         if (ah.x.allFinite() &&
                             ah.x.cwiseAbs().maxCoeff() < calculator._scf._tol_density)
                         {
@@ -2324,7 +2324,7 @@ namespace DFT::Driver
             Eigen::MatrixXd Ca_soscf_prev, Cb_soscf_prev;
             Eigen::VectorXd epsa_soscf_prev, epsb_soscf_prev;
             unsigned int soscf_window_start = 0;
-            // SOSCF_DFT_HYBRID_SCOPE H4/H5: UKS hybrids -- global and
+            // SOSCF_DFT.md invariant 3 (UKS hybrids): UKS hybrids -- global and
             // range-separated -- are now supported. The polarized h_op gains
             // the spin-resolved K response (-1*(c_fr*K_C + c_sr*K_SR) per
             // spin, from _compute_2e_k_uhf_direct); UKS h_op stays uniform 1x
@@ -2546,14 +2546,14 @@ namespace DFT::Driver
                             DFT::Driver::pack_hessian_vector_product_cphf_order(
                                 dV_xc->second, Cb_occ, Cb_virt);
 
-                        // K response (SOSCF_DFT_HYBRID_SCOPE H4/H5): the UKS KS
+                        // K response (SOSCF_DFT.md invariant 3 (UKS hybrids)): the UKS KS
                         // Fock carries -1*(c_fr*K_C + c_sr*K_SR) per spin from
                         // _compute_2e_k_uhf_direct (K_alpha from Pa, K_beta from
                         // Pb in ONE sweep per kernel) -- see
                         // assemble_current_ks_potential's UHF branch. K linear in
                         // the density like J, and UKS h_op is uniform 1x (no
                         // RKS-style 2x on the kernel -- occupancy-1 makes diag and
-                        // kernel scale identically, docs/SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE).
+                        // kernel scale identically, docs/SOSCF_DFT.md invariant 2).
                         Eigen::VectorXd Ka_packed = Eigen::VectorXd::Zero(nova);
                         Eigen::VectorXd Kb_packed = Eigen::VectorXd::Zero(novb);
                         {

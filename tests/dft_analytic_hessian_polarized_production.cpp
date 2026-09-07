@@ -319,7 +319,7 @@ namespace
                      name + ": delta_V_xc^b(0,1) vs F3.4 reference formula (check_beta)");
     }
 
-    // DFT_ANALYTIC_FXC_COMBINED_XC_SCOPE C4: for a combined exchange-
+    // DFT_ANALYTIC_FXC_HESSIAN.md invariant 3a: for a combined exchange-
     // correlation functional the exchange slot already carries the whole XC,
     // so compute_analytic_xc_hessian_vector_product{,_polarized} must treat
     // the correlation_functional argument as inert -- otherwise fxc[c] is
@@ -430,7 +430,7 @@ int main()
     check_point_lda("lda_c_pw", Pa, Pb, dPa, Eigen::Matrix3d::Zero());
     check_point_lda("lda_c_pw", Pa, Pb, Eigen::Matrix3d::Zero(), dPb);
 
-    // DFT_ANALYTIC_FXC_COMBINED_XC_SCOPE C4: combined XC must not double-count
+    // DFT_ANALYTIC_FXC_HESSIAN.md invariant 3a: combined XC must not double-count
     // correlation. B3LYP is GGA-combined; PBE0 (pbeh) too.
     check_combined_no_double_count("hyb_gga_xc_b3lyp");
     check_combined_no_double_count("hyb_gga_xc_pbeh");

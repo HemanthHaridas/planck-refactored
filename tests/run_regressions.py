@@ -102,7 +102,7 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     # => the FINAL SOSCF-window step, so a metric_le on this asserts the window
     # converged the orbital gradient superlinearly (much larger and linear if
     # the RKS kernel weight regresses to 1x, or the c_sr/K term is missing --
-    # SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE / SOSCF_DFT_HYBRID_SCOPE).
+    # SOSCF_DFT.md invariants 2 and 3).
     "dft_soscf_last_gradient": re.compile(
         r"DFT (?:UKS )?SOSCF\s*:\s*step at iter \d+:\s*\|g\|=([-+0-9Ee\.]+)", re.MULTILINE),
     "zero_point_energy_eh": re.compile(r"Zero-point energy\s*:\s*([-+0-9Ee\.]+)\s+Eh"),

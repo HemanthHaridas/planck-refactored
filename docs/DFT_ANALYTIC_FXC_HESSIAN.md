@@ -144,10 +144,10 @@ the same guard.
 `exchange_functional.is_combined_exchange_correlation()`, in all four
 branches (RKS/UKS × LDA/GGA).
 
-**Found latent** — DFT SOSCF rejects hybrids (`soscf_dft_hybrid_blocked`),
-so no shipped SOSCF run reached the combined-XC analytic Hessian. It
-surfaced via the RKS Hessian-scale probe
-(`docs/SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE.md`): on B3LYP and PBE0 the
+**Found latent** — when this was found, DFT SOSCF still rejected hybrids,
+so no shipped SOSCF run reached the combined-XC analytic Hessian (hybrid
+DFT SOSCF landed shortly after — `docs/SOSCF_DFT.md` invariant 3). It
+surfaced via an env-gated RKS Hessian-scale probe: on B3LYP and PBE0 the
 composed `h_op` missed a central-FD of the true total energy by
 `~0.7% – 5.6%`, direction-dependent, while every separate-slot functional
 (LDA, PBE, B88, LYP, PBE_X+LYP) was exact to `1.000000`. Zeroing the
@@ -274,21 +274,19 @@ the point-level test file had it correctly. `"alpha-only x ⇒ δσ_bb = 0"`
 is true; the converse (`"δρ_β nonzero ⇒ σ_bb-rooted terms matter"`) must be
 re-derived at every site, not inferred from one working implementation.
 
-## Remaining architecture concern
+## Consumers
 
-Hybrid and range-separated functionals need the exact-exchange (`K`)
-response on top of `fxc` — the machinery `build_rhf_cphf_matrix` already
-has for HF but which is unbuilt for the KS path. The analytic `fxc`
-functions themselves are functional-agnostic; the gap is a `K`-response
-contraction against an RKS/UKS `C`. `docs/SOSCF_DFT_HYBRID_SCOPE.md`
-scopes closing it (the `K` response is one more linear-in-density term
-built with the direct K builders already in the tree); until it lands,
-DFT SOSCF rejects hybrids with a warning (`docs/SOSCF_DFT.md`).
+The analytic `fxc` functions here are functional-agnostic and are the
+production DFT SOSCF orbital Hessian's `xc_packed` term. Hybrid DFT SOSCF
+adds a `K`-response term alongside — one more linear-in-density
+contraction, built with the direct K builders — and is fully wired
+(RKS + UKS, global + range-separated); see `docs/SOSCF_DFT.md`
+invariants 2 (the RKS `4×`/`8×` kernel scale) and 3 (the K term and this
+double-count's role as one of its two prerequisites).
 
-When that lands, the combined-XC `fxc` double-count fixed in invariant 3a
-goes from latent to live — `check_combined_no_double_count` is the unit
-gate, and the hybrid SOSCF-vs-DIIS regression case added in
-`SOSCF_DFT_HYBRID_SCOPE` H2 is the end-to-end one (a regression of the
-guard shows there as a hybrid SOSCF convergence slowdown — linear instead
-of superlinear — the same signature the RKS Hessian-scale fix had,
-`docs/SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE.md`).
+Invariant 3a's combined-XC guard is now live (hybrid DFT SOSCF ships).
+`check_combined_no_double_count` is the unit gate; the hybrid
+SOSCF-vs-DIIS regression cases (`water_rks_b3lyp_soscf_631g`,
+`h2o_cation_uks_pbe0_soscf_631g`) are the end-to-end ones — a regression
+of the guard shows there as a hybrid SOSCF convergence slowdown (linear
+instead of superlinear), the same signature the RKS kernel-scale fix had.

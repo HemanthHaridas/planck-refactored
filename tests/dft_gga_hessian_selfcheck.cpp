@@ -340,7 +340,7 @@ int main()
 
     // B88 exchange and LYP correlation -- B3LYP's GGA components. Previously
     // only "pbe" was exercised here; adding these closes the coverage gap
-    // flagged during SOSCF_DFT_HYBRID_SCOPE H4/H5 (the polarized twin adds
+    // flagged during SOSCF_DFT.md invariant 3 (UKS hybrids) (the polarized twin adds
     // the same). B88/LYP match the FD of delta[V_xc] to the same 50*h^2
     // tolerance PBE does.
     check_T1_T2_T3("gga_x_b88", {0.3, 0.1, 0.05, -0.02}, {0.01, 0.02, -0.01, 0.005}, ao1);

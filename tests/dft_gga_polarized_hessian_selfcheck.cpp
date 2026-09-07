@@ -503,7 +503,7 @@ int main()
 
     // B88 exchange and LYP correlation -- the components of B3LYP. These
     // were previously unexercised at the point level (the whole suite only
-    // ran gga_c_pbe), which left a gap flagged during SOSCF_DFT_HYBRID_SCOPE
+    // ran gga_c_pbe), which left a gap flagged during the DFT SOSCF hybrid work (docs/SOSCF_DFT.md)
     // H4/H5: a whole-molecule FD probe on B3LYP UKS showed ~8e-4 scatter, and
     // the question was whether the polarized fxc formula is wrong for
     // B88/LYP or the whole-molecule FD is just noisy. It is the FD -- B88

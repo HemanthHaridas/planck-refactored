@@ -136,11 +136,19 @@ truth for what remains.
     agreement instead, which doesn't depend on the cluster ladder. The
     large-`nb` win this work was originally motivated by is unmeasured for
     RHF/UHF/RKS; measured and positive for UKS at modest sizes (D3.5).
-  - **Hybrid / range-separated functionals** for DFT SOSCF — needs the
-    exact-exchange (K) response, the same machinery `build_rhf_cphf_matrix`
-    already has for HF but unbuilt for the KS path. Currently rejected with
-    a warning (D2.2.4 / D3.2.1).
-  - **PCM and SAO/symmetry** for DFT SOSCF — same, rejected with a warning.
+  - **Hybrid / range-separated functionals** for DFT SOSCF — **DONE.**
+    All RKS and UKS hybrids (global B3LYP/PBE0, range-separated HSE06)
+    now run SOSCF. The `K` response is one more linear-in-density term in
+    `h_op`, built with the direct K builders (`_compute_2e_k_direct` /
+    `_compute_2e_k_uhf_direct`) already in the tree — no new CPHF matrix.
+    Two prerequisite fixes landed with it: the RKS kernel-vs-diagonal
+    scale (`SOSCF_DFT.md` invariant 2 — the old single `4×` made RKS
+    PBE/LDA converge linearly) and the combined-XC `fxc` double-count
+    (`DFT_ANALYTIC_FXC_HESSIAN.md` invariant 3a). Plus a pure-SOSCF step
+    deadband. See `docs/SOSCF_DFT.md`.
+  - **PCM and SAO/symmetry** for DFT SOSCF — still rejected with a
+    warning. PCM needs the reaction-field response; SAO needs the
+    block-diagonal response.
 
 ## FCI performance — two measured, independent items
 
