@@ -2281,6 +2281,38 @@
    "_note": "RKS global-hybrid DFT SOSCF (SOSCF_DFT_HYBRID_SCOPE H2). B3LYP: exact-exchange K response is one more linear-in-density term in h_op. SOSCF energy must match SOSCF-off DIIS to 10 digits, no hybrid-blocked warning, 3-cycle window converges superlinearly (~1.7e-4). Kernel weight 1x -> linear (~8.7e-3); combined-XC fxc double-count also loses superlinearity. Gates both."
   },
   {
+   "id": "water_rks_hse06_soscf_631g",
+   "input": "tests/inputs/regression/dft/water_rks_hse06_soscf_631g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT SOSCF :",
+    "RKS Converged :",
+    "DFT Energy :"
+   ],
+   "not_contains": [
+    "scf_soscf_start/scf_soscf_diis_tol requested but disabled"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3017376982,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_le",
+     "metric": "dft_soscf_last_gradient",
+     "value": 5e-05
+    }
+   ],
+   "_note": "RKS range-separated hybrid DFT SOSCF (SOSCF_DFT_HYBRID_SCOPE H3). HSE06: the exact-exchange K response is c_fr*K_Coulomb + c_sr*K_ShortRange (c_fr=0 here, c_sr=0.25, omega=0.11) scaled -0.5 like the KS build. SOSCF energy matches the SOSCF-off DIIS value to 10 digits, no hybrid-blocked warning, superlinear window (dft_soscf_last_gradient ~3e-5; ~9e-5 without the c_sr ShortRange K branch, which the 5e-5 threshold catches)."
+  },
+  {
    "id": "h2_dft_tddft_pbe_sto3g",
    "input": "tests/inputs/regression/dft/h2_dft_tddft_pbe.hfinp",
    "executable": "planck-dft",

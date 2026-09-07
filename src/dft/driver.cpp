@@ -1865,16 +1865,13 @@ namespace DFT::Driver
                 Eigen::MatrixXd C_soscf_prev;
                 Eigen::VectorXd eps_soscf_prev;
                 unsigned int soscf_window_start = 0;
-                // SOSCF_DFT_HYBRID_SCOPE H2: global hybrids (B3LYP, PBE0)
-                // are now supported -- the exact-exchange (K) response is one
-                // more linear-in-density term in h_op, built with
-                // _compute_2e_k_direct and scaled -0.5*c_fr like the KS build
-                // (H0/H1, verified to ratio 1.000000 by the scale probe once
-                // the combined-XC fxc guard is in). Range-separated hybrids
-                // still need the ShortRange-kernel branch (H3), so they stay
-                // blocked. This gate no longer covers a global hybrid.
-                const bool soscf_dft_hybrid_blocked =
-                    x_functional.is_hybrid() && x_functional.is_range_separated();
+                // SOSCF_DFT_HYBRID_SCOPE H2/H3: RKS hybrids -- global (B3LYP,
+                // PBE0) and range-separated (HSE06, CAM-B3LYP) -- are now
+                // supported. The exact-exchange (K) response is one more
+                // linear-in-density term in h_op (c_fr*Coulomb + c_sr*ShortRange,
+                // scaled -0.5 like the KS build); verified to ratio 1.000000 by
+                // the scale probe (LDA + combined-XC hard assertion). The only
+                // remaining RKS scope cuts are PCM and SAO, handled below.
                 // D2.2.4: a user requesting SOSCF (either trigger keyword)
                 // must be told when the request cannot be honored, rather
                 // than silently running plain DIIS the whole time -- the
@@ -1884,10 +1881,7 @@ namespace DFT::Driver
                      calculator._scf._scf_soscf_start > 0))
                 {
                     std::string reason;
-                    if (soscf_dft_hybrid_blocked)
-                        reason = "range-separated hybrid (the short-range exact-exchange response "
-                                 "is not yet wired through DFT SOSCF)";
-                    else if (prepared.pcm)
+                    if (prepared.pcm)
                         reason = "PCM solvation (not yet wired through DFT SOSCF)";
                     else if (calculator._use_sao_blocking)
                         reason = "SAO/symmetry blocking (not yet wired through DFT SOSCF)";
@@ -1986,7 +1980,7 @@ namespace DFT::Driver
                     const bool soscf_enabled =
                         (calculator._scf._scf_soscf_diis_tol > 0.0 ||
                          calculator._scf._scf_soscf_start > 0) &&
-                        !sao_active_rks && !prepared.pcm && !soscf_dft_hybrid_blocked;
+                        !sao_active_rks && !prepared.pcm;
                     if (soscf_enabled && soscf_window_start == 0)
                     {
                         const bool criterion_fires =
@@ -2079,24 +2073,34 @@ namespace DFT::Driver
                             // Fock carries -0.5*(c_fr*K_Coulomb + c_sr*K_SR),
                             // K linear in the density exactly like J, so the
                             // Hessian gains delta of it on the trial dP with the
-                            // same coeff/sign as the KS build
-                            // (src/dft/driver.cpp assemble_current_ks_potential).
-                            // H2 wires the global-hybrid c_fr branch and lifts
-                            // the gate for it; the c_sr (ShortRange) branch for
-                            // range-separated hybrids is H3, still gated off.
+                            // same coeff/sign/kernel decomposition the KS build
+                            // uses (src/dft/driver.cpp assemble_current_ks_potential,
+                            // the RKS unpolarized branch). H2 wired c_fr (global
+                            // hybrids); H3 adds the c_sr ShortRange branch and
+                            // lifts the gate for range-separated hybrids too.
                             Eigen::VectorXd K_packed = Eigen::VectorXd::Zero(x.size());
                             {
                                 const double c_fr = xc_grid->full_range_exchange_coefficient;
-                                if (c_fr != 0.0)
+                                const double c_sr = xc_grid->short_range_exchange_coefficient;
+                                if (c_fr != 0.0 || c_sr != 0.0)
                                 {
-                                    const Eigen::MatrixXd dK = _compute_2e_k_direct(
-                                        prepared.shell_pairs, dP, calculator._shells.nbasis(),
-                                        calculator._integral._engine, HartreeFock::ERIKernel::Coulomb,
-                                        0.0, calculator._integral._tol_eri,
-                                        calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
-                                                                          : nullptr);
+                                    Eigen::MatrixXd dK = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                                    if (c_fr != 0.0)
+                                        dK.noalias() += c_fr * _compute_2e_k_direct(
+                                            prepared.shell_pairs, dP, calculator._shells.nbasis(),
+                                            calculator._integral._engine, HartreeFock::ERIKernel::Coulomb,
+                                            0.0, calculator._integral._tol_eri,
+                                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
+                                                                              : nullptr);
+                                    if (c_sr != 0.0)
+                                        dK.noalias() += c_sr * _compute_2e_k_direct(
+                                            prepared.shell_pairs, dP, calculator._shells.nbasis(),
+                                            calculator._integral._engine, HartreeFock::ERIKernel::ShortRange,
+                                            xc_grid->range_separation_omega, calculator._integral._tol_eri,
+                                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
+                                                                              : nullptr);
                                     K_packed = DFT::Driver::pack_hessian_vector_product_cphf_order(
-                                        -0.5 * c_fr * dK, C_occ_prev, C_virt_prev);
+                                        -0.5 * dK, C_occ_prev, C_virt_prev);
                                 }
                             }
 
@@ -2298,18 +2302,32 @@ namespace DFT::Driver
                                 x_functional, c_functional);
                             const Eigen::VectorXd Xp = DFT::Driver::pack_hessian_vector_product_cphf_order(
                                 *dVxc, Co, Cv);
+                            // K response -- mirrors the production RKS h_op
+                            // (c_fr Coulomb + c_sr ShortRange, scaled -0.5).
                             Eigen::VectorXd Kp = Eigen::VectorXd::Zero(x.size());
-                            const double c_fr = xc_grid->full_range_exchange_coefficient;
-                            if (c_fr != 0.0)
                             {
-                                const Eigen::MatrixXd dK = _compute_2e_k_direct(
-                                    prepared.shell_pairs, dP, calculator._shells.nbasis(),
-                                    calculator._integral._engine, HartreeFock::ERIKernel::Coulomb,
-                                    0.0, calculator._integral._tol_eri,
-                                    calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
-                                                                      : nullptr);
-                                Kp = DFT::Driver::pack_hessian_vector_product_cphf_order(
-                                    -0.5 * c_fr * dK, Co, Cv);
+                                const double c_fr = xc_grid->full_range_exchange_coefficient;
+                                const double c_sr = xc_grid->short_range_exchange_coefficient;
+                                if (c_fr != 0.0 || c_sr != 0.0)
+                                {
+                                    Eigen::MatrixXd dK = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                                    if (c_fr != 0.0)
+                                        dK.noalias() += c_fr * _compute_2e_k_direct(
+                                            prepared.shell_pairs, dP, calculator._shells.nbasis(),
+                                            calculator._integral._engine, HartreeFock::ERIKernel::Coulomb,
+                                            0.0, calculator._integral._tol_eri,
+                                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
+                                                                              : nullptr);
+                                    if (c_sr != 0.0)
+                                        dK.noalias() += c_sr * _compute_2e_k_direct(
+                                            prepared.shell_pairs, dP, calculator._shells.nbasis(),
+                                            calculator._integral._engine, HartreeFock::ERIKernel::ShortRange,
+                                            xc_grid->range_separation_omega, calculator._integral._tol_eri,
+                                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
+                                                                              : nullptr);
+                                    Kp = DFT::Driver::pack_hessian_vector_product_cphf_order(
+                                        -0.5 * dK, Co, Cv);
+                                }
                             }
                             return 4.0 * dg.cwiseProduct(x) + 8.0 * (Jp + Xp + Kp);
                         };

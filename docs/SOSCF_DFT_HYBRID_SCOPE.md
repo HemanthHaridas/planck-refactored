@@ -1,7 +1,6 @@
 # DFT SOSCF for hybrid and range-separated functionals — scope
 
-**Status: H0–H2 landed (RKS global hybrids: B3LYP, PBE0).** H3–H6
-(range-separated RKS, then UKS) ahead. In-flight scope. Fold into
+**Status: H0–H3 landed (RKS hybrids: global B3LYP/PBE0, range-separated HSE06).** H4–H6 (UKS, then doc fold) ahead. In-flight scope. Fold into
 `docs/SOSCF_DFT.md` when H6 lands (per `docs/docs_answer_one_question.md`).
 
 Two prerequisites surfaced and landed on the way, each with its own
@@ -179,15 +178,31 @@ verified against the kernel-weight mutation.
 unchanged. Smoke 35/35, DFT ctest 12/12. HSE06 still warns
 (range-separated) and runs plain DIIS.
 
-### H3 — range-separated RKS: add the `ShortRange`-kernel branch
+### H3 — range-separated RKS: add the `ShortRange`-kernel branch  **[DONE — gate `water_rks_hse06_soscf_631g`]**
 
-Add the `c_sr != 0` branch to the RKS `h_op` (now reachable). Re-run the
-H1 probe on an **HSE06** input (pure short-range) and a **CAM-B3LYP**
-input (both branches).
+**As landed:** the RKS `h_op` K term accumulates `c_fr·K_Coulomb[δP] +
+c_sr·K_ShortRange[δP, omega]` into one `dK`, packed `-0.5·dK` (same
+decomposition as `assemble_current_ks_potential`'s RKS unpolarized
+branch). `soscf_dft_hybrid_blocked` is now removed entirely — the only
+RKS scope cuts left are PCM and SAO. The **S1 scale probe's** own
+`h_op_scaled` copy had to be updated too (it lagged the production `h_op`
+at c_fr-only — the bug that first showed as a 5-8% HSE06 miss).
 
-**Verify:** H1 probe ratio → `1.000000` on HSE06 and CAM-B3LYP
-water/6-31G. Then add a permanent regression: RKS HSE06 SOSCF-vs-DIIS
-10-digit agreement (pairs with the existing `water_*_hse06_*` cases).
+**Verified:** the S1 scale probe on HSE06 water/6-31G lands on ratio
+`1.000000` at `h = 1e-4` (the `h = 1e-2`/`1e-3` lines are FD-rough on the
+screened-kernel `E(κ)` surface — diagnostic only, the abort check reads
+`h = 1e-4`). HSE06 RKS SOSCF converges superlinearly
+(`8.8e-3 → 5.6e-4 → 3.1e-5`) to the SOSCF-off DIIS energy
+`-76.3017376982` (10 digits), no warning.
+
+Regression `water_rks_hse06_soscf_631g` (extended): energy to 1e-9,
+`not_contains` the hybrid-blocked warning, `dft_soscf_last_gradient <= 5e-5`
+(~3e-5 with the c_sr branch, ~9e-5 without — the tighter threshold is what
+makes it non-vacuous, verified; on this system c_sr·K_SR is a modest
+fraction of the Hessian, so disabling it slows but does not linearize).
+CAM-B3LYP (both c_fr and c_sr nonzero) is not in the functional table
+used here, so it is not gated; the `dK` accumulation covers it by
+construction.
 
 ### H4 — UKS global hybrid: mirror H0–H2 in the UKS `h_op`
 
