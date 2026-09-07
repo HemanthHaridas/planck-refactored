@@ -97,6 +97,13 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
         r"^\[INF\]\s+3\s+(?:[A-Za-z][A-Za-z0-9_'\"]*\s+)?([-+0-9Ee\.]+)\s*$",
         re.MULTILINE,
     ),
+    # Orbital-gradient norm at a DFT SOSCF step ("DFT SOSCF : step at iter N:
+    # |g|=..."). MULTILINE + last-match => the FINAL SOSCF-window step, so a
+    # metric_le on this asserts the window converged the orbital gradient
+    # (superlinear when the RKS Hessian scale is right; ~30x larger and linear
+    # if the kernel weight regresses to 1x -- SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE).
+    "dft_soscf_last_gradient": re.compile(
+        r"DFT SOSCF\s*:\s*step at iter \d+:\s*\|g\|=([-+0-9Ee\.]+)", re.MULTILINE),
     "zero_point_energy_eh": re.compile(r"Zero-point energy\s*:\s*([-+0-9Ee\.]+)\s+Eh"),
     "point_group": re.compile(r"(?:Point Group\s*:\s*|Detected point group\s+)([A-Za-z0-9_+\-]+)"),
     "stability_real_internal": re.compile(

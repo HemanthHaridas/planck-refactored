@@ -41,7 +41,9 @@ end-to-end against PySCF's own `nr_rks_fxc`.
   component counts, which are NOT `spin_components()`/`sigma_components()`)
 - `src/dft/analytic_hessian.cpp` — the T1..T5 contraction, LDA/GGA and
   unpolarized/polarized dispatch; the GGA branch is F3.3.3's `T1+T2+T3`
-  decomposition ported from the now-deleted whole-molecule probe
+  decomposition ported from the now-deleted whole-molecule probe. Also
+  `drop_correlation_if_combined` (invariant 3a) — zeroes the correlation
+  `fxc` arrays under `is_combined_exchange_correlation()`
 - `src/dft/response_packing.{h,cpp}` — `pack_hessian_vector_product_cphf_order`,
   the single translation from AO-basis `δV_xc` into the virtual-major
   `idx(a,i) = a·n_occ + i` layout `solve_augmented_hessian` consumes
@@ -122,6 +124,48 @@ Design rule:
   that depends on the perturbed quantity, not just the named coefficients —
   and gate each term in isolation so a dropped term is a specific
   disagreement, not one combined mismatch.
+
+### 3a. A combined exchange-correlation functional must not have `fxc[c_functional]` added on top
+
+`compute_analytic_xc_hessian_vector_product` and `_polarized` sum
+`fxc[exchange_functional] + fxc[correlation_functional]`. When the
+exchange slot holds a *combined* exchange-correlation libxc entry (B3LYP,
+PBE0, HSE06 — every named hybrid, and any input using one of those names),
+that entry already carries the whole XC, so adding a second
+`fxc[correlation_functional]` **double-counts a correlation `fxc`**. This
+is the exact case the KS-matrix build guards on
+(`src/dft/driver.cpp`, `if (exchange->is_combined_exchange_correlation())`
+— "configured correlation is ignored"); the analytic Hessian must apply
+the same guard.
+
+`src/dft/analytic_hessian.cpp`'s `drop_correlation_if_combined` zeroes
+`v2rho2_c`, and for GGA also `v2rhosigma_c` / `v2sigma2_c` / `vsigma_c`
+(the last feeds the T3 `2·vsigma·δ∇ρ` term), under
+`exchange_functional.is_combined_exchange_correlation()`, in all four
+branches (RKS/UKS × LDA/GGA).
+
+**Found latent** — DFT SOSCF rejects hybrids (`soscf_dft_hybrid_blocked`),
+so no shipped SOSCF run reached the combined-XC analytic Hessian. It
+surfaced via the RKS Hessian-scale probe
+(`docs/SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE.md`): on B3LYP and PBE0 the
+composed `h_op` missed a central-FD of the true total energy by
+`~0.7% – 5.6%`, direction-dependent, while every separate-slot functional
+(LDA, PBE, B88, LYP, PBE_X+LYP) was exact to `1.000000`. Zeroing the
+spurious `fxc[c_functional]` lands every hybrid direction on `1.000000`.
+
+Design rule:
+
+- Any code that sums `fxc[x] + fxc[c]` must apply the
+  `is_combined_exchange_correlation()` guard the KS-matrix build applies —
+  a combined-XC functional carries its correlation in the exchange slot.
+
+Gate: `tests/dft_analytic_hessian_polarized_production.cpp` ::
+`check_combined_no_double_count` — asserts the `correlation_functional`
+argument is inert (RKS and polarized entries give identical results
+whether it is `gga_c_pbe` or the combined functional itself) for
+`hyb_gga_xc_b3lyp` and `hyb_gga_xc_pbeh`. Mutation-verified: reverting
+`drop_correlation_if_combined` makes all six assertions fail by
+`0.012 – 0.018`.
 
 ### 4. The one-term trace identity is the wrong quantity to test the Hessian against
 
@@ -236,5 +280,15 @@ Hybrid and range-separated functionals need the exact-exchange (`K`)
 response on top of `fxc` — the machinery `build_rhf_cphf_matrix` already
 has for HF but which is unbuilt for the KS path. The analytic `fxc`
 functions themselves are functional-agnostic; the gap is a `K`-response
-contraction against an RKS/UKS `C`. Until then, DFT SOSCF rejects hybrids
-with a warning (`docs/SOSCF_DFT.md`).
+contraction against an RKS/UKS `C`. `docs/SOSCF_DFT_HYBRID_SCOPE.md`
+scopes closing it (the `K` response is one more linear-in-density term
+built with the direct K builders already in the tree); until it lands,
+DFT SOSCF rejects hybrids with a warning (`docs/SOSCF_DFT.md`).
+
+When that lands, the combined-XC `fxc` double-count fixed in invariant 3a
+goes from latent to live — `check_combined_no_double_count` is the unit
+gate, and the hybrid SOSCF-vs-DIIS regression case added in
+`SOSCF_DFT_HYBRID_SCOPE` H2 is the end-to-end one (a regression of the
+guard shows there as a hybrid SOSCF convergence slowdown — linear instead
+of superlinear — the same signature the RKS Hessian-scale fix had,
+`docs/SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE.md`).

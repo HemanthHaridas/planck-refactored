@@ -2012,12 +2012,22 @@ namespace DFT::Driver
                     if (soscf_active)
                     {
                         // ── SOSCF (D2.2.3) ──────────────────────────────────
-                        // g_ai = F_mo(a,i), paired with the composed h_op
-                        // UNSCALED -- D2.2.2's own cross-check against
-                        // PySCF's gen_g_hop_rhf confirmed g_true=2*g_bare and
-                        // H_true=4*H_bare, a MATCHING pair (like RHF's own
-                        // 4-and-4), so the unscaled ratio already reproduces
-                        // the true Newton step.
+                        // Closed-shell RKS. The exact Newton step is
+                        // -H_true^-1 g_true with, in the kappa parametrization
+                        // (occupancy-2 density, dP/dkappa = [R,P0] = 2*dP):
+                        //   g_true      = 4 * F_mo(a,i)
+                        //   H_true * x  = 4 * diag(eps_a-eps_i) .* x
+                        //               + 8 * (J + V_xc + K)[dP]
+                        // Dividing both by 4: g = F_mo (unscaled, as before) and
+                        //   h_op(x) = diag .* x + 2 * (J + V_xc + K)[dP].
+                        // The old code used a bare (J+V_xc), i.e. the kernel was
+                        // half-weighted relative to the diagonal -- the Newton
+                        // DIRECTION was slightly wrong (magnitude was fine because
+                        // the diagonal dominates). See
+                        // docs/SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE.md; LDA-verified
+                        // to ratio 1.000000 by the S1 probe.
+                        // (UKS is unaffected -- occupancy-1 makes diag and kernel
+                        // scale identically there; do NOT add a 2x to UKS.)
                         const int n_occ_i = static_cast<int>(n_occ);
                         const int n_virt_i = static_cast<int>(nbasis) - n_occ_i;
                         const Eigen::MatrixXd C_occ_prev = C_soscf_prev.leftCols(n_occ_i);
@@ -2034,8 +2044,9 @@ namespace DFT::Driver
 
                         const auto h_op = [&](const Eigen::VectorXd &x) -> Eigen::VectorXd
                         {
-                            // dP(x) = 2*(C_virt*unpack(x)*C_occ^T + h.c.), same
-                            // convention D2.2.2 verified.
+                            // dP = C_virt*unpack(x)*C_occ^T + h.c. -- half of the
+                            // true dP/dt = [R,P0] = 2*dP (see the scale block
+                            // above). The 4x/8x split is applied at the return.
                             Eigen::MatrixXd x_mat(n_virt_i, n_occ_i);
                             for (int a = 0; a < n_virt_i; ++a)
                                 for (int i = 0; i < n_occ_i; ++i)
@@ -2060,7 +2071,36 @@ namespace DFT::Driver
                             const Eigen::VectorXd xc_packed = DFT::Driver::pack_hessian_vector_product_cphf_order(
                                 *dV_xc, C_occ_prev, C_virt_prev);
 
-                            return diag_term.cwiseProduct(x) + J_packed + xc_packed;
+                            // K response (SOSCF_DFT_HYBRID_SCOPE H0): a hybrid's
+                            // KS Fock carries -0.5*(c_fr*K_Coulomb + c_sr*K_SR),
+                            // K linear in the density exactly like J, so the
+                            // Hessian gains delta of it on the trial dP with the
+                            // same coeff/sign as the KS build
+                            // (src/dft/driver.cpp assemble_current_ks_potential).
+                            // H0 wires only the global-hybrid c_fr branch; still
+                            // unreachable (soscf_dft_hybrid_blocked gate stays).
+                            Eigen::VectorXd K_packed = Eigen::VectorXd::Zero(x.size());
+                            {
+                                const double c_fr = xc_grid->full_range_exchange_coefficient;
+                                if (c_fr != 0.0)
+                                {
+                                    const Eigen::MatrixXd dK = _compute_2e_k_direct(
+                                        prepared.shell_pairs, dP, calculator._shells.nbasis(),
+                                        calculator._integral._engine, HartreeFock::ERIKernel::Coulomb,
+                                        0.0, calculator._integral._tol_eri,
+                                        calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
+                                                                          : nullptr);
+                                    K_packed = DFT::Driver::pack_hessian_vector_product_cphf_order(
+                                        -0.5 * c_fr * dK, C_occ_prev, C_virt_prev);
+                                }
+                            }
+
+                            // diag .* x + 2 * kernel  (see the scale block
+                            // above): the kernel carries twice the diagonal's
+                            // weight because dP/dkappa = 2*dP and the kernel is
+                            // bilinear. Paired with the unscaled g = F_mo.
+                            return diag_term.cwiseProduct(x) +
+                                   2.0 * (J_packed + xc_packed + K_packed);
                         };
                         const auto g_op = [&g]() -> Eigen::VectorXd
                         { return g; };
@@ -2074,6 +2114,28 @@ namespace DFT::Driver
                         const HartreeFock::Correlation::CASSCF::AugHessianResult ah =
                             HartreeFock::Correlation::CASSCF::solve_augmented_hessian(
                                 h_op, g_op, nullptr, x0, ah_opts);
+
+                        // Deadband: once the Newton step is at the density-tolerance
+                        // scale, applying it just cycles the density at ~1e-10 (the
+                        // AH solve returns a nonzero step for any g != 0, and a
+                        // full-convergence SOSCF window has no DIIS to damp it).
+                        // Pass the reference orbitals through unchanged so
+                        // next_density == density and is_converged can fire. The
+                        // DIIS-handoff mode never reaches this -- it hands back
+                        // long before. See SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE.
+                        if (ah.x.allFinite() &&
+                            ah.x.cwiseAbs().maxCoeff() < calculator._scf._tol_density)
+                        {
+                            C_new = C_soscf_prev;
+                            eps_new = eps_soscf_prev;
+                            HartreeFock::Logger::logging(
+                                HartreeFock::LogLevel::Info, "DFT SOSCF :",
+                                std::format("step at iter {}: |g|={:.3e} step below tol_density "
+                                            "-- holding orbitals (deadband)",
+                                            iter, g.norm()));
+                        }
+                        else
+                        {
 
                         // Trust-region cap, same constant RHF/UHF SOSCF use.
                         constexpr double kSoscfMaxRot = 0.20;
@@ -2132,6 +2194,7 @@ namespace DFT::Driver
                                 "ah_iters={} ah_residual={:.3e} cap_fired={}",
                                 iter, g.norm(), ah.v0, ah.eigenvalue, ah.converged, ah.iterations,
                                 ah.residual_norm, cap_fired));
+                        } // end deadband else
                     }
                     else
                     {
@@ -2175,6 +2238,150 @@ namespace DFT::Driver
                     // it fires -- same discipline RHF/UHF SOSCF use.
                     C_soscf_prev = C_new;
                     eps_soscf_prev = eps_new;
+
+                    // ── RKS Hessian-scale probe (SOSCF_DFT_RKS_HESSIAN_SCALE_SCOPE S1) ──
+                    // Env-gated (PLANCK_SOSCF_HYBRID_CHECK), fires once at a
+                    // converged reference, reverted after the hybrid work lands.
+                    // Central-FDs the TRUE total energy E(kappa) along three
+                    // (a,i) directions and checks the composed RKS h_op with the
+                    // split scaling: curvature term 4x, kernel term (J + V_xc +
+                    // K) 8x. HARD assertion (|ratio - 1| < 1e-4) for:
+                    //   - LDA (exact delta_V_xc), and
+                    //   - a combined exchange-correlation functional (B3LYP /
+                    //     PBE0 / ...): its GGA base is individually exact, so
+                    //     after the DFT_ANALYTIC_FXC_COMBINED_XC_SCOPE guard is
+                    //     in, the composed h_op must land on 1. Without the
+                    //     guard this fails ~0.7% (spurious fxc[c_functional]).
+                    // Separate x + c GGA functionals are reported only (the
+                    // separate-slot GGA path is already exact; nothing to gate
+                    // here beyond the combined case above).
+                    // Runs regardless of soscf_active.
+                    static bool rks_scale_probe_done = false;
+                    if (!rks_scale_probe_done && std::getenv("PLANCK_SOSCF_HYBRID_CHECK") &&
+                        use_diis && diis_error > 0.0 && diis_error < 1e-9)
+                    {
+                        rks_scale_probe_done = true;
+                        const int no = static_cast<int>(n_occ);
+                        const int nv = static_cast<int>(nbasis) - no;
+                        const Eigen::MatrixXd Co = C_soscf_prev.leftCols(no);
+                        const Eigen::MatrixXd Cv = C_soscf_prev.rightCols(nv);
+                        const Eigen::VectorXd dg =
+                            DFT::Driver::orbital_energy_difference_diagonal(eps_soscf_prev, no);
+                        const bool lda = x_functional.is_lda_like();
+                        const bool combined_xc = x_functional.is_combined_exchange_correlation();
+                        const bool hard_assert = lda || combined_xc;
+
+                        // Composed h_op with the SPLIT scaling: 4*diag + 8*kernel.
+                        const auto h_op_scaled = [&](const Eigen::VectorXd &x) -> Eigen::VectorXd
+                        {
+                            Eigen::MatrixXd xm(nv, no);
+                            for (int a = 0; a < nv; ++a)
+                                for (int i = 0; i < no; ++i)
+                                    xm(a, i) = x(a * no + i);
+                            const Eigen::MatrixXd d1 = Cv * xm * Co.transpose();
+                            const Eigen::MatrixXd dP = d1 + d1.transpose();
+                            const Eigen::MatrixXd dJ = _compute_2e_j_direct(
+                                prepared.shell_pairs, dP, calculator._shells.nbasis(),
+                                calculator._integral._engine, HartreeFock::ERIKernel::Coulomb,
+                                0.0, calculator._integral._tol_eri,
+                                calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
+                                                                  : nullptr);
+                            const Eigen::VectorXd Jp = DFT::Driver::pack_hessian_vector_product_cphf_order(
+                                dJ, Co, Cv);
+                            const auto dVxc = DFT::Driver::compute_analytic_xc_hessian_vector_product(
+                                prepared.molecular_grid, prepared.ao_grid, density, dP,
+                                x_functional, c_functional);
+                            const Eigen::VectorXd Xp = DFT::Driver::pack_hessian_vector_product_cphf_order(
+                                *dVxc, Co, Cv);
+                            Eigen::VectorXd Kp = Eigen::VectorXd::Zero(x.size());
+                            const double c_fr = xc_grid->full_range_exchange_coefficient;
+                            if (c_fr != 0.0)
+                            {
+                                const Eigen::MatrixXd dK = _compute_2e_k_direct(
+                                    prepared.shell_pairs, dP, calculator._shells.nbasis(),
+                                    calculator._integral._engine, HartreeFock::ERIKernel::Coulomb,
+                                    0.0, calculator._integral._tol_eri,
+                                    calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
+                                                                      : nullptr);
+                                Kp = DFT::Driver::pack_hessian_vector_product_cphf_order(
+                                    -0.5 * c_fr * dK, Co, Cv);
+                            }
+                            return 4.0 * dg.cwiseProduct(x) + 8.0 * (Jp + Xp + Kp);
+                        };
+
+                        // E(kappa): swap in P(kappa), rebuild XC+KS, apply the
+                        // SAME energy formula as production (line ~1948), restore.
+                        const Eigen::MatrixXd saved_density = calculator._info._scf.alpha.density;
+                        const auto E_at = [&](const Eigen::VectorXd &step) -> double
+                        {
+                            Eigen::MatrixXd kap = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                            for (int a = 0; a < nv; ++a)
+                                for (int i = 0; i < no; ++i)
+                                {
+                                    const double v = step(a * no + i);
+                                    kap(no + a, i) = v;
+                                    kap(i, no + a) = -v;
+                                }
+                            const Eigen::MatrixXd Ck =
+                                HartreeFock::Correlation::CASSCF::apply_orbital_rotation(
+                                    C_soscf_prev, kap, calculator._overlap);
+                            const Eigen::MatrixXd Pk = density_from_orbitals(Ck, n_occ, 2.0);
+                            calculator._info._scf.alpha.density = Pk;
+                            auto xg = evaluate_current_density_and_xc(
+                                calculator, prepared, x_functional, c_functional, 0,
+                                prepared.molecular_grid.points.rows());
+                            reduce_partial_xc_scalars(*xg);
+                            auto ksp = assemble_current_ks_potential(
+                                calculator, prepared, *xg, 0,
+                                prepared.molecular_grid.points.rows());
+                            return (Pk.array() * calculator._hcore.array()).sum() +
+                                   0.5 * (Pk.array() * ksp->coulomb.array()).sum() +
+                                   xg->total_energy + ksp->exact_exchange_energy +
+                                   calculator._nuclear_repulsion;
+                        };
+                        const double E0 = E_at(Eigen::VectorXd::Zero(nv * no));
+                        HartreeFock::Logger::logging(
+                            HartreeFock::LogLevel::Info, "RKS SCALE PROBE :",
+                            std::format("func={} lda={} c_fr={:.4f} E0={:.10f} nov={}",
+                                        x_functional.name(), lda,
+                                        xc_grid->full_range_exchange_coefficient, E0, nv * no));
+                        const int dirs[3][2] = {{0, 0}, {nv / 2, no / 2}, {nv - 1, no - 1}};
+                        bool assert_ok = true;
+                        for (const auto &d : dirs)
+                        {
+                            const int a = d[0], i = d[1];
+                            if (a < 0 || a >= nv || i < 0 || i >= no)
+                                continue;
+                            Eigen::VectorXd e = Eigen::VectorXd::Zero(nv * no);
+                            e(a * no + i) = 1.0;
+                            const double composed = h_op_scaled(e)(a * no + i);
+                            double last_ratio = 0.0;
+                            for (double h : {1e-2, 1e-3, 1e-4})
+                            {
+                                const double fd = (E_at(h * e) - 2.0 * E0 + E_at(-h * e)) / (h * h);
+                                last_ratio = composed / fd;
+                                HartreeFock::Logger::logging(
+                                    HartreeFock::LogLevel::Info, "RKS SCALE PROBE :",
+                                    std::format("(a={},i={}) h={:.0e} composed={:.6e} FD={:.6e} ratio={:.6f}",
+                                                a, i, h, composed, fd, last_ratio));
+                            }
+                            if (hard_assert && std::abs(last_ratio - 1.0) > 1e-4)
+                            {
+                                assert_ok = false;
+                                HartreeFock::Logger::logging(
+                                    HartreeFock::LogLevel::Error, "RKS SCALE PROBE :",
+                                    std::format("assertion FAILED at (a={},i={}): ratio={:.6f} "
+                                                "({}) -- expected |ratio - 1| < 1e-4",
+                                                a, i, last_ratio,
+                                                lda ? "4*diag + 8*kernel split is wrong"
+                                                    : "combined-XC fxc double-counts correlation "
+                                                      "(DFT_ANALYTIC_FXC_COMBINED_XC_SCOPE)"));
+                            }
+                        }
+                        calculator._info._scf.alpha.density = saved_density;
+                        if (hard_assert && !assert_ok)
+                            std::abort();
+                    }
 
                     HartreeFock::SCF::store_restricted_iteration(
                         calculator,
