@@ -732,27 +732,61 @@ water/STO-3G B2PLYP FD residual. Component-resolved probes:
    (2.65e-4 vs 1.88e-4 needed), with a per-component sign structure -- the
    same shape N3.5.7.4 and S4 hit.
 
-**Still unresolved: why XC_II overshoots ~2x.** Two candidates, needing
-the spin-RESOLVED Eq. 33 (paper Sec. II, not the Sec. III.A closed-shell
-collapse this arc has been approximating):
+**Sec. II derivation done (2026) -- XC_II is EXACTLY Eq. 33 Term1+Term2.**
+Worked the spin-resolved form and its closed-shell collapse, then
+numerically validated against
+`compute_analytic_xc_hessian_vector_product_polarized` (the SOSCF-validated
+polarized `R^XC` operator):
 
-- **A residual closed-shell spin factor.** Sec. III.A's collapse of
-  `Sum_sigma int zeta(P)^(x) { f^{rho_sigma rho_sigma zeta} rho_D^sigma + ... }`
-  with `rho_P^sigma = rho_P/2`, `rho_D^sigma = rho_D/2`, `Sum_sigma -> x2`
-  gives a net factor 1 on the total-density product ONLY if the polarized
-  `f^{rho_sigma rho_sigma}` equals the unpolarized `v2rho2`. It does not:
-  `v2rho2_unpol = 1/2 (v2rho2_aa + v2rho2_ab)`, so
-  `v2rho2_aa = 2 v2rho2_unpol - v2rho2_ab`. For pure exchange
-  `v2rho2_ab = 0` and the routine is right; for correlation (and the
-  combined B2PLYP entry) the `v2rho2_ab/2` piece is missing. Whether that
-  accounts for the ~2x needs the polarized libxc `fxc` worked through.
-- **A partial double-count** with N3.5.4's `ks_veff` (the `f_xc` HVP in
-  `veff_corr_ao` / `Xvo`) -- ruled *less* likely: disabling `ks_veff` and
-  re-measuring left the residual at ~3.5e-3 (unchanged), so the
-  Lagrangian's XC response is not silently supplying XC_II.
+> Eq.33_XC = Sum_sigma Sum_munu D^sigma_munu . R^XC_polarized[trial = rho_P^(x)]^sigma_munu
 
-**The routine and its FD gate stay committed.** The N3.5.5 `vhf_s1occ`
-HF-vs-KS question stays parked (small, wrong-sign, revert-safe).
+i.e. the polarized response operator applied to the SCF density's
+basis-function derivative `rho^(x)` (per spin `rho_P^(x)/2`), contracted
+with `D^sigma`. Closed-shell collapse (`rho_alpha = rho_beta = rho_P/2`,
+`D^alpha = D^beta = D/2`, `Sum_sigma -> x2`):
+`Sum_sigma D^sigma . R^XC_pol[rho_P^(x)/2]^sigma == D . R^XC_unpol[rho_P^(x)]`.
+**Verified to machine precision (diff 1e-17) for both a linear (He2) and a
+bent 3-atom (water-like) geometry with all components non-zero.** So:
+
+- **There is NO closed-shell spin-factor bug.** The `v2rho2_ab/2`
+  candidate above is DEAD -- the LDA collapse gives exactly
+  `int v2rho2_unpol * rho_P^(x) * rho_D dr` (because
+  `v2rho2_unpol = 1/2 (v2rho2_aa + v2rho2_ab)` and the spin sum + halved
+  densities reconstruct it), and the GGA collapse matches the polarized
+  form term-for-term.
+- **The `ks_veff` for `vhf_s1occ` (N3.5.5) is inert now**, not harmful:
+  re-tested with the CURRENT `ks_veff` closure (linear `f_xc` HVP, not
+  N3.5.5's nonlinear `get_veff`), the `vhf_s1occ` KS-vs-HF swap changes
+  the water/STO-3G B2PLYP FD residual by 0 (projected `R^XC(relaxed)` is
+  ~0 there). N3.5.5's "made it worse" does not reproduce.
+
+**So the ~2x end-to-end overshoot is NOT in the XC term** -- XC_II is
+provably Eq. 33's XC contribution. It is in **how Planck assembles
+`E_PT2^x` around it**: `build_rmp2_gradient_intermediates` is the *HF-MP2*
+gradient path re-run on KS orbitals, and its `<D h^x>`, `<W^PT2 S^x>`,
+`Sum Gamma (munu|kt)^x` terms are the HF-MP2 versions, not the paper's
+DH-specific Eqs. 22-33. Candidates for the mismatch (all in the
+already-committed DH gradient path, not this routine):
+- **`W^PT2`'s `-1/2 R(D)_ij` piece (Eq. 42).** Planck's `vhf_s1occ` uses
+  HF `J - 1/2 K`; the paper wants `R(D)` = the full response operator
+  INCLUDING `R^XC(D)`. Inert for water (see above) but may bite on a
+  system with real `rho_D` gradient structure.
+- **`Gamma^PT2` (Eq. 46) vs Planck's `dm1p` / `dm2buf`.** The separable
+  2e density the `vhf1` derivative kernel contracts is `hf_dm1 + 2*D`;
+  Eq. 46's `Gamma^{SCF+PT2}` is `1/2 P P - 1/4 P P + D P - 1/2 D P +
+  Gamma^NS`. Needs a term-by-term check that the DH path reproduces it
+  exactly (it was validated for HF-MP2, where there is no XC operator).
+- **`<D h^x>` -- `h` in the DH context.** The KS `h_core` is the same
+  kinetic + nuclear as HF, so this is likely fine, but the `x` derivative
+  of the KS one-electron operator has no XC part by construction, so any
+  XC that "should" be in `<D h^x>` is not there.
+
+**Next:** term-by-term audit of `build_rmp2_gradient_intermediates`
+against Eqs. 22-46 in the double-hybrid context, isolating which of
+`<D h^x>` / `<W^PT2 S^x>` / `Sum Gamma (munu|kt)^x` is the ~2x. The XC
+term (this routine) is settled.
+
+**The routine and its FD gate stay committed.**
 
 ### N3.6 -- lift the gate, add regressions
 
