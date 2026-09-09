@@ -85,7 +85,24 @@ MO-side one.**
 **Why first.** Every step is hours, uses instruments that already exist, and
 each has a decisive pass/fail. H1 needs a geometry-optimization campaign.
 
-### H2.1 -- does the residual scale with `c_pt2`? (~1 h, highest information)
+### H2.1 -- RUN. The residual is LINEAR THROUGH THE ORIGIN to 97%: the defect is inside the PT2 term
+
+Planck's gradient is `G_KS + c_pt2 * corr` and the FD reference is
+`FD_KS + c_pt2 * dEcorr/dR`, so the residual is
+`(G_KS - FD_KS) + c_pt2 * (corr - dEcorr/dR)` -- an intercept plus a slope, and
+both are already measured. Linearity confirmed numerically by running Planck at
+`c_pt2` scaled 0.5x / 1x / 2x (`max|[G(2)-G(1)] - 2[G(1)-G(0.5)]| = 1.0e-8`).
+
+| piece | value | share |
+|---|---|---|
+| intercept (= the KS-only error, measurement 2) | `3.66e-5` | **3%** |
+| slope (the PT2 part) | `1.24e-3` | **97%** |
+
+**The `ref_grad` subtraction is not leaking**, which independently confirms
+N3.5.7.9's per-term invariance check from a different direction. Whatever is
+missing is a term in `E_PT2^x`, exactly as every candidate has assumed.
+
+<details><summary>original plan (superseded by the above)</summary>
 
 `*corr` is built from a Lagrangian scaled by `c_pt2 = 0.27`. If the residual is
 **linear in `c_pt2`**, it lives in the PT2 correction proper. If it has a
@@ -105,8 +122,26 @@ literal; parameterize it).
 
 **Falsifiable:** a defect that is *not* linear in `c_pt2` cannot be a missing
 term in `E_PT2^x`, which is what every candidate so far has assumed.
+</details>
 
-### H2.2 -- is `rmp2_kernel` on KS orbitals returning the right amplitudes? (~2 h)
+### H2.2 -- RUN. Amplitudes agree ELEMENTWISE to 8e-9; exonerated
+
+Dumped Planck's `t2` (`[i,j,a,b]` row-major) with its own `mo_coeff`/`mo_energy`,
+then rebuilt PySCF's amplitudes **using Planck's C**, so MO phase and ordering
+match by construction and no phase-invariant dodge is needed.
+
+```
+max|t2_planck - t2_pyscf| = 7.96e-09   (|t2|max 6.96e-02, rel 1.1e-07)
+max|eps_planck - eps_pyscf| = 2.43e-06
+```
+
+The 8e-9 is fully accounted for by the 2.4e-6 orbital-energy difference between
+the two independently-converged SCF solutions -- it is not an MP2-kernel error.
+**Amplitudes are exonerated, and with them `Gamma^NS`.** This was the failure
+mode `CCGEN_SPIN_ADAPT_DEFAULT` recorded (energy right because it is a
+contraction, amplitudes wrong); it does not apply here.
+
+<details><summary>original plan (superseded by the above)</summary>
 
 Never checked. The energy agrees with PySCF to 6.3e-8 (N3.5.7.10), but the
 **energy is a contraction of amplitudes** and can be right while individual
@@ -119,8 +154,39 @@ the PySCF run, so no phase-invariance dodge is needed). Tolerance 1e-10.
 
 - **Mismatch** -> found it; the whole downstream chain inherits it.
 - **Match** -> amplitudes are exonerated, and with them `Gamma^NS`.
+</details>
 
-### H2.3 -- is the Z-vector solution converged and correct? (~2 h)
+### H2.3 -- RUN. Exact solve, symmetric well-conditioned operator; exonerated -- but the Z-vector has REAL LEVERAGE
+
+**Part 1 is answered by inspection: there is no convergence tolerance to be
+loose.** `dh_relaxed_density.cpp` assembles the Hessian densely and solves with
+`colPivHouseholderQr` -- a direct solve, not an iterative one.
+
+Probe results on both fixtures:
+
+```
+dim=27  ||Az-rhs||=6.8e-18  max|A-A^T|=1.0e-15 (rel 5.2e-17)
+        eig[min,max]=[3.07e-01, 1.99e+01]   (SPD, cond ~65)
+```
+
+Machine-precision solve, symmetric to 5e-17 relative, positive definite. Part 2
+(independent construction) done by cross-checking `A` against
+`build_rhf_cphf_matrix`: they differ by 1.9% overall but **33% in the
+off-diagonal block**, which is the expected structural difference from replacing
+full HF exchange with `0.53*K + R^XC`. (The diagonal difference is larger in
+absolute terms only because the diagonal is dominated by `eps_a - eps_i` ~ 20
+while off-diagonals are ~0.2 -- an initial reading of this as "suspiciously
+diagonal" was wrong.)
+
+**But the Z-vector matters far more than expected, which is worth carrying.**
+Switching the operator to HF-CPHF (`PLANCK_DFT_DH_ZVECTOR_HFCPHF`) moves the
+final gradient by **1.39e-3 / 1.18e-3** -- **3.6x the residual** -- and makes it
+worse (residual 3.89e-4 -> 1.59e-3). So the KS operator is both load-bearing and
+the better choice, and a *subtle* error in it could comfortably carry 3.9e-4.
+The checks above say it is well-formed, not that every coefficient in it is
+right.
+
+<details><summary>original plan (superseded by the above)</summary>
 
 The DH path solves the Z-vector with `build_ks_orbital_hessian_op` (N2). Two
 checks, neither done:
@@ -134,6 +200,7 @@ checks, neither done:
 
 **Falsifiable and cheap.** A tight residual plus a matching dense solve
 exonerates the Z-vector entirely.
+</details>
 
 ### H2.4 -- the `ks_veff` closure's ground density -- CHECKED WHILE SCOPING, REFUTED
 
@@ -153,11 +220,25 @@ Recorded rather than deleted because the naming genuinely invites the mistake --
 `alpha.density` holding a total density is a trap a future reader will hit
 again.
 
-### H2 stop condition
+### H2 -- OUTCOME: all four steps run, all clean. H1 is now the live hypothesis.
 
-If H2.1-H2.4 all pass, the KS-side assembly is exonerated to the precision
-available and **H1 becomes the live hypothesis**. Record that outcome; do not
-invent an H2.5.
+| step | result |
+|---|---|
+| H2.1 `c_pt2` linearity | residual is **97% slope, 3% intercept** -- the defect is inside `E_PT2^x`; `ref_grad` does not leak |
+| H2.2 amplitudes | elementwise to **8e-9**; exonerated, with `Gamma^NS` |
+| H2.3 Z-vector | exact QR solve (resid 7e-18), symmetric (5e-17 rel), SPD; operator well-formed |
+| H2.4 density convention | refuted during scoping (`alpha.density` IS the total for RKS) |
+
+**H2 is exonerated to the precision available**, and the scope's own instruction
+applies: record it and do not invent an H2.5. The one caveat worth carrying is
+H2.3's leverage finding -- the Z-vector operator moves the gradient by 3.6x the
+residual, so "well-formed" is not the same as "every coefficient correct". If
+H1.2 ever shows Planck (not the paper) is wrong, the KS orbital Hessian's
+coefficients are where to look first, despite passing every structural check
+here.
+
+**Next: H1.1**, which the scope already marks as the highest-value step in
+either investigation and to be run regardless of cause.
 
 ---
 
