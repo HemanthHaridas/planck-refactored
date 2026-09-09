@@ -781,10 +781,57 @@ already-committed DH gradient path, not this routine):
   of the KS one-electron operator has no XC part by construction, so any
   XC that "should" be in `<D h^x>` is not there.
 
-**Next:** term-by-term audit of `build_rmp2_gradient_intermediates`
-against Eqs. 22-46 in the double-hybrid context, isolating which of
-`<D h^x>` / `<W^PT2 S^x>` / `Sum Gamma (munu|kt)^x` is the ~2x. The XC
-term (this routine) is settled.
+**Term-by-term audit (started 2026).** Mapping `electronic` in
+`build_rmp2_gradient_intermediates` to Eq. 33's closed-shell form:
+
+| Planck accumulator | Eq. 33 term | density used |
+|---|---|---|
+| `two_e_terms` = `sum dI * 2*dm2buf_full` | nonseparable `Gamma^NS` (Eq. 35/47) | `t2 -> AO`, KS orbitals |
+| `one_e_terms` on `dm1_total_ao` | `<D h^x>` | `hf_dm1 + 1*D'_relaxed` |
+| `s_im1 + s_zeta + s_vhf` | `<W^PT2 S^x>` (Eqs. 42-45) | `imat`, `zeta`, `vhf_s1occ` |
+| `vhf1_terms` = `sum vhf1[atom][q] .* dm1p` | separable `Gamma` (Eq. 46: `1/2 PP - 1/4 PP + DP - 1/2 DP`) | `dm1p = hf_dm1 + 2*D'_relaxed`, HF `2J-K` full-weight kernel |
+| `vhf1_rs/rq/pq/ps` | same separable `Gamma`, other permutations | `hf_dm1 (x) dm1p` |
+
+The full-HF-exchange-weight in `vhf1` (not `a_x`) is CORRECT per Eq. 46
+(the paper is explicit: `a_x` lives in `E_SCF` and `R^XC`, not the
+separable PT2 `Gamma`). So `Gamma^PT2` looks structurally right.
+
+**Per-component probe (water/STO-3G B2PLYP, wiring XC_II only, unrelaxed
+`D` = `lag->dm1_corr_ao`), analytic - FD:**
+
+| component | baseline (no XC) | + XC_II | XC_II contributed | needed |
+|---|---|---|---|---|
+| atom1 (O) z | `-1.87e-4` | `-1.89e-4` | `~0` | `+1.87e-4` |
+| atom2 (H) y | `+1.88e-4` | `+4.0e-5`  | `-1.48e-4` | `-1.88e-4` |
+| atom2 (H) z | `+9.3e-5`  | `+2.02e-4` | `+1.09e-4` | `-9.3e-5` |
+
+XC_II **fixes atom2-y** (the baseline's max residual) almost perfectly,
+does **nothing** for atom1-z, and gets atom2-z the **wrong sign**. So the
+missing term is XC_II (which XC_II supplies) **plus a z-directional term**
+that pushes both z-forces negative -- one XC_II does not carry. (Relaxed
+`D` gives a worse atom2-z; the `z_ov` block of the relaxed density is not
+helping there.)
+
+**The z-directional term is the open question.** Candidates, in order of
+suspicion:
+- **XC_III (moving grid), which is NOT negligible for a bent molecule.**
+  The synthetic He2 test put XC_III at ~1e-7, but water's grid has real
+  geometry dependence on the O-centred block -- a Becke-weight /
+  point-translation term of O(1e-4) on the O z-force is plausible and
+  matches the atom1-z signature (a term XC_II structurally cannot carry).
+  The routine already computes XC_III; a clean wired probe (XC_II + XC_III,
+  no XC_I) is the immediate next step -- the env-gated probes for this
+  kept mis-firing.
+- **`<W^PT2 S^x>`'s `-1/2 R^XC(D)` piece.** Inert for water at the SCF
+  level (projected `R^XC(relaxed)` ~ 0), but its `S^x` contraction is a
+  different object and was not separately checked.
+- **A sign or factor in how `*corr` isolates the PT2 part** (the
+  `full - ref_grad` subtraction with a zeroed Lagrangian) in the DH
+  context -- the `ref_grad` was built for HF-MP2.
+
+**The XC term (this routine, XC_II) is settled** -- Sec. II derivation +
+polarized `R^XC` cross-check to machine precision. Everything unresolved
+is in the surrounding DH-gradient assembly.
 
 **The routine and its FD gate stay committed.**
 
