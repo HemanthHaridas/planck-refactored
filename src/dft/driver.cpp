@@ -4167,25 +4167,51 @@ namespace DFT::Driver
                 //                                -- the paper's "not the naive
                 //                                D^(x)" is literal)
                 //   XC_II only      -> 2.65e-4  (worse than the 1.88e-4 baseline)
-                //   XC_II * c_pt2   -> ~1.4e-4  (marginal, and the c_pt2 = 0.27
-                //                                coincidence smells of a factor
-                //                                bug)
+                //   XC_II * c_pt2   -> ~1.4e-4  (a max-norm coincidence --
+                //                                N3.5.7.8 showed no single
+                //                                scale factor works)
                 // Eq. 33's Term1+Term2 IS XC_II (basis-only rho_P^(x), no
                 // moving grid, no rho_D^(x)). XC_II is FD-verified as
                 // sum_munu D_munu R^XC[rho_P^(x)]_munu with the SOSCF-validated
-                // total-density v2rho2, yet it overshoots the baseline
-                // residual ~2x with a per-component sign structure. Likely a
-                // residual closed-shell spin factor (v2rho2_aa vs v2rho2_unpol
-                // differ by v2rho2_ab/2 for correlation) or a partial
-                // double-count not yet found -- needs the spin-RESOLVED
-                // Eq. 33 (paper Sec. II, not the Sec. III.A collapse).
-                //   auto dh_xc_grad = DFT::Gradient::compute_dh_xc_pt2_gradient(
-                //       calculator._molecule, calculator._shells,
-                //       prepared.molecular_grid, prepared.ao_grid, hess,
-                //       calculator._info._scf.alpha.density,
-                //       rd->dm1_corr_relaxed_ao,
-                //       functionals.exchange, functionals.correlation);
-                //   calculator._gradient += *dh_xc_grad;   // (reverted -- S5)
+                // total-density v2rho2. N3.5.7.8 measured the decomposition
+                // end-to-end and eliminated three candidates: XC_III is ~1e-7
+                // on real water (not just synthetic He2); the closed-shell
+                // spin factor is fine (Sec. II vs polarized R^XC, 1e-17); and
+                // restoring XC_II's translational invariance with its
+                // point-translation companion (kXcIIt) makes the residual
+                // WORSE. XC_II carries one component almost exactly and is
+                // structurally missing the z-directional piece; the open
+                // suspect is the `full - ref_grad` PT2 isolation below, built
+                // for HF-MP2.
+                // Probe hook, OFF by default (production is unchanged):
+                // PLANCK_DFT_DH_XC_PARTS is the bitmask 1=XC_I, 2=XC_II,
+                // 4=XC_III; PLANCK_DFT_DH_XC_SCALE an optional prefactor.
+                // Explicit mask rather than a bare on/off flag -- the earlier
+                // env-gated probes for this "kept mis-firing" because they
+                // could not say WHICH piece they were adding.
+                if (const char *parts_env = std::getenv("PLANCK_DFT_DH_XC_PARTS"))
+                {
+                    const unsigned parts =
+                        static_cast<unsigned>(std::strtoul(parts_env, nullptr, 10));
+                    double scale = 1.0;
+                    if (const char *s = std::getenv("PLANCK_DFT_DH_XC_SCALE"))
+                        scale = std::strtod(s, nullptr);
+                    auto dh_xc_grad = DFT::Gradient::compute_dh_xc_pt2_gradient(
+                        calculator._molecule, calculator._shells,
+                        prepared.molecular_grid, prepared.ao_grid, hess,
+                        calculator._info._scf.alpha.density,
+                        rd->dm1_corr_relaxed_ao,
+                        functionals.exchange, functionals.correlation, parts);
+                    if (!dh_xc_grad)
+                        return std::unexpected("DFT double-hybrid gradient: XC probe failed: " +
+                                               dh_xc_grad.error());
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Info, "DFT DH Gradient :",
+                        std::format("N3.5.7 XC probe: parts={} scale={:.4f} "
+                                    "max|xc_grad| = {:.6e}",
+                                    parts, scale, dh_xc_grad->cwiseAbs().maxCoeff()));
+                    calculator._gradient += scale * (*dh_xc_grad);
+                }
 
                 // N3.5.1: is compute_xc_nuclear_gradient_rks linear in its
                 // density argument? If g(Pa+Pb) == g(Pa) + g(Pb), the missing

@@ -43,18 +43,38 @@ namespace DFT::Gradient
     // All first / second derivatives at the GROUND density; rho_P >= 1e-8
     // screened; combined-XC guard on the _c arrays.
     //
-    // *** NOT WIRED INTO THE DRIVER *** -- see S5 in the scope doc. Eq. 33's
-    // XC term is the XC_II piece ONLY (basis-only rho_P^(x), no moving grid,
-    // no rho_D^(x)); XC_I blows the end-to-end B2PLYP gradient up (~3.5e-3),
-    // and XC_II alone overshoots the ~1.9e-4 residual ~2x with a
-    // per-component sign structure -- unresolved (likely a closed-shell
-    // spin factor: v2rho2_aa vs v2rho2_unpol differ by v2rho2_ab/2 for
-    // correlation). This routine and its FD gate are kept as the validated
-    // building block for the eventual fix.
+    // *** NOT WIRED INTO PRODUCTION *** -- see S5 / N3.5.7.8 in the scope
+    // doc. Eq. 33's XC term is the XC_II piece ONLY (basis-only rho_P^(x),
+    // no moving grid, no rho_D^(x)); XC_I blows the end-to-end B2PLYP
+    // gradient up (~3.5e-3). XC_II supplies one component of the residual
+    // almost exactly but not the z structure. Measured (N3.5.7.8), so do
+    // not re-litigate: XC_III is ~1e-7 on real water, not just on the
+    // synthetic He2 fixture; the closed-shell spin factor is NOT the
+    // problem (Sec. II derivation cross-checked against the polarized
+    // R^XC to 1e-17); and no single scale factor closes the gap (per-
+    // component ratios -5.29 / 1.11 / -0.52), so the c_pt2 = 0.27 "fit"
+    // was a max-norm coincidence. The driver reaches this routine only
+    // via the PLANCK_DFT_DH_XC_PARTS probe hook.
     //
     // `ground_density_restricted` is the SCF (KS) density P;
     // `relaxed_density_restricted` is the relaxed PT2 difference density D
     // (dm1_corr_relaxed_ao). Both are the full closed-shell (RKS) matrices.
+    //
+    // `parts` selects which of the three pieces to accumulate. Default = all
+    // three (the full d/dR{Phi_XC} the FD gate verifies). Eq. 33's XC term is
+    // XC_II alone; the selector exists so an end-to-end probe can isolate the
+    // pieces without env vars or edit-rebuild cycles.
+    enum XcPart : unsigned
+    {
+        kXcI = 1u,
+        kXcII = 2u,
+        kXcIII = 4u,
+        // XC_II's point-translation companion: the owner-atom scatter that
+        // makes the XC_II piece translationally invariant on its own.
+        kXcIIt = 8u,
+        kXcAll = kXcI | kXcII | kXcIII,
+    };
+
     [[nodiscard]] std::expected<Eigen::MatrixXd, std::string>
     compute_dh_xc_pt2_gradient(
         const HartreeFock::Molecule &mol,
@@ -65,7 +85,8 @@ namespace DFT::Gradient
         const Eigen::Ref<const Eigen::MatrixXd> &ground_density_restricted,
         const Eigen::Ref<const Eigen::MatrixXd> &relaxed_density_restricted,
         const XC::Functional &exchange_functional,
-        const XC::Functional &correlation_functional);
+        const XC::Functional &correlation_functional,
+        unsigned parts = kXcAll);
 
 } // namespace DFT::Gradient
 

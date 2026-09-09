@@ -835,6 +835,104 @@ is in the surrounding DH-gradient assembly.
 
 **The routine and its FD gate stay committed.**
 
+#### N3.5.7.8 -- component probe wired; XC_III and the point-translation companion are both RULED OUT
+
+The doc's own "immediate next step" (a clean wired probe of `XC_II +
+XC_III`, no `XC_I`) is now built and run. The earlier env-gated probes
+"kept mis-firing" because they were on/off flags that could not say WHICH
+piece they added; this one takes an explicit **bitmask**:
+
+- `compute_dh_xc_pt2_gradient` gained a trailing `unsigned parts = kXcAll`
+  (`kXcI=1, kXcII=2, kXcIII=4, kXcIIt=8`). Default is the same full
+  `XC_I+II+III` the FD gate verifies, so `planck-dft-kernel-gradient-fd`
+  is unaffected and still passes.
+- The driver's reverted comment block became a probe hook read from
+  `PLANCK_DFT_DH_XC_PARTS` (bitmask) and `PLANCK_DFT_DH_XC_SCALE`
+  (prefactor), logging what it added. **Unset = production unchanged**;
+  `water_dft_hse06_gradient_symm_ultrafine_fd`, `water_rks_b3lyp_soscf_631g`,
+  `h2_dft_b2plyp_sto3g`, `water_rmp2_gradient_{fd,smoke}` all pass.
+
+**Fixture.** The doc's water/STO-3G B2PLYP case was ad hoc and is not in
+the tree; rebuilt at `use_symm .false.`, `grid ultrafine`, `tol 1e-10`,
+the standard `water_dft_hse06_gradient` geometry (O at origin, H's in the
+xz plane). Baseline residual **2.424e-4 Ha/Bohr (atom 2, x)** -- the same
+phenomenon as the doc's 1.881e-4 (atom 2, y), rotated: that run's water
+was not in the xz plane, so its "y" is this run's "x". Per-component
+signature is identical in shape. **Now committed** (it was ad hoc, and
+re-deriving it cost a pass) at
+`tests/inputs/exploratory/dh_gradient/water_b2plyp_gradient_fd.hfinp` --
+exploratory, deliberately NOT a registered regression case (the FD driver
+run is minutes). Reproduce with:
+
+```
+PLANCK_DFT_DH_GRADIENT=1 PLANCK_DFT_DH_XC_PARTS=<mask> \
+  python3 tests/dft_gradient_fd.py \
+    tests/inputs/exploratory/dh_gradient/water_b2plyp_gradient_fd.hfinp \
+    --build-dir ./build --delta 1e-3 --atol 1e-2
+```
+
+| config | max residual | where |
+|---|---|---|
+| baseline | `2.424e-4` | a2-x |
+| `XC_II` (parts=2) | `2.057e-4` | a2-z |
+| `XC_III` (parts=4) | `2.424e-4` | a2-x |
+| `XC_II+XC_III` (parts=6) | `2.057e-4` | a2-z |
+| `XC_II+XC_IIt` (parts=10) | `2.164e-4` | a1-z |
+
+**1. XC_III is NOT the z-directional term -- the doc's leading candidate
+is dead.** The suspicion was that the synthetic He2 test understated
+XC_III and that "water's grid has real geometry dependence on the
+O-centred block". It does not: `parts=4` reproduces the baseline gradient
+to **7 significant figures** on every component (a1-z `0.18961646` vs
+`0.18961656`), and `parts=6` is `parts=2` to the same precision. XC_III
+is ~1e-7 on real water exactly as on synthetic He2.
+
+**2. The real defect XC_II has: it is not translationally invariant, and
+that non-invariance is the same size as the residual it fails to close.**
+`sum_A grad_A` is exactly `0` for the baseline analytic gradient and
+`-1.0e-7` for the FD reference, but adding XC_II makes it **`-2.445e-4`
+in z** -- i.e. XC_II injects a spurious net force of the same magnitude
+as the whole problem. This was predicted structurally by N3.5.7.6a
+("Eq. 33 as WRITTEN ... is NOT translationally invariant on its own")
+but had never been measured end-to-end.
+
+**3. Restoring invariance the obvious way does NOT fix it -- `kXcIIt`
+tried and rejected.** Added XC_II's point-translation companion: the same
+XC_II integrand scattered onto the owner atom with
+`d/dr_q = -sum_A(channel)`, exactly as XC_III does for `I_p`. It works as
+designed -- `sum_A grad_A` returns to `1.0e-8` -- but the residual gets
+**worse** (2.057e-4 -> 2.164e-4), because the redistribution undoes the
+one thing XC_II got right:
+
+| component | baseline - fd | + XC_II | + XC_II + XC_IIt |
+|---|---|---|---|
+| a1-z | `1.404e-4` | `1.669e-4` | `2.164e-4` |
+| a2-x | `2.424e-4` | **`2.44e-5`** | `1.717e-4` |
+| a2-z | `-7.013e-5` | `-2.056e-4` | `-1.082e-4` |
+
+So XC_II carries the **a2-x** physics almost exactly (contributes
+`-2.181e-4` against a needed `-2.424e-4`, ratio 1.112) and the missing
+piece is genuinely a *different* term that supplies the z structure --
+not a redistribution of XC_II's own weight. `kXcIIt` is kept in the enum
+(off by default, not in `kXcAll`) as the recorded negative result; delete
+it if the eventual fix makes it meaningless.
+
+**4. The `c_pt2 = 0.27` "best fit" is confirmed coincidence.** The needed
+/ supplied ratios per component are `-5.29` (a1-z), `1.11` (a2-x),
+`-0.52` (a2-z) -- no single scale factor exists, so the earlier `~1.4e-4`
+at `XC_II * 0.27` was a max-norm artifact of two components crossing, not
+a missing constant. The N3.5.7.2 "small rational number = missing factor"
+heuristic does **not** apply here.
+
+**What is left.** The z-directional term is still open, but two of the
+three candidates the term-by-term audit listed are now eliminated (XC_III
+by measurement above; the `vhf_s1occ` `R^XC(D)` piece was already shown
+inert for water). That leaves the third: **how `*corr` isolates the PT2
+part** -- the `full - ref_grad` subtraction with a zeroed Lagrangian, and
+its `<D h^x>` / `Gamma^PT2` assembly, all built for HF-MP2. That is the
+next thing to instrument, and the probe hook above is the instrument to
+do it with.
+
 ### N3.6 -- lift the gate, add regressions
 
 Once N3.5.7's FD passes: lift `validate_workflow_support` for double-hybrid
