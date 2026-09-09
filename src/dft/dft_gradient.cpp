@@ -135,41 +135,6 @@ namespace DFT::Gradient
             return g_axis_mu(ao, ip, mu, q);
         }
 
-        // ∂g_axis/dR_{atom_A,q} for spin-resolved density matrix P (symmetric).
-        double dg_axis_spin(
-            const Eigen::MatrixXd &P,
-            const AOGridEvaluation &ao,
-            const AOGridHessian &H,
-            Eigen::Index ip,
-            int axis_g,
-            int atom_A,
-            int q,
-            const std::vector<std::vector<int>> &atoms_bf)
-        {
-            double sum = 0.0;
-            const Eigen::Index nb = P.cols();
-
-            for (int mu : atoms_bf[static_cast<std::size_t>(atom_A)])
-            {
-                const Eigen::Index imu = static_cast<Eigen::Index>(mu);
-                const double gm = g_axis_mu(ao, ip, imu, axis_g);
-                const double hm = h_axis_q(H, ip, imu, axis_g, q);
-                for (Eigen::Index nu = 0; nu < nb; ++nu)
-                    sum += P(imu, nu) * (-hm * ao.values(ip, nu) - gm * gq_mu(ao, ip, nu, q));
-            }
-
-            for (int nu : atoms_bf[static_cast<std::size_t>(atom_A)])
-            {
-                const Eigen::Index inu = static_cast<Eigen::Index>(nu);
-                const double hn = h_axis_q(H, ip, inu, axis_g, q);
-                for (Eigen::Index mu = 0; mu < nb; ++mu)
-                    sum += P(mu, inu) * (-gq_mu(ao, ip, mu, q) * g_axis_mu(ao, ip, inu, axis_g) -
-                                         ao.values(ip, mu) * hn);
-            }
-
-            return sum;
-        }
-
     } // namespace
 
     double drho_channel(
@@ -190,6 +155,44 @@ namespace DFT::Gradient
                 d -= 2.0 * P_sym(imu, nu) * ao.values(ip, nu) * gmq;
         }
         return d;
+    }
+
+    // ∂[grad_rho_P]_{axis_g} / ∂R_{atom_A,q} at grid point `ip` (basis-
+    // function derivative only). `P` symmetrized.
+    //
+    // grad_rho_P|_ag = sum_munu P(mu,nu) [ g_ag(mu) phi(nu) + phi(mu) g_ag(nu) ],
+    //   g_ag(k) = d phi_k / d r_ag.
+    // A basis function k on atom A has  d phi_k/dR_{A,q} = -g_q(k)  and
+    //   d g_ag(k)/dR_{A,q} = -h_{ag,q}(k); functions off A contribute nothing.
+    // The four product-rule terms collapse (by P symmetry, relabelling
+    // mu<->nu) to  2 * sum_{mu in A, all nu} P(mu,nu) *
+    //   [ -h_{ag,q}(mu) phi(nu)  -  g_q(mu) g_ag(nu) ].
+    // Note the cross term is g_q(mu)*g_ag(nu) (the atom-A function carries
+    // the q-derivative), NOT g_ag(mu)*g_q(nu).
+    double dg_axis_spin(
+        const Eigen::MatrixXd &P,
+        const AOGridEvaluation &ao,
+        const AOGridHessian &H,
+        Eigen::Index ip,
+        int axis_g,
+        int atom_A,
+        int q,
+        const std::vector<std::vector<int>> &atoms_bf)
+    {
+        double sum = 0.0;
+        const Eigen::Index nb = P.cols();
+
+        for (int mu : atoms_bf[static_cast<std::size_t>(atom_A)])
+        {
+            const Eigen::Index imu = static_cast<Eigen::Index>(mu);
+            const double gq = gq_mu(ao, ip, imu, q);
+            const double hm = h_axis_q(H, ip, imu, axis_g, q);
+            for (Eigen::Index nu = 0; nu < nb; ++nu)
+                sum += P(imu, nu) *
+                       (-hm * ao.values(ip, nu) - gq * g_axis_mu(ao, ip, nu, axis_g));
+        }
+
+        return 2.0 * sum;
     }
 
     std::expected<std::vector<std::vector<int>>, std::string>

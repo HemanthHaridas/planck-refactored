@@ -50,6 +50,20 @@ namespace DFT::Gradient
         int q,
         const std::vector<std::vector<int>> &atoms_bf);
 
+    // Basis-function-derivative of the `axis_g` component of grad_rho_P(r)
+    // w.r.t. nuclear Cartesian (atom_A, q) at grid point `ip` -- i.e.
+    // [grad_rho_P^(x)]_{axis_g}. Needs AO Hessians. `P_sym` symmetrized.
+    // Shared with compute_dh_xc_pt2_gradient's GGA branch (N3.5.7 S3).
+    [[nodiscard]] double dg_axis_spin(
+        const Eigen::MatrixXd &P_sym,
+        const AOGridEvaluation &ao,
+        const AOGridHessian &hess,
+        Eigen::Index ip,
+        int axis_g,
+        int atom_A,
+        int q,
+        const std::vector<std::vector<int>> &atoms_bf);
+
     // Nuclear XC contribution ∂E_xc/∂R for semilocal and global-hybrid KS-DFT,
     // including the moving-grid (Becke partition + point-translation) response.
     [[nodiscard]] std::expected<Eigen::MatrixXd, std::string>

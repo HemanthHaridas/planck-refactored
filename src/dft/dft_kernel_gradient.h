@@ -15,35 +15,37 @@ namespace DFT::Gradient
 {
     // N3.5.7 (docs/DOUBLE_HYBRID_GRADIENT_KS_VEFF_SCOPE.md): the XC
     // contribution to the double-hybrid PT2 gradient -- Eq. 33
-    // (Neese/Schwabe/Grimme, JCP 126, 124115, 2007). It is a response-type
-    // term: the SCF operator already carries the first XC-potential
-    // derivative, and E_PT2 is not stationary w.r.t. the SCF density, so
-    // differentiating it pulls down the SECOND (Term 2) and THIRD (Term 1)
-    // functional derivatives of the XC functional, contracted with the
-    // RELAXED PT2 difference density.
+    // (Neese/Schwabe/Grimme, JCP 126, 124115, 2007). It is the geometry
+    // derivative of
     //
-    // Both terms are DIRECT per-point scalar grid integrals -- NOT an
-    // AO-pair scatter (the first attempt, deleted at S0, mirrored
-    // compute_xc_nuclear_gradient_rks's vtmp/vxc1 machinery against P and
-    // made the FD residual worse).
+    //   Phi_XC = sum_munu D_munu <mu|V_xc[rho_P]|nu>
+    //          = integral w * { (df/drho)*rho_D + 2*(df/dgamma)*(grad_rho_P . grad_rho_D) } dr
     //
-    //   Term 1 (closed-shell LDA, this routine's only branch for now):
-    //     integral  rho_P^(x)(r) * [ v3rho3(rho_P; r) * rho_D(r) ]  dr
-    //   with rho_P^(x)(r) the BASIS-function derivative of the density at a
-    //   FIXED spatial point (Eq. 15), v3rho3 = f^{rho rho rho} at the
-    //   GROUND (SCF) density, and rho_D(r) from the relaxed difference
-    //   density -- both frozen per-point scalars.
+    // where <mu|V_xc|nu> is the XC part of the SCF operator (Eq. 10, FIRST
+    // functional derivatives) and D is the RELAXED PT2 difference density.
+    // The paper's own text (p.6): "a response-type term arises which
+    // requires the evaluation of the SECOND functional derivative of the XC
+    // functional" -- there is NO third derivative here (the "f^{...zeta}"
+    // notation in Eq. 33 is d^2 f / d rho_sigma d zeta, i.e. v2*, matching
+    // Eq. 41's own response operator). So the S1 kxc wrapper is not needed
+    // for this term (it stays as a correct utility for future use).
     //
-    // rho_P^(x) is the integrand itself, so this is a plain grid integral,
-    // NOT d/dR of an integral -- there is NO moving-grid (Becke-weight /
-    // point-translation) correction (those belong to E_xc^x, where E_xc is
-    // the thing being differentiated). Only the basis-function-derivative
-    // piece, drho_channel, at the current geometry.
+    // The response part (rho_P, grad_rho_P move via their basis-function
+    // derivative at a FIXED spatial point; rho_D, grad_rho_D frozen):
     //
-    //   Term 1 GGA (v3rho2sigma/v3rhosigma2/v3sigma3, plus the gamma(P)
-    //   branch weighted by grad_rho_P^(x) via dg_axis_spin) and Term 2
-    //   (f^(2) v2sigma contracting grad_rho_P^(x) with grad_rho_D) are S3
-    //   -- the GGA branch here returns an explicit error until then.
+    //   LDA:  integrand(A,q) = rho_P^(x) * v2rho2 * rho_D
+    //   GGA:  integrand(A,q) =
+    //             [ v2rho2*rx + 2*v2rhosigma*(g.gx) ] * rho_D
+    //           + 2*[ v2rhosigma*rx + 2*v2sigma2*(g.gx) ] * (g.grad_rho_D)
+    //           + 2*vsigma * (gx . grad_rho_D)
+    //   with rx = rho_P^(x) (drho_channel), gx = grad_rho_P^(x)
+    //   (dg_axis_spin), g = grad_rho_P (SCF gradient, frozen here).
+    //
+    // Plain grid integrals of a basis-derivative integrand -- NO moving-grid
+    // (Becke-weight / point-translation) correction. The first attempt
+    // (deleted at S0) scattered AO-pair derivatives against P and made the
+    // FD residual worse. Term 1/Term 2 alone are NOT translationally
+    // invariant; sum_A grad_A = 0 holds only for the full E_PT2^x (S4).
     //
     // `ground_density_restricted` is the SCF (KS) density P;
     // `relaxed_density_restricted` is the relaxed PT2 difference density D
