@@ -51,10 +51,11 @@ decomposes the XC term the way this project has had to.
 sum_A(XC_III) ~ 1e-07   (needed 5.2e-04, 5000x larger)
 ```
 
-And D3 shows by linearity that **no** moving-frame construction on `XC_II`
-can supply it either. So the frame-correction family is closed entirely, and
-the companion must come from an XC channel this arc has not yet
-differentiated. Identifying it is the derivation's job.
+D3 shows by linearity that the `rx`/`gx` channel of a moving-frame correction
+on `XC_II` is also closed (it reproduces `kXcIIt` byte-for-byte). **But the
+coefficient channel is NOT closed and has never been probed** -- see D3.
+Identifying which of the two remaining candidates is right is the derivation's
+job.
 
 ## What is already established (do not re-derive)
 
@@ -136,28 +137,64 @@ needs a different account, and there is no candidate for one.
 D2 leaves `XC_II` (keep) and `XC_III` (measured negligible, 4.6e-7). Neither
 supplies `R`.
 
-**The constraint says what to look for**, but the obvious reading is **already
-refuted, by an argument worth stating because it kills a whole family**:
+**The constraint says what to look for. An earlier draft of this scope claimed
+the whole moving-frame family was closed by a linearity argument; that claim was
+too broad and is corrected here.**
 
-`XC_II`'s integrand is **linear in `(rx, gx)`**:
+`XC_II` is a **quadrature**, `XC_II(A,q) = sum_p w_p * F_p(A,q)` with
 
 ```
-xc2 = (v2rho2*rx + 2*v2rhosigma*(g.gx))*rho_D
-    + 2*(v2rhosigma*rx + 2*v2sigma2*(g.gx))*(g.grad_rho_D)
-    + 2*vsigma*(gx.grad_rho_D)
+F_p(A,q) = c1 * rx(A,q)  +  c2 . gx(A,q)          [LINEAR in rx, gx]
+c1 = v2rho2*rho_D + 2*v2rhosigma*(g.grad_rho_D)
+c2 = 2*v2rhosigma*g*rho_D + 4*v2sigma2*(g.grad_rho_D)*g + 2*vsigma*grad_rho_D
 ```
 
-So "complete the density derivative inside `rx`/`gx`" (add the
-point-translation piece `delta_{A,owner} * (-sum_B drho_channel)`) is
-**algebraically identical** to "scatter XC_II's integrand onto the owner
-atom" -- which is exactly what `kXcIIt` did, and it measured **cos -0.997**
-against the target. `XC_II[rx + c] = XC_II[rx] + XC_II[c]` by linearity, so
-the two operations cannot differ.
+If the grid point translates with its owner atom, **three** things move, not
+one:
 
-**Therefore the companion is NOT a moving-grid term on XC_II, in any form.**
-Combined with `XC_III` being 1400x too small, **no moving-frame construction on
-either scalar can supply `R`.** This retires the entire frame-correction family
-and is the single most useful constraint the derivation has.
+| channel | what moves | probed? |
+|---|---|---|
+| (i) | `rx`, `gx` -- the density derivatives | **yes** -- `kXcIIt` |
+| (ii) | `c1`, `c2` -- i.e. `v2*`, `rho_D`, `grad_rho_D`, `g` | **NO** |
+| (iii) | `w` -- the Becke weight | **yes** -- `kXcIIw` |
+
+**The linearity argument covers channel (i) ONLY, and there it is confirmed:**
+completing the density derivative inside `rx`/`gx` was implemented as a fresh
+probe and came out **byte-identical** to `kXcIIt` (cos -0.997), exactly as
+`XC_II[rx + c] = XC_II[rx] + XC_II[c]` predicts. So that channel really is
+closed.
+
+**Channel (ii) was never probed by anything in this arc**, and it is where the
+missing invariant physics would naturally live, because `c1`/`c2` contain
+`rho_D` and `grad_rho_D`. A scratch probe of it produces a non-zero,
+direction-distinct contribution. **It was deliberately NOT scored**, because the
+probe as written carried zeroed and dead terms (`f^(3)` pieces are unavailable);
+scoring a half-built term is precisely the "tune until it fits" failure this arc
+has repeated. **Deriving channel (ii) properly is D3's first task.**
+
+### Does channel (ii) even belong? The bookkeeping question D3 must settle first
+
+`d/dR{Phi_XC} = XC_I + XC_II + XC_III` was FD-verified to **rel 3e-9** (S5), so
+that decomposition is complete -- there is no unaccounted fourth channel *in
+`Phi_XC`*. The three movement channels above are already distributed across it:
+(i) and (ii) sit inside what S5 called XC_II and XC_I respectively, and (iii) is
+XC_III(a).
+
+**So the real question is not "is a term missing from `d/dR{Phi_XC}`" -- it is
+"which channels does Eq. 33's convention keep".** Eq. 33's `rho_P^(x)` (Eq. 15)
+is basis-only at a **fixed** point, which is what `drho_channel` computes and
+what Planck implements. The moving-point version differs by exactly the
+point-translation piece. **Planck's XC_II is faithful to Eq. 33; the open
+question is whether Eq. 33's fixed-point convention is the right object for a
+force, given that `T` is invariant and `XC_II` is not.**
+
+That is a question about the paper, not about Planck, and it is the same
+question H1 asks. **D3 must resolve it before writing any term**, because the
+two readings prescribe different code:
+- if the fixed-point convention is right, the companion is a *separate* term
+  (D3's `d eps/dR` candidate below), and
+- if the moving-point convention is right, the companion is channel (ii) of a
+  correctly-completed `XC_II`, and Eq. 33 as printed is incomplete.
 
 **What `R` must therefore be.** Measured in the invariant subspace (where the
 frame question does not arise):
@@ -171,7 +208,23 @@ So `R` carries **real invariant physics at 32% of the total**, plus the frame
 constraint as a by-product of whatever object supplies it. **D3's task is to
 find a scalar whose `d/dR` produces both at once** -- not to patch XC_II.
 
-**D3's primary candidate: the XC part of `d eps/dR` in the MP2 denominators.**
+**D3's two candidates.** The bookkeeping question above decides between them;
+do not build either before settling it.
+
+**Candidate 1 -- channel (ii): `XC_II`'s coefficients move with the point.**
+Applies if the moving-point convention is the right one for a force. Never
+probed, direction-distinct in a scratch test, and structurally where the missing
+invariant physics would live (`c1`/`c2` carry `rho_D` and `grad_rho_D`). Needs
+`f^(3)` for the `v2*`-moves piece -- **the `evaluate_*_kxc` wrappers built at S1
+would finally have a consumer** -- verified: `grep` shows their only callers are
+in `tests/dft_kxc_selfcheck.cpp`, i.e. they are orphaned production code built
+on the later-overruled `f^(3)` reading. A channel that genuinely needs `f^(3)`
+would give them their first real use. Weak corroboration, but it points the
+same way.
+
+**Candidate 2 -- the XC part of `d eps/dR` in the MP2 denominators.**
+Applies if Eq. 33's fixed-point convention is right and the companion is a
+separate term.
 
 `Phi_XC` is **not the only place XC enters `E_PT2`**. The amplitudes carry
 `D_ijab = eps_i + eps_j - eps_a - eps_b`, and for a double hybrid the `eps` are
