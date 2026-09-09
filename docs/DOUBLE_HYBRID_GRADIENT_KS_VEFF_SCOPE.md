@@ -1277,6 +1277,108 @@ The second is the more likely reading now: three independent slots
 none contains it, which is what one expects when the missing object is a
 *new* contraction that overlaps all of them rather than a defect in any.
 
+#### N3.5.7.14 -- paper rechecked against the PDF; the XC term is confirmed, and Eq. 42's `R^XC(D)` is measured and NEGATIVE
+
+The full text was re-read directly (not the transcription this doc carried).
+Three results.
+
+**1. XC_II is confirmed correct, by term-matching Eq. 33 against Eq. 23.**
+Eq. 23 (the AO response operator `R^alpha(D')`) has, inside its `Sum_zeta`
+block, the coefficients `d^2 f / d rho_alpha d zeta` on `(phi_mu phi_nu)`
+and `2 d^2f/(d gamma_aa d zeta) grad rho_P` on `grad(phi_mu phi_nu)` --
+unambiguously **second** derivatives, since `R(D')` is a first-order
+response. Eq. 33's XC term is that same block with three substitutions:
+`zeta(D') -> zeta(P)^(x)`, `(phi_mu phi_nu) -> rho_D`, and
+`grad(phi_mu phi_nu) -> grad rho_D` -- which is exactly the paper's own
+prose description ("contraction of the relaxed PT2 difference density with
+the derivative of the SCF operator"). Planck's XC_II reproduces that
+block term for term.
+
+**The `f^{rho_s rho_s zeta}` notation that started the N3.5.7.6 vs .6a
+argument is spin labelling, not a third derivative.** Eq. 23's matching
+object has one `rho` index plus `zeta`; Eq. 33 writes the spin label on the
+density index. Reading it as `f^(3)` (N3.5.7.6) contradicts Eq. 23, and the
+p.6 text says "second functional derivative" outright. **N3.5.7.6a was
+right and stands**; the `evaluate_*_kxc` wrappers (S1) remain correct
+utilities with no consumer.
+
+**2. A correction to N3.5.7.13's conclusion, which overreached.** That
+step said the hard bound on the `s_vhf` family "retires the `W^PT2` /
+Eq. 42 `-1/2 R(D)` lead as stated". The bound is real, but the claim was
+too strong: N3.5.5 and N3.5.7.11 both swapped the **whole** `ks_veff` into
+`vhf_s1occ`, which changes **two things at once** -- it adds `R^XC` *and*
+changes the exchange weight from full HF (`c_x = 1`) to the hybrid
+`c_x = 0.53`. Eq. 46 is explicit that `a_x` belongs in `E_SCF` and `R^XC`,
+**not** in the separable PT2 term, so those probes were testing a variant
+the paper does not ask for. The `R^XC` piece alone had never been isolated,
+and it is not a rescaling of `s_vhf`, so the geometric bound did not
+actually cover it.
+
+**3. So it was isolated and measured -- and it is NEGATIVE.** A probe
+adding **only** `R^XC(D)` on top of the untouched full-HF `(J - 1/2 K)`,
+at Eq. 42's weight, wired at the gradient-side `ps.ks_veff` (the site that
+actually feeds `s_vhf`; the first attempt patched `rd_in.ks_veff` instead
+and came out **byte-identical**, which is how the mis-wiring was caught):
+
+| | cos | scale | resid @1.0 | baseline |
+|---|---|---|---|---|
+| fixture 1 | -0.527 | -1.378 | `4.145e-4` | `3.887e-4` (**-7%**) |
+| fixture 2 | -0.439 | -0.939 | `2.864e-4` | `2.689e-4` (**-7%**) |
+
+Worse on both fixtures at coefficient 1, wrong sign, and 32% scale spread.
+Reverted.
+
+**So Eq. 42's `-1/2 R^XC(D)` is now genuinely excluded** -- on the paper's
+own weight, with the confounding exchange-weight change removed, which is
+the test N3.5.5 and N3.5.7.11 could not perform. The `W^PT2` lead is closed
+for the right reason this time.
+
+**What the paper says that Planck has NOT yet been checked against.** The
+closed-shell working equations (Eqs. 42-47) are more specific than the
+HF-MP2 forms Planck contracts, and three are worth a direct term-by-term
+audit rather than a scoring probe:
+- **Eq. 43** `W_ab = -1/2 D_ab(eps_a + eps_b) - Sum_{i<=j} 1/(1+delta_ij)(K^ij t~^ij+)_ab`
+  -- note the `1/(1+delta_ij)` weight on the diagonal `i == j` pairs.
+- **Eq. 44** `W_ia = - Sum_kjb t~^kj_ab (ki|jb)` -- the occ-virt block,
+  built from CONTRAVARIANT amplitudes `t~` (Eq. 39).
+- **Eq. 47** `Gamma^NS = Sum cci ccj cca ccb t~^ij_ab (1 + delta_ij)`
+  -- again the `(1 + delta_ij)` diagonal weight, and `t~` not `t`.
+
+The contravariant amplitude `t~^ij = 2/(1+delta_ij) (2 t^ij - t^ij+)`
+(Eq. 39) carries a `delta_ij` weight that a plain `2t - t^T` does not.
+
+**Checked immediately, and it is NOT a defect.** Planck sums `i` and `j`
+**unrestricted** (`mp2_gradient.cpp:305-306, 328-329`) with
+`4*t_ab - 2*t_ba` -- PySCF's convention, algebraically equivalent to the
+paper's restricted `i<=j` sum with its compensating `1/(1+delta_ij)`. The
+two conventions differ only in bookkeeping, and this path is FD-verified
+for HF-MP2 regardless. **No `delta_ij` defect exists**; the lead is closed
+before any code was written against it.
+
+**Standing conclusion after this recheck.** The paper's XC term is
+implemented and confirmed; `W^PT2`'s `R^XC` piece is measured and
+excluded; `Gamma^PT2`'s amplitude convention is verified equivalent. Every
+DH-specific object in Eqs. 40-47 has now been either verified or excluded
+against the two-fixture target, **and the ~31% remains**. Two possibilities
+survive, and they need different work:
+1. **The paper's own equations do not fully account for the residual at
+   this magnitude** -- plausible given ORCA's B2-PLYP gradient was
+   validated against geometries (pm-level bond lengths), not against
+   Ha/Bohr force components at 1e-4, which is roughly the accuracy this
+   residual sits at.
+2. **Something in Planck's KS-side assembly upstream of the PT2 code** --
+   the residual has been localised to `*corr` (N3.5.7.9), but `*corr` is
+   `full - ref_grad` and BOTH terms use KS orbitals; a defect common to
+   both would partially cancel and leave exactly this kind of small,
+   structured remainder.
+
+The instruments (two fixtures, exact FD targets, the scoring harness) are
+committed and the search space is now well mapped, so either line can be
+picked up cheaply. **No further probe should be run without a specific
+derivation behind it** -- the productive steps in this arc have all come
+from reading the source (the paper, or Planck's own code), and the
+speculative probes have all been negative.
+
 **Method note worth carrying, since it cost this arc four reverted
 attempts (N3.5.7.4, S4, S5, N3.5.7.8):** a symmetric fixture can have
 fewer independent components than the number of candidate terms, and then
