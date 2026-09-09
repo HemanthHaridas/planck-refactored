@@ -1356,8 +1356,60 @@ were corrected in the same pass: `CCGEN_UNRESTRICTED_CC` (U0) and
 
 ## DFT and response-method gaps
 
-- Double-hybrid functionals remain single-point only; analytic gradients,
-  geometry optimization, frequencies, and TDDFT are still unimplemented there
+- **Double-hybrid analytic gradient: in flight behind `PLANCK_DFT_DH_GRADIENT`,
+  now at ~3.9e-4 Ha/Bohr from FD after the Eq. 33 XC term was identified and
+  wired.** Production still ships single-point only; geomopt / frequencies /
+  TDDFT untouched. Full record in
+  `docs/DOUBLE_HYBRID_GRADIENT_KS_VEFF_SCOPE.md`.
+
+  **What landed (N3.5.7.10):** the missing term is `XC_II` -- the `rho_P^(x)`
+  piece of `d/dR{Phi_XC}`, i.e. `sum_munu D_munu R^XC[rho_P^(x)]_munu` with the
+  RELAXED difference density -- at **coefficient 1**. Wired; the C1 H2O2
+  residual drops **1.240e-3 -> 3.887e-4 (69%)**, exactly as forecast.
+
+  **The finding that unblocked it, after FOUR reverted attempts
+  (N3.5.7.4, S4, S5, N3.5.7.8): water/C2v was the wrong fixture.** It leaves
+  only **3 independent gradient components** -- fewer than the number of
+  candidate terms -- so any three of them span the target exactly (an LSQ fit
+  returns residual **1.8e-18** with coefficients `-0.99 / 8.41 / 23011`). Every
+  conclusion drawn there from residual magnitude was noise, including a
+  confident "no single scale factor works, so XC_II cannot be it". On a C1
+  fixture (12 components, 6 independent) one scale factor does work. **Count a
+  fixture's independent components before trusting any term-by-term
+  conclusion.**
+
+  **Instruments now committed, all reusable:**
+  - exact FD targets for `*corr` itself -- `tests/pyscf/{water,h2o2,h2o2b}_b2plyp_dh_gradient_fd.py`
+    (FD of `E_KS_hyb + 0.27*E_MP2-on-KS`), with fixtures under
+    `tests/inputs/exploratory/dh_gradient/`
+  - `PLANCK_DFT_DH_XC_PARTS` / `_SCALE` component probe on
+    `compute_dh_xc_pt2_gradient`
+  - a **two-fixture consistency test**: a real term scores the same coefficient
+    on two independent geometries, a fit artifact does not. Validated on the
+    known answer (XC_II: 1.078 vs 1.015) and it killed three candidates.
+
+  **Open: the remaining ~31%** (3.887e-4 / 2.689e-4 on the two fixtures). It is
+  91% translation-free and 42% pure net force, and its net force is exactly
+  `-sum_A(XC_II)`. Eliminated by measurement so far: `XC_I` (cos -0.54),
+  `XC_III` (~1e-7), the unrelaxed density (cos 0.75 vs 0.93), the closed-shell
+  spin factor (Sec. II vs polarized `R^XC`, 1e-17), any rescaling of XC_II, the
+  `vhf_s1occ` KS swap (fit artifact -- scale -1.11 vs -0.59 across fixtures),
+  and **both moving-frame variants on XC_II, for a structural reason: XC_II's
+  integrand already carries the derivative index `(A,q)`, so a `dw/dR_{B,q'}`
+  factor gives a rank-2 object that cannot collapse onto a gradient index.**
+  The companion must come from a different scalar -- most likely the DH-specific
+  `W^PT2` / `Gamma^PT2` of the paper's Eqs. 42-46 rather than the HF-MP2 forms
+  Planck contracts, which is a rewrite of the surrounding assembly, not a
+  one-term addition.
+
+  Also settled along the way: **Planck's PT2 assembly is sound** -- every
+  accumulator is translationally invariant to 1e-14, and `*corr` reproduces the
+  exact FD `0.27*dE_corr/dR`, so the whole residual lives in the XC term.
+  And **PySCF's `grad/mp2.py` is NOT a valid reference for this** -- its `fvind`
+  uses the nonlinear `mp._scf.get_veff` on a small non-idempotent trial density,
+  giving a singular CPHF matrix (cond 1.6e18); patched to the linear response it
+  still lands 22x worse than Planck.
+- Double-hybrid geometry optimization, frequencies, and TDDFT are unimplemented
 - For range-separated functionals, `ImaginaryFollow` and `LinearResponse`
   (TDDFT) remain gated / unvalidated even though gradient-driven workflows are
   now landed
