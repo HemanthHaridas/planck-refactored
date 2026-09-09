@@ -511,3 +511,83 @@ scoring a term while the reference itself was in doubt would have been
 premature. With the reference now proven sound (Planck-vs-Planck), that probe is
 the immediate next step: score `R^XC` at weight 0.5 relative to `(J - K/2)`
 against both fixtures, requiring cross-fixture coefficient agreement.
+
+---
+
+## D5 -- channel bisection: the Z-vector carries 6x the residual, but no XC weight in it closes the gap
+
+With the residual proven **internal to Planck** (D4), the search becomes
+bisection of Planck's own channels rather than theory.
+
+### `R^XC` in `vhf_s1occ` at the corrected half weight -- FALSIFIED
+
+D4 derived that Eq. 41's `R = 4(J - K/2) + R^XC` puts `R^XC` at **half** the
+weight of the `(J - K/2)` part, and that N3.5.7.14 had used full weight.
+Re-probed at 0.5:
+
+| | cos | scale | residual | vs baseline |
+|---|---|---|---|---|
+| fixture 1 | -0.527 | -2.757 | `4.016e-4` | **-3%** |
+| fixture 2 | -0.439 | -1.879 | `2.777e-4` | **-3%** |
+
+Halving the weight halved the *damage* (7% -> 3% worse) but left cos unchanged
+at -0.53/-0.44 with 32% spread. **The direction is wrong, so no weight fixes
+it.** `R^XC` in `vhf_s1occ` is closed for good, now on the paper's own weight.
+
+### The Z-vector carries 2.4e-3 -- 6x the residual
+
+Zeroing `z` (and scaling it) with a probe inside `solve_pt2_relaxed_density`:
+
+```
+z_mult=0 :  atom1 = 0.02586969    (shift 2.438e-03 from production)
+z_mult=1 :  atom1 = 0.02822906    (reproduces production exactly)
+z_mult=10:  atom1 = 0.04946336    (scales linearly)
+```
+
+**A 15.9% error in `z` would produce the entire residual.** H2.3 proved `A` is
+symmetric, SPD and exactly solved, so any error must be in the RHS `Xvo` or in
+`A`'s coefficients.
+
+**A probe bug worth recording, because it produced a false "found it" moment.**
+The first version of this probe zeroed `z` and then fell through to the
+*original* assignment loop, which re-assigned `z` unconditionally -- an
+`if (false)` guard that covered only the adjacent `allFinite` check. The probe
+therefore reported "zeroing `z` changes nothing", which read as a spectacular
+finding (a computed-then-discarded Z-vector) and was purely an artifact of the
+edit. **Caught by the control**: `z_mult=10` also changed nothing, which no real
+"z is discarded" defect would survive. **Always include a scale control, not
+just an on/off one.**
+
+### But no XC weight inside `ks_veff` can close it -- FALSIFIED
+
+`ks_veff` feeds **both** the Lagrangian RHS and the Z-vector Hessian, so its
+`R^XC` weight is the highest-leverage single parameter available. Eq. 41's
+structure suggested `R^XC` might need half the J/K weight there too. Scanned:
+
+```
+xcw = 0.0 / 0.5 / 1.0 / 2.0  ->  atom3-x spans only 7e-5
+error to close                                   3.9e-4
+```
+
+**The entire axis is 5x too small.** No value of `xcw` closes the gap; the
+prediction is falsified without needing a fixture score.
+
+### Where this leaves D5
+
+The `z` channel has the leverage (2.4e-3) but its XC content does not (7e-5).
+So if the defect is in `z`, it is in the **non-XC** part of `Xvo` or in `A`'s
+non-XC coefficients -- both of which are shared with the plain RMP2 path, **which
+is FD-verified**. That is a genuine tension and it is the sharpest remaining
+lead:
+
+- either the shared RMP2 machinery has a defect that only manifests on KS
+  orbitals (possible: `build_rhf_cphf_matrix` hardcodes `a_x = 1`, and while the
+  DH path uses `build_ks_orbital_hessian_op` instead, the **Lagrangian**'s
+  `imat`/`dm2buf` construction is shared verbatim),
+- or the defect is outside `z` entirely, in a channel not yet bisected.
+
+**Next: bisect the remaining channels the same way** -- scale each of
+`imat_ao`, `two_e_terms`, and `dm1p` in turn and measure the leverage of each,
+exactly as the `z_mult` probe did. The channel whose leverage matches 3.9e-4 at
+a plausible error fraction is the one to audit. This is mechanical and cheap now
+that the probe pattern is established.
