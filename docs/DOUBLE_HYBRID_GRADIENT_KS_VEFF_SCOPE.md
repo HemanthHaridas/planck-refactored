@@ -1372,9 +1372,15 @@ survive, and they need different work:
    both would partially cancel and leave exactly this kind of small,
    structured remainder.
 
-The instruments (two fixtures, exact FD targets, the scoring harness) are
-committed and the search space is now well mapped, so either line can be
-picked up cheaply. **No further probe should be run without a specific
+**Both are now scoped, with the measurements that shape them, in
+`docs/DH_GRADIENT_RESIDUAL_SCOPE.md`** -- including three taken during
+scoping: the residual is NOT grid noise (ultrafine converged to 9.3e-5),
+Planck's KS-only gradient is **11x more accurate** than the PT2 remainder
+(3.66e-5 vs 3.89e-4, which sharply constrains H2), and the residual is
+**0.04 pm** on a stiff bond against the paper's own 0.3 pm MAD but
+**0.7 pm** on a torsion. The instruments (two fixtures, exact FD targets,
+the scoring harness) are committed, so either line can be picked up
+cheaply. **No further probe should be run without a specific
 derivation behind it** -- the productive steps in this arc have all come
 from reading the source (the paper, or Planck's own code), and the
 speculative probes have all been negative.
