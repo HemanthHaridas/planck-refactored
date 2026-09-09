@@ -924,14 +924,103 @@ at `XC_II * 0.27` was a max-norm artifact of two components crossing, not
 a missing constant. The N3.5.7.2 "small rational number = missing factor"
 heuristic does **not** apply here.
 
-**What is left.** The z-directional term is still open, but two of the
-three candidates the term-by-term audit listed are now eliminated (XC_III
-by measurement above; the `vhf_s1occ` `R^XC(D)` piece was already shown
-inert for water). That leaves the third: **how `*corr` isolates the PT2
-part** -- the `full - ref_grad` subtraction with a zeroed Lagrangian, and
-its `<D h^x>` / `Gamma^PT2` assembly, all built for HF-MP2. That is the
-next thing to instrument, and the probe hook above is the instrument to
-do it with.
+#### N3.5.7.9 -- the `full - ref_grad` isolation is EXONERATED, and the missing term is now known EXACTLY
+
+The third and last candidate from the term-by-term audit -- "how `*corr`
+isolates the PT2 part" -- is measured and clean. Two instruments:
+
+**(a) Per-term dump.** `PLANCK_DEBUG_RMP2_TERMS=1` (already in
+`mp2_gradient.cpp`, no new code) prints all 14 accumulators for BOTH the
+zero-Lagrangian reference call and the full call, so the per-term PT2
+contribution is a direct subtraction. Every term is translationally
+invariant to **machine precision** (`sum_A grad_A` rel 1e-14 or better:
+`two_e` 8.9e-15, `h1` 1.6e-14, `s_im1` 0.0, `s_zeta` 1.1e-14, `s_vhf`
+5.4e-13, `vhf1` 8.8e-15, `electronic` 4.4e-14). The four `vhf1_{rs,rq,pq,ps}`
+rows are NOT invariant individually but cancel exactly in pairs
+(`rs+pq = 0`, `rq+ps = 0`) -- they are a decomposition of `vhf1`, not
+separate contributions. Nothing in the assembly leaks a net force.
+
+**(b) An exact FD reference for `*corr` itself.** Built in PySCF 2.13.0 by
+finite-differencing `E(R) = E_KS_hyb(R) + 0.27 * E_MP2-on-KS(R)` --
+the same total-energy function Planck's own FD driver differentiates, so
+its `0.27 * dE_corr/dR` is precisely what `*corr` must equal. Cross-check
+first: **PySCF `E_corr = -0.0384041028`, Planck `-0.0384040654`** (3.7e-8),
+and the KS parts agree too, so the two codes share orbitals and
+correlation energy before any gradient is compared.
+
+| | a1-z | a2-x | a2-z | max err |
+|---|---|---|---|---|
+| FD truth (`0.27 dE_corr/dR`) | `9.8812e-3` | `-5.2017e-3` | `-4.9406e-3` | -- |
+| Planck `*corr` | `1.0020e-2` | `-4.9600e-3` | `-5.0110e-3` | **`2.42e-4`** |
+| PySCF `grad/mp2.py` on KS orbitals | `4.5858e-3` | `-3.7951e-3` | `-2.2929e-3` | `5.30e-3` |
+
+**Planck's PT2 assembly is right to 2.4e-4; the PySCF harness is 22x
+worse.** `max|Planck total - FD total| = 2.383e-4` equals
+`max|Planck *corr - FD *corr| = 2.417e-4`, so the ENTIRE end-to-end
+residual lives in `*corr` and is exactly this size -- nothing is hiding
+in the KS part or in the subtraction.
+
+**PySCF's `grad/mp2.py` is NOT a usable reference here, on two counts, and
+this kills the N3.5.5 line of reasoning permanently.** Its `fvind`
+(`grad/mp2.py:277`) calls `mp._scf.get_veff(mol, dm + dm.T)` -- the full
+**nonlinear** KS `get_veff` on a small non-idempotent trial density, not
+the linear `gen_response`. Built densely, that CPHF matrix has
+`cond = 1.6e18` (numerically singular; the stock Krylov solver raises
+`Krylov solver failed to converge`, which is how this surfaced), and the
+gradient it produces is garbage (~3.5 Ha/Bohr). With the linear response
+substituted, `cond = 37` and the eigenvalues are sane (min 0.53). All
+three `get_veff` sites (lines 138 `Xvo`, 163 `vhf_s1occ`, 277 Z-vector --
+the doc's N3.5.4 / N3.5.5 / N2 sites) were patched through every
+combination; none reaches the FD truth (`planck` config 5.30e-3, `allhf`
+7.20e-3, `allks` 5.23e-3). The driver comment at `driver.cpp:4065`
+already suspected this; it is now measured.
+
+**The missing term, exactly.** `FD - Planck`, in Ha/Bohr:
+
+```
+  Atom 1 (O):   0.00000e+00   0.00000e+00  -1.38775e-04
+  Atom 2 (H):  -2.41742e-04   0.00000e+00   7.03883e-05
+  Atom 3 (H):   2.41742e-04   0.00000e+00   7.03883e-05
+```
+
+**It is translationally invariant (`sum_A = 2.0e-6`) while XC_II is not
+(`-2.445e-4`).** That is an independent confirmation of N3.5.7.8's
+conclusion, reached from the opposite direction: **no multiple of XC_II
+can be the missing term**, whatever the prefactor, because they differ in
+a conserved quantity. The per-component ratios `missing/XC_II` are
+`-5.23 / 1.11 / -0.52` -- the a2-x agreement at 1.11 that made XC_II look
+close is coincidence, exactly as the earlier scale-factor analysis said.
+
+**Where this leaves the arc.** All three candidates from the term-by-term
+audit are now eliminated by measurement (XC_III ~1e-7; `vhf_s1occ`'s
+`R^XC(D)` inert; the `full - ref_grad` isolation clean to 1e-14), and the
+XC term itself is settled by derivation. The missing 2.4e-4 is a
+translationally-invariant term that Eq. 33's XC contribution, as
+implemented, does not supply. Two readings remain, and they are
+distinguishable:
+
+1. **The implemented XC_II is not the whole of Eq. 33's XC term** -- the
+   Sec. II cross-check validated it against
+   `compute_analytic_xc_hessian_vector_product_polarized`, i.e. against
+   Planck's own `R^XC`, which is a consistency check, not an independent
+   one. A direct FD of `sum_munu D_munu R^XC[rho_P^(x)]_munu` against a
+   moving-geometry reference would separate "XC_II is correctly
+   implemented" from "XC_II is the right formula".
+2. **The relaxed density `D` fed to it is not the paper's `D`.** Eq. 33
+   pairs the RELAXED PT2 difference density with `R^XC`; the probe used
+   `rd->dm1_corr_relaxed_ao`, but the z-block convention there was never
+   FD-verified independently of the rest of the gradient.
+
+The exact target vector above is the instrument for both: any candidate
+term can now be scored against it directly, per component, without
+running the full FD driver.
+
+**Reproduce:** `tests/inputs/exploratory/dh_gradient/` carries the Planck
+input; the PySCF FD reference script is small enough to re-derive from
+the recipe above (`E_KS_hyb + 0.27*E_MP2-on-KS`, `xc = "0.53*HF +
+0.47*B88, 0.73*LYP"`, `cart=True`, `grids.level=6`, `h = 1e-3` Bohr) --
+note PySCF has no `B2PLYP` alias in its vendored libxc, so the explicit
+hybrid form is required.
 
 ### N3.6 -- lift the gate, add regressions
 
