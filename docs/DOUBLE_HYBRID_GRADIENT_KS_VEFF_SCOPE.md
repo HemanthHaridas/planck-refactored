@@ -1112,11 +1112,63 @@ Verified inert elsewhere: all 14 `planck-dft` CTest targets and
 `h2_dft_b2plyp_sto3g`, `water_rmp2_gradient_{fd,smoke}` all pass -- the
 new term is reached only on the DH gradient path.
 
-**Next: the remaining 31%**, hunted against the H2O2 target vector,
-scoring by cos in the translation-free subspace -- never on water, and
-never by max-norm on 3 components. Its measured signature (net force
-exactly `-sum_A(XC_II)`, and no alignment with anything already built) is
-the constraint to design against.
+#### N3.5.7.11 -- the remaining 31%: three more candidates killed, and a TWO-FIXTURE consistency test that makes the hunt reliable
+
+**The instrument first, because a 12-component cos is still not decisive
+on its own.** A second, independently distorted C1 H2O2 geometry was added
+(`h2o2_c1b_b2plyp_gradient_fd.hfinp`) with its own FD target. **A real term
+scores the same coefficient on both fixtures; a fit artifact does not.**
+
+**Validated on the known answer:** XC_II scores **cos 0.946 / scale 1.078**
+on fixture 1 and **cos 0.942 / scale 1.015** on fixture 2 -- consistent to
+6% in scale. That is what a genuine term looks like, and it independently
+re-confirms N3.5.7.10's identification on a second geometry. Energy
+cross-check holds there too (Planck `-0.0868898054` vs PySCF
+`-0.0868897932`).
+
+**Remaining target after XC_II** is `3.887e-4` (fixture 1) / `2.689e-4`
+(fixture 2). Its decomposition is the key structural fact: **91% lives in
+the translation-free (physical) subspace and 42% is pure net force** -- so
+the companion is not merely a frame fix, it carries real physics *and*
+restores XC_II's invariance simultaneously.
+
+**Three candidates tested and killed:**
+
+| candidate | result |
+|---|---|
+| **Becke-weight response on XC_II's integrand** (`kXcIIw`) | **cos -0.019** -- orthogonal. Dead. |
+| **`vhf_s1occ` with KS veff** (Eq. 42's `-1/2 R(D)_ij`) | cos -0.52 / scale **-1.11** on fixture 1, cos -0.33 / scale **-0.59** on fixture 2 -- **scale inconsistent across fixtures, so a FIT ARTIFACT**, and a negative coefficient on a KS-vs-HF swap is unphysical anyway. Dead. N3.5.5's "made it worse" was right for the wrong reason. |
+| **a hidden scale factor on XC_II** (`c_pt2`, `1-c_pt2`, `a_x`, `1-a_x`, `0.5`) | all worse than 1.0; coefficient 1 stands. Dead. |
+
+**A structural result worth keeping, because it rules out a whole class.**
+A Becke-weight or point-translation term *on XC_II* cannot exist as a
+gradient-indexed object: XC_II's integrand already carries the derivative
+index `(A,q)` through `rx`/`gx`, so multiplying it by `dw/dR_{B,q'}` gives
+a rank-2 object that cannot collapse onto a single gradient index. This
+is why `kXcIIt` came out collinear with XC_II (N3.5.7.10) and why
+`kXcIIw` comes out orthogonal -- **neither is a well-formed term.** The
+companion must therefore come from a different scalar functional, not
+from a moving-frame treatment of XC_II's own.
+
+**Where to look next.** Everything in the XC term itself is now excluded
+(XC_I by direction, XC_III by magnitude, both frame variants by
+structure, the density choice by score, the spin factor by derivation).
+The remainder's net force being exactly `-sum_A(XC_II)` means the missing
+scalar is one whose basis-derivative and moving-frame pieces are BOTH
+present -- i.e. a full `d/dR` of some scalar, of which XC_II is only the
+`rho_P^(x)` half. The natural candidate is the geometry derivative of the
+`W^PT2` / `Gamma^PT2` objects in the paper's Eqs. 42-46 as DH-specific
+quantities, rather than the HF-MP2 forms Planck currently contracts --
+but that is a rewrite of the surrounding assembly, not a one-term
+addition, and should not be started without first scoring a candidate
+against both fixtures.
+
+**Method, now established and cheap to run:** compute the analytic
+gradient with `PLANCK_DFT_DH_XC_PARTS`, difference against the committed
+FD reference for each fixture, score the candidate by cos in the
+translation-free subspace, and **require the fitted coefficient to agree
+across the two geometries**. Three of the four candidates tested in this
+step were killed by the second fixture alone.
 
 **Method note worth carrying, since it cost this arc four reverted
 attempts (N3.5.7.4, S4, S5, N3.5.7.8):** a symmetric fixture can have

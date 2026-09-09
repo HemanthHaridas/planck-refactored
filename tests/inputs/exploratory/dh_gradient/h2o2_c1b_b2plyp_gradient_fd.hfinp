@@ -1,0 +1,38 @@
+%begin_control
+    basis       sto-3g
+    calculation gradient
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    6
+    engine      os
+    guess       hcore
+    max_cycles  100
+    tol_energy  1.0e-10
+    tol_density 1.0e-10
+%end_scf
+
+%begin_dft
+    grid                ultrafine
+    exchange            b2plyp
+    correlation         pbe
+%end_dft
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+4
+0   1
+O     0.021000     0.690000    -0.093000
+O    -0.037000    -0.702000     0.061000
+H     0.792000     0.951000     0.402000
+H    -0.741000    -0.859000     0.487000
+%end_coords
