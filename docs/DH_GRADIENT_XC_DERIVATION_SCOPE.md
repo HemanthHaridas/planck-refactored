@@ -337,3 +337,97 @@ attempt jumped to.
 **Method rule carried from N3.5.7.8-.14:** no probe without a derivation behind
 it. Every productive step in this arc came from reading a source; every
 speculative probe was negative.
+
+---
+
+## D1-D3 RUN. The derivation closes, and it REPRODUCES what Planck ships.
+
+### D1 -- the decisive structural result: `E_PT2` has NO explicit grid dependence
+
+```
+E_PT2 = sum_ijab t_ijab Kbar_ijab ,  t = Kbar/D ,  D = e_i+e_j-e_a-e_b
+Kbar  = (ia|jb) - (ib|ja)  -- pure Coulomb ERIs, NO XC, NO grid sum
+```
+
+`R` enters through (1) basis functions, (2) `C(R)`, (3) `eps(R)`. **The XC
+quadrature enters ONLY through `C` and `eps`** -- there is no `V_xc` matrix
+element and no grid sum anywhere inside `E_PT2`.
+
+**This kills candidate 1 outright.** Channel (ii) ("XC_II's coefficients move
+with the grid point") is the derivative of a quadrature that `E_PT2` does not
+contain. The three-channel decomposition was a correct description of
+`d/dR{Phi_XC}`, but `Phi_XC` is a *construction* used to express the XC term,
+not something `E_PT2` contains -- so asking which of its channels "move" is the
+wrong question. **The fixed-point convention is right, for a reason the paper
+never states: there is no quadrature in `E_PT2` to move.**
+
+### D2/D3 -- the XC term derived from scratch equals XC_II + XC_III
+
+`dE_PT2/d eps` contracts with `<p| dF_KS/dR |p>`, and `dF_KS/dR` contains
+`dV_xc/dR`. That contraction is
+
+```
+sum_munu D_munu * d/dR { <mu|V_xc[rho_P]|nu> }      at FIXED D
+```
+
+which is exactly `XC_II + XC_III` -- and explicitly **not** `XC_I`, because
+`XC_I` moves `rho_D`, i.e. moves `D`, which is held fixed here. **This
+independently explains the 3.5e-3 blow-up** that wiring `XC_I` produced, from
+the derivation rather than from measurement.
+
+Since `XC_III` measures ~1e-7, **the derived term IS what Planck already
+ships.** The derivation produces no new term.
+
+### Two concrete predictions, both made and both FALSIFIED
+
+**(1) Unrelaxed `D`. WRONG.** I argued `dE_PT2/d eps` uses the unrelaxed `D'`
+because the `Z` part is "the C channel, already handled by the Lagrangian".
+Measured: residual **1.03e-3 / 8.13e-4**, i.e. **165% / 202% WORSE**.
+
+**The error:** the Lagrangian *determines* `Z` (Eq. 27); it does not *contract*
+`Z` against `dF/dR`. That contraction happens once, in Eq. 33, and the paper
+uses the **relaxed** `D` there and in Eq. 46 consistently. Conflating "determines"
+with "already counted" was the mistake. **Planck's relaxed `D` is correct**, and
+N3.5.7.10's empirical choice stands.
+
+**(2) `a_x` on `Gamma`'s exchange. WRONG.** Eq. 17's SCF `Gamma` carries `a_x`
+explicitly while Eq. 46's SCF+PT2 `Gamma` does not, and the paper does say it
+"suppresses explicit reference to `a_x`". Tested at `a_x = 0.53`: residual
+**6.54e-3 / 5.85e-3**, **16x / 21x WORSE**. **N3.5.6 was right** -- full HF
+exchange weight in `Gamma` is correct and Eq. 46's coefficients mean what they
+say.
+
+### What the derivation actually establishes
+
+The complete `dE_PT2/dR` is four terms, and **Planck has all four**:
+
+```
+<D h^x>  +  sum Gamma^PT2 (munu|kt)^(x)  +  [XC term]  +  <W^PT2 S^(x)>
+```
+
+The `eps` channel splits into (a) "the operator moves" -- carried by the first
+three -- and (b) "the orbitals re-orthonormalise" -- carried by `<W S^(x)>`.
+With the XC term in, **the assembly is complete**.
+
+**Therefore the residual is NOT a missing term. It is an error inside one of the
+four.** That is a different search, and it inverts the arc's entire premise:
+every candidate since N3.5.7.4 has been a hunt for something absent.
+
+**Where to look, in order of remaining suspicion:**
+1. **`<W^PT2 S^(x)>`** -- the only term with a known KS-vs-HF gap
+   (`vhf_s1occ` is HF `J - K/2` where Eq. 42 wants `-1/2 R(D)`). The
+   `s_vhf` family is bounded away from the target by >=72%, but that bound
+   assumed the rest of the assembly was right. **With the assembly now proven
+   complete, a `W` error is the leading candidate** -- and Eqs. 43/44's `W_ab`
+   and `W_ia` blocks have never been checked against Planck term by term.
+2. **The Z-vector's coefficients** -- H2.3 proved the operator well-formed
+   (symmetric, SPD, exact solve) but not that every coefficient matches Eq. 41.
+   It has **3.6x leverage** on the final gradient.
+3. **`Gamma^NS`** -- amplitudes are exonerated elementwise (H2.2), but the
+   backtransformation `Eq. 47` with its `(1+delta_ij)` weight was checked only
+   for convention-equivalence, not numerically.
+
+**Method note:** both falsified predictions were derivation-driven, stated
+before measuring, and cost ~20 minutes each to kill. That is the intended cost
+of a wrong hypothesis; the failure mode this arc kept hitting was *tuning*
+after a partial match instead of predicting first.
