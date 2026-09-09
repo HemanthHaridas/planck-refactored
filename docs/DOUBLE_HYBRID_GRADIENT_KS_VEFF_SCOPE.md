@@ -1227,11 +1227,55 @@ both why the swap made things worse and why scaling `s_vhf` up looks
 superficially attractive. Neither is the answer; whatever is missing lives
 near `vhf_s1occ` in the assembly but is not a reweighting of it.
 
-**Next step (not taken here):** the screen above tested only *prefactors*
-on existing terms. The remaining structural hypothesis is that
-`vhf_s1occ`'s density argument or projection is the HF-MP2 one where the
-paper's Eq. 42 wants `-1/2 R(D)` on the relaxed `D` -- a different object,
-not a rescaling, and therefore not reachable by this screen.
+**Step 5 -- the `vhf_s1occ` construction matches PySCF exactly (negative).**
+Planck builds `p1 * veff(D + D^T) * p1` with `p1 = C_occ C_occ^T`, which is
+`grad/mp2.py:163` line-for-line. The projector is deliberately unnormalized
+in both codes (closed-shell `hf_dm1 = 2 C_occ C_occ^T`), and the whole path
+is FD-verified for HF-MP2. **No convention bug here** -- the only
+DH-specific freedom is which operator is applied.
+
+**Step 6 -- the un-doubled density argument is arithmetic, not physics
+(negative).** Probed `0.5*(D + D^T)`: it scores **cos -0.690 / -0.592,
+scale -0.508 / -0.393** -- exactly `-0.5x` the `s_vhf` numbers, because
+`vhf_s1occ` is linear in its density argument. At coefficient 1.0 it makes
+the residual clearly worse (7.05e-4 / 5.25e-4 against a 3.89e-4 / 2.69e-4
+baseline). Reverted.
+
+**Step 7 -- a HARD BOUND that closes the whole `vhf_s1occ` family.** Every
+variant tried across N3.5.7.11-13 -- the KS-vs-HF operator swap, the
+density doubling, any prefactor -- is a **linear rescaling of `s_vhf`**.
+They all lie on one line through the origin, so the best any of them can
+do is bounded by the angle between that line and the target:
+
+    irreducible fraction = sqrt(1 - cos^2)
+
+With `cos = 0.690 / 0.592`, **even a perfectly scaled `s_vhf` leaves
+72.4% / 80.6% of the remainder norm** (4.28e-4 of 5.91e-4; 3.19e-4 of
+3.96e-4).
+
+**So the missing term is not any reweighting of `vhf_s1occ`, proven
+geometrically rather than by enumerating variants.** This also retires
+the `W^PT2` / Eq. 42 `-1/2 R(D)` lead as stated: `R(D)` enters `W^PT2`
+precisely through this slot, and the slot cannot carry the term whatever
+operator is put in it. The 0.6-0.7 correlation is real but is the
+signature of a *neighbouring* quantity, not the term itself.
+
+**What survives.** Of the paper's DH-specific objects, `W^PT2`'s
+`vhf_s1occ` slot is now excluded, `Gamma^PT2` (Eq. 46) was argued
+structurally correct (full HF exchange weight, N3.5.6), and `<D h^x>` has
+no XC part by construction. The remaining candidates are:
+- **`Imat` / `zeta` built on KS rather than HF orbitals' response** --
+  `s_im1` and `s_zeta` scored 0.62/0.42 and 0.34/0.27, both rejected as
+  *prefactors*, but like `vhf_s1occ` they could be structurally different
+  objects in the DH case; unlike `vhf_s1occ` this has not been bounded.
+- **A term with no counterpart in the HF-MP2 assembly at all**, which the
+  screen cannot find by construction, since it can only reweight what is
+  already there.
+
+The second is the more likely reading now: three independent slots
+(`s_im1`, `s_zeta`, `s_vhf`) each correlate 0.3-0.7 with the target and
+none contains it, which is what one expects when the missing object is a
+*new* contraction that overlaps all of them rather than a defect in any.
 
 **Method note worth carrying, since it cost this arc four reverted
 attempts (N3.5.7.4, S4, S5, N3.5.7.8):** a symmetric fixture can have
