@@ -407,10 +407,16 @@ set(DFT_LIB_SRC
     ${SRC_DIR}/dft/ao_grid.h
     ${SRC_DIR}/dft/dft_gradient.cpp
     ${SRC_DIR}/dft/dft_gradient.h
+    ${SRC_DIR}/dft/dh_gradient.cpp
+    ${SRC_DIR}/dft/dh_gradient.h
+    ${SRC_DIR}/dft/dh_relaxed_density.cpp
+    ${SRC_DIR}/dft/dh_relaxed_density.h
     ${SRC_DIR}/dft/driver.cpp
     ${SRC_DIR}/dft/driver.h
     ${SRC_DIR}/dft/ks_matrix.cpp
     ${SRC_DIR}/dft/ks_matrix.h
+    ${SRC_DIR}/dft/ks_orbital_hessian.cpp
+    ${SRC_DIR}/dft/ks_orbital_hessian.h
     ${SRC_DIR}/dft/response_packing.cpp
     ${SRC_DIR}/dft/response_packing.h
     ${SRC_DIR}/dft/xc_grid.cpp
@@ -884,6 +890,45 @@ if(BUILD_TESTING)
     add_executable(planck-dft-density-response-linearity
         ${CMAKE_SOURCE_DIR}/tests/dft_density_response_linearity.cpp
         ${SRC_DIR}/dft/xc_grid.cpp
+    )
+
+    # N1.1 (docs/DOUBLE_HYBRID_GRADIENT_SCOPE.md): DFT::Gradient::
+    # build_pt2_mo_intermediates returns the gamma^1 blocks (shape, sign,
+    # hand-computed values) on a synthetic RMP2Result. build_pt2_mo_intermediates
+    # only calls rmp2_gamma1_intermediates, which is self-contained -- but it
+    # is compiled inside mp2_rmp2.cpp, whose other functions pull in the MP2
+    # ERI stack, hence the full integral/basis link list.
+    add_executable(planck-dh-gradient-pt2-intermediates
+        ${CMAKE_SOURCE_DIR}/tests/dh_gradient_pt2_intermediates.cpp
+        ${SRC_DIR}/dft/dh_gradient.cpp
+        ${SRC_DIR}/post_hf/mp2.cpp
+        ${SRC_DIR}/post_hf/mp2_internal.cpp
+        ${SRC_DIR}/post_hf/mp2_rmp2.cpp
+        ${SRC_DIR}/post_hf/mp2_ump2.cpp
+        ${SRC_DIR}/post_hf/mp2_gradient.cpp
+        ${SRC_DIR}/post_hf/rhf_response.cpp
+        ${SRC_DIR}/post_hf/uhf_response.cpp
+        ${SRC_DIR}/post_hf/integrals.cpp
+        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
+        ${SRC_DIR}/gradient/gradient.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/rifit.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${SRC_DIR}/integrals/hgp.cpp
+        ${SRC_DIR}/integrals/os.cpp
+        ${SRC_DIR}/integrals/rys.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+        ${SRC_DIR}/integrals/screening.cpp
+        ${SRC_DIR}/integrals/shellpair.cpp
+        ${SRC_DIR}/lookup/elements.cpp
+        ${SRC_DIR}/lookup/boys.cpp
+    )
+    target_include_directories(planck-dh-gradient-pt2-intermediates PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
     )
 
     add_executable(planck-eri-derivative-kernels
@@ -2508,6 +2553,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-symm-fock-equivalence
         COMMAND planck-symm-fock-equivalence
+    )
+
+    add_test(
+        NAME planck-dh-gradient-pt2-intermediates
+        COMMAND planck-dh-gradient-pt2-intermediates
     )
 endif()
 
