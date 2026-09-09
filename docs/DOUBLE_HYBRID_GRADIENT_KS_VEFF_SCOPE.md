@@ -593,20 +593,50 @@ mixed-partial cross-checks and family guards.
    on a new `has_kxc()` predicate (`func_.info->flags & XC_FLAGS_HAVE_KXC`)
    and return `std::unexpected` -- the family check alone is not enough.
 
-**S2 -- new routine, LDA only.** `DFT::Gradient::compute_dh_xc_pt2_gradient`
-in a fresh `dft_kernel_gradient.{cpp,h}` (filenames reused, contents new).
-Args: mol, basis, grid, ao, ao Hessian (GGA needs it -- take it now),
-ground density `P`, relaxed density `D`, both functionals. Per point:
-project `rho_P`, `rho_D`; `c_rho(p) = w_p * v3rho3(p) * rho_D(p)` (with the
-explicit closed-shell spin factor, FD-verified); for each atom `A`,
-Cartesian `q`: `grad(A,q) += drho_channel(P, ao, p, A, q, atoms_bf) *
-c_rho(p)` plus the `becke_partition_owner_derivatives` weight piece x
-`v3rho3(p) * rho_D(p)` (no `w`). GGA branch returns an explicit error until
-S3. `drop_correlation_if_combined` guard (risk 2). FD gate: real
-He2/STO-3G, arbitrary fixed symmetric `P`/`D`, central difference against
-an INDEPENDENT re-implementation of the term (not the routine's internals),
-moving-grid + frozen-coefficient discipline from N3.5.7.1/.2, plus `Sum_A
-grad_A = 0`. Ratio 1.000000 across 2 seeds x 2 steps.
+**S2 -- new routine, LDA only. LANDED.**
+`DFT::Gradient::compute_dh_xc_pt2_gradient` in a fresh
+`dft_kernel_gradient.{cpp,h}` (filenames reused, contents new). Args: mol,
+basis, grid, ao, ao Hessian (S3/GGA needs it -- taken now; S2 only
+dimension-checks it), ground density `P`, relaxed density `D`, both
+functionals. Per grid point:
+
+    grad(A,q) += w_p * (v3rho3_x + v3rho3_c)(rho_P;p) * rho_D(p)
+                       * drho_channel(P_sym, ao, p, A, q, atoms_bf)
+
+with `v3rho3` at the GROUND density, `rho_D` the relaxed difference density
+on the grid, and `rho_P >= 1e-8` screened (v3rho3 ~ rho^(-5/3) is
+numerically meaningless below that and contributes nothing physical).
+`drop_correlation_if_combined` guard on `v3rho3_c` (risk 2). GGA branch
+returns an explicit error until S3.
+
+**The moving-grid pieces (point-translation, Becke-weight-derivative) do
+NOT belong here** -- the scoped plan was wrong on this. Eq. 33 Term 1 is a
+PLAIN grid integral of `rho_P^(x)(r) * c(r)`, where `rho_P^(x)` (Eq. 15) is
+the basis-function derivative of the density at a FIXED spatial point and
+is the integrand itself. It is not `d/dR` of an integral, so there is no
+quadrature-moving-frame correction. Only `drho_channel`. (The moving-grid
+terms belong to `E_xc^x`, where `E_xc` is what gets differentiated;
+`compute_xc_nuclear_gradient_rks` carries them for that reason.)
+Consequence: Term 1 alone is NOT translationally invariant -- `sum_A
+grad_A = 0` holds only for the full `E_PT2^x`, checked end-to-end at S4.
+
+FD gate: `tests/dft_kernel_gradient_fd.cpp` (`planck-dft-kernel-gradient-fd`)
+-- He2/STO-3G, Normal grid, strongly diagonally-dominant random symmetric
+`P`/`D` (keeps `rho_P` off the singular regime). Reference: rebuild the
+basis with atom `A`'s shell centers shifted +-h along `q`, re-evaluate
+`rho_P` at the ORIGINAL grid points (grid + weights + frozen coefficient
+held fixed), central difference -> `[d rho_P / d R_{A,q}]_basis`, contract
+with `w * (v3rho3_x + v3rho3_c) * rho_D`. Independent of the routine's
+internals. **Passes at rel 6e-6 (h=1e-3), converging to 1.5e-6 (h=5e-4) --
+the O(h^2) signature.** Three cases (2 seeds x 2 steps).
+
+**Exports from `dft_gradient.{h,cpp}` (was file-local anon namespace):**
+`drho_channel` (real shared algorithm -- the basis-derivative piece of
+`d rho_P/dR`, consumed as a scalar integrand here vs AO-pair-scattered
+there) and `atom_bf_lists` (a single wrapper over the three flat-AO ->
+shell -> atom bookkeeping steps). Behavior-neutral for
+`compute_xc_nuclear_gradient_{rks,uks}` -- verified by the HSE06-gradient
+and B3LYP-SOSCF regressions.
 
 **S3 -- GGA: Term 1 `gamma(P)` branch + Term 2.** Add `v3rho2sigma`,
 `v3rhosigma2`, `v3sigma3` (Term 1) and `v2sigma`-family (Term 2)

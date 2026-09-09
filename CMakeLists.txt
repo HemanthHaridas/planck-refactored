@@ -415,6 +415,8 @@ set(DFT_LIB_SRC
     ${SRC_DIR}/dft/ao_grid.h
     ${SRC_DIR}/dft/dft_gradient.cpp
     ${SRC_DIR}/dft/dft_gradient.h
+    ${SRC_DIR}/dft/dft_kernel_gradient.cpp
+    ${SRC_DIR}/dft/dft_kernel_gradient.h
     ${SRC_DIR}/dft/dh_gradient.cpp
     ${SRC_DIR}/dft/dh_gradient.h
     ${SRC_DIR}/dft/dh_relaxed_density.cpp
@@ -838,6 +840,24 @@ if(BUILD_TESTING)
     # gradient. Header-only wrapper, no src/ sources beyond libxc.
     add_executable(planck-dft-kxc-selfcheck
         ${CMAKE_SOURCE_DIR}/tests/dft_kxc_selfcheck.cpp
+    )
+
+    # S2 (docs/DOUBLE_HYBRID_GRADIENT_KS_VEFF_SCOPE.md, N3.5.7.7): FD check
+    # of compute_dh_xc_pt2_gradient's LDA branch (Eq. 33 Term 1) against a
+    # real He2/STO-3G nuclear displacement -- needs real basis/grid/AO
+    # machinery (read_gbs_basis, MakeMolecularGrid, evaluate_ao_*_on_grid),
+    # not just xc_grid.cpp's density evaluator.
+    add_executable(planck-dft-kernel-gradient-fd
+        ${CMAKE_SOURCE_DIR}/tests/dft_kernel_gradient_fd.cpp
+        ${SRC_DIR}/dft/dft_kernel_gradient.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${LOOKUP_SRC}
     )
 
     # F3.3 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): the GGA analytic
@@ -1617,6 +1637,12 @@ if(BUILD_TESTING)
         ${LIBXC_INSTALL_DIR}/include
     )
 
+    target_include_directories(planck-dft-kernel-gradient-fd PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-dft-gga-hessian-selfcheck PRIVATE
         ${SRC_DIR}
         ${LIBXC_INSTALL_DIR}/include
@@ -1911,6 +1937,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-dft-kxc-selfcheck PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dft-kernel-gradient-fd PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -2263,6 +2295,15 @@ if(BUILD_TESTING)
     )
     add_dependencies(planck-dft-kxc-selfcheck libxc)
 
+    target_link_libraries(planck-dft-kernel-gradient-fd
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-kernel-gradient-fd libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-dft-kernel-gradient-fd OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-dft-kernel-gradient-fd PRIVATE USE_OPENMP)
+    endif()
+
     target_link_libraries(planck-dft-gga-hessian-selfcheck
         ${LIBXC_INSTALL_DIR}/lib/libxc.a
     )
@@ -2328,6 +2369,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-dft-kxc-selfcheck
         COMMAND planck-dft-kxc-selfcheck
+    )
+
+    add_test(
+        NAME planck-dft-kernel-gradient-fd
+        COMMAND planck-dft-kernel-gradient-fd
     )
 
     add_test(

@@ -170,27 +170,39 @@ namespace DFT::Gradient
             return sum;
         }
 
-        double drho_channel(
-            const Eigen::MatrixXd &P_sym,
-            const AOGridEvaluation &ao,
-            Eigen::Index ip,
-            int atom_A,
-            int q,
-            const std::vector<std::vector<int>> &atoms_bf)
-        {
-            double d = 0.0;
-            const Eigen::Index nb = P_sym.cols();
-            for (int mu : atoms_bf[static_cast<std::size_t>(atom_A)])
-            {
-                const Eigen::Index imu = static_cast<Eigen::Index>(mu);
-                const double gmq = gq_mu(ao, ip, imu, q);
-                for (Eigen::Index nu = 0; nu < nb; ++nu)
-                    d -= 2.0 * P_sym(imu, nu) * ao.values(ip, nu) * gmq;
-            }
-            return d;
-        }
-
     } // namespace
+
+    double drho_channel(
+        const Eigen::MatrixXd &P_sym,
+        const AOGridEvaluation &ao,
+        Eigen::Index ip,
+        int atom_A,
+        int q,
+        const std::vector<std::vector<int>> &atoms_bf)
+    {
+        double d = 0.0;
+        const Eigen::Index nb = P_sym.cols();
+        for (int mu : atoms_bf[static_cast<std::size_t>(atom_A)])
+        {
+            const Eigen::Index imu = static_cast<Eigen::Index>(mu);
+            const double gmq = gq_mu(ao, ip, imu, q);
+            for (Eigen::Index nu = 0; nu < nb; ++nu)
+                d -= 2.0 * P_sym(imu, nu) * ao.values(ip, nu) * gmq;
+        }
+        return d;
+    }
+
+    std::expected<std::vector<std::vector<int>>, std::string>
+    atom_bf_lists(const HartreeFock::Molecule &mol, const HartreeFock::Basis &basis)
+    {
+        auto bf_shell = build_bf_shell_map(basis);
+        if (!bf_shell)
+            return std::unexpected(bf_shell.error());
+        auto shell_atom = build_shell_atom_map(mol, basis);
+        if (!shell_atom)
+            return std::unexpected(shell_atom.error());
+        return build_atoms_bf_lists(mol.natoms, *bf_shell, *shell_atom);
+    }
 
     std::expected<Eigen::MatrixXd, std::string> becke_partition_owner_derivatives(
         const MolecularGrid &grid,

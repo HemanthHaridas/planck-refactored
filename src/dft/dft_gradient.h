@@ -3,12 +3,14 @@
 
 #include <expected>
 #include <string>
+#include <vector>
 
 #include <Eigen/Dense>
 
 #include "ao_grid.h"
 #include "base/grid.h"
 #include "base/types.h"
+#include "basis/basis.h"
 #include "xc_grid.h"
 
 namespace DFT::Gradient
@@ -17,16 +19,36 @@ namespace DFT::Gradient
     // d(Becke partition weight of grid point `ip`'s owner atom)/dR, for
     // every nuclear Cartesian -- the core moving-grid correction analytic
     // DFT gradients need. Shared by compute_xc_nuclear_gradient_{rks,uks}
-    // and (N3.5.7.3, docs/DOUBLE_HYBRID_GRADIENT_KS_VEFF_SCOPE.md)
-    // compute_xc_kernel_nuclear_gradient -- exported here (was file-local to
+    // and (N3.5.7, docs/DOUBLE_HYBRID_GRADIENT_KS_VEFF_SCOPE.md)
+    // compute_dh_xc_pt2_gradient -- exported here (was file-local to
     // dft_gradient.cpp) rather than duplicated a third time, since this is
-    // real shared Becke-weight-derivative algebra, not per-TU private
-    // wiring like the small shell/atom bookkeeping helpers each of those
-    // TUs still keeps its own copy of.
+    // real shared Becke-weight-derivative algebra.
     [[nodiscard]] std::expected<Eigen::MatrixXd, std::string> becke_partition_owner_derivatives(
         const MolecularGrid &grid,
         const HartreeFock::Molecule &mol,
         Eigen::Index ip);
+
+    // Per-atom lists of basis-function indices (flat AO list -> shells ->
+    // atoms). The moving-grid derivative terms are organized atom-by-atom;
+    // this recovers that structure. Shared with compute_dh_xc_pt2_gradient
+    // (N3.5.7) -- a single wrapper over what was three file-local steps.
+    [[nodiscard]] std::expected<std::vector<std::vector<int>>, std::string>
+    atom_bf_lists(const HartreeFock::Molecule &mol, const HartreeFock::Basis &basis);
+
+    // Basis-function-derivative piece of d(rho_P(r))/dR_{atom_A,q} at grid
+    // point `ip`: sum over mu on atom A of -2 P_sym(mu,nu) phi_nu (d phi_mu/dq).
+    // (The point-translation and Becke-weight pieces are separate, added by
+    // the caller.) `P_sym` must already be symmetrized. Shared with
+    // compute_dh_xc_pt2_gradient (N3.5.7); it consumes rho_P^(x) as a scalar
+    // grid integrand rather than scattering it AO-pair-wise like
+    // compute_xc_nuclear_gradient_rks does.
+    [[nodiscard]] double drho_channel(
+        const Eigen::MatrixXd &P_sym,
+        const AOGridEvaluation &ao,
+        Eigen::Index ip,
+        int atom_A,
+        int q,
+        const std::vector<std::vector<int>> &atoms_bf);
 
     // Nuclear XC contribution ∂E_xc/∂R for semilocal and global-hybrid KS-DFT,
     // including the moving-grid (Becke partition + point-translation) response.
