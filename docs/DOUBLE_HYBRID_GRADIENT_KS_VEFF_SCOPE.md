@@ -694,14 +694,47 @@ consumes `dg_axis_spin`. Term 2 is the separate `INT 2 f^{gamma}
 on every `_c` array. FD gate extended with PBE (non-combined pair -- keeps
 the guard inert, same choice `dft_gga_hessian_selfcheck.cpp` makes).
 
-**S4 -- wire into the driver + measure. NEXT.** `calculator._gradient +=
-*dh_xc_pt2_grad` in the DH block of `compute_analytic_ks_gradient`, after
-`*corr`, with `rd->dm1_corr_relaxed_ao` as the relaxed density and
-`calculator._info._scf.alpha.density` as the ground density. Target:
-water/STO-3G B2PLYP FD `1.877e-4 -> below ~5e-5`. The routine now covers
-the whole Eq. 33 XC term (LDA + GGA, second-derivative response) in one
-shot -- no separate Term 1 / Term 2 wiring. The N3.5.5 `vhf_s1occ`
-HF-vs-KS question stays parked (small, wrong-sign, revert-safe).
+**S4 -- wire into the driver + measure. TRIED, REVERTED (2nd time -- same
+wall as N3.5.7.4).** `calculator._gradient += *dh_xc_grad` in the DH block
+of `compute_analytic_ks_gradient`, after `*corr`, with
+`rd->dm1_corr_relaxed_ao` (already `c_pt2`-scaled -- linear in it, no extra
+factor) as `D` and `calculator._info._scf.alpha.density` as `P`. The
+`hess` in scope is zero-filled for LDA and `evaluate_ao_hessian_on_grid`
+for GGA-family (B2PLYP qualifies).
+
+**Made the water/STO-3G B2PLYP FD residual WORSE, not better:**
+
+| config | FD residual (Ha/Bohr) |
+|---|---|
+| baseline (no S4) | `1.881e-4` (atom 2, y) |
+| `+= *dh_xc_grad`, relaxed `D` | `2.650e-4` (atom 2, z) |
+| `+= *dh_xc_grad`, unrelaxed `D` (`lag->dm1_corr_ao`) | `2.022e-4` |
+| `-= *dh_xc_grad` | `4.155e-4` |
+| `+= 0.5 * *dh_xc_grad` | `1.792e-4` (marginally < baseline) |
+| `+= 2.0 * *dh_xc_grad` | `4.366e-4` |
+
+Per-component: S4 moves **every** component toward FD (atom 1 z:
+`1.87e-4 -> 2.5e-5`) but overshoots ~2x on the others, and atom 2 z gets
+the wrong-sign correction (needed `-9.3e-5`, got `+1.7e-4`). The ~2x and
+the per-component sign inconsistency say it is **structurally not quite
+Eq. 33's XC term**, not a scale bug -- the identical conclusion N3.5.7.4
+reached with its (differently-wrong, v3) routine.
+
+**The routine and gate stay committed.** `compute_dh_xc_pt2_gradient` is
+FD-verified as `d/dR{ sum_munu D_munu <mu|V_xc[rho_P]|nu> }` (the SECOND-
+derivative response part) to `O(h^2)` -- that piece is correct. What is
+unresolved: whether Eq. 33's XC term is that `Phi_XC` alone, or `Phi_XC`
+**plus** the basis-derivative piece `int rho_D^(x) . (df/drho) + 2 (df/dgamma)
+(grad_rho_P . grad_rho_D^(x))` -- the "naive `D^(x)` analog" the paper's
+p.6 text says is "not the case" *on its own*, but may still be additive
+alongside the response term (the text rules out the naive term being the
+WHOLE answer, not its presence). That second piece is a plain grid
+integral of a `D`-basis-derivative against the FIRST XC derivatives; it is
+NOT in `build_rmp2_gradient_intermediates` (which only knows HF-style
+`2J - K` terms). Building and adding it is the next attempt.
+
+The N3.5.5 `vhf_s1occ` HF-vs-KS question stays parked (small, wrong-sign,
+revert-safe).
 
 ### N3.6 -- lift the gate, add regressions
 

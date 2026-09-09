@@ -27,6 +27,7 @@
 #include "base/wrapper.h"
 #include "basis/basis.h"
 #include "dft_gradient.h"
+#include "dft_kernel_gradient.h"
 #include "freq/hessian.h"
 #include "gradient/gradient.h"
 #include "integrals/base.h"
@@ -4152,20 +4153,29 @@ namespace DFT::Driver
 
                 calculator._gradient += *corr;
 
-                // N3.5.7 (docs/DOUBLE_HYBRID_GRADIENT_KS_VEFF_SCOPE.md): the
-                // Eq. 33 XC contribution to the PT2 gradient is still missing
-                // here -- it is the ~1.9e-4 Ha/Bohr residual against FD on
-                // water/STO-3G B2PLYP. Per the paper (Neese/Schwabe/Grimme,
-                // JCP 126, 124115, 2007, Eq. 33) it is two additive per-point
-                // scalar grid integrals over d(rho_P)/dR and d(grad_rho_P)/dR
-                // (drho_channel / dg_axis_spin in dft_gradient.cpp), NOT an
-                // AO-pair scatter: Term 1 weights f^(3) (libxc v3rho3 /
-                // v3rho2sigma / v3rhosigma2 / v3sigma3) by relaxed-density
-                // quantities; Term 2 (GGA only) weights f^(2) v2sigma by
-                // grad_rho_D. The first attempt (compute_xc_kernel_nuclear_
-                // gradient) scattered AO-pair derivatives against P instead
-                // and made FD worse in both signs -- deleted (S0). New
-                // routine + its own FD gate land before this is wired in.
+                // N3.5.7 S4 (docs/DOUBLE_HYBRID_GRADIENT_KS_VEFF_SCOPE.md):
+                // Eq. 33's XC contribution to the PT2 gradient -- d/dR of
+                // Phi_XC = sum_munu D_munu <mu|V_xc[rho_P]|nu> -- is
+                // implemented and FD-gated (planck-dft-kernel-gradient-fd,
+                // DFT::Gradient::compute_dh_xc_pt2_gradient, LDA + GGA, O(h^2)),
+                // but wiring it here does NOT close the ~1.9e-4 Ha/Bohr
+                // water/STO-3G B2PLYP FD residual: it moves each component in
+                // the right direction but overshoots ~2x (relaxed D -> FD
+                // 2.65e-4; unrelaxed D -> 2.02e-4; 0.5x weight -> 1.79e-4,
+                // marginally better than the 1.88e-4 baseline), with a
+                // per-component sign inconsistency that is not a scale factor.
+                // This is the same wall N3.5.7.4 hit. The routine and gate
+                // stay; wiring waits on more of the paper's derivation
+                // (whether Phi_XC is the right functional, or a compensating
+                // basis-derivative piece `int rho_D^(x) . df/drho` -- the one
+                // the paper says the naive analog is -- belongs alongside it).
+                //   auto dh_xc_grad = DFT::Gradient::compute_dh_xc_pt2_gradient(
+                //       calculator._molecule, calculator._shells,
+                //       prepared.molecular_grid, prepared.ao_grid, hess,
+                //       calculator._info._scf.alpha.density,
+                //       rd->dm1_corr_relaxed_ao,
+                //       functionals.exchange, functionals.correlation);
+                //   calculator._gradient += *dh_xc_grad;   // (reverted)
 
                 // N3.5.1: is compute_xc_nuclear_gradient_rks linear in its
                 // density argument? If g(Pa+Pb) == g(Pa) + g(Pb), the missing
