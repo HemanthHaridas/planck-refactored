@@ -572,12 +572,17 @@ vs the routine). Two corrections:
    same object Eq. 41's response operator uses. **S1's kxc wrapper is not
    needed for this term** (kept as a correct utility).
 
-2. **No moving-grid (Becke-weight / point-translation) correction.**
-   `rho_P^(x)` (Eq. 15) is the basis-function derivative at a FIXED spatial
-   point -- it is the integrand, not `d/dR` of a quadrature. So Eq. 33's XC
-   term is a plain `sum_p w_p * integrand_p`. Term 1/Term 2 alone are NOT
-   translationally invariant; `sum_A grad_A = 0` holds only for the full
-   `E_PT2^x` (checked end-to-end at S4).
+2. **Eq. 33 as WRITTEN has no moving-grid (Becke-weight /
+   point-translation) correction.** `rho_P^(x)` (Eq. 15) is the
+   basis-function derivative at a FIXED spatial point -- it is the
+   integrand, not `d/dR` of a quadrature. So Eq. 33's Term1+Term2 is a
+   plain `sum_p w_p * integrand_p` (= XC_II in the S5 breakdown), and it
+   is NOT translationally invariant on its own; `sum_A grad_A = 0` holds
+   only for the full `E_PT2^x`.
+   **NB (S5):** the *scalar* `Phi_XC = sum D_munu <mu|V_xc[rho_P]|nu>` IS
+   a grid integral, so its own `d/dR` (XC_I + XC_II + XC_III, S5-validated
+   to rel 3e-9) does carry the moving-grid terms. Eq. 33's XC term is only
+   the XC_II piece of that -- see S5 for why the other two do not belong.
 
 Closed-shell, total-density convention (matching
 `compute_analytic_xc_hessian_vector_product`'s GGA branch):
@@ -600,7 +605,7 @@ old code had `g_ag(mu)*g_q(nu)` plus a missing `sum_{mu,nu in A}` term.
 Fixed and simplified to the single loop above; weighted-FD residual
 `5e-8` (was ~1%). No prior callers, so behaviour-neutral for the tree.
 
-### N3.5.7.7 -- the rewrite (S0-S4)
+### N3.5.7.7 -- the rewrite (S0-S5)
 
 Supersedes N3.5.7.1-4. The old `compute_xc_kernel_nuclear_gradient` and
 `tests/dft_kernel_gradient_fd.cpp` are the AO-pair-scatter architecture
@@ -639,102 +644,115 @@ mixed-partial cross-checks and family guards.
    on a new `has_kxc()` predicate (`func_.info->flags & XC_FLAGS_HAVE_KXC`)
    and return `std::unexpected` -- the family check alone is not enough.
 
-**S2 + S3 -- new routine, LDA and GGA. LANDED (as one rewrite -- S2's
-v3rho3 form was wrong per N3.5.7.6a, so S3 replaced it wholesale).**
+**S2 + S3 + S5 -- `compute_dh_xc_pt2_gradient`, the full geometry
+derivative of `Phi_XC`. LANDED as a routine + FD gate; NOT wired in.**
 `DFT::Gradient::compute_dh_xc_pt2_gradient` in a fresh
 `dft_kernel_gradient.{cpp,h}` (filenames reused, contents new). Args: mol,
 basis, grid, ao, ao Hessian, ground density `P`, relaxed density `D`, both
-functionals. Two branches:
+functionals.
 
-    LDA:  grad(A,q) += w_p * (v2rho2_x + v2rho2_c)(rho_P;p) * rho_D(p)
-                             * drho_channel(P_sym, ao, p, A, q, atoms_bf)
+**The quantity (Python/PySCF-derived and validated, S5).** The scalar
+functional whose geometry derivative is Eq. 33's XC term is
 
-    GGA (per point, per (A,q); rx = drho_channel, gx = dg_axis_spin
-         per axis, g = grad_rho_P frozen, grad_d = grad_rho_D frozen):
-      d_dfdrho   = v2rho2*rx + 2*v2rhosigma*(g.gx)
-      d_dfdgamma = v2rhosigma*rx + 2*v2sigma2*(g.gx)
-      integrand  = d_dfdrho * rho_D
-                 + 2*d_dfdgamma * (g.grad_d)
-                 + 2*vsigma * (gx.grad_d)
-      grad(A,q) += w_p * integrand
+    Phi_XC = sum_munu D_munu <mu|V_xc[rho_P]|nu>
+           = integral w * { vrho*rho_D + 2*vsigma*(grad_rho_P . grad_rho_D) } dr
 
-All SECOND functional derivatives (v2rho2/v2rhosigma/v2sigma2/vsigma) at
-the GROUND density. `rho_P >= 1e-8` screened. `drop_correlation_if_combined`
-on the `_c` arrays (risk 2). No moving-grid correction (N3.5.7.6a).
+(`<mu|V_xc|nu>` = the SCF operator's XC part, Eq. 10, FIRST functional
+derivatives; `D` = relaxed PT2 difference density). Since `Phi_XC` is
+itself a grid integral, `d/dR` is a TRUE geometry derivative with THREE
+pieces -- verified in Python against a rebuild-the-molecule central
+difference to **rel 3e-9** (He2/STO-3G PBE):
 
-FD gate: `tests/dft_kernel_gradient_fd.cpp` (`planck-dft-kernel-gradient-fd`)
--- He2/STO-3G, Normal grid, strongly diagonally-dominant random symmetric
-`P`/`D` (keeps `rho_P` off the `rho^(-2/3)` singular regime).
-- LDA reference: frozen `coeff = w*(v2rho2_x+v2rho2_c)*rho_D`; FD of
-  `rho_P` w.r.t. shifted AO centers (grid/weights/coeff fixed) contracted
-  with it.
-- GGA reference: central difference of
-  `Phi_XC = integral w*{ vrho*rho_D + 2*vsigma*(grad_rho_P.grad_rho_D) }`
-  -- FIRST derivatives (vrho, vsigma) and `grad_rho_P` re-evaluated at the
-  shifted-AO geometry, `rho_D`/`grad_rho_D` frozen. Linear in `D`.
-Both independent of the routine's internals. **LDA rel 1e-5, GGA rel 9e-6
-at h=1e-3, both converging to ~2e-6 at h=5e-4 (O(h^2)).** 6 cases
-(LDA/GGA x 2 seeds x 2 steps).
+- **XC_I** -- basis-function derivative of `rho_D` (`drho_channel(D)`,
+  `dg_axis_spin(D)`) against the FIRST XC derivatives:
+  `sum_p w_p [ vrho*rho_D^(x) + 2*vsigma*(grad_rho_P . grad_rho_D^(x)) ]`.
+  Dominant (~85% of `d/dR{Phi_XC}`).
+- **XC_II** -- `rho_P` inside `V_xc[rho_P]` responds
+  (`drho_channel(P)`, `dg_axis_spin(P)`) against the SECOND XC
+  derivatives:
+  `sum_p w_p [ (v2rho2*rx + 2*v2rhosigma*(g.gx))*rho_D
+             + 2*(v2rhosigma*rx + 2*v2sigma2*(g.gx))*(g.grad_rho_D)
+             + 2*vsigma*(gx.grad_rho_D) ]`
+  (rx = drho_channel(P), gx_a = dg_axis_spin(P), g = grad_rho_P). ~15%.
+- **XC_III** -- grid quadrature moving frame:
+  `sum_p [dw_p/dR]*I_p` (Becke partition weight, via
+  `becke_partition_owner_derivatives`) `+ sum_{owner(p)=A} w_p*[dI_p/dr_q]`
+  (point translation, with `d(.)/dr_q = -sum_A(channel helper)`), where
+  `I_p = vrho*rho_D + 2*vsigma*(grad_rho_P . grad_rho_D)`. ~0.1%, but
+  load-bearing for exact translational invariance.
+
+The routine computes all three, LDA (v2sigma-family = 0) and GGA, at the
+GROUND density, `rho_P >= 1e-8` screened, combined-XC guard on the `_c`
+arrays.
+
+**FD gate:** `tests/dft_kernel_gradient_fd.cpp`
+(`planck-dft-kernel-gradient-fd`) -- He2/STO-3G, Normal grid, strongly
+diagonally-dominant random symmetric `P`/`D`. Reference: rebuild the
+molecule (grid + basis) at each `+-h` displaced geometry and central-
+difference `Phi_XC` -- a genuine geometry derivative (basis moves, grid
+points move with owner, weights move). `sum_A grad_A = 0` is a valid
+check now that XC_III is included. **LDA rel 3e-4 -> 7e-5, GGA rel 2e-5 ->
+6e-6** (h = 1e-3 -> 5e-4, O(h^2)). 6 cases (LDA/GGA x 2 seeds x 2 steps).
 
 **Exports from `dft_gradient.{h,cpp}` (was file-local anon namespace):**
-`drho_channel`, `dg_axis_spin` (real shared algorithm -- the
-basis-function derivatives of `rho_P` and `grad_rho_P`, consumed as scalar
-integrands here) and `atom_bf_lists` (a wrapper over the three flat-AO ->
-shell -> atom bookkeeping steps). `dg_axis_spin` was **fixed** in the same
-change (N3.5.7.6a -- the cross-term index swap). Behavior-neutral for
-`compute_xc_nuclear_gradient_{rks,uks}` (neither helper had a prior
-caller; verified by the HSE06-gradient and B3LYP/HSE06/PBE0-SOSCF
-regressions).
+`drho_channel`, `dg_axis_spin`, `atom_bf_lists` -- real shared algorithm.
+`dg_axis_spin` was **fixed** in this arc (N3.5.7.6a -- cross-term index
+swap; a weighted-FD probe caught it where an unweighted L1 norm matched
+to 2e-6). Behavior-neutral for `compute_xc_nuclear_gradient_{rks,uks}`.
 
-**S3 (superseded by S2+S3 above) -- GGA scoped plan.** Original plan: add `v3rho2sigma`,
-`v3rhosigma2`, `v3sigma3` (Term 1) and `v2sigma`-family (Term 2)
-contractions. Term 1's `gamma_P^(x) = 2 grad_rho_P . d(grad_rho_P)/dR`
-consumes `dg_axis_spin`. Term 2 is the separate `INT 2 f^{gamma}
-(d(grad_rho_P)/dR . grad_rho_D)` integral. `drop_correlation_if_combined`
-on every `_c` array. FD gate extended with PBE (non-combined pair -- keeps
-the guard inert, same choice `dft_gga_hessian_selfcheck.cpp` makes).
+**S5 -- wire into the driver + measure. TRIED, REVERTED (3rd wall in
+this arc, after N3.5.7.4 and S4).** The routine is FD-verified as
+`d/dR{Phi_XC}` to rel 3e-9, but wiring it into
+`compute_analytic_ks_gradient` STILL does not close the ~1.9e-4 Ha/Bohr
+water/STO-3G B2PLYP FD residual. Component-resolved probes:
 
-**S4 -- wire into the driver + measure. TRIED, REVERTED (2nd time -- same
-wall as N3.5.7.4).** `calculator._gradient += *dh_xc_grad` in the DH block
-of `compute_analytic_ks_gradient`, after `*corr`, with
-`rd->dm1_corr_relaxed_ao` (already `c_pt2`-scaled -- linear in it, no extra
-factor) as `D` and `calculator._info._scf.alpha.density` as `P`. The
-`hess` in scope is zero-filled for LDA and `evaluate_ao_hessian_on_grid`
-for GGA-family (B2PLYP qualifies).
-
-**Made the water/STO-3G B2PLYP FD residual WORSE, not better:**
-
-| config | FD residual (Ha/Bohr) |
+| config | water/STO-3G B2PLYP FD residual |
 |---|---|
-| baseline (no S4) | `1.881e-4` (atom 2, y) |
-| `+= *dh_xc_grad`, relaxed `D` | `2.650e-4` (atom 2, z) |
-| `+= *dh_xc_grad`, unrelaxed `D` (`lag->dm1_corr_ao`) | `2.022e-4` |
-| `-= *dh_xc_grad` | `4.155e-4` |
-| `+= 0.5 * *dh_xc_grad` | `1.792e-4` (marginally < baseline) |
-| `+= 2.0 * *dh_xc_grad` | `4.366e-4` |
+| baseline (nothing added) | `1.881e-4` (atom 2, y) |
+| full `XC_I + XC_II + XC_III` | `3.517e-3` (atom 1, z) |
+| `XC_I` only | `3.678e-3` |
+| `XC_I + XC_II` (no XC_III) | `3.517e-3` |
+| `XC_II` only | `2.650e-4` |
+| `XC_II * 0.5` | `1.792e-4` |
+| `XC_II * c_pt2` (0.27) | `~1.40e-4` (best; the `0.27` coincidence is suspicious) |
 
-Per-component: S4 moves **every** component toward FD (atom 1 z:
-`1.87e-4 -> 2.5e-5`) but overshoots ~2x on the others, and atom 2 z gets
-the wrong-sign correction (needed `-9.3e-5`, got `+1.7e-4`). The ~2x and
-the per-component sign inconsistency say it is **structurally not quite
-Eq. 33's XC term**, not a scale bug -- the identical conclusion N3.5.7.4
-reached with its (differently-wrong, v3) routine.
+**Conclusions from the probes:**
 
-**The routine and gate stay committed.** `compute_dh_xc_pt2_gradient` is
-FD-verified as `d/dR{ sum_munu D_munu <mu|V_xc[rho_P]|nu> }` (the SECOND-
-derivative response part) to `O(h^2)` -- that piece is correct. What is
-unresolved: whether Eq. 33's XC term is that `Phi_XC` alone, or `Phi_XC`
-**plus** the basis-derivative piece `int rho_D^(x) . (df/drho) + 2 (df/dgamma)
-(grad_rho_P . grad_rho_D^(x))` -- the "naive `D^(x)` analog" the paper's
-p.6 text says is "not the case" *on its own*, but may still be additive
-alongside the response term (the text rules out the naive term being the
-WHOLE answer, not its presence). That second piece is a plain grid
-integral of a `D`-basis-derivative against the FIRST XC derivatives; it is
-NOT in `build_rmp2_gradient_intermediates` (which only knows HF-style
-`2J - K` terms). Building and adding it is the next attempt.
+1. **XC_I is NOT in the answer.** Adding it (~3.5e-3, ~85% of the routine)
+   blows the gradient up. The paper's "not the naive `D^(x)`" (p.6) is
+   *literal* -- Eq. 33 has no `rho_D^(x)` factor anywhere. XC_I is a real
+   piece of `d/dR{Phi_XC}` but `Phi_XC` is the wrong scalar to fully
+   differentiate.
+2. **XC_III is negligible end-to-end** (Planck's grid, like the synthetic
+   one, has moving-frame terms that cancel to ~1e-7).
+3. **Eq. 33's Term1+Term2 IS XC_II** -- basis-only `rho_P^(x)` (Eq. 15),
+   no moving grid, no `rho_D^(x)`. XC_II is FD-verified as
+   `sum_munu D_munu R^XC[rho_P^(x)]_munu` with the SOSCF-validated
+   total-density `v2rho2`, yet it **overshoots the baseline residual ~2x**
+   (2.65e-4 vs 1.88e-4 needed), with a per-component sign structure -- the
+   same shape N3.5.7.4 and S4 hit.
 
-The N3.5.5 `vhf_s1occ` HF-vs-KS question stays parked (small, wrong-sign,
-revert-safe).
+**Still unresolved: why XC_II overshoots ~2x.** Two candidates, needing
+the spin-RESOLVED Eq. 33 (paper Sec. II, not the Sec. III.A closed-shell
+collapse this arc has been approximating):
+
+- **A residual closed-shell spin factor.** Sec. III.A's collapse of
+  `Sum_sigma int zeta(P)^(x) { f^{rho_sigma rho_sigma zeta} rho_D^sigma + ... }`
+  with `rho_P^sigma = rho_P/2`, `rho_D^sigma = rho_D/2`, `Sum_sigma -> x2`
+  gives a net factor 1 on the total-density product ONLY if the polarized
+  `f^{rho_sigma rho_sigma}` equals the unpolarized `v2rho2`. It does not:
+  `v2rho2_unpol = 1/2 (v2rho2_aa + v2rho2_ab)`, so
+  `v2rho2_aa = 2 v2rho2_unpol - v2rho2_ab`. For pure exchange
+  `v2rho2_ab = 0` and the routine is right; for correlation (and the
+  combined B2PLYP entry) the `v2rho2_ab/2` piece is missing. Whether that
+  accounts for the ~2x needs the polarized libxc `fxc` worked through.
+- **A partial double-count** with N3.5.4's `ks_veff` (the `f_xc` HVP in
+  `veff_corr_ao` / `Xvo`) -- ruled *less* likely: disabling `ks_veff` and
+  re-measuring left the residual at ~3.5e-3 (unchanged), so the
+  Lagrangian's XC response is not silently supplying XC_II.
+
+**The routine and its FD gate stay committed.** The N3.5.5 `vhf_s1occ`
+HF-vs-KS question stays parked (small, wrong-sign, revert-safe).
 
 ### N3.6 -- lift the gate, add regressions
 

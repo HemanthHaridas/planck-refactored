@@ -4153,29 +4153,39 @@ namespace DFT::Driver
 
                 calculator._gradient += *corr;
 
-                // N3.5.7 S4 (docs/DOUBLE_HYBRID_GRADIENT_KS_VEFF_SCOPE.md):
-                // Eq. 33's XC contribution to the PT2 gradient -- d/dR of
-                // Phi_XC = sum_munu D_munu <mu|V_xc[rho_P]|nu> -- is
-                // implemented and FD-gated (planck-dft-kernel-gradient-fd,
-                // DFT::Gradient::compute_dh_xc_pt2_gradient, LDA + GGA, O(h^2)),
-                // but wiring it here does NOT close the ~1.9e-4 Ha/Bohr
-                // water/STO-3G B2PLYP FD residual: it moves each component in
-                // the right direction but overshoots ~2x (relaxed D -> FD
-                // 2.65e-4; unrelaxed D -> 2.02e-4; 0.5x weight -> 1.79e-4,
-                // marginally better than the 1.88e-4 baseline), with a
-                // per-component sign inconsistency that is not a scale factor.
-                // This is the same wall N3.5.7.4 hit. The routine and gate
-                // stay; wiring waits on more of the paper's derivation
-                // (whether Phi_XC is the right functional, or a compensating
-                // basis-derivative piece `int rho_D^(x) . df/drho` -- the one
-                // the paper says the naive analog is -- belongs alongside it).
+                // N3.5.7 S5 (docs/DOUBLE_HYBRID_GRADIENT_KS_VEFF_SCOPE.md):
+                // Eq. 33's XC contribution to the PT2 gradient. The scalar
+                //   Phi_XC = sum_munu D_munu <mu|V_xc[rho_P]|nu>
+                // and its FULL geometry derivative XC_I + XC_II + XC_III are
+                // now derived and Python/PySCF-validated to rel 3e-9
+                // (DFT::Gradient::compute_dh_xc_pt2_gradient, FD-gated by
+                // planck-dft-kernel-gradient-fd against a true moving-grid FD).
+                // But wiring it here STILL does not close the ~1.9e-4 Ha/Bohr
+                // water/STO-3G B2PLYP FD residual:
+                //   full I+II+III   -> 3.5e-3   (XC_I, the rho_D^(x) piece,
+                //                                is ~85% and clearly wrong here
+                //                                -- the paper's "not the naive
+                //                                D^(x)" is literal)
+                //   XC_II only      -> 2.65e-4  (worse than the 1.88e-4 baseline)
+                //   XC_II * c_pt2   -> ~1.4e-4  (marginal, and the c_pt2 = 0.27
+                //                                coincidence smells of a factor
+                //                                bug)
+                // Eq. 33's Term1+Term2 IS XC_II (basis-only rho_P^(x), no
+                // moving grid, no rho_D^(x)). XC_II is FD-verified as
+                // sum_munu D_munu R^XC[rho_P^(x)]_munu with the SOSCF-validated
+                // total-density v2rho2, yet it overshoots the baseline
+                // residual ~2x with a per-component sign structure. Likely a
+                // residual closed-shell spin factor (v2rho2_aa vs v2rho2_unpol
+                // differ by v2rho2_ab/2 for correlation) or a partial
+                // double-count not yet found -- needs the spin-RESOLVED
+                // Eq. 33 (paper Sec. II, not the Sec. III.A collapse).
                 //   auto dh_xc_grad = DFT::Gradient::compute_dh_xc_pt2_gradient(
                 //       calculator._molecule, calculator._shells,
                 //       prepared.molecular_grid, prepared.ao_grid, hess,
                 //       calculator._info._scf.alpha.density,
                 //       rd->dm1_corr_relaxed_ao,
                 //       functionals.exchange, functionals.correlation);
-                //   calculator._gradient += *dh_xc_grad;   // (reverted)
+                //   calculator._gradient += *dh_xc_grad;   // (reverted -- S5)
 
                 // N3.5.1: is compute_xc_nuclear_gradient_rks linear in its
                 // density argument? If g(Pa+Pb) == g(Pa) + g(Pb), the missing
