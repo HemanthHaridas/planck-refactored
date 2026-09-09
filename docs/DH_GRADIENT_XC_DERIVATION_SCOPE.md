@@ -431,3 +431,83 @@ every candidate since N3.5.7.4 has been a hunt for something absent.
 before measuring, and cost ~20 minutes each to kill. That is the intended cost
 of a wrong hypothesis; the failure mode this arc kept hitting was *tuning*
 after a partial match instead of predicting first.
+
+---
+
+## D4 -- the `W^PT2` audit, and the truncation question
+
+### W audit: Planck's `zeta` matches PySCF exactly; Eq. 44 is absorbed, not missing
+
+Mapping `build_rmp2_energy_weighted_density` onto Eqs. 42-45:
+
+| block | paper | Planck `zeta_weights .* corr_relaxed_mo` |
+|---|---|---|
+| oo | `-1/2 D_ij(e_i+e_j)` (+ `-1/2 R(D)_ij`, + amplitude trace) | `1/2(e_i+e_j) * D_ij`, sign carried by the `-dST` contraction |
+| vv | `-1/2 D_ab(e_a+e_b)` (+ amplitude term) | `1/2(e_a+e_b) * D_ab` |
+| vo | `W_ai = -e_i Z_ai` | `e_i * Z_ai` |
+| ov | **`W_ia = -sum_kjb t~^kj_ab (ki|jb)`** | `e_i * Z_ai` -- **different object** |
+
+The `ov` block looked like a real discrepancy: Eq. 44's `W_ia` is an
+amplitude-integral contraction, not `e_i Z`. **It is not a defect.** PySCF
+(`grad/mp2.py:156-158`) builds `zeta` identically -- `zeta[:nocc,nocc:] =
+mo_energy[:nocc]` -- and PySCF's RMP2 gradient is FD-verified. In this
+formulation Eq. 44's content is absorbed into `Imat`, and `W` is symmetrized
+before contracting with the symmetric `S^(x)`, so only the symmetrized
+combination is observable. **`W`'s HF form is correct.**
+
+### The `R^XC` weight: a factor-2 error in the N3.5.7.14 probe
+
+Eq. 41 gives `R(D) = 4J - 2K + R^XC = 4(J - K/2) + R^XC`. So **relative to the
+`(J - K/2)` part, `R^XC` carries HALF the weight**. N3.5.7.14's probe added it
+at the *same* weight -- a factor 2 too large -- which is why it came out 7%
+worse rather than simply small. A weight-scanned re-probe was built; see below
+for why it was not pursued.
+
+### "FD does not care whether the DH is truncated" -- checked, and it closed a bigger question
+
+Truncation itself creates no mismatch: the FD reference re-converges the *same*
+truncated procedure (SCF on `E_hyb`, then PT2 once) at every displaced geometry,
+so both sides differentiate the same `E_total(R)`. The non-stationarity of
+`E_total` in `C` is precisely why a Z-vector exists, and Planck has one.
+
+But following the question exposed something the arc had never checked: **the
+two codes' hybrid parts do not agree as well as their correlation parts.**
+
+```
+E_corr :  Planck -0.1005920516  PySCF -0.1005921150   diff 6.3e-08
+E_KS   :  Planck -149.2137898538 PySCF -149.2137885062  diff 1.35e-06   (21x larger)
+```
+
+A geometry-*varying* functional difference of that size could produce the
+observed residual (a 3.9e-4 gradient error over a 1e-3 bohr step is a 7.8e-7 Eh
+asymmetry -- the same order). **Ruled out by scope measurement 2:** Planck's
+KS-only gradient matches PySCF's KS-only FD to 3.66e-5, which it could not if
+the functionals diverged geometry-dependently at the 3.9e-4 level. The 1.35e-6
+is a near-constant offset (different libxc build / grid), and it cancels in the
+derivative.
+
+**Then the decisive check, which removes PySCF from the loop entirely:**
+Planck's analytic gradient against **Planck's own FD** (`tests/dft_gradient_fd.py`,
+same binary, same grid, same functional):
+
+```
+max|g_analytic - g_fd| = 3.559e-04 Ha/Bohr    (vs 3.887e-04 against PySCF)
+```
+
+**The residual is internal to Planck.** It is not a cross-code artifact, not a
+functional-definition mismatch, and not an FD-reference error. **H1 is
+substantially weakened by this** -- "the paper's equations are incomplete" would
+have to be a defect ORCA shares, but the discrepancy reproduces with no second
+code involved at all.
+
+**This is the single most useful thing to come out of D4**, and it came from
+asking whether the truncated/non-truncated distinction mattered to FD.
+
+### Status
+
+The `R^XC` half-weight prediction is derived and the probe is written but **not
+yet scored** -- the truncation question redirected the work mid-probe, and
+scoring a term while the reference itself was in doubt would have been
+premature. With the reference now proven sound (Planck-vs-Planck), that probe is
+the immediate next step: score `R^XC` at weight 0.5 relative to `(J - K/2)`
+against both fixtures, requiring cross-fixture coefficient agreement.
