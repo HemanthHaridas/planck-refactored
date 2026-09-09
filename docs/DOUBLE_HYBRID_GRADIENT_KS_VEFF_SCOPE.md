@@ -1170,6 +1170,69 @@ translation-free subspace, and **require the fitted coefficient to agree
 across the two geometries**. Three of the four candidates tested in this
 step were killed by the second fixture alone.
 
+#### N3.5.7.12 -- the hunt, in verifiable steps: harness controlled, `W^PT2` screened, `s_vhf` correlated but NOT the term
+
+Small steps, each with its own check, so a wrong turn is cheap. The
+scoring harness is now committed as `tests/pyscf/dh_gradient_score.py`.
+
+**Step 1 -- positive control (PASS).** The harness must recover the known
+answer before it is used on anything unknown. Scoring XC_II against the
+pre-XC_II target: **cos 0.946 / scale 1.078** (fixture 1), **cos 0.960 /
+scale 1.053** (fixture 2). Run `python3 tests/pyscf/dh_gradient_score.py`
+to reproduce.
+
+**Step 2 -- negative control (PASS, with a caveat worth keeping).** A
+harness that only says "yes" is useless. Three random vectors: they reach
+**cos 0.49, 0.37, 0.32** on a *single* fixture -- comfortably high enough
+to fool a one-fixture test -- and are rejected by scale spreads of 175% /
+128% / **30%**. **The 30% is uncomfortably close to the 25% threshold**,
+so a spread in the 20-30% band is unproven, not a pass. The
+single-fixture cos is not decisive on its own; the cross-fixture
+coefficient is what does the work.
+
+**Step 3 -- screen `W^PT2`'s three pieces.** `W^PT2` enters the gradient
+as three separately-dumpable overlap-derivative terms (`s_im1`, `s_zeta`,
+`s_vhf`, via `PLANCK_DEBUG_RMP2_TERMS=1`). Scoring each *as-is* tests the
+cheapest hypothesis available -- that one of them carries a wrong
+prefactor:
+
+| term | cos f1 / f2 | scale f1 / f2 | spread | verdict |
+|---|---|---|---|---|
+| `s_im1` | 0.62 / 0.42 | 0.020 / 0.009 | 56% | artifact |
+| `s_zeta` | 0.34 / 0.27 | 0.048 / 0.028 | 41% | artifact |
+| **`s_vhf`** | **0.69 / 0.59** | **0.254 / 0.197** | **23%** | **only survivor** |
+| `two_e` | -0.63 / -0.45 | -0.013 / -0.007 | 49% | artifact |
+| `h1` | -0.64 / -0.51 | -0.001 / -0.001 | 38% | artifact |
+| `vhf1` | 0.64 / 0.51 | 0.001 / 0.001 | 39% | artifact |
+
+**Step 4 -- `s_vhf` is correlated with the missing term but is NOT it
+(negative result).** Two checks, both failed:
+- **No recognizable factor.** If `s_vhf` were mis-scaled, the remainder
+  would be `(f-1)*s_vhf` with a constant `f`. Fitted: **1.254 / 1.197** --
+  not `c_pt2` (0.27), `a_x` (0.53), `1/2`, or `2`, and the two fixtures do
+  not agree well enough to call it a constant. Compare N3.5.7.2's rule:
+  a genuine missing factor shows as a small rational number, consistently.
+- **Its 23% spread sits in the unproven band** Step 2 just established, so
+  it does not clear the bar it appears to pass.
+
+At best `f ~ 0.2` cuts the residual ~30%, which is what any partially
+aligned vector does. **`s_vhf` at cos 0.6-0.7 is correlated with the
+missing term, not equal to it.**
+
+**A relationship worth carrying:** `cos(s_vhf, vhf_s1occ-KS-swap) = -0.73`,
+with the swap only 19% of `s_vhf` by norm. So N3.5.7.11's killed candidate
+and this one are the same physics seen from two sides -- `s_vhf` points
+roughly the right way and the KS swap moves it *backwards*, which explains
+both why the swap made things worse and why scaling `s_vhf` up looks
+superficially attractive. Neither is the answer; whatever is missing lives
+near `vhf_s1occ` in the assembly but is not a reweighting of it.
+
+**Next step (not taken here):** the screen above tested only *prefactors*
+on existing terms. The remaining structural hypothesis is that
+`vhf_s1occ`'s density argument or projection is the HF-MP2 one where the
+paper's Eq. 42 wants `-1/2 R(D)` on the relaxed `D` -- a different object,
+not a rescaling, and therefore not reachable by this screen.
+
 **Method note worth carrying, since it cost this arc four reverted
 attempts (N3.5.7.4, S4, S5, N3.5.7.8):** a symmetric fixture can have
 fewer independent components than the number of candidate terms, and then
