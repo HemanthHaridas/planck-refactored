@@ -4183,19 +4183,21 @@ namespace DFT::Driver
                 // structurally missing the z-directional piece; the open
                 // suspect is the `full - ref_grad` PT2 isolation below, built
                 // for HF-MP2.
-                // Probe hook, OFF by default (production is unchanged):
-                // PLANCK_DFT_DH_XC_PARTS is the bitmask 1=XC_I, 2=XC_II,
-                // 4=XC_III; PLANCK_DFT_DH_XC_SCALE an optional prefactor.
-                // Explicit mask rather than a bare on/off flag -- the earlier
-                // env-gated probes for this "kept mis-firing" because they
-                // could not say WHICH piece they were adding.
-                if (const char *parts_env = std::getenv("PLANCK_DFT_DH_XC_PARTS"))
+                // N3.5.7.10: Eq. 33's XC contribution to the PT2 gradient
+                // is the XC_II piece of d/dR{Phi_XC} -- identified against an
+                // exact FD target on the C1 H2O2 fixture (cos 0.946 at
+                // coefficient 1.078; removes 69% of the residual). XC_I is not
+                // in the answer and XC_III is ~1e-7, so kXcII alone is wired.
+                // PLANCK_DFT_DH_XC_PARTS overrides the mask for probing; it
+                // takes the bitmask 1=XC_I, 2=XC_II, 4=XC_III, and
+                // PLANCK_DFT_DH_XC_SCALE an optional prefactor.
                 {
-                    const unsigned parts =
-                        static_cast<unsigned>(std::strtoul(parts_env, nullptr, 10));
+                    unsigned parts = DFT::Gradient::kXcII;
+                    if (const char *e = std::getenv("PLANCK_DFT_DH_XC_PARTS"))
+                        parts = static_cast<unsigned>(std::strtoul(e, nullptr, 10));
                     double scale = 1.0;
-                    if (const char *s = std::getenv("PLANCK_DFT_DH_XC_SCALE"))
-                        scale = std::strtod(s, nullptr);
+                    if (const char *e = std::getenv("PLANCK_DFT_DH_XC_SCALE"))
+                        scale = std::strtod(e, nullptr);
                     auto dh_xc_grad = DFT::Gradient::compute_dh_xc_pt2_gradient(
                         calculator._molecule, calculator._shells,
                         prepared.molecular_grid, prepared.ao_grid, hess,
@@ -4203,13 +4205,9 @@ namespace DFT::Driver
                         rd->dm1_corr_relaxed_ao,
                         functionals.exchange, functionals.correlation, parts);
                     if (!dh_xc_grad)
-                        return std::unexpected("DFT double-hybrid gradient: XC probe failed: " +
-                                               dh_xc_grad.error());
-                    HartreeFock::Logger::logging(
-                        HartreeFock::LogLevel::Info, "DFT DH Gradient :",
-                        std::format("N3.5.7 XC probe: parts={} scale={:.4f} "
-                                    "max|xc_grad| = {:.6e}",
-                                    parts, scale, dh_xc_grad->cwiseAbs().maxCoeff()));
+                        return std::unexpected(
+                            "DFT double-hybrid gradient: Eq. 33 XC term failed: " +
+                            dh_xc_grad.error());
                     calculator._gradient += scale * (*dh_xc_grad);
                 }
 

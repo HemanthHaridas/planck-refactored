@@ -43,18 +43,22 @@ namespace DFT::Gradient
     // All first / second derivatives at the GROUND density; rho_P >= 1e-8
     // screened; combined-XC guard on the _c arrays.
     //
-    // *** NOT WIRED INTO PRODUCTION *** -- see S5 / N3.5.7.8 in the scope
-    // doc. Eq. 33's XC term is the XC_II piece ONLY (basis-only rho_P^(x),
-    // no moving grid, no rho_D^(x)); XC_I blows the end-to-end B2PLYP
-    // gradient up (~3.5e-3). XC_II supplies one component of the residual
-    // almost exactly but not the z structure. Measured (N3.5.7.8), so do
-    // not re-litigate: XC_III is ~1e-7 on real water, not just on the
-    // synthetic He2 fixture; the closed-shell spin factor is NOT the
-    // problem (Sec. II derivation cross-checked against the polarized
-    // R^XC to 1e-17); and no single scale factor closes the gap (per-
-    // component ratios -5.29 / 1.11 / -0.52), so the c_pt2 = 0.27 "fit"
-    // was a max-norm coincidence. The driver reaches this routine only
-    // via the PLANCK_DFT_DH_XC_PARTS probe hook.
+    // Eq. 33's XC term is the XC_II piece ONLY (basis-only rho_P^(x), no
+    // moving grid, no rho_D^(x)). N3.5.7.10 IDENTIFIED it against an exact
+    // FD target on a low-symmetry C1 H2O2 fixture: XC_II scores cos 0.946 at
+    // coefficient 1.078 and removes 69% of the missing term. Use kXcII.
+    //
+    // Measured, so do not re-litigate: XC_I is not in the answer (cos -0.54);
+    // XC_III is ~1e-7 on real molecules, not just the synthetic He2 fixture;
+    // the relaxed density D is correct (cos 0.93 vs the unrelaxed 0.75); and
+    // the closed-shell spin factor is fine (Sec. II vs polarized R^XC, 1e-17).
+    //
+    // Every pre-N3.5.7.10 conclusion here was drawn on water/C2v, which has
+    // only 3 independent gradient components -- fewer than the number of
+    // candidate terms, so any three of them span the target exactly and no
+    // decomposition is identifiable. Score candidates on the C1 fixture
+    // (tests/inputs/exploratory/dh_gradient/h2o2_c1_b2plyp_gradient_fd.hfinp),
+    // by cos in the translation-free subspace, never by max-norm on water.
     //
     // `ground_density_restricted` is the SCF (KS) density P;
     // `relaxed_density_restricted` is the relaxed PT2 difference density D
@@ -69,9 +73,6 @@ namespace DFT::Gradient
         kXcI = 1u,
         kXcII = 2u,
         kXcIII = 4u,
-        // XC_II's point-translation companion: the owner-atom scatter that
-        // makes the XC_II piece translationally invariant on its own.
-        kXcIIt = 8u,
         kXcAll = kXcI | kXcII | kXcIII,
     };
 

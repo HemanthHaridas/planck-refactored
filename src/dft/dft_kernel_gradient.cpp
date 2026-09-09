@@ -129,7 +129,6 @@ namespace DFT::Gradient
         const bool want_xc1 = (parts & kXcI) != 0u;
         const bool want_xc2 = (parts & kXcII) != 0u;
         const bool want_xc3 = (parts & kXcIII) != 0u;
-        const bool want_xc2t = (parts & kXcIIt) != 0u;
 
         if (exchange_functional.is_lda_like() != correlation_functional.is_lda_like() ||
             exchange_functional.is_gga_like() != correlation_functional.is_gga_like())
@@ -259,39 +258,6 @@ namespace DFT::Gradient
             //   (a) Becke partition weight response: [dw_p/dR_{A,q}] * I_p
             //   (b) point translation, owner atom only: w_p * dI_p/dr_q
             //       with d(.)/dr_q = -(sum over A of the channel helper).
-            // ---- XC_IIt : XC_II's point-translation companion --------------
-            // XC_II sums the basis-function derivative rho_P^(x) over atoms.
-            // sum_A d(rho_P)/dR_A is NOT zero at a fixed grid point -- the
-            // grid point itself translates with its owner. Scattering the
-            // same integrand onto the owner with d/dr_q = -sum_A(channel)
-            // restores sum_A grad_A = 0 for the XC_II piece, exactly as
-            // XC_III does for I_p. Measured: without it, XC_II injects a
-            // spurious net force (~2.4e-4 Ha/Bohr on water/STO-3G B2PLYP)
-            // of the same size as the residual it is meant to remove.
-            if (want_xc2t)
-            {
-                const int owner = grid.owner(ip);
-                for (int q = 0; q < 3; ++q)
-                {
-                    const std::size_t qi = static_cast<std::size_t>(q);
-                    const double rx = -sum_rx[qi];
-                    std::array<double, 3> gx = {0.0, 0.0, 0.0};
-                    if (gga)
-                        for (int a = 0; a < 3; ++a)
-                            gx[static_cast<std::size_t>(a)] =
-                                -sum_gx[qi][static_cast<std::size_t>(a)];
-
-                    const double g_dot_gx = gga ? (g[0] * gx[0] + g[1] * gx[1] + g[2] * gx[2]) : 0.0;
-                    const double gx_dot_gradd =
-                        gga ? (gx[0] * grad_d[0] + gx[1] * grad_d[1] + gx[2] * grad_d[2]) : 0.0;
-                    const double d_dfdrho = v2rho2 * rx + 2.0 * v2rhosigma * g_dot_gx;
-                    const double d_dfdgamma = v2rhosigma * rx + 2.0 * v2sigma2 * g_dot_gx;
-                    grad(static_cast<Eigen::Index>(owner), q) +=
-                        w * (d_dfdrho * d + 2.0 * d_dfdgamma * g_dot_gradd +
-                             2.0 * vsigma * gx_dot_gradd);
-                }
-            }
-
             if (!want_xc3)
                 continue;
 

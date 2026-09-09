@@ -1016,11 +1016,116 @@ term can now be scored against it directly, per component, without
 running the full FD driver.
 
 **Reproduce:** `tests/inputs/exploratory/dh_gradient/` carries the Planck
-input; the PySCF FD reference script is small enough to re-derive from
-the recipe above (`E_KS_hyb + 0.27*E_MP2-on-KS`, `xc = "0.53*HF +
-0.47*B88, 0.73*LYP"`, `cart=True`, `grids.level=6`, `h = 1e-3` Bohr) --
-note PySCF has no `B2PLYP` alias in its vendored libxc, so the explicit
+input; `tests/pyscf/water_b2plyp_dh_gradient_fd.py` the FD reference.
+Note PySCF has no `B2PLYP` alias in its vendored libxc, so the explicit
 hybrid form is required.
+
+#### N3.5.7.10 -- IDENTIFIED: the missing term is XC_II at unit coefficient. Water was the wrong fixture.
+
+**The blocker was the fixture, not the physics.** Water/C2v leaves only
+**3 independent gradient components** (`a1-z`, `a2-x`, `a2-z`; the rest
+are fixed by symmetry). With 3 basis vectors and 3 components, ANY three
+candidate terms span the target exactly -- a least-squares fit over
+`XC_I/XC_II/XC_III` returns residual **1.8e-18** with coefficients
+`(-0.99, 8.41, 23011)`. That is not a fit, it is an identity. Every
+"XC_II overshoots ~2x with a per-component sign structure" conclusion
+from N3.5.7.4 / S4 / S5 / N3.5.7.8 was drawn on a system that cannot
+distinguish one term from another.
+
+**New fixture: distorted C1 H2O2** (18 e-, closed shell,
+`tests/inputs/exploratory/dh_gradient/h2o2_c1_b2plyp_gradient_fd.hfinp`,
+FD reference `tests/pyscf/h2o2_b2plyp_dh_gradient_fd.py`). 12 gradient
+components, 6 independent after translation + rotation -- enough to
+IDENTIFY rather than fit. Energy cross-check first, as before: PySCF
+`E_corr = -0.1005921150` vs Planck `-0.1005920516` (6.3e-8).
+
+The missing term there is **5x larger** than on water
+(`max 1.240e-03` vs `2.417e-04`) and is both translationally
+(`sum_A = 1.3e-8`) and **rotationally** (torque `~2e-5`) invariant -- a
+genuine physical force, not a frame artifact, which independently rules
+out every moving-grid candidate.
+
+**Scored against the target** (H2O2, translation-free subspace, which is
+the physically meaningful one since the target has zero net force):
+
+| piece | cos with target | best scale | resid @ scale 1.0 |
+|---|---|---|---|
+| **XC_II** | **+0.946** | **1.078** | **3.48e-4** |
+| XC_I | -0.543 | -0.033 | -- |
+| XC_III | -0.015 | -21.0 | -- |
+| XC_IIt | -0.962 | -1.007 | -- |
+
+**XC_II is the missing term, at coefficient 1.** It removes **69%** of
+the target by magnitude and matches its direction at cos 0.946. On water
+the same measurement gave an ambiguous scale 0.62 / cos 0.93 across three
+components -- consistent, but not identifying. The `-5.23 / 1.11 / -0.52`
+per-component ratio spread that N3.5.7.8/.9 read as "no single scale
+factor works, so XC_II cannot be it" was an artifact of 3 components:
+with 12, one scale factor does work.
+
+**`kXcIIt` is NOT a companion term -- it is minus XC_II, and must be
+deleted.** `cos(XC_II, XC_IIt) = -0.997`, `|XC_IIt|/|XC_II| = 1.087`.
+The owner-atom scatter re-derives the same quantity through
+`sum_A(channel)` rather than adding anything new, so `XC_II + XC_IIt`
+nearly annihilates (that is why it "restored invariance" -- it restored
+it to *zero contribution*, and why it undid the one component XC_II got
+right, on both molecules). Flipping its sign was tried and is worse
+(`sum_A` 2e-8 -> 1.0e-3). N3.5.7.8's reading of it as a real negative
+result was wrong; it is a double-count.
+
+**The relaxed density is correct** -- the second of N3.5.7.9's two open
+readings is closed. Probed both (`PLANCK_DFT_DH_XC_UNRELAXED`):
+`dm1_corr_relaxed_ao` scores cos 0.932 / scale 1.047; the unrelaxed
+`lag->dm1_corr_ao` scores cos 0.751 / scale 3.079. Eq. 33 wants the
+relaxed `D`, as the paper says.
+
+**What is still open: the remaining 31%.** After XC_II at 1.0 the
+residual is `3.89e-4` and it aligns with nothing already built (best is
+cos 0.54 against XC_I, at a nonsense scale of -0.03). It is a distinct
+term. One property is measured and should drive the search: its net force
+is **exactly minus XC_II's** (`sum_A(XC_II) = [-1.62e-4, 5.48e-5,
+-5.16e-4]`, `sum_A(remainder) = [+1.62e-4, -5.48e-5, +5.16e-4]`,
+cancelling to 1.1e-8). So the true companion restores XC_II's
+translational invariance *while contributing in the invariant subspace
+too* -- which is precisely what `kXcIIt` fails to do, since it is
+collinear with XC_II and therefore adds nothing invariant.
+
+**WIRED AND MEASURED.** `kXcII` at coefficient 1.0 is now the production
+path in `compute_analytic_ks_gradient` (no longer behind a probe flag;
+`PLANCK_DFT_DH_XC_PARTS` / `_SCALE` still override for probing), and
+`kXcIIt` is deleted. End-to-end, the prediction holds exactly:
+
+| fixture | before | after | reduction |
+|---|---|---|---|
+| **H2O2 / C1** | `1.240e-3` | **`3.887e-4`** | **69%** |
+| water / C2v | `2.424e-4` | `2.057e-4` | 15% |
+
+The 69% is the forecast figure, hit on the nose. **Water improving only
+15% is expected and is the whole lesson of this step**: its max-norm sits
+on a component XC_II does not dominate, so the headline number there
+understates a term that is demonstrably 69% of the answer. Four earlier
+attempts (N3.5.7.4, S4, S5, N3.5.7.8) were reverted on exactly that
+misleading number.
+
+Verified inert elsewhere: all 14 `planck-dft` CTest targets and
+`water_dft_hse06_gradient_symm_ultrafine_fd`, `water_rks_b3lyp_soscf_631g`,
+`h2_dft_b2plyp_sto3g`, `water_rmp2_gradient_{fd,smoke}` all pass -- the
+new term is reached only on the DH gradient path.
+
+**Next: the remaining 31%**, hunted against the H2O2 target vector,
+scoring by cos in the translation-free subspace -- never on water, and
+never by max-norm on 3 components. Its measured signature (net force
+exactly `-sum_A(XC_II)`, and no alignment with anything already built) is
+the constraint to design against.
+
+**Method note worth carrying, since it cost this arc four reverted
+attempts (N3.5.7.4, S4, S5, N3.5.7.8):** a symmetric fixture can have
+fewer independent components than the number of candidate terms, and then
+every fit succeeds and every conclusion drawn from residual magnitude is
+noise. Count the independent components BEFORE trusting a
+decomposition. The same trap this project already recorded for CC
+fixtures (`CCGEN_MERGE_TRANSPOSES`: a fixture too general; G4: a fixture
+too structureless) appears here as a fixture too *symmetric*.
 
 ### N3.6 -- lift the gate, add regressions
 
