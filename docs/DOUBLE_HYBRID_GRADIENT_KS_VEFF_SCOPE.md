@@ -568,13 +568,30 @@ the driver placeholder comment rewritten to point at the S1-S4 plan. The
 N3.5.7.3 `becke_partition_owner_derivatives` export in `dft_gradient.h`
 stays -- the rewrite needs it.
 
-**S1 -- libxc third-derivative wrapper.** Add `evaluate_lda_kxc`
-(`xc_lda_kxc` -> `v3rho3`) and `evaluate_gga_kxc` (`xc_gga_kxc` ->
-`v3rho3`, `v3rho2sigma`, `v3rhosigma2`, `v3sigma3`) to
-`src/dft/base/wrapper.h`, mirroring `evaluate_lda_fxc` / `evaluate_gga_fxc`
-one-for-one (component-count helpers, npoints/size guards, slice params).
-Self-check: FD `v3rho3` against `d(v2rho2)/d(rho)` on a 2-Gaussian toy,
-same style as `dft_fxc_selfcheck.cpp`.
+**S1 -- libxc third-derivative wrapper. LANDED.**
+`evaluate_lda_kxc` (`xc_lda_kxc` -> `v3rho3`) and `evaluate_gga_kxc`
+(`xc_gga_kxc` -> `v3rho3`, `v3rho2sigma`, `v3rhosigma2`, `v3sigma3`) added
+to `src/dft/base/wrapper.h`, mirroring `evaluate_lda_fxc` /
+`evaluate_gga_fxc` one-for-one (new `v3*_components()` helpers,
+npoints/size guards, chunked/threaded loop, pointwise-map). Gate:
+`tests/dft_kxc_selfcheck.cpp` (`planck-dft-kxc-selfcheck`) -- `v3rho3`,
+`v3rho2sigma`, `v3rhosigma2`, `v3sigma3` each vs a central-difference of
+the corresponding libxc `fxc` block, three step sizes, `O(h^2)` tol, plus
+mixed-partial cross-checks and family guards.
+
+**Two libxc findings, both real:**
+1. **`DISABLE_KXC` defaults ON in libxc.** The vendored ExternalProject
+   built with NO third derivatives -- every functional has
+   `XC_FLAGS_HAVE_KXC` unset, and `lda_x`/`pbe`/`b88`/`lyp`/`b3lyp` all
+   report `kxc=0`. Fixed with `-DDISABLE_KXC:BOOL=OFF` in the libxc
+   `CMAKE_ARGS` (`CMakeLists.txt`); additive, the vxc/fxc paths every
+   existing DFT regression validated are byte-identical. Forces a one-time
+   libxc rebuild (`rm -rf src/external/libxc/{src/libxc-build,install,src/libxc-stamp}`
+   then reconfigure).
+2. **Requesting v3 from a kxc-less functional is `exit(1)` inside libxc**,
+   not an error return (`lda.c:41`, `gga.c:53`). So `evaluate_*_kxc` guard
+   on a new `has_kxc()` predicate (`func_.info->flags & XC_FLAGS_HAVE_KXC`)
+   and return `std::unexpected` -- the family check alone is not enough.
 
 **S2 -- new routine, LDA only.** `DFT::Gradient::compute_dh_xc_pt2_gradient`
 in a fresh `dft_kernel_gradient.{cpp,h}` (filenames reused, contents new).
