@@ -4207,6 +4207,26 @@ namespace DFT::Driver
 
                 calculator._gradient += *corr;
 
+                // PLANCK_DEBUG_DH_CHANNELS: dump the KS and *corr halves of the
+                // DH gradient separately. Without this the two can only be
+                // separated by inference, and inference is what produced a
+                // wrong localisation once already (a pure-B3LYP self-FD does
+                // NOT isolate the DH run's KS channel -- B2PLYP's hybrid is a
+                // different functional). Planck's own FD of each half is
+                // directly comparable to these.
+                if (std::getenv("PLANCK_DEBUG_DH_CHANNELS"))
+                {
+                    const Eigen::MatrixXd ks_half = calculator._gradient - *corr;
+                    for (Eigen::Index a = 0; a < corr->rows(); ++a)
+                        HartreeFock::Logger::logging(
+                            HartreeFock::LogLevel::Info, "DH Channels :",
+                            std::format("atom {} KS {: .10f} {: .10f} {: .10f}"
+                                        "  corr {: .10f} {: .10f} {: .10f}",
+                                        a + 1,
+                                        ks_half(a, 0), ks_half(a, 1), ks_half(a, 2),
+                                        (*corr)(a, 0), (*corr)(a, 1), (*corr)(a, 2)));
+                }
+
                 // N3.5.7 S5 (docs/DOUBLE_HYBRID_GRADIENT_KS_VEFF_SCOPE.md):
                 // Eq. 33's XC contribution to the PT2 gradient. The scalar
                 //   Phi_XC = sum_munu D_munu <mu|V_xc[rho_P]|nu>
