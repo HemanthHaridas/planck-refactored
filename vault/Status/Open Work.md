@@ -1463,15 +1463,62 @@ were corrected in the same pass: `CCGEN_UNRESTRICTED_CC` (U0) and
   gradient by more than the entire residual, so `kx = 1.0` is pinned tightly
   rather than merely fitted.
 
-  **What this leaves is a genuinely narrower question**, and it should be
-  stated rather than dissolved into another candidate list: every individual
-  term is now verified or tightly bounded, the four-term assembly is proven
-  complete (D4), and the residual is nonetheless 3.9e-4. The remaining
-  possibilities are (a) an error in how the verified terms are COMBINED rather
-  than in any one of them, (b) the DH-specific `W^PT2` / `Gamma^PT2` of
-  Eqs. 42-46 differing from the HF-MP2 forms in a way that is invisible to
-  each term's own invariant, or (c) the paper's equations being incomplete --
-  which only the ORCA cross-check can settle.
+  **(a) and (b) were then checked, and BOTH are falsified (2026-09-10). Only
+  (c) remains.**
+
+  **(a) -- a combination error rather than a term error. Negative, three ways.**
+  Per-term translational invariance is clean to ~1e-14 for every physical
+  accumulator, so no net-force-class mis-combination exists. A new
+  `PLANCK_DFT_DH_ZMULT` control separates the **Z-routed** part of the gradient
+  from the direct part -- something `c_pt2` scaling structurally cannot do,
+  since it scales the whole PT2 block uniformly and is blind to a
+  mis-combination of two terms of the *same* amplitude order -- and gives an
+  implied z scale of **0.940 / 0.970** against a correct 1.0. Per-term
+  direction scoring, calibrated against a **random-direction negative control**
+  (400 draws: median |cos| 0.225, median spread 40.4%), shows the terms at
+  |cos| 0.42-0.69 but with spreads of 45-56%, i.e. at the random median; none
+  qualifies under the two-geometry rule.
+
+  **A least-squares fit of the residual in the span of all term directions was
+  computed and DISCARDED as vacuous** -- rank 9 over a 9-dimensional
+  translation-free space fits anything at 1e-16. Worth recording because it is
+  the fixture trap in a NEW guise: not too few independent components, but too
+  many free directions. **Check the rank against the dimension before reading
+  any span-fit.**
+
+  **(b) -- the DH-specific forms differing from HF-MP2. Negative, and this one
+  is settled rather than bounded.** It had a specific untested mechanism:
+  `ks_veff` is applied at **one of three sites**, and N3.5.5 tried the other
+  two and reverted on "FD got worse" -- but tested only the **linear** `f_xc`
+  response, while its own comment records that PySCF's `get_veff` there is the
+  full **nonlinear** `V_xc[dm]`. The form PySCF actually uses had never been
+  tried. Now measured on both C1 fixtures:
+
+  | config | fixture 1 | fixture 2 |
+  |---|---|---|
+  | HF at both (default) | 3.887e-4 **1.00x** | 2.689e-4 **1.00x** |
+  | linear, site 2 | 5.393e-4 1.39x | 3.829e-4 1.42x |
+  | nonlinear, site 1 | 9.131e-3 **23.5x** | 4.084e-3 **15.2x** |
+  | nonlinear, site 2 | 1.693e-2 **43.6x** | 2.234e-2 **83.1x** |
+
+  Every KS-veff variant is worse, the nonlinear one by **15-83x**. The HF
+  default is right at all three sites. **So the Eqs. 42-46 rewrite this entry
+  previously called "the remaining work" is not supported by measurement** --
+  its most specific mechanism makes the answer dramatically worse.
+
+  Incidental: site 1 (`vhf_s1occ`) with the linear form is **byte-identical**
+  to the default, so it has no effect at all -- N3.5.5's measured
+  1.88e-4 -> 2.86e-4 came from site 2 alone, not from the pair it attributed
+  it to.
+
+  **What is left is (c): the paper's equations, as Planck implements them, do
+  not reproduce their own finite difference -- and every part of Planck's
+  implementation is now verified or tightly bounded.** That is a statement
+  about the equations, not the code, and **the ORCA cross-check is the only
+  thing that can settle it.** It needs a licence. Say so rather than
+  substituting a weaker test; do not open another candidate hunt without new
+  information, because the three-suspect list and both structural hypotheses
+  are now exhausted by measurement.
 
   **Consequence: every component of the Z-vector path is now accounted for.**
   H2.3 had established only that `A` is well-formed (symmetric, SPD, exactly
