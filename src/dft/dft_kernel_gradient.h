@@ -48,7 +48,32 @@ namespace DFT::Gradient
     // FD target on a low-symmetry C1 H2O2 fixture: XC_II scores cos 0.946 at
     // coefficient 1.078 and removes 69% of the missing term. Use kXcII.
     //
-    // Measured, so do not re-litigate: XC_I is not in the answer (cos -0.54);
+    // VERIFIED ON A REAL GRID (2026-09-10,
+    // tests/pyscf/dh_xc_realgrid_{model,check}.py): the three parts DO sum to
+    // the exact d/dR{Phi_XC}. On a 23896-point Becke grid with real PBE and a
+    // real basis, XC_I + XC_II + XC_III reproduces the finite difference to
+    // **1.5e-9 (rel 1.3e-8)** -- so kXcAll is the full derivative, exactly as
+    // this header says, and D6's toy-grid structure survives contact with a
+    // real grid.
+    //
+    // **XC_I is the LARGEST of the three** (|g| 2.75e-1 vs XC_II's 1.71e-1),
+    // and it is not optional for THAT scalar: its net force (+1.66e-1)
+    // exactly cancels XC_II's (-1.66e-1), so XC_II alone is 160.7% wrong
+    // against the true d/dR{Phi_XC}. XC_III really is ~1e-6 on a real grid
+    // (a converged Becke quadrature is nearly translation-invariant).
+    //
+    // **Wiring kXcII ALONE is nonetheless correct, and the two facts do not
+    // conflict.** Measured in the C++: XC_I's contribution is PARALLEL to the
+    // Z-vector channel -- cos **+0.976**, magnitudes 7.5e-3 vs 5.8e-3 -- so
+    // the relaxed density already carries it. Adding XC_I on top
+    // DOUBLE-COUNTS it, which is why kXcAll scores **17x worse** end to end
+    // (6.66e-3 vs 3.89e-4 on the C1 H2O2 fixture). The old note "XC_I is not
+    // in the answer (cos -0.54)" recorded the right wiring for the wrong
+    // reason: XC_I is not absent from the derivative, it is already present
+    // in the assembly by another route.
+    //
+    // Measured, so do not re-litigate: XC_I must not be wired here (but see
+    // above for WHY -- it is a double-count, not an absence);
     // XC_III is ~1e-7 on real molecules, not just the synthetic He2 fixture;
     // the relaxed density D is correct (cos 0.93 vs the unrelaxed 0.75); and
     // the closed-shell spin factor is fine (Sec. II vs polarized R^XC, 1e-17).
