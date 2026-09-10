@@ -738,3 +738,76 @@ the natural D8, and it is now the single most specific open item in the arc: the
 Z-vector has **3.6x leverage** on the final gradient (D5), its coefficients have
 never been matched against Eq. 41 term by term, and `W`'s off-diagonal blocks are
 exactly where a Z-vector-coupled error would live.
+
+---
+
+## D8 -- the Z-vector: decomposition verified, the orbital Hessian NOT reached
+
+Third application of D6's method, to the object D5 ranked as carrying **3.6x
+leverage** on the final gradient. `tests/pyscf/dh_z_derivation_{model,check}.py`.
+
+**The channel decomposition is exact: `max|SUM - FD| = 1.735e-11` (rel 2.4e-9).**
+
+```
+explicit (basis moves, MOs+eps frozen)   |g| = 7.294688e-02
+eps channel (eps moves, rest frozen)     |g| = 1.496824e-03
+MO channel  (MOs move, rest frozen)      |g| = 6.142377e-02
+SUM == FD                                |g| = 1.118980e-02
+```
+
+**The explicit and MO channels are each ~7e-2 and cancel to 1.1e-2** -- a 6.5x
+cancellation, the same signature `W^PT2` showed in D7. The MO channel is
+precisely what the Z-vector exists to compute without forming `dC/dR`.
+
+### Two model defects found and fixed, both mine
+
+**(1) The first model was ILL-POSED, and would have produced a false finding.**
+It used `E = Tr[G * C^T H C]`, which is **not invariant under virtual-virtual
+rotations** -- measured `-0.77723303` vs `-0.79274766` under a 0.3 rad vv
+rotation. The SCF leaves those rotations arbitrary, so that functional is not a
+function of the SCF solution at all, and **no Z-vector formulation could
+reproduce its FD**. The three "failures" it produced (2.25e-1, 2.30e-1, 3.43e-2)
+were artifacts of a gauge-dependent energy, not defects in Planck.
+
+**(2) The fix is to fix the gauge.** The replacement is MP2-shaped,
+`sum_ia |v_ia|^2/(eps_i - eps_a)`, which is well posed only for canonical
+orbitals -- the same invariant Planck's CC/MP2 code relies on (`f_ov = 0`,
+canonical Fock throughout; see the `cc_canonical_fock_only` memory). Worth
+carrying: **MP2 is invariant only under rotations WITHIN a degenerate set**, so
+"MP2 is gauge-invariant" is false as usually stated, and a model that assumes it
+will mislead.
+
+### What D8 does NOT establish -- read before citing it
+
+**Planck's orbital Hessian (`build_ks_orbital_hessian_op`) is still not under an
+independent oracle.** Reproducing the MO channel as `L . dkappa/dR` -- the step
+that would test `A` -- requires extracting the rotation generator `kappa` from
+the MO overlap `U = C0^T S(R0) C(R+h)`, and that extraction is **contaminated**:
+`C(R+h)` is orthonormal wrt `S(R+h)`, not `S(R0)`, so `U` mixes a genuine
+rotation with an `O(dS)` metric mismatch. Measured: `|U - I| = 3.7e-6` at
+`h = 1e-5`, against `O(h) = 1e-5` for a pure rotation. **Three extraction
+attempts each came up ~30x short** (2.0e-3 against a true 6.1e-2).
+
+Separating them is exactly the `U_ij = -1/2 S^(x)_ij` bookkeeping of Eqs. 19-21.
+A model carrying it would close the loop and put the Hessian's coefficients
+under an oracle for the first time. **That is real work, not a patch** -- and it
+is now the single most valuable remaining step in this arc, because:
+
+- the Z-vector has **3.6x leverage** on the final gradient (D5),
+- its coefficients have **never** been matched against Eq. 41 term by term,
+- H2.3 established only that `A` is symmetric, SPD and exactly solved -- i.e.
+  *well-formed*, which is not the same as *right*, and
+- `W`'s ov/vo blocks (D7's gap) are Z-vector-coupled, so one model would close
+  both.
+
+### Status of the three derivations
+
+| object | decomposition vs FD | Planck verified? |
+|---|---|---|
+| `d/dR{Phi_XC}` (D6) | `2.2e-11` | **yes** -- all four channels matched |
+| `W^PT2` (D7) | `2.5e-12` | **diagonal blocks yes**; ov/vo out of reach |
+| Z-vector (D8) | `1.7e-11` | **no** -- `A` not reached; needs the Eq. 19-21 model |
+
+All three decompositions are exact. Two of the three objects are verified against
+Planck. The orbital Hessian is the one that is not, and it is the one with the
+leverage.
