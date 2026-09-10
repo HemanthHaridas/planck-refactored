@@ -4020,6 +4020,33 @@ namespace DFT::Driver
                             calculator._integral._tol_eri,
                             calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
                                                               : nullptr);
+                    // PLANCK_DFT_DH_VEFF_XC selects the XC piece:
+                    //   linear (default) -- the f_xc RESPONSE, d V_xc/d rho . d
+                    //   nonlinear        -- V_xc[d] evaluated on d itself
+                    // N3.5.5 tested passing ks_veff to the two HF-defaulted
+                    // sites and found it made FD worse, but it tested the
+                    // LINEAR form only -- and its own comment records that
+                    // PySCF's get_veff there is the full nonlinear V_xc[dm].
+                    // So "ks_veff makes it worse" was never tested for the
+                    // form PySCF actually uses. This makes both reachable.
+                    const char *veff_xc_mode = std::getenv("PLANCK_DFT_DH_VEFF_XC");
+                    const bool use_nonlinear_xc =
+                        veff_xc_mode != nullptr &&
+                        std::string_view(veff_xc_mode) == "nonlinear";
+                    if (use_nonlinear_xc)
+                    {
+                        auto xc_d = DFT::evaluate_xc_on_grid(
+                            prepared.molecular_grid, prepared.ao_grid, d,
+                            functionals.exchange, functionals.correlation);
+                        if (xc_d)
+                        {
+                            auto vxc_d = DFT::assemble_xc_matrix(
+                                prepared.molecular_grid, prepared.ao_grid, *xc_d);
+                            if (vxc_d)
+                                v.noalias() += vxc_d->alpha;
+                        }
+                        return v;
+                    }
                     auto dvxc = DFT::Driver::compute_analytic_xc_hessian_vector_product(
                         prepared.molecular_grid, prepared.ao_grid,
                         ground_density_veff, d,
@@ -4066,7 +4093,16 @@ namespace DFT::Driver
                 // grad/mp2.py `mp._scf.get_veff` there is a full nonlinear
                 // V_xc[dm_small], not the linear f_xc response, and pyscf has
                 // no validated DH gradient to cross-check. vhf_s1occ stays HF.
-                rd_in.ks_veff = {};
+                // PLANCK_DFT_DH_VEFF_SITES bitmask: 1 = vhf_s1occ
+                // (relaxed-density path), 2 = the presolved gradient path.
+                // Default 0 = both HF, i.e. byte-identical to N3.5.5's revert.
+                unsigned veff_sites = 0;
+                if (const char *e = std::getenv("PLANCK_DFT_DH_VEFF_SITES"))
+                    veff_sites = static_cast<unsigned>(std::strtoul(e, nullptr, 10));
+                if (veff_sites & 1u)
+                    rd_in.ks_veff = ks_veff;
+                else
+                    rd_in.ks_veff = {};
 
                 auto rd = DFT::Gradient::solve_pt2_relaxed_density(rd_in);
                 if (!rd)
@@ -4137,7 +4173,12 @@ namespace DFT::Driver
                     HartreeFock::Correlation::RMP2PreSolved ps;
                     ps.lagrangian = &scaled_lag;
                     ps.z = &ks_z;
-                    // N3.5.5 tried ps.ks_veff = ks_veff here -- made FD WORSE (1.88e-4 -> 2.86e-4), reverted
+                    // N3.5.5 tried ps.ks_veff = ks_veff here -- made FD WORSE
+                    // (1.88e-4 -> 2.86e-4) with the LINEAR response, reverted.
+                    // Reachable again via PLANCK_DFT_DH_VEFF_SITES bit 2, so the
+                    // nonlinear form can be tested; default off.
+                    if (veff_sites & 2u)
+                        ps.ks_veff = ks_veff;
                     auto full = HartreeFock::Correlation::build_rmp2_gradient_intermediates(
                         calculator, prepared.shell_pairs, *rmp2_res, ps);
                     if (!full)

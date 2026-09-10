@@ -286,6 +286,20 @@ namespace DFT::Gradient
                     z(a, i) = z_vec(a * n_occ + i);
         }
 
+        // PLANCK_DFT_DH_ZMULT: scale the converged Z-vector before it enters
+        // the relaxed density. This separates the Z-ROUTED part of the
+        // gradient from the direct part, which no c_pt2 scaling can do --
+        // c_pt2 scales the whole PT2 block uniformly, so an error in how two
+        // terms of the SAME amplitude order are combined is invisible to it.
+        //
+        // Applied AFTER the solve (not inside it) so the operator and RHS are
+        // untouched: this is a pure downstream leverage control, and z_mult=1
+        // is byte-identical. Trap #5 of the handoff -- always a scale control,
+        // never on/off, because an `if (false)` guard that misses the real
+        // assignment reports "zeroing changes nothing".
+        if (const char *e = std::getenv("PLANCK_DFT_DH_ZMULT"))
+            z *= std::strtod(e, nullptr);
+
         // Relaxed density + energy-weighted density: the SAME shared assembly
         // build_rmp2_gradient_intermediates uses. Only the Z-vector operator
         // above differs (KS orbital Hessian here vs solve_rhf_cphf there).
