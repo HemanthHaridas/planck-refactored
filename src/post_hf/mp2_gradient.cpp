@@ -610,6 +610,10 @@ namespace HartreeFock::Correlation
 
         const auto &bfs = calculator._shells._basis_functions;
         const Eigen::MatrixXd hf_dm1 = 2.0 * C_occ * C_occ.transpose();
+
+        double kx_vhf1 = 1.0;
+        if (const char *e = std::getenv("PLANCK_DEBUG_VHF1_KX"))
+            kx_vhf1 = std::strtod(e, nullptr);
         for (std::size_t atom = 0; atom < atom_aos.size(); ++atom)
         {
             for (int p : atom_aos[atom])
@@ -640,12 +644,23 @@ namespace HartreeFock::Correlation
                             // contraction that used to be fused here) now comes
                             // from build_rmp2_lagrangian above.
 
+                            // PLANCK_DEBUG_VHF1_KX: weight control on vhf1's
+                            // EXCHANGE half. This builds the reference
+                            // mean-field response contracted against the
+                            // relaxed correction density (line ~777), and it
+                            // is hardcoded to HF's J - K/2. For a double
+                            // hybrid the reference is KS, so the exchange
+                            // should carry a_x and there should be an XC
+                            // response alongside. D4 named this KS-vs-HF gap
+                            // for vhf_s1occ (the OVERLAP term); this is the
+                            // same gap at the DERIVATIVE site, which no probe
+                            // has touched. Default 1.0 => byte-identical.
                             for (int comp = 0; comp < 3; ++comp)
                             {
                                 vhf1[atom][comp](r, s) += dI[comp] * hf_dm1(p, q);
-                                vhf1[atom][comp](r, q) -= 0.5 * dI[comp] * hf_dm1(p, s);
+                                vhf1[atom][comp](r, q) -= kx_vhf1 * 0.5 * dI[comp] * hf_dm1(p, s);
                                 vhf1[atom][comp](p, q) += dI[comp] * hf_dm1(r, s);
-                                vhf1[atom][comp](p, s) -= 0.5 * dI[comp] * hf_dm1(q, r);
+                                vhf1[atom][comp](p, s) -= kx_vhf1 * 0.5 * dI[comp] * hf_dm1(q, r);
                             }
                         }
         }
