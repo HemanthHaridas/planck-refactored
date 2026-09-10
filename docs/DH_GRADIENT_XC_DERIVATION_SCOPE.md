@@ -811,3 +811,24 @@ is now the single most valuable remaining step in this arc, because:
 All three decompositions are exact. Two of the three objects are verified against
 Planck. The orbital Hessian is the one that is not, and it is the one with the
 leverage.
+
+### D8 addendum -- the canonical-orbital assumption is VERIFIED, not assumed
+
+D8's model is well posed only if Planck's KS orbitals are canonical. That was
+initially asserted from the `cc_canonical_fock_only` memory; it has now been
+**checked directly** by probing `C^T F C` against the stored `eps` on the real
+DH fixtures:
+
+```
+h2o2 C1  (use_symm .false.) : max|offdiag| = 3.546656e-11  max|diag - eps| = 9.480772e-11
+water    (use_symm .false.) : max|offdiag| = 8.562944e-14  max|diag - eps| = 2.806644e-13
+water    (use_symm .true. ) : max|offdiag| = 1.239710e-13  max|diag - eps| = 4.263256e-13
+```
+
+Both diagonalisation branches produce canonical orbitals -- the plain path
+(`driver.cpp:836`) and the **SAO-blocked** path (`:862`), which block-diagonalises
+per irrep with the off-diagonal blocks vanishing by symmetry. The symmetry-on
+case was checked specifically because it is the branch that could plausibly break
+the invariant, and it does not.
+
+This matters beyond D8: **every CC/MP2 kernel in the tree assumes it.**
