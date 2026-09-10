@@ -2231,6 +2231,19 @@ namespace DFT::Driver
                     result.total_energy = total_energy;
                     result.xc_energy = xc_grid->total_energy + ks_potential->exact_exchange_energy;
                     result.integrated_electrons = xc_grid->integrated_electrons;
+                    // PLANCK_DEBUG_GRID_ACC: absolute grid-accuracy probe.
+                    // int rho dr must equal the electron count EXACTLY, so the
+                    // deviation is a reference-free measure of the quadrature's
+                    // own error -- no PySCF, no FD, no fitting.
+                    if (std::getenv("PLANCK_DEBUG_GRID_ACC"))
+                        HartreeFock::Logger::logging(
+                            HartreeFock::LogLevel::Info, "Grid Accuracy :",
+                            std::format("integrated_electrons = {:.10f}, deviation = {:.3e}",
+                                        xc_grid->integrated_electrons,
+                                        [&]{ int ne = 0;
+                                             for (auto z : calculator._molecule.atomic_numbers) ne += static_cast<int>(z);
+                                             ne -= calculator._molecule.charge;
+                                             return std::abs(xc_grid->integrated_electrons - static_cast<double>(ne)); }()));
                     result.solvation_energy = pcm_energy;
 
                     if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter))

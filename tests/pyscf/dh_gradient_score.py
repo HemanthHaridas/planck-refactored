@@ -26,8 +26,16 @@ Run directly to execute the positive control.
 """
 import numpy as np
 
-# Exact FD targets for *corr (PySCF, 0.27*dE_corr/dR), from
-# tests/pyscf/h2o2{,b}_b2plyp_dh_gradient_fd.py
+# MISLABEL CORRECTED 2026-09-10. These are the FD **TOTAL DH gradient**
+# (dE_total/dR), NOT 0.27*dE_corr/dR -- the name FD_TOT is right, the old
+# comment above it was wrong, and they differ by ~10x in magnitude.
+#
+# Verified directly: Planck's own FD of 0.27*E_corr reproduces the FD script's
+# printed `0.27*d(E_corr)/dR` block to **6.4e-08**, while these values match
+# the script's TOTAL block. Every score computed here compares Planck's TOTAL
+# analytic gradient against the FD TOTAL, which is the correct pairing --
+# so no past conclusion is invalidated, but the comment would mislead anyone
+# who trusted it when adding a new candidate.
 FD_TOT = {
     1: np.array([[0.0282807311, -0.0040897949, 0.0104669488],
                  [-0.1369469959, -0.0088664716, 0.0603711531],
