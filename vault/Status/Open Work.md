@@ -1445,17 +1445,50 @@ were corrected in the same pass: `CCGEN_UNRESTRICTED_CC` (U0) and
   Eqs. 42-46 versus the HF-MP2 forms Planck contracts -- which is a rewrite of
   the surrounding assembly, not a one-term addition.
 
-  **So the stop condition should now be taken seriously** (handoff section 7).
-  The residual is **0.041 pm on a stiff X-H stretch** against B2-PLYP's own
-  0.3 pm MAD claim. Next action is **H1.1** -- optimize the fixtures with the DH
-  gradient, compare against an FD-driven optimization, and if stiff coordinates
-  agree to <0.05 pm, **ship behind the flag with the residual documented as a
-  measured bound**. A bounded, non-blocking limitation is a legitimate outcome;
-  the alternative (rewriting the PT2 assembly to Eqs. 42-46) is a large change
-  motivated by a discrepancy an order of magnitude inside the method's own
-  accuracy. The only decisive test of "the paper's equations are incomplete" is
-  a cross-check against ORCA, which needs a licence -- say so rather than
-  substituting a weaker test.
+  **The stop condition is REJECTED (2026-09-10, user decision). Do not ship
+  this at 3.9e-4.** An earlier revision of this entry recommended taking the
+  handoff's section-7 exit -- run H1.1, and if stiff coordinates agree to
+  <0.05 pm, ship behind the flag with the residual as a documented bound. That
+  recommendation was wrong and is withdrawn.
+
+  **The argument that kills it is the tree's own convention, not the method's
+  literature accuracy.** Surveying every gradient tolerance recorded in
+  `Completion.md`, there are exactly two populations:
+
+  | gradient | gated at |
+  |---|---|
+  | RHF / UHF / ROHF, Cartesian and spherical | **1e-7 .. 7.8e-8 Ha/Bohr** |
+  | RMP2 OS-vs-HGP cross-engine | **1e-7 Ha/Bohr** |
+  | **double-hybrid PT2** | **3.9e-4 Ha/Bohr** |
+
+  This one is the sole outlier, **~4000x looser than the standard every other
+  gradient in the codebase meets for the same quantity**. Section 7's framing
+  compared the residual against B2-PLYP's 0.3 pm literature MAD, which is the
+  wrong yardstick: that measures whether the *functional* is accurate against
+  experiment, not whether *this implementation* solves the equations it claims
+  to. A code whose SCF converges to 1e-10 and whose gradients are PySCF-gated
+  at 1e-7 does not get to hold one gradient to 1e-4 because the underlying
+  approximation is loose anyway. **Those are independent error budgets and
+  conflating them is how a real defect gets shipped as a tolerance.**
+
+  Also, "0.041 pm on a stiff stretch" is a *favourable projection* of the
+  residual: the same 3.9e-4 is **0.686 pm on a torsion**, and soft coordinates
+  are exactly where a double hybrid gets used. The bound is not uniformly
+  small; it is small in the direction that was measured.
+
+  **Consequence: the Eqs. 42-46 rewrite is no longer "a large change motivated
+  by a small discrepancy" -- it is the remaining work.** Section 3's audit
+  eliminated the Z-vector path entirely, so the residual is now localized to
+  the PT2 assembly by exclusion rather than by guess: Planck contracts the
+  HF-MP2 `W` / `Gamma` forms where the double hybrid needs the DH-specific
+  `W^PT2` / `Gamma^PT2`. That is the one hypothesis left standing, and it is
+  structural, not a missing prefactor.
+
+  **The ORCA cross-check remains the only decisive test of "the paper's
+  equations are incomplete", and it needs a licence.** Say so rather than
+  substituting a weaker test -- but note it is now a *tiebreaker*, not a
+  blocker: the Eqs. 42-46 derivation can be done and FD-verified in Python
+  first, exactly as D6/D7/D8 were, without waiting on it.
 
   Also settled along the way: **Planck's PT2 assembly is sound** -- every
   accumulator is translationally invariant to 1e-14, and `*corr` reproduces the

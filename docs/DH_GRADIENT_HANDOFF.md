@@ -19,8 +19,12 @@ are present and the XC term is correct**, so the residual is an **error inside a
 existing term, not a missing one**. **All four are now verified**, the orbital Hessian
 included (2026-09-10, section 3) -- so the residual is an error in a term that
 is individually correct as written, i.e. the equations Planck implements do not
-match the ones the paper intends. **The next action is the stop condition in
-section 7, not another term hunt.**
+match the ones the paper intends. Section 3's audit eliminated the Z-vector
+path entirely, which **localizes the residual to the PT2 assembly by exclusion**:
+Planck contracts the HF-MP2 `W` / `Gamma` forms where the double hybrid needs
+the DH-specific `W^PT2` / `Gamma^PT2` (Eqs. 42-46). **That derivation is the
+next action.** Section 7's ship-behind-the-flag exit is **withdrawn** -- see
+section 7.
 
 ---
 
@@ -121,7 +125,9 @@ section 2's tail already names: the DH-specific `W^PT2` / `Gamma^PT2` of
 Eqs. 42-46 versus the HF-MP2 forms Planck contracts -- a rewrite of the
 surrounding assembly, not a one-term addition.
 
-**Go to section 7.**
+**Next action: derive Eqs. 42-46's `W^PT2` / `Gamma^PT2` and FD-verify it in
+Python first**, exactly as D6/D7/D8 were built. The instruments in section 4
+are the pattern to copy.
 
 ## 4. Instruments (all committed, all reusable)
 
@@ -200,20 +206,49 @@ ill-posed -- which is exactly how D8's first attempt failed.
 
 ---
 
-## 7. If the next step does not close it
+## 7. WITHDRAWN: do not ship at 3.9e-4
 
-The stop condition from `docs/DH_GRADIENT_RESIDUAL_SCOPE.md` still stands and
-should be taken seriously: **the residual is 0.041 pm on a stiff X-H stretch**,
-against the paper's own B2-PLYP accuracy claim of **0.3 pm MAD**. It is
-0.686 pm on a torsion.
+This section used to say: if the orbital-Hessian audit comes back clean, run
+H1.1, and if stiff coordinates agree to <0.05 pm, **ship it behind the flag
+with the residual documented as a known bound**. The audit did come back clean
+(section 3). **That exit is withdrawn anyway (2026-09-10, user decision).**
 
-**The orbital-Hessian audit has now come back clean (section 3), so this is
-the live next action.** Run **H1.1** -- optimize the
-fixtures with the DH gradient and compare against an FD-driven optimization. If
-stiff coordinates agree to <0.05 pm, **ship it behind the flag with the residual
-documented as a known bound** and stop hunting. A bounded, measured, non-blocking
-limitation is a legitimate outcome.
+**The argument is the tree's own convention, not the method's literature
+accuracy.** Every gradient tolerance recorded in `vault/Status/Completion.md`
+falls into two populations:
 
-The only decisive test of "the paper's equations are incomplete" is a cross-check
-against ORCA (the paper's own implementation), which needs a licence. Without
-that, H1 cannot be settled -- say so rather than substituting a weaker test.
+| gradient | gated at |
+|---|---|
+| RHF / UHF / ROHF, Cartesian and spherical | **1e-7 .. 7.8e-8 Ha/Bohr** |
+| RMP2 OS-vs-HGP cross-engine | **1e-7 Ha/Bohr** |
+| **double-hybrid PT2** | **3.9e-4 Ha/Bohr** |
+
+This one is the sole outlier, **~4000x looser than the standard every other
+gradient in this codebase meets for the same quantity**, in a code whose SCF
+converges to 1e-10.
+
+**Why the old framing was wrong.** It scored the residual against B2-PLYP's own
+0.3 pm MAD -- but that measures whether the *functional* reproduces experiment,
+not whether *this implementation* solves the equations it claims to. Those are
+independent error budgets. Conflating them is how a genuine defect ships as a
+tolerance: the functional's approximation error does not license an
+implementation error hiding underneath it, and the two do not cancel -- they
+add, and only the implementation half is ours to remove.
+
+**And the quoted bound was the favourable projection.** The same 3.9e-4 is
+**0.686 pm on a torsion** against 0.041 pm on a stiff X-H stretch. Soft
+coordinates are exactly where a double hybrid earns its cost, so the bound is
+not uniformly small -- it is small in the direction that happened to be
+measured.
+
+**What replaces it.** Section 3 eliminated the Z-vector path, so the remaining
+suspect is no longer a guess: Planck contracts the HF-MP2 `W` / `Gamma` forms
+where the double hybrid needs the DH-specific `W^PT2` / `Gamma^PT2` of
+Eqs. 42-46. That is structural, not a missing prefactor, and it is now **the
+remaining work rather than a disproportionate response**.
+
+**On ORCA:** a cross-check against the paper's own implementation remains the
+only decisive test of "the paper's equations are incomplete", and it needs a
+licence -- say so rather than substituting a weaker test. But it is a
+*tiebreaker*, not a blocker: the Eqs. 42-46 derivation can be built and
+FD-verified in Python first, exactly as D6/D7/D8 were.
