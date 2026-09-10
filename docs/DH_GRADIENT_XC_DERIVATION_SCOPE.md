@@ -591,3 +591,84 @@ lead:
 exactly as the `z_mult` probe did. The channel whose leverage matches 3.9e-4 at
 a plausible error fraction is the one to audit. This is mechanical and cheap now
 that the probe pattern is established.
+
+---
+
+## D6 -- the derivation done independently in Python, FD-verified, and compared term by term
+
+Rather than transcribing the paper's equations again, `Phi_XC` was rebuilt as an
+explicit differentiable model with **every** `R`-dependence written out (basis
+centres, grid points that ride their owner atom, Becke weights), each channel
+differentiated in isolation, and the sum checked against a finite-difference
+oracle. `f_xc`'s first derivatives are analytic, so only the outer geometry FD is
+numerical. Committed: `tests/pyscf/dh_xc_derivation_{model,check}.py`.
+
+**The derivation is exact:**
+
+```
+basis   |g|=2.803135e-01   sum_A=[ 0.09341059 -0.07064314  0.00959678]
+point   |g|=2.093901e-01   sum_A=[-0.09341059  0.07064314 -0.00959678]
+weight  |g|=4.438146e-02   sum_A=[0. 0. 0.]
+SUM  vs FD:  max|SUM - FD| = 2.220e-11   rel = 8.3e-11
+```
+
+**`basis` and `point` carry equal and opposite net force to 8 digits**, and the
+total is invariant. That is the `XC_II` / missing-companion structure reproduced
+from first principles, with no reference to the paper -- independent confirmation
+that the structure this arc inferred empirically is real.
+
+### Term-by-term against the C++ -- NO UNMATCHED TERM
+
+| derivation channel | C++ | status | verdict |
+|---|---|---|---|
+| basis, `rho_D` moves | `XC_I` | implemented, deliberately not wired | correct to exclude -- `D`'s `R`-response is the Z-vector's |
+| basis, `rho_P` moves | `XC_II` | **wired, coefficient 1** | **matches** |
+| point translation | `XC_III(b)` | implemented, not wired | matches (cancels) |
+| Becke weight | `XC_III(a)` | implemented, not wired | matches (cancels) |
+
+### One flag raised, chased, and RESOLVED -- and it closes XC_III properly
+
+The model said `point + weight` should be **~33% of the total, stable as the grid
+densifies** (checked at 12/104/444 points). Planck measures `XC_III` at
+`4.57e-07`, a share of **0.03%** -- a factor of ~1500. Flagged and verified
+numerically rather than argued.
+
+An in-binary probe on the real C1 H2O2 fixture, accumulating the two XC_III
+sub-terms separately:
+
+```
+sum|point term|  = 1.060347e-01
+sum|weight term| = 9.878599e-03
+|XC_III| summed  = 2.660422e-07        <-- 4e5 x cancellation
+```
+
+**The per-point terms ARE large, exactly as the derivation predicts.** They
+cancel because a converged atom-centred Becke grid is very nearly
+translation-invariant *as a quadrature*; the toy grid is not a partition of unity
+(its weights sum to 5.67), so it kept 33%. **The 0.03% is physics, not a missing
+term** -- and this is the first account of *why* XC_III is small, where before it
+was only known *that* it was.
+
+(The probe also caught, incidentally, that with production's `kXcII` mask both
+accumulators read exactly `0.000000e+00` -- the `want_xc3` guard's `continue`
+skips the whole block, as designed.)
+
+### What this establishes, and what it does not
+
+**Establishes:** the XC term is complete and correctly implemented. Every channel
+a first-principles derivation produces has a structurally-correct counterpart in
+the C++, and the one apparent discrepancy is a real cancellation. Combined with
+D1's result that `E_PT2` has no explicit grid dependence, **the XC side is
+closed.**
+
+**Does not establish** where the 3.887e-4 comes from. The derivation confirms
+what Planck implements is right; it does not produce a new term. Since D1-D3 also
+showed the four-term assembly is complete and H2 exonerated the KS-side
+machinery, the residual is an error *inside* an existing term -- and the ranked
+suspicion from D5 stands (`W^PT2`'s blocks, the Z-vector's coefficients against
+Eq. 41, `Gamma^NS`'s Eq. 47 backtransformation).
+
+**Method note:** this is the first step in the arc to produce a
+structural result rather than a candidate. Deriving and checking against FD cost
+~30 minutes and settled two questions (XC_III's smallness, the completeness of
+the channel set) that months of candidate-scoring had left open.
