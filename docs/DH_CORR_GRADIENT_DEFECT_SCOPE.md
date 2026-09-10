@@ -30,6 +30,47 @@ concluding anything from the old numbers.** They are not wrong in direction —
 the pairing was total-vs-total, which is self-consistent — but they are wrong
 in magnitude, and several were rejected on "removes only X% of the target".
 
+## 1b. The angular-momentum hypothesis: RAISED, TESTED, FALSIFIED
+
+**Hypothesis (worth recording because the pattern really does suggest it):** in
+STO-3G, H is pure `S` (`l = 0`) while O carries `S` + `SP` (`l = 1`). The
+defect is concentrated on the two oxygens along the O-O axis with H components
+~6x smaller. So it looks like a defect in how the derivative raises/lowers
+angular momentum -- `_compute_eri_deriv_elem`'s
+`+2*alpha*ERI(l+1) - l*ERI(l-1)`, whose lowering term **only fires when
+`l > 0`**, i.e. on O and never on H.
+
+**Two independent measurements kill it.**
+
+1. **The same derivative-ERI path is FD-gated and passes.**
+   `water_rmp2_gradient_fd` (water/STO-3G, so O p-shells, the same
+   `_compute_eri_deriv_elem`, the same MP2 amplitudes) agrees with finite
+   difference to **2.2e-07** against a 3e-4 tolerance. A broken raise/lower
+   would fail this too.
+
+2. **The defect survives with NO p-shells anywhere.** A pure-`s` fixture --
+   H4 as two H2 units, STO-3G, so every function is `l = 0` and the lowering
+   term can never fire -- shows a **7.58%** relative defect, slightly WORSE
+   than H2O2's 6.63%:
+
+   ```
+     H1: +1.740e-06  +6.982e-06  -3.484e-04
+     H2: +1.328e-06  +3.740e-06  +3.479e-04
+     H3: +9.185e-05  -2.903e-04  +7.894e-05
+     H4: -9.489e-05  +2.796e-04  -7.847e-05
+   ```
+
+**What the pattern actually tracks is BONDED PAIRS, not angular momentum.**
+On H4 the defect is antisymmetric along each H-H bond axis
+(-3.484e-4 / +3.479e-4 on the bonded pair), exactly as it is along O-O in
+H2O2. In H2O2 the heavy-atom pair simply *is* the bonded pair, so the p-shells
+were **correlated with the signature, not causing it**.
+
+Fixture committed at `tests/inputs/exploratory/dh_gradient/h4_s_only_b2plyp.hfinp`
+-- it is the cheapest discriminator in the set (4 s-functions) and it
+**excludes every angular-momentum-dependent explanation in one run**. Use it
+first on any future candidate.
+
 ## 2. What the defect looks like (measured, use it to discriminate)
 
 ```
@@ -38,6 +79,15 @@ in magnitude, and several were rejected on "removes only X% of the target".
   net force        1.000e-08     -> 0.0% of max|d|
   translation-free 100.0%
 ```
+
+**Reproduced on three fixtures**, which is what makes the structural
+properties below trustworthy rather than a single-geometry artifact:
+
+| fixture | `max|d|` | `|corr_FD|` | relative | net force |
+|---|---|---|---|---|
+| h2o2 C1 | 1.243e-3 | 1.876e-2 | **6.63%** | 1.0e-8 |
+| h2o2b C1 | 9.827e-4 | 1.636e-2 | **6.01%** | 2.7e-8 |
+| H4 (s-only) | 3.484e-4 | 4.594e-3 | **7.58%** | 2.7e-8 |
 
 Per-atom, on the C1 H2O2 fixture (O at y = +-0.717, so **y is the O-O axis**):
 
@@ -54,9 +104,10 @@ Three properties worth more than any single number:
    Whatever is wrong conserves momentum, which **excludes** a missing
    one-centre term, a moving-frame/grid term, and any term that does not sum
    to zero over atoms by construction.
-2. **Concentrated on the O-O axis and antisymmetric between the two oxygens**
-   (-1.197e-3 / +1.243e-3, equal to 4%). The H components are ~6x smaller.
-   This is a heavy-atom, bond-directed signature.
+2. **Bond-directed and antisymmetric between the bonded pair**
+   (-1.197e-3 / +1.243e-3 along O-O, equal to 4%). **NOT a heavy-atom or
+   angular-momentum signature** -- see section 1b: the identical pattern
+   appears along each H-H bond in a pure-`s` fixture. It tracks bonds.
 3. **NOT a uniform scale error.** The elementwise ratio `d / corr_FD` spans
    +0.002 to -15.3 (the large value is where `corr_FD` itself is ~1e-5).
    A wrong prefactor on the whole term is therefore excluded; on the two large
@@ -94,16 +145,16 @@ is bookkeeping, not new physics, and it must come first — otherwise every
 number in the next step is off by 3.2x.
 *Verify:* the XC_II positive control still scores cos ~0.95 at scale ~1.
 
-**A2. Get `corr_FD` on both C1 fixtures.** Fixture 1 is measured; fixture 2 is
-in flight. **Two geometries is the standing requirement** (the fixture trap:
-`h2o2` C1 has 12 components, 6 independent — enough to identify, but a single
-fixture still admits fit artifacts). Commit both as reference blocks so nobody
-re-runs 24 SCFs.
+**A2. DONE -- `corr_FD` measured on three fixtures** (table in section 2), all
+committed as reference blocks so nobody re-runs 24 SCFs each. Two geometries
+is the standing requirement; the third (s-only) additionally serves as the
+angular-momentum discriminator.
 
-**A3. Use the three structural properties as a FILTER, not a fit.** Any
-candidate must be translation-free by construction, bond-directed on the heavy
-atoms, and non-uniform in its ratio to `corr_FD`. That rules out most of what
-a term-hunt would otherwise propose, before any scoring.
+**A3. Use the structural properties as a FILTER, not a fit.** Any candidate
+must be translation-free by construction, **bond-directed and antisymmetric
+between bonded pairs**, non-uniform in its ratio to `corr_FD`, and
+**independent of angular momentum** (it must survive on the s-only fixture).
+That last one is cheap and rules out a whole family in a single run.
 
 **A4. The first specific candidate: the `s_zeta` / `s_im1` overlap terms.**
 They are the only `*corr` pieces contracted against `S^(x)`, which is
