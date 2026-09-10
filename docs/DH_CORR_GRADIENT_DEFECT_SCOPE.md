@@ -124,26 +124,55 @@ argument survive unchanged:
 |---|---|---|
 | Z-vector operator (diag/J/K) | exact vs HF-CPHF, **3.7e-15** | **yes** — identity, not a fit |
 | `Gamma^NS` / Eq. 47 | contraction invariant **4.000000000000** | **yes** — identity |
-| `h_op`'s XC channel | bounded, 0.36x/0.44x of the total | **NO** — re-measure vs 1.24e-3 |
+| `h_op`'s XC channel | bounded, 0.36x/0.44x of the total | **RE-MEASURED (A1): excluded.** 0.111x/0.115x, and **0.002x** on the s-only fixture; spread 99.6% |
 | `vhf1` HF exchange weight | implied `kx` 0.984/0.990, 2 geometries | **yes** — a ratio, scale-free |
 | KS-veff at all 3 sites | 1.4x-83x **worse** | **yes** — worse is worse |
 | combination error | per-term translation invariance 1e-14 | **yes** |
 | amplitudes `t2` | elementwise vs PySCF **8e-9** | **yes** |
 
-**The XC-channel bound is the one that flips.** It was called safe because its
-whole contribution (1.41e-4) was 0.36x the total residual. Against the real
-1.24e-3 defect it is 0.11x — still short, but it was never the leading
-candidate on magnitude alone, and the argument that retired it was partly the
-scale.
+**The XC-channel bound was the one that flipped, and A1 has now settled it.**
+Its contribution is 0.111x/0.115x the real defect (not 0.36x of the total),
+and on the s-only fixture **0.002x** — it contributes 6.1e-7 where the defect
+is 3.5e-4. Scale spread 99.6%. **Excluded, no longer a candidate.**
 
 ## 4. Steps
 
-**A1. Re-score every candidate against the right target.** Change
-`dh_gradient_score.py` to take `corr_FD` (Planck's own, per-fixture) as the
-target and Planck's `*corr` as the prediction, instead of total-vs-total. This
-is bookkeeping, not new physics, and it must come first — otherwise every
-number in the next step is off by 3.2x.
-*Verify:* the XC_II positive control still scores cos ~0.95 at scale ~1.
+**A1. DONE (2026-09-10).** `dh_gradient_score.py` gained a `*corr` layer --
+`CORR_FD` / `CORR_PLANCK` / `CORR_DEFECT` on all three fixtures, plus
+`score_corr()` and `random_control()`. The old total-vs-total layer is kept
+(it is the positive control for itself and still passes at cos 0.946/0.960).
+
+**Score with `score_corr`, never `score`.**
+
+*Controls, all in `python dh_gradient_score.py`:*
+
+| control | result |
+|---|---|
+| positive (defect scores itself) | cos 1.0000, scale 1.0000, resid 0 |
+| discriminating (heavy-atom-only) | **REJECTED**, naming the s-only fixture |
+| random, 400 draws | median cos 0.231, spread 110%, **1.8% pass by luck** |
+
+That last number is the payoff: the three-fixture spread test passes a random
+vector **1.8%** of the time against the old two-fixture layer's **24%** --
+**13x more discriminating**, which is what makes a single positive result
+worth acting on.
+
+**Three defects in the gate, each found by its own control and each fixed:**
+a translation-free warning calibrated in absolute units flagged the *known
+right answer*; the spread test skipped zero scales, so a candidate that
+vanishes on a fixture reported "CONSISTENT"; and a pure-translation projection
+guard was **vacuous** (orthogonal to the defect either way -- the probe must be
+`defect + a uniform shift`, which collapses 1.0000 -> 0.0145 without the
+projection). Two further mutations (sign-flipped `CORR_DEFECT`, dropped
+projection) initially passed because **a vector scored against itself cancels
+both errors** -- fixed by two guards that score *fixed* vectors instead.
+
+**First result: the XC channel of `h_op` is now definitively excluded.**
+Re-scored against the right target it gives cos 0.671/0.544/0.836 with a
+**99.6% scale spread**, and on the s-only fixture its leverage is **0.002x**
+(6.1e-7 against a 3.5e-4 defect). The scope predicted this bound would "flip"
+from 0.36x to something weaker -- it does (0.111x) -- but the third fixture
+settles it outright, which the two-fixture layer could not have done.
 
 **A2. DONE -- `corr_FD` measured on three fixtures** (table in section 2), all
 committed as reference blocks so nobody re-runs 24 SCFs each. Two geometries
