@@ -1436,6 +1436,43 @@ were corrected in the same pass: `CCGEN_UNRESTRICTED_CC` (U0) and
   "INCONSISTENT -> fit artifact" verdict. Verified linear in the scale (second
   difference 1.7e-05), so the bound extrapolates.
 
+  **ALL THREE of D4's remaining suspects are now eliminated by measurement
+  (steps 1-2, 2026-09-10), and that is a different situation from "keep
+  hunting".** D4 narrowed the residual to "an error inside one of the four
+  terms" and listed three candidates in order of suspicion. Each is now closed:
+
+  | suspect | how closed | number |
+  |---|---|---|
+  | #2 Z-vector coefficients | diag/J/K vs HF-CPHF, no FD | **3.7e-15** |
+  | #2 (XC channel, no oracle) | bounded: whole contribution vs residual | **0.36x / 0.44x** |
+  | #3 `Gamma^NS` / Eq. 47 | contraction invariant `tr = 4*E_corr` | **4.000000000000** |
+  | #1 `W` KS-vs-HF, overlap site | pre-existing `vhf_s1occ` bound | **>=72% left** |
+  | #1 `W` KS-vs-HF, derivative site | implied `kx` on two geometries | **0.984 / 0.990 vs HF 1.0** |
+
+  **Two of these were previously believed settled on unsound grounds, which is
+  why they were worth re-doing.** H2.2 verified the AMPLITUDES elementwise and
+  wrote "and with them `Gamma^NS`" -- but `Gamma` is the backtransformation OF
+  the amplitudes, so a correct `t2` with a wrong backtransformation still gives
+  a wrong `Gamma`; D4 separately flagged Eq. 47's `(1+delta_ij)` as never
+  numerically checked, and those two statements cannot both be true. The
+  `vhf1` derivative site had never been probed at all -- every `vhf_s1occ`
+  measurement touched the overlap term only.
+
+  **The `vhf1` bound is the strongest single constraint in the arc**: at
+  **36.8x / 47.6x leverage**, a weight wrong by a few percent would move the
+  gradient by more than the entire residual, so `kx = 1.0` is pinned tightly
+  rather than merely fitted.
+
+  **What this leaves is a genuinely narrower question**, and it should be
+  stated rather than dissolved into another candidate list: every individual
+  term is now verified or tightly bounded, the four-term assembly is proven
+  complete (D4), and the residual is nonetheless 3.9e-4. The remaining
+  possibilities are (a) an error in how the verified terms are COMBINED rather
+  than in any one of them, (b) the DH-specific `W^PT2` / `Gamma^PT2` of
+  Eqs. 42-46 differing from the HF-MP2 forms in a way that is invisible to
+  each term's own invariant, or (c) the paper's equations being incomplete --
+  which only the ORCA cross-check can settle.
+
   **Consequence: every component of the Z-vector path is now accounted for.**
   H2.3 had established only that `A` is well-formed (symmetric, SPD, exactly
   solved); it is now established that `A` is RIGHT. Combined with the
