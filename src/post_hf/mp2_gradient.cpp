@@ -515,6 +515,70 @@ namespace HartreeFock::Correlation
                         pair_dm2_ao[idx_dm2(mu, nu, la, si, nao)] = val;
                     }
 
+        // PLANCK_DEBUG_GAMMA_TRACE: numeric gate on the Gamma^NS
+        // backtransformation (Eq. 47). H2.2 verified the AMPLITUDES
+        // elementwise to 8e-9 and concluded "and with them Gamma^NS" -- but
+        // that inference does not hold: Gamma is the backtransformation OF
+        // the amplitudes, so a correct t2 with a wrong backtransformation
+        // still gives a wrong Gamma. D4 flags Eq. 47's (1+delta_ij) weight as
+        // checked only for convention-equivalence, never numerically. This is
+        // that check.
+        //
+        // The invariant needs no external reference. Contracting Gamma with
+        // the UNDIFFERENTIATED ERIs must reproduce a fixed multiple of the
+        // MP2 correlation energy, because both are contractions of the same
+        // amplitudes against the same integrals:
+        //
+        //   E_corr        = sum_ijab (2*t_ijab - t_ijba) (ia|jb)
+        //   dovov         = 4*t_ijab - 2*t_ijba          =  2x the above weight
+        //   both orderings summed                        =  2x again
+        //   => sum_{munulasi} Gamma (munu|lasi) == 4 * E_corr
+        //
+        // A wrong permutation, a missing/spurious (1+delta_ij), a dropped
+        // ordering or a transposed backtransform all break this ratio, and it
+        // is exact rather than tolerance-based.
+        if (const char *dbg = std::getenv("PLANCK_DEBUG_GAMMA_TRACE"))
+        {
+            if (std::string_view(dbg) == "1")
+            {
+                std::vector<double> eri_chk;
+                const std::vector<double> &eri_ref =
+                    ensure_eri(calculator, shell_pairs, eri_chk, "Gamma trace :");
+                double tr = 0.0;
+                for (int mu = 0; mu < nao; ++mu)
+                    for (int nu = 0; nu < nao; ++nu)
+                        for (int la = 0; la < nao; ++la)
+                            for (int si = 0; si < nao; ++si)
+                                tr += pair_dm2_ao[idx_dm2(mu, nu, la, si, nao)] *
+                                      eri_ref[idx_dm2(mu, nu, la, si, nao)];
+
+                double e_corr = 0.0;
+                for (int i = 0; i < nocc; ++i)
+                    for (int j = 0; j < nocc; ++j)
+                        for (int a = 0; a < nvirt; ++a)
+                            for (int b = 0; b < nvirt; ++b)
+                            {
+                                const double tab = result.t2[detail::idx_t2(i, j, a, b, nocc, nvirt)];
+                                const double tba = result.t2[detail::idx_t2(i, j, b, a, nocc, nvirt)];
+                                double iajb = 0.0;
+                                for (int mu = 0; mu < nao; ++mu)
+                                    for (int nu = 0; nu < nao; ++nu)
+                                        for (int la = 0; la < nao; ++la)
+                                            for (int si = 0; si < nao; ++si)
+                                                iajb += C_occ(mu, i) * C_virt(nu, a) *
+                                                        C_occ(la, j) * C_virt(si, b) *
+                                                        eri_ref[idx_dm2(mu, nu, la, si, nao)];
+                                e_corr += (2.0 * tab - tba) * iajb;
+                            }
+
+                std::cout << std::setprecision(12)
+                          << "PLANCK_GAMMA_TRACE tr=" << tr
+                          << " E_corr=" << e_corr
+                          << " ratio=" << (e_corr != 0.0 ? tr / e_corr : 0.0)
+                          << " (expect 4.0)\n";
+            }
+        }
+
         std::vector<std::vector<int>> atom_aos = build_atom_ao_lists(calculator);
 
         // Debug output
