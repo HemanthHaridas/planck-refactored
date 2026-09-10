@@ -28,7 +28,31 @@ would have produced a false finding about Planck:
    the gauge to canonical orbitals -- the same invariant Planck's CC/MP2 code
    relies on (f_ov = 0, canonical Fock throughout).
 
-WHAT THIS DOES **NOT** ESTABLISH -- read before citing it:
+SUPERSEDED IN PART (2026-09-10): the "NOT ESTABLISHED" section below is
+obsolete on both counts. See dh_zov_derivation_check.py (D9).
+
+  * The orbital Hessian IS now under an independent oracle -- but in C++, not
+    here: build_ks_orbital_hessian_op's diag/J/K channels are gated to
+    rel 3.7e-15 against build_rhf_cphf_matrix (PLANCK_DFT_DH_HESSIAN_AUDIT).
+    Needed no FD and no kappa at all -- the non-XC channels of the KS orbital
+    Hessian ARE the RHF CPHF couplings, so comparing operator-to-operator at a
+    FIXED geometry sidesteps the metric problem entirely.
+  * The kappa extraction below is NOT blocked on Eqs. 19-21. The contamination
+    is removed by Lowdin-orthonormalizing the displaced MOs against S(R0) --
+    four lines. log(U) is then a clean generator (pred vs actual dkappa/dR
+    agree to 0.9993/0.9998, FD-step-limited).
+
+**And this file's own mo_channel is contaminated by the same defect**: it
+differentiates E(C(R+h)) with C raw from the displaced SCF, which carries an
+O(dS) norm change on top of the rotation. Measured via a variational control
+(E_scf's MO channel must vanish): **1.065e+00 raw, 3.0e-09 projected**. The
+numbers below are therefore ~26x too large in the MO/explicit channels
+individually. **The SUM is unaffected** -- the contamination cancels between
+the explicit and MO channels, which is why 1.735e-11 vs FD still holds -- so
+the decomposition result stands, but **do not cite the individual channel
+magnitudes**.
+
+WHAT THIS DOES **NOT** ESTABLISH -- read before citing it (OBSOLETE, above):
 
 The decomposition is verified, but the step that would test Planck's ORBITAL
 HESSIAN (`build_ks_orbital_hessian_op`) is NOT. Reproducing the MO channel as
