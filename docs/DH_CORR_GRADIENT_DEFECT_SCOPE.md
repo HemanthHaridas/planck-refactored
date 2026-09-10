@@ -185,7 +185,59 @@ between bonded pairs**, non-uniform in its ratio to `corr_FD`, and
 **independent of angular momentum** (it must survive on the s-only fixture).
 That last one is cheap and rules out a whole family in a single run.
 
-**A4. The first specific candidate: the `s_zeta` / `s_im1` overlap terms.**
+**A4. RUN (2026-09-10). PARTIAL: `s_zeta` is the strongest candidate the arc
+has produced, and it does NOT close.** Instrument:
+`PLANCK_DEBUG_OVERLAP_SCALE="a,b,c"` scales `s_im1` / `s_zeta` / `s_vhf`
+independently (RMP2/DH path only, `1,1,1` byte-identical).
+
+Scored against the A1 target, `s_zeta` is the only one of the three with a
+consistent DIRECTION -- cos **-0.931 / -0.853 / -0.999** on the three fixtures
+against a random median of 0.231, and negative on all three, meaning the term
+wants to be LARGER. (`s_im1` and `s_vhf` flip sign between the C1 and s-only
+fixtures: cos -0.617/-0.508/**+0.998** and -0.743/-0.680/**+0.997**. Sign
+inconsistency across geometries is disqualifying on its own.)
+
+Sweeping the coefficient:
+
+| fixture | best `sc_zeta` | residual there | baseline | removed |
+|---|---|---|---|---|
+| h2o2 C1 | 1.40 | 3.058e-4 | 1.243e-3 | **75%** |
+| h2o2b C1 | 1.30 | 3.284e-4 | 9.827e-4 | **67%** |
+| H4 (s-only) | 1.20 | 5.880e-5 | 3.484e-4 | **83%** |
+
+**Why this is not yet a fix, stated plainly:**
+
+- The coefficient spread is **14%** -- inside the scorer's 25% "consistent"
+  band, so the two-geometry rule does NOT reject it. But it is not ONE number
+  either, and it drifts **monotonically with system size** (1.2 -> 1.3 -> 1.4
+  from H4 to h2o2b to h2o2), which is what a *missing companion term* looks
+  like, not what a wrong prefactor looks like.
+- At each fixture's own optimum the C1 cases retain **25% and 33%** of the
+  defect. A correct prefactor would zero out; this leaves a systematic
+  remainder.
+- **A fitted scale factor is exactly the trap this arc keeps hitting.** Do not
+  wire `sc_zeta = 1.3` into production. The result is a *localisation* --
+  the defect lives in or beside `zeta_ao` -- not a coefficient.
+
+**What it does establish, which is real:** the defect is in the
+`<W^PT2 S^(x)>` overlap channel, specifically the `zeta` piece, and
+D4's block table already flags `zeta`'s **ov/vo** blocks as the one place
+Planck's convention (`zeta_weights(v,o) = eps_occ(i)`) differs from Eq. 44's
+amplitude-integral `W_ia`. D7 verified `zeta`'s oo/vv blocks and could not
+reach ov/vo; **D9 now supplies that oracle**
+(`tests/pyscf/dh_zov_derivation_check.py`). That is A6.
+
+**A6 (new, now the top item): derive `zeta`'s ov/vo blocks with the D9
+machinery and compare against `zeta_weights(v,o) = eps_occ(i)`.** A wrong ov/vo
+convention would produce exactly this signature -- a term that is ~right in
+direction, needs a >1 multiplier, and leaves a size-dependent remainder,
+because the ov/vo blocks scale differently with the occupied-virtual gap than
+the diagonal ones do.
+*Verify:* the derived convention must remove the defect at coefficient 1 on
+all three fixtures simultaneously -- no fitted scale.
+
+**A4 (original text, superseded by the run above):** the `s_zeta` / `s_im1`
+overlap terms.
 They are the only `*corr` pieces contracted against `S^(x)`, which is
 intrinsically bond-directed and antisymmetric between a bonded pair — matching
 property 2. `s_zeta` is 5.1e-1 in magnitude, so a 0.2% error there is the whole

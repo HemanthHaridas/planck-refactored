@@ -1,6 +1,7 @@
 #include "mp2_gradient.h"
 
 #include <cstdlib>
+#include <cstdio>
 #include <expected>
 #include <iostream>
 #include <iomanip>
@@ -756,6 +757,17 @@ namespace HartreeFock::Correlation
         maybe_print_rmp2_matrix("dm1_corr_relaxed_ao", dm1_corr_relaxed_ao);
         maybe_print_rmp2_matrix("dm1p", dm1p);
 
+        // PLANCK_DEBUG_OVERLAP_SCALE="a,b,c": independent scale controls on
+        // the three <W S^(x)> pieces (s_im1, s_zeta, s_vhf). A4 of
+        // docs/DH_CORR_GRADIENT_DEFECT_SCOPE.md: these are the only *corr
+        // pieces contracted against S^(x), which is intrinsically
+        // bond-directed and antisymmetric between a bonded pair -- matching
+        // the defect's measured signature. RMP2/DH path only. 1,1,1 default
+        // => byte-identical.
+        double sc_im1 = 1.0, sc_zeta = 1.0, sc_vhf = 1.0;
+        if (const char *e = std::getenv("PLANCK_DEBUG_OVERLAP_SCALE"))
+            std::sscanf(e, "%lf,%lf,%lf", &sc_im1, &sc_zeta, &sc_vhf);
+
         Eigen::MatrixXd overlap_terms = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
         Eigen::MatrixXd s_im1_terms = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
         Eigen::MatrixXd s_zeta_terms = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
@@ -768,14 +780,14 @@ namespace HartreeFock::Correlation
                     const auto dST = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp);
                     for (int q = 0; q < 3; ++q)
                     {
-                        const double s_im1 =
+                        const double s_im1 = sc_im1 * (
                             dST[q] * imat_ao(p, nu) +
-                            dST[q] * imat_ao(nu, p);
-                        const double s_zeta =
+                            dST[q] * imat_ao(nu, p));
+                        const double s_zeta = sc_zeta * (
                             -dST[q] * zeta_ao(p, nu) -
-                            dST[q] * zeta_ao(nu, p);
-                        const double s_vhf =
-                            -2.0 * dST[q] * vhf_s1occ(p, nu);
+                            dST[q] * zeta_ao(nu, p));
+                        const double s_vhf = sc_vhf * (
+                            -2.0 * dST[q] * vhf_s1occ(p, nu));
                         s_im1_terms(atom, q) += s_im1;
                         s_zeta_terms(atom, q) += s_zeta;
                         s_vhf_terms(atom, q) += s_vhf;
