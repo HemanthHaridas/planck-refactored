@@ -672,3 +672,69 @@ Eq. 41, `Gamma^NS`'s Eq. 47 backtransformation).
 structural result rather than a candidate. Deriving and checking against FD cost
 ~30 minutes and settled two questions (XC_III's smallness, the completeness of
 the channel set) that months of candidate-scoring had left open.
+
+---
+
+## D7 -- `W^PT2` derived from orthonormality, FD-verified, compared block by block
+
+Same method as D6, applied to the term D5 ranked most suspicious.
+`tests/pyscf/dh_w_derivation_{model,check}.py`.
+
+**`W` is not a postulate.** It is what `C^T S C = I` forces when the basis moves,
+so the model derives it from that constraint rather than transcribing Eqs. 42-45.
+For a generalised eigenproblem,
+
+```
+d eps_p/dR = <p|dH/dR|p> - eps_p <p|dS/dR|p>
+```
+
+so `E = sum_p D_pp eps_p` splits into an operator-moves channel and
+`-<W S^(x)>`, with `W_ao = C (D_mo .* zeta) C^T`.
+
+**The derivation is exact: `max|SUM - FD| = 2.475e-12` (rel 1.0e-10).** The two
+channels are each `~0.2` and cancel to `0.035` -- a **6x cancellation**, so
+`W`'s sign and factor are tightly constrained and the mutation test below is
+meaningful rather than slack.
+
+### Block-by-block verdict
+
+| block | Planck's `zeta` | verdict |
+|---|---|---|
+| oo / vv (diagonal) | `0.5*(eps_p + eps_q)` | **VERIFIED** -- reproduces the oracle at `2.475e-12` |
+| ov / vo | `eps_i` | **beyond this model** -- see below |
+| factor mutation (`2x`) | -- | FAILS at `1.440e-01` |
+| sign mutation (`-1x`) | -- | FAILS at `2.879e-01` |
+
+Both mutations fail hard, so the passing result is not vacuous.
+
+### Two test defects found and fixed, both mine
+
+**(1) Unconstrained elements made a correct convention look wrong.** The first
+run reported Planck's `0.5*(eps_p+eps_q)` FAILING at `5.7e-02` while the derived
+`eps_p`-on-diagonal passed. The model's energy reads only `diag(D_mo)*eps`, so
+the OFF-DIAGONAL `D` elements are invisible to it and any `zeta` there is
+unconstrained. Zeroing them, **all three physical conventions pass identically at
+`2.475e-12`.** A convention cannot be tested against a functional that never
+reads it.
+
+**(2) Constraining the off-diagonals needs a Z-vector the model lacks.**
+Switching to `E = Tr[D_mo * (C^T H C)]` -- which does read the full matrix --
+made all three conventions fail, with `0.5*(eps_p+eps_q)` closest at `1.8e-3`.
+That pattern was diagnosed rather than reported: the new functional is
+non-variational in `C`, so its geometry derivative needs a `dC/dR` channel.
+Measured directly -- **diagonal `D` passes at `1.140e-11`, full `D` fails at
+`1.796e-03`** -- confirming the residual IS the missing Z-vector channel, a limit
+of the test, not a defect in Planck's `W`.
+
+### What D7 establishes
+
+`W`'s diagonal blocks are **verified against an independent derivation**, which
+is more than the earlier audit gave (that only established Planck matches
+PySCF's `grad/mp2.py` line for line -- consistency, not correctness).
+
+**It does not clear the ov/vo blocks.** Eqs. 43/44's `W_ab` and `W_ia` remain
+unverified, and reaching them requires a model carrying its own Z-vector. That is
+the natural D8, and it is now the single most specific open item in the arc: the
+Z-vector has **3.6x leverage** on the final gradient (D5), its coefficients have
+never been matched against Eq. 41 term by term, and `W`'s off-diagonal blocks are
+exactly where a Z-vector-coupled error would live.
