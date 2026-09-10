@@ -1,5 +1,7 @@
 #include "ks_orbital_hessian.h"
 
+#include <cstdlib>
+
 #include "analytic_hessian.h"
 #include "response_packing.h"
 #include "integrals/base.h"
@@ -68,8 +70,19 @@ namespace DFT::Driver
                     -0.5 * dK, in.C_occ, in.C_virt);
             }
 
+            // PLANCK_DFT_DH_HESSIAN_XC_SCALE: leverage control on the ONLY
+            // channel of h_op with no independent oracle. The diag / J / K
+            // channels are gated to ~4e-15 against build_rhf_cphf_matrix by
+            // PLANCK_DFT_DH_HESSIAN_AUDIT (dh_relaxed_density.cpp); the XC
+            // channel has no CPHF counterpart, so its correctness is bounded
+            // only by how much the final gradient moves when it is scaled.
+            // Inert (exactly 1.0) unless set.
+            double xc_scale = 1.0;
+            if (const char *e = std::getenv("PLANCK_DFT_DH_HESSIAN_XC_SCALE"))
+                xc_scale = std::strtod(e, nullptr);
+
             return diag_term.cwiseProduct(x) +
-                   in.kernel_scale * (J_packed + xc_packed + K_packed);
+                   in.kernel_scale * (J_packed + xc_scale * xc_packed + K_packed);
         };
     }
 
