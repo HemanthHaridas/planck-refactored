@@ -16,10 +16,11 @@ status lives in `vault/Status/`; the investigation record is
 The gradient is assembled from four terms (`<D h^x>`, `Gamma^PT2 (munu|kt)^x`,
 the XC term, `<W^PT2 S^x>`). A first-principles derivation confirms **all four
 are present and the XC term is correct**, so the residual is an **error inside an
-existing term, not a missing one**. Of the four, three are verified against
-independent FD-checked derivations; the **orbital Hessian feeding the Z-vector is
-not**, and it carries **3.6x leverage** on the final gradient. That is the next
-thing to do.
+existing term, not a missing one**. **All four are now verified**, the orbital Hessian
+included (2026-09-10, section 3) -- so the residual is an error in a term that
+is individually correct as written, i.e. the equations Planck implements do not
+match the ones the paper intends. **The next action is the stop condition in
+section 7, not another term hunt.**
 
 ---
 
@@ -40,32 +41,87 @@ thing to do.
 | the relaxed vs unrelaxed `D` | relaxed correct (cos 0.93 vs 0.75) |
 | Eq. 42's `R^XC(D)` | 7% worse at full weight, 3% at the derived half weight |
 | every `vhf_s1occ` variant | bounded: any multiple leaves >=72% of the target |
+| **the orbital Hessian `h_op`** | diag/J/K exact to **3.7e-15** vs HF-CPHF (section 3) |
+| **`h_op`'s XC channel** | its whole contribution is **0.36x/0.44x** the residual |
 
 ---
 
-## 3. The single most valuable next step
+## 3. ANSWERED (2026-09-10): the orbital Hessian is clean
 
-**Put `build_ks_orbital_hessian_op` under an independent oracle.**
+This section used to read "put `build_ks_orbital_hessian_op` under an
+independent oracle" and was the named next step. **Done, and it comes back
+clean -- the residual is not in the Z-vector operator.**
 
-D8 verified the Z-vector's *channel decomposition* to 1.7e-11 but could not reach
-the Hessian itself. Reproducing the MO channel as `L . dkappa/dR` needs `kappa`
-extracted from `U = C0^T S(R0) C(R+h)`, and that is **contaminated**: `C(R+h)` is
-orthonormal wrt `S(R+h)`, not `S(R0)`, so `U` mixes a genuine rotation with an
-`O(dS)` metric mismatch. Measured `|U - I| = 3.7e-6` at `h = 1e-5` against
-`O(h) = 1e-5` for a pure rotation. **Three extraction attempts each came up ~30x
-short.**
+### The move that unblocked it: no finite difference at all
 
-The fix is the `U_ij = -1/2 S^(x)_ij` bookkeeping of the paper's Eqs. 19-21.
+Three `kappa`-extraction attempts each came up ~30x short because
+`U = C0^T S(R0) C(R+h)` mixes a genuine rotation with an `O(dS)` metric
+mismatch (`|U - I| = 3.7e-6` at `h = 1e-5` against `O(h) = 1e-5`). The fix this
+section prescribed was the `U_ij = -1/2 S^(x)_ij` bookkeeping of Eqs. 19-21.
 
-**Why this one:**
-- the Z-vector moves the final gradient by **1.39e-3, 3.6x the residual**
-  (measured by switching to HF-CPHF, which makes it worse)
-- H2.3 established only that `A` is *well-formed* (symmetric, SPD, exactly
-  solved) -- **not that it is right**; its coefficients have never been matched
-  against Eq. 41 term by term
-- `W`'s ov/vo blocks (D7's gap) are Z-vector-coupled, so **one model closes both**
+**That is unnecessary. Do not build it.** The non-XC channels of the KS orbital
+Hessian *are* the RHF CPHF matrix's couplings, so `build_rhf_cphf_matrix` --
+a fully independent path (dense AO->MO ERI transform, textbook
+`4(ai|jb) - (ab|ji) - (aj|bi)`) -- is an **exact** oracle for them. Comparing
+operator-to-operator at a **fixed** geometry needs no displaced `C`, hence no
+metric contamination and no gauge ambiguity.
 
----
+**Generalizable:** when a quantity is a derivative, the reflex is to verify it
+by finite difference. If it also has an algebraic identity to something already
+implemented independently, that identity is the better oracle -- exact instead
+of noise-floored, and it sidesteps whatever made the FD hard.
+
+### What it measures
+
+`PLANCK_DFT_DH_HESSIAN_AUDIT=1`, all three fixtures:
+
+```
+diag channel   : max|Hd - diag| = 0.000e+00   max|offdiag(Hd)| = 0.000e+00
+J + K coupling : rel 3.6e-15 .. 3.8e-15  vs HF-CPHF
+```
+
+Gated **jointly** at machine precision: the `(a,i)` packing convention,
+`kernel_scale = 2`, the `dP = C_v x C_o^T + h.c.` trial density, and the hybrid
+`-0.5` K prefactor. Those are exactly the coefficients this section complained
+had "never been matched against Eq. 41 term by term".
+
+Non-vacuous -- three independent mutations, each caught **14 orders of
+magnitude** above the clean value:
+
+| mutation | rel |
+|---|---|
+| kernel scale `2 -> 1` | 4.7e-01 |
+| K prefactor `-0.5 -> -1.0` | 1.1e+00 |
+| drop the `h.c.` half of `dP` | 1.7e+01 |
+
+### The XC channel is bounded out, not verified
+
+`h_op`'s XC channel has no CPHF counterpart, so it gets a **scale control**
+(`PLANCK_DFT_DH_HESSIAN_XC_SCALE`, per trap #5 -- never on/off). Bounding is
+enough here:
+
+| fixture | \|XC channel\| | residual | ratio |
+|---|---|---|---|
+| 1 (h2o2 C1) | 1.41e-4 | 3.89e-4 | **0.36** |
+| 2 (h2o2b C1) | 1.18e-4 | 2.69e-4 | **0.44** |
+
+Its **entire** contribution to the final gradient is under half the residual,
+so no error in it -- not even zeroing it outright -- closes the gap. Scored as
+a candidate: cos **-0.55 / -0.36**, scale spread **52.5%** -> the scorer's own
+`INCONSISTENT -> fit artifact`. Linear in the scale (second difference
+1.7e-05), so the bound extrapolates.
+
+### What this leaves
+
+H2.3 established that `A` is *well-formed* (symmetric, SPD, exactly solved);
+this establishes that `A` is *right*. Every component of the Z-vector path is
+now accounted for, so **the "error inside an existing term" framing has no
+candidate term left inside the Z-vector**. The remaining suspect is the one
+section 2's tail already names: the DH-specific `W^PT2` / `Gamma^PT2` of
+Eqs. 42-46 versus the HF-MP2 forms Planck contracts -- a rewrite of the
+surrounding assembly, not a one-term addition.
+
+**Go to section 7.**
 
 ## 4. Instruments (all committed, all reusable)
 
@@ -80,6 +136,8 @@ The fix is the `U_ij = -1/2 S^(x)_ij` bookkeeping of the paper's Eqs. 19-21.
 | `PLANCK_DFT_DH_XC_PARTS` / `_SCALE` | component probe on the XC routine |
 | `PLANCK_DEBUG_RMP2_TERMS=1` | per-term gradient dump (14 accumulators) |
 | `PLANCK_DFT_DH_ZVECTOR_HFCPHF` | swap the Z-vector operator to HF-CPHF |
+| `PLANCK_DFT_DH_HESSIAN_AUDIT` | channel-resolved oracle on `h_op` vs HF-CPHF (section 3); FD-free, mutation-verified |
+| `PLANCK_DFT_DH_HESSIAN_XC_SCALE` | scale control on `h_op`'s XC channel, the one channel with no oracle |
 
 **Fixture rule:** measure on a **C1** fixture. Water/C2v has only **3 independent
 gradient components** -- fewer than the number of candidate terms -- so any three
@@ -149,7 +207,8 @@ should be taken seriously: **the residual is 0.041 pm on a stiff X-H stretch**,
 against the paper's own B2-PLYP accuracy claim of **0.3 pm MAD**. It is
 0.686 pm on a torsion.
 
-So if the orbital-Hessian audit comes back clean, run **H1.1** -- optimize the
+**The orbital-Hessian audit has now come back clean (section 3), so this is
+the live next action.** Run **H1.1** -- optimize the
 fixtures with the DH gradient and compare against an FD-driven optimization. If
 stiff coordinates agree to <0.05 pm, **ship it behind the flag with the residual
 documented as a known bound** and stop hunting. A bounded, measured, non-blocking

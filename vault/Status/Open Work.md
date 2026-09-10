@@ -1402,6 +1402,61 @@ were corrected in the same pass: `CCGEN_UNRESTRICTED_CC` (U0) and
   Planck contracts, which is a rewrite of the surrounding assembly, not a
   one-term addition.
 
+  **The orbital Hessian is ELIMINATED (2026-09-10), and it was the handoff's
+  named next step.** `build_ks_orbital_hessian_op` carried 3.6x leverage on the
+  final gradient and had never been matched against Eq. 41 term by term. It is
+  now gated to **machine precision** by a channel-resolved oracle needing **no
+  finite difference at all** (`PLANCK_DFT_DH_HESSIAN_AUDIT`): the non-XC
+  channels of the KS orbital Hessian ARE the RHF CPHF matrix's couplings, so
+  `build_rhf_cphf_matrix` -- an independent path (dense AO->MO ERI transform,
+  textbook `4(ai|jb) - (ab|ji) - (aj|bi)`) -- is an exact oracle for them.
+
+  **That sidesteps the whole blocker.** Three `kappa`-extraction attempts each
+  came up ~30x short because `U = C0^T S(R0) C(R+h)` mixes a genuine rotation
+  with an `O(dS)` metric mismatch. Comparing operator-to-operator at a FIXED
+  geometry needs no displaced `C` at all -- no metric contamination, no gauge
+  ambiguity, and no `U_ij = -1/2 S^(x)_ij` bookkeeping. **The Eqs. 19-21 route
+  the handoff prescribed is unnecessary; do not build it.**
+
+  Measured on all three fixtures: `diag` channel `0.000e+00` (and zero
+  off-diagonal contamination), `J + K` coupling **rel 3.6e-15 .. 3.8e-15**.
+  This gates JOINTLY the `(a,i)` packing, `kernel_scale = 2`, the
+  `dP = C_v x C_o^T + h.c.` trial density, and the hybrid `-0.5` K prefactor.
+  Non-vacuous -- three mutations (kernel scale `2 -> 1`; K prefactor
+  `-0.5 -> -1.0`; dropping the `h.c.` half of `dP`) caught at rel
+  `4.7e-01 / 1.1e+00 / 1.7e+01`, **14 orders above the clean value**.
+
+  **The XC channel -- `h_op`'s only channel with no CPHF counterpart -- is
+  BOUNDED OUT rather than verified, which is enough.** A scale control
+  (`PLANCK_DFT_DH_HESSIAN_XC_SCALE`, per trap #5: never on/off) measures its
+  ENTIRE contribution to the final gradient at **1.41e-4 / 1.18e-4**, i.e.
+  **0.36x / 0.44x the residual**. No error in it -- not even zeroing it
+  outright -- can close the gap. Scored as a candidate it gives cos
+  **-0.55 / -0.36** with a **52.5% scale spread**, the scorer's own
+  "INCONSISTENT -> fit artifact" verdict. Verified linear in the scale (second
+  difference 1.7e-05), so the bound extrapolates.
+
+  **Consequence: every component of the Z-vector path is now accounted for.**
+  H2.3 had established only that `A` is well-formed (symmetric, SPD, exactly
+  solved); it is now established that `A` is RIGHT. Combined with the
+  already-ruled-out list above, **the "error inside an existing term" framing
+  has no candidate term left inside the Z-vector**. The remaining suspect is
+  the one the section already names -- the DH-specific `W^PT2` / `Gamma^PT2` of
+  Eqs. 42-46 versus the HF-MP2 forms Planck contracts -- which is a rewrite of
+  the surrounding assembly, not a one-term addition.
+
+  **So the stop condition should now be taken seriously** (handoff section 7).
+  The residual is **0.041 pm on a stiff X-H stretch** against B2-PLYP's own
+  0.3 pm MAD claim. Next action is **H1.1** -- optimize the fixtures with the DH
+  gradient, compare against an FD-driven optimization, and if stiff coordinates
+  agree to <0.05 pm, **ship behind the flag with the residual documented as a
+  measured bound**. A bounded, non-blocking limitation is a legitimate outcome;
+  the alternative (rewriting the PT2 assembly to Eqs. 42-46) is a large change
+  motivated by a discrepancy an order of magnitude inside the method's own
+  accuracy. The only decisive test of "the paper's equations are incomplete" is
+  a cross-check against ORCA, which needs a licence -- say so rather than
+  substituting a weaker test.
+
   Also settled along the way: **Planck's PT2 assembly is sound** -- every
   accumulator is translationally invariant to 1e-14, and `*corr` reproduces the
   exact FD `0.27*dE_corr/dR`, so the whole residual lives in the XC term.
