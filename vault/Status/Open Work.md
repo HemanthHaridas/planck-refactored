@@ -1463,8 +1463,47 @@ were corrected in the same pass: `CCGEN_UNRESTRICTED_CC` (U0) and
   gradient by more than the entire residual, so `kx = 1.0` is pinned tightly
   rather than merely fitted.
 
-  **(a) and (b) were then checked, and BOTH are falsified (2026-09-10). Only
-  (c) remains.**
+  **SUPERSEDED 2026-09-10 by a direct per-half measurement. The residual is in
+  `*corr`, it is 1.24e-3 not 3.9e-4, and it has TWO scopes:**
+  `docs/DH_CORR_GRADIENT_DEFECT_SCOPE.md` and
+  `docs/DFT_GRID_CONVERGENCE_SCOPE.md`.
+
+  Everything below was measured against the **total** gradient. The KS and
+  `*corr` halves partially **cancel** there, so the total understates the real
+  defect by **3.2x**. Measuring them separately
+  (`PLANCK_DEBUG_DH_CHANNELS`) against Planck's own FD:
+
+  | half | `max|analytic - FD|` | magnitude | share |
+  |---|---|---|---|
+  | KS | **1.02e-6** | 1.27e-1 | 0% |
+  | `*corr` | **1.24e-3** | 1.88e-2 | **100%** |
+
+  So Planck's KS gradient is correct and `*corr` is **6.63%** wrong against the
+  FD of the energy it differentiates. The findings below that rest on an exact
+  identity or a scale-free ratio survive; those that rest on a **magnitude vs
+  the total** must be re-derived against `corr_FD`. The scope doc carries the
+  per-finding table.
+
+  **A separate, general DFT defect was found in the same pass: Planck's grid
+  does not converge.** At ultrafine (49824 pts) the energy still moves 2.9e-5
+  Eh and the gradient 9.3e-5 Ha/Bohr, where PySCF at a *smaller* 47784 points
+  is converged to 1.4e-7 — **680x tighter**. Root cause isolated: Planck uses
+  **44 radial points** for a second-row atom where ~75 are needed
+  (`radial_row_factor` is fixed at 5 for all four levels), while its angular
+  table is comparable to PySCF's. Confirmed by pinning the angular grid at 590
+  and varying only nr: at 44 the energy still moves 3.9e-5, at 60 it is 1.1e-6,
+  at 75 it is 1.8e-8. **This affects every DFT energy, gradient, geomopt and
+  frequency in the code, not just the double hybrid.**
+
+  **The two are independent** — `*corr` moves only 6.8e-8 between fine and
+  ultrafine against its 1.24e-3 defect (18000x apart) — so either can be done
+  first.
+
+  ---
+
+  **(a) and (b) as originally framed were checked, and both were falsified
+  (2026-09-10) — but note the caveat above: those were total-gradient
+  measurements.**
 
   **(a) -- a combination error rather than a term error. Negative, three ways.**
   Per-term translational invariance is clean to ~1e-14 for every physical
