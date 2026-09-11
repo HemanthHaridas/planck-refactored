@@ -227,8 +227,56 @@ amplitude-integral `W_ia`. D7 verified `zeta`'s oo/vv blocks and could not
 reach ov/vo; **D9 now supplies that oracle**
 (`tests/pyscf/dh_zov_derivation_check.py`). That is A6.
 
-**A6 (new, now the top item): derive `zeta`'s ov/vo blocks with the D9
-machinery and compare against `zeta_weights(v,o) = eps_occ(i)`.** A wrong ov/vo
+**A6 ATTEMPTED 2026-09-11 and the model is VOID -- no verdict on any `zeta`
+convention.** `tests/pyscf/dh_zeta_ov_derivation_check.py` is kept and marked
+void in its own docstring. **Do not cite its convention scores.**
+
+*Why it is void:* production's `corr_relaxed_mo` carries THREE block families --
+oo (`doo+doo^T`) and vv (`dvv+dvv^T`) from the MP2 unrelaxed density, plus
+ov/vo from the Z-vector (`mp2_gradient.cpp:403-405, 285-288`). `doo`/`dvv` are
+amplitude bilinears (`mp2_rmp2.cpp:89-124`). The model has **no amplitudes**, so
+it built `D` from the Z-vector alone -- measured `max|D_vv| = 0.000e+00`.
+`zeta`'s D7-verified oo/vv weights then multiply nothing while the target
+contains their contribution in full, so every convention scores cos ~ 0
+(-0.0846 / -0.0600 / +0.0003 / 0) at 2-5x the target magnitude. **That is the
+model failing, not evidence about `zeta`.**
+
+*What a real A6 needs:* explicit amplitudes. `E_pt2 = sum_ia |v_ia|^2/(eps_i -
+eps_a)` has implied `t_ia = v_ia/(eps_i - eps_a)`, so `doo`/`dvv` can be
+**derived** rather than invented, leaving `zeta`'s ov/vo weight as the only free
+variable. The verify condition is unchanged: the derived convention must remove
+the defect at coefficient 1 on all three fixtures, with no fitted scale.
+
+**TWO FINDINGS FROM THE ATTEMPT THAT ARE SOUND, and constrain the rewrite:**
+
+**(i) The SCF orbital Hessian is singular BY CONSTRUCTION.** `E_scf` depends
+only on the occupied *subspace*, so oo and vv rotations leave it exactly
+invariant -- verified at four sizes, not just the toy:
+
+| (NB,NO) | max abs dE oo | max abs dE vv | max abs dE ov |
+|---|---|---|---|
+| (3,1) | n/a | **0.00e+00** | 9.53e-01 |
+| (6,2) | 2.22e-16 | **0.00e+00** | 4.11e-01 |
+| (8,3) | 4.44e-16 | **0.00e+00** | 6.22e-01 |
+| (10,4) | 4.44e-16 | **0.00e+00** | 6.62e-01 |
+
+`E_pt2` is *not* vv-invariant over the same rotations (-0.007457 -> -0.006932),
+which is the D9 corollary. **Consequence, and a standing constraint on any
+rewrite: `H z = -L` must be solved on the ov subspace ALONE.** Solving it over
+the full generator set divides `L` by machine noise -- measured cond **6.3e15**
+and `max|z| = 1.03e+13`, which silently swamped all four conventions identically
+and is what made the first A6 run look like a result.
+
+**(ii) 10.9% of the Lagrangian lies in that null space** (`|L_vv|/|L| = 0.109`)
+-- a direction **no orbital response can carry**. A4 left **17-33%** of the
+defect unexplained after scaling `s_zeta`. Whether these are the same object is
+**UNMEASURED**: it needs a production vv-channel probe, which does not exist.
+**Do not assert the correspondence from a toy model** -- that is the fixture
+trap this arc keeps hitting.
+
+**A6 (original statement, still the target once the model carries amplitudes):
+derive `zeta`'s ov/vo blocks with the D9 machinery and compare against
+`zeta_weights(v,o) = eps_occ(i)`.** A wrong ov/vo
 convention would produce exactly this signature -- a term that is ~right in
 direction, needs a >1 multiplier, and leaves a size-dependent remainder,
 because the ov/vo blocks scale differently with the occupied-virtual gap than
