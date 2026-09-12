@@ -147,6 +147,34 @@ namespace DFT
                 return (spin_ == Spin::Polarized) ? 6 : 1;
             }
 
+            // Per-point component counts for libxc's THIRD derivative arrays
+            // (N3.5.7, docs/DOUBLE_HYBRID_GRADIENT_KS_VEFF_SCOPE.md). Same
+            // "independent symmetric tuples" packing as the second-derivative
+            // counts above; the polarized numbers are libxc's documented
+            // kxc block sizes (src/util.c internal_counters_set_{lda,gga}).
+            // Unpolarized: all 1. Only the unpolarized path is exercised by
+            // the RKS double-hybrid gradient; polarized counts are here for
+            // the future UKS extension (N3.7).
+            int v3rho3_components() const noexcept
+            {
+                return (spin_ == Spin::Polarized) ? 4 : 1;
+            }
+
+            int v3rho2sigma_components() const noexcept
+            {
+                return (spin_ == Spin::Polarized) ? 9 : 1;
+            }
+
+            int v3rhosigma2_components() const noexcept
+            {
+                return (spin_ == Spin::Polarized) ? 12 : 1;
+            }
+
+            int v3sigma3_components() const noexcept
+            {
+                return (spin_ == Spin::Polarized) ? 10 : 1;
+            }
+
             int kind() const noexcept
             {
                 return func_.info ? func_.info->kind : XC_EXCHANGE_CORRELATION;
@@ -321,6 +349,16 @@ namespace DFT
                 return is_lda_like() || is_gga_like();
             }
 
+            // libxc exit(1)s inside xc_{lda,gga}_kxc if the functional was
+            // built without third derivatives (DISABLE_KXC, the upstream
+            // default -- Planck overrides it to OFF in CMakeLists.txt). Guard
+            // every kxc call with this so a stray functional is a clean
+            // std::unexpected, not a process abort.
+            bool has_kxc() const noexcept
+            {
+                return func_.info && (func_.info->flags & XC_FLAGS_HAVE_KXC);
+            }
+
             std::expected<void, std::string> evaluate_lda_exc_vxc(
                 const std::vector<double> &rho,
                 int npoints,
@@ -478,6 +516,97 @@ namespace DFT
                         v2rho2.data() + static_cast<std::size_t>(start) * nv2rho2,
                         v2rhosigma.data() + static_cast<std::size_t>(start) * nv2rhosigma,
                         v2sigma2.data() + static_cast<std::size_t>(start) * nv2sigma2);
+                }
+                return {};
+            }
+
+            // Analytic XC THIRD derivative (N3.5.7,
+            // docs/DOUBLE_HYBRID_GRADIENT_KS_VEFF_SCOPE.md). Eq. 33's Term 1
+            // of the double-hybrid PT2 gradient differentiates the response
+            // operator R(D'), which already carries f^(2), so it needs
+            // f^(3). Mirrors evaluate_lda_fxc/evaluate_gga_fxc exactly --
+            // same chunked/threaded shape, guards, pointwise-map argument.
+            std::expected<void, std::string> evaluate_lda_kxc(
+                const std::vector<double> &rho,
+                int npoints,
+                std::vector<double> &v3rho3) const
+            {
+                if (!is_lda_like())
+                    return std::unexpected("evaluate_lda_kxc requires an LDA functional");
+                if (!has_kxc())
+                    return std::unexpected("evaluate_lda_kxc: functional '" + name() +
+                                           "' was built without third derivatives (kxc)");
+                if (npoints <= 0)
+                    return std::unexpected("evaluate_lda_kxc requires at least one grid point");
+                if (rho.size() != static_cast<std::size_t>(npoints * spin_components()))
+                    return std::unexpected("evaluate_lda_kxc received an invalid rho array size");
+
+                v3rho3.resize(static_cast<std::size_t>(npoints * v3rho3_components()));
+
+                const int nspin = spin_components();
+                const int nv3rho3 = v3rho3_components();
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static) if (!omp_in_parallel())
+#endif
+                for (int start = 0; start < npoints; start += xc_chunk_points)
+                {
+                    const int count = std::min(xc_chunk_points, npoints - start);
+                    xc_lda_kxc(
+                        &func_,
+                        count,
+                        const_cast<double *>(rho.data()) + static_cast<std::size_t>(start) * nspin,
+                        v3rho3.data() + static_cast<std::size_t>(start) * nv3rho3);
+                }
+                return {};
+            }
+
+            std::expected<void, std::string> evaluate_gga_kxc(
+                const std::vector<double> &rho,
+                const std::vector<double> &sigma,
+                int npoints,
+                std::vector<double> &v3rho3,
+                std::vector<double> &v3rho2sigma,
+                std::vector<double> &v3rhosigma2,
+                std::vector<double> &v3sigma3) const
+            {
+                if (!is_gga_like())
+                    return std::unexpected("evaluate_gga_kxc requires a GGA-like functional");
+                if (!has_kxc())
+                    return std::unexpected("evaluate_gga_kxc: functional '" + name() +
+                                           "' was built without third derivatives (kxc)");
+                if (npoints <= 0)
+                    return std::unexpected("evaluate_gga_kxc requires at least one grid point");
+                if (rho.size() != static_cast<std::size_t>(npoints * spin_components()))
+                    return std::unexpected("evaluate_gga_kxc received an invalid rho array size");
+                if (sigma.size() != static_cast<std::size_t>(npoints * sigma_components()))
+                    return std::unexpected("evaluate_gga_kxc received an invalid sigma array size");
+
+                v3rho3.resize(static_cast<std::size_t>(npoints * v3rho3_components()));
+                v3rho2sigma.resize(static_cast<std::size_t>(npoints * v3rho2sigma_components()));
+                v3rhosigma2.resize(static_cast<std::size_t>(npoints * v3rhosigma2_components()));
+                v3sigma3.resize(static_cast<std::size_t>(npoints * v3sigma3_components()));
+
+                const int nspin = spin_components();
+                const int nsigma = sigma_components();
+                const int nv3rho3 = v3rho3_components();
+                const int nv3rho2sigma = v3rho2sigma_components();
+                const int nv3rhosigma2 = v3rhosigma2_components();
+                const int nv3sigma3 = v3sigma3_components();
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static) if (!omp_in_parallel())
+#endif
+                for (int start = 0; start < npoints; start += xc_chunk_points)
+                {
+                    const int count = std::min(xc_chunk_points, npoints - start);
+                    xc_gga_kxc(
+                        &func_,
+                        count,
+                        const_cast<double *>(rho.data()) + static_cast<std::size_t>(start) * nspin,
+                        const_cast<double *>(sigma.data()) + static_cast<std::size_t>(start) * nsigma,
+                        v3rho3.data() + static_cast<std::size_t>(start) * nv3rho3,
+                        v3rho2sigma.data() + static_cast<std::size_t>(start) * nv3rho2sigma,
+                        v3rhosigma2.data() + static_cast<std::size_t>(start) * nv3rhosigma2,
+                        v3sigma3.data() + static_cast<std::size_t>(start) * nv3sigma3);
                 }
                 return {};
             }

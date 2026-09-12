@@ -1,10 +1,12 @@
 #include "driver.h"
 
 #include "analytic_hessian.h"
+#include "ks_orbital_hessian.h"
 #include "post_hf/casscf/aug-hessian.h"
 #include "post_hf/casscf/orbital.h"
 
 #include <Eigen/QR>
+#include <Eigen/Eigenvalues>
 
 #include <cstdlib>
 #include <algorithm>
@@ -2037,80 +2039,34 @@ namespace DFT::Driver
                             for (int i = 0; i < n_occ_i; ++i)
                                 g(a * n_occ_i + i) = F_mo(n_occ_i + a, i);
 
-                        const Eigen::VectorXd diag_term =
-                            DFT::Driver::orbital_energy_difference_diagonal(eps_soscf_prev, n_occ_i);
-
-                        const auto h_op = [&](const Eigen::VectorXd &x) -> Eigen::VectorXd
-                        {
-                            // dP = C_virt*unpack(x)*C_occ^T + h.c. -- half of the
-                            // true dP/dt = [R,P0] = 2*dP (see the scale block
-                            // above). The 4x/8x split is applied at the return.
-                            Eigen::MatrixXd x_mat(n_virt_i, n_occ_i);
-                            for (int a = 0; a < n_virt_i; ++a)
-                                for (int i = 0; i < n_occ_i; ++i)
-                                    x_mat(a, i) = x(a * n_occ_i + i);
-                            const Eigen::MatrixXd d1 = C_virt_prev * x_mat * C_occ_prev.transpose();
-                            const Eigen::MatrixXd dP = d1 + d1.transpose();
-
-                            const Eigen::MatrixXd dJ = _compute_2e_j_direct(
-                                prepared.shell_pairs, dP, calculator._shells.nbasis(),
-                                calculator._integral._engine, HartreeFock::ERIKernel::Coulomb,
-                                0.0, calculator._integral._tol_eri,
-                                calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
-                                                                   : nullptr);
-                            const Eigen::VectorXd J_packed = DFT::Driver::pack_hessian_vector_product_cphf_order(
-                                dJ, C_occ_prev, C_virt_prev);
-
-                            const auto dV_xc = DFT::Driver::compute_analytic_xc_hessian_vector_product(
-                                prepared.molecular_grid, prepared.ao_grid, density, dP,
-                                x_functional, c_functional);
-                            if (!dV_xc)
-                                return Eigen::VectorXd::Zero(x.size());
-                            const Eigen::VectorXd xc_packed = DFT::Driver::pack_hessian_vector_product_cphf_order(
-                                *dV_xc, C_occ_prev, C_virt_prev);
-
-                            // K response (SOSCF_DFT.md invariant 3): a hybrid's KS
-                            // Fock carries -0.5*(c_fr*K_Coulomb + c_sr*K_SR),
-                            // K linear in the density exactly like J, so the
-                            // Hessian gains delta of it on the trial dP with the
-                            // same coeff/sign/kernel decomposition the KS build
-                            // uses (src/dft/driver.cpp assemble_current_ks_potential,
-                            // the RKS unpolarized branch). H2 wired c_fr (global
-                            // hybrids); H3 adds the c_sr ShortRange branch and
-                            // lifts the gate for range-separated hybrids too.
-                            Eigen::VectorXd K_packed = Eigen::VectorXd::Zero(x.size());
-                            {
-                                const double c_fr = xc_grid->full_range_exchange_coefficient;
-                                const double c_sr = xc_grid->short_range_exchange_coefficient;
-                                if (c_fr != 0.0 || c_sr != 0.0)
-                                {
-                                    Eigen::MatrixXd dK = Eigen::MatrixXd::Zero(nbasis, nbasis);
-                                    if (c_fr != 0.0)
-                                        dK.noalias() += c_fr * _compute_2e_k_direct(
-                                            prepared.shell_pairs, dP, calculator._shells.nbasis(),
-                                            calculator._integral._engine, HartreeFock::ERIKernel::Coulomb,
-                                            0.0, calculator._integral._tol_eri,
-                                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
-                                                                              : nullptr);
-                                    if (c_sr != 0.0)
-                                        dK.noalias() += c_sr * _compute_2e_k_direct(
-                                            prepared.shell_pairs, dP, calculator._shells.nbasis(),
-                                            calculator._integral._engine, HartreeFock::ERIKernel::ShortRange,
-                                            xc_grid->range_separation_omega, calculator._integral._tol_eri,
-                                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
-                                                                              : nullptr);
-                                    K_packed = DFT::Driver::pack_hessian_vector_product_cphf_order(
-                                        -0.5 * dK, C_occ_prev, C_virt_prev);
-                                }
-                            }
-
-                            // diag .* x + 2 * kernel  (see the scale block
-                            // above): the kernel carries twice the diagonal's
-                            // weight because dP/dkappa = 2*dP and the kernel is
-                            // bilinear. Paired with the unscaled g = F_mo.
-                            return diag_term.cwiseProduct(x) +
-                                   2.0 * (J_packed + xc_packed + K_packed);
-                        };
+                        // The KS orbital Hessian h_op is lifted into its own TU
+                        // (src/dft/ks_orbital_hessian.{h,cpp}) so the analytic
+                        // double-hybrid gradient's Z-vector solve uses the exact
+                        // same operator. This branch is a pure caller: same
+                        // diag + s*(J + xc + K) with s = 2 for RKS
+                        // (docs/SOSCF_DFT.md invariant 2/3).
+                        DFT::Driver::KsOrbitalHessianInputs h_in;
+                        h_in.shell_pairs = &prepared.shell_pairs;
+                        h_in.molecular_grid = &prepared.molecular_grid;
+                        h_in.ao_grid = &prepared.ao_grid;
+                        h_in.density = density;
+                        h_in.C_occ = C_occ_prev;
+                        h_in.C_virt = C_virt_prev;
+                        h_in.eps = eps_soscf_prev;
+                        h_in.x_functional = &x_functional;
+                        h_in.c_functional = &c_functional;
+                        h_in.engine = calculator._integral._engine;
+                        h_in.tol_eri = calculator._integral._tol_eri;
+                        h_in.sym_ops = calculator._use_integral_symmetry
+                                           ? &calculator._integral_symmetry_ops
+                                           : nullptr;
+                        h_in.full_range_exchange_coefficient =
+                            xc_grid->full_range_exchange_coefficient;
+                        h_in.short_range_exchange_coefficient =
+                            xc_grid->short_range_exchange_coefficient;
+                        h_in.range_separation_omega = xc_grid->range_separation_omega;
+                        h_in.kernel_scale = 2.0; // RKS
+                        const auto h_op = DFT::Driver::build_ks_orbital_hessian_op(h_in);
                         const auto g_op = [&g]() -> Eigen::VectorXd
                         { return g; };
 
@@ -2262,6 +2218,19 @@ namespace DFT::Driver
                     result.total_energy = total_energy;
                     result.xc_energy = xc_grid->total_energy + ks_potential->exact_exchange_energy;
                     result.integrated_electrons = xc_grid->integrated_electrons;
+                    // PLANCK_DEBUG_GRID_ACC: absolute grid-accuracy probe.
+                    // int rho dr must equal the electron count EXACTLY, so the
+                    // deviation is a reference-free measure of the quadrature's
+                    // own error -- no PySCF, no FD, no fitting.
+                    if (std::getenv("PLANCK_DEBUG_GRID_ACC"))
+                        HartreeFock::Logger::logging(
+                            HartreeFock::LogLevel::Info, "Grid Accuracy :",
+                            std::format("integrated_electrons = {:.10f}, deviation = {:.3e}",
+                                        xc_grid->integrated_electrons,
+                                        [&]{ int ne = 0;
+                                             for (auto z : calculator._molecule.atomic_numbers) ne += static_cast<int>(z);
+                                             ne -= calculator._molecule.charge;
+                                             return std::abs(xc_grid->integrated_electrons - static_cast<double>(ne)); }()));
                     result.solvation_energy = pcm_energy;
 
                     if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter))
@@ -2883,6 +2852,14 @@ namespace DFT::Driver
                 !functionals.has_double_hybrid_pt2)
                 return {};
 
+            // Restricted global-double-hybrid Cartesian gradients use the
+            // validated literal Eq. (47) RHS/overlap and hybrid Eq. (46)
+            // complement. Range-separated and UKS variants remain excluded.
+            if (functionals.has_double_hybrid_pt2 && !functionals.has_range_separation &&
+                calculator._scf._scf != HartreeFock::SCFType::UHF &&
+                calculator._calculation == HartreeFock::CalculationType::Gradient)
+                return {};
+
             return std::unexpected(
                 std::format(
                     "{} currently supports only single-point energies for range-separated and double-hybrid functionals",
@@ -2893,7 +2870,8 @@ namespace DFT::Driver
             HartreeFock::Calculator &calculator,
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             const InitializedFunctionals &functionals,
-            Result &result)
+            Result &result,
+            HartreeFock::Correlation::RMP2Result *restricted_pt2_result = nullptr)
         {
             if (std::abs(functionals.perturbative_correlation_coefficient) <= 1.0e-14)
                 return {};
@@ -2902,6 +2880,8 @@ namespace DFT::Driver
                 calculator._scf._scf == HartreeFock::SCFType::UHF
                     ? [&]() -> std::expected<void, std::string>
                       {
+                          if (restricted_pt2_result != nullptr)
+                              return std::unexpected("DFT double-hybrid gradients support RKS only.");
                           auto mp2_res = HartreeFock::Correlation::ump2_kernel(calculator, shell_pairs, calculator._mp2);
                           return mp2_res
                                      ? HartreeFock::Correlation::apply_ump2_result(calculator, *mp2_res)
@@ -2910,6 +2890,8 @@ namespace DFT::Driver
                     : [&]() -> std::expected<void, std::string>
                       {
                           auto mp2_res = HartreeFock::Correlation::rmp2_kernel(calculator, shell_pairs, calculator._mp2);
+                          if (mp2_res && restricted_pt2_result != nullptr)
+                              *restricted_pt2_result = *mp2_res;
                           return mp2_res
                                      ? HartreeFock::Correlation::apply_rmp2_result(calculator, *mp2_res)
                                      : std::unexpected(mp2_res.error());
@@ -3972,6 +3954,7 @@ namespace DFT::Driver
             calculator._gradient = *wf_grad + *xc_grad;
             if (dft_gradient_debug_enabled())
                 print_gradient_component_report("KS-total", calculator._gradient);
+
             return calculator._gradient;
         }
 
@@ -4151,6 +4134,212 @@ namespace DFT::Driver
             exact_exchange_energy);
     }
 
+    std::expected<Gradient::DHEq33NonXCDerivatives, std::string>
+    build_dh_eq33_derivative_integrals(const HartreeFock::Calculator &calculator)
+    {
+        if (calculator._basis._basis != HartreeFock::BasisType::Cartesian ||
+            calculator._molecule.natoms == 0 || calculator._shells.nbasis() == 0)
+            return std::unexpected("DH Eq. 33 derivatives require a nonempty Cartesian AO basis and molecule.");
+        const int nbasis = static_cast<int>(calculator._shells.nbasis());
+        const int ncoord = static_cast<int>(3 * calculator._molecule.natoms);
+        const auto &basis_functions = calculator._shells._basis_functions;
+        if (static_cast<int>(basis_functions.size()) != nbasis)
+            return std::unexpected("DH Eq. 33 derivatives: basis-function list does not match AO dimension.");
+
+        std::vector<int> bf_atom(static_cast<std::size_t>(nbasis), -1);
+        for (int mu = 0; mu < nbasis; ++mu)
+        {
+            const Eigen::Vector3d center = basis_functions[static_cast<std::size_t>(mu)]._shell->_center;
+            double closest_distance_squared = std::numeric_limits<double>::infinity();
+            int closest_atom = -1;
+            for (std::size_t atom = 0; atom < calculator._molecule.natoms; ++atom)
+            {
+                const Eigen::Vector3d atom_center = calculator._molecule._standard.row(
+                    static_cast<Eigen::Index>(atom)).transpose();
+                const double distance_squared = (center - atom_center).squaredNorm();
+                if (distance_squared < closest_distance_squared)
+                {
+                    closest_distance_squared = distance_squared;
+                    closest_atom = static_cast<int>(atom);
+                }
+            }
+            if (closest_atom < 0 || closest_distance_squared > 1e-18)
+                return std::unexpected("DH Eq. 33 derivatives: could not assign AO basis function to a nucleus.");
+            bf_atom[static_cast<std::size_t>(mu)] = closest_atom;
+        }
+
+        Gradient::DHEq33NonXCDerivatives out;
+        out.hamiltonian_ao.assign(static_cast<std::size_t>(ncoord), Eigen::MatrixXd::Zero(nbasis, nbasis));
+        out.overlap_ao.assign(static_cast<std::size_t>(ncoord), Eigen::MatrixXd::Zero(nbasis, nbasis));
+        out.eri_ao.assign(static_cast<std::size_t>(ncoord),
+            std::vector<double>(static_cast<std::size_t>(nbasis) * nbasis * nbasis * nbasis, 0.0));
+        const auto eri_index = [nbasis](int mu, int nu, int ka, int ta)
+        {
+            return ((static_cast<std::size_t>(mu) * nbasis + nu) * nbasis + ka) * nbasis + ta;
+        };
+        for (int mu = 0; mu < nbasis; ++mu)
+            for (int nu = 0; nu < nbasis; ++nu)
+            {
+                const HartreeFock::ShellPair pair_mu_nu(
+                    basis_functions[static_cast<std::size_t>(mu)], basis_functions[static_cast<std::size_t>(nu)]);
+                const HartreeFock::ShellPair pair_nu_mu(
+                    basis_functions[static_cast<std::size_t>(nu)], basis_functions[static_cast<std::size_t>(mu)]);
+                const auto derivative_mu = HartreeFock::ObaraSaika::_compute_1e_deriv_A(pair_mu_nu);
+                const auto derivative_nu = HartreeFock::ObaraSaika::_compute_1e_deriv_A(pair_nu_mu);
+                for (std::size_t atom = 0; atom < calculator._molecule.natoms; ++atom)
+                    for (int q = 0; q < 3; ++q)
+                    {
+                        const int coordinate = 3 * static_cast<int>(atom) + q;
+                        if (bf_atom[static_cast<std::size_t>(mu)] == static_cast<int>(atom))
+                        {
+                            out.overlap_ao[static_cast<std::size_t>(coordinate)](mu, nu) += derivative_mu[q];
+                            out.hamiltonian_ao[static_cast<std::size_t>(coordinate)](mu, nu) +=
+                                derivative_mu[q + 3] +
+                                HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(
+                                    pair_mu_nu, calculator._molecule)[q];
+                        }
+                        if (bf_atom[static_cast<std::size_t>(nu)] == static_cast<int>(atom))
+                        {
+                            out.overlap_ao[static_cast<std::size_t>(coordinate)](mu, nu) += derivative_nu[q];
+                            out.hamiltonian_ao[static_cast<std::size_t>(coordinate)](mu, nu) +=
+                                derivative_nu[q + 3] +
+                                HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(
+                                    pair_nu_mu, calculator._molecule)[q];
+                        }
+                        const Eigen::Vector3d atom_center = calculator._molecule._standard.row(
+                            static_cast<Eigen::Index>(atom)).transpose();
+                        out.hamiltonian_ao[static_cast<std::size_t>(coordinate)](mu, nu) +=
+                            HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(
+                                pair_mu_nu, atom_center, calculator._molecule.atomic_numbers[atom], q);
+                    }
+            }
+        for (int mu = 0; mu < nbasis; ++mu)
+            for (int nu = 0; nu < nbasis; ++nu)
+                for (int ka = 0; ka < nbasis; ++ka)
+                    for (int ta = 0; ta < nbasis; ++ta)
+                    {
+                        const HartreeFock::ShellPair left(
+                            basis_functions[static_cast<std::size_t>(mu)], basis_functions[static_cast<std::size_t>(nu)]);
+                        const HartreeFock::ShellPair right(
+                            basis_functions[static_cast<std::size_t>(ka)], basis_functions[static_cast<std::size_t>(ta)]);
+                        const auto derivative = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(left, right);
+                        const int centers[4] = {
+                            bf_atom[static_cast<std::size_t>(mu)], bf_atom[static_cast<std::size_t>(nu)],
+                            bf_atom[static_cast<std::size_t>(ka)], bf_atom[static_cast<std::size_t>(ta)]};
+                        const std::size_t index = eri_index(mu, nu, ka, ta);
+                        for (int center = 0; center < 4; ++center)
+                            for (int q = 0; q < 3; ++q)
+                                out.eri_ao[static_cast<std::size_t>(3 * centers[center] + q)][index] +=
+                                    derivative[3 * center + q];
+                    }
+        return out;
+    }
+
+    std::expected<DHEq41ZVectorProducts, std::string>
+    build_dh_eq41_response_and_solve_zvector(
+        HartreeFock::Calculator &calculator,
+        const PreparedSystem &prepared,
+        const XC::Functional &exchange_functional,
+        const XC::Functional &correlation_functional,
+        double exact_exchange_coefficient,
+        const HartreeFock::Correlation::RMP2Result &pt2_result,
+        double c_pt2)
+    {
+        if (calculator._scf._scf == HartreeFock::SCFType::UHF || calculator._info._scf.is_uhf ||
+            !calculator._info._is_converged || !std::isfinite(exact_exchange_coefficient) ||
+            exact_exchange_coefficient < 0.0 || !std::isfinite(c_pt2))
+            return std::unexpected("DH Eq. 41/Z-vector: converged restricted KS inputs are required.");
+        const Eigen::MatrixXd &density = calculator._info._scf.alpha.density;
+        const Eigen::Index nao = static_cast<Eigen::Index>(calculator._shells.nbasis());
+        const int nocc = pt2_result.n_occ;
+        const int nvirt = pt2_result.n_virt;
+        if (nocc <= 0 || nvirt <= 0 || density.rows() != nao || density.cols() != nao ||
+            pt2_result.mo_coeff.rows() != nao || pt2_result.mo_coeff.cols() != nocc + nvirt ||
+            pt2_result.mo_energy.size() != nocc + nvirt)
+            return std::unexpected("DH Eq. 41/Z-vector: inconsistent KS density or PT2 orbital dimensions.");
+
+        const Gradient::DHEq41XCInputs xc_inputs{
+            &prepared.molecular_grid, &prepared.ao_grid, density,
+            &exchange_functional, &correlation_functional};
+        const auto xc_response = Gradient::make_dh_eq41_xc_response_callback(xc_inputs);
+        if (!xc_response)
+            return std::unexpected("DH Eq. 41/Z-vector: XC response construction failed: " + xc_response.error());
+        const auto response = Gradient::make_dh_eq41_direct_eri_response_operator({
+            &prepared.shell_pairs, static_cast<std::size_t>(nao), calculator._integral._engine,
+            calculator._integral._tol_eri,
+            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr,
+            exact_exchange_coefficient, *xc_response});
+        if (!response)
+            return std::unexpected("DH Eq. 41/Z-vector: direct response construction failed: " + response.error());
+
+        DHEq41ZVectorProducts out;
+        out.response_operator = *response;
+        const auto amplitudes = Gradient::build_dh_pt2_amplitude_density(pt2_result, c_pt2);
+        if (!amplitudes) return std::unexpected(amplitudes.error());
+        out.amplitudes = *amplitudes;
+        const auto eq41 = Gradient::build_dh_eq41_response_density(
+            out.amplitudes, pt2_result.mo_coeff, out.response_operator);
+        if (!eq41) return std::unexpected(eq41.error());
+        out.eq41_response = *eq41;
+
+        std::vector<double> eri_local;
+        const std::vector<double> &eri_ao = HartreeFock::Correlation::ensure_eri(
+            calculator, prepared.shell_pairs, eri_local, "DH Eq. 40:");
+        out.mo_eri = HartreeFock::Correlation::transform_eri(
+            eri_ao, static_cast<std::size_t>(nao), pt2_result.mo_coeff,
+            pt2_result.mo_coeff, pt2_result.mo_coeff, pt2_result.mo_coeff);
+        const auto eq40 = Gradient::build_dh_eq40_amplitude_rhs(
+            pt2_result, out.amplitudes, out.mo_eri, c_pt2);
+        if (!eq40) return std::unexpected(eq40.error());
+        out.eq40_amplitude_rhs = *eq40;
+        // Eq. (40)'s compressed external plus internal form is equivalent to
+        // the literal four-coefficient Eq. (47) derivative.  The builder
+        // above returns that literal derivative in `three_external`; adding
+        // `three_internal` once more double-counts it. The production call
+        // skips that excluded bracket and uses the validated literal RHS.
+        const Eigen::MatrixXd c_occ = pt2_result.mo_coeff.leftCols(nocc);
+        const Eigen::MatrixXd c_virt = pt2_result.mo_coeff.rightCols(nvirt);
+        const auto rhs = Gradient::build_dh_lagrangian_rhs(
+            out.eq41_response, c_occ, c_virt, out.eq40_amplitude_rhs,
+            Gradient::DHRHSConvention::LiteralEq47);
+        if (!rhs) return std::unexpected(rhs.error());
+        out.lagrangian_rhs = *rhs;
+
+        const int nov = nocc * nvirt;
+        Eigen::MatrixXd hessian(nov, nov);
+        for (int col = 0; col < nov; ++col)
+        {
+            Eigen::MatrixXd unit = Eigen::MatrixXd::Zero(nvirt, nocc);
+            unit(col / nocc, col % nocc) = 1.0;
+            const auto action = Gradient::apply_dh_eq27_hessian(
+                unit, c_occ, c_virt, pt2_result.mo_energy, out.response_operator);
+            if (!action) return std::unexpected(action.error());
+            for (int a = 0; a < nvirt; ++a)
+                for (int i = 0; i < nocc; ++i)
+                    hessian(a * nocc + i, col) = action->total_ai(a, i);
+        }
+        Eigen::VectorXd rhs_vector(nov);
+        for (int a = 0; a < nvirt; ++a)
+            for (int i = 0; i < nocc; ++i)
+                rhs_vector(a * nocc + i) = -out.lagrangian_rhs.total_ai(a, i);
+        const Eigen::VectorXd z_vector = hessian.colPivHouseholderQr().solve(rhs_vector);
+        if (!z_vector.allFinite())
+            return std::unexpected("DH Eq. 27 Z-vector solve returned non-finite coefficients.");
+        out.z_ai = Eigen::MatrixXd::Zero(nvirt, nocc);
+        for (int a = 0; a < nvirt; ++a)
+            for (int i = 0; i < nocc; ++i)
+                out.z_ai(a, i) = z_vector(a * nocc + i);
+        const auto residual_action = Gradient::apply_dh_eq27_hessian(
+            out.z_ai, c_occ, c_virt, pt2_result.mo_energy, out.response_operator);
+        if (!residual_action) return std::unexpected(residual_action.error());
+        out.residual_max_abs = (residual_action->total_ai + out.lagrangian_rhs.total_ai).cwiseAbs().maxCoeff();
+        const double residual_limit = 1e-9 * std::max(1.0, out.lagrangian_rhs.total_ai.cwiseAbs().maxCoeff());
+        if (!std::isfinite(out.residual_max_abs) || out.residual_max_abs > residual_limit)
+            return std::unexpected(std::format(
+                "DH Eq. 27 Z-vector residual {:.3e} exceeds {:.3e}.", out.residual_max_abs, residual_limit));
+        return out;
+    }
+
     std::expected<PreparedSystem, std::string>
     prepare(HartreeFock::Calculator &calculator, const Options &options)
     {
@@ -4298,6 +4487,76 @@ namespace DFT::Driver
         {
             const Eigen::MatrixXd requested_gradient_frame_bohr =
                 calculator._molecule._coordinates;
+            if (functionals->has_double_hybrid_pt2)
+            {
+                if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+                    return std::unexpected("DFT double-hybrid analytic gradients do not implement solvent response.");
+                auto prepared = prepare(calculator, options);
+                if (!prepared)
+                    return std::unexpected(prepared.error());
+                auto result = run_ks_scf_scaffold(
+                    calculator, *prepared, functionals->exchange, functionals->correlation);
+                if (!result)
+                    return std::unexpected(result.error());
+                if (!result->converged)
+                    return *result;
+                HartreeFock::Correlation::RMP2Result pt2_result;
+                if (auto correction = apply_post_ks_double_hybrid_correction(
+                        calculator, prepared->shell_pairs, *functionals, *result, &pt2_result);
+                    !correction)
+                    return std::unexpected(correction.error());
+                const auto zvector = build_dh_eq41_response_and_solve_zvector(
+                    calculator, *prepared, functionals->exchange, functionals->correlation,
+                    functionals->implemented_exact_exchange_coefficient,
+                    pt2_result, functionals->perturbative_correlation_coefficient);
+                if (!zvector)
+                    return std::unexpected("DFT double-hybrid Z-vector construction failed: " + zvector.error());
+                const auto derivatives = build_dh_eq33_derivative_integrals(calculator);
+                if (!derivatives)
+                    return std::unexpected("DFT double-hybrid derivative-integral construction failed: " + derivatives.error());
+                const auto ao_hessian = evaluate_ao_hessian_on_grid(
+                    calculator._shells, prepared->molecular_grid);
+                if (!ao_hessian)
+                    return std::unexpected("DFT double-hybrid XC-II AO Hessian construction failed: " + ao_hessian.error());
+                const Gradient::DHEq33XCFixedDensityInputs xc_inputs{
+                    &calculator._molecule, &calculator._shells, &prepared->molecular_grid,
+                    &prepared->ao_grid, &*ao_hessian, calculator._info._scf.alpha.density,
+                    &functionals->exchange, &functionals->correlation};
+                const Gradient::DHGradientDriverInputs contract_inputs{
+                    &pt2_result, functionals->perturbative_correlation_coefficient,
+                    pt2_result.mo_coeff, pt2_result.mo_energy, zvector->mo_eri,
+                    zvector->response_operator, zvector->z_ai, *derivatives, xc_inputs};
+                const auto contract = Gradient::build_dh_gradient_driver_contract(contract_inputs);
+                if (!contract)
+                    return std::unexpected("DFT double-hybrid gradient contract failed: " + contract.error());
+                const double rhs_difference = (contract->lagrangian_rhs.total_ai -
+                    zvector->lagrangian_rhs.total_ai).cwiseAbs().maxCoeff();
+                const auto contract_action = Gradient::apply_dh_eq27_hessian(
+                    zvector->z_ai, pt2_result.mo_coeff.leftCols(pt2_result.n_occ),
+                    pt2_result.mo_coeff.rightCols(pt2_result.n_virt), pt2_result.mo_energy,
+                    zvector->response_operator);
+                if (!contract_action) return std::unexpected(contract_action.error());
+                const double contract_residual = (contract_action->total_ai +
+                    contract->lagrangian_rhs.total_ai).cwiseAbs().maxCoeff();
+                if (!std::isfinite(rhs_difference) || !std::isfinite(contract_residual) ||
+                    rhs_difference > 1e-12 || contract_residual > 1e-9)
+                    return std::unexpected("DH solver/contract RHS mismatch or contract Z residual failure.");
+                const auto pt2_correction = Gradient::build_dh_eq33_pt2_correction_gradient(*contract);
+                if (!pt2_correction)
+                    return std::unexpected("DFT double-hybrid Eq. 33 correction assembly failed: " + pt2_correction.error());
+                auto ks_gradient = compute_analytic_ks_gradient(calculator, *prepared, *functionals);
+                if (!ks_gradient)
+                    return std::unexpected("DFT double-hybrid KS gradient failed: " + ks_gradient.error());
+                if (ks_gradient->rows() != pt2_correction->total.rows() ||
+                    ks_gradient->cols() != 3 || pt2_correction->total.cols() != 3 ||
+                    !ks_gradient->allFinite() || !pt2_correction->total.allFinite())
+                    return std::unexpected("DFT double-hybrid gradient has invalid dimensions or values.");
+                const Eigen::MatrixXd total_gradient = *ks_gradient + pt2_correction->total;
+                calculator._gradient = rotate_gradient_to_requested_frame_if_needed(
+                    calculator, total_gradient, requested_gradient_frame_bohr);
+                print_gradient_report(calculator._gradient);
+                return *result;
+            }
             auto result = run_initial_single_point(calculator, options, *functionals);
             if (!result)
                 return std::unexpected(result.error());

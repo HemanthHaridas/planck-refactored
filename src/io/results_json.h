@@ -26,7 +26,9 @@ namespace HartreeFock::IO
             return std::unexpected("Failed to open JSON output file: " + path);
 
         const auto &mol = calc._molecule;
-        auto num = [](double v) { return std::format("{:.12g}", v); };
+        // Round-trip double precision is needed for molecular energy finite
+        // differences; use the normal results API rather than debug logs.
+        auto num = [](double v) { return std::format("{:.17g}", v); };
         auto mat_rows = [&](const Eigen::MatrixXd &m) -> std::string
         {
             std::string s = "[";
