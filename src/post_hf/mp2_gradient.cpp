@@ -251,6 +251,14 @@ namespace
 
 namespace HartreeFock::Correlation
 {
+    Eigen::MatrixXd contract_rmp2_one_electron_gradient(
+        const HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const Eigen::MatrixXd &density)
+    {
+        return one_electron_gradient_from_density(calculator, shell_pairs, density);
+    }
+
     std::expected<RMP2Lagrangian, std::string> build_rmp2_lagrangian(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
@@ -848,6 +856,9 @@ namespace HartreeFock::Correlation
         out.zeta_ao = zeta_ao;
         out.vhf_s1occ_ao = vhf_s1occ;
         out.Gamma_pair_ao = std::move(pair_dm2_ao);
+        out.two_e_nonseparable_gradient = two_e_terms;
+        out.two_e_separable_gradient = vhf1_terms;
+        out.overlap_gradient = overlap_terms;
         return out;
     }
 

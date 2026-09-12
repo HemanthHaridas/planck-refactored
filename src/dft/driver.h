@@ -13,6 +13,7 @@
 #include "base/grid.h"
 #include "base/types.h"
 #include "base/wrapper.h"
+#include "dh_pt2_gradient.h"
 #include "integrals/shellpair.h"
 #include "ks_matrix.h"
 #include "response_packing.h"
@@ -47,6 +48,37 @@ namespace DFT::Driver
         double solvation_energy = 0.0;
         bool converged = false;
     };
+
+    // Restricted-KS Eq. (41)/(27) portion of the double-hybrid driver. The
+    // returned response operator borrows `prepared`'s grid/AO storage, so that
+    // storage must outlive the result. This helper does not assemble derivative
+    // integrals or a final nuclear gradient.
+    struct DHEq41ZVectorProducts
+    {
+        Gradient::DHEq41ResponseOperator response_operator;
+        Gradient::DHPT2AmplitudeDensity amplitudes;
+        Gradient::DHEq41ResponseDensity eq41_response;
+        Gradient::DHEq40AmplitudeRHS eq40_amplitude_rhs;
+        Gradient::DHLagrangianRHS lagrangian_rhs;
+        std::vector<double> mo_eri;
+        Eigen::MatrixXd z_ai;
+        double residual_max_abs = 0.0;
+    };
+
+    [[nodiscard]] std::expected<DHEq41ZVectorProducts, std::string>
+    build_dh_eq41_response_and_solve_zvector(
+        HartreeFock::Calculator &calculator,
+        const PreparedSystem &prepared,
+        const XC::Functional &exchange_functional,
+        const XC::Functional &correlation_functional,
+        double exact_exchange_coefficient,
+        const HartreeFock::Correlation::RMP2Result &pt2_result,
+        double c_pt2);
+
+    // AO derivative bundle for the correction-only non-XC Eq. (33) terms.
+    // Coordinates are atom-major: index = 3 * atom + Cartesian component.
+    [[nodiscard]] std::expected<Gradient::DHEq33NonXCDerivatives, std::string>
+    build_dh_eq33_derivative_integrals(const HartreeFock::Calculator &calculator);
 
     // TDDFT excitation-space and finite-difference XC kernel machinery
     // (docs/DFT_ANALYTIC_FXC_HESSIAN.md, F3.1). These were originally

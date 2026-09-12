@@ -90,8 +90,9 @@ of such gradients.
 
 **It does NOT confound the `*corr` defect** — `*corr` moves 6.8e-8 between fine
 and ultrafine against a 1.24e-3 defect (18000x apart), so
-`docs/DH_CORR_GRADIENT_DEFECT_SCOPE.md` is independent and either can be done
-first.
+the historical DH correlation-gradient investigation was independent of this
+grid-convergence work. That defect is now resolved; see
+[the consolidated DH implementation reference](DH_IMPLEMENTATION.md#12-resolved-defects-and-superseded-interpretations).
 
 ## 5. Steps
 

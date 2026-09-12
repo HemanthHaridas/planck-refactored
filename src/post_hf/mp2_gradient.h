@@ -25,6 +25,10 @@ namespace HartreeFock::Correlation
         Eigen::MatrixXd zeta_ao;
         Eigen::MatrixXd vhf_s1occ_ao;
         std::vector<double> Gamma_pair_ao;
+        // Exposed for the DH B2 direct Eq. (46)/(47) equivalence gate.
+        Eigen::MatrixXd two_e_nonseparable_gradient;
+        Eigen::MatrixXd two_e_separable_gradient;
+        Eigen::MatrixXd overlap_gradient;
     };
 
     // Orbital-basis half of the RMP2 gradient: the unrelaxed correlation
@@ -125,6 +129,13 @@ namespace HartreeFock::Correlation
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const RMP2Result &result,
         RMP2PreSolved presolved = {});
+
+    // Correction-only <D h^(x)> primitive shared by the direct double-hybrid
+    // Eq. (33) assembly. `density` is not augmented with the HF reference.
+    Eigen::MatrixXd contract_rmp2_one_electron_gradient(
+        const HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const Eigen::MatrixXd &density);
 
     std::expected<UMP2GradientIntermediates, std::string> build_ump2_gradient_intermediates(
         HartreeFock::Calculator &calculator,

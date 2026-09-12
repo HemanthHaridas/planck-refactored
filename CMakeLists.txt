@@ -415,12 +415,8 @@ set(DFT_LIB_SRC
     ${SRC_DIR}/dft/ao_grid.h
     ${SRC_DIR}/dft/dft_gradient.cpp
     ${SRC_DIR}/dft/dft_gradient.h
-    ${SRC_DIR}/dft/dft_kernel_gradient.cpp
-    ${SRC_DIR}/dft/dft_kernel_gradient.h
-    ${SRC_DIR}/dft/dh_gradient.cpp
-    ${SRC_DIR}/dft/dh_gradient.h
-    ${SRC_DIR}/dft/dh_relaxed_density.cpp
-    ${SRC_DIR}/dft/dh_relaxed_density.h
+    ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+    ${SRC_DIR}/dft/dh_pt2_gradient.h
     ${SRC_DIR}/dft/driver.cpp
     ${SRC_DIR}/dft/driver.h
     ${SRC_DIR}/dft/ks_matrix.cpp
@@ -790,6 +786,38 @@ endif()
 find_package(Python3 COMPONENTS Interpreter)
 
 if(BUILD_TESTING)
+    # Detached UKS DH U0 contract only; no production workflow enablement.
+    add_executable(planck-udh-pt2-energy-contract
+        ${CMAKE_SOURCE_DIR}/tests/udh_pt2_energy_contract.cpp
+        ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+    )
+    target_include_directories(planck-udh-pt2-energy-contract PRIVATE
+        ${SRC_DIR} ${eigen_SOURCE_DIR}
+    )
+    add_test(NAME planck-udh-pt2-energy-contract COMMAND planck-udh-pt2-energy-contract)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME planck-udh-u0-fixtures
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_u0_fixtures.py -v)
+    endif()
+
+    add_executable(planck-dh-pt2-amplitude-density
+        ${CMAKE_SOURCE_DIR}/tests/dh_pt2_amplitude_density.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-dh-pt2-amplitude-density PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR}
+    )
     add_executable(planck-casscf-internal
         ${CMAKE_SOURCE_DIR}/tests/casscf_internal.cpp
         ${SRC_DIR}/post_hf/ci/ci.cpp
@@ -842,24 +870,6 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/dft_kxc_selfcheck.cpp
     )
 
-    # S2 (docs/DOUBLE_HYBRID_GRADIENT_KS_VEFF_SCOPE.md, N3.5.7.7): FD check
-    # of compute_dh_xc_pt2_gradient's LDA branch (Eq. 33 Term 1) against a
-    # real He2/STO-3G nuclear displacement -- needs real basis/grid/AO
-    # machinery (read_gbs_basis, MakeMolecularGrid, evaluate_ao_*_on_grid),
-    # not just xc_grid.cpp's density evaluator.
-    add_executable(planck-dft-kernel-gradient-fd
-        ${CMAKE_SOURCE_DIR}/tests/dft_kernel_gradient_fd.cpp
-        ${SRC_DIR}/dft/dft_kernel_gradient.cpp
-        ${SRC_DIR}/dft/dft_gradient.cpp
-        ${SRC_DIR}/dft/xc_grid.cpp
-        ${SRC_DIR}/basis/basis.cpp
-        ${SRC_DIR}/basis/gaussian.cpp
-        ${SRC_DIR}/basis/gbs_parser.cpp
-        ${SRC_DIR}/basis/spherical.cpp
-        ${SRC_DIR}/basis/spherical_recurrence.cpp
-        ${LOOKUP_SRC}
-    )
-
     # F3.3 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): the GGA analytic
     # Hessian-vector product's T1/T2/T3 terms, verified as isolated
     # point-level checks against libxc's own finite difference. Header-only
@@ -908,6 +918,21 @@ if(BUILD_TESTING)
         ${SRC_DIR}/dft/xc_grid.cpp
     )
 
+    add_executable(planck-dh-eq41-xc-response
+        ${CMAKE_SOURCE_DIR}/tests/dh_eq41_xc_response.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/dft/ks_matrix.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
     # D3.0 (docs/SOSCF_UHF_DFT_SCOPE.md): the polarized (UKS) sibling of the
     # above -- verifies compute_analytic_xc_hessian_vector_product_polarized
     # against F3.4's own point-level formulas (check_mixed/check_beta,
@@ -927,45 +952,6 @@ if(BUILD_TESTING)
     add_executable(planck-dft-density-response-linearity
         ${CMAKE_SOURCE_DIR}/tests/dft_density_response_linearity.cpp
         ${SRC_DIR}/dft/xc_grid.cpp
-    )
-
-    # N1.1 (docs/DOUBLE_HYBRID_GRADIENT_SCOPE.md): DFT::Gradient::
-    # build_pt2_mo_intermediates returns the gamma^1 blocks (shape, sign,
-    # hand-computed values) on a synthetic RMP2Result. build_pt2_mo_intermediates
-    # only calls rmp2_gamma1_intermediates, which is self-contained -- but it
-    # is compiled inside mp2_rmp2.cpp, whose other functions pull in the MP2
-    # ERI stack, hence the full integral/basis link list.
-    add_executable(planck-dh-gradient-pt2-intermediates
-        ${CMAKE_SOURCE_DIR}/tests/dh_gradient_pt2_intermediates.cpp
-        ${SRC_DIR}/dft/dh_gradient.cpp
-        ${SRC_DIR}/post_hf/mp2.cpp
-        ${SRC_DIR}/post_hf/mp2_internal.cpp
-        ${SRC_DIR}/post_hf/mp2_rmp2.cpp
-        ${SRC_DIR}/post_hf/mp2_ump2.cpp
-        ${SRC_DIR}/post_hf/mp2_gradient.cpp
-        ${SRC_DIR}/post_hf/rhf_response.cpp
-        ${SRC_DIR}/post_hf/uhf_response.cpp
-        ${SRC_DIR}/post_hf/integrals.cpp
-        ${SRC_DIR}/post_hf/ri/ri_eri.cpp
-        ${SRC_DIR}/gradient/gradient.cpp
-        ${SRC_DIR}/basis/basis.cpp
-        ${SRC_DIR}/basis/gaussian.cpp
-        ${SRC_DIR}/basis/gbs_parser.cpp
-        ${SRC_DIR}/basis/rifit.cpp
-        ${SRC_DIR}/basis/spherical.cpp
-        ${SRC_DIR}/basis/spherical_recurrence.cpp
-        ${SRC_DIR}/integrals/hgp.cpp
-        ${SRC_DIR}/integrals/os.cpp
-        ${SRC_DIR}/integrals/rys.cpp
-        ${SRC_DIR}/integrals/rys_roots.cpp
-        ${SRC_DIR}/integrals/screening.cpp
-        ${SRC_DIR}/integrals/shellpair.cpp
-        ${SRC_DIR}/lookup/elements.cpp
-        ${SRC_DIR}/lookup/boys.cpp
-    )
-    target_include_directories(planck-dh-gradient-pt2-intermediates PRIVATE
-        ${SRC_DIR}
-        ${eigen_SOURCE_DIR}
     )
 
     add_executable(planck-eri-derivative-kernels
@@ -1042,9 +1028,15 @@ if(BUILD_TESTING)
     # uses, src/integrals/base.h) IS delta_J(dP). This target only needs the
     # non-DFT integral/basis machinery (no libxc, no grid) -- same source
     # list as planck-fock-accumulate, which this file's fixture construction
-    # mirrors.
+    # mirrors. Its Eq. (46) physical-density audit also calls the DH tensor
+    # builder, so include its fixed-geometry XC dependencies even though that
+    # audit itself uses only direct J/K integrals.
     add_executable(planck-dft-coulomb-response
         ${CMAKE_SOURCE_DIR}/tests/dft_coulomb_response.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
@@ -1637,11 +1629,6 @@ if(BUILD_TESTING)
         ${LIBXC_INSTALL_DIR}/include
     )
 
-    target_include_directories(planck-dft-kernel-gradient-fd PRIVATE
-        ${SRC_DIR}
-        ${LIBXC_INSTALL_DIR}/include
-        ${eigen_SOURCE_DIR}
-    )
 
     target_include_directories(planck-dft-gga-hessian-selfcheck PRIVATE
         ${SRC_DIR}
@@ -1664,6 +1651,12 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(planck-dft-analytic-hessian-production PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-dh-eq41-xc-response PRIVATE
         ${SRC_DIR}
         ${LIBXC_INSTALL_DIR}/include
         ${eigen_SOURCE_DIR}
@@ -1708,6 +1701,7 @@ if(BUILD_TESTING)
 
     target_include_directories(planck-dft-coulomb-response PRIVATE
         ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
         ${eigen_SOURCE_DIR}
     )
 
@@ -1942,11 +1936,6 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
-    set_target_properties(planck-dft-kernel-gradient-fd PROPERTIES
-        CXX_STANDARD 23
-        CXX_STANDARD_REQUIRED ON
-        CXX_EXTENSIONS OFF
-    )
 
     set_target_properties(planck-dft-gga-hessian-selfcheck PROPERTIES
         CXX_STANDARD 23
@@ -1973,6 +1962,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-dft-analytic-hessian-production PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dh-eq41-xc-response PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -2295,15 +2290,6 @@ if(BUILD_TESTING)
     )
     add_dependencies(planck-dft-kxc-selfcheck libxc)
 
-    target_link_libraries(planck-dft-kernel-gradient-fd
-        ${LIBXC_INSTALL_DIR}/lib/libxc.a
-    )
-    add_dependencies(planck-dft-kernel-gradient-fd libxc)
-    if(USE_OPENMP AND OpenMP_CXX_FOUND)
-        target_link_libraries(planck-dft-kernel-gradient-fd OpenMP::OpenMP_CXX)
-        target_compile_definitions(planck-dft-kernel-gradient-fd PRIVATE USE_OPENMP)
-    endif()
-
     target_link_libraries(planck-dft-gga-hessian-selfcheck
         ${LIBXC_INSTALL_DIR}/lib/libxc.a
     )
@@ -2336,6 +2322,29 @@ if(BUILD_TESTING)
         target_link_libraries(planck-dft-analytic-hessian-production OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-dft-analytic-hessian-production PRIVATE USE_OPENMP)
     endif()
+
+    target_link_libraries(planck-dh-eq41-xc-response
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dh-eq41-xc-response libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-dh-eq41-xc-response OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-dh-eq41-xc-response PRIVATE USE_OPENMP)
+    endif()
+
+    target_link_libraries(planck-dh-pt2-amplitude-density
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dh-pt2-amplitude-density libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-dh-pt2-amplitude-density OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-dh-pt2-amplitude-density PRIVATE USE_OPENMP)
+    endif()
+
+    target_link_libraries(planck-dft-coulomb-response
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-coulomb-response libxc)
 
     target_link_libraries(planck-dft-analytic-hessian-polarized-production
         ${LIBXC_INSTALL_DIR}/lib/libxc.a
@@ -2372,11 +2381,6 @@ if(BUILD_TESTING)
     )
 
     add_test(
-        NAME planck-dft-kernel-gradient-fd
-        COMMAND planck-dft-kernel-gradient-fd
-    )
-
-    add_test(
         NAME planck-dft-gga-hessian-selfcheck
         COMMAND planck-dft-gga-hessian-selfcheck
     )
@@ -2399,6 +2403,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-dft-analytic-hessian-production
         COMMAND planck-dft-analytic-hessian-production
+    )
+
+    add_test(
+        NAME planck-dh-eq41-xc-response
+        COMMAND planck-dh-eq41-xc-response
     )
 
     add_test(
@@ -2635,14 +2644,15 @@ if(BUILD_TESTING)
     )
 
     add_test(
+        NAME planck-dh-pt2-amplitude-density
+        COMMAND planck-dh-pt2-amplitude-density
+    )
+
+    add_test(
         NAME planck-symm-fock-equivalence
         COMMAND planck-symm-fock-equivalence
     )
 
-    add_test(
-        NAME planck-dh-gradient-pt2-intermediates
-        COMMAND planck-dh-gradient-pt2-intermediates
-    )
 endif()
 
 if(BUILD_TESTING AND Python3_Interpreter_FOUND)
