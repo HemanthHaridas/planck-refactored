@@ -99,13 +99,20 @@ static void log_esp_report(const HartreeFock::Calculator &calculator,
     // The grid is just another way to fill the point list, so everything below
     // this block is identical for both modes -- there is no second code path.
     std::vector<Eigen::Vector3d> generated;
-    if (calculator._esp._grid)
+    if (calculator._esp.wants_grid())
     {
-        auto grid = HartreeFock::SCF::chelpg_grid(
-            calculator._molecule,
-            calculator._esp._grid_spacing * ANGSTROM_TO_BOHR,
-            calculator._esp._grid_headspace * ANGSTROM_TO_BOHR,
-            calculator._esp._radius_scale);
+        auto grid =
+            (calculator._esp._grid == HartreeFock::OptionsESP::Grid::Connolly)
+                ? HartreeFock::SCF::connolly_grid(
+                      calculator._molecule,
+                      calculator._esp._shell_scales,
+                      calculator._esp._points_per_shell,
+                      calculator._esp._radius_scale)
+                : HartreeFock::SCF::chelpg_grid(
+                      calculator._molecule,
+                      calculator._esp._grid_spacing * ANGSTROM_TO_BOHR,
+                      calculator._esp._grid_headspace * ANGSTROM_TO_BOHR,
+                      calculator._esp._radius_scale);
         if (!grid)
         {
             HartreeFock::Logger::logging(
@@ -119,7 +126,7 @@ static void log_esp_report(const HartreeFock::Calculator &calculator,
     }
 
     const std::vector<Eigen::Vector3d> &points =
-        calculator._esp._grid ? generated : calculator._esp._points;
+        calculator._esp.wants_grid() ? generated : calculator._esp._points;
 
     if (points.empty())
         return;
@@ -150,7 +157,7 @@ static void log_esp_report(const HartreeFock::Calculator &calculator,
     // Grid mode: the point table would be thousands of rows and tells nobody
     // anything, so report the fitted charges instead -- that is what the grid
     // was generated for.
-    if (calculator._esp._grid)
+    if (calculator._esp.wants_grid())
     {
         const double total_charge = static_cast<double>(calculator._molecule.charge);
         auto fit = HartreeFock::SCF::fit_esp_charges(
@@ -166,7 +173,11 @@ static void log_esp_report(const HartreeFock::Calculator &calculator,
             return;
         }
 
-        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "ESP Charges (CHELPG) :", "");
+        const char *grid_label =
+            (calculator._esp._grid == HartreeFock::OptionsESP::Grid::Connolly)
+                ? "ESP Charges (Connolly) :"
+                : "ESP Charges (CHELPG) :";
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, grid_label, "");
 
         constexpr int charge_width = 62;
         std::cout << std::string(charge_width, '-') << "\n"

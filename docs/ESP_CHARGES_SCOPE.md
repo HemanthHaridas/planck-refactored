@@ -4,9 +4,10 @@
 against PySCF, which pulled the `%begin_esp` input plumbing forward from E5),
 E2 (the vdW radii, which turned out to need a comment fix and one data
 correction rather than a new field — see §3), and E3 (the CHELPG grid and the
-constrained charge fit). Not built: E4 (the Connolly-shell grid, which also
-fixes the rotational variance E3 measured, plus the RESP restraint) and E5 (the
-remaining wiring).
+constrained charge fit), and E4 — E4a, the Connolly-shell grid, which also
+fixes the rotational variance E3 measured, and E4b, the RESP restraint. Not
+built: E5, the input wiring. **RESP has no keyword yet**, so `grid connolly`
+runs the unrestrained fit and `fit_resp_charges` is reachable only from C++.
 
 Mulliken and Löwdin charges partition the density by *basis function ownership*,
 which makes them basis-set dependent and physically arbitrary — a Löwdin charge
@@ -263,7 +264,43 @@ measurement and for why not.
 Two pieces, deliberately in one step because the second is the fix for a defect
 E3 measured and could not gate.
 
-#### E4a — Connolly shells (`connolly_grid`)
+#### E4a — Connolly shells (`connolly_grid`) — LANDED
+
+**The first implementation was wrong, and the way it was wrong is the point.**
+Calling `fibonacci_sphere` directly and placing those directions around each
+atom measured a rotational drift of **3.3e-02** — barely better than the cubic
+lattice it replaced. The scope's premise ("a sphere is rotationally symmetric")
+is true of the *surface* and false of a *fixed discrete sampling* of it: the
+point pattern stays pinned to the lab axes, so rotating the molecule slides
+points across each atom's surface exactly as the lattice does.
+
+Measured against sampling density, which is what proved it was not simply a
+resolution problem:
+
+| points/shell | 50 | 200 | 800 | 1600 | 3200 |
+|---|---|---|---|---|---|
+| drift | 1.0e-1 | 3.3e-2 | 8.1e-3 | 8.7e-3 | 1.6e-2 |
+
+Non-monotone, with a floor. The decisive experiment was rotating the direction
+set *with* the molecule: **3.3e-02 → 7.1e-15**, independent of density.
+
+The fix is therefore to build the direction set in a **molecule-derived frame**.
+`connolly_grid` receives no rotation, so the frame comes from the geometry
+itself: Gram-Schmidt from the centroid, seeded by the farthest atom, with ties
+broken by atom index — all rotation-invariant choices, so the frame rotates with
+the molecule by construction. This also sidesteps the degenerate-eigenvector
+discontinuity that ruled out principal axes.
+
+Measured: **6.9e-15** against CHELPG's 5.8e-02 on the identical fixture.
+Water/STO-3G over 1016 points gives O −0.709219, H +0.354587 / +0.354632.
+Gated by `water_rhf_connolly_sto3g` and by check 7 of `planck-esp-points`, which
+runs **both** grids and requires the CHELPG arm to keep failing, so a Connolly
+pass cannot become vacuous. Mutation-verified: removing the frame rotation
+returns the drift to 3.3e-02 and the check goes red.
+
+`fibonacci_sphere` was promoted from an anonymous namespace in `pcm.cpp` to
+`src/base/sphere.h`, and PCM now consumes it — one generator, not two that can
+drift apart.
 
 Merz-Kollman-style nested spherical shells: for each atom, points on spheres of
 radius `scale_k × r_vdW` for a few scale factors (conventionally 1.4, 1.6, 1.8,
@@ -306,15 +343,48 @@ trading a 3–7 % variance for a discontinuity. Orientation averaging (fit over
 several rotated lattices) is trivially correct but N× the cost and still only
 mitigates.
 
-#### E4b — the restraint
+#### E4b — the restraint (`fit_resp_charges`) — LANDED, not yet wired
 
-Same ESP, same solver, plus the hyperbolic restraint `a·Σ(√(q²+b²) − b)` (with
-`a = 0.0005`, `b = 0.1` a.u., the Bayly et al. values) solved iteratively to
-self-consistency, ~25 iterations. Optional equivalent-atom constraints.
+The hyperbolic restraint `a·Σ(√(q²+b²) − b)`, Bayly et al. stage-1 defaults
+`a = 0.0005`, `b = 0.1` a.u. Its derivative contributes a **diagonal**
+`a/√(q_k²+b²)` to the normal matrix, which depends on `q`, so the same
+`(natoms+1)` LDLᵀ system is simply re-solved until the charges stop moving —
+no new solver, ~7 iterations on water. Hydrogens are exempt by default
+(`exempt_hydrogen`), since the restraint exists to tame buried heavy atoms and
+hydrogens always sit where the data is good.
 
-**Skip stage 2** (methyl/methylene refitting). It exists for AMBER
-compatibility specifically; add it when someone needs AMBER-compatible charges,
-not before.
+Equivalence groups force chosen atoms to share a charge. They are **hard rows
+in the same Lagrange block** as the total charge, not penalties, so grouped
+atoms agree to 2.2e-16 rather than approximately.
+
+**Stage 2 (methyl/methylene refitting) is deliberately not implemented** — it
+exists for AMBER compatibility specifically, and `equivalence_groups` already
+covers the general case of forcing atoms to share a charge.
+
+**Still open: there is no input keyword for RESP.** `fit_resp_charges` is
+implemented and gated but has no driver call site, so `grid connolly` currently
+runs the *unrestrained* fit. Wiring it is E5's job, and until then RESP is
+reachable only from C++.
+
+Gated by check 8 of `planck-esp-points`, which asserts three things:
+
+- **reduction** — at `strength = 0` it reproduces `fit_esp_charges` to
+  `0.0e+00`, pinning that the restraint is the only difference between the two
+  paths;
+- **the trade** — the restraint must both shrink the charges and *worsen* the
+  RRMS, measured 4.7e-03 and 1.6e-06;
+- **equivalence** — grouped atoms agree exactly, against a 1.34 gap when
+  unconstrained (the non-vacuity check: if the free fit already tied them, the
+  constraint would be untested).
+
+**The effect-size thresholds are deliberate.** Bare inequalities (`|q|` smaller,
+RRMS larger) *do* catch an inert restraint, so they were not vacuous — but the
+real effect is 0.5 % in `|q|` and an RRMS rise below the fifth significant
+figure, so a bare inequality sits one fixture change away from passing on
+rounding noise. The check therefore requires a minimum effect and asserts the
+**iteration count > 2** as an independent signal: an inert restraint leaves the
+normal matrix unchanged between passes and exits at exactly 2. All three fire on
+a mutation that deletes the restraint diagonal.
 
 #### Gating
 

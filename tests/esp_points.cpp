@@ -572,6 +572,285 @@ namespace
                "with the reference");
     }
 
+    // ── Check 7: the Connolly grid IS rotationally invariant ────────────────
+    //
+    // This is the check E3 could not have. It fits a field the atom-centred
+    // model CANNOT represent -- so the surviving sample points genuinely
+    // determine the answer -- and requires the charges to be unchanged under a
+    // rigid motion of the whole problem.
+    //
+    // chelpg_grid fails this by 3-7% and does not converge with spacing,
+    // because a cubic lattice is not rotationally symmetric. connolly_grid
+    // passes because a sphere is: rotating the molecule rotates the sample set
+    // with it. The same fixture is run through BOTH grids here, so the
+    // comparison is the point, not an incidental detail -- if the CHELPG arm
+    // ever stops failing, this gate has stopped measuring the grid.
+    void check_connolly_is_rotation_invariant()
+    {
+        HartreeFock::Calculator calc = make_water("sto-3g");
+        if (!g_ok)
+            return;
+
+        // Sources OFF the nuclei: unrepresentable by atom-centred charges, so
+        // which points survive actually matters.
+        const std::vector<std::pair<Eigen::Vector3d, double>> sources{
+            {{1.9, 1.3, -0.8}, 0.63},
+            {{-1.4, -1.7, 1.1}, -0.41},
+            {{0.2, 2.2, 2.0}, 0.28},
+        };
+        const double target_total = -0.75;
+
+        const std::vector<double> shells{1.4, 1.6, 1.8, 2.0};
+
+        auto drift_for = [&](bool connolly) -> double {
+            auto charges_for = [&](const Eigen::Matrix3d &R,
+                                   const Eigen::Vector3d &t) -> Eigen::VectorXd {
+                HartreeFock::Molecule mol = calc._molecule;
+                Eigen::MatrixXd moved(mol.natoms, 3);
+                for (std::size_t a = 0; a < mol.natoms; ++a)
+                    moved.row(static_cast<Eigen::Index>(a)) =
+                        (R * mol._standard.row(static_cast<Eigen::Index>(a)).transpose() + t)
+                            .transpose();
+                mol.set_standard_from_bohr(moved);
+
+                auto grid =
+                    connolly
+                        ? HartreeFock::SCF::connolly_grid(mol, shells, 200, 1.0)
+                        : HartreeFock::SCF::chelpg_grid(
+                              mol, 0.3 * ANGSTROM_TO_BOHR, 2.8 * ANGSTROM_TO_BOHR, 1.0);
+                if (!grid)
+                    return Eigen::VectorXd();
+
+                // The sources move WITH the molecule, so the physical problem
+                // is identical in both frames and only the grid can differ.
+                Eigen::VectorXd phi(static_cast<Eigen::Index>(grid->size()));
+                for (std::size_t k = 0; k < grid->size(); ++k)
+                {
+                    double acc = 0.0;
+                    for (const auto &[pos, q] : sources)
+                        acc += q / ((*grid)[k] - (R * pos + t)).norm();
+                    phi(static_cast<Eigen::Index>(k)) = acc;
+                }
+
+                auto fit = HartreeFock::SCF::fit_esp_charges(mol, *grid, phi, target_total);
+                return fit ? fit->charges : Eigen::VectorXd();
+            };
+
+            const Eigen::Matrix3d R =
+                Eigen::AngleAxisd(0.7, Eigen::Vector3d(1.0, 2.0, 3.0).normalized())
+                    .toRotationMatrix();
+            const Eigen::Vector3d t(0.137, -0.921, 0.455);
+
+            const Eigen::VectorXd a =
+                charges_for(Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero());
+            const Eigen::VectorXd b = charges_for(R, t);
+            if (a.size() != 3 || b.size() != 3)
+                return -1.0;
+            return (b - a).cwiseAbs().maxCoeff();
+        };
+
+        const double chelpg_drift = drift_for(false);
+        const double connolly_drift = drift_for(true);
+
+        std::cout << "  chelpg   drift: " << std::scientific << std::setprecision(3)
+                  << chelpg_drift << '\n';
+        std::cout << "  connolly drift: " << std::scientific << std::setprecision(3)
+                  << connolly_drift << '\n';
+
+        expect(chelpg_drift >= 0.0 && connolly_drift >= 0.0,
+               "both grids should produce a fit");
+        if (chelpg_drift < 0.0 || connolly_drift < 0.0)
+            return;
+
+        // The claim being gated.
+        expect(connolly_drift < 1e-8,
+               "Connolly shells must give orientation-independent charges -- "
+               "that is the whole reason E4a replaced the cubic lattice");
+
+        // Non-vacuity, and the reason both arms are run: if the CHELPG arm also
+        // passed, the fixture would not be exercising grid orientation at all
+        // and the Connolly result would prove nothing.
+        expect(chelpg_drift > 1e-4,
+               "the CHELPG arm must still fail -- if it does not, this fixture "
+               "has stopped measuring the grid and the Connolly pass is vacuous");
+    }
+
+    // ── Check 8: RESP reduces to the unrestrained fit, and the restraint trades ──
+    //
+    // Three properties, each chosen because it can actually fail:
+    //
+    //   (a) REDUCTION. With strength = 0 the restraint term vanishes
+    //       identically, so fit_resp_charges must reproduce fit_esp_charges to
+    //       solver precision. This pins that the restraint is the ONLY
+    //       difference between the two paths -- if the iteration, the
+    //       constraint block, or the design matrix drifted apart, this fails
+    //       even though both answers would look individually plausible.
+    //
+    //   (b) THE TRADE. A restraint that changed nothing would be pointless, and
+    //       one that improved the fit would mean the unrestrained solve was not
+    //       optimal. So turning it on must shrink the charges AND raise the
+    //       RRMS. Asserting only the first would pass for a restraint that
+    //       simply scaled everything down.
+    //
+    //   (c) EQUIVALENCE. Atoms in a group must come back with EXACTLY equal
+    //       charges -- these are hard linear constraints in the same Lagrange
+    //       block as the total charge, not penalties, so "close" is not good
+    //       enough and a loose bound would hide a penalty-style implementation.
+    void check_resp_restraint()
+    {
+        HartreeFock::Calculator calc = make_water("sto-3g");
+        if (!g_ok)
+            return;
+
+        auto grid = HartreeFock::SCF::connolly_grid(
+            calc._molecule, {1.4, 1.6, 1.8, 2.0}, 200, 1.0);
+        if (!grid)
+        {
+            fail("connolly_grid failed in the RESP check");
+            return;
+        }
+
+        // Off-nucleus sources: the model cannot fit this exactly, so the
+        // unrestrained solve has genuine freedom for the restraint to remove.
+        // On an exactly-fittable field the restraint would have nothing to do
+        // and (b) would be untestable -- the fixture-too-easy trap this file
+        // has already hit twice.
+        const std::vector<std::pair<Eigen::Vector3d, double>> sources{
+            {{1.9, 1.3, -0.8}, 0.63},
+            {{-1.4, -1.7, 1.1}, -0.41},
+            {{0.2, 2.2, 2.0}, 0.28},
+        };
+        Eigen::VectorXd phi(static_cast<Eigen::Index>(grid->size()));
+        for (std::size_t k = 0; k < grid->size(); ++k)
+        {
+            double acc = 0.0;
+            for (const auto &[pos, q] : sources)
+                acc += q / ((*grid)[k] - pos).norm();
+            phi(static_cast<Eigen::Index>(k)) = acc;
+        }
+
+        const double total = -0.75;
+
+        // (a) Reduction at zero strength.
+        auto plain = HartreeFock::SCF::fit_esp_charges(calc._molecule, *grid, phi, total);
+        HartreeFock::SCF::RESPOptions off;
+        off.strength = 0.0;
+        auto reduced =
+            HartreeFock::SCF::fit_resp_charges(calc._molecule, *grid, phi, total, off);
+        if (!plain || !reduced)
+        {
+            fail("both fits should succeed in the RESP reduction check");
+            return;
+        }
+
+        const double reduction_gap =
+            (reduced->fit.charges - plain->charges).cwiseAbs().maxCoeff();
+        std::cout << "  strength=0 vs unrestrained: " << std::scientific
+                  << std::setprecision(3) << reduction_gap << '\n';
+        expect(reduction_gap < 1e-10,
+               "with the restraint off, RESP must reproduce the unrestrained fit "
+               "exactly -- a gap here means the two paths differ in something "
+               "other than the restraint");
+
+        // (b) The trade. Restrain every atom, hydrogens included, so water's
+        // three atoms all feel it; exempting H would leave only one restrained
+        // atom and a much weaker signal.
+        HartreeFock::SCF::RESPOptions on;
+        on.strength = 0.01; // well above the 0.0005 production value, to make
+                            // the effect unambiguous rather than marginal
+        on.exempt_hydrogen = false;
+        auto restrained =
+            HartreeFock::SCF::fit_resp_charges(calc._molecule, *grid, phi, total, on);
+        if (!restrained)
+        {
+            fail("the restrained fit should succeed");
+            return;
+        }
+
+        const double norm_plain = plain->charges.norm();
+        const double norm_restrained = restrained->fit.charges.norm();
+        const double shrink = (norm_plain - norm_restrained) / norm_plain;
+        const double rrms_rise = restrained->fit.rrms - plain->rrms;
+        std::cout << "  |q| unrestrained " << std::fixed << std::setprecision(6)
+                  << norm_plain << " -> restrained " << norm_restrained
+                  << "   (shrink " << std::scientific << std::setprecision(3)
+                  << shrink << ")\n";
+        std::cout << "  rrms " << std::scientific << std::setprecision(10)
+                  << plain->rrms << " -> " << restrained->fit.rrms
+                  << "   (rise " << std::setprecision(3) << rrms_rise << ")\n";
+        std::cout << "  iterations: " << restrained->iterations
+                  << " (converged " << (restrained->converged ? "yes" : "no") << ")\n";
+
+        expect(restrained->converged,
+               "the restraint iteration must converge");
+
+        // MINIMUM EFFECT SIZES, not bare inequalities.
+        //
+        // A mutation that deletes the restraint diagonal entirely does fail the
+        // bare forms `norm_restrained < norm_plain` and `rrms > plain->rrms`,
+        // so they are load-bearing rather than vacuous. But they pass on ANY
+        // nonzero difference, and the measured effect here is small -- 0.5% in
+        // |q|, and an RRMS rise below the 5th significant figure. A bare
+        // inequality on a quantity that small is one fixture change or one
+        // compiler reassociation away from passing on rounding noise.
+        //
+        // So require the effect to be big enough to be unambiguous. The
+        // thresholds are well below the measured values (shrink ~4.7e-03,
+        // rise ~2.6e-06) and well above double-precision noise on quantities
+        // of order 1.
+        expect(shrink > 1e-4,
+               "the restraint must shrink the charges by a measurable amount, "
+               "not merely by an amount that happens to be nonzero");
+        expect(rrms_rise > 1e-9,
+               "the restraint must WORSEN the fit to the potential measurably; "
+               "if it improved it, the unrestrained solve was not least-squares "
+               "optimal and something upstream is wrong");
+
+        // The iteration count separates a working restraint from an inert one
+        // independently of the charges: with no restraint the diagonal never
+        // changes, so the second pass reproduces the first exactly and the loop
+        // exits at 2. A real restraint takes several passes to settle.
+        expect(restrained->iterations > 2,
+               "a live restraint must take more than two passes to converge -- "
+               "exiting at 2 means the normal matrix did not change between "
+               "iterations, i.e. the restraint is inert");
+
+        // The constraint still holds exactly under restraint.
+        expect(std::abs(restrained->fit.charges.sum() - total) < 1e-10,
+               "the total-charge constraint must survive the restraint iteration");
+
+        // (c) Equivalence groups. Water's two hydrogens are symmetry
+        // equivalent; the grid samples them slightly differently, so without
+        // the constraint their charges differ.
+        HartreeFock::SCF::RESPOptions equiv;
+        equiv.strength = 0.0;
+        equiv.equivalence_groups = {{1, 2}};
+        auto grouped =
+            HartreeFock::SCF::fit_resp_charges(calc._molecule, *grid, phi, total, equiv);
+        if (!grouped)
+        {
+            fail("the equivalence-constrained fit should succeed");
+            return;
+        }
+
+        const double h_gap =
+            std::abs(grouped->fit.charges(1) - grouped->fit.charges(2));
+        const double h_gap_free = std::abs(plain->charges(1) - plain->charges(2));
+        std::cout << "  H-H charge gap: free " << std::scientific
+                  << std::setprecision(3) << h_gap_free << " -> grouped " << h_gap
+                  << '\n';
+
+        expect(h_gap < 1e-12,
+               "equivalence groups are hard constraints, so grouped atoms must "
+               "share a charge exactly, not approximately");
+
+        // Non-vacuity: if the free fit already gave them equal charges, the
+        // constraint would be doing nothing and (c) would prove nothing.
+        expect(h_gap_free > 1e-6,
+               "the unconstrained fit must give the two hydrogens DIFFERENT "
+               "charges, otherwise the equivalence constraint is untested");
+    }
+
     // ── Guard: the error paths that protect against silent wrong answers ─────
     void check_error_paths()
     {
@@ -614,6 +893,12 @@ int main()
 
     std::cout << "[3] thread invariance / purity\n";
     check_thread_invariance();
+
+    std::cout << "[7] Connolly grid is rotation invariant (CHELPG is not)\n";
+    check_connolly_is_rotation_invariant();
+
+    std::cout << "[8] RESP restraint: reduction, trade, equivalence\n";
+    check_resp_restraint();
 
     std::cout << "[4] error paths\n";
     check_error_paths();

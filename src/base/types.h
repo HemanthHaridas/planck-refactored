@@ -553,15 +553,32 @@ namespace HartreeFock
         // one vector of points either way.
         std::vector<Eigen::Vector3d> _points;
 
-        // Generate a CHELPG grid instead of taking explicit points, and fit
-        // atomic charges to the potential on it.
-        bool _grid = false;
-        // Breneman & Wiberg (1990) defaults, converted to Bohr at use.
+        // Generate a grid instead of taking explicit points, and fit atomic
+        // charges to the potential on it. Both kinds fill the same _points
+        // vector, so there is one downstream path either way.
+        enum class Grid
+        {
+            None,
+            CHELPG,  // cubic lattice (Breneman & Wiberg 1990)
+            Connolly // nested spherical shells (Merz-Kollman)
+        };
+        Grid _grid = Grid::None;
+
+        // CHELPG. Breneman & Wiberg (1990) defaults, converted to Bohr at use.
         double _grid_spacing = 0.3;   // Angstrom
         double _grid_headspace = 2.8; // Angstrom beyond the vdW surface
+
+        // Connolly. Merz-Kollman conventional shells; rotationally symmetric,
+        // unlike the CHELPG lattice, so fitted charges do not depend on the
+        // molecule's orientation.
+        std::vector<double> _shell_scales = {1.4, 1.6, 1.8, 2.0};
+        int _points_per_shell = 200;
+
         // Multiplies the tabulated vdW radius, mirroring
-        // OptionsSolvation::_cavity_scale.
+        // OptionsSolvation::_cavity_scale. Applies to both grid kinds.
         double _radius_scale = 1.0;
+
+        bool wants_grid() const noexcept { return _grid != Grid::None; }
     };
 
     struct OptionsBSSE

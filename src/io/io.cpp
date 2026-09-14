@@ -1852,14 +1852,18 @@ namespace HartreeFock::IO
             {
                 std::string value;
                 if (!(iss >> value))
-                    return std::unexpected("esp: 'grid' needs a value (chelpg or none): " + line);
+                    return std::unexpected(
+                        "esp: 'grid' needs a value (chelpg, connolly or none): " + line);
                 const std::string lvalue = toLower(value);
                 if (lvalue == "chelpg")
-                    esp._grid = true;
+                    esp._grid = HartreeFock::OptionsESP::Grid::CHELPG;
+                else if (lvalue == "connolly" || lvalue == "mk" || lvalue == "merz-kollman")
+                    esp._grid = HartreeFock::OptionsESP::Grid::Connolly;
                 else if (lvalue == "none")
-                    esp._grid = false;
+                    esp._grid = HartreeFock::OptionsESP::Grid::None;
                 else
-                    return std::unexpected("esp: unknown grid '" + value + "' (expected chelpg or none)");
+                    return std::unexpected(
+                        "esp: unknown grid '" + value + "' (expected chelpg, connolly or none)");
             }
             else if (lkey == "grid_spacing" || lkey == "grid_headspace" || lkey == "radius_scale")
             {
@@ -1876,6 +1880,29 @@ namespace HartreeFock::IO
                 else
                     esp._radius_scale = v;
             }
+            else if (lkey == "points_per_shell")
+            {
+                int v;
+                if (!(iss >> v))
+                    return std::unexpected("esp: 'points_per_shell' needs an integer value: " + line);
+                if (v <= 0)
+                    return std::unexpected("esp: 'points_per_shell' must be positive: " + line);
+                esp._points_per_shell = v;
+            }
+            else if (lkey == "shell_scales")
+            {
+                std::vector<double> scales;
+                double v;
+                while (iss >> v)
+                {
+                    if (v <= 0.0)
+                        return std::unexpected("esp: 'shell_scales' entries must be positive: " + line);
+                    scales.push_back(v);
+                }
+                if (scales.empty())
+                    return std::unexpected("esp: 'shell_scales' needs at least one value: " + line);
+                esp._shell_scales = std::move(scales);
+            }
             else
             {
                 return std::unexpected("esp: unknown keyword '" + key + "': " + line);
@@ -1884,12 +1911,12 @@ namespace HartreeFock::IO
 
         // Explicit points and a generated grid are mutually exclusive: honouring
         // both would silently mix a diagnostic point list into a charge fit.
-        if (esp._grid && !esp._points.empty())
+        if (esp.wants_grid() && !esp._points.empty())
             return std::unexpected(
-                "esp: 'grid chelpg' and explicit 'point' lines are mutually exclusive "
+                "esp: 'grid' and explicit 'point' lines are mutually exclusive "
                 "-- use one or the other");
 
-        if (!esp._grid && esp._points.empty())
+        if (!esp.wants_grid() && esp._points.empty())
             return std::unexpected(
                 "esp: section declared but no 'point' lines and no 'grid' given");
 

@@ -52,6 +52,26 @@ namespace HartreeFock::SCF
         double headspace,
         double radius_scale = 1.0);
 
+    // Merz-Kollman / Connolly sampling shells: for each atom, `points_per_shell`
+    // Fibonacci-sphere points on a sphere of radius `scale * r_vdW` for every
+    // scale in `shell_scales`, discarding any point buried inside another
+    // atom's sphere at that same scale.
+    //
+    // Unlike the CHELPG cubic lattice, this construction is ROTATIONALLY
+    // SYMMETRIC: rotating the molecule rotates the sample set with it rather
+    // than resampling a fixed lattice, so the fitted charges do not depend on
+    // the molecule's orientation in the lab frame. chelpg_grid has a measured
+    // 3-7% orientation dependence that does not converge with spacing (see
+    // docs/ESP_CHARGES_SCOPE.md); this is the fix, and it is also what RESP
+    // conventionally samples on.
+    //
+    // Returns points in BOHR, in the molecule._standard frame.
+    std::expected<std::vector<Eigen::Vector3d>, std::string> connolly_grid(
+        const Molecule &molecule,
+        const std::vector<double> &shell_scales,
+        int points_per_shell,
+        double radius_scale = 1.0);
+
     struct ESPChargeFit
     {
         Eigen::VectorXd charges;  // one per atom, in e
@@ -77,6 +97,63 @@ namespace HartreeFock::SCF
         const std::vector<Eigen::Vector3d> &points,
         const Eigen::VectorXd &potential,
         double total_charge);
+
+    struct RESPOptions
+    {
+        // Bayly et al. (1993) stage-1 values. `a` sets how hard poorly
+        // determined charges are pulled toward zero; `b` is the width of the
+        // flat-bottomed region, below which the restraint is effectively
+        // quadratic and above which it is effectively linear.
+        double strength = 0.0005; // a, atomic units
+        double tightness = 0.1;   // b, atomic units
+
+        // Atoms exempt from the restraint. Hydrogens are conventionally NOT
+        // restrained, because the restraint exists to tame buried heavy atoms
+        // whose charges the ESP barely constrains, and hydrogens are always on
+        // the surface where the data is good.
+        bool exempt_hydrogen = true;
+
+        // Groups of atom indices forced to share one charge (0-based). Used for
+        // symmetry-equivalent atoms that the fit would otherwise give slightly
+        // different charges to purely because the grid samples them unevenly.
+        std::vector<std::vector<std::size_t>> equivalence_groups;
+
+        int max_iterations = 50;
+        double convergence = 1e-10; // max |dq| between iterations
+    };
+
+    struct RESPChargeFit
+    {
+        ESPChargeFit fit;
+        int iterations = 0;
+        bool converged = false;
+    };
+
+    // RESP: the same constrained least-squares problem as fit_esp_charges, plus
+    // a hyperbolic restraint a*sum(sqrt(q^2 + b^2) - b) pulling charges toward
+    // zero.
+    //
+    // The restraint is solved by iterating the SAME (natoms+1) LDL^T system,
+    // not by a new solver: its derivative contributes a diagonal
+    // a/sqrt(q_k^2 + b^2) to the normal matrix, which depends on q and so is
+    // refreshed each pass until the charges stop moving. Typically ~10-25
+    // iterations.
+    //
+    // Why it exists: an atom with little grid nearby (a buried carbon) has
+    // almost no leverage on the potential, so the unrestrained fit is free to
+    // give it a large charge cancelled by its neighbours. Those charges fit the
+    // ESP but transfer badly and behave poorly in dynamics. The restraint
+    // removes that freedom without meaningfully degrading the fit.
+    //
+    // Stage 2 (methyl/methylene refitting) is deliberately not implemented: it
+    // exists for AMBER compatibility specifically, and `equivalence_groups`
+    // already covers the general case of forcing atoms to share a charge.
+    std::expected<RESPChargeFit, std::string> fit_resp_charges(
+        const Molecule &molecule,
+        const std::vector<Eigen::Vector3d> &points,
+        const Eigen::VectorXd &potential,
+        double total_charge,
+        const RESPOptions &options = {});
 } // namespace HartreeFock::SCF
 
 #endif // HF_POPULATIONS_ESP_H

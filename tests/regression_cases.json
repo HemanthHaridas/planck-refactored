@@ -82,6 +82,31 @@
    ]
   },
   {
+   "id": "water_rhf_connolly_sto3g",
+   "_note": "E4a of docs/ESP_CHARGES_SCOPE.md: Connolly/Merz-Kollman sampling shells. Unlike the CHELPG cubic lattice these are rotationally invariant -- the direction set is built in a molecule-derived frame, so rotating the molecule rotates the sample set with it. Measured drift under a rigid motion: 6.9e-15 here against 5.8e-02 for chelpg on the identical fixture (planck-esp-points check 7, which runs both arms and requires the chelpg arm to keep failing so the comparison cannot go vacuous). Charges asserted to 6 decimals; the total is exact because the constraint is a Lagrange multiplier, not a penalty.",
+   "input": "tests/inputs/regression/scf/water_rhf_connolly_sto3g.hfinp",
+   "tags": [
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "ESP Charges (Connolly) :",
+    "1       O       8             -0.709218",
+    "2       H       1              0.354586",
+    "3       H       1              0.354631",
+    "ESP Grid Points :             1016",
+    "ESP Fit RRMS 3.6088"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -74.9458807581,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
    "id": "water_rhf_esp_points_sto3g",
    "_note": "E1 of docs/ESP_CHARGES_SCOPE.md: the molecular electrostatic potential at explicit points. The contains lines assert 8 decimals, not the 12 printed: Planck and PySCF round Angstrom->Bohr differently (Planck keeps more digits), so at identical input coordinates the nuclei sit a few parts in 1e8 apart, and ~1e-8 is the floor for any cross-code comparison here. Asserting more digits would pin the rounding, not the physics.",
    "_pyscf_reference": "PySCF 2.13.0 RHF/STO-3G cart=True, mol.intor('int1e_grids') contracted with the converged density plus the nuclear sum -- an independent implementation of the same one-electron integral. Evaluated at Planck's own Bohr coordinates so the conversion-constant difference is removed: phi = 0.145838922309, -0.011474069301, 0.040830828077, 0.003869442320, 0.000005075137 at the five points. Max abs diff vs Planck 4.6e-09. E_RHF -74.9458807350 (Planck -74.9458807581).",
