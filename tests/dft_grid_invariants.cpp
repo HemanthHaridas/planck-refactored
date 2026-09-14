@@ -139,9 +139,9 @@ namespace
 
     void test_radial_grid_invariants()
     {
-        require_near(DFT::treutler_radius(1), 0.80, 0.0, "Wrong Treutler radius for H");
-        require_near(DFT::treutler_radius(36), 1.60, 0.0, "Wrong Treutler radius for Kr");
-        require_near(DFT::treutler_radius(54), 2.00, 0.0, "Wrong Treutler fallback radius");
+        require_near(DFT::treutler_xi(1), 0.80, 0.0, "Wrong Treutler xi for H");
+        require_near(DFT::treutler_xi(36), 0.90, 0.0, "Wrong Treutler xi for Kr");
+        require_near(DFT::treutler_xi(104), 1.50, 0.0, "Wrong Treutler xi fallback past table end");
 
         const Eigen::MatrixXd grid = DFT::MakeTreutlerAhlrichsGrid(100, 1.0, 0.6);
         require(grid.rows() == 100, "Radial grid returned wrong number of points");

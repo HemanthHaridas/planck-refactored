@@ -2235,7 +2235,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -75.8100241262,
+     "expected": -75.8097355638,
      "atol": 1e-09
     },
     {
@@ -2264,7 +2264,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -76.2897226108,
+     "expected": -76.289436536,
      "atol": 1e-09
     }
    ],
@@ -2291,7 +2291,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -76.3781217832,
+     "expected": -76.3779007886,
      "atol": 1e-09
     },
     {
@@ -2323,7 +2323,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -76.3017376982,
+     "expected": -76.3015412696,
      "atol": 1e-09
     },
     {
@@ -2355,7 +2355,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -75.837581496,
+     "expected": -75.8372242895,
      "atol": 1e-09
     },
     {
@@ -2666,7 +2666,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -75.2062610942,
+     "expected": -75.2062561072,
      "atol": 1e-06
     }
    ],
