@@ -814,6 +814,9 @@ if(BUILD_TESTING)
         add_test(NAME planck-udh-u2-contract
             COMMAND ${Python3_EXECUTABLE} -m unittest discover
                 -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_ks_response_contract.py -v)
+        add_test(NAME planck-udh-u3-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_pt2_orbital_contract.py -v)
     endif()
 
     add_executable(planck-dh-pt2-amplitude-density
@@ -1085,6 +1088,32 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-udh-ks-response PRIVATE USE_OPENMP)
     endif()
     add_test(NAME planck-udh-ks-response COMMAND planck-udh-ks-response)
+
+    # U3 detached literal orbital RHS; uses U1 and U2, no UKS driver routing.
+    add_executable(planck-udh-pt2-orbital
+        ${CMAKE_SOURCE_DIR}/tests/udh_pt2_orbital.cpp
+        ${SRC_DIR}/dft/udh_pt2_orbital.cpp
+        ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/udh_ks_response.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-pt2-orbital PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-pt2-orbital ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-pt2-orbital libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-pt2-orbital OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-pt2-orbital PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-pt2-orbital COMMAND planck-udh-pt2-orbital)
 
     add_executable(planck-hgp-quartet-validation
         ${CMAKE_SOURCE_DIR}/tests/hgp_quartet_validation.cpp
