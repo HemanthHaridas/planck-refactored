@@ -417,6 +417,8 @@ set(DFT_LIB_SRC
     ${SRC_DIR}/dft/dft_gradient.h
     ${SRC_DIR}/dft/dh_pt2_gradient.cpp
     ${SRC_DIR}/dft/dh_pt2_gradient.h
+    ${SRC_DIR}/dft/udh_ks_response.cpp
+    ${SRC_DIR}/dft/udh_ks_response.h
     ${SRC_DIR}/dft/driver.cpp
     ${SRC_DIR}/dft/driver.h
     ${SRC_DIR}/dft/ks_matrix.cpp
@@ -809,6 +811,9 @@ if(BUILD_TESTING)
         add_test(NAME planck-udh-u1-contract
             COMMAND ${Python3_EXECUTABLE} -m unittest discover
                 -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_pt2_stationary_contract.py -v)
+        add_test(NAME planck-udh-u2-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_ks_response_contract.py -v)
     endif()
 
     add_executable(planck-dh-pt2-amplitude-density
@@ -1055,6 +1060,31 @@ if(BUILD_TESTING)
         ${INT_SRC}
         ${LOOKUP_SRC}
     )
+
+    # Detached U2 physical two-spin AO response. No UKS gradient driver.
+    add_executable(planck-udh-ks-response
+        ${CMAKE_SOURCE_DIR}/tests/udh_ks_response.cpp
+        ${SRC_DIR}/dft/udh_ks_response.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/dft/ks_matrix.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-ks-response PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-ks-response ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-ks-response libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-ks-response OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-ks-response PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-ks-response COMMAND planck-udh-ks-response)
 
     add_executable(planck-hgp-quartet-validation
         ${CMAKE_SOURCE_DIR}/tests/hgp_quartet_validation.cpp
