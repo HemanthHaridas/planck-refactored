@@ -37,6 +37,31 @@ namespace HartreeFock
             const std::size_t nbasis,
             const std::vector<HartreeFock::ExternalCharge> &charges,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+        // Electronic electrostatic potential at each of `points` (Bohr):
+        //
+        //   phi_el(r_k) = sum_munu P_munu <mu| 1/|r - r_k| |nu>
+        //
+        // Returned POSITIVE (i.e. the raw contraction, before the electron's
+        // negative charge is applied); the caller owns the sign. Same
+        // Obara-Saika kernel as _compute_external_charge_attraction.
+        //
+        // Why this exists rather than calling that routine per point: it sums
+        // its whole charge list into ONE AO matrix, which is what C-PCM's
+        // per-tessera setup wants but not what ESP fitting wants -- a fit needs
+        // phi at each point SEPARATELY. Getting that from the existing entry
+        // means one call per point, each allocating an nbasis^2 matrix that is
+        // contracted once and discarded, or storing one matrix per point, which
+        // a ~10k-point CHELPG grid cannot afford. Here the density contraction
+        // is fused into the sweep, so the cost is O(npoints * npairs) time in
+        // O(npoints) memory with no nbasis^2 temporary.
+        //
+        // No sym_ops overload: symmetry folding reconstructs AO-pair orbits,
+        // which is a property of the MATRIX, not of a contraction already
+        // reduced against a full (unfolded) density.
+        Eigen::VectorXd _compute_electronic_potential(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const Eigen::MatrixXd &density,
+            const std::vector<Eigen::Vector3d> &points);
         // Build the full AO ERI tensor. Applies Schwarz screening:
         // quartets with Q(i,j)·Q(k,l) < tol_eri are skipped.
         std::vector<double> _compute_2e(const std::vector<HartreeFock::ShellPair> &shell_pairs,

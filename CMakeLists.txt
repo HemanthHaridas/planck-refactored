@@ -1065,6 +1065,22 @@ if(BUILD_TESTING)
         ${LOOKUP_SRC}
     )
 
+    # E0 gate for the fused electronic-ESP sweep. Needs only the integral and
+    # basis machinery (no SCF, no DFT) -- same source list as
+    # planck-fock-accumulate, whose fixture construction this file mirrors,
+    # plus the ESP assembly itself.
+    add_executable(planck-esp-points
+        ${CMAKE_SOURCE_DIR}/tests/esp_points.cpp
+        ${SRC_DIR}/populations/esp.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
     add_executable(planck-fock-accumulate
         ${CMAKE_SOURCE_DIR}/tests/fock_accumulate.cpp
         ${SRC_DIR}/basis/basis.cpp
@@ -1835,6 +1851,11 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-esp-points PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-dft-coulomb-response PRIVATE
         ${SRC_DIR}
         ${LIBXC_INSTALL_DIR}/include
@@ -2151,6 +2172,12 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-esp-points PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
     set_target_properties(planck-dft-coulomb-response PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
@@ -2332,6 +2359,8 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-compute-2e PRIVATE USE_OPENMP)
         target_link_libraries(planck-fock-accumulate OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-fock-accumulate PRIVATE USE_OPENMP)
+        target_link_libraries(planck-esp-points OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-esp-points PRIVATE USE_OPENMP)
         target_link_libraries(planck-dft-coulomb-response OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-dft-coulomb-response PRIVATE USE_OPENMP)
     endif()
@@ -2599,6 +2628,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-fock-accumulate
         COMMAND planck-fock-accumulate
+    )
+
+    add_test(
+        NAME planck-esp-points
+        COMMAND planck-esp-points
     )
 
     add_test(
