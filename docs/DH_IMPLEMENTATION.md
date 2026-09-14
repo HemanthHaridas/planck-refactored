@@ -15,7 +15,9 @@ Quick access: [energy](#3-energy-and-scfpt2-boundary),
 [XC-II](#9-complete-fixed-coefficient-xc-ii-geometry-derivative),
 [typed contracts](#10-eq-33-and-driver-contracts),
 [validation](#13-validation-evidence-and-remaining-acceptance-work),
-[UKS extension scope](#15-uks-extension-scope-and-acceptance-plan).
+[UKS extension scope](#15-uks-extension-scope-and-acceptance-plan),
+[Hessian swap evidence](#16-hessian-free-z-vector-swap-probe),
+[scalability plan](#17-recommended-optimization-sequence).
 
 Equation numbers refer to Neese, Schwabe and Grimme, *J. Chem. Phys.* **126**,
 124115 (2007), DOI `10.1063/1.2712433`; the supplied reference is
@@ -38,15 +40,24 @@ analytic vectors and FD values exactly reproduce the pre-cleanup results.
   every supported energy functional or basis.
 - Unrestricted and range-separated DH gradients remain excluded. Solvated DH
   gradients are rejected because solvent response is not implemented.
-- DH optimization, frequency and response workflows are not enabled by this
-  gradient change. The DFT driver rejects spherical basis functions.
+- RKS global-DH geometry optimization, frequency and combined opt/frequency
+  workflows share the full gradient and pass the water/C1 H2O2 molecular
+  workflow audits (2026-09-13; see Section 18). Frequencies use
+  a semi-numerical Hessian, not an analytic second derivative. DH response
+  and imaginary-mode following remain excluded. The DFT driver rejects
+  spherical basis functions.
 - The current XC-II implementation supports LDA-like and GGA-like functionals,
   not a general meta-GGA derivative. No general frozen-core/active-space
   response, spin-component-scaled DH, or near-degeneracy validation is claimed.
 - There is no HF-MP2 full-minus-reference subtraction and no
   `RMP2Lagrangian` bridge in this production DH assembly.
-- There are no `PLANCK_DFT_DH_*` production switches. The literal RHS and
-  literal pair-overlap convention are unconditional.
+- The literal RHS and literal pair-overlap convention are unconditional.
+  O3 now routes normal production through the typed matrix-free Eq. 27
+  GMRES backend, with no DH flags required. The user rebuild passes the
+  water/C1 H2O2 all-coordinate molecular FD and typed contraction checks
+  (2026-09-14). The corrected standalone failure-path test also passes
+  after its test-only rebuild (Section 17).
+  Dense QR remains an explicit reference backend for the Section 16 probe.
 
 The fundamental rule is
 
@@ -283,12 +294,19 @@ channels. Although it stores `raw_z_ao = C_v X C_o^T`, it applies the
 physical response to **\(2(\mathrm{raw}+\mathrm{raw}^T)\)**, not to raw Z
 or the relaxed-density half-block adapter.
 
-The driver constructs a dense \((ov)\times(ov)\) Hessian by unit-vector
-actions, flattens \((a,i)\) as \(ao+i\), and solves by column-pivoted QR.
-It checks finite Z and
-\(\|AZ+L\|_\infty\le10^{-9}\max(1,\|L\|_\infty)\).
-The independently assembled contract must agree with the solver RHS within
-1e-12 and satisfy its absolute Z residual within 1e-9.
+`solve_dh_zvector` flattens \((a,i)\) as \(a n_{\rm occ}+i\) and solves
+\(AZ=-L\) with checked restarted, right-preconditioned GMRES (O3).
+The defaults are tolerance \(10^{-12}\), restart 24, and 256 iterations.
+Only the preconditioner uses \(1/\max(|\epsilon_a-\epsilon_i|,10^{-8})\);
+neither the physical Hessian nor PT2 denominators are shifted. A fresh
+unpreconditioned action must satisfy
+\(\|AZ+L\|_\infty\le10^{-12}\max(1,\|L\|_\infty)\).
+An explicit `DenseReference` backend builds unit columns and uses
+column-pivoted QR for tests/probes; it is never a convergence fallback.
+The assembled contract must still agree with the solver RHS within 1e-12
+and satisfy its additional absolute Z residual check within 1e-9.
+Post-O3 molecular, typed-contract and standalone solver checks pass;
+the acceptance evidence is recorded in Section 17.
 
 ## 6. Relaxed correction density: Eq. 28
 
@@ -531,13 +549,16 @@ The derivative builder constructs overlap, kinetic/electron–nuclear and
 four-center ERI derivatives analytically in the Cartesian AO basis, including
 derivatives with respect to the nuclear-attraction centers. Derivative arrays
 are not derivatives of already-transformed live MO tensors. The current
-implementation materializes dense AO/MO tensors and a dense orbital Hessian:
-storage includes O(3N_atom N^4) ERI derivatives and O((ov)^2) response storage.
+implementation materializes dense AO/MO tensors:
+storage includes O(3N_atom N^4) ERI derivatives. O3 removes the normal-path
+O((ov)^2) orbital Hessian, replacing it with O(k ov + k^2) Krylov matrix
+storage at bounded restart k, plus the action and O2 XC-cache workspace.
 It is not a density-fitted, sparse or large-system scalability implementation.
 
 Numerical dimension, finite-value and Z-residual checks remain production
-safety checks. Debug ledgers, selfcheck FD loops, snapshots and environment
-gates have been removed from the production driver.
+safety checks. Historical debug ledgers, selfcheck FD loops, snapshots and
+mathematical-convention gates have been removed. The separately requested
+Hessian-swap diagnostic in Section 16 is inactive unless explicitly selected.
 
 ## 11. Stationary transport and what may be compared
 
@@ -1210,8 +1231,17 @@ the summed UKS+PT2 gradient once. Errors propagate through checked returns.
 
 ### 15.10 Small implementation steps and acceptance gates
 
-U0 code and fixtures are implemented; its C++ acceptance is pending the
-user-managed rebuild (see Section 15.12). U1–U11 remain pending.
+U0 code, invariant tests and all five molecular smoke fixtures pass the latest
+user-managed rebuild (2026-09-13, `/private/tmp/udh-u0-molecular-retest-sep13.log`).
+The failed SCF runs in Sections 15.12–15.14 are historical, not the latest
+U0 status. U1 and U2 passed their rebuilt primitive acceptance tests on
+2026-09-13 (Sections 15.16 and 15.15; logs `/private/tmp/udh-u1-stationary.log`
+and `/private/tmp/udh-u2-response.log`). U3 passed its rebuilt primitive
+acceptance on 2026-09-14 (Section 15.17).
+U4 passes its rebuilt detached primitive suite on 2026-09-14 after correcting
+the test-only rectangular/all-active fixture boundary (Section 15.18).
+U5–U11 remain pending;
+U2 does not depend on U1.
 The user continues to own builds. Each step
 should add a bounded primitive and independent tests; wait for the user's
 rebuild before running the relevant executable. Do not start background
@@ -1340,9 +1370,10 @@ and the full closed-shell spatial MP2 energy are checked independently.
 These synthetic integral fixtures are algebra tests, not molecular AO-to-MO
 validation.
 
-The new CMake/CTest target is `planck-udh-pt2-energy-contract`. No compiler
-or build has been started. **The new C++ suite has not yet been executed;
-U0 is not marked fully validated.** After the user's rebuild, run:
+The new CMake/CTest target is `planck-udh-pt2-energy-contract`. The user
+rebuilt it, and it now passes with exit code 0. No agent-initiated build
+was started. U0 is not marked fully validated because the C1 molecular
+fixture remains unconverged. Reproduce the successful C++ run with:
 
 ```sh
 build/planck-udh-pt2-energy-contract > /private/tmp/udh-u0-contract.log 2>&1
@@ -1369,8 +1400,9 @@ electronic branch across geometry displacements; U11 must test that.
 All inputs use B2PLYP/STO-3G, Cartesian AOs, ultrafine grid, symmetry off,
 and 1e-11 energy/density SCF thresholds. Ordinary DIIS initially failed to
 converge HO2 and H2O2+ within 200 iterations. HO2 now uses a three-cycle
-UKS SOSCF window starting at iteration 5; H2O2+ uses a longer window.
-These are fixture settings, not modifications to the SCF implementation.
+UKS SOSCF window starting at iteration 5; the failed H2O2+ trials used a
+longer window. H2O2+ is now configured for the new 0.3-Ha UKS SCF level-shift
+path instead (Section 15.13); its post-rebuild retest still fails to converge.
 
 `tests/udh_u0_molecular_audit.py` runs the existing energy executable and
 then generates gradient inputs that must fail with the existing UKS DH
@@ -1415,5 +1447,1416 @@ Detailed inputs/results/logs:
 The initial DIIS and short-SOSCF attempts remain in
 `/private/tmp/udh-u0-molecular-audit.log` and
 `/private/tmp/udh-u0-molecular-soscf-audit.log`.
-These smoke results do not execute the new C++ contract; that acceptance
-remains pending the rebuild independently of the fixture convergence issue.
+Those initial smoke results did not execute the new C++ contract. Its
+subsequent successful run is independent of the remaining fixture
+convergence issue; see the post-rebuild results below.
+
+### 15.13 UKS SCF level-shift support and retest
+
+The input parser already accepted `%begin_scf` `level_shift`, but the UKS
+driver did not consume it. The UHF implementation did. UKS support has now
+been rebuilt by the user and tested. The projector/handoff unit suite passes,
+but the 0.3-Ha shift does not resolve H2O2+ convergence at the original
+settings. Detailed results are in Section 15.14.
+
+`src/dft/uks_level_shift.{h,cpp}` provides the occupancy-one AO-metric
+projector and an unshifted eigenpair validator. For each spin the iteration
+matrix is
+
+\[
+F^\sigma_{\rm iter}=F^\sigma_{\rm physical}
++\lambda(S-SP^\sigma S),\qquad \lambda\ge0.
+\]
+
+The physical Fock, KS energy expression, XC evaluation and PT2 Hamiltonian
+are unchanged. The projector is added before DIIS; errors use the physical
+commutator, which the projector leaves unchanged. Negative/nonfinite shifts
+are rejected. `level_shift 0` retains the previous UKS numerical path.
+This SCF keyword is distinct from `mp2_level_shift`; shifted PT2 denominators
+remain excluded by the U0 contract.
+
+With a positive shift, SOSCF is disabled for the entire run and an explicit
+warning is emitted if it was also requested. This matches the UHF policy
+of not combining a shifted iteration with an unshifted SOSCF Hessian. It
+does not disable hybrid exchange or polarized XC response.
+
+Convergence of the shifted iteration is only an intermediate state. The
+driver removes the shift, clears both DIIS histories, rebuilds physical
+Fock matrices, and performs unshifted, non-extrapolated diagonalizations
+until the requested convergence thresholds are met again. For this new
+positive-shift path it checks both spin-density changes independently and
+the physical commutator residual; cancellation in the total spin density
+cannot produce a false handoff. Polishing uses the same iteration budget;
+exhaustion is a failure, never a return of shifted orbital energies.
+
+Before post-KS work, both spin channels must satisfy the unshifted equations
+\(FC=SC\epsilon\) and \(C^TSC=I\) (scaled eigenpair and metric check at
+1e-9). Simply subtracting lambda from shifted virtual eigenvalues is not
+used: away from an exact fixed point the coefficients also differ. The
+normal log records shift application, removal and the verified unshifted
+handoff. No production debug switch is added.
+
+The new standalone `planck-uks-level-shift` target tests the projector on a
+nonidentity AO overlap, unequal spin occupations, occupied/virtual shifts,
+unchanged commutator, zero shift, empty/full spin densities, malformed
+inputs, rejection of shifted final spectra, and unshifted PT2 denominators.
+An off-shell test explicitly rejects eigenvalue subtraction with unchanged
+shifted coefficients. These C++ tests now pass with exit code 0.
+
+H2O2+ now has `level_shift 0.3` and no SOSCF window, with the original
+geometry, 200-iteration cap and 1e-11 thresholds unchanged. The molecular
+audit checks that unshifted-handoff messages occur before the PT2 energy
+summary, so a binary that silently ignores the keyword cannot pass.
+Four fast U0 Python tests pass, including missing/reordered/wrong-shift
+handoff rejection. Molecular success is established for the shifted
+one-electron H2+ handoff, not for the correlated open-shell fixtures.
+
+Commands used after rebuilding `planck-dft`, `planck-uks-level-shift` and
+`planck-udh-pt2-energy-contract`:
+
+```sh
+build/planck-uks-level-shift > /private/tmp/uks-level-shift-unit.log 2>&1
+build/planck-udh-pt2-energy-contract > /private/tmp/udh-u0-contract.log 2>&1
+python3 tests/udh_u0_molecular_audit.py \
+  --fixture h2o2_cation_c1_b2plyp_sto3g.hfinp \
+  > /private/tmp/uks-level-shift-h2o2-retest.log 2>&1
+```
+
+The full U0 fixture set, shifted/unshifted comparisons and existing RKS
+validation checks were also rerun as recorded below. UKS DH gradients remain
+disabled throughout.
+
+### 15.14 Post-rebuild validation: passes and unresolved failures
+
+Completed 2026-09-12 with the user-rebuilt binaries; no agent build was
+started. The following tests pass:
+
+- `planck-uks-level-shift` (projector, physical eigenpair and denominator
+  invariants): `/private/tmp/uks-level-shift-unit.log`.
+- `planck-udh-pt2-energy-contract` (U0 spin-orbital, storage and scope
+  invariants): `/private/tmp/udh-u0-contract.log`.
+- `planck-dh-pt2-amplitude-density`:
+  `/private/tmp/dh-amplitude-post-uks-shift.log`.
+- `planck-dft-coulomb-response`:
+  `/private/tmp/dh-coulomb-post-uks-shift.log`.
+- Six fast Python tests (two existing runner tests plus four U0 fixture/
+  audit-parser tests): `/private/tmp/dh-python-post-uks-shift.log`.
+
+Both all-coordinate RKS B2PLYP/STO-3G production FD checks pass unchanged
+at steps 1e-4 and 2e-4 Bohr, with the same stored results as before:
+
+| Molecule | max error at 1e-4 | max error at 2e-4 | units |
+|---|---:|---:|---|
+| Water | 1.44657175e-8 | 1.69526181e-8 | Ha/Bohr |
+| C1 H2O2 (neutral RKS) | 9.03449667e-9 | 1.34265307e-8 | Ha/Bohr |
+
+Logs: `/private/tmp/dh-water-post-uks-shift-fd.log` and
+`/private/tmp/dh-h2o2-post-uks-shift-fd.log`. Detailed outputs are under
+`/var/folders/b6/8bkpkc5j2hjgttz3q3yv16gr0000gn/T/` in
+`dh-production-cartesian-fd-2qdc0pfp/` and
+`dh-production-cartesian-fd-ccdqipoi/`, respectively.
+
+UKS molecular results are deliberately reported separately:
+
+- H2+ with shift 0.3 converges in three iterations, explicitly removes the
+  shift and verifies the physical canonical handoff before PT2. Its total
+  energy is -0.5872125980237026 Ha, identical at stored precision to the
+  two-iteration unshifted run, and its PT2 correction is exactly zero.
+- H2O2+ with shift 0.3 still fails within 200 iterations at the unchanged
+  1e-11 thresholds. At iteration 200 its per-spin density RMS/max changes
+  are 9.108e-7 / 5.997e-6 and physical commutator RMS is 5.816e-5. It has
+  not reached shift removal, so this is a shifted-iteration convergence
+  failure, not a PT2 or unshifted-spectrum failure.
+- Additional shifted water-cation and triplet-water checks also fail by
+  iteration 200, although both unshifted fixtures converge. Their final
+  physical commutator RMS values are 2.022e-10 and 4.123e-10, respectively,
+  above the requested 1e-11 threshold. No unconverged PT2 energies are
+  reported. A correlated same-branch shift-invariance check is consequently
+  still outstanding; the one-electron success does not establish it.
+- The complete U0 smoke run remains four passes out of five; the other four
+  inputs retain their original unshifted settings (including HO2 SOSCF).
+  UKS DH gradient rejection passes for these converged fixtures.
+
+Targeted log: `/private/tmp/uks-level-shift-h2o2-retest.log`, with details in
+`/var/folders/b6/8bkpkc5j2hjgttz3q3yv16gr0000gn/T/udh-u0-molecular-7z1obnw9/`.
+Full smoke log: `/private/tmp/udh-u0-post-level-shift-full.log`, with details
+in `.../udh-u0-molecular-kbkwrto0/`. Shift/no-shift comparison inputs and
+outputs: `/private/tmp/uks-level-shift-energy.6Elye8/`.
+
+The formerly unlinked `planck-dh-eq41-xc-response` now links and runs, but
+exits 1. Its test contained a definite stale composition assertion:
+it equated the full Eq. 41 XC channel with the physical callback, whereas
+the documented closed-shell adjoint is four times that callback. The test
+source now checks that factor and also compares against four times an
+independent potential FD, with separate error logging. No production XC
+factor was changed and no primitive FD tolerance was relaxed. The corrected
+test needs a target-only rebuild and rerun before claiming it passes.
+Original failure log: `/private/tmp/dh-eq41-xc-response-rebuilt.log`.
+
+Remaining work: establish reliable correlated UKS SCF convergence/handoff,
+complete the C1 fixture acceptance, and execute the corrected Eq. 41 test.
+These failures do not invalidate the unchanged measured RKS molecular FD
+results, nor do the RKS passes establish unrestricted derivative support.
+
+### 15.15 U2: checked physical two-spin KS response
+
+Implemented in `src/dft/udh_ks_response.h/.cpp` as a detached AO primitive,
+not wired into the UKS DH gradient driver. `UDHSpinMatrices` contains two
+symmetric nao×nao matrices, one per spin; a zero spin trial is a zero matrix
+of that shape, not a missing/zero-dimensional AO matrix. Indefinite trial
+densities are legal. Occupation counts, amplitudes, PT2 scaling, orbital
+energy differences and Z-vector signs do not enter this primitive.
+
+`make_udh_ks_response_operator` owns checked raw-J, raw-K and physical
+polarized-XC callbacks. `apply_channels` returns the following ledger:
+
+| Field | Definition |
+|---|---|
+| `coulomb` | J[Qalpha+Qbeta], shared by both output spins |
+| `exchange.alpha`, `.beta` | -a_x K[Qalpha], -a_x K[Qbeta]; no cross-spin exchange |
+| `xc_from_alpha.alpha`, `.beta` | f_aa[Qalpha], f_ba[Qalpha] |
+| `xc_from_beta.alpha`, `.beta` | f_ab[Qbeta], f_bb[Qbeta] |
+| `total.alpha`, `.beta` | Each spin's J + weighted K + both XC inputs |
+
+There is no RKS occupancy factor, PT2 coefficient, or adjoint factor 2/4 in
+this physical response. `apply` returns the two totals from the same checked
+assembly. The four-XC-block ledger uses two spin-only calls to the existing
+polarized Hessian-vector primitive; it does not assume that the two cross
+output matrices are equal. Self-adjointness is tested in the joint-spin
+Frobenius pairing of Section 15.6.
+
+`make_udh_direct_ks_response_operator` binds raw J/K to Planck's memory-direct
+Coulomb-kernel builders and XC to
+`compute_analytic_xc_hessian_vector_product_polarized`. It requires matching
+polarized global LDA/GGA functionals, finite AO/grid/ground-density data,
+consistent matrix dimensions, and available VXC/FXC support. Ground spin
+densities are copied. Basis/shell-pair, AO/grid and functional objects are
+borrowed: they must remain alive and unchanged until the operator is discarded.
+Rebuild the operator when geometry, grid, density or functional changes.
+No integral-symmetry reduction is imposed on arbitrary response densities.
+No solvent, range-separated, orbital-Hessian or UKS gradient support is added.
+
+All callback errors, exceptions, nonfinite/asymmetric matrices and wrong
+shapes remain errors with a channel label. No failed action is replaced by
+zero. Exact-exchange coefficient zero permits an absent K callback and skips
+K evaluation, but does not suppress J/XC error checks.
+
+The new standalone target `planck-udh-ks-response` contains:
+
+- Explicit independent channel maps for signs, spin orientation and absence
+  of closed-shell prefactors; missing/invalid callbacks, exceptions, NaNs,
+  wrong shapes, zero-spin trials and callback-lifetime checks.
+- A nonsymmetric water-cation/STO-3G fixed-geometry fixture with core-orbital
+  spin densities Tr(Palpha S)=5 and Tr(Pbeta S)=4. No converged-SCF or DH
+  amplitude stationarity is assumed or needed for this density derivative.
+- Independent full-index AO-ERI J/K contractions and density FDs of ordinary
+  first-derivative XC potentials, with alpha-only, beta-only and mixed trials.
+  It logs J, alpha-K, beta-K and all four XC block errors separately.
+- LDA (X+VWN), GGA (PBE X+C), and combined B2PLYP coverage; three density FD
+  steps (1e-3, 3e-4, 1e-4), joint adjointness, linearity, spin swapping,
+  ground-density snapshot immutability and physical closed-shell RKS reduction.
+
+Acceptance thresholds are 1e-8 for J/K density FDs, 2e-7 for XC/total FDs,
+and 1e-10 for joint adjointness and the RKS reduction. They are prospective
+thresholds, not measured results: **the new C++ target has not been rebuilt
+or run yet**. Five fast U2 API/routing checks and the four existing U0 fixture
+checks pass. The existing polarized production-HVP, GGA FXC-ordering and
+GGA Hessian-selfcheck executables also exit successfully; these are baseline
+checks of reused code, not validation of the new binding.
+
+After the user rebuilds `planck-udh-ks-response`, run:
+
+```sh
+build/planck-udh-ks-response > /private/tmp/udh-u2-response.log 2>&1
+```
+
+Baseline logs: `/private/tmp/udh-u2-polarized-baseline.log`,
+`/private/tmp/udh-u2-fxc-ordering-baseline.log`,
+`/private/tmp/udh-u2-hessian-selfcheck-baseline.log`; fast checks:
+`/private/tmp/udh-u2-source-tests.log`. The UKS DH derivative workflow guard
+remains unchanged. U4 will separately establish orbital packing, occupation
+factors, residual conventions and the coupled Z Hessian.
+
+### 15.16 U1: Dprime and the common stationary scalar
+
+Implemented in `src/dft/udh_pt2_gradient.h/.cpp`, alongside the U0 boundary.
+This is a detached algebraic primitive, not UKS gradient enablement. It uses
+the unscaled aa/ab/bb amplitudes and the four Dprime blocks of Section 15.5
+literally: same-spin contractions have weight c/2 and opposite-spin
+contractions weight c. Beta ab contributions use the second occupied and
+virtual slots. No reference density, exact-exchange coefficient, closed-shell
+occupation factor or extra PT2 scale is included.
+
+The public interfaces separate off-shell evaluation from canonical validation:
+
+| Interface | Contract |
+|---|---|
+| `UDHPT2Amplitudes` | Owned unscaled aa/ab/bb arrays in [i,j,a,b] order with explicit spin dimensions; no cached energy or denominators |
+| `build_udh_pt2_dprime` | Finite, shape-checked, antisymmetry-checked amplitudes to owned alpha/beta MO matrices; only oo/vv are nonzero |
+| `transform_udh_pt2_dprime_to_ao` | Separate C-alpha and C-beta transforms, with checked all-active C^T S C=I; preserves each spin's trace and operator contractions |
+| `evaluate_udh_pt2_stationary_scalar` | Off-shell H=P+Dprime-alpha:F-alpha+Dprime-beta:F-beta, using the supplied full symmetric MO Fock matrices |
+| `build_udh_pt2_stationary_contract` | Canonical U0 validation followed by the same scalar at F=diag(epsilon); checks each pair spin channel and the summed stationary identities |
+
+The scalar result retains `pair_aa=c*Taa:gaa`, `pair_ab=2c*Tab:gab`,
+`pair_bb=c*Tbb:gbb`, their sum, the two Dprime:F spin contributions, their
+sum, the total, and the Dprime matrices from that evaluation. Same-spin g
+is direct, not antisymmetrized. It is checked for pair symmetry. Nothing is
+rediagonalized and no amplitude is recomputed inside the off-shell evaluator.
+It accepts nonstationary T and noncanonical F: H=cE and amplitude stationarity
+are asserted only at a canonical validated snapshot, not for arbitrary input.
+
+Raw algebra permits unequal spin dimensions and genuinely zero-extent spin
+sectors, including an empty occupied or virtual space. Nonzero-extent arrays
+may not be omitted, even at c=0. This does **not** broaden U0's canonical
+all-active scope or its current virtual-space restrictions. The AO adapter
+requires full square spin MO spaces over the same nonempty AO basis.
+Malformed dimensions, nonfinite data, invalid same-spin antisymmetry,
+asymmetric Fock matrices and nonfinite contractions are returned as errors.
+
+The independent numerical target is `planck-udh-pt2-stationary`. It expands
+the three storage sectors into the full antisymmetric spin-orbital tensor,
+including all four mixed-spin occupied/virtual placements. Besides the
+spin-orbital -1/2 TT and +1/2 TT density oracle, it evaluates
+
+\[
+\mathcal H=\frac c2\sum_{ijab}T_{ijab}V_{ijab}
+-\frac c4\sum_{ijab}T_{ijab}\mathcal A_F(T)_{ijab},
+\]
+\[
+\mathcal A_F(T)_{ijab}=\sum_k(F_{ik}T_{kjab}+F_{jk}T_{ikab})
+-\sum_d(F_{ad}T_{ijdb}+F_{bd}T_{ijad}).
+\]
+
+Thus the independent amplitude-direction derivative is
+`c/2 deltaT:(V-A_F(T))`. This oracle never constructs Dprime. Central
+differences at 1e-3 and 1e-4 test every independent same-spin antisymmetric
+and direct ab amplitude basis direction, both at canonical stationarity and
+with off-shell amplitudes and noncanonical Fock matrices. Every symmetric
+spin MO Fock direction is also tested: the derivative is Dprime_pp on the
+diagonal, 2 Dprime_pq off diagonal, and zero in ov/vo. This exposes missing
+off-diagonal Fock contractions without using the implementation as its own
+reference.
+
+Other checks cover isolated aa/ab/bb sectors; separate spin traces; spin
+swapping; zero and unequal spaces; scales 0, 0.27, 0.54, 1 and -0.27;
+pair=2cE, Dprime:F=-cE and H=cE; the spatial closed-shell total-density
+reduction; and literal AO transforms with a nonorthogonal metric and distinct
+spin coefficients. Algebraic tolerance is 2e-12 (scaled), and amplitude/Fock
+FD tolerance is 2e-10 (scaled). These are acceptance thresholds, not measured
+errors until the user rebuilds and the executable passes.
+
+The four U1 boundary guards, five U2 boundary guards and four U0 fixture
+checks pass (13 fast checks). Logs are `/private/tmp/udh-u1-source-tests.log`
+and `/private/tmp/udh-u1-fixture-tests.log`. The existing U0 executable also
+exits successfully (`/private/tmp/udh-u1-u0-baseline.log`), but that binary
+predates these source edits and is only a baseline, not a rebuilt regression.
+
+No C++ rebuild has been started for U1. After rebuilding the new target
+and the existing U0 target, run with output preserved:
+
+```sh
+build/planck-udh-pt2-stationary > /private/tmp/udh-u1-stationary.log 2>&1
+build/planck-udh-pt2-energy-contract > /private/tmp/udh-u1-u0-regression.log 2>&1
+```
+
+Fast boundary guards (not numerical acceptance) can run without a build:
+
+```sh
+python3 -m unittest discover -s tests -p test_udh_pt2_stationary_contract.py -v
+```
+
+U3 will differentiate the pair's four coefficient factors and add the Dprime
+response once. No G/RHS, Z solve, W, geometry derivative or production driver
+change is part of U1.
+
+### 15.17 U3: literal pair orbital gradient and stationary RHS
+
+Source: `src/dft/udh_pt2_orbital.h/.cpp`. New standalone acceptance target:
+`planck-udh-pt2-orbital`. U3 composes the validated U1 amplitudes/Dprime and
+U2 physical two-spin response. It does not solve Z or enable a UKS derivative
+workflow. The supplied paper's page 124115-4, particularly Eq. 22 and the
+response expression preceding Eq. 23, was visually checked for this mapping.
+
+**Coefficient convention.** With delta C=C U, G_pq multiplies U_pq, not
+U_qp. For a pair amplitude T_ijab and the chemist integral g_(ia|jb), the
+four contributions with weight w are
+
+\[
+G^{(i)}_{pi}\mathrel{+}=wT_{ijab}(pa|jb),\qquad
+G^{(a)}_{pa}\mathrel{+}=wT_{ijab}(ip|jb),
+\]
+\[
+G^{(j)}_{pj}\mathrel{+}=wT_{ijab}(ia|pb),\qquad
+G^{(b)}_{pb}\mathrel{+}=wT_{ijab}(ia|jp).
+\]
+
+Here w=c for aa/bb and w=2c for ab. In ab, the first two slots belong
+to alpha and the last two to beta. Same-spin pair symmetry combines its
+two occupied and two virtual legs. For U_ai=X_ai and U_ia=-X_ai,
+ell_pair_ai=G_ai-G_ia. The positive occupied-coefficient contribution is
+stored as `external_ai`; the negative virtual-coefficient contribution is
+`internal_ai`. These are the two parts of the literal derivative, not an
+additional legacy internal bracket.
+
+In Planck's ordered T storage, the alpha Eq. 22 pair terms reduce to
+
+\[
+\ell^{\alpha,\mathrm{SS,ext}}_{ai}
+=2c\sum_{jbc}(a_\alpha c_\alpha|j_\alpha b_\alpha)T^{aa}_{ijcb},
+\quad
+\ell^{\alpha,\mathrm{SS,int}}_{ai}
+=-2c\sum_{kjb}(k_\alpha i_\alpha|j_\alpha b_\alpha)T^{aa}_{kjab},
+\]
+\[
+\ell^{\alpha,\mathrm{OS,ext}}_{ai}
+=2c\sum_{jbc}(a_\alpha c_\alpha|j_\beta b_\beta)T^{ab}_{ijcb},
+\quad
+\ell^{\alpha,\mathrm{OS,int}}_{ai}
+=-2c\sum_{kjb}(k_\alpha i_\alpha|j_\beta b_\beta)T^{ab}_{kjab}.
+\]
+
+For beta, interchange spins; ab is repacked with beta on the second
+occupied/virtual slots: T^ba_ijab=T^ab_jiba. This double interchange
+has positive sign. The tests implement these reduced expressions
+independently of the four-slot builder, separately for each spin sector.
+No exact-exchange coefficient multiplies the pair sector.
+
+**Response and coefficient connection.** U1's fixed-T common scalar also
+has the derivative of Dprime:F. The physical density variation is
+delta P^sigma=Cv X Co^T+Co X^T Cv^T (no closed-shell factor two).
+Joint-spin adjointness gives
+
+\[
+\ell^{\sigma,\mathrm{response}}_{ai}
+=2[C_v^{\sigma T}\mathscr K^\sigma[D'_\mathrm{AO}]C_o^\sigma]_{ai}.
+\]
+
+The two belongs to the adjoint projection of **every** physical channel,
+including both XC inputs. It is outside U2 and does not rescale T or Dprime.
+The Fock coefficient connection is explicitly retained:
+
+\[
+\ell^{\sigma,\mathrm{connection}}_{ai}
+=2[(F^\sigma D'^{\sigma})_{ai}-(F^\sigma D'^{\sigma})_{ia}].
+\]
+
+It vanishes when F has no ov/vo block, in particular at the canonical
+reference. Keeping it explicit permits off-shell/noncanonical tests of the
+same functional without silently applying a canonical-only simplification.
+The returned total is pair + response + connection. At the canonical
+reference this is exactly the pair + response RHS of Section 15.6. The
+printed compact XC response is mapped through the physical U2 derivative
+and the scalar identity; an independent nonlinear potential FD, not a
+factor inferred from a printed R label, is the acceptance test. U4 still
+owns the residual Jacobian, its transpose convention and the Z solve.
+
+**Typed boundaries.** `UDHFullMOIntegrals` stores aa/ab/bb *full direct MO*
+integrals in chemist [p,q,r,s] order, with separate alpha/beta dimensions.
+This is deliberately different from U1's [i,j,a,b] amplitude-order ovov
+contract. The builder checks extents, finite values, within-pair symmetry,
+same-spin pair interchange and U1 amplitude antisymmetry, even at c=0.
+This dense boundary is a correctness implementation, not an optimized
+integral transformation. The result retains all four square G matrices for
+each sector/spin and their rectangular vo projections.
+
+`build_udh_orbital_rhs` additionally checks C^T S C=I through the U1 AO
+adapter and full symmetric spin Fock shapes. It returns Dprime in both
+bases, U2's physical AO response ledger, separate projected J, K,
+XC-from-alpha and XC-from-beta channels, the coefficient connection and the
+total. Errors are propagated; nonfinite projections fail. U2's callbacks
+must represent the derivative of the same Fock model used in the scalar
+and be jointly self-adjoint; the callback type alone cannot prove this.
+No amplitude-response or independent legacy bracket is added to the RHS.
+
+**Independent numerical oracles.** The C++ test uses
+common symmetric AO ERI factors, distinct spin MO coefficients, a
+nonorthogonal AO metric and unequal occupied/virtual dimensions. For each
+aa/ab/bb sector, it perturbs each of the four coefficient matrices separately
+in every MO basis direction and evaluates the pair scalar from AO factors,
+without using G or the stored MO integrals. Slot FDs use 1e-3 and 1e-4.
+
+The complete stationary oracle uses a fixed one-body spin potential plus
+physical AO J/K and a nonlinear two-spin XC model with nonzero cross
+couplings. Fixed one-body matrices make its reference Fock canonical; it is
+a synthetic orbital-functional oracle, **not** a molecular UKS calculation
+or an independent Libxc validation. U2 supplies the separate physical
+Libxc/molecular-grid evidence. The oracle evaluates the changing Fock
+potential and all coefficient factors directly at displaced orbitals. It
+checks each alpha/beta vo direction and a mixed-spin direction, the pair,
+fixed-Dprime AO response, coefficient connection and full stationary sum,
+then repeats with off-shell amplitudes and nonzero Fock ov blocks. It also
+checks the separate J/K/XC contractions, spin reversal, scales 0/0.54/-0.27,
+empty spin sectors, zero virtual blocks, canonical vanishing connections,
+callback errors and invalid inputs. A spatial 2c(2t-t_exchange):g scalar
+independently checks the closed-shell summed G reduction.
+
+Pair/index/connection tolerance is 2e-11 (scaled). The full stationary and
+response FDs use 1e-4 and 5e-5 with 3e-8 tolerance; the closed-shell
+four-factor spatial FD tolerance is 3e-9. These are acceptance bounds;
+measured results are recorded below. U1's amplitude validation was extracted into
+a shared checked function without changing its density contractions; rerun
+U1 after rebuilding along with U3. No build was started by the agent.
+
+```sh
+build/planck-udh-pt2-orbital > /private/tmp/udh-u3-orbital.log 2>&1
+build/planck-udh-pt2-stationary > /private/tmp/udh-u3-u1-regression.log 2>&1
+OMP_NUM_THREADS=2 build/planck-udh-ks-response > /private/tmp/udh-u3-u2-regression.log 2>&1
+```
+
+The 17 fast UKS boundary/fixture checks and 24 fast RKS DH checks pass;
+logs are `/private/tmp/udh-u3-source-tests.log` and
+`/private/tmp/udh-u3-rks-boundary-regression.log`. U3 boundary checks are in
+`tests/test_udh_pt2_orbital_contract.py`. They do not establish numerical
+acceptance. UKS production guards remain intact.
+
+**Rebuilt acceptance (2026-09-14).** The user rebuilt U3 and U1 at 07:42
+local time. `planck-udh-pt2-orbital` and the U1 regression both exit 0;
+the unchanged U2 executable also passes again. Maximum logged U3 errors:
+
+| Check | Maximum absolute error |
+|---|---:|
+| All four pair-coefficient slots, aa/ab/bb and both spin orientations | 2.82481083e-15 |
+| Canonical full stationary orbital FD | 3.57231063e-14 |
+| Off-shell/noncanonical full stationary orbital FD | 4.93354272e-14 |
+| Fixed-Dprime physical response FD | 4.81773070e-15 |
+| Dprime:F coefficient-connection FD | 5.67664541e-16 |
+
+The independent Eq. 22 external/internal sums, isolated aa/ab/bb stationary
+identities, alpha/beta/mixed rotations, J/K/XC projections, spin reversal,
+zero sectors, scaling, spatial closed-shell reduction and rejection checks
+all pass. U1's largest amplitude-direction FD error remains 1.73472348e-14;
+U2's largest total physical-response FD error remains 1.14205e-10. Logs:
+`/private/tmp/udh-u3-orbital.log`, `/private/tmp/udh-u3-u1-regression.log`,
+`/private/tmp/udh-u3-u2-regression.log`.
+
+U3 is accepted at the detached orbital-functional primitive level. This is
+not a molecular UKS DH gradient test or a validation of the coupled Z solve;
+U4's subsequent source implementation is recorded below. U5–U11 and the
+UKS production guard remain unchanged.
+
+### 15.18 U4 — coupled canonical KS Jacobian and transpose Z solve
+
+**Rebuilt detached primitive acceptance passes (2026-09-14).**
+This is a detached correctness primitive, not UKS gradient enablement or a
+promotion of the RKS iterative solver into UKS. Sources are
+`src/dft/udh_zvector.h/.cpp`; the standalone target is
+`planck-udh-zvector`. No new driver branch, environment switch, SCF iteration,
+level shift, orbital recanonicalization, or gradient composition is added.
+
+**Derivation in Planck conventions.** The supplied paper's Eq. 27 has the
+orbital gap plus response on the left, and minus its Lagrangian RHS on the
+right. To fix its implementation normalization, start with spin-specific
+orthonormal coefficients and the physical UKS density
+\(P^\sigma=C_o^\sigma C_o^{\sigma T}\). For the non-metric variation
+\(\delta C^\sigma=C^\sigma U^\sigma\), set
+\(U_{vo}^\sigma=X^\sigma\), \(U_{ov}^\sigma=-X^{\sigma T}\), and
+\(U_{oo}^\sigma=U_{vv}^\sigma=0\). Then
+
+\[
+\delta P^\sigma=C_v^\sigma X^\sigma C_o^{\sigma T}
+                 +C_o^\sigma X^{\sigma T}C_v^{\sigma T}.
+\]
+
+There is no RKS occupation factor 2. Differentiating the *co-moving* Fock
+matrix, rather than its fixed-coefficient AO operator alone, gives
+
+\[
+\delta F_{\rm MO}^\sigma
+ =F_{\rm MO}^\sigma U^\sigma-U^\sigma F_{\rm MO}^\sigma
+ +C^{\sigma T}\mathscr K^\sigma[\delta P^\alpha,\delta P^\beta]C^\sigma.
+\]
+
+At a canonical reference the vo block of the coefficient commutator is
+\((\epsilon_a^\sigma-\epsilon_i^\sigma)X_{ai}^\sigma\). Thus
+
+\[
+(AX)^\sigma_{ai}=(\epsilon_a^\sigma-\epsilon_i^\sigma)X^\sigma_{ai}
+ +(C_v^{\sigma T}\mathscr K^\sigma[\delta P]C_o^\sigma)_{ai},
+\quad
+\mathscr K^\sigma[Q]=J[Q^\alpha+Q^\beta]-a_xK[Q^\sigma]
+ +\sum_\tau f_{\rm XC}^{\sigma\tau}[Q^\tau].
+\]
+
+The U3 derivative \(\ell\) is used unchanged. In particular, its adjoint
+R(Dprime) contribution already contains the factor 2 appropriate to
+\(\mathcal H=P_{\rm pair}+\sum_\sigma D^{\prime\sigma}:F^\sigma\).
+That RHS factor must **not** be copied into this residual Jacobian, or
+applied to its XC channel a second time. Likewise, U4 does not multiply
+the already-scaled RHS by \(c_{\rm PT2}\) again.
+
+For \(\mathcal L=\mathcal H+\sum_\sigma z^\sigma:F_{vo}^\sigma\),
+
+\[
+\delta\mathcal L=\ell:X+z:AX=(\ell+A^Tz):X,
+\qquad A^Tz=-\ell.
+\]
+
+Joint-spin adjointness follows from
+\[
+Y:AX=\sum_{\sigma ai}(\epsilon_a^\sigma-\epsilon_i^\sigma)
+Y^\sigma_{ai}X^\sigma_{ai}
++\tfrac12\sum_\sigma\delta P_Y^\sigma:
+\mathscr K^\sigma[\delta P_X].
+\]
+The second term is symmetric in X and Y for U2's jointly self-adjoint
+physical response. This is not a symmetry assertion about each cross-spin
+matrix separately. The implementation nevertheless solves **the transpose
+explicitly**; it does not use a presumed equality to conceal the convention.
+
+**Typed boundaries and controls.**
+
+- `UDHZVectorInputs` owns alpha/beta C, canonical full MO Fock matrices, S,
+  occupation counts, and a U2 response object. It requires positive-definite
+  S, \(C^{\sigma T}SC^\sigma=I\), finite dimensions and diagonal Fock
+  matrices. The gaps come from these physical Fock diagonals, not separately
+  passed potentially shifted eigenvalues. The caller must supply the same
+  physical unshifted reference to F and U2; the type cannot prove consistency
+  of arbitrary callback captures. A diagonal level-shift contamination
+  cannot be recognized from the Fock matrix alone.
+- `apply_udh_eq27_hessian` returns the two AO trial densities and separately
+  inspectable gap, J, same-spin K, XC-from-alpha and XC-from-beta vo pairs.
+  Each XC pair exposes both target spins, retaining all four spin blocks.
+  U2 validates callback outputs and propagates errors/exceptions.
+- Alpha and beta may have different MO and occupied/virtual dimensions.
+  Packing is alpha first, then beta, each `a*nocc+i`; an empty ov sector
+  retains its `(nvirt,nocc)` shape and contributes a zero AO density.
+- `solve_udh_zvector` builds the dense Jacobian from these checked actions,
+  verifies zero-trial homogeneity and joint adjointness, checks singular
+  values and column-pivoted QR rank, then solves the transposed system.
+  Defaults are residual tolerance 1e-12, scaled adjoint tolerance 1e-10 and
+  minimum singular-value ratio 1e-12. Negative eigenvalues are not rejected
+  merely for their sign. Singular/ill-conditioned systems return errors;
+  no level shift, regularization or zero-solution fallback is applied.
+- The final residual is **fresh**: new unit-column actions are paired with
+  z to obtain \((A^Tz)_q=z:(A e_q)\), not multiplication by the cached
+  matrix or substitution of Az. Require
+  \(\|A^Tz+\ell\|_\infty\le10^{-12}\max(1,\|\ell\|_\infty)\).
+  A successful nonempty solve uses `1+2*n` actions, where
+  \(n=o_\alpha v_\alpha+o_\beta v_\beta\); an empty total space validates
+  its zero action and returns correctly shaped zero blocks.
+- `UDHZVectorProducts` owns the C/F/S and RHS snapshot, Jacobian, Z,
+  per-spin residual matrices, maximum residual, adjoint defect, rank,
+  reciprocal condition and action count. U2 callbacks retain their existing
+  borrowed geometry/functionals lifetimes; copying the products does not
+  deep-copy these external resources. They must remain unchanged and alive.
+  This O(n²)-storage/O(n³)-factorization reference is intentionally not a
+  large-system algorithm; UKS matrix-free promotion is a separate change.
+
+**Independent test construction and acceptance gates.**
+`tests/udh_zvector.cpp` builds a nonidentity AO metric, distinct spin
+coefficients and unequal spin spaces, common symmetric AO ERI factors,
+and a nonlinear coupled two-spin XC scalar/potential. Fixed spin-specific
+one-body matrices make the chosen center exactly canonical. This is a
+synthetic orbital-functional model, **not a converged molecular UKS state**.
+Its Fock potential uses explicit AO four-index contractions while the U2
+response callbacks use the factorized actions. Cayley rotations move the
+occupied density and both coefficient sides of F. The FD reference never
+differentiates the new Jacobian builder.
+
+Rectangular MO spaces test the detached U4 response/solve only, using a
+fixed nonzero RHS and the independently FD-built transpose Jacobian. They
+also assert that the current U3 handoff rejects those spaces. U1's AO Dprime
+adapter requires both spin coefficient matrices and Dprime matrices to be
+square/all-active in the common AO dimension. Consequently the U3-to-U4
+stationary cancellation tests use full square coefficient matrices, with
+unequal alpha/beta occupations and virtual counts. Missing occupied or
+virtual spin blocks are exercised within both appropriate boundaries. U4's
+rectangular response capability does not enable a truncated-space DH gradient.
+
+| Added check | Acceptance condition / purpose | Status |
+| --- | --- | --- |
+| Every alpha/beta Jacobian column | Co-moving F_ai FD at 1e-4 and 3e-5; gap/J/K/XC channels isolated; maximum error 3e-8 | PASS; maximum full-column error 1.67507577e-8, isolated-channel error 1.65749281e-8 |
+| Mixed-spin direction and spin swap | Combined FD and linear action; permuted solutions agree to 2e-12 | PASS |
+| Dense transpose solve | Solve independently FD-built A^T against the same U3 RHS; Z agreement 2e-9; rectangular spaces use a separate fixed RHS | PASS; maximum logged rectangular Z difference 8.12023643e-11 |
+| Common stationary cancellation | Independently FD U1 H(C) plus z:F_vo using fixed stationary amplitudes, regenerated MO integrals and co-moving F; each basis and mixed direction below 2e-9 | PASS; maximum error 3.02673106e-14 |
+| Closed-shell reduction | Equal-spin action equals existing RKS Eq. 27 action; each spin Z is half the RKS Z for half-spin RHS | PASS |
+| Empty/unequal spaces | Missing occupied/virtual sectors, unequal MO counts, and empty total pair space retain valid shapes | PASS; U3 rejection of rectangular spaces also confirmed |
+| Failure/conditioning controls | Bad metric/C/F/RHS, noncanonical F, callback failures, nonadjoint kernel, singular/poor condition rejected; indefinite nonsingular problem solved | PASS |
+| Transpose and fresh-action controls | Deliberately relaxed adjoint gate only in a nonphysical test distinguishes A^Tz from Az; callback error injected after matrix construction must propagate | PASS |
+
+The stationary test holds amplitudes fixed at their canonical stationary
+value; U1 independently established amplitude-direction stationarity.
+It does not claim a live geometry-dependent amplitude-response solve or
+the U9 transport identity. The U2 physical J/K/polarized-XC regressions
+remain separately required; these synthetic U4 tests do not replace a
+future physical molecular orbital-Jacobian or full-gradient validation.
+
+**First rebuilt run and correction (2026-09-14).** The user-supplied
+`planck-udh-zvector` binary (08:35) exits 1 at the first U3 RHS handoff:
+`UDH U1 AO adapter: invalid all-active matrix shape or values`.
+The initial fixture used four alpha but only three beta MOs in a four-AO
+basis. That is valid for the detached U4 Jacobian, but not for U3's existing
+all-active AO Dprime adapter. Its preceding canonical, per-column/channel
+FD and adjoint assertions reported no failures; the later solve/cancellation
+and control suites were not reached. That first run was not a complete U4 pass.
+
+Only `tests/udh_zvector.cpp` was corrected: separate the rectangular-space
+solver oracle from the all-active stationary handoff, explicitly retain the
+U3 rejection, and add full-square fixtures for the U3-to-U4 tests. Neither
+the U1/U3 contract nor the U4 solver was changed. The original failure log
+is retained at `/private/tmp/udh-u4-zvector.log`.
+
+**Corrected rebuilt acceptance.** The user rebuilt `planck-udh-zvector`
+(binary stamped 2026-09-14 08:41). Running with `OMP_NUM_THREADS=2` exits
+zero and reports `PASS U4 coupled canonical KS Jacobian and transpose Z solve`.
+All seven fixture audits, transpose/error controls and the closed-shell
+reduction pass. The rectangular audits have 6, 4 and 2 response directions;
+the all-active stationary audits have 7, 7, 4 and 3 directions. The largest
+logged fresh residual is 1.38777878e-16 for the fixed-RHS rectangular tests
+and 2.71050543e-20 for the U3-RHS stationary tests. The latter fixtures have
+singular-value ratios between 0.83097165 and 0.86458992. The separate
+ill-conditioned and singular rejection controls also pass. Retest log:
+`/private/tmp/udh-u4-zvector-retest.log`.
+
+The 22 UKS no-build Python checks pass, including five U4 architecture/oracle
+guards (`/private/tmp/udh-u4-source-tests-retest.log`). The extra guard fixes
+the rectangular/all-active boundary in the test layout. All 28 RKS DH
+Python checks pass (`/private/tmp/udh-u4-rks-source-tests.log`), and
+`git diff --check` passes. These source/runner checks do not establish
+numerical acceptance of the corrected C++ suite.
+
+The rebuilt U1, U2 and U3 numerical regressions pass, as do the four RKS
+amplitude/density, physical contraction, XC callback and GMRES suites.
+Logs (all `/private/tmp/`): `udh-u4-u1-regression.log`,
+`udh-u4-u2-regression.log`, `udh-u4-u3-regression.log`,
+`udh-u4-rks-invariants.log`, `udh-u4-rks-contract.log`,
+`udh-u4-rks-xc.log`, and `udh-u4-rks-gmres.log`. No agent build or
+configuration was started. U4 is accepted at the detached canonical
+orbital-response/Z-vector primitive level, not as a molecular UKS gradient.
+U5–U11 and the UKS production guard remain unchanged.
+
+## 16. Hessian-free Z-vector swap probe
+
+This section records the diagnostic experiment that preceded O3. It is
+not the production iterative implementation; Section 17 describes that
+separate promotion and its acceptance evidence. Select the probe by setting
+`PLANCK_DFT_DH_HESSIAN_PROBE_LOG` to a writable ledger path for a restricted
+global-DH gradient request. With the variable absent, the normal backend
+is now O3 GMRES; with it present, the baseline is explicitly dense QR.
+An empty path is rejected; MPI runs and more than 128
+occupied–virtual pairs are excluded from the probe.
+
+### Question and controls
+
+The diagnostic dense Hessian is built column-by-column from
+`apply_dh_eq27_hessian`. A separate implementation,
+`build_ks_orbital_hessian_op`, retains the shared KS/SOSCF action and its
+`kernel_scale=2` convention. Its input object is kept alive throughout the
+probe because that callback borrows it by reference. The probe distinguishes:
+
+1. Dense QR production Z versus GMRES using the same dense matrix.
+2. Dense QR production Z versus GMRES calling Eq. 27 directly.
+3. Dense QR production Z versus GMRES calling the shared KS action.
+
+All iterative solves start at zero. They use right-preconditioned restarted
+GMRES (24-vector restart, maximum 256 iterations, two-pass orthogonalization),
+with absolute orbital gaps floored at 1e-8 **only in the preconditioner**.
+The operator and PT2 denominators are not shifted. The solver tolerance is
+`1e-12 * max(1, max_abs(rhs))`, checked with a fresh unpreconditioned residual.
+There is no assumption of positive definiteness and no dense-solution fallback.
+
+The ledger prints full-precision orbital-energy/J/K/XC matrices, differences,
+total-matrix asymmetries, mixed-direction actions at several scales, Z vectors,
+iteration residuals, and residuals against both the candidate and reference
+operators. Shared-action channels use its one-spin-sized trial density and
+ov projection, whereas Eq. 27 uses the total-density trial and vo projection.
+Their comparison explicitly exposes factor and orientation differences. The
+shared action is also checked against its channel reconstruction; callback
+errors cannot be accepted as the legacy callback's silent zero response.
+
+The dense matrix here is **not an independent physical Hessian oracle**.
+Basis-direction agreement alone is also insufficient: the mixed-direction
+checks test superposition and screening effects. Passing this experiment
+establishes equivalence for these inputs, not universal operator correctness.
+
+### Actual gradient substitution
+
+One explicitly selected diagnostic run constructs the converged SCF/PT2 state, dense Z,
+derivative arrays, dense contract, and analytic KS gradient. The probe then
+rebuilds the same typed contract with **only Z changed** to the shared-action
+GMRES solution. There is no intervening SCF, amplitude, geometry, quadrature,
+or orbital update. The output gradient in normal JSON is the swapped result.
+
+The ledger records raw/symmetric D and W matrices and the separate h, overlap,
+separable ERI, nonseparable ERI, P-side XC, D-side XC, Becke partition, and
+point-translation gradient contributions. Dense and candidate PT2 and total
+gradients are printed in the same driver-standard frame. Normal JSON retains
+the usual requested output frame. The RHS must remain unchanged.
+
+`STATUS PASS` requires action agreement within 1e-10, both control and candidate
+Z agreement within 1e-9, candidate dense residual within 1e-9, unchanged RHS
+within 1e-12, and total-gradient agreement within 1e-9 Ha/Bohr. A finite,
+converged but discrepant candidate is deliberately returned with ledger status
+`DIFFERENCE`, so its energy-FD discrepancy can be measured. It must not be
+mistaken for an accepted production result. Solver/callback failure emits
+`FAILURE` and aborts the diagnostic run rather than substituting dense Z.
+
+### Rebuild and run
+
+The user owns rebuilding. Rebuild `planck-dft` and the new Eigen-only test
+target `planck-dh-probe-gmres`; no build was started when adding this probe.
+After rebuilding:
+
+```sh
+build/planck-dh-probe-gmres > /private/tmp/dh-probe-gmres.log 2>&1
+python3 tests/dh_hessian_swap_audit.py \
+  > /private/tmp/dh-hessian-swap.log 2>&1
+```
+
+The runner defaults to the validated water and nonplanar C1 H2O2 fixtures.
+It first runs a clean normal gradient, then the opt-in swap, requires an
+explicit probe marker, and preserves every input/log/result in a unique
+temporary directory. It reports an error rather than silently accepting a
+stale binary. It also checks that energy and normal-output gradients agree.
+For the stronger end-to-end comparison:
+
+```sh
+python3 tests/dh_hessian_swap_audit.py --fd \
+  > /private/tmp/dh-hessian-swap-fd.log 2>&1
+```
+
+`--fd` compares both gradients against the same unmodified total-energy
+central differences on every coordinate at 1e-4 and 2e-4 Bohr, with the
+existing 5e-8 Ha/Bohr tolerance. Energy endpoints run with all DH probe flags
+removed. A probe mismatch is a failed audit even if its molecular error falls
+below the looser FD tolerance. The runner serializes full matrix ledgers into
+`report.json`, with a top-level `summary.json` listing fixture outcomes.
+
+Source: `src/dft/dh_hessian_probe.*`, diagnostic solver
+`src/dft/dh_probe_gmres.h`, and the single opt-in branch in `driver.cpp`.
+Tests: `tests/dh_probe_gmres.cpp`, `tests/test_dh_hessian_swap_audit.py`.
+
+### Measured swap results (2026-09-12)
+
+The user rebuilt and ran the full `--fd` audit. Both fixtures pass, including
+all 42 coordinate/step pairs for each of the dense and swapped gradients.
+The total energies are identical at stored precision. Maximum absolute
+differences are:
+
+| Quantity | Water | Nonplanar C1 H2O2 |
+|---|---:|---:|
+| Dense/shared Hessian matrix | 2.22044605e-16 | 3.55271368e-15 |
+| Orbital-energy channel | 0 | 0 |
+| J channel | 2.22044605e-16 | 1.24900090e-16 |
+| K channel | 1.11022302e-16 | 1.66533454e-16 |
+| XC channel | 1.38777878e-17 | 2.08166817e-17 |
+| Largest action/reconstruction audit difference | 3.55271368e-15 | 3.55271368e-15 |
+| Shared-action Z minus dense QR Z | 4.66206934e-18 | 1.06897650e-12 |
+| Shared-action Z minus dense-matvec GMRES Z | 8.67361738e-18 | 5.20417043e-17 |
+| Candidate residual against the dense matrix | 6.50521303e-18 | 6.64818894e-13 |
+| Total gradient difference (Ha/Bohr) | 1.38777878e-17 | 1.39017270e-13 |
+| Shared-gradient/energy-FD error, h=1e-4 Bohr (Ha/Bohr) | 1.44657175e-8 | 6.60811300e-9 |
+| Shared-gradient/energy-FD error, h=2e-4 Bohr (Ha/Bohr) | 1.69526181e-8 | 1.26284304e-8 |
+
+All three GMRES variants converge in 4 iterations on water and 12 on H2O2.
+The H2O2 Z difference from dense QR is attributable to iterative stopping,
+not a detected operator difference: GMRES using the dense matrix reproduces
+the shared-action solution to 5.20e-17. The contract RHS and nonseparable ERI
+gradient term are exactly unchanged. Mixed-direction tests also pass.
+
+Evidence: `/private/tmp/dh-hessian-swap-fd.log`; full matrix ledgers and JSON
+reports are in
+`/var/folders/b6/8bkpkc5j2hjgttz3q3yv16gr0000gn/T/dh-hessian-swap-f5akb2ul/`.
+These temporary files may not survive cleanup. The standalone
+`/private/tmp/dh-probe-gmres.log` was not present when reviewing the run;
+the separate solver failure-path suite is not claimed to have run merely
+because the molecular audit succeeded.
+
+The previously reported action defect is **not reproduced by the current
+implementation on these fixtures**. This does not explain the historical
+failure or establish large-system convergence. At the time of those results,
+the normal production solve remained dense. The probe still constructs dense matrices for comparison and
+duplicates channel evaluations: it demonstrates correctness of the swap,
+not a production memory or timing improvement.
+
+## 17. Recommended optimization sequence
+
+This sequence supersedes the earlier recommendation to block matrix-free
+work pending the swap experiment. Section 16 now supports staging an
+iterative Z backend early, after inexpensive grid and ownership improvements.
+O1 is implemented and its rebuilt invariant, XC-channel and molecular FD
+checks pass (2026-09-13). O2 is implemented; its rebuilt cache, contraction,
+and invariant checks pass, with molecular revalidation recorded below.
+O3 is rebuilt and passes typed/physical, molecular FD and standalone solver
+checks, including the corrected failure-path assertion. O4–O9 remain plans.
+UKS derivative development remains a separate scope.
+
+Let N denote AO count, o/v occupied/virtual counts, G grid points, and M
+atoms. The goal is a memory-bounded conventional gradient with fifth-order
+PT2 contractions, not a claim of linear scaling. Iterative response costs
+also depend on iteration count. Exact contraction reordering comes before
+RI or locality approximations, which require their own energy contracts.
+
+### O0. Freeze correctness evidence and establish performance baselines
+
+- Retain the dense QR, literal four-coefficient, and full-array contractions
+  as small-system test oracles. Preserve the Section 16 input configurations,
+  thresholds, and matrix/gradient evidence.
+- Run the standalone GMRES solver tests, including indefinite/nonsymmetric
+  matrices, restart, exhaustion, singular breakdown, and callback failures.
+- Measure wall time and peak resident memory by stage: PT2 transform,
+  D-prime/RHS, Z solve, derivative construction, pair backtransform, XC-II.
+  Record dimensions, grid size, threads, and response-action count.
+- Separate diagnostic cost from normal production cost; the swap probe's
+  extra dense/channel calculations must not be used to estimate speedup.
+
+Acceptance: reproducible numerical baselines and a performance ledger. The
+source-level cost analysis below is not a substitute for those measurements.
+
+### O1. Remove accidental quadratic-grid work
+
+Implemented in `analytic_hessian.cpp` and the three GGA paths in
+`dh_pt2_gradient.cpp`: each loop now computes the whole-grid
+`gradient_squared()` vector once, then copies its entries. The old schedule
+recomputed all G values for each of G points. Sigma preparation now performs
+O(G) work rather than O(G²), with no change to the arithmetic inside
+`gradient_squared()`. Each temporary is block-scoped and released before
+Libxc evaluation; no cross-call cache or new density/grid lifetime is added.
+
+The affected consumers are the analytic XC Hessian-vector action, the
+fixed-grid P-side XC-II term, GGA moving-grid partition/point-translation,
+and the GGA D-side AO term. Grid points, weights, cutoffs, coefficients,
+response conventions, and Libxc calls are unchanged.
+
+Verification status: the no-build source/schedule checks in
+`tests/test_dh_grid_sigma_hoist.py` pass. The new C++ micro-oracle in
+`tests/dh_grid_sigma.cpp` is part of `planck-dh-pt2-amplitude-density`: it
+compares the actual Eigen whole-grid method under both schedules for
+G = 0, 1, 7, 64, 256, 1024, 4096, requires exact output equality, counts
+G² versus G evaluated grid values, and logs timings without a flaky wall-time
+ratio threshold. The rebuilt suite passes with exactly zero sigma differences
+at every tested size. At G = 4096, the whole-grid evaluations visit 16,777,216
+values under the old schedule and 4,096 under the new schedule. The diagnostic
+single-sample timings were 3,089 microseconds and 1 microsecond, respectively;
+the small timings are not a reliable throughput benchmark or an end-to-end
+speedup claim. This removes one quadratic operation, not every scaling
+bottleneck.
+
+Rebuilt validation (2026-09-13): `planck-dh-pt2-amplitude-density` and
+`planck-dft-coulomb-response` both exit successfully, including the physical
+XC-II channel/geometry checks. Both molecular fixtures pass every Cartesian
+coordinate at both steps, without DH diagnostic flags:
+
+| Fixture | FD step (Bohr) | Maximum gradient error (Ha/Bohr) |
+|---|---:|---:|
+| Water | 1e-4 | 1.43673238e-8 |
+| Water | 2e-4 | 1.70318601e-8 |
+| C1 H2O2 | 1e-4 | 7.33748209e-9 |
+| C1 H2O2 | 2e-4 | 1.17966995e-8 |
+
+The acceptance threshold remains 5e-8 Ha/Bohr. The two molecular result
+directories are `dh-production-cartesian-fd-8wbix1bn` and
+`dh-production-cartesian-fd-m0a4k813` under the host temporary directory.
+Reproduce the checks and their logs with:
+
+```sh
+build/planck-dh-pt2-amplitude-density > /private/tmp/dh-o1-invariants.log 2>&1
+build/planck-dft-coulomb-response > /private/tmp/dh-o1-xc-channels.log 2>&1
+python3 tests/dh_cartesian_fd_audit.py \
+  tests/inputs/exploratory/dh_gradient/water_b2plyp_gradient_fd.hfinp \
+  > /private/tmp/dh-o1-water-fd.log 2>&1
+python3 tests/dh_cartesian_fd_audit.py \
+  tests/inputs/exploratory/dh_gradient/h2o2_c1_b2plyp_gradient_fd.hfinp \
+  > /private/tmp/dh-o1-h2o2-fd.log 2>&1
+```
+
+Acceptance: unchanged XC channel actions and all four XC-II contributions;
+both molecular FD fixtures pass. Show linear growth of this operation with
+grid size without changing grid points, weights, or numerical cutoffs.
+
+### O2. Separate ownership, reuse stationary inputs, and cache fixed XC data
+
+Implemented in the restricted DH production path. At O2 acceptance, the dense QR Z solve,
+orbital packing, response factors, PT2 scaling and all contraction formulas
+were unchanged. O3's subsequent solver change is documented below; neither
+step enables UKS derivatives.
+
+**Per-geometry ownership.** `DHGradientGeometryWorkspace` owns the MO ERIs
+and h/S/ERI derivative bundle. `DHGradientDriverInputs` holds a
+`shared_ptr<const DHGradientGeometryWorkspace>` instead of copying those
+arrays. The driver moves the finished MO transform and derivative bundle
+into that owner. Input/probe copies share the same immutable owner and
+quartic buffers; no unowned span escapes. The small C/epsilon/Z input
+matrices remain owned copies. The PT2 snapshot and XC-II pointer inputs are
+still synchronous borrowed inputs: they must remain unchanged and alive for
+the complete geometry evaluation, as before. Direct J/K callbacks continue
+to borrow the prepared shell-pair/basis data.
+
+**One stationary construction.** `build_dh_stationary_products` constructs
+the tilde amplitudes, Dprime, Eq. 41 response and literal Eq. 40 RHS once.
+The Z solver uses these products; the two-argument
+`build_dh_gradient_driver_contract(inputs, std::move(stationary))` then
+consumes exactly those objects. The handoff checks snapshot/ERI identity,
+C and scale/exchange bindings, dimensions, finite entries and the literal
+RHS convention. The geometry's PT2/ERI data must not be mutated in place
+between preparation and consumption; pointer identity is not a content
+checksum. A fresh final physical Z action/residual remains mandatory in the
+driver. The one-argument contract overload is the independent reconstruction
+adapter used by small-system tests and the explicit Hessian-swap probe.
+
+**Gamma storage.** `DHGammaStorage::ContractionOnly` computes the unchanged
+eightfold-symmetric separable and nonseparable tensors. It releases each
+raw temporary after its symmetric adapter is complete and never constructs
+the unused raw/symmetric totals. Eq. 33 consumes only the two separate
+symmetric tensors. `ReferenceAll` remains the default for low-level and
+one-argument reference calls and returns all six arrays. Finished tensors
+and stationary products are moved, not copied, into the contract.
+
+| Storage/work item | Previous production schedule | O2 production schedule |
+|---|---|---|
+| Driver MO ERIs and derivative bundle | Value copies at the input boundary | Shared immutable owner; buffers moved into it |
+| Dprime/Eq. 41/Eq. 40 preparation | Solver construction plus contract reconstruction | One construction, then move handoff |
+| Retained Gamma arrays per contract | Six N^4 arrays, plus transient result copies | Two N^4 arrays, moved; at most three during their construction |
+| Fixed XC ground-density evaluation | Once per response action | Once per kernel preparation |
+| Libxc evaluations | Two for LDA / four for GGA per action | Two / four at preparation, none during actions |
+
+**Fixed XC cache.** `prepare_rks_xc_kernel` creates an immutable owning
+`RKSXCKernel`. It snapshots AO values/gradients, weights, ground rho/gradient
+fields and the summed functional derivatives. The GGA cache retains
+vsigma, f-rho-rho, f-rho-sigma and f-sigma-sigma, including the combined-XC
+correlation-suppression rule. Each action evaluates only the new trial
+density fields and projects the original LDA/GGA formula. The original
+uncached HVP is retained as an independent comparison path. No global cache,
+geometry-key inference, mutable functional pointer or trial-dependent cache
+is introduced. Each geometry/SCF call prepares a new kernel; an old kernel
+continues to represent its original snapshot if caller objects change or
+are destroyed. Kernel copies share that snapshot.
+
+The owned AO snapshot adds four G-by-N arrays to the cache; that deliberate
+lifetime-safety cost must be included in memory measurements. Reported
+`storage_bytes()` counts retained numerical arrays, not allocator overhead
+or whole-process RSS. A future shared geometry-wide AO owner could remove
+this extra AO copy, but no lifetime-unsafe borrowing is used to claim that
+saving here. No end-to-end peak-RSS or timing speedup is claimed from the
+local storage counts.
+
+**Rebuilt primitive acceptance (2026-09-13).** The user-managed rebuild
+completed at 12:54 local time; the following executables exit successfully:
+
+- `planck-dh-eq41-xc-response`: cached/uncached actions for LDA, GGA and
+  combined B2PLYP at G=2,17,64, four trial scales, two potential-FD steps,
+  copied/moved kernels, invalid trials, snapshot lifetime and new-snapshot
+  changes. Maximum cached/reference norm difference is 8.881784e-16. The
+  largest potential-FD norm error is 1.535470e-7, within the 2e-7 bound.
+- `planck-dft-coulomb-response`: physical water compact/reference Gamma
+  arrays agree exactly; Dprime, response, RHS, W, separate h/S/ERI and all
+  four XC-II channels agree. Pointer checks confirm stationary products are
+  moved and workspace copies share buffers. Stale-scale/nonfinite products
+  fail. Eq. 41 preparation makes one response call; downstream assembly
+  makes one further call for Eq. 42 rather than rebuilding Eq. 41.
+  Retained Gamma storage is 115,248 bytes in the six-array reference and
+  38,416 bytes in production.
+- `planck-dh-pt2-amplitude-density`: all existing algebraic invariants,
+  including O1's exact sigma schedule comparison, pass.
+
+The 24 fast DH source/workflow tests pass. Primitive logs:
+`/private/tmp/dh-o2-xc-cache.log`, `/private/tmp/dh-o2-contract.log`,
+`/private/tmp/dh-o2-invariants.log`, `/private/tmp/dh-o2-source-tests.log`.
+Molecular all-coordinate revalidation uses the same water/C1 H2O2 inputs,
+1e-4 and 2e-4 Bohr steps, 5e-8 Ha/Bohr tolerance, and unchanged user SCF
+limits. Logs: `/private/tmp/dh-o2-water-fd.log` and
+`/private/tmp/dh-o2-h2o2-fd.log`.
+
+Both all-coordinate molecular runs pass after the same rebuild:
+
+| Fixture | FD step (Bohr) | Maximum error (Ha/Bohr) |
+|---|---:|---:|
+| Water | 1e-4 | 1.45093823e-8 |
+| Water | 2e-4 | 1.69607557e-8 |
+| C1 H2O2 | 1e-4 | 7.90939006e-9 |
+| C1 H2O2 | 2e-4 | 1.17256475e-8 |
+
+All calculations use the ordinary production gradient with no DH diagnostic
+flags. Analytic translation-sum components are below 6.6e-14 Ha/Bohr.
+Artifacts are `dh-production-cartesian-fd-prji24gp` (water) and
+`dh-production-cartesian-fd-mlmxasae` (C1 H2O2) under the host temporary
+directory. This establishes numerical acceptance and the measured local
+storage/construction reductions. Whole-process peak-RSS and timing scaling
+remain O0 performance-ledger work; they have not been inferred from these
+small-system tests.
+
+Acceptance: invariant objects agree with the reference; no stale-data or
+borrowed-lifetime failures; peak memory and construction/action counts drop.
+Retain finite-value, dimension, convention, and final Z-residual checks.
+
+### O3. Promote the validated matrix-free Z solve behind a typed backend
+
+**Rebuilt molecular, typed-contract and standalone solver validation pass
+(2026-09-14), including the corrected singular-failure assertion.**
+Unit-column construction and dense QR are replaced in the
+normal restricted production branch by a checked action-based iterative
+solve of the same AZ=-L equation. The following requirements govern it:
+
+- First retain the successful probe's GMRES settings and preconditioner.
+  Change solver tuning only after numerical equivalence is established.
+- Use one explicitly specified physical KS action, preserving density
+  normalization, a*nocc+i packing, and all J/K/XC coefficients. The probe
+  validates both the Eq. 27 and shared KS conventions on these systems;
+  do not mix pieces of the two conventions implicitly.
+- Propagate callback errors. The shared callback's historical zero-vector
+  return on XC failure is not an acceptable production error contract.
+  Resolve its borrowed-input lifetime explicitly.
+- Compute a fresh final residual with the unmodified action. A preconditioner
+  floor is not a shift of A or of PT2 denominators. No silent dense fallback
+  and no requirement that A be positive definite.
+- In the iterative production backend, do not allocate the dense Hessian,
+  construct its columns, run the three diagnostic solves, or reconstruct
+  duplicate channels. Keep those operations in explicit tests/probes only.
+
+Acceptance: reproduce the channel, Z, and gradient bounds in Section 16;
+exercise larger ov spaces, restart, tighter tolerances, failure handling,
+and more than one nonsymmetric geometry. Preserve the existing molecular
+FD tolerance. Measure memory reduction from O((ov)^2) Hessian storage to
+O(k*ov) Krylov storage plus the action workspace, with bounded restart k.
+Report actual action counts and time; two small-fixture passes do not
+establish general convergence or an asymptotic iteration bound.
+
+#### O3 implementation contract and acceptance ledger
+
+- `src/dft/dh_zvector.h` provides `DHZVectorOptions`, the backend enum,
+  `DHZVectorResult` and `solve_dh_zvector`. The default is
+  `MatrixFreeGMRES`; `DenseReference` is an explicit test/probe choice.
+- `src/dft/response_gmres.h` contains the same restarted right-preconditioned
+  algorithm used by the validated probe: tolerance 1e-12, restart 24,
+  maximum 256 iterations, and two-pass modified Gram–Schmidt. The old
+  `dh_probe_gmres.h` aliases this implementation, avoiding a second solver.
+- Each action invokes `apply_dh_eq27_hessian` with the unchanged physical
+  total-density trial and separate gap/J/K/XC factors. This does not use
+  the historical shared action's zero-on-XC-error behavior. Detailed
+  callback errors, exceptions, nonfinite values and invalid dimensions
+  propagate; nonconvergence aborts the gradient, with no dense fallback.
+- The solver borrows its arguments synchronously only. No action escapes.
+  Direct J/K borrow the current prepared geometry; XC owns the immutable
+  O2 kernel snapshot. The same stationary RHS is moved into the gradient
+  contract after solving. No SCF, PT2, grid or coefficient convention changes.
+- `DHEq41ZVectorProducts::solver` and the normal `DH Z-vector` log line
+  report backend, pair count, iterations, actions, restarts, final residual,
+  matrix-storage bytes and solver seconds. Action count includes the initial
+  zero trial, Arnoldi and per-iterate residual actions, and the final fresh
+  residual. The downstream contract residual is one additional action
+  outside this count. There is no timing-based correctness assertion.
+- For cycle width k and n=ov, `krylov_matrix_bytes` reports the largest
+  allocated basis/direction/Hessenberg matrix sum:
+  `sizeof(double) * [n*(2*k+1) + k*(k+1)]`. It excludes vectors, small QR
+  temporaries, the action/cache workspace and allocator overhead; it is
+  **not peak process RSS**. Dense-reference bytes report only its n-by-n
+  Hessian. For tiny n the Krylov matrices can exceed a dense Hessian; the
+  benefit is bounded-restart scaling for growing n, not guaranteed savings
+  on every molecule. No whole-process speedup/RSS reduction is claimed.
+- Ordinary gradient, optimization and frequency calls use GMRES. The
+  existing `PLANCK_DFT_DH_HESSIAN_PROBE_LOG` selects the dense reference
+  baseline plus the existing diagnostic comparisons; no new input flag is
+  added. The historical audit runner calls its normal-run files `dense`:
+  after O3 those files hold the production Eq. 27 GMRES result. Its explicit
+  probe still compares dense QR, dense-matvec GMRES, Eq. 27 GMRES and shared
+  KS GMRES on one fixed state, and tests their gradients.
+
+The user supplied the rebuild (test targets stamped 2026-09-14 08:01,
+`planck-dft` 08:02); no agent build or configuration was started. The
+rebuilt executables were then run with `OMP_NUM_THREADS=2`, writing outputs
+to logs. The **28 fast DH Python routing/runner checks
+pass**, including four O3 guards, and `git diff --check` passes. Output:
+`/private/tmp/dh-o3-source-tests.log`. These checks do not establish numerical
+equivalence or C++ compilation. All 17 UKS Python contract/fixture checks also
+pass (`/private/tmp/dh-o3-uks-source-tests.log`); UKS production remains
+disabled. Added numerical acceptance tests are:
+
+| Target / audit | Added or retained O3 coverage | Status |
+| --- | --- | --- |
+| `planck-dh-probe-gmres` | Existing indefinite/nonsymmetric, restart, exhaustion and error tests; exceptions; matrix-free 128/256-direction banded operators with restart 4, tolerance 1e-13, exact solution, action counts and bounded matrix storage | PASS after test-only rebuild at 08:12; singular case explicitly reports `GMRES: nonfinite iterate` |
+| `planck-dh-pt2-amplitude-density` (`tests/dh_zvector.cpp`) | Independent Eq. 27 gap/J/K/XC expressions; typed dense/GMRES Z and packing; restart/tighter tolerance; zero RHS; gap floor without shift; singular/exhausted solves; J/K/XC failures; changed-callback fresh residual | PASS; typed restart fixture: 8 iterations, 3 restarts, 18 actions, residual 4.55191e-15 |
+| `planck-dft-coulomb-response` | Water/STO-3G physical direct J/K + analytic GGA action; same-RHS typed dense/GMRES; D/W, h/S, separable/pair ERI, all four XC-II channels and total correction (1e-9 bounds) | PASS; Z difference 3.35051e-15, W 2.49865e-14, total correction 8.09763e-15 |
+| `planck-dh-eq41-xc-response` | O2 cached physical XC regression | PASS |
+| `tests/dh_hessian_swap_audit.py` (without `--fd`) | Retained dense/shared/explicit Eq. 27 channel ledger and molecular gradient comparison; FD run separately below | PASS on water and C1 H2O2 |
+| `tests/dh_cartesian_fd_audit.py` | Normal production B2PLYP water and C1 H2O2, every Cartesian coordinate at 1e-4 and 2e-4 Bohr; max error 5e-8 Ha/Bohr; user SCF limits preserved | PASS: all 42 coordinate/step comparisons |
+
+**Molecular acceptance and solver telemetry.** Both center logs explicitly
+show `backend=GMRES` and `dense_matrix_bytes=0`; no DH debug flags entered
+the production FD runs. All energies are Planck total-energy calculations.
+
+| Quantity | Water | C1 H2O2 |
+| --- | ---: | ---: |
+| Maximum analytic–FD error, h=1e-4 Bohr (Ha/Bohr) | 1.45093822e-8 | 7.90936419e-9 |
+| Maximum analytic–FD error, h=2e-4 Bohr (Ha/Bohr) | 1.69607556e-8 | 1.17256574e-8 |
+| Production ov pairs | 10 | 27 |
+| Production GMRES iterations / actions | 4 / 10 | 12 / 26 |
+| Fresh final residual | 3.686e-17 | 6.648e-13 |
+| Reported Krylov matrix bytes | 2560 | 15384 |
+| Solver elapsed seconds in this run | 0.185351 | 1.457091 |
+| Probe dense–shared gradient difference (Ha/Bohr) | 2.775558e-17 | 1.360786e-13 |
+| Normal Eq. 27 GMRES–shared gradient difference (Ha/Bohr) | 1.387779e-17 | 1.353084e-16 |
+
+The 128/256-direction synthetic restart tests both took 17 iterations,
+35 actions and 4 restarts. Reported matrix bytes were 9376 and 18592,
+versus dense Hessian sizes of 131072 and 524288 bytes. Their true residuals
+were 1.55431e-13 and 1.54765e-13, within the specified scaled tolerance
+`1e-13 * max(1, norm_inf(b))`. The exact-solution checks passed. These are
+synthetic linear systems, not evidence of larger-molecule convergence.
+The solver timings above were collected during validation, not isolated
+benchmark runs; no speedup or whole-process memory claim follows from them.
+
+**Resolved test-only correction.** The standalone suite originally required
+the zero-operator/inconsistent-RHS case to return a `Solve` object with
+`converged=false`. The API also permits an error: the zero projected Arnoldi
+matrix can produce a nonfinite QR iterate that the solver rejects before
+its explicit breakdown return. A zero action cannot satisfy the nonzero RHS.
+The assertion now accepts either an error or explicit nonconvergence, but
+never convergence, and prints the outcome. No solver or production source
+was changed after the molecular tests. The user rebuilt `planck-dh-probe-gmres`
+(binary stamped 2026-09-14 08:12), and the rerun exits zero with all controls
+and failure paths passing. The singular outcome is explicitly logged as
+`GMRES: nonfinite iterate`, confirming error propagation rather than false
+convergence. The 128/256-direction restart/storage checks also pass unchanged.
+The typed backend's singular rejection tests already pass. Retest output:
+`/private/tmp/dh-o3-gmres-retest.log`; the original failed run is retained
+separately in `/private/tmp/dh-o3-gmres.log`.
+
+Logs: `/private/tmp/dh-o3-gmres.log`, `dh-o3-invariants.log`,
+`dh-o3-contract.log`, `dh-o3-xc-cache.log`, `dh-o3-water-fd.log`,
+`dh-o3-h2o2-fd.log`, and `dh-o3-hessian-swap.log`, all under `/private/tmp`.
+Each molecular log identifies its retained per-calculation artifacts and
+full-precision JSON report. U1, U2 and U3 rebuilt regression executables
+also pass; logs are `/private/tmp/dh-o3-u1-regression.log`,
+`/private/tmp/dh-o3-u2-regression.log`, and `/private/tmp/dh-o3-u3-regression.log`.
+
+The new water contraction fixture uses core-H orbitals and physical AO
+integrals/GGA quadrature, not a self-consistent B2PLYP state. It isolates
+solver/contract equivalence; only the separate live molecular FD audit tests
+the full energy-to-gradient route. More nonsymmetric geometries and larger
+physical ov spaces remain necessary before claiming general convergence.
+
+### O4. Reduce the literal Eq. 40 RHS to four fifth-order contractions
+
+Substitute each Kronecker condition before entering the loops instead of
+scanning every klcb for every ai and testing equality inside. This reduces
+O(o^3 v^3) loop work to O(o^2 v^3 + o^3 v^2). Block the contractions into
+matrix products and reuse compatible pair-derivative intermediates in W.
+Optimize D-prime's occupied and virtual contractions similarly, preserving
+the t(k,j,b,a) orientation and unordered occupied-pair multiplicities.
+
+Acceptance: each of the four coefficient derivatives, every D-prime and
+raw W block, and their symmetric contractions agree with explicit-index
+oracles. Never restore the excluded legacy internal bracket.
+
+### O5. Replace the Eq. 47 eighth-order backtransformation
+
+Replace the nested AO-quartet/MO-quartet sum, O(N^4 o^2 v^2), with successive
+one-index transformations and blocked matrix products. The conventional
+all-dimensions-growing cost becomes O(N^5). Initially retain dense output
+so that the contraction reordering can be validated independently of a
+new derivative-streaming interface.
+
+Acceptance: raw and eightfold-symmetric nonseparable tensors and their
+derivative contractions agree on small systems; demonstrate the changed
+time scaling. This step alone still has quartic storage and is not the
+finished memory-bounded algorithm.
+
+### O6. Stream derivative contractions instead of storing 3M tensors
+
+Evaluate a derivative quartet once, contract immediately, and scatter its
+center contributions into the M-by-3 result. Eliminate the O(3M N^4)
+ERI-derivative bundle. Stream h/S contractions as well. Generate the
+separable coefficient directly from D and P, without storing its AO tensor.
+Use the O5 pair density as an intermediate reference before removing it.
+
+Reuse derivative dispatch and permutation infrastructure from `gradient.cpp`
+only through a verified convention adapter: the existing accumulator's
+1/4 coefficient is not the DH correction's coefficient. Start unscreened;
+introduce derivative-aware screening with an explicit error budget and
+checks across thresholds, rather than assuming an energy-integral bound
+controls gradient error. Retain the same a_x in separable exchange.
+
+Acceptance: separate h/S/separable/nonseparable channel equality, atom-center
+and permutation multiplicities, rigid-translation invariance, and molecular
+FD; demonstrate absence of all-coordinate quartic derivative storage.
+
+### O7. Bound pair-density, integral, and amplitude working sets
+
+Connect blocked Eq. 47 backtransforms to the derivative consumer so that
+global AO Gamma tensors disappear. Reuse partial transforms across tiles;
+recomputing the full amplitude sum independently for every quartet would
+reintroduce the excessive work. Share the PT2 integral workspace and
+transform only the needed ovov and three-occupied/three-virtual blocks,
+not the full MO tensor. Introduce blocked/out-of-core amplitudes separately.
+
+Acceptance: dense/tiled contraction equivalence and block-size invariance;
+measured memory bound under increasing AO count. Account explicitly for
+the remaining O(o^2 v^2) amplitudes until their storage is also blocked;
+removing AO tensors alone does not make the algorithm quadratic-memory.
+
+### O8. Batch and fuse the XC and direct-response work
+
+Evaluate AO values, gradients, and Hessians in grid batches. Reuse P*phi,
+D*phi, and gradient projections; accumulate P-side, D-side, partition, and
+point-translation outputs together while preserving their separate ledgers.
+Replace forward all-atom Becke derivative propagation, currently O(G M^3),
+with a separately derived reverse accumulation targeting O(G M^2), handling
+zero switching factors without division by zero.
+
+Fuse J/K integral traversal for response actions and introduce controlled
+threading/distribution of independent tiles, with reproducible reductions
+and explicit memory limits. This need not change physical exchange factors.
+
+Acceptance: batch-size and thread-count consistency; all four XC-II geometry
+oracles and translation checks; unchanged operator action and molecular FD.
+Retain GGA AO Hessians and the partition's moving-point contribution. Do not
+change quadrature or drop a geometry channel as a performance shortcut.
+
+### O9. Add RI-DH as a separately validated backend
+
+Reuse Planck's three-center integrals, auxiliary metric, fitted pair factors,
+and derivative primitives, but derive all PT2 objects from the chosen RI
+energy consistently. Include auxiliary-metric derivatives. An exact KS
+reference may remain exact if that is the defined energy; its response must
+then remain consistent with that choice. Do not transplant the HF-MP2
+full-minus-reference gradient or assume the current RI helpers are already
+fully streamed.
+
+Acceptance: analytic derivatives match finite differences of the same
+RI-DH energy, independently of the conventional-DH comparison. Quantify
+fitting error and memory/time separately. Local-pair or low-rank amplitude
+approximations require further scope and are not implied by RI.
+
+### Rules common to every step
+
+Make one independently testable change at a time and retain the current
+water/C1 H2O2 two-step, all-coordinate 5e-8 Ha/Bohr FD acceptance gate.
+For exact reorganizations, compare channel matrices/contractions before
+relying on their total cancellation. Keep c scaled once, the raw/symmetric
+D and W adapters, AZ=-L, hybrid-scaled separable exchange, and complete
+XC-II intact. Add larger-basis and memory-scaling tests as the bottlenecks
+are removed. Rebuilds remain user-managed; changing this plan does not
+authorize production promotion or a new scientific approximation.
+
+## 18. RKS DH geometry optimization and frequencies
+
+Status (2026-09-13): rebuilt water Cartesian optimization, frequency and
+combined opt/frequency audits pass; water internal-coordinate optimization
+also passes. C1 H2O2 optimization, input-geometry frequency and combined
+opt/frequency audits now all pass. Its first combined audit exposed an
+SCF-limit override during a Hessian displacement:
+the geometry-preparation helper replaced the requested 100 cycles with 50.
+The helper now matches `Calculator::initialize()`: it applies the automatic
+limit only when `_max_cycles == 0`. An explicit limit is preserved on every
+trial/displaced geometry; tolerances and early convergence are unchanged.
+Ten fast workflow/oracle tests pass, including explicit-limit preservation.
+The rebuilt fix passes the combined retest with the original 100-cycle input:
+the formerly failing displacement converges in 93 iterations, and another
+takes 88. No iteration-limit increase or tolerance relaxation was needed.
+
+Measured maximum errors before the SCF-limit fix: water energy-FD gradients
+1.16201e-9 Ha/Bohr (Cartesian) and 1.12171e-9 (internal); water Hessians
+1.91120e-9 Ha/Bohr² at input geometry and 1.37320e-7 after optimization;
+C1 H2O2 energy-FD gradient 7.93391e-9 Ha/Bohr and input Hessian 3.25837e-8
+Ha/Bohr². Water optimizations took 5 Cartesian / 4 internal steps; C1 H2O2
+took 7 Cartesian steps. Logs are `/private/tmp/dh-workflow-cartesian-validation.log`,
+`/private/tmp/dh-workflow-internal-validation.log`, and
+`/private/tmp/dh-workflow-h2o2-validation.log`. The last log records the
+combined-path failure, not a full pass. No tolerance was relaxed.
+
+The successful post-fix C1 H2O2 combined audit is recorded separately in
+`/private/tmp/dh-workflow-h2o2-scf-limit-retest.log` (artifacts:
+`dh-workflows-bwu_jzzh` under the host temporary directory). Optimization
+converges in 7 steps. Maximum errors are 7.93391e-9 Ha/Bohr for the optimized
+energy-FD gradient and 2.96052e-8 Ha/Bohr² for the full 12×12 Hessian against
+independently differenced standalone gradients. Restored energy and gradient
+agree with a fresh reference calculation within 3.12639e-12 Ha and
+5.60629e-10 Ha/Bohr. UKS workflow rejection remains intact. The six optimized
+frequencies are 125.55, 1241.95, 1416.90, 1586.14, 3683.81 and 3697.54 cm⁻¹;
+none is imaginary. These are B2PLYP/STO-3G test results, not a general accuracy
+claim for all DH functionals, bases or geometries.
+
+Use `calculation geomopt`, `calculation freq`, or `calculation geomoptfreq`
+with the same RKS/global-DH/Cartesian-basis input as a supported DH gradient.
+Both `opt_coords cartesian` (L-BFGS) and `opt_coords internal` (IC-BFGS) retain
+the full derivative callback, including the IC-to-Cartesian fallback. UKS,
+range-separated DH, and solvent-response derivative paths remain rejected.
+Neither DH linear response nor imaginary-mode following is enabled.
+
+### Shared energy/gradient contract
+
+At every trial or displaced geometry, `run_analytic_gradient_current_geometry`
+rebuilds basis/integrals, atom-centered grid and AO values, converges the KS
+reference, computes a fresh RMP2 amplitude snapshot, and applies the PT2
+correlation coefficient once. It supplies that same snapshot to
+`compute_analytic_dh_gradient`, also used by the standalone gradient branch.
+The Eq. 41/27 response, derivative integrals, Eq. 33 correction and complete
+XC-II are rebuilt; only the previous density is reused as an SCF guess.
+
+The callback sets both `current_total_energy()` and `_gradient` consistently:
+
+\[
+E(R)=E_{\mathrm{KS}}(R)+c E_{\mathrm{PT2}}(R),\qquad
+g(R)=g_{\mathrm{KS}}(R)+\Delta g_{\mathrm{PT2}}(R).
+\]
+
+Optimizer gradients and Hessian columns remain in the current working frame,
+flattened atom-major. The standalone gradient retains its existing requested-
+frame rotation. Merely opening the workflow guard without replacing the old
+KS-only callbacks would have paired a DH energy with the wrong gradient.
+
+### Semi-numerical frequencies and state restoration
+
+The existing frequency engine constructs
+
+\[
+H_{pq}=\frac{g_p(R+h e_q)-g_p(R-h e_q)}{2h},\qquad
+H\leftarrow\tfrac12(H+H^{\mathsf T}),
+\]
+
+using the **full analytic DH gradient** at both endpoints. The step is
+`calculator._hessian_step` (currently 0.005 Bohr), not the separate numerical-
+energy-gradient step. Mass weighting, translation/rotation projection, normal
+modes and ZPE use the existing frequency implementation. This is not an
+analytic DH Hessian. At a nonstationary input geometry, interpret frequencies
+accordingly; `geomoptfreq` runs the frequency stage only if optimization
+converged.
+
+After all displacements, the DFT wrapper recomputes the complete undisplaced
+KS/PT2 energy and gradient. Restoring coordinates alone leaves the last
+displaced wavefunction and correlated energy in the calculator. The JSON
+result includes `hessian` (Ha/Bohr²), `hessian_step_bohr`, `frequencies_cm1`,
+`normal_modes`, and `zpe_hartree` when a Hessian exists, alongside the restored
+reference energy, geometry and gradient.
+
+### Small, verifiable acceptance steps
+
+1. Run the fast checks (no build or molecular calculation):
+
+   ```sh
+   python3 -m unittest discover -s tests -p test_dh_workflow_audit.py -v
+   ```
+
+2. After rebuilding `planck-dft`, run the water full-matrix frequency audit:
+
+   ```sh
+   python3 tests/dh_workflow_audit.py --workflows freq \
+     > /private/tmp/dh-frequency-audit.log 2>&1
+   ```
+
+3. Run Cartesian optimization and combined optimization/frequency:
+
+   ```sh
+   python3 tests/dh_workflow_audit.py --workflows geomopt geomoptfreq \
+     > /private/tmp/dh-optimization-audit.log 2>&1
+   ```
+
+4. Exercise the internal-coordinate callback separately:
+
+   ```sh
+   python3 tests/dh_workflow_audit.py --workflows geomopt --opt-coords internal \
+     > /private/tmp/dh-internal-optimization-audit.log 2>&1
+   ```
+
+5. Repeat frequency/optimization with `--input` pointing to the existing C1
+   H2O2 B2PLYP fixture, then rerun the standalone water/C1 H2O2 all-coordinate
+   total-energy FD regression to guard the shared-assembly extraction.
+
+The workflow runner preserves each input, log and JSON in a unique directory.
+It compares restored energy (1e-8 Ha) and gradient (1e-7 Ha/Bohr) with a fresh
+standalone gradient at the returned geometry; compares every Hessian matrix
+entry with independent fresh-gradient differences (2e-6 Ha/Bohr²); checks
+optimizer convergence and full-coordinate energy FD gradients (5e-8 Ha/Bohr);
+and verifies UKS optimization/frequency rejection. These are acceptance
+thresholds, not measured results until the rebuilt runner passes. No PySCF DH
+derivative reference is used.
