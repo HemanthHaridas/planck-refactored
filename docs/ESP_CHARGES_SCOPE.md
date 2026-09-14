@@ -4,7 +4,9 @@
 against PySCF, which pulled the `%begin_esp` input plumbing forward from E5),
 E2 (the vdW radii, which turned out to need a comment fix and one data
 correction rather than a new field — see §3), and E3 (the CHELPG grid and the
-constrained charge fit). E4 (RESP) and E5 (the remaining wiring) are not built.
+constrained charge fit). Not built: E4 (the Connolly-shell grid, which also
+fixes the rotational variance E3 measured, plus the RESP restraint) and E5 (the
+remaining wiring).
 
 Mulliken and Löwdin charges partition the density by *basis function ownership*,
 which makes them basis-set dependent and physically arbitrary — a Löwdin charge
@@ -251,7 +253,60 @@ it is genuinely required (an exactly-representable field, where it holds to
 it. **Do not "fix" this by loosening the bound until an unfittable field
 passes.**
 
-### E4 — RESP
+It is fixed properly in **E4a**, by sampling on rotationally symmetric Connolly
+shells instead of a cubic lattice — which RESP wants anyway. `use_symm true`
+also removes it for symmetric molecules, but is not the remedy; see E4a for the
+measurement and for why not.
+
+### E4 — RESP, and the Connolly-shell grid that dissolves E3's rotational variance
+
+Two pieces, deliberately in one step because the second is the fix for a defect
+E3 measured and could not gate.
+
+#### E4a — Connolly shells (`connolly_grid`)
+
+Merz-Kollman-style nested spherical shells: for each atom, points on spheres of
+radius `scale_k × r_vdW` for a few scale factors (conventionally 1.4, 1.6, 1.8,
+2.0), discarding any point that falls inside another atom's scaled sphere. This
+is what RESP conventionally samples on, so it is needed for E4 regardless.
+
+**It also removes the rotational variance E3 recorded**, and removes it
+structurally rather than mitigating it: a sphere is rotationally symmetric, so
+rotating the molecule rotates the sample set with it instead of resampling a
+lattice through a fixed cubic grid. E3's 3–7 % drift has nowhere to come from.
+
+Reuse `fibonacci_sphere` for the point placement. It currently sits in an
+anonymous namespace in `src/solvation/pcm.cpp`, so **promote it to a shared
+header rather than copying it** — one generator with a parameter, not two
+implementations that can drift apart.
+
+**What `use_symm` revealed, and why it is not the fix.** `detectSymmetry` calls
+`msymAlignAxes` and writes a standardized frame into `_standard`
+(`symmetry.cpp:170`), which is the frame `chelpg_grid` builds in. Measured on a
+rigidly rotated C2v water:
+
+| | point group | grid pts | O charge | RRMS |
+|---|---|---|---|---|
+| canonical, symm off | — | 8485 | −0.71334229 | 5.6198e-02 |
+| rotated, **symm on** | C2v | **8485** | **−0.71334223** | 5.6198e-02 |
+| rotated, symm off | — | 9232 | −0.71350913 | 5.4665e-02 |
+
+Symmetry-on recovers the canonical answer to 6e-8 on a bit-identical grid.
+That is real, but it is **not** a fix for three reasons: it only helps molecules
+that *have* symmetry (C1 falls through to `set_standard_from_bohr(bohr_coords)`,
+the untouched input frame — and C1 is most of what anyone fits charges for); it
+makes charges depend silently on an SCF/geometry keyword; and libmsym reorders
+atoms, so the two H charges swap position in the output. Do not present
+`use_symm true` as the remedy.
+
+Two options were considered and rejected. A principal-axis frame is cheap and
+works for C1, but degenerate or near-degenerate moments of inertia make the
+eigenvectors arbitrary, so axes swap discontinuously along a geometry scan —
+trading a 3–7 % variance for a discontinuity. Orientation averaging (fit over
+several rotated lattices) is trivially correct but N× the cost and still only
+mitigates.
+
+#### E4b — the restraint
 
 Same ESP, same solver, plus the hyperbolic restraint `a·Σ(√(q²+b²) − b)` (with
 `a = 0.0005`, `b = 0.1` a.u., the Bayly et al. values) solved iteratively to
@@ -260,6 +315,19 @@ self-consistency, ~25 iterations. Optional equivalent-atom constraints.
 **Skip stage 2** (methyl/methylene refitting). It exists for AMBER
 compatibility specifically; add it when someone needs AMBER-compatible charges,
 not before.
+
+#### Gating
+
+The check E3 could not have: **fitted charges must be invariant under rigid
+motion with `use_symm false`**, on a field the model cannot represent exactly —
+the fixture where E3's lattice demonstrably fails. Verify it goes red against a
+`chelpg_grid` fit before trusting it, so the gate is known to be measuring the
+grid and not the fit. E3's two fixture-too-easy failures (see the test's own
+comments) are the trap to avoid repeating here.
+
+Keep `chelpg_grid`: CHELPG charges are a published, cited quantity and people
+reproducing them need the cubic lattice, variance and all. The default for
+RESP should be the Connolly grid.
 
 ### E5 — wiring
 
@@ -309,3 +377,17 @@ the **RRMS**, and verify it goes red when the grid is perturbed.
   `O(npoints × npairs)`; ~10k points on a real basis is the expensive part of the
   whole feature, and the CHELPG default spacing was chosen in 1990 for molecules
   much smaller than what people will run this on.
+- **An exactly-representable fixture cannot gate anything about the grid.**
+  This bit twice in E3, in two guises. Asserting the charge constraint on a
+  field of nuclear-centred point charges passed even with the Lagrange row
+  deleted, because the unconstrained solution already sums correctly there.
+  Asserting rotational invariance on the same fixture passed against two
+  deliberately broken grids, because an exact fit is insensitive to which
+  points sample it. **A property can only be gated on a fixture where it
+  binds** — for a constraint or a grid, that means a field the atom-centred
+  model cannot represent. Mutation-test every such check before trusting it;
+  both of these were caught only that way.
+- **Do not invent a tolerance to make a failing check pass.** When the
+  rewritten invariance check failed on correct code, the fix was to measure the
+  effect (3–7 %, non-convergent in spacing), discover it was CHELPG's real
+  behaviour, and narrow the claim — not to widen the bound until it went green.
