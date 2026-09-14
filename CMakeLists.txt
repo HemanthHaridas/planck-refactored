@@ -795,10 +795,20 @@ if(BUILD_TESTING)
         ${SRC_DIR} ${eigen_SOURCE_DIR}
     )
     add_test(NAME planck-udh-pt2-energy-contract COMMAND planck-udh-pt2-energy-contract)
+    # U1 detached off-shell stationary functional; no UKS gradient enablement.
+    add_executable(planck-udh-pt2-stationary
+        ${CMAKE_SOURCE_DIR}/tests/udh_pt2_stationary.cpp
+        ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+    )
+    target_include_directories(planck-udh-pt2-stationary PRIVATE ${SRC_DIR} ${eigen_SOURCE_DIR})
+    add_test(NAME planck-udh-pt2-stationary COMMAND planck-udh-pt2-stationary)
     if(Python3_Interpreter_FOUND)
         add_test(NAME planck-udh-u0-fixtures
             COMMAND ${Python3_EXECUTABLE} -m unittest discover
                 -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_u0_fixtures.py -v)
+        add_test(NAME planck-udh-u1-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_pt2_stationary_contract.py -v)
     endif()
 
     add_executable(planck-dh-pt2-amplitude-density
