@@ -539,6 +539,19 @@ namespace HartreeFock
     // instead of a single SCF: the dimer, each isolated monomer, and each
     // monomer in the full dimer basis (partner atoms kept as ghosts). SCF-level
     // only (RHF/UHF/ROHF energies). See src/bsse/counterpoise.cpp.
+    // Electrostatic-potential evaluation at explicitly listed points.
+    // This is the validation surface for the ESP machinery that CHELPG/RESP
+    // charge fitting is built on (docs/ESP_CHARGES_SCOPE.md): the points are
+    // given directly rather than generated, so the printed potential can be
+    // compared against an independent code point-for-point.
+    struct OptionsESP
+    {
+        bool _enabled = false;
+        // Evaluation points. Stored in BOHR; the parser converts from the
+        // declared input units.
+        std::vector<Eigen::Vector3d> _points;
+    };
+
     struct OptionsBSSE
     {
         bool _enabled = false;
@@ -1327,6 +1340,7 @@ namespace HartreeFock
         OptionsDFT _dft;
         OptionsSolvation _solvation;
         OptionsBSSE _bsse;
+        OptionsESP _esp;
         OptionsOutput _output;
         InfoSCF _info;
         Molecule _molecule;

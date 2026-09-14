@@ -1796,6 +1796,70 @@ namespace HartreeFock::IO
     //
     // Atom indices are stored 0-based. Validation that the fragments partition
     // the molecule is deferred to parse_input (where natoms is known).
+    // Parse the optional %begin_esp section: explicit points at which to report
+    // the molecular electrostatic potential.
+    //
+    //   units   bohr|angstrom   — units of the point coordinates (default bohr)
+    //   point   x y z           — one evaluation point, repeatable
+    //
+    // Points are stored in Bohr. Deliberately explicit rather than generated:
+    // this section exists to validate the ESP itself against an external code
+    // (docs/ESP_CHARGES_SCOPE.md, E1), which requires naming the points. Grid
+    // generation for CHELPG/RESP is a separate concern.
+    std::expected<void, std::string>
+    _parse_esp(const std::vector<std::string> &lines, HartreeFock::OptionsESP &esp)
+    {
+        esp._enabled = true;
+        double scale = 1.0; // input already in Bohr unless 'units angstrom'
+
+        for (const auto &raw : lines)
+        {
+            const std::string line = strip_inline_comment(raw);
+            if (line.empty())
+                continue;
+
+            std::istringstream iss(line);
+            std::string key;
+            iss >> key;
+            const std::string lkey = toLower(key);
+
+            if (lkey == "units")
+            {
+                std::string value;
+                if (!(iss >> value))
+                    return std::unexpected("esp: 'units' needs a value (bohr or angstrom): " + line);
+                const std::string lvalue = toLower(value);
+                if (lvalue == "bohr" || lvalue == "au")
+                    scale = 1.0;
+                else if (lvalue == "angstrom" || lvalue == "ang")
+                    scale = ANGSTROM_TO_BOHR;
+                else
+                    return std::unexpected("esp: unknown units '" + value + "' (expected bohr or angstrom)");
+
+                if (!esp._points.empty())
+                    return std::unexpected(
+                        "esp: 'units' must appear before any 'point' line, otherwise "
+                        "earlier points would silently carry different units");
+            }
+            else if (lkey == "point")
+            {
+                double x, y, z;
+                if (!(iss >> x >> y >> z))
+                    return std::unexpected("esp: 'point' needs three coordinates: " + line);
+                esp._points.emplace_back(x * scale, y * scale, z * scale);
+            }
+            else
+            {
+                return std::unexpected("esp: unknown keyword '" + key + "': " + line);
+            }
+        }
+
+        if (esp._points.empty())
+            return std::unexpected("esp: section declared but no 'point' lines given");
+
+        return std::expected<void, std::string>{};
+    }
+
     std::expected<void, std::string>
     _parse_bsse(const std::vector<std::string> &lines, HartreeFock::OptionsBSSE &bsse)
     {
@@ -2150,6 +2214,13 @@ namespace HartreeFock::IO
         if (auto it = _sections.find("constraints"); it != _sections.end())
         {
             if (auto res = _parse_constraints(it->second, calculator._constraints); !res)
+                return std::unexpected(res.error());
+        }
+
+        // esp point list (optional)
+        if (auto it = _sections.find("esp"); it != _sections.end())
+        {
+            if (auto res = _parse_esp(it->second, calculator._esp); !res)
                 return std::unexpected(res.error());
         }
 

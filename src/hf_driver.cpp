@@ -25,6 +25,7 @@
 #include "io/logging.h"
 #include "lookup/elements.h"
 #include "opt/geomopt.h"
+#include "populations/esp.h"
 #include "populations/multipole.h"
 #include "populations/population.h"
 #include "post_hf/casscf.h"
@@ -81,6 +82,66 @@ static void log_multipole_report(
     calculator._multipole = *moments;   // cache for the JSON results dump
     calculator._have_multipole = true;
     HartreeFock::Logger::multipole_moments(*moments);
+    HartreeFock::Logger::blank();
+}
+
+// Report the molecular electrostatic potential at the points named in
+// %begin_esp. This is the validation surface for the ESP machinery the
+// CHELPG/RESP fitting is built on (docs/ESP_CHARGES_SCOPE.md): the points come
+// from the input rather than a generator, so the printed values can be compared
+// point-for-point against an independent code.
+static void log_esp_report(const HartreeFock::Calculator &calculator,
+                           const std::vector<HartreeFock::ShellPair> &shell_pairs)
+{
+    if (!calculator._esp._enabled || calculator._esp._points.empty())
+        return;
+
+    // Total density: alpha + beta for an unrestricted reference, and for RHF the
+    // alpha channel already holds the full P_total (the same convention
+    // log_population_report uses just above).
+    const bool has_spin_channels =
+        calculator._scf._scf != HartreeFock::SCFType::RHF &&
+        calculator._info._scf.beta.density.rows() == calculator._info._scf.alpha.density.rows();
+    Eigen::MatrixXd total_density = calculator._info._scf.alpha.density;
+    if (has_spin_channels)
+        total_density += calculator._info._scf.beta.density;
+
+    auto phi = HartreeFock::SCF::electrostatic_potential(
+        calculator._molecule, shell_pairs, total_density, calculator._esp._points);
+
+    if (!phi)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Warning,
+            "Electrostatic Potential :",
+            "Unavailable: " + phi.error());
+        HartreeFock::Logger::blank();
+        return;
+    }
+
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Electrostatic Potential :", "");
+
+    constexpr int line_width = 78;
+    std::cout << std::string(line_width, '-') << "\n"
+              << std::setw(6) << std::right << "Point"
+              << std::setw(14) << std::right << "X (Bohr)"
+              << std::setw(14) << std::right << "Y (Bohr)"
+              << std::setw(14) << std::right << "Z (Bohr)"
+              << std::setw(24) << std::right << "Potential (a.u.)" << "\n"
+              << std::string(line_width, '-') << "\n";
+
+    for (std::size_t k = 0; k < calculator._esp._points.size(); ++k)
+    {
+        const Eigen::Vector3d &p = calculator._esp._points[k];
+        std::cout << std::setw(6) << std::right << (k + 1)
+                  << std::setw(14) << std::right << std::fixed << std::setprecision(6) << p[0]
+                  << std::setw(14) << std::right << std::fixed << std::setprecision(6) << p[1]
+                  << std::setw(14) << std::right << std::fixed << std::setprecision(6) << p[2]
+                  << std::setw(24) << std::right << std::fixed << std::setprecision(12)
+                  << (*phi)(static_cast<Eigen::Index>(k)) << "\n";
+    }
+
+    std::cout << std::string(line_width, '-') << "\n";
     HartreeFock::Logger::blank();
 }
 
@@ -1282,6 +1343,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
 
     HartreeFock::Logger::converged_energy(calculator._total_energy, calculator._nuclear_repulsion);
     log_population_report(calculator);
+    log_esp_report(calculator, shellpairs);
     log_multipole_report(calculator, shellpairs);
 
     // ── FCIDUMP export ────────────────────────────────────────────────────────

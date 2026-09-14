@@ -1,6 +1,10 @@
 # ESP-derived atomic charges (CHELPG and RESP)
 
-**Status:** scope. E0 (the ESP kernel) is landed and gated; E1-E5 are not built.
+**Status:** scope. Landed: E0 (the ESP kernel), E1 (cross-code validation
+against PySCF, which pulled the `%begin_esp` input plumbing forward from E5),
+and E2 (the vdW radii, which turned out to need a comment fix and one data
+correction rather than a new field — see §3). E3-E5 — grid generation and the
+CHELPG/RESP fits — are not built.
 
 Mulliken and Löwdin charges partition the density by *basis function ownership*,
 which makes them basis-set dependent and physically arbitrary — a Löwdin charge
@@ -86,33 +90,64 @@ error.
 
 ---
 
-## 3. The real gap: no vdW radii
+## 3. The vdW radii were already there, mislabelled (RESOLVED)
 
-`src/lookup/elements.h` carries exactly one radius:
+**This section previously claimed Planck had only covalent radii and that
+CHELPG would need a new `vdw_radius` field. That was wrong**, and it was wrong
+because it trusted a comment over the data.
 
-```cpp
-double radius;  // Covalent radius (Angstrom)
-```
+`ElementData::radius` was documented as `// Covalent radius (Angstrom)` but
+holds **van der Waals** radii. H 1.20, C 1.70, N 1.55, O 1.52 and Na 2.27 match
+PySCF's Bondi table exactly; the covalent values would be ~0.31 / 0.73 / 0.71 /
+0.66 / 1.66. The comment is now corrected in both `elements.h` and
+`elements.cpp`. **No new field is needed** — adding one would have duplicated
+data already present.
 
-CHELPG needs **van der Waals** radii for its exclusion shell, and RESP needs them
-for its Connolly shells. Covalent radii are roughly half the size and would place
-grid points **inside** the electron density, where the fit is meaningless.
+**A retraction:** this section used to accuse `pcm.cpp:88` of claiming Bondi
+radii while scaling covalent ones. That accusation was false — the PCM cavity
+scales vdW radii, exactly as its comment says. The defect was the `elements.h`
+comment, which had propagated the wrong belief.
 
-**Incidental finding, pre-existing and out of scope here:** `pcm.cpp:88` claims
-its cavity uses "the standard Bondi-radius PCM choice" while actually scaling
-`element->radius`, i.e. covalent radii. Either the comment or the cavity is
-wrong. Worth a separate look; do **not** fold it into this work, because changing
-it moves every committed PCM energy.
+**One genuine data error, fixed:** F was 1.350, which matches no published set.
+Bondi 1.47, Mantina 1.47, Alvarez 1.46, Batsanov 1.45 and Hu 1.48 agree within
+0.03 Å. Corrected to 1.470. Blast radius was nil — the radius has exactly one
+consumer (`pcm.cpp:103`), the only fluorine-bearing registered case is gas
+phase, and both PCM cases are water — so no committed result moved.
 
-Reference values are available for cross-checking at
-`pyscf.data.radii.VDW` (104 elements, **in Bohr** — note the unit differs from
-Planck's Angstrom convention).
+### Why Alvarez 2013 is deliberately not imported
+
+Alvarez (*Dalton Trans.* **42**, 8617) is the newest and broadest set: 93
+elements, and the first real lanthanide/actinide values derived from non-bonded
+distances. It is still the wrong table to import here, for a reason that is
+easy to miss.
+
+It measures a **different quantity**. Alvarez radii mark the point of maximum
+slope on the *leading edge of the van der Waals peak*, which his §5.4 states
+explicitly is **not** a closest-approach cutoff — and he names Pd, Pt, Hg and U
+among the elements where Bondi's values are cutoff-like. Both consumers here
+want the cutoff sense: a PCM cavity wants an enclosing surface, and a CHELPG
+exclusion shell wants points outside the density.
+
+Measured against Planck's table, importing it would move **75 of 93 entries by
+≥0.10 Å, essentially always upward** (Planck lower in 85 of 93, mean −0.38 Å),
+inflating every cavity by ~0.4 Å and shifting every committed PCM energy.
+Alvarez also has no datum for Pm, Po, At, Rn, Fr or Ra, and flags 11 entries as
+rough — Bk's `[3.40]` rests on **3 atom pairs**.
+
+Where Alvarez *is* useful: it confirms Planck is right and Bondi is stale on 5
+of the 7 elements where the two disagree (F, Pd, Pt, Hg, U). Alvarez notes
+Bondi's Cu, Ag and Hg radii point "even to the chemical bond territory".
+
+**PySCF's table is not a drop-in reference either.** Its apparent disagreements
+with Planck are mostly its own `unknown = 1.999999` filler, which sits at
+Sc–Co, Y–Rh, the lanthanides and the actinides — 49 elements where Bondi
+published nothing. Planck carries real values there.
 
 ---
 
 ## 4. Steps
 
-### E1 — validate the ESP against PySCF
+### E1 — validate the ESP against PySCF (LANDED)
 
 E0's gate proves the fused sweep agrees with *Planck's own* matrix builder. It
 does **not** prove either is right; both share the same integral kernel, so a
@@ -121,29 +156,57 @@ for the spherical transform, where every high-L gate was cross-*engine* and so
 agreed while all being wrong.
 
 PySCF's `mol.intor('int1e_grids', grids=pts)` is the same one-electron integral
-and is an **independent implementation**. Reference values, water/STO-3G
-`cart=True`, converged RHF (`E = -74.9629507133`, `tr(PS) = 10.0000000000`):
+and is an **independent implementation**. Measured on water/STO-3G `cart=True`,
+converged RHF, against `water_rhf_esp_points_sto3g.hfinp`:
 
-| point (Bohr) | φ (a.u.) |
-|---|---|
-| `( 1.3, -0.7,  2.1)` | `-0.085603882576` |
-| `(-2.4,  1.9, -0.6)` | `+0.007140177405` |
-| `( 0.4,  0.3,  3.7)` | `-0.048251686268` |
-| `(-5.0, -4.0,  1.2)` | `-0.003635334371` |
-| `(60.0,  0.0,  0.0)` | `-0.000004193544` |
+| point (Bohr) | Planck | PySCF | abs diff |
+|---|---|---|---|
+| `( 1.3, -0.7,  2.1)` | `0.145838926896` | `0.145838922309` | `4.6e-09` |
+| `(-2.4,  1.9, -0.6)` | `-0.011474069305` | `-0.011474069301` | `4.0e-12` |
+| `( 0.4,  0.3,  3.7)` | `0.040830829013` | `0.040830828077` | `9.4e-10` |
+| `(-5.0, -4.0,  1.2)` | `0.003869442460` | `0.003869442320` | `1.4e-10` |
+| `(60.0,  0.0,  0.0)` | `0.000005075137` | `0.000005075137` | `0.0` |
 
-Expect agreement to ~1e-10. A committed script under `tests/pyscf/`, registered
-in `cases.json` with `"kind": "esp"`.
+**The ESP kernel is cross-code validated.** The residual ~5e-9 is not an ESP
+error: Planck and PySCF carry different roundings of the Angstrom→Bohr
+conversion (Planck keeps more digits), so at identical *input* coordinates the
+two codes place nuclei a few parts in 1e8 apart. That shifts the nuclear
+repulsion by 6.9e-7 Eh and the SCF energy by ~1e-8, which propagates into the
+potential. Feeding PySCF Planck's own Bohr coordinates makes the nuclear
+repulsions agree to all ten printed digits and leaves the table above.
+
+**So ~1e-8 is the floor for any Planck-vs-PySCF comparison on an Angstrom
+input, and a tighter tolerance on this gate would be asserting the rounding,
+not the physics.** Do not chase it, and do not "fix" it by tightening SCF
+convergence — verified inert: `tol_energy`/`tol_density` at `1e-13` reproduce
+the same energy and the same potentials bitwise.
+
+*Trap, and it cost real time:* the first reference table here was computed on
+`O 0 0 0.117176`, a geometry **no committed input uses**. The values were
+correct and useless. Generate a reference from the geometry in the actual input
+file, not from a plausible-looking one.
 
 *Trap:* the density must be the converged RHF one, not the identity-scaled
 density E0's gate uses. A fabricated density is only comparable across codes if
 the AO ordering matches, and `cart=True` ordering is not guaranteed to. The
 converged density is a physical object and sidesteps the question.
 
-### E2 — vdW radii
+**Wiring, which the plan got wrong.** This was scoped as a C++ test binary.
+That is the wrong shape: `scf.cpp` includes `post_hf/casscf/aug-hessian.h`,
+`casscf/orbital.h` and both response modules, which in turn pull
+`post_hf/integrals.h` and `post_hf/ri/ri_eri.h` — CASSCF and RI machinery
+linked in to validate two contractions. E1 instead runs through the
+**production binary** via a `%begin_esp` section (`OptionsESP` in `types.h`,
+`_parse_esp` in `io.cpp`, `log_esp_report` in `hf_driver.cpp`), which needs no
+new target and gates the path a user actually takes. This pulls a slice of E5
+forward, deliberately.
 
-Add a `vdw_radius` field to `ElementData`. Bondi (1964) covers H–Rn; ~30 lines of
-data. Gate: covered by E4's fit, which cannot be right with wrong radii.
+### E2 — vdW radii (LANDED; no new field was needed)
+
+See §3. The radii were already present and correct, just documented as
+covalent. The work was a comment fix in `elements.{h,cpp}` plus one data
+correction (F 1.350 → 1.470). Alvarez 2013 was evaluated against the primary
+source and deliberately not imported.
 
 ### E3 — CHELPG
 
@@ -196,8 +259,12 @@ the **RRMS**, and verify it goes red when the grid is perturbed.
 - **Do not add a `sym_ops` overload to the fused sweep.** Symmetry folding
   reconstructs AO-pair orbits, which is a property of the *matrix*; a contraction
   already reduced against a full unfolded density has nothing to fold.
-- **Covalent ≠ vdW.** See §3. Grid points placed with covalent radii sit inside
-  the density and the fit is meaningless rather than merely inaccurate.
+- **`ElementData::radius` is vdW, and not every vdW set means the same thing.**
+  See §3. The field was mislabelled `// Covalent radius` for years, so check the
+  data before trusting a comment about it. And when comparing against a
+  published set, check what that set *measures*: Alvarez radii mark a
+  distribution slope, not a closest-approach cutoff, so they are not
+  interchangeable with the cutoff-sense radii a grid exclusion shell wants.
 - **Buried atoms fit badly and that is not a bug.** An atom with no grid points
   in its neighbourhood (a carbon in a bulky group) has almost no leverage on the
   ESP, so its fitted charge is poorly determined. This is the known motivation

@@ -12,7 +12,12 @@ struct ElementData
     std::string_view symbol; // Chemical symbol (e.g. "C")
     std::uint64_t Z;         // Atomic number
     double mass;             // Atomic mass (amu)
-    double radius;           // Covalent radius (Angstrom)
+    // Van der Waals radius (Angstrom) -- NOT covalent. Verified against
+    // PySCF's Bondi table: H 1.20, C 1.70, O 1.52 agree exactly, where the
+    // covalent values would be ~0.31 / 0.73 / 0.66. Used by the PCM cavity
+    // (src/solvation/pcm.cpp), which scales it by cavity_scale, and by any
+    // ESP-derived charge fitting that needs an exclusion shell.
+    double radius;
 };
 
 extern const std::array<ElementData, 99> planck_periodic_table;

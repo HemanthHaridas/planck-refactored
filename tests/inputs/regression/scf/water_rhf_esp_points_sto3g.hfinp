@@ -1,0 +1,43 @@
+%begin_control
+    basis             sto-3g
+    calculation       energy
+    verbosity         normal
+    basis_type        cartesian
+%end_control
+
+%begin_scf
+    scf_type        rhf
+    use_diis        .true.
+    diis_dim        8
+    engine          os
+    guess           hcore
+    save_checkpoint .false.
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+# Electrostatic potential at explicit points, for the cross-code check against
+# PySCF's int1e_grids (docs/ESP_CHARGES_SCOPE.md, E1). The points are off-axis
+# and off-symmetry on purpose: an on-axis point can make whole angular-momentum
+# blocks vanish and hide an index error. The last point is far enough out to be
+# in the monopole limit.
+%begin_esp
+    units bohr
+    point   1.3  -0.7   2.1
+    point  -2.4   1.9  -0.6
+    point   0.4   0.3   3.7
+    point  -5.0  -4.0   1.2
+    point  60.0   0.0   0.0
+%end_esp
+
+%begin_coords
+3
+0   1
+O      0.000000     0.000000     0.000000
+H      0.758602     0.000000     0.504284
+H     -0.758602     0.000000     0.504284
+%end_coords
