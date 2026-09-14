@@ -16,6 +16,7 @@
 #include "post_hf/casscf/aug-hessian.h"
 #include "post_hf/casscf/orbital.h"
 #include "post_hf/rhf_response.h"
+#include "post_hf/ri/ri_eri.h"
 #include "post_hf/uhf_response.h"
 #include "sad.h"
 #include "scf.h"
@@ -527,8 +528,18 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
          (calculator._scf._mode == HartreeFock::SCFMode::Auto &&
           nbasis <= static_cast<std::size_t>(calculator._scf._threshold)));
 
+    // RI-JK: prime the fitted cache once, here. build_ri_fock_rhf takes a const
+    // Calculator and so cannot build it lazily from inside the loop.
+    if (calculator._scf._ri_jk)
+    {
+        if (auto ready = HartreeFock::Correlation::RI::ensure_ri_3c_ready(calculator); !ready)
+            return std::unexpected("RI-JK SCF: " + ready.error());
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
+                                     "RI-JK: density-fitted Fock build (dense ERI tensor skipped)");
+    }
+
     std::vector<double> eri;
-    if (use_conventional)
+    if (use_conventional && !calculator._scf._ri_jk)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
                                      std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
@@ -609,7 +620,15 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
         // density is back-projected and the result forward-transformed (see
         // spherical_direct_fock). In Cartesian mode the builder is called directly.
         Eigen::MatrixXd G;
-        if (use_conventional)
+        if (calculator._scf._ri_jk)
+        {
+            // Density-fitted J - 1/2 K. Same quantity every branch below
+            // returns, to fitting accuracy (planck-ri-jk-equivalence gates it
+            // against the dense oracle), so it slots in ahead of the
+            // conventional/direct split rather than inside it.
+            G = HartreeFock::Correlation::RI::build_ri_fock_rhf(calculator, P);
+        }
+        else if (use_conventional)
         {
             G = HartreeFock::ObaraSaika::_compute_fock_rhf(eri, P, nbasis);
         }
@@ -1189,8 +1208,18 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
          (calculator._scf._mode == HartreeFock::SCFMode::Auto &&
           nbasis <= static_cast<std::size_t>(calculator._scf._threshold)));
 
+    // RI-JK: prime the fitted cache once, here. build_ri_fock_rhf takes a const
+    // Calculator and so cannot build it lazily from inside the loop.
+    if (calculator._scf._ri_jk)
+    {
+        if (auto ready = HartreeFock::Correlation::RI::ensure_ri_3c_ready(calculator); !ready)
+            return std::unexpected("RI-JK SCF: " + ready.error());
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
+                                     "RI-JK: density-fitted Fock build (dense ERI tensor skipped)");
+    }
+
     std::vector<double> eri;
-    if (use_conventional)
+    if (use_conventional && !calculator._scf._ri_jk)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
                                      std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
@@ -1273,7 +1302,14 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         // Cartesian, with spherical back-projection/forward-transform per spin channel.
         Eigen::MatrixXd Ga;
         Eigen::MatrixXd Gb;
-        if (use_conventional)
+        if (calculator._scf._ri_jk)
+        {
+            // {J(Pa+Pb) - K(Pa), J(Pa+Pb) - K(Pb)} -- no closed-shell 1/2 here;
+            // see the prefactor note on build_ri_fock_uhf.
+            std::tie(Ga, Gb) =
+                HartreeFock::Correlation::RI::build_ri_fock_uhf(calculator, Pa, Pb);
+        }
+        else if (use_conventional)
         {
             std::tie(Ga, Gb) = HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis);
         }

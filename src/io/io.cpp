@@ -1203,7 +1203,7 @@ namespace HartreeFock::IO
                 key == "mcscf_debug_numeric_newton" || key == "mcscf_debug_commutator_rhs" ||
                 key == "mcscf_accept_uphill" ||
                 key == "stability_check" || key == "stability_follow" ||
-                key == "mp2_with_t2" || key == "mp2_use_ri")
+                key == "mp2_with_t2" || key == "mp2_use_ri" || key == "scf_ri_jk")
             {
                 if (!(_iss >> value))
                     return std::unexpected("Missing value for scf keyword: " + key);
@@ -1228,6 +1228,8 @@ namespace HartreeFock::IO
                     scf._stability_follow = *parsed;
                 else if (key == "mp2_use_ri")
                     mp2.use_ri = *parsed;
+                else if (key == "scf_ri_jk")
+                    scf._ri_jk = *parsed;
                 else
                     mp2.with_t2 = *parsed;
                 continue;

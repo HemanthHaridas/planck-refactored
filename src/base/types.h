@@ -480,6 +480,19 @@ namespace HartreeFock
         unsigned int _DIIS_dim = 8;    // Dimension of DIIS Error Vector (Default is 8)
 
         bool _use_DIIS = true;          // Use DIIS (Default is true)
+        // Build the SCF/KS two-electron Fock contribution from the density-fitted
+        // (RI) J/K builders instead of the dense four-index quartet sweep. Reuses
+        // the SAME auxiliary-basis configuration as RI-MP2 (_mp2.ri_basis_name /
+        // ri_basis_path / ri_lindep) rather than introducing a second aux config:
+        // there is one fitting basis per run, and splitting it into two keywords
+        // would let them silently disagree. Off by default, so the dense path is
+        // unchanged unless asked for.
+        //
+        // NOTE this breaks the RI handoff doc's standing "the SCF reference stays
+        // dense" invariant BY DESIGN, and only when explicitly enabled -- see
+        // docs/RI_DENSITY_FITTING_HANDOFF.md section 1. With it off, that
+        // invariant holds exactly as before.
+        bool _ri_jk = false;
         bool _save_checkpoint = true;   // Save checkpoint after convergence
         bool _stability_check = false;  // Run wavefunction stability analysis after SCF
         bool _stability_follow = false; // If unstable, rotate along the unstable mode and re-run SCF
