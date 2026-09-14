@@ -4,6 +4,9 @@
 #include <source_location>
 #include "dft/dh_pt2_gradient.h"
 
+bool test_dh_grid_sigma();
+bool test_dh_zvector();
+
 namespace
 {
     bool near(double x, double y,
@@ -59,6 +62,8 @@ int main()
     Eigen::Matrix2d x; x << 0.3, -0.2, -0.2, 0.7;
     Eigen::Matrix2d y; y << -0.4, 0.1, 0.1, 0.9;
     Checks ok = response.has_value();
+    ok &= test_dh_grid_sigma();
+    ok &= test_dh_zvector();
     const auto no_exchange = DFT::Gradient::make_dh_eq41_response_operator(
         0.0,
         [a](const Eigen::Ref<const Eigen::MatrixXd> &d)

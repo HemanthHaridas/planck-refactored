@@ -27,8 +27,10 @@
 // checks, which is appropriate since this piece is pure linear algebra.
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>
@@ -40,6 +42,7 @@
 #include "basis/basis.h"
 #include "dft/dft_gradient.h"
 #include "dft/dh_pt2_gradient.h"
+#include "dft/dh_zvector.h"
 #include "dft/xc_grid.h"
 #include "integrals/base.h"
 #include "integrals/shellpair.h"
@@ -1094,9 +1097,125 @@ namespace
         // The driver contract is the sole paper-object assembly boundary: it
         // must reproduce the independently built water objects without
         // rerunning an SCF, PT2 kernel, or Z-vector solve.
+        const auto workspace = std::make_shared<const DFT::Gradient::DHGradientGeometryWorkspace>(
+            DFT::Gradient::DHGradientGeometryWorkspace{mo_eri, derivatives});
         const DFT::Gradient::DHGradientDriverInputs driver_inputs{
-            &result, 0.27, c, eps, mo_eri, *response, z, derivatives, xc_inputs};
+            &result, 0.27, c, eps, workspace, *response, z, xc_inputs};
         const auto driver_contract = DFT::Gradient::build_dh_gradient_driver_contract(driver_inputs);
+        // O3: identical physical water AO integrals and analytic GGA kernel
+        // through explicit dense and matrix-free backends. This fixture uses
+        // core-H orbitals, not a converged B2PLYP energy; molecular FD remains
+        // a separate end-to-end test of the normal driver after rebuilding.
+        const auto o3_xc=DFT::Gradient::make_dh_eq41_xc_response_callback(
+            {&*grid,&*ao_grid,p,&*pbe_x,&*pbe_c});
+        if (!o3_xc) { fail("O3 physical XC preparation"); return; }
+        auto o3_inputs=driver_inputs;
+        o3_inputs.response_operator.xc=*o3_xc;
+        o3_inputs.response_operator.exact_exchange=.53;
+        o3_inputs.xc_inputs=gga_inputs;
+        auto o3_stationary=DFT::Gradient::build_dh_stationary_products(
+            result,.27,c,workspace->mo_eri,o3_inputs.response_operator);
+        if (!o3_stationary) { fail("O3 physical stationary preparation"); return; }
+        DFT::Gradient::DHZVectorOptions o3_dense_options;
+        o3_dense_options.backend=DFT::Gradient::DHZVectorBackend::DenseReference;
+        const auto o3_dense=DFT::Gradient::solve_dh_zvector(o3_stationary->lagrangian_rhs.total_ai,
+            c.leftCols(no),c.rightCols(nv),eps,o3_inputs.response_operator,o3_dense_options);
+        const auto o3_iterative=DFT::Gradient::solve_dh_zvector(o3_stationary->lagrangian_rhs.total_ai,
+            c.leftCols(no),c.rightCols(nv),eps,o3_inputs.response_operator);
+        if (!o3_dense || !o3_iterative)
+        {
+            fail("O3 physical water Z solve");
+            if (!o3_dense) std::cerr<<o3_dense.error()<<'\n';
+            if (!o3_iterative) std::cerr<<o3_iterative.error()<<'\n';
+            return;
+        }
+        auto o3_reference_inputs=o3_inputs; o3_reference_inputs.z_ai=o3_dense->z_ai;
+        o3_inputs.z_ai=o3_iterative->z_ai;
+        const auto o3_reference=DFT::Gradient::build_dh_gradient_driver_contract(o3_reference_inputs);
+        const auto o3_production=DFT::Gradient::build_dh_gradient_driver_contract(o3_inputs,std::move(*o3_stationary));
+        if (!o3_reference || !o3_production) { fail("O3 physical contract assembly"); return; }
+        const auto o3_compare=[&](const char *name,const Eigen::MatrixXd &a,const Eigen::MatrixXd &b,double tol)
+        {
+            const double error=(a-b).cwiseAbs().maxCoeff();
+            std::printf("O3 water %s max_abs=%.12e\n",name,error);
+            if (!std::isfinite(error) || error>tol) fail("O3 physical channel mismatch");
+        };
+        o3_compare("Z",o3_dense->z_ai,o3_iterative->z_ai,1e-9);
+        o3_compare("D",o3_reference->relaxed_density.raw_mo,o3_production->relaxed_density.raw_mo,1e-9);
+        o3_compare("W",o3_reference->overlap_density.raw_mo,o3_production->overlap_density.raw_mo,1e-9);
+        o3_compare("h",o3_reference->non_xc_gradient.one_electron,o3_production->non_xc_gradient.one_electron,1e-9);
+        o3_compare("S",o3_reference->non_xc_gradient.overlap,o3_production->non_xc_gradient.overlap,1e-9);
+        o3_compare("ERI-separable",o3_reference->non_xc_gradient.two_electron_separable,o3_production->non_xc_gradient.two_electron_separable,1e-9);
+        o3_compare("ERI-pair",o3_reference->non_xc_gradient.two_electron_nonseparable,o3_production->non_xc_gradient.two_electron_nonseparable,1e-9);
+        o3_compare("XC-P",o3_reference->xc_ii_gradient.p_side_fixed,o3_production->xc_ii_gradient.p_side_fixed,1e-9);
+        o3_compare("XC-D",o3_reference->xc_ii_gradient.d_side_ao,o3_production->xc_ii_gradient.d_side_ao,1e-9);
+        o3_compare("XC-partition",o3_reference->xc_ii_gradient.becke_partition,o3_production->xc_ii_gradient.becke_partition,1e-9);
+        o3_compare("XC-translation",o3_reference->xc_ii_gradient.point_translation,o3_production->xc_ii_gradient.point_translation,1e-9);
+        const auto o3_gref=DFT::Gradient::build_dh_eq33_pt2_correction_gradient(*o3_reference);
+        const auto o3_gprod=DFT::Gradient::build_dh_eq33_pt2_correction_gradient(*o3_production);
+        if (!o3_gref || !o3_gprod) { fail("O3 correction assembly"); return; }
+        o3_compare("correction",o3_gref->total,o3_gprod->total,1e-9);
+        std::printf("O3 water pairs=%d actions=%d iterations=%d residual=%.12e krylov_matrix_bytes=%zu dense_reference_bytes=%zu seconds=%.6f\n",
+            no*nv,o3_iterative->action_count,o3_iterative->iterations,o3_iterative->residual_max_abs,
+            o3_iterative->krylov_matrix_bytes,o3_dense->dense_matrix_bytes,o3_iterative->elapsed_seconds);
+        // O2: same geometry/stationary objects through a move handoff, versus
+        // the independent reconstruction above. Observe callback counts and
+        // tensor capacities, not timings or a production diagnostic switch.
+        auto reused_inputs=driver_inputs;
+        int response_calls=0;
+        const auto reference_j=reused_inputs.response_operator.coulomb;
+        reused_inputs.response_operator.coulomb=[&](const Eigen::Ref<const Eigen::MatrixXd> &q)
+            -> std::expected<Eigen::MatrixXd,std::string>
+        { ++response_calls; return reference_j(q); };
+        auto stationary=DFT::Gradient::build_dh_stationary_products(
+            result,.27,c,workspace->mo_eri,reused_inputs.response_operator);
+        if (!stationary || response_calls!=1) { fail("O2 stationary preparation count"); return; }
+        const auto *amplitude_data=stationary->amplitudes.t_tilde.data();
+        const auto *rhs_data=stationary->lagrangian_rhs.total_ai.data();
+        auto stale=*stationary;
+        stale.c_pt2=.54;
+        if (DFT::Gradient::build_dh_gradient_driver_contract(reused_inputs,std::move(stale)))
+            fail("O2 stale stationary snapshot accepted");
+        auto invalid=*stationary;
+        invalid.lagrangian_rhs.total_ai(0,0)=std::numeric_limits<double>::quiet_NaN();
+        if (DFT::Gradient::build_dh_gradient_driver_contract(reused_inputs,std::move(invalid)))
+            fail("O2 nonfinite stationary snapshot accepted");
+        response_calls=0;
+        const auto reused=DFT::Gradient::build_dh_gradient_driver_contract(reused_inputs,std::move(*stationary));
+        if (!driver_contract || !reused || response_calls!=1)
+        { fail("O2 reused assembly/response count"); return; }
+        if (amplitude_data!=reused->amplitudes.t_tilde.data() || rhs_data!=reused->lagrangian_rhs.total_ai.data())
+            fail("O2 stationary products copied instead of moved");
+        const auto matrices_equal=[&](const Eigen::MatrixXd &a,const Eigen::MatrixXd &b)
+        { if (a.rows()!=b.rows() || a.cols()!=b.cols() || !a.isApprox(b,1e-13)) fail("O2 channel matrix mismatch"); };
+        matrices_equal(driver_contract->amplitudes.dprime_mo,reused->amplitudes.dprime_mo);
+        matrices_equal(driver_contract->eq41_response.response_ao,reused->eq41_response.response_ao);
+        matrices_equal(driver_contract->lagrangian_rhs.total_ai,reused->lagrangian_rhs.total_ai);
+        matrices_equal(driver_contract->overlap_density.raw_mo,reused->overlap_density.raw_mo);
+        matrices_equal(driver_contract->overlap_density.symmetric_mo,reused->overlap_density.symmetric_mo);
+        matrices_equal(driver_contract->non_xc_gradient.one_electron,reused->non_xc_gradient.one_electron);
+        matrices_equal(driver_contract->non_xc_gradient.overlap,reused->non_xc_gradient.overlap);
+        matrices_equal(driver_contract->non_xc_gradient.two_electron_separable,reused->non_xc_gradient.two_electron_separable);
+        matrices_equal(driver_contract->non_xc_gradient.two_electron_nonseparable,reused->non_xc_gradient.two_electron_nonseparable);
+        matrices_equal(driver_contract->xc_ii_gradient.p_side_fixed,reused->xc_ii_gradient.p_side_fixed);
+        matrices_equal(driver_contract->xc_ii_gradient.d_side_ao,reused->xc_ii_gradient.d_side_ao);
+        matrices_equal(driver_contract->xc_ii_gradient.becke_partition,reused->xc_ii_gradient.becke_partition);
+        matrices_equal(driver_contract->xc_ii_gradient.point_translation,reused->xc_ii_gradient.point_translation);
+        matrices_equal(driver_contract->xc_ii_gradient.total,reused->xc_ii_gradient.total);
+        const auto &compact_gamma=reused->two_particle_density;
+        const auto &full_gamma=driver_contract->two_particle_density;
+        if (compact_gamma.separable_symmetric_ao!=full_gamma.separable_symmetric_ao ||
+            compact_gamma.nonseparable_symmetric_ao!=full_gamma.nonseparable_symmetric_ao ||
+            compact_gamma.separable_raw_ao.capacity()!=0 || compact_gamma.nonseparable_raw_ao.capacity()!=0 ||
+            compact_gamma.total_raw_ao.capacity()!=0 || compact_gamma.total_symmetric_ao.capacity()!=0)
+            fail("O2 compact Gamma value or retained-storage mismatch");
+        auto owner_copy=reused_inputs;
+        if (owner_copy.workspace.get()!=workspace.get() || owner_copy.workspace->mo_eri.data()!=workspace->mo_eri.data() ||
+            owner_copy.workspace->non_xc_derivatives.eri_ao[0].data()!=workspace->non_xc_derivatives.eri_ao[0].data())
+            fail("O2 driver view copied quartic arrays");
+        std::printf("O2 water Gamma retained bytes reference=%zu production=%zu; stationary Eq41 calls=1; downstream calls=%d\n",
+            6*full_gamma.separable_symmetric_ao.size()*sizeof(double),
+            2*compact_gamma.separable_symmetric_ao.size()*sizeof(double),response_calls);
         // The coefficient must cross the driver boundary, not merely work
         // when passed directly to the low-level tensor builder. This is an
         // assembly test with fixed inputs, not a hybrid Z-stationarity test.

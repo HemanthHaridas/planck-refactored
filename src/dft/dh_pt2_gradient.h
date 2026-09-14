@@ -3,6 +3,7 @@
 
 #include <expected>
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 #include <Eigen/Dense>
@@ -68,9 +69,10 @@ namespace DFT::Gradient
     [[nodiscard]] std::expected<DHEq41ResponseOperator, std::string>
     make_dh_eq41_direct_eri_response_operator(const DHEq41DirectERIInputs &inputs);
 
-    // Fixed-geometry R_XC(D') action used by Eq. (41). The grid, AO values,
-    // and functionals must outlive the returned callback; ground_density is
-    // copied so the callback cannot observe later SCF-density mutation.
+    // Fixed-geometry R_XC(D') action used by Eq. (41). Preparation snapshots
+    // AO/grid/ground fields and functional derivatives. The returned callback
+    // owns its immutable cache; no caller object must remain alive. Construct
+    // a new callback after changing geometry, grid, density or functionals.
     struct DHEq41XCInputs
     {
         const MolecularGrid *molecular_grid = nullptr;
@@ -305,13 +307,16 @@ namespace DFT::Gradient
         std::vector<double> total_symmetric_ao;
     };
 
+    enum class DHGammaStorage { ReferenceAll, ContractionOnly };
+
     [[nodiscard]] std::expected<DHEq46_47TwoParticleDensity, std::string>
     build_dh_eq46_47_two_particle_density(
         const DHRelaxedDifferenceDensity &relaxed,
         const DHPT2AmplitudeDensity &amplitudes,
         const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
         const Eigen::Ref<const Eigen::MatrixXd> &ground_density_ao,
-        double exact_exchange);
+        double exact_exchange,
+        DHGammaStorage storage = DHGammaStorage::ReferenceAll);
 
     // Non-XC part of paper Eq. (33), evaluated coordinate by coordinate in
     // the AO basis.  All derivative vectors share one coordinate order; each
@@ -480,29 +485,51 @@ namespace DFT::Gradient
     // Z-vector solve, and derivative-integral preparation; this builder
     // validates those products and constructs every downstream Eq. (28),
     // (33), and (37)-(47) object exactly once.
+    // Immutable shared owner for the quartic per-geometry inputs. Copying a
+    // driver view/probe never copies these arrays; no nonowning spans escape.
+    struct DHGradientGeometryWorkspace
+    {
+        std::vector<double> mo_eri;
+        DHEq33NonXCDerivatives non_xc_derivatives;
+    };
+
     struct DHGradientDriverInputs
     {
         const HartreeFock::Correlation::RMP2Result *pt2_result = nullptr;
         double c_pt2 = 0.0;
         Eigen::MatrixXd mo_coeff;
         Eigen::VectorXd orbital_energies;
-        std::vector<double> mo_eri;
+        std::shared_ptr<const DHGradientGeometryWorkspace> workspace;
         // Single source of a_x for both the KS response and Eq. (46)'s
         // separable D:F_KS two-electron derivative.
         DHEq41ResponseOperator response_operator;
         Eigen::MatrixXd z_ai;
-        DHEq33NonXCDerivatives non_xc_derivatives;
         DHEq33XCFixedDensityInputs xc_inputs;
         // The contract always uses the validated literal Eq. (47) RHS and
         // pair metric blocks; there is no production legacy/gated fallback.
     };
 
-    struct DHGradientDriverContract
+    struct DHStationaryProducts
     {
+        // Snapshot binding for the move-only production handoff. The source
+        // PT2/MO data must remain unchanged during this synchronous geometry.
+        const HartreeFock::Correlation::RMP2Result *source_pt2 = nullptr;
+        const double *source_mo_eri = nullptr;
+        double c_pt2 = 0.0, exact_exchange = 0.0;
+        Eigen::MatrixXd source_mo_coeff;
         DHPT2AmplitudeDensity amplitudes;
         DHEq41ResponseDensity eq41_response;
         DHEq40AmplitudeRHS eq40_amplitude_rhs;
         DHLagrangianRHS lagrangian_rhs;
+    };
+
+    [[nodiscard]] std::expected<DHStationaryProducts, std::string>
+    build_dh_stationary_products(const HartreeFock::Correlation::RMP2Result &pt2,
+        double c_pt2, const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
+        const std::vector<double> &mo_eri, const DHEq41ResponseOperator &response);
+
+    struct DHGradientDriverContract : DHStationaryProducts
+    {
         DHRelaxedDifferenceDensity relaxed_density;
         DHEq42_43EnergyWeightedDensity eq42_43_overlap;
         DHEq44_45EnergyWeightedDensity eq44_45_overlap;
@@ -514,6 +541,13 @@ namespace DFT::Gradient
 
     [[nodiscard]] std::expected<DHGradientDriverContract, std::string>
     build_dh_gradient_driver_contract(const DHGradientDriverInputs &inputs);
+
+    // Production consumes the same checked stationary products used by the
+    // solve, by move. The one-argument overload independently rebuilds them
+    // and retains all Gamma arrays as a small-system reference adapter.
+    [[nodiscard]] std::expected<DHGradientDriverContract, std::string>
+    build_dh_gradient_driver_contract(const DHGradientDriverInputs &inputs,
+        DHStationaryProducts &&stationary);
 
     // Final correction-only Eq. (33) sum. The normal KS gradient and nuclear
     // repulsion remain driver-owned; this object is only the scaled PT2

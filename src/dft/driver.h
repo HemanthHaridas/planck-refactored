@@ -14,6 +14,7 @@
 #include "base/types.h"
 #include "base/wrapper.h"
 #include "dh_pt2_gradient.h"
+#include "dh_zvector.h"
 #include "integrals/shellpair.h"
 #include "ks_matrix.h"
 #include "response_packing.h"
@@ -50,19 +51,16 @@ namespace DFT::Driver
     };
 
     // Restricted-KS Eq. (41)/(27) portion of the double-hybrid driver. The
-    // returned response operator borrows `prepared`'s grid/AO storage, so that
-    // storage must outlive the result. This helper does not assemble derivative
+    // returned direct J/K callbacks borrow `prepared`'s shell pairs, so that
+    // storage must outlive the result; XC owns an immutable snapshot. This helper does not assemble derivative
     // integrals or a final nuclear gradient.
-    struct DHEq41ZVectorProducts
+    struct DHEq41ZVectorProducts : Gradient::DHStationaryProducts
     {
         Gradient::DHEq41ResponseOperator response_operator;
-        Gradient::DHPT2AmplitudeDensity amplitudes;
-        Gradient::DHEq41ResponseDensity eq41_response;
-        Gradient::DHEq40AmplitudeRHS eq40_amplitude_rhs;
-        Gradient::DHLagrangianRHS lagrangian_rhs;
         std::vector<double> mo_eri;
         Eigen::MatrixXd z_ai;
         double residual_max_abs = 0.0;
+        Gradient::DHZVectorStatistics solver;
     };
 
     [[nodiscard]] std::expected<DHEq41ZVectorProducts, std::string>
@@ -73,7 +71,8 @@ namespace DFT::Driver
         const XC::Functional &correlation_functional,
         double exact_exchange_coefficient,
         const HartreeFock::Correlation::RMP2Result &pt2_result,
-        double c_pt2);
+        double c_pt2,
+        const Gradient::DHZVectorOptions &solver_options = {});
 
     // AO derivative bundle for the correction-only non-XC Eq. (33) terms.
     // Coordinates are atom-major: index = 3 * atom + Cartesian component.

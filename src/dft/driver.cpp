@@ -1,6 +1,7 @@
 #include "driver.h"
 
 #include "analytic_hessian.h"
+#include "dh_hessian_probe.h"
 #include "ks_orbital_hessian.h"
 #include "uks_level_shift.h"
 #include "post_hf/casscf/aug-hessian.h"
@@ -3067,13 +3068,25 @@ namespace DFT::Driver
                 !functionals.has_double_hybrid_pt2)
                 return {};
 
-            // Restricted global-double-hybrid Cartesian gradients use the
+            // Restricted global-double-hybrid Cartesian derivatives use the
             // validated literal Eq. (47) RHS/overlap and hybrid Eq. (46)
             // complement. Range-separated and UKS variants remain excluded.
             if (functionals.has_double_hybrid_pt2 && !functionals.has_range_separation &&
-                calculator._scf._scf != HartreeFock::SCFType::UHF &&
-                calculator._calculation == HartreeFock::CalculationType::Gradient)
-                return {};
+                calculator._scf._scf != HartreeFock::SCFType::UHF)
+            {
+                switch (calculator._calculation)
+                {
+                case HartreeFock::CalculationType::Gradient:
+                case HartreeFock::CalculationType::GeomOpt:
+                case HartreeFock::CalculationType::Frequency:
+                case HartreeFock::CalculationType::GeomOptFrequency:
+                    if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+                        return std::unexpected("DFT double-hybrid analytic gradients do not implement solvent response.");
+                    return {};
+                default:
+                    break;
+                }
+            }
 
             return std::unexpected(
                 std::format(
@@ -3398,6 +3411,134 @@ namespace DFT::Driver
             }
 
             return result;
+        }
+
+        // One converged geometry, one PT2 amplitude snapshot. Returns rows in
+        // the current working frame; only the standalone gradient caller rotates.
+        std::expected<Eigen::MatrixXd, std::string> compute_analytic_dh_gradient(
+            HartreeFock::Calculator &calculator,
+            const PreparedSystem &prepared,
+            const InitializedFunctionals &functionals,
+            const HartreeFock::Correlation::RMP2Result &pt2_result)
+        {
+            Gradient::DHZVectorOptions z_options;
+            // Dense work is opt-in through the existing explicit swap probe.
+            // Ordinary gradients/optimization/frequencies use only GMRES.
+            if (std::getenv("PLANCK_DFT_DH_HESSIAN_PROBE_LOG"))
+                z_options.backend=Gradient::DHZVectorBackend::DenseReference;
+            auto zvector = build_dh_eq41_response_and_solve_zvector(
+                calculator, prepared, functionals.exchange, functionals.correlation,
+                functionals.implemented_exact_exchange_coefficient,
+                pt2_result, functionals.perturbative_correlation_coefficient, z_options);
+            if (!zvector)
+                return std::unexpected("DFT double-hybrid Z-vector construction failed: " + zvector.error());
+            auto derivatives = build_dh_eq33_derivative_integrals(calculator);
+            if (!derivatives)
+                return std::unexpected("DFT double-hybrid derivative-integral construction failed: " + derivatives.error());
+            const auto ao_hessian = evaluate_ao_hessian_on_grid(
+                calculator._shells, prepared.molecular_grid);
+            if (!ao_hessian)
+                return std::unexpected("DFT double-hybrid XC-II AO Hessian construction failed: " + ao_hessian.error());
+            const Gradient::DHEq33XCFixedDensityInputs xc_inputs{
+                &calculator._molecule, &calculator._shells, &prepared.molecular_grid,
+                &prepared.ao_grid, &*ao_hessian, calculator._info._scf.alpha.density,
+                &functionals.exchange, &functionals.correlation};
+            const auto workspace = std::make_shared<const Gradient::DHGradientGeometryWorkspace>(
+                Gradient::DHGradientGeometryWorkspace{std::move(zvector->mo_eri), std::move(*derivatives)});
+            const Gradient::DHGradientDriverInputs contract_inputs{
+                &pt2_result, functionals.perturbative_correlation_coefficient,
+                pt2_result.mo_coeff, pt2_result.mo_energy, workspace,
+                zvector->response_operator, zvector->z_ai, xc_inputs};
+            const auto contract = Gradient::build_dh_gradient_driver_contract(contract_inputs,
+                std::move(static_cast<Gradient::DHStationaryProducts &>(*zvector)));
+            if (!contract)
+                return std::unexpected("DFT double-hybrid gradient contract failed: " + contract.error());
+            const auto contract_action = Gradient::apply_dh_eq27_hessian(
+                zvector->z_ai, pt2_result.mo_coeff.leftCols(pt2_result.n_occ),
+                pt2_result.mo_coeff.rightCols(pt2_result.n_virt), pt2_result.mo_energy,
+                zvector->response_operator);
+            if (!contract_action) return std::unexpected(contract_action.error());
+            const double contract_residual = (contract_action->total_ai +
+                contract->lagrangian_rhs.total_ai).cwiseAbs().maxCoeff();
+            if (!std::isfinite(contract_residual) || contract_residual > 1e-9)
+                return std::unexpected("DH contract Z residual failure.");
+            const auto pt2_correction = Gradient::build_dh_eq33_pt2_correction_gradient(*contract);
+            if (!pt2_correction)
+                return std::unexpected("DFT double-hybrid Eq. 33 correction assembly failed: " + pt2_correction.error());
+            auto ks_gradient = compute_analytic_ks_gradient(calculator, prepared, functionals);
+            if (!ks_gradient)
+                return std::unexpected("DFT double-hybrid KS gradient failed: " + ks_gradient.error());
+            if (ks_gradient->rows() != pt2_correction->total.rows() ||
+                ks_gradient->cols() != 3 || pt2_correction->total.cols() != 3 ||
+                !ks_gradient->allFinite() || !pt2_correction->total.allFinite())
+                return std::unexpected("DFT double-hybrid gradient has invalid dimensions or values.");
+            Eigen::MatrixXd total_gradient = *ks_gradient + pt2_correction->total;
+            // Explicit diagnostic swap only. A requested ledger selected the
+            // dense reference baseline above; ordinary calls use GMRES.
+            // The probe keeps this same SCF/PT2 state and changes only Z.
+            if (const char *probe_log = std::getenv("PLANCK_DFT_DH_HESSIAN_PROBE_LOG"))
+            {
+                if (*probe_log == '\0')
+                    return std::unexpected("DH Hessian probe requires a nonempty log path.");
+                if (HartreeFock::Mpi::distributed())
+                    return std::unexpected("DH Hessian swap probe is serial/OpenMP only, not MPI.");
+                KsOrbitalHessianInputs shared_inputs;
+                shared_inputs.shell_pairs = &prepared.shell_pairs;
+                shared_inputs.molecular_grid = &prepared.molecular_grid;
+                shared_inputs.ao_grid = &prepared.ao_grid;
+                shared_inputs.density = calculator._info._scf.alpha.density;
+                shared_inputs.C_occ = pt2_result.mo_coeff.leftCols(pt2_result.n_occ);
+                shared_inputs.C_virt = pt2_result.mo_coeff.rightCols(pt2_result.n_virt);
+                shared_inputs.eps = pt2_result.mo_energy;
+                shared_inputs.x_functional = &functionals.exchange;
+                shared_inputs.c_functional = &functionals.correlation;
+                shared_inputs.engine = calculator._integral._engine;
+                shared_inputs.tol_eri = calculator._integral._tol_eri;
+                shared_inputs.sym_ops = calculator._use_integral_symmetry
+                    ? &calculator._integral_symmetry_ops : nullptr;
+                shared_inputs.full_range_exchange_coefficient = functionals.implemented_exact_exchange_coefficient;
+                shared_inputs.kernel_scale = 2.0;
+                const auto swapped = run_dh_hessian_swap_probe(
+                    contract_inputs, *contract, shared_inputs, *ks_gradient, probe_log);
+                if (!swapped) return std::unexpected(swapped.error());
+                total_gradient = *ks_gradient + *swapped;
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "DH Hessian Probe :",
+                    std::string("Returning shared-action Z gradient; diagnostic ledger: ") + probe_log);
+            }
+            return total_gradient;
+        }
+
+        // Optimizers read current_total_energy() after this callback. Keep the
+        // scaled PT2 energy and its full derivative at exactly the same geometry.
+        // No C, epsilon, amplitudes, Z or derivative arrays survive a displacement.
+        std::expected<Eigen::MatrixXd, std::string> run_analytic_gradient_current_geometry(
+            HartreeFock::Calculator &calculator,
+            const InitializedFunctionals &functionals)
+        {
+            auto prepared = prepare_current_geometry(calculator, true);
+            if (!prepared)
+                return std::unexpected(prepared.error());
+            auto result = run_ks_scf_scaffold(
+                calculator, *prepared, functionals.exchange, functionals.correlation);
+            if (!result)
+                return std::unexpected(result.error());
+            if (!result->converged)
+                return std::unexpected("KS-SCF did not converge during analytic gradient evaluation");
+
+            HartreeFock::Correlation::RMP2Result pt2_result;
+            if (auto correction = apply_post_ks_double_hybrid_correction(
+                    calculator, prepared->shell_pairs, functionals, *result,
+                    functionals.has_double_hybrid_pt2 ? &pt2_result : nullptr);
+                !correction)
+                return std::unexpected(correction.error());
+
+            auto gradient = functionals.has_double_hybrid_pt2
+                ? compute_analytic_dh_gradient(calculator, *prepared, functionals, pt2_result)
+                : compute_analytic_ks_gradient(calculator, *prepared, functionals);
+            if (!gradient)
+                return std::unexpected(gradient.error());
+            calculator._gradient = *gradient;
+            return gradient;
         }
 
         std::expected<Result, std::string> run_initial_single_point(
@@ -3730,27 +3871,26 @@ namespace DFT::Driver
                 HartreeFock::LogLevel::Info,
                 "Frequency :",
                 std::format(
-                    "Computing numerical Hessian via analytic KS gradients (central differences, gradient step = {:.4f} Bohr)",
-                    NUMERICAL_GRADIENT_STEP_BOHR));
+                    "Computing numerical Hessian via analytic {} gradients (central differences, step = {:.4f} Bohr)",
+                    functionals.has_double_hybrid_pt2 ? "double-hybrid" : "KS",
+                    calculator._hessian_step));
 
             auto gradient_runner = [&](HartreeFock::Calculator &inner) -> std::expected<Eigen::MatrixXd, std::string>
             {
-                auto ks = run_single_point_current_geometry(inner, functionals, true);
-                if (!ks)
-                    return std::unexpected(ks.error());
-                if (!ks->converged)
-                    return std::unexpected("KS-SCF did not converge during Hessian displacement");
-
-                auto pq = prepare_quadrature_for_calculator(inner);
-                if (!pq)
-                    return std::unexpected(pq.error());
-
-                return compute_analytic_ks_gradient(inner, *pq, functionals);
+                return run_analytic_gradient_current_geometry(inner, functionals);
             };
 
+            const Eigen::MatrixXd reference_geometry = calculator._molecule._standard;
             auto result = HartreeFock::Freq::compute_hessian(calculator, gradient_runner);
+            calculator._molecule.set_standard_from_bohr(reference_geometry);
+            calculator.sync_coordinate_frames_from_standard();
             if (!result)
                 return std::unexpected(result.error());
+            // compute_hessian restores coordinates, but its last wavefunction,
+            // energy and gradient still belong to the final -h displacement.
+            // Rebuild the complete reference state before publishing results.
+            if (auto reference = gradient_runner(calculator); !reference)
+                return std::unexpected("DFT frequency reference restoration failed: " + reference.error());
             store_frequency_result(calculator, *result);
             print_frequency_report(calculator, *result);
             return result;
@@ -3786,24 +3926,14 @@ namespace DFT::Driver
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Info,
                 "Geometry Optimization :",
-                use_internal_coordinates
-                    ? "Starting IC-BFGS optimizer with analytic KS gradients"
-                    : "Starting L-BFGS optimizer with analytic KS gradients");
+                std::format("Starting {} optimizer with analytic {} gradients",
+                    use_internal_coordinates ? "IC-BFGS" : "L-BFGS",
+                    functionals.has_double_hybrid_pt2 ? "double-hybrid" : "KS"));
             HartreeFock::Logger::blank();
 
             auto gradient_runner = [&](HartreeFock::Calculator &inner) -> std::expected<Eigen::VectorXd, std::string>
             {
-                auto ks = run_single_point_current_geometry(inner, functionals, true);
-                if (!ks)
-                    return std::unexpected(ks.error());
-                if (!ks->converged)
-                    return std::unexpected("KS-SCF did not converge during analytic gradient evaluation");
-
-                auto pq = prepare_quadrature_for_calculator(inner);
-                if (!pq)
-                    return std::unexpected(pq.error());
-
-                auto gradient = compute_analytic_ks_gradient(inner, *pq, functionals);
+                auto gradient = run_analytic_gradient_current_geometry(inner, functionals);
                 if (!gradient)
                     return std::unexpected(gradient.error());
                 return flatten_gradient_atom_major(*gradient);
@@ -4461,7 +4591,8 @@ namespace DFT::Driver
         const XC::Functional &correlation_functional,
         double exact_exchange_coefficient,
         const HartreeFock::Correlation::RMP2Result &pt2_result,
-        double c_pt2)
+        double c_pt2,
+        const Gradient::DHZVectorOptions &solver_options)
     {
         if (calculator._scf._scf == HartreeFock::SCFType::UHF || calculator._info._scf.is_uhf ||
             !calculator._info._is_converged || !std::isfinite(exact_exchange_coefficient) ||
@@ -4492,13 +4623,6 @@ namespace DFT::Driver
 
         DHEq41ZVectorProducts out;
         out.response_operator = *response;
-        const auto amplitudes = Gradient::build_dh_pt2_amplitude_density(pt2_result, c_pt2);
-        if (!amplitudes) return std::unexpected(amplitudes.error());
-        out.amplitudes = *amplitudes;
-        const auto eq41 = Gradient::build_dh_eq41_response_density(
-            out.amplitudes, pt2_result.mo_coeff, out.response_operator);
-        if (!eq41) return std::unexpected(eq41.error());
-        out.eq41_response = *eq41;
 
         std::vector<double> eri_local;
         const std::vector<double> &eri_ao = HartreeFock::Correlation::ensure_eri(
@@ -4506,10 +4630,10 @@ namespace DFT::Driver
         out.mo_eri = HartreeFock::Correlation::transform_eri(
             eri_ao, static_cast<std::size_t>(nao), pt2_result.mo_coeff,
             pt2_result.mo_coeff, pt2_result.mo_coeff, pt2_result.mo_coeff);
-        const auto eq40 = Gradient::build_dh_eq40_amplitude_rhs(
-            pt2_result, out.amplitudes, out.mo_eri, c_pt2);
-        if (!eq40) return std::unexpected(eq40.error());
-        out.eq40_amplitude_rhs = *eq40;
+        auto stationary = Gradient::build_dh_stationary_products(
+            pt2_result, c_pt2, pt2_result.mo_coeff, out.mo_eri, out.response_operator);
+        if (!stationary) return std::unexpected(stationary.error());
+        static_cast<Gradient::DHStationaryProducts &>(out) = std::move(*stationary);
         // Eq. (40)'s compressed external plus internal form is equivalent to
         // the literal four-coefficient Eq. (47) derivative.  The builder
         // above returns that literal derivative in `three_external`; adding
@@ -4517,44 +4641,19 @@ namespace DFT::Driver
         // skips that excluded bracket and uses the validated literal RHS.
         const Eigen::MatrixXd c_occ = pt2_result.mo_coeff.leftCols(nocc);
         const Eigen::MatrixXd c_virt = pt2_result.mo_coeff.rightCols(nvirt);
-        const auto rhs = Gradient::build_dh_lagrangian_rhs(
-            out.eq41_response, c_occ, c_virt, out.eq40_amplitude_rhs,
-            Gradient::DHRHSConvention::LiteralEq47);
-        if (!rhs) return std::unexpected(rhs.error());
-        out.lagrangian_rhs = *rhs;
 
-        const int nov = nocc * nvirt;
-        Eigen::MatrixXd hessian(nov, nov);
-        for (int col = 0; col < nov; ++col)
-        {
-            Eigen::MatrixXd unit = Eigen::MatrixXd::Zero(nvirt, nocc);
-            unit(col / nocc, col % nocc) = 1.0;
-            const auto action = Gradient::apply_dh_eq27_hessian(
-                unit, c_occ, c_virt, pt2_result.mo_energy, out.response_operator);
-            if (!action) return std::unexpected(action.error());
-            for (int a = 0; a < nvirt; ++a)
-                for (int i = 0; i < nocc; ++i)
-                    hessian(a * nocc + i, col) = action->total_ai(a, i);
-        }
-        Eigen::VectorXd rhs_vector(nov);
-        for (int a = 0; a < nvirt; ++a)
-            for (int i = 0; i < nocc; ++i)
-                rhs_vector(a * nocc + i) = -out.lagrangian_rhs.total_ai(a, i);
-        const Eigen::VectorXd z_vector = hessian.colPivHouseholderQr().solve(rhs_vector);
-        if (!z_vector.allFinite())
-            return std::unexpected("DH Eq. 27 Z-vector solve returned non-finite coefficients.");
-        out.z_ai = Eigen::MatrixXd::Zero(nvirt, nocc);
-        for (int a = 0; a < nvirt; ++a)
-            for (int i = 0; i < nocc; ++i)
-                out.z_ai(a, i) = z_vector(a * nocc + i);
-        const auto residual_action = Gradient::apply_dh_eq27_hessian(
-            out.z_ai, c_occ, c_virt, pt2_result.mo_energy, out.response_operator);
-        if (!residual_action) return std::unexpected(residual_action.error());
-        out.residual_max_abs = (residual_action->total_ai + out.lagrangian_rhs.total_ai).cwiseAbs().maxCoeff();
-        const double residual_limit = 1e-9 * std::max(1.0, out.lagrangian_rhs.total_ai.cwiseAbs().maxCoeff());
-        if (!std::isfinite(out.residual_max_abs) || out.residual_max_abs > residual_limit)
-            return std::unexpected(std::format(
-                "DH Eq. 27 Z-vector residual {:.3e} exceeds {:.3e}.", out.residual_max_abs, residual_limit));
+        auto solved=Gradient::solve_dh_zvector(out.lagrangian_rhs.total_ai,
+            c_occ,c_virt,pt2_result.mo_energy,out.response_operator,solver_options);
+        if (!solved) return std::unexpected(solved.error());
+        out.z_ai=std::move(solved->z_ai);
+        out.residual_max_abs=solved->residual_max_abs;
+        out.solver=std::move(static_cast<Gradient::DHZVectorStatistics &>(*solved));
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,"DH Z-vector :",
+            std::format("backend={} pairs={} iterations={} actions={} restarts={} residual={:.3e} "
+                        "krylov_matrix_bytes={} dense_matrix_bytes={} seconds={:.6f}",
+                solver_options.backend==Gradient::DHZVectorBackend::MatrixFreeGMRES?"GMRES":"dense-reference",
+                nocc*nvirt,out.solver.iterations,out.solver.action_count,out.solver.restarts,
+                out.residual_max_abs,out.solver.krylov_matrix_bytes,out.solver.dense_matrix_bytes,out.solver.elapsed_seconds));
         return out;
     }
 
@@ -4749,55 +4848,12 @@ namespace DFT::Driver
                         calculator, prepared->shell_pairs, *functionals, *result, &pt2_result);
                     !correction)
                     return std::unexpected(correction.error());
-                const auto zvector = build_dh_eq41_response_and_solve_zvector(
-                    calculator, *prepared, functionals->exchange, functionals->correlation,
-                    functionals->implemented_exact_exchange_coefficient,
-                    pt2_result, functionals->perturbative_correlation_coefficient);
-                if (!zvector)
-                    return std::unexpected("DFT double-hybrid Z-vector construction failed: " + zvector.error());
-                const auto derivatives = build_dh_eq33_derivative_integrals(calculator);
-                if (!derivatives)
-                    return std::unexpected("DFT double-hybrid derivative-integral construction failed: " + derivatives.error());
-                const auto ao_hessian = evaluate_ao_hessian_on_grid(
-                    calculator._shells, prepared->molecular_grid);
-                if (!ao_hessian)
-                    return std::unexpected("DFT double-hybrid XC-II AO Hessian construction failed: " + ao_hessian.error());
-                const Gradient::DHEq33XCFixedDensityInputs xc_inputs{
-                    &calculator._molecule, &calculator._shells, &prepared->molecular_grid,
-                    &prepared->ao_grid, &*ao_hessian, calculator._info._scf.alpha.density,
-                    &functionals->exchange, &functionals->correlation};
-                const Gradient::DHGradientDriverInputs contract_inputs{
-                    &pt2_result, functionals->perturbative_correlation_coefficient,
-                    pt2_result.mo_coeff, pt2_result.mo_energy, zvector->mo_eri,
-                    zvector->response_operator, zvector->z_ai, *derivatives, xc_inputs};
-                const auto contract = Gradient::build_dh_gradient_driver_contract(contract_inputs);
-                if (!contract)
-                    return std::unexpected("DFT double-hybrid gradient contract failed: " + contract.error());
-                const double rhs_difference = (contract->lagrangian_rhs.total_ai -
-                    zvector->lagrangian_rhs.total_ai).cwiseAbs().maxCoeff();
-                const auto contract_action = Gradient::apply_dh_eq27_hessian(
-                    zvector->z_ai, pt2_result.mo_coeff.leftCols(pt2_result.n_occ),
-                    pt2_result.mo_coeff.rightCols(pt2_result.n_virt), pt2_result.mo_energy,
-                    zvector->response_operator);
-                if (!contract_action) return std::unexpected(contract_action.error());
-                const double contract_residual = (contract_action->total_ai +
-                    contract->lagrangian_rhs.total_ai).cwiseAbs().maxCoeff();
-                if (!std::isfinite(rhs_difference) || !std::isfinite(contract_residual) ||
-                    rhs_difference > 1e-12 || contract_residual > 1e-9)
-                    return std::unexpected("DH solver/contract RHS mismatch or contract Z residual failure.");
-                const auto pt2_correction = Gradient::build_dh_eq33_pt2_correction_gradient(*contract);
-                if (!pt2_correction)
-                    return std::unexpected("DFT double-hybrid Eq. 33 correction assembly failed: " + pt2_correction.error());
-                auto ks_gradient = compute_analytic_ks_gradient(calculator, *prepared, *functionals);
-                if (!ks_gradient)
-                    return std::unexpected("DFT double-hybrid KS gradient failed: " + ks_gradient.error());
-                if (ks_gradient->rows() != pt2_correction->total.rows() ||
-                    ks_gradient->cols() != 3 || pt2_correction->total.cols() != 3 ||
-                    !ks_gradient->allFinite() || !pt2_correction->total.allFinite())
-                    return std::unexpected("DFT double-hybrid gradient has invalid dimensions or values.");
-                const Eigen::MatrixXd total_gradient = *ks_gradient + pt2_correction->total;
+                auto total_gradient = compute_analytic_dh_gradient(
+                    calculator, *prepared, *functionals, pt2_result);
+                if (!total_gradient)
+                    return std::unexpected(total_gradient.error());
                 calculator._gradient = rotate_gradient_to_requested_frame_if_needed(
-                    calculator, total_gradient, requested_gradient_frame_bohr);
+                    calculator, *total_gradient, requested_gradient_frame_bohr);
                 print_gradient_report(calculator._gradient);
                 return *result;
             }
@@ -4865,6 +4921,8 @@ namespace DFT::Driver
             auto geomopt = run_geometry_optimization(calculator, *functionals);
             if (!geomopt)
                 return std::unexpected(geomopt.error());
+            if (!geomopt->converged)
+                return *geomopt;
 
             auto frequency = run_frequency_analysis(calculator, *functionals);
             if (!frequency)

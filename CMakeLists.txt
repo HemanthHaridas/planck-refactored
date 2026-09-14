@@ -419,6 +419,9 @@ set(DFT_LIB_SRC
     ${SRC_DIR}/dft/dh_pt2_gradient.h
     ${SRC_DIR}/dft/udh_ks_response.cpp
     ${SRC_DIR}/dft/udh_ks_response.h
+    ${SRC_DIR}/dft/dh_hessian_probe.cpp
+    ${SRC_DIR}/dft/dh_hessian_probe.h
+    ${SRC_DIR}/dft/dh_probe_gmres.h
     ${SRC_DIR}/dft/driver.cpp
     ${SRC_DIR}/dft/driver.h
     ${SRC_DIR}/dft/ks_matrix.cpp
@@ -790,6 +793,23 @@ endif()
 find_package(Python3 COMPONENTS Interpreter)
 
 if(BUILD_TESTING)
+    add_executable(planck-dh-probe-gmres ${CMAKE_SOURCE_DIR}/tests/dh_probe_gmres.cpp)
+    target_include_directories(planck-dh-probe-gmres PRIVATE ${SRC_DIR} ${eigen_SOURCE_DIR})
+    add_test(NAME planck-dh-probe-gmres COMMAND planck-dh-probe-gmres)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME planck-dh-hessian-swap-runner
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_dh_hessian_swap_audit.py -v)
+        add_test(NAME planck-dh-workflow-runner
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_dh_workflow_audit.py -v)
+        add_test(NAME planck-dh-grid-sigma-hoist
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_dh_grid_sigma_hoist.py -v)
+        add_test(NAME planck-dh-o3-zvector-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_dh_o3_zvector.py -v)
+    endif()
     add_executable(planck-uks-level-shift
         ${CMAKE_SOURCE_DIR}/tests/uks_level_shift.cpp
         ${SRC_DIR}/dft/uks_level_shift.cpp
@@ -833,6 +853,8 @@ if(BUILD_TESTING)
 
     add_executable(planck-dh-pt2-amplitude-density
         ${CMAKE_SOURCE_DIR}/tests/dh_pt2_amplitude_density.cpp
+        ${CMAKE_SOURCE_DIR}/tests/dh_grid_sigma.cpp
+        ${CMAKE_SOURCE_DIR}/tests/dh_zvector.cpp
         ${SRC_DIR}/dft/dh_pt2_gradient.cpp
         ${SRC_DIR}/dft/dft_gradient.cpp
         ${SRC_DIR}/dft/analytic_hessian.cpp
@@ -951,6 +973,9 @@ if(BUILD_TESTING)
     add_executable(planck-dh-eq41-xc-response
         ${CMAKE_SOURCE_DIR}/tests/dh_eq41_xc_response.cpp
         ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        # dh_pt2_gradient's complete XC-II routines call the AO-center and
+        # Becke-partition helpers defined in this translation unit.
+        ${SRC_DIR}/dft/dft_gradient.cpp
         ${SRC_DIR}/dft/analytic_hessian.cpp
         ${SRC_DIR}/dft/xc_grid.cpp
         ${SRC_DIR}/dft/ks_matrix.cpp

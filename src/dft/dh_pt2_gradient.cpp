@@ -97,16 +97,14 @@ namespace DFT::Gradient
             inputs.ground_density.rows() != inputs.ground_density.cols() ||
             inputs.ground_density.rows() != inputs.ao_grid->nbasis())
             return std::unexpected("DH Eq. 41 XC response: invalid fixed-geometry inputs.");
-        const auto fixed = inputs;
-        return DHResponseFn{[fixed](const Eigen::Ref<const Eigen::MatrixXd> &trial_density)
+        auto kernel = DFT::Driver::prepare_rks_xc_kernel(
+            *inputs.molecular_grid, *inputs.ao_grid, inputs.ground_density,
+            *inputs.exchange_functional, *inputs.correlation_functional);
+        if (!kernel) return std::unexpected(kernel.error());
+        return DHResponseFn{[kernel = std::move(*kernel)](const Eigen::Ref<const Eigen::MatrixXd> &trial_density)
             -> std::expected<Eigen::MatrixXd, std::string>
         {
-            if (trial_density.rows() != fixed.ground_density.rows() ||
-                trial_density.cols() != fixed.ground_density.cols())
-                return std::unexpected("DH Eq. 41 XC response: trial-density dimensions do not match ground density.");
-            return DFT::Driver::compute_analytic_xc_hessian_vector_product(
-                *fixed.molecular_grid, *fixed.ao_grid, fixed.ground_density, trial_density,
-                *fixed.exchange_functional, *fixed.correlation_functional);
+            return kernel.apply(trial_density);
         }};
     }
 
@@ -386,7 +384,10 @@ namespace DFT::Gradient
         const Eigen::Index no = c_occ.cols();
         const Eigen::Index nv = c_virt.cols();
         if (nao == 0 || c_virt.rows() != nao || z_ai.rows() != nv || z_ai.cols() != no ||
-            orbital_energies.size() != no + nv)
+            orbital_energies.size() != no + nv || !z_ai.allFinite() || !c_occ.allFinite() ||
+            !c_virt.allFinite() || !orbital_energies.allFinite() || !response.coulomb || !response.xc ||
+            !std::isfinite(response.exact_exchange) || response.exact_exchange<0 ||
+            (response.exact_exchange!=0 && !response.exchange))
             return std::unexpected("DH Eq. 27 Hessian: incompatible Z_ai, orbitals, or orbital energies.");
 
         DHEq27HessianAction out;
@@ -398,11 +399,13 @@ namespace DFT::Gradient
         // its factor of two, most visibly in the XC Hessian channel.
         const Eigen::MatrixXd delta_density = 2.0 * (out.raw_z_ao + out.raw_z_ao.transpose());
         auto coulomb = response.coulomb(delta_density);
+        if (!coulomb) return std::unexpected("DH Eq. 27 Coulomb: "+coulomb.error());
         auto xc = response.xc(delta_density);
-        if (!coulomb || !xc)
-            return std::unexpected("DH Eq. 27 Hessian: Coulomb or XC orbital-density response failed.");
+        if (!xc) return std::unexpected("DH Eq. 27 XC: "+xc.error());
         if (coulomb->rows() != nao || coulomb->cols() != nao || xc->rows() != nao || xc->cols() != nao)
             return std::unexpected("DH Eq. 27 Hessian: Coulomb or XC orbital-density response has wrong dimensions.");
+        if (!coulomb->allFinite() || !xc->allFinite())
+            return std::unexpected("DH Eq. 27 Hessian: nonfinite Coulomb or XC response.");
         const auto transform_ai = [&c_occ, &c_virt](const Eigen::MatrixXd &ao)
         { return c_virt.transpose() * ao * c_occ; };
         out.coulomb_ai = transform_ai(*coulomb);
@@ -411,7 +414,8 @@ namespace DFT::Gradient
         if (response.exact_exchange != 0.0)
         {
             auto exchange = response.exchange(delta_density);
-            if (!exchange || exchange->rows() != nao || exchange->cols() != nao)
+            if (!exchange) return std::unexpected("DH Eq. 27 exchange: "+exchange.error());
+            if (exchange->rows() != nao || exchange->cols() != nao || !exchange->allFinite())
                 return std::unexpected("DH Eq. 27 Hessian: exchange orbital-density response failed.");
             out.exchange_ai.noalias() = -0.5 * response.exact_exchange * transform_ai(*exchange);
         }
@@ -422,6 +426,7 @@ namespace DFT::Gradient
                 out.orbital_energy_ai(a, i) =
                     (orbital_energies(no + a) - orbital_energies(i)) * z_ai(a, i);
         out.total_ai = out.orbital_energy_ai + out.response_ai;
+        if (!out.total_ai.allFinite()) return std::unexpected("DH Eq. 27 Hessian: nonfinite total action.");
         return out;
     }
 
@@ -639,7 +644,7 @@ namespace DFT::Gradient
         const DHPT2AmplitudeDensity &amplitudes,
         const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
         const Eigen::Ref<const Eigen::MatrixXd> &ground_density_ao,
-        double exact_exchange)
+        double exact_exchange, DHGammaStorage storage)
     {
         const int no = amplitudes.n_occ;
         const int nv = amplitudes.n_virt;
@@ -660,7 +665,6 @@ namespace DFT::Gradient
             mo_coeff * relaxed.symmetric_mo * mo_coeff.transpose();
         const std::size_t n4 = static_cast<std::size_t>(nao) * nao * nao * nao;
         out.separable_raw_ao.assign(n4, 0.0);
-        out.nonseparable_raw_ao.assign(n4, 0.0);
 
         // Eq. (46), correction only: its 1/2 P P - 1/4 P P terms are the
         // SCF reference and deliberately do not enter the PT2 correction.
@@ -674,6 +678,11 @@ namespace DFT::Gradient
                         out.separable_raw_ao[eri_idx(mu, nu, ka, ta, nao)] =
                             out.relaxed_difference_ao(mu, nu) * ground_density_ao(ka, ta) -
                             0.5 * exact_exchange * out.relaxed_difference_ao(mu, ka) * ground_density_ao(nu, ta);
+
+        out.separable_symmetric_ao = eri_eightfold_symmetrize(out.separable_raw_ao, out.n_ao);
+        if (storage == DHGammaStorage::ContractionOnly)
+            std::vector<double>().swap(out.separable_raw_ao);
+        out.nonseparable_raw_ao.assign(n4, 0.0);
 
         // Eq. (47), direct MO-to-AO backtransformation.  The AO pair order
         // is (mu nu | ka ta), so its closed-shell spatial realization is
@@ -697,12 +706,16 @@ namespace DFT::Gradient
                                             static_cast<double>(1 + (i == j)) *
                                             amplitudes.t_tilde[idx(i, j, a, b, no, nv)];
 
-        out.total_raw_ao = out.separable_raw_ao;
-        for (std::size_t p = 0; p < n4; ++p)
-            out.total_raw_ao[p] += out.nonseparable_raw_ao[p];
-        out.separable_symmetric_ao = eri_eightfold_symmetrize(out.separable_raw_ao, out.n_ao);
         out.nonseparable_symmetric_ao = eri_eightfold_symmetrize(out.nonseparable_raw_ao, out.n_ao);
-        out.total_symmetric_ao = eri_eightfold_symmetrize(out.total_raw_ao, out.n_ao);
+        if (storage == DHGammaStorage::ReferenceAll)
+        {
+            out.total_raw_ao = out.separable_raw_ao;
+            for (std::size_t p = 0; p < n4; ++p)
+                out.total_raw_ao[p] += out.nonseparable_raw_ao[p];
+            out.total_symmetric_ao = eri_eightfold_symmetrize(out.total_raw_ao, out.n_ao);
+        }
+        else
+            std::vector<double>().swap(out.nonseparable_raw_ao);
         return out;
     }
 
@@ -723,7 +736,7 @@ namespace DFT::Gradient
             overlap.symmetric_mo.cols() != nmo || two_particle.n_ao != nao ||
             two_particle.separable_symmetric_ao.size() != n4 ||
             two_particle.nonseparable_symmetric_ao.size() != n4 ||
-            two_particle.total_symmetric_ao.size() != n4 ||
+            (!two_particle.total_symmetric_ao.empty() && two_particle.total_symmetric_ao.size() != n4) ||
             derivatives.overlap_ao.size() != ncoord || derivatives.eri_ao.size() != ncoord)
             return std::unexpected("DH Eq. 33 non-XC gradient: incompatible densities, orbitals, or derivative dimensions.");
 
@@ -809,8 +822,12 @@ namespace DFT::Gradient
         else if (inputs.exchange_functional->is_gga_like())
         {
             std::vector<double> sigma(static_cast<std::size_t>(npts));
-            for (Eigen::Index p = 0; p < npts; ++p)
-                sigma[static_cast<std::size_t>(p)] = ground->total.gradient_squared()(p);
+            {
+                // Whole-grid sigma is evaluated once; release it before Libxc.
+                const Eigen::VectorXd ground_sigma = ground->total.gradient_squared();
+                for (Eigen::Index p = 0; p < npts; ++p)
+                    sigma[static_cast<std::size_t>(p)] = ground_sigma(p);
+            }
             std::vector<double> exc;
             std::vector<double> vrho_x, vrho_c, exc_c;
             auto vx = inputs.exchange_functional->evaluate_gga_exc_vxc(
@@ -1042,10 +1059,13 @@ namespace DFT::Gradient
 
         const Eigen::Index npts = ao.npoints();
         std::vector<double> rho(static_cast<std::size_t>(npts)), sigma(static_cast<std::size_t>(npts));
-        for (Eigen::Index p = 0; p < npts; ++p)
         {
-            rho[static_cast<std::size_t>(p)] = ground->total.rho(p);
-            sigma[static_cast<std::size_t>(p)] = ground->total.gradient_squared()(p);
+            const Eigen::VectorXd ground_sigma = ground->total.gradient_squared();
+            for (Eigen::Index p = 0; p < npts; ++p)
+            {
+                rho[static_cast<std::size_t>(p)] = ground->total.rho(p);
+                sigma[static_cast<std::size_t>(p)] = ground_sigma(p);
+            }
         }
         std::vector<double> exc_x, exc_c, vrho_x, vrho_c, fs_x, fs_c;
         std::vector<double> frr_x, frr_c, frs_x, frs_c, fss_x, fss_c;
@@ -1162,10 +1182,13 @@ namespace DFT::Gradient
         if (!atoms_bf) return std::unexpected(atoms_bf.error());
         const Eigen::Index npts = ao.npoints();
         std::vector<double> rho(static_cast<std::size_t>(npts)), sigma(static_cast<std::size_t>(npts));
-        for (Eigen::Index p = 0; p < npts; ++p)
         {
-            rho[static_cast<std::size_t>(p)] = ground->total.rho(p);
-            sigma[static_cast<std::size_t>(p)] = ground->total.gradient_squared()(p);
+            const Eigen::VectorXd ground_sigma = ground->total.gradient_squared();
+            for (Eigen::Index p = 0; p < npts; ++p)
+            {
+                rho[static_cast<std::size_t>(p)] = ground->total.rho(p);
+                sigma[static_cast<std::size_t>(p)] = ground_sigma(p);
+            }
         }
         std::vector<double> exc_x, exc_c, vrho_x, vrho_c, fs_x, fs_c;
         const auto vx = inputs.exchange_functional->evaluate_gga_exc_vxc(
@@ -1352,10 +1375,36 @@ namespace DFT::Gradient
         return out;
     }
 
-    std::expected<DHGradientDriverContract, std::string>
-    build_dh_gradient_driver_contract(const DHGradientDriverInputs &inputs)
+    std::expected<DHStationaryProducts, std::string>
+    build_dh_stationary_products(const HartreeFock::Correlation::RMP2Result &pt2,
+        double c_pt2, const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
+        const std::vector<double> &mo_eri, const DHEq41ResponseOperator &response)
     {
-        if (inputs.pt2_result == nullptr || !std::isfinite(inputs.c_pt2))
+        DHStationaryProducts out;
+        out.source_pt2 = &pt2; out.source_mo_eri = mo_eri.data();
+        out.c_pt2 = c_pt2; out.exact_exchange = response.exact_exchange;
+        out.source_mo_coeff = mo_coeff;
+        auto amplitudes = build_dh_pt2_amplitude_density(pt2, c_pt2);
+        if (!amplitudes) return std::unexpected(amplitudes.error());
+        out.amplitudes = std::move(*amplitudes);
+        auto eq41 = build_dh_eq41_response_density(out.amplitudes, mo_coeff, response);
+        if (!eq41) return std::unexpected(eq41.error());
+        out.eq41_response = std::move(*eq41);
+        auto eq40 = build_dh_eq40_amplitude_rhs(pt2, out.amplitudes, mo_eri, c_pt2);
+        if (!eq40) return std::unexpected(eq40.error());
+        out.eq40_amplitude_rhs = std::move(*eq40);
+        auto rhs = build_dh_lagrangian_rhs(out.eq41_response, mo_coeff.leftCols(pt2.n_occ),
+            mo_coeff.rightCols(pt2.n_virt), out.eq40_amplitude_rhs, DHRHSConvention::LiteralEq47);
+        if (!rhs) return std::unexpected(rhs.error());
+        out.lagrangian_rhs = std::move(*rhs);
+        return out;
+    }
+
+    static std::expected<DHGradientDriverContract, std::string>
+    assemble_dh_gradient_driver_contract(const DHGradientDriverInputs &inputs,
+        DHStationaryProducts &&stationary, DHGammaStorage storage)
+    {
+        if (inputs.pt2_result == nullptr || !inputs.workspace || !std::isfinite(inputs.c_pt2))
             return std::unexpected("DH gradient driver contract: missing PT2 result or invalid PT2 coefficient.");
         const auto &pt2 = *inputs.pt2_result;
         const int nocc = pt2.n_occ;
@@ -1364,47 +1413,60 @@ namespace DFT::Gradient
         if (nocc <= 0 || nvirt <= 0 || inputs.mo_coeff.cols() != nmo ||
             inputs.mo_coeff.rows() == 0 || inputs.orbital_energies.size() != nmo ||
             inputs.z_ai.rows() != nvirt || inputs.z_ai.cols() != nocc ||
-            inputs.mo_eri.size() != static_cast<std::size_t>(nmo) * nmo * nmo * nmo)
+            inputs.workspace->mo_eri.size() != static_cast<std::size_t>(nmo) * nmo * nmo * nmo)
             return std::unexpected("DH gradient driver contract: inconsistent PT2, MO, ERI, or Z-vector dimensions.");
         if (inputs.xc_inputs.ground_density_ao.rows() != inputs.mo_coeff.rows() ||
             inputs.xc_inputs.ground_density_ao.cols() != inputs.mo_coeff.rows())
             return std::unexpected("DH gradient driver contract: ground AO density does not match MO coefficients.");
 
         DHGradientDriverContract out;
-        const auto amplitudes = build_dh_pt2_amplitude_density(pt2, inputs.c_pt2);
-        if (!amplitudes) return std::unexpected(amplitudes.error());
-        out.amplitudes = *amplitudes;
-        const auto eq41 = build_dh_eq41_response_density(
-            out.amplitudes, inputs.mo_coeff, inputs.response_operator);
-        if (!eq41) return std::unexpected(eq41.error());
-        out.eq41_response = *eq41;
-        const auto eq40 = build_dh_eq40_amplitude_rhs(
-            pt2, out.amplitudes, inputs.mo_eri, inputs.c_pt2);
-        if (!eq40) return std::unexpected(eq40.error());
-        out.eq40_amplitude_rhs = *eq40;
-        const Eigen::MatrixXd c_occ = inputs.mo_coeff.leftCols(nocc);
-        const Eigen::MatrixXd c_virt = inputs.mo_coeff.rightCols(nvirt);
-        const auto rhs = build_dh_lagrangian_rhs(
-            out.eq41_response, c_occ, c_virt, out.eq40_amplitude_rhs, DHRHSConvention::LiteralEq47);
-        if (!rhs) return std::unexpected(rhs.error());
-        out.lagrangian_rhs = *rhs;
-        const auto relaxed = build_dh_relaxed_difference_density(out.amplitudes, inputs.z_ai);
+        const auto valid = [](const Eigen::MatrixXd &m, Eigen::Index rows, Eigen::Index cols)
+        { return m.rows()==rows && m.cols()==cols && m.allFinite(); };
+        if (stationary.source_pt2 != inputs.pt2_result ||
+            stationary.source_mo_eri != inputs.workspace->mo_eri.data() ||
+            stationary.c_pt2 != inputs.c_pt2 || stationary.exact_exchange != inputs.response_operator.exact_exchange ||
+            !valid(stationary.source_mo_coeff,inputs.mo_coeff.rows(),nmo) ||
+            !stationary.source_mo_coeff.isApprox(inputs.mo_coeff,0.0) ||
+            stationary.amplitudes.n_occ!=nocc || stationary.amplitudes.n_virt!=nvirt ||
+            stationary.amplitudes.t_tilde.size()!=static_cast<std::size_t>(nocc)*nocc*nvirt*nvirt ||
+            !std::all_of(stationary.amplitudes.t_tilde.begin(),stationary.amplitudes.t_tilde.end(),
+                         [](double v){ return std::isfinite(v); }) ||
+            !valid(stationary.amplitudes.dprime_oo,nocc,nocc) ||
+            !valid(stationary.amplitudes.dprime_vv,nvirt,nvirt) ||
+            !valid(stationary.amplitudes.dprime_mo,nmo,nmo) ||
+            !valid(stationary.eq41_response.dprime_ao,inputs.mo_coeff.rows(),inputs.mo_coeff.rows()) ||
+            !valid(stationary.eq41_response.response_ao,inputs.mo_coeff.rows(),inputs.mo_coeff.rows()) ||
+            !valid(stationary.eq40_amplitude_rhs.three_external,nvirt,nocc) ||
+            !valid(stationary.eq40_amplitude_rhs.total,nvirt,nocc) ||
+            !valid(stationary.lagrangian_rhs.response_ai,nvirt,nocc) ||
+            !valid(stationary.lagrangian_rhs.amplitude_ai,nvirt,nocc) ||
+            !valid(stationary.lagrangian_rhs.total_ai,nvirt,nocc) ||
+            !valid(stationary.lagrangian_rhs.included_internal_ai,nvirt,nocc) ||
+            stationary.lagrangian_rhs.included_internal_ai.norm()!=0.0 ||
+            !inputs.mo_coeff.allFinite() || !inputs.orbital_energies.allFinite() || !inputs.z_ai.allFinite())
+            return std::unexpected("DH gradient driver contract: stale or invalid stationary products.");
+        if (!(stationary.lagrangian_rhs.total_ai-stationary.lagrangian_rhs.response_ai-
+              stationary.lagrangian_rhs.amplitude_ai).isZero(1e-12) ||
+            !(stationary.lagrangian_rhs.amplitude_ai-stationary.eq40_amplitude_rhs.three_external).isZero(1e-12))
+            return std::unexpected("DH gradient driver contract: stationary RHS convention mismatch.");
+        static_cast<DHStationaryProducts &>(out) = std::move(stationary);
+        auto relaxed = build_dh_relaxed_difference_density(out.amplitudes, inputs.z_ai);
         if (!relaxed) return std::unexpected(relaxed.error());
-        out.relaxed_density = *relaxed;
-        const auto diagonal = build_dh_eq42_43_energy_weighted_density(
+        out.relaxed_density = std::move(*relaxed);
+        auto diagonal = build_dh_eq42_43_energy_weighted_density(
             out.relaxed_density, pt2, out.amplitudes, inputs.mo_coeff,
-            inputs.orbital_energies, inputs.mo_eri, inputs.response_operator, false);
+            inputs.orbital_energies, inputs.workspace->mo_eri, inputs.response_operator, false);
         if (!diagonal) return std::unexpected(diagonal.error());
-        out.eq42_43_overlap = *diagonal;
-        const auto off_diagonal = build_dh_eq44_45_energy_weighted_density(
-            out.relaxed_density, pt2, out.amplitudes, inputs.orbital_energies, inputs.mo_eri, false);
+        out.eq42_43_overlap = std::move(*diagonal);
+        auto off_diagonal = build_dh_eq44_45_energy_weighted_density(
+            out.relaxed_density, pt2, out.amplitudes, inputs.orbital_energies, inputs.workspace->mo_eri, false);
         if (!off_diagonal) return std::unexpected(off_diagonal.error());
-        out.eq44_45_overlap = *off_diagonal;
+        out.eq44_45_overlap = std::move(*off_diagonal);
         // Always use the independently validated four-coefficient pair
         // metric derivative, for production as well as contract callers.
         {
             const auto literal_pair = build_dh_eq47_pair_metric_overlap_density(
-                pt2, out.amplitudes, inputs.mo_eri);
+                pt2, out.amplitudes, inputs.workspace->mo_eri);
             if (!literal_pair) return std::unexpected(literal_pair.error());
 
             // Preserve the independently derived Eq. (42) response and
@@ -1419,24 +1481,41 @@ namespace DFT::Gradient
                 out.eq42_43_overlap.amplitude_vv;
             out.eq44_45_overlap.w_ia = literal_pair->w_ia;
         }
-        const auto overlap = build_dh_overlap_density_adapter(out.eq42_43_overlap, out.eq44_45_overlap);
+        auto overlap = build_dh_overlap_density_adapter(out.eq42_43_overlap, out.eq44_45_overlap);
         if (!overlap) return std::unexpected(overlap.error());
-        out.overlap_density = *overlap;
-        const auto pair_density = build_dh_eq46_47_two_particle_density(
+        out.overlap_density = std::move(*overlap);
+        auto pair_density = build_dh_eq46_47_two_particle_density(
             out.relaxed_density, out.amplitudes, inputs.mo_coeff, inputs.xc_inputs.ground_density_ao,
-            inputs.response_operator.exact_exchange);
+            inputs.response_operator.exact_exchange, storage);
         if (!pair_density) return std::unexpected(pair_density.error());
-        out.two_particle_density = *pair_density;
-        const auto non_xc = build_dh_eq33_non_xc_gradient(
+        out.two_particle_density = std::move(*pair_density);
+        auto non_xc = build_dh_eq33_non_xc_gradient(
             out.relaxed_density, out.overlap_density, out.two_particle_density,
-            inputs.mo_coeff, inputs.non_xc_derivatives);
+            inputs.mo_coeff, inputs.workspace->non_xc_derivatives);
         if (!non_xc) return std::unexpected(non_xc.error());
-        out.non_xc_gradient = *non_xc;
-        const auto xc_ii = build_dh_eq33_complete_xc_ii_gradient(
+        out.non_xc_gradient = std::move(*non_xc);
+        auto xc_ii = build_dh_eq33_complete_xc_ii_gradient(
             out.relaxed_density, inputs.mo_coeff, inputs.xc_inputs);
         if (!xc_ii) return std::unexpected(xc_ii.error());
-        out.xc_ii_gradient = *xc_ii;
+        out.xc_ii_gradient = std::move(*xc_ii);
         return out;
+    }
+
+    std::expected<DHGradientDriverContract, std::string>
+    build_dh_gradient_driver_contract(const DHGradientDriverInputs &inputs)
+    {
+        if (!inputs.pt2_result || !inputs.workspace)
+            return std::unexpected("DH gradient reference contract: missing snapshot or workspace.");
+        auto stationary = build_dh_stationary_products(*inputs.pt2_result, inputs.c_pt2,
+            inputs.mo_coeff, inputs.workspace->mo_eri, inputs.response_operator);
+        if (!stationary) return std::unexpected(stationary.error());
+        return assemble_dh_gradient_driver_contract(inputs,std::move(*stationary),DHGammaStorage::ReferenceAll);
+    }
+
+    std::expected<DHGradientDriverContract, std::string>
+    build_dh_gradient_driver_contract(const DHGradientDriverInputs &inputs, DHStationaryProducts &&stationary)
+    {
+        return assemble_dh_gradient_driver_contract(inputs,std::move(stationary),DHGammaStorage::ContractionOnly);
     }
 
     std::expected<DHEq33PT2CorrectionGradient, std::string>

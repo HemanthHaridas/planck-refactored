@@ -67,6 +67,15 @@ namespace HartreeFock::IO
         // Gradient (Ha/Bohr), natoms×3 — only present when a gradient ran.
         if (calc._gradient.size() != 0)
             out << ",\n  \"gradient\": " << mat_rows(calc._gradient);
+        // Semi-numerical frequency results, in the same atom-major frame.
+        if (calc._hessian.size() != 0)
+        {
+            out << ",\n  \"hessian\": " << mat_rows(calc._hessian);
+            out << ",\n  \"hessian_step_bohr\": " << num(calc._hessian_step);
+            out << ",\n  \"frequencies_cm1\": " << vec(calc._frequencies);
+            out << ",\n  \"normal_modes\": " << mat_rows(calc._normal_modes);
+            out << ",\n  \"zpe_hartree\": " << num(calc._zpe);
+        }
         // Multipole moments (au), only when the multipole report ran. Dipole is
         // a length-3 vector; quadrupole the traceless 3×3 Cartesian tensor.
         if (calc._have_multipole)
