@@ -578,6 +578,17 @@ namespace HartreeFock
         // OptionsSolvation::_cavity_scale. Applies to both grid kinds.
         double _radius_scale = 1.0;
 
+        // RESP: add the Bayly hyperbolic restraint to the charge fit. Off by
+        // default, so `grid chelpg` / `grid connolly` alone stay the plain
+        // least-squares fit and existing inputs are unaffected.
+        bool _resp = false;
+        double _resp_strength = 0.0005;  // a, atomic units (Bayly stage 1)
+        double _resp_tightness = 0.1;    // b, atomic units
+        bool _resp_exempt_hydrogen = true;
+        // Groups of 0-based atom indices constrained to share one charge. The
+        // parser converts from the 1-based indices the input uses.
+        std::vector<std::vector<std::size_t>> _resp_equivalence;
+
         bool wants_grid() const noexcept { return _grid != Grid::None; }
     };
 

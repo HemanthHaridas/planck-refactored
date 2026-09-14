@@ -82,8 +82,32 @@
    ]
   },
   {
+   "id": "water_rhf_resp_sto3g",
+   "_note": "E4b/E5 of docs/ESP_CHARGES_SCOPE.md: the Bayly hyperbolic restraint on a Connolly grid, driven from the input file. `equivalent 2 3` forces water's two symmetry-equivalent hydrogens to share a charge -- they come back EXACTLY equal here, against 0.354386/0.354418 for the same grid unrestrained, so the constraint is doing visible work. resp_strength is 0.01 rather than the Bayly stage-1 default 0.0005 deliberately: at 0.0005 the restraint moves these charges by ~4e-4, which is below what the 8-decimal charge print can distinguish from the unrestrained fit, and the case would assert nothing about the restraint. Unrestrained on the same grid: O -0.708804, RRMS 3.5763e-02; restrained: O -0.700909, RRMS 3.7456e-02 -- the restraint shrinks the charges and worsens the fit, which is the trade it exists to make.",
+   "input": "tests/inputs/regression/scf/water_rhf_resp_sto3g.hfinp",
+   "tags": [
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "RESP Charges (Connolly) :",
+    "1       O       8             -0.700908",
+    "2       H       1              0.350454",
+    "3       H       1              0.350454",
+    "RESP Iterations 7"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -74.9458807581,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
    "id": "water_rhf_connolly_sto3g",
-   "_note": "E4a of docs/ESP_CHARGES_SCOPE.md: Connolly/Merz-Kollman sampling shells. Unlike the CHELPG cubic lattice these are rotationally invariant -- the direction set is built in a molecule-derived frame, so rotating the molecule rotates the sample set with it. Measured drift under a rigid motion: 6.9e-15 here against 5.8e-02 for chelpg on the identical fixture (planck-esp-points check 7, which runs both arms and requires the chelpg arm to keep failing so the comparison cannot go vacuous). Charges asserted to 6 decimals; the total is exact because the constraint is a Lagrange multiplier, not a penalty.",
+   "_note": "E4a of docs/ESP_CHARGES_SCOPE.md: Connolly/Merz-Kollman sampling shells. Unlike the CHELPG cubic lattice these are rotationally invariant -- the direction set is built in a molecule-derived frame, so rotating the molecule rotates the sample set with it. Measured drift under a rigid motion: 6.9e-15 here against 5.8e-02 for chelpg on the identical fixture (planck-esp-points check 7, which runs both arms and requires the chelpg arm to keep failing so the comparison cannot go vacuous). Charges asserted to 6 decimals; the total is exact because the constraint is a Lagrange multiplier, not a penalty. The values here were re-captured after the molecular-frame fix: an earlier revision of this case asserted 1016 points and O -0.709218, taken from a binary built BEFORE that fix, and was registered without rebuilding hartree-fock first. It passed its own mutation test because a mutation test proves an assertion is sensitive, not that its value is current.",
    "input": "tests/inputs/regression/scf/water_rhf_connolly_sto3g.hfinp",
    "tags": [
     "core"
@@ -91,11 +115,11 @@
    "expected_exit_code": 0,
    "contains": [
     "ESP Charges (Connolly) :",
-    "1       O       8             -0.709218",
-    "2       H       1              0.354586",
-    "3       H       1              0.354631",
-    "ESP Grid Points :             1016",
-    "ESP Fit RRMS 3.6088"
+    "1       O       8             -0.708804",
+    "2       H       1              0.354385",
+    "3       H       1              0.354418",
+    "ESP Grid Points :             1012",
+    "ESP Fit RRMS 3.5763"
    ],
    "checks": [
     {

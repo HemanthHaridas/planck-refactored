@@ -160,23 +160,66 @@ static void log_esp_report(const HartreeFock::Calculator &calculator,
     if (calculator._esp.wants_grid())
     {
         const double total_charge = static_cast<double>(calculator._molecule.charge);
-        auto fit = HartreeFock::SCF::fit_esp_charges(
-            calculator._molecule, points, *phi, total_charge);
 
-        if (!fit)
+        // RESP is the same fit plus a restraint, so both routes produce the
+        // same ESPChargeFit and everything below is shared. Only the iteration
+        // count is RESP-specific, and it is reported because an unconverged
+        // restraint is otherwise invisible in the charges.
+        Eigen::VectorXd charges;
+        double rrms = 0.0;
+        double rms = 0.0;
+        int resp_iterations = 0;
+        bool resp_converged = true;
+
+        if (calculator._esp._resp)
         {
-            HartreeFock::Logger::logging(
-                HartreeFock::LogLevel::Warning,
-                "ESP Charges :",
-                "Unavailable: " + fit.error());
-            HartreeFock::Logger::blank();
-            return;
+            HartreeFock::SCF::RESPOptions options;
+            options.strength = calculator._esp._resp_strength;
+            options.tightness = calculator._esp._resp_tightness;
+            options.exempt_hydrogen = calculator._esp._resp_exempt_hydrogen;
+            options.equivalence_groups = calculator._esp._resp_equivalence;
+
+            auto fit = HartreeFock::SCF::fit_resp_charges(
+                calculator._molecule, points, *phi, total_charge, options);
+            if (!fit)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning,
+                    "ESP Charges :",
+                    "Unavailable: " + fit.error());
+                HartreeFock::Logger::blank();
+                return;
+            }
+            charges = fit->fit.charges;
+            rrms = fit->fit.rrms;
+            rms = fit->fit.rms;
+            resp_iterations = fit->iterations;
+            resp_converged = fit->converged;
+        }
+        else
+        {
+            auto fit = HartreeFock::SCF::fit_esp_charges(
+                calculator._molecule, points, *phi, total_charge);
+            if (!fit)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning,
+                    "ESP Charges :",
+                    "Unavailable: " + fit.error());
+                HartreeFock::Logger::blank();
+                return;
+            }
+            charges = fit->charges;
+            rrms = fit->rrms;
+            rms = fit->rms;
         }
 
+        const bool connolly =
+            (calculator._esp._grid == HartreeFock::OptionsESP::Grid::Connolly);
         const char *grid_label =
-            (calculator._esp._grid == HartreeFock::OptionsESP::Grid::Connolly)
-                ? "ESP Charges (Connolly) :"
-                : "ESP Charges (CHELPG) :";
+            calculator._esp._resp
+                ? (connolly ? "RESP Charges (Connolly) :" : "RESP Charges (CHELPG) :")
+                : (connolly ? "ESP Charges (Connolly) :" : "ESP Charges (CHELPG) :");
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, grid_label, "");
 
         constexpr int charge_width = 62;
@@ -196,21 +239,33 @@ static void log_esp_report(const HartreeFock::Calculator &calculator,
                       << std::setw(8) << std::right << symbol
                       << std::setw(8) << std::right << Z
                       << std::setw(24) << std::right << std::fixed << std::setprecision(8)
-                      << fit->charges(static_cast<Eigen::Index>(a)) << "\n";
+                      << charges(static_cast<Eigen::Index>(a)) << "\n";
         }
 
         std::cout << std::string(charge_width, '-') << "\n"
                   << std::setw(22) << std::left << "  Total"
                   << std::setw(24) << std::right << std::fixed << std::setprecision(8)
-                  << fit->charges.sum() << "\n"
+                  << charges.sum() << "\n"
                   << std::string(charge_width, '-') << "\n";
 
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Info, "ESP Grid Points :", points.size());
         std::cout << "  ESP Fit RRMS " << std::scientific << std::setprecision(6)
-                  << fit->rrms << "\n";
+                  << rrms << "\n";
         std::cout << "  ESP Fit RMS  " << std::scientific << std::setprecision(6)
-                  << fit->rms << "\n";
+                  << rms << "\n";
+
+        if (calculator._esp._resp)
+        {
+            std::cout << "  RESP Iterations " << resp_iterations << "\n";
+            if (!resp_converged)
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning,
+                    "RESP :",
+                    "the restraint iteration did not converge -- the charges "
+                    "below are the last iterate, not a converged fit");
+        }
+
         HartreeFock::Logger::blank();
         return;
     }
@@ -226,9 +281,13 @@ static void log_esp_report(const HartreeFock::Calculator &calculator,
               << std::setw(24) << std::right << "Potential (a.u.)" << "\n"
               << std::string(line_width, '-') << "\n";
 
-    for (std::size_t k = 0; k < calculator._esp._points.size(); ++k)
+    // `points`, not calculator._esp._points: the two coincide here because this
+    // branch is only reached when no grid was requested, but reading the option
+    // directly would silently print an empty table if the grid branch above
+    // ever stopped returning early.
+    for (std::size_t k = 0; k < points.size(); ++k)
     {
-        const Eigen::Vector3d &p = calculator._esp._points[k];
+        const Eigen::Vector3d &p = points[k];
         std::cout << std::setw(6) << std::right << (k + 1)
                   << std::setw(14) << std::right << std::fixed << std::setprecision(6) << p[0]
                   << std::setw(14) << std::right << std::fixed << std::setprecision(6) << p[1]

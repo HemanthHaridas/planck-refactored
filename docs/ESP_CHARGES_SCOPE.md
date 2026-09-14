@@ -4,10 +4,13 @@
 against PySCF, which pulled the `%begin_esp` input plumbing forward from E5),
 E2 (the vdW radii, which turned out to need a comment fix and one data
 correction rather than a new field — see §3), and E3 (the CHELPG grid and the
-constrained charge fit), and E4 — E4a, the Connolly-shell grid, which also
-fixes the rotational variance E3 measured, and E4b, the RESP restraint. Not
-built: E5, the input wiring. **RESP has no keyword yet**, so `grid connolly`
-runs the unrestrained fit and `fit_resp_charges` is reachable only from C++.
+constrained charge fit), E4 — E4a, the Connolly-shell grid, which also fixes
+the rotational variance E3 measured, and E4b, the RESP restraint — and E5, the
+input wiring. **E0–E5 are complete for the HF path.**
+
+Not done, and deliberately: RESP stage-2 refitting (§E4b), and ESP charges in
+`planck-dft`, which has no population analysis at all and would need either a
+duplicated reporter or a shared one extracted (§E5).
 
 Mulliken and Löwdin charges partition the density by *basis function ownership*,
 which makes them basis-set dependent and physically arbitrary — a Löwdin charge
@@ -399,11 +402,48 @@ Keep `chelpg_grid`: CHELPG charges are a published, cited quantity and people
 reproducing them need the cubic lattice, variance and all. The default for
 RESP should be the Connolly grid.
 
-### E5 — wiring
+### E5 — wiring (LANDED)
 
-A `%begin_esp` block following `_parse_bsse` (`src/io/io.cpp:1799`). Call site is
-`hf_driver.cpp:1284`, beside `log_population_report`, where `shellpairs` is
-already in scope.
+The `%begin_esp` block landed early, pulled forward by E1. What E5 added is the
+RESP half: `resp`, `resp_strength`, `resp_tightness`, `resp_exempt_hydrogen`
+and `equivalent` (1-based atom indices, stored 0-based, matching the `bsse`
+`fragment` convention). Range-checked in `parse_input` where `natoms` is known.
+
+The driver dispatches between `fit_esp_charges` and `fit_resp_charges`, both of
+which yield the same `ESPChargeFit`, so the report below the dispatch is shared
+and there is still one path. RESP additionally prints its iteration count, and
+warns if the restraint did not converge — otherwise an unconverged fit is
+indistinguishable from a converged one in the charges alone.
+
+Measured on water/STO-3G, one Connolly grid of 1012 points:
+
+| | O | H | H | RRMS | iters |
+|---|---|---|---|---|---|
+| unrestrained | −0.708804 | 0.354386 | 0.354418 | 3.576e-02 | — |
+| RESP, no `equivalent` | −0.700909 | 0.350440 | 0.350469 | 3.746e-02 | 7 |
+| RESP + `equivalent 2 3` | −0.700909 | 0.350454 | 0.350454 | 3.746e-02 | 7 |
+| RESP at Bayly 0.0005 | −0.708410 | 0.354205 | 0.354205 | 3.577e-02 | 5 |
+
+Gated by `water_rhf_resp_sto3g`. **The fixture uses `resp_strength 0.01`, not
+the Bayly stage-1 default**, because at 0.0005 the restraint moves these charges
+by ~4e-4 — below what the 8-decimal print distinguishes from the unrestrained
+fit — so a case pinning printed charges would assert nothing about the
+restraint. The production default is unchanged.
+
+#### A stale-expectation failure worth recording
+
+`water_rhf_connolly_sto3g` was committed asserting 1016 grid points and
+O −0.709218. Committed code produces **1012** and **−0.708804**. The numbers
+were captured from a `hartree-fock` binary built *before* E4a's molecular-frame
+fix and registered without rebuilding — the fix changes which directions are
+generated and so which points survive burial, which is exactly a 1016 → 1012
+shift.
+
+**Its mutation test passed and did not catch this**, which is the transferable
+part: a mutation test proves an assertion is *sensitive to change*, not that its
+*value is current*. Perturbing a stale expectation still turns the case red.
+Capture regression values from a binary you have just rebuilt, and prefer
+verifying the build is current over assuming it.
 
 **DFT is a separate decision.** `planck-dft` has **no population analysis at
 all** — it includes `populations/multipole.h` and nothing else. Wiring ESP there

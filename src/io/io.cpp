@@ -1880,6 +1880,54 @@ namespace HartreeFock::IO
                 else
                     esp._radius_scale = v;
             }
+            else if (lkey == "resp" || lkey == "resp_exempt_hydrogen")
+            {
+                std::string value;
+                if (!(iss >> value))
+                    return std::unexpected("esp: '" + lkey + "' needs a boolean value: " + line);
+                auto parsed = toBool(value);
+                if (!parsed)
+                    return std::unexpected("esp: '" + lkey + "': " + parsed.error());
+
+                if (lkey == "resp")
+                    esp._resp = *parsed;
+                else
+                    esp._resp_exempt_hydrogen = *parsed;
+            }
+            else if (lkey == "resp_strength" || lkey == "resp_tightness")
+            {
+                double v;
+                if (!(iss >> v))
+                    return std::unexpected("esp: '" + lkey + "' needs a numeric value: " + line);
+                if (lkey == "resp_strength" && v < 0.0)
+                    return std::unexpected("esp: 'resp_strength' must not be negative: " + line);
+                if (lkey == "resp_tightness" && v <= 0.0)
+                    return std::unexpected("esp: 'resp_tightness' must be positive: " + line);
+
+                if (lkey == "resp_strength")
+                    esp._resp_strength = v;
+                else
+                    esp._resp_tightness = v;
+            }
+            else if (lkey == "equivalent")
+            {
+                // 1-based atom indices, stored 0-based, matching the `fragment`
+                // convention in the bsse section. Range validation is deferred
+                // to parse_input, where natoms is known.
+                std::vector<std::size_t> group;
+                int idx;
+                while (iss >> idx)
+                {
+                    if (idx < 1)
+                        return std::unexpected(
+                            "esp: 'equivalent' atom indices are 1-based and must be >= 1: " + line);
+                    group.push_back(static_cast<std::size_t>(idx - 1));
+                }
+                if (group.size() < 2)
+                    return std::unexpected(
+                        "esp: 'equivalent' needs at least two atom indices: " + line);
+                esp._resp_equivalence.push_back(std::move(group));
+            }
             else if (lkey == "points_per_shell")
             {
                 int v;
@@ -2285,6 +2333,17 @@ namespace HartreeFock::IO
         {
             if (auto res = _parse_esp(it->second, calculator._esp); !res)
                 return std::unexpected(res.error());
+
+            // Range-check the equivalence groups now that natoms is known. The
+            // parser stores them 0-based but reports 1-based, matching the
+            // indices the user typed.
+            const std::size_t natoms = calculator._molecule.natoms;
+            for (const auto &group : calculator._esp._resp_equivalence)
+                for (std::size_t a : group)
+                    if (a >= natoms)
+                        return std::unexpected(
+                            "esp: 'equivalent' names atom " + std::to_string(a + 1) +
+                            ", which is out of range (1.." + std::to_string(natoms) + ")");
         }
 
         // bsse / counterpoise (optional)
