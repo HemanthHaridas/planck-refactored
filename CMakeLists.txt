@@ -425,6 +425,8 @@ set(DFT_LIB_SRC
     ${SRC_DIR}/dft/ks_matrix.h
     ${SRC_DIR}/dft/ks_orbital_hessian.cpp
     ${SRC_DIR}/dft/ks_orbital_hessian.h
+    ${SRC_DIR}/dft/uks_level_shift.cpp
+    ${SRC_DIR}/dft/uks_level_shift.h
     ${SRC_DIR}/dft/response_packing.cpp
     ${SRC_DIR}/dft/response_packing.h
     ${SRC_DIR}/dft/xc_grid.cpp
@@ -788,6 +790,13 @@ endif()
 find_package(Python3 COMPONENTS Interpreter)
 
 if(BUILD_TESTING)
+    add_executable(planck-uks-level-shift
+        ${CMAKE_SOURCE_DIR}/tests/uks_level_shift.cpp
+        ${SRC_DIR}/dft/uks_level_shift.cpp
+    )
+    target_include_directories(planck-uks-level-shift PRIVATE ${SRC_DIR} ${eigen_SOURCE_DIR})
+    add_test(NAME planck-uks-level-shift COMMAND planck-uks-level-shift)
+
     # Detached UKS DH U0 contract only; no production workflow enablement.
     add_executable(planck-udh-pt2-energy-contract
         ${CMAKE_SOURCE_DIR}/tests/udh_pt2_energy_contract.cpp

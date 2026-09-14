@@ -1834,6 +1834,28 @@
    ]
   },
   {
+   "id": "h2o2_cation_uhf_tight_tol_sto3g",
+   "input": "tests/inputs/regression/open_shell/h2o2_cation_uhf_tight_tol_sto3g.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "UHF Converged"
+   ],
+   "not_contains": [
+    "did not converge"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -148.4133957644,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
    "id": "water_triplet_uhf_sto3g",
    "input": "tests/inputs/regression/open_shell/water_triplet_uhf_sto3g.hfinp",
    "tags": [

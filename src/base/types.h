@@ -459,6 +459,18 @@ namespace HartreeFock
         double _scf_soscf_diis_tol = 0.0;
         unsigned int _scf_soscf_min_iter = 2;
 
+        // Auto-SOSCF: engage SOSCF after this many consecutive iterations in
+        // which the DIIS error fails to improve by _scf_soscf_auto_factor.
+        // 0 = off. Unlike the two triggers above, this needs no prior knowledge
+        // of WHEN a given system will stall, which is the case it exists for:
+        // a slow orbital-rotation mode that first-order DIIS cannot resolve.
+        // Measured on the h2o2-cation UKS double hybrid, where DIIS crawls for
+        // 1417 iterations along a nearly-flat direction (SOSCF reports
+        // curvature eig ~ -2e-4) while every frontier gap is large, so it is
+        // not near-degeneracy: engaging SOSCF converges it in 58.
+        unsigned int _scf_soscf_auto_stall = 0;
+        double _scf_soscf_auto_factor = 0.9;
+
         SCFType _scf = SCFType::RHF;           // SCF Type (Default is RHF)
         SCFMode _mode = SCFMode::Conventional; // SCF Mode (Default is Conventional)
         SCFGuess _guess = SCFGuess::HCore;     // Initial guess

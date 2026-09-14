@@ -12,8 +12,8 @@
     engine      os
     guess       hcore
     max_cycles  200
-    scf_soscf_start  5
-    scf_soscf_cycles 150
+    scf_soscf_auto_stall 5
+    scf_soscf_cycles 30
     tol_energy  1.0e-11
     tol_density 1.0e-11
 %end_scf

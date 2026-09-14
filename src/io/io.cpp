@@ -852,6 +852,19 @@ namespace HartreeFock::IO
                      scf._scf_soscf_diis_tol = std::stod(value);
                      return std::expected<void, std::string>{};
                  }},
+                {"scf_soscf_auto_stall", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._scf_soscf_auto_stall = static_cast<unsigned int>(std::stoul(value));
+                     return {};
+                 }},
+                {"scf_soscf_auto_factor", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     const double v = std::stod(value);
+                     if (!(v > 0.0) || v > 1.0)
+                         return std::unexpected("scf_soscf_auto_factor must be in (0, 1]");
+                     scf._scf_soscf_auto_factor = v;
+                     return {};
+                 }},
                 {"scf_soscf_min_iter", [&scf](const std::string &value) -> std::expected<void, std::string>
                  {
                      scf._scf_soscf_min_iter = static_cast<unsigned int>(std::stoul(value));

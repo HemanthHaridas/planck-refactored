@@ -17,7 +17,7 @@ FIXTURES = Path(__file__).resolve().parent / "inputs/exploratory/dh_gradient/uks
 NUMBER = r"[-+]?\d+(?:\.\d*)?(?:[Ee][-+]?\d+)?"
 
 
-def check_energy(output, data, zero_beta=False):
+def check_energy(output, data, zero_beta=False, level_shift=0.0):
     if not re.search(r"Converged\s*:\s*true", output):
         raise ValueError("UKS did not converge")
     if not math.isfinite(data["total_energy"]) or not data.get("has_correlation"):
@@ -27,12 +27,20 @@ def check_energy(output, data, zero_beta=False):
     if not match:
         raise ValueError("Missing normal DH energy summary")
     c, bare, scaled = map(float, match.groups())
+    if level_shift > 0:
+        markers = (f"Applying {level_shift:.6f} Eh to the iteration virtual spaces",
+                   "Shift removed; reconverging physical Fock before post-KS handoff",
+                   "Unshifted canonical orbitals verified for post-KS handoff")
+        positions = [output.find(marker) for marker in markers] + [match.start()]
+        if any(p < 0 for p in positions) or positions != sorted(positions) or len(set(positions)) != len(positions):
+            raise ValueError("Missing or out-of-order UKS level-shift removal / unshifted PT2 handoff")
     # Normal summaries round to 10 decimal places, not FD precision.
     if abs(c - 0.27) > 1e-12 or abs(scaled - c * bare) > 1e-10:
         raise ValueError("B2PLYP single correlation scaling mismatch")
     if zero_beta and (abs(bare) > 1e-12 or abs(scaled) > 1e-12):
         raise ValueError("One-electron PT2 correction is not zero")
-    return dict(total_energy=data["total_energy"], c_pt2=c, bare=bare, scaled=scaled)
+    return dict(total_energy=data["total_energy"], c_pt2=c, bare=bare, scaled=scaled,
+                scf_level_shift=level_shift)
 
 
 def check_rejection(returncode, output):
@@ -43,6 +51,8 @@ def check_rejection(returncode, output):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--executable", type=Path, default=Path("build/planck-dft"))
+    parser.add_argument("--fixture", choices=[p.name for p in sorted(FIXTURES.glob("*.hfinp"))],
+                        help="Run one named fixture; default runs the complete U0 set")
     args = parser.parse_args()
     executable = str(args.executable.resolve())
     root = Path(tempfile.mkdtemp(prefix="udh-u0-molecular-"))
@@ -50,12 +60,17 @@ def main():
     env = {k: v for k, v in os.environ.items() if not k.startswith("PLANCK_DFT_DH_")}
     results = []
     for fixture in sorted(FIXTURES.glob("*.hfinp")):
+        if args.fixture and fixture.name != args.fixture:
+            continue
         row = dict(fixture=fixture.name, passed=False)
         try:
+            template = fixture.read_text()
+            shift_match = re.search(rf"^\s*level_shift\s+({NUMBER})\s*$", template, re.M)
+            level_shift = float(shift_match.group(1)) if shift_match else 0.0
             for mode in ("energy", "gradient"):
                 stem = fixture.stem + "-" + mode
                 inp, log, js = (root / (stem + suffix) for suffix in (".hfinp", ".log", ".json"))
-                inp.write_text(re.sub(r"(calculation\s+)energy", rf"\g<1>{mode}", fixture.read_text(), count=1))
+                inp.write_text(re.sub(r"(calculation\s+)energy", rf"\g<1>{mode}", template, count=1))
                 proc = subprocess.run([executable, str(inp), "--json", str(js)],
                                       env=env, capture_output=True, text=True)
                 output = proc.stdout + proc.stderr
@@ -63,7 +78,8 @@ def main():
                 if mode == "energy":
                     if proc.returncode != 0:
                         raise ValueError(f"Energy failed: {log}")
-                    row.update(check_energy(output, json.loads(js.read_text()), "zero_beta" in fixture.name))
+                    row.update(check_energy(output, json.loads(js.read_text()),
+                                            "zero_beta" in fixture.name, level_shift))
                 else:
                     check_rejection(proc.returncode, output)
                     row["gradient_rejected"] = True

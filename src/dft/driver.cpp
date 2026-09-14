@@ -2,6 +2,7 @@
 
 #include "analytic_hessian.h"
 #include "ks_orbital_hessian.h"
+#include "uks_level_shift.h"
 #include "post_hf/casscf/aug-hessian.h"
 #include "post_hf/casscf/orbital.h"
 
@@ -36,6 +37,7 @@
 #include "populations/multipole.h"
 #include "post_hf/integrals.h"
 #include "post_hf/mp2.h"
+#include "scf/sad.h"
 #include "scf/scf.h"
 #include "symmetry/integral_symmetry.h"
 #include "symmetry/mo_symmetry.h"
@@ -631,16 +633,44 @@ namespace DFT::Driver
                 return (occupancy * C_occ * C_occ.transpose()).eval();
             };
 
-            const std::size_t n_occ = static_cast<std::size_t>(std::max(0, n_electrons / 2));
-            calculator._info._scf.alpha.density = make_spin_density(n_occ, true);
+            const bool want_sad = calculator._scf._guess == HartreeFock::SCFGuess::SAD;
 
-            if (calculator._scf._scf == HartreeFock::SCFType::UHF)
+            const bool is_uhf = calculator._scf._scf == HartreeFock::SCFType::UHF;
+
+            const std::size_t n_occ = static_cast<std::size_t>(std::max(0, n_electrons / 2));
+            if (want_sad && !is_uhf)
+            {
+                auto sad = HartreeFock::SCF::compute_sad_guess_rhf(calculator);
+                if (!sad)
+                    return std::unexpected("RKS SAD guess failed: " + sad.error());
+                calculator._info._scf.alpha.density = std::move(*sad);
+            }
+            else
+                calculator._info._scf.alpha.density = make_spin_density(n_occ, true);
+
+            if (is_uhf)
             {
                 const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
                 const std::size_t n_alpha = static_cast<std::size_t>((n_electrons + n_unpaired) / 2);
                 const std::size_t n_beta = static_cast<std::size_t>((n_electrons - n_unpaired) / 2);
-                calculator._info._scf.alpha.density = make_spin_density(n_alpha, false);
-                calculator._info._scf.beta.density = make_spin_density(n_beta, false);
+
+                if (want_sad)
+                {
+                    // Same call the UHF/ROHF SCF paths use (scf.cpp); SAD builds its
+                    // atomic densities in the Cartesian basis and maps the assembled
+                    // guess into the working basis itself, against calculator._overlap.
+                    auto sad = HartreeFock::SCF::compute_sad_guess_open_shell(
+                        calculator, static_cast<int>(n_alpha), static_cast<int>(n_beta));
+                    if (!sad)
+                        return std::unexpected("UKS SAD guess failed: " + sad.error());
+                    calculator._info._scf.alpha.density = std::move(sad->first);
+                    calculator._info._scf.beta.density = std::move(sad->second);
+                }
+                else
+                {
+                    calculator._info._scf.alpha.density = make_spin_density(n_alpha, false);
+                    calculator._info._scf.beta.density = make_spin_density(n_beta, false);
+                }
             }
 
             return {};
@@ -1853,6 +1883,8 @@ namespace DFT::Driver
                     density = HartreeFock::SCF::initial_density(calculator._hcore, X, n_occ);
 
                 HartreeFock::DIISState diis;
+                const double restart_factor = calculator._scf._diis_restart_factor;
+                double diis_err_prev = std::numeric_limits<double>::max();
                 diis.max_vecs = calculator._scf._DIIS_dim;
                 const bool use_diis = calculator._scf._use_DIIS;
                 double previous_total_energy = 0.0;
@@ -1963,8 +1995,25 @@ namespace DFT::Driver
                             X.transpose() *
                             (fock * density * calculator._overlap - calculator._overlap * density * fock) *
                             X;
+                        // DIIS restart, matching run_rhf/run_uhf (src/scf/scf.cpp).
+                        // A subspace that has accumulated bad vectors extrapolates
+                        // away from the solution; clearing it is the only escape.
+                        // planck-dft had no restart at all, so the KS SCF could
+                        // not recover from a poisoned subspace the way HF does.
+                        const double cur_err = std::sqrt(
+                            error.squaredNorm() / static_cast<double>(error.size()));
+                        if (restart_factor > 0.0 && iter > 2 &&
+                            cur_err > diis_err_prev * restart_factor)
+                        {
+                            diis.clear();
+                            HartreeFock::Logger::logging(
+                                HartreeFock::LogLevel::Info, "DIIS :",
+                                std::format("Subspace restarted at iter {} (error grew {:.1f}x)",
+                                            iter, cur_err / diis_err_prev));
+                        }
                         diis.push(fock, error);
                         diis_error = diis.error_norm();
+                        diis_err_prev = cur_err;
                     }
 
                     // SOSCF (D2.2.3): same criterion-or-fixed-iteration gate
@@ -2001,7 +2050,10 @@ namespace DFT::Driver
                     if (soscf_window_start > 0 &&
                         iter == soscf_window_start + calculator._scf._scf_soscf_cycles)
                     {
+                        // Subspace dropped: reset the growth tracker too, or the next
+                        // (legitimately large) error reads as a restart trigger.
                         diis.clear();
+                        diis_err_prev = std::numeric_limits<double>::max();
                     }
                     const bool do_diis = use_diis && diis.ready() && !soscf_active;
                     const Eigen::MatrixXd fock_for_diagonalization =
@@ -2262,6 +2314,30 @@ namespace DFT::Driver
             const std::size_t n_alpha = static_cast<std::size_t>((n_electrons + n_unpaired) / 2);
             const std::size_t n_beta = static_cast<std::size_t>((n_electrons - n_unpaired) / 2);
 
+            const double requested_level_shift = calculator._scf._level_shift;
+            if (!std::isfinite(requested_level_shift) || requested_level_shift < 0.0)
+                return std::unexpected("UKS level_shift must be finite and nonnegative (Hartree)");
+            double active_level_shift = requested_level_shift;
+            bool unshifted_polish = false;
+            // The shifted fixed point is NOT the answer -- the shift is a
+            // convergence aid, and removing it moves the density a long way
+            // (measured: dP jumps to 1.4 on water-triplet/PBE the iteration the
+            // shift comes off). Converging the shifted phase to the user's full
+            // tol_density is therefore wasted work on a result about to be
+            // discarded: on that case it spent 56 of its 70 shifted iterations
+            // polishing below dP 1e-5, then had only 10 of an 80-iteration
+            // budget left for the real, unshifted solve -- so the run failed
+            // while converging correctly. Release the shift once the shifted
+            // phase is merely STABLE and spend the budget where it counts.
+            const double shift_release_tol =
+                std::max(calculator._scf._tol_density * 1E3, 1E-6);
+
+            if (requested_level_shift > 0.0)
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info, "DFT UKS level shift :",
+                    std::format("Applying {:.6f} Eh to the iteration virtual spaces; physical energy is unchanged",
+                                requested_level_shift));
+
             Eigen::MatrixXd alpha_density = calculator._info._scf.alpha.density;
             Eigen::MatrixXd beta_density = calculator._info._scf.beta.density;
             const Eigen::MatrixXd hcore_prime = X.transpose() * calculator._hcore * X;
@@ -2277,6 +2353,8 @@ namespace DFT::Driver
                 beta_density = density_from_orbitals(hcore_coefficients, n_beta, 1.0);
 
             HartreeFock::DIISState diis_alpha, diis_beta;
+            const double restart_factor = calculator._scf._diis_restart_factor;
+            double diis_err_prev = std::numeric_limits<double>::max();
             diis_alpha.max_vecs = diis_beta.max_vecs = calculator._scf._DIIS_dim;
             const bool use_diis = calculator._scf._use_DIIS;
             double previous_total_energy = 0.0;
@@ -2293,12 +2371,15 @@ namespace DFT::Driver
             Eigen::MatrixXd Ca_soscf_prev, Cb_soscf_prev;
             Eigen::VectorXd epsa_soscf_prev, epsb_soscf_prev;
             unsigned int soscf_window_start = 0;
+            unsigned int soscf_stall_streak = 0;
+            double soscf_auto_prev_err = std::numeric_limits<double>::max();
             // SOSCF_DFT.md invariant 3 (UKS hybrids): UKS hybrids -- global and
             // range-separated -- are now supported. The polarized h_op gains
             // the spin-resolved K response (-1*(c_fr*K_C + c_sr*K_SR) per
             // spin, from _compute_2e_k_uhf_direct); UKS h_op stays uniform 1x
-            // (no RKS-style 2x on the kernel). Only PCM and SAO remain as UKS
-            // scope cuts.
+            // (no RKS-style 2x on the kernel). PCM, SAO and an explicitly
+            // requested level shift exclude SOSCF; do not mix a shifted
+            // iteration with the unshifted SOSCF Hessian.
             // D3.2.1: same one-time diagnostic D2.2.4 built for RKS -- a
             // user requesting SOSCF (either trigger keyword) is told when
             // the request cannot be honored rather than silently running
@@ -2311,6 +2392,8 @@ namespace DFT::Driver
                     reason = "PCM solvation (not yet wired through DFT SOSCF)";
                 else if (calculator._use_sao_blocking)
                     reason = "SAO/symmetry blocking (not yet wired through DFT SOSCF)";
+                else if (requested_level_shift > 0.0)
+                    reason = "UKS level shifting (using shifted DIIS followed by unshifted polishing)";
                 if (!reason.empty())
                     HartreeFock::Logger::logging(
                         HartreeFock::LogLevel::Warning,
@@ -2372,8 +2455,24 @@ namespace DFT::Driver
                 const double electronic_energy = electronic_energy_gas + pcm_energy;
                 const double total_energy = electronic_energy + calculator._nuclear_repulsion;
 
+                // Keep physical F/energy untouched. Shift the iteration
+                // matrices before DIIS, separately for occupancy-one spins.
+                Eigen::MatrixXd fock_alpha_iteration = fock_alpha;
+                Eigen::MatrixXd fock_beta_iteration = fock_beta;
+                if (active_level_shift > 0.0)
+                {
+                    const auto shift_a = build_uks_level_shift_matrix(
+                        calculator._overlap, alpha_density, active_level_shift);
+                    const auto shift_b = build_uks_level_shift_matrix(
+                        calculator._overlap, beta_density, active_level_shift);
+                    if (!shift_a) return std::unexpected(shift_a.error());
+                    if (!shift_b) return std::unexpected(shift_b.error());
+                    fock_alpha_iteration += *shift_a;
+                    fock_beta_iteration += *shift_b;
+                }
+
                 double diis_error = 0.0;
-                if (use_diis)
+                if (use_diis || requested_level_shift > 0.0)
                 {
                     const Eigen::MatrixXd error_alpha =
                         X.transpose() *
@@ -2381,9 +2480,31 @@ namespace DFT::Driver
                     const Eigen::MatrixXd error_beta =
                         X.transpose() *
                         (fock_beta * beta_density * calculator._overlap - calculator._overlap * beta_density * fock_beta) * X;
-                    diis_alpha.push(fock_alpha, error_alpha);
-                    diis_beta.push(fock_beta, error_beta);
-                    diis_error = std::max(diis_alpha.error_norm(), diis_beta.error_norm());
+                    if (use_diis && !unshifted_polish)
+                    {
+                        // DIIS restart, matching run_uhf (src/scf/scf.cpp): one
+                        // combined RMS over both spins, so the two channels are
+                        // restarted together and keep a common history length.
+                        const double cur_err = std::sqrt(
+                            (error_alpha.squaredNorm() + error_beta.squaredNorm()) /
+                            static_cast<double>(error_alpha.size() + error_beta.size()));
+                        if (restart_factor > 0.0 && iter > 2 &&
+                            cur_err > diis_err_prev * restart_factor)
+                        {
+                            diis_alpha.clear();
+                            diis_beta.clear();
+                            HartreeFock::Logger::logging(
+                                HartreeFock::LogLevel::Info, "DIIS :",
+                                std::format("Subspace restarted at iter {} (error grew {:.1f}x)",
+                                            iter, cur_err / diis_err_prev));
+                        }
+                        diis_alpha.push(fock_alpha_iteration, error_alpha);
+                        diis_beta.push(fock_beta_iteration, error_beta);
+                        diis_error = std::max(diis_alpha.error_norm(), diis_beta.error_norm());
+                        diis_err_prev = cur_err;
+                    }
+                    else
+                        diis_error = std::max(error_alpha.norm(), error_beta.norm()) / static_cast<double>(nbasis);
                 }
 
                 // ── SOSCF window selection (D3.2) ────────────────────────
@@ -2399,8 +2520,21 @@ namespace DFT::Driver
                                             !calculator._sao_block_sizes.empty();
                 const bool soscf_enabled =
                     (calculator._scf._scf_soscf_diis_tol > 0.0 ||
-                     calculator._scf._scf_soscf_start > 0) &&
-                    !sao_active_uks && !prepared.pcm;
+                     calculator._scf._scf_soscf_start > 0 ||
+                     calculator._scf._scf_soscf_auto_stall > 0) &&
+                    !sao_active_uks && !prepared.pcm && requested_level_shift == 0.0;
+
+                // Auto-SOSCF stagnation counter: consecutive iterations whose
+                // DIIS error failed to improve by the required factor.
+                if (diis_error > 0.0)
+                {
+                    if (diis_error > soscf_auto_prev_err * calculator._scf._scf_soscf_auto_factor)
+                        ++soscf_stall_streak;
+                    else
+                        soscf_stall_streak = 0;
+                    soscf_auto_prev_err = diis_error;
+                }
+
                 if (soscf_enabled && soscf_window_start == 0)
                 {
                     const bool criterion_fires =
@@ -2408,9 +2542,22 @@ namespace DFT::Driver
                             ? (use_diis && diis_error > 0.0 &&
                                diis_error < calculator._scf._scf_soscf_diis_tol &&
                                iter >= calculator._scf._scf_soscf_min_iter)
-                            : (iter >= calculator._scf._scf_soscf_start);
-                    if (criterion_fires)
+                            : (calculator._scf._scf_soscf_start > 0 &&
+                               iter >= calculator._scf._scf_soscf_start);
+                    const bool auto_fires =
+                        calculator._scf._scf_soscf_auto_stall > 0 &&
+                        soscf_stall_streak >= calculator._scf._scf_soscf_auto_stall &&
+                        iter >= calculator._scf._scf_soscf_min_iter;
+                    if (criterion_fires || auto_fires)
+                    {
                         soscf_window_start = iter;
+                        if (auto_fires && !criterion_fires)
+                            HartreeFock::Logger::logging(
+                                HartreeFock::LogLevel::Info, "DFT UKS SOSCF :",
+                                std::format("Auto-engaged at iter {} after {} stagnant "
+                                            "iterations (DIIS error {:.3e})",
+                                            iter, soscf_stall_streak, diis_error));
+                    }
                 }
                 const bool soscf_active =
                     soscf_enabled && soscf_window_start > 0 &&
@@ -2421,13 +2568,14 @@ namespace DFT::Driver
                 {
                     diis_alpha.clear();
                     diis_beta.clear();
+                    diis_err_prev = std::numeric_limits<double>::max();
                 }
 
-                const bool do_diis_uks = use_diis && !soscf_active;
+                const bool do_diis_uks = use_diis && !soscf_active && !unshifted_polish;
                 const Eigen::MatrixXd fock_alpha_diag =
-                    (do_diis_uks && diis_alpha.ready()) ? diis_alpha.extrapolate() : fock_alpha;
+                    (do_diis_uks && diis_alpha.ready()) ? diis_alpha.extrapolate() : fock_alpha_iteration;
                 const Eigen::MatrixXd fock_beta_diag =
-                    (do_diis_uks && diis_beta.ready()) ? diis_beta.extrapolate() : fock_beta;
+                    (do_diis_uks && diis_beta.ready()) ? diis_beta.extrapolate() : fock_beta_iteration;
 
                 Eigen::MatrixXd Ca_new, Cb_new;
                 Eigen::VectorXd epsa_new, epsb_new;
@@ -2690,13 +2838,23 @@ namespace DFT::Driver
                     density_from_orbitals(Ca_new, n_alpha, 1.0);
                 const Eigen::MatrixXd next_beta_density =
                     density_from_orbitals(Cb_new, n_beta, 1.0);
-                const auto metrics = HartreeFock::SCF::unrestricted_iteration_metrics(
+                auto metrics = HartreeFock::SCF::unrestricted_iteration_metrics(
                     alpha_density,
                     beta_density,
                     next_alpha_density,
                     next_beta_density,
                     previous_total_energy,
                     total_energy);
+                if (requested_level_shift > 0.0)
+                {
+                    // Opposite alpha/beta changes must not cancel in the
+                    // total-density convergence metric during this handoff.
+                    const Eigen::MatrixXd da = next_alpha_density - alpha_density;
+                    const Eigen::MatrixXd db = next_beta_density - beta_density;
+                    metrics.delta_density_max = std::max(da.cwiseAbs().maxCoeff(), db.cwiseAbs().maxCoeff());
+                    metrics.delta_density_rms = std::max(da.norm(), db.norm()) / static_cast<double>(nbasis);
+                    metrics.diis_error = diis_error; // physical commutator, including polishing
+                }
 
                 const double iter_time = std::chrono::duration<double>(
                                              std::chrono::steady_clock::now() - iter_start)
@@ -2745,8 +2903,64 @@ namespace DFT::Driver
                 result.integrated_electrons = xc_grid->integrated_electrons;
                 result.solvation_energy = pcm_energy;
 
+                // Release the shift on a loose stability test, well before the
+                // full convergence gate: see shift_release_tol above.
+                //
+                // Deliberately NOT also released on stagnation. That was tried:
+                // on the h2o2 cation the shifted phase never reaches
+                // shift_release_tol, so a stall-based release looks like the
+                // obvious fix -- but releasing there DIVERGES the run, walking a
+                // nearly-converged -148.90347 out to -142.36 over ~20 iterations
+                // into a period-2 limit cycle. Measured both ways: with the
+                // stall release the run ends at -142.36 |dP| 1.68; without it,
+                // at -148.9035 |dP| 7e-6, still converging. The shift is doing
+                // load-bearing work on this system and must not be dropped early.
+                if (active_level_shift > 0.0 && iter > 1 &&
+                    metrics.delta_density_max < shift_release_tol)
+                {
+                    // A shifted fixed point is not a post-KS handoff.
+                    // Rebuild physical F at the new density next iteration,
+                    // diagonalize it without extrapolation, and reconverge.
+                    active_level_shift = 0.0;
+                    unshifted_polish = true;
+                    diis_alpha.clear();
+                    diis_beta.clear();
+                    diis_err_prev = std::numeric_limits<double>::max();
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Info, "DFT UKS level shift :",
+                        std::format("Shift released at dP {:.3e}; reconverging physical Fock "
+                                    "before post-KS handoff", metrics.delta_density_max));
+                    continue;
+                }
+
                 if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter))
                 {
+                    if (active_level_shift > 0.0)
+                    {
+                        // Fallback: converged while still shifted (a tol_density
+                        // looser than shift_release_tol). Same handoff.
+                        active_level_shift = 0.0;
+                        unshifted_polish = true;
+                        diis_alpha.clear();
+                        diis_beta.clear();
+                        diis_err_prev = std::numeric_limits<double>::max();
+                        HartreeFock::Logger::logging(
+                            HartreeFock::LogLevel::Info, "DFT UKS level shift :",
+                            "Shift removed; reconverging physical Fock before post-KS handoff");
+                        continue;
+                    }
+                    if (unshifted_polish)
+                    {
+                        const auto canonical_a = validate_uks_unshifted_orbitals(
+                            fock_alpha, calculator._overlap, Ca_new, epsa_new);
+                        const auto canonical_b = validate_uks_unshifted_orbitals(
+                            fock_beta, calculator._overlap, Cb_new, epsb_new);
+                        if (!canonical_a) return std::unexpected(canonical_a.error());
+                        if (!canonical_b) return std::unexpected(canonical_b.error());
+                        HartreeFock::Logger::logging(
+                            HartreeFock::LogLevel::Info, "DFT UKS level shift :",
+                            "Unshifted canonical orbitals verified for post-KS handoff");
+                    }
                     calculator._info._is_converged = true;
                     result.converged = true;
                     HartreeFock::Logger::scf_footer();
@@ -2762,7 +2976,8 @@ namespace DFT::Driver
             }
 
             HartreeFock::Logger::scf_footer();
-            return std::unexpected(std::format("UKS did not converge in {} iterations", max_iter));
+            return std::unexpected(std::format("UKS did not converge in {} iterations{}", max_iter,
+                unshifted_polish ? " (unshifted level-shift handoff incomplete)" : ""));
         }
 
         std::expected<DFT::XC::Functional, std::string> initialize_functional(
@@ -3052,7 +3267,10 @@ namespace DFT::Driver
                 calculator._scf._scf == HartreeFock::SCFType::UHF);
             calculator._info._scf.initialize(calculator._shells.nbasis());
             calculator._scf.set_scf_mode_auto(calculator._shells.nbasis());
-            calculator._scf.set_max_cycles_auto(calculator._shells.nbasis());
+            // Match Calculator::initialize(): displacements must not replace
+            // an explicit user SCF limit with the size-based default.
+            if (calculator._scf._max_cycles == 0)
+                calculator._scf.set_max_cycles_auto(calculator._shells.nbasis());
             calculator._info._is_converged = false;
             calculator._eri.clear();
             if (auto nuclear_repulsion = calculator.recompute_nuclear_repulsion(); !nuclear_repulsion)
@@ -4410,6 +4628,32 @@ namespace DFT::Driver
                 return std::unexpected(res.error());
         }
 
+        // The KS density carries XC quadrature noise, so |dP| between iterations
+        // cannot be driven below a grid-dependent floor -- a tol_density under
+        // that floor is unreachable by construction and the run reports failure
+        // while sitting on the converged answer. This is the same defect class
+        // as the DIIS residual floor in SCF::is_converged (see kDiisStallFloor):
+        // a threshold compared against a quantity whose numerical floor is
+        // higher than it.
+        //
+        // Measured on HO2/STO-3G/B2PLYP, min achievable |dP|_max by grid:
+        //   coarse 9.1e-12 | normal 8.7e-12 | fine 2.6e-11 | ultrafine 3.6e-11
+        // The floor rises with grid size but not as a clean power of the point
+        // count (it is non-monotone from coarse to normal), so a fixed
+        // conservative bound is used rather than a fitted formula. 1e-10 clears
+        // every measured case with ~3x margin and is loose enough to be
+        // physically meaningless for a density, while 24 of the 31 committed
+        // DFT regression inputs already ask for only 1e-8.
+        constexpr double kDftDensityFloor = 1E-10;
+        if (calculator._scf._tol_density < kDftDensityFloor)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Warning, "DFT SCF :",
+                std::format("tol_density {:.1e} is below the XC-grid density noise floor; "
+                            "using {:.1e}", calculator._scf._tol_density, kDftDensityFloor));
+            calculator._scf._tol_density = kDftDensityFloor;
+        }
+
         if (calculator._dft._print_grid_summary && options.print_grid_summary)
         {
             HartreeFock::Logger::logging(
@@ -4668,6 +4912,54 @@ namespace DFT::Driver
             return "Unknown";
         }
 
+        // Converged KS orbital energies, in the same table the HF driver prints
+        // (Logger::mo_header / mo_energies / mo_energies_uhf, reused as-is so the
+        // two binaries' output stays identical). planck-dft previously printed no
+        // orbital energies at ANY verbosity, which made an SCF convergence stall
+        // impossible to attribute without patching the source -- diagnosing the
+        // h2o2-cation UKS stall needed a temporary probe for exactly this.
+        void log_mo_energy_report(HartreeFock::Calculator &calculator)
+        {
+            int n_elec = 0;
+            for (auto z : calculator._molecule.atomic_numbers)
+                n_elec += z;
+            n_elec -= calculator._molecule.charge;
+            if (n_elec <= 0)
+                return;
+
+            const auto &alpha = calculator._info._scf.alpha;
+            if (alpha.mo_energies.size() == 0)
+                return;
+            const bool have_symm = !alpha.mo_symmetry.empty();
+
+            if (calculator._scf._scf != HartreeFock::SCFType::UHF)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "RKS MOs :", "");
+                HartreeFock::Logger::mo_header(have_symm);
+                HartreeFock::Logger::mo_energies(
+                    alpha.mo_energies, static_cast<std::size_t>(n_elec), alpha.mo_symmetry);
+                HartreeFock::Logger::blank();
+                return;
+            }
+
+            const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
+            const std::size_t n_alpha = static_cast<std::size_t>((n_elec + n_unpaired) / 2);
+            const std::size_t n_beta = static_cast<std::size_t>((n_elec - n_unpaired) / 2);
+            const auto &beta = calculator._info._scf.beta;
+
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Alpha MOs :", "");
+            HartreeFock::Logger::mo_header(have_symm);
+            HartreeFock::Logger::mo_energies_uhf(alpha.mo_energies, n_alpha, alpha.mo_symmetry);
+            HartreeFock::Logger::blank();
+
+            if (beta.mo_energies.size() == 0)
+                return;
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Beta MOs :", "");
+            HartreeFock::Logger::mo_header(!beta.mo_symmetry.empty());
+            HartreeFock::Logger::mo_energies_uhf(beta.mo_energies, n_beta, beta.mo_symmetry);
+            HartreeFock::Logger::blank();
+        }
+
         void log_multipole_report(HartreeFock::Calculator &calculator)
         {
             auto shell_pairs = build_shellpairs(calculator._shells);
@@ -4720,7 +5012,10 @@ namespace DFT::Driver
             return std::unexpected(result.error());
 
         if (result->converged)
+        {
+            log_mo_energy_report(calculator);
             log_multipole_report(calculator);
+        }
 
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Info, "DFT Energy :",
