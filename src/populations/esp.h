@@ -44,7 +44,7 @@ namespace HartreeFock::SCF
     // `radius_scale` multiplies the tabulated vdW radius, mirroring
     // OptionsSolvation::_cavity_scale. Note ElementData::radius is a
     // cutoff-sense vdW radius, not the leading-edge-slope kind (see
-    // docs/ESP_CHARGES_SCOPE.md section 3), so reproducing another code's
+    // docs/ESP_CHARGES.md section 4), so reproducing another code's
     // published CHELPG numbers may need this knob.
     std::expected<std::vector<Eigen::Vector3d>, std::string> chelpg_grid(
         const Molecule &molecule,
@@ -62,7 +62,7 @@ namespace HartreeFock::SCF
     // than resampling a fixed lattice, so the fitted charges do not depend on
     // the molecule's orientation in the lab frame. chelpg_grid has a measured
     // 3-7% orientation dependence that does not converge with spacing (see
-    // docs/ESP_CHARGES_SCOPE.md); this is the fix, and it is also what RESP
+    // docs/ESP_CHARGES.md); this is the fix, and it is also what RESP
     // conventionally samples on.
     //
     // Returns points in BOHR, in the molecule._standard frame.

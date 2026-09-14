@@ -343,6 +343,7 @@
 <li class="toc-level-3"><a href="#mulliken-population-analysis">Mulliken Population Analysis</a></li>
 <li class="toc-level-3"><a href="#l-wdin-population-analysis">Löwdin Population Analysis</a></li>
 <li class="toc-level-3"><a href="#mayer-bond-orders">Mayer Bond Orders</a></li>
+<li class="toc-level-3"><a href="#esp-derived-charges-chelpg-and-resp">ESP-Derived Charges (CHELPG and RESP)</a></li>
 <li class="toc-level-3"><a href="#electric-dipole-moment">Electric Dipole Moment</a></li>
 <li class="toc-level-3"><a href="#traceless-quadrupole-moment">Traceless Quadrupole Moment</a></li>
 <li class="toc-level-3"><a href="#rmp2-natural-orbitals">RMP2 Natural Orbitals</a></li>
@@ -452,7 +453,7 @@ CMake configure
 <tr><td><code>src/freq</code></td><td>finite-difference Hessian, vibrational analysis</td></tr>
 <tr><td><code>src/solvation</code></td><td>C-PCM cavity, influence matrix, reaction-field operator (shared by HF and DFT)</td></tr>
 <tr><td><code>src/bsse</code></td><td>ghost atoms and the counterpoise driver</td></tr>
-<tr><td><code>src/populations</code></td><td>Mulliken, Löwdin, Mayer bond orders</td></tr>
+<tr><td><code>src/populations</code></td><td>Mulliken, Löwdin, Mayer bond orders, ESP/RESP charges</td></tr>
 <tr><td><code>src/dft</code></td><td>Kohn-Sham DFT pipeline: molecular grid, AO evaluation, XC matrix, analytic KS gradients, TD-DFT, KS driver</td></tr>
 <tr><td><code>src/dft/base</code></td><td>grid construction headers: radial (Treutler-Ahlrichs), angular (Lebedev), Becke partition, libxc wrapper</td></tr>
 <tr><td><code>src/mpi</code></td><td>the <code>planck-mpi</code> unified front end</td></tr>
@@ -3978,6 +3979,41 @@ B_{AB}^{\mathrm{Mayer}} =
 <p><strong>Code path</strong></p>
 <p><code>src/populations/bond-order.cpp</code> — <code>mayer_bond_order_analysis()</code></p>
 <p>The routine first validates the density dimensions and builds the AO lists for each atom.  It then forms either <span class="math-inline">\(\mathbf P\mathbf S\)</span> or the spin-resolved <span class="math-inline">\(\mathbf P^\alpha\mathbf S\)</span> / <span class="math-inline">\(\mathbf P^\beta\mathbf S\)</span> products and loops over atom pairs <span class="math-inline">\(A < B\)</span>.  For each AO pair <span class="math-inline">\(\mu \in A\)</span>, <span class="math-inline">\(\nu \in B\)</span> it accumulates the appropriate product into a dense <code>natoms × natoms</code> bond-order matrix.  <code>src/driver.cpp</code> prints the final matrix below the Mulliken and Löwdin tables whenever population reporting is enabled.</p>
+<h3 id="esp-derived-charges-chelpg-and-resp">ESP-Derived Charges (CHELPG and RESP)</h3>
+<p><strong>Theory</strong></p>
+<p>Mulliken and Löwdin charges partition the density by <em>which basis function owns it</em>, which is a bookkeeping choice rather than an observable — a Löwdin charge can move by tenths of an electron between STO-3G and cc-pVTZ on the same geometry. ESP-derived charges instead ask a physical question: what set of point charges on the nuclei best reproduces the potential the molecule actually presents to its surroundings?</p>
+<p>The molecular electrostatic potential at a point <span class="math-inline">\(\mathbf r\)</span> is</p>
+<p><span class="math-display">\[
+\phi(\mathbf r) =
+\sum_A \frac{Z_A}{|\mathbf r - \mathbf R_A|}
+-
+\sum_{\mu\nu} P_{\mu\nu}
+\left\langle \mu \left| \frac{1}{|\mathbf r - \mathbf r'|} \right| \nu \right\rangle
+\]</span></p>
+<p>The second term is the same one-electron potential integral the nuclear attraction and C-PCM paths already use. Sampling <span class="math-inline">\(\phi\)</span> at <span class="math-inline">\(m\)</span> points outside the van der Waals surface and fitting <span class="math-inline">\(n\)</span> atomic charges is then a linear least-squares problem with design matrix <span class="math-inline">\(A_{ka} = 1/|\mathbf r_k - \mathbf
+R_a|\)</span>, minimizing <span class="math-inline">\(\|\mathbf{Aq} - \boldsymbol\phi\|^2\)</span> subject to <span class="math-inline">\(\sum_a
+q_a = q_{\text{tot}}\)</span>.</p>
+<p>The constraint enters as a <strong>Lagrange multiplier</strong>, not a penalty:</p>
+<p><span class="math-display">\[
+\begin{pmatrix} 2\mathbf A^\top \mathbf A & \mathbf 1 \\ \mathbf 1^\top & 0 \end{pmatrix}
+\begin{pmatrix} \mathbf q \\ \lambda \end{pmatrix}
+=
+\begin{pmatrix} 2\mathbf A^\top \boldsymbol\phi \\ q_{\text{tot}} \end{pmatrix}
+\]</span></p>
+<p>so the total charge is exact rather than approximate. The zero block guarantees a negative eigenvalue, making the system symmetric <strong>indefinite</strong> — Cholesky would fail, and the solve uses <span class="math-inline">\(\mathbf{LDL}^\top\)</span>.</p>
+<p>Atoms buried inside a molecule have little grid nearby and therefore almost no leverage on <span class="math-inline">\(\phi\)</span>, so the unrestrained fit is free to give them large charges cancelled by their neighbours. Those charges reproduce the ESP but transfer badly between molecules. <strong>RESP</strong> removes that freedom with a hyperbolic restraint <span class="math-inline">\(a\sum_a\!\left(\sqrt{q_a^2+b^2}-b\right)\)</span>, whose derivative contributes a <em>diagonal</em> <span class="math-inline">\(a/\sqrt{q_a^2+b^2}\)</span> to the normal matrix. Since that depends on <span class="math-inline">\(\mathbf q\)</span>, the same system is simply re-solved until the charges settle — about seven passes on water — rather than requiring a new solver.</p>
+<p><strong>Grid choice matters, and not for the obvious reason</strong></p>
+<p>CHELPG samples a cubic lattice; Connolly/Merz-Kollman samples nested spheres. A cubic lattice is not rotationally symmetric, so rotating the molecule changes <em>which</em> points survive the exclusion test. On a field the atom-centred model cannot represent exactly, the fitted charges then move by 3–7% — and refining the spacing does not fix it, because a finer lattice is still a lattice.</p>
+<p>Spheres dissolve this, but only if sampled correctly. A sphere is rotationally symmetric; a <em>fixed discrete sampling</em> of one is not. Placing the same Fibonacci point pattern around each atom leaves it pinned to the lab axes, and the drift stays at 3.3e-02. Planck therefore builds the direction set in a frame derived from the molecule&#x27;s own geometry, so it rotates with the molecule by construction — measured drift 6.9e-15.</p>
+<p><strong>Code path</strong></p>
+<p><code>src/populations/esp.cpp</code></p>
+<ul>
+<li><code>electrostatic_potential()</code> — assembles <span class="math-inline">\(\phi\)</span> at arbitrary points. The electronic term fuses the density contraction into the shell-pair sweep (<code>ObaraSaika::_compute_electronic_potential</code>) so a 10 000-point grid costs <span class="math-inline">\(O(n_{\text{points}}\, n_{\text{pairs}})\)</span> time in <span class="math-inline">\(O(n_{\text{points}})\)</span> memory, never materializing one <span class="math-inline">\(n_{\text{basis}}^2\)</span> matrix per point.</li>
+<li><code>chelpg_grid()</code> / <code>connolly_grid()</code> — the two samplings, both returning points in the <code>molecule._standard</code> Bohr frame.</li>
+<li><code>fit_esp_charges()</code> / <code>fit_resp_charges()</code> — the constrained solve, with and without the restraint. Equivalence groups are additional hard rows in the same Lagrange block.</li>
+</ul>
+<p><code>log_esp_report</code> in <code>src/hf_driver.cpp</code> runs whichever grid was requested, calls the potential once, and dispatches between the two fits. Both yield the same fit object, so the printed report is shared.</p>
+<p>Triggered by a <code>%begin_esp</code> section; there is no verbosity-based fallback, because generating a grid and fitting charges is real work rather than a diagnostic print.</p>
 <h3 id="electric-dipole-moment">Electric Dipole Moment</h3>
 <p><strong>Theory</strong></p>
 <p>The electronic contribution to the electric dipole moment is</p>

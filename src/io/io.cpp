@@ -1804,7 +1804,7 @@ namespace HartreeFock::IO
     //
     // Points are stored in Bohr. Deliberately explicit rather than generated:
     // this section exists to validate the ESP itself against an external code
-    // (docs/ESP_CHARGES_SCOPE.md, E1), which requires naming the points. Grid
+    // (docs/ESP_CHARGES.md, section 1), which requires naming the points. Grid
     // generation for CHELPG/RESP is a separate concern.
     std::expected<void, std::string>
     _parse_esp(const std::vector<std::string> &lines, HartreeFock::OptionsESP &esp)

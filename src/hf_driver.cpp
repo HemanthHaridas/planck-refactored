@@ -87,7 +87,7 @@ static void log_multipole_report(
 
 // Report the molecular electrostatic potential at the points named in
 // %begin_esp. This is the validation surface for the ESP machinery the
-// CHELPG/RESP fitting is built on (docs/ESP_CHARGES_SCOPE.md): the points come
+// CHELPG/RESP fitting is built on (docs/ESP_CHARGES.md): the points come
 // from the input rather than a generator, so the printed values can be compared
 // point-for-point against an independent code.
 static void log_esp_report(const HartreeFock::Calculator &calculator,

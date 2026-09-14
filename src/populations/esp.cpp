@@ -228,7 +228,7 @@ HartreeFock::SCF::connolly_grid(
     // R*frame and the sample points follow the molecule exactly. Gram-Schmidt
     // on displacements from the centroid is sufficient and avoids the
     // degenerate-eigenvector discontinuity that rules out an inertia-tensor
-    // frame (see docs/ESP_CHARGES_SCOPE.md, E4a, on why principal axes were
+    // frame (see docs/ESP_CHARGES.md, section 3, on why principal axes were
     // rejected).
     Eigen::Matrix3d frame = Eigen::Matrix3d::Identity();
     {
