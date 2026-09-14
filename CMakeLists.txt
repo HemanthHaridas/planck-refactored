@@ -817,6 +817,9 @@ if(BUILD_TESTING)
         add_test(NAME planck-udh-u3-contract
             COMMAND ${Python3_EXECUTABLE} -m unittest discover
                 -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_pt2_orbital_contract.py -v)
+        add_test(NAME planck-udh-u4-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_zvector_contract.py -v)
     endif()
 
     add_executable(planck-dh-pt2-amplitude-density
@@ -1114,6 +1117,36 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-udh-pt2-orbital PRIVATE USE_OPENMP)
     endif()
     add_test(NAME planck-udh-pt2-orbital COMMAND planck-udh-pt2-orbital)
+
+    # U4 detached dense reference solve and co-moving Fock FD oracle.
+    # No UKS production routing; RKS primitive is linked for reduction tests.
+    add_executable(planck-udh-zvector
+        ${CMAKE_SOURCE_DIR}/tests/udh_zvector.cpp
+        ${SRC_DIR}/dft/udh_zvector.cpp
+        ${SRC_DIR}/dft/udh_pt2_orbital.cpp
+        ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/udh_ks_response.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-zvector PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-zvector ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-zvector libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-zvector OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-zvector PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-zvector COMMAND planck-udh-zvector)
 
     add_executable(planck-hgp-quartet-validation
         ${CMAKE_SOURCE_DIR}/tests/hgp_quartet_validation.cpp
