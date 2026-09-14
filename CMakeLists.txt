@@ -1264,9 +1264,16 @@ if(BUILD_TESTING)
         ${LOOKUP_SRC}
     )
 
+    # POPULATIONS_SRC is a glob, so this target picks up every file added to
+    # src/populations -- including esp.cpp, which unlike the Mulliken/Lowdin/
+    # Mayer sources calls into the integral engine (_compute_electronic_potential)
+    # and the element table (element_from_z). Those are needed to LINK even
+    # though population_analysis.cpp never calls them.
     add_executable(planck-population-analysis
         ${CMAKE_SOURCE_DIR}/tests/population_analysis.cpp
         ${POPULATIONS_SRC}
+        ${INT_SRC}
+        ${LOOKUP_SRC}
     )
 
     add_executable(planck-symmetry-units
