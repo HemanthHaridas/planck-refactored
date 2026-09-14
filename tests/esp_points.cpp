@@ -307,6 +307,271 @@ namespace
                   << " points, repeated calls bitwise identical\n";
     }
 
+    // ── Check 5: the CHELPG fit recovers KNOWN point charges exactly ────────
+    //
+    // This is the load-bearing gate for E3, and it exists because PySCF has no
+    // CHELPG module -- there is no external reference to compare against, so
+    // the oracle has to be an analytically known answer instead.
+    //
+    // Replace the QM potential with the field of point charges sitting ON the
+    // nuclei. The model the fit assumes is then EXACTLY right, so the solve
+    // must return those charges to solver precision. A wrong design matrix, a
+    // wrong constraint row, or a broken solve all fail here; none of them can
+    // be caught by looking at charges alone, because the constraint forces
+    // those to sum correctly whatever else is wrong.
+    void check_fit_recovers_point_charges()
+    {
+        HartreeFock::Calculator calc = make_water("sto-3g");
+        if (!g_ok)
+            return;
+
+        auto grid = HartreeFock::SCF::chelpg_grid(
+            calc._molecule, 0.3 * ANGSTROM_TO_BOHR, 2.8 * ANGSTROM_TO_BOHR, 1.0);
+        expect(grid.has_value(), "chelpg_grid should succeed on prepared water");
+        if (!grid)
+            return;
+
+        std::cout << "  grid points: " << grid->size() << '\n';
+        expect(grid->size() > 100,
+               "a 0.3 A grid around water should give a few thousand points");
+
+        // Deliberately NOT the physical charges: an arbitrary set that still
+        // sums to zero, so a fit that secretly returns something plausible
+        // (Mulliken-like, or all zeros) cannot pass by luck.
+        Eigen::VectorXd known(3);
+        known << -0.834, 0.417, 0.417;
+
+        Eigen::VectorXd phi(static_cast<Eigen::Index>(grid->size()));
+        for (std::size_t k = 0; k < grid->size(); ++k)
+        {
+            double acc = 0.0;
+            for (std::size_t a = 0; a < calc._molecule.natoms; ++a)
+            {
+                const Eigen::Vector3d R =
+                    calc._molecule._standard.row(static_cast<Eigen::Index>(a));
+                acc += known(static_cast<Eigen::Index>(a)) / ((*grid)[k] - R).norm();
+            }
+            phi(static_cast<Eigen::Index>(k)) = acc;
+        }
+
+        auto fit = HartreeFock::SCF::fit_esp_charges(
+            calc._molecule, *grid, phi, known.sum());
+        expect(fit.has_value(), "fit_esp_charges should succeed on a well-posed grid");
+        if (!fit)
+            return;
+
+        const double worst = (fit->charges - known).cwiseAbs().maxCoeff();
+        std::cout << "  recovered: " << std::fixed << std::setprecision(10)
+                  << fit->charges(0) << ", " << fit->charges(1) << ", "
+                  << fit->charges(2) << "  (max err " << std::scientific
+                  << std::setprecision(3) << worst << ")\n";
+        std::cout << "  rrms: " << std::scientific << std::setprecision(3)
+                  << fit->rrms << '\n';
+
+        expect(worst < 1e-8,
+               "the fit must recover charges it was given exactly -- the model is "
+               "exact here, so any error is in the design matrix, the constraint "
+               "row, or the solve");
+
+        // An exactly-representable potential must be fit exactly. This is what
+        // makes the gate non-vacuous: charges alone always look plausible
+        // because the constraint forces them to sum correctly.
+        expect(fit->rrms < 1e-10,
+               "an exactly-representable potential must give a vanishing RRMS");
+
+        // NOTE: this fixture canNOT gate the constraint -- see
+        // check_constraint_is_load_bearing below for why, and for the check
+        // that actually does.
+        expect(std::abs(fit->charges.sum() - known.sum()) < 1e-12,
+               "the total-charge constraint must be satisfied exactly");
+    }
+
+    // ── Check 5b: the total-charge constraint is LOAD-BEARING ───────────────
+    //
+    // This check exists because of a mutation that PASSED. Zeroing the Lagrange
+    // row in fit_esp_charges left check 5 completely green, and the reason is
+    // instructive: check 5 fits a potential the model can represent EXACTLY, so
+    // the unconstrained least-squares solution already lands on the right
+    // charges and already sums correctly. There is nothing for the constraint
+    // to do, so removing it changes nothing and asserting "the sum is right"
+    // asserts a property that holds for free.
+    //
+    // A constraint can only be gated on a fixture where it BINDS -- i.e. where
+    // the unconstrained fit would drift away from the target sum. So here the
+    // potential is deliberately NOT representable by nuclear-centred charges:
+    // it comes from charges placed OFF the nuclei, which no atom-centred model
+    // can reproduce. The unconstrained sum then drifts, and the Lagrange row is
+    // the only thing pulling it back.
+    void check_constraint_is_load_bearing()
+    {
+        HartreeFock::Calculator calc = make_water("sto-3g");
+        if (!g_ok)
+            return;
+
+        auto grid = HartreeFock::SCF::chelpg_grid(
+            calc._molecule, 0.4 * ANGSTROM_TO_BOHR, 2.8 * ANGSTROM_TO_BOHR, 1.0);
+        if (!grid)
+        {
+            fail("chelpg_grid failed in the constraint check");
+            return;
+        }
+
+        // Sources displaced well off every nucleus, so the field has structure
+        // an atom-centred model cannot capture.
+        const std::vector<std::pair<Eigen::Vector3d, double>> sources{
+            {{1.9, 1.3, -0.8}, 0.63},
+            {{-1.4, -1.7, 1.1}, -0.41},
+            {{0.2, 2.2, 2.0}, 0.28},
+        };
+
+        Eigen::VectorXd phi(static_cast<Eigen::Index>(grid->size()));
+        for (std::size_t k = 0; k < grid->size(); ++k)
+        {
+            double acc = 0.0;
+            for (const auto &[pos, q] : sources)
+                acc += q / ((*grid)[k] - pos).norm();
+            phi(static_cast<Eigen::Index>(k)) = acc;
+        }
+
+        // Ask for a total that the unconstrained fit has no reason to hit.
+        const double target_total = -0.75;
+
+        auto fit = HartreeFock::SCF::fit_esp_charges(
+            calc._molecule, *grid, phi, target_total);
+        if (!fit)
+        {
+            fail("fit_esp_charges failed in the constraint check");
+            return;
+        }
+
+        std::cout << "  constrained sum: " << std::fixed << std::setprecision(12)
+                  << fit->charges.sum() << " (target " << target_total << ")\n";
+        std::cout << "  rrms: " << std::scientific << std::setprecision(3)
+                  << fit->rrms << "  (must be >0: the model cannot fit this field)\n";
+
+        expect(std::abs(fit->charges.sum() - target_total) < 1e-10,
+               "the constraint must hold even when it BINDS -- if this passes "
+               "with the Lagrange row removed, the fixture is too easy");
+
+        // Non-vacuity of the fixture itself: if the model could represent this
+        // field, the constraint would again be free and this check would be as
+        // hollow as check 5's version of it.
+        expect(fit->rrms > 1e-3,
+               "the fixture must be genuinely unfittable, otherwise the "
+               "constraint is satisfied for free and nothing is being tested");
+    }
+
+    // ── Check 6: charges are invariant under rigid motion ────────────────────
+    //
+    // A grid keyed to the LAB axes rather than to the molecule would still pass
+    // every check above, and would silently give different charges for the same
+    // molecule in a different orientation. Nothing else here would catch it.
+    void check_fit_is_rotation_invariant()
+    {
+        HartreeFock::Calculator calc = make_water("sto-3g");
+        if (!g_ok)
+            return;
+
+        // What this check can and cannot establish, measured rather than assumed.
+        //
+        // The field here is built from charges ON the nuclei, so the model
+        // represents it exactly and the fit must return them in any
+        // orientation. That is a genuine requirement -- a fit that got the
+        // right answer only in one frame would be broken -- but it is a
+        // property of the FIT, not of the grid: any grid that samples an
+        // exactly-representable field returns the exact answer. Two grid
+        // mutations confirmed this empirically (a lab-snapped lattice origin,
+        // and an anisotropic box exclusion test in place of the spherical one):
+        // both passed here, because neither can perturb an exact fit.
+        //
+        // The tempting fix -- fit an UNREPRESENTABLE field so the surviving
+        // points matter -- was tried and is wrong, because the property then
+        // does not hold. Measured drift between two orientations, sources off
+        // the nuclei, as the lattice is refined:
+        //
+        //     0.50 A  2.2e-01      0.20 A  6.1e-02
+        //     0.40 A  3.6e-01      0.15 A  7.8e-02
+        //     0.30 A  5.8e-02      0.10 A  2.8e-02
+        //
+        // against charges of order 0.9. It is 3-7% throughout and does NOT
+        // converge with spacing, because refining a cubic lattice does not make
+        // it rotationally symmetric -- it just resamples a field the model
+        // cannot represent. This is CHELPG's known rotational variance, not a
+        // defect in this grid, and gating on it would mean inventing a
+        // tolerance to hide a real property of the method.
+        //
+        // So: assert invariance where it is actually required, and record the
+        // measurement above for whoever wonders why there is no tighter gate.
+        Eigen::VectorXd known(3);
+        known << -0.834, 0.417, 0.417;
+
+        auto charges_for = [&](const Eigen::Matrix3d &R,
+                               const Eigen::Vector3d &t) -> Eigen::VectorXd {
+            HartreeFock::Molecule mol = calc._molecule;
+            Eigen::MatrixXd moved(mol.natoms, 3);
+            for (std::size_t a = 0; a < mol.natoms; ++a)
+                moved.row(static_cast<Eigen::Index>(a)) =
+                    (R * mol._standard.row(static_cast<Eigen::Index>(a)).transpose() + t)
+                        .transpose();
+            mol.set_standard_from_bohr(moved);
+
+            auto grid = HartreeFock::SCF::chelpg_grid(
+                mol, 0.3 * ANGSTROM_TO_BOHR, 2.8 * ANGSTROM_TO_BOHR, 1.0);
+            if (!grid)
+                return Eigen::VectorXd();
+
+            Eigen::VectorXd phi(static_cast<Eigen::Index>(grid->size()));
+            for (std::size_t k = 0; k < grid->size(); ++k)
+            {
+                double acc = 0.0;
+                for (std::size_t a = 0; a < mol.natoms; ++a)
+                {
+                    const Eigen::Vector3d P =
+                        mol._standard.row(static_cast<Eigen::Index>(a));
+                    acc += known(static_cast<Eigen::Index>(a)) / ((*grid)[k] - P).norm();
+                }
+                phi(static_cast<Eigen::Index>(k)) = acc;
+            }
+
+            auto fit = HartreeFock::SCF::fit_esp_charges(mol, *grid, phi, known.sum());
+            return fit ? fit->charges : Eigen::VectorXd();
+        };
+
+        const Eigen::VectorXd reference =
+            charges_for(Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero());
+        expect(reference.size() == 3, "reference orientation should produce a fit");
+        if (reference.size() != 3)
+            return;
+
+        // A rotation with no special relationship to the lattice axes, plus a
+        // translation that is deliberately NOT a multiple of the grid spacing.
+        const Eigen::Matrix3d R =
+            (Eigen::AngleAxisd(0.7, Eigen::Vector3d(1.0, 2.0, 3.0).normalized()))
+                .toRotationMatrix();
+        const Eigen::Vector3d t(0.137, -0.921, 0.455);
+
+        const Eigen::VectorXd moved = charges_for(R, t);
+        expect(moved.size() == 3, "rotated orientation should produce a fit");
+        if (moved.size() != 3)
+            return;
+
+        const double drift = (moved - reference).cwiseAbs().maxCoeff();
+        std::cout << "  rotation/translation drift: " << std::scientific
+                  << std::setprecision(3) << drift << '\n';
+
+        // Tight, because the field is exactly representable: the fit must land
+        // on `known` in every frame, so the two answers agree to solver noise.
+        expect(drift < 1e-10,
+               "an exactly-representable field must give the same charges in any "
+               "orientation -- a frame-dependent answer here is a broken fit");
+
+        // And it must be the RIGHT answer in the rotated frame too, not merely
+        // the same wrong one in both.
+        expect((moved - known).cwiseAbs().maxCoeff() < 1e-8,
+               "the rotated fit must recover the known charges, not just agree "
+               "with the reference");
+    }
+
     // ── Guard: the error paths that protect against silent wrong answers ─────
     void check_error_paths()
     {
@@ -352,6 +617,15 @@ int main()
 
     std::cout << "[4] error paths\n";
     check_error_paths();
+
+    std::cout << "[5] CHELPG fit recovers known point charges\n";
+    check_fit_recovers_point_charges();
+
+    std::cout << "[5b] total-charge constraint is load-bearing\n";
+    check_constraint_is_load_bearing();
+
+    std::cout << "[6] fitted charges are rotation/translation invariant\n";
+    check_fit_is_rotation_invariant();
 
     if (!g_ok)
     {

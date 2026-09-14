@@ -1848,14 +1848,50 @@ namespace HartreeFock::IO
                     return std::unexpected("esp: 'point' needs three coordinates: " + line);
                 esp._points.emplace_back(x * scale, y * scale, z * scale);
             }
+            else if (lkey == "grid")
+            {
+                std::string value;
+                if (!(iss >> value))
+                    return std::unexpected("esp: 'grid' needs a value (chelpg or none): " + line);
+                const std::string lvalue = toLower(value);
+                if (lvalue == "chelpg")
+                    esp._grid = true;
+                else if (lvalue == "none")
+                    esp._grid = false;
+                else
+                    return std::unexpected("esp: unknown grid '" + value + "' (expected chelpg or none)");
+            }
+            else if (lkey == "grid_spacing" || lkey == "grid_headspace" || lkey == "radius_scale")
+            {
+                double v;
+                if (!(iss >> v))
+                    return std::unexpected("esp: '" + lkey + "' needs a numeric value: " + line);
+                if (v <= 0.0)
+                    return std::unexpected("esp: '" + lkey + "' must be positive: " + line);
+
+                if (lkey == "grid_spacing")
+                    esp._grid_spacing = v;
+                else if (lkey == "grid_headspace")
+                    esp._grid_headspace = v;
+                else
+                    esp._radius_scale = v;
+            }
             else
             {
                 return std::unexpected("esp: unknown keyword '" + key + "': " + line);
             }
         }
 
-        if (esp._points.empty())
-            return std::unexpected("esp: section declared but no 'point' lines given");
+        // Explicit points and a generated grid are mutually exclusive: honouring
+        // both would silently mix a diagnostic point list into a charge fit.
+        if (esp._grid && !esp._points.empty())
+            return std::unexpected(
+                "esp: 'grid chelpg' and explicit 'point' lines are mutually exclusive "
+                "-- use one or the other");
+
+        if (!esp._grid && esp._points.empty())
+            return std::unexpected(
+                "esp: section declared but no 'point' lines and no 'grid' given");
 
         return std::expected<void, std::string>{};
     }

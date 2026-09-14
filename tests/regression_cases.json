@@ -57,6 +57,31 @@
    ]
   },
   {
+   "id": "water_rhf_chelpg_sto3g",
+   "_note": "E3 of docs/ESP_CHARGES_SCOPE.md: CHELPG charges from a generated grid. Breneman & Wiberg 1990 defaults (0.3 A spacing, 2.8 A head-space, points inside any vdW radius discarded). Charges are asserted to 6 decimals and the RRMS to 4 significant figures; the total is pinned exactly because the Lagrange constraint makes it exact, not approximate. No PySCF cross-check exists -- PySCF ships no CHELPG module -- so the method is gated by planck-esp-points, which fits a field of KNOWN point charges the model can represent exactly and requires them back to 1e-8.",
+   "input": "tests/inputs/regression/scf/water_rhf_chelpg_sto3g.hfinp",
+   "tags": [
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "ESP Charges (CHELPG) :",
+    "1       O       8             -0.713342",
+    "2       H       1              0.356707",
+    "3       H       1              0.356634",
+    "ESP Grid Points :             8485",
+    "ESP Fit RRMS 5.6198"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -74.9458807581,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
    "id": "water_rhf_esp_points_sto3g",
    "_note": "E1 of docs/ESP_CHARGES_SCOPE.md: the molecular electrostatic potential at explicit points. The contains lines assert 8 decimals, not the 12 printed: Planck and PySCF round Angstrom->Bohr differently (Planck keeps more digits), so at identical input coordinates the nuclei sit a few parts in 1e8 apart, and ~1e-8 is the floor for any cross-code comparison here. Asserting more digits would pin the rounding, not the physics.",
    "_pyscf_reference": "PySCF 2.13.0 RHF/STO-3G cart=True, mol.intor('int1e_grids') contracted with the converged density plus the nuclear sum -- an independent implementation of the same one-electron integral. Evaluated at Planck's own Bohr coordinates so the conversion-constant difference is removed: phi = 0.145838922309, -0.011474069301, 0.040830828077, 0.003869442320, 0.000005075137 at the five points. Max abs diff vs Planck 4.6e-09. E_RHF -74.9458807350 (Planck -74.9458807581).",

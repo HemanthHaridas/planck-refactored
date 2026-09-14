@@ -93,7 +93,35 @@ static void log_multipole_report(
 static void log_esp_report(const HartreeFock::Calculator &calculator,
                            const std::vector<HartreeFock::ShellPair> &shell_pairs)
 {
-    if (!calculator._esp._enabled || calculator._esp._points.empty())
+    if (!calculator._esp._enabled)
+        return;
+
+    // The grid is just another way to fill the point list, so everything below
+    // this block is identical for both modes -- there is no second code path.
+    std::vector<Eigen::Vector3d> generated;
+    if (calculator._esp._grid)
+    {
+        auto grid = HartreeFock::SCF::chelpg_grid(
+            calculator._molecule,
+            calculator._esp._grid_spacing * ANGSTROM_TO_BOHR,
+            calculator._esp._grid_headspace * ANGSTROM_TO_BOHR,
+            calculator._esp._radius_scale);
+        if (!grid)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Warning,
+                "Electrostatic Potential :",
+                "Unavailable: " + grid.error());
+            HartreeFock::Logger::blank();
+            return;
+        }
+        generated = std::move(*grid);
+    }
+
+    const std::vector<Eigen::Vector3d> &points =
+        calculator._esp._grid ? generated : calculator._esp._points;
+
+    if (points.empty())
         return;
 
     // Total density: alpha + beta for an unrestricted reference, and for RHF the
@@ -107,7 +135,7 @@ static void log_esp_report(const HartreeFock::Calculator &calculator,
         total_density += calculator._info._scf.beta.density;
 
     auto phi = HartreeFock::SCF::electrostatic_potential(
-        calculator._molecule, shell_pairs, total_density, calculator._esp._points);
+        calculator._molecule, shell_pairs, total_density, points);
 
     if (!phi)
     {
@@ -115,6 +143,63 @@ static void log_esp_report(const HartreeFock::Calculator &calculator,
             HartreeFock::LogLevel::Warning,
             "Electrostatic Potential :",
             "Unavailable: " + phi.error());
+        HartreeFock::Logger::blank();
+        return;
+    }
+
+    // Grid mode: the point table would be thousands of rows and tells nobody
+    // anything, so report the fitted charges instead -- that is what the grid
+    // was generated for.
+    if (calculator._esp._grid)
+    {
+        const double total_charge = static_cast<double>(calculator._molecule.charge);
+        auto fit = HartreeFock::SCF::fit_esp_charges(
+            calculator._molecule, points, *phi, total_charge);
+
+        if (!fit)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Warning,
+                "ESP Charges :",
+                "Unavailable: " + fit.error());
+            HartreeFock::Logger::blank();
+            return;
+        }
+
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "ESP Charges (CHELPG) :", "");
+
+        constexpr int charge_width = 62;
+        std::cout << std::string(charge_width, '-') << "\n"
+                  << std::setw(6) << std::right << "Atom"
+                  << std::setw(8) << std::right << "Elem"
+                  << std::setw(8) << std::right << "Z"
+                  << std::setw(24) << std::right << "Charge (e)" << "\n"
+                  << std::string(charge_width, '-') << "\n";
+
+        for (std::size_t a = 0; a < calculator._molecule.natoms; ++a)
+        {
+            const int Z = calculator._molecule.atomic_numbers(static_cast<Eigen::Index>(a));
+            const auto element = element_from_z(static_cast<std::uint64_t>(Z));
+            const std::string symbol = element ? std::string(element->symbol) : "?";
+            std::cout << std::setw(6) << std::right << (a + 1)
+                      << std::setw(8) << std::right << symbol
+                      << std::setw(8) << std::right << Z
+                      << std::setw(24) << std::right << std::fixed << std::setprecision(8)
+                      << fit->charges(static_cast<Eigen::Index>(a)) << "\n";
+        }
+
+        std::cout << std::string(charge_width, '-') << "\n"
+                  << std::setw(22) << std::left << "  Total"
+                  << std::setw(24) << std::right << std::fixed << std::setprecision(8)
+                  << fit->charges.sum() << "\n"
+                  << std::string(charge_width, '-') << "\n";
+
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "ESP Grid Points :", points.size());
+        std::cout << "  ESP Fit RRMS " << std::scientific << std::setprecision(6)
+                  << fit->rrms << "\n";
+        std::cout << "  ESP Fit RMS  " << std::scientific << std::setprecision(6)
+                  << fit->rms << "\n";
         HartreeFock::Logger::blank();
         return;
     }
