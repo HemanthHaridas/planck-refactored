@@ -355,10 +355,11 @@ HartreeFock::Freq::compute_hessian(
     }
 
     // Symmetrise to remove numerical noise
-    result.hessian = 0.5 * (result.hessian + result.hessian.transpose());
+    result.hessian = (0.5 * (result.hessian + result.hessian.transpose())).eval();
 
-    // Restore the calculator's SCF state to the undisplaced geometry so
-    // the energy / density printed after the hessian block is consistent.
+    // Restore coordinate frames. The callback may retain the last displaced
+    // wavefunction; callers exporting a reference energy/density/gradient must
+    // rebuild that state separately (as the DFT frequency wrapper does).
     calc.sync_coordinate_frames_from_standard();
 
     // Run vibrational analysis

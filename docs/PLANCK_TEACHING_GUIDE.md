@@ -24,6 +24,8 @@ self-consistent field theory. It implements:
   (`ucc2`-`ucc6`). Optionally dressed and OpenMP-threaded
 - Analytic RHF, UHF, ROHF, RKS, UKS, RMP2, and UMP2 nuclear gradients
 - Analytic RMP2 nuclear gradients include Z-vector / CPHF relaxation
+- Analytic restricted global-double-hybrid gradients include KS Z-vector
+  relaxation and the complete LDA/GGA XC geometry response
 - Geometry optimization in Cartesian and internal coordinates
 - Semi-numerical Hessians and harmonic vibrational analysis
 - CASSCF and RASSCF active-space multiconfigurational SCF, and full CI
@@ -111,7 +113,7 @@ itself.
 | `src/freq` | finite-difference Hessian, vibrational analysis |
 | `src/solvation` | C-PCM cavity, influence matrix, reaction-field operator (shared by HF and DFT) |
 | `src/bsse` | ghost atoms and the counterpoise driver |
-| `src/populations` | Mulliken, Löwdin, Mayer bond orders |
+| `src/populations` | Mulliken, Löwdin, Mayer bond orders, ESP/RESP charges |
 | `src/dft` | Kohn-Sham DFT pipeline: molecular grid, AO evaluation, XC matrix, analytic KS gradients, TD-DFT, KS driver |
 | `src/dft/base` | grid construction headers: radial (Treutler-Ahlrichs), angular (Lebedev), Becke partition, libxc wrapper |
 | `src/mpi` | the `planck-mpi` unified front end |
@@ -3539,6 +3541,406 @@ gradient combines those objects with the UHF reference two-particle density
 expression and reuses the same derivative-integral contraction infrastructure
 as the RHF, UHF, and RMP2 gradients.
 
+### Double-Hybrid Analytic Gradients
+
+A double hybrid brings the two preceding gradient problems together: its
+orbitals come from Kohn-Sham DFT, but its energy also contains a perturbative
+correlation correction. The KS energy is stationary with respect to those
+orbitals; the added PT2 energy is not. Consequently, **adding a scaled MP2
+energy does not mean adding a scaled HF-MP2 gradient**. The response equations
+must describe the KS reference that actually generated the orbitals.
+
+Planck follows the stationary-Lagrangian construction of Neese, Schwabe and
+Grimme, *J. Chem. Phys.* **126**, 124115 (2007), DOI `10.1063/1.2712433`.
+Equation numbers in this subsection refer to that paper. The formulas below
+are its closed-shell realization in Planck's storage and density conventions;
+the detailed contracts and validation record are in
+[the DH implementation reference](DH_IMPLEMENTATION.md).
+
+#### Start with the Energy Being Differentiated
+
+For B2PLYP, the electronic energy is
+
+\[
+E_{\mathrm{DH,elec}} = T_s+V_{ne}+E_J
++0.53E_x^{HF}+0.47E_x^{B88}+0.73E_c^{LYP}
++0.27E_c^{MP2}.
+\]
+
+The first six terms define the hybrid SCF reference. Only after that SCF
+converges is the MP2 correlation evaluated, using its KS orbitals and orbital
+energies. Nuclear repulsion is added once to obtain the molecular total:
+
+\[
+E_{\mathrm{DH}}=E_{\mathrm{KS}}+cE_c^{MP2},\qquad
+g_{\mathrm{DH}}^x=g_{\mathrm{KS}}^x+\Delta g_{\mathrm{PT2}}^x.
+\]
+
+Here \(c=0.27\), while the exact-exchange fraction is \(a_x=0.53\).
+These coefficients have different jobs. \(c\) scales the correlation
+correction; \(a_x\) belongs to the KS operator and its response. Neither
+coefficient multiplies the entire MP2 total energy. The combined `b2plyp`
+libxc functional already supplies the B88/LYP mixture: a separate correlation
+setting must not add another semilocal correlation contribution.
+
+Use occupied spatial indices \(i,j,k\), virtual indices \(a,b,c\), and
+general MO indices \(p,q\). The coefficients obey \(C^TSC=I\), with occupied
+columns first. In this subsection \(P=2C_oC_o^T\) is explicitly the **total
+RKS density**, not a one-spin occupied projector. Define
+\(A:B=\sum_{pq}A_{pq}B_{pq}\), an elementwise contraction, and
+
+\[
+J[Q]_{\mu\nu}=\sum_{\kappa\tau}(\mu\nu|\kappa\tau)Q_{\kappa\tau},\qquad
+K[Q]_{\mu\nu}=\sum_{\kappa\tau}(\mu\kappa|\nu\tau)Q_{\kappa\tau}.
+\]
+
+Then the physical reference operator is
+
+\[
+F_{\mathrm{KS}}=h+J[P]-\frac{a_x}{2}K[P]+V_{xc}[P].
+\]
+
+This fixes the factors used below. A formula written for an occupancy-one
+projector cannot be substituted without converting its density convention.
+
+#### Amplitudes, Difference Density, and Stationarity
+
+Planck stores the unscaled spatial amplitudes in `[i,j,a,b]` order:
+
+\[
+t_{ij}^{ab}=\frac{(ia|jb)}{\epsilon_i+\epsilon_j-\epsilon_a-\epsilon_b},\qquad
+E_c^{MP2}=\sum_{ijab}(ia|jb)(2t_{ij}^{ab}-t_{ij}^{ba}).
+\]
+
+The paper's scaled amplitudes and a useful pair coefficient are
+
+\[
+\widetilde t_{ij}^{ab}=\frac{2c}{1+\delta_{ij}}
+(2t_{ij}^{ab}-t_{ij}^{ba}),\qquad
+\Theta_{ij}^{ab}=(1+\delta_{ij})\widetilde t_{ij}^{ab}.
+\]
+
+Eqs. 37–39 give the unrelaxed difference-density blocks:
+
+\[
+D'_{ij}=-\sum_{kab}(1+\delta_{ik})\widetilde t_{ik}^{ab}t_{kj}^{ba},
+\qquad
+D'_{ab}=\sum_{i\le j,c}
+\left(\widetilde t_{ij}^{ac}t_{ij}^{bc}
++\widetilde t_{ij}^{ca}t_{ij}^{cb}\right),\qquad D'_{ia}=D'_{ai}=0.
+\]
+
+The occupied contraction uses \(t_{kj}^{ba}\), and the virtual contraction
+uses an unordered occupied-pair sum. These are indexing rules, not optional
+algebraic simplifications. Each product contains one scaled amplitude, so
+\(D'\) is linear in \(c\). For physical amplitudes,
+\(t_{ij}^{ab}=t_{ji}^{ba}\) and \(\operatorname{Tr}D'=0\): correlation moves
+population from occupied to virtual orbitals without changing electron count.
+
+Why introduce this density? The stationary Eq. 11 functional can be organized as
+
+\[
+\mathcal H_{11}=\mathcal H_{\mathrm{pair}}+D':F_{\mathrm{KS,MO}},\qquad
+\mathcal H_{\mathrm{pair}}=\sum_{ijab}\Theta_{ij}^{ab}(ia|jb).
+\]
+
+At the canonical amplitude solution, the pair part is \(2cE_c^{MP2}\)
+and \(D':\epsilon=-cE_c^{MP2}\). Their sum is the desired correction.
+The factor of two in the pair part is therefore necessary, not a duplicate
+energy contribution. The amplitude derivatives of these two parts cancel;
+neither part is separately stationary. This is a useful teaching example of
+why matching the value of an energy at one geometry is weaker than matching
+the functional whose derivative is taken.
+
+#### The KS Z-Vector: Which Response Operator?
+
+Let \(f_{xc}[Q]\) denote the fixed-geometry derivative of the XC potential
+in density direction \(Q\). Two related operators enter the implementation:
+
+\[
+\mathscr K[Q]=J[Q]-\frac{a_x}{2}K[Q]+f_{xc}[Q],
+\]
+
+\[
+R(Q)=4J[Q]-a_x\{K[Q]+K[Q]^T\}+4f_{xc}[Q].
+\]
+
+The first is the physical Fock response. The second is Eq. 41's closed-shell
+adjoint response; for symmetric \(Q\), \(R(Q)=4\mathscr K[Q]\).
+Planck's callbacks return unscaled J, K, and XC responses. The Eq. 41 wrapper
+owns the factors of four. In particular, the analytic XC Hessian-vector
+callback must not apply that factor a second time.
+
+The amplitude part of Eq. 40 is easiest to understand by differentiating all
+four coefficients in \(\mathcal H_{\mathrm{pair}}\). At fixed AO integrals
+and fixed \(\Theta\), write \(\delta C=CU\) and define
+
+\[
+\delta\mathcal H_{\mathrm{pair}}=\sum_{pq}G_{pq}U_{pq},
+\]
+
+\[
+G_{pq}=\sum_{klab}\Theta_{kl}^{ab}\left[
+\delta_{qk}(pa|lb)+\delta_{qa}(kp|lb)
++\delta_{ql}(ka|pb)+\delta_{qb}(ka|lp)\right].
+\]
+
+Virtual labels in the Kronecker deltas mean their full MO columns. A real
+occupied–virtual rotation has \(U_{ai}=X_{ai}\), \(U_{ia}=-X_{ai}\), so
+
+\[
+L_{ai}=[C_v^TR(CD'C^T)C_o]_{ai}+G_{ai}-G_{ia}.
+\]
+
+This literal four-coefficient derivative is the production convention. It
+already contains both occupied-coefficient contributions; adding the old
+separately named “internal” amplitude bracket would count a contribution twice.
+
+For an arbitrary trial rotation \(X\), the orbital Hessian acts as
+
+\[
+\delta P_X=2(C_vXC_o^T+C_oX^TC_v^T),
+\qquad
+(AX)_{ai}=(\epsilon_a-\epsilon_i)X_{ai}
++[C_v^T\mathscr K[\delta P_X]C_o]_{ai}.
+\]
+
+Planck solves **\(AZ=-L\)** in this DH convention. This sign belongs to
+the definition of \(L\) above; it is not inferred from the generic MP2
+Z-vector notation earlier in this section. For any direction \(X\), the
+stationary pairing is \(L:X+Z:AX=0\). The driver builds the dense Hessian
+from unit-direction actions, solves it by pivoted QR, and checks the residual.
+A small residual verifies the solve; independent directional derivatives are
+still needed to verify the RHS and Hessian themselves.
+
+#### Relaxed Density and the Overlap Blocks
+
+Eq. 28 first places Z in a *raw vo block*. The adapter used for symmetric
+AO operators is
+
+\[
+D_{\mathrm{raw}}=\begin{pmatrix}D'_{oo}&0\\Z&D'_{vv}\end{pmatrix},\qquad
+D_s=\begin{pmatrix}D'_{oo}&Z^T/2\\Z/2&D'_{vv}\end{pmatrix},\qquad
+D_{\mathrm{AO}}=CD_sC^T.
+\]
+
+For symmetric \(M\), \(D_{\mathrm{raw}}:M=D_s:M\). Putting a full Z
+in both off-diagonal blocks doubles its operator contraction. Notice also
+that this relaxed correction density is not the trial density \(\delta P_X\)
+used in the Hessian: those objects serve different derivatives.
+
+The overlap term needs a second adapter. Write \(s^x=C^TS^xC\). The paper's
+metric connection assigns \(U_{oo}=-s_{oo}^x/2\),
+\(U_{vv}=-s_{vv}^x/2\), \(U_{ia}=-s_{ia}^x\), and \(U_{ai}=0\).
+Inserting that connection into the same four-coefficient derivative gives
+
+\[
+B_{ij}=-G_{ij}/2,\qquad B_{ab}=-G_{ab}/2,\qquad
+B_{ia}=-G_{ia},\qquad B_{ai}=0.
+\]
+
+The complete raw Eqs. 42–45 blocks are
+
+\[
+\begin{aligned}
+W_{ij}&=-\tfrac12[C^TR(D_{\mathrm{AO}})C]_{ij}
+-\tfrac12D'_{ij}(\epsilon_i+\epsilon_j)+B_{ij},\\
+W_{ab}&=-\tfrac12D'_{ab}(\epsilon_a+\epsilon_b)+B_{ab},\\
+W_{ia}&=B_{ia},\qquad W_{ai}=-\epsilon_iZ_{ai}.
+\end{aligned}
+\]
+
+Only after assembling these differently oriented blocks does Planck form
+
+\[
+W_s=\tfrac12(W_{\mathrm{raw}}+W_{\mathrm{raw}}^T),\qquad
+W_{\mathrm{AO}}=CW_sC^T,\qquad g_S^x=W_{\mathrm{AO}}:S^x.
+\]
+
+Here W already contains the negative metric signs. Unlike an unsigned
+energy-weighted density used with an explicit minus sign, it enters the final
+contraction with a **plus** sign. The test is contraction equivalence,
+\(W_{\mathrm{raw}}:s^x=W_s:s^x\), not equality of the raw ov and vo blocks.
+One may choose a symmetric metric connection instead, but then the non-Z and
+Z contributions must both be transformed. Mixing those conventions can make
+two individually correct overlap expressions appear inconsistent.
+
+#### Two-Electron Terms: Separable and Nonseparable
+
+In chemists' AO ordering, Eqs. 46–47 supply two correction tensors. In the
+following formulas D means \(D_{\mathrm{AO}}\), while P remains the ground
+total density:
+
+\[
+\Gamma^{\mathrm{sep}}_{\mu\nu\kappa\tau}
+=D_{\mu\nu}P_{\kappa\tau}
+-\frac{a_x}{2}D_{\mu\kappa}P_{\nu\tau},
+\]
+
+\[
+\Gamma^{\mathrm{NS}}_{\mu\nu\kappa\tau}
+=\sum_{ijab}C_{\mu i}C_{\nu a}C_{\kappa j}C_{\tau b}\Theta_{ij}^{ab}.
+\]
+
+“Separable” means a product of two one-particle densities. Its contraction
+with an ERI tensor is \(D:J[P]-a_xD:K[P]/2\), the two-electron partner of
+\(D:F_{\mathrm{KS}}\). It therefore uses the hybrid exchange fraction, not
+full HF exchange. The nonseparable term instead carries the correlated
+\((ia|jb)\) pair structure and is not multiplied by \(a_x\).
+
+These are correction-only tensors: the SCF reference pair density is excluded.
+The raw tensors are averaged over ERI permutation symmetries before contraction,
+preserving their pairing with symmetric derivative integrals. No additional
+global factor of one half belongs to this correction contraction.
+
+#### XC-II: Fixed Matrices Do Not Mean Fixed Functions
+
+The remaining explicit XC contribution differentiates the scalar
+
+\[
+\Phi[P,D]=D:V_{xc}[P]\approx\sum_g w_g\ell_g,\qquad
+\ell=f_\rho\rho_D+2f_\sigma\nabla\rho_P\cdot\nabla\rho_D.
+\]
+
+Here \(f(\rho,\sigma)\) is the unpolarized XC energy density per volume,
+\(\sigma=|\nabla\rho_P|^2\), and
+\(\rho_Q(\mathbf r)=\sum_{\mu\nu}Q_{\mu\nu}\chi_\mu(\mathbf r)\chi_\nu(\mathbf r)\).
+The AO coefficient matrices P and D are held numerically fixed. Their basis
+functions still move with the nuclei, so both densities change on the grid.
+
+For a GGA, put \(p=\nabla\rho_P\), \(d=\nabla\rho_D\), and \(s=p\cdot d\).
+The chain rule for any change in these density fields is
+
+\[
+\begin{aligned}
+\delta\ell={}&\rho_D(f_{\rho\rho}\delta\rho_P
++2f_{\rho\sigma}p\cdot\delta p)
++2s(f_{\rho\sigma}\delta\rho_P
++2f_{\sigma\sigma}p\cdot\delta p)\\
+&+f_\rho\delta\rho_D
++2f_\sigma(\delta p\cdot d+p\cdot\delta d).
+\end{aligned}
+\]
+
+This organizes the complete XC-II nuclear derivative into four channels:
+
+| Channel | What changes while P and D stay fixed? |
+|---|---|
+| P-side AO-center term | The reference density and its gradient inside the XC potential |
+| D-side AO-center term | The density and gradient against which that potential is contracted |
+| Becke partition term | The quadrature partition weight along the moving point's path |
+| Owner-point translation term | The integrand sampled by a point attached to a moving atom |
+
+For the first two channels, evaluate the chain rule at a fixed laboratory
+point using AO-center derivatives. For translation in direction q, use
+\(\delta\rho_P=p_q\), \(\delta p=H_P(:,q)\),
+\(\delta\rho_D=d_q\), \(\delta d=H_D(:,q)\), where H denotes a density
+Hessian. This is why the GGA point-motion term needs AO Hessians; first AO
+derivatives alone do not suffice. LDA follows by setting all sigma derivatives
+to zero.
+
+If point g belongs to atom B and \(w_g=w_g^{atom}b_g\), the two moving-grid
+channels are
+
+\[
+G_{\mathrm{Becke}}^{Aq}=\sum_g w_g^{atom}\dot b_g^{Aq}\ell_g,\qquad
+G_{\mathrm{point}}^{Aq}=\sum_g w_g\delta_{A,B(g)}\partial_q\ell_g.
+\]
+
+Planck's \(\dot b\) already includes the partition's spatial change along
+the moving point. Adding another spatial Becke derivative would count that
+motion twice. Conversely, omitting the D-side AO term differentiates only
+part of \(D:V_{xc}[P]\). The complete result is
+\(G_{\mathrm{XC-II}}=G_P+G_D+G_{\mathrm{Becke}}+G_{\mathrm{point}}\).
+No live matrix derivative \(D^x:V_{xc}\), separate XC-I correction, or extra
+Z-multiplier derivative is appended: orbital and amplitude response have
+already been eliminated into the stationary objects.
+
+#### Final Assembly and Code Map
+
+All these pieces meet in the correction-only Eq. 33 contraction:
+
+\[
+\boxed{\Delta g_{\mathrm{PT2}}^x
+=D_{\mathrm{AO}}:h^x+W_{\mathrm{AO}}:S^x
++\Gamma^{\mathrm{sep}}:V^x+\Gamma^{\mathrm{NS}}:V^x
++G_{\mathrm{XC-II}}^x.}
+\]
+
+Here \(V^x\) is the AO ERI derivative tensor, not the XC potential. The
+ordinary KS gradient already owns nuclear repulsion and every reference
+term. The correction already carries c through the scaled amplitudes and
+the resulting linear response solution; it is not multiplied by c again.
+
+| Stage | Implementation |
+|---|---|
+| KS orbitals and unscaled PT2 amplitudes | `apply_post_ks_double_hybrid_correction` in `src/dft/driver.cpp`; `src/post_hf/mp2_rmp2.cpp` |
+| Tilde amplitudes and D-prime | `build_dh_pt2_amplitude_density` in `src/dft/dh_pt2_gradient.cpp` |
+| KS response, literal RHS, Hessian | `build_dh_eq41_response_density`, `build_dh_eq40_amplitude_rhs`, `build_dh_lagrangian_rhs`, `apply_dh_eq27_hessian` in the same file |
+| Relaxed D and raw/symmetric W | `build_dh_relaxed_difference_density`, `build_dh_eq47_pair_metric_overlap_density`, `build_dh_overlap_density_adapter` |
+| Two-electron correction tensors | `build_dh_eq46_47_two_particle_density` |
+| Complete XC geometry channels | `DHEq33CompleteXCIIGradient`; XC response uses `src/dft/analytic_hessian.cpp`, with AO/grid derivative helpers in `src/dft/dft_gradient.cpp` |
+| Checked assembly and final KS + PT2 sum | `DHGradientDriverContract` in `src/dft/dh_pt2_gradient.h`; restricted gradient branch in `src/dft/driver.cpp` |
+
+All inputs must belong to the same converged geometry and MO ordering.
+The driver constructs analytic h, S, and ERI derivative arrays, solves Z,
+and passes them into the typed contract. The contract independently checks
+the RHS and Z residual. The final KS and PT2 gradients are summed in a common
+frame and rotated once to the requested output frame. There is no
+`RMP2Lagrangian` full-minus-reference bridge and no production DH debug gate.
+
+#### What Makes a Convincing Gradient Test?
+
+There are three complementary levels of evidence:
+
+1. **Algebraic invariants** check amplitude permutations, trace-zero D-prime,
+   scaling with c, raw-to-symmetric contraction equivalence, and isolated J,
+   K, and XC factors.
+2. **Fixed-functional directional differences** check a declared scalar or
+   operator while explicitly holding amplitudes, coefficients, or AO matrices
+   fixed as appropriate. Amplitude-response and orbital-response cancellation
+   must be tested in the same functional and coordinate convention.
+3. **Molecular total-energy differences** rerun SCF and PT2 at every displaced
+   geometry, then compare \([E(R+h)-E(R-h)]/(2h)\) with the assembled analytic
+   derivative for every coordinate.
+
+Individually differentiating live D, W, and Gamma objects and adding their
+responses to Eq. 33 is not the third test: those responses have already been
+eliminated by stationarity. Similarly, copying amplitudes into independently
+optimized endpoint orbitals does not hold the same tensor fixed when the
+occupied and virtual subspaces rotate.
+
+Planck's production B2PLYP/STO-3G checks use Cartesian AOs, ultrafine quadrature,
+and disabled symmetry. All coordinates pass a \(5\times10^{-8}\) Ha/Bohr
+tolerance at both central-difference steps:
+
+| Molecule | Coordinates | Max error at \(h=10^{-4}\) Bohr | Max error at \(h=2\times10^{-4}\) Bohr |
+|---|---:|---:|---:|
+| Water | 9 | \(1.45\times10^{-8}\) Ha/Bohr | \(1.70\times10^{-8}\) Ha/Bohr |
+| Nonplanar C1 H2O2 | 12 | \(9.03\times10^{-9}\) Ha/Bohr | \(1.34\times10^{-8}\) Ha/Bohr |
+
+The nonsymmetric molecule matters: symmetry can hide off-diagonal orientation
+or cancellation errors. The normal-output audit is
+`tests/dh_cartesian_fd_audit.py`; its energy differences use full-precision
+JSON results, not rounded printed energies. This validation compares Planck's
+gradient with Planck's energy, not an external DH analytic-gradient routine.
+
+**Current scope.** Production supports restricted global-DH Cartesian gradient
+requests with LDA/GGA XC-II. These small-system tests do not establish every
+functional, basis, or near-degenerate case. Geometry optimization and
+semi-numerical frequencies now share the full RKS DH gradient callback;
+their repeated-geometry acceptance tests pass for water and nonsymmetric
+H2O2 at B2PLYP/STO-3G. Displaced SCF calculations retain the user's requested
+iteration limit. Frequencies are
+central differences of analytic gradients, not an analytic DH Hessian.
+UKS and range-separated DH gradients, solvent response, DH response workflows,
+and general meta-GGA, frozen-core, RI, or independently spin-scaled DH gradient
+extensions are not covered. UKS U0 energy/amplitude contracts are tested, but
+are not a UKS analytic gradient; an SCF level shift is likewise a convergence
+aid, not a replacement for spin-resolved response theory. The present dense
+implementation stores \(O(3N_{atom}N_{AO}^4)\) ERI derivatives and a dense
+\((ov)\times(ov)\) Hessian, so it is not yet a large-system algorithm.
+
 ---
 
 ## 16. Coupled Cluster in Planck
@@ -5982,9 +6384,13 @@ Double hybrids extend the hybrid idea once more:
 E^{DH} = E^{KS-hyb} + c_{PT2} E^{(2)}.
 \]
 
-In a double hybrid, the converged KS reference is followed by an RHF/UHF-based
-MP2-like correction scaled by the functional's PT2 coefficient. For B2PLYP,
-for example, one commonly uses \(a_x = 0.53\) and \(c_{PT2} = 0.27\).
+In a double hybrid, the converged KS orbitals and orbital energies are passed
+to the restricted/unrestricted MP2 correlation kernel; no additional HF SCF
+is performed. Only the correlation energy is scaled. For B2PLYP,
+\(a_x = 0.53\) and \(c_{PT2} = 0.27\), while the semilocal SCF mixture is
+\(0.47E_x^{B88}+0.73E_c^{LYP}\). The restricted analytic derivative, including
+KS orbital relaxation and moving-grid XC response, is developed in
+[Section 15](#double-hybrid-analytic-gradients).
 
 ### Numerical Integration: Molecular Grid
 
@@ -7057,6 +7463,94 @@ accumulates the appropriate product into a dense `natoms × natoms` bond-order
 matrix.  `src/driver.cpp` prints the final matrix below the Mulliken and
 Löwdin tables whenever population reporting is enabled.
 
+### ESP-Derived Charges (CHELPG and RESP)
+
+**Theory**
+
+Mulliken and Löwdin charges partition the density by *which basis function owns
+it*, which is a bookkeeping choice rather than an observable — a Löwdin charge
+can move by tenths of an electron between STO-3G and cc-pVTZ on the same
+geometry. ESP-derived charges instead ask a physical question: what set of point
+charges on the nuclei best reproduces the potential the molecule actually
+presents to its surroundings?
+
+The molecular electrostatic potential at a point \(\mathbf r\) is
+
+\[
+\phi(\mathbf r) =
+\sum_A \frac{Z_A}{|\mathbf r - \mathbf R_A|}
+-
+\sum_{\mu\nu} P_{\mu\nu}
+\left\langle \mu \left| \frac{1}{|\mathbf r - \mathbf r'|} \right| \nu \right\rangle
+\]
+
+The second term is the same one-electron potential integral the nuclear
+attraction and C-PCM paths already use. Sampling \(\phi\) at \(m\) points outside
+the van der Waals surface and fitting \(n\) atomic charges is then a linear
+least-squares problem with design matrix \(A_{ka} = 1/|\mathbf r_k - \mathbf
+R_a|\), minimizing \(\|\mathbf{Aq} - \boldsymbol\phi\|^2\) subject to \(\sum_a
+q_a = q_{\text{tot}}\).
+
+The constraint enters as a **Lagrange multiplier**, not a penalty:
+
+\[
+\begin{pmatrix} 2\mathbf A^\top \mathbf A & \mathbf 1 \\ \mathbf 1^\top & 0 \end{pmatrix}
+\begin{pmatrix} \mathbf q \\ \lambda \end{pmatrix}
+=
+\begin{pmatrix} 2\mathbf A^\top \boldsymbol\phi \\ q_{\text{tot}} \end{pmatrix}
+\]
+
+so the total charge is exact rather than approximate. The zero block guarantees a
+negative eigenvalue, making the system symmetric **indefinite** — Cholesky would
+fail, and the solve uses \(\mathbf{LDL}^\top\).
+
+Atoms buried inside a molecule have little grid nearby and therefore almost no
+leverage on \(\phi\), so the unrestrained fit is free to give them large charges
+cancelled by their neighbours. Those charges reproduce the ESP but transfer
+badly between molecules. **RESP** removes that freedom with a hyperbolic
+restraint \(a\sum_a\!\left(\sqrt{q_a^2+b^2}-b\right)\), whose derivative
+contributes a *diagonal* \(a/\sqrt{q_a^2+b^2}\) to the normal matrix. Since that
+depends on \(\mathbf q\), the same system is simply re-solved until the charges
+settle — about seven passes on water — rather than requiring a new solver.
+
+**Grid choice matters, and not for the obvious reason**
+
+CHELPG samples a cubic lattice; Connolly/Merz-Kollman samples nested spheres.
+A cubic lattice is not rotationally symmetric, so rotating the molecule changes
+*which* points survive the exclusion test. On a field the atom-centred model
+cannot represent exactly, the fitted charges then move by 3–7% — and refining
+the spacing does not fix it, because a finer lattice is still a lattice.
+
+Spheres dissolve this, but only if sampled correctly. A sphere is rotationally
+symmetric; a *fixed discrete sampling* of one is not. Placing the same
+Fibonacci point pattern around each atom leaves it pinned to the lab axes, and
+the drift stays at 3.3e-02. Planck therefore builds the direction set in a frame
+derived from the molecule's own geometry, so it rotates with the molecule by
+construction — measured drift 6.9e-15.
+
+**Code path**
+
+`src/populations/esp.cpp`
+
+- `electrostatic_potential()` — assembles \(\phi\) at arbitrary points. The
+  electronic term fuses the density contraction into the shell-pair sweep
+  (`ObaraSaika::_compute_electronic_potential`) so a 10 000-point grid costs
+  \(O(n_{\text{points}}\, n_{\text{pairs}})\) time in \(O(n_{\text{points}})\)
+  memory, never materializing one \(n_{\text{basis}}^2\) matrix per point.
+- `chelpg_grid()` / `connolly_grid()` — the two samplings, both returning points
+  in the `molecule._standard` Bohr frame.
+- `fit_esp_charges()` / `fit_resp_charges()` — the constrained solve, with and
+  without the restraint. Equivalence groups are additional hard rows in the same
+  Lagrange block.
+
+`log_esp_report` in `src/hf_driver.cpp` runs whichever grid was requested, calls
+the potential once, and dispatches between the two fits. Both yield the same fit
+object, so the printed report is shared.
+
+Triggered by a `%begin_esp` section; there is no verbosity-based fallback,
+because generating a grid and fitting charges is real work rather than a
+diagnostic print.
+
 ### Electric Dipole Moment
 
 **Theory**
@@ -7452,6 +7946,8 @@ driver.cpp
 | CC denominators/DIIS | `src/post_hf/cc/amplitudes.cpp`, `src/post_hf/cc/diis.cpp` | `build_denominator_cache`, `AmplitudeDIIS` |
 | CPHF Z-vector | `src/post_hf/rhf_response.cpp` | `build_rhf_cphf_matrix` |
 | RMP2 gradient | `src/post_hf/mp2_gradient.cpp` | `compute_rmp2_gradient` |
+| Restricted double-hybrid gradient | `src/dft/dh_pt2_gradient.cpp`, `src/dft/driver.cpp` | `DHGradientDriverContract`; correction-only KS Z-vector, literal pair RHS/overlap, Eq. 33 assembly |
+| Double-hybrid XC-II geometry response | `src/dft/dh_pt2_gradient.cpp`, `src/dft/dft_gradient.cpp` | `DHEq33CompleteXCIIGradient`; P-side, D-side, Becke partition, point translation |
 | UMP2 gradient intermediates | `src/post_hf/mp2_gradient.cpp` | `build_ump2_gradient_intermediates` |
 | CI string generation | `src/post_hf/ci/strings.cpp` | `generate_strings`, `parity_between`, `select_active_orbitals` |
 | CI determinant space + sigma | `src/post_hf/ci/ci.cpp` | `build_ci_space`, `apply_ci_hamiltonian`, `slater_condon_element` |
@@ -7561,10 +8057,12 @@ driver.cpp
 | Molecular grid (Treutler-Ahlrichs + Lebedev + Becke) | Complete |
 | Analytic KS-DFT gradient (RKS/UKS, LDA/GGA/global hybrid, range-separated hybrid) | Complete |
 | TD-DFT / linear response (RKS singlet/triplet, UKS spin-conserving, Casida/TDA, semilocal XC kernels) | Complete |
-| DFT geometry optimization / gradients | Complete |
+| DFT geometry optimization / gradients | Complete within the functional-specific workflow restrictions; DH supports restricted global-DH gradient requests only, not optimization |
 | Global hybrid XC functionals (B3LYP, PBE0, compatible libxc IDs) | Complete |
 | Range-separated hybrid XC functionals (for example HSE06) | Complete for single-point, gradient, geometry optimization, frequency, and geomopt+frequency workflows |
 | Double-hybrid XC functionals (for example B2PLYP) | Complete for single-point energies |
+| Restricted global-double-hybrid analytic gradient | Production enabled for Cartesian AOs and LDA/GGA XC-II; all-coordinate B2PLYP/STO-3G water and C1 H2O2 energy-FD validated at two steps (Section 15). UKS, range separation, solvent response, and DH optimization/frequency/response workflows remain excluded |
+| UKS double-hybrid derivative extension | U0 spin-resolved energy/amplitude contracts tested; analytic gradient not implemented |
 | Range-separated double hybrids (for example \(\omega\)B2PLYP) | Complete for single-point energies |
 | Spherical harmonic basis | Complete (real-spherical AO basis via fixed cart→sph transform; SCF, SAO blocking + MO irreps, full point-group ERI reduction, post-HF) |
 | C-PCM solvation (RHF/UHF/RKS/UKS, single-point energy) | Complete |

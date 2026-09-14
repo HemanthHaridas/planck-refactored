@@ -1,6 +1,8 @@
 #include "analytic_hessian.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace DFT::Driver
 {
@@ -22,6 +24,124 @@ namespace DFT::Driver
             (std::fill(vecs.begin(), vecs.end(), 0.0), ...);
         }
     } // namespace
+
+    struct RKSXCKernelData
+    {
+        AOGridEvaluation ao;
+        Eigen::VectorXd weights;
+        DensityChannelOnGrid ground;
+        std::vector<double> rr, rs, ss, vs;
+        bool gga = false;
+    };
+
+    std::expected<RKSXCKernel,std::string> prepare_rks_xc_kernel(
+        const MolecularGrid &grid, const AOGridEvaluation &ao,
+        const Eigen::Ref<const Eigen::MatrixXd> &density,
+        const XC::Functional &x, const XC::Functional &c)
+    {
+        const auto n=ao.npoints(),nb=ao.nbasis();
+        if (n<0 || n>std::numeric_limits<int>::max() || nb<=0 || grid.points.rows()!=n ||
+            grid.points.cols()!=4 || !grid.points.allFinite() || !ao.values.allFinite() ||
+            density.rows()!=nb || density.cols()!=nb || !density.allFinite() ||
+            x.spin()!=XC::Spin::Unpolarized || c.spin()!=XC::Spin::Unpolarized ||
+            x.is_lda_like()!=c.is_lda_like() || x.is_gga_like()!=c.is_gga_like() ||
+            (!x.is_lda_like() && !x.is_gga_like()))
+            return std::unexpected("RKS XC cache: invalid grid, density, spin or functional family.");
+        for (const auto *grad:{&ao.grad_x,&ao.grad_y,&ao.grad_z})
+            if (grad->rows()!=n || grad->cols()!=nb || !grad->allFinite())
+                return std::unexpected("RKS XC cache: invalid AO gradient dimensions or values.");
+        auto ground=evaluate_density_on_grid(ao,density);
+        if (!ground) return std::unexpected("RKS XC cache: "+ground.error());
+        auto data=std::make_shared<RKSXCKernelData>();
+        data->ao=ao; data->weights=grid.points.col(3);
+        data->ground=std::move(ground->total); data->gga=x.is_gga_like();
+        std::vector<double> rho(static_cast<std::size_t>(n)),sigma;
+        for (Eigen::Index p=0;p<n;++p) rho[p]=data->ground.rho(p);
+        std::vector<double> rr_c,rs_c,ss_c,vs_c;
+        if (!data->gga)
+        {
+            auto a=x.evaluate_lda_fxc(rho,static_cast<int>(n),data->rr);
+            if (!a) return std::unexpected(a.error());
+            auto b=c.evaluate_lda_fxc(rho,static_cast<int>(n),rr_c);
+            if (!b) return std::unexpected(b.error());
+            drop_correlation_if_combined(x,rr_c);
+        }
+        else
+        {
+            const Eigen::VectorXd sigma_grid=data->ground.gradient_squared();
+            sigma.resize(static_cast<std::size_t>(n));
+            for (Eigen::Index p=0;p<n;++p) sigma[p]=sigma_grid(p);
+            std::vector<double> exc,vrho;
+            auto a=x.evaluate_gga_exc_vxc(rho,sigma,static_cast<int>(n),exc,vrho,data->vs);
+            if (!a) return std::unexpected(a.error());
+            auto b=c.evaluate_gga_exc_vxc(rho,sigma,static_cast<int>(n),exc,vrho,vs_c);
+            if (!b) return std::unexpected(b.error());
+            auto f=x.evaluate_gga_fxc(rho,sigma,static_cast<int>(n),data->rr,data->rs,data->ss);
+            if (!f) return std::unexpected(f.error());
+            auto g=c.evaluate_gga_fxc(rho,sigma,static_cast<int>(n),rr_c,rs_c,ss_c);
+            if (!g) return std::unexpected(g.error());
+            drop_correlation_if_combined(x,rr_c,rs_c,ss_c,vs_c);
+        }
+        const auto combine=[n](std::vector<double> &a,const std::vector<double> &b)
+        {
+            if (a.size()!=static_cast<std::size_t>(n) || b.size()!=a.size()) return false;
+            for (std::size_t p=0;p<a.size();++p)
+            { a[p]+=b[p]; if (!std::isfinite(a[p])) return false; }
+            return true;
+        };
+        if (!combine(data->rr,rr_c) || (data->gga &&
+            (!combine(data->rs,rs_c) || !combine(data->ss,ss_c) || !combine(data->vs,vs_c))))
+            return std::unexpected("RKS XC cache: invalid functional derivative arrays.");
+        return RKSXCKernel(std::move(data));
+    }
+
+    std::size_t RKSXCKernel::storage_bytes() const
+    {
+        if (!data_) return 0;
+        const auto &d=*data_;
+        return sizeof(double)*(d.ao.values.size()+d.ao.grad_x.size()+d.ao.grad_y.size()+d.ao.grad_z.size()+
+            d.weights.size()+d.ground.rho.size()+d.ground.grad_x.size()+d.ground.grad_y.size()+d.ground.grad_z.size()+
+            d.rr.size()+d.rs.size()+d.ss.size()+d.vs.size());
+    }
+
+    std::expected<Eigen::MatrixXd,std::string> RKSXCKernel::apply(
+        const Eigen::Ref<const Eigen::MatrixXd> &density) const
+    {
+        if (!data_) return std::unexpected("RKS XC cache: moved-from kernel.");
+        const auto &d=*data_;
+        const auto &ao=d.ao;
+        if (density.rows()!=ao.nbasis() || density.cols()!=ao.nbasis() || !density.allFinite())
+            return std::unexpected("RKS XC cache: invalid trial density.");
+        auto trial=evaluate_density_on_grid(ao,density);
+        if (!trial) return std::unexpected(trial.error());
+        Eigen::MatrixXd out=Eigen::MatrixXd::Zero(ao.nbasis(),ao.nbasis());
+        for (Eigen::Index p=0;p<ao.npoints();++p)
+        {
+            const double weight=d.weights(p);
+            if (weight==0.0) continue;
+            const auto phi=ao.values.row(p).transpose();
+            const double drho=trial->total.rho(p);
+            if (!d.gga)
+            {
+                const double delta_vrho=d.rr[p]*drho;
+                out.noalias()+=(weight*delta_vrho)*(phi*phi.transpose());
+                continue;
+            }
+            const double dot=d.ground.grad_x(p)*trial->total.grad_x(p)+
+                d.ground.grad_y(p)*trial->total.grad_y(p)+d.ground.grad_z(p)*trial->total.grad_z(p);
+            const double delta_vrho=d.rr[p]*drho+2.0*d.rs[p]*dot;
+            const double delta_vsigma=d.rs[p]*drho+2.0*d.ss[p]*dot;
+            const Eigen::Vector3d grad{d.ground.grad_x(p),d.ground.grad_y(p),d.ground.grad_z(p)};
+            const Eigen::Vector3d dg{trial->total.grad_x(p),trial->total.grad_y(p),trial->total.grad_z(p)};
+            const Eigen::Vector3d term=2.0*delta_vsigma*grad+2.0*d.vs[p]*dg;
+            const Eigen::VectorXd projected=term.x()*ao.grad_x.row(p).transpose()+
+                term.y()*ao.grad_y.row(p).transpose()+term.z()*ao.grad_z.row(p).transpose();
+            out.noalias()+=(weight*delta_vrho)*(phi*phi.transpose());
+            out.noalias()+=weight*(phi*projected.transpose()+projected*phi.transpose());
+        }
+        if (!out.allFinite()) return std::unexpected("RKS XC cache: nonfinite action.");
+        return out;
+    }
 
     std::expected<Eigen::MatrixXd, std::string> compute_analytic_xc_hessian_vector_product(
         const MolecularGrid &molecular_grid,
@@ -89,8 +209,12 @@ namespace DFT::Driver
         // machinery -- see docs/DFT_ANALYTIC_FXC_HESSIAN.md, F3.3.4 and
         // D2.0's own commit for the record of that verification.
         std::vector<double> sigma_vec(static_cast<std::size_t>(npoints));
-        for (Eigen::Index p = 0; p < npoints; ++p)
-            sigma_vec[static_cast<std::size_t>(p)] = ground->total.gradient_squared()(p);
+        {
+            // gradient_squared() evaluates the entire grid: once, not per point.
+            const Eigen::VectorXd ground_sigma = ground->total.gradient_squared();
+            for (Eigen::Index p = 0; p < npoints; ++p)
+                sigma_vec[static_cast<std::size_t>(p)] = ground_sigma(p);
+        }
 
         std::vector<double> exc_x, vrho_x, vsigma_x;
         std::vector<double> exc_c, vrho_c, vsigma_c;

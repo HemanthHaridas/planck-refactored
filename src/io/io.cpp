@@ -852,6 +852,19 @@ namespace HartreeFock::IO
                      scf._scf_soscf_diis_tol = std::stod(value);
                      return std::expected<void, std::string>{};
                  }},
+                {"scf_soscf_auto_stall", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     scf._scf_soscf_auto_stall = static_cast<unsigned int>(std::stoul(value));
+                     return {};
+                 }},
+                {"scf_soscf_auto_factor", [&scf](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     const double v = std::stod(value);
+                     if (!(v > 0.0) || v > 1.0)
+                         return std::unexpected("scf_soscf_auto_factor must be in (0, 1]");
+                     scf._scf_soscf_auto_factor = v;
+                     return {};
+                 }},
                 {"scf_soscf_min_iter", [&scf](const std::string &value) -> std::expected<void, std::string>
                  {
                      scf._scf_soscf_min_iter = static_cast<unsigned int>(std::stoul(value));
@@ -1190,7 +1203,7 @@ namespace HartreeFock::IO
                 key == "mcscf_debug_numeric_newton" || key == "mcscf_debug_commutator_rhs" ||
                 key == "mcscf_accept_uphill" ||
                 key == "stability_check" || key == "stability_follow" ||
-                key == "mp2_with_t2" || key == "mp2_use_ri")
+                key == "mp2_with_t2" || key == "mp2_use_ri" || key == "scf_ri_jk")
             {
                 if (!(_iss >> value))
                     return std::unexpected("Missing value for scf keyword: " + key);
@@ -1215,6 +1228,8 @@ namespace HartreeFock::IO
                     scf._stability_follow = *parsed;
                 else if (key == "mp2_use_ri")
                     mp2.use_ri = *parsed;
+                else if (key == "scf_ri_jk")
+                    scf._ri_jk = *parsed;
                 else
                     mp2.with_t2 = *parsed;
                 continue;
@@ -1783,6 +1798,181 @@ namespace HartreeFock::IO
     //
     // Atom indices are stored 0-based. Validation that the fragments partition
     // the molecule is deferred to parse_input (where natoms is known).
+    // Parse the optional %begin_esp section: explicit points at which to report
+    // the molecular electrostatic potential.
+    //
+    //   units   bohr|angstrom   — units of the point coordinates (default bohr)
+    //   point   x y z           — one evaluation point, repeatable
+    //
+    // Points are stored in Bohr. Deliberately explicit rather than generated:
+    // this section exists to validate the ESP itself against an external code
+    // (docs/ESP_CHARGES.md, section 1), which requires naming the points. Grid
+    // generation for CHELPG/RESP is a separate concern.
+    std::expected<void, std::string>
+    _parse_esp(const std::vector<std::string> &lines, HartreeFock::OptionsESP &esp)
+    {
+        esp._enabled = true;
+        double scale = 1.0; // input already in Bohr unless 'units angstrom'
+
+        for (const auto &raw : lines)
+        {
+            const std::string line = strip_inline_comment(raw);
+            if (line.empty())
+                continue;
+
+            std::istringstream iss(line);
+            std::string key;
+            iss >> key;
+            const std::string lkey = toLower(key);
+
+            if (lkey == "units")
+            {
+                std::string value;
+                if (!(iss >> value))
+                    return std::unexpected("esp: 'units' needs a value (bohr or angstrom): " + line);
+                const std::string lvalue = toLower(value);
+                if (lvalue == "bohr" || lvalue == "au")
+                    scale = 1.0;
+                else if (lvalue == "angstrom" || lvalue == "ang")
+                    scale = ANGSTROM_TO_BOHR;
+                else
+                    return std::unexpected("esp: unknown units '" + value + "' (expected bohr or angstrom)");
+
+                if (!esp._points.empty())
+                    return std::unexpected(
+                        "esp: 'units' must appear before any 'point' line, otherwise "
+                        "earlier points would silently carry different units");
+            }
+            else if (lkey == "point")
+            {
+                double x, y, z;
+                if (!(iss >> x >> y >> z))
+                    return std::unexpected("esp: 'point' needs three coordinates: " + line);
+                esp._points.emplace_back(x * scale, y * scale, z * scale);
+            }
+            else if (lkey == "grid")
+            {
+                std::string value;
+                if (!(iss >> value))
+                    return std::unexpected(
+                        "esp: 'grid' needs a value (chelpg, connolly or none): " + line);
+                const std::string lvalue = toLower(value);
+                if (lvalue == "chelpg")
+                    esp._grid = HartreeFock::OptionsESP::Grid::CHELPG;
+                else if (lvalue == "connolly" || lvalue == "mk" || lvalue == "merz-kollman")
+                    esp._grid = HartreeFock::OptionsESP::Grid::Connolly;
+                else if (lvalue == "none")
+                    esp._grid = HartreeFock::OptionsESP::Grid::None;
+                else
+                    return std::unexpected(
+                        "esp: unknown grid '" + value + "' (expected chelpg, connolly or none)");
+            }
+            else if (lkey == "grid_spacing" || lkey == "grid_headspace" || lkey == "radius_scale")
+            {
+                double v;
+                if (!(iss >> v))
+                    return std::unexpected("esp: '" + lkey + "' needs a numeric value: " + line);
+                if (v <= 0.0)
+                    return std::unexpected("esp: '" + lkey + "' must be positive: " + line);
+
+                if (lkey == "grid_spacing")
+                    esp._grid_spacing = v;
+                else if (lkey == "grid_headspace")
+                    esp._grid_headspace = v;
+                else
+                    esp._radius_scale = v;
+            }
+            else if (lkey == "resp" || lkey == "resp_exempt_hydrogen")
+            {
+                std::string value;
+                if (!(iss >> value))
+                    return std::unexpected("esp: '" + lkey + "' needs a boolean value: " + line);
+                auto parsed = toBool(value);
+                if (!parsed)
+                    return std::unexpected("esp: '" + lkey + "': " + parsed.error());
+
+                if (lkey == "resp")
+                    esp._resp = *parsed;
+                else
+                    esp._resp_exempt_hydrogen = *parsed;
+            }
+            else if (lkey == "resp_strength" || lkey == "resp_tightness")
+            {
+                double v;
+                if (!(iss >> v))
+                    return std::unexpected("esp: '" + lkey + "' needs a numeric value: " + line);
+                if (lkey == "resp_strength" && v < 0.0)
+                    return std::unexpected("esp: 'resp_strength' must not be negative: " + line);
+                if (lkey == "resp_tightness" && v <= 0.0)
+                    return std::unexpected("esp: 'resp_tightness' must be positive: " + line);
+
+                if (lkey == "resp_strength")
+                    esp._resp_strength = v;
+                else
+                    esp._resp_tightness = v;
+            }
+            else if (lkey == "equivalent")
+            {
+                // 1-based atom indices, stored 0-based, matching the `fragment`
+                // convention in the bsse section. Range validation is deferred
+                // to parse_input, where natoms is known.
+                std::vector<std::size_t> group;
+                int idx;
+                while (iss >> idx)
+                {
+                    if (idx < 1)
+                        return std::unexpected(
+                            "esp: 'equivalent' atom indices are 1-based and must be >= 1: " + line);
+                    group.push_back(static_cast<std::size_t>(idx - 1));
+                }
+                if (group.size() < 2)
+                    return std::unexpected(
+                        "esp: 'equivalent' needs at least two atom indices: " + line);
+                esp._resp_equivalence.push_back(std::move(group));
+            }
+            else if (lkey == "points_per_shell")
+            {
+                int v;
+                if (!(iss >> v))
+                    return std::unexpected("esp: 'points_per_shell' needs an integer value: " + line);
+                if (v <= 0)
+                    return std::unexpected("esp: 'points_per_shell' must be positive: " + line);
+                esp._points_per_shell = v;
+            }
+            else if (lkey == "shell_scales")
+            {
+                std::vector<double> scales;
+                double v;
+                while (iss >> v)
+                {
+                    if (v <= 0.0)
+                        return std::unexpected("esp: 'shell_scales' entries must be positive: " + line);
+                    scales.push_back(v);
+                }
+                if (scales.empty())
+                    return std::unexpected("esp: 'shell_scales' needs at least one value: " + line);
+                esp._shell_scales = std::move(scales);
+            }
+            else
+            {
+                return std::unexpected("esp: unknown keyword '" + key + "': " + line);
+            }
+        }
+
+        // Explicit points and a generated grid are mutually exclusive: honouring
+        // both would silently mix a diagnostic point list into a charge fit.
+        if (esp.wants_grid() && !esp._points.empty())
+            return std::unexpected(
+                "esp: 'grid' and explicit 'point' lines are mutually exclusive "
+                "-- use one or the other");
+
+        if (!esp.wants_grid() && esp._points.empty())
+            return std::unexpected(
+                "esp: section declared but no 'point' lines and no 'grid' given");
+
+        return std::expected<void, std::string>{};
+    }
+
     std::expected<void, std::string>
     _parse_bsse(const std::vector<std::string> &lines, HartreeFock::OptionsBSSE &bsse)
     {
@@ -2138,6 +2328,24 @@ namespace HartreeFock::IO
         {
             if (auto res = _parse_constraints(it->second, calculator._constraints); !res)
                 return std::unexpected(res.error());
+        }
+
+        // esp point list (optional)
+        if (auto it = _sections.find("esp"); it != _sections.end())
+        {
+            if (auto res = _parse_esp(it->second, calculator._esp); !res)
+                return std::unexpected(res.error());
+
+            // Range-check the equivalence groups now that natoms is known. The
+            // parser stores them 0-based but reports 1-based, matching the
+            // indices the user typed.
+            const std::size_t natoms = calculator._molecule.natoms;
+            for (const auto &group : calculator._esp._resp_equivalence)
+                for (std::size_t a : group)
+                    if (a >= natoms)
+                        return std::unexpected(
+                            "esp: 'equivalent' names atom " + std::to_string(a + 1) +
+                            ", which is out of range (1.." + std::to_string(natoms) + ")");
         }
 
         // bsse / counterpoise (optional)

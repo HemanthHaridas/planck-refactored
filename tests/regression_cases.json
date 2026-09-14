@@ -57,6 +57,107 @@
    ]
   },
   {
+   "id": "water_rhf_chelpg_sto3g",
+   "_note": "docs/ESP_CHARGES.md -- CHELPG charges from a generated grid. Breneman & Wiberg 1990 defaults (0.3 A spacing, 2.8 A head-space, points inside any vdW radius discarded). Charges are asserted to 6 decimals and the RRMS to 4 significant figures; the total is pinned exactly because the Lagrange constraint makes it exact, not approximate. No PySCF cross-check exists -- PySCF ships no CHELPG module -- so the method is gated by planck-esp-points, which fits a field of KNOWN point charges the model can represent exactly and requires them back to 1e-8.",
+   "input": "tests/inputs/regression/scf/water_rhf_chelpg_sto3g.hfinp",
+   "tags": [
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "ESP Charges (CHELPG) :",
+    "1       O       8             -0.713342",
+    "2       H       1              0.356707",
+    "3       H       1              0.356634",
+    "ESP Grid Points :             8485",
+    "ESP Fit RRMS 5.6198"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -74.9458807581,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_resp_sto3g",
+   "_note": "docs/ESP_CHARGES.md -- the Bayly hyperbolic restraint on a Connolly grid, driven from the input file. `equivalent 2 3` forces water's two symmetry-equivalent hydrogens to share a charge -- they come back EXACTLY equal here, against 0.354386/0.354418 for the same grid unrestrained, so the constraint is doing visible work. resp_strength is 0.01 rather than the Bayly stage-1 default 0.0005 deliberately: at 0.0005 the restraint moves these charges by ~4e-4, which is below what the 8-decimal charge print can distinguish from the unrestrained fit, and the case would assert nothing about the restraint. Unrestrained on the same grid: O -0.708804, RRMS 3.5763e-02; restrained: O -0.700909, RRMS 3.7456e-02 -- the restraint shrinks the charges and worsens the fit, which is the trade it exists to make.",
+   "input": "tests/inputs/regression/scf/water_rhf_resp_sto3g.hfinp",
+   "tags": [
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "RESP Charges (Connolly) :",
+    "1       O       8             -0.700908",
+    "2       H       1              0.350454",
+    "3       H       1              0.350454",
+    "RESP Iterations 7"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -74.9458807581,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_connolly_sto3g",
+   "_note": "docs/ESP_CHARGES.md -- Connolly/Merz-Kollman sampling shells. Unlike the CHELPG cubic lattice these are rotationally invariant -- the direction set is built in a molecule-derived frame, so rotating the molecule rotates the sample set with it. Measured drift under a rigid motion: 6.9e-15 here against 5.8e-02 for chelpg on the identical fixture (planck-esp-points check 7, which runs both arms and requires the chelpg arm to keep failing so the comparison cannot go vacuous). Charges asserted to 6 decimals; the total is exact because the constraint is a Lagrange multiplier, not a penalty. The values here were re-captured after the molecular-frame fix: an earlier revision of this case asserted 1016 points and O -0.709218, taken from a binary built BEFORE that fix, and was registered without rebuilding hartree-fock first. It passed its own mutation test because a mutation test proves an assertion is sensitive, not that its value is current.",
+   "input": "tests/inputs/regression/scf/water_rhf_connolly_sto3g.hfinp",
+   "tags": [
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "ESP Charges (Connolly) :",
+    "1       O       8             -0.708804",
+    "2       H       1              0.354385",
+    "3       H       1              0.354418",
+    "ESP Grid Points :             1012",
+    "ESP Fit RRMS 3.5763"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -74.9458807581,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_esp_points_sto3g",
+   "_note": "docs/ESP_CHARGES.md -- the molecular electrostatic potential at explicit points. The contains lines assert 8 decimals, not the 12 printed: Planck and PySCF round Angstrom->Bohr differently (Planck keeps more digits), so at identical input coordinates the nuclei sit a few parts in 1e8 apart, and ~1e-8 is the floor for any cross-code comparison here. Asserting more digits would pin the rounding, not the physics.",
+   "_pyscf_reference": "PySCF 2.13.0 RHF/STO-3G cart=True, mol.intor('int1e_grids') contracted with the converged density plus the nuclear sum -- an independent implementation of the same one-electron integral. Evaluated at Planck's own Bohr coordinates so the conversion-constant difference is removed: phi = 0.145838922309, -0.011474069301, 0.040830828077, 0.003869442320, 0.000005075137 at the five points. Max abs diff vs Planck 4.6e-09. E_RHF -74.9458807350 (Planck -74.9458807581).",
+   "input": "tests/inputs/regression/scf/water_rhf_esp_points_sto3g.hfinp",
+   "tags": [
+    "smoke",
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Electrostatic Potential :",
+    "1      1.300000     -0.700000      2.100000          0.14583892",
+    "2     -2.400000      1.900000     -0.600000         -0.01147406",
+    "3      0.400000      0.300000      3.700000          0.04083082",
+    "4     -5.000000     -4.000000      1.200000          0.00386944",
+    "5     60.000000      0.000000      0.000000          0.00000507"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -74.9458807581,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
    "id": "lih_rmp2_sto3g",
    "input": "inputs/examples/hf/mp2_validation/val_lih.hfinp",
    "tags": [
@@ -1834,6 +1935,28 @@
    ]
   },
   {
+   "id": "h2o2_cation_uhf_tight_tol_sto3g",
+   "input": "tests/inputs/regression/open_shell/h2o2_cation_uhf_tight_tol_sto3g.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "UHF Converged"
+   ],
+   "not_contains": [
+    "did not converge"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -148.4133957644,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
    "id": "water_triplet_uhf_sto3g",
    "input": "tests/inputs/regression/open_shell/water_triplet_uhf_sto3g.hfinp",
    "tags": [
@@ -2213,7 +2336,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -75.8100241262,
+     "expected": -75.8097355638,
      "atol": 1e-09
     },
     {
@@ -2242,7 +2365,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -76.2897226108,
+     "expected": -76.289436536,
      "atol": 1e-09
     }
    ],
@@ -2269,7 +2392,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -76.3781217832,
+     "expected": -76.3779007886,
      "atol": 1e-09
     },
     {
@@ -2301,7 +2424,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -76.3017376982,
+     "expected": -76.3015412696,
      "atol": 1e-09
     },
     {
@@ -2333,7 +2456,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -75.837581496,
+     "expected": -75.8372242895,
      "atol": 1e-09
     },
     {
@@ -2644,7 +2767,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -75.2062610942,
+     "expected": -75.2062561072,
      "atol": 1e-06
     }
    ],

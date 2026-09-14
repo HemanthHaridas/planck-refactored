@@ -25,6 +25,7 @@
 #include "io/logging.h"
 #include "lookup/elements.h"
 #include "opt/geomopt.h"
+#include "populations/esp.h"
 #include "populations/multipole.h"
 #include "populations/population.h"
 #include "post_hf/casscf.h"
@@ -81,6 +82,221 @@ static void log_multipole_report(
     calculator._multipole = *moments;   // cache for the JSON results dump
     calculator._have_multipole = true;
     HartreeFock::Logger::multipole_moments(*moments);
+    HartreeFock::Logger::blank();
+}
+
+// Report the molecular electrostatic potential at the points named in
+// %begin_esp. This is the validation surface for the ESP machinery the
+// CHELPG/RESP fitting is built on (docs/ESP_CHARGES.md): the points come
+// from the input rather than a generator, so the printed values can be compared
+// point-for-point against an independent code.
+static void log_esp_report(const HartreeFock::Calculator &calculator,
+                           const std::vector<HartreeFock::ShellPair> &shell_pairs)
+{
+    if (!calculator._esp._enabled)
+        return;
+
+    // The grid is just another way to fill the point list, so everything below
+    // this block is identical for both modes -- there is no second code path.
+    std::vector<Eigen::Vector3d> generated;
+    if (calculator._esp.wants_grid())
+    {
+        auto grid =
+            (calculator._esp._grid == HartreeFock::OptionsESP::Grid::Connolly)
+                ? HartreeFock::SCF::connolly_grid(
+                      calculator._molecule,
+                      calculator._esp._shell_scales,
+                      calculator._esp._points_per_shell,
+                      calculator._esp._radius_scale)
+                : HartreeFock::SCF::chelpg_grid(
+                      calculator._molecule,
+                      calculator._esp._grid_spacing * ANGSTROM_TO_BOHR,
+                      calculator._esp._grid_headspace * ANGSTROM_TO_BOHR,
+                      calculator._esp._radius_scale);
+        if (!grid)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Warning,
+                "Electrostatic Potential :",
+                "Unavailable: " + grid.error());
+            HartreeFock::Logger::blank();
+            return;
+        }
+        generated = std::move(*grid);
+    }
+
+    const std::vector<Eigen::Vector3d> &points =
+        calculator._esp.wants_grid() ? generated : calculator._esp._points;
+
+    if (points.empty())
+        return;
+
+    // Total density: alpha + beta for an unrestricted reference, and for RHF the
+    // alpha channel already holds the full P_total (the same convention
+    // log_population_report uses just above).
+    const bool has_spin_channels =
+        calculator._scf._scf != HartreeFock::SCFType::RHF &&
+        calculator._info._scf.beta.density.rows() == calculator._info._scf.alpha.density.rows();
+    Eigen::MatrixXd total_density = calculator._info._scf.alpha.density;
+    if (has_spin_channels)
+        total_density += calculator._info._scf.beta.density;
+
+    auto phi = HartreeFock::SCF::electrostatic_potential(
+        calculator._molecule, shell_pairs, total_density, points);
+
+    if (!phi)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Warning,
+            "Electrostatic Potential :",
+            "Unavailable: " + phi.error());
+        HartreeFock::Logger::blank();
+        return;
+    }
+
+    // Grid mode: the point table would be thousands of rows and tells nobody
+    // anything, so report the fitted charges instead -- that is what the grid
+    // was generated for.
+    if (calculator._esp.wants_grid())
+    {
+        const double total_charge = static_cast<double>(calculator._molecule.charge);
+
+        // RESP is the same fit plus a restraint, so both routes produce the
+        // same ESPChargeFit and everything below is shared. Only the iteration
+        // count is RESP-specific, and it is reported because an unconverged
+        // restraint is otherwise invisible in the charges.
+        Eigen::VectorXd charges;
+        double rrms = 0.0;
+        double rms = 0.0;
+        int resp_iterations = 0;
+        bool resp_converged = true;
+
+        if (calculator._esp._resp)
+        {
+            HartreeFock::SCF::RESPOptions options;
+            options.strength = calculator._esp._resp_strength;
+            options.tightness = calculator._esp._resp_tightness;
+            options.exempt_hydrogen = calculator._esp._resp_exempt_hydrogen;
+            options.equivalence_groups = calculator._esp._resp_equivalence;
+
+            auto fit = HartreeFock::SCF::fit_resp_charges(
+                calculator._molecule, points, *phi, total_charge, options);
+            if (!fit)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning,
+                    "ESP Charges :",
+                    "Unavailable: " + fit.error());
+                HartreeFock::Logger::blank();
+                return;
+            }
+            charges = fit->fit.charges;
+            rrms = fit->fit.rrms;
+            rms = fit->fit.rms;
+            resp_iterations = fit->iterations;
+            resp_converged = fit->converged;
+        }
+        else
+        {
+            auto fit = HartreeFock::SCF::fit_esp_charges(
+                calculator._molecule, points, *phi, total_charge);
+            if (!fit)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning,
+                    "ESP Charges :",
+                    "Unavailable: " + fit.error());
+                HartreeFock::Logger::blank();
+                return;
+            }
+            charges = fit->charges;
+            rrms = fit->rrms;
+            rms = fit->rms;
+        }
+
+        const bool connolly =
+            (calculator._esp._grid == HartreeFock::OptionsESP::Grid::Connolly);
+        const char *grid_label =
+            calculator._esp._resp
+                ? (connolly ? "RESP Charges (Connolly) :" : "RESP Charges (CHELPG) :")
+                : (connolly ? "ESP Charges (Connolly) :" : "ESP Charges (CHELPG) :");
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, grid_label, "");
+
+        constexpr int charge_width = 62;
+        std::cout << std::string(charge_width, '-') << "\n"
+                  << std::setw(6) << std::right << "Atom"
+                  << std::setw(8) << std::right << "Elem"
+                  << std::setw(8) << std::right << "Z"
+                  << std::setw(24) << std::right << "Charge (e)" << "\n"
+                  << std::string(charge_width, '-') << "\n";
+
+        for (std::size_t a = 0; a < calculator._molecule.natoms; ++a)
+        {
+            const int Z = calculator._molecule.atomic_numbers(static_cast<Eigen::Index>(a));
+            const auto element = element_from_z(static_cast<std::uint64_t>(Z));
+            const std::string symbol = element ? std::string(element->symbol) : "?";
+            std::cout << std::setw(6) << std::right << (a + 1)
+                      << std::setw(8) << std::right << symbol
+                      << std::setw(8) << std::right << Z
+                      << std::setw(24) << std::right << std::fixed << std::setprecision(8)
+                      << charges(static_cast<Eigen::Index>(a)) << "\n";
+        }
+
+        std::cout << std::string(charge_width, '-') << "\n"
+                  << std::setw(22) << std::left << "  Total"
+                  << std::setw(24) << std::right << std::fixed << std::setprecision(8)
+                  << charges.sum() << "\n"
+                  << std::string(charge_width, '-') << "\n";
+
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "ESP Grid Points :", points.size());
+        std::cout << "  ESP Fit RRMS " << std::scientific << std::setprecision(6)
+                  << rrms << "\n";
+        std::cout << "  ESP Fit RMS  " << std::scientific << std::setprecision(6)
+                  << rms << "\n";
+
+        if (calculator._esp._resp)
+        {
+            std::cout << "  RESP Iterations " << resp_iterations << "\n";
+            if (!resp_converged)
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning,
+                    "RESP :",
+                    "the restraint iteration did not converge -- the charges "
+                    "below are the last iterate, not a converged fit");
+        }
+
+        HartreeFock::Logger::blank();
+        return;
+    }
+
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Electrostatic Potential :", "");
+
+    constexpr int line_width = 78;
+    std::cout << std::string(line_width, '-') << "\n"
+              << std::setw(6) << std::right << "Point"
+              << std::setw(14) << std::right << "X (Bohr)"
+              << std::setw(14) << std::right << "Y (Bohr)"
+              << std::setw(14) << std::right << "Z (Bohr)"
+              << std::setw(24) << std::right << "Potential (a.u.)" << "\n"
+              << std::string(line_width, '-') << "\n";
+
+    // `points`, not calculator._esp._points: the two coincide here because this
+    // branch is only reached when no grid was requested, but reading the option
+    // directly would silently print an empty table if the grid branch above
+    // ever stopped returning early.
+    for (std::size_t k = 0; k < points.size(); ++k)
+    {
+        const Eigen::Vector3d &p = points[k];
+        std::cout << std::setw(6) << std::right << (k + 1)
+                  << std::setw(14) << std::right << std::fixed << std::setprecision(6) << p[0]
+                  << std::setw(14) << std::right << std::fixed << std::setprecision(6) << p[1]
+                  << std::setw(14) << std::right << std::fixed << std::setprecision(6) << p[2]
+                  << std::setw(24) << std::right << std::fixed << std::setprecision(12)
+                  << (*phi)(static_cast<Eigen::Index>(k)) << "\n";
+    }
+
+    std::cout << std::string(line_width, '-') << "\n";
     HartreeFock::Logger::blank();
 }
 
@@ -597,6 +813,41 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             "singlepoint, gradient or geomopt, or disable RI (mp2_use_ri false) "
             "for " + map_enum(calculator._calculation) + ".");
         return EXIT_FAILURE;
+    }
+
+    // ── RI-JK SCF boundary ───────────────────────────────────────────────────────
+    // The RI J/K builders work on a plain AO density in the working basis. They
+    // have no spherical back-projection, no symmetry-orbit folding, and ROHF's
+    // Roothaan effective Fock is assembled after the (Ga, Gb) build that RI-JK
+    // replaces -- none of which is wired. Reject rather than silently returning a
+    // dense (or wrong) answer; each rejection names the specific reason.
+    if (calculator._scf._ri_jk)
+    {
+        const char *reason =
+            (calculator._scf._scf == HartreeFock::SCFType::ROHF)
+                ? "ROHF (the Roothaan effective Fock is not wired through the RI builders)"
+            : calculator._shells._spherical
+                ? "the spherical basis (the RI J/K builders have no spherical path)"
+            : calculator._use_full_symmetry
+                ? "full point-group symmetry (RI J/K does not fold symmetry orbits)"
+                : nullptr;
+        if (reason != nullptr)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Error, "RI-JK :",
+                std::string("RI-JK SCF (scf_ri_jk) does not support ") + reason +
+                    ". Use RHF or UHF in a Cartesian basis without full symmetry, "
+                    "or disable RI-JK (scf_ri_jk false).");
+            return EXIT_FAILURE;
+        }
+        if (calculator._mp2.ri_basis_name.empty())
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Error, "RI-JK :",
+                "RI-JK SCF (scf_ri_jk) needs an auxiliary basis: set mp2_ri_basis "
+                "(the same fitting basis RI-MP2 uses).");
+            return EXIT_FAILURE;
+        }
     }
 
     // ── Correlated frequencies are not implemented ───────────────────────────────
@@ -1282,6 +1533,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
 
     HartreeFock::Logger::converged_energy(calculator._total_energy, calculator._nuclear_repulsion);
     log_population_report(calculator);
+    log_esp_report(calculator, shellpairs);
     log_multipole_report(calculator, shellpairs);
 
     // ── FCIDUMP export ────────────────────────────────────────────────────────

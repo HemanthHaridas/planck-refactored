@@ -39,6 +39,10 @@ namespace DFT
         double int_acc;
         int radial_row_factor;
         bool reduce_light_atoms;
+        // PySCF grid level (gen_grid.Grids.level, 0-9) whose RAD_GRIDS row gives
+        // the radial point count. Coarse/Normal/Fine/UltraFine map to 1/3/5/7,
+        // putting Normal on PySCF's own default (level 3).
+        int pyscf_level;
     };
 
     struct MolecularGrid
@@ -132,15 +136,15 @@ namespace DFT
 
         inline std::expected<int, std::string> radial_point_count(int Z, const GridPreset &preset)
         {
-            const int scheme = effective_angular_scheme(Z, preset);
-            const auto int_acc = xc_intacc_for_scheme(scheme);
-            if (!int_acc)
-                return std::unexpected(int_acc.error());
-            const auto row = periodic_row(Z);
-            if (!row)
-                return std::unexpected(row.error());
-            const double count = (15.0 * (*int_acc) - 40.0) + static_cast<double>(preset.radial_row_factor * (*row));
-            return std::max(1, static_cast<int>(std::lround(count)));
+            // PySCF gen_grid._default_rad: a period x level lookup, not a
+            // heuristic. The old ORCA-style formula
+            //   (15*int_acc - 40) + radial_row_factor*row
+            // gave 44 points for a second-row atom at "ultrafine" where PySCF
+            // uses 75 at its default level, which is why Planck's grid did not
+            // converge (2.9e-5 Eh still moving at ultrafine vs PySCF's 1.4e-7).
+            if (Z <= 0)
+                return std::unexpected("radial_point_count: atomic number must be positive");
+            return pyscf_radial_count(Z, preset.pyscf_level);
         }
 
         // ORCA-like five-region pruning. The exact ORCA cutoffs are not published
@@ -179,17 +183,18 @@ namespace DFT
 
         inline double treutler_becke_adjustment(int Zi, int Zj)
         {
-            const double ri = treutler_radius(Zi);
-            const double rj = treutler_radius(Zj);
-            const double denom = ri + rj;
-            if (denom <= 0.0)
+            // PySCF radi.treutler_atomic_radii_adjust:
+            //   rad = sqrt(BRAGG[Z]),  a(i,j) = 1/4 * (rad_j/rad_i - rad_i/rad_j)
+            // clamped to [-0.5, 0.5]. Note this uses BRAGG radii, NOT the M4 xi
+            // -- they are different quantities and PySCF tables them separately.
+            // The previous form u/(u^2-1) with u = (ri-rj)/(ri+rj) on the xi
+            // table is a different function of different inputs.
+            const double ri = std::sqrt(bragg_radius(Zi));
+            const double rj = std::sqrt(bragg_radius(Zj));
+            if (ri <= 0.0 || rj <= 0.0)
                 return 0.0;
 
-            const double u = (ri - rj) / denom;
-            if (std::abs(u) < 1e-14)
-                return 0.0;
-
-            const double raw = u / (u * u - 1.0);
+            const double raw = 0.25 * (rj / ri - ri / rj);
             return std::clamp(raw, -0.5, 0.5);
         }
 
@@ -280,28 +285,28 @@ namespace DFT
             auto int_acc = detail::xc_intacc_for_scheme(3);
             if (!int_acc)
                 return std::unexpected(int_acc.error());
-            return GridPreset{level, 3, *int_acc, 5, true};
+            return GridPreset{level, 3, *int_acc, 5, true, 1};
         }
         case GridLevel::Normal:
         {
             auto int_acc = detail::xc_intacc_for_scheme(4);
             if (!int_acc)
                 return std::unexpected(int_acc.error());
-            return GridPreset{level, 4, *int_acc, 5, true};
+            return GridPreset{level, 4, *int_acc, 5, true, 3};
         }
         case GridLevel::Fine:
         {
             auto int_acc = detail::xc_intacc_for_scheme(5);
             if (!int_acc)
                 return std::unexpected(int_acc.error());
-            return GridPreset{level, 5, *int_acc, 5, true};
+            return GridPreset{level, 5, *int_acc, 5, true, 5};
         }
         case GridLevel::UltraFine:
         {
             auto int_acc = detail::xc_intacc_for_scheme(6);
             if (!int_acc)
                 return std::unexpected(int_acc.error());
-            return GridPreset{level, 6, *int_acc, 5, true};
+            return GridPreset{level, 6, *int_acc, 5, true, 7};
         }
         }
 
@@ -370,7 +375,7 @@ namespace DFT
         const auto shells = angular_shell_sizes(Z, level);
         if (!shells)
             return std::unexpected(shells.error());
-        const Eigen::MatrixXd radial = MakeTreutlerAhlrichsGrid(*nr, treutler_radius(Z));
+        const Eigen::MatrixXd radial = MakeTreutlerAhlrichsGrid(*nr, treutler_xi(Z));
 
         std::array<Eigen::MatrixXd, 5> angular_cache;
         for (std::size_t shell_index = 0; shell_index < angular_cache.size(); ++shell_index)

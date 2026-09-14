@@ -16,6 +16,7 @@
 #include "post_hf/casscf/aug-hessian.h"
 #include "post_hf/casscf/orbital.h"
 #include "post_hf/rhf_response.h"
+#include "post_hf/ri/ri_eri.h"
 #include "post_hf/uhf_response.h"
 #include "sad.h"
 #include "scf.h"
@@ -367,8 +368,36 @@ bool HartreeFock::SCF::is_converged(
     // so we don't declare convergence in a wrong basin (seen with SAD guess on
     // lone closed-shell atoms). diis_error is 0 when DIIS is inactive, so this
     // is a no-op for non-DIIS runs. See SAD isolated-atom bug.
+    //
+    // The threshold is NOT _tol_density. ΔP is a difference of two densities and
+    // reaches exactly 0; the DIIS residual is a product (FPS-SPF) of converged
+    // matrices, so it bottoms out in accumulated roundoff and, on a hard
+    // open-shell case, wanders in that noise instead of settling. Measured on
+    // the h2o2 cation (UHF/STO-3G): at iteration 430 ΔP_max is 2.1e-15 — machine
+    // precision — while diis_error still reads 6.9e-13 and keeps drifting over
+    // 1e-12..8e-10 for another thousand iterations. Comparing the two against one
+    // threshold therefore makes any _tol_density below the DIIS noise floor
+    // unreachable by construction: the run is converged and reports failure.
+    //
+    // kDiisStallFloor separates the two regimes. The stall this guard exists to
+    // catch sits at diis_error ~1.4e-03 (he_sad_ccpvdz, ΔP exactly 0 at iters
+    // 4-8), seven orders of magnitude above the roundoff noise, so the floor
+    // catches it with room to spare while never gating on noise. A caller asking
+    // for a _tol_density looser than the floor still gets the tighter of the two.
+    //
+    // The value is the default _tol_density, so this is INERT for a default run
+    // and only acts when a caller tightens _tol_density past the DIIS noise --
+    // exactly the regime that was unreachable. That is deliberate and load-
+    // bearing, not a coincidence: water_casscf_sa2_sto3g_sad_guess_uphill is a
+    // deliberately basin-sensitive SA-CASSCF canary over a shallow landscape,
+    // and a looser floor (1E-8 or 1E-9) stops its reference RHF at iteration 8
+    // instead of 12. Both are converged RHF to the same energy, but the extra
+    // iterations change the orbitals enough to move which basin the CASSCF
+    // reaches. Do not loosen this without re-running that case.
+    constexpr double kDiisStallFloor = 1E-10;
+    const double diis_tolerance = std::max(scf_options._tol_density, kDiisStallFloor);
     const bool diis_residual_ok =
-        metrics.diis_error <= 0.0 || metrics.diis_error < scf_options._tol_density;
+        metrics.diis_error <= 0.0 || metrics.diis_error < diis_tolerance;
     return iteration > 1 &&
            metrics.delta_energy < scf_options._tol_energy &&
            metrics.delta_density_rms < scf_options._tol_density &&
@@ -499,8 +528,18 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
          (calculator._scf._mode == HartreeFock::SCFMode::Auto &&
           nbasis <= static_cast<std::size_t>(calculator._scf._threshold)));
 
+    // RI-JK: prime the fitted cache once, here. build_ri_fock_rhf takes a const
+    // Calculator and so cannot build it lazily from inside the loop.
+    if (calculator._scf._ri_jk)
+    {
+        if (auto ready = HartreeFock::Correlation::RI::ensure_ri_3c_ready(calculator); !ready)
+            return std::unexpected("RI-JK SCF: " + ready.error());
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
+                                     "RI-JK: density-fitted Fock build (dense ERI tensor skipped)");
+    }
+
     std::vector<double> eri;
-    if (use_conventional)
+    if (use_conventional && !calculator._scf._ri_jk)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
                                      std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
@@ -581,7 +620,15 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
         // density is back-projected and the result forward-transformed (see
         // spherical_direct_fock). In Cartesian mode the builder is called directly.
         Eigen::MatrixXd G;
-        if (use_conventional)
+        if (calculator._scf._ri_jk)
+        {
+            // Density-fitted J - 1/2 K. Same quantity every branch below
+            // returns, to fitting accuracy (planck-ri-jk-equivalence gates it
+            // against the dense oracle), so it slots in ahead of the
+            // conventional/direct split rather than inside it.
+            G = HartreeFock::Correlation::RI::build_ri_fock_rhf(calculator, P);
+        }
+        else if (use_conventional)
         {
             G = HartreeFock::ObaraSaika::_compute_fock_rhf(eri, P, nbasis);
         }
@@ -1161,8 +1208,18 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
          (calculator._scf._mode == HartreeFock::SCFMode::Auto &&
           nbasis <= static_cast<std::size_t>(calculator._scf._threshold)));
 
+    // RI-JK: prime the fitted cache once, here. build_ri_fock_rhf takes a const
+    // Calculator and so cannot build it lazily from inside the loop.
+    if (calculator._scf._ri_jk)
+    {
+        if (auto ready = HartreeFock::Correlation::RI::ensure_ri_3c_ready(calculator); !ready)
+            return std::unexpected("RI-JK SCF: " + ready.error());
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
+                                     "RI-JK: density-fitted Fock build (dense ERI tensor skipped)");
+    }
+
     std::vector<double> eri;
-    if (use_conventional)
+    if (use_conventional && !calculator._scf._ri_jk)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "2e Integrals :",
                                      std::format("Building ERI tensor ({:.1f} MB)", nbasis * nbasis * nbasis * nbasis * 8.0 / 1e6));
@@ -1245,7 +1302,14 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         // Cartesian, with spherical back-projection/forward-transform per spin channel.
         Eigen::MatrixXd Ga;
         Eigen::MatrixXd Gb;
-        if (use_conventional)
+        if (calculator._scf._ri_jk)
+        {
+            // {J(Pa+Pb) - K(Pa), J(Pa+Pb) - K(Pb)} -- no closed-shell 1/2 here;
+            // see the prefactor note on build_ri_fock_uhf.
+            std::tie(Ga, Gb) =
+                HartreeFock::Correlation::RI::build_ri_fock_uhf(calculator, Pa, Pb);
+        }
+        else if (use_conventional)
         {
             std::tie(Ga, Gb) = HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis);
         }

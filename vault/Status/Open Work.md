@@ -1356,8 +1356,271 @@ were corrected in the same pass: `CCGEN_UNRESTRICTED_CC` (U0) and
 
 ## DFT and response-method gaps
 
-- Double-hybrid functionals remain single-point only; analytic gradients,
-  geometry optimization, frequencies, and TDDFT are still unimplemented there
+- **Double-hybrid analytic gradient: in flight behind `PLANCK_DFT_DH_GRADIENT`,
+  now at ~3.9e-4 Ha/Bohr from FD after the Eq. 33 XC term was identified and
+  wired.** Production still ships single-point only; geomopt / frequencies /
+  TDDFT untouched. Full record in
+  `docs/DOUBLE_HYBRID_GRADIENT_KS_VEFF_SCOPE.md`.
+
+  **What landed (N3.5.7.10):** the missing term is `XC_II` -- the `rho_P^(x)`
+  piece of `d/dR{Phi_XC}`, i.e. `sum_munu D_munu R^XC[rho_P^(x)]_munu` with the
+  RELAXED difference density -- at **coefficient 1**. Wired; the C1 H2O2
+  residual drops **1.240e-3 -> 3.887e-4 (69%)**, exactly as forecast.
+
+  **The finding that unblocked it, after FOUR reverted attempts
+  (N3.5.7.4, S4, S5, N3.5.7.8): water/C2v was the wrong fixture.** It leaves
+  only **3 independent gradient components** -- fewer than the number of
+  candidate terms -- so any three of them span the target exactly (an LSQ fit
+  returns residual **1.8e-18** with coefficients `-0.99 / 8.41 / 23011`). Every
+  conclusion drawn there from residual magnitude was noise, including a
+  confident "no single scale factor works, so XC_II cannot be it". On a C1
+  fixture (12 components, 6 independent) one scale factor does work. **Count a
+  fixture's independent components before trusting any term-by-term
+  conclusion.**
+
+  **Instruments now committed, all reusable:**
+  - exact FD targets for `*corr` itself -- `tests/pyscf/{water,h2o2,h2o2b}_b2plyp_dh_gradient_fd.py`
+    (FD of `E_KS_hyb + 0.27*E_MP2-on-KS`), with fixtures under
+    `tests/inputs/exploratory/dh_gradient/`
+  - `PLANCK_DFT_DH_XC_PARTS` / `_SCALE` component probe on
+    `compute_dh_xc_pt2_gradient`
+  - a **two-fixture consistency test**: a real term scores the same coefficient
+    on two independent geometries, a fit artifact does not. Validated on the
+    known answer (XC_II: 1.078 vs 1.015) and it killed three candidates.
+
+  **Open: the remaining ~31%** (3.887e-4 / 2.689e-4 on the two fixtures). It is
+  91% translation-free and 42% pure net force, and its net force is exactly
+  `-sum_A(XC_II)`. Eliminated by measurement so far: `XC_I` (cos -0.54),
+  `XC_III` (~1e-7), the unrelaxed density (cos 0.75 vs 0.93), the closed-shell
+  spin factor (Sec. II vs polarized `R^XC`, 1e-17), any rescaling of XC_II, the
+  `vhf_s1occ` KS swap (fit artifact -- scale -1.11 vs -0.59 across fixtures),
+  and **both moving-frame variants on XC_II, for a structural reason: XC_II's
+  integrand already carries the derivative index `(A,q)`, so a `dw/dR_{B,q'}`
+  factor gives a rank-2 object that cannot collapse onto a gradient index.**
+  The companion must come from a different scalar -- most likely the DH-specific
+  `W^PT2` / `Gamma^PT2` of the paper's Eqs. 42-46 rather than the HF-MP2 forms
+  Planck contracts, which is a rewrite of the surrounding assembly, not a
+  one-term addition.
+
+  **The orbital Hessian is ELIMINATED (2026-09-10), and it was the handoff's
+  named next step.** `build_ks_orbital_hessian_op` carried 3.6x leverage on the
+  final gradient and had never been matched against Eq. 41 term by term. It is
+  now gated to **machine precision** by a channel-resolved oracle needing **no
+  finite difference at all** (`PLANCK_DFT_DH_HESSIAN_AUDIT`): the non-XC
+  channels of the KS orbital Hessian ARE the RHF CPHF matrix's couplings, so
+  `build_rhf_cphf_matrix` -- an independent path (dense AO->MO ERI transform,
+  textbook `4(ai|jb) - (ab|ji) - (aj|bi)`) -- is an exact oracle for them.
+
+  **That sidesteps the whole blocker.** Three `kappa`-extraction attempts each
+  came up ~30x short because `U = C0^T S(R0) C(R+h)` mixes a genuine rotation
+  with an `O(dS)` metric mismatch. Comparing operator-to-operator at a FIXED
+  geometry needs no displaced `C` at all -- no metric contamination, no gauge
+  ambiguity, and no `U_ij = -1/2 S^(x)_ij` bookkeeping. **The Eqs. 19-21 route
+  the handoff prescribed is unnecessary; do not build it.**
+
+  Measured on all three fixtures: `diag` channel `0.000e+00` (and zero
+  off-diagonal contamination), `J + K` coupling **rel 3.6e-15 .. 3.8e-15**.
+  This gates JOINTLY the `(a,i)` packing, `kernel_scale = 2`, the
+  `dP = C_v x C_o^T + h.c.` trial density, and the hybrid `-0.5` K prefactor.
+  Non-vacuous -- three mutations (kernel scale `2 -> 1`; K prefactor
+  `-0.5 -> -1.0`; dropping the `h.c.` half of `dP`) caught at rel
+  `4.7e-01 / 1.1e+00 / 1.7e+01`, **14 orders above the clean value**.
+
+  **The XC channel -- `h_op`'s only channel with no CPHF counterpart -- is
+  BOUNDED OUT rather than verified, which is enough.** A scale control
+  (`PLANCK_DFT_DH_HESSIAN_XC_SCALE`, per trap #5: never on/off) measures its
+  ENTIRE contribution to the final gradient at **1.41e-4 / 1.18e-4**, i.e.
+  **0.36x / 0.44x the residual**. No error in it -- not even zeroing it
+  outright -- can close the gap. Scored as a candidate it gives cos
+  **-0.55 / -0.36** with a **52.5% scale spread**, the scorer's own
+  "INCONSISTENT -> fit artifact" verdict. Verified linear in the scale (second
+  difference 1.7e-05), so the bound extrapolates.
+
+  **ALL THREE of D4's remaining suspects are now eliminated by measurement
+  (steps 1-2, 2026-09-10), and that is a different situation from "keep
+  hunting".** D4 narrowed the residual to "an error inside one of the four
+  terms" and listed three candidates in order of suspicion. Each is now closed:
+
+  | suspect | how closed | number |
+  |---|---|---|
+  | #2 Z-vector coefficients | diag/J/K vs HF-CPHF, no FD | **3.7e-15** |
+  | #2 (XC channel, no oracle) | bounded: whole contribution vs residual | **0.36x / 0.44x** |
+  | #3 `Gamma^NS` / Eq. 47 | contraction invariant `tr = 4*E_corr` | **4.000000000000** |
+  | #1 `W` KS-vs-HF, overlap site | pre-existing `vhf_s1occ` bound | **>=72% left** |
+  | #1 `W` KS-vs-HF, derivative site | implied `kx` on two geometries | **0.984 / 0.990 vs HF 1.0** |
+
+  **Two of these were previously believed settled on unsound grounds, which is
+  why they were worth re-doing.** H2.2 verified the AMPLITUDES elementwise and
+  wrote "and with them `Gamma^NS`" -- but `Gamma` is the backtransformation OF
+  the amplitudes, so a correct `t2` with a wrong backtransformation still gives
+  a wrong `Gamma`; D4 separately flagged Eq. 47's `(1+delta_ij)` as never
+  numerically checked, and those two statements cannot both be true. The
+  `vhf1` derivative site had never been probed at all -- every `vhf_s1occ`
+  measurement touched the overlap term only.
+
+  **The `vhf1` bound is the strongest single constraint in the arc**: at
+  **36.8x / 47.6x leverage**, a weight wrong by a few percent would move the
+  gradient by more than the entire residual, so `kx = 1.0` is pinned tightly
+  rather than merely fitted.
+
+  **SUPERSEDED 2026-09-10 by a direct per-half measurement. The residual is in
+  `*corr`, it is 1.24e-3 not 3.9e-4, and it has TWO scopes:**
+  `docs/DH_CORR_GRADIENT_DEFECT_SCOPE.md` and
+  `docs/DFT_GRID_CONVERGENCE_SCOPE.md`.
+
+  Everything below was measured against the **total** gradient. The KS and
+  `*corr` halves partially **cancel** there, so the total understates the real
+  defect by **3.2x**. Measuring them separately
+  (`PLANCK_DEBUG_DH_CHANNELS`) against Planck's own FD:
+
+  | half | `max|analytic - FD|` | magnitude | share |
+  |---|---|---|---|
+  | KS | **1.02e-6** | 1.27e-1 | 0% |
+  | `*corr` | **1.24e-3** | 1.88e-2 | **100%** |
+
+  So Planck's KS gradient is correct and `*corr` is **6.63%** wrong against the
+  FD of the energy it differentiates. The findings below that rest on an exact
+  identity or a scale-free ratio survive; those that rest on a **magnitude vs
+  the total** must be re-derived against `corr_FD`. The scope doc carries the
+  per-finding table.
+
+  **A separate, general DFT defect was found in the same pass: Planck's grid
+  does not converge.** At ultrafine (49824 pts) the energy still moves 2.9e-5
+  Eh and the gradient 9.3e-5 Ha/Bohr, where PySCF at a *smaller* 47784 points
+  is converged to 1.4e-7 — **680x tighter**. Root cause isolated: Planck uses
+  **44 radial points** for a second-row atom where ~75 are needed
+  (`radial_row_factor` is fixed at 5 for all four levels), while its angular
+  table is comparable to PySCF's. Confirmed by pinning the angular grid at 590
+  and varying only nr: at 44 the energy still moves 3.9e-5, at 60 it is 1.1e-6,
+  at 75 it is 1.8e-8. **This affects every DFT energy, gradient, geomopt and
+  frequency in the code, not just the double hybrid.**
+
+  **The two are independent** — `*corr` moves only 6.8e-8 between fine and
+  ultrafine against its 1.24e-3 defect (18000x apart) — so either can be done
+  first.
+
+  ---
+
+  **(a) and (b) as originally framed were checked, and both were falsified
+  (2026-09-10) — but note the caveat above: those were total-gradient
+  measurements.**
+
+  **(a) -- a combination error rather than a term error. Negative, three ways.**
+  Per-term translational invariance is clean to ~1e-14 for every physical
+  accumulator, so no net-force-class mis-combination exists. A new
+  `PLANCK_DFT_DH_ZMULT` control separates the **Z-routed** part of the gradient
+  from the direct part -- something `c_pt2` scaling structurally cannot do,
+  since it scales the whole PT2 block uniformly and is blind to a
+  mis-combination of two terms of the *same* amplitude order -- and gives an
+  implied z scale of **0.940 / 0.970** against a correct 1.0. Per-term
+  direction scoring, calibrated against a **random-direction negative control**
+  (400 draws: median |cos| 0.225, median spread 40.4%), shows the terms at
+  |cos| 0.42-0.69 but with spreads of 45-56%, i.e. at the random median; none
+  qualifies under the two-geometry rule.
+
+  **A least-squares fit of the residual in the span of all term directions was
+  computed and DISCARDED as vacuous** -- rank 9 over a 9-dimensional
+  translation-free space fits anything at 1e-16. Worth recording because it is
+  the fixture trap in a NEW guise: not too few independent components, but too
+  many free directions. **Check the rank against the dimension before reading
+  any span-fit.**
+
+  **(b) -- the DH-specific forms differing from HF-MP2. Negative, and this one
+  is settled rather than bounded.** It had a specific untested mechanism:
+  `ks_veff` is applied at **one of three sites**, and N3.5.5 tried the other
+  two and reverted on "FD got worse" -- but tested only the **linear** `f_xc`
+  response, while its own comment records that PySCF's `get_veff` there is the
+  full **nonlinear** `V_xc[dm]`. The form PySCF actually uses had never been
+  tried. Now measured on both C1 fixtures:
+
+  | config | fixture 1 | fixture 2 |
+  |---|---|---|
+  | HF at both (default) | 3.887e-4 **1.00x** | 2.689e-4 **1.00x** |
+  | linear, site 2 | 5.393e-4 1.39x | 3.829e-4 1.42x |
+  | nonlinear, site 1 | 9.131e-3 **23.5x** | 4.084e-3 **15.2x** |
+  | nonlinear, site 2 | 1.693e-2 **43.6x** | 2.234e-2 **83.1x** |
+
+  Every KS-veff variant is worse, the nonlinear one by **15-83x**. The HF
+  default is right at all three sites. **So the Eqs. 42-46 rewrite this entry
+  previously called "the remaining work" is not supported by measurement** --
+  its most specific mechanism makes the answer dramatically worse.
+
+  Incidental: site 1 (`vhf_s1occ`) with the linear form is **byte-identical**
+  to the default, so it has no effect at all -- N3.5.5's measured
+  1.88e-4 -> 2.86e-4 came from site 2 alone, not from the pair it attributed
+  it to.
+
+  **What is left is (c): the paper's equations, as Planck implements them, do
+  not reproduce their own finite difference -- and every part of Planck's
+  implementation is now verified or tightly bounded.** That is a statement
+  about the equations, not the code, and **the ORCA cross-check is the only
+  thing that can settle it.** It needs a licence. Say so rather than
+  substituting a weaker test; do not open another candidate hunt without new
+  information, because the three-suspect list and both structural hypotheses
+  are now exhausted by measurement.
+
+  **Consequence: every component of the Z-vector path is now accounted for.**
+  H2.3 had established only that `A` is well-formed (symmetric, SPD, exactly
+  solved); it is now established that `A` is RIGHT. Combined with the
+  already-ruled-out list above, **the "error inside an existing term" framing
+  has no candidate term left inside the Z-vector**. The remaining suspect is
+  the one the section already names -- the DH-specific `W^PT2` / `Gamma^PT2` of
+  Eqs. 42-46 versus the HF-MP2 forms Planck contracts -- which is a rewrite of
+  the surrounding assembly, not a one-term addition.
+
+  **The stop condition is REJECTED (2026-09-10, user decision). Do not ship
+  this at 3.9e-4.** An earlier revision of this entry recommended taking the
+  handoff's section-7 exit -- run H1.1, and if stiff coordinates agree to
+  <0.05 pm, ship behind the flag with the residual as a documented bound. That
+  recommendation was wrong and is withdrawn.
+
+  **The argument that kills it is the tree's own convention, not the method's
+  literature accuracy.** Surveying every gradient tolerance recorded in
+  `Completion.md`, there are exactly two populations:
+
+  | gradient | gated at |
+  |---|---|
+  | RHF / UHF / ROHF, Cartesian and spherical | **1e-7 .. 7.8e-8 Ha/Bohr** |
+  | RMP2 OS-vs-HGP cross-engine | **1e-7 Ha/Bohr** |
+  | **double-hybrid PT2** | **3.9e-4 Ha/Bohr** |
+
+  This one is the sole outlier, **~4000x looser than the standard every other
+  gradient in the codebase meets for the same quantity**. Section 7's framing
+  compared the residual against B2-PLYP's 0.3 pm literature MAD, which is the
+  wrong yardstick: that measures whether the *functional* is accurate against
+  experiment, not whether *this implementation* solves the equations it claims
+  to. A code whose SCF converges to 1e-10 and whose gradients are PySCF-gated
+  at 1e-7 does not get to hold one gradient to 1e-4 because the underlying
+  approximation is loose anyway. **Those are independent error budgets and
+  conflating them is how a real defect gets shipped as a tolerance.**
+
+  Also, "0.041 pm on a stiff stretch" is a *favourable projection* of the
+  residual: the same 3.9e-4 is **0.686 pm on a torsion**, and soft coordinates
+  are exactly where a double hybrid gets used. The bound is not uniformly
+  small; it is small in the direction that was measured.
+
+  **Consequence: the Eqs. 42-46 rewrite is no longer "a large change motivated
+  by a small discrepancy" -- it is the remaining work.** Section 3's audit
+  eliminated the Z-vector path entirely, so the residual is now localized to
+  the PT2 assembly by exclusion rather than by guess: Planck contracts the
+  HF-MP2 `W` / `Gamma` forms where the double hybrid needs the DH-specific
+  `W^PT2` / `Gamma^PT2`. That is the one hypothesis left standing, and it is
+  structural, not a missing prefactor.
+
+  **The ORCA cross-check remains the only decisive test of "the paper's
+  equations are incomplete", and it needs a licence.** Say so rather than
+  substituting a weaker test -- but note it is now a *tiebreaker*, not a
+  blocker: the Eqs. 42-46 derivation can be done and FD-verified in Python
+  first, exactly as D6/D7/D8 were, without waiting on it.
+
+  Also settled along the way: **Planck's PT2 assembly is sound** -- every
+  accumulator is translationally invariant to 1e-14, and `*corr` reproduces the
+  exact FD `0.27*dE_corr/dR`, so the whole residual lives in the XC term.
+  And **PySCF's `grad/mp2.py` is NOT a valid reference for this** -- its `fvind`
+  uses the nonlinear `mp._scf.get_veff` on a small non-idempotent trial density,
+  giving a singular CPHF matrix (cond 1.6e18); patched to the linear response it
+  still lands 22x worse than Planck.
+- Double-hybrid geometry optimization, frequencies, and TDDFT are unimplemented
 - For range-separated functionals, `ImaginaryFollow` and `LinearResponse`
   (TDDFT) remain gated / unvalidated even though gradient-driven workflows are
   now landed

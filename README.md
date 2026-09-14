@@ -21,6 +21,7 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 - **Three integral engines** — Obara-Saika (`engine os`) for lightly-contracted bases; Head-Gordon-Pople (`engine hgp`) for routine contracted bases through 6-31G(d,p) and similar valence-double/triple-zeta sets, where the HRR is factored out of the primitive contraction loop and yields the lowest per-quartet cost in the low-to-medium angular-momentum regime; Rys quadrature (`engine rys`) for high angular momentum; automatic engine selection per shell quartet (`engine auto`)
 - **Electric multipole moments** — dipole and quadrupole moment analysis after SCF convergence for both `hartree-fock` and `planck-dft`
 - **Mulliken population analysis** — atomic gross populations, net charges, and (for UHF/ROHF) spin populations; printed when `print_populations true` or verbosity is `verbose`/`debug`
+- **ESP-derived atomic charges (CHELPG and RESP)** — atomic charges fitted to reproduce the molecule's own electrostatic potential on a grid outside the van der Waals surface, via `%begin_esp`. Unlike Mulliken/Löwdin charges, which partition the density by basis-function ownership and are therefore basis-set dependent, these reproduce the observable a force field actually needs. Two grids: the CHELPG cubic lattice (Breneman-Wiberg) and rotationally-invariant Connolly/Merz-Kollman spherical shells. The total charge is imposed as a Lagrange multiplier, so it is satisfied exactly rather than approximately. Optional Bayly hyperbolic restraint (RESP) with equivalent-atom constraints. The section also evaluates the potential at explicitly listed points, cross-validated against PySCF's `int1e_grids` to ~5e-9
 - **Conventional and Direct SCF** — ERI tensor stored once (conventional) or recomputed per iteration (direct); auto-selection based on system size
 - **DIIS** — convergence acceleration with optional automatic subspace restart
 - **SOSCF** — second-order (augmented-Hessian Newton) RHF convergence acceleration. Runs as a transient window (default 3 iterations) that hands back to DIIS to finish, matching the ORCA-style DIIS/SOSCF handoff, though a full unbounded SOSCF run converges to the same energy on its own. The switch from DIIS to SOSCF can be triggered at a fixed iteration or by the DIIS error norm dropping below a threshold. Off by default
@@ -322,6 +323,7 @@ Input files use an INI-style block format with the extension `.hfinp`. Each sect
 %end_constraints
 
 %begin_bsse            (optional; runs counterpoise / BSSE correction)
+%begin_esp             (optional; ESP/RESP atomic charges or potential at points)
     ...
 %end_bsse
 ```
@@ -575,6 +577,58 @@ O
 H  1  0.9572
 H  1  0.9572  2  104.52
 ```
+
+### Section: `%begin_esp` (optional)
+
+<p align="justify">
+Electrostatic-potential analysis. Either evaluates the potential at explicitly
+listed points, or generates a sampling grid and fits atomic charges that
+reproduce the potential on it. Mulliken and Löwdin charges partition the density
+by which basis function owns it, which makes them basis-set dependent; ESP
+charges instead reproduce the field the molecule actually presents to its
+surroundings, which is what a force field needs.
+</p>
+
+<p align="justify">
+<code>grid</code> and explicit <code>point</code> lines are mutually exclusive
+and the parser rejects inputs that give both, rather than silently mixing a
+diagnostic point list into a charge fit.
+</p>
+
+| Keyword | Type | Values | Default | Description |
+|---|---|---|---|---|
+| `grid` | enum | `chelpg`, `connolly`/`mk`, `none` | `none` | Sampling grid. `chelpg` is the Breneman-Wiberg cubic lattice; `connolly` is nested Merz-Kollman spherical shells. **Prefer `connolly`**: the cubic lattice is not rotationally symmetric, so its charges depend on the molecule's orientation in the lab frame by 3-7% on an unfittable field, and that does not converge away with finer spacing. |
+| `point` | 3 floats | any coordinate | — | One evaluation point, repeatable. Reports the potential rather than fitting charges. |
+| `units` | enum | `bohr`/`au`, `angstrom`/`ang` | `bohr` | Units of the `point` coordinates. Must appear before any `point` line. |
+| `grid_spacing` | float | > 0 | `0.3` | CHELPG lattice spacing in Angstrom |
+| `grid_headspace` | float | > 0 | `2.8` | CHELPG sampling depth in Angstrom beyond the van der Waals surface |
+| `shell_scales` | floats | > 0 | `1.4 1.6 1.8 2.0` | Connolly shell radii, as multiples of the van der Waals radius |
+| `points_per_shell` | int | > 0 | `200` | Fibonacci-sphere points per atom per Connolly shell |
+| `radius_scale` | float | > 0 | `1.0` | Multiplies the tabulated van der Waals radius for both grids, mirroring `cavity_scale` in `%begin_pcm` |
+| `resp` | bool | `.true.`, `.false.` | `.false.` | Add the Bayly hyperbolic restraint to the fit |
+| `resp_strength` | float | ≥ 0 | `0.0005` | Restraint strength *a* in atomic units (Bayly stage 1) |
+| `resp_tightness` | float | > 0 | `0.1` | Restraint width *b* in atomic units |
+| `resp_exempt_hydrogen` | bool | `.true.`, `.false.` | `.true.` | Exempt hydrogens from the restraint. The restraint exists to tame buried heavy atoms that the potential barely constrains; hydrogens sit on the surface where the data is good. |
+| `equivalent` | ints | 1-based atom indices | — | Force the listed atoms to share one charge, repeatable. These are hard constraints in the same Lagrange block as the total charge, so grouped atoms agree exactly rather than approximately. |
+
+```
+%begin_esp
+    grid             connolly
+    shell_scales     1.4 1.6 1.8 2.0
+    points_per_shell 200
+    resp             .true.
+    resp_strength    0.0005
+    equivalent       2 3
+%end_esp
+```
+
+<p align="justify">
+Buried atoms fit poorly and that is not a defect: an atom with little grid in
+its neighbourhood has almost no leverage on the potential, so its charge is
+poorly determined and the unrestrained fit is free to give it a large value
+cancelled by its neighbours. Those charges reproduce the ESP but transfer badly.
+Removing that freedom is exactly what the RESP restraint is for.
+</p>
 
 ### Section: `%begin_bsse` (optional)
 
@@ -1542,6 +1596,7 @@ The program prints a structured log to standard output. Key sections:
 - **Dipole Moment** — printed automatically after a converged SCF/KS solution; includes the electronic, nuclear, and total `X`, `Y`, `Z` components in atomic units, plus the total vector norm in atomic units and Debye
 - **Quadrupole Moment** — printed automatically after the dipole block; includes electronic, nuclear, and total components of the traceless Cartesian tensor (`XX`, `XY`, `XZ`, `YY`, `YZ`, `ZZ`) in atomic units
 - **Mulliken Population Analysis** — printed when `print_populations true` or verbosity is `verbose`/`debug`; shows AO gross populations, net atomic charges, and spin populations (UHF/ROHF)
+- **ESP / RESP Charges** — printed when `%begin_esp` requests a grid; one row per atom with the fitted charge in e, the exact total, the grid point count, and the fit RRMS/RMS. RESP runs additionally report the restraint iteration count and warn if it did not converge. With explicit `point` lines instead of a grid, prints the potential in atomic units at each point
 - **RMP2 Natural Orbitals** — occupation numbers and natural orbital coefficients printed after single-point RMP2
 - **Nuclear Gradient** — printed when `calculation gradient` or `calculation geomopt`; one row per atom showing ∂E/∂x, ∂E/∂y, ∂E/∂z in Ha/Bohr, followed by max and RMS norms. Supported analytic gradients include RHF, UHF, ROHF, RMP2, and UMP2.
 - **IC System** — when `opt_coords internal`, logs the count of stretches, bends, and torsions in the redundant GIC set

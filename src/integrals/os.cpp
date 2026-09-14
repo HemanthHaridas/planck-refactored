@@ -1181,6 +1181,66 @@ static Eigen::MatrixXd compute_external_charge_attraction_impl(
     return V;
 }
 
+// Electronic ESP at a list of points, fused: the density contraction happens
+// inside the shell-pair sweep so no nbasis^2 matrix is ever materialized. See
+// os.h for why this is not _compute_external_charge_attraction in a loop.
+//
+// Parallelized over POINTS, not pairs. Each thread then owns a disjoint set of
+// output entries and there is no cross-thread reduction at all -- the same
+// shape as the DFT J/K builds (bitwise thread-count-invariant), rather than the
+// grid-reduction shape that has caused determinism jitter here before. The
+// inner accumulation order over pairs is identical in every thread.
+Eigen::VectorXd HartreeFock::ObaraSaika::_compute_electronic_potential(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &density,
+    const std::vector<Eigen::Vector3d> &points)
+{
+    const std::size_t npoints = points.size();
+    const std::size_t npairs = shell_pairs.size();
+    Eigen::VectorXd phi = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(npoints));
+
+#pragma omp parallel for schedule(static)
+    for (std::size_t k = 0; k < npoints; k++)
+    {
+        const Eigen::Vector3d &r = points[k];
+        double acc = 0.0;
+
+        for (std::size_t p = 0; p < npairs; p++)
+        {
+            const auto &sp = shell_pairs[p];
+            const std::size_t ii = sp.A._index;
+            const std::size_t jj = sp.B._index;
+
+            const int lAx = sp.A._cartesian[0], lAy = sp.A._cartesian[1], lAz = sp.A._cartesian[2];
+            const int lBx = sp.B._cartesian[0], lBy = sp.B._cartesian[1], lBz = sp.B._cartesian[2];
+            const double ABx = sp.R[0], ABy = sp.R[1], ABz = sp.R[2];
+
+            double v_point = 0.0;
+            for (const auto &pp : sp.primitive_pairs)
+                v_point += _os_nuclear_primitive(
+                               pp,
+                               lAx, lAy, lAz,
+                               lBx, lBy, lBz,
+                               ABx, ABy, ABz,
+                               r) *
+                           pp.coeff_product;
+
+            // build_shellpairs emits the upper triangle only (jj >= ii), while
+            // the AO matrix this would have built is symmetric, so an
+            // off-diagonal pair stands for two elements of the full Frobenius
+            // product P : V and the diagonal for one.
+            const double weight = (ii == jj) ? 1.0 : 2.0;
+            acc += weight * density(static_cast<Eigen::Index>(ii),
+                                    static_cast<Eigen::Index>(jj)) *
+                   v_point;
+        }
+
+        phi(static_cast<Eigen::Index>(k)) = acc;
+    }
+
+    return phi;
+}
+
 // Contract the per-primitive (a0|c0; m=0) blocks across all primitive pairs
 // into `scratch.a0c0_data`, mirroring HGP's `hgp_contract_a0c0`. The caller's
 // `scratch` is (re)sized and the accumulator zeroed by resize_for_quartet, so a
