@@ -2,11 +2,14 @@
 
 #include "base/sphere.h"
 #include "integrals/os.h"
+#include "io/logging.h"
 #include "lookup/elements.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <iomanip>
+#include <iostream>
 #include <string>
 
 std::expected<Eigen::VectorXd, std::string>
@@ -65,6 +68,51 @@ HartreeFock::SCF::electrostatic_potential(
         return std::unexpected("ESP: electronic potential length mismatch");
 
     phi -= phi_el;
+    return phi;
+}
+
+std::expected<Eigen::VectorXd, std::string>
+HartreeFock::SCF::reaction_field_potential(
+    const std::vector<Eigen::Vector3d> &points,
+    const std::vector<Solvation::PCMSurfacePoint> &surface_points,
+    const Eigen::VectorXd &charges)
+{
+    if (static_cast<Eigen::Index>(surface_points.size()) != charges.size())
+        return std::unexpected(
+            "ESP reaction field: " + std::to_string(surface_points.size()) +
+            " tesserae but " + std::to_string(charges.size()) +
+            " apparent charges -- the cavity and the PCM solve disagree");
+
+    if (points.empty())
+        return Eigen::VectorXd();
+
+    Eigen::VectorXd phi = Eigen::VectorXd::Zero(static_cast<Eigen::Index>(points.size()));
+
+    for (std::size_t k = 0; k < points.size(); ++k)
+    {
+        double acc = 0.0;
+        for (std::size_t i = 0; i < surface_points.size(); ++i)
+        {
+            const double distance = (points[k] - surface_points[i].position).norm();
+
+            // An ESP point sitting on a tessera diverges the same way one
+            // sitting on a nucleus does, and for the same reason. Reject it
+            // rather than returning an enormous finite number: the sampling
+            // shells and the cavity are separately constructed surfaces with
+            // different radii conventions, so a collision means the two were
+            // configured to overlap, which is worth saying out loud.
+            if (distance < 1e-12)
+                return std::unexpected(
+                    "ESP reaction field: evaluation point coincides with PCM "
+                    "tessera " + std::to_string(i) + " -- the potential "
+                    "diverges there (the ESP shells and the PCM cavity "
+                    "overlap; check radius_scale against cavity_scale)");
+
+            acc += charges(static_cast<Eigen::Index>(i)) / distance;
+        }
+        phi(static_cast<Eigen::Index>(k)) = acc;
+    }
+
     return phi;
 }
 
@@ -545,4 +593,296 @@ HartreeFock::SCF::fit_resp_charges(
     result.fit.rrms = (phi_rms > 0.0) ? (result.fit.rms / phi_rms) : result.fit.rms;
 
     return result;
+}
+
+void HartreeFock::SCF::log_esp_report(
+    const HartreeFock::Calculator &calculator,
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const std::vector<HartreeFock::Solvation::PCMSurfacePoint> *surface_points,
+    const Eigen::VectorXd *apparent_charges)
+{
+    if (!calculator._esp._enabled)
+        return;
+
+    // Under PCM the fitted density IS solvent-polarized (the reaction field
+    // enters the Fock every SCF iteration), and there are then TWO legitimate
+    // potentials to fit, differing by the reaction field's own contribution
+    // sum_i q_i / |r - s_i|:
+    //
+    //   solute (default) -- nuc + el only. What force-field charge derivation
+    //     wants: the AMBER/RESP convention fits the polarized solute WITHOUT
+    //     the continuum, because an MD run supplies the solvent explicitly and
+    //     would otherwise count it twice.
+    //   total in-solvent  -- nuc + el + rxn. What another code prints, and what
+    //     continuum interaction energies need.
+    //
+    // Neither was identified before, so a user comparing against another code
+    // could not tell which one they had. `reaction_field_label` below is that
+    // identification, and it is printed in BOTH cases.
+    const bool solvated =
+        calculator._solvation._model != HartreeFock::SolvationModel::None;
+    const bool want_reaction_field =
+        solvated && calculator._esp._include_reaction_field;
+
+    if (calculator._esp._include_reaction_field && !solvated)
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Warning,
+            "ESP Reaction Field :",
+            "'include_reaction_field' has no effect without a solvation "
+            "model; there is no reaction field to include");
+
+    if (want_reaction_field && !(surface_points && apparent_charges &&
+                                 apparent_charges->size() > 0))
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Warning,
+            "ESP Reaction Field :",
+            "PCM is active but its apparent charges are unavailable here, so "
+            "the reaction field cannot be added -- reporting the SOLUTE "
+            "potential instead");
+
+    // Reflects what was actually assembled, not what was asked for: the caller
+    // degrades to the solute potential on any PCM failure, and the label has to
+    // follow it or it would state the opposite of the truth.
+    const bool has_reaction_field =
+        want_reaction_field && surface_points && apparent_charges &&
+        apparent_charges->size() > 0;
+    const char *reaction_field_label =
+        !solvated ? nullptr
+                  : (has_reaction_field
+                         ? "TOTAL in-solvent potential (nuclear + electronic + "
+                           "PCM reaction field)"
+                         : "SOLUTE potential (nuclear + electronic) of the "
+                           "solvent-polarized density; the PCM reaction field "
+                           "is excluded. This is the force-field convention, "
+                           "not the total in-solvent potential");
+
+    if (solvated)
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Warning,
+            "ESP + PCM :",
+            std::string("the fit is to the ") + reaction_field_label);
+
+    // The grid is just another way to fill the point list, so everything below
+    // this block is identical for both modes -- there is no second code path.
+    std::vector<Eigen::Vector3d> generated;
+    if (calculator._esp.wants_grid())
+    {
+        auto grid =
+            (calculator._esp._grid == HartreeFock::OptionsESP::Grid::Connolly)
+                ? HartreeFock::SCF::connolly_grid(
+                      calculator._molecule,
+                      calculator._esp._shell_scales,
+                      calculator._esp._points_per_shell,
+                      calculator._esp._radius_scale)
+                : HartreeFock::SCF::chelpg_grid(
+                      calculator._molecule,
+                      calculator._esp._grid_spacing * ANGSTROM_TO_BOHR,
+                      calculator._esp._grid_headspace * ANGSTROM_TO_BOHR,
+                      calculator._esp._radius_scale);
+        if (!grid)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Warning,
+                "Electrostatic Potential :",
+                "Unavailable: " + grid.error());
+            HartreeFock::Logger::blank();
+            return;
+        }
+        generated = std::move(*grid);
+    }
+
+    const std::vector<Eigen::Vector3d> &points =
+        calculator._esp.wants_grid() ? generated : calculator._esp._points;
+
+    if (points.empty())
+        return;
+
+    // Total density: alpha + beta for an unrestricted reference, and for RHF the
+    // alpha channel already holds the full P_total (the same convention
+    // log_population_report uses just above).
+    const bool has_spin_channels =
+        calculator._scf._scf != HartreeFock::SCFType::RHF &&
+        calculator._info._scf.beta.density.rows() == calculator._info._scf.alpha.density.rows();
+    Eigen::MatrixXd total_density = calculator._info._scf.alpha.density;
+    if (has_spin_channels)
+        total_density += calculator._info._scf.beta.density;
+
+    auto phi = HartreeFock::SCF::electrostatic_potential(
+        calculator._molecule, shell_pairs, total_density, points);
+
+    if (!phi)
+    {
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Warning,
+            "Electrostatic Potential :",
+            "Unavailable: " + phi.error());
+        HartreeFock::Logger::blank();
+        return;
+    }
+
+    // The two quantities differ by exactly this term, added here rather than
+    // inside electrostatic_potential so the sum is visible at the call site.
+    if (has_reaction_field)
+    {
+        auto phi_rxn = HartreeFock::SCF::reaction_field_potential(
+            points, *surface_points, *apparent_charges);
+        if (!phi_rxn)
+        {
+            // A tessera collision is a misconfiguration, not a reason to
+            // silently print the other quantity under the label promising
+            // this one -- the label was already emitted above.
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Error,
+                "ESP Reaction Field :",
+                phi_rxn.error());
+            HartreeFock::Logger::blank();
+            return;
+        }
+        *phi += *phi_rxn;
+    }
+
+    // Grid mode: the point table would be thousands of rows and tells nobody
+    // anything, so report the fitted charges instead -- that is what the grid
+    // was generated for.
+    if (calculator._esp.wants_grid())
+    {
+        const double total_charge = static_cast<double>(calculator._molecule.charge);
+
+        // RESP is the same fit plus a restraint, so both routes produce the
+        // same ESPChargeFit and everything below is shared. Only the iteration
+        // count is RESP-specific, and it is reported because an unconverged
+        // restraint is otherwise invisible in the charges.
+        Eigen::VectorXd charges;
+        double rrms = 0.0;
+        double rms = 0.0;
+        int resp_iterations = 0;
+        bool resp_converged = true;
+
+        if (calculator._esp._resp)
+        {
+            HartreeFock::SCF::RESPOptions options;
+            options.strength = calculator._esp._resp_strength;
+            options.tightness = calculator._esp._resp_tightness;
+            options.exempt_hydrogen = calculator._esp._resp_exempt_hydrogen;
+            options.equivalence_groups = calculator._esp._resp_equivalence;
+
+            auto fit = HartreeFock::SCF::fit_resp_charges(
+                calculator._molecule, points, *phi, total_charge, options);
+            if (!fit)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning,
+                    "ESP Charges :",
+                    "Unavailable: " + fit.error());
+                HartreeFock::Logger::blank();
+                return;
+            }
+            charges = fit->fit.charges;
+            rrms = fit->fit.rrms;
+            rms = fit->fit.rms;
+            resp_iterations = fit->iterations;
+            resp_converged = fit->converged;
+        }
+        else
+        {
+            auto fit = HartreeFock::SCF::fit_esp_charges(
+                calculator._molecule, points, *phi, total_charge);
+            if (!fit)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning,
+                    "ESP Charges :",
+                    "Unavailable: " + fit.error());
+                HartreeFock::Logger::blank();
+                return;
+            }
+            charges = fit->charges;
+            rrms = fit->rrms;
+            rms = fit->rms;
+        }
+
+        const bool connolly =
+            (calculator._esp._grid == HartreeFock::OptionsESP::Grid::Connolly);
+        const char *grid_label =
+            calculator._esp._resp
+                ? (connolly ? "RESP Charges (Connolly) :" : "RESP Charges (CHELPG) :")
+                : (connolly ? "ESP Charges (Connolly) :" : "ESP Charges (CHELPG) :");
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, grid_label, "");
+
+        constexpr int charge_width = 62;
+        std::cout << std::string(charge_width, '-') << "\n"
+                  << std::setw(6) << std::right << "Atom"
+                  << std::setw(8) << std::right << "Elem"
+                  << std::setw(8) << std::right << "Z"
+                  << std::setw(24) << std::right << "Charge (e)" << "\n"
+                  << std::string(charge_width, '-') << "\n";
+
+        for (std::size_t a = 0; a < calculator._molecule.natoms; ++a)
+        {
+            const int Z = calculator._molecule.atomic_numbers(static_cast<Eigen::Index>(a));
+            const auto element = element_from_z(static_cast<std::uint64_t>(Z));
+            const std::string symbol = element ? std::string(element->symbol) : "?";
+            std::cout << std::setw(6) << std::right << (a + 1)
+                      << std::setw(8) << std::right << symbol
+                      << std::setw(8) << std::right << Z
+                      << std::setw(24) << std::right << std::fixed << std::setprecision(8)
+                      << charges(static_cast<Eigen::Index>(a)) << "\n";
+        }
+
+        std::cout << std::string(charge_width, '-') << "\n"
+                  << std::setw(22) << std::left << "  Total"
+                  << std::setw(24) << std::right << std::fixed << std::setprecision(8)
+                  << charges.sum() << "\n"
+                  << std::string(charge_width, '-') << "\n";
+
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "ESP Grid Points :", points.size());
+        std::cout << "  ESP Fit RRMS " << std::scientific << std::setprecision(6)
+                  << rrms << "\n";
+        std::cout << "  ESP Fit RMS  " << std::scientific << std::setprecision(6)
+                  << rms << "\n";
+
+        if (calculator._esp._resp)
+        {
+            std::cout << "  RESP Iterations " << resp_iterations << "\n";
+            if (!resp_converged)
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning,
+                    "RESP :",
+                    "the restraint iteration did not converge -- the charges "
+                    "below are the last iterate, not a converged fit");
+        }
+
+        HartreeFock::Logger::blank();
+        return;
+    }
+
+    HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Electrostatic Potential :", "");
+
+    constexpr int line_width = 78;
+    std::cout << std::string(line_width, '-') << "\n"
+              << std::setw(6) << std::right << "Point"
+              << std::setw(14) << std::right << "X (Bohr)"
+              << std::setw(14) << std::right << "Y (Bohr)"
+              << std::setw(14) << std::right << "Z (Bohr)"
+              << std::setw(24) << std::right << "Potential (a.u.)" << "\n"
+              << std::string(line_width, '-') << "\n";
+
+    // `points`, not calculator._esp._points: the two coincide here because this
+    // branch is only reached when no grid was requested, but reading the option
+    // directly would silently print an empty table if the grid branch above
+    // ever stopped returning early.
+    for (std::size_t k = 0; k < points.size(); ++k)
+    {
+        const Eigen::Vector3d &p = points[k];
+        std::cout << std::setw(6) << std::right << (k + 1)
+                  << std::setw(14) << std::right << std::fixed << std::setprecision(6) << p[0]
+                  << std::setw(14) << std::right << std::fixed << std::setprecision(6) << p[1]
+                  << std::setw(14) << std::right << std::fixed << std::setprecision(6) << p[2]
+                  << std::setw(24) << std::right << std::fixed << std::setprecision(12)
+                  << (*phi)(static_cast<Eigen::Index>(k)) << "\n";
+    }
+
+    std::cout << std::string(line_width, '-') << "\n";
+    HartreeFock::Logger::blank();
 }

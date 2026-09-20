@@ -585,6 +585,122 @@ namespace
     // with it. The same fixture is run through BOTH grids here, so the
     // comparison is the point, not an incidental detail -- if the CHELPG arm
     // ever stops failing, this gate has stopped measuring the grid.
+    // b5 gate for SCF::reaction_field_potential -- the PCM reaction field term
+    // phi_rxn(r) = sum_i q_i / |r - s_i| that `include_reaction_field` adds to
+    // the fitted potential.
+    //
+    // Pure arithmetic against a hand-summed oracle: no SCF, no PCM solve, no
+    // cavity. The tesserae and charges are made up, because the identity under
+    // test is the sum itself, not where the charges came from -- and inventing
+    // them keeps this gate in the minimal planck-esp-points target, which links
+    // neither SCF nor solvation sources.
+    void check_reaction_field_potential()
+    {
+        std::vector<HartreeFock::Solvation::PCMSurfacePoint> tesserae(4);
+        // Deliberately off-axis and asymmetric: a symmetric layer would make a
+        // sign or index error in the sum cancel against itself.
+        tesserae[0].position = Eigen::Vector3d(1.7, -0.4, 0.9);
+        tesserae[1].position = Eigen::Vector3d(-2.1, 1.3, -0.6);
+        tesserae[2].position = Eigen::Vector3d(0.3, 2.4, 1.8);
+        tesserae[3].position = Eigen::Vector3d(-0.8, -1.9, -2.2);
+
+        // Mixed signs, summing to a small non-zero net -- a net-zero layer
+        // would hide an error that scales the whole vector.
+        Eigen::VectorXd q(4);
+        q << 0.031, -0.047, 0.019, -0.011;
+
+        const std::vector<Eigen::Vector3d> points = {
+            {3.0, 1.0, -2.0}, {-4.5, 0.2, 3.1}, {0.0, 0.0, 6.0}, {25.0, -25.0, 25.0}};
+
+        auto phi = HartreeFock::SCF::reaction_field_potential(points, tesserae, q);
+        if (!phi)
+        {
+            fail("reaction_field_potential: " + phi.error());
+            return;
+        }
+
+        double worst = 0.0;
+        for (std::size_t k = 0; k < points.size(); ++k)
+        {
+            double oracle = 0.0;
+            for (std::size_t i = 0; i < tesserae.size(); ++i)
+                oracle += q(static_cast<Eigen::Index>(i)) /
+                          (points[k] - tesserae[i].position).norm();
+            worst = std::max(worst,
+                             std::abs((*phi)(static_cast<Eigen::Index>(k)) - oracle));
+        }
+        expect(worst < 1e-14,
+               "reaction_field_potential disagrees with the hand-summed "
+               "Coulomb oracle by " + std::to_string(worst));
+
+        // Far field: the layer's net charge is what survives at distance, so
+        // phi -> sum(q)/r. This is what pins the SCALE and SIGN of the whole
+        // sum; the oracle above shares its own arithmetic and would not catch a
+        // convention error reproduced in both.
+        //
+        // The tolerance is DERIVED, not chosen. The leading correction is the
+        // layer's dipole, so the relative error decays as |d| / (|sum q| * r),
+        // and this layer's dipole is large against its deliberately small net
+        // charge -- at r = 4000 that is ~4e-3, so demanding 1e-9 would fail on
+        // correct code. Assert the monopole limit is approached at the rate the
+        // multipole expansion predicts, and confirm it by doubling r: a genuine
+        // sign or scale error does not halve when the distance doubles.
+        const double dipole =
+            (q(0) * tesserae[0].position + q(1) * tesserae[1].position +
+             q(2) * tesserae[2].position + q(3) * tesserae[3].position)
+                .norm();
+
+        double previous_error = 0.0;
+        for (int step = 0; step < 2; ++step)
+        {
+            const double r = 4000.0 * (step + 1);
+            const Eigen::Vector3d far(0.0, 0.0, r);
+            auto phi_far =
+                HartreeFock::SCF::reaction_field_potential({far}, tesserae, q);
+            if (!phi_far)
+            {
+                fail("reaction_field_potential (far): " + phi_far.error());
+                return;
+            }
+
+            const double expected = q.sum() / r;
+            const double relative =
+                std::abs((*phi_far)(0) - expected) / std::abs(expected);
+            const double bound = 3.0 * dipole / (std::abs(q.sum()) * r);
+
+            expect(relative < bound,
+                   "reaction_field_potential far field deviates from sum(q)/r by " +
+                       std::to_string(relative) + ", beyond the dipole bound " +
+                       std::to_string(bound));
+
+            // 1/r decay of the residual is the part a wrong sign or a wrong
+            // scale factor cannot fake.
+            if (step == 1)
+                expect(std::abs(previous_error / relative - 2.0) < 0.05,
+                       "far-field residual does not decay as 1/r -- ratio " +
+                           std::to_string(previous_error / relative));
+            previous_error = relative;
+        }
+
+        // A length mismatch between the cavity and the PCM solve must be
+        // rejected, not silently truncated to the shorter of the two.
+        Eigen::VectorXd short_q(3);
+        short_q << 0.1, 0.2, 0.3;
+        expect(!HartreeFock::SCF::reaction_field_potential(points, tesserae, short_q),
+               "reaction_field_potential accepted 4 tesserae against 3 charges");
+
+        // A point sitting on a tessera diverges; returning a huge finite number
+        // would look like a plausible potential.
+        expect(!HartreeFock::SCF::reaction_field_potential(
+                   {tesserae[2].position}, tesserae, q),
+               "reaction_field_potential accepted a point on a tessera");
+
+        // Empty point list is not an error -- the reporter returns early on it.
+        auto empty = HartreeFock::SCF::reaction_field_potential({}, tesserae, q);
+        expect(empty && empty->size() == 0,
+               "reaction_field_potential did not return an empty vector for no points");
+    }
+
     void check_connolly_is_rotation_invariant()
     {
         HartreeFock::Calculator calc = make_water("sto-3g");
@@ -899,6 +1015,9 @@ int main()
 
     std::cout << "[8] RESP restraint: reduction, trade, equivalence\n";
     check_resp_restraint();
+
+    std::cout << "[9] PCM reaction-field potential vs hand-summed oracle\n";
+    check_reaction_field_potential();
 
     std::cout << "[4] error paths\n";
     check_error_paths();

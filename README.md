@@ -611,6 +611,7 @@ diagnostic point list into a charge fit.
 | `resp_tightness` | float | > 0 | `0.1` | Restraint width *b* in atomic units |
 | `resp_exempt_hydrogen` | bool | `.true.`, `.false.` | `.true.` | Exempt hydrogens from the restraint. The restraint exists to tame buried heavy atoms that the potential barely constrains; hydrogens sit on the surface where the data is good. |
 | `equivalent` | ints | 1-based atom indices | — | Force the listed atoms to share one charge, repeatable. These are hard constraints in the same Lagrange block as the total charge, so grouped atoms agree exactly rather than approximately. |
+| `include_reaction_field` | bool | `.true.`, `.false.` | `.false.` | Under `%begin_pcm`, add the PCM reaction field `sum_i q_i/\|r - s_i\|` to the fitted potential, giving the total in-solvent potential instead of the solute one. No effect without a solvation model. See below. |
 
 ```
 %begin_esp
@@ -629,6 +630,33 @@ its neighbourhood has almost no leverage on the potential, so its charge is
 poorly determined and the unrestrained fit is free to give it a large value
 cancelled by its neighbours. Those charges reproduce the ESP but transfer badly.
 Removing that freedom is exactly what the RESP restraint is for.
+</p>
+
+<p align="justify">
+The section works in both binaries — <code>hartree-fock</code> and
+<code>planck-dft</code> share one reporter, so an RKS/UKS run reports ESP and
+RESP charges exactly as an RHF/UHF one does.
+</p>
+
+<p align="justify">
+<b>Under PCM, two different potentials exist and the report says which it
+printed.</b> The fitted density is solvent-polarized — the reaction field enters
+the Fock every SCF iteration — but the potential itself is the gas-phase form
+<code>phi = nuc - el</code>, excluding the reaction field's own contribution.
+That is the right quantity for deriving force-field charges, because the
+AMBER/RESP convention fits the polarized solute <i>without</i> the continuum:
+an MD run supplies the solvent explicitly and would otherwise count it twice.
+It is not the total in-solvent potential another code would print, which is what
+<code>include_reaction_field</code> selects.
+</p>
+
+<p align="justify">
+<b>Expect near-zero charges from <code>include_reaction_field</code>, and a fit
+RRMS near 1.0.</b> That is the screening, not a defect: a conductor-like
+continuum cancels most of the solute's field outside the cavity, so there is
+very little potential left for an atomic-charge model to reproduce. Use the
+default for force-field parameters; use this one to compare a potential against
+another code.
 </p>
 
 ### Section: `%begin_bsse` (optional)
@@ -1597,7 +1625,7 @@ The program prints a structured log to standard output. Key sections:
 - **Dipole Moment** — printed automatically after a converged SCF/KS solution; includes the electronic, nuclear, and total `X`, `Y`, `Z` components in atomic units, plus the total vector norm in atomic units and Debye
 - **Quadrupole Moment** — printed automatically after the dipole block; includes electronic, nuclear, and total components of the traceless Cartesian tensor (`XX`, `XY`, `XZ`, `YY`, `YZ`, `ZZ`) in atomic units
 - **Mulliken Population Analysis** — printed when `print_populations true` or verbosity is `verbose`/`debug`; shows AO gross populations, net atomic charges, and spin populations (UHF/ROHF)
-- **ESP / RESP Charges** — printed when `%begin_esp` requests a grid; one row per atom with the fitted charge in e, the exact total, the grid point count, and the fit RRMS/RMS. RESP runs additionally report the restraint iteration count and warn if it did not converge. With explicit `point` lines instead of a grid, prints the potential in atomic units at each point
+- **ESP / RESP Charges** — printed when `%begin_esp` requests a grid; one row per atom with the fitted charge in e, the exact total, the grid point count, and the fit RRMS/RMS. RESP runs additionally report the restraint iteration count and warn if it did not converge. With explicit `point` lines instead of a grid, prints the potential in atomic units at each point. Emitted by both binaries. Under `%begin_pcm` a warning states that the fit is to the solute potential with the reaction field excluded, so the printed quantity is never ambiguous
 - **RMP2 Natural Orbitals** — occupation numbers and natural orbital coefficients printed after single-point RMP2
 - **Nuclear Gradient** — printed when `calculation gradient` or `calculation geomopt`; one row per atom showing ∂E/∂x, ∂E/∂y, ∂E/∂z in Ha/Bohr, followed by max and RMS norms. Supported analytic gradients include RHF, UHF, ROHF, RMP2, and UMP2.
 - **IC System** — when `opt_coords internal`, logs the count of stretches, bends, and torsions in the redundant GIC set

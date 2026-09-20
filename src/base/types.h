@@ -602,6 +602,21 @@ namespace HartreeFock
         // parser converts from the 1-based indices the input uses.
         std::vector<std::vector<std::size_t>> _resp_equivalence;
 
+        // Under PCM, add the reaction field sum_i q_i / |r - s_i| to the fitted
+        // potential. Two different, both-legitimate quantities:
+        //
+        //   false (default) -- the SOLUTE potential of the solvent-polarized
+        //     density. This is what force-field charge derivation wants: the
+        //     AMBER/RESP convention fits the polarized solute WITHOUT the
+        //     continuum, because the MD solvent supplies it explicitly.
+        //   true -- the TOTAL in-solvent potential, for comparing against
+        //     another code's in-solvent numbers or continuum interaction
+        //     energies.
+        //
+        // Default false preserves both the existing numbers and the more common
+        // use. Ignored without PCM, where there is no reaction field to add.
+        bool _include_reaction_field = false;
+
         bool wants_grid() const noexcept { return _grid != Grid::None; }
     };
 

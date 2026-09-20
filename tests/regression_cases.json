@@ -106,6 +106,105 @@
    ]
   },
   {
+   "id": "water_rks_b3lyp_esp_sto3g",
+   "_note": "docs/ESP_CHARGES.md section 6 -- ESP/RESP reporting in the DFT driver. %begin_esp already PARSED under planck-dft (both binaries share IO::parse_input) but the report existed only in the HF driver, so a DFT run with an ESP block silently printed nothing. log_esp_report now lives in src/populations/esp.cpp with both drivers calling it. Connolly rather than CHELPG deliberately: chelpg_grid has a measured 3-7% orientation dependence that does not converge with spacing (esp.h), which would make an 8-decimal gate flaky for a reason unrelated to DFT. Charges verified reproducible run-to-run and across OMP_NUM_THREADS=1/4/8 at the full printed precision, so the DFT grid's known ~1e-10 XC reduction jitter does not reach them. Same geometry and grid settings as water_rhf_resp_sto3g: B3LYP gives O -0.70025568 against RHF's -0.708804 unrestrained on the identical grid, a more polarized water, which is the expected direction.",
+   "input": "tests/inputs/regression/dft/water_rks_b3lyp_esp_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "ESP Charges (Connolly) :",
+    "1       O       8             -0.70025568",
+    "2       H       1              0.35011239",
+    "3       H       1              0.35014328",
+    "ESP Grid Points :             1012"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.2893278688,
+     "atol": 1e-07
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_pcm_esp_sto3g",
+   "_note": "docs/ESP_CHARGES.md section 6 -- ESP under PCM is now LABELLED. The fitted density is solvent-polarized (the reaction field enters the Fock each SCF iteration) but the potential is the gas-phase form phi = nuc - el, excluding the reaction field's own sum_i q_i/|r - s_i|. Both quantities are legitimate -- the force-field (AMBER/RESP) convention wants exactly this one, since the MD solvent supplies the continuum -- and neither was identified before, so a user comparing against another code's in-solvent potential could not tell which they had. Sanity: PCM polarizes water further than gas phase, O -0.73345627 against -0.708804 unrestrained on the identical grid, the expected direction. The charges are pinned so that when item (b) adds the reaction field behind a keyword, this case shows the DEFAULT did not move -- which is the check that would catch the term being wired in unconditionally.",
+   "input": "tests/inputs/regression/hf/water_rhf_pcm_esp_sto3g.hfinp",
+   "tags": [
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "ESP + PCM :",
+    "the PCM reaction field is excluded",
+    "ESP Charges (Connolly) :",
+    "1       O       8             -0.73345627",
+    "2       H       1              0.36665044",
+    "3       H       1              0.36680583"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -74.9515732413,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_pcm_esp_rxnfield_sto3g",
+   "_note": "docs/ESP_CHARGES.md section 6 -- 'include_reaction_field' selects the TOTAL in-solvent potential (nuclear + electronic + PCM reaction field) instead of the default solute potential. The charges MUST differ from water_rhf_pcm_esp_sto3g, the same input without the keyword: -0.00420202 against -0.73345627. While the flag was parsed but inert the two cases were byte-identical, so a regression to that state shows up here as the two agreeing again. THE NEAR-ZERO CHARGES AND RRMS ~1.0 ARE THE PHYSICS: a conductor-like continuum screens the solute field outside the cavity, so the total potential there nearly vanishes and an atomic-charge model fits almost none of it -- which is exactly why the default is the solute potential and why AMBER/RESP fits that one. Confirmed at explicit points rather than inferred: at 60 bohr the solute potential is +5.2e-6 and the total -3.5e-5, so the reaction field opposes and overshoots the bare multipole. The RRMS is asserted BECAUSE it is bad -- if this fit ever looks good, screening broke.",
+   "input": "tests/inputs/regression/hf/water_rhf_pcm_esp_rxnfield_sto3g.hfinp",
+   "tags": [
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "ESP + PCM :",
+    "the fit is to the TOTAL in-solvent potential",
+    "1       O       8             -0.00420202",
+    "2       H       1              0.00321526",
+    "3       H       1              0.00098677",
+    "ESP Fit RRMS 9.970094e-01"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -74.9515732413,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rks_b3lyp_pcm_esp_rxnfield_sto3g",
+   "_note": "docs/ESP_CHARGES.md section 6, DFT side. A DISTINCT code path from water_rhf_pcm_esp_rxnfield_sto3g, not a duplicate: `prepared` (shell pairs + PCM state) is local to the DFT driver's inner run() and already dead when the report runs, so log_esp_report_dft rebuilds BOTH, cavity included (one AO matrix per tessera). The HF driver still holds its state at the call site and rebuilds nothing, so only this case exercises the rebuild. Cost measured rather than assumed, since the scope named it as the one thing that would justify restructuring run()'s return type: 0.3473 s -> 0.3621 s mean of 5, i.e. ~15 ms (~4%) for rebuild + PCM solve + phi_rxn -- the simple rebuild stands. Near-zero charges and RRMS ~1.0 are the screening physics; see the HF case for the explicit-point evidence.",
+   "input": "tests/inputs/regression/dft/water_rks_b3lyp_pcm_esp_rxnfield_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "the fit is to the TOTAL in-solvent potential",
+    "1       O       8             -0.00394916",
+    "2       H       1              0.00308501",
+    "3       H       1              0.00086415"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.2948977855,
+     "atol": 1e-07
+    }
+   ]
+  },
+  {
    "id": "water_rhf_connolly_sto3g",
    "_note": "docs/ESP_CHARGES.md -- Connolly/Merz-Kollman sampling shells. Unlike the CHELPG cubic lattice these are rotationally invariant -- the direction set is built in a molecule-derived frame, so rotating the molecule rotates the sample set with it. Measured drift under a rigid motion: 6.9e-15 here against 5.8e-02 for chelpg on the identical fixture (planck-esp-points check 7, which runs both arms and requires the chelpg arm to keep failing so the comparison cannot go vacuous). Charges asserted to 6 decimals; the total is exact because the constraint is a Lagrange multiplier, not a penalty. The values here were re-captured after the molecular-frame fix: an earlier revision of this case asserted 1016 points and O -0.709218, taken from a binary built BEFORE that fix, and was registered without rebuilding hartree-fock first. It passed its own mutation test because a mutation test proves an assertion is sensitive, not that its value is current.",
    "input": "tests/inputs/regression/scf/water_rhf_connolly_sto3g.hfinp",

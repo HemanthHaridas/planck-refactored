@@ -9,6 +9,10 @@
 
 #include "base/types.h"
 #include "integrals/shellpair.h"
+// PCMSurfacePoint only -- reaction_field_potential reads tessera positions and
+// calls no PCM function, so this is a type dependency, not a link one. That is
+// what keeps the minimal planck-esp-points target (no SOLVATION_SRC) linking.
+#include "solvation/pcm.h"
 
 namespace HartreeFock::SCF
 {
@@ -154,6 +158,56 @@ namespace HartreeFock::SCF
         const Eigen::VectorXd &potential,
         double total_charge,
         const RESPOptions &options = {});
+
+    // Reaction-field potential of a PCM apparent-charge layer, in atomic units:
+    //
+    //   phi_rxn(r) = sum_i q_i / |r - s_i|
+    //
+    // Points and surface positions are both in Bohr, in the molecule._standard
+    // frame. `charges` is PCMResult::apparent_charges and `surface_points` the
+    // matching PCMState::surface_points, so the two must be the same length.
+    //
+    // A free function rather than a flag inside electrostatic_potential: the
+    // solute potential and the total in-solvent potential are two different
+    // quantities (see log_esp_report), and keeping the sum visible at the call
+    // site says which one is being assembled instead of hiding it behind a
+    // bool. It also leaves electrostatic_potential's doc comment above true.
+    //
+    // Cheap and PCM-agnostic -- pure Coulomb arithmetic over the tesserae, no
+    // integrals -- so it needs neither a PCMState nor a density.
+    std::expected<Eigen::VectorXd, std::string> reaction_field_potential(
+        const std::vector<Eigen::Vector3d> &points,
+        const std::vector<Solvation::PCMSurfacePoint> &surface_points,
+        const Eigen::VectorXd &charges);
+
+    // Print the %begin_esp report: either the potential at the explicit points,
+    // or -- in grid mode -- the ESP/RESP charges fitted on the generated grid.
+    // No-op when %begin_esp is absent.
+    //
+    // This lives here rather than in a driver because both drivers need it and
+    // it is driver-agnostic: the only thing either one supplies is the shell
+    // pairs. `hartree-fock` passes the ones it already has; `planck-dft`
+    // rebuilds them post-SCF, the same way its multipole report does.
+    //
+    // `density` is read from calculator._info._scf, where both drivers leave
+    // the converged density (RHF/RKS keep the full P_total in the alpha
+    // channel; unrestricted fills both).
+    //
+    // To honour `include_reaction_field`, pass the converged PCM apparent
+    // charges and their tesserae; omit them (the default) and the report prints
+    // the solute potential and labels it as such. Never fails for want of them.
+    //
+    // The charges are passed in rather than solved for here so that this file
+    // calls no PCM function: `planck-esp-points` links esp.cpp with neither SCF
+    // nor solvation sources by design, and calling evaluate_pcm_reaction_field
+    // from here breaks that target's link. Each driver already knows how to get
+    // a PCMState -- `hartree-fock` still holds one at the call site,
+    // `planck-dft` rebuilds it -- so the retrieval belongs there.
+    void log_esp_report(
+        const Calculator &calculator,
+        const std::vector<ShellPair> &shell_pairs,
+        const std::vector<Solvation::PCMSurfacePoint> *surface_points = nullptr,
+        const Eigen::VectorXd *apparent_charges = nullptr);
 } // namespace HartreeFock::SCF
 
 #endif // HF_POPULATIONS_ESP_H

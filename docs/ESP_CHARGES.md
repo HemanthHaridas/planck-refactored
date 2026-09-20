@@ -246,14 +246,85 @@ contains the change rather than trusting a timestamp.
 
 ## 6. Scope
 
-Landed for the HF path: potential at explicit points, both grids, the
+Landed for **both** binaries: potential at explicit points, both grids, the
 constrained fit, the RESP restraint, and the `%begin_esp` wiring.
+
+`log_esp_report` lives in `src/populations/esp.cpp`, not in either driver. That
+is the shared-reporter option this section previously listed as the cost of
+wiring ESP into `planck-dft`; it was taken rather than duplicating ~200 lines,
+because the only driver-specific part is where the shell pairs come from —
+`hartree-fock` passes the ones it already holds, `planck-dft` rebuilds them
+post-SCF exactly as its multipole report does. Gated by
+`water_rks_b3lyp_esp_sto3g` (RKS/B3LYP Connolly), which is verified to fail if
+the DFT call site is removed.
+
+Connolly rather than CHELPG in that gate deliberately: section 3's measured
+3-7% orientation dependence would make a tight charge gate flaky for a reason
+unrelated to DFT.
+
+### Under PCM, two different potentials
+
+The fitted density is solvent-polarized — the reaction field enters the Fock
+every SCF iteration — but the potential is the gas-phase form `phi = nuc - el`,
+with the reaction field's own `sum_i q_i / |r - s_i|` excluded. Both quantities
+are legitimate and the report now says which one it printed:
+
+| | `phi` fitted | Wanted by |
+|---|---|---|
+| default | nuc + el, solvated density | force-field charge derivation — AMBER/RESP fits the polarized solute *without* the continuum, since the MD solvent supplies it |
+| `include_reaction_field true` | nuc + el + rxn | comparing against another code's in-solvent potential; continuum interaction energies |
+
+The term itself is `SCF::reaction_field_potential`, a free function the caller
+adds to `phi` rather than a flag inside `electrostatic_potential`: the sum stays
+visible at the call site, and that function's doc comment stays true. It also
+keeps `esp.cpp` calling no PCM function, which is what lets the minimal
+`planck-esp-points` target — no SCF, no solvation sources — keep linking. The
+apparent charges are therefore passed *in*; each driver fetches them, since
+`evaluate_pcm_reaction_field` is a pure function of `(state, density)` and needs
+nothing cached during the SCF.
+
+**The near-zero charges this produces are the physics, not a defect.** A
+conductor-like continuum screens the solute's field outside the cavity, so the
+total potential there very nearly vanishes, and fitting *atomic charges* to a
+near-zero field gives near-zero charges with `RRMS ~ 1.0` — a fit explaining
+almost none of what little is left. Measured at explicit points on water/STO-3G:
+at 60 bohr the solute potential is `+5.2e-6` while the total is `-3.5e-5`, so
+the reaction field opposes and overshoots the bare solute multipole. That is
+exactly why the default is the solute potential, and why AMBER/RESP fits that
+one: these charges are correct for what they are and useless as force-field
+parameters.
+
+Gated by `water_rhf_pcm_esp_rxnfield_sto3g` and
+`water_rks_b3lyp_pcm_esp_rxnfield_sto3g` (the DFT path is distinct — it rebuilds
+the cavity, measured at ~15 ms), against `water_rhf_pcm_esp_sto3g` which pins
+the unchanged default. `planck-esp-points` check 9 gates the term itself against
+a hand-summed oracle plus a derived far-field bound, mutation-verified against
+three broken implementations.
+
+One caveat on the gates: the default is protected by **two** independent guards —
+the caller only computes the charges when the flag is set, and the reporter
+re-checks it — so no single-point mutation breaks the default, and removing
+either alone still passes. The gate catches the failure that matters (the term
+applied unconditionally) but is not evidence that either guard alone is
+load-bearing.
 
 Not done, deliberately:
 
 - **RESP stage-2 refitting** (methyl/methylene). It exists for AMBER
   compatibility specifically, and `equivalent` already covers the general case
   of forcing atoms to share a charge.
-- **ESP in `planck-dft`.** It has no population analysis at all — one
-  `populations/multipole.h` include and nothing else — so wiring ESP there means
-  either duplicating the reporter or extracting a shared one.
+- **A rotational gate on total-ESP charges.** Any ESP value carrying the
+  reaction field inherits the cavity's lab-frame pinning (~6.0e-5 Eh rotational
+  spread, `docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md`). The Connolly grid is
+  rotationally symmetric by construction, so with `grid connolly` the cavity is
+  the *only* remaining orientation dependence — but it is real, and a tight gate
+  would fail for a reason this work does not own. That ceiling is inherited, not
+  fixable here.
+- **Reconciling the ESP shells with the PCM cavity.** They are separately
+  constructed surfaces with different radii conventions; nothing here needs them
+  aligned, and an ESP point landing on a tessera is rejected with a message
+  naming both knobs rather than silently returning a huge number.
+- **PCM + ESP for post-HF densities.** PCM is single-point SCF only, so no
+  correlated density reaches ESP anyway.
+- **ESP in the JSON results dump.** ESP is print-only; `results_json.h` has no
+  ESP field. Small and separate, and nothing has asked for it.

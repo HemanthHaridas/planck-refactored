@@ -20,6 +20,7 @@
 #include <iomanip>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <sstream>
 #include <string>
 
@@ -35,6 +36,7 @@
 #include "io/logging.h"
 #include "io/results_json.h"
 #include "opt/geomopt.h"
+#include "populations/esp.h"
 #include "populations/multipole.h"
 #include "post_hf/integrals.h"
 #include "post_hf/mp2.h"
@@ -5095,6 +5097,73 @@ namespace DFT::Driver
             HartreeFock::Logger::blank();
         }
 
+        // ESP/RESP report. The reporter itself is shared with hartree-fock
+        // (src/populations/esp.cpp); what is driver-specific is obtaining its
+        // two inputs, because `prepared` -- which held both the shell pairs and
+        // the PCM state -- is local to the inner run() and already dead here.
+        //
+        // Both are therefore rebuilt, the shell pairs exactly as
+        // log_multipole_report does. Rebuilding the cavity is the more
+        // expensive of the two (it precomputes one AO matrix per tessera), but
+        // it happens once, post-SCF, and only when %begin_esp actually asks for
+        // the reaction field.
+        //
+        // Measured rather than assumed, because the scope for this work named
+        // the cost as the one thing that would justify restructuring run() to
+        // carry `prepared` out instead: water/STO-3G B3LYP with 24 points/atom
+        // goes 0.3473 s -> 0.3621 s (mean of 5), so the rebuild plus the PCM
+        // solve plus phi_rxn together cost ~15 ms, about 4% of the run. That is
+        // milliseconds against a converged DFT calculation, so the simple
+        // rebuild stands. Worth re-measuring before trusting it on a much
+        // larger cavity, where the per-tessera AO matrices dominate.
+        void log_esp_report_dft(HartreeFock::Calculator &calculator)
+        {
+            if (!calculator._esp._enabled)
+                return;
+
+            auto shell_pairs = build_shellpairs(calculator._shells);
+
+            std::optional<HartreeFock::Solvation::PCMState> pcm_state;
+            std::optional<Eigen::VectorXd> apparent_charges;
+            if (calculator._solvation._model != HartreeFock::SolvationModel::None &&
+                calculator._esp._include_reaction_field)
+            {
+                auto state =
+                    HartreeFock::Solvation::build_pcm_state(calculator, shell_pairs);
+                if (!state)
+                    // Degrade to the solute potential rather than failing the
+                    // run; log_esp_report labels whichever it actually printed.
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Warning, "ESP Reaction Field :",
+                        "PCM cavity rebuild failed: " + state.error());
+                else if (state->enabled())
+                {
+                    pcm_state = std::move(*state);
+
+                    Eigen::MatrixXd pcm_density =
+                        calculator._info._scf.alpha.density;
+                    if (calculator._scf._scf != HartreeFock::SCFType::RHF &&
+                        calculator._info._scf.beta.density.rows() ==
+                            calculator._info._scf.alpha.density.rows())
+                        pcm_density += calculator._info._scf.beta.density;
+
+                    auto pcm = HartreeFock::Solvation::evaluate_pcm_reaction_field(
+                        calculator, *pcm_state, pcm_density);
+                    if (!pcm)
+                        HartreeFock::Logger::logging(
+                            HartreeFock::LogLevel::Warning, "ESP Reaction Field :",
+                            "unavailable: " + pcm.error());
+                    else
+                        apparent_charges = std::move(pcm->apparent_charges);
+                }
+            }
+
+            HartreeFock::SCF::log_esp_report(
+                calculator, shell_pairs,
+                pcm_state ? &pcm_state->surface_points : nullptr,
+                apparent_charges ? &*apparent_charges : nullptr);
+        }
+
         void log_multipole_report(HartreeFock::Calculator &calculator)
         {
             auto shell_pairs = build_shellpairs(calculator._shells);
@@ -5149,6 +5218,9 @@ namespace DFT::Driver
         if (result->converged)
         {
             log_mo_energy_report(calculator);
+            // Same rebuild log_multipole_report does, and for the same reason:
+            // `prepared` is local to the inner run() and already dead here.
+            log_esp_report_dft(calculator);
             log_multipole_report(calculator);
         }
 

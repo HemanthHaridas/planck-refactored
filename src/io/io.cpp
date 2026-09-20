@@ -1895,7 +1895,8 @@ namespace HartreeFock::IO
                 else
                     esp._radius_scale = v;
             }
-            else if (lkey == "resp" || lkey == "resp_exempt_hydrogen")
+            else if (lkey == "resp" || lkey == "resp_exempt_hydrogen" ||
+                     lkey == "include_reaction_field")
             {
                 std::string value;
                 if (!(iss >> value))
@@ -1906,8 +1907,10 @@ namespace HartreeFock::IO
 
                 if (lkey == "resp")
                     esp._resp = *parsed;
-                else
+                else if (lkey == "resp_exempt_hydrogen")
                     esp._resp_exempt_hydrogen = *parsed;
+                else
+                    esp._include_reaction_field = *parsed;
             }
             else if (lkey == "resp_strength" || lkey == "resp_tightness")
             {
