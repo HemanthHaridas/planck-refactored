@@ -15,6 +15,8 @@
 // after selecting HF vs DFT on calculator.is_dft_run().
 int main(int argc, const char *argv[])
 {
+    HartreeFock::Logger::banner();
+
     // Args: <input file> [--json <path>]. --json writes machine-readable
     // results for the Python front end; the human log is unaffected.
     std::string input_file;

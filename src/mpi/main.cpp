@@ -59,6 +59,7 @@ int main(int argc, const char *argv[])
     // covers the driver's internal logging, not just main's messages, so
     // mpirun -n k no longer prints the log k times.
     HartreeFock::Logger::set_rank(rank);
+    HartreeFock::Logger::banner();
 
     auto finalize = [](int code) -> int
     {

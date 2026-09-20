@@ -438,6 +438,28 @@ namespace HartreeFock
             std::cout << std::string(78, '-') << "\n";
         }
 
+        inline void banner()
+        {
+            if (is_silenced())
+                return;
+
+            std::lock_guard<std::mutex> lock(log_mutex);
+            std::cout <<
+                "\n"
+                "                                 ~~~~                 ~~~~\n"
+                "                               ~~    ~~~            ~~    ~~\n"
+                "                   ~         ~~         ~         ~~        ~\n"
+                "                    ~~~    ~~            ~~~    ~~\n"
+                "                       ~~~~                 ~~~~\n"
+                "\n"
+                "                   #####  #        #    ##   #  ##### #   #\n"
+                "                   #    # #       # #   # #  # #      #  #\n"
+                "                   #####  #      #####  #  # # #      ###\n"
+                "                   #      #      #   #  #   ## #      #  #\n"
+                "                   #      ###### #   #  #    #  ##### #   #\n"
+                "\n";
+        }
+
         inline void blank()
         {
             if (is_silenced())
