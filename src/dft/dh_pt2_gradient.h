@@ -2,6 +2,7 @@
 #define DFT_DH_PT2_GRADIENT_H
 
 #include <expected>
+#include <array>
 #include <functional>
 #include <memory>
 #include <string>
@@ -117,6 +118,23 @@ namespace DFT::Gradient
         const HartreeFock::Correlation::RMP2Result &result,
         double c_pt2);
 
+    // O4: dE_pair = sum_pq G(p,q) U(p,q), with dC=C U and fixed
+    // Theta_ijab=(1+delta_ij)t_tilde_ijab. Slots follow (i,a,j,b).
+    // Occupied slots have shape (nmo,no), virtual slots (nmo,nv).
+    // No ERI or amplitude symmetry is assumed. The reduction tile bounds
+    // packing workspace, not the existing dense MO ERI/amplitude storage.
+    struct DHPairCoefficientGradient
+    {
+        std::array<Eigen::MatrixXd, 4> slots;
+        Eigen::MatrixXd total;
+    };
+
+    [[nodiscard]] std::expected<DHPairCoefficientGradient, std::string>
+    build_dh_pair_coefficient_gradient(
+        const DHPT2AmplitudeDensity &amplitudes,
+        const std::vector<double> &mo_eri,
+        int reduction_tile = 128);
+
     // Amplitude-dependent part of the closed-shell Eq. (40) Lagrangian RHS.
     // The dense MO ERI tensor uses chemists' ordering [p,q,r,s] = (pq|rs).
     // `c_pt2` scales the raw-amplitude second term; t_tilde already carries
@@ -124,7 +142,8 @@ namespace DFT::Gradient
     // their signs and index patterns independently testable.
     struct DHEq40AmplitudeRHS
     {
-        Eigen::MatrixXd three_external; // sum_jbc t~_ij^cb [(ac|jb)-(ab|jc)]
+        DHPairCoefficientGradient pair_coefficients; // reused by pair W
+        Eigen::MatrixXd three_external; // G_vo - G_ov^T, all four slots
         // Literal closed-shell reduction of the two negative terms in the
         // unrestricted Eq. (22).  Keep the spin-origin channels distinct
         // until the final sum; their cancellation must not be hidden by an
@@ -273,6 +292,12 @@ namespace DFT::Gradient
         const DHPT2AmplitudeDensity &amplitudes,
         const std::vector<double> &mo_eri);
 
+    // Cheap paper-gauge projection of the same O4 coefficient derivatives
+    // used by Eq. 40; performs no amplitude/integral contraction.
+    [[nodiscard]] std::expected<DHEq47PairMetricOverlapDensity, std::string>
+    build_dh_eq47_pair_metric_overlap_density(
+        const DHPairCoefficientGradient &coefficients, int n_occ, int n_virt);
+
     // The only permitted raw-to-symmetric conversion for the Eq. (42)-(45)
     // overlap density. `symmetric_mo = 1/2 (raw_mo + raw_mo^T)` preserves its
     // contraction with any symmetric overlap derivative.
@@ -308,6 +333,16 @@ namespace DFT::Gradient
     };
 
     enum class DHGammaStorage { ReferenceAll, ContractionOnly };
+
+    // O5: exact four-stage Eq. 47 backtransformation, (i,a,j,b) ->
+    // (mu,nu,kappa,tau), replacing b,j,a,i successively. No symmetry or
+    // orthonormality assumption on C. Theta=(1+delta_ij)*t_tilde carries
+    // c_PT2 once. Column tiles bound GEMM panels, not quartic tensor storage.
+    [[nodiscard]] std::expected<std::vector<double>, std::string>
+    build_dh_eq47_nonseparable_raw_ao(
+        const DHPT2AmplitudeDensity &amplitudes,
+        const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
+        int column_tile = 128);
 
     [[nodiscard]] std::expected<DHEq46_47TwoParticleDensity, std::string>
     build_dh_eq46_47_two_particle_density(

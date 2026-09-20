@@ -26,6 +26,7 @@
 // to near machine precision -- a much tighter bar than D2.0/D2.1's own
 // checks, which is appropriate since this piece is pure linear algebra.
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
@@ -350,6 +351,7 @@ namespace
         const auto tidx = [no, nv](int i, int j_idx, int a, int b)
         { return ((static_cast<std::size_t>(i) * no + j_idx) * nv + a) * nv + b; };
         double nonseparable_mo = 0.0;
+        std::vector<double> o5_raw_reference(gamma->nonseparable_raw_ao.size(),0.0);
         for (int i = 0; i < no; ++i)
             for (int j_idx = 0; j_idx < no; ++j_idx)
                 for (int a = 0; a < nv; ++a)
@@ -363,13 +365,30 @@ namespace
                                     {
                                         const std::size_t q =
                                             ((static_cast<std::size_t>(mu) * nb + nu) * nb + ka_idx) * nb + ta;
-                                        ijab += c(mu,i) * c(nu,no+a) * c(ka_idx,j_idx) * c(ta,no+b) * eri[q];
+                                        const double coefficient=c(mu,i)*c(nu,no+a)*c(ka_idx,j_idx)*c(ta,no+b);
+                                        ijab += coefficient * eri[q];
+                                        o5_raw_reference[q] += coefficient * (1+(i==j_idx))*
+                                            amplitudes->t_tilde[tidx(i,j_idx,a,b)];
                                     }
                         nonseparable_mo += static_cast<double>(1 + (i == j_idx)) *
                             amplitudes->t_tilde[tidx(i,j_idx,a,b)] * ijab;
                     }
         if (std::abs(nonseparable_gamma - nonseparable_mo) > 1e-9)
             fail("Eq. 47 AO nonseparable tensor does not reproduce the independent water/STO-3G (ia|jb) contraction");
+        double o5_raw_error=0,o5_symmetric_error=0;
+        const auto o5_at=[&](int p0,int q,int r,int s0)
+        { return o5_raw_reference[((static_cast<std::size_t>(p0)*nb+q)*nb+r)*nb+s0]; };
+        for(int mu=0;mu<nb;++mu) for(int nu=0;nu<nb;++nu)
+            for(int ka=0;ka<nb;++ka) for(int ta=0;ta<nb;++ta)
+            {
+                const auto q=((static_cast<std::size_t>(mu)*nb+nu)*nb+ka)*nb+ta;
+                const double sym=(o5_at(mu,nu,ka,ta)+o5_at(nu,mu,ka,ta)+o5_at(mu,nu,ta,ka)+o5_at(nu,mu,ta,ka)+
+                    o5_at(ka,ta,mu,nu)+o5_at(ta,ka,mu,nu)+o5_at(ka,ta,nu,mu)+o5_at(ta,ka,nu,mu))/8;
+                o5_raw_error=std::max(o5_raw_error,std::abs(o5_raw_reference[q]-gamma->nonseparable_raw_ao[q]));
+                o5_symmetric_error=std::max(o5_symmetric_error,std::abs(sym-gamma->nonseparable_symmetric_ao[q]));
+            }
+        std::printf("O5 water raw_error=%.12e symmetric_error=%.12e\n",o5_raw_error,o5_symmetric_error);
+        if(o5_raw_error>1e-11 || o5_symmetric_error>1e-11) fail("O5 physical water tensor mismatch");
 
         // Physical Eq. (33) translation audit. Construct W from Eqs. (42)-
         // (45), then differentiate every AO integral explicitly with respect
@@ -659,6 +678,16 @@ namespace
             fail("Eq. 33 physical water/STO-3G channel assembly failed");
             return;
         }
+        double o5_derivative_error=0;
+        for(std::size_t coordinate=0;coordinate<derivatives.eri_ao.size();++coordinate)
+        {
+            const double reference=std::inner_product(o5_raw_reference.begin(),o5_raw_reference.end(),
+                derivatives.eri_ao[coordinate].begin(),0.0);
+            o5_derivative_error=std::max(o5_derivative_error,
+                std::abs(reference-eq33->two_electron_nonseparable(coordinate)));
+        }
+        std::printf("O5 water all-coordinate ERI derivative contraction error=%.12e\n",o5_derivative_error);
+        if(o5_derivative_error>1e-11) fail("O5 physical water derivative contraction mismatch");
         // Eq. (46) Z-only oracle.  The solved response changes the
         // separable D P - 1/2 D P tensor but cannot change Eq. (47), which is
         // amplitude-only.  Central-difference a freshly rebuilt AO ERI
@@ -1116,6 +1145,57 @@ namespace
         auto o3_stationary=DFT::Gradient::build_dh_stationary_products(
             result,.27,c,workspace->mo_eri,o3_inputs.response_operator);
         if (!o3_stationary) { fail("O3 physical stationary preparation"); return; }
+        // O4: physical water integrals, with intentionally synthetic fixed
+        // amplitudes. Compare every coefficient slot and both D' blocks to
+        // scalar loops, independently of the production packing/GEMMs.
+        {
+            const auto tidx=[&](int i,int j,int a,int b)
+            { return ((static_cast<std::size_t>(i)*no+j)*nv+a)*nv+b; };
+            const auto eri=[&](int p0,int q,int r,int s0)
+            { return mo_eri[((static_cast<std::size_t>(p0)*nb+q)*nb+r)*nb+s0]; };
+            const auto &d=o3_stationary->amplitudes;
+            std::array<Eigen::MatrixXd,4> slots;
+            for(int leg=0;leg<4;++leg) slots[leg]=Eigen::MatrixXd::Zero(nb,leg%2?nv:no);
+            for(int i=0;i<no;++i) for(int j0=0;j0<no;++j0)
+                for(int a=0;a<nv;++a) for(int b=0;b<nv;++b)
+                {
+                    const double theta=(1+(i==j0))*d.t_tilde[tidx(i,j0,a,b)];
+                    for(int p0=0;p0<nb;++p0)
+                    {
+                        slots[0](p0,i)+=theta*eri(p0,no+a,j0,no+b);
+                        slots[1](p0,a)+=theta*eri(i,p0,j0,no+b);
+                        slots[2](p0,j0)+=theta*eri(i,no+a,p0,no+b);
+                        slots[3](p0,b)+=theta*eri(i,no+a,j0,p0);
+                    }
+                }
+            const auto compare=[&](const char *label,const Eigen::MatrixXd &actual,const Eigen::MatrixXd &expected)
+            {
+                const double error=(actual-expected).cwiseAbs().maxCoeff();
+                std::printf("O4 water %s max_abs=%.12e\n",label,error);
+                if (!std::isfinite(error) || error>1e-11) fail("O4 physical scalar contraction mismatch");
+            };
+            for(int leg=0;leg<4;++leg)
+                compare(("slot-"+std::to_string(leg)).c_str(),o3_stationary->eq40_amplitude_rhs.pair_coefficients.slots[leg],slots[leg]);
+            Eigen::MatrixXd g=Eigen::MatrixXd::Zero(nb,nb);
+            g.leftCols(no)=slots[0]+slots[2]; g.rightCols(nv)=slots[1]+slots[3];
+            compare("RHS",o3_stationary->eq40_amplitude_rhs.three_external,
+                g.bottomLeftCorner(nv,no)-g.topRightCorner(no,nv).transpose());
+            Eigen::MatrixXd oo=Eigen::MatrixXd::Zero(no,no),vv=Eigen::MatrixXd::Zero(nv,nv);
+            for(int i=0;i<no;++i) for(int j0=0;j0<no;++j0) for(int k0=0;k0<no;++k0)
+                for(int a=0;a<nv;++a) for(int b=0;b<nv;++b)
+                    oo(i,j0)-=(1+(i==k0))*d.t_tilde[tidx(i,k0,a,b)]*result.t2[tidx(k0,j0,b,a)];
+            for(int i=0;i<no;++i) for(int j0=i;j0<no;++j0)
+                for(int a=0;a<nv;++a) for(int b=0;b<nv;++b) for(int c0=0;c0<nv;++c0)
+                    vv(a,b)+=d.t_tilde[tidx(i,j0,a,c0)]*result.t2[tidx(i,j0,b,c0)]+
+                        d.t_tilde[tidx(i,j0,c0,a)]*result.t2[tidx(i,j0,c0,b)];
+            compare("Dprime-oo",d.dprime_oo,oo); compare("Dprime-vv",d.dprime_vv,vv);
+            const auto w=DFT::Gradient::build_dh_eq47_pair_metric_overlap_density(
+                o3_stationary->eq40_amplitude_rhs.pair_coefficients,no,nv);
+            if (!w) { fail("O4 cached W projection"); return; }
+            compare("W-oo",w->w_oo,-0.5*g.topLeftCorner(no,no));
+            compare("W-vv",w->w_vv,-0.5*g.bottomRightCorner(nv,nv));
+            compare("W-ov",w->w_ia,-g.topRightCorner(no,nv));
+        }
         DFT::Gradient::DHZVectorOptions o3_dense_options;
         o3_dense_options.backend=DFT::Gradient::DHZVectorBackend::DenseReference;
         const auto o3_dense=DFT::Gradient::solve_dh_zvector(o3_stationary->lagrangian_rhs.total_ai,
@@ -1172,6 +1252,7 @@ namespace
         if (!stationary || response_calls!=1) { fail("O2 stationary preparation count"); return; }
         const auto *amplitude_data=stationary->amplitudes.t_tilde.data();
         const auto *rhs_data=stationary->lagrangian_rhs.total_ai.data();
+        const auto *coefficient_data=stationary->eq40_amplitude_rhs.pair_coefficients.total.data();
         auto stale=*stationary;
         stale.c_pt2=.54;
         if (DFT::Gradient::build_dh_gradient_driver_contract(reused_inputs,std::move(stale)))
@@ -1186,6 +1267,8 @@ namespace
         { fail("O2 reused assembly/response count"); return; }
         if (amplitude_data!=reused->amplitudes.t_tilde.data() || rhs_data!=reused->lagrangian_rhs.total_ai.data())
             fail("O2 stationary products copied instead of moved");
+        if (coefficient_data!=reused->eq40_amplitude_rhs.pair_coefficients.total.data())
+            fail("O4 coefficient gradient copied instead of moved");
         const auto matrices_equal=[&](const Eigen::MatrixXd &a,const Eigen::MatrixXd &b)
         { if (a.rows()!=b.rows() || a.cols()!=b.cols() || !a.isApprox(b,1e-13)) fail("O2 channel matrix mismatch"); };
         matrices_equal(driver_contract->amplitudes.dprime_mo,reused->amplitudes.dprime_mo);

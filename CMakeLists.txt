@@ -853,6 +853,8 @@ if(BUILD_TESTING)
 
     add_executable(planck-dh-pt2-amplitude-density
         ${CMAKE_SOURCE_DIR}/tests/dh_pt2_amplitude_density.cpp
+        ${CMAKE_SOURCE_DIR}/tests/dh_o4_contractions.cpp
+        ${CMAKE_SOURCE_DIR}/tests/dh_o5_backtransform.cpp
         ${CMAKE_SOURCE_DIR}/tests/dh_grid_sigma.cpp
         ${CMAKE_SOURCE_DIR}/tests/dh_zvector.cpp
         ${SRC_DIR}/dft/dh_pt2_gradient.cpp

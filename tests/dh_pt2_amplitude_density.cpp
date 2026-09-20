@@ -6,6 +6,8 @@
 
 bool test_dh_grid_sigma();
 bool test_dh_zvector();
+bool test_dh_o4_contractions();
+bool test_dh_o5_backtransform();
 
 namespace
 {
@@ -63,6 +65,8 @@ int main()
     Eigen::Matrix2d y; y << -0.4, 0.1, 0.1, 0.9;
     Checks ok = response.has_value();
     ok &= test_dh_grid_sigma();
+    ok &= test_dh_o4_contractions();
+    ok &= test_dh_o5_backtransform();
     ok &= test_dh_zvector();
     const auto no_exchange = DFT::Gradient::make_dh_eq41_response_operator(
         0.0,

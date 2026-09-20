@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "analytic_hessian.h"
 #include "dft_gradient.h"
@@ -17,6 +18,30 @@ namespace
     std::size_t eri_idx(int p, int q, int r, int s, int nmo)
     {
         return ((static_cast<std::size_t>(p) * nmo + q) * nmo + r) * nmo + s;
+    }
+
+    // Pack only a bounded slice of the reduction dimension. Both operands
+    // are owned before GEMM; no tensor-layout or permutation symmetry is
+    // delegated to Eigen. Output and packing require quadratic and linear
+    // (at fixed tile width) storage, respectively.
+    template<class Left, class Right>
+    Eigen::MatrixXd tiled_product(int rows, int cols, std::size_t reduction,
+        int tile, Left left, Right right)
+    {
+        Eigen::MatrixXd out = Eigen::MatrixXd::Zero(rows, cols);
+        const int capacity=static_cast<int>(std::min<std::size_t>(tile,reduction));
+        Eigen::MatrixXd a(rows,capacity), b(capacity,cols);
+        for (std::size_t begin = 0; begin < reduction; begin += tile)
+        {
+            const int width = static_cast<int>(std::min<std::size_t>(tile, reduction-begin));
+            for (int k = 0; k < width; ++k)
+            {
+                for (int p = 0; p < rows; ++p) a(p,k) = left(p,begin+k);
+                for (int q = 0; q < cols; ++q) b(k,q) = right(begin+k,q);
+            }
+            out.noalias() += a.leftCols(width) * b.topRows(width);
+        }
+        return out;
     }
 
     std::vector<double> eri_eightfold_symmetrize(const std::vector<double> &raw, int n)
@@ -36,6 +61,48 @@ namespace
                             get(ka, ta, nu, mu) + get(ta, ka, nu, mu));
                     }
         return symmetric;
+    }
+
+    // Preserve row-major tensor order while replacing one index. For each
+    // prefix, map [old-index, suffix] and multiply C[new,old] into column
+    // panels. Only the input and output tensors coexist; no permuted copy,
+    // full AO-by-MO-quartet product, or repeated amplitude sum is formed.
+    std::vector<double> transform_pair_axis(const std::vector<double> &input,
+        std::array<std::size_t,4> &shape, int axis,
+        const Eigen::Ref<const Eigen::MatrixXd> &coefficients, int column_tile)
+    {
+        std::size_t prefix=1, suffix=1;
+        for(int k=0;k<axis;++k) prefix*=shape[k];
+        for(int k=axis+1;k<4;++k) suffix*=shape[k];
+        const std::size_t old=shape[axis], nao=coefficients.rows();
+        std::vector<double> output(prefix*nao*suffix);
+        using RowMatrix=Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor>;
+        if(suffix==1)
+        {
+            // The last-index transform is one batched matrix product, not
+            // one matrix-vector call for every i,a,j prefix.
+            const Eigen::Map<const RowMatrix> source(input.data(),prefix,old);
+            Eigen::Map<RowMatrix> target(output.data(),prefix,nao);
+            for(std::size_t begin=0;begin<prefix;begin+=column_tile)
+            {
+                const auto width=static_cast<Eigen::Index>(std::min<std::size_t>(column_tile,prefix-begin));
+                target.middleRows(begin,width).noalias() = source.middleRows(begin,width) * coefficients.transpose();
+            }
+            shape[axis]=nao;
+            return output;
+        }
+        for(std::size_t p=0;p<prefix;++p)
+        {
+            const Eigen::Map<const RowMatrix> source(input.data()+p*old*suffix,old,suffix);
+            Eigen::Map<RowMatrix> target(output.data()+p*nao*suffix,nao,suffix);
+            for(std::size_t begin=0;begin<suffix;begin+=column_tile)
+            {
+                const auto width=static_cast<Eigen::Index>(std::min<std::size_t>(column_tile,suffix-begin));
+                target.middleCols(begin,width).noalias() = coefficients * source.middleCols(begin,width);
+            }
+        }
+        shape[axis]=nao;
+        return output;
     }
 }
 
@@ -203,35 +270,74 @@ namespace DFT::Gradient
         // Eq. (37): D'_ij = -sum_k (1+delta_ik) tr(t~^(ik) t^(kj)).
         // With the virtual-index trace written explicitly, the second factor
         // is t(k,j,b,a), not t(j,k,b,a).
-        for (int i = 0; i < no; ++i)
-            for (int j = 0; j < no; ++j)
-                for (int k = 0; k < no; ++k)
-                {
-                    double trace = 0.0;
-                    for (int a = 0; a < nv; ++a)
-                        for (int b = 0; b < nv; ++b)
-                            trace += out.t_tilde[idx(i, k, a, b, no, nv)] *
-                                result.t2[idx(k, j, b, a, no, nv)];
-                    out.dprime_oo(i, j) -= (1 + (i == k)) * trace;
-                }
+        out.dprime_oo = -tiled_product(no, no, static_cast<std::size_t>(no)*nv*nv, 128,
+            [&](int i, std::size_t r) {
+                const int b=r%nv, a=(r/nv)%nv, k=r/(static_cast<std::size_t>(nv)*nv);
+                return (1+(i==k))*out.t_tilde[idx(i,k,a,b,no,nv)];
+            },
+            [&](std::size_t r, int j) {
+                const int b=r%nv, a=(r/nv)%nv, k=r/(static_cast<std::size_t>(nv)*nv);
+                return result.t2[idx(k,j,b,a,no,nv)];
+            });
 
         // Eq. (38): D'_ab = sum_{i<=j}(t~_ij t_ij^T + t~_ij^T t_ij)_ab.
         for (int i = 0; i < no; ++i)
             for (int j = i; j < no; ++j)
-                for (int a = 0; a < nv; ++a)
-                    for (int b = 0; b < nv; ++b)
-                        for (int c = 0; c < nv; ++c)
-                        {
-                            out.dprime_vv(a, b) +=
-                                out.t_tilde[idx(i, j, a, c, no, nv)] *
-                                result.t2[idx(i, j, b, c, no, nv)] +
-                                out.t_tilde[idx(i, j, c, a, no, nv)] *
-                                result.t2[idx(i, j, c, b, no, nv)];
-                        }
+            {
+                using PairMatrix = Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor>;
+                const Eigen::Map<const PairMatrix> tilde(out.t_tilde.data()+idx(i,j,0,0,no,nv),nv,nv);
+                const Eigen::Map<const PairMatrix> raw(result.t2.data()+idx(i,j,0,0,no,nv),nv,nv);
+                out.dprime_vv.noalias() += tilde * raw.transpose();
+                out.dprime_vv.noalias() += tilde.transpose() * raw;
+            }
 
         out.dprime_mo = Eigen::MatrixXd::Zero(no + nv, no + nv);
         out.dprime_mo.topLeftCorner(no, no) = out.dprime_oo;
         out.dprime_mo.bottomRightCorner(nv, nv) = out.dprime_vv;
+        return out;
+    }
+
+    std::expected<DHPairCoefficientGradient, std::string>
+    build_dh_pair_coefficient_gradient(const DHPT2AmplitudeDensity &amplitudes,
+        const std::vector<double> &mo_eri, int reduction_tile)
+    {
+        const int no=amplitudes.n_occ, nv=amplitudes.n_virt, n=no+nv;
+        if (no<=0 || nv<=0 || reduction_tile<=0 ||
+            amplitudes.t_tilde.size()!=static_cast<std::size_t>(no)*no*nv*nv ||
+            mo_eri.size()!=static_cast<std::size_t>(n)*n*n*n)
+            return std::unexpected("DH pair coefficient gradient: invalid dimensions or reduction tile.");
+        const std::array<int,4> dimensions{no,nv,no,nv};
+        DHPairCoefficientGradient out;
+        out.total=Eigen::MatrixXd::Zero(n,n);
+        for (int slot=0; slot<4; ++slot)
+        {
+            // Substitute the differentiated index q before reduction. The
+            // three remaining indices r enumerate the other coefficient
+            // slots, not all ijab for each orbital direction.
+            std::size_t count=1;
+            for (int s=0; s<4; ++s) if (s!=slot) count*=dimensions[s];
+            const auto unpack=[&](std::size_t r, int q) {
+                std::array<int,4> x{};
+                for (int s=3; s>=0; --s)
+                    if (s!=slot) { x[s]=r%dimensions[s]; r/=dimensions[s]; }
+                x[slot]=q;
+                return x;
+            };
+            out.slots[slot]=tiled_product(n,dimensions[slot],count,reduction_tile,
+                [&](int p, std::size_t r) {
+                    auto x=unpack(r,0);
+                    x[1]+=no; x[3]+=no; x[slot]=p;
+                    return mo_eri[eri_idx(x[0],x[1],x[2],x[3],n)];
+                },
+                [&](std::size_t r, int q) {
+                    const auto x=unpack(r,q);
+                    return (1+(x[0]==x[2]))*amplitudes.t_tilde[idx(x[0],x[2],x[1],x[3],no,nv)];
+                });
+            if (slot%2==0) out.total.leftCols(no)+=out.slots[slot];
+            else out.total.rightCols(nv)+=out.slots[slot];
+        }
+        if (!out.total.allFinite())
+            return std::unexpected("DH pair coefficient gradient: nonfinite contraction.");
         return out;
     }
 
@@ -254,45 +360,17 @@ namespace DFT::Gradient
             return std::unexpected("DH Eq. 40 RHS: inconsistent amplitudes or MO ERI dimensions.");
 
         DHEq40AmplitudeRHS out;
-        out.three_external = Eigen::MatrixXd::Zero(nv, no);
+        auto pair = build_dh_pair_coefficient_gradient(amplitudes, mo_eri);
+        if (!pair) return std::unexpected(pair.error());
+        out.pair_coefficients = std::move(*pair);
+        out.three_external = out.pair_coefficients.total.bottomLeftCorner(nv,no) -
+            out.pair_coefficients.total.topRightCorner(no,nv).transpose();
         out.internal_same_spin_exchange = Eigen::MatrixXd::Zero(nv, no);
         out.internal_opposite_spin_direct = Eigen::MatrixXd::Zero(nv, no);
         out.three_internal = Eigen::MatrixXd::Zero(nv, no);
         for (int a = 0; a < nv; ++a)
             for (int i = 0; i < no; ++i)
             {
-                const int ap = no + a;
-                // Literal non-metric derivative of the Eq. (47) pair
-                // scalar.  For kappa_ai=1, dC_i=C_a and dC_a=-C_i.
-                // Differentiate each of the four MO coefficients in
-                // Theta_kl^cb (kc|ld), with Theta=(1+delta_kl)t_tilde.
-                // The paper's compressed Eq. (40) first term is only valid
-                // after amplitude symmetries that Planck's stored spatial
-                // t2 tensor does not provide in that orientation.  Keeping
-                // all four legs is the same convention already validated
-                // for the literal Eq. (47) metric-overlap builder.
-                for (int k = 0; k < no; ++k)
-                    for (int l = 0; l < no; ++l)
-                        for (int c = 0; c < nv; ++c)
-                            for (int b = 0; b < nv; ++b)
-                            {
-                                const int cp = no + c;
-                                const int bp = no + b;
-                                const double theta = static_cast<double>(1 + (k == l)) *
-                                    amplitudes.t_tilde[idx(k, l, c, b, no, nv)];
-                                if (k == i)
-                                    out.three_external(a, i) += theta *
-                                        mo_eri[eri_idx(ap, cp, l, bp, nmo)];
-                                if (c == a)
-                                    out.three_external(a, i) -= theta *
-                                        mo_eri[eri_idx(k, i, l, bp, nmo)];
-                                if (l == i)
-                                    out.three_external(a, i) += theta *
-                                        mo_eri[eri_idx(k, cp, ap, bp, nmo)];
-                                if (b == a)
-                                    out.three_external(a, i) -= theta *
-                                        mo_eri[eri_idx(k, cp, l, i, nmo)];
-                            }
                 // The excluded internal bracket is available only for
                 // standalone reference tests, never evaluated by production.
                 if (!include_legacy_internal) continue;
@@ -551,68 +629,26 @@ namespace DFT::Gradient
             amplitudes.t_tilde.size() != nt || mo_eri.size() != ne)
             return std::unexpected("DH Eq. 47 pair metric overlap: incompatible amplitudes or MO ERIs.");
 
-        // Let Theta_ij^ab=(1+delta_ij)t~_ij^ab.  Differentiate the four
-        // coefficients in Theta_ij^ab (ia|jb) literally, then insert the
-        // paper metric gauge U_oo=U_vv=-S/2, U_ia=-S_ia, U_ai=0.  Retaining
-        // both appearances of each occupied/virtual coefficient is essential;
-        // only afterwards may pair symmetries compress these sums.
+        auto coefficients = build_dh_pair_coefficient_gradient(amplitudes, mo_eri);
+        if (!coefficients) return std::unexpected(coefficients.error());
+        return build_dh_eq47_pair_metric_overlap_density(*coefficients, no, nv);
+    }
+
+    std::expected<DHEq47PairMetricOverlapDensity, std::string>
+    build_dh_eq47_pair_metric_overlap_density(
+        const DHPairCoefficientGradient &coefficients, int no, int nv)
+    {
+        const int n=no+nv;
+        const auto &g=coefficients.total;
+        if (no<=0 || nv<=0 || g.rows()!=n || g.cols()!=n || !g.allFinite())
+            return std::unexpected("DH Eq. 47 pair metric overlap: invalid coefficient gradient.");
+        // dE=G:U; insert U_oo=U_vv=-S/2, U_ov=-S_ov, U_vo=0.
+        // Do not symmetrize G or infer any equality between coefficient slots.
         DHEq47PairMetricOverlapDensity out;
-        out.w_oo = Eigen::MatrixXd::Zero(no, no);
-        out.w_vv = Eigen::MatrixXd::Zero(nv, nv);
-        out.w_ia = Eigen::MatrixXd::Zero(no, nv);
-        out.w_ai = Eigen::MatrixXd::Zero(nv, no);
-        const auto theta = [&amplitudes, no, nv](int i, int j, int a, int b)
-        {
-            return static_cast<double>(1 + (i == j)) * amplitudes.t_tilde[idx(i, j, a, b, no, nv)];
-        };
-        for (int p = 0; p < no; ++p)
-            for (int q = 0; q < no; ++q)
-            {
-                double value = 0.0;
-                for (int j = 0; j < no; ++j)
-                    for (int a = 0; a < nv; ++a)
-                        for (int b = 0; b < nv; ++b)
-                            value += theta(q, j, a, b) *
-                                mo_eri[eri_idx(p, no + a, j, no + b, nmo)];
-                for (int i = 0; i < no; ++i)
-                    for (int a = 0; a < nv; ++a)
-                        for (int b = 0; b < nv; ++b)
-                            value += theta(i, q, a, b) *
-                                mo_eri[eri_idx(i, no + a, p, no + b, nmo)];
-                out.w_oo(p, q) = -0.5 * value;
-            }
-        for (int p = 0; p < nv; ++p)
-            for (int q = 0; q < nv; ++q)
-            {
-                double value = 0.0;
-                for (int i = 0; i < no; ++i)
-                    for (int j = 0; j < no; ++j)
-                        for (int b = 0; b < nv; ++b)
-                            value += theta(i, j, q, b) *
-                                mo_eri[eri_idx(i, no + p, j, no + b, nmo)];
-                for (int i = 0; i < no; ++i)
-                    for (int j = 0; j < no; ++j)
-                        for (int a = 0; a < nv; ++a)
-                            value += theta(i, j, a, q) *
-                                mo_eri[eri_idx(i, no + a, j, no + p, nmo)];
-                out.w_vv(p, q) = -0.5 * value;
-            }
-        for (int p = 0; p < no; ++p)
-            for (int q = 0; q < nv; ++q)
-            {
-                double value = 0.0;
-                for (int i = 0; i < no; ++i)
-                    for (int j = 0; j < no; ++j)
-                        for (int b = 0; b < nv; ++b)
-                            value += theta(i, j, q, b) *
-                                mo_eri[eri_idx(i, p, j, no + b, nmo)];
-                for (int i = 0; i < no; ++i)
-                    for (int j = 0; j < no; ++j)
-                        for (int a = 0; a < nv; ++a)
-                            value += theta(i, j, a, q) *
-                                mo_eri[eri_idx(i, no + a, j, p, nmo)];
-                out.w_ia(p, q) = -value;
-            }
+        out.w_oo=-0.5*g.topLeftCorner(no,no);
+        out.w_vv=-0.5*g.bottomRightCorner(nv,nv);
+        out.w_ia=-g.topRightCorner(no,nv);
+        out.w_ai=Eigen::MatrixXd::Zero(nv,no);
         return out;
     }
 
@@ -636,6 +672,47 @@ namespace DFT::Gradient
         out.raw_mo.bottomRightCorner(nv, nv) = diagonal.w_vv;
         out.symmetric_mo = 0.5 * (out.raw_mo + out.raw_mo.transpose());
         return out;
+    }
+
+    std::expected<std::vector<double>, std::string>
+    build_dh_eq47_nonseparable_raw_ao(const DHPT2AmplitudeDensity &amplitudes,
+        const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff, int column_tile)
+    {
+        const int no=amplitudes.n_occ, nv=amplitudes.n_virt;
+        const Eigen::Index nao=mo_coeff.rows();
+        if(no<=0 || nv<=0 || nao<=0 || column_tile<=0 ||
+            mo_coeff.cols()!=static_cast<Eigen::Index>(no)+nv || !mo_coeff.allFinite())
+            return std::unexpected("DH Eq. 47 backtransform: invalid dimensions, coefficients, or column tile.");
+        // Bound all intermediate products and Eigen map extents before any
+        // allocation. This also covers rectangular C with nao < nmo.
+        std::size_t capacity=1;
+        const auto bound=static_cast<std::size_t>(std::max({nao,static_cast<Eigen::Index>(no),static_cast<Eigen::Index>(nv)}));
+        for(int k=0;k<4;++k)
+        {
+            if(capacity>static_cast<std::size_t>(std::numeric_limits<Eigen::Index>::max())/sizeof(double)/bound)
+                return std::unexpected("DH Eq. 47 backtransform: tensor extent overflow.");
+            capacity*=bound;
+        }
+        const std::size_t nt=static_cast<std::size_t>(no)*no*nv*nv;
+        if(amplitudes.t_tilde.size()!=nt ||
+            !std::all_of(amplitudes.t_tilde.begin(),amplitudes.t_tilde.end(),[](double t){return std::isfinite(t);}))
+            return std::unexpected("DH Eq. 47 backtransform: invalid tilde amplitudes.");
+        // Stored amplitudes are [i,j,a,b]; the contraction's coefficient
+        // slots are [i,a,j,b]. Apply the unordered-pair weight exactly once.
+        std::vector<double> tensor(nt);
+        for(int i=0;i<no;++i) for(int a=0;a<nv;++a)
+            for(int j=0;j<no;++j) for(int b=0;b<nv;++b)
+                tensor[((static_cast<std::size_t>(i)*nv+a)*no+j)*nv+b]=
+                    (1+(i==j))*amplitudes.t_tilde[idx(i,j,a,b,no,nv)];
+        std::array<std::size_t,4> shape{static_cast<std::size_t>(no),static_cast<std::size_t>(nv),
+                                     static_cast<std::size_t>(no),static_cast<std::size_t>(nv)};
+        tensor=transform_pair_axis(tensor,shape,3,mo_coeff.rightCols(nv),column_tile); // i,a,j,tau
+        tensor=transform_pair_axis(tensor,shape,2,mo_coeff.leftCols(no),column_tile);  // i,a,kappa,tau
+        tensor=transform_pair_axis(tensor,shape,1,mo_coeff.rightCols(nv),column_tile); // i,nu,kappa,tau
+        tensor=transform_pair_axis(tensor,shape,0,mo_coeff.leftCols(no),column_tile);  // mu,nu,kappa,tau
+        if(!std::all_of(tensor.begin(),tensor.end(),[](double x){return std::isfinite(x);}))
+            return std::unexpected("DH Eq. 47 backtransform: nonfinite contraction.");
+        return tensor;
     }
 
     std::expected<DHEq46_47TwoParticleDensity, std::string>
@@ -682,8 +759,6 @@ namespace DFT::Gradient
         out.separable_symmetric_ao = eri_eightfold_symmetrize(out.separable_raw_ao, out.n_ao);
         if (storage == DHGammaStorage::ContractionOnly)
             std::vector<double>().swap(out.separable_raw_ao);
-        out.nonseparable_raw_ao.assign(n4, 0.0);
-
         // Eq. (47), direct MO-to-AO backtransformation.  The AO pair order
         // is (mu nu | ka ta), so its closed-shell spatial realization is
         // C_mu,i C_nu,a C_ka,j C_ta,b t~_ab^ij, exactly as printed in the
@@ -692,19 +767,9 @@ namespace DFT::Gradient
         // unrelated (ij|ab) integral and violates Eq. (47).  t_tilde already
         // carries c_PT2; the explicit (1+delta_ij) is paper-defined and must
         // not be folded into the amplitude convention.
-        for (int mu = 0; mu < nao; ++mu)
-            for (int nu = 0; nu < nao; ++nu)
-                for (int ka = 0; ka < nao; ++ka)
-                    for (int ta = 0; ta < nao; ++ta)
-                        for (int i = 0; i < no; ++i)
-                            for (int j = 0; j < no; ++j)
-                                for (int a = 0; a < nv; ++a)
-                                    for (int b = 0; b < nv; ++b)
-                                        out.nonseparable_raw_ao[eri_idx(mu, nu, ka, ta, nao)] +=
-                                            mo_coeff(mu, i) * mo_coeff(nu, no + a) *
-                                            mo_coeff(ka, j) * mo_coeff(ta, no + b) *
-                                            static_cast<double>(1 + (i == j)) *
-                                            amplitudes.t_tilde[idx(i, j, a, b, no, nv)];
+        auto nonseparable=build_dh_eq47_nonseparable_raw_ao(amplitudes,mo_coeff);
+        if (!nonseparable) return std::unexpected(nonseparable.error());
+        out.nonseparable_raw_ao=std::move(*nonseparable);
 
         out.nonseparable_symmetric_ao = eri_eightfold_symmetrize(out.nonseparable_raw_ao, out.n_ao);
         if (storage == DHGammaStorage::ReferenceAll)
@@ -1438,6 +1503,7 @@ namespace DFT::Gradient
             !valid(stationary.eq41_response.response_ao,inputs.mo_coeff.rows(),inputs.mo_coeff.rows()) ||
             !valid(stationary.eq40_amplitude_rhs.three_external,nvirt,nocc) ||
             !valid(stationary.eq40_amplitude_rhs.total,nvirt,nocc) ||
+            !valid(stationary.eq40_amplitude_rhs.pair_coefficients.total,nmo,nmo) ||
             !valid(stationary.lagrangian_rhs.response_ai,nvirt,nocc) ||
             !valid(stationary.lagrangian_rhs.amplitude_ai,nvirt,nocc) ||
             !valid(stationary.lagrangian_rhs.total_ai,nvirt,nocc) ||
@@ -1447,7 +1513,10 @@ namespace DFT::Gradient
             return std::unexpected("DH gradient driver contract: stale or invalid stationary products.");
         if (!(stationary.lagrangian_rhs.total_ai-stationary.lagrangian_rhs.response_ai-
               stationary.lagrangian_rhs.amplitude_ai).isZero(1e-12) ||
-            !(stationary.lagrangian_rhs.amplitude_ai-stationary.eq40_amplitude_rhs.three_external).isZero(1e-12))
+            !(stationary.lagrangian_rhs.amplitude_ai-stationary.eq40_amplitude_rhs.three_external).isZero(1e-12) ||
+            !(stationary.eq40_amplitude_rhs.three_external-
+              stationary.eq40_amplitude_rhs.pair_coefficients.total.bottomLeftCorner(nvirt,nocc)+
+              stationary.eq40_amplitude_rhs.pair_coefficients.total.topRightCorner(nocc,nvirt).transpose()).isZero(1e-12))
             return std::unexpected("DH gradient driver contract: stationary RHS convention mismatch.");
         static_cast<DHStationaryProducts &>(out) = std::move(stationary);
         auto relaxed = build_dh_relaxed_difference_density(out.amplitudes, inputs.z_ai);
@@ -1466,7 +1535,7 @@ namespace DFT::Gradient
         // metric derivative, for production as well as contract callers.
         {
             const auto literal_pair = build_dh_eq47_pair_metric_overlap_density(
-                pt2, out.amplitudes, inputs.workspace->mo_eri);
+                out.eq40_amplitude_rhs.pair_coefficients, nocc, nvirt);
             if (!literal_pair) return std::unexpected(literal_pair.error());
 
             // Preserve the independently derived Eq. (42) response and
