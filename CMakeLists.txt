@@ -419,6 +419,15 @@ set(DFT_LIB_SRC
     ${SRC_DIR}/dft/dh_pt2_gradient.h
     ${SRC_DIR}/dft/udh_ks_response.cpp
     ${SRC_DIR}/dft/udh_ks_response.h
+    ${SRC_DIR}/dft/udh_driver.cpp
+    ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+    ${SRC_DIR}/dft/udh_pt2_orbital.cpp
+    ${SRC_DIR}/dft/udh_zvector.cpp
+    ${SRC_DIR}/dft/udh_relaxed_density.cpp
+    ${SRC_DIR}/dft/udh_overlap_density.cpp
+    ${SRC_DIR}/dft/udh_two_particle_density.cpp
+    ${SRC_DIR}/dft/udh_xc_ii.cpp
+    ${SRC_DIR}/dft/udh_xc_ii_gga.cpp
     ${SRC_DIR}/dft/dh_hessian_probe.cpp
     ${SRC_DIR}/dft/dh_hessian_probe.h
     ${SRC_DIR}/dft/dh_probe_gmres.h
@@ -793,6 +802,29 @@ endif()
 find_package(Python3 COMPONENTS Interpreter)
 
 if(BUILD_TESTING)
+    # Test-only front end of the same driver, with a typed UDH validation
+    # ledger. Not installed; normal CLI/MPI guards remain unchanged.
+    add_executable(planck-udh-validation
+        ${CMAKE_SOURCE_DIR}/tests/udh_gradient_main.cpp
+        ${BASE_SRC} ${DFT_LIB_SRC} ${LOOKUP_SRC} ${SYMM_SRC} ${BASIS_SRC}
+        ${INT_SRC} ${IO_SRC} ${SCF_SRC} ${SOLVATION_SRC} ${POPULATIONS_SRC}
+        ${POSTHF_DFT_SRC} ${GRADIENT_SRC} ${OPT_SRC} ${FREQ_SRC})
+    target_include_directories(planck-udh-validation PRIVATE ${SRC_DIR} ${CMAKE_BINARY_DIR}
+        ${MSYM_INSTALL_DIR}/include ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-validation ${MSYM_INSTALL_DIR}/lib/libmsym.a ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-validation libmsym libxc)
+    target_compile_definitions(planck-udh-validation PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER}
+        PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower} PLANCK_CC_DRESS_OPERATORS=${_planck_cc_dressed})
+    if(Python3_Interpreter_FOUND)
+        add_dependencies(planck-udh-validation ccgen-spinorbital-warm-start ccgen-planck-kernels)
+        add_test(NAME planck-udh-molecular-runner
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_molecular_audit.py -v)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-validation OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-validation PRIVATE USE_OPENMP)
+    endif()
+
     add_executable(planck-dh-probe-gmres ${CMAKE_SOURCE_DIR}/tests/dh_probe_gmres.cpp)
     target_include_directories(planck-dh-probe-gmres PRIVATE ${SRC_DIR} ${eigen_SOURCE_DIR})
     add_test(NAME planck-dh-probe-gmres COMMAND planck-dh-probe-gmres)
@@ -849,6 +881,21 @@ if(BUILD_TESTING)
         add_test(NAME planck-udh-u4-contract
             COMMAND ${Python3_EXECUTABLE} -m unittest discover
                 -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_zvector_contract.py -v)
+        add_test(NAME planck-udh-u5-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_relaxed_density_contract.py -v)
+        add_test(NAME planck-udh-u6-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_overlap_density_contract.py -v)
+        add_test(NAME planck-udh-u7-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_two_particle_density_contract.py -v)
+        add_test(NAME planck-udh-u8a-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_xc_ii_lda_contract.py -v)
+        add_test(NAME planck-udh-u8b-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_xc_ii_gga_contract.py -v)
     endif()
 
     add_executable(planck-dh-pt2-amplitude-density
@@ -1199,6 +1246,182 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-udh-zvector PRIVATE USE_OPENMP)
     endif()
     add_test(NAME planck-udh-zvector COMMAND planck-udh-zvector)
+
+    # U5 detached relaxed spin densities, U4 handoff and RKS reduction.
+    add_executable(planck-udh-relaxed-density
+        ${CMAKE_SOURCE_DIR}/tests/udh_relaxed_density.cpp
+        ${SRC_DIR}/dft/udh_relaxed_density.cpp
+        ${SRC_DIR}/dft/udh_zvector.cpp
+        ${SRC_DIR}/dft/udh_pt2_orbital.cpp
+        ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/udh_ks_response.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-relaxed-density PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-relaxed-density ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-relaxed-density libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-relaxed-density OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-relaxed-density PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-relaxed-density COMMAND planck-udh-relaxed-density)
+
+    # U6 detached pair/nonpair metric W and fixed-AO scalar oracles.
+    add_executable(planck-udh-overlap-density
+        ${CMAKE_SOURCE_DIR}/tests/udh_overlap_density.cpp
+        ${SRC_DIR}/dft/udh_overlap_density.cpp
+        ${SRC_DIR}/dft/udh_relaxed_density.cpp
+        ${SRC_DIR}/dft/udh_zvector.cpp
+        ${SRC_DIR}/dft/udh_pt2_orbital.cpp
+        ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/udh_ks_response.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-overlap-density PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-overlap-density ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-overlap-density libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-overlap-density OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-overlap-density PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-overlap-density COMMAND planck-udh-overlap-density)
+
+    # U7 detached spin-resolved ERI tensors and fixed-contract non-XC oracles.
+    add_executable(planck-udh-two-particle-density
+        ${CMAKE_SOURCE_DIR}/tests/udh_two_particle_density.cpp
+        ${SRC_DIR}/dft/udh_two_particle_density.cpp
+        ${SRC_DIR}/dft/udh_relaxed_density.cpp
+        ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-two-particle-density PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-two-particle-density ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-two-particle-density libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-two-particle-density OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-two-particle-density PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-two-particle-density COMMAND planck-udh-two-particle-density)
+
+    # U8a detached complete polarized LDA XC-II, four geometry channels.
+    add_executable(planck-udh-xc-ii-lda
+        ${CMAKE_SOURCE_DIR}/tests/udh_xc_ii_lda.cpp
+        ${SRC_DIR}/dft/udh_xc_ii.cpp
+        ${SRC_DIR}/dft/ks_matrix.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-xc-ii-lda PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-xc-ii-lda ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-xc-ii-lda libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-xc-ii-lda OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-xc-ii-lda PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-xc-ii-lda COMMAND planck-udh-xc-ii-lda)
+
+    # U8b detached complete polarized GGA XC-II and Hessian-bearing oracles.
+    add_executable(planck-udh-xc-ii-gga
+        ${CMAKE_SOURCE_DIR}/tests/udh_xc_ii_gga.cpp
+        ${SRC_DIR}/dft/udh_xc_ii_gga.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/ks_matrix.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-xc-ii-gga PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-xc-ii-gga ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-xc-ii-gga libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-xc-ii-gga OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-xc-ii-gga PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-xc-ii-gga COMMAND planck-udh-xc-ii-gga)
+
+    # U9 common stationary functional, noncanonical amplitudes and Z transfer.
+    # Standalone manufactured AO oracle; not a UKS driver/SCF enablement.
+    add_executable(planck-udh-stationary-transfer
+        ${CMAKE_SOURCE_DIR}/tests/udh_stationary_transfer.cpp
+        ${SRC_DIR}/dft/udh_two_particle_density.cpp
+        ${SRC_DIR}/dft/udh_overlap_density.cpp
+        ${SRC_DIR}/dft/udh_relaxed_density.cpp
+        ${SRC_DIR}/dft/udh_zvector.cpp
+        ${SRC_DIR}/dft/udh_pt2_orbital.cpp
+        ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/udh_ks_response.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-stationary-transfer PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-stationary-transfer ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-stationary-transfer libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-stationary-transfer OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-stationary-transfer PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-stationary-transfer COMMAND planck-udh-stationary-transfer)
 
     add_executable(planck-hgp-quartet-validation
         ${CMAKE_SOURCE_DIR}/tests/hgp_quartet_validation.cpp

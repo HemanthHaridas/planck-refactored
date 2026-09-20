@@ -3048,7 +3048,7 @@ namespace DFT::Driver
 
         std::expected<void, std::string> validate_workflow_support(
             const HartreeFock::Calculator &calculator,
-            const InitializedFunctionals &functionals)
+            const InitializedFunctionals &functionals,const Options &options)
         {
             if (calculator._calculation == HartreeFock::CalculationType::SinglePoint)
                 return {};
@@ -3093,6 +3093,20 @@ namespace DFT::Driver
                 !functionals.has_double_hybrid_pt2)
                 return {};
 
+            // U10 access is programmatic and Gradient-only. Neither normal
+            // CLI supplies this ledger pointer; U11 acceptance precedes promotion.
+            if(options.udh_gradient_validation && functionals.has_double_hybrid_pt2 &&
+                !functionals.has_range_separation && calculator._scf._scf==HartreeFock::SCFType::UHF &&
+                calculator._calculation==HartreeFock::CalculationType::Gradient)
+            {
+                if(calculator._solvation._model!=HartreeFock::SolvationModel::None)
+                    return std::unexpected("UDH validation does not implement solvent response.");
+                if(!calculator._mp2.frozen.empty() || calculator._mp2.use_ri ||
+                    calculator._mp2.level_shift!=0.0 || !calculator._mp2.with_t2)
+                    return std::unexpected("UDH validation requires all-active conventional unshifted PT2 with stored T2.");
+                return {};
+            }
+
             // Restricted global-double-hybrid Cartesian derivatives use the
             // validated literal Eq. (47) RHS/overlap and hybrid Eq. (46)
             // complement. Range-separated and UKS variants remain excluded.
@@ -3124,9 +3138,11 @@ namespace DFT::Driver
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             const InitializedFunctionals &functionals,
             Result &result,
-            HartreeFock::Correlation::RMP2Result *restricted_pt2_result = nullptr)
+            HartreeFock::Correlation::RMP2Result *restricted_pt2_result = nullptr,
+            HartreeFock::Correlation::UMP2Result *unrestricted_pt2_result = nullptr)
         {
-            if (std::abs(functionals.perturbative_correlation_coefficient) <= 1.0e-14)
+            if (std::abs(functionals.perturbative_correlation_coefficient) <= 1.0e-14 &&
+                restricted_pt2_result==nullptr && unrestricted_pt2_result==nullptr)
                 return {};
 
             std::expected<void, std::string> correction =
@@ -3136,6 +3152,8 @@ namespace DFT::Driver
                           if (restricted_pt2_result != nullptr)
                               return std::unexpected("DFT double-hybrid gradients support RKS only.");
                           auto mp2_res = HartreeFock::Correlation::ump2_kernel(calculator, shell_pairs, calculator._mp2);
+                          if(mp2_res && unrestricted_pt2_result)
+                              *unrestricted_pt2_result=*mp2_res;
                           return mp2_res
                                      ? HartreeFock::Correlation::apply_ump2_result(calculator, *mp2_res)
                                      : std::unexpected(mp2_res.error());
@@ -4818,7 +4836,14 @@ namespace DFT::Driver
         if (!functionals)
             return std::unexpected(functionals.error());
 
-        if (auto workflow_support = validate_workflow_support(calculator, *functionals); !workflow_support)
+        if(options.udh_gradient_validation && options.udh_pt2_scale_validation)
+        {
+            if(!functionals->has_double_hybrid_pt2 || !std::isfinite(*options.udh_pt2_scale_validation))
+                return std::unexpected("UDH coefficient sweep requires a finite scale and a double-hybrid parent functional.");
+            functionals->perturbative_correlation_coefficient=*options.udh_pt2_scale_validation;
+        }
+
+        if (auto workflow_support = validate_workflow_support(calculator, *functionals,options); !workflow_support)
             return std::unexpected(workflow_support.error());
 
         HartreeFock::Logger::logging(
@@ -4873,6 +4898,28 @@ namespace DFT::Driver
                     return std::unexpected(result.error());
                 if (!result->converged)
                     return *result;
+                if(calculator._scf._scf==HartreeFock::SCFType::UHF)
+                {
+                    if(!options.udh_gradient_validation)
+                        return std::unexpected("UKS double-hybrid gradients await U11 molecular acceptance.");
+                    HartreeFock::Correlation::UMP2Result pt2;
+                    if(auto applied=apply_post_ks_double_hybrid_correction(calculator,prepared->shell_pairs,
+                        *functionals,*result,nullptr,&pt2); !applied) return std::unexpected(applied.error());
+                    auto correction=build_udh_gradient_correction(calculator,*prepared,functionals->exchange,
+                        functionals->correlation,pt2,functionals->perturbative_correlation_coefficient);
+                    if(!correction) return std::unexpected(correction.error());
+                    auto ks=compute_analytic_ks_gradient(calculator,*prepared,*functionals);
+                    if(!ks) return std::unexpected(ks.error());
+                    if(ks->rows()!=correction->correction.rows() || ks->cols()!=3 || !ks->allFinite())
+                        return std::unexpected("UDH driver: invalid KS/correction result shape");
+                    correction->ks=*ks;
+                    correction->total=*ks+correction->correction;
+                    calculator._gradient=rotate_gradient_to_requested_frame_if_needed(
+                        calculator,correction->total,requested_gradient_frame_bohr);
+                    *options.udh_gradient_validation=std::move(*correction);
+                    print_gradient_report(calculator._gradient);
+                    return *result;
+                }
                 HartreeFock::Correlation::RMP2Result pt2_result;
                 if (auto correction = apply_post_ks_double_hybrid_correction(
                         calculator, prepared->shell_pairs, *functionals, *result, &pt2_result);

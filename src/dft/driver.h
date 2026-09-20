@@ -15,6 +15,7 @@
 #include "base/wrapper.h"
 #include "dh_pt2_gradient.h"
 #include "dh_zvector.h"
+#include "udh_driver.h"
 #include "integrals/shellpair.h"
 #include "ks_matrix.h"
 #include "response_packing.h"
@@ -30,6 +31,13 @@ namespace DFT::Driver
         bool use_sao_blocking = true;
         bool save_checkpoint = false;
         bool print_grid_summary = true;
+        // U10 test-only access, never set by either production CLI. The
+        // owned ledger is filled only by the UKS global-DH Gradient branch.
+        // Remove this gate only after the U11 molecular acceptance ledger.
+        UDHGradientResult *udh_gradient_validation = nullptr;
+        // Validation-only coefficient sweep on the same parent functional;
+        // ignored without the ledger pointer. No input/CLI keyword exposes it.
+        std::optional<double> udh_pt2_scale_validation;
     };
 
     struct PreparedSystem
