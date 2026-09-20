@@ -211,6 +211,71 @@ namespace
                 "Normal grid should allocate radial points for oxygen");
     }
 
+    void test_unpruned_angular_refinement()
+    {
+        constexpr auto level = DFT::GridLevel::UltraFine;
+        constexpr int angular = 974;
+        for (int z : {1, 8})
+        {
+            const auto shells = require_expected(DFT::angular_shell_sizes(z, level, angular), "unpruned shells");
+            for (int count : shells)
+                require(count == angular, "Override must bypass pruning AND light-atom reduction");
+            const int nr = require_expected(DFT::radial_point_count(z, level), "radial count");
+            const auto radial = DFT::MakeTreutlerAhlrichsGrid(nr, DFT::treutler_xi(z));
+            const Eigen::Vector3d center(.21, -.35, .11);
+            const auto grid = require_expected(DFT::MakeAtomicGrid(z, center, level, angular), "unpruned atomic grid");
+            require(grid.rows() == nr*angular, "Unpruned point count must be radial count times angular count");
+            require(grid.rows() == require_expected(DFT::atomic_point_count(z, level, angular), "unpruned count"),
+                    "Allocation and generation must use the same override");
+            for (int ir = 0; ir < nr; ++ir)
+            {
+                const double expected_weight = 4*std::numbers::pi*radial(ir,1);
+                require_near(grid.block(ir*angular,3,angular,1).sum(), expected_weight,
+                             1e-11*std::max(1.0,std::abs(expected_weight)), "Angular refinement changed radial weight");
+                for (int ia : {0, angular/2, angular-1})
+                    require_near((grid.row(ir*angular+ia).head<3>().transpose()-center).norm(), radial(ir,0),
+                                 1e-12*std::max(1.0,radial(ir,0)), "Angular refinement changed radial node");
+            }
+        }
+        const auto old = require_expected(DFT::MakeAtomicGrid(1, Eigen::Vector3d::Zero(), level), "default grid");
+        const auto zero = require_expected(DFT::MakeAtomicGrid(1, Eigen::Vector3d::Zero(), level, 0), "zero override");
+        require(old.rows()==zero.rows() && (old-zero).cwiseAbs().maxCoeff()==0,
+                "Omitted/zero angular override must preserve the original grid exactly");
+        for (int count : {-1, 1, 591, 5811})
+            require_unexpected(DFT::MakeAtomicGrid(8,Eigen::Vector3d::Zero(),level,count), "invalid angular override");
+
+        // Exact spherical moment independent of orientation: integral (u.n)^32
+        // = 4*pi/33 for every unit u. The 302-point rule has degree 29; the
+        // 974-point rule has degree 53. This checks actual quadrature, not an
+        // assumed equality of two rotated finite grids.
+        const std::array<Eigen::Vector3d,2> axes{Eigen::Vector3d(1,0,0), Eigen::Vector3d(.8,.48,.36)};
+        double coarse_error=0, refined_error=0;
+        for (int count : {302, angular})
+        {
+            const auto grid = require_expected(DFT::MakeLebedevGrid(count), "moment grid");
+            for (const auto &axis : axes)
+            {
+                double value=0;
+                for (Eigen::Index p=0;p<grid.rows();++p)
+                    value += grid(p,3)*std::pow(grid.row(p).head<3>().dot(axis),32);
+                const double error=std::abs(value-4*std::numbers::pi/33);
+                if (count==302) coarse_error=std::max(coarse_error,error);
+                else refined_error=std::max(refined_error,error);
+            }
+        }
+        require(refined_error<1e-11, "Refined angular grid must integrate rotated degree-32 moment");
+        require(refined_error<coarse_error, "Angular refinement must reduce the unresolved moment error");
+
+        HartreeFock::Molecule atom;
+        atom.natoms=1; atom.atomic_numbers=Eigen::VectorXi::Constant(1,8);
+        atom._coordinates=Eigen::MatrixXd::Zero(1,3);
+        const auto molecular=require_expected(DFT::MakeMolecularGrid(atom,level,angular), "refined molecular grid");
+        const auto atomic=require_expected(DFT::MakeAtomicGrid(8,Eigen::Vector3d::Zero(),level,angular), "reference atomic grid");
+        require(molecular.points.rows()==atomic.rows(), "Molecular overload must forward angular override");
+        require((molecular.points-atomic).cwiseAbs().maxCoeff()<1e-12,
+                "Single-atom partition must preserve the refined atomic grid");
+    }
+
     void test_atomic_and_molecular_grid_generation()
     {
         const Eigen::Vector3d center = Eigen::Vector3d::Zero();
@@ -290,6 +355,7 @@ int main()
     test_angular_grid_invariants();
     test_radial_grid_invariants();
     test_orca_like_grid_presets();
+    test_unpruned_angular_refinement();
     test_atomic_and_molecular_grid_generation();
     return g_ok ? 0 : 1;
 }

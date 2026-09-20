@@ -337,20 +337,35 @@ namespace DFT
         return detail::radial_point_count(Z, *preset);
     }
 
-    inline std::expected<std::array<int, 5>, std::string> angular_shell_sizes(int Z, GridLevel level)
+    inline std::expected<std::array<int, 5>, std::string> angular_shell_sizes(
+        int Z, GridLevel level, int angular_points = 0)
     {
+        if (angular_points != 0)
+        {
+            const bool supported = angular_points >= 6 && std::any_of(
+                LEBEDEV_ORDER.begin(), LEBEDEV_ORDER.end(),
+                [angular_points](const auto &entry) { return entry.second == angular_points; });
+            if (!supported)
+                return std::unexpected("grid_angular_points: unsupported Lebedev size " +
+                                       std::to_string(angular_points));
+            // Fixed angular refinement: no pruning or H/He reduction. Neither
+            // the radial nodes/weights nor the lab-frame grid orientation move.
+            return std::array<int, 5>{angular_points, angular_points, angular_points,
+                                      angular_points, angular_points};
+        }
         auto scheme = effective_angular_scheme(Z, level);
         if (!scheme)
             return std::unexpected(scheme.error());
         return detail::angular_shells_for_scheme(*scheme);
     }
 
-    inline std::expected<int, std::string> atomic_point_count(int Z, GridLevel level)
+    inline std::expected<int, std::string> atomic_point_count(
+        int Z, GridLevel level, int angular_points = 0)
     {
         const auto nr = radial_point_count(Z, level);
         if (!nr)
             return std::unexpected(nr.error());
-        const auto shells = angular_shell_sizes(Z, level);
+        const auto shells = angular_shell_sizes(Z, level, angular_points);
         if (!shells)
             return std::unexpected(shells.error());
 
@@ -363,7 +378,8 @@ namespace DFT
     inline std::expected<Eigen::MatrixXd, std::string> MakeAtomicGrid(
         int Z,
         const Eigen::Vector3d &center,
-        GridLevel level)
+        GridLevel level,
+        int angular_points = 0)
     {
         if (Z <= 0)
             return std::unexpected(
@@ -372,7 +388,7 @@ namespace DFT
         const auto nr = radial_point_count(Z, level);
         if (!nr)
             return std::unexpected(nr.error());
-        const auto shells = angular_shell_sizes(Z, level);
+        const auto shells = angular_shell_sizes(Z, level, angular_points);
         if (!shells)
             return std::unexpected(shells.error());
         const Eigen::MatrixXd radial = MakeTreutlerAhlrichsGrid(*nr, treutler_xi(Z));
@@ -386,7 +402,7 @@ namespace DFT
             angular_cache[shell_index] = std::move(*angular_grid);
         }
 
-        const auto total_points = atomic_point_count(Z, level);
+        const auto total_points = atomic_point_count(Z, level, angular_points);
         if (!total_points)
             return std::unexpected(total_points.error());
         Eigen::MatrixXd grid(*total_points, 4);
@@ -416,7 +432,8 @@ namespace DFT
     inline std::expected<MolecularGrid, std::string> MakeMolecularGrid(
         const Eigen::VectorXi &atomic_numbers,
         const Eigen::MatrixXd &coordinates_bohr,
-        GridLevel level)
+        GridLevel level,
+        int angular_points = 0)
     {
         const Eigen::Index natoms = atomic_numbers.size();
         if (coordinates_bohr.rows() != natoms || coordinates_bohr.cols() != 3)
@@ -431,7 +448,7 @@ namespace DFT
             auto atomic_grid = MakeAtomicGrid(
                 atomic_numbers(atom),
                 coordinates_bohr.row(atom).transpose(),
-                level);
+                level, angular_points);
             if (!atomic_grid)
                 return std::unexpected(atomic_grid.error());
             atomic_grids[static_cast<std::size_t>(atom)] = std::move(*atomic_grid);
@@ -472,7 +489,8 @@ namespace DFT
 
     inline std::expected<MolecularGrid, std::string> MakeMolecularGrid(
         const HartreeFock::Molecule &molecule,
-        GridLevel level)
+        GridLevel level,
+        int angular_points = 0)
     {
         auto coords = detail::coordinates_bohr(molecule);
         if (!coords)
@@ -480,7 +498,7 @@ namespace DFT
         return MakeMolecularGrid(
             molecule.atomic_numbers,
             *coords,
-            level);
+            level, angular_points);
     }
 
 } // namespace DFT

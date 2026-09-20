@@ -1286,6 +1286,19 @@ namespace HartreeFock::IO
                      return std::expected<void, std::string>{};
                  }},
 
+                {"grid_angular_points", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     std::size_t consumed = 0;
+                     const int points = std::stoi(value, &consumed);
+                     if (consumed != value.size() || points < 0 || points > 5810 ||
+                         (points > 0 && points < 6))
+                         return std::unexpected("grid_angular_points must be 0 (preset) or a supported Lebedev size from 6 to 5810");
+                     // The grid builder checks membership in the actual
+                     // Lebedev table before allocating grids or starting SCF.
+                     dft._grid_angular_points = points;
+                     return {};
+                 }},
+
                 {"exchange", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
                      auto parsed = map_string_enum<HartreeFock::XCExchangeFunctional>(value);

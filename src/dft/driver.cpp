@@ -1348,7 +1348,7 @@ namespace DFT::Driver
 
             auto molecular_grid = MakeMolecularGrid(
                 calculator._molecule,
-                to_grid_level(calculator._dft._grid));
+                to_grid_level(calculator._dft._grid), calculator._dft._grid_angular_points);
             if (!molecular_grid)
                 return std::unexpected("TDDFT molecular grid construction failed: " + molecular_grid.error());
             prepared.molecular_grid = std::move(*molecular_grid);
@@ -3326,7 +3326,7 @@ namespace DFT::Driver
 
             auto molecular_grid = MakeMolecularGrid(
                 calculator._molecule,
-                to_grid_level(calculator._dft._grid));
+                to_grid_level(calculator._dft._grid), calculator._dft._grid_angular_points);
             if (!molecular_grid)
                 return std::unexpected("DFT molecular grid construction failed: " + molecular_grid.error());
             prepared.molecular_grid = std::move(*molecular_grid);
@@ -3383,7 +3383,7 @@ namespace DFT::Driver
 
             auto molecular_grid = MakeMolecularGrid(
                 calculator._molecule,
-                to_grid_level(calculator._dft._grid));
+                to_grid_level(calculator._dft._grid), calculator._dft._grid_angular_points);
             if (!molecular_grid)
                 return std::unexpected("DFT molecular grid construction failed: " + molecular_grid.error());
             prepared.molecular_grid = std::move(*molecular_grid);
@@ -4727,7 +4727,8 @@ namespace DFT::Driver
 
         maybe_build_sao_basis(calculator, options);
 
-        auto molecular_grid = MakeMolecularGrid(calculator._molecule, grid_level);
+        auto molecular_grid = MakeMolecularGrid(
+            calculator._molecule, grid_level, calculator._dft._grid_angular_points);
         if (!molecular_grid)
             return std::unexpected("DFT molecular grid construction failed: " + molecular_grid.error());
         prepared.molecular_grid = std::move(*molecular_grid);
@@ -4780,6 +4781,10 @@ namespace DFT::Driver
 
         if (calculator._dft._print_grid_summary && options.print_grid_summary)
         {
+            if (calculator._dft._grid_angular_points > 0)
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "DFT Angular grid :",
+                    std::format("{} points per radial shell, unpruned; radial preset unchanged",
+                                calculator._dft._grid_angular_points));
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Info,
                 "DFT Grid :",

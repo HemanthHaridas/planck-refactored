@@ -635,6 +635,10 @@ namespace HartreeFock
     struct OptionsDFT
     {
         DFTGridQuality _grid = DFTGridQuality::Normal;
+        // 0 preserves preset pruning. A supported Lebedev size uses that
+        // many points on EVERY radial shell, without light-atom reduction.
+        // Radial quadrature and Becke partitioning are unchanged.
+        int _grid_angular_points = 0;
         XCExchangeFunctional _exchange = XCExchangeFunctional::PBE;
         XCCorrelationFunctional _correlation = XCCorrelationFunctional::PBE;
         int _exchange_id = 0;    // 0 => resolve from _exchange through libxc

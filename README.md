@@ -403,6 +403,7 @@ Kohn-Sham DFT settings. Only read by `planck-dft`; ignored by `hartree-fock`. Th
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
 | `grid` / `grid_level` | enum | `coarse`, `normal`, `fine`, `ultrafine` | `normal` | Molecular integration grid quality. Higher quality uses more radial shells and angular points; see grid preset table below. |
+| `grid_angular_points` | int | `0`, or a supported Lebedev size (e.g. `590`, `974`, `1454`, `2030`) | `0` | `0` keeps preset pruning. A nonzero size uses that many angular points on every radial shell of every atom, without light-atom reduction. Radial quadrature and Becke partitioning remain unchanged. Intended for controlled angular convergence; increases grid memory and cost. |
 | `exchange` | enum/string | built-in aliases such as `slater`/`lda`, `b88`/`becke88`, `pw91`, `pbe`, `b3lyp`, `pbe0`/`pbeh`, `hse06`, `b2plyp`; or any libxc name | `pbe` | Exchange or combined exchange-correlation functional. Combined XC entries such as `b3lyp`, `pbe0`, `hse06`, and `b2plyp` ignore the separate `correlation` keyword. Unknown strings are resolved through libxc by name. |
 | `correlation` | enum/string | `vwn`/`vwn5`, `lyp`, `p86`, `pw91`, `pbe`; or any libxc name | `pbe` | Correlation functional |
 | `exchange_id` | int | any libxc integer ID | — | Use an arbitrary libxc exchange functional by its integer identifier. Overrides `exchange`. |
