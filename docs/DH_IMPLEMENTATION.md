@@ -3945,6 +3945,12 @@ failures remain valid records for that different discretization. No build,
 production enablement, fixture edit or derivative implementation change
 was performed during this validation run.
 
+The general quadrature/default-policy fix is scoped separately in
+[DFT grid accuracy](DFT_GRID_CONVERGENCE_SCOPE.md). It separates radial
+refinement, angular/pruning attribution, reproducible fixed grid policies,
+expanded molecular acceptance and deliberate defaults migration; the 1454
+override is a validated control, not that entire implementation.
+
 ## 16. Hessian-free Z-vector swap probe
 
 This section records the diagnostic experiment that preceded O3. It is
