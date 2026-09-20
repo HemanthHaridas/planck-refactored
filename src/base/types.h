@@ -1035,22 +1035,20 @@ namespace HartreeFock
     //   [-1   0 ] [ lam ] = [-1 ]
     // where G_{ij} = <e_i, e_j> is the m×m error-overlap (Gram) block.
     //
-    // Important: G is *expected* to be extremely ill-conditioned near
-    // convergence — the error matrices shrink toward zero and become nearly
-    // parallel, so the smallest Gram eigenvalue routinely reaches ~1e-29 while
-    // G stays positive-definite. The bare colPivHouseholderQr solve handles that
-    // gracefully (the tiny, near-degenerate coefficients are harmless because all
-    // stored Fock matrices are nearly identical there), so a condition-number
-    // threshold is the WRONG trigger — it would fire on healthy SCF and perturb
-    // the convergence path. Instead this guard intervenes only on genuine
-    // numerical breakdown:
+    // A common rescaling of all errors cannot change the minimizer. Normalize
+    // the errors before forming G (avoiding under/overflow), then normalize the
+    // active Gram block before bordering it with unit constraints. Otherwise
+    // rank-revealing QR sees G ~ 1e-20 next to the unit border and discards the
+    // objective near convergence, returning finite but non-minimizing weights.
+    // This scaling is NOT regularization or a convergence-tolerance change.
+    // Relative linear dependence may still require dropping old vectors. The
+    // guard intervenes on genuine numerical breakdown:
     //   - the active Gram block is indefinite (a real negative eigenvalue, beyond
     //     a relative noise floor), or
     //   - the solved coefficients are non-finite or explosively large.
     // In either case it drops the OLDEST vector (least representative of the
     // current point) and retries, always keeping at least the two newest
-    // vectors. On well-behaved SCF none of these fire, so the result is bitwise
-    // identical to the previous bare solve.
+    // vectors, falling back to the newest Fock if even the final solve fails.
     //
     // The returned coefficient vector has one entry per input error matrix;
     // entries for dropped (oldest) vectors are exactly zero, so callers keep
@@ -1064,12 +1062,26 @@ namespace HartreeFock
         if (m == 0)
             return coeffs;
 
+        double error_scale = 0.0;
+        for (const auto *error : errors)
+        {
+            if (!error || error->size() == 0 || !error->allFinite())
+                throw std::invalid_argument("DIIS requires finite, nonempty error matrices");
+            error_scale = std::max(error_scale, error->cwiseAbs().maxCoeff());
+        }
+        if (error_scale == 0.0)
+        {
+            coeffs(static_cast<Eigen::Index>(m - 1)) = 1.0;
+            return coeffs;
+        }
+
         // Full m×m Gram block; sub-blocks are taken as trailing (newest) corners.
         Eigen::MatrixXd G_full(static_cast<Eigen::Index>(m), static_cast<Eigen::Index>(m));
         for (std::size_t i = 0; i < m; ++i)
             for (std::size_t j = i; j < m; ++j)
             {
-                const double gij = (errors[i]->array() * errors[j]->array()).sum();
+                const double gij = ((errors[i]->array() / error_scale) *
+                                    (errors[j]->array() / error_scale)).sum();
                 G_full(static_cast<Eigen::Index>(i), static_cast<Eigen::Index>(j)) = gij;
                 G_full(static_cast<Eigen::Index>(j), static_cast<Eigen::Index>(i)) = gij;
             }
@@ -1082,7 +1094,14 @@ namespace HartreeFock
         {
             const std::size_t k = m - offset; // active subspace size
             const Eigen::Index ki = static_cast<Eigen::Index>(k);
-            const Eigen::MatrixXd G = G_full.bottomRightCorner(ki, ki);
+            Eigen::MatrixXd G = G_full.bottomRightCorner(ki, ki);
+            const double gram_scale = G.cwiseAbs().maxCoeff();
+            if (gram_scale == 0.0)
+            {
+                coeffs(static_cast<Eigen::Index>(m - 1)) = 1.0;
+                return coeffs;
+            }
+            G /= gram_scale;
 
             bool acceptable = true;
             if (k > 2)
@@ -1119,8 +1138,9 @@ namespace HartreeFock
                 // Accept unless the solve itself produced something unusable.
                 const bool usable =
                     sol.allFinite() &&
-                    (k <= 2 || sol.head(ki).cwiseAbs().maxCoeff() <= max_coeff_magnitude);
-                if (usable || k <= 2)
+                    sol.head(ki).cwiseAbs().maxCoeff() <= max_coeff_magnitude &&
+                    std::abs(sol.head(ki).sum() - 1.0) < 1e-8;
+                if (usable)
                 {
                     for (Eigen::Index i = 0; i < ki; ++i)
                         coeffs(static_cast<Eigen::Index>(offset) + i) = sol(i);
@@ -1128,6 +1148,11 @@ namespace HartreeFock
                 }
             }
 
+            if (k <= 2)
+            {
+                coeffs(static_cast<Eigen::Index>(m - 1)) = 1.0;
+                return coeffs;
+            }
             ++offset; // drop one more of the oldest vectors and retry
         }
     }

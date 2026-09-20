@@ -19,6 +19,8 @@ class U0Fixtures(unittest.TestCase):
         self.assertEqual(len(fixtures), len(expected))
         for path in fixtures:
             text = path.read_text()
+            self.assertIn("max_cycles  200", text)
+            self.assertIn("tol_energy  1.0e-11", text)
             symbols, xyz, charge, mult = parse_geometry(text)
             electrons = sum({"O": 8, "H": 1}[s] for s in symbols) - charge
             nao = sum({"O": 5, "H": 1}[s] for s in symbols)
@@ -33,6 +35,9 @@ class U0Fixtures(unittest.TestCase):
             self.assertIn("calculation gradient", gradient)
             self.assertEqual(parse_geometry(gradient), (symbols, xyz, charge, mult))
             if key == "h2o2_cation_c1":
+                self.assertIn("diis_dim    8", text)
+                self.assertIn("scf_soscf_auto_stall 5", text)
+                self.assertIn("scf_soscf_cycles 30", text)
                 # This fixture's contract is that the downstream post-KS (PT2)
                 # step receives the UNSHIFTED Fock and density -- not that any
                 # particular convergence aid is used to get there. Two routes
@@ -60,6 +65,10 @@ class U0Fixtures(unittest.TestCase):
                     "h2o2_cation_c1 must use exactly one unshifted-handoff route: "
                     "a level shift that is removed before post-KS, or SOSCF "
                     "(unshifted by construction). They cannot be combined.")
+            if key == "ho2_asymmetric":
+                self.assertIn("scf_soscf_cycles 30", text)
+            if key in ("water_triplet_asymmetric", "ho2_asymmetric", "h2o2_cation_c1"):
+                self.assertIn("tol_eri     1.0e-14", text)
 
     def test_actual_c1_geometry(self):
         path = FIXTURES / "h2o2_cation_c1_b2plyp_sto3g.hfinp"

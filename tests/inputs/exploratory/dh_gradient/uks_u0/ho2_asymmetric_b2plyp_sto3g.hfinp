@@ -10,10 +10,11 @@
     use_diis    .true.
     diis_dim    8
     engine      os
+    tol_eri     1.0e-14
     guess       hcore
     max_cycles  200
     scf_soscf_start  5
-    scf_soscf_cycles 3
+    scf_soscf_cycles 30
     tol_energy  1.0e-11
     tol_density 1.0e-11
 %end_scf
