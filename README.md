@@ -163,10 +163,24 @@ an uninstalled binary looks under the prefix and reports:
 
 <p align="justify">
 Setting <code>BASIS_PATH</code> to the in-tree <code>basis-sets/</code>
-directory overrides it. (Note the stray <code>install/</code> segment in that
-path: the compiled-in default and the <code>install()</code> destination do not
-currently agree, so <code>BASIS_PATH</code> is also the reliable route after
-<code>cmake --install</code>.)
+directory overrides it, or simply <code>cmake --install</code> first and run
+the installed binary — the compiled-in default and the <code>install()</code>
+destination now agree (<code>&lt;prefix&gt;/share/basis-sets</code>).
+</p>
+
+<p align="justify">
+<strong>A valid license is required to run any binary.</strong> Every
+executable that touches the Boys function — <code>hartree-fock</code>,
+<code>planck-dft</code>, <code>planck-mpi</code>, and every test binary
+built from this tree — verifies a local license file before doing anything
+else and exits immediately if one isn't found or doesn't verify. The
+compiled-in default install prefix fixes where that file is expected:
+<code>&lt;prefix&gt;/license.json</code>, a sibling of <code>bin/</code> and
+<code>share/</code> — e.g. <code>install/license.json</code> for the default
+in-tree prefix, or <code>/path/to/prefix/license.json</code> for a custom one
+set via <code>-DCMAKE_INSTALL_PREFIX</code>. Unlike <code>BASIS_PATH</code>,
+this location is fixed and not overridable by an environment variable — a
+license is meant to be found where the software itself is installed.
 </p>
 
 ### Build options

@@ -32,6 +32,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include "require_boys_library.h"
 
 namespace
 {
@@ -216,6 +217,8 @@ namespace
 
 int main()
 {
+    if (!require_boys_library()) return 1;
+
     // NH3 — C3v, |G| = 6. First non-Abelian group (C3, sigma_v); build_sao_basis
     // would only ever see its Cs/C... Abelian subgroup, so this exercises the new
     // full-operation path.

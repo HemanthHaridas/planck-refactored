@@ -1,0 +1,23 @@
+#ifndef HF_LOOKUP_LOADER_LICENSE_PATH_H
+#define HF_LOOKUP_LOADER_LICENSE_PATH_H
+
+#include <string>
+
+namespace HartreeFock
+{
+    namespace Loader
+    {
+        // Fixed, install-prefix-relative location of the license file
+        // (<prefix>/license.json, sibling to bin/ and share/) — not
+        // user-overridable via an environment variable, unlike
+        // get_basis_path()'s BASIS_PATH. The license is meant to be found
+        // where the binary itself is installed, not wherever the caller's
+        // environment happens to point.
+        inline std::string get_license_path()
+        {
+            return "@LICENSE_INSTALL_PATH@";
+        }
+    } // namespace Loader
+} // namespace HartreeFock
+
+#endif // !HF_LOOKUP_LOADER_LICENSE_PATH_H

@@ -4,6 +4,8 @@ build
 arXiv
 src/external
 src/base/basis.h
+src/lookup/loader/license_path.h
+license.json
 inputs
 !tests/inputs/
 !tests/inputs/**

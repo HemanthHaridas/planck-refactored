@@ -22,6 +22,7 @@
 #include "post_hf/integrals.h"
 #include "post_hf/rhf_response.h"
 #include "post_hf/ri/ri_eri.h"
+#include "require_boys_library.h"
 
 namespace
 {
@@ -41,6 +42,8 @@ namespace
 
 int main()
 {
+    if (!require_boys_library()) return 1;
+
     using HartreeFock::BasisFunctions::read_gbs_basis;
     using HartreeFock::BasisFunctions::read_ri_basis;
     using HartreeFock::Correlation::build_rhf_cphf_matrix_ri;

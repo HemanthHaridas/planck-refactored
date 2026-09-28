@@ -28,6 +28,7 @@
 #include "base/types.h"
 #include "basis/rifit.h"
 #include "post_hf/ri/ri_eri.h"
+#include "require_boys_library.h"
 
 namespace
 {
@@ -102,6 +103,8 @@ namespace
 
 int main()
 {
+    if (!require_boys_library()) return 1;
+
     using HartreeFock::Correlation::RI::compute_2c_eri;
     using HartreeFock::Correlation::RI::ensure_ri_metric_ready;
     using HartreeFock::Correlation::RI::factorize_2c_metric;
