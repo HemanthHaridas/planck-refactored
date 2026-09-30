@@ -125,7 +125,25 @@ int main(int argc, const char *argv[])
         std::vector<std::uint8_t> blob;
         if (rank == 0)
         {
+            // Every rank will independently decrypt whatever gets
+            // broadcast below, so a stale/corrupt cache entry would
+            // otherwise fail identically on all N ranks before the job
+            // dies — wasteful, and it hides that the fix (retry past the
+            // cache) only needed to happen once. Validate here instead,
+            // with the side-effect-free decrypt check (NOT
+            // initialize_boys_library_from_blob() — that sets the
+            // process-global boys()/boys_vec() function pointers and
+            // rejects being called a second time, which every rank
+            // including this one still needs to do below after the
+            // broadcast): on decrypt failure, evict and retry the fetch
+            // once, exactly like initialize_boys_library()'s own retry.
             auto fetched = HartreeFock::Loader::fetch_boys_library_blob(*local_license, blob_url_template);
+            if (fetched && !HartreeFock::Loader::boys_library_blob_decrypts(*local_license, *fetched))
+            {
+                HartreeFock::Loader::evict_boys_library_cache_entry(*local_license, blob_url_template);
+                fetched = HartreeFock::Loader::fetch_boys_library_blob(*local_license, blob_url_template,
+                                                                       /*force_network=*/true);
+            }
             if (fetched)
                 blob = std::move(*fetched);
             else

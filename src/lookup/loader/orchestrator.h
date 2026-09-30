@@ -44,12 +44,49 @@ namespace HartreeFock
             const std::string &blob_url_template);
 
         // Substitutes license.library_version into blob_url_template
-        // (replacing the literal "{version}") and fetches the resulting URL.
+        // (replacing the literal "{version}") and returns the blob's bytes.
         // The network half of initialize_boys_library() — the one step that
         // should run once per job, not once per MPI rank.
+        //
+        // Checks a local cache first (see cache.h): a hit — an entry no
+        // older than the compile-time max age — is returned without
+        // touching the network at all. license.expires_at is NOT checked
+        // here, because every caller already obtained `license` via
+        // load_and_verify_license(), which rejects an expired license
+        // before this function is ever reached — there is no path by which
+        // an expired license's cache entry gets served.
+        //
+        // force_network skips the cache lookup unconditionally (but still
+        // writes a fresh cache entry on success) — used by the retry path
+        // in initialize_boys_library() after a cached blob fails to
+        // decrypt, so the retry can't just re-read the same corrupt entry.
         std::expected<std::vector<std::uint8_t>, std::string> fetch_boys_library_blob(
             const License &license,
+            const std::string &blob_url_template,
+            bool force_network = false);
+
+        // Deletes the cache entry fetch_boys_library_blob() would have read
+        // for this (license, blob_url_template) pair. For callers that
+        // split fetch from decrypt across process boundaries (planck-mpi:
+        // rank 0 fetches, every rank decrypts independently) and so can't
+        // use initialize_boys_library()'s own built-in retry — call this
+        // then fetch_boys_library_blob(..., force_network=true) to retry
+        // past a cache entry that failed to decrypt.
+        void evict_boys_library_cache_entry(
+            const License &license,
             const std::string &blob_url_template);
+
+        // Decrypts (but does not load/dlopen) a fetched blob — a pure
+        // validity check for callers that need to know "would this blob
+        // decrypt" without the call-once, process-global side effects of
+        // initialize_boys_library_from_blob(). planck-mpi's rank 0 uses
+        // this to validate a fetched/cached blob before broadcasting it,
+        // so a stale cache entry is caught and retried once on rank 0
+        // alone instead of failing identically on every rank after the
+        // broadcast.
+        std::expected<void, std::string> boys_library_blob_decrypts(
+            const License &license,
+            const std::vector<std::uint8_t> &blob);
 
         // Decrypts an already-fetched blob (license.decryption_key, AES-256-GCM)
         // and dlopens the result, resolving boys()/boys_vec() the same way

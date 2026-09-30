@@ -187,6 +187,18 @@ install(
 # WHERE the loader looks for one.
 set(LICENSE_INSTALL_PATH "${CMAKE_INSTALL_PREFIX}/license.json")
 
+# Fixed, predictable spot for the cached (still-encrypted) Boys library
+# blob — a sibling of license.json under the same install prefix, same
+# non-overridable, prefix-relative pattern. Not installed or pre-populated
+# by this build; the loader creates it on first fetch. Caching is a
+# convenience over the network, not a security boundary (the cached bytes
+# are the same public ciphertext a bare `curl` returns), so — unlike the
+# license path — there is no reason for a stricter location, but there is
+# also no reason for a looser (e.g. environment-overridable) one: the cache
+# belongs to this install, not to whatever directory the caller happens to
+# be in.
+set(BOYS_CACHE_INSTALL_PATH "${CMAKE_INSTALL_PREFIX}/boys_cache")
+
 # Boys-function license-gate loader (src/lookup/loader/) needs OpenSSL EVP for
 # Ed25519 signature verification and AES-256-GCM decryption. Linked globally
 # rather than per-target, since LOOKUP_SRC already reaches 37 targets and this
@@ -202,6 +214,10 @@ configure_file(
 configure_file(
     ${SRC_DIR}/lookup/loader/license_path.h.in
     ${SRC_DIR}/lookup/loader/license_path.h @ONLY
+)
+configure_file(
+    ${SRC_DIR}/lookup/loader/cache_path.h.in
+    ${SRC_DIR}/lookup/loader/cache_path.h @ONLY
 )
 
 # Fetch Eigen
