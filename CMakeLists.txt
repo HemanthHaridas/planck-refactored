@@ -1,6 +1,20 @@
 cmake_minimum_required(VERSION 3.5)
 project(planck LANGUAGES CXX)
 
+# Default to an in-tree install/ directory for local dev builds, but only when
+# the user hasn't asked for a real prefix. CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT
+# is set by CMake itself right after project(), before anything else can read or
+# consume CMAKE_INSTALL_PREFIX, and is the standard way to tell "user passed
+# -DCMAKE_INSTALL_PREFIX=..." apart from "still at CMake's own platform default
+# (e.g. /usr/local)". This must run before ANY other use of CMAKE_INSTALL_PREFIX
+# in this file (including BASIS_INSTALL_PATH below) or FetchContent/ExternalProject
+# call that might touch it — previously this override ran unconditionally and much
+# later in the file, discarding any -DCMAKE_INSTALL_PREFIX the user passed and
+# leaving BASIS_INSTALL_PATH computed from the wrong prefix.
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    set(CMAKE_INSTALL_PREFIX ${CMAKE_CURRENT_SOURCE_DIR}/install)
+endif()
+
 include(CTest)
 
 # C++ standard settings
@@ -154,7 +168,11 @@ find_package(Python3 COMPONENTS Interpreter)
 # Source directory
 set(SRC_DIR ${CMAKE_SOURCE_DIR}/src)
 
-set(BASIS_INSTALL_PATH "${CMAKE_INSTALL_PREFIX}/install/share/basis-sets")
+# Matches the actual install(DESTINATION share) layout below: <prefix>/share/basis-sets.
+# Previously had a spurious extra /install/ segment (<prefix>/install/share/basis-sets),
+# which never existed on disk, so an uninstalled build with BASIS_PATH unset always
+# failed to find its basis sets at runtime.
+set(BASIS_INSTALL_PATH "${CMAKE_INSTALL_PREFIX}/share/basis-sets")
 
 # Install basis sets
 install(
@@ -162,10 +180,44 @@ install(
     DESTINATION share
 )
 
+# Fixed, predictable spot for the Boys-function license file: a top-level
+# sibling of bin/ and share/ under the install prefix, e.g.
+# <prefix>/license.json. Not installed by this build (a license is issued by
+# hand, per-recipient, never generated at build time) — this only fixes
+# WHERE the loader looks for one.
+set(LICENSE_INSTALL_PATH "${CMAKE_INSTALL_PREFIX}/license.json")
+
+# Fixed, predictable spot for the cached (still-encrypted) Boys library
+# blob — a sibling of license.json under the same install prefix, same
+# non-overridable, prefix-relative pattern. Not installed or pre-populated
+# by this build; the loader creates it on first fetch. Caching is a
+# convenience over the network, not a security boundary (the cached bytes
+# are the same public ciphertext a bare `curl` returns), so — unlike the
+# license path — there is no reason for a stricter location, but there is
+# also no reason for a looser (e.g. environment-overridable) one: the cache
+# belongs to this install, not to whatever directory the caller happens to
+# be in.
+set(BOYS_CACHE_INSTALL_PATH "${CMAKE_INSTALL_PREFIX}/boys_cache")
+
+# Boys-function license-gate loader (src/lookup/loader/) needs OpenSSL EVP for
+# Ed25519 signature verification and AES-256-GCM decryption. Linked globally
+# rather than per-target, since LOOKUP_SRC already reaches 37 targets and this
+# avoids per-target target_link_libraries surgery.
+find_package(OpenSSL REQUIRED)
+link_libraries(OpenSSL::Crypto)
+
 # Configure generated header
 configure_file(
     ${SRC_DIR}/base/basis.h.in
     ${SRC_DIR}/base/basis.h @ONLY
+)
+configure_file(
+    ${SRC_DIR}/lookup/loader/license_path.h.in
+    ${SRC_DIR}/lookup/loader/license_path.h @ONLY
+)
+configure_file(
+    ${SRC_DIR}/lookup/loader/cache_path.h.in
+    ${SRC_DIR}/lookup/loader/cache_path.h @ONLY
 )
 
 # Fetch Eigen
@@ -195,7 +247,6 @@ set(LIBXC_INSTALL_DIR ${SRC_DIR}/external/libxc/install)
 # host and you want libxc tuned for it.
 option(LIBXC_ENABLE_XHOST
        "Let libxc compile itself with -march=native/-xHost (NOT portable)" OFF)
-set(CMAKE_INSTALL_PREFIX ${CMAKE_CURRENT_SOURCE_DIR}/install)
 
 include(ExternalProject)
 
@@ -269,6 +320,18 @@ file(GLOB LOOKUP_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/lookup/*.h
     ${SRC_DIR}/lookup/*.cpp
 )
+
+# Boys-function license-gate loader: not a recursive glob (no precedent for
+# that in this file, and it would silently pull in src/lookup/keys/, which
+# must never be compiled). orchestrator.cpp defines
+# HartreeFock::Lookup::boys()/boys_vec(), dispatching through the
+# license-gated dlopen'd library; boys.h (declarations only) stays in the
+# plain LOOKUP_SRC glob above.
+file(GLOB LOOKUP_LOADER_SRC CONFIGURE_DEPENDS
+    ${SRC_DIR}/lookup/loader/*.h
+    ${SRC_DIR}/lookup/loader/*.cpp
+)
+list(APPEND LOOKUP_SRC ${LOOKUP_LOADER_SRC})
 
 # Collect sources automatically
 file(GLOB SYMM_SRC CONFIGURE_DEPENDS
@@ -899,8 +962,8 @@ if(BUILD_TESTING)
         ${SRC_DIR}/integrals/rys_roots.cpp
         ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
-        ${SRC_DIR}/lookup/elements.cpp
-        ${SRC_DIR}/lookup/boys.cpp
+        ${LOOKUP_SRC}
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
     )
 
     add_executable(planck-multipole-integrals
@@ -1236,8 +1299,8 @@ if(BUILD_TESTING)
         ${SRC_DIR}/integrals/rys_roots.cpp
         ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
-        ${SRC_DIR}/lookup/elements.cpp
-        ${SRC_DIR}/lookup/boys.cpp
+        ${LOOKUP_SRC}
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
     )
 
     # Native RI 3-center (mu nu | P) gate, validated against local PySCF.
@@ -1256,8 +1319,8 @@ if(BUILD_TESTING)
         ${SRC_DIR}/integrals/rys_roots.cpp
         ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
-        ${SRC_DIR}/lookup/elements.cpp
-        ${SRC_DIR}/lookup/boys.cpp
+        ${LOOKUP_SRC}
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
     )
 
     # Step 2 seam: transform_eri_ri must reproduce the dense transform_eri.
@@ -1278,8 +1341,8 @@ if(BUILD_TESTING)
         ${SRC_DIR}/integrals/rys_roots.cpp
         ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
-        ${SRC_DIR}/lookup/elements.cpp
-        ${SRC_DIR}/lookup/boys.cpp
+        ${LOOKUP_SRC}
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
     )
 
     # RG2.1: RI-MP2 gradient fitted 3-index density (Γ3) re-gram check.
@@ -1299,8 +1362,8 @@ if(BUILD_TESTING)
         ${SRC_DIR}/integrals/rys_roots.cpp
         ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
-        ${SRC_DIR}/lookup/elements.cpp
-        ${SRC_DIR}/lookup/boys.cpp
+        ${LOOKUP_SRC}
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
     )
 
     # RG3.3: RI Lagrangian imat vs dense imat.
@@ -1319,8 +1382,8 @@ if(BUILD_TESTING)
         ${SRC_DIR}/integrals/rys_roots.cpp
         ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
-        ${SRC_DIR}/lookup/elements.cpp
-        ${SRC_DIR}/lookup/boys.cpp
+        ${LOOKUP_SRC}
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
     )
 
     # RG3.1: RI-fitted RHF CPHF orbital Hessian vs dense A.
@@ -1341,8 +1404,8 @@ if(BUILD_TESTING)
         ${SRC_DIR}/integrals/rys_roots.cpp
         ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
-        ${SRC_DIR}/lookup/elements.cpp
-        ${SRC_DIR}/lookup/boys.cpp
+        ${LOOKUP_SRC}
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
     )
 
     # RG2.2: RI-MP2 gradient two-electron term vs dense two_e_terms.
@@ -1361,8 +1424,8 @@ if(BUILD_TESTING)
         ${SRC_DIR}/integrals/rys_roots.cpp
         ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
-        ${SRC_DIR}/lookup/elements.cpp
-        ${SRC_DIR}/lookup/boys.cpp
+        ${LOOKUP_SRC}
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
     )
 
     # Step J0: RI-JK builder harness. Same self-contained fixture; the RI J/K
@@ -1382,8 +1445,8 @@ if(BUILD_TESTING)
         ${SRC_DIR}/integrals/rys_roots.cpp
         ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
-        ${SRC_DIR}/lookup/elements.cpp
-        ${SRC_DIR}/lookup/boys.cpp
+        ${LOOKUP_SRC}
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
     )
 
     # G0/G1: RI caches must rebuild when the geometry moves.
@@ -1402,8 +1465,8 @@ if(BUILD_TESTING)
         ${SRC_DIR}/integrals/rys_roots.cpp
         ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
-        ${SRC_DIR}/lookup/elements.cpp
-        ${SRC_DIR}/lookup/boys.cpp
+        ${LOOKUP_SRC}
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
     )
 
     # RG0: finite-difference oracle for the 3-center derivative d/dR (μν|Q),
@@ -1423,8 +1486,8 @@ if(BUILD_TESTING)
         ${SRC_DIR}/integrals/rys_roots.cpp
         ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
-        ${SRC_DIR}/lookup/elements.cpp
-        ${SRC_DIR}/lookup/boys.cpp
+        ${LOOKUP_SRC}
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
     )
 
     # Contract test for the working-state rebuild helper that will drive
@@ -1447,8 +1510,8 @@ if(BUILD_TESTING)
         ${SRC_DIR}/integrals/rys_roots.cpp
         ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
-        ${SRC_DIR}/lookup/elements.cpp
-        ${SRC_DIR}/lookup/boys.cpp
+        ${LOOKUP_SRC}
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
     )
 
     add_executable(planck-group-operations
@@ -1460,7 +1523,6 @@ if(BUILD_TESTING)
         ${SRC_DIR}/basis/gbs_parser.cpp
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
-        ${SRC_DIR}/lookup/elements.cpp
         # group_operations.cpp now computes the Cartesian overlap to correct O_R into
         # the spherical AO basis (Step 1', spherical full-symmetry), so it needs the
         # integral engine.
@@ -1470,7 +1532,8 @@ if(BUILD_TESTING)
         ${SRC_DIR}/integrals/rys_roots.cpp
         ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
-        ${SRC_DIR}/lookup/boys.cpp
+        ${LOOKUP_SRC}
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
     )
 
     add_executable(planck-fock-symmetrization
@@ -1483,7 +1546,6 @@ if(BUILD_TESTING)
         ${SRC_DIR}/basis/gbs_parser.cpp
         ${SRC_DIR}/basis/spherical.cpp
         ${SRC_DIR}/basis/spherical_recurrence.cpp
-        ${SRC_DIR}/lookup/elements.cpp
         # group_operations.cpp needs the integral engine (Cartesian overlap) for the
         # spherical O_R correction (Step 1').
         ${SRC_DIR}/integrals/os.cpp
@@ -1492,7 +1554,8 @@ if(BUILD_TESTING)
         ${SRC_DIR}/integrals/rys_roots.cpp
         ${SRC_DIR}/integrals/screening.cpp
         ${SRC_DIR}/integrals/shellpair.cpp
-        ${SRC_DIR}/lookup/boys.cpp
+        ${LOOKUP_SRC}
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
     )
 
     add_executable(planck-symm-fock-benchmark

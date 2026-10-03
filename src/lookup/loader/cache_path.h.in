@@ -1,0 +1,24 @@
+#ifndef HF_LOOKUP_LOADER_CACHE_PATH_H
+#define HF_LOOKUP_LOADER_CACHE_PATH_H
+
+#include <string>
+
+namespace HartreeFock
+{
+    namespace Loader
+    {
+        // Fixed, install-prefix-relative location of the Boys library blob
+        // cache (<prefix>/boys_cache, sibling to license.json) — same
+        // non-overridable pattern as get_license_path(). The cache holds
+        // only public ciphertext (the same bytes a bare `curl` returns), so
+        // its location isn't a security boundary the way the license path
+        // is, but it still belongs to this install rather than to whatever
+        // directory the caller happens to be in.
+        inline std::string get_boys_cache_dir()
+        {
+            return "@BOYS_CACHE_INSTALL_PATH@";
+        }
+    } // namespace Loader
+} // namespace HartreeFock
+
+#endif // !HF_LOOKUP_LOADER_CACHE_PATH_H

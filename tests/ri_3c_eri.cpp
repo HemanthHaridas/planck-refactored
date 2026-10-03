@@ -21,6 +21,7 @@
 #include "integrals/shellpair.h"
 #include "lookup/elements.h"
 #include "post_hf/ri/ri_eri.h"
+#include "require_boys_library.h"
 
 namespace
 {
@@ -193,6 +194,8 @@ namespace
 
 int main()
 {
+    if (!require_boys_library()) return 1;
+
     using HartreeFock::BasisFunctions::read_gbs_basis;
     using HartreeFock::BasisFunctions::read_ri_basis;
     using HartreeFock::Correlation::RI::compute_3c_eri;

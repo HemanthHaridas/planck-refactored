@@ -31,6 +31,7 @@
 #include <random>
 #include <string>
 #include <vector>
+#include "require_boys_library.h"
 
 namespace
 {
@@ -209,6 +210,8 @@ namespace
 
 int main()
 {
+    if (!require_boys_library()) return 1;
+
     check("NH3/C3v",
           {7, 1, 1, 1},
           {{{0.0000, 0.0000, 0.1173}},

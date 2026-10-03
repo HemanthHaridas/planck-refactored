@@ -15,6 +15,7 @@
 #include "integrals/os.h"
 #include "integrals/rys.h"
 #include "integrals/shellpair.h"
+#include "require_boys_library.h"
 
 namespace
 {
@@ -1140,6 +1141,8 @@ namespace
 
 int main()
 {
+    if (!require_boys_library()) return 1;
+
     test_kernel_entry_points();
     test_long_range_quartet_derivative_against_finite_difference();
     test_hgp_screened_quartet_derivatives_s_p();

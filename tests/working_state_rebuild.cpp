@@ -28,6 +28,7 @@
 #include "basis/basis.h"
 #include "scf/working_state.h"
 #include "symmetry/symmetry.h"
+#include "require_boys_library.h"
 
 namespace
 {
@@ -205,6 +206,8 @@ namespace
 
 int main()
 {
+    if (!require_boys_library()) return 1;
+
     check_cartesian();
     check_spherical();
 
