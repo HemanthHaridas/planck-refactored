@@ -6,6 +6,8 @@
 #include <cmath>
 #include <cstddef>
 #include <expected>
+#include <map>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -43,6 +45,80 @@ namespace DFT
         // the radial point count. Coarse/Normal/Fine/UltraFine map to 1/3/5/7,
         // putting Normal on PySCF's own default (level 3).
         int pyscf_level;
+    };
+
+    // Named schedules are immutable and versioned.  The candidates below are
+    // G3 measurement controls; LegacyOrcaIndexV1 remains the production
+    // default.  G43V4QualifiedV1 is a separately qualified opt-in policy;
+    // it is deliberately not a default-policy migration.  In particular,
+    // PySCFNWChem213 is a literal PySCF 2.13 `nwchem_prune` candidate, not a
+    // claim of force convergence.
+    enum class GridPruningPolicy
+    {
+        LegacyOrcaIndexV1,
+        LegacyOrcaNoLightReductionV1,
+        LegacyOrcaUnprunedMaxV1,
+        PySCFNWChem213,
+        G43V4QualifiedV1
+    };
+
+    // The request is the small, user-facing part of grid selection.  It is
+    // intentionally independent of a molecule: resolution must not inspect a
+    // changing density or geometry, otherwise a numerical displacement could
+    // silently use a different quadrature rule.
+    struct GridRequest
+    {
+        GridLevel level = GridLevel::Normal;
+        // Zero retains the selected policy's shell schedule.  A supported
+        // positive Lebedev size is an unpruned, uniform angular override.
+        int angular_points = 0;
+        // Zero uses the element/quality radial table.  A positive value is a
+        // uniform per-atom shell count; it is deliberately independent of
+        // density and geometry so displaced calculations retain one rule.
+        int radial_points = 0;
+        GridPruningPolicy pruning_policy = GridPruningPolicy::LegacyOrcaIndexV1;
+    };
+
+    // An immutable description of every geometry-independent quadrature
+    // choice.  MolecularGrid below owns only the geometry-dependent points and
+    // weights; consumers retain this specification to prove that SCF, response
+    // and displaced calculations used the same rule.
+    struct ResolvedGridSpec
+    {
+        GridRequest request;
+        GridPreset preset;
+        GridPruningPolicy pruning_policy = GridPruningPolicy::LegacyOrcaIndexV1;
+        int radial_override = 0; // Reserved for G2; zero means preset count.
+        bool reduce_light_atoms = true;
+        std::string radial_rule = "treutler-ahlrichs-m4-xi-pyscf-2.13";
+        std::string partition_rule = "original-becke-treutler-bragg";
+        std::string policy_name = "legacy-orca-index-v1";
+
+        [[nodiscard]] std::string fingerprint() const
+        {
+            return policy_name + ";v=1;level=" + std::to_string(static_cast<int>(request.level)) +
+                   ";pyscf_level=" + std::to_string(preset.pyscf_level) +
+                   ";angular_override=" + std::to_string(request.angular_points) +
+                   ";radial_override=" + std::to_string(radial_override) +
+                   ";light_atoms=" + (reduce_light_atoms ? "reduced" : "full") +
+                   ";radial=" + radial_rule + ";partition=" + partition_rule;
+        }
+
+        // All current fields are resolver-owned identifiers or integers, so no
+        // escaping is needed.  Keep this compact record separate from runtime
+        // MolecularGrid arrays; it is suitable for an audit ledger or cache
+        // key report without serializing geometry-dependent data.
+        [[nodiscard]] std::string json() const
+        {
+            return "{\"policy\":\"" + policy_name + "\",\"version\":1,\"level\":" +
+                   std::to_string(static_cast<int>(request.level)) +
+                   ",\"pyscf_level\":" + std::to_string(preset.pyscf_level) +
+                   ",\"angular_override\":" + std::to_string(request.angular_points) +
+                   ",\"radial_override\":" + std::to_string(radial_override) +
+                   ",\"light_atoms\":\"" + (reduce_light_atoms ? "reduced" : "full") +
+                   "\",\"radial\":\"" + radial_rule + "\",\"partition\":\"" +
+                   partition_rule + "\"}";
+        }
     };
 
     struct MolecularGrid
@@ -313,6 +389,61 @@ namespace DFT
         return std::unexpected("grid_preset: unsupported grid level");
     }
 
+    inline std::string grid_pruning_policy_name(GridPruningPolicy policy)
+    {
+        switch (policy)
+        {
+        case GridPruningPolicy::LegacyOrcaIndexV1: return "legacy-orca-index-v1";
+        case GridPruningPolicy::LegacyOrcaNoLightReductionV1: return "legacy-orca-no-light-reduction-v1";
+        case GridPruningPolicy::LegacyOrcaUnprunedMaxV1: return "legacy-orca-unpruned-max-v1";
+        case GridPruningPolicy::PySCFNWChem213: return "pyscf-nwchem-2.13";
+        case GridPruningPolicy::G43V4QualifiedV1: return "g4-3-v4";
+        }
+        return "unknown";
+    }
+
+    inline std::expected<GridPruningPolicy, std::string> grid_pruning_policy_from_name(
+        const std::string &name)
+    {
+        if (name == "legacy") return GridPruningPolicy::LegacyOrcaIndexV1;
+        if (name == "legacy-no-light-reduction") return GridPruningPolicy::LegacyOrcaNoLightReductionV1;
+        if (name == "legacy-unpruned-max") return GridPruningPolicy::LegacyOrcaUnprunedMaxV1;
+        if (name == "pyscf-nwchem-2.13") return GridPruningPolicy::PySCFNWChem213;
+        if (name == "g4-3-v4" || name == "g4-3-v4-test-only")
+            return GridPruningPolicy::G43V4QualifiedV1;
+        return std::unexpected("grid_policy must be legacy, legacy-no-light-reduction, legacy-unpruned-max, pyscf-nwchem-2.13, or g4-3-v4");
+    }
+
+    inline std::expected<ResolvedGridSpec, std::string> resolve_grid_spec(GridRequest request)
+    {
+        auto preset = grid_preset(request.level);
+        if (!preset)
+            return std::unexpected(preset.error());
+
+        if (request.radial_points < 0)
+            return std::unexpected("grid_radial_points must be 0 or a positive shell count");
+        if (request.angular_points < 0 ||
+            (request.angular_points > 0 &&
+             (request.angular_points < 6 ||
+             std::none_of(LEBEDEV_ORDER.begin(), LEBEDEV_ORDER.end(),
+                          [&request](const auto &entry) { return entry.second == request.angular_points; }))))
+            return std::unexpected("grid_angular_points must be 0 or a supported Lebedev size");
+
+        ResolvedGridSpec spec;
+        spec.request = request;
+        spec.preset = *preset;
+        spec.radial_override = request.radial_points;
+        spec.pruning_policy = request.pruning_policy;
+        spec.policy_name = grid_pruning_policy_name(request.pruning_policy);
+        spec.reduce_light_atoms = preset->reduce_light_atoms &&
+                                  request.pruning_policy != GridPruningPolicy::LegacyOrcaNoLightReductionV1 &&
+                                  request.pruning_policy != GridPruningPolicy::PySCFNWChem213;
+        if (request.pruning_policy == GridPruningPolicy::G43V4QualifiedV1 &&
+            request.radial_points != 135 && request.radial_points != 0)
+            return std::unexpected("g4-3-v4 requires exactly 135 radial shells");
+        return spec;
+    }
+
     inline std::expected<int, std::string> angular_scheme(GridLevel level)
     {
         auto preset = grid_preset(level);
@@ -329,80 +460,175 @@ namespace DFT
         return detail::effective_angular_scheme(Z, *preset);
     }
 
+    inline std::expected<int, std::string> radial_point_count(
+        int Z, const ResolvedGridSpec &spec)
+    {
+        if (spec.radial_override > 0)
+            return spec.radial_override;
+        return detail::radial_point_count(Z, spec.preset);
+    }
+
     inline std::expected<int, std::string> radial_point_count(int Z, GridLevel level)
     {
-        auto preset = grid_preset(level);
-        if (!preset)
-            return std::unexpected(preset.error());
-        return detail::radial_point_count(Z, *preset);
+        auto spec = resolve_grid_spec(GridRequest{level});
+        if (!spec)
+            return std::unexpected(spec.error());
+        return radial_point_count(Z, *spec);
+    }
+
+    inline std::expected<std::array<int, 5>, std::string> angular_shell_sizes(
+        int Z, const ResolvedGridSpec &spec)
+    {
+        if (Z <= 0)
+            return std::unexpected("angular_shell_sizes: atomic number must be positive");
+        if (spec.request.angular_points > 0)
+        {
+            // Fixed angular refinement: no pruning or H/He reduction. Neither
+            // the radial nodes/weights nor the lab-frame grid orientation move.
+            return std::array<int, 5>{spec.request.angular_points, spec.request.angular_points,
+                                      spec.request.angular_points, spec.request.angular_points,
+                                      spec.request.angular_points};
+        }
+        if (spec.pruning_policy == GridPruningPolicy::PySCFNWChem213)
+            return std::unexpected("angular_shell_sizes: unsupported grid pruning policy");
+        if (spec.pruning_policy == GridPruningPolicy::G43V4QualifiedV1)
+            return std::unexpected("angular_shell_sizes: G4.3 V4 selects by physical radius per shell");
+        GridPreset preset = spec.preset;
+        preset.reduce_light_atoms = spec.reduce_light_atoms;
+        auto shells = detail::angular_shells_for_scheme(detail::effective_angular_scheme(Z, preset));
+        if (!shells)
+            return std::unexpected(shells.error());
+        if (spec.pruning_policy == GridPruningPolicy::LegacyOrcaUnprunedMaxV1)
+            return std::array<int, 5>{(*shells)[3], (*shells)[3], (*shells)[3], (*shells)[3], (*shells)[3]};
+        return *shells;
+    }
+
+    inline std::expected<int, std::string> angular_points_for_shell(
+        int Z, const ResolvedGridSpec &spec, int radial_index, int radial_count, double radius)
+    {
+        if (spec.request.angular_points > 0)
+            return spec.request.angular_points;
+        if (spec.pruning_policy == GridPruningPolicy::G43V4QualifiedV1)
+        {
+            if (radial_count != 135)
+                return std::unexpected("g4-3-v4 requires exactly 135 radial shells");
+            const std::array<double, 4> boundaries = Z <= 2 ? std::array<double, 4>{.25, 1., 2.5, 3.5} :
+                                                       Z <= 10 ? std::array<double, 4>{.4, 1., 2.5, 4.5} :
+                                                       Z <= 18 ? std::array<double, 4>{.4, .8, 2.5, 4.5} :
+                                                       std::array<double, 4>{};
+            if (Z <= 0 || Z > 18)
+                return std::unexpected("g4-3-v4 supports atomic numbers 1 through 18 only");
+            const std::array<int, 5> points = Z <= 2 ? std::array<int, 5>{26, 146, 2030, 974, 590} :
+                                              Z <= 10 ? std::array<int, 5>{110, 770, 2030, 590, 170} :
+                                                        std::array<int, 5>{86, 590, 974, 590, 26};
+            int band = 0;
+            for (const double boundary : boundaries) band += radius / bragg_radius(Z) >= boundary;
+            return points[band];
+        }
+        if (spec.pruning_policy != GridPruningPolicy::PySCFNWChem213)
+        {
+            const auto shells = angular_shell_sizes(Z, spec);
+            if (!shells) return std::unexpected(shells.error());
+            return (*shells)[detail::pruning_region(radial_index, radial_count)];
+        }
+
+        // Literal PySCF 2.13 gen_grid._default_ang + nwchem_prune.  The
+        // selection depends on the fixed atom-centred radius r/R_Bragg, never
+        // on density or molecular geometry, so it is safe for analytic grids.
+        constexpr int orders[10][7] = {
+            {11,15,17,17,17,17,17}, {17,23,23,23,23,23,23}, {23,29,29,29,29,29,29},
+            {29,29,35,35,35,35,35}, {35,41,41,41,41,41,41}, {41,47,47,47,47,47,47},
+            {47,53,53,53,53,53,53}, {53,59,59,59,59,59,59}, {59,59,59,59,59,59,59},
+            {65,65,65,65,65,65,65}};
+        constexpr int ngrid[] = {38,50,74,86,110,146,170,194,230,266,302,350,434,
+                                 590,770,974,1202,1454,1730,2030,2354,2702,3074,
+                                 3470,3890,4334,4802,5294,5810};
+        const int period = pyscf_period_index(Z);
+        const int order = orders[spec.preset.pyscf_level][period];
+        const auto maximum = LEBEDEV_ORDER.find(order);
+        if (maximum == LEBEDEV_ORDER.end())
+            return std::unexpected("PySCF NWChem pruning: unsupported angular order");
+        const int n_ang = maximum->second;
+        if (n_ang < 50) return n_ang;
+        int index = -1;
+        for (int i = 0; i < static_cast<int>(std::size(ngrid)); ++i)
+            if (ngrid[i] == n_ang) { index = i; break; }
+        if (index < 1)
+            return std::unexpected("PySCF NWChem pruning: unsupported maximum angular grid");
+        const double thresholds[3][4] = {
+            {.25,.50,1.00,4.50}, {.1667,.50,.90,3.50}, {.10,.40,.80,2.50}};
+        const int family = Z <= 2 ? 0 : (Z <= 10 ? 1 : 2);
+        const double scaled = radius / bragg_radius(Z);
+        int place = 0;
+        while (place < 4 && scaled > thresholds[family][place]) ++place;
+        const int levels[5] = {1, 3, index-1, index, index-1};
+        return ngrid[levels[place]];
     }
 
     inline std::expected<std::array<int, 5>, std::string> angular_shell_sizes(
         int Z, GridLevel level, int angular_points = 0)
     {
-        if (angular_points != 0)
+        auto spec = resolve_grid_spec(GridRequest{level, angular_points});
+        if (!spec)
+            return std::unexpected(spec.error());
+        return angular_shell_sizes(Z, *spec);
+    }
+
+    inline std::expected<int, std::string> atomic_point_count(
+        int Z, const ResolvedGridSpec &spec)
+    {
+        const auto nr = radial_point_count(Z, spec);
+        if (!nr)
+            return std::unexpected(nr.error());
+        const Eigen::MatrixXd radial = MakeTreutlerAhlrichsGrid(*nr, treutler_xi(Z));
+        int total = 0;
+        for (int ir = 0; ir < *nr; ++ir)
         {
-            const bool supported = angular_points >= 6 && std::any_of(
-                LEBEDEV_ORDER.begin(), LEBEDEV_ORDER.end(),
-                [angular_points](const auto &entry) { return entry.second == angular_points; });
-            if (!supported)
-                return std::unexpected("grid_angular_points: unsupported Lebedev size " +
-                                       std::to_string(angular_points));
-            // Fixed angular refinement: no pruning or H/He reduction. Neither
-            // the radial nodes/weights nor the lab-frame grid orientation move.
-            return std::array<int, 5>{angular_points, angular_points, angular_points,
-                                      angular_points, angular_points};
+            const auto angular = angular_points_for_shell(Z, spec, ir, *nr, radial(ir, 0));
+            if (!angular) return std::unexpected(angular.error());
+            total += *angular;
         }
-        auto scheme = effective_angular_scheme(Z, level);
-        if (!scheme)
-            return std::unexpected(scheme.error());
-        return detail::angular_shells_for_scheme(*scheme);
+        return total;
     }
 
     inline std::expected<int, std::string> atomic_point_count(
         int Z, GridLevel level, int angular_points = 0)
     {
-        const auto nr = radial_point_count(Z, level);
-        if (!nr)
-            return std::unexpected(nr.error());
-        const auto shells = angular_shell_sizes(Z, level, angular_points);
-        if (!shells)
-            return std::unexpected(shells.error());
-
-        int total = 0;
-        for (int ir = 0; ir < *nr; ++ir)
-            total += (*shells)[detail::pruning_region(ir, *nr)];
-        return total;
+        auto spec = resolve_grid_spec(GridRequest{level, angular_points});
+        if (!spec)
+            return std::unexpected(spec.error());
+        return atomic_point_count(Z, *spec);
     }
 
     inline std::expected<Eigen::MatrixXd, std::string> MakeAtomicGrid(
         int Z,
         const Eigen::Vector3d &center,
-        GridLevel level,
-        int angular_points = 0)
+        const ResolvedGridSpec &spec)
     {
         if (Z <= 0)
             return std::unexpected(
                 "MakeAtomicGrid: atomic number must be positive, got " + std::to_string(Z));
 
-        const auto nr = radial_point_count(Z, level);
+        const auto nr = radial_point_count(Z, spec);
         if (!nr)
             return std::unexpected(nr.error());
-        const auto shells = angular_shell_sizes(Z, level, angular_points);
-        if (!shells)
-            return std::unexpected(shells.error());
         const Eigen::MatrixXd radial = MakeTreutlerAhlrichsGrid(*nr, treutler_xi(Z));
 
-        std::array<Eigen::MatrixXd, 5> angular_cache;
-        for (std::size_t shell_index = 0; shell_index < angular_cache.size(); ++shell_index)
+        std::vector<int> angular_sizes(static_cast<std::size_t>(*nr));
+        std::map<int, Eigen::MatrixXd> angular_cache;
+        for (int ir = 0; ir < *nr; ++ir)
         {
-            auto angular_grid = MakeLebedevGrid((*shells)[shell_index]);
+            const auto size = angular_points_for_shell(Z, spec, ir, *nr, radial(ir, 0));
+            if (!size) return std::unexpected(size.error());
+            angular_sizes[static_cast<std::size_t>(ir)] = *size;
+            if (angular_cache.contains(*size)) continue;
+            auto angular_grid = MakeLebedevGrid(*size);
             if (!angular_grid)
                 return std::unexpected(angular_grid.error());
-            angular_cache[shell_index] = std::move(*angular_grid);
+            angular_cache.emplace(*size, std::move(*angular_grid));
         }
 
-        const auto total_points = atomic_point_count(Z, level, angular_points);
+        const auto total_points = atomic_point_count(Z, spec);
         if (!total_points)
             return std::unexpected(total_points.error());
         Eigen::MatrixXd grid(*total_points, 4);
@@ -412,7 +638,7 @@ namespace DFT
         {
             const double radius = radial(ir, 0);
             const double wr = radial(ir, 1);
-            const Eigen::MatrixXd &angular = angular_cache[detail::pruning_region(ir, *nr)];
+            const Eigen::MatrixXd &angular = angular_cache.at(angular_sizes[static_cast<std::size_t>(ir)]);
 
             for (Eigen::Index ia = 0; ia < angular.rows(); ++ia, ++row)
             {
@@ -429,11 +655,22 @@ namespace DFT
         return grid;
     }
 
+    inline std::expected<Eigen::MatrixXd, std::string> MakeAtomicGrid(
+        int Z,
+        const Eigen::Vector3d &center,
+        GridLevel level,
+        int angular_points = 0)
+    {
+        auto spec = resolve_grid_spec(GridRequest{level, angular_points});
+        if (!spec)
+            return std::unexpected(spec.error());
+        return MakeAtomicGrid(Z, center, *spec);
+    }
+
     inline std::expected<MolecularGrid, std::string> MakeMolecularGrid(
         const Eigen::VectorXi &atomic_numbers,
         const Eigen::MatrixXd &coordinates_bohr,
-        GridLevel level,
-        int angular_points = 0)
+        const ResolvedGridSpec &spec)
     {
         const Eigen::Index natoms = atomic_numbers.size();
         if (coordinates_bohr.rows() != natoms || coordinates_bohr.cols() != 3)
@@ -448,7 +685,7 @@ namespace DFT
             auto atomic_grid = MakeAtomicGrid(
                 atomic_numbers(atom),
                 coordinates_bohr.row(atom).transpose(),
-                level, angular_points);
+                spec);
             if (!atomic_grid)
                 return std::unexpected(atomic_grid.error());
             atomic_grids[static_cast<std::size_t>(atom)] = std::move(*atomic_grid);
@@ -488,17 +725,36 @@ namespace DFT
     }
 
     inline std::expected<MolecularGrid, std::string> MakeMolecularGrid(
-        const HartreeFock::Molecule &molecule,
+        const Eigen::VectorXi &atomic_numbers,
+        const Eigen::MatrixXd &coordinates_bohr,
         GridLevel level,
         int angular_points = 0)
+    {
+        auto spec = resolve_grid_spec(GridRequest{level, angular_points});
+        if (!spec)
+            return std::unexpected(spec.error());
+        return MakeMolecularGrid(atomic_numbers, coordinates_bohr, *spec);
+    }
+
+    inline std::expected<MolecularGrid, std::string> MakeMolecularGrid(
+        const HartreeFock::Molecule &molecule,
+        const ResolvedGridSpec &spec)
     {
         auto coords = detail::coordinates_bohr(molecule);
         if (!coords)
             return std::unexpected(coords.error());
-        return MakeMolecularGrid(
-            molecule.atomic_numbers,
-            *coords,
-            level, angular_points);
+        return MakeMolecularGrid(molecule.atomic_numbers, *coords, spec);
+    }
+
+    inline std::expected<MolecularGrid, std::string> MakeMolecularGrid(
+        const HartreeFock::Molecule &molecule,
+        GridLevel level,
+        int angular_points = 0)
+    {
+        auto spec = resolve_grid_spec(GridRequest{level, angular_points});
+        if (!spec)
+            return std::unexpected(spec.error());
+        return MakeMolecularGrid(molecule, *spec);
     }
 
 } // namespace DFT

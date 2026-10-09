@@ -36,11 +36,11 @@ class U2ContractTests(unittest.TestCase):
         self.assertEqual(self.source.count("catch (...)"), 2)
         self.assertIn("if (exact_exchange != 0.0)", self.source)
 
-    def test_no_uks_gradient_enablement(self):
+    def test_uks_gradient_enablement_is_qualified_by_grid(self):
         driver = (ROOT / "src/dft/driver.cpp").read_text()
-        guard = driver.split("// Restricted global-double-hybrid Cartesian derivatives", 1)[1].split(
-            "apply_post_ks_double_hybrid_correction(", 1)[0]
-        self.assertIn("calculator._scf._scf != HartreeFock::SCFType::UHF", guard)
+        self.assertIn("validate_qualified_uks_dh_grid", driver)
+        self.assertIn("G43V4QualifiedV1", driver)
+        self.assertIn("all-active conventional unshifted PT2 with stored T2", driver)
         self.assertNotIn("make_udh_direct_ks_response_operator", driver)
 
     def test_detached_target_links_actual_primitive(self):

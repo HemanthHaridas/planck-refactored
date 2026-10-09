@@ -108,6 +108,39 @@ namespace DFT::Driver
             return DFT::GridLevel::Normal;
         }
 
+        std::expected<DFT::ResolvedGridSpec, std::string> resolve_calculator_grid_spec(
+            const HartreeFock::Calculator &calculator)
+        {
+            const auto policy = DFT::grid_pruning_policy_from_name(calculator._dft._grid_policy);
+            if (!policy)
+                return std::unexpected(policy.error());
+            return DFT::resolve_grid_spec(DFT::GridRequest{
+                to_grid_level(calculator._dft._grid),
+                calculator._dft._grid_angular_points,
+                calculator._dft._grid_radial_points,
+                *policy});
+        }
+
+        // UKS global-double-hybrid gradients are qualified only on the fixed
+        // V4 physical-radius quadrature.  Requiring the explicit radial
+        // override and no angular override prevents a superficially similar
+        // input from silently selecting a different grid in displaced runs.
+        std::expected<void, std::string> validate_qualified_uks_dh_grid(
+            const HartreeFock::Calculator &calculator)
+        {
+            const auto grid = resolve_calculator_grid_spec(calculator);
+            if (!grid)
+                return std::unexpected("UKS double-hybrid gradient grid resolution failed: " + grid.error());
+            if (grid->pruning_policy != DFT::GridPruningPolicy::G43V4QualifiedV1 ||
+                grid->request.radial_points != 135 || grid->request.angular_points != 0)
+            {
+                return std::unexpected(
+                    "UKS double-hybrid gradients require grid_policy g4-3-v4, "
+                    "grid_radial_points 135, and no grid_angular_points override.");
+            }
+            return {};
+        }
+
         constexpr double NUMERICAL_GRADIENT_STEP_BOHR = 1.0e-3;
 
         bool dft_gradient_debug_enabled()
@@ -1342,15 +1375,14 @@ namespace DFT::Driver
                 return std::unexpected("TDDFT / linear response requires a converged KS reference");
 
             PreparedSystem prepared;
-            auto preset = grid_preset(to_grid_level(calculator._dft._grid));
-            if (!preset)
-                return std::unexpected("TDDFT grid preset resolution failed: " + preset.error());
-            prepared.grid_preset = *preset;
+            auto grid_spec = resolve_calculator_grid_spec(calculator);
+            if (!grid_spec)
+                return std::unexpected("TDDFT grid specification resolution failed: " + grid_spec.error());
+            prepared.grid_spec = *grid_spec;
+            prepared.grid_preset = grid_spec->preset;
             prepared.shell_pairs = build_shellpairs(calculator._shells);
 
-            auto molecular_grid = MakeMolecularGrid(
-                calculator._molecule,
-                to_grid_level(calculator._dft._grid), calculator._dft._grid_angular_points);
+            auto molecular_grid = MakeMolecularGrid(calculator._molecule, *grid_spec);
             if (!molecular_grid)
                 return std::unexpected("TDDFT molecular grid construction failed: " + molecular_grid.error());
             prepared.molecular_grid = std::move(*molecular_grid);
@@ -2403,7 +2435,7 @@ namespace DFT::Driver
                 else if (calculator._use_sao_blocking)
                     reason = "SAO/symmetry blocking (not yet wired through DFT SOSCF)";
                 else if (requested_level_shift > 0.0)
-                    reason = "UKS level shifting (using shifted DIIS followed by unshifted polishing)";
+                    reason = "UKS level shifting (SOSCF is deferred until physical-Fock polishing)";
                 if (!reason.empty())
                     HartreeFock::Logger::logging(
                         HartreeFock::LogLevel::Warning,
@@ -2490,7 +2522,12 @@ namespace DFT::Driver
                     const Eigen::MatrixXd error_beta =
                         X.transpose() *
                         (fock_beta * beta_density * calculator._overlap - calculator._overlap * beta_density * fock_beta) * X;
-                    if (use_diis && !unshifted_polish)
+                    // `unshifted_polish` means only that the old shifted
+                    // history was discarded.  It must not suppress a new DIIS
+                    // history built from physical-Fock iterations: after the
+                    // transient SOSCF window ends, plain Roothaan updates can
+                    // otherwise enter a two-cycle.
+                    if (use_diis)
                     {
                         // DIIS restart, matching run_uhf (src/scf/scf.cpp): one
                         // combined RMS over both spins, so the two channels are
@@ -2531,7 +2568,7 @@ namespace DFT::Driver
                     (calculator._scf._scf_soscf_diis_tol > 0.0 ||
                      calculator._scf._scf_soscf_start > 0 ||
                      calculator._scf._scf_soscf_auto_stall > 0) &&
-                    !sao_active_uks && !prepared.pcm && requested_level_shift == 0.0;
+                    !sao_active_uks && !prepared.pcm && active_level_shift == 0.0;
 
                 // Auto-SOSCF stagnation counter: consecutive iterations whose
                 // DIIS error failed to improve by the required factor.
@@ -2579,7 +2616,7 @@ namespace DFT::Driver
                     diis_err_prev = std::numeric_limits<double>::max();
                 }
 
-                const bool do_diis_uks = use_diis && !soscf_active && !unshifted_polish;
+                const bool do_diis_uks = use_diis && !soscf_active;
                 const auto fock_pair_diag = (do_diis_uks && diis.ready())
                     ? diis.extrapolate() : std::make_pair(fock_alpha_iteration, fock_beta_iteration);
                 const Eigen::MatrixXd &fock_alpha_diag = fock_pair_diag.first;
@@ -3109,6 +3146,26 @@ namespace DFT::Driver
                 return {};
             }
 
+            // Production UKS global-double-hybrid gradients are deliberately
+            // narrower than the validation sidecar: only the conventional,
+            // all-active UMP2 implementation and the independently qualified
+            // V4 grid are admitted.  Geometry optimization and frequencies
+            // remain RKS-only until their UKS workflow contracts are accepted.
+            if (functionals.has_double_hybrid_pt2 && !functionals.has_range_separation &&
+                calculator._scf._scf == HartreeFock::SCFType::UHF &&
+                calculator._calculation == HartreeFock::CalculationType::Gradient)
+            {
+                if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+                    return std::unexpected("UKS double-hybrid analytic gradients do not implement solvent response.");
+                if (!calculator._mp2.frozen.empty() || calculator._mp2.use_ri ||
+                    calculator._mp2.level_shift != 0.0 || !calculator._mp2.with_t2)
+                {
+                    return std::unexpected(
+                        "UKS double-hybrid gradients require all-active conventional unshifted PT2 with stored T2.");
+                }
+                return validate_qualified_uks_dh_grid(calculator);
+            }
+
             // Restricted global-double-hybrid Cartesian derivatives use the
             // validated literal Eq. (47) RHS/overlap and hybrid Eq. (46)
             // complement. Range-separated and UKS variants remain excluded.
@@ -3335,18 +3392,17 @@ namespace DFT::Driver
                 return std::unexpected("DFT geometry preparation failed: " + nuclear_repulsion.error());
 
             PreparedSystem prepared;
-            auto preset = grid_preset(to_grid_level(calculator._dft._grid));
-            if (!preset)
-                return std::unexpected(preset.error());
-            prepared.grid_preset = *preset;
+            auto grid_spec = resolve_calculator_grid_spec(calculator);
+            if (!grid_spec)
+                return std::unexpected(grid_spec.error());
+            prepared.grid_spec = *grid_spec;
+            prepared.grid_preset = grid_spec->preset;
             prepared.shell_pairs = build_shellpairs(calculator._shells);
 
             if (auto res = compute_one_electron_terms(calculator, prepared.shell_pairs); !res)
                 return std::unexpected(res.error());
 
-            auto molecular_grid = MakeMolecularGrid(
-                calculator._molecule,
-                to_grid_level(calculator._dft._grid), calculator._dft._grid_angular_points);
+            auto molecular_grid = MakeMolecularGrid(calculator._molecule, *grid_spec);
             if (!molecular_grid)
                 return std::unexpected("DFT molecular grid construction failed: " + molecular_grid.error());
             prepared.molecular_grid = std::move(*molecular_grid);
@@ -3395,15 +3451,14 @@ namespace DFT::Driver
             HartreeFock::Calculator &calculator)
         {
             PreparedSystem prepared;
-            auto preset = grid_preset(to_grid_level(calculator._dft._grid));
-            if (!preset)
-                return std::unexpected(preset.error());
-            prepared.grid_preset = *preset;
+            auto grid_spec = resolve_calculator_grid_spec(calculator);
+            if (!grid_spec)
+                return std::unexpected(grid_spec.error());
+            prepared.grid_spec = *grid_spec;
+            prepared.grid_preset = grid_spec->preset;
             prepared.shell_pairs = build_shellpairs(calculator._shells);
 
-            auto molecular_grid = MakeMolecularGrid(
-                calculator._molecule,
-                to_grid_level(calculator._dft._grid), calculator._dft._grid_angular_points);
+            auto molecular_grid = MakeMolecularGrid(calculator._molecule, *grid_spec);
             if (!molecular_grid)
                 return std::unexpected("DFT molecular grid construction failed: " + molecular_grid.error());
             prepared.molecular_grid = std::move(*molecular_grid);
@@ -3724,7 +3779,15 @@ namespace DFT::Driver
                     HartreeFock::LogLevel::Info,
                     "",
                     std::format(
-                        "  Atom {:3d}: {:14.8f}  {:14.8f}  {:14.8f}",
+                        // This report is also consumed by the molecular
+                        // finite-difference harness.  Eight decimal places
+                        // quantize a Cartesian component at 1e-8 Ha/Bohr,
+                        // which is too coarse for its 5e-8 Ha/Bohr
+                        // acceptance criterion after component-wise
+                        // subtraction.  Keep the human-readable fixed-point
+                        // layout, but retain sufficient numerical precision
+                        // for that machine consumer.
+                        "  Atom {:3d}: {:20.12f}  {:20.12f}  {:20.12f}",
                         static_cast<int>(atom + 1),
                         gradient(atom, 0),
                         gradient(atom, 1),
@@ -4708,7 +4771,6 @@ namespace DFT::Driver
         // Central DFT rebuild path for a given geometry/orientation.
         // Everything that depends on nuclear positions is refreshed here before
         // any KS iterations begin.
-        const GridLevel grid_level = to_grid_level(calculator._dft._grid);
         calculator.prepare_coordinates();
         calculator._eri.clear();
         reset_sao_state(calculator);
@@ -4724,10 +4786,11 @@ namespace DFT::Driver
             return std::unexpected(res.error());
 
         PreparedSystem prepared;
-        auto preset = grid_preset(grid_level);
-        if (!preset)
-            return std::unexpected(preset.error());
-        prepared.grid_preset = *preset;
+        auto grid_spec = resolve_calculator_grid_spec(calculator);
+        if (!grid_spec)
+            return std::unexpected(grid_spec.error());
+        prepared.grid_spec = *grid_spec;
+        prepared.grid_preset = grid_spec->preset;
         prepared.shell_pairs = build_shellpairs(calculator._shells);
 
         RestartState restart_state;
@@ -4747,8 +4810,7 @@ namespace DFT::Driver
 
         maybe_build_sao_basis(calculator, options);
 
-        auto molecular_grid = MakeMolecularGrid(
-            calculator._molecule, grid_level, calculator._dft._grid_angular_points);
+        auto molecular_grid = MakeMolecularGrid(calculator._molecule, *grid_spec);
         if (!molecular_grid)
             return std::unexpected("DFT molecular grid construction failed: " + molecular_grid.error());
         prepared.molecular_grid = std::move(*molecular_grid);
@@ -4801,10 +4863,18 @@ namespace DFT::Driver
 
         if (calculator._dft._print_grid_summary && options.print_grid_summary)
         {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info,
+                "DFT Grid policy :",
+                prepared.grid_spec.fingerprint());
             if (calculator._dft._grid_angular_points > 0)
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "DFT Angular grid :",
                     std::format("{} points per radial shell, unpruned; radial preset unchanged",
                                 calculator._dft._grid_angular_points));
+            if (calculator._dft._grid_radial_points > 0)
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "DFT Radial grid :",
+                    std::format("{} shells per atom, fixed; angular policy unchanged",
+                                calculator._dft._grid_radial_points));
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Info,
                 "DFT Grid :",
@@ -4902,8 +4972,6 @@ namespace DFT::Driver
                     return *result;
                 if(calculator._scf._scf==HartreeFock::SCFType::UHF)
                 {
-                    if(!options.udh_gradient_validation)
-                        return std::unexpected("UKS double-hybrid gradients await U11 molecular acceptance.");
                     HartreeFock::Correlation::UMP2Result pt2;
                     if(auto applied=apply_post_ks_double_hybrid_correction(calculator,prepared->shell_pairs,
                         *functionals,*result,nullptr,&pt2); !applied) return std::unexpected(applied.error());
@@ -4918,7 +4986,8 @@ namespace DFT::Driver
                     correction->total=*ks+correction->correction;
                     calculator._gradient=rotate_gradient_to_requested_frame_if_needed(
                         calculator,correction->total,requested_gradient_frame_bohr);
-                    *options.udh_gradient_validation=std::move(*correction);
+                    if (options.udh_gradient_validation)
+                        *options.udh_gradient_validation=std::move(*correction);
                     print_gradient_report(calculator._gradient);
                     return *result;
                 }
@@ -5226,7 +5295,11 @@ namespace DFT::Driver
 
         HartreeFock::Logger::logging(
             HartreeFock::LogLevel::Info, "DFT Energy :",
-            std::format("{:.10f} Eh", result->total_energy));
+            // Energy-only displaced calculations feed the molecular
+            // finite-difference gradient harness.  Ten fractional places
+            // induce a 1e-7 Ha/Bohr quantization error at its 5e-4 Bohr
+            // stencil; retain enough digits for a 5e-8 comparison.
+            std::format("{:.14f} Eh", result->total_energy));
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)
         {
             HartreeFock::Logger::logging(

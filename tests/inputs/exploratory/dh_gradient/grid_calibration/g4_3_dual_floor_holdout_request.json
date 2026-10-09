@@ -1,0 +1,29 @@
+{
+  "contract": "g4-3-fixed-density-holdout-v2",
+  "reference": { "radial_points": 135, "angular_points": 2030 },
+  "limits": { "xc_energy_ha": 1e-08, "xc_response_contraction": 1e-07 },
+  "finalist": "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/g4-3-dual-floor-combined-frontier.json",
+  "cases": [
+    {
+      "name": "water-pbe-displaced-631g",
+      "input": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v2/water_pbe_displaced_631g.hfinp",
+      "parent": "tests/inputs/regression/dft/water_rks_pbe_soscf_puredeadband_631g.hfinp",
+      "families": ["hydrogen-helium", "second-row"],
+      "role": "geometry"
+    },
+    {
+      "name": "ph3-b2plyp-displaced-sto3g",
+      "input": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v2/ph3_b2plyp_displaced_sto3g.hfinp",
+      "parent": "tests/inputs/exploratory/dh_gradient/grid_calibration/ph3_asymmetric_b2plyp_sto3g.hfinp",
+      "families": ["hydrogen-helium", "third-row"],
+      "role": "geometry"
+    },
+    {
+      "name": "water-triplet-uks-pbe-displaced-sto3g",
+      "input": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v2/water_triplet_uks_pbe_displaced_sto3g.hfinp",
+      "parent": "tests/inputs/regression/dft/water_triplet_uks_pbe_sto3g.hfinp",
+      "families": ["hydrogen-helium", "second-row"],
+      "role": "functional-spin"
+    }
+  ]
+}

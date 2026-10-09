@@ -1,0 +1,48 @@
+{
+  "contract": "g4-3-direct-rescore-v1",
+  "fingerprint": "g4-3-v4-robust-development-v1;radial=135;radius=m4-over-bragg;partition=original-becke-treutler-bragg",
+  "points": 373074,
+  "atlas": {
+    "xc_energy": -10.845269112322304,
+    "directions": [
+      {
+        "D_V": 0.04389762749928729,
+        "D_fxc_D": -0.021809145394101823
+      },
+      {
+        "D_V": 0.0004041493302717781,
+        "D_fxc_D": -0.00013649110949534693
+      }
+    ]
+  },
+  "direct": {
+    "xc_energy": -10.845269112322129,
+    "directions": [
+      {
+        "D_V": 0.043897627499283776,
+        "D_fxc_D": -0.02180914560298833
+      },
+      {
+        "D_V": 0.00040414933027302293,
+        "D_fxc_D": -0.00013649110676983587
+      }
+    ]
+  },
+  "delta": {
+    "xc_energy": 1.758593271006248e-13,
+    "directions": [
+      {
+        "D_V": -3.5110803153770576e-15,
+        "D_fxc_D": -2.0888650878458925e-10
+      },
+      {
+        "D_V": 1.244826724339232e-15,
+        "D_fxc_D": 2.7255110603315036e-12
+      }
+    ]
+  },
+  "tolerance": 1e-09,
+  "max_error": 2.0888650878458925e-10,
+  "passed": true,
+  "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v4/sih4_rks_b2plyp_distorted_ccpvdz.hfinp"
+}

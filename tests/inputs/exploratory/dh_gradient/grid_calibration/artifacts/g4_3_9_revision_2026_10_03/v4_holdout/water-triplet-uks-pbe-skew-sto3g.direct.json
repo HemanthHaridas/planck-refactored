@@ -1,0 +1,48 @@
+{
+  "contract": "g4-3-direct-rescore-v1",
+  "fingerprint": "g4-3-v4-robust-development-v1;radial=135;radius=m4-over-bragg;partition=original-becke-treutler-bragg",
+  "points": 241050,
+  "atlas": {
+    "xc_energy": -9.351220123382118,
+    "directions": [
+      {
+        "D_V": 0.02362461365962154,
+        "D_fxc_D": -0.44605538108946124
+      },
+      {
+        "D_V": 0.32413756804990596,
+        "D_fxc_D": -0.1413572605231849
+      }
+    ]
+  },
+  "direct": {
+    "xc_energy": -9.351220123382014,
+    "directions": [
+      {
+        "D_V": 0.023624613659619275,
+        "D_fxc_D": -0.4460553808499962
+      },
+      {
+        "D_V": 0.3241375680499127,
+        "D_fxc_D": -0.14135725990898038
+      }
+    ]
+  },
+  "delta": {
+    "xc_energy": 1.0480505352461478e-13,
+    "directions": [
+      {
+        "D_V": -2.26554885962571e-15,
+        "D_fxc_D": 2.394650588932734e-10
+      },
+      {
+        "D_V": 6.772360450213455e-15,
+        "D_fxc_D": 6.14204520577033e-10
+      }
+    ]
+  },
+  "tolerance": 1e-09,
+  "max_error": 6.14204520577033e-10,
+  "passed": true,
+  "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v4/water_triplet_uks_pbe_skew_sto3g.hfinp"
+}

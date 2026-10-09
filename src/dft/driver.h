@@ -31,9 +31,9 @@ namespace DFT::Driver
         bool use_sao_blocking = true;
         bool save_checkpoint = false;
         bool print_grid_summary = true;
-        // U10 test-only access, never set by either production CLI. The
-        // owned ledger is filled only by the UKS global-DH Gradient branch.
-        // Remove this gate only after the U11 molecular acceptance ledger.
+        // Validation-only capture of the detailed UKS global-DH ledger.  A
+        // null pointer is the normal production route; the qualified gradient
+        // is still computed and reported without retaining this sidecar.
         UDHGradientResult *udh_gradient_validation = nullptr;
         // Validation-only coefficient sweep on the same parent functional;
         // ignored without the ledger pointer. No input/CLI keyword exposes it.
@@ -46,6 +46,10 @@ namespace DFT::Driver
         MolecularGrid molecular_grid;
         AOGridEvaluation ao_grid;
         GridPreset grid_preset;
+        // The immutable quadrature policy used to build molecular_grid.  Keep
+        // it beside the geometry-dependent grid so derivative/rebuild paths
+        // cannot accidentally re-resolve a different rule.
+        ResolvedGridSpec grid_spec;
         std::optional<HartreeFock::Solvation::PCMState> pcm;
     };
 

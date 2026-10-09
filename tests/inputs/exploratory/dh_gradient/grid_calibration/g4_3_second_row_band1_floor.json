@@ -1,0 +1,8 @@
+{
+  "contract": "g4-3-second-row-band1-floor-v1",
+  "source_finalist": "tests/inputs/exploratory/dh_gradient/grid_calibration/g4_3_combined_frontier_finalist.json",
+  "family": "second-row",
+  "band_index": 1,
+  "minimum_lebedev_points": 770,
+  "status": "test-only-revision-after-g4-3-9-failure"
+}

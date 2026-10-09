@@ -1,0 +1,33 @@
+%begin_control
+ basis cc-pVDZ
+ calculation energy
+ basis_type cartesian
+%end_control
+%begin_scf
+ scf_type rhf
+ use_diis .true.
+ diis_dim 8
+ guess hcore
+ max_cycles 200
+ tol_energy 1.0e-10
+ tol_density 1.0e-10
+%end_scf
+%begin_dft
+ grid ultrafine
+ exchange b2plyp
+ correlation pbe
+%end_dft
+%begin_geom
+ coord_type cartesian
+ coord_units angstrom
+ use_symm .false.
+%end_geom
+%begin_coords
+5
+0 1
+Si 0.022 -0.056 0.101
+H 0.704 0.681 0.711
+H -0.726 -0.611 0.673
+H -0.621 0.743 -0.702
+H 0.711 -0.734 -0.591
+%end_coords

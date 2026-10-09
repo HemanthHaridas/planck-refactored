@@ -1,0 +1,41 @@
+{
+  "contract": "g4-3-shell-atlas-v1",
+  "fixture": "tests/inputs/exploratory/dh_gradient/uks_u0/ho2_asymmetric_b2plyp_sto3g.hfinp",
+  "selector": {
+    "coordinate": "m4-radius-over-bragg-radius",
+    "depends_on": ["atomic_number", "fixed_radial_coordinate"],
+    "forbids": ["density", "molecular_geometry", "scf_iteration", "orbital_response"]
+  },
+  "reference": { "radial_points": 135, "angular_points": 2030 },
+  "directions": 2,
+  "band_boundaries": [0.25, 0.5, 1.0, 4.5],
+  "records": [
+    {
+      "atom": 0,
+      "atomic_number": 8,
+      "family": "second-row",
+      "radial_index": 4,
+      "radius_bohr": 0.8,
+      "u": 0.5,
+      "physical_band": 1,
+      "lebedev_points": 2030,
+      "xc_energy": -0.1,
+      "direction_records": [
+        {
+          "index": 0,
+          "spin_channels": [
+            { "spin": "alpha", "D_V": 1.0, "D_fxc_D": 2.0 },
+            { "spin": "beta", "D_V": 0.0, "D_fxc_D": 0.0 }
+          ]
+        },
+        {
+          "index": 1,
+          "spin_channels": [
+            { "spin": "alpha", "D_V": 1.0, "D_fxc_D": 2.0 },
+            { "spin": "beta", "D_V": 0.0, "D_fxc_D": 0.0 }
+          ]
+        }
+      ]
+    }
+  ]
+}

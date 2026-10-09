@@ -42,11 +42,11 @@ class U1ContractTests(unittest.TestCase):
         self.assertIn("amplitude_checks(x,true)", oracle)
         self.assertIn("amplitude_checks(off,false)", oracle)
 
-    def test_production_uks_guard_unchanged(self):
+    def test_production_uks_route_requires_the_qualified_grid(self):
         driver = (ROOT / "src/dft/driver.cpp").read_text()
-        guard = driver.split("// Restricted global-double-hybrid Cartesian derivatives", 1)[1].split(
-            "apply_post_ks_double_hybrid_correction(", 1)[0]
-        self.assertIn("calculator._scf._scf != HartreeFock::SCFType::UHF", guard)
+        self.assertIn("validate_qualified_uks_dh_grid", driver)
+        self.assertIn("G43V4QualifiedV1", driver)
+        self.assertIn("grid_radial_points 135", driver)
         self.assertNotIn("build_udh_pt2_stationary_contract", driver)
         self.assertNotIn("evaluate_udh_pt2_stationary_scalar", driver)
 

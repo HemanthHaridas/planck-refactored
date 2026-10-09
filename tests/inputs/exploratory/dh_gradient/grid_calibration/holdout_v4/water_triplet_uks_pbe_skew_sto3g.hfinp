@@ -1,0 +1,32 @@
+%begin_control
+ basis sto-3g
+ calculation energy
+ basis_type cartesian
+%end_control
+%begin_scf
+ scf_type uhf
+ use_diis .true.
+ diis_dim 8
+ guess hcore
+ level_shift 0.3
+ max_cycles 400
+ tol_energy 1.0e-9
+ tol_density 1.0e-9
+%end_scf
+%begin_dft
+ grid ultrafine
+ exchange pbe
+ correlation pbe
+%end_dft
+%begin_geom
+ coord_type cartesian
+ coord_units angstrom
+ use_symm .false.
+%end_geom
+%begin_coords
+3
+0 3
+O 0.012 -0.018 0.126
+H 0.036 0.773 -0.479
+H -0.058 -0.742 -0.451
+%end_coords

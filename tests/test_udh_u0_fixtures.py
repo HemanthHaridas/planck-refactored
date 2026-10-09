@@ -40,8 +40,7 @@ class U0Fixtures(unittest.TestCase):
                 self.assertIn("scf_soscf_cycles 30", text)
                 # This fixture's contract is that the downstream post-KS (PT2)
                 # step receives the UNSHIFTED Fock and density -- not that any
-                # particular convergence aid is used to get there. Two routes
-                # satisfy it, and exactly one must be configured:
+                # particular convergence aid is used to get there.
                 #
                 #   level_shift: shifts a COPY (fock_alpha_iteration) for the
                 #     DIIS/diagonalization step only, then removes the shift and
@@ -49,22 +48,17 @@ class U0Fixtures(unittest.TestCase):
                 #     marker sequence check in udh_u0_molecular_audit.check_energy
                 #     enforces that removal actually happened, in order.
                 #
-                #   SOSCF: unshifted BY CONSTRUCTION -- driver.cpp gates SOSCF on
-                #     `requested_level_shift == 0.0`, so no shift matrix is ever
-                #     built and the stored fock/density are physical throughout.
-                #     Nothing to remove, hence no markers to check.
+                #   SOSCF: while a shift is active it is excluded from the
+                #     shifted iteration. Once the driver releases the shift,
+                #     it can accelerate the unshifted physical-Fock polish.
                 #
-                # They are mutually exclusive in the driver (a shifted iteration
-                # must not be mixed with the unshifted SOSCF Hessian), so assert
-                # exactly one is present rather than pinning the level_shift one.
+                # A shifted iteration and SOSCF never overlap. A fixture may
+                # request both because the latter is valid after shift release.
                 shifted = "level_shift 0.3" in text
                 soscf = ("scf_soscf_cycles" in text or "scf_soscf_start" in text
                          or "scf_soscf_auto_stall" in text)
-                self.assertNotEqual(
-                    shifted, soscf,
-                    "h2o2_cation_c1 must use exactly one unshifted-handoff route: "
-                    "a level shift that is removed before post-KS, or SOSCF "
-                    "(unshifted by construction). They cannot be combined.")
+                self.assertTrue(shifted or soscf,
+                                "h2o2_cation_c1 must configure a UKS convergence aid")
             if key == "ho2_asymmetric":
                 self.assertIn("scf_soscf_cycles 30", text)
             if key in ("water_triplet_asymmetric", "ho2_asymmetric", "h2o2_cation_c1"):

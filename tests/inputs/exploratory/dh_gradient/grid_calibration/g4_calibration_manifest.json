@@ -1,0 +1,80 @@
+{
+  "contract": "g4-grid-calibration-manifest-v1",
+  "parent_grid": { "radial": 135, "angular": 1454 },
+  "energy_limit": 1e-08,
+  "contraction_limit": 1e-07,
+  "policies": ["legacy-unpruned-max", "pyscf-nwchem-2.13"],
+  "cases": [
+    {
+      "fixture": "cn_anion_b2plyp_augccpvdz.hfinp",
+      "legacy-unpruned-max": { "points": 81540, "energy_error": 1.8895287112741244e-08, "response_error": 1.118953869491679e-08, "energy_pass": false, "response_pass": true, "qualified": false },
+      "pyscf-nwchem-2.13": { "points": 50148, "energy_error": 1.88717237392666e-08, "response_error": 1.1191266253117449e-08, "energy_pass": false, "response_pass": true, "qualified": false }
+    },
+    {
+      "fixture": "../uks_u0/cn_radical_asymmetric_b2plyp_sto3g.hfinp",
+      "legacy-unpruned-max": { "points": 81540, "energy_error": 1.6586218620773252e-08, "response_error": 2.349800253174071e-07, "energy_pass": false, "response_pass": false, "qualified": false },
+      "pyscf-nwchem-2.13": { "points": 50148, "energy_error": 1.5410042131236423e-08, "response_error": 2.3558395236206522e-07, "energy_pass": false, "response_pass": false, "qualified": false }
+    },
+    {
+      "fixture": "fcn_asymmetric_b2plyp_ccpvdz.hfinp",
+      "legacy-unpruned-max": { "points": 122310, "energy_error": 2.481535936738055e-07, "response_error": 9.035717640770713e-08, "energy_pass": false, "response_pass": true, "qualified": false },
+      "pyscf-nwchem-2.13": { "points": 75978, "energy_error": 2.4879823712353755e-07, "response_error": 9.789325148418238e-08, "energy_pass": false, "response_pass": true, "qualified": false }
+    },
+    {
+      "fixture": "h2s_asymmetric_b2plyp_ccpvdz.hfinp",
+      "legacy-unpruned-max": { "points": 93150, "energy_error": 2.6091609228728885e-07, "response_error": 2.1328886518068302e-08, "energy_pass": false, "response_pass": true, "qualified": false },
+      "pyscf-nwchem-2.13": { "points": 85218, "energy_error": 8.90508484729935e-08, "response_error": 2.5286371347197294e-08, "energy_pass": false, "response_pass": true, "qualified": false }
+    },
+    {
+      "fixture": "h2s_asymmetric_b2plyp_sto3g.hfinp",
+      "legacy-unpruned-max": { "points": 93150, "energy_error": 2.954003459620935e-07, "response_error": 2.627747413032344e-07, "energy_pass": false, "response_pass": false, "qualified": false },
+      "pyscf-nwchem-2.13": { "points": 85218, "energy_error": 1.2780180291827037e-07, "response_error": 5.903789444469676e-08, "energy_pass": false, "response_pass": true, "qualified": false }
+    },
+    {
+      "fixture": "hcl_b2plyp_ccpvdz.hfinp",
+      "legacy-unpruned-max": { "points": 66960, "energy_error": 7.19428605577832e-08, "response_error": 1.8843747222330176e-08, "energy_pass": false, "response_pass": true, "qualified": false },
+      "pyscf-nwchem-2.13": { "points": 58632, "energy_error": 8.001173057436972e-10, "response_error": 5.200661299178955e-09, "energy_pass": true, "response_pass": true, "qualified": true }
+    },
+    {
+      "fixture": "hcl_b2plyp_sto3g.hfinp",
+      "legacy-unpruned-max": { "points": 66960, "energy_error": 2.322527752340875e-07, "response_error": 5.584542990544339e-08, "energy_pass": false, "response_pass": true, "qualified": false },
+      "pyscf-nwchem-2.13": { "points": 58632, "energy_error": 1.7314132350065847e-09, "response_error": 2.8083885956348142e-08, "energy_pass": true, "response_pass": true, "qualified": true }
+    },
+    {
+      "fixture": "hf_b2plyp_sto3g.hfinp",
+      "legacy-unpruned-max": { "points": 66960, "energy_error": 8.885012308113005e-07, "response_error": 4.670307123186279e-07, "energy_pass": false, "response_pass": false, "qualified": false },
+      "pyscf-nwchem-2.13": { "points": 52416, "energy_error": 1.392900932373209e-07, "response_error": 3.5147865173890125e-08, "energy_pass": false, "response_pass": true, "qualified": false }
+    },
+    {
+      "fixture": "../uks_u0/ho2_asymmetric_b2plyp_sto3g.hfinp",
+      "legacy-unpruned-max": { "points": 107730, "energy_error": 1.1937526522842745e-08, "response_error": 3.3087924425356796e-07, "energy_pass": false, "response_pass": false, "qualified": false },
+      "pyscf-nwchem-2.13": { "points": 77166, "energy_error": 2.3574041208007657e-07, "response_error": 1.5573759853282354e-05, "energy_pass": false, "response_pass": false, "qualified": false }
+    },
+    {
+      "fixture": "ph3_asymmetric_b2plyp_ccpvdz.hfinp",
+      "legacy-unpruned-max": { "points": 119340, "energy_error": 4.73784286469936e-07, "response_error": 1.4685517078436017e-07, "energy_pass": false, "response_pass": false, "qualified": false },
+      "pyscf-nwchem-2.13": { "points": 112284, "energy_error": 1.0092774971326435e-07, "response_error": 8.709238068574376e-09, "energy_pass": false, "response_pass": true, "qualified": false }
+    },
+    {
+      "fixture": "ph3_asymmetric_b2plyp_sto3g.hfinp",
+      "legacy-unpruned-max": { "points": 119340, "energy_error": 6.644906545005824e-07, "response_error": 4.23973272451611e-07, "energy_pass": false, "response_pass": false, "qualified": false },
+      "pyscf-nwchem-2.13": { "points": 112284, "energy_error": 3.5951904564512915e-08, "response_error": 1.1501479021958083e-07, "energy_pass": false, "response_pass": false, "qualified": false }
+    },
+    {
+      "fixture": "sih4_asymmetric_b2plyp_ccpvdz.hfinp",
+      "legacy-unpruned-max": { "points": 145530, "energy_error": 5.985951236908704e-07, "response_error": 1.3163467002114126e-06, "energy_pass": false, "response_pass": false, "qualified": false },
+      "pyscf-nwchem-2.13": { "points": 138870, "energy_error": 7.791045675276109e-08, "response_error": 2.386585779834416e-07, "energy_pass": false, "response_pass": false, "qualified": false }
+    },
+    {
+      "fixture": "sih4_asymmetric_b2plyp_sto3g.hfinp",
+      "legacy-unpruned-max": { "points": 145530, "energy_error": 4.03173748608765e-07, "response_error": 3.230458777772615e-07, "energy_pass": false, "response_pass": false, "qualified": false },
+      "pyscf-nwchem-2.13": { "points": 138870, "energy_error": 7.510496757845431e-08, "response_error": 5.402141582677711e-08, "energy_pass": false, "response_pass": true, "qualified": false }
+    },
+    {
+      "fixture": "../../../../regression/dft/water_rks_pbe_soscf_puredeadband_631g.hfinp",
+      "legacy-unpruned-max": { "points": 93150, "energy_error": 2.2708697926532295e-06, "response_error": 1.289812522134448e-07, "energy_pass": false, "response_pass": false, "qualified": false },
+      "pyscf-nwchem-2.13": { "points": 78462, "energy_error": 1.386717904949819e-07, "response_error": 5.0465608723154753e-08, "energy_pass": false, "response_pass": true, "qualified": false }
+    }
+  ],
+  "qualified_policies": []
+}

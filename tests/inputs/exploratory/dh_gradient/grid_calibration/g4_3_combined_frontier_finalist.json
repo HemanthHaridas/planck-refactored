@@ -1,0 +1,32 @@
+{
+  "contract": "g4-3-combined-frontier-v1",
+  "families": [
+    "hydrogen-helium",
+    "second-row",
+    "third-row"
+  ],
+  "frontier": [
+    {
+      "family_rules": {
+        "hydrogen-helium": {
+          "boundaries": [0.4, 1.0, 2.5, 3.5],
+          "lebedev_points": [26, 110, 1454, 770, 434]
+        },
+        "second-row": {
+          "boundaries": [0.25, 1.0, 2.5, 4.5],
+          "lebedev_points": [50, 434, 1454, 590, 170]
+        },
+        "third-row": {
+          "boundaries": [0.1, 0.5, 3.5, 4.5],
+          "lebedev_points": [26, 146, 770, 230, 26]
+        }
+      },
+      "cost": {
+        "contract": "g4-3-rule-cost-v1",
+        "max_points_per_atom": 62010,
+        "total_ledger_points": 2432742
+      }
+    }
+  ],
+  "provenance": "Exact G4.3.7 L1 frontier result; retained so G4.3.8 direct rescoring does not depend on disposable /private/tmp artifacts."
+}

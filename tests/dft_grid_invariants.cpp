@@ -211,6 +211,138 @@ namespace
                 "Normal grid should allocate radial points for oxygen");
     }
 
+    void test_resolved_grid_spec()
+    {
+        const auto spec = require_expected(
+            DFT::resolve_grid_spec(DFT::GridRequest{DFT::GridLevel::Normal, 0}),
+            "resolve legacy normal grid spec");
+        require(spec.pruning_policy == DFT::GridPruningPolicy::LegacyOrcaIndexV1,
+                "Default request must resolve the legacy pruning policy");
+        require(spec.preset.level == DFT::GridLevel::Normal,
+                "Resolved preset must retain requested quality");
+        require(spec.fingerprint().find("legacy-orca-index-v1") != std::string::npos,
+                "Resolved grid fingerprint must identify the policy version");
+        require(spec.fingerprint().find("angular_override=0") != std::string::npos,
+                "Resolved grid fingerprint must identify the angular override");
+        require(spec.json().find("\"policy\":\"legacy-orca-index-v1\"") != std::string::npos &&
+                    spec.json().find("\"angular_override\":0") != std::string::npos,
+                "Resolved grid JSON must report the effective policy and override");
+
+        const Eigen::Vector3d center(.21, -.35, .11);
+        const auto direct = require_expected(
+            DFT::MakeAtomicGrid(8, center, DFT::GridLevel::Normal),
+            "legacy atomic grid");
+        const auto resolved = require_expected(
+            DFT::MakeAtomicGrid(8, center, spec),
+            "resolved atomic grid");
+        require(direct.rows() == resolved.rows() && direct.cols() == resolved.cols() &&
+                    (direct-resolved).cwiseAbs().maxCoeff() == 0.0,
+                "Resolved legacy spec must preserve the atomic grid bit-for-bit");
+        require(require_expected(DFT::atomic_point_count(8, spec), "resolved point count") ==
+                    require_expected(DFT::atomic_point_count(8, DFT::GridLevel::Normal), "legacy point count"),
+                "Resolved legacy spec must preserve the point count");
+
+        const auto refined = require_expected(
+            DFT::resolve_grid_spec(DFT::GridRequest{DFT::GridLevel::UltraFine, 1454}),
+            "resolve refined grid spec");
+        const auto refined_shells = require_expected(
+            DFT::angular_shell_sizes(1, refined), "refined shell sizes");
+        for (int shell : refined_shells)
+            require(shell == 1454, "Resolved angular override must remain unpruned");
+        require(refined.fingerprint() != spec.fingerprint(),
+                "Different resolved specifications must have different fingerprints");
+        require_unexpected(
+            DFT::resolve_grid_spec(DFT::GridRequest{DFT::GridLevel::Normal, 591}),
+            "unsupported angular override must fail during resolution");
+    }
+
+    void test_radial_override_and_oracle()
+    {
+        constexpr int radial_shells = 96;
+        const auto spec = require_expected(
+            DFT::resolve_grid_spec(
+                DFT::GridRequest{DFT::GridLevel::Normal, 302, radial_shells}),
+            "resolve radial override");
+        require(spec.radial_override == radial_shells,
+                "Resolved grid must retain the requested radial override");
+        require(spec.fingerprint().find("radial_override=96") != std::string::npos,
+                "Resolved fingerprint must identify the radial override");
+        require(require_expected(DFT::radial_point_count(1, spec), "H overridden radial count") == radial_shells &&
+                    require_expected(DFT::radial_point_count(16, spec), "S overridden radial count") == radial_shells,
+                "A radial override must be uniform across elements");
+        require(require_expected(DFT::atomic_point_count(8, spec), "overridden atomic count") ==
+                    radial_shells * 302,
+                "Uniform radial/angular overrides must have a product point count");
+        require_unexpected(
+            DFT::resolve_grid_spec(DFT::GridRequest{DFT::GridLevel::Normal, 0, -1}),
+            "negative radial override must fail during resolution");
+
+        // Independent Gaussian references at several length scales.  The
+        // radial moment is exact analytically, and the deliberately off-center
+        // three-dimensional case checks the radial weights together with the
+        // angular product construction:
+        // int r^2 exp(-alpha r^2) dr = sqrt(pi)/(4 alpha^(3/2));
+        // int exp(-alpha |r-d|^2) d^3r = (pi/alpha)^(3/2).
+        const auto grid = require_expected(
+            DFT::MakeAtomicGrid(8, Eigen::Vector3d::Zero(), spec),
+            "overridden Gaussian-integration grid");
+        const std::array<std::pair<double, Eigen::Vector3d>, 3> cases{{
+            {.35, Eigen::Vector3d(.19, -.11, .23)},
+            {.70, Eigen::Vector3d(.37, -.21, .46)},
+            {1.40, Eigen::Vector3d(-.31, .27, .16)}}};
+        for (const auto &[alpha, displacement] : cases)
+        {
+            double radial_integral = 0.0;
+            double integral = 0.0;
+            for (Eigen::Index p = 0; p < grid.rows(); ++p)
+            {
+                const Eigen::Vector3d point = grid.row(p).head<3>().transpose();
+                const double radius = point.norm();
+                radial_integral += grid(p, 3) * std::exp(-alpha * radius * radius) /
+                    (4.0 * std::numbers::pi);
+                integral += grid(p, 3) * std::exp(-alpha * (point-displacement).squaredNorm());
+            }
+            require_near(radial_integral, std::sqrt(std::numbers::pi) /
+                         (4.0 * std::pow(alpha, 1.5)), 2e-7,
+                         "Radial Gaussian reference is not integrated accurately");
+            require_near(integral, std::pow(std::numbers::pi / alpha, 1.5), 2e-7,
+                         "Radial/angular product grid misses off-center Gaussian reference");
+        }
+    }
+
+    void test_g3_pruning_candidates()
+    {
+        const auto legacy = require_expected(DFT::resolve_grid_spec(
+            DFT::GridRequest{DFT::GridLevel::Normal, 0, 0,
+                             DFT::GridPruningPolicy::LegacyOrcaIndexV1}), "legacy candidate");
+        const auto no_light = require_expected(DFT::resolve_grid_spec(
+            DFT::GridRequest{DFT::GridLevel::Normal, 0, 0,
+                             DFT::GridPruningPolicy::LegacyOrcaNoLightReductionV1}), "no-light candidate");
+        const auto unpruned = require_expected(DFT::resolve_grid_spec(
+            DFT::GridRequest{DFT::GridLevel::Normal, 0, 0,
+                             DFT::GridPruningPolicy::LegacyOrcaUnprunedMaxV1}), "unpruned candidate");
+        const auto pyscf = require_expected(DFT::resolve_grid_spec(
+            DFT::GridRequest{DFT::GridLevel::Normal, 0, 0,
+                             DFT::GridPruningPolicy::PySCFNWChem213}), "PySCF candidate");
+
+        require(legacy.policy_name == "legacy-orca-index-v1" &&
+                    no_light.policy_name == "legacy-orca-no-light-reduction-v1" &&
+                    unpruned.policy_name == "legacy-orca-unpruned-max-v1" &&
+                    pyscf.policy_name == "pyscf-nwchem-2.13",
+                "Every G3 candidate must have a distinct versioned identity");
+        require(require_expected(DFT::atomic_point_count(1, no_light), "H no-light count") >
+                    require_expected(DFT::atomic_point_count(1, legacy), "H legacy count"),
+                "No-light candidate must remove the legacy H/He reduction");
+        require(require_expected(DFT::atomic_point_count(8, unpruned), "O unpruned count") == 75*302,
+                "Legacy unpruned-max candidate must retain its maximum angular rule on every O shell");
+        // Independent literal totals from PySCF 2.13 gen_grid.nwchem_prune,
+        // using its level-3 radial/ANG_ORDER tables and Treutler radii.
+        require(require_expected(DFT::atomic_point_count(1, pyscf), "PySCF H count") == 9808 &&
+                    require_expected(DFT::atomic_point_count(8, pyscf), "PySCF O count") == 14082 &&
+                    require_expected(DFT::atomic_point_count(16, pyscf), "PySCF S count") == 18880,
+                "PySCF NWChem candidate must reproduce known PySCF 2.13 atomic point totals");
+    }
+
     void test_unpruned_angular_refinement()
     {
         constexpr auto level = DFT::GridLevel::UltraFine;
@@ -355,6 +487,9 @@ int main()
     test_angular_grid_invariants();
     test_radial_grid_invariants();
     test_orca_like_grid_presets();
+    test_resolved_grid_spec();
+    test_radial_override_and_oracle();
+    test_g3_pruning_candidates();
     test_unpruned_angular_refinement();
     test_atomic_and_molecular_grid_generation();
     return g_ok ? 0 : 1;

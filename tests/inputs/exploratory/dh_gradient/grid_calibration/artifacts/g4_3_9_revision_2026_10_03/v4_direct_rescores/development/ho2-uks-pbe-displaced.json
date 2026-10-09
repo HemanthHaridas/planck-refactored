@@ -1,0 +1,48 @@
+{
+  "contract": "g4-3-direct-rescore-v1",
+  "fingerprint": "g4-3-v4-robust-development-v1;radial=135;radius=m4-over-bragg;partition=original-becke-treutler-bragg",
+  "points": 242070,
+  "atlas": {
+    "xc_energy": -17.418929226911725,
+    "directions": [
+      {
+        "D_V": -0.10193886352817372,
+        "D_fxc_D": -0.22714687298447275
+      },
+      {
+        "D_V": 0.18672798595405266,
+        "D_fxc_D": -0.14044340782987114
+      }
+    ]
+  },
+  "direct": {
+    "xc_energy": -17.418929226911658,
+    "directions": [
+      {
+        "D_V": -0.1019388635281657,
+        "D_fxc_D": -0.22714687307491593
+      },
+      {
+        "D_V": 0.1867279859540527,
+        "D_fxc_D": -0.14044340801059912
+      }
+    ]
+  },
+  "delta": {
+    "xc_energy": 6.750155989720952e-14,
+    "directions": [
+      {
+        "D_V": 8.021361352916756e-15,
+        "D_fxc_D": -9.044318072248814e-11
+      },
+      {
+        "D_V": 5.551115123125783e-17,
+        "D_fxc_D": -1.807279881305135e-10
+      }
+    ]
+  },
+  "tolerance": 1e-09,
+  "max_error": 1.807279881305135e-10,
+  "passed": true,
+  "fixture": "/Users/hemanthharidas/Desktop/codes/planck-refactored/tests/inputs/exploratory/dh_gradient/grid_calibration/holdout/ho2_uks_pbe_displaced_sto3g.hfinp"
+}

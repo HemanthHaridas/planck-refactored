@@ -1,0 +1,48 @@
+{
+  "contract": "g4-3-direct-rescore-v1",
+  "fingerprint": "g4-3-v4-robust-development-v1;radial=135;radius=m4-over-bragg;partition=original-becke-treutler-bragg",
+  "points": 241050,
+  "atlas": {
+    "xc_energy": -9.355912858243856,
+    "directions": [
+      {
+        "D_V": 0.025765509375183463,
+        "D_fxc_D": -0.4433181404504778
+      },
+      {
+        "D_V": 0.31665906084963674,
+        "D_fxc_D": -0.14247704523215676
+      }
+    ]
+  },
+  "direct": {
+    "xc_energy": -9.35591285824373,
+    "directions": [
+      {
+        "D_V": 0.02576550937517973,
+        "D_fxc_D": -0.4433181403653896
+      },
+      {
+        "D_V": 0.3166590608496333,
+        "D_fxc_D": -0.14247704504811828
+      }
+    ]
+  },
+  "delta": {
+    "xc_energy": 1.2612133559741778e-13,
+    "directions": [
+      {
+        "D_V": -3.733124920302089e-15,
+        "D_fxc_D": 8.5088214252238e-11
+      },
+      {
+        "D_V": -3.4416913763379853e-15,
+        "D_fxc_D": 1.840384789009164e-10
+      }
+    ]
+  },
+  "tolerance": 1e-09,
+  "max_error": 1.840384789009164e-10,
+  "passed": true,
+  "fixture": "/Users/hemanthharidas/Desktop/codes/planck-refactored/tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v2/water_triplet_uks_pbe_displaced_sto3g.hfinp"
+}

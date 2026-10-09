@@ -1,0 +1,280 @@
+{
+  "contract": "g4-3-combined-frontier-v1",
+  "status": "robust-finalist",
+  "families": [
+    "hydrogen-helium",
+    "second-row",
+    "third-row"
+  ],
+  "frontier": [
+    {
+      "family_rules": {
+        "hydrogen-helium": {
+          "boundaries": [
+            0.25,
+            1.0,
+            2.5,
+            3.5
+          ],
+          "lebedev_points": [
+            26,
+            146,
+            2030,
+            974,
+            590
+          ]
+        },
+        "second-row": {
+          "boundaries": [
+            0.4,
+            1.0,
+            2.5,
+            4.5
+          ],
+          "lebedev_points": [
+            110,
+            770,
+            2030,
+            590,
+            170
+          ]
+        },
+        "third-row": {
+          "boundaries": [
+            0.4,
+            0.8,
+            2.5,
+            4.5
+          ],
+          "lebedev_points": [
+            86,
+            590,
+            974,
+            590,
+            26
+          ]
+        }
+      },
+      "cost": {
+        "contract": "g4-3-rule-cost-v1",
+        "max_points_per_atom": 82170,
+        "total_ledger_points": 3234918,
+        "fixtures": [
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/cn_anion_b2plyp_augccpvdz.hfinp",
+            "total_points": 162600,
+            "max_atom_points": 82170
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/uks_u0/cn_radical_asymmetric_b2plyp_sto3g.hfinp",
+            "total_points": 162600,
+            "max_atom_points": 82170
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/fcn_asymmetric_b2plyp_ccpvdz.hfinp",
+            "total_points": 241350,
+            "max_atom_points": 82170
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/ph3_asymmetric_b2plyp_ccpvdz.hfinp",
+            "total_points": 293064,
+            "max_atom_points": 80010
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/sih4_asymmetric_b2plyp_ccpvdz.hfinp",
+            "total_points": 373074,
+            "max_atom_points": 80010
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/sih4_asymmetric_b2plyp_sto3g.hfinp",
+            "total_points": 373074,
+            "max_atom_points": 80010
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/h2s_asymmetric_b2plyp_ccpvdz.hfinp",
+            "total_points": 213558,
+            "max_atom_points": 80010
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/h2s_asymmetric_b2plyp_sto3g.hfinp",
+            "total_points": 213558,
+            "max_atom_points": 80010
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/hcl_b2plyp_ccpvdz.hfinp",
+            "total_points": 133548,
+            "max_atom_points": 80010
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/hcl_b2plyp_sto3g.hfinp",
+            "total_points": 133548,
+            "max_atom_points": 80010
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/hf_b2plyp_sto3g.hfinp",
+            "total_points": 158760,
+            "max_atom_points": 80010
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/uks_u0/ho2_asymmetric_b2plyp_sto3g.hfinp",
+            "total_points": 242070,
+            "max_atom_points": 81030
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/ph3_asymmetric_b2plyp_sto3g.hfinp",
+            "total_points": 293064,
+            "max_atom_points": 80010
+          },
+          {
+            "fixture": "tests/inputs/regression/dft/water_rks_pbe_soscf_puredeadband_631g.hfinp",
+            "total_points": 241050,
+            "max_atom_points": 81030
+          }
+        ]
+      }
+    }
+  ],
+  "provenance": "G4.3 V4 development-only selection: one shared family rule was searched against the immutable fourteen-fixture atlas and all consumed V1--V3 evidence.",
+  "v4_development": {
+    "request": "tests/inputs/exploratory/dh_gradient/grid_calibration/g4_3_v4_development_request.json",
+    "cost_policy": "unconstrained; rank robust survivors by cost",
+    "robust_ratio": 0.5,
+    "diagnostics": {
+      "hydrogen-helium": {
+        "qualified": 1946397,
+        "robust": 608636,
+        "robust_available": true,
+        "lowest_cost_robust": {
+          "rule": {
+            "boundaries": [
+              0.25,
+              1.0,
+              2.5,
+              3.5
+            ],
+            "lebedev_points": [
+              26,
+              146,
+              2030,
+              974,
+              590
+            ]
+          },
+          "normalized_error": 0.4495606112775996,
+          "max_points_per_atom": 80010,
+          "total_ledger_points": 1920240
+        },
+        "lowest_error_qualified": {
+          "rule": {
+            "boundaries": [
+              0.1,
+              0.1667,
+              0.25,
+              0.4
+            ],
+            "lebedev_points": [
+              2030,
+              2030,
+              2030,
+              2030,
+              2030
+            ]
+          },
+          "normalized_error": 0.0,
+          "max_points_per_atom": 274050,
+          "total_ledger_points": 6577200
+        }
+      },
+      "second-row": {
+        "qualified": 1793278,
+        "robust": 843449,
+        "robust_available": true,
+        "lowest_cost_robust": {
+          "rule": {
+            "boundaries": [
+              0.4,
+              1.0,
+              2.5,
+              4.5
+            ],
+            "lebedev_points": [
+              110,
+              770,
+              2030,
+              590,
+              170
+            ]
+          },
+          "normalized_error": 0.3965197291760464,
+          "max_points_per_atom": 82170,
+          "total_ledger_points": 888390
+        },
+        "lowest_error_qualified": {
+          "rule": {
+            "boundaries": [
+              0.1,
+              0.1667,
+              0.25,
+              0.4
+            ],
+            "lebedev_points": [
+              2030,
+              2030,
+              2030,
+              2030,
+              2030
+            ]
+          },
+          "normalized_error": 0.0,
+          "max_points_per_atom": 274050,
+          "total_ledger_points": 3014550
+        }
+      },
+      "third-row": {
+        "qualified": 10045835,
+        "robust": 8216527,
+        "robust_available": true,
+        "lowest_cost_robust": {
+          "rule": {
+            "boundaries": [
+              0.4,
+              0.8,
+              2.5,
+              4.5
+            ],
+            "lebedev_points": [
+              86,
+              590,
+              974,
+              590,
+              26
+            ]
+          },
+          "normalized_error": 0.48326759218237186,
+          "max_points_per_atom": 53538,
+          "total_ledger_points": 426288
+        },
+        "lowest_error_qualified": {
+          "rule": {
+            "boundaries": [
+              0.1,
+              0.1667,
+              0.25,
+              0.4
+            ],
+            "lebedev_points": [
+              2030,
+              2030,
+              2030,
+              2030,
+              2030
+            ]
+          },
+          "normalized_error": 0.0,
+          "max_points_per_atom": 274050,
+          "total_ledger_points": 2192400
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "contract": "g4-3-direct-rescore-v1",
+  "fingerprint": "g4-3-v3-constrained-selection-v1;radial=135;radius=m4-over-bragg;partition=original-becke-treutler-bragg",
+  "points": 110796,
+  "atlas": {
+    "xc_energy": -13.574593082026906,
+    "directions": [
+      {
+        "D_V": -1.1572795199615701e-09,
+        "D_fxc_D": -0.01845529920279271
+      },
+      {
+        "D_V": 0.057716410471565435,
+        "D_fxc_D": -0.0038092598745535946
+      }
+    ]
+  },
+  "direct": {
+    "xc_energy": -13.574593082026919,
+    "directions": [
+      {
+        "D_V": -1.1572792654734876e-09,
+        "D_fxc_D": -0.01845529923707693
+      },
+      {
+        "D_V": 0.05771641047156506,
+        "D_fxc_D": -0.00380925989034845
+      }
+    ]
+  },
+  "delta": {
+    "xc_energy": -1.2434497875801753e-14,
+    "directions": [
+      {
+        "D_V": 2.5448808252608277e-16,
+        "D_fxc_D": -3.428421782580848e-11
+      },
+      {
+        "D_V": -3.7470027081099033e-16,
+        "D_fxc_D": -1.579485544092596e-11
+      }
+    ]
+  },
+  "tolerance": 1e-09,
+  "max_error": 3.428421782580848e-11,
+  "passed": true,
+  "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/hcl_b2plyp_sto3g.hfinp"
+}

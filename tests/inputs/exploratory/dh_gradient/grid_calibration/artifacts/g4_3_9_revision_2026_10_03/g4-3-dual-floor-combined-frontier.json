@@ -1,0 +1,1000 @@
+{
+  "contract": "g4-3-combined-frontier-v1",
+  "families": [
+    "hydrogen-helium",
+    "second-row",
+    "third-row"
+  ],
+  "frontier": [
+    {
+      "family_rules": {
+        "hydrogen-helium": {
+          "boundaries": [
+            0.4,
+            1.0,
+            2.5,
+            3.5
+          ],
+          "lebedev_points": [
+            26,
+            110,
+            1454,
+            770,
+            590
+          ]
+        },
+        "second-row": {
+          "boundaries": [
+            0.4,
+            1.0,
+            2.5,
+            4.5
+          ],
+          "lebedev_points": [
+            86,
+            770,
+            1730,
+            590,
+            170
+          ]
+        },
+        "third-row": {
+          "boundaries": [
+            0.1,
+            0.5,
+            3.5,
+            4.5
+          ],
+          "lebedev_points": [
+            26,
+            146,
+            770,
+            230,
+            26
+          ]
+        }
+      },
+      "cost": {
+        "contract": "g4-3-rule-cost-v1",
+        "max_points_per_atom": 73626,
+        "total_ledger_points": 2713398,
+        "fixtures": [
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/cn_anion_b2plyp_augccpvdz.hfinp",
+            "total_points": 145860,
+            "max_atom_points": 73626
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/uks_u0/cn_radical_asymmetric_b2plyp_sto3g.hfinp",
+            "total_points": 145860,
+            "max_atom_points": 73626
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/fcn_asymmetric_b2plyp_ccpvdz.hfinp",
+            "total_points": 216786,
+            "max_atom_points": 73626
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/ph3_asymmetric_b2plyp_ccpvdz.hfinp",
+            "total_points": 239124,
+            "max_atom_points": 64662
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/sih4_asymmetric_b2plyp_ccpvdz.hfinp",
+            "total_points": 303702,
+            "max_atom_points": 64662
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/sih4_asymmetric_b2plyp_sto3g.hfinp",
+            "total_points": 303702,
+            "max_atom_points": 64662
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/h2s_asymmetric_b2plyp_ccpvdz.hfinp",
+            "total_points": 175122,
+            "max_atom_points": 64662
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/h2s_asymmetric_b2plyp_sto3g.hfinp",
+            "total_points": 175122,
+            "max_atom_points": 64662
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/hcl_b2plyp_ccpvdz.hfinp",
+            "total_points": 110460,
+            "max_atom_points": 64662
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/hcl_b2plyp_sto3g.hfinp",
+            "total_points": 110460,
+            "max_atom_points": 64662
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/hf_b2plyp_sto3g.hfinp",
+            "total_points": 135588,
+            "max_atom_points": 70926
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/uks_u0/ho2_asymmetric_b2plyp_sto3g.hfinp",
+            "total_points": 210330,
+            "max_atom_points": 72834
+          },
+          {
+            "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/ph3_asymmetric_b2plyp_sto3g.hfinp",
+            "total_points": 239124,
+            "max_atom_points": 64662
+          },
+          {
+            "fixture": "tests/inputs/regression/dft/water_rks_pbe_soscf_puredeadband_631g.hfinp",
+            "total_points": 202158,
+            "max_atom_points": 72834
+          }
+        ]
+      }
+    }
+  ],
+  "provenance": "G4.3.9 test-only dual-floor revision: H/He outer-energy and second-row peak-energy floors, composed with the prior second-row band-1 response floor; all rules re-certified on the frozen selection atlas.",
+  "certificates": {
+    "hydrogen-helium": {
+      "contract": "g4-3-rule-certificate-v1",
+      "family": "hydrogen-helium",
+      "rule": {
+        "boundaries": [
+          0.4,
+          1.0,
+          2.5,
+          3.5
+        ],
+        "lebedev_points": [
+          26,
+          110,
+          1454,
+          770,
+          590
+        ]
+      },
+      "fixtures": [
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/cn_anion_b2plyp_augccpvdz.hfinp",
+          "signed_xc_energy": 0.0,
+          "l1_xc_energy": 0.0,
+          "directions": [
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            },
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/uks_u0/cn_radical_asymmetric_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": 0.0,
+          "l1_xc_energy": 0.0,
+          "directions": [
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            },
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/fcn_asymmetric_b2plyp_ccpvdz.hfinp",
+          "signed_xc_energy": 0.0,
+          "l1_xc_energy": 0.0,
+          "directions": [
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            },
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/ph3_asymmetric_b2plyp_ccpvdz.hfinp",
+          "signed_xc_energy": -1.000935906628948e-09,
+          "l1_xc_energy": 2.6733024148486106e-09,
+          "directions": [
+            {
+              "signed_D_V": 9.088527998364445e-10,
+              "l1_D_V": 1.4112561347000455e-09,
+              "signed_D_fxc_D": 4.858158695117816e-10,
+              "l1_D_fxc_D": 1.300025250782529e-09
+            },
+            {
+              "signed_D_V": 7.769701551037272e-12,
+              "l1_D_V": 1.1719915584191786e-11,
+              "signed_D_fxc_D": -1.9970630501236955e-14,
+              "l1_D_fxc_D": 5.076774975101506e-13
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/sih4_asymmetric_b2plyp_ccpvdz.hfinp",
+          "signed_xc_energy": 9.035072915917953e-11,
+          "l1_xc_energy": 1.2787492547530676e-09,
+          "directions": [
+            {
+              "signed_D_V": -1.1874518867009658e-10,
+              "l1_D_V": 1.3713691311202708e-09,
+              "signed_D_fxc_D": 6.623402192517332e-10,
+              "l1_D_fxc_D": 2.113831978633899e-09
+            },
+            {
+              "signed_D_V": -8.063959313087971e-13,
+              "l1_D_V": 3.2353223548672637e-12,
+              "signed_D_fxc_D": 1.7040136880021918e-14,
+              "l1_D_fxc_D": 5.222476555747444e-14
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/sih4_asymmetric_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": 1.2764491129743604e-10,
+          "l1_xc_energy": 9.068862841468929e-10,
+          "directions": [
+            {
+              "signed_D_V": -8.594688208906336e-11,
+              "l1_D_V": 1.830234665722648e-09,
+              "signed_D_fxc_D": -9.176697343741529e-10,
+              "l1_D_fxc_D": 8.506262942943266e-09
+            },
+            {
+              "signed_D_V": -2.0371304036106854e-11,
+              "l1_D_V": 3.1763213458804414e-11,
+              "signed_D_fxc_D": 8.820782994513803e-14,
+              "l1_D_fxc_D": 2.9460198725649846e-12
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/h2s_asymmetric_b2plyp_ccpvdz.hfinp",
+          "signed_xc_energy": 5.869534810670914e-10,
+          "l1_xc_energy": 3.0277709357035377e-09,
+          "directions": [
+            {
+              "signed_D_V": 1.5780726014936664e-09,
+              "l1_D_V": 2.8003718148734743e-09,
+              "signed_D_fxc_D": -5.41537372762275e-10,
+              "l1_D_fxc_D": 2.8726008650234975e-09
+            },
+            {
+              "signed_D_V": 8.663656964557159e-12,
+              "l1_D_V": 2.0122742827415597e-11,
+              "signed_D_fxc_D": -1.0207400633358068e-12,
+              "l1_D_fxc_D": 1.2755086687034668e-12
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/h2s_asymmetric_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": -1.1082899995462245e-09,
+          "l1_xc_energy": 5.226849662085612e-09,
+          "directions": [
+            {
+              "signed_D_V": 3.284618633315477e-09,
+              "l1_D_V": 9.013860715872017e-09,
+              "signed_D_fxc_D": 3.1106722205284215e-09,
+              "l1_D_fxc_D": 8.030868533201124e-09
+            },
+            {
+              "signed_D_V": -3.812632586867031e-11,
+              "l1_D_V": 9.29717596965306e-11,
+              "signed_D_fxc_D": -8.719762950375349e-13,
+              "l1_D_fxc_D": 3.112742902920319e-12
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/hcl_b2plyp_ccpvdz.hfinp",
+          "signed_xc_energy": 8.247736888768988e-10,
+          "l1_xc_energy": 2.5483482074729697e-09,
+          "directions": [
+            {
+              "signed_D_V": 4.4318920478905646e-10,
+              "l1_D_V": 1.8156335712619563e-09,
+              "signed_D_fxc_D": 8.837305980646364e-11,
+              "l1_D_fxc_D": 1.90157189630142e-09
+            },
+            {
+              "signed_D_V": -1.1199992846859502e-12,
+              "l1_D_V": 2.445760315499915e-12,
+              "signed_D_fxc_D": -1.7488338598868776e-14,
+              "l1_D_fxc_D": 2.88472461004774e-14
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/hcl_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": 6.221118392887043e-10,
+          "l1_xc_energy": 3.2577362053768655e-09,
+          "directions": [
+            {
+              "signed_D_V": -6.381938667804309e-10,
+              "l1_D_V": 4.925251077646847e-09,
+              "signed_D_fxc_D": -1.2782095359855927e-10,
+              "l1_D_fxc_D": 7.2333046619026745e-09
+            },
+            {
+              "signed_D_V": 1.3185695760220263e-11,
+              "l1_D_V": 4.908629850815218e-11,
+              "signed_D_fxc_D": -2.016486296062846e-13,
+              "l1_D_fxc_D": 1.5616119591828217e-12
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/hf_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": -6.831508985340967e-11,
+          "l1_xc_energy": 6.15291879328596e-09,
+          "directions": [
+            {
+              "signed_D_V": 6.147536061908389e-11,
+              "l1_D_V": 6.160728425502415e-09,
+              "signed_D_fxc_D": -1.664942905498664e-09,
+              "l1_D_fxc_D": 3.999980508882718e-09
+            },
+            {
+              "signed_D_V": -6.769545460505279e-10,
+              "l1_D_V": 2.535624148885611e-09,
+              "signed_D_fxc_D": 1.3154143815540924e-09,
+              "l1_D_fxc_D": 4.7795244442382265e-09
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/uks_u0/ho2_asymmetric_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": -1.141834581844589e-09,
+          "l1_xc_energy": 6.02139544228234e-09,
+          "directions": [
+            {
+              "signed_D_V": -1.4009113474928272e-09,
+              "l1_D_V": 3.2729584254771345e-09,
+              "signed_D_fxc_D": -1.7119679733049953e-09,
+              "l1_D_fxc_D": 1.188310683033839e-08
+            },
+            {
+              "signed_D_V": 1.2212950725711098e-10,
+              "l1_D_V": 1.358035093074826e-09,
+              "signed_D_fxc_D": 3.1506482221614204e-10,
+              "l1_D_fxc_D": 3.936621332879824e-09
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/ph3_asymmetric_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": 6.466641426320117e-10,
+          "l1_xc_energy": 2.69288772328487e-09,
+          "directions": [
+            {
+              "signed_D_V": -4.1095345361360936e-10,
+              "l1_D_V": 3.3509652898277164e-09,
+              "signed_D_fxc_D": -5.978490751551956e-10,
+              "l1_D_fxc_D": 3.5881450380929844e-09
+            },
+            {
+              "signed_D_V": -1.9816022775512175e-11,
+              "l1_D_V": 5.925342915670445e-11,
+              "signed_D_fxc_D": -1.61742736484703e-12,
+              "l1_D_fxc_D": 1.9733502946834255e-12
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/regression/dft/water_rks_pbe_soscf_puredeadband_631g.hfinp",
+          "signed_xc_energy": -5.662489570671262e-10,
+          "l1_xc_energy": 4.6108643248225855e-09,
+          "directions": [
+            {
+              "signed_D_V": -1.1668433038576186e-19,
+              "l1_D_V": 9.357186390942988e-19,
+              "signed_D_fxc_D": -8.672989435881471e-10,
+              "l1_D_fxc_D": 3.521966014459164e-09
+            },
+            {
+              "signed_D_V": 2.7954026597474924e-20,
+              "l1_D_V": 4.5833073226797025e-09,
+              "signed_D_fxc_D": -7.09276866681825e-10,
+              "l1_D_fxc_D": 6.762600758140476e-09
+            }
+          ]
+        }
+      ]
+    },
+    "second-row": {
+      "contract": "g4-3-rule-certificate-v1",
+      "family": "second-row",
+      "rule": {
+        "boundaries": [
+          0.4,
+          1.0,
+          2.5,
+          4.5
+        ],
+        "lebedev_points": [
+          86,
+          770,
+          1730,
+          590,
+          170
+        ]
+      },
+      "fixtures": [
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/cn_anion_b2plyp_augccpvdz.hfinp",
+          "signed_xc_energy": 8.818119941927837e-10,
+          "l1_xc_energy": 2.2865584342441e-09,
+          "directions": [
+            {
+              "signed_D_V": -3.9230338717866715e-11,
+              "l1_D_V": 1.5255169098078323e-10,
+              "signed_D_fxc_D": -1.3140750542113138e-09,
+              "l1_D_fxc_D": 1.4506674674762114e-09
+            },
+            {
+              "signed_D_V": -2.0060279835954988e-10,
+              "l1_D_V": 4.320003695862077e-10,
+              "signed_D_fxc_D": 5.435330912368726e-10,
+              "l1_D_fxc_D": 1.2588204326170568e-09
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/uks_u0/cn_radical_asymmetric_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": 6.71624331219329e-10,
+          "l1_xc_energy": 2.828458845908556e-09,
+          "directions": [
+            {
+              "signed_D_V": 1.0854987395577571e-10,
+              "l1_D_V": 2.5707759210424756e-09,
+              "signed_D_fxc_D": -5.86391570366965e-10,
+              "l1_D_fxc_D": 4.424104490374804e-09
+            },
+            {
+              "signed_D_V": -1.2113254381431687e-09,
+              "l1_D_V": 2.1334822033733036e-09,
+              "signed_D_fxc_D": 9.097799163502279e-09,
+              "l1_D_fxc_D": 2.497332901517248e-08
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/fcn_asymmetric_b2plyp_ccpvdz.hfinp",
+          "signed_xc_energy": -1.4497203858938156e-10,
+          "l1_xc_energy": 4.826276136605109e-09,
+          "directions": [
+            {
+              "signed_D_V": -1.3589989132336404e-09,
+              "l1_D_V": 3.750528315516413e-09,
+              "signed_D_fxc_D": 4.174848573463359e-09,
+              "l1_D_fxc_D": 1.842525220803289e-08
+            },
+            {
+              "signed_D_V": -2.115390839480276e-11,
+              "l1_D_V": 1.1952761662423264e-09,
+              "signed_D_fxc_D": -3.2172723070674555e-10,
+              "l1_D_fxc_D": 6.2093833995932e-10
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/ph3_asymmetric_b2plyp_ccpvdz.hfinp",
+          "signed_xc_energy": 0.0,
+          "l1_xc_energy": 0.0,
+          "directions": [
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            },
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/sih4_asymmetric_b2plyp_ccpvdz.hfinp",
+          "signed_xc_energy": 0.0,
+          "l1_xc_energy": 0.0,
+          "directions": [
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            },
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/sih4_asymmetric_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": 0.0,
+          "l1_xc_energy": 0.0,
+          "directions": [
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            },
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/h2s_asymmetric_b2plyp_ccpvdz.hfinp",
+          "signed_xc_energy": 0.0,
+          "l1_xc_energy": 0.0,
+          "directions": [
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            },
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/h2s_asymmetric_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": 0.0,
+          "l1_xc_energy": 0.0,
+          "directions": [
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            },
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/hcl_b2plyp_ccpvdz.hfinp",
+          "signed_xc_energy": 0.0,
+          "l1_xc_energy": 0.0,
+          "directions": [
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            },
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/hcl_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": 0.0,
+          "l1_xc_energy": 0.0,
+          "directions": [
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            },
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/hf_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": -1.318939172395395e-10,
+          "l1_xc_energy": 2.000445994171807e-10,
+          "directions": [
+            {
+              "signed_D_V": 6.1608075988835175e-12,
+              "l1_D_V": 7.473404857110232e-12,
+              "signed_D_fxc_D": 2.246749464402862e-10,
+              "l1_D_fxc_D": 2.2702723516916764e-10
+            },
+            {
+              "signed_D_V": 8.134243787939939e-12,
+              "l1_D_V": 1.2612320251232753e-11,
+              "signed_D_fxc_D": -5.135200360718325e-11,
+              "l1_D_fxc_D": 5.494566179826866e-11
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/uks_u0/ho2_asymmetric_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": 1.5753395583773452e-10,
+          "l1_xc_energy": 3.040748776278025e-09,
+          "directions": [
+            {
+              "signed_D_V": -5.874399148947326e-09,
+              "l1_D_V": 8.16187183211343e-09,
+              "signed_D_fxc_D": -2.4767615602846647e-08,
+              "l1_D_fxc_D": 6.280511692927119e-08
+            },
+            {
+              "signed_D_V": -7.838477349770994e-10,
+              "l1_D_V": 1.4462138750608335e-09,
+              "signed_D_fxc_D": -2.705950203273782e-09,
+              "l1_D_fxc_D": 9.062169817800908e-09
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/ph3_asymmetric_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": 0.0,
+          "l1_xc_energy": 0.0,
+          "directions": [
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            },
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/regression/dft/water_rks_pbe_soscf_puredeadband_631g.hfinp",
+          "signed_xc_energy": 2.0021886711561584e-12,
+          "l1_xc_energy": 3.792910644961396e-11,
+          "directions": [
+            {
+              "signed_D_V": -1.0277839399825511e-19,
+              "l1_D_V": 4.883399435827766e-18,
+              "signed_D_fxc_D": 2.5121476103494017e-10,
+              "l1_D_fxc_D": 2.754539536732647e-10
+            },
+            {
+              "signed_D_V": 3.95546764279863e-19,
+              "l1_D_V": 8.253544889256759e-17,
+              "signed_D_fxc_D": 4.2280161252002e-12,
+              "l1_D_fxc_D": 1.7530484264796985e-11
+            }
+          ]
+        }
+      ]
+    },
+    "third-row": {
+      "contract": "g4-3-rule-certificate-v1",
+      "family": "third-row",
+      "rule": {
+        "boundaries": [
+          0.1,
+          0.5,
+          3.5,
+          4.5
+        ],
+        "lebedev_points": [
+          26,
+          146,
+          770,
+          230,
+          26
+        ]
+      },
+      "fixtures": [
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/cn_anion_b2plyp_augccpvdz.hfinp",
+          "signed_xc_energy": 0.0,
+          "l1_xc_energy": 0.0,
+          "directions": [
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            },
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/uks_u0/cn_radical_asymmetric_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": 0.0,
+          "l1_xc_energy": 0.0,
+          "directions": [
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            },
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/fcn_asymmetric_b2plyp_ccpvdz.hfinp",
+          "signed_xc_energy": 0.0,
+          "l1_xc_energy": 0.0,
+          "directions": [
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            },
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/ph3_asymmetric_b2plyp_ccpvdz.hfinp",
+          "signed_xc_energy": 1.7781387516374812e-09,
+          "l1_xc_energy": 4.952525883314021e-09,
+          "directions": [
+            {
+              "signed_D_V": -1.192449599321543e-09,
+              "l1_D_V": 1.358035909682048e-09,
+              "signed_D_fxc_D": 9.666506266569445e-10,
+              "l1_D_fxc_D": 1.168917815885086e-09
+            },
+            {
+              "signed_D_V": -4.370248327144806e-13,
+              "l1_D_V": 1.6172916847891555e-12,
+              "signed_D_fxc_D": 7.187757294435409e-13,
+              "l1_D_fxc_D": 5.587918939552157e-12
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/sih4_asymmetric_b2plyp_ccpvdz.hfinp",
+          "signed_xc_energy": 1.2733713645181068e-09,
+          "l1_xc_energy": 9.432939002470328e-09,
+          "directions": [
+            {
+              "signed_D_V": 1.6411194511218797e-08,
+              "l1_D_V": 1.64480242817295e-08,
+              "signed_D_fxc_D": 2.0251720211579207e-08,
+              "l1_D_fxc_D": 2.6334291206962117e-08
+            },
+            {
+              "signed_D_V": 2.498202151745566e-13,
+              "l1_D_V": 4.62720688585766e-12,
+              "signed_D_fxc_D": -3.6178057519146156e-14,
+              "l1_D_fxc_D": 2.3770176708823803e-12
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/sih4_asymmetric_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": -1.1503196664236129e-09,
+          "l1_xc_energy": 5.7746728153541335e-09,
+          "directions": [
+            {
+              "signed_D_V": -1.267245067391098e-09,
+              "l1_D_V": 5.928376507546736e-09,
+              "signed_D_fxc_D": -9.651991337950895e-10,
+              "l1_D_fxc_D": 2.431626147010456e-09
+            },
+            {
+              "signed_D_V": -5.124286556040386e-12,
+              "l1_D_V": 1.0809888384265252e-11,
+              "signed_D_fxc_D": -2.147197973578498e-13,
+              "l1_D_fxc_D": 1.5787746289129452e-12
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/h2s_asymmetric_b2plyp_ccpvdz.hfinp",
+          "signed_xc_energy": 2.0658482380742357e-09,
+          "l1_xc_energy": 5.789367655486093e-09,
+          "directions": [
+            {
+              "signed_D_V": 4.502655269084123e-12,
+              "l1_D_V": 2.0058381882131193e-10,
+              "signed_D_fxc_D": -5.362027804723816e-11,
+              "l1_D_fxc_D": 1.192745531387952e-10
+            },
+            {
+              "signed_D_V": -3.592937259560108e-13,
+              "l1_D_V": 6.771187869005386e-13,
+              "signed_D_fxc_D": -5.424560435998442e-12,
+              "l1_D_fxc_D": 7.742331886409113e-12
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/h2s_asymmetric_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": -2.7884532742710315e-10,
+          "l1_xc_energy": 3.4786122104158576e-09,
+          "directions": [
+            {
+              "signed_D_V": -2.4076036582390942e-11,
+              "l1_D_V": 2.0144839118797475e-10,
+              "signed_D_fxc_D": 2.97799390119778e-10,
+              "l1_D_fxc_D": 4.384373698945928e-10
+            },
+            {
+              "signed_D_V": -2.570414688221444e-12,
+              "l1_D_V": 3.789803526749548e-12,
+              "signed_D_fxc_D": -4.055523766861189e-10,
+              "l1_D_fxc_D": 4.072605030819391e-10
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/hcl_b2plyp_ccpvdz.hfinp",
+          "signed_xc_energy": 1.2997990315910142e-10,
+          "l1_xc_energy": 4.655642384096809e-10,
+          "directions": [
+            {
+              "signed_D_V": 1.0503593207025689e-10,
+              "l1_D_V": 1.4880740130687015e-10,
+              "signed_D_fxc_D": -2.6569612898384614e-11,
+              "l1_D_fxc_D": 8.659112231768486e-11
+            },
+            {
+              "signed_D_V": 2.1287238169328993e-12,
+              "l1_D_V": 2.696972999515518e-12,
+              "signed_D_fxc_D": 1.2965342569364504e-12,
+              "l1_D_fxc_D": 4.5305316695288475e-12
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/hcl_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": 6.564527203141571e-12,
+          "l1_xc_energy": 1.821722147859041e-10,
+          "directions": [
+            {
+              "signed_D_V": 6.320945406880459e-11,
+              "l1_D_V": 8.598703136934165e-11,
+              "signed_D_fxc_D": -1.820254946311796e-10,
+              "l1_D_fxc_D": 2.135201477089875e-10
+            },
+            {
+              "signed_D_V": -5.443373972002474e-12,
+              "l1_D_V": 6.411986860982327e-12,
+              "signed_D_fxc_D": 1.4624680752478947e-10,
+              "l1_D_fxc_D": 1.4868122215167154e-10
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/hf_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": 0.0,
+          "l1_xc_energy": 0.0,
+          "directions": [
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            },
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/uks_u0/ho2_asymmetric_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": 0.0,
+          "l1_xc_energy": 0.0,
+          "directions": [
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            },
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/ph3_asymmetric_b2plyp_sto3g.hfinp",
+          "signed_xc_energy": -7.664086451959704e-10,
+          "l1_xc_energy": 2.0962468253915955e-09,
+          "directions": [
+            {
+              "signed_D_V": 1.913675565021314e-10,
+              "l1_D_V": 5.575964448989991e-10,
+              "signed_D_fxc_D": 1.5862635635104063e-10,
+              "l1_D_fxc_D": 2.456727542178181e-10
+            },
+            {
+              "signed_D_V": -3.0768273259857977e-13,
+              "l1_D_V": 6.836173987194077e-12,
+              "signed_D_fxc_D": -1.9547030505896007e-12,
+              "l1_D_fxc_D": 7.671992253084405e-12
+            }
+          ]
+        },
+        {
+          "fixture": "tests/inputs/regression/dft/water_rks_pbe_soscf_puredeadband_631g.hfinp",
+          "signed_xc_energy": 0.0,
+          "l1_xc_energy": 0.0,
+          "directions": [
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            },
+            {
+              "signed_D_V": 0.0,
+              "l1_D_V": 0.0,
+              "signed_D_fxc_D": 0.0,
+              "l1_D_fxc_D": 0.0
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

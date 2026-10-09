@@ -16,6 +16,7 @@ moving-grid (Becke partition + point-translation) response.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -124,6 +125,7 @@ def central_difference_gradient(
     multiplicity: int,
     delta_bohr: float,
     workdir: Path,
+    tag: str = "fd",
 ) -> list[list[float]]:
     """
     Build a natom x 3 numerical gradient (Ha/Bohr) by central differences
@@ -144,7 +146,7 @@ def central_difference_gradient(
                     template, symbols, shifted, charge, multiplicity,
                     calculation="energy",
                 )
-                inp_path = workdir / f"fd_{ia}_{q}_{'+' if sign > 0 else '-'}.hfinp"
+                inp_path = workdir / f"{tag}_{ia}_{q}_{'+' if sign > 0 else '-'}.hfinp"
                 inp_path.write_text(inp)
                 out = run_planck_dft(executable, inp_path)
                 results.append(parse_dft_energy(out))
@@ -188,6 +190,11 @@ def main(argv: Iterable[str] | None = None) -> int:
         help="finite-difference step in Bohr (default 1e-3)",
     )
     parser.add_argument(
+        "--outer-delta",
+        type=float,
+        help="second central-difference radius for fourth-order extrapolation",
+    )
+    parser.add_argument(
         "--atol",
         type=float,
         default=2.0e-4,
@@ -198,6 +205,13 @@ def main(argv: Iterable[str] | None = None) -> int:
         action="store_true",
         help="keep the working directory of FD inputs/outputs for inspection",
     )
+    parser.add_argument("--grid-policy", help="override the immutable DFT grid policy")
+    parser.add_argument("--radial-points", type=int, help="override the radial shell count")
+    parser.add_argument(
+        "--scf-tolerance",
+        type=float,
+        help="override both SCF energy and density tolerances for the FD stencil",
+    )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
     executable = args.build_dir / "planck-dft"
@@ -207,6 +221,26 @@ def main(argv: Iterable[str] | None = None) -> int:
         raise SystemExit(f"input file not found: {args.input}")
 
     template = args.input.read_text()
+    if args.radial_points is not None:
+        if args.radial_points <= 0:
+            parser.error("--radial-points must be positive")
+        template = re.sub(r"^\s*grid_radial_points\s+[^\n]*\n", "", template, flags=re.MULTILINE)
+        template = template.replace("%end_dft", f"    grid_radial_points {args.radial_points}\n%end_dft", 1)
+    if args.grid_policy is not None:
+        template = re.sub(r"^\s*grid_policy\s+[^\n]*\n", "", template, flags=re.MULTILINE)
+        template = template.replace("%end_dft", f"    grid_policy {args.grid_policy}\n%end_dft", 1)
+    if args.scf_tolerance is not None:
+        if args.scf_tolerance <= 0.0:
+            parser.error("--scf-tolerance must be positive")
+        value = f"{args.scf_tolerance:.17g}"
+        for key in ("tol_energy", "tol_density"):
+            pattern = rf"^(\s*{key})\s+[^\n]*$"
+            template, count = re.subn(pattern, rf"\1 {value}", template,
+                                      count=1, flags=re.MULTILINE)
+            if count != 1:
+                parser.error(f"input has no {key} entry to override")
+    if args.outer_delta is not None and (args.outer_delta <= args.delta or not args.outer_delta > 0):
+        parser.error("--outer-delta must be positive and larger than --delta")
     symbols, coords, charge, multiplicity, _ = parse_coords_block(template)
     natom = len(symbols)
 
@@ -225,21 +259,40 @@ def main(argv: Iterable[str] | None = None) -> int:
     analytic_out = run_planck_dft(executable, grad_path)
     g_analytic = parse_analytic_gradient(analytic_out, natom)
 
-    # Central-difference gradient.
-    g_fd = central_difference_gradient(
+    # Central difference, optionally extrapolated from two radii to cancel
+    # the O(h^2) truncation term without changing the analytic calculation.
+    g_inner = central_difference_gradient(
         executable, template, symbols, coords, charge, multiplicity,
-        args.delta, workdir,
+        args.delta, workdir, "inner",
     )
+    g_fd = g_inner
+    if args.outer_delta is not None:
+        g_outer = central_difference_gradient(
+            executable, template, symbols, coords, charge, multiplicity,
+            args.outer_delta, workdir, "outer")
+        ratio2 = (args.outer_delta / args.delta) ** 2
+        g_fd = [[(ratio2 * inner - outer) / (ratio2 - 1.0)
+                 for inner, outer in zip(row_inner, row_outer)]
+                for row_inner, row_outer in zip(g_inner, g_outer)]
 
     # Report.
     print("Analytic gradient (Ha/Bohr):")
     for i, row in enumerate(g_analytic):
         print(f"  Atom {i + 1}: {row[0]:14.8f}  {row[1]:14.8f}  {row[2]:14.8f}")
-    print("Finite-difference gradient (Ha/Bohr):")
+    print(("Fourth-order extrapolated" if args.outer_delta is not None else "Finite-difference") + " gradient (Ha/Bohr):")
     for i, row in enumerate(g_fd):
         print(f"  Atom {i + 1}: {row[0]:14.8f}  {row[1]:14.8f}  {row[2]:14.8f}")
 
     worst, (ia, q) = max_abs_diff(g_analytic, g_fd)
+    report = dict(input=str(args.input), grid_policy=args.grid_policy, radial_points=args.radial_points,
+                  scf_tolerance=args.scf_tolerance,
+                  inner_delta_bohr=args.delta, outer_delta_bohr=args.outer_delta,
+                  stencil="fourth-order" if args.outer_delta is not None else "second-order",
+                  analytic_gradient=g_analytic, finite_difference_gradient=g_fd,
+                  max_error=worst, atom=ia + 1, axis="xyz"[q], tolerance=args.atol,
+                  passed=worst <= args.atol)
+    if args.keep_tmp:
+        (workdir / "results.json").write_text(json.dumps(report, indent=2) + "\n")
     print(
         f"max |g_analytic - g_fd| = {worst:.3e} Ha/Bohr "
         f"(atom {ia + 1}, axis {'xyz'[q]})"
@@ -249,7 +302,7 @@ def main(argv: Iterable[str] | None = None) -> int:
     if args.keep_tmp:
         print(f"work directory kept at: {workdir}")
 
-    if worst > args.atol:
+    if not report["passed"]:
         print("FAIL: analytic DFT gradient deviates from finite difference")
         return 1
     print("PASS")

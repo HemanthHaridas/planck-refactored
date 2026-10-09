@@ -1,0 +1,48 @@
+{
+  "contract": "g4-3-direct-rescore-v1",
+  "fingerprint": "g4-3-dual-energy-floor-v1;radial=135;radius=m4-over-bragg;partition=original-becke-treutler-bragg",
+  "points": 175122,
+  "atlas": {
+    "xc_energy": -12.690354255043335,
+    "directions": [
+      {
+        "D_V": 3.2025861795537048e-09,
+        "D_fxc_D": -0.02532479399171033
+      },
+      {
+        "D_V": -0.05804964693212333,
+        "D_fxc_D": -0.00532942153969049
+      }
+    ]
+  },
+  "direct": {
+    "xc_energy": -12.690354255043335,
+    "directions": [
+      {
+        "D_V": 3.202585577094826e-09,
+        "D_fxc_D": -0.02532479396938069
+      },
+      {
+        "D_V": -0.058049646932123035,
+        "D_fxc_D": -0.005329421519584872
+      }
+    ]
+  },
+  "delta": {
+    "xc_energy": 0.0,
+    "directions": [
+      {
+        "D_V": -6.024588789344991e-16,
+        "D_fxc_D": 2.232964160797657e-11
+      },
+      {
+        "D_V": 2.983724378680108e-16,
+        "D_fxc_D": 2.0105618558918792e-11
+      }
+    ]
+  },
+  "tolerance": 1e-09,
+  "max_error": 2.232964160797657e-11,
+  "passed": true,
+  "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/h2s_asymmetric_b2plyp_sto3g.hfinp"
+}

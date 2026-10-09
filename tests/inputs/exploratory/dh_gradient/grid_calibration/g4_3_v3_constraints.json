@@ -1,0 +1,19 @@
+{
+  "contract": "g4-3-v3-diagnostic-constraints-v1",
+  "status": "test-only",
+  "hydrogen_helium": {
+    "minimum_third_boundary": 3.5,
+    "interval": [0.4, 1.0],
+    "minimum_order": 146
+  },
+  "second_row": {
+    "interval": [0.0, 0.4],
+    "minimum_order": 110
+  },
+  "forbids": [
+    "exact-diagnostic-rule",
+    "selection-atlas-augmentation",
+    "production-policy-promotion",
+    "v2-holdout-qualification"
+  ]
+}

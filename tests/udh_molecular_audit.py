@@ -138,6 +138,34 @@ def with_angular_points(template, points):
     return template[:match.start(1)]+body+f"    grid_angular_points {points}\n"+template[match.end(1):]
 
 
+def with_radial_points(template, points):
+    """Change only the DFT radial control; retain angular, SCF and geometry inputs."""
+    if points is None:
+        return template
+    if not isinstance(points, int) or points < 0:
+        raise ValueError("Invalid radial point count")
+    match = re.search(r"%begin_dft\s*\n(.*?)%end_dft", template, re.S)
+    if not match:
+        raise ValueError("Missing DFT section")
+    body = re.sub(r"^\s*grid_radial_points\s+[^\n]*\n", "", match[1], flags=re.M)
+    return template[:match.start(1)]+body+f"    grid_radial_points {points}\n"+template[match.end(1):]
+
+
+def with_grid_policy(template, policy):
+    """Change only the immutable DFT pruning-policy selector."""
+    valid = {'legacy', 'legacy-no-light-reduction', 'legacy-unpruned-max', 'pyscf-nwchem-2.13',
+             'g4-3-v4', 'g4-3-v4-test-only'}
+    if policy is None:
+        return template
+    if policy not in valid:
+        raise ValueError("Invalid grid policy")
+    match = re.search(r"%begin_dft\s*\n(.*?)%end_dft", template, re.S)
+    if not match:
+        raise ValueError("Missing DFT section")
+    body = re.sub(r"^\s*grid_policy\s+[^\n]*\n", "", match[1], flags=re.M)
+    return template[:match.start(1)]+body+f"    grid_policy {policy}\n"+template[match.end(1):]
+
+
 def centered_fourth_order(inner, outer, inner_separation, outer_separation):
     """Cancel the O(h^2) error using measured radii; return (fourth, raw second).
 
@@ -180,6 +208,12 @@ class Audit:
         angular = re.search(r"^\s*grid_angular_points\s+(\d+)", rendered, re.M)
         if angular and state.get("grid_angular_points") != int(angular[1]):
             raise ValueError("Requested angular grid was not reported by the executable")
+        radial = re.search(r"^\s*grid_radial_points\s+(\d+)", rendered, re.M)
+        if radial and state.get("grid_radial_points") != int(radial[1]):
+            raise ValueError("Requested radial grid was not reported by the executable")
+        policy = re.search(r"^\s*grid_policy\s+(\S+)", rendered, re.M)
+        if policy and state.get("grid_policy") != policy[1]:
+            raise ValueError("Requested grid policy was not reported by the executable")
         if not state.get("converged") or not all(math.isfinite(data[k]) for k in ("total_energy", "scf_total_energy")):
             raise ValueError("Unconverged or nonfinite result")
         if gradient and (len(data.get("gradient", [])) != len(symbols) or any(
@@ -281,6 +315,8 @@ class Audit:
                       ("raw_second_total_error", "raw_second_ks_error", "raw_second_pt2_error")}
         report = dict(name=name, passed=passed, errors=errors, rows=rows, scaling=scaling,
                       grid_angular_points=state.get("grid_angular_points", 0),
+                      grid_radial_points=state.get("grid_radial_points", 0),
+                      grid_policy=state.get("grid_policy", "legacy"),
                       fd_stencil="fourth-order centered; actual Bohr radii", tolerance=5e-8,
                       raw_second_errors=raw_errors,
                       translation=translation, translation_error=translation_error, covariance=covariance,
@@ -334,9 +370,14 @@ def main():
     parser.add_argument("--fixture", help="One U0 filename/stem (partial run, never full U11 acceptance)")
     parser.add_argument("--steps", type=float, nargs=2, default=[1e-4, 2e-4])
     parser.add_argument("--angular-points", type=int, help="Unpruned angular override; radial preset and SCF limits unchanged")
+    parser.add_argument("--grid-policy", help="Explicit immutable grid policy for this audit")
+    parser.add_argument("--radial-points", type=int, default=0,
+                        help="Fixed radial-shell override; zero retains the fixture preset")
     args = parser.parse_args()
     if len(set(args.steps)) != 2 or any(not math.isfinite(x) or x <= 0 for x in args.steps):
         parser.error("Two distinct positive finite FD steps required")
+    if args.radial_points < 0:
+        parser.error("--radial-points must be nonnegative")
     paths = [p for p in sorted(FIXTURES.glob("*.hfinp")) if not args.fixture or args.fixture in (p.name, p.stem)]
     if not paths:
         parser.error("No matching fixture")
@@ -346,9 +387,13 @@ def main():
     report = dict(scope="test-only molecular U11; no production promotion", complete=not bool(args.fixture), results=[], passed=False)
     try:
         for path in paths:
-            report["results"].append(audit.molecule(path.stem, with_angular_points(path.read_text(), args.angular_points)))
+            template = with_radial_points(with_angular_points(path.read_text(), args.angular_points), args.radial_points)
+            report["results"].append(audit.molecule(path.stem, with_grid_policy(template, args.grid_policy)))
         if not args.fixture:
-            water = with_angular_points((FIXTURES/"water_cation_asymmetric_b2plyp_sto3g.hfinp").read_text(), args.angular_points)
+            water = with_grid_policy(with_radial_points(with_angular_points(
+                (FIXTURES/"water_cation_asymmetric_b2plyp_sto3g.hfinp").read_text(), args.angular_points),
+                args.radial_points),
+                args.grid_policy)
             larger = re.sub(r"(basis\s+)sto-3g", r"\g<1>6-31g", water, count=1)
             report["results"].append(audit.molecule("water-cation-6-31g", larger))
             report["closed_shell"] = audit.closed_shell(water)

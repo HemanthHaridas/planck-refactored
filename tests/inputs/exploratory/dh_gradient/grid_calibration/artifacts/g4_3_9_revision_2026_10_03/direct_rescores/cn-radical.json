@@ -1,0 +1,48 @@
+{
+  "contract": "g4-3-direct-rescore-v1",
+  "fingerprint": "g4-3-second-row-band1-floor-v1;radial=135;radius=m4-over-bragg;partition=original-becke-treutler-bragg",
+  "points": 132888,
+  "atlas": {
+    "xc_energy": -5.801468149580608,
+    "directions": [
+      {
+        "D_V": 0.02046184702632919,
+        "D_fxc_D": -0.09609417259876847
+      },
+      {
+        "D_V": -1.252882230610083e-09,
+        "D_fxc_D": -0.03767044583573151
+      }
+    ]
+  },
+  "direct": {
+    "xc_energy": -5.80146814958061,
+    "directions": [
+      {
+        "D_V": 0.020461847026329076,
+        "D_fxc_D": -0.09609417263835976
+      },
+      {
+        "D_V": -1.2528821998966655e-09,
+        "D_fxc_D": -0.03767044583365982
+      }
+    ]
+  },
+  "delta": {
+    "xc_energy": -1.7763568394002505e-15,
+    "directions": [
+      {
+        "D_V": -1.1449174941446927e-16,
+        "D_fxc_D": -3.9591288580886896e-11
+      },
+      {
+        "D_V": 3.0713417562573074e-17,
+        "D_fxc_D": 2.07169004173835e-12
+      }
+    ]
+  },
+  "tolerance": 1e-09,
+  "max_error": 3.9591288580886896e-11,
+  "passed": true,
+  "fixture": "tests/inputs/exploratory/dh_gradient/uks_u0/cn_radical_asymmetric_b2plyp_sto3g.hfinp"
+}

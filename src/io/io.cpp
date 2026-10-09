@@ -1299,6 +1299,29 @@ namespace HartreeFock::IO
                      return {};
                  }},
 
+                {"grid_radial_points", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     std::size_t consumed = 0;
+                     const int points = std::stoi(value, &consumed);
+                     if (consumed != value.size() || points < 0)
+                         return std::unexpected("grid_radial_points must be 0 (preset) or a positive shell count");
+                     dft._grid_radial_points = points;
+                     return {};
+                 }},
+
+                {"grid_policy", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     if (value != "legacy" && value != "legacy-no-light-reduction" &&
+                         value != "legacy-unpruned-max" && value != "pyscf-nwchem-2.13" &&
+                         value != "g4-3-v4" &&
+                         // Preserve the archived qualification spelling; the
+                         // resolver canonicalizes it to g4-3-v4.
+                         value != "g4-3-v4-test-only")
+                         return std::unexpected("grid_policy must be legacy, legacy-no-light-reduction, legacy-unpruned-max, pyscf-nwchem-2.13, or g4-3-v4");
+                     dft._grid_policy = value;
+                     return {};
+                 }},
+
                 {"exchange", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {
                      auto parsed = map_string_enum<HartreeFock::XCExchangeFunctional>(value);

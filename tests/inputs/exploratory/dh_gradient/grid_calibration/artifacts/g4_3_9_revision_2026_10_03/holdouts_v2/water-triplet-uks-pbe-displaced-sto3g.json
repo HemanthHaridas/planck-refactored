@@ -1,0 +1,112 @@
+{
+  "contract": "g4-3-fixed-density-holdout-ledger-v1",
+  "request_contract": "g4-3-fixed-density-holdout-v2",
+  "finalist": "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/g4-3-dual-floor-combined-frontier.json",
+  "reference": {
+    "radial_points": 135,
+    "angular_points": 2030
+  },
+  "limits": {
+    "xc_energy_ha": 1e-08,
+    "xc_response_contraction": 1e-07
+  },
+  "cases": [
+    {
+      "name": "water-triplet-uks-pbe-displaced-sto3g",
+      "input": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v2/water_triplet_uks_pbe_displaced_sto3g.hfinp",
+      "role": "functional-spin",
+      "families": [
+        "hydrogen-helium",
+        "second-row"
+      ],
+      "reference_stable": true,
+      "direct_reconciliation_passed": true,
+      "direct_max_error": 3.190266384400786e-10,
+      "l1_certificate_passed": false,
+      "l1_certificates": {
+        "hydrogen-helium": {
+          "contract": "g4-3-rule-certificate-v1",
+          "family": "hydrogen-helium",
+          "rule": {
+            "boundaries": [
+              0.4,
+              1.0,
+              2.5,
+              3.5
+            ],
+            "lebedev_points": [
+              26,
+              110,
+              1454,
+              770,
+              590
+            ]
+          },
+          "fixtures": [
+            {
+              "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v2/water_triplet_uks_pbe_displaced_sto3g.hfinp",
+              "signed_xc_energy": 2.56632852784033e-09,
+              "l1_xc_energy": 1.2065029437171563e-08,
+              "directions": [
+                {
+                  "signed_D_V": 5.962265420678217e-09,
+                  "l1_D_V": 2.8086894928461875e-08,
+                  "signed_D_fxc_D": -4.7774938666657284e-08,
+                  "l1_D_fxc_D": 1.4346495387153923e-07
+                },
+                {
+                  "signed_D_V": -4.316875930144996e-09,
+                  "l1_D_V": 1.291288975218998e-08,
+                  "signed_D_fxc_D": -1.0110249194843656e-08,
+                  "l1_D_fxc_D": 4.017135433028029e-08
+                }
+              ]
+            }
+          ]
+        },
+        "second-row": {
+          "contract": "g4-3-rule-certificate-v1",
+          "family": "second-row",
+          "rule": {
+            "boundaries": [
+              0.4,
+              1.0,
+              2.5,
+              4.5
+            ],
+            "lebedev_points": [
+              86,
+              770,
+              1730,
+              590,
+              170
+            ]
+          },
+          "fixtures": [
+            {
+              "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v2/water_triplet_uks_pbe_displaced_sto3g.hfinp",
+              "signed_xc_energy": 4.959178344312772e-10,
+              "l1_xc_energy": 1.0556826908748661e-09,
+              "directions": [
+                {
+                  "signed_D_V": -2.150802114140324e-08,
+                  "l1_D_V": 2.928105374134321e-08,
+                  "signed_D_fxc_D": -3.597764271847872e-07,
+                  "l1_D_fxc_D": 4.833664201558962e-07
+                },
+                {
+                  "signed_D_V": -9.161341441706074e-09,
+                  "l1_D_V": 9.246509013370733e-09,
+                  "signed_D_fxc_D": 6.855947851057817e-08,
+                  "l1_D_fxc_D": 6.860662778428773e-08
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "passed": false
+    }
+  ],
+  "passed": false
+}

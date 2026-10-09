@@ -1,0 +1,17 @@
+{
+  "contract": "g4-3-dual-energy-floor-v1",
+  "source_revision": "g4-3-second-row-band1-floor-v1",
+  "floors": [
+    {
+      "family": "hydrogen-helium",
+      "band_index": 4,
+      "minimum_lebedev_points": 590
+    },
+    {
+      "family": "second-row",
+      "band_index": 2,
+      "minimum_lebedev_points": 1730
+    }
+  ],
+  "status": "test-only-revision-after-g4-3-9-uks-pbe-energy-failure"
+}

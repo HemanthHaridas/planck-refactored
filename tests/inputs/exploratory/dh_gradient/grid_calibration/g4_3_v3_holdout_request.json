@@ -1,0 +1,29 @@
+{
+  "contract": "g4-3-fixed-density-holdout-v3",
+  "reference": {"radial_points": 135, "angular_points": 2030},
+  "limits": {"xc_energy_ha": 1e-8, "xc_response_contraction": 1e-7},
+  "finalist": "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/g4-3-v3-combined-frontier.json",
+  "cases": [
+    {
+      "name": "h2o2-c1-b2plyp-displaced-sto3g",
+      "input": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v3/h2o2_c1_b2plyp_displaced_sto3g.hfinp",
+      "parent": "tests/inputs/exploratory/dh_gradient/h2o2_c1_b2plyp_gradient_fd.hfinp",
+      "families": ["hydrogen-helium", "second-row"],
+      "role": "geometry"
+    },
+    {
+      "name": "hcl-b2plyp-stretched-sto3g",
+      "input": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v3/hcl_b2plyp_stretched_sto3g.hfinp",
+      "parent": "tests/inputs/exploratory/dh_gradient/grid_calibration/hcl_b2plyp_sto3g.hfinp",
+      "families": ["hydrogen-helium", "third-row"],
+      "role": "geometry"
+    },
+    {
+      "name": "water-cation-uks-pbe0-displaced-631g",
+      "input": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v3/water_cation_uks_pbe0_displaced_631g.hfinp",
+      "parent": "tests/inputs/regression/dft/h2o_cation_uks_pbe0_soscf_631g.hfinp",
+      "families": ["hydrogen-helium", "second-row"],
+      "role": "functional-spin"
+    }
+  ]
+}

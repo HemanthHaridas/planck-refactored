@@ -1,0 +1,112 @@
+{
+  "contract": "g4-3-fixed-density-holdout-ledger-v1",
+  "request_contract": "g4-3-fixed-density-holdout-v2",
+  "finalist": "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/g4-3-dual-floor-combined-frontier.json",
+  "reference": {
+    "radial_points": 135,
+    "angular_points": 2030
+  },
+  "limits": {
+    "xc_energy_ha": 1e-08,
+    "xc_response_contraction": 1e-07
+  },
+  "cases": [
+    {
+      "name": "ph3-b2plyp-displaced-sto3g",
+      "input": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v2/ph3_b2plyp_displaced_sto3g.hfinp",
+      "role": "geometry",
+      "families": [
+        "hydrogen-helium",
+        "third-row"
+      ],
+      "reference_stable": true,
+      "direct_reconciliation_passed": true,
+      "direct_max_error": 4.31095575903484e-11,
+      "l1_certificate_passed": true,
+      "l1_certificates": {
+        "hydrogen-helium": {
+          "contract": "g4-3-rule-certificate-v1",
+          "family": "hydrogen-helium",
+          "rule": {
+            "boundaries": [
+              0.4,
+              1.0,
+              2.5,
+              3.5
+            ],
+            "lebedev_points": [
+              26,
+              110,
+              1454,
+              770,
+              590
+            ]
+          },
+          "fixtures": [
+            {
+              "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v2/ph3_b2plyp_displaced_sto3g.hfinp",
+              "signed_xc_energy": 9.242831073591045e-10,
+              "l1_xc_energy": 2.812968463611017e-09,
+              "directions": [
+                {
+                  "signed_D_V": -2.799114738309935e-09,
+                  "l1_D_V": 3.361604672297751e-09,
+                  "signed_D_fxc_D": -1.2603402985972735e-10,
+                  "l1_D_fxc_D": 4.114486670114564e-09
+                },
+                {
+                  "signed_D_V": -1.378886598459555e-11,
+                  "l1_D_V": 6.279323740228789e-11,
+                  "signed_D_fxc_D": 1.0758555826558305e-12,
+                  "l1_D_fxc_D": 1.7559764170266824e-12
+                }
+              ]
+            }
+          ]
+        },
+        "third-row": {
+          "contract": "g4-3-rule-certificate-v1",
+          "family": "third-row",
+          "rule": {
+            "boundaries": [
+              0.1,
+              0.5,
+              3.5,
+              4.5
+            ],
+            "lebedev_points": [
+              26,
+              146,
+              770,
+              230,
+              26
+            ]
+          },
+          "fixtures": [
+            {
+              "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v2/ph3_b2plyp_displaced_sto3g.hfinp",
+              "signed_xc_energy": -8.864049639548869e-11,
+              "l1_xc_energy": 2.2008701189320178e-09,
+              "directions": [
+                {
+                  "signed_D_V": 1.9204438000477057e-10,
+                  "l1_D_V": 6.495640072520955e-10,
+                  "signed_D_fxc_D": 8.45523858161242e-11,
+                  "l1_D_fxc_D": 1.669713793643417e-10
+                },
+                {
+                  "signed_D_V": -3.738554207518354e-12,
+                  "l1_D_V": 8.591683917081443e-12,
+                  "signed_D_fxc_D": -2.3341917800777177e-11,
+                  "l1_D_fxc_D": 2.9252188288097274e-11
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "passed": true
+    }
+  ],
+  "passed": true
+}

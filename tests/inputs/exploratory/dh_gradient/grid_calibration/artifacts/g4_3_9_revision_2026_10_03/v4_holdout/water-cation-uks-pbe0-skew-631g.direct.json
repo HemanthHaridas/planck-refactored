@@ -1,0 +1,48 @@
+{
+  "contract": "g4-3-direct-rescore-v1",
+  "fingerprint": "g4-3-v4-robust-development-v1;radial=135;radius=m4-over-bragg;partition=original-becke-treutler-bragg",
+  "points": 241050,
+  "atlas": {
+    "xc_energy": -6.735474596743412,
+    "directions": [
+      {
+        "D_V": 0.12042830901686118,
+        "D_fxc_D": -0.21980533135173777
+      },
+      {
+        "D_V": -0.18966801358863994,
+        "D_fxc_D": -0.06461162153351496
+      }
+    ]
+  },
+  "direct": {
+    "xc_energy": -6.73547459674335,
+    "directions": [
+      {
+        "D_V": 0.12042830901685754,
+        "D_fxc_D": -0.21980533110807882
+      },
+      {
+        "D_V": -0.18966801358863533,
+        "D_fxc_D": -0.06461162136759786
+      }
+    ]
+  },
+  "delta": {
+    "xc_energy": 6.217248937900877e-14,
+    "directions": [
+      {
+        "D_V": -3.635980405647388e-15,
+        "D_fxc_D": 2.4365895412437055e-10
+      },
+      {
+        "D_V": 4.6074255521944e-15,
+        "D_fxc_D": 1.6591709950386502e-10
+      }
+    ]
+  },
+  "tolerance": 1e-09,
+  "max_error": 2.4365895412437055e-10,
+  "passed": true,
+  "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v4/water_cation_uks_pbe0_skew_631g.hfinp"
+}

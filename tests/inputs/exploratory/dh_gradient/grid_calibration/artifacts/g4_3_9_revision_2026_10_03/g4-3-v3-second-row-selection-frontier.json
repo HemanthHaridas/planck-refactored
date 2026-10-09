@@ -1,0 +1,67 @@
+{
+  "contract": "g4-3-v3-constrained-family-frontier-v1",
+  "status": "selection-atlas-only",
+  "family": "second-row",
+  "constraints": {
+    "contract": "g4-3-v3-diagnostic-constraints-v1",
+    "status": "test-only",
+    "hydrogen_helium": {
+      "minimum_third_boundary": 3.5,
+      "interval": [
+        0.4,
+        1.0
+      ],
+      "minimum_order": 146
+    },
+    "second_row": {
+      "interval": [
+        0.0,
+        0.4
+      ],
+      "minimum_order": 110
+    },
+    "forbids": [
+      "exact-diagnostic-rule",
+      "selection-atlas-augmentation",
+      "production-policy-promotion",
+      "v2-holdout-qualification"
+    ]
+  },
+  "reports": [
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/selection/cn-anion-shell-residuals.json",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/selection/cn-radical-shell-residuals.json",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/selection/fcn-shell-residuals.json",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/selection/g4-3-ph3-ccpvdz-shell-residuals.json",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/selection/g4-3-sih4-ccpvdz-shell-residuals.json",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/selection/g4-3-sih4-sto3g-shell-residuals.json",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/selection/h2s-ccpvdz-shell-residuals.json",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/selection/h2s-sto3g-shell-residuals.json",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/selection/hcl-ccpvdz-shell-residuals.json",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/selection/hcl-sto3g-shell-residuals.json",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/selection/hf-shell-residuals.json",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/selection/ho2-shell-residuals.json",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/selection/ph3-sto3g-shell-residuals.json",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/selection/water-rks-pbe-shell-residuals.json"
+  ],
+  "frontier": [
+    {
+      "max_points_per_atom": 62298,
+      "total_ledger_points": 674550,
+      "rule": {
+        "boundaries": [
+          0.4,
+          1.0,
+          2.5,
+          4.5
+        ],
+        "lebedev_points": [
+          110,
+          434,
+          1454,
+          590,
+          170
+        ]
+      }
+    }
+  ]
+}

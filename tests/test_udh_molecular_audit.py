@@ -107,6 +107,13 @@ class U10WiringTests(unittest.TestCase):
         self.assertIn("if(canonical_error>1e-9)", driver)
         self.assertIn("iter <= max_iter", driver)
 
+    def test_uks_soscf_is_deferred_only_while_shift_is_active(self):
+        driver = (ROOT/"src/dft/driver.cpp").read_text()
+        self.assertIn("!sao_active_uks && !prepared.pcm && active_level_shift == 0.0", driver)
+        self.assertNotIn("!sao_active_uks && !prepared.pcm && requested_level_shift == 0.0", driver)
+        self.assertIn("const bool do_diis_uks = use_diis && !soscf_active;", driver)
+        self.assertNotIn("const bool do_diis_uks = use_diis && !soscf_active && !unshifted_polish;", driver)
+
     def test_uks_uses_coupled_diis_without_relaxing_spin_residual(self):
         driver = (ROOT/"src/dft/driver.cpp").read_text()
         self.assertIn("HartreeFock::UHFDIISState diis", driver)

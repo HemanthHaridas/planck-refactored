@@ -1,0 +1,48 @@
+{
+  "contract": "g4-3-direct-rescore-v1",
+  "fingerprint": "g4-3-v3-constrained-selection-v1;radial=135;radius=m4-over-bragg;partition=original-becke-treutler-bragg",
+  "points": 252792,
+  "atlas": {
+    "xc_energy": -8.608205155710333,
+    "directions": [
+      {
+        "D_V": -0.006371704973127906,
+        "D_fxc_D": -0.03128193889018545
+      },
+      {
+        "D_V": 0.09972952261889478,
+        "D_fxc_D": -0.017879800231176565
+      }
+    ]
+  },
+  "direct": {
+    "xc_energy": -8.608205155710197,
+    "directions": [
+      {
+        "D_V": -0.006371704973127827,
+        "D_fxc_D": -0.03128193893565434
+      },
+      {
+        "D_V": 0.09972952261889266,
+        "D_fxc_D": -0.01787980007404283
+      }
+    ]
+  },
+  "delta": {
+    "xc_energy": 1.3677947663381929e-13,
+    "directions": [
+      {
+        "D_V": 7.892991815694472e-17,
+        "D_fxc_D": -4.546889253997932e-11
+      },
+      {
+        "D_V": -2.123301534595612e-15,
+        "D_fxc_D": 1.5713373657799679e-10
+      }
+    ]
+  },
+  "tolerance": 1e-09,
+  "max_error": 1.5713373657799679e-10,
+  "passed": true,
+  "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v3/h2o2_c1_b2plyp_displaced_sto3g.hfinp"
+}
