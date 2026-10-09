@@ -1153,6 +1153,7 @@ if(BUILD_TESTING)
     # audit itself uses only direct J/K integrals.
     add_executable(planck-dft-coulomb-response
         ${CMAKE_SOURCE_DIR}/tests/dft_coulomb_response.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/dft/dh_pt2_gradient.cpp
         ${SRC_DIR}/dft/dft_gradient.cpp
         ${SRC_DIR}/dft/analytic_hessian.cpp
