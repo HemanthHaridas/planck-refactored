@@ -654,6 +654,13 @@ namespace HartreeFock
         // many points on EVERY radial shell, without light-atom reduction.
         // Radial quadrature and Becke partitioning are unchanged.
         int _grid_angular_points = 0;
+        // 0 preserves the element/quality radial-table count. A positive value
+        // fixes one radial shell count for every atom, for controlled radial
+        // convergence studies; it never changes during SCF or displacements.
+        int _grid_radial_points = 0;
+        // Versioned angular schedule. `legacy` is the production-compatible
+        // default; the remaining names are explicit G3 audit candidates.
+        std::string _grid_policy = "legacy";
         XCExchangeFunctional _exchange = XCExchangeFunctional::PBE;
         XCCorrelationFunctional _correlation = XCCorrelationFunctional::PBE;
         int _exchange_id = 0;    // 0 => resolve from _exchange through libxc
@@ -818,6 +825,7 @@ namespace HartreeFock
         int max_cycle = 50;             // maximum iterative MP2 cycles
         int diis_space = 6;             // DIIS subspace size for iterative MP2
         bool with_t2 = true;            // store T2 amplitudes (gradient/RDM consumers need them)
+        bool compact_t2_storage = false; // DH-only exact pair-packed canonical T2 owner
 
         // Optional RI-MP2 front-end. When use_ri is true, the MP2 builder will
         // source its auxiliary basis from ri_basis_name/ri_basis_path instead of

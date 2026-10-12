@@ -679,6 +679,65 @@ namespace
             fail("Eq. 33 physical water/STO-3G channel assembly failed");
             return;
         }
+        // O6.2/O6.3 seam: the production derivative producer contracts h/S
+        // and ERI primitives as they are visited and does not retain its 3M
+        // AO matrices or 3M ERI tensors.
+        // Re-express this independently assembled dense reference as that
+        // direct callback and require all Eq. (33) channels to stay bitwise
+        // algebraically equivalent; ERI data remains intentionally dense at
+        // this stage of O6.
+        auto direct_derivatives = derivatives;
+        direct_derivatives.hamiltonian_ao.clear();
+        direct_derivatives.overlap_ao.clear();
+        direct_derivatives.eri_ao.clear();
+        direct_derivatives.direct_one_electron_overlap = [&derivatives](
+            const Eigen::Ref<const Eigen::MatrixXd> &d,
+            const Eigen::Ref<const Eigen::MatrixXd> &w)
+            -> std::expected<DFT::Gradient::DHEq33OneElectronOverlapGradient, std::string>
+        {
+            const Eigen::Index ncoord = static_cast<Eigen::Index>(derivatives.eri_ao.size());
+            DFT::Gradient::DHEq33OneElectronOverlapGradient out{
+                Eigen::VectorXd::Zero(ncoord), Eigen::VectorXd::Zero(ncoord)};
+            for (Eigen::Index x = 0; x < ncoord; ++x)
+            {
+                out.one_electron(x) = (d.array() * derivatives.hamiltonian_ao[x].array()).sum();
+                out.overlap(x) = (w.array() * derivatives.overlap_ao[x].array()).sum();
+            }
+            return out;
+        };
+        direct_derivatives.direct_two_electron = [&derivatives](
+            const DFT::Gradient::DHEq46_47TwoParticleDensity &two_particle,
+            const DFT::Gradient::DHEq47TiledExecution *)
+            -> std::expected<DFT::Gradient::DHEq33TwoElectronGradient, std::string>
+        {
+            const auto &separable = two_particle.separable_symmetric_ao;
+            const auto &nonseparable = two_particle.nonseparable_symmetric_ao;
+            const Eigen::Index nao = two_particle.n_ao;
+            const Eigen::Index ncoord = static_cast<Eigen::Index>(derivatives.eri_ao.size());
+            const std::size_t n4 = static_cast<std::size_t>(nao) * nao * nao * nao;
+            if (separable.size() != n4 || nonseparable.size() != n4)
+                return std::unexpected("O6.3 direct ERI test received incompatible AO pair densities.");
+            DFT::Gradient::DHEq33TwoElectronGradient out{
+                Eigen::VectorXd::Zero(ncoord), Eigen::VectorXd::Zero(ncoord)};
+            for (Eigen::Index x = 0; x < ncoord; ++x)
+                for (std::size_t q = 0; q < n4; ++q)
+                {
+                    out.separable(x) += separable[q] * derivatives.eri_ao[x][q];
+                    out.nonseparable(x) += nonseparable[q] * derivatives.eri_ao[x][q];
+                }
+            return out;
+        };
+        const auto direct_eq33 = DFT::Gradient::build_dh_eq33_non_xc_gradient(
+            *relaxed, *overlap_w, *gamma, c, direct_derivatives);
+        if (!direct_eq33 || (direct_eq33->one_electron - eq33->one_electron).norm() > 1e-13 ||
+            (direct_eq33->overlap - eq33->overlap).norm() > 1e-13 ||
+            (direct_eq33->two_electron_separable - eq33->two_electron_separable).norm() > 1e-13 ||
+            (direct_eq33->two_electron_nonseparable - eq33->two_electron_nonseparable).norm() > 1e-13 ||
+            (direct_eq33->total - eq33->total).norm() > 1e-13)
+        {
+            fail("O6.2/O6.3 direct Eq. 33 seam does not reproduce dense channels");
+            return;
+        }
         double o5_derivative_error=0;
         for(std::size_t coordinate=0;coordinate<derivatives.eri_ao.size();++coordinate)
         {
@@ -1288,18 +1347,49 @@ namespace
         matrices_equal(driver_contract->xc_ii_gradient.total,reused->xc_ii_gradient.total);
         const auto &compact_gamma=reused->two_particle_density;
         const auto &full_gamma=driver_contract->two_particle_density;
-        if (compact_gamma.separable_symmetric_ao!=full_gamma.separable_symmetric_ao ||
-            compact_gamma.nonseparable_symmetric_ao!=full_gamma.nonseparable_symmetric_ao ||
-            compact_gamma.separable_raw_ao.capacity()!=0 || compact_gamma.nonseparable_raw_ao.capacity()!=0 ||
-            compact_gamma.total_raw_ao.capacity()!=0 || compact_gamma.total_symmetric_ao.capacity()!=0)
-            fail("O2 compact Gamma value or retained-storage mismatch");
+        // This fixture intentionally owns dense derivative arrays, so the
+        // driver must retain ReferenceAll. A production workspace has the
+        // direct callback and is the only path entitled to ContractionOnly.
+        const bool expects_compact = static_cast<bool>(reused_inputs.workspace->non_xc_derivatives.direct_two_electron);
+        const bool compact_gamma_ok =
+            compact_gamma.relaxed_difference_ao.rows()==full_gamma.relaxed_difference_ao.rows() &&
+            compact_gamma.relaxed_difference_ao.cols()==full_gamma.relaxed_difference_ao.cols() &&
+            compact_gamma.relaxed_difference_ao.isApprox(full_gamma.relaxed_difference_ao,1e-13) &&
+            compact_gamma.ground_density_ao.isApprox(full_gamma.ground_density_ao,1e-13) &&
+            compact_gamma.exact_exchange==full_gamma.exact_exchange &&
+            (expects_compact
+                ? (compact_gamma.separable_raw_ao.empty() && compact_gamma.separable_symmetric_ao.empty() &&
+                   compact_gamma.nonseparable_raw_ao.empty() && compact_gamma.nonseparable_symmetric_ao.empty() &&
+                   compact_gamma.total_raw_ao.empty() && compact_gamma.total_symmetric_ao.empty())
+                : (compact_gamma.separable_raw_ao==full_gamma.separable_raw_ao &&
+                   compact_gamma.separable_symmetric_ao==full_gamma.separable_symmetric_ao &&
+                   compact_gamma.nonseparable_raw_ao==full_gamma.nonseparable_raw_ao &&
+                   compact_gamma.nonseparable_symmetric_ao==full_gamma.nonseparable_symmetric_ao &&
+                   compact_gamma.total_raw_ao==full_gamma.total_raw_ao &&
+                   compact_gamma.total_symmetric_ao==full_gamma.total_symmetric_ao));
+        if (!compact_gamma_ok)
+        {
+            std::fprintf(stderr,
+                "O7.4.3 compact Gamma detail raw=(%zu,%zu,%zu) symmetric=(%zu,%zu,%zu) D=%tdx%td/%tdx%td Ddelta=%.3e Pdelta=%.3e ax=(%.17g,%.17g)\n",
+                compact_gamma.separable_raw_ao.size(), compact_gamma.nonseparable_raw_ao.size(), compact_gamma.total_raw_ao.size(),
+                compact_gamma.separable_symmetric_ao.size(), compact_gamma.nonseparable_symmetric_ao.size(), compact_gamma.total_symmetric_ao.size(),
+                compact_gamma.relaxed_difference_ao.rows(), compact_gamma.relaxed_difference_ao.cols(),
+                full_gamma.relaxed_difference_ao.rows(), full_gamma.relaxed_difference_ao.cols(),
+                (compact_gamma.relaxed_difference_ao-full_gamma.relaxed_difference_ao).norm(),
+                (compact_gamma.ground_density_ao-full_gamma.ground_density_ao).norm(),
+                compact_gamma.exact_exchange, full_gamma.exact_exchange);
+            fail(expects_compact ? "O7.4.3 compact Gamma storage or value mismatch" :
+                "O2 dense-reference Gamma storage or value mismatch");
+        }
         auto owner_copy=reused_inputs;
         if (owner_copy.workspace.get()!=workspace.get() || owner_copy.workspace->mo_eri.data()!=workspace->mo_eri.data() ||
             owner_copy.workspace->non_xc_derivatives.eri_ao[0].data()!=workspace->non_xc_derivatives.eri_ao[0].data())
             fail("O2 driver view copied quartic arrays");
-        std::printf("O2 water Gamma retained bytes reference=%zu production=%zu; stationary Eq41 calls=1; downstream calls=%d\n",
+        std::printf("O7.4.3 water Gamma retained bytes reference=%zu %s=%zu; stationary Eq41 calls=1; downstream calls=%d\n",
             6*full_gamma.separable_symmetric_ao.size()*sizeof(double),
-            2*compact_gamma.separable_symmetric_ao.size()*sizeof(double),response_calls);
+            expects_compact ? "direct" : "dense-reference",
+            expects_compact ? static_cast<std::size_t>(2*compact_gamma.n_ao*compact_gamma.n_ao)*sizeof(double) :
+                6*compact_gamma.separable_symmetric_ao.size()*sizeof(double), response_calls);
         // The coefficient must cross the driver boundary, not merely work
         // when passed directly to the low-level tensor builder. This is an
         // assembly test with fixed inputs, not a hybrid Z-stationarity test.

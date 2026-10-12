@@ -3554,8 +3554,10 @@ Planck follows the stationary-Lagrangian construction of Neese, Schwabe and
 Grimme, *J. Chem. Phys.* **126**, 124115 (2007), DOI `10.1063/1.2712433`.
 Equation numbers in this subsection refer to that paper. The formulas below
 are its closed-shell realization in Planck's storage and density conventions;
-the detailed contracts and validation record are in
-[the DH implementation reference](DH_IMPLEMENTATION.md).
+the landed contracts and validation record are in
+[the double-hybrid gradient guide](DOUBLE_HYBRID_GRADIENTS.md). The detailed
+derivation and active optimization ledger remain in
+[DH_IMPLEMENTATION.md](DH_IMPLEMENTATION.md).
 
 #### Start with the Energy Being Differentiated
 
