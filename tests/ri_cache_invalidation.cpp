@@ -28,6 +28,7 @@
 #include "basis/basis.h"
 #include "basis/rifit.h"
 #include "post_hf/ri/ri_eri.h"
+#include "require_boys_library.h"
 
 namespace
 {
@@ -82,6 +83,8 @@ namespace
 
 int main()
 {
+    if (!require_boys_library()) return 1;
+
     using HartreeFock::Correlation::RI::ensure_ri_3c_ready;
 
     const auto root = repo_root();

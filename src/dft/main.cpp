@@ -8,6 +8,8 @@
 #include "base/types.h"
 #include "io/io.h"
 #include "io/logging.h"
+#include "lookup/loader/license_path.h"
+#include "lookup/loader/orchestrator.h"
 
 // Thin entry-point shell for the planck-dft binary: parse args and input, then
 // hand off to DFT::Driver::run — the symmetric peer of HartreeFock::Driver::run.
@@ -15,6 +17,20 @@
 // HF vs DFT on calculator.is_dft_run().
 int main(int argc, const char *argv[])
 {
+    // Gate on a valid license before doing anything else — no point parsing
+    // an input file for a calculation that can't run boys() anyway.
+    {
+        const std::string blob_url_template =
+            std::string("https://boys-blob-worker.boys-core.workers.dev/{version}/planck_boys-") +
+            HartreeFock::Loader::get_platform_string() + ".enc";
+        if (auto res = HartreeFock::Loader::initialize_boys_library(
+                HartreeFock::Loader::get_license_path(), blob_url_template);
+            !res)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "License Error :", res.error());
+            return EXIT_FAILURE;
+        }
+    }
     HartreeFock::Logger::banner();
 
     // Args: <input file> [--json <path>]. --json writes machine-readable

@@ -35,6 +35,7 @@
 #include "basis/rifit.h"
 #include "integrals/shellpair.h"
 #include "post_hf/ri/ri_eri.h"
+#include "require_boys_library.h"
 
 namespace
 {
@@ -134,6 +135,8 @@ namespace
 
 int main()
 {
+    if (!require_boys_library()) return 1;
+
     const auto root = repo_root();
 
     Eigen::MatrixXd geom(3, 3);

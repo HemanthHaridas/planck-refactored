@@ -49,9 +49,15 @@ jobs:
           g++ --version
           cmake --version
 
+      - name: Write license
+        run: echo "$PLANCK_LICENSE" > "${GITHUB_WORKSPACE}/license.json"
+        env:
+          PLANCK_LICENSE: ${{ secrets.PLANCK_LICENSE }}
+
       - name: Configure CMake
         run: |
           cmake -S . -B "${BUILD_DIR}" \
+            -DCMAKE_INSTALL_PREFIX="${GITHUB_WORKSPACE}" \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_CXX_STANDARD=23 \
             -DCMAKE_CXX_STANDARD_REQUIRED=ON \
@@ -60,14 +66,16 @@ jobs:
       - name: Build hartree-fock executable
         run: |
           cmake --build "${BUILD_DIR}" --verbose -j4
-          
+
       - name: Generate callgraphs
         shell: bash
+        env:
+          BASIS_PATH: ${{ github.workspace }}/basis-sets
         run: |
           set -euo pipefail
 
           declare -A CASES
-          CASES["water_rhf"]="tests/inputs/regression/scf/water_rhf_os_symm.hfinp"
+          CASES["water_rhf"]="tests/inputs/regression/hf/water_rhf_os_symm.hfinp"
           CASES["water_casscf"]="tests/inputs/regression/post_hf/water_cas44.hfinp"
           CASES["bh3_rccsdt"]="tests/inputs/regression/post_hf/bh3_rccsdt_sto3g.hfinp"
 
