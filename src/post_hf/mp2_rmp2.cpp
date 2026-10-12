@@ -12,18 +12,70 @@ namespace
     using HartreeFock::Correlation::detail::idx_ovov;
     using HartreeFock::Correlation::detail::idx_t2;
 
-    void canonical_kernel(
+    std::expected<void, std::string> canonical_kernel(
         const ChemistsERIs &eris,
         int n_occ,
         int n_virt,
         bool with_t2,
+        bool compact_t2,
         std::vector<double> &t2,
+        std::vector<double> &packed_t2,
         double &e_ss,
         double &e_os)
     {
         e_ss = 0.0;
         e_os = 0.0;
-        if (with_t2)
+        // The compact DH path consumes the ordered OVOV tile interface.  The
+        // exchange contribution needs (ib|ja), which may live in another
+        // tile.  After the first pass t_ij^ab is already in pair-packed
+        // storage, so (ib|ja)=t_ij^ba*Delta_ij^ab can be recovered without
+        // retaining or randomly indexing OVOV.
+        if (with_t2 && compact_t2)
+        {
+            const int npair=n_occ*n_virt;
+            packed_t2.assign(static_cast<std::size_t>(npair)*(npair+1)/2,0.0);
+            double direct=0.0;
+            const auto packed_at=[&](int i,int j,int a,int b)
+            {
+                int p=i*n_virt+a, q=j*n_virt+b;
+                if (p>q) std::swap(p,q);
+                return packed_t2[static_cast<std::size_t>(p)*npair-
+                    static_cast<std::size_t>(p)*(p-1)/2+(q-p)];
+            };
+            const auto streamed=HartreeFock::Correlation::detail::for_each_rmp2_ovov_pair_tile(
+                eris,32,[&](const HartreeFock::Correlation::detail::RMP2OVOVPairTile &tile)
+                {
+                    for(int ip=0;ip<tile.rows;++ip)
+                        for(int iq=0;iq<tile.cols;++iq)
+                        {
+                            const int p=tile.p0+ip, q=tile.q0+iq;
+                            const int i=p/n_virt, a=p%n_virt;
+                            const int j=q/n_virt, b=q%n_virt;
+                            const double denom=eris.mo_energy(i)+eris.mo_energy(j)-
+                                eris.mo_energy(n_occ+a)-eris.mo_energy(n_occ+b);
+                            const double t=tile.values[static_cast<std::size_t>(ip)*tile.cols+iq]/denom;
+                            int upper_p=p, upper_q=q;
+                            if (upper_p>upper_q) std::swap(upper_p,upper_q);
+                            packed_t2[static_cast<std::size_t>(upper_p)*npair-
+                                static_cast<std::size_t>(upper_p)*(upper_p-1)/2+(upper_q-upper_p)]=t;
+                            direct+=t*tile.values[static_cast<std::size_t>(ip)*tile.cols+iq];
+                        }
+                    return true;
+                });
+            if (!streamed) return std::unexpected(streamed.error());
+            double exchange=0.0;
+            for(int i=0;i<n_occ;++i) for(int j=0;j<n_occ;++j)
+                for(int a=0;a<n_virt;++a) for(int b=0;b<n_virt;++b)
+                {
+                    const double denom=eris.mo_energy(i)+eris.mo_energy(j)-
+                        eris.mo_energy(n_occ+a)-eris.mo_energy(n_occ+b);
+                    exchange-=packed_at(i,j,a,b)*packed_at(i,j,b,a)*denom;
+                }
+            e_os=direct;
+            e_ss=direct+exchange;
+            return {};
+        }
+        if (with_t2 && !compact_t2)
             t2.assign(static_cast<std::size_t>(n_occ) * n_occ * n_virt * n_virt, 0.0);
 
         // Canonical RHF MP2 can be evaluated directly from the transformed ovov
@@ -44,9 +96,10 @@ namespace
                         const double exi = -t * gijba;
                         e_ss += 0.5 * edi + exi;
                         e_os += 0.5 * edi;
-                        if (with_t2)
-                            t2[idx_t2(i, j, a, b, n_occ, n_virt)] = t;
+                        if (with_t2 && !compact_t2)
+                            t2[idx_t2(i,j,a,b,n_occ,n_virt)] = t;
                     }
+        return {};
     }
 }
 
@@ -76,8 +129,10 @@ namespace HartreeFock::Correlation
         out.mo_occ = Eigen::VectorXd::Zero(dims.n_mo);
         out.mo_occ.head(dims.n_occ).setConstant(2.0);
 
-        canonical_kernel(eris, dims.n_occ, dims.n_virt, options.with_t2,
-                         out.t2, out.e_corr_ss, out.e_corr_os);
+        auto canonical=canonical_kernel(eris,dims.n_occ,dims.n_virt,options.with_t2,
+                                        options.compact_t2_storage,out.t2,out.t2_pair_packed,
+                                        out.e_corr_ss,out.e_corr_os);
+        if (!canonical) return std::unexpected(canonical.error());
         out.e_corr = out.e_corr_ss + out.e_corr_os;
         out.converged = true;
         out.n_iter = 0;

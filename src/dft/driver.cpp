@@ -3219,12 +3219,19 @@ namespace DFT::Driver
                       }()
                     : [&]() -> std::expected<void, std::string>
                       {
-                          auto mp2_res = HartreeFock::Correlation::rmp2_kernel(calculator, shell_pairs, calculator._mp2);
-                          if (mp2_res && restricted_pt2_result != nullptr)
-                              *restricted_pt2_result = *mp2_res;
-                          return mp2_res
-                                     ? HartreeFock::Correlation::apply_rmp2_result(calculator, *mp2_res)
-                                     : std::unexpected(mp2_res.error());
+                          auto mp2_options=calculator._mp2;
+                          mp2_options.compact_t2_storage=restricted_pt2_result!=nullptr;
+                          auto mp2_res = HartreeFock::Correlation::rmp2_kernel(calculator, shell_pairs, mp2_options);
+                          if (!mp2_res) return std::unexpected(mp2_res.error());
+                          auto applied=HartreeFock::Correlation::apply_rmp2_result(
+                              calculator,*mp2_res,restricted_pt2_result==nullptr);
+                          if (!applied) return std::unexpected(applied.error());
+                          // Transfer rather than copy the sole amplitude owner
+                          // into the gradient snapshot after its energy fields
+                          // have been recorded on Calculator.
+                          if (restricted_pt2_result != nullptr)
+                              *restricted_pt2_result=std::move(*mp2_res);
+                          return {};
                       }();
             if (!correction)
             {
@@ -3544,7 +3551,7 @@ namespace DFT::Driver
                 &prepared.ao_grid, &*ao_hessian, calculator._info._scf.alpha.density,
                 &functionals.exchange, &functionals.correlation};
             const auto workspace = std::make_shared<const Gradient::DHGradientGeometryWorkspace>(
-                Gradient::DHGradientGeometryWorkspace{std::move(zvector->mo_eri), std::move(*derivatives)});
+                Gradient::DHGradientGeometryWorkspace{{}, std::move(*derivatives)});
             const Gradient::DHGradientDriverInputs contract_inputs{
                 &pt2_result, functionals.perturbative_correlation_coefficient,
                 pt2_result.mo_coeff, pt2_result.mo_energy, workspace,
@@ -4590,104 +4597,230 @@ namespace DFT::Driver
             exact_exchange_energy);
     }
 
+    namespace
+    {
+        std::expected<std::vector<int>, std::string>
+        dh_eq33_basis_function_atoms(const HartreeFock::Calculator &calculator)
+        {
+            const int nbasis = static_cast<int>(calculator._shells.nbasis());
+            const auto &basis_functions = calculator._shells._basis_functions;
+            if (static_cast<int>(basis_functions.size()) != nbasis)
+                return std::unexpected("DH Eq. 33 derivatives: basis-function list does not match AO dimension.");
+            std::vector<int> bf_atom(static_cast<std::size_t>(nbasis), -1);
+            for (int mu = 0; mu < nbasis; ++mu)
+            {
+                const Eigen::Vector3d center = basis_functions[static_cast<std::size_t>(mu)]._shell->_center;
+                double closest_distance_squared = std::numeric_limits<double>::infinity();
+                int closest_atom = -1;
+                for (std::size_t atom = 0; atom < calculator._molecule.natoms; ++atom)
+                {
+                    const Eigen::Vector3d atom_center = calculator._molecule._standard.row(
+                        static_cast<Eigen::Index>(atom)).transpose();
+                    const double distance_squared = (center - atom_center).squaredNorm();
+                    if (distance_squared < closest_distance_squared)
+                    {
+                        closest_distance_squared = distance_squared;
+                        closest_atom = static_cast<int>(atom);
+                    }
+                }
+                if (closest_atom < 0 || closest_distance_squared > 1e-18)
+                    return std::unexpected("DH Eq. 33 derivatives: could not assign AO basis function to a nucleus.");
+                bf_atom[static_cast<std::size_t>(mu)] = closest_atom;
+            }
+            return bf_atom;
+        }
+
+        std::expected<Gradient::DHEq33OneElectronOverlapGradient, std::string>
+        contract_dh_eq33_one_electron_overlap_direct(
+            const HartreeFock::Calculator &calculator,
+            const Eigen::Ref<const Eigen::MatrixXd> &relaxed_ao,
+            const Eigen::Ref<const Eigen::MatrixXd> &overlap_ao)
+        {
+            if (calculator._basis._basis != HartreeFock::BasisType::Cartesian ||
+                calculator._molecule.natoms == 0 || calculator._shells.nbasis() == 0)
+                return std::unexpected("DH Eq. 33 direct h/S contraction requires a nonempty Cartesian AO basis and molecule.");
+            const int nbasis = static_cast<int>(calculator._shells.nbasis());
+            if (relaxed_ao.rows() != nbasis || relaxed_ao.cols() != nbasis ||
+                overlap_ao.rows() != nbasis || overlap_ao.cols() != nbasis ||
+                !relaxed_ao.allFinite() || !overlap_ao.allFinite())
+                return std::unexpected("DH Eq. 33 direct h/S contraction: invalid AO density dimensions.");
+            auto bf_atom = dh_eq33_basis_function_atoms(calculator);
+            if (!bf_atom) return std::unexpected(bf_atom.error());
+
+            const int ncoord = static_cast<int>(3 * calculator._molecule.natoms);
+            Gradient::DHEq33OneElectronOverlapGradient out{
+                Eigen::VectorXd::Zero(ncoord), Eigen::VectorXd::Zero(ncoord)};
+            const auto &basis_functions = calculator._shells._basis_functions;
+            for (int mu = 0; mu < nbasis; ++mu)
+                for (int nu = 0; nu < nbasis; ++nu)
+                {
+                    const HartreeFock::ShellPair pair_mu_nu(
+                        basis_functions[static_cast<std::size_t>(mu)], basis_functions[static_cast<std::size_t>(nu)]);
+                    const HartreeFock::ShellPair pair_nu_mu(
+                        basis_functions[static_cast<std::size_t>(nu)], basis_functions[static_cast<std::size_t>(mu)]);
+                    const auto derivative_mu = HartreeFock::ObaraSaika::_compute_1e_deriv_A(pair_mu_nu);
+                    const auto derivative_nu = HartreeFock::ObaraSaika::_compute_1e_deriv_A(pair_nu_mu);
+                    const double d = relaxed_ao(mu, nu);
+                    const double w = overlap_ao(mu, nu);
+                    for (std::size_t atom = 0; atom < calculator._molecule.natoms; ++atom)
+                        for (int q = 0; q < 3; ++q)
+                        {
+                            const Eigen::Index coordinate = 3 * static_cast<Eigen::Index>(atom) + q;
+                            double h = HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(
+                                pair_mu_nu, calculator._molecule._standard.row(static_cast<Eigen::Index>(atom)).transpose(),
+                                calculator._molecule.atomic_numbers[atom], q);
+                            double s = 0.0;
+                            if ((*bf_atom)[static_cast<std::size_t>(mu)] == static_cast<int>(atom))
+                            {
+                                s += derivative_mu[q];
+                                h += derivative_mu[q + 3] +
+                                    HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(
+                                        pair_mu_nu, calculator._molecule)[q];
+                            }
+                            if ((*bf_atom)[static_cast<std::size_t>(nu)] == static_cast<int>(atom))
+                            {
+                                s += derivative_nu[q];
+                                h += derivative_nu[q + 3] +
+                                    HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(
+                                        pair_nu_mu, calculator._molecule)[q];
+                            }
+                            out.one_electron(coordinate) += d * h;
+                            out.overlap(coordinate) += w * s;
+                        }
+                }
+            return out;
+        }
+
+        std::expected<Gradient::DHEq33TwoElectronGradient, std::string>
+        contract_dh_eq33_two_electron_direct(
+            const HartreeFock::Calculator &calculator,
+            const Gradient::DHEq46_47TwoParticleDensity &two_particle,
+            const Gradient::DHEq47TiledExecution *eq47_tiled)
+        {
+            if (calculator._basis._basis != HartreeFock::BasisType::Cartesian ||
+                calculator._molecule.natoms == 0 || calculator._shells.nbasis() == 0)
+                return std::unexpected("DH Eq. 33 direct ERI contraction requires a nonempty Cartesian AO basis and molecule.");
+            const int nbasis = static_cast<int>(calculator._shells.nbasis());
+            const std::size_t n4 = static_cast<std::size_t>(nbasis) * nbasis * nbasis * nbasis;
+            const auto &nonseparable = two_particle.nonseparable_raw_ao.size() == n4
+                ? two_particle.nonseparable_raw_ao : two_particle.nonseparable_symmetric_ao;
+            const bool has_materialized_eq47 = nonseparable.size() == n4;
+            const bool has_tiled_eq47 = eq47_tiled && eq47_tiled->amplitudes && eq47_tiled->mo_coeff &&
+                eq47_tiled->transform_tile > 0 && eq47_tiled->mu_tile > 0 &&
+                eq47_tiled->occupied_tile > 0 && eq47_tiled->nu_tile > 0 &&
+                eq47_tiled->kappa_tile > 0 && eq47_tiled->tau_tile > 0;
+            if (two_particle.n_ao != nbasis || (!has_materialized_eq47 && !has_tiled_eq47) ||
+                two_particle.relaxed_difference_ao.rows() != nbasis ||
+                two_particle.relaxed_difference_ao.cols() != nbasis ||
+                two_particle.ground_density_ao.rows() != nbasis ||
+                two_particle.ground_density_ao.cols() != nbasis ||
+                !std::isfinite(two_particle.exact_exchange) || two_particle.exact_exchange < 0.0)
+                return std::unexpected("DH Eq. 33 direct ERI contraction: invalid AO two-particle density dimensions.");
+            auto bf_atom = dh_eq33_basis_function_atoms(calculator);
+            if (!bf_atom) return std::unexpected(bf_atom.error());
+
+            const int ncoord = static_cast<int>(3 * calculator._molecule.natoms);
+            Gradient::DHEq33TwoElectronGradient out{
+                Eigen::VectorXd::Zero(ncoord), Eigen::VectorXd::Zero(ncoord)};
+            const auto &basis_functions = calculator._shells._basis_functions;
+            const auto eri_index = [nbasis](int mu, int nu, int ka, int ta)
+            { return ((static_cast<std::size_t>(mu) * nbasis + nu) * nbasis + ka) * nbasis + ta; };
+            const auto accumulate = [&](int mu, int nu, int ka, int ta, double pair)
+            {
+                const HartreeFock::ShellPair left(
+                    basis_functions[static_cast<std::size_t>(mu)], basis_functions[static_cast<std::size_t>(nu)]);
+                const HartreeFock::ShellPair right(
+                    basis_functions[static_cast<std::size_t>(ka)], basis_functions[static_cast<std::size_t>(ta)]);
+                const auto derivative = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(left, right);
+                const int centers[4] = {
+                    (*bf_atom)[static_cast<std::size_t>(mu)], (*bf_atom)[static_cast<std::size_t>(nu)],
+                    (*bf_atom)[static_cast<std::size_t>(ka)], (*bf_atom)[static_cast<std::size_t>(ta)]};
+                // d(ERI) is eightfold symmetric. Contracting it with literal
+                // raw Eq. (46)/(47) is exactly the same scalar as using their
+                // symmetric adapters, without allocating either adapter.
+                const double separable =
+                    two_particle.relaxed_difference_ao(mu, nu) * two_particle.ground_density_ao(ka, ta) -
+                    0.5 * two_particle.exact_exchange *
+                    two_particle.relaxed_difference_ao(mu, ka) * two_particle.ground_density_ao(nu, ta);
+                for (int center = 0; center < 4; ++center)
+                    for (int q = 0; q < 3; ++q)
+                    {
+                        const Eigen::Index coordinate = 3 * static_cast<Eigen::Index>(centers[center]) + q;
+                        out.separable(coordinate) += separable * derivative[3 * center + q];
+                        out.nonseparable(coordinate) += pair * derivative[3 * center + q];
+                    }
+            };
+            if (has_materialized_eq47)
+                for (int mu = 0; mu < nbasis; ++mu)
+                    for (int nu = 0; nu < nbasis; ++nu)
+                        for (int ka = 0; ka < nbasis; ++ka)
+                            for (int ta = 0; ta < nbasis; ++ta)
+                                accumulate(mu, nu, ka, ta, nonseparable[eri_index(mu, nu, ka, ta)]);
+            else
+            {
+                const auto tiled = Gradient::for_each_dh_eq47_nonseparable_raw_ao_block(
+                    *eq47_tiled->amplitudes, *eq47_tiled->mo_coeff,
+                    eq47_tiled->occupied_tile, eq47_tiled->mu_tile, eq47_tiled->nu_tile,
+                    eq47_tiled->kappa_tile, eq47_tiled->tau_tile,
+                    [&accumulate](int mu_begin, int mu_count, int nu_begin, int nu_count,
+                        int kappa_begin, int kappa_count, int tau_begin, int tau_count,
+                        const std::vector<double> &tile)
+                    -> std::expected<void, std::string>
+                    {
+                        const std::size_t suffix = static_cast<std::size_t>(nu_count)*kappa_count*tau_count;
+                        if (tile.size() != static_cast<std::size_t>(mu_count) * suffix)
+                            return std::unexpected("DH Eq. 33 direct ERI contraction: invalid Eq. 47 tile extent.");
+                        for (int local_mu = 0; local_mu < mu_count; ++local_mu)
+                            for (int local_nu = 0; local_nu < nu_count; ++local_nu)
+                                for (int local_ka = 0; local_ka < kappa_count; ++local_ka)
+                                    for (int local_ta = 0; local_ta < tau_count; ++local_ta)
+                                    {
+                                        const std::size_t index =
+                                            ((static_cast<std::size_t>(local_mu) * nu_count + local_nu) * kappa_count + local_ka) * tau_count + local_ta;
+                                        accumulate(mu_begin + local_mu, nu_begin + local_nu,
+                                            kappa_begin + local_ka, tau_begin + local_ta, tile[index]);
+                                    }
+                        return {};
+                    });
+                if (!tiled) return std::unexpected(tiled.error());
+            }
+            return out;
+        }
+    }
+
     std::expected<Gradient::DHEq33NonXCDerivatives, std::string>
     build_dh_eq33_derivative_integrals(const HartreeFock::Calculator &calculator)
     {
         if (calculator._basis._basis != HartreeFock::BasisType::Cartesian ||
             calculator._molecule.natoms == 0 || calculator._shells.nbasis() == 0)
             return std::unexpected("DH Eq. 33 derivatives require a nonempty Cartesian AO basis and molecule.");
-        const int nbasis = static_cast<int>(calculator._shells.nbasis());
-        const int ncoord = static_cast<int>(3 * calculator._molecule.natoms);
-        const auto &basis_functions = calculator._shells._basis_functions;
-        if (static_cast<int>(basis_functions.size()) != nbasis)
-            return std::unexpected("DH Eq. 33 derivatives: basis-function list does not match AO dimension.");
-
-        std::vector<int> bf_atom(static_cast<std::size_t>(nbasis), -1);
-        for (int mu = 0; mu < nbasis; ++mu)
-        {
-            const Eigen::Vector3d center = basis_functions[static_cast<std::size_t>(mu)]._shell->_center;
-            double closest_distance_squared = std::numeric_limits<double>::infinity();
-            int closest_atom = -1;
-            for (std::size_t atom = 0; atom < calculator._molecule.natoms; ++atom)
-            {
-                const Eigen::Vector3d atom_center = calculator._molecule._standard.row(
-                    static_cast<Eigen::Index>(atom)).transpose();
-                const double distance_squared = (center - atom_center).squaredNorm();
-                if (distance_squared < closest_distance_squared)
-                {
-                    closest_distance_squared = distance_squared;
-                    closest_atom = static_cast<int>(atom);
-                }
-            }
-            if (closest_atom < 0 || closest_distance_squared > 1e-18)
-                return std::unexpected("DH Eq. 33 derivatives: could not assign AO basis function to a nucleus.");
-            bf_atom[static_cast<std::size_t>(mu)] = closest_atom;
-        }
-
         Gradient::DHEq33NonXCDerivatives out;
-        out.hamiltonian_ao.assign(static_cast<std::size_t>(ncoord), Eigen::MatrixXd::Zero(nbasis, nbasis));
-        out.overlap_ao.assign(static_cast<std::size_t>(ncoord), Eigen::MatrixXd::Zero(nbasis, nbasis));
-        out.eri_ao.assign(static_cast<std::size_t>(ncoord),
-            std::vector<double>(static_cast<std::size_t>(nbasis) * nbasis * nbasis * nbasis, 0.0));
-        const auto eri_index = [nbasis](int mu, int nu, int ka, int ta)
-        {
-            return ((static_cast<std::size_t>(mu) * nbasis + nu) * nbasis + ka) * nbasis + ta;
-        };
-        for (int mu = 0; mu < nbasis; ++mu)
-            for (int nu = 0; nu < nbasis; ++nu)
-            {
-                const HartreeFock::ShellPair pair_mu_nu(
-                    basis_functions[static_cast<std::size_t>(mu)], basis_functions[static_cast<std::size_t>(nu)]);
-                const HartreeFock::ShellPair pair_nu_mu(
-                    basis_functions[static_cast<std::size_t>(nu)], basis_functions[static_cast<std::size_t>(mu)]);
-                const auto derivative_mu = HartreeFock::ObaraSaika::_compute_1e_deriv_A(pair_mu_nu);
-                const auto derivative_nu = HartreeFock::ObaraSaika::_compute_1e_deriv_A(pair_nu_mu);
-                for (std::size_t atom = 0; atom < calculator._molecule.natoms; ++atom)
-                    for (int q = 0; q < 3; ++q)
-                    {
-                        const int coordinate = 3 * static_cast<int>(atom) + q;
-                        if (bf_atom[static_cast<std::size_t>(mu)] == static_cast<int>(atom))
-                        {
-                            out.overlap_ao[static_cast<std::size_t>(coordinate)](mu, nu) += derivative_mu[q];
-                            out.hamiltonian_ao[static_cast<std::size_t>(coordinate)](mu, nu) +=
-                                derivative_mu[q + 3] +
-                                HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(
-                                    pair_mu_nu, calculator._molecule)[q];
-                        }
-                        if (bf_atom[static_cast<std::size_t>(nu)] == static_cast<int>(atom))
-                        {
-                            out.overlap_ao[static_cast<std::size_t>(coordinate)](mu, nu) += derivative_nu[q];
-                            out.hamiltonian_ao[static_cast<std::size_t>(coordinate)](mu, nu) +=
-                                derivative_nu[q + 3] +
-                                HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(
-                                    pair_nu_mu, calculator._molecule)[q];
-                        }
-                        const Eigen::Vector3d atom_center = calculator._molecule._standard.row(
-                            static_cast<Eigen::Index>(atom)).transpose();
-                        out.hamiltonian_ao[static_cast<std::size_t>(coordinate)](mu, nu) +=
-                            HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(
-                                pair_mu_nu, atom_center, calculator._molecule.atomic_numbers[atom], q);
-                    }
-            }
-        for (int mu = 0; mu < nbasis; ++mu)
-            for (int nu = 0; nu < nbasis; ++nu)
-                for (int ka = 0; ka < nbasis; ++ka)
-                    for (int ta = 0; ta < nbasis; ++ta)
-                    {
-                        const HartreeFock::ShellPair left(
-                            basis_functions[static_cast<std::size_t>(mu)], basis_functions[static_cast<std::size_t>(nu)]);
-                        const HartreeFock::ShellPair right(
-                            basis_functions[static_cast<std::size_t>(ka)], basis_functions[static_cast<std::size_t>(ta)]);
-                        const auto derivative = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(left, right);
-                        const int centers[4] = {
-                            bf_atom[static_cast<std::size_t>(mu)], bf_atom[static_cast<std::size_t>(nu)],
-                            bf_atom[static_cast<std::size_t>(ka)], bf_atom[static_cast<std::size_t>(ta)]};
-                        const std::size_t index = eri_index(mu, nu, ka, ta);
-                        for (int center = 0; center < 4; ++center)
-                            for (int q = 0; q < 3; ++q)
-                                out.eri_ao[static_cast<std::size_t>(3 * centers[center] + q)][index] +=
-                                    derivative[3 * center + q];
-                    }
+        out.direct_one_electron_overlap = [&calculator](
+            const Eigen::Ref<const Eigen::MatrixXd> &relaxed_ao,
+            const Eigen::Ref<const Eigen::MatrixXd> &overlap_ao)
+        { return contract_dh_eq33_one_electron_overlap_direct(calculator, relaxed_ao, overlap_ao); };
+        out.direct_two_electron = [&calculator](
+            const Gradient::DHEq46_47TwoParticleDensity &two_particle,
+            const Gradient::DHEq47TiledExecution *eq47_tiled)
+        { return contract_dh_eq33_two_electron_direct(calculator, two_particle, eq47_tiled); };
+        return out;
+    }
+
+    std::expected<Gradient::DHMolecularERIBlocks, std::string>
+    build_dh_eq40_mo_eri_blocks_direct(const std::vector<double> &eri_ao, std::size_t nao,
+        const Eigen::Ref<const Eigen::MatrixXd> &c_occ,
+        const Eigen::Ref<const Eigen::MatrixXd> &c_virt)
+    {
+        if (nao==0 || c_occ.rows()!=static_cast<Eigen::Index>(nao) || c_virt.rows()!=static_cast<Eigen::Index>(nao) ||
+            c_occ.cols()==0 || c_virt.cols()==0)
+            return std::unexpected("DH Eq. 40 direct MO sectors: invalid AO ERIs or coefficient dimensions.");
+        Gradient::DHMolecularERIBlocks out;
+        out.n_occ=static_cast<int>(c_occ.cols()); out.n_virt=static_cast<int>(c_virt.cols());
+        out.ovov=HartreeFock::Correlation::transform_eri(eri_ao,nao,c_occ,c_virt,c_occ,c_virt);
+        out.vvov=HartreeFock::Correlation::transform_eri(eri_ao,nao,c_virt,c_virt,c_occ,c_virt);
+        out.ooov=HartreeFock::Correlation::transform_eri(eri_ao,nao,c_occ,c_occ,c_occ,c_virt);
+        out.ovvv=HartreeFock::Correlation::transform_eri(eri_ao,nao,c_occ,c_virt,c_virt,c_virt);
+        out.ovoo=HartreeFock::Correlation::transform_eri(eri_ao,nao,c_occ,c_virt,c_occ,c_occ);
         return out;
     }
 
@@ -4735,11 +4868,33 @@ namespace DFT::Driver
         std::vector<double> eri_local;
         const std::vector<double> &eri_ao = HartreeFock::Correlation::ensure_eri(
             calculator, prepared.shell_pairs, eri_local, "DH Eq. 40:");
-        out.mo_eri = HartreeFock::Correlation::transform_eri(
-            eri_ao, static_cast<std::size_t>(nao), pt2_result.mo_coeff,
-            pt2_result.mo_coeff, pt2_result.mo_coeff, pt2_result.mo_coeff);
+        auto direct_blocks=build_dh_eq40_mo_eri_blocks_direct(eri_ao,static_cast<std::size_t>(nao),
+            pt2_result.mo_coeff.leftCols(nocc),pt2_result.mo_coeff.rightCols(nvirt));
+        if(!direct_blocks) return std::unexpected("DH Eq. 40 direct MO sector construction failed.");
+        const auto sector_equal=[](const std::vector<double> &a,const std::vector<double> &b)
+        {
+            if(a.size()!=b.size()) return false;
+            double error=0.0;
+            for(std::size_t q=0;q<a.size();++q) error=std::max(error,std::abs(a[q]-b[q]));
+            return std::isfinite(error) && error<1e-11;
+        };
+        // The all-MO transform is a retained opt-in reference oracle, never
+        // a production allocation. It compares each direct sector exactly.
+        if (std::getenv("PLANCK_DFT_DH_EQ40_DENSE_REFERENCE"))
+        {
+            const auto mo_eri=HartreeFock::Correlation::transform_eri(
+                eri_ao,static_cast<std::size_t>(nao),pt2_result.mo_coeff,
+                pt2_result.mo_coeff,pt2_result.mo_coeff,pt2_result.mo_coeff);
+            auto dense_blocks=Gradient::build_dh_molecular_eri_blocks(mo_eri,nocc,nvirt);
+            if(!dense_blocks || !sector_equal(direct_blocks->ovov,dense_blocks->ovov) ||
+                !sector_equal(direct_blocks->vvov,dense_blocks->vvov) ||
+                !sector_equal(direct_blocks->ooov,dense_blocks->ooov) ||
+                !sector_equal(direct_blocks->ovvv,dense_blocks->ovvv) ||
+                !sector_equal(direct_blocks->ovoo,dense_blocks->ovoo))
+                return std::unexpected("DH Eq. 40 direct MO sectors disagree with dense MO transform.");
+        }
         auto stationary = Gradient::build_dh_stationary_products(
-            pt2_result, c_pt2, pt2_result.mo_coeff, out.mo_eri, out.response_operator);
+            pt2_result, c_pt2, pt2_result.mo_coeff, out.response_operator, *direct_blocks);
         if (!stationary) return std::unexpected(stationary.error());
         static_cast<Gradient::DHStationaryProducts &>(out) = std::move(*stationary);
         // Eq. (40)'s compressed external plus internal form is equivalent to

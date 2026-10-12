@@ -413,6 +413,7 @@ set(POSTHF_DFT_SRC
     ${SRC_DIR}/post_hf/integrals.cpp
     ${SRC_DIR}/post_hf/mp2.h
     ${SRC_DIR}/post_hf/mp2.cpp
+    ${SRC_DIR}/post_hf/mp2_t2_storage.cpp
     ${SRC_DIR}/post_hf/mp2_internal.h
     ${SRC_DIR}/post_hf/mp2_internal.cpp
     ${SRC_DIR}/post_hf/mp2_rmp2.cpp
@@ -967,6 +968,7 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/dh_o5_backtransform.cpp
         ${CMAKE_SOURCE_DIR}/tests/dh_grid_sigma.cpp
         ${CMAKE_SOURCE_DIR}/tests/dh_zvector.cpp
+        ${SRC_DIR}/post_hf/mp2_t2_storage.cpp
         ${SRC_DIR}/dft/dh_pt2_gradient.cpp
         ${SRC_DIR}/dft/dft_gradient.cpp
         ${SRC_DIR}/dft/analytic_hessian.cpp

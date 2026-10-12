@@ -18,8 +18,10 @@ class O2WorkspaceTests(unittest.TestCase):
         self.assertIn("std::shared_ptr<const DHGradientGeometryWorkspace> workspace", view)
         self.assertNotIn("std::vector<double>", view)
         self.assertNotIn("DHEq33NonXCDerivatives non_xc_derivatives", view)
-        self.assertIn("std::move(zvector->mo_eri)", self.driver)
+        self.assertIn("DHGradientGeometryWorkspace{{}, std::move(*derivatives)}", self.driver)
         self.assertIn("std::move(*derivatives)", self.driver)
+        self.assertIn("restricted_pt2_result==nullptr", self.driver)
+        self.assertIn("*restricted_pt2_result=std::move(*mp2_res)", self.driver)
 
     def test_stationary_inputs_are_constructed_once_and_moved(self):
         production = self.driver.split("compute_analytic_dh_gradient(", 1)[1].split(
@@ -52,8 +54,8 @@ class O2WorkspaceTests(unittest.TestCase):
     def test_gamma_reference_is_separate_from_compact_production(self):
         self.assertIn("DHGammaStorage::ReferenceAll", self.source)
         self.assertIn("DHGammaStorage::ContractionOnly", self.source)
-        self.assertIn("std::vector<double>().swap(out.separable_raw_ao)", self.source)
-        self.assertIn("std::vector<double>().swap(out.nonseparable_raw_ao)", self.source)
+        self.assertIn("if (storage == DHGammaStorage::ReferenceAll)", self.source)
+        self.assertIn("ContractionOnly retains no final Eq. (47) AO tensor", self.source)
         self.assertIn("Gradient::solve_dh_zvector(", self.driver)
 
 

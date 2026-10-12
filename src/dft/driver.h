@@ -69,7 +69,6 @@ namespace DFT::Driver
     struct DHEq41ZVectorProducts : Gradient::DHStationaryProducts
     {
         Gradient::DHEq41ResponseOperator response_operator;
-        std::vector<double> mo_eri;
         Eigen::MatrixXd z_ai;
         double residual_max_abs = 0.0;
         Gradient::DHZVectorStatistics solver;
@@ -86,8 +85,11 @@ namespace DFT::Driver
         double c_pt2,
         const Gradient::DHZVectorOptions &solver_options = {});
 
-    // AO derivative bundle for the correction-only non-XC Eq. (33) terms.
-    // Coordinates are atom-major: index = 3 * atom + Cartesian component.
+    // Correction-only Eq. (33) derivative producer. The normal production
+    // result supplies direct h/S and ERI contractions rather than retaining
+    // all-coordinate AO derivative arrays; dense arrays remain available to
+    // the typed reference/test adapter. Coordinates are atom-major:
+    // index = 3 * atom + Cartesian component.
     [[nodiscard]] std::expected<Gradient::DHEq33NonXCDerivatives, std::string>
     build_dh_eq33_derivative_integrals(const HartreeFock::Calculator &calculator);
 

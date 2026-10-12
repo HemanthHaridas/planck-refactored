@@ -1,8 +1,10 @@
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <limits>
 #include <source_location>
 #include "dft/dh_pt2_gradient.h"
+#include "post_hf/mp2_internal.h"
 
 bool test_dh_grid_sigma();
 bool test_dh_zvector();
@@ -31,7 +33,10 @@ namespace
     {
         bool passed;
         Checks(bool value) : passed(value) {}
-        operator bool() const { return passed; }
+        // Keep boolean use contextual only (`if`, `?:`, `!`).  An implicit
+        // conversion here lets built-in `&=` bypass the located RHS overload,
+        // turning a failed invariant into an unlabelled suite-level error.
+        explicit operator bool() const { return passed; }
         Checks &operator&=(LocatedCheck check)
         {
             if (!check.passed)
@@ -64,10 +69,15 @@ int main()
     Eigen::Matrix2d x; x << 0.3, -0.2, -0.2, 0.7;
     Eigen::Matrix2d y; y << -0.4, 0.1, 0.1, 0.9;
     Checks ok = response.has_value();
-    ok &= test_dh_grid_sigma();
-    ok &= test_dh_o4_contractions();
-    ok &= test_dh_o5_backtransform();
-    ok &= test_dh_zvector();
+    const auto delegated_gate=[](const char *name, bool passed)
+    {
+        if (!passed) std::fprintf(stderr, "%s: delegated DH invariant suite failed\n", name);
+        return passed;
+    };
+    ok &= delegated_gate("DH grid sigma",test_dh_grid_sigma());
+    ok &= delegated_gate("DH O4 contractions",test_dh_o4_contractions());
+    ok &= delegated_gate("DH O5 backtransform",test_dh_o5_backtransform());
+    ok &= delegated_gate("DH Z-vector",test_dh_zvector());
     const auto no_exchange = DFT::Gradient::make_dh_eq41_response_operator(
         0.0,
         [a](const Eigen::Ref<const Eigen::MatrixXd> &d)
@@ -186,6 +196,185 @@ int main()
     HartreeFock::Correlation::RMP2Result r40;
     r40.n_occ = 1; r40.n_virt = 2;
     r40.t2 = {1.0, 2.0, 3.0, 4.0};
+    // O7.6.3a: the packed canonical representation must be a lossless
+    // realization of t_ij^ab=t_ji^ba before it can become a production owner.
+    auto rpacked40=r40;
+    rpacked40.t2 = {1.0, 2.0, 2.0, 4.0};
+    const auto packed40=HartreeFock::Correlation::pack_rmp2_pair_t2(rpacked40);
+    ok &= !HartreeFock::Correlation::pack_rmp2_pair_t2(r40);
+    ok &= packed40 && packed40->values.size()==3;
+    if (packed40)
+    {
+        double packed_error=0.0;
+        for(int i=0;i<rpacked40.n_occ;++i) for(int j=0;j<rpacked40.n_occ;++j)
+            for(int a=0;a<rpacked40.n_virt;++a) for(int b=0;b<rpacked40.n_virt;++b)
+                packed_error=std::max(packed_error,std::abs(
+                    packed40->at(i,j,a,b)-rpacked40.t2[idx(i,j,a,b)]));
+        ok &= packed_error<1e-13;
+        std::printf("O7.6.3a pair-packed T2 max_error=%.3e storage=(%zu,%zu) %s\n",
+            packed_error,rpacked40.t2.size(),packed40->values.size(),packed_error<1e-13?"PASS":"FAIL");
+    }
+    // O7.6.4a: the materialized ChemistsERIs oracle defines the exact ordered
+    // OVOV tile contract for later direct conventional/RI producers.
+    {
+        HartreeFock::Correlation::detail::ChemistsERIs eris;
+        eris.nocc=1;
+        eris.mo_coeff=Eigen::MatrixXd::Identity(3,3);
+        eris.mo_energy.resize(3);
+        eris.mo_energy << -0.8,0.2,0.6;
+        eris.ovov.resize(4);
+        for (std::size_t q=0;q<eris.ovov.size();++q) eris.ovov[q]=0.125*static_cast<double>(q+1);
+        bool ovov_tiles_ok=true;
+        double ovov_tile_error=0.0;
+        for (const int width : {1,2,5})
+        {
+            std::vector<int> seen(4,0);
+            const auto streamed=HartreeFock::Correlation::detail::for_each_rmp2_ovov_pair_tile(
+                eris,width,[&](const auto &tile)
+                {
+                    ovov_tiles_ok &= tile.values.size()<=static_cast<std::size_t>(width)*width;
+                    for(int i=0;i<1;++i) for(int a=0;a<2;++a)
+                        for(int j=0;j<1;++j) for(int b=0;b<2;++b)
+                        {
+                            const int p=i*2+a,q=j*2+b;
+                            if(p>=tile.p0 && p<tile.p0+tile.rows && q>=tile.q0 && q<tile.q0+tile.cols)
+                            {
+                                ++seen[static_cast<std::size_t>(p)*2+q];
+                                ovov_tile_error=std::max(ovov_tile_error,std::abs(tile.at(i,a,j,b)-eris.ovov[static_cast<std::size_t>(p)*2+q]));
+                            }
+                        }
+                    return true;
+                });
+            ovov_tiles_ok &= streamed.has_value() && std::all_of(seen.begin(),seen.end(),[](int n){ return n==1; });
+        }
+        ok &= ovov_tiles_ok && ovov_tile_error<1e-13;
+        std::printf("O7.6.4a materialized OVOV pair-tile stream max_error=%.3e %s\n",
+            ovov_tile_error,ovov_tiles_ok && ovov_tile_error<1e-13 ? "PASS" : "FAIL");
+    }
+    // O7.6.4b: the conventional direct transformer must emit the identical
+    // OVOV tiles without allocating the complete transformed output.
+    {
+        constexpr int nao=3, no=1, nv=2, npair=no*nv;
+        Eigen::MatrixXd c_occ(nao,no), c_virt(nao,nv);
+        c_occ << 0.7, -0.2, 0.5;
+        c_virt << 0.1, 0.6, -0.4,
+                  -0.3, 0.2, 0.8;
+        std::vector<double> eri_ao(static_cast<std::size_t>(nao)*nao*nao*nao);
+        for (std::size_t q=0;q<eri_ao.size();++q) eri_ao[q]=std::sin(0.19*static_cast<double>(q+1));
+        const auto ao_index=[=](int mu,int nu,int lambda,int sigma)
+        { return ((static_cast<std::size_t>(mu)*nao+nu)*nao+lambda)*nao+sigma; };
+        std::vector<double> ovov_reference(static_cast<std::size_t>(npair)*npair,0.0);
+        for(int i=0;i<no;++i) for(int a=0;a<nv;++a) for(int j=0;j<no;++j) for(int b=0;b<nv;++b)
+            for(int mu=0;mu<nao;++mu) for(int nu=0;nu<nao;++nu)
+                for(int lambda=0;lambda<nao;++lambda) for(int sigma=0;sigma<nao;++sigma)
+                    ovov_reference[static_cast<std::size_t>(i*nv+a)*npair+j*nv+b]+=
+                        c_occ(mu,i)*c_virt(nu,a)*c_occ(lambda,j)*c_virt(sigma,b)*
+                        eri_ao[ao_index(mu,nu,lambda,sigma)];
+        bool conventional_tiles_ok=true;
+        double conventional_tile_error=0.0;
+        for(const int width : {1,2,5})
+        {
+            std::vector<int> seen(static_cast<std::size_t>(npair)*npair,0);
+            const auto streamed=HartreeFock::Correlation::detail::for_each_rmp2_ovov_conventional_tile(
+                eri_ao,nao,c_occ,c_virt,width,[&](const auto &tile)
+                {
+                    conventional_tiles_ok &= tile.values.size()<=static_cast<std::size_t>(width)*width;
+                    for(int i=0;i<no;++i) for(int a=0;a<nv;++a)
+                        for(int j=0;j<no;++j) for(int b=0;b<nv;++b)
+                        {
+                            const int p=i*nv+a,q=j*nv+b;
+                            if(p>=tile.p0 && p<tile.p0+tile.rows && q>=tile.q0 && q<tile.q0+tile.cols)
+                            {
+                                ++seen[static_cast<std::size_t>(p)*npair+q];
+                                conventional_tile_error=std::max(conventional_tile_error,
+                                    std::abs(tile.at(i,a,j,b)-ovov_reference[static_cast<std::size_t>(p)*npair+q]));
+                            }
+                        }
+                    return true;
+                });
+            conventional_tiles_ok &= streamed.has_value() &&
+                std::all_of(seen.begin(),seen.end(),[](int n){ return n==1; });
+        }
+        ok &= conventional_tiles_ok && conventional_tile_error<1e-12;
+        std::printf("O7.6.4b conventional OVOV direct tiles max_error=%.3e %s\n",
+            conventional_tile_error,conventional_tiles_ok && conventional_tile_error<1e-12 ? "PASS" : "FAIL");
+    }
+    // O7.6.4c: RI factors are contracted into the same bounded tiles, never
+    // first expanded to a complete pair-pair Gram matrix.
+    {
+        constexpr int no=2, nv=2, npair=no*nv;
+        Eigen::MatrixXd b_ov(npair,3);
+        for(int p=0;p<npair;++p) for(int q=0;q<3;++q)
+            b_ov(p,q)=std::cos(0.23*(p+1)*(q+2));
+        const Eigen::MatrixXd reference=b_ov*b_ov.transpose();
+        bool ri_tiles_ok=true;
+        double ri_tile_error=0.0;
+        for(const int width : {1,3,7})
+        {
+            std::vector<int> seen(static_cast<std::size_t>(npair)*npair,0);
+            const auto streamed=HartreeFock::Correlation::detail::for_each_rmp2_ovov_ri_tile(
+                b_ov,no,nv,width,[&](const auto &tile)
+                {
+                    ri_tiles_ok &= tile.values.size()<=static_cast<std::size_t>(width)*width;
+                    for(int i=0;i<no;++i) for(int a=0;a<nv;++a)
+                        for(int j=0;j<no;++j) for(int b=0;b<nv;++b)
+                        {
+                            const int p=i*nv+a,q=j*nv+b;
+                            if(p>=tile.p0 && p<tile.p0+tile.rows && q>=tile.q0 && q<tile.q0+tile.cols)
+                            {
+                                ++seen[static_cast<std::size_t>(p)*npair+q];
+                                ri_tile_error=std::max(ri_tile_error,std::abs(tile.at(i,a,j,b)-reference(p,q)));
+                            }
+                        }
+                    return true;
+                });
+            ri_tiles_ok &= streamed.has_value() &&
+                std::all_of(seen.begin(),seen.end(),[](int n){ return n==1; });
+        }
+        ok &= ri_tiles_ok && ri_tile_error<1e-13;
+        std::printf("O7.6.4c RI OVOV direct tiles max_error=%.3e %s\n",
+            ri_tile_error,ri_tiles_ok && ri_tile_error<1e-13 ? "PASS" : "FAIL");
+    }
+    // O7.6.3c: the storage-independent composite-pair stream must visit every
+    // ordered canonical amplitude exactly once, with a bounded tile scratch.
+    // Check both owners and several widths before consumers migrate to it.
+    if (packed40)
+    {
+        auto compact_result=rpacked40;
+        compact_result.t2.clear();
+        compact_result.t2_pair_packed=packed40->values;
+        ok &= !HartreeFock::Correlation::for_each_rmp2_t2_pair_tile(
+            compact_result,0,[](const auto &){ return true; });
+        double tile_error=0.0;
+        bool tile_ok=true;
+        for (const auto *source : {&rpacked40,&compact_result})
+            for (const int width : {1,2,5})
+            {
+                const int npair=source->n_occ*source->n_virt;
+                std::vector<int> seen(static_cast<std::size_t>(npair)*npair,0);
+                const auto streamed=HartreeFock::Correlation::for_each_rmp2_t2_pair_tile(
+                    *source,width,[&](const auto &tile)
+                    {
+                        tile_ok &= tile.values.size()<=static_cast<std::size_t>(width)*width;
+                        for(int i=0;i<source->n_occ;++i) for(int j=0;j<source->n_occ;++j)
+                            for(int a=0;a<source->n_virt;++a) for(int b=0;b<source->n_virt;++b)
+                            {
+                                const int p=i*source->n_virt+a, q=j*source->n_virt+b;
+                                if (p>=tile.p0 && p<tile.p0+tile.rows && q>=tile.q0 && q<tile.q0+tile.cols)
+                                {
+                                    ++seen[static_cast<std::size_t>(p)*npair+q];
+                                    tile_error=std::max(tile_error,std::abs(tile.at(i,j,a,b)-
+                                        rpacked40.t2[idx(i,j,a,b)]));
+                                }
+                            }
+                        return true;
+                    });
+                tile_ok &= streamed.has_value() && std::all_of(seen.begin(),seen.end(),[](int n){ return n==1; });
+            }
+        ok &= tile_ok && tile_error<1e-13;
+        std::printf("O7.6.3c canonical T2 pair-tile stream max_error=%.3e %s\n",tile_error,
+            tile_ok && tile_error<1e-13 ? "PASS" : "FAIL");
+    }
     constexpr int nmo40 = 3;
     auto eidx = [](int p, int q, int rr, int s)
     { return ((p * nmo40 + q) * nmo40 + rr) * nmo40 + s; };
@@ -193,11 +382,127 @@ int main()
     eri40[eidx(1,1,0,2)] = 13.0; eri40[eidx(1,2,0,1)] = 5.0;
     eri40[eidx(2,1,0,2)] = 17.0; eri40[eidx(2,2,0,1)] = 7.0;
     eri40[eidx(0,0,0,2)] = 19.0; eri40[eidx(0,2,0,0)] = 3.0;
+    const auto blocks40=DFT::Gradient::build_dh_molecular_eri_blocks(eri40,1,2);
+    ok &= blocks40 && blocks40->ovov.size()==4 && blocks40->vvov.size()==8 &&
+        blocks40->ooov.size()==2 && blocks40->ovvv.size()==8 && blocks40->ovoo.size()==2;
+    if (blocks40)
+    {
+        for(int a=0;a<2;++a) for(int b=0;b<2;++b)
+            ok &= near(blocks40->ovov[(static_cast<std::size_t>(a)*1)*2+b],eri40[eidx(0,1+a,0,1+b)]);
+        for(int p=0;p<nmo40;++p)
+        {
+            const double slot0 = p==0 ? blocks40->ovov[0] : blocks40->vvov[((static_cast<std::size_t>(p-1)*2)*1)*2];
+            ok &= near(slot0,eri40[eidx(p,1,0,1)]);
+        }
+    }
+    ok &= !DFT::Gradient::build_dh_molecular_eri_blocks(eri40,0,2);
+    ok &= !DFT::Gradient::build_dh_molecular_eri_blocks(eri40,1,1);
     auto d40 = DFT::Gradient::build_dh_pt2_amplitude_density(r40, 0.5);
+    const auto d40_view = DFT::Gradient::build_dh_pt2_amplitude_density(
+        r40, 0.5, DFT::Gradient::DHTildeAmplitudeStorage::SourceView);
+    ok &= d40 && d40_view && d40_view->t_tilde.empty() && d40_view->has_tilde_storage();
+    if (d40 && d40_view)
+    {
+        double tilde_view_error=0.0;
+        for (int i=0;i<r40.n_occ;++i) for (int j=0;j<r40.n_occ;++j)
+            for (int a=0;a<r40.n_virt;++a) for (int b=0;b<r40.n_virt;++b)
+                tilde_view_error=std::max(tilde_view_error,std::abs(
+                    d40->tilde(i,j,a,b)-d40_view->tilde(i,j,a,b)));
+        ok &= tilde_view_error<1e-13 &&
+            (d40->dprime_mo-d40_view->dprime_mo).norm()<1e-13;
+        std::printf("O7.6.1 source-view tilde max_error=%.3e storage=(%zu,%zu) %s\n",
+            tilde_view_error,d40->t_tilde.size(),d40_view->t_tilde.size(),
+            tilde_view_error<1e-13 ? "PASS" : "FAIL");
+        bool tilde_tiles_ok=true;
+        double tilde_tile_error=0.0;
+        for (const int width : {1,2,5})
+        {
+            std::vector<int> seen(4,0);
+            const auto streamed=d40_view->for_each_pair_tile(width,[&](const auto &tile)
+            {
+                tilde_tiles_ok &= tile.values.size()<=static_cast<std::size_t>(width)*width;
+                for(int ip=0;ip<tile.rows;++ip) for(int iq=0;iq<tile.cols;++iq)
+                {
+                    const int p=tile.p0+ip, q=tile.q0+iq;
+                    ++seen[static_cast<std::size_t>(p)*2+q];
+                    tilde_tile_error=std::max(tilde_tile_error,std::abs(tile.values[
+                        static_cast<std::size_t>(ip)*tile.cols+iq]-d40->tilde(
+                        p/2,q/2,p%2,q%2)));
+                }
+                return true;
+            });
+            tilde_tiles_ok &= streamed.has_value() &&
+                std::all_of(seen.begin(),seen.end(),[](int n){ return n==1; });
+        }
+        ok &= tilde_tiles_ok && tilde_tile_error<1e-13;
+        std::printf("O7.6.4e source tilde pair-tile stream max_error=%.3e %s\n",
+            tilde_tile_error,tilde_tiles_ok && tilde_tile_error<1e-13 ? "PASS" : "FAIL");
+        // SourceView is represented by an empty materialized buffer.  A
+        // malformed nonempty buffer must be rejected rather than silently
+        // falling back to the source owner.
+        auto malformed=*d40_view;
+        malformed.t_tilde.push_back(0.0);
+        ok &= !malformed.has_tilde_storage() && !std::isfinite(malformed.tilde(0,0,0,0));
+    }
+    const auto dense_pair40=d40 ? DFT::Gradient::build_dh_pair_coefficient_gradient(*d40,eri40)
+        : std::expected<DFT::Gradient::DHPairCoefficientGradient,std::string>(std::unexpected("Eq. 40 dense pair setup failed"));
+    const auto typed_pair40=(d40 && blocks40) ? DFT::Gradient::build_dh_pair_coefficient_gradient(*d40,*blocks40)
+        : std::expected<DFT::Gradient::DHPairCoefficientGradient,std::string>(std::unexpected("Eq. 40 typed pair setup failed"));
+    ok &= dense_pair40 && typed_pair40;
+    if(dense_pair40 && typed_pair40)
+    {
+        double pair40_error=0.0;
+        for(int slot=0;slot<4;++slot)
+            pair40_error=std::max(pair40_error,(dense_pair40->slots[slot]-typed_pair40->slots[slot]).norm());
+        ok &= pair40_error<1e-13;
+        std::printf("O7.5.2 typed Eq. 40 sector slots max_error=%.3e %s\n",pair40_error,
+            pair40_error<1e-13 ? "PASS" : "FAIL");
+    }
     auto l40 = d40 ? DFT::Gradient::build_dh_eq40_amplitude_rhs(r40, *d40, eri40, 0.5, true)
                    : std::expected<DFT::Gradient::DHEq40AmplitudeRHS, std::string>(
                          std::unexpected("Eq. 40 amplitude fixture setup failed"));
     ok &= l40.has_value();
+    const auto dense_l40_literal=d40 ? DFT::Gradient::build_dh_eq40_amplitude_rhs(r40,*d40,eri40,0.5,false)
+        : std::expected<DFT::Gradient::DHEq40AmplitudeRHS,std::string>(std::unexpected("Eq. 40 dense literal setup failed"));
+    const auto typed_l40_literal=(d40 && blocks40) ? DFT::Gradient::build_dh_eq40_amplitude_rhs(r40,*d40,*blocks40,0.5,false)
+        : std::expected<DFT::Gradient::DHEq40AmplitudeRHS,std::string>(std::unexpected("Eq. 40 typed literal setup failed"));
+    ok &= dense_l40_literal && typed_l40_literal;
+    if(dense_l40_literal && typed_l40_literal)
+    {
+        const double rhs_error=(dense_l40_literal->total-typed_l40_literal->total).norm();
+        ok &= rhs_error<1e-13;
+        std::printf("O7.5.3 typed Eq. 40 RHS max_error=%.3e %s\n",rhs_error,rhs_error<1e-13?"PASS":"FAIL");
+    }
+    // O7.5.6: a production stationary snapshot owns only the typed Eq. 40
+    // sectors.  Its dense-reference counterpart must produce bitwise-close
+    // stationary data without leaving an all-MO ERI dependency in the compact
+    // entry point.
+    const auto zero_response=[](const Eigen::Ref<const Eigen::MatrixXd> &density)
+        -> std::expected<Eigen::MatrixXd,std::string>
+    { return Eigen::MatrixXd::Zero(density.rows(),density.cols()); };
+    const auto stationary_response=DFT::Gradient::make_dh_eq41_response_operator(
+        0.0,zero_response,zero_response,zero_response);
+    const Eigen::MatrixXd stationary_coeff=Eigen::Matrix3d::Identity();
+    const auto stationary_dense=stationary_response
+        ? DFT::Gradient::build_dh_stationary_products(r40,0.5,stationary_coeff,eri40,*stationary_response)
+        : std::expected<DFT::Gradient::DHStationaryProducts,std::string>(
+            std::unexpected("O7.5.6 dense stationary setup failed"));
+    const auto stationary_compact=(stationary_response && blocks40)
+        ? DFT::Gradient::build_dh_stationary_products(r40,0.5,stationary_coeff,*stationary_response,*blocks40)
+        : std::expected<DFT::Gradient::DHStationaryProducts,std::string>(
+            std::unexpected("O7.5.6 compact stationary setup failed"));
+    ok &= stationary_dense && stationary_compact;
+    if (stationary_dense && stationary_compact)
+    {
+        const double stationary_error=std::max({
+            (stationary_dense->eq41_response.response_ao-stationary_compact->eq41_response.response_ao).norm(),
+            (stationary_dense->eq40_amplitude_rhs.total-stationary_compact->eq40_amplitude_rhs.total).norm(),
+            (stationary_dense->lagrangian_rhs.total_ai-stationary_compact->lagrangian_rhs.total_ai).norm()});
+        ok &= stationary_error<1e-13;
+        std::printf("O7.5.6 compact stationary snapshot max_error=%.3e %s\n",stationary_error,
+            stationary_error<1e-13 ? "PASS" : "FAIL");
+    }
+    ok &= !(d40 && blocks40 && DFT::Gradient::build_dh_eq40_amplitude_rhs(r40,*d40,*blocks40,0.5,true));
     if (l40)
     {
         // The literal four-coefficient derivative gives external blocks
@@ -490,6 +795,19 @@ int main()
         eri44[eidx(0,0,0,1)] = 7.0;
         eri44[eidx(0,0,0,2)] = 11.0;
         const auto relaxed44 = DFT::Gradient::build_dh_relaxed_difference_density(*d40, z_ai);
+        const std::vector<double> no_legacy_pair_eri;
+        const auto w42_no_eri = (relaxed44 && self_adjoint_response)
+            ? DFT::Gradient::build_dh_eq42_43_energy_weighted_density(
+                *relaxed44, r40, *d40, Eigen::Matrix3d::Identity(), eps_w, no_legacy_pair_eri,
+                *self_adjoint_response, false)
+            : std::expected<DFT::Gradient::DHEq42_43EnergyWeightedDensity,std::string>(
+                std::unexpected("Eq. 42 no-legacy-ERI fixture setup failed"));
+        const auto w45_no_eri = relaxed44
+            ? DFT::Gradient::build_dh_eq44_45_energy_weighted_density(
+                *relaxed44, r40, *d40, eps_w, no_legacy_pair_eri, false)
+            : std::expected<DFT::Gradient::DHEq44_45EnergyWeightedDensity,std::string>(
+                std::unexpected("Eq. 45 no-legacy-ERI fixture setup failed"));
+        ok &= w42_no_eri && w45_no_eri;
         const auto w44_45 = relaxed44
             ? DFT::Gradient::build_dh_eq44_45_energy_weighted_density(
                 *relaxed44, r40, *d40, eps_w, eri44)
@@ -718,6 +1036,90 @@ int main()
                 ok &= eq33->two_electron_separable.sum() == 0.0;
                 ok &= eq33->two_electron_nonseparable.sum() == 0.0;
                 ok &= eq33->total.sum() == 0.0;
+
+                // O7.2: retain Eq. (46) as D/P/a_x only, then contract its
+                // literal raw coefficient into the same symmetric derivative
+                // quartets. This must reproduce the dense symmetric tensor
+                // channel independently of Eq. (47).
+                const auto compact46 = DFT::Gradient::build_dh_eq46_47_two_particle_density(
+                    *relaxed44, *d40, Eigen::Matrix3d::Identity(), ground_density, 1.0,
+                    DFT::Gradient::DHGammaStorage::ContractionOnly);
+                auto factorized_derivatives = derivatives33;
+                factorized_derivatives.eri_ao.clear();
+                factorized_derivatives.direct_two_electron = [&derivatives33](
+                    const DFT::Gradient::DHEq46_47TwoParticleDensity &two,
+                    const DFT::Gradient::DHEq47TiledExecution *tiled)
+                    -> std::expected<DFT::Gradient::DHEq33TwoElectronGradient, std::string>
+                {
+                    const Eigen::Index n = two.n_ao;
+                    const std::size_t n4 = static_cast<std::size_t>(n)*n*n*n;
+                    if (n <= 0 || two.relaxed_difference_ao.rows() != n ||
+                        two.ground_density_ao.rows() != n || !tiled || !tiled->amplitudes || !tiled->mo_coeff)
+                        return std::unexpected("O7.2 factorized fixture received invalid two-particle data.");
+                    const Eigen::Index nc = static_cast<Eigen::Index>(derivatives33.eri_ao.size());
+                    DFT::Gradient::DHEq33TwoElectronGradient out{
+                        Eigen::VectorXd::Zero(nc), Eigen::VectorXd::Zero(nc)};
+                    const auto index = [n](Eigen::Index mu, Eigen::Index nu, Eigen::Index ka, Eigen::Index ta)
+                    { return ((static_cast<std::size_t>(mu)*n+nu)*n+ka)*n+ta; };
+                    for (Eigen::Index x = 0; x < nc; ++x)
+                        for (Eigen::Index mu = 0; mu < n; ++mu)
+                            for (Eigen::Index nu = 0; nu < n; ++nu)
+                                for (Eigen::Index ka = 0; ka < n; ++ka)
+                                    for (Eigen::Index ta = 0; ta < n; ++ta)
+                                    {
+                                        const auto p = index(mu,nu,ka,ta);
+                                        const double sep = two.relaxed_difference_ao(mu,nu) * two.ground_density_ao(ka,ta) -
+                                            0.5 * two.exact_exchange * two.relaxed_difference_ao(mu,ka) * two.ground_density_ao(nu,ta);
+                                        out.separable(x) += sep * derivatives33.eri_ao[x][p];
+                                    }
+                    const auto streamed = DFT::Gradient::for_each_dh_eq47_nonseparable_raw_ao_tile(
+                        *tiled->amplitudes, *tiled->mo_coeff, tiled->transform_tile, tiled->mu_tile,
+                        [&out, &derivatives33, n, nc, &index](int begin, int width, const std::vector<double> &tile)
+                        -> std::expected<void, std::string>
+                        {
+                            const std::size_t suffix = static_cast<std::size_t>(n)*n*n;
+                            if (tile.size() != static_cast<std::size_t>(width)*suffix)
+                                return std::unexpected("O7.4.3 factorized fixture received invalid tile.");
+                            for (Eigen::Index x = 0; x < nc; ++x)
+                                for (int local_mu = 0; local_mu < width; ++local_mu)
+                                    for (Eigen::Index nu = 0; nu < n; ++nu)
+                                        for (Eigen::Index ka = 0; ka < n; ++ka)
+                                            for (Eigen::Index ta = 0; ta < n; ++ta)
+                                            {
+                                                const auto p = index(local_mu,nu,ka,ta);
+                                                const auto global = index(begin+local_mu,nu,ka,ta);
+                                                out.nonseparable(x) += tile[p] * derivatives33.eri_ao[x][global];
+                                            }
+                            return {};
+                        });
+                    if (!streamed) return std::unexpected(streamed.error());
+                    return out;
+                };
+                const Eigen::MatrixXd compact_coeff = Eigen::Matrix3d::Identity();
+                const DFT::Gradient::DHEq47TiledExecution compact_tiles{
+                    &*d40, &compact_coeff, 2, 1};
+                const auto factorized_eq33 = compact46
+                    ? DFT::Gradient::build_dh_eq33_non_xc_gradient(
+                        *relaxed44, *overlap33, *compact46, Eigen::Matrix3d::Identity(), factorized_derivatives,
+                        &compact_tiles)
+                    : std::expected<DFT::Gradient::DHEq33NonXCGradient, std::string>(
+                        std::unexpected("O7.2 compact Eq. 46 fixture setup failed"));
+                ok &= factorized_eq33.has_value() && compact46->separable_symmetric_ao.empty() &&
+                    compact46->nonseparable_raw_ao.empty() && compact46->nonseparable_symmetric_ao.empty();
+                if (factorized_eq33)
+                {
+                    const double separable_error=(factorized_eq33->two_electron_separable -
+                        eq33->two_electron_separable).norm();
+                    const double pair_error=(factorized_eq33->two_electron_nonseparable -
+                        eq33->two_electron_nonseparable).norm();
+                    const double total_error=(factorized_eq33->total-eq33->total).norm();
+                    const bool compact_pass=separable_error<1e-13 && pair_error<1e-13 && total_error<1e-13;
+                    ok &= compact_pass;
+                    std::printf("O7.4.3 compact Eq. 47 tile contract sep=%.3e pair=%.3e total=%.3e storage=(%zu,%zu) %s\n",
+                        separable_error,pair_error,total_error,
+                        compact46->nonseparable_raw_ao.capacity(), compact46->nonseparable_symmetric_ao.capacity(),
+                        compact_pass ? "PASS" : "FAIL");
+                }
             }
 
             const auto zero_amplitudes33 = DFT::Gradient::build_dh_pt2_amplitude_density(r40, 0.0);
