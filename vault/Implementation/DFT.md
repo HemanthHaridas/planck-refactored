@@ -28,14 +28,25 @@ Three-level partitioning:
 2. **Angular**: Lebedev quadrature (`src/dft/base/angular.h`)
 3. **Partitioning**: Becke fuzzy-cell scheme (`src/dft/base/grid.h`)
 
-Grid quality levels (`DFTGridQuality`):
+Grid quality levels (`DFTGridQuality`). Radial counts come from PySCF's
+`gen_grid._default_rad` period × level table (`RAD_GRIDS` in `radial.h`;
+presets map to PySCF levels 1/3/5/7). The old ORCA-style row formula gave
+only 44 radial points for a second-row atom where ~75 are needed, and the grid
+did not converge. Angular sizes are the five-region pruning schedule's
+largest (valence) region:
 
-| Level | Radial pts | Angular pts |
-|-------|-----------|------------|
-| Coarse | ~25 | ~110 |
-| Normal | ~50 | ~302 |
-| Fine | ~75 | ~590 |
-| UltraFine | ~99 | ~974 |
+| Level | Radial pts (H / 2nd row) | Max angular pts |
+|-------|--------------------------|-----------------|
+| Coarse | 30 / 40 | 110 |
+| Normal | 50 / 75 | 302 |
+| Fine | 70 / 105 | 434 |
+| UltraFine | 90 / 135 | 590 |
+
+`grid_radial_points` / `grid_angular_points` override the counts, and
+`grid_policy` selects a versioned pruning schedule (`GridPruningPolicy`).
+`legacy` is the default. `g4-3-v4` is a qualified opt-in policy, and it is
+mandatory (with `grid_radial_points 135` and no angular override) for UKS
+double-hybrid gradients. See `docs/DFT_GRID_CONVERGENCE_SCOPE.md`.
 
 ## AO Evaluation
 
@@ -99,26 +110,35 @@ Analytic KS gradients currently warn/error if PCM geometry response would be req
 **Correlation**: VWN5 (LDA), LYP (GGA), P86, PW91, PBE, B2PLYP-style combined XC entries, custom libxc names/IDs
 
 Support is split by workflow:
-- LDA/GGA/global-hybrid path: single points, gradients, geomopt, frequencies, and TDDFT
-- Range-separated hybrids and double hybrids: single-point energies only
+- LDA/GGA/global-hybrid: single points, gradients, geomopt, frequencies, geomopt+freq, TDDFT
+- Range-separated hybrids (erf): the same set, including TDDFT
+- RKS global double hybrids: single points, analytic gradients, geomopt, frequencies (FD of analytic gradients), geomopt+freq
+- UKS global double hybrids: single points, analytic gradients only (conventional all-active UMP2, no solvent, qualified V4 grid)
+- Range-separated double hybrids: single-point energies only
+- Yukawa/Gaussian screened-exchange functionals: evaluated with the erf kernel; rejected for TDDFT (see Open Work)
 
 ## Hybrid / Range-Separated / Double-Hybrid XC
 
 `src/dft/base/wrapper.h` exposes `hybrid_type()`, `is_hybrid()`, `is_global_hybrid()`, and `exact_exchange_coefficient()` from libxc. When a global hybrid is selected:
 
-1. `XCExchangeFunctional::B3LYP` / `PBE0` are named aliases; combined exchange-correlation libxc IDs are used without double-counting the correlation slot (see `src/dft/driver.cpp:999` and around line 1591).
+1. `XCExchangeFunctional::B3LYP` / `PBE0` are named aliases; combined exchange-correlation libxc IDs are used without double-counting the correlation slot (`src/dft/driver.cpp`).
 2. The KS build assembles an AO exchange matrix `K` from the ERI tensor (both RKS and UKS) in `src/dft/driver.cpp` (scaled by `exact_exchange_coefficient`).
 3. The scaled exact-exchange contribution is added to the KS potential via `build_ks_matrix` (see `src/dft/ks_matrix.h` — `exact_exchange_alpha` / `exact_exchange_beta` / `exact_exchange_energy` parameters).
 4. The matching exchange energy is included in the reported DFT total energy.
 
 Regression cases: `h2_dft_b3lyp_sto3g` and `h_dft_uks_b3lyp_sto3g`.
 
-The same wrapper layer now also exposes `is_range_separated()` and `is_double_hybrid()`. The driver accepts those functionals for single-point calculations, computes the implemented exact-exchange share, and applies the additional perturbative correction path for double hybrids where supported. Non-single-point workflows still reject them explicitly.
+The same wrapper layer also exposes `is_range_separated()`, `is_double_hybrid()`, `fock_exchange_coefficient()` / `short_range_exchange_coefficient()` (the SCF, SOSCF, and TDDFT all read exact exchange from these), and `perturbative_correlation_coefficient()`. Double hybrids run the KS SCF, then a non-self-consistent RMP2/UMP2 on the KS orbitals scaled by the PT2 coefficient. Workflows outside the support list above are rejected explicitly.
+
+## Double-Hybrid Analytic Gradients
+
+The restricted path (`src/dft/dh_pt2_gradient.{h,cpp}`) follows the Neese–Schwabe–Grimme (2007) stationary Lagrangian. It uses a matrix-free GMRES Z-vector (`solve_dh_zvector`) and direct (streamed) derivative-integral and Eq. 47 pair-density contractions. Only the five MO-ERI sectors the RHS needs are formed. Analytic-vs-energy-FD error is ≤1.7e-8 Ha/Bohr on water and C1 H2O2 (B2PLYP/STO-3G). The unrestricted path (`src/dft/udh_*.cpp`, `build_udh_gradient_correction`) is a dense implementation: full spin MO ERIs, a dense joint α/β Jacobian solved by pivoted QR, and a dense AO pair density. Worst FD error on the three hard open-shell B2PLYP cases is 2.7e-9 Ha/Bohr on the V4 grid. User-facing scope: `docs/DOUBLE_HYBRID_GRADIENTS.md`. Architecture and remaining scalability work: `docs/DH_IMPLEMENTATION.md`. Teaching derivation: §15 of `docs/PLANCK_TEACHING_GUIDE.md`.
 
 ## TDDFT / Linear Response
 
 `src/dft/driver.cpp` contains a dense linear-response implementation with:
 - full Casida and TDA solvers,
+- global-hybrid and erf range-separated exact exchange (`c_fr K + c_sr K[erf, ω]`, one shared helper `src/dft/tddft_exchange.h` owns the `(ib|ja)` B-matrix index; `docs/RS_TDDFT.md`),
 - RKS singlet/triplet support,
 - UKS spin-conserving response,
 - transition dipoles, oscillator strengths, and per-root reporting,

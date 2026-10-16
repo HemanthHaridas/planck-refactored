@@ -9,7 +9,7 @@ tags: [status, completion, validated, canonical]
 
 # Completion Status
 
-Last updated: 2026-06-04
+Last updated: 2026-10-16
 
 This is the canonical completion-status document for the repository.
 Subsystem handoff, plan, benchmark, and fix-summary notes may still exist for
@@ -311,9 +311,59 @@ historical design context, but they are no longer the source of truth for
 - LDA, GGA, global hybrids, and arbitrary libxc functional selection
 - Range-separated libxc functionals for single-point, analytic-gradient,
   geometry-optimization, frequency, and geomopt+frequency workflows
-- Double-hybrid libxc functionals for single-point energies
+- Double-hybrid libxc functionals for single-point energies (RKS and UKS;
+  range-separated double hybrids single-point only)
+- **Restricted global double-hybrid analytic gradient** (landed 2026-09-12,
+  `647aeaa7`), plus geomopt, frequencies (central differences of analytic
+  gradients) and geomopt+freq on the same callback. Neese-Schwabe-Grimme (2007)
+  stationary Lagrangian, `src/dft/dh_pt2_gradient.{h,cpp}`. Analytic vs
+  total-energy FD at two steps: water 1.70e-8, C1 H2O2 1.34e-8 Ha/Bohr
+  (B2PLYP/STO-3G, limit 5e-8). Production is matrix-free and streamed:
+  GMRES Z-vector (`solve_dh_zvector`, no dense fallback), direct h/S/ERI
+  derivative contractions, Eq. 47 pair density streamed in bounded AO tiles,
+  only five MO-ERI sectors formed, scratch-backed pair-packed T2 tiles
+  (O7 closed 2026-10-16, `6a621425`). The remaining `N_AO^4` object is the
+  conventional AO ERI tensor. The long debugging arc that preceded this
+  carries three lessons:
+  - **Two separate omissions.** Wiring XC-II (the fixed-matrix,
+    moving-function geometry derivative of `D:V_xc[P]`, including Becke and
+    owner-point grid motion) removed 69% of the residual. The rest was in the
+    PT2 half and closed by implementing the paper's objects literally: the
+    four-coefficient amplitude derivative, the literal Eq. 47 RHS/overlap, and
+    the hybrid Eq. 46 complement (driver comment in
+    `src/dft/driver.cpp`).
+  - **Measure the KS and PT2 halves separately.** They partially cancel in
+    the total, which understated the real defect by 3.2x.
+  - **Count a fixture's independent gradient components before scoring
+    candidate terms.** Water/C2v has only 3, so any three candidates fit
+    exactly; four attempts were reverted on that artifact.
+
+  PySCF's `grad/mp2.py` is not a valid DH reference (its response uses the
+  nonlinear `get_veff` on a non-idempotent trial density). Validation is
+  Planck's gradient against Planck's own energy FD.
+- **UKS global double-hybrid analytic gradient** (`73ce3866`, promoted with the
+  grid in `039bd2df`), `calculation gradient` only. Same Lagrangian with
+  per-spin densities, three amplitude blocks (c, 2c, c), alpha/beta coupling
+  only through J and the cross-spin XC kernel, and a joint alpha-then-beta
+  Z-vector (`src/dft/udh_*.cpp`). Dense implementation (see Open Work).
+  Scope: conventional all-active UMP2 with stored T2, no solvent, no range
+  separation, and the pinned grid `grid_policy g4-3-v4` + `grid_radial_points
+  135` (`validate_qualified_uks_dh_grid`). Fourth-order FD on C1 H2O2+, HO2 and
+  an asymmetric water cation (B2PLYP/STO-3G): worst 2.68e-9 Ha/Bohr; translation
+  below 5.9e-13.
+- **DFT grid: radial counts fixed and a qualified V4 pruning policy.** Radial
+  shells now come from PySCF's `RAD_GRIDS` period x level table (presets map to
+  levels 1/3/5/7). The old ORCA-style formula gave 44 points for a second-row
+  atom where ~75 are needed, and the energy still moved 2.9e-5 Eh at
+  "ultrafine". `grid_policy g4-3-v4` was selected on fixed-density XC
+  energy/potential/kernel L1 limits and passed a blind suite frozen before its
+  first run. On live UKS DH gradients it cut the rotational-covariance error
+  from 2.2e-5 (legacy) to 1.1e-7 Ha/Bohr. Opt-in; `legacy` stays the default
+  (`docs/DFT_GRID_CONVERGENCE_SCOPE.md`).
 - Treutler-Ahlrichs radial grid, Lebedev angular grid, and Becke partitioning
-- Grid quality levels: Coarse, Normal, Fine, UltraFine
+- Grid quality levels: Coarse, Normal, Fine, UltraFine, with explicit
+  `grid_radial_points` / `grid_angular_points` overrides and versioned
+  `grid_policy` pruning schedules
 - Single-point PCM solvation for RKS/UKS
 - Linear-response TDDFT / Casida and TDA excited states
 - Hybrid and range-separated TDDFT (2026-10-16, `docs/RS_TDDFT.md`).

@@ -160,9 +160,9 @@ actually gated.
 - **TDDFT/linear-response for meta-GGA** — the Casida/TDA kernel would need a
   tau-response fxc term; unbuilt, unscoped beyond this note.
 - **Double-hybrid meta-GGA** — `dh_pt2_gradient.cpp` gates on `is_gga_like()`
-  for the same structural reason; the double-hybrid work already has its own
-  open residual (`docs/DH_CORR_GRADIENT_DEFECT_SCOPE.md`) and should not be
-  entangled with this one.
+  for the same structural reason. A meta-GGA XC-II and kernel response would
+  be a new contract in the double-hybrid gradient (`docs/DH_IMPLEMENTATION.md`),
+  not a side effect of single-point meta-GGA support.
 
 ## 6. Estimate
 
