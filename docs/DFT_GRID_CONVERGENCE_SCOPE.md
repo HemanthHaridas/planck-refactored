@@ -1,44 +1,53 @@
-# DFT Grid Pruning: Current Qualification Contract
+# How is a DFT grid pruning policy qualified, and why is V4 the qualified one?
 
-## Status
+This file answers one architecture question:
 
-V4 is qualified for **opt-in** use as `grid_policy g4-3-v4`; the legacy grid
-policy remains the default.  The old `g4-3-v4-test-only` spelling remains an
-input-compatible alias for archived qualification fixtures, but resolves to
-the same immutable V4 schedule.  This is not a default-grid migration.
+**What does it take for an angular-pruning schedule to be trusted for
+calculations that differentiate the grid (UKS double-hybrid gradients), and
+what is the qualified `g4-3-v4` policy?**
 
-UKS global-double-hybrid analytic gradients may use V4 only with
-`grid_radial_points 135` and no `grid_angular_points` override.  The narrow
-production contract also retains the validated all-active conventional UMP2,
-stored-T2, no-solvent, non-range-separated scope.  UKS geometry optimization
-and frequency workflows remain separately gated.
+## Short answer
 
-Raw evidence is stored under
-**tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/**. The
-current G4.3 evidence root is **g4_3_9_revision_2026_10_03/**.
+A candidate pruning rule may depend only on atomic number and a fixed physical
+radial coordinate. It is accepted only if, on every fixture, it reproduces a
+135-radial-shell × 2030-angular-point reference within non-cancelling L1 limits
+on three fixed-density observables: XC energy, $D:V_{\rm XC}$, and
+$D:f_{\rm XC}:D$. The evidence is tiered, and a holdout that has been looked
+at can never be reused as independent evidence.
 
-## Purpose and boundary
+V3 failed one channel by a factor of 2 and is unqualified. V4 was found by an
+unconstrained search over the whole development bank, reproduced exactly by the
+C++ builder, and then passed a blind suite frozen before its first run. It also
+passed live UKS/DH checks where the default (legacy) pruning failed rotational
+covariance: 2.2e-5 against V4's 1.1e-7 Ha/Bohr on C1 H2O2⁺.
 
-The problem is quadrature accuracy in the shared KS grid machinery. It is not
-an unresolved restricted double-hybrid gradient derivation. A candidate policy
-must be evaluated through fixed-density XC energy, potential, and kernel
-contractions before it is used for live molecular calculations.
+**Scope.** V4 is opt-in (`grid_policy g4-3-v4`); `legacy` stays the default.
+UKS global-double-hybrid gradients *require* V4 with `grid_radial_points 135`
+and no `grid_angular_points` override (`validate_qualified_uks_dh_grid`). The old
+`g4-3-v4-test-only` spelling is an input-compatible alias for the same immutable
+schedule.
 
-This work does not:
+## Where the logic and evidence live
 
-- change a default grid;
-- broaden UKS double-hybrid support beyond the narrow qualified production
-  gradient contract stated above;
-- treat a direct-grid/atlas match as a scientific accuracy result; or
-- use another program's double-hybrid analytic gradient as an oracle.
+- `src/dft/base/grid.h` — `GridPruningPolicy`, `G43V4QualifiedV1`, the resolver
+- `src/dft/driver.cpp` — `validate_qualified_uks_dh_grid`
+- `tests/g4_3_*.py`, `tests/g4_3_direct_grid.h` — search, direct-rescore, and holdout runners
+- `tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/` — raw evidence (the V4 holdout ledger is `v4_holdout/ledger.json`)
+
+## What this does not claim
+
+- It does not change a default grid.
+- A direct-grid/atlas match proves the C++ builder realizes a rule, not that
+  the rule integrates accurately.
+- No other program's double-hybrid analytic gradient is used as an oracle.
 
 ## Fixed numerical contract
 
 All candidate rules use the physical radial coordinate
 
-\[
+```math
 u = r_{\mathrm{M4}} / r_{\mathrm{Bragg}}(Z).
-\]
+```
 
 They may depend only on atomic number and this fixed radial coordinate. They
 must not depend on density, molecular geometry, SCF iteration, or orbital
@@ -57,8 +66,8 @@ limits:
 | Observable | Limit |
 |---|---:|
 | XC energy | 1e-8 Ha |
-| \(D:V_{\rm XC}\) | 1e-7 |
-| \(D:f_{\rm XC}:D\) | 1e-7 |
+| $D:V_{\rm XC}$ | 1e-7 |
+| $D:f_{\rm XC}:D$ | 1e-7 |
 
 Each fixture uses two independent AO-density directions. Signed sums are
 diagnostic only; a candidate cannot pass through cancellation between shells,
@@ -90,11 +99,13 @@ used to adjust the rule before the full batch has completed. Their request must
 contain inputs, hashes, families, roles, reference ladder, limits, and the
 selected candidate fingerprint.
 
-## Current result
+## What was found
 
-The latest candidate is test-only V3:
+### Ruled out: V3
 
-| Family | Boundaries in \(u\) | Lebedev points, bands 0--4 |
+The previous candidate, test-only V3:
+
+| Family | Boundaries in $u$ | Lebedev points, bands 0--4 |
 |---|---|---|
 | H/He | [0.4, 1.0, 3.5, 4.5] | [26, 146, 1454, 434, 434] |
 | Second row | [0.4, 1.0, 2.5, 4.5] | [110, 434, 1454, 590, 170] |
@@ -119,18 +130,18 @@ V3 nevertheless failed qualification and is unqualified:
 
 The only failed channel is H/He XC-energy L1 for H2O2:
 
-\[
+```math
 2.0703621109700418\times10^{-8} > 1.0\times10^{-8}.
-\]
+```
 
 All H2O2 potential/kernel channels and the second-row energy channel pass.
-The selected outer H/He band, \(u \ge 4.5\), at 434 points contributes
+The selected outer H/He band, $u \ge 4.5$, at 434 points contributes
 1.3117254654494327e-8 (63.4%) of that L1 value. At this fixed density, 590
 points in that band would reduce the measured value to approximately 9.52e-9.
 That result is a V4 diagnostic constraint, not permission to patch V3 and call
 the same holdout independent.
 
-## V4 candidate search
+### The V4 search
 
 1. Validate and collect all selection and development residual reports.
 2. Keep the allowed band boundaries and Lebedev-order vocabulary unchanged.
@@ -163,13 +174,13 @@ pruning policy.
 zero robust-margin survivors for either family under the ceiling. Third row has
 222,011 robust survivors. The all-2030 H/He/second-row probe output is
 diagnostic only; `g4-3-v4-search-status.json` preserves this bounded-search
-result. The next V4 run removes that ceiling and must produce a robust rule
-before any performance optimization or blind validation begins.
+result. The unconstrained run that followed removed that ceiling, and a robust
+rule was required before any performance optimization or blind validation.
 
 **Unconstrained V4 result:** the complete search found robust survivors for
 all three families and selected the lowest-cost survivor in each:
 
-| Family | Boundaries in \(u\) | Lebedev points, bands 0--4 | Normalized worst L1 | Maximum points/atom |
+| Family | Boundaries in $u$ | Lebedev points, bands 0--4 | Normalized worst L1 | Maximum points/atom |
 |---|---|---|---:|---:|
 | H/He | [0.25, 1.0, 2.5, 3.5] | [26, 146, 2030, 974, 590] | 0.4495606113 | 80,010 |
 | Second row | [0.4, 1.0, 2.5, 4.5] | [110, 770, 2030, 590, 170] | 0.3965197292 | 82,170 |
@@ -181,25 +192,16 @@ not the uniform 2030-point fallback's 274,050 points/atom. It is a
 development-selected rule only: direct-builder reconciliation and the frozen
 blind qualification suite remain required before promotion.
 
-**Literal realization:** the V4 direct builder reconciled with all 14 frozen
-selection and all 9 consumed-development shell atlases. Every one of the 23
-reports passed the 1e-9 identity limit; the worst absolute channel difference
-was 1.9399352610416365e-10 (SiH4/B2PLYP/cc-pVDZ). This proves that the C++
+### Literal realization
+
+The V4 direct builder reconciled with all 14 frozen selection and all 9
+consumed-development shell atlases. Every one of the 23 reports passed the 1e-9
+identity limit, with a worst absolute channel difference of
+1.9399352610416365e-10 (SiH4/B2PLYP/cc-pVDZ). This proves that the C++
 physical-grid selector realizes the enumerated rule. It does not qualify the
-rule's quadrature accuracy on unseen systems.
+rule's quadrature accuracy on unseen systems; the blind suite does that.
 
-## Literal realization
-
-The selected V4 rule requires a new test-only C++ direct builder and unique
-fingerprint. It must reconcile at 1e-9 against:
-
-- all 14 frozen selection fixtures; and
-- every development-bank fixture.
-
-This establishes that the physical builder reproduces the shell-atlas rule. It
-does not establish quadrature accuracy.
-
-## V4 blind qualification
+### V4 blind and live qualification
 
 Freeze at least six unused input states before their first calculation:
 
@@ -258,7 +260,7 @@ and both response L1 channels. A failure is classified before another search:
 
 Neither outcome authorizes an in-place patch to the candidate just tested.
 
-## Promotion
+## Promotion rules
 
 Only an all-pass blind suite authorizes an opt-in GridPruningPolicy entry,
 resolver/parser support, shell-size invariants, and default-legacy regression
@@ -277,3 +279,14 @@ Default-policy migration requires a separate review with a compact calibration
 manifest: resolved rule/fingerprint, inputs and hashes, reference ladders,
 channel errors, point counts, memory/timing, stationary-root diagnostics, and
 live derivative results. No default changes before that review.
+
+## What remains
+
+- **No committed regression case exercises the production UKS double-hybrid
+  gradient on V4.** The qualification evidence comes from runners under
+  `tests/`, not from `tests/regression_cases.json`. The release smoke test
+  described above is the obvious candidate to commit.
+- **Default migration is a separate decision.** The legacy pruning failed
+  rotational covariance on the hard UKS/DH cases. Whether that matters for
+  workflows that do not differentiate the grid at this precision has not been
+  measured.

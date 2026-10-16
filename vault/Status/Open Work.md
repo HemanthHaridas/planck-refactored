@@ -1420,7 +1420,10 @@ were corrected in the same pass: `CCGEN_UNRESTRICTED_CC` (U0) and
   H2O2+, limit 2e-6) where the qualified `g4-3-v4` policy passes (1.1e-7).
   V4 is opt-in and mandatory only for UKS DH gradients. Whether to migrate the
   default is open and deliberately separate
-  (`docs/DFT_GRID_CONVERGENCE_SCOPE.md`).
+  (`docs/DFT_GRID_CONVERGENCE_SCOPE.md`). **No committed regression case runs
+  the production UKS DH gradient on V4**: the qualification evidence lives in
+  the `tests/g4_3_*` runners, not `tests/regression_cases.json`, so routing or
+  grid-contract breakage would go unnoticed by the suite.
 - Double-hybrid TDDFT is unimplemented; UKS double-hybrid geometry optimization
   and frequencies are rejected (above)
 - For range-separated functionals, `ImaginaryFollow` remains gated (the DFT
@@ -1429,7 +1432,7 @@ were corrected in the same pass: `CCGEN_UNRESTRICTED_CC` (U0) and
 - DFT imaginary-mode following is not implemented
 ### HPC campaign — what is left (verified against the tree 2026-08-30)
 
-Full measured rescope in `docs/HPC_REMAINING_SCOPE.md`. **Tiers 3 and 1 are done
+Architecture and measurements in `docs/HPC_MPI.md`. **Tiers 3 and 1 are done
 and measured** for the default engine, HF and DFT: the `planck-mpi` front end, the
 distributed direct-SCF Fock build (#146), the DFT J/K build (#151), and the **DFT
 grid rank-split (#156 — Gap 2, CLOSED)**; `src/dft/driver.cpp` carries the
@@ -1876,7 +1879,22 @@ identify the path taken. Not required for correctness or performance.
   contractions are now parallel and verified thread-count-invariant (see the
   Integral Engine note). The remaining DFT parallelization target is the grid
   layer, tracked above under the DFT gaps.
-- Rework shell-pair construction to operate at shell granularity rather than per Cartesian AO component
+- **Shell-pair granularity follow-ons** (architecture in
+  `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys
+  hoist):
+  - **B-4 — explicit `engine rys`.** The hoist is wired into Auto (B-3) but not
+    the non-Auto Rys tensor/Fock builds. It reorders accumulation, so gate at the
+    `1e-13` ERI bar, not bitwise, plus the SA-2 uphill case under `engine rys`.
+  - **Phase C — symmetry direct-SCF skeletons** (`os_symm` / `hgp_symm` /
+    `rys_symm`) are still per-AO; convert to shell-quartet carrying the signed-AO
+    orbit per component. Unblocked: block kernels exist for all three engines.
+  - **Phase D — gradient derivative ERIs** (`compute_eri_deriv_dispatch`) are
+    still per-AO. Rys has no derivative kernel, so per-quartet Auto gradients need
+    one written first. The largest remaining piece.
+  - **Phase E — retire the per-AO adapter.** Make `build_shellpairs` emit
+    shell-level `ShellPair` objects and drop `expand_shell_groups_to_ao_pairs`.
+    Last, because it changes the shared `ShellPair` contract and must resolve
+    per-component `_component_norm` folding across OS/HGP/Rys at once.
 - Eliminate remaining reversed-shell-pair reconstruction churn in gradient paths outside the already-fixed RHF path
 - Deduplicate the full-group AO-transform machinery that still exists in both `group_operations.cpp` and `mo_symmetry.cpp`
 - Extract a shared `SpatialQuartetLayout` (6-axis dims + strides +
