@@ -2036,14 +2036,21 @@ namespace DFT::Gradient
         // call. `out` owns the amplitudes; `inputs` owns the MO coefficients.
         // Nothing returned in DHGradientDriverContract may retain either
         // address through this O7.4.3 execution handoff.
+        DHEq47BlockWorkspace eq47_workspace;
         const DHEq47TiledExecution eq47_tiled{
-            &out.amplitudes, &inputs.mo_coeff, 128, 32, 16, 16, 16, 16};
+            &out.amplitudes, &inputs.mo_coeff, 128, 32, 16, 16, 16, 16,
+            &eq47_workspace};
         auto non_xc = build_dh_eq33_non_xc_gradient(
             out.relaxed_density, out.overlap_density, out.two_particle_density,
             inputs.mo_coeff, inputs.workspace->non_xc_derivatives,
             storage == DHGammaStorage::ContractionOnly ? &eq47_tiled : nullptr);
         if (!non_xc) return std::unexpected(non_xc.error());
         out.non_xc_gradient = std::move(*non_xc);
+        out.amplitude_ownership=audit_dh_amplitude_ownership(pt2,out.amplitudes);
+        out.eq47_workspace=eq47_workspace;
+        out.reference_mo_eri_bytes=inputs.workspace->mo_eri.size()*sizeof(double);
+        out.materialized_eq47_bytes=(out.two_particle_density.nonseparable_raw_ao.size()+
+            out.two_particle_density.nonseparable_symmetric_ao.size())*sizeof(double);
         auto xc_ii = build_dh_eq33_complete_xc_ii_gradient(
             out.relaxed_density, inputs.mo_coeff, inputs.xc_inputs);
         if (!xc_ii) return std::unexpected(xc_ii.error());

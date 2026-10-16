@@ -1390,6 +1390,153 @@ namespace
             expects_compact ? "direct" : "dense-reference",
             expects_compact ? static_cast<std::size_t>(2*compact_gamma.n_ao*compact_gamma.n_ao)*sizeof(double) :
                 6*compact_gamma.separable_symmetric_ao.size()*sizeof(double), response_calls);
+        // O7.6.5: exercise the *driver* handoff with the production-shaped
+        // owners.  In particular, the PT2 amplitudes are scratch-backed, the
+        // geometry workspace carries no all-MO ERI tensor or materialized
+        // AO ERI derivatives, and the Eq. (47) contribution reaches the
+        // direct derivative consumer only through bounded AO blocks.  The
+        // dense data captured below is this small fixture's independent
+        // reference for primitive derivative values; it is not retained by
+        // the resulting driver contract.
+        auto compact_reference_result = result;
+        const auto compact_t2_index = [no, nv](int i, int j, int a, int b)
+        { return ((static_cast<std::size_t>(i) * no + j) * nv + a) * nv + b; };
+        // Pair-packed production storage represents T_ia,jb = T_jb,ia.
+        // The broader water algebra fixture deliberately uses arbitrary
+        // synthetic values, so construct a separate physically admissible
+        // source for this storage/ownership comparison.
+        for (int i = 0; i < no; ++i)
+            for (int j = 0; j < no; ++j)
+                for (int a = 0; a < nv; ++a)
+                    for (int b = 0; b < nv; ++b)
+                    {
+                        const int left = i * nv + a;
+                        const int right = j * nv + b;
+                        compact_reference_result.t2[compact_t2_index(i, j, a, b)] =
+                            1e-3 * static_cast<double>(1 + std::min(left, right) * (no * nv) + std::max(left, right));
+                    }
+        const auto packed_t2 = HartreeFock::Correlation::pack_rmp2_pair_t2(compact_reference_result);
+        if (!packed_t2)
+        {
+            fail("O7.6.5 could not pack the water PT2 amplitudes");
+            return;
+        }
+        const auto scratch_t2 = HartreeFock::Correlation::make_rmp2_scratch_t2_source(
+            no, nv, packed_t2->values);
+        const auto eq40_blocks = DFT::Gradient::build_dh_molecular_eri_blocks(mo_eri, no, nv);
+        if (!scratch_t2 || !eq40_blocks)
+        {
+            fail("O7.6.5 compact stationary inputs failed");
+            return;
+        }
+        auto scratch_result = compact_reference_result;
+        scratch_result.t2.clear();
+        scratch_result.t2_pair_packed.clear();
+        scratch_result.t2_source = *scratch_t2;
+        auto production_derivatives = direct_derivatives;
+        production_derivatives.direct_two_electron = [&derivatives](
+            const DFT::Gradient::DHEq46_47TwoParticleDensity &two_particle,
+            const DFT::Gradient::DHEq47TiledExecution *eq47_tiled)
+            -> std::expected<DFT::Gradient::DHEq33TwoElectronGradient, std::string>
+        {
+            if (!eq47_tiled || !eq47_tiled->amplitudes || !eq47_tiled->mo_coeff)
+                return std::unexpected("O7.6.5 direct ERI consumer requires the Eq. (47) block stream.");
+            const Eigen::Index nao = two_particle.n_ao;
+            const Eigen::Index ncoord = static_cast<Eigen::Index>(derivatives.eri_ao.size());
+            if (two_particle.relaxed_difference_ao.rows() != nao ||
+                two_particle.ground_density_ao.rows() != nao ||
+                derivatives.eri_ao.empty() ||
+                !two_particle.nonseparable_raw_ao.empty() ||
+                !two_particle.nonseparable_symmetric_ao.empty())
+                return std::unexpected("O7.6.5 direct ERI consumer received an invalid compact density.");
+            DFT::Gradient::DHEq33TwoElectronGradient out{
+                Eigen::VectorXd::Zero(ncoord), Eigen::VectorXd::Zero(ncoord)};
+            const auto add = [&](int mu, int nu, int ka, int ta, double separable, double pair)
+            {
+                const std::size_t q = ((static_cast<std::size_t>(mu) * nao + nu) * nao + ka) * nao + ta;
+                for (Eigen::Index x = 0; x < ncoord; ++x)
+                {
+                    out.separable(x) += separable * derivatives.eri_ao[x][q];
+                    out.nonseparable(x) += pair * derivatives.eri_ao[x][q];
+                }
+            };
+            for (int mu = 0; mu < nao; ++mu)
+                for (int nu = 0; nu < nao; ++nu)
+                    for (int ka = 0; ka < nao; ++ka)
+                        for (int ta = 0; ta < nao; ++ta)
+                        {
+                            const double separable =
+                                two_particle.relaxed_difference_ao(mu, nu) * two_particle.ground_density_ao(ka, ta) -
+                                0.5 * two_particle.exact_exchange *
+                                two_particle.relaxed_difference_ao(mu, ka) * two_particle.ground_density_ao(nu, ta);
+                            add(mu, nu, ka, ta, separable, 0.0);
+                        }
+            const auto streamed = DFT::Gradient::for_each_dh_eq47_nonseparable_raw_ao_block(
+                *eq47_tiled->amplitudes, *eq47_tiled->mo_coeff,
+                eq47_tiled->occupied_tile, eq47_tiled->mu_tile, eq47_tiled->nu_tile,
+                eq47_tiled->kappa_tile, eq47_tiled->tau_tile,
+                [&add](int mu_begin, int mu_count, int nu_begin, int nu_count,
+                    int ka_begin, int ka_count, int ta_begin, int ta_count,
+                    const std::vector<double> &tile) -> std::expected<void, std::string>
+                {
+                    const std::size_t expected = static_cast<std::size_t>(mu_count) * nu_count * ka_count * ta_count;
+                    if (tile.size() != expected)
+                        return std::unexpected("O7.6.5 received an Eq. (47) tile with an invalid extent.");
+                    for (int lmu = 0; lmu < mu_count; ++lmu)
+                        for (int lnu = 0; lnu < nu_count; ++lnu)
+                            for (int lka = 0; lka < ka_count; ++lka)
+                                for (int lta = 0; lta < ta_count; ++lta)
+                                {
+                                    const std::size_t q =
+                                        ((static_cast<std::size_t>(lmu) * nu_count + lnu) * ka_count + lka) * ta_count + lta;
+                                    add(mu_begin + lmu, nu_begin + lnu, ka_begin + lka, ta_begin + lta, 0.0, tile[q]);
+                                }
+                    return {};
+                }, eq47_tiled->workspace);
+            if (!streamed) return std::unexpected(streamed.error());
+            return out;
+        };
+        const auto production_workspace = std::make_shared<const DFT::Gradient::DHGradientGeometryWorkspace>(
+            DFT::Gradient::DHGradientGeometryWorkspace{{}, std::move(production_derivatives)});
+        auto production_inputs = driver_inputs;
+        production_inputs.pt2_result = &scratch_result;
+        production_inputs.workspace = production_workspace;
+        auto production_stationary = DFT::Gradient::build_dh_stationary_products(
+            scratch_result, 0.27, c, production_inputs.response_operator, *eq40_blocks,
+            DFT::Gradient::DHTildeAmplitudeStorage::SourceView);
+        const auto production_contract = production_stationary
+            ? DFT::Gradient::build_dh_gradient_driver_contract(production_inputs, std::move(*production_stationary))
+            : std::expected<DFT::Gradient::DHGradientDriverContract, std::string>(
+                std::unexpected("O7.6.5 compact stationary assembly failed"));
+        auto compact_reference_inputs = driver_inputs;
+        compact_reference_inputs.pt2_result = &compact_reference_result;
+        const auto compact_reference_contract = DFT::Gradient::build_dh_gradient_driver_contract(
+            compact_reference_inputs);
+        if (!production_contract ||
+            !compact_reference_contract ||
+            !production_contract->amplitude_ownership.passes_production() ||
+            production_contract->reference_mo_eri_bytes != 0 ||
+            production_contract->materialized_eq47_bytes != 0 ||
+            !production_contract->two_particle_density.separable_raw_ao.empty() ||
+            !production_contract->two_particle_density.separable_symmetric_ao.empty() ||
+            !production_contract->two_particle_density.nonseparable_raw_ao.empty() ||
+            !production_contract->two_particle_density.nonseparable_symmetric_ao.empty() ||
+            production_contract->eq47_workspace.peak_live_elements == 0 ||
+            production_contract->eq47_workspace.peak_output_slab_elements == 0 ||
+            production_contract->eq47_workspace.peak_emitted_tile_elements == 0 ||
+            (production_contract->non_xc_gradient.total - compact_reference_contract->non_xc_gradient.total).norm() > 1e-11)
+        {
+            fail("O7.6.5 production driver ownership or direct Eq. (47) handoff failed");
+            return;
+        }
+        std::printf("O7.6.5 water production ownership: source=%zu reference_mo_eri=%zu materialized_eq47=%zu "
+            "workspace=(%zu,%zu,%zu) PASS\n",
+            production_contract->amplitude_ownership.source_resident_bytes,
+            production_contract->reference_mo_eri_bytes,
+            production_contract->materialized_eq47_bytes,
+            production_contract->eq47_workspace.peak_live_elements,
+            production_contract->eq47_workspace.peak_output_slab_elements,
+            production_contract->eq47_workspace.peak_emitted_tile_elements);
         // The coefficient must cross the driver boundary, not merely work
         // when passed directly to the low-level tensor builder. This is an
         // assembly test with fixed inputs, not a hybrid Z-stationarity test.

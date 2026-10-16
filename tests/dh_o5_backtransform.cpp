@@ -258,6 +258,74 @@ namespace
         }
         return ok;
     }
+
+    // O7.7: Measure the workspace owned by the actual four-index block
+    // producer, rather than the deliberately dense oracle used to validate
+    // its values.  With fixed AO and occupied tiles, the producer holds one
+    // [AO, nu, kappa, tau] output slab and at most an old/new pair of the
+    // current occupied reduction panel.  This is the exact conservative
+    // accounting recorded by DHEq47BlockWorkspace below; no final AO^4
+    // tensor belongs to the producer.
+    bool bounded_workspace_scaling()
+    {
+        constexpr int occupied_tile = 2;
+        bool ok = true;
+        for (int n : {4, 8, 12, 16})
+        {
+            const int o = n / 2, v = n - o;
+            const auto d = amplitudes(o, v, 0.27);
+            const auto c = coefficients(n, n);
+            const auto reference = build_dh_eq47_nonseparable_raw_ao(d, c);
+            if (!reference) return false;
+            for (int block : {1, 2, 3})
+            {
+                std::vector<double> actual(reference->size(), 0.0);
+                DHEq47BlockWorkspace workspace;
+                const auto streamed = for_each_dh_eq47_nonseparable_raw_ao_block(
+                    d, c, occupied_tile, block, block, block, block,
+                    [&](int mu0, int mc, int nu0, int nc, int ka0, int kc, int ta0, int tc,
+                        const std::vector<double> &tile) -> std::expected<void, std::string>
+                    {
+                        const std::size_t expected = static_cast<std::size_t>(mc) * nc * kc * tc;
+                        if (tile.size() != expected)
+                            return std::unexpected("O7.7 Eq. (47) block extent mismatch.");
+                        for (int lm = 0; lm < mc; ++lm)
+                            for (int ln = 0; ln < nc; ++ln)
+                                for (int lk = 0; lk < kc; ++lk)
+                                    for (int lt = 0; lt < tc; ++lt)
+                                    {
+                                        const std::size_t output =
+                                            ((static_cast<std::size_t>(mu0 + lm) * n + nu0 + ln) * n + ka0 + lk) * n + ta0 + lt;
+                                        const std::size_t input =
+                                            ((static_cast<std::size_t>(lm) * nc + ln) * kc + lk) * tc + lt;
+                                        actual[output] = tile[input];
+                                    }
+                        return {};
+                    }, &workspace);
+                const std::size_t output_slab = static_cast<std::size_t>(n) * block * block * block;
+                const std::size_t initial_panel = static_cast<std::size_t>(occupied_tile) * v * o * v;
+                const std::size_t tau_panel = static_cast<std::size_t>(occupied_tile) * v * o * block;
+                const std::size_t kappa_panel = static_cast<std::size_t>(occupied_tile) * v * block * block;
+                const std::size_t nu_panel = static_cast<std::size_t>(occupied_tile) * block * block * block;
+                const std::size_t emitted_tile = static_cast<std::size_t>(block) * block * block * block;
+                const std::size_t exact_bound = output_slab + std::max({
+                    initial_panel + tau_panel, tau_panel + kappa_panel,
+                    kappa_panel + nu_panel, emitted_tile});
+                const double max_error = error(actual, *reference);
+                const bool bounded = workspace.peak_live_elements <= exact_bound &&
+                    workspace.peak_output_slab_elements <= output_slab &&
+                    workspace.peak_emitted_tile_elements <= emitted_tile &&
+                    workspace.peak_live_elements < reference->size();
+                ok &= streamed && max_error < 2e-11 && bounded;
+                std::printf("O7.7 Eq47 N=%d block=%d reference_bytes=%zu producer_peak_bytes=%zu "
+                    "bound_bytes=%zu max_error=%.3e %s\n",
+                    n, block, reference->size() * sizeof(double),
+                    workspace.peak_live_elements * sizeof(double), exact_bound * sizeof(double),
+                    max_error, streamed && max_error < 2e-11 && bounded ? "PASS" : "FAIL");
+            }
+        }
+        return ok;
+    }
 }
 
 bool test_dh_o5_backtransform()
@@ -268,5 +336,6 @@ bool test_dh_o5_backtransform()
     ok &= fixture(5,2,3,0.27,1);
     ok &= fixture(5,2,3,0.27,2);
     ok &= scaling();
+    ok &= bounded_workspace_scaling();
     return ok;
 }

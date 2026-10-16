@@ -398,28 +398,85 @@ verifiable steps:
    algebraic unit tests intentionally use noncanonical raw tensors; generic
    MP2/RDM callers may also retain their independent full owner.
 
-   The stationary-product handoff now enforces the amplitude portion of this
+   The stationary-product handoff enforces the amplitude portion of this
    contract: a production `SourceView` must retain zero resident bytes for
    raw T2, packed T2, and tilde amplitudes, and must reference a valid
    nonresident source. The component fixture checks this record directly.
-   The remaining O7.6.5 closure evidence is a whole-driver peak-live audit,
-   including the Eq. 40 sector and derivative-workspace owners.
+   The physical-water driver fixture additionally constructs a scratch-backed
+   `SourceView`, gives the geometry workspace no all-MO ERI tensor, and uses
+   only the direct Eq. (33) derivative callback. It requires the returned
+   contract to retain zero materialized Eq. (46)/(47) AO tensors, records a
+   nonzero bounded Eq. (47) block-workspace ledger, and compares the complete
+   non-XC correction with an independent dense reference for the same
+   pair-symmetric amplitudes. Thus O7.6.5 closes the ownership and
+   synchronous-handoff contract; it does not claim a machine-level peak-RSS
+   measurement.
 
-O7.7 follows O7.6: it measures the resulting peak-live memory across AO size
-and tile widths, rather than inferring a memory claim from these contracts.
+### O7.7 — measured memory closure — closed 2026-10-16
 
-### O7.7 — measured memory closure
+The `planck-dh-pt2-amplitude-density` O7.7 fixture measures the actual
+`DHEq47BlockWorkspace` ledger for AO dimensions 4, 8, 12, and 16 and block
+widths 1, 2, and 3. For every row it reconstructs the direct block stream in
+the test oracle, requires equality with the dense Eq. (47) reference, and
+checks the measured live, slab, and emitted-tile counts against the exact
+fixed-tile bound implied by the producer's three transform panels. It also
+requires that the recorded producer workspace is smaller than the reference
+AO^4 tensor; the oracle's own reference allocation is explicitly excluded
+from that claim.
 
-Measure peak live memory over increasing AO dimensions with fixed block
-widths. Report direct-versus-reference equality, block-width invariance, and
-the water/C1 H2O2 molecular gates. Only then may O7 claim bounded production
-working sets.
+The normal-output Cartesian FD gates for water and C1 H2O2 both pass using
+the production executable after this fixture. They establish that the direct
+ownership path retains the already-validated end-to-end energy-gradient
+agreement. O7 is therefore closed at the bounded-working-set contract level.
+Process peak-RSS profiling and tile-I/O throughput qualification remain
+separate performance characterizations, not unresolved correctness work.
 
 ### O8 — response and XC throughput
 
-Batch grid AO values/derivatives, fuse compatible J/K traversal, and add
-reproducible parallel reductions. These are throughput improvements and must
-not drop an XC-II moving-grid channel or change closed-shell factors.
+O8 is performance work only. It cannot change the paper-object contracts,
+the Eq. (27) Hessian convention, or any XC-II moving-grid channel. The
+current code already does two important things correctly: it prepares the
+fixed-grid RKS XC kernel once per geometry (ground density and libxc first and
+second derivatives are cached), and the ordinary XC matrix builder reduces
+thread partials in a fixed order. The remaining response hot spots are
+therefore deliberately split as follows.
+
+1. **O8.1 — raw J/K paired action.** `DHEq41ResponseOperator::apply_channels`
+   currently invokes independent raw-J and raw-K direct ERI callbacks for a
+   hybrid trial density. Extend the direct-Fock traversal with a paired raw
+   `J,K` mode that shares screening, quartet generation, symmetry orbit
+   enumeration, and deterministic reductions. It must return unscaled raw
+   channels: Eq. (41) continues to apply `4J` and `-a_x(K+K^T)` at the same
+   boundary. Gate it against the present separate sweeps for arbitrary
+   symmetric AO trial densities, then against dense Eq. (27) and the water/C1
+   H2O2 Cartesian FD gates.
+
+2. **O8.2 — blocked fixed-grid XC action.** `RKSXCKernel::apply` already
+   reuses cached libxc arrays but projects one grid point at a time using
+   rank-one updates. Add a bounded point-block implementation for LDA and GGA
+   that forms the same weighted AO panels and uses deterministic fixed-order
+   block accumulation. First compare each channel against the present scalar
+   action for random symmetric trial densities, including zero-weight points,
+   LDA, and GGA. Then repeat the Eq. (27) dense-versus-matrix-free test and
+   the molecular FD gates. No geometry derivative is routed through this
+   action, so XC-II is not rewritten by this step.
+
+3. **O8.3 — batched Krylov interface.** Only after O8.1/O8.2 are equal,
+   introduce an optional multi-trial-density action used by a block Krylov
+   solver or concurrent response requests. It must preserve deterministic
+   column order and retain the existing single-vector operation as the
+   reference path. This is not justified merely by a loop rewrite: a benchmark
+   must show that the solver actually exposes useful simultaneous vectors.
+
+4. **O8.4 — reproducible throughput ledger.** Benchmark the separate and
+   optimized actions by channel count, ERI quartets, grid points, tile size,
+   and fixed thread count. Report equality before timing; do not make
+   hardware-dependent timing a correctness assertion. Peak-RSS and scratch
+   ownership are reported separately from O7's completed algebraic contract.
+
+O8.1 is the first implementation target because it removes a whole duplicate
+ERI traversal for every hybrid response action without changing the XC
+formula. O8.2 follows as the independently auditable grid-projection change.
 
 ### O9 — RI-DH backend
 

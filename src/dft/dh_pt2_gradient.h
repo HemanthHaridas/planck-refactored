@@ -499,6 +499,9 @@ namespace DFT::Gradient
         int nu_tile = 16;
         int kappa_tile = 16;
         int tau_tile = 16;
+        // Optional call-scoped O7.6.5 ledger.  The direct consumer records
+        // its bounded Eq. (47) workspace here; the pointer never escapes.
+        DHEq47BlockWorkspace *workspace = nullptr;
     };
 
     [[nodiscard]] std::expected<DHEq46_47TwoParticleDensity, std::string>
@@ -775,6 +778,12 @@ namespace DFT::Gradient
         DHEq46_47TwoParticleDensity two_particle_density;
         DHEq33NonXCGradient non_xc_gradient;
         DHEq33CompleteXCIIGradient xc_ii_gradient;
+        // Snapshot of the production-relevant retained owners after Eq. (33).
+        // It is data-only: reporting it cannot extend any workspace lifetime.
+        DHAmplitudeOwnershipAudit amplitude_ownership;
+        DHEq47BlockWorkspace eq47_workspace;
+        std::size_t reference_mo_eri_bytes = 0;
+        std::size_t materialized_eq47_bytes = 0;
     };
 
     [[nodiscard]] std::expected<DHGradientDriverContract, std::string>

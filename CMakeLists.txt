@@ -1210,6 +1210,7 @@ if(BUILD_TESTING)
     add_executable(planck-dft-coulomb-response
         ${CMAKE_SOURCE_DIR}/tests/dft_coulomb_response.cpp
         ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
+        ${SRC_DIR}/post_hf/mp2_t2_storage.cpp
         ${SRC_DIR}/dft/dh_pt2_gradient.cpp
         ${SRC_DIR}/dft/dft_gradient.cpp
         ${SRC_DIR}/dft/analytic_hessian.cpp
