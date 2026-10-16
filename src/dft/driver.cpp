@@ -4764,7 +4764,7 @@ namespace DFT::Driver
                                             kappa_begin + local_ka, tau_begin + local_ta, tile[index]);
                                     }
                         return {};
-                    });
+                    },eq47_tiled->workspace);
                 if (!tiled) return std::unexpected(tiled.error());
             }
             return out;
