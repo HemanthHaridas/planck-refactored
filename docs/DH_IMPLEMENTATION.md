@@ -13,9 +13,9 @@ Equation numbers refer to Neese, Schwabe and Grimme, *J. Chem. Phys.* **126**,
 
 ## 1. Scope and status
 
-The landed production path is the restricted, global double-hybrid Cartesian
-gradient. It supports the hybrid-KS reference plus a conventional PT2
-correction, and returns
+The primary landed production path is the restricted, global double-hybrid
+Cartesian gradient. It supports the hybrid-KS reference plus a conventional
+PT2 correction, and returns
 
 ```math
 g_\mathrm{DH}=g_\mathrm{KS}+\Delta g_\mathrm{PT2}.
@@ -25,10 +25,15 @@ RKS DH geometry optimization and semi-numerical frequencies reuse this
 gradient. A frequency calculation therefore differentiates the analytic
 gradient numerically; it is not an analytic DH Hessian.
 
+A deliberately narrower UKS global-DH analytic-gradient contract is also
+production-enabled: conventional all-active UMP2 with stored T2, no solvent or
+range separation, and the qualified V4 grid at 135 radial shells without an
+angular override. UKS DH geometry optimization and frequencies remain
+rejected. The UKS response contracts and grid qualification are independent of
+the closed-shell RKS derivation recorded below.
+
 The implementation currently excludes solvent response, range-separated DH,
-general SCS/DOS variants, and a general meta-GGA DH derivative. UKS DH has a
-separate validation and grid-qualification track; it must not be inferred
-from the RKS contracts in this document.
+general SCS/DOS variants, and a general meta-GGA DH derivative.
 
 ## 2. Conventions
 

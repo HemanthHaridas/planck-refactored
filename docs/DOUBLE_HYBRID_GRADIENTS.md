@@ -37,6 +37,12 @@ g_\mathrm{DH}=g_\mathrm{KS}+\Delta g_\mathrm{PT2}.
 RKS geometry optimization and semi-numerical frequency workflows reuse this
 same analytic-gradient path. Frequencies are not analytic DH Hessians.
 
+A narrower UKS global-DH analytic-gradient path is also production-enabled.
+It is limited to conventional all-active UMP2 with stored T2, no solvent or
+range separation, and `grid_policy g4-3-v4` with
+`grid_radial_points 135` and no angular-grid override. UKS DH geometry
+optimization and frequencies remain explicitly rejected.
+
 ## 2. The convention that controls all factors
 
 Planck uses the total closed-shell AO density
@@ -173,13 +179,15 @@ H2O2, without DH debug flags.
 
 This document makes no claim of universal DH-gradient support. In particular:
 
-- the landed production contract is RKS global DH; unrestricted, range-
-  separated, SCS, frozen-core/active-space, and near-degenerate cases need
-  their own response and validation contracts;
+- the broad production contract is RKS global DH. The narrower UKS gradient
+  contract above does not extend to UKS geometry optimization or frequencies;
+  range-separated, SCS, frozen-core/active-space, and near-degenerate cases
+  need their own response and validation contracts;
 - the XC-II implementation is LDA/GGA-like, not a general meta-GGA gradient;
 - solvated DH gradients are rejected because solvent response is absent; and
-- the performance work is still active: the global MO-ERI and canonical
-  amplitude workspaces have not yet been fully externalized or block-streamed.
+- the performance work is still active: O7 retains whole-driver memory and
+  scratch-I/O scaling qualification, despite production streaming the compact
+  PT2 amplitude and direct MO-ERI tile paths.
 
 ## 9. Where to look next
 

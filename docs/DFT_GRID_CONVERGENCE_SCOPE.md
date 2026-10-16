@@ -27,7 +27,8 @@ contractions before it is used for live molecular calculations.
 This work does not:
 
 - change a default grid;
-- enable UKS double-hybrid gradients;
+- broaden UKS double-hybrid support beyond the narrow qualified production
+  gradient contract stated above;
 - treat a direct-grid/atlas match as a scientific accuracy result; or
 - use another program's double-hybrid analytic gradient as an oracle.
 
