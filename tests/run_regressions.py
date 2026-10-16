@@ -59,12 +59,12 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
         r"Projected energy\s+[-+0-9Ee\.]+\s+\+/-\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "dft_total_energy": re.compile(r"^\s*(?:\[INF\]\s+)?DFT Energy\s*:\s*([-+0-9Ee\.]+)\s+Eh", re.MULTILINE),
     # TDDFT table rows have eight numeric columns after the integer root
-    # label. Use horizontal whitespace exclusively: `\\s` crosses line
+    # label. Use horizontal whitespace exclusively: `\s` crosses line
     # boundaries and previously let an SCF iteration be mistaken for a root.
-    "lr_root1_energy_ev": re.compile(r"^[ \\t]*1[ \\t]+[-+0-9Ee\.]+[ \\t]+([-+0-9Ee\.]+)(?:[ \\t]+[-+0-9Ee\.]+){6}[ \\t]*$", re.MULTILINE),
-    "lr_root2_energy_ev": re.compile(r"^[ \\t]*2[ \\t]+[-+0-9Ee\.]+[ \\t]+([-+0-9Ee\.]+)(?:[ \\t]+[-+0-9Ee\.]+){6}[ \\t]*$", re.MULTILINE),
-    "lr_root3_energy_ev": re.compile(r"^[ \\t]*3[ \\t]+[-+0-9Ee\.]+[ \\t]+([-+0-9Ee\.]+)(?:[ \\t]+[-+0-9Ee\.]+){6}[ \\t]*$", re.MULTILINE),
-    "lr_root4_energy_ev": re.compile(r"^[ \\t]*4[ \\t]+[-+0-9Ee\.]+[ \\t]+([-+0-9Ee\.]+)(?:[ \\t]+[-+0-9Ee\.]+){6}[ \\t]*$", re.MULTILINE),
+    "lr_root1_energy_ev": re.compile(r"^[ \t]*1[ \t]+[-+0-9Ee\.]+[ \t]+([-+0-9Ee\.]+)(?:[ \t]+[-+0-9Ee\.]+){6}[ \t]*$", re.MULTILINE),
+    "lr_root2_energy_ev": re.compile(r"^[ \t]*2[ \t]+[-+0-9Ee\.]+[ \t]+([-+0-9Ee\.]+)(?:[ \t]+[-+0-9Ee\.]+){6}[ \t]*$", re.MULTILINE),
+    "lr_root3_energy_ev": re.compile(r"^[ \t]*3[ \t]+[-+0-9Ee\.]+[ \t]+([-+0-9Ee\.]+)(?:[ \t]+[-+0-9Ee\.]+){6}[ \t]*$", re.MULTILINE),
+    "lr_root4_energy_ev": re.compile(r"^[ \t]*4[ \t]+[-+0-9Ee\.]+[ \t]+([-+0-9Ee\.]+)(?:[ \t]+[-+0-9Ee\.]+){6}[ \t]*$", re.MULTILINE),
     "casscf_converged_via_plateau": re.compile(r"casscf_converged_via_plateau=(true|false)"),
     "casscf_sa_gnorm": re.compile(r"sa_g=([-+0-9Ee\.]+)"),
     "casscf_root_screen_gnorm": re.compile(r"root_screen_g=([-+0-9Ee\.]+)"),
