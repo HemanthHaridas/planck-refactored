@@ -66,6 +66,76 @@ namespace HartreeFock::Correlation::detail
 
     using RMP2OVOVPairTileConsumer = std::function<bool(const RMP2OVOVPairTile &)>;
 
+    // Canonical restricted-MP2 consumer for an ordered OVOV tile source.
+    // It owns only the pair-packed T2 result; callers select the dense,
+    // conventional-direct, or RI-direct producer.  Keeping this seam here
+    // makes the production consumer independently testable without exposing
+    // any runtime test switch.
+    struct RMP2CompactTileResult
+    {
+        std::vector<double> t2_pair_packed;
+        double e_corr_ss = 0.0;
+        double e_corr_os = 0.0;
+    };
+
+    [[nodiscard]] inline std::expected<RMP2CompactTileResult, std::string>
+    contract_rmp2_ovov_tiles(
+        int n_occ, int n_virt, const Eigen::Ref<const Eigen::VectorXd> &mo_energy,
+        int pair_tile_width,
+        const std::function<std::expected<void, std::string>(
+            int, const RMP2OVOVPairTileConsumer &)> &producer)
+    {
+        const int npair=n_occ*n_virt;
+        if (n_occ<=0 || n_virt<=0 || mo_energy.size()!=n_occ+n_virt ||
+            pair_tile_width<=0 || !producer)
+            return std::unexpected("RMP2 compact OVOV consumer: invalid dimensions or producer.");
+        RMP2CompactTileResult out;
+        out.t2_pair_packed.assign(static_cast<std::size_t>(npair)*(npair+1)/2,0.0);
+        const auto packed_at=[&](int i,int j,int a,int b)
+        {
+            int p=i*n_virt+a, q=j*n_virt+b;
+            if (p>q) std::swap(p,q);
+            return out.t2_pair_packed[static_cast<std::size_t>(p)*npair-
+                static_cast<std::size_t>(p)*(p-1)/2+(q-p)];
+        };
+        double direct=0.0;
+        const auto consumed=producer(pair_tile_width,[&](const RMP2OVOVPairTile &tile)
+        {
+            if (tile.n_occ!=n_occ || tile.n_virt!=n_virt || tile.rows<=0 || tile.cols<=0 ||
+                tile.p0<0 || tile.q0<0 || tile.p0+tile.rows>npair || tile.q0+tile.cols>npair ||
+                tile.values.size()!=static_cast<std::size_t>(tile.rows)*tile.cols)
+                return false;
+            for(int ip=0;ip<tile.rows;++ip) for(int iq=0;iq<tile.cols;++iq)
+            {
+                const int p=tile.p0+ip, q=tile.q0+iq;
+                const int i=p/n_virt, a=p%n_virt;
+                const int j=q/n_virt, b=q%n_virt;
+                const double denominator=mo_energy(i)+mo_energy(j)-
+                    mo_energy(n_occ+a)-mo_energy(n_occ+b);
+                const double integral=tile.values[static_cast<std::size_t>(ip)*tile.cols+iq];
+                const double amplitude=integral/denominator;
+                int upper_p=p, upper_q=q;
+                if (upper_p>upper_q) std::swap(upper_p,upper_q);
+                out.t2_pair_packed[static_cast<std::size_t>(upper_p)*npair-
+                    static_cast<std::size_t>(upper_p)*(upper_p-1)/2+(upper_q-upper_p)]=amplitude;
+                direct+=amplitude*integral;
+            }
+            return true;
+        });
+        if (!consumed) return std::unexpected(consumed.error());
+        double exchange=0.0;
+        for(int i=0;i<n_occ;++i) for(int j=0;j<n_occ;++j)
+            for(int a=0;a<n_virt;++a) for(int b=0;b<n_virt;++b)
+            {
+                const double denominator=mo_energy(i)+mo_energy(j)-
+                    mo_energy(n_occ+a)-mo_energy(n_occ+b);
+                exchange-=packed_at(i,j,a,b)*packed_at(i,j,b,a)*denominator;
+            }
+        out.e_corr_os=direct;
+        out.e_corr_ss=direct+exchange;
+        return out;
+    }
+
     // Dense reference producer for O7.6.4a.  Later direct conventional and
     // RI producers must obey this exact ordered-tile contract.
     [[nodiscard]] inline std::expected<void, std::string>
@@ -264,7 +334,19 @@ namespace HartreeFock::Correlation::detail
     std::expected<ChemistsERIs, std::string> make_eris_rmp2(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
-        const RMP2Dims &dims);
+        const RMP2Dims &dims,
+        bool materialize_ovov = true);
+
+    // Build a bounded OVOV source directly from the canonical reference in
+    // `eris`.  This is deliberately separate from `make_eris_rmp2`: compact
+    // RMP2 needs only the metadata carried by ChemistsERIs, whereas legacy
+    // callers still require its materialized ovov reference tensor.
+    [[nodiscard]] std::expected<void, std::string>
+    for_each_rmp2_direct_ovov_pair_tile(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const ChemistsERIs &eris, int pair_tile_width,
+        const RMP2OVOVPairTileConsumer &consumer);
 
     std::expected<UChemistsERIs, std::string> make_eris_ump2(
         HartreeFock::Calculator &calculator,

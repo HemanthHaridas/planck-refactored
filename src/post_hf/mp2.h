@@ -4,6 +4,7 @@
 #include <Eigen/Core>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <expected>
 #include <string>
 #include <utility>
@@ -14,6 +15,8 @@
 
 namespace HartreeFock::Correlation
 {
+    struct RMP2T2PairTile;
+    struct RMP2T2TileSource;
     struct RMP2NaturalOrbitals
     {
         Eigen::VectorXd occupations;
@@ -35,31 +38,16 @@ namespace HartreeFock::Correlation
         std::vector<int> active_mo;
         std::vector<double> t2; // [i,j,a,b] row-major; empty if not requested
         std::vector<double> t2_pair_packed; // upper triangle over composite (i,a)
+        // Geometry-scoped nonresident canonical-amplitude source. Compact DH
+        // uses this instead of retaining t2_pair_packed in memory.
+        std::shared_ptr<const RMP2T2TileSource> t2_source;
         Eigen::MatrixXd mo_coeff;
         Eigen::VectorXd mo_energy;
         Eigen::VectorXd mo_occ;
 
-        [[nodiscard]] bool has_t2() const
-        {
-            const std::size_t nt=static_cast<std::size_t>(n_occ)*n_occ*n_virt*n_virt;
-            const int npair=n_occ*n_virt;
-            return t2.size()==nt || t2_pair_packed.size()==static_cast<std::size_t>(npair)*(npair+1)/2;
-        }
-
-        [[nodiscard]] double t2_at(int i, int j, int a, int b) const
-        {
-            if (i<0 || j<0 || a<0 || b<0 || i>=n_occ || j>=n_occ || a>=n_virt || b>=n_virt)
-                return std::numeric_limits<double>::quiet_NaN();
-            if (!t2.empty()) return t2[((static_cast<std::size_t>(i)*n_occ+j)*n_virt+a)*n_virt+b];
-            const int npair=n_occ*n_virt;
-            if (t2_pair_packed.size()!=static_cast<std::size_t>(npair)*(npair+1)/2)
-                return std::numeric_limits<double>::quiet_NaN();
-            int p=i*n_virt+a, q=j*n_virt+b;
-            if (p>q) std::swap(p,q);
-            const std::size_t offset=static_cast<std::size_t>(p)*npair-
-                static_cast<std::size_t>(p)*(p-1)/2+(q-p);
-            return t2_pair_packed[offset];
-        }
+        [[nodiscard]] bool has_t2() const;
+        [[nodiscard]] double t2_at(int i, int j, int a, int b) const;
+        [[nodiscard]] std::size_t resident_t2_bytes() const;
     };
 
     // Exact packed representation of canonical RHF T2. Pair interchange gives
@@ -93,6 +81,52 @@ namespace HartreeFock::Correlation
         [[nodiscard]] double at(int i, int j, int a, int b) const;
     };
 
+    struct RMP2T2TileSource
+    {
+        virtual ~RMP2T2TileSource() = default;
+        [[nodiscard]] virtual int n_occ() const = 0;
+        [[nodiscard]] virtual int n_virt() const = 0;
+        [[nodiscard]] virtual std::size_t resident_bytes() const = 0;
+        [[nodiscard]] virtual std::expected<RMP2T2PairTile, std::string>
+        read(int p0, int q0, int rows, int cols) const = 0;
+    };
+
+    [[nodiscard]] std::expected<std::shared_ptr<const RMP2T2TileSource>, std::string>
+    make_rmp2_scratch_t2_source(int n_occ, int n_virt,
+                                const std::vector<double> &pair_packed);
+
+    inline bool RMP2Result::has_t2() const
+    {
+        const std::size_t nt=static_cast<std::size_t>(n_occ)*n_occ*n_virt*n_virt;
+        const int npair=n_occ*n_virt;
+        return t2.size()==nt || t2_pair_packed.size()==static_cast<std::size_t>(npair)*(npair+1)/2 ||
+            (t2_source && t2_source->n_occ()==n_occ && t2_source->n_virt()==n_virt);
+    }
+
+    inline double RMP2Result::t2_at(int i, int j, int a, int b) const
+    {
+        if (i<0 || j<0 || a<0 || b<0 || i>=n_occ || j>=n_occ || a>=n_virt || b>=n_virt)
+            return std::numeric_limits<double>::quiet_NaN();
+        if (!t2.empty()) return t2[((static_cast<std::size_t>(i)*n_occ+j)*n_virt+a)*n_virt+b];
+        const int npair=n_occ*n_virt;
+        if (t2_pair_packed.size()==static_cast<std::size_t>(npair)*(npair+1)/2)
+        {
+            int p=i*n_virt+a, q=j*n_virt+b;
+            if (p>q) std::swap(p,q);
+            return t2_pair_packed[static_cast<std::size_t>(p)*npair-
+                static_cast<std::size_t>(p)*(p-1)/2+(q-p)];
+        }
+        if (!t2_source) return std::numeric_limits<double>::quiet_NaN();
+        auto tile=t2_source->read(i*n_virt+a,j*n_virt+b,1,1);
+        return tile ? tile->values[0] : std::numeric_limits<double>::quiet_NaN();
+    }
+
+    inline std::size_t RMP2Result::resident_t2_bytes() const
+    {
+        return t2.size()*sizeof(double)+t2_pair_packed.size()*sizeof(double)+
+            (t2_source ? t2_source->resident_bytes() : 0);
+    }
+
     using RMP2T2PairTileConsumer = std::function<bool(const RMP2T2PairTile &)>;
 
     // Streams the complete canonical T2 tensor as composite-pair tiles in
@@ -116,6 +150,8 @@ namespace HartreeFock::Correlation
         if (!result.has_t2() || result.n_occ<=0 || result.n_virt<=0 ||
             p0<0 || q0<0 || rows<=0 || cols<=0 || p0+rows>npair || q0+cols>npair)
             return std::unexpected("RMP2 T2 tile read: invalid canonical source or rectangle.");
+        if (result.t2_source)
+            return result.t2_source->read(p0,q0,rows,cols);
         RMP2T2PairTile tile{result.n_virt,p0,q0,rows,cols,
             std::vector<double>(static_cast<std::size_t>(rows)*cols)};
         for (int ip=0;ip<rows;++ip)

@@ -152,6 +152,25 @@ namespace DFT::Gradient
                            const DHTildeAmplitudePairTileConsumer &consumer) const;
     };
 
+    // O7.6.5 ownership record for the production SourceView handoff. Scratch
+    // file bytes are deliberately not resident bytes; the invariant is about
+    // live RAM duplicates of canonical/tilde amplitudes.
+    struct DHAmplitudeOwnershipAudit
+    {
+        std::size_t raw_t2_bytes = 0;
+        std::size_t packed_t2_bytes = 0;
+        std::size_t source_resident_bytes = 0;
+        std::size_t tilde_bytes = 0;
+        bool source_valid = false;
+        [[nodiscard]] bool passes_production() const
+        { return raw_t2_bytes==0 && packed_t2_bytes==0 && source_resident_bytes==0 &&
+                 tilde_bytes==0 && source_valid; }
+    };
+
+    [[nodiscard]] DHAmplitudeOwnershipAudit audit_dh_amplitude_ownership(
+        const HartreeFock::Correlation::RMP2Result &result,
+        const DHPT2AmplitudeDensity &amplitudes);
+
     [[nodiscard]] std::expected<DHPT2AmplitudeDensity, std::string>
     build_dh_pt2_amplitude_density(
         const HartreeFock::Correlation::RMP2Result &result,

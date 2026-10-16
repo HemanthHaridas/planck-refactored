@@ -524,70 +524,6 @@ namespace HartreeFock::Correlation
                         pair_dm2_ao[idx_dm2(mu, nu, la, si, nao)] = val;
                     }
 
-        // PLANCK_DEBUG_GAMMA_TRACE: numeric gate on the Gamma^NS
-        // backtransformation (Eq. 47). H2.2 verified the AMPLITUDES
-        // elementwise to 8e-9 and concluded "and with them Gamma^NS" -- but
-        // that inference does not hold: Gamma is the backtransformation OF
-        // the amplitudes, so a correct t2 with a wrong backtransformation
-        // still gives a wrong Gamma. D4 flags Eq. 47's (1+delta_ij) weight as
-        // checked only for convention-equivalence, never numerically. This is
-        // that check.
-        //
-        // The invariant needs no external reference. Contracting Gamma with
-        // the UNDIFFERENTIATED ERIs must reproduce a fixed multiple of the
-        // MP2 correlation energy, because both are contractions of the same
-        // amplitudes against the same integrals:
-        //
-        //   E_corr        = sum_ijab (2*t_ijab - t_ijba) (ia|jb)
-        //   dovov         = 4*t_ijab - 2*t_ijba          =  2x the above weight
-        //   both orderings summed                        =  2x again
-        //   => sum_{munulasi} Gamma (munu|lasi) == 4 * E_corr
-        //
-        // A wrong permutation, a missing/spurious (1+delta_ij), a dropped
-        // ordering or a transposed backtransform all break this ratio, and it
-        // is exact rather than tolerance-based.
-        if (const char *dbg = std::getenv("PLANCK_DEBUG_GAMMA_TRACE"))
-        {
-            if (std::string_view(dbg) == "1")
-            {
-                std::vector<double> eri_chk;
-                const std::vector<double> &eri_ref =
-                    ensure_eri(calculator, shell_pairs, eri_chk, "Gamma trace :");
-                double tr = 0.0;
-                for (int mu = 0; mu < nao; ++mu)
-                    for (int nu = 0; nu < nao; ++nu)
-                        for (int la = 0; la < nao; ++la)
-                            for (int si = 0; si < nao; ++si)
-                                tr += pair_dm2_ao[idx_dm2(mu, nu, la, si, nao)] *
-                                      eri_ref[idx_dm2(mu, nu, la, si, nao)];
-
-                double e_corr = 0.0;
-                for (int i = 0; i < nocc; ++i)
-                    for (int j = 0; j < nocc; ++j)
-                        for (int a = 0; a < nvirt; ++a)
-                            for (int b = 0; b < nvirt; ++b)
-                            {
-                                const double tab = result.t2[detail::idx_t2(i, j, a, b, nocc, nvirt)];
-                                const double tba = result.t2[detail::idx_t2(i, j, b, a, nocc, nvirt)];
-                                double iajb = 0.0;
-                                for (int mu = 0; mu < nao; ++mu)
-                                    for (int nu = 0; nu < nao; ++nu)
-                                        for (int la = 0; la < nao; ++la)
-                                            for (int si = 0; si < nao; ++si)
-                                                iajb += C_occ(mu, i) * C_virt(nu, a) *
-                                                        C_occ(la, j) * C_virt(si, b) *
-                                                        eri_ref[idx_dm2(mu, nu, la, si, nao)];
-                                e_corr += (2.0 * tab - tba) * iajb;
-                            }
-
-                std::cout << std::setprecision(12)
-                          << "PLANCK_GAMMA_TRACE tr=" << tr
-                          << " E_corr=" << e_corr
-                          << " ratio=" << (e_corr != 0.0 ? tr / e_corr : 0.0)
-                          << " (expect 4.0)\n";
-            }
-        }
-
         std::vector<std::vector<int>> atom_aos = build_atom_ao_lists(calculator);
 
         // Debug output
@@ -620,9 +556,6 @@ namespace HartreeFock::Correlation
         const auto &bfs = calculator._shells._basis_functions;
         const Eigen::MatrixXd hf_dm1 = 2.0 * C_occ * C_occ.transpose();
 
-        double kx_vhf1 = 1.0;
-        if (const char *e = std::getenv("PLANCK_DEBUG_VHF1_KX"))
-            kx_vhf1 = std::strtod(e, nullptr);
         for (std::size_t atom = 0; atom < atom_aos.size(); ++atom)
         {
             for (int p : atom_aos[atom])
@@ -653,23 +586,12 @@ namespace HartreeFock::Correlation
                             // contraction that used to be fused here) now comes
                             // from build_rmp2_lagrangian above.
 
-                            // PLANCK_DEBUG_VHF1_KX: weight control on vhf1's
-                            // EXCHANGE half. This builds the reference
-                            // mean-field response contracted against the
-                            // relaxed correction density (line ~777), and it
-                            // is hardcoded to HF's J - K/2. For a double
-                            // hybrid the reference is KS, so the exchange
-                            // should carry a_x and there should be an XC
-                            // response alongside. D4 named this KS-vs-HF gap
-                            // for vhf_s1occ (the OVERLAP term); this is the
-                            // same gap at the DERIVATIVE site, which no probe
-                            // has touched. Default 1.0 => byte-identical.
                             for (int comp = 0; comp < 3; ++comp)
                             {
                                 vhf1[atom][comp](r, s) += dI[comp] * hf_dm1(p, q);
-                                vhf1[atom][comp](r, q) -= kx_vhf1 * 0.5 * dI[comp] * hf_dm1(p, s);
+                                vhf1[atom][comp](r, q) -= 0.5 * dI[comp] * hf_dm1(p, s);
                                 vhf1[atom][comp](p, q) += dI[comp] * hf_dm1(r, s);
-                                vhf1[atom][comp](p, s) -= kx_vhf1 * 0.5 * dI[comp] * hf_dm1(q, r);
+                                vhf1[atom][comp](p, s) -= 0.5 * dI[comp] * hf_dm1(q, r);
                             }
                         }
         }
@@ -765,17 +687,6 @@ namespace HartreeFock::Correlation
         maybe_print_rmp2_matrix("dm1_corr_relaxed_ao", dm1_corr_relaxed_ao);
         maybe_print_rmp2_matrix("dm1p", dm1p);
 
-        // PLANCK_DEBUG_OVERLAP_SCALE="a,b,c": independent scale controls on
-        // the three <W S^(x)> pieces (s_im1, s_zeta, s_vhf). A4 of
-        // docs/DH_CORR_GRADIENT_DEFECT_SCOPE.md: these are the only *corr
-        // pieces contracted against S^(x), which is intrinsically
-        // bond-directed and antisymmetric between a bonded pair -- matching
-        // the defect's measured signature. RMP2/DH path only. 1,1,1 default
-        // => byte-identical.
-        double sc_im1 = 1.0, sc_zeta = 1.0, sc_vhf = 1.0;
-        if (const char *e = std::getenv("PLANCK_DEBUG_OVERLAP_SCALE"))
-            std::sscanf(e, "%lf,%lf,%lf", &sc_im1, &sc_zeta, &sc_vhf);
-
         Eigen::MatrixXd overlap_terms = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
         Eigen::MatrixXd s_im1_terms = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
         Eigen::MatrixXd s_zeta_terms = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
@@ -788,14 +699,14 @@ namespace HartreeFock::Correlation
                     const auto dST = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp);
                     for (int q = 0; q < 3; ++q)
                     {
-                        const double s_im1 = sc_im1 * (
+                        const double s_im1 =
                             dST[q] * imat_ao(p, nu) +
-                            dST[q] * imat_ao(nu, p));
-                        const double s_zeta = sc_zeta * (
+                            dST[q] * imat_ao(nu, p);
+                        const double s_zeta =
                             -dST[q] * zeta_ao(p, nu) -
-                            dST[q] * zeta_ao(nu, p));
-                        const double s_vhf = sc_vhf * (
-                            -2.0 * dST[q] * vhf_s1occ(p, nu));
+                            dST[q] * zeta_ao(nu, p);
+                        const double s_vhf =
+                            -2.0 * dST[q] * vhf_s1occ(p, nu);
                         s_im1_terms(atom, q) += s_im1;
                         s_zeta_terms(atom, q) += s_zeta;
                         s_vhf_terms(atom, q) += s_vhf;

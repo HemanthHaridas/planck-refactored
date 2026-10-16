@@ -1,7 +1,11 @@
 #include "mp2.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <limits>
 
 namespace HartreeFock::Correlation
@@ -17,6 +21,37 @@ namespace HartreeFock::Correlation
             return static_cast<std::size_t>(p)*npair-
                 static_cast<std::size_t>(p)*(p-1)/2+(q-p);
         }
+
+        class ScratchT2Source final : public RMP2T2TileSource
+        {
+        public:
+            ScratchT2Source(int no,int nv,std::filesystem::path path)
+                : no_(no), nv_(nv), path_(std::move(path)) {}
+            ~ScratchT2Source() override { std::error_code ignored; std::filesystem::remove(path_,ignored); }
+            int n_occ() const override { return no_; }
+            int n_virt() const override { return nv_; }
+            std::size_t resident_bytes() const override { return 0; }
+            std::expected<RMP2T2PairTile,std::string> read(int p0,int q0,int rows,int cols) const override
+            {
+                const int npair=no_*nv_;
+                if(p0<0 || q0<0 || rows<=0 || cols<=0 || p0+rows>npair || q0+cols>npair)
+                    return std::unexpected("RMP2 scratch T2 source: invalid tile extent.");
+                std::ifstream stream(path_,std::ios::binary);
+                if(!stream) return std::unexpected("RMP2 scratch T2 source: cannot reopen amplitude file.");
+                RMP2T2PairTile out{nv_,p0,q0,rows,cols,
+                    std::vector<double>(static_cast<std::size_t>(rows)*cols)};
+                for(int ip=0;ip<rows;++ip) for(int iq=0;iq<cols;++iq)
+                {
+                    int p=p0+ip,q=q0+iq; if(p>q) std::swap(p,q);
+                    stream.seekg(static_cast<std::streamoff>(rmp2_pair_index(p,q,npair)*sizeof(double)));
+                    stream.read(reinterpret_cast<char *>(&out.values[static_cast<std::size_t>(ip)*cols+iq]),sizeof(double));
+                    if(!stream) return std::unexpected("RMP2 scratch T2 source: truncated amplitude file.");
+                }
+                return out;
+            }
+        private:
+            int no_,nv_; std::filesystem::path path_;
+        };
     }
 
     double RMP2PairPackedT2::at(int i,int j,int a,int b) const
@@ -47,6 +82,25 @@ namespace HartreeFock::Correlation
                 out.values[rmp2_pair_index(i*nv+a,j*nv+b,npair)]=value;
             }
         return out;
+    }
+
+    std::expected<std::shared_ptr<const RMP2T2TileSource>,std::string>
+    make_rmp2_scratch_t2_source(int no,int nv,const std::vector<double> &values)
+    {
+        const int npair=no*nv;
+        if(no<=0 || nv<=0 || values.size()!=static_cast<std::size_t>(npair)*(npair+1)/2)
+            return std::unexpected("RMP2 scratch T2 source: invalid packed amplitude extent.");
+        static std::atomic<unsigned long long> serial{0};
+        const auto stamp=std::chrono::steady_clock::now().time_since_epoch().count();
+        const auto path=std::filesystem::temp_directory_path()/
+            ("planck-rmp2-t2-"+std::to_string(stamp)+"-"+std::to_string(serial++)+".bin");
+        std::ofstream stream(path,std::ios::binary|std::ios::trunc);
+        if(!stream) return std::unexpected("RMP2 scratch T2 source: cannot create amplitude file.");
+        stream.write(reinterpret_cast<const char *>(values.data()),static_cast<std::streamsize>(values.size()*sizeof(double)));
+        if(!stream) { std::error_code ignored; std::filesystem::remove(path,ignored);
+            return std::unexpected("RMP2 scratch T2 source: cannot write amplitude file."); }
+        return std::shared_ptr<const RMP2T2TileSource>(
+            std::make_shared<ScratchT2Source>(no,nv,path));
     }
 
     double RMP2T2PairTile::at(int i,int j,int a,int b) const

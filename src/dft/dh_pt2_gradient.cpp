@@ -170,6 +170,21 @@ namespace DFT::Gradient
             : (t_tilde.empty() && source_pt2!=nullptr && source_pt2->has_t2());
     }
 
+    DHAmplitudeOwnershipAudit audit_dh_amplitude_ownership(
+        const HartreeFock::Correlation::RMP2Result &result,
+        const DHPT2AmplitudeDensity &amplitudes)
+    {
+        DHAmplitudeOwnershipAudit out;
+        out.raw_t2_bytes=result.t2.size()*sizeof(double);
+        out.packed_t2_bytes=result.t2_pair_packed.size()*sizeof(double);
+        out.source_resident_bytes=result.t2_source ? result.t2_source->resident_bytes() : 0;
+        out.tilde_bytes=amplitudes.t_tilde.size()*sizeof(double);
+        out.source_valid=amplitudes.storage==DHTildeAmplitudeStorage::SourceView &&
+            amplitudes.source_pt2==&result && result.t2_source &&
+            result.t2_source->n_occ()==result.n_occ && result.t2_source->n_virt()==result.n_virt;
+        return out;
+    }
+
     std::expected<void, std::string>
     DHPT2AmplitudeDensity::for_each_pair_tile(
         int pair_tile_width, const DHTildeAmplitudePairTileConsumer &consumer) const

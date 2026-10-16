@@ -3,6 +3,7 @@
 
 #include <Eigen/Eigenvalues>
 #include <expected>
+#include <functional>
 #include <string>
 
 namespace
@@ -11,6 +12,9 @@ namespace
     using HartreeFock::Correlation::detail::RMP2Dims;
     using HartreeFock::Correlation::detail::idx_ovov;
     using HartreeFock::Correlation::detail::idx_t2;
+    using OVOVTileProducer = std::function<std::expected<void, std::string>(
+        int, const HartreeFock::Correlation::detail::RMP2OVOVPairTileConsumer &)>;
+    constexpr int compact_ovov_tile_width=32;
 
     std::expected<void, std::string> canonical_kernel(
         const ChemistsERIs &eris,
@@ -18,6 +22,7 @@ namespace
         int n_virt,
         bool with_t2,
         bool compact_t2,
+        const OVOVTileProducer *direct_ovov,
         std::vector<double> &t2,
         std::vector<double> &packed_t2,
         double &e_ss,
@@ -32,47 +37,19 @@ namespace
         // retaining or randomly indexing OVOV.
         if (with_t2 && compact_t2)
         {
-            const int npair=n_occ*n_virt;
-            packed_t2.assign(static_cast<std::size_t>(npair)*(npair+1)/2,0.0);
-            double direct=0.0;
-            const auto packed_at=[&](int i,int j,int a,int b)
+            const auto producer=[&](int width,
+                                    const HartreeFock::Correlation::detail::RMP2OVOVPairTileConsumer &consumer)
+                -> std::expected<void,std::string>
             {
-                int p=i*n_virt+a, q=j*n_virt+b;
-                if (p>q) std::swap(p,q);
-                return packed_t2[static_cast<std::size_t>(p)*npair-
-                    static_cast<std::size_t>(p)*(p-1)/2+(q-p)];
+                return direct_ovov ? (*direct_ovov)(width,consumer) :
+                    HartreeFock::Correlation::detail::for_each_rmp2_ovov_pair_tile(eris,width,consumer);
             };
-            const auto streamed=HartreeFock::Correlation::detail::for_each_rmp2_ovov_pair_tile(
-                eris,32,[&](const HartreeFock::Correlation::detail::RMP2OVOVPairTile &tile)
-                {
-                    for(int ip=0;ip<tile.rows;++ip)
-                        for(int iq=0;iq<tile.cols;++iq)
-                        {
-                            const int p=tile.p0+ip, q=tile.q0+iq;
-                            const int i=p/n_virt, a=p%n_virt;
-                            const int j=q/n_virt, b=q%n_virt;
-                            const double denom=eris.mo_energy(i)+eris.mo_energy(j)-
-                                eris.mo_energy(n_occ+a)-eris.mo_energy(n_occ+b);
-                            const double t=tile.values[static_cast<std::size_t>(ip)*tile.cols+iq]/denom;
-                            int upper_p=p, upper_q=q;
-                            if (upper_p>upper_q) std::swap(upper_p,upper_q);
-                            packed_t2[static_cast<std::size_t>(upper_p)*npair-
-                                static_cast<std::size_t>(upper_p)*(upper_p-1)/2+(upper_q-upper_p)]=t;
-                            direct+=t*tile.values[static_cast<std::size_t>(ip)*tile.cols+iq];
-                        }
-                    return true;
-                });
-            if (!streamed) return std::unexpected(streamed.error());
-            double exchange=0.0;
-            for(int i=0;i<n_occ;++i) for(int j=0;j<n_occ;++j)
-                for(int a=0;a<n_virt;++a) for(int b=0;b<n_virt;++b)
-                {
-                    const double denom=eris.mo_energy(i)+eris.mo_energy(j)-
-                        eris.mo_energy(n_occ+a)-eris.mo_energy(n_occ+b);
-                    exchange-=packed_at(i,j,a,b)*packed_at(i,j,b,a)*denom;
-                }
-            e_os=direct;
-            e_ss=direct+exchange;
+            auto compact=HartreeFock::Correlation::detail::contract_rmp2_ovov_tiles(
+                n_occ,n_virt,eris.mo_energy,compact_ovov_tile_width,producer);
+            if (!compact) return std::unexpected(compact.error());
+            packed_t2=std::move(compact->t2_pair_packed);
+            e_ss=compact->e_corr_ss;
+            e_os=compact->e_corr_os;
             return {};
         }
         if (with_t2 && !compact_t2)
@@ -101,6 +78,7 @@ namespace
                     }
         return {};
     }
+
 }
 
 namespace HartreeFock::Correlation
@@ -115,7 +93,9 @@ namespace HartreeFock::Correlation
             return std::unexpected(dims_res.error());
         const RMP2Dims &dims = *dims_res;
 
-        auto eris_res = detail::make_eris_rmp2(calculator, shell_pairs, dims);
+        const bool compact_direct=options.with_t2 && options.compact_t2_storage;
+        auto eris_res = detail::make_eris_rmp2(calculator, shell_pairs, dims,
+                                                !compact_direct);
         if (!eris_res)
             return std::unexpected(eris_res.error());
         const ChemistsERIs &eris = *eris_res;
@@ -129,10 +109,30 @@ namespace HartreeFock::Correlation
         out.mo_occ = Eigen::VectorXd::Zero(dims.n_mo);
         out.mo_occ.head(dims.n_occ).setConstant(2.0);
 
+        OVOVTileProducer direct_ovov;
+        if (compact_direct)
+        {
+            direct_ovov=[&calculator,&shell_pairs,&eris](
+                int width,const detail::RMP2OVOVPairTileConsumer &consumer)
+            {
+                return detail::for_each_rmp2_direct_ovov_pair_tile(
+                    calculator,shell_pairs,eris,width,consumer);
+            };
+        }
         auto canonical=canonical_kernel(eris,dims.n_occ,dims.n_virt,options.with_t2,
-                                        options.compact_t2_storage,out.t2,out.t2_pair_packed,
+                                        options.compact_t2_storage,
+                                        compact_direct ? &direct_ovov : nullptr,
+                                        out.t2,out.t2_pair_packed,
                                         out.e_corr_ss,out.e_corr_os);
         if (!canonical) return std::unexpected(canonical.error());
+        if (compact_direct)
+        {
+            auto source=make_rmp2_scratch_t2_source(
+                out.n_occ,out.n_virt,out.t2_pair_packed);
+            if(!source) return std::unexpected(source.error());
+            out.t2_source=std::move(*source);
+            std::vector<double>().swap(out.t2_pair_packed);
+        }
         out.e_corr = out.e_corr_ss + out.e_corr_os;
         out.converged = true;
         out.n_iter = 0;

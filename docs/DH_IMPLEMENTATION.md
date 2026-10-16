@@ -177,10 +177,7 @@ needed by the literal Eq. 40 RHS:
 | `ovvv` | `(ia|bc)` |
 | `ovoo` | `(ia|jk)` |
 
-`DHMolecularERIBlocks` makes those layouts explicit. An environment-gated
-reference oracle (`PLANCK_DFT_DH_EQ40_DENSE_REFERENCE`) performs the
-all-MO transform only when requested and verifies all five direct sectors.
-Ordinary RKS DH gradients do not allocate a global MO-ERI tensor.
+`DHMolecularERIBlocks` makes those layouts explicit. Ordinary RKS DH gradients do not allocate a global MO-ERI tensor.
 
 For Eq. 46, production retains only quadratic `D`, `P`, and `a_x` data and
 evaluates the separable coefficient during ERI-derivative traversal. For
@@ -198,11 +195,11 @@ contract. `ReferenceAll` remains available for literal dense comparisons.
 | Eq. 47 penultimate transform | blocked with an explicit workspace ledger |
 | Scaled tilde tensor | removed; source-backed view |
 | Calculator MP2 T2 copy during gradient | removed; metadata-only handoff |
-| Canonical T2 | still globally materialized |
+| Canonical T2 | pair-packed scratch-backed tile source; no resident amplitude buffer |
 
-The last row is the remaining O7 closure item. Exact options are a bounded
-block provider or recoverable external storage with a documented I/O budget.
-It is not correct to call O7 complete until that canonical owner is bounded.
+The canonical amplitude owner is a recoverable external source. Its remaining
+O7 evidence is not a storage redesign, but a measured whole-driver live-memory
+and I/O qualification across increasing AO dimensions and tile widths.
 
 ## 7. Validation model
 
@@ -352,7 +349,20 @@ verifiable steps:
    packed-T2 production consume tiles. Validate energies, full/packed T2,
    pair symmetry, and tile-width invariance against the current canonical
    kernel. Remove the production `ChemistsERIs::ovov` owner only after those
-   checks pass.
+   checks pass. **Implemented:** the compact canonical branch now requests
+   metadata-only `ChemistsERIs` and invokes the direct producer at its kernel
+   seam. Conventional calculations stream AO-ERI transformed tiles; RI
+   calculations stream bounded pair-factor Gram panels. The dense `ovov`
+   builder and consumer remain the non-compact reference path. The AO-ERI
+   cache and RI pair-factor panel are separate source owners and are not
+   claimed to be removed by this step.
+
+   `planck-dh-pt2-amplitude-density` exercises that same canonical tile
+   consumer with dense, conventional-direct, and RI-direct producers at
+   widths 1, 2, and oversized widths. It compares pair-packed amplitudes and
+   both spin energy components; this is a test fixture only, with no runtime
+   environment override or dense-reference allocation in production.
+
 5. **O7.6.4e — DH recoverable amplitude source.** Migrate Eq. 37--40 and
    Eq. 47 consumers from scalar `t2_at` calls to their natural amplitude-tile
    access patterns. The source may be an external/recomputable provider, but
@@ -368,12 +378,27 @@ verifiable steps:
    Eq. 39 oracle. The typed Eq. 40 production builder now also scatters the
    literal four coefficient slots directly from those tiles; its dense scalar
    builder remains an equality oracle only. This establishes the DH-facing
-   contract but does not yet close O7.6.4e: the current source remains the
-   in-memory full/packed `RMP2Result` owner, not a recoverable backend.
+   contract. The compact RMP2 owner is now a geometry-scoped, self-cleaning
+   scratch-backed packed-amplitude source: after the canonical energy pass it
+   clears the in-memory packed vector, and DH reloads only the requested
+   composite-pair tile. The component fixture verifies scalar/tile equality
+   and proves that both in-memory amplitude buffers are empty for this source.
+   The remaining O7.6.4e work is performance qualification of its tile I/O;
+   it no longer has an in-memory full/packed fallback.
 6. **O7.6.5 — ownership audit.** Verify that normal RKS-DH gradient,
    optimization, and frequency calls retain neither a duplicate `t_tilde`, a
    full canonical T2, nor a full transformed `ovov` buffer after its consumer
-   finishes. Generic MP2/RDM callers may retain their independent full owner.
+   finishes. The production driver enforces this at its stationary-product
+   handoff. Generic stationary builders remain permissive because their
+   algebraic unit tests intentionally use noncanonical raw tensors; generic
+   MP2/RDM callers may also retain their independent full owner.
+
+   The stationary-product handoff now enforces the amplitude portion of this
+   contract: a production `SourceView` must retain zero resident bytes for
+   raw T2, packed T2, and tilde amplitudes, and must reference a valid
+   nonresident source. The component fixture checks this record directly.
+   The remaining O7.6.5 closure evidence is a whole-driver peak-live audit,
+   including the Eq. 40 sector and derivative-workspace owners.
 
 O7.7 follows O7.6: it measures the resulting peak-live memory across AO size
 and tile widths, rather than inferring a memory claim from these contracts.

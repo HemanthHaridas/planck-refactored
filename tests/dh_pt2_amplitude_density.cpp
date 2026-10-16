@@ -298,6 +298,37 @@ int main()
         ok &= conventional_tiles_ok && conventional_tile_error<1e-12;
         std::printf("O7.6.4b conventional OVOV direct tiles max_error=%.3e %s\n",
             conventional_tile_error,conventional_tiles_ok && conventional_tile_error<1e-12 ? "PASS" : "FAIL");
+
+        // O7.6.4d: exercise the production canonical tile consumer with the
+        // dense oracle and the direct conventional producer at every width.
+        HartreeFock::Correlation::detail::ChemistsERIs dense;
+        dense.nocc=no; dense.mo_coeff=Eigen::MatrixXd::Identity(nao,nao);
+        dense.mo_energy.resize(no+nv); dense.mo_energy << -0.8,0.2,0.6;
+        dense.ovov=ovov_reference;
+        double kernel_error=0.0;
+        bool kernel_ok=true;
+        for (const int width : {1,2,5})
+        {
+            const auto reference=HartreeFock::Correlation::detail::contract_rmp2_ovov_tiles(
+                no,nv,dense.mo_energy,width,[&](int w,const auto &consumer)
+                { return HartreeFock::Correlation::detail::for_each_rmp2_ovov_pair_tile(dense,w,consumer); });
+            const auto direct=HartreeFock::Correlation::detail::contract_rmp2_ovov_tiles(
+                no,nv,dense.mo_energy,width,[&](int w,const auto &consumer)
+                { return HartreeFock::Correlation::detail::for_each_rmp2_ovov_conventional_tile(
+                    eri_ao,nao,c_occ,c_virt,w,consumer); });
+            kernel_ok &= reference.has_value() && direct.has_value();
+            if (reference && direct)
+            {
+                kernel_error=std::max(kernel_error,std::abs(reference->e_corr_ss-direct->e_corr_ss));
+                kernel_error=std::max(kernel_error,std::abs(reference->e_corr_os-direct->e_corr_os));
+                for(std::size_t q=0;q<reference->t2_pair_packed.size();++q)
+                    kernel_error=std::max(kernel_error,std::abs(
+                        reference->t2_pair_packed[q]-direct->t2_pair_packed[q]));
+            }
+        }
+        ok &= kernel_ok && kernel_error<1e-12;
+        std::printf("O7.6.4d conventional compact kernel max_error=%.3e %s\n",
+            kernel_error,kernel_ok && kernel_error<1e-12 ? "PASS" : "FAIL");
     }
     // O7.6.4c: RI factors are contracted into the same bounded tiles, never
     // first expanded to a complete pair-pair Gram matrix.
@@ -334,6 +365,36 @@ int main()
         ok &= ri_tiles_ok && ri_tile_error<1e-13;
         std::printf("O7.6.4c RI OVOV direct tiles max_error=%.3e %s\n",
             ri_tile_error,ri_tiles_ok && ri_tile_error<1e-13 ? "PASS" : "FAIL");
+
+        HartreeFock::Correlation::detail::ChemistsERIs dense;
+        dense.nocc=no; dense.mo_coeff=Eigen::MatrixXd::Identity(no+nv,no+nv);
+        dense.mo_energy.resize(no+nv); dense.mo_energy << -1.1,-0.7,0.2,0.8;
+        dense.ovov.resize(static_cast<std::size_t>(npair)*npair);
+        for(int p=0;p<npair;++p) for(int q=0;q<npair;++q)
+            dense.ovov[static_cast<std::size_t>(p)*npair+q]=reference(p,q);
+        double kernel_error=0.0;
+        bool kernel_ok=true;
+        for (const int width : {1,3,7})
+        {
+            const auto dense_result=HartreeFock::Correlation::detail::contract_rmp2_ovov_tiles(
+                no,nv,dense.mo_energy,width,[&](int w,const auto &consumer)
+                { return HartreeFock::Correlation::detail::for_each_rmp2_ovov_pair_tile(dense,w,consumer); });
+            const auto ri_result=HartreeFock::Correlation::detail::contract_rmp2_ovov_tiles(
+                no,nv,dense.mo_energy,width,[&](int w,const auto &consumer)
+                { return HartreeFock::Correlation::detail::for_each_rmp2_ovov_ri_tile(b_ov,no,nv,w,consumer); });
+            kernel_ok &= dense_result.has_value() && ri_result.has_value();
+            if (dense_result && ri_result)
+            {
+                kernel_error=std::max(kernel_error,std::abs(dense_result->e_corr_ss-ri_result->e_corr_ss));
+                kernel_error=std::max(kernel_error,std::abs(dense_result->e_corr_os-ri_result->e_corr_os));
+                for(std::size_t q=0;q<dense_result->t2_pair_packed.size();++q)
+                    kernel_error=std::max(kernel_error,std::abs(
+                        dense_result->t2_pair_packed[q]-ri_result->t2_pair_packed[q]));
+            }
+        }
+        ok &= kernel_ok && kernel_error<1e-12;
+        std::printf("O7.6.4d RI compact kernel max_error=%.3e %s\n",
+            kernel_error,kernel_ok && kernel_error<1e-12 ? "PASS" : "FAIL");
     }
     // O7.6.3c: the storage-independent composite-pair stream must visit every
     // ordered canonical amplitude exactly once, with a bounded tile scratch.
@@ -343,11 +404,39 @@ int main()
         auto compact_result=rpacked40;
         compact_result.t2.clear();
         compact_result.t2_pair_packed=packed40->values;
+        // O7.6.4e: the production owner is a geometry-scoped scratch source,
+        // not an in-memory packed vector.  Its tile API must be exactly
+        // interchangeable with both legacy in-memory representations.
+        auto scratch=HartreeFock::Correlation::make_rmp2_scratch_t2_source(
+            compact_result.n_occ,compact_result.n_virt,compact_result.t2_pair_packed);
+        auto scratch_result=compact_result;
+        if (scratch)
+        {
+            scratch_result.t2_source=*scratch;
+            scratch_result.t2_pair_packed.clear();
+        }
+        double scratch_error=0.0;
+        if (scratch)
+            for(int i=0;i<rpacked40.n_occ;++i) for(int j=0;j<rpacked40.n_occ;++j)
+                for(int a=0;a<rpacked40.n_virt;++a) for(int b=0;b<rpacked40.n_virt;++b)
+                    scratch_error=std::max(scratch_error,std::abs(
+                        scratch_result.t2_at(i,j,a,b)-rpacked40.t2[idx(i,j,a,b)]));
+        ok &= scratch && scratch_result.t2.empty() && scratch_result.t2_pair_packed.empty() &&
+            scratch_error<1e-13;
+        auto scratch_density=DFT::Gradient::build_dh_pt2_amplitude_density(
+            scratch_result,0.27,DFT::Gradient::DHTildeAmplitudeStorage::SourceView);
+        const auto ownership=scratch_density
+            ? DFT::Gradient::audit_dh_amplitude_ownership(scratch_result,*scratch_density)
+            : DFT::Gradient::DHAmplitudeOwnershipAudit{};
+        ok &= scratch_density && ownership.passes_production();
+        std::printf("O7.6.4e scratch T2 source max_error=%.3e storage=(%zu,%zu) %s\n",
+            scratch_error,scratch_result.t2.size(),scratch_result.t2_pair_packed.size(),
+            scratch && scratch_error<1e-13 && ownership.passes_production() ? "PASS" : "FAIL");
         ok &= !HartreeFock::Correlation::for_each_rmp2_t2_pair_tile(
             compact_result,0,[](const auto &){ return true; });
         double tile_error=0.0;
         bool tile_ok=true;
-        for (const auto *source : {&rpacked40,&compact_result})
+        for (const auto *source : {&rpacked40,&compact_result,&scratch_result})
             for (const int width : {1,2,5})
             {
                 const int npair=source->n_occ*source->n_virt;

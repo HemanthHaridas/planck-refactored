@@ -149,12 +149,6 @@ namespace DFT::Driver
             return value != nullptr && std::string(value) != "0";
         }
 
-        bool dft_allow_unvalidated_range_separated_workflows()
-        {
-            const char *value = std::getenv("PLANCK_DFT_ALLOW_RS_WORKFLOWS");
-            return value != nullptr && std::string(value) != "0";
-        }
-
         Eigen::MatrixXd rotate_gradient_rows(
             const Eigen::Ref<const Eigen::MatrixXd> &gradient,
             const Eigen::Matrix3d &rotation)
@@ -3117,17 +3111,6 @@ namespace DFT::Driver
                 }
             }
 
-            if (functionals.has_range_separation &&
-                !functionals.has_double_hybrid_pt2 &&
-                dft_allow_unvalidated_range_separated_workflows())
-            {
-                HartreeFock::Logger::logging(
-                    HartreeFock::LogLevel::Warning,
-                    "DFT Driver :",
-                    "Debug override enabled: allowing unvalidated range-separated non-single-point workflow");
-                return {};
-            }
-
             if (!functionals.has_range_separation &&
                 !functionals.has_double_hybrid_pt2)
                 return {};
@@ -4871,31 +4854,18 @@ namespace DFT::Driver
         auto direct_blocks=build_dh_eq40_mo_eri_blocks_direct(eri_ao,static_cast<std::size_t>(nao),
             pt2_result.mo_coeff.leftCols(nocc),pt2_result.mo_coeff.rightCols(nvirt));
         if(!direct_blocks) return std::unexpected("DH Eq. 40 direct MO sector construction failed.");
-        const auto sector_equal=[](const std::vector<double> &a,const std::vector<double> &b)
-        {
-            if(a.size()!=b.size()) return false;
-            double error=0.0;
-            for(std::size_t q=0;q<a.size();++q) error=std::max(error,std::abs(a[q]-b[q]));
-            return std::isfinite(error) && error<1e-11;
-        };
-        // The all-MO transform is a retained opt-in reference oracle, never
-        // a production allocation. It compares each direct sector exactly.
-        if (std::getenv("PLANCK_DFT_DH_EQ40_DENSE_REFERENCE"))
-        {
-            const auto mo_eri=HartreeFock::Correlation::transform_eri(
-                eri_ao,static_cast<std::size_t>(nao),pt2_result.mo_coeff,
-                pt2_result.mo_coeff,pt2_result.mo_coeff,pt2_result.mo_coeff);
-            auto dense_blocks=Gradient::build_dh_molecular_eri_blocks(mo_eri,nocc,nvirt);
-            if(!dense_blocks || !sector_equal(direct_blocks->ovov,dense_blocks->ovov) ||
-                !sector_equal(direct_blocks->vvov,dense_blocks->vvov) ||
-                !sector_equal(direct_blocks->ooov,dense_blocks->ooov) ||
-                !sector_equal(direct_blocks->ovvv,dense_blocks->ovvv) ||
-                !sector_equal(direct_blocks->ovoo,dense_blocks->ovoo))
-                return std::unexpected("DH Eq. 40 direct MO sectors disagree with dense MO transform.");
-        }
         auto stationary = Gradient::build_dh_stationary_products(
             pt2_result, c_pt2, pt2_result.mo_coeff, out.response_operator, *direct_blocks);
         if (!stationary) return std::unexpected(stationary.error());
+        // The production compact path must transfer amplitudes through the
+        // non-resident canonical tile source. Keep this guard at the driver
+        // boundary: lower-level stationary builders also support deliberately
+        // noncanonical raw tensors used by algebraic component tests.
+        const auto amplitude_ownership=Gradient::audit_dh_amplitude_ownership(
+            pt2_result,stationary->amplitudes);
+        if (!amplitude_ownership.passes_production())
+            return std::unexpected("DH amplitude ownership contract failed: canonical compact "
+                                   "PT2 data must not retain raw, packed, or tilde amplitudes.");
         static_cast<Gradient::DHStationaryProducts &>(out) = std::move(*stationary);
         // Eq. (40)'s compressed external plus internal form is equivalent to
         // the literal four-coefficient Eq. (47) derivative.  The builder

@@ -170,7 +170,7 @@ namespace HartreeFock::Correlation::detail
     std::expected<ChemistsERIs, std::string> make_eris_rmp2(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
-        const RMP2Dims &dims)
+        const RMP2Dims &dims, bool materialize_ovov)
     {
         const int nb = static_cast<int>(calculator.working_nbasis());
         const Eigen::MatrixXd &C_full = calculator._info._scf.alpha.mo_coefficients;
@@ -193,6 +193,12 @@ namespace HartreeFock::Correlation::detail
 
         const Eigen::MatrixXd C_occ = C_act.leftCols(dims.n_occ);
         const Eigen::MatrixXd C_virt = C_act.middleCols(dims.n_occ, dims.n_virt);
+
+        // The compact canonical kernel consumes a bounded OVOV tile source.
+        // Its producer is constructed below, so retaining the full pair-pair
+        // tensor here would defeat that storage contract.
+        if (!materialize_ovov)
+            return out;
 
         if (calculator._mp2.use_ri)
         {
@@ -218,6 +224,42 @@ namespace HartreeFock::Correlation::detail
         out.ovov = HartreeFock::Correlation::transform_eri(
             eri, static_cast<std::size_t>(nb), C_occ, C_virt, C_occ, C_virt);
         return out;
+    }
+
+    std::expected<void, std::string>
+    for_each_rmp2_direct_ovov_pair_tile(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const ChemistsERIs &eris, int pair_tile_width,
+        const RMP2OVOVPairTileConsumer &consumer)
+    {
+        const int nb=static_cast<int>(calculator.working_nbasis());
+        const int nvirt=static_cast<int>(eris.mo_coeff.cols())-eris.nocc;
+        if (eris.nocc<=0 || nvirt<=0 || eris.mo_coeff.rows()!=nb)
+            return std::unexpected("RMP2 direct OVOV producer: invalid canonical metadata.");
+        const Eigen::MatrixXd c_occ=eris.mo_coeff.leftCols(eris.nocc);
+        const Eigen::MatrixXd c_virt=eris.mo_coeff.rightCols(nvirt);
+
+        if (calculator._mp2.use_ri)
+        {
+            auto ri_ready=HartreeFock::Correlation::RI::ensure_ri_3c_ready(calculator);
+            if (!ri_ready)
+                return std::unexpected("RMP2 direct OVOV producer: " + ri_ready.error());
+            if (!calculator._ri_metric_factor)
+                return std::unexpected("RMP2 direct OVOV producer: RI metric factorization is missing.");
+            const Eigen::MatrixXd pair_factors=
+                HartreeFock::Correlation::RI::build_ri_pair_factors(calculator);
+            const Eigen::MatrixXd b_ov=
+                HartreeFock::Correlation::RI::build_ri_mo_block(pair_factors,c_occ,c_virt);
+            return for_each_rmp2_ovov_ri_tile(
+                b_ov,eris.nocc,nvirt,pair_tile_width,consumer);
+        }
+
+        std::vector<double> eri_local;
+        const std::vector<double> &ao_eri=HartreeFock::Correlation::ensure_eri(
+            calculator,shell_pairs,eri_local,"RMP2 :");
+        return for_each_rmp2_ovov_conventional_tile(
+            ao_eri,static_cast<std::size_t>(nb),c_occ,c_virt,pair_tile_width,consumer);
     }
 
     std::expected<UChemistsERIs, std::string> make_eris_ump2(
