@@ -209,7 +209,6 @@ python generate_ccsdt_cpp.py ccsdt                 # CCSDT naive C++ to stdout
 python generate_ccsdt_cpp.py ccsd --einsum         # numpy einsum
 python generate_ccsdt_cpp.py ccsd --planck         # Planck-native kernels
 python generate_planck_cc_kernels.py --output-dir build/ --methods ccsd ccsdt
-python generate_spinorbital_ccsd_warm_start.py --output ccsd_warm_start.inc
 ```
 
 ## Validation
@@ -312,7 +311,7 @@ The Planck emitter (`print_cpp_planck` / `emit/planck_tensor_cpp.py`) maps abstr
 | `T1`, `T2`, `T3` | `amplitudes.t1()`, `t2()`, `t3()` |
 | `D` (denominators) | `denominators.d_ov()`, `d_oovv()`, … |
 
-Two code-generation workflows exist — kernel generation (`generate_planck_cc_kernels.py`) and warm-start inclusion (`generate_spinorbital_ccsd_warm_start.py`). Note that generated code is **not compiled into the default build**: the shipping CCSD warm-start calls the hand-written `src/post_hf/cc/ccsd.cpp`. Wiring the (validated) generated path into the build is a separate, deferred step.
+Kernel generation is `generate_planck_cc_kernels.py`. The build includes its rank >= 4 output (and the rank-2/3 arbitrary-order companions with `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON`) through `src/post_hf/cc/generated_kernel_registry.cpp`.
 
 ## License
 

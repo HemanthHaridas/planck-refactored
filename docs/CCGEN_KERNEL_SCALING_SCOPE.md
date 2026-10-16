@@ -81,9 +81,9 @@ Design rule:
 
 ### 3. Time the residual evaluation, not a converged solve
 
-A solve conflates kernel cost with convergence path. The `PLANCK_CC_T3_DIFF=1` probe evaluates the
-generated and hand-written residuals once each from identical amplitudes and is the correct
-harness for this class of measurement.
+A solve conflates kernel cost with convergence path. Evaluate the generated and hand-written
+residuals once each from identical amplitudes (the pattern of the former `PLANCK_CC_T3_DIFF=1`
+probe, removed 2026-10-12) — that is the correct harness for this class of measurement.
 
 Design rule:
 

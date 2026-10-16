@@ -75,7 +75,6 @@ def run_planck_gradient(input_path: Path) -> str:
         temp_path = Path(handle.name)
     env = os.environ.copy()
     env["PLANCK_DFT_GRADIENT_DEBUG"] = "1"
-    env["PLANCK_DFT_ALLOW_RS_WORKFLOWS"] = "1"
     try:
         proc = subprocess.run(
             [str(PLANCK_DFT_EXE), str(temp_path)],

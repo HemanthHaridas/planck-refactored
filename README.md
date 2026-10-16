@@ -1558,9 +1558,6 @@ python generate_ccsdt_cpp.py ccsdt --planck
 
 # Generate Planck-compatible .cpp kernel files
 python generate_planck_cc_kernels.py --output-dir build/ --methods ccsd ccsdt
-
-# Generate the spin-orbital CCSD warm-start .inc file used by the tensor-optimized RCCSDT backend
-python generate_spinorbital_ccsd_warm_start.py --output ccsd_warm_start.inc
 ```
 
 Programmatic API:

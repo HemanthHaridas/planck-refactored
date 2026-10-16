@@ -237,13 +237,13 @@ resolved for exactly this reason.
 
 A ccgen-emitted kernel is a `.cpp` file. Getting it *executed* is a separate
 problem from getting it *emitted*, and for a long time the two were confused —
-kernels existed, compiled, and were never called. Three generated artifacts enter
-a binary three different ways:
+kernels existed, compiled, and were never called. Generated artifacts now enter
+a binary only through the registry (the spin-orbital warm-start `.inc` and the plain
+rank-3 TU in `tensor_backend.cpp` were removed 2026-10-12 as unreachable):
 
 | artifact | how it enters | reached by |
 |---|---|---|
-| `ccsd_spinorbital_warm_start.inc` | `#include`d unconditionally | always — the RCCSD warm start |
-| `<method>_planck_generated.cpp` | `#include`d in `tensor_backend.cpp` | only under the tensor-optimized RCCSDT backend |
+| `<method>_planck_generated.cpp` (rank >= 4) | registry, behind `PLANCK_CC_MAXORDER` | `rccgen.cpp` → the arbitrary-order harness |
 | `<method>_arbitrary_planck_generated.cpp` | registry, behind `PLANCK_CC_MAXORDER` / `PLANCK_CC_ARBITRARY_LOWER_RANKS` | `rccgen.cpp` → the arbitrary-order harness |
 
 **The third row is the production route.** The build flags that gate each stage:
@@ -870,8 +870,7 @@ alternatives were tried and each of them held while the answer was wrong.
 - **Factorization and memory passes:** `python/ccgen/optimization/factorize.py`
   (`factorize_equations(..., merge_transposes=, memory_budget_bytes=, factor_builder_bodies=)`).
 - **Diagnostics:** `PLANCK_CC_T3_TIME=N` (isolated triples-residual timer, inert
-  when unset); `PLANCK_CC_FIXTURE_DIR` (inject amplitudes, evaluate residuals once,
-  dump per-rank tensors, exit — no solver, no DIIS).
+  when unset). The former `PLANCK_CC_FIXTURE_DIR` residual probe was removed 2026-10-12.
 - **Build:** `make -j4`; the generated TUs are large enough that a full-width build
   is disruptive. Always set an explicit `CMAKE_BUILD_TYPE` — an empty one drops
   `-DNDEBUG`, re-enables the CC bounds asserts, and effectively reverts §10.1.

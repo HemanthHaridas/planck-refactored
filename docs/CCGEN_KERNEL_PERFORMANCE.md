@@ -98,7 +98,7 @@ Design rule:
 
 **P1 — the headline ratio.** `bh3` RCCSDT / STO-3G, `no=4 nv=4`, Release `-O3`, `OMP_NUM_THREADS=1`,
 clang (Darwin 25.5.0). Both residuals evaluated from identical amplitudes in one pass via the
-existing `PLANCK_CC_T3_DIFF=1` probe, six consecutive iterations:
+`PLANCK_CC_T3_DIFF=1` probe (since removed), six consecutive iterations:
 
 | | generated | hand-written | + its intermediates | ratio |
 |---|---|---|---|---|
@@ -198,8 +198,8 @@ fixing only the fixed-rank accessors moved rank 3 by 76× and rank 4 by nothing 
 
 ## Validation strategy that should remain in place
 
-- Both residuals must be evaluated from identical amplitudes in one pass (the `PLANCK_CC_T3_DIFF=1`
-  probe pattern), never compared across separately-run binaries.
+- Both residuals must be evaluated from identical amplitudes in one pass (the pattern of the
+  former `PLANCK_CC_T3_DIFF=1` probe), never compared across separately-run binaries.
 - `tests/cc_tensor_index.cpp` (`planck-cc-tensor-index`) as the layout gate for the accessor fix.
 - Re-measure rather than cite a carried number — the 180× figure and the original H1 hypothesis
   both failed to reproduce under direct measurement.
@@ -221,10 +221,10 @@ full-width build is disruptive.
 
 `BASIS_PATH` is required if the build's compiled-in basis path points at a stale install prefix.
 
-The P1/P2 numbers were taken with temporary timing instrumentation hung off the pre-existing
-`PLANCK_CC_T3_DIFF=1` probe (which already evaluates the generated and hand-written residuals once
-each from identical amplitudes). That instrumentation has been removed; re-add it the same way if
-the comparison is needed again. The two microbenchmarks are throwaway and described inline above.
+The P1/P2 numbers were taken with temporary timing instrumentation hung off the
+`PLANCK_CC_T3_DIFF=1` probe (which evaluated the generated and hand-written residuals once
+each from identical amplitudes). The probe and that instrumentation have both been removed; re-add
+them if the comparison is needed again. The two microbenchmarks are throwaway and described inline above.
 
 ## Remaining architecture concern
 

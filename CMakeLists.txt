@@ -611,31 +611,24 @@ add_executable(planck-dft
 )
 
 if(Python3_Interpreter_FOUND)
-    set(CCGEN_SPINORBITAL_WARM_START_INC
-        ${CMAKE_BINARY_DIR}/generated/cc/ccsd_spinorbital_warm_start.inc)
-
-    add_custom_command(
-        OUTPUT ${CCGEN_SPINORBITAL_WARM_START_INC}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
-        COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/python/generate_spinorbital_ccsd_warm_start.py
-                --output ${CCGEN_SPINORBITAL_WARM_START_INC}
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
-        DEPENDS
-            ${CMAKE_SOURCE_DIR}/python/generate_spinorbital_ccsd_warm_start.py
-            ${CMAKE_SOURCE_DIR}/python/ccgen/generate.py
-            ${CMAKE_SOURCE_DIR}/python/ccgen/project.py
-            ${CMAKE_SOURCE_DIR}/python/ccgen/wick.py
-        COMMENT "Generating spin-orbital CCSD warm-start kernels with ccgen"
-    )
-
-    add_custom_target(ccgen-spinorbital-warm-start
-        DEPENDS ${CCGEN_SPINORBITAL_WARM_START_INC}
-    )
+    # RCC methods to emit. The plain <method>_planck_generated.cpp TU is consumed
+    # only at rank >= 4 (generated_kernel_registry.cpp); rank 2/3 run through
+    # their arbitrary-order companions, so they are passed only when those are
+    # requested.
+    # ponytail: with ARBITRARY_LOWER_RANKS the script still writes the unused
+    # plain ccsd/ccsdt TUs as a side effect; add a generator flag if that
+    # generation time ever matters.
+    set(_ccgen_rcc_methods "")
+    foreach(_planck_cc_method ${PLANCK_CC_METHODS})
+        list(FIND _planck_cc_method_by_rank ${_planck_cc_method} _planck_cc_method_rank_idx)
+        if(_planck_cc_method_rank_idx GREATER_EQUAL 2 OR PLANCK_CC_ARBITRARY_LOWER_RANKS)
+            list(APPEND _ccgen_rcc_methods ${_planck_cc_method})
+        endif()
+    endforeach()
 
     set(_ccgen_planck_kernel_args
         --output-dir ${CMAKE_BINARY_DIR}/generated/cc
-        --methods ${PLANCK_CC_METHODS}
+        --methods ${_ccgen_rcc_methods}
         --engine ${PLANCK_CC_ENGINE}
         --intermediate-threshold ${PLANCK_CC_INTERMEDIATE_THRESHOLD}
     )
@@ -685,21 +678,21 @@ if(Python3_Interpreter_FOUND)
     set(_ccgen_planck_outputs "")
     set(_ccgen_ucc_outputs "")
     foreach(_planck_cc_method ${PLANCK_CC_METHODS})
-        list(APPEND _ccgen_planck_outputs
-            ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_planck_generated.cpp)
         list(APPEND _ccgen_ucc_outputs
             ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_ucc_planck_generated.cpp)
-        # Lower-rank arbitrary-order companions, RCC side only -- the UCC
-        # invocation never passes --arbitrary-lower-ranks, so it emits none.
-        if(PLANCK_CC_ARBITRARY_LOWER_RANKS)
-            list(FIND _planck_cc_method_by_rank ${_planck_cc_method} _planck_cc_method_rank_idx)
-            if(_planck_cc_method_rank_idx LESS 2)
-                list(APPEND _ccgen_planck_outputs
-                    ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_arbitrary_planck_generated.cpp)
-            endif()
+        list(FIND _planck_cc_method_by_rank ${_planck_cc_method} _planck_cc_method_rank_idx)
+        if(_planck_cc_method_rank_idx GREATER_EQUAL 2)
+            list(APPEND _ccgen_planck_outputs
+                ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_planck_generated.cpp)
+        elseif(PLANCK_CC_ARBITRARY_LOWER_RANKS)
+            # Lower-rank arbitrary-order companions, RCC side only -- the UCC
+            # invocation never passes --arbitrary-lower-ranks, so it emits none.
+            list(APPEND _ccgen_planck_outputs
+                ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_arbitrary_planck_generated.cpp)
         endif()
     endforeach()
 
+    if(_ccgen_rcc_methods)
     add_custom_command(
         OUTPUT ${_ccgen_planck_outputs}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
@@ -710,8 +703,9 @@ if(Python3_Interpreter_FOUND)
         DEPENDS
             ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
             ${_ccgen_package_sources}
-        COMMENT "Generating Planck-compatible CC kernels with ccgen (up to rank ${PLANCK_CC_MAXORDER}: ${PLANCK_CC_METHODS})"
+        COMMENT "Generating Planck-compatible CC kernels with ccgen (up to rank ${PLANCK_CC_MAXORDER}: ${_ccgen_rcc_methods})"
     )
+    endif()
 
     add_custom_target(ccgen-planck-kernels DEPENDS ${_ccgen_planck_outputs})
 
@@ -741,7 +735,6 @@ if(Python3_Interpreter_FOUND)
 endif()
 
 if(Python3_Interpreter_FOUND)
-    add_dependencies(hartree-fock ccgen-spinorbital-warm-start)
     add_dependencies(hartree-fock ccgen-planck-kernels)
 endif()
 
@@ -760,7 +753,6 @@ target_link_libraries(planck-dft
 
 add_dependencies(planck-dft libmsym libxc)
 if(Python3_Interpreter_FOUND)
-    add_dependencies(planck-dft ccgen-spinorbital-warm-start)
     add_dependencies(planck-dft ccgen-planck-kernels)
 endif()
 target_compile_definitions(planck-dft PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER} PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower} PLANCK_CC_DRESS_OPERATORS=${_planck_cc_dressed})
@@ -815,7 +807,6 @@ if(BUILD_MPI)
     )
     add_dependencies(planck-mpi libmsym libxc)
     if(Python3_Interpreter_FOUND)
-        add_dependencies(planck-mpi ccgen-spinorbital-warm-start)
         add_dependencies(planck-mpi ccgen-planck-kernels)
     endif()
     # USING_Libxc enables the libxc-backed XC path (same as planck-dft).
@@ -880,7 +871,7 @@ if(BUILD_TESTING)
     target_compile_definitions(planck-udh-validation PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER}
         PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower} PLANCK_CC_DRESS_OPERATORS=${_planck_cc_dressed})
     if(Python3_Interpreter_FOUND)
-        add_dependencies(planck-udh-validation ccgen-spinorbital-warm-start ccgen-planck-kernels)
+        add_dependencies(planck-udh-validation ccgen-planck-kernels)
         add_test(NAME planck-udh-molecular-runner
             COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_molecular_audit.py -v)
     endif()

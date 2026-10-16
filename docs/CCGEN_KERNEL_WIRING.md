@@ -35,12 +35,14 @@ determinant-space backstop hides which regression cases actually exercise genera
 ccgen emit  ->  #include or registry  ->  backend selection  ->  solver harness
 ```
 
-Three generated artifacts enter a binary three different ways:
+Generated artifacts enter a binary only through the registry. The rank-2/3
+spin-orbital warm start (`ccsd_spinorbital_warm_start.inc`) and the plain rank-3
+TU that `tensor_backend.cpp` used to include were removed 2026-10-12: neither was
+reachable after the rank-3 route moved to the arbitrary-order harness.
 
 | artifact | how it enters | reached by |
 |---|---|---|
-| `ccsd_spinorbital_warm_start.inc` | `#include`d unconditionally in `tensor_backend.cpp` | always — the RCCSD warm start |
-| `<method>_planck_generated.cpp` | `#include`d in `tensor_backend.cpp` | only when the tensor-optimized RCCSDT backend is selected |
+| `<method>_planck_generated.cpp` (rank >= 4) | registry, behind `PLANCK_CC_MAXORDER` | `rccgen.cpp` -> the arbitrary-order harness |
 | `<method>_arbitrary_planck_generated.cpp` | registry, behind `PLANCK_CC_MAXORDER` / `PLANCK_CC_ARBITRARY_LOWER_RANKS` | `rccgen.cpp` -> the arbitrary-order harness |
 
 **The third row is the one that runs in production.** The plain per-method TUs
@@ -148,9 +150,10 @@ retired with this rewrite. What replaced it, and works:
   silently measuring the wrong emit. It accepts a list.
 - **`PLANCK_CC_T3_TIME=N`** — an opt-in isolated triples-residual timer, inert
   when unset. This is what the scaling ladder used.
-- **`PLANCK_CC_FIXTURE_DIR`** — inject amplitudes, evaluate residuals once, dump
-  per-rank tensors, exit. No solver, no DIIS. Built for the D4 diagnosis and the
-  right instrument for any "which manifold disagrees" question.
+- **`PLANCK_CC_FIXTURE_DIR`** (removed 2026-10-12) — injected amplitudes and
+  evaluated residuals once, no solver. Built for the D4 diagnosis; removed because
+  it lived in the production path. Re-add it if a "which manifold disagrees"
+  question needs it again.
 
 A driver script would have added a fourth harness over three that already work.
 The gap it was meant to fill — *nothing proves the generated path ran* — was
@@ -162,7 +165,6 @@ closed by gates that assert the routing line instead.
   `PLANCK_CC_*` flag
 - Gates asserting the routing line (which backend/kernel actually ran), not just the final energy
 - `PLANCK_CC_T3_TIME` for isolated triples-residual timing
-- `PLANCK_CC_FIXTURE_DIR` for per-rank tensor diagnosis without a full solve
 
 ## Related but separate outcome: adjacent documents
 
