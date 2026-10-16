@@ -1,39 +1,38 @@
-# ccgen Dressing vs. Spin Adaptation (Recognition Route)
+# ccgen Recognition Dressing vs. Spin Adaptation
 
 Canonical status now lives in:
 
 - `vault/Status/Completion.md`
 - `vault/Status/Open Work.md`
 
-> **SUPERSEDED IN ITS CONCLUSION (2026-08-26). Read this header before the body.**
->
-> This document answers the question for **one** of ccgen's two dressing routes —
-> **recognition**, which matches hand-seeded Stanton-Gauss fingerprints. For that route the
-> answer below is correct and it stays retired.
->
-> It is **not** correct as a general claim, and the body reads as one. ccgen's other route,
-> **derivation** (`factorize.py`, operators from each term's own contraction tree), *does*
-> compose with spin adaptation. It is now wired into production, value-gated at ranks 2-4, and
-> measured at **3.12x (LiH) / 3.61x (CH4)** wall-clock with energies matching the undressed
-> baseline to 2e-10 and exactly, respectively.
->
-> So "dressing and spin adaptation do not compose" is false as stated; what does not compose is
-> *recognition* and spin adaptation. See `CCGEN_TWO_DRESSING_ROUTES.md` (which found the second
-> route) and `CCGEN_WIRING_THE_DERIVATION_ROUTE.md` (which wired it, and records the ERI-symmetry
-> defect that wiring exposed).
->
-> Kept because its diagnosis of *why recognition* fails, its five falsified fix attempts, and its
-> measured 52 %-short number are all still accurate and still useful.
+This file answers a narrower architecture question:
 
-This file answers a narrower architecture question, scoped to the recognition route only:
+**Why does ccgen's *recognition* dressing route (hand-seeded Stanton-Gauss
+fingerprints) give wrong kernels once the equations are spin-adapted, and why
+was it retired rather than fixed?**
 
-**Can ccgen's dressed-operator recognition be combined with spin adaptation, and is it worth doing?**
+It is about one of ccgen's two dressing routes. The other, *derivation*
+(`factorize.py`, operators taken from each term's own contraction tree), does
+compose with spin adaptation and is the production dressed path
+(`--dressing derived`; 3.12× on LiH and 3.61× on CH4 end to end, with energies
+matching the undressed baseline). Read `CCGEN_TWO_DRESSING_ROUTES.md` for that
+route and for why its existence overturned this document's original, broader
+conclusion that "dressing and spin adaptation do not compose".
 
 ## Short answer
 
-No, and no — for the recognition route. Each transform is correct alone and the composition is wrong in either order, for a structural reason. The measured FLOP payoff (~1.2–1.5× actual on spin-orbital, bounded ~2.8–4× spatial) does not justify the research needed to fix it.
+Recognition subtracts what each matched operator absorbs from the remaining
+terms. That subtraction is valid only against the exact term set it was computed
+for, and spin adaptation changes the term set. Each transform is correct alone;
+the composition is wrong in either order. The seeded operators also lean on the
+antisymmetry of `<pq||rs>`, which spatial integrals lack, so a spatial operator
+set would have to be re-derived, not relabeled. Five fix attempts each passed
+their own gate and made the energy worse, and on Be/STO-3G CCSDTQ the result
+stayed 52 % short.
 
-**Decision: the RECOGNITION route stays opt-in and OFF, and the spin-adapted recognized path is unsupported.** `-DPLANCK_CC_DRESS_OPERATORS=ON -DPLANCK_CC_DRESSING=recognized` generates and compiles, but its RCC kernels are wrong. `-DPLANCK_CC_DRESSING=derived` is the supported dressed path.
+**Decision:** recognition stays retired. `-DPLANCK_CC_DRESSING=recognized`
+still generates and compiles, but its spin-adapted RCC kernels are wrong.
+`-DPLANCK_CC_DRESSING=derived` is the supported dressed path.
 
 ## Where the logic lives
 
@@ -107,7 +106,11 @@ Note the GCC saving *shrinks* as `n_vir/n_occ` grows, i.e. it pays least in the 
 
 Against a ~2× constant factor, the work required is: derive a spatial operator set (research; the literature factorization may not match ccgen's terms), build a spatial-capable matcher (the current one assumes antisymmetric factors), and maintain and validate a second equation path indefinitely.
 
-A larger lever is untouched: the generated kernels run ~180× slower than hand-written ones (7 s → ~1270 s on `bh3` RCCSDT), attributed to intermediates rebuilt inside loops and CSE being disabled under dressing. That is a bigger win than any factorization and does not require new equations.
+At the time, a larger lever was untouched: the generated kernels' own cost. (A
+"~180×" figure cited here then never recorded its dimensions and did not
+reproduce.) That lever has since been worked: inlined tensor accessors (up to
+206×), operator-build hoisting, transpose merging, the derivation route, and
+OpenMP. See `CCGEN_WHY_GENERATED_IS_SLOW.md` and `CCGEN_KERNEL_PERFORMANCE.md`.
 
 **Five fix attempts, all falsified**, each passing its own gate and making the energy worse:
 
@@ -127,7 +130,7 @@ A larger lever is untouched: the generated kernels run ~180× slower than hand-w
 | `tests/test_dressed_spatial_equivalence.py` | recognition must be value-preserving on spatial terms |
 | `GeneratedKernelsAreReachableTests` | a kernel with no caller passes every other check |
 
-The numeric gates matter beyond dressing: they catch value defects that structural gates cannot, and the still-open rank-3 triples defect needs exactly that instrument.
+The numeric gates matter beyond dressing: they catch value defects that structural gates cannot.
 
 **Test-system note, load-bearing:** every numeric gate uses `no=3, nv=4`. On Be/STO-3G (`nv == no == 4`) a wrongly-ordered tensor read stays in bounds and returns a wrong number silently; asymmetric extents make it raise instead.
 
@@ -137,15 +140,24 @@ The numeric gates matter beyond dressing: they catch value defects that structur
 - `GeneratedKernelsAreReachableTests`, to catch a kernel with no production caller
 - `_eri_canonical(..., spatial=True)` used on any spatial-residual equivalence check
 
-## Related but separate outcome: if dressing is revisited for UCC
+## Related outcome: recognition does not carry over to UCC either
 
-For UCC, the mechanism predicts recognition would work. UCC keeps per-spin-block tensors (`ucc_independent_blocks(4)` → `aaaa`, `abab`, `bbbb` as separate arrays) rather than folding to one spatial tensor, so each block stays close to the spin-orbital form where recognition is correct. Untested — `ucc_adapt_equations` does not exist yet and U1 is unstarted.
-
-Two things to settle first, cheaply, while U1 is being scoped:
-
-- U1.1 is the same shape as this defect. Its stated problem — "the bridge drops the block" — is information a downstream consumer needs being discarded at an adaptation boundary, exactly as the spin-case identity was here. Solving it correctly may be the same work as making dressing block-aware.
-- `spatial=True` likely applies to UCC too. A `v_abab` block does not have the full 8-fold antisymmetry, so UCC verification could inherit the same blind spot. Check before it costs another investigation.
+This document once predicted that recognition would work for UCC, since UCC
+keeps per-spin-block tensors close to the spin-orbital form. Measured, it finds
+**zero** operators on UCC terms. UCC factors are spin-tagged (`v_abab`,
+`t2_aaaa`) while the fingerprints key on bare names, and the obvious tag-blind
+match is unsound: it collapses 12 distinct spin-tagged contractions onto one
+`Wmbej`. See invariant 3 of `CCGEN_TWO_DRESSING_ROUTES.md` and O6 in
+`CCGEN_OPERATOR_IDENTITY_AND_REUSE.md`. The basis-aware ERI fold
+(`spatial=True`) remains the right guard for any UCC equivalence check, because
+a `v_abab` block lacks the full 8-fold antisymmetry.
 
 ## Remaining architecture concern
 
-The undressed rank-3 triples residual is independently wrong — it writes ~45 % of the elements it should, with unrelated values on those. That defect predates dressing, is unaffected by turning it off, and blocks a path that is in production. See `CCGEN_RANK3_KERNEL_AND_SOLVER.md`. This is not fixed by the decision in this document.
+None for this route: it is retired. The "undressed rank-3 triples residual is
+independently wrong" concern once listed here was resolved. The kernel was
+correct throughout; the wrong numbers came from the `PLANCK_CC_SPIN_ADAPT=OFF`
+default and from a solver-representation mismatch (`CCGEN_SPIN_ADAPT_DEFAULT.md`,
+`CCGEN_RANK3_KERNEL_AND_SOLVER.md`). The seven `expectedFailure` gates on this
+route stay as a tripwire: an unexpected pass would mean the composition was
+genuinely fixed.
