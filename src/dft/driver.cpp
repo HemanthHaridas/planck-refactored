@@ -3,6 +3,7 @@
 #include "analytic_hessian.h"
 #include "dh_hessian_probe.h"
 #include "ks_orbital_hessian.h"
+#include "tddft_exchange.h"
 #include "uks_level_shift.h"
 #include "post_hf/casscf/aug-hessian.h"
 #include "post_hf/casscf/orbital.h"
@@ -1281,16 +1282,24 @@ namespace DFT::Driver
             const std::string &method_label,
             const std::string &spin_label,
             bool includes_semilocal_xc,
-            double exact_exchange_coefficient)
+            double exact_exchange_coefficient,
+            double short_range_exchange_coefficient)
         {
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Info,
                 "TDDFT / Linear Response :",
-                std::format(
-                    "{} {} solver with {:.6f} exact-exchange kernel coefficient",
-                    method_label,
-                    spin_label,
-                    exact_exchange_coefficient));
+                short_range_exchange_coefficient == 0.0
+                    ? std::format(
+                          "{} {} solver with {:.6f} exact-exchange kernel coefficient",
+                          method_label,
+                          spin_label,
+                          exact_exchange_coefficient)
+                    : std::format(
+                          "{} {} solver with {:.6f} full-range + {:.6f} short-range exact-exchange kernel coefficients",
+                          method_label,
+                          spin_label,
+                          exact_exchange_coefficient,
+                          short_range_exchange_coefficient));
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Info,
                 "TDDFT / Linear Response :",
@@ -1511,11 +1520,54 @@ namespace DFT::Driver
                 eri_local,
                 "TDDFT / Linear Response :");
 
-            const double exact_exchange_coefficient =
-                exchange_functional.is_hybrid() ? exchange_functional.exact_exchange_coefficient() : 0.0;
+            // Same coefficient source as the SCF (xc_grid.cpp): c_fr K[Coulomb]
+            // + c_sr K[erf short-range, omega].  For a global hybrid c_sr = 0
+            // and c_fr == exact_exchange_coefficient().
+            if (exchange_functional.has_non_erf_short_range_exchange())
+                return std::unexpected(std::format(
+                    "TDDFT / linear response: {} uses Yukawa or Gaussian screened exchange; "
+                    "only erf range separation is implemented",
+                    exchange_functional.name()));
+            const double full_range_exchange_coefficient = exchange_functional.fock_exchange_coefficient();
+            const double short_range_exchange_coefficient = exchange_functional.short_range_exchange_coefficient();
+
+            // ponytail: a second dense nb^4 AO tensor, matching the dense response design.
+            std::vector<double> eri_short_range;
+            if (short_range_exchange_coefficient != 0.0)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info, "TDDFT / Linear Response :",
+                    std::format("Building short-range AO ERI tensor (omega = {:.4f})",
+                                exchange_functional.range_separation_omega()));
+                eri_short_range = _compute_2e(
+                    shell_pairs, static_cast<std::size_t>(nbasis), calculator._integral._engine,
+                    HartreeFock::ERIKernel::ShortRange, exchange_functional.range_separation_omega(),
+                    calculator._integral._tol_eri,
+                    calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+            }
+
 
             Eigen::MatrixXd A = Eigen::MatrixXd::Zero(total_dimension, total_dimension);
             Eigen::MatrixXd B = Eigen::MatrixXd::Zero(total_dimension, total_dimension);
+
+            const auto add_exact_exchange = [&](const ResponseExcitationSpace &space)
+            {
+                const auto add_term = [&](const std::vector<double> &ao_eri, double coefficient)
+                {
+                    if (coefficient == 0.0)
+                        return;
+                    const std::vector<double> k_a = HartreeFock::Correlation::transform_eri(
+                        ao_eri, static_cast<std::size_t>(nbasis),
+                        space.C_occ, space.C_occ, space.C_virt, space.C_virt);
+                    const std::vector<double> k_b = HartreeFock::Correlation::transform_eri(
+                        ao_eri, static_cast<std::size_t>(nbasis),
+                        space.C_occ, space.C_virt, space.C_virt, space.C_occ);
+                    DFT::LinearResponse::add_same_spin_exact_exchange(
+                        A, B, space.mo_offset, space.n_occ, space.n_virt, coefficient, k_a, k_b);
+                };
+                add_term(eri, full_range_exchange_coefficient);
+                add_term(eri_short_range, short_range_exchange_coefficient);
+            };
 
             const auto fill_diagonal_gap = [&](const ResponseExcitationSpace &space)
             {
@@ -1538,20 +1590,6 @@ namespace DFT::Driver
                     space.C_occ,
                     space.C_virt);
                 const std::vector<double> j_b = HartreeFock::Correlation::transform_eri(
-                    eri,
-                    static_cast<std::size_t>(nbasis),
-                    space.C_occ,
-                    space.C_virt,
-                    space.C_virt,
-                    space.C_occ);
-                const std::vector<double> k_a = HartreeFock::Correlation::transform_eri(
-                    eri,
-                    static_cast<std::size_t>(nbasis),
-                    space.C_occ,
-                    space.C_occ,
-                    space.C_virt,
-                    space.C_virt);
-                const std::vector<double> k_b = HartreeFock::Correlation::transform_eri(
                     eri,
                     static_cast<std::size_t>(nbasis),
                     space.C_occ,
@@ -1599,11 +1637,6 @@ namespace DFT::Driver
                 {
                     return ((static_cast<std::size_t>(i) * space.n_virt + a) * space.n_virt + b) * space.n_occ + j;
                 };
-                auto idx_k = [&](int i, int j, int a, int b) -> std::size_t
-                {
-                    return ((static_cast<std::size_t>(i) * space.n_occ + j) * space.n_virt + a) * space.n_virt + b;
-                };
-
                 for (int i = 0; i < space.n_occ; ++i)
                     for (int a = 0; a < space.n_virt; ++a)
                     {
@@ -1614,12 +1647,11 @@ namespace DFT::Driver
                                 const int jb = space.mo_offset + space.flat_index(j, b);
                                 A(ia, jb) += coulomb_factor * j_a[idx_j(i, a, j, b)];
                                 B(ia, jb) += coulomb_factor * j_b[idx_j_b(i, a, b, j)];
-                                A(ia, jb) -= exact_exchange_coefficient * k_a[idx_k(i, j, a, b)];
-                                B(ia, jb) -= exact_exchange_coefficient * k_b[idx_j_b(i, a, b, j)];
                                 A(ia, jb) += kxc(space.flat_index(i, a), space.flat_index(j, b));
                                 B(ia, jb) += kxc(space.flat_index(i, a), space.flat_index(j, b));
                             }
                     }
+                add_exact_exchange(space);
             }
             else
             {
@@ -1657,26 +1689,6 @@ namespace DFT::Driver
                             source_space.C_virt,
                             source_space.C_occ);
 
-                        std::vector<double> k_a;
-                        std::vector<double> k_b;
-                        if (target == source)
-                        {
-                            k_a = HartreeFock::Correlation::transform_eri(
-                                eri,
-                                static_cast<std::size_t>(nbasis),
-                                target_space.C_occ,
-                                target_space.C_occ,
-                                target_space.C_virt,
-                                target_space.C_virt);
-                            k_b = HartreeFock::Correlation::transform_eri(
-                                eri,
-                                static_cast<std::size_t>(nbasis),
-                                target_space.C_occ,
-                                target_space.C_virt,
-                                target_space.C_virt,
-                                target_space.C_occ);
-                        }
-
                         auto idx_j = [&](int i, int a, int j, int b) -> std::size_t
                         {
                             return ((static_cast<std::size_t>(i) * target_space.n_virt + a) * source_space.n_occ + j) * source_space.n_virt + b;
@@ -1688,11 +1700,6 @@ namespace DFT::Driver
                         {
                             return ((static_cast<std::size_t>(i) * target_space.n_virt + a) * source_space.n_virt + b) * source_space.n_occ + j;
                         };
-                        auto idx_k = [&](int i, int j, int a, int b) -> std::size_t
-                        {
-                            return ((static_cast<std::size_t>(i) * source_space.n_occ + j) * target_space.n_virt + a) * source_space.n_virt + b;
-                        };
-
                         for (int i = 0; i < target_space.n_occ; ++i)
                             for (int a = 0; a < target_space.n_virt; ++a)
                             {
@@ -1703,11 +1710,6 @@ namespace DFT::Driver
                                         const int jb = source_space.mo_offset + source_space.flat_index(j, b);
                                         A(ia, jb) += j_a[idx_j(i, a, j, b)];
                                         B(ia, jb) += j_b[idx_j_b(i, a, b, j)];
-                                        if (target == source)
-                                        {
-                                            A(ia, jb) -= exact_exchange_coefficient * k_a[idx_k(i, j, a, b)];
-                                            B(ia, jb) -= exact_exchange_coefficient * k_b[idx_j_b(i, a, b, j)];
-                                        }
                                         A(ia, jb) += (*kxc_blocks)[static_cast<std::size_t>(target)][static_cast<std::size_t>(source)](
                                             target_space.flat_index(i, a),
                                             source_space.flat_index(j, b));
@@ -1716,6 +1718,8 @@ namespace DFT::Driver
                                             source_space.flat_index(j, b));
                                     }
                             }
+                        if (target == source)
+                            add_exact_exchange(target_space);
                     }
                 }
             }
@@ -1863,7 +1867,8 @@ namespace DFT::Driver
                 linear_response_method_label(calculator._dft._lr_method),
                 linear_response_spin_label(spin_mode),
                 true,
-                exact_exchange_coefficient);
+                full_range_exchange_coefficient,
+                short_range_exchange_coefficient);
             print_uvvis_spectrum_report(calculator, roots);
             return reported_roots;
         }
@@ -3094,13 +3099,18 @@ namespace DFT::Driver
             //   - Freq @ input geometry: max |Δ| = 2.17 cm^-1 vs PySCF analytic Hessian.
             //   - GeomOpt: final geometry within ~7e-4 Å, final energy within ~2e-5 Eh.
             //   - GeomOptFreq @ optimized geometry: max |Δ| = 6.78 cm^-1.
-            // Double-hybrid PT2 paths and ImaginaryFollow / LinearResponse for
-            // range-separated functionals remain unvalidated.
+            // LinearResponse (RKS singlet/triplet, UKS spin-conserving, TDA
+            // and Casida) agrees with PySCF 2.13.0 within 1e-4 eV per root on
+            // water/STO-3G for HSE06, CAM-B3LYP and wB97X
+            // (docs/RS_TDDFT.md, tests/pyscf/rs_tddft_references.py).
+            // Double-hybrid PT2 paths and ImaginaryFollow for range-separated
+            // functionals remain unvalidated.
             if (functionals.has_range_separation &&
                 !functionals.has_double_hybrid_pt2)
             {
                 switch (calculator._calculation)
                 {
+                case HartreeFock::CalculationType::LinearResponse:
                 case HartreeFock::CalculationType::Gradient:
                 case HartreeFock::CalculationType::Frequency:
                 case HartreeFock::CalculationType::GeomOpt:

@@ -904,6 +904,15 @@ if(BUILD_TESTING)
     target_include_directories(planck-uks-level-shift PRIVATE ${SRC_DIR} ${eigen_SOURCE_DIR})
     add_test(NAME planck-uks-level-shift COMMAND planck-uks-level-shift)
 
+    # R0: exact-exchange B-block indexing shared by the RKS and UKS Casida
+    # builders.  Header-only by design: the test checks the production helper
+    # without linking the entire DFT driver.
+    add_executable(planck-tddft-exchange
+        ${CMAKE_SOURCE_DIR}/tests/tddft_exchange.cpp
+    )
+    target_include_directories(planck-tddft-exchange PRIVATE ${SRC_DIR} ${eigen_SOURCE_DIR})
+    add_test(NAME planck-tddft-exchange COMMAND planck-tddft-exchange)
+
     # Detached UKS DH U0 contract only; no production workflow enablement.
     add_executable(planck-udh-pt2-energy-contract
         ${CMAKE_SOURCE_DIR}/tests/udh_pt2_energy_contract.cpp

@@ -316,6 +316,19 @@ historical design context, but they are no longer the source of truth for
 - Grid quality levels: Coarse, Normal, Fine, UltraFine
 - Single-point PCM solvation for RKS/UKS
 - Linear-response TDDFT / Casida and TDA excited states
+- Hybrid and range-separated TDDFT (2026-10-16, `docs/RS_TDDFT.md`).
+  The full-Casida B-matrix exact-exchange term used `(ia|bj)` instead of
+  `(ib|ja)` in both RKS and UKS (B3LYP root 3 off by 7.5 meV), ungated because
+  every TDDFT case was PBE; fixed in one shared helper
+  (`src/dft/tddft_exchange.h`). Range-separated response adds
+  `c_sr K[erf, omega]` from the same coefficient source as the SCF. HSE06,
+  CAM-B3LYP and wB97X agree with PySCF 2.13.0 on water/STO-3G within
+  4e-4 eV per root across RKS singlet/triplet, UKS spin-conserving, TDA and
+  Casida; the residual is grid/kernel (UKS PBE, with no exact exchange, is
+  already 1.9e-4 eV off). Gated by `water_tddft_{b3lyp_casida,b3lyp_tda,
+  hse06_casida,hse06_triplet_casida,camb3lyp_casida,wb97x_tda}_sto3g`,
+  `water_triplet_uks_tddft_{b3lyp,camb3lyp}_sto3g` and the Yukawa rejection
+  case
 - DFT single-point, gradient, geometry optimization, frequency, and geomopt+frequency workflows
 - DFT checkpoint/restart and symmetry+SAO blocking
 - Symmetry-enabled DFT gradient/frame handling fixed by synchronizing

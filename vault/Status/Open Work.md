@@ -18,15 +18,18 @@ truth for what remains.
 
 ## Highest-priority correctness and robustness work
 
-- **Global-hybrid full TDDFT (Casida) is wrong: the B-matrix exact-exchange
-  term uses `(ia|bj)` instead of `(ib|ja)`, in both the RKS and UKS branches of
-  `run_linear_response` (`src/dft/driver.cpp`). Found 2026-10-13.** Water/STO-3G
-  B3LYP root 3 is 14.51474 eV against PySCF's 14.50727 eV (7.5 meV off).
-  Rebuilding PySCF's own matrices with Planck's indexing reproduces Planck's
-  numbers to 2e-5 eV. TDA (no B matrix) and PBE (no exact exchange) both agree
-  with PySCF to 1e-5 eV. Nothing caught it because every TDDFT regression case
-  is PBE. Fix and gate as step R0 of `docs/RS_TDDFT_SCOPE.md`, which also scopes
-  range-separated TDDFT (R1-R3).
+- **Yukawa / Gaussian screened-exchange functionals are evaluated with the
+  erf kernel everywhere except TDDFT (found 2026-10-16).** `cam_coefficients()`
+  (`src/dft/base/wrapper.h`) folds `XC_HYB_YUKAWA_SR` / `XC_HYB_GAUSSIAN_SR`
+  into the short-range coefficient and the SCF builds it with
+  `ERIKernel::ShortRange` (erf). PySCF does the same: water/STO-3G
+  `camyb3lyp` agrees to 1.4e-6 Eh (-75.4581507 vs -75.4581521), so there is no
+  independent reference showing the energy is wrong -- but it is not the
+  kernel libxc defines. TDDFT now rejects these by name
+  (`Functional::has_non_erf_short_range_exchange`, gated by
+  `water_tddft_camy_b3lyp_rejected_sto3g`). Decide whether functional
+  initialization should reject them for every workflow, or accept and document
+  the erf substitution.
 
 ## Build and packaging
 

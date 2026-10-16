@@ -2724,6 +2724,320 @@
    ]
   },
   {
+   "id": "water_tddft_b3lyp_casida_sto3g",
+   "input": "tests/inputs/regression/dft/water_tddft_b3lyp_casida_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_pyscf_reference": "PySCF 2.13.0 RKS B3LYP/STO-3G, this Cartesian water geometry, grid level 6: Casida roots 11.6737501, 13.9865099, 14.5135334, 17.8803925 eV. The third root detects the historical B-exchange (ia|bj) index defect.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Reference :                   RKS",
+    "TDDFT / Linear Response :     full Casida singlet solver",
+    "Root  3 dominant configurations:",
+    "DFT Hybrid XC :               B3LYP exact exchange coefficient = 0.200000"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 11.6737501,
+     "atol": 0.0001
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 13.9865099,
+     "atol": 0.0001
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 14.5135334,
+     "atol": 0.0001
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 17.8803925,
+     "atol": 0.0001
+    }
+   ]
+  },
+  {
+   "id": "water_tddft_b3lyp_tda_sto3g",
+   "input": "tests/inputs/regression/dft/water_tddft_b3lyp_tda_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_pyscf_reference": "PySCF 2.13.0 RKS B3LYP/STO-3G, this Cartesian water geometry, grid level 6: TDA roots 11.7278211, 13.9950126, 14.6539379, 17.9782649 eV. This control is invariant under the B-block correction.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Reference :                   RKS",
+    "TDDFT / Linear Response :     TDA singlet solver",
+    "Root  3 dominant configurations:"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 11.7278211,
+     "atol": 0.0001
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 13.9950126,
+     "atol": 0.0001
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 14.6539379,
+     "atol": 0.0001
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 17.9782649,
+     "atol": 0.0001
+    }
+   ]
+  },
+  {
+   "id": "water_triplet_uks_tddft_b3lyp_sto3g",
+   "input": "tests/inputs/regression/dft/water_triplet_uks_tddft_b3lyp_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_note": "R0 UKS route gate. The shared rectangular-tensor invariant in planck-tddft-exchange detects the B-index mutant; this molecular case ensures the same helper is exercised by the spin-conserving production path.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Reference :                   UKS",
+    "TDDFT / Linear Response :     full Casida spin-conserving solver",
+    "DFT Hybrid XC :               B3LYP exact exchange coefficient = 0.200000",
+    "Root  1 dominant configurations:"
+   ],
+   "checks": []
+  },
+  {
+   "id": "water_tddft_hse06_casida_sto3g",
+   "input": "tests/inputs/regression/dft/water_tddft_hse06_casida_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_pyscf_reference": "HSE06 RKS singlet Casida (short-range only, omega 0.11): 11.8513670 14.1345242 14.8228534 18.0786336 eV. PySCF 2.13.0 (tests/pyscf/rs_tddft_references.py), water/STO-3G Cartesian, grid level 6. atol 5e-4 eV: the floor is grid/kernel, not exchange -- UKS PBE (no exact exchange) already sits 1.9e-4 eV from PySCF, and PySCF wB97X itself moves ~1e-4 eV between grid levels 7 and 8. Dropping the short-range term shifts roots by ~3 eV.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Reference :                   RKS",
+    "full Casida singlet solver with 0.000000 full-range + 0.250000 short-range"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 11.851367,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 14.1345242,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 14.8228534,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 18.0786336,
+     "atol": 0.0005
+    }
+   ]
+  },
+  {
+   "id": "water_tddft_hse06_triplet_casida_sto3g",
+   "input": "tests/inputs/regression/dft/water_tddft_hse06_triplet_casida_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_pyscf_reference": "HSE06 RKS triplet Casida: 9.8613957 12.2240713 12.7939598 14.6310737 eV. PySCF 2.13.0 (tests/pyscf/rs_tddft_references.py), water/STO-3G Cartesian, grid level 6. atol 5e-4 eV: the floor is grid/kernel, not exchange -- UKS PBE (no exact exchange) already sits 1.9e-4 eV from PySCF, and PySCF wB97X itself moves ~1e-4 eV between grid levels 7 and 8. Dropping the short-range term shifts roots by ~3 eV.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "full Casida triplet solver with 0.000000 full-range + 0.250000 short-range"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 9.8613957,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 12.2240713,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 12.7939598,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 14.6310737,
+     "atol": 0.0005
+    }
+   ]
+  },
+  {
+   "id": "water_tddft_camb3lyp_casida_sto3g",
+   "input": "tests/inputs/regression/dft/water_tddft_camb3lyp_casida_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_pyscf_reference": "CAM-B3LYP RKS singlet Casida (full 0.65 + short -0.46, omega 0.33): 11.7792602 14.0890894 14.6108765 17.9912125 eV. PySCF 2.13.0 (tests/pyscf/rs_tddft_references.py), water/STO-3G Cartesian, grid level 6. atol 5e-4 eV: the floor is grid/kernel, not exchange -- UKS PBE (no exact exchange) already sits 1.9e-4 eV from PySCF, and PySCF wB97X itself moves ~1e-4 eV between grid levels 7 and 8. Dropping the short-range term shifts roots by ~3 eV.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "full Casida singlet solver with 0.650000 full-range + -0.460000 short-range"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 11.7792602,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 14.0890894,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 14.6108765,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 17.9912125,
+     "atol": 0.0005
+    }
+   ]
+  },
+  {
+   "id": "water_tddft_wb97x_tda_sto3g",
+   "input": "tests/inputs/regression/dft/water_tddft_wb97x_tda_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_pyscf_reference": "wB97X RKS singlet TDA (full 1.0 + short -0.842294, omega 0.30): 11.9295228 14.1645962 14.9190625 18.2402648 eV. PySCF 2.13.0 (tests/pyscf/rs_tddft_references.py), water/STO-3G Cartesian, grid level 6. atol 5e-4 eV: the floor is grid/kernel, not exchange -- UKS PBE (no exact exchange) already sits 1.9e-4 eV from PySCF, and PySCF wB97X itself moves ~1e-4 eV between grid levels 7 and 8. Dropping the short-range term shifts roots by ~3 eV.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "TDA singlet solver with 1.000000 full-range + -0.842294 short-range"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 11.9295228,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 14.1645962,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 14.9190625,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 18.2402648,
+     "atol": 0.0005
+    }
+   ]
+  },
+  {
+   "id": "water_triplet_uks_tddft_camb3lyp_sto3g",
+   "input": "tests/inputs/regression/dft/water_triplet_uks_tddft_camb3lyp_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_pyscf_reference": "CAM-B3LYP UKS triplet water, spin-conserving Casida: 2.9514402 3.4832863 7.0447881 eV. PySCF 2.13.0 (tests/pyscf/rs_tddft_references.py), water/STO-3G Cartesian, grid level 6. atol 5e-4 eV: the floor is grid/kernel, not exchange -- UKS PBE (no exact exchange) already sits 1.9e-4 eV from PySCF, and PySCF wB97X itself moves ~1e-4 eV between grid levels 7 and 8. Dropping the short-range term shifts roots by ~3 eV.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Reference :                   UKS",
+    "full Casida spin-conserving solver with 0.650000 full-range + -0.460000 short-range"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 2.9514402,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 3.4832863,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 7.0447881,
+     "atol": 0.0005
+    }
+   ]
+  },
+  {
+   "id": "water_tddft_camy_b3lyp_rejected_sto3g",
+   "input": "tests/inputs/regression/dft/water_tddft_camy_b3lyp_rejected_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_note": "Yukawa-screened exchange: the ERI engines evaluate only the erf kernel, so TDDFT must reject it rather than treat it as erf.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 1,
+   "contains": [
+    "uses Yukawa or Gaussian screened exchange"
+   ],
+   "checks": []
+  },
+  {
    "id": "h_dft_uks_b3lyp_sto3g",
    "input": "tests/inputs/regression/dft/h_dft_uks_b3lyp.hfinp",
    "executable": "planck-dft",

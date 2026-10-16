@@ -229,6 +229,20 @@ namespace DFT
                 return false;
             }
 
+            // Yukawa / Gaussian screened exchange: the ERI engines evaluate
+            // only the erf kernel, so callers must reject these rather than
+            // let cam_coefficients() fold them in as if they were erf.
+            bool has_non_erf_short_range_exchange() const noexcept
+            {
+                if (func_.hyb_type == nullptr)
+                    return false;
+                for (int term = 0; term < func_.hyb_number_terms; ++term)
+                    if (func_.hyb_type[term] == XC_HYB_YUKAWA_SR ||
+                        func_.hyb_type[term] == XC_HYB_GAUSSIAN_SR)
+                        return true;
+                return false;
+            }
+
             bool has_pt2_term() const noexcept
             {
                 if (func_.hyb_type == nullptr || func_.hyb_coeff == nullptr)
