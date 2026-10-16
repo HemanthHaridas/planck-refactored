@@ -122,8 +122,8 @@ def planck_input(atoms, basis: str, engine: str, method: str,
                  max_cycles: int = 100) -> str:
     coords = "\n".join(f"{s}  {x:.6f}  {y:.6f}  {z:.6f}" for s, x, y, z in atoms)
     # DFT: B3LYP is the hybrid case -- it exercises BOTH the Coulomb and the
-    # exact-exchange build, which is exactly the nb^4 path DFT_FUSED_JK_SCOPE
-    # wants to kill. A pure GGA would only exercise J and would understate the
+    # exact-exchange build, which is exactly the nb^4 path #151 removed
+    # (docs/HPC_MPI.md). A pure GGA would only exercise J and would understate the
     # gap.
     dft_block = (
         """
@@ -837,7 +837,7 @@ def main() -> int:
         print("    rank-split #156) are distributed; a rising f, not a low efficiency,")
         print("    is what would indict either.")
 
-    # Q2 -- the DFT memory gap. The headline number for DFT_FUSED_JK_SCOPE.md.
+    # Q2 -- the DFT memory gap (the before/after of #151, docs/HPC_MPI.md).
     print("\nQ2  Is DFT paying for the missing fused J/K? (peak RSS, 1 rank)")
     hf1 = {r["nwater"]: r for r in runs("hf", 1)}
     dft1 = {r["nwater"]: r for r in runs("dft", 1)}
@@ -908,7 +908,7 @@ def main() -> int:
                         print("        -> DFT's J/K build is not distributed (dense nb^4),")
                         print("           so this is dominated by the MISSING FUSED J/K,")
                         print("           not by diagonalization. Land Step 3 of")
-                        print("           docs/DFT_FUSED_JK_SCOPE.md, then re-measure --")
+                        print("           docs/HPC_MPI.md (#151), then re-measure --")
                         print("           only then does this number mean 'diag'.")
                         print("           (A residue near 100% = DFT is not distributing")
                         print("            at all, which is exactly the predicted symptom.)")

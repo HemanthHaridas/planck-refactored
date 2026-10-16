@@ -230,7 +230,7 @@ namespace
                       << worst_uhf << '\n';
     }
 
-    // ── J-only / K-only split (DFT_FUSED_JK_SCOPE.md Steps 0-1) ──────────────
+    // ── J-only / K-only split (PR #151; docs/HPC_MPI.md) ──────────────
     //
     // DFT needs J and K separately: J always, K scaled by
     // exact_exchange_coefficient, and for range-separated functionals TWO K's

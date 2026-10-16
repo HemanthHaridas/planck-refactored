@@ -11,7 +11,7 @@
 //                         "rank 0"), so the dispatch logic is testable without
 //                         an MPI toolchain.
 //
-// Tier 3 scope (docs/HPC_MPI_EXECUTABLE_SCOPE.md): scaffolding + dispatch +
+// Tier 3 (docs/HPC_MPI.md): scaffolding + dispatch +
 // rank-aware I/O. The distributed Fock build (Tier 1) plugs in underneath the
 // existing Driver::run without changing this file.
 //

@@ -770,7 +770,7 @@ install(TARGETS planck-dft DESTINATION bin)
 # One binary that dispatches HF vs DFT on calculator.is_dft_run(). Built when
 # BUILD_MPI=ON. If MPI is found it links MPI and defines USE_MPI; otherwise it
 # still builds as a plain serial binary so the dispatch logic is testable without
-# an MPI toolchain (single rank 0). See docs/HPC_MPI_EXECUTABLE_SCOPE.md.
+# an MPI toolchain (single rank 0). See docs/HPC_MPI.md.
 option(BUILD_MPI "Build the unified planck-mpi front end" OFF)
 if(BUILD_MPI)
     add_executable(planck-mpi
