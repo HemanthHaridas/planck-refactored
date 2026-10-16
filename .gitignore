@@ -9,6 +9,8 @@ src/lookup/loader/cache_path.h
 license.json
 boys_cache
 inputs
+include
+share
 !tests/inputs/
 !tests/inputs/**
 !tests/benchmarks/
