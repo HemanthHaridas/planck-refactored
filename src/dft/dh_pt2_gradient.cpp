@@ -265,9 +265,21 @@ namespace DFT::Gradient
                 direct.engine, HartreeFock::ERIKernel::Coulomb, 0.0,
                 direct.tol_eri, direct.sym_ops);
         };
-        return make_dh_eq41_response_operator(inputs.exact_exchange,
-                                                std::move(coulomb), std::move(exchange),
-                                                inputs.xc);
+        auto response = make_dh_eq41_response_operator(inputs.exact_exchange,
+            std::move(coulomb), std::move(exchange), inputs.xc);
+        if (!response) return std::unexpected(response.error());
+        response->paired_coulomb_exchange = [direct](
+            const Eigen::Ref<const Eigen::MatrixXd> &density)
+            -> std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>
+        {
+            if (density.rows() != static_cast<Eigen::Index>(direct.nbasis) ||
+                density.cols() != static_cast<Eigen::Index>(direct.nbasis))
+                return std::unexpected("DH Eq. 41 paired J/K: density dimensions do not match the AO basis.");
+            return _compute_2e_jk_direct(*direct.shell_pairs, density, direct.nbasis,
+                direct.engine, HartreeFock::ERIKernel::Coulomb, 0.0,
+                direct.tol_eri, direct.sym_ops);
+        };
+        return response;
     }
 
     std::expected<DHResponseFn, std::string>
@@ -303,13 +315,28 @@ namespace DFT::Gradient
     {
         if (density.rows() != density.cols())
             return std::unexpected("DH Eq. 41 response: density must be square.");
-        auto j = coulomb(density);
         auto vxc = xc(density);
-        if (!j || !vxc)
-            return std::unexpected("DH Eq. 41 response: Coulomb or XC channel failed.");
-        if (j->rows() != density.rows() || j->cols() != density.cols() ||
-            vxc->rows() != density.rows() || vxc->cols() != density.cols())
-            return std::unexpected("DH Eq. 41 response: channel dimensions do not match density.");
+        if (!vxc || vxc->rows() != density.rows() || vxc->cols() != density.cols())
+            return std::unexpected("DH Eq. 41 response: XC channel failed or has wrong dimensions.");
+        std::expected<Eigen::MatrixXd, std::string> j =
+            std::unexpected("DH Eq. 41 response: Coulomb channel was not evaluated.");
+        std::expected<Eigen::MatrixXd, std::string> k =
+            std::unexpected("DH Eq. 41 response: exchange channel was not evaluated.");
+        if (exact_exchange != 0.0 && paired_coulomb_exchange)
+        {
+            auto paired = paired_coulomb_exchange(density);
+            if (!paired)
+                return std::unexpected("DH Eq. 41 response: paired J/K channel failed: " + paired.error());
+            j = std::move(paired->first);
+            k = std::move(paired->second);
+        }
+        else
+        {
+            j = coulomb(density);
+            if (exact_exchange != 0.0) k = exchange(density);
+        }
+        if (!j || j->rows() != density.rows() || j->cols() != density.cols())
+            return std::unexpected("DH Eq. 41 response: Coulomb channel failed or has wrong dimensions.");
         Channels out;
         out.coulomb = 4.0 * *j;
         // `density` is the symmetric correction-density test object D' in
@@ -321,7 +348,6 @@ namespace DFT::Gradient
         out.exchange = Eigen::MatrixXd::Zero(density.rows(), density.cols());
         if (exact_exchange != 0.0)
         {
-            auto k = exchange(density);
             if (!k || k->rows() != density.rows() || k->cols() != density.cols())
                 return std::unexpected("DH Eq. 41 response: exchange channel failed or has wrong dimensions.");
             // Eq. (41): -a_x [K[D'] + K[D']^T].  For symmetric D', the

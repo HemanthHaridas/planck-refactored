@@ -1819,6 +1819,24 @@ namespace
     }
 
     template <typename Elem>
+    std::pair<Eigen::MatrixXd, Eigen::MatrixXd> rys_fused_raw_jk(
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const Eigen::MatrixXd &density, std::size_t nb,
+        HartreeFock::ERIKernel kernel, double omega, double tol_eri,
+        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops, Elem elem)
+    {
+        const Eigen::MatrixXd Q = rys_schwarz_matrix(shell_pairs, nb, sym_ops);
+        Eigen::MatrixXd J, K, unused;
+        HartreeFock::Integrals::FusedFockDensities dens;
+        dens.P = &density;
+        HartreeFock::Integrals::fused_fock_build(
+            shell_pairs, nb, Q, kernel, omega, tol_eri,
+            /*spin_resolved=*/false, dens, J, K, unused, elem, sym_ops,
+            HartreeFock::Integrals::FusedTerm::RawCoulombExchange);
+        return {std::move(J), std::move(K)};
+    }
+
+    template <typename Elem>
     std::pair<Eigen::MatrixXd, Eigen::MatrixXd> rys_fused_uhf(
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb, std::size_t nb,
@@ -1851,6 +1869,17 @@ Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock_direct(
 }
 
 std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
+HartreeFock::RysQuad::_compute_2e_jk_direct(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &density, const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel, const double omega, const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    return rys_fused_raw_jk(shell_pairs, density, nbasis, kernel, omega, tol_eri,
+        sym_ops, rys_eri_elem);
+}
+
+std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
 HartreeFock::RysQuad::_compute_2e_fock_uhf_direct(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb, const std::size_t nbasis,
@@ -1869,6 +1898,17 @@ Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock_auto_direct(
     HartreeFock::Integrals::FusedTerm term)
 {
     return rys_fused_rhf(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem, term);
+}
+
+std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
+HartreeFock::RysQuad::_compute_2e_jk_auto_direct(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &density, const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel, const double omega, const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    return rys_fused_raw_jk(shell_pairs, density, nbasis, kernel, omega, tol_eri,
+        sym_ops, auto_eri_elem);
 }
 
 std::pair<Eigen::MatrixXd, Eigen::MatrixXd>

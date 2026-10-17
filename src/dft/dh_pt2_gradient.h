@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 #include <Eigen/Dense>
 #include "ao_grid.h"
@@ -19,6 +20,9 @@ namespace DFT::Gradient
 
     using DHResponseFn = std::function<std::expected<Eigen::MatrixXd, std::string>(
         const Eigen::Ref<const Eigen::MatrixXd> &)>;
+    using DHResponsePairFn = std::function<std::expected<
+        std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>(
+        const Eigen::Ref<const Eigen::MatrixXd> &)>;
 
     // Paper Eq. (41), in Planck's AO total-density convention.  `exchange`
     // supplies the raw K[D] channel; apply() explicitly forms K[D]+K[D]^T.
@@ -30,6 +34,10 @@ namespace DFT::Gradient
         DHResponseFn coulomb;
         DHResponseFn exchange;
         DHResponseFn xc;
+        // Optional direct hybrid fast path returning raw {J[D], K[D]} from
+        // one quartet traversal. Generic/test operators retain the separate
+        // callbacks as their reference implementation.
+        DHResponsePairFn paired_coulomb_exchange;
 
         [[nodiscard]] std::expected<Eigen::MatrixXd, std::string>
         apply(const Eigen::Ref<const Eigen::MatrixXd> &density) const;

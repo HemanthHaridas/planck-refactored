@@ -222,6 +222,33 @@ namespace
         const Eigen::MatrixXd k = _compute_2e_k_direct(
             shell_pairs, d, nb, HartreeFock::IntegralMethod::ObaraSaika,
             HartreeFock::ERIKernel::Coulomb, 0.0, 0.0, nullptr);
+        // O8.1: the paired raw-J/K traversal must be channel-identical to
+        // the long-standing independent raw builders for every direct engine.
+        // The Eq. (41) prefactors below remain outside that primitive.
+        for (const auto engine : {HartreeFock::IntegralMethod::ObaraSaika,
+                                  HartreeFock::IntegralMethod::RysQuadrature,
+                                  HartreeFock::IntegralMethod::HeadGordonPople,
+                                  HartreeFock::IntegralMethod::Auto})
+        {
+            const auto paired = _compute_2e_jk_direct(
+                shell_pairs, d, nb, engine, HartreeFock::ERIKernel::Coulomb,
+                0.0, 0.0, nullptr);
+            const auto separate_j = _compute_2e_j_direct(
+                shell_pairs, d, nb, engine, HartreeFock::ERIKernel::Coulomb,
+                0.0, 0.0, nullptr);
+            const auto separate_k = _compute_2e_k_direct(
+                shell_pairs, d, nb, engine, HartreeFock::ERIKernel::Coulomb,
+                0.0, 0.0, nullptr);
+            const double pair_error = std::max(
+                (paired.first - separate_j).cwiseAbs().maxCoeff(),
+                (paired.second - separate_k).cwiseAbs().maxCoeff());
+            std::printf("O8.1 raw J/K engine=%d max_abs=%.12e %s\n",
+                static_cast<int>(engine), pair_error, pair_error < 1e-10 ? "PASS" : "FAIL");
+            if (pair_error >= 1e-10)
+                fail("O8.1 paired raw J/K differs from separate direct channels");
+        }
+        if (!op->paired_coulomb_exchange)
+            fail("O8.1 direct Eq. 41 operator did not bind the paired raw J/K action");
         // Eq. (41) maps the symmetric closed-shell D' test density onto the
         // KS response adjoint.  The XC HVP receives the same total-density
         // factor four as the Coulomb channel, so this callback contributes
@@ -1302,14 +1329,30 @@ namespace
         // the independent reconstruction above. Observe callback counts and
         // tensor capacities, not timings or a production diagnostic switch.
         auto reused_inputs=driver_inputs;
-        int response_calls=0;
+        int separate_coulomb_calls=0;
+        int paired_jk_calls=0;
         const auto reference_j=reused_inputs.response_operator.coulomb;
         reused_inputs.response_operator.coulomb=[&](const Eigen::Ref<const Eigen::MatrixXd> &q)
             -> std::expected<Eigen::MatrixXd,std::string>
-        { ++response_calls; return reference_j(q); };
+        { ++separate_coulomb_calls; return reference_j(q); };
+        const auto reference_paired=reused_inputs.response_operator.paired_coulomb_exchange;
+        if (reference_paired)
+            reused_inputs.response_operator.paired_coulomb_exchange=
+                [&](const Eigen::Ref<const Eigen::MatrixXd> &q)
+                -> std::expected<std::pair<Eigen::MatrixXd,Eigen::MatrixXd>,std::string>
+            { ++paired_jk_calls; return reference_paired(q); };
+        const auto one_response_action=[&]()
+        {
+            // O8.1 replaces the separate J and K traversals in Eq. (41) with
+            // one paired raw-channel traversal.  The O2 ownership gate counts
+            // that one physical response action, rather than assuming it is a
+            // call to the legacy J callback.
+            return reference_paired ? paired_jk_calls==1 && separate_coulomb_calls==0
+                                    : separate_coulomb_calls==1;
+        };
         auto stationary=DFT::Gradient::build_dh_stationary_products(
             result,.27,c,workspace->mo_eri,reused_inputs.response_operator);
-        if (!stationary || response_calls!=1) { fail("O2 stationary preparation count"); return; }
+        if (!stationary || !one_response_action()) { fail("O2 stationary preparation count"); return; }
         const auto *amplitude_data=stationary->amplitudes.t_tilde.data();
         const auto *rhs_data=stationary->lagrangian_rhs.total_ai.data();
         const auto *coefficient_data=stationary->eq40_amplitude_rhs.pair_coefficients.total.data();
@@ -1321,9 +1364,10 @@ namespace
         invalid.lagrangian_rhs.total_ai(0,0)=std::numeric_limits<double>::quiet_NaN();
         if (DFT::Gradient::build_dh_gradient_driver_contract(reused_inputs,std::move(invalid)))
             fail("O2 nonfinite stationary snapshot accepted");
-        response_calls=0;
+        separate_coulomb_calls=0;
+        paired_jk_calls=0;
         const auto reused=DFT::Gradient::build_dh_gradient_driver_contract(reused_inputs,std::move(*stationary));
-        if (!driver_contract || !reused || response_calls!=1)
+        if (!driver_contract || !reused || !one_response_action())
         { fail("O2 reused assembly/response count"); return; }
         if (amplitude_data!=reused->amplitudes.t_tilde.data() || rhs_data!=reused->lagrangian_rhs.total_ai.data())
             fail("O2 stationary products copied instead of moved");
@@ -1389,7 +1433,8 @@ namespace
             6*full_gamma.separable_symmetric_ao.size()*sizeof(double),
             expects_compact ? "direct" : "dense-reference",
             expects_compact ? static_cast<std::size_t>(2*compact_gamma.n_ao*compact_gamma.n_ao)*sizeof(double) :
-                6*compact_gamma.separable_symmetric_ao.size()*sizeof(double), response_calls);
+                6*compact_gamma.separable_symmetric_ao.size()*sizeof(double),
+            reference_paired ? paired_jk_calls : separate_coulomb_calls);
         // O7.6.5: exercise the *driver* handoff with the production-shaped
         // owners.  In particular, the PT2 amplitudes are scratch-backed, the
         // geometry workspace carries no all-MO ERI tensor or materialized

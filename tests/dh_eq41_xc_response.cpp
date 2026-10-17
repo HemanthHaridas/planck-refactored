@@ -1,3 +1,4 @@
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -43,7 +44,9 @@ namespace
             ao.grad_y.resize(points,2); ao.grad_z.resize(points,2);
             for (int p=0;p<points;++p)
             {
-                grid.points(p,3)=.3+.01*p;
+                // A zero quadrature weight must be a strict no-op in both
+                // the scalar reference and the blocked projection path.
+                grid.points(p,3)=p==0 ? 0.0 : .3+.01*p;
                 for (int m=0;m<2;++m)
                 {
                     ao.values(p,m)=.8+.1*std::cos(.7*(p+1)*(m+1));
@@ -54,6 +57,11 @@ namespace
             }
             Eigen::MatrixXd ground(2,2); ground << .9,.2,.2,.7;
             Eigen::MatrixXd trial(2,2); trial << .3,-.1,-.1,.25;
+            const auto symmetric=[](double a,double b,double d)
+            { Eigen::Matrix2d m; m << a,b,b,d; return m; };
+            const std::array<Eigen::Matrix2d,3> symmetric_trials{{
+                symmetric(.3,-.1,.25), symmetric(-.17,.36,.08), symmetric(.61,.04,-.29)
+            }};
             for (const auto *name:{"lda_x","gga_x_pbe","hyb_gga_xc_b2plyp"})
             {
                 auto x=functional(name);
@@ -62,22 +70,29 @@ namespace
                 auto kernel=DFT::Driver::prepare_rks_xc_kernel(grid,ao,ground,*x,*c);
                 if (!kernel) { std::fprintf(stderr,"O2 cache: %s\n",kernel.error().c_str()); return false; }
                 double max_error=0,fd_error=0;
+                for (const auto &base_trial:symmetric_trials)
                 for (double scale:{0.,1.,-.4,2.})
                 {
-                    Eigen::MatrixXd q=scale*trial;
+                    Eigen::MatrixXd q=scale*base_trial;
                     auto cached=kernel->apply(q);
                     auto reference=DFT::Driver::compute_analytic_xc_hessian_vector_product(grid,ao,ground,q,*x,*c);
                     if (!cached || !reference) return false;
                     max_error=std::max(max_error,(*cached-*reference).norm());
                     ok &= near(*cached,*reference,1e-12);
-                    for (double h:{1e-3,1e-4})
-                    {
-                        auto plus=vxc(grid,ao,ground+h*q,*x,*c),minus=vxc(grid,ao,ground-h*q,*x,*c);
-                        if (!plus || !minus) return false;
-                        const Eigen::MatrixXd difference=(*plus-*minus)/(2*h);
-                        fd_error=std::max(fd_error,(*cached-difference).norm());
-                        ok &= near(*cached,difference,2e-7);
-                    }
+                    // The integrated potential has visible O(h^2) central-FD
+                    // truncation over a 64-point panel.  Extrapolate the h and
+                    // h/2 central differences so this remains an independent
+                    // numerical oracle rather than a grid-size-dependent
+                    // finite-difference error bound.
+                    constexpr double h=1e-4;
+                    auto plus=vxc(grid,ao,ground+h*q,*x,*c),minus=vxc(grid,ao,ground-h*q,*x,*c);
+                    auto plus_half=vxc(grid,ao,ground+.5*h*q,*x,*c),minus_half=vxc(grid,ao,ground-.5*h*q,*x,*c);
+                    if (!plus || !minus || !plus_half || !minus_half) return false;
+                    const Eigen::MatrixXd central=(*plus-*minus)/(2*h);
+                    const Eigen::MatrixXd central_half=(*plus_half-*minus_half)/h;
+                    const Eigen::MatrixXd difference=(4.0*central_half-central)/3.0;
+                    fd_error=std::max(fd_error,(*cached-difference).norm());
+                    ok &= near(*cached,difference,2e-7);
                 }
                 auto expected=kernel->apply(trial);
                 auto snapshot_copy=*kernel;

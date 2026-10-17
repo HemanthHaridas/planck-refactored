@@ -128,6 +128,15 @@ namespace HartreeFock
             HartreeFock::Integrals::FusedTerm term =
                 HartreeFock::Integrals::FusedTerm::Combined);
 
+        std::pair<Eigen::MatrixXd, Eigen::MatrixXd> _compute_2e_jk_direct(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const Eigen::MatrixXd &density,
+            std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10,
+            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
+
         std::pair<Eigen::MatrixXd, Eigen::MatrixXd> _compute_2e_fock_uhf_direct(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             const Eigen::MatrixXd &Pa,
@@ -150,6 +159,15 @@ namespace HartreeFock
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
             HartreeFock::Integrals::FusedTerm term =
                 HartreeFock::Integrals::FusedTerm::Combined);
+
+        std::pair<Eigen::MatrixXd, Eigen::MatrixXd> _compute_2e_jk_auto_direct(
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const Eigen::MatrixXd &density,
+            std::size_t nbasis,
+            HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+            double omega = 0.0,
+            double tol_eri = 1e-10,
+            const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr);
 
         std::pair<Eigen::MatrixXd, Eigen::MatrixXd> _compute_2e_fock_uhf_auto_direct(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,

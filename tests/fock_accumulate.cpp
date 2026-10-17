@@ -42,6 +42,7 @@
 #include "integrals/os.h"
 #include "integrals/rys.h"
 #include "integrals/shellpair.h"
+#include "require_boys_library.h"
 
 namespace
 {
@@ -803,6 +804,12 @@ void check_symmetry_ops(const std::string &basis_name)
 
 int main()
 {
+    // Real-integral fixtures dispatch through the signed, runtime-loaded Boys
+    // implementation.  Fail cleanly if it cannot be made available rather
+    // than dereferencing the uninitialized dispatch pointer in boys_vec().
+    if (!require_boys_library())
+        return 1;
+
     check_random_tensors();
     check_split_accumulators();
     check_real_integrals("sto-3g");

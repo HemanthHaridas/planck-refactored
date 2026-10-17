@@ -114,30 +114,57 @@ namespace DFT::Driver
             return std::unexpected("RKS XC cache: invalid trial density.");
         auto trial=evaluate_density_on_grid(ao,density);
         if (!trial) return std::unexpected(trial.error());
-        Eigen::MatrixXd out=Eigen::MatrixXd::Zero(ao.nbasis(),ao.nbasis());
-        for (Eigen::Index p=0;p<ao.npoints();++p)
+        // The XC kernel action is called repeatedly by the DH Z-vector solve.
+        // Keep its temporary storage O(B*N_AO), rather than materializing a
+        // grid-sized weighted AO panel, and reduce point blocks in increasing
+        // grid order.  This is algebraically the scalar rank-one projection
+        // below, but lets Eigen execute each panel contraction as GEMM.
+        constexpr Eigen::Index kPointBlock = 128;
+        const Eigen::Index npoints=ao.npoints();
+        const Eigen::Index nbasis=ao.nbasis();
+        Eigen::MatrixXd out=Eigen::MatrixXd::Zero(nbasis,nbasis);
+        for (Eigen::Index first=0;first<npoints;first+=kPointBlock)
         {
-            const double weight=d.weights(p);
-            if (weight==0.0) continue;
-            const auto phi=ao.values.row(p).transpose();
-            const double drho=trial->total.rho(p);
+            const Eigen::Index count=std::min(kPointBlock,npoints-first);
+            const auto phi=ao.values.middleRows(first,count);
+            Eigen::VectorXd coefficient=Eigen::VectorXd::Zero(count);
             if (!d.gga)
             {
-                const double delta_vrho=d.rr[p]*drho;
-                out.noalias()+=(weight*delta_vrho)*(phi*phi.transpose());
+                for (Eigen::Index local=0;local<count;++local)
+                {
+                    const Eigen::Index p=first+local;
+                    coefficient(local)=d.weights(p)*d.rr[static_cast<std::size_t>(p)]*
+                        trial->total.rho(p);
+                }
+                const Eigen::MatrixXd weighted_phi=phi.array().colwise()*coefficient.array();
+                out.noalias()+=phi.transpose()*weighted_phi;
                 continue;
             }
-            const double dot=d.ground.grad_x(p)*trial->total.grad_x(p)+
-                d.ground.grad_y(p)*trial->total.grad_y(p)+d.ground.grad_z(p)*trial->total.grad_z(p);
-            const double delta_vrho=d.rr[p]*drho+2.0*d.rs[p]*dot;
-            const double delta_vsigma=d.rs[p]*drho+2.0*d.ss[p]*dot;
-            const Eigen::Vector3d grad{d.ground.grad_x(p),d.ground.grad_y(p),d.ground.grad_z(p)};
-            const Eigen::Vector3d dg{trial->total.grad_x(p),trial->total.grad_y(p),trial->total.grad_z(p)};
-            const Eigen::Vector3d term=2.0*delta_vsigma*grad+2.0*d.vs[p]*dg;
-            const Eigen::VectorXd projected=term.x()*ao.grad_x.row(p).transpose()+
-                term.y()*ao.grad_y.row(p).transpose()+term.z()*ao.grad_z.row(p).transpose();
-            out.noalias()+=(weight*delta_vrho)*(phi*phi.transpose());
-            out.noalias()+=weight*(phi*projected.transpose()+projected*phi.transpose());
+            Eigen::VectorXd term_x(count),term_y(count),term_z(count);
+            for (Eigen::Index local=0;local<count;++local)
+            {
+                const Eigen::Index p=first+local;
+                const std::size_t index=static_cast<std::size_t>(p);
+                const double drho=trial->total.rho(p);
+                const double dot=d.ground.grad_x(p)*trial->total.grad_x(p)+
+                    d.ground.grad_y(p)*trial->total.grad_y(p)+d.ground.grad_z(p)*trial->total.grad_z(p);
+                const double delta_vrho=d.rr[index]*drho+2.0*d.rs[index]*dot;
+                const double delta_vsigma=d.rs[index]*drho+2.0*d.ss[index]*dot;
+                coefficient(local)=d.weights(p)*delta_vrho;
+                term_x(local)=d.weights(p)*(2.0*delta_vsigma*d.ground.grad_x(p)+
+                    2.0*d.vs[index]*trial->total.grad_x(p));
+                term_y(local)=d.weights(p)*(2.0*delta_vsigma*d.ground.grad_y(p)+
+                    2.0*d.vs[index]*trial->total.grad_y(p));
+                term_z(local)=d.weights(p)*(2.0*delta_vsigma*d.ground.grad_z(p)+
+                    2.0*d.vs[index]*trial->total.grad_z(p));
+            }
+            const Eigen::MatrixXd weighted_phi=phi.array().colwise()*coefficient.array();
+            out.noalias()+=phi.transpose()*weighted_phi;
+            const Eigen::MatrixXd projected=
+                ao.grad_x.middleRows(first,count).array().colwise()*term_x.array()+
+                ao.grad_y.middleRows(first,count).array().colwise()*term_y.array()+
+                ao.grad_z.middleRows(first,count).array().colwise()*term_z.array();
+            out.noalias()+=phi.transpose()*projected+projected.transpose()*phi;
         }
         if (!out.allFinite()) return std::unexpected("RKS XC cache: nonfinite action.");
         return out;
