@@ -67,31 +67,32 @@ double-hybrid gradients. See `docs/DFT_GRID_CONVERGENCE_SCOPE.md`.
 - V_xc from grid integration
 - Symmetry + SAO blocking supported
 
-### J / K build parallelism (and why it does not jitter)
+### J / K build: memory-direct, and why it does not jitter
 
-`build_coulomb_from_eri` and `build_exchange_from_eri` in
-`src/dft/driver.cpp` are the per-iteration `nb⁴` AO contractions for the KS
-Coulomb and exact-exchange (hybrid / range-separated) matrices. They were
-fully serial — the dominant DFT load-imbalance (B3LYP profiled at ~60% of
-samples idle at the barrier) — and are now `#pragma omp parallel for
-schedule(static)` over the outer `mu`, mirroring
-`HartreeFock::ObaraSaika::_compute_fock_rhf`.
+The KS Coulomb and exact-exchange matrices are built memory-direct through the
+same fused Fock loop HF uses: `_compute_2e_j_direct` and `_compute_2e_k_direct`
+/ `_compute_2e_k_uhf_direct` (`src/integrals/base.h`, accumulators in
+`src/integrals/fock_accumulate.h`). No `nb⁴` ERI tensor is materialized for
+the SCF; the old `build_coulomb_from_eri` / `build_exchange_from_eri` dense
+contractions were deleted (2026-07-20). On 8 water/6-31g/B3LYP this cut peak
+RSS from 1360 to 427 MB at an identical energy. TDDFT is the one remaining
+dense-tensor consumer.
 
-Crucially this is **not** the kind of change that caused the historical DFT
-jitter (see DFT XC Reduction Determinism). That jitter came from a
-**cross-thread reduction** summed in non-deterministic completion order. The
-J/K builds have **no cross-thread summation**: each thread owns a disjoint set
-of output rows `coulomb(mu,·)` / `exchange(mu,·)` and computes them entirely
-itself, with the inner `lam`/`sig` accumulation order unchanged. Verified
-**bitwise-identical across `OMP_NUM_THREADS` = 1/2/4/8** (water-dimer/cc-pVTZ
-B3LYP `-152.9317586225` to all digits), unlike the grid XC reduction which
-still drifts ~1e-10 across thread counts.
+DFT needs J and K separately, with **unscaled** K: each call site applies its
+own prefactor (`-0.5 × c` for RKS, `-c` for UKS), and the ½ must never be
+folded into the shared accumulator or RKS hybrids get half their exact
+exchange. Architecture and MPI distribution: `docs/HPC_MPI.md`.
 
-The DFT **grid layer** (`evaluate_density_on_grid`, the `xc_grid.cpp`
-density/XC loops) remains serial and is the residual DFT parallelization
-target (~12% idle after the J/K change). It is deliberately deferred: adding a
-parallel region there re-enters the grid-reduction jitter territory, so any
-reduction must use fixed thread-index order.
+None of this is the kind of change that caused the historical DFT jitter (see
+DFT XC Reduction Determinism). That jitter came from a **cross-thread
+reduction** summed in non-deterministic completion order; the fused loop sums
+in fixed order, and MPI reductions sum in fixed rank order.
+
+The grid layer is threaded too (`0453c80d`): the density contraction in
+`xc_grid.cpp` and the libxc `exc_vxc` evaluation split grid points into
+disjoint slabs with no cross-thread reduction, bitwise-identical across
+1/2/3/4/6/8 threads. AO-on-grid evaluation (`src/dft/ao_grid.h`) and grid
+construction remain serial; any future reduction there must use fixed order.
 
 ## PCM Solvation
 

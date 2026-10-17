@@ -1653,7 +1653,8 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
   binary** goes **2.70 s -> 0.81 s (3.3x)**. That positive control is what makes it
   a measurement rather than an inference, and `build-full` is the baseline O2 must
   beat. (Pick the control carefully: a small DFT case shows nothing, and a larger
-  one is grid-bound because the DFT grid layer is itself unthreaded.) (2) "The emitter
+  one is grid-bound: AO-on-grid evaluation (`ao_grid.h`) and grid
+  construction still carry no OpenMP.) (2) "The emitter
   never emits a pragma" is false: `emit/cpp_loops.py:331` already emits
   `#pragma omp parallel for collapse(n) schedule(dynamic)`, and
   `print_cpp_optimized` defaults `use_openmp=True`. That is a *different* emit path
@@ -1875,10 +1876,6 @@ identify the path taken. Not required for correctness or performance.
 
 ## Performance and maintenance opportunities
 
-- The DFT Coulomb/exchange (`build_coulomb_from_eri` / `build_exchange_from_eri`)
-  contractions are now parallel and verified thread-count-invariant (see the
-  Integral Engine note). The remaining DFT parallelization target is the grid
-  layer, tracked above under the DFT gaps.
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys
   hoist):

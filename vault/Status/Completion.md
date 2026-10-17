@@ -994,6 +994,10 @@ historical design context, but they are no longer the source of truth for
   (B3LYP), with all energies unchanged. New gates: `planck-transform-eri`,
   `planck-transform-eri-sph`, `planck-compute-2e`. The DFT J/K builds were
   confirmed thread-count-invariant (no repeat of the grid-reduction jitter).
+  Those two dense-tensor builders were later deleted outright (2026-07-20):
+  the KS J/K now run memory-direct through the fused Fock loop
+  (`_compute_2e_j_direct` / `_compute_2e_k_direct`), cutting 8-water/6-31g
+  B3LYP peak RSS 1360 -> 427 MB at an identical energy; see `docs/HPC_MPI.md`.
   See the Integral Engine and DFT implementation notes.
 - ROHF references enabled for CASSCF and RASSCF. ROHF stores a single common
   spatial-orbital set in the alpha channel, so the MCSCF loop and CI engine
