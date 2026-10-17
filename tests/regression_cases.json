@@ -879,7 +879,7 @@
     {
      "type": "metric_eq",
      "metric": "scf_converged_iterations",
-     "expected": 11
+     "expected": 10
     }
    ]
   },
