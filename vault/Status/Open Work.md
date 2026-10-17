@@ -1891,10 +1891,10 @@ identify the path taken. Not required for correctness or performance.
   L_tot ≤ 2 is 19.6 % (4 H2O / 6-31G*), 30.2 % (cc-pVDZ) and 53.7 % (8 H2O /
   6-31G, pure sp). A `sample` profile puts the kernel at 84.1 % and
   `ShellPair` construction at 8.4 %. **Bigger finding:** one branch of the
-  out-of-tree Boys core spends **17.7 % of the whole build** in libm calls,
-  on every engine. The fix lands in the Boys core and ships as a new blob
-  (measured 1.21× on 4 H2O / 6-31G*, 1.64× on 8 H2O / 6-31G). Do that before
-  C1/C2.
+  out-of-tree Boys core spent **17.7 % of the whole build** in libm calls,
+  on every engine. **Fixed in Boys library v1.1.0 (2026-10-17)**: through the
+  blob ~1.13× on 4 H2O / 6-31G* and ~1.37× on 8 H2O / 6-31G. Post-fix
+  L_tot ≤ 2 shares are 16.8 % / 31.0 % / 45.7 %. Next: C1.
 
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys

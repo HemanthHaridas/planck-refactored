@@ -1,13 +1,15 @@
 # Closed-Form Low-Angular-Momentum ERI Kernels — Scope
 
-Status: **scope; C0 done (2026-10-17), no kernel landed.** In-flight work, so
+Status: **scope; C0 done and the Boys-core fix it found shipped in Boys
+library v1.1.0 (2026-10-17); no closed-form kernel landed.** In-flight work, so
 this file is allowed to be scope-shaped; rewrite it as an answer when the work
 lands or is abandoned.
 
 **C0 changed the plan.** The real Fock build spends **17.7 %** of its time in
 libm calls inside one branch of the Boys core, which is more than closed forms
-for L_tot ≤ 2 would save on 6-31G* (see "C0 results"). That fix is small but
-lives in the out-of-tree Boys core, not in this repository.
+for L_tot ≤ 2 would save on 6-31G* (see "C0 results"). That fix lived in the
+out-of-tree Boys core and **shipped in library v1.1.0**; the shares below are
+re-measured on it.
 Projections below are now normalized to the **whole build**, not to HGP kernel
 time; the first-pass numbers overstated them by the ~16–20 % of the build that
 is loop overhead rather than ERI evaluation.
@@ -29,18 +31,24 @@ HGP to about 1e-16, measured on 4 H2O / 6-31G*:
 Even with a perfect kernel, the low classes are not most of the time. By
 Amdahl:
 
-Shares of the **whole Fock build** from the C0 probe (`planck-eri-class-share`),
-with the projected build speedup at ~5× on the covered classes and the ceiling:
+Shares of the **whole Fock build** from the C0 probe (`planck-eri-class-share`)
+on Boys library v1.1.0, with the projected build speedup at ~5× on the covered
+classes and the ceiling (single runs; about ±5 % noise):
 
 | coverage | 4 H2O / 6-31G* | 1 H2O / cc-pVDZ | 8 H2O / 6-31G |
 |---|---|---|---|
-| L_tot ≤ 1: (ss\|ss), (ps\|ss) | 7.2 % → 1.06× (1.08×) | 12.0 % → 1.11× (1.14×) | 23.8 % → 1.24× (1.31×) |
-| L_tot ≤ 2: adds (pp\|ss), (ps\|ps), (ds\|ss) | 19.6 % → 1.19× (1.24×) | 30.2 % → 1.32× (1.43×) | 53.7 % → 1.75× (2.16×) |
-| L_tot ≤ 4: through (pp\|pp), (ds\|ps), … | 54.8 % → **1.78×** (2.21×) | 73.6 % → **2.43×** (3.78×) | 80.8 % → **2.83×** (5.20×) |
+| L_tot ≤ 1: (ss\|ss), (ps\|ss) | 5.8 % → 1.05× (1.06×) | 13.4 % → 1.12× (1.16×) | 19.8 % → 1.19× (1.25×) |
+| L_tot ≤ 2: adds (pp\|ss), (ps\|ps), (ds\|ss) | 16.8 % → 1.16× (1.20×) | 31.0 % → 1.33× (1.45×) | 45.7 % → 1.58× (1.84×) |
+| L_tot ≤ 4: through (pp\|pp), (ds\|ps), … | 52.4 % → **1.72×** (2.10×) | 72.0 % → **2.36×** (3.57×) | 73.2 % → **2.41×** (3.74×) |
+
+The Boys fix lowered the low-L shares most on the water chains (8 H2O / 6-31G
+L_tot ≤ 2: 53.7 % → 45.7 %), because the far-apart pairs it sped up are
+mostly low-L. On v1.0.0 the same rows were 7.2 / 19.6 / 54.8 % (4 H2O),
+12.0 / 30.2 / 73.6 % (cc-pVDZ) and 23.8 / 53.7 / 80.8 % (8 H2O).
 
 The payoff depends on the basis. On d-containing 6-31G*, hand-written forms up
-to L_tot ≤ 2 are worth about 1.19×. On a pure sp basis (6-31G), L_tot ≤ 2 is
-already half the build. The ~2× payoff needs a **compile-time-specialized
+to L_tot ≤ 2 are worth about 1.16×. On a pure sp basis (6-31G), L_tot ≤ 2 is
+still close to half the build. The ~2× payoff needs a **compile-time-specialized
 shell-quartet kernel family** up to L_tot = 4. That is the "batched engine for sp-rich bases" from
 `docs/ERI_PERFORMANCE_SCOPE.md`, and it should be scoped as that.
 **Against the ~200× libcint gap, this is about a 2× step, not a fix.**
@@ -157,14 +165,22 @@ blob; it cannot be done from this repository. Measured on the same
 `fused_fock_build` harness with the fix linked in place of the blob:
 4 H2O / 6-31G* **1.21×**, 8 H2O / 6-31G **1.64×**, 1 H2O / cc-pVDZ unchanged
 (it never reaches that branch). The largest Fock-matrix change was 2.2e-16.
-It is worth more than C2+C3 on 6-31G*. It is not bitwise against the current
-blob, so gate it at the existing ERI tolerances. The loader's function-pointer
-dispatch also prevents inlining (`Lookup::boys` self time 3 %).
+It is worth more than C2+C3 on 6-31G*. The loader's function-pointer dispatch
+also prevents inlining (`Lookup::boys` self time 3 %).
 
-**Revised order of work:** (1) the Boys-core fix;
-(2) C1; (3) C2 only on the case for pure-sp bases, where L_tot ≤ 1 is 23.8 %
-of the build. Re-run `planck-eri-class-share` after (1), since it lowers the
-per-quartet floor for every class and so shifts the shares.
+**Shipped in Boys library v1.1.0 (2026-10-17).** Measured through the real
+blob with `planck-eri-class-share`: 4 H2O / 6-31G* 1.583 → 1.397 s (**~1.13×**,
+best of four), 8 H2O / 6-31G 2.561 → 1.866 s (**~1.37×**). That is below the
+direct-link numbers above, plausibly because the blob's dispatch cannot be
+inlined; the v1.0.0 baseline is a single run and can no longer be repeated
+(current binaries reject v1.0.0 licenses). Not bitwise against v1.0.0: water
+RHF/STO-3G (HGP) keeps -74.9458807581 to every digit but now converges in 10
+SCF iterations instead of 11, because that case sits at the convergence noise
+floor (`water_rhf_hgp_sto3g` re-pinned).
+
+**Revised order of work:** (1) the Boys-core fix: **done, v1.1.0**, shares
+re-measured above; (2) C1; (3) C2 only on the case for pure-sp bases, where
+L_tot ≤ 1 is 19.8 % of the build.
 
 ### C1 — Shell-pair primitive cache for the fused loop
 
