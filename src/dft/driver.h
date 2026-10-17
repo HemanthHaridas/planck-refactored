@@ -13,6 +13,9 @@
 #include "base/grid.h"
 #include "base/types.h"
 #include "base/wrapper.h"
+#include "dh_pt2_gradient.h"
+#include "dh_zvector.h"
+#include "udh_driver.h"
 #include "integrals/shellpair.h"
 #include "ks_matrix.h"
 #include "response_packing.h"
@@ -28,6 +31,13 @@ namespace DFT::Driver
         bool use_sao_blocking = true;
         bool save_checkpoint = false;
         bool print_grid_summary = true;
+        // Validation-only capture of the detailed UKS global-DH ledger.  A
+        // null pointer is the normal production route; the qualified gradient
+        // is still computed and reported without retaining this sidecar.
+        UDHGradientResult *udh_gradient_validation = nullptr;
+        // Validation-only coefficient sweep on the same parent functional;
+        // ignored without the ledger pointer. No input/CLI keyword exposes it.
+        std::optional<double> udh_pt2_scale_validation;
     };
 
     struct PreparedSystem
@@ -36,6 +46,10 @@ namespace DFT::Driver
         MolecularGrid molecular_grid;
         AOGridEvaluation ao_grid;
         GridPreset grid_preset;
+        // The immutable quadrature policy used to build molecular_grid.  Keep
+        // it beside the geometry-dependent grid so derivative/rebuild paths
+        // cannot accidentally re-resolve a different rule.
+        ResolvedGridSpec grid_spec;
         std::optional<HartreeFock::Solvation::PCMState> pcm;
     };
 
@@ -47,6 +61,37 @@ namespace DFT::Driver
         double solvation_energy = 0.0;
         bool converged = false;
     };
+
+    // Restricted-KS Eq. (41)/(27) portion of the double-hybrid driver. The
+    // returned direct J/K callbacks borrow `prepared`'s shell pairs, so that
+    // storage must outlive the result; XC owns an immutable snapshot. This helper does not assemble derivative
+    // integrals or a final nuclear gradient.
+    struct DHEq41ZVectorProducts : Gradient::DHStationaryProducts
+    {
+        Gradient::DHEq41ResponseOperator response_operator;
+        Eigen::MatrixXd z_ai;
+        double residual_max_abs = 0.0;
+        Gradient::DHZVectorStatistics solver;
+    };
+
+    [[nodiscard]] std::expected<DHEq41ZVectorProducts, std::string>
+    build_dh_eq41_response_and_solve_zvector(
+        HartreeFock::Calculator &calculator,
+        const PreparedSystem &prepared,
+        const XC::Functional &exchange_functional,
+        const XC::Functional &correlation_functional,
+        double exact_exchange_coefficient,
+        const HartreeFock::Correlation::RMP2Result &pt2_result,
+        double c_pt2,
+        const Gradient::DHZVectorOptions &solver_options = {});
+
+    // Correction-only Eq. (33) derivative producer. The normal production
+    // result supplies direct h/S and ERI contractions rather than retaining
+    // all-coordinate AO derivative arrays; dense arrays remain available to
+    // the typed reference/test adapter. Coordinates are atom-major:
+    // index = 3 * atom + Cartesian component.
+    [[nodiscard]] std::expected<Gradient::DHEq33NonXCDerivatives, std::string>
+    build_dh_eq33_derivative_integrals(const HartreeFock::Calculator &calculator);
 
     // TDDFT excitation-space and finite-difference XC kernel machinery
     // (docs/DFT_ANALYTIC_FXC_HESSIAN.md, F3.1). These were originally

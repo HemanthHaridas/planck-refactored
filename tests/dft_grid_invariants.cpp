@@ -139,9 +139,9 @@ namespace
 
     void test_radial_grid_invariants()
     {
-        require_near(DFT::treutler_radius(1), 0.80, 0.0, "Wrong Treutler radius for H");
-        require_near(DFT::treutler_radius(36), 1.60, 0.0, "Wrong Treutler radius for Kr");
-        require_near(DFT::treutler_radius(54), 2.00, 0.0, "Wrong Treutler fallback radius");
+        require_near(DFT::treutler_xi(1), 0.80, 0.0, "Wrong Treutler xi for H");
+        require_near(DFT::treutler_xi(36), 0.90, 0.0, "Wrong Treutler xi for Kr");
+        require_near(DFT::treutler_xi(104), 1.50, 0.0, "Wrong Treutler xi fallback past table end");
 
         const Eigen::MatrixXd grid = DFT::MakeTreutlerAhlrichsGrid(100, 1.0, 0.6);
         require(grid.rows() == 100, "Radial grid returned wrong number of points");
@@ -209,6 +209,203 @@ namespace
                     DFT::radial_point_count(8, DFT::GridLevel::Normal),
                     "radial_point_count(O, Normal)") > 0,
                 "Normal grid should allocate radial points for oxygen");
+    }
+
+    void test_resolved_grid_spec()
+    {
+        const auto spec = require_expected(
+            DFT::resolve_grid_spec(DFT::GridRequest{DFT::GridLevel::Normal, 0}),
+            "resolve legacy normal grid spec");
+        require(spec.pruning_policy == DFT::GridPruningPolicy::LegacyOrcaIndexV1,
+                "Default request must resolve the legacy pruning policy");
+        require(spec.preset.level == DFT::GridLevel::Normal,
+                "Resolved preset must retain requested quality");
+        require(spec.fingerprint().find("legacy-orca-index-v1") != std::string::npos,
+                "Resolved grid fingerprint must identify the policy version");
+        require(spec.fingerprint().find("angular_override=0") != std::string::npos,
+                "Resolved grid fingerprint must identify the angular override");
+        require(spec.json().find("\"policy\":\"legacy-orca-index-v1\"") != std::string::npos &&
+                    spec.json().find("\"angular_override\":0") != std::string::npos,
+                "Resolved grid JSON must report the effective policy and override");
+
+        const Eigen::Vector3d center(.21, -.35, .11);
+        const auto direct = require_expected(
+            DFT::MakeAtomicGrid(8, center, DFT::GridLevel::Normal),
+            "legacy atomic grid");
+        const auto resolved = require_expected(
+            DFT::MakeAtomicGrid(8, center, spec),
+            "resolved atomic grid");
+        require(direct.rows() == resolved.rows() && direct.cols() == resolved.cols() &&
+                    (direct-resolved).cwiseAbs().maxCoeff() == 0.0,
+                "Resolved legacy spec must preserve the atomic grid bit-for-bit");
+        require(require_expected(DFT::atomic_point_count(8, spec), "resolved point count") ==
+                    require_expected(DFT::atomic_point_count(8, DFT::GridLevel::Normal), "legacy point count"),
+                "Resolved legacy spec must preserve the point count");
+
+        const auto refined = require_expected(
+            DFT::resolve_grid_spec(DFT::GridRequest{DFT::GridLevel::UltraFine, 1454}),
+            "resolve refined grid spec");
+        const auto refined_shells = require_expected(
+            DFT::angular_shell_sizes(1, refined), "refined shell sizes");
+        for (int shell : refined_shells)
+            require(shell == 1454, "Resolved angular override must remain unpruned");
+        require(refined.fingerprint() != spec.fingerprint(),
+                "Different resolved specifications must have different fingerprints");
+        require_unexpected(
+            DFT::resolve_grid_spec(DFT::GridRequest{DFT::GridLevel::Normal, 591}),
+            "unsupported angular override must fail during resolution");
+    }
+
+    void test_radial_override_and_oracle()
+    {
+        constexpr int radial_shells = 96;
+        const auto spec = require_expected(
+            DFT::resolve_grid_spec(
+                DFT::GridRequest{DFT::GridLevel::Normal, 302, radial_shells}),
+            "resolve radial override");
+        require(spec.radial_override == radial_shells,
+                "Resolved grid must retain the requested radial override");
+        require(spec.fingerprint().find("radial_override=96") != std::string::npos,
+                "Resolved fingerprint must identify the radial override");
+        require(require_expected(DFT::radial_point_count(1, spec), "H overridden radial count") == radial_shells &&
+                    require_expected(DFT::radial_point_count(16, spec), "S overridden radial count") == radial_shells,
+                "A radial override must be uniform across elements");
+        require(require_expected(DFT::atomic_point_count(8, spec), "overridden atomic count") ==
+                    radial_shells * 302,
+                "Uniform radial/angular overrides must have a product point count");
+        require_unexpected(
+            DFT::resolve_grid_spec(DFT::GridRequest{DFT::GridLevel::Normal, 0, -1}),
+            "negative radial override must fail during resolution");
+
+        // Independent Gaussian references at several length scales.  The
+        // radial moment is exact analytically, and the deliberately off-center
+        // three-dimensional case checks the radial weights together with the
+        // angular product construction:
+        // int r^2 exp(-alpha r^2) dr = sqrt(pi)/(4 alpha^(3/2));
+        // int exp(-alpha |r-d|^2) d^3r = (pi/alpha)^(3/2).
+        const auto grid = require_expected(
+            DFT::MakeAtomicGrid(8, Eigen::Vector3d::Zero(), spec),
+            "overridden Gaussian-integration grid");
+        const std::array<std::pair<double, Eigen::Vector3d>, 3> cases{{
+            {.35, Eigen::Vector3d(.19, -.11, .23)},
+            {.70, Eigen::Vector3d(.37, -.21, .46)},
+            {1.40, Eigen::Vector3d(-.31, .27, .16)}}};
+        for (const auto &[alpha, displacement] : cases)
+        {
+            double radial_integral = 0.0;
+            double integral = 0.0;
+            for (Eigen::Index p = 0; p < grid.rows(); ++p)
+            {
+                const Eigen::Vector3d point = grid.row(p).head<3>().transpose();
+                const double radius = point.norm();
+                radial_integral += grid(p, 3) * std::exp(-alpha * radius * radius) /
+                    (4.0 * std::numbers::pi);
+                integral += grid(p, 3) * std::exp(-alpha * (point-displacement).squaredNorm());
+            }
+            require_near(radial_integral, std::sqrt(std::numbers::pi) /
+                         (4.0 * std::pow(alpha, 1.5)), 2e-7,
+                         "Radial Gaussian reference is not integrated accurately");
+            require_near(integral, std::pow(std::numbers::pi / alpha, 1.5), 2e-7,
+                         "Radial/angular product grid misses off-center Gaussian reference");
+        }
+    }
+
+    void test_g3_pruning_candidates()
+    {
+        const auto legacy = require_expected(DFT::resolve_grid_spec(
+            DFT::GridRequest{DFT::GridLevel::Normal, 0, 0,
+                             DFT::GridPruningPolicy::LegacyOrcaIndexV1}), "legacy candidate");
+        const auto no_light = require_expected(DFT::resolve_grid_spec(
+            DFT::GridRequest{DFT::GridLevel::Normal, 0, 0,
+                             DFT::GridPruningPolicy::LegacyOrcaNoLightReductionV1}), "no-light candidate");
+        const auto unpruned = require_expected(DFT::resolve_grid_spec(
+            DFT::GridRequest{DFT::GridLevel::Normal, 0, 0,
+                             DFT::GridPruningPolicy::LegacyOrcaUnprunedMaxV1}), "unpruned candidate");
+        const auto pyscf = require_expected(DFT::resolve_grid_spec(
+            DFT::GridRequest{DFT::GridLevel::Normal, 0, 0,
+                             DFT::GridPruningPolicy::PySCFNWChem213}), "PySCF candidate");
+
+        require(legacy.policy_name == "legacy-orca-index-v1" &&
+                    no_light.policy_name == "legacy-orca-no-light-reduction-v1" &&
+                    unpruned.policy_name == "legacy-orca-unpruned-max-v1" &&
+                    pyscf.policy_name == "pyscf-nwchem-2.13",
+                "Every G3 candidate must have a distinct versioned identity");
+        require(require_expected(DFT::atomic_point_count(1, no_light), "H no-light count") >
+                    require_expected(DFT::atomic_point_count(1, legacy), "H legacy count"),
+                "No-light candidate must remove the legacy H/He reduction");
+        require(require_expected(DFT::atomic_point_count(8, unpruned), "O unpruned count") == 75*302,
+                "Legacy unpruned-max candidate must retain its maximum angular rule on every O shell");
+        // Independent literal totals from PySCF 2.13 gen_grid.nwchem_prune,
+        // using its level-3 radial/ANG_ORDER tables and Treutler radii.
+        require(require_expected(DFT::atomic_point_count(1, pyscf), "PySCF H count") == 9808 &&
+                    require_expected(DFT::atomic_point_count(8, pyscf), "PySCF O count") == 14082 &&
+                    require_expected(DFT::atomic_point_count(16, pyscf), "PySCF S count") == 18880,
+                "PySCF NWChem candidate must reproduce known PySCF 2.13 atomic point totals");
+    }
+
+    void test_unpruned_angular_refinement()
+    {
+        constexpr auto level = DFT::GridLevel::UltraFine;
+        constexpr int angular = 974;
+        for (int z : {1, 8})
+        {
+            const auto shells = require_expected(DFT::angular_shell_sizes(z, level, angular), "unpruned shells");
+            for (int count : shells)
+                require(count == angular, "Override must bypass pruning AND light-atom reduction");
+            const int nr = require_expected(DFT::radial_point_count(z, level), "radial count");
+            const auto radial = DFT::MakeTreutlerAhlrichsGrid(nr, DFT::treutler_xi(z));
+            const Eigen::Vector3d center(.21, -.35, .11);
+            const auto grid = require_expected(DFT::MakeAtomicGrid(z, center, level, angular), "unpruned atomic grid");
+            require(grid.rows() == nr*angular, "Unpruned point count must be radial count times angular count");
+            require(grid.rows() == require_expected(DFT::atomic_point_count(z, level, angular), "unpruned count"),
+                    "Allocation and generation must use the same override");
+            for (int ir = 0; ir < nr; ++ir)
+            {
+                const double expected_weight = 4*std::numbers::pi*radial(ir,1);
+                require_near(grid.block(ir*angular,3,angular,1).sum(), expected_weight,
+                             1e-11*std::max(1.0,std::abs(expected_weight)), "Angular refinement changed radial weight");
+                for (int ia : {0, angular/2, angular-1})
+                    require_near((grid.row(ir*angular+ia).head<3>().transpose()-center).norm(), radial(ir,0),
+                                 1e-12*std::max(1.0,radial(ir,0)), "Angular refinement changed radial node");
+            }
+        }
+        const auto old = require_expected(DFT::MakeAtomicGrid(1, Eigen::Vector3d::Zero(), level), "default grid");
+        const auto zero = require_expected(DFT::MakeAtomicGrid(1, Eigen::Vector3d::Zero(), level, 0), "zero override");
+        require(old.rows()==zero.rows() && (old-zero).cwiseAbs().maxCoeff()==0,
+                "Omitted/zero angular override must preserve the original grid exactly");
+        for (int count : {-1, 1, 591, 5811})
+            require_unexpected(DFT::MakeAtomicGrid(8,Eigen::Vector3d::Zero(),level,count), "invalid angular override");
+
+        // Exact spherical moment independent of orientation: integral (u.n)^32
+        // = 4*pi/33 for every unit u. The 302-point rule has degree 29; the
+        // 974-point rule has degree 53. This checks actual quadrature, not an
+        // assumed equality of two rotated finite grids.
+        const std::array<Eigen::Vector3d,2> axes{Eigen::Vector3d(1,0,0), Eigen::Vector3d(.8,.48,.36)};
+        double coarse_error=0, refined_error=0;
+        for (int count : {302, angular})
+        {
+            const auto grid = require_expected(DFT::MakeLebedevGrid(count), "moment grid");
+            for (const auto &axis : axes)
+            {
+                double value=0;
+                for (Eigen::Index p=0;p<grid.rows();++p)
+                    value += grid(p,3)*std::pow(grid.row(p).head<3>().dot(axis),32);
+                const double error=std::abs(value-4*std::numbers::pi/33);
+                if (count==302) coarse_error=std::max(coarse_error,error);
+                else refined_error=std::max(refined_error,error);
+            }
+        }
+        require(refined_error<1e-11, "Refined angular grid must integrate rotated degree-32 moment");
+        require(refined_error<coarse_error, "Angular refinement must reduce the unresolved moment error");
+
+        HartreeFock::Molecule atom;
+        atom.natoms=1; atom.atomic_numbers=Eigen::VectorXi::Constant(1,8);
+        atom._coordinates=Eigen::MatrixXd::Zero(1,3);
+        const auto molecular=require_expected(DFT::MakeMolecularGrid(atom,level,angular), "refined molecular grid");
+        const auto atomic=require_expected(DFT::MakeAtomicGrid(8,Eigen::Vector3d::Zero(),level,angular), "reference atomic grid");
+        require(molecular.points.rows()==atomic.rows(), "Molecular overload must forward angular override");
+        require((molecular.points-atomic).cwiseAbs().maxCoeff()<1e-12,
+                "Single-atom partition must preserve the refined atomic grid");
     }
 
     void test_atomic_and_molecular_grid_generation()
@@ -290,6 +487,10 @@ int main()
     test_angular_grid_invariants();
     test_radial_grid_invariants();
     test_orca_like_grid_presets();
+    test_resolved_grid_spec();
+    test_radial_override_and_oracle();
+    test_g3_pruning_candidates();
+    test_unpruned_angular_refinement();
     test_atomic_and_molecular_grid_generation();
     return g_ok ? 0 : 1;
 }

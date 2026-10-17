@@ -1,0 +1,27 @@
+{
+  "contract": "g4-3-v3-diagnostic-request-v1",
+  "status": "diagnostic-only",
+  "selection_atlas": "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/selection",
+  "failed_holdout": {
+    "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v2/water_triplet_uks_pbe_displaced_sto3g.hfinp",
+    "residual_report": "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/holdouts_v2/water-triplet-uks-pbe-displaced-sto3g/residual.json",
+    "direct_report": "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/holdouts_v2/water-triplet-uks-pbe-displaced-sto3g/direct.json"
+  },
+  "candidate": "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/g4-3-dual-floor-combined-frontier.json",
+  "limits": { "xc_energy_ha": 1e-08, "xc_response_contraction": 1e-07 },
+  "second_row_core_experiment": {
+    "u_lower": 0.0,
+    "u_upper": 0.4,
+    "current_order": 86,
+    "diagnostic_minimum_order": 110
+  },
+  "hydrogen_helium": {
+    "analyze_all_five_bands": true,
+    "forbid_single_band_floor": true
+  },
+  "forbids": [
+    "selection-atlas-augmentation",
+    "production-policy-promotion",
+    "v2-holdout-qualification"
+  ]
+}

@@ -160,26 +160,20 @@ class ArbitraryOrderCoInclusionTests(_CoInclude):
         self.assertNotIn("redefinition", stderr)
 
 
-class AnchorIsNotCoIncludedTests(unittest.TestCase):
-    """Why rank 3 is the V1.3 anchor: its TU is never co-included with another dressed TU."""
+class LowerRankPlainTUsHaveNoConsumerTests(unittest.TestCase):
+    """The plain rank-2/3 TUs are not compiled into anything, so they are never co-included.
 
-    def test_rank3_tu_has_a_single_dedicated_consumer(self):
-        consumer = (REPO / "src" / "post_hf" / "cc" / "tensor_backend.cpp").read_text()
-        self.assertIn("generated/cc/ccsdt_planck_generated.cpp", consumer)
+    `tensor_backend.cpp` used to include `ccsdt_planck_generated.cpp`; that branch was
+    unreachable and was removed (docs/RUNTIME_ENV_OVERRIDES_SCOPE.md, E4). Rank 2/3 now
+    run only through their `_arbitrary_` companions in the registry.
+    """
 
-        registry = (REPO / "src" / "post_hf" / "cc"
-                    / "generated_kernel_registry.cpp").read_text()
-        includes = re.findall(r'#include "generated/cc/(\w+)\.cpp"', registry)
-        self.assertNotIn("ccsdt_planck_generated", includes,
-                         "the plain rank-3 TU must not also be registry-co-included")
-
-    def test_rank2_tu_has_no_consumer(self):
-        """`ccsd_planck_generated.cpp` is generated but compiled into nothing, which is why
-        the anchor is rank 3 rather than the rank-2 case every V1 measurement used."""
-        hits = subprocess.run(
-            ["grep", "-rl", "ccsd_planck_generated.cpp", str(REPO / "src")],
-            capture_output=True, text=True).stdout.split()
-        self.assertEqual(hits, [], f"expected no consumer, found: {hits}")
+    def test_plain_rank2_and_rank3_tus_have_no_consumer(self):
+        for tu in ("ccsd_planck_generated.cpp", "ccsdt_planck_generated.cpp"):
+            hits = subprocess.run(
+                ["grep", "-rlw", tu, str(REPO / "src")],
+                capture_output=True, text=True).stdout.split()
+            self.assertEqual(hits, [], f"expected no consumer of {tu}, found: {hits}")
 
 
 if __name__ == "__main__":

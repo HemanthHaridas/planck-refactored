@@ -284,6 +284,14 @@ externalproject_add(
         -DNAMESPACE_INSTALL_INCLUDEDIR:STRING=/
         -DCMAKE_INSTALL_LIBDIR:STRING=lib
         -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+        # libxc's DISABLE_KXC defaults ON -- it compiles out ALL third
+        # derivatives (xc_lda_kxc/xc_gga_kxc, XC_FLAGS_HAVE_KXC unset on
+        # every functional), and requesting v3rho3 from such a build is a
+        # hard exit(1) inside libxc, not an error return. The double-hybrid
+        # PT2 gradient's Eq. 33 Term 1 needs f^(3), so turn it on. Additive
+        # only: the vxc/fxc paths every existing DFT regression validated
+        # are untouched.
+        -DDISABLE_KXC:BOOL=OFF
         # libxc's cmake/xhost.cmake defaults ENABLE_XHOST=ON, which on GCC/Clang
         # appends -march=native (Intel: -xHost) to ITS OWN build. libxc.a is then
         # statically linked into planck-dft, so the binary carries whatever
@@ -405,6 +413,7 @@ set(POSTHF_DFT_SRC
     ${SRC_DIR}/post_hf/integrals.cpp
     ${SRC_DIR}/post_hf/mp2.h
     ${SRC_DIR}/post_hf/mp2.cpp
+    ${SRC_DIR}/post_hf/mp2_t2_storage.cpp
     ${SRC_DIR}/post_hf/mp2_internal.h
     ${SRC_DIR}/post_hf/mp2_internal.cpp
     ${SRC_DIR}/post_hf/mp2_rmp2.cpp
@@ -470,10 +479,30 @@ set(DFT_LIB_SRC
     ${SRC_DIR}/dft/ao_grid.h
     ${SRC_DIR}/dft/dft_gradient.cpp
     ${SRC_DIR}/dft/dft_gradient.h
+    ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+    ${SRC_DIR}/dft/dh_pt2_gradient.h
+    ${SRC_DIR}/dft/udh_ks_response.cpp
+    ${SRC_DIR}/dft/udh_ks_response.h
+    ${SRC_DIR}/dft/udh_driver.cpp
+    ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+    ${SRC_DIR}/dft/udh_pt2_orbital.cpp
+    ${SRC_DIR}/dft/udh_zvector.cpp
+    ${SRC_DIR}/dft/udh_relaxed_density.cpp
+    ${SRC_DIR}/dft/udh_overlap_density.cpp
+    ${SRC_DIR}/dft/udh_two_particle_density.cpp
+    ${SRC_DIR}/dft/udh_xc_ii.cpp
+    ${SRC_DIR}/dft/udh_xc_ii_gga.cpp
+    ${SRC_DIR}/dft/dh_hessian_probe.cpp
+    ${SRC_DIR}/dft/dh_hessian_probe.h
+    ${SRC_DIR}/dft/dh_probe_gmres.h
     ${SRC_DIR}/dft/driver.cpp
     ${SRC_DIR}/dft/driver.h
     ${SRC_DIR}/dft/ks_matrix.cpp
     ${SRC_DIR}/dft/ks_matrix.h
+    ${SRC_DIR}/dft/ks_orbital_hessian.cpp
+    ${SRC_DIR}/dft/ks_orbital_hessian.h
+    ${SRC_DIR}/dft/uks_level_shift.cpp
+    ${SRC_DIR}/dft/uks_level_shift.h
     ${SRC_DIR}/dft/response_packing.cpp
     ${SRC_DIR}/dft/response_packing.h
     ${SRC_DIR}/dft/xc_grid.cpp
@@ -582,31 +611,24 @@ add_executable(planck-dft
 )
 
 if(Python3_Interpreter_FOUND)
-    set(CCGEN_SPINORBITAL_WARM_START_INC
-        ${CMAKE_BINARY_DIR}/generated/cc/ccsd_spinorbital_warm_start.inc)
-
-    add_custom_command(
-        OUTPUT ${CCGEN_SPINORBITAL_WARM_START_INC}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
-        COMMAND ${Python3_EXECUTABLE}
-                ${CMAKE_SOURCE_DIR}/python/generate_spinorbital_ccsd_warm_start.py
-                --output ${CCGEN_SPINORBITAL_WARM_START_INC}
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/python
-        DEPENDS
-            ${CMAKE_SOURCE_DIR}/python/generate_spinorbital_ccsd_warm_start.py
-            ${CMAKE_SOURCE_DIR}/python/ccgen/generate.py
-            ${CMAKE_SOURCE_DIR}/python/ccgen/project.py
-            ${CMAKE_SOURCE_DIR}/python/ccgen/wick.py
-        COMMENT "Generating spin-orbital CCSD warm-start kernels with ccgen"
-    )
-
-    add_custom_target(ccgen-spinorbital-warm-start
-        DEPENDS ${CCGEN_SPINORBITAL_WARM_START_INC}
-    )
+    # RCC methods to emit. The plain <method>_planck_generated.cpp TU is consumed
+    # only at rank >= 4 (generated_kernel_registry.cpp); rank 2/3 run through
+    # their arbitrary-order companions, so they are passed only when those are
+    # requested.
+    # ponytail: with ARBITRARY_LOWER_RANKS the script still writes the unused
+    # plain ccsd/ccsdt TUs as a side effect; add a generator flag if that
+    # generation time ever matters.
+    set(_ccgen_rcc_methods "")
+    foreach(_planck_cc_method ${PLANCK_CC_METHODS})
+        list(FIND _planck_cc_method_by_rank ${_planck_cc_method} _planck_cc_method_rank_idx)
+        if(_planck_cc_method_rank_idx GREATER_EQUAL 2 OR PLANCK_CC_ARBITRARY_LOWER_RANKS)
+            list(APPEND _ccgen_rcc_methods ${_planck_cc_method})
+        endif()
+    endforeach()
 
     set(_ccgen_planck_kernel_args
         --output-dir ${CMAKE_BINARY_DIR}/generated/cc
-        --methods ${PLANCK_CC_METHODS}
+        --methods ${_ccgen_rcc_methods}
         --engine ${PLANCK_CC_ENGINE}
         --intermediate-threshold ${PLANCK_CC_INTERMEDIATE_THRESHOLD}
     )
@@ -656,21 +678,21 @@ if(Python3_Interpreter_FOUND)
     set(_ccgen_planck_outputs "")
     set(_ccgen_ucc_outputs "")
     foreach(_planck_cc_method ${PLANCK_CC_METHODS})
-        list(APPEND _ccgen_planck_outputs
-            ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_planck_generated.cpp)
         list(APPEND _ccgen_ucc_outputs
             ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_ucc_planck_generated.cpp)
-        # Lower-rank arbitrary-order companions, RCC side only -- the UCC
-        # invocation never passes --arbitrary-lower-ranks, so it emits none.
-        if(PLANCK_CC_ARBITRARY_LOWER_RANKS)
-            list(FIND _planck_cc_method_by_rank ${_planck_cc_method} _planck_cc_method_rank_idx)
-            if(_planck_cc_method_rank_idx LESS 2)
-                list(APPEND _ccgen_planck_outputs
-                    ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_arbitrary_planck_generated.cpp)
-            endif()
+        list(FIND _planck_cc_method_by_rank ${_planck_cc_method} _planck_cc_method_rank_idx)
+        if(_planck_cc_method_rank_idx GREATER_EQUAL 2)
+            list(APPEND _ccgen_planck_outputs
+                ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_planck_generated.cpp)
+        elseif(PLANCK_CC_ARBITRARY_LOWER_RANKS)
+            # Lower-rank arbitrary-order companions, RCC side only -- the UCC
+            # invocation never passes --arbitrary-lower-ranks, so it emits none.
+            list(APPEND _ccgen_planck_outputs
+                ${CMAKE_BINARY_DIR}/generated/cc/${_planck_cc_method}_arbitrary_planck_generated.cpp)
         endif()
     endforeach()
 
+    if(_ccgen_rcc_methods)
     add_custom_command(
         OUTPUT ${_ccgen_planck_outputs}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/generated/cc
@@ -681,8 +703,9 @@ if(Python3_Interpreter_FOUND)
         DEPENDS
             ${CMAKE_SOURCE_DIR}/python/generate_planck_cc_kernels.py
             ${_ccgen_package_sources}
-        COMMENT "Generating Planck-compatible CC kernels with ccgen (up to rank ${PLANCK_CC_MAXORDER}: ${PLANCK_CC_METHODS})"
+        COMMENT "Generating Planck-compatible CC kernels with ccgen (up to rank ${PLANCK_CC_MAXORDER}: ${_ccgen_rcc_methods})"
     )
+    endif()
 
     add_custom_target(ccgen-planck-kernels DEPENDS ${_ccgen_planck_outputs})
 
@@ -712,7 +735,6 @@ if(Python3_Interpreter_FOUND)
 endif()
 
 if(Python3_Interpreter_FOUND)
-    add_dependencies(hartree-fock ccgen-spinorbital-warm-start)
     add_dependencies(hartree-fock ccgen-planck-kernels)
 endif()
 
@@ -731,7 +753,6 @@ target_link_libraries(planck-dft
 
 add_dependencies(planck-dft libmsym libxc)
 if(Python3_Interpreter_FOUND)
-    add_dependencies(planck-dft ccgen-spinorbital-warm-start)
     add_dependencies(planck-dft ccgen-planck-kernels)
 endif()
 target_compile_definitions(planck-dft PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER} PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower} PLANCK_CC_DRESS_OPERATORS=${_planck_cc_dressed})
@@ -749,7 +770,7 @@ install(TARGETS planck-dft DESTINATION bin)
 # One binary that dispatches HF vs DFT on calculator.is_dft_run(). Built when
 # BUILD_MPI=ON. If MPI is found it links MPI and defines USE_MPI; otherwise it
 # still builds as a plain serial binary so the dispatch logic is testable without
-# an MPI toolchain (single rank 0). See docs/HPC_MPI_EXECUTABLE_SCOPE.md.
+# an MPI toolchain (single rank 0). See docs/HPC_MPI.md.
 option(BUILD_MPI "Build the unified planck-mpi front end" OFF)
 if(BUILD_MPI)
     add_executable(planck-mpi
@@ -786,7 +807,6 @@ if(BUILD_MPI)
     )
     add_dependencies(planck-mpi libmsym libxc)
     if(Python3_Interpreter_FOUND)
-        add_dependencies(planck-mpi ccgen-spinorbital-warm-start)
         add_dependencies(planck-mpi ccgen-planck-kernels)
     endif()
     # USING_Libxc enables the libxc-backed XC path (same as planck-dft).
@@ -837,6 +857,133 @@ endif()
 find_package(Python3 COMPONENTS Interpreter)
 
 if(BUILD_TESTING)
+    # Test-only front end of the same driver, with a typed UDH validation
+    # ledger. Not installed; normal CLI/MPI guards remain unchanged.
+    add_executable(planck-udh-validation
+        ${CMAKE_SOURCE_DIR}/tests/udh_gradient_main.cpp
+        ${BASE_SRC} ${DFT_LIB_SRC} ${LOOKUP_SRC} ${SYMM_SRC} ${BASIS_SRC}
+        ${INT_SRC} ${IO_SRC} ${SCF_SRC} ${SOLVATION_SRC} ${POPULATIONS_SRC}
+        ${POSTHF_DFT_SRC} ${GRADIENT_SRC} ${OPT_SRC} ${FREQ_SRC})
+    target_include_directories(planck-udh-validation PRIVATE ${SRC_DIR} ${CMAKE_BINARY_DIR}
+        ${MSYM_INSTALL_DIR}/include ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-validation ${MSYM_INSTALL_DIR}/lib/libmsym.a ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-validation libmsym libxc)
+    target_compile_definitions(planck-udh-validation PRIVATE USING_Libxc PLANCK_CC_MAXORDER=${PLANCK_CC_MAXORDER}
+        PLANCK_CC_ARBITRARY_LOWER_RANKS=${_planck_cc_arb_lower} PLANCK_CC_DRESS_OPERATORS=${_planck_cc_dressed})
+    if(Python3_Interpreter_FOUND)
+        add_dependencies(planck-udh-validation ccgen-planck-kernels)
+        add_test(NAME planck-udh-molecular-runner
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_molecular_audit.py -v)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-validation OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-validation PRIVATE USE_OPENMP)
+    endif()
+
+    add_executable(planck-dh-probe-gmres ${CMAKE_SOURCE_DIR}/tests/dh_probe_gmres.cpp)
+    target_include_directories(planck-dh-probe-gmres PRIVATE ${SRC_DIR} ${eigen_SOURCE_DIR})
+    add_test(NAME planck-dh-probe-gmres COMMAND planck-dh-probe-gmres)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME planck-dh-hessian-swap-runner
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_dh_hessian_swap_audit.py -v)
+        add_test(NAME planck-dh-workflow-runner
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_dh_workflow_audit.py -v)
+        add_test(NAME planck-dh-grid-sigma-hoist
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_dh_grid_sigma_hoist.py -v)
+        add_test(NAME planck-dh-o3-zvector-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_dh_o3_zvector.py -v)
+    endif()
+    add_executable(planck-uks-level-shift
+        ${CMAKE_SOURCE_DIR}/tests/uks_level_shift.cpp
+        ${SRC_DIR}/dft/uks_level_shift.cpp
+    )
+    target_include_directories(planck-uks-level-shift PRIVATE ${SRC_DIR} ${eigen_SOURCE_DIR})
+    add_test(NAME planck-uks-level-shift COMMAND planck-uks-level-shift)
+
+    # R0: exact-exchange B-block indexing shared by the RKS and UKS Casida
+    # builders.  Header-only by design: the test checks the production helper
+    # without linking the entire DFT driver.
+    add_executable(planck-tddft-exchange
+        ${CMAKE_SOURCE_DIR}/tests/tddft_exchange.cpp
+    )
+    target_include_directories(planck-tddft-exchange PRIVATE ${SRC_DIR} ${eigen_SOURCE_DIR})
+    add_test(NAME planck-tddft-exchange COMMAND planck-tddft-exchange)
+
+    # Detached UKS DH U0 contract only; no production workflow enablement.
+    add_executable(planck-udh-pt2-energy-contract
+        ${CMAKE_SOURCE_DIR}/tests/udh_pt2_energy_contract.cpp
+        ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+    )
+    target_include_directories(planck-udh-pt2-energy-contract PRIVATE
+        ${SRC_DIR} ${eigen_SOURCE_DIR}
+    )
+    add_test(NAME planck-udh-pt2-energy-contract COMMAND planck-udh-pt2-energy-contract)
+    # U1 detached off-shell stationary functional; no UKS gradient enablement.
+    add_executable(planck-udh-pt2-stationary
+        ${CMAKE_SOURCE_DIR}/tests/udh_pt2_stationary.cpp
+        ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+    )
+    target_include_directories(planck-udh-pt2-stationary PRIVATE ${SRC_DIR} ${eigen_SOURCE_DIR})
+    add_test(NAME planck-udh-pt2-stationary COMMAND planck-udh-pt2-stationary)
+    if(Python3_Interpreter_FOUND)
+        add_test(NAME planck-udh-u0-fixtures
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_u0_fixtures.py -v)
+        add_test(NAME planck-udh-u1-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_pt2_stationary_contract.py -v)
+        add_test(NAME planck-udh-u2-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_ks_response_contract.py -v)
+        add_test(NAME planck-udh-u3-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_pt2_orbital_contract.py -v)
+        add_test(NAME planck-udh-u4-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_zvector_contract.py -v)
+        add_test(NAME planck-udh-u5-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_relaxed_density_contract.py -v)
+        add_test(NAME planck-udh-u6-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_overlap_density_contract.py -v)
+        add_test(NAME planck-udh-u7-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_two_particle_density_contract.py -v)
+        add_test(NAME planck-udh-u8a-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_xc_ii_lda_contract.py -v)
+        add_test(NAME planck-udh-u8b-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_xc_ii_gga_contract.py -v)
+    endif()
+
+    add_executable(planck-dh-pt2-amplitude-density
+        ${CMAKE_SOURCE_DIR}/tests/dh_pt2_amplitude_density.cpp
+        ${CMAKE_SOURCE_DIR}/tests/dh_o4_contractions.cpp
+        ${CMAKE_SOURCE_DIR}/tests/dh_o5_backtransform.cpp
+        ${CMAKE_SOURCE_DIR}/tests/dh_grid_sigma.cpp
+        ${CMAKE_SOURCE_DIR}/tests/dh_zvector.cpp
+        ${SRC_DIR}/post_hf/mp2_t2_storage.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-dh-pt2-amplitude-density PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR}
+    )
     add_executable(planck-casscf-internal
         ${CMAKE_SOURCE_DIR}/tests/casscf_internal.cpp
         ${SRC_DIR}/post_hf/ci/ci.cpp
@@ -878,6 +1025,15 @@ if(BUILD_TESTING)
     # Header-only wrapper, so no src/ sources beyond libxc itself.
     add_executable(planck-dft-fxc-selfcheck
         ${CMAKE_SOURCE_DIR}/tests/dft_fxc_selfcheck.cpp
+    )
+
+    # S1 (docs/DOUBLE_HYBRID_GRADIENT_KS_VEFF_SCOPE.md, N3.5.7.7): the same
+    # idea as the fxc selfcheck one order up -- libxc's analytic third
+    # derivative (xc_lda_kxc/xc_gga_kxc) vs a finite difference of its own
+    # second derivative. Needed by Eq. 33 Term 1 of the double-hybrid PT2
+    # gradient. Header-only wrapper, no src/ sources beyond libxc.
+    add_executable(planck-dft-kxc-selfcheck
+        ${CMAKE_SOURCE_DIR}/tests/dft_kxc_selfcheck.cpp
     )
 
     # F3.3 (docs/SOSCF_DFT_ANALYTIC_FXC_SCOPE.md): the GGA analytic
@@ -926,6 +1082,24 @@ if(BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/tests/dft_analytic_hessian_production.cpp
         ${SRC_DIR}/dft/analytic_hessian.cpp
         ${SRC_DIR}/dft/xc_grid.cpp
+    )
+
+    add_executable(planck-dh-eq41-xc-response
+        ${CMAKE_SOURCE_DIR}/tests/dh_eq41_xc_response.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        # dh_pt2_gradient's complete XC-II routines call the AO-center and
+        # Becke-partition helpers defined in this translation unit.
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/dft/ks_matrix.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
     )
 
     # D3.0 (docs/SOSCF_UHF_DFT_SCOPE.md): the polarized (UKS) sibling of the
@@ -1005,8 +1179,25 @@ if(BUILD_TESTING)
         ${LOOKUP_SRC}
     )
 
+    # E0 gate for the fused electronic-ESP sweep. Needs only the integral and
+    # basis machinery (no SCF, no DFT) -- same source list as
+    # planck-fock-accumulate, whose fixture construction this file mirrors,
+    # plus the ESP assembly itself.
+    add_executable(planck-esp-points
+        ${CMAKE_SOURCE_DIR}/tests/esp_points.cpp
+        ${SRC_DIR}/populations/esp.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+
     add_executable(planck-fock-accumulate
         ${CMAKE_SOURCE_DIR}/tests/fock_accumulate.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
@@ -1023,9 +1214,17 @@ if(BUILD_TESTING)
     # uses, src/integrals/base.h) IS delta_J(dP). This target only needs the
     # non-DFT integral/basis machinery (no libxc, no grid) -- same source
     # list as planck-fock-accumulate, which this file's fixture construction
-    # mirrors.
+    # mirrors. Its Eq. (46) physical-density audit also calls the DH tensor
+    # builder, so include its fixed-geometry XC dependencies even though that
+    # audit itself uses only direct J/K integrals.
     add_executable(planck-dft-coulomb-response
         ${CMAKE_SOURCE_DIR}/tests/dft_coulomb_response.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
+        ${SRC_DIR}/post_hf/mp2_t2_storage.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
@@ -1034,6 +1233,263 @@ if(BUILD_TESTING)
         ${INT_SRC}
         ${LOOKUP_SRC}
     )
+
+    # Detached U2 physical two-spin AO response. No UKS gradient driver.
+    add_executable(planck-udh-ks-response
+        ${CMAKE_SOURCE_DIR}/tests/udh_ks_response.cpp
+        ${SRC_DIR}/dft/udh_ks_response.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/dft/ks_matrix.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-ks-response PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-ks-response ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-ks-response libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-ks-response OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-ks-response PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-ks-response COMMAND planck-udh-ks-response)
+
+    # U3 detached literal orbital RHS; uses U1 and U2, no UKS driver routing.
+    add_executable(planck-udh-pt2-orbital
+        ${CMAKE_SOURCE_DIR}/tests/udh_pt2_orbital.cpp
+        ${SRC_DIR}/dft/udh_pt2_orbital.cpp
+        ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/udh_ks_response.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-pt2-orbital PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-pt2-orbital ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-pt2-orbital libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-pt2-orbital OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-pt2-orbital PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-pt2-orbital COMMAND planck-udh-pt2-orbital)
+
+    # U4 detached dense reference solve and co-moving Fock FD oracle.
+    # No UKS production routing; RKS primitive is linked for reduction tests.
+    add_executable(planck-udh-zvector
+        ${CMAKE_SOURCE_DIR}/tests/udh_zvector.cpp
+        ${SRC_DIR}/dft/udh_zvector.cpp
+        ${SRC_DIR}/dft/udh_pt2_orbital.cpp
+        ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/udh_ks_response.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-zvector PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-zvector ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-zvector libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-zvector OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-zvector PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-zvector COMMAND planck-udh-zvector)
+
+    # U5 detached relaxed spin densities, U4 handoff and RKS reduction.
+    add_executable(planck-udh-relaxed-density
+        ${CMAKE_SOURCE_DIR}/tests/udh_relaxed_density.cpp
+        ${SRC_DIR}/dft/udh_relaxed_density.cpp
+        ${SRC_DIR}/dft/udh_zvector.cpp
+        ${SRC_DIR}/dft/udh_pt2_orbital.cpp
+        ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/udh_ks_response.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-relaxed-density PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-relaxed-density ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-relaxed-density libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-relaxed-density OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-relaxed-density PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-relaxed-density COMMAND planck-udh-relaxed-density)
+
+    # U6 detached pair/nonpair metric W and fixed-AO scalar oracles.
+    add_executable(planck-udh-overlap-density
+        ${CMAKE_SOURCE_DIR}/tests/udh_overlap_density.cpp
+        ${SRC_DIR}/dft/udh_overlap_density.cpp
+        ${SRC_DIR}/dft/udh_relaxed_density.cpp
+        ${SRC_DIR}/dft/udh_zvector.cpp
+        ${SRC_DIR}/dft/udh_pt2_orbital.cpp
+        ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/udh_ks_response.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-overlap-density PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-overlap-density ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-overlap-density libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-overlap-density OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-overlap-density PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-overlap-density COMMAND planck-udh-overlap-density)
+
+    # U7 detached spin-resolved ERI tensors and fixed-contract non-XC oracles.
+    add_executable(planck-udh-two-particle-density
+        ${CMAKE_SOURCE_DIR}/tests/udh_two_particle_density.cpp
+        ${SRC_DIR}/dft/udh_two_particle_density.cpp
+        ${SRC_DIR}/dft/udh_relaxed_density.cpp
+        ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-two-particle-density PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-two-particle-density ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-two-particle-density libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-two-particle-density OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-two-particle-density PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-two-particle-density COMMAND planck-udh-two-particle-density)
+
+    # U8a detached complete polarized LDA XC-II, four geometry channels.
+    add_executable(planck-udh-xc-ii-lda
+        ${CMAKE_SOURCE_DIR}/tests/udh_xc_ii_lda.cpp
+        ${SRC_DIR}/dft/udh_xc_ii.cpp
+        ${SRC_DIR}/dft/ks_matrix.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-xc-ii-lda PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-xc-ii-lda ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-xc-ii-lda libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-xc-ii-lda OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-xc-ii-lda PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-xc-ii-lda COMMAND planck-udh-xc-ii-lda)
+
+    # U8b detached complete polarized GGA XC-II and Hessian-bearing oracles.
+    add_executable(planck-udh-xc-ii-gga
+        ${CMAKE_SOURCE_DIR}/tests/udh_xc_ii_gga.cpp
+        ${SRC_DIR}/dft/udh_xc_ii_gga.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/ks_matrix.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-xc-ii-gga PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-xc-ii-gga ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-xc-ii-gga libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-xc-ii-gga OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-xc-ii-gga PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-xc-ii-gga COMMAND planck-udh-xc-ii-gga)
+
+    # U9 common stationary functional, noncanonical amplitudes and Z transfer.
+    # Standalone manufactured AO oracle; not a UKS driver/SCF enablement.
+    add_executable(planck-udh-stationary-transfer
+        ${CMAKE_SOURCE_DIR}/tests/udh_stationary_transfer.cpp
+        ${SRC_DIR}/dft/udh_two_particle_density.cpp
+        ${SRC_DIR}/dft/udh_overlap_density.cpp
+        ${SRC_DIR}/dft/udh_relaxed_density.cpp
+        ${SRC_DIR}/dft/udh_zvector.cpp
+        ${SRC_DIR}/dft/udh_pt2_orbital.cpp
+        ${SRC_DIR}/dft/udh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/udh_ks_response.cpp
+        ${SRC_DIR}/dft/dh_pt2_gradient.cpp
+        ${SRC_DIR}/dft/dft_gradient.cpp
+        ${SRC_DIR}/dft/analytic_hessian.cpp
+        ${SRC_DIR}/dft/xc_grid.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-udh-stationary-transfer PRIVATE
+        ${SRC_DIR} ${LIBXC_INSTALL_DIR}/include ${eigen_SOURCE_DIR})
+    target_link_libraries(planck-udh-stationary-transfer ${LIBXC_INSTALL_DIR}/lib/libxc.a)
+    add_dependencies(planck-udh-stationary-transfer libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-udh-stationary-transfer OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-udh-stationary-transfer PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-udh-stationary-transfer COMMAND planck-udh-stationary-transfer)
 
     add_executable(planck-hgp-quartet-validation
         ${CMAKE_SOURCE_DIR}/tests/hgp_quartet_validation.cpp
@@ -1101,9 +1557,16 @@ if(BUILD_TESTING)
         ${LOOKUP_SRC}
     )
 
+    # POPULATIONS_SRC is a glob, so this target picks up every file added to
+    # src/populations -- including esp.cpp, which unlike the Mulliken/Lowdin/
+    # Mayer sources calls into the integral engine (_compute_electronic_potential)
+    # and the element table (element_from_z). Those are needed to LINK even
+    # though population_analysis.cpp never calls them.
     add_executable(planck-population-analysis
         ${CMAKE_SOURCE_DIR}/tests/population_analysis.cpp
         ${POPULATIONS_SRC}
+        ${INT_SRC}
+        ${LOOKUP_SRC}
     )
 
     add_executable(planck-symmetry-units
@@ -1613,6 +2076,12 @@ if(BUILD_TESTING)
         ${LIBXC_INSTALL_DIR}/include
     )
 
+    target_include_directories(planck-dft-kxc-selfcheck PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+    )
+
+
     target_include_directories(planck-dft-gga-hessian-selfcheck PRIVATE
         ${SRC_DIR}
         ${LIBXC_INSTALL_DIR}/include
@@ -1634,6 +2103,12 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(planck-dft-analytic-hessian-production PRIVATE
+        ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-dh-eq41-xc-response PRIVATE
         ${SRC_DIR}
         ${LIBXC_INSTALL_DIR}/include
         ${eigen_SOURCE_DIR}
@@ -1676,8 +2151,14 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-esp-points PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-dft-coulomb-response PRIVATE
         ${SRC_DIR}
+        ${LIBXC_INSTALL_DIR}/include
         ${eigen_SOURCE_DIR}
     )
 
@@ -1906,6 +2387,13 @@ if(BUILD_TESTING)
         CXX_EXTENSIONS OFF
     )
 
+    set_target_properties(planck-dft-kxc-selfcheck PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+
     set_target_properties(planck-dft-gga-hessian-selfcheck PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
@@ -1931,6 +2419,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-dft-analytic-hessian-production PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-dh-eq41-xc-response PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -1973,6 +2467,12 @@ if(BUILD_TESTING)
     )
 
     set_target_properties(planck-fock-accumulate PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
+
+    set_target_properties(planck-esp-points PROPERTIES
         CXX_STANDARD 23
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
@@ -2159,6 +2659,8 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-compute-2e PRIVATE USE_OPENMP)
         target_link_libraries(planck-fock-accumulate OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-fock-accumulate PRIVATE USE_OPENMP)
+        target_link_libraries(planck-esp-points OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-esp-points PRIVATE USE_OPENMP)
         target_link_libraries(planck-dft-coulomb-response OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-dft-coulomb-response PRIVATE USE_OPENMP)
     endif()
@@ -2248,6 +2750,11 @@ if(BUILD_TESTING)
     )
     add_dependencies(planck-dft-fxc-selfcheck libxc)
 
+    target_link_libraries(planck-dft-kxc-selfcheck
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-kxc-selfcheck libxc)
+
     target_link_libraries(planck-dft-gga-hessian-selfcheck
         ${LIBXC_INSTALL_DIR}/lib/libxc.a
     )
@@ -2281,6 +2788,29 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-dft-analytic-hessian-production PRIVATE USE_OPENMP)
     endif()
 
+    target_link_libraries(planck-dh-eq41-xc-response
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dh-eq41-xc-response libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-dh-eq41-xc-response OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-dh-eq41-xc-response PRIVATE USE_OPENMP)
+    endif()
+
+    target_link_libraries(planck-dh-pt2-amplitude-density
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dh-pt2-amplitude-density libxc)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-dh-pt2-amplitude-density OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-dh-pt2-amplitude-density PRIVATE USE_OPENMP)
+    endif()
+
+    target_link_libraries(planck-dft-coulomb-response
+        ${LIBXC_INSTALL_DIR}/lib/libxc.a
+    )
+    add_dependencies(planck-dft-coulomb-response libxc)
+
     target_link_libraries(planck-dft-analytic-hessian-polarized-production
         ${LIBXC_INSTALL_DIR}/lib/libxc.a
     )
@@ -2311,6 +2841,11 @@ if(BUILD_TESTING)
     )
 
     add_test(
+        NAME planck-dft-kxc-selfcheck
+        COMMAND planck-dft-kxc-selfcheck
+    )
+
+    add_test(
         NAME planck-dft-gga-hessian-selfcheck
         COMMAND planck-dft-gga-hessian-selfcheck
     )
@@ -2333,6 +2868,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-dft-analytic-hessian-production
         COMMAND planck-dft-analytic-hessian-production
+    )
+
+    add_test(
+        NAME planck-dh-eq41-xc-response
+        COMMAND planck-dh-eq41-xc-response
     )
 
     add_test(
@@ -2388,6 +2928,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-fock-accumulate
         COMMAND planck-fock-accumulate
+    )
+
+    add_test(
+        NAME planck-esp-points
+        COMMAND planck-esp-points
     )
 
     add_test(
@@ -2569,9 +3114,15 @@ if(BUILD_TESTING)
     )
 
     add_test(
+        NAME planck-dh-pt2-amplitude-density
+        COMMAND planck-dh-pt2-amplitude-density
+    )
+
+    add_test(
         NAME planck-symm-fock-equivalence
         COMMAND planck-symm-fock-equivalence
     )
+
 endif()
 
 if(BUILD_TESTING AND Python3_Interpreter_FOUND)

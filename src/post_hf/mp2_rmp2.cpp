@@ -3,6 +3,7 @@
 
 #include <Eigen/Eigenvalues>
 #include <expected>
+#include <functional>
 #include <string>
 
 namespace
@@ -11,19 +12,47 @@ namespace
     using HartreeFock::Correlation::detail::RMP2Dims;
     using HartreeFock::Correlation::detail::idx_ovov;
     using HartreeFock::Correlation::detail::idx_t2;
+    using OVOVTileProducer = std::function<std::expected<void, std::string>(
+        int, const HartreeFock::Correlation::detail::RMP2OVOVPairTileConsumer &)>;
+    constexpr int compact_ovov_tile_width=32;
 
-    void canonical_kernel(
+    std::expected<void, std::string> canonical_kernel(
         const ChemistsERIs &eris,
         int n_occ,
         int n_virt,
         bool with_t2,
+        bool compact_t2,
+        const OVOVTileProducer *direct_ovov,
         std::vector<double> &t2,
+        std::vector<double> &packed_t2,
         double &e_ss,
         double &e_os)
     {
         e_ss = 0.0;
         e_os = 0.0;
-        if (with_t2)
+        // The compact DH path consumes the ordered OVOV tile interface.  The
+        // exchange contribution needs (ib|ja), which may live in another
+        // tile.  After the first pass t_ij^ab is already in pair-packed
+        // storage, so (ib|ja)=t_ij^ba*Delta_ij^ab can be recovered without
+        // retaining or randomly indexing OVOV.
+        if (with_t2 && compact_t2)
+        {
+            const auto producer=[&](int width,
+                                    const HartreeFock::Correlation::detail::RMP2OVOVPairTileConsumer &consumer)
+                -> std::expected<void,std::string>
+            {
+                return direct_ovov ? (*direct_ovov)(width,consumer) :
+                    HartreeFock::Correlation::detail::for_each_rmp2_ovov_pair_tile(eris,width,consumer);
+            };
+            auto compact=HartreeFock::Correlation::detail::contract_rmp2_ovov_tiles(
+                n_occ,n_virt,eris.mo_energy,compact_ovov_tile_width,producer);
+            if (!compact) return std::unexpected(compact.error());
+            packed_t2=std::move(compact->t2_pair_packed);
+            e_ss=compact->e_corr_ss;
+            e_os=compact->e_corr_os;
+            return {};
+        }
+        if (with_t2 && !compact_t2)
             t2.assign(static_cast<std::size_t>(n_occ) * n_occ * n_virt * n_virt, 0.0);
 
         // Canonical RHF MP2 can be evaluated directly from the transformed ovov
@@ -44,10 +73,12 @@ namespace
                         const double exi = -t * gijba;
                         e_ss += 0.5 * edi + exi;
                         e_os += 0.5 * edi;
-                        if (with_t2)
-                            t2[idx_t2(i, j, a, b, n_occ, n_virt)] = t;
+                        if (with_t2 && !compact_t2)
+                            t2[idx_t2(i,j,a,b,n_occ,n_virt)] = t;
                     }
+        return {};
     }
+
 }
 
 namespace HartreeFock::Correlation
@@ -62,7 +93,9 @@ namespace HartreeFock::Correlation
             return std::unexpected(dims_res.error());
         const RMP2Dims &dims = *dims_res;
 
-        auto eris_res = detail::make_eris_rmp2(calculator, shell_pairs, dims);
+        const bool compact_direct=options.with_t2 && options.compact_t2_storage;
+        auto eris_res = detail::make_eris_rmp2(calculator, shell_pairs, dims,
+                                                !compact_direct);
         if (!eris_res)
             return std::unexpected(eris_res.error());
         const ChemistsERIs &eris = *eris_res;
@@ -76,8 +109,30 @@ namespace HartreeFock::Correlation
         out.mo_occ = Eigen::VectorXd::Zero(dims.n_mo);
         out.mo_occ.head(dims.n_occ).setConstant(2.0);
 
-        canonical_kernel(eris, dims.n_occ, dims.n_virt, options.with_t2,
-                         out.t2, out.e_corr_ss, out.e_corr_os);
+        OVOVTileProducer direct_ovov;
+        if (compact_direct)
+        {
+            direct_ovov=[&calculator,&shell_pairs,&eris](
+                int width,const detail::RMP2OVOVPairTileConsumer &consumer)
+            {
+                return detail::for_each_rmp2_direct_ovov_pair_tile(
+                    calculator,shell_pairs,eris,width,consumer);
+            };
+        }
+        auto canonical=canonical_kernel(eris,dims.n_occ,dims.n_virt,options.with_t2,
+                                        options.compact_t2_storage,
+                                        compact_direct ? &direct_ovov : nullptr,
+                                        out.t2,out.t2_pair_packed,
+                                        out.e_corr_ss,out.e_corr_os);
+        if (!canonical) return std::unexpected(canonical.error());
+        if (compact_direct)
+        {
+            auto source=make_rmp2_scratch_t2_source(
+                out.n_occ,out.n_virt,out.t2_pair_packed);
+            if(!source) return std::unexpected(source.error());
+            out.t2_source=std::move(*source);
+            std::vector<double>().swap(out.t2_pair_packed);
+        }
         out.e_corr = out.e_corr_ss + out.e_corr_os;
         out.converged = true;
         out.n_iter = 0;

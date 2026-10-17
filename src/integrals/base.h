@@ -176,6 +176,36 @@ _compute_2e_k_direct(const std::vector<HartreeFock::ShellPair> &shell_pairs,
                             HartreeFock::Integrals::FusedTerm::ExchangeOnly);
 }
 
+// Restricted raw {J, K} from one direct quartet traversal.  This is the
+// hybrid-response primitive: callers retain responsibility for every
+// closed-shell factor, sign, and range-separation coefficient.
+inline std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
+_compute_2e_jk_direct(const std::vector<HartreeFock::ShellPair> &shell_pairs,
+                      const Eigen::MatrixXd &density,
+                      const std::size_t nbasis,
+                      const HartreeFock::IntegralMethod &engine,
+                      HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
+                      double omega = 0.0,
+                      double tol_eri = 1e-10,
+                      const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr)
+{
+    switch (engine)
+    {
+    case HartreeFock::IntegralMethod::RysQuadrature:
+        return HartreeFock::RysQuad::_compute_2e_jk_direct(
+            shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
+    case HartreeFock::IntegralMethod::HeadGordonPople:
+        return HartreeFock::HeadGordonPople::_compute_2e_jk_direct(
+            shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
+    case HartreeFock::IntegralMethod::Auto:
+        return HartreeFock::RysQuad::_compute_2e_jk_auto_direct(
+            shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
+    default:
+        return HartreeFock::ObaraSaika::_compute_2e_jk_direct(
+            shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops);
+    }
+}
+
 // Spin-resolved exchange: K_alpha and K_beta from ONE quartet sweep, which is
 // what a UKS hybrid needs (the RKS path can just call _compute_2e_k_direct
 // twice, but UKS would then pay the sweep twice for no reason).

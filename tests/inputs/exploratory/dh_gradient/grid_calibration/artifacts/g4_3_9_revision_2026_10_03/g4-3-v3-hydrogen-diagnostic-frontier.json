@@ -1,0 +1,37 @@
+{
+  "contract": "g4-3-v3-hydrogen-diagnostic-frontier-v1",
+  "status": "diagnostic-only",
+  "source_request": "tests/inputs/exploratory/dh_gradient/grid_calibration/g4_3_v3_diagnostic_request.json",
+  "failed_holdout": {
+    "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v2/water_triplet_uks_pbe_displaced_sto3g.hfinp",
+    "residual_report": "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/holdouts_v2/water-triplet-uks-pbe-displaced-sto3g/residual.json",
+    "direct_report": "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/holdouts_v2/water-triplet-uks-pbe-displaced-sto3g/direct.json"
+  },
+  "boundaries_examined": 330,
+  "frontier": [
+    {
+      "max_points_per_atom": 46110,
+      "total_ledger_points": 92220,
+      "rule": {
+        "boundaries": [
+          0.4,
+          1.0,
+          3.5,
+          4.5
+        ],
+        "lebedev_points": [
+          26,
+          146,
+          974,
+          434,
+          302
+        ]
+      }
+    }
+  ],
+  "forbids": [
+    "selection-atlas-augmentation",
+    "production-policy-promotion",
+    "v2-holdout-qualification"
+  ]
+}

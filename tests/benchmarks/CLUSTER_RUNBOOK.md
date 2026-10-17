@@ -149,8 +149,8 @@ Ignore DFT's Q1 number — see below.
 Report: **the `nb` (and atom count) at which DFT dies while HF survives**, plus
 the HF/DFT RSS ratio at the largest size where both ran.
 
-That crossover sizes the DFT fused-J/K work (`docs/DFT_FUSED_JK_SCOPE.md`) and is
-the number to quote when justifying it.
+That crossover sized the DFT fused-J/K work (landed in #151; see
+`docs/HPC_MPI.md` for the before/after).
 
 ### Q3 — where does replicated diagonalization bite?
 
@@ -169,8 +169,8 @@ non-scaling residue is dominated by the *un-distributed J/K build*, not by diag 
 Amdahl gives one number for "everything that didn't scale" and cannot tell them
 apart. Reading DFT's residue as a diag verdict would send you off to build
 ScaLAPACK to fix a problem that is actually the missing fused J/K. The script
-says so in its own read-out. DFT's Q3 number only becomes meaningful after Step 3
-of `DFT_FUSED_JK_SCOPE.md` lands.
+says so in its own read-out. (Written before #151 distributed DFT J/K; see
+`docs/HPC_MPI.md`.)
 
 ### Q4 — the regression fixture to commit
 
@@ -188,7 +188,7 @@ rather than a measurement.
 - **DFT shows ~50% efficiency at 2 ranks and a 1.00x speedup.** Not a bug, and
   not a new finding — DFT's J/K build is not distributed *at all* (it still
   contracts a dense `nb^4` tensor), so there is nothing to distribute. This is
-  the predicted symptom of the gap in `DFT_FUSED_JK_SCOPE.md`, already reproduced
+  the predicted symptom of the pre-#151 gap (`docs/HPC_MPI.md`), already reproduced
   on a laptop. The fixture labels it `EXPECTED` rather than `WEAK`.
 - **Small systems report `too small to judge`.** Below ~50 ms per iteration the
   efficiency number is measuring process startup, not scaling. Deliberate.

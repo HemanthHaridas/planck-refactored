@@ -1,0 +1,48 @@
+{
+  "contract": "g4-3-direct-rescore-v1",
+  "fingerprint": "g4-3-second-row-band1-floor-v1;radial=135;radius=m4-over-bragg;partition=original-becke-treutler-bragg",
+  "points": 183018,
+  "atlas": {
+    "xc_energy": -9.315390469639315,
+    "directions": [
+      {
+        "D_V": -3.662676606112621e-16,
+        "D_fxc_D": -0.030521736097766906
+      },
+      {
+        "D_V": -1.0982992930150422e-14,
+        "D_fxc_D": -0.02106789378060928
+      }
+    ]
+  },
+  "direct": {
+    "xc_energy": -9.315390469639366,
+    "directions": [
+      {
+        "D_V": -3.6656032848435166e-16,
+        "D_fxc_D": -0.03052173609769768
+      },
+      {
+        "D_V": -1.0986709921897414e-14,
+        "D_fxc_D": -0.021067893666274564
+      }
+    ]
+  },
+  "delta": {
+    "xc_energy": -5.1514348342607263e-14,
+    "directions": [
+      {
+        "D_V": -2.9266787308956e-19,
+        "D_fxc_D": 6.922587503233046e-14
+      },
+      {
+        "D_V": -3.7169917469921706e-18,
+        "D_fxc_D": 1.1433471530652994e-10
+      }
+    ]
+  },
+  "tolerance": 1e-09,
+  "max_error": 1.1433471530652994e-10,
+  "passed": true,
+  "fixture": "tests/inputs/regression/dft/water_rks_pbe_soscf_puredeadband_631g.hfinp"
+}

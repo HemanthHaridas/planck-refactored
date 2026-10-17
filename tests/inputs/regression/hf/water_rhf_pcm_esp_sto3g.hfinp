@@ -1,0 +1,54 @@
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type        rhf
+    use_diis        .true.
+    diis_dim        8
+    engine          os
+    guess           hcore
+    save_checkpoint .false.
+%end_scf
+
+%begin_pcm
+    model       pcm
+    solvent     water
+    cavity_scale 1.2
+    surface_points_per_atom 24
+%end_pcm
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+# ESP under PCM (docs/ESP_CHARGES.md section 6). The density
+# being fitted IS solvent-polarized -- the reaction field enters the Fock every
+# SCF iteration -- but the potential is the gas-phase form phi = nuc - el, with
+# the reaction field's own sum_i q_i/|r - s_i| excluded.
+#
+# Both quantities are legitimate and neither was labelled before, which is the
+# defect this case pins: the force-field (AMBER/RESP) convention wants exactly
+# this one, since the MD solvent supplies the continuum itself, but a user
+# comparing against another code's in-solvent potential had no way to tell
+# which they had. The warning is asserted here, not the charges -- adding the
+# reaction field behind a keyword is item (b)'s remaining work, and this case
+# is what will show that the default did not move when it lands.
+%begin_esp
+    grid             connolly
+    shell_scales     1.4 1.6 1.8 2.0
+    points_per_shell 200
+%end_esp
+
+%begin_coords
+3
+0   1
+O      0.000000     0.000000     0.000000
+H      0.758602     0.000000     0.504284
+H     -0.758602     0.000000     0.504284
+%end_coords

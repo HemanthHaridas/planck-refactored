@@ -1,0 +1,48 @@
+{
+  "contract": "g4-3-direct-rescore-v1",
+  "fingerprint": "g4-3-second-row-band1-floor-v1;radial=135;radius=m4-over-bragg;partition=original-becke-treutler-bragg",
+  "points": 132888,
+  "atlas": {
+    "xc_energy": -5.867556057269528,
+    "directions": [
+      {
+        "D_V": -1.3998852511570012e-10,
+        "D_fxc_D": -0.0034210274018247034
+      },
+      {
+        "D_V": -9.243639286676842e-11,
+        "D_fxc_D": -0.0023778642151540148
+      }
+    ]
+  },
+  "direct": {
+    "xc_energy": -5.867556057269542,
+    "directions": [
+      {
+        "D_V": -1.3998845138640803e-10,
+        "D_fxc_D": -0.00342102739403148
+      },
+      {
+        "D_V": -9.243641529294022e-11,
+        "D_fxc_D": -0.00237786421310062
+      }
+    ]
+  },
+  "delta": {
+    "xc_energy": -1.4210854715202004e-14,
+    "directions": [
+      {
+        "D_V": 7.372929209454151e-17,
+        "D_fxc_D": 7.793223531782356e-12
+      },
+      {
+        "D_V": -2.2426171800716766e-17,
+        "D_fxc_D": 2.0533947805989605e-12
+      }
+    ]
+  },
+  "tolerance": 1e-09,
+  "max_error": 7.793223531782356e-12,
+  "passed": true,
+  "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/cn_anion_b2plyp_augccpvdz.hfinp"
+}

@@ -90,6 +90,9 @@ namespace HartreeFock::Integrals
         Combined,     // G = J - 0.5K (RHF) / J - K (UHF) — the HF path
         CoulombOnly,  // J, raw
         ExchangeOnly, // K, raw
+        // Restricted-only paired raw channels. The fused traversal writes J
+        // and K separately, with no coefficient or sign applied.
+        RawCoulombExchange,
     };
 
     // ── Single-term accumulators (J-only / K-only) ───────────────────────────

@@ -1,0 +1,48 @@
+{
+  "contract": "g4-3-direct-rescore-v1",
+  "fingerprint": "g4-3-v3-constrained-selection-v1;radial=135;radius=m4-over-bragg;partition=original-becke-treutler-bragg",
+  "points": 191394,
+  "atlas": {
+    "xc_energy": -6.77202886094466,
+    "directions": [
+      {
+        "D_V": -0.09603475033952766,
+        "D_fxc_D": -0.21242623678499373
+      },
+      {
+        "D_V": -0.24305421230963198,
+        "D_fxc_D": -0.05958341723461803
+      }
+    ]
+  },
+  "direct": {
+    "xc_energy": -6.772028860944589,
+    "directions": [
+      {
+        "D_V": -0.09603475033952394,
+        "D_fxc_D": -0.2124262369026635
+      },
+      {
+        "D_V": -0.24305421230962762,
+        "D_fxc_D": -0.059583417241285484
+      }
+    ]
+  },
+  "delta": {
+    "xc_energy": 7.105427357601002e-14,
+    "directions": [
+      {
+        "D_V": 3.7192471324942744e-15,
+        "D_fxc_D": -1.1766976282245878e-10
+      },
+      {
+        "D_V": 4.3576253716537394e-15,
+        "D_fxc_D": -6.6674513132802815e-12
+      }
+    ]
+  },
+  "tolerance": 1e-09,
+  "max_error": 1.1766976282245878e-10,
+  "passed": true,
+  "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v3/water_cation_uks_pbe0_displaced_631g.hfinp"
+}

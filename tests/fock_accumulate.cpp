@@ -42,6 +42,7 @@
 #include "integrals/os.h"
 #include "integrals/rys.h"
 #include "integrals/shellpair.h"
+#include "require_boys_library.h"
 
 namespace
 {
@@ -230,7 +231,7 @@ namespace
                       << worst_uhf << '\n';
     }
 
-    // ── J-only / K-only split (DFT_FUSED_JK_SCOPE.md Steps 0-1) ──────────────
+    // ── J-only / K-only split (PR #151; docs/HPC_MPI.md) ──────────────
     //
     // DFT needs J and K separately: J always, K scaled by
     // exact_exchange_coefficient, and for range-separated functionals TWO K's
@@ -803,6 +804,12 @@ void check_symmetry_ops(const std::string &basis_name)
 
 int main()
 {
+    // Real-integral fixtures dispatch through the signed, runtime-loaded Boys
+    // implementation.  Fail cleanly if it cannot be made available rather
+    // than dereferencing the uninitialized dispatch pointer in boys_vec().
+    if (!require_boys_library())
+        return 1;
+
     check_random_tensors();
     check_split_accumulators();
     check_real_integrals("sto-3g");

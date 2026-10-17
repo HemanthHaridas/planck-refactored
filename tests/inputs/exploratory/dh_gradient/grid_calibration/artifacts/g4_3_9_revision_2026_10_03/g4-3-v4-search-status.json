@@ -1,0 +1,13 @@
+{
+  "contract": "g4-3-v4-search-v1",
+  "status": "no-robust-finalist",
+  "source_probe": "g4-3-v4-combined-frontier.json",
+  "cost_ceiling": 73626,
+  "robust_ratio": 0.5,
+  "diagnostics": {
+    "hydrogen-helium": {"qualified": 1946397, "robust": 0},
+    "second-row": {"qualified": 1793278, "robust": 0},
+    "third-row": {"qualified": 10045835, "robust": 222011}
+  },
+  "note": "The source probe's all-2030 H/He and second-row output minimizes error without honoring the V4 robustness/cost stopping rule. It is diagnostic only and must not be passed to a direct-grid or qualification runner."
+}

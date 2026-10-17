@@ -524,7 +524,7 @@ std::expected<HartreeFock::Opt::GeomOptResult, std::string> HartreeFock::Opt::ru
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
                                      "IC System :", "No internal coordinates found — falling back to Cartesian optimizer");
-        return run_geomopt(calc);
+        return run_geomopt(calc, gradient_runner);
     }
 
     // Count each type for the log message

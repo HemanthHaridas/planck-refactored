@@ -1,0 +1,48 @@
+{
+  "contract": "g4-3-direct-rescore-v1",
+  "fingerprint": "g4-3-v3-constrained-selection-v1;radial=135;radius=m4-over-bragg;partition=original-becke-treutler-bragg",
+  "points": 305046,
+  "atlas": {
+    "xc_energy": -10.858758186538898,
+    "directions": [
+      {
+        "D_V": -0.046808764498895365,
+        "D_fxc_D": -0.021346987445436793
+      },
+      {
+        "D_V": 0.0033674046771474493,
+        "D_fxc_D": -0.00012574700568992393
+      }
+    ]
+  },
+  "direct": {
+    "xc_energy": -10.858758186538818,
+    "directions": [
+      {
+        "D_V": -0.04680876449889291,
+        "D_fxc_D": -0.021346987504498677
+      },
+      {
+        "D_V": 0.003367404677145381,
+        "D_fxc_D": -0.0001257470023225219
+      }
+    ]
+  },
+  "delta": {
+    "xc_energy": 7.993605777301127e-14,
+    "directions": [
+      {
+        "D_V": 2.456368441983159e-15,
+        "D_fxc_D": -5.906188385584876e-11
+      },
+      {
+        "D_V": -2.0682240642333483e-15,
+        "D_fxc_D": 3.3674020332146587e-12
+      }
+    ]
+  },
+  "tolerance": 1e-09,
+  "max_error": 5.906188385584876e-11,
+  "passed": true,
+  "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/sih4_asymmetric_b2plyp_ccpvdz.hfinp"
+}

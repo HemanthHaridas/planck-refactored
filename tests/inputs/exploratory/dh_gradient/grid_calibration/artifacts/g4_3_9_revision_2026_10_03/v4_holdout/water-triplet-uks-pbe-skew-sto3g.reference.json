@@ -1,0 +1,67 @@
+{
+  "contract": "g4-3-reference-ladder-report-v1",
+  "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v4/water_triplet_uks_pbe_skew_sto3g.hfinp",
+  "reference_ladder": {
+    "angular_anchor": {
+      "radial": 135,
+      "angular": 2030
+    },
+    "radial_check": {
+      "radial": 165,
+      "angular": 2030
+    },
+    "angular_check": {
+      "radial": 165,
+      "angular": 2702
+    }
+  },
+  "energy_limit": 1e-08,
+  "contraction_limit": 1e-07,
+  "rows": [
+    {
+      "name": "uniform-2030-a",
+      "points": 822150
+    },
+    {
+      "name": "uniform-2030-b",
+      "points": 1004850
+    },
+    {
+      "name": "uniform-2702-c",
+      "points": 1337490
+    }
+  ],
+  "radial_delta": {
+    "energy": 9.734435479913373e-13,
+    "alpha_norm": -2.0827783941967937e-12,
+    "beta_norm": 5.023093052614058e-12,
+    "directions": [
+      {
+        "D_V": 5.147354417700534e-11,
+        "D_fxc_D": 1.0759455548736696e-09
+      },
+      {
+        "D_V": 1.5751955295684184e-11,
+        "D_fxc_D": -3.4486813405010253e-10
+      }
+    ]
+  },
+  "angular_delta": {
+    "energy": -1.822186845856777e-11,
+    "alpha_norm": -6.368106042486943e-11,
+    "beta_norm": -2.219380235146673e-10,
+    "directions": [
+      {
+        "D_V": 5.80037608222117e-10,
+        "D_fxc_D": 3.931060310602419e-09
+      },
+      {
+        "D_V": 7.765911802515291e-10,
+        "D_fxc_D": -1.115823766717483e-09
+      }
+    ]
+  },
+  "radial_stable": true,
+  "angular_stable": true,
+  "reference_stable": true
+}

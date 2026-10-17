@@ -2,6 +2,7 @@
 #define DFT_ANALYTIC_HESSIAN_H
 
 #include <expected>
+#include <memory>
 #include <string>
 
 #include <Eigen/Dense>
@@ -12,6 +13,27 @@
 
 namespace DFT::Driver
 {
+    struct RKSXCKernelData;
+    class RKSXCKernel
+    {
+        std::shared_ptr<const RKSXCKernelData> data_;
+        explicit RKSXCKernel(std::shared_ptr<const RKSXCKernelData> data) : data_(std::move(data)) {}
+        friend std::expected<RKSXCKernel,std::string> prepare_rks_xc_kernel(
+            const MolecularGrid &, const AOGridEvaluation &, const Eigen::Ref<const Eigen::MatrixXd> &,
+            const XC::Functional &, const XC::Functional &);
+    public:
+        // Immutable, owning per-geometry snapshot. Copies share the cache.
+        // No Libxc or ground-density evaluation occurs during apply().
+        [[nodiscard]] std::expected<Eigen::MatrixXd,std::string>
+        apply(const Eigen::Ref<const Eigen::MatrixXd> &trial_density) const;
+        [[nodiscard]] std::size_t storage_bytes() const;
+    };
+
+    [[nodiscard]] std::expected<RKSXCKernel,std::string> prepare_rks_xc_kernel(
+        const MolecularGrid &grid, const AOGridEvaluation &ao,
+        const Eigen::Ref<const Eigen::MatrixXd> &ground_density,
+        const XC::Functional &exchange, const XC::Functional &correlation);
+
     // D2.0 (docs/SOSCF_DFT.md): promotes the analytic XC
     // Hessian-vector product derived and point-level-verified in
     // docs/DFT_ANALYTIC_FXC_HESSIAN.md (F3.1 LDA, F3.3.1-F3.3.3 GGA

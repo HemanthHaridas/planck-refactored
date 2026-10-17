@@ -825,10 +825,13 @@ namespace HartreeFock::Correlation::RI
         HartreeFock::Calculator &calculator)
     {
         const auto &opts = calculator._mp2;
-        if (!opts.use_ri)
-            return std::unexpected("ensure_ri_metric_ready: MP2 RI is disabled.");
+        // Two independent consumers can want the fitted cache: RI-MP2
+        // (mp2_use_ri) and the RI-JK SCF/KS Fock build (scf_ri_jk). They share
+        // one auxiliary basis, so either one is sufficient reason to prepare it.
+        if (!opts.use_ri && !calculator._scf._ri_jk)
+            return std::unexpected("ensure_ri_metric_ready: RI is disabled (set mp2_use_ri or scf_ri_jk).");
         if (opts.ri_basis_name.empty())
-            return std::unexpected("ensure_ri_metric_ready: mp2_ri_basis must be set when mp2_use_ri is true.");
+            return std::unexpected("ensure_ri_metric_ready: mp2_ri_basis must be set when mp2_use_ri or scf_ri_jk is true.");
 
         ri_invalidate_if_geometry_moved(calculator);
 
@@ -866,8 +869,8 @@ namespace HartreeFock::Correlation::RI
     std::expected<Eigen::MatrixXd, std::string> compute_3c_eri(
         const HartreeFock::Calculator &calculator)
     {
-        if (!calculator._mp2.use_ri)
-            return std::unexpected("compute_3c_eri: MP2 RI is disabled.");
+        if (!calculator._mp2.use_ri && !calculator._scf._ri_jk)
+            return std::unexpected("compute_3c_eri: RI is disabled (set mp2_use_ri or scf_ri_jk).");
         if (!calculator._ri_aux_basis)
             return std::unexpected("compute_3c_eri: RI auxiliary basis is not loaded.");
 

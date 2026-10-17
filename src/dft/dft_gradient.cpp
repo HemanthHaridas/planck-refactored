@@ -135,180 +135,195 @@ namespace DFT::Gradient
             return g_axis_mu(ao, ip, mu, q);
         }
 
-        // ∂g_axis/dR_{atom_A,q} for spin-resolved density matrix P (symmetric).
-        double dg_axis_spin(
-            const Eigen::MatrixXd &P,
-            const AOGridEvaluation &ao,
-            const AOGridHessian &H,
-            Eigen::Index ip,
-            int axis_g,
-            int atom_A,
-            int q,
-            const std::vector<std::vector<int>> &atoms_bf)
-        {
-            double sum = 0.0;
-            const Eigen::Index nb = P.cols();
-
-            for (int mu : atoms_bf[static_cast<std::size_t>(atom_A)])
-            {
-                const Eigen::Index imu = static_cast<Eigen::Index>(mu);
-                const double gm = g_axis_mu(ao, ip, imu, axis_g);
-                const double hm = h_axis_q(H, ip, imu, axis_g, q);
-                for (Eigen::Index nu = 0; nu < nb; ++nu)
-                    sum += P(imu, nu) * (-hm * ao.values(ip, nu) - gm * gq_mu(ao, ip, nu, q));
-            }
-
-            for (int nu : atoms_bf[static_cast<std::size_t>(atom_A)])
-            {
-                const Eigen::Index inu = static_cast<Eigen::Index>(nu);
-                const double hn = h_axis_q(H, ip, inu, axis_g, q);
-                for (Eigen::Index mu = 0; mu < nb; ++mu)
-                    sum += P(mu, inu) * (-gq_mu(ao, ip, mu, q) * g_axis_mu(ao, ip, inu, axis_g) -
-                                         ao.values(ip, mu) * hn);
-            }
-
-            return sum;
-        }
-
-        double drho_channel(
-            const Eigen::MatrixXd &P_sym,
-            const AOGridEvaluation &ao,
-            Eigen::Index ip,
-            int atom_A,
-            int q,
-            const std::vector<std::vector<int>> &atoms_bf)
-        {
-            double d = 0.0;
-            const Eigen::Index nb = P_sym.cols();
-            for (int mu : atoms_bf[static_cast<std::size_t>(atom_A)])
-            {
-                const Eigen::Index imu = static_cast<Eigen::Index>(mu);
-                const double gmq = gq_mu(ao, ip, imu, q);
-                for (Eigen::Index nu = 0; nu < nb; ++nu)
-                    d -= 2.0 * P_sym(imu, nu) * ao.values(ip, nu) * gmq;
-            }
-            return d;
-        }
-
-        std::expected<Eigen::MatrixXd, std::string> becke_partition_owner_derivatives(
-            const MolecularGrid &grid,
-            const HartreeFock::Molecule &mol,
-            Eigen::Index ip)
-        {
-            // Differentiate the owner atom's Becke partition weight with
-            // respect to every nuclear Cartesian. This is the core moving-grid
-            // correction needed for analytic DFT gradients.
-            const Eigen::Index natoms = static_cast<Eigen::Index>(mol.natoms);
-            if (grid.owner.size() != grid.points.rows())
-                return std::unexpected("molecular grid owner array does not match point count");
-            if (grid.atomic_weights.size() != grid.points.rows() ||
-                grid.partition_weights.size() != grid.points.rows())
-            {
-                return std::unexpected("molecular grid partition metadata does not match point count");
-            }
-
-            const int owner = grid.owner(ip);
-            if (owner < 0 || owner >= natoms)
-                return std::unexpected("molecular grid owner index is out of range");
-
-            const Eigen::Vector3d point = grid.points.row(ip).head<3>().transpose();
-            const Eigen::MatrixXd &coordinates = mol._standard;
-            const Eigen::VectorXi &atomic_numbers = mol.atomic_numbers;
-
-            std::vector<double> products(static_cast<std::size_t>(natoms), 1.0);
-            std::vector<Eigen::MatrixXd> dproducts(
-                static_cast<std::size_t>(natoms),
-                Eigen::MatrixXd::Zero(natoms, 3));
-
-            for (Eigen::Index i = 0; i < natoms; ++i)
-            {
-                const Eigen::Vector3d ri = coordinates.row(i).transpose();
-                for (Eigen::Index j = i + 1; j < natoms; ++j)
-                {
-                    const Eigen::Vector3d rj = coordinates.row(j).transpose();
-                    const Eigen::Vector3d rij = ri - rj;
-                    const double Rij = rij.norm();
-                    if (Rij < 1e-14)
-                        return std::unexpected("Becke partition derivative encountered coincident atoms");
-
-                    const Eigen::Vector3d eij = rij / Rij;
-                    const Eigen::Vector3d dpi = point - ri;
-                    const Eigen::Vector3d dpj = point - rj;
-                    const double di = dpi.norm();
-                    const double dj = dpj.norm();
-                    if (di < 1e-14 || dj < 1e-14)
-                        return std::unexpected("Becke partition derivative encountered a grid point on a nucleus");
-
-                    const Eigen::Vector3d ui = dpi / di;
-                    const Eigen::Vector3d uj = dpj / dj;
-                    const double mu_raw = (di - dj) / Rij;
-                    const double aij = DFT::detail::treutler_becke_adjustment(
-                        atomic_numbers(i),
-                        atomic_numbers(j));
-                    const double mu_adjusted = mu_raw + aij * (1.0 - mu_raw * mu_raw);
-                    const double mu_clamped = std::clamp(mu_adjusted, -1.0, 1.0);
-                    const double sij = DFT::detail::becke_switch(mu_clamped);
-                    const double ds_dmu =
-                        (std::abs(mu_adjusted - mu_clamped) < 1e-14)
-                            ? DFT::detail::becke_switch_derivative(mu_clamped)
-                            : 0.0;
-
-                    Eigen::MatrixXd ds = Eigen::MatrixXd::Zero(natoms, 3);
-                    for (Eigen::Index atom = 0; atom < natoms; ++atom)
-                    {
-                        const double delta_owner = (atom == owner) ? 1.0 : 0.0;
-                        const double delta_i = (atom == i) ? 1.0 : 0.0;
-                        const double delta_j = (atom == j) ? 1.0 : 0.0;
-
-                        const Eigen::Vector3d ddi = (delta_owner - delta_i) * ui;
-                        const Eigen::Vector3d ddj = (delta_owner - delta_j) * uj;
-                        const Eigen::Vector3d dR = (delta_i - delta_j) * eij;
-                        const Eigen::Vector3d dmu_raw =
-                            ((ddi - ddj) * Rij - (di - dj) * dR) / (Rij * Rij);
-                        const Eigen::Vector3d dmu_adjusted =
-                            (1.0 - 2.0 * aij * mu_raw) * dmu_raw;
-                        ds.row(atom) = (ds_dmu * dmu_adjusted).transpose();
-                    }
-
-                    const double old_pi = products[static_cast<std::size_t>(i)];
-                    const double old_pj = products[static_cast<std::size_t>(j)];
-                    const Eigen::MatrixXd old_dpi = dproducts[static_cast<std::size_t>(i)];
-                    const Eigen::MatrixXd old_dpj = dproducts[static_cast<std::size_t>(j)];
-
-                    products[static_cast<std::size_t>(i)] = old_pi * sij;
-                    products[static_cast<std::size_t>(j)] = old_pj * (1.0 - sij);
-                    dproducts[static_cast<std::size_t>(i)] = old_dpi * sij + old_pi * ds;
-                    dproducts[static_cast<std::size_t>(j)] = old_dpj * (1.0 - sij) - old_pj * ds;
-                }
-            }
-
-            double sum = 0.0;
-            Eigen::MatrixXd dsum = Eigen::MatrixXd::Zero(natoms, 3);
-            for (Eigen::Index atom = 0; atom < natoms; ++atom)
-            {
-                sum += products[static_cast<std::size_t>(atom)];
-                dsum += dproducts[static_cast<std::size_t>(atom)];
-            }
-            if (sum <= 0.0)
-                return std::unexpected("Becke partition derivative: partition denominator underflowed");
-
-            const double owner_product = products[static_cast<std::size_t>(owner)];
-            Eigen::MatrixXd derivatives = Eigen::MatrixXd::Zero(natoms, 3);
-            for (Eigen::Index atom = 0; atom < natoms; ++atom)
-            {
-                for (int q = 0; q < 3; ++q)
-                {
-                    derivatives(atom, q) =
-                        (dproducts[static_cast<std::size_t>(owner)](atom, q) * sum -
-                         owner_product * dsum(atom, q)) /
-                        (sum * sum);
-                }
-            }
-
-            return derivatives;
-        }
-
     } // namespace
+
+    double drho_channel(
+        const Eigen::MatrixXd &P_sym,
+        const AOGridEvaluation &ao,
+        Eigen::Index ip,
+        int atom_A,
+        int q,
+        const std::vector<std::vector<int>> &atoms_bf)
+    {
+        double d = 0.0;
+        const Eigen::Index nb = P_sym.cols();
+        for (int mu : atoms_bf[static_cast<std::size_t>(atom_A)])
+        {
+            const Eigen::Index imu = static_cast<Eigen::Index>(mu);
+            const double gmq = gq_mu(ao, ip, imu, q);
+            for (Eigen::Index nu = 0; nu < nb; ++nu)
+                d -= 2.0 * P_sym(imu, nu) * ao.values(ip, nu) * gmq;
+        }
+        return d;
+    }
+
+    // ∂[grad_rho_P]_{axis_g} / ∂R_{atom_A,q} at grid point `ip` (basis-
+    // function derivative only). `P` symmetrized.
+    //
+    // grad_rho_P|_ag = sum_munu P(mu,nu) [ g_ag(mu) phi(nu) + phi(mu) g_ag(nu) ],
+    //   g_ag(k) = d phi_k / d r_ag.
+    // A basis function k on atom A has  d phi_k/dR_{A,q} = -g_q(k)  and
+    //   d g_ag(k)/dR_{A,q} = -h_{ag,q}(k); functions off A contribute nothing.
+    // The four product-rule terms collapse (by P symmetry, relabelling
+    // mu<->nu) to  2 * sum_{mu in A, all nu} P(mu,nu) *
+    //   [ -h_{ag,q}(mu) phi(nu)  -  g_q(mu) g_ag(nu) ].
+    // Note the cross term is g_q(mu)*g_ag(nu) (the atom-A function carries
+    // the q-derivative), NOT g_ag(mu)*g_q(nu).
+    double dg_axis_spin(
+        const Eigen::MatrixXd &P,
+        const AOGridEvaluation &ao,
+        const AOGridHessian &H,
+        Eigen::Index ip,
+        int axis_g,
+        int atom_A,
+        int q,
+        const std::vector<std::vector<int>> &atoms_bf)
+    {
+        double sum = 0.0;
+        const Eigen::Index nb = P.cols();
+
+        for (int mu : atoms_bf[static_cast<std::size_t>(atom_A)])
+        {
+            const Eigen::Index imu = static_cast<Eigen::Index>(mu);
+            const double gq = gq_mu(ao, ip, imu, q);
+            const double hm = h_axis_q(H, ip, imu, axis_g, q);
+            for (Eigen::Index nu = 0; nu < nb; ++nu)
+                sum += P(imu, nu) *
+                       (-hm * ao.values(ip, nu) - gq * g_axis_mu(ao, ip, nu, axis_g));
+        }
+
+        return 2.0 * sum;
+    }
+
+    std::expected<std::vector<std::vector<int>>, std::string>
+    atom_bf_lists(const HartreeFock::Molecule &mol, const HartreeFock::Basis &basis)
+    {
+        auto bf_shell = build_bf_shell_map(basis);
+        if (!bf_shell)
+            return std::unexpected(bf_shell.error());
+        auto shell_atom = build_shell_atom_map(mol, basis);
+        if (!shell_atom)
+            return std::unexpected(shell_atom.error());
+        return build_atoms_bf_lists(mol.natoms, *bf_shell, *shell_atom);
+    }
+
+    std::expected<Eigen::MatrixXd, std::string> becke_partition_owner_derivatives(
+        const MolecularGrid &grid,
+        const HartreeFock::Molecule &mol,
+        Eigen::Index ip)
+    {
+        // Differentiate the owner atom's Becke partition weight with
+        // respect to every nuclear Cartesian. This is the core moving-grid
+        // correction needed for analytic DFT gradients.
+        const Eigen::Index natoms = static_cast<Eigen::Index>(mol.natoms);
+        if (grid.owner.size() != grid.points.rows())
+            return std::unexpected("molecular grid owner array does not match point count");
+        if (grid.atomic_weights.size() != grid.points.rows() ||
+            grid.partition_weights.size() != grid.points.rows())
+        {
+            return std::unexpected("molecular grid partition metadata does not match point count");
+        }
+
+        const int owner = grid.owner(ip);
+        if (owner < 0 || owner >= natoms)
+            return std::unexpected("molecular grid owner index is out of range");
+
+        const Eigen::Vector3d point = grid.points.row(ip).head<3>().transpose();
+        const Eigen::MatrixXd &coordinates = mol._standard;
+        const Eigen::VectorXi &atomic_numbers = mol.atomic_numbers;
+
+        std::vector<double> products(static_cast<std::size_t>(natoms), 1.0);
+        std::vector<Eigen::MatrixXd> dproducts(
+            static_cast<std::size_t>(natoms),
+            Eigen::MatrixXd::Zero(natoms, 3));
+
+        for (Eigen::Index i = 0; i < natoms; ++i)
+        {
+            const Eigen::Vector3d ri = coordinates.row(i).transpose();
+            for (Eigen::Index j = i + 1; j < natoms; ++j)
+            {
+                const Eigen::Vector3d rj = coordinates.row(j).transpose();
+                const Eigen::Vector3d rij = ri - rj;
+                const double Rij = rij.norm();
+                if (Rij < 1e-14)
+                    return std::unexpected("Becke partition derivative encountered coincident atoms");
+
+                const Eigen::Vector3d eij = rij / Rij;
+                const Eigen::Vector3d dpi = point - ri;
+                const Eigen::Vector3d dpj = point - rj;
+                const double di = dpi.norm();
+                const double dj = dpj.norm();
+                if (di < 1e-14 || dj < 1e-14)
+                    return std::unexpected("Becke partition derivative encountered a grid point on a nucleus");
+
+                const Eigen::Vector3d ui = dpi / di;
+                const Eigen::Vector3d uj = dpj / dj;
+                const double mu_raw = (di - dj) / Rij;
+                const double aij = DFT::detail::treutler_becke_adjustment(
+                    atomic_numbers(i),
+                    atomic_numbers(j));
+                const double mu_adjusted = mu_raw + aij * (1.0 - mu_raw * mu_raw);
+                const double mu_clamped = std::clamp(mu_adjusted, -1.0, 1.0);
+                const double sij = DFT::detail::becke_switch(mu_clamped);
+                const double ds_dmu =
+                    (std::abs(mu_adjusted - mu_clamped) < 1e-14)
+                        ? DFT::detail::becke_switch_derivative(mu_clamped)
+                        : 0.0;
+
+                Eigen::MatrixXd ds = Eigen::MatrixXd::Zero(natoms, 3);
+                for (Eigen::Index atom = 0; atom < natoms; ++atom)
+                {
+                    const double delta_owner = (atom == owner) ? 1.0 : 0.0;
+                    const double delta_i = (atom == i) ? 1.0 : 0.0;
+                    const double delta_j = (atom == j) ? 1.0 : 0.0;
+
+                    const Eigen::Vector3d ddi = (delta_owner - delta_i) * ui;
+                    const Eigen::Vector3d ddj = (delta_owner - delta_j) * uj;
+                    const Eigen::Vector3d dR = (delta_i - delta_j) * eij;
+                    const Eigen::Vector3d dmu_raw =
+                        ((ddi - ddj) * Rij - (di - dj) * dR) / (Rij * Rij);
+                    const Eigen::Vector3d dmu_adjusted =
+                        (1.0 - 2.0 * aij * mu_raw) * dmu_raw;
+                    ds.row(atom) = (ds_dmu * dmu_adjusted).transpose();
+                }
+
+                const double old_pi = products[static_cast<std::size_t>(i)];
+                const double old_pj = products[static_cast<std::size_t>(j)];
+                const Eigen::MatrixXd old_dpi = dproducts[static_cast<std::size_t>(i)];
+                const Eigen::MatrixXd old_dpj = dproducts[static_cast<std::size_t>(j)];
+
+                products[static_cast<std::size_t>(i)] = old_pi * sij;
+                products[static_cast<std::size_t>(j)] = old_pj * (1.0 - sij);
+                dproducts[static_cast<std::size_t>(i)] = old_dpi * sij + old_pi * ds;
+                dproducts[static_cast<std::size_t>(j)] = old_dpj * (1.0 - sij) - old_pj * ds;
+            }
+        }
+
+        double sum = 0.0;
+        Eigen::MatrixXd dsum = Eigen::MatrixXd::Zero(natoms, 3);
+        for (Eigen::Index atom = 0; atom < natoms; ++atom)
+        {
+            sum += products[static_cast<std::size_t>(atom)];
+            dsum += dproducts[static_cast<std::size_t>(atom)];
+        }
+        if (sum <= 0.0)
+            return std::unexpected("Becke partition derivative: partition denominator underflowed");
+
+        const double owner_product = products[static_cast<std::size_t>(owner)];
+        Eigen::MatrixXd derivatives = Eigen::MatrixXd::Zero(natoms, 3);
+        for (Eigen::Index atom = 0; atom < natoms; ++atom)
+        {
+            for (int q = 0; q < 3; ++q)
+            {
+                derivatives(atom, q) =
+                    (dproducts[static_cast<std::size_t>(owner)](atom, q) * sum -
+                     owner_product * dsum(atom, q)) /
+                    (sum * sum);
+            }
+        }
+
+        return derivatives;
+    }
 
     std::expected<Eigen::MatrixXd, std::string>
     compute_xc_nuclear_gradient_rks(

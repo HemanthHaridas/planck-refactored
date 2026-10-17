@@ -6,9 +6,12 @@ Canonical status now lives in:
 
 > **The route this doc describes has been retired.** Stages 1-4 hold and are worth reading -- the
 > defects they found are real and the mechanics still describe how the emitter works. But stage 5
-> never passes: dressing and spin adaptation **do not compose**, in either order, and the
-> spin-adapted dressed kernels are wrong by ~52 % of the correlation energy. The decision, the
-> measurements behind it, and what was kept are in `CCGEN_DRESSING_AND_SPIN_ADAPTATION.md`.
+> never passes for this route: *recognition* dressing and spin adaptation **do not compose**, in
+> either order, and the spin-adapted recognized kernels are wrong by ~52 % of the correlation
+> energy. The decision, the measurements behind it, and what was kept are in
+> `CCGEN_DRESSING_AND_SPIN_ADAPTATION.md`. The production dressed path is the separate
+> *derivation* route (`--dressing derived`; `CCGEN_TWO_DRESSING_ROUTES.md`,
+> `CCGEN_WIRING_THE_DERIVATION_ROUTE.md`), which does compose.
 >
 > Read this document for *how the dressed emit pipeline works*, not as a live plan.
 
@@ -155,4 +158,4 @@ Gates: `test_emit_flag_matrix.py`, `test_dressed_tu_coinclusion.py`, `test_inter
 
 ## Remaining architecture concern
 
-Stage 5 (run) is where this pipeline stops applying: dressing and spin adaptation do not compose, so the spin-adapted dressed kernels this pipeline describes are wrong by ~52 % of the correlation energy. See `CCGEN_DRESSING_AND_SPIN_ADAPTATION.md` for the decision and measurements. Stages 1-4 remain accurate descriptions of the (undressed-spin) emit mechanics and their defects are real; only the composition with spin adaptation is retired.
+Stage 5 (run) is where this pipeline stops applying: recognition dressing and spin adaptation do not compose, so the spin-adapted recognized kernels this pipeline describes are wrong by ~52 % of the correlation energy. (The derivation route does compose; see `CCGEN_TWO_DRESSING_ROUTES.md`.) See `CCGEN_DRESSING_AND_SPIN_ADAPTATION.md` for the decision and measurements. Stages 1-4 remain accurate descriptions of the (undressed-spin) emit mechanics and their defects are real; only the composition with spin adaptation is retired.

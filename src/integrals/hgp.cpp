@@ -1620,6 +1620,27 @@ Eigen::MatrixXd HartreeFock::HeadGordonPople::_compute_2e_fock_direct(
 }
 
 std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
+HartreeFock::HeadGordonPople::_compute_2e_jk_direct(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &density,
+    const std::size_t nbasis,
+    const HartreeFock::ERIKernel kernel,
+    const double omega,
+    const double tol_eri,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
+{
+    const Eigen::MatrixXd Q = hgp_schwarz_matrix(shell_pairs, nbasis, sym_ops);
+    Eigen::MatrixXd J, K, unused;
+    HartreeFock::Integrals::FusedFockDensities dens;
+    dens.P = &density;
+    HartreeFock::Integrals::fused_fock_build(
+        shell_pairs, nbasis, Q, kernel, omega, tol_eri,
+        /*spin_resolved=*/false, dens, J, K, unused, hgp_eri_elem,
+        sym_ops, HartreeFock::Integrals::FusedTerm::RawCoulombExchange);
+    return {std::move(J), std::move(K)};
+}
+
+std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
 HartreeFock::HeadGordonPople::_compute_2e_fock_uhf_direct(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const Eigen::MatrixXd &Pa,

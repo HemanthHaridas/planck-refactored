@@ -31,6 +31,14 @@ must be rewritten into an architecture answer as soon as that work lands and is 
 - `CCGEN_GCC_TO_UCC_BRIDGE.md` — how does a spin-orbital manifold become a spin-block-resolved
   one, and how does that differ from the spatial collapse?
 
+### Answered questions — parallelism, grids, and performance
+
+- `HPC_MPI.md` — how does `planck-mpi` distribute an SCF, and how well does it scale?
+- `DFT_GRID_CONVERGENCE_SCOPE.md` — how is a DFT grid pruning policy qualified, and why
+  is V4 the qualified one?
+- `CASSCF_FOCK_REBUILD_COST.md` — why don't direct or cached Fock builds speed up CASSCF
+  on a large basis?
+
 To export it as a standalone static webpage:
 
 ```bash

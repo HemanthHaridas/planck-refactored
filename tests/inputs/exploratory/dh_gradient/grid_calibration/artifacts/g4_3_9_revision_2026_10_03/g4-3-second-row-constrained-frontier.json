@@ -1,0 +1,33 @@
+{
+  "contract": "g4-3-constrained-family-frontier-v1",
+  "family": "second-row",
+  "constraint": {
+    "contract": "g4-3-second-row-band1-floor-v1",
+    "source_finalist": "tests/inputs/exploratory/dh_gradient/grid_calibration/g4_3_combined_frontier_finalist.json",
+    "family": "second-row",
+    "band_index": 1,
+    "minimum_lebedev_points": 770,
+    "status": "test-only-revision-after-g4-3-9-failure"
+  },
+  "frontier": [
+    {
+      "max_points_per_atom": 67002,
+      "total_ledger_points": 727830,
+      "rule": {
+        "boundaries": [
+          0.4,
+          1.0,
+          2.5,
+          4.5
+        ],
+        "lebedev_points": [
+          86,
+          770,
+          1454,
+          590,
+          170
+        ]
+      }
+    }
+  ]
+}

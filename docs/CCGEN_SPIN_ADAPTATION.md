@@ -62,6 +62,51 @@ Every one of these was found *after* something green, which is why they are reco
 3. **Line-swap antisymmetry is not axis antisymmetry** — see invariant 3 above.
 4. **Rank 4 has two independent Sz sectors.** `t4` needs `aabb` *and* `aaab`; `aaab` is not reducible to `aabb`, proven and not merely assumed. A solver storing one silently loses the entire T4 contribution and CCSDTQ collapses onto CCSDT — converged, self-consistent, and 3e-6 short. Answered in full in `docs/CCGEN_CCSDTQ_MULTISECTOR.md`.
 
+## Why adapt the equations rather than bind spin-orbital storage
+
+When the generated kernels first ran on the spatial runtime, they emitted
+spin-orbital algebra (`0.25 * oovv * t2`, coefficients `±1, ±½, ±¼`,
+spin-orbital term counts) against spatial amplitudes and chemists' integrals.
+The energy came out about 5× too large on Be/STO-3G `cc4` and dived below the
+FCI floor. Two fixes were possible:
+
+- **Bind spin-orbital storage to the generated kernels**: a `2·n_occ`
+  reference with antisymmetrized `<ij||ab>` blocks. The emitted algebra would
+  then be correct as it stands. It was rejected as the fix because it is
+  exactly the `2^(2·rank)` cost this layer exists to avoid: 16× the ERI block
+  at rank 2, far worse at rank 4.
+- **Spin-adapt in the emit path, keeping spatial storage**: the route taken
+  (R1). Terms pass through `spin.py` and arrive with spatial coefficients
+  (the `2J − K` structure) and the spatial term count. The runtime is
+  unchanged.
+
+Before investing in R1, a cheap spike settled the diagnosis. The *same*
+generated equations evaluated under spin-orbital storage reproduce PySCF:
+CCSD energy to 12 places at PySCF's converged amplitudes, and CCSDT to the FCI
+limit to 8 places (`ccgen/tests/test_reference_vs_pyscf.py`). So the algebra
+was right and the defect was purely storage and summation. The numeric gate
+that would have caught it at once is `GeneratedSpatialEnergyGate`. It binds the
+generated CCSD energy to spatial storage exactly as the C++ runtime does. The
+un-adapted path gives **exactly 0.2500 × `rccsd.e_corr`** (H2/STO-3G: −0.00513
+vs −0.02052): the spin-orbital ¼ applied with no spin summation. That is pinned
+as an expected failure (`test_ccsd_spatial_energy_raw_is_wrong`), and the
+adapted path must match RCCSD to 9 places
+(`test_ccsd_spatial_energy_spin_adapted_matches_rccsd`). An exact rational ratio
+like that is the signature to look for.
+
+Design rules that came out of it:
+
+- Never patch the energy kernel's `0.25` in isolation. The residuals carry the
+  same spin-orbital algebra, so the amplitudes would still converge to
+  spin-orbital-scaled values. The fix lives in one place in the emit path and
+  propagates to the energy and every residual together.
+- There is one spin adapter, `spin.py`. Connect to it; do not write a second.
+- Do not treat rank-generic collapse code as validated just because it runs.
+  Each rank needs its own numeric gate; rank 4 needed the multi-sector work in
+  `docs/CCGEN_CCSDTQ_MULTISECTOR.md` before `PLANCK_CC_SPIN_ADAPT` could
+  become the default without hiding a rank-4 defect behind a fixed rank-2/3
+  one.
+
 ## Validation strategy that should remain in place
 
 - RCC reproducing the GCC residual on real integrals to ~1e-16, vanishing at PySCF's converged RCCSD amplitudes

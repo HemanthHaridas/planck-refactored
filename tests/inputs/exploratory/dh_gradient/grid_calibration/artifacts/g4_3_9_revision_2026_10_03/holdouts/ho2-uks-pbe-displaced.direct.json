@@ -1,0 +1,48 @@
+{
+  "contract": "g4-3-direct-rescore-v1",
+  "fingerprint": "g4-3-second-row-band1-floor-v1;radial=135;radius=m4-over-bragg;partition=original-becke-treutler-bragg",
+  "points": 191238,
+  "atlas": {
+    "xc_energy": -17.418929214322567,
+    "directions": [
+      {
+        "D_V": -0.10193887443198936,
+        "D_fxc_D": -0.2271468939487428
+      },
+      {
+        "D_V": 0.18672798072611296,
+        "D_fxc_D": -0.1404433858087173
+      }
+    ]
+  },
+  "direct": {
+    "xc_energy": -17.418929214322592,
+    "directions": [
+      {
+        "D_V": -0.10193887443198964,
+        "D_fxc_D": -0.22714689384610554
+      },
+      {
+        "D_V": 0.18672798072611316,
+        "D_fxc_D": -0.1404433858200642
+      }
+    ]
+  },
+  "delta": {
+    "xc_energy": -2.4868995751603507e-14,
+    "directions": [
+      {
+        "D_V": -2.7755575615628914e-16,
+        "D_fxc_D": 1.0263725980230731e-10
+      },
+      {
+        "D_V": 1.942890293094024e-16,
+        "D_fxc_D": -1.1346895645303334e-11
+      }
+    ]
+  },
+  "tolerance": 1e-09,
+  "max_error": 1.0263725980230731e-10,
+  "passed": true,
+  "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout/ho2_uks_pbe_displaced_sto3g.hfinp"
+}

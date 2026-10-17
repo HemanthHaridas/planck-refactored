@@ -25,6 +25,7 @@
 #include "io/logging.h"
 #include "lookup/elements.h"
 #include "opt/geomopt.h"
+#include "populations/esp.h"
 #include "populations/multipole.h"
 #include "populations/population.h"
 #include "post_hf/casscf.h"
@@ -83,6 +84,7 @@ static void log_multipole_report(
     HartreeFock::Logger::multipole_moments(*moments);
     HartreeFock::Logger::blank();
 }
+
 
 static void log_population_report(const HartreeFock::Calculator &calculator)
 {
@@ -597,6 +599,41 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             "singlepoint, gradient or geomopt, or disable RI (mp2_use_ri false) "
             "for " + map_enum(calculator._calculation) + ".");
         return EXIT_FAILURE;
+    }
+
+    // ── RI-JK SCF boundary ───────────────────────────────────────────────────────
+    // The RI J/K builders work on a plain AO density in the working basis. They
+    // have no spherical back-projection, no symmetry-orbit folding, and ROHF's
+    // Roothaan effective Fock is assembled after the (Ga, Gb) build that RI-JK
+    // replaces -- none of which is wired. Reject rather than silently returning a
+    // dense (or wrong) answer; each rejection names the specific reason.
+    if (calculator._scf._ri_jk)
+    {
+        const char *reason =
+            (calculator._scf._scf == HartreeFock::SCFType::ROHF)
+                ? "ROHF (the Roothaan effective Fock is not wired through the RI builders)"
+            : calculator._shells._spherical
+                ? "the spherical basis (the RI J/K builders have no spherical path)"
+            : calculator._use_full_symmetry
+                ? "full point-group symmetry (RI J/K does not fold symmetry orbits)"
+                : nullptr;
+        if (reason != nullptr)
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Error, "RI-JK :",
+                std::string("RI-JK SCF (scf_ri_jk) does not support ") + reason +
+                    ". Use RHF or UHF in a Cartesian basis without full symmetry, "
+                    "or disable RI-JK (scf_ri_jk false).");
+            return EXIT_FAILURE;
+        }
+        if (calculator._mp2.ri_basis_name.empty())
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Error, "RI-JK :",
+                "RI-JK SCF (scf_ri_jk) needs an auxiliary basis: set mp2_ri_basis "
+                "(the same fitting basis RI-MP2 uses).");
+            return EXIT_FAILURE;
+        }
     }
 
     // ── Correlated frequencies are not implemented ───────────────────────────────
@@ -1282,6 +1319,35 @@ std::expected<int, std::string> HartreeFock::Driver::run(
 
     HartreeFock::Logger::converged_energy(calculator._total_energy, calculator._nuclear_repulsion);
     log_population_report(calculator);
+    // Apparent charges for `include_reaction_field`. evaluate_pcm_reaction_field
+    // is a pure function of (state, density), so the converged charges come back
+    // from one post-SCF call -- nothing had to be cached during the SCF.
+    std::optional<Eigen::VectorXd> esp_apparent_charges;
+    if (calculator._esp._enabled && calculator._esp._include_reaction_field &&
+        pcm_state && pcm_state->enabled())
+    {
+        Eigen::MatrixXd pcm_density = calculator._info._scf.alpha.density;
+        if (calculator._scf._scf != HartreeFock::SCFType::RHF &&
+            calculator._info._scf.beta.density.rows() ==
+                calculator._info._scf.alpha.density.rows())
+            pcm_density += calculator._info._scf.beta.density;
+
+        auto pcm = HartreeFock::Solvation::evaluate_pcm_reaction_field(
+            calculator, *pcm_state, pcm_density);
+        if (!pcm)
+            // Degrade to the solute potential; log_esp_report labels whichever
+            // quantity it actually printed.
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Warning, "ESP Reaction Field :",
+                "unavailable: " + pcm.error());
+        else
+            esp_apparent_charges = std::move(pcm->apparent_charges);
+    }
+
+    HartreeFock::SCF::log_esp_report(
+        calculator, shellpairs,
+        pcm_state ? &pcm_state->surface_points : nullptr,
+        esp_apparent_charges ? &*esp_apparent_charges : nullptr);
     log_multipole_report(calculator, shellpairs);
 
     // ── FCIDUMP export ────────────────────────────────────────────────────────

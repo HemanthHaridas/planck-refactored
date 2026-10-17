@@ -1,0 +1,67 @@
+{
+  "contract": "g4-3-reference-ladder-report-v1",
+  "fixture": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v3/h2o2_c1_b2plyp_displaced_sto3g.hfinp",
+  "reference_ladder": {
+    "angular_anchor": {
+      "radial": 135,
+      "angular": 2030
+    },
+    "radial_check": {
+      "radial": 165,
+      "angular": 2030
+    },
+    "angular_check": {
+      "radial": 165,
+      "angular": 2702
+    }
+  },
+  "energy_limit": 1e-08,
+  "contraction_limit": 1e-07,
+  "rows": [
+    {
+      "name": "uniform-2030-a",
+      "points": 1096200
+    },
+    {
+      "name": "uniform-2030-b",
+      "points": 1339800
+    },
+    {
+      "name": "uniform-2702-c",
+      "points": 1783320
+    }
+  ],
+  "radial_delta": {
+    "energy": 2.7981172934232745e-11,
+    "alpha_norm": -6.997957768817287e-12,
+    "beta_norm": -6.997957768817287e-12,
+    "directions": [
+      {
+        "D_V": -1.073835464993067e-12,
+        "D_fxc_D": 2.9639931481417747e-10
+      },
+      {
+        "D_V": 2.105274288233261e-12,
+        "D_fxc_D": 7.67600198681162e-10
+      }
+    ]
+  },
+  "angular_delta": {
+    "energy": 3.2953195727714046e-11,
+    "alpha_norm": 4.85997908583613e-11,
+    "beta_norm": 4.85997908583613e-11,
+    "directions": [
+      {
+        "D_V": 8.31426941183544e-11,
+        "D_fxc_D": -2.3912433838590985e-10
+      },
+      {
+        "D_V": 1.1787977538535444e-10,
+        "D_fxc_D": -6.02766035001645e-10
+      }
+    ]
+  },
+  "radial_stable": true,
+  "angular_stable": true,
+  "reference_stable": true
+}

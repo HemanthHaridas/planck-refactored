@@ -11,7 +11,7 @@
 //                         "rank 0"), so the dispatch logic is testable without
 //                         an MPI toolchain.
 //
-// Tier 3 scope (docs/HPC_MPI_EXECUTABLE_SCOPE.md): scaffolding + dispatch +
+// Tier 3 (docs/HPC_MPI.md): scaffolding + dispatch +
 // rank-aware I/O. The distributed Fock build (Tier 1) plugs in underneath the
 // existing Driver::run without changing this file.
 //
@@ -68,6 +68,7 @@ int main(int argc, const char *argv[])
     // covers the driver's internal logging, not just main's messages, so
     // mpirun -n k no longer prints the log k times.
     HartreeFock::Logger::set_rank(rank);
+    HartreeFock::Logger::banner();
 
     auto finalize = [](int code) -> int
     {

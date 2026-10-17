@@ -1,0 +1,51 @@
+{
+  "contract": "g4-3-physical-radius-derivation-v1",
+  "reference_ladder": {
+    "angular_anchor": { "radial_points": 135, "angular_points": 2030 },
+    "radial_check": { "radial_points": 165, "angular_points": 2030 },
+    "angular_check": { "radial_points": 165, "angular_points": 2702 }
+  },
+  "limits": {
+    "xc_energy_ha": 1e-08,
+    "xc_response_contraction": 1e-07
+  },
+  "observables": [
+    "xc_energy",
+    "density_xc_potential",
+    "density_xc_kernel_density"
+  ],
+  "directions_per_fixture": 2,
+  "shell_selector": {
+    "coordinate": "m4-radius-over-bragg-radius",
+    "depends_on": ["atomic_number", "fixed_radial_coordinate"],
+    "forbids": ["density", "molecular_geometry", "scf_iteration", "orbital_response"]
+  },
+  "families": [
+    { "name": "hydrogen-helium", "atomic_numbers": [1, 2] },
+    { "name": "second-row", "atomic_numbers": [3, 4, 5, 6, 7, 8, 9, 10] },
+    { "name": "third-row", "atomic_numbers": [11, 12, 13, 14, 15, 16, 17, 18] }
+  ],
+  "allowed_lebedev_points": [
+    26, 50, 86, 110, 146, 170, 194, 230, 266, 302, 350, 434, 590,
+    770, 974, 1202, 1454, 1730, 2030
+  ],
+  "allowed_band_boundaries": [
+    0.1, 0.1667, 0.25, 0.4, 0.5, 0.8, 0.9, 1.0, 2.5, 3.5, 4.5
+  ],
+  "fixtures": [
+    "tests/inputs/exploratory/dh_gradient/uks_u0/ho2_asymmetric_b2plyp_sto3g.hfinp",
+    "tests/inputs/regression/dft/water_rks_pbe_soscf_puredeadband_631g.hfinp",
+    "tests/inputs/exploratory/dh_gradient/uks_u0/cn_radical_asymmetric_b2plyp_sto3g.hfinp",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/cn_anion_b2plyp_augccpvdz.hfinp",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/fcn_asymmetric_b2plyp_ccpvdz.hfinp",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/hf_b2plyp_sto3g.hfinp",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/hcl_b2plyp_sto3g.hfinp",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/hcl_b2plyp_ccpvdz.hfinp",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/h2s_asymmetric_b2plyp_sto3g.hfinp",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/h2s_asymmetric_b2plyp_ccpvdz.hfinp",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/ph3_asymmetric_b2plyp_sto3g.hfinp",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/ph3_asymmetric_b2plyp_ccpvdz.hfinp",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/sih4_asymmetric_b2plyp_sto3g.hfinp",
+    "tests/inputs/exploratory/dh_gradient/grid_calibration/sih4_asymmetric_b2plyp_ccpvdz.hfinp"
+  ]
+}

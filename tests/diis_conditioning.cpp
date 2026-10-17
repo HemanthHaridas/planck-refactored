@@ -82,9 +82,8 @@ int main()
         expect(same, "well-conditioned: guard matches the bare bordered solve exactly");
     }
 
-    // 2) Near-converged subspace (tiny, nearly parallel errors): the Gram block
-    //    is extremely ill-conditioned but still positive — the guard must NOT
-    //    drop vectors here; it should pass the bare solve through unchanged.
+    // 2) Near-converged parallel errors must still be minimized, not merely
+    //    passed through the old unscaled QR (which loses the objective's rank).
     {
         Eigen::MatrixXd base(2, 2);
         base << 1.0, 0.5, 0.5, 1.0;
@@ -95,18 +94,16 @@ int main()
             ptrs.push_back(&e);
 
         const Eigen::VectorXd c = HartreeFock::solve_diis_coefficients(ptrs);
-        const Eigen::VectorXd ref = bare_solve(errs);
         expect(c.allFinite(), "near-converged: coefficients are finite");
         expect(near(c.sum(), 1.0, 1e-6), "near-converged: coefficients sum to 1");
-        bool same = true;
-        for (Eigen::Index i = 0; i < c.size(); ++i)
-            same = same && near(c(i), ref(i), 1e-6);
-        expect(same, "near-converged: benign ill-conditioning is passed through unchanged");
+        const double residual = c(0) + .99*c(1) + .98*c(2);
+        expect(std::abs(residual) < 1e-8,
+               "near-converged: cancel the normalized residual, not just satisfy sum(c)=1");
     }
 
     // 3) Duplicated vector creates an exactly singular Gram block. The bare
-    //    solve would be unreliable; the guard must drop the oldest vector and
-    //    still return a finite, sum-to-1 coefficient set.
+    //    solve is not unique; any finite bounded minimizing coefficient set
+    //    satisfying the constraint is acceptable.
     {
         Eigen::MatrixXd e0(2, 2);
         e0 << 0.20, 0.00, 0.00, 0.10;
@@ -124,6 +121,66 @@ int main()
         expect(c.allFinite(), "singular: coefficients remain finite despite singular Gram block");
         expect(near(c.sum(), 1.0, 1e-8), "singular: coefficients still sum to 1");
         expect(c.cwiseAbs().maxCoeff() < 1e8, "singular: no explosive coefficients");
+    }
+
+    // 4) Exact two-vector oracle: min ||2*c0*e + c1*e|| with c0+c1=1
+    //    has the unique solution (-1,2), for every nonzero common scale.
+    //    Includes scales whose unnormalized Gram underflows/overflows.
+    for (double scale : {1.0, 1e-8, 1e-10, 1e-100, 1e-200, 1e100, 1e200})
+    {
+        Eigen::MatrixXd e0 = Eigen::MatrixXd::Constant(1, 1, 2*scale);
+        Eigen::MatrixXd e1 = Eigen::MatrixXd::Constant(1, 1, scale);
+        const auto c = HartreeFock::solve_diis_coefficients({&e0, &e1});
+        expect(near(c(0), -1., 1e-11) && near(c(1), 2., 1e-11),
+               "scale invariance: two-vector cancellation gives (-1,2)");
+        expect(std::abs(2*c(0)+c(1)) < 1e-11, "scale invariance: residual is minimized");
+        if (scale == 1e-10)
+        {
+            const auto old = bare_solve({e0, e1});
+            std::printf("tiny-error oracle: old normalized residual %.12e, fixed %.12e\n",
+                        std::abs(2*old(0)+old(1)), std::abs(2*c(0)+c(1)));
+            expect(std::abs(2*old(0)+old(1)) > .1,
+                   "regression reproducer: unscaled QR loses the tiny objective");
+        }
+    }
+
+    // 5) A coupled spin oracle with an analytic minimizer. For c0=t,c1=1-t,
+    //    ||e_a||^2+||e_b||^2 = (1+t)^2+(-1+2t)^2, minimized at t=1/5.
+    //    Independent spin solves instead give t=-1 and t=1/2.
+    for (double scale : {1., 1e-10})
+    {
+        auto scalar = [](double x) { return Eigen::MatrixXd::Constant(1, 1, x).eval(); };
+        HartreeFock::UHFDIISState spin, swapped, empty_beta;
+        spin.push(scalar(10), scalar(30), scalar(2*scale), scalar(scale));
+        spin.push(scalar(20), scalar(50), scalar(scale), scalar(-scale));
+        const auto [fa, fb] = spin.extrapolate();
+        expect(near(fa(0,0), 18) && near(fb(0,0), 46),
+               "coupled spin: one minimizing coefficient vector for both Focks");
+        swapped.push(scalar(30), scalar(10), scalar(scale), scalar(2*scale));
+        swapped.push(scalar(50), scalar(20), scalar(-scale), scalar(scale));
+        const auto [sa, sb] = swapped.extrapolate();
+        expect(near(sa(0,0), fb(0,0)) && near(sb(0,0), fa(0,0)),
+               "coupled spin: alpha/beta exchange invariance");
+        empty_beta.push(scalar(10), scalar(30), scalar(2*scale), scalar(0));
+        empty_beta.push(scalar(20), scalar(50), scalar(scale), scalar(0));
+        const auto [za, zb] = empty_beta.extrapolate();
+        expect(near(za(0,0), 30) && near(zb(0,0), 70),
+               "coupled spin: zero-beta residual reduces to alpha minimization");
+        spin.clear();
+        expect(spin.size() == 0 && !spin.ready(), "coupled spin: reset clears both histories");
+    }
+
+    // 6) Zero residuals and final-subspace breakdown have deterministic,
+    //    finite fallbacks. The coefficient magnitude guard also applies at k=2.
+    {
+        Eigen::MatrixXd zero = Eigen::MatrixXd::Zero(2, 2);
+        const auto c = HartreeFock::solve_diis_coefficients({&zero, &zero});
+        expect(c(0) == 0 && c(1) == 1, "zero errors: use the newest Fock");
+        Eigen::MatrixXd e0 = Eigen::MatrixXd::Constant(1, 1, 1.001);
+        Eigen::MatrixXd e1 = Eigen::MatrixXd::Constant(1, 1, 1.0);
+        const auto guarded = HartreeFock::solve_diis_coefficients({&e0, &e1}, 10.);
+        expect(guarded(0) == 0 && guarded(1) == 1,
+               "two-vector breakdown: do not return explosive coefficients");
     }
 
     if (g_failures == 0)

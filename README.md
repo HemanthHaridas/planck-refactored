@@ -14,16 +14,17 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 <div align="justify">
 
 - **RHF / ROHF / UHF** — closed-shell, restricted open-shell, and unrestricted Hartree-Fock; ROHF uses a Roothaan-type effective Fock construction with aufbau orbital reordering and DIIS convergence
-- **RKS / UKS (Kohn-Sham DFT)** — closed-shell and open-shell Kohn-Sham SCF via the `planck-dft` executable; LDA, GGA, global hybrid, range-separated hybrid, and double-hybrid exchange-correlation functionals through libxc; four grid quality presets (Coarse/Normal/Fine/UltraFine); arbitrary libxc functionals by name or integer ID. Range-separated hybrids are implemented for single-point, gradient, geometry-optimization, frequency, and geomopt+frequency workflows; double hybrids remain single-point only
+- **RKS / UKS (Kohn-Sham DFT)** — closed-shell and open-shell Kohn-Sham SCF via the `planck-dft` executable; LDA, GGA, global hybrid, range-separated hybrid, and double-hybrid exchange-correlation functionals through libxc; four grid quality presets (Coarse/Normal/Fine/UltraFine); arbitrary libxc functionals by name or integer ID. Range-separated hybrids support single-point, gradient, geometry-optimization, frequency, and geomopt+frequency workflows. Global RKS double hybrids support analytic gradients, geometry optimization, and semi-numerical frequencies; a separately qualified UKS subset supports gradients only (all-active conventional UMP2, V4 grid, no solvent/range separation)
 - **PCM solvation** — self-consistent conductor-like polarizable continuum model (C-PCM) for single-point RHF/UHF/RKS/UKS calculations with user-defined dielectric, named solvents, atom-centered cavities, and surface discretization controls
 - **BSSE / counterpoise correction** — ghost atoms (basis-only centers, requested as `Gh(X)`/`@X`/`X:`) and a two-fragment Boys-Bernardi counterpoise driver (`%begin_bsse`) that runs the dimer, isolated monomers, and ghosted monomers to report BSSE alongside the raw and CP-corrected interaction energies; SCF-level (RHF/UHF/ROHF) single points, PySCF-validated
-- **TDDFT / linear response** — full Casida and optional TDA excited-state roots on top of converged KS orbitals, with RKS singlet/triplet support, UKS spin-conserving response, semilocal XC kernels, transition dipoles, oscillator strengths, wavelengths, and Gaussian-broadened UV-Vis spectra
+- **TDDFT / linear response** — full Casida and optional TDA excited-state roots on top of converged KS orbitals, with RKS singlet/triplet support, UKS spin-conserving response, semilocal XC kernels, global-hybrid and erf range-separated exact exchange (B3LYP, PBE0, HSE06, CAM-B3LYP, ωB97X), transition dipoles, oscillator strengths, wavelengths, and Gaussian-broadened UV-Vis spectra
 - **Three integral engines** — Obara-Saika (`engine os`) for lightly-contracted bases; Head-Gordon-Pople (`engine hgp`) for routine contracted bases through 6-31G(d,p) and similar valence-double/triple-zeta sets, where the HRR is factored out of the primitive contraction loop and yields the lowest per-quartet cost in the low-to-medium angular-momentum regime; Rys quadrature (`engine rys`) for high angular momentum; automatic engine selection per shell quartet (`engine auto`)
 - **Electric multipole moments** — dipole and quadrupole moment analysis after SCF convergence for both `hartree-fock` and `planck-dft`
 - **Mulliken population analysis** — atomic gross populations, net charges, and (for UHF/ROHF) spin populations; printed when `print_populations true` or verbosity is `verbose`/`debug`
+- **ESP-derived atomic charges (CHELPG and RESP)** — atomic charges fitted to reproduce the molecule's own electrostatic potential on a grid outside the van der Waals surface, via `%begin_esp`. Unlike Mulliken/Löwdin charges, which partition the density by basis-function ownership and are therefore basis-set dependent, these reproduce the observable a force field actually needs. Two grids: the CHELPG cubic lattice (Breneman-Wiberg) and rotationally-invariant Connolly/Merz-Kollman spherical shells. The total charge is imposed as a Lagrange multiplier, so it is satisfied exactly rather than approximately. Optional Bayly hyperbolic restraint (RESP) with equivalent-atom constraints. The section also evaluates the potential at explicitly listed points, cross-validated against PySCF's `int1e_grids` to ~5e-9
 - **Conventional and Direct SCF** — ERI tensor stored once (conventional) or recomputed per iteration (direct); auto-selection based on system size
 - **DIIS** — convergence acceleration with optional automatic subspace restart
-- **SOSCF** — second-order (augmented-Hessian Newton) RHF convergence acceleration. Runs as a transient window (default 3 iterations) that hands back to DIIS to finish, matching the ORCA-style DIIS/SOSCF handoff, though a full unbounded SOSCF run converges to the same energy on its own. The switch from DIIS to SOSCF can be triggered at a fixed iteration or by the DIIS error norm dropping below a threshold. Off by default
+- **SOSCF** — second-order (augmented-Hessian Newton) convergence acceleration for RHF, UHF, RKS, and UKS (LDA, GGA, global and range-separated hybrids; PCM and SAO blocking fall back to DIIS with a warning). Runs as a transient window (default 3 iterations) that hands back to DIIS to finish, matching the ORCA-style DIIS/SOSCF handoff, though a full unbounded SOSCF run converges to the same energy on its own. The switch from DIIS to SOSCF can be triggered at a fixed iteration or by the DIIS error norm dropping below a threshold. Off by default
 - **Level shifting** — virtual orbital energy raising for open-shell convergence
 - **Wavefunction stability analysis** — orbital-Hessian eigenvalue check after SCF for three RHF channels (real-internal singlet `A+B`, complex-internal singlet `A−B`, and external triplet `A^T−B^T` for RHF→UHF) and two UHF channels (spin-conserving internal and a diagonal-approximation external GHF check). When an instability is detected, optional detect-and-follow rotates the orbitals along the lowest unstable mode (using a two-step broken-symmetry guess for triplet RHF→UHF: π/8 β HOMO–LUMO mix + adaptive eigenvector rotation) and re-converges SCF
 - **Symmetry detection** — point group via libmsym; standard-orientation coordinates
@@ -31,7 +32,7 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 - **Symmetry-adapted orbital (SAO) blocking** — the Fock matrix is block-diagonalized per irrep during SCF (RHF/UHF/ROHF and RKS/UKS), reducing diagonalization cost and giving clean per-orbital irrep labels
 - **Full point-group ERI reduction** — direct-SCF Fock builds exploit the *entire* molecular point group (not just its D2h subgroup) via a petite-list / skeleton-Fock symmetrization scheme: only orbit-representative shell quartets are computed, then the skeleton Fock is projected back to the totally-symmetric component. Available for RHF, UHF, and ROHF in both the Cartesian and real-spherical-harmonic basis, OpenMP-parallel and Schwarz-screened, with the density-independent skeleton persisted across SCF iterations. Validated through d-shells (C2v→C3v→Td) with symmetry-on energies matching symmetry-off
 - **Post-HF** — RMP2 and UMP2 correlation energy corrections; RMP2 natural orbital analysis; analytic RMP2 and UMP2 nuclear gradients; RCCSD for canonical closed-shell RHF references; teaching-oriented determinant-space UCCSD/UCCSDT prototypes for small UHF systems; RCCSDT with automatic backend dispatch across three tiers (determinant-space prototype, tensor production solver, tensor-optimized ccgen-driven backend); RCCSDTQ (`correlation ccsdtq`/`cc4`) via the ccgen-generated arbitrary-order solver; unrestricted generated CC (`ucc2`/`ucc3`/`ucc4`, spin-block-resolved) behind `-DPLANCK_CC_UCC=ON`; CASSCF and RASSCF multireference active-space calculations; full configuration interaction (FCI) over the entire MO space for small RHF/ROHF references; FCIQMC (stochastic FCI by walker sampling) for systems beyond exact diagonalization
-- **Coupled cluster** — `RCCSD` is an iterative spin-orbital amplitude solver for canonical RHF references. `RCCSDT` automatically selects between (1) a determinant-space teaching prototype (≤12 spin orbitals and ≤1200 determinants), (2) a tensor production backend (dressed-intermediate CCSD + staged T3 amplitude updates), and (3) a tensor-optimized backend that consumes ccgen-generated warm-start kernels for restricted references. The backend can be forced via the `PLANCK_RCCSDT_BACKEND` environment variable (`determinant`, `tensor`, or `optimized`). `UCCSD` and `UCCSDT` currently use determinant-space prototypes aimed at small teaching examples and validation studies. **`RCCSDTQ`** (`correlation ccsdtq`, `cc4`, or `ccsdt_gen`) routes through the ccgen-generated arbitrary-order RCC solver (Jacobi + DIIS on `ArbitraryOrderResiduals`), validated against FCI to all ten printed digits on small closed-shell systems. **Unrestricted generated CC** (`ucc2`/`ucc3`/`ucc4`, one residual per stored spin block — `aaaa`/`abab`/`bbbb` — rather than one per rank) is available behind the opt-in `-DPLANCK_CC_UCC=ON` build flag (default off, zero footprint on a default build); `ucc4` matches FCI to all ten digits on an open-shell doublet.
+- **Coupled cluster** — `RCCSD` is an iterative spin-orbital amplitude solver for canonical RHF references. `RCCSDT` automatically selects between (1) a determinant-space teaching prototype (≤12 spin orbitals and ≤1200 determinants), (2) a tensor production backend (dressed-intermediate CCSD + staged T3 amplitude updates), and (3) a tensor-optimized backend that routes the ccgen-generated rank-3 kernels through the arbitrary-order harness (requires `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON`; selected automatically in a `-DPLANCK_CC_DRESS_OPERATORS=ON` build). The backend can be forced via the `PLANCK_RCCSDT_BACKEND` environment variable (`determinant`, `tensor`, or `optimized`). `UCCSD` and `UCCSDT` currently use determinant-space prototypes aimed at small teaching examples and validation studies. **`RCCSDTQ`** (`correlation ccsdtq` or `cc4`; `cc3`/`ccsdt_gen`, `cc5`/`ccsdtqp`, and `cc6` select ranks 3, 5, and 6) routes through the ccgen-generated arbitrary-order RCC solver (Jacobi + DIIS on `ArbitraryOrderResiduals`), validated against FCI to all ten printed digits on small closed-shell systems. **Unrestricted generated CC** (`ucc2`/`ucc3`/`ucc4`, one residual per stored spin block — `aaaa`/`abab`/`bbbb` — rather than one per rank) is available behind the opt-in `-DPLANCK_CC_UCC=ON` build flag (default off, zero footprint on a default build); `ucc4` matches FCI to all ten digits on an open-shell doublet.
 - **ccgen — symbolic coupled-cluster equation generator** — a Python package (`python/ccgen/`) that derives spin-orbital CC residual equations at arbitrary truncation order (CCD through CC6) directly from the normal-ordered Hamiltonian via Baker-Campbell-Hausdorff expansion, Wick contraction, canonicalization, and connectivity filtering. Supports algebraic optimizations (orbital-energy denominator collection, permutation-based term grouping, implicit antisymmetry exploitation), intermediate tensor extraction with layout hints, a contraction-path factorizer that mechanically derives the dressed-operator set for each rank (see below), and four tiers of C++ emission including a Planck-specific tensor emitter that targets `Tensor2D`/`Tensor4D`/`Tensor6D` and the production CC infrastructure in `src/post_hf/cc/`. Used to generate the warm-start kernels consumed by the tensor-optimized RCCSDT backend.
 - **RMP2 natural orbitals** — natural orbital occupation numbers and coefficients printed after a single-point RMP2 run
 - **CASSCF** — Complete Active Space SCF with full-CI, state-averaged (SA-CASSCF) roots, matrix-free second-order orbital optimization, and a dedicated active-integral-cache transform for the orbital-gradient/response hot path. Runs from either an RHF or an ROHF reference; open-shell (high-spin) systems are supported as long as the unpaired electrons live inside the active space, so the inactive core stays closed-shell and doubly occupied
@@ -336,6 +337,7 @@ Input files use an INI-style block format with the extension `.hfinp`. Each sect
 %end_constraints
 
 %begin_bsse            (optional; runs counterpoise / BSSE correction)
+%begin_esp             (optional; ESP/RESP atomic charges or potential at points)
     ...
 %end_bsse
 ```
@@ -365,7 +367,7 @@ SCF procedure and convergence settings.
 |---|---|---|---|---|
 | `scf_type` | enum | `rhf`/`rks`, `rohf`, `uhf`/`uks` | `rhf` | Wavefunction type. `rks`/`uks` are aliases for `rhf`/`uhf` when using `planck-dft`. `rohf`: restricted open-shell HF (Roothaan effective Fock with SAO blocking and full point-group ERI reduction). Analytic nuclear gradients, geometry optimization, and vibrational frequencies are supported for ROHF in both the Cartesian and spherical basis. FCI, CASSCF, and RASSCF run from an ROHF reference (the MCSCF methods require the unpaired electrons to sit inside the active space so the inactive core stays closed-shell). ROHF-MP2/coupled-cluster, stability analysis, and PCM are not yet supported for ROHF. |
 | `engine` | enum | `os` / `obara-saika`, `hgp` / `head-gordon-pople`, `rys` / `rys-quadrature`, `auto` | `os` | Two-electron integral engine. `os`: Obara-Saika algorithm. `hgp`: Head-Gordon-Pople (HRR factored outside the primitive contraction loops; best per-quartet cost for routine contracted bases through 6-31G(d,p)). `rys`: Rys quadrature (preferred at high angular momentum). `auto`: selects the engine per shell quartet based on angular momentum. |
-| `correlation` | enum | `rmp2`, `ump2`, `ccsd`, `uccsd`, `ccsdt`, `uccsdt`, `ccsdtq`, `casscf`, `rasscf`, `fci` | none | Post-HF method. `rmp2`/`ump2`: Møller-Plesset second-order correction; both support `calculation gradient` for analytic MP2 nuclear gradients (`rmp2` with RHF, `ump2` with UHF). `ccsd`: restricted coupled cluster with singles and doubles for canonical RHF references. `uccsd`: unrestricted coupled cluster with singles and doubles for canonical UHF references; currently implemented as a determinant-space teaching prototype for small systems. `ccsdt`: restricted coupled cluster with singles, doubles, and triples; automatically dispatches to a determinant-space teaching prototype for tiny RHF systems (≤12 spin orbitals and ≤1200 determinants) or to a tensor production backend (dressed-intermediate CCSD followed by staged T3 amplitude updates) for larger systems. A third tensor-optimized backend driven by ccgen-generated warm-start kernels can be forced via the `PLANCK_RCCSDT_BACKEND=optimized` environment variable. `uccsdt`: unrestricted coupled cluster with singles, doubles, and triples for canonical UHF references; currently implemented as a determinant-space teaching prototype for small systems. `ccsdtq` (alias `cc4`): restricted coupled cluster through quadruples for canonical RHF references, driven by the arbitrary-order solver consuming ccgen-generated residuals; single-point energies only. `casscf`: Complete Active Space SCF (requires `nactele`, `nactorb`); runs from an RHF or ROHF reference, with high-spin open-shell systems supported when the unpaired electrons are in the active space (closed, doubly-occupied inactive core). `rasscf`: Restricted Active Space SCF (requires `nactele`, `nactorb`, `nras1`, `nras2`, `nras3`); same RHF/ROHF reference handling as `casscf`. `fci`: Full Configuration Interaction over the whole MO space for a converged RHF or ROHF reference (open-shell supported); single-point only. The FCI total energy is invariant to the reference orbitals. Honors `nroots` (lowest roots to report), `ci_max_dim` (determinant-count cap), and `target_irrep`. No active-space keywords are needed. |
+| `correlation` | enum | `rmp2`, `ump2`, `ccsd`, `uccsd`, `ccsdt`, `uccsdt`, `cc3`/`ccsdt_gen`, `ccsdtq`/`cc4`, `ccsdtqp`/`cc5`, `cc6`, `ucc2`…`ucc6` (aliases `uccsd_gen`, `uccsdt_gen`, `uccsdtq_gen`), `casscf`, `rasscf`, `fci`, `fciqmc` | none | Post-HF method. `rmp2`/`ump2`: Møller-Plesset second-order correction; both support `calculation gradient` for analytic MP2 nuclear gradients (`rmp2` with RHF, `ump2` with UHF). `ccsd`: restricted coupled cluster with singles and doubles for canonical RHF references. `uccsd`: unrestricted coupled cluster with singles and doubles for canonical UHF references; currently implemented as a determinant-space teaching prototype for small systems. `ccsdt`: restricted coupled cluster with singles, doubles, and triples; automatically dispatches to a determinant-space teaching prototype for tiny RHF systems (≤12 spin orbitals and ≤1200 determinants) or to a tensor production backend (dressed-intermediate CCSD followed by staged T3 amplitude updates) for larger systems. A third tensor-optimized backend, which runs the ccgen-generated rank-3 kernels through the arbitrary-order harness, can be forced via the `PLANCK_RCCSDT_BACKEND=optimized` environment variable (needs `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON`). `uccsdt`: unrestricted coupled cluster with singles, doubles, and triples for canonical UHF references; currently implemented as a determinant-space teaching prototype for small systems. `ccsdtq` (alias `cc4`): restricted coupled cluster through quadruples for canonical RHF references, driven by the arbitrary-order solver consuming ccgen-generated residuals; single-point energies only. `cc3`/`ccsdt_gen`, `cc5`/`ccsdtqp`, and `cc6` run the same generated solver at ranks 3, 5, and 6 (rank 3 needs `-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON`; ranks above 4 need `PLANCK_CC_MAXORDER` raised). `ucc2`–`ucc6`: generated unrestricted CC for canonical UHF references, behind `-DPLANCK_CC_UCC=ON`. `fciqmc`: stochastic FCI by walker sampling (see the FCIQMC example). `casscf`: Complete Active Space SCF (requires `nactele`, `nactorb`); runs from an RHF or ROHF reference, with high-spin open-shell systems supported when the unpaired electrons are in the active space (closed, doubly-occupied inactive core). `rasscf`: Restricted Active Space SCF (requires `nactele`, `nactorb`, `nras1`, `nras2`, `nras3`); same RHF/ROHF reference handling as `casscf`. `fci`: Full Configuration Interaction over the whole MO space for a converged RHF or ROHF reference (open-shell supported); single-point only. The FCI total energy is invariant to the reference orbitals. Honors `nroots` (lowest roots to report), `ci_max_dim` (determinant-count cap), and `target_irrep`. No active-space keywords are needed. |
 | `nactele` | int | ≥ 1 | — | Number of active electrons for CASSCF/RASSCF |
 | `nactorb` | int | ≥ 1 | — | Number of active orbitals for CASSCF/RASSCF |
 | `nroots` | int | ≥ 1 | `1` | Number of CI roots for state-averaged CASSCF (SA-CASSCF). `1` = single-state CASSCF. |
@@ -390,10 +392,10 @@ SCF procedure and convergence settings.
 | `use_diis` | bool | `.true.`, `.false.` | `.true.` | Enable DIIS convergence acceleration |
 | `diis_dim` | int | ≥ 2 | `8` | Maximum DIIS subspace size |
 | `diis_restart` | float | ≥ 0 | `2.0` | Clear the DIIS subspace when the error grows by more than this factor relative to the previous iteration. Set to `0` to disable. |
-| `scf_soscf_start` | int | ≥ 0 | `0` | RHF only. Fixed iteration at which SCF switches from DIIS to a second-order (SOSCF) augmented-Hessian orbital step. `0` disables SOSCF entirely (pure DIIS). Superseded by `scf_soscf_diis_tol` when that is nonzero. |
-| `scf_soscf_cycles` | int | ≥ 1 | `3` | RHF only. Number of consecutive SOSCF iterations before handing control back to DIIS (the DIIS subspace is cleared on handoff). SOSCF run to full, unbounded convergence with no handoff reaches the same energy but converges more slowly in practice than the default transient-window handoff. |
-| `scf_soscf_diis_tol` | float | ≥ 0 | `0.0` | RHF only. Switch from DIIS to SOSCF once the DIIS error norm (‖FPS−SPF‖) drops below this value and `scf_soscf_min_iter` iterations have passed. `0` disables the criterion, falling back to the fixed `scf_soscf_start` iteration. |
-| `scf_soscf_min_iter` | int | ≥ 0 | `2` | RHF only. Minimum iteration count before `scf_soscf_diis_tol` is allowed to trigger the switch to SOSCF. |
+| `scf_soscf_start` | int | ≥ 0 | `0` | RHF, UHF, RKS, and UKS (UHF: not with an active level shift; all: not with PCM or SAO blocking, which fall back to DIIS). Fixed iteration at which SCF switches from DIIS to a second-order (SOSCF) augmented-Hessian orbital step. `0` disables SOSCF entirely (pure DIIS). Superseded by `scf_soscf_diis_tol` when that is nonzero. |
+| `scf_soscf_cycles` | int | ≥ 1 | `3` | RHF, UHF, RKS, and UKS (see `scf_soscf_start`). Number of consecutive SOSCF iterations before handing control back to DIIS (the DIIS subspace is cleared on handoff). SOSCF run to full, unbounded convergence with no handoff reaches the same energy but converges more slowly in practice than the default transient-window handoff. |
+| `scf_soscf_diis_tol` | float | ≥ 0 | `0.0` | RHF, UHF, RKS, and UKS (see `scf_soscf_start`). Switch from DIIS to SOSCF once the DIIS error norm (‖FPS−SPF‖) drops below this value and `scf_soscf_min_iter` iterations have passed. `0` disables the criterion, falling back to the fixed `scf_soscf_start` iteration. |
+| `scf_soscf_min_iter` | int | ≥ 0 | `2` | RHF, UHF, RKS, and UKS (see `scf_soscf_start`). Minimum iteration count before `scf_soscf_diis_tol` is allowed to trigger the switch to SOSCF. |
 | `level_shift` | float | ≥ 0.0 | `0.0` | Virtual orbital level shift in Hartree. Raises virtual MO energies to widen the HOMO–LUMO gap and suppress orbital swapping. Recommended `0.2`–`0.5` for open-shell systems. Set to `0` to disable. |
 | `max_cycles` | int | ≥ 1 | auto | Maximum SCF iterations |
 | `tol_energy` | float | > 0 | `1e-10` | Energy convergence threshold in Hartree |
@@ -415,6 +417,9 @@ Kohn-Sham DFT settings. Only read by `planck-dft`; ignored by `hartree-fock`. Th
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
 | `grid` / `grid_level` | enum | `coarse`, `normal`, `fine`, `ultrafine` | `normal` | Molecular integration grid quality. Higher quality uses more radial shells and angular points; see grid preset table below. |
+| `grid_angular_points` | int | `0`, or a supported Lebedev size (e.g. `590`, `974`, `1454`, `2030`) | `0` | `0` keeps preset pruning. A nonzero size uses that many angular points on every radial shell of every atom, without light-atom reduction. Radial quadrature and Becke partitioning remain unchanged. Intended for controlled angular convergence; increases grid memory and cost. |
+| `grid_radial_points` | int | `0`, or a positive shell count | `0` | `0` uses the preset’s element-dependent radial count. A positive value uses that many Treutler–Ahlrichs radial shells for every atom, retaining the selected angular policy and Becke partitioning. Intended for controlled radial convergence; fixed throughout SCF and geometry displacements. |
+| `grid_policy` | enum | `legacy`, `legacy-no-light-reduction`, `legacy-unpruned-max`, `pyscf-nwchem-2.13`, `g4-3-v4` | `legacy` | Versioned angular-pruning schedule. `g4-3-v4` is a qualified opt-in policy, required (with `grid_radial_points 135` and no `grid_angular_points`) for UKS double-hybrid gradients; see `docs/DFT_GRID_CONVERGENCE_SCOPE.md`. The other non-legacy choices are diagnostic candidates, not production accuracy presets: use them only in explicit convergence/attribution studies. |
 | `exchange` | enum/string | built-in aliases such as `slater`/`lda`, `b88`/`becke88`, `pw91`, `pbe`, `b3lyp`, `pbe0`/`pbeh`, `hse06`, `b2plyp`; or any libxc name | `pbe` | Exchange or combined exchange-correlation functional. Combined XC entries such as `b3lyp`, `pbe0`, `hse06`, and `b2plyp` ignore the separate `correlation` keyword. Unknown strings are resolved through libxc by name. |
 | `correlation` | enum/string | `vwn`/`vwn5`, `lyp`, `p86`, `pw91`, `pbe`; or any libxc name | `pbe` | Correlation functional |
 | `exchange_id` | int | any libxc integer ID | — | Use an arbitrary libxc exchange functional by its integer identifier. Overrides `exchange`. |
@@ -429,10 +434,12 @@ Kohn-Sham DFT settings. Only read by `planck-dft`; ignored by `hartree-fock`. Th
 
 <p align="justify">
 Range-separated hybrids are supported for single-point energies, analytic
-gradients, geometry optimization, frequencies, and geomopt+frequency. Double
-hybrids remain single-point only. TDDFT / linear response and
-`imagfollow` remain limited to the existing semilocal/global-hybrid path and
-still error explicitly for unsupported range-separated or double-hybrid cases.
+gradients, geometry optimization, frequencies, and geomopt+frequency. Global
+RKS double hybrids support those gradient-driven workflows; the qualified UKS
+subset supports gradients only. TDDFT / linear response supports semilocal,
+global-hybrid, and erf range-separated functionals; double hybrids and
+Yukawa/Gaussian screened-exchange functionals are rejected for TDDFT.
+`imagfollow` is not implemented in `planck-dft`.
 </p>
 
 ### Section: `%begin_pcm`
@@ -589,6 +596,86 @@ O
 H  1  0.9572
 H  1  0.9572  2  104.52
 ```
+
+### Section: `%begin_esp` (optional)
+
+<p align="justify">
+Electrostatic-potential analysis. Either evaluates the potential at explicitly
+listed points, or generates a sampling grid and fits atomic charges that
+reproduce the potential on it. Mulliken and Löwdin charges partition the density
+by which basis function owns it, which makes them basis-set dependent; ESP
+charges instead reproduce the field the molecule actually presents to its
+surroundings, which is what a force field needs.
+</p>
+
+<p align="justify">
+<code>grid</code> and explicit <code>point</code> lines are mutually exclusive
+and the parser rejects inputs that give both, rather than silently mixing a
+diagnostic point list into a charge fit.
+</p>
+
+| Keyword | Type | Values | Default | Description |
+|---|---|---|---|---|
+| `grid` | enum | `chelpg`, `connolly`/`mk`, `none` | `none` | Sampling grid. `chelpg` is the Breneman-Wiberg cubic lattice; `connolly` is nested Merz-Kollman spherical shells. **Prefer `connolly`**: the cubic lattice is not rotationally symmetric, so its charges depend on the molecule's orientation in the lab frame by 3-7% on an unfittable field, and that does not converge away with finer spacing. |
+| `point` | 3 floats | any coordinate | — | One evaluation point, repeatable. Reports the potential rather than fitting charges. |
+| `units` | enum | `bohr`/`au`, `angstrom`/`ang` | `bohr` | Units of the `point` coordinates. Must appear before any `point` line. |
+| `grid_spacing` | float | > 0 | `0.3` | CHELPG lattice spacing in Angstrom |
+| `grid_headspace` | float | > 0 | `2.8` | CHELPG sampling depth in Angstrom beyond the van der Waals surface |
+| `shell_scales` | floats | > 0 | `1.4 1.6 1.8 2.0` | Connolly shell radii, as multiples of the van der Waals radius |
+| `points_per_shell` | int | > 0 | `200` | Fibonacci-sphere points per atom per Connolly shell |
+| `radius_scale` | float | > 0 | `1.0` | Multiplies the tabulated van der Waals radius for both grids, mirroring `cavity_scale` in `%begin_pcm` |
+| `resp` | bool | `.true.`, `.false.` | `.false.` | Add the Bayly hyperbolic restraint to the fit |
+| `resp_strength` | float | ≥ 0 | `0.0005` | Restraint strength *a* in atomic units (Bayly stage 1) |
+| `resp_tightness` | float | > 0 | `0.1` | Restraint width *b* in atomic units |
+| `resp_exempt_hydrogen` | bool | `.true.`, `.false.` | `.true.` | Exempt hydrogens from the restraint. The restraint exists to tame buried heavy atoms that the potential barely constrains; hydrogens sit on the surface where the data is good. |
+| `equivalent` | ints | 1-based atom indices | — | Force the listed atoms to share one charge, repeatable. These are hard constraints in the same Lagrange block as the total charge, so grouped atoms agree exactly rather than approximately. |
+| `include_reaction_field` | bool | `.true.`, `.false.` | `.false.` | Under `%begin_pcm`, add the PCM reaction field `sum_i q_i/\|r - s_i\|` to the fitted potential, giving the total in-solvent potential instead of the solute one. No effect without a solvation model. See below. |
+
+```
+%begin_esp
+    grid             connolly
+    shell_scales     1.4 1.6 1.8 2.0
+    points_per_shell 200
+    resp             .true.
+    resp_strength    0.0005
+    equivalent       2 3
+%end_esp
+```
+
+<p align="justify">
+Buried atoms fit poorly and that is not a defect: an atom with little grid in
+its neighbourhood has almost no leverage on the potential, so its charge is
+poorly determined and the unrestrained fit is free to give it a large value
+cancelled by its neighbours. Those charges reproduce the ESP but transfer badly.
+Removing that freedom is exactly what the RESP restraint is for.
+</p>
+
+<p align="justify">
+The section works in both binaries — <code>hartree-fock</code> and
+<code>planck-dft</code> share one reporter, so an RKS/UKS run reports ESP and
+RESP charges exactly as an RHF/UHF one does.
+</p>
+
+<p align="justify">
+<b>Under PCM, two different potentials exist and the report says which it
+printed.</b> The fitted density is solvent-polarized — the reaction field enters
+the Fock every SCF iteration — but the potential itself is the gas-phase form
+<code>phi = nuc - el</code>, excluding the reaction field's own contribution.
+That is the right quantity for deriving force-field charges, because the
+AMBER/RESP convention fits the polarized solute <i>without</i> the continuum:
+an MD run supplies the solvent explicitly and would otherwise count it twice.
+It is not the total in-solvent potential another code would print, which is what
+<code>include_reaction_field</code> selects.
+</p>
+
+<p align="justify">
+<b>Expect near-zero charges from <code>include_reaction_field</code>, and a fit
+RRMS near 1.0.</b> That is the screening, not a defect: a conductor-like
+continuum cancels most of the solute's field outside the cavity, so there is
+very little potential left for an atomic-charge model to reproduce. Use the
+default for force-field parameters; use this one to compare a potential against
+another code.
+</p>
 
 ### Section: `%begin_bsse` (optional)
 
@@ -1473,9 +1560,6 @@ python generate_ccsdt_cpp.py ccsdt --planck
 
 # Generate Planck-compatible .cpp kernel files
 python generate_planck_cc_kernels.py --output-dir build/ --methods ccsd ccsdt
-
-# Generate the spin-orbital CCSD warm-start .inc file used by the tensor-optimized RCCSDT backend
-python generate_spinorbital_ccsd_warm_start.py --output ccsd_warm_start.inc
 ```
 
 Programmatic API:
@@ -1556,6 +1640,7 @@ The program prints a structured log to standard output. Key sections:
 - **Dipole Moment** — printed automatically after a converged SCF/KS solution; includes the electronic, nuclear, and total `X`, `Y`, `Z` components in atomic units, plus the total vector norm in atomic units and Debye
 - **Quadrupole Moment** — printed automatically after the dipole block; includes electronic, nuclear, and total components of the traceless Cartesian tensor (`XX`, `XY`, `XZ`, `YY`, `YZ`, `ZZ`) in atomic units
 - **Mulliken Population Analysis** — printed when `print_populations true` or verbosity is `verbose`/`debug`; shows AO gross populations, net atomic charges, and spin populations (UHF/ROHF)
+- **ESP / RESP Charges** — printed when `%begin_esp` requests a grid; one row per atom with the fitted charge in e, the exact total, the grid point count, and the fit RRMS/RMS. RESP runs additionally report the restraint iteration count and warn if it did not converge. With explicit `point` lines instead of a grid, prints the potential in atomic units at each point. Emitted by both binaries. Under `%begin_pcm` a warning states that the fit is to the solute potential with the reaction field excluded, so the printed quantity is never ambiguous
 - **RMP2 Natural Orbitals** — occupation numbers and natural orbital coefficients printed after single-point RMP2
 - **Nuclear Gradient** — printed when `calculation gradient` or `calculation geomopt`; one row per atom showing ∂E/∂x, ∂E/∂y, ∂E/∂z in Ha/Bohr, followed by max and RMS norms. Supported analytic gradients include RHF, UHF, ROHF, RMP2, and UMP2.
 - **IC System** — when `opt_coords internal`, logs the count of stretches, bends, and torsions in the redundant GIC set

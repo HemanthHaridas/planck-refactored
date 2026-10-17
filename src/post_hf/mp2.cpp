@@ -8,7 +8,8 @@ namespace HartreeFock::Correlation
 {
     std::expected<void, std::string> apply_rmp2_result(
         HartreeFock::Calculator &calculator,
-        const RMP2Result &result)
+        const RMP2Result &result,
+        bool retain_amplitudes)
     {
         // The driver keeps one canonical MP2 "result slot" on Calculator even
         // though RHF and UHF store amplitudes differently. This helper is the
@@ -22,7 +23,13 @@ namespace HartreeFock::Correlation
         calculator._mp2_result.nocc = result.n_occ;
         calculator._mp2_result.nvir = result.n_virt;
         calculator._mp2_result.active_mo = result.active_mo;
-        calculator._mp2_result.t2 = result.t2;
+        // Gradient callers retain the canonical RMP2Result locally through
+        // their synchronous derivative assembly. Keeping another copy in the
+        // Calculator would raise the peak by O(o^2 v^2) for no consumer.
+        if (retain_amplitudes)
+            calculator._mp2_result.t2 = result.t2;
+        else
+            std::vector<double>().swap(calculator._mp2_result.t2);
         calculator._mp2_result.ump2_t2_aa.clear();
         calculator._mp2_result.ump2_t2_ab.clear();
         calculator._mp2_result.ump2_t2_bb.clear();

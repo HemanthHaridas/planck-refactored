@@ -1,0 +1,65 @@
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type        rhf
+    use_diis        .true.
+    diis_dim        8
+    engine          os
+    guess           hcore
+    save_checkpoint .false.
+%end_scf
+
+%begin_pcm
+    model       pcm
+    solvent     water
+    cavity_scale 1.2
+    surface_points_per_atom 24
+%end_pcm
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+# `include_reaction_field` -- the TOTAL in-solvent potential
+# (docs/ESP_CHARGES.md section 6). The default fits the solute
+# potential; this adds the PCM reaction field sum_i q_i/|r - s_i| on top.
+#
+# The charges here MUST differ from water_rhf_pcm_esp_sto3g, which is this same
+# input without the keyword: -0.00420202 against -0.73345627. That divergence
+# is the evidence the term is actually wired in -- while the flag was parsed
+# but inert, these two cases were byte-identical, and a regression to that
+# state would show up here as the two agreeing again.
+#
+# THE NEAR-ZERO CHARGES AND RRMS ~1.0 ARE THE PHYSICS, NOT A DEFECT. A
+# conductor-like continuum screens the solute's field outside the cavity, so
+# the total potential there very nearly vanishes; fitting ATOMIC CHARGES to a
+# near-zero field gives near-zero charges that explain almost none of it. That
+# is why the default is the solute potential and why AMBER/RESP fits that one:
+# these charges are correct for what they are and useless as force-field
+# parameters. Verified directly at explicit points -- at 60 bohr the solute
+# potential is +5.2e-6 while the total is -3.5e-5, i.e. the reaction field
+# opposes and overshoots the bare solute multipole, which is what screening is.
+#
+# The RRMS is asserted BECAUSE it is bad: if a future change made this fit look
+# good, the screening would have stopped working.
+%begin_esp
+    grid                   connolly
+    shell_scales           1.4 1.6 1.8 2.0
+    points_per_shell       200
+    include_reaction_field .true.
+%end_esp
+
+%begin_coords
+3
+0   1
+O      0.000000     0.000000     0.000000
+H      0.758602     0.000000     0.504284
+H     -0.758602     0.000000     0.504284
+%end_coords

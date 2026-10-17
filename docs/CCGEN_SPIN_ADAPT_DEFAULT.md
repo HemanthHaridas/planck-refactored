@@ -19,7 +19,6 @@ The sibling question — a correct kernel driven by a solver expecting a differe
 
 - `CMakeLists.txt` — `PLANCK_CC_SPIN_ADAPT` option and its comment
 - `python/ccgen/spin.py` — the R1.0 spin-adaptation emit
-- `src/post_hf/cc/rccgen.cpp` — `PLANCK_CC_FIXTURE_DIR` probe (seed amplitudes, evaluate residuals once, report per-rank max|R| with index; inert when unset)
 - `src/post_hf/cc/generated_kernel_registry.cpp` — `make_generated_rcc_kernels` (rank floor)
 - `src/post_hf/cc/amplitudes.cpp` — `rank_dims` (C++ amplitude layout)
 - `python/ccgen/tests/dump_cc_fixture.py` — fixture dumper (layout, spatial block, MO phase handling)
@@ -117,7 +116,7 @@ Findings that outlived the investigation itself:
 | `run_regressions.py` | `requires_build_option` accepts a **list** — these cases depend on more than one flag |
 | `be_rccsdtq_sto3g` | requires `PLANCK_CC_SPIN_ADAPT` |
 | `ch4_rccsdt_generated_sto3g` | requires both flags; **inverted** to assert `rccsdt_total_energy == -39.8058445240 ± 1e-06` and exit 0 |
-| `src/post_hf/cc/rccgen.cpp` | `PLANCK_CC_FIXTURE_DIR` probe added (see Where the logic lives) |
+| `src/post_hf/cc/rccgen.cpp` | `PLANCK_CC_FIXTURE_DIR` probe added (since removed, 2026-10-12) |
 | `python/ccgen/tests/dump_cc_fixture.py` | fixture dumper added; refuses to write a non-fixed-point fixture; handles layout, spatial block, and MO phases |
 | `python/ccgen/tests/test_iterate_amps_fixed_point.py` | added; the fixture is a fixed point, Be's t1/t3 are inert |
 | `python/ccgen/tests/test_spatial_residual_vs_pyscf.py` | added; pins the reference side independently of C++ |

@@ -13,10 +13,11 @@ This file answers a narrower architecture question:
 implicated (and not testable on this ladder). The ratio rises from 21.8× to 50.1× across the
 measured range and both indices contribute.
 
-**Revisited 2026-08-26** — H3's fix now has a second mechanism (derivation dressing, wired and
-measured at 3.12×/3.61× end-to-end) which this ladder has not yet been re-run against. See the
-"Revisited" material below before acting on the recommendation in "What was found"; the two
-candidate fixes may overlap.
+**Settled 2026-08-29.** The contraction-order defect H3 names is fixed in production by
+derivation dressing (`--dressing derived`, which removes the 391 four-deep `o⁵v⁵` terms; 3.1–3.6×
+end to end). Re-running this ladder under dressing turned out to be impossible (see "Revisited"),
+so whether dressing changed the *exponents* or only the *constant* stays unmeasured. The fit below
+is the record of the undressed emitter.
 
 ## Short answer
 
@@ -33,13 +34,12 @@ every leave-one-out variant, meaning both indices contribute with `o` roughly 3�
 
 ## Where the logic lives
 
-- `src/post_hf/cc/tensor_backend.cpp:2324` — generated-vs-hand branch + `T3_DIFF` probe
-- `src/post_hf/cc/tensor_backend.cpp:1800` — hand-written triples (1-nest reference)
-- `src/post_hf/cc/tensor_backend.cpp:241` — `choose_determinant_backstop`
-- `python/ccgen/emit/planck_tensor_cpp.py:284`, `:443` — one-nest-per-term emission (H1's mechanism)
-- `python/ccgen/tensor_ir.py:198,261,283` — unused contraction-order analysis (H3's fix,
-  `_optimal_contraction_order`)
-- `CMakeLists.txt:402` — `-O1` registry pin (rank 4+ only)
+- `build_dressed_triples_residual`, `src/post_hf/cc/tensor_backend.cpp` — hand-written triples (1-nest reference)
+- `choose_determinant_backstop`, `src/post_hf/cc/tensor_backend.cpp`
+- `emit_planck_term` / `_emit_kernel`, `python/ccgen/emit/planck_tensor_cpp.py` — one-nest-per-term emission (H1's mechanism)
+- `_optimal_contraction_order`, `python/ccgen/tensor_ir.py` — unused contraction-order analysis (H3's fix)
+- the measurement probe (`T3_DIFF` / `PLANCK_CC_T3_TIME`) was removed in `82161190`
+- `CMakeLists.txt` (`COMPILE_OPTIONS "-O1"`) — `-O1` registry pin (rank 4+ only)
 - `docs/CCGEN_KERNEL_PERFORMANCE.md` — the measurement record this continues
 
 ## What invariants matter
@@ -81,9 +81,9 @@ Design rule:
 
 ### 3. Time the residual evaluation, not a converged solve
 
-A solve conflates kernel cost with convergence path. The `PLANCK_CC_T3_DIFF=1` probe evaluates the
-generated and hand-written residuals once each from identical amplitudes and is the correct
-harness for this class of measurement.
+A solve conflates kernel cost with convergence path. Evaluate the generated and hand-written
+residuals once each from identical amplitudes (the pattern of the former `PLANCK_CC_T3_DIFF=1`
+probe, removed 2026-10-12) — that is the correct harness for this class of measurement.
 
 Design rule:
 
@@ -211,7 +211,7 @@ and at least one case whose `t3` working set exceeds L2, or H1 stays untested by
 Rank 4 is the production target and is **not** covered by this rank-3 ladder — different tensor
 types, different code path, and a lesson already paid for once: the fixed-rank-only accessor pass
 fixed rank 3 by 76× and moved rank 4 by nothing. Rank 4 also still carries the `-O1` registry pin
-(`CMakeLists.txt:402`) that rank 3 does not, so its ratio has a known extra term. `be_rccsdtq_sto3g`
+(`CMakeLists.txt` (`COMPILE_OPTIONS "-O1"`)) that rank 3 does not, so its ratio has a known extra term. `be_rccsdtq_sto3g`
 at 11.4 s/iteration is the cheapest rank-4 handle, but no point has been measured there yet.
 
 ## What was found (H1 vs H3)
@@ -294,32 +294,23 @@ routes through `rccgen.cpp` to the arbitrary-order harness, which never consults
 the `nso > 16 || ndet > 10000` requirement recorded above applies to the hand-written arm of the
 comparison only. That widens the set of usable ladder points on the generated side.
 
-## What this makes worth doing
+## What this made worth doing, and what happened
 
-**SETTLED 2026-08-29 — read this before acting on the recommendation.** Both levers this document
-points at were built and measured (`CCGEN_WHY_GENERATED_IS_SLOW.md`):
+Both levers this ladder pointed at were built and measured (`CCGEN_WHY_GENERATED_IS_SLOW.md`):
 
-- **Contraction order is fixed by `--dressing derived`**, which eliminates the 391 four-deep
-  `o⁵v⁵` terms `_optimal_contraction_order` would target — **measured 3.6x**. Consuming the IR
-  hints is therefore **probably redundant**; re-check before building it.
-- **Loop fusion is refuted at ~0 %**, twice: 806→15 nests changed runtime 0-3 %, and again after a
-  later fix raised the residual's share of runtime from 32 % to 55 %.
+- **Contraction order:** fixed by `--dressing derived`, which eliminates the 391 four-deep
+  `o⁵v⁵` terms that `_optimal_contraction_order` (`python/ccgen/tensor_ir.py`, still computed and
+  discarded) would have targeted. Measured 3.6×. Consuming those IR hints is therefore probably
+  redundant; re-check before building it.
+- **Loop fusion:** refuted at about 0 %, twice. 806→15 nests changed runtime by 0–3 %, and again
+  after a later fix raised the residual's share of runtime from 32 % to 55 %.
 
-What the profile found instead was **redundant operator construction** — 67.7 % of the kernel,
-fixed for **1.76x** — and that **CC has no OpenMP at all** (modelled 3.86x). Neither was visible to
-a cost model.
-
-The originally recommended row was: **consume `_optimal_contraction_order` in the emitter**
-(`python/ccgen/tensor_ir.py:283`, currently computed and discarded — `grep BLASHint
-python/ccgen/emit/planck_tensor_cpp.py` returns nothing). That was the asymptotic fix and it
-outranked loop fusion, which the earlier P2 measurement already showed buys nothing at small size.
-
-The fit no longer localizes the defect to one index, so it does not hand you a single loop to go
-delete. The term-level approach `CCGEN_HIGHER_OPERATOR_REUSE.md` frames is the productive next
-step: find which generated terms are evaluated n-arily where a factored order is cheaper — the
-recorded `t2·t3·v` case is `o⁵v⁵` n-ary against `o³v⁴` factored, which is superlinear in *both*
-indices and therefore consistent with the measured `o^0.40 v^0.32`. Enumerate those terms and their
-cost gap before writing any emitter change.
+What the profile found instead, and neither cost model saw, was redundant operator construction
+(67.7 % of the kernel, fixed for 1.76×), duplicate transpose-equivalent builders (1.42–1.52×,
+`CCGEN_MERGE_TRANSPOSES.md`), and missing OpenMP (now 3.22× at 4 threads behind
+`CCGEN_OMP_COLLAPSE`, `CCGEN_CC_OPENMP.md`). The general lesson: profile the generated kernel
+against itself across a configuration change, rather than model it or time it against the
+hand-written solver.
 
 ## Validation strategy that should remain in place
 
@@ -342,7 +333,7 @@ cost gap before writing any emitter change.
   should be time-boxed before committing to it. H1 and H3 are not exclusive — H1 could still add a
   term on top of the measured growth once the working set spills.
 - **Rank 4 has no point on this ladder.** Different tensor types, different path, plus the `-O1`
-  registry pin (`CMakeLists.txt:402`) that rank 3 lacks. The fixed-rank-only accessor pass already
+  registry pin (`CMakeLists.txt` (`COMPILE_OPTIONS "-O1"`)) that rank 3 lacks. The fixed-rank-only accessor pass already
   proved rank 3 is not a proxy for rank 4; do not assume `o^0.9 v^0.3` transfers.
 - **The generated-side residual (21.4%) is itself a finding.** The hand-written kernel fits a clean
   power law (4.5%); the generated one does not. Something in it is not a simple `o^a v^b` — worth
@@ -355,9 +346,11 @@ cost gap before writing any emitter change.
 
 | what | where |
 |---|---|
-| generated-vs-hand branch + `T3_DIFF` probe | `src/post_hf/cc/tensor_backend.cpp:2324` |
-| hand-written triples (1-nest reference) | `src/post_hf/cc/tensor_backend.cpp:1800` |
-| one-nest-per-term emission (H1's mechanism) | `python/ccgen/emit/planck_tensor_cpp.py:284`, `:443` |
-| unused contraction-order analysis (H3's fix) | `python/ccgen/tensor_ir.py:198,261,283` |
-| `-O1` registry pin (rank 4+ only) | `CMakeLists.txt:402` |
+| hand-written triples (1-nest reference) | `build_dressed_triples_residual`, `src/post_hf/cc/tensor_backend.cpp` |
+| one-nest-per-term emission (H1's mechanism) | `emit_planck_term`, `_emit_kernel` in `python/ccgen/emit/planck_tensor_cpp.py` |
+| unused contraction-order analysis (H3's fix) | `_detect_gemm`, `_optimal_contraction_order` in `python/ccgen/tensor_ir.py` |
+| `-O1` registry pin (rank 4+ only) | `CMakeLists.txt` (`COMPILE_OPTIONS "-O1"`) |
+
+The `T3_DIFF` / `PLANCK_CC_T3_TIME` probe used to take these measurements lived in an unreachable
+generated-kernel branch of `tensor_backend.cpp` and was removed in `82161190`.
 | measurement record this continues | `docs/CCGEN_KERNEL_PERFORMANCE.md` |

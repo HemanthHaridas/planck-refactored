@@ -1,0 +1,29 @@
+{
+  "contract": "g4-3-fixed-density-holdout-v1",
+  "reference": { "radial_points": 135, "angular_points": 2030 },
+  "limits": { "xc_energy_ha": 1e-08, "xc_response_contraction": 1e-07 },
+  "finalist": "tests/inputs/exploratory/dh_gradient/grid_calibration/g4_3_combined_frontier_finalist.json",
+  "cases": [
+    {
+      "name": "ho2-b2plyp-displaced",
+      "input": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout/ho2_b2plyp_displaced_sto3g.hfinp",
+      "parent": "tests/inputs/exploratory/dh_gradient/uks_u0/ho2_asymmetric_b2plyp_sto3g.hfinp",
+      "families": ["hydrogen-helium", "second-row"],
+      "role": "geometry"
+    },
+    {
+      "name": "h2s-b2plyp-displaced",
+      "input": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout/h2s_b2plyp_displaced_sto3g.hfinp",
+      "parent": "tests/inputs/exploratory/dh_gradient/grid_calibration/h2s_asymmetric_b2plyp_sto3g.hfinp",
+      "families": ["hydrogen-helium", "third-row"],
+      "role": "geometry"
+    },
+    {
+      "name": "ho2-uks-pbe-displaced",
+      "input": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout/ho2_uks_pbe_displaced_sto3g.hfinp",
+      "parent": "tests/inputs/exploratory/dh_gradient/uks_u0/ho2_asymmetric_b2plyp_sto3g.hfinp",
+      "families": ["hydrogen-helium", "second-row"],
+      "role": "functional-spin"
+    }
+  ]
+}

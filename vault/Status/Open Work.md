@@ -9,7 +9,7 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-06-04
+Last updated: 2026-10-16
 
 This is the canonical open-work document for the repository.
 Use it with `vault/Status/Completion.md`. Older status snapshots and handoff
@@ -18,10 +18,32 @@ truth for what remains.
 
 ## Highest-priority correctness and robustness work
 
-- (none currently — the ROHF MO-energy bookkeeping inconsistency is resolved;
-  see Completion)
+- **Yukawa / Gaussian screened-exchange functionals are evaluated with the
+  erf kernel everywhere except TDDFT (found 2026-10-16).** `cam_coefficients()`
+  (`src/dft/base/wrapper.h`) folds `XC_HYB_YUKAWA_SR` / `XC_HYB_GAUSSIAN_SR`
+  into the short-range coefficient and the SCF builds it with
+  `ERIKernel::ShortRange` (erf). PySCF does the same: water/STO-3G
+  `camyb3lyp` agrees to 1.4e-6 Eh (-75.4581507 vs -75.4581521), so there is no
+  independent reference showing the energy is wrong -- but it is not the
+  kernel libxc defines. TDDFT now rejects these by name
+  (`Functional::has_non_erf_short_range_exchange`, gated by
+  `water_tddft_camy_b3lyp_rejected_sto3g`). Decide whether functional
+  initialization should reject them for every workflow, or accept and document
+  the erf substitution.
 
 ## Build and packaging
+
+- **Result-changing environment overrides still reach production binaries
+  (scoped 2026-10-12, `docs/RUNTIME_ENV_OVERRIDES_SCOPE.md`).** Six unused ones
+  were deleted, then E1 (`PLANCK_DFT_ALLOW_RS_WORKFLOWS`) and E4 (the
+  unreachable generated-kernel branch in `tensor_backend.cpp`, carrying
+  `PLANCK_CC_T3_TIME`) landed 2026-10-12. Remaining: E2 turn `PLANCK_RCCSDT_BACKEND` into an input keyword; E3
+  `PLANCK_DFT_DH_HESSIAN_PROBE_LOG`: delete the DH swap probe (recommended)
+  or gate it at compile time. It replaces the returned DH gradient. It exists
+  only on `dft-dh-gradient-xc-kernel-rewrite`, not `devel`, so it is a merge
+  blocker for that branch. The two generator steps E4 orphaned (the
+  spin-orbital warm-start `.inc` and the plain rank-2/3 RCC TUs) were removed
+  the same day.
 
 - **The compiled-in default basis path has a spurious `install/` segment and
   never resolves.** `CMakeLists.txt` sets
@@ -150,10 +172,13 @@ truth for what remains.
     warning. PCM needs the reaction-field response; SAO needs the
     block-diagonal response.
 
-## FCI performance — two measured, independent items
+## FCI performance — F1 and F3 landed; only F2 (hygiene) remains
 
-Found while sizing an FCIQMC validation fixture; both stand on their own and are
-worth doing whether or not FCIQMC happens.
+**Status (2026-10-16):** both problems described below are FIXED — the
+allocation (F1, 4.8x) and the threading (F3, 3.54x at 4 threads, bitwise
+thread-count-invariant); see Completion. The original problem statements are
+kept as the record of what was measured. Only F2 (the `occupied_orbitals`
+allocation, 0.1-0.2 % of profile) remains, as code hygiene.
 
 - **The FCI sigma build is single-threaded.** `apply_ci_hamiltonian`
   (`src/post_hf/ci/ci.cpp:437-622`) — the iterative path taken by every space
@@ -307,7 +332,12 @@ worth doing whether or not FCIQMC happens.
   threaded sigma build unchanged — the same trap that kept `ch4_rccsdt_sto3g`
   green for its entire life while never running the kernel it protected.
 
-## Research: FCIQMC (scoped, deliberately not started)
+## FCIQMC — implemented and validated; Q1 (a real target) still open
+
+**Status (2026-10-16):** FCIQMC is implemented, threaded, and gated against
+exact FCI on N2/STO-3G (see Completion). What remains open is Q1 below — no
+calculation in the tree needs it yet — plus the optional H3 replica
+parallelism. The entry keeps its original scoping record.
 
 - **Scoped as a research question, not a work item, because two prerequisites are
   unanswered and either one kills it.** `docs/FCIQMC_RESEARCH_SCOPE.md`.
@@ -1209,7 +1239,10 @@ worth doing whether or not FCIQMC happens.
   A disagreement implicates `spherical_recurrence.cpp`, not the pseudoinverse fix.
   See `docs/SPHERICAL_F_SHELL_ACCURACY_SCOPE.md` FU2.
 
-## docs/ hygiene — two ccgen scope docs still owe an architecture rewrite
+## docs/ hygiene — ccgen scope-doc rewrites done
+
+**Status:** every rewrite listed below has landed (the last two on
+2026-08-26). Kept as the audit record.
 
 A file in `docs/` answers one architecture question or is a teaching guide; scoping **in-flight**
 work is the only exception, and it expires when that work lands.
@@ -1273,7 +1306,7 @@ ccgen docs still record its `nso > 16` requirement as universal.
 
 Part C of the wiring scope (a `benchmark_generated_kernels.py` driver) is
 retired unbuilt, deliberately: `run_regressions.py`'s `requires_build_option`,
-`PLANCK_CC_T3_TIME` and `PLANCK_CC_FIXTURE_DIR` already cover what it proposed,
+`PLANCK_CC_T3_TIME` and `PLANCK_CC_FIXTURE_DIR` (since removed) already covered what it proposed,
 and the gap it existed to close — nothing proving the generated path ran — was
 closed by gates asserting the routing line.
 
@@ -1327,7 +1360,7 @@ check first if dressing is ever revisited.
 | `CCGEN_TWO_DRESSING_ROUTES` | **ANSWERED (2026-08-25).** Opened by "CFOUR/MRCC ship dressing as their only route, why did ccgen's fail?" — the premise was wrong. ccgen has **two** dressing routes and production was wired to the weaker one: recognition (6 hand-seeded spin-orbital fingerprints, `dressing.py`, retired, 52 % short) and derivation (`factorize.py`, from each term's own contraction tree). The derivation route recognizes 5 of the 6 Stanton-Gauss operators **on spatial terms**, was built 8 days later, ships an emit bridge, and **has no production caller to this day** — deferred in its own commit with "CCSD dressing stays D7.3's job" and never revisited. It did fail value preservation (23/66 GCC terms) via two defects, both now fixed: `node_to_term` recorded only the top tree step's summed indices (20/52 malformed specs), and `_derived_name` discarded slot order so one name denoted several contractions. Now value-gated at ranks 2-4 (**0/2536 on quadruples**) and worth **2.0x-7.1x**, growing with rank — the retirement measured only `ccsd` and concluded the opposite. **Recommendation: wire the derivation route; leave recognition retired.** Full answer in `docs/CCGEN_TWO_DRESSING_ROUTES.md`; the operator-granularity half in `docs/CCGEN_OPERATOR_IDENTITY_AND_REUSE.md`. **Open:** what CFOUR/MRCC actually do (literature, no longer blocking); UCC carry-over (recognition finds 0 operators there — the tag-blind "fix" is measured and unsound); 6 selection-model gates need re-deriving |
 | `CCGEN_OPERATOR_IDENTITY_AND_REUSE` | **O1-O5 COMPLETE (2026-08-25); O6 open.** Answers "when are two derived contractions the SAME operator?" — the question D6's shape-tag fix created by over-splitting operators 12→27 (GCC) and 26→83 (rank 3). Transpose-equivalence is decided **symbolically** (`operator_identity.symbolic_transpose`), exact against a numeric oracle on both bases at two fixtures x three seeds. Merging is implemented end to end and reaches the emitted C++: **27→19 builders on `ccsd`, 254→69 at rank 4**, value-gated at **0/2536** on quadruples. The merge ratio **grows with rank** (1.4x → 2.1x → 3.7x) and roughly doubles the spatial dressing payoff. Two lessons worth carrying: only **sign-preserving** symmetries may be folded (using all 8 ERI permutations produced 2 false merges — the same blind spot as the 52 % defect), and the oracle's fixture must match the basis (`random_tensors` antisymmetrizes `t2`/`v`; ~30 of 48 apparent spatial misses were oracle false positives). **O6 open:** UCC carry-over — recognition finds 0 operators on spin-tagged factors, and the obvious tag-blind fix is measured and unsound |
 | `CCGEN_WIRING_THE_DERIVATION_ROUTE` | **W1-W2, W3.1-W3.2, W4.2-W4.3 and W4.5 COMPLETE (2026-08-26). The derivation route has a production caller and computes the right energy.** Wired as ONE dressing axis with a value — `--dressing {none,recognized,derived}` plus `PLANCK_CC_DRESSING` — not a fourth boolean, on evidence in the tree (`print_cpp_planck` has 16 branches, `dress_operators` interacts at three points, and `generate.py:1060` records that a second emit call site already cost a double-wiring). **W4.3 went RED on the first end-to-end comparison** — CH4 off by 1.61e-05, LiH by 1.08e-05, both converging cleanly — and the cause was an **invalid ERI symmetry table**: `lowering/restricted_closed_shell.py` carried the full 8-fold group of the ANTISYMMETRIZED `<pq||rs>`, four members of which are false for spatial blocks, and its phase reaches the emitted C++ directly. **41 of 288** emitted operator builders read the wrong block with a bogus sign. Fixed by defining the spatial and antisymmetrized sets **once** in `ccgen/tensors.py`; CH4 now matches to **2e-10** and LiH **exactly**, and the retired `recognized` route is repaired too. **The full answer — how it was found in five eliminations, why every existing gate missed it (the value gate never emits C++, covers 27/142 doubles terms, and its fixture ANTISYMMETRIZES `v` so the bad relation is TRUE under it), the two operator censuses that looked decisive and were each refuted, and the gates that now gate it — is in `docs/CCGEN_WIRING_THE_DERIVATION_ROUTE.md`**, rewritten from scope into answer. **W3.3 and W5 COMPLETE (2026-08-26), so W1-W5 are all done.** W3.3: `emit_factorized_translation_unit` deleted (**-45 lines**) — it had **no production caller** (25 references, all tests), so "two emitters" was already one plus dead weight; the generate-then-emit convenience moved into `test_factorize.py`, its only consumer, because inlining `generate_cc_equations` at 25 call sites would have been a net POSITIVE diff to remove 13 lines. `print_cpp_planck` gained exactly one parameter (`dressing`) and none of the factorizer's seven selection knobs, the condition W3 set. **W5 — the route's first wall-clock numbers:** LiH 5.12s → **1.64s (3.12x)**, CH4 104.56s → **28.94s (3.61x)**, energies identical to all printed digits and CH4 taking 15 steps either way, so it is per-iteration work rather than fewer iterations. Both land inside the modelled 2.0x-7.1x — worth stating because `CCGEN_KERNEL_SCALING_SCOPE` gave good reason to expect the FLOP model NOT to survive contact; two points is not enough to generalise, and the ratio grows between them. **Two follow-ons scoped (2026-08-26):** (1) **`CCGEN_MERGE_TRANSPOSES` — DONE 2026-08-29 (M1-M5), and its prediction was wrong in the safe direction.** Threading `merge_transposes` into the production dressing path measures **1.42x (LiH) / 1.52x (CH4)**, energies bitwise identical and iteration counts unchanged — against a scoped expectation of "likely compile time, not speed" (1.02x-1.20x) and then a profile-weighted re-cost of 1.21x-1.36x. Both underestimates came from treating operators as equal-cost. It is now **unconditional for `derived`** (the preferred wiring; no flag kept — 10 lines, 8 of them comment) and the call-site gate landed as `test_merged_call_sites.py`, mutation-verified at ranks 3 AND 4. Compile time and TU size also improve (registry TU 1.5x smaller, ~1.1x faster). **Rank 4 needed no new mechanism** — same method list, same emit path, merging already unconditional — and the reduction roughly doubles with rank: **1615 -> 239 builders (6.8x)** vs rank 3's 3.2x, TU 11.0 MB -> 6.6 MB. Only a rank-4 end-to-end RUN remains untried (6.6 MB TU against the `-O1`-pinned registry). (2) **`CCGEN_KERNEL_SCALING_SCOPE` revisited** — its H3 ("generated kernels evaluate each term n-arily; `t2·t3·v` is `o⁵v⁵` n-ary vs `o³v⁴` factored") is exactly what derivation dressing fixes, by a different mechanism than the `_optimal_contraction_order` consumption it recommends. W5's 3.12x/3.61x is **consistent with H3 but is NOT a measurement on that ladder** (end-to-end solve times on two systems, one of them off-ladder, versus isolated triples-residual timings — the two sets must not be combined). Two points cannot give exponents, so whether dressing reduces the SCALING or only the CONSTANT is unmeasured. **Re-run the six-point ladder with `--dressing derived` before consuming `_optimal_contraction_order`** — the two fixes may overlap rather than add. Also noted there: the backstop constraint binds the hand-written arm only, widening the usable ladder points on the generated side. UCC stays out of scope pending O6 |
-| `CCGEN_SPIN_ADAPT_DEFAULT` | **RESOLVED (2026-08-26). Was never a kernel defect — the build flag `PLANCK_CC_SPIN_ADAPT` defaulted OFF, which `CMakeLists.txt` itself documented as the historical emit that makes the generated correlation energy ~4x wrong.** Opened as "the generated rank-3 CCSDT kernel converges to a wrong answer"; every measurement in that investigation was taken under the defective emit. **The flag now defaults ON.** With it ON the generated rank-3 kernel matches the hand-written path to all ten digits on three systems: Be −0.0517702884, LiH −0.0204594700, CH4 −0.0791116827 (hand-written −0.0791116825, 2e-10; total −39.8058445098 vs PySCF −39.8058445240, 1.4e-08). Rank 4 warm-starts from it in 6 steps against 12 cold. **What cracked it:** compare the CCSDTQ bundle's shared manifolds against the CCSDT bundle's — they are `cmp`-BYTE-IDENTICAL at ranks 1/2/3, excluding "the rank-3 kernel is wrong" in one step and moving the search to the build. The two trees differed in **three** flags, not the one that was assumed. **Coverage gap closed:** no case pinned the flag, so the suite was green while the binary under test was the defective emit. `requires_build_option` now accepts a LIST; `be_rccsdtq_sto3g` requires `PLANCK_CC_SPIN_ADAPT`, `ch4_rccsdt_generated_sto3g` requires it plus `PLANCK_CC_ARBITRARY_LOWER_RANKS` and is **inverted** to assert the correct energy. Gates added: `test_iterate_amps_fixed_point.py`, `test_spatial_residual_vs_pyscf.py`; env-gated `PLANCK_CC_FIXTURE_DIR` probe in `rccgen.cpp` (inert when unset). Findings that outlived it: there is **no rank-2 generated RCC kernel** (`generated_floor` is 3), so any "rank 2 works" datapoint is hand-written CCSD; **Be/STO-3G cannot validate a rank-3 kernel** (t1 and t3 both at machine zero — LiH/STO-3G at 1.6 Å is the fixture); the spatial representative block is `aabaab`, **not** all-alpha (`spin.py:577`); ccgen amplitudes are `(vir...,occ...)` vs C++ `(occ...,virt...)`; and MO phase freedom makes cross-implementation residuals incomparable elementwise (use the phase-invariant Frobenius norm). Full answer: `docs/CCGEN_SPIN_ADAPT_DEFAULT.md`. **W4 UNBLOCKED.** **Second flag found flipped (2026-08-26):** `ch4_rccsdt_sto3g` was FAILING on a clean tree — the **hand-written** tensor path diverging to `E_corr=nan` (`rms(R3)` growing 1.7e-03 → 6.1e-03 → 2.4e-02) — because commit `70a587d` (the W4.2a investigation) flipped `use_diis` to `.false.` in that input while testing whether DIIS mattered for the **generated** path, and left it flipped. The generated path is indifferent; **the hand-written restricted tensor CCSDT solver diverges without DIIS on this system**. Restored: 24 steps, `-0.0791116825`, exactly W4.1's baseline. Two lessons: the two ch4 cases **share one input file**, so probing one path silently broke the other (the input now carries a comment saying the setting is load-bearing); and "not DIIS (both settings reach the same value)" was true of the **generated path only** but was recorded as a general finding — when ruling a variable out, record which path it was ruled out for. Minor open: `be_rccsdtq_sto3g` asserts −14.4036551081 while both builds give −14.4036550465 (6.2e-08, passes at 1e-07, pre-existing and flag-independent); and the hand-written tensor solver's need for DIIS is a real fragility nobody has investigated |
+| `CCGEN_SPIN_ADAPT_DEFAULT` | **RESOLVED (2026-08-26). Was never a kernel defect — the build flag `PLANCK_CC_SPIN_ADAPT` defaulted OFF, which `CMakeLists.txt` itself documented as the historical emit that makes the generated correlation energy ~4x wrong.** Opened as "the generated rank-3 CCSDT kernel converges to a wrong answer"; every measurement in that investigation was taken under the defective emit. **The flag now defaults ON.** With it ON the generated rank-3 kernel matches the hand-written path to all ten digits on three systems: Be −0.0517702884, LiH −0.0204594700, CH4 −0.0791116827 (hand-written −0.0791116825, 2e-10; total −39.8058445098 vs PySCF −39.8058445240, 1.4e-08). Rank 4 warm-starts from it in 6 steps against 12 cold. **What cracked it:** compare the CCSDTQ bundle's shared manifolds against the CCSDT bundle's — they are `cmp`-BYTE-IDENTICAL at ranks 1/2/3, excluding "the rank-3 kernel is wrong" in one step and moving the search to the build. The two trees differed in **three** flags, not the one that was assumed. **Coverage gap closed:** no case pinned the flag, so the suite was green while the binary under test was the defective emit. `requires_build_option` now accepts a LIST; `be_rccsdtq_sto3g` requires `PLANCK_CC_SPIN_ADAPT`, `ch4_rccsdt_generated_sto3g` requires it plus `PLANCK_CC_ARBITRARY_LOWER_RANKS` and is **inverted** to assert the correct energy. Gates added: `test_iterate_amps_fixed_point.py`, `test_spatial_residual_vs_pyscf.py`; env-gated `PLANCK_CC_FIXTURE_DIR` probe in `rccgen.cpp` (removed 2026-10-12). Findings that outlived it: there is **no rank-2 generated RCC kernel** (`generated_floor` is 3), so any "rank 2 works" datapoint is hand-written CCSD; **Be/STO-3G cannot validate a rank-3 kernel** (t1 and t3 both at machine zero — LiH/STO-3G at 1.6 Å is the fixture); the spatial representative block is `aabaab`, **not** all-alpha (`spin.py:577`); ccgen amplitudes are `(vir...,occ...)` vs C++ `(occ...,virt...)`; and MO phase freedom makes cross-implementation residuals incomparable elementwise (use the phase-invariant Frobenius norm). Full answer: `docs/CCGEN_SPIN_ADAPT_DEFAULT.md`. **W4 UNBLOCKED.** **Second flag found flipped (2026-08-26):** `ch4_rccsdt_sto3g` was FAILING on a clean tree — the **hand-written** tensor path diverging to `E_corr=nan` (`rms(R3)` growing 1.7e-03 → 6.1e-03 → 2.4e-02) — because commit `70a587d` (the W4.2a investigation) flipped `use_diis` to `.false.` in that input while testing whether DIIS mattered for the **generated** path, and left it flipped. The generated path is indifferent; **the hand-written restricted tensor CCSDT solver diverges without DIIS on this system**. Restored: 24 steps, `-0.0791116825`, exactly W4.1's baseline. Two lessons: the two ch4 cases **share one input file**, so probing one path silently broke the other (the input now carries a comment saying the setting is load-bearing); and "not DIIS (both settings reach the same value)" was true of the **generated path only** but was recorded as a general finding — when ruling a variable out, record which path it was ruled out for. Minor open: `be_rccsdtq_sto3g` asserts −14.4036551081 while both builds give −14.4036550465 (6.2e-08, passes at 1e-07, pre-existing and flag-independent); and the hand-written tensor solver's need for DIIS is a real fragility nobody has investigated |
 | `CCGEN_KERNEL_SCALING_SCOPE` | **research, partly open** — H1 (memory-bound) untestable on the current ladder (tops out at 0.49 MiB `t3`); overlaps the cost scope, which hands off to it |
 
 Two docs carried self-contradicting status lines ("nothing here is landed" above a LANDED entry) and
@@ -1356,16 +1389,50 @@ were corrected in the same pass: `CCGEN_UNRESTRICTED_CC` (U0) and
 
 ## DFT and response-method gaps
 
-- Double-hybrid functionals remain single-point only; analytic gradients,
-  geometry optimization, frequencies, and TDDFT are still unimplemented there
-- For range-separated functionals, `ImaginaryFollow` and `LinearResponse`
-  (TDDFT) remain gated / unvalidated even though gradient-driven workflows are
-  now landed
+- **Double-hybrid analytic gradients: landed (see Completion); what remains is
+  scope and throughput, not correctness.** RKS global DH supports gradient,
+  geomopt, frequencies and geomopt+freq; UKS global DH supports `calculation
+  gradient` only, on the pinned V4 grid. Remaining, in
+  `docs/DH_IMPLEMENTATION.md` §9:
+  - **UKS DH geometry optimization and frequencies** are rejected until their
+    workflow contracts are accepted (the gradient they would call already
+    passes FD).
+  - **The UKS path is dense** -- full alpha/beta MO ERIs, a dense joint Jacobian
+    solved by pivoted QR, and an `N_AO^4` AO pair density. None of the RKS
+    streaming / matrix-free work (O7) has been carried over; it is qualified
+    only on small molecules.
+  - **O8 response throughput** (performance only): paired raw J/K traversal for
+    hybrid response actions (O8.1), blocked fixed-grid XC action (O8.2), then a
+    batched Krylov interface only if a benchmark shows it pays (O8.3).
+  - **O9 RI-DH** is a separate energy backend with its own derivative and FD
+    gates, not a speed switch -- it is the only route to dropping the remaining
+    conventional `N_AO^4` AO ERI tensor.
+  - **Not covered:** range-separated DH gradients, solvent response,
+    SCS/DOS-style independent spin scaling, meta-GGA, frozen-core/RI PT2 in the
+    gradient, and DH TDDFT. Each needs its own response and validation
+    contract.
+  - The diagnostic `PLANCK_DFT_DH_HESSIAN_PROBE_LOG` swap is tracked under
+    Build and packaging (E3) as a merge blocker for this branch.
+- **The default DFT grid is not qualified for differentiated-grid
+  properties.** Radial counts were fixed (PySCF `RAD_GRIDS`; the old formula
+  gave 44 points where ~75 are needed), but the default `legacy` angular
+  pruning failed the UKS DH rotational-covariance check (2.2e-5 Ha/Bohr on C1
+  H2O2+, limit 2e-6) where the qualified `g4-3-v4` policy passes (1.1e-7).
+  V4 is opt-in and mandatory only for UKS DH gradients. Whether to migrate the
+  default is open and deliberately separate
+  (`docs/DFT_GRID_CONVERGENCE_SCOPE.md`). **No committed regression case runs
+  the production UKS DH gradient on V4**: the qualification evidence lives in
+  the `tests/g4_3_*` runners, not `tests/regression_cases.json`, so routing or
+  grid-contract breakage would go unnoticed by the suite.
+- Double-hybrid TDDFT is unimplemented; UKS double-hybrid geometry optimization
+  and frequencies are rejected (above)
+- For range-separated functionals, `ImaginaryFollow` remains gated (the DFT
+  driver does not implement it for any functional)
 - Analytic Hessian remains unimplemented; frequencies are currently semi-numerical
 - DFT imaginary-mode following is not implemented
 ### HPC campaign — what is left (verified against the tree 2026-08-30)
 
-Full measured rescope in `docs/HPC_REMAINING_SCOPE.md`. **Tiers 3 and 1 are done
+Architecture and measurements in `docs/HPC_MPI.md`. **Tiers 3 and 1 are done
 and measured** for the default engine, HF and DFT: the `planck-mpi` front end, the
 distributed direct-SCF Fock build (#146), the DFT J/K build (#151), and the **DFT
 grid rank-split (#156 — Gap 2, CLOSED)**; `src/dft/driver.cpp` carries the
@@ -1812,7 +1879,22 @@ identify the path taken. Not required for correctness or performance.
   contractions are now parallel and verified thread-count-invariant (see the
   Integral Engine note). The remaining DFT parallelization target is the grid
   layer, tracked above under the DFT gaps.
-- Rework shell-pair construction to operate at shell granularity rather than per Cartesian AO component
+- **Shell-pair granularity follow-ons** (architecture in
+  `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys
+  hoist):
+  - **B-4 — explicit `engine rys`.** The hoist is wired into Auto (B-3) but not
+    the non-Auto Rys tensor/Fock builds. It reorders accumulation, so gate at the
+    `1e-13` ERI bar, not bitwise, plus the SA-2 uphill case under `engine rys`.
+  - **Phase C — symmetry direct-SCF skeletons** (`os_symm` / `hgp_symm` /
+    `rys_symm`) are still per-AO; convert to shell-quartet carrying the signed-AO
+    orbit per component. Unblocked: block kernels exist for all three engines.
+  - **Phase D — gradient derivative ERIs** (`compute_eri_deriv_dispatch`) are
+    still per-AO. Rys has no derivative kernel, so per-quartet Auto gradients need
+    one written first. The largest remaining piece.
+  - **Phase E — retire the per-AO adapter.** Make `build_shellpairs` emit
+    shell-level `ShellPair` objects and drop `expand_shell_groups_to_ao_pairs`.
+    Last, because it changes the shared `ShellPair` contract and must resolve
+    per-component `_component_norm` folding across OS/HGP/Rys at once.
 - Eliminate remaining reversed-shell-pair reconstruction churn in gradient paths outside the already-fixed RHF path
 - Deduplicate the full-group AO-transform machinery that still exists in both `group_operations.cpp` and `mo_symmetry.cpp`
 - Extract a shared `SpatialQuartetLayout` (6-axis dims + strides +

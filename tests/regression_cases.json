@@ -57,6 +57,206 @@
    ]
   },
   {
+   "id": "water_rhf_chelpg_sto3g",
+   "_note": "docs/ESP_CHARGES.md -- CHELPG charges from a generated grid. Breneman & Wiberg 1990 defaults (0.3 A spacing, 2.8 A head-space, points inside any vdW radius discarded). Charges are asserted to 6 decimals and the RRMS to 4 significant figures; the total is pinned exactly because the Lagrange constraint makes it exact, not approximate. No PySCF cross-check exists -- PySCF ships no CHELPG module -- so the method is gated by planck-esp-points, which fits a field of KNOWN point charges the model can represent exactly and requires them back to 1e-8.",
+   "input": "tests/inputs/regression/scf/water_rhf_chelpg_sto3g.hfinp",
+   "tags": [
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "ESP Charges (CHELPG) :",
+    "1       O       8             -0.713342",
+    "2       H       1              0.356707",
+    "3       H       1              0.356634",
+    "ESP Grid Points :             8485",
+    "ESP Fit RRMS 5.6198"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -74.9458807581,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_resp_sto3g",
+   "_note": "docs/ESP_CHARGES.md -- the Bayly hyperbolic restraint on a Connolly grid, driven from the input file. `equivalent 2 3` forces water's two symmetry-equivalent hydrogens to share a charge -- they come back EXACTLY equal here, against 0.354386/0.354418 for the same grid unrestrained, so the constraint is doing visible work. resp_strength is 0.01 rather than the Bayly stage-1 default 0.0005 deliberately: at 0.0005 the restraint moves these charges by ~4e-4, which is below what the 8-decimal charge print can distinguish from the unrestrained fit, and the case would assert nothing about the restraint. Unrestrained on the same grid: O -0.708804, RRMS 3.5763e-02; restrained: O -0.700909, RRMS 3.7456e-02 -- the restraint shrinks the charges and worsens the fit, which is the trade it exists to make.",
+   "input": "tests/inputs/regression/scf/water_rhf_resp_sto3g.hfinp",
+   "tags": [
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "RESP Charges (Connolly) :",
+    "1       O       8             -0.700908",
+    "2       H       1              0.350454",
+    "3       H       1              0.350454",
+    "RESP Iterations 7"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -74.9458807581,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rks_b3lyp_esp_sto3g",
+   "_note": "docs/ESP_CHARGES.md section 6 -- ESP/RESP reporting in the DFT driver. %begin_esp already PARSED under planck-dft (both binaries share IO::parse_input) but the report existed only in the HF driver, so a DFT run with an ESP block silently printed nothing. log_esp_report now lives in src/populations/esp.cpp with both drivers calling it. Connolly rather than CHELPG deliberately: chelpg_grid has a measured 3-7% orientation dependence that does not converge with spacing (esp.h), which would make an 8-decimal gate flaky for a reason unrelated to DFT. Charges verified reproducible run-to-run and across OMP_NUM_THREADS=1/4/8 at the full printed precision, so the DFT grid's known ~1e-10 XC reduction jitter does not reach them. Same geometry and grid settings as water_rhf_resp_sto3g: B3LYP gives O -0.70025568 against RHF's -0.708804 unrestrained on the identical grid, a more polarized water, which is the expected direction.",
+   "input": "tests/inputs/regression/dft/water_rks_b3lyp_esp_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "ESP Charges (Connolly) :",
+    "1       O       8             -0.70025568",
+    "2       H       1              0.35011239",
+    "3       H       1              0.35014328",
+    "ESP Grid Points :             1012"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.2893278688,
+     "atol": 1e-07
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_pcm_esp_sto3g",
+   "_note": "docs/ESP_CHARGES.md section 6 -- ESP under PCM is now LABELLED. The fitted density is solvent-polarized (the reaction field enters the Fock each SCF iteration) but the potential is the gas-phase form phi = nuc - el, excluding the reaction field's own sum_i q_i/|r - s_i|. Both quantities are legitimate -- the force-field (AMBER/RESP) convention wants exactly this one, since the MD solvent supplies the continuum -- and neither was identified before, so a user comparing against another code's in-solvent potential could not tell which they had. Sanity: PCM polarizes water further than gas phase, O -0.73345627 against -0.708804 unrestrained on the identical grid, the expected direction. The charges are pinned so that when item (b) adds the reaction field behind a keyword, this case shows the DEFAULT did not move -- which is the check that would catch the term being wired in unconditionally.",
+   "input": "tests/inputs/regression/hf/water_rhf_pcm_esp_sto3g.hfinp",
+   "tags": [
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "ESP + PCM :",
+    "the PCM reaction field is excluded",
+    "ESP Charges (Connolly) :",
+    "1       O       8             -0.73345627",
+    "2       H       1              0.36665044",
+    "3       H       1              0.36680583"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -74.9515732413,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_pcm_esp_rxnfield_sto3g",
+   "_note": "docs/ESP_CHARGES.md section 6 -- 'include_reaction_field' selects the TOTAL in-solvent potential (nuclear + electronic + PCM reaction field) instead of the default solute potential. The charges MUST differ from water_rhf_pcm_esp_sto3g, the same input without the keyword: -0.00420202 against -0.73345627. While the flag was parsed but inert the two cases were byte-identical, so a regression to that state shows up here as the two agreeing again. THE NEAR-ZERO CHARGES AND RRMS ~1.0 ARE THE PHYSICS: a conductor-like continuum screens the solute field outside the cavity, so the total potential there nearly vanishes and an atomic-charge model fits almost none of it -- which is exactly why the default is the solute potential and why AMBER/RESP fits that one. Confirmed at explicit points rather than inferred: at 60 bohr the solute potential is +5.2e-6 and the total -3.5e-5, so the reaction field opposes and overshoots the bare multipole. The RRMS is asserted BECAUSE it is bad -- if this fit ever looks good, screening broke.",
+   "input": "tests/inputs/regression/hf/water_rhf_pcm_esp_rxnfield_sto3g.hfinp",
+   "tags": [
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "ESP + PCM :",
+    "the fit is to the TOTAL in-solvent potential",
+    "1       O       8             -0.00420202",
+    "2       H       1              0.00321526",
+    "3       H       1              0.00098677",
+    "ESP Fit RRMS 9.970094e-01"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -74.9515732413,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rks_b3lyp_pcm_esp_rxnfield_sto3g",
+   "_note": "docs/ESP_CHARGES.md section 6, DFT side. A DISTINCT code path from water_rhf_pcm_esp_rxnfield_sto3g, not a duplicate: `prepared` (shell pairs + PCM state) is local to the DFT driver's inner run() and already dead when the report runs, so log_esp_report_dft rebuilds BOTH, cavity included (one AO matrix per tessera). The HF driver still holds its state at the call site and rebuilds nothing, so only this case exercises the rebuild. Cost measured rather than assumed, since the scope named it as the one thing that would justify restructuring run()'s return type: 0.3473 s -> 0.3621 s mean of 5, i.e. ~15 ms (~4%) for rebuild + PCM solve + phi_rxn -- the simple rebuild stands. Near-zero charges and RRMS ~1.0 are the screening physics; see the HF case for the explicit-point evidence.",
+   "input": "tests/inputs/regression/dft/water_rks_b3lyp_pcm_esp_rxnfield_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "the fit is to the TOTAL in-solvent potential",
+    "1       O       8             -0.00394916",
+    "2       H       1              0.00308501",
+    "3       H       1              0.00086415"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.2948977855,
+     "atol": 1e-07
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_connolly_sto3g",
+   "_note": "docs/ESP_CHARGES.md -- Connolly/Merz-Kollman sampling shells. Unlike the CHELPG cubic lattice these are rotationally invariant -- the direction set is built in a molecule-derived frame, so rotating the molecule rotates the sample set with it. Measured drift under a rigid motion: 6.9e-15 here against 5.8e-02 for chelpg on the identical fixture (planck-esp-points check 7, which runs both arms and requires the chelpg arm to keep failing so the comparison cannot go vacuous). Charges asserted to 6 decimals; the total is exact because the constraint is a Lagrange multiplier, not a penalty. The values here were re-captured after the molecular-frame fix: an earlier revision of this case asserted 1016 points and O -0.709218, taken from a binary built BEFORE that fix, and was registered without rebuilding hartree-fock first. It passed its own mutation test because a mutation test proves an assertion is sensitive, not that its value is current.",
+   "input": "tests/inputs/regression/scf/water_rhf_connolly_sto3g.hfinp",
+   "tags": [
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "ESP Charges (Connolly) :",
+    "1       O       8             -0.708804",
+    "2       H       1              0.354385",
+    "3       H       1              0.354418",
+    "ESP Grid Points :             1012",
+    "ESP Fit RRMS 3.5763"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -74.9458807581,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_esp_points_sto3g",
+   "_note": "docs/ESP_CHARGES.md -- the molecular electrostatic potential at explicit points. The contains lines assert 8 decimals, not the 12 printed: Planck and PySCF round Angstrom->Bohr differently (Planck keeps more digits), so at identical input coordinates the nuclei sit a few parts in 1e8 apart, and ~1e-8 is the floor for any cross-code comparison here. Asserting more digits would pin the rounding, not the physics.",
+   "_pyscf_reference": "PySCF 2.13.0 RHF/STO-3G cart=True, mol.intor('int1e_grids') contracted with the converged density plus the nuclear sum -- an independent implementation of the same one-electron integral. Evaluated at Planck's own Bohr coordinates so the conversion-constant difference is removed: phi = 0.145838922309, -0.011474069301, 0.040830828077, 0.003869442320, 0.000005075137 at the five points. Max abs diff vs Planck 4.6e-09. E_RHF -74.9458807350 (Planck -74.9458807581).",
+   "input": "tests/inputs/regression/scf/water_rhf_esp_points_sto3g.hfinp",
+   "tags": [
+    "smoke",
+    "core"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Electrostatic Potential :",
+    "1      1.300000     -0.700000      2.100000          0.14583892",
+    "2     -2.400000      1.900000     -0.600000         -0.01147406",
+    "3      0.400000      0.300000      3.700000          0.04083082",
+    "4     -5.000000     -4.000000      1.200000          0.00386944",
+    "5     60.000000      0.000000      0.000000          0.00000507"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -74.9458807581,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
    "id": "lih_rmp2_sto3g",
    "input": "inputs/examples/hf/mp2_validation/val_lih.hfinp",
    "tags": [
@@ -1834,6 +2034,28 @@
    ]
   },
   {
+   "id": "h2o2_cation_uhf_tight_tol_sto3g",
+   "input": "tests/inputs/regression/open_shell/h2o2_cation_uhf_tight_tol_sto3g.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "UHF Converged"
+   ],
+   "not_contains": [
+    "did not converge"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -148.4133957644,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
    "id": "water_triplet_uhf_sto3g",
    "input": "tests/inputs/regression/open_shell/water_triplet_uhf_sto3g.hfinp",
    "tags": [
@@ -2213,7 +2435,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -75.8100241262,
+     "expected": -75.8097355638,
      "atol": 1e-09
     },
     {
@@ -2242,7 +2464,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -76.2897226108,
+     "expected": -76.289436536,
      "atol": 1e-09
     }
    ],
@@ -2269,7 +2491,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -76.3781217832,
+     "expected": -76.3779007886,
      "atol": 1e-09
     },
     {
@@ -2301,7 +2523,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -76.3017376982,
+     "expected": -76.3015412696,
      "atol": 1e-09
     },
     {
@@ -2333,7 +2555,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -75.837581496,
+     "expected": -75.8372242895,
      "atol": 1e-09
     },
     {
@@ -2502,6 +2724,320 @@
    ]
   },
   {
+   "id": "water_tddft_b3lyp_casida_sto3g",
+   "input": "tests/inputs/regression/dft/water_tddft_b3lyp_casida_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_pyscf_reference": "PySCF 2.13.0 RKS B3LYP/STO-3G, this Cartesian water geometry, grid level 6: Casida roots 11.6737501, 13.9865099, 14.5135334, 17.8803925 eV. The third root detects the historical B-exchange (ia|bj) index defect.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Reference :                   RKS",
+    "TDDFT / Linear Response :     full Casida singlet solver",
+    "Root  3 dominant configurations:",
+    "DFT Hybrid XC :               B3LYP exact exchange coefficient = 0.200000"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 11.6737501,
+     "atol": 0.0001
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 13.9865099,
+     "atol": 0.0001
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 14.5135334,
+     "atol": 0.0001
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 17.8803925,
+     "atol": 0.0001
+    }
+   ]
+  },
+  {
+   "id": "water_tddft_b3lyp_tda_sto3g",
+   "input": "tests/inputs/regression/dft/water_tddft_b3lyp_tda_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_pyscf_reference": "PySCF 2.13.0 RKS B3LYP/STO-3G, this Cartesian water geometry, grid level 6: TDA roots 11.7278211, 13.9950126, 14.6539379, 17.9782649 eV. This control is invariant under the B-block correction.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Reference :                   RKS",
+    "TDDFT / Linear Response :     TDA singlet solver",
+    "Root  3 dominant configurations:"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 11.7278211,
+     "atol": 0.0001
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 13.9950126,
+     "atol": 0.0001
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 14.6539379,
+     "atol": 0.0001
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 17.9782649,
+     "atol": 0.0001
+    }
+   ]
+  },
+  {
+   "id": "water_triplet_uks_tddft_b3lyp_sto3g",
+   "input": "tests/inputs/regression/dft/water_triplet_uks_tddft_b3lyp_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_note": "R0 UKS route gate. The shared rectangular-tensor invariant in planck-tddft-exchange detects the B-index mutant; this molecular case ensures the same helper is exercised by the spin-conserving production path.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Reference :                   UKS",
+    "TDDFT / Linear Response :     full Casida spin-conserving solver",
+    "DFT Hybrid XC :               B3LYP exact exchange coefficient = 0.200000",
+    "Root  1 dominant configurations:"
+   ],
+   "checks": []
+  },
+  {
+   "id": "water_tddft_hse06_casida_sto3g",
+   "input": "tests/inputs/regression/dft/water_tddft_hse06_casida_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_pyscf_reference": "HSE06 RKS singlet Casida (short-range only, omega 0.11): 11.8513670 14.1345242 14.8228534 18.0786336 eV. PySCF 2.13.0 (tests/pyscf/rs_tddft_references.py), water/STO-3G Cartesian, grid level 6. atol 5e-4 eV: the floor is grid/kernel, not exchange -- UKS PBE (no exact exchange) already sits 1.9e-4 eV from PySCF, and PySCF wB97X itself moves ~1e-4 eV between grid levels 7 and 8. Dropping the short-range term shifts roots by ~3 eV.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Reference :                   RKS",
+    "full Casida singlet solver with 0.000000 full-range + 0.250000 short-range"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 11.851367,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 14.1345242,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 14.8228534,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 18.0786336,
+     "atol": 0.0005
+    }
+   ]
+  },
+  {
+   "id": "water_tddft_hse06_triplet_casida_sto3g",
+   "input": "tests/inputs/regression/dft/water_tddft_hse06_triplet_casida_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_pyscf_reference": "HSE06 RKS triplet Casida: 9.8613957 12.2240713 12.7939598 14.6310737 eV. PySCF 2.13.0 (tests/pyscf/rs_tddft_references.py), water/STO-3G Cartesian, grid level 6. atol 5e-4 eV: the floor is grid/kernel, not exchange -- UKS PBE (no exact exchange) already sits 1.9e-4 eV from PySCF, and PySCF wB97X itself moves ~1e-4 eV between grid levels 7 and 8. Dropping the short-range term shifts roots by ~3 eV.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "full Casida triplet solver with 0.000000 full-range + 0.250000 short-range"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 9.8613957,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 12.2240713,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 12.7939598,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 14.6310737,
+     "atol": 0.0005
+    }
+   ]
+  },
+  {
+   "id": "water_tddft_camb3lyp_casida_sto3g",
+   "input": "tests/inputs/regression/dft/water_tddft_camb3lyp_casida_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_pyscf_reference": "CAM-B3LYP RKS singlet Casida (full 0.65 + short -0.46, omega 0.33): 11.7792602 14.0890894 14.6108765 17.9912125 eV. PySCF 2.13.0 (tests/pyscf/rs_tddft_references.py), water/STO-3G Cartesian, grid level 6. atol 5e-4 eV: the floor is grid/kernel, not exchange -- UKS PBE (no exact exchange) already sits 1.9e-4 eV from PySCF, and PySCF wB97X itself moves ~1e-4 eV between grid levels 7 and 8. Dropping the short-range term shifts roots by ~3 eV.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "full Casida singlet solver with 0.650000 full-range + -0.460000 short-range"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 11.7792602,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 14.0890894,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 14.6108765,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 17.9912125,
+     "atol": 0.0005
+    }
+   ]
+  },
+  {
+   "id": "water_tddft_wb97x_tda_sto3g",
+   "input": "tests/inputs/regression/dft/water_tddft_wb97x_tda_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_pyscf_reference": "wB97X RKS singlet TDA (full 1.0 + short -0.842294, omega 0.30): 11.9295228 14.1645962 14.9190625 18.2402648 eV. PySCF 2.13.0 (tests/pyscf/rs_tddft_references.py), water/STO-3G Cartesian, grid level 6. atol 5e-4 eV: the floor is grid/kernel, not exchange -- UKS PBE (no exact exchange) already sits 1.9e-4 eV from PySCF, and PySCF wB97X itself moves ~1e-4 eV between grid levels 7 and 8. Dropping the short-range term shifts roots by ~3 eV.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "TDA singlet solver with 1.000000 full-range + -0.842294 short-range"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 11.9295228,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 14.1645962,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 14.9190625,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 18.2402648,
+     "atol": 0.0005
+    }
+   ]
+  },
+  {
+   "id": "water_triplet_uks_tddft_camb3lyp_sto3g",
+   "input": "tests/inputs/regression/dft/water_triplet_uks_tddft_camb3lyp_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_pyscf_reference": "CAM-B3LYP UKS triplet water, spin-conserving Casida: 2.9514402 3.4832863 7.0447881 eV. PySCF 2.13.0 (tests/pyscf/rs_tddft_references.py), water/STO-3G Cartesian, grid level 6. atol 5e-4 eV: the floor is grid/kernel, not exchange -- UKS PBE (no exact exchange) already sits 1.9e-4 eV from PySCF, and PySCF wB97X itself moves ~1e-4 eV between grid levels 7 and 8. Dropping the short-range term shifts roots by ~3 eV.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Reference :                   UKS",
+    "full Casida spin-conserving solver with 0.650000 full-range + -0.460000 short-range"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 2.9514402,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 3.4832863,
+     "atol": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 7.0447881,
+     "atol": 0.0005
+    }
+   ]
+  },
+  {
+   "id": "water_tddft_camy_b3lyp_rejected_sto3g",
+   "input": "tests/inputs/regression/dft/water_tddft_camy_b3lyp_rejected_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_note": "Yukawa-screened exchange: the ERI engines evaluate only the erf kernel, so TDDFT must reject it rather than treat it as erf.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 1,
+   "contains": [
+    "uses Yukawa or Gaussian screened exchange"
+   ],
+   "checks": []
+  },
+  {
    "id": "h_dft_uks_b3lyp_sto3g",
    "input": "tests/inputs/regression/dft/h_dft_uks_b3lyp.hfinp",
    "executable": "planck-dft",
@@ -2644,7 +3180,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -75.2062610942,
+     "expected": -75.2062561072,
      "atol": 1e-06
     }
    ],

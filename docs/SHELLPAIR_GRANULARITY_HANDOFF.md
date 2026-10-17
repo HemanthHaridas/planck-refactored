@@ -5,9 +5,10 @@ Canonical status now lives in:
 - `vault/Status/Completion.md`
 - `vault/Status/Open Work.md`
 
-Remaining and deferred work for this effort lives in:
-
-- `docs/SHELLPAIR_GRANULARITY_OPEN_WORK.md`
+Remaining work for this effort (B-4, Phases C-E, the shared scratch layout)
+is tracked in `vault/Status/Open Work.md` under "Performance and maintenance
+opportunities". The CASSCF g-basis investigation it surfaced is answered in
+`docs/CASSCF_FOCK_REBUILD_COST.md`.
 
 This file answers a narrower architecture question:
 
@@ -200,6 +201,6 @@ open-work document.
 
 The Rys hoist is wired into the Auto path but not into explicit `engine rys`,
 and several downstream subsystems (symmetry direct-SCF skeletons, gradient
-derivative ERIs) are still per-AO. Those, plus the per-AO adapter retirement
-and the CASSCF speedups, are tracked in
-`docs/SHELLPAIR_GRANULARITY_OPEN_WORK.md`, not here.
+derivative ERIs) are still per-AO. Those, plus the per-AO adapter retirement,
+are tracked in `vault/Status/Open Work.md`; the CASSCF speed question is
+answered in `docs/CASSCF_FOCK_REBUILD_COST.md`.

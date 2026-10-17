@@ -124,6 +124,17 @@ namespace HartreeFock::Integrals
     {
         switch (term)
         {
+        case FusedTerm::RawCoulombExchange:
+            // This mode is intentionally restricted: its second matrix is
+            // the paired raw-K output, whereas the UHF slot convention is
+            // alpha/beta. UHF retains its existing one-sweep path.
+            if (!need_uhf)
+            {
+                coulomb_accumulate(G, *dens.P, i, j, k, l, val);
+                exchange_accumulate(Gb, *dens.P, i, j, k, l, val);
+            }
+            return;
+
         case FusedTerm::CoulombOnly:
             if (need_uhf)
             {
@@ -230,11 +241,13 @@ namespace HartreeFock::Integrals
         const int n_threads = 1;
 #endif
         const bool need_uhf = spin_resolved;
+        const bool raw_coulomb_exchange =
+            !need_uhf && term == FusedTerm::RawCoulombExchange;
         std::vector<Eigen::MatrixXd> g_partials(
             need_uhf ? 0 : static_cast<std::size_t>(n_threads),
             Eigen::MatrixXd::Zero(nb, nb));
         std::vector<Eigen::MatrixXd> ga_partials(
-            need_uhf ? static_cast<std::size_t>(n_threads) : 0,
+            (need_uhf || raw_coulomb_exchange) ? static_cast<std::size_t>(n_threads) : 0,
             Eigen::MatrixXd::Zero(nb, nb));
         std::vector<Eigen::MatrixXd> gb_partials(
             need_uhf ? static_cast<std::size_t>(n_threads) : 0,
@@ -277,8 +290,8 @@ namespace HartreeFock::Integrals
             // aliases the alpha slot purely to keep both branches in one loop.
             Eigen::MatrixXd &G_local =
                 need_uhf ? ga_partials[thread_id] : g_partials[thread_id];
-            Eigen::MatrixXd &Gb_local =
-                need_uhf ? gb_partials[thread_id] : g_partials[thread_id];
+            Eigen::MatrixXd &Gb_local = need_uhf ? gb_partials[thread_id]
+                : raw_coulomb_exchange ? ga_partials[thread_id] : g_partials[thread_id];
 
             const FusedShellGroup &gA = groups[group_pairs[bra].a];
             const FusedShellGroup &gB = groups[group_pairs[bra].b];
@@ -409,6 +422,13 @@ namespace HartreeFock::Integrals
             for (int t = 0; t < n_threads; ++t)
                 G += g_partials[static_cast<std::size_t>(t)];
             HartreeFock::Mpi::allreduce_inplace(G.data(), static_cast<std::size_t>(G.size()));
+            if (raw_coulomb_exchange)
+            {
+                Ga.setZero(nb, nb);
+                for (int t = 0; t < n_threads; ++t)
+                    Ga += ga_partials[static_cast<std::size_t>(t)];
+                HartreeFock::Mpi::allreduce_inplace(Ga.data(), static_cast<std::size_t>(Ga.size()));
+            }
         }
     }
 }

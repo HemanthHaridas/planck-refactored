@@ -1,0 +1,57 @@
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type        rhf
+    use_diis        .true.
+    diis_dim        8
+    engine          os
+    guess           hcore
+    max_cycles      50
+    tol_energy      1.0e-8
+    tol_density     1.0e-8
+    save_checkpoint .false.
+%end_scf
+
+%begin_dft
+    grid        fine
+    exchange    b3lyp
+    correlation pbe
+%end_dft
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+# ESP charges from the DFT driver (docs/ESP_CHARGES.md section 6).
+# Before this, %begin_esp parsed under planck-dft and then silently printed
+# nothing -- the report existed only in the HF driver.
+#
+# Connolly rather than CHELPG deliberately: chelpg_grid has a measured 3-7%
+# orientation dependence that does not converge with spacing (esp.h), which
+# would make a tight gate on the printed charges flaky for a reason that has
+# nothing to do with DFT. connolly_grid is rotationally symmetric by
+# construction.
+#
+# Same geometry and grid settings as water_rhf_resp_sto3g, so the charges are
+# directly comparable against the RHF ones: B3LYP gives a more polarized water
+# than RHF/STO-3G does, which is the expected direction.
+%begin_esp
+    grid             connolly
+    shell_scales     1.4 1.6 1.8 2.0
+    points_per_shell 200
+%end_esp
+
+%begin_coords
+3
+0   1
+O      0.000000     0.000000     0.000000
+H      0.758602     0.000000     0.504284
+H     -0.758602     0.000000     0.504284
+%end_coords

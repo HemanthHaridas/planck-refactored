@@ -1,6 +1,8 @@
 #ifndef HF_LOGGING_H
 #define HF_LOGGING_H
 
+#include <chrono>
+#include <ctime>
 #include <format>
 #include <iomanip>
 #include <iostream>
@@ -436,6 +438,33 @@ namespace HartreeFock
                           << "\n";
             }
             std::cout << std::string(78, '-') << "\n";
+        }
+
+        inline void banner()
+        {
+            if (is_silenced())
+                return;
+
+            std::lock_guard<std::mutex> lock(log_mutex);
+            const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+            std::tm local{};
+#ifdef _WIN32
+            localtime_s(&local, &now);
+#else
+            localtime_r(&now, &local);
+#endif
+            std::cout << "\n     Program Planck starts on  " << std::put_time(&local, "%e%b%Y at %H:%M:%S")
+                      << "\n\n"
+                      << "     Planck is a molecular electronic-structure program.\n"
+                      << "     Please cite the relevant method and implementation references.\n\n";
+        }
+
+        inline void reading_input(const std::string &path)
+        {
+            if (is_silenced())
+                return;
+            std::lock_guard<std::mutex> lock(log_mutex);
+            std::cout << "     Reading input from " << path << "\n\n";
         }
 
         inline void blank()

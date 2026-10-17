@@ -251,6 +251,7 @@
 <li class="toc-level-2"><a href="#15-coupled-perturbed-hf-and-the-mp2-gradient">15. Coupled-Perturbed HF and the MP2 Gradient</a></li>
 <li class="toc-level-3"><a href="#rmp2-z-vector-method">RMP2 Z-Vector Method</a></li>
 <li class="toc-level-3"><a href="#ump2-gradient-intermediates">UMP2 Gradient Intermediates</a></li>
+<li class="toc-level-3"><a href="#double-hybrid-analytic-gradients">Double-Hybrid Analytic Gradients</a></li>
 <li class="toc-level-2"><a href="#16-coupled-cluster-in-planck">16. Coupled Cluster in Planck</a></li>
 <li class="toc-level-3"><a href="#the-hand-written-paths">The hand-written paths</a></li>
 <li class="toc-level-3"><a href="#the-generated-paths-and-how-to-ask-for-them">The generated paths, and how to ask for them</a></li>
@@ -342,6 +343,7 @@
 <li class="toc-level-3"><a href="#mulliken-population-analysis">Mulliken Population Analysis</a></li>
 <li class="toc-level-3"><a href="#l-wdin-population-analysis">Löwdin Population Analysis</a></li>
 <li class="toc-level-3"><a href="#mayer-bond-orders">Mayer Bond Orders</a></li>
+<li class="toc-level-3"><a href="#esp-derived-charges-chelpg-and-resp">ESP-Derived Charges (CHELPG and RESP)</a></li>
 <li class="toc-level-3"><a href="#electric-dipole-moment">Electric Dipole Moment</a></li>
 <li class="toc-level-3"><a href="#traceless-quadrupole-moment">Traceless Quadrupole Moment</a></li>
 <li class="toc-level-3"><a href="#rmp2-natural-orbitals">RMP2 Natural Orbitals</a></li>
@@ -375,6 +377,7 @@
 <li>Coupled-cluster kernels <strong>generated at build time</strong> by <code>ccgen</code>, to arbitrary excitation rank: restricted (<code>cc3</code>-<code>cc6</code>) and, opt-in, unrestricted (<code>ucc2</code>-<code>ucc6</code>). Optionally dressed and OpenMP-threaded</li>
 <li>Analytic RHF, UHF, ROHF, RKS, UKS, RMP2, and UMP2 nuclear gradients</li>
 <li>Analytic RMP2 nuclear gradients include Z-vector / CPHF relaxation</li>
+<li>Analytic restricted global-double-hybrid gradients include KS Z-vector relaxation and the complete LDA/GGA XC geometry response</li>
 <li>Geometry optimization in Cartesian and internal coordinates</li>
 <li>Semi-numerical Hessians and harmonic vibrational analysis</li>
 <li>CASSCF and RASSCF active-space multiconfigurational SCF, and full CI</li>
@@ -450,7 +453,7 @@ CMake configure
 <tr><td><code>src/freq</code></td><td>finite-difference Hessian, vibrational analysis</td></tr>
 <tr><td><code>src/solvation</code></td><td>C-PCM cavity, influence matrix, reaction-field operator (shared by HF and DFT)</td></tr>
 <tr><td><code>src/bsse</code></td><td>ghost atoms and the counterpoise driver</td></tr>
-<tr><td><code>src/populations</code></td><td>Mulliken, Löwdin, Mayer bond orders</td></tr>
+<tr><td><code>src/populations</code></td><td>Mulliken, Löwdin, Mayer bond orders, ESP/RESP charges</td></tr>
 <tr><td><code>src/dft</code></td><td>Kohn-Sham DFT pipeline: molecular grid, AO evaluation, XC matrix, analytic KS gradients, TD-DFT, KS driver</td></tr>
 <tr><td><code>src/dft/base</code></td><td>grid construction headers: radial (Treutler-Ahlrichs), angular (Lebedev), Becke partition, libxc wrapper</td></tr>
 <tr><td><code>src/mpi</code></td><td>the <code>planck-mpi</code> unified front end</td></tr>
@@ -753,7 +756,7 @@ P = 2 C_{\mathrm{occ}} C_{\mathrm{occ}}^T.
 <p>So SAD is available for all three SCF flavors currently implemented by Planck.</p>
 <h3 id="when-the-guess-matters">When the Guess Matters</h3>
 <p>Different initial guesses can converge to <strong>different SCF stationary points</strong>. This is not a bug. SCF does not minimize the energy directly; it solves the fixed-point equation <span class="math-inline">\([\mathbf F, \mathbf P] = 0\)</span>, and any density whose Fock eigenvectors reproduce that density is a valid solution. The global minimum is one such fixed point, but for a symmetric molecule there can be others — broken-symmetry stationary points where the density localizes asymmetrically across equivalent atoms. DIIS converges to whichever fixed point lies in the same basin as the initial guess.</p>
-<p>The two subsections below switch from this general SCF lesson to Planck- specific material: first a concrete validation case, then a current SAD caveat.</p>
+<p>The two subsections below switch from this general SCF lesson to Planck- specific material: first a concrete validation case, then a historical SAD pitfall that turned out to be a convergence-test defect.</p>
 <h4 id="case-study-planar-ethylene-without-symmetry">Case Study: Planar Ethylene Without Symmetry</h4>
 <p>A clean illustration is RHF/3-21G on planar ethylene with <code>use_symm false</code>:</p>
 <div class="table-wrap"><table>
@@ -782,8 +785,10 @@ P = 2 C_{\mathrm{occ}} C_{\mathrm{occ}}^T.
 <li><strong>Use SAD.</strong> Cheaper and more general: it works for asymmetric molecules too, and it does not require detecting a point group.</li>
 </ul>
 <p>The deeper lesson is that broken-symmetry RHF stationary points are real features of the Hartree-Fock energy surface, not numerical artifacts. They become genuine ground states for stretched bonds (where RHF fails and UHF takes over). The instability we hit on equilibrium ethylene is the same mechanism that drives the well-known RHF <span class="math-inline">\(\to\)</span> UHF transition at bond dissociation. Treat HCore as a fine guess for asymmetric molecules and small clusters, but reach for SAD or <code>use_symm true</code> whenever the molecule has equivalent atoms.</p>
-<h4 id="current-planck-caveat-isolated-atom-sad">Current Planck Caveat: Isolated-Atom SAD</h4>
-<p>There is one known exception that runs the <em>other</em> way. For a small <strong>isolated closed-shell atom</strong> the SAD guess can itself false-converge to a wrong SCF stationary point: a lone helium atom in cc-pVDZ settles at <span class="math-inline">\(-2.85515\)</span> Eh from SAD but at the correct <span class="math-inline">\(-2.85516\)</span> Eh (matching PySCF to <span class="math-inline">\(10^{-10}\)</span>) from HCore, each &quot;converging&quot; in five iterations at a different HOMO energy. The SAD atomic-density seed apparently lands in the wrong basin for a single small atom. This matters directly for the isolated-monomer references in a counterpoise calculation (<a href="#24-basis-set-superposition-error-and-the-counterpoise-correction">§24</a>), where a core-Hamiltonian guess is the safer choice for those small fragments. The lesson is not that one guess is universally safer — it is that the converged SCF solution should be sanity-checked (symmetry of degenerate orbitals, dipole of a centrosymmetric system, agreement across guesses) rather than trusted because the iteration count looked reasonable.</p>
+<h4 id="historical-pitfall-isolated-atom-sad-and-the-convergence-test">Historical Pitfall: Isolated-Atom SAD and the Convergence Test</h4>
+<p>One former Planck bug looked like a guess failure but was really a convergence-test failure. A lone helium atom in cc-pVDZ, started from SAD, stopped at <span class="math-inline">\(-2.8551548739\)</span> Eh instead of the correct <span class="math-inline">\(-2.8551604772\)</span> Eh (the HCore result, which matches PySCF). Both runs reported convergence in five iterations.</p>
+<p>The SAD seed was not in a wrong basin. DIIS extrapolated a Fock matrix whose diagonalized density exactly reproduced the previous density, so <span class="math-inline">\(\Delta P \to 0\)</span> and <span class="math-inline">\(\Delta E \to 0\)</span>. But the DIIS error <span class="math-inline">\(\mathbf{FPS}-\mathbf{SPF}\)</span> was still about <span class="math-inline">\(10^{-3}\)</span>: the density had stopped moving without satisfying the SCF stationarity condition. The old <span class="math-inline">\(\Delta E + \Delta P\)</span> test could not tell the difference.</p>
+<p><code>is_converged</code> (<code>src/scf/scf.cpp</code>) now also requires the DIIS error to be below <span class="math-inline">\(\max(\texttt{\_tol\_density}, 10^{-10})\)</span>. The floor matters: the DIIS residual is a product of converged matrices, so it bottoms out in roundoff (about <span class="math-inline">\(10^{-12}\)</span> on hard open-shell cases) where <span class="math-inline">\(\Delta P\)</span> can reach exactly zero. One shared threshold would make a very tight <code>_tol_density</code> unreachable. The DIIS error is zero when DIIS is inactive, so non-DIIS paths are unaffected. The regression case <code>he_sad_ccpvdz</code> pins the correct energy. The general lesson outlives the fix: <span class="math-inline">\(\Delta P\)</span> measures whether the iteration has <em>stopped</em>, while the commutator <span class="math-inline">\([\mathbf F, \mathbf P]\)</span> measures whether it has <em>arrived</em>. A convergence test needs the second.</p>
 <h3 id="wavefunction-stability-analysis">Wavefunction Stability Analysis</h3>
 <p>The case study above raises a concrete question: how can the SCF tell whether the converged solution is a global minimum, a broken-symmetry local minimum, or an unstable stationary point? The answer is <strong>stability analysis</strong> — diagonalizing the orbital Hessian (the second variation of the HF energy with respect to occupied-virtual orbital rotations) and checking its lowest eigenvalues. Negative eigenvalues mean an orbital rotation exists that lowers the energy.</p>
 <h4 id="planck-interface">Planck Interface</h4>
@@ -1024,14 +1029,15 @@ F^{\text{MO},\beta}_{ai})\)</span> packed into one vector, and the Hessian is th
 2\,\mathbf A\)</span> matches, using the unscaled <span class="math-inline">\(\mathbf g = \mathbf F^{\text{MO}}\)</span> against the unscaled <span class="math-inline">\(\mathbf A\)</span> still reproduces the true step — the same conclusion as RHF, at a different constant. Second, the level shift: UHF&#x27;s loop can stage a level-shifted Fock before diagonalizing, and the SOSCF gradient reads the <em>unshifted</em> Fock, so running both at once would silently ignore the user&#x27;s level-shift request. Planck makes them mutually exclusive in code — requesting SOSCF with <code>level_shift &gt; 0</code> simply keeps DIIS.</p>
 <p><code>docs/SOSCF_UHF.md</code> records the full derivation and the finite-difference sweep.</p>
 <h4 id="dft-the-hessian-has-no-single-matrix">DFT: the Hessian Has No Single Matrix</h4>
-<p>For Kohn-Sham DFT there is no <code>build_rhf_cphf_matrix</code> analogue — the KS orbital Hessian is assembled from three pieces every time it acts on a trial vector <span class="math-inline">\(\mathbf x\)</span>: <span class="math-display">\[
+<p>For Kohn-Sham DFT there is no <code>build_rhf_cphf_matrix</code> analogue — the KS orbital Hessian is assembled from up to four pieces every time it acts on a trial vector <span class="math-inline">\(\mathbf x\)</span>: <span class="math-display">\[
 (\mathbf H\,\mathbf x)_{ai} =
     (\varepsilon_a - \varepsilon_i)\,x_{ai}
     \;+\; \big[\delta J(\delta P)\big]^{\text{MO}}_{ai}
+    \;-\; \tfrac12\big[c_{fr}\,\delta K(\delta P) + c_{sr}\,\delta K^{SR}_\omega(\delta P)\big]^{\text{MO}}_{ai}
     \;+\; \big[\delta V_{xc}(\delta P)\big]^{\text{MO}}_{ai}.
-\]</span> The first term is the orbital-energy difference (pure bookkeeping). The second is the Coulomb response: <span class="math-inline">\(J\)</span> is linear in the density, so <span class="math-inline">\(\delta J(\delta P)\)</span> is just the ordinary memory-direct Coulomb build called on the <em>trial</em> density <span class="math-inline">\(\delta P\)</span> instead of the SCF density — no new code. The third term is the one that needed real work.</p>
+\]</span> The first term is the orbital-energy difference (pure bookkeeping). The second is the Coulomb response: <span class="math-inline">\(J\)</span> is linear in the density, so <span class="math-inline">\(\delta J(\delta P)\)</span> is just the ordinary memory-direct Coulomb build called on the <em>trial</em> density <span class="math-inline">\(\delta P\)</span> instead of the SCF density — no new code. The third term exists only for hybrids and is the same kind of object: exact exchange is linear in the density too, so its response is the direct exchange build (<code>_compute_2e_k_direct</code> / <code>_compute_2e_k_uhf_direct</code>) on <span class="math-inline">\(\delta P\)</span>, with full-range and short-range (erfc) pieces weighted by the functional&#x27;s own coefficients, exactly as in the SCF Fock build. That covers global hybrids (B3LYP, PBE0) and range-separated ones (HSE06) in both RKS and UKS. The fourth term is the one that needed real work.</p>
 <p><span class="math-inline">\(\delta V_{xc}\)</span> is the directional derivative of the XC potential — the XC <em>kernel</em> <span class="math-inline">\(f_{xc} = \delta^2 E_{xc}/\delta\rho^2\)</span> contracted against the trial response density <span class="math-inline">\(\delta\rho\)</span> (and <span class="math-inline">\(\delta\nabla\rho\)</span> for a GGA) on the grid. libxc exposes analytic second derivatives (<code>xc_lda_fxc</code> / <code>xc_gga_fxc</code>), but Planck&#x27;s wrapper had only ever called the first-derivative <code>exc_vxc</code> family. Wiring <code>f_{xc}</code> through and deriving the grid contraction — for a GGA it is a three-term chain rule, and the term most easily dropped comes from <span class="math-inline">\(\nabla\rho\)</span> itself being an argument of the existing gradient-coupling factor — is a genuine derivation, not a port. Each term was checked point-by-point against a finite-difference kernel (the same one TDDFT uses), and once end-to-end against PySCF&#x27;s own <code>nr_rks_fxc</code>. <code>docs/DFT_ANALYTIC_FXC_HESSIAN.md</code> covers the algebra; <code>docs/SOSCF_DFT.md</code> covers wiring it into the RKS and UKS loops.</p>
-<p>Two teaching points fall out of this. <strong>The right identity to test the Hessian against is not the obvious one.</strong> The naive check <span class="math-inline">\(\text{Tr}(\delta P\cdot\delta V_{xc}) = \partial^2 E_{xc}/\partial\kappa^2\)</span> is <em>wrong</em> — it is missing a term, because the Cayley transform is nonlinear in <span class="math-inline">\(\boldsymbol\kappa\)</span>, so <span class="math-inline">\(P(\boldsymbol\kappa)\)</span> has curvature (<span class="math-inline">\(d^2P/d\kappa^2 \neq 0\)</span>) and that curvature contracted against the ground-state <span class="math-inline">\(V_{xc}\)</span> is a real, separate contribution. It is exactly the orbital-energy-difference term every Newton/CPHF formulation already carries. The lesson: verify the <em>fully composed</em> <span class="math-inline">\(\mathbf H\cdot\mathbf x\)</span> against a finite difference of the <em>total</em> energy, never one piece of it against a piece of the energy. <strong>And &quot;pure functionals only&quot; for now</strong> — a hybrid&#x27;s exact-exchange response needs the same <span class="math-inline">\(K\)</span>-response machinery <code>build_rhf_cphf_matrix</code> already has for HF but which is unbuilt for the KS path, so requesting SOSCF on a hybrid (or with PCM or symmetry blocking) prints a one-line warning and keeps DIIS rather than running an incomplete Hessian.</p>
+<p>Two teaching points fall out of this. <strong>The right identity to test the Hessian against is not the obvious one.</strong> The naive check <span class="math-inline">\(\text{Tr}(\delta P\cdot\delta V_{xc}) = \partial^2 E_{xc}/\partial\kappa^2\)</span> is <em>wrong</em> — it is missing a term, because the Cayley transform is nonlinear in <span class="math-inline">\(\boldsymbol\kappa\)</span>, so <span class="math-inline">\(P(\boldsymbol\kappa)\)</span> has curvature (<span class="math-inline">\(d^2P/d\kappa^2 \neq 0\)</span>) and that curvature contracted against the ground-state <span class="math-inline">\(V_{xc}\)</span> is a real, separate contribution. It is exactly the orbital-energy-difference term every Newton/CPHF formulation already carries. The lesson: verify the <em>fully composed</em> <span class="math-inline">\(\mathbf H\cdot\mathbf x\)</span> against a finite difference of the <em>total</em> energy, never one piece of it against a piece of the energy. <strong>And the relative scale of the pieces is part of the contract.</strong> In the closed-shell parametrization the kernel response enters at twice the weight of the diagonal term. An earlier version applied a single overall factor that under-weighted it by half, and RKS SOSCF with PBE or LDA still converged, but only <em>linearly</em>: a wrong Hessian still gives a descent direction, so the energy alone does not expose it, and only the convergence rate does. PCM and SAO symmetry blocking are the two remaining exclusions. Requesting SOSCF with either prints a one-line warning and keeps DIIS, because the reaction-field response and the block-diagonal response are not wired in.</p>
 <p>On wall-clock: the analytic <span class="math-inline">\(f_{xc}\)</span> contraction is <span class="math-inline">\(O(1)\)</span> grid passes regardless of how many Krylov iterations the solver takes, versus <span class="math-inline">\(O(n_{\text{occ}} n_{\text{virt}})\)</span> grid passes to build the finite-difference kernel once. For UKS this is a measured 3–5× per-Newton- step win at every size tested; for RKS it is roughly break-even at the modest sizes measured, because the real Krylov iteration counts sit right at the crossover.</p>
 <hr>
 <h2 id="8-symmetry">8. Symmetry</h2>
@@ -2027,6 +2033,262 @@ t^{ab}_{ij,\alpha\beta} =
  \varepsilon^\alpha_a - \varepsilon^\beta_b}.
 \]</span></p>
 <p>These amplitudes populate spin-specific occupied/virtual 1-PDM corrections <span class="math-inline">\(D^\alpha\)</span> and <span class="math-inline">\(D^\beta\)</span>, an AO-space spin-summed energy-weighted density <span class="math-inline">\(W\)</span>, and an explicit AO pair-density correction <span class="math-inline">\(\Gamma^{MP2}\)</span>. The final gradient combines those objects with the UHF reference two-particle density expression and reuses the same derivative-integral contraction infrastructure as the RHF, UHF, and RMP2 gradients.</p>
+<h3 id="double-hybrid-analytic-gradients">Double-Hybrid Analytic Gradients</h3>
+<p>A double hybrid brings the two preceding gradient problems together: its orbitals come from Kohn-Sham DFT, but its energy also contains a perturbative correlation correction. The KS energy is stationary with respect to those orbitals; the added PT2 energy is not. Consequently, <strong>adding a scaled MP2 energy does not mean adding a scaled HF-MP2 gradient</strong>. The response equations must describe the KS reference that actually generated the orbitals.</p>
+<p>Planck follows the stationary-Lagrangian construction of Neese, Schwabe and Grimme, <em>J. Chem. Phys.</em> <strong>126</strong>, 124115 (2007), DOI <code>10.1063/1.2712433</code>. Equation numbers in this subsection refer to that paper. The formulas below are its closed-shell realization in Planck&#x27;s storage and density conventions; the landed contracts and validation record are in <a href="DOUBLE_HYBRID_GRADIENTS.md">the double-hybrid gradient guide</a>. The detailed derivation and active optimization ledger remain in <a href="DH_IMPLEMENTATION.md">DH_IMPLEMENTATION.md</a>.</p>
+<h4 id="start-with-the-energy-being-differentiated">Start with the Energy Being Differentiated</h4>
+<p>For B2PLYP, the electronic energy is</p>
+<p><span class="math-display">\[
+E_{\mathrm{DH,elec}} = T_s+V_{ne}+E_J
++0.53E_x^{HF}+0.47E_x^{B88}+0.73E_c^{LYP}
++0.27E_c^{MP2}.
+\]</span></p>
+<p>The first six terms define the hybrid SCF reference. Only after that SCF converges is the MP2 correlation evaluated, using its KS orbitals and orbital energies. Nuclear repulsion is added once to obtain the molecular total:</p>
+<p><span class="math-display">\[
+E_{\mathrm{DH}}=E_{\mathrm{KS}}+cE_c^{MP2},\qquad
+g_{\mathrm{DH}}^x=g_{\mathrm{KS}}^x+\Delta g_{\mathrm{PT2}}^x.
+\]</span></p>
+<p>Here <span class="math-inline">\(c=0.27\)</span>, while the exact-exchange fraction is <span class="math-inline">\(a_x=0.53\)</span>. These coefficients have different jobs. <span class="math-inline">\(c\)</span> scales the correlation correction; <span class="math-inline">\(a_x\)</span> belongs to the KS operator and its response. Neither coefficient multiplies the entire MP2 total energy. The combined <code>b2plyp</code> libxc functional already supplies the B88/LYP mixture: a separate correlation setting must not add another semilocal correlation contribution.</p>
+<p>Use occupied spatial indices <span class="math-inline">\(i,j,k\)</span>, virtual indices <span class="math-inline">\(a,b,c\)</span>, and general MO indices <span class="math-inline">\(p,q\)</span>. The coefficients obey <span class="math-inline">\(C^TSC=I\)</span>, with occupied columns first. In this subsection <span class="math-inline">\(P=2C_oC_o^T\)</span> is explicitly the <strong>total RKS density</strong>, not a one-spin occupied projector. Define <span class="math-inline">\(A:B=\sum_{pq}A_{pq}B_{pq}\)</span>, an elementwise contraction, and</p>
+<p><span class="math-display">\[
+J[Q]_{\mu\nu}=\sum_{\kappa\tau}(\mu\nu|\kappa\tau)Q_{\kappa\tau},\qquad
+K[Q]_{\mu\nu}=\sum_{\kappa\tau}(\mu\kappa|\nu\tau)Q_{\kappa\tau}.
+\]</span></p>
+<p>Then the physical reference operator is</p>
+<p><span class="math-display">\[
+F_{\mathrm{KS}}=h+J[P]-\frac{a_x}{2}K[P]+V_{xc}[P].
+\]</span></p>
+<p>This fixes the factors used below. A formula written for an occupancy-one projector cannot be substituted without converting its density convention.</p>
+<h4 id="amplitudes-difference-density-and-stationarity">Amplitudes, Difference Density, and Stationarity</h4>
+<p>Planck stores the unscaled spatial amplitudes in <code>[i,j,a,b]</code> order:</p>
+<p><span class="math-display">\[
+t_{ij}^{ab}=\frac{(ia|jb)}{\epsilon_i+\epsilon_j-\epsilon_a-\epsilon_b},\qquad
+E_c^{MP2}=\sum_{ijab}(ia|jb)(2t_{ij}^{ab}-t_{ij}^{ba}).
+\]</span></p>
+<p>The paper&#x27;s scaled amplitudes and a useful pair coefficient are</p>
+<p><span class="math-display">\[
+\widetilde t_{ij}^{ab}=\frac{2c}{1+\delta_{ij}}
+(2t_{ij}^{ab}-t_{ij}^{ba}),\qquad
+\Theta_{ij}^{ab}=(1+\delta_{ij})\widetilde t_{ij}^{ab}.
+\]</span></p>
+<p>Eqs. 37–39 give the unrelaxed difference-density blocks:</p>
+<p><span class="math-display">\[
+D'_{ij}=-\sum_{kab}(1+\delta_{ik})\widetilde t_{ik}^{ab}t_{kj}^{ba},
+\qquad
+D'_{ab}=\sum_{i\le j,c}
+\left(\widetilde t_{ij}^{ac}t_{ij}^{bc}
++\widetilde t_{ij}^{ca}t_{ij}^{cb}\right),\qquad D'_{ia}=D'_{ai}=0.
+\]</span></p>
+<p>The occupied contraction uses <span class="math-inline">\(t_{kj}^{ba}\)</span>, and the virtual contraction uses an unordered occupied-pair sum. These are indexing rules, not optional algebraic simplifications. Each product contains one scaled amplitude, so <span class="math-inline">\(D'\)</span> is linear in <span class="math-inline">\(c\)</span>. For physical amplitudes, <span class="math-inline">\(t_{ij}^{ab}=t_{ji}^{ba}\)</span> and <span class="math-inline">\(\operatorname{Tr}D'=0\)</span>: correlation moves population from occupied to virtual orbitals without changing electron count.</p>
+<p>Why introduce this density? The stationary Eq. 11 functional can be organized as</p>
+<p><span class="math-display">\[
+\mathcal H_{11}=\mathcal H_{\mathrm{pair}}+D':F_{\mathrm{KS,MO}},\qquad
+\mathcal H_{\mathrm{pair}}=\sum_{ijab}\Theta_{ij}^{ab}(ia|jb).
+\]</span></p>
+<p>At the canonical amplitude solution, the pair part is <span class="math-inline">\(2cE_c^{MP2}\)</span> and <span class="math-inline">\(D':\epsilon=-cE_c^{MP2}\)</span>. Their sum is the desired correction. The factor of two in the pair part is therefore necessary, not a duplicate energy contribution. The amplitude derivatives of these two parts cancel; neither part is separately stationary. This is a useful teaching example of why matching the value of an energy at one geometry is weaker than matching the functional whose derivative is taken.</p>
+<h4 id="the-ks-z-vector-which-response-operator">The KS Z-Vector: Which Response Operator?</h4>
+<p>Let <span class="math-inline">\(f_{xc}[Q]\)</span> denote the fixed-geometry derivative of the XC potential in density direction <span class="math-inline">\(Q\)</span>. Two related operators enter the implementation:</p>
+<p><span class="math-display">\[
+\mathscr K[Q]=J[Q]-\frac{a_x}{2}K[Q]+f_{xc}[Q],
+\]</span></p>
+<p><span class="math-display">\[
+R(Q)=4J[Q]-a_x\{K[Q]+K[Q]^T\}+4f_{xc}[Q].
+\]</span></p>
+<p>The first is the physical Fock response. The second is Eq. 41&#x27;s closed-shell adjoint response; for symmetric <span class="math-inline">\(Q\)</span>, <span class="math-inline">\(R(Q)=4\mathscr K[Q]\)</span>. Planck&#x27;s callbacks return unscaled J, K, and XC responses. The Eq. 41 wrapper owns the factors of four. In particular, the analytic XC Hessian-vector callback must not apply that factor a second time.</p>
+<p>The amplitude part of Eq. 40 is easiest to understand by differentiating all four coefficients in <span class="math-inline">\(\mathcal H_{\mathrm{pair}}\)</span>. At fixed AO integrals and fixed <span class="math-inline">\(\Theta\)</span>, write <span class="math-inline">\(\delta C=CU\)</span> and define</p>
+<p><span class="math-display">\[
+\delta\mathcal H_{\mathrm{pair}}=\sum_{pq}G_{pq}U_{pq},
+\]</span></p>
+<p><span class="math-display">\[
+G_{pq}=\sum_{klab}\Theta_{kl}^{ab}\left[
+\delta_{qk}(pa|lb)+\delta_{qa}(kp|lb)
++\delta_{ql}(ka|pb)+\delta_{qb}(ka|lp)\right].
+\]</span></p>
+<p>Virtual labels in the Kronecker deltas mean their full MO columns. A real occupied–virtual rotation has <span class="math-inline">\(U_{ai}=X_{ai}\)</span>, <span class="math-inline">\(U_{ia}=-X_{ai}\)</span>, so</p>
+<p><span class="math-display">\[
+L_{ai}=[C_v^TR(CD'C^T)C_o]_{ai}+G_{ai}-G_{ia}.
+\]</span></p>
+<p>This literal four-coefficient derivative is the production convention. It already contains both occupied-coefficient contributions; adding the old separately named “internal” amplitude bracket would count a contribution twice.</p>
+<p>For an arbitrary trial rotation <span class="math-inline">\(X\)</span>, the orbital Hessian acts as</p>
+<p><span class="math-display">\[
+\delta P_X=2(C_vXC_o^T+C_oX^TC_v^T),
+\qquad
+(AX)_{ai}=(\epsilon_a-\epsilon_i)X_{ai}
++[C_v^T\mathscr K[\delta P_X]C_o]_{ai}.
+\]</span></p>
+<p>Planck solves <strong><span class="math-inline">\(AZ=-L\)</span></strong> in this DH convention. This sign belongs to the definition of <span class="math-inline">\(L\)</span> above; it is not inferred from the generic MP2 Z-vector notation earlier in this section. For any direction <span class="math-inline">\(X\)</span>, the stationary pairing is <span class="math-inline">\(L:X+Z:AX=0\)</span>. The production solve (<code>solve_dh_zvector</code>, <code>src/dft/dh_zvector.h</code>) is <strong>matrix-free</strong>: restarted GMRES calls the action <span class="math-inline">\(AX\)</span> above directly, preconditioned by the orbital-energy gaps <span class="math-inline">\(\epsilon_a-\epsilon_i\)</span>. It never forms a column of <span class="math-inline">\(A\)</span>, and if GMRES fails to converge the run fails rather than silently switching to a dense solve. A dense reference solve exists, built from the <em>same</em> action applied to unit directions, but only for the comparisons that validated the matrix-free path. After the solve, the gradient contract re-applies <span class="math-inline">\(A\)</span> to <span class="math-inline">\(Z\)</span> and rejects a residual above <span class="math-inline">\(10^{-9}\)</span>. A small residual verifies the solve; independent directional derivatives are still needed to verify the RHS and Hessian themselves.</p>
+<h4 id="relaxed-density-and-the-overlap-blocks">Relaxed Density and the Overlap Blocks</h4>
+<p>Eq. 28 first places Z in a <em>raw vo block</em>. The adapter used for symmetric AO operators is</p>
+<p><span class="math-display">\[
+D_{\mathrm{raw}}=\begin{pmatrix}D'_{oo}&0\\Z&D'_{vv}\end{pmatrix},\qquad
+D_s=\begin{pmatrix}D'_{oo}&Z^T/2\\Z/2&D'_{vv}\end{pmatrix},\qquad
+D_{\mathrm{AO}}=CD_sC^T.
+\]</span></p>
+<p>For symmetric <span class="math-inline">\(M\)</span>, <span class="math-inline">\(D_{\mathrm{raw}}:M=D_s:M\)</span>. Putting a full Z in both off-diagonal blocks doubles its operator contraction. Notice also that this relaxed correction density is not the trial density <span class="math-inline">\(\delta P_X\)</span> used in the Hessian: those objects serve different derivatives.</p>
+<p>The overlap term needs a second adapter. Write <span class="math-inline">\(s^x=C^TS^xC\)</span>. The paper&#x27;s metric connection assigns <span class="math-inline">\(U_{oo}=-s_{oo}^x/2\)</span>, <span class="math-inline">\(U_{vv}=-s_{vv}^x/2\)</span>, <span class="math-inline">\(U_{ia}=-s_{ia}^x\)</span>, and <span class="math-inline">\(U_{ai}=0\)</span>. Inserting that connection into the same four-coefficient derivative gives</p>
+<p><span class="math-display">\[
+B_{ij}=-G_{ij}/2,\qquad B_{ab}=-G_{ab}/2,\qquad
+B_{ia}=-G_{ia},\qquad B_{ai}=0.
+\]</span></p>
+<p>The complete raw Eqs. 42–45 blocks are</p>
+<p><span class="math-display">\[
+\begin{aligned}
+W_{ij}&=-\tfrac12[C^TR(D_{\mathrm{AO}})C]_{ij}
+-\tfrac12D'_{ij}(\epsilon_i+\epsilon_j)+B_{ij},\\
+W_{ab}&=-\tfrac12D'_{ab}(\epsilon_a+\epsilon_b)+B_{ab},\\
+W_{ia}&=B_{ia},\qquad W_{ai}=-\epsilon_iZ_{ai}.
+\end{aligned}
+\]</span></p>
+<p>Only after assembling these differently oriented blocks does Planck form</p>
+<p><span class="math-display">\[
+W_s=\tfrac12(W_{\mathrm{raw}}+W_{\mathrm{raw}}^T),\qquad
+W_{\mathrm{AO}}=CW_sC^T,\qquad g_S^x=W_{\mathrm{AO}}:S^x.
+\]</span></p>
+<p>Here W already contains the negative metric signs. Unlike an unsigned energy-weighted density used with an explicit minus sign, it enters the final contraction with a <strong>plus</strong> sign. The test is contraction equivalence, <span class="math-inline">\(W_{\mathrm{raw}}:s^x=W_s:s^x\)</span>, not equality of the raw ov and vo blocks. One may choose a symmetric metric connection instead, but then the non-Z and Z contributions must both be transformed. Mixing those conventions can make two individually correct overlap expressions appear inconsistent.</p>
+<h4 id="two-electron-terms-separable-and-nonseparable">Two-Electron Terms: Separable and Nonseparable</h4>
+<p>In chemists&#x27; AO ordering, Eqs. 46–47 supply two correction tensors. In the following formulas D means <span class="math-inline">\(D_{\mathrm{AO}}\)</span>, while P remains the ground total density:</p>
+<p><span class="math-display">\[
+\Gamma^{\mathrm{sep}}_{\mu\nu\kappa\tau}
+=D_{\mu\nu}P_{\kappa\tau}
+-\frac{a_x}{2}D_{\mu\kappa}P_{\nu\tau},
+\]</span></p>
+<p><span class="math-display">\[
+\Gamma^{\mathrm{NS}}_{\mu\nu\kappa\tau}
+=\sum_{ijab}C_{\mu i}C_{\nu a}C_{\kappa j}C_{\tau b}\Theta_{ij}^{ab}.
+\]</span></p>
+<p>“Separable” means a product of two one-particle densities. Its contraction with an ERI tensor is <span class="math-inline">\(D:J[P]-a_xD:K[P]/2\)</span>, the two-electron partner of <span class="math-inline">\(D:F_{\mathrm{KS}}\)</span>. It therefore uses the hybrid exchange fraction, not full HF exchange. The nonseparable term instead carries the correlated <span class="math-inline">\((ia|jb)\)</span> pair structure and is not multiplied by <span class="math-inline">\(a_x\)</span>.</p>
+<p>These are correction-only tensors: the SCF reference pair density is excluded. The raw tensors are averaged over ERI permutation symmetries before contraction, preserving their pairing with symmetric derivative integrals. No additional global factor of one half belongs to this correction contraction.</p>
+<h4 id="xc-ii-fixed-matrices-do-not-mean-fixed-functions">XC-II: Fixed Matrices Do Not Mean Fixed Functions</h4>
+<p>The remaining explicit XC contribution differentiates the scalar</p>
+<p><span class="math-display">\[
+\Phi[P,D]=D:V_{xc}[P]\approx\sum_g w_g\ell_g,\qquad
+\ell=f_\rho\rho_D+2f_\sigma\nabla\rho_P\cdot\nabla\rho_D.
+\]</span></p>
+<p>Here <span class="math-inline">\(f(\rho,\sigma)\)</span> is the unpolarized XC energy density per volume, <span class="math-inline">\(\sigma=|\nabla\rho_P|^2\)</span>, and <span class="math-inline">\(\rho_Q(\mathbf r)=\sum_{\mu\nu}Q_{\mu\nu}\chi_\mu(\mathbf r)\chi_\nu(\mathbf r)\)</span>. The AO coefficient matrices P and D are held numerically fixed. Their basis functions still move with the nuclei, so both densities change on the grid.</p>
+<p>For a GGA, put <span class="math-inline">\(p=\nabla\rho_P\)</span>, <span class="math-inline">\(d=\nabla\rho_D\)</span>, and <span class="math-inline">\(s=p\cdot d\)</span>. The chain rule for any change in these density fields is</p>
+<p><span class="math-display">\[
+\begin{aligned}
+\delta\ell={}&\rho_D(f_{\rho\rho}\delta\rho_P
++2f_{\rho\sigma}p\cdot\delta p)
++2s(f_{\rho\sigma}\delta\rho_P
++2f_{\sigma\sigma}p\cdot\delta p)\\
+&+f_\rho\delta\rho_D
++2f_\sigma(\delta p\cdot d+p\cdot\delta d).
+\end{aligned}
+\]</span></p>
+<p>This organizes the complete XC-II nuclear derivative into four channels:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Channel</th>
+<th>What changes while P and D stay fixed?</th>
+</tr></thead>
+<tbody>
+<tr><td>P-side AO-center term</td><td>The reference density and its gradient inside the XC potential</td></tr>
+<tr><td>D-side AO-center term</td><td>The density and gradient against which that potential is contracted</td></tr>
+<tr><td>Becke partition term</td><td>The quadrature partition weight along the moving point&#x27;s path</td></tr>
+<tr><td>Owner-point translation term</td><td>The integrand sampled by a point attached to a moving atom</td></tr>
+</tbody></table></div>
+<p>For the first two channels, evaluate the chain rule at a fixed laboratory point using AO-center derivatives. For translation in direction q, use <span class="math-inline">\(\delta\rho_P=p_q\)</span>, <span class="math-inline">\(\delta p=H_P(:,q)\)</span>, <span class="math-inline">\(\delta\rho_D=d_q\)</span>, <span class="math-inline">\(\delta d=H_D(:,q)\)</span>, where H denotes a density Hessian. This is why the GGA point-motion term needs AO Hessians; first AO derivatives alone do not suffice. LDA follows by setting all sigma derivatives to zero.</p>
+<p>If point g belongs to atom B and <span class="math-inline">\(w_g=w_g^{atom}b_g\)</span>, the two moving-grid channels are</p>
+<p><span class="math-display">\[
+G_{\mathrm{Becke}}^{Aq}=\sum_g w_g^{atom}\dot b_g^{Aq}\ell_g,\qquad
+G_{\mathrm{point}}^{Aq}=\sum_g w_g\delta_{A,B(g)}\partial_q\ell_g.
+\]</span></p>
+<p>Planck&#x27;s <span class="math-inline">\(\dot b\)</span> already includes the partition&#x27;s spatial change along the moving point. Adding another spatial Becke derivative would count that motion twice. Conversely, omitting the D-side AO term differentiates only part of <span class="math-inline">\(D:V_{xc}[P]\)</span>. The complete result is <span class="math-inline">\(G_{\mathrm{XC-II}}=G_P+G_D+G_{\mathrm{Becke}}+G_{\mathrm{point}}\)</span>. No live matrix derivative <span class="math-inline">\(D^x:V_{xc}\)</span>, separate XC-I correction, or extra Z-multiplier derivative is appended: orbital and amplitude response have already been eliminated into the stationary objects.</p>
+<h4 id="final-assembly-and-code-map">Final Assembly and Code Map</h4>
+<p>All these pieces meet in the correction-only Eq. 33 contraction:</p>
+<p><span class="math-display">\[
+\boxed{\Delta g_{\mathrm{PT2}}^x
+=D_{\mathrm{AO}}:h^x+W_{\mathrm{AO}}:S^x
++\Gamma^{\mathrm{sep}}:V^x+\Gamma^{\mathrm{NS}}:V^x
++G_{\mathrm{XC-II}}^x.}
+\]</span></p>
+<p>Here <span class="math-inline">\(V^x\)</span> is the AO ERI derivative tensor, not the XC potential. The ordinary KS gradient already owns nuclear repulsion and every reference term. The correction already carries c through the scaled amplitudes and the resulting linear response solution; it is not multiplied by c again.</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Stage</th>
+<th>Implementation</th>
+</tr></thead>
+<tbody>
+<tr><td>KS orbitals and unscaled PT2 amplitudes</td><td><code>apply_post_ks_double_hybrid_correction</code> in <code>src/dft/driver.cpp</code>; <code>src/post_hf/mp2_rmp2.cpp</code></td></tr>
+<tr><td>Tilde amplitudes and D-prime</td><td><code>build_dh_pt2_amplitude_density</code> in <code>src/dft/dh_pt2_gradient.cpp</code></td></tr>
+<tr><td>KS response, literal RHS, Hessian</td><td><code>build_dh_eq41_response_density</code>, <code>build_dh_eq40_amplitude_rhs</code>, <code>build_dh_lagrangian_rhs</code>, <code>apply_dh_eq27_hessian</code> in the same file</td></tr>
+<tr><td>Relaxed D and raw/symmetric W</td><td><code>build_dh_relaxed_difference_density</code>, <code>build_dh_eq47_pair_metric_overlap_density</code>, <code>build_dh_overlap_density_adapter</code></td></tr>
+<tr><td>Two-electron correction tensors</td><td><code>build_dh_eq46_47_two_particle_density</code></td></tr>
+<tr><td>Complete XC geometry channels</td><td><code>DHEq33CompleteXCIIGradient</code>; XC response uses <code>src/dft/analytic_hessian.cpp</code>, with AO/grid derivative helpers in <code>src/dft/dft_gradient.cpp</code></td></tr>
+<tr><td>Checked assembly and final KS + PT2 sum</td><td><code>DHGradientDriverContract</code> in <code>src/dft/dh_pt2_gradient.h</code>; restricted gradient branch in <code>src/dft/driver.cpp</code></td></tr>
+</tbody></table></div>
+<p>All inputs must belong to the same converged geometry and MO ordering. The driver solves Z, binds direct h, S, and ERI derivative <em>contractions</em> (next subsection), and passes them into the typed contract. The contract independently checks the RHS and Z residual. The final KS and PT2 gradients are summed in a common frame and rotated once to the requested output frame. There is no <code>RMP2Lagrangian</code> full-minus-reference bridge. The one runtime switch, <code>PLANCK_DFT_DH_HESSIAN_PROBE_LOG</code>, is a diagnostic that swaps in the dense Z-vector reference to compare the two solves. It is not a production setting.</p>
+<h4 id="never-forming-the-four-index-objects">Never Forming the Four-Index Objects</h4>
+<p>Read literally, Eq. 33 suggests four large objects: the AO derivative integrals <span class="math-inline">\(V^x\)</span> for every nuclear coordinate (<span class="math-inline">\(3N_{atom}N_{AO}^4\)</span>), the AO pair density <span class="math-inline">\(\Gamma^{\mathrm{NS}}\)</span> (<span class="math-inline">\(N_{AO}^4\)</span>), the full MO ERI tensor for the RHS, and a dense <span class="math-inline">\((ov)\times(ov)\)</span> Hessian. The restricted production path forms none of them. Each one is only ever <em>contracted</em>, and a contraction can consume its operands piece by piece.</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Literal object</th>
+<th>What production does instead</th>
+</tr></thead>
+<tbody>
+<tr><td><span class="math-inline">\(h^x\)</span>, <span class="math-inline">\(S^x\)</span>, <span class="math-inline">\(V^x\)</span> per coordinate</td><td>Contracted as each derivative integral is computed (<code>contract_dh_eq33_one_electron_overlap_direct</code>, <code>contract_dh_eq33_two_electron_direct</code>)</td></tr>
+<tr><td><span class="math-inline">\(\Gamma^{\mathrm{sep}}\)</span></td><td>Never stored. It is a product of the matrices D and P with the scalar <span class="math-inline">\(a_x\)</span>, so its coefficient is evaluated on the fly during the ERI-derivative traversal</td></tr>
+<tr><td><span class="math-inline">\(\Gamma^{\mathrm{NS}}\)</span></td><td>Back-transformed in bounded AO blocks (<code>for_each_dh_eq47_nonseparable_raw_ao_block</code>), each consumed by the derivative contraction immediately</td></tr>
+<tr><td>Full MO ERI tensor</td><td>Only the five MO sectors the Eq. 40 RHS reads: <code>ovov</code>, <code>vvov</code>, <code>ooov</code>, <code>ovvv</code>, <code>ovoo</code> (<code>DHMolecularERIBlocks</code>)</td></tr>
+<tr><td>Canonical <span class="math-inline">\(t_{ij}^{ab}\)</span></td><td>A pair-packed, scratch-backed tile source (<code>RMP2T2TileSource</code>), with no resident amplitude array</td></tr>
+<tr><td>Orbital Hessian <span class="math-inline">\(A\)</span></td><td>Applied matrix-free inside GMRES (previous subsections)</td></tr>
+</tbody></table></div>
+<p>None of this is an approximation. A contraction <span class="math-inline">\(\sum_{\mu\nu\kappa\tau}
+\Gamma_{\mu\nu\kappa\tau}V^x_{\mu\nu\kappa\tau}\)</span> gives the same number whether <span class="math-inline">\(\Gamma\)</span> arrives whole or in blocks. Only the summation order changes, which is why the water and C1 H2O2 finite-difference gates were re-run after each step of the streaming work rather than relaxed. The blocked Eq. 47 producer is also checked tile-for-tile against the dense reference tensor on small AO dimensions.</p>
+<p>One <span class="math-inline">\(N_{AO}^4\)</span> object remains: the conventional AO ERI tensor from which the five MO sectors are transformed. Removing it, and the <span class="math-inline">\(O(o^2v^2)\)</span> amplitude scratch, is the separate RI-DH backend listed as future work in <code>docs/DH_IMPLEMENTATION.md</code>. That is a different energy expression with its own derivative, not a faster way to evaluate this one.</p>
+<h4 id="what-makes-a-convincing-gradient-test">What Makes a Convincing Gradient Test?</h4>
+<p>There are three complementary levels of evidence:</p>
+<ol>
+<li><strong>Algebraic invariants</strong> check amplitude permutations, trace-zero D-prime, scaling with c, raw-to-symmetric contraction equivalence, and isolated J, K, and XC factors.</li>
+<li><strong>Fixed-functional directional differences</strong> check a declared scalar or operator while explicitly holding amplitudes, coefficients, or AO matrices fixed as appropriate. Amplitude-response and orbital-response cancellation must be tested in the same functional and coordinate convention.</li>
+<li><strong>Molecular total-energy differences</strong> rerun SCF and PT2 at every displaced geometry, then compare <span class="math-inline">\([E(R+h)-E(R-h)]/(2h)\)</span> with the assembled analytic derivative for every coordinate.</li>
+</ol>
+<p>Individually differentiating live D, W, and Gamma objects and adding their responses to Eq. 33 is not the third test: those responses have already been eliminated by stationarity. Similarly, copying amplitudes into independently optimized endpoint orbitals does not hold the same tensor fixed when the occupied and virtual subspaces rotate.</p>
+<p>Planck&#x27;s production B2PLYP/STO-3G checks use Cartesian AOs, ultrafine quadrature, and disabled symmetry. All coordinates pass a <span class="math-inline">\(5\times10^{-8}\)</span> Ha/Bohr tolerance at both central-difference steps:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Molecule</th>
+<th>Coordinates</th>
+<th>Max error at <span class="math-inline">\(h=10^{-4}\)</span> Bohr</th>
+<th>Max error at <span class="math-inline">\(h=2\times10^{-4}\)</span> Bohr</th>
+</tr></thead>
+<tbody>
+<tr><td>Water</td><td>9</td><td><span class="math-inline">\(1.45\times10^{-8}\)</span> Ha/Bohr</td><td><span class="math-inline">\(1.70\times10^{-8}\)</span> Ha/Bohr</td></tr>
+<tr><td>Nonplanar C1 H2O2</td><td>12</td><td><span class="math-inline">\(9.03\times10^{-9}\)</span> Ha/Bohr</td><td><span class="math-inline">\(1.34\times10^{-8}\)</span> Ha/Bohr</td></tr>
+</tbody></table></div>
+<p>The nonsymmetric molecule matters: symmetry can hide off-diagonal orientation or cancellation errors. The normal-output audit is <code>tests/dh_cartesian_fd_audit.py</code>; its energy differences use full-precision JSON results, not rounded printed energies. This validation compares Planck&#x27;s gradient with Planck&#x27;s energy, not an external DH analytic-gradient routine.</p>
+<p><strong>Current scope.</strong> Production supports restricted global-DH Cartesian gradient requests with LDA/GGA XC-II. These small-system tests do not establish every functional, basis, or near-degenerate case. Geometry optimization and semi-numerical frequencies now share the full RKS DH gradient callback; their repeated-geometry acceptance tests pass for water and nonsymmetric H2O2 at B2PLYP/STO-3G. Displaced SCF calculations retain the user&#x27;s requested iteration limit. Frequencies are central differences of analytic gradients, not an analytic DH Hessian. Range-separated DH gradients, solvent response, DH response workflows, and general meta-GGA, frozen-core, RI, or independently spin-scaled DH gradient extensions are not covered.</p>
+<h4 id="the-unrestricted-extension">The Unrestricted Extension</h4>
+<p>The UKS double-hybrid gradient (<code>src/dft/udh_<em>.cpp</code>, driven by <code>build_udh_gradient_correction</code>) differentiates the same stationary functional. Every object above reappears per spin. What changes is which factors survive, and that makes it a good exercise in reading the restricted formulas critically: each factor of 2 or 4 above encoded </em>closed-shell pairing*, not the physics.</p>
+<p><strong>Densities are physical per-spin matrices.</strong> Instead of <span class="math-inline">\(P=2C_oC_o^T\)</span>, each spin has <span class="math-inline">\(P^\sigma=C^\sigma_oC^{\sigma T}_o\)</span> with its own coefficients, and the spin Fock operator is</p>
+<p><span class="math-display">\[
+F^\sigma=h+J[P^\alpha+P^\beta]-a_xK[P^\sigma]+V_{xc}^\sigma[P^\alpha,P^\beta].
+\]</span></p>
+<p>The exchange prefactor is <span class="math-inline">\(a_x\)</span>, not <span class="math-inline">\(a_x/2\)</span>: the half in the restricted operator only compensated for <span class="math-inline">\(K\)</span> acting on a doubly occupied density. Raw spin MO matrices must be transformed to the AO basis <em>before</em> they are summed. Alpha and beta have different MO frames, so adding them in the MO basis is meaningless.</p>
+<p><strong>Three amplitude blocks.</strong> The UMP2 amplitudes split into <span class="math-inline">\(t^{\alpha\alpha}\)</span>, <span class="math-inline">\(t^{\alpha\beta}\)</span>, and <span class="math-inline">\(t^{\beta\beta}\)</span>. The same-spin blocks are antisymmetric in both index pairs; the opposite-spin block has no symmetry. With direct (not antisymmetrized) integrals <span class="math-inline">\(g\)</span>, the stationary functional becomes</p>
+<p><span class="math-display">\[
+\mathcal H=c\,T^{\alpha\alpha}\!:g^{\alpha\alpha}
++2c\,T^{\alpha\beta}\!:g^{\alpha\beta}
++c\,T^{\beta\beta}\!:g^{\beta\beta}
++\sum_\sigma D'^\sigma\!:F^\sigma_{\mathrm{MO}}.
+\]</span></p>
+<p>The same-spin weight is <span class="math-inline">\(c\)</span>, not <span class="math-inline">\(2c\)</span>, because antisymmetry already doubles the direct contraction: <span class="math-inline">\(T^{\alpha\alpha}\!:g^{\alpha\alpha}=
+2E^{\alpha\alpha}_c\)</span>. The restricted identities therefore survive block by block: the pair part is <span class="math-inline">\(2cE_c^{MP2}\)</span>, <span class="math-inline">\(\sum_\sigma
+D'^\sigma\!:\epsilon^\sigma=-cE_c^{MP2}\)</span>, and their sum is <span class="math-inline">\(cE_c^{MP2}\)</span>. <code>build_udh_pt2_stationary_contract</code> asserts all three for the converged amplitudes. In <span class="math-inline">\(D'\)</span>, same-spin products carry <span class="math-inline">\(\mp\tfrac12c\)</span> on the <span class="math-inline">\(oo\)</span>/<span class="math-inline">\(vv\)</span> blocks, while each opposite-spin product contributes <span class="math-inline">\(\mp c\)</span> to <em>both</em> spins&#x27; densities, since one <span class="math-inline">\(\alpha\beta\)</span> pair moves one electron of each spin.</p>
+<p><strong>The response couples the spins only through Coulomb and the XC kernel.</strong> For a trial rotation <span class="math-inline">\(X^\sigma\)</span>, define <span class="math-inline">\(\delta P^\sigma=C^\sigma_vX^\sigma C^{\sigma T}_o+\text{h.c.}\)</span>. There is no factor of 2 here, unlike the restricted <span class="math-inline">\(\delta P_X\)</span>. The spin Fock response is</p>
+<p><span class="math-display">\[
+\delta F^\sigma=J[\delta P^\alpha+\delta P^\beta]-a_xK[\delta P^\sigma]
++f_{xc}^{\sigma\alpha}\delta P^\alpha+f_{xc}^{\sigma\beta}\delta P^\beta,
+\]</span></p>
+<p>and <span class="math-inline">\((AX)^\sigma_{ai}=(\epsilon^\sigma_a-\epsilon^\sigma_i)X^\sigma_{ai}
++[C^{\sigma T}_v\delta F^\sigma C^\sigma_o]_{ai}\)</span>. Exact exchange never mixes spins, so all <span class="math-inline">\(\alpha\)</span>–<span class="math-inline">\(\beta\)</span> coupling comes from <span class="math-inline">\(J\)</span> and the cross-spin kernel <span class="math-inline">\(f_{xc}^{\alpha\beta}\)</span>. The XC part is the same analytic polarized Hessian-vector product that UKS SOSCF uses (<code>compute_analytic_xc_hessian_vector_product_polarized</code>).</p>
+<p><strong>The Z-vector system is joint and checked rather than assumed.</strong> The unknowns are packed alpha block first, then beta, in one linear system <span class="math-inline">\(A^Tz=-\ell\)</span>. The UKS solver (<code>solve_udh_zvector</code>) builds <span class="math-inline">\(A\)</span> column by column from that action. It then verifies that <span class="math-inline">\(A\)</span> is symmetric to <span class="math-inline">\(10^{-10}\)</span> relative, rejects it if the reciprocal condition number falls below <span class="math-inline">\(10^{-12}\)</span>, solves by column-pivoted QR, and re-evaluates the residual. It does not assume positive definiteness or add a shift, so an ill-conditioned response is reported as an error instead of returning a plausible but wrong <span class="math-inline">\(z\)</span>. At the sizes this path is qualified for, the dense checks are cheap. The driver rejects a Z residual above <span class="math-inline">\(10^{-10}\)</span>, scaled by the RHS size.</p>
+<p><strong>Relaxed density, W, and the pair density follow the restricted pattern per spin.</strong> The relaxed density puts <span class="math-inline">\(D'^\sigma\)</span> in the <span class="math-inline">\(oo\)</span>/<span class="math-inline">\(vv\)</span> blocks and <span class="math-inline">\(z^\sigma\)</span> in <span class="math-inline">\(vo\)</span> (<code>build_udh_relaxed_difference_density</code>). The energy-weighted overlap density uses each spin&#x27;s own Fock and response (<code>build_udh_overlap_density</code>). The separable pair term becomes <span class="math-inline">\(D\,P-a_x\sum_\sigma D^\sigma_{\mu\kappa}P^\sigma_{\nu\tau}\)</span>, with total <span class="math-inline">\(D\)</span> and <span class="math-inline">\(P\)</span> in the Coulomb part and same-spin products in the exchange part. The nonseparable term back-transforms the three amplitude blocks with weights <span class="math-inline">\(c,2c,c\)</span> (<code>build_udh_two_particle_density</code>). XC-II differentiates <span class="math-inline">\(\sum_g w_g\sum_\sigma v_{xc}^\sigma(P)\rho_{D^\sigma}\)</span>. For a GGA, the variables are <span class="math-inline">\((\rho_\alpha,\rho_\beta,\sigma_{\alpha\alpha},
+\sigma_{\alpha\beta},\sigma_{\beta\beta})\)</span>. The cross invariant <span class="math-inline">\(\sigma_{\alpha\beta}=\nabla\rho_\alpha\cdot\nabla\rho_\beta\)</span> appears once in the functional, but its density-direction partner is <span class="math-inline">\(\nabla\rho_\alpha\cdot\nabla\rho_{D^\beta}+\nabla\rho_\beta\cdot\nabla\rho_{D^\alpha}\)</span>, and differentiating that produces four chain-rule terms rather than two. That term is the easiest one in the unrestricted XC-II to drop.</p>
+<p><strong>It is a dense implementation.</strong> The memory work of the previous subsection has not been carried over. The UKS path transforms the full <span class="math-inline">\(\alpha\alpha\)</span>, <span class="math-inline">\(\alpha\beta\)</span>, and <span class="math-inline">\(\beta\beta\)</span> MO ERI tensors, builds the Jacobian densely, and stores the AO pair density at <span class="math-inline">\(N_{AO}^4\)</span>. That is acceptable for the small molecules it is qualified on, and it is the reason its scope is narrow.</p>
+<p><strong>Why one grid is pinned.</strong> An analytic gradient includes the motion of the quadrature itself (the Becke and owner-point channels of XC-II). It can only be as good as the grid&#x27;s behaviour under displacement and rotation. On Planck&#x27;s default pruned grid, the UKS DH gradient was not <em>covariant</em>: rotating the molecule changed the computed forces beyond a rigid rotation. The worst errors were <span class="math-inline">\(2.2\times10^{-5}\)</span> Ha/Bohr on C1 H2O2<span class="math-inline">\(^+\)</span> and <span class="math-inline">\(6.9\times10^{-6}\)</span> on HO2, against a <span class="math-inline">\(2\times10^{-6}\)</span> covariance limit. The qualified <code>g4-3-v4</code> pruning policy, at 135 radial shells, brings the same cases to <span class="math-inline">\(1.1\times10^{-7}\)</span> and <span class="math-inline">\(9.3\times10^{-8}\)</span>. The policy was selected on fixed-density XC energy, potential, and kernel contractions, and then passed a blind suite frozen before its first run (<code>docs/DFT_GRID_CONVERGENCE_SCOPE.md</code>). The driver therefore refuses a UKS DH gradient on any other grid (<code>validate_qualified_uks_dh_grid</code>): a displaced or user-overridden grid would silently leave the qualified regime. The lesson generalizes. Once a method differentiates its own quadrature, grid choice stops being a speed/accuracy dial and becomes part of the method&#x27;s correctness contract.</p>
+<p><strong>Validation and scope.</strong> On V4, fourth-order total-energy finite differences agree on the three difficult open-shell B2PLYP/STO-3G cases (C1 H2O2<span class="math-inline">\(^+\)</span>, HO2, an asymmetric water cation) to at worst <span class="math-inline">\(2.7\times10^{-9}\)</span> Ha/Bohr, against the same <span class="math-inline">\(5\times10^{-8}\)</span> threshold the restricted path meets. Translation errors are below <span class="math-inline">\(6\times10^{-13}\)</span>. The acceptance suite also checks coefficient scaling, rotation, and the closed-shell reduction: a singlet run through the UKS path must reproduce the restricted gradient. Production accepts <code>calculation gradient</code> only, with conventional all-active UMP2 with stored T2 (no RI, frozen core, or PT2 level shift), no solvent, no range separation, and the pinned grid. UKS DH geometry optimization and frequencies are rejected. See <a href="DOUBLE_HYBRID_GRADIENTS.md">the double-hybrid gradient guide</a>.</p>
 <hr>
 <h2 id="16-coupled-cluster-in-planck">16. Coupled Cluster in Planck</h2>
 <p>Planck&#x27;s coupled-cluster support comes from <strong>two independent sources</strong>, and keeping them apart is the first thing to understand about this section:</p>
@@ -2097,7 +2359,7 @@ t^{ab}_{ij,\alpha\beta} =
 <li><code>determinant_space.*</code> contains the shared small-system backend used by <code>RCCSDT</code> (determinant path), <code>UCCSD</code>, and <code>UCCSDT</code></li>
 <li><code>tensor_backend.*</code> contains RCCSDT backend routing and the tensor iteration driver for systems beyond the determinant-space prototype limit</li>
 <li><code>tensor_backend_state.*</code> owns the tensor RCCSDT state-building helpers</li>
-<li><code>tensor_optimized.*</code> provides the optimized RCCSDT entry point that reuses the ccgen-generated warm-start path</li>
+<li><code>tensor_optimized.*</code> declares the <code>TensorOptimized</code> RCCSDT entry point; its body (<code>run_tensor_optimized_rccsdt</code>, in <code>tensor_backend.cpp</code>) sets the generated rank to 3 and hands off to <code>run_rccgen</code>, the arbitrary-order harness. The older warm-start route that ran generated triples inside the tensor solver converged to a wrong fixed point and has been removed</li>
 <li><code>solver_arbitrary.*</code> and the <code>generated_...</code> translation units support generated arbitrary-order restricted tensor kernels such as RCCSDTQ</li>
 </ul>
 <h3 id="rccsd">RCCSD</h3>
@@ -2317,7 +2579,7 @@ enum class RCCSDTBackend
     TensorOptimized       // the ccgen-GENERATED kernels, via the arbitrary-order harness
 };
 </code></pre>
-<p>In the current code path, <code>choose_rccsdt_backend</code> itself only returns <code>DeterminantPrototype</code> or <code>TensorProduction</code> based on system size. The <code>TensorOptimized</code> variant is selected only through the <code>PLANCK_RCCSDT_BACKEND=optimized</code> / <code>tensor_optimized</code> environment override in <code>run_rccsdt</code>.</p>
+<p>In a default build, <code>choose_rccsdt_backend</code> returns <code>DeterminantPrototype</code> (at most 12 spin orbitals and 1200 determinants) or <code>TensorProduction</code> based on system size. <code>TensorOptimized</code> is reached in two ways: through the <code>PLANCK_RCCSDT_BACKEND=optimized</code> / <code>tensor_optimized</code> environment override in <code>run_rccsdt</code>, or unconditionally in a build configured with <code>-DPLANCK_CC_DRESS_OPERATORS=ON</code>. Dressing rewrites only the generated kernel, so that build always routes there rather than reporting numbers from hand-written code the flag never touched.</p>
 <p><strong><code>TensorOptimized</code> is not a developer scratch path</strong> — it routes the ccgen-generated rank-3 kernels through the arbitrary-order harness (the representation they are emitted for), and it is gated end to end by <code>lih_rccsdt_generated_sto3g</code> and <code>ch4_rccsdt_generated_sto3g</code>, matching the hand-written path to all ten digits. It is opt-in because it needs <code>-DPLANCK_CC_ARBITRARY_LOWER_RANKS=ON</code> at build time, not because it is experimental.</p>
 <p><strong>One routing constraint that costs people time:</strong> <code>choose_determinant_backstop</code> sends any case with <code>nso &lt;= 16</code> <strong>and</strong> <code>ndet &lt;= 10000</code> to the determinant prototype, which never calls a tensor kernel at all. A small system therefore produces <em>no tensor timing whatsoever</em>, silently, regardless of <code>PLANCK_RCCSDT_BACKEND</code>. Any benchmark of the tensor or generated paths needs <code>nso &gt; 16 || ndet &gt; 10000</code> — this is why CH4/STO-3G, not water, is the rank-3 benchmark case. Note the backstop binds the <strong>hand-written</strong> path only; the generated route reaches its kernels through <code>rccgen.cpp</code> and never consults it.</p>
 <p>If the backend is <code>TensorProduction</code>, <code>run_rccsdt</code> delegates to <code>run_tensor_rccsdt</code> in <code>tensor_backend.*</code>. If the override selects <code>TensorOptimized</code>, it delegates to <code>run_tensor_optimized_rccsdt</code>. Otherwise it falls through to the determinant-space prototype described below.</p>
@@ -2327,7 +2589,7 @@ enum class RCCSDTBackend
 <li><strong>Restricted tensor RCCSDT solve</strong> — rewrites the larger-system branch in restricted spatial-orbital form and follows the standard dressed-intermediate layout for restricted CCSDT.</li>
 <li><strong>Determinant backstop for moderate cases</strong> — a second size check runs via <code>choose_determinant_backstop</code> (current limits: nso ≤ 16, <code>C(nso, nelec)</code> ≤ 10000). If the system fits, <code>solve_determinant_cc</code> is called with <code>max_rank=3</code> and warm-started from the tensor amplitudes above. This gives a hybrid path for medium teaching-sized systems while still keeping a pure tensor path available for larger systems beyond the determinant limit.</li>
 </ol>
-<p>Water/STO-3G (nso=14, ndet=C(14,10)=1001) illustrates this: it exceeds the routing threshold (nso=14 &gt; 12) so <code>choose_rccsdt_backend</code> selects <code>TensorProduction</code>, but it fits the backstop window (14 ≤ 16, 1001 ≤ 10000), so the final convergence can be cross-checked through the determinant solver, warm-started from the tensor stages. <code>BH3/STO-3G</code>, on the other hand, is the smallest current regression that lies beyond the determinant backstop and must therefore converge on the pure restricted tensor <code>RCCSDT</code> path.</p>
+<p>Water/STO-3G (nso=14, ndet=C(14,10)=1001) illustrates this: it exceeds the routing threshold (nso=14 &gt; 12) so <code>choose_rccsdt_backend</code> selects <code>TensorProduction</code>, but it fits the backstop window (14 ≤ 16, 1001 ≤ 10000), so the final convergence can be cross-checked through the determinant solver, warm-started from the tensor stages. <code>BH3/STO-3G</code> (nso=16, ndet=12870) is the smallest teaching input that lies beyond the determinant backstop and must therefore converge on the pure restricted tensor <code>RCCSDT</code> path. Among the registered regression cases, <code>ch4_rccsdt_sto3g</code> (nso=18, ndet=43758) is the one that does.</p>
 <h3 id="rccsdt-equations">RCCSDT Equations</h3>
 <p>For triples, the cluster operator is extended to</p>
 <p><span class="math-display">\[
@@ -2543,15 +2805,16 @@ exp(-T) H exp(T) |Phi0&gt;
 \]</span></p>
 <p>Students can inspect the Planck output to confirm that the unrestricted triples path lowers the correlation energy relative to UCCSD, and that both alpha and beta spin channels contribute to the triples amplitude tensor.</p>
 <h3 id="the-tensor-only-benchmark-bh3-sto-3g">The Tensor-Only Benchmark: BH3/STO-3G</h3>
-<p><code>BH3/STO-3G</code> is qualitatively different from the two cases above. Boron trihydride in STO-3G has 8 electrons and 7 spatial orbitals (14 spin orbitals). That system size puts it beyond both the determinant-space prototype limit (capped at 12 spin orbitals) and the determinant backstop window used by the tensor backend. It can only be solved by the pure restricted tensor <code>RCCSDT</code> path, with no determinant cross-check available.</p>
-<p>This makes it the first test that exercises the tensor machinery end-to-end without a fallback. The molecule is planar with <span class="math-inline">\(D_{3h}\)</span> symmetry, which constrains the molecular orbitals into irreducible representations of that point group. In STO-3G the occupied space consists of three bonding orbitals (one B–H bond per hydrogen arm) plus the boron 1s core, and the virtual space is dominated by the empty boron <span class="math-inline">\(2p_z\)</span> perpendicular to the molecular plane.</p>
+<p><code>BH3/STO-3G</code> is qualitatively different from the two cases above. Boron trihydride in STO-3G has 8 electrons and 8 spatial orbitals (16 spin orbitals: B contributes 1s, 2s and three 2p functions, each H one 1s), so <span class="math-inline">\(o = 4\)</span>, <span class="math-inline">\(v = 4\)</span>. That puts it beyond the determinant-space prototype limit (12 spin orbitals, 1200 determinants) and beyond the backstop window (<span class="math-inline">\(C(16,8) = 12870 > 10000\)</span>), even though it sits exactly at the backstop&#x27;s 16-spin-orbital cap. It can only be solved by the pure restricted tensor <code>RCCSDT</code> path, with no determinant cross-check available.</p>
+<p>The input lives at <code>tests/inputs/regression/post_hf/bh3_rccsdt_sto3g.hfinp</code> but is <strong>not</strong> a registered regression case; <code>ch4_rccsdt_sto3g</code> is the case that gates the hand-written tensor path. BH3 remains the best <em>teaching</em> input because it runs in about 0.1 s.</p>
+<p>This makes it the smallest input that exercises the tensor machinery end-to-end without a fallback. The molecule is planar with <span class="math-inline">\(D_{3h}\)</span> symmetry, which constrains the molecular orbitals into irreducible representations of that point group. In STO-3G the occupied space consists of three bonding orbitals (one B–H bond per hydrogen arm) plus the boron 1s core, and the virtual space is dominated by the empty boron <span class="math-inline">\(2p_z\)</span> perpendicular to the molecular plane.</p>
 <p>BH3 is also significant from a correlation standpoint. The boron atom has an incomplete valence shell, and in the planar geometry all three B–H bonds involve the same central atom at roughly the same bond length. The T2 amplitudes are therefore not dominated by a single large pair but spread more evenly across the occupied-virtual pairs, making this a moderately multi-configurational system where triples corrections are non-negligible.</p>
-<p>The expected triples correction is larger than in <code>LiH/STO-3G</code>:</p>
+<p>The triples correction is much larger than in <code>LiH/STO-3G</code>:</p>
 <p><span class="math-display">\[
 \Delta E_T = E_{\mathrm{RCCSDT}} - E_{\mathrm{RCCSD}}
-\approx -10^{-4}\;\mathrm{Hartree},
+= -0.0533629 - (-0.0529972) \approx -3.7\times10^{-4}\;\mathrm{Hartree},
 \]</span></p>
-<p>about an order of magnitude larger, reflecting the richer correlation structure relative to the two-electron LiH case.</p>
+<p>about 35 times LiH&#x27;s <span class="math-inline">\(-1.0\times10^{-5}\)</span>, reflecting the richer correlation structure relative to LiH&#x27;s single correlated valence pair. The hand-written tensor path and the generated route (<code>PLANCK_RCCSDT_BACKEND=optimized</code>) agree on <span class="math-inline">\(E_{\mathrm{corr}}\)</span> to <span class="math-inline">\(10^{-9}\)</span>.</p>
 <p>From a pedagogical standpoint, <code>BH3/STO-3G</code> illustrates three things that the smaller systems cannot:</p>
 <ol>
 <li><strong>Pure tensor path</strong>: the calculation must use the staged tensor pipeline — T1-dressing, restricted dressed intermediates, and the full spin-summation restoration — with no determinant solver as a safety net. Any error in the restricted CCSDT algebra shows up directly in the energy.</li>
@@ -2560,8 +2823,7 @@ exp(-T) H exp(T) |Phi0&gt;
 <li><strong>Symmetry in the MO basis</strong>: the <span class="math-inline">\(D_{3h}\)</span> symmetry of BH3 causes several MO pairs to be exactly degenerate, which means the triples residual has exact zeros for certain index combinations that would be non-zero in a lower-symmetry system. The code must handle these without division-by-zero in the denominator update.</li>
 </ol>
 <ol>
-<li><strong>Scaling crossover</strong>: with <span class="math-inline">\(o = 4\)</span> occupied and <span class="math-inline">\(v = 10\)</span> virtual spatial orbitals, the triples amplitude tensor has <span class="math-inline">\(o^3 v^3 / \text{symmetry} \sim
-   4000\)</span> independent elements. This is small enough to store densely but large enough that the <span class="math-inline">\(O(o^3 v^4)\)</span> and <span class="math-inline">\(O(o^4 v^3)\)</span> contractions in R3 are non-trivial, making it a useful check that the contraction order and intermediate reuse in <code>tensor_backend.cpp</code> are correct.</li>
+<li><strong>Scaling crossover</strong>: with <span class="math-inline">\(o = 4\)</span> occupied and <span class="math-inline">\(v = 4\)</span> virtual spatial orbitals, the dense triples amplitude tensor has <span class="math-inline">\(o^3 v^3 = 4096\)</span> elements. This is small enough to store densely but large enough that the <span class="math-inline">\(O(o^3 v^4)\)</span> and <span class="math-inline">\(O(o^4 v^3)\)</span> contractions in R3 are non-trivial, making it a useful check that the contraction order and intermediate reuse in <code>tensor_backend.cpp</code> are correct.</li>
 </ol>
 <hr>
 <h2 id="17-full-configuration-interaction-fci">17. Full Configuration Interaction (FCI)</h2>
@@ -3065,7 +3327,7 @@ R_{ij} = |\mathbf r_i - \mathbf r_j|,
 <p>Torsion residuals are wrapped into <span class="math-inline">\([-\pi, \pi]\)</span> so that crossing the branch cut does not appear as a spurious large displacement. Large IC steps that fall outside the linear regime can fail to converge in microiterations; the standard remedy is a smaller trust radius on <span class="math-inline">\(\Delta\mathbf q\)</span> supplied by the outer optimizer.</p>
 <h3 id="planck-specific-note-generalized-internal-coordinates-for-optimization">Planck-Specific Note: Generalized Internal Coordinates for Optimization</h3>
 <p>Planck uses <strong>redundant primitive internal coordinates</strong> with a Moore–Penrose pseudoinverse, not <em>delocalized</em> internal coordinates. There is no SVD or eigendecomposition of <span class="math-inline">\(\mathbf G = \mathbf B\mathbf B^T\)</span> into a non-redundant basis of <span class="math-inline">\(3N - 6\)</span> eigenvector-combined coordinates (the Baker / Bakken–Helgaker &quot;delocalized internals&quot; construction). Redundancy is handled directly at the gradient-transformation step.</p>
-<p>The coordinate system is built once at the start of <code>run_geomopt_ic</code> (<code>src/opt/geomopt.cpp:506-507</code>) by <code>IntCoordSystem::build</code> (<code>src/opt/intcoords.cpp:267-345</code>), which:</p>
+<p>The coordinate system is built once at the start of <code>run_geomopt_ic</code> (<code>src/opt/geomopt.cpp:519</code>) by <code>IntCoordSystem::build</code> (<code>src/opt/intcoords.cpp:267-345</code>), which:</p>
 <ol>
 <li><strong>Detects bonds</strong> by a covalent-radius criterion. A pair <span class="math-inline">\((i, j)\)</span> is bonded if <span class="math-inline">\(|\mathbf r_i - \mathbf r_j| < 1.3\,(r_{\text{cov}}(Z_i) +
    r_{\text{cov}}(Z_j))\)</span>. Covalent radii come from Alvarez (2008), hard-coded for <span class="math-inline">\(Z \in [1, 36]\)</span> with a 1.5 Å fallback above Kr (<code>covalent_radius_ang</code>, <code>src/opt/intcoords.cpp:13-58</code>).</li>
@@ -3074,8 +3336,8 @@ R_{ij} = |\mathbf r_i - \mathbf r_j|,
 <li><strong>Adds every proper torsion</strong> A–B–C–D about each bond B–C, with A bonded to B, D bonded to C, and both intermediate bends in <span class="math-inline">\([5°, 175°]\)</span>.</li>
 </ol>
 <p>No out-of-plane bends, no lattice/cell coordinates, no auxiliary &quot;fragment connection&quot; bonds for disconnected systems. The result is typically larger than <span class="math-inline">\(3N - 6\)</span>; the pseudoinverse handles the redundancy.</p>
-<p>The optimizer then maintains a BFGS Hessian directly in this redundant IC space, so neither the Cartesian→internal nor the internal→Cartesian Hessian transformation from §&quot;Wilson&#x27;s B-Matrix&quot; is computed explicitly. Geometry constraints (<code>%begin_geomopt</code> Bond/Angle/Torsion constraints and frozen atoms) are added through <code>IntCoordSystem::add_coord</code> (which deduplicates against forward and reverse atom orderings), then enforced by zeroing the constrained IC components of the gradient before the BFGS step (<code>src/opt/geomopt.cpp:532-595</code>).</p>
-<p>If the connectivity scan returns zero primitives — for example, a single atom or an unbonded fragment pair too far apart for the covalent-radius cutoff — the driver logs a warning and falls back to the Cartesian L-BFGS optimizer (<code>src/opt/geomopt.cpp:510-515</code>).</p>
+<p>The optimizer then maintains a BFGS Hessian directly in this redundant IC space, so neither the Cartesian→internal nor the internal→Cartesian Hessian transformation from §&quot;Wilson&#x27;s B-Matrix&quot; is computed explicitly. Geometry constraints (<code>%begin_geomopt</code> Bond/Angle/Torsion constraints and frozen atoms) are added through <code>IntCoordSystem::add_coord</code> (which deduplicates against forward and reverse atom orderings), then enforced by zeroing the constrained IC components of the gradient before the BFGS step (<code>src/opt/geomopt.cpp:545-596</code>).</p>
+<p>If the connectivity scan returns zero primitives — for example, a single atom or an unbonded fragment pair too far apart for the covalent-radius cutoff — the driver logs a warning and falls back to the Cartesian L-BFGS optimizer (<code>src/opt/geomopt.cpp:523-528</code>).</p>
 <p><strong>Code map for the IC machinery.</strong></p>
 <div class="table-wrap"><table>
 <thead><tr>
@@ -3204,7 +3466,7 @@ K^{xc}_{exact} = \alpha K^{full} + \beta K^{SR}(\omega).
 <p><span class="math-display">\[
 E^{DH} = E^{KS-hyb} + c_{PT2} E^{(2)}.
 \]</span></p>
-<p>In a double hybrid, the converged KS reference is followed by an RHF/UHF-based MP2-like correction scaled by the functional&#x27;s PT2 coefficient. For B2PLYP, for example, one commonly uses <span class="math-inline">\(a_x = 0.53\)</span> and <span class="math-inline">\(c_{PT2} = 0.27\)</span>.</p>
+<p>In a double hybrid, the converged KS orbitals and orbital energies are passed to the restricted/unrestricted MP2 correlation kernel; no additional HF SCF is performed. Only the correlation energy is scaled. For B2PLYP, <span class="math-inline">\(a_x = 0.53\)</span> and <span class="math-inline">\(c_{PT2} = 0.27\)</span>, while the semilocal SCF mixture is <span class="math-inline">\(0.47E_x^{B88}+0.73E_c^{LYP}\)</span>. The restricted analytic derivative, including KS orbital relaxation and moving-grid XC response, is developed in <a href="#double-hybrid-analytic-gradients">Section 15</a>.</p>
 <h3 id="numerical-integration-molecular-grid">Numerical Integration: Molecular Grid</h3>
 <p>Because <span class="math-inline">\(V^{xc}_{\mu\nu}\)</span> has no analytic closed form, it is evaluated numerically:</p>
 <p><span class="math-display">\[
@@ -3267,7 +3529,7 @@ V^{xc}_{\mu\nu} = \sum_g w_g\, v_{\rho,g}\, \phi_\mu(\mathbf r_g)\, \phi_\nu(\ma
 <li>At each iteration: a. Build the Coulomb matrix <span class="math-inline">\(J[P]\)</span> using the standard ERI or direct path b. Evaluate the density <span class="math-inline">\(\rho\)</span> and gradient <span class="math-inline">\(\nabla\rho\)</span> on the molecular grid c. Call libxc to get <span class="math-inline">\(\varepsilon_{xc}\)</span>, <span class="math-inline">\(v_\rho\)</span>, <span class="math-inline">\(v_\sigma\)</span> on the grid d. Assemble <span class="math-inline">\(V^{xc}_{\mu\nu}\)</span> by numerical quadrature e. Form the KS Fock matrix <span class="math-inline">\(F^{KS} = h + J + V^{xc}\)</span> f. Solve the KS secular equation, update <span class="math-inline">\(P\)</span>, check convergence</li>
 </ol>
 <p>For RKS the alpha and beta XC contributions are identical; for UKS they differ because <span class="math-inline">\(\rho_\alpha \neq \rho_\beta\)</span>.</p>
-<p>Step 2f can optionally be replaced by a second-order Newton step in orbital rotation space (§7, SOSCF) for pure functionals. The only DFT-specific piece is the orbital Hessian&#x27;s XC contribution: instead of a stored ERI transform, it is an analytic contraction of libxc&#x27;s second-derivative kernel <span class="math-inline">\(f_{xc}\)</span> against the trial response density on the grid (<code>compute_analytic_xc_hessian_vector_product</code>, <code>src/dft/analytic_hessian.cpp</code>). Hybrids, PCM, and symmetry blocking fall back to DIIS with a warning. See §7&#x27;s &quot;DFT: the Hessian Has No Single Matrix&quot;.</p>
+<p>Step 2f can optionally be replaced by a second-order Newton step in orbital rotation space (§7, SOSCF), for LDA, GGA, global-hybrid and range-separated-hybrid functionals. The main DFT-specific piece is the orbital Hessian&#x27;s XC contribution: instead of a stored ERI transform, it is an analytic contraction of libxc&#x27;s second-derivative kernel <span class="math-inline">\(f_{xc}\)</span> against the trial response density on the grid (<code>compute_analytic_xc_hessian_vector_product</code>, <code>src/dft/analytic_hessian.cpp</code>); hybrids add a direct exchange response on the same trial density. PCM and symmetry blocking fall back to DIIS with a warning. See §7&#x27;s &quot;DFT: the Hessian Has No Single Matrix&quot;.</p>
 <h3 id="dft-code-map">DFT Code Map</h3>
 <div class="table-wrap"><table>
 <thead><tr>
@@ -3300,7 +3562,7 @@ V^{xc}_{\mu\nu} = \sum_g w_g\, v_{\rho,g}\, \phi_\mu(\mathbf r_g)\, \phi_\nu(\ma
 <li><strong>full Casida</strong> response as the default solver</li>
 <li>optional <strong>TDA</strong> response via <code>lr_method tda</code></li>
 <li>Hartree coupling</li>
-<li>global-hybrid exact exchange through the functional exact-exchange fraction</li>
+<li>exact exchange for global hybrids (B3LYP, PBE0) and for erf range-separated hybrids (HSE06, CAM-B3LYP, <span class="math-inline">\(\omega\)</span>B97X), with full-range and short-range coefficients read from the same accessors as the SCF</li>
 <li>semilocal XC response kernels <span class="math-inline">\(f_{xc}\)</span> for the supported LDA and GGA libxc functionals</li>
 </ul>
 <p>The implementation is still intentionally compact and dense-matrix based, but it is no longer limited to the original RKS singlet TDA scaffold.</p>
@@ -3335,7 +3597,7 @@ B_{ia,jb}^{(0)} = 0
 <p>Everything interesting is in the interaction kernel.  In Planck, each matrix element is built from three physical pieces:</p>
 <ol>
 <li>Coulomb (Hartree) response</li>
-<li>exact-exchange response for global hybrids</li>
+<li>exact-exchange response for hybrids (global and range-separated)</li>
 <li>semilocal XC-kernel response <span class="math-inline">\(f_{xc}\)</span></li>
 </ol>
 <p>So the working matrices are</p>
@@ -3360,6 +3622,7 @@ B^{S}_{ia,jb}
 + L^{S,xc}_{ia,jb}
 \]</span></p>
 <p>where <span class="math-inline">\(c_x\)</span> is the global-hybrid exact-exchange fraction.  Here <span class="math-inline">\(K^{S,xc}\)</span> and <span class="math-inline">\(L^{S,xc}\)</span> are the singlet-projected semilocal XC-kernel contributions.</p>
+<p>For a range-separated hybrid, each exchange integral becomes a sum over kernels, <span class="math-inline">\(c_x(pq|rs) \to c_{fr}(pq|rs) + c_{sr}(pq|rs)_{\mathrm{erfc},\omega}\)</span>, using the same full-range and short-range coefficients the SCF uses. No extra XC-kernel term is added, because libxc&#x27;s <span class="math-inline">\(f_{xc}\)</span> for the functional already contains the screened DFT exchange. Note the index pattern in <span class="math-inline">\(B\)</span>: exchange is <span class="math-inline">\((ib|ja)\)</span>, not <span class="math-inline">\((ia|jb)\)</span>. Swapping them leaves TDA untouched (TDA has no <span class="math-inline">\(B\)</span>) but shifts full-Casida hybrid roots by meV. That is exactly the defect Planck carried until hybrid TDDFT was gated against PySCF (B3LYP root 3 was off by 7.5 meV), so a single helper (<code>src/dft/tddft_exchange.h</code>) now owns the index for RKS and UKS alike. Functionals whose short-range kernel is Yukawa or Gaussian rather than erf are rejected for TDDFT. See <code>docs/RS_TDDFT.md</code>.</p>
 <p>For <strong>triplets</strong>, the Coulomb contribution drops out after spin adaptation, so only exchange and spin-dependent XC-kernel terms remain:</p>
 <p><span class="math-display">\[
 A^{T}_{ia,jb}
@@ -3601,7 +3864,7 @@ E^{\text{elec}} = E^{\text{gas}}_{\text{elec}} + G^{\text{rxn}},
 <tr><td><code>surface_points</code> / <code>surface_points_per_atom</code></td><td>tesserae per atom (default 60, minimum 6)</td></tr>
 </tbody></table></div>
 <p>Built-in solvent dielectrics (<code>dielectric_from_solvent_name</code> in <code>io.cpp</code>): water (78.3553), acetonitrile (35.688), methanol (32.613), ethanol (24.852), DMSO (46.826), dichloromethane (8.93), chloroform (4.7113), THF (7.4257), toluene (2.3741), benzene (2.2706), hexane (1.8819). Listing a <code>solvent</code> overrides any prior <code>dielectric</code> value; passing both is allowed but the solvent name wins.</p>
-<p>PCM is currently <strong>gated to single-point energy calculations only</strong> (see the check around <code>src/io/io.cpp:1266</code>). Combining <code>model pcm</code> with <code>calculation gradient</code>, <code>geomopt</code>, or <code>frequency</code> produces an explicit input error rather than a silently incomplete result, because analytic PCM gradients (which require derivatives of the cavity, the influence matrix, and the reaction-field operator) are not implemented.</p>
+<p>PCM is currently <strong>gated to single-point energy calculations only</strong> (see the check around <code>src/io/io.cpp:1729</code>). Combining <code>model pcm</code> with <code>calculation gradient</code>, <code>geomopt</code>, or <code>frequency</code> produces an explicit input error rather than a silently incomplete result, because analytic PCM gradients (which require derivatives of the cavity, the influence matrix, and the reaction-field operator) are not implemented.</p>
 <h3 id="limitations-and-cost">Limitations and Cost</h3>
 <ul>
 <li><strong>Single-point only.</strong> No PCM gradient, geometry optimization, or frequencies. Post-HF (MP2, CC, CASSCF) is not coupled to PCM either — the reaction field is enforced only at the SCF/KS level.</li>
@@ -3680,7 +3943,7 @@ E_A^{*} = E_B^{*} &= -2.85517107.
 <p>Then <span class="math-inline">\(\text{BSSE} = 2(E_A^{*}-E_A) = -2.1\times10^{-5}\)</span> Eh <span class="math-inline">\(= -0.013\)</span> kcal/mol, <span class="math-inline">\(\Delta E_{\text{raw}} = +0.0005\)</span> kcal/mol, and <span class="math-inline">\(\Delta E_{\text{CP}} = \Delta E_{\text{raw}} - \text{BSSE} = +0.014\)</span> kcal/mol. Hartree-Fock has no dispersion, so He<span class="math-inline">\(_2\)</span> is genuinely unbound. The raw number shows a spurious whisper of binding; removing the BSSE restores the correct sign — a small repulsion. This is the diagnostic value of CP: it tells you how much of an apparent interaction is real and how much is the basis cheating.</p>
 <p><strong>Water dimer / STO-3G.</strong> Here the raw interaction is <span class="math-inline">\(-5.53\)</span> kcal/mol, the BSSE is <span class="math-inline">\(-4.13\)</span> kcal/mol, and the CP-corrected interaction is <span class="math-inline">\(-1.40\)</span> kcal/mol. With a minimal basis the superposition error is roughly <em>half</em> of the apparent binding — a vivid warning that small-basis interaction energies are not to be trusted uncorrected.</p>
 <h3 id="implementation-note-the-initial-guess-and-the-monomer-references">Implementation Note: the initial guess and the monomer references</h3>
-<p>The monomer reference energies <span class="math-inline">\(E_A, E_B\)</span> must be the <em>true</em> SCF minima, or the BSSE is meaningless. This is a place where the choice of initial guess (<a href="#6-scf-algorithm">§6, &quot;When the Guess Matters&quot;</a>) bites. The superposition-of- atomic-densities (SAD) guess, normally the more robust choice for molecules with equivalent atoms, can itself <strong>false-converge for a small isolated closed-shell atom</strong>: a lone helium atom in cc-pVDZ settles at <span class="math-inline">\(-2.85515\)</span> Eh from SAD but at the correct <span class="math-inline">\(-2.85516\)</span> Eh from a core-Hamiltonian guess, each reporting convergence in five iterations at a different HOMO energy. A counterpoise study of small fragments should therefore verify its monomer references against a second guess (or a reference program) rather than trust the iteration count — the same &quot;sanity-check the converged solution, do not trust the loop&quot; lesson from the broken-symmetry case study in §6, now cutting the other way.</p>
+<p>The monomer reference energies <span class="math-inline">\(E_A, E_B\)</span> must be the <em>true</em> SCF minima, or the BSSE is meaningless. Small isolated fragments are exactly where Planck once got this wrong: a lone helium atom in cc-pVDZ started from SAD stopped <span class="math-inline">\(5.6\times10^{-6}\)</span> Eh above the true minimum while reporting convergence (see §6, &quot;Historical Pitfall: Isolated-Atom SAD and the Convergence Test&quot;). That was a defect in the convergence test, now fixed and gated by <code>he_sad_ccpvdz</code>, so SAD is again safe for monomer references. The general advice still stands: for a counterpoise study, check the monomer energies against a second guess or a reference program rather than trusting the iteration count. That is the same &quot;sanity-check the converged solution, do not trust the loop&quot; lesson as the broken-symmetry case study in §6.</p>
 <h3 id="scope-and-generality">Scope and generality</h3>
 <p>The counterpoise method as described handles a <strong>dimer</strong> (two fragments) at the <strong>SCF level</strong>. The same construction extends naturally — though with more bookkeeping — to the site-site (Valiron-Mayer) <span class="math-inline">\(N\)</span>-body counterpoise for clusters, to correlated methods (one simply uses the correlated monomer and dimer energies in the same five-term expression), and to gradients (where the ghost basis functions also contribute Pulay terms). The ghost-atom primitive itself is more general than counterpoise: placing ghosts in any single calculation lets you probe basis-set extension effects, build mixed-basis descriptions, or study how much a neighbor&#x27;s functions improve a fragment — all without changing the physical system.</p>
 <h2 id="25-molecular-properties">25. Molecular Properties</h2>
@@ -3710,7 +3973,7 @@ S_A = \sum_{\mu \in A} \sum_\nu \Delta P_{\mu\nu} S_{\mu\nu}
 Eigen::VectorXd gross = (density.array() * overlap.array()).rowwise().sum();
 </code></pre>
 <p>The function then iterates over <code>basis._basis_functions</code>, accumulates <code>gross[μ]</code> into the correct atom bucket via <code>cv._shell-&gt;_atom_index</code>, and fills an <code>AtomicPopulation</code> struct.  When a <code>spin_density_ptr</code> is provided the same loop runs a second time over <span class="math-inline">\(\Delta P\)</span>.</p>
-<p>Population analysis is triggered when <code>_output._print_populations</code> is set or <code>verbosity</code> is <code>verbose</code> / <code>debug</code> (see <code>log_population_report</code> in <code>src/driver.cpp:71</code>).</p>
+<p>Population analysis is triggered when <code>_output._print_populations</code> is set or <code>verbosity</code> is <code>verbose</code> / <code>debug</code> (see <code>log_population_report</code> in <code>src/hf_driver.cpp:89</code>).</p>
 <h3 id="l-wdin-population-analysis">Löwdin Population Analysis</h3>
 <p><strong>Theory</strong></p>
 <p>Mulliken populations depend directly on the AO overlap partitioning.  Löwdin analysis instead first orthogonalizes the AO basis with the symmetric overlap square root:</p>
@@ -3767,7 +4030,42 @@ B_{AB}^{\mathrm{Mayer}} =
 <p>The diagonal <span class="math-inline">\(B_{AA}\)</span> is left at zero in the printed matrix, and the off-diagonal matrix is symmetrized.</p>
 <p><strong>Code path</strong></p>
 <p><code>src/populations/bond-order.cpp</code> — <code>mayer_bond_order_analysis()</code></p>
-<p>The routine first validates the density dimensions and builds the AO lists for each atom.  It then forms either <span class="math-inline">\(\mathbf P\mathbf S\)</span> or the spin-resolved <span class="math-inline">\(\mathbf P^\alpha\mathbf S\)</span> / <span class="math-inline">\(\mathbf P^\beta\mathbf S\)</span> products and loops over atom pairs <span class="math-inline">\(A < B\)</span>.  For each AO pair <span class="math-inline">\(\mu \in A\)</span>, <span class="math-inline">\(\nu \in B\)</span> it accumulates the appropriate product into a dense <code>natoms × natoms</code> bond-order matrix.  <code>src/driver.cpp</code> prints the final matrix below the Mulliken and Löwdin tables whenever population reporting is enabled.</p>
+<p>The routine first validates the density dimensions and builds the AO lists for each atom.  It then forms either <span class="math-inline">\(\mathbf P\mathbf S\)</span> or the spin-resolved <span class="math-inline">\(\mathbf P^\alpha\mathbf S\)</span> / <span class="math-inline">\(\mathbf P^\beta\mathbf S\)</span> products and loops over atom pairs <span class="math-inline">\(A < B\)</span>.  For each AO pair <span class="math-inline">\(\mu \in A\)</span>, <span class="math-inline">\(\nu \in B\)</span> it accumulates the appropriate product into a dense <code>natoms × natoms</code> bond-order matrix.  <code>src/hf_driver.cpp</code> prints the final matrix below the Mulliken and Löwdin tables whenever population reporting is enabled.</p>
+<h3 id="esp-derived-charges-chelpg-and-resp">ESP-Derived Charges (CHELPG and RESP)</h3>
+<p><strong>Theory</strong></p>
+<p>Mulliken and Löwdin charges partition the density by <em>which basis function owns it</em>, which is a bookkeeping choice rather than an observable — a Löwdin charge can move by tenths of an electron between STO-3G and cc-pVTZ on the same geometry. ESP-derived charges instead ask a physical question: what set of point charges on the nuclei best reproduces the potential the molecule actually presents to its surroundings?</p>
+<p>The molecular electrostatic potential at a point <span class="math-inline">\(\mathbf r\)</span> is</p>
+<p><span class="math-display">\[
+\phi(\mathbf r) =
+\sum_A \frac{Z_A}{|\mathbf r - \mathbf R_A|}
+-
+\sum_{\mu\nu} P_{\mu\nu}
+\left\langle \mu \left| \frac{1}{|\mathbf r - \mathbf r'|} \right| \nu \right\rangle
+\]</span></p>
+<p>The second term is the same one-electron potential integral the nuclear attraction and C-PCM paths already use. Sampling <span class="math-inline">\(\phi\)</span> at <span class="math-inline">\(m\)</span> points outside the van der Waals surface and fitting <span class="math-inline">\(n\)</span> atomic charges is then a linear least-squares problem with design matrix <span class="math-inline">\(A_{ka} = 1/|\mathbf r_k - \mathbf
+R_a|\)</span>, minimizing <span class="math-inline">\(\|\mathbf{Aq} - \boldsymbol\phi\|^2\)</span> subject to <span class="math-inline">\(\sum_a
+q_a = q_{\text{tot}}\)</span>.</p>
+<p>The constraint enters as a <strong>Lagrange multiplier</strong>, not a penalty:</p>
+<p><span class="math-display">\[
+\begin{pmatrix} 2\mathbf A^\top \mathbf A & \mathbf 1 \\ \mathbf 1^\top & 0 \end{pmatrix}
+\begin{pmatrix} \mathbf q \\ \lambda \end{pmatrix}
+=
+\begin{pmatrix} 2\mathbf A^\top \boldsymbol\phi \\ q_{\text{tot}} \end{pmatrix}
+\]</span></p>
+<p>so the total charge is exact rather than approximate. The zero block guarantees a negative eigenvalue, making the system symmetric <strong>indefinite</strong> — Cholesky would fail, and the solve uses <span class="math-inline">\(\mathbf{LDL}^\top\)</span>.</p>
+<p>Atoms buried inside a molecule have little grid nearby and therefore almost no leverage on <span class="math-inline">\(\phi\)</span>, so the unrestrained fit is free to give them large charges cancelled by their neighbours. Those charges reproduce the ESP but transfer badly between molecules. <strong>RESP</strong> removes that freedom with a hyperbolic restraint <span class="math-inline">\(a\sum_a\!\left(\sqrt{q_a^2+b^2}-b\right)\)</span>, whose derivative contributes a <em>diagonal</em> <span class="math-inline">\(a/\sqrt{q_a^2+b^2}\)</span> to the normal matrix. Since that depends on <span class="math-inline">\(\mathbf q\)</span>, the same system is simply re-solved until the charges settle — about seven passes on water — rather than requiring a new solver.</p>
+<p><strong>Grid choice matters, and not for the obvious reason</strong></p>
+<p>CHELPG samples a cubic lattice; Connolly/Merz-Kollman samples nested spheres. A cubic lattice is not rotationally symmetric, so rotating the molecule changes <em>which</em> points survive the exclusion test. On a field the atom-centred model cannot represent exactly, the fitted charges then move by 3–7% — and refining the spacing does not fix it, because a finer lattice is still a lattice.</p>
+<p>Spheres dissolve this, but only if sampled correctly. A sphere is rotationally symmetric; a <em>fixed discrete sampling</em> of one is not. Placing the same Fibonacci point pattern around each atom leaves it pinned to the lab axes, and the drift stays at 3.3e-02. Planck therefore builds the direction set in a frame derived from the molecule&#x27;s own geometry, so it rotates with the molecule by construction — measured drift 6.9e-15.</p>
+<p><strong>Code path</strong></p>
+<p><code>src/populations/esp.cpp</code></p>
+<ul>
+<li><code>electrostatic_potential()</code> — assembles <span class="math-inline">\(\phi\)</span> at arbitrary points. The electronic term fuses the density contraction into the shell-pair sweep (<code>ObaraSaika::_compute_electronic_potential</code>) so a 10 000-point grid costs <span class="math-inline">\(O(n_{\text{points}}\, n_{\text{pairs}})\)</span> time in <span class="math-inline">\(O(n_{\text{points}})\)</span> memory, never materializing one <span class="math-inline">\(n_{\text{basis}}^2\)</span> matrix per point.</li>
+<li><code>chelpg_grid()</code> / <code>connolly_grid()</code> — the two samplings, both returning points in the <code>molecule._standard</code> Bohr frame.</li>
+<li><code>fit_esp_charges()</code> / <code>fit_resp_charges()</code> — the constrained solve, with and without the restraint. Equivalence groups are additional hard rows in the same Lagrange block.</li>
+</ul>
+<p><code>log_esp_report</code> in <code>src/hf_driver.cpp</code> runs whichever grid was requested, calls the potential once, and dispatches between the two fits. Both yield the same fit object, so the printed report is shared.</p>
+<p>Triggered by a <code>%begin_esp</code> section; there is no verbosity-based fallback, because generating a grid and fitting charges is real work rather than a diagnostic print.</p>
 <h3 id="electric-dipole-moment">Electric Dipole Moment</h3>
 <p><strong>Theory</strong></p>
 <p>The electronic contribution to the electric dipole moment is</p>
@@ -3780,7 +4078,7 @@ B_{AB}^{\mathrm{Mayer}} =
 \]</span></p>
 <p>and the total dipole is <span class="math-inline">\(\boldsymbol{\mu} = \boldsymbol{\mu}^{(e)} + \boldsymbol{\mu}^{(n)}\)</span>, reported in Debye (<span class="math-inline">\(1\,\mathrm{a.u.} = 2.5418\,\mathrm{D}\)</span>).</p>
 <p><strong>AO integrals via Obara-Saika moment recurrence</strong></p>
-<p>The one-electron AO integral <span class="math-inline">\(\langle \mu | r_\alpha | \nu \rangle\)</span> is evaluated using a 1-D three-component recurrence <code>_os_1d_moments</code> in <code>src/integrals/os.cpp</code>.  For functions centred at <span class="math-inline">\(A\)</span> and <span class="math-inline">\(B\)</span> with angular momenta <span class="math-inline">\(i\)</span> and <span class="math-inline">\(j\)</span> and origin at <span class="math-inline">\(P = (\alpha_a A + \alpha_b B)/(\alpha_a+\alpha_b)\)</span>, the recurrence simultaneously computes the overlap <span class="math-inline">\(S_{ij}\)</span>, dipole moment <span class="math-inline">\(M^{(1)}_{ij}\)</span>, and quadrupole moment <span class="math-inline">\(M^{(2)}_{ij}\)</span> integrals:</p>
+<p>The one-electron AO integral <span class="math-inline">\(\langle \mu | r_\alpha | \nu \rangle\)</span> is evaluated using a 1-D three-component recurrence <code>os_1d_moments</code> in <code>src/populations/multipole.cpp</code>.  For functions centred at <span class="math-inline">\(A\)</span> and <span class="math-inline">\(B\)</span> with angular momenta <span class="math-inline">\(i\)</span> and <span class="math-inline">\(j\)</span> and origin at <span class="math-inline">\(P = (\alpha_a A + \alpha_b B)/(\alpha_a+\alpha_b)\)</span>, the recurrence simultaneously computes the overlap <span class="math-inline">\(S_{ij}\)</span>, dipole moment <span class="math-inline">\(M^{(1)}_{ij}\)</span>, and quadrupole moment <span class="math-inline">\(M^{(2)}_{ij}\)</span> integrals:</p>
 <p><span class="math-display">\[
 M^{(n)}_{i,j} = (P_\alpha - A_\alpha)\,M^{(n)}_{i-1,j} + \frac{j}{2\zeta}\,M^{(n)}_{i-1,j-1} + \frac{i-1}{2\zeta}\,M^{(n)}_{i-2,j} + \frac{n}{2\zeta}\,M^{(n-1)}_{i-1,j}
 \]</span></p>
@@ -3788,7 +4086,7 @@ M^{(n)}_{i,j} = (P_\alpha - A_\alpha)\,M^{(n)}_{i-1,j} + \frac{j}{2\zeta}\,M^{(n
 <p><span class="math-display">\[
 M^{(0)}_{0,0} = S_{00} = \sqrt{\frac{\pi}{\zeta}}\,e^{-\alpha_a\alpha_b|A-B|^2/\zeta}, \qquad M^{(n\ge1)}_{0,0} = \frac{n}{2\zeta}\,M^{(n-1)}_{0,0}
 \]</span></p>
-<p>The function <code>_compute_multipole_matrices</code> in <code>os.cpp</code> assembles the three <span class="math-inline">\(N_b \times N_b\)</span> dipole matrices (one per Cartesian component <span class="math-inline">\(x,y,z\)</span>) and the six independent upper-triangle elements of the raw quadrupole matrix, parallelised over shell pairs with OpenMP.</p>
+<p>The function <code>_compute_multipole_matrices</code> in <code>src/populations/multipole.cpp</code> assembles the three <span class="math-inline">\(N_b \times N_b\)</span> dipole matrices (one per Cartesian component <span class="math-inline">\(x,y,z\)</span>) and the six independent upper-triangle elements of the raw quadrupole matrix, parallelised over shell pairs with OpenMP.</p>
 <h3 id="traceless-quadrupole-moment">Traceless Quadrupole Moment</h3>
 <p><strong>Theory</strong></p>
 <p>The raw second-moment tensor is</p>
@@ -3801,14 +4099,14 @@ Q_{\alpha\beta} = \frac{1}{2}\bigl(3\Theta_{\alpha\beta} - \delta_{\alpha\beta}\
 \]</span></p>
 <p>in atomic units (<span class="math-inline">\(\mathrm{a.u.} = e\,a_0^2\)</span>).  The traceless tensor has five independent components (<span class="math-inline">\(Q_{xx}\)</span>, <span class="math-inline">\(Q_{yy}\)</span>, <span class="math-inline">\(Q_{xy}\)</span>, <span class="math-inline">\(Q_{xz}\)</span>, <span class="math-inline">\(Q_{yz}\)</span>; <span class="math-inline">\(Q_{zz} = -Q_{xx}-Q_{yy}\)</span>) and transforms as a rank-2 spherical tensor under rotations.</p>
 <p><strong>Code path</strong></p>
-<p><code>_compute_multipole_moments</code> in <code>src/integrals/os.cpp</code> contracts the six AO quadrupole matrices with the total density matrix to obtain <span class="math-inline">\(\Theta^{(e)}\)</span>, then adds the nuclear contribution in a loop over atoms.  The traceless transform is applied element-by-element:</p>
+<p><code>_compute_multipole_moments</code> in <code>src/populations/multipole.cpp</code> contracts the six AO quadrupole matrices with the total density matrix to obtain <span class="math-inline">\(\Theta^{(e)}\)</span>, then adds the nuclear contribution in a loop over atoms.  The traceless transform is applied element-by-element:</p>
 <pre><code class="language-cpp">
 const double trace = raw_xx + raw_yy + raw_zz;
 Q_xx = 0.5 * (3 * raw_xx - trace);
 Q_xy = 1.5 * raw_xy;          // off-diagonal scaled by 3/2
 // ... (analogously for all components)
 </code></pre>
-<p>Both the dipole and quadrupole moments use the nuclear frame origin <span class="math-inline">\(\mathbf{o} = \mathbf{0}\)</span> (atomic units) as passed by <code>log_multipole_report</code> in <code>src/driver.cpp:52</code>.</p>
+<p>Both the dipole and quadrupole moments use the nuclear frame origin <span class="math-inline">\(\mathbf{o} = \mathbf{0}\)</span> (atomic units) as passed by <code>log_multipole_report</code> in <code>src/hf_driver.cpp:63</code>.</p>
 <h3 id="rmp2-natural-orbitals">RMP2 Natural Orbitals</h3>
 <p><strong>Theory</strong></p>
 <p>Natural orbitals (NOs) diagonalise the one-particle density matrix (1-PDM).  For RMP2, the unrelaxed 1-PDM in the MO basis has two non-trivial blocks.</p>
@@ -3828,13 +4126,11 @@ Q_xy = 1.5 * raw_xy;          // off-diagonal scaled by 3/2
 <p>(the factor of 2 accounts for the closed-shell occupation; off-diagonal terms symmetrise the matrix).  Diagonalising <span class="math-inline">\(\gamma\)</span> yields eigenvalues <span class="math-inline">\(n_p\)</span> (natural occupation numbers) and eigenvectors <span class="math-inline">\(U\)</span>.  The natural orbitals in the AO basis are <span class="math-inline">\(\tilde{C} = C U\)</span>, where <span class="math-inline">\(C\)</span> is the RHF MO coefficient matrix.</p>
 <p>For the reference wavefunction alone, <span class="math-inline">\(\gamma_{ii} = 2\)</span> for occupied and <span class="math-inline">\(\gamma_{aa} = 0\)</span> for virtual MOs; the MP2 correction shifts occupation numbers away from 0 and 2.</p>
 <p><strong>Code path</strong></p>
-<p><code>compute_rmp2_natural_orbitals</code> in <code>src/post_hf/mp2.cpp</code>:</p>
+<p><code>rmp2_make_natural_orbitals</code> in <code>src/post_hf/mp2.cpp</code> takes a converged <code>RMP2Result</code> (from <code>rmp2_kernel</code>):</p>
 <ol>
-<li>Calls <code>run_rmp2</code> to obtain doubles amplitudes <span class="math-inline">\(T_2\)</span> (shape <code>[nocc,nocc,nvirt,nvirt]</code>).</li>
-<li>Builds <span class="math-inline">\(\Gamma^{oo}\)</span> and <span class="math-inline">\(\Gamma^{vv}\)</span> with two nested loops over the amplitude tensor.</li>
-<li>Assembles the full <span class="math-inline">\((n_{mo} \times n_{mo})\)</span> density matrix block-diagonally and symmetrises it.</li>
-<li>Diagonalises via <code>Eigen::SelfAdjointEigenSolver</code>; sorts eigenvalues in descending order.</li>
-<li>Returns a <code>NaturalOrbitalResult</code> containing <code>occupations</code> and <code>coefficients_mo</code> (the transformation <span class="math-inline">\(U\)</span>) which the logger formats and prints.</li>
+<li>Builds the unrelaxed correlated 1-RDM in the MO basis via <code>rmp2_make_rdm1(result, false)</code>.</li>
+<li>Diagonalises it with <code>Eigen::SelfAdjointEigenSolver</code> and reorders eigenpairs by descending occupation.</li>
+<li>Returns an <code>RMP2NaturalOrbitals</code> carrying <code>occupations</code>, <code>coefficients_mo</code> (the transformation <span class="math-inline">\(U\)</span>) and <code>coefficients_ao</code> (<span class="math-inline">\(\tilde C = C U\)</span>), which the logger formats and prints.</li>
 </ol>
 <h3 id="mo-symmetry-labels">MO Symmetry Labels</h3>
 <p><strong>Theory</strong></p>
@@ -3975,10 +4271,10 @@ driver.cpp
 
   if post_hf == RMP2:
       AO→MO transform → (ia|jb) MO integrals
-      run_rmp2()               → E_MP2
+      rmp2_kernel()            → E_MP2
   elif post_hf == UMP2:
       AO→MO transform in α/β blocks
-      run_ump2()               → E_UMP2
+      ump2_kernel()            → E_UMP2
   elif post_hf == RCCSD:
       prepare_rccsd()          → reference, MO blocks, denominators
       run_rccsd()              → E_RCCSD
@@ -4076,7 +4372,7 @@ driver.cpp
 <tr><td>RCCSDT tensor production</td><td><code>src/post_hf/cc/tensor_backend.cpp</code>, <code>src/post_hf/cc/tensor_backend_state.cpp</code></td><td><code>prepare_tensor_rccsdt</code>, <code>run_tensor_rccsdt</code>, <code>build_tensor_cc_block_cache</code>, <code>allocate_dense_triples_workspace</code></td></tr>
 <tr><td>Tensor CC block cache</td><td><code>src/post_hf/cc/tensor_backend_state.cpp</code></td><td><code>build_canonical_rhf_cc_reference</code>, <code>format_tensor_memory_summary</code></td></tr>
 <tr><td>UCCSDT prototype</td><td><code>src/post_hf/cc/ccsdt.cpp</code></td><td><code>prepare_uccsdt</code>, <code>run_uccsdt</code></td></tr>
-<tr><td>RCCSDTQ generated tensor path</td><td><code>src/post_hf/cc/ccsdtq.cpp</code>, <code>src/post_hf/cc/solver_arbitrary.cpp</code></td><td><code>run_rccsdtq</code>, <code>solve_generated_arbitrary_order_cc</code></td></tr>
+<tr><td>RCCSDTQ generated tensor path</td><td><code>src/post_hf/cc/rccgen.cpp</code>, <code>src/post_hf/cc/generated_arbitrary_runtime.cpp</code></td><td><code>run_rccgen</code>, <code>run_generated_arbitrary_order_iterations</code></td></tr>
 <tr><td>Generated RCC driver (<code>cc3</code>-<code>cc6</code>)</td><td><code>src/post_hf/cc/rccgen.cpp</code></td><td><code>run_rccgen</code></td></tr>
 <tr><td>Generated UCC driver (<code>ucc2</code>-<code>ucc6</code>)</td><td><code>src/post_hf/cc/uccgen.cpp</code></td><td><code>run_uccgen</code></td></tr>
 <tr><td>Generated-kernel registry (what the emitted TUs plug into)</td><td><code>src/post_hf/cc/generated_kernel_registry.cpp</code></td><td><code>make_generated_*_kernels</code></td></tr>
@@ -4085,6 +4381,9 @@ driver.cpp
 <tr><td>CC denominators/DIIS</td><td><code>src/post_hf/cc/amplitudes.cpp</code>, <code>src/post_hf/cc/diis.cpp</code></td><td><code>build_denominator_cache</code>, <code>AmplitudeDIIS</code></td></tr>
 <tr><td>CPHF Z-vector</td><td><code>src/post_hf/rhf_response.cpp</code></td><td><code>build_rhf_cphf_matrix</code></td></tr>
 <tr><td>RMP2 gradient</td><td><code>src/post_hf/mp2_gradient.cpp</code></td><td><code>compute_rmp2_gradient</code></td></tr>
+<tr><td>Restricted double-hybrid gradient</td><td><code>src/dft/dh_pt2_gradient.cpp</code>, <code>src/dft/driver.cpp</code></td><td><code>DHGradientDriverContract</code>; correction-only KS Z-vector, literal pair RHS/overlap, Eq. 33 assembly</td></tr>
+<tr><td>Double-hybrid XC-II geometry response</td><td><code>src/dft/dh_pt2_gradient.cpp</code>, <code>src/dft/dft_gradient.cpp</code></td><td><code>DHEq33CompleteXCIIGradient</code>; P-side, D-side, Becke partition, point translation</td></tr>
+<tr><td>Unrestricted double-hybrid gradient</td><td><code>src/dft/udh_driver.cpp</code>, <code>src/dft/udh_*.cpp</code></td><td><code>build_udh_gradient_correction</code>; <code>build_udh_pt2_stationary_contract</code>, <code>solve_udh_zvector</code>, <code>build_udh_overlap_density</code>, <code>build_udh_two_particle_density</code>, <code>build_udh_{lda,gga}_complete_xc_ii_gradient</code></td></tr>
 <tr><td>UMP2 gradient intermediates</td><td><code>src/post_hf/mp2_gradient.cpp</code></td><td><code>build_ump2_gradient_intermediates</code></td></tr>
 <tr><td>CI string generation</td><td><code>src/post_hf/ci/strings.cpp</code></td><td><code>generate_strings</code>, <code>parity_between</code>, <code>select_active_orbitals</code></td></tr>
 <tr><td>CI determinant space + sigma</td><td><code>src/post_hf/ci/ci.cpp</code></td><td><code>build_ci_space</code>, <code>apply_ci_hamiltonian</code>, <code>slater_condon_element</code></td></tr>
@@ -4107,7 +4406,7 @@ driver.cpp
 <tr><td>Semi-numerical Hessian</td><td><code>src/freq/hessian.cpp</code></td><td><code>compute_hessian</code></td></tr>
 <tr><td>Vibrational analysis</td><td><code>src/freq/hessian.cpp</code></td><td><code>vibrational_analysis</code></td></tr>
 <tr><td>Vibrational symmetry</td><td><code>src/symmetry/vibrational_symmetry.cpp</code></td><td>mode irrep assignment</td></tr>
-<tr><td>Checkpoint I/O</td><td><code>src/io/checkpoint.cpp</code></td><td><code>save_checkpoint</code>, <code>load_checkpoint</code></td></tr>
+<tr><td>Checkpoint I/O</td><td><code>src/io/checkpoint.cpp</code></td><td><code>HartreeFock::Checkpoint::save</code>, <code>HartreeFock::Checkpoint::load</code></td></tr>
 <tr><td>Cross-basis projection</td><td><code>src/io/checkpoint.cpp</code></td><td>Löwdin SVD projection</td></tr>
 <tr><td>Molecular grid</td><td><code>src/dft/base/grid.h</code></td><td><code>MakeMolecularGrid</code>, <code>MakeAtomicGrid</code></td></tr>
 <tr><td>AO evaluation on grid</td><td><code>src/dft/ao_grid.h</code></td><td><code>AOGridEvaluation</code></td></tr>
@@ -4127,9 +4426,9 @@ driver.cpp
 <tr><td>Mulliken population analysis</td><td><code>src/populations/mulliken.cpp</code></td><td><code>mulliken_population_analysis</code>, <code>gross_ao_population</code></td></tr>
 <tr><td>Löwdin population analysis</td><td><code>src/populations/lodwin.cpp</code></td><td><code>lowdin_population_analysis</code>, <code>symmetric_overlap_sqrt</code></td></tr>
 <tr><td>Mayer bond orders</td><td><code>src/populations/bond-order.cpp</code></td><td><code>mayer_bond_order_analysis</code></td></tr>
-<tr><td>Dipole / quadrupole AO integrals</td><td><code>src/integrals/os.cpp</code></td><td><code>_os_1d_moments</code>, <code>_compute_multipole_matrices</code></td></tr>
-<tr><td>Multipole moments (traceless)</td><td><code>src/integrals/os.cpp</code></td><td><code>_compute_multipole_moments</code></td></tr>
-<tr><td>RMP2 natural orbitals</td><td><code>src/post_hf/mp2.cpp</code></td><td><code>compute_rmp2_natural_orbitals</code></td></tr>
+<tr><td>Dipole / quadrupole AO integrals</td><td><code>src/populations/multipole.cpp</code></td><td><code>os_1d_moments</code>, <code>_compute_multipole_matrices</code></td></tr>
+<tr><td>Multipole moments (traceless)</td><td><code>src/populations/multipole.cpp</code></td><td><code>_compute_multipole_moments</code></td></tr>
+<tr><td>RMP2 natural orbitals</td><td><code>src/post_hf/mp2.cpp</code></td><td><code>rmp2_make_natural_orbitals</code></td></tr>
 <tr><td>AO symmetry representation</td><td><code>src/symmetry/mo_symmetry.cpp</code></td><td><code>build_ao_transform</code>, <code>sop_to_matrix</code>, <code>angular_coeff</code></td></tr>
 <tr><td>MO irrep labels</td><td><code>src/symmetry/mo_symmetry.cpp</code></td><td><code>assign_mo_symmetry</code></td></tr>
 <tr><td>Full point-group AO operations <span class="math-inline">\(\mathbf O_R\)</span></td><td><code>src/symmetry/group_operations.cpp</code></td><td><code>build_group_operations</code></td></tr>
@@ -4154,7 +4453,7 @@ driver.cpp
 <tr><td>Schwarz screening</td><td>Complete</td></tr>
 <tr><td>DIIS acceleration</td><td>Complete</td></tr>
 <tr><td>SOSCF (RHF/UHF, augmented-Hessian orbital step)</td><td>Complete. Runs as a transient window (default 3 iterations, <code>scf_soscf_cycles</code>) that hands back to DIIS; trigger by fixed iteration (<code>scf_soscf_start</code>) or DIIS-error threshold (<code>scf_soscf_diis_tol</code>/<code>scf_soscf_min_iter</code>). Reuses the CASSCF augmented-Hessian solver and the RHF/UHF CPHF orbital Hessian unchanged (UHF: <code>build_uhf_cphf_matrix</code> split out of <code>solve_uhf_cphf</code>, per-spin Cayley step). Off by default. ROHF, SAO, and PCM not yet covered; UHF and an active level shift are mutually exclusive</td></tr>
-<tr><td>SOSCF (RKS/UKS, analytic-<code>fxc</code> orbital step)</td><td>Complete for pure (non-hybrid) functionals. Same transient-window machinery. The KS orbital Hessian has no single matrix: <code>h_op</code> = orbital-energy diagonal + Coulomb response on the trial density + an analytic XC second-derivative contraction (<code>compute_analytic_xc_hessian_vector_product{,_polarized}</code>, LDA + GGA), wired through libxc&#x27;s <code>xc_{lda,gga}_fxc</code>. Hybrid / range-separated functionals, PCM, and SAO blocking print a warning and fall back to DIIS. Off by default</td></tr>
+<tr><td>SOSCF (RKS/UKS, analytic-<code>fxc</code> orbital step)</td><td>Complete for LDA, GGA, global hybrids (B3LYP, PBE0) and range-separated hybrids (HSE06). Same transient-window machinery. The KS orbital Hessian has no single matrix: <code>h_op</code> = orbital-energy diagonal + Coulomb response on the trial density + (hybrids) a direct exact-exchange response + an analytic XC second-derivative contraction (<code>compute_analytic_xc_hessian_vector_product{,_polarized}</code>, LDA + GGA), wired through libxc&#x27;s <code>xc_{lda,gga}_fxc</code>. PCM and SAO blocking print a warning and fall back to DIIS. Off by default</td></tr>
 <tr><td>Level shifting</td><td>Complete</td></tr>
 <tr><td>Point group detection and SAO blocking</td><td>Complete</td></tr>
 <tr><td>MO irrep labeling</td><td>Complete</td></tr>
@@ -4183,11 +4482,15 @@ driver.cpp
 <tr><td>Analytic ROHF gradient</td><td>Complete (Cartesian and spherical; <code>W = P^α F^α P^α + P^β F^β P^β</code>, no Z-vector — SCF is variational)</td></tr>
 <tr><td>Analytic RMP2 gradient (Z-vector)</td><td>Complete</td></tr>
 <tr><td>Analytic UMP2 gradient</td><td>Complete</td></tr>
+<tr><td>RHF/UHF wavefunction stability analysis</td><td>Complete (RHF real/complex singlet and external triplet; UHF internal plus diagonal-approximation GHF external; optional <code>stability_follow</code>)</td></tr>
+<tr><td>FCI (full MO space, RHF/ROHF references)</td><td>Complete (dense at or below 500 determinants, otherwise Davidson with a threaded, thread-count-invariant sigma build)</td></tr>
+<tr><td>FCIQMC (<code>correlation fciqmc</code>)</td><td>Complete (shift and projected estimators with blocked error bars, initiator option, fixed-seed reproducibility; reproduces exact FCI on N2/STO-3G, gated by <code>n2_fciqmc_sto3g</code>)</td></tr>
 <tr><td>CASSCF / RASSCF</td><td>Complete</td></tr>
 <tr><td>Geometry optimization (RHF/UHF/ROHF/RMP2/UMP2)</td><td>Complete</td></tr>
 <tr><td>Semi-numerical Hessian</td><td>Complete</td></tr>
 <tr><td>Harmonic vibrational analysis</td><td>Complete</td></tr>
 <tr><td>Checkpoint save/restart</td><td>Complete</td></tr>
+<tr><td>CC amplitude checkpoint (<code>.ccamp</code> sidecar)</td><td>Complete for generated RCC (<code>cc3</code>-<code>cc6</code>), generated UCC, and hand-written RCCSD (projected to the spatial layout); a later run warm-starts from it, including across ranks</td></tr>
 <tr><td>Cross-basis density projection</td><td>Complete</td></tr>
 <tr><td>Kohn-Sham DFT (RKS/UKS)</td><td>Complete</td></tr>
 <tr><td>LDA XC functionals (Slater, VWN5)</td><td>Complete</td></tr>
@@ -4195,14 +4498,17 @@ driver.cpp
 <tr><td>Arbitrary libxc functionals via integer ID or libxc name</td><td>Complete within the currently supported single-point KS subset; unsupported workflow/family combinations still error explicitly</td></tr>
 <tr><td>Molecular grid (Treutler-Ahlrichs + Lebedev + Becke)</td><td>Complete</td></tr>
 <tr><td>Analytic KS-DFT gradient (RKS/UKS, LDA/GGA/global hybrid, range-separated hybrid)</td><td>Complete</td></tr>
-<tr><td>TD-DFT / linear response (RKS singlet/triplet, UKS spin-conserving, Casida/TDA, semilocal XC kernels)</td><td>Complete</td></tr>
-<tr><td>DFT geometry optimization / gradients</td><td>Complete</td></tr>
+<tr><td>TD-DFT / linear response (RKS singlet/triplet, UKS spin-conserving, Casida/TDA, semilocal XC kernels)</td><td>Complete, including global-hybrid and erf range-separated exact exchange (B3LYP, HSE06, CAM-B3LYP, wB97X; PySCF-gated to 4e-4 eV per root). Yukawa/Gaussian screened-exchange functionals are rejected for TDDFT</td></tr>
+<tr><td>DFT geometry optimization / gradients</td><td>Complete within the functional-specific workflow restrictions; for double hybrids see the three DH rows below</td></tr>
 <tr><td>Global hybrid XC functionals (B3LYP, PBE0, compatible libxc IDs)</td><td>Complete</td></tr>
 <tr><td>Range-separated hybrid XC functionals (for example HSE06)</td><td>Complete for single-point, gradient, geometry optimization, frequency, and geomopt+frequency workflows</td></tr>
-<tr><td>Double-hybrid XC functionals (for example B2PLYP)</td><td>Complete for single-point energies</td></tr>
+<tr><td>Double-hybrid XC functionals (for example B2PLYP)</td><td>Single-point energies for RKS and UKS; derivative workflows per the next two rows</td></tr>
+<tr><td>Restricted global-double-hybrid analytic gradient</td><td>Complete for Cartesian AOs and LDA/GGA XC-II: gradient, geometry optimization, frequencies (central differences of analytic gradients) and geomopt+frequency. Water and C1 H2O2 B2PLYP/STO-3G energy-FD validated at two steps (Section 15). Range separation, solvent response, and DH response (TDDFT) workflows remain excluded</td></tr>
+<tr><td>UKS global-double-hybrid analytic gradient</td><td>Complete for <code>calculation gradient</code> only, with conventional all-active UMP2 (stored T2, no RI, no frozen core, no level shift), no solvent, and the qualified grid <code>grid_policy g4-3-v4</code> + <code>grid_radial_points 135</code> with no angular override. UKS DH geometry optimization and frequencies are rejected</td></tr>
 <tr><td>Range-separated double hybrids (for example <span class="math-inline">\(\omega\)</span>B2PLYP)</td><td>Complete for single-point energies</td></tr>
-<tr><td>Spherical harmonic basis</td><td>Complete (real-spherical AO basis via fixed cart→sph transform; SCF, SAO blocking + MO irreps, full point-group ERI reduction, post-HF)</td></tr>
+<tr><td>Spherical harmonic basis</td><td>Complete for <code>hartree-fock</code> (real-spherical AO basis via fixed cart→sph transform; SCF, SAO blocking + MO irreps, full point-group ERI reduction, post-HF, RHF/UHF/ROHF gradients, geomopt and frequencies). <code>planck-dft</code> rejects <code>basis_type spherical</code>; spherical MP2 gradients and spherical PCM are rejected</td></tr>
 <tr><td>C-PCM solvation (RHF/UHF/RKS/UKS, single-point energy)</td><td>Complete</td></tr>
+<tr><td>ESP-derived charges (CHELPG, RESP)</td><td>Complete for HF and DFT, optionally including the PCM reaction field</td></tr>
 <tr><td>PCM gradients / geometry optimization / frequencies</td><td>Not implemented</td></tr>
 <tr><td>PCM coupling to post-HF (MP2, CC, CASSCF)</td><td>Not implemented</td></tr>
 <tr><td>Ghost atoms (basis-only centers; <code>Gh()</code>/<code>@</code>/<code>:</code> syntax)</td><td>Complete</td></tr>

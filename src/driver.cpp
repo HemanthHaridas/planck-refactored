@@ -31,6 +31,7 @@ int main(int argc, const char *argv[])
             return EXIT_FAILURE;
         }
     }
+    HartreeFock::Logger::banner();
 
     // Args: <input file> [--json <path>]. --json writes machine-readable
     // results for the Python front end; the human log is unaffected.
@@ -57,6 +58,7 @@ int main(int argc, const char *argv[])
         return EXIT_FAILURE;
     }
 
+    HartreeFock::Logger::reading_input(input_file);
     std::ifstream input_stream(input_file);
     if (!input_stream)
     {

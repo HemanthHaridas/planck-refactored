@@ -1,0 +1,22 @@
+{
+  "contract": "g4-3-fixed-density-holdout-v4",
+  "reference": {"radial_points": 135, "angular_points": 2030},
+  "limits": {"xc_energy_ha": 1e-8, "xc_response_contraction": 1e-7},
+  "finalist": "tests/inputs/exploratory/dh_gradient/grid_calibration/artifacts/g4_3_9_revision_2026_10_03/g4-3-v4-combined-frontier.json",
+  "fixture_hashes": {
+    "water-rks-b2plyp-skew-sto3g": "9d5fba888428bfc9c313f3fa4dba30c42c1ca0078244873599c0020c99d15b27",
+    "h2o2-rks-b2plyp-twisted-sto3g": "6c8b355904f9faed5fd84ac9b4c0ce18ff9dd8869a44fe332dca2e034291947b",
+    "hcl-rks-b2plyp-skew-ccpvdz": "94554a68c6d87b6b8cb0318b23b1e42228924485dfe933346d05bd0e7c2afd63",
+    "sih4-rks-b2plyp-distorted-ccpvdz": "07e70586506d634c01a5fbc84b4dec61f9271bde6494f58da9ee08414bd95eea",
+    "water-triplet-uks-pbe-skew-sto3g": "d265540a3c32ff4a17f775e9a0d591805fa659e0ff216fbba7838688959c8397",
+    "water-cation-uks-pbe0-skew-631g": "ac57635b2d4a24e75a7f9d8b51331f65f6ed15e2f2c4ecdcc432da71d582ce29"
+  },
+  "cases": [
+    {"name": "water-rks-b2plyp-skew-sto3g", "input": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v4/water_rks_b2plyp_skew_sto3g.hfinp", "parent": "tests/inputs/exploratory/dh_gradient/water_b2plyp_gradient_fd.hfinp", "families": ["hydrogen-helium", "second-row"], "role": "geometry"},
+    {"name": "h2o2-rks-b2plyp-twisted-sto3g", "input": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v4/h2o2_rks_b2plyp_twisted_sto3g.hfinp", "parent": "tests/inputs/exploratory/dh_gradient/h2o2_c1_b2plyp_gradient_fd.hfinp", "families": ["hydrogen-helium", "second-row"], "role": "geometry"},
+    {"name": "hcl-rks-b2plyp-skew-ccpvdz", "input": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v4/hcl_rks_b2plyp_skew_ccpvdz.hfinp", "parent": "tests/inputs/exploratory/dh_gradient/grid_calibration/hcl_b2plyp_ccpvdz.hfinp", "families": ["hydrogen-helium", "third-row"], "role": "geometry"},
+    {"name": "sih4-rks-b2plyp-distorted-ccpvdz", "input": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v4/sih4_rks_b2plyp_distorted_ccpvdz.hfinp", "parent": "tests/inputs/exploratory/dh_gradient/grid_calibration/sih4_asymmetric_b2plyp_ccpvdz.hfinp", "families": ["hydrogen-helium", "third-row"], "role": "geometry"},
+    {"name": "water-triplet-uks-pbe-skew-sto3g", "input": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v4/water_triplet_uks_pbe_skew_sto3g.hfinp", "parent": "tests/inputs/regression/dft/water_triplet_uks_pbe_sto3g.hfinp", "families": ["hydrogen-helium", "second-row"], "role": "functional-spin"},
+    {"name": "water-cation-uks-pbe0-skew-631g", "input": "tests/inputs/exploratory/dh_gradient/grid_calibration/holdout_v4/water_cation_uks_pbe0_skew_631g.hfinp", "parent": "tests/inputs/regression/dft/h2o_cation_uks_pbe0_soscf_631g.hfinp", "families": ["hydrogen-helium", "second-row"], "role": "functional-spin"}
+  ]
+}
