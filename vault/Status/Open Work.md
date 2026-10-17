@@ -1876,6 +1876,26 @@ identify the path taken. Not required for correctness or performance.
 
 ## Performance and maintenance opportunities
 
+- **Closed-form low-L ERI kernels — scoped 2026-10-17, nothing landed**
+  (`docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`). Prototypes exact vs HGP (~1e-16):
+  per-component closed form is only **1.7×** (the primitive Boys/prefactor
+  loop is the floor), a **shell-level** (ps|ss) kernel is **4.9×**. Class
+  shares on 4 H2O / 6-31G*: L_tot ≤ 2 is 24.6 % of HGP time (→ ~1.24× Fock),
+  L_tot ≤ 4 is 69.3 % (→ ~2.2×, needs a template-specialized shell-kernel
+  family, not hand-written forms). Prerequisite: the per-component
+  `ShellPair spCD` construction in `fused_fock.h` is 8 % of HGP time and
+  would be ~40 % against the new kernels. Coulomb only until the screened
+  scaling is mirrored (inv_2_delta gotcha).
+  **C0 DONE (2026-10-17)**, via `planck-eri-class-share`, which drives the
+  production `fused_fock_build`. Measured as shares of the **whole build**,
+  L_tot ≤ 2 is 19.6 % (4 H2O / 6-31G*), 30.2 % (cc-pVDZ) and 53.7 % (8 H2O /
+  6-31G, pure sp). A `sample` profile puts the kernel at 84.1 % and
+  `ShellPair` construction at 8.4 %. **Bigger finding:** one branch of the
+  out-of-tree Boys core spends **17.7 % of the whole build** in libm calls,
+  on every engine. The fix lands in the Boys core and ships as a new blob
+  (measured 1.21× on 4 H2O / 6-31G*, 1.64× on 8 H2O / 6-31G). Do that before
+  C1/C2.
+
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys
   hoist):

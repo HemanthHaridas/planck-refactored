@@ -1557,6 +1557,20 @@ if(BUILD_TESTING)
         ${LOOKUP_SRC}
     )
 
+    # Per-angular-momentum-class share of the direct Fock build (C0 of
+    # docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md). A measurement, not a ctest.
+    add_executable(planck-eri-class-share
+        ${CMAKE_SOURCE_DIR}/tests/eri_class_share_benchmark.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
+    )
+
     # POPULATIONS_SRC is a glob, so this target picks up every file added to
     # src/populations -- including esp.cpp, which unlike the Mulliken/Lowdin/
     # Mayer sources calls into the integral engine (_compute_electronic_potential)
@@ -2192,6 +2206,11 @@ if(BUILD_TESTING)
         ${eigen_SOURCE_DIR}
     )
 
+    target_include_directories(planck-eri-class-share PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
     target_include_directories(planck-population-analysis PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
@@ -2519,6 +2538,11 @@ if(BUILD_TESTING)
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
     )
+    set_target_properties(planck-eri-class-share PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
 
     set_target_properties(planck-population-analysis PROPERTIES
         CXX_STANDARD 23
@@ -2687,6 +2711,10 @@ if(BUILD_TESTING)
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-auto-dispatch-benchmark OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-auto-dispatch-benchmark PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-eri-class-share OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-eri-class-share PRIVATE USE_OPENMP)
     endif()
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-transform-eri OpenMP::OpenMP_CXX)
