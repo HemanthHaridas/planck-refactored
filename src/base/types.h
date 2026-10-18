@@ -800,6 +800,11 @@ namespace HartreeFock
         int sampling_steps = 8000;         // averaged
         int spawn_attempts = 1;            // draws per walker per iteration
 
+        // Emit the opt-in scaling ledger.  This changes neither the stochastic
+        // evolution nor the estimator; it only records work and wall-time
+        // counters around the existing fixed-order propagation phases.
+        bool profile = false;
+
         // The seed is USER-VISIBLE on purpose. The reproducibility contract --
         // same seed reproduces the trajectory bitwise -- is worthless if the seed
         // cannot be set and is not recorded in the output.
