@@ -40,6 +40,7 @@
 #include <Eigen/Dense>
 
 #include "base/basis.h"
+#include "symmetry/integral_symmetry.h"
 #include "base/types.h"
 #include "basis/basis.h"
 #include "integrals/fused_fock.h"
@@ -65,7 +66,7 @@ namespace
 
     struct Fixture
     {
-        int nwater;
+        int nwater; // 0 = naphthalene with its D2h integral symmetry (sym_ops)
         const char *basis;
     };
 
@@ -105,6 +106,54 @@ namespace
         return calc;
     }
 
+    // Naphthalene, planar in xy with the long axis on x: exactly D2h by
+    // construction, so update_integral_symmetry finds all 8 sign-flip
+    // operations. The symmetric fixture for the fused loop's sym_ops path.
+    HartreeFock::Calculator make_naphthalene(const std::string &basis_name)
+    {
+        HartreeFock::Calculator calc;
+        HartreeFock::Molecule &mol = calc._molecule;
+        const double C[10][2] = {{0.0, 0.716}, {0.0, -0.716}, {1.240, 1.403}, {-1.240, 1.403},
+                                 {1.240, -1.403}, {-1.240, -1.403}, {2.432, 0.703}, {-2.432, 0.703},
+                                 {2.432, -0.703}, {-2.432, -0.703}};
+        const double H[8][2] = {{1.240, 2.490}, {-1.240, 2.490}, {1.240, -2.490}, {-1.240, -2.490},
+                                {3.380, 1.243}, {-3.380, 1.243}, {3.380, -1.243}, {-3.380, -1.243}};
+        mol.natoms = 18;
+        mol.charge = 0;
+        mol.multiplicity = 1;
+        mol.atomic_numbers.resize(18);
+        mol.atomic_masses.resize(18);
+        mol.coordinates.resize(18, 3);
+        for (int a = 0; a < 10; ++a)
+        {
+            mol.atomic_numbers[a] = 6;
+            mol.atomic_masses[a] = 12.0;
+            mol.coordinates.row(a) << C[a][0], C[a][1], 0.0;
+        }
+        for (int a = 0; a < 8; ++a)
+        {
+            mol.atomic_numbers[10 + a] = 1;
+            mol.atomic_masses[10 + a] = 1.0;
+            mol.coordinates.row(10 + a) << H[a][0], H[a][1], 0.0;
+        }
+        calc._basis._basis = HartreeFock::BasisType::Cartesian;
+        calc.prepare_coordinates();
+        mol.set_standard_from_bohr(mol._coordinates);
+        mol._symmetry = true;
+        mol._point_group = "D2h";
+
+        const std::filesystem::path gbs = std::filesystem::path(get_basis_path()) / basis_name;
+        auto basis_res = HartreeFock::BasisFunctions::read_gbs_basis(gbs.string(), mol, calc._basis._basis);
+        if (!basis_res)
+        {
+            std::fprintf(stderr, "read_gbs_basis failed for %s: %s\n", basis_name.c_str(), basis_res.error().c_str());
+            std::exit(1);
+        }
+        calc._shells = std::move(*basis_res);
+        HartreeFock::Symmetry::update_integral_symmetry(calc);
+        return calc;
+    }
+
     int pair_L(const HartreeFock::ShellPair &sp) noexcept
     {
         return sp.A._cartesian[0] + sp.A._cartesian[1] + sp.A._cartesian[2] +
@@ -134,11 +183,13 @@ namespace
         Eigen::MatrixXd Q;
         Eigen::MatrixXd P;
         std::size_t nb = 0;
+        bool sym = false; // pass calc._integral_symmetry_ops to the build
     };
 
     BuildSetup prepare(const Fixture &f)
     {
-        BuildSetup s{make_water_chain(f.nwater, f.basis), {}, {}, {}, 0};
+        BuildSetup s{f.nwater > 0 ? make_water_chain(f.nwater, f.basis) : make_naphthalene(f.basis),
+                     {}, {}, {}, 0, f.nwater == 0};
         s.pairs = build_shellpairs(s.calc._shells);
         s.nb = s.calc._shells.nbasis();
         const std::vector<double> flat = HartreeFock::Screening::schwarz_table_hgp(s.pairs, s.nb, nullptr);
@@ -168,7 +219,8 @@ namespace
         const auto t0 = Clock::now();
         HartreeFock::Integrals::fused_fock_build(
             s.pairs, s.nb, s.Q, HartreeFock::ERIKernel::Coulomb, 0.0, /*tol_eri=*/1e-10,
-            /*spin_resolved=*/false, dens, G, Ga, Gb, elem, nullptr,
+            /*spin_resolved=*/false, dens, G, Ga, Gb, elem,
+            s.sym ? &s.calc._integral_symmetry_ops : nullptr,
             HartreeFock::Integrals::FusedTerm::Combined, closed_form_max_l);
         const double dt = seconds_since(t0);
         std::uint64_t h = 1469598103934665603ULL;
@@ -196,7 +248,7 @@ namespace
 
     void run_fixture(const Fixture &f, double timer_pair)
     {
-        const BuildSetup s = prepare(f);
+        BuildSetup s = prepare(f);
 
         timed_build(s, hgp_elem); // warm the HGP scratch and the caches
         const double t_unwrapped = timed_build(s, hgp_elem);
@@ -262,6 +314,17 @@ namespace
         const double kernel_net = std::max(0.0, kernel_wrapped - n_total * 0.5 * timer_pair);
         const double kernel_share = std::min(1.0, kernel_net / t_unwrapped);
 
+        if (s.sym)
+        {
+            s.sym = false;
+            timed_build(s, hgp_elem, 3);
+            const double t_nosym = timed_build(s, hgp_elem, 3);
+            s.sym = true;
+            timed_build(s, hgp_elem, 3);
+            const double t_sym = timed_build(s, hgp_elem, 3);
+            std::printf("\nnaphthalene / %s: %zu integral-symmetry ops; closed-form build %.3f s with sym_ops, %.3f s without\n",
+                        f.basis, s.calc._integral_symmetry_ops.size(), t_sym, t_nosym);
+        }
         std::printf("\n%d H2O / %s: G fingerprint %016llx\n", f.nwater, f.basis,
                     static_cast<unsigned long long>(fingerprint));
         for (int max_l = 1; max_l <= 3; ++max_l)
@@ -325,7 +388,7 @@ int main(int argc, char **argv)
     std::printf("steady_clock pair: %.1f ns per quartet\n", 1e9 * timer_pair);
 
     for (const Fixture &f : {Fixture{1, "6-31g*"}, Fixture{4, "6-31g*"},
-                             Fixture{1, "cc-pVDZ"}, Fixture{8, "6-31g"}})
+                             Fixture{1, "cc-pVDZ"}, Fixture{8, "6-31g"}, Fixture{0, "6-31g"}})
         run_fixture(f, timer_pair);
     return 0;
 }

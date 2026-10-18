@@ -1563,6 +1563,7 @@ if(BUILD_TESTING)
     # docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md). A measurement, not a ctest.
     add_executable(planck-eri-class-share
         ${CMAKE_SOURCE_DIR}/tests/eri_class_share_benchmark.cpp
+        ${SRC_DIR}/symmetry/integral_symmetry.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp

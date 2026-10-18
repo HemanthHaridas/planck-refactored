@@ -355,6 +355,49 @@ Two cheap measurements split it before anything is changed:
 
 Each step below gets its prediction from these numbers.
 
+*L0 results (2026-10-18).* Counters, per build:
+
+| | 8 H2O / 6-31G | 4 H2O / 6-31G\* | 1 H2O / cc-pVDZ |
+|---|---|---|---|
+| ket-loop iterations | 6.91 M | 672 k | 6.1 k |
+| … surviving block Schwarz | 987 k (14 %) | 293 k | 6.1 k |
+| … of which L1-skippable | **486 k (49 %)** | 142 k (49 %) | 2.7 k (45 %) |
+| component iterations | 4.36 M | 3.86 M | 114 k |
+| … passing the canonical filter | 2.13 M (49 %) | 1.84 M (48 %) | 53 k (46 %) |
+| accepted quartets | 2.00 M | 1.64 M | 53 k |
+| … via closed form | 95 % | 46 % | 41 % |
+
+The consistency check holds: surviving blocks minus skippable (500,935)
+≥ blocks with any canonical quartet (495,844). The difference is
+same-group blocks where every component fails. (A first version of the
+counters overcounted because a block counter landed inside the `ca` loop;
+the inconsistency exposed it.)
+
+Attribution, with `distinct_eri_orbit`, `accumulate_term` and the kernel
+marked `noinline` (self time as a share of the build):
+
+| frame | 8 H2O / 6-31G | 4 H2O / 6-31G\* |
+|---|---|---|
+| `hgp_vrr` | 23.2 % | 59.3 % |
+| closed-form kernel | 17.8 % | 3.2 % |
+| **`distinct_eri_orbit`** | **17.3 %** | 7.9 % |
+| fused loop traversal and filters | 13.9 % | 4.1 % |
+| Boys | ~19 % | ~10 % |
+| `accumulate_term` (the `G` writes) | 4.7 % | 1.8 % |
+
+(The traversal figure includes the counters, so it is slightly high.)
+
+What it means for each step:
+- **L2 first.** The orbit dedup costs about 3.7× the `G` writes it feeds.
+  Predicted ~1.15–1.2× on 8 H2O / 6-31G, ~1.07× on 6-31G\*.
+- **L1 next.** About half the traversal is skippable blocks. Predicted
+  ~1.05–1.07× on 8 H2O / 6-31G, ~1.02× on 6-31G\*.
+- **The `G` writes are cheap (4.7 %).** That settles the
+  local-accumulation-buffer idea below: not worth its non-bitwise cost.
+- **L4 has no visible cost of its own.** Deprioritized.
+- **L3: measured separately, below.** The water chains run without
+  symmetry.
+
 **L1 — skip blocks that cannot hold a canonical quartet.** The ket loop
 runs over all `ngp` shell-group pairs, and canonical order (k ≥ i, then
 l ≥ j) is enforced only per component. Groups are AO-contiguous and
@@ -387,14 +430,56 @@ the result is bitwise-identical. Gate: an exhaustive comparison against the
 current enumeration over all index tuples in 0..4 (625 cases, including
 non-canonical), added to `tests/fock_accumulate.cpp`.
 
-**L3 — no heap allocation per quartet on the symmetry path.** With
-point-group symmetry on, `build_quartet_orbit` returns a fresh
-`std::vector<QuartetOrbitElem>` for every surviving component quartet. The
-water-chain fixtures run without symmetry, so the probe never sees this,
-but every full-symmetry direct SCF pays it. Fill a thread-local buffer
-instead. Measure on a symmetric fixture: add one to the probe (for example
-CH4/Td or a symmetric water cluster with `sym_ops`), so this is not tuned
-blind.
+**L3 — the symmetry path.** With integral symmetry on, the fused loop
+receives `sym_ops`: the D2h-subgroup signed AO permutations from
+`update_integral_symmetry`, at most 8. For every canonical component
+quartet it calls `build_quartet_orbit`, which allocates a
+`std::vector<QuartetOrbitElem>`, applies every operation, deduplicates,
+and sorts. The ERI is then computed only if the quartet is the orbit's
+representative (the lexicographic minimum); otherwise the orbit is
+thrown away.
+
+*Measured (2026-10-18)* on a new probe fixture: axis-aligned naphthalene /
+6-31G (nb = 106, D2h by construction, all 8 operations found).
+`Fixture{0, "6-31g"}` in the probe; `--profile N 0 6-31g` profiles it.
+
+- **With `sym_ops`, the build is only 1.90× faster than the same build
+  without them** (1.739 vs 3.308 s), although symmetry cuts the evaluated
+  ERIs roughly 8×. The bookkeeping eats most of the saving.
+- **Only about a quarter of the symmetric build computes integrals.**
+  Inclusive shares, with `build_quartet_orbit`, `distinct_eri_orbit` and
+  `accumulate_term` marked `noinline`:
+
+  | | share of the D2h build |
+  |---|---|
+  | `build_quartet_orbit` (including its allocation and sort) | **35.7 %** |
+  | heap: `free` 13.8 % (5.3 % of it `mach_absolute_time` inside macOS's zone allocator) + `operator new` 11.5 % | **~25–30 %** |
+  | `accumulate_term`, including `distinct_eri_orbit` 13.2 % | 16.2 % |
+  | ERI work: HGP 13.2 % + closed form 11.7 % | ~25 % |
+
+Two fixes follow, both bitwise:
+
+- **L3a — reject non-representatives early.** A quartet is not its orbit's
+  representative as soon as one operation maps it, after
+  canonicalization, to a lexicographically smaller quartet. A pre-check
+  loop can return at the first such image, with no allocation, dedup or
+  sort. Most canonical quartets are non-representatives (about 7 in 8
+  under D2h), and they are skipped today too, so the set of accumulated
+  quartets is unchanged. A quartet that is symmetry-forbidden *and* a
+  non-representative is skipped either way. A forbidden representative is
+  still caught by the full orbit build.
+- **L3b — no heap for representatives.** The orbit has at most
+  `sym_ops.size()` ≤ 8 elements. Build it in a fixed-capacity stack array
+  in the same order, then sort it the same way, so representatives see an
+  identical orbit. Keep the vector-returning `build_quartet_orbit` for
+  any other caller.
+
+Predicted: the heap share (~25–30 %) goes away entirely, and most of
+`build_quartet_orbit`'s remaining ~24 % goes with the non-representatives,
+for roughly **1.6–2×** on the symmetric build. L2 then takes
+`distinct_eri_orbit`'s 13.2 % here as well. Gate: the naphthalene G
+fingerprint (sym on) is unchanged before and after, plus the existing
+symmetry regression cases.
 
 **L4 — precompute the low-L readout per block.** Today each component
 recomputes its axis slot (nested loops over the Cartesian exponents) and
@@ -402,8 +487,9 @@ multiplies four norm ratios. Both depend only on the component indices
 within the block, so they can be a small table per block. This is probably
 the smallest of the four; do it only if L0 attributes visible time to it.
 
-**Order:** L0, then L1 and L2 (independent, both pure), then L3 with its
-fixture, and L4 only if L0 says so. A step whose measured gain is noise
+**Order:** L0 and the L3 measurement are done. Next L2 and L1 (they help
+every build), then L3a/L3b (symmetric builds, which they could speed up
+by more than any other single step). L4 only if a later profile shows it. A step whose measured gain is noise
 still lands if it is bitwise and simpler. L2 qualifies on that ground
 alone, since it replaces a quadratic search with a table.
 

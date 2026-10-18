@@ -1941,6 +1941,15 @@ identify the path taken. Not required for correctness or performance.
   8-bit keep-mask from three index equalities; L3 no per-quartet
   `std::vector` on the symmetry path; L4 per-block low-L readout table.
   C4 (a generated four-raise chain) remains the d-basis lever.
+  **L0 + L3 measured (2026-10-18).** L0: ~49 % of blocks surviving Schwarz
+  (and ~half of component iterations) cannot hold a canonical quartet (L1);
+  `distinct_eri_orbit` is 17.3 % of the 8 H2O / 6-31G build, 3.7× the G
+  writes (L2). L3, on a new naphthalene / 6-31G D2h probe fixture: with
+  `sym_ops` the build is only 1.90× faster than without, because
+  `build_quartet_orbit` (35.7 %) and per-quartet heap traffic (~25–30 %)
+  leave only ~25 % of the build computing ERIs. Scoped fixes, bitwise:
+  L3a early non-representative exit, L3b stack orbit for representatives
+  (predicted 1.6–2× on symmetric builds).
 
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys
