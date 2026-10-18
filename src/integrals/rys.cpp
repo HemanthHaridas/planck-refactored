@@ -1900,7 +1900,7 @@ Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock_auto_direct(
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops,
     HartreeFock::Integrals::FusedTerm term)
 {
-    return rys_fused_rhf(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem, term, /*closed_form_max_l=*/2);
+    return rys_fused_rhf(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem, term, /*closed_form_max_l=*/3);
 }
 
 std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
@@ -1911,7 +1911,7 @@ HartreeFock::RysQuad::_compute_2e_jk_auto_direct(
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
     return rys_fused_raw_jk(shell_pairs, density, nbasis, kernel, omega, tol_eri,
-        sym_ops, auto_eri_elem, /*closed_form_max_l=*/2);
+        sym_ops, auto_eri_elem, /*closed_form_max_l=*/3);
 }
 
 std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
@@ -1922,6 +1922,6 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf_auto_direct(
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops,
     HartreeFock::Integrals::FusedTerm term)
 {
-    return rys_fused_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem, term, /*closed_form_max_l=*/2);
+    return rys_fused_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem, term, /*closed_form_max_l=*/3);
 }
 

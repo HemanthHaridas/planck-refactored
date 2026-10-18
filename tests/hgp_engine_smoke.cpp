@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <map>
+#include <vector>
 #include <filesystem>
 #include <iostream>
 #include <optional>
@@ -125,12 +127,13 @@ namespace
             sp_cd.B._cartesian[0], sp_cd.B._cartesian[1], sp_cd.B._cartesian[2]);
     }
 
-    // Sweep every component quartet with total L <= 2 through the closed-form
+    // Sweep every component quartet with total L <= 3 through the closed-form
     // shell kernel (low_l_eri.h) and compare against per-component HGP. The
     // kernel is fed the first-component pair of each shell and rescaled by
     // each component's norm ratio, exactly as the fused loop does, so the axis
-    // readout and the d-shell norms are checked too. Every raise layout must
-    // occur: none, one raise on each of A..D, and all ten (c1 <= c2) pairs.
+    // readout and the d-shell norms are checked too. Every reachable raise
+    // layout (sorted center tuple) must occur: a center raised twice needs a d
+    // basis, and three times an f shell, which neither fixture has.
     void check_low_l_kernel(const std::vector<HartreeFock::ShellPair> &pairs, std::size_t nb,
                             const std::string &label, bool expect_d)
     {
@@ -153,22 +156,14 @@ namespace
 
         double max_rel = 0.0;
         std::size_t n = 0;
-        std::array<std::size_t, 15> layout{}; // [0] none, [1+c] one raise, [5+..] pairs
-        const auto pair_slot = [](int a, int b) { // a <= b, 10 pairs
-            int s = 0;
-            for (int x = 0; x < 4; ++x)
-                for (int y = x; y < 4; ++y, ++s)
-                    if (x == a && y == b)
-                        return s;
-            return -1;
-        };
+        std::map<std::vector<int>, std::size_t> layout; // sorted raised centers -> count
         for (const auto &ab : pairs)
             for (const auto &cd : pairs)
             {
                 const HartreeFock::ContractedView *v[4] = {&ab.A, &ab.B, &cd.A, &cd.B};
-                if (L(*v[0]) + L(*v[1]) + L(*v[2]) + L(*v[3]) > 2)
+                if (L(*v[0]) + L(*v[1]) + L(*v[2]) + L(*v[3]) > 3)
                     continue;
-                int nr = 0, cs[2] = {0, 0}, axes[2] = {0, 0}, na = 0;
+                int nr = 0, cs[3] = {0, 0, 0}, axes[3] = {0, 0, 0}, na = 0;
                 double ratio = 1.0;
                 for (int c = 0; c < 4; ++c)
                 {
@@ -182,27 +177,51 @@ namespace
                 }
                 const auto *ab0 = pair_of[first[ab.A._index] * nb + first[ab.B._index]];
                 const auto *cd0 = pair_of[first[cd.A._index] * nb + first[cd.B._index]];
-                std::array<double, 9> out{};
-                HartreeFock::Integrals::low_l_shell_eri(*ab0, *cd0, nr, cs[0], cs[1], out);
-                const int slot = nr == 2 ? 3 * axes[0] + axes[1] : axes[0];
+                std::array<double, 27> out{};
+                HartreeFock::Integrals::low_l_shell_eri(*ab0, *cd0, nr, cs, out);
+                const int slot = nr == 3   ? 9 * axes[0] + 3 * axes[1] + axes[2]
+                                 : nr == 2 ? 3 * axes[0] + axes[1]
+                                           : axes[0];
                 const double got = out[slot] * ratio;
                 const double ref = hgp_quartet_value(ab, cd);
                 max_rel = std::max(max_rel, std::abs(got - ref) / std::max(1.0, std::abs(ref)));
                 ++n;
-                ++layout[nr == 0 ? 0 : nr == 1 ? 1 + cs[0] : 5 + pair_slot(cs[0], cs[1])];
+                ++layout[std::vector<int>(cs, cs + nr)];
             }
 
         std::cout << "[INFO] low-L closed form vs HGP (" << label << "): " << n
                   << " quartets, max rel diff " << max_rel << '\n';
         require_true(n > 0, label + ": no low-L quartets swept");
-        for (int c = 0; c < 15; ++c)
+        // Enumerate every sorted center tuple of length 0..3 and require the
+        // reachable ones.
+        std::size_t required = 0;
+        for (int nr = 0; nr <= 3; ++nr)
         {
-            // Same-center pairs are d shells: only a d basis can produce them.
-            const bool d_layout = c == 5 + 0 || c == 5 + 4 || c == 5 + 7 || c == 5 + 9;
-            if (d_layout && !expect_d)
-                continue;
-            require_true(layout[c] > 0, label + ": raise layout " + std::to_string(c) + " never exercised");
+            std::vector<int> t(nr, 0);
+            while (true)
+            {
+                int maxmult = 0;
+                for (int c = 0; c < 4; ++c)
+                    maxmult = std::max(maxmult, static_cast<int>(std::count(t.begin(), t.end(), c)));
+                if (maxmult <= 1 || (maxmult == 2 && expect_d))
+                {
+                    ++required;
+                    std::string name = "(";
+                    for (int c : t)
+                        name += "ABCD"[c];
+                    require_true(layout[t] > 0, label + ": raise layout " + name + ") never exercised");
+                }
+                int pos = nr - 1; // next non-decreasing tuple
+                while (pos >= 0 && t[pos] == 3)
+                    --pos;
+                if (pos < 0)
+                    break;
+                ++t[pos];
+                for (int q = pos + 1; q < nr; ++q)
+                    t[q] = t[pos];
+            }
         }
+        std::cout << "[INFO]   " << required << " raise layouts required, all exercised if no failure above\n";
         require_near(max_rel, 0.0, 1e-14, label + ": low-L closed form must match HGP");
     }
 } // namespace
@@ -303,7 +322,17 @@ int main()
     }
 
     check_low_l_kernel(sp_pairs, sp_calc->_shells.nbasis(), "water/6-31g", false);
-    check_low_l_kernel(d_pairs, d_calc->_shells.nbasis(), "water/6-31g*", true);
+    // 6-31G* has d only on O and no p after it, so the (d,p)-ordered layouts
+    // (AAB, CCD) cannot occur there; cc-pVDZ's H p shells follow the O d.
+    check_low_l_kernel(d_pairs, d_calc->_shells.nbasis(), "water/6-31g*", false);
+    auto cc_calc = make_water_calculator("cc-pVDZ");
+    if (!cc_calc)
+    {
+        fail(cc_calc.error());
+        return 1;
+    }
+    const auto cc_pairs = build_shellpairs(cc_calc->_shells);
+    check_low_l_kernel(cc_pairs, cc_calc->_shells.nbasis(), "water/cc-pVDZ", true);
 
     if (!g_ok)
         return 1;

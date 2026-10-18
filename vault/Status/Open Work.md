@@ -1924,8 +1924,15 @@ identify the path taken. Not required for correctness or performance.
   1.13× 6-31G\*. The sweep covers all 15 layouts at 3.4e-16 and is
   mutation-verified. The flag-off fingerprint caught a C3 bug where (ss|ss)
   took the closed form with the flag off; fixed. Cumulative on 8 H2O /
-  6-31G since C1: ~2.9× (1.50 → 0.52 s). Next: a post-C3 profile to decide
-  C4.
+  6-31G since C1: ~2.9× (1.50 → 0.52 s).
+  **C3.5 DONE (2026-10-18):** the raise chain extended to a third raise
+  (total L = 3, 27 outputs in registers); Auto passes 3. Over C3:
+  **1.87× on 8 H2O / 6-31G** (predicted 1.6×), 1.43× cc-pVDZ, 1.26× 6-31G\*,
+  max|ΔG| ≤ 4.4e-15. The sweep adds water/cc-pVDZ, the only fixture that
+  reaches the (d,p)-ordered layouts; 31 layouts at 6.1e-16,
+  mutation-verified. Cumulative on 8 H2O / 6-31G since C1: **~5.4×**
+  (1.50 → 0.28 s). Next: profile; the fused loop's per-component overhead
+  and total L = 4 (a generated four-raise chain) are the candidates.
 
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys

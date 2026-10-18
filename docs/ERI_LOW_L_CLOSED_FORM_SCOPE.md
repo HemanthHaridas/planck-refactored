@@ -3,8 +3,8 @@
 Status: **in flight.** Landed: the class-share probe (C0), the Boys-core fix
 it found (Boys library v1.1.0), ShellPair reuse in the fused loop (C1),
 closed-form kernels for total L ≤ 1 (C2), a profile-driven hotspot round on
-the HGP kernel (H1), and closed forms for total L ≤ 2 (C3). Open: the C4
-decision and C5 (screened kernels). This file stays scope-shaped until C3–C5
+the HGP kernel (H1), and closed forms for total L ≤ 2 (C3) and L = 3 (C3.5).
+Open: the C4 decision and C5 (screened kernels). This file stays scope-shaped until C3–C5
 land or are abandoned; then rewrite it as an answer.
 
 **Question:** Would specialized closed-form kernels for low-angular-momentum
@@ -16,21 +16,20 @@ how much?
 Yes, but only at **shell** granularity, and how much depends on the basis.
 A closed form that returns one Cartesian component at a time is only about
 1.7× faster than HGP on its class. One that returns every component of a
-shell quartet from a single primitive pass is about 5× faster. C2 and C3
-shipped the second kind through total L ≤ 2.
+shell quartet from a single primitive pass is about 5× faster. C2, C3 and
+C3.5 shipped the second kind through total L ≤ 3.
 
 Each step is a ratio over the build *with all previous steps*, so the
 columns multiply along a row. The last column is the product.
 
-| fixture | C1 | C2 | H1 | C3 | cumulative |
-|---|---|---|---|---|---|
-| 8 H2O / 6-31G | 1.26× | 1.22–1.28× | 1.16× | **1.61×** | **~2.9×** |
-| 1 H2O / cc-pVDZ | 1.07× | 1.10× | — | 1.23× | — |
-| 4 H2O / 6-31G\* | 1.16× | 1.02–1.05× | 1.16× | 1.13× | ~1.55× |
+| fixture | C1 | C2 | H1 | C3 | C3.5 | cumulative |
+|---|---|---|---|---|---|---|
+| 8 H2O / 6-31G | 1.26× | 1.22–1.28× | 1.16× | 1.61× | **1.87×** | **~5.4×** |
+| 1 H2O / cc-pVDZ | 1.07× | 1.10× | — | 1.23× | 1.43× | — |
+| 4 H2O / 6-31G\* | 1.16× | 1.02–1.05× | 1.16× | 1.13× | 1.26× | ~2.0× |
 
 (H1 was not measured on cc-pVDZ, so that row has no cumulative figure.
-In absolute terms 8 H2O / 6-31G went from 1.50 s before C1 to about
-0.52 s.)
+In absolute terms 8 H2O / 6-31G went from 1.50 s before C1 to 0.28 s.)
 
 Pure sp bases gain the most, because low-L quartets are most of their
 build. What remains above L = 2 needs a compile-time-specialized kernel
@@ -72,8 +71,25 @@ naive regex misattributes inclusive counts):
 | HRR + scratch resize/memset | ~3.4 % | ~6.9 % |
 
 `hgp_vrr` dominated because HGP reruns the whole primitive VRR for every
-Cartesian component. That is what C3 removed for L = 2. A profile after C3
-has not been taken yet; it is the input to the C4 decision.
+Cartesian component. That is what C3 removed for L = 2.
+
+**After C3.** Classes above L = 2 still run through HGP, so their absolute
+time is unchanged and only the build shrank. Re-based on the post-C3 build:
+
+| | 8 H2O / 6-31G (0.516 s) | 4 H2O / 6-31G\* (0.726 s) | 1 H2O / cc-pVDZ (0.043 s) |
+|---|---|---|---|
+| HGP, total L = 3 | **47 %** (all (1,2)) | 22 % | 31 % |
+| HGP, total L = 4 | 15 % | 26 % | 28 % |
+| HGP, total L ≥ 5 | — | ~36 % | — |
+| loop + closed-form kernels + Boys | ~38 % | ~16 % | ~41 % |
+
+(The cc-pVDZ column was first written as 50 % / 10 %, which put the C3.5
+projection at ~1.7×. Recomputed from the class table it is 31 % / 28 %,
+and the projection is ~1.34×.)
+
+Profile self times: `hgp_vrr` 45 % / 60 % (8 H2O / 4 H2O), the fused loop
+with the closed-form kernels inlined 25 % / 12 %, Boys ~16 % / ~12 %. The
+single largest target is now total L = 3, (ps|pp)-type on sp bases.
 
 **Measuring on this machine.** Timings are bimodal under load (P/E-core
 scheduling): one binary alternated between 1.0 s and 1.22 s. So compare
@@ -255,18 +271,70 @@ layouts: d on one center (4), two p on one side (2), one p on each side (4).
   4 threads for full-symmetry RHF/UHF direct (including NH3/6-31G\*, which
   has d shells) and ethylene/cc-pVDZ Auto.
 
+### C3.5 — closed forms for total L = 3 (2026-10-18)
+
+The same kernel with a third raise, applied in center order (c1 ≤ c2 ≤ c3,
+axes i, j, k). With θ0..θ3 from one `boys_vec` call:
+
+    A_i(m)   = d1_i θm + w1_i θ(m+1)                                  m = 0..2
+    A2_j(m)  = d2_j θm + w2_j θ(m+1)        (second raise alone)      m = 0..1
+    B_ij(m)  = d2_j A_i(m) + w2_j A_i(m+1) + [i=j] cpl(1,2; θ)        m = 0..1
+    C_ijk    = d3_k B_ij(0) + w3_k B_ij(1) + [k=i] cpl(1,3; A2_j) + [k=j] cpl(2,3; A_i)
+
+cpl(y,x; X) is the Obara–Saika coupling of the new raise x to the earlier
+raise y it lowers: (X(m) − (ρ/ζ)X(m+1))/2ζ when both are on the bra, the
+same with η on the ket, X(m+1)/2(ζ+η) when they straddle. It is C3's κ,
+one level up. The 27 outputs stay in registers. The 0–2 raise paths are
+unchanged, and Auto now passes `closed_form_max_l = 3`.
+
+- **Speed (same binary, max_l 2 vs 3):**
+
+  | fixture | predicted | measured |
+  |---|---|---|
+  | 8 H2O / 6-31G | ~1.6× | **1.87×** (0.517 → 0.277 s) |
+  | 1 H2O / cc-pVDZ | ~1.34× | 1.43× |
+  | 4 H2O / 6-31G\* | ~1.2× | 1.26× |
+
+  On 8 H2O / 6-31G the build is now 3.7× faster than pure HGP in the same
+  loop. max|ΔG| against HGP is ≤ 4.4e-15, and the flag-off fingerprints are
+  unchanged. **The raise chain still beats its ~5× model at three raises**,
+  which answers C4's question in its favour.
+- **Gate.** The sweep covers total L ≤ 3. Water/6-31G sweeps 7840
+  quartets, 6-31G\* sweeps 15736, and water/cc-pVDZ (new) sweeps 43456.
+  Max relative difference is 6.1e-16. Every reachable raise layout is
+  required: a sorted center tuple of length 0–3, with a center raised twice
+  only on a d basis and never three times (no f). 15 layouts on the sp
+  fixtures, 31 on cc-pVDZ.
+- **Why cc-pVDZ joined the gate.** The first L ≤ 3 sweep failed on 6-31G\*
+  with (AAB) and (CCD) never exercised. Those layouts need a d on A and a p
+  on B with the d's AO index first. In water/6-31G\* the only d is O's, and
+  nothing with p follows it (H has no p). cc-pVDZ's H p shells come after
+  the O d.
+- **Mutation-verified:** dropping the `[k=i]` coupling fails at 0.0096 /
+  0.079 (6-31G / 6-31G\*); dropping the `[k=j]` coupling fails at 0.24.
+- **Suites.** Core 79/79, `planck-compute-2e` OK. Smoke 43/45; the two
+  failures are the known rccsdt routing cases. Output is identical at 1 and
+  4 threads for full-symmetry RHF/UHF direct, NH3/6-31G\* and
+  ethylene/cc-pVDZ Auto.
+
 ## Open
 
 ### C4 — decision point: a specialized family through total L ≤ 4
 
-What is left above L = 2 is mostly `hgp_vrr` on L = 3–4 classes. Their
-share of the post-C3 build has not been measured; take a profile before
-deciding. This is a different project. It needs `template <int LA, int LB, int LC, int
+After C3.5 the HGP remainder is total L = 4 (all of it on sp bases, since
+6-31G has nothing higher) and L ≥ 5 on d bases. Four raises would mean 81
+outputs and one more intermediate level. That is still the same chain,
+generated rather than hand-written. A post-C3.5 profile should come
+first. It needs `template <int LA, int LB, int LC, int
 LD>` shell kernels: an OS/MD-style VRR with constexpr-unrolled loops and no
 runtime scratch. It **must not** reintroduce the hoist's buffer or gather.
 (pp|pp) and (ds|ps) will need intermediates; size them on the stack per
-instantiation. C3 beat its prediction, so the go/no-go now rests on the post-C3 profile
-and on whether someone is actually blocked on Fock time in sp-rich bases.
+instantiation. C3.5 settled the generalization question: three raises still beat the ~5×
+model. So L = 4 can be the same chain (code-generated, since four nested
+levels by hand invite exactly the coupling bugs the mutation tests
+catch), not a separate template engine. Before that, the fused loop's
+per-component filtering and accumulation, which no kernel work touches,
+is probably now the largest single item on sp bases. Profile first.
 
 ### C5 — screened kernels
 

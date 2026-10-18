@@ -158,7 +158,7 @@ namespace
     Eigen::MatrixXd g_last;
 
     // closed_form_max_l routes total-L <= max quartets through low_l_eri.h
-    // (the Auto engine passes 2).
+    // (the Auto engine passes 3).
     template <typename Elem>
     double timed_build(const BuildSetup &s, Elem &&elem, int closed_form_max_l = 0)
     {
@@ -202,8 +202,8 @@ namespace
         const double t_unwrapped = timed_build(s, hgp_elem);
         const std::uint64_t fingerprint = g_fingerprint;
         const Eigen::MatrixXd G_hgp = g_last;
-        double t_low[3] = {t_unwrapped, 0.0, 0.0}, low_dG[3] = {0.0, 0.0, 0.0};
-        for (int max_l = 1; max_l <= 2; ++max_l)
+        double t_low[4] = {t_unwrapped, 0.0, 0.0, 0.0}, low_dG[4] = {0.0, 0.0, 0.0, 0.0};
+        for (int max_l = 1; max_l <= 3; ++max_l)
         {
             timed_build(s, hgp_elem, max_l);
             t_low[max_l] = timed_build(s, hgp_elem, max_l);
@@ -264,7 +264,7 @@ namespace
 
         std::printf("\n%d H2O / %s: G fingerprint %016llx\n", f.nwater, f.basis,
                     static_cast<unsigned long long>(fingerprint));
-        for (int max_l = 1; max_l <= 2; ++max_l)
+        for (int max_l = 1; max_l <= 3; ++max_l)
             std::printf("  closed-form L_tot<=%d: %.3f s vs %.3f s (%.3fx), max|dG| %.1e\n",
                         max_l, t_low[max_l], t_unwrapped, t_unwrapped / t_low[max_l], low_dG[max_l]);
         std::printf("\n%d H2O / %s: nb=%zu, %zu evaluated component quartets\n",
@@ -316,7 +316,7 @@ int main(int argc, char **argv)
         const BuildSetup s = prepare({nwater, basis});
         double total = 0.0;
         for (int r = 0; r < reps; ++r)
-            total += timed_build(s, hgp_elem, 2);
+            total += timed_build(s, hgp_elem, 3);
         std::printf("--profile: %d builds of %d H2O / %s, %.3f s each\n", reps, nwater, basis, total / reps);
         return 0;
     }
