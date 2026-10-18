@@ -3,8 +3,9 @@
 Status: **in flight.** Landed: the class-share probe (C0), the Boys-core fix
 it found, ShellPair reuse (C1), closed-form shell kernels through total
 L ≤ 3 (C2, C3, C3.5), a hotspot round on the HGP kernel (H1), the
-closed-form orbit dedup (L2), and skipping non-canonical blocks (L1). Open:
-L3 (symmetry path), L4, the C4 decision, and C5 (screened kernels). When those land or are
+closed-form orbit dedup (L2), skipping non-canonical blocks (L1), and the
+early non-representative exit on the symmetry path (L3a). Open: L3b, L4,
+the C4 decision, and C5 (screened kernels). When those land or are
 abandoned, rewrite this as an answer.
 
 **Question:** How much faster can the direct (memory-direct, fused) Fock
@@ -28,11 +29,15 @@ production configuration), so a row multiplies:
 | 4 H2O / 6-31G\* | 1.16× | ~1.04× | 1.16× | 1.13× | 1.26× | 1.09× | ~1.01× | **~2.2×** |
 | 1 H2O / cc-pVDZ | 1.07× | 1.10× | — | 1.23× | 1.43× | — | — | — |
 
+Symmetric molecules gain on top of this. On D2h naphthalene / 6-31G, L3a
+made the symmetric build 1.70× faster, so integral symmetry now pays 3.1×
+(it paid 1.9× before, against an ideal of ~8×).
+
 The basis decides the payoff. The closed forms cover total L ≤ 3, which is
 almost all of a pure sp build but only part of one with d shells. On 6-31G\*,
 HGP at L ≥ 4 is still ~59 % of the build. These are Fock-build numbers, not
 SCF wall time, and they apply to the default `engine auto` only; explicit
-engines get just the engine-independent steps (C1, H1, L2, L1). **Against the
+engines get just the engine-independent steps (C1, H1, L2, L1, L3a). **Against the
 ~200× libcint gap this is a large step, not a fix.**
 
 ## How it is measured
@@ -91,12 +96,13 @@ Loop counters (L0, per build, temporary instrumentation):
 | … passing the canonical filter | 2.13 M (49 %) | 1.84 M (48 %) | 53 k (46 %) |
 | accepted quartets (closed form) | 2.00 M (95 %) | 1.64 M (46 %) | 53 k (41 %) |
 
-On the symmetric fixture (naphthalene, D2h) the picture is worse. With
-`sym_ops` the build is only **1.90× faster** than without, although symmetry
-cuts the ERIs computed about 8×. Inclusive shares of that build:
-`build_quartet_orbit` 35.7 %, per-quartet heap traffic ~25–30 % (`free`,
-`operator new`, and `mach_absolute_time` called from inside macOS's `free`),
-accumulation 16.2 %, ERI work ~25 %.
+On the symmetric fixture (naphthalene, D2h), before L3a, the picture was
+worse. With `sym_ops` the build was only **1.90× faster** than without,
+although symmetry cuts the ERIs computed about 8×. Inclusive shares of that
+build: `build_quartet_orbit` 35.7 %, per-quartet heap traffic ~25–30 %
+(`free`, `operator new`, and `mach_absolute_time` called from inside macOS's
+`free`), accumulation 16.2 %, ERI work ~25 %. L3a removed most of the first
+two; the symmetric build has not been re-profiled since.
 
 ## Findings
 
@@ -250,31 +256,53 @@ The d-basis gain is within noise; it lands anyway, as a bitwise change
 that makes the loop do less. `planck-fock-accumulate` OK, core 79/79, smoke
 43/45 (the known rccsdt failures).
 
-## Open
-
-### L3 — the symmetry path
+### L3a — reject non-representatives early on the symmetry path
 
 With integral symmetry on, the fused loop receives `sym_ops`, at most 8
-D2h-subgroup signed AO permutations. For every canonical component quartet
-it calls `build_quartet_orbit`, which allocates a vector, applies every
-operation, deduplicates and sorts. It then computes the ERI only if the
-quartet is the orbit's representative, the lexicographic minimum, which is
-about 1 in 8 under D2h. That is the 35.7 % + ~25–30 % above. Two bitwise
-fixes:
-- **L3a — reject non-representatives early.** A quartet is not the
-  representative as soon as one operation maps it (after
-  canonicalization) to a lexicographically smaller quartet. A pre-check can
-  return at the first such image, with no allocation, dedup or sort. The set
-  of accumulated quartets is unchanged. A forbidden non-representative is
-  skipped either way; a forbidden representative is still caught by the
-  full build.
-- **L3b — no heap for representatives.** The orbit has at most
-  `sym_ops.size()` ≤ 8 elements. Build it in a fixed-capacity stack array in
-  the same order and sort it the same way. Keep the vector-returning
-  `build_quartet_orbit` for any other caller.
+D2h-subgroup signed AO permutations. It used to call `build_quartet_orbit`
+for every canonical component quartet: allocate a vector, apply every
+operation, deduplicate, sort. It then computed the ERI only if the quartet
+was the orbit's representative (the lexicographic minimum), about 1 in 8
+under D2h. Everything else was thrown away.
 
-Predicted ~1.6–2× on the symmetric build. Gate: the naphthalene fingerprint
-with `sym_ops` unchanged, plus the symmetry regression cases.
+`is_orbit_representative` (`src/integrals/quartet_orbit.h`) answers the
+representative question directly. A quartet is not the representative as
+soon as one operation maps it, after canonicalization, to a
+lexicographically smaller quartet. The check returns at the first such
+image, with no allocation, dedup or sort. The loop calls it first and builds
+the full orbit only for representatives. The accumulated quartets are
+unchanged: a symmetry-forbidden non-representative is skipped either way,
+and a forbidden representative is still caught by the full build.
+
+- **Gate.** `planck-fock-accumulate` compares the pre-check with
+  `build_quartet_orbit`'s own answer on every canonical quartet of a
+  synthetic nb = 6 group whose operations permute AOs as well as flipping
+  signs. Sign-only operations would make every quartet its own
+  representative, so the check would test nothing. That is 231 quartets, 85
+  representatives; the test fails if the fixture has none, or only
+  representatives. Mutation-verified: dropping the canonicalization fails at
+  (0,1,3,3). All the symmetric fused-vs-two-phase checks pass, and the G
+  fingerprints are identical on all five probe fixtures, naphthalene with
+  `sym_ops` included.
+- **Speed** (best of three interleaved runs): D2h naphthalene / 6-31G
+  1.454 → 0.855 s, **1.70×**. Fixtures without symmetry are unchanged
+  (8 H2O / 6-31G 0.220 → 0.217 s).
+- **Suites.** Core 79/79. Smoke 43/45 (the known rccsdt routing failures).
+  Output is identical at 1 and 4 threads for the C2v symmetry reference
+  case, triplet water UHF, full-symmetry direct water and ethylene/cc-pVDZ.
+
+## Open
+
+### L3b — no heap for representatives
+
+Representatives still get their orbit from `build_quartet_orbit`, which
+allocates a `std::vector` per call. The orbit has at most `sym_ops.size()`
+≤ 8 elements, so it fits a fixed-capacity stack array, built in the same
+order and sorted the same way. The vector-returning function stays for
+other callers. After L3a only representatives (about 1 in 8 canonical
+quartets) pay the allocation, so the remaining gain is smaller than the
+original ~25–30 % heap share. Re-profile the symmetric build to size it
+before doing the work. Gate: the naphthalene fingerprint with `sym_ops`.
 
 ### L4 — per-block low-L readout table
 

@@ -434,6 +434,11 @@ namespace HartreeFock::Integrals
                                 std::vector<QuartetOrbitElem> orbit;
                                 if (use_sym)
                                 {
+                                    // Cheap rejection first: most canonical
+                                    // quartets are not their orbit's
+                                    // representative and never need the orbit.
+                                    if (!is_orbit_representative(i, j, k, l, *sym_ops))
+                                        continue;
                                     auto [orb, forced_zero] =
                                         build_quartet_orbit(i, j, k, l, *sym_ops);
                                     if (forced_zero)

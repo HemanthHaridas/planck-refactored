@@ -41,6 +41,7 @@
 #include "integrals/fock_accumulate.h"
 #include "integrals/hgp.h"
 #include "integrals/os.h"
+#include "integrals/quartet_orbit.h"
 #include "integrals/rys.h"
 #include "integrals/shellpair.h"
 #include "require_boys_library.h"
@@ -99,6 +100,60 @@ namespace
                     }
         std::cout << "[INFO] distinct_eri_orbit == first-occurrence search on " << cases
                   << " tuples (order included)\n";
+    }
+
+    // is_orbit_representative must agree with build_quartet_orbit's own answer
+    // (orbit.front() == the quartet) on every canonical quartet whose orbit is
+    // not forced to zero (forced ones are skipped either way). Sign-only ops
+    // would make every quartet its own representative, so these ops permute
+    // AOs as well: two involutions on nb = 6 with mixed signs, plus their
+    // product and the identity.
+    void check_orbit_representative_precheck()
+    {
+        constexpr std::size_t nb = 6;
+        const auto make_op = [](std::array<int, nb> map, std::array<int8_t, nb> sign)
+        {
+            HartreeFock::SignedAOSymOp op;
+            op.ao_map.assign(map.begin(), map.end());
+            op.ao_sign.assign(sign.begin(), sign.end());
+            return op;
+        };
+        const std::vector<HartreeFock::SignedAOSymOp> ops = {
+            make_op({0, 1, 2, 3, 4, 5}, {1, 1, 1, 1, 1, 1}),
+            make_op({3, 4, 2, 0, 1, 5}, {1, -1, 1, 1, -1, 1}),
+            make_op({0, 1, 5, 3, 4, 2}, {1, 1, -1, 1, 1, -1}),
+            make_op({3, 4, 5, 0, 1, 2}, {1, -1, -1, 1, -1, -1}),
+        };
+        std::size_t compared = 0, reps = 0;
+        for (std::size_t i = 0; i < nb; ++i)
+            for (std::size_t j = i; j < nb; ++j)
+                for (std::size_t k = i; k < nb; ++k)
+                    for (std::size_t l = k; l < nb; ++l)
+                    {
+                        if (k == i && l < j)
+                            continue;
+                        const auto [orbit, forced] =
+                            HartreeFock::Integrals::build_quartet_orbit(i, j, k, l, ops);
+                        if (forced)
+                            continue;
+                        const bool ref = orbit.front().i == i && orbit.front().j == j &&
+                                         orbit.front().k == k && orbit.front().l == l;
+                        const bool got =
+                            HartreeFock::Integrals::is_orbit_representative(i, j, k, l, ops);
+                        if (got != ref)
+                        {
+                            fail("is_orbit_representative disagrees with build_quartet_orbit at (" +
+                                 std::to_string(i) + "," + std::to_string(j) + "," +
+                                 std::to_string(k) + "," + std::to_string(l) + ")");
+                            return;
+                        }
+                        ++compared;
+                        reps += ref;
+                    }
+        std::cout << "[INFO] is_orbit_representative == build_quartet_orbit on " << compared
+                  << " canonical quartets (" << reps << " representatives)\n";
+        if (reps == 0 || reps == compared)
+            fail("is_orbit_representative fixture is vacuous: needs both representatives and non-representatives");
     }
 
     // The production quartet loop's canonical filter (os.cpp): each canonical
@@ -858,6 +913,7 @@ int main()
         return 1;
 
     check_distinct_orbit_matches_search();
+    check_orbit_representative_precheck();
     check_random_tensors();
     check_split_accumulators();
     check_real_integrals("sto-3g");

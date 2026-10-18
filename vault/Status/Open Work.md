@@ -1961,8 +1961,17 @@ identify the path taken. Not required for correctness or performance.
   `.a` matches the bra's, skipping the ~49 % of blocks that cannot hold a
   canonical quartet. Bitwise (fingerprints identical on all five
   fixtures). 1.06× on 8 H2O / 6-31G (predicted 1.05–1.07×), ~1.01–1.02×
-  elsewhere. 8 H2O / 6-31G since C1: ~6.8× (1.50 → 0.22 s). Next: L3a/L3b,
-  the symmetry path (predicted 1.6–2× on symmetric builds).
+  elsewhere. 8 H2O / 6-31G since C1: ~6.8× (1.50 → 0.22 s).
+  **L3a DONE (2026-10-18):** `is_orbit_representative` rejects
+  non-representative quartets before any orbit is built (no allocation,
+  dedup or sort); only representatives (~1 in 8 under D2h) build the full
+  orbit. Bitwise (fingerprints identical, naphthalene with `sym_ops`
+  included). Gated by an exhaustive comparison against
+  `build_quartet_orbit` on an AO-permuting synthetic group (231 quartets,
+  85 representatives), mutation-verified. D2h naphthalene / 6-31G
+  **1.70×** (1.454 → 0.855 s); integral symmetry now pays 3.1× instead of
+  1.9×. Next: re-profile the symmetric build to size L3b (stack orbit for
+  representatives).
 
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys

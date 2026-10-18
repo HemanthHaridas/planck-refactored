@@ -85,6 +85,32 @@ namespace HartreeFock::Integrals
         return true;
     }
 
+    // True iff canonical quartet (i,j,k,l) is its orbit's representative: no
+    // operation maps it (after canonicalization) to a lexicographically smaller
+    // quartet. Same answer as build_quartet_orbit(...).first.front() == (i,j,k,l)
+    // whenever the orbit is not forced to zero, but with no allocation, dedup or
+    // sort, and it returns at the first smaller image. Most canonical quartets
+    // are not representatives (about 7 in 8 under D2h), so the fused Fock loop
+    // calls this first and builds the full orbit only for representatives. A
+    // forbidden non-representative is skipped either way; a forbidden
+    // representative is still caught by build_quartet_orbit.
+    inline bool is_orbit_representative(
+        std::size_t i, std::size_t j, std::size_t k, std::size_t l,
+        const std::vector<HartreeFock::SignedAOSymOp> &sym_ops) noexcept
+    {
+        for (const auto &op : sym_ops)
+        {
+            std::size_t ii = static_cast<std::size_t>(op.ao_map[i]);
+            std::size_t jj = static_cast<std::size_t>(op.ao_map[j]);
+            std::size_t kk = static_cast<std::size_t>(op.ao_map[k]);
+            std::size_t ll = static_cast<std::size_t>(op.ao_map[l]);
+            canonicalize_orbit_quartet(ii, jj, kk, ll);
+            if (std::tie(ii, jj, kk, ll) < std::tie(i, j, k, l))
+                return false;
+        }
+        return true;
+    }
+
     // {orbit, forced_zero}. The orbit is sorted, so orbit.front() is the
     // representative: callers compute the ERI only when the incoming quartet IS
     // the representative, then replicate over the orbit.
