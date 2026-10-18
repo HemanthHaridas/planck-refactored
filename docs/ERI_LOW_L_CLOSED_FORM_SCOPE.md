@@ -4,7 +4,8 @@ Status: **in flight.** Landed: the class-share probe (C0), the Boys-core fix
 it found (Boys library v1.1.0), ShellPair reuse in the fused loop (C1),
 closed-form kernels for total L ≤ 1 (C2), a profile-driven hotspot round on
 the HGP kernel (H1), and closed forms for total L ≤ 2 (C3) and L = 3 (C3.5).
-Open: the C4 decision and C5 (screened kernels). This file stays scope-shaped until C3–C5
+Open: fused-loop overhead (L1–L4, scoped below), the C4 decision and C5
+(screened kernels). This file stays scope-shaped until C3–C5
 land or are abandoned; then rewrite it as an answer.
 
 **Question:** Would specialized closed-form kernels for low-angular-momentum
@@ -90,6 +91,21 @@ and the projection is ~1.34×.)
 Profile self times: `hgp_vrr` 45 % / 60 % (8 H2O / 4 H2O), the fused loop
 with the closed-form kernels inlined 25 % / 12 %, Boys ~16 % / ~12 %. The
 single largest target is now total L = 3, (ps|pp)-type on sp bases.
+
+**After C3.5** (kernel marked `noinline` in a profiling-only build, so its
+time is separable; self time as a share of the build):
+
+| frame | 8 H2O / 6-31G (0.294 s) | 4 H2O / 6-31G\* (0.601 s) |
+|---|---|---|
+| fused loop: traversal, filters, Schwarz, orbit, accumulate | **35.8 %** | 13.3 % |
+| `hgp_vrr` (remaining L ≥ 4 classes) | 23.0 % | **58.9 %** |
+| closed-form kernel `low_l_shell_eri` | 18.1 % | 3.5 % |
+| Boys (`boys_vec` + `boys`) | ~19 % | ~10 % |
+| HGP accumulate + HRR + scratch | ~3 % | ~11 % |
+
+The two bases now want different work. On sp bases the loop itself is the
+largest item, and no kernel change touches it (L1–L4). On d bases HGP at
+L ≥ 4 still dominates (C4).
 
 **Measuring on this machine.** Timings are bimodal under load (P/E-core
 scheduling): one binary alternated between 1.0 s and 1.22 s. So compare
@@ -319,6 +335,84 @@ unchanged, and Auto now passes `closed_form_max_l = 3`.
 
 ## Open
 
+### L — fused-loop overhead
+
+A reading of `fused_fock_build` and `fock_accumulate.h` against the profile
+found four places where the loop does avoidable work per component quartet.
+All four keep the result **bitwise-identical**: the same quartets are
+accumulated, in the same order, with the same values. The flag-off and
+flag-on G fingerprints are the gate for every step.
+
+**L0 — split the 35.8 % first.** `fused_fock_build`'s self time is one
+number covering traversal, filters, orbit enumeration and the `G` writes.
+Two cheap measurements split it before anything is changed:
+- *Counters*, in a probe-only build: blocks visited, blocks containing at
+  least one canonical quartet, component iterations, accepted quartets. That
+  gives the wasted-traversal fraction exactly, not from a timer.
+- *Attribution*: a profiling build with `distinct_eri_orbit` and
+  `accumulate_term` marked `noinline`, the same trick that separated the
+  kernel above.
+
+Each step below gets its prediction from these numbers.
+
+**L1 — skip blocks that cannot hold a canonical quartet.** The ket loop
+runs over all `ngp` shell-group pairs, and canonical order (k ≥ i, then
+l ≥ j) is enforced only per component. Groups are AO-contiguous and
+`group_pairs` is lexicographic, so every ket block with
+`group_pairs[ket].a < group_pairs[bra].a` has k < i for *every* component
+and contributes nothing. Yet each one still runs the block Schwarz test,
+the low-L setup, the pair lookups and four nested component loops. Start
+the ket loop at the first block whose `.a` equals `bra.a` (one precomputed
+offset per group). Those blocks only ever fed nothing, so the result is
+bitwise-identical, and the per-thread work split (static over bra) is
+unchanged. Roughly half of all block visits disappear; what fraction of the
+loop's time they were is L0's question.
+
+**L2 — closed-form orbit dedup.** `distinct_eri_orbit` builds all 8 tuples
+of `(ij|kl)`'s permutational orbit and compares each against every earlier
+keeper. That is up to 28 four-index comparisons per accepted quartet, and
+twice per quartet in `RawCoulombExchange`. Which tuples are duplicates
+follows from three equalities. With `X = {k,l} == {i,j}` as multisets,
+tuple *n* in the fixed order (ij|kl), (ji|kl), (ij|lk), (ji|lk), (kl|ij),
+(lk|ij), (kl|ji), (lk|ji) is kept iff:
+
+| n | 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 |
+|---|---|---|---|---|---|---|---|---|
+| keep iff | always | i≠j | k≠l | i≠j ∧ k≠l | ¬X | ¬X ∧ k≠l | ¬X ∧ i≠j | ¬X ∧ i≠j ∧ k≠l |
+
+This holds for any (i,j,k,l), not only canonical ones; each entry was
+derived by checking tuple n against every earlier tuple. It keeps the
+same tuples in the same order as the current first-occurrence dedup, so
+the result is bitwise-identical. Gate: an exhaustive comparison against the
+current enumeration over all index tuples in 0..4 (625 cases, including
+non-canonical), added to `tests/fock_accumulate.cpp`.
+
+**L3 — no heap allocation per quartet on the symmetry path.** With
+point-group symmetry on, `build_quartet_orbit` returns a fresh
+`std::vector<QuartetOrbitElem>` for every surviving component quartet. The
+water-chain fixtures run without symmetry, so the probe never sees this,
+but every full-symmetry direct SCF pays it. Fill a thread-local buffer
+instead. Measure on a symmetric fixture: add one to the probe (for example
+CH4/Td or a symmetric water cluster with `sym_ops`), so this is not tuned
+blind.
+
+**L4 — precompute the low-L readout per block.** Today each component
+recomputes its axis slot (nested loops over the Cartesian exponents) and
+multiplies four norm ratios. Both depend only on the component indices
+within the block, so they can be a small table per block. This is probably
+the smallest of the four; do it only if L0 attributes visible time to it.
+
+**Order:** L0, then L1 and L2 (independent, both pure), then L3 with its
+fixture, and L4 only if L0 says so. A step whose measured gain is noise
+still lands if it is bitwise and simpler. L2 qualifies on that ground
+alone, since it replaces a quadratic search with a table.
+
+**Out of scope here:** restructuring the accumulation itself, for example
+accumulating each block into a small local buffer and flushing it to `G`.
+That changes summation order (so it is not bitwise) and interacts with the
+threading determinism rules. Revisit only if L0 shows the `G` writes
+dominate after L1–L3.
+
 ### C4 — decision point: a specialized family through total L ≤ 4
 
 After C3.5 the HGP remainder is total L = 4 (all of it on sp bases, since
@@ -332,9 +426,9 @@ runtime scratch. It **must not** reintroduce the hoist's buffer or gather.
 instantiation. C3.5 settled the generalization question: three raises still beat the ~5×
 model. So L = 4 can be the same chain (code-generated, since four nested
 levels by hand invite exactly the coupling bugs the mutation tests
-catch), not a separate template engine. Before that, the fused loop's
-per-component filtering and accumulation, which no kernel work touches,
-is probably now the largest single item on sp bases. Profile first.
+catch), not a separate template engine. The post-C3.5 profile confirms the
+split: on sp bases the loop is the larger item (L series first); on d
+bases HGP at L ≥ 4 is (C4).
 
 ### C5 — screened kernels
 

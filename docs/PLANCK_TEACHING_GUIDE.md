@@ -1866,6 +1866,161 @@ Screening happens at the block level: a Schwarz bound is computed per
 shell-group pair and whole quartet blocks are rejected before any primitive work
 is done.
 
+The loop also never builds a `ShellPair` of its own. Every caller already
+passes the full per-AO pair list (`shell_pairs`, from `build_shellpairs`), so
+the loop looks pairs up in an \(n_b \times n_b\) pointer table keyed on the AO
+index. An earlier version rebuilt the pair — a heap allocation plus a `pow`
+and an `exp` per primitive pair — for every surviving component quartet. That
+rebuild was 8.4 % of a profile; removing it bought 1.16–1.26×, with the Fock
+matrix byte-identical.
+
+#### Shell-level closed forms for low angular momentum
+
+All three engines share a calling convention: one call returns **one
+Cartesian component** of a contracted quartet. That convention hides a cost
+floor. Every call runs the full primitive loop — one Boys evaluation and one
+prefactor product per primitive quartet — and the loop is repeated for every
+component. An oxygen 1s in 6-31G\* has six primitives, so a single
+\((1s\,1s|1s\,1s)\) is \(6^4 = 1296\) primitive quartets. A \((ps|ss)\) shell
+quartet repeats that 3×, a \((pp|ss)\) 9×, a \((pp|pp)\) 81×.
+
+How much of the cost is the recurrence, and how much is the primitive loop?
+A closed-form \((ss|ss)\) kernel answers it directly. There is no recurrence
+left in
+
+\[
+(ss|ss) = \sum_{pq} c_p c_q K_{AB} K_{CD}\, 2\sqrt{\rho/\pi}\; F_0(\rho R_{PQ}^2),
+\]
+
+yet written per component it was only **1.7×** faster than HGP. Written per
+*shell quartet*, producing every component from one primitive pass, the same
+idea measured **4.9×**. The lesson is that at low angular momentum the
+recurrence is not the expensive part; repeating the primitive loop is.
+
+**The raise chain.** For a shell quartet with total angular momentum
+\(L = L_A + L_B + L_C + L_D \le 3\), treat the angular momentum as a short
+list of *raises*, each a center (A, B, C or D) and an axis, applied in center
+order. Per primitive quartet let \(\theta_m = c\,K_{AB}K_{CD}\,2\sqrt{\rho/\pi}
+\,F_m(T)\). Let \(d\) be \(P-A\), \(P-B\), \(Q-C\) or \(Q-D\) for the raised
+center, and let \(w\) be \(W-P\) for a bra raise or \(W-Q\) for a ket raise.
+Then:
+
+\[
+\begin{aligned}
+A_i(m) &= d_{1,i}\,\theta_m + w_{1,i}\,\theta_{m+1}\\
+B_{ij}(m) &= d_{2,j}\,A_i(m) + w_{2,j}\,A_i(m{+}1) + [i{=}j]\,\kappa_{12}(\theta; m)\\
+C_{ijk} &= d_{3,k}\,B_{ij}(0) + w_{3,k}\,B_{ij}(1)
+ + [k{=}i]\,\kappa_{13}(A^{(2)}_j) + [k{=}j]\,\kappa_{23}(A_i)
+\end{aligned}
+\]
+
+\(A^{(2)}_j\) is the second raise applied on its own. \(\kappa_{yx}\) is the
+Obara–Saika coupling between a new raise \(x\) and the earlier raise \(y\)
+that it lowers. Its form depends only on where the two raises sit:
+
+| raises | \(\kappa_{yx}(X; m)\) |
+|---|---|
+| both on the bra | \(\bigl(X(m) - \tfrac{\rho}{\zeta}X(m{+}1)\bigr)/2\zeta\) |
+| both on the ket | \(\bigl(X(m) - \tfrac{\rho}{\eta}X(m{+}1)\bigr)/2\eta\) |
+| one on each side | \(X(m{+}1)/2(\zeta+\eta)\) |
+
+These are exactly the VRR terms written out earlier in this section, unrolled
+for a fixed small \(L\). Nothing here is new physics. What is new is the
+**shape**: there are at most 27 outputs, every intermediate lives in
+registers, and there is no scratch buffer, gather or HRR pass. (That is also
+why this is not the "contract once per shell quartet" hoist, which measured
+*slower*: the hoist kept the general VRR/HRR machinery and its buffers.)
+
+**Feeding the kernel.** The kernel is given the pair of the *first* component
+of each shell, because all components of a shell share the primitive data.
+They do not all share the normalization, though. `coeff_product` carries the
+first component's Cartesian norm, \(1/\sqrt{(2l_x-1)!!(2l_y-1)!!(2l_z-1)!!}\).
+For a d shell that is \(1/\sqrt3\) on \(d_{xx}\) but 1 on \(d_{xy}\). So each
+output is rescaled by its own ratio, which is exactly 1.0 for s and p. Leave
+the ratio out and every off-diagonal d component is wrong by \(\sqrt3\). Only a
+fixture with d shells can notice that.
+
+**Reading the output.** The loop reads each component's slot from its
+Cartesian exponents: walk the centers in order and emit one axis per unit of
+\(x\), then \(y\), then \(z\). \(p_y\) on A followed by \(p_z\) on C is slot
+\((1,2)\), and \(d_{xy}\) is \((0,1)\). Because the kernel applies raises in
+the same order, one rule covers every layout. A per-layout switch would be a
+place for bugs to hide.
+
+**Engine purity.** The closed forms run only when the caller sets
+`closed_form_max_l`, and only the Auto engine (the default) sets it. An
+explicit `engine os`, `hgp` or `rys` stays exactly that engine. Otherwise the
+cross-engine regression comparators would quietly compare the closed form
+against itself. The closed forms are Coulomb-only. The range-separated
+kernels scale \(T\), the prefactor, \(W-P\)/\(W-Q\) and the straddling
+\(\kappa\) (the same `inv_2_delta` term behind the HGP screened-kernel bug), so
+they stay on HGP until a screened sweep covers them.
+
+**Verifying it.** Three checks, each aimed at a different way of being wrong.
+
+- *Per quartet.* `planck-hgp-engine-smoke` runs every component quartet with
+  \(L \le 3\) of water in 6-31G, 6-31G\* and cc-pVDZ through the kernel,
+  feeding it exactly as the fused loop does, and compares against HGP. The
+  worst relative difference is about \(6\times10^{-16}\).
+- *Coverage.* The sweep also requires every reachable *layout* (the sorted
+  tuple of raised centers) to occur. That requirement found a real fixture
+  gap. A d on A with a p on B in the same pair needs the d's AO index first,
+  and in water/6-31G\* nothing with p comes after oxygen's d. cc-pVDZ joined
+  the gate because its hydrogen p shells do.
+- *Mutation.* Each coupling term, the straddling \(\kappa\) and the norm
+  ratio were deliberately broken in turn, and each break turned the gate red.
+  A gate that has never failed proves nothing.
+
+A fourth check guards the opt-in: a bitwise fingerprint of \(\mathbf G\)
+built *with the flag off*. It caught a real bug. The first L ≤ 2 version
+tested \(\sum L \le\) `max_l` without requiring `max_l` > 0, so
+\((ss|ss)\) blocks (\(0 \le 0\)) took the closed form with the flag off. That
+quietly changed every explicit engine, and the fingerprint moved on every
+fixture.
+
+**What it bought.** On 8 water / 6-31G, one thread, each step measured
+against the build that already had the previous ones, so the factors
+multiply:
+
+| step | gain | build |
+|---|---|---|
+| reuse the caller's `ShellPair`s | 1.26× | 1.50 → 1.19 s |
+| closed forms, \(L \le 1\) | ~1.25× | → ~1.0 s |
+| one vector Boys call per primitive; single-pass accumulate | 1.16× | → ~0.82 s |
+| closed forms, \(L = 2\) | 1.61× | → 0.52 s |
+| closed forms, \(L = 3\) | 1.87× | → 0.28 s |
+
+That is about 5.4× overall. On d-containing 6-31G\* the same steps give about
+2×, because the classes they cover are a smaller share of its build. The gain
+always depends on how much of the build the covered classes account for.
+
+**What the profiling taught.**
+
+- *A profile share is a lower bound* on what removing the work is worth. The
+  `ShellPair` rebuild was 8.4 % of samples but worth 1.16–1.26×, because its
+  allocator and cache traffic were charged to other frames.
+- *Look for the cheap fix next to the hot frame.* The HGP seed made one Boys
+  call per order through the loader's indirect call (6.8 % *self* time in the
+  wrapper alone). One `boys_vec` call does the same work, bitwise-identically.
+  OS had already made that change; HGP and the RI kernels never got it.
+- *Predict before measuring, and say where the prediction came from.* Every
+  step was projected from the class shares beforehand. When a projection was
+  wrong (one table row had misread the class data) the measurement exposed
+  it, and that is the reason to write the projection down first.
+- *Measure on a quiet comparison.* Apple-silicon timings are bimodal under
+  load (P- and E-core scheduling). Compare best-of runs of interleaved
+  binaries, or one binary with the feature switched off and on, never a
+  single run.
+- *A build in flight is not the source on disk.* Restoring a file within the
+  same second a binary was linked made `make` skip a rebuild, and the next
+  profile showed no change. Check `nm` or the fingerprint, not the timestamp.
+
+Implementation: `src/integrals/low_l_eri.h` (kernel), `src/integrals/fused_fock.h`
+(block dispatch, axis readout, norm ratios), `tests/hgp_engine_smoke.cpp` (sweep),
+`tests/eri_class_share_benchmark.cpp` (`planck-eri-class-share`: class shares,
+fingerprints, `--profile`). The full record, including what is still open, is in
+`docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
+
 #### Threading: why the reduction order is fixed
 
 The accumulations into \(\mathbf F\) are **read-modify-write**, unlike the
@@ -2513,9 +2668,13 @@ rule applies across stored-ERI and direct-Fock paths. Schwarz screening,
 canonical-quartet iteration, and the tensor/Fock contraction patterns are
 unchanged from the per-engine path.
 
-The dispatch is purely a *which-engine* choice — all three engines return
-bitwise-identical integrals — so `engine auto` always matches any single
-explicit engine to machine precision. This is verified by the
+The table is purely a *which-engine* choice — all three engines return
+bitwise-identical integrals. In the memory-direct Fock build, though, Auto
+first sends every shell quartet with total \(L \le 3\) to the closed-form
+kernels described in §9 ("Shell-level closed forms"). Those agree with the
+engines to about \(10^{-15}\) in \(\mathbf G\) but are not bitwise-identical,
+so `engine auto` matches an explicit engine to machine precision rather than
+bit for bit. This is verified by the
 `engine_scf_energy_compare.py` comparator (OS == HGP == Rys == Auto to
 `0.000e+00 Eh`), including a He₂/cc-pV5Z case that reaches the high-L corner
 where Auto actually selects OS (Lsum ≳ 11) and Rys (\((7,8)\)/\((8,8)\)).

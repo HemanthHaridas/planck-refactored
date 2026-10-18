@@ -1931,8 +1931,16 @@ identify the path taken. Not required for correctness or performance.
   max|ΔG| ≤ 4.4e-15. The sweep adds water/cc-pVDZ, the only fixture that
   reaches the (d,p)-ordered layouts; 31 layouts at 6.1e-16,
   mutation-verified. Cumulative on 8 H2O / 6-31G since C1: **~5.4×**
-  (1.50 → 0.28 s). Next: profile; the fused loop's per-component overhead
-  and total L = 4 (a generated four-raise chain) are the candidates.
+  (1.50 → 0.28 s).
+  **Post-C3.5 profile and L series scoped (2026-10-18).** On 8 H2O / 6-31G
+  the fused loop itself is now 35.8 % self (the kernel 18 %, HGP at L ≥ 4
+  23 %); on 6-31G\* HGP at L ≥ 4 is 59 %. Scoped in the doc, all bitwise:
+  L0 split the loop time (counters plus noinline attribution); L1 skip
+  ket blocks with `.a < bra.a` (roughly half of all block visits, zero
+  contribution); L2 replace the quadratic `distinct_eri_orbit` with an
+  8-bit keep-mask from three index equalities; L3 no per-quartet
+  `std::vector` on the symmetry path; L4 per-block low-L readout table.
+  C4 (a generated four-raise chain) remains the d-basis lever.
 
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys
