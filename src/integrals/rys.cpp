@@ -1806,7 +1806,7 @@ namespace
         const Eigen::MatrixXd &density, std::size_t nb,
         HartreeFock::ERIKernel kernel, double omega, double tol_eri,
         const std::vector<HartreeFock::SignedAOSymOp> *sym_ops, Elem elem,
-        HartreeFock::Integrals::FusedTerm term)
+        HartreeFock::Integrals::FusedTerm term, bool closed_form_low_l = false)
     {
         const Eigen::MatrixXd Q = rys_schwarz_matrix(shell_pairs, nb, sym_ops);
         Eigen::MatrixXd G, Ga_unused, Gb_unused;
@@ -1814,7 +1814,8 @@ namespace
         dens.P = &density;
         HartreeFock::Integrals::fused_fock_build(
             shell_pairs, nb, Q, kernel, omega, tol_eri,
-            /*spin_resolved=*/false, dens, G, Ga_unused, Gb_unused, elem, sym_ops, term);
+            /*spin_resolved=*/false, dens, G, Ga_unused, Gb_unused, elem, sym_ops, term,
+            closed_form_low_l);
         return G;
     }
 
@@ -1823,7 +1824,8 @@ namespace
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const Eigen::MatrixXd &density, std::size_t nb,
         HartreeFock::ERIKernel kernel, double omega, double tol_eri,
-        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops, Elem elem)
+        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops, Elem elem,
+        bool closed_form_low_l = false)
     {
         const Eigen::MatrixXd Q = rys_schwarz_matrix(shell_pairs, nb, sym_ops);
         Eigen::MatrixXd J, K, unused;
@@ -1832,7 +1834,7 @@ namespace
         HartreeFock::Integrals::fused_fock_build(
             shell_pairs, nb, Q, kernel, omega, tol_eri,
             /*spin_resolved=*/false, dens, J, K, unused, elem, sym_ops,
-            HartreeFock::Integrals::FusedTerm::RawCoulombExchange);
+            HartreeFock::Integrals::FusedTerm::RawCoulombExchange, closed_form_low_l);
         return {std::move(J), std::move(K)};
     }
 
@@ -1842,7 +1844,7 @@ namespace
         const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb, std::size_t nb,
         HartreeFock::ERIKernel kernel, double omega, double tol_eri,
         const std::vector<HartreeFock::SignedAOSymOp> *sym_ops, Elem elem,
-        HartreeFock::Integrals::FusedTerm term)
+        HartreeFock::Integrals::FusedTerm term, bool closed_form_low_l = false)
     {
         const Eigen::MatrixXd Q = rys_schwarz_matrix(shell_pairs, nb, sym_ops);
         const Eigen::MatrixXd Pt = Pa + Pb;
@@ -1853,7 +1855,8 @@ namespace
         dens.Pb = &Pb;
         HartreeFock::Integrals::fused_fock_build(
             shell_pairs, nb, Q, kernel, omega, tol_eri,
-            /*spin_resolved=*/true, dens, G_unused, Ga, Gb, elem, sym_ops, term);
+            /*spin_resolved=*/true, dens, G_unused, Ga, Gb, elem, sym_ops, term,
+            closed_form_low_l);
         return {Ga, Gb};
     }
 }
@@ -1897,7 +1900,7 @@ Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock_auto_direct(
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops,
     HartreeFock::Integrals::FusedTerm term)
 {
-    return rys_fused_rhf(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem, term);
+    return rys_fused_rhf(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem, term, /*closed_form_low_l=*/true);
 }
 
 std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
@@ -1908,7 +1911,7 @@ HartreeFock::RysQuad::_compute_2e_jk_auto_direct(
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
     return rys_fused_raw_jk(shell_pairs, density, nbasis, kernel, omega, tol_eri,
-        sym_ops, auto_eri_elem);
+        sym_ops, auto_eri_elem, /*closed_form_low_l=*/true);
 }
 
 std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
@@ -1919,6 +1922,6 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf_auto_direct(
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops,
     HartreeFock::Integrals::FusedTerm term)
 {
-    return rys_fused_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem, term);
+    return rys_fused_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem, term, /*closed_form_low_l=*/true);
 }
 

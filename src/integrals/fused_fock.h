@@ -36,6 +36,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <optional>
 #include <vector>
@@ -45,6 +46,7 @@
 #include "base/mpi_env.h"
 #include "base/types.h"
 #include "fock_accumulate.h"
+#include "low_l_eri.h"
 #include "quartet_orbit.h"
 
 #ifdef USE_OPENMP
@@ -187,7 +189,8 @@ namespace HartreeFock::Integrals
         Eigen::MatrixXd &Gb,
         EriElem &&eri_elem,
         const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
-        FusedTerm term = FusedTerm::Combined)
+        FusedTerm term = FusedTerm::Combined,
+        bool closed_form_low_l = false)
     {
         const bool use_sym = (sym_ops != nullptr) && !sym_ops->empty();
         std::vector<const HartreeFock::ContractedView *> ao_views;
@@ -217,6 +220,17 @@ namespace HartreeFock::Integrals
         for (const auto &sp : shell_pairs)
             if (sp.A._index < nb && sp.B._index < nb)
                 pair_of[sp.A._index * nb + sp.B._index] = &sp;
+
+        // Shell quartets with total L <= 1 can take the closed-form kernel
+        // (low_l_eri.h), which yields every component from one primitive pass.
+        // Opt-in by the caller, Coulomb only.
+        const bool use_low_l = closed_form_low_l && kernel == HartreeFock::ERIKernel::Coulomb;
+        std::vector<int> group_L(ngroups, 0);
+        for (std::size_t g = 0; g < ngroups; ++g)
+        {
+            const auto &c = ao_views[groups[g].first_ao]->_cartesian;
+            group_L[g] = c[0] + c[1] + c[2];
+        }
 
         // Shell-pair Schwarz bound: Qmax[p] = max over the components (ca,cb) of
         // shell-pair p of Q(i,j). Since every component quartet of the block
@@ -318,6 +332,23 @@ namespace HartreeFock::Integrals
                 const FusedShellGroup &gC = groups[group_pairs[ket].a];
                 const FusedShellGroup &gD = groups[group_pairs[ket].b];
 
+                // Closed-form path for this block: which center carries the
+                // p (-1 for (ss|ss)), the first-component pairs, and the values,
+                // computed on the first component quartet that survives.
+                const std::size_t ia = group_pairs[bra].a, ib = group_pairs[bra].b;
+                const std::size_t ic = group_pairs[ket].a, id = group_pairs[ket].b;
+                const HartreeFock::ShellPair *low_ab = nullptr, *low_cd = nullptr;
+                int low_p = -1;
+                if (use_low_l && group_L[ia] + group_L[ib] + group_L[ic] + group_L[id] <= 1)
+                {
+                    low_ab = pair_of[gA.first_ao * nb + gB.first_ao];
+                    low_cd = pair_of[gC.first_ao * nb + gD.first_ao];
+                    low_p = group_L[ia] ? 0 : group_L[ib] ? 1 : group_L[ic] ? 2 : group_L[id] ? 3 : -1;
+                }
+                const bool low = low_ab && low_cd;
+                bool low_ready = false;
+                std::array<double, 3> low_vals{};
+
                 for (std::size_t ca = 0; ca < gA.n_components; ++ca)
                 {
                     const HartreeFock::ContractedView &cvA = *ao_views[gA.first_ao + ca];
@@ -388,16 +419,34 @@ namespace HartreeFock::Integrals
                                         continue;
                                 }
 
-                                std::optional<HartreeFock::ShellPair> spCD_own;
-                                const HartreeFock::ShellPair *spCD_ptr = pair_of[k * nb + l];
-                                if (!spCD_ptr)
-                                    spCD_ptr = &spCD_own.emplace(cvC, cvD);
-                                const HartreeFock::ShellPair &spCD = *spCD_ptr;
-                                const double val = eri_elem(
-                                    spAB, spCD,
-                                    lAx, lAy, lAz, lBx, lBy, lBz,
-                                    lCx, lCy, lCz, lDx, lDy, lDz,
-                                    kernel, omega);
+                                double val;
+                                if (low)
+                                {
+                                    if (!low_ready)
+                                    {
+                                        low_l_shell_eri(*low_ab, *low_cd, low_p, low_vals);
+                                        low_ready = true;
+                                    }
+                                    const auto axis = [](int ly, int lz) { return ly ? 1 : lz ? 2 : 0; };
+                                    const int ax = low_p == 0 ? axis(lAy, lAz)
+                                                 : low_p == 1 ? axis(lBy, lBz)
+                                                 : low_p == 2 ? axis(lCy, lCz)
+                                                 : low_p == 3 ? axis(lDy, lDz)
+                                                              : 0;
+                                    val = low_vals[ax];
+                                }
+                                else
+                                {
+                                    std::optional<HartreeFock::ShellPair> spCD_own;
+                                    const HartreeFock::ShellPair *spCD_ptr = pair_of[k * nb + l];
+                                    if (!spCD_ptr)
+                                        spCD_ptr = &spCD_own.emplace(cvC, cvD);
+                                    val = eri_elem(
+                                        spAB, *spCD_ptr,
+                                        lAx, lAy, lAz, lBx, lBy, lBz,
+                                        lCx, lCy, lCz, lDx, lDy, lDz,
+                                        kernel, omega);
+                                }
 
                                 if (!use_sym)
                                 {

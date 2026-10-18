@@ -1,8 +1,8 @@
 # Closed-Form Low-Angular-Momentum ERI Kernels — Scope
 
 Status: **scope; C0 done, the Boys-core fix it found shipped in Boys library
-v1.1.0 (2026-10-17), and C1 done (2026-10-18, 1.16–1.26× and bitwise); no
-closed-form kernel landed.** In-flight work, so
+v1.1.0 (2026-10-17), C1 done (2026-10-18, 1.16–1.26× and bitwise), and C2
+done (2026-10-18, the L_tot ≤ 1 closed forms, 1.22–1.28× on 8 H2O / 6-31G).** In-flight work, so
 this file is allowed to be scope-shaped; rewrite it as an answer when the work
 lands or is abandoned.
 
@@ -267,7 +267,7 @@ benefits, because OS, HGP and Rys all drive the same loop.
 The kernel is now about 89 % of the build on every fixture. The pure-sp case
 strengthens: closed forms through L_tot ≤ 2 project to 1.77× on 8 H2O / 6-31G.
 
-### C2 — (ss|ss) and (ps|ss) shell kernels, Coulomb only
+### C2 — (ss|ss) and (ps|ss) shell kernels, Coulomb only (DONE 2026-10-18)
 
 - Add a shell-quartet entry point to the fused loop for these classes. The
   kernel returns all `n_A n_B n_C n_D` components; the loop then applies the
@@ -285,14 +285,62 @@ strengthens: closed forms through L_tot ≤ 2 project to 1.77× on 8 H2O / 6-31G
   of the 4 H2O / 6-31G\* build (about 1.05×, which is inside the run noise)
   but 23.0 % on 8 H2O / 6-31G (about 1.23×). Only the sp fixture can falsify
   the prediction.
-- **Stop rule:** if the sp-fixture gain is materially below 1.23× the interface overhead is eating the kernel, and C3/C4 will
-  not pay either.
+- **Stop rule:** if the sp-fixture gain is materially below 1.23×, the
+  interface overhead is eating the kernel, and C3/C4 will not pay either.
+
+#### C2 results
+
+`low_l_shell_eri` (`src/integrals/low_l_eri.h`) runs one primitive pass per
+shell quartet with total L ≤ 1. It takes the first-component pair of each
+shell (all components of an s or p shell share the primitive data and norm)
+and returns (ss|ss) or the three components of the one p. `fused_fock_build`
+calls it per block, on the first component quartet that survives the
+filters, under an opt-in `closed_form_low_l` flag that only the Auto engine
+(the default) sets. Explicit `engine os/hgp/rys` stay pure, so the
+cross-engine comparators still compare what they say they do. The canonical
+filter, Schwarz, symmetry orbit and accumulation all run per component on
+the output, unchanged.
+
+- **The stop rule passes.** Same binary, flag off vs on, three runs each,
+  1 thread:
+
+  | fixture | predicted | measured | max\|ΔG\| vs HGP |
+  |---|---|---|---|
+  | 8 H2O / 6-31G | 1.23× | **1.22–1.28×** | 3.5e-15 |
+  | 1 H2O / cc-pVDZ | 1.10× | 1.10–1.11× | 4.0e-15 |
+  | 4 H2O / 6-31G\* | 1.05× | 1.02–1.05× | 1.8e-15 |
+
+  The kernel delivers its modelled ~5×: the interface is not eating it.
+- **Gates.** `planck-hgp-engine-smoke` now sweeps all 3136 total-L ≤ 1
+  component quartets of water/6-31G and water/6-31G\* through the kernel,
+  fed exactly as the fused loop feeds it. Max relative difference against
+  HGP is 3.4e-16, with all five p positions (none, A, B, C, D) exercised.
+  Mutation-verified: flipping the W−P sign and swapping the y/z axis readout
+  each fail at 0.26 / 0.77. Core 79/79, `planck-compute-2e` OK. Outputs are
+  identical at 1 and 4 threads for full-symmetry RHF/UHF direct and
+  ethylene/cc-pVDZ Auto.
+- **Found, not caused:** `water_rhf_spherical_direct_631gd` differs between
+  1 and 4 threads in the last digits of the converged residuals
+  (1.621e-12 vs 1.619e-12; energy identical to all 10 digits). The C1-only
+  binary does the same, so it predates C2, and it lives somewhere on the
+  spherical direct path outside the fused loop. Not chased.
 
 ### C3 — Hand-written through L_tot ≤ 2
 
 (pp|ss), (ps|ps), (ds|ss) and their bra/ket mirrors. The d components need
 their per-component norm at output. Predicted cumulative after C1: about
-1.17× on 6-31G\*, 1.77× on 8 H2O / 6-31G.
+1.17× on 6-31G\*, 1.77× on 8 H2O / 6-31G. C2 measured ~1.25× of that, so C3
+should add about 1.42× on 8 H2O / 6-31G and 1.11× on 6-31G\*.
+
+Design carried from C2: extend `low_l_shell_eri` rather than add a second
+kernel. Dispatch on the AM layout (two p's on the same side, one p on each
+side, one d), and keep the axis readout local to the loop's existing `ax`
+lambda. A d shell breaks C2's "first component carries the norm"
+shortcut: the xx-type and xy-type components carry different
+`_component_norm`s, so read them from the component's own `ContractedView`
+at output, not from the first-component pair. Gate by extending the
+hgp_engine_smoke sweep to total L ≤ 2, which must again exercise every
+position.
 
 ### C4 — Decision point: template-specialized family through L_tot ≤ 4
 

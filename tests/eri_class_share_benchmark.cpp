@@ -155,9 +155,12 @@ namespace
     // Bitwise fingerprint of the last build's G (FNV-1a over its bytes), so a
     // loop change that must not move a single bit can be checked here.
     std::uint64_t g_fingerprint = 0;
+    Eigen::MatrixXd g_last;
 
+    // closed_form_low_l routes total-L <= 1 quartets through low_l_eri.h,
+    // as the Auto engine does.
     template <typename Elem>
-    double timed_build(const BuildSetup &s, Elem &&elem)
+    double timed_build(const BuildSetup &s, Elem &&elem, bool closed_form_low_l = false)
     {
         Eigen::MatrixXd G, Ga, Gb;
         HartreeFock::Integrals::FusedFockDensities dens;
@@ -165,13 +168,15 @@ namespace
         const auto t0 = Clock::now();
         HartreeFock::Integrals::fused_fock_build(
             s.pairs, s.nb, s.Q, HartreeFock::ERIKernel::Coulomb, 0.0, /*tol_eri=*/1e-10,
-            /*spin_resolved=*/false, dens, G, Ga, Gb, elem);
+            /*spin_resolved=*/false, dens, G, Ga, Gb, elem, nullptr,
+            HartreeFock::Integrals::FusedTerm::Combined, closed_form_low_l);
         const double dt = seconds_since(t0);
         std::uint64_t h = 1469598103934665603ULL;
         const auto *bytes = reinterpret_cast<const unsigned char *>(G.data());
         for (std::size_t b = 0; b < sizeof(double) * static_cast<std::size_t>(G.size()); ++b)
             h = (h ^ bytes[b]) * 1099511628211ULL;
         g_fingerprint = h;
+        g_last = std::move(G);
         return dt;
     }
 
@@ -196,6 +201,10 @@ namespace
         timed_build(s, hgp_elem); // warm the HGP scratch and the caches
         const double t_unwrapped = timed_build(s, hgp_elem);
         const std::uint64_t fingerprint = g_fingerprint;
+        const Eigen::MatrixXd G_hgp = g_last;
+        timed_build(s, hgp_elem, true);
+        const double t_low = timed_build(s, hgp_elem, true);
+        const double low_dG = (g_last - G_hgp).cwiseAbs().maxCoeff();
 
 #ifdef USE_OPENMP
         const int nthreads = omp_get_max_threads();
@@ -251,6 +260,8 @@ namespace
 
         std::printf("\n%d H2O / %s: G fingerprint %016llx\n", f.nwater, f.basis,
                     static_cast<unsigned long long>(fingerprint));
+        std::printf("  closed-form L_tot<=1: %.3f s vs %.3f s (%.3fx), max|dG| %.1e\n",
+                    t_low, t_unwrapped, t_unwrapped / t_low, low_dG);
         std::printf("\n%d H2O / %s: nb=%zu, %zu evaluated component quartets\n",
                     f.nwater, f.basis, s.nb, n_total);
         std::printf("  Fock build %.3f s (unwrapped), %.3f s (wrapped); HGP kernel ~%.0f%% of the build\n",

@@ -1905,7 +1905,15 @@ identify the path taken. Not required for correctness or performance.
   `planck-hgp-engine-smoke` and `planck-compute-2e` segfaulted because
   they never called `require_boys_library()` (fixed). Separately,
   `ethylene_rhf_ccpvdz_auto` dropped to 15 iterations with
-  Boys v1.1.0, so its floor is now `>= 15`. Next: C2, measured on 8 H2O / 6-31G.
+  Boys v1.1.0, so its floor is now `>= 15`.
+  **C2 DONE (2026-10-18):** the L_tot ≤ 1 closed-form shell kernel
+  (`src/integrals/low_l_eri.h`), used by the Auto engine only (explicit
+  engines stay pure). 1.22–1.28× on 8 H2O / 6-31G against the predicted
+  1.23×, 1.10× cc-pVDZ, 1.02–1.05× 6-31G\*; max|ΔG| vs HGP ≤ 4e-15. The
+  per-quartet sweep in `planck-hgp-engine-smoke` agrees to 3.4e-16 and is
+  mutation-verified. Separately found: `water_rhf_spherical_direct_631gd` is
+  not bitwise across 1/4 threads (residual last digits; predates C2,
+  outside the fused loop). Next: C3 (L_tot ≤ 2).
 
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys
