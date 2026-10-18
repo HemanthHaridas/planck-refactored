@@ -39,6 +39,7 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <type_traits>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -318,15 +319,16 @@ namespace HartreeFock::Integrals
         const int mpi_rank = HartreeFock::Mpi::rank();
         const int mpi_size = HartreeFock::Mpi::size();
 
-        // schedule(static), NOT dynamic — load-bearing, see the header note.
-#ifdef USE_OPENMP
-#pragma omp parallel for schedule(static)
-#endif
-        for (std::size_t bra = 0; bra < ngp; ++bra)
+        // The bra body is instantiated twice, with and without integral
+        // symmetry, so the non-symmetric hot loop carries no symmetry code.
+        // With the symmetry branches inline, merely moving the orbit buffer
+        // swung the non-symmetric build by 2-5 % through code generation.
+        const auto bra_body = [&](std::size_t bra, auto sym_tag)
         {
+            constexpr bool kSym = decltype(sym_tag)::value;
             if (mpi_size > 1 &&
                 static_cast<int>(bra % static_cast<std::size_t>(mpi_size)) != mpi_rank)
-                continue;
+                return;
 
 #ifdef USE_OPENMP
             const int thread_id = omp_get_thread_num();
@@ -342,6 +344,12 @@ namespace HartreeFock::Integrals
                 : raw_coulomb_exchange ? ga_partials[thread_id] : g_partials[thread_id];
 
             const FusedShellGroup &gA = groups[group_pairs[bra].a];
+
+            // One orbit buffer per bra iteration (so per thread), reused for
+            // every representative quartet: no per-quartet allocation.
+            std::vector<QuartetOrbitElem> orbit;
+            if constexpr (kSym)
+                orbit.reserve(sym_ops->size());
             const FusedShellGroup &gB = groups[group_pairs[bra].b];
 
             for (std::size_t ket = first_pair_of[group_pairs[bra].a]; ket < ngp; ++ket)
@@ -431,19 +439,15 @@ namespace HartreeFock::Integrals
                                 // quartets, and fock_accumulate_* dedups the
                                 // 8-fold permutational orbit of each. See the
                                 // dedup argument in quartet_orbit.h.
-                                std::vector<QuartetOrbitElem> orbit;
-                                if (use_sym)
+                                if constexpr (kSym)
                                 {
                                     // Cheap rejection first: most canonical
                                     // quartets are not their orbit's
                                     // representative and never need the orbit.
                                     if (!is_orbit_representative(i, j, k, l, *sym_ops))
                                         continue;
-                                    auto [orb, forced_zero] =
-                                        build_quartet_orbit(i, j, k, l, *sym_ops);
-                                    if (forced_zero)
+                                    if (fill_quartet_orbit(i, j, k, l, *sym_ops, orbit))
                                         continue; // symmetry-forbidden: vanishes
-                                    orbit = std::move(orb);
                                     // Only the representative computes the value.
                                     if (orbit.front().i != i || orbit.front().j != j ||
                                         orbit.front().k != k || orbit.front().l != l)
@@ -486,24 +490,37 @@ namespace HartreeFock::Integrals
                                         kernel, omega);
                                 }
 
-                                if (!use_sym)
+                                if constexpr (!kSym)
                                 {
                                     accumulate_term(term, need_uhf, G_local, Gb_local,
                                                     dens, i, j, k, l, val);
-                                    continue;
                                 }
-
-                                for (const auto &e : orbit)
+                                else
                                 {
-                                    const double sv = static_cast<double>(e.sign) * val;
-                                    accumulate_term(term, need_uhf, G_local, Gb_local,
-                                                    dens, e.i, e.j, e.k, e.l, sv);
+                                    for (const auto &e : orbit)
+                                    {
+                                        const double sv = static_cast<double>(e.sign) * val;
+                                        accumulate_term(term, need_uhf, G_local, Gb_local,
+                                                        dens, e.i, e.j, e.k, e.l, sv);
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+        };
+
+        // schedule(static), NOT dynamic — load-bearing, see the header note.
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+        for (std::size_t bra = 0; bra < ngp; ++bra)
+        {
+            if (use_sym)
+                bra_body(bra, std::true_type{});
+            else
+                bra_body(bra, std::false_type{});
         }
 
         // Fixed thread-index order — never completion order.

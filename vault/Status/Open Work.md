@@ -1970,8 +1970,16 @@ identify the path taken. Not required for correctness or performance.
   `build_quartet_orbit` on an AO-permuting synthetic group (231 quartets,
   85 representatives), mutation-verified. D2h naphthalene / 6-31G
   **1.70×** (1.454 → 0.855 s); integral symmetry now pays 3.1× instead of
-  1.9×. Next: re-profile the symmetric build to size L3b (stack orbit for
-  representatives).
+  1.9×.
+  **L3b DONE (2026-10-18):** representatives fill a reused per-bra orbit
+  buffer (`fill_quartet_orbit`) instead of allocating, and the bra-loop
+  body is compiled twice (`std::true_type` / `std::false_type`), so the
+  non-symmetric loop carries no symmetry code. The split was needed: the
+  buffer hoisted naively slowed molecules *without* symmetry by 5 % through
+  codegen. Bitwise. D2h naphthalene 1.23× over L3a (0.862 → 0.702 s);
+  symmetry now pays 3.8× (was 1.9× before L3a). Non-symmetric fixtures
+  unchanged. Next: C4 (total L = 4, about a third of every build now);
+  one fresh probe run as its baseline.
 
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys

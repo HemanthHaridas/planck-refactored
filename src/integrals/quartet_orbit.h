@@ -114,13 +114,17 @@ namespace HartreeFock::Integrals
     // {orbit, forced_zero}. The orbit is sorted, so orbit.front() is the
     // representative: callers compute the ERI only when the incoming quartet IS
     // the representative, then replicate over the orbit.
-    inline std::pair<std::vector<QuartetOrbitElem>, bool> build_quartet_orbit(
+    // Fill `orbit` (cleared first) with the deduplicated, sorted orbit of
+    // (i,j,k,l); returns true if it is symmetry-forbidden (the orbit is then
+    // partial). Takes the caller's vector so a loop can reuse one buffer per
+    // thread instead of allocating per quartet: that allocation was ~13 % of a
+    // symmetric fused Fock build after the representative pre-check.
+    inline bool fill_quartet_orbit(
         std::size_t i, std::size_t j, std::size_t k, std::size_t l,
-        const std::vector<HartreeFock::SignedAOSymOp> &sym_ops)
+        const std::vector<HartreeFock::SignedAOSymOp> &sym_ops,
+        std::vector<QuartetOrbitElem> &orbit)
     {
-        std::vector<QuartetOrbitElem> orbit;
-        orbit.reserve(sym_ops.size());
-
+        orbit.clear();
         for (const auto &op : sym_ops)
         {
             std::size_t ii = static_cast<std::size_t>(op.ao_map[i]);
@@ -131,7 +135,7 @@ namespace HartreeFock::Integrals
                              static_cast<int>(op.ao_sign[k]) * static_cast<int>(op.ao_sign[l]);
             canonicalize_orbit_quartet(ii, jj, kk, ll);
             if (!append_quartet_orbit(orbit, ii, jj, kk, ll, sign))
-                return {orbit, true}; // symmetry-forbidden
+                return true; // symmetry-forbidden
         }
 
         std::sort(orbit.begin(), orbit.end(),
@@ -139,6 +143,16 @@ namespace HartreeFock::Integrals
                   {
                       return std::tie(a.i, a.j, a.k, a.l) < std::tie(b.i, b.j, b.k, b.l);
                   });
-        return {orbit, false};
+        return false;
+    }
+
+    inline std::pair<std::vector<QuartetOrbitElem>, bool> build_quartet_orbit(
+        std::size_t i, std::size_t j, std::size_t k, std::size_t l,
+        const std::vector<HartreeFock::SignedAOSymOp> &sym_ops)
+    {
+        std::vector<QuartetOrbitElem> orbit;
+        orbit.reserve(sym_ops.size());
+        const bool forced_zero = fill_quartet_orbit(i, j, k, l, sym_ops, orbit);
+        return {std::move(orbit), forced_zero};
     }
 }

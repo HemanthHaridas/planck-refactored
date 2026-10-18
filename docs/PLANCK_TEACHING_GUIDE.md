@@ -1866,6 +1866,24 @@ Point-group symmetry composes on top without double-counting: the ERI is
 computed once at each symmetry-orbit representative and replicated across the
 orbit with the accumulated AO sign, exactly as the tensor scatter does.
 
+The representative is the lexicographically smallest canonical quartet in the
+orbit, and finding out whether a quartet *is* one does not need the orbit. As
+soon as one operation maps the quartet, after canonicalization, to something
+smaller, it is not the representative. So the loop asks that cheap question
+first (`is_orbit_representative`) and builds the full orbit only for
+representatives, about one quartet in eight under \(D_{2h}\). Building every
+orbit just to discard most of them used to be ~60 % of a symmetric build, so
+the 8 operations bought only 1.9× instead of the ideal ~8×. With the
+pre-check and a reused orbit buffer they buy 3.8×.
+
+The symmetric and non-symmetric cases are also compiled as two separate
+instantiations of the loop body (a generic lambda called with
+`std::true_type` or `std::false_type`). With the symmetry branches inline, the
+hot non-symmetric loop was sensitive to the most trivial changes: merely moving
+the orbit buffer slowed molecules *without* symmetry by 5 %, through code
+generation alone. Splitting at compile time removed that coupling, and both
+paths got faster.
+
 #### One loop, four engines
 
 OS, HGP, Rys, and Rys-Auto had four copies of the identical two-phase builder.
@@ -2029,6 +2047,9 @@ always depends on how much of the build the covered classes account for.
 - *A build in flight is not the source on disk.* Restoring a file within the
   same second a binary was linked made `make` skip a rebuild, and the next
   profile showed no change. Check `nm` or the fingerprint, not the timestamp.
+- *Time the paths a change should not touch.* A change to the symmetry path
+  slowed the non-symmetric path by 5 %, and only the A/B on a fixture without
+  symmetry showed it.
 
 Implementation: `src/integrals/low_l_eri.h` (kernel), `src/integrals/fused_fock.h`
 (block dispatch, axis readout, norm ratios), `tests/hgp_engine_smoke.cpp` (sweep),

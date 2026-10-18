@@ -4,8 +4,8 @@ Status: **in flight.** Landed: the class-share probe (C0), the Boys-core fix
 it found, ShellPair reuse (C1), closed-form shell kernels through total
 L ≤ 3 (C2, C3, C3.5), a hotspot round on the HGP kernel (H1), the
 closed-form orbit dedup (L2), skipping non-canonical blocks (L1), and the
-early non-representative exit on the symmetry path (L3a). Open: L3b, L4,
-the C4 decision, and C5 (screened kernels). When those land or are
+symmetry path (L3a, L3b). Open: L4, C4 (total L = 4) and C5 (screened
+kernels). When those land or are
 abandoned, rewrite this as an answer.
 
 **Question:** How much faster can the direct (memory-direct, fused) Fock
@@ -29,15 +29,15 @@ production configuration), so a row multiplies:
 | 4 H2O / 6-31G\* | 1.16× | ~1.04× | 1.16× | 1.13× | 1.26× | 1.09× | ~1.01× | **~2.2×** |
 | 1 H2O / cc-pVDZ | 1.07× | 1.10× | — | 1.23× | 1.43× | — | — | — |
 
-Symmetric molecules gain on top of this. On D2h naphthalene / 6-31G, L3a
-made the symmetric build 1.70× faster, so integral symmetry now pays 3.1×
-(it paid 1.9× before, against an ideal of ~8×).
+Symmetric molecules gain on top of this. On D2h naphthalene / 6-31G, L3a and
+L3b made the symmetric build 2.07× faster (1.454 → 0.702 s), so integral
+symmetry now pays 3.8× (it paid 1.9×, against an ideal of ~8×).
 
 The basis decides the payoff. The closed forms cover total L ≤ 3, which is
 almost all of a pure sp build but only part of one with d shells. On 6-31G\*,
 HGP at L ≥ 4 is still ~59 % of the build. These are Fock-build numbers, not
 SCF wall time, and they apply to the default `engine auto` only; explicit
-engines get just the engine-independent steps (C1, H1, L2, L1, L3a). **Against the
+engines get just the engine-independent steps (C1, H1, L2, L1, L3). **Against the
 ~200× libcint gap this is a large step, not a fix.**
 
 ## How it is measured
@@ -291,18 +291,46 @@ and a forbidden representative is still caught by the full build.
   Output is identical at 1 and 4 threads for the C2v symmetry reference
   case, triplet water UHF, full-symmetry direct water and ethylene/cc-pVDZ.
 
+### L3b — reuse the orbit buffer, and split the loop at compile time
+
+After L3a, representatives still got their orbit from `build_quartet_orbit`,
+which allocates a vector per call: ~13 % of the symmetric build in a post-L3a
+profile (`operator new` 6.3 %, `free` 6.7 %; ERI work was by then ~48 %).
+`fill_quartet_orbit` (`src/integrals/quartet_orbit.h`) fills a caller's
+vector instead, and the vector-returning function is a thin wrapper for
+other callers. The same elements are pushed in the same order and sorted the
+same way; the keys are distinct after dedup, so the order is unique. Bitwise.
+
+**Where the buffer lives turned out to matter more than the buffer.**
+
+| variant | 8 H2O / 6-31G (no symmetry) | naphthalene D2h |
+|---|---|---|
+| L3a | 0.218 s | 0.862 s |
+| buffer hoisted to the bra scope | 0.229 s (**−5 %**) | 0.721 s |
+| `thread_local` buffer, pointer in the inner loop | 0.223 s (−2 %) | 0.736 s |
+| **loop body compiled twice (kept)** | **0.217 s** | **0.702 s** |
+
+The first two variants slowed molecules *without* symmetry, although nothing
+there touches the buffer. The cause was code generation: the symmetry
+branches sat inside the hot non-symmetric loop, so any change near them moved
+its register allocation and layout. The fix removes the coupling. The
+bra-loop body is a generic lambda called with `std::true_type` or
+`std::false_type`, and `if constexpr (kSym)` replaces the runtime `use_sym`
+tests, so the non-symmetric instantiation contains no symmetry code at all.
+The symmetric one uses a plain per-bra buffer. Arithmetic and order are
+unchanged.
+
+- **Speed:** D2h naphthalene 1.23× over L3a (0.862 → 0.702 s; predicted
+  ~1.15×). Molecules without symmetry are unchanged (0.218 → 0.217 s).
+  Symmetry now pays 3.8× (0.701 s with `sym_ops`, 2.687 s without).
+- **Gate:** fingerprints identical on all five fixtures;
+  `planck-fock-accumulate`, `planck-compute-2e` and `planck-hgp-engine-smoke`
+  OK.
+- **Suites.** Core 79/79. Smoke 43/45 (the known rccsdt routing failures).
+  Output is identical at 1 and 4 threads for the C2v symmetry reference,
+  triplet water UHF, full-symmetry direct water and ethylene/cc-pVDZ.
+
 ## Open
-
-### L3b — no heap for representatives
-
-Representatives still get their orbit from `build_quartet_orbit`, which
-allocates a `std::vector` per call. The orbit has at most `sym_ops.size()`
-≤ 8 elements, so it fits a fixed-capacity stack array, built in the same
-order and sorted the same way. The vector-returning function stays for
-other callers. After L3a only representatives (about 1 in 8 canonical
-quartets) pay the allocation, so the remaining gain is smaller than the
-original ~25–30 % heap share. Re-profile the symmetric build to size it
-before doing the work. Gate: the naphthalene fingerprint with `sym_ops`.
 
 ### L4 — per-block low-L readout table
 
