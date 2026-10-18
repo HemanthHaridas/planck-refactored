@@ -30,6 +30,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -151,6 +152,10 @@ namespace
         return s;
     }
 
+    // Bitwise fingerprint of the last build's G (FNV-1a over its bytes), so a
+    // loop change that must not move a single bit can be checked here.
+    std::uint64_t g_fingerprint = 0;
+
     template <typename Elem>
     double timed_build(const BuildSetup &s, Elem &&elem)
     {
@@ -161,7 +166,13 @@ namespace
         HartreeFock::Integrals::fused_fock_build(
             s.pairs, s.nb, s.Q, HartreeFock::ERIKernel::Coulomb, 0.0, /*tol_eri=*/1e-10,
             /*spin_resolved=*/false, dens, G, Ga, Gb, elem);
-        return seconds_since(t0);
+        const double dt = seconds_since(t0);
+        std::uint64_t h = 1469598103934665603ULL;
+        const auto *bytes = reinterpret_cast<const unsigned char *>(G.data());
+        for (std::size_t b = 0; b < sizeof(double) * static_cast<std::size_t>(G.size()); ++b)
+            h = (h ^ bytes[b]) * 1099511628211ULL;
+        g_fingerprint = h;
+        return dt;
     }
 
     // Cost of the two steady_clock reads the wrapper adds per quartet.
@@ -184,6 +195,7 @@ namespace
 
         timed_build(s, hgp_elem); // warm the HGP scratch and the caches
         const double t_unwrapped = timed_build(s, hgp_elem);
+        const std::uint64_t fingerprint = g_fingerprint;
 
 #ifdef USE_OPENMP
         const int nthreads = omp_get_max_threads();
@@ -237,6 +249,8 @@ namespace
         const double kernel_net = std::max(0.0, kernel_wrapped - n_total * 0.5 * timer_pair);
         const double kernel_share = std::min(1.0, kernel_net / t_unwrapped);
 
+        std::printf("\n%d H2O / %s: G fingerprint %016llx\n", f.nwater, f.basis,
+                    static_cast<unsigned long long>(fingerprint));
         std::printf("\n%d H2O / %s: nb=%zu, %zu evaluated component quartets\n",
                     f.nwater, f.basis, s.nb, n_total);
         std::printf("  Fock build %.3f s (unwrapped), %.3f s (wrapped); HGP kernel ~%.0f%% of the build\n",

@@ -1156,6 +1156,7 @@ if(BUILD_TESTING)
 
     add_executable(planck-hgp-engine-smoke
         ${CMAKE_SOURCE_DIR}/tests/hgp_engine_smoke.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
@@ -1170,6 +1171,7 @@ if(BUILD_TESTING)
     # loop. Pins permutational symmetry + golden checksum/elements.
     add_executable(planck-compute-2e
         ${CMAKE_SOURCE_DIR}/tests/compute_2e_unit.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp

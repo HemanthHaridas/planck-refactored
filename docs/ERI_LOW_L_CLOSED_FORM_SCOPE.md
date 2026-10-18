@@ -1,7 +1,8 @@
 # Closed-Form Low-Angular-Momentum ERI Kernels — Scope
 
-Status: **scope; C0 done and the Boys-core fix it found shipped in Boys
-library v1.1.0 (2026-10-17); no closed-form kernel landed.** In-flight work, so
+Status: **scope; C0 done, the Boys-core fix it found shipped in Boys library
+v1.1.0 (2026-10-17), and C1 done (2026-10-18, 1.16–1.26× and bitwise); no
+closed-form kernel landed.** In-flight work, so
 this file is allowed to be scope-shaped; rewrite it as an answer when the work
 lands or is abandoned.
 
@@ -179,21 +180,92 @@ SCF iterations instead of 11, because that case sits at the convergence noise
 floor (`water_rhf_hgp_sto3g` re-pinned).
 
 **Revised order of work:** (1) the Boys-core fix: **done, v1.1.0**, shares
-re-measured above; (2) C1; (3) C2 only on the case for pure-sp bases, where
-L_tot ≤ 1 is 19.8 % of the build.
+re-measured above; (2) C1: **done**, 1.16–1.26×, bitwise; (3) C2, justified only by pure-sp bases,
+where L_tot ≤ 1 is 19.8 % of the build.
 
-### C1 — Shell-pair primitive cache for the fused loop
+### C1 — Stop rebuilding ShellPairs inside the fused loop (DONE 2026-10-18)
 
-Precompute primitive-pair data once per **shell** pair per Fock build: product
-center, `K_ab`, ζ, coefficient products. The component norms are kept separate
-(1 for s/p; for d they differ per component, so they must be applied per
-component at output). This overlaps Open Work's Phase E (retire the per-AO
-`ShellPair`). Keep it local to `fused_fock.h` for now, and do not change the
-shared `ShellPair` contract.
+**The cache already exists.** Every `fused_fock_build` caller (OS, HGP and Rys
+Fock / J / K, RHF and UHF) passes `shell_pairs`, the full per-AO upper-triangle
+list from `build_shellpairs`. Each entry is the same `ShellPair(cvA, cvB)`
+the loop builds again at `fused_fock.h:324` (`spAB`, once per bra component
+pair per ket block) and `:374` (`spCD`, once per surviving component quartet).
+The canonical filter already ensures `j >= i` and `l >= k`, so every pair the
+loop builds is in that list with the same A/B order. C1 needs no new struct:
 
-Gate: bitwise-identical Fock matrices if HGP reads the cache exactly as it
-read `ShellPair`. Otherwise fall back to `planck-hgp-engine-smoke` at 1e-12.
-Expected: about 8 % on its own.
+1. At the top of `fused_fock_build`, build an `nb × nb` table of
+   `const ShellPair *`, filled from `shell_pairs` keyed on
+   `(sp.A._index, sp.B._index)`. Key on the index; do not assume the list
+   order. `fused_shell_groups` already allows for a list that does not
+   cover every AO (`_index < nbasis` guard).
+2. Replace both constructions with a table lookup. If an entry is null,
+   construct the pair as today (`// ponytail:` fallback for a partial list).
+   Memory is 8·nb² bytes (2 MB at nb = 500). The pairs themselves already
+   live in the caller.
+
+This is the narrow version of the shell-level cache. It does not touch the
+shared `ShellPair` contract, so Phase E stays independent. Folding
+per-component norms out of `coeff_product` is deferred until C2 needs it.
+
+- **Gate: bitwise.** Same constructor, same inputs, same summation order.
+  So Fock matrices must be byte-identical, and any difference is a bug.
+  Check `planck-hgp-engine-smoke`, `planck-compute-2e` and the smoke
+  regression suite with energies unchanged at every printed digit, plus
+  one full-symmetry direct case (the orbit path shares the loop) and one
+  UHF case.
+- **Measure** with `planck-eri-class-share` on all four fixtures, best of
+  three, `OMP_NUM_THREADS=1`. Expected: the 8.4 % `ShellPair` slice on
+  4 H2O / 6-31G\* goes away, about 1.08–1.09×. Confirm with `--profile`
+  plus `sample` that `ShellPair::ShellPair` has left the profile. It
+  applies to every engine, not only HGP.
+- **Then re-run the class table.** With the loop overhead gone, the kernel
+  shares rise by about 1/0.92. C2/C3's predictions must be recomputed on
+  the new shares, not the ones above.
+
+#### C1 results
+
+Landed as described: a `pair_of` pointer table in `fused_fock_build`, plus a
+construct-on-miss fallback that no current caller reaches. Every engine
+benefits, because OS, HGP and Rys all drive the same loop.
+
+- **Bitwise.** The probe now prints an FNV-1a fingerprint of G. It is
+  byte-identical before and after on all four fixtures. `hartree-fock`
+  output for `ethylene_rhf_ccpvdz_auto` is identical except for timing.
+  Passing: `planck-hgp-engine-smoke`, `planck-compute-2e`, the full-symmetry
+  RHF/UHF direct cases, the OS-vs-HGP SCF comparators (RHF, UHF, HSE06,
+  symmetric HSE06, UKS) and core 78/79. The one failure,
+  `ethylene_rhf_ccpvdz_auto` (15 iterations against a floor of 16),
+  predates C1: the HEAD-header binary prints the same 15. Its floor is now `>= 15`.
+- **Speed.** Best runs, interleaved before/after binaries, 1 thread:
+
+  | fixture | before | after | gain |
+  |---|---|---|---|
+  | 4 H2O / 6-31G\* | 1.17 s | 1.01 s | **1.16×** |
+  | 8 H2O / 6-31G | 1.50 s | 1.19 s | **1.26×** |
+  | 1 H2O / cc-pVDZ | 0.071 s | 0.066 s | 1.07× |
+
+  That is twice the 1.09× the 8.4 % profile share implied. A profile
+  share is again a lower bound: the allocator and cache traffic of the
+  rebuild were charged to other frames. `sample` confirms that
+  `ShellPair::ShellPair`, `pow`/`exp` and malloc are gone from the profile.
+  The top is now `hgp_vrr`, Boys, `hgp_contract_a0c0`, HRR. Timings on this
+  machine are bimodal under load (P/E cores), so compare best runs, never
+  single ones.
+- **Found on the way:** `planck-hgp-engine-smoke` and `planck-compute-2e`
+  segfaulted (ctest too) because they never called `require_boys_library()`,
+  so `Lookup::boys` was a null pointer. Both were fixed. They had been
+  silently broken since the license-gated Boys blob arrived.
+
+**Class shares after C1** (share of the build, projected @5× and ceiling):
+
+| coverage | 4 H2O / 6-31G\* | 1 H2O / cc-pVDZ | 8 H2O / 6-31G |
+|---|---|---|---|
+| L_tot ≤ 1 | 6.1 % → 1.05× (1.07×) | 11.5 % → 1.10× (1.13×) | 23.0 % → **1.23×** (1.30×) |
+| L_tot ≤ 2 | 18.2 % → 1.17× (1.22×) | 30.0 % → 1.32× (1.43×) | 54.5 % → **1.77×** (2.20×) |
+| L_tot ≤ 4 | 58.3 % → 1.88× (2.40×) | 75.0 % → 2.50× (4.0×) | 87.9 % → **3.4×** (8.3×) |
+
+The kernel is now about 89 % of the build on every fixture. The pure-sp case
+strengthens: closed forms through L_tot ≤ 2 project to 1.77× on 8 H2O / 6-31G.
 
 ### C2 — (ss|ss) and (ps|ss) shell kernels, Coulomb only
 
@@ -209,14 +281,18 @@ Expected: about 8 % on its own.
   `planck-compute-2e`, `planck-hgp-engine-smoke`, and thread-count invariance
   (the fused loop's static schedule is unchanged). The result is **not**
   bitwise against HGP, because the summation order changes.
-- **Stop rule:** predicted whole-Fock gain is about 1.08× (8.9 % share at
-  ~5×). If the measured gain is materially below that, the interface overhead
-  is eating the kernel, and C3/C4 will not pay either.
+- **Measure on 8 H2O / 6-31G, not 6-31G\*.** After C1, L_tot ≤ 1 is 6.1 %
+  of the 4 H2O / 6-31G\* build (about 1.05×, which is inside the run noise)
+  but 23.0 % on 8 H2O / 6-31G (about 1.23×). Only the sp fixture can falsify
+  the prediction.
+- **Stop rule:** if the sp-fixture gain is materially below 1.23× the interface overhead is eating the kernel, and C3/C4 will
+  not pay either.
 
 ### C3 — Hand-written through L_tot ≤ 2
 
 (pp|ss), (ps|ps), (ds|ss) and their bra/ket mirrors. The d components need
-their per-component norm at output. Predicted cumulative: about 1.24×.
+their per-component norm at output. Predicted cumulative after C1: about
+1.17× on 6-31G\*, 1.77× on 8 H2O / 6-31G.
 
 ### C4 — Decision point: template-specialized family through L_tot ≤ 4
 

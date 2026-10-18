@@ -5,6 +5,7 @@
 #include <sstream>
 #include <string>
 
+#include "require_boys_library.h"
 #include "base/basis.h"
 #include "base/types.h"
 #include "basis/basis.h"
@@ -124,6 +125,8 @@ namespace
 
 int main()
 {
+    if (!require_boys_library())
+        return 1;
     auto calc_res = make_water_calculator("sto-3g");
     if (!calc_res)
     {

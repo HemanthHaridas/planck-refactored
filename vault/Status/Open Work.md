@@ -1894,7 +1894,18 @@ identify the path taken. Not required for correctness or performance.
   out-of-tree Boys core spent **17.7 % of the whole build** in libm calls,
   on every engine. **Fixed in Boys library v1.1.0 (2026-10-17)**: through the
   blob ~1.13× on 4 H2O / 6-31G* and ~1.37× on 8 H2O / 6-31G. Post-fix
-  L_tot ≤ 2 shares are 16.8 % / 31.0 % / 45.7 %. Next: C1.
+  L_tot ≤ 2 shares are 16.8 % / 31.0 % / 45.7 %.
+  **C1 DONE (2026-10-18):** `fused_fock_build` used to rebuild a
+  `ShellPair` for every component quartet. It now looks the pair up in the
+  `shell_pairs` list the caller already passes. G is byte-identical
+  (fingerprinted in the probe) and the gain is **1.16× (4 H2O / 6-31G\*),
+  1.26× (8 H2O / 6-31G)** on every engine, twice what the 8.4 % profile
+  share implied. Post-C1 L_tot ≤ 2 is 18.2 % / 30.0 % / 54.5 %, so the
+  6-31G projection for C2+C3 is now 1.77×. Found on the way:
+  `planck-hgp-engine-smoke` and `planck-compute-2e` segfaulted because
+  they never called `require_boys_library()` (fixed). Separately,
+  `ethylene_rhf_ccpvdz_auto` dropped to 15 iterations with
+  Boys v1.1.0, so its floor is now `>= 15`. Next: C2, measured on 8 H2O / 6-31G.
 
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys

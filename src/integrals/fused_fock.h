@@ -37,6 +37,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <optional>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -207,6 +208,16 @@ namespace HartreeFock::Integrals
 
         const std::size_t ngp = group_pairs.size();
 
+        // The caller's shell_pairs already holds ShellPair(cvA, cvB) for every
+        // AO pair the canonical filter admits (j >= i, l >= k), built with the
+        // same constructor. Look them up instead of rebuilding one per component
+        // quartet — the rebuild (pow, exp, heap per primitive pair) was ~8 % of
+        // the build. Keyed on _index, not list order. Bitwise-identical.
+        std::vector<const HartreeFock::ShellPair *> pair_of(nb * nb, nullptr);
+        for (const auto &sp : shell_pairs)
+            if (sp.A._index < nb && sp.B._index < nb)
+                pair_of[sp.A._index * nb + sp.B._index] = &sp;
+
         // Shell-pair Schwarz bound: Qmax[p] = max over the components (ca,cb) of
         // shell-pair p of Q(i,j). Since every component quartet of the block
         // (A B | C D) obeys Q(i,j)*Q(k,l) <= Qmax[bra] * Qmax[ket], a block whose
@@ -321,7 +332,13 @@ namespace HartreeFock::Integrals
                             continue;
                         const int lBx = cvB._cartesian[0], lBy = cvB._cartesian[1], lBz = cvB._cartesian[2];
 
-                        const HartreeFock::ShellPair spAB(cvA, cvB);
+                        // ponytail: a pair missing from a partial list is built
+                        // on the spot, as before; no caller passes one today.
+                        std::optional<HartreeFock::ShellPair> spAB_own;
+                        const HartreeFock::ShellPair *spAB_ptr = pair_of[i * nb + j];
+                        if (!spAB_ptr)
+                            spAB_ptr = &spAB_own.emplace(cvA, cvB);
+                        const HartreeFock::ShellPair &spAB = *spAB_ptr;
 
                         for (std::size_t cc = 0; cc < gC.n_components; ++cc)
                         {
@@ -371,7 +388,11 @@ namespace HartreeFock::Integrals
                                         continue;
                                 }
 
-                                const HartreeFock::ShellPair spCD(cvC, cvD);
+                                std::optional<HartreeFock::ShellPair> spCD_own;
+                                const HartreeFock::ShellPair *spCD_ptr = pair_of[k * nb + l];
+                                if (!spCD_ptr)
+                                    spCD_ptr = &spCD_own.emplace(cvC, cvD);
+                                const HartreeFock::ShellPair &spCD = *spCD_ptr;
                                 const double val = eri_elem(
                                     spAB, spCD,
                                     lAx, lAy, lAz, lBx, lBy, lBz,
