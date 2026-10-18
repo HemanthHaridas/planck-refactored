@@ -245,10 +245,12 @@ namespace
                 layout.configure(lABx, lABy, lABz, lCDx, lCDy, lCDz);
             cd_block_size = static_cast<std::size_t>(layout.cx_dim) *
                             layout.cy_dim * layout.cz_dim;
+            // No zero-fill for vrr: MMAX is the sum of the per-axis maxima, so
+            // every cell's m range [0, MMAX - total] is written by hgp_vrr before
+            // any read, and nothing outside it is ever read (OS's policy too).
             const std::size_t vrr_size = spatial_size * static_cast<std::size_t>(m_dim);
             if (vrr.size() != vrr_size)
                 vrr.resize(vrr_size);
-            std::fill(vrr.begin(), vrr.end(), 0.0);
             if (hrr.size() != spatial_size)
                 hrr.resize(spatial_size);
             if (a0c0_accum.size() != spatial_size)
@@ -490,8 +492,13 @@ namespace
         // Build the primitive quartet with a VRR-first / HRR-second layout.
         // Phase 1 keeps this explicit and close to the OS structure so the HGP
         // path can be validated independently before deeper optimization.
+        // One vector Boys call for F_0..F_MMAX, bitwise-identical to the
+        // per-order loop (same idiom as the OS seed). The MMAX+1 scalar calls
+        // were ~24 % of the fused Fock build after C2.
+        double F[4 * MAX_L + 1];
+        HartreeFock::Lookup::boys_vec(T, std::span<double>(F, MMAX + 1));
         for (int m = 0; m <= MMAX; ++m)
-            scratch.v(0, 0, 0, 0, 0, 0, m) = prefac * HartreeFock::Lookup::boys(m, T);
+            scratch.v(0, 0, 0, 0, 0, 0, m) = prefac * F[m];
 
         for (int ax = 1; ax <= lABx; ++ax)
         {
@@ -654,29 +661,6 @@ namespace
         }
     }
 
-    // Runs VRR for one primitive pair and writes the m=0 (a0|c0) slice into
-    // out_a0c0 (length scratch.spatial_size). Assumes scratch has already
-    // been sized via resize_for_quartet so that out_a0c0 (typically pointing
-    // into scratch storage) is not invalidated mid-call.
-    // Does not touch scratch.hrr_data, so the same scratch can be reused
-    // across primitive pairs for an outside-the-loop HRR.
-    static void hgp_eri_primitive_vrr_only(
-        const HartreeFock::PrimitivePair &ppAB,
-        const HartreeFock::PrimitivePair &ppCD,
-        const int lABx, const int lABy, const int lABz,
-        const int lCDx, const int lCDy, const int lCDz,
-        EriScratch &scratch,
-        double *out_a0c0,
-        HartreeFock::ERIKernel kernel,
-        double omega)
-    {
-        hgp_vrr(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz, scratch, kernel, omega);
-
-        const std::size_t m_stride = static_cast<std::size_t>(scratch.m_dim);
-        for (std::size_t idx = 0; idx < scratch.spatial_size; ++idx)
-            out_a0c0[idx] = scratch.vrr_data[idx * m_stride];
-    }
-
     // Runs both HRR passes on scratch.hrr_data (which the caller has already
     // populated with the contracted (a0|c0; m=0) block) and returns the
     // scalar (ab|cd) ERI at the requested cartesian indices.
@@ -725,16 +709,16 @@ namespace
         const int mmax = lABx + lABy + lABz + lCDx + lCDy + lCDz;
         scratch.resize_for_quartet(lABx, lABy, lABz, lCDx, lCDy, lCDz, mmax);
 
-        // hrr_data is only read after the accumulation loop, so it doubles as
-        // the per-pair VRR scratch in the meantime (avoids a second buffer).
-        double *a0c0_pair = scratch.hrr_data;
+        // Accumulate each primitive pair's m=0 (a0|c0) slice straight from the
+        // VRR buffer: one pass, the same arithmetic as copying it out first.
+        const std::size_t m_stride = static_cast<std::size_t>(scratch.m_dim);
+        const double *vrr_m0 = scratch.vrr_data;
         for (const auto &ppAB : spAB.primitive_pairs)
         {
             for (const auto &ppCD : spCD.primitive_pairs)
             {
-                hgp_eri_primitive_vrr_only(
-                    ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
-                    scratch, a0c0_pair, kernel, omega);
+                hgp_vrr(ppAB, ppCD, lABx, lABy, lABz, lCDx, lCDy, lCDz,
+                        scratch, kernel, omega);
 
                 double w = ppAB.coeff_product * ppCD.coeff_product;
                 switch (weight_center)
@@ -756,7 +740,7 @@ namespace
                 }
 
                 for (std::size_t n = 0; n < scratch.spatial_size; ++n)
-                    scratch.a0c0_data[n] += w * a0c0_pair[n];
+                    scratch.a0c0_data[n] += w * vrr_m0[n * m_stride];
             }
         }
     }
