@@ -3,12 +3,16 @@
 
 #include "post_hf/ci/strings.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <random>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 // Full Configuration Interaction Quantum Monte Carlo.
@@ -84,6 +88,10 @@ namespace HartreeFock::Correlation::CI::QMC
     // annihilation is cancellation of opposite signs.
     using Weight = double;
 
+    // Fixed partition count for reproducible FCIQMC reductions and spawning.
+    // It must never depend on OpenMP thread count or population capacity.
+    inline constexpr std::size_t kFciqmcBins = 64;
+
     // The sparse walker population: determinant -> signed weight.
     //
     // This is the piece the existing CI layer cannot supply. CIDeterminantSpace
@@ -152,6 +160,87 @@ namespace HartreeFock::Correlation::CI::QMC
 
     private:
         std::unordered_map<DetKey, Weight, DetKeyHash> _walkers;
+    };
+
+    // Read-only contiguous population owner for the canonical-merge path.
+    // Entries must arrive in strict (alpha, beta) order with cross-bin
+    // contributions already folded.  It deliberately has no add(): building
+    // it by incremental insertion would recreate the map merge this type is
+    // intended to eliminate.  The O(log N) lookup is the future initiator and
+    // estimator occupancy index.
+    class CanonicalWalkerPopulation
+    {
+    public:
+        using Entry = std::pair<DetKey, Weight>;
+
+        void clear() noexcept { _entries.clear(); }
+
+        void assign_sorted(std::vector<Entry> entries)
+        {
+            _entries.clear();
+            if (_entries.capacity() < entries.size())
+                _entries.reserve(entries.size());
+            _entries.insert(_entries.end(),
+                            std::make_move_iterator(entries.begin()),
+                            std::make_move_iterator(entries.end()));
+        }
+
+        std::size_t size() const noexcept { return _entries.size(); }
+        bool empty() const noexcept { return _entries.empty(); }
+        const Entry &at(std::size_t index) const { return _entries.at(index); }
+        auto begin() const noexcept { return _entries.begin(); }
+        auto end() const noexcept { return _entries.end(); }
+
+        Weight weight_at(const DetKey &det) const noexcept
+        {
+            const auto it = std::lower_bound(
+                _entries.begin(), _entries.end(), det,
+                [](const Entry &entry, const DetKey &key) {
+                    return entry.first.alpha < key.alpha
+                        || (entry.first.alpha == key.alpha
+                            && entry.first.beta < key.beta);
+                });
+            return it != _entries.end() && it->first == det ? it->second : 0.0;
+        }
+
+        std::size_t retained_bytes() const noexcept
+        {
+            return _entries.capacity() * sizeof(Entry);
+        }
+
+        struct CompressResult
+        {
+            std::size_t removed = 0;
+            Weight l1_norm = 0.0;
+        };
+
+        // In-place stable compaction retains canonical determinant order.  The
+        // fixed determinant partition and bin-order reduction make the L1
+        // population control scalar independent of storage capacity.
+        CompressResult compress_with_l1_norm(Weight threshold = 0.0) noexcept
+        {
+            CompressResult result;
+            std::array<Weight, kFciqmcBins> bins{};
+            std::size_t out = 0;
+            for (const Entry &entry : _entries)
+            {
+                const Weight aw = std::abs(entry.second);
+                if (aw <= threshold)
+                {
+                    ++result.removed;
+                    continue;
+                }
+                _entries[out++] = entry;
+                bins[DetKeyHash{}(entry.first) % kFciqmcBins] += aw;
+            }
+            _entries.resize(out);
+            for (const Weight bin : bins)
+                result.l1_norm += bin;
+            return result;
+        }
+
+    private:
+        std::vector<Entry> _entries;
     };
 
     // ------------------------------------------------------------------
@@ -283,6 +372,33 @@ namespace HartreeFock::Correlation::CI::QMC
             s = (s ^ (s >> 30)) * 0xbf58476d1ce4e5b9ULL;
             s = (s ^ (s >> 27)) * 0x94d049bb133111ebULL;
             return RandomSource(s ^ (s >> 31));
+        }
+
+        // Derive a stream owned by one determinant.  Unlike derive(index),
+        // both spin strings participate explicitly: this is the prospective
+        // parent-stream convention for a population whose storage order is not
+        // allowed to choose which random variates a parent receives.  The
+        // caller normally first derives a fixed bin root from the per-call
+        // seed, then derives this stream from that root.
+        //
+        // This is deliberately a stateless derivation.  It neither advances
+        // this generator nor depends on a container traversal order.  The
+        // domain constant prevents the two-word path from overlapping the
+        // one-word shard path above for ordinary small indices.
+        RandomSource derive_parent(const DetKey &det) const noexcept
+        {
+            auto avalanche = [](std::uint64_t x) noexcept
+            {
+                x ^= x >> 30;
+                x *= 0xbf58476d1ce4e5b9ULL;
+                x ^= x >> 27;
+                x *= 0x94d049bb133111ebULL;
+                return x ^ (x >> 31);
+            };
+            std::uint64_t s = avalanche(_seed ^ 0xd1b54a32d192ed03ULL);
+            s = avalanche(s ^ det.alpha ^ 0x94d049bb133111ebULL);
+            s = avalanche(s ^ det.beta ^ 0xbf58476d1ce4e5b9ULL);
+            return RandomSource(s);
         }
 
     private:
@@ -547,12 +663,40 @@ namespace HartreeFock::Correlation::CI::QMC
     // have to thread a workspace.
     struct SpawnWorkspace; // defined in spawn_accumulator.h
 
-    // The fixed number of parent bins the spawn step partitions the walker
-    // population into (T2/S4). A FIXED constant, never tied to thread count --
-    // see the long note in fciqmc.cpp. Exposed here so the driver's fused
-    // per-step pre-pass (H2.8.4-b) can pre-partition into `SpawnWorkspace::parents`
-    // using the identical `DetKeyHash{}(det) % kFciqmcBins` binning.
-    inline constexpr std::size_t kFciqmcBins = 64;
+    // Opt-in work ledger for scaling investigations.  It is deliberately a
+    // passive side channel: no field is consulted by propagation, so collecting
+    // it cannot alter random draws, arithmetic order, or the walker trajectory.
+    // A bin is owned by one OpenMP loop iteration, making its counters race-free.
+    struct FCIQMCBinWork
+    {
+        std::uint64_t parents = 0;
+        std::uint64_t spawn_attempts = 0;
+        std::uint64_t invalid_excitations = 0;
+        std::uint64_t zero_hamiltonian = 0;
+        std::uint64_t initiator_rejections = 0;
+        std::uint64_t rounded_to_zero = 0;
+        std::uint64_t accumulator_records = 0;
+        std::uint64_t finalized_records = 0;
+        double worker_seconds = 0.0;
+    };
+
+    struct FCIQMCPropagationProfile
+    {
+        std::uint64_t calls = 0;
+        double setup_seconds = 0.0;
+        double worker_wall_seconds = 0.0;
+        double merge_seconds = 0.0;
+        double merge_insert_seconds = 0.0;
+        double parent_cleanup_seconds = 0.0;
+        double canonical_merge_reserve_seconds = 0.0;
+        double canonical_merge_frontier_seconds = 0.0;
+        double canonical_merge_stream_seconds = 0.0;
+        double canonical_pairwise_seconds = 0.0;
+        std::uint64_t canonical_merge_emitted = 0;
+        std::array<FCIQMCBinWork, kFciqmcBins> bins{};
+
+        void clear() noexcept { *this = {}; }
+    };
 
     void propagate_stochastic(
         const WalkerPopulation &population,
@@ -565,7 +709,53 @@ namespace HartreeFock::Correlation::CI::QMC
         double granularity,
         double initiator_threshold,
         SpawnWorkspace &ws,
-        WalkerPopulation &out);
+        WalkerPopulation &out,
+        FCIQMCPropagationProfile *profile = nullptr);
+
+    // Incremental canonical-owner path: read parents directly from the
+    // contiguous population while retaining the established map output.  This
+    // isolates read-side lookup/iteration from the later output-owner switch.
+    void propagate_stochastic(
+        const CanonicalWalkerPopulation &population,
+        int n_act,
+        const HamiltonianOps &ham,
+        double dt,
+        double shift,
+        RandomSource &rng,
+        int n_spawn_attempts,
+        double granularity,
+        double initiator_threshold,
+        SpawnWorkspace &ws,
+        WalkerPopulation &out,
+        FCIQMCPropagationProfile *profile = nullptr);
+
+    void propagate_stochastic(
+        const WalkerPopulation &population,
+        int n_act,
+        const HamiltonianOps &ham,
+        double dt,
+        double shift,
+        RandomSource &rng,
+        int n_spawn_attempts,
+        double granularity,
+        double initiator_threshold,
+        SpawnWorkspace &ws,
+        CanonicalWalkerPopulation &out,
+        FCIQMCPropagationProfile *profile = nullptr);
+
+    void propagate_stochastic(
+        const CanonicalWalkerPopulation &population,
+        int n_act,
+        const HamiltonianOps &ham,
+        double dt,
+        double shift,
+        RandomSource &rng,
+        int n_spawn_attempts,
+        double granularity,
+        double initiator_threshold,
+        SpawnWorkspace &ws,
+        CanonicalWalkerPopulation &out,
+        FCIQMCPropagationProfile *profile = nullptr);
 
     WalkerPopulation propagate_stochastic(
         const WalkerPopulation &population,
@@ -611,6 +801,11 @@ namespace HartreeFock::Correlation::CI::QMC
     // derived from the full diagonal, whenever that is affordable.
     double max_stable_timestep(
         const WalkerPopulation &population,
+        const HamiltonianOps &ham,
+        double shift);
+
+    double max_stable_timestep(
+        const CanonicalWalkerPopulation &population,
         const HamiltonianOps &ham,
         double shift);
 
@@ -663,6 +858,13 @@ namespace HartreeFock::Correlation::CI::QMC
 
     ProjectedEnergy projected_energy(
         const WalkerPopulation &population,
+        const DetKey &reference,
+        int n_act,
+        const HamiltonianOps &ham,
+        double min_reference_weight = 1e-12);
+
+    ProjectedEnergy projected_energy(
+        const CanonicalWalkerPopulation &population,
         const DetKey &reference,
         int n_act,
         const HamiltonianOps &ham,

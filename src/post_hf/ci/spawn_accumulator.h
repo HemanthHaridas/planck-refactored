@@ -35,8 +35,10 @@
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <queue>
 #include <utility>
 #include <vector>
 
@@ -96,6 +98,13 @@ namespace HartreeFock::Correlation::CI::QMC
         [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }
         [[nodiscard]] bool empty() const noexcept { return entries_.empty(); }
 
+        // Indexed read of finalized output for the canonical cross-bin merge.
+        // Callers must finalize first, just as they must before begin()/end().
+        [[nodiscard]] const std::pair<DetKey, Weight> &at(std::size_t i) const
+        {
+            return entries_.at(i);
+        }
+
         // Iterate the finalized (key, summed-weight) pairs, in the canonical
         // (alpha, beta) order -- which is also the order a merge across bins
         // must consume them in for the merge itself to be deterministic.
@@ -126,6 +135,188 @@ namespace HartreeFock::Correlation::CI::QMC
         bool finalized_ = false;
         static constexpr KeyWeightLess less_{};
     };
+
+    // Literal oracle for the prospective contiguous population owner.  Each bin
+    // is already sorted and locally folded by SpawnAccumulator::finalize().  This
+    // 64-way merge emits globally determinant-key-sorted entries while preserving
+    // the CURRENT map path's summation order for cross-bin duplicates: equal keys
+    // are taken in ascending bin order, exactly as propagate_stochastic's
+    // `for (bin = 0; ...) out.add(...)` loop does today.
+    //
+    // This is not yet a production population.  It is a typed boundary and an
+    // oracle whose equality to the current map output must remain demonstrated
+    // before any parent/RNG convention is redesigned around it.
+    struct CanonicalSpawnMerge
+    {
+        std::vector<std::pair<DetKey, Weight>> entries;
+    };
+
+    struct CanonicalSpawnMergeProfile
+    {
+        double reserve_seconds = 0.0;
+        double frontier_seconds = 0.0;
+        double stream_seconds = 0.0;
+        std::uint64_t emitted = 0;
+    };
+
+    inline CanonicalSpawnMerge merge_finalized_spawn_bins(
+        const std::vector<SpawnAccumulator> &bins,
+        CanonicalSpawnMergeProfile *profile = nullptr)
+    {
+        struct Cursor
+        {
+            std::size_t bin = 0;
+            std::size_t index = 0;
+        };
+        const auto less_key = [&bins](const Cursor &a, const Cursor &b) {
+            const DetKey &ka = bins[a.bin].at(a.index).first;
+            const DetKey &kb = bins[b.bin].at(b.index).first;
+            if (ka.alpha != kb.alpha)
+                return ka.alpha < kb.alpha;
+            if (ka.beta != kb.beta)
+                return ka.beta < kb.beta;
+            return a.bin < b.bin;
+        };
+        // priority_queue exposes the largest element, hence reverse the total
+        // key/bin order to obtain the next smallest determinant contribution.
+        const auto later = [&less_key](const Cursor &a, const Cursor &b) {
+            return less_key(b, a);
+        };
+        const auto reserve_start = profile ? std::chrono::steady_clock::now()
+                                           : std::chrono::steady_clock::time_point{};
+        CanonicalSpawnMerge out;
+        std::size_t upper_bound = 0;
+        for (const auto &bin : bins)
+            upper_bound += bin.size();
+        out.entries.reserve(upper_bound);
+        if (profile)
+            profile->reserve_seconds += std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - reserve_start).count();
+
+        const auto frontier_start = profile ? std::chrono::steady_clock::now()
+                                            : std::chrono::steady_clock::time_point{};
+        std::priority_queue<Cursor, std::vector<Cursor>, decltype(later)> queue(later);
+        for (std::size_t bin = 0; bin < bins.size(); ++bin)
+            if (!bins[bin].empty())
+                queue.push({bin, 0});
+        if (profile)
+            profile->frontier_seconds += std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - frontier_start).count();
+
+        const auto stream_start = profile ? std::chrono::steady_clock::now()
+                                          : std::chrono::steady_clock::time_point{};
+        while (!queue.empty())
+        {
+            const Cursor first = queue.top();
+            const DetKey key = bins[first.bin].at(first.index).first;
+            Weight sum = 0.0;
+            do
+            {
+                const Cursor current = queue.top();
+                queue.pop();
+                sum += bins[current.bin].at(current.index).second;
+                const std::size_t next = current.index + 1;
+                if (next < bins[current.bin].size())
+                    queue.push({current.bin, next});
+            }
+            while (!queue.empty()
+                   && queue.top().bin < bins.size()
+                   && bins[queue.top().bin].at(queue.top().index).first == key);
+            out.entries.push_back({key, sum});
+        }
+        if (profile)
+        {
+            profile->stream_seconds += std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - stream_start).count();
+            profile->emitted += out.entries.size();
+        }
+        return out;
+    }
+
+    // Production implementation for the canonical merge.  A
+    // balanced pairwise tree replaces the priority queue's O(log bins)
+    // maintenance on every emitted record with sequential two-way merges.  At
+    // Every record carries its source bin through the tree.  Equal keys MUST
+    // NOT fold at an intermediate level: for four contributing bins, doing
+    // `(w0 + w1) + (w2 + w3)` changes the established left-fold
+    // `((w0 + w1) + w2) + w3`.  The final stream is ordered by (key, bin) and
+    // folds only once, exactly matching the heap path.  The heap merge remains
+    // in this header as the literal test oracle; this pairwise path is used by
+    // the canonical production population.
+    inline CanonicalSpawnMerge merge_finalized_spawn_bins_pairwise(
+        const std::vector<SpawnAccumulator> &bins)
+    {
+        struct TaggedEntry
+        {
+            DetKey key;
+            Weight weight = 0.0;
+            std::size_t bin = 0;
+        };
+        const auto less_tag = [](const TaggedEntry &a, const TaggedEntry &b) {
+            if (a.key.alpha != b.key.alpha)
+                return a.key.alpha < b.key.alpha;
+            if (a.key.beta != b.key.beta)
+                return a.key.beta < b.key.beta;
+            return a.bin < b.bin;
+        };
+        const auto merge_two = [&less_tag](std::vector<TaggedEntry> left,
+                                           std::vector<TaggedEntry> right) {
+            std::vector<TaggedEntry> merged;
+            merged.reserve(left.size() + right.size());
+            std::size_t i = 0, j = 0;
+            while (i < left.size() && j < right.size())
+            {
+                if (less_tag(left[i], right[j]))
+                    merged.push_back(std::move(left[i++]));
+                else
+                    merged.push_back(std::move(right[j++]));
+            }
+            while (i < left.size())
+                merged.push_back(std::move(left[i++]));
+            while (j < right.size())
+                merged.push_back(std::move(right[j++]));
+            return merged;
+        };
+
+        std::vector<std::vector<TaggedEntry>> level;
+        level.reserve(bins.size());
+        for (std::size_t bin = 0; bin < bins.size(); ++bin)
+        {
+            auto &entries = level.emplace_back();
+            entries.reserve(bins[bin].size());
+            for (const auto &[key, weight] : bins[bin])
+                entries.push_back({key, weight, bin});
+        }
+        while (level.size() > 1)
+        {
+            std::vector<std::vector<TaggedEntry>> next;
+            next.reserve((level.size() + 1) / 2);
+            for (std::size_t i = 0; i < level.size(); i += 2)
+                if (i + 1 == level.size())
+                    next.push_back(std::move(level[i]));
+                else
+                    next.push_back(merge_two(std::move(level[i]),
+                                             std::move(level[i + 1])));
+            level = std::move(next);
+        }
+        CanonicalSpawnMerge out;
+        if (!level.empty())
+        {
+            const auto &stream = level.front();
+            out.entries.reserve(stream.size());
+            std::size_t i = 0;
+            while (i < stream.size())
+            {
+                const DetKey key = stream[i].key;
+                Weight sum = stream[i].weight;
+                ++i;
+                while (i < stream.size() && stream[i].key == key)
+                    sum += stream[i++].weight;
+                out.entries.push_back({key, sum});
+            }
+        }
+        return out;
+    }
 
     // H2.4/H2.5 (docs/FCIQMC_PARALLELISM.md): the persistent
     // per-call scaffolding for propagate_stochastic, hoisted out of the

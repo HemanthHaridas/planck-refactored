@@ -3594,13 +3594,13 @@
     {
      "type": "metric_close",
      "metric": "fciqmc_shift_energy",
-     "expected": -108.5036712075,
+     "expected": -109.3621937007,
      "atol": 0.0
     },
     {
      "type": "metric_close",
      "metric": "fciqmc_projected_energy",
-     "expected": -107.5859595426,
+     "expected": -107.6491159983,
      "atol": 0.0
     }
    ]

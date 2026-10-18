@@ -37,8 +37,13 @@ invariant, on the `fciqmc-parallel-rewrite-scope` branch:
 | after `draw_excitation` (`hf_prof`, wall) | 78.1 s -> 60.5 s | — | — |
 | after the fold (`hf_prof`, wall) | -> 61.0 s | 34.1 s -> 32.1 s | — |
 
-The residual ceiling is the fixed-order merge — `unordered_map::operator[]`
-latency on ~26k entries per step, serial, with no cheap parallelization.
+The former residual ceiling was fixed-order hash-map insertion: the ledger put
+it at ~107 s at every thread count, 58 % of 8-thread propagation. The
+canonical-population work has now replaced it with a determinant-sorted owner
+and tagged pairwise merge. On the same HF/6-31G workload this lowers total
+wall time by 16--29 % over one to eight threads, with four threads best at
+203.22 s. The detailed measurements, validation contract, and remaining
+scaling hypotheses are in `docs/FCIQMC_SCALING_INVESTIGATION.md`.
 The one axis that would give genuine near-linear scaling, **replica
 parallelism (H3)**, is a design sketch, declined pending a real target.
 
@@ -52,9 +57,10 @@ size or duration where any of it matters.
   64-bin partition, the `#pragma omp parallel for schedule(static)` region,
   the fixed-order merge at the tail); `draw_excitation` and `nth_set_bit`;
   `WalkerPopulation::compress` / `compress_with_l1_norm`; `ordered_l1_norm`
-- `src/post_hf/ci/fciqmc.h` — `WalkerPopulation` (the `unordered_map` the
-  merge writes into); `RandomSource` (xoshiro256**, its fixed-seed
-  contract, `derive`); `kFciqmcBins`
+- `src/post_hf/ci/fciqmc.h` — `CanonicalWalkerPopulation` (the
+  determinant-sorted production owner), `WalkerPopulation` (test and legacy
+  bridge type), `RandomSource` (xoshiro256**, its fixed-seed contract,
+  `derive_parent`); `kFciqmcBins`
 - `src/post_hf/ci/spawn_accumulator.h` — `SpawnAccumulator` (the
   reuse-stable per-bin accumulator, `finalize()`), `SpawnWorkspace` (the
   hoisted per-call scaffolding, `parents_prefilled`)
@@ -131,9 +137,12 @@ Design rule:
 - A phase probe measures wall-clock spent between two points, including
   work that threads. Cross-check a "serial bottleneck" claim with a
   leaf-sample self-time profile before restructuring around it. `rehash`
-  is 0.2 % here — the walker map is warm across steps — so a
-  "cache-miss / rehash bound" hypothesis was also wrong; `operator[]`
-  self-time is steady-state hash+probe.
+  is 0.2 % here, so a "rehash bound" hypothesis was also wrong. **But the
+  walker map is NOT warm across steps:** the driver constructs a fresh
+  `WalkerPopulation next_pop` every step (`fciqmc_driver.cpp`) and
+  move-assigns it, so the merge inserts into a cold map and node allocation
+  plus destruction recur every step. Part of the `operator[]` and allocator
+  shares may be that churn; it has not been measured separately.
 
 ### 3. A merge that is 99 % concatenation is still not worth sharding if the shard needs a sort
 
@@ -161,7 +170,8 @@ Design rule:
 - A near-pure concatenation only shards for a win if the shards can be
   concatenated without a sort. If deduplicating the 0.73 % that collide
   requires re-sorting the shard, the sort dominates and the plain
-  warm-hash merge is already close to optimal for this access pattern.
+  hash merge beats it. (That map is rebuilt every step — see invariant 2 —
+  so map churn, not sharding, is the untested lever.)
 
 ### 4. `draw_excitation` builds four full orbital lists to use at most two entries of one
 
@@ -305,34 +315,32 @@ investigation is docs-only.
 
 ## What was measured after the fixes
 
-**Where the 1-thread time is now** (HF/6-31G, `sample`, post-`draw_excitation`):
+**Historical 1-thread profile** (HF/6-31G, `sample`, pre-canonical owner):
 `draw_excitation` 27.1 %, `unordered_map::operator[]` 15.2 %,
 `slater_condon_element` 12.5 %, spawn-loop body 10.6 %, allocator 8.7 %,
 diagonal memo 8.2 %, `finalize()` sort 7.3 %, serial merge/partition 2.5 %.
-Everything scaled up proportionally from the pre-refactor profile — the pie
-is smaller, not reshaped.
+The phase ledger later showed that map insertion was materially larger in
+whole-call wall time than this leaf-sample attribution suggested.
 
-**Where the 4-thread time goes:** ~54 % barrier idle. Three workers park
-while one runs the serial per-step driver tail. Folding the non-merge
-passes (fix 5) moved the 4-thread wall ~6 %; the residual is the merge and
-the fork/join around a region that, post-`draw_excitation`, is smaller
-relative to the unchanged serial tail.
+**Where the 4-thread time goes:** the canonical pairwise merge remains serial
+and worker speedup saturates before eight threads. The measured 4-thread
+configuration is nevertheless the current optimum; this document does not
+infer a general thread cap from one workload.
 
-**Net HF/6-31G whole-call speedup:** 2.24x -> 2.42x at 4 threads, 2.47x ->
-2.87x at 8 threads from the `SpawnWorkspace` rewrite; the region ceiling on
-that fixture is >=4.5x at 8 threads. The gap between whole-call and region
-is the serial tail, dominated by the merge.
+**Net HF/6-31G whole-call result:** the earlier `SpawnWorkspace` rewrite
+improved the worker region, then the canonical owner removed the dominant
+map-insertion tail. The current first ladder records 474.54/294.88/203.22/
+225.07 s at 1/2/4/8 threads; see the scaling investigation for the comparable
+baseline and methodology.
 
 ## Remaining architecture concern
 
-**The merge is the residual serial cost and has no cheap parallelization.**
-It is `unordered_map::operator[]` latency on ~26k entries per step. Sharding
-it was tried and reverted (invariant 3). A fixed-order parallel scatter
-(prefix-sum the per-bin sizes, threaded scatter into one flat output array
-by precomputed offset, ordering fixed by the offsets so no completion-order
-hazard) is possible but is a careful target for a real large-`ndet`
-workload, where 26k -> 260k might change whether the sort or the scatter
-dominates.
+**The pairwise merge is the residual serial cost.** It is already a contiguous
+determinant-sorted population and replaces the map rebuild without changing
+the canonical fold. A fixed-order parallel merge tree or scatter remains a
+possible next target, but only after profiling a real larger-`ndet` workload:
+it must preserve the final ascending-bin association of every equal-key sum.
+The earlier child-hash sharded map merge remains rejected.
 
 **H3 — replica parallelism — is the only route to near-linear, and is not
 built.** FCIQMC literature runs multiple independent replicas (different
