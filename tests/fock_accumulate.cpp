@@ -22,6 +22,7 @@
 // Both RHF and UHF forms are covered. Nothing in production calls the new
 // accumulator yet — this test is the whole of its exposure.
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <filesystem>
@@ -52,6 +53,52 @@ namespace
     {
         std::cerr << "FAIL: " << message << '\n';
         g_ok = false;
+    }
+
+    // distinct_eri_orbit used to find repeats by a pairwise first-occurrence
+    // search. That search is kept here verbatim as the oracle: the closed-form
+    // version must return the same tuples in the same ORDER (order fixes the
+    // accumulation sequence into G, so it is what keeps the Fock build
+    // bitwise), on every tuple over 0..5, canonical or not.
+    void check_distinct_orbit_matches_search()
+    {
+        std::size_t cases = 0;
+        for (std::size_t i = 0; i < 6; ++i)
+            for (std::size_t j = 0; j < 6; ++j)
+                for (std::size_t k = 0; k < 6; ++k)
+                    for (std::size_t l = 0; l < 6; ++l)
+                    {
+                        const std::array<std::array<std::size_t, 4>, 8> all = {{
+                            {i, j, k, l}, {j, i, k, l}, {i, j, l, k}, {j, i, l, k},
+                            {k, l, i, j}, {l, k, i, j}, {k, l, j, i}, {l, k, j, i},
+                        }};
+                        std::array<std::array<std::size_t, 4>, 8> ref{};
+                        std::size_t n_ref = 0;
+                        for (const auto &t : all)
+                        {
+                            bool seen = false;
+                            for (std::size_t m = 0; m < n_ref; ++m)
+                                seen = seen || ref[m] == t;
+                            if (!seen)
+                                ref[n_ref++] = t;
+                        }
+                        std::array<std::array<std::size_t, 4>, 8> got{};
+                        const std::size_t n_got =
+                            HartreeFock::Integrals::distinct_eri_orbit(i, j, k, l, got);
+                        bool same = n_got == n_ref;
+                        for (std::size_t m = 0; same && m < n_ref; ++m)
+                            same = got[m] == ref[m];
+                        if (!same)
+                        {
+                            fail("distinct_eri_orbit differs from the first-occurrence search at (" +
+                                 std::to_string(i) + "," + std::to_string(j) + "," +
+                                 std::to_string(k) + "," + std::to_string(l) + ")");
+                            return;
+                        }
+                        ++cases;
+                    }
+        std::cout << "[INFO] distinct_eri_orbit == first-occurrence search on " << cases
+                  << " tuples (order included)\n";
     }
 
     // The production quartet loop's canonical filter (os.cpp): each canonical
@@ -810,6 +857,7 @@ int main()
     if (!require_boys_library())
         return 1;
 
+    check_distinct_orbit_matches_search();
     check_random_tensors();
     check_split_accumulators();
     check_real_integrals("sto-3g");

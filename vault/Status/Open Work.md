@@ -1950,6 +1950,14 @@ identify the path taken. Not required for correctness or performance.
   leave only ~25 % of the build computing ERIs. Scoped fixes, bitwise:
   L3a early non-representative exit, L3b stack orbit for representatives
   (predicted 1.6–2× on symmetric builds).
+  **L2 DONE (2026-10-18):** `distinct_eri_orbit` now emits the distinct
+  tuples from three index equalities instead of a pairwise search.
+  Bitwise (G fingerprints identical on all five probe fixtures). Gated by an
+  exhaustive order-included comparison against the old search on 1296
+  tuples in `planck-fock-accumulate`, mutation-verified. 1.20× on
+  8 H2O / 6-31G (predicted 1.15–1.2×), 1.09× on 6-31G\*, 1.11× on
+  D2h naphthalene. 8 H2O / 6-31G since C1: ~6.5× (1.50 → 0.23 s).
+  Next: L1, then L3a/L3b.
 
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys

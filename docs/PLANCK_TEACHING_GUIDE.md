@@ -1838,7 +1838,20 @@ geometry-dependent, and miserable to find.
 
 Planck sidesteps the whole issue. Instead of weighting, it **enumerates the
 orbit's distinct tuples** and applies one unweighted contribution per distinct
-tuple (`distinct_eri_orbit` in `src/integrals/fock_accumulate.h`). Deduplication
+tuple (`distinct_eri_orbit` in `src/integrals/fock_accumulate.h`).
+
+Finding the distinct tuples needs no search. Take the eight in a fixed order:
+\((ij|kl), (ji|kl), (ij|lk), (ji|lk)\) and then the same four with bra and
+ket swapped. A tuple repeats an earlier one exactly when one of three
+equalities holds. \((ji|\cdot)\) repeats \((ij|\cdot)\) iff \(i = j\);
+\((\cdot|lk)\) repeats \((\cdot|kl)\) iff \(k = l\); and the swapped half
+repeats the first half iff \(\{k,l\} = \{i,j\}\) as multisets. So the
+distinct set is a fixed 8-bit keep-mask over the tuples. An earlier version
+compared each tuple against every one already kept, and that pairwise search
+was 17 % of a Fock build on its own, 3.7× the cost of the Fock writes it fed.
+Replacing it with the mask gave 1.20× on a water chain, with the Fock matrix
+byte-identical. The same tuples come out in the same order, so the
+accumulation sequence is unchanged. Deduplication
 then handles every collapse case automatically — and it reproduces the two-phase
 result *by construction*, because a Phase-2 sweep over the tensor also reads
 each distinct slot exactly once. There is no case analysis to get wrong.
@@ -1989,8 +2002,9 @@ multiply:
 | one vector Boys call per primitive; single-pass accumulate | 1.16× | → ~0.82 s |
 | closed forms, \(L = 2\) | 1.61× | → 0.52 s |
 | closed forms, \(L = 3\) | 1.87× | → 0.28 s |
+| closed-form orbit dedup (keep-mask) | 1.20× | → 0.23 s |
 
-That is about 5.4× overall. On d-containing 6-31G\* the same steps give about
+That is about 6.5× overall. On d-containing 6-31G\* the same steps give about
 2×, because the classes they cover are a smaller share of its build. The gain
 always depends on how much of the build the covered classes account for.
 

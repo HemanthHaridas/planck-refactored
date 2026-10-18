@@ -4,8 +4,9 @@ Status: **in flight.** Landed: the class-share probe (C0), the Boys-core fix
 it found (Boys library v1.1.0), ShellPair reuse in the fused loop (C1),
 closed-form kernels for total L ≤ 1 (C2), a profile-driven hotspot round on
 the HGP kernel (H1), and closed forms for total L ≤ 2 (C3) and L = 3 (C3.5).
-Open: fused-loop overhead (L1–L4, scoped below), the C4 decision and C5
-(screened kernels). This file stays scope-shaped until C3–C5
+L2 (closed-form orbit dedup) landed too. Open: the rest of the fused-loop
+overhead (L1, L3, L4, scoped below), the C4 decision and C5 (screened
+kernels). This file stays scope-shaped until C3–C5
 land or are abandoned; then rewrite it as an answer.
 
 **Question:** Would specialized closed-form kernels for low-angular-momentum
@@ -31,6 +32,8 @@ columns multiply along a row. The last column is the product.
 
 (H1 was not measured on cc-pVDZ, so that row has no cumulative figure.
 In absolute terms 8 H2O / 6-31G went from 1.50 s before C1 to 0.28 s.)
+
+(L2 then took 8 H2O / 6-31G from 0.278 s to 0.232 s, so ~6.5× since C1.)
 
 Pure sp bases gain the most, because low-L quartets are most of their
 build. What remains above L = 2 needs a compile-time-specialized kernel
@@ -430,6 +433,28 @@ the result is bitwise-identical. Gate: an exhaustive comparison against the
 current enumeration over all index tuples in 0..4 (625 cases, including
 non-canonical), added to `tests/fock_accumulate.cpp`.
 
+*L2 results (2026-10-18).* Landed as specified: `distinct_eri_orbit` emits
+the kept tuples straight from the three equalities, and the comment
+records the rule.
+- **Gate.** `planck-fock-accumulate` keeps the old pairwise search
+  verbatim as an oracle and compares on all 1296 tuples over 0..5, order
+  included. Mutation-verified: weakening the fourth tuple's condition
+  (`bra && ket` → `bra || ket`) fails at (0,0,0,1). All the existing
+  accumulation checks still pass. The flag-off and flag-on G fingerprints
+  are identical on all five probe fixtures, including naphthalene with
+  `sym_ops`, so the change is bitwise.
+- **Speed** (best of three interleaved runs, production configuration):
+
+  | fixture | before | L2 | gain | predicted |
+  |---|---|---|---|---|
+  | 8 H2O / 6-31G | 0.278 s | 0.232 s | **1.20×** | 1.15–1.2× |
+  | 4 H2O / 6-31G\* | 0.584 s | 0.535 s | 1.09× | ~1.07× |
+  | naphthalene / 6-31G, D2h | 1.702 s | 1.532 s | 1.11× | — |
+
+  Both predictions held, which is what L0's attribution was for.
+- **Suites.** Core 79/79. Smoke 43/45; the two failures are the known
+  rccsdt routing cases.
+
 **L3 — the symmetry path.** With integral symmetry on, the fused loop
 receives `sym_ops`: the D2h-subgroup signed AO permutations from
 `update_integral_symmetry`, at most 8. For every canonical component
@@ -487,9 +512,9 @@ multiplies four norm ratios. Both depend only on the component indices
 within the block, so they can be a small table per block. This is probably
 the smallest of the four; do it only if L0 attributes visible time to it.
 
-**Order:** L0 and the L3 measurement are done. Next L2 and L1 (they help
-every build), then L3a/L3b (symmetric builds, which they could speed up
-by more than any other single step). L4 only if a later profile shows it. A step whose measured gain is noise
+**Order:** L0, the L3 measurement and L2 are done. Next L1 (helps every
+build), then L3a/L3b (symmetric builds, which they could speed up by more
+than any other single step). L4 only if a later profile shows it. A step whose measured gain is noise
 still lands if it is bitwise and simpler. L2 qualifies on that ground
 alone, since it replaces a quadratic search with a table.
 
