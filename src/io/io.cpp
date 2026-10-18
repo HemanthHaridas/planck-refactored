@@ -1072,6 +1072,14 @@ namespace HartreeFock::IO
                      fciqmc.spawn_attempts = parsed;
                      return std::expected<void, std::string>{};
                  }},
+                {"fciqmc_profile", [&fciqmc](const std::string &v) -> std::expected<void, std::string>
+                 {
+                     auto parsed = toBool(v);
+                     if (!parsed)
+                         return std::unexpected(parsed.error());
+                     fciqmc.profile = *parsed;
+                     return std::expected<void, std::string>{};
+                 }},
                 // The seed is an input on purpose: the reproducibility contract
                 // (same seed -> same trajectory, bitwise) is worthless if it
                 // cannot be set and is not recorded in the output.

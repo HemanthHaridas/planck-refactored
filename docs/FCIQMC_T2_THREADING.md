@@ -22,7 +22,7 @@ the-pragma work now exceeds the parallel region — structurally capping the
 achievable speedup regardless of thread balance. Both remaining levers were
 investigated and neither is worth taking: merging via reuse was tried and
 reverted (net slower, plus a reordering hazard caught only by bisection), and
-the RNG-shard construction cost is dominated by unavoidable seeding work, not
+the RNG-shard construction cost is dominated by seeding work (avoidable after all: H2.5 swapped mt19937_64 for xoshiro256**, ~38 us -> 0.14 us/call), not
 container overhead (~4% available, judged not worth a code change).
 
 The serial work that preceded this (5.21x, no threads) is answered in
@@ -315,7 +315,7 @@ merge's two hazards. A standalone microbenchmark measured the saving before
 writing any real code: 26.8us/call (fresh vector) vs 25.8us/call (reused,
 overwritten by index) — about 4%. The dominant cost is not the vector's own
 allocation but constructing and seeding 64 `std::mt19937_64` engines from
-scratch every call, real and unavoidable given S1's correctness requirement
+scratch every call, real, and unavoidable with mt19937_64 given S1's correctness requirement (H2.5 later removed it by switching engines)
 that each call's 64 bin streams be fresh and independent. Judged not worth a
 code change for a measured ~4%. Left as documented, unfixed cost.
 
@@ -346,10 +346,13 @@ would reintroduce the exact completion-order hazard this whole design was
 built to avoid, so any future work there is a smaller, careful target, not
 simply "thread more of it."
 
-**S5, the invariance gate's blind spot — not built.** `h2_fciqmc_threads1/4`
+**S5, the invariance gate's blind spot — built later (H2.1,
+`n2_fciqmc_s5_threads1/4`; see `docs/FCIQMC_PARALLELISM.md` invariant 5).** `h2_fciqmc_threads1/4`
 runs on 4 determinants — smaller than `kBins`, so at most one parent ever
 lands in each bin and the gate can never exercise a merge-order defect. What's
 missing: an N2-sized `threads1`/`threads4` pair at `atol = 0.0`, extended to 8
 threads, verified non-vacuous by perturbing the merge order (reversing the bin
 loop) and confirming the N2 gate goes red. A gate that cannot fail is not a
-gate — this is the one piece of the original scope that still needs doing.
+gate. The landed pair pins `threads1` to fixed energies, because a merge-order
+defect is itself thread-count-invariant and a `threads1 == threads4`
+comparison alone cannot see it.

@@ -5,6 +5,7 @@
 // RNG honours its bitwise reproducibility contract.
 
 #include "post_hf/ci/fciqmc.h"
+#include "post_hf/ci/spawn_accumulator.h"
 
 #include <bit>
 #include <cmath>
@@ -2214,6 +2215,221 @@ static void test_trajectory_digest_is_sensitive()
     check(h1 != h2, "the trajectory digest distinguishes a one-ulp difference");
 }
 
+static void test_profile_is_a_passive_trajectory_observer()
+{
+    // The scaling ledger must be a side channel only.  This catches the easy
+    // mistake of conditioning a random draw, an arithmetic contribution, or an
+    // merge order on whether profiling was requested.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    WalkerPopulation start;
+    for (std::size_t i = 0; i < toy.dets.size(); ++i)
+        if (i % 3 == 0)
+            start.add(toy.dets[i], (i % 2 == 0) ? 2.0 : -1.0);
+
+    RandomSource plain_rng(741852), profiled_rng(741852);
+    const auto plain = propagate_stochastic(start, 4, ops, 0.01, -2.0,
+                                             plain_rng, 3, 1.0, 0.0);
+
+    SpawnWorkspace workspace;
+    WalkerPopulation profiled;
+    FCIQMCPropagationProfile profile;
+    propagate_stochastic(start, 4, ops, 0.01, -2.0, profiled_rng, 3, 1.0,
+                         0.0, workspace, profiled, &profile);
+
+    for (const auto &det : toy.dets)
+        check(plain.weight_at(det) == profiled.weight_at(det),
+              "FCIQMC profile preserves every walker weight bitwise");
+    check(plain_rng.raw64() == profiled_rng.raw64(),
+          "FCIQMC profile preserves caller RNG consumption");
+
+    std::uint64_t parents = 0, attempts = 0, raw = 0, folded = 0;
+    for (const auto &bin : profile.bins)
+    {
+        parents += bin.parents;
+        attempts += bin.spawn_attempts;
+        raw += bin.accumulator_records;
+        folded += bin.finalized_records;
+    }
+    check(profile.calls == 1, "FCIQMC profile records one propagation call");
+    check(parents == start.size(), "FCIQMC profile accounts for every parent");
+    check(attempts == 3 * start.size(), "FCIQMC profile accounts for every spawn draw");
+    check(raw >= parents && folded <= raw,
+          "FCIQMC profile records the accumulator before and after fold");
+}
+
+static void test_literal_canonical_merge_matches_map_output()
+{
+    // The candidate contiguous owner must begin as an oracle for today's merge,
+    // not as an independently assumed reduction.  In particular, equal children
+    // from different bins must fold in the existing ascending-bin order.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    WalkerPopulation start;
+    for (std::size_t i = 0; i < toy.dets.size(); ++i)
+        if (i % 2 == 0)
+            start.add(toy.dets[i], (i % 4 == 0) ? 3.0 : -2.0);
+
+    RandomSource rng(192837);
+    SpawnWorkspace workspace;
+    WalkerPopulation map_output;
+    propagate_stochastic(start, 4, ops, 0.01, -2.0, rng, 4, 0.0, 0.0,
+                         workspace, map_output);
+    const auto canonical = merge_finalized_spawn_bins(workspace.bins);
+    const auto pairwise = merge_finalized_spawn_bins_pairwise(workspace.bins);
+    CanonicalWalkerPopulation contiguous;
+    contiguous.assign_sorted(canonical.entries);
+
+    check(canonical.entries.size() == map_output.size(),
+          "literal canonical merge retains every map output determinant");
+    check(contiguous.size() == map_output.size(),
+          "contiguous canonical owner retains every map output determinant");
+    check(pairwise.entries.size() == canonical.entries.size(),
+          "pairwise canonical merge retains every heap-merge determinant");
+    for (std::size_t i = 0; i < canonical.entries.size(); ++i)
+    {
+        const auto &[key, weight] = canonical.entries[i];
+        check(std::bit_cast<std::uint64_t>(weight)
+                  == std::bit_cast<std::uint64_t>(map_output.weight_at(key)),
+              "literal canonical merge preserves current cross-bin fold bits");
+        check(std::bit_cast<std::uint64_t>(contiguous.weight_at(key))
+                  == std::bit_cast<std::uint64_t>(map_output.weight_at(key)),
+              "contiguous canonical owner preserves lookup bits");
+        check(i < pairwise.entries.size()
+                  && pairwise.entries[i].first == key
+                  && std::bit_cast<std::uint64_t>(pairwise.entries[i].second)
+                         == std::bit_cast<std::uint64_t>(weight),
+              "pairwise canonical merge preserves heap-merge bits");
+        if (i > 0)
+        {
+            const DetKey &previous = canonical.entries[i - 1].first;
+            check(previous.alpha < key.alpha
+                      || (previous.alpha == key.alpha && previous.beta < key.beta),
+                  "literal canonical merge emits a strict determinant order");
+        }
+    }
+    check(contiguous.weight_at(DetKey{CIString{0}, CIString{0}}) == 0.0,
+          "contiguous canonical owner reports absent determinant as unoccupied");
+
+    CanonicalWalkerPopulation compacted;
+    compacted.assign_sorted({
+        {DetKey{CIString{1}, CIString{1}}, 1.0},
+        {DetKey{CIString{1}, CIString{2}}, 0.0},
+        {DetKey{CIString{2}, CIString{1}}, -1.0e-13},
+        {DetKey{CIString{2}, CIString{2}}, -2.0},
+    });
+    const auto compressed = compacted.compress_with_l1_norm(1.0e-12);
+    check(compressed.removed == 2 && compacted.size() == 2,
+          "contiguous canonical owner compresses zero and threshold entries");
+    check(compressed.l1_norm == 3.0,
+          "contiguous canonical owner computes compacted L1 norm");
+    check(compacted.at(0).first == DetKey{CIString{1}, CIString{1}}
+              && compacted.at(1).first == DetKey{CIString{2}, CIString{2}},
+          "contiguous canonical compaction preserves determinant order");
+}
+
+static void test_parent_keyed_stream_is_independent_of_parent_visit_order()
+{
+    // This is the contract needed before a future contiguous/canonical
+    // population owner may replace unordered_map iteration.  Each parent owns
+    // its excitation and rounding variates, so reversing the visitation order
+    // changes neither the individual streams nor the folded contribution.
+    // propagate_stochastic uses the same convention; this small oracle keeps
+    // the invariant independent of its larger integration path.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    std::vector<std::pair<DetKey, Weight>> parents;
+    for (std::size_t i = 0; i < toy.dets.size(); ++i)
+        if (i % 3 == 0)
+            parents.push_back({toy.dets[i], (i % 2 == 0) ? 1.75 : -0.75});
+
+    const RandomSource bin_root = RandomSource(918273645ULL).derive(17);
+    auto sample = [&](bool reverse) {
+        SpawnAccumulator records;
+        for (std::size_t step = 0; step < parents.size(); ++step)
+        {
+            const std::size_t i = reverse ? parents.size() - 1 - step : step;
+            const auto &[parent, weight] = parents[i];
+            RandomSource parent_rng = bin_root.derive_parent(parent);
+            for (int attempt = 0; attempt < 5; ++attempt)
+            {
+                const auto exc = draw_excitation(parent, 4, parent_rng);
+                if (!exc.valid || exc.p_gen <= 0.0)
+                    continue;
+                const double h = ops.off_diagonal(parent, exc.det);
+                if (h == 0.0)
+                    continue;
+                const double raw = -0.01 * h * (weight / 5.0) / exc.p_gen;
+                const double child = parent_rng.stochastic_round(raw / 0.25) * 0.25;
+                if (child != 0.0)
+                    records.add(exc.det, child);
+            }
+        }
+        records.finalize();
+        return records;
+    };
+
+    const auto forward = sample(false);
+    const auto reverse = sample(true);
+    check(forward.size() == reverse.size(),
+          "parent-keyed streams preserve folded record count under reversal");
+    for (std::size_t i = 0; i < forward.size() && i < reverse.size(); ++i)
+    {
+        const auto &a = forward.at(i);
+        const auto &b = reverse.at(i);
+        check(a.first == b.first
+                  && std::bit_cast<std::uint64_t>(a.second)
+                         == std::bit_cast<std::uint64_t>(b.second),
+              "parent-keyed streams preserve folded contribution bits under reversal");
+    }
+
+    // Both spin strings must affect the stream.  This catches the subtle but
+    // catastrophic mistake of keying only on alpha occupation in an open-shell
+    // population.
+    check(bin_root.derive_parent(parents.front().first).raw64()
+              != bin_root.derive_parent(DetKey{parents.front().first.alpha,
+                                                parents.front().first.beta ^ CIString{1}}).raw64(),
+          "parent-keyed stream includes the beta determinant string");
+}
+
+static void test_canonical_owner_roundtrips_through_propagation()
+{
+    // This incremental adapter gate proves the direct read-side transfer:
+    // canonical storage and map storage must produce the identical following
+    // propagation now that each parent's stream is keyed by its determinant.
+    // Output remains the established map here; changing that owner is the next
+    // independently gated step.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    WalkerPopulation incoming;
+    for (std::size_t i = 0; i < toy.dets.size(); ++i)
+        if (i % 2 == 0)
+            incoming.add(toy.dets[i], (i % 4 == 0) ? 2.5 : -0.75);
+
+    RandomSource first_rng(741963);
+    SpawnWorkspace workspace;
+    WalkerPopulation map_owner;
+    propagate_stochastic(incoming, 4, ops, 0.01, -2.0, first_rng, 3, 1.0,
+                         0.0, workspace, map_owner);
+    const auto merge = merge_finalized_spawn_bins(workspace.bins);
+    CanonicalWalkerPopulation canonical;
+    canonical.assign_sorted(merge.entries);
+
+    RandomSource map_rng(1234567), canonical_rng(1234567);
+    const auto map_next = propagate_stochastic(map_owner, 4, ops, 0.01, -2.0,
+                                               map_rng, 3, 1.0, 0.0);
+    SpawnWorkspace canonical_workspace;
+    CanonicalWalkerPopulation canonical_next;
+    propagate_stochastic(canonical, 4, ops, 0.01, -2.0, canonical_rng,
+                         3, 1.0, 0.0, canonical_workspace, canonical_next);
+    for (const auto &key : toy.dets)
+        check(std::bit_cast<std::uint64_t>(map_next.weight_at(key))
+                  == std::bit_cast<std::uint64_t>(canonical_next.weight_at(key)),
+          "canonical owner direct path preserves next propagation bits");
+    check(map_rng.raw64() == canonical_rng.raw64(),
+          "canonical owner direct path preserves caller RNG consumption");
+}
+
 static void test_compression_does_not_break_reproducibility()
 {
     // compress() erases from a hash map while iterating. If that ever became
@@ -3423,10 +3639,10 @@ static void test_initiator_judges_occupancy_before_the_sweep()
     for (std::size_t i = toy.dets.size(); i > 0; --i)
         reverse.add(toy.dets[i - 1], ((i - 1) % 2 == 0) ? 2.0 : 0.5);
 
-    // CONTROL FIRST: the same comparison with the initiator DISABLED. If that
-    // also differs, insertion order is changing the result for a reason unrelated
-    // to the initiator -- the population iterates in hash order and draws from a
-    // shared RNG, so a different order gives each parent different draws.
+    // CONTROL FIRST: the same comparison with the initiator DISABLED.  The
+    // parent-keyed RNG convention means both populations must now produce the
+    // exact same propagation result despite their deliberately different hash
+    // layouts.  This is the end-to-end production gate for the convention.
     RandomSource c0(13579), c1(13579);
     const auto ctrl_a = propagate_stochastic(forward, 4, ops, dt, -2.0, c0, 4, 1.0, 0.0);
     const auto ctrl_b = propagate_stochastic(reverse, 4, ops, dt, -2.0, c1, 4, 1.0, 0.0);
@@ -3443,16 +3659,10 @@ static void test_initiator_judges_occupancy_before_the_sweep()
         if (sa.weight_at(d) != sb.weight_at(d))
             initiator_differs = true;
 
-    // The claim is that the INITIATOR adds no order dependence beyond whatever
-    // the propagator already has. Comparing against the control is what isolates
-    // it -- asserting the initiator run alone is order-independent would fail for
-    // a reason that has nothing to do with the initiator.
-    if (initiator_differs && !control_differs)
-    {
-        check(false, "the initiator rule adds order dependence the propagator "
-                     "does not already have");
-        return;
-    }
+    check(!control_differs,
+          "parent-keyed streams make propagation independent of insertion order");
+    check(!initiator_differs,
+          "the initiator preserves parent-keyed insertion-order independence");
     if (std::getenv("PLANCK_FCIQMC_VERBOSE") != nullptr)
         std::printf("      order dependence: control=%s initiator=%s\n",
                     control_differs ? "yes" : "no",
@@ -3530,6 +3740,10 @@ int main()
     std::printf("F3.5 -- fixed-seed trajectory reproducibility\n");
     test_trajectory_is_reproducible();
     test_trajectory_digest_is_sensitive();
+    test_profile_is_a_passive_trajectory_observer();
+    test_literal_canonical_merge_matches_map_output();
+    test_parent_keyed_stream_is_independent_of_parent_visit_order();
+    test_canonical_owner_roundtrips_through_propagation();
     test_compression_does_not_break_reproducibility();
 
     std::printf("F4.1 -- shift control\n");
