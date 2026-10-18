@@ -211,6 +211,17 @@ namespace HartreeFock::Integrals
 
         const std::size_t ngp = group_pairs.size();
 
+        // first_pair_of[g]: index of the first group pair with .a == g (pairs
+        // are ordered by .a, then .b). Groups are AO-contiguous, so a ket block
+        // whose .a sorts before the bra's .a has k < i for every component and
+        // holds no canonical quartet; the ket loop starts at first_pair_of[bra.a].
+        // That skipped about half of all blocks surviving Schwarz, each of which
+        // walked four component loops for nothing. Bitwise: the skipped blocks
+        // contributed nothing, and the rest are visited in the same order.
+        std::vector<std::size_t> first_pair_of(ngroups, 0);
+        for (std::size_t p = ngp; p-- > 0;)
+            first_pair_of[group_pairs[p].a] = p;
+
         // The caller's shell_pairs already holds ShellPair(cvA, cvB) for every
         // AO pair the canonical filter admits (j >= i, l >= k), built with the
         // same constructor. Look them up instead of rebuilding one per component
@@ -333,7 +344,7 @@ namespace HartreeFock::Integrals
             const FusedShellGroup &gA = groups[group_pairs[bra].a];
             const FusedShellGroup &gB = groups[group_pairs[bra].b];
 
-            for (std::size_t ket = 0; ket < ngp; ++ket)
+            for (std::size_t ket = first_pair_of[group_pairs[bra].a]; ket < ngp; ++ket)
             {
                 // Block-level Schwarz: every component of this block is below
                 // tolerance, so skip all of them without touching the component

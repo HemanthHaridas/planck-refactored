@@ -1957,7 +1957,12 @@ identify the path taken. Not required for correctness or performance.
   tuples in `planck-fock-accumulate`, mutation-verified. 1.20× on
   8 H2O / 6-31G (predicted 1.15–1.2×), 1.09× on 6-31G\*, 1.11× on
   D2h naphthalene. 8 H2O / 6-31G since C1: ~6.5× (1.50 → 0.23 s).
-  Next: L1, then L3a/L3b.
+  **L1 DONE (2026-10-18):** the ket loop starts at the first group pair whose
+  `.a` matches the bra's, skipping the ~49 % of blocks that cannot hold a
+  canonical quartet. Bitwise (fingerprints identical on all five
+  fixtures). 1.06× on 8 H2O / 6-31G (predicted 1.05–1.07×), ~1.01–1.02×
+  elsewhere. 8 H2O / 6-31G since C1: ~6.8× (1.50 → 0.22 s). Next: L3a/L3b,
+  the symmetry path (predicted 1.6–2× on symmetric builds).
 
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys

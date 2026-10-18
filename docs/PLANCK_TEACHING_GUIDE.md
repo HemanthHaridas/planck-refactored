@@ -2003,8 +2003,9 @@ multiply:
 | closed forms, \(L = 2\) | 1.61× | → 0.52 s |
 | closed forms, \(L = 3\) | 1.87× | → 0.28 s |
 | closed-form orbit dedup (keep-mask) | 1.20× | → 0.23 s |
+| skip blocks that cannot hold a canonical quartet | 1.06× | → 0.22 s |
 
-That is about 6.5× overall. On d-containing 6-31G\* the same steps give about
+That is about 6.8× overall. On d-containing 6-31G\* the same steps give about
 2×, because the classes they cover are a smaller share of its build. The gain
 always depends on how much of the build the covered classes account for.
 
