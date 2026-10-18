@@ -1913,7 +1913,19 @@ identify the path taken. Not required for correctness or performance.
   per-quartet sweep in `planck-hgp-engine-smoke` agrees to 3.4e-16 and is
   mutation-verified. Separately found: `water_rhf_spherical_direct_631gd` is
   not bitwise across 1/4 threads (residual last digits; predates C2,
-  outside the fused loop). Next: C3 (L_tot ≤ 2).
+  outside the fused loop).
+  **H1 + C3 DONE (2026-10-18).** H1 came from a profile of the C2 build.
+  `hgp_vrr` and the RI seeds now make one `boys_vec` call instead of
+  MMAX+1 `boys` calls (1.10–1.12×). The m=0 slice is accumulated straight
+  from the VRR buffer, and the VRR buffer is no longer zero-filled
+  (1.04–1.06×). All bitwise. C3 extends the closed forms to total L ≤ 2
+  (`closed_form_max_l = 2` from Auto, with a per-AO norm ratio for d):
+  **1.61× over C2 on 8 H2O / 6-31G** (predicted 1.42×), 1.23× cc-pVDZ,
+  1.13× 6-31G\*. The sweep covers all 15 layouts at 3.4e-16 and is
+  mutation-verified. The flag-off fingerprint caught a C3 bug where (ss|ss)
+  took the closed form with the flag off; fixed. Cumulative on 8 H2O /
+  6-31G since C1: ~2.9× (1.50 → 0.52 s). Next: a post-C3 profile to decide
+  C4.
 
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys

@@ -190,7 +190,7 @@ namespace HartreeFock::Integrals
         EriElem &&eri_elem,
         const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
         FusedTerm term = FusedTerm::Combined,
-        bool closed_form_low_l = false)
+        int closed_form_max_l = 0)
     {
         const bool use_sym = (sym_ops != nullptr) && !sym_ops->empty();
         std::vector<const HartreeFock::ContractedView *> ao_views;
@@ -224,12 +224,24 @@ namespace HartreeFock::Integrals
         // Shell quartets with total L <= 1 can take the closed-form kernel
         // (low_l_eri.h), which yields every component from one primitive pass.
         // Opt-in by the caller, Coulomb only.
-        const bool use_low_l = closed_form_low_l && kernel == HartreeFock::ERIKernel::Coulomb;
+        // closed_form_max_l: 0 = off, 1 = total L <= 1, 2 = total L <= 2.
+        //
+        // norm_ratio: the kernel is fed first-component pairs, whose
+        // coeff_product carries the FIRST component's _component_norm. A d
+        // shell's components differ (xx 1/sqrt(3), xy 1), so each output is
+        // rescaled by its own ratio. Exactly 1.0 for s and p.
+        const int low_max_l =
+            kernel == HartreeFock::ERIKernel::Coulomb ? std::min(closed_form_max_l, 2) : 0;
         std::vector<int> group_L(ngroups, 0);
+        std::vector<double> norm_ratio(nb, 1.0);
         for (std::size_t g = 0; g < ngroups; ++g)
         {
-            const auto &c = ao_views[groups[g].first_ao]->_cartesian;
+            const HartreeFock::ContractedView &first = *ao_views[groups[g].first_ao];
+            const auto &c = first._cartesian;
             group_L[g] = c[0] + c[1] + c[2];
+            for (std::size_t comp = 0; comp < groups[g].n_components; ++comp)
+                norm_ratio[groups[g].first_ao + comp] =
+                    ao_views[groups[g].first_ao + comp]->_component_norm / first._component_norm;
         }
 
         // Shell-pair Schwarz bound: Qmax[p] = max over the components (ca,cb) of
@@ -338,16 +350,19 @@ namespace HartreeFock::Integrals
                 const std::size_t ia = group_pairs[bra].a, ib = group_pairs[bra].b;
                 const std::size_t ic = group_pairs[ket].a, id = group_pairs[ket].b;
                 const HartreeFock::ShellPair *low_ab = nullptr, *low_cd = nullptr;
-                int low_p = -1;
-                if (use_low_l && group_L[ia] + group_L[ib] + group_L[ic] + group_L[id] <= 1)
+                int low_n = 0, low_c[2] = {0, 0}; // raised centers, in center order
+                if (low_max_l > 0 && group_L[ia] + group_L[ib] + group_L[ic] + group_L[id] <= low_max_l)
                 {
                     low_ab = pair_of[gA.first_ao * nb + gB.first_ao];
                     low_cd = pair_of[gC.first_ao * nb + gD.first_ao];
-                    low_p = group_L[ia] ? 0 : group_L[ib] ? 1 : group_L[ic] ? 2 : group_L[id] ? 3 : -1;
+                    const std::size_t g4[4] = {ia, ib, ic, id};
+                    for (int c = 0; c < 4; ++c)
+                        for (int u = 0; u < group_L[g4[c]]; ++u)
+                            low_c[low_n++] = c;
                 }
                 const bool low = low_ab && low_cd;
                 bool low_ready = false;
-                std::array<double, 3> low_vals{};
+                std::array<double, 9> low_vals{};
 
                 for (std::size_t ca = 0; ca < gA.n_components; ++ca)
                 {
@@ -424,16 +439,21 @@ namespace HartreeFock::Integrals
                                 {
                                     if (!low_ready)
                                     {
-                                        low_l_shell_eri(*low_ab, *low_cd, low_p, low_vals);
+                                        low_l_shell_eri(*low_ab, *low_cd, low_n, low_c[0], low_c[1], low_vals);
                                         low_ready = true;
                                     }
-                                    const auto axis = [](int ly, int lz) { return ly ? 1 : lz ? 2 : 0; };
-                                    const int ax = low_p == 0 ? axis(lAy, lAz)
-                                                 : low_p == 1 ? axis(lBy, lBz)
-                                                 : low_p == 2 ? axis(lCy, lCz)
-                                                 : low_p == 3 ? axis(lDy, lDz)
-                                                              : 0;
-                                    val = low_vals[ax];
+                                    // Axes in the kernel's raise order: centers in
+                                    // order, each unit of x, then y, then z.
+                                    const int lc[4][3] = {{lAx, lAy, lAz}, {lBx, lBy, lBz},
+                                                          {lCx, lCy, lCz}, {lDx, lDy, lDz}};
+                                    int axes[2] = {0, 0}, n_ax = 0;
+                                    for (int c = 0; c < 4 && n_ax < low_n; ++c)
+                                        for (int a = 0; a < 3; ++a)
+                                            for (int u = 0; u < lc[c][a]; ++u)
+                                                axes[n_ax++] = a;
+                                    const int slot = low_n == 2 ? 3 * axes[0] + axes[1] : axes[0];
+                                    val = low_vals[slot] * norm_ratio[i] * norm_ratio[j] *
+                                          norm_ratio[k] * norm_ratio[l];
                                 }
                                 else
                                 {

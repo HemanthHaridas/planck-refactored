@@ -125,17 +125,17 @@ namespace
             sp_cd.B._cartesian[0], sp_cd.B._cartesian[1], sp_cd.B._cartesian[2]);
     }
 
-    // Sweep every component quartet with total L <= 1 through the closed-form
+    // Sweep every component quartet with total L <= 2 through the closed-form
     // shell kernel (low_l_eri.h) and compare against per-component HGP. The
-    // kernel is fed the first-component pair of each shell, exactly as the
-    // fused loop does; reading the right axis per component is checked too.
+    // kernel is fed the first-component pair of each shell and rescaled by
+    // each component's norm ratio, exactly as the fused loop does, so the axis
+    // readout and the d-shell norms are checked too. Every raise layout must
+    // occur: none, one raise on each of A..D, and all ten (c1 <= c2) pairs.
     void check_low_l_kernel(const std::vector<HartreeFock::ShellPair> &pairs, std::size_t nb,
-                            const std::string &label)
+                            const std::string &label, bool expect_d)
     {
         const auto L = [](const HartreeFock::ContractedView &v)
         { return v._cartesian[0] + v._cartesian[1] + v._cartesian[2]; };
-        const auto axis = [](const HartreeFock::ContractedView &v)
-        { return v._cartesian[1] ? 1 : v._cartesian[2] ? 2 : 0; };
 
         // AO -> first AO of its shell, and (i,j) -> pair.
         std::vector<std::size_t> first(nb, 0);
@@ -148,36 +148,61 @@ namespace
             const auto *cur = pair_of[ao * nb + ao];
             first[ao] = (cur->A._shell == prev->A._shell) ? first[ao - 1] : ao;
         }
+        const auto norm_of = [&](const HartreeFock::ContractedView &v)
+        { return pair_of[v._index * nb + v._index]->A._component_norm; };
 
         double max_rel = 0.0;
         std::size_t n = 0;
-        std::array<std::size_t, 5> per_center{};
+        std::array<std::size_t, 15> layout{}; // [0] none, [1+c] one raise, [5+..] pairs
+        const auto pair_slot = [](int a, int b) { // a <= b, 10 pairs
+            int s = 0;
+            for (int x = 0; x < 4; ++x)
+                for (int y = x; y < 4; ++y, ++s)
+                    if (x == a && y == b)
+                        return s;
+            return -1;
+        };
         for (const auto &ab : pairs)
             for (const auto &cd : pairs)
             {
                 const HartreeFock::ContractedView *v[4] = {&ab.A, &ab.B, &cd.A, &cd.B};
-                if (L(*v[0]) + L(*v[1]) + L(*v[2]) + L(*v[3]) > 1)
+                if (L(*v[0]) + L(*v[1]) + L(*v[2]) + L(*v[3]) > 2)
                     continue;
-                int pc = -1;
+                int nr = 0, cs[2] = {0, 0}, axes[2] = {0, 0}, na = 0;
+                double ratio = 1.0;
                 for (int c = 0; c < 4; ++c)
-                    if (L(*v[c]))
-                        pc = c;
+                {
+                    for (int u = 0; u < L(*v[c]); ++u)
+                        cs[nr++] = c;
+                    for (int a = 0; a < 3; ++a)
+                        for (int u = 0; u < v[c]->_cartesian[a]; ++u)
+                            axes[na++] = a;
+                    const auto &f = *pair_of[first[v[c]->_index] * nb + first[v[c]->_index]];
+                    ratio *= norm_of(*v[c]) / f.A._component_norm;
+                }
                 const auto *ab0 = pair_of[first[ab.A._index] * nb + first[ab.B._index]];
                 const auto *cd0 = pair_of[first[cd.A._index] * nb + first[cd.B._index]];
-                std::array<double, 3> out{};
-                HartreeFock::Integrals::low_l_shell_eri(*ab0, *cd0, pc, out);
-                const double got = out[pc < 0 ? 0 : axis(*v[pc])];
+                std::array<double, 9> out{};
+                HartreeFock::Integrals::low_l_shell_eri(*ab0, *cd0, nr, cs[0], cs[1], out);
+                const int slot = nr == 2 ? 3 * axes[0] + axes[1] : axes[0];
+                const double got = out[slot] * ratio;
                 const double ref = hgp_quartet_value(ab, cd);
                 max_rel = std::max(max_rel, std::abs(got - ref) / std::max(1.0, std::abs(ref)));
                 ++n;
-                ++per_center[pc + 1];
+                ++layout[nr == 0 ? 0 : nr == 1 ? 1 + cs[0] : 5 + pair_slot(cs[0], cs[1])];
             }
 
         std::cout << "[INFO] low-L closed form vs HGP (" << label << "): " << n
                   << " quartets, max rel diff " << max_rel << '\n';
         require_true(n > 0, label + ": no low-L quartets swept");
-        for (int c = 0; c < 5; ++c)
-            require_true(per_center[c] > 0, label + ": a p-center position was never exercised");
+        for (int c = 0; c < 15; ++c)
+        {
+            // Same-center pairs are d shells: only a d basis can produce them.
+            const bool d_layout = c == 5 + 0 || c == 5 + 4 || c == 5 + 7 || c == 5 + 9;
+            if (d_layout && !expect_d)
+                continue;
+            require_true(layout[c] > 0, label + ": raise layout " + std::to_string(c) + " never exercised");
+        }
         require_near(max_rel, 0.0, 1e-14, label + ": low-L closed form must match HGP");
     }
 } // namespace
@@ -277,8 +302,8 @@ int main()
             "HGP d/s|s/s quartet mismatch");
     }
 
-    check_low_l_kernel(sp_pairs, sp_calc->_shells.nbasis(), "water/6-31g");
-    check_low_l_kernel(d_pairs, d_calc->_shells.nbasis(), "water/6-31g*");
+    check_low_l_kernel(sp_pairs, sp_calc->_shells.nbasis(), "water/6-31g", false);
+    check_low_l_kernel(d_pairs, d_calc->_shells.nbasis(), "water/6-31g*", true);
 
     if (!g_ok)
         return 1;

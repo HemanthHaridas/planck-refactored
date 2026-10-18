@@ -157,10 +157,10 @@ namespace
     std::uint64_t g_fingerprint = 0;
     Eigen::MatrixXd g_last;
 
-    // closed_form_low_l routes total-L <= 1 quartets through low_l_eri.h,
-    // as the Auto engine does.
+    // closed_form_max_l routes total-L <= max quartets through low_l_eri.h
+    // (the Auto engine passes 2).
     template <typename Elem>
-    double timed_build(const BuildSetup &s, Elem &&elem, bool closed_form_low_l = false)
+    double timed_build(const BuildSetup &s, Elem &&elem, int closed_form_max_l = 0)
     {
         Eigen::MatrixXd G, Ga, Gb;
         HartreeFock::Integrals::FusedFockDensities dens;
@@ -169,7 +169,7 @@ namespace
         HartreeFock::Integrals::fused_fock_build(
             s.pairs, s.nb, s.Q, HartreeFock::ERIKernel::Coulomb, 0.0, /*tol_eri=*/1e-10,
             /*spin_resolved=*/false, dens, G, Ga, Gb, elem, nullptr,
-            HartreeFock::Integrals::FusedTerm::Combined, closed_form_low_l);
+            HartreeFock::Integrals::FusedTerm::Combined, closed_form_max_l);
         const double dt = seconds_since(t0);
         std::uint64_t h = 1469598103934665603ULL;
         const auto *bytes = reinterpret_cast<const unsigned char *>(G.data());
@@ -202,9 +202,13 @@ namespace
         const double t_unwrapped = timed_build(s, hgp_elem);
         const std::uint64_t fingerprint = g_fingerprint;
         const Eigen::MatrixXd G_hgp = g_last;
-        timed_build(s, hgp_elem, true);
-        const double t_low = timed_build(s, hgp_elem, true);
-        const double low_dG = (g_last - G_hgp).cwiseAbs().maxCoeff();
+        double t_low[3] = {t_unwrapped, 0.0, 0.0}, low_dG[3] = {0.0, 0.0, 0.0};
+        for (int max_l = 1; max_l <= 2; ++max_l)
+        {
+            timed_build(s, hgp_elem, max_l);
+            t_low[max_l] = timed_build(s, hgp_elem, max_l);
+            low_dG[max_l] = (g_last - G_hgp).cwiseAbs().maxCoeff();
+        }
 
 #ifdef USE_OPENMP
         const int nthreads = omp_get_max_threads();
@@ -260,8 +264,9 @@ namespace
 
         std::printf("\n%d H2O / %s: G fingerprint %016llx\n", f.nwater, f.basis,
                     static_cast<unsigned long long>(fingerprint));
-        std::printf("  closed-form L_tot<=1: %.3f s vs %.3f s (%.3fx), max|dG| %.1e\n",
-                    t_low, t_unwrapped, t_unwrapped / t_low, low_dG);
+        for (int max_l = 1; max_l <= 2; ++max_l)
+            std::printf("  closed-form L_tot<=%d: %.3f s vs %.3f s (%.3fx), max|dG| %.1e\n",
+                        max_l, t_low[max_l], t_unwrapped, t_unwrapped / t_low[max_l], low_dG[max_l]);
         std::printf("\n%d H2O / %s: nb=%zu, %zu evaluated component quartets\n",
                     f.nwater, f.basis, s.nb, n_total);
         std::printf("  Fock build %.3f s (unwrapped), %.3f s (wrapped); HGP kernel ~%.0f%% of the build\n",
@@ -301,14 +306,18 @@ int main(int argc, char **argv)
     if (!require_boys_library())
         return 1;
 
-    if (argc == 3 && std::string(argv[1]) == "--profile")
+    // --profile N [nwater basis]: repeat the production-shaped build (closed-form
+    // low-L path on, as the Auto engine runs it) so `sample` can attribute it.
+    if ((argc == 3 || argc == 5) && std::string(argv[1]) == "--profile")
     {
         const int reps = std::atoi(argv[2]);
-        const BuildSetup s = prepare({4, "6-31g*"});
+        const int nwater = argc == 5 ? std::atoi(argv[3]) : 4;
+        const char *basis = argc == 5 ? argv[4] : "6-31g*";
+        const BuildSetup s = prepare({nwater, basis});
         double total = 0.0;
         for (int r = 0; r < reps; ++r)
-            total += timed_build(s, hgp_elem);
-        std::printf("--profile: %d unwrapped builds of 4 H2O / 6-31g*, %.3f s each\n", reps, total / reps);
+            total += timed_build(s, hgp_elem, 2);
+        std::printf("--profile: %d builds of %d H2O / %s, %.3f s each\n", reps, nwater, basis, total / reps);
         return 0;
     }
 
