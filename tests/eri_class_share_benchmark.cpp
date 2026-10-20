@@ -45,6 +45,7 @@
 #include "basis/basis.h"
 #include "integrals/fused_fock.h"
 #include "integrals/hgp.h"
+#include "integrals/hgp_block_eri.h"
 #include "integrals/screening.h"
 #include "integrals/shellpair.h"
 #include "require_boys_library.h"
@@ -212,10 +213,10 @@ namespace
     std::uint64_t g_fingerprint = 0;
     Eigen::MatrixXd g_last;
 
-    // closed_form_max_l routes total-L <= max quartets through low_l_eri.h
-    // (the Auto engine passes 3).
-    template <typename Elem>
-    double timed_build(const BuildSetup &s, Elem &&elem, int closed_form_max_l = 0)
+    // `block` is the block kernel (block_eri.h); the Auto engine uses the
+    // closed forms (low_l_eri.h) at total L <= 3.
+    template <typename Elem, typename Block>
+    double timed_build_block(const BuildSetup &s, Elem &&elem, Block block)
     {
         Eigen::MatrixXd G, Ga, Gb;
         HartreeFock::Integrals::FusedFockDensities dens;
@@ -225,7 +226,7 @@ namespace
             s.pairs, s.nb, s.Q, HartreeFock::ERIKernel::Coulomb, 0.0, /*tol_eri=*/1e-10,
             /*spin_resolved=*/false, dens, G, Ga, Gb, elem,
             s.sym ? &s.calc._integral_symmetry_ops : nullptr,
-            HartreeFock::Integrals::FusedTerm::Combined, closed_form_max_l);
+            HartreeFock::Integrals::FusedTerm::Combined, block);
         const double dt = seconds_since(t0);
         std::uint64_t h = 1469598103934665603ULL;
         const auto *bytes = reinterpret_cast<const unsigned char *>(G.data());
@@ -234,6 +235,48 @@ namespace
         g_fingerprint = h;
         g_last = std::move(G);
         return dt;
+    }
+
+    // The Auto engine's block kernels (rys.cpp auto_block_kernel): closed forms
+    // at total L <= 3, HGP block kernel at 4-12.
+    auto production_kernel()
+    {
+        using namespace HartreeFock::Integrals;
+        return ChainBlockKernel<ClosedFormBlockKernel, HgpBlockKernel>{ClosedFormBlockKernel{3}, HgpBlockKernel{4, 12}};
+    }
+
+    // closed_form_max_l routes total-L <= max quartets through the closed forms.
+    template <typename Elem>
+    double timed_build(const BuildSetup &s, Elem &&elem, int closed_form_max_l = 0)
+    {
+        return timed_build_block(s, elem, HartreeFock::Integrals::ClosedFormBlockKernel{closed_form_max_l});
+    }
+
+    // D1: the HGP block kernel (hgp_block_eri.h) one total-L class at a time,
+    // on top of the closed forms, against the closed forms alone. A class wins
+    // when its build is faster; max|dG| is against the per-component HGP build.
+    void report_hgp_block_by_class(const BuildSetup &s, const Eigen::MatrixXd &G_hgp, double t_cf3)
+    {
+        using HartreeFock::Integrals::ChainBlockKernel;
+        using HartreeFock::Integrals::ClosedFormBlockKernel;
+        using HartreeFock::Integrals::HgpBlockKernel;
+        int max_shell_l = 0;
+        for (const auto &bf : s.calc._shells._basis_functions)
+            max_shell_l = std::max(max_shell_l, bf._cartesian[0] + bf._cartesian[1] + bf._cartesian[2]);
+        std::printf("  HGP block kernel on top of the closed forms (L_tot<=3 build %.3f s):\n", t_cf3);
+        for (int lt = 4; lt <= 4 * max_shell_l; ++lt)
+        {
+            const ChainBlockKernel<ClosedFormBlockKernel, HgpBlockKernel> k{ClosedFormBlockKernel{3}, HgpBlockKernel{lt, lt}};
+            timed_build_block(s, hgp_elem, k);
+            const double t = timed_build_block(s, hgp_elem, k);
+            std::printf("    L_tot=%2d: %.3f s, saves %+.3f s, max|dG| %.1e\n",
+                        lt, t, t_cf3 - t, (g_last - G_hgp).cwiseAbs().maxCoeff());
+        }
+        const ChainBlockKernel<ClosedFormBlockKernel, HgpBlockKernel> all{ClosedFormBlockKernel{3}, HgpBlockKernel{4}};
+        timed_build_block(s, hgp_elem, all);
+        const double t = timed_build_block(s, hgp_elem, all);
+        std::printf("    all L_tot>=4: %.3f s (%.2fx over the closed forms alone), max|dG| %.1e\n",
+                    t, t_cf3 / t, (g_last - G_hgp).cwiseAbs().maxCoeff());
     }
 
     // Cost of the two steady_clock reads the wrapper adds per quartet.
@@ -259,11 +302,13 @@ namespace
         const std::uint64_t fingerprint = g_fingerprint;
         const Eigen::MatrixXd G_hgp = g_last;
         double t_low[4] = {t_unwrapped, 0.0, 0.0, 0.0}, low_dG[4] = {0.0, 0.0, 0.0, 0.0};
+        std::uint64_t low_fp[4] = {fingerprint, 0, 0, 0};
         for (int max_l = 1; max_l <= 3; ++max_l)
         {
             timed_build(s, hgp_elem, max_l);
             t_low[max_l] = timed_build(s, hgp_elem, max_l);
             low_dG[max_l] = (g_last - G_hgp).cwiseAbs().maxCoeff();
+            low_fp[max_l] = g_fingerprint;
         }
 
 #ifdef USE_OPENMP
@@ -321,21 +366,23 @@ namespace
         if (s.sym)
         {
             s.sym = false;
-            timed_build(s, hgp_elem, 3);
-            const double t_nosym = timed_build(s, hgp_elem, 3);
+            timed_build_block(s, hgp_elem, production_kernel());
+            const double t_nosym = timed_build_block(s, hgp_elem, production_kernel());
             const Eigen::MatrixXd G_nosym = g_last;
             s.sym = true;
-            timed_build(s, hgp_elem, 3);
-            const double t_sym = timed_build(s, hgp_elem, 3);
-            std::printf("\nnaphthalene / %s: %zu integral-symmetry ops; closed-form build %.3f s with sym_ops, %.3f s without, max|dG| %.1e\n",
+            timed_build_block(s, hgp_elem, production_kernel());
+            const double t_sym = timed_build_block(s, hgp_elem, production_kernel());
+            std::printf("\nnaphthalene / %s: %zu integral-symmetry ops; production build (Auto block kernels) %.3f s with sym_ops, %.3f s without, max|dG| %.1e\n",
                         f.basis, s.calc._integral_symmetry_ops.size(), t_sym, t_nosym,
                         (g_last - G_nosym).cwiseAbs().maxCoeff());
         }
         std::printf("\n%d H2O / %s: G fingerprint %016llx\n", f.nwater, f.basis,
                     static_cast<unsigned long long>(fingerprint));
         for (int max_l = 1; max_l <= 3; ++max_l)
-            std::printf("  closed-form L_tot<=%d: %.3f s vs %.3f s (%.3fx), max|dG| %.1e\n",
-                        max_l, t_low[max_l], t_unwrapped, t_unwrapped / t_low[max_l], low_dG[max_l]);
+            std::printf("  closed-form L_tot<=%d: %.3f s vs %.3f s (%.3fx), max|dG| %.1e, fingerprint %016llx\n",
+                        max_l, t_low[max_l], t_unwrapped, t_unwrapped / t_low[max_l], low_dG[max_l],
+                        static_cast<unsigned long long>(low_fp[max_l]));
+        report_hgp_block_by_class(s, G_hgp, t_low[3]);
         std::printf("\n%d H2O / %s: nb=%zu, %zu evaluated component quartets\n",
                     f.nwater, f.basis, s.nb, n_total);
         std::printf("  Fock build %.3f s (unwrapped), %.3f s (wrapped); HGP kernel ~%.0f%% of the build\n",
@@ -375,8 +422,9 @@ int main(int argc, char **argv)
     if (!require_boys_library())
         return 1;
 
-    // --profile N [nwater basis]: repeat the production-shaped build (closed-form
-    // low-L path on, as the Auto engine runs it) so `sample` can attribute it.
+    // --profile N [nwater basis]: repeat the production-shaped build (the Auto
+    // engine's block kernels: closed forms at L <= 3, HGP block kernel at 4-12)
+    // so `sample` can attribute it. nwater 0 is naphthalene.
     if ((argc == 3 || argc == 5) && std::string(argv[1]) == "--profile")
     {
         const int reps = std::atoi(argv[2]);
@@ -385,7 +433,7 @@ int main(int argc, char **argv)
         const BuildSetup s = prepare({nwater, basis});
         double total = 0.0;
         for (int r = 0; r < reps; ++r)
-            total += timed_build(s, hgp_elem, 3);
+            total += timed_build_block(s, hgp_elem, production_kernel());
         std::printf("--profile: %d builds of %d H2O / %s, %.3f s each\n", reps, nwater, basis, total / reps);
         return 0;
     }
@@ -394,7 +442,8 @@ int main(int argc, char **argv)
     std::printf("steady_clock pair: %.1f ns per quartet\n", 1e9 * timer_pair);
 
     for (const Fixture &f : {Fixture{1, "6-31g*"}, Fixture{4, "6-31g*"},
-                             Fixture{1, "cc-pVDZ"}, Fixture{8, "6-31g"}, Fixture{0, "6-31g"}})
+                             Fixture{1, "cc-pVDZ"}, Fixture{8, "6-31g"}, Fixture{0, "6-31g"},
+                             Fixture{4, "cc-pVDZ"}, Fixture{1, "cc-pVTZ"}})
         run_fixture(f, timer_pair);
     return 0;
 }

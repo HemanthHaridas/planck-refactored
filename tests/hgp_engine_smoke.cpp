@@ -15,6 +15,7 @@
 #include "basis/basis.h"
 #include "integrals/base.h"
 #include "integrals/hgp.h"
+#include "integrals/hgp_block_eri.h"
 #include "integrals/low_l_eri.h"
 #include "integrals/os.h"
 #include "integrals/shellpair.h"
@@ -224,6 +225,87 @@ namespace
         std::cout << "[INFO]   " << required << " raise layouts required, all exercised if no failure above\n";
         require_near(max_rel, 0.0, 1e-14, label + ": low-L closed form must match HGP");
     }
+    // Sweep every shell quartet (A<=B, C<=D) through the HGP block kernel
+    // (hgp_block_eri.h) and compare every component against per-component
+    // HGP. The kernel is fed exactly as the fused loop feeds it: first-
+    // component pairs, component views, and a per-AO norm ratio. Every
+    // (L_A, L_B, L_C, L_D) class of the basis is visited, so the triangle
+    // VRR, both HRRs and the readout are checked on every layout it has.
+    void check_hgp_block_kernel(const std::vector<HartreeFock::ShellPair> &pairs, std::size_t nb,
+                                const std::string &label)
+    {
+        std::vector<const HartreeFock::ShellPair *> pair_of(nb * nb, nullptr);
+        std::vector<const HartreeFock::ContractedView *> views(nb, nullptr);
+        for (const auto &sp : pairs)
+        {
+            pair_of[sp.A._index * nb + sp.B._index] = &sp;
+            views[sp.A._index] = &sp.A;
+            views[sp.B._index] = &sp.B;
+        }
+        std::vector<std::pair<std::size_t, std::size_t>> groups; // first AO, components
+        for (std::size_t ao = 0; ao < nb; ++ao)
+            if (ao == 0 || views[ao]->_shell != views[ao - 1]->_shell)
+                groups.push_back({ao, 1});
+            else
+                ++groups.back().second;
+        std::vector<double> norm_ratio(nb, 1.0);
+        std::vector<int> group_L(groups.size());
+        for (std::size_t g = 0; g < groups.size(); ++g)
+        {
+            const auto &f = *views[groups[g].first];
+            group_L[g] = f._cartesian[0] + f._cartesian[1] + f._cartesian[2];
+            for (std::size_t c = 0; c < groups[g].second; ++c)
+                norm_ratio[groups[g].first + c] = views[groups[g].first + c]->_component_norm / f._component_norm;
+        }
+
+        double max_rel = 0.0;
+        std::size_t n = 0;
+        std::map<std::array<int, 4>, std::size_t> classes;
+        const std::size_t ng = groups.size();
+        for (std::size_t ga = 0; ga < ng; ++ga)
+            for (std::size_t gb = ga; gb < ng; ++gb)
+                for (std::size_t gc = 0; gc < ng; ++gc)
+                    for (std::size_t gd = gc; gd < ng; ++gd)
+                    {
+                        const std::size_t g4[4] = {ga, gb, gc, gd};
+                        HartreeFock::Integrals::BlockEriRequest req;
+                        req.ab = pair_of[groups[ga].first * nb + groups[gb].first];
+                        req.cd = pair_of[groups[gc].first * nb + groups[gd].first];
+                        req.norm_ratio = norm_ratio.data();
+                        for (int s = 0; s < 4; ++s)
+                        {
+                            req.views[s] = &views[groups[g4[s]].first];
+                            req.n[s] = groups[g4[s]].second;
+                            req.L[s] = group_L[g4[s]];
+                        }
+                        HartreeFock::Integrals::HgpBlockKernel kernel;
+                        if (!kernel.prepare(req))
+                        {
+                            fail(label + ": HGP block kernel declined a Coulomb quartet");
+                            return;
+                        }
+                        ++classes[{req.L[0], req.L[1], req.L[2], req.L[3]}];
+                        for (std::size_t ca = 0; ca < req.n[0]; ++ca)
+                            for (std::size_t cb = 0; cb < req.n[1]; ++cb)
+                                for (std::size_t cc = 0; cc < req.n[2]; ++cc)
+                                    for (std::size_t cd = 0; cd < req.n[3]; ++cd)
+                                    {
+                                        const std::size_t i = groups[ga].first + ca, j = groups[gb].first + cb;
+                                        const std::size_t k = groups[gc].first + cc, l = groups[gd].first + cd;
+                                        if (j < i || l < k)
+                                            continue;
+                                        const double ref = hgp_quartet_value(*pair_of[i * nb + j], *pair_of[k * nb + l]);
+                                        const double got = kernel.value(ca, cb, cc, cd);
+                                        max_rel = std::max(max_rel, std::abs(got - ref) / std::max(1.0, std::abs(ref)));
+                                        ++n;
+                                    }
+                    }
+        std::cout << "[INFO] HGP block kernel vs per-component HGP (" << label << "): " << n
+                  << " component quartets in " << classes.size() << " (L_A,L_B,L_C,L_D) classes, max rel diff "
+                  << max_rel << '\n';
+        require_true(n > 0, label + ": no quartets swept");
+        require_near(max_rel, 0.0, 1e-13, label + ": HGP block kernel must match per-component HGP");
+    }
 } // namespace
 
 int main()
@@ -333,6 +415,19 @@ int main()
     }
     const auto cc_pairs = build_shellpairs(cc_calc->_shells);
     check_low_l_kernel(cc_pairs, cc_calc->_shells.nbasis(), "water/cc-pVDZ", true);
+    check_hgp_block_kernel(sp_pairs, sp_calc->_shells.nbasis(), "water/6-31g");
+    check_hgp_block_kernel(d_pairs, d_calc->_shells.nbasis(), "water/6-31g*");
+    check_hgp_block_kernel(cc_pairs, cc_calc->_shells.nbasis(), "water/cc-pVDZ");
+    // cc-pVTZ adds f shells: every class up to (ff|ff), ~4.6M component
+    // quartets, a few seconds.
+    auto tz_calc = make_water_calculator("cc-pVTZ");
+    if (!tz_calc)
+    {
+        fail(tz_calc.error());
+        return 1;
+    }
+    const auto tz_pairs = build_shellpairs(tz_calc->_shells);
+    check_hgp_block_kernel(tz_pairs, tz_calc->_shells.nbasis(), "water/cc-pVTZ");
 
     if (!g_ok)
         return 1;

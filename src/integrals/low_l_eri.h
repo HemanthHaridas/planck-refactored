@@ -6,6 +6,7 @@
 #include <numbers>
 
 #include "base/types.h"
+#include "block_eri.h"
 #include "lookup/boys.h"
 
 // Closed-form contracted Coulomb ERIs for shell quartets with
@@ -159,6 +160,59 @@ namespace HartreeFock::Integrals
             }
         }
     }
+
+    // low_l_shell_eri as a block kernel (block_eri.h): total L <= max_l (at
+    // most 3), Coulomb, no primitive screening. The readout arithmetic is the
+    // fused loop's original one, so G is bitwise unchanged by the interface.
+    struct ClosedFormBlockKernel
+    {
+        int max_l = 3;
+
+        explicit ClosedFormBlockKernel(int max_total_l = 3) noexcept : max_l(max_total_l) {}
+
+        bool prepare(const BlockEriRequest &r) noexcept
+        {
+            const int lt = r.L[0] + r.L[1] + r.L[2] + r.L[3];
+            if (max_l <= 0 || lt > (max_l < 3 ? max_l : 3) || !r.ab || !r.cd ||
+                r.kernel != HartreeFock::ERIKernel::Coulomb || r.prim_eps != 0.0)
+                return false;
+            req_ = &r;
+            n_raise_ = 0;
+            for (int s = 0; s < 4; ++s)
+                for (int u = 0; u < r.L[s]; ++u)
+                    c_[n_raise_++] = s;
+            low_l_shell_eri(*r.ab, *r.cd, n_raise_, c_, vals_);
+            return true;
+        }
+
+        double value(std::size_t ca, std::size_t cb, std::size_t cc, std::size_t cd) const noexcept
+        {
+            const std::size_t comp[4] = {ca, cb, cc, cd};
+            // Axes in the kernel's raise order: centers in order, each unit of
+            // x, then y, then z.
+            int axes[3] = {0, 0, 0}, n_ax = 0;
+            std::size_t ao[4];
+            for (int s = 0; s < 4; ++s)
+            {
+                const HartreeFock::ContractedView &v = *req_->views[s][comp[s]];
+                ao[s] = v._index;
+                for (int a = 0; a < 3 && n_ax < n_raise_; ++a)
+                    for (int u = 0; u < v._cartesian[a]; ++u)
+                        axes[n_ax++] = a;
+            }
+            const int slot = n_raise_ == 3   ? 9 * axes[0] + 3 * axes[1] + axes[2]
+                             : n_raise_ == 2 ? 3 * axes[0] + axes[1]
+                                             : axes[0];
+            const double *nr = req_->norm_ratio;
+            return vals_[slot] * nr[ao[0]] * nr[ao[1]] * nr[ao[2]] * nr[ao[3]];
+        }
+
+    private:
+        const BlockEriRequest *req_ = nullptr;
+        int n_raise_ = 0;
+        int c_[3] = {0, 0, 0};
+        std::array<double, 27> vals_{};
+    };
 }
 
 #endif // !HF_INTEGRALS_LOW_L_ERI_H
