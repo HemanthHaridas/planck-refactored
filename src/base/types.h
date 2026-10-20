@@ -978,6 +978,20 @@ namespace HartreeFock
                     pp.coeff_product = cA * cB * A._shell->_normalizations[i] * B._shell->_normalizations[j] * A._component_norm * B._component_norm;
                     pp.prefactor = std::pow(std::numbers::pi * inv_zeta, 1.5) * std::exp(-alpha_beta_over_zeta * R2);
 
+                    // Drop primitive pairs whose overlap prefactor has underflowed
+                    // to nothing: tight primitives on distant atoms, where
+                    // exp(-alpha beta R^2 / zeta) is ~e^-55 or smaller. Every
+                    // integral over the pair is bounded by this times polynomial
+                    // and exponent factors, so it contributes nothing at double
+                    // precision. On water clusters these were ~19 % of all ERI
+                    // primitive quartets; dropping them left G bit-identical on
+                    // every probe fixture (docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md, P1).
+                    // ponytail: fixed absolute cutoff, independent of tol_eri;
+                    // tie it to the screening tolerance only if a case needs it.
+                    constexpr double kNegligiblePrimitivePair = 1e-24;
+                    if (std::abs(pp.coeff_product * pp.prefactor) < kNegligiblePrimitivePair)
+                        continue;
+
                     // Gaussian product center
                     pp.center = (alpha * A._shell->_center + beta * B._shell->_center) * inv_zeta;
 

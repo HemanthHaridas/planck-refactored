@@ -45,6 +45,7 @@
 #include "integrals/rys.h"
 #include "integrals/shellpair.h"
 #include "require_boys_library.h"
+#include "symmetry/integral_symmetry.h"
 
 namespace
 {
@@ -904,6 +905,67 @@ void check_symmetry_ops(const std::string &basis_name)
                  RysQuad::_compute_2e_fock_uhf_auto_direct(sp, Pa, Pb, nb, K, W, T, &ops).first);
 }
 
+// The sign-flip ops above map every shell group onto itself, so the fused
+// loop's block-level orbit rejection (an op sending one of a block's groups
+// below the bra's first group) can never fire under them. Water's real C2v
+// ops swap the two H atoms, so they move shell groups and exercise it.
+void check_real_symmetry_ops(const std::string &basis_name)
+{
+    HartreeFock::Calculator calc = make_water(basis_name);
+    if (!g_ok)
+        return;
+    calc._molecule._symmetry = true;
+    calc._molecule._point_group = "C2v";
+    HartreeFock::Symmetry::update_integral_symmetry(calc);
+    const std::vector<HartreeFock::SignedAOSymOp> &ops = calc._integral_symmetry_ops;
+
+    bool moves_ao = false;
+    for (const auto &op : ops)
+        for (std::size_t a = 0; a < op.ao_map.size(); ++a)
+            moves_ao = moves_ao || op.ao_map[a] != static_cast<int>(a);
+    if (ops.size() < 2 || !moves_ao)
+    {
+        fail("water/" + basis_name + ": expected C2v ops that swap the H atoms, got " +
+             std::to_string(ops.size()) + " ops" + (moves_ao ? "" : ", none permuting AOs"));
+        return;
+    }
+
+    const std::vector<HartreeFock::ShellPair> sp = build_shellpairs(calc._shells);
+    const std::size_t nb = calc._shells._basis_functions.size();
+    // A density with the molecule's symmetry is not required: fused and
+    // two-phase builders apply the same orbit replication, so they must agree
+    // for any density.
+    std::mt19937 rng(29);
+    const Eigen::MatrixXd P = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pa = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pb = random_symmetric_density(nb, rng);
+
+    const auto K = HartreeFock::ERIKernel::Coulomb;
+    constexpr double W = 0.0;
+    constexpr double T = 1e-10;
+
+    using namespace HartreeFock;
+
+    check_engine("OS   RHF C2v", basis_name,
+                 ObaraSaika::_compute_2e_fock(sp, P, nb, K, W, T, &ops),
+                 ObaraSaika::_compute_2e_fock_direct(sp, P, nb, K, W, T, &ops));
+    check_engine("HGP  RHF C2v", basis_name,
+                 HeadGordonPople::_compute_2e_fock(sp, P, nb, K, W, T, &ops),
+                 HeadGordonPople::_compute_2e_fock_direct(sp, P, nb, K, W, T, &ops));
+    check_engine("Rys  RHF C2v", basis_name,
+                 RysQuad::_compute_2e_fock(sp, P, nb, K, W, T, &ops),
+                 RysQuad::_compute_2e_fock_direct(sp, P, nb, K, W, T, &ops));
+    check_engine("Auto RHF C2v", basis_name,
+                 RysQuad::_compute_2e_fock_auto(sp, P, nb, K, W, T, &ops),
+                 RysQuad::_compute_2e_fock_auto_direct(sp, P, nb, K, W, T, &ops));
+    check_engine("HGP  UHF C2v", basis_name,
+                 HeadGordonPople::_compute_2e_fock_uhf(sp, Pa, Pb, nb, K, W, T, &ops).first,
+                 HeadGordonPople::_compute_2e_fock_uhf_direct(sp, Pa, Pb, nb, K, W, T, &ops).first);
+    check_engine("Auto UHF C2v", basis_name,
+                 RysQuad::_compute_2e_fock_uhf_auto(sp, Pa, Pb, nb, K, W, T, &ops).first,
+                 RysQuad::_compute_2e_fock_uhf_auto_direct(sp, Pa, Pb, nb, K, W, T, &ops).first);
+}
+
 int main()
 {
     // Real-integral fixtures dispatch through the signed, runtime-loaded Boys
@@ -925,6 +987,8 @@ int main()
     check_single_term_builders("6-31g*");
     check_symmetry_ops("sto-3g");
     check_symmetry_ops("6-31g*");
+    check_real_symmetry_ops("sto-3g");
+    check_real_symmetry_ops("6-31g*");
 
     if (!g_ok)
     {

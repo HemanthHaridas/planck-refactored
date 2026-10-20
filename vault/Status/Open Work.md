@@ -1876,6 +1876,17 @@ identify the path taken. Not required for correctness or performance.
 
 ## Performance and maintenance opportunities
 
+- **ERI/Fock BLAS-LAPACK migration — scoped 2026-10-17, nothing landed**
+  (`docs/ERI_FOCK_BLAS_SCOPE.md`). BLAS buys nothing for the ERI kernels,
+  direct-SCF digestion, the conventional `nb⁴` contraction (bandwidth-bound,
+  `dsymv` 0.8–1.7× at 4 threads) or the cart→sph transform (dense `dgemm`
+  0.14–0.62×, `C` is 2.5–4 % nonzero). The real lever is **RI-JK**:
+  `build_ri_pair_factors` is density-independent but recomputed twice per
+  iteration, **~61 %** of the RI-JK Fock build (B0, no BLAS; invalidate with
+  `_ri_j3c`, and add the first RI-JK regression case). Then B1 optional
+  `USE_BLAS` (Accelerate RI-K GEMMs 4.3–7.8×, bitwise thread-count-invariant
+  on M3; OpenBLAS unmeasured), B2 RI-K from `C_occ` on the SCF caller only
+  (4.4–4.8×), B3 `dsyevd` (diag is 0.08 % of an iteration today; deferred).
 - **Closed-form low-L ERI kernels — scoped 2026-10-17, nothing landed**
   (`docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`). Prototypes exact vs HGP (~1e-16):
   per-component closed form is only **1.7×** (the primitive Boys/prefactor
@@ -1978,8 +1989,53 @@ identify the path taken. Not required for correctness or performance.
   buffer hoisted naively slowed molecules *without* symmetry by 5 % through
   codegen. Bitwise. D2h naphthalene 1.23× over L3a (0.862 → 0.702 s);
   symmetry now pays 3.8× (was 1.9× before L3a). Non-symmetric fixtures
-  unchanged. Next: C4 (total L = 4, about a third of every build now);
-  one fresh probe run as its baseline.
+  unchanged.
+  **Post-L3b profile and next steps scoped (2026-10-20).** HGP is 77 % of
+  the 4 H2O / 6-31G\* build. On D2h naphthalene the loop's own self time
+  (30 %) is now the largest frame. Total-L = 4 HGP work is 31–44 % of every
+  build. Next, in order: A0, a noinline split of the loop self time (decides
+  L4 and any symmetric-path item); C4a, a four-raise prototype in the probe
+  on (pp|pp) and (ds|ds), since the ordered raise chain does up to 2.25×
+  redundant work on d layouts; C4b, the generated kernel (predicted
+  1.3–1.5×). After that L ≥ 5 needs a different design, because five raises
+  is 243 outputs. C5 (screened kernels) comes after C4.
+  **A0 done (2026-10-20).** After the split, the loop's own time is 8.5 %
+  (sp) and 19.7 % (D2h). The representative check is 10 % of the symmetric
+  build. L4 is dropped: the readout is ≤ 3.6 %. A census of executed
+  primitive quartets found 19–37 % with prefactor bound < 1e-18 on water
+  clusters (≈0 on one cc-pVDZ water). **P1 + L3c landed (2026-10-20)**,
+  both bitwise; core 79/79, smoke 43/45 (the known rccsdt failures):
+  - **P1** drops primitive pairs with |c·K_ab| < 1e-24 in the `ShellPair`
+    constructor. It covers all engines and G is byte-identical on every
+    fixture: 1.15× on 8 H2O / 6-31G, 1.10× on D2h naphthalene, 1.04× on
+    6-31G\*.
+  - **L3c** rejects a whole block when an op sends one of its shell groups
+    below the bra's first group. That cuts 60 % of D2h blocks for 1.07×.
+    Gated by `check_real_symmetry_ops` (water's real C2v ops, which swap the
+    H shells). Mutation-verified: `< A` → `!= A` fails only the new gate.
+
+  **Found on the way, not chased:** the fused direct loop is not
+  thread-count invariant. Its partials are keyed by thread index, so CO2
+  direct differs between 1 and 4 threads in the DIIS digits and the last
+  kcal/mol digit, with or without symmetry. This is the FCI sigma-build
+  lesson again: fix the partition into accumulators, not only the summation
+  order. `water_rhf_spherical_direct_631gd`'s drift is the same defect.
+
+  **Deep-contraction architecture scoped as D0–D3 (2026-10-20).** On water,
+  unscreened, HGP's per-component calls repeat the primitive loop 4.9×
+  (cc-pVDZ) / 14.3× (cc-pVTZ). Segmented storage of general contractions
+  repeats it another 4.8–4.9×: cc-pVDZ O 1s and 2s are two 9-primitive
+  shells over the same exponents. The steps:
+  - **D0:** measure both repetitions after screening.
+  - **D1:** a shell-quartet block interface for every engine (needs Phase E;
+    must avoid the failed hoist's buffers).
+  - **D2:** general contraction in `Shell`/`ShellPair`, the most invasive.
+  - **D3:** RI-JK pair factors, i.e. the BLAS doc's B0.
+
+  **P2 scoped, not landed:** quartet-level skip |base| < 1e-4·tol_eri,
+  a further 1.07–1.15× at max|ΔG| ~5e-12. It is not bitwise, needs ε plumbed
+  through the engine callable, and must never reach the Schwarz table (an
+  experiment that let it gave max|ΔG| 3e-6).
 
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys

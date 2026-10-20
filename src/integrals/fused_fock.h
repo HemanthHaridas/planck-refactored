@@ -284,6 +284,40 @@ namespace HartreeFock::Integrals
             qmax[p] = m;
         }
 
+        // Block-level orbit rejection. A canonical quartet starts with its
+        // smallest AO, so if an operation sends any of a block's four shell
+        // groups below the bra's first group A, every component quartet of the
+        // block maps to a smaller quartet and none is its orbit's
+        // representative: skip the block without visiting a component. Needs
+        // each operation to map a group onto one group (true for the signed AO
+        // permutations update_integral_symmetry builds); checked here, and the
+        // rejection is off if any operation splits a group. Bitwise: the
+        // skipped blocks held no representatives. ~60 % of D2h naphthalene's
+        // blocks, 1.07x on its build.
+        std::vector<std::size_t> op_group; // op_group[o * ngroups + g]
+        if (use_sym)
+        {
+            std::vector<std::size_t> group_of_ao(nb, 0);
+            for (std::size_t g = 0; g < ngroups; ++g)
+                for (std::size_t c = 0; c < groups[g].n_components; ++c)
+                    group_of_ao[groups[g].first_ao + c] = g;
+            op_group.resize(sym_ops->size() * ngroups);
+            bool maps_groups = true;
+            for (std::size_t o = 0; o < sym_ops->size() && maps_groups; ++o)
+            {
+                const std::vector<int> &map = (*sym_ops)[o].ao_map;
+                for (std::size_t g = 0; g < ngroups && maps_groups; ++g)
+                {
+                    const std::size_t h = group_of_ao[map[groups[g].first_ao]];
+                    for (std::size_t c = 1; c < groups[g].n_components; ++c)
+                        maps_groups = maps_groups && group_of_ao[map[groups[g].first_ao + c]] == h;
+                    op_group[o * ngroups + g] = h;
+                }
+            }
+            if (!maps_groups)
+                op_group.clear();
+        }
+
 #ifdef USE_OPENMP
         const int n_threads = omp_get_max_threads();
 #else
@@ -362,6 +396,23 @@ namespace HartreeFock::Integrals
 
                 const FusedShellGroup &gC = groups[group_pairs[ket].a];
                 const FusedShellGroup &gD = groups[group_pairs[ket].b];
+
+                if constexpr (kSym)
+                {
+                    if (!op_group.empty())
+                    {
+                        const std::size_t A = group_pairs[bra].a, B = group_pairs[bra].b;
+                        const std::size_t C = group_pairs[ket].a, D = group_pairs[ket].b;
+                        bool below = false;
+                        for (std::size_t o = 0; o < sym_ops->size() && !below; ++o)
+                        {
+                            const std::size_t *m = &op_group[o * ngroups];
+                            below = std::min({m[A], m[B], m[C], m[D]}) < A;
+                        }
+                        if (below)
+                            continue;
+                    }
+                }
 
                 // Closed-form path for this block: which center carries the
                 // p (-1 for (ss|ss)), the first-component pairs, and the values,
