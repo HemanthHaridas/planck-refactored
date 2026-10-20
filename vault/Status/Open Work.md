@@ -1891,11 +1891,21 @@ identify the path taken. Not required for correctness or performance.
   (`docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`, the source of truth; it carries
   every measurement, finding and ruled-out idea).
   - **Landed:** C0 (Boys v1.1.0), C1, C2–C3.5 (closed-form shell kernels
-    through total L ≤ 3, Auto only), H1, L1, L2, L3a–c, P1, S1. Measured:
+    through total L ≤ 3, Auto only), H1, L1, L2, L3a–c, P1, S1, D1. Measured:
     A0, D0, C4a.
-  - **Fock build, one thread, Auto:** 8 H2O / 6-31G 1.50 → 0.187 s (8.0×),
-    4 H2O / 6-31G\* ~2.3×, 1 H2O / cc-pVDZ ~2.1×, D2h naphthalene 1.454 →
-    0.454 s (3.2×; symmetry now pays 5.2×).
+  - **Fock build, one thread, Auto:** 8 H2O / 6-31G 1.50 → 0.137 s (~11×),
+    4 H2O / 6-31G\* ~11×, 1 H2O / cc-pVDZ ~8×, D2h naphthalene 1.454 →
+    0.301 s (4.8×), 1 H2O / cc-pVTZ 1.631 → 0.128 s (12.7× since D0).
+  - **D1 (2026-10-20):** the fused loop takes a block kernel
+    (`src/integrals/block_eri.h`: `prepare`/`value`, declined blocks fall back
+    to per-component `eri_elem`; explicit engines stay pure). Moving the
+    closed forms behind it was bitwise (20 fingerprints). The new HGP block
+    kernel (`hgp_block_eri.h`) runs one primitive pass per shell quartet with
+    an L-major triangle VRR (not the per-axis cube the failed hoist used),
+    then HRR once. Auto dispatches it for total L 4–12, where every class won:
+    1.5× on sp, 4.3–4.9× on d, 12.9× on cc-pVTZ over the closed forms alone.
+    Gated against per-component HGP on water 6-31G/6-31G\*/cc-pVDZ/cc-pVTZ
+    (4.6 M component quartets, 256 classes, ≤ 8.9e-15), mutation-verified.
   - **S1 (2026-10-20):** skeleton accumulation plus final symmetrization when
     every density is symmetric (tolerance 1e-10), else unchanged replication.
     1.33× on D2h naphthalene. Gains land on symmetric DFT. Direct HF on linear
@@ -1910,15 +1920,45 @@ identify the path taken. Not required for correctness or performance.
     Python tests updated: `test_udh_molecular_audit` (the U11 rejection
     removed in `039bd2df`) and `test_udh_u0_fixtures` (the CN-radical fixture
     from `de57169b`).
-  - **Open, in order:** D1 (shell-quartet block interface, with an HGP block
-    kernel; the lever for d/f bases), C4b (four-raise kernel, predicted
-    1.4–1.7× on sp and cc-pVDZ), C5 (screened kernels), D2a/D2b
-    (shared-exponent families, 2–5× in primitive passes), P2 (ε screening,
-    a policy decision), then the L ≥ 5 decision. D3 (RI-JK pair factors) is
-    independent.
+  - **Post-D1 profile (2026-10-20):** the HGP block kernel's ket VRR is the
+    largest item on d/f bases (24 % 6-31G\*, 21 % cc-pVDZ, 41 % cc-pVTZ);
+    closed forms + Boys are ~60–67 % on sp bases; `skeleton_orbit_weight` is
+    13 % of the symmetric build; emulated thread-local access 2.5–4.7 % on
+    d/f; G writes 6–15 % everywhere.
+  - **Open, in order:** block-kernel scratch out of thread-local storage,
+    D1c (Head-Gordon–Pople electron-transfer recurrence in place of the ket
+    VRR), a per-block skeleton test, C5 (screened kernels in both block
+    kernels; range-separated hybrids still take per-component HGP), D2a/D2b
+    (shared-exponent families), P2 (ε screening, a policy decision), then
+    total L > 12. D3 (RI-JK pair factors) is independent. C4b is
+    deprioritised: the block kernel leaves only 4–9 % at L = 4 on sp bases.
   - **Known defect, not chased:** the fused direct loop is not thread-count
-    invariant (accumulators keyed by thread index). Fix it before D1 if at
-    all.
+    invariant (accumulators keyed by thread index).
+  - **Teaching-guide follow-ups (found 2026-10-20, after D1):**
+    - **§11 "Auto-Dispatch: Calibrated Per-Bucket Engine Selection" needs
+      rewriting.** It says every contracted shell quartet is routed to the
+      bucket's fastest engine, and that the direct Fock variants reuse
+      `_compute_2e_auto` with the same per-quartet rule. In the direct
+      (fused) build, Coulomb quartets with total L ≤ 12 now go to the block
+      kernels; per-bucket dispatch governs only the conventional ERI tensor
+      and two-phase builds, screened kernels, and direct quartets with total
+      L > 12. Its µs ladder also predates H1 (HGP's per-component path ~1.1×
+      faster), so near-tied buckets may have moved: rerun
+      `planck-auto-dispatch-benchmark` and `scripts/fit_auto_dispatch.py`. If
+      the fitted table changes, that is a `kAutoEngine` change in `rys.cpp`,
+      not only a doc edit.
+    - **§12 "HGP vs OS vs Rys in Practice — Measured Timings" is stale**
+      (measured 2026-06-15). The `nosym`/`d2h` columns go through the fused
+      direct loop, which C1, H1, L1, L2 and P1 sped up for every engine; the
+      Auto rows now run the block kernels and no longer track HGP; the `full`
+      column (separate skeleton path) probably moved less. Rerun the
+      full-symmetry direct-Fock benchmark across the three engines and three
+      modes, then re-check its conclusions (HGP narrowly wins full symmetry;
+      Rys dominated at these L).
+    - **§9 "One loop, four engines"** says the engines differ in exactly one
+      expression, the per-quartet ERI function. Still true for explicit
+      engines, but Auto also passes block kernels; add one sentence pointing
+      to "The HGP block kernel".
 
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys
