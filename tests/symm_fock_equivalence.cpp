@@ -23,6 +23,7 @@
 #include "basis/basis.h"
 #include "base/basis.h"
 #include "base/types.h"
+#include "require_boys_library.h"
 
 #include <Eigen/Core>
 #include <array>
@@ -250,6 +251,8 @@ namespace
 
 int main()
 {
+    if (!require_boys_library())
+        return 1;
     // Water — C2v (|G| = 4). Production also reduces here, so this confirms the new
     // path agrees on a case the existing engine already handles.
     check("H2O/C2v",

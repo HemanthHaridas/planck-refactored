@@ -1187,6 +1187,7 @@ if(BUILD_TESTING)
     # plus the ESP assembly itself.
     add_executable(planck-esp-points
         ${CMAKE_SOURCE_DIR}/tests/esp_points.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/populations/esp.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
@@ -1240,6 +1241,7 @@ if(BUILD_TESTING)
     # Detached U2 physical two-spin AO response. No UKS gradient driver.
     add_executable(planck-udh-ks-response
         ${CMAKE_SOURCE_DIR}/tests/udh_ks_response.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/dft/udh_ks_response.cpp
         ${SRC_DIR}/dft/analytic_hessian.cpp
         ${SRC_DIR}/dft/xc_grid.cpp
@@ -1382,6 +1384,7 @@ if(BUILD_TESTING)
     # U7 detached spin-resolved ERI tensors and fixed-contract non-XC oracles.
     add_executable(planck-udh-two-particle-density
         ${CMAKE_SOURCE_DIR}/tests/udh_two_particle_density.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/dft/udh_two_particle_density.cpp
         ${SRC_DIR}/dft/udh_relaxed_density.cpp
         ${SRC_DIR}/dft/udh_pt2_gradient.cpp
@@ -1410,6 +1413,7 @@ if(BUILD_TESTING)
     # U8a detached complete polarized LDA XC-II, four geometry channels.
     add_executable(planck-udh-xc-ii-lda
         ${CMAKE_SOURCE_DIR}/tests/udh_xc_ii_lda.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/dft/udh_xc_ii.cpp
         ${SRC_DIR}/dft/ks_matrix.cpp
         ${SRC_DIR}/dft/dh_pt2_gradient.cpp
@@ -1437,6 +1441,7 @@ if(BUILD_TESTING)
     # U8b detached complete polarized GGA XC-II and Hessian-bearing oracles.
     add_executable(planck-udh-xc-ii-gga
         ${CMAKE_SOURCE_DIR}/tests/udh_xc_ii_gga.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/dft/udh_xc_ii_gga.cpp
         ${SRC_DIR}/dft/dh_pt2_gradient.cpp
         ${SRC_DIR}/dft/ks_matrix.cpp
@@ -1496,6 +1501,7 @@ if(BUILD_TESTING)
 
     add_executable(planck-hgp-quartet-validation
         ${CMAKE_SOURCE_DIR}/tests/hgp_quartet_validation.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
@@ -1507,6 +1513,7 @@ if(BUILD_TESTING)
 
     add_executable(planck-os-block-kernel
         ${CMAKE_SOURCE_DIR}/tests/os_block_kernel.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
@@ -1518,6 +1525,7 @@ if(BUILD_TESTING)
 
     add_executable(planck-hgp-triangular-contract
         ${CMAKE_SOURCE_DIR}/tests/hgp_triangular_contract.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
@@ -2059,6 +2067,7 @@ if(BUILD_TESTING)
 
     add_executable(planck-symm-fock-equivalence
         ${CMAKE_SOURCE_DIR}/tests/symm_fock_equivalence.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${INT_SRC}
         ${LOOKUP_SRC}
         ${SRC_DIR}/symmetry/os_symm.cpp

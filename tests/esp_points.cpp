@@ -51,6 +51,7 @@
 #include "integrals/os.h"
 #include "integrals/shellpair.h"
 #include "populations/esp.h"
+#include "require_boys_library.h"
 
 namespace
 {
@@ -999,6 +1000,8 @@ namespace
 
 int main()
 {
+    if (!require_boys_library())
+        return 1;
     std::cout << "planck-esp-points\n";
 
     std::cout << "[1] fused sweep vs per-point matrix oracle\n";

@@ -14,6 +14,7 @@ class U0Fixtures(unittest.TestCase):
             "water_triplet_asymmetric": (6, 4, 7),
             "h2plus_zero_beta": (1, 0, 2),
             "h2o2_cation_c1": (9, 8, 12),
+            "cn_radical_asymmetric": (7, 6, 10),
         }
         fixtures = list(FIXTURES.glob("*.hfinp"))
         self.assertEqual(len(fixtures), len(expected))
@@ -22,8 +23,8 @@ class U0Fixtures(unittest.TestCase):
             self.assertIn("max_cycles  200", text)
             self.assertIn("tol_energy  1.0e-11", text)
             symbols, xyz, charge, mult = parse_geometry(text)
-            electrons = sum({"O": 8, "H": 1}[s] for s in symbols) - charge
-            nao = sum({"O": 5, "H": 1}[s] for s in symbols)
+            electrons = sum({"C": 6, "N": 7, "O": 8, "H": 1}[s] for s in symbols) - charge
+            nao = sum({"C": 5, "N": 5, "O": 5, "H": 1}[s] for s in symbols)
             key = path.stem.removesuffix("_b2plyp_sto3g")
             self.assertEqual((electrons + mult - 1) % 2, 0)
             self.assertEqual(((electrons + mult - 1)//2, (electrons - mult + 1)//2, nao), expected[key])

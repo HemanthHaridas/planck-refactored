@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cmath>
 #include <cstdint>
 #include <numbers>
@@ -495,7 +496,13 @@ namespace
         // One vector Boys call for F_0..F_MMAX, bitwise-identical to the
         // per-order loop (same idiom as the OS seed). The MMAX+1 scalar calls
         // were ~24 % of the fused Fock build after C2.
-        double F[4 * MAX_L + 1];
+        // Sized for the hoisted block path (MaxBoxLayout), which passes the
+        // per-AXIS maxima over a shell pair, up to 2*MAX_L on each of the six
+        // axes: MMAX <= 12*MAX_L, not the 4*MAX_L of a single component. The
+        // old 4*MAX_L + 1 buffer overflowed on (ff|ff) (MMAX = 36) and smashed
+        // the stack.
+        double F[6 * (VRR_DIM - 1) + 1];
+        assert(MMAX < static_cast<int>(std::size(F)));
         HartreeFock::Lookup::boys_vec(T, std::span<double>(F, MMAX + 1));
         for (int m = 0; m <= MMAX; ++m)
             scratch.v(0, 0, 0, 0, 0, 0, m) = prefac * F[m];

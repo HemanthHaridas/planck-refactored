@@ -90,7 +90,8 @@ class U10WiringTests(unittest.TestCase):
         driver = (ROOT/"src/dft/driver.cpp").read_text()
         self.assertIn("options.udh_gradient_validation && functionals.has_double_hybrid_pt2", driver)
         self.assertIn("calculator._calculation==HartreeFock::CalculationType::Gradient", driver)
-        self.assertIn("UKS double-hybrid gradients await U11 molecular acceptance", driver)
+        # 039bd2df promoted UKS DH gradients; the U11 rejection must stay gone.
+        self.assertNotIn("UKS double-hybrid gradients await U11 molecular acceptance", driver)
         self.assertIn("correction->total=*ks+correction->correction", driver)
         self.assertIn("calculator,correction->total,requested_gradient_frame_bohr", driver)
         self.assertNotIn("udh_gradient_validation", (ROOT/"src/dft/main.cpp").read_text())

@@ -38,6 +38,7 @@
 #include "basis/basis.h"
 #include "integrals/hgp.h"
 #include "integrals/shellpair.h"
+#include "require_boys_library.h"
 
 namespace
 {
@@ -263,6 +264,8 @@ namespace
 
 int main()
 {
+    if (!require_boys_library())
+        return 1;
     // d-shell basis: the (dd|dd) quartets are the ones A4-1's dense readout broke.
     check_basis("6-31g*", HartreeFock::ERIKernel::Coulomb, 0.0);
     check_basis("6-31g*", HartreeFock::ERIKernel::LongRange, 0.3);

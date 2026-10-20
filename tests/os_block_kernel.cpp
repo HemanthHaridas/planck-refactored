@@ -28,6 +28,7 @@
 #include "integrals/hgp.h"
 #include "integrals/os.h"
 #include "integrals/shellpair.h"
+#include "require_boys_library.h"
 
 namespace
 {
@@ -287,6 +288,8 @@ namespace
 
 int main()
 {
+    if (!require_boys_library())
+        return 1;
     check_engine(Engine::OS);
     check_engine(Engine::HGP);
     check_hgp_hoisted();
