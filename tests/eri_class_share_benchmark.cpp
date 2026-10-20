@@ -200,6 +200,10 @@ namespace
         // ERI cost does not depend on the density; any symmetric matrix will do.
         s.P = Eigen::MatrixXd::Random(s.nb, s.nb);
         s.P = (0.5 * (s.P + s.P.transpose())).eval();
+        // The symmetric fixture's density must carry the molecule's symmetry,
+        // or the build falls back from the skeleton path (S1) to replication.
+        if (s.sym)
+            HartreeFock::Integrals::symmetrize_over_ops(s.P, s.calc._integral_symmetry_ops);
         return s;
     }
 
@@ -319,11 +323,13 @@ namespace
             s.sym = false;
             timed_build(s, hgp_elem, 3);
             const double t_nosym = timed_build(s, hgp_elem, 3);
+            const Eigen::MatrixXd G_nosym = g_last;
             s.sym = true;
             timed_build(s, hgp_elem, 3);
             const double t_sym = timed_build(s, hgp_elem, 3);
-            std::printf("\nnaphthalene / %s: %zu integral-symmetry ops; closed-form build %.3f s with sym_ops, %.3f s without\n",
-                        f.basis, s.calc._integral_symmetry_ops.size(), t_sym, t_nosym);
+            std::printf("\nnaphthalene / %s: %zu integral-symmetry ops; closed-form build %.3f s with sym_ops, %.3f s without, max|dG| %.1e\n",
+                        f.basis, s.calc._integral_symmetry_ops.size(), t_sym, t_nosym,
+                        (g_last - G_nosym).cwiseAbs().maxCoeff());
         }
         std::printf("\n%d H2O / %s: G fingerprint %016llx\n", f.nwater, f.basis,
                     static_cast<unsigned long long>(fingerprint));

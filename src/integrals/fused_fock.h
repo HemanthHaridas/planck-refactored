@@ -32,7 +32,10 @@
 // symmetry-orbit representative and replicated across the orbit with the
 // accumulated AO sign, exactly as the tensor build's scatter does. The two
 // dedups compose without double-counting — see the dedup argument in
-// quartet_orbit.h. Passing sym_ops = nullptr (the default) disables it.
+// quartet_orbit.h. When every density is itself symmetric, the loop instead
+// accumulates each representative once, weighted by its orbit size, and
+// symmetrizes G at the end (skeleton mode, S1). Passing sym_ops = nullptr (the
+// default) disables both.
 #pragma once
 
 #include <algorithm>
@@ -194,6 +197,20 @@ namespace HartreeFock::Integrals
         int closed_form_max_l = 0)
     {
         const bool use_sym = (sym_ops != nullptr) && !sym_ops->empty();
+
+        // Skeleton mode (S1): when every density carries the molecule's
+        // symmetry, accumulate each non-forbidden orbit representative ONCE,
+        // weighted by its orbit size, and symmetrize G over the ops at the end
+        // instead of replicating every value across its orbit. Exact for a
+        // symmetric density; replication (below) is kept for any other, which
+        // it reproduces exactly (PCM, symmetry-broken UHF, random test densities).
+        // ponytail: absolute tolerance; a density off by <= 1e-10 is treated as
+        // symmetric, i.e. G is built from its group average.
+        constexpr double kSkeletonDensityTol = 1e-10;
+        bool skeleton = use_sym;
+        for (const Eigen::MatrixXd *D : {dens.P, dens.Pt, dens.Pa, dens.Pb})
+            if (skeleton && D && !density_has_symmetry(*D, *sym_ops, kSkeletonDensityTol))
+                skeleton = false;
         std::vector<const HartreeFock::ContractedView *> ao_views;
         const std::vector<FusedShellGroup> groups =
             fused_shell_groups(shell_pairs, nb, ao_views);
@@ -353,13 +370,15 @@ namespace HartreeFock::Integrals
         const int mpi_rank = HartreeFock::Mpi::rank();
         const int mpi_size = HartreeFock::Mpi::size();
 
-        // The bra body is instantiated twice, with and without integral
-        // symmetry, so the non-symmetric hot loop carries no symmetry code.
-        // With the symmetry branches inline, merely moving the orbit buffer
-        // swung the non-symmetric build by 2-5 % through code generation.
-        const auto bra_body = [&](std::size_t bra, auto sym_tag)
+        // The bra body is instantiated per symmetry mode (0 none, 1 orbit
+        // replication, 2 skeleton), so the non-symmetric hot loop carries no
+        // symmetry code. With the symmetry branches inline, merely moving the
+        // orbit buffer swung the non-symmetric build by 2-5 % through code
+        // generation.
+        const auto bra_body = [&](std::size_t bra, auto mode_tag)
         {
-            constexpr bool kSym = decltype(sym_tag)::value;
+            constexpr bool kSym = decltype(mode_tag)::value != 0;
+            constexpr bool kSkel = decltype(mode_tag)::value == 2;
             if (mpi_size > 1 &&
                 static_cast<int>(bra % static_cast<std::size_t>(mpi_size)) != mpi_rank)
                 return;
@@ -382,7 +401,7 @@ namespace HartreeFock::Integrals
             // One orbit buffer per bra iteration (so per thread), reused for
             // every representative quartet: no per-quartet allocation.
             std::vector<QuartetOrbitElem> orbit;
-            if constexpr (kSym)
+            if constexpr (kSym && !kSkel)
                 orbit.reserve(sym_ops->size());
             const FusedShellGroup &gB = groups[group_pairs[bra].b];
 
@@ -490,7 +509,14 @@ namespace HartreeFock::Integrals
                                 // quartets, and fock_accumulate_* dedups the
                                 // 8-fold permutational orbit of each. See the
                                 // dedup argument in quartet_orbit.h.
-                                if constexpr (kSym)
+                                double weight = 1.0; // skeleton: orbit size
+                                if constexpr (kSkel)
+                                {
+                                    weight = skeleton_orbit_weight(i, j, k, l, *sym_ops);
+                                    if (weight == 0.0)
+                                        continue; // not the representative, or forbidden
+                                }
+                                else if constexpr (kSym)
                                 {
                                     // Cheap rejection first: most canonical
                                     // quartets are not their orbit's
@@ -546,6 +572,11 @@ namespace HartreeFock::Integrals
                                     accumulate_term(term, need_uhf, G_local, Gb_local,
                                                     dens, i, j, k, l, val);
                                 }
+                                else if constexpr (kSkel)
+                                {
+                                    accumulate_term(term, need_uhf, G_local, Gb_local,
+                                                    dens, i, j, k, l, weight * val);
+                                }
                                 else
                                 {
                                     for (const auto &e : orbit)
@@ -568,10 +599,12 @@ namespace HartreeFock::Integrals
 #endif
         for (std::size_t bra = 0; bra < ngp; ++bra)
         {
-            if (use_sym)
-                bra_body(bra, std::true_type{});
+            if (skeleton)
+                bra_body(bra, std::integral_constant<int, 2>{});
+            else if (use_sym)
+                bra_body(bra, std::integral_constant<int, 1>{});
             else
-                bra_body(bra, std::false_type{});
+                bra_body(bra, std::integral_constant<int, 0>{});
         }
 
         // Fixed thread-index order — never completion order.
@@ -591,6 +624,11 @@ namespace HartreeFock::Integrals
             // every rank uses the same one (they do; same type, same dims).
             HartreeFock::Mpi::allreduce_inplace(Ga.data(), static_cast<std::size_t>(Ga.size()));
             HartreeFock::Mpi::allreduce_inplace(Gb.data(), static_cast<std::size_t>(Gb.size()));
+            if (skeleton)
+            {
+                symmetrize_over_ops(Ga, *sym_ops);
+                symmetrize_over_ops(Gb, *sym_ops);
+            }
         }
         else
         {
@@ -604,7 +642,11 @@ namespace HartreeFock::Integrals
                 for (int t = 0; t < n_threads; ++t)
                     Ga += ga_partials[static_cast<std::size_t>(t)];
                 HartreeFock::Mpi::allreduce_inplace(Ga.data(), static_cast<std::size_t>(Ga.size()));
+                if (skeleton)
+                    symmetrize_over_ops(Ga, *sym_ops);
             }
+            if (skeleton)
+                symmetrize_over_ops(G, *sym_ops);
         }
     }
 }

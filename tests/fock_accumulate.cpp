@@ -966,6 +966,121 @@ void check_real_symmetry_ops(const std::string &basis_name)
                  RysQuad::_compute_2e_fock_uhf_auto_direct(sp, Pa, Pb, nb, K, W, T, &ops).first);
 }
 
+// ── S1: skeleton accumulation + final symmetrization ────────────────────────
+//
+// When every density has the molecule's symmetry the fused loop accumulates
+// each orbit representative once, weighted by its orbit size, and symmetrizes
+// G at the end instead of replicating. Every check above uses densities with
+// no point-group symmetry, so it exercises only the replication fallback (a
+// skeleton build would differ from the two-phase builder by O(1) there, so
+// their passing also proves the fallback fired). This one group-averages the
+// densities, so the skeleton path runs, and requires it to match the
+// two-phase replication builder. The average is built from dense O_R matrices,
+// independently of the production gather in symmetrize_over_ops.
+Eigen::MatrixXd group_average(const Eigen::MatrixXd &P,
+                              const std::vector<HartreeFock::SignedAOSymOp> &ops)
+{
+    const Eigen::Index nb = P.rows();
+    Eigen::MatrixXd avg = Eigen::MatrixXd::Zero(nb, nb);
+    for (const auto &op : ops)
+    {
+        Eigen::MatrixXd O = Eigen::MatrixXd::Zero(nb, nb);
+        for (Eigen::Index a = 0; a < nb; ++a)
+            O(op.ao_map[a], a) = op.ao_sign[a];
+        avg += O * P * O.transpose();
+    }
+    return avg / static_cast<double>(ops.size());
+}
+
+void check_skeleton(const std::string &label, const std::string &basis_name,
+                    const HartreeFock::Calculator &calc,
+                    const std::vector<HartreeFock::SignedAOSymOp> &ops, unsigned seed,
+                    bool physical)
+{
+    const std::vector<HartreeFock::ShellPair> sp = build_shellpairs(calc._shells);
+    const std::size_t nb = calc._shells._basis_functions.size();
+    std::mt19937 rng(seed);
+    const Eigen::MatrixXd P = group_average(random_symmetric_density(nb, rng), ops);
+    const Eigen::MatrixXd Pa = group_average(random_symmetric_density(nb, rng), ops);
+    const Eigen::MatrixXd Pb = group_average(random_symmetric_density(nb, rng), ops);
+    const Eigen::MatrixXd Pt = Pa + Pb;
+    if (!HartreeFock::Integrals::density_has_symmetry(P, ops, 1e-12))
+        fail(label + ": group-averaged density failed the symmetry check");
+
+    const auto K = HartreeFock::ERIKernel::Coulomb;
+    constexpr double W = 0.0;
+    constexpr double T = 1e-10;
+    using namespace HartreeFock;
+
+    check_engine("OS   RHF skel " + label, basis_name,
+                 ObaraSaika::_compute_2e_fock(sp, P, nb, K, W, T, &ops),
+                 ObaraSaika::_compute_2e_fock_direct(sp, P, nb, K, W, T, &ops));
+    check_engine("HGP  RHF skel " + label, basis_name,
+                 HeadGordonPople::_compute_2e_fock(sp, P, nb, K, W, T, &ops),
+                 HeadGordonPople::_compute_2e_fock_direct(sp, P, nb, K, W, T, &ops));
+    check_engine("Rys  RHF skel " + label, basis_name,
+                 RysQuad::_compute_2e_fock(sp, P, nb, K, W, T, &ops),
+                 RysQuad::_compute_2e_fock_direct(sp, P, nb, K, W, T, &ops));
+    check_engine("Auto RHF skel " + label, basis_name,
+                 RysQuad::_compute_2e_fock_auto(sp, P, nb, K, W, T, &ops),
+                 RysQuad::_compute_2e_fock_auto_direct(sp, P, nb, K, W, T, &ops));
+
+    const auto uhf_ref = HeadGordonPople::_compute_2e_fock_uhf(sp, Pa, Pb, nb, K, W, T, &ops);
+    const auto uhf_hgp = HeadGordonPople::_compute_2e_fock_uhf_direct(sp, Pa, Pb, nb, K, W, T, &ops);
+    check_engine("HGP  UHF a skel " + label, basis_name, uhf_ref.first, uhf_hgp.first);
+    check_engine("HGP  UHF b skel " + label, basis_name, uhf_ref.second, uhf_hgp.second);
+    const auto uhf_auto_ref = RysQuad::_compute_2e_fock_uhf_auto(sp, Pa, Pb, nb, K, W, T, &ops);
+    const auto uhf_auto = RysQuad::_compute_2e_fock_uhf_auto_direct(sp, Pa, Pb, nb, K, W, T, &ops);
+    check_engine("Auto UHF a skel " + label, basis_name, uhf_auto_ref.first, uhf_auto.first);
+    check_engine("Auto UHF b skel " + label, basis_name, uhf_auto_ref.second, uhf_auto.second);
+
+    // Single-term modes (the DFT J/K path): skeleton vs the no-symmetry build,
+    // which is a valid reference only when the ops are true ERI symmetries.
+    if (!physical)
+        return;
+    const auto engine = HartreeFock::IntegralMethod::Auto;
+    check_engine("Auto J skel " + label, basis_name,
+                 _compute_2e_j_direct(sp, P, nb, engine, K, W, T, nullptr),
+                 _compute_2e_j_direct(sp, P, nb, engine, K, W, T, &ops));
+    check_engine("Auto K skel " + label, basis_name,
+                 _compute_2e_k_direct(sp, P, nb, engine, K, W, T, nullptr),
+                 _compute_2e_k_direct(sp, P, nb, engine, K, W, T, &ops));
+    const auto k_ref = _compute_2e_k_uhf_direct(sp, Pa, Pb, nb, engine, K, W, T, nullptr);
+    const auto k_skel = _compute_2e_k_uhf_direct(sp, Pa, Pb, nb, engine, K, W, T, &ops);
+    check_engine("Auto Ka skel " + label, basis_name, k_ref.first, k_skel.first);
+    check_engine("Auto Kb skel " + label, basis_name, k_ref.second, k_skel.second);
+    check_engine("Auto Jt skel " + label, basis_name,
+                 _compute_2e_j_direct(sp, Pt, nb, engine, K, W, T, nullptr),
+                 _compute_2e_j_direct(sp, Pt, nb, engine, K, W, T, &ops));
+}
+
+void check_skeleton_symmetry(const std::string &basis_name)
+{
+    HartreeFock::Calculator calc = make_water(basis_name);
+    if (!g_ok)
+        return;
+    const std::size_t nb = calc._shells._basis_functions.size();
+
+    // Synthetic order-2 group: identity plus one AO sign flip (orbits of 1 and
+    // 2, forbidden quartets, and no AO movement).
+    std::vector<HartreeFock::SignedAOSymOp> flip_ops(2);
+    flip_ops[0].ao_map.resize(nb);
+    flip_ops[0].ao_sign.assign(nb, 1);
+    for (std::size_t a = 0; a < nb; ++a)
+        flip_ops[0].ao_map[a] = static_cast<int>(a);
+    flip_ops[1] = flip_ops[0];
+    flip_ops[1].ao_sign[nb / 3] = -1;
+    // Not a true ERI symmetry in general (AO nb/3 is an s function in 6-31g*),
+    // so the reference is replication, which applies the same ops.
+    check_skeleton("flip", basis_name, calc, flip_ops, 31, false);
+
+    // Water's real C2v ops, which swap the H atoms.
+    calc._molecule._symmetry = true;
+    calc._molecule._point_group = "C2v";
+    HartreeFock::Symmetry::update_integral_symmetry(calc);
+    check_skeleton("C2v", basis_name, calc, calc._integral_symmetry_ops, 37, true);
+}
+
 int main()
 {
     // Real-integral fixtures dispatch through the signed, runtime-loaded Boys
@@ -989,6 +1104,8 @@ int main()
     check_symmetry_ops("6-31g*");
     check_real_symmetry_ops("sto-3g");
     check_real_symmetry_ops("6-31g*");
+    check_skeleton_symmetry("sto-3g");
+    check_skeleton_symmetry("6-31g*");
 
     if (!g_ok)
     {

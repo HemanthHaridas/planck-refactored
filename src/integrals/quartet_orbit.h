@@ -32,10 +32,13 @@
 #pragma once
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <tuple>
 #include <utility>
 #include <vector>
+
+#include <Eigen/Dense>
 
 #include "base/types.h"
 
@@ -109,6 +112,72 @@ namespace HartreeFock::Integrals
                 return false;
         }
         return true;
+    }
+
+    // Skeleton weight (S1): the orbit size of canonical (i,j,k,l) if it is its
+    // orbit's representative and not symmetry-forbidden, else 0. One pass over
+    // the ops, no allocation. Needs sym_ops to be a GROUP (update_integral_symmetry
+    // builds identity plus every valid axis flip, which is closed): then the ops
+    // that fix the quartet are its stabilizer, the orbit has |G|/|Stab| distinct
+    // members, and the quartet is forbidden iff some op fixes it with sign -1
+    // (two ops reaching one image with opposite signs compose to exactly that).
+    // Skipping a forbidden quartet only saves work: its contribution would be
+    // cancelled exactly by the final symmetrization (the op fixing it with sign
+    // -1 maps it to its own negative), so no value gate can see that test.
+    inline double skeleton_orbit_weight(
+        std::size_t i, std::size_t j, std::size_t k, std::size_t l,
+        const std::vector<HartreeFock::SignedAOSymOp> &sym_ops) noexcept
+    {
+        std::size_t stab = 0;
+        for (const auto &op : sym_ops)
+        {
+            std::size_t ii = static_cast<std::size_t>(op.ao_map[i]);
+            std::size_t jj = static_cast<std::size_t>(op.ao_map[j]);
+            std::size_t kk = static_cast<std::size_t>(op.ao_map[k]);
+            std::size_t ll = static_cast<std::size_t>(op.ao_map[l]);
+            canonicalize_orbit_quartet(ii, jj, kk, ll);
+            const auto image = std::tie(ii, jj, kk, ll);
+            const auto self = std::tie(i, j, k, l);
+            if (image < self)
+                return 0.0;
+            if (image == self)
+            {
+                if (op.ao_sign[i] * op.ao_sign[j] * op.ao_sign[k] * op.ao_sign[l] < 0)
+                    return 0.0;
+                ++stab;
+            }
+        }
+        return static_cast<double>(sym_ops.size()) / static_cast<double>(stab);
+    }
+
+    // True iff s(a) s(b) P(R(a), R(b)) == P(a, b) within `tol` for every op: the
+    // density has the molecule's symmetry, which the skeleton scheme requires.
+    inline bool density_has_symmetry(
+        const Eigen::MatrixXd &P,
+        const std::vector<HartreeFock::SignedAOSymOp> &sym_ops, double tol) noexcept
+    {
+        const Eigen::Index nb = P.rows();
+        for (const auto &op : sym_ops)
+            for (Eigen::Index b = 0; b < nb; ++b)
+                for (Eigen::Index a = 0; a < nb; ++a)
+                    if (std::abs(op.ao_sign[a] * op.ao_sign[b] * P(op.ao_map[a], op.ao_map[b]) -
+                                 P(a, b)) > tol)
+                        return false;
+        return true;
+    }
+
+    // M <- (1/|G|) sum_R s(a) s(b) M(R(a), R(b)): turns a skeleton Fock matrix
+    // into the full one (Dupuis-King). A gather; nb^2 |G|.
+    inline void symmetrize_over_ops(
+        Eigen::MatrixXd &M, const std::vector<HartreeFock::SignedAOSymOp> &sym_ops)
+    {
+        const Eigen::Index nb = M.rows();
+        Eigen::MatrixXd out = Eigen::MatrixXd::Zero(nb, nb);
+        for (const auto &op : sym_ops)
+            for (Eigen::Index b = 0; b < nb; ++b)
+                for (Eigen::Index a = 0; a < nb; ++a)
+                    out(a, b) += op.ao_sign[a] * op.ao_sign[b] * M(op.ao_map[a], op.ao_map[b]);
+        M = out / static_cast<double>(sym_ops.size());
     }
 
     // {orbit, forced_zero}. The orbit is sorted, so orbit.front() is the

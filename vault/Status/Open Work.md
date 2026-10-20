@@ -2098,6 +2098,51 @@ identify the path taken. Not required for correctness or performance.
   through the engine callable, and must never reach the Schwarz table (an
   experiment that let it gave max|ΔG| 3e-6).
 
+  **H1 stack overflow fixed (2026-10-20).** H1's one-call `boys_vec` wrote
+  into `F[4*MAX_L + 1]`. The HGP hoisted block path passes per-axis maxima,
+  so (ff|ff) reaches MMAX = 36, which smashed the stack: SIGBUS on any
+  conventional HGP build with f shells or higher. The f/g/h spherical gates
+  had been crashing since H1, hidden among known failures. Now sized
+  `6*(VRR_DIM-1)+1` with an assert, and all three gates pass.
+
+  **Test triage (2026-10-20):**
+  - Nine ctest binaries never called `require_boys_library()` and segfaulted
+    at startup, so they tested nothing. Fixed: `symm-fock-equivalence`,
+    `esp-points`, `hgp-quartet-validation`, `os-block-kernel`,
+    `hgp-triangular-contract` and four `udh-*` binaries.
+  - Two stale Python tests on this branch:
+    - `test_udh_molecular_audit` still asserted the U11 rejection that
+      `039bd2df` removed when it promoted UKS DH gradients; it now asserts
+      the rejection stays gone.
+    - `test_udh_u0_fixtures` did not know the CN-radical fixture added in
+      `de57169b`.
+
+  **S1 done (2026-10-20).** When every density it contracts has the
+  molecule's symmetry (checked per call, tolerance 1e-10), the fused loop
+  accumulates each non-forbidden orbit representative once, weighted by its
+  orbit size, then symmetrizes G over the ops (`skeleton_orbit_weight`,
+  `density_has_symmetry` and `symmetrize_over_ops` in `quartet_orbit.h`). Any
+  other density falls back to the unchanged replication path.
+  - **Speed:** D2h naphthalene / 6-31G is 1.33× faster on the same symmetric
+    density (0.604 → 0.454 s; predicted 1.2–1.3×). Symmetry now pays 5.2×
+    (was 4.0×).
+  - **Correctness:** max|ΔG| 7e-14 against the no-symmetry build.
+    Non-symmetric fingerprints are bitwise identical to HEAD.
+  - **Gate:** the `check_skeleton_symmetry` gate in `planck-fock-accumulate`
+    (group-averaged densities, water C2v plus a synthetic flip group, every
+    engine, RHF, UHF and J/K) passes at ≤ 1.6e-14.
+  - **Mutations:** dropping the weight fails 13 checks; skipping the
+    symmetrization fails 7. Inverting the forbidden test survives, by
+    construction: the symmetrization cancels a forbidden quartet exactly, so
+    the test only saves cost.
+  - **End to end:** CO2 / 6-31G\* direct and water HSE06 symmetry-on both
+    match symmetry-off to every printed Eh digit.
+  - **Water DFT** takes the skeleton path on every build, because SAO
+    blocking keeps the density symmetric.
+  - **Direct HF CO2 takes it only on iteration 1.** Its iterates break the
+    symmetry (SAO is off for this linear case) and only reach 3e-10 at
+    convergence. It falls back, correctly, so HF gains nothing there.
+
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys
   hoist):

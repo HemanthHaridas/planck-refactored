@@ -9,7 +9,7 @@ unchanged by every step after the closed forms themselves.**
 | 8 H2O / 6-31G (nb = 104) | **0.187 s** | 1.50 s | **8.0×** | 4.4× |
 | 4 H2O / 6-31G\* (nb = 76) | **0.497 s** | ~1.12 s† | **~2.3×** | 1.5× |
 | 1 H2O / cc-pVDZ (nb = 25) | **0.028 s** | ~0.058 s† | **~2.1×** | 2.0× |
-| naphthalene / 6-31G, D2h (nb = 106) | **0.597 s** | 1.454 s‡ | **2.4×** | 2.4× |
+| naphthalene / 6-31G, D2h (nb = 106) | **0.454 s**§ | 1.454 s‡ | **3.2×** | ~2.4× (not re-measured after S1) |
 
 Best of three runs of `planck-eri-class-share` on `15c532e4`, Apple M3,
 `build-full`, `OMP_NUM_THREADS=1`. "Before" is the build before C1, after
@@ -17,18 +17,19 @@ the Boys-library fix (C0), which gave another 1.37× / 1.13× on its own.
 † The product of the measured per-step ratios below; that fixture was never
 timed before C1. ‡ The symmetric build before L3a. The last column is what
 the Auto engine buys over an explicit engine, which gets only the
-engine-independent steps.
+engine-independent steps. § After S1, on a group-averaged density (the
+skeleton path needs a symmetric one); the earlier rows are on `15c532e4`.
 
-**Symmetry now pays 4.0×** on naphthalene (2.368 s without `sym_ops`),
-against 1.9× before the L3 series. For this planar molecule 4× is the orbit
-cap, not overhead (see S1).
+**Symmetry now pays 5.2×** on naphthalene (2.36 s without `sym_ops`),
+against 1.9× before the L3 series. 4× was the orbit cap for this planar
+molecule; S1's skeleton accumulation took it past that (see S1).
 
 **Next:** C4b alone is predicted at 1.4–1.7× on sp and cc-pVDZ builds (C4a
 measured its kernel at 10–16× over HGP on its class). On cc-pVTZ, where HGP
 at L ≥ 5 is 87 % of the build, D1 is the lever.
 
 Status: **in flight.** Landed: C0, C1, C2–C3.5, H1, L1, L2, L3a, L3b, P1,
-L3c. Measured: A0, D0 (corrected), C4a. Open, in dependency order: S1, D1,
+L3c, S1. Measured: A0, D0 (corrected), C4a. Open, in dependency order: D1,
 C4b, C5, D2a, D2b, P2, then the L ≥ 5 decision, with D3 as an independent
 track. When those
 land or are abandoned, rewrite this as an answer.
@@ -294,6 +295,23 @@ All bitwise. One `boys_vec` call instead of MMAX+1 `boys` calls in
 straight from the VRR buffer, and the VRR zero-fill, whose zeros were never
 read, is gone (1.04–1.06×).
 
+**It shipped a stack overflow, fixed 2026-10-20.** The `boys_vec` call
+writes into `double F[4*MAX_L + 1]`, sized for one component's total
+angular momentum (MMAX ≤ 24). The hoisted block path (`MaxBoxLayout`)
+passes the per-*axis* maxima over a shell pair instead, so (ff|ff) reaches
+MMAX = 36. That overran the buffer, and the corrupted stack showed up as
+SIGBUS on any HGP conventional build with f shells or higher. The old
+per-order `boys` loop never touched a stack buffer. (dd|dd) peaks at exactly
+24, which is why no d-basis gate saw it.
+
+The bug went unnoticed because the f/g/h spherical gates crashed alongside
+already-known failures, not as a new red. Bisected inside the commit
+(reverting `boys_vec` alone fixes it; restoring the zero-fill alone does
+not). Fixed by sizing `F` to `6*(VRR_DIM - 1) + 1` (MMAX ≤ 12·MAX_L) plus an
+assert. `water_rhf_spherical_ccpvtz_fshell`, `ne_rhf_spherical_ccpvqz_gshell`
+and `ne_rhf_spherical_ccpv5z_hshell` pass again. The RI and OS seeds use
+real totals and fit their buffers.
+
 ### L2 — closed-form orbit dedup (`659883ab`)
 
 `distinct_eri_orbit` searched each of the 8 permuted tuples against every
@@ -557,7 +575,7 @@ Two consequences:
 
 | step | needs | why it needs it | bitwise? |
 |---|---|---|---|
-| 1 S1 | — (strictly) | touches only the accumulation side of the symmetric branch; doing it before D1 means D1 rewrites a simpler loop (no orbit buffer, no replication) | no, ~1e-15; re-baselines only the symmetric fixture's fingerprint |
+| 1 S1 (done) | — (strictly) | touches only the accumulation side of the symmetric branch; doing it before D1 means D1 rewrites a simpler loop (no orbit buffer, no replication) | no, ~1e-15; re-baselines only the symmetric fixture's fingerprint |
 | 2 D1 | S1; D0 and C4a (done) | D0 says which classes a block kernel must win on; C4a says the interface carries ordered-raise kernels for every L = 4 layout | yes (per-component fallback), or ~1e-15 where a block kernel is dispatched |
 | 3 C4b | D1 | lands as an implementation of D1's interface, not as another special case in the fused loop | ~1e-15 vs HGP; flag-off fingerprints unchanged |
 | 4 C5 | C4b | screened scaling goes into the closed-form family once, covering L ≤ 4, instead of patching the L ≤ 3 kernel and redoing it | screened kernels only |
@@ -583,7 +601,54 @@ Three things about this ordering:
   count. If that defect is fixed, fix it before D1, because D1 rewrites the
   loop it lives in.
 
-### 1 · S1 — skeleton accumulation and final symmetrization on the signed-op path
+### 1 · S1 — skeleton accumulation and final symmetrization on the signed-op path — DONE
+
+**Result (2026-10-20).** On D2h naphthalene / 6-31G the build is
+**1.33× faster** on the same symmetric density (0.604 → 0.454 s, against a
+prediction of 1.2–1.3×). Symmetry now pays **5.2×** (2.36 s without
+`sym_ops`), up from 4.0×. Against the no-symmetry build, max|ΔG| is 7e-14.
+Non-symmetric fingerprints are bitwise identical to the previous commit.
+
+How it is built:
+- `skeleton_orbit_weight` gives representative, stabilizer and forbidden
+  status in one pass over the ops.
+- `density_has_symmetry` is the per-call check, with an absolute tolerance
+  of 1e-10. It runs on every non-null density.
+- `symmetrize_over_ops` is the final gather.
+
+All three live in `quartet_orbit.h`. The bra body is instantiated in three
+modes (none, replication, skeleton). The orbit size is |ops|/|stabilizer|,
+which needs the ops to form a group. They do: `update_integral_symmetry`
+builds the identity plus every valid axis flip.
+
+What the gates found:
+- **Skeleton gate** (`check_skeleton_symmetry` in `planck-fock-accumulate`):
+  group-averaged densities, built from dense O_R matrices independently of
+  the production gather. Water C2v plus a synthetic order-2 flip group,
+  every engine, RHF, UHF, and J/K. Passes at ≤ 1.6e-14. The flip group is a
+  true ERI symmetry only in STO-3G, so for J/K it is checked against
+  replication, not against the no-symmetry build.
+- **Fallback:** the existing random-density gates still pass against
+  replication. The skeleton would differ from replication by O(1) on those
+  densities, so their passing proves the fallback fires.
+- **Mutations:** dropping the weight fails 13 checks; skipping the
+  symmetrization fails 7. **Inverting the forbidden test survives, and must.**
+  The final symmetrization cancels a forbidden quartet's contribution exactly
+  (the op that fixes it with sign −1 maps it to its own negative), so that
+  test only saves cost and no value gate can see it.
+- **End to end:** CO2 / 6-31G\* direct and water / STO-3G HSE06, each with
+  symmetry on, match symmetry off in every printed Eh digit. Water DFT takes
+  the skeleton path on all 16 builds, because SAO blocking keeps the density
+  symmetric.
+- **Direct HF CO2 takes it only on iteration 1.** SAO is off for this linear
+  case, so the iterates break the symmetry (deviation 0.6 at iteration 2,
+  falling to 3e-10 at convergence). The build falls back, as designed, so
+  linear HF gains nothing. A looser tolerance would build G from the group
+  average of a non-symmetric iterate and change the SCF path, so the
+  tolerance was not loosened.
+
+The scoping notes follow.
+
 
 **Why symmetry pays 4×, not 8×** (naphthalene / 6-31G, D2h, per Fock build,
 temporary counters):
