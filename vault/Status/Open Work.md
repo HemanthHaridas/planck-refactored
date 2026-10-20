@@ -1887,261 +1887,38 @@ identify the path taken. Not required for correctness or performance.
   `USE_BLAS` (Accelerate RI-K GEMMs 4.3–7.8×, bitwise thread-count-invariant
   on M3; OpenBLAS unmeasured), B2 RI-K from `C_occ` on the SCF caller only
   (4.4–4.8×), B3 `dsyevd` (diag is 0.08 % of an iteration today; deferred).
-- **Closed-form low-L ERI kernels — scoped 2026-10-17, nothing landed**
-  (`docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`). Prototypes exact vs HGP (~1e-16):
-  per-component closed form is only **1.7×** (the primitive Boys/prefactor
-  loop is the floor), a **shell-level** (ps|ss) kernel is **4.9×**. Class
-  shares on 4 H2O / 6-31G*: L_tot ≤ 2 is 24.6 % of HGP time (→ ~1.24× Fock),
-  L_tot ≤ 4 is 69.3 % (→ ~2.2×, needs a template-specialized shell-kernel
-  family, not hand-written forms). Prerequisite: the per-component
-  `ShellPair spCD` construction in `fused_fock.h` is 8 % of HGP time and
-  would be ~40 % against the new kernels. Coulomb only until the screened
-  scaling is mirrored (inv_2_delta gotcha).
-  **C0 DONE (2026-10-17)**, via `planck-eri-class-share`, which drives the
-  production `fused_fock_build`. Measured as shares of the **whole build**,
-  L_tot ≤ 2 is 19.6 % (4 H2O / 6-31G*), 30.2 % (cc-pVDZ) and 53.7 % (8 H2O /
-  6-31G, pure sp). A `sample` profile puts the kernel at 84.1 % and
-  `ShellPair` construction at 8.4 %. **Bigger finding:** one branch of the
-  out-of-tree Boys core spent **17.7 % of the whole build** in libm calls,
-  on every engine. **Fixed in Boys library v1.1.0 (2026-10-17)**: through the
-  blob ~1.13× on 4 H2O / 6-31G* and ~1.37× on 8 H2O / 6-31G. Post-fix
-  L_tot ≤ 2 shares are 16.8 % / 31.0 % / 45.7 %.
-  **C1 DONE (2026-10-18):** `fused_fock_build` used to rebuild a
-  `ShellPair` for every component quartet. It now looks the pair up in the
-  `shell_pairs` list the caller already passes. G is byte-identical
-  (fingerprinted in the probe) and the gain is **1.16× (4 H2O / 6-31G\*),
-  1.26× (8 H2O / 6-31G)** on every engine, twice what the 8.4 % profile
-  share implied. Post-C1 L_tot ≤ 2 is 18.2 % / 30.0 % / 54.5 %, so the
-  6-31G projection for C2+C3 is now 1.77×. Found on the way:
-  `planck-hgp-engine-smoke` and `planck-compute-2e` segfaulted because
-  they never called `require_boys_library()` (fixed). Separately,
-  `ethylene_rhf_ccpvdz_auto` dropped to 15 iterations with
-  Boys v1.1.0, so its floor is now `>= 15`.
-  **C2 DONE (2026-10-18):** the L_tot ≤ 1 closed-form shell kernel
-  (`src/integrals/low_l_eri.h`), used by the Auto engine only (explicit
-  engines stay pure). 1.22–1.28× on 8 H2O / 6-31G against the predicted
-  1.23×, 1.10× cc-pVDZ, 1.02–1.05× 6-31G\*; max|ΔG| vs HGP ≤ 4e-15. The
-  per-quartet sweep in `planck-hgp-engine-smoke` agrees to 3.4e-16 and is
-  mutation-verified. Separately found: `water_rhf_spherical_direct_631gd` is
-  not bitwise across 1/4 threads (residual last digits; predates C2,
-  outside the fused loop).
-  **H1 + C3 DONE (2026-10-18).** H1 came from a profile of the C2 build.
-  `hgp_vrr` and the RI seeds now make one `boys_vec` call instead of
-  MMAX+1 `boys` calls (1.10–1.12×). The m=0 slice is accumulated straight
-  from the VRR buffer, and the VRR buffer is no longer zero-filled
-  (1.04–1.06×). All bitwise. C3 extends the closed forms to total L ≤ 2
-  (`closed_form_max_l = 2` from Auto, with a per-AO norm ratio for d):
-  **1.61× over C2 on 8 H2O / 6-31G** (predicted 1.42×), 1.23× cc-pVDZ,
-  1.13× 6-31G\*. The sweep covers all 15 layouts at 3.4e-16 and is
-  mutation-verified. The flag-off fingerprint caught a C3 bug where (ss|ss)
-  took the closed form with the flag off; fixed. Cumulative on 8 H2O /
-  6-31G since C1: ~2.9× (1.50 → 0.52 s).
-  **C3.5 DONE (2026-10-18):** the raise chain extended to a third raise
-  (total L = 3, 27 outputs in registers); Auto passes 3. Over C3:
-  **1.87× on 8 H2O / 6-31G** (predicted 1.6×), 1.43× cc-pVDZ, 1.26× 6-31G\*,
-  max|ΔG| ≤ 4.4e-15. The sweep adds water/cc-pVDZ, the only fixture that
-  reaches the (d,p)-ordered layouts; 31 layouts at 6.1e-16,
-  mutation-verified. Cumulative on 8 H2O / 6-31G since C1: **~5.4×**
-  (1.50 → 0.28 s).
-  **Post-C3.5 profile and L series scoped (2026-10-18).** On 8 H2O / 6-31G
-  the fused loop itself is now 35.8 % self (the kernel 18 %, HGP at L ≥ 4
-  23 %); on 6-31G\* HGP at L ≥ 4 is 59 %. Scoped in the doc, all bitwise:
-  L0 split the loop time (counters plus noinline attribution); L1 skip
-  ket blocks with `.a < bra.a` (roughly half of all block visits, zero
-  contribution); L2 replace the quadratic `distinct_eri_orbit` with an
-  8-bit keep-mask from three index equalities; L3 no per-quartet
-  `std::vector` on the symmetry path; L4 per-block low-L readout table.
-  C4 (a generated four-raise chain) remains the d-basis lever.
-  **L0 + L3 measured (2026-10-18).** L0: ~49 % of blocks surviving Schwarz
-  (and ~half of component iterations) cannot hold a canonical quartet (L1);
-  `distinct_eri_orbit` is 17.3 % of the 8 H2O / 6-31G build, 3.7× the G
-  writes (L2). L3, on a new naphthalene / 6-31G D2h probe fixture: with
-  `sym_ops` the build is only 1.90× faster than without, because
-  `build_quartet_orbit` (35.7 %) and per-quartet heap traffic (~25–30 %)
-  leave only ~25 % of the build computing ERIs. Scoped fixes, bitwise:
-  L3a early non-representative exit, L3b stack orbit for representatives
-  (predicted 1.6–2× on symmetric builds).
-  **L2 DONE (2026-10-18):** `distinct_eri_orbit` now emits the distinct
-  tuples from three index equalities instead of a pairwise search.
-  Bitwise (G fingerprints identical on all five probe fixtures). Gated by an
-  exhaustive order-included comparison against the old search on 1296
-  tuples in `planck-fock-accumulate`, mutation-verified. 1.20× on
-  8 H2O / 6-31G (predicted 1.15–1.2×), 1.09× on 6-31G\*, 1.11× on
-  D2h naphthalene. 8 H2O / 6-31G since C1: ~6.5× (1.50 → 0.23 s).
-  **L1 DONE (2026-10-18):** the ket loop starts at the first group pair whose
-  `.a` matches the bra's, skipping the ~49 % of blocks that cannot hold a
-  canonical quartet. Bitwise (fingerprints identical on all five
-  fixtures). 1.06× on 8 H2O / 6-31G (predicted 1.05–1.07×), ~1.01–1.02×
-  elsewhere. 8 H2O / 6-31G since C1: ~6.8× (1.50 → 0.22 s).
-  **L3a DONE (2026-10-18):** `is_orbit_representative` rejects
-  non-representative quartets before any orbit is built (no allocation,
-  dedup or sort); only representatives (~1 in 8 under D2h) build the full
-  orbit. Bitwise (fingerprints identical, naphthalene with `sym_ops`
-  included). Gated by an exhaustive comparison against
-  `build_quartet_orbit` on an AO-permuting synthetic group (231 quartets,
-  85 representatives), mutation-verified. D2h naphthalene / 6-31G
-  **1.70×** (1.454 → 0.855 s); integral symmetry now pays 3.1× instead of
-  1.9×.
-  **L3b DONE (2026-10-18):** representatives fill a reused per-bra orbit
-  buffer (`fill_quartet_orbit`) instead of allocating, and the bra-loop
-  body is compiled twice (`std::true_type` / `std::false_type`), so the
-  non-symmetric loop carries no symmetry code. The split was needed: the
-  buffer hoisted naively slowed molecules *without* symmetry by 5 % through
-  codegen. Bitwise. D2h naphthalene 1.23× over L3a (0.862 → 0.702 s);
-  symmetry now pays 3.8× (was 1.9× before L3a). Non-symmetric fixtures
-  unchanged.
-  **Post-L3b profile and next steps scoped (2026-10-20).** HGP is 77 % of
-  the 4 H2O / 6-31G\* build. On D2h naphthalene the loop's own self time
-  (30 %) is now the largest frame. Total-L = 4 HGP work is 31–44 % of every
-  build. Next, in order: A0, a noinline split of the loop self time (decides
-  L4 and any symmetric-path item); C4a, a four-raise prototype in the probe
-  on (pp|pp) and (ds|ds), since the ordered raise chain does up to 2.25×
-  redundant work on d layouts; C4b, the generated kernel (predicted
-  1.3–1.5×). After that L ≥ 5 needs a different design, because five raises
-  is 243 outputs. C5 (screened kernels) comes after C4.
-  **A0 done (2026-10-20).** After the split, the loop's own time is 8.5 %
-  (sp) and 19.7 % (D2h). The representative check is 10 % of the symmetric
-  build. L4 is dropped: the readout is ≤ 3.6 %. A census of executed
-  primitive quartets found 19–37 % with prefactor bound < 1e-18 on water
-  clusters (≈0 on one cc-pVDZ water). **P1 + L3c landed (2026-10-20)**,
-  both bitwise; core 79/79, smoke 43/45 (the known rccsdt failures):
-  - **P1** drops primitive pairs with |c·K_ab| < 1e-24 in the `ShellPair`
-    constructor. It covers all engines and G is byte-identical on every
-    fixture: 1.15× on 8 H2O / 6-31G, 1.10× on D2h naphthalene, 1.04× on
-    6-31G\*.
-  - **L3c** rejects a whole block when an op sends one of its shell groups
-    below the bra's first group. That cuts 60 % of D2h blocks for 1.07×.
-    Gated by `check_real_symmetry_ops` (water's real C2v ops, which swap the
-    H shells). Mutation-verified: `< A` → `!= A` fails only the new gate.
-
-  **Found on the way, not chased:** the fused direct loop is not
-  thread-count invariant. Its partials are keyed by thread index, so CO2
-  direct differs between 1 and 4 threads in the DIIS digits and the last
-  kcal/mol digit, with or without symmetry. This is the FCI sigma-build
-  lesson again: fix the partition into accumulators, not only the summation
-  order. `water_rhf_spherical_direct_631gd`'s drift is the same defect.
-
-  **Deep-contraction architecture scoped as D0–D3 (2026-10-20).** On water,
-  unscreened, HGP's per-component calls repeat the primitive loop 4.9×
-  (cc-pVDZ) / 14.3× (cc-pVTZ). Segmented storage of general contractions
-  repeats it another 4.8–4.9×: cc-pVDZ O 1s and 2s are two 9-primitive
-  shells over the same exponents. The steps:
-  - **D0:** measure both repetitions after screening.
-  - **D1:** a shell-quartet block interface for every engine (needs Phase E;
-    must avoid the failed hoist's buffers).
-  - **D2:** general contraction in `Shell`/`ShellPair`, the most invasive.
-  - **D3:** RI-JK pair factors, i.e. the BLAS doc's B0.
-
-  **Why symmetry pays 4×, not 8×, on D2h naphthalene (measured):** the
-  molecular plane fixes every AO, so orbits cap at 4 (canonical /
-  representatives = 3.99×). Forbidden zeros bring computed values down 7.0×,
-  but G writes fall only 1.75×, because orbit replication rewrites every
-  nonzero integral.
-
-  **Open steps reordered by dependency (2026-10-20):**
-  1. D0, the census, which also re-baselines C4b's predictions.
-  2. C4a, the four-raise prototype.
-  3. S1, skeleton accumulation plus final symmetrization on the signed-op
-     path (~1.2–1.3× predicted on D2h). It needs a per-call
-     symmetric-density check with a fallback to replication, because PCM
-     and symmetry-broken UHF densities are not symmetric.
-  4. D1, the block interface. It carries `prim_eps` and the screened-scaling
-     slots from day one. It does *not* need Phase E: the closed-form path
-     already feeds first-component pairs plus `norm_ratio`.
-  5. C4b, landing on D1.
-  6. C5, after C4b, across the whole closed-form family at once.
-  7. P2, which D1 unblocks. It lands alone because it is not bitwise.
-  8. D2, after D1 and P2. It lands alone.
-  9. The L ≥ 5 decision.
-
-  D3 is an independent track. Bitwise-gated steps come first, so the
-  flag-off fingerprints stay meaningful as long as possible.
-
-  **D0 done (2026-10-20)**, with a temporary census after Schwarz and P1 (not
-  committed):
-  - Wherever HGP runs, it repeats its primitive loop 27–78× per unique shell
-    quartet (78× on cc-pVTZ water). There, HGP at L ≥ 5 is 87 % of the
-    build, so **D1 is the lever for d/f bases**. Its real gain depends on
-    the per-class cost of a block VRR, which D1 must measure.
-  - HGP at L = 4 is 30–45 % of sp and cc-pVDZ builds but 12 % on cc-pVTZ.
-    C4b re-predicted at 1.29–1.56× (1.10× on cc-pVTZ).
-  - **Corrected 2026-10-20:** the D0 census first reported general
-    contraction (D2) at only 1.47–1.83× on cc bases. Its merge rule never
-    merged two equal-size shells (cc-pVDZ O 1s and 2s), and printing the
-    group map exposed the bug. Corrected: 4.82–5.11× on cc bases within L.
-    Pople sets have no within-L sharing, but their SP shells share
-    exponents across L: 2.13–3.73× (6-31G, 6-31G\*, naphthalene, 6-311G).
-  - **D2 rescoped as shared-exponent families**, merged inside the fused loop
-    only (`Shell`/`ShellPair` untouched): D2a is a prototype (SP all-subset
-    kernel plus within-L contraction kernel, guessed 1.3–2×), D2b lands it.
-    Order: S1, D1, C4b, C5, D2a, D2b, P2, L ≥ 5.
-
-  The order stands. The probe's fingerprints depend on the fixture list
-  (`Eigen::MatrixXd::Random` state carries across fixtures).
-
-  **C4a done (2026-10-20).** A hand-written four-raise prototype (~70 lines,
-  temporary probe mode, not committed) matches HGP to ≤ 1.3e-15 on every
-  total-L = 4 layout of four fixtures. Mutation-checked: dropping one
-  coupling gives an error of 1.0. Kernel against HGP on the same work:
-  - (pp|pp) 10–19×;
-  - (ds|ds) 6–8×;
-  - even (dd|ss), with 45 of 81 outputs redundant, 3.9–5.4×;
-  - all L = 4 together 10.4–15.9×. Both predictions (≥ 4×, 2–3×) were too
-    low.
-
-  So C4b covers every L = 4 layout, predicted at 1.39× (8 H2O / 6-31G) to
-  1.71× (4 H2O / cc-pVDZ), near the ceilings. A generator is not needed for
-  L = 4, and a five-raise chain is now a fair L ≥ 5 candidate.
-
-  **P2 scoped, not landed:** quartet-level skip |base| < 1e-4·tol_eri,
-  a further 1.07–1.15× at max|ΔG| ~5e-12. It is not bitwise, needs ε plumbed
-  through the engine callable, and must never reach the Schwarz table (an
-  experiment that let it gave max|ΔG| 3e-6).
-
-  **H1 stack overflow fixed (2026-10-20).** H1's one-call `boys_vec` wrote
-  into `F[4*MAX_L + 1]`. The HGP hoisted block path passes per-axis maxima,
-  so (ff|ff) reaches MMAX = 36, which smashed the stack: SIGBUS on any
-  conventional HGP build with f shells or higher. The f/g/h spherical gates
-  had been crashing since H1, hidden among known failures. Now sized
-  `6*(VRR_DIM-1)+1` with an assert, and all three gates pass.
-
-  **Test triage (2026-10-20):**
-  - Nine ctest binaries never called `require_boys_library()` and segfaulted
-    at startup, so they tested nothing. Fixed: `symm-fock-equivalence`,
-    `esp-points`, `hgp-quartet-validation`, `os-block-kernel`,
-    `hgp-triangular-contract` and four `udh-*` binaries.
-  - Two stale Python tests on this branch:
-    - `test_udh_molecular_audit` still asserted the U11 rejection that
-      `039bd2df` removed when it promoted UKS DH gradients; it now asserts
-      the rejection stays gone.
-    - `test_udh_u0_fixtures` did not know the CN-radical fixture added in
-      `de57169b`.
-
-  **S1 done (2026-10-20).** When every density it contracts has the
-  molecule's symmetry (checked per call, tolerance 1e-10), the fused loop
-  accumulates each non-forbidden orbit representative once, weighted by its
-  orbit size, then symmetrizes G over the ops (`skeleton_orbit_weight`,
-  `density_has_symmetry` and `symmetrize_over_ops` in `quartet_orbit.h`). Any
-  other density falls back to the unchanged replication path.
-  - **Speed:** D2h naphthalene / 6-31G is 1.33× faster on the same symmetric
-    density (0.604 → 0.454 s; predicted 1.2–1.3×). Symmetry now pays 5.2×
-    (was 4.0×).
-  - **Correctness:** max|ΔG| 7e-14 against the no-symmetry build.
-    Non-symmetric fingerprints are bitwise identical to HEAD.
-  - **Gate:** the `check_skeleton_symmetry` gate in `planck-fock-accumulate`
-    (group-averaged densities, water C2v plus a synthetic flip group, every
-    engine, RHF, UHF and J/K) passes at ≤ 1.6e-14.
-  - **Mutations:** dropping the weight fails 13 checks; skipping the
-    symmetrization fails 7. Inverting the forbidden test survives, by
-    construction: the symmetrization cancels a forbidden quartet exactly, so
-    the test only saves cost.
-  - **End to end:** CO2 / 6-31G\* direct and water HSE06 symmetry-on both
-    match symmetry-off to every printed Eh digit.
-  - **Water DFT** takes the skeleton path on every build, because SAO
-    blocking keeps the density symmetric.
-  - **Direct HF CO2 takes it only on iteration 1.** Its iterates break the
-    symmetry (SAO is off for this linear case) and only reach 3e-10 at
-    convergence. It falls back, correctly, so HF gains nothing there.
+- **Closed-form low-L ERI kernels and the fused Fock loop — in flight**
+  (`docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`, the source of truth; it carries
+  every measurement, finding and ruled-out idea).
+  - **Landed:** C0 (Boys v1.1.0), C1, C2–C3.5 (closed-form shell kernels
+    through total L ≤ 3, Auto only), H1, L1, L2, L3a–c, P1, S1. Measured:
+    A0, D0, C4a.
+  - **Fock build, one thread, Auto:** 8 H2O / 6-31G 1.50 → 0.187 s (8.0×),
+    4 H2O / 6-31G\* ~2.3×, 1 H2O / cc-pVDZ ~2.1×, D2h naphthalene 1.454 →
+    0.454 s (3.2×; symmetry now pays 5.2×).
+  - **S1 (2026-10-20):** skeleton accumulation plus final symmetrization when
+    every density is symmetric (tolerance 1e-10), else unchanged replication.
+    1.33× on D2h naphthalene. Gains land on symmetric DFT. Direct HF on linear
+    molecules falls back every iteration, because SAO blocking is not
+    implemented for infinite groups.
+  - **H1 shipped a stack overflow, fixed 2026-10-20:** `boys_vec` into
+    `F[4*MAX_L+1]`, while HGP's hoisted block path needs MMAX up to 36 for
+    (ff|ff). SIGBUS on conventional HGP with f+ shells; the f/g/h spherical
+    gates had been crashing among known failures.
+  - **Test triage (2026-10-20):** nine ctest binaries never called
+    `require_boys_library()` and segfaulted at startup (fixed). Two stale
+    Python tests updated: `test_udh_molecular_audit` (the U11 rejection
+    removed in `039bd2df`) and `test_udh_u0_fixtures` (the CN-radical fixture
+    from `de57169b`).
+  - **Open, in order:** D1 (shell-quartet block interface, with an HGP block
+    kernel; the lever for d/f bases), C4b (four-raise kernel, predicted
+    1.4–1.7× on sp and cc-pVDZ), C5 (screened kernels), D2a/D2b
+    (shared-exponent families, 2–5× in primitive passes), P2 (ε screening,
+    a policy decision), then the L ≥ 5 decision. D3 (RI-JK pair factors) is
+    independent.
+  - **Known defect, not chased:** the fused direct loop is not thread-count
+    invariant (accumulators keyed by thread index). Fix it before D1 if at
+    all.
 
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys
