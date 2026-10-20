@@ -2057,6 +2057,20 @@ identify the path taken. Not required for correctness or performance.
   D3 is an independent track. Bitwise-gated steps come first, so the
   flag-off fingerprints stay meaningful as long as possible.
 
+  **D0 done (2026-10-20)**, with a temporary census after Schwarz and P1 (not
+  committed):
+  - Wherever HGP runs, it repeats its primitive loop 27–78× per unique shell
+    quartet (78× on cc-pVTZ water). There, HGP at L ≥ 5 is 87 % of the
+    build, so **D1 is the lever for d/f bases**. Its real gain depends on
+    the per-class cost of a block VRR, which D1 must measure.
+  - HGP at L = 4 is 30–45 % of sp and cc-pVDZ builds but 12 % on cc-pVTZ.
+    C4b re-predicted at 1.29–1.56× (1.10× on cc-pVTZ).
+  - General contraction (D2) is worth only 1.47–1.83× in primitive quartets
+    on cc bases (unscreened estimate 4.8×), and 1.00× on Pople sets.
+
+  The order stands. The probe's fingerprints depend on the fixture list
+  (`Eigen::MatrixXd::Random` state carries across fixtures).
+
   **P2 scoped, not landed:** quartet-level skip |base| < 1e-4·tol_eri,
   a further 1.07–1.15× at max|ΔG| ~5e-12. It is not bitwise, needs ε plumbed
   through the engine callable, and must never reach the Schwarz table (an

@@ -26,7 +26,7 @@ of 2 appears only as zero integrals (computed values do fall 7.0×). The G
 writes, which barely shrink, are what S1 targets.
 
 Status: **in flight.** Landed: C0, C1, C2–C3.5, H1, L1, L2, L3a, L3b, A0,
-P1 and L3c. Open, in dependency order: D0, C4a, S1, D1, C4b, C5, P2, D2,
+P1 and L3c; measured: D0. Open, in dependency order: C4a, S1, D1, C4b, C5, P2, D2,
 then the L ≥ 5 decision, with D3 as an independent track (see the dependency
 map under "Open"). When those land or are abandoned, rewrite this as an
 answer.
@@ -446,20 +446,10 @@ Not ordered here: the fused loop's thread-count drift (Out of scope). Every
 that defect is fixed, fix it before D1, because D1 rewrites the loop it
 lives in.
 
-### 1 · D0 — measure the repetitions after screening (nothing lands)
+### 1 · D0 — the repetitions after screening (done 2026-10-20)
 
-Deep contraction multiplies the primitive loop by two repetitions that the
-architecture, not the arithmetic, causes. Counted for water over all shell
-quartets, with no screening (so ratios, not timings):
-
-| primitive quartets executed | cc-pVDZ | cc-pVTZ |
-|---|---|---|
-| per Cartesian component (HGP today) | 1.6 M | 16.4 M |
-| once per segmented shell quartet (the closed-form kernel) | 330 k | 1.15 M |
-| once per general-contraction shell quartet | 69 k | 236 k |
-| repetition from per-component calls | 4.9× | 14.3× |
-| repetition from segmented storage | 4.8× | 4.9× |
-
+**The question.** Deep contraction multiplies the primitive loop by two
+repetitions that the architecture, not the arithmetic, causes:
 - **Per-component calls.** The engine callable
   `eri_elem(spAB, spCD, lAx…lDz)` returns one component, and HGP's
   `_contracted_eri_elem` reruns the whole primitive loop (Boys, VRR,
@@ -470,12 +460,73 @@ quartets, with no screening (so ratios, not timings):
   over the **same nine exponents**, and the third s shell is the last of
   them.
 
-The step: an A0-style probe on water / cc-pVDZ and cc-pVTZ, plus the five
-existing fixtures, after Schwarz and P1. It does three things:
-- counts executed primitive quartets against unique ones, per shell quartet
-  and per general-contraction quartet (what D1 and D2 are each worth);
-- times HGP per (L_AB, L_CD) class (where a D1 block kernel must win);
-- re-derives the C4b prediction table from the post-P1/L3c shares.
+An unscreened count over all shell quartets of one water put these at 4.9× /
+4.8× (cc-pVDZ) and 14.3× / 4.9× (cc-pVTZ). D0 measured what the production
+build actually executes, after Schwarz and P1.
+
+**Method.** A temporary census in the fused loop (never committed). Per
+evaluated block it records:
+- the primitive quartets executed: closed form once per block, HGP once per
+  component;
+- the unique count for the segmented shell quartet;
+- the general-contraction quartet the block belongs to. A group maps to the
+  largest shell on the same atom with the same L whose exponent set contains
+  its own, and each general quartet is counted once, with its
+  representative pairs' primitive counts after P1.
+
+The class tables come from the probe with cc-pVTZ water and 4 H2O / cc-pVDZ
+added as fixtures.
+
+**Executed primitive quartets.** Ratios against the unique count:
+
+| fixture | executed / per shell quartet | HGP blocks only | per shell / per general contraction |
+|---|---|---|---|
+| 8 H2O / 6-31G | 1.11× | 49× | 1.00× |
+| 4 H2O / 6-31G\* | 2.84× | 52× | 1.01× |
+| 1 H2O / cc-pVDZ | 1.79× | 48× | 1.47× |
+| 4 H2O / cc-pVDZ | 1.99× | 56× | 1.72× |
+| 1 H2O / cc-pVTZ | **9.25×** | **78×** | 1.83× |
+| naphthalene D2h | 1.23× | 27× | 1.00× |
+
+**Time.** Shares of the production build that are still HGP, with the
+L = 4 HGP time = (the L = 4 classes' share of the HGP-only build) × (the
+HGP-only build time). Single runs; the shares within a run are consistent:
+
+| fixture | production build | HGP at L = 4 | HGP at L ≥ 5 |
+|---|---|---|---|
+| 8 H2O / 6-31G | 0.222 s | 30 % | 0 |
+| naphthalene D2h | 0.651 s | 34 % | 0 |
+| 4 H2O / 6-31G\* | 0.504 s | 34 % | 50 % |
+| 1 H2O / cc-pVDZ | 0.032 s | 39 % | 34 % |
+| 4 H2O / cc-pVDZ | 2.573 s | 45 % | 36 % |
+| 1 H2O / cc-pVTZ | 1.631 s | 12 % | **87 %** |
+
+What D0 says:
+- **D1 is the lever for d and f bases.** Wherever HGP runs, it repeats its
+  primitive loop 27–78× per unique shell quartet, once per component the
+  block needs. On cc-pVTZ that is 9.4 M of 10.4 M executed primitive
+  quartets, and HGP at L ≥ 5 is 87 % of the build. The primitive-quartet
+  ratio overstates the possible gain: a block kernel's VRR covers every
+  component, so each of its primitive quartets costs more than one
+  component's. That cost ratio is what D1 has to measure per class. Even a
+  3× net gain on the HGP part would be ~2.4× on the cc-pVTZ build.
+- **C4b is the lever for sp bases and cc-pVDZ** (30–45 % of the build), and
+  worth only 1.1× on cc-pVTZ. Predictions re-derived under C4b.
+- **D2 is worth less than estimated: 1.5–1.8× in primitive quartets on cc
+  bases, not 4.8×.** After screening, the expensive blocks involve the
+  uncontracted valence and polarization shells, where merging saves nothing.
+  It is 1.00× on the Pople sets. Those share exponents between their s and p
+  shells (SP shells), not within one L, which is a different merge D2 does
+  not cover.
+- **The probe's fingerprints depend on the fixture list.** The test density
+  comes from `Eigen::MatrixXd::Random`, whose state carries across
+  fixtures, so adding or removing a fixture re-baselines every fingerprint
+  after it. That is a probe artifact, not a change in G; compare
+  fingerprints only between runs with the same list.
+
+The order of the open steps stands. D0 sharpens the reasons: D1 before C4b,
+because on d/f bases D1 is the larger win and C4b should land on its
+interface, and D2 after P2, now valued at ≤ 1.8×.
 
 ### 2 · C4a — four-raise prototype in the probe (nothing lands)
 
@@ -605,15 +656,20 @@ identity cases.
 Generate the fourth level rather than hand-write it. Outputs stay in
 registers, with **no** buffers or gathers. It lands as a D1 block kernel for
 the layouts C4a admits. The generator must first reproduce the hand-written
-three-raise outputs for every L ≤ 3 layout. Predicted over L3b, at 4–5× on
-the class (to be replaced by D0's re-derived numbers):
+three-raise outputs for every L ≤ 3 layout. Predicted from D0's L = 4
+shares, at 4–5× on the class (C3.5 realized 4.4× on its own class):
 
-| fixture | predicted | ceiling (class free) |
-|---|---|---|
-| 8 H2O / 6-31G | 1.38–1.42× | 1.59× |
-| naphthalene D2h | 1.31–1.33× | 1.45× |
-| 4 H2O / 6-31G\* | ~1.3× (less if C4a limits d) | 1.53× |
-| 1 H2O / cc-pVDZ | 1.5× | 1.77× |
+| fixture | L = 4 share | predicted | ceiling (class free) |
+|---|---|---|---|
+| 8 H2O / 6-31G | 30 % | 1.29–1.32× | 1.43× |
+| naphthalene D2h | 34 % | 1.34–1.37× | 1.52× |
+| 4 H2O / 6-31G\* | 34 % | 1.34–1.37× (less if C4a limits d) | 1.52× |
+| 1 H2O / cc-pVDZ | 39 % | 1.41–1.45× | 1.64× |
+| 4 H2O / cc-pVDZ | 45 % | 1.51–1.56× | 1.82× |
+| 1 H2O / cc-pVTZ | 12 % | 1.10× | 1.14× |
+
+These replace the post-L3b predictions (1.38–1.42× on 8 H2O, now lower
+because P1 also made the HGP L = 4 work cheaper).
 
 Gates as for C3.5: a per-quartet sweep against HGP with every reachable
 four-raise layout required and counted; mutation tests on each coupling
@@ -676,8 +732,10 @@ loops when |base| < ε, with the Schwarz table held exact, measured:
 This is the most invasive step. `ContractedView._index`, normalization (Nc is
 folded per contraction), the 1e integrals, the gradients, the spherical
 transform and the adapter all assume one contraction per shell. It pays
-only for generally contracted bases (none of the Pople sets), and D0 says
-by how much after screening. Gate: G and energies unchanged against the
+only for generally contracted bases (none of the Pople sets). D0 measured
+the ceiling after screening at 1.47–1.83× in primitive quartets on cc-pVDZ
+and cc-pVTZ water, well below the unscreened 4.8×. So D2 ranks behind D1 on
+value as well as on dependency. Gate: G and energies unchanged against the
 segmented path on cc-pVDZ / cc-pVTZ inputs (to ~1e-12; summation order
 changes), the PySCF-anchored spherical gates, and the gradient regression
 cases. Land it alone, as with P2.
