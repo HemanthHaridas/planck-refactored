@@ -1402,6 +1402,13 @@ of each symmetry orbit need be computed and the rest filled in by permutation an
 sign. This is the lightest-weight integral reduction; its reach is exactly
 D\(_{2h}\), for the algebraic reason explained next.
 
+The saving is not always the group order. An orbit has
+\(|G|/|\mathrm{Stab}|\) members, and an operation that fixes every atom (the
+mirror plane of a planar molecule, for instance) is in every stabilizer. So
+planar naphthalene's eight operations make orbits of at most four. The
+missing factor reappears as integrals forced to zero by sign; see "Symmetry
+inside the fused loop" in §9.
+
 ### Planck's Full Point-Group ERI Reduction
 
 The coordinate-axis-reflection scheme above is limited to D\(_{2h}\). The reason is
@@ -1862,27 +1869,8 @@ This is correct only if the quartet loop visits each canonical \((\mu\nu|\lambda
 invariants are load-bearing together: dedup without the filter would
 double-count, and the filter without dedup would miss the collapse cases.
 
-Point-group symmetry composes on top without double-counting: the ERI is
-computed once at each symmetry-orbit representative and replicated across the
-orbit with the accumulated AO sign, exactly as the tensor scatter does.
-
-The representative is the lexicographically smallest canonical quartet in the
-orbit, and finding out whether a quartet *is* one does not need the orbit. As
-soon as one operation maps the quartet, after canonicalization, to something
-smaller, it is not the representative. So the loop asks that cheap question
-first (`is_orbit_representative`) and builds the full orbit only for
-representatives, about one quartet in eight under \(D_{2h}\). Building every
-orbit just to discard most of them used to be ~60 % of a symmetric build, so
-the 8 operations bought only 1.9× instead of the ideal ~8×. With the
-pre-check and a reused orbit buffer they buy 3.8×.
-
-The symmetric and non-symmetric cases are also compiled as two separate
-instantiations of the loop body (a generic lambda called with
-`std::true_type` or `std::false_type`). With the symmetry branches inline, the
-hot non-symmetric loop was sensitive to the most trivial changes: merely moving
-the orbit buffer slowed molecules *without* symmetry by 5 %, through code
-generation alone. Splitting at compile time removed that coupling, and both
-paths got faster.
+Point-group symmetry composes on top without double-counting; see
+"Symmetry inside the fused loop" below.
 
 #### One loop, four engines
 
@@ -1897,6 +1885,16 @@ Screening happens at the block level: a Schwarz bound is computed per
 shell-group pair and whole quartet blocks are rejected before any primitive work
 is done.
 
+The canonical filter can be hoisted to the block level the same way. A shell
+group's components are contiguous in AO order, and the group pairs are
+ordered by their first group. Suppose a ket block's first group \(C\) comes
+before the bra's first group \(A\). Then every \(k\) in it is smaller than
+every \(i\), so the block cannot hold a single canonical quartet
+(\(k \ge i\) is required). The ket loop therefore starts at the first pair
+whose first group is \(A\). That skips about half of the blocks surviving
+Schwarz, and half of all component iterations. The blocks it skips never
+contributed anything, so the result is byte-identical.
+
 The loop also never builds a `ShellPair` of its own. Every caller already
 passes the full per-AO pair list (`shell_pairs`, from `build_shellpairs`), so
 the loop looks pairs up in an \(n_b \times n_b\) pointer table keyed on the AO
@@ -1904,6 +1902,140 @@ index. An earlier version rebuilt the pair — a heap allocation plus a `pow`
 and an `exp` per primitive pair — for every surviving component quartet. That
 rebuild was 8.4 % of a profile; removing it bought 1.16–1.26×, with the Fock
 matrix byte-identical.
+
+#### Dropping primitive pairs that cannot contribute
+
+Every integral over a primitive pair carries the Gaussian product prefactor
+
+\[
+K_{ab} = \exp\!\Big(-\frac{\alpha\beta}{\alpha+\beta}\,R_{AB}^2\Big).
+\]
+
+For two primitives on the same atom, \(R_{AB} = 0\) and \(K_{ab} = 1\). For
+two tight primitives on different atoms it collapses. Take \(\alpha = \beta =
+10\) (a core-like exponent) 3 Å apart: \(\alpha\beta/(\alpha+\beta) = 5\),
+\(R^2 \approx 32\) bohr², \(K \approx e^{-160}\). Contraction coefficients do
+not rescue it. So in an extended system a large share of all primitive
+pairs, and of the primitive quartets built from them, contribute nothing at
+double precision. Their number also grows with the number of atom pairs.
+Measured over the quartets the kernels actually execute: 19–37 % on water
+clusters and naphthalene, against about 0 % on a single water.
+
+The bound that makes dropping them safe comes from the \((ss|ss)\) form above.
+Since \(0 \le F_0 \le 1\),
+
+\[
+\big|(ab|cd)_{\text{prim}}\big| \le |c_{ab} K_{ab}| \cdot |c_{cd} K_{cd}| \cdot
+2\sqrt{\rho/\pi}\,\Big(\tfrac{\pi}{\zeta}\Big)^{3/2}\Big(\tfrac{\pi}{\eta}\Big)^{3/2}.
+\]
+
+Higher angular momentum multiplies this by geometric and exponent factors of
+modest size: \(PA\), \(W-P\), \(1/2\zeta\), and in gradients \(2\alpha\). So a
+pair whose \(|c_a c_b N_a N_b\,(\pi/\zeta)^{3/2} K_{ab}|\) is below
+\(10^{-24}\), about \(e^{-55}\) for a unit pair, cannot move any integral by
+more than \(\sim 10^{-19}\), far below one ulp of a Fock element. Planck drops
+such pairs once, when the `ShellPair` is built. One place covers every engine,
+the one-electron integrals and the gradients. The measured result is a Fock
+matrix that is **byte-identical** on every probe fixture, with 18–19 % fewer
+primitive quartets and a 1.04–1.15× faster build.
+
+**Going further changes the answer, and that is a different decision.**
+Skipping individual primitive quartets whose bound is below some
+\(\varepsilon\) removes another ~20 % on water clusters. The Fock error then
+grows like 300–500 × \(\varepsilon\), because many small omissions add up.
+That is an approximation with a tolerance, like Schwarz screening itself,
+not a free lunch. One trap is worth knowing in advance. The Schwarz table
+\(Q(i,j) = \sqrt{(ij|ij)}\) is computed with the same integral kernel. If the
+primitive skip is active while \(Q\) is built, \(Q\) comes out *smaller*
+than the true \(\sqrt{(ij|ij)}\). Schwarz then stops being an upper bound, and
+quartets that matter get screened out. In Planck's first experiment this
+produced Fock errors of \(3\times10^{-6}\) at \(\varepsilon = 10^{-14}\), and
+\(4.6\times10^{-10}\) even at \(\varepsilon = 10^{-20}\). The rule:
+**an approximation must never enter a quantity that is used as a bound.**
+
+#### Symmetry inside the fused loop
+
+The ERI is computed once at each symmetry-orbit representative and
+replicated across the orbit with the accumulated AO sign, exactly as the
+tensor scatter does. Three things make that cheap.
+
+**Recognize non-representatives without building the orbit.** The
+representative is the lexicographically smallest canonical quartet in the
+orbit. As soon as one operation maps a quartet, after canonicalization, to
+something smaller, the quartet is not the representative. So the loop asks
+that cheap question first (`is_orbit_representative`) and builds the full
+orbit, into a reused buffer, only for representatives. Building every orbit
+just to discard most of them used to be ~60 % of a symmetric build.
+
+**Reject whole blocks.** A canonical quartet starts with its smallest AO.
+Under a signed AO permutation, every component of a shell maps into one
+shell on the image atom. So if an operation sends any of a block's four
+shell groups to a group below the bra's first group \(A\), every component
+quartet of the block has an image containing an AO smaller than its own
+\(i\). None of them can be a representative, and the block is skipped with
+one comparison per operation. Planck checks once per build that every
+operation really does map groups onto groups, and turns the test off
+otherwise. On \(D_{2h}\) naphthalene this skips 60 % of the blocks, but
+gains only 1.07×: the rejected blocks were mostly cheap ones.
+
+**Keep the symmetry code out of the non-symmetric loop.** The two cases are
+compiled as separate instantiations of the loop body (a generic lambda
+called with `std::true_type` or `std::false_type`). With the symmetry
+branches inline, merely moving the orbit buffer slowed molecules *without*
+symmetry by 5 %, through code generation alone.
+
+**Why eight operations buy 4×, not 8×.** On naphthalene the symmetric build
+is 4.0× faster than the plain one. That is not overhead. The
+orbit–stabilizer theorem says an orbit has \(|G|/|\mathrm{Stab}|\) members.
+Naphthalene is planar, and the mirror plane containing the molecule maps
+every atom, and so every AO, to plus or minus itself. That operation is in
+the stabilizer of every quartet, so no orbit has more than \(8/2 = 4\)
+members. Measured: 13.37 M canonical quartets and 3.35 M representatives,
+a ratio of 3.99.
+
+The plane's factor of 2 is not lost; it reappears as **integrals that must
+vanish**. If an operation maps a quartet onto itself with sign \(-1\), the
+integral equals its own negative, so it is zero. For the molecular plane
+the sign is \((-1)^{n}\), with \(n\) the number of out-of-plane powers among
+the four functions. So every quartet with an odd count vanishes, and Planck
+skips it. 1.43 M of the 3.35 M representatives are skipped this way, and the
+integral values actually computed fall 7.0× (13.37 M → 1.92 M), close to the
+group order.
+
+What keeps the build at 4× is work that does not shrink:
+
+| per Fock build, naphthalene \(D_{2h}\) | no symmetry | symmetry | ratio |
+|---|---|---|---|
+| integral values computed | 13.37 M | 1.92 M | 7.0× |
+| closed-form kernel calls (one per block) | 1.87 M | 0.48 M | 3.9× |
+| writes into \(\mathbf G\) | 104.7 M | 59.7 M | 1.75× |
+
+Kernel calls are per block, and being forbidden is a per-component property
+(it depends on the axis labels), so almost no block vanishes entirely. And
+every nonzero integral is still replicated over its orbit and its
+permutations, so the writes barely fall.
+
+**The skeleton scheme removes the replication.** If the density is
+symmetric, \(O_R \mathbf P O_R^{\mathsf T} = \mathbf P\) for every operation
+\(R\), then so is \(\mathbf G\). Instead of replicating, accumulate each
+representative once, weighted by its orbit size \(|G|/|\mathrm{Stab}|\), into
+a *skeleton* \(\mathbf G^{\text{skel}}\), and symmetrize at the end:
+
+\[
+\mathbf G = \frac{1}{|G|}\sum_{R} O_R\, \mathbf G^{\text{skel}} O_R^{\mathsf T}.
+\]
+
+This is the Dupuis–King skeleton method. The symmetrization costs
+\(n_b^2 |G|\), and it projects out the forbidden contributions on its own.
+The condition is essential. For a density that is not symmetric (a PCM
+reaction field, a symmetry-broken UHF solution), the true \(\mathbf G\) is
+not symmetric either, and averaging over the group would destroy real
+information. Replication has no such condition, because it reproduces the
+integrals themselves. Planck's full point-group HF path ("Planck's Full
+Point-Group ERI Reduction") already uses the skeleton scheme. The
+signed-operation fused path, which the DFT J/K builds use, still
+replicates; moving it to a skeleton with a symmetric-density check is
+scoped as S1 in `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
 
 #### Shell-level closed forms for low angular momentum
 
@@ -2022,10 +2154,12 @@ multiply:
 | closed forms, \(L = 3\) | 1.87× | → 0.28 s |
 | closed-form orbit dedup (keep-mask) | 1.20× | → 0.23 s |
 | skip blocks that cannot hold a canonical quartet | 1.06× | → 0.22 s |
+| drop negligible primitive pairs (and whole-block symmetry rejection) | 1.14× | → 0.19 s |
 
-That is about 6.8× overall. On d-containing 6-31G\* the same steps give about
-2×, because the classes they cover are a smaller share of its build. The gain
-always depends on how much of the build the covered classes account for.
+That is 8.0× overall (1.50 → 0.187 s). On d-containing 6-31G\* the same
+steps give about 2.3×, because the classes they cover are a smaller share of
+its build. The gain always depends on how much of the build the covered
+classes account for.
 
 **What the profiling taught.**
 
@@ -2069,9 +2203,23 @@ order makes the result drift with thread count.
 Planck therefore gives each thread its own \(\mathbf G\) partial and sums the
 partials in **fixed thread-index order**, under `schedule(static)`. Never `omp
 atomic`, never `omp critical`, never `schedule(dynamic)` — each of those
-reintroduces the drift. The result is bitwise-invariant to `OMP_NUM_THREADS`.
-This is not a hypothetical concern: it is exactly the bug that produced the
-historical \(\sim10^{-10}\) jitter in the DFT XC grid reduction.
+makes the result change from run to run. This is not a hypothetical concern:
+it is exactly the bug that produced the historical \(\sim10^{-10}\) jitter in
+the DFT XC grid reduction.
+
+A fixed summation order is **necessary but not sufficient**, though. It makes
+a run reproducible *at a given thread count*. But with `schedule(static)` the
+set of bra pairs each thread owns, and so the set of terms in each partial,
+depends on how many threads there are. Change `OMP_NUM_THREADS` and the
+partials hold different subsets, so their sums round differently. Measured
+on CO\(_2\)/6-31G\* direct: all ten printed Hartree digits agree between 1 and
+4 threads, but the DIIS residuals and the last digit of the kcal/mol energy
+do not. For results independent of the thread count, the *partition* of
+work into accumulators must itself be fixed. One way is to key each
+partial on a fixed function of the bra index (a fixed number of bins, each
+one chunk of a `schedule(static, chunk)`), not on the thread that happened to
+run it. That is how the FCI sigma build achieves it. The fused Fock loop
+has not been changed yet.
 
 #### MPI distribution
 

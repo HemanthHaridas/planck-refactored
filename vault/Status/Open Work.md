@@ -2032,6 +2032,31 @@ identify the path taken. Not required for correctness or performance.
   - **D2:** general contraction in `Shell`/`ShellPair`, the most invasive.
   - **D3:** RI-JK pair factors, i.e. the BLAS doc's B0.
 
+  **Why symmetry pays 4×, not 8×, on D2h naphthalene (measured):** the
+  molecular plane fixes every AO, so orbits cap at 4 (canonical /
+  representatives = 3.99×). Forbidden zeros bring computed values down 7.0×,
+  but G writes fall only 1.75×, because orbit replication rewrites every
+  nonzero integral.
+
+  **Open steps reordered by dependency (2026-10-20):**
+  1. D0, the census, which also re-baselines C4b's predictions.
+  2. C4a, the four-raise prototype.
+  3. S1, skeleton accumulation plus final symmetrization on the signed-op
+     path (~1.2–1.3× predicted on D2h). It needs a per-call
+     symmetric-density check with a fallback to replication, because PCM
+     and symmetry-broken UHF densities are not symmetric.
+  4. D1, the block interface. It carries `prim_eps` and the screened-scaling
+     slots from day one. It does *not* need Phase E: the closed-form path
+     already feeds first-component pairs plus `norm_ratio`.
+  5. C4b, landing on D1.
+  6. C5, put in the generator after C4b.
+  7. P2, which D1 unblocks. It lands alone because it is not bitwise.
+  8. D2, after D1 and P2. It lands alone.
+  9. The L ≥ 5 decision.
+
+  D3 is an independent track. Bitwise-gated steps come first, so the
+  flag-off fingerprints stay meaningful as long as possible.
+
   **P2 scoped, not landed:** quartet-level skip |base| < 1e-4·tol_eri,
   a further 1.07–1.15× at max|ΔG| ~5e-12. It is not bitwise, needs ε plumbed
   through the engine callable, and must never reach the Schwarz table (an

@@ -1,14 +1,60 @@
 # Closed-Form Low-Angular-Momentum ERI Kernels — Scope
 
-Status: **in flight.** Landed: C0, C1, C2–C3.5, H1, L1, L2, L3a, L3b, the
-A0 split, P1 (negligible primitive pairs) and L3c (block-level orbit
-rejection). Open, in order: P2 (a policy decision), C4a, C4b, the L ≥ 5
-decision, C5, and the deep-contraction architecture steps D0–D3. When those
-land or are abandoned, rewrite this as an answer.
+**The direct Fock build is now 8.0× faster on sp bases, 2.3× on d bases,
+and 2.4× on symmetric molecules than before this work, with G bitwise
+unchanged by every step after the closed forms themselves.**
+
+| fixture (one thread, `engine auto`) | Fock build now | before this work | speedup | vs explicit `engine hgp` now |
+|---|---|---|---|---|
+| 8 H2O / 6-31G (nb = 104) | **0.187 s** | 1.50 s | **8.0×** | 4.4× |
+| 4 H2O / 6-31G\* (nb = 76) | **0.497 s** | ~1.12 s† | **~2.3×** | 1.5× |
+| 1 H2O / cc-pVDZ (nb = 25) | **0.028 s** | ~0.058 s† | **~2.1×** | 2.0× |
+| naphthalene / 6-31G, D2h (nb = 106) | **0.597 s** | 1.454 s‡ | **2.4×** | 2.4× |
+
+Best of three runs of `planck-eri-class-share` on `15c532e4`, Apple M3,
+`build-full`, `OMP_NUM_THREADS=1`. "Before" is the build before C1, after
+the Boys-library fix (C0), which gave another 1.37× / 1.13× on its own.
+† The product of the measured per-step ratios below; that fixture was never
+timed before C1. ‡ The symmetric build before L3a. The last column is what
+the Auto engine buys over an explicit engine, which gets only the
+engine-independent steps.
+
+**Symmetry now pays 4.0×** on naphthalene (2.368 s without `sym_ops`),
+against 1.9× before the L3 series. For this planar molecule 4× is the orbit
+cap, not overhead: the molecular mirror plane fixes every AO, so its factor
+of 2 appears only as zero integrals (computed values do fall 7.0×). The G
+writes, which barely shrink, are what S1 targets.
+
+Status: **in flight.** Landed: C0, C1, C2–C3.5, H1, L1, L2, L3a, L3b, A0,
+P1 and L3c. Open, in dependency order: D0, C4a, S1, D1, C4b, C5, P2, D2,
+then the L ≥ 5 decision, with D3 as an independent track (see the dependency
+map under "Open"). When those land or are abandoned, rewrite this as an
+answer.
 
 **Question:** How much faster can the direct (memory-direct, fused) Fock
 build get by evaluating low-angular-momentum shell quartets in closed form,
 and what else in the build stands in the way?
+
+## How it got there
+
+Each step is a ratio over the build *with all previous steps*, so a row
+multiplies:
+
+| fixture | C1 | C2 | H1 | C3 | C3.5 | L2 | L1 | P1+L3c | total |
+|---|---|---|---|---|---|---|---|---|---|
+| 8 H2O / 6-31G | 1.26× | ~1.25× | 1.16× | 1.61× | 1.87× | 1.20× | 1.06× | 1.14× | **8.0×** |
+| 4 H2O / 6-31G\* | 1.16× | ~1.04× | 1.16× | 1.13× | 1.26× | 1.09× | ~1.01× | 1.03× | **~2.3×** |
+| 1 H2O / cc-pVDZ | 1.07× | 1.10× | — | 1.23× | 1.43× | — | — | 1.00× | **~2.1×** |
+
+On the symmetric fixture the L3 series did most of the work: L3a 1.70×,
+L3b 1.23×, then L3c and P1 together 1.16× (1.454 → 0.855 → 0.702 → 0.597 s).
+
+| kind of step | steps | what it removed |
+|---|---|---|
+| closed-form kernels | C2, C3, C3.5 | the primitive loop repeated per Cartesian component, for total L ≤ 3 |
+| work around the kernels | C1, H1, L1, L2 | `ShellPair` rebuilds, per-order Boys calls, empty blocks, the quadratic orbit dedup |
+| symmetry bookkeeping | L3a, L3b, L3c | full orbits built for quartets that are not representatives, per-quartet allocation, rejected blocks |
+| dead primitive work | P1 | primitive pairs whose prefactor has underflowed (19 % of executed quartets on water clusters) |
 
 ## Short answer
 
@@ -16,31 +62,15 @@ Closed forms help only at **shell** granularity. A closed form that returns
 one Cartesian component per call is about 1.7× faster than HGP on its class.
 One that returns every component of a shell quartet from a single primitive
 pass is about 5× faster. Once the kernels were fast, the work around them
-became the cost: the loop (L series), symmetry bookkeeping, and primitive
-quartets that contribute nothing (P series).
-
-Each step is a ratio over the build *with all previous steps* (one thread,
-production `engine auto`), so a row multiplies:
-
-| fixture | C1 | C2 | H1 | C3 | C3.5 | L2 | L1 | P1+L3c\* | total |
-|---|---|---|---|---|---|---|---|---|---|
-| 8 H2O / 6-31G | 1.26× | ~1.25× | 1.16× | 1.61× | 1.87× | 1.20× | 1.06× | 1.14× | **~7.9×** (1.50 → 0.19 s) |
-| 4 H2O / 6-31G\* | 1.16× | ~1.04× | 1.16× | 1.13× | 1.26× | 1.09× | ~1.01× | 1.03× | **~2.3×** |
-| 1 H2O / cc-pVDZ | 1.07× | 1.10× | — | 1.23× | 1.43× | — | — | 1.00× | — |
-
-\* landed together; measured as one step.
-
-Symmetric molecules gain more. On D2h naphthalene / 6-31G, L3a, L3b and L3c
-took the symmetric build from 1.454 to 0.605 s (2.4×, with P1). Integral
-symmetry now pays 3.9× (2.366 s without `sym_ops`), against 1.9× before and
-an ideal of ~8×.
+became the cost: the loop, symmetry bookkeeping, and primitive quartets
+that contribute nothing.
 
 The basis decides the payoff. The closed forms cover total L ≤ 3, which is
 almost all of a pure sp build but only part of one with d shells: on
-6-31G\*, HGP is still ~¾ of the build. These are Fock-build numbers, not SCF
-wall time. Explicit engines get only the engine-independent steps (C1, H1,
-L1, L2, L3, P1). **Against the ~200× libcint gap this is a large step, not a
-fix.**
+6-31G\*, HGP is still ~¾ of the build, and that is what the open steps
+target. These are Fock-build numbers, not SCF wall time. The ~200× libcint
+gap in `docs/ERI_PERFORMANCE_SCOPE.md` was measured before this work and has
+not been re-measured; at 2–8× this is a large step, not a fix.
 
 ## How it is measured
 
@@ -307,7 +337,7 @@ decided three things. L4 (a per-block readout table) is dropped, since the
 readout is ≤ 3.6 %. The symmetric item is L3c. Primitive screening moved in
 from out of scope, as P1 and P2. Nothing from A0 itself is committed.
 
-### P1 — drop negligible primitive pairs
+### P1 — drop negligible primitive pairs (`15c532e4`)
 
 The below-1e-18 band in the census is a **pair** property: tight
 primitives on distant atoms, where exp(−αβR²/ζ) has underflowed. One water
@@ -336,7 +366,7 @@ integrals and the gradients. Every consumer iterates
 - **Suites:** core 79/79, smoke 43/45 (the two known rccsdt routing
   failures).
 
-### L3c — reject whole blocks on the symmetry path
+### L3c — reject whole blocks on the symmetry path (`15c532e4`)
 
 A quartet's canonical form starts with its smallest AO. If any operation
 sends one of a block's four shell groups below the bra's first group A,
@@ -370,96 +400,57 @@ op.
   0.059 s per iteration against 0.335 s without symmetry.
 - **Suites:** core 79/79, smoke 43/45 (the known rccsdt failures).
 
-## Open, in order
+## Open, in dependency order
 
-### P2 — quartet-level primitive screening (a policy decision)
+### Dependency map
 
-After P1, another ~20 % of primitive quartets on water clusters have |base|
-between 1e-24 and 1e-12. Skipping them in the closed-form and HGP primitive
-loops when |base| < ε, with the Schwarz table held exact, measured:
+```
+ measure (nothing lands)       symmetric loop       interface         bitwise-gated kernels          value-changing steps        last
+ 1 D0  repetition census ─┐
+                          ├──▶ 3 S1 skeleton ──▶ 4 D1 block ──┬──▶ 5 C4b L=4 kernel ──▶ 6 C5 screened ──┐
+ 2 C4a four-raise proto ──┘    + symmetrize       interface    │                                         │
+                                                               └──────────────────────────▶ 7 P2 ──▶ 8 D2 ──┴──▶ 9 L≥5 decision
+                                                                                        ε screening  general
+                                                                                                     contraction
+ independent:  D3 RI-JK pair factors (BLAS doc B0)
+```
 
-| fixture | ε = 1e-14 | ε = 1e-12 | max\|ΔG\| at 1e-14 / 1e-12 |
+| step | needs | why it needs it | bitwise? |
 |---|---|---|---|
-| 8 H2O / 6-31G | 0.194 → 0.171 s, 1.13× | 1.37× | 4.0e-12 / 3.3e-10 |
-| 4 H2O / 6-31G\* | 0.504 → 0.471 s, 1.07× | 1.18× | 4.9e-12 / 3.7e-10 |
-| naphthalene D2h | 0.598 → 0.520 s, 1.15× | 1.22× | 4.8e-12 / 4.8e-10 |
+| 1 D0 | — | measures what D1 and D2 are each worth; also re-baselines the shares that C4b's predictions rest on (P1 and L3c moved them) | nothing lands |
+| 2 C4a | — | a probe prototype; its result fixes whether C4b covers d layouts | nothing lands |
+| 3 S1 | — (strictly); placed after the probes | touches only the accumulation side of the symmetric branch; doing it before D1 means D1 rewrites a simpler loop (no orbit buffer, no replication) | no, ~1e-15; re-baselines only the symmetric fixture's fingerprint |
+| 4 D1 | D0, C4a, S1 | D0 says which classes a block kernel must win on; C4a says whether the interface must carry ordered-raise kernels for d layouts | yes (per-component fallback), or ~1e-15 where a block kernel is dispatched |
+| 5 C4b | D1, C4a | lands as an implementation of D1's interface, not as another special case in the fused loop | ~1e-15 vs HGP; flag-off fingerprints unchanged |
+| 6 C5 | C4b | screened scaling goes into the generator once, covering L ≤ 4, instead of hand-patching the L ≤ 3 kernel and redoing it | screened kernels only |
+| 7 P2 | D1 (and the policy decision) | D1's interface carries ε from day one, which removes P2's plumbing blocker; it comes after the bitwise steps because it moves every fingerprint | no (~1e-12) |
+| 8 D2 | D1, D0, P1, P2 | block kernels are where the K⁴ block is contracted once; P1's pair cutoff and P2's bound must be re-derived per exponent set (max over contraction columns) | no (summation order) |
+| 9 L ≥ 5 | C4b, P2, D2 | needs a profile with everything above in place; new kernels are written once against the general-contraction interface instead of retrofitted | — |
+| D3 | — | different code (RI-JK) | per the BLAS doc |
 
-ΔG is ~300–500 × ε on every fixture. The proposed rule is ε = 1e-4 ·
-`tol_eri` (1e-14 at the default), which keeps the primitive error about
-100× below what Schwarz screening at `tol_eri` already admits. Not landed,
-because:
-- **It is not bitwise.** Regression energies move at ~1e-12, and iteration
-  counts at the convergence floor may move, as they did for the Boys fix.
-- **ε must reach the kernels.** `low_l_shell_eri` can take it from the fused
-  loop, but the OS/HGP/Rys `eri_elem` callable is a shared engine signature.
-- **Schwarz safety.** `schwarz_table_*` must pass ε = 0 (see Findings). The
-  gate: Q built with screening on equals the exact Q.
+Two consequences of this ordering:
+- **D1 does not need Phase E** (retiring the per-AO `ShellPair` adapter),
+  contrary to an earlier version of this doc. The closed-form path already
+  feeds a shell-level kernel with first-component pairs and a per-AO
+  `norm_ratio` (the C2 wiring), and an HGP block kernel can be fed the same
+  way. Phase E is cleanup that can follow D1.
+- **Fingerprints stay strong as long as possible.** Steps 4–6 keep the
+  flag-off G fingerprints unchanged. S1 re-baselines only the symmetric
+  fixture (naphthalene), and only in builds that take the skeleton path.
+  Steps 7 and 8 re-baseline everything once each. Each value-changing step
+  lands alone, so a fingerprint change has one cause.
 
-If a non-bitwise default is accepted, do the closed-form kernel first (one
-parameter, most of the sp gain), then HGP behind the same parameter.
+Not ordered here: the fused loop's thread-count drift (Out of scope). Every
+"thread-identity" gate below means identical output at a fixed thread count,
+1 vs 1 and 4 vs 4. Output is not identical across 1 and 4 threads today. If
+that defect is fixed, fix it before D1, because D1 rewrites the loop it
+lives in.
 
-### C4a — four-raise prototype in the probe (nothing lands)
+### 1 · D0 — measure the repetitions after screening (nothing lands)
 
-Four raises give 3⁴ = 81 *ordered* outputs. That is exact for (pp|pp), the
-only L = 4 class on sp bases. d layouts are redundant: (ds|ds) and (dd|ss)
-need 36 distinct components, (ps|pd) 54, so up to 2.25× of the arithmetic
-is wasted. Prototype (pp|pp) and (ds|ds) with the kernel's shell-level
-feed, timed per class against HGP. Predicted: (pp|pp) ≥ 4×, (ds|ds) 2–3×.
-- Both ≥ 2×: one generated four-raise chain for every L = 4 layout.
-- d layouts < 2×: C4 covers (pp|pp) only, and d at L = 4 waits for the
-  L ≥ 5 design.
-
-### C4b — the generated four-raise kernel
-
-Generate the fourth level rather than hand-write it. Outputs stay in
-registers, with **no** buffers or gathers (the failed hoist). Wiring is
-unchanged: `closed_form_max_l = 4` from Auto, explicit engines pure.
-Predicted at 4–5× on the class, over L3b. Re-derive from a fresh probe once
-P1 and L3c land, since both shift the shares:
-
-| fixture | predicted | ceiling (class free) |
-|---|---|---|
-| 8 H2O / 6-31G | 1.38–1.42× | 1.59× |
-| naphthalene D2h | 1.31–1.33× | 1.45× |
-| 4 H2O / 6-31G\* | ~1.3× (less if C4a limits d) | 1.53× |
-| 1 H2O / cc-pVDZ | 1.5× | 1.77× |
-
-Gates as for C3.5: a per-quartet sweep against HGP on water in 6-31G,
-6-31G\* and cc-pVDZ, with every reachable four-raise layout required;
-mutation tests on each coupling term, sign and norm; unchanged flag-off
-fingerprints; max|ΔG| ≤ ~5e-15; core, smoke and the thread-identity cases.
-The generator must also reproduce the hand-written three-raise outputs for
-every L ≤ 3 layout before its new level is trusted.
-
-### After C4 — L ≥ 5 (a decision, not a step)
-
-d bases will still be ~60–70 % HGP at L ≥ 5. Five raises is 243 ordered
-outputs, more than the registers hold, and the redundancy grows with every
-d shell, so the raise chain ends at L = 4. Candidates, each needing a
-C0-style prototype first:
-- per-class generated VRR over *distinct* Cartesian components, unrolled,
-  with no runtime-sized scratch;
-- P2 extended to HGP, if accepted. The census found almost nothing to screen
-  on compact d-basis molecules (cc-pVDZ water: 0.4 % of HGP quartets below
-  1e-12), so it pays on extended systems, not on deep contractions as such.
-
-Choose from a fresh profile after C4b. D1 below is the general form of
-the first candidate.
-
-### C5 — screened kernels
-
-The closed forms need `hgp_vrr`'s screened scaling: T × `boys_scale`,
-prefactor × `prefactor_scale`, W−P/W−Q × `screen.rho / rho`, and the
-straddling coupling × `boys_scale` (the `inv_2_delta` term behind
-`vault/Gotchas/HGP Screened inv_2_delta`). Until a screened sweep against
-OS passes on a mixed bra/ket-AM fixture, screened kernels stay on HGP. It
-pays only for range-separated hybrids, so it ranks after C4.
-
-### D — deep-contracted bases: architecture steps
-
-Deep contraction (cc-pVXZ, ANO) multiplies the primitive loop by two
-repetitions that the architecture, not the arithmetic, causes. Counted for
-water over all shell quartets, with no screening (so ratios, not timings):
+Deep contraction multiplies the primitive loop by two repetitions that the
+architecture, not the arithmetic, causes. Counted for water over all shell
+quartets, with no screening (so ratios, not timings):
 
 | primitive quartets executed | cc-pVDZ | cc-pVTZ |
 |---|---|---|
@@ -477,68 +468,246 @@ water over all shell quartets, with no screening (so ratios, not timings):
 - **Segmented storage.** The GBS reader stores a general contraction as
   separate shells. Oxygen's 1s and 2s in cc-pVDZ are two 9-primitive shells
   over the **same nine exponents**, and the third s shell is the last of
-  them. Every primitive integral over those exponents is computed once per
-  contracted function.
+  them.
 
-Steps, in order:
+The step: an A0-style probe on water / cc-pVDZ and cc-pVTZ, plus the five
+existing fixtures, after Schwarz and P1. It does three things:
+- counts executed primitive quartets against unique ones, per shell quartet
+  and per general-contraction quartet (what D1 and D2 are each worth);
+- times HGP per (L_AB, L_CD) class (where a D1 block kernel must win);
+- re-derives the C4b prediction table from the post-P1/L3c shares.
 
-#### D0 — measure the two repetitions after screening (nothing lands)
+### 2 · C4a — four-raise prototype in the probe (nothing lands)
 
-An A0-style probe on water / cc-pVDZ and cc-pVTZ. Count executed primitive
-quartets against unique ones (per shell quartet, and per general-contraction
-quartet) after Schwarz and P1. That gives what D1 and D2 are each worth
-before either is designed. The unscreened counts above are an upper bound.
+Four raises give 3⁴ = 81 *ordered* outputs. That is exact for (pp|pp), the
+only L = 4 class on sp bases. d layouts are redundant: (ds|ds) and (dd|ss)
+need 36 distinct components, (ps|pd) 54, so up to 2.25× of the arithmetic
+is wasted. Prototype (pp|pp) and (ds|ds) with the kernel's shell-level
+feed, timed per class against HGP. Predicted: (pp|pp) ≥ 4×, (ds|ds) 2–3×.
+- Both ≥ 2×: C4b covers every L = 4 layout.
+- d layouts < 2×: C4b covers (pp|pp) only. d at L = 4 then goes to the D1
+  HGP block kernel or the L ≥ 5 design.
 
-#### D1 — a shell-quartet block interface for every engine
+### 3 · S1 — skeleton accumulation and final symmetrization on the signed-op path
 
-The fused loop's engine interface becomes a block call that returns all
-components of a shell quartet, with the primitive loop run once.
-Prerequisite: retire the per-AO `ShellPair` adapter (Open Work, shell-pair
-granularity Phase E), so the loop holds shell-level pairs. C4b and the
-L ≥ 5 kernels then become implementations of this one interface, class by
-class. Constraint from history: the earlier contract-once hoist was
-1.14–1.62× *slower* (1.23× on cc-pVDZ), because of snapshot copies and
-per-component gathers (`docs/ERI_PERFORMANCE_SCOPE.md`). A block kernel must
-keep intermediates in registers or fixed-size stack storage, as the closed
-forms do, and must be measured per class against the per-component path
-before it is dispatched. Gates: the per-quartet sweep against the
-per-component engine on every reachable layout, flag-off fingerprints, and
-the thread-identity cases.
+**Why symmetry pays 4×, not 8×** (naphthalene / 6-31G, D2h, per Fock build,
+temporary counters):
 
-#### D2 — general contraction in `Shell` and `ShellPair`
+| | no symmetry | symmetry | ratio |
+|---|---|---|---|
+| canonical quartets surviving Schwarz | 13.37 M | 13.37 M | — |
+| orbit representatives | — | 3.35 M | **4.0×** |
+| … of which symmetry-forbidden (zero) | — | 1.43 M | |
+| integral values computed | 13.37 M | 1.92 M | **7.0×** |
+| closed-form kernel calls (per block) | 1.87 M | 0.48 M | 3.9× |
+| G writes (accumulation) | 104.7 M | 59.7 M | **1.75×** |
+| build time (best of three, no counters) | 2.37 s | 0.60 s | 4.0× |
+
+Three things, in order of size:
+- **A planar molecule caps the orbit at 4.** The mirror through the
+  molecular plane maps every AO to itself and only flips the sign of the
+  out-of-plane p functions. So orbits have at most 4 members, and
+  canonical/representatives is 3.99×. That plane's factor of 2 shows up
+  instead as **zero integrals**: a quartet with an odd count of out-of-plane
+  p functions vanishes. 1.43 M of the 3.35 M representatives are skipped on
+  that ground, so integral evaluations really are down 7.0×.
+- **Closed-form calls are per block.** A block is evaluated if any of its
+  components is needed. Being forbidden is a per-component property (the
+  axis parity), so almost no block is entirely zero, and kernel calls fall
+  only 3.9×.
+- **G writes barely fall.** Each representative's value is replicated
+  across its orbit and then across each element's distinct 8-fold
+  permutations, so every nonzero integral still pays its full set of writes.
+  Only forbidden quartets save any: 1.75×. The orbit fill and the per-element
+  sign loop come on top.
+
+**The change.** Accumulate each non-forbidden representative **once**, with
+its 8-fold permutational contributions weighted by its orbit size, into a
+skeleton G. At the end of the build, symmetrize:
+G(μ,ν) = (1/|G|) Σ_R s_R(μ) s_R(ν) G_skel(R(μ), R(ν)). That costs nb² × |G|,
+which is trivial. It is the Dupuis–King skeleton scheme, which Planck's
+full-symmetry HF path already uses with dense operation matrices. Here the
+operations are signed AO permutations, so the symmetrization is a gather.
+
+- **One pass over the operations, no allocation.** For each canonical
+  quartet, apply each op once. That answers three questions together:
+  is there a smaller image (not a representative)? how many ops map the
+  quartet to itself (the stabilizer, giving orbit size = |G| / |stab|)? does
+  one map it to itself with sign −1 (forbidden)? This replaces both
+  `is_orbit_representative` and `fill_quartet_orbit` on this path.
+- **Validity: the density must be symmetric.** The skeleton scheme needs
+  O P Oᵀ = P for every operation. Today's replication works for *any* P,
+  because it reproduces the integrals exactly. PCM runs (SAO is disabled
+  there because the reaction field breaks symmetry) and symmetry-broken UHF
+  do not satisfy this. So the build checks max|s O P Oᵀ − P| per call (nb² ×
+  |G|) for every density it contracts (P, or Pa and Pb), and falls back to
+  today's replication above a tolerance. The fallback is the current code,
+  unchanged.
+- **Who gains.** HF reaches this path only with PCM or linear point groups;
+  other symmetric HF runs use the full-symmetry path, which is already
+  skeleton-based. The DFT driver passes the same signed ops into its direct
+  J/K builds, so symmetric DFT is the main beneficiary, together with linear
+  molecules.
+
+Predicted on D2h naphthalene: G writes 59.7 M → ~15 M (the 1.92 M computed
+quartets × their distinct permutations); the orbit fill, the sign loop and
+most of `accumulate_term`'s 7.7 % go. Roughly 1.2–1.3× on the symmetric
+build, to be measured. Kernel calls are unchanged: block granularity is D1's
+business, not S1's.
+
+Gates:
+- **Skeleton against replication**, on symmetrized densities (P → average of
+  s O P Oᵀ over the group), for water C2v and naphthalene D2h, RHF and UHF,
+  every engine, max|ΔG| ≤ ~1e-14. The existing `check_symmetry_ops` /
+  `check_real_symmetry_ops` gates use random densities, so they only exercise
+  the fallback. Keep them, and assert that they did take it.
+- **The fallback must fire** on a deliberately asymmetric density, so that
+  the check cannot silently pass a PCM-like case.
+- **Mutations:** drop the stabilizer weight; skip the symmetrization; invert
+  the forbidden sign test. Each must fail the skeleton gate.
+- **End to end:** CO2 / 6-31G\* direct (D∞h) and a symmetric DFT case must
+  match their symmetry-off energies in all printed digits, plus core and
+  smoke.
+
+### 4 · D1 — a shell-quartet block interface for every engine
+
+The fused loop's engine interface becomes a block call. It takes the two
+first-component shell pairs and the shell layouts, runs the primitive loop
+once, and returns every component of the shell quartet. Readout and
+`norm_ratio` scaling stay in the loop, as they are for the closed forms
+today. The step has five parts:
+- **The interface**, with two parameters that later steps need and that
+  default to inert: `prim_eps = 0` (P2) and the screened-kernel scaling
+  (C5). Adding them now means no later step changes the signature.
+- **The existing closed forms (L ≤ 3) moved onto it**, replacing the
+  `closed_form_max_l` side path. Bitwise against today: same kernel, same
+  feed, same order.
+- **A per-component adapter** wrapping today's `eri_elem`, for every engine
+  and class without a block kernel. Bitwise.
+- **An HGP shell-quartet block kernel**: VRR once per primitive quartet for
+  the whole shell quartet, HRR outside, intermediates in fixed-size stack
+  storage. It is dispatched per class only where D0's class timings and
+  this step's measurement show a win. The earlier contract-once hoist was
+  1.14–1.62× *slower* (1.23× on cc-pVDZ) because of snapshot copies and
+  per-component gathers (`docs/ERI_PERFORMANCE_SCOPE.md`); that is the
+  mechanism to avoid, not the idea.
+- **Explicit engines stay pure** (adapter only) unless the user selects
+  Auto, so the cross-engine comparators keep meaning something.
+
+Gates: flag-off fingerprints unchanged; with the block kernel off, the
+closed-form fingerprints unchanged too; a per-quartet sweep of the HGP block
+kernel against per-component HGP on every reachable layout (water in 6-31G,
+6-31G\*, cc-pVDZ), mutation-tested; core, smoke and the fixed-thread-count
+identity cases.
+
+### 5 · C4b — the generated four-raise kernel, on D1
+
+Generate the fourth level rather than hand-write it. Outputs stay in
+registers, with **no** buffers or gathers. It lands as a D1 block kernel for
+the layouts C4a admits. The generator must first reproduce the hand-written
+three-raise outputs for every L ≤ 3 layout. Predicted over L3b, at 4–5× on
+the class (to be replaced by D0's re-derived numbers):
+
+| fixture | predicted | ceiling (class free) |
+|---|---|---|
+| 8 H2O / 6-31G | 1.38–1.42× | 1.59× |
+| naphthalene D2h | 1.31–1.33× | 1.45× |
+| 4 H2O / 6-31G\* | ~1.3× (less if C4a limits d) | 1.53× |
+| 1 H2O / cc-pVDZ | 1.5× | 1.77× |
+
+Gates as for C3.5: a per-quartet sweep against HGP with every reachable
+four-raise layout required and counted; mutation tests on each coupling
+term, sign and norm; unchanged flag-off fingerprints; max|ΔG| ≤ ~5e-15 on
+all five fixtures; core, smoke and the identity cases.
+
+### 6 · C5 — screened kernels, in the generator
+
+The closed forms need `hgp_vrr`'s screened scaling: T × `boys_scale`,
+prefactor × `prefactor_scale`, W−P/W−Q × `screen.rho / rho`, and the
+straddling coupling × `boys_scale` (the `inv_2_delta` term behind
+`vault/Gotchas/HGP Screened inv_2_delta`). After C4b the generator emits
+the whole closed-form family, so the scaling is added there once and
+reaches L ≤ 4 together, through D1's screened-scaling parameter. Gate: a
+screened per-quartet sweep against OS on a mixed bra/ket-AM fixture, for
+LongRange and ShortRange, plus the existing
+`water_*_engine_os_vs_hgp` comparators. It pays only for range-separated
+hybrids. Until it passes, screened kernels stay on the adapter.
+
+### 7 · P2 — quartet-level primitive screening (a policy decision)
+
+After P1, another ~20 % of primitive quartets on water clusters have |base|
+between 1e-24 and 1e-12. Skipping them in the closed-form and HGP primitive
+loops when |base| < ε, with the Schwarz table held exact, measured:
+
+| fixture | ε = 1e-14 | ε = 1e-12 | max\|ΔG\| at 1e-14 / 1e-12 |
+|---|---|---|---|
+| 8 H2O / 6-31G | 0.194 → 0.171 s, 1.13× | 1.37× | 4.0e-12 / 3.3e-10 |
+| 4 H2O / 6-31G\* | 0.504 → 0.471 s, 1.07× | 1.18× | 4.9e-12 / 3.7e-10 |
+| naphthalene D2h | 0.598 → 0.520 s, 1.15× | 1.22× | 4.8e-12 / 4.8e-10 |
+
+ΔG is ~300–500 × ε on every fixture. The proposed rule is ε = 1e-4 ·
+`tol_eri` (1e-14 at the default), which keeps the primitive error about
+100× below what Schwarz screening at `tol_eri` already admits.
+
+- **What D1 removes:** the plumbing blocker. ε arrives through the block
+  interface's `prim_eps`, and the adapter passes it to the per-component
+  engines.
+- **What remains:** the policy decision (a non-bitwise default) and
+  Schwarz safety. `schwarz_table_*` must pass ε = 0 (see Findings); the gate
+  is that Q built with screening on equals the exact Q.
+- **Landing:** alone, so the fingerprint re-baseline has one cause. Regression
+  energies move at ~1e-12, and iteration counts at the convergence floor
+  may move, as they did for the Boys fix.
+
+### 8 · D2 — general contraction in `Shell` and `ShellPair`
 
 - **`Shell`:** holds one exponent set and an n_prim × n_contracted
   coefficient matrix. The reader merges shells with the same L on the same
   atom whose exponents form a subset: O s becomes 9 × 3 in cc-pVDZ, 10 × 4 in
   cc-pVTZ.
-- **`ShellPair`:** built once per exponent-set pair.
-- **Kernels:** compute the K⁴ primitive block once, then contract it in
-  quarter steps (K⁴ → n·K³ → …). Contracting each primitive straight into all
-  n⁴ outputs would cost 256 multiply-adds per primitive for cc-pVTZ O s
-  quartets, about what the Boys call saves.
+- **`ShellPair`:** built once per exponent-set pair. P1's pair cutoff becomes
+  a bound over all contraction columns, using the largest |c|.
+- **Kernels:** D1 block kernels compute the K⁴ primitive block once, then
+  contract it in quarter steps (K⁴ → n·K³ → …). Contracting each primitive
+  straight into all n⁴ outputs would cost 256 multiply-adds per primitive
+  for cc-pVTZ O s quartets, about what the Boys call saves. P2's |base| bound
+  uses the largest coefficient product.
 
 This is the most invasive step. `ContractedView._index`, normalization (Nc is
 folded per contraction), the 1e integrals, the gradients, the spherical
-transform and every engine assume one contraction per shell. It needs D1's
-block interface, and it pays only for generally contracted bases (none of
-the Pople sets). Gate: G and energies unchanged against the segmented path
-on cc-pVDZ / cc-pVTZ inputs (not bitwise; summation order changes), plus the
-PySCF-anchored spherical gates.
+transform and the adapter all assume one contraction per shell. It pays
+only for generally contracted bases (none of the Pople sets), and D0 says
+by how much after screening. Gate: G and energies unchanged against the
+segmented path on cc-pVDZ / cc-pVTZ inputs (to ~1e-12; summation order
+changes), the PySCF-anchored spherical gates, and the gradient regression
+cases. Land it alone, as with P2.
 
-#### D3 — RI-JK pair factors (B0 in `docs/ERI_FOCK_BLAS_SCOPE.md`)
+### 9 · L ≥ 5 — a decision, not a step
 
-Exact four-centre integrals stay K⁴ per shell quartet whatever D1 and D2 do.
-Large cc-pVTZ/QZ runs are made fast in practice by density fitting.
+After C4b, d bases are still ~60–70 % HGP at L ≥ 5 (before P2 and D2 shift
+the shares). Five raises is 243 ordered outputs, more than the registers
+hold, and the redundancy grows with every d shell, so the raise chain ends
+at L = 4. Candidates, each needing a C0-style prototype first:
+- D1's HGP block kernel, if step 3 found it wins at high L;
+- per-class generated VRR over *distinct* Cartesian components, unrolled,
+  with no runtime-sized scratch.
+
+Either is written against D2's general-contraction interface. Choose from
+a fresh profile with steps 1–8 in place.
+
+### Independent · D3 — RI-JK pair factors (B0 in `docs/ERI_FOCK_BLAS_SCOPE.md`)
+
+Exact four-centre integrals stay K⁴ per shell quartet whatever D1 and D2
+do. Large cc-pVTZ/QZ runs are made fast in practice by density fitting.
 Planck's RI-JK recomputes its density-independent pair factors twice per
 iteration, ~61 % of the RI Fock build. Owned and scoped by the BLAS doc as
-B0; listed here because, for big deep-contracted jobs, it is probably the
-cheapest large win. Independent of D0–D2.
+B0. It touches none of the code above, so it can run at any time, and for
+big deep-contracted jobs it is probably the cheapest large win.
 
-Not on this list: primitive screening (P2) pays on extended systems, not
-compact ones (0.4 % of HGP quartets below 1e-12 on one cc-pVDZ water).
-Faster per-primitive work (vectorizing the primitive loop, a cheaper Boys
-call path) is bounded at maybe 1.5–2× and is not specific to deep
-contraction.
+Not on this list: faster per-primitive work (vectorizing the primitive loop,
+a cheaper Boys call path). It is bounded at maybe 1.5–2×, is not specific to
+deep contraction, and would be easier to do once D1 and D2 fix the kernel
+shapes.
 
 ## Ruled out
 
