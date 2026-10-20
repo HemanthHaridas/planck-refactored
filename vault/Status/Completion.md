@@ -9,7 +9,7 @@ tags: [status, completion, validated, canonical]
 
 # Completion Status
 
-Last updated: 2026-10-16
+Last updated: 2026-10-20
 
 This is the canonical completion-status document for the repository.
 Subsystem handoff, plan, benchmark, and fix-summary notes may still exist for
@@ -396,6 +396,18 @@ historical design context, but they are no longer the source of truth for
 - PySCF-validated He2/cc-pVDZ counterpoise decomposition
 
 ### Recent fixes now considered landed
+
+- **`guess sad` works with full point-group symmetry (F4, 2026-10-20).** It
+  used to abort on C3v/D6h with "initial density is not symmetry-adapted"
+  (NH3/6-31G\* 8.0e-5, benzene 2.6e-3). The raw SAD density is invariant;
+  the idempotent projection keeps the top n_occ natural orbitals and splits a
+  degenerate set at that cutoff. When full symmetry is active the guess (RHF,
+  and each UHF/ROHF spin) is now averaged over the group with the
+  contravariant law `P <- (1/|G|) Σ_R O_R P O_Rᵀ` (`symmetrize_density`,
+  `src/scf/scf.cpp`), which keeps Tr(PS) and drops idempotence. SAD now
+  reaches the hcore energy (benzene to 1e-11 Eh). Gated by
+  `nh3_c3v_fullsym_631gd_sad_direct`, mutation-verified. Record:
+  `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
 
 - **CC amplitude checkpoint (`.ccamp`): hand-written RCCSD can now write a
   spatial sidecar, a sector-drop defect in the shipped format is fixed, and

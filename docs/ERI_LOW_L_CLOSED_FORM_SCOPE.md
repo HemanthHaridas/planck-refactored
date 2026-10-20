@@ -6,10 +6,12 @@ momentum and with a block kernel above it, and what else in the build
 stands in the way?
 
 **Status: in flight.** Landed: C0, C1, C2–C3.5, H1, L1, L2, L3a–c, P1, S1,
-D1. Measured: A0, D0, C4a, and a post-D1 profile. Open, in order:
-block-kernel scratch out of thread-local storage, D1c (the
-electron-transfer recurrence), a per-block skeleton test, C5, D2a, D2b, P2,
-total L > 12; D3 is an independent track and C4b is deprioritised. When
+D1, F4. Measured: A0, D0, C4a, a post-D1 profile, and the full point-group
+path. Open, in order: the full point-group follow-ups F1–F3 (its default
+above nb = 100 is slower than no symmetry), block-kernel scratch out of
+thread-local storage, D1c (the electron-transfer recurrence), a per-block
+skeleton test, C5, D2a, D2b, P2, total L > 12; D3 is an independent track
+and C4b is deprioritised. When
 those land or are abandoned, rewrite this as an answer.
 
 ## Answer so far
@@ -215,6 +217,50 @@ kernels, counted with temporary counters:
   plain build (2.37 → 1.01 s) more than the symmetric one (0.454 → 0.295 s):
   the plain build evaluated 3.9× more blocks for the block kernel to speed up.
 
+## The full point-group path does not get any of this
+
+Symmetric HF with SAO blocking and direct SCF does not use the fused loop.
+`full_symmetry_build_skeleton` (`src/scf/scf.cpp`) calls
+`{os,hgp,rys}_symm.cpp` → `Symmetry::build_skeleton_eri`, a separate loop
+that calls the engine per Cartesian component and fills a dense
+n_b⁴ skeleton, contracted against the density every iteration. Of this
+work only P1 (in the `ShellPair` constructor) reaches it, and H1 only with
+`engine hgp`. The dispatch there checks for Rys and HGP and otherwise uses
+OS, so **`engine auto` builds the skeleton with per-component OS**. The
+skeleton is persisted across iterations only when n_b ≤ `threshold`
+(default 100); above that, every iteration rebuilds it. Symmetric DFT and
+HF with PCM or a linear point group use the fused signed-operation path
+instead.
+
+Measured 2026-10-20: RHF, `scf_mode direct`, one thread, Auto engine,
+energies identical on both paths (temporary timer, never committed):
+
+| molecule | n_b | full symmetry | fused, no symmetry |
+|---|---|---|---|
+| H2O / cc-pVDZ (C2v) | 25 | 0.047 s once + 0.0004 s/iter | 0.0075 s/iter |
+| NH3 / 6-31G\* (C3v) | 21 | 0.017 s once + 0.0003 s/iter | 0.0024 s/iter |
+| CH4 / cc-pVDZ (Td) | 35 | 0.054 s once + 0.0016 s/iter | 0.018 s/iter |
+| benzene / 6-31G\* (D6h), default | 102 | **1.47 s/iter** (17.7 s) | 0.84 s/iter (11.8 s) |
+| benzene, `threshold 200` | 102 | 1.34 s once + 0.126 s/iter (3.0 s) | |
+| naphthalene / 6-31G (D2h), default | 106 | **3.50 s/iter** (66.6 s) | 1.00 s/iter (19.0 s) |
+| naphthalene, `threshold 200` | 106 | 3.43 s once + 0.163 s/iter (7.3 s) | |
+
+- **Below n_b = 100 it works well**: the skeleton build is small and the
+  per-iteration contraction is 6–19× cheaper than a fused build.
+- **Above n_b = 100 the default is slower than no symmetry** (1.75× on
+  benzene, 3.5× on naphthalene): each iteration rebuilds an n_b⁴ tensor
+  (~1 GB on naphthalene) with per-component OS.
+- **Persisted, it is fast per iteration** (0.13–0.16 s, against ~0.30 s for
+  the fused symmetric build on the same naphthalene Fock build, from the
+  probe), but it holds the n_b⁴ skeleton, and its one-time build costs
+  1.3–3.4 s, as much as 1.6–3.4 plain fused iterations.
+- **For an Abelian group the fused path (S1) would do better than either**:
+  naphthalene at ~0.3 s/iter is ~6 s for 19 iterations with no n_b⁴ memory.
+  That is estimated from the probe, not measured in an HF run.
+- **Side finding (fixed by F4):** with `guess sad`, NH3 (C3v) and benzene
+  (D6h) aborted with "initial density is not symmetry-adapted" (8.0e-5 and
+  2.6e-3).
+
 ## What landed
 
 | step | commit | what it removed or added | gain | gate |
@@ -232,9 +278,25 @@ kernels, counted with temporary counters:
 | S1 | `7ec71009` | per-orbit-element replication of every G write | 1.33× (D2h) | `check_skeleton_symmetry` |
 | fix | `fd51d29d` | H1's Boys buffer overflow on (ff\|ff) in HGP's hoisted block path | — | the f/g/h spherical gates |
 | D1 | — | the per-component primitive loop at total L 4–12 | 1.5× sp, 4.3–4.9× d, 12.9× f | 20 fingerprints; `check_hgp_block_kernel` |
+| F4 | — | `guess sad` aborting full point-group SCF on C3v/D6h | — (correctness) | `nh3_c3v_fullsym_631gd_sad_direct` |
 
 Suites: smoke 43/45 and extended 132/136 after D1; the failures are the
 known rccsdt routing cases.
+
+### F4 — a symmetric SAD guess for the full point-group path
+
+The raw SAD density is group-invariant
+(shell-wise spherical averages); the break was the idempotent projection,
+which keeps the top n_occ natural orbitals and splits a degenerate set
+(e, t) at that cutoff. When full symmetry is active the projected guess
+(RHF, and each spin of UHF/ROHF) is averaged over the group with the
+contravariant law, `P ← (1/|G|) Σ_R O_R P O_Rᵀ` (`symmetrize_density`,
+`src/scf/scf.cpp`). It preserves Tr(PS) and gives up idempotence, which
+a guess does not need. NH3 / 6-31G\* (Cartesian and spherical) and
+benzene / 6-31G\* now converge from SAD to the hcore energy (benzene to
+1e-11 Eh, 13 against 12 iterations). Gated by
+`nh3_c3v_fullsym_631gd_sad_direct`, which fails with the averaging
+removed.
 
 ### The closed-form kernels (C2–C3.5)
 
@@ -425,6 +487,27 @@ never merged: 1.47–1.83× instead of 4.8–5.1×, which nearly retired D2.
 3–4×. Both were caught only because the number was written down first.
 
 ## Open, in order
+
+### Full point-group follow-ups (F1–F3), ahead of everything below
+
+- **F1 — stop rebuilding the skeleton every iteration above the persist
+  threshold.** For Abelian groups (D2h and its subgroups) route the build
+  to the fused signed-operation path, which already runs S1's skeleton
+  scheme with no n_b⁴ memory; for non-Abelian groups (C3v, Td, D6h) the
+  dense-operation path needs a memory-direct skeleton build (accumulate
+  into G instead of materializing n_b⁴), already listed in Open Work. Gate:
+  energies against symmetry off on the five molecules above, and the
+  full-symmetry regression ladder.
+- **F2 — fix the Auto fall-through.** `full_symmetry_build_skeleton` sends
+  `engine auto` to OS. Route it to HGP (fastest on this path in the
+  teaching guide's §12) or to the per-bucket table. One line; values move
+  at ~1e-15.
+- **F3 — feed `build_skeleton_eri` from the block kernels.** The skeleton
+  loop calls the engine per component; give it the `BlockEriRequest`
+  interface so the closed forms and the HGP block kernel evaluate whole
+  shell quartets. Cuts the one-time (persisted) build several-fold.
+
+### The fused-loop steps
 
 ```
  cheap, bitwise-gated                  kernels                         shared exponents (value-changing)         last

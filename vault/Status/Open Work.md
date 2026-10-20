@@ -9,7 +9,7 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-10-16
+Last updated: 2026-10-20
 
 This is the canonical open-work document for the repository.
 Use it with `vault/Status/Completion.md`. Older status snapshots and handoff
@@ -1934,6 +1934,23 @@ identify the path taken. Not required for correctness or performance.
     deprioritised: the block kernel leaves only 4–9 % at L = 4 on sp bases.
   - **Known defect, not chased:** the fused direct loop is not thread-count
     invariant (accumulators keyed by thread index).
+  - **The full point-group path gets none of this (measured 2026-10-20).**
+    Symmetric HF with SAO and direct SCF builds a dense n_b⁴ skeleton in a
+    separate per-component loop (`Symmetry::build_skeleton_eri`); `engine
+    auto` falls through to OS there; the skeleton is persisted only when
+    n_b ≤ `threshold` (100), otherwise rebuilt every iteration. Above 100
+    the default is **slower than no symmetry**: naphthalene / 6-31G 3.50
+    s/iter (66.6 s) vs 1.00 s/iter without symmetry; benzene / 6-31G\*
+    1.47 vs 0.84 s/iter. Persisted (`threshold 200`) it is 7.3 s / 3.0 s.
+    Follow-ups, in order: **F1** stop the per-iteration rebuild (fused S1
+    path for Abelian groups, memory-direct skeleton otherwise); **F2** route
+    Auto to HGP or the per-bucket table, not OS; **F3** feed the skeleton
+    build from the block kernels. **F4 landed (2026-10-20):** `guess sad`
+    aborted on C3v/D6h because the SAD idempotent projection splits a
+    degenerate set at the n_occ cutoff; the guess is now averaged over the
+    group (contravariant law) when full symmetry is on. Gated by
+    `nh3_c3v_fullsym_631gd_sad_direct`. Record:
+    `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
   - **Teaching-guide follow-ups (found 2026-10-20, after D1):**
     - **§11 "Auto-Dispatch: Calibrated Per-Bucket Engine Selection" needs
       rewriting.** It says every contracted shell quartet is routed to the
