@@ -2049,7 +2049,7 @@ identify the path taken. Not required for correctness or performance.
      slots from day one. It does *not* need Phase E: the closed-form path
      already feeds first-component pairs plus `norm_ratio`.
   5. C4b, landing on D1.
-  6. C5, put in the generator after C4b.
+  6. C5, after C4b, across the whole closed-form family at once.
   7. P2, which D1 unblocks. It lands alone because it is not bitwise.
   8. D2, after D1 and P2. It lands alone.
   9. The L ≥ 5 decision.
@@ -2065,11 +2065,33 @@ identify the path taken. Not required for correctness or performance.
     the per-class cost of a block VRR, which D1 must measure.
   - HGP at L = 4 is 30–45 % of sp and cc-pVDZ builds but 12 % on cc-pVTZ.
     C4b re-predicted at 1.29–1.56× (1.10× on cc-pVTZ).
-  - General contraction (D2) is worth only 1.47–1.83× in primitive quartets
-    on cc bases (unscreened estimate 4.8×), and 1.00× on Pople sets.
+  - **Corrected 2026-10-20:** the D0 census first reported general
+    contraction (D2) at only 1.47–1.83× on cc bases. Its merge rule never
+    merged two equal-size shells (cc-pVDZ O 1s and 2s), and printing the
+    group map exposed the bug. Corrected: 4.82–5.11× on cc bases within L.
+    Pople sets have no within-L sharing, but their SP shells share
+    exponents across L: 2.13–3.73× (6-31G, 6-31G\*, naphthalene, 6-311G).
+  - **D2 rescoped as shared-exponent families**, merged inside the fused loop
+    only (`Shell`/`ShellPair` untouched): D2a is a prototype (SP all-subset
+    kernel plus within-L contraction kernel, guessed 1.3–2×), D2b lands it.
+    Order: S1, D1, C4b, C5, D2a, D2b, P2, L ≥ 5.
 
   The order stands. The probe's fingerprints depend on the fixture list
   (`Eigen::MatrixXd::Random` state carries across fixtures).
+
+  **C4a done (2026-10-20).** A hand-written four-raise prototype (~70 lines,
+  temporary probe mode, not committed) matches HGP to ≤ 1.3e-15 on every
+  total-L = 4 layout of four fixtures. Mutation-checked: dropping one
+  coupling gives an error of 1.0. Kernel against HGP on the same work:
+  - (pp|pp) 10–19×;
+  - (ds|ds) 6–8×;
+  - even (dd|ss), with 45 of 81 outputs redundant, 3.9–5.4×;
+  - all L = 4 together 10.4–15.9×. Both predictions (≥ 4×, 2–3×) were too
+    low.
+
+  So C4b covers every L = 4 layout, predicted at 1.39× (8 H2O / 6-31G) to
+  1.71× (4 H2O / cc-pVDZ), near the ceilings. A generator is not needed for
+  L = 4, and a five-raise chain is now a fair L ≥ 5 candidate.
 
   **P2 scoped, not landed:** quartet-level skip |base| < 1e-4·tol_eri,
   a further 1.07–1.15× at max|ΔG| ~5e-12. It is not bitwise, needs ε plumbed
