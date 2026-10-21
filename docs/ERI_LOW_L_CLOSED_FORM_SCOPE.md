@@ -9,7 +9,7 @@ stands in the way?
 D1, F1, F2, F4, T1. Measured and declined: D1c (electron-transfer
 recurrence), 5b (a class-batched scheduler). Measured, not landed: lanes
 across primitive quartets (2b, prototype kept in the tree) and D2a
-(shared-exponent families). Open, in order: D2b's B0 probe, 2b, D2b, the fixed
+(shared-exponent families; B0 done). Open, in order: 2b, D2b, the fixed
 accumulator partition, a per-block skeleton test, C5, P2, total L > 12, F3;
 D3 is independent and C4b deprioritised. When those land or are abandoned,
 rewrite this as an answer.
@@ -362,6 +362,33 @@ Schwarz or canonical filtering on either side), all values within 7.2e-16:
   weighted add, `boys_vec` where production's (ss|ss) uses `boys(0, T)`).
 - **Guess was 1.3–1.6× on 6-31G, 1.5–2× on cc-pVDZ.** cc landed in range.
 
+**B0 — the closed-form family pass made production-quality (probe, 2026-10-21).**
+Raises templated on their count, layouts per family quartet without
+allocation (buffers reused across quartets), scalar `boys(0, T)` when every
+member is (ss|ss), a single-member layout folding its weight into θ.
+Members at L ≤ 3, merged across L:
+
+| fixture | D2a probe | B0 |
+|---|---|---|
+| 1 H2O / cc-pVTZ | 1.69× | **1.54–1.78×** |
+| 4 H2O / cc-pVDZ | 1.66× | **1.54×** |
+| naphthalene / 6-31G | 1.16× | **1.22–1.34×** |
+| 4 H2O / 6-31G\* | 0.95× | **1.11–1.13×** |
+| 4 H2O / 6-31G | 0.93× | **1.04–1.15×** |
+
+- **Decision: Pople merges across L.** It wins on every Pople fixture now.
+  At 1:1 (`within`) the pass still runs at 0.74–0.81× of production, so
+  ~20 % per-quartet overhead remains; families built once per Fock build
+  rather than per probe quartet should take part of it.
+- **Iteration order matters more than the fixes.** Walking each layout's
+  member list cost 1.25× on cc-pVDZ and 1.65× on cc-pVTZ against looping
+  over bra members first and skipping a member's whole row when its weight
+  at the primitive pair is zero: cc's small members (the uncontracted 3s)
+  contribute at one exponent of nine. Removing per-quartet allocation, by
+  contrast, was worth ~10–20 % on Pople. Scalar Boys and weight folding were
+  each within noise.
+- Kernel totals with B0: 1 H2O / cc-pVTZ **1.74×**, 4 H2O / 6-31G\* 1.18×.
+
 ### 5b — a class-batched scheduler (declined after S0)
 
 The question: collect the blocks that pass the block filters, group them by
@@ -464,7 +491,6 @@ cc-pVDZ oxygen's equal-size 1s and 2s never merged: 1.47–1.83× instead of
 
 | step | what | bitwise? |
 |---|---|---|
-| D2b B0 | production-quality closed-form family pass, in the probe | nothing lands |
 | 2b | lanes at K ≥ 3 in the HGP block kernel, as a reusable laned core | no; lands alone |
 | D2b B1–B3 | families in the fused loop | no (summation order); lands alone |
 | partition | fixed accumulator partition | no; lands alone |
@@ -512,13 +538,8 @@ shell pairs, so a family quartet's members share one primitive pass.
 
 Steps:
 
-- **B0 — production-quality closed-form family pass, in the probe.** The
-  D2a probe's pass carries 1.5–1.7× overhead at 1:1 on Pople. Template on
-  the raise count, precompute layouts per family-quartet class, use
-  `boys(0, T)` when every member is (ss|ss). Measure at 1:1 against
-  production (target ≥ 1.0×) and with across-L merging on 6-31G,
-  6-31G\*, naphthalene. Decides the family policy for Pople: across L,
-  or within L only (no Pople merges).
+- **B0 — done** (see D2a above): Pople merges across L; the closed-form
+  pass iterates bra members first and skips zero-weight rows.
 - **B1 — the family-pair loop, members evaluated one by one** with today's
   block kernels. Isolates the reordering: gate on the count of accumulated
   component quartets (identical to today's, per fixture, with and without
