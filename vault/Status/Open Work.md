@@ -1925,33 +1925,29 @@ identify the path taken. Not required for correctness or performance.
     closed forms + Boys are ~60–67 % on sp bases; `skeleton_orbit_weight` is
     13 % of the symmetric build; emulated thread-local access 2.5–4.7 % on
     d/f; G writes 6–15 % everywhere.
-  - **Open, in order:** block-kernel scratch out of thread-local storage,
-    D1c (Head-Gordon–Pople electron-transfer recurrence in place of the ket
+  - **Open, in order:** D1c (Head-Gordon–Pople electron-transfer recurrence in place of the ket
     VRR), a per-block skeleton test, C5 (screened kernels in both block
     kernels; range-separated hybrids still take per-component HGP), D2a/D2b
     (shared-exponent families), P2 (ε screening, a policy decision), then
-    total L > 12. D3 (RI-JK pair factors) is independent. C4b is
+    total L > 12, then F3. D3 (RI-JK pair factors) is independent. T1
+    (block-kernel scratch out of thread-local storage) landed 2026-10-21:
+    bitwise, time-neutral. C4b is
     deprioritised: the block kernel leaves only 4–9 % at L = 4 on sp bases.
   - **Known defect, not chased:** the fused direct loop is not thread-count
     invariant (accumulators keyed by thread index).
-  - **The full point-group path gets none of this (measured 2026-10-20).**
+  - **The full point-group path (measured 2026-10-20, F1 2026-10-21).**
     Symmetric HF with SAO and direct SCF builds a dense n_b⁴ skeleton in a
-    separate per-component loop (`Symmetry::build_skeleton_eri`); `engine
-    auto` falls through to OS there; the skeleton is persisted only when
-    n_b ≤ `threshold` (100), otherwise rebuilt every iteration. Above 100
-    the default is **slower than no symmetry**: naphthalene / 6-31G 3.50
-    s/iter (66.6 s) vs 1.00 s/iter without symmetry; benzene / 6-31G\*
-    1.47 vs 0.84 s/iter. Persisted (`threshold 200`) it is 7.3 s / 3.0 s.
-    Follow-ups, in order: **F1** stop the per-iteration rebuild (fused S1
-    path for Abelian groups, memory-direct skeleton otherwise); **F3** feed
-    the skeleton build from the block kernels. **F2 landed (2026-10-20):**
-    Auto resolves to HGP there instead of falling through to OS
-    (`full_symmetry_engine`), 1.07-1.12x per rebuilt skeleton. **F4 landed
-    (2026-10-20):** `guess sad`
-    aborted on C3v/D6h because the SAD idempotent projection splits a
-    degenerate set at the n_occ cutoff; the guess is now averaged over the
-    group (contravariant law) when full symmetry is on. Gated by
-    `nh3_c3v_fullsym_631gd_sad_direct`. Record:
+    separate per-component loop (`Symmetry::build_skeleton_eri`), persisted
+    when n_b ≤ `threshold` (100). **F1 landed:** above that it no longer
+    rebuilds the skeleton every iteration but takes the fused direct build
+    with the geometry's D2h-subgroup signed operations: benzene / 6-31G\*
+    17.7 -> 4.08 s, naphthalene / 6-31G 66.6 -> 6.35 s (no symmetry 13.7 /
+    21.3 s), energies equal to the persisted full-group path. **F2 landed:**
+    Auto resolves to HGP there (`full_symmetry_engine`). **F4 landed:**
+    `guess sad` is group-averaged when full symmetry is on (gated by
+    `nh3_c3v_fullsym_631gd_sad_direct`). **Open: F3**, feed the persisted
+    skeleton build from the block kernels; it only shortens a one-time
+    build now, so it is last. Record:
     `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
   - **Teaching-guide follow-ups (found 2026-10-20, after D1):**
     - **§11 "Auto-Dispatch: Calibrated Per-Bucket Engine Selection" needs

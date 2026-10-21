@@ -6,13 +6,12 @@ momentum and with a block kernel above it, and what else in the build
 stands in the way?
 
 **Status: in flight.** Landed: C0, C1, C2–C3.5, H1, L1, L2, L3a–c, P1, S1,
-D1, F2, F4. Measured: A0, D0, C4a, a post-D1 profile, and the full point-group
-path. Open, in order: the full point-group follow-ups F1 and F3 (its default
-above nb = 100 is slower than no symmetry), block-kernel scratch out of
-thread-local storage, D1c (the electron-transfer recurrence), a per-block
-skeleton test, C5, D2a, D2b, P2, total L > 12; D3 is an independent track
-and C4b is deprioritised. When
-those land or are abandoned, rewrite this as an answer.
+D1, F1, F2, F4, T1 (block-kernel scratch out of thread-local storage).
+Measured: A0, D0, C4a, a post-D1 profile, and the full point-group path.
+Open, in order: D1c (the electron-transfer recurrence), a per-block
+skeleton test, C5, D2a, D2b, P2, total L > 12, then F3 (re-costed after
+F1); D3 is an independent track and C4b is deprioritised. When those land
+or are abandoned, rewrite this as an answer.
 
 ## Answer so far
 
@@ -152,7 +151,8 @@ What it says:
   representatives, which must test every operation (step 3).
 - **Emulated thread-local access** (2.5–4.7 % on d and f): g++ on macOS
   implements `thread_local` through `__emutls_get_address`, and the block
-  kernel reaches four scratch vectors that way per `prepare` (step 1).
+  kernel reached four scratch vectors that way per `prepare` (removed by T1,
+  which turned out time-neutral).
 - **G writes** (6–15 %) are the Fock contraction itself; only symmetry
   shrinks them.
 
@@ -217,7 +217,7 @@ kernels, counted with temporary counters:
   plain build (2.37 → 1.01 s) more than the symmetric one (0.454 → 0.295 s):
   the plain build evaluated 3.9× more blocks for the block kernel to speed up.
 
-## The full point-group path does not get any of this
+## The full point-group path
 
 Symmetric HF with SAO blocking and direct SCF does not use the fused loop.
 `full_symmetry_build_skeleton` (`src/scf/scf.cpp`) calls
@@ -229,11 +229,12 @@ work only P1 (in the `ShellPair` constructor) reaches it, and H1 only with
 OS, so **`engine auto` built the skeleton with per-component OS** (until F2,
 which the table below predates). The
 skeleton is persisted across iterations only when n_b ≤ `threshold`
-(default 100); above that, every iteration rebuilds it. Symmetric DFT and
+(default 100); above that, every iteration rebuilt it until F1, which
+sends the unpersisted case to the fused path instead. Symmetric DFT and
 HF with PCM or a linear point group use the fused signed-operation path
 instead.
 
-Measured 2026-10-20: RHF, `scf_mode direct`, one thread, Auto engine,
+Measured 2026-10-20, before F1 and F2: RHF, `scf_mode direct`, one thread, Auto engine,
 energies identical on both paths (temporary timer, never committed):
 
 | molecule | n_b | full symmetry | fused, no symmetry |
@@ -257,7 +258,7 @@ energies identical on both paths (temporary timer, never committed):
   1.3–3.4 s, as much as 1.6–3.4 plain fused iterations.
 - **For an Abelian group the fused path (S1) would do better than either**:
   naphthalene at ~0.3 s/iter is ~6 s for 19 iterations with no n_b⁴ memory.
-  That is estimated from the probe, not measured in an HF run.
+  F1 measured it: 6.35 s.
 - **Side finding (fixed by F4):** with `guess sad`, NH3 (C3v) and benzene
   (D6h) aborted with "initial density is not symmetry-adapted" (8.0e-5 and
   2.6e-3).
@@ -279,7 +280,9 @@ energies identical on both paths (temporary timer, never committed):
 | S1 | `7ec71009` | per-orbit-element replication of every G write | 1.33× (D2h) | `check_skeleton_symmetry` |
 | fix | `fd51d29d` | H1's Boys buffer overflow on (ff\|ff) in HGP's hoisted block path | — | the f/g/h spherical gates |
 | D1 | — | the per-component primitive loop at total L 4–12 | 1.5× sp, 4.3–4.9× d, 12.9× f | 20 fingerprints; `check_hgp_block_kernel` |
-| F2 | — | `engine auto` falling through to per-component OS on the full point-group path | 1.07× benzene/6-31G\*, 1.12× naphthalene/6-31G per rebuilt skeleton | energies unchanged; full-symmetry and OS-vs-HGP cases |
+| F2 | `17cf5adf` | `engine auto` falling through to per-component OS on the full point-group path | 1.07× benzene/6-31G\*, 1.12× naphthalene/6-31G per rebuilt skeleton | energies unchanged; full-symmetry and OS-vs-HGP cases |
+| F1 | — | rebuilding the n_b⁴ skeleton every iteration above `threshold` | 4.3× benzene/6-31G\*, 10.5× naphthalene/6-31G (whole SCF) | energies vs persisted path; 10 full-symmetry inputs at `threshold 1` |
+| T1 | — | `thread_local` block-kernel scratch (emulated TLS on macOS g++) | neutral within noise | 28 fingerprints identical to the pre-change binary |
 | F4 | `d0224110` | `guess sad` aborting full point-group SCF on C3v/D6h | — (correctness) | `nh3_c3v_fullsym_631gd_sad_direct` |
 
 Suites: smoke 43/45 and extended 132/136 after D1; the failures are the
@@ -303,6 +306,48 @@ HGP wins on both the d-shell and the sp-only basis, so the per-bucket table
 was not needed. Energies are unchanged to the printed digits. This is the
 small half: the per-iteration rebuild (F1) and per-component evaluation (F3)
 remain the large ones.
+
+### F1 — no per-iteration skeleton rebuild
+
+`update_integral_symmetry` always builds the axis-flip operations valid for
+the geometry: the largest D2h subgroup of the point group (D2h for D6h, Cs
+for C3v). An SAO-blocked density is symmetric under the full group, so under
+that subgroup too, which is all S1 needs. So the full-group branch in the
+RHF, UHF and ROHF loops now runs only when the skeleton was persisted;
+otherwise the loop falls through to the fused direct build with the signed
+operations. The per-iteration rebuild wrappers (`full_symmetry_fock_{rhf,uhf}`)
+had no other caller and were deleted. Below `threshold` nothing changes.
+
+RHF, `scf_mode direct`, default `threshold`, one thread, whole SCF:
+
+| molecule | before F1 | F1 | no symmetry | persisted (`threshold 200`) |
+|---|---|---|---|---|
+| benzene / 6-31G\* (D6h → D2h) | 17.7 s | **4.08 s** (15 iter) | 13.7 s (16 iter) | 3.0 s, 866 MB |
+| naphthalene / 6-31G (D2h) | 66.6 s | **6.35 s** (20 iter) | 21.3 s (20 iter) | 7.3 s |
+
+- **Prediction** (written first): naphthalene ≈ 6 s, benzene under the
+  no-symmetry time. Both held.
+- **What a non-Abelian group gives up:** benzene uses 8 of its 24
+  operations. It still beats the no-symmetry run 3.4× and is within 1.4× of
+  the persisted full-group path without its n_b⁴ memory. A memory-direct
+  dense-operation skeleton is not worth writing unless that gap matters.
+- **Gate.** Benzene's energy on the F1 path equals the persisted full-group
+  path to every printed digit (−230.7021012897); the no-symmetry run differs
+  by 2.3e-9 Eh because it splits the e orbitals (−0.581648 / −0.581628), not
+  because of F1. All ten full-symmetry regression inputs, rerun with
+  `threshold 1` so none persists, match their default energies to every
+  printed Hartree digit.
+
+### T1 — block-kernel scratch out of thread-local storage
+
+The HGP block kernel's four scratch vectors are members, and the fused loop
+keeps one kernel copy per thread (a copy per bra would reallocate them every
+bra). Bitwise: all 28 fingerprints of `planck-eri-class-share` are identical
+to a binary built from the pre-change headers. Time is neutral within
+noise (best of three: 4 H2O / 6-31G\* 0.101 → 0.100 s, 4 H2O / cc-pVDZ
+0.555 → 0.553 s, 1 H2O / cc-pVTZ 0.130 → 0.131 s): the 2.5–4.7 % profile
+share of `__emutls_get_address` did not translate into time. Kept because
+it removes hidden per-thread state, not for speed.
 
 ### F4 — a symmetric SAD guess for the full point-group path
 
@@ -509,53 +554,30 @@ never merged: 1.47–1.83× instead of 4.8–5.1×, which nearly retired D2.
 
 ## Open, in order
 
-### Full point-group follow-ups (F1, F3), ahead of everything below
-
-- **F1 — stop rebuilding the skeleton every iteration above the persist
-  threshold.** For Abelian groups (D2h and its subgroups) route the build
-  to the fused signed-operation path, which already runs S1's skeleton
-  scheme with no n_b⁴ memory; for non-Abelian groups (C3v, Td, D6h) the
-  dense-operation path needs a memory-direct skeleton build (accumulate
-  into G instead of materializing n_b⁴), already listed in Open Work. Gate:
-  energies against symmetry off on the five molecules above, and the
-  full-symmetry regression ladder.
-- **F3 — feed `build_skeleton_eri` from the block kernels.** The skeleton
-  loop calls the engine per component; give it the `BlockEriRequest`
-  interface so the closed forms and the HGP block kernel evaluate whole
-  shell quartets. Cuts the one-time (persisted) build several-fold.
-
 ### The fused-loop steps
 
 ```
- cheap, bitwise-gated                  kernels                         shared exponents (value-changing)         last
- 1 TLS scratch ──▶ 2 D1c ETR ──▶ 3 skeleton test ──▶ 4 C5 screened ──┬──▶ 5 D2a prototype ──▶ 6 D2b families ──┐
-                                                                      │                                        │
-                                                                      └────────────────────▶ 7 P2 ε screening ──┴──▶ 8 L>12
+ kernels                                         shared exponents (value-changing)         last
+ 2 D1c ETR ──▶ 3 skeleton test ──▶ 4 C5 screened ──┬──▶ 5 D2a prototype ──▶ 6 D2b families ──┐
+                                                    │                                        │
+                                                    └────────────────────▶ 7 P2 ε screening ──┴──▶ 8 L>12 ──▶ F3
  independent:  D3 RI-JK pair factors (BLAS doc B0).   deprioritised:  C4b.
 ```
 
 | step | needs | bitwise? |
 |---|---|---|
-| 1 TLS scratch | — | yes |
-| 2 D1c | 1 (same code) | no, ~1e-15 vs the current block kernel; flag-off fingerprints unchanged |
+| 2 D1c | — | no, ~1e-15 vs the current block kernel; flag-off fingerprints unchanged |
 | 3 skeleton test | — | yes |
 | 4 C5 | 2: screened scaling added once to both block kernels | screened kernels only |
 | 5 D2a | 2: a family kernel builds on the block kernel's recurrences | nothing lands |
 | 6 D2b | D2a | no (summation order) |
 | 7 P2 | after D2b, so its bound is written once per family and re-measured | no (~1e-12) |
 | 8 L > 12 | a fixture that has it | — |
+| F3 | worth it only if `threshold` is raised routinely | yes, per engine |
 | D3 | — (different code) | per the BLAS doc |
 
-Steps 1–4 keep the flag-off fingerprints; D2b and P2 each re-baseline
+Steps 2–4 keep the flag-off fingerprints; D2b and P2 each re-baseline
 everything once and land alone, so a fingerprint change has one cause.
-
-### 1 · Block-kernel scratch out of thread-local storage
-
-`HgpBlockKernel::prepare` reaches four `thread_local` vectors per call;
-g++'s emulated TLS on macOS makes each access a call to
-`__emutls_get_address` (2.5–4.7 % of d and f builds). The kernel object is
-already copied once per bra iteration, so the vectors can be members.
-Bitwise; gate on the fingerprints and the block sweep.
 
 ### 2 · D1c — the electron-transfer recurrence in the HGP block kernel
 
@@ -649,6 +671,16 @@ fixture had (cc-pVTZ (ff|ff)). Beyond that (g and higher shells) blocks take
 per-component HGP. Extend the range when a fixture needs it: the VRR table
 grows as Ne·Nf·(M+1), 3.7 MB for (gg|gg), so measure memory as well as time
 (D1c shrinks it).
+
+### F3 — feed `build_skeleton_eri` from the block kernels
+
+After F1 the full-group skeleton runs only where it is persisted (n_b ≤
+`threshold`), so F3 only shortens a one-time build: 0.017–0.054 s on the
+small regression molecules, 1.3–3.4 s near n_b = 100 (benzene,
+naphthalene at `threshold 200`, before F2). Give the skeleton loop the
+`BlockEriRequest` interface so the closed forms and the HGP block kernel
+evaluate whole shell quartets. Worth doing if people routinely raise
+`threshold`; otherwise last.
 
 ### Independent · D3 — RI-JK pair factors (B0 in `docs/ERI_FOCK_BLAS_SCOPE.md`)
 

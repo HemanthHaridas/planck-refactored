@@ -182,7 +182,7 @@ namespace HartreeFock::Integrals
     //
     // `block_kernel` (block_eri.h) evaluates a whole shell quartet at once for
     // the classes it accepts; every other block uses eri_elem per component.
-    // The default NoBlockKernel keeps an engine pure. A copy lives per bra.
+    // The default NoBlockKernel keeps an engine pure. A copy lives per thread.
     template <typename EriElem, typename BlockKernel = NoBlockKernel>
     void fused_fock_build(
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
@@ -350,6 +350,9 @@ namespace HartreeFock::Integrals
         std::vector<Eigen::MatrixXd> gb_partials(
             need_uhf ? static_cast<std::size_t>(n_threads) : 0,
             Eigen::MatrixXd::Zero(nb, nb));
+        // One block kernel per thread: it carries reusable scratch, so a copy per
+        // bra would reallocate it every iteration.
+        std::vector<BlockKernel> blocks(static_cast<std::size_t>(n_threads), block_kernel);
 
         // MPI: partition the bra shell-pair triangle across ranks; OpenMP splits
         // each rank's stripe within the node — the hybrid. Each canonical quartet
@@ -396,7 +399,7 @@ namespace HartreeFock::Integrals
 
             const FusedShellGroup &gA = groups[group_pairs[bra].a];
 
-            BlockKernel block = block_kernel;
+            BlockKernel &block = blocks[static_cast<std::size_t>(thread_id)];
             BlockEriRequest request;
             request.norm_ratio = norm_ratio.data();
             request.kernel = kernel;

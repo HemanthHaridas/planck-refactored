@@ -97,7 +97,8 @@ The screened scaling is applied inside `hgp_vrr`:
 - SCF Fock builds dispatch through `src/integrals/base.h`:
   `engine == HeadGordonPople` routes to the HGP entries.
 - Full-symmetry direct SCF dispatches through `src/scf/scf.cpp`
-  (`full_symmetry_fock_{rhf,uhf}` and `full_symmetry_build_skeleton`).
+  (`full_symmetry_build_skeleton`, persisted when `nbasis_cart ≤ threshold`;
+  above that, the fused direct build with signed-operation symmetry).
 - Analytic gradient dispatches through `compute_eri_deriv_dispatch`, now a
   public entry in `HartreeFock::Gradient` (`src/gradient/gradient.{h,cpp}`) —
   engine-agnostic for all kernels (Coulomb, LongRange, ShortRange).

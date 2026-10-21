@@ -63,94 +63,14 @@ namespace
                    : engine;
     }
 
-    // ── Full-symmetry direct Fock dispatch (SAO-blocked direct SCF) ───────────────
-    // Routes the RHF / UHF skeleton+symmetrization Fock to the requested engine
-    // (os_symm / rys_symm). See docs/FULL_SYMMETRY_ERI_DESIGN.md §8. The caller
-    // gates on calculator._use_full_symmetry && sao_active && direct; this helper
-    // then dispatches internally to the Cartesian or spherical full-symmetry path.
-    std::expected<Eigen::MatrixXd, std::string> full_symmetry_fock_rhf(
-        const std::vector<HartreeFock::ShellPair> &shell_pairs,
-        const HartreeFock::Calculator &calc,
-        const Eigen::MatrixXd &P, std::size_t nbasis, double tol_eri)
-    {
-        const auto engine = full_symmetry_engine(calc);
-        if (calc._shells._spherical)
-        {
-            // Spherical mode (Step 2): skeleton built over Cartesian quartets, the
-            // tensor transformed to spherical, contracted with the spherical density P,
-            // symmetrized with the spherical O_R. `nbasis` here is the spherical AO
-            // count; the engine needs the Cartesian count separately.
-            const std::size_t nbasis_cart = calc._shells.nbasis();
-            const Eigen::MatrixXd &C = calc._shells._cart_to_sph;
-            if (engine == HartreeFock::IntegralMethod::RysQuadrature)
-                return HartreeFock::RysQuad::_compute_2e_fock_symm_spherical(
-                    shell_pairs, calc._shells, P, nbasis_cart, C, calc._group_operations,
-                    HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
-            if (engine == HartreeFock::IntegralMethod::HeadGordonPople)
-                return HartreeFock::HeadGordonPople::_compute_2e_fock_symm_spherical(
-                    shell_pairs, calc._shells, P, nbasis_cart, C, calc._group_operations,
-                    HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
-            return HartreeFock::ObaraSaika::_compute_2e_fock_symm_spherical(
-                shell_pairs, calc._shells, P, nbasis_cart, C, calc._group_operations,
-                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
-        }
-        if (engine == HartreeFock::IntegralMethod::RysQuadrature)
-            return HartreeFock::RysQuad::_compute_2e_fock_symm(
-                shell_pairs, calc._shells, P, nbasis, calc._group_operations,
-                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
-        if (engine == HartreeFock::IntegralMethod::HeadGordonPople)
-            return HartreeFock::HeadGordonPople::_compute_2e_fock_symm(
-                shell_pairs, calc._shells, P, nbasis, calc._group_operations,
-                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
-        return HartreeFock::ObaraSaika::_compute_2e_fock_symm(
-            shell_pairs, calc._shells, P, nbasis, calc._group_operations,
-            HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
-    }
-
-    std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>
-    full_symmetry_fock_uhf(
-        const std::vector<HartreeFock::ShellPair> &shell_pairs,
-        const HartreeFock::Calculator &calc,
-        const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb,
-        std::size_t nbasis, double tol_eri)
-    {
-        const auto engine = full_symmetry_engine(calc);
-        if (calc._shells._spherical)
-        {
-            const std::size_t nbasis_cart = calc._shells.nbasis();
-            const Eigen::MatrixXd &C = calc._shells._cart_to_sph;
-            if (engine == HartreeFock::IntegralMethod::RysQuadrature)
-                return HartreeFock::RysQuad::_compute_2e_fock_uhf_symm_spherical(
-                    shell_pairs, calc._shells, Pa, Pb, nbasis_cart, C, calc._group_operations,
-                    HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
-            if (engine == HartreeFock::IntegralMethod::HeadGordonPople)
-                return HartreeFock::HeadGordonPople::_compute_2e_fock_uhf_symm_spherical(
-                    shell_pairs, calc._shells, Pa, Pb, nbasis_cart, C, calc._group_operations,
-                    HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
-            return HartreeFock::ObaraSaika::_compute_2e_fock_uhf_symm_spherical(
-                shell_pairs, calc._shells, Pa, Pb, nbasis_cart, C, calc._group_operations,
-                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
-        }
-        if (engine == HartreeFock::IntegralMethod::RysQuadrature)
-            return HartreeFock::RysQuad::_compute_2e_fock_uhf_symm(
-                shell_pairs, calc._shells, Pa, Pb, nbasis, calc._group_operations,
-                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
-        if (engine == HartreeFock::IntegralMethod::HeadGordonPople)
-            return HartreeFock::HeadGordonPople::_compute_2e_fock_uhf_symm(
-                shell_pairs, calc._shells, Pa, Pb, nbasis, calc._group_operations,
-                HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
-        return HartreeFock::ObaraSaika::_compute_2e_fock_uhf_symm(
-            shell_pairs, calc._shells, Pa, Pb, nbasis, calc._group_operations,
-            HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri);
-    }
-
     // ── C1: persisted-skeleton full-symmetry Fock (docs/FULL_SYMMETRY_PERF_SCOPE.md) ─
     // The skeleton ERI is density-independent, so it is built ONCE before the SCF loop
     // (full_symmetry_build_skeleton) and contracted each iteration against the current
-    // density (full_symmetry_contract_{rhf,uhf}). This is bit-identical to calling
-    // full_symmetry_fock_{rhf,uhf} every iteration (proven by planck-symm-fock-
-    // equivalence) — only WHEN the skeleton is built changes. The skeleton is always
+    // density (full_symmetry_contract_{rhf,uhf}). The skeleton is always
     // Cartesian-sized; in spherical mode the contraction does the cart→sph transform.
+    // F1: when it is too large to persist (nbasis_cart > _threshold) the SCF loops
+    // take the fused direct build with the signed-operation (D2h subgroup) symmetry
+    // instead of rebuilding the nb⁴ skeleton every iteration.
 
     // Returns the per-quartet count the skeleton will occupy: nbasis_cart⁴ doubles.
     std::size_t full_symmetry_skeleton_doubles(const HartreeFock::Calculator &calc)
@@ -180,7 +100,7 @@ namespace
     }
 
     // Contract a persisted skeleton with the current RHF density (Cartesian or
-    // spherical mode), matching full_symmetry_fock_rhf's dispatch.
+    // spherical mode).
     std::expected<Eigen::MatrixXd, std::string> full_symmetry_contract_rhf(
         const std::vector<double> &skeleton, const HartreeFock::Calculator &calc,
         const Eigen::MatrixXd &P, std::size_t nbasis)
@@ -607,7 +527,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
     // skeleton is nbasis_cart⁴ doubles, so persist only when the Cartesian basis size
     // is within the same cap the conventional path uses to decide an nb⁴ tensor fits
     // (`_threshold`). If not persisted, _symm_skeleton_eri stays empty and the loop
-    // falls back to the per-iteration full_symmetry_fock_rhf build (unchanged path).
+    // takes the fused direct build with the signed-operation symmetry instead (F1).
     calculator._symm_skeleton_eri.clear();
     if (!use_conventional && calculator._use_full_symmetry && sao_active &&
         calculator._shells.nbasis() <= static_cast<std::size_t>(calculator._scf._threshold))
@@ -665,15 +585,15 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
         {
             G = HartreeFock::ObaraSaika::_compute_fock_rhf(eri, P, nbasis);
         }
-        else if (calculator._use_full_symmetry && sao_active)
+        else if (calculator._use_full_symmetry && sao_active &&
+                 !calculator._symm_skeleton_eri.empty())
         {
             // Full point-group ERI reduction (supersedes the D2h sign-flip path:
             // full group ⊇ D2h, so the D2h ops are NOT also applied). Requires a
             // symmetry-adapted density (contravariant: O P O^T = P); the SAO basis
             // (built with the correct AO representation, Cartesian or spherical)
-            // produces one. Works in BOTH Cartesian and spherical mode —
-            // full_symmetry_fock_rhf dispatches to the spherical pipeline (skeleton →
-            // cart→sph transform → contract → spherical symmetrize) when
+            // produces one. Works in BOTH Cartesian and spherical mode — the
+            // contraction does the cart→sph transform and spherical symmetrize when
             // _shells._spherical (Step 2). The iteration-1 assertion fails loudly if
             // the contract is ever violated rather than corrupting the energy.
             if (iter == 1)
@@ -685,10 +605,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
                         "(max |O P O^T - P| = {:.3e}); SAO blocking should guarantee this",
                         dev));
             }
-            // C1: contract the persisted skeleton if built; else rebuild per-iteration.
-            auto G_res = calculator._symm_skeleton_eri.empty()
-                             ? full_symmetry_fock_rhf(shell_pairs, calculator, P, nbasis, tol_eri)
-                             : full_symmetry_contract_rhf(calculator._symm_skeleton_eri, calculator, P, nbasis);
+            // C1: contract the persisted skeleton (F1: unpersisted falls through below).
+            auto G_res = full_symmetry_contract_rhf(calculator._symm_skeleton_eri, calculator, P, nbasis);
             if (!G_res)
                 return std::unexpected(G_res.error());
             G = std::move(*G_res);
@@ -1298,7 +1216,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
     // ── C1: build the full-symmetry skeleton ONCE (docs/FULL_SYMMETRY_PERF_SCOPE.md) ─
     // Mirror of the RHF path: density-independent skeleton built before the loop and
     // contracted each iteration. Same memory gate (nbasis_cart ≤ _threshold). Empty
-    // ⇒ fall back to per-iteration full_symmetry_fock_uhf.
+    // ⇒ the fused direct build with signed-operation symmetry (F1).
     calculator._symm_skeleton_eri.clear();
     if (!use_conventional && calculator._use_full_symmetry && sao_active_uhf &&
         calculator._shells.nbasis() <= static_cast<std::size_t>(calculator._scf._threshold))
@@ -1351,7 +1269,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         {
             std::tie(Ga, Gb) = HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis);
         }
-        else if (calculator._use_full_symmetry && sao_active_uhf)
+        else if (calculator._use_full_symmetry && sao_active_uhf &&
+                 !calculator._symm_skeleton_eri.empty())
         {
             // Full point-group ERI reduction (supersedes the D2h sign-flip path).
             // Both spin densities must be symmetry-adapted (contravariant); SAO
@@ -1366,10 +1285,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
                         "(max |O P O^T - P| = {:.3e}); SAO blocking should guarantee this",
                         dev));
             }
-            // C1: contract the persisted skeleton if built; else rebuild per-iteration.
-            auto G_res = calculator._symm_skeleton_eri.empty()
-                             ? full_symmetry_fock_uhf(shell_pairs, calculator, Pa, Pb, nbasis, tol_eri)
-                             : full_symmetry_contract_uhf(calculator._symm_skeleton_eri, calculator, Pa, Pb, nbasis);
+            // C1: contract the persisted skeleton (F1: unpersisted falls through below).
+            auto G_res = full_symmetry_contract_uhf(calculator._symm_skeleton_eri, calculator, Pa, Pb, nbasis);
             if (!G_res)
                 return std::unexpected(G_res.error());
             std::tie(Ga, Gb) = std::move(*G_res);
@@ -2139,7 +2056,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
     // ROHF's two-electron build is the UHF (Ga, Gb) = f(Pa, Pb) path — all the Roothaan-
     // specific coupling happens downstream of the Fock build — so it reuses the same
     // density-independent skeleton: built before the loop, contracted each iteration.
-    // Same memory gate (nbasis_cart ≤ _threshold). Empty ⇒ per-iteration rebuild.
+    // Same memory gate (nbasis_cart ≤ _threshold). Empty ⇒ fused direct build (F1).
     calculator._symm_skeleton_eri.clear();
     if (!use_conventional && calculator._use_full_symmetry && sao_active &&
         calculator._shells.nbasis() <= static_cast<std::size_t>(calculator._scf._threshold))
@@ -2168,7 +2085,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
         {
             std::tie(Ga, Gb) = HartreeFock::ObaraSaika::_compute_fock_uhf(eri, Pa, Pb, nbasis);
         }
-        else if (calculator._use_full_symmetry && sao_active)
+        else if (calculator._use_full_symmetry && sao_active &&
+                 !calculator._symm_skeleton_eri.empty())
         {
             // Full point-group ERI reduction, reusing the UHF (Ga, Gb) machinery —
             // ROHF differs from UHF only AFTER the Fock build (the Roothaan effective
@@ -2186,10 +2104,8 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
                         "unless a degenerate open shell is partially occupied",
                         dev));
             }
-            // C1: contract the persisted skeleton if built; else rebuild per-iteration.
-            auto G_res = calculator._symm_skeleton_eri.empty()
-                             ? full_symmetry_fock_uhf(shell_pairs, calculator, Pa, Pb, nbasis, tol_eri)
-                             : full_symmetry_contract_uhf(calculator._symm_skeleton_eri, calculator, Pa, Pb, nbasis);
+            // C1: contract the persisted skeleton (F1: unpersisted falls through below).
+            auto G_res = full_symmetry_contract_uhf(calculator._symm_skeleton_eri, calculator, Pa, Pb, nbasis);
             if (!G_res)
                 return std::unexpected(G_res.error());
             std::tie(Ga, Gb) = std::move(*G_res);

@@ -118,7 +118,6 @@ namespace HartreeFock::Integrals
             const int Ne = n_upto(LAB), Nf = n_upto(LCD), Md = M + 1;
             const int e0 = n_upto(LA - 1), f0 = n_upto(LC - 1);
 
-            thread_local std::vector<double> V, acc, H, K;
             V.resize(static_cast<std::size_t>(Ne) * Nf * Md);
             acc.assign(static_cast<std::size_t>(Ne) * Nf, 0.0);
             const auto v = [&](int e, int f) { return &V[(static_cast<std::size_t>(e) * Nf + f) * Md]; };
@@ -264,6 +263,10 @@ namespace HartreeFock::Integrals
 
     private:
         const BlockEriRequest *req_ = nullptr;
+        // Scratch, reused across prepare() calls; one kernel copy per thread
+        // (fused_fock.h), so members rather than thread_local (emulated TLS on
+        // macOS g++ was 2.5-4.7 % of d/f builds).
+        std::vector<double> V, acc, H, K;
         std::size_t n_[4] = {};
         std::vector<double> out_;
     };

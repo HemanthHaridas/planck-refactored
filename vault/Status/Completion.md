@@ -397,6 +397,16 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **No per-iteration skeleton rebuild on the full point-group path (F1,
+  2026-10-21).** Above `threshold` the SAO-blocked direct SCF rebuilt its
+  n_b⁴ skeleton every iteration and was slower than no symmetry. It now
+  takes the fused direct build with the geometry's D2h-subgroup signed
+  operations (an SAO density is symmetric under any subgroup): benzene /
+  6-31G\* 17.7 -> 4.08 s, naphthalene / 6-31G 66.6 -> 6.35 s, energies
+  equal to the persisted full-group path; the ten full-symmetry inputs at
+  `threshold 1` match their default energies. Record:
+  `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
+
 - **`engine auto` uses HGP on the full point-group path (F2, 2026-10-20).**
   The `{os,hgp,rys}_symm.cpp` skeleton loops have no Auto mode, so the three
   dispatchers in `src/scf/scf.cpp` sent Auto to OS. `full_symmetry_engine`
