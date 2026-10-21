@@ -50,6 +50,19 @@ namespace
         return C * G_cart * C.transpose();
     }
 
+    // The full-symmetry loops ({os,hgp,rys}_symm.cpp) evaluate the skeleton one
+    // Cartesian component at a time and have no Auto mode of their own, so Auto
+    // resolves to HGP, the fastest per-component engine there (benzene / 6-31G*
+    // skeleton rebuild: HGP 1.31 s, OS 1.40 s, Rys 6.9 s). It used to fall
+    // through to OS.
+    HartreeFock::IntegralMethod full_symmetry_engine(const HartreeFock::Calculator &calc)
+    {
+        const auto engine = calc._integral._engine;
+        return engine == HartreeFock::IntegralMethod::Auto
+                   ? HartreeFock::IntegralMethod::HeadGordonPople
+                   : engine;
+    }
+
     // ── Full-symmetry direct Fock dispatch (SAO-blocked direct SCF) ───────────────
     // Routes the RHF / UHF skeleton+symmetrization Fock to the requested engine
     // (os_symm / rys_symm). See docs/FULL_SYMMETRY_ERI_DESIGN.md §8. The caller
@@ -60,7 +73,7 @@ namespace
         const HartreeFock::Calculator &calc,
         const Eigen::MatrixXd &P, std::size_t nbasis, double tol_eri)
     {
-        const auto engine = calc._integral._engine;
+        const auto engine = full_symmetry_engine(calc);
         if (calc._shells._spherical)
         {
             // Spherical mode (Step 2): skeleton built over Cartesian quartets, the
@@ -101,7 +114,7 @@ namespace
         const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb,
         std::size_t nbasis, double tol_eri)
     {
-        const auto engine = calc._integral._engine;
+        const auto engine = full_symmetry_engine(calc);
         if (calc._shells._spherical)
         {
             const std::size_t nbasis_cart = calc._shells.nbasis();
@@ -151,7 +164,7 @@ namespace
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const HartreeFock::Calculator &calc, double tol_eri)
     {
-        const auto engine = calc._integral._engine;
+        const auto engine = full_symmetry_engine(calc);
         const std::size_t nbasis_cart = calc._shells.nbasis();
         if (engine == HartreeFock::IntegralMethod::RysQuadrature)
             return HartreeFock::RysQuad::_build_skeleton_eri_symm(

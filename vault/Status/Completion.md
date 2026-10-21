@@ -397,6 +397,14 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **`engine auto` uses HGP on the full point-group path (F2, 2026-10-20).**
+  The `{os,hgp,rys}_symm.cpp` skeleton loops have no Auto mode, so the three
+  dispatchers in `src/scf/scf.cpp` sent Auto to OS. `full_symmetry_engine`
+  now resolves it to HGP, the faster per-component engine there: per rebuilt
+  skeleton, benzene/6-31G\* 1.40 -> 1.31 s, naphthalene/6-31G 3.93 -> 3.51 s
+  (Rys 6.9 s on benzene). Energies unchanged. Record:
+  `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
+
 - **`guess sad` works with full point-group symmetry (F4, 2026-10-20).** It
   used to abort on C3v/D6h with "initial density is not symmetry-adapted"
   (NH3/6-31G\* 8.0e-5, benzene 2.6e-3). The raw SAD density is invariant;

@@ -1943,9 +1943,11 @@ identify the path taken. Not required for correctness or performance.
     s/iter (66.6 s) vs 1.00 s/iter without symmetry; benzene / 6-31G\*
     1.47 vs 0.84 s/iter. Persisted (`threshold 200`) it is 7.3 s / 3.0 s.
     Follow-ups, in order: **F1** stop the per-iteration rebuild (fused S1
-    path for Abelian groups, memory-direct skeleton otherwise); **F2** route
-    Auto to HGP or the per-bucket table, not OS; **F3** feed the skeleton
-    build from the block kernels. **F4 landed (2026-10-20):** `guess sad`
+    path for Abelian groups, memory-direct skeleton otherwise); **F3** feed
+    the skeleton build from the block kernels. **F2 landed (2026-10-20):**
+    Auto resolves to HGP there instead of falling through to OS
+    (`full_symmetry_engine`), 1.07-1.12x per rebuilt skeleton. **F4 landed
+    (2026-10-20):** `guess sad`
     aborted on C3v/D6h because the SAD idempotent projection splits a
     degenerate set at the n_occ cutoff; the guess is now averaged over the
     group (contravariant law) when full symmetry is on. Gated by

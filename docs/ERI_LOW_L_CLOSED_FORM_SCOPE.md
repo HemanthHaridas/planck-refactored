@@ -6,8 +6,8 @@ momentum and with a block kernel above it, and what else in the build
 stands in the way?
 
 **Status: in flight.** Landed: C0, C1, C2–C3.5, H1, L1, L2, L3a–c, P1, S1,
-D1, F4. Measured: A0, D0, C4a, a post-D1 profile, and the full point-group
-path. Open, in order: the full point-group follow-ups F1–F3 (its default
+D1, F2, F4. Measured: A0, D0, C4a, a post-D1 profile, and the full point-group
+path. Open, in order: the full point-group follow-ups F1 and F3 (its default
 above nb = 100 is slower than no symmetry), block-kernel scratch out of
 thread-local storage, D1c (the electron-transfer recurrence), a per-block
 skeleton test, C5, D2a, D2b, P2, total L > 12; D3 is an independent track
@@ -225,8 +225,9 @@ Symmetric HF with SAO blocking and direct SCF does not use the fused loop.
 that calls the engine per Cartesian component and fills a dense
 n_b⁴ skeleton, contracted against the density every iteration. Of this
 work only P1 (in the `ShellPair` constructor) reaches it, and H1 only with
-`engine hgp`. The dispatch there checks for Rys and HGP and otherwise uses
-OS, so **`engine auto` builds the skeleton with per-component OS**. The
+`engine hgp`. The dispatch there checked for Rys and HGP and otherwise used
+OS, so **`engine auto` built the skeleton with per-component OS** (until F2,
+which the table below predates). The
 skeleton is persisted across iterations only when n_b ≤ `threshold`
 (default 100); above that, every iteration rebuilds it. Symmetric DFT and
 HF with PCM or a linear point group use the fused signed-operation path
@@ -278,10 +279,30 @@ energies identical on both paths (temporary timer, never committed):
 | S1 | `7ec71009` | per-orbit-element replication of every G write | 1.33× (D2h) | `check_skeleton_symmetry` |
 | fix | `fd51d29d` | H1's Boys buffer overflow on (ff\|ff) in HGP's hoisted block path | — | the f/g/h spherical gates |
 | D1 | — | the per-component primitive loop at total L 4–12 | 1.5× sp, 4.3–4.9× d, 12.9× f | 20 fingerprints; `check_hgp_block_kernel` |
-| F4 | — | `guess sad` aborting full point-group SCF on C3v/D6h | — (correctness) | `nh3_c3v_fullsym_631gd_sad_direct` |
+| F2 | — | `engine auto` falling through to per-component OS on the full point-group path | 1.07× benzene/6-31G\*, 1.12× naphthalene/6-31G per rebuilt skeleton | energies unchanged; full-symmetry and OS-vs-HGP cases |
+| F4 | `d0224110` | `guess sad` aborting full point-group SCF on C3v/D6h | — (correctness) | `nh3_c3v_fullsym_631gd_sad_direct` |
 
 Suites: smoke 43/45 and extended 132/136 after D1; the failures are the
 known rccsdt routing cases.
+
+### F2 — Auto resolves to HGP on the full point-group path
+
+The `{os,hgp,rys}_symm.cpp` skeleton loops evaluate one Cartesian component
+at a time and have no Auto mode, so the three dispatchers in `src/scf/scf.cpp`
+(RHF Fock, UHF Fock, persisted skeleton) sent `engine auto` to OS. One helper,
+`full_symmetry_engine`, now resolves Auto to HGP for all three. Measured with
+the skeleton rebuilt every iteration (default `threshold`), one thread, per
+iteration:
+
+| molecule | OS | HGP | Rys |
+|---|---|---|---|
+| benzene / 6-31G\* (D6h) | 1.40 s | 1.31 s | 6.9 s |
+| naphthalene / 6-31G (D2h) | 3.76–4.15 s | 3.30–3.60 s | — |
+
+HGP wins on both the d-shell and the sp-only basis, so the per-bucket table
+was not needed. Energies are unchanged to the printed digits. This is the
+small half: the per-iteration rebuild (F1) and per-component evaluation (F3)
+remain the large ones.
 
 ### F4 — a symmetric SAD guess for the full point-group path
 
@@ -488,7 +509,7 @@ never merged: 1.47–1.83× instead of 4.8–5.1×, which nearly retired D2.
 
 ## Open, in order
 
-### Full point-group follow-ups (F1–F3), ahead of everything below
+### Full point-group follow-ups (F1, F3), ahead of everything below
 
 - **F1 — stop rebuilding the skeleton every iteration above the persist
   threshold.** For Abelian groups (D2h and its subgroups) route the build
@@ -498,10 +519,6 @@ never merged: 1.47–1.83× instead of 4.8–5.1×, which nearly retired D2.
   into G instead of materializing n_b⁴), already listed in Open Work. Gate:
   energies against symmetry off on the five molecules above, and the
   full-symmetry regression ladder.
-- **F2 — fix the Auto fall-through.** `full_symmetry_build_skeleton` sends
-  `engine auto` to OS. Route it to HGP (fastest on this path in the
-  teaching guide's §12) or to the per-bucket table. One line; values move
-  at ~1e-15.
 - **F3 — feed `build_skeleton_eri` from the block kernels.** The skeleton
   loop calls the engine per component; give it the `BlockEriRequest`
   interface so the closed forms and the HGP block kernel evaluate whole
