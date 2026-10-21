@@ -750,19 +750,98 @@ ratio, not a build time. Every member value within 7.2e-16 of production.
 - **Guess was 1.3–1.6× on 6-31G, 1.5–2× on cc-pVDZ.** cc landed in range;
   6-31G did not, pending the overhead above.
 
-### 5b · Open question: a class-batched shell-quartet scheduler
+### 5b · A class-batched shell-quartet scheduler (scoped, 2026-10-21)
 
-D2a (sharing primitive passes, ~1.7× on cc), step 2b (lanes across
-primitive quartets, 1.13–1.32×) and the per-block HRR and readout (0.7–1.5
-µs per block) all work inside one shell quartet at a time, in Schwarz and
-canonical order. An integral scheduler in the style of ORCA's SHARK
-batches same-class work across shell quartets instead: lanes would fill
-regardless of K (cc-pVTZ's K = 1 blocks are 23 % of its HGP kernel time),
-HRR becomes array work, and general contraction is native. Question to
-answer before D2b: does a class-batched scheduler subsume D2b, 2b and the
-per-block HRR, and what does it do to the skeleton/symmetry paths, the MPI
-bra striping and the fixed-partition thread-determinism rule? If it does,
-D2b as a block kernel in the current loop is the wrong shape.
+**Question.** Should the fused build stop evaluating one shell quartet at a
+time in loop order, and instead collect the blocks that survive the
+block-level filters, group them by class, and evaluate each class in
+batches (the shape of ORCA's SHARK)? Does that subsume D2b (families),
+step 2b (lanes) and the per-block HRR, and what does it do to symmetry, MPI
+and determinism?
+
+**What the loop does today** (`fused_fock_build`). OpenMP `schedule(static)`
+and the MPI stripe both run over bra group pairs. For each bra, ket group
+pairs from `first_pair_of[bra.a]` (L1) pass block Schwarz and, with
+symmetry, the L3c group-map test. Then the four component loops apply the
+canonical filter, component Schwarz and the orbit test (replication or
+S1 skeleton weight). The block kernel is prepared lazily at the first
+surviving component, and each value is accumulated at once into
+per-thread partials keyed by `omp_get_thread_num()`. Every improvement so
+far works inside one block.
+
+**What batching across blocks would buy, from what is measured:**
+
+| lever | measured inside one block | what batching across blocks adds |
+|---|---|---|
+| shared primitive passes (D2a) | ~1.7× on cc kernels, ~1.0× Pople (probe overhead) | the same, with the family quartet as the batch unit |
+| SIMD lanes (2b) | 1.13–1.32× of the build | also fills blocks with K < 3: 8–23 % of HGP kernel time today |
+| per-block HRR and readout | 10–16 % of the HGP kernel | at most that share; small |
+| closed forms (sp builds) | ~10 ns per primitive quartet, about half Boys | little, unless Boys is vectorized (out-of-tree core) |
+
+Kernels are ~73–80 % of cc builds and ~65–90 % of sp builds. Guess, not
+measured: 1.6–2.0× of the build on cc bases, 1.2–1.4× on Pople. The
+uncertainty is whether families and lanes multiply (families remove
+primitive quartets that lanes would otherwise have filled).
+
+**Constraints the design must keep:**
+
+1. **Each canonical quartet exactly once** (the unweighted 8-fold
+   accumulation depends on it). Enumeration emits the same blocks the loop
+   visits today (L1, block Schwarz, L3c); component filters (canonical,
+   component Schwarz, orbit test or skeleton weight) move to the digestion
+   step, unchanged.
+2. **A fixed partition of work into accumulators.** Today's per-thread
+   partials make the build reproducible at a given thread count but not
+   across counts (Out of scope, below). Batches must accumulate into
+   partials keyed by a fixed function of the chunk index and be merged in
+   fixed order, the FCI sigma-build rule. This would also fix the known
+   defect. Memory is n_bins × nb²: 64 bins × 2 MB at nb = 500.
+3. **MPI.** Keep the stripe on bra group pairs before batching, so each
+   rank still owns a disjoint set of canonical quartets and only nb² is
+   reduced.
+4. **Bounded memory.** Batch outputs are up to n_comp⁴ values per block
+   (10⁴ for (ff|ff)). Work in chunks of bra group pairs: enumerate, bucket,
+   evaluate, digest, then drop the chunk. The chunk size trades batch fill
+   against memory, and S0 measures that trade.
+5. **Explicit engines stay pure.** The cross-engine comparators rely on
+   `NoBlockKernel`, so the scheduler is for Auto only, as the block kernels
+   are.
+6. **Screened kernels (C5)** become one more batch-kernel variant, not a
+   separate path.
+
+**Steps, prototype first; nothing lands before S3:**
+
+- **S0 — census.** Per chunk size (1, 8, 64 bra pairs, whole build): blocks
+  per class, how full B = 4 lanes would be if primitive quartets of
+  same-class blocks were pooled, and the cost of enumerating and bucketing.
+  Decides the chunk size, or kills the idea if chunks small enough to bound
+  memory cannot fill lanes.
+- **S1 — lanes across blocks** for the HGP class in the probe: pool the
+  primitive quartets of a batch of same-class blocks into B = 4 lanes, with
+  each lane writing to its own block's accumulator. Compare with step 2b on
+  cc-pVTZ, where K = 1 blocks are 23 % of HGP kernel time. Predicts most of
+  that 23 % comes back.
+- **S2 — families in batches.** D2a's family pass with lanes; measures
+  whether the two multiply. Includes a production-quality closed-form
+  family pass, to settle the Pople question D2a left open.
+- **S3 — the scheduler in `fused_fock_build`** (Auto only), chunked as
+  above, with fixed-partition accumulators. Gates:
+  - re-baselined fingerprints;
+  - max|ΔG| ≤ 1e-13 against today's build on all probe fixtures;
+  - **G bitwise identical at 1/2/4/8 threads** (new; today's build does
+    not meet it);
+  - MPI 1/2/4 ranks against serial;
+  - `check_skeleton_symmetry` and `check_real_symmetry_ops`;
+  - smoke and extended suites.
+
+  Not bitwise against today's build, so it lands alone.
+- **S4 — retire** D2b-as-block-kernel and step 2b if S3 subsumes them;
+  step 3 (per-block skeleton test) becomes an enumeration-time filter.
+
+**Decisions to make, not discover:** the accumulator partition (bins by
+chunk index; their count fixed, never the thread count); Auto-only scope;
+and whether the full point-group path (F3) is filled from the same batches
+later or stays separate.
 
 ### 6 · D2b — shared-exponent families in the fused loop
 
