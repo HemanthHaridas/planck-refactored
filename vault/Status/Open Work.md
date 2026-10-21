@@ -1935,8 +1935,11 @@ identify the path taken. Not required for correctness or performance.
     sweep <= 1.1e-14 (prototype kept uncommitted). D2a shared-exponent
     families: ~1.7x on the kernels for cc bases (est. 1.4-1.5x of the
     build), not yet a win on Pople (probe overhead). Both work inside one
-    shell quartet; question 5b (a SHARK-style class-batched scheduler)
-    now precedes D2b.
+    shell quartet. 5b (a SHARK-style class-batched scheduler) was
+    declined after its S0 census: within-block lanes already carry
+    94-99.8 % of primitive quartets, so pooling across blocks buys at
+    most ~1.15x on the lane work. Next: D2b (fused loop grouped by family
+    pair), then 2b; the fixed accumulator partition is independent.
   - **Open, in order:** a per-block skeleton test, C5 (screened kernels in both block
     kernels; range-separated hybrids still take per-component HGP), D2a/D2b
     (shared-exponent families), P2 (ε screening, a policy decision), then
