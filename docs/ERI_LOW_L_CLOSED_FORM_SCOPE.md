@@ -580,8 +580,13 @@ Steps:
     `schedule(static)`); per family quartet it balances better than
     today's per-bra units.
   - Gates: `planck-fock-accumulate`, `planck-hgp-engine-smoke`, smoke 43/45
-    (known rccsdt). **MPI untested**: neither build tree enables it; needed
-    before landing.
+    (known rccsdt), and MPI: `planck-mpi` (`-DBUILD_MPI=ON` in `build-full`,
+    Homebrew Open MPI) at 1/2/4 ranks, one thread each, against the serial
+    binaries, Auto direct SCF. RHF 4 H2O / cc-pVDZ (−304.0946975211),
+    RHF naphthalene / 6-31G with D2h skeleton (−383.2197459693) and UHF
+    H2O⁺ / 6-31G\* (−75.6121793874) identical to every printed digit;
+    B3LYP H2O / 6-31G\* within 9e-14 Eh (reduction order). Wall time
+    9.3 → 6.1 → 5.1 s and 6.3 → 3.7 → 2.9 s on the two larger cases.
 - **B2 — family passes in the loop.** Gates: a family sweep in
   `planck-hgp-engine-smoke` (every member value of every family quartet
   against per-component HGP on water 6-31G, 6-31G\*, cc-pVDZ, cc-pVTZ,
