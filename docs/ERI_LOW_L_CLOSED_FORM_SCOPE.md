@@ -6,12 +6,14 @@ momentum and with a block kernel above it, and what else in the build
 stands in the way?
 
 **Status: in flight.** Landed: C0, C1, C2–C3.5, H1, L1, L2, L3a–c, P1, S1,
-D1, F1, F2, F4, T1, 2b (lanes across primitive quartets). Measured and declined: D1c (electron-transfer
-recurrence), 5b (a class-batched scheduler). Measured, not landed: D2a
-(shared-exponent families; B0 done). Open, in order: D2b, the fixed
-accumulator partition, a per-block skeleton test, C5, P2, total L > 12, F3;
-D3 is independent and C4b deprioritised. When those land or are abandoned,
-rewrite this as an answer.
+D1, F1, F2, F4, T1, 2b. Measured and declined: D1c (electron-transfer
+recurrence), 5b (a class-batched scheduler). Measured, not landed: D2a/B0
+(shared-exponent families), B1 (the fused loop in family-quartet order, in
+the working tree), the K1 census (dense digestion per block). Open, in
+order: K1 in the loop, B2 (families) on top of it, the fixed accumulator
+partition, a per-block skeleton test, C5, P2, total L > 12, F3; D3 is
+independent, C4b deprioritised, K2 conditional. When those land or are
+abandoned, rewrite this as an answer.
 
 ## Answer so far
 
@@ -56,11 +58,17 @@ D1 ~1.5× (1.454 → 0.855 → 0.702 → 0.597 → 0.454 → 0.295 s).
   an earlier contract-once hoist that measured 1.14–1.62× *slower*; the
   difference is indexing Cartesian functions by total L instead of a
   per-axis cube.
-- **What is left is per-primitive-quartet overhead.** A primitive quartet
-  writes only 180–300 ket elements into a 5–7.5 KB table, at ~6 cycles per
-  element. A cheaper recurrence (D1c) or a better layout does not help;
-  fewer primitive passes (families, ~1.7× on cc kernels) and several
-  primitive quartets per pass (lanes, 1.13–1.32× of the build) do.
+- **Inside the kernels, what is left is per-primitive-quartet overhead.** A
+  primitive quartet writes only 180–300 ket elements into a 5–7.5 KB table,
+  at ~6 cycles per element. A cheaper recurrence (D1c) or a better layout
+  does not help; several primitive quartets per pass (lanes, landed,
+  1.05–1.38×) and fewer primitive passes (families, ~1.7× on cc kernels)
+  do.
+- **Outside the kernels, the cost is digesting one component at a time.**
+  Every value is read out, filtered and scattered into G alone; digesting
+  each block densely instead measured 1.11–1.26× of the build (K1 census),
+  with the per-component path 1.8–2.6× the dense one. This, not lane fill,
+  is why batching blocks (5b) had nothing to buy.
 
 ## How the build works now
 
@@ -101,6 +109,9 @@ one total-L class at a time, the symmetric build with and without
 - `--profile N [nwater basis]`: N production builds, for `sample`.
 - `--family nwater basis [within]`: the D2a family probe.
 - `--census nwater basis`: the 5b S0 lane-fill census.
+- `--b1 nwater basis`: the fused loop in family-quartet order against
+  today's order (needs the B1 working-tree change).
+- `--k1 nwater basis`: dense per-block digestion against today's.
 
 Rules learned the hard way:
 - **Timings are bimodal under load** (P/E-core scheduling; one binary
@@ -284,131 +295,50 @@ rccsdt routing cases. Details worth keeping:
 - **F4.** The raw SAD density is group-invariant; the idempotent projection
   splits a degenerate set at the n_occ cutoff. With full symmetry the guess
   is group-averaged, `P ← (1/|G|) Σ_R O_R P O_Rᵀ`.
+- **2b.** `hgp_block::vrr_lanes<B>` runs the block kernel's VRR for B
+  primitive quartets at once, lane-minor (`[e][f][m][lane]`), every
+  innermost loop of compile-time length B. It takes primitive-pair pointers
+  only; the caller contracts with its own weights, so a family pass can
+  reuse it. `HgpBlockKernel` uses B = 4 in blocks with K ≥ 3, padding lanes
+  at weight 0; smaller blocks keep the scalar loop. Against the scalar
+  kernel, one thread: cc-pVTZ 0.127 → 0.092 s, 6-31G\* 0.100 → 0.081 s,
+  cc-pVDZ 0.548 → 0.453 s, naphthalene 0.294 → 0.274 s, 8 H2O / 6-31G
+  0.136 → 0.129 s. B = 2 sits between, B = 8 is slower than 4, and a K = 3
+  block is cheaper padded to 4 than run scalar. Gates: the block sweep
+  ≤ 1.1e-14 on four bases; dropping the laned W−Q term, weighting padding
+  lanes or contracting lane 0 only each fail by 0.13–5.4; max|ΔG| against
+  per-component HGP ≤ 1.7e-14; the 28 fingerprints (explicit-engine and
+  closed-form builds) unchanged.
 
 ## Measured, not landed
 
 ### D1c — the electron-transfer recurrence (declined)
 
-Head-Gordon and Pople's ETR at m = 0 after a one-centre VRR out to
-|e| ≤ M,
+Head-Gordon and Pople's ETR at m = 0 after a one-centre VRR out to |e| ≤ M,
 $[e|f{+}1_j] = \bigl(\tfrac{\zeta}{\eta}PA_j + QC_j\bigr)[e|f]
 + \tfrac{f_j}{2\eta}[e|f{-}1_j] + \tfrac{e_j}{2\eta}[e{-}1_j|f]
 - \tfrac{\zeta}{\eta}[e{+}1_j|f]$
 (the textbook $-(\beta X_{AB}+\delta X_{CD})/\eta$ written with $P-A$, $Q-C$).
 
-- **Precision.** A fixed bra→ket direction was off by 2.8e-9 on cc-pVTZ.
-  Transferring per primitive quartet toward the larger exponent sum gave
-  2.4e-13 (27× the VRR); G moved by up to 9.4e-13. VRR for ratios in
-  (0.25, 1] restores the VRR's error exactly.
-- **Speed.** 1.18× / 1.06× / 1.09× (cc-pVTZ / 4 H2O cc-pVDZ / 4 H2O 6-31G\*);
-  1.06× / 1.04× / 1.04× at VRR precision. An operation-count model
-  predicted 1.1–2.3× less recurrence work. The ket phase fell 2.0–2.1×, but
-  the bra VRR to |e| ≤ M grew 3.3–3.5× (cc-pVTZ: ket 55.6 → 26.1 ms, bra
-  4.0 → 14.0 ms, contraction 4.5 → 7.3 ms per build).
-- **Row layout, also reverted:** V as [f][m][e] with every term unit-stride
-  through precomputed contiguous runs was bitwise on all 28 fingerprints
-  and time-neutral on four fixtures. That and the counters above showed
-  the cost is per primitive quartet, not arithmetic.
-
-### 2b — lanes across primitive quartets (landed)
-
-`hgp_block::vrr_lanes<B>` runs the block kernel's VRR for B primitive
-quartets at once, lane-minor (`[e][f][m][lane]`), per-lane coefficients,
-every innermost loop of compile-time length B. It takes the primitive-pair
-pointers only; the caller contracts with its own weights, so D2b's family
-pass reuses it. `HgpBlockKernel` uses it with B = 4 in blocks with K ≥ 3,
-padding lanes repeating a valid quartet at weight 0, lanes summed before
-accumulating; smaller blocks keep the scalar loop. Not bitwise (the
-contraction sums lanes first). Landed against the scalar kernel,
-interleaved, best of three, one thread: 1 H2O / cc-pVTZ 0.127 → 0.092 s
-(1.38×), 4 H2O / 6-31G\* 0.100 → 0.081 s (1.23×), 4 H2O / cc-pVDZ 0.548 →
-0.453 s (1.21×), naphthalene / 6-31G 0.294 → 0.274 s (1.07×), 8 H2O / 6-31G
-0.136 → 0.129 s (1.05×). Gates: the block sweep at ≤ 1.1e-14 on all four
-bases; mutations (dropping the W−Q term in the laned ket recurrence, giving
-padding lanes their weight, contracting lane 0 only) each fail by 0.13–5.4;
-max|ΔG| against per-component HGP ≤ 1.7e-14; smoke 43/45 (the known rccsdt
-cases). The 28 fingerprints cover explicit-engine and closed-form builds
-and are unchanged. The prototype's measurements, for the choice of B and
-the K threshold:
-
-| fixture | HGP kernel, scalar → B = 4 | build, scalar → B = 4 | build, B = 4 with scalar for K < 4 |
-|---|---|---|---|
-| 1 H2O / cc-pVTZ | 77 → 52 ms (1.49×) | 0.128 → 0.103 s (1.25×) | **0.097 s (1.32×)** |
-| 4 H2O / cc-pVDZ | 170 → 87 ms (1.96×) | 0.556 → 0.472 s (1.18×) | **0.471 s (1.19×)** |
-| 4 H2O / 6-31G\* | 39 → 25 ms (1.56×) | 0.103 → 0.089 s (1.16×) | 0.091 s (1.13×) |
-| 8 H2O / 6-31G | 6.8 → 3.1 ms (2.2×) | 0.145 → 0.142 s (1.02×) | — |
-
-B = 2 sits between; B = 8 is slower than 4. K ≥ 3 because K = 3 blocks
-are better padded to 4 than run scalar.
-
-### D2a — shared-exponent families
-
-`--family`: per atom, a shell joins the largest shell whose exponent set
-contains its own. A family quartet runs one primitive pass over the union of
-its members' primitive pairs (keyed by the two exponents), and member
-quartets split by **their own** total L:
-
-- **L ≤ 3:** T, the coefficient-free prefactor and Boys once per primitive
-  quartet; the raises once per distinct (L_A, L_B, L_C, L_D) layout (the
-  outputs are linear in θ_m); each member adds w_k·w_l times them.
-- **L ≥ 4:** one HGP VRR pass at the high members' maximum L (L-major
-  indices and m = 0 values do not depend on L_A+L_B or M), then each
-  member's own `finish()`.
-
-Kernel time against the production kernels on the same member blocks (no
-Schwarz or canonical filtering on either side), all values within 7.2e-16:
-
-| fixture | L ≤ 3 (passes fewer) | L ≥ 4 (passes fewer) | kernel total |
-|---|---|---|---|
-| 1 H2O / cc-pVTZ | 1.69× (5.9×) | 1.70× (2.6×) | **1.70×** |
-| 4 H2O / cc-pVDZ | 1.66× (5.9×) | 1.69× (2.4×) | **1.67×** |
-| naphthalene / 6-31G | 1.16× (3.6×) | 1.05× (1.0×) | 1.15× |
-| 4 H2O / 6-31G\* | 0.95× (2.2×) | 1.21× (1.3×) | 1.08× |
-| 4 H2O / 6-31G | 0.93× (2.3×) | 1.49× (1.0×) | 0.97× |
-
-- **cc bases: ~1.7× on kernels that are 73–80 % of the build**, an
-  estimated 1.4–1.5× of the Fock build.
-- **Pople is understated.** With nothing merged (`within` on Pople) the
-  probe's closed-form family pass runs at 0.59–0.68× of production: it
-  carries 1.5–1.7× overhead of its own (layout lookup, raises then a
-  weighted add, `boys_vec` where production's (ss|ss) uses `boys(0, T)`).
-- **Guess was 1.3–1.6× on 6-31G, 1.5–2× on cc-pVDZ.** cc landed in range.
-
-**B0 — the closed-form family pass made production-quality (probe, 2026-10-21).**
-Raises templated on their count, layouts per family quartet without
-allocation (buffers reused across quartets), scalar `boys(0, T)` when every
-member is (ss|ss), a single-member layout folding its weight into θ.
-Members at L ≤ 3, merged across L:
-
-| fixture | D2a probe | B0 |
-|---|---|---|
-| 1 H2O / cc-pVTZ | 1.69× | **1.54–1.78×** |
-| 4 H2O / cc-pVDZ | 1.66× | **1.54×** |
-| naphthalene / 6-31G | 1.16× | **1.22–1.34×** |
-| 4 H2O / 6-31G\* | 0.95× | **1.11–1.13×** |
-| 4 H2O / 6-31G | 0.93× | **1.04–1.15×** |
-
-- **Decision: Pople merges across L.** It wins on every Pople fixture now.
-  At 1:1 (`within`) the pass still runs at 0.74–0.81× of production, so
-  ~20 % per-quartet overhead remains; families built once per Fock build
-  rather than per probe quartet should take part of it.
-- **Iteration order matters more than the fixes.** Walking each layout's
-  member list cost 1.25× on cc-pVDZ and 1.65× on cc-pVTZ against looping
-  over bra members first and skipping a member's whole row when its weight
-  at the primitive pair is zero: cc's small members (the uncontracted 3s)
-  contribute at one exponent of nine. Removing per-quartet allocation, by
-  contrast, was worth ~10–20 % on Pople. Scalar Boys and weight folding were
-  each within noise.
-- Kernel totals with B0: 1 H2O / cc-pVTZ **1.74×**, 4 H2O / 6-31G\* 1.18×.
+- **Precision.** A fixed bra→ket direction was off by 2.8e-9 on cc-pVTZ;
+  transferring per primitive quartet toward the larger exponent sum gave
+  2.4e-13 (27× the VRR), G up to 9.4e-13. The VRR for ratios in (0.25, 1]
+  restores the VRR's error exactly.
+- **Speed.** 1.18× / 1.06× / 1.09× (cc-pVTZ / 4 H2O cc-pVDZ / 4 H2O
+  6-31G\*), 1.06× / 1.04× / 1.04× at VRR precision, against a predicted
+  1.1–2.3× less recurrence work: the ket phase fell 2.0–2.1×, the bra VRR to
+  |e| ≤ M grew 3.3–3.5× (cc-pVTZ: ket 55.6 → 26.1 ms, bra 4.0 → 14.0 ms).
+- **A row layout** (V as [f][m][e], every term unit-stride through
+  precomputed runs) was bitwise on 28 fingerprints and time-neutral: the
+  cost is per primitive quartet, not arithmetic. Both reverted.
 
 ### 5b — a class-batched scheduler (declined after S0)
 
-The question: collect the blocks that pass the block filters, group them by
-class, and evaluate classes in batches across blocks (the shape of ORCA's
-SHARK). `--census` replays the fused loop's enumeration, weighted by
-primitive quartets:
+Collect the blocks that pass the block filters, group them by class, and
+evaluate classes in batches across blocks (the shape of ORCA's SHARK).
+`--census`, weighted by primitive quartets:
 
-| fixture | HGP-class quartets already in within-block lanes | padding within-block | padding pooled per bra pair |
+| fixture | HGP-class quartets already in within-block lanes | padding within-block | pooled per bra pair |
 |---|---|---|---|
 | 1 H2O / cc-pVTZ | 93.9 % | 13.4 % | 2.7 % |
 | 4 H2O / cc-pVDZ | 96.5 % | 4.6 % | 0.8 % |
@@ -416,15 +346,126 @@ primitive quartets:
 | 8 H2O / 6-31G | 98.8 % | 12.4 % | 0.5 % |
 | naphthalene / 6-31G | 99.5 % | 9.4 % | 0.1 % |
 
-Closed-form classes: 99.5–99.8 % already in within-block lanes. Enumerating
-with a survival check cost 2–12 % of the build, and 1.5–14.6 % of the
-primitive quartets in blocks passing the block filters belong to blocks with
-no surviving component. Pooling across blocks would buy at most ~1.15× on
-the lane work (≤ ~8 % of the cc-pVTZ build), and cc-pVTZ's K = 1 blocks
-(23 % of kernel time, ~6 % of its primitive quartets) cost per block, which
-pooling does not touch. The family win needs only member quartets evaluated
-together; the fixed accumulator partition is independent. Both stay open on
-their own.
+Closed-form classes: 99.5–99.8 % already in lanes. Pooling would buy at most
+~1.15× on the lane work; enumerating with a survival check cost 2–12 % of
+the build. cc-pVTZ's K = 1 blocks are 23 % of HGP kernel time but ~6 % of
+its primitive quartets: their cost is per block, which batching does not
+touch while each block is still read out and digested component by
+component. K1 measures that contract directly.
+
+### D2a and B0 — shared-exponent families
+
+`--family`: per atom, a shell joins the largest shell whose exponent set
+contains its own (cc general contractions within L, Pople SP across L). A
+family quartet runs one primitive pass over the union of its members'
+primitive pairs, keyed by the two exponents, and members split by **their
+own** total L:
+
+- **L ≤ 3:** T, the coefficient-free prefactor and Boys once per primitive
+  quartet; the raises once per distinct (L_A, L_B, L_C, L_D) layout (linear
+  in θ_m); each member adds w_k·w_l times them. B0 made this
+  production-quality: raises templated on their count, no per-quartet
+  allocation, bra members looped first with zero-weight rows skipped.
+- **L ≥ 4:** one HGP VRR pass at the high members' maximum L (L-major
+  indices and m = 0 values do not depend on L_A+L_B or M), then each
+  member's own `finish()`.
+
+Kernel time against the production kernels on the same member blocks (no
+Schwarz or canonical filtering on either side), values within 7.2e-16:
+
+| fixture | L ≤ 3, D2a → B0 (passes fewer) | L ≥ 4 (passes fewer) | kernel total (B0) |
+|---|---|---|---|
+| 1 H2O / cc-pVTZ | 1.69× → **1.54–1.78×** (5.9×) | 1.70× (2.6×) | **1.74×** |
+| 4 H2O / cc-pVDZ | 1.66× → **1.54×** (5.9×) | 1.69× (2.4×) | — |
+| naphthalene / 6-31G | 1.16× → **1.22–1.34×** (3.6×) | 1.05× | — |
+| 4 H2O / 6-31G\* | 0.95× → **1.11–1.13×** (2.2×) | 1.21× (1.3×) | 1.18× |
+| 4 H2O / 6-31G | 0.93× → **1.04–1.15×** (2.3×) | 1.49× | — |
+
+- **Pople merges across L**: it wins on every Pople fixture with B0. With
+  nothing merged the pass still runs at 0.74–0.81× of production, so ~20 %
+  per-quartet overhead remains.
+- **The L ≥ 4 numbers predate 2b** and are against the scalar kernel; the
+  family pass must call `vrr_lanes` over the union primitive quartets to
+  keep both gains.
+- **Iteration order decided B0**: walking each layout's member list cost
+  1.25× (cc-pVDZ) and 1.65× (cc-pVTZ) against bra-members-first with
+  zero-weight rows skipped (cc's small members contribute at one exponent
+  of nine). Removing allocation was worth 10–20 % on Pople; scalar Boys and
+  weight folding were within noise.
+- cc kernels are 73–80 % of those builds: an estimated 1.4–1.5× of the
+  Fock build.
+
+### B1 — the fused loop in family-quartet order (working tree)
+
+`fused_fock_build` takes the ket iteration as a parameter of its bra body.
+With a block kernel (Auto) and `family_order` (default true) it runs one
+unit per family quartet (P, Q), P ≤ Q: bra x ∈ P with kets y ∈ Q where
+y.a ≥ x.a, and for P < Q also bra y ∈ Q with kets x ∈ P where x.a ≥ y.a.
+That is exactly today's set of ordered block pairs (ket.a ≥ bra.a), each
+through the same per-block body; explicit engines keep today's order.
+Families come from `fused_families` once per build; the MPI stripe moved to
+the unit index; the orbit buffer is per thread.
+
+- **Exactly once:** accumulation counts identical on five fixtures with and
+  without symmetry; max|ΔG| ≤ 4.7e-14 against today's order.
+- **Cost of the order alone** (best of five, interleaved):
+
+  | fixture | 1 thread | 4 threads |
+  |---|---|---|
+  | 4 H2O / cc-pVDZ | −1.6 % | −22 % |
+  | 1 H2O / cc-pVTZ | −1.7 % | +2.6 % |
+  | 4 H2O / 6-31G\* | +4.6 % | −8.5 % |
+  | naphthalene / 6-31G | +5.6 % | +0.7 % |
+  | 4 H2O / 6-31G | +7.6 % | +1.3 % |
+
+  One unit per family *pair* was +76 % at 4 threads on cc-pVTZ (13
+  families, 91 uneven units under `schedule(static)`).
+- **Gates:** `planck-fock-accumulate`, `planck-hgp-engine-smoke`, smoke
+  43/45 (known rccsdt), and MPI: `planck-mpi` (`-DBUILD_MPI=ON`,
+  `build-full`, Homebrew Open MPI) at 1/2/4 ranks against the serial
+  binaries, Auto direct SCF: RHF 4 H2O / cc-pVDZ, RHF naphthalene / 6-31G
+  (D2h skeleton) and UHF H2O⁺ / 6-31G\* identical to every printed digit;
+  B3LYP H2O / 6-31G\* within 9e-14 Eh. Wall 9.3 → 6.1 → 5.1 s and 6.3 → 3.7
+  → 2.9 s on the larger cases. The runner was session-local; it is to be
+  committed with K1's gates.
+- **Fate:** visits ordered block pairs, which K1 replaces with unordered
+  pairs; reworked into K1 rather than landed on its own.
+
+### K1 census — dense digestion per block
+
+`--k1`: production kernels both sides. The dense arm visits each unordered
+block pair (p ≤ q) once with block Schwarz, reads every component of the
+block, and digests it with shell-level degeneracy weights,
+deg = (A = B ? 1 : 2)(C = D ? 1 : 2)(p = q ? 1 : 2); with D = P/2 and
+v′ = deg · v,
+
+$$
+\begin{aligned}
+G_{ab} &\mathrel{+}= D_{cd}\,v', & G_{cd} &\mathrel{+}= D_{ab}\,v', \\
+G_{ac} &\mathrel{-}= \tfrac14 D_{bd}\,v', & G_{bd} &\mathrel{-}= \tfrac14 D_{ac}\,v', &
+G_{ad} &\mathrel{-}= \tfrac14 D_{bc}\,v', & G_{bc} &\mathrel{-}= \tfrac14 D_{ad}\,v',
+\end{aligned}
+$$
+
+then G ← (G + Gᵀ)/2. RHF, Combined, no symmetry, one thread, best of five,
+against today's loop order:
+
+| fixture | dense | dense with a component-Schwarz mask | dense arm: kernel / digestion |
+|---|---|---|---|
+| 1 H2O / cc-pVTZ | 1.30× | **1.26×** | 0.058 / 0.013 s |
+| 4 H2O / 6-31G\* | 1.21× | **1.19×** | 0.050 / 0.016 s |
+| 8 H2O / 6-31G | 1.18× | **1.14×** | 0.078 / 0.026 s |
+| 4 H2O / cc-pVDZ | 1.13× | **1.11×** | 0.345 / 0.054 s |
+
+- **The weights are exact.** Unmasked, G differs by 2.8–6.2e-10 on the
+  water clusters: the dropped component Schwarz at tol 1e-10. Masked, 1.0–
+  5.0e-14; the single water (no screening) is 3.3e-14 either way.
+- **The gain is digestion, not block count.** Today's loop prepares only
+  0.4–2.4 % more blocks; its per-component digestion is ~1.8–2.6× the dense
+  one (today's total minus the dense arm's kernel time).
+- **The mask costs ~3 %** and keeps G within 5e-14 of today: K1 then
+  changes summation order only, not screening.
+- Not covered: symmetry, UHF, the J- and K-only term modes.
 
 ## Findings
 
@@ -438,6 +479,11 @@ and 10–16× at L = 4.
 elements of work per primitive quartet is overhead-bound, so the lever is
 the number of primitive passes and how many run together, not their
 arithmetic (D1c, the row layout).
+
+**The contract between generation and digestion caps what batching can
+buy.** While every integral leaves its kernel through `value()` and is
+digested alone, batching blocks changes nothing outside the kernels; making
+the per-block digestion dense did (K1).
 
 **A share of time is not a share of work.** cc-pVTZ's K = 1 blocks are 23 %
 of HGP kernel time and ~6 % of its primitive quartets. Lanes across blocks
@@ -455,6 +501,10 @@ and worth 1.16–1.26×; L3c cut 59 % of the symmetric loop's iterations for
 **Classify by the work, not the container.** D2a first classified family
 quartets by the family's maximum L, which sent Pople's (ss|ss) members
 through the HGP VRR (0.51–0.53×). Split by member L.
+
+**Granularity decides load balance.** B1's units of one family pair left
+four threads 76 % slower on cc-pVTZ; one family quartet per unit balanced
+better than today's loop.
 
 **Precision can decide an algorithm.** The ETR's −ζ/η subtraction cost
 4–6 digits until the transfer direction was chosen per primitive quartet,
@@ -494,249 +544,85 @@ symmetry fixtures make every quartet its own representative.
 **Print a census's mapping before believing its total.** D0's first count
 required a representative strictly larger than the shell it absorbs, so
 cc-pVDZ oxygen's equal-size 1s and 2s never merged: 1.47–1.83× instead of
-4.8–5.1×.
+4.8–5.1×. K1's first max|ΔG| of 6e-10 looked like a weight error and was the
+dropped component Schwarz.
 
 **Write the prediction down first.** It caught a misread class share, C4a's
-3–4× low predictions, and 5b's premise.
+3–4× low predictions, 5b's premise, and B1's Pople cost (+5–8 % against
+±3 %).
 
 ## Open, in order
 
 | step | what | bitwise? |
 |---|---|---|
-| D2b B1–B3 | families in the fused loop | no (summation order); lands alone |
+| K1 | dense digestion per block in the fused loop | no (summation order); lands alone |
+| B2 | families on top of K1 | no; lands alone |
 | partition | fixed accumulator partition | no; lands alone |
-| skeleton test | per-block skeleton test | yes |
+| skeleton test | per-block skeleton weight | yes; needed by K1 under S1 |
 | C5 | screened kernels in both block kernels | screened kernels only |
 | P2 | quartet-level primitive screening | no (~1e-12); lands alone |
 | L > 12 | block kernel above total L = 12 | — |
 | F3 | full point-group skeleton from the block kernels | yes, per engine |
 | D3 | RI-JK pair factors (independent) | per the BLAS doc |
+| K2 | batches across ket blocks (conditional) | no |
 
-**D2b — families in the fused loop (scoped, 2026-10-21).** D2a's family
-passes, with `fused_fock_build` (Auto only) visiting family pairs instead of
-shell pairs, so a family quartet's members share one primitive pass.
+**K1 — dense digestion per block in the fused loop.** Auto only (explicit
+engines keep today's per-component path for the cross-engine comparators).
+The loop visits each unordered block pair once, in family-quartet units (B1
+reworked: within a unit, member pairs p ≤ q); block Schwarz and L3c per
+block; the kernel's dense block digested with the census's weights and a
+component-Schwarz mask.
 
-- **Exactly once.** Families partition the shells, so every shell pair
-  (canonical, a ≤ b by first AO) belongs to exactly one unordered family
-  pair. The loop runs over family pairs P ≤ Q, bra members from P, ket
-  members from Q:
-  - P < Q: every member component quartet with j ≥ i and l ≥ k is produced
-    by no other (P′, Q′), so the bra–ket test `(k,l) ≥ (i,j)` is dropped;
-    the tuple is put in canonical order (bra and ket swapped when
-    (k,l) < (i,j)) before the orbit test and accumulation.
-  - P = Q: today's canonical filter, unchanged.
+- *Benefit:* 1.11–1.26× of the build at today's precision (census), before
+  any family work.
+- *Scope it must cover:* every `FusedTerm` mode (Combined, CoulombOnly,
+  ExchangeOnly, RawCoulombExchange) and UHF, each with its own dense
+  contraction derived from the same degeneracy weights; S1 skeleton runs
+  through a per-block skeleton weight (the skeleton-test step, so it comes
+  first or with K1); replication-mode symmetry kept on today's path.
+- *Risks:* the block weights for A = B, bra = ket and both, which the
+  per-component filters existed to get right (gate: dense against today's
+  on every term mode, RHF and UHF, with and without symmetry); tiny blocks
+  on sp bases, where per-block overhead may dominate (the census already
+  includes 8 H2O / 6-31G at 1.14×); the change of loop unit for MPI and
+  threads (repeat B1's MPI and 1/4-thread gates).
+- *Gates:* the census comparison promoted to a test (max|ΔG| ≤ 1e-13
+  against today's build per term mode, RHF/UHF, symmetric and not), the
+  MPI 1/2/4-rank runner, `planck-fock-accumulate`, smoke and extended.
 
-  The member blocks visited, and the component quartets accumulated, are
-  the same set as today, in a different order.
-- **Filters keep their granularity.** Block Schwarz and L3c apply per
-  member block; a family quartet whose live members are all dead is
-  skipped; component Schwarz and the orbit test stay per component. The
-  family pass skips the accumulation (not the primitive work) of dead
-  members.
-- **Families** are built once per Fock build from the shells: per atom, a
-  shell joins the largest shell whose exponent set contains its own. A
-  family primitive pair is kept if any member keeps it (P1's cutoff on the
-  largest member coefficient product).
-- **Kernels.** A family block kernel: `prepare(family quartet)`, then
-  `value(member_ab, member_cd, ca, cb, cc, cd)`. Members with total L ≤ 3
-  take a closed-form family pass (T, prefactor and Boys once per primitive
-  quartet, raises once per layout, weighted per member); members with
-  L ≥ 4 an HGP VRR pass at their maximum L plus each member's `finish()`.
-  Explicit engines keep the pure per-component path.
-- **MPI and threads.** The stripe and `schedule(static)` move to family
-  bra pairs: fewer, larger units. Per-thread partials as today (the fixed
-  partition is a separate step).
+**B2 — families on top of K1.** The family kernel produces each member
+quartet as a dense block for K1 to digest; the L ≥ 4 pass calls `vrr_lanes`
+over the union primitive quartets.
 
-Steps:
-
-- **B0 — done** (see D2a above): Pople merges across L; the closed-form
-  pass iterates bra members first and skips zero-weight rows.
-- **B1 — the family-pair loop (done, uncommitted; lands with B2).**
-  `fused_fock_build` takes the ket iteration as a parameter of its bra
-  body. With a block kernel (Auto) and `family_order` (default true) it
-  runs one unit per family quartet (P, Q), P ≤ Q: bra x ∈ P with kets
-  y ∈ Q where y.a ≥ x.a, and for P < Q also bra y ∈ Q with kets x ∈ P where
-  x.a ≥ y.a. That is exactly today's set of ordered block pairs (ket.a ≥
-  bra.a), each through the same per-block body; explicit engines keep
-  today's order. Families come from `fused_families` (per atom, exponent
-  containment, across L) once per build. The MPI stripe moved to the unit
-  index; the per-call orbit buffer became per thread.
-  - **Exactly once:** accumulation counts identical on all five probe
-    fixtures, one thread, with and without symmetry; max|ΔG| ≤ 4.7e-14
-    against today's order (`planck-eri-class-share --b1`).
-  - **Cost of the order alone** (best of five, interleaved):
-
-    | fixture | 1 thread | 4 threads |
-    |---|---|---|
-    | 4 H2O / cc-pVDZ | −1.6 % | −22 % |
-    | 1 H2O / cc-pVTZ | −1.7 % | +2.6 % |
-    | 4 H2O / 6-31G\* | +4.6 % | −8.5 % |
-    | naphthalene / 6-31G | +5.6 % | +0.7 % |
-    | 4 H2O / 6-31G | +7.6 % | +1.3 % |
-
-    Pople pays 5–8 % on one thread (prediction was ±3 %), which B2's family
-    pass must repay. A first version with one unit per family *pair* was
-    +76 % at 4 threads on cc-pVTZ (13 families, 91 uneven units under
-    `schedule(static)`); per family quartet it balances better than
-    today's per-bra units.
-  - Gates: `planck-fock-accumulate`, `planck-hgp-engine-smoke`, smoke 43/45
-    (known rccsdt), and MPI: `planck-mpi` (`-DBUILD_MPI=ON` in `build-full`,
-    Homebrew Open MPI) at 1/2/4 ranks, one thread each, against the serial
-    binaries, Auto direct SCF. RHF 4 H2O / cc-pVDZ (−304.0946975211),
-    RHF naphthalene / 6-31G with D2h skeleton (−383.2197459693) and UHF
-    H2O⁺ / 6-31G\* (−75.6121793874) identical to every printed digit;
-    B3LYP H2O / 6-31G\* within 9e-14 Eh (reduction order). Wall time
-    9.3 → 6.1 → 5.1 s and 6.3 → 3.7 → 2.9 s on the two larger cases.
-- **B2 — family passes in the loop.** Gates: a family sweep in
-  `planck-hgp-engine-smoke` (every member value of every family quartet
-  against per-component HGP on water 6-31G, 6-31G\*, cc-pVDZ, cc-pVTZ,
-  mutation-tested on the coefficient contraction, the member-subset
-  selection and the layout sharing); re-baselined fingerprints; max|ΔG| ≤
-  1e-12 against today's build; `check_skeleton_symmetry`,
-  `check_real_symmetry_ops`; MPI 1/2/4 ranks; smoke and extended suites.
-- **B3 — measure the builds**, then land B1+B2 together, alone.
-
-Predictions (written first): cc-pVDZ / cc-pVTZ builds 1.4–1.5× (kernels
-1.7× at 73–80 % of the build); Pople decided by B0, 1.0–1.3×; B1 alone
-within ±3 % of today. All measured against the laned kernel (2b), which D2a
-was not: its HGP family pass should call `vrr_lanes` over the union of a
-family quartet's primitive quartets.
-
-**After B1: two routes, scoped 2026-10-21.** B1 changed only the visiting
-order. What comes next is either B2 on today's per-component digestion, or a
-change to the contract between integral generation and digestion first.
-
-*Why the contract matters.* Today every integral leaves its kernel through
-`value(ca, cb, cc, cd)` and is digested alone: canonical test, component
-Schwarz, orbit test or skeleton weight, then a scatter into G over its
-distinct 8-fold permutations. That per-component path is what the post-D1
-profile charges outside the kernels: G writes 6–15 % of the build, the loop
-body 5–14 %, the orbit test 13 % on symmetric builds, closed-form readout
-1–10 %. Batching blocks (5b) could not reach it because each block is still
-read out and digested component by component. Integral codes that batch
-profitably (ORCA's SHARK, Psi4's direct J/K) digest shell blocks with dense
-contractions instead.
-
-*The kernels are not the lock-in.* Both block kernels, and B2's family pass,
-already produce each member quartet as a dense block (`acc` → `finish()` →
-`out_`). `value()` is only how today's loop reads them. If B2 exposes the
-dense blocks, a later digestion change reuses its kernels as they are.
-
-**Route A — B2 now, on per-component digestion.**
-
-- *Benefit (measured):* closed-form family pass 1.54–1.78× on cc and
-  1.04–1.34× on Pople at L ≤ 3 (B0); HGP family pass ~1.7× on cc at L ≥ 4
-  (D2a, against the scalar kernel). Estimated build: cc 1.4–1.5×, Pople
-  1.0–1.3×. It builds on B1 (gated, including MPI) and `vrr_lanes`.
-- *Risks:*
-  - The HGP family number was measured against the scalar kernel; against
-    the laned one it will be smaller. Lanes and families compete for the
-    same primitive work, and the family pass must call `vrr_lanes` over
-    the union primitive quartets to keep both.
-  - Pople may not repay B1's 5–8 % single-thread cost: the probe's pass
-    still ran at 0.74–0.81× of production at 1:1.
-  - Scratch per family quartet: one accumulator per member quartet. cc-pVTZ
-    has up to 10 member pairs per family pair, so 100 member quartets, each
-    up to n_comp⁴ for (ff|ff); bound it before relying on it.
-  - Validation surface: every reachable family layout, the member-subset
-    selection, and the union primitive pairs under P1.
-  - It adds a third producer for the per-component path.
-- *Mitigation:* the family kernel exposes its dense member blocks, with
-  `value()` a thin reader over them.
-
-**Route B — change the generation/digestion contract, in two levels.**
-
-- **K1 — dense digestion per block.** For each block the kernel's dense
-  (ab|cd) array is contracted at once: J_ab += Σ (ab|cd) D_cd, J_cd +=
-  Σ (ab|cd) D_ab, K_ac += Σ (ab|cd) D_bd and its three partners. Weights
-  per block replace per-component canonical and orbit decisions: unordered
-  block pairs visited once, half weight where bra = ket or A = B, and S1's
-  weight per block (needs the per-block skeleton test, step 3).
-  - *Benefit:* at most the per-component machinery above, ~25–45 % of the
-    build, less the cost of the dense contractions. Unmeasured.
-  - *Risks:*
-    - On sp bases blocks are tiny ((ss|ss) is one value), so per-block
-      contraction overhead may exceed the scatter it replaces.
-    - Getting the block weights right for every symmetry case (A = B,
-      bra = ket, both) is exactly the class of error the per-component
-      filters exist to avoid.
-    - Every `FusedTerm` mode (Combined, CoulombOnly, ExchangeOnly,
-      RawCoulombExchange) and UHF need their own contraction.
-    - Symmetry: replication mode has no per-block form; symmetric runs
-      that are not skeleton-eligible keep the old path.
-    - Component Schwarz goes; screened components are digested at zero
-      effect, so this is a cost question, not a correctness one.
-- **K2 — batches across ket blocks** of one class for a fixed bra unit
-  (block or family pair), on top of K1: lanes across kets (cc-pVTZ's
-  K = 1 blocks, 23 % of its HGP kernel time), bra-side work hoisted, the
-  HRR as array work over the batch, digestion as small matrix products.
-  - *Benefit:* the per-block fixed costs that 5b's census could not touch.
-    Unmeasured.
-  - *Risks:* the largest restructure here. Batches cross today's
-    exactly-once unit, so the batch order must still give each unordered
-    block pair exactly once (the B1 argument, one level up). Memory per
-    batch; the MPI stripe and fixed partition at batch level.
-
-**What to measure first, cheapest first:**
-
-1. *K1 digestion census — done (2026-10-21).* `planck-eri-class-share
-   --k1 nwater basis`: production kernels both sides; arm B visits each
-   unordered block pair (p ≤ q) once with block Schwarz, reads every
-   component of the dense block, and digests it with shell-level
-   degeneracy weights ((A = B ? 1 : 2)(C = D ? 1 : 2)(p = q ? 1 : 2)), six
-   accumulations per value with D = P/2, then G ← (G + Gᵀ)/2. RHF,
-   Combined, no symmetry, one thread, best of five, against today's loop
-   order:
-
-   | fixture | no component Schwarz | with a component-Schwarz mask | dense arm: kernel / digestion |
-   |---|---|---|---|
-   | 1 H2O / cc-pVTZ | 1.30× | **1.26×** | 0.058 / 0.013 s |
-   | 4 H2O / 6-31G\* | 1.21× | **1.19×** | 0.050 / 0.016 s |
-   | 8 H2O / 6-31G | 1.18× | **1.14×** | 0.078 / 0.026 s |
-   | 4 H2O / cc-pVDZ | 1.13× | **1.11×** | 0.345 / 0.054 s |
-
-   - **The weights are exact.** Without the mask G differs by 2.8–6.2e-10
-     on the water clusters, which is the dropped component Schwarz at
-     tol 1e-10: zeroing those components brings it to 1.0–5.0e-14, and the
-     single water (no screening) is 3.3e-14 either way.
-   - **The gain is digestion, not block count.** Today's loop prepares only
-     0.4–2.4 % more blocks than the dense arm (it visits both orders of
-     pairs sharing a first shell). Today's per-component digestion is
-     about 1.8–2.6× the dense one (today's total minus the dense arm's
-     kernel time).
-   - **Keep the mask**: ~3 % for G within 5e-14 of today, so K1 changes
-     summation order only, not screening.
-   - Not covered: symmetry, UHF, the J/K-only term modes.
-2. *B2*, with the family kernel exposing dense member blocks.
-3. *K1 in the loop* — step 1 shows 1.11–1.26×, so it goes ahead, landed
-   alone (not bitwise), **before B2**: K1 visits unordered block pairs
-   once, while B1 visits ordered pairs with ket.a ≥ bra.a, so B1's family
-   units become unordered member pairs under K1 and are reworked into it.
-   Needs the block weights for every `FusedTerm` mode and UHF, the
-   per-block skeleton weight (step 3) for symmetric skeleton runs, and
-   today's path kept for replication-mode symmetry.
-4. *K2*, only after K1, if a census shows the per-block fixed costs are
-   still worth a restructure.
-
-**Recommendation (updated after the census).** K1 in the loop next, then
-B2 on top of it with the family kernel exposing dense member blocks; K2
-only on a later census of what per-block costs remain.
+- *Benefit (measured on kernels):* L ≤ 3 1.54–1.78× on cc, 1.04–1.34× on
+  Pople (B0); L ≥ 4 ~1.7× on cc against the scalar kernel. Estimated build:
+  cc 1.4–1.5×, Pople 1.0–1.3×, on top of K1.
+- *Risks:* the L ≥ 4 gain shrinks against the laned kernel (lanes and
+  families compete for the same primitive work); Pople's ~20 % per-quartet
+  overhead at 1:1; scratch per family quartet (cc-pVTZ: up to 100 member
+  quartets, each up to n_comp⁴ for (ff|ff)), to bound before relying on it;
+  the validation surface (every family layout, member-subset selection,
+  union primitive pairs under P1).
+- *Gates:* a family sweep in `planck-hgp-engine-smoke` (every member value
+  of every family quartet against per-component HGP on water 6-31G,
+  6-31G\*, cc-pVDZ, cc-pVTZ, mutation-tested on the coefficient
+  contraction, member-subset selection and layout sharing); max|ΔG| ≤
+  1e-12 against the K1 build; the symmetry checks; MPI 1/2/4; both suites.
 
 **The fixed accumulator partition.** The fused loop's partials are keyed by
 thread index, so a run is reproducible at a given thread count but not
 across counts (CO2 / 6-31G\* direct differs between 1 and 4 threads in the
 DIIS residual digits and the last kcal/mol digit; all 10 Hartree digits
-identical). Key the partials by a fixed function of the bra index instead
-and merge in fixed order, the FCI sigma-build rule; memory n_bins × nb²
-(64 × 2 MB at nb = 500). Gate: G bitwise identical at 1/2/4/8 threads.
-Predates this work.
+identical). Key the partials by a fixed function of the unit index and merge
+in fixed order, the FCI sigma-build rule; memory n_bins × nb² (64 × 2 MB at
+nb = 500). Gate: G bitwise identical at 1/2/4/8 threads. Predates this work.
 
-**A per-block skeleton test.** `skeleton_orbit_weight` is 13 % of the
+**A per-block skeleton weight.** `skeleton_orbit_weight` is 13 % of the
 symmetric build, dominated by representatives, which apply every operation.
 When every operation maps the block's shells onto shells (the L3c group
 map), only the operations fixing the block's shell quartet can stabilize a
 component, and each maps a component to a fixed component with a fixed
-sign: set the test up once per block. Measure before landing.
+sign: set the test up once per block. K1 needs it for S1 skeleton runs.
 
 **C5 — screened kernels.** Both block kernels decline screened kernels, so
 range-separated hybrids take per-component HGP. They need `hgp_vrr`'s
@@ -757,7 +643,7 @@ bra/ket fixture for LongRange and ShortRange, plus the
 | naphthalene D2h | 1.15× | 1.22× | 4.8e-12 / 4.8e-10 |
 
 Proposed ε = 1e-4 · `tol_eri`, through `BlockEriRequest::prim_eps`;
-`schwarz_table_*` must pass ε = 0. Re-measure after D2b.
+`schwarz_table_*` must pass ε = 0. Re-measure after B2.
 
 **L > 12.** Blocks above total L = 12 (g shells and up) take per-component
 HGP. Extend when a fixture needs it; the VRR table is 3.7 MB for (gg|gg).
@@ -770,6 +656,13 @@ routinely.
 **D3 (independent).** RI-JK recomputes its density-independent pair factors
 twice per iteration, ~61 % of the RI Fock build (B0 in
 `docs/ERI_FOCK_BLAS_SCOPE.md`).
+
+**K2 (conditional).** Batches of same-class ket blocks for a fixed bra unit
+on top of K1: lanes across kets, bra-side work hoisted, the HRR as array
+work, digestion as small matrix products. Only if a census after K1 and B2
+shows per-block fixed costs (setup, HRR at 10–16 % of the HGP kernel) still
+worth the largest restructure here; the exactly-once argument then has to
+hold at batch level.
 
 **C4b (deprioritised).** A four-raise closed form matched HGP to 1.3e-15 on
 every total-L = 4 layout and measured 10–16× over per-component HGP (C4a),
@@ -784,8 +677,8 @@ builds. Revisit only if L = 4 becomes prominent again.
   evaluation itself.
 - **A generator for an L = 4 closed form**: the hand-written level was
   correct first time (C4a).
-- **The ETR (D1c) and a unit-stride row layout for the VRR**: see above.
-- **A class-batched scheduler (5b)**: see above.
+- **The ETR (D1c), a unit-stride row layout for the VRR, and a
+  class-batched scheduler on today's digestion (5b)**: see above.
 - **Vectorizing the closed forms' primitive loop** while Boys, about half
   their cost, is an out-of-tree core that evaluates one T per call.
 - **Loosening S1's density tolerance** so linear HF takes the skeleton
@@ -793,8 +686,6 @@ builds. Revisit only if L = 4 becomes prominent again.
 
 ## Out of scope
 
-- **A local accumulation buffer per block**: changes summation order under
-  the threading rules.
 - **Gradients**: derivative ERIs are a separate kernel family (Open Work
   Phase D); P1 covers them.
 - **Spherical**: the direct spherical path back-projects to Cartesian and

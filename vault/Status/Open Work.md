@@ -1938,11 +1938,11 @@ identify the path taken. Not required for correctness or performance.
     94-99.8 % of primitive quartets, so pooling across blocks buys at
     most ~1.15x on the lane work. B0 (a production-quality closed-form
     family pass) has Pople merging across L at 1.04-1.34x. D2b B1 (the fused
-    loop in family-quartet order, same kernels) is done in the working tree:
-    exactly-once verified by identical accumulation counts, max|dG| <= 4.7e-14,
-    +5-8 % on single-thread Pople, neutral to -22 % at 4 threads. It lands
-    with B2 (the family passes), which still needs an MPI 1/2/4-rank gate
-    (`-DBUILD_MPI=ON`, `planck-mpi`). The fixed accumulator partition is
+    loop in family-quartet order, working tree) is exactly-once and passes
+    MPI 1/2/4 ranks. The K1 census then showed the larger lever is
+    digestion: dense per-block digestion is 1.11-1.26x of the build at
+    today's precision. Order now: K1 in the loop (B1 reworked into it),
+    then B2 (families) on top; the fixed accumulator partition is
     independent.
   - **Open, in order:** a per-block skeleton test, C5 (screened kernels in both block
     kernels; range-separated hybrids still take per-component HGP), D2a/D2b
