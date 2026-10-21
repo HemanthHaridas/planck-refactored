@@ -7,9 +7,10 @@ stands in the way?
 
 **Status: in flight.** Landed: C0, C1, C2–C3.5, H1, L1, L2, L3a–c, P1, S1,
 D1, F1, F2, F4, T1 (block-kernel scratch out of thread-local storage).
-Measured: A0, D0, C4a, a post-D1 profile, the full point-group path, and
-D1c (the electron-transfer recurrence; declined, see step 2).
-Open, in order: a per-block skeleton test, C5, D2a, D2b, P2, total L > 12, then F3 (re-costed after
+Measured: A0, D0, C4a, a post-D1 profile, the full point-group path,
+D1c (the electron-transfer recurrence; declined, see step 2), lanes across
+primitive quartets (step 2b) and D2a (shared-exponent families, step 5).
+Open, in order: a per-block skeleton test, C5, the scheduler question (5b), D2b, P2, total L > 12, then F3 (re-costed after
 F1); D3 is an independent track and C4b is deprioritised. When those land
 or are abandoned, rewrite this as an answer.
 
@@ -559,7 +560,7 @@ never merged: 1.47–1.83× instead of 4.8–5.1×, which nearly retired D2.
 
 ```
  kernels                                         shared exponents (value-changing)         last
- 3 skeleton test ──▶ 4 C5 screened ──┬──▶ 5 D2a prototype ──▶ 6 D2b families ──┐
+ 3 skeleton test ──▶ 4 C5 screened ──┬──▶ 5b scheduler question ──▶ 6 D2b families ──┐
                                                     │                                        │
                                                     └────────────────────▶ 7 P2 ε screening ──┴──▶ 8 L>12 ──▶ F3
  independent:  D3 RI-JK pair factors (BLAS doc B0).   deprioritised:  C4b.
@@ -569,7 +570,7 @@ never merged: 1.47–1.83× instead of 4.8–5.1×, which nearly retired D2.
 |---|---|---|
 | 3 skeleton test | — | yes |
 | 4 C5 | — : screened scaling added once to both block kernels | screened kernels only |
-| 5 D2a | — : a family kernel builds on the block kernel's recurrences | nothing lands |
+| 5b scheduler | D2a (measured) | nothing lands; decides D2b's shape |
 | 6 D2b | D2a | no (summation order) |
 | 7 P2 | after D2b, so its bound is written once per family and re-measured | no (~1e-12) |
 | 8 L > 12 | a fixture that has it | — |
@@ -638,6 +639,48 @@ per pass (SIMD lanes across primitives, ruled out below "for now" at
 1.5–2×; this measurement reopens it), not a cheaper recurrence per
 primitive quartet.
 
+### 2b · Lanes across primitive quartets in the HGP block kernel (measured, 2026-10-21)
+
+D1c left the per-primitive-quartet overhead as the cost. Where that time
+sits, by K = primitive quartets per block after P1 (temporary timers in
+`ChainBlockKernel::prepare`):
+
+| | 4 H2O / 6-31G\* | 4 H2O / cc-pVDZ | 1 H2O / cc-pVTZ |
+|---|---|---|---|
+| HGP block kernel, share of build | 38 % | 31 % | 60 % |
+| … of it in blocks with K = 1 | 10 % | 8 % | 23 % |
+| per primitive quartet at K ≥ 9 | 290–430 ns | 290–410 ns | 320–650 ns |
+| a K = 1 block | 1.2 µs | 1.1 µs | 2.3 µs |
+
+Uncontracted d/f shells pair with contracted s/p ones, so most kernel time
+has K ≥ 3. The closed forms spend 49–65 % of their time at K > 64, at only
+7–13 ns per primitive quartet, about half of it in Boys.
+
+**Prototype.** The primitive loop over B primitive quartets at once, V laid
+out `[e][f][m][lane]`, per-lane recurrence coefficients, every innermost
+loop of compile-time length B, padding lanes repeating lane 0 at weight 0,
+lanes summed before accumulating. Sweep error ≤ 1.1e-14 (not bitwise: the
+contraction sums lanes first). Interleaved, best of two, one thread:
+
+| fixture | HGP kernel, scalar → B = 4 | build, scalar → B = 4 | build, B = 4 with scalar for K < 4 |
+|---|---|---|---|
+| 1 H2O / cc-pVTZ | 77 → 52 ms (1.49×) | 0.128 → 0.103 s (1.25×) | **0.097 s (1.32×)** |
+| 4 H2O / cc-pVDZ | 170 → 87 ms (1.96×) | 0.556 → 0.472 s (1.18×) | **0.471 s (1.19×)** |
+| 4 H2O / 6-31G\* | 39 → 25 ms (1.56×) | 0.103 → 0.089 s (1.16×) | 0.091 s (1.13×) |
+| 8 H2O / 6-31G | 6.8 → 3.1 ms (2.2×) | 0.145 → 0.142 s (1.02×) | — |
+
+B = 2 sits between; B = 8 is slower than 4 (register pressure, padding).
+The scalar fallback pays off where K = 1 is common (cc-pVTZ) and costs on
+6-31G\*, where K = 3 blocks are better padded than run scalar: the rule to
+land is lanes at K ≥ 3. Not touched: the per-block HRR and readout (0.7–1.5
+µs per block) and the closed forms. Lanes there would mostly batch the
+out-of-tree Boys core, which evaluates one T per call.
+
+**To land (step 2b):** B = 4 lanes at K ≥ 3, scalar below, in
+`hgp_block_eri.h`. Not bitwise, so it re-baselines the fingerprints and
+lands alone; gate on the block sweep (≤ 1e-13) on all four bases and
+max|ΔG| against per-component HGP.
+
 ### 3 · A per-block skeleton test
 
 `skeleton_orbit_weight` is 13 % of the symmetric build. It already returns
@@ -661,21 +704,65 @@ Gate: a screened per-quartet sweep against OS on a mixed bra/ket-AM fixture
 for LongRange and ShortRange, plus the `water_*_engine_os_vs_hgp`
 comparators.
 
-### 5 · D2a — shared-exponent family prototype (nothing lands)
+### 5 · D2a — shared-exponent families (measured, 2026-10-21)
 
-A **family** is the set of segmented shells on one atom whose exponent sets
-are contained in one exponent set: Pople SP shells (6-31G oxygen's valence s
-and p over the same three exponents, 16 segmented blocks per family
-quartet, each running its own primitive loop) and general contractions
-(cc-pVDZ O 1s/2s). A family quartet can run one primitive pass: compute the
-coefficient-free intermediates once, then add each member block's
-coefficient product times the intermediates of its own L. Families exist
-only inside the fused loop; `Shell`, `ShellPair`, normalization, 1e
-integrals, gradients and the spherical transform are untouched, and
-per-member Schwarz, canonical filtering and accumulation stay as they are.
-The prototype is a probe mode, validated against HGP and timed against the
-sum of its member blocks on the current path (closed forms and the block
-kernel). Guess: 1.3–1.6× on 6-31G builds, 1.5–2× on cc-pVDZ.
+Probe: `planck-eri-class-share --family nwater basis [within]`. Families as
+D0 defined them (per atom, a shell joins the largest shell whose exponent
+set contains its own; across L unless `within`). Members of a family pair
+are the canonical shell pairs with one shell in each family; the union of
+their primitive pairs is keyed by (exponent on the first family's shell,
+exponent on the second's). Per family quartet, member quartets split by
+their own total L:
+
+- **L ≤ 3:** one closed-form family pass. T, the coefficient-free
+  prefactor and Boys once per union primitive quartet; the raises once per
+  distinct (L_A, L_B, L_C, L_D) layout (the outputs are linear in
+  θ_m = base·F_m); each member adds w_k·w_l times them.
+- **L ≥ 4:** one HGP VRR pass at the high members' maximum L (L-major
+  indices and the m = 0 values do not depend on L_A+L_B or M, so every
+  member reads a subset of one table), then each member's own HRR via
+  `HgpBlockKernel::finish()` (split out of `prepare`; bitwise).
+
+Timed against the production kernels on the same member blocks, one
+thread. Neither side applies Schwarz or canonical filtering, and a family
+pair with p = q counts both orders on both sides: a like-for-like kernel
+ratio, not a build time. Every member value within 7.2e-16 of production.
+
+| fixture | L ≤ 3 (passes fewer) | L ≥ 4 (passes fewer) | kernel total |
+|---|---|---|---|
+| 1 H2O / cc-pVTZ | 1.69× (5.9×) | 1.70× (2.6×) | **1.70×** |
+| 4 H2O / cc-pVDZ | 1.66× (5.9×) | 1.69× (2.4×) | **1.67×** |
+| naphthalene / 6-31G | 1.16× (3.6×) | 1.05× (1.0×) | 1.15× |
+| 4 H2O / 6-31G\* | 0.95× (2.2×) | 1.21× (1.3×) | 1.08× |
+| 4 H2O / 6-31G | 0.93× (2.3×) | 1.49× (1.0×, 666 blocks) | 0.97× |
+
+- **cc bases pay ~1.7× on the kernels**, ~73–80 % of those builds, so an
+  estimated 1.4–1.5× of the Fock build.
+- **Pople bases are understated by the probe.** With nothing merged
+  (`within` on a Pople basis) the probe's closed-form family pass runs at
+  0.59–0.68× of production, i.e. it carries 1.5–1.7× of its own overhead
+  (layout lookup, raises then a weighted add, `boys_vec` where production's
+  (ss|ss) uses scalar `boys(0, T)`). Not measured without it.
+- **First attempt, recorded because it misleads:** classifying a family
+  quartet by the family's maximum L sent Pople's (sp sp|sp sp) family
+  quartets, and with them their (ss|ss) members, through the HGP VRR:
+  0.51–0.53× at L ≤ 3. Split by member L, not family L.
+- **Guess was 1.3–1.6× on 6-31G, 1.5–2× on cc-pVDZ.** cc landed in range;
+  6-31G did not, pending the overhead above.
+
+### 5b · Open question: a class-batched shell-quartet scheduler
+
+D2a (sharing primitive passes, ~1.7× on cc), step 2b (lanes across
+primitive quartets, 1.13–1.32×) and the per-block HRR and readout (0.7–1.5
+µs per block) all work inside one shell quartet at a time, in Schwarz and
+canonical order. An integral scheduler in the style of ORCA's SHARK
+batches same-class work across shell quartets instead: lanes would fill
+regardless of K (cc-pVTZ's K = 1 blocks are 23 % of its HGP kernel time),
+HRR becomes array work, and general contraction is native. Question to
+answer before D2b: does a class-batched scheduler subsume D2b, 2b and the
+per-block HRR, and what does it do to the skeleton/symmetry paths, the MPI
+bra striping and the fixed-partition thread-determinism rule? If it does,
+D2b as a block kernel in the current loop is the wrong shape.
 
 ### 6 · D2b — shared-exponent families in the fused loop
 
@@ -769,10 +856,9 @@ only if L = 4 becomes prominent again.
   correct first time (C4a).
 - **Faster per-primitive work** (vectorizing the primitive loop, a cheaper
   Boys path) for now: bounded at ~1.5–2×, not specific to deep contraction,
-  and easier once D2b fixes the kernel shapes. D1c's measurement (a few
-  hundred elements per primitive quartet, overhead-bound) makes batching
-  primitive quartets across SIMD lanes the stronger candidate; re-cost it
-  after D2a.
+  and easier once D2b fixes the kernel shapes. For the HGP block kernel
+  this is superseded by step 2b (lanes across primitive quartets, 1.13–1.32×
+  measured); it still holds for the closed forms, whose cost is half Boys.
 - **Loosening S1's density tolerance** so linear HF takes the skeleton path:
   it would build G from the group average of a non-symmetric iterate and
   change the SCF trajectory.
