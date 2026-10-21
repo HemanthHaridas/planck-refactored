@@ -551,11 +551,37 @@ Steps:
 
 - **B0 — done** (see D2a above): Pople merges across L; the closed-form
   pass iterates bra members first and skips zero-weight rows.
-- **B1 — the family-pair loop, members evaluated one by one** with today's
-  block kernels. Isolates the reordering: gate on the count of accumulated
-  component quartets (identical to today's, per fixture, with and without
-  symmetry) and max|ΔG| ≤ 1e-13; also measures what coarser OpenMP units
-  cost.
+- **B1 — the family-pair loop (done, uncommitted; lands with B2).**
+  `fused_fock_build` takes the ket iteration as a parameter of its bra
+  body. With a block kernel (Auto) and `family_order` (default true) it
+  runs one unit per family quartet (P, Q), P ≤ Q: bra x ∈ P with kets
+  y ∈ Q where y.a ≥ x.a, and for P < Q also bra y ∈ Q with kets x ∈ P where
+  x.a ≥ y.a. That is exactly today's set of ordered block pairs (ket.a ≥
+  bra.a), each through the same per-block body; explicit engines keep
+  today's order. Families come from `fused_families` (per atom, exponent
+  containment, across L) once per build. The MPI stripe moved to the unit
+  index; the per-call orbit buffer became per thread.
+  - **Exactly once:** accumulation counts identical on all five probe
+    fixtures, one thread, with and without symmetry; max|ΔG| ≤ 4.7e-14
+    against today's order (`planck-eri-class-share --b1`).
+  - **Cost of the order alone** (best of five, interleaved):
+
+    | fixture | 1 thread | 4 threads |
+    |---|---|---|
+    | 4 H2O / cc-pVDZ | −1.6 % | −22 % |
+    | 1 H2O / cc-pVTZ | −1.7 % | +2.6 % |
+    | 4 H2O / 6-31G\* | +4.6 % | −8.5 % |
+    | naphthalene / 6-31G | +5.6 % | +0.7 % |
+    | 4 H2O / 6-31G | +7.6 % | +1.3 % |
+
+    Pople pays 5–8 % on one thread (prediction was ±3 %), which B2's family
+    pass must repay. A first version with one unit per family *pair* was
+    +76 % at 4 threads on cc-pVTZ (13 families, 91 uneven units under
+    `schedule(static)`); per family quartet it balances better than
+    today's per-bra units.
+  - Gates: `planck-fock-accumulate`, `planck-hgp-engine-smoke`, smoke 43/45
+    (known rccsdt). **MPI untested**: neither build tree enables it; needed
+    before landing.
 - **B2 — family passes in the loop.** Gates: a family sweep in
   `planck-hgp-engine-smoke` (every member value of every family quartet
   against per-component HGP on water 6-31G, 6-31G\*, cc-pVDZ, cc-pVTZ,

@@ -1937,9 +1937,13 @@ identify the path taken. Not required for correctness or performance.
     declined after its S0 census: within-block lanes already carry
     94-99.8 % of primitive quartets, so pooling across blocks buys at
     most ~1.15x on the lane work. B0 (a production-quality closed-form
-    family pass) has Pople merging across L at 1.04-1.34x. Next: D2b (fused
-    loop grouped by family pair), measured against the laned kernel; the
-    fixed accumulator partition is independent.
+    family pass) has Pople merging across L at 1.04-1.34x. D2b B1 (the fused
+    loop in family-quartet order, same kernels) is done in the working tree:
+    exactly-once verified by identical accumulation counts, max|dG| <= 4.7e-14,
+    +5-8 % on single-thread Pople, neutral to -22 % at 4 threads. It lands
+    with B2 (the family passes), which still needs an MPI 1/2/4-rank gate
+    (`-DBUILD_MPI=ON`, `planck-mpi`). The fixed accumulator partition is
+    independent.
   - **Open, in order:** a per-block skeleton test, C5 (screened kernels in both block
     kernels; range-separated hybrids still take per-component HGP), D2a/D2b
     (shared-exponent families), P2 (ε screening, a policy decision), then
