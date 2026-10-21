@@ -1925,8 +1925,12 @@ identify the path taken. Not required for correctness or performance.
     closed forms + Boys are ~60–67 % on sp bases; `skeleton_orbit_weight` is
     13 % of the symmetric build; emulated thread-local access 2.5–4.7 % on
     d/f; G writes 6–15 % everywhere.
-  - **Open, in order:** D1c (Head-Gordon–Pople electron-transfer recurrence in place of the ket
-    VRR), a per-block skeleton test, C5 (screened kernels in both block
+  - **D1c measured and declined (2026-10-21):** the electron-transfer
+    recurrence bought 1.06–1.18x for ~100x worse G (1.04–1.06x at VRR
+    precision). The ket VRR is per-primitive-quartet overhead (180–300
+    elements each, ~3 GFLOP/s), not arithmetic or memory, so the levers are
+    fewer primitive quartets (D2) or several per pass (SIMD lanes).
+  - **Open, in order:** a per-block skeleton test, C5 (screened kernels in both block
     kernels; range-separated hybrids still take per-component HGP), D2a/D2b
     (shared-exponent families), P2 (ε screening, a policy decision), then
     total L > 12, then F3. D3 (RI-JK pair factors) is independent. T1

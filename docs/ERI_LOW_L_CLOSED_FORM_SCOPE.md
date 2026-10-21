@@ -7,9 +7,9 @@ stands in the way?
 
 **Status: in flight.** Landed: C0, C1, C2–C3.5, H1, L1, L2, L3a–c, P1, S1,
 D1, F1, F2, F4, T1 (block-kernel scratch out of thread-local storage).
-Measured: A0, D0, C4a, a post-D1 profile, and the full point-group path.
-Open, in order: D1c (the electron-transfer recurrence), a per-block
-skeleton test, C5, D2a, D2b, P2, total L > 12, then F3 (re-costed after
+Measured: A0, D0, C4a, a post-D1 profile, the full point-group path, and
+D1c (the electron-transfer recurrence; declined, see step 2).
+Open, in order: a per-block skeleton test, C5, D2a, D2b, P2, total L > 12, then F3 (re-costed after
 F1); D3 is an independent track and C4b is deprioritised. When those land
 or are abandoned, rewrite this as an answer.
 
@@ -143,7 +143,8 @@ production (0.142 vs 0.137 s on 8 H2O / 6-31G).
 What it says:
 - **d and f bases: the block kernel's ket VRR** (21–41 %). It recurses every
   bra function |e| ≤ L_A+L_B at every ket level, carrying the Boys-order
-  index m throughout. D1c replaces it.
+  index m throughout. D1c measured it as per-primitive-quartet overhead
+  (a few hundred elements each), not arithmetic: see step 2.
 - **sp bases: the closed forms and Boys** (~60–67 %), as before D1. The block
   kernel's L = 4 work is only 4–9 % there, which is why C4b is
   deprioritised.
@@ -558,7 +559,7 @@ never merged: 1.47–1.83× instead of 4.8–5.1×, which nearly retired D2.
 
 ```
  kernels                                         shared exponents (value-changing)         last
- 2 D1c ETR ──▶ 3 skeleton test ──▶ 4 C5 screened ──┬──▶ 5 D2a prototype ──▶ 6 D2b families ──┐
+ 3 skeleton test ──▶ 4 C5 screened ──┬──▶ 5 D2a prototype ──▶ 6 D2b families ──┐
                                                     │                                        │
                                                     └────────────────────▶ 7 P2 ε screening ──┴──▶ 8 L>12 ──▶ F3
  independent:  D3 RI-JK pair factors (BLAS doc B0).   deprioritised:  C4b.
@@ -566,10 +567,9 @@ never merged: 1.47–1.83× instead of 4.8–5.1×, which nearly retired D2.
 
 | step | needs | bitwise? |
 |---|---|---|
-| 2 D1c | — | no, ~1e-15 vs the current block kernel; flag-off fingerprints unchanged |
 | 3 skeleton test | — | yes |
-| 4 C5 | 2: screened scaling added once to both block kernels | screened kernels only |
-| 5 D2a | 2: a family kernel builds on the block kernel's recurrences | nothing lands |
+| 4 C5 | — : screened scaling added once to both block kernels | screened kernels only |
+| 5 D2a | — : a family kernel builds on the block kernel's recurrences | nothing lands |
 | 6 D2b | D2a | no (summation order) |
 | 7 P2 | after D2b, so its bound is written once per family and re-measured | no (~1e-12) |
 | 8 L > 12 | a fixture that has it | — |
@@ -579,24 +579,64 @@ never merged: 1.47–1.83× instead of 4.8–5.1×, which nearly retired D2.
 Steps 2–4 keep the flag-off fingerprints; D2b and P2 each re-baseline
 everything once and land alone, so a fingerprint change has one cause.
 
-### 2 · D1c — the electron-transfer recurrence in the HGP block kernel
+### 2 · D1c — the electron-transfer recurrence (measured and declined, 2026-10-21)
 
-The ket VRR is 21–41 % of d and f builds. Head-Gordon and Pople's
-electron-transfer recurrence,
+Prototyped behind a kernel switch: a one-centre VRR on the source side out
+to |e| ≤ M, then Head-Gordon and Pople's ETR at m = 0,
 
 $$
-[e|f{+}1_i] = -\frac{\beta (A-B)_i + \delta (C-D)_i}{\eta}\,[e|f]
- + \frac{f_i}{2\eta}[e|f{-}1_i] + \frac{e_i}{2\eta}[e{-}1_i|f]
- - \frac{\zeta}{\eta}[e{+}1_i|f],
+[e|f{+}1_j] = \Bigl(\tfrac{\zeta}{\eta}PA_j + QC_j\Bigr)[e|f]
+ + \frac{f_j}{2\eta}[e|f{-}1_j] + \frac{e_j}{2\eta}[e{-}1_j|f]
+ - \frac{\zeta}{\eta}[e{+}1_j|f]
 $$
 
-runs at m = 0 only, per primitive quartet, after a bra-only VRR built out
-to |e| ≤ L_A+L_B+L_C+L_D. The table shrinks from Ne·Nf·(M+1) to
-n(L_tot)·(M+1) plus an m-free (e, f) table, and the ket work loses its m
-loop. Prototype first: time the ket phase both ways per class on the five
-profile fixtures, and check the ETR's −ζ/η subtraction against
-per-component HGP on the full sweep, including cc-pVTZ. Gate as D1, with
-mutation tests on each ETR term.
+(the textbook $-(\beta X_{AB}+\delta X_{CD})/\eta$ rewritten with $P-A$ and
+$Q-C$, which the primitive pairs keep).
+
+**Precision.** With a fixed bra→ket direction cc-pVTZ was off by 2.8e-9:
+each raise multiplies through ζ/η. Transferring per primitive quartet
+toward the larger exponent sum (ratio ≤ 1) brings it to 2.4e-13 relative,
+still 27× the VRR's 8.9e-15; G moves by up to 9.4e-13 (4 H2O / cc-pVDZ).
+The residual comes from quartets with ratio in (0.25, 1]: routing those
+through the VRR restores the VRR's sweep error exactly.
+
+**Speed** (interleaved, best of two, one thread):
+
+| fixture | VRR | ETR, ratio ≤ 1 | ETR only at ratio ≤ 0.25 |
+|---|---|---|---|
+| 1 H2O / cc-pVTZ | 0.122 s | 0.104 s (1.18×) | 0.115 s (1.06×) |
+| 4 H2O / cc-pVDZ | 0.545 s | 0.515 s (1.06×) | 0.522 s (1.04×) |
+| 4 H2O / 6-31G\* | 0.097 s | 0.089 s (1.09×) | 0.093 s (1.04×) |
+
+An operation-count model predicted 1.1–2.3× less recurrence work per class
+(2.3× on (ff|ff)). Phase split (temporary named frames, ms per build):
+
+| phase | cc-pVTZ VRR → ETR | 4 H2O / cc-pVDZ VRR → ETR |
+|---|---|---|
+| ket VRR → ETR transfer | 55.6 → 26.1 | 128 → 65 |
+| bra VRR (to L_A+L_B → to M) | 4.0 → 14.0 | 11.5 → 38 |
+| contraction | 4.5 → 7.3 | 12 → 15 |
+
+**Why the ket share did not come back.** Counted per build: 121 k / 432 k
+/ 83 k primitive quartets (cc-pVTZ / 4 H2O cc-pVDZ / 4 H2O 6-31G\*), and per
+primitive quartet only **305 / 183 / 203 ket elements** in a **5–7.5 KB**
+table. The ket VRR runs at ~3 GFLOP/s, ~6 cycles per element: it is the
+fixed cost of a small recurrence per primitive quartet (dozens of short
+(f, m) rows and coupling runs), not arithmetic and not memory. Two checks
+confirm it. A row layout (V as [f][m][e], every term unit-stride in e
+through precomputed contiguous runs) was bitwise identical on all 28
+fingerprints and **time-neutral** on all four fixtures, so it was reverted.
+And the ETR cut the arithmetic 2.6× but kept a similar number of short
+rows and added the longer bra recurrence, so it bought 1.06–1.18×.
+
+**Declined:** 1.18× at best on f bases for ~100× worse G, or 1.04–1.06×
+with two recurrences kept in the kernel. The prototype was reverted.
+
+**Consequence.** The levers are fewer primitive quartets (D2, which D0
+counted at 2.1–5.1× fewer primitive passes) or several primitive quartets
+per pass (SIMD lanes across primitives, ruled out below "for now" at
+1.5–2×; this measurement reopens it), not a cheaper recurrence per
+primitive quartet.
 
 ### 3 · A per-block skeleton test
 
@@ -670,7 +710,7 @@ The block kernel is dispatched up to total L = 12, the highest class any
 fixture had (cc-pVTZ (ff|ff)). Beyond that (g and higher shells) blocks take
 per-component HGP. Extend the range when a fixture needs it: the VRR table
 grows as Ne·Nf·(M+1), 3.7 MB for (gg|gg), so measure memory as well as time
-(D1c shrinks it).
+(the declined D1c would have shrunk it).
 
 ### F3 — feed `build_skeleton_eri` from the block kernels
 
@@ -715,7 +755,7 @@ total-L = 4 layout and measured 10–16× over **per-component** HGP:
 
 Its competitor is now the HGP block kernel, whose L = 4 work is 4–9 % of sp
 builds after D1, so even a free L = 4 kernel would save under 10 %. Revisit
-only if D1c leaves L = 4 prominent.
+only if L = 4 becomes prominent again.
 
 ## Ruled out
 
@@ -729,7 +769,10 @@ only if D1c leaves L = 4 prominent.
   correct first time (C4a).
 - **Faster per-primitive work** (vectorizing the primitive loop, a cheaper
   Boys path) for now: bounded at ~1.5–2×, not specific to deep contraction,
-  and easier once D1c and D2b fix the kernel shapes.
+  and easier once D2b fixes the kernel shapes. D1c's measurement (a few
+  hundred elements per primitive quartet, overhead-bound) makes batching
+  primitive quartets across SIMD lanes the stronger candidate; re-cost it
+  after D2a.
 - **Loosening S1's density tolerance** so linear HF takes the skeleton path:
   it would build G from the group average of a non-symmetric iterate and
   change the SCF trajectory.
