@@ -28,6 +28,11 @@
 //                                          # kernel vs loop time
 
 #include <algorithm>
+#include <map>
+#include <utility>
+#include <span>
+#include <numbers>
+#include <cmath>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -293,6 +298,692 @@ namespace
         return seconds_since(t0) / n;
     }
 
+    // D2a (docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md): shared-exponent families.
+    // A family is a set of shells on one atom whose exponent sets are contained
+    // in the largest one's (cc general contractions within L; Pople SP shells
+    // across L unless `within_l`). A family quartet runs ONE primitive pass over
+    // the union of its members' primitive pairs, building the HGP VRR table at
+    // the family's maximum L, and accumulates every member quartet from it with
+    // that member's own weight; each member then runs its own HRR (finish()).
+    // Timed against the production kernels (closed forms + HGP block kernel) on
+    // the same member blocks. No Schwarz or canonical filtering on either side;
+    // a family pair with p == q includes both orders of a member quartet on
+    // both sides alike.
+    // The closed-form raises of low_l_shell_eri for ONE primitive quartet, from
+    // coefficient-free th[m] = base0 F_m, written (not accumulated) into out.
+    // NR raises fixed at compile time; ACC accumulates into out instead of writing it.
+    template <int NR, bool ACC>
+    void cfr(const HartreeFock::PrimitivePair &ab, const HartreeFock::PrimitivePair &cd,
+             double rho, double delta, const double (&PQ)[3], const double *th,
+             const int (&c)[3], double *out)
+    {
+        const auto put = [&](int k, double v) { if constexpr (ACC) out[k] += v; else out[k] = v; };
+        if constexpr (NR == 0)
+        {
+            put(0, th[0]);
+            return;
+        }
+        const auto d_of = [&](int k) -> const Eigen::Vector3d &
+        { return k == 0 ? ab.pA : k == 1 ? ab.pB : k == 2 ? cd.pA : cd.pB; };
+        const auto w_scale = [&](int k) { return k < 2 ? -cd.zeta / delta : ab.zeta / delta; };
+        const int c1 = c[0], c2 = c[1], c3 = c[2];
+        (void)c2; (void)c3;
+        const Eigen::Vector3d &d1 = d_of(c1);
+        const double s1 = w_scale(c1);
+        if constexpr (NR == 1)
+        {
+            for (int i = 0; i < 3; ++i)
+                put(i, d1[i] * th[0] + PQ[i] * (th[1] * s1));
+            return;
+        }
+        const Eigen::Vector3d &d2 = d_of(c2);
+        const double s2 = w_scale(c2);
+        if constexpr (NR == 2)
+        {
+            double R0[3], R1[3];
+            for (int i = 0; i < 3; ++i)
+            {
+                const double w1 = s1 * PQ[i];
+                R0[i] = d1[i] * th[0] + w1 * th[1];
+                R1[i] = d1[i] * th[1] + w1 * th[2];
+            }
+            const double kappa = c2 < 2 ? (th[0] - (rho / ab.zeta) * th[1]) * (0.5 / ab.zeta)
+                                 : c1 >= 2 ? (th[0] - (rho / cd.zeta) * th[1]) * (0.5 / cd.zeta)
+                                           : th[1] * (0.5 / delta);
+            for (int i = 0; i < 3; ++i)
+                for (int j = 0; j < 3; ++j)
+                    put(3 * i + j, d2[j] * R0[i] + s2 * PQ[j] * R1[i] + (i == j ? kappa : 0.0));
+            return;
+        }
+        if constexpr (NR == 3)
+        {
+        const Eigen::Vector3d &d3 = d_of(c3);
+        const double s3 = w_scale(c3);
+        const auto cpl = [&](int y, int x, const double *X, int m)
+        {
+            if (y < 2 && x < 2)
+                return (X[m] - (rho / ab.zeta) * X[m + 1]) * (0.5 / ab.zeta);
+            if (y >= 2 && x >= 2)
+                return (X[m] - (rho / cd.zeta) * X[m + 1]) * (0.5 / cd.zeta);
+            return X[m + 1] * (0.5 / delta);
+        };
+        double A[3][3], A2[3][2], B[3][3][2];
+        for (int i = 0; i < 3; ++i)
+        {
+            for (int m = 0; m < 3; ++m)
+                A[i][m] = d1[i] * th[m] + s1 * PQ[i] * th[m + 1];
+            for (int m = 0; m < 2; ++m)
+                A2[i][m] = d2[i] * th[m] + s2 * PQ[i] * th[m + 1];
+        }
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                for (int m = 0; m < 2; ++m)
+                    B[i][j][m] = d2[j] * A[i][m] + s2 * PQ[j] * A[i][m + 1] + (i == j ? cpl(c1, c2, th, m) : 0.0);
+        for (int i = 0; i < 3; ++i)
+            for (int j = 0; j < 3; ++j)
+                for (int k = 0; k < 3; ++k)
+                {
+                    double v = d3[k] * B[i][j][0] + s3 * PQ[k] * B[i][j][1];
+                    if (k == i)
+                        v += cpl(c1, c3, A2[j], 0);
+                    if (k == j)
+                        v += cpl(c2, c3, A[i], 0);
+                    put(9 * i + 3 * j + k, v);
+                }
+        }
+    }
+
+    void report_families(const BuildSetup &s, bool within_l)
+    {
+        using namespace HartreeFock;
+        using namespace HartreeFock::Integrals;
+        const std::size_t nb = s.nb;
+        std::vector<const ShellPair *> pair_of(nb * nb, nullptr);
+        std::vector<const ContractedView *> views(nb, nullptr);
+        for (const auto &sp : s.pairs)
+        {
+            pair_of[sp.A._index * nb + sp.B._index] = &sp;
+            views[sp.A._index] = &sp.A;
+            views[sp.B._index] = &sp.B;
+        }
+        struct Group { std::size_t first, n; int L; const Shell *sh; };
+        std::vector<Group> groups;
+        for (std::size_t ao = 0; ao < nb; ++ao)
+        {
+            const auto &v = *views[ao];
+            const int L = v._cartesian[0] + v._cartesian[1] + v._cartesian[2];
+            if (ao == 0 || v._shell != views[ao - 1]->_shell)
+                groups.push_back({ao, 1, L, v._shell});
+            else
+                ++groups.back().n;
+        }
+        std::vector<double> norm_ratio(nb, 1.0);
+        for (const Group &g : groups)
+            for (std::size_t c = 0; c < g.n; ++c)
+                norm_ratio[g.first + c] = views[g.first + c]->_component_norm / views[g.first]->_component_norm;
+
+        // Families: per atom, largest exponent set first; a shell joins the
+        // first family whose representative contains all its exponents.
+        const auto contains = [](const Shell &big, const Shell &small)
+        {
+            for (int i = 0; i < small._primitives.size(); ++i)
+            {
+                bool hit = false;
+                for (int j = 0; j < big._primitives.size(); ++j)
+                    hit = hit || big._primitives[j] == small._primitives[i];
+                if (!hit)
+                    return false;
+            }
+            return true;
+        };
+        std::vector<std::size_t> order(groups.size());
+        for (std::size_t i = 0; i < order.size(); ++i)
+            order[i] = i;
+        std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b)
+                         { const Shell &x = *groups[a].sh, &y = *groups[b].sh;
+                           return x._atom_index != y._atom_index ? x._atom_index < y._atom_index
+                                                                 : x._primitives.size() > y._primitives.size(); });
+        std::vector<std::vector<std::size_t>> fam; // group indices; fam[k][0] is the representative
+        for (std::size_t g : order)
+        {
+            bool placed = false;
+            for (auto &F : fam)
+            {
+                const Group &r = groups[F[0]];
+                if (r.sh->_atom_index == groups[g].sh->_atom_index && (!within_l || r.L == groups[g].L) &&
+                    contains(*r.sh, *groups[g].sh))
+                {
+                    F.push_back(g);
+                    placed = true;
+                    break;
+                }
+            }
+            if (!placed)
+                fam.push_back({g});
+        }
+
+        // Family pairs: members are the canonical shell pairs (first AO of A <=
+        // first AO of B) with one shell in each family. The union primitive pair
+        // is keyed by (exponent on the FA shell, exponent on the FB shell).
+        struct Member { const ShellPair *sp; std::size_t ga, gb; int LA, LB; std::vector<double> w; };
+        struct FamPair { std::vector<const PrimitivePair *> u; std::vector<Member> m; int Lmax = 0; };
+        std::vector<FamPair> fps;
+        for (std::size_t p = 0; p < fam.size(); ++p)
+            for (std::size_t q = p; q < fam.size(); ++q)
+            {
+                FamPair fp;
+                std::vector<std::pair<double, double>> keys;
+                const bool same_atom = groups[fam[p][0]].sh->_atom_index == groups[fam[q][0]].sh->_atom_index;
+                for (std::size_t ga : fam[p])
+                    for (std::size_t gb : fam[q])
+                    {
+                        if (p == q && gb < ga)
+                            continue;
+                        const bool flip = groups[gb].first < groups[ga].first;
+                        if (flip && !same_atom)
+                        {
+                            std::fprintf(stderr, "family probe: cross-atom member pair against family order\n");
+                            std::exit(1);
+                        }
+                        const std::size_t a = flip ? gb : ga, b = flip ? ga : gb;
+                        const ShellPair *sp = pair_of[groups[a].first * nb + groups[b].first];
+                        Member mem{sp, a, b, groups[a].L, groups[b].L, {}};
+                        std::vector<std::pair<std::size_t, double>> wl;
+                        for (const auto &pp : sp->primitive_pairs)
+                        {
+                            const std::pair<double, double> key = flip ? std::pair{pp.beta, pp.alpha} : std::pair{pp.alpha, pp.beta};
+                            std::size_t u = 0;
+                            while (u < keys.size() && keys[u] != key)
+                                ++u;
+                            if (u == keys.size())
+                            {
+                                keys.push_back(key);
+                                fp.u.push_back(&pp);
+                            }
+                            wl.push_back({u, pp.coeff_product});
+                        }
+                        mem.w.assign(keys.size() + 64, 0.0); // resized below once the union is final
+                        for (auto [u, w] : wl)
+                            mem.w[u] = w;
+                        fp.Lmax = std::max(fp.Lmax, mem.LA + mem.LB);
+                        fp.m.push_back(std::move(mem));
+                    }
+                for (Member &mem : fp.m)
+                    mem.w.resize(fp.u.size(), 0.0);
+                fps.push_back(std::move(fp));
+            }
+
+        const auto request = [&](const Member &x, const Member &y)
+        {
+            BlockEriRequest r;
+            r.ab = x.sp;
+            r.cd = y.sp;
+            r.norm_ratio = norm_ratio.data();
+            const std::size_t g4[4] = {x.ga, x.gb, y.ga, y.gb};
+            for (int k = 0; k < 4; ++k)
+            {
+                r.views[k] = &views[groups[g4[k]].first];
+                r.n[k] = groups[g4[k]].n;
+                r.L[k] = groups[g4[k]].L;
+            }
+            return r;
+        };
+
+        // Per family quartet, member quartets split by their own total L:
+        //   low  (<= 3): (a) closed forms per member  vs (c) one closed-form family
+        //                pass: T, prefactor and Boys once per union primitive
+        //                quartet, raises once per distinct (L_A,L_B,L_C,L_D)
+        //                layout, each member adding w_k w_l x them;
+        //   high (>= 4): (a) HGP block kernel per member vs (b) one HGP VRR pass
+        //                at the high members' maximum L, each member accumulating
+        //                its own [e0|f0] and running its own HRR (finish()).
+        using hgp_block::n_upto;
+        const auto &T = hgp_block::table();
+        auto prod = production_kernel();
+        HgpBlockKernel fin;
+        std::vector<double> V, F(4 * MAX_L + 1);
+        std::vector<std::vector<double>> accs;
+        std::vector<std::array<double, 27>> cf_acc;
+        // B0: per-family-quartet bookkeeping, reused across quartets (no allocation per quartet).
+        struct Lay { int nr; int c[3]; std::array<int, 4> L4; };
+        std::vector<Lay> lays;
+        std::vector<int> lay;
+        double ta[2] = {0, 0}, tf[2] = {0, 0}, dmax[2] = {0, 0}; // [0] low, [1] high
+        std::size_t nfq = 0, nmem_q[2] = {0, 0}, pa_passes[2] = {0, 0}, pf_passes[2] = {0, 0};
+        volatile double sink = 0.0;
+        const double two_over_sqrt_pi = 2.0 / std::sqrt(std::numbers::pi);
+        const auto check = [&](const BlockEriRequest &r, auto &&got, double &dm)
+        {
+            prod.prepare(r);
+            for (std::size_t ca = 0; ca < r.n[0]; ++ca)
+                for (std::size_t cb = 0; cb < r.n[1]; ++cb)
+                    for (std::size_t cc = 0; cc < r.n[2]; ++cc)
+                        for (std::size_t cd2 = 0; cd2 < r.n[3]; ++cd2)
+                        {
+                            const double x = prod.value(ca, cb, cc, cd2), y = got(ca, cb, cc, cd2);
+                            dm = std::max(dm, std::abs(x - y) / std::max(1.0, std::abs(x)));
+                        }
+        };
+        for (std::size_t P = 0; P < fps.size(); ++P)
+            for (std::size_t Qi = P; Qi < fps.size(); ++Qi)
+            {
+                const FamPair &fa = fps[P], &fc = fps[Qi];
+                const std::size_t na = fa.m.size(), nc = fc.m.size(), nm = na * nc;
+                ++nfq;
+                const auto ltot = [&](std::size_t i, std::size_t j) { return fa.m[i].LA + fa.m[i].LB + fc.m[j].LA + fc.m[j].LB; };
+                int LABh = -1, LCDh = -1, Mlow = -1;
+                for (std::size_t i = 0; i < na; ++i)
+                    for (std::size_t j = 0; j < nc; ++j)
+                        if (ltot(i, j) >= 4)
+                            LABh = std::max(LABh, fa.m[i].LA + fa.m[i].LB), LCDh = std::max(LCDh, fc.m[j].LA + fc.m[j].LB);
+                        else
+                            Mlow = std::max(Mlow, ltot(i, j));
+                // (a), split low / high
+                for (int h = 0; h < 2; ++h)
+                {
+                    const auto t0 = Clock::now();
+                    for (std::size_t i = 0; i < na; ++i)
+                        for (std::size_t j = 0; j < nc; ++j)
+                            if ((ltot(i, j) >= 4) == (h == 1))
+                            {
+                                prod.prepare(request(fa.m[i], fc.m[j]));
+                                sink = sink + prod.value(0, 0, 0, 0);
+                                pa_passes[h] += fa.m[i].sp->primitive_pairs.size() * fc.m[j].sp->primitive_pairs.size();
+                                ++nmem_q[h];
+                            }
+                    ta[h] += seconds_since(t0);
+                }
+                // (c) low members, closed-form family pass (B0: production-quality).
+                // Layouts precomputed per family quartet with their members; a
+                // single-member layout folds its weight into theta and accumulates
+                // directly; a shared layout raises once and adds per member;
+                // scalar boys(0, T) when every low member is (ss|ss).
+                if (Mlow >= 0)
+                {
+                    const auto t0 = Clock::now();
+                    cf_acc.resize(nm);
+                    lay.assign(nm, -1);
+                    lays.clear();
+                    for (std::size_t i = 0; i < na; ++i)
+                        for (std::size_t j = 0; j < nc; ++j)
+                        {
+                            if (ltot(i, j) >= 4)
+                                continue;
+                            cf_acc[i * nc + j].fill(0.0);
+                            const std::array<int, 4> L4 = {fa.m[i].LA, fa.m[i].LB, fc.m[j].LA, fc.m[j].LB};
+                            std::size_t id = 0;
+                            while (id < lays.size() && lays[id].L4 != L4)
+                                ++id;
+                            if (id == lays.size())
+                            {
+                                Lay l{0, {0, 0, 0}, L4};
+                                for (int s2 = 0; s2 < 4; ++s2)
+                                    for (int u = 0; u < L4[s2]; ++u)
+                                        l.c[l.nr++] = s2;
+                                lays.push_back(l);
+                            }
+                            lay[i * nc + j] = static_cast<int>(id);
+                        }
+                    const auto raise = [&](int nr, bool acc, const PrimitivePair &ab, const PrimitivePair &cd, double rho,
+                                           double delta, const double (&PQ)[3], const double *th, const int (&c)[3], double *out)
+                    {
+                        switch (nr * 2 + (acc ? 1 : 0))
+                        {
+                        case 0: cfr<0, false>(ab, cd, rho, delta, PQ, th, c, out); break;
+                        case 1: cfr<0, true>(ab, cd, rho, delta, PQ, th, c, out); break;
+                        case 2: cfr<1, false>(ab, cd, rho, delta, PQ, th, c, out); break;
+                        case 3: cfr<1, true>(ab, cd, rho, delta, PQ, th, c, out); break;
+                        case 4: cfr<2, false>(ab, cd, rho, delta, PQ, th, c, out); break;
+                        case 5: cfr<2, true>(ab, cd, rho, delta, PQ, th, c, out); break;
+                        case 6: cfr<3, false>(ab, cd, rho, delta, PQ, th, c, out); break;
+                        default: cfr<3, true>(ab, cd, rho, delta, PQ, th, c, out); break;
+                        }
+                    };
+                    std::array<double, 27> tmp;
+                    std::array<std::array<double, 27>, 64> raised_l;
+                    for (std::size_t u = 0; u < fa.u.size(); ++u)
+                        for (std::size_t w2 = 0; w2 < fc.u.size(); ++w2)
+                        {
+                            const PrimitivePair &ab = *fa.u[u], &cd = *fc.u[w2];
+                            ++pf_passes[0];
+                            const double delta = ab.zeta + cd.zeta, rho = ab.zeta * cd.zeta / delta;
+                            const double PQ[3] = {ab.center[0] - cd.center[0], ab.center[1] - cd.center[1], ab.center[2] - cd.center[2]};
+                            const double Tb = rho * (PQ[0] * PQ[0] + PQ[1] * PQ[1] + PQ[2] * PQ[2]);
+                            const double base0 = ab.prefactor * cd.prefactor * two_over_sqrt_pi * std::sqrt(rho);
+                            double th[4];
+                            if (Mlow == 0)
+                                th[0] = base0 * HartreeFock::Lookup::boys(0, Tb);
+                            else
+                            {
+                                HartreeFock::Lookup::boys_vec(Tb, std::span<double>(th, Mlow + 1));
+                                for (int m = 0; m <= Mlow; ++m)
+                                    th[m] *= base0;
+                            }
+                            // Rows first: a bra member whose weight is zero at this primitive
+                            // pair skips its whole row (cc's small members contribute at one
+                            // exponent of nine). Iterating layout member lists instead
+                            // measured 1.25x slower on cc-pVDZ, 1.65x on cc-pVTZ.
+                            {
+                                std::uint64_t done = 0;
+                                for (std::size_t i = 0; i < na; ++i)
+                                {
+                                    const double wa = fa.m[i].w[u];
+                                    if (wa == 0.0)
+                                        continue;
+                                    for (std::size_t j = 0; j < nc; ++j)
+                                    {
+                                        const int id = lay[i * nc + j];
+                                        if (id < 0)
+                                            continue;
+                                        const double wc = fc.m[j].w[w2];
+                                        if (wc == 0.0)
+                                            continue;
+                                        const Lay &l = lays[id];
+                                        const double ww = wa * wc;
+                                        const int nout = l.nr == 3 ? 27 : l.nr == 2 ? 9 : l.nr == 1 ? 3 : 1;
+                                        if (!(done >> id & 1))
+                                        {
+                                            raise(l.nr, false, ab, cd, rho, delta, PQ, th, l.c, raised_l[id].data());
+                                            done |= std::uint64_t{1} << id;
+                                        }
+                                        double *o = cf_acc[i * nc + j].data();
+                                        for (int k = 0; k < nout; ++k)
+                                            o[k] += ww * raised_l[id][k];
+                                    }
+                                }
+                            }
+                        }
+                    tf[0] += seconds_since(t0);
+                    for (std::size_t i = 0; i < na; ++i)
+                        for (std::size_t j = 0; j < nc; ++j)
+                        {
+                            if (ltot(i, j) >= 4)
+                                continue;
+                            const BlockEriRequest r = request(fa.m[i], fc.m[j]);
+                            const int nr = lays[lay[i * nc + j]].nr;
+                            check(r, [&](std::size_t ca, std::size_t cb, std::size_t cc, std::size_t cd2)
+                                  {
+                                      const std::size_t comp[4] = {ca, cb, cc, cd2};
+                                      int axes[3] = {0, 0, 0}, n_ax = 0;
+                                      double nrm = 1.0;
+                                      for (int s2 = 0; s2 < 4; ++s2)
+                                      {
+                                          const ContractedView &vv = *r.views[s2][comp[s2]];
+                                          nrm *= norm_ratio[vv._index];
+                                          for (int ax = 0; ax < 3 && n_ax < nr; ++ax)
+                                              for (int uu = 0; uu < vv._cartesian[ax]; ++uu)
+                                                  axes[n_ax++] = ax;
+                                      }
+                                      const int slot = nr == 3 ? 9 * axes[0] + 3 * axes[1] + axes[2]
+                                                       : nr == 2 ? 3 * axes[0] + axes[1] : axes[0];
+                                      return cf_acc[i * nc + j][slot] * nrm;
+                                  }, dmax[0]);
+                        }
+                }
+                // (b) high members, HGP family pass
+                if (LABh >= 0)
+                {
+                    const auto t0 = Clock::now();
+                    const int LAB = LABh, LCD = LCDh, M = LAB + LCD;
+                    const int Ne = n_upto(LAB), Nf = n_upto(LCD), Md = M + 1;
+                    V.resize(static_cast<std::size_t>(Ne) * Nf * Md);
+                    const auto v = [&](int e, int f) { return &V[(static_cast<std::size_t>(e) * Nf + f) * Md]; };
+                    accs.resize(std::max(accs.size(), nm));
+                    for (std::size_t i = 0; i < na; ++i)
+                        for (std::size_t j = 0; j < nc; ++j)
+                            if (ltot(i, j) >= 4)
+                                accs[i * nc + j].assign(
+                                    static_cast<std::size_t>(n_upto(fa.m[i].LA + fa.m[i].LB)) * n_upto(fc.m[j].LA + fc.m[j].LB), 0.0);
+                    for (std::size_t u = 0; u < fa.u.size(); ++u)
+                        for (std::size_t w2 = 0; w2 < fc.u.size(); ++w2)
+                        {
+                            const PrimitivePair &ab = *fa.u[u], &cd = *fc.u[w2];
+                            ++pf_passes[1];
+                            const double zeta = ab.zeta, eta = cd.zeta, delta = zeta + eta, rho = zeta * eta / delta;
+                            double WP[3], WQ[3], PQ2 = 0.0;
+                            for (int x = 0; x < 3; ++x)
+                            {
+                                const double W = (zeta * ab.center[x] + eta * cd.center[x]) / delta;
+                                WP[x] = W - ab.center[x];
+                                WQ[x] = W - cd.center[x];
+                                const double pq = ab.center[x] - cd.center[x];
+                                PQ2 += pq * pq;
+                            }
+                            const double prefac = ab.prefactor * cd.prefactor * two_over_sqrt_pi * std::sqrt(rho);
+                            HartreeFock::Lookup::boys_vec(rho * PQ2, std::span<double>(F.data(), M + 1));
+                            for (int m = 0; m <= M; ++m)
+                                v(0, 0)[m] = prefac * F[m];
+                            const double i2z = 0.5 / zeta, i2e = 0.5 / eta, i2d = 0.5 / delta, rz = rho / zeta, re = rho / eta;
+                            for (int e = 1; e < Ne; ++e)
+                            {
+                                const auto &c = T[e];
+                                const int i = c.axis, em = c.down[i], mt = M - c.L;
+                                const double *a = v(em, 0);
+                                double *o = v(e, 0);
+                                for (int m = 0; m <= mt; ++m)
+                                    o[m] = ab.pA[i] * a[m] + WP[i] * a[m + 1];
+                                if (c.e[i] > 1)
+                                {
+                                    const double *bb = v(T[em].down[i], 0);
+                                    const double sc = (c.e[i] - 1) * i2z;
+                                    for (int m = 0; m <= mt; ++m)
+                                        o[m] += sc * (bb[m] - rz * bb[m + 1]);
+                                }
+                            }
+                            for (int f = 1; f < Nf; ++f)
+                            {
+                                const auto &cf = T[f];
+                                const int j = cf.axis, fm = cf.down[j];
+                                const int fmm = cf.e[j] > 1 ? T[fm].down[j] : -1;
+                                const double sf = (cf.e[j] - 1) * i2e;
+                                for (int e = 0; e < Ne; ++e)
+                                {
+                                    const auto &ce = T[e];
+                                    const int mt = M - ce.L - cf.L;
+                                    const double *a = v(e, fm);
+                                    double *o = v(e, f);
+                                    for (int m = 0; m <= mt; ++m)
+                                        o[m] = cd.pA[j] * a[m] + WQ[j] * a[m + 1];
+                                    if (fmm >= 0)
+                                    {
+                                        const double *bb = v(e, fmm);
+                                        for (int m = 0; m <= mt; ++m)
+                                            o[m] += sf * (bb[m] - re * bb[m + 1]);
+                                    }
+                                    if (ce.e[j] > 0)
+                                    {
+                                        const double *bb = v(ce.down[j], fm);
+                                        const double sc = ce.e[j] * i2d;
+                                        for (int m = 0; m <= mt; ++m)
+                                            o[m] += sc * bb[m + 1];
+                                    }
+                                }
+                            }
+                            for (std::size_t i = 0; i < na; ++i)
+                            {
+                                const double wa = fa.m[i].w[u];
+                                if (wa == 0.0)
+                                    continue;
+                                const int e0 = n_upto(fa.m[i].LA - 1), ne = n_upto(fa.m[i].LA + fa.m[i].LB);
+                                for (std::size_t j = 0; j < nc; ++j)
+                                {
+                                    const double wc = fc.m[j].w[w2];
+                                    if (wc == 0.0 || ltot(i, j) < 4)
+                                        continue;
+                                    const double ww = wa * wc;
+                                    const int f0 = n_upto(fc.m[j].LA - 1), nf = n_upto(fc.m[j].LA + fc.m[j].LB);
+                                    double *acc = accs[i * nc + j].data();
+                                    for (int e = e0; e < ne; ++e)
+                                        for (int f = f0; f < nf; ++f)
+                                            acc[static_cast<std::size_t>(e) * nf + f] += ww * v(e, f)[0];
+                                }
+                            }
+                        }
+                    for (std::size_t i = 0; i < na; ++i)
+                        for (std::size_t j = 0; j < nc; ++j)
+                            if (ltot(i, j) >= 4)
+                            {
+                                const BlockEriRequest r = request(fa.m[i], fc.m[j]);
+                                fin.acc_buffer() = accs[i * nc + j];
+                                fin.finish(r);
+                                sink = sink + fin.value(0, 0, 0, 0);
+                            }
+                    tf[1] += seconds_since(t0);
+                    for (std::size_t i = 0; i < na; ++i)
+                        for (std::size_t j = 0; j < nc; ++j)
+                            if (ltot(i, j) >= 4)
+                            {
+                                const BlockEriRequest r = request(fa.m[i], fc.m[j]);
+                                fin.acc_buffer() = accs[i * nc + j];
+                                fin.finish(r);
+                                check(r, [&](std::size_t ca, std::size_t cb, std::size_t cc, std::size_t cd2)
+                                      { return fin.value(ca, cb, cc, cd2); }, dmax[1]);
+                            }
+                }
+            }
+        std::size_t nmem = 0;
+        for (const auto &F2 : fam)
+            nmem += F2.size();
+        std::printf("  families (%s): %zu families over %zu shells, %zu family quartets\n",
+                    within_l ? "within L" : "across L", fam.size(), nmem, nfq);
+        const char *nm2[2] = {"L_tot <= 3 (closed-form family)", "L_tot >= 4 (HGP family)    "};
+        for (int h = 0; h < 2; ++h)
+            std::printf("    %s: %zu member blocks, passes %.2fx fewer, members %.3f s, family %.3f s (%.2fx), max rel diff %.1e\n",
+                        nm2[h], nmem_q[h], double(pa_passes[h]) / std::max<double>(1, pf_passes[h]), ta[h], tf[h], ta[h] / tf[h], dmax[h]);
+        std::printf("    total: members %.3f s, families %.3f s (%.2fx)\n", ta[0] + ta[1], tf[0] + tf[1],
+                    (ta[0] + ta[1]) / (tf[0] + tf[1]));
+    }
+
+    // 5b S0 (docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md): if the fused build collected
+    // its surviving blocks per chunk of bra group pairs and pooled the
+    // primitive quartets of same-class blocks into B = 4 lanes, how full would
+    // the lanes be? Replays the fused loop's enumeration exactly (group pairs,
+    // L1 start, block Schwarz, at least one component surviving the canonical
+    // and component Schwarz filters). No symmetry. Weighted by primitive
+    // quartets, the kernel's unit of work.
+    void report_census(const BuildSetup &s)
+    {
+        using namespace HartreeFock;
+        using namespace HartreeFock::Integrals;
+        constexpr double tol = 1e-10;
+        constexpr int B = 4;
+        const std::size_t nb = s.nb;
+        std::vector<const ContractedView *> ao_views;
+        const auto groups = fused_shell_groups(s.pairs, nb, ao_views);
+        const std::size_t ng = groups.size();
+        std::vector<int> gL(ng);
+        for (std::size_t g = 0; g < ng; ++g)
+        {
+            const auto &c = ao_views[groups[g].first_ao]->_cartesian;
+            gL[g] = c[0] + c[1] + c[2];
+        }
+        std::vector<const ShellPair *> pair_of(nb * nb, nullptr);
+        for (const auto &sp : s.pairs)
+            pair_of[sp.A._index * nb + sp.B._index] = &sp;
+        std::vector<std::array<std::size_t, 2>> gp;
+        for (std::size_t a = 0; a < ng; ++a)
+            for (std::size_t b = a; b < ng; ++b)
+                gp.push_back({a, b});
+        const std::size_t ngp = gp.size();
+        std::vector<std::size_t> first_pair_of(ng, 0);
+        for (std::size_t p = ngp; p-- > 0;)
+            first_pair_of[gp[p][0]] = p;
+        std::vector<double> qmax(ngp, 0.0);
+        for (std::size_t p = 0; p < ngp; ++p)
+            for (std::size_t ca = 0; ca < groups[gp[p][0]].n_components; ++ca)
+                for (std::size_t cb = 0; cb < groups[gp[p][1]].n_components; ++cb)
+                    qmax[p] = std::max(qmax[p], s.Q(groups[gp[p][0]].first_ao + ca, groups[gp[p][1]].first_ao + cb));
+
+        struct Blk { std::size_t bra; int cls; std::size_t K; bool live; };
+        std::vector<Blk> blks;
+        const auto t0 = Clock::now();
+        for (std::size_t bra = 0; bra < ngp; ++bra)
+            for (std::size_t ket = first_pair_of[gp[bra][0]]; ket < ngp; ++ket)
+            {
+                if (qmax[bra] * qmax[ket] < tol)
+                    continue;
+                const auto &gA = groups[gp[bra][0]], &gB = groups[gp[bra][1]];
+                const auto &gC = groups[gp[ket][0]], &gD = groups[gp[ket][1]];
+                bool live = false;
+                for (std::size_t ca = 0; ca < gA.n_components && !live; ++ca)
+                    for (std::size_t cb = 0; cb < gB.n_components && !live; ++cb)
+                    {
+                        const std::size_t i = gA.first_ao + ca, j = gB.first_ao + cb;
+                        if (j < i)
+                            continue;
+                        for (std::size_t cc = 0; cc < gC.n_components && !live; ++cc)
+                            for (std::size_t cd = 0; cd < gD.n_components && !live; ++cd)
+                            {
+                                const std::size_t k = gC.first_ao + cc, l = gD.first_ao + cd;
+                                if (l < k || k < i || (k == i && l < j))
+                                    continue;
+                                live = s.Q(i, j) * s.Q(k, l) >= tol;
+                            }
+                    }
+                const int L4[4] = {gL[gp[bra][0]], gL[gp[bra][1]], gL[gp[ket][0]], gL[gp[ket][1]]};
+                const int cls = ((L4[0] * 8 + L4[1]) * 8 + L4[2]) * 8 + L4[3];
+                const std::size_t K = pair_of[gA.first_ao * nb + gB.first_ao]->primitive_pairs.size() *
+                                      pair_of[gC.first_ao * nb + gD.first_ao]->primitive_pairs.size();
+                blks.push_back({bra, cls, K, live});
+            }
+        const double t_enum = seconds_since(t0);
+        const double t_build = timed_build_block(s, hgp_elem, production_kernel());
+        std::size_t n_live = 0, K_dead = 0, K_all = 0;
+        for (const Blk &b : blks)
+        {
+            n_live += b.live;
+            K_all += b.K;
+            K_dead += b.live ? 0 : b.K;
+        }
+        std::printf("  census: %zu blocks pass block filters, %zu with a surviving component (%.1f%% of their primitive quartets dead);\n"
+                    "          enumeration %.1f ms against a %.1f ms production build\n",
+                    blks.size(), n_live, 100.0 * K_dead / std::max<std::size_t>(1, K_all), 1e3 * t_enum, 1e3 * t_build);
+        for (int high = 1; high >= 0; --high)
+        {
+            // within-block (step 2b's rule): lanes when K >= 3, else scalar
+            std::size_t useful = 0, wb_lane = 0, wb_slots = 0;
+            for (const Blk &b : blks)
+            {
+                const int lt = (b.cls >> 9) + ((b.cls >> 6) & 7) + ((b.cls >> 3) & 7) + (b.cls & 7);
+                if (!b.live || (lt >= 4) != (high == 1))
+                    continue;
+                useful += b.K;
+                if (b.K >= 3)
+                    wb_lane += b.K, wb_slots += B * ((b.K + B - 1) / B);
+            }
+            std::printf("  %s: %.3g live primitive quartets; within-block lanes carry %.1f%% of them (padding %.1f%%)\n",
+                        high ? "HGP classes (L_tot >= 4)" : "closed-form classes (L_tot <= 3)",
+                        double(useful), 100.0 * wb_lane / std::max<std::size_t>(1, useful),
+                        100.0 * (wb_slots - wb_lane) / std::max<std::size_t>(1, wb_slots));
+            for (std::size_t chunk : {std::size_t{1}, std::size_t{8}, std::size_t{64}, ngp})
+            {
+                // pooled: per (chunk, class), all live primitive quartets in lanes
+                std::map<std::pair<std::size_t, int>, std::array<std::size_t, 2>> pool; // K sum, blocks
+                for (const Blk &b : blks)
+                {
+                    const int lt = (b.cls >> 9) + ((b.cls >> 6) & 7) + ((b.cls >> 3) & 7) + (b.cls & 7);
+                    if (!b.live || (lt >= 4) != (high == 1))
+                        continue;
+                    auto &e = pool[{b.bra / chunk, b.cls}];
+                    e[0] += b.K;
+                    ++e[1];
+                }
+                std::size_t slots = 0;
+                std::vector<std::size_t> nblk;
+                for (const auto &[key, e] : pool)
+                {
+                    slots += B * ((e[0] + B - 1) / B);
+                    nblk.push_back(e[1]);
+                }
+                std::sort(nblk.begin(), nblk.end());
+                std::printf("    pooled per %s: padding %.2f%%, %zu (chunk, class) batches, median %zu blocks per batch\n",
+                            chunk == ngp ? "whole build   " : (std::to_string(chunk) + " bra pairs").c_str(),
+                            100.0 * (slots - useful) / std::max<std::size_t>(1, slots), pool.size(),
+                            nblk.empty() ? std::size_t{0} : nblk[nblk.size() / 2]);
+            }
+        }
+    }
+
     void run_fixture(const Fixture &f, double timer_pair)
     {
         BuildSetup s = prepare(f);
@@ -435,6 +1126,24 @@ int main(int argc, char **argv)
         for (int r = 0; r < reps; ++r)
             total += timed_build_block(s, hgp_elem, production_kernel());
         std::printf("--profile: %d builds of %d H2O / %s, %.3f s each\n", reps, nwater, basis, total / reps);
+        return 0;
+    }
+
+    // --census nwater basis: 5b S0, lane fill if same-class blocks were pooled.
+    if (argc == 4 && std::string(argv[1]) == "--census")
+    {
+        const BuildSetup s = prepare({std::atoi(argv[2]), argv[3]});
+        report_census(s);
+        return 0;
+    }
+
+    // --family nwater basis [within]: the D2a shared-exponent family probe.
+    if ((argc == 4 || argc == 5) && std::string(argv[1]) == "--family")
+    {
+        const BuildSetup s = prepare({std::atoi(argv[2]), argv[3]});
+        const bool within = argc == 5 && std::string(argv[4]) == "within";
+        report_families(s, within); // warm-up
+        report_families(s, within);
         return 0;
     }
 
