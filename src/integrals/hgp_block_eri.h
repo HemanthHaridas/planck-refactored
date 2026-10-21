@@ -9,6 +9,8 @@
 //   VRR    per primitive quartet: [e0|f0]^(m) for |e| <= L_A+L_B,
 //          |f| <= L_C+L_D, Cartesian functions indexed L-major (a triangle,
 //          not the per-axis cube box that made the earlier hoist slower);
+//          in blocks with K >= 3 primitive quartets, four at a time across
+//          SIMD lanes (hgp_block::vrr_lanes);
 //   sum    the m = 0 slice over primitive quartets, for |e| >= L_A and
 //          |f| >= L_C only (what HRR reads);
 //   HRR    once per shell quartet: (a b| from (e 0| on the bra, then (c d|
@@ -94,6 +96,104 @@ namespace HartreeFock::Integrals
             }();
             return t;
         }
+
+        // Primitive quartets per pass, and the smallest block K that uses them.
+        constexpr int kLanes = 4;
+        constexpr std::size_t kMinLaneK = 3;
+
+        // The VRR of the block kernel for B primitive quartets at once
+        // (ab[l], cd[l]), lane-minor: out[((e * Nf + f) * (M + 1) + m) * B + l]
+        // = [e0|f0]^(m) of lane l, |e| <= LAB, |f| <= LCD, M = LAB + LCD.
+        // Weights and contraction are the caller's, so the block kernel and a
+        // family pass (several member accumulators) share it. Every innermost
+        // loop runs over the B lanes. out must hold n_upto(LAB) * n_upto(LCD) *
+        // (M + 1) * B doubles.
+        template <int B>
+        inline void vrr_lanes(const HartreeFock::PrimitivePair *const (&ab)[B],
+                              const HartreeFock::PrimitivePair *const (&cd)[B],
+                              int LAB, int LCD, double *out)
+        {
+            const auto &T = table();
+            const int M = LAB + LCD, Ne = n_upto(LAB), Nf = n_upto(LCD), Md = M + 1;
+            const auto v = [&](int e, int f) { return out + (static_cast<std::size_t>(e) * Nf + f) * Md * B; };
+            const double two_over_sqrt_pi = 2.0 / std::sqrt(std::numbers::pi);
+            alignas(64) double pa[3][B], wp[3][B], qc[3][B], wq[3][B], i2z[B], rz[B], i2e[B], re[B], i2d[B];
+            double *v00 = v(0, 0);
+            for (int l = 0; l < B; ++l)
+            {
+                const HartreeFock::PrimitivePair &p = *ab[l], &q = *cd[l];
+                const double zeta = p.zeta, eta = q.zeta, delta = zeta + eta;
+                const double rho = zeta * eta / delta;
+                double PQ2 = 0.0;
+                for (int x = 0; x < 3; ++x)
+                {
+                    const double W = (zeta * p.center[x] + eta * q.center[x]) / delta;
+                    wp[x][l] = W - p.center[x];
+                    wq[x][l] = W - q.center[x];
+                    pa[x][l] = p.pA[x];
+                    qc[x][l] = q.pA[x];
+                    const double pq = p.center[x] - q.center[x];
+                    PQ2 += pq * pq;
+                }
+                const double prefac = p.prefactor * q.prefactor * two_over_sqrt_pi * std::sqrt(rho);
+                double F[4 * MAX_L + 1];
+                HartreeFock::Lookup::boys_vec(rho * PQ2, std::span<double>(F, M + 1));
+                for (int m = 0; m <= M; ++m)
+                    v00[m * B + l] = prefac * F[m];
+                i2z[l] = 0.5 / zeta, i2e[l] = 0.5 / eta, i2d[l] = 0.5 / delta;
+                rz[l] = rho / zeta, re[l] = rho / eta;
+            }
+            for (int e = 1; e < Ne; ++e)
+            {
+                const Cart &c = T[e];
+                const int i = c.axis, em = c.down[i], mt = M - c.L;
+                const double *a = v(em, 0);
+                double *o = v(e, 0);
+                for (int m = 0; m <= mt; ++m)
+                    for (int l = 0; l < B; ++l)
+                        o[m * B + l] = pa[i][l] * a[m * B + l] + wp[i][l] * a[(m + 1) * B + l];
+                if (c.e[i] > 1)
+                {
+                    const double *b = v(T[em].down[i], 0);
+                    const double s = c.e[i] - 1;
+                    for (int m = 0; m <= mt; ++m)
+                        for (int l = 0; l < B; ++l)
+                            o[m * B + l] += s * i2z[l] * (b[m * B + l] - rz[l] * b[(m + 1) * B + l]);
+                }
+            }
+            for (int f = 1; f < Nf; ++f)
+            {
+                const Cart &cf = T[f];
+                const int j = cf.axis, fm = cf.down[j];
+                const int fmm = cf.e[j] > 1 ? T[fm].down[j] : -1;
+                const double sf = cf.e[j] - 1;
+                for (int e = 0; e < Ne; ++e)
+                {
+                    const Cart &ce = T[e];
+                    const int mt = M - ce.L - cf.L;
+                    const double *a = v(e, fm);
+                    double *o = v(e, f);
+                    for (int m = 0; m <= mt; ++m)
+                        for (int l = 0; l < B; ++l)
+                            o[m * B + l] = qc[j][l] * a[m * B + l] + wq[j][l] * a[(m + 1) * B + l];
+                    if (fmm >= 0)
+                    {
+                        const double *b = v(e, fmm);
+                        for (int m = 0; m <= mt; ++m)
+                            for (int l = 0; l < B; ++l)
+                                o[m * B + l] += sf * i2e[l] * (b[m * B + l] - re[l] * b[(m + 1) * B + l]);
+                    }
+                    if (ce.e[j] > 0)
+                    {
+                        const double *b = v(ce.down[j], fm);
+                        const double s = ce.e[j];
+                        for (int m = 0; m <= mt; ++m)
+                            for (int l = 0; l < B; ++l)
+                                o[m * B + l] += s * i2d[l] * b[(m + 1) * B + l];
+                    }
+                }
+            }
+        }
     }
 
     struct HgpBlockKernel
@@ -123,6 +223,41 @@ namespace HartreeFock::Integrals
             const auto v = [&](int e, int f) { return &V[(static_cast<std::size_t>(e) * Nf + f) * Md]; };
 
             const double two_over_sqrt_pi = 2.0 / std::sqrt(std::numbers::pi);
+            // Blocks with K >= kMinLaneK primitive quartets run them kLanes at a
+            // time (hgp_block::vrr_lanes); below that, one at a time. Measured
+            // (docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md, 2b): 4 lanes beat 2 and 8,
+            // and a K = 3 block is cheaper padded to 4 than run scalar.
+            const auto &P = r.ab->primitive_pairs, &Q = r.cd->primitive_pairs;
+            const std::size_t K = P.size() * Q.size();
+            if (K >= hgp_block::kMinLaneK)
+            {
+                constexpr int B = hgp_block::kLanes;
+                VL.resize(static_cast<std::size_t>(Ne) * Nf * Md * B);
+                const PrimitivePair *pa[B], *pc[B];
+                double w[B];
+                for (std::size_t k0 = 0; k0 < K; k0 += B)
+                {
+                    for (int l = 0; l < B; ++l)
+                    {
+                        // A padding lane repeats a valid quartet at weight 0.
+                        const std::size_t k = k0 + l < K ? k0 + l : k0;
+                        pa[l] = &P[k / Q.size()];
+                        pc[l] = &Q[k % Q.size()];
+                        w[l] = k0 + l < K ? pa[l]->coeff_product * pc[l]->coeff_product : 0.0;
+                    }
+                    hgp_block::vrr_lanes<B>(pa, pc, LAB, LCD, VL.data());
+                    for (int e = e0; e < Ne; ++e)
+                        for (int f = f0; f < Nf; ++f)
+                        {
+                            const double *x = &VL[(static_cast<std::size_t>(e) * Nf + f) * Md * B];
+                            double sum = 0.0;
+                            for (int l = 0; l < B; ++l)
+                                sum += w[l] * x[l];
+                            acc[static_cast<std::size_t>(e) * Nf + f] += sum;
+                        }
+                }
+            }
+            else
             for (const auto &ab : r.ab->primitive_pairs)
                 for (const auto &cd : r.cd->primitive_pairs)
                 {
@@ -201,6 +336,24 @@ namespace HartreeFock::Integrals
                             acc[static_cast<std::size_t>(e) * Nf + f] += w * v(e, f)[0];
                 }
 
+            finish(r);
+            return true;
+        }
+
+        // HRR and readout from `acc` ([e][f], |e| in [LA, LA+LB], |f| in
+        // [LC, LC+LD], row stride n_upto(LC+LD)) for request r. prepare() calls
+        // it after its primitive loop; a caller that fills acc itself (the D2a
+        // family probe) calls it directly.
+        void finish(const BlockEriRequest &r)
+        {
+            req_ = &r;
+            using hgp_block::n_upto;
+            const auto &T = hgp_block::table();
+            const int LA = r.L[0], LB = r.L[1], LC = r.L[2], LD = r.L[3];
+            const int LAB = LA + LB, LCD = LC + LD;
+            const int Ne = n_upto(LAB), Nf = n_upto(LCD);
+            const int e0 = n_upto(LA - 1), f0 = n_upto(LC - 1);
+
             // Bra HRR: H[a][b][f - f0] for |a| in [LA, LAB - |b|], |b| <= LB.
             const int Nb = n_upto(LB), Nd = n_upto(LD), nfk = Nf - f0;
             H.resize(static_cast<std::size_t>(Ne) * Nb * nfk);
@@ -250,8 +403,10 @@ namespace HartreeFock::Integrals
                         for (std::size_t cdc = 0; cdc < n_[3]; ++cdc)
                             out_[o++] = K[static_cast<std::size_t>(idx(2, cc)) * Nd + idx(3, cdc)];
                 }
-            return true;
         }
+
+        // The contracted [e0|f0] that finish() reads (D2a probe fills it directly).
+        std::vector<double> &acc_buffer() noexcept { return acc; }
 
         double value(std::size_t ca, std::size_t cb, std::size_t cc, std::size_t cd) const noexcept
         {
@@ -262,6 +417,8 @@ namespace HartreeFock::Integrals
         }
 
     private:
+        std::vector<double> VL; // lane-minor VRR table for vrr_lanes
+
         const BlockEriRequest *req_ = nullptr;
         // Scratch, reused across prepare() calls; one kernel copy per thread
         // (fused_fock.h), so members rather than thread_local (emulated TLS on

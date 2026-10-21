@@ -6,10 +6,9 @@ momentum and with a block kernel above it, and what else in the build
 stands in the way?
 
 **Status: in flight.** Landed: C0, C1, C2–C3.5, H1, L1, L2, L3a–c, P1, S1,
-D1, F1, F2, F4, T1. Measured and declined: D1c (electron-transfer
-recurrence), 5b (a class-batched scheduler). Measured, not landed: lanes
-across primitive quartets (2b, prototype kept in the tree) and D2a
-(shared-exponent families; B0 done). Open, in order: 2b, D2b, the fixed
+D1, F1, F2, F4, T1, 2b (lanes across primitive quartets). Measured and declined: D1c (electron-transfer
+recurrence), 5b (a class-batched scheduler). Measured, not landed: D2a
+(shared-exponent families; B0 done). Open, in order: D2b, the fixed
 accumulator partition, a per-block skeleton test, C5, P2, total L > 12, F3;
 D3 is independent and C4b deprioritised. When those land or are abandoned,
 rewrite this as an answer.
@@ -238,6 +237,7 @@ within 1.4× of the persisted full-group path without its n_b⁴ memory.
 | F2 | `17cf5adf` | `engine auto` falling through to per-component OS on the full point-group path | 1.07–1.12× per rebuilt skeleton | energies unchanged |
 | F1 | `92838e03` | the n_b⁴ skeleton rebuilt every iteration above `threshold` | 4.3× benzene, 10.5× naphthalene (whole SCF) | energies vs the persisted path; 10 full-symmetry inputs at `threshold 1` |
 | T1 | `92838e03` | `thread_local` block-kernel scratch | neutral | 28 fingerprints identical |
+| 2b | — | one primitive quartet per VRR pass in blocks with K ≥ 3 | 1.38× cc-pVTZ, 1.21–1.23× cc-pVDZ / 6-31G\*, 1.05–1.07× sp | block sweep ≤ 1.1e-14 on four bases, mutation-tested; max\|ΔG\| ≤ 1.7e-14 |
 
 Suites after D1: smoke 43/45, extended 132/136; the failures are the known
 rccsdt routing cases. Details worth keeping:
@@ -310,13 +310,26 @@ $[e|f{+}1_j] = \bigl(\tfrac{\zeta}{\eta}PA_j + QC_j\bigr)[e|f]
   and time-neutral on four fixtures. That and the counters above showed
   the cost is per primitive quartet, not arithmetic.
 
-### 2b — lanes across primitive quartets (prototype kept, not landed)
+### 2b — lanes across primitive quartets (landed)
 
-The HGP primitive loop over B primitive quartets at once, V as
-`[e][f][m][lane]`, per-lane coefficients, innermost loops of compile-time
-length B, padding lanes repeating lane 0 at weight 0, lanes summed before
-accumulating. In the working tree behind `PLANCK_HGP_LANES` (off by
-default). Sweep error ≤ 1.1e-14, not bitwise. Interleaved, best of two:
+`hgp_block::vrr_lanes<B>` runs the block kernel's VRR for B primitive
+quartets at once, lane-minor (`[e][f][m][lane]`), per-lane coefficients,
+every innermost loop of compile-time length B. It takes the primitive-pair
+pointers only; the caller contracts with its own weights, so D2b's family
+pass reuses it. `HgpBlockKernel` uses it with B = 4 in blocks with K ≥ 3,
+padding lanes repeating a valid quartet at weight 0, lanes summed before
+accumulating; smaller blocks keep the scalar loop. Not bitwise (the
+contraction sums lanes first). Landed against the scalar kernel,
+interleaved, best of three, one thread: 1 H2O / cc-pVTZ 0.127 → 0.092 s
+(1.38×), 4 H2O / 6-31G\* 0.100 → 0.081 s (1.23×), 4 H2O / cc-pVDZ 0.548 →
+0.453 s (1.21×), naphthalene / 6-31G 0.294 → 0.274 s (1.07×), 8 H2O / 6-31G
+0.136 → 0.129 s (1.05×). Gates: the block sweep at ≤ 1.1e-14 on all four
+bases; mutations (dropping the W−Q term in the laned ket recurrence, giving
+padding lanes their weight, contracting lane 0 only) each fail by 0.13–5.4;
+max|ΔG| against per-component HGP ≤ 1.7e-14; smoke 43/45 (the known rccsdt
+cases). The 28 fingerprints cover explicit-engine and closed-form builds
+and are unchanged. The prototype's measurements, for the choice of B and
+the K threshold:
 
 | fixture | HGP kernel, scalar → B = 4 | build, scalar → B = 4 | build, B = 4 with scalar for K < 4 |
 |---|---|---|---|
@@ -325,9 +338,8 @@ default). Sweep error ≤ 1.1e-14, not bitwise. Interleaved, best of two:
 | 4 H2O / 6-31G\* | 39 → 25 ms (1.56×) | 0.103 → 0.089 s (1.16×) | 0.091 s (1.13×) |
 | 8 H2O / 6-31G | 6.8 → 3.1 ms (2.2×) | 0.145 → 0.142 s (1.02×) | — |
 
-B = 2 sits between; B = 8 is slower than 4. The rule to land is lanes at
-K ≥ 3 (K = 3 blocks are better padded than run scalar). Revisit after
-D2b, since families change K.
+B = 2 sits between; B = 8 is slower than 4. K ≥ 3 because K = 3 blocks
+are better padded to 4 than run scalar.
 
 ### D2a — shared-exponent families
 
@@ -491,7 +503,6 @@ cc-pVDZ oxygen's equal-size 1s and 2s never merged: 1.47–1.83× instead of
 
 | step | what | bitwise? |
 |---|---|---|
-| 2b | lanes at K ≥ 3 in the HGP block kernel, as a reusable laned core | no; lands alone |
 | D2b B1–B3 | families in the fused loop | no (summation order); lands alone |
 | partition | fixed accumulator partition | no; lands alone |
 | skeleton test | per-block skeleton test | yes |
@@ -556,17 +567,9 @@ Steps:
 
 Predictions (written first): cc-pVDZ / cc-pVTZ builds 1.4–1.5× (kernels
 1.7× at 73–80 % of the build); Pople decided by B0, 1.0–1.3×; B1 alone
-within ±3 % of today.
-
-**2b — lanes. Lands after B0 and before B1, alone.** It is measured and
-ready, and not bitwise, so it re-baselines the fingerprints on its own. D2b
-must then be measured against the laned kernel: D2a's 1.7× at L ≥ 4 was
-against the scalar one, and lanes and families compete for the same HGP
-primitive work. Land it with the laned primitive loop taking a list of
-primitive quartets and per-quartet weights into accumulators, so that D2b's
-HGP family pass reuses the same core (the union of a family quartet's
-primitive quartets, several member accumulators) and the lane width is
-written once. B0 is closed-form only and does not depend on it.
+within ±3 % of today. All measured against the laned kernel (2b), which D2a
+was not: its HGP family pass should call `vrr_lanes` over the union of a
+family quartet's primitive quartets.
 
 **The fixed accumulator partition.** The fused loop's partials are keyed by
 thread index, so a run is reproducible at a given thread count but not
