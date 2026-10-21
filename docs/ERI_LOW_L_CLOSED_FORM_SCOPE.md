@@ -679,23 +679,48 @@ dense blocks, a later digestion change reuses its kernels as they are.
 
 **What to measure first, cheapest first:**
 
-1. *K1 digestion census (probe only).* In the benchmark, for the
-   production build without symmetry, RHF, Combined: time today's
-   per-component digestion against a per-block dense contraction of the
-   same block values, by class, on 8 H2O / 6-31G, 4 H2O / cc-pVDZ and 1
-   H2O / cc-pVTZ, with G compared. Decides whether Route B is worth its
-   risks at all, and on which bases.
+1. *K1 digestion census — done (2026-10-21).* `planck-eri-class-share
+   --k1 nwater basis`: production kernels both sides; arm B visits each
+   unordered block pair (p ≤ q) once with block Schwarz, reads every
+   component of the dense block, and digests it with shell-level
+   degeneracy weights ((A = B ? 1 : 2)(C = D ? 1 : 2)(p = q ? 1 : 2)), six
+   accumulations per value with D = P/2, then G ← (G + Gᵀ)/2. RHF,
+   Combined, no symmetry, one thread, best of five, against today's loop
+   order:
+
+   | fixture | no component Schwarz | with a component-Schwarz mask | dense arm: kernel / digestion |
+   |---|---|---|---|
+   | 1 H2O / cc-pVTZ | 1.30× | **1.26×** | 0.058 / 0.013 s |
+   | 4 H2O / 6-31G\* | 1.21× | **1.19×** | 0.050 / 0.016 s |
+   | 8 H2O / 6-31G | 1.18× | **1.14×** | 0.078 / 0.026 s |
+   | 4 H2O / cc-pVDZ | 1.13× | **1.11×** | 0.345 / 0.054 s |
+
+   - **The weights are exact.** Without the mask G differs by 2.8–6.2e-10
+     on the water clusters, which is the dropped component Schwarz at
+     tol 1e-10: zeroing those components brings it to 1.0–5.0e-14, and the
+     single water (no screening) is 3.3e-14 either way.
+   - **The gain is digestion, not block count.** Today's loop prepares only
+     0.4–2.4 % more blocks than the dense arm (it visits both orders of
+     pairs sharing a first shell). Today's per-component digestion is
+     about 1.8–2.6× the dense one (today's total minus the dense arm's
+     kernel time).
+   - **Keep the mask**: ~3 % for G within 5e-14 of today, so K1 changes
+     summation order only, not screening.
+   - Not covered: symmetry, UHF, the J/K-only term modes.
 2. *B2*, with the family kernel exposing dense member blocks.
-3. *K1 in the loop*, only if step 1 shows a clear win, landed alone (not
-   bitwise).
+3. *K1 in the loop* — step 1 shows 1.11–1.26×, so it goes ahead, landed
+   alone (not bitwise), **before B2**: K1 visits unordered block pairs
+   once, while B1 visits ordered pairs with ket.a ≥ bra.a, so B1's family
+   units become unordered member pairs under K1 and are reworked into it.
+   Needs the block weights for every `FusedTerm` mode and UHF, the
+   per-block skeleton weight (step 3) for symmetric skeleton runs, and
+   today's path kept for replication-mode symmetry.
 4. *K2*, only after K1, if a census shows the per-block fixed costs are
    still worth a restructure.
 
-**Recommendation.** Do the K1 census first: it is a probe, it needs
-nothing restructured, and it answers whether the contract is the next big
-lever or a small one. Then B2 regardless, since its kernels survive either
-answer as long as they expose dense blocks. Start K1 or K2 only on measured
-evidence.
+**Recommendation (updated after the census).** K1 in the loop next, then
+B2 on top of it with the family kernel exposing dense member blocks; K2
+only on a later census of what per-block costs remain.
 
 **The fixed accumulator partition.** The fused loop's partials are keyed by
 thread index, so a run is reproducible at a given thread count but not
