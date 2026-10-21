@@ -474,16 +474,67 @@ cc-pVDZ oxygen's equal-size 1s and 2s never merged: 1.47–1.83× instead of
 | F3 | full point-group skeleton from the block kernels | yes, per engine |
 | D3 | RI-JK pair factors (independent) | per the BLAS doc |
 
-**D2b — families in the fused loop.** D2a's family passes, with the loop
-visiting blocks grouped by family pair so a family quartet's members are
-evaluated together; each member keeps its own component filters and
-accumulation. Families built once per Fock build; a family primitive pair
-kept if *any* member needs it (P1's cutoff on the largest member
-coefficient product). Needs a production-quality closed-form family pass,
-which settles the Pople question. Gates: per-component validation against
-HGP on every reachable family layout, mutation-tested on the coefficient
-contraction and subset selection; G and energies within ~1e-12 of the
-current path. To be scoped next.
+**D2b — families in the fused loop (scoped, 2026-10-21).** D2a's family
+passes, with `fused_fock_build` (Auto only) visiting family pairs instead of
+shell pairs, so a family quartet's members share one primitive pass.
+
+- **Exactly once.** Families partition the shells, so every shell pair
+  (canonical, a ≤ b by first AO) belongs to exactly one unordered family
+  pair. The loop runs over family pairs P ≤ Q, bra members from P, ket
+  members from Q:
+  - P < Q: every member component quartet with j ≥ i and l ≥ k is produced
+    by no other (P′, Q′), so the bra–ket test `(k,l) ≥ (i,j)` is dropped;
+    the tuple is put in canonical order (bra and ket swapped when
+    (k,l) < (i,j)) before the orbit test and accumulation.
+  - P = Q: today's canonical filter, unchanged.
+
+  The member blocks visited, and the component quartets accumulated, are
+  the same set as today, in a different order.
+- **Filters keep their granularity.** Block Schwarz and L3c apply per
+  member block; a family quartet whose live members are all dead is
+  skipped; component Schwarz and the orbit test stay per component. The
+  family pass skips the accumulation (not the primitive work) of dead
+  members.
+- **Families** are built once per Fock build from the shells: per atom, a
+  shell joins the largest shell whose exponent set contains its own. A
+  family primitive pair is kept if any member keeps it (P1's cutoff on the
+  largest member coefficient product).
+- **Kernels.** A family block kernel: `prepare(family quartet)`, then
+  `value(member_ab, member_cd, ca, cb, cc, cd)`. Members with total L ≤ 3
+  take a closed-form family pass (T, prefactor and Boys once per primitive
+  quartet, raises once per layout, weighted per member); members with
+  L ≥ 4 an HGP VRR pass at their maximum L plus each member's `finish()`.
+  Explicit engines keep the pure per-component path.
+- **MPI and threads.** The stripe and `schedule(static)` move to family
+  bra pairs: fewer, larger units. Per-thread partials as today (the fixed
+  partition is a separate step).
+
+Steps:
+
+- **B0 — production-quality closed-form family pass, in the probe.** The
+  D2a probe's pass carries 1.5–1.7× overhead at 1:1 on Pople. Template on
+  the raise count, precompute layouts per family-quartet class, use
+  `boys(0, T)` when every member is (ss|ss). Measure at 1:1 against
+  production (target ≥ 1.0×) and with across-L merging on 6-31G,
+  6-31G\*, naphthalene. Decides the family policy for Pople: across L,
+  or within L only (no Pople merges).
+- **B1 — the family-pair loop, members evaluated one by one** with today's
+  block kernels. Isolates the reordering: gate on the count of accumulated
+  component quartets (identical to today's, per fixture, with and without
+  symmetry) and max|ΔG| ≤ 1e-13; also measures what coarser OpenMP units
+  cost.
+- **B2 — family passes in the loop.** Gates: a family sweep in
+  `planck-hgp-engine-smoke` (every member value of every family quartet
+  against per-component HGP on water 6-31G, 6-31G\*, cc-pVDZ, cc-pVTZ,
+  mutation-tested on the coefficient contraction, the member-subset
+  selection and the layout sharing); re-baselined fingerprints; max|ΔG| ≤
+  1e-12 against today's build; `check_skeleton_symmetry`,
+  `check_real_symmetry_ops`; MPI 1/2/4 ranks; smoke and extended suites.
+- **B3 — measure the builds**, then land B1+B2 together, alone.
+
+Predictions (written first): cc-pVDZ / cc-pVTZ builds 1.4–1.5× (kernels
+1.7× at 73–80 % of the build); Pople decided by B0, 1.0–1.3×; B1 alone
+within ±3 % of today.
 
 **2b — lanes.** As measured above; re-measure on top of D2b.
 
