@@ -602,6 +602,101 @@ within ±3 % of today. All measured against the laned kernel (2b), which D2a
 was not: its HGP family pass should call `vrr_lanes` over the union of a
 family quartet's primitive quartets.
 
+**After B1: two routes, scoped 2026-10-21.** B1 changed only the visiting
+order. What comes next is either B2 on today's per-component digestion, or a
+change to the contract between integral generation and digestion first.
+
+*Why the contract matters.* Today every integral leaves its kernel through
+`value(ca, cb, cc, cd)` and is digested alone: canonical test, component
+Schwarz, orbit test or skeleton weight, then a scatter into G over its
+distinct 8-fold permutations. That per-component path is what the post-D1
+profile charges outside the kernels: G writes 6–15 % of the build, the loop
+body 5–14 %, the orbit test 13 % on symmetric builds, closed-form readout
+1–10 %. Batching blocks (5b) could not reach it because each block is still
+read out and digested component by component. Integral codes that batch
+profitably (ORCA's SHARK, Psi4's direct J/K) digest shell blocks with dense
+contractions instead.
+
+*The kernels are not the lock-in.* Both block kernels, and B2's family pass,
+already produce each member quartet as a dense block (`acc` → `finish()` →
+`out_`). `value()` is only how today's loop reads them. If B2 exposes the
+dense blocks, a later digestion change reuses its kernels as they are.
+
+**Route A — B2 now, on per-component digestion.**
+
+- *Benefit (measured):* closed-form family pass 1.54–1.78× on cc and
+  1.04–1.34× on Pople at L ≤ 3 (B0); HGP family pass ~1.7× on cc at L ≥ 4
+  (D2a, against the scalar kernel). Estimated build: cc 1.4–1.5×, Pople
+  1.0–1.3×. It builds on B1 (gated, including MPI) and `vrr_lanes`.
+- *Risks:*
+  - The HGP family number was measured against the scalar kernel; against
+    the laned one it will be smaller. Lanes and families compete for the
+    same primitive work, and the family pass must call `vrr_lanes` over
+    the union primitive quartets to keep both.
+  - Pople may not repay B1's 5–8 % single-thread cost: the probe's pass
+    still ran at 0.74–0.81× of production at 1:1.
+  - Scratch per family quartet: one accumulator per member quartet. cc-pVTZ
+    has up to 10 member pairs per family pair, so 100 member quartets, each
+    up to n_comp⁴ for (ff|ff); bound it before relying on it.
+  - Validation surface: every reachable family layout, the member-subset
+    selection, and the union primitive pairs under P1.
+  - It adds a third producer for the per-component path.
+- *Mitigation:* the family kernel exposes its dense member blocks, with
+  `value()` a thin reader over them.
+
+**Route B — change the generation/digestion contract, in two levels.**
+
+- **K1 — dense digestion per block.** For each block the kernel's dense
+  (ab|cd) array is contracted at once: J_ab += Σ (ab|cd) D_cd, J_cd +=
+  Σ (ab|cd) D_ab, K_ac += Σ (ab|cd) D_bd and its three partners. Weights
+  per block replace per-component canonical and orbit decisions: unordered
+  block pairs visited once, half weight where bra = ket or A = B, and S1's
+  weight per block (needs the per-block skeleton test, step 3).
+  - *Benefit:* at most the per-component machinery above, ~25–45 % of the
+    build, less the cost of the dense contractions. Unmeasured.
+  - *Risks:*
+    - On sp bases blocks are tiny ((ss|ss) is one value), so per-block
+      contraction overhead may exceed the scatter it replaces.
+    - Getting the block weights right for every symmetry case (A = B,
+      bra = ket, both) is exactly the class of error the per-component
+      filters exist to avoid.
+    - Every `FusedTerm` mode (Combined, CoulombOnly, ExchangeOnly,
+      RawCoulombExchange) and UHF need their own contraction.
+    - Symmetry: replication mode has no per-block form; symmetric runs
+      that are not skeleton-eligible keep the old path.
+    - Component Schwarz goes; screened components are digested at zero
+      effect, so this is a cost question, not a correctness one.
+- **K2 — batches across ket blocks** of one class for a fixed bra unit
+  (block or family pair), on top of K1: lanes across kets (cc-pVTZ's
+  K = 1 blocks, 23 % of its HGP kernel time), bra-side work hoisted, the
+  HRR as array work over the batch, digestion as small matrix products.
+  - *Benefit:* the per-block fixed costs that 5b's census could not touch.
+    Unmeasured.
+  - *Risks:* the largest restructure here. Batches cross today's
+    exactly-once unit, so the batch order must still give each unordered
+    block pair exactly once (the B1 argument, one level up). Memory per
+    batch; the MPI stripe and fixed partition at batch level.
+
+**What to measure first, cheapest first:**
+
+1. *K1 digestion census (probe only).* In the benchmark, for the
+   production build without symmetry, RHF, Combined: time today's
+   per-component digestion against a per-block dense contraction of the
+   same block values, by class, on 8 H2O / 6-31G, 4 H2O / cc-pVDZ and 1
+   H2O / cc-pVTZ, with G compared. Decides whether Route B is worth its
+   risks at all, and on which bases.
+2. *B2*, with the family kernel exposing dense member blocks.
+3. *K1 in the loop*, only if step 1 shows a clear win, landed alone (not
+   bitwise).
+4. *K2*, only after K1, if a census shows the per-block fixed costs are
+   still worth a restructure.
+
+**Recommendation.** Do the K1 census first: it is a probe, it needs
+nothing restructured, and it answers whether the contract is the next big
+lever or a small one. Then B2 regardless, since its kernels survive either
+answer as long as they expose dense blocks. Start K1 or K2 only on measured
+evidence.
+
 **The fixed accumulator partition.** The fused loop's partials are keyed by
 thread index, so a run is reproducible at a given thread count but not
 across counts (CO2 / 6-31G\* direct differs between 1 and 4 threads in the
