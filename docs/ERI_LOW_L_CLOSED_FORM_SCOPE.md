@@ -9,7 +9,7 @@ stands in the way?
 D1, F1, F2, F4, T1. Measured and declined: D1c (electron-transfer
 recurrence), 5b (a class-batched scheduler). Measured, not landed: lanes
 across primitive quartets (2b, prototype kept in the tree) and D2a
-(shared-exponent families). Open, in order: D2b, then 2b, the fixed
+(shared-exponent families). Open, in order: D2b's B0 probe, 2b, D2b, the fixed
 accumulator partition, a per-block skeleton test, C5, P2, total L > 12, F3;
 D3 is independent and C4b deprioritised. When those land or are abandoned,
 rewrite this as an answer.
@@ -464,8 +464,9 @@ cc-pVDZ oxygen's equal-size 1s and 2s never merged: 1.47–1.83× instead of
 
 | step | what | bitwise? |
 |---|---|---|
-| D2b | families in the fused loop | no (summation order); lands alone |
-| 2b | lanes at K ≥ 3 in the HGP block kernel | no; lands alone |
+| D2b B0 | production-quality closed-form family pass, in the probe | nothing lands |
+| 2b | lanes at K ≥ 3 in the HGP block kernel, as a reusable laned core | no; lands alone |
+| D2b B1–B3 | families in the fused loop | no (summation order); lands alone |
 | partition | fixed accumulator partition | no; lands alone |
 | skeleton test | per-block skeleton test | yes |
 | C5 | screened kernels in both block kernels | screened kernels only |
@@ -536,7 +537,15 @@ Predictions (written first): cc-pVDZ / cc-pVTZ builds 1.4–1.5× (kernels
 1.7× at 73–80 % of the build); Pople decided by B0, 1.0–1.3×; B1 alone
 within ±3 % of today.
 
-**2b — lanes.** As measured above; re-measure on top of D2b.
+**2b — lanes. Lands after B0 and before B1, alone.** It is measured and
+ready, and not bitwise, so it re-baselines the fingerprints on its own. D2b
+must then be measured against the laned kernel: D2a's 1.7× at L ≥ 4 was
+against the scalar one, and lanes and families compete for the same HGP
+primitive work. Land it with the laned primitive loop taking a list of
+primitive quartets and per-quartet weights into accumulators, so that D2b's
+HGP family pass reuses the same core (the union of a family quartet's
+primitive quartets, several member accumulators) and the lane width is
+written once. B0 is closed-form only and does not depend on it.
 
 **The fixed accumulator partition.** The fused loop's partials are keyed by
 thread index, so a run is reproducible at a given thread count but not
