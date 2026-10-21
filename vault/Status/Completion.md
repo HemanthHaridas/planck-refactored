@@ -397,6 +397,13 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Lanes across primitive quartets in the HGP block kernel (2b,
+  2026-10-21).** `hgp_block::vrr_lanes<B>` runs the VRR for four primitive
+  quartets at once in blocks with K >= 3 (scalar below). Fock build, one
+  thread: cc-pVTZ 1.38x, 6-31G\* 1.23x, cc-pVDZ 1.21x, sp-only 1.05-1.07x.
+  Not bitwise; block sweep <= 1.1e-14 on four bases, mutation-tested.
+  Record: `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
+
 - **No per-iteration skeleton rebuild on the full point-group path (F1,
   2026-10-21).** Above `threshold` the SAO-blocked direct SCF rebuilt its
   n_b⁴ skeleton every iteration and was slower than no symmetry. It now

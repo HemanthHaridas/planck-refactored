@@ -1930,16 +1930,16 @@ identify the path taken. Not required for correctness or performance.
     precision). The ket VRR is per-primitive-quartet overhead (180–300
     elements each, ~3 GFLOP/s), not arithmetic or memory, so the levers are
     fewer primitive quartets (D2) or several per pass (SIMD lanes).
-  - **Lanes and D2a measured (2026-10-21), nothing landed.** Lanes across
-    primitive quartets in the HGP block kernel: 1.13-1.32x of the build,
-    sweep <= 1.1e-14 (prototype kept uncommitted). D2a shared-exponent
+  - **Lanes landed (2b, 2026-10-21; see Completion); D2a measured.** D2a shared-exponent
     families: ~1.7x on the kernels for cc bases (est. 1.4-1.5x of the
     build), not yet a win on Pople (probe overhead). Both work inside one
     shell quartet. 5b (a SHARK-style class-batched scheduler) was
     declined after its S0 census: within-block lanes already carry
     94-99.8 % of primitive quartets, so pooling across blocks buys at
-    most ~1.15x on the lane work. Next: D2b (fused loop grouped by family
-    pair), then 2b; the fixed accumulator partition is independent.
+    most ~1.15x on the lane work. B0 (a production-quality closed-form
+    family pass) has Pople merging across L at 1.04-1.34x. Next: D2b (fused
+    loop grouped by family pair), measured against the laned kernel; the
+    fixed accumulator partition is independent.
   - **Open, in order:** a per-block skeleton test, C5 (screened kernels in both block
     kernels; range-separated hybrids still take per-component HGP), D2a/D2b
     (shared-exponent families), P2 (ε screening, a policy decision), then
