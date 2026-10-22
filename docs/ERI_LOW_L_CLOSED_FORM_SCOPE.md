@@ -605,7 +605,7 @@ hot calls were in the per-block test, and a table took the build from
 
 | step | what | bitwise? |
 |---|---|---|
-| B2 | families on top of K1, with B1's loop order re-cut for p ≤ q | no; lands alone |
+| B2.1–B2.3 | family-quartet loop order, closed-form families, then a probe decides HGP families | no; each lands alone |
 | partition | fixed accumulator partition | no; lands alone |
 | C5 | screened kernels in both block kernels (then dense too) | screened kernels only |
 | P2 | quartet-level primitive screening | no (~1e-12); lands alone |
@@ -614,27 +614,76 @@ hot calls were in the per-block test, and a table took the build from
 | D3 | RI-JK pair factors (independent) | per the BLAS doc |
 | K2 | batches across ket blocks (conditional) | no |
 
-**B2 — families on top of K1.** The family kernel produces each member
-quartet as a dense block for K1 to digest; the L ≥ 4 pass calls `vrr_lanes`
-over the union primitive quartets. B1's family-quartet units return with it
-(from the stash), re-cut so each unit visits member pairs p ≤ q; that also
-fixes K1's four-thread imbalance on cc-pVTZ.
+**B2 — families on top of K1. Rescoped 2026-10-22 after a re-measure.**
 
-- *Benefit (measured on kernels):* L ≤ 3 1.54–1.78× on cc, 1.04–1.34× on
-  Pople (B0); L ≥ 4 ~1.7× on cc against the scalar kernel. Estimated build:
-  cc 1.4–1.5×, Pople 1.0–1.3×, on top of K1.
-- *Risks:* the L ≥ 4 gain shrinks against the laned kernel (lanes and
-  families compete for the same primitive work); Pople's ~20 % per-quartet
-  overhead at 1:1; scratch per family quartet (cc-pVTZ: up to 100 member
-  quartets, each up to n_comp⁴ for (ff|ff)), to bound before relying on it;
-  the validation surface (every family layout, member-subset selection,
-  union primitive pairs under P1).
-- *Gates:* a family sweep in `planck-hgp-engine-smoke` (every member value
-  of every family quartet against per-component HGP on water 6-31G,
-  6-31G\*, cc-pVDZ, cc-pVTZ, mutation-tested on the coefficient
-  contraction, member-subset selection and layout sharing); max|ΔG| ≤
-  1e-12 against the K1 build; `check_dense_digest` with and without
-symmetry; MPI 1/2/4; both suites.
+*What changed since B0.* Lanes (2b) and K1 both landed after the family
+numbers were taken. `--family` again, against today's production kernels
+(laned), one thread, no Schwarz or canonical filtering on either side
+(second of two runs):
+
+| fixture | L ≤ 3: family vs production (passes fewer) | L ≥ 4: scalar family vs laned production (passes fewer) | kernel total |
+|---|---|---|---|
+| 1 H2O / cc-pVTZ | **1.78×** (5.9×) | 1.02× (2.6×) | 1.16× |
+| 4 H2O / cc-pVDZ | **1.73×** (5.9×) | **0.92×** (2.4×) | 1.41× |
+| 4 H2O / 6-31G\* | 1.17× (2.2×) | **0.81×** (1.3×) | 0.98× |
+| 4 H2O / 6-31G | 1.18× (2.3×) | 0.96–1.01× (1.0×) | 1.17× |
+| naphthalene / 6-31G | **1.37×** (3.6×) | **0.48×** (1.0×) | 1.21× |
+
+- **The closed-form half held.** 1.16–1.78×, as in B0.
+- **Lanes took the HGP half.** B0's 1.70× on cc bases was against the
+  scalar kernel. Against the laned one, a scalar family pass is 0.92–1.03×
+  on cc bases where it merges 2.4–2.6× of the passes, and a loss (0.48–0.81×)
+  where it merges little or nothing. Lanes and families compete for the same
+  primitive work; this is the risk B0 flagged, now measured.
+
+*Predicted build gain, closed-form families only.* Kernel time is ~75–86 %
+of the dense build (K1 census arm); taking the L ≤ 3 family ratio on the
+L ≤ 3 share of kernel time and leaving L ≥ 4 on today's kernel:
+
+| fixture | kernel, L ≤ 3 families only | build (prediction) |
+|---|---|---|
+| 4 H2O / cc-pVDZ | 1.46× | **~1.35×** |
+| naphthalene / 6-31G | 1.34× | **~1.25×** |
+| 4 H2O / 6-31G (8 H2O similar) | 1.17× | ~1.13× |
+| 1 H2O / cc-pVTZ | 1.14× | ~1.11× (its work is L ≥ 4) |
+| 4 H2O / 6-31G\* | 1.08× | ~1.06× |
+
+*Steps.*
+
+1. **B2.1, the loop order alone.** The dense traversal runs one unit per
+   family quartet (P, Q), P ≤ Q, visiting its member block pairs as
+   (min, max) of a member of P and a member of Q (for P = Q, x ≤ y). That
+   is K1's set of unordered block pairs, each once. Re-cut from B1's stash
+   (which visited ordered pairs); per-member `prepare`, unchanged kernels,
+   MPI stripe on the unit index. Gate: a counting kernel proves each
+   surviving unordered pair is prepared once; max|ΔG| ≤ 1e-13 against K1
+   with and without symmetry; MPI 1/2/4. Measure at 1 and 4 threads: B1 cost
+   Pople +5–8 % at one thread for the order alone, which B2.2 must repay;
+   it should fix K1's four-thread drop on cc-pVTZ (1.22× → 1.09×).
+2. **B2.2, the closed-form family kernel.** Move B0 from the probe into
+   `src/integrals/` (layouts templated on raise count, bra members first,
+   zero-weight rows skipped, no per-quartet allocation). Input: the unit's
+   surviving L ≤ 3 member blocks (after block Schwarz and, under S1, the
+   per-block op test), so member-subset selection is part of the contract.
+   Output: each member's dense block (≤ 27 values) into per-thread scratch,
+   digested by K1's writes. Families of one member use today's kernel.
+   Gates: a family sweep in `planck-hgp-engine-smoke` (every member value of
+   every family quartet against per-component HGP on water 6-31G, 6-31G\*,
+   cc-pVDZ, cc-pVTZ; mutations on the coefficient contraction, member-subset
+   selection and layout sharing); `check_dense_digest` family on against
+   off; smoke, extended, MPI. Prediction above; stop if 6-31G\* regresses.
+3. **B2.3, HGP families: decide by a probe, not by building.** Give the
+   probe's L ≥ 4 family pass `vrr_lanes` over the union primitive quartets,
+   and apply it only to family quartets that merge (union passes < summed
+   member passes). Land it only if it reaches ≥ 1.15× on the L ≥ 4 kernel
+   share of cc-pVDZ and cc-pVTZ; otherwise record it as declined. Pople
+   L ≥ 4 merges nothing and stays on today's kernel either way.
+
+*Risks.* B2.1's order cost on Pople (above). Scratch per unit: cc-pVTZ has
+up to ~100 member blocks per family quartet; at ≤ 27 values each the L ≤ 3
+side is a few KB, but B2.3 would need a contracted table per member, which
+must be bounded before relying on it. Exactly-once now rests on the unit
+enumeration, so the counting-kernel gate is load-bearing.
 
 **The fixed accumulator partition.** The fused loop's partials are keyed by
 thread index, so a run is reproducible at a given thread count but not

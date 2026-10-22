@@ -1961,6 +1961,12 @@ identify the path taken. Not required for correctness or performance.
     replaced the per-block group-quartet canonicalization with a per-build
     pair-image table: **1.32× at one thread, 1.33× at four** (0.273 → 0.206
     s); eight mutations caught.
+  - **B2 rescoped (2026-10-22).** Re-measured after lanes and K1: the
+    closed-form family pass still gives 1.16–1.78× on its kernels, but the
+    scalar HGP family pass is now 0.48–1.03× against laned production, so
+    lanes took that half. Plan: B2.1 family-quartet loop order (B1 re-cut
+    for p ≤ q), B2.2 closed-form families (predicted build ~1.06–1.35×), B2.3
+    a laned HGP family probe that lands only at ≥ 1.15× on cc L ≥ 4.
   - **Open, in order:** K1.4 with a per-block skeleton test, B2, C5 (screened kernels in both block
     kernels; range-separated hybrids still take per-component HGP), D2a/D2b
     (shared-exponent families), P2 (ε screening, a policy decision), then
