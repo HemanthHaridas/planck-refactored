@@ -41,6 +41,7 @@
 #include "basis/basis.h"
 #include "base/basis.h"
 #include "base/types.h"
+#include "require_boys_library.h"
 
 #include <Eigen/Core>
 #include <algorithm>
@@ -255,6 +256,9 @@ namespace
 
 int main(int argc, char **argv)
 {
+    // Real integrals dispatch through the runtime-loaded Boys library.
+    if (!require_boys_library())
+        return 1;
     int reps = 7;
     if (argc > 1)
         reps = std::max(1, std::atoi(argv[1]));

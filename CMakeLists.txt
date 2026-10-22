@@ -2049,6 +2049,7 @@ if(BUILD_TESTING)
 
     add_executable(planck-symm-fock-benchmark
         ${CMAKE_SOURCE_DIR}/tests/symm_fock_benchmark.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${INT_SRC}
         ${LOOKUP_SRC}
         ${SRC_DIR}/symmetry/hgp_symm.cpp

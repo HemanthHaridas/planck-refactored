@@ -1950,6 +1950,17 @@ identify the path taken. Not required for correctness or performance.
     Smoke 43/45 and extended 132/136 (known rccsdt failures). B1 is parked as a git stash ("B1: fused
     loop in family-quartet order") and returns with B2. Next: K1.4 (under
     S1, with the per-block skeleton test), then B2.
+  - **K1.4 is in the working tree, gated, not committed (2026-10-22).**
+    Skeleton-mode (S1) builds take the dense path, with K1.4b; each component carries
+    the S1 weight of its canonical form. Ops that send the block's shell
+    quartet to a different canonical shell quartet are decided once per
+    block (lower: skip the block). Gate: dense against per-component under
+    water's real C2v (32 checks, worst 1.2e-13 against 1e-13·|G|); four
+    mutations caught. Naphthalene D2h 0.275 → 0.255 s (1.08×) at one thread,
+    1.12× at four. K1.4b then made identity-map ops a sign test and
+    replaced the per-block group-quartet canonicalization with a per-build
+    pair-image table: **1.32× at one thread, 1.33× at four** (0.273 → 0.206
+    s); eight mutations caught.
   - **Open, in order:** K1.4 with a per-block skeleton test, B2, C5 (screened kernels in both block
     kernels; range-separated hybrids still take per-component HGP), D2a/D2b
     (shared-exponent families), P2 (ε screening, a policy decision), then
@@ -1973,31 +1984,25 @@ identify the path taken. Not required for correctness or performance.
     skeleton build from the block kernels; it only shortens a one-time
     build now, so it is last. Record:
     `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
-  - **Teaching-guide follow-ups (found 2026-10-20, after D1):**
-    - **§11 "Auto-Dispatch: Calibrated Per-Bucket Engine Selection" needs
-      rewriting.** It says every contracted shell quartet is routed to the
-      bucket's fastest engine, and that the direct Fock variants reuse
-      `_compute_2e_auto` with the same per-quartet rule. In the direct
-      (fused) build, Coulomb quartets with total L ≤ 12 now go to the block
-      kernels; per-bucket dispatch governs only the conventional ERI tensor
-      and two-phase builds, screened kernels, and direct quartets with total
-      L > 12. Its µs ladder also predates H1 (HGP's per-component path ~1.1×
-      faster), so near-tied buckets may have moved: rerun
-      `planck-auto-dispatch-benchmark` and `scripts/fit_auto_dispatch.py`. If
-      the fitted table changes, that is a `kAutoEngine` change in `rys.cpp`,
-      not only a doc edit.
-    - **§12 "HGP vs OS vs Rys in Practice — Measured Timings" is stale**
-      (measured 2026-06-15). The `nosym`/`d2h` columns go through the fused
-      direct loop, which C1, H1, L1, L2 and P1 sped up for every engine; the
-      Auto rows now run the block kernels and no longer track HGP; the `full`
-      column (separate skeleton path) probably moved less. Rerun the
-      full-symmetry direct-Fock benchmark across the three engines and three
-      modes, then re-check its conclusions (HGP narrowly wins full symmetry;
-      Rys dominated at these L).
-    - **§9 "One loop, four engines"** says the engines differ in exactly one
-      expression, the per-quartet ERI function. Still true for explicit
-      engines, but Auto also passes block kernels; add one sentence pointing
-      to "The HGP block kernel".
+  - **Teaching guide (rewritten 2026-10-22).** §8 now covers the persist
+    threshold, the fused D2h-subgroup path above it, Auto → HGP and the
+    group-averaged SAD guess (F1/F2/F4). §9 covers lanes, dense digestion
+    (K1) and dense skeleton weighting (K1.4). §11 says where the per-bucket
+    table still decides (stored tensor, two-phase builds, screened kernels,
+    total L > 12). §12 is re-measured. One item remains open: **refit the
+    Auto table.** Its µs ladder predates H1 (HGP's per-component path is about
+    1.1× faster), so near-tied buckets may have moved. Rerun
+    `planck-auto-dispatch-benchmark` and `scripts/fit_auto_dispatch.py`; a
+    changed table means editing `kAutoEngine` in `rys.cpp`, not only the doc.
+    - **Correction:** the earlier note said §12's `nosym`/`d2h` columns go
+      through the fused loop. They do not. `planck-symm-fock-benchmark`
+      times the two-phase `_compute_2e_fock{,_auto}` builds, which is why
+      Auto tracked HGP there and still does. The re-measured table is
+      labelled accordingly.
+    - **`planck-symm-fock-benchmark` segfaulted at startup.** It never
+      loaded the Boys library (the same defect fixed in nine ctest binaries
+      on 2026-10-20). Fixed: `require_boys_library()` call plus its source
+      in the target.
 
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys

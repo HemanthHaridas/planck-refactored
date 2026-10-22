@@ -1519,6 +1519,50 @@ value-neutral — the Schwarz bound is symmetry-invariant, so screening a repres
 screens its whole orbit, and the orbit slots written by distinct representatives are
 disjoint, so the parallel scatter needs only same-value atomic stores.
 
+**Where the skeleton is used, and what happens above it.** The skeleton ERI
+is a dense \(n_b^4\) array. It is density-independent, so when it fits it is
+built once and reused every iteration, which makes each iteration a cheap
+contraction. Planck *persists* it when \(n_b \le\) `threshold` (default 100).
+Below that line it is 6–19× cheaper per iteration than a fused direct build:
+
+| molecule | \(n_b\) | full group, persisted | fused, no symmetry |
+|---|---|---|---|
+| H₂O / cc-pVDZ (\(C_{2v}\)) | 25 | 0.047 s once + 0.0004 s/iter | 0.0075 s/iter |
+| NH₃ / 6-31G\* (\(C_{3v}\)) | 21 | 0.017 s once + 0.0003 s/iter | 0.0024 s/iter |
+| CH₄ / cc-pVDZ (\(T_d\)) | 35 | 0.054 s once + 0.0016 s/iter | 0.018 s/iter |
+
+Above the threshold, an earlier version rebuilt the \(n_b^4\) skeleton every
+iteration, and the result was slower than no symmetry at all. Now those runs
+take the fused direct build (§9) with signed operations instead. The
+operations Planck builds from coordinate-axis flips form the largest
+\(D_{2h}\) subgroup of the point group. A density that is symmetric under the
+full group is symmetric under any subgroup, which is all the fused loop's
+skeleton scheme needs. RHF, `scf_mode direct`, one thread, whole SCF:
+
+| molecule | \(n_b\) | no symmetry | skeleton rebuilt every iteration | fused with the \(D_{2h}\) subgroup | full group, persisted (`threshold 200`) |
+|---|---|---|---|---|---|
+| benzene / 6-31G\* (\(D_{6h}\)) | 102 | 13.7 s | 17.7 s | **4.08 s** | 3.0 s, 866 MB |
+| naphthalene / 6-31G (\(D_{2h}\)) | 106 | 21.3 s | 66.6 s | **6.35 s** | 7.3 s |
+
+Benzene uses only 8 of its 24 operations on the fused path, yet lands within
+1.4× of the persisted full-group path without its \(n_b^4\) memory.
+
+Two smaller fixes make the path behave:
+
+- **Auto means HGP here.** The skeleton loops have no Auto mode of their own,
+  so `engine auto` used to fall through to per-component OS. It now resolves
+  to HGP, the faster per-component engine on this path (1.07–1.12× per
+  skeleton build).
+- **Group-average the SAD guess.** The raw SAD density is invariant under
+  the group, but making it idempotent keeps the top \(n_\text{occ}\) natural
+  orbitals, and that splits a degenerate set at the cutoff. The result is
+  not symmetric, and full-symmetry SCF aborted on it (\(C_{3v}\) NH₃,
+  \(D_{6h}\) benzene). With full symmetry on, the guess is averaged,
+  \(\mathbf P \leftarrow \tfrac{1}{|G|}\sum_R \mathbf O_R \mathbf P
+  \mathbf O_R^{\mathsf T}\), the contravariant law above. Averaging keeps
+  \(\mathrm{Tr}(\mathbf{PS})\) but gives up idempotence, and the SCF fixes
+  that on its first diagonalization.
+
 ### Planck's Spherical-Harmonic Full-Symmetry Path
 
 The reduction above is engine-Cartesian: the integral primitives, the petite list, and
@@ -1833,7 +1877,7 @@ applied for each of the (up to eight) distinct index tuples in the orbit.
 Nothing larger than \(n_b^2\) is ever allocated, and the second \(n_b^4\) sweep
 disappears entirely.
 
-#### Why there are no degeneracy factors
+#### Why the per-component path has no degeneracy factors
 
 This build is notoriously easy to get wrong, and the usual bug is in the
 bookkeeping. When indices coincide — \(\mu = \nu\), or \(\lambda = \sigma\), or
@@ -1872,6 +1916,11 @@ double-count, and the filter without dedup would miss the collapse cases.
 Point-group symmetry composes on top without double-counting; see
 "Symmetry inside the fused loop" below.
 
+This is the path every explicit engine takes. The default (Auto) engine now
+digests whole shell quartets at once, and there degeneracy weights come back,
+at the level of shells rather than AOs, where they are three simple factors;
+see "Digesting a whole block at once" below.
+
 #### One loop, four engines
 
 OS, HGP, Rys, and Rys-Auto had four copies of the identical two-phase builder.
@@ -1880,6 +1929,12 @@ contracted ERI — and all four of those have the same signature. So the engine
 enters as a callable and the loop is written once, in
 `src/integrals/fused_fock.h`. The engine-specific recurrences stay in their own
 files; the traversal, screening, threading, and accumulation are shared.
+
+That is still exactly true of the explicit engines. The default (Auto) engine
+also hands the loop *block kernels*, which evaluate a whole shell quartet at
+once ("Shell-level closed forms" and "The HGP block kernel" below). With
+symmetric densities it then switches to a different traversal that digests
+each block densely ("Digesting a whole block at once").
 
 Screening happens at the block level: a Schwarz bound is computed per
 shell-group pair and whole quartet blocks are rejected before any primitive work
@@ -2049,8 +2104,10 @@ Three details make it work:
   whether the skip works. Inverting it is a mutation the gate cannot catch,
   and that is correct.
 
-**What symmetry buys today.** On naphthalene / 6-31G (\(D_{2h}\)), one Fock
-build with the default (Auto) kernels:
+**What symmetry buys.** On naphthalene / 6-31G (\(D_{2h}\)), one Fock
+build with the default (Auto) kernels, measured after the HGP block kernel
+and before lanes and dense digestion (both builds have since got faster, the
+symmetric one to 0.255 s):
 
 | per Fock build | no symmetry | symmetry | ratio |
 |---|---|---|---|
@@ -2208,8 +2265,10 @@ multiply:
 | skip blocks that cannot hold a canonical quartet | 1.06× | → 0.22 s |
 | drop negligible primitive pairs (and whole-block symmetry rejection) | 1.14× | → 0.19 s |
 | HGP block kernel for total \(L \ge 4\) (next subsection) | ~1.5× | → ~0.13 s |
+| several primitive quartets per VRR pass (lanes) | 1.05× | → 0.129 s |
+| digest each block densely (§ "Digesting a whole block at once") | 1.14× | → 0.113 s |
 
-That is about 11× overall. On d-containing 6-31G\* the closed forms alone
+That is about 13× overall. On d-containing 6-31G\* the closed forms alone
 gave about 2.3×, because the classes they cover are a smaller share of its
 build; the HGP block kernel then took it to about 11× too (4.9× on its own).
 The gain always depends on how much of the build the covered classes account
@@ -2340,6 +2399,32 @@ The gain grows with angular momentum, because the per-component path
 repeated its primitive loop once per component, and the number of components
 grows as \(L^2\) per shell.
 
+**Several primitive quartets per pass (lanes).** Profiling the block kernel
+then showed where its time goes: the ket VRR, at about 3 GFLOP/s. A primitive
+quartet writes only 180–300 table elements into a 5–7.5 KB table, so the cost
+is the fixed overhead of a small recurrence per primitive quartet, not the
+arithmetic and not memory. Two attempts to cut the arithmetic confirmed it.
+The electron-transfer recurrence did less work but bought only 1.04–1.06× at
+equal precision, and a unit-stride row layout was time-neutral. What helps is
+running several primitive quartets through one pass. `hgp_block::vrr_lanes<B>`
+evaluates the VRR for B primitive quartets at once, with the lane index
+innermost (`[e][f][m][lane]`) so every innermost loop has compile-time length
+B. Blocks with at least three primitive quartets use B = 4, padding the last
+group with zero-weight lanes; smaller blocks keep the scalar loop. B = 2 sits
+between, B = 8 is slower than 4, and a three-quartet block is cheaper padded
+to four than run one at a time. One thread, against the scalar kernel:
+
+| fixture | scalar | lanes | speedup |
+|---|---|---|---|
+| 1 H2O / cc-pVTZ | 0.127 s | 0.092 s | 1.38× |
+| 4 H2O / 6-31G\* | 0.100 s | 0.081 s | 1.23× |
+| 4 H2O / cc-pVDZ | 0.548 s | 0.453 s | 1.21× |
+| 8 H2O / 6-31G | 0.136 s | 0.129 s | 1.05× |
+
+The gate is the same block sweep (worst \(1.1\times10^{-14}\)), and three
+mutations aimed at the lanes each fail it: dropping the laned \(W-Q\) term,
+giving padding lanes a nonzero weight, contracting lane 0 only.
+
 **What it taught.** The idea that failed (contract once per shell quartet)
 and the idea that worked are the same idea. The failure was in the data
 layout: an axis-indexed cube carries cells no component reaches and Boys
@@ -2351,6 +2436,151 @@ Implementation: `src/integrals/block_eri.h` (interface, `NoBlockKernel`,
 `ChainBlockKernel`), `src/integrals/hgp_block_eri.h` (kernel),
 `src/integrals/rys.cpp` (`auto_block_kernel`), `tests/hgp_engine_smoke.cpp`
 (sweep), `tests/eri_class_share_benchmark.cpp` (per-class timing).
+
+#### Digesting a whole block at once
+
+Once the kernels produce a whole shell quartet per call, the rest of the loop
+still treats integrals one at a time. Each component is read out of the
+block, run through the canonical filter, the component Schwarz test and the
+orbit dedup, and written into \(\mathbf G\) at up to eight places on its own.
+A census measured what that costs: digesting each block densely instead
+would make the whole build 1.11–1.26× faster at unchanged precision, because
+the per-component digestion took 1.8–2.6× the time of the dense one. It also
+explained why an earlier plan to batch same-class blocks across a bra pair
+had nothing to buy: as long as every value leaves its kernel and is digested
+alone, the cost outside the kernels does not move.
+
+**Visit each unordered block pair once.** The dense loop visits each pair of
+shell pairs \(p \le q\) once and reads every component of the block, including
+the non-canonical ones that the per-component filter would discard. That
+changes the bookkeeping. Within a block \((AB|CD)\) every component
+\((ab|cd)\) is a distinct member of its permutational orbit, except that a
+diagonal shell pair (\(A = B\)) produces both \((ab|\cdot)\) and
+\((ba|\cdot)\), and \(p = q\) produces both \((ab|cd)\) and \((cd|ab)\). So
+the weights the per-component path avoided come back, but at shell level,
+where they are just three factors:
+
+\[
+\text{deg} = (A{=}B\;?\;1:2)\,(C{=}D\;?\;1:2)\,(p{=}q\;?\;1:2).
+\]
+
+With \(v' = \text{deg}\cdot(ab|cd)\), six writes per component and one
+symmetrization at the end reproduce the full eight-fold sum:
+
+\[
+\begin{aligned}
+G_{ab} &\mathrel{+}= \tfrac12 P_{cd}\,v', & G_{cd} &\mathrel{+}= \tfrac12 P_{ab}\,v',\\
+G_{ac},\ G_{bd},\ G_{ad},\ G_{bc} &\mathrel{-}= \tfrac18 P_{bd}v',\ \tfrac18 P_{ac}v',\ \tfrac18 P_{bc}v',\ \tfrac18 P_{ad}v',
+\end{aligned}
+\qquad \mathbf G \leftarrow \tfrac12(\mathbf G + \mathbf G^{\mathsf T}).
+\]
+
+The other modes use the same writes with their own coefficients: raw
+exchange is \(+\tfrac14\), and unrestricted exchange is \(-\tfrac14\) per spin
+density. These weights were derived once and are pinned by a gate that
+breaks each of them on purpose.
+
+**Why it needs a symmetric density.** The final symmetrization is what lets
+six writes stand in for eight, and it keeps only the part of \(\mathbf G\)
+that is symmetric. For a symmetric \(\mathbf P\) that is all of it. For a
+non-symmetric \(\mathbf P = \mathbf S + \mathbf A\), exchange built from the
+antisymmetric part \(\mathbf A\) is itself antisymmetric, and averaging with
+the transpose deletes it. SCF densities are symmetric, but the J and K entry
+points also serve response code, which can pass anything. So the dense path
+is chosen **once per build**, and only when every density is symmetric to
+\(10^{-10}\). Anything else takes the per-component loop and is reproduced
+bit for bit.
+
+The choice cannot be made per block. The dense loop visits \(p \le q\), while
+the per-component canonical filter works on AO indices and needs some kets
+with \(q < p\). Mixing the two inside one build would count some integrals
+twice and drop others. So the build is all-dense or all-per-component, and
+dense requires that the block kernels accept every block: Auto, the Coulomb
+kernel, and shells up to f (total \(L \le 12\)). Explicit engines keep the
+per-component loop, so the cross-engine comparators still compare engines.
+
+**Screening stays exactly the same.** The dense loop still skips a component
+whose Schwarz product is below the tolerance. Without that mask the new
+\(\mathbf G\) differs from the old by about \(10^{-10}\), the size of what
+the tolerance drops; with it, by at most \(10^{-13}\), which is summation
+order. The mask costs about 3 %.
+
+**Specialize the inner loop.** The first version looped over two output
+channels with a check per component for which writes were active, so that
+one body served every mode. It gave 1.09–1.18× against the census's
+1.11–1.26×. Compiling one inner loop per active combination of writes
+(Coulomb and exchange, into either output) recovered almost all of the gap:
+
+| fixture | today | dense | 1 thread | 4 threads |
+|---|---|---|---|---|
+| 8 H2O / 6-31G | 0.129 s | 0.113 s | 1.14× | 1.12× |
+| 4 H2O / 6-31G\* | 0.082 s | 0.070 s | 1.17× | 1.17× |
+| 4 H2O / cc-pVDZ | 0.453 s | 0.410 s | 1.11× | 1.11× |
+| 1 H2O / cc-pVTZ | 0.092 s | 0.076 s | 1.22× | 1.09× |
+
+The four-thread drop on cc-pVTZ is load imbalance. Visiting \(p \le q\) gives
+the early bra pairs more kets than the late ones, and a single water has few
+pairs to spread. Grouping the work by shared-exponent families balances it;
+that change waits for the families themselves.
+
+**With point-group symmetry.** In the skeleton scheme (§ "Symmetry inside the
+fused loop") each component of a dense block carries the skeleton weight of
+its canonical form: the orbit size if it is its orbit's representative and
+not forbidden, and 0 otherwise. Because classes and weights compose, the
+final symmetrizations then do the rest: first \(\tfrac12(\mathbf G + \mathbf
+G^{\mathsf T})\), then the average over the group. Replication mode, used for
+non-symmetric densities, keeps the per-component loop.
+
+The weight test can mostly be decided per block. Shells are contiguous in AO
+order, so an operation that sends the block's four shells to a *different*
+canonical shell quartet decides every component the same way. If the image
+sorts lower, no component of the block can be a representative, and the
+block is skipped. If it sorts higher, that operation can never reject a
+component of the block. Only operations that map the block's shell quartet
+onto itself are applied component by component, and an operation that
+fixes every AO (the identity, or the mirror through a planar molecule) needs
+only a sign test, never canonicalization.
+
+The per-block test itself has to be cheap, because it runs for every
+operation on every block pair, about 1.9 M × 8 on naphthalene. Canonicalizing
+the four shell indices each time cost more than the per-component test did.
+Instead, each operation's image of each shell pair is tabulated once per
+build. Shell pairs are numbered in lexicographic order, so the image of a
+block is just the sorted pair of two table entries, and "sorts lower" is two
+integer comparisons. On naphthalene / 6-31G (\(D_{2h}\)) the symmetric
+build goes from 0.273 to 0.206 s (1.32×) at one thread, and 1.33× at four.
+
+The first attempt at this optimized the wrong call site. The profile named
+the canonicalization function, and only the per-component calls were removed
+at first. Time improved by 3 %, but the function's profile share did not
+move. That unchanged share, not the small time gain, was the sign that the
+hot calls were elsewhere.
+
+**Verifying it.** `planck-fock-accumulate` builds \(\mathbf G\) twice with
+the production kernels, dense on and off, for every term mode, restricted and
+unrestricted, on water in four bases, at two Schwarz tolerances, and under
+water's \(C_{2v}\) group. The worst difference is \(8.9\times10^{-14}\)
+without symmetry. A counting kernel asserts that the dense build prepared
+exactly the expected blocks, so the gate cannot pass on the old path. Nine
+mutations, each caught, cover every degeneracy factor, the exchange
+coefficient, the symmetrization, the Schwarz mask, the skeleton weight, the
+block rejection and the stabilizer count.
+
+Two traps came up while building that gate:
+
+- **A copied `Calculator` hides the point group.** `update_integral_symmetry`
+  matches basis functions to shells by pointer, and a copy's basis functions
+  still point at the original's shells. On the copy only the identity
+  operation survived, so the first "\(C_{2v}\)" gate tested a one-element
+  group and passed.
+- **zsh does not split an unquoted variable into words.** A benchmark loop
+  `for f in "8 6-31g" ...; ./bench --k1 $f` passed one argument, missed the
+  mode and ran the full default sweep, minutes per fixture with no matching
+  output. Use `${=f}`.
+
+Implementation: `src/integrals/fused_fock.h` (`dense_digest`, the build-level
+predicate, `dense_body`), `tests/fock_accumulate.cpp` (`check_dense_digest`),
+`tests/eri_class_share_benchmark.cpp` (`--k1`).
 
 #### Threading: why the reduction order is fixed
 
@@ -2395,6 +2625,10 @@ The MPI surface is confined to `src/base/mpi_env.h`, which compiles to rank 0 /
 size 1 / no-op reductions in the serial binaries. So the stride degrades to the
 full loop, the reduce touches nothing, and the serial and MPI builds are
 bitwise-identical — verified by `water_rhf_mpi_smoke` and `water_dft_mpi_smoke`.
+Three further cases run Auto direct SCF, which takes the dense digestion
+above, against serial: RHF on four waters in cc-pVDZ and UHF H₂O⁺ in
+6-31G\* are identical at 2 and 4 ranks, and B3LYP water in 6-31G\* differs
+by \(1.4\times10^{-14}\) Eh (`*_auto_direct_mpi_smoke`).
 
 Implementation: `src/integrals/fused_fock.h` (loop),
 `src/integrals/fock_accumulate.h` (orbit accumulation),
@@ -3004,27 +3238,42 @@ default:                             return HeadGordonPople::_contracted_eri_ele
 }
 ```
 
-In the stored-ERI sweep `_compute_2e_auto`, the HGP block-hoist fast path fires
-only when `_auto_engine` returns HGP for the shell-group bucket; OS- and
-Rys-chosen quartets fall to the per-component path (which re-dispatches through
-`_auto_contracted_eri`). The direct-Fock variants (`_compute_2e_fock_auto`,
-`_compute_2e_fock_uhf_auto`) reuse `_compute_2e_auto`, so the same per-quartet
-rule applies across stored-ERI and direct-Fock paths. Schwarz screening,
-canonical-quartet iteration, and the tensor/Fock contraction patterns are
-unchanged from the per-engine path.
+**Where the table still decides, and where it no longer does.** The table
+was built for a world in which every engine returned one Cartesian component
+per call. That world survives in two places, and in both the table chooses
+the engine per quartet:
 
-The table is purely a *which-engine* choice — all three engines return
-bitwise-identical integrals. In the memory-direct Fock build, though, Auto
-first sends every shell quartet with total \(L \le 3\) to the closed-form
-kernels described in §9 ("Shell-level closed forms"), and every quartet with
-\(4 \le L \le 12\) to the HGP block kernel ("The HGP block kernel"). Those
-agree with the engines to about \(10^{-15}\) in \(\mathbf G\) but are not
-bitwise-identical,
+- **The stored ERI tensor.** `_compute_2e_auto` (conventional SCF, MP2, CC,
+  CASSCF) and the two-phase Fock builds that contract it
+  (`_compute_2e_fock_auto`, `_compute_2e_fock_uhf_auto`). Its HGP fast path
+  fires only when the table picks HGP for the shell-group bucket; OS- and
+  Rys-chosen quartets fall to the per-component path, which re-dispatches
+  through `_auto_contracted_eri`.
+- **Whatever the block kernels decline** in the memory-direct Fock build
+  (§9): screened (range-separated) kernels, and shell quartets with total
+  \(L > 12\).
+
+Everything else in the direct build no longer consults the table. Every
+Coulomb shell quartet with total \(L \le 3\) goes to the closed forms, and
+every one with \(4 \le L \le 12\) to the HGP block kernel. With symmetric
+densities, the whole block is then digested at once ("Digesting a whole block
+at once"). Since direct SCF and every DFT J/K build use this path, the table
+now governs only a minority of Auto's work.
+
+The engines return identical integrals, so between them the table is purely a
+speed choice. The block kernels and dense digestion agree with the engines to
+about \(10^{-15}\)–\(10^{-13}\) in \(\mathbf G\) but are not bitwise-identical,
 so `engine auto` matches an explicit engine to machine precision rather than
-bit for bit. This is verified by the
-`engine_scf_energy_compare.py` comparator (OS == HGP == Rys == Auto to
-`0.000e+00 Eh`), including a He₂/cc-pV5Z case that reaches the high-L corner
-where Auto actually selects OS (Lsum ≳ 11) and Rys (\((7,8)\)/\((8,8)\)).
+bit for bit. The `engine_scf_energy_compare.py` comparator checks this
+(OS == HGP == Rys == Auto to `0.000e+00 Eh` at printed precision), including a
+He₂/cc-pV5Z case whose \(L > 12\) quartets reach the corner where the table
+picks OS (Lsum ≳ 11) and Rys (\((7,8)\)/\((8,8)\)).
+
+**The timings above are dated.** They were taken before one vectorized Boys
+call per primitive replaced HGP's per-order calls, which made HGP's
+per-component path about 1.1× faster, so buckets near a tie may have moved.
+The table has not been refitted since. Rerun the benchmark and the fitter
+before relying on the exact boundaries.
 
 When an engine is re-optimized: re-run `planck-auto-dispatch-benchmark`, re-run
 `scripts/fit_auto_dispatch.py`, then paste the regenerated table from
@@ -3187,13 +3436,15 @@ momentum the OS/HGP scratch buffers grow as the product of all six VRR
 extents, while Rys keeps a fixed number of quadrature roots \(n = \lfloor L/2
 \rfloor + 1\). The textbook expectation is therefore that hybrid engines prefer
 HGP at low-to-medium \(L\) and Rys at high \(L\). Planck's *measured*
-calibration (§11) tells a more specific story for the angular momenta that
-shipped bases actually reach: it picks Rys only at the very bottom
-(\(L_{AB}+L_{CD}\le 1\)) and HGP everywhere above, because the asymptotic
-high-\(L\) crossover sits past those bases. The same per-bucket operation-count
-sweep used for the OS-vs-Rys decision applies equally to HGP-vs-Rys, with the
-OS flop estimate replaced by the HGP estimate (which has a smaller HRR
-coefficient).
+calibration (§11) agrees in shape and is more specific: HGP wins 66 of 81
+buckets, including the very lowest; OS returns in a high-\(L\) corner after it
+received the same HRR hoist; and Rys keeps only the two most extreme buckets,
+\((7,8)\) and \((8,8)\).
+
+In the memory-direct Fock build none of this per-component comparison
+decides much any more. Whole shell quartets go to the closed forms or to the
+HGP *block* kernel (§9), which keeps HGP's recurrence but runs one primitive
+pass per shell quartet rather than one per Cartesian component.
 
 ### Screened and Range-Separated Kernels
 
@@ -3225,121 +3476,89 @@ exactly as in the OS and Rys symmetry-reduced variants.
 
 ### HGP vs OS vs Rys in Practice — Measured Timings
 
-The theoretical argument above (HRR factored *outside* the primitive contraction
-loops) explains why HGP is fast, but it does **not** imply HGP wins by a wide
-margin, because the same factorization can be applied to OS. Once it was (the
-OS-A4 rearrangement — see §11 and the OS engine notes — builds the VRR `(a0|c0)`
-block per primitive pair and runs HRR once per shell quartet, exactly as HGP
-does), the OS/HGP gap narrowed sharply: HGP still leads on the workload that
-matters — the full point-group path — but only by ~1.1–1.2×, not the ~1.5–2× an
-earlier build showed. The benchmark below is a head-to-head of all three engines
-on the same molecules and bases, in three symmetry modes — no symmetry
-(`nosym`), the legacy D2h coordinate-axis reduction (`d2h`), and the full
-point-group reduction (`full`). All runs share the shell-pair list, Schwarz
-screening, and OpenMP settings; only the contracted-quartet kernel and the
-symmetry walker change.
+The HRR-outside factorization explains why HGP is fast, but not by how much,
+because the same factorization can be applied to OS. Once it was (OS builds
+its `(a0|c0)` block per primitive pair and runs HRR once per shell quartet,
+as HGP does), the gap between the two narrowed to about 1.1–1.3× on the path
+where it still matters.
 
-The numbers are the **median of 9 repetitions** per configuration, OpenMP
-enabled, **on an otherwise-idle machine** (an earlier run was contaminated by
-competing background load and is not reported here; repeated idle-machine runs
-agreed on every ordering and differed only in the third significant figure).
-They were taken after both HGP and OS had the A4 HRR hoist, reproducible from the
-full-symmetry direct-Fock benchmark harness (`tests/`, the same one summarized in
-the gitignored scratch `docs/timings.md`). `|G|` is the full point-group order;
-"D2h ops" is how many of those operations the legacy coordinate-axis reduction
-can actually use. The fastest engine in each (case, mode) cell is **bold**.
+**What this table measures.** `planck-symm-fock-benchmark`
+(`tests/symm_fock_benchmark.cpp`) times one Fock build per engine on the same
+symmetry-adapted density, in three modes:
 
-| Molecule / basis | nbasis | Engine | nosym ms | d2h ms | full ms |
+- `nosym`: the two-phase build `_compute_2e_fock`, which builds the whole ERI
+  tensor and then contracts it, with no symmetry.
+- `d2h`: the same with the coordinate-axis operations.
+- `full`: the full point-group skeleton, `_compute_2e_fock_symm`.
+
+None of these is the memory-direct (fused) build that direct SCF and DFT use.
+The closed forms, the HGP block kernel, lanes and dense digestion (§9) live
+only there, so they do not appear here. For Auto, `nosym` and `d2h` go
+through the per-bucket table of §11, and `full` reuses the HGP skeleton
+loop, which is also what `engine auto` resolves to on the full point-group
+path.
+
+Median of 9 runs, OpenMP on, Apple M3, measured 2026-10-22. The fastest engine
+in each (case, mode) cell is **bold**:
+
+| Molecule / basis | \(n_b\) | Engine | nosym ms | d2h ms | full ms |
 |---|---|---|---|---|---|
-| H₂O / STO-3G (C2v, \|G\|=4) | 7 | **OS** | **0.946** | **0.501** | 0.371 |
-| H₂O / STO-3G | 7 | Rys | 3.925 | 1.863 | 2.762 |
-| H₂O / STO-3G | 7 | **HGP** | 1.081 | 0.807 | **0.340** |
-| H₂O / STO-3G | 7 | Auto | 1.092 | 0.795 | **0.340** |
-| NH₃ / STO-3G (C3v, \|G\|=6) | 8 | **OS** | **1.218** | **0.822** | 0.413 |
-| NH₃ / STO-3G | 8 | Rys | 4.900 | 3.177 | 2.859 |
-| NH₃ / STO-3G | 8 | **HGP** | 1.590 | 1.237 | **0.360** |
-| NH₃ / STO-3G | 8 | Auto | 1.604 | 1.216 | **0.360** |
-| CH₄ / STO-3G (Td, \|G\|=24) | 9 | **OS** | **1.790** | **0.813** | 0.452 |
-| CH₄ / STO-3G | 9 | Rys | 6.284 | 2.266 | 2.988 |
-| CH₄ / STO-3G | 9 | **HGP** | 2.058 | 1.221 | **0.388** |
-| CH₄ / STO-3G | 9 | Auto | 2.034 | 1.201 | **0.388** |
-| H₂O / `6-31G**` (C2v, \|G\|=4) | 25 | **OS** | 12.850 | **6.463** | 5.691 |
-| H₂O / `6-31G**` | 25 | Rys | 58.597 | 18.773 | 38.293 |
-| H₂O / `6-31G**` | 25 | **HGP** | **11.835** | 8.886 | **5.065** |
-| H₂O / `6-31G**` | 25 | Auto | 11.904 | 9.233 | **5.065** |
-| NH₃ / `6-31G` (C3v, \|G\|=6) | 15 | **OS** | 3.378 | **2.303** | 1.048 |
-| NH₃ / `6-31G` | 15 | Rys | 11.329 | 7.362 | 7.228 |
-| NH₃ / `6-31G` | 15 | **HGP** | **2.769** | 2.388 | **0.918** |
-| NH₃ / `6-31G` | 15 | Auto | 2.776 | 2.500 | **0.918** |
-| NH₃ / `6-31G*` (C3v, \|G\|=6) | 21 | **OS** | 8.746 | **5.545** | 2.901 |
-| NH₃ / `6-31G*` | 21 | Rys | 33.220 | 19.045 | 19.590 |
-| NH₃ / `6-31G*` | 21 | **HGP** | **7.640** | 6.560 | **2.521** |
-| NH₃ / `6-31G*` | 21 | Auto | 7.524 | 6.728 | **2.521** |
-| NH₃ / `6-31G**` (C3v, \|G\|=6) | 30 | OS | 18.896 | 12.952 | 5.076 |
-| NH₃ / `6-31G**` | 30 | Rys | 92.177 | 50.980 | 36.201 |
-| NH₃ / `6-31G**` | 30 | **HGP** | **16.332** | **12.708** | **4.714** |
-| NH₃ / `6-31G**` | 30 | Auto | 17.114 | 13.173 | **4.714** |
-| CH₄ / `6-31G**` (Td, \|G\|=24) | 35 | OS | 33.109 | 14.945 | 6.546 |
-| CH₄ / `6-31G**` | 35 | Rys | 143.254 | 42.482 | 37.544 |
-| CH₄ / `6-31G**` | 35 | **HGP** | **23.256** | **14.936** | **5.840** |
-| CH₄ / `6-31G**` | 35 | Auto | 24.176 | 16.291 | **5.840** |
+| H₂O / STO-3G (C2v, \|G\|=4) | 7 | OS | **0.849** | **0.454** | 0.348 |
+| | | Rys | 3.759 | 1.702 | 2.456 |
+| | | HGP | 1.022 | 0.760 | **0.306** |
+| | | Auto | 1.039 | 0.760 | **0.306** |
+| NH₃ / STO-3G (C3v, \|G\|=6) | 8 | OS | **1.100** | **0.731** | 0.364 |
+| | | Rys | 4.228 | 2.825 | 2.482 |
+| | | HGP | 1.496 | 1.158 | **0.334** |
+| | | Auto | 1.489 | 1.143 | **0.334** |
+| CH₄ / STO-3G (Td, \|G\|=24) | 9 | OS | **1.608** | **0.729** | 0.398 |
+| | | Rys | 5.792 | 2.024 | 2.683 |
+| | | HGP | 1.896 | 1.123 | **0.347** |
+| | | Auto | 1.873 | 1.096 | **0.347** |
+| H₂O / `6-31G**` (C2v) | 25 | OS | 12.049 | **5.412** | 5.477 |
+| | | Rys | 51.524 | 17.548 | 35.573 |
+| | | HGP | 11.241 | 8.070 | **4.229** |
+| | | Auto | **11.189** | 8.341 | **4.229** |
+| NH₃ / `6-31G` (C3v) | 15 | OS | 3.006 | **2.014** | 0.991 |
+| | | Rys | 10.663 | 6.787 | 6.810 |
+| | | HGP | 2.549 | 2.195 | **0.871** |
+| | | Auto | **2.516** | 2.123 | **0.871** |
+| NH₃ / `6-31G*` (C3v) | 21 | OS | 8.040 | **5.019** | 2.980 |
+| | | Rys | 34.440 | 20.353 | 22.334 |
+| | | HGP | 8.346 | 7.158 | **2.670** |
+| | | Auto | **7.843** | 6.801 | **2.670** |
+| NH₃ / `6-31G**` (C3v) | 30 | OS | 18.930 | **12.502** | 5.552 |
+| | | Rys | 89.666 | 48.551 | 38.004 |
+| | | HGP | **15.693** | 12.811 | **5.487** |
+| | | Auto | 15.977 | 13.485 | **5.487** |
+| CH₄ / `6-31G**` (Td) | 35 | OS | 28.482 | **13.756** | 6.468 |
+| | | Rys | 136.457 | 39.487 | 35.383 |
+| | | HGP | **22.932** | 14.828 | **6.053** |
+| | | Auto | 25.460 | 13.942 | **6.053** |
 
-Reading the table, four patterns stand out.
+Four patterns:
 
-**1. Rys is dominated by both HGP and OS across this entire set.** Every case
-here tops out at d functions, and Rys loses in every cell — by up to ~6.2× (CH₄ /
-6-31G(d,p), `nosym`: Rys 143.3 vs HGP 23.3 ms). This is consistent with the
-per-bucket calibration in §11: Rys's empirical niche is the high-\(L\) tail
-(f/g/h, the \((7,8)\)/\((8,8)\) buckets), which none of these Pople bases reach.
-The asymptotic flop-count argument that Rys's fixed root count eventually beats
-the growing OS/HGP recurrence stacks holds, but only at angular momenta past
-where these bases live.
+1. **Rys loses every cell.** These bases stop at d functions, and Rys's niche
+   in the §11 calibration is the f/g/h tail, which none of them reach. It is
+   up to 6× slower here (CH₄ / 6-31G\*\* `nosym`: 136 against 23 ms).
+2. **HGP wins the `full` column on every case, by 1.01–1.30× over OS.** That
+   is the mode you run when the full group is available, and the reason
+   Auto resolves to HGP on it. The lead is consistent but small, so the
+   honest summary is "HGP is a little faster on the symmetry path", not
+   "HGP dominates".
+3. **Without the full group the ranking is mixed.** OS wins the small STO-3G
+   cases and most `d2h` cells; HGP, or Auto picking per bucket, wins the
+   larger polarized `nosym` cases. These are near-ties that depend on loop
+   structure, and they do not drive any default.
+4. **The full group is the bigger lever.** For any one engine, `nosym` →
+   `full` gains 2.2–5.5× here, far more than the gap between OS and HGP.
+   `d2h` gets only part of that, and on H₂O / 6-31G\*\* OS's `d2h` (5.41 ms)
+   even edges out its own `full` (5.48 ms).
 
-**2. HGP wins the mode that matters — `full` symmetry — on every case, but only
-narrowly.** In the full point-group mode (the one you actually run when symmetry
-is available) HGP is fastest in all 8 cases, by 1.08–1.16× over OS (e.g. CH₄ /
-6-31G(d,p): HGP 5.840 vs OS 6.546 ms, 1.12×; NH₃ / 6-31G(d,p): 4.714 vs 5.076,
-1.08×). The HRR-outside factorization still pays off, but after OS-A4 the lead is
-small — a far cry from the ~1.5–2× HGP showed before OS got the same hoist. This
-is why the section is no longer titled "Why HGP Wins": HGP is the right default,
-but the honest reason is "consistently a little faster on the symmetry path," not
-"dominant."
-
-**3. Without full symmetry the ranking is mixed and near-tied.** In `nosym` HGP
-leads on the larger / polarized cases (H₂O and CH₄ / 6-31G(d,p), all three NH₃
-bases) while OS edges ahead on the small STO-3G systems (H₂O, NH₃, CH₄). In the
-legacy `d2h` mode OS is faster in most cells — but `d2h` is the partial
-coordinate-axis reduction, frequently *slower* than full symmetry and sometimes
-barely better than `nosym`, because its limited orbit walk adds bookkeeping it
-cannot fully amortize. The practical reading is that the `nosym`/`d2h` orderings
-sit within the noise of which engine's loop structure the build happens to favor;
-they should not drive the default, because the recommended path is full symmetry,
-where HGP wins cleanly.
-
-**4. Full point-group symmetry is the larger lever by far, and both engines
-exploit it well.** The `nosym`→`full` speedup dwarfs the OS-vs-HGP kernel gap: on
-CH₄ / 6-31G(d,p) (Td) HGP goes 23.256→5.840 ms (4.0×) and OS 33.109→6.546 ms
-(5.1×); on NH₃ / 6-31G(d,p) HGP goes 16.332→4.714 ms (3.5×). Whichever engine you
-fix, turning on the full reduction (§8) buys 3–5× here — several times more than
-the ~1.12× difference between engines. `d2h` captures only part of that and can
-even regress relative to `nosym`; it is the wrong mode to use when the full group
-is available.
-
-**Auto-dispatch under `full` symmetry equals HGP** in every case — the `Auto
-full` and `HGP full` cells match exactly — because these bases live in the
-low-to-medium-\(L\) region where the §11 three-way rule selects HGP, which is also
-the per-cell `full` winner here, so Auto inherits the right choice. (Auto keys on
-per-quartet buckets; OS's standalone wins in this table are confined to the
-small-system `nosym`/`d2h` cells, not the `full` path Auto is compared on, so
-there is no conflict in this set.)
-
-Putting these together: **for routine Pople-style bases up through 6-31G(d,p),
-run with full point-group symmetry and let Auto pick the engine — it lands on HGP,
-which is the fastest engine on the full-symmetry path for every case here.** OS is
-now close enough that on small systems or the legacy `d2h` mode it can edge ahead,
-so it is a perfectly reasonable explicit choice; Rys stays reserved for genuine
-high-\(L\) work (f/g/h) where the per-bucket rule (§11) actually routes quartets
-to it. The dominant performance decision is the symmetry mode, not the kernel.
+For production direct SCF the comparison that matters is different. There,
+Auto goes through the block kernels, and an explicit engine does not: the
+memory-direct build is several times faster with Auto than with explicit HGP
+(§9). Choose explicit engines for cross-checks, not for speed.
 
 ### Implementation Files
 

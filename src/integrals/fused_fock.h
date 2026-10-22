@@ -42,6 +42,7 @@
 #include <array>
 #include <cstddef>
 #include <optional>
+#include <tuple>
 #include <type_traits>
 #include <vector>
 
@@ -277,11 +278,13 @@ namespace HartreeFock::Integrals
         // p <= q, while the per-component loop's canonical filter is by AO index
         // and needs kets with q < p, so the two cannot share a build. Needs a
         // block kernel (Auto) that accepts every block (Coulomb, shells up to f,
-        // i.e. total L <= 12), no integral symmetry, and symmetric densities:
-        // the final (G + G^T)/2 keeps only K of the density's symmetric part.
+        // i.e. total L <= 12), no integral symmetry or skeleton mode (K1.4;
+        // replication mode keeps the per-component loop), and symmetric
+        // densities: the final (G + G^T)/2 keeps only K of the density's
+        // symmetric part.
         // ponytail: same 1e-10 absolute tolerance as skeleton mode.
         constexpr bool kHasBlockKernel = !std::is_same_v<BlockKernel, NoBlockKernel>;
-        bool dense = kHasBlockKernel && dense_digest && !use_sym &&
+        bool dense = kHasBlockKernel && dense_digest && (!use_sym || skeleton) &&
                      kernel == HartreeFock::ERIKernel::Coulomb &&
                      *std::max_element(group_L.begin(), group_L.end()) <= 3;
         for (const Eigen::MatrixXd *D : {dens.P, dens.Pt, dens.Pa, dens.Pb})
@@ -348,6 +351,53 @@ namespace HartreeFock::Integrals
             }
             if (!maps_groups)
                 op_group.clear();
+        }
+
+        // K1.4b: an op whose AO map is the identity (the identity itself, or the
+        // mirror through a planar molecule's plane) fixes every quartet. In the
+        // dense skeleton weight it always counts toward the stabilizer and needs
+        // only a sign test, never canonicalization. `sign_ops` holds those with
+        // a negative sign somewhere (the identity needs no test at all).
+        std::size_t n_identity_map_ops = 0;
+        std::vector<std::size_t> sign_ops;
+        std::vector<char> is_identity_map;
+        // op_pair[o * ngp + p]: the index of the canonical image of shell pair p
+        // under op o. Pairs are numbered lexicographically, so a block (p, q)
+        // maps to (min, max) of the two image indices, and comparing blocks is
+        // comparing those two integers: no canonicalization per block.
+        std::vector<std::size_t> op_pair;
+        if (use_sym && !op_group.empty())
+        {
+            op_pair.resize(sym_ops->size() * ngp);
+            for (std::size_t o = 0; o < sym_ops->size(); ++o)
+                for (std::size_t pp = 0; pp < ngp; ++pp)
+                {
+                    std::size_t x = op_group[o * ngroups + group_pairs[pp].a];
+                    std::size_t y = op_group[o * ngroups + group_pairs[pp].b];
+                    if (x > y)
+                        std::swap(x, y);
+                    op_pair[o * ngp + pp] = x * ngroups - x * (x - 1) / 2 + (y - x); // group_pairs order
+                }
+        }
+        if (use_sym)
+        {
+            is_identity_map.assign(sym_ops->size(), 0);
+            for (std::size_t o = 0; o < sym_ops->size(); ++o)
+            {
+                const auto &op = (*sym_ops)[o];
+                bool id = true, positive = true;
+                for (std::size_t a = 0; a < nb && id; ++a)
+                {
+                    id = op.ao_map[a] == static_cast<int>(a);
+                    positive = positive && op.ao_sign[a] > 0;
+                }
+                if (!id)
+                    continue;
+                is_identity_map[o] = 1;
+                ++n_identity_map_ops;
+                if (!positive)
+                    sign_ops.push_back(o);
+            }
         }
 
 #ifdef USE_OPENMP
@@ -643,9 +693,22 @@ namespace HartreeFock::Integrals
         // 1: exchange into out[0], 2: Coulomb into out[1], 3: exchange into
         // out[1]), so the component loop carries no per-mode branch: the
         // generic two-channel loop cost 2-8 % against hard-coded RHF writes.
-        const auto dense_body = [&](std::size_t p, auto mode_tag)
+        //
+        // Skeleton mode (kSkel, K1.4): a component carries the S1 weight of its
+        // canonical form (orbit size, or 0 if it is not its orbit's
+        // representative or is forbidden), and G is symmetrized over the ops at
+        // the end as before. Groups are AO-contiguous, so an op that sends the
+        // block's group quartet to a different canonical group quartet decides
+        // every component the same way: a smaller one means no representative
+        // in the block (skip it), a larger one is irrelevant. Only the ops that
+        // map the block's group quartet onto itself are tested per component.
+        const auto dense_body = [&](std::size_t p, auto mode_tag, auto skel_tag)
         {
             constexpr int kMode = decltype(mode_tag)::value;
+            constexpr bool kSkel = decltype(skel_tag)::value;
+            std::vector<std::size_t> block_ops; // permuting ops fixing the block's group quartet
+            if constexpr (kSkel)
+                block_ops.reserve(sym_ops->size());
             if (mpi_size > 1 &&
                 static_cast<int>(p % static_cast<std::size_t>(mpi_size)) != mpi_rank)
                 return;
@@ -695,6 +758,26 @@ namespace HartreeFock::Integrals
                 if (qmax[p] * qmax[q] < tol_eri)
                     continue;
                 const std::size_t sC = group_pairs[q].a, sD = group_pairs[q].b;
+                if constexpr (kSkel)
+                {
+                    if (!op_group.empty())
+                    {
+                        // (sA, sB, sC, sD) is a canonical group quartet: a <= b
+                        // within each pair, and pairs are ordered p <= q.
+                        block_ops.clear();
+                        bool below = false;
+                        for (std::size_t o = 0; o < sym_ops->size() && !below; ++o)
+                        {
+                            const std::size_t ip = op_pair[o * ngp + p], iq = op_pair[o * ngp + q];
+                            const std::size_t lo = std::min(ip, iq), hi = std::max(ip, iq);
+                            below = lo < p || (lo == p && hi < q);
+                            if (lo == p && hi == q && !is_identity_map[o])
+                                block_ops.push_back(o);
+                        }
+                        if (below)
+                            continue;
+                    }
+                }
                 const FusedShellGroup &gC = groups[sC], &gD = groups[sD];
                 const FusedShellGroup *g4[4] = {&gA, &gB, &gC, &gD};
                 const std::size_t s4[4] = {sA, sB, sC, sD};
@@ -728,8 +811,65 @@ namespace HartreeFock::Integrals
                                 // exactly today's.
                                 if (qab * Q(c, d) < tol_eri)
                                     continue;
-                                const double v = deg * (prepared ? block.value(ca, cb, cc, cd)
-                                                                 : component_eri(a, b, c, d));
+                                double weight = 1.0;
+                                if constexpr (kSkel)
+                                {
+                                    if (op_group.empty())
+                                    {
+                                        std::size_t i = a, j = b, k = c, l = d;
+                                        canonicalize_orbit_quartet(i, j, k, l);
+                                        weight = skeleton_orbit_weight(i, j, k, l, *sym_ops);
+                                    }
+                                    else
+                                    {
+                                        // skeleton_orbit_weight over the ops not
+                                        // already decided for the whole block: the
+                                        // identity-map ops (a sign test each) and
+                                        // the permuting ops that fix the block.
+                                        bool forbidden_or_not_rep = false;
+                                        std::size_t stab = n_identity_map_ops;
+                                        for (const std::size_t o : sign_ops)
+                                        {
+                                            const auto &sg = (*sym_ops)[o].ao_sign;
+                                            if (sg[a] * sg[b] * sg[c] * sg[d] < 0)
+                                            {
+                                                forbidden_or_not_rep = true;
+                                                break;
+                                            }
+                                        }
+                                        if (!forbidden_or_not_rep && !block_ops.empty())
+                                        {
+                                            std::size_t i = a, j = b, k = c, l = d;
+                                            canonicalize_orbit_quartet(i, j, k, l);
+                                            for (const std::size_t o : block_ops)
+                                            {
+                                                const HartreeFock::SignedAOSymOp &op = (*sym_ops)[o];
+                                                std::size_t ii = static_cast<std::size_t>(op.ao_map[i]);
+                                                std::size_t jj = static_cast<std::size_t>(op.ao_map[j]);
+                                                std::size_t kk = static_cast<std::size_t>(op.ao_map[k]);
+                                                std::size_t ll = static_cast<std::size_t>(op.ao_map[l]);
+                                                canonicalize_orbit_quartet(ii, jj, kk, ll);
+                                                const auto image = std::tie(ii, jj, kk, ll);
+                                                const auto self = std::tie(i, j, k, l);
+                                                if (image < self ||
+                                                    (image == self &&
+                                                     op.ao_sign[i] * op.ao_sign[j] * op.ao_sign[k] * op.ao_sign[l] < 0))
+                                                {
+                                                    forbidden_or_not_rep = true;
+                                                    break;
+                                                }
+                                                stab += image == self;
+                                            }
+                                        }
+                                        weight = forbidden_or_not_rep
+                                                     ? 0.0
+                                                     : static_cast<double>(sym_ops->size()) / static_cast<double>(stab);
+                                    }
+                                    if (weight == 0.0)
+                                        continue;
+                                }
+                                const double v = deg * weight * (prepared ? block.value(ca, cb, cc, cd)
+                                                                          : component_eri(a, b, c, d));
                                 const auto coul = [&](double *O, const double *P, double w)
                                 {
                                     O[b * nb + a] += P[d * nb + c] * w;
@@ -766,17 +906,24 @@ namespace HartreeFock::Integrals
             if (dense)
             {
                 using std::integral_constant;
-                switch (dense_mode)
+                const auto go = [&](auto skel)
                 {
-                case 1: dense_body(bra, integral_constant<int, 1>{}); break;
-                case 2: dense_body(bra, integral_constant<int, 2>{}); break;
-                case 3: dense_body(bra, integral_constant<int, 3>{}); break;
-                case 5: dense_body(bra, integral_constant<int, 5>{}); break;
-                case 9: dense_body(bra, integral_constant<int, 9>{}); break;
-                case 10: dense_body(bra, integral_constant<int, 10>{}); break;
-                case 15: dense_body(bra, integral_constant<int, 15>{}); break;
-                default: break; // nothing to write (UHF RawCoulombExchange)
-                }
+                    switch (dense_mode)
+                    {
+                    case 1: dense_body(bra, integral_constant<int, 1>{}, skel); break;
+                    case 2: dense_body(bra, integral_constant<int, 2>{}, skel); break;
+                    case 3: dense_body(bra, integral_constant<int, 3>{}, skel); break;
+                    case 5: dense_body(bra, integral_constant<int, 5>{}, skel); break;
+                    case 9: dense_body(bra, integral_constant<int, 9>{}, skel); break;
+                    case 10: dense_body(bra, integral_constant<int, 10>{}, skel); break;
+                    case 15: dense_body(bra, integral_constant<int, 15>{}, skel); break;
+                    default: break; // nothing to write (UHF RawCoulombExchange)
+                    }
+                };
+                if (skeleton)
+                    go(std::true_type{});
+                else
+                    go(std::false_type{});
             }
             else if (skeleton)
                 bra_body(bra, std::integral_constant<int, 2>{});

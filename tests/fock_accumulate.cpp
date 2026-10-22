@@ -27,6 +27,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <iomanip>
+#include <sstream>
 #include <atomic>
 #include <iostream>
 #include <random>
@@ -1177,7 +1178,7 @@ void check_dense_digest(const std::string &basis_name)
                 const std::string tag = "K1 water/" + basis_name + " " + names[t] + (uhf ? " UHF" : " RHF") +
                                         " tol " + (tol < 1e-8 ? "1e-10" : "1e-6");
                 if (worst > 1e-13)
-                    fail(tag + ": dense != per-component, max|dG| = " + std::to_string(worst));
+                    { std::ostringstream os; os << std::setprecision(3) << worst; fail(tag + ": dense != per-component, max|dG| = " + os.str()); }
                 // UHF RawCoulombExchange writes nothing either way, and the dense
                 // loop skips it outright.
                 else if (count[1] != (uhf && terms[t] == FusedTerm::RawCoulombExchange ? 0 : expect))
@@ -1185,6 +1186,61 @@ void check_dense_digest(const std::string &basis_name)
                          std::to_string(expect) + " (dense path not taken?)");
                 else
                     std::cout << "OK  " << tag << ": max|dG| = " << worst << ", " << expect << " blocks\n";
+            }
+    }
+
+    // K1.4: skeleton mode (water's real C2v ops, group-averaged densities)
+    // goes dense too; replication mode does not. Dense visits unordered block
+    // pairs only, and skips blocks an op sends below themselves, so it must
+    // prepare fewer blocks than the per-component skeleton loop.
+    {
+        // A fresh molecule, not a copy of `calc`: update_integral_symmetry
+        // matches basis functions to shells by pointer, and a copy's basis
+        // functions still point at the original's shells (only the identity
+        // would survive).
+        HartreeFock::Calculator cs = make_water(basis_name);
+        cs._molecule._symmetry = true;
+        cs._molecule._point_group = "C2v";
+        HartreeFock::Symmetry::update_integral_symmetry(cs);
+        const auto &ops = cs._integral_symmetry_ops;
+        if (ops.size() != 4)
+            fail("K1.4 water/" + basis_name + ": expected 4 C2v ops, got " + std::to_string(ops.size()));
+        std::mt19937 rs(29);
+        const Eigen::MatrixXd Ps = group_average(random_symmetric_density(nb, rs), ops);
+        const Eigen::MatrixXd Psa = group_average(random_symmetric_density(nb, rs), ops);
+        const Eigen::MatrixXd Psb = group_average(random_symmetric_density(nb, rs), ops);
+        const Eigen::MatrixXd Pst = Psa + Psb;
+        for (int t = 0; t < 4; ++t)
+            for (const bool uhf : {false, true})
+            {
+                FusedFockDensities dens;
+                dens.P = &Ps;
+                if (uhf)
+                    dens = {nullptr, &Pst, &Psa, &Psb};
+                Eigen::MatrixXd out[2][3];
+                std::atomic<std::size_t> count[2]{0, 0};
+                for (int d = 0; d < 2; ++d)
+                    fused_fock_build(sp, nb, Q, HartreeFock::ERIKernel::Coulomb, 0.0, 1e-10, uhf, dens,
+                                     out[d][0], out[d][1], out[d][2], hgp_elem, &ops, terms[t],
+                                     CountingBlockKernel{.count = &count[d]}, /*dense_digest=*/d == 1);
+                double worst = 0.0;
+                for (int m = 0; m < 3; ++m)
+                    if (out[0][m].size() || out[1][m].size())
+                        worst = std::max(worst, out[0][m].size() == out[1][m].size()
+                                                    ? (out[0][m] - out[1][m]).cwiseAbs().maxCoeff()
+                                                    : 1e300);
+                const std::string tag = "K1.4 water/" + basis_name + " C2v skeleton " + names[t] +
+                                        (uhf ? " UHF" : " RHF");
+                const bool nothing = uhf && terms[t] == FusedTerm::RawCoulombExchange;
+                // Skeleton weights scale values by up to |G|, and the rounding with them.
+                if (worst > 1e-13 * static_cast<double>(ops.size()))
+                    { std::ostringstream os; os << std::setprecision(3) << worst; fail(tag + ": dense != per-component, max|dG| = " + os.str()); }
+                else if (!nothing && !(count[1] > 0 && count[1] < count[0]))
+                    fail(tag + ": dense prepared " + std::to_string(count[1].load()) + " blocks against " +
+                         std::to_string(count[0].load()) + " (dense skeleton path not taken?)");
+                else
+                    std::cout << "OK  " << tag << ": max|dG| = " << worst << ", blocks " << count[1]
+                              << " vs " << count[0] << '\n';
             }
     }
 
