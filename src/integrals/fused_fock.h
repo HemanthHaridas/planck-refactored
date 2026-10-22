@@ -199,7 +199,8 @@ namespace HartreeFock::Integrals
         EriElem &&eri_elem,
         const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
         FusedTerm term = FusedTerm::Combined,
-        BlockKernel block_kernel = {})
+        BlockKernel block_kernel = {},
+        bool dense_digest = true)
     {
         const bool use_sym = (sym_ops != nullptr) && !sym_ops->empty();
 
@@ -270,6 +271,22 @@ namespace HartreeFock::Integrals
                 norm_ratio[groups[g].first_ao + comp] =
                     ao_views[groups[g].first_ao + comp]->_component_norm / first._component_norm;
         }
+
+        // K1: dense digestion per block (docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md).
+        // Decided per build, never per block: the dense loop visits block pairs
+        // p <= q, while the per-component loop's canonical filter is by AO index
+        // and needs kets with q < p, so the two cannot share a build. Needs a
+        // block kernel (Auto) that accepts every block (Coulomb, shells up to f,
+        // i.e. total L <= 12), no integral symmetry, and symmetric densities:
+        // the final (G + G^T)/2 keeps only K of the density's symmetric part.
+        // ponytail: same 1e-10 absolute tolerance as skeleton mode.
+        constexpr bool kHasBlockKernel = !std::is_same_v<BlockKernel, NoBlockKernel>;
+        bool dense = kHasBlockKernel && dense_digest && !use_sym &&
+                     kernel == HartreeFock::ERIKernel::Coulomb &&
+                     *std::max_element(group_L.begin(), group_L.end()) <= 3;
+        for (const Eigen::MatrixXd *D : {dens.P, dens.Pt, dens.Pa, dens.Pb})
+            if (dense && D && (*D - D->transpose()).cwiseAbs().maxCoeff() > kSkeletonDensityTol)
+                dense = false;
 
         // Shell-pair Schwarz bound: Qmax[p] = max over the components (ca,cb) of
         // shell-pair p of Q(i,j). Since every component quartet of the block
@@ -581,13 +598,187 @@ namespace HartreeFock::Integrals
             }
         };
 
+        // Dense digestion (K1). Every component (a,b|c,d) of a visited block
+        // pair p <= q above the component Schwarz bound is digested with
+        // v' = deg * v, deg = (A=B ? 1 : 2)(C=D ? 1 : 2)(p=q ? 1 : 2):
+        //   Coulomb   out_ab += cj P_cd v',  out_cd += cj P_ab v'
+        //   exchange  out_ac += ck P_bd v',  out_bd += ck P_ac v',
+        //             out_ad += ck P_bc v',  out_bc += ck P_ad v'
+        // and out <- (out + out^T)/2 after the merge. Against the 8-fold orbit
+        // sum this is exact for a symmetric density: cj = 1/2 for Coulomb,
+        // ck = 1/4 for raw K, so -1/8 for RHF's -K/2 and -1/4 for UHF's -K.
+        struct DenseChannel
+        {
+            const Eigen::MatrixXd *Pj = nullptr;
+            double cj = 0.0;
+            const Eigen::MatrixXd *Pk = nullptr;
+            double ck = 0.0;
+        };
+        std::array<DenseChannel, 2> channel{}; // [0] -> G_local, [1] -> Gb_local
+        if (need_uhf)
+        {
+            const bool coul = term == FusedTerm::Combined || term == FusedTerm::CoulombOnly;
+            const double ck = term == FusedTerm::Combined ? -0.25
+                              : term == FusedTerm::ExchangeOnly ? 0.25 : 0.0;
+            for (int s = 0; s < 2; ++s)
+            {
+                if (coul)
+                    channel[s].Pj = dens.Pt, channel[s].cj = 0.5;
+                if (ck != 0.0)
+                    channel[s].Pk = s == 0 ? dens.Pa : dens.Pb, channel[s].ck = ck;
+            }
+        }
+        else if (term == FusedTerm::Combined)
+            channel[0] = {dens.P, 0.5, dens.P, -0.125};
+        else if (term == FusedTerm::CoulombOnly)
+            channel[0] = {dens.P, 0.5, nullptr, 0.0};
+        else if (term == FusedTerm::ExchangeOnly)
+            channel[0] = {nullptr, 0.0, dens.P, 0.25};
+        else // RawCoulombExchange
+            channel[0] = {dens.P, 0.5, nullptr, 0.0}, channel[1] = {nullptr, 0.0, dens.P, 0.25};
+        const int dense_mode = (channel[0].Pj ? 1 : 0) | (channel[0].Pk ? 2 : 0) |
+                               (channel[1].Pj ? 4 : 0) | (channel[1].Pk ? 8 : 0);
+
+        // Instantiated per active write group (bit 0: Coulomb into out[0],
+        // 1: exchange into out[0], 2: Coulomb into out[1], 3: exchange into
+        // out[1]), so the component loop carries no per-mode branch: the
+        // generic two-channel loop cost 2-8 % against hard-coded RHF writes.
+        const auto dense_body = [&](std::size_t p, auto mode_tag)
+        {
+            constexpr int kMode = decltype(mode_tag)::value;
+            if (mpi_size > 1 &&
+                static_cast<int>(p % static_cast<std::size_t>(mpi_size)) != mpi_rank)
+                return;
+#ifdef USE_OPENMP
+            const int thread_id = omp_get_thread_num();
+#else
+            const int thread_id = 0;
+#endif
+            Eigen::MatrixXd *out[2] = {
+                need_uhf ? &ga_partials[thread_id] : &g_partials[thread_id],
+                need_uhf ? &gb_partials[thread_id]
+                : raw_coulomb_exchange ? &ga_partials[thread_id] : &g_partials[thread_id]};
+            // Column-major raw views: M(r, c) = M[c * nb + r].
+            double *const o0 = out[0]->data(), *const o1 = out[1]->data();
+            const auto raw = [](const Eigen::MatrixXd *M) { return M ? M->data() : nullptr; };
+            const double *const j0 = raw(channel[0].Pj), *const k0 = raw(channel[0].Pk);
+            const double *const j1 = raw(channel[1].Pj), *const k1 = raw(channel[1].Pk);
+            const double cj0 = channel[0].cj, ck0 = channel[0].ck, cj1 = channel[1].cj, ck1 = channel[1].ck;
+
+            BlockKernel &block = blocks[static_cast<std::size_t>(thread_id)];
+            BlockEriRequest request;
+            request.norm_ratio = norm_ratio.data();
+            request.kernel = kernel;
+            request.omega = omega;
+
+            const std::size_t sA = group_pairs[p].a, sB = group_pairs[p].b;
+            const FusedShellGroup &gA = groups[sA], &gB = groups[sB];
+
+            // A block the kernel declines (none, under the predicate above) is
+            // evaluated per component in canonical AO order.
+            const auto component_eri = [&](std::size_t a, std::size_t b, std::size_t c, std::size_t d)
+            {
+                if (a > b)
+                    std::swap(a, b);
+                if (c > d)
+                    std::swap(c, d);
+                const auto pair = [&](std::size_t x, std::size_t y)
+                { return pair_of[x * nb + y] ? *pair_of[x * nb + y] : HartreeFock::ShellPair(*ao_views[x], *ao_views[y]); };
+                const auto &la = ao_views[a]->_cartesian, &lb = ao_views[b]->_cartesian;
+                const auto &lc = ao_views[c]->_cartesian, &ld = ao_views[d]->_cartesian;
+                return eri_elem(pair(a, b), pair(c, d), la[0], la[1], la[2], lb[0], lb[1], lb[2],
+                                lc[0], lc[1], lc[2], ld[0], ld[1], ld[2], kernel, omega);
+            };
+
+            for (std::size_t q = p; q < ngp; ++q)
+            {
+                if (qmax[p] * qmax[q] < tol_eri)
+                    continue;
+                const std::size_t sC = group_pairs[q].a, sD = group_pairs[q].b;
+                const FusedShellGroup &gC = groups[sC], &gD = groups[sD];
+                const FusedShellGroup *g4[4] = {&gA, &gB, &gC, &gD};
+                const std::size_t s4[4] = {sA, sB, sC, sD};
+                request.ab = pair_of[gA.first_ao * nb + gB.first_ao];
+                request.cd = pair_of[gC.first_ao * nb + gD.first_ao];
+                for (int s = 0; s < 4; ++s)
+                {
+                    request.views[s] = &ao_views[g4[s]->first_ao];
+                    request.n[s] = g4[s]->n_components;
+                    request.L[s] = group_L[s4[s]];
+                }
+                const bool prepared = block.prepare(request);
+                const double deg = (sA == sB ? 1.0 : 2.0) * (sC == sD ? 1.0 : 2.0) * (p == q ? 1.0 : 2.0);
+
+                for (std::size_t ca = 0; ca < gA.n_components; ++ca)
+                {
+                    const std::size_t a = gA.first_ao + ca;
+                    for (std::size_t cb = 0; cb < gB.n_components; ++cb)
+                    {
+                        const std::size_t b = gB.first_ao + cb;
+                        const double qab = Q(a, b);
+                        if (qab * qmax[q] < tol_eri)
+                            continue;
+                        for (std::size_t cc = 0; cc < gC.n_components; ++cc)
+                        {
+                            const std::size_t c = gC.first_ao + cc;
+                            for (std::size_t cd = 0; cd < gD.n_components; ++cd)
+                            {
+                                const std::size_t d = gD.first_ao + cd;
+                                // The component Schwarz mask: screening stays
+                                // exactly today's.
+                                if (qab * Q(c, d) < tol_eri)
+                                    continue;
+                                const double v = deg * (prepared ? block.value(ca, cb, cc, cd)
+                                                                 : component_eri(a, b, c, d));
+                                const auto coul = [&](double *O, const double *P, double w)
+                                {
+                                    O[b * nb + a] += P[d * nb + c] * w;
+                                    O[d * nb + c] += P[b * nb + a] * w;
+                                };
+                                const auto exch = [&](double *O, const double *P, double w)
+                                {
+                                    O[c * nb + a] += P[d * nb + b] * w;
+                                    O[d * nb + b] += P[c * nb + a] * w;
+                                    O[d * nb + a] += P[c * nb + b] * w;
+                                    O[c * nb + b] += P[d * nb + a] * w;
+                                };
+                                if constexpr ((kMode & 1) != 0)
+                                    coul(o0, j0, cj0 * v);
+                                if constexpr ((kMode & 2) != 0)
+                                    exch(o0, k0, ck0 * v);
+                                if constexpr ((kMode & 4) != 0)
+                                    coul(o1, j1, cj1 * v);
+                                if constexpr ((kMode & 8) != 0)
+                                    exch(o1, k1, ck1 * v);
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
         // schedule(static), NOT dynamic — load-bearing, see the header note.
 #ifdef USE_OPENMP
 #pragma omp parallel for schedule(static)
 #endif
         for (std::size_t bra = 0; bra < ngp; ++bra)
         {
-            if (skeleton)
+            if (dense)
+            {
+                using std::integral_constant;
+                switch (dense_mode)
+                {
+                case 1: dense_body(bra, integral_constant<int, 1>{}); break;
+                case 2: dense_body(bra, integral_constant<int, 2>{}); break;
+                case 3: dense_body(bra, integral_constant<int, 3>{}); break;
+                case 5: dense_body(bra, integral_constant<int, 5>{}); break;
+                case 9: dense_body(bra, integral_constant<int, 9>{}); break;
+                case 10: dense_body(bra, integral_constant<int, 10>{}); break;
+                case 15: dense_body(bra, integral_constant<int, 15>{}); break;
+                default: break; // nothing to write (UHF RawCoulombExchange)
+                }
+            }
+            else if (skeleton)
                 bra_body(bra, std::integral_constant<int, 2>{});
             else if (use_sym)
                 bra_body(bra, std::integral_constant<int, 1>{});
@@ -612,6 +803,11 @@ namespace HartreeFock::Integrals
             // every rank uses the same one (they do; same type, same dims).
             HartreeFock::Mpi::allreduce_inplace(Ga.data(), static_cast<std::size_t>(Ga.size()));
             HartreeFock::Mpi::allreduce_inplace(Gb.data(), static_cast<std::size_t>(Gb.size()));
+            if (dense)
+            {
+                Ga = (0.5 * (Ga + Ga.transpose())).eval();
+                Gb = (0.5 * (Gb + Gb.transpose())).eval();
+            }
             if (skeleton)
             {
                 symmetrize_over_ops(Ga, *sym_ops);
@@ -630,9 +826,13 @@ namespace HartreeFock::Integrals
                 for (int t = 0; t < n_threads; ++t)
                     Ga += ga_partials[static_cast<std::size_t>(t)];
                 HartreeFock::Mpi::allreduce_inplace(Ga.data(), static_cast<std::size_t>(Ga.size()));
+                if (dense)
+                    Ga = (0.5 * (Ga + Ga.transpose())).eval();
                 if (skeleton)
                     symmetrize_over_ops(Ga, *sym_ops);
             }
+            if (dense)
+                G = (0.5 * (G + G.transpose())).eval();
             if (skeleton)
                 symmetrize_over_ops(G, *sym_ops);
         }

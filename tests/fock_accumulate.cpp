@@ -27,6 +27,7 @@
 #include <cstddef>
 #include <filesystem>
 #include <iomanip>
+#include <atomic>
 #include <iostream>
 #include <random>
 #include <string>
@@ -39,6 +40,9 @@
 #include "basis/basis.h"
 #include "integrals/base.h"
 #include "integrals/fock_accumulate.h"
+#include "integrals/fused_fock.h"
+#include "integrals/hgp_block_eri.h"
+#include "integrals/screening.h"
 #include "integrals/hgp.h"
 #include "integrals/os.h"
 #include "integrals/quartet_orbit.h"
@@ -1081,6 +1085,126 @@ void check_skeleton_symmetry(const std::string &basis_name)
     check_skeleton("C2v", basis_name, calc, calc._integral_symmetry_ops, 37, true);
 }
 
+// ── K1: dense digestion per block against the per-component loop ─────────────
+//
+// docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md, K1. Same production kernels both ways,
+// through fused_fock_build's dense_digest flag; every FusedTerm mode, RHF and
+// UHF, at tol 1e-10 and at 1e-6 (where the component Schwarz mask matters).
+// A counting kernel proves the dense path ran: it prepares every unordered
+// block pair above the block Schwarz bound exactly once. A non-symmetric
+// density must take the per-component path, so it must come out bitwise equal.
+struct CountingBlockKernel
+{
+    HartreeFock::Integrals::ChainBlockKernel<HartreeFock::Integrals::ClosedFormBlockKernel,
+                                             HartreeFock::Integrals::HgpBlockKernel>
+        inner{HartreeFock::Integrals::ClosedFormBlockKernel{3}, HartreeFock::Integrals::HgpBlockKernel{4, 12}};
+    std::atomic<std::size_t> *count = nullptr;
+    bool prepare(const HartreeFock::Integrals::BlockEriRequest &r)
+    {
+        count->fetch_add(1, std::memory_order_relaxed);
+        return inner.prepare(r);
+    }
+    double value(std::size_t a, std::size_t b, std::size_t c, std::size_t d) const { return inner.value(a, b, c, d); }
+};
+
+double hgp_elem(const HartreeFock::ShellPair &ab, const HartreeFock::ShellPair &cd,
+                int lAx, int lAy, int lAz, int lBx, int lBy, int lBz,
+                int lCx, int lCy, int lCz, int lDx, int lDy, int lDz,
+                HartreeFock::ERIKernel k, double w) noexcept
+{
+    return HartreeFock::HeadGordonPople::_contracted_eri_elem(
+        ab, cd, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, k, w);
+}
+
+void check_dense_digest(const std::string &basis_name)
+{
+    using namespace HartreeFock::Integrals;
+    HartreeFock::Calculator calc = make_water(basis_name);
+    if (!g_ok)
+        return;
+    const std::vector<HartreeFock::ShellPair> sp = build_shellpairs(calc._shells);
+    const std::size_t nb = calc._shells._basis_functions.size();
+    const std::vector<double> flat = HartreeFock::Screening::schwarz_table_hgp(sp, nb, nullptr);
+    Eigen::MatrixXd Q(nb, nb);
+    for (std::size_t i = 0; i < nb; ++i)
+        for (std::size_t j = 0; j < nb; ++j)
+            Q(i, j) = flat[i * nb + j];
+
+    std::mt19937 rng(23);
+    const Eigen::MatrixXd P = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pa = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pb = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pt = Pa + Pb;
+
+    // Expected dense prepare count: unordered pairs of shell pairs above the
+    // block Schwarz bound (shell groups = runs of AOs sharing one Shell).
+    std::vector<const HartreeFock::ContractedView *> views;
+    const auto groups = fused_shell_groups(sp, nb, views);
+    std::vector<double> qmax;
+    for (std::size_t a = 0; a < groups.size(); ++a)
+        for (std::size_t b = a; b < groups.size(); ++b)
+            qmax.push_back(Q.block(groups[a].first_ao, groups[b].first_ao,
+                                   groups[a].n_components, groups[b].n_components).maxCoeff());
+
+    const FusedTerm terms[] = {FusedTerm::Combined, FusedTerm::CoulombOnly,
+                               FusedTerm::ExchangeOnly, FusedTerm::RawCoulombExchange};
+    const char *names[] = {"Combined", "CoulombOnly", "ExchangeOnly", "RawCoulombExchange"};
+    for (const double tol : {1e-10, 1e-6})
+    {
+        std::size_t expect = 0;
+        for (std::size_t p = 0; p < qmax.size(); ++p)
+            for (std::size_t q = p; q < qmax.size(); ++q)
+                expect += qmax[p] * qmax[q] >= tol;
+        for (int t = 0; t < 4; ++t)
+            for (const bool uhf : {false, true})
+            {
+                FusedFockDensities dens;
+                dens.P = &P;
+                if (uhf)
+                    dens = {nullptr, &Pt, &Pa, &Pb};
+                Eigen::MatrixXd out[2][3];
+                std::atomic<std::size_t> count[2]{0, 0};
+                for (int d = 0; d < 2; ++d)
+                    fused_fock_build(sp, nb, Q, HartreeFock::ERIKernel::Coulomb, 0.0, tol, uhf, dens,
+                                     out[d][0], out[d][1], out[d][2], hgp_elem, nullptr, terms[t],
+                                     CountingBlockKernel{.count = &count[d]}, /*dense_digest=*/d == 1);
+                double worst = 0.0;
+                for (int m = 0; m < 3; ++m)
+                    if (out[0][m].size() || out[1][m].size())
+                        worst = std::max(worst, out[0][m].size() == out[1][m].size()
+                                                    ? (out[0][m] - out[1][m]).cwiseAbs().maxCoeff()
+                                                    : 1e300);
+                const std::string tag = "K1 water/" + basis_name + " " + names[t] + (uhf ? " UHF" : " RHF") +
+                                        " tol " + (tol < 1e-8 ? "1e-10" : "1e-6");
+                if (worst > 1e-13)
+                    fail(tag + ": dense != per-component, max|dG| = " + std::to_string(worst));
+                // UHF RawCoulombExchange writes nothing either way, and the dense
+                // loop skips it outright.
+                else if (count[1] != (uhf && terms[t] == FusedTerm::RawCoulombExchange ? 0 : expect))
+                    fail(tag + ": dense prepared " + std::to_string(count[1].load()) + " blocks, expected " +
+                         std::to_string(expect) + " (dense path not taken?)");
+                else
+                    std::cout << "OK  " << tag << ": max|dG| = " << worst << ", " << expect << " blocks\n";
+            }
+    }
+
+    // A non-symmetric density must fall back to the per-component path.
+    Eigen::MatrixXd Pn = P;
+    Pn(0, nb - 1) += 1e-3;
+    FusedFockDensities dn;
+    dn.P = &Pn;
+    Eigen::MatrixXd G[2], u1, u2;
+    std::atomic<std::size_t> c0{0}, c1{0};
+    fused_fock_build(sp, nb, Q, HartreeFock::ERIKernel::Coulomb, 0.0, 1e-10, false, dn, G[0], u1, u2,
+                     hgp_elem, nullptr, FusedTerm::ExchangeOnly, CountingBlockKernel{.count = &c0}, false);
+    fused_fock_build(sp, nb, Q, HartreeFock::ERIKernel::Coulomb, 0.0, 1e-10, false, dn, G[1], u1, u2,
+                     hgp_elem, nullptr, FusedTerm::ExchangeOnly, CountingBlockKernel{.count = &c1}, true);
+    if (!(G[0].array() == G[1].array()).all() || c0 != c1)
+        fail("K1 water/" + basis_name + ": a non-symmetric density did not fall back bitwise");
+    else
+        std::cout << "OK  K1 water/" << basis_name << ": non-symmetric density falls back, bitwise\n";
+}
+
 int main()
 {
     // Real-integral fixtures dispatch through the signed, runtime-loaded Boys
@@ -1106,6 +1230,8 @@ int main()
     check_real_symmetry_ops("6-31g*");
     check_skeleton_symmetry("sto-3g");
     check_skeleton_symmetry("6-31g*");
+    for (const char *b : {"6-31g", "6-31g*", "cc-pVDZ", "cc-pVTZ"})
+        check_dense_digest(b);
 
     if (!g_ok)
     {

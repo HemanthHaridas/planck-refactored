@@ -221,7 +221,7 @@ namespace
     // `block` is the block kernel (block_eri.h); the Auto engine uses the
     // closed forms (low_l_eri.h) at total L <= 3.
     template <typename Elem, typename Block>
-    double timed_build_block(const BuildSetup &s, Elem &&elem, Block block)
+    double timed_build_block(const BuildSetup &s, Elem &&elem, Block block, bool dense_digest = true)
     {
         Eigen::MatrixXd G, Ga, Gb;
         HartreeFock::Integrals::FusedFockDensities dens;
@@ -231,7 +231,7 @@ namespace
             s.pairs, s.nb, s.Q, HartreeFock::ERIKernel::Coulomb, 0.0, /*tol_eri=*/1e-10,
             /*spin_resolved=*/false, dens, G, Ga, Gb, elem,
             s.sym ? &s.calc._integral_symmetry_ops : nullptr,
-            HartreeFock::Integrals::FusedTerm::Combined, block);
+            HartreeFock::Integrals::FusedTerm::Combined, block, dense_digest);
         const double dt = seconds_since(t0);
         std::uint64_t h = 1469598103934665603ULL;
         const auto *bytes = reinterpret_cast<const unsigned char *>(G.data());
@@ -984,6 +984,154 @@ namespace
         }
     }
 
+    // K1 census (docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md, after D2b B1): today's
+    // per-component digestion against dense digestion per block. Arm B visits
+    // each unordered block pair (p <= q) once with block Schwarz only, reads
+    // every component of the production kernels' dense block, and digests it
+    // with shell-level degeneracy weights (the standard direct-J/K scheme), no
+    // canonical, component-Schwarz or orbit tests: with D = P/2, G = 2J - K is
+    //   G(a,b) += D(c,d) v'  G(c,d) += D(a,b) v'
+    //   G(a,c) -= D(b,d) v'/4  G(b,d) -= D(a,c) v'/4  G(a,d) -= D(b,c) v'/4  G(b,c) -= D(a,d) v'/4
+    // with v' = deg * v, then G <- (G + G^T)/2. RHF, Combined, no symmetry.
+    struct K1Stats { double t_kernel = 0, t_digest = 0; std::size_t blocks = 0; };
+    template <bool kTimed>
+    Eigen::MatrixXd k1_dense_build(const BuildSetup &s, K1Stats &st)
+    {
+        using namespace HartreeFock;
+        using namespace HartreeFock::Integrals;
+        constexpr double tol = 1e-10;
+        const std::size_t nb = s.nb;
+        std::vector<const ContractedView *> ao_views;
+        const auto groups = fused_shell_groups(s.pairs, nb, ao_views);
+        const std::size_t ng = groups.size();
+        std::vector<int> gL(ng);
+        std::vector<double> norm_ratio(nb, 1.0);
+        for (std::size_t g = 0; g < ng; ++g)
+        {
+            const auto &first = *ao_views[groups[g].first_ao];
+            gL[g] = first._cartesian[0] + first._cartesian[1] + first._cartesian[2];
+            for (std::size_t c = 0; c < groups[g].n_components; ++c)
+                norm_ratio[groups[g].first_ao + c] = ao_views[groups[g].first_ao + c]->_component_norm / first._component_norm;
+        }
+        std::vector<const ShellPair *> pair_of(nb * nb, nullptr);
+        for (const auto &sp : s.pairs)
+            pair_of[sp.A._index * nb + sp.B._index] = &sp;
+        std::vector<std::array<std::size_t, 2>> gp;
+        for (std::size_t a = 0; a < ng; ++a)
+            for (std::size_t b = a; b < ng; ++b)
+                gp.push_back({a, b});
+        const std::size_t ngp = gp.size();
+        std::vector<double> qmax(ngp, 0.0);
+        for (std::size_t p = 0; p < ngp; ++p)
+            for (std::size_t ca = 0; ca < groups[gp[p][0]].n_components; ++ca)
+                for (std::size_t cb = 0; cb < groups[gp[p][1]].n_components; ++cb)
+                    qmax[p] = std::max(qmax[p], s.Q(groups[gp[p][0]].first_ao + ca, groups[gp[p][1]].first_ao + cb));
+        Eigen::MatrixXd G = Eigen::MatrixXd::Zero(nb, nb);
+        const Eigen::MatrixXd D = 0.5 * s.P;
+        auto block = production_kernel();
+        BlockEriRequest req;
+        req.norm_ratio = norm_ratio.data();
+        double *g = G.data();
+        const double *d = D.data();
+        for (std::size_t p = 0; p < ngp; ++p)
+            for (std::size_t q = p; q < ngp; ++q)
+            {
+                if (qmax[p] * qmax[q] < tol)
+                    continue;
+                const std::size_t g4[4] = {gp[p][0], gp[p][1], gp[q][0], gp[q][1]};
+                const auto &A = groups[g4[0]], &B = groups[g4[1]], &C = groups[g4[2]], &Dg = groups[g4[3]];
+                req.ab = pair_of[A.first_ao * nb + B.first_ao];
+                req.cd = pair_of[C.first_ao * nb + Dg.first_ao];
+                for (int k = 0; k < 4; ++k)
+                {
+                    req.views[k] = &ao_views[groups[g4[k]].first_ao];
+                    req.n[k] = groups[g4[k]].n_components;
+                    req.L[k] = gL[g4[k]];
+                }
+                Clock::time_point t0;
+                if constexpr (kTimed)
+                    t0 = Clock::now();
+                block.prepare(req);
+                Clock::time_point t1;
+                if constexpr (kTimed)
+                    t1 = Clock::now();
+                ++st.blocks;
+                const double deg = (g4[0] == g4[1] ? 1.0 : 2.0) * (g4[2] == g4[3] ? 1.0 : 2.0) * (p == q ? 1.0 : 2.0);
+                for (std::size_t ca = 0; ca < A.n_components; ++ca)
+                {
+                    const std::size_t a = A.first_ao + ca;
+                    for (std::size_t cb = 0; cb < B.n_components; ++cb)
+                    {
+                        const std::size_t b = B.first_ao + cb;
+                        for (std::size_t cc = 0; cc < C.n_components; ++cc)
+                        {
+                            const std::size_t c = C.first_ao + cc;
+                            for (std::size_t cd = 0; cd < Dg.n_components; ++cd)
+                            {
+                                const std::size_t dd = Dg.first_ao + cd;
+                                const double v = deg * block.value(ca, cb, cc, cd);
+                                g[b * nb + a] += d[dd * nb + c] * v;
+                                g[dd * nb + c] += d[b * nb + a] * v;
+                                const double vk = 0.25 * v;
+                                g[c * nb + a] -= d[dd * nb + b] * vk;
+                                g[dd * nb + b] -= d[c * nb + a] * vk;
+                                g[dd * nb + a] -= d[c * nb + b] * vk;
+                                g[c * nb + b] -= d[dd * nb + a] * vk;
+                            }
+                        }
+                    }
+                }
+                if constexpr (kTimed)
+                {
+                    const auto t2 = Clock::now();
+                    st.t_kernel += std::chrono::duration<double>(t1 - t0).count();
+                    st.t_digest += std::chrono::duration<double>(t2 - t1).count();
+                }
+            }
+        return (0.5 * (G + G.transpose())).eval();
+    }
+
+    // Counts block preparations of the production kernel (K1 census).
+    struct CountingKernel
+    {
+        decltype(production_kernel()) inner = production_kernel();
+        std::size_t *n = nullptr;
+        bool prepare(const HartreeFock::Integrals::BlockEriRequest &r) { ++*n; return inner.prepare(r); }
+        double value(std::size_t a, std::size_t b, std::size_t c, std::size_t d) const { return inner.value(a, b, c, d); }
+    };
+
+    void report_k1(const BuildSetup &s)
+    {
+        double best[3] = {1e30, 1e30, 1e30};
+        Eigen::MatrixXd GA, GB, GC;
+        K1Stats st;
+        for (int r = 0; r < 6; ++r)
+        {
+            const double tc = timed_build_block(s, hgp_elem, production_kernel(), /*dense_digest=*/true);
+            GC = g_last;
+            if (r > 0)
+                best[2] = std::min(best[2], tc);
+            const double ta = timed_build_block(s, hgp_elem, production_kernel(), /*dense_digest=*/false);
+            GA = g_last;
+            K1Stats s0;
+            const auto t0 = Clock::now();
+            GB = k1_dense_build<false>(s, s0);
+            const double tb = seconds_since(t0);
+            if (r > 0)
+                best[0] = std::min(best[0], ta), best[1] = std::min(best[1], tb), st.blocks = s0.blocks;
+        }
+        K1Stats tim;
+        k1_dense_build<true>(s, tim);
+        std::size_t today_prepares = 0;
+        timed_build_block(s, hgp_elem, CountingKernel{production_kernel(), &today_prepares}, /*dense_digest=*/false);
+        std::printf("  K1: today's loop prepares %zu blocks (single thread), dense %zu\n", today_prepares, st.blocks);
+        std::printf("  K1: today %.4f s, dense per block %.4f s (%.2fx); dense run: %zu blocks, kernel %.4f s, digestion %.4f s (timed run); max|dG| %.1e\n",
+                    best[0], best[1], best[0] / best[1], st.blocks, tim.t_kernel, tim.t_digest,
+                    (GA - GB).cwiseAbs().maxCoeff());
+        std::printf("  K1: production dense_digest %.4f s (%.2fx over today), max|dG| %.1e\n",
+                    best[2], best[0] / best[2], (GA - GC).cwiseAbs().maxCoeff());
+    }
+
     void run_fixture(const Fixture &f, double timer_pair)
     {
         BuildSetup s = prepare(f);
@@ -1126,6 +1274,14 @@ int main(int argc, char **argv)
         for (int r = 0; r < reps; ++r)
             total += timed_build_block(s, hgp_elem, production_kernel());
         std::printf("--profile: %d builds of %d H2O / %s, %.3f s each\n", reps, nwater, basis, total / reps);
+        return 0;
+    }
+
+    // --k1 nwater basis: K1 census, dense per-block digestion against today's.
+    if (argc == 4 && std::string(argv[1]) == "--k1")
+    {
+        const BuildSetup s = prepare({std::atoi(argv[2]), argv[3]});
+        report_k1(s);
         return 0;
     }
 

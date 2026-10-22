@@ -8,10 +8,12 @@ stands in the way?
 **Status: in flight.** Landed: C0, C1, C2–C3.5, H1, L1, L2, L3a–c, P1, S1,
 D1, F1, F2, F4, T1, 2b. Measured and declined: D1c (electron-transfer
 recurrence), 5b (a class-batched scheduler). Measured, not landed: D2a/B0
-(shared-exponent families), B1 (the fused loop in family-quartet order, in
-the working tree), the K1 census (dense digestion per block). Open, in
-order: K1 in the loop, B2 (families) on top of it, the fixed accumulator
-partition, a per-block skeleton test, C5, P2, total L > 12, F3; D3 is
+(shared-exponent families), B1 (the fused loop in family-quartet order,
+parked until B2), the K1 census (dense digestion per block). In the
+working tree, gated, not committed: K1.1–K1.3 (dense digestion, no
+symmetry). Open, in order: K1.4 (under S1, with the per-block skeleton
+test), B2 (families, with B1's order), the fixed accumulator partition, C5,
+P2, total L > 12, F3; D3 is
 independent, C4b deprioritised, K2 conditional. When those land or are
 abandoned, rewrite this as an answer.
 
@@ -555,10 +557,10 @@ dropped component Schwarz.
 
 | step | what | bitwise? |
 |---|---|---|
-| K1 | dense digestion per block in the fused loop | no (summation order); lands alone |
-| B2 | families on top of K1 | no; lands alone |
+| K1.1–K1.3 | dense digestion per block, no symmetry, Auto, Coulomb, L ≤ 12 | no (summation order); lands alone |
+| K1.4 + skeleton test | dense digestion under S1, with a per-block skeleton weight | no; after K1.3 |
+| B2 | families on top of K1, with B1's parked loop order | no; lands alone |
 | partition | fixed accumulator partition | no; lands alone |
-| skeleton test | per-block skeleton weight | yes; needed by K1 under S1 |
 | C5 | screened kernels in both block kernels | screened kernels only |
 | P2 | quartet-level primitive screening | no (~1e-12); lands alone |
 | L > 12 | block kernel above total L = 12 | — |
@@ -566,29 +568,127 @@ dropped component Schwarz.
 | D3 | RI-JK pair factors (independent) | per the BLAS doc |
 | K2 | batches across ket blocks (conditional) | no |
 
-**K1 — dense digestion per block in the fused loop.** Auto only (explicit
-engines keep today's per-component path for the cross-engine comparators).
-The loop visits each unordered block pair once, in family-quartet units (B1
-reworked: within a unit, member pairs p ≤ q); block Schwarz and L3c per
-block; the kernel's dense block digested with the census's weights and a
-component-Schwarz mask.
+**K1 — dense digestion per block in the fused loop.** Scoped 2026-10-22
+against the current `fused_fock.h`.
 
-- *Benefit:* 1.11–1.26× of the build at today's precision (census), before
-  any family work.
-- *Scope it must cover:* every `FusedTerm` mode (Combined, CoulombOnly,
-  ExchangeOnly, RawCoulombExchange) and UHF, each with its own dense
-  contraction derived from the same degeneracy weights; S1 skeleton runs
-  through a per-block skeleton weight (the skeleton-test step, so it comes
-  first or with K1); replication-mode symmetry kept on today's path.
-- *Risks:* the block weights for A = B, bra = ket and both, which the
-  per-component filters existed to get right (gate: dense against today's
-  on every term mode, RHF and UHF, with and without symmetry); tiny blocks
-  on sp bases, where per-block overhead may dominate (the census already
-  includes 8 H2O / 6-31G at 1.14×); the change of loop unit for MPI and
-  threads (repeat B1's MPI and 1/4-thread gates).
-- *Gates:* the census comparison promoted to a test (max|ΔG| ≤ 1e-13
-  against today's build per term mode, RHF/UHF, symmetric and not), the
-  MPI 1/2/4-rank runner, `planck-fock-accumulate`, smoke and extended.
+*Where it applies.* One predicate per build, not per block: the block kernel
+is not `NoBlockKernel` (Auto), the kernel is Coulomb, the basis's maximum
+total L is ≤ 12, and `sym_ops` is empty. Everything else, including explicit
+engines (the cross-engine comparators), screened kernels (until C5), L > 12,
+and both symmetry modes, keeps today's loop unchanged. A per-block fallback
+does not work: dense visits block pairs p ≤ q, while today's canonical
+component filter is by AO index and needs kets with q < p. Mixing the two
+inside one build would double-count or drop quartets.
+
+*Loop order.* Bra units p, kets q ≥ p, with the same `schedule(static)` and
+MPI stripe over p as today. This is not B1's family-quartet units. B1
+measured ±8 % at one thread; its one clear win was load balance at four
+threads on cc-pVDZ (−22 %), and families only need that order once B2
+exists. So **B1's working-tree diff is parked** (kept as a git stash, "B1: fused loop in family-quartet order", removed
+from `fused_fock.h`) and comes back with B2. K1 then stays one change in one
+place.
+
+*Per block.* Block Schwarz as today. `prepare`, then for every component
+with `Q(a,b)·Q(c,d) ≥ tol` (the mask; it keeps screening identical to
+today's), v′ = deg·value with deg = (A=B?1:2)(C=D?1:2)(p=q?1:2), then the
+six census writes, split by `FusedTerm`:
+
+| mode | writes per component (D = ½ of the density named) |
+|---|---|
+| Combined, RHF | Coulomb `G_ab, G_cd += D·v′`; exchange `G_ac, G_bd, G_ad, G_bc −= ¼ D·v′` (the census) |
+| CoulombOnly | the two Coulomb writes (UHF: Pt into both channels) |
+| ExchangeOnly | the four exchange writes, raw: `+½ D·v′` (UHF: Pa → G, Pb → Gb) |
+| RawCoulombExchange | Coulomb into G, raw exchange into Gb (RHF only, as today) |
+| Combined, UHF | Coulomb from Pt into both; exchange `−½ D·v′` from Pa / Pb, per channel |
+
+Then symmetrize G (and Gb) once after the thread and MPI merge. These
+coefficients are derived from the census's RHF weights and the raw-K
+contract in `fock_accumulate.h`. The gate pins them; nothing else does.
+Write one function, `dense_digest_block(term, need_uhf, …)`, with the
+`switch` outside the component loops. Use no per-component `accumulate_term`
+call.
+
+*Steps.*
+
+1. **K1.1, flag and gate first.** Add `bool dense_digest = true` to
+   `fused_fock_build`, next to `block_kernel`. A new ctest drives it on and
+   off through the production function: water 6-31G, 6-31G\*, cc-pVDZ,
+   cc-pVTZ, and 4 H2O / 6-31G\* (screening active), with every `FusedTerm`
+   mode for RHF and UHF and a random symmetric density. Gate: max|ΔG| ≤
+   1e-13. Also check that Coulomb plus exchange written separately equals
+   Combined, the round-trip `planck-fock-accumulate` already pins for the
+   per-component form. Mutation-test the gate: drop the (p=q) factor, drop
+   (A=B), use ½ for ¼, skip the final symmetrization, and drop the mask (the
+   last must fail at ~1e-10 on 4 H2O, as in the census).
+2. **K1.2, measure.** Prediction written first: 1.11–1.26× at one thread
+   (census). Run interleaved with the flag as the switch: `--profile` on the
+   six benchmark fixtures, at 1 and 4 threads. Stop if 8 H2O / 6-31G
+   regresses. That fixture has the smallest blocks and the least room
+   (1.14× in the census).
+3. **K1.3, the regression net.** `planck-hgp-engine-smoke`,
+   `planck-fock-accumulate`, smoke (43/45) and extended (132/136; the
+   failures are the known rccsdt cases). Run the MPI 1/2/4-rank gate B1 used
+   (Auto direct SCF: RHF 4 H2O / cc-pVDZ, UHF H2O⁺ / 6-31G\*, B3LYP H2O /
+   6-31G\*, all to every printed digit or 1e-13 Eh), and commit that runner
+   this time. Summation order changes, so iteration counts may move at the
+   noise floor. Re-pin with a reason, as C0 did, not silently.
+4. **K1.4, symmetry (separate commit).** Skeleton mode (S1) gets dense
+   digestion through the per-block skeleton test below: one stabilizer
+   setup per block gives each component a weight of 0 or the orbit size.
+   Then multiply v′ by that weight and let the existing final
+   symmetrization finish the job. Replication mode stays on today's path.
+   Gate: `check_skeleton_symmetry` with the flag on and off, and
+   naphthalene D2h. Prediction: the 13 % `skeleton_orbit_weight` frame goes,
+   plus the digestion share.
+
+*Results, K1.1–K1.3 (working tree, 2026-10-22).*
+
+- **Code.** `fused_fock_build(..., dense_digest = true)`; the build-level
+  predicate also requires every density to be symmetric (1e-10, skeleton
+  mode's tolerance), because the J/K entry points take response densities.
+  Non-symmetric densities keep the per-component path, bitwise. The dense
+  body is instantiated per active write group (Coulomb or exchange, into
+  either output), with raw column-major writes. UHF RawCoulombExchange
+  writes nothing on either path, and the dense loop skips it.
+- **Gate** (`planck-fock-accumulate`, `check_dense_digest`): flag on
+  against flag off, every `FusedTerm` mode, RHF and UHF, water 6-31G,
+  6-31G\*, cc-pVDZ, cc-pVTZ, tol 1e-10 and 1e-6. 68 checks, worst
+  max|ΔG| 8.9e-14. A counting kernel asserts dense prepared exactly the
+  unordered block pairs above block Schwarz, so the gate cannot pass on
+  today's path. Mutations, each caught: drop (p=q), drop (A=B), RHF
+  exchange −¼ instead of −⅛, no final symmetrization, no component mask
+  (caught at tol 1e-6 only).
+- **Time**, `--k1` production arm against today, best of five:
+
+  | fixture | 1 thread | 4 threads | census, masked |
+  |---|---|---|---|
+  | 8 H2O / 6-31G | 1.14× | 1.12× | 1.14× |
+  | 4 H2O / 6-31G\* | 1.17× | 1.17× | 1.19× |
+  | 4 H2O / cc-pVDZ | 1.11× | 1.11× | 1.11× |
+  | 1 H2O / cc-pVTZ | 1.22× | 1.09× | 1.26× |
+
+  A first, generic body (a two-channel loop with null checks per
+  component) gave 1.09–1.18× at one thread. Per-mode instantiation took
+  back all but 0–4 points. cc-pVTZ at four threads is the p ≤ q imbalance
+  (early bra units carry more kets, and one water has few units), which
+  B1's family units address. Record it for B2.
+- **Regression net.** Smoke 43/45 (known rccsdt failures). MPI, three new
+  Auto direct-SCF inputs in `tests/inputs/regression/mpi/` (RHF 4 H2O /
+  cc-pVDZ, UHF H2O⁺ / 6-31G\*, B3LYP H2O / 6-31G\*): serial against 2 and
+  4 ranks, identical for HF and 1.4e-14 Eh for B3LYP. Against explicit
+  `engine hgp` (today's per-component path): HF identical to every printed
+  digit, B3LYP 1.1e-13 Eh. Extended 132/136 (the four known rccsdt cases).
+- **Coverage note.** HF SCF defaults to conventional mode, so HF reaches K1
+  only with `scf_mode direct`. DFT always builds J and K direct with the
+  default Auto engine, so every DFT regression case runs K1.
+- **Rule learned.** zsh does not word-split an unquoted `$f`; a
+  `for f in "8 6-31g" ...; ./bench --k1 $f` loop passed one argument and
+  ran the full default sweep. Use `${=f}`.
+
+- *Risks:* the deg weights on diagonal blocks (the gate's mutations cover
+  them). On sp bases, per-block overhead may eat the gain; K1.2's stop rule
+  covers that. Do not assume Hermitian outputs for every caller; check that
+  each `base.h` J/K caller only reads the symmetrized result.
 
 **B2 — families on top of K1.** The family kernel produces each member
 quartet as a dense block for K1 to digest; the L ≥ 4 pass calls `vrr_lanes`

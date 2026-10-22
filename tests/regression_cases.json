@@ -1268,6 +1268,33 @@
    "expected_exit_code": 0
   },
   {
+   "id": "water4_rhf_ccpvdz_auto_direct_mpi_smoke",
+   "input": "tests/inputs/regression/mpi/water4_rhf_ccpvdz_auto_direct.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0
+  },
+  {
+   "id": "h2o_cation_uhf_631gd_auto_direct_mpi_smoke",
+   "input": "tests/inputs/regression/mpi/h2o_cation_uhf_631gd_auto_direct.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0
+  },
+  {
+   "id": "water_b3lyp_631gd_auto_direct_mpi_smoke",
+   "input": "tests/inputs/regression/mpi/water_b3lyp_631gd_auto_direct.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0
+  },
+  {
    "id": "h2_rmp2_gradient_smoke",
    "input": "tests/inputs/regression/post_hf/h2_rmp2_gradient.hfinp",
    "tags": [

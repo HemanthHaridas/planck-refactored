@@ -1941,10 +1941,16 @@ identify the path taken. Not required for correctness or performance.
     loop in family-quartet order, working tree) is exactly-once and passes
     MPI 1/2/4 ranks. The K1 census then showed the larger lever is
     digestion: dense per-block digestion is 1.11-1.26x of the build at
-    today's precision. Order now: K1 in the loop (B1 reworked into it),
-    then B2 (families) on top; the fixed accumulator partition is
-    independent.
-  - **Open, in order:** a per-block skeleton test, C5 (screened kernels in both block
+    today's precision.
+  - **K1 (dense digestion per block) is in the working tree, gated, not
+    committed (2026-10-22).** No symmetry, Auto, Coulomb, shells up to f,
+    symmetric densities; everything else keeps today's loop. One thread
+    1.11-1.22x, four threads 1.09-1.17x; G within 8.9e-14 of today on every
+    term mode, RHF and UHF; MPI 1/2/4 ranks and explicit-HGP energies agree.
+    Smoke 43/45 and extended 132/136 (known rccsdt failures). B1 is parked as a git stash ("B1: fused
+    loop in family-quartet order") and returns with B2. Next: K1.4 (under
+    S1, with the per-block skeleton test), then B2.
+  - **Open, in order:** K1.4 with a per-block skeleton test, B2, C5 (screened kernels in both block
     kernels; range-separated hybrids still take per-component HGP), D2a/D2b
     (shared-exponent families), P2 (ε screening, a policy decision), then
     total L > 12, then F3. D3 (RI-JK pair factors) is independent. T1
