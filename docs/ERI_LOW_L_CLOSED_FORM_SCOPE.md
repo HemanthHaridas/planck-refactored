@@ -282,16 +282,16 @@ rccsdt routing cases. Details worth keeping:
 
 - **Closed forms (C2–C3.5).** `low_l_shell_eri` treats a quartet as up to
   three *raises* (center, axis) in center order. Per primitive quartet,
-  with $\theta_m = c\,K_{AB}K_{CD}\,2\sqrt{\rho/\pi}\,F_m(T)$, $d$ the
+  with $`\theta_m = c\,K_{AB}K_{CD}\,2\sqrt{\rho/\pi}\,F_m(T)`$, $d$ the
   raised center's $P-A$, $P-B$, $Q-C$ or $Q-D$, and $w$ its $W-P$ or $W-Q$:
 
-  $$
+  ```math
   \begin{aligned}
   A_i(m) &= d_{1,i}\,\theta_m + w_{1,i}\,\theta_{m+1} \\
   B_{ij}(m) &= d_{2,j}\,A_i(m) + w_{2,j}\,A_i(m+1) + [i=j]\,\kappa_{12}(\theta;\,m) \\
   C_{ijk} &= d_{3,k}\,B_{ij}(0) + w_{3,k}\,B_{ij}(1) + [k=i]\,\kappa_{13}(A^{(2)}_j) + [k=j]\,\kappa_{23}(A_i)
   \end{aligned}
-  $$
+  ```
 
   $\kappa_{yx}$ couples a new raise to an earlier one it lowers: on the bra
   $\bigl(X(m) - \tfrac{\rho}{\zeta}X(m+1)\bigr)/2\zeta$, on the ket the same
@@ -301,8 +301,13 @@ rccsdt routing cases. Details worth keeping:
   reachable raise layout required, mutation-verified.
 - **S1.** When every density has the molecule's symmetry, each
   non-forbidden representative is accumulated once, weighted by its orbit
-  size, and $G_{\mu\nu} = \frac{1}{|G|}\sum_R s_R(\mu)s_R(\nu)\,
-  G^{\mathrm{skel}}_{R(\mu)R(\nu)}$ at the end (`quartet_orbit.h`). Any
+  size, and at the end (`quartet_orbit.h`)
+
+  ```math
+  G_{\mu\nu} = \frac{1}{|G|}\sum_R s_R(\mu)\,s_R(\nu)\,G^{\mathrm{skel}}_{R(\mu)R(\nu)}.
+  ```
+
+  Any
   non-symmetric density falls back to replication. Symmetric DFT gains;
   direct HF on linear molecules does not (no SAO blocking for infinite
   groups, so iterates break the symmetry).
@@ -373,10 +378,14 @@ rccsdt routing cases. Details worth keeping:
 
 ### D1c — the electron-transfer recurrence (declined)
 
-Head-Gordon and Pople's ETR at m = 0 after a one-centre VRR out to |e| ≤ M,
-$[e|f{+}1_j] = \bigl(\tfrac{\zeta}{\eta}PA_j + QC_j\bigr)[e|f]
+Head-Gordon and Pople's ETR at m = 0 after a one-centre VRR out to |e| ≤ M:
+
+```math
+[e|f{+}1_j] = \bigl(\tfrac{\zeta}{\eta}PA_j + QC_j\bigr)[e|f]
 + \tfrac{f_j}{2\eta}[e|f{-}1_j] + \tfrac{e_j}{2\eta}[e{-}1_j|f]
-- \tfrac{\zeta}{\eta}[e{+}1_j|f]$
+- \tfrac{\zeta}{\eta}[e{+}1_j|f]
+```
+
 (the textbook $-(\beta X_{AB}+\delta X_{CD})/\eta$ written with $P-A$, $Q-C$).
 
 - **Precision.** A fixed bra→ket direction was off by 2.8e-9 on cc-pVTZ;
