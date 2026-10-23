@@ -32,8 +32,10 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
+#include <ranges>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -124,30 +126,60 @@ namespace HartreeFock::Integrals
     // Skipping a forbidden quartet only saves work: its contribution would be
     // cancelled exactly by the final symmetrization (the op fixing it with sign
     // -1 maps it to its own negative), so no value gate can see that test.
+    //
+    // The general form, for a caller that has already decided some ops for a
+    // whole block of quartets (fused_fock.h, K1.4): `stab0` ops are known to
+    // fix (a,b,c,d) with sign +1, `sign_ops` fix every AO and need only the sign
+    // test, and only `perm_ops` (op indices) can move it. (a,b,c,d) need not be
+    // canonical; it is canonicalized only when some perm op remains.
+    template <typename PermOps, typename SignOps>
+    inline double skeleton_orbit_weight(
+        std::size_t a, std::size_t b, std::size_t c, std::size_t d,
+        const std::vector<HartreeFock::SignedAOSymOp> &sym_ops,
+        const PermOps &perm_ops, const SignOps &sign_ops, std::size_t stab0) noexcept
+    {
+        for (const std::size_t o : sign_ops)
+        {
+            const auto &sg = sym_ops[o].ao_sign;
+            if (sg[a] * sg[b] * sg[c] * sg[d] < 0)
+                return 0.0;
+        }
+        std::size_t stab = stab0;
+        if (!std::ranges::empty(perm_ops))
+        {
+            std::size_t i = a, j = b, k = c, l = d;
+            canonicalize_orbit_quartet(i, j, k, l);
+            for (const std::size_t o : perm_ops)
+            {
+                const auto &op = sym_ops[o];
+                std::size_t ii = static_cast<std::size_t>(op.ao_map[i]);
+                std::size_t jj = static_cast<std::size_t>(op.ao_map[j]);
+                std::size_t kk = static_cast<std::size_t>(op.ao_map[k]);
+                std::size_t ll = static_cast<std::size_t>(op.ao_map[l]);
+                canonicalize_orbit_quartet(ii, jj, kk, ll);
+                const auto image = std::tie(ii, jj, kk, ll);
+                const auto self = std::tie(i, j, k, l);
+                if (image < self)
+                    return 0.0;
+                if (image == self)
+                {
+                    if (op.ao_sign[i] * op.ao_sign[j] * op.ao_sign[k] * op.ao_sign[l] < 0)
+                        return 0.0;
+                    ++stab;
+                }
+            }
+        }
+        return static_cast<double>(sym_ops.size()) / static_cast<double>(stab);
+    }
+
+    // Every op undecided.
     inline double skeleton_orbit_weight(
         std::size_t i, std::size_t j, std::size_t k, std::size_t l,
         const std::vector<HartreeFock::SignedAOSymOp> &sym_ops) noexcept
     {
-        std::size_t stab = 0;
-        for (const auto &op : sym_ops)
-        {
-            std::size_t ii = static_cast<std::size_t>(op.ao_map[i]);
-            std::size_t jj = static_cast<std::size_t>(op.ao_map[j]);
-            std::size_t kk = static_cast<std::size_t>(op.ao_map[k]);
-            std::size_t ll = static_cast<std::size_t>(op.ao_map[l]);
-            canonicalize_orbit_quartet(ii, jj, kk, ll);
-            const auto image = std::tie(ii, jj, kk, ll);
-            const auto self = std::tie(i, j, k, l);
-            if (image < self)
-                return 0.0;
-            if (image == self)
-            {
-                if (op.ao_sign[i] * op.ao_sign[j] * op.ao_sign[k] * op.ao_sign[l] < 0)
-                    return 0.0;
-                ++stab;
-            }
-        }
-        return static_cast<double>(sym_ops.size()) / static_cast<double>(stab);
+        return skeleton_orbit_weight(i, j, k, l, sym_ops,
+                                     std::views::iota(std::size_t{0}, sym_ops.size()),
+                                     std::array<std::size_t, 0>{}, 0);
     }
 
     // True iff s(a) s(b) P(R(a), R(b)) == P(a, b) within `tol` for every op: the

@@ -40,6 +40,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cassert>
 #include <cstddef>
 #include <optional>
 #include <tuple>
@@ -101,6 +102,70 @@ namespace HartreeFock::Integrals
             }
         }
         return groups;
+    }
+
+    // Shared-exponent families of shell groups (D2b): per atom, a shell joins
+    // the first family, largest exponent set first, whose representative's
+    // exponents contain all of its own (exact match), across L. Pople SP shells
+    // and cc general contractions fall out of the same rule. Group pairs are
+    // then bucketed by their unordered family pair, ordered by (lower family,
+    // higher family).
+    struct FusedFamilies
+    {
+        std::vector<std::size_t> of_group;               // family index per group
+        std::vector<std::vector<std::size_t>> members;   // per family pair: group-pair indices
+    };
+
+    template <typename GroupPairs>
+    FusedFamilies fused_families(const std::vector<FusedShellGroup> &groups,
+                                 const std::vector<const HartreeFock::ContractedView *> &ao_views,
+                                 const GroupPairs &group_pairs)
+    {
+        const std::size_t ng = groups.size();
+        const auto shell_of = [&](std::size_t g) { return ao_views[groups[g].first_ao]->_shell; };
+        const auto contains = [](const HartreeFock::Shell &big, const HartreeFock::Shell &small)
+        {
+            for (Eigen::Index i = 0; i < small._primitives.size(); ++i)
+            {
+                bool hit = false;
+                for (Eigen::Index j = 0; j < big._primitives.size() && !hit; ++j)
+                    hit = big._primitives[j] == small._primitives[i];
+                if (!hit)
+                    return false;
+            }
+            return true;
+        };
+        std::vector<std::size_t> order(ng);
+        for (std::size_t g = 0; g < ng; ++g)
+            order[g] = g;
+        std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b)
+                         {
+                             const HartreeFock::Shell &x = *shell_of(a), &y = *shell_of(b);
+                             return x._atom_index != y._atom_index ? x._atom_index < y._atom_index
+                                                                   : x._primitives.size() > y._primitives.size();
+                         });
+        FusedFamilies F;
+        F.of_group.assign(ng, 0);
+        std::vector<std::size_t> rep; // representative group per family
+        for (const std::size_t g : order)
+        {
+            std::size_t f = 0;
+            while (f < rep.size() && !(shell_of(rep[f])->_atom_index == shell_of(g)->_atom_index &&
+                                       contains(*shell_of(rep[f]), *shell_of(g))))
+                ++f;
+            if (f == rep.size())
+                rep.push_back(g);
+            F.of_group[g] = f;
+        }
+        const std::size_t nf = rep.size();
+        F.members.assign(nf * (nf + 1) / 2, {});
+        const auto fp_index = [&](std::size_t p, std::size_t q) { return p * nf - p * (p - 1) / 2 + (q - p); };
+        for (std::size_t gp = 0; gp < group_pairs.size(); ++gp)
+        {
+            const std::size_t p = F.of_group[group_pairs[gp].a], q = F.of_group[group_pairs[gp].b];
+            F.members[fp_index(std::min(p, q), std::max(p, q))].push_back(gp);
+        }
+        return F;
     }
 
     // Densities the fused driver contracts against. For RHF only `P` is read;
@@ -201,7 +266,10 @@ namespace HartreeFock::Integrals
         const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
         FusedTerm term = FusedTerm::Combined,
         BlockKernel block_kernel = {},
-        bool dense_digest = true)
+        bool dense_digest = true,
+        // ponytail: off until B2.2's family kernels repay the order's cost
+        // (+4-8 % on Pople bases at one thread); the gate covers both orders.
+        bool family_units = false)
     {
         const bool use_sym = (sym_ops != nullptr) && !sym_ops->empty();
 
@@ -277,16 +345,16 @@ namespace HartreeFock::Integrals
         // Decided per build, never per block: the dense loop visits block pairs
         // p <= q, while the per-component loop's canonical filter is by AO index
         // and needs kets with q < p, so the two cannot share a build. Needs a
-        // block kernel (Auto) that accepts every block (Coulomb, shells up to f,
-        // i.e. total L <= 12), no integral symmetry or skeleton mode (K1.4;
+        // block kernel that covers every block of the basis (every total L up to
+        // four times the largest shell L, for this kernel; the Auto chain covers
+        // Coulomb through f shells), no integral symmetry or skeleton mode (K1.4;
         // replication mode keeps the per-component loop), and symmetric
         // densities: the final (G + G^T)/2 keeps only K of the density's
         // symmetric part.
         // ponytail: same 1e-10 absolute tolerance as skeleton mode.
-        constexpr bool kHasBlockKernel = !std::is_same_v<BlockKernel, NoBlockKernel>;
-        bool dense = kHasBlockKernel && dense_digest && (!use_sym || skeleton) &&
-                     kernel == HartreeFock::ERIKernel::Coulomb &&
-                     *std::max_element(group_L.begin(), group_L.end()) <= 3;
+        bool dense = dense_digest && (!use_sym || skeleton);
+        for (int lt = 0; dense && lt <= 4 * *std::max_element(group_L.begin(), group_L.end()); ++lt)
+            dense = block_kernel.covers(lt, kernel);
         for (const Eigen::MatrixXd *D : {dens.P, dens.Pt, dens.Pa, dens.Pb})
             if (dense && D && (*D - D->transpose()).cwiseAbs().maxCoeff() > kSkeletonDensityTol)
                 dense = false;
@@ -319,16 +387,11 @@ namespace HartreeFock::Integrals
             qmax[p] = m;
         }
 
-        // Block-level orbit rejection. A canonical quartet starts with its
-        // smallest AO, so if an operation sends any of a block's four shell
-        // groups below the bra's first group A, every component quartet of the
-        // block maps to a smaller quartet and none is its orbit's
-        // representative: skip the block without visiting a component. Needs
-        // each operation to map a group onto one group (true for the signed AO
+        // op_group[o * ngroups + g]: the group op o maps group g onto, used by
+        // the block-level orbit tests (below). Needs each
+        // operation to map a group onto one group (true for the signed AO
         // permutations update_integral_symmetry builds); checked here, and the
-        // rejection is off if any operation splits a group. Bitwise: the
-        // skipped blocks held no representatives. ~60 % of D2h naphthalene's
-        // blocks, 1.07x on its build.
+        // block test is off if any operation splits a group.
         std::vector<std::size_t> op_group; // op_group[o * ngroups + g]
         if (use_sym)
         {
@@ -353,6 +416,22 @@ namespace HartreeFock::Integrals
                 op_group.clear();
         }
 
+        // The block request for shell groups (sA sB | sC sD): first-component
+        // pairs, component views, counts and L. Shared by both traversals.
+        const auto set_block = [&](BlockEriRequest &r, std::size_t sA, std::size_t sB,
+                                   std::size_t sC, std::size_t sD)
+        {
+            const std::size_t s4[4] = {sA, sB, sC, sD};
+            r.ab = pair_of[groups[sA].first_ao * nb + groups[sB].first_ao];
+            r.cd = pair_of[groups[sC].first_ao * nb + groups[sD].first_ao];
+            for (int s = 0; s < 4; ++s)
+            {
+                r.views[s] = &ao_views[groups[s4[s]].first_ao];
+                r.n[s] = groups[s4[s]].n_components;
+                r.L[s] = group_L[s4[s]];
+            }
+        };
+
         // K1.4b: an op whose AO map is the identity (the identity itself, or the
         // mirror through a planar molecule's plane) fixes every quartet. In the
         // dense skeleton weight it always counts toward the stabilizer and needs
@@ -361,24 +440,6 @@ namespace HartreeFock::Integrals
         std::size_t n_identity_map_ops = 0;
         std::vector<std::size_t> sign_ops;
         std::vector<char> is_identity_map;
-        // op_pair[o * ngp + p]: the index of the canonical image of shell pair p
-        // under op o. Pairs are numbered lexicographically, so a block (p, q)
-        // maps to (min, max) of the two image indices, and comparing blocks is
-        // comparing those two integers: no canonicalization per block.
-        std::vector<std::size_t> op_pair;
-        if (use_sym && !op_group.empty())
-        {
-            op_pair.resize(sym_ops->size() * ngp);
-            for (std::size_t o = 0; o < sym_ops->size(); ++o)
-                for (std::size_t pp = 0; pp < ngp; ++pp)
-                {
-                    std::size_t x = op_group[o * ngroups + group_pairs[pp].a];
-                    std::size_t y = op_group[o * ngroups + group_pairs[pp].b];
-                    if (x > y)
-                        std::swap(x, y);
-                    op_pair[o * ngp + pp] = x * ngroups - x * (x - 1) / 2 + (y - x); // group_pairs order
-                }
-        }
         if (use_sym)
         {
             is_identity_map.assign(sym_ops->size(), 0);
@@ -399,6 +460,73 @@ namespace HartreeFock::Integrals
                     sign_ops.push_back(o);
             }
         }
+
+        // Two representative conventions, one per traversal. The skeleton (S1)
+        // and replication schemes need exactly one representative per orbit;
+        // any consistent choice works, but a traversal must not mix two.
+        //
+        // The per-component loop uses the AO-minimal canonical quartet
+        // (is_orbit_representative, fill_quartet_orbit, skeleton_orbit_weight
+        // over all ops). Its block test can only use what holds for every
+        // component: each has its smallest AO in the block's smallest group
+        // G0, so an op whose image's smallest group is below G0 sends every
+        // component lower, and the block holds no representative. Comparing
+        // whole shell quartets is NOT valid here: when both pairs start in G0,
+        // the AO order is decided inside G0, so an AO-minimal representative
+        // can sit in a block whose shell quartet some op sends lower.
+        const auto ao_block_has_no_representative =
+            [&](std::size_t sA, std::size_t sB, std::size_t sC, std::size_t sD)
+        {
+            const std::size_t g0 = std::min(sA, sC);
+            for (std::size_t o = 0; o < sym_ops->size(); ++o)
+            {
+                const std::size_t *m = &op_group[o * ngroups];
+                if (std::min({m[sA], m[sB], m[sC], m[sD]}) < g0)
+                    return true;
+            }
+            return false;
+        };
+
+        // The dense loop (K1.4) uses the shell-first convention: the
+        // representative lies in the orbit's lowest canonical shell quartet,
+        // and within it is AO-minimal among the ops that map that shell
+        // quartet onto itself. Unique per orbit (every other member's block is
+        // sent lower by some op), so a block some op sends to a lower canonical
+        // shell quartet holds no representative, and only the ops fixing the
+        // block's shell quartet can matter to a component. op_pair[o * ngp + p]
+        // is op o's canonical image of shell pair p; pairs are numbered
+        // lexicographically, so the image of block {p, q} is (min, max) of two
+        // entries. `fixing` collects the permuting ops that fix the block (the
+        // identity-map ops are counted separately).
+        std::vector<std::size_t> op_pair;
+        if (use_sym && !op_group.empty())
+        {
+            op_pair.resize(sym_ops->size() * ngp);
+            for (std::size_t o = 0; o < sym_ops->size(); ++o)
+                for (std::size_t pp = 0; pp < ngp; ++pp)
+                {
+                    std::size_t x = op_group[o * ngroups + group_pairs[pp].a];
+                    std::size_t y = op_group[o * ngroups + group_pairs[pp].b];
+                    if (x > y)
+                        std::swap(x, y);
+                    op_pair[o * ngp + pp] = x * ngroups - x * (x - 1) / 2 + (y - x); // group_pairs order
+                }
+        }
+        const auto shell_block_has_no_representative =
+            [&](std::size_t p, std::size_t q, std::vector<std::size_t> &fixing)
+        {
+            fixing.clear();
+            for (std::size_t o = 0; o < sym_ops->size(); ++o)
+            {
+                const std::size_t ip = op_pair[o * ngp + p], iq = op_pair[o * ngp + q];
+                const std::size_t lo = std::min(ip, iq), hi = std::max(ip, iq);
+                if (lo < p || (lo == p && hi < q))
+                    return true;
+                if (lo == p && hi == q && !is_identity_map[o])
+                    fixing.push_back(o);
+            }
+            return false;
+        };
 
 #ifdef USE_OPENMP
         const int n_threads = omp_get_max_threads();
@@ -492,19 +620,10 @@ namespace HartreeFock::Integrals
 
                 if constexpr (kSym)
                 {
-                    if (!op_group.empty())
-                    {
-                        const std::size_t A = group_pairs[bra].a, B = group_pairs[bra].b;
-                        const std::size_t C = group_pairs[ket].a, D = group_pairs[ket].b;
-                        bool below = false;
-                        for (std::size_t o = 0; o < sym_ops->size() && !below; ++o)
-                        {
-                            const std::size_t *m = &op_group[o * ngroups];
-                            below = std::min({m[A], m[B], m[C], m[D]}) < A;
-                        }
-                        if (below)
-                            continue;
-                    }
+                    if (!op_group.empty() &&
+                        ao_block_has_no_representative(group_pairs[bra].a, group_pairs[bra].b,
+                                                       group_pairs[ket].a, group_pairs[ket].b))
+                        continue;
                 }
 
                 // The block kernel is prepared on the first component quartet
@@ -592,17 +711,8 @@ namespace HartreeFock::Integrals
 
                                 if (block_state < 0)
                                 {
-                                    const FusedShellGroup *g4[4] = {&gA, &gB, &gC, &gD};
-                                    const std::size_t s4[4] = {group_pairs[bra].a, group_pairs[bra].b,
-                                                               group_pairs[ket].a, group_pairs[ket].b};
-                                    request.ab = pair_of[gA.first_ao * nb + gB.first_ao];
-                                    request.cd = pair_of[gC.first_ao * nb + gD.first_ao];
-                                    for (int s = 0; s < 4; ++s)
-                                    {
-                                        request.views[s] = &ao_views[g4[s]->first_ao];
-                                        request.n[s] = g4[s]->n_components;
-                                        request.L[s] = group_L[s4[s]];
-                                    }
+                                    set_block(request, group_pairs[bra].a, group_pairs[bra].b,
+                                              group_pairs[ket].a, group_pairs[ket].b);
                                     block_state = block.prepare(request) ? 1 : 0;
                                 }
 
@@ -702,21 +812,22 @@ namespace HartreeFock::Integrals
         // every component the same way: a smaller one means no representative
         // in the block (skip it), a larger one is irrelevant. Only the ops that
         // map the block's group quartet onto itself are tested per component.
-        const auto dense_body = [&](std::size_t p, auto mode_tag, auto skel_tag)
+        //
+        // dense_body(p, kets, ...) visits bra pair p against every ket q that
+        // kets(f) hands to f; callers guarantee q >= p and that each unordered
+        // block pair is handed over exactly once per build.
+        std::vector<std::vector<std::size_t>> block_ops_of(static_cast<std::size_t>(n_threads));
+        const auto dense_body = [&](std::size_t p, auto &&kets, auto mode_tag, auto skel_tag)
         {
             constexpr int kMode = decltype(mode_tag)::value;
             constexpr bool kSkel = decltype(skel_tag)::value;
-            std::vector<std::size_t> block_ops; // permuting ops fixing the block's group quartet
-            if constexpr (kSkel)
-                block_ops.reserve(sym_ops->size());
-            if (mpi_size > 1 &&
-                static_cast<int>(p % static_cast<std::size_t>(mpi_size)) != mpi_rank)
-                return;
 #ifdef USE_OPENMP
             const int thread_id = omp_get_thread_num();
 #else
             const int thread_id = 0;
 #endif
+            // the block's undecided permuting ops (per thread, reused)
+            std::vector<std::size_t> &block_ops = block_ops_of[static_cast<std::size_t>(thread_id)];
             Eigen::MatrixXd *out[2] = {
                 need_uhf ? &ga_partials[thread_id] : &g_partials[thread_id],
                 need_uhf ? &gb_partials[thread_id]
@@ -737,59 +848,31 @@ namespace HartreeFock::Integrals
             const std::size_t sA = group_pairs[p].a, sB = group_pairs[p].b;
             const FusedShellGroup &gA = groups[sA], &gB = groups[sB];
 
-            // A block the kernel declines (none, under the predicate above) is
-            // evaluated per component in canonical AO order.
-            const auto component_eri = [&](std::size_t a, std::size_t b, std::size_t c, std::size_t d)
-            {
-                if (a > b)
-                    std::swap(a, b);
-                if (c > d)
-                    std::swap(c, d);
-                const auto pair = [&](std::size_t x, std::size_t y)
-                { return pair_of[x * nb + y] ? *pair_of[x * nb + y] : HartreeFock::ShellPair(*ao_views[x], *ao_views[y]); };
-                const auto &la = ao_views[a]->_cartesian, &lb = ao_views[b]->_cartesian;
-                const auto &lc = ao_views[c]->_cartesian, &ld = ao_views[d]->_cartesian;
-                return eri_elem(pair(a, b), pair(c, d), la[0], la[1], la[2], lb[0], lb[1], lb[2],
-                                lc[0], lc[1], lc[2], ld[0], ld[1], ld[2], kernel, omega);
-            };
-
-            for (std::size_t q = p; q < ngp; ++q)
+            kets([&](std::size_t q)
             {
                 if (qmax[p] * qmax[q] < tol_eri)
-                    continue;
+                    return;
                 const std::size_t sC = group_pairs[q].a, sD = group_pairs[q].b;
                 if constexpr (kSkel)
                 {
-                    if (!op_group.empty())
-                    {
-                        // (sA, sB, sC, sD) is a canonical group quartet: a <= b
-                        // within each pair, and pairs are ordered p <= q.
-                        block_ops.clear();
-                        bool below = false;
-                        for (std::size_t o = 0; o < sym_ops->size() && !below; ++o)
-                        {
-                            const std::size_t ip = op_pair[o * ngp + p], iq = op_pair[o * ngp + q];
-                            const std::size_t lo = std::min(ip, iq), hi = std::max(ip, iq);
-                            below = lo < p || (lo == p && hi < q);
-                            if (lo == p && hi == q && !is_identity_map[o])
-                                block_ops.push_back(o);
-                        }
-                        if (below)
-                            continue;
-                    }
+                    if (!op_pair.empty() && shell_block_has_no_representative(p, q, block_ops))
+                        return;
                 }
                 const FusedShellGroup &gC = groups[sC], &gD = groups[sD];
-                const FusedShellGroup *g4[4] = {&gA, &gB, &gC, &gD};
-                const std::size_t s4[4] = {sA, sB, sC, sD};
-                request.ab = pair_of[gA.first_ao * nb + gB.first_ao];
-                request.cd = pair_of[gC.first_ao * nb + gD.first_ao];
-                for (int s = 0; s < 4; ++s)
+                // Prepared lazily at the first component that survives the
+                // Schwarz mask and (under S1) has a nonzero weight, as in the
+                // per-component loop: a block with no representative costs no
+                // kernel work. The dense predicate admits only kernels that
+                // cover every block of the basis.
+                bool prepared = false;
+                const auto ensure_prepared = [&]
                 {
-                    request.views[s] = &ao_views[g4[s]->first_ao];
-                    request.n[s] = g4[s]->n_components;
-                    request.L[s] = group_L[s4[s]];
-                }
-                const bool prepared = block.prepare(request);
+                    if (prepared)
+                        return;
+                    set_block(request, sA, sB, sC, sD);
+                    prepared = block.prepare(request);
+                    assert(prepared && "dense digestion: block kernel declined a block");
+                };
                 const double deg = (sA == sB ? 1.0 : 2.0) * (sC == sD ? 1.0 : 2.0) * (p == q ? 1.0 : 2.0);
 
                 for (std::size_t ca = 0; ca < gA.n_components; ++ca)
@@ -814,62 +897,20 @@ namespace HartreeFock::Integrals
                                 double weight = 1.0;
                                 if constexpr (kSkel)
                                 {
-                                    if (op_group.empty())
-                                    {
-                                        std::size_t i = a, j = b, k = c, l = d;
-                                        canonicalize_orbit_quartet(i, j, k, l);
-                                        weight = skeleton_orbit_weight(i, j, k, l, *sym_ops);
-                                    }
-                                    else
-                                    {
-                                        // skeleton_orbit_weight over the ops not
-                                        // already decided for the whole block: the
-                                        // identity-map ops (a sign test each) and
-                                        // the permuting ops that fix the block.
-                                        bool forbidden_or_not_rep = false;
-                                        std::size_t stab = n_identity_map_ops;
-                                        for (const std::size_t o : sign_ops)
-                                        {
-                                            const auto &sg = (*sym_ops)[o].ao_sign;
-                                            if (sg[a] * sg[b] * sg[c] * sg[d] < 0)
-                                            {
-                                                forbidden_or_not_rep = true;
-                                                break;
-                                            }
-                                        }
-                                        if (!forbidden_or_not_rep && !block_ops.empty())
-                                        {
-                                            std::size_t i = a, j = b, k = c, l = d;
-                                            canonicalize_orbit_quartet(i, j, k, l);
-                                            for (const std::size_t o : block_ops)
-                                            {
-                                                const HartreeFock::SignedAOSymOp &op = (*sym_ops)[o];
-                                                std::size_t ii = static_cast<std::size_t>(op.ao_map[i]);
-                                                std::size_t jj = static_cast<std::size_t>(op.ao_map[j]);
-                                                std::size_t kk = static_cast<std::size_t>(op.ao_map[k]);
-                                                std::size_t ll = static_cast<std::size_t>(op.ao_map[l]);
-                                                canonicalize_orbit_quartet(ii, jj, kk, ll);
-                                                const auto image = std::tie(ii, jj, kk, ll);
-                                                const auto self = std::tie(i, j, k, l);
-                                                if (image < self ||
-                                                    (image == self &&
-                                                     op.ao_sign[i] * op.ao_sign[j] * op.ao_sign[k] * op.ao_sign[l] < 0))
-                                                {
-                                                    forbidden_or_not_rep = true;
-                                                    break;
-                                                }
-                                                stab += image == self;
-                                            }
-                                        }
-                                        weight = forbidden_or_not_rep
-                                                     ? 0.0
-                                                     : static_cast<double>(sym_ops->size()) / static_cast<double>(stab);
-                                    }
+                                    // With the op tables, only the identity-map
+                                    // ops (a sign test) and the permuting ops
+                                    // fixing the block are applied per component.
+                                    weight = op_pair.empty()
+                                                 ? skeleton_orbit_weight(a, b, c, d, *sym_ops,
+                                                                         std::views::iota(std::size_t{0}, sym_ops->size()),
+                                                                         std::array<std::size_t, 0>{}, 0)
+                                                 : skeleton_orbit_weight(a, b, c, d, *sym_ops, block_ops,
+                                                                         sign_ops, n_identity_map_ops);
                                     if (weight == 0.0)
                                         continue;
                                 }
-                                const double v = deg * weight * (prepared ? block.value(ca, cb, cc, cd)
-                                                                          : component_eri(a, b, c, d));
+                                ensure_prepared();
+                                const double v = deg * weight * block.value(ca, cb, cc, cd);
                                 const auto coul = [&](double *O, const double *P, double w)
                                 {
                                     O[b * nb + a] += P[d * nb + c] * w;
@@ -894,14 +935,79 @@ namespace HartreeFock::Integrals
                         }
                     }
                 }
-            }
+            });
         };
+
+        // B2.1: the dense path runs one unit per family quartet (P, Q), P <= Q,
+        // over the shared-exponent families' buckets of shell pairs. A unit
+        // visits every unordered block pair with one member in P and one in Q,
+        // each once: bra x in P against kets y in Q with y >= x, and for P < Q
+        // also bra y in Q against kets x in P with x > y. Without families the
+        // unit is a bra pair p against every q >= p, as in K1.
+        const bool use_units = dense && family_units;
+        FusedFamilies families;
+        std::vector<std::array<std::size_t, 2>> units;
+        if (use_units)
+        {
+            families = fused_families(groups, ao_views, group_pairs);
+            const auto &M = families.members;
+            // Unit-level Schwarz: every block of the unit is bounded by the
+            // product of the two buckets' largest shell-pair bounds, so a unit
+            // below tol_eri holds no surviving block. Exact, like block Schwarz;
+            // it keeps the many fully screened units of extended systems out of
+            // the loop entirely.
+            std::vector<double> bucket_qmax(M.size(), 0.0);
+            for (std::size_t P = 0; P < M.size(); ++P)
+                for (const std::size_t x : M[P])
+                    bucket_qmax[P] = std::max(bucket_qmax[P], qmax[x]);
+            units.reserve(M.size() * (M.size() + 1) / 2);
+            for (std::size_t P = 0; P < M.size(); ++P)
+                for (std::size_t Q = P; Q < M.size(); ++Q)
+                    if (!M[P].empty() && !M[Q].empty() && bucket_qmax[P] * bucket_qmax[Q] >= tol_eri)
+                        units.push_back({P, Q});
+        }
+        const auto dense_unit = [&](std::size_t u, auto mode_tag, auto skel_tag)
+        {
+            if (mpi_size > 1 &&
+                static_cast<int>(u % static_cast<std::size_t>(mpi_size)) != mpi_rank)
+                return;
+            if (!use_units)
+            {
+                dense_body(u, [&](auto &&f)
+                           {
+                               for (std::size_t q = u; q < ngp; ++q)
+                                   f(q);
+                           },
+                           mode_tag, skel_tag);
+                return;
+            }
+            const auto &MP = families.members[units[u][0]];
+            const auto &MQ = families.members[units[u][1]];
+            for (const std::size_t x : MP)
+                dense_body(x, [&](auto &&f)
+                           {
+                               for (const std::size_t y : MQ)
+                                   if (y >= x)
+                                       f(y);
+                           },
+                           mode_tag, skel_tag);
+            if (units[u][0] != units[u][1])
+                for (const std::size_t y : MQ)
+                    dense_body(y, [&](auto &&f)
+                               {
+                                   for (const std::size_t x : MP)
+                                       if (x > y)
+                                           f(x);
+                               },
+                               mode_tag, skel_tag);
+        };
+        const std::size_t n_units = use_units ? units.size() : ngp;
 
         // schedule(static), NOT dynamic — load-bearing, see the header note.
 #ifdef USE_OPENMP
 #pragma omp parallel for schedule(static)
 #endif
-        for (std::size_t bra = 0; bra < ngp; ++bra)
+        for (std::size_t bra = 0; bra < n_units; ++bra)
         {
             if (dense)
             {
@@ -910,13 +1016,13 @@ namespace HartreeFock::Integrals
                 {
                     switch (dense_mode)
                     {
-                    case 1: dense_body(bra, integral_constant<int, 1>{}, skel); break;
-                    case 2: dense_body(bra, integral_constant<int, 2>{}, skel); break;
-                    case 3: dense_body(bra, integral_constant<int, 3>{}, skel); break;
-                    case 5: dense_body(bra, integral_constant<int, 5>{}, skel); break;
-                    case 9: dense_body(bra, integral_constant<int, 9>{}, skel); break;
-                    case 10: dense_body(bra, integral_constant<int, 10>{}, skel); break;
-                    case 15: dense_body(bra, integral_constant<int, 15>{}, skel); break;
+                    case 1: dense_unit(bra, integral_constant<int, 1>{}, skel); break;
+                    case 2: dense_unit(bra, integral_constant<int, 2>{}, skel); break;
+                    case 3: dense_unit(bra, integral_constant<int, 3>{}, skel); break;
+                    case 5: dense_unit(bra, integral_constant<int, 5>{}, skel); break;
+                    case 9: dense_unit(bra, integral_constant<int, 9>{}, skel); break;
+                    case 10: dense_unit(bra, integral_constant<int, 10>{}, skel); break;
+                    case 15: dense_unit(bra, integral_constant<int, 15>{}, skel); break;
                     default: break; // nothing to write (UHF RawCoulombExchange)
                     }
                 };

@@ -6,6 +6,8 @@
 //
 //   bool   prepare(const BlockEriRequest &)   // false: class not handled
 //   double value(ca, cb, cc, cd) const        // component (ca,cb|cc,cd)
+//   bool   covers(total_L, kernel) const      // prepare() accepts every block
+//                                             // of this total L and kernel
 //
 // prepare() runs at most once per block, at the first component that survives
 // the loop's filters, so a fully screened block costs nothing. When it returns
@@ -42,6 +44,7 @@ namespace HartreeFock::Integrals
     struct NoBlockKernel
     {
         bool prepare(const BlockEriRequest &) noexcept { return false; }
+        bool covers(int, HartreeFock::ERIKernel) const noexcept { return false; }
         double value(std::size_t, std::size_t, std::size_t, std::size_t) const noexcept { return 0.0; }
     };
 
@@ -54,6 +57,10 @@ namespace HartreeFock::Integrals
         Second second;
         bool use_first = true;
 
+        bool covers(int total_l, HartreeFock::ERIKernel k) const noexcept
+        {
+            return first.covers(total_l, k) || second.covers(total_l, k);
+        }
         bool prepare(const BlockEriRequest &r)
         {
             use_first = first.prepare(r);

@@ -30,6 +30,7 @@
 #include <sstream>
 #include <atomic>
 #include <iostream>
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>
@@ -1100,13 +1101,38 @@ struct CountingBlockKernel
                                              HartreeFock::Integrals::HgpBlockKernel>
         inner{HartreeFock::Integrals::ClosedFormBlockKernel{3}, HartreeFock::Integrals::HgpBlockKernel{4, 12}};
     std::atomic<std::size_t> *count = nullptr;
+    // Blocks whose bra pair sorts after the ket pair (by first AO). The dense
+    // traversal visits only p <= q, so it never prepares one; the
+    // per-component loop does. Proves which path ran when counts tie.
+    std::atomic<std::size_t> *reversed = nullptr;
+    bool covers(int l, HartreeFock::ERIKernel k) const { return inner.covers(l, k); }
     bool prepare(const HartreeFock::Integrals::BlockEriRequest &r)
     {
         count->fetch_add(1, std::memory_order_relaxed);
+        const auto first = [&](int s) { return r.views[s][0]->_index; };
+        if (reversed && std::pair(first(0), first(1)) > std::pair(first(2), first(3)))
+            reversed->fetch_add(1, std::memory_order_relaxed);
         return inner.prepare(r);
     }
     double value(std::size_t a, std::size_t b, std::size_t c, std::size_t d) const { return inner.value(a, b, c, d); }
 };
+
+// max|A - B| over the outputs a build filled, NaN-safe: a size mismatch or any
+// non-finite entry is +inf, so `!(worst <= tol)` cannot pass on NaN the way
+// `std::max(worst, NaN)` (which returns worst) did.
+double max_output_diff(const Eigen::MatrixXd (&a)[3], const Eigen::MatrixXd (&b)[3])
+{
+    double worst = 0.0;
+    for (int m = 0; m < 3; ++m)
+    {
+        if (!a[m].size() && !b[m].size())
+            continue;
+        if (a[m].size() != b[m].size() || !a[m].allFinite() || !b[m].allFinite())
+            return std::numeric_limits<double>::infinity();
+        worst = std::max(worst, (a[m] - b[m]).cwiseAbs().maxCoeff());
+    }
+    return worst;
+}
 
 double hgp_elem(const HartreeFock::ShellPair &ab, const HartreeFock::ShellPair &cd,
                 int lAx, int lAy, int lAz, int lBx, int lBy, int lBz,
@@ -1163,36 +1189,48 @@ void check_dense_digest(const std::string &basis_name)
                 dens.P = &P;
                 if (uhf)
                     dens = {nullptr, &Pt, &Pa, &Pb};
-                Eigen::MatrixXd out[2][3];
-                std::atomic<std::size_t> count[2]{0, 0};
-                for (int d = 0; d < 2; ++d)
+                // [0] per-component, [1] dense in family-quartet units (B2.1),
+                // [2] dense in bra-pair units (K1, the default for now).
+                Eigen::MatrixXd out[3][3];
+                std::atomic<std::size_t> count[3]{0, 0, 0};
+                for (int d = 0; d < 3; ++d)
                     fused_fock_build(sp, nb, Q, HartreeFock::ERIKernel::Coulomb, 0.0, tol, uhf, dens,
                                      out[d][0], out[d][1], out[d][2], hgp_elem, nullptr, terms[t],
-                                     CountingBlockKernel{.count = &count[d]}, /*dense_digest=*/d == 1);
-                double worst = 0.0;
-                for (int m = 0; m < 3; ++m)
-                    if (out[0][m].size() || out[1][m].size())
-                        worst = std::max(worst, out[0][m].size() == out[1][m].size()
-                                                    ? (out[0][m] - out[1][m]).cwiseAbs().maxCoeff()
-                                                    : 1e300);
+                                     CountingBlockKernel{.count = &count[d]}, /*dense_digest=*/d >= 1,
+                                     /*family_units=*/d == 1);
+                const double worst = max_output_diff(out[0], out[1]);
                 const std::string tag = "K1 water/" + basis_name + " " + names[t] + (uhf ? " UHF" : " RHF") +
                                         " tol " + (tol < 1e-8 ? "1e-10" : "1e-6");
-                if (worst > 1e-13)
+                // Summation order differs, so the bound is relative to the size
+                // of G (cc-pVTZ UHF Coulomb sits at ~1e-13 absolute).
+                double gmax = 1.0;
+                for (int m = 0; m < 3; ++m)
+                    if (out[0][m].size())
+                        gmax = std::max(gmax, out[0][m].cwiseAbs().maxCoeff());
+                if (!(worst <= 1e-14 * gmax))
                     { std::ostringstream os; os << std::setprecision(3) << worst; fail(tag + ": dense != per-component, max|dG| = " + os.str()); }
                 // UHF RawCoulombExchange writes nothing either way, and the dense
                 // loop skips it outright.
                 else if (count[1] != (uhf && terms[t] == FusedTerm::RawCoulombExchange ? 0 : expect))
                     fail(tag + ": dense prepared " + std::to_string(count[1].load()) + " blocks, expected " +
-                         std::to_string(expect) + " (dense path not taken?)");
+                         std::to_string(expect) + " (dense path not taken, or a block pair visited twice?)");
+                else if (count[2] != count[1] ||
+                         [&]
+                         {
+                             for (int m = 0; m < 3; ++m)
+                                 if (out[1][m].size() != out[2][m].size() ||
+                                     (out[1][m].size() && (out[1][m] - out[2][m]).cwiseAbs().maxCoeff() > 1e-13))
+                                     return true;
+                             return false;
+                         }())
+                    fail(tag + ": family units != bra units (B2.1)");
                 else
                     std::cout << "OK  " << tag << ": max|dG| = " << worst << ", " << expect << " blocks\n";
             }
     }
 
     // K1.4: skeleton mode (water's real C2v ops, group-averaged densities)
-    // goes dense too; replication mode does not. Dense visits unordered block
-    // pairs only, and skips blocks an op sends below themselves, so it must
-    // prepare fewer blocks than the per-component skeleton loop.
+    // goes dense too; replication mode does not.
     {
         // A fresh molecule, not a copy of `calc`: update_integral_symmetry
         // matches basis functions to shells by pointer, and a copy's basis
@@ -1218,26 +1256,28 @@ void check_dense_digest(const std::string &basis_name)
                 if (uhf)
                     dens = {nullptr, &Pst, &Psa, &Psb};
                 Eigen::MatrixXd out[2][3];
-                std::atomic<std::size_t> count[2]{0, 0};
+                std::atomic<std::size_t> count[2]{0, 0}, reversed[2]{0, 0};
                 for (int d = 0; d < 2; ++d)
                     fused_fock_build(sp, nb, Q, HartreeFock::ERIKernel::Coulomb, 0.0, 1e-10, uhf, dens,
                                      out[d][0], out[d][1], out[d][2], hgp_elem, &ops, terms[t],
-                                     CountingBlockKernel{.count = &count[d]}, /*dense_digest=*/d == 1);
-                double worst = 0.0;
-                for (int m = 0; m < 3; ++m)
-                    if (out[0][m].size() || out[1][m].size())
-                        worst = std::max(worst, out[0][m].size() == out[1][m].size()
-                                                    ? (out[0][m] - out[1][m]).cwiseAbs().maxCoeff()
-                                                    : 1e300);
+                                     CountingBlockKernel{.count = &count[d], .reversed = &reversed[d]},
+                                     /*dense_digest=*/d == 1);
+                const double worst = max_output_diff(out[0], out[1]);
                 const std::string tag = "K1.4 water/" + basis_name + " C2v skeleton " + names[t] +
                                         (uhf ? " UHF" : " RHF");
                 const bool nothing = uhf && terms[t] == FusedTerm::RawCoulombExchange;
                 // Skeleton weights scale values by up to |G|, and the rounding with them.
-                if (worst > 1e-13 * static_cast<double>(ops.size()))
+                if (!(worst <= 1e-13 * static_cast<double>(ops.size())))
                     { std::ostringstream os; os << std::setprecision(3) << worst; fail(tag + ": dense != per-component, max|dG| = " + os.str()); }
-                else if (!nothing && !(count[1] > 0 && count[1] < count[0]))
-                    fail(tag + ": dense prepared " + std::to_string(count[1].load()) + " blocks against " +
-                         std::to_string(count[0].load()) + " (dense skeleton path not taken?)");
+                // Both prepare lazily, only blocks holding a representative, so
+                // the counts can tie. Which path ran is decided by the reversed
+                // blocks: dense visits p <= q only, the per-component loop does not.
+                else if (!nothing && !(count[1] > 0 && count[1] <= count[0] && reversed[1] == 0 &&
+                                       reversed[0] > 0))
+                    fail(tag + ": dense prepared " + std::to_string(count[1].load()) + " blocks (" +
+                         std::to_string(reversed[1].load()) + " reversed) against " +
+                         std::to_string(count[0].load()) + " (" + std::to_string(reversed[0].load()) +
+                         " reversed): dense skeleton path not taken?");
                 else
                     std::cout << "OK  " << tag << ": max|dG| = " << worst << ", blocks " << count[1]
                               << " vs " << count[0] << '\n';

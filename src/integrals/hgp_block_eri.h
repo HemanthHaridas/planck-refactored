@@ -203,6 +203,10 @@ namespace HartreeFock::Integrals
 
         explicit HgpBlockKernel(int lo = 0, int hi = 4 * MAX_L) noexcept : min_l(lo), max_l(hi) {}
 
+        bool covers(int total_l, HartreeFock::ERIKernel k) const noexcept
+        {
+            return total_l >= min_l && total_l <= max_l && k == HartreeFock::ERIKernel::Coulomb;
+        }
         bool prepare(const BlockEriRequest &r)
         {
             const int LA = r.L[0], LB = r.L[1], LC = r.L[2], LD = r.L[3];
@@ -213,25 +217,21 @@ namespace HartreeFock::Integrals
             req_ = &r;
 
             using hgp_block::n_upto;
-            const auto &T = hgp_block::table();
             const int LAB = LA + LB, LCD = LC + LD, M = LAB + LCD;
             const int Ne = n_upto(LAB), Nf = n_upto(LCD), Md = M + 1;
             const int e0 = n_upto(LA - 1), f0 = n_upto(LC - 1);
 
-            V.resize(static_cast<std::size_t>(Ne) * Nf * Md);
             acc.assign(static_cast<std::size_t>(Ne) * Nf, 0.0);
-            const auto v = [&](int e, int f) { return &V[(static_cast<std::size_t>(e) * Nf + f) * Md]; };
 
-            const double two_over_sqrt_pi = 2.0 / std::sqrt(std::numbers::pi);
             // Blocks with K >= kMinLaneK primitive quartets run them kLanes at a
-            // time (hgp_block::vrr_lanes); below that, one at a time. Measured
+            // time; below that, one at a time. Both are hgp_block::vrr_lanes, so
+            // the recurrence exists once. Measured
             // (docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md, 2b): 4 lanes beat 2 and 8,
-            // and a K = 3 block is cheaper padded to 4 than run scalar.
+            // and a K = 3 block is cheaper padded to 4 than run one at a time.
             const auto &P = r.ab->primitive_pairs, &Q = r.cd->primitive_pairs;
             const std::size_t K = P.size() * Q.size();
-            if (K >= hgp_block::kMinLaneK)
+            const auto pass = [&]<int B>()
             {
-                constexpr int B = hgp_block::kLanes;
                 VL.resize(static_cast<std::size_t>(Ne) * Nf * Md * B);
                 const PrimitivePair *pa[B], *pc[B];
                 double w[B];
@@ -256,85 +256,11 @@ namespace HartreeFock::Integrals
                             acc[static_cast<std::size_t>(e) * Nf + f] += sum;
                         }
                 }
-            }
+            };
+            if (K >= hgp_block::kMinLaneK)
+                pass.template operator()<hgp_block::kLanes>();
             else
-            for (const auto &ab : r.ab->primitive_pairs)
-                for (const auto &cd : r.cd->primitive_pairs)
-                {
-                    const double zeta = ab.zeta, eta = cd.zeta, delta = zeta + eta;
-                    const double rho = zeta * eta / delta;
-                    double WP[3], WQ[3], PQ2 = 0.0;
-                    for (int x = 0; x < 3; ++x)
-                    {
-                        const double W = (zeta * ab.center[x] + eta * cd.center[x]) / delta;
-                        WP[x] = W - ab.center[x];
-                        WQ[x] = W - cd.center[x];
-                        const double pq = ab.center[x] - cd.center[x];
-                        PQ2 += pq * pq;
-                    }
-                    const double prefac = ab.prefactor * cd.prefactor * two_over_sqrt_pi * std::sqrt(rho);
-                    double F[4 * MAX_L + 1]; // M <= 4*MAX_L: real totals, not per-axis maxima
-                    HartreeFock::Lookup::boys_vec(rho * PQ2, std::span<double>(F, M + 1));
-                    double *v00 = v(0, 0);
-                    for (int m = 0; m <= M; ++m)
-                        v00[m] = prefac * F[m];
-
-                    const double i2z = 0.5 / zeta, i2e = 0.5 / eta, i2d = 0.5 / delta;
-                    const double rz = rho / zeta, re = rho / eta;
-
-                    for (int e = 1; e < Ne; ++e) // bra
-                    {
-                        const hgp_block::Cart &c = T[e];
-                        const int i = c.axis, em = c.down[i], mt = M - c.L;
-                        const double pa = ab.pA[i], wp = WP[i];
-                        const double *a = v(em, 0);
-                        double *o = v(e, 0);
-                        for (int m = 0; m <= mt; ++m)
-                            o[m] = pa * a[m] + wp * a[m + 1];
-                        if (c.e[i] > 1)
-                        {
-                            const double *b = v(T[em].down[i], 0);
-                            const double s = (c.e[i] - 1) * i2z;
-                            for (int m = 0; m <= mt; ++m)
-                                o[m] += s * (b[m] - rz * b[m + 1]);
-                        }
-                    }
-                    for (int f = 1; f < Nf; ++f) // ket
-                    {
-                        const hgp_block::Cart &cf = T[f];
-                        const int j = cf.axis, fm = cf.down[j];
-                        const double qc = cd.pA[j], wq = WQ[j];
-                        const int fmm = cf.e[j] > 1 ? T[fm].down[j] : -1;
-                        const double sf = (cf.e[j] - 1) * i2e;
-                        for (int e = 0; e < Ne; ++e)
-                        {
-                            const hgp_block::Cart &ce = T[e];
-                            const int mt = M - ce.L - cf.L;
-                            const double *a = v(e, fm);
-                            double *o = v(e, f);
-                            for (int m = 0; m <= mt; ++m)
-                                o[m] = qc * a[m] + wq * a[m + 1];
-                            if (fmm >= 0)
-                            {
-                                const double *b = v(e, fmm);
-                                for (int m = 0; m <= mt; ++m)
-                                    o[m] += sf * (b[m] - re * b[m + 1]);
-                            }
-                            if (ce.e[j] > 0)
-                            {
-                                const double *b = v(ce.down[j], fm);
-                                const double s = ce.e[j] * i2d;
-                                for (int m = 0; m <= mt; ++m)
-                                    o[m] += s * b[m + 1];
-                            }
-                        }
-                    }
-
-                    const double w = ab.coeff_product * cd.coeff_product;
-                    for (int e = e0; e < Ne; ++e)
-                        for (int f = f0; f < Nf; ++f)
-                            acc[static_cast<std::size_t>(e) * Nf + f] += w * v(e, f)[0];
-                }
+                pass.template operator()<1>();
 
             finish(r);
             return true;
@@ -423,7 +349,7 @@ namespace HartreeFock::Integrals
         // Scratch, reused across prepare() calls; one kernel copy per thread
         // (fused_fock.h), so members rather than thread_local (emulated TLS on
         // macOS g++ was 2.5-4.7 % of d/f builds).
-        std::vector<double> V, acc, H, K;
+        std::vector<double> acc, H, K;
         std::size_t n_[4] = {};
         std::vector<double> out_;
     };

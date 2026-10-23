@@ -170,6 +170,10 @@ namespace HartreeFock::Integrals
 
         explicit ClosedFormBlockKernel(int max_total_l = 3) noexcept : max_l(max_total_l) {}
 
+        bool covers(int total_l, HartreeFock::ERIKernel k) const noexcept
+        {
+            return max_l > 0 && total_l <= (max_l < 3 ? max_l : 3) && k == HartreeFock::ERIKernel::Coulomb;
+        }
         bool prepare(const BlockEriRequest &r) noexcept
         {
             const int lt = r.L[0] + r.L[1] + r.L[2] + r.L[3];
