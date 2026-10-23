@@ -1,294 +1,227 @@
-# FCIQMC scaling investigation
+# FCIQMC Scalability
 
-Status: **implemented and validated for the measured throughput fixture.**
-The phase ledger, parent-keyed RNG streams, determinant-sorted
-`CanonicalWalkerPopulation`, and its pairwise canonical merge are now in the
-production FCIQMC path.  On the measured HF/6-31G 50k-walker workload, four
-OpenMP threads are the best measured configuration.  Further work is an
-independent scaling investigation, not a prerequisite for this representation.
+## Purpose
 
-Background that this doc does not repeat (the 64-bin partition, the
-`SpawnAccumulator`, the reverted sharded merge, the `draw_excitation` rewrite,
-the H3 replica sketch) is in `docs/FCIQMC_PARALLELISM.md`.
+This document records the production FCIQMC propagation design, the measured
+performance envelope, and the evidence required before another optimization is
+accepted. It is deliberately a current-state document: superseded experiments
+are not retained as an implementation plan.
 
-## Question
+The scope is one fixed-seed FCIQMC trajectory. An accepted optimization must
+not change its sampling law, support, `p_gen`, deterministic reduction order,
+or fixed-seed trajectory. Replica throughput, MPI/GPU execution, and
+active-space/frozen-core FCIQMC are separate capability projects.
 
-Can the current FCIQMC implementation reach a usable energy in less wall time,
-or fit a larger problem in a fixed memory budget, while keeping fixed-seed
-reproducibility and bitwise thread-count invariance?
+## Production architecture
 
-Three outcomes are kept apart: faster single trajectories, lower wall time to
-a stated statistical precision, and a larger problem that fits. More steps per
-second does not prove better statistical efficiency, and replicas do not speed
-up the equilibration of one trajectory or remove its bias.
+`CanonicalWalkerPopulation` stores the live wavefunction as a sorted vector of
+`(DetKey, weight)` entries. This gives deterministic traversal, binary-search
+lookup for initiator and estimator queries, and in-place compaction.
 
-## Short answer so far
+One propagation step is:
 
-**The fixed-order merge into the next `WalkerPopulation` is the limit, and it
-is per-record hash-map insertion.** On HF/6-31G at 50k walkers the threaded
-worker phase scales to 5.01x at 8 threads, but the merge stays at ~107 s at
-every thread count. At 8 threads it is 58 % of propagation wall time, which
-holds end-to-end speedup at 2.19x.
+1. Partition parent determinants into 64 fixed bins by parent hash. The bin
+   count does not depend on the OpenMP thread count.
+2. Derive each parent's random stream from its determinant. Excitation and
+   stochastic-rounding draws therefore do not depend on container layout or
+   visitation order.
+3. Accumulate each bin privately, then sort and fold each bin in canonical key
+   order.
+4. Merge the 64 finalized streams through a tagged, balanced pairwise tree.
+   Equal keys retain ascending source-bin association at every tree node.
+5. Store the sorted result in the next canonical population, compact it, then
+   update population control and the projected estimator.
 
-This settles the question `FCIQMC_PARALLELISM.md` left open. Its sampling
-profile put "merge + partition" at only 2.0-2.5 % of self-time because the
-insertion cost was attributed to the `unordered_map::operator[]` and
-allocator frames, not to the merge. The phase ledger measures elapsed time at
-the phase boundary and shows the merge directly.
+The production merge is
+`merge_finalized_spawn_bins_pairwise_parallel` in
+`src/post_hf/ci/spawn_accumulator.h`. Independent pair merges at a tree level
+run in parallel, but each result is written to a predetermined slot; the tree
+shape and floating-point association are unchanged. The sequential pairwise
+tree is retained only as a test oracle.
 
-Two cheap fixes for the map were tried and rejected (below). The real fix is a
-change of representation: a contiguous, determinant-sorted next population
-built by a fixed 64-way merge. That needed parent-keyed RNG streams first,
-because hash-map iteration order was deciding which parent consumed which
-random number. Both are now built. They change the trajectory on purpose, so
-they were validated as a new trajectory (re-pinned S5, exact-FCI statistical
-gates), not as a speedup of the old one.
+## Correctness contract
 
-The parent-keyed streams on their own were measured and are performance
-neutral (within noise of the baseline at every thread count).  The canonical
-owner removes the hash-map insertion limit: its first priority-queue merge was
-itself too expensive, but a bitwise-equivalent tagged pairwise merge makes the
-representation a clear end-to-end win.
+The following properties are non-negotiable.
 
-## Where the logic lives
+- Parent partitioning, not child partitioning, defines independent work.
+- The 64-bin layout and ascending-bin equal-key reduction association are
+  invariant across OpenMP thread counts.
+- Parent-keyed RNG streams make generated excitations independent of traversal
+  order.
+- `p_gen` equals the probability for the exact generated excitation; support
+  and observed frequency are tested separately.
+- A mechanical optimization reproduces the fixed-seed trajectory bitwise. Any
+  intentional statistical change needs a new, explicitly documented reference.
 
-- `src/post_hf/fciqmc_driver.cpp` — the step loop, which now owns a
-  `CanonicalWalkerPopulation` and builds a fresh one each step; the
-  `fciqmc_profile` ledger records
-- `src/post_hf/ci/fciqmc.h` — `CanonicalWalkerPopulation` (determinant-sorted
-  storage, binary-search `weight_at` for the initiator and estimator lookups,
-  in-place compaction, fixed-partition L1 norm) and
-  `RandomSource::derive_parent` (the per-parent stream)
-- `src/post_hf/ci/fciqmc.cpp` — `propagate_stochastic` (prefill, worker
-  region, fixed-order merge), `projected_energy`
-- `src/post_hf/ci/spawn_accumulator.h` — `SpawnAccumulator`, `SpawnWorkspace`,
-  and the finalized-output accessors behind `merge_finalized_spawn_bins`
-- `src/io/io.cpp` — the `fciqmc_profile` keyword
-- `tests/fciqmc_walkers.cpp` — the ledger's no-perturbation check, the
-  literal merge oracle (`test_literal_canonical_merge_matches_map_output`),
-  the parent-stream order-independence oracle, and
-  `test_canonical_owner_roundtrips_through_propagation`
-- `tests/run_fciqmc_scaling_profile.sh` — the benchmark runner
-- `tests/artifacts/fciqmc_scaling/` — raw logs for the ladder below
+`planck-fciqmc-walkers` covers excitation support, `p_gen`, literal sampler
+equivalence, fixed-seed reproducibility, canonical-population propagation, and
+the parallel-tree raw-bit oracle. `planck-fciqmc-accumulator` covers local
+ordered folding and merge behavior. N2 S5 runs at one and four threads are the
+fixed-seed integration gate; H2/N2 exact-FCI cases remain statistical controls.
 
-## What was measured
+## Measured performance
 
-### The work ledger
+The representative throughput fixture is
+`tests/inputs/exploratory/fciqmc/validation/hf_pop_50000.hfinp`: HF/6-31G,
+50,000 walkers, 20,000 equilibration steps, and 30,000 sampling steps. Each
+accepted figure uses the same seed, timestep, walker target, Hamiltonian, and
+step counts. Timings are three-run alternating medians unless stated otherwise.
 
-`fciqmc_profile true` emits two `FCIQMC_PROFILE` records, one for
-equilibration and one for sampling. Only the sampling record is relevant to
-time-to-precision. The switch is off by default and must not change the
-trajectory. The walker test runs one propagation with and without it and
-requires bitwise-identical walker weights and caller RNG state.
+| configuration | 1 thread wall | 2 thread wall | 4 thread wall | 8 thread wall |
+|---|---:|---:|---:|---:|
+| map population baseline | 565.88 s | 374.18 s | 284.03 s | 258.41 s |
+| canonical population + pairwise merge | 474.54 s | 294.88 s | 203.221 s | 225.07 s |
+| E1 rank-select + M1 parallel tree | 403.748 s | — | **163.958 s** | — |
 
-Each record carries:
+Four threads are the best measured configuration for this workload. This is a
+recommendation, not a runtime limit; callers continue to select
+`OMP_NUM_THREADS`.
 
-- parents, attempts, invalid draws, zero-Hamiltonian draws, initiator
-  rejections, and granularity-rounding zeroes;
-- raw accumulator records and records after each bin's sort/fold;
-- wall time for prefill, propagator setup, the parallel worker region, the
-  fixed-order merge (map insertion and parent-bucket cleanup separately),
-  compression/norm, and the projected estimator;
-- `max_bin_work_s`, the largest per-bin worker time. It is a skew indicator,
-  not a wall time; compare it with `worker_wall_s`.
+At four threads, M1 changed the phase ledger as follows:
 
-It deliberately adds no locks or reductions inside the parallel loop, does not
-time individual spawn attempts, and never sums per-bin seconds as elapsed
-time, so it cannot perturb RNG consumption or merge order.
+| phase | E1 median | M1 median | change |
+|---|---:|---:|---:|
+| sampling worker | 50.233810 s | 51.357996 s | +2.2% |
+| sampling pairwise merge | 38.811332 s | 24.049039 s | -38.0% |
+| full wall | 182.431 s | 163.958 s | -10.1% |
 
-`tests/run_fciqmc_scaling_profile.sh [binary] [fixture] [threads] [outdir]`
-copies the fixture, changes only `verbosity verbose` to `normal`, enables the
-ledger, and keeps the full log. Defaults: `build/hartree-fock`, HF/6-31G at
-50k walkers, one thread, `tests/artifacts/fciqmc_scaling/`.
+All three M1 runs have identical parent, attempt, raw-record, folded-record,
+and final-energy values. The small worker increase is the cost of materializing
+tree levels and is more than recovered by the parallel merge.
 
-### Strong scaling, HF/6-31G, 50k walkers (2026-10-17)
+## Landed optimization decisions
 
-One clean rebuilt binary, run at 1, 2, 4 and 8 OpenMP threads. All four runs
-had identical parents, attempts, rejection counts, folded-record counts, both
-energies and reference-weight diagnostics, so this is a purely mechanical
-comparison.
-
-| Threads | Worker phase (s) | Fixed-order merge (s) | Full wall (s) | Worker speedup | Full speedup |
-|---:|---:|---:|---:|---:|---:|
-| 1 | 379.06 | 110.09 | 565.88 | 1.00x | 1.00x |
-| 2 | 193.92 | 106.43 | 374.18 | 1.96x | 1.51x |
-| 4 | 102.53 | 107.93 | 284.03 | 3.70x | 1.99x |
-| 8 | 75.68 | 106.25 | 258.41 | 5.01x | 2.19x |
-
-- The merge does not shrink with threads and is 58 % of 8-thread propagation
-  (`106.25 / (75.68 + 106.25)`).
-- At 8 threads, insertion was 107.774 s of the 107.778 s merge (99.996 %);
-  parent-bucket cleanup was 0.003 s.
-- The worker phase is sub-linear at 8 threads (5.01x). That justifies a later
-  per-thread balance measurement, but it is not the current limit.
-- Nearly every sampled spawn rounds to zero on this fixture. That is a
-  statistical observation, not a reason to drop stochastic rounding without a
-  separate time-to-precision study.
-
-### Parent-keyed stream candidate (2026-10-17)
-
-The new parent-keyed stream convention passed the S5 1/4-thread equality gate
-and the existing H2/N2 exact-FCI statistical gates. It deliberately changes the
-stochastic trajectory, so its timings are compared with the earlier baseline
-only as a scaling result, not bitwise as a mechanical optimization.
-
-| Threads | Worker phase (s) | Fixed-order merge (s) | Full wall (s) | Full change from baseline |
-|---:|---:|---:|---:|---:|
-| 1 | 407.16 | 93.26 | 572.12 | +1.1 % |
-| 2 | 216.39 | 95.98 | 389.25 | +4.0 % |
-| 4 | 114.34 | 95.53 | 284.50 | +0.2 % |
-| 8 | 88.33 | 93.06 | 257.36 | -0.4 % |
-
-The per-parent rekey increases worker cost by 7-17 %, while the changed
-population happens to make the merge 10-15 % cheaper. Net wall time is within
-noise of the baseline and nowhere near the 10 % acceptance threshold. Retain
-the convention as the correctness prerequisite for a layout-independent
-population, not as a standalone performance improvement.
-
-The first canonical-owner measurement exposed a second limit: 99.1 % of its
-merge time was the priority-queue stream.  Production now uses a tagged
-pairwise merge.  Its oracle demonstrates raw-bit equality with the heap's
-ascending-bin fold, while the normal walker and statistical gates demonstrate
-that the complete production path preserves the intended trajectory and
-physical behavior.
-
-## What was tried and rejected
-
-| Attempt | Result | Why rejected |
+| item | decision | evidence |
 |---|---|---|
-| Reuse two output populations, swapped each step | Failed the 200-step fixed-seed trajectory gate | A reused `unordered_map` keeps its bucket layout, so the next step iterates parents in a different order. Parent order within a bin decides which parent consumes each bin RNG draw, so the trajectory changes. This is a reordering, not a mechanical optimization. |
-| Recycle node storage with a driver-owned `std::pmr::unsynchronized_pool_resource` (every map still freshly constructed) | Passed the trajectory gate; merge insertion 107.77 s -> 103.01 s (4.4 %) | At most ~1.6 % of end-to-end wall, far below the 10 % acceptance threshold. Removed rather than kept as production complexity. |
-| Shard the merge by `hash(child) % 64` (earlier, `FCIQMC_PARALLELISM.md`) | 3-8 % slower on HF/6-31G | The shards need a second sort. |
+| Canonical population | landed | removes hash-layout traversal dependence |
+| Parent-derived RNG | landed | deterministic trajectory across layout and threads |
+| Tagged pairwise merge | landed | raw-bit equality with the heap/reference fold; faster than heap merge |
+| E0 literal excitation oracle | landed, test-only | exact excitation, `p_gen`, phase, validity, and RNG-state equality |
+| E1 rank selection | landed | 1.112x focused benchmark; 10.2% four-thread full-run wall reduction before M1 |
+| M1 level-parallel pairwise tree | landed | sequential-tree raw-bit oracle; N2 S5 1/4-thread gate; 10.1% additional wall reduction |
+| E2 table dispatch | rejected | exact supplied-input descriptor oracle, but 0.968x versus the switch |
+| Reused map populations | rejected | bucket layout changes parent traversal |
+| PMR node recycling | rejected | negligible end-to-end return |
+| Child-hash sharded merge | rejected | second sorting stage loses performance |
 
-The lesson from the first row is why the canonical population needed
-parent-keyed streams first: while each bin shared one RNG stream, hash-map
-iteration order was part of the trajectory, and no layout change could be
-mechanical.
+E1 replaces a scan-to-the-selected-bit implementation of `nth_set_bit` with
+repeated least-significant-set-bit clearing followed by `countr_zero`. It does
+not change excitation classes, RNG calls, signs, or `p_gen` arithmetic order.
 
-## Canonical population: accepted production representation
+## Profiling and acceptance workflow
 
-The hash-map next population is replaced by a contiguous, determinant-sorted
-array built by a fixed 64-way merge of the already-canonical bin outputs,
-which removes per-record map insertion. It is an explicitly reordered
-trajectory, validated as such rather than against the retired map trajectory.
+Use the phase ledger to establish the dominant phase, then use a CPU sample to
+identify the responsible routine. A stack sample is attribution evidence, not
+a performance result. Do not modify a candidate until both identify a concrete
+mechanism.
 
-1. **Literal merge oracle — implemented.** `merge_finalized_spawn_bins`
-   consumes the finalized bin streams, folds equal determinants across bins
-   in a fixed key order, and is gated by
-   `test_literal_canonical_merge_matches_map_output`, which compares every
-   determinant and raw weight bit with the existing merge on a physical
-   one-step input.
-2. **Canonical parent order and RNG convention — implemented and validated.**
-   `RandomSource::derive_parent(det)` derives a
-   stream from the per-call/bin root plus both packed spin strings, without
-   advancing the root. The walker oracle samples and stochastic-rounds the
-   same physical parent set forward and backward and requires bit-identical
-   folded contributions. Production now uses that stream for each parent's
-   excitation and rounding sequence; the insertion-order gate requires exact
-   equality with and without the initiator. This deliberately changes the
-   trajectory. The N2 S5 1/4-thread gate has re-pinned this trajectory
-   (`-109.3621937007` shift and `-107.6491159983` projected Eh) and passed
-   exactly across thread counts. The existing H2 and N2 exact-FCI statistical
-   gates, plus H2 1/4-thread equality, also pass. The completed 1/2/4/8
-   ladder shows no standalone speedup, but establishes the convention as the
-   canonical-population prerequisite.
-3. **Canonical owner and initiator index — implemented and validated.**
-   `CanonicalWalkerPopulation` stores the fixed-merge output in determinant
-   order; its binary-search `weight_at` supplies the read-only initiator and
-   estimator lookup. It compacts in place and computes L1 with the fixed
-   determinant partition. The driver now owns this representation end-to-end.
-   S5, H2/N2 exact-FCI statistical gates, and H2 thread equality pass without
-   changing the parent-stream pins.
-4. **Measure the canonical owner — accepted.** The first 1/2/4/8 production
-   ladder is below. It meets the 10% end-to-end acceptance threshold at every
-   measured count. The pairwise merge is roughly 2.3x faster than the earlier
-   heap merge at one thread, and removes the map-insertion bottleneck.  Keep
-   parent-keyed streams as the order-independence guarantee and the canonical
-   owner as the production representation.
+```sh
+tests/run_fciqmc_cpu_profile.sh \
+  build/hartree-fock \
+  tests/inputs/exploratory/fciqmc/validation/hf_pop_50000.hfinp \
+  1 30 /private/tmp/fciqmc-profile
 
-### Pairwise canonical merge, HF/6-31G, 50k walkers (2026-10-17)
+tests/run_fciqmc_cpu_profile.sh \
+  build/hartree-fock \
+  tests/inputs/exploratory/fciqmc/validation/hf_pop_50000.hfinp \
+  4 30 /private/tmp/fciqmc-profile
+```
 
-This is the first production ladder after the pairwise merge replaced the
-heap-based canonical stream. The seed, timestep, population target, number of
-steps, and Hamiltonian are identical to the baseline. Counts and diagnostics
-match across the ladder; correctness gates listed above passed before timing.
+An accepted change requires:
 
-| Threads | Full wall (s) | Map baseline (s) | Change from baseline |
-|---:|---:|---:|---:|
-| 1 | 474.54 | 565.88 | -16.1% |
-| 2 | 294.88 | 374.18 | -21.2% |
-| 4 | 203.22 | 284.03 | -28.5% |
-| 8 | 225.07 | 258.41 | -12.9% |
+1. an isolated, deterministic oracle for the altered operation;
+2. walker and accumulator invariant tests plus fixed-seed N2 S5 at one and
+   four threads;
+3. H2/N2 statistical regression controls when sampling behavior is involved;
+4. three alternating representative fixture runs; and
+5. at least 10% end-to-end improvement beyond noise, no unexplained control
+   regression above 5%, or a documented memory reduction that enables a
+   previously infeasible calculation.
 
-The earlier 4-thread observation was 217.47 s; the repeated 203.22 s result
-shows ordinary host variation but leaves the improvement well beyond the
-acceptance threshold. Four threads are therefore the recommended setting for
-this workload. Eight threads are slower than four because the worker phase
-has saturated and the serial pairwise merge grows slightly. This is a
-workload-specific recommendation, not a hidden runtime cap: the caller keeps
-control through `OMP_NUM_THREADS`.
+## Post-M1 attribution and next decision
 
-The ledger separates the mechanism from the total: at one thread, pairwise
-merge consumes 62.60 s (24.59 s equilibration plus 38.01 s sampling), versus
-146.75 s for the prior heap merge, a 2.34x reduction. A later benchmark
-publication should add alternating repetitions and report medians/spread; it
-does not change the representation decision made by this unambiguous ladder.
+Fresh 30-second one- and four-thread CPU samples were collected after M1 on
+the representative fixture. Their ledgers preserve the expected trajectory
+counts. At four threads, sampling spends `49.528 s` in worker propagation and
+`23.355 s` in pairwise merging; M1 therefore remains effective, but worker
+propagation is again the dominant scalable cost.
 
-Do not combine this with an excitation-sampler change. Changing sampling
-variance at the same time would make the performance result uninterpretable.
+In the one-thread sample, `draw_excitation` accounts for 7,135 of 16,064
+propagation-stack samples (44.4%); at four threads it accounts for 3,544 of
+8,320 (42.6%). `slater_condon_element` and `SpawnAccumulator::finalize()` /
+sorting remain visible secondary costs. This authorizes an excitation-generator
+attribution benchmark, but not a production dispatch rewrite: the sampled
+frame still includes rank selection, random draws, orbital updates, parity,
+and class selection.
 
-## Other open hypotheses
+### E2 — decomposed excitation-generator benchmark
 
-Not yet measured against the ledger; ordered by expected value.
+Build a deterministic, test-only benchmark that measures the current literal
+generator and a candidate dispatch mapping separately from orbital updates,
+parity, and RNG generation. Both paths must consume the same supplied class
+and rank values and produce exactly the same excitation descriptor and
+`p_gen`. The benchmark must report a digest and per-component times over the
+same closed-shell, open-shell, and edge active-space corpus used by E0.
 
-| Hypothesis | Constraint |
-|---|---|
-| Cache the reference's connections and Hamiltonian elements once after re-anchoring, and reuse them in `projected_energy` (it currently rebuilds them every sampling step). | Stop if the ledger's estimator time is negligible. Keep connection order, occupancy checks, the validity threshold and ratio-of-sums semantics. |
-| Carry the prefilled diagonal with each parent instead of looking it up again during propagation. | Extra parent-record traffic may cost more than the lookup. Check memory on a fixture where the memo keeps growing, not only N2. |
-| If worker imbalance grows past 8 threads, try other schedules over the same fixed bins, or a persistent OpenMP team. | Keep each bin's parent order and RNG order and the fixed merge order. Never tie bin count to thread count. |
-| If excitation work dominates after the merge is fixed, cache class counts and pair-unranking data. | Keep draw probabilities, support, RNG consumption and fermionic signs exact. `slater_condon_element` is shared with CI and CASSCF. |
-| Independent trajectories for throughput: compare separate processes at equal total cores (1x8, 2x4, 4x2, 8x1) before writing a replica API. | Distinct recorded seeds; block within each trajectory; combine projected ratios with their numerator/denominator covariance; never concatenate chains. |
-| Reach larger targets: an active-space / frozen-core Hamiltonian adapter (needed for Cr2 CAS(12,18), `FCIQMC_RESEARCH_SCOPE.md` Q1), audited separately from the `ci_max_dim` and 31-orbital limits. | Core-energy accounting, orbital selection, and equivalence with deterministic CASCI on a small space. Measure integral setup separately from walkers. |
+Only if that benchmark attributes a material fraction to dispatch may a
+branch-only production candidate be written. It must preserve class order, RNG
+calls, signs, and `p_gen` operation order, then pass the normal exact and
+full-trajectory gates.
 
-MPI and GPU work stay out of scope unless the measured CPU and memory envelope
-fails an explicit target.
+**Closed as a non-candidate (2026-10-20):** `planck-fciqmc-walkers` constructs
+plans with a supplied non-empty class and within-class rank. A literal `switch`
+and a table-dispatch candidate receive the same plans; neither path draws RNG,
+selects orbitals, evaluates parity, or updates a determinant. The invariant
+requires raw descriptor and `p_gen` equality, then materializes both results
+to confirm equal excitations. The opt-in benchmark is:
 
-## Rules for any change
+```sh
+PLANCK_FCIQMC_DISPATCH_BENCHMARK=1 build/planck-fciqmc-walkers
+```
 
-**Measurement.**
-- Use HF/6-31G (or larger) for throughput; N2/STO-3G is the correctness gate
-  and the small-workload overhead control only.
-- Record the binary's source diff and build configuration; never infer results
-  from an existing `build` or `build-full` tree of unknown provenance.
-- Hold seed, timestep, spawn attempts, granularity, initiator threshold, shift
-  settings and step counts fixed within a strong-scaling comparison. Use a
-  separate seed ensemble for statistical efficiency.
-- Repeat runs at least three times, alternate configuration order, and report
-  medians and spread. Measure saturation as occupied determinants and bin
-  work, not walkers divided by Hilbert-space size.
-- Use `wall_time * SE^2` only in the converged sampling regime.
+`PLANCK_FCIQMC_DISPATCH_BENCHMARK_DRAWS` and
+`PLANCK_FCIQMC_DISPATCH_BENCHMARK_ROUNDS` override the defaults. Five
+alternating 10,000,000-draw rounds gave `0.033586 s` for the literal switch
+and `0.034704 s` for table dispatch: **0.968x**, with a matching digest. The
+indirect call loses, so production retains the switch and dispatch is closed.
 
-**Correctness.**
-- Keep `planck-fciqmc-walkers`, `planck-fciqmc-accumulator`,
-  `planck-statistical-gate`, and the H2/N2 exact-FCI regressions green.
-- Run the S5 pair at 1/2/4/8 threads. Its committed checks compare printed
-  energies; for investigation work, also compare raw-bit trajectory and
-  population digests, and mutation-check that stronger comparison.
-- A mechanical optimization must reproduce the baseline trajectory exactly.
-  A deliberate reordering must stay self-reproducible and thread-count
-  invariant, pass exact-reference and multi-seed statistical checks, and
-  document any re-pin. Never re-pin just to make a failing test pass.
-- Sorting accumulator input alone does not make a bin independent of parent
-  visit order. What does is the parent-keyed stream: each parent draws from
-  `derive_parent(det)`, never from a stream shared across the bin. Any change
-  that reintroduces a shared stream must re-prove order independence.
-- Changes to shared CI setup or matrix elements also run the deterministic
-  FCI and CASSCF tests, including open-shell excitation and initiator cases.
+### E3 — generator-component attribution
 
-**Acceptance.** At least 10 % lower end-to-end wall time on a representative
-large fixture, beyond run-to-run noise, with no unexplained regression above
-5 % on controls; or a memory reduction that makes a previously infeasible run
-possible. Statistical changes must improve time to precision, with bias
-checks, not just step rate. Stop a prototype when its target falls below that
-threshold or its gain disappears outside a microbenchmark, and remove it.
-A measured finding of little remaining headroom is a valid outcome.
+**Implemented, awaiting measurement:** the same supplied-input corpus now
+times five test-only stages independently: mask/popcount and class-size setup,
+rank decomposition, rank-to-orbital bit selection, parity/determinant
+materialization, and the recomposed no-RNG pipeline. The recomposed pipeline
+must produce the same final-excitation digest as the precomputed staged path.
+
+```sh
+PLANCK_FCIQMC_COMPONENT_BENCHMARK=1 build/planck-fciqmc-walkers
+```
+
+`PLANCK_FCIQMC_COMPONENT_BENCHMARK_DRAWS` and
+`PLANCK_FCIQMC_COMPONENT_BENCHMARK_ROUNDS` override the defaults. This is an
+attribution measurement, not a production candidate. It determines whether to
+investigate a local generator change or to stop generator work and move to
+sorting or the shared Hamiltonian.
+
+The following table describes the decision after E3:
+
+| observed limit | permitted next investigation | required isolation |
+|---|---|---|
+| setup, bit selection, or parity | local generator candidate | literal sampler oracle and full fixed-seed trajectory gate |
+| orbital updates or parity | local generator work, not dispatch rewrite | literal excitation oracle |
+| `SpawnAccumulator::finalize()` / sorting | local folding or allocation prototype | ordered-fold raw-bit oracle and memory accounting |
+| `slater_condon_element` | separate shared-Hamiltonian project | CI, CASSCF, open-shell, and FCIQMC validation |
+| residual pairwise merge | larger-population merge study | same tagged tree and explicit temporary-memory bound |
+
+Descriptor caching is not authorized without a physical-population prototype
+that reports retained bytes and lookup cost. The reference estimator is not a
+candidate unless the ledger shows it is material.
+
+## Out of scope
+
+- Replica trajectories improve time-to-error-bar, not a single-chain step
+  rate, and must be compared at equal total core counts.
+- MPI and GPU work require an explicit CPU or memory target beyond this
+  measured envelope.
+- Active-space/frozen-core FCIQMC requires core-energy, orbital-selection, and
+  small-CASCI equivalence validation; it is not a propagation micro-optimization.

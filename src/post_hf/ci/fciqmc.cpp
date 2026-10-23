@@ -310,24 +310,18 @@ namespace HartreeFock::Correlation::CI::QMC
         // mask to pick a class, and this select to map the drawn index k to an
         // orbital.
         //
-        // The caller guarantees 0 <= i < popcount(x & low n_act bits), so the
-        // loop always finds its target; the n_act bound keeps it to <= 31
-        // iterations and it exits at the i-th set bit (~half that on average).
-        // arm64 has no PDEP; this portable form is fine at this size. If x86_64
-        // ever matters, _pdep_u64(1ull<<i, x) then countr_zero is the 2-instr
-        // replacement.
+        // The caller guarantees 0 <= i < popcount(x & low n_act bits), so x
+        // remains nonzero after discarding the i lower set bits.  Clearing a
+        // set bit is one arithmetic operation; this therefore works in selected
+        // rank rather than scanning every orbital position up to the answer.
+        // `countr_zero` then returns the same bit position as the former
+        // position scan.  This is portable on arm64 (which has no PDEP) and
+        // deliberately changes no RNG draw or class-selection arithmetic.
         inline int nth_set_bit(CIString x, int i) noexcept
         {
-            for (int b = 0; b < CASSCFInternal::kCIStringBits; ++b)
-            {
-                if (x & (CIString(1) << b))
-                {
-                    if (i == 0)
-                        return b;
-                    --i;
-                }
-            }
-            return -1; // unreachable given the caller's contract
+            while (i-- > 0)
+                x &= x - 1;
+            return static_cast<int>(std::countr_zero(x));
         }
     } // namespace
 
@@ -593,7 +587,7 @@ namespace HartreeFock::Correlation::CI::QMC
         {
             const auto start = profile ? std::chrono::steady_clock::now()
                                        : std::chrono::steady_clock::time_point{};
-            auto merged = merge_finalized_spawn_bins_pairwise(bins);
+            auto merged = merge_finalized_spawn_bins_pairwise_parallel(bins);
             if (profile)
             {
                 profile->canonical_merge_emitted += merged.entries.size();
@@ -830,16 +824,14 @@ namespace HartreeFock::Correlation::CI::QMC
                 merge_start - worker_start).count();
         }
 
-        // Merge in FIXED bin order, 0..kBins-1, regardless of thread count --
-        // never by completion order, which is the DFT-grid jitter defect this
-        // codebase specifically avoids elsewhere. Fixed bin order is what makes
-        // one call's result reproducible under threading (S4/R3): the same
-        // kBins accumulators are merged in the same order regardless of how
-        // many threads computed them. Within a bin, SpawnAccumulator's iteration
-        // is the canonical (alpha, beta, weight-bits) order -- a pure function
-        // of that bin's multiset, reproducible across calls no matter how many
-        // prior calls the workspace served (the property unordered_map::clear
-        // could not give, and the reason R2's reuse changed output values).
+        // Merge through the fixed 64-leaf pairwise tree, never by completion
+        // order. M1 parallelizes only disjoint pairs within a tree level; every
+        // pair has a predetermined output slot and carries its source-bin tag,
+        // so OpenMP scheduling cannot alter equal-key addition association.
+        // Within a bin, SpawnAccumulator's iteration is the canonical
+        // (alpha, beta, weight-bits) order -- a pure function of that bin's
+        // multiset, reproducible across calls no matter how many prior calls
+        // the workspace served.
         if constexpr (std::is_same_v<Output, CanonicalWalkerPopulation>)
             merge_spawn_bins_into(next_bins, out, profile);
         else

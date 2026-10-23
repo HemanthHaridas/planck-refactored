@@ -107,7 +107,7 @@ Design rule:
 
 3. **Q2 answered: G1-G4 built and passing** as CTest `planck-statistical-gate` (2.0 s), all mutation-verified — see invariants 1 and 2 above.
 
-4. **The reusable pieces of the existing CI layer were identified and confirmed sufficient.** Bitstring determinants (`CIString`), occupation/parity helpers, `slater_condon_element`, `build_ci_diagonal`, active-space integrals (`h_eff` + `ga`), and the deterministic reference all carried over as-is. `slater_condon_element` no longer heap-allocates per call (fixed alongside the sigma-build work), so the spawn step inherits that fix — the allocation prerequisite this scope originally named is satisfied. What had to be built new: an RNG policy (`RandomSource`, seeded and per-shard, with `derive(index)` independent of shard count), a sparse walker container (`WalkerPopulation`, a dynamic determinant-keyed map, since the existing `det_lookup` indexes only a fixed enumerated space), and an excitation generator with a consistent `p_gen`.
+4. **The reusable pieces of the existing CI layer were identified and confirmed sufficient.** Bitstring determinants (`CIString`), occupation/parity helpers, `slater_condon_element`, `build_ci_diagonal`, active-space integrals (`h_eff` + `ga`), and the deterministic reference all carried over as-is. `slater_condon_element` no longer heap-allocates per call (fixed alongside the sigma-build work), so the spawn step inherits that fix. The FCIQMC-specific layer adds `RandomSource::derive_parent(det)` so random draws are independent of traversal, a sparse canonical walker population, and an excitation generator with a consistent `p_gen`.
 
 5. **The full implementation ladder (F1-F5) landed**, gated by `planck-fciqmc-walkers` (~34 s) plus the `h2_fciqmc_sto3g`, `n2_fciqmc_sto3g`, and `h2_fciqmc_threads1/4` regression cases:
 
@@ -119,7 +119,7 @@ Design rule:
    | **F4** | shift control, estimators, initiator | `FCIQMC_POPULATION_CONTROL.md` |
    | **F5** | driver, keywords, N2 gate, determinism | `FCIQMC_DRIVER_AND_VALIDATION.md` |
 
-6. **The determinism decision (2026-09-02): no exception.** FCIQMC keeps bitwise thread-count invariance — see invariant 5. Current state is entirely serial (zero `#pragma omp` in `fciqmc.cpp` or `fciqmc_driver.cpp`), verified bitwise-identical across `OMP_NUM_THREADS` = 1, 2, and 4 on N2/STO-3G today. This is a policy decision made for the threading that does not exist yet, before it is written rather than discovered afterward — so F5's eventual parallel step is a normal piece of work under the existing discipline, not an exception requiring separate sign-off.
+6. **The determinism decision (2026-09-02): no exception.** FCIQMC keeps bitwise thread-count invariance. Production propagation now uses fixed parent bins, parent-keyed streams, a canonical sorted population, and a tagged pairwise merge; its mechanical changes are checked against raw trajectory equality across supported thread counts. The current parallel contract is documented in `FCIQMC_PARALLELISM.md`.
 
 ## Validation strategy that should remain in place
 

@@ -1616,6 +1616,13 @@ if(BUILD_TESTING)
     add_executable(planck-fciqmc-accumulator
         ${CMAKE_SOURCE_DIR}/tests/fciqmc_accumulator.cpp
     )
+    # M1's level-parallel merge candidate is exercised directly by the walker
+    # invariant executable.  Link its test target with the same OpenMP runtime
+    # as production so this is a real parallel oracle, not a serial fallback.
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-fciqmc-walkers OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-fciqmc-walkers PRIVATE USE_OPENMP)
+    endif()
 
     add_executable(planck-cc-arbitrary-solver
         ${CMAKE_SOURCE_DIR}/tests/cc_arbitrary_solver.cpp
