@@ -845,8 +845,8 @@ parallelism. The entry keeps its original scoping record.
   64 bin streams be fresh and independent, not container overhead. Left
   unfixed.
 
-  **S5 (extending the invariance gate to an N2-sized pair) is the one piece
-  still unbuilt.** `h2_fciqmc_threads1/4` runs on 4 determinants against
+  **S5 (extending the invariance gate to an N2-sized pair) — LANDED later as
+  H2.1 (`n2_fciqmc_s5_threads1/4`, below).** `h2_fciqmc_threads1/4` runs on 4 determinants against
   `kBins = 64`, so at most one parent lands in each bin and a merge-order
   defect can never surface there — an N2 pair is needed, shown to go red
   under a perturbed (reversed) merge order before it is trusted.
@@ -991,6 +991,30 @@ parallelism. The entry keeps its original scoping record.
   by R). **Fixture: HF/6-31G or larger for all parallel-FCIQMC
   measurement; N2/STO-3G is the correctness gate only.** Full answer:
   `docs/FCIQMC_PARALLELISM.md`.
+
+  **IN FLIGHT: `docs/FCIQMC_SCALING_INVESTIGATION.md`** (scoped
+  2026-10-11, uncommitted working-tree work). Stage 1 is measured: a
+  `fciqmc_profile` phase ledger on HF/6-31G 50k walkers shows the worker
+  phase scaling 5.01x at 8 threads while the fixed-order merge stays ~107 s
+  at every thread count (58 % of 8-thread propagation; 99.996 % of it is
+  hash-map insertion), holding end-to-end at 2.19x. That settles what
+  `FCIQMC_PARALLELISM.md` left open (its 2 % "merge" self-time was hidden in
+  `operator[]`/allocator frames). Rejected: reusing two output maps (changes
+  the trajectory, since map iteration order decides parent RNG order) and a
+  pmr node pool (4.4 % of the merge, ~1.6 % of wall). Built and validated
+  since: parent-keyed RNG streams (`RandomSource::derive_parent`, S5
+  re-pinned, exact-FCI gates pass; performance neutral on their own) and a
+  determinant-sorted `CanonicalWalkerPopulation` built by a fixed 64-way
+  merge, now owned by the driver. **Since then (working tree):** the
+  canonical owner is kept, E1 (rank-select `nth_set_bit`, 1.112x focused)
+  and M1 (the pairwise merge tree parallel within each level, each pair
+  writing a fixed slot so the fold order is unchanged) landed. HF/6-31G 50k
+  walkers: 565.88 -> 403.75 s at one thread and 284.03 -> **163.96 s** at
+  four (best measured; eight threads is slower), fixed-seed trajectory
+  identical. E2 (table dispatch) was rejected at 0.968x. Post-M1 profile:
+  `draw_excitation` is ~43 % of propagation again; E3 (per-stage generator
+  attribution) is implemented and awaiting measurement. Full record:
+  `docs/FCIQMC_SCALING_INVESTIGATION.md`.
 
   **Three lessons, each of which cost a wrong number first.** (1) **A profile share
   is a lower bound on what removing that work is worth** — three for three now
@@ -1873,6 +1897,18 @@ identify the path taken. Not required for correctness or performance.
   cases that uses it; the other three converge through the normal gate at
   `sa_g < 1e-5`).
 - Keep the two water SA-2 SAD-start regressions, because they intentionally protect two distinct optimizer policies
+- **`water_casscf_sa2_sto3g_sad_guess_uphill` reaches its basin by roundoff,
+  not by policy (found 2026-10-23).** It fails after the unprojected SAD guess
+  landed: the RHF reference is identical to all 10 printed digits and the SA-2
+  trajectory is identical through macro 10, where the decision between
+  "plateau converged" (shallow basin, -74.7751378) and "reject, damp, probe
+  uphill" (deep basin, -74.7877865) rests on merit changes of ~1e-14. On the
+  current build, unrelated perturbations flip it: `diis_dim` 6/10 shallow and
+  7 deep, `guess hcore` deep, `engine os`/`hgp` (the same integrals to ~1e-15)
+  shallow. The earlier pass was luck. Fix in the optimizer, not the input: the
+  merit acceptance and the plateau test need a noise floor (treat
+  |merit change| below ~1e-12 as no change), so the escape is deterministic.
+  Tuning the input until it passes again would hide this.
 
 ## Performance and maintenance opportunities
 
@@ -1942,32 +1978,30 @@ identify the path taken. Not required for correctness or performance.
     MPI 1/2/4 ranks. The K1 census then showed the larger lever is
     digestion: dense per-block digestion is 1.11-1.26x of the build at
     today's precision.
-  - **K1 (dense digestion per block) is in the working tree, gated, not
-    committed (2026-10-22).** No symmetry, Auto, Coulomb, shells up to f,
-    symmetric densities; everything else keeps today's loop. One thread
-    1.11-1.22x, four threads 1.09-1.17x; G within 8.9e-14 of today on every
-    term mode, RHF and UHF; MPI 1/2/4 ranks and explicit-HGP energies agree.
-    Smoke 43/45 and extended 132/136 (known rccsdt failures). B1 is parked as a git stash ("B1: fused
-    loop in family-quartet order") and returns with B2. Next: K1.4 (under
-    S1, with the per-block skeleton test), then B2.
-  - **K1.4 is in the working tree, gated, not committed (2026-10-22).**
-    Skeleton-mode (S1) builds take the dense path, with K1.4b; each component carries
-    the S1 weight of its canonical form. Ops that send the block's shell
-    quartet to a different canonical shell quartet are decided once per
-    block (lower: skip the block). Gate: dense against per-component under
-    water's real C2v (32 checks, worst 1.2e-13 against 1e-13·|G|); four
-    mutations caught. Naphthalene D2h 0.275 → 0.255 s (1.08×) at one thread,
-    1.12× at four. K1.4b then made identity-map ops a sign test and
-    replaced the per-block group-quartet canonicalization with a per-build
-    pair-image table: **1.32× at one thread, 1.33× at four** (0.273 → 0.206
-    s); eight mutations caught.
+  - **K1 and K1.4 (dense digestion, also under S1) landed** (`5fd08496`,
+    `f2849647`; see Completion).
   - **B2 rescoped (2026-10-22).** Re-measured after lanes and K1: the
     closed-form family pass still gives 1.16–1.78× on its kernels, but the
     scalar HGP family pass is now 0.48–1.03× against laned production, so
     lanes took that half. Plan: B2.1 family-quartet loop order (B1 re-cut
     for p ≤ q), B2.2 closed-form families (predicted build ~1.06–1.35×), B2.3
     a laned HGP family probe that lands only at ≥ 1.15× on cc L ≥ 4.
-  - **Open, in order:** K1.4 with a per-block skeleton test, B2, C5 (screened kernels in both block
+    **B2.1 is in the working tree, default off** (`family_units`): exactly
+    once, gated against bra units, but +4-8 % at one thread on Pople and it
+    did not fix cc-pVTZ's four-thread drop. It stays off until B2.2 repays
+    the order's cost.
+  - **Working-tree refactors:** each block kernel now
+    answers `covers(total_L, kernel)` and the dense predicate asks it,
+    instead of hard-coding Auto/Coulomb/L ≤ 12; HGP's K < 3 blocks run
+    `vrr_lanes<1>` (the scalar recurrence is deleted); the dense skeleton
+    weight and the per-component one are one `skeleton_orbit_weight`
+    overload. A K1.4 mutation re-run (2026-10-23) found the gate NaN-blind
+    (`std::max(worst, NaN)` returns `worst`) and unable to tell whether the
+    skeleton dense path ran when block counts tie; both closed
+    (`max_output_diff`, and a reversed-block counter in the counting
+    kernel). 7 of 9 mutations caught; the 2 survivors drop the sign test,
+    which only saves work.
+  - **Open, in order:** B2 (B2.2 next), C5 (screened kernels in both block
     kernels; range-separated hybrids still take per-component HGP), D2a/D2b
     (shared-exponent families), P2 (ε screening, a policy decision), then
     total L > 12, then F3. D3 (RI-JK pair factors) is independent. T1
@@ -1984,15 +2018,17 @@ identify the path taken. Not required for correctness or performance.
     with the geometry's D2h-subgroup signed operations: benzene / 6-31G\*
     17.7 -> 4.08 s, naphthalene / 6-31G 66.6 -> 6.35 s (no symmetry 13.7 /
     21.3 s), energies equal to the persisted full-group path. **F2 landed:**
-    Auto resolves to HGP there (`full_symmetry_engine`). **F4 landed:**
-    `guess sad` is group-averaged when full symmetry is on (gated by
-    `nh3_c3v_fullsym_631gd_sad_direct`). **Open: F3**, feed the persisted
+    Auto resolves to HGP there (`full_symmetry_engine`). **F4 landed**, and
+    is now fixed at the source: the SAD guess is the raw density scaled to
+    the electron count, not projected, so no group average is needed (gated by
+    `nh3_c3v_fullsym_631gd_sad_direct`; see Completion). **Open: F3**, feed the persisted
     skeleton build from the block kernels; it only shortens a one-time
     build now, so it is last. Record:
     `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
   - **Teaching guide (rewritten 2026-10-22).** §8 now covers the persist
     threshold, the fused D2h-subgroup path above it, Auto → HGP and the
-    group-averaged SAD guess (F1/F2/F4). §9 covers lanes, dense digestion
+    unprojected SAD guess (F1/F2/F4; §6 explains why the projection was
+    ill-posed). §9 covers lanes, dense digestion
     (K1) and dense skeleton weighting (K1.4). §11 says where the per-bucket
     table still decides (stored tensor, two-phase builds, screened kernels,
     total L > 12). §12 is re-measured. One item remains open: **refit the

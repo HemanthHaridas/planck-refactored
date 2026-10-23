@@ -6,8 +6,10 @@ momentum and with a block kernel above it, and what else in the build
 stands in the way?
 
 **Status: in flight.** Landed: C0, C1, C2–C3.5, H1, L1, L2, L3a–c, P1, S1,
-D1, F1, F2, F4, T1, 2b, K1 (`5fd08496`). In the working tree, gated, not
-committed: K1.4 (dense digestion under S1, with K1.4b). Measured and
+D1, F1, F2, F4, T1, 2b, K1 (`5fd08496`), K1.4 (`f2849647`, with K1.4b). In
+the working tree, not committed: B2.1 (family-quartet units, default off),
+the `covers()` dense predicate, HGP's K < 3 blocks on `vrr_lanes<1>`, F4
+redone in the SAD guess itself, and a NaN-safe K1.4 gate. Measured and
 declined: D1c (electron-transfer recurrence), 5b (a class-batched
 scheduler). Measured, not landed: D2a/B0 (shared-exponent families), B1
 (family-quartet loop order, parked as a git stash until B2). Open, in order:
@@ -75,8 +77,9 @@ two traversals **per build**. OpenMP `schedule(static)` and the MPI stripe
 run over bra group pairs in both; partials are keyed by
 `omp_get_thread_num()` and summed in thread order.
 
-**Dense (K1, K1.4).** Taken when a block kernel is given (Auto), the kernel
-is Coulomb, every shell is at most f (total L ≤ 12), every density is
+**Dense (K1, K1.4).** Taken when the block kernel `covers()` every total L
+the basis can produce (today: Auto, Coulomb, shells up to f, total L ≤ 12),
+every density is
 symmetric to 1e-10, and there is either no symmetry or skeleton mode. Per
 bra pair p, kets q ≥ p:
 
@@ -269,13 +272,13 @@ numbers predate K1).
 | S1 | `7ec71009` | per-orbit-element replication of every G write | 1.33× (D2h) | `check_skeleton_symmetry` |
 | fix | `fd51d29d` | H1's Boys buffer overflow on (ff\|ff) in HGP's hoisted block path | — | f/g/h spherical gates |
 | D1 | `52698142` | the per-component primitive loop at total L 4–12 | 1.5× sp, 4.3–4.9× d, 12.9× f | 20 fingerprints; `check_hgp_block_kernel` |
-| F4 | `d0224110` | `guess sad` aborting full point-group SCF on C3v/D6h | correctness | `nh3_c3v_fullsym_631gd_sad_direct` |
+| F4 | `d0224110`, redone in tree | `guess sad` aborting full point-group SCF on C3v/D6h | correctness | `nh3_c3v_fullsym_631gd_sad_direct` |
 | F2 | `17cf5adf` | `engine auto` falling through to per-component OS on the full point-group path | 1.07–1.12× per rebuilt skeleton | energies unchanged |
 | F1 | `92838e03` | the n_b⁴ skeleton rebuilt every iteration above `threshold` | 4.3× benzene, 10.5× naphthalene (whole SCF) | energies vs the persisted path; 10 full-symmetry inputs at `threshold 1` |
 | T1 | `92838e03` | `thread_local` block-kernel scratch | neutral | 28 fingerprints identical |
 | 2b | `bbe705fc` | one primitive quartet per VRR pass: four at once (lanes) in blocks with K ≥ 3 | 1.38× cc-pVTZ, 1.21–1.23× cc-pVDZ / 6-31G\*, 1.05–1.07× sp | block sweep ≤ 1.1e-14 on four bases, mutation-tested; max\|ΔG\| ≤ 1.7e-14 |
 | K1 | `5fd08496` | per-component digestion (canonical filter, orbit dedup, scatter) on symmetric densities, Auto, Coulomb, L ≤ 12 | 1.11–1.22× (1 thread), 1.09–1.17× (4) | `check_dense_digest`, 68 checks ≤ 8.9e-14, counting kernel; 5 mutations; MPI 1/2/4 |
-| K1.4 | — | the per-component skeleton weight and per-block group-quartet canonicalization under S1 | 1.32× (1 thread), 1.33× (4), D2h naphthalene | 32 checks under real C2v ≤ 1e-13·\|G\|; 8 mutations |
+| K1.4 | `f2849647` | the per-component skeleton weight and per-block group-quartet canonicalization under S1 | 1.32× (1 thread), 1.33× (4), D2h naphthalene | 32 checks under real C2v ≤ 1e-13·\|G\|; 8 mutations |
 
 Suites after K1.4: smoke 43/45, extended 135/139; the failures are the known
 rccsdt routing cases. Details worth keeping:
@@ -324,16 +327,34 @@ rccsdt routing cases. Details worth keeping:
   symmetric under any subgroup, which is all S1 needs. So an unpersisted
   full-group run falls through to the fused build; the per-iteration
   rebuild wrappers were deleted.
-- **F4.** The raw SAD density is group-invariant; the idempotent projection
-  splits a degenerate set at the n_occ cutoff. With full symmetry the guess
-  is group-averaged, `P ← (1/|G|) Σ_R O_R P O_Rᵀ`.
+- **F4.** The raw SAD density is group-invariant, but the guess built from
+  it was not, and full-symmetry SCF aborted on C3v/D6h. The first fix
+  (`d0224110`) group-averaged the guess. The cause was the projection that
+  made the guess idempotent by keeping the top n natural orbitals: that is
+  ill-posed when a degenerate set straddles the cutoff, and SAD hits that
+  routinely. A spherically averaged open-shell atom carries a degenerate
+  fractional shell (O: three 2p at 1/3 β), and atomic spin counts need not
+  add to the molecule's (triplet water: 7α/3β raw against 6/4). The
+  projection's metric was also wrong (`S^{-1/2} P S^{-1/2}`, the transform
+  for a Fock-like matrix, not a density), and that error happened to act as
+  a molecule-aware tie-break. Correcting only the metric left the tie to the
+  eigensolver and sent triplet water into the UHF state 0.103 Eh above the
+  ground state (four regression cases). Now the guess is the raw density
+  scaled to the target count, `P = (n / Tr(P_raw S)) P_raw`, not idempotent;
+  open shell takes the spin-summed raw density scaled to n_α and n_β. The
+  first SCF diagonalization occupies by orbital energy. The projection and
+  `symmetrize_density` are deleted (`src/scf/sad.cpp`, −105 lines).
+  Suites: smoke 43/45, extended 134/139. The known rccsdt cases fail, plus
+  `water_casscf_sa2_sto3g_sad_guess_uphill`, whose basin turned out to be
+  set by roundoff (`diis_dim` 6/7/10 flips it); see Open Work.
 - **2b.** `hgp_block::vrr_lanes<B>` runs the block kernel's VRR for B
   primitive quartets at once, lane-minor (`[e][f][m][lane]`), every
   innermost loop of compile-time length B. It takes primitive-pair pointers
   only; the caller contracts with its own weights, so a family pass can
   reuse it. `HgpBlockKernel` uses B = 4 in blocks with K ≥ 3, padding lanes
-  at weight 0; smaller blocks keep the scalar loop. Against the scalar
-  kernel, one thread: cc-pVTZ 0.127 → 0.092 s, 6-31G\* 0.100 → 0.081 s,
+  at weight 0; smaller blocks run `vrr_lanes<1>`, so the recurrence exists
+  once (the old scalar loop is deleted). Against the scalar kernel, one
+  thread: cc-pVTZ 0.127 → 0.092 s, 6-31G\* 0.100 → 0.081 s,
   cc-pVDZ 0.548 → 0.453 s, naphthalene 0.294 → 0.274 s, 8 H2O / 6-31G
   0.136 → 0.129 s. B = 2 sits between, B = 8 is slower than 4, and a K = 3
   block is cheaper padded to 4 than run scalar. Gates: the block sweep
@@ -361,7 +382,12 @@ rccsdt routing cases. Details worth keeping:
   coefficient, the symmetrization and the mask. MPI: three Auto direct-SCF
   cases (`*_auto_direct_mpi_smoke`) match serial at 2 and 4 ranks (HF
   identical, B3LYP 1.4e-14 Eh), and explicit `engine hgp` to every printed
-  digit (B3LYP 1.1e-13 Eh).
+  digit (B3LYP 1.1e-13 Eh). The build-level predicate now asks the kernel:
+  each block kernel answers `covers(total_L, kernel)` (closed forms L ≤ 3,
+  HGP block L 4–12, Coulomb only; `NoBlockKernel` nothing; the chain either
+  link), and the build goes dense only if every total L up to four times the
+  basis's largest shell L is covered. Same decision as the old hard-coded
+  test, kept next to the kernel that knows it.
 - **K1.4.** Skeleton-mode builds go dense with a per-component S1 weight.
   Ops that send the block's canonical shell quartet lower skip the block;
   higher ones are irrelevant to it; only ops fixing it are applied per
@@ -371,8 +397,25 @@ rccsdt routing cases. Details worth keeping:
   instead of canonicalizing four shell indices for every op on every block
   pair, ~1.9 M × 8 on naphthalene (0.206 s, 1.32×). Gates: dense against
   per-component under water's real C2v (op count asserted), 32 checks ≤
-  1e-13·|G|; 8 mutations. The op-splits-a-group fallback
-  (`skeleton_orbit_weight`, unchanged) has no fixture.
+  1e-13·|G|; 8 mutations. The op-splits-a-group fallback has no fixture.
+  In the tree, the dense weight and the per-component one are one function:
+  `skeleton_orbit_weight(a, b, c, d, ops, perm_ops, sign_ops, stab0)` takes
+  what the caller already decided for the block (`stab0` ops fix it with
+  sign +1, `sign_ops` need only the sign test, only `perm_ops` can move it),
+  and the per-component path is the case with every op undecided.
+  `check_dense_digest` now bounds the dense/per-component difference
+  relative to max|G| (1e-14·max|G|): cc-pVTZ UHF Coulomb sits near 1e-13
+  absolute. A mutation re-run (2026-10-23) found two holes in the gate,
+  both closed: `worst = std::max(worst, NaN)` returns `worst`, so a NaN G
+  passed (dropping the identity-map ops from the stabilizer gave `|G|/0`
+  and printed `max|dG| = 0`); and with both paths preparing lazily the
+  block counts can tie, so a skeleton build that never went dense passed.
+  Now `max_output_diff` returns +inf for any non-finite entry and the test
+  reads `!(worst <= tol)`, and the counting kernel records blocks whose bra
+  pair sorts after the ket pair: dense never prepares one, the
+  per-component loop does. Of nine mutations seven are caught; the two
+  survivors drop the sign test, which only saves work (the final
+  symmetrization cancels a forbidden quartet).
 
 ## Measured, not landed
 
@@ -660,6 +703,30 @@ L ≤ 3 share of kernel time and leaving L ≥ 4 on today's kernel:
    with and without symmetry; MPI 1/2/4. Measure at 1 and 4 threads: B1 cost
    Pople +5–8 % at one thread for the order alone, which B2.2 must repay;
    it should fix K1's four-thread drop on cc-pVTZ (1.22× → 1.09×).
+   *Result (2026-10-22): landed default-off.* `fused_fock_build(...,
+   family_units)`; `fused_families` restored from the B1 stash. A first
+   version was +50 % (1 thread) and +84 % (4) on 8 H2O / 6-31G: ~1.3 M
+   family-quartet units, most pairing distant waters and fully screened, each
+   still paying a call per bra member. A unit-level Schwarz bound (the product
+   of the two buckets' largest shell-pair bounds, exact) removed them.
+   `--b21`, family units against K1's bra units, best of five:
+
+   | fixture | 1 thread | 4 threads |
+   |---|---|---|
+   | 8 H2O / 6-31G | +4.2 % | −1.9 % |
+   | 4 H2O / 6-31G\* | +4.2 % | −13.7 % |
+   | 4 H2O / cc-pVDZ | −1.2 % | −11.9 % |
+   | 1 H2O / cc-pVTZ | −2.1 % | +1.9 % |
+   | naphthalene / 6-31G | +7.8 % | +1.0 % |
+
+   The one-thread Pople cost is B1's again; B2.2 has to repay it, so
+   `family_units` stays off until then. It did **not** fix the cc-pVTZ
+   four-thread drop (one water, 13 families): that needs another look.
+   Gate: `check_dense_digest` adds a third build per case (dense, bra units)
+   that must match the family-unit build to 1e-13 with an identical block
+   count; with the exact expected count this pins exactly-once. Mutations,
+   each caught: dropping the diagonal block pairs, visiting the reverse
+   orientation twice.
 2. **B2.2, the closed-form family kernel.** Move B0 from the probe into
    `src/integrals/` (layouts templated on raise count, bra members first,
    zero-weight rows skipped, no per-quartet allocation). Input: the unit's

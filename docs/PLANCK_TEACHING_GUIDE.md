@@ -624,11 +624,43 @@ Planck builds that guess in four stages:
    carry directional bias. `spherical_average_atomic_density` replaces each
    shell block by a spherically averaged form while preserving the shell
    population in the atomic AO metric.
-4. **Assemble and project back to a valid molecular density** — the averaged
-   atomic blocks are inserted atom-by-atom into a block-diagonal molecular
-   density. That raw SAD density is then orthogonalized with \(S^{-1/2}\),
-   diagonalized, and reconstructed from the leading natural orbitals so the
-   final guess has the correct RHF or spin-resolved UHF/ROHF occupations.
+4. **Assemble and scale** — the averaged atomic blocks are inserted
+   atom-by-atom into a block-diagonal molecular density, which is scaled to
+   the target electron count, \(\mathbf P = \frac{n}{\mathrm{Tr}(\mathbf P_\text{raw}\mathbf S)}\mathbf P_\text{raw}\)
+   (`scale_raw_sad`). Open-shell SCF uses the same spin-summed density in both
+   channels, scaled to \(n_\alpha\) and \(n_\beta\). The guess is deliberately
+   **not** idempotent. The first SCF iteration builds \(\mathbf F[\mathbf P]\),
+   diagonalizes it and occupies by orbital energy, which turns it into a proper
+   density.
+
+#### Why the SAD guess is not made idempotent
+
+Planck used to "clean up" the raw density: keep its top \(n\) natural orbitals
+and rebuild \(\mathbf P = \sum_i \mathbf c_i \mathbf c_i^{\mathsf T}\). That step
+looks harmless and is ill-posed. A spherically averaged open-shell atom carries
+a *degenerate* fractional shell; oxygen's single \(\beta\) 2p electron becomes
+three 2p orbitals at occupation \(1/3\) each. Atomic spin counts also need not
+add up to the molecule's: triplet water assembled from a triplet O and two
+doublet H has 7 \(\alpha\) and 3 \(\beta\) raw electrons, against 6 and 4. So the
+fourth \(\beta\) orbital has to be chosen from three exactly degenerate ones,
+and the eigensolver, not chemistry, decides which.
+
+The projection also used the wrong metric. A density is *contravariant*, so its
+orthonormal form is \(\mathbf S^{1/2}\mathbf P\mathbf S^{1/2}\) (eigenvalues of
+\(\mathbf{PS}\), the natural occupations). The code used
+\(\mathbf S^{-1/2}\mathbf P\mathbf S^{-1/2}\), the transform for a Fock-like
+matrix. Fixing only the metric made things *worse*. The wrong metric had mixed
+in the hydrogen overlap and lifted the degeneracy in a molecule-aware
+direction. The right one reproduces the atomic degeneracy exactly, and triplet
+water then fell into a UHF state 0.103 Eh above the ground state. The same
+arbitrary choice also broke the point-group symmetry that the raw density has,
+so full-symmetry SCF aborted on NH₃ and benzene.
+
+**The lesson.** When an arbitrary choice sits inside a guess, a bug can hold the
+accidental tie-break that makes it work, and fixing the bug exposes the choice.
+Remove the choice instead: the raw density is group-invariant and needs no
+selection, and the first diagonalization occupies orbitals by energy, which is
+what the projection was trying to do.
 
 In `src/scf/scf.cpp`, the SAD path is selected before the usual HCore/SAO
 guess construction:
@@ -1553,15 +1585,15 @@ Two smaller fixes make the path behave:
   so `engine auto` used to fall through to per-component OS. It now resolves
   to HGP, the faster per-component engine on this path (1.07–1.12× per
   skeleton build).
-- **Group-average the SAD guess.** The raw SAD density is invariant under
-  the group, but making it idempotent keeps the top \(n_\text{occ}\) natural
-  orbitals, and that splits a degenerate set at the cutoff. The result is
-  not symmetric, and full-symmetry SCF aborted on it (\(C_{3v}\) NH₃,
-  \(D_{6h}\) benzene). With full symmetry on, the guess is averaged,
+- **Do not project the SAD guess.** The raw SAD density is invariant under
+  the group, but the idempotent guess built from it was not: keeping the top
+  \(n_\text{occ}\) natural orbitals splits a degenerate set at the cutoff, and
+  full-symmetry SCF aborted on it (\(C_{3v}\) NH₃, \(D_{6h}\) benzene). The
+  first fix averaged the guess over the group,
   \(\mathbf P \leftarrow \tfrac{1}{|G|}\sum_R \mathbf O_R \mathbf P
-  \mathbf O_R^{\mathsf T}\), the contravariant law above. Averaging keeps
-  \(\mathrm{Tr}(\mathbf{PS})\) but gives up idempotence, and the SCF fixes
-  that on its first diagonalization.
+  \mathbf O_R^{\mathsf T}\). The guess is now the raw density scaled to the
+  electron count (§6, "Why the SAD guess is not made idempotent"), which is
+  symmetric by construction, and the averaging step is gone.
 
 ### Planck's Spherical-Harmonic Full-Symmetry Path
 
@@ -2410,7 +2442,8 @@ running several primitive quartets through one pass. `hgp_block::vrr_lanes<B>`
 evaluates the VRR for B primitive quartets at once, with the lane index
 innermost (`[e][f][m][lane]`) so every innermost loop has compile-time length
 B. Blocks with at least three primitive quartets use B = 4, padding the last
-group with zero-weight lanes; smaller blocks keep the scalar loop. B = 2 sits
+group with zero-weight lanes; smaller blocks run the same code with B = 1,
+so the recurrence is written once. B = 2 sits
 between, B = 8 is slower than 4, and a three-quartet block is cheaper padded
 to four than run one at a time. One thread, against the scalar kernel:
 
@@ -2495,8 +2528,10 @@ The choice cannot be made per block. The dense loop visits \(p \le q\), while
 the per-component canonical filter works on AO indices and needs some kets
 with \(q < p\). Mixing the two inside one build would count some integrals
 twice and drop others. So the build is all-dense or all-per-component, and
-dense requires that the block kernels accept every block: Auto, the Coulomb
-kernel, and shells up to f (total \(L \le 12\)). Explicit engines keep the
+dense requires that the block kernels accept every block. Each kernel says
+so itself through `covers(total_L, kernel)`, and the build asks for every
+total \(L\) up to four times its largest shell \(L\). Today that means Auto,
+the Coulomb kernel, and shells up to f (total \(L \le 12\)). Explicit engines keep the
 per-component loop, so the cross-engine comparators still compare engines.
 
 **Screening stays exactly the same.** The dense loop still skips a component

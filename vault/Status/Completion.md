@@ -260,8 +260,9 @@ historical design context, but they are no longer the source of truth for
 - Active-integral-cache transform is landed and benchmarked
 - Per-root SA total-energy reporting is fixed
 - SA diagnostics are parsed by the regression runner
-- SAD-start uphill-enabled water SA-2 basin is validated and retained as a separate
-  regression mode
+- SAD-start uphill-enabled water SA-2 basin is retained as a separate
+  regression mode. **Caveat (2026-10-23):** reaching it turned out to depend on
+  ~1e-14 merit roundoff, not on the guess; see Open Work (CASSCF)
 - Plateau-escape convergence branch is hardened: the old rounding-sensitive
   `100·tol_mcscf_grad` screen is replaced by an explicit `sa_g`-stationarity
   bound `plateau_sa_g_bound = max(1e-6, tol_mcscf_grad)`, and a
@@ -397,6 +398,23 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Dense digestion per block in the fused Fock loop (K1 `5fd08496`, K1.4
+  `f2849647`, 2026-10-22).** Instead of running every component through the
+  canonical filter, orbit dedup and up to eight scattered writes, the loop
+  visits each unordered block pair once and digests the whole block, with
+  three shell-level degeneracy factors and one final symmetrization. Taken
+  per build when the block kernel `covers()` every total L of the basis
+  (Auto, Coulomb, shells up to f) and every density is symmetric. One
+  thread 1.11-1.22x, four 1.09-1.17x. K1.4 extends it to skeleton-mode (S1)
+  builds: a per-build table of each op's image of each shell pair decides
+  every op per block with two integer comparisons, identity-map ops get a
+  sign test, and only ops fixing the block are applied per component.
+  Naphthalene / 6-31G D2h 0.273 -> 0.206 s (1.32x), 1.33x at four threads.
+  Gate: `check_dense_digest` (every `FusedTerm` mode, RHF/UHF, four bases,
+  two tolerances, water's real C2v with the op count asserted, a counting
+  kernel proving the dense path ran), 5 + 8 mutations; MPI 1/2/4 ranks
+  match. Record: `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
+
 - **Lanes across primitive quartets in the HGP block kernel (2b,
   2026-10-21).** `hgp_block::vrr_lanes<B>` runs the VRR for four primitive
   quartets at once in blocks with K >= 3 (scalar below). Fock build, one
@@ -425,13 +443,20 @@ historical design context, but they are no longer the source of truth for
 - **`guess sad` works with full point-group symmetry (F4, 2026-10-20).** It
   used to abort on C3v/D6h with "initial density is not symmetry-adapted"
   (NH3/6-31G\* 8.0e-5, benzene 2.6e-3). The raw SAD density is invariant;
-  the idempotent projection keeps the top n_occ natural orbitals and splits a
-  degenerate set at that cutoff. When full symmetry is active the guess (RHF,
-  and each UHF/ROHF spin) is now averaged over the group with the
-  contravariant law `P <- (1/|G|) Σ_R O_R P O_Rᵀ` (`symmetrize_density`,
-  `src/scf/scf.cpp`), which keeps Tr(PS) and drops idempotence. SAD now
-  reaches the hcore energy (benzene to 1e-11 Eh). Gated by
-  `nh3_c3v_fullsym_631gd_sad_direct`, mutation-verified. Record:
+  the guess was not, because making it idempotent kept the top n natural
+  orbitals, which is ill-posed when a degenerate set straddles the cutoff (a
+  spherically averaged open-shell atom has one: O's three 2p at 1/3 beta).
+  The first fix (`d0224110`) group-averaged the guess. A later attempt
+  corrected the projection's metric (it used `S^{-1/2} P S^{-1/2}`, the
+  Fock-like transform) and made things worse: the wrong metric had been an
+  accidental tie-break, and triplet water fell into the UHF state 0.103 Eh
+  above the ground state (four regression cases). Now (2026-10-23) the guess
+  is the raw density scaled to the target count,
+  `P = (n / Tr(P_raw S)) P_raw`, not idempotent; open shell uses the
+  spin-summed raw density scaled to n_alpha and n_beta (`scale_raw_sad`,
+  `src/scf/sad.cpp`). The projection and `symmetrize_density` are deleted.
+  Gated by `nh3_c3v_fullsym_631gd_sad_direct` and the four
+  `water_triplet_*` cases. Record:
   `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
 
 - **CC amplitude checkpoint (`.ccamp`): hand-written RCCSD can now write a
