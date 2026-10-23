@@ -2004,7 +2004,19 @@ identify the path taken. Not required for correctness or performance.
     HGP VRR+HRR 49 % on cc-pVTZ, 25 % on 6-31G\*; idle <= 6 % (10 %
     naphthalene). B2.1 stays off (delete if unused), B2.3 dropped.
   - **Open, in order:** R1 closed-form readout as a flat array (in-tree),
-    R2 a batched multi-x Boys entry (next core release, optional in the loader; probe 1.3-2.3x on the Boys evaluation, bitwise; scoped outside the repo), R3 ket-side
+    R2 a batched multi-x Boys entry: core v1.2.0 released (bitwise against
+    v1.1.0 through the C ABI); Planck callers written, uncommitted, gates
+    pass (smoke 43/45, extended 135/139), not bitwise against HEAD by
+    compiler fusion only: T and every Boys value are byte-identical, and 583
+    of 67 032 closed-form outputs differ by <= 1.1e-16 because g++'s default
+    -ffp-contract=fast fuses `out + base*F` differently in the two-pass loop.
+    Measured HEAD -> R2 on the same v1.2.0 library: 1.01-1.11x (1 thread),
+    1.03-1.11x (4); with the core's own ~1-2 % that is 1.03-1.13x against a
+    1.10-1.19x prediction. Re-profiled: Boys is still 13-24 % (7 % cc-pVTZ),
+    nearly all core evaluation, so batching removed call overhead, not work.
+    The v1.1.0 fallback path is not yet run. Scope doc rewritten as current
+    state (2026-10-23).
+    `planck-boys-vec` was a dead gate (segfaulted, unregistered), now fixed, R3 ket-side
     family sharing within bra units (B2.2 proper only if short), the fixed
     partition, C5 (screened kernels in both block
     kernels; range-separated hybrids still take per-component HGP), D2a/D2b
