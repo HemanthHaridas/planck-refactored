@@ -1897,18 +1897,6 @@ identify the path taken. Not required for correctness or performance.
   cases that uses it; the other three converge through the normal gate at
   `sa_g < 1e-5`).
 - Keep the two water SA-2 SAD-start regressions, because they intentionally protect two distinct optimizer policies
-- **`water_casscf_sa2_sto3g_sad_guess_uphill` reaches its basin by roundoff,
-  not by policy (found 2026-10-23).** It fails after the unprojected SAD guess
-  landed: the RHF reference is identical to all 10 printed digits and the SA-2
-  trajectory is identical through macro 10, where the decision between
-  "plateau converged" (shallow basin, -74.7751378) and "reject, damp, probe
-  uphill" (deep basin, -74.7877865) rests on merit changes of ~1e-14. On the
-  current build, unrelated perturbations flip it: `diis_dim` 6/10 shallow and
-  7 deep, `guess hcore` deep, `engine os`/`hgp` (the same integrals to ~1e-15)
-  shallow. The earlier pass was luck. Fix in the optimizer, not the input: the
-  merit acceptance and the plateau test need a noise floor (treat
-  |merit change| below ~1e-12 as no change), so the escape is deterministic.
-  Tuning the input until it passes again would hide this.
 
 ## Performance and maintenance opportunities
 

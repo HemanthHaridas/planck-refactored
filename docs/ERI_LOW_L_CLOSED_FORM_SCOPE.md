@@ -344,9 +344,11 @@ rccsdt routing cases. Details worth keeping:
   open shell takes the spin-summed raw density scaled to n_α and n_β. The
   first SCF diagonalization occupies by orbital energy. The projection and
   `symmetrize_density` are deleted (`src/scf/sad.cpp`, −105 lines).
-  Suites: smoke 43/45, extended 134/139. The known rccsdt cases fail, plus
-  `water_casscf_sa2_sto3g_sad_guess_uphill`, whose basin turned out to be
-  set by roundoff (`diis_dim` 6/7/10 flips it); see Open Work.
+  This exposed `water_casscf_sa2_sto3g_sad_guess_uphill` as reaching its
+  basin by roundoff (`diis_dim` 6/7/10 flipped it); fixed in the CASSCF
+  candidate selector and plateau exit (see the vault CASSCF note).
+  Suites after both: smoke 43/45, extended 135/139 (only the known rccsdt
+  routing cases fail).
 - **2b.** `hgp_block::vrr_lanes<B>` runs the block kernel's VRR for B
   primitive quartets at once, lane-minor (`[e][f][m][lane]`), every
   innermost loop of compile-time length B. It takes primitive-pair pointers

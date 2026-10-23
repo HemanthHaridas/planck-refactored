@@ -6749,6 +6749,29 @@ whole story in SA-CASSCF; **acceptance policy is part of the algorithm**.
 The paired fixtures also prevent accidental drift in either mode
 (strict-monotone robustness or uphill-enabled global-basin reachability).
 
+**Acceptance has to ignore noise.** For a while the uphill fixture reached
+the deeper basin by luck. Both trajectories reach the upper plateau, where
+\(g_{\mathrm{SA}}\approx 10^{-10}\). The next decision rested on energy and
+gradient changes of about \(10^{-14}\). If the selector accepted a
+\(2\times10^{-11}\) step because it lowered \(g_{\mathrm{SA}}\) from
+\(1.56\times10^{-10}\) to \(1.27\times10^{-10}\), the plateau exit fired and
+the run stayed in the upper basin. If it rejected every candidate, the
+stagnation probes ran and the uphill pass escaped. Unrelated inputs flipped
+the outcome: `diis_dim` 6 and 10 stayed up while 7 escaped, and so did the
+choice of integral engine, although the engines agree to \(10^{-15}\). Two
+rules make it deterministic:
+
+- A gradient-only improvement counts only while \(g_{\mathrm{SA}}\) is above
+  `tol_mcscf_grad`. Below that, a "better" gradient is noise.
+- The plateau exit treats "no step taken" as flat, as it does a micro step.
+  Under `mcscf_accept_uphill` it also requires that the escape probes were
+  offered in that macroiteration and none was taken, so the run cannot
+  declare the upper plateau converged before it has tried to leave.
+
+The same input now lands at \(-74.7877864784\) Eh under all seven variations
+that used to flip it (three `diis_dim` values, an hcore guess, and three
+engines).
+
 The CI density matrices (1-RDM and 2-RDM) are built using exact
 creation/annihilation operators in the spin-orbital determinant basis with a
 determinant lookup table, ensuring the CI eigenvalue, density matrices, and

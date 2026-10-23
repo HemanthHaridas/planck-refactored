@@ -261,8 +261,12 @@ historical design context, but they are no longer the source of truth for
 - Per-root SA total-energy reporting is fixed
 - SA diagnostics are parsed by the regression runner
 - SAD-start uphill-enabled water SA-2 basin is retained as a separate
-  regression mode. **Caveat (2026-10-23):** reaching it turned out to depend on
-  ~1e-14 merit roundoff, not on the guess; see Open Work (CASSCF)
+  regression mode. Reaching it used to depend on ~1e-14 roundoff (`diis_dim`
+  6/7/10 and the integral engine flipped it); fixed 2026-10-23 by a noise
+  floor in the candidate selector (no gradient-only acceptance below
+  `tol_mcscf_grad`) and a plateau exit that counts "no step" as flat and, under
+  `mcscf_accept_uphill`, needs the escape probes offered first. All seven
+  variations now land at -74.7877864784
 - Plateau-escape convergence branch is hardened: the old rounding-sensitive
   `100·tol_mcscf_grad` screen is replaced by an explicit `sa_g`-stationarity
   bound `plateau_sa_g_bound = max(1e-6, tol_mcscf_grad)`, and a
