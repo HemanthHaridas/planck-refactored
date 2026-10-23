@@ -71,6 +71,7 @@ namespace
         const McscfState &current_state,
         const std::vector<RotPair> &opt_pairs,
         double tol_energy,
+        double tol_grad,
         EvaluateFn &&evaluate,
         bool accept_uphill = false,
         double uphill_max_eh = 5e-3)
@@ -119,7 +120,15 @@ namespace
                 // The relative term (10% of sel_gnorm) dominates above ~1e-11;
                 // the 1e-12 floor only kicks in if the gradient has genuinely
                 // vanished, preserving prior strict-improvement semantics there.
+                //
+                // Below the convergence tolerance there is nothing left to
+                // reduce: a "better" gradient there is noise (sa_g ~1e-10 on
+                // the SA-2 SAD-uphill plateau). Counting it as progress let a
+                // 2e-11 step through and decided that case's basin by roundoff
+                // (diis_dim 6/7/10 flipped it); energy/merit improvements and
+                // the uphill pass still apply.
                 const bool sa_gradient_reduced =
+                    selection.sa_gnorm > tol_grad &&
                     trial.gnorm < selection.sa_gnorm -
                                       std::max(0.1 * selection.sa_gnorm, 1.0e-12);
                 const double sa_worsen_window =
@@ -1069,6 +1078,7 @@ namespace HartreeFock::Correlation::CASSCF
             // SA-2 canary accepts one (probe-pair6-favored[uphill]), so they are
             // load-bearing on that basin. numeric-newton is kept (the dominant
             // accepted fallback). See the cascade-trim spike.
+            bool probes_offered = false;
             if (stagnation_streak >= 2 && probe_signal.weighted_abs.size() > 0)
             {
                 std::vector<int> ranked_pairs(static_cast<std::size_t>(probe_signal.weighted_abs.size()));
@@ -1090,6 +1100,7 @@ namespace HartreeFock::Correlation::CASSCF
 
                     const double signed_probe =
                         (probe_signal.weighted_signed(k) >= 0.0) ? -max_rot : max_rot;
+                    probes_offered = true;
                     append_candidate_step(
                         step_candidates,
                         build_single_pair_probe_step(k, signed_probe),
@@ -1110,6 +1121,7 @@ namespace HartreeFock::Correlation::CASSCF
                     st_current,
                     opt_pairs,
                     as.tol_mcscf_energy,
+                    as.tol_mcscf_grad,
                     evaluate,
                     as.mcscf_accept_uphill,
                     as.mcscf_uphill_max_eh);
@@ -1153,8 +1165,15 @@ namespace HartreeFock::Correlation::CASSCF
             const bool small_energy_change = macro > 1 && std::abs(dE) < std::max(10.0 * as.tol_mcscf_energy, 1e-8);
             const bool little_gradient_progress =
                 sa_gradient_progress_flat(reported_gnorm, prev_sa_gnorm);
+            // The orbitals did not move: a micro step, or no step at all (the
+            // selector rejects noise-level moves once sa_g is below tolerance).
             const bool accepted_micro_step_plateau =
-                diag.step_accepted && diag.accepted_step_norm < 5e-5;
+                !diag.step_accepted || diag.accepted_step_norm < 5e-5;
+            // Under mcscf_accept_uphill the plateau may be a false SA-stationary
+            // point; it is converged only once this macro's escape probes were
+            // offered and none was taken.
+            const bool escape_tried =
+                !as.mcscf_accept_uphill || (probes_offered && !diag.step_accepted);
             // A flat gradient that is still well above tolerance is itself a stall
             // signal, independent of the energy drift and step size. A healthy
             // macroiteration drives the gradient down fast (so it is NOT flat
@@ -1232,6 +1251,7 @@ namespace HartreeFock::Correlation::CASSCF
             if (stagnation_streak >= 2 &&
                 small_energy_change &&
                 accepted_micro_step_plateau &&
+                escape_tried &&
                 reported_gnorm <= plateau_sa_g_bound)
             {
                 logging(LogLevel::Warning, tag + " :",
