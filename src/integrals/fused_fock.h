@@ -22,7 +22,7 @@
 //     is visited exactly ONCE, which is what makes the unweighted 8-fold-orbit
 //     accumulation in fock_accumulate.h correct.
 //
-//  2. schedule(static) + per-thread partials summed in FIXED thread-index order.
+//  2. schedule(static, 1) + per-thread partials summed in FIXED thread-index order.
 //     These accumulations are read-modify-write, unlike the store-only
 //     write_eri_permutations of the tensor build. A critical/atomic reduction,
 //     or schedule(dynamic), makes the result drift with thread count (measured);
@@ -1003,9 +1003,13 @@ namespace HartreeFock::Integrals
         };
         const std::size_t n_units = use_units ? units.size() : ngp;
 
-        // schedule(static), NOT dynamic — load-bearing, see the header note.
+        // Static, NOT dynamic: load-bearing, see the header note. Chunk 1
+        // (round-robin) because bra p visits every ket q >= p: contiguous
+        // quarters handed the first thread 44 % of the triangle and capped four
+        // threads at 2.29x (measured ~2.3x); round-robin gave 1.5-2.0x more at
+        // four threads and is identical at one.
 #ifdef USE_OPENMP
-#pragma omp parallel for schedule(static)
+#pragma omp parallel for schedule(static, 1)
 #endif
         for (std::size_t bra = 0; bra < n_units; ++bra)
         {

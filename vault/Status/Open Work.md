@@ -1989,15 +1989,25 @@ identify the path taken. Not required for correctness or performance.
     (`max_output_diff`, and a reversed-block counter in the counting
     kernel). 7 of 9 mutations caught; the 2 survivors drop the sign test,
     which only saves work.
-  - **Open, in order:** B2 (B2.2 next), C5 (screened kernels in both block
+  - **W1 landed (2026-10-23):** the dense bra loop is a
+    triangle (bra p visits every ket q >= p) and `schedule(static)` gave the
+    first of four threads 44 % of it: a 2.29x ceiling, measured 2.32x on
+    6-31G\*/cc-pVDZ/cc-pVTZ and 1.72x on naphthalene. `schedule(static, 1)`
+    (round-robin, still deterministic at a fixed thread count) gives 1.10-1.97x
+    at four threads (scaling now 3.4-3.7x), unchanged at one. B2.1's
+    four-thread gains were this imbalance: on the balanced schedule family
+    units are only a one-thread Pople cost (+3.5-7.4 %), which B2.2 must repay.
+    The fixed accumulator partition becomes cyclic bins (u mod 64).
+  - **Open, in order:** the fixed partition, B2.2-B2.3, C5 (screened kernels in both block
     kernels; range-separated hybrids still take per-component HGP), D2a/D2b
     (shared-exponent families), P2 (ε screening, a policy decision), then
     total L > 12, then F3. D3 (RI-JK pair factors) is independent. T1
     (block-kernel scratch out of thread-local storage) landed 2026-10-21:
     bitwise, time-neutral. C4b is
     deprioritised: the block kernel leaves only 4–9 % at L = 4 on sp bases.
-  - **Known defect, not chased:** the fused direct loop is not thread-count
-    invariant (accumulators keyed by thread index).
+  - **Known defect, scheduled (the fixed partition, after W1):** the fused
+    direct loop is not thread-count invariant (accumulators keyed by thread
+    index).
   - **The full point-group path (measured 2026-10-20, F1 2026-10-21).**
     Symmetric HF with SAO and direct SCF builds a dense n_b⁴ skeleton in a
     separate per-component loop (`Symmetry::build_skeleton_eri`), persisted

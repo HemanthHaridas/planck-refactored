@@ -6,16 +6,14 @@ momentum and with a block kernel above it, and what else in the build
 stands in the way?
 
 **Status: in flight.** Landed: C0, C1, C2–C3.5, H1, L1, L2, L3a–c, P1, S1,
-D1, F1, F2, F4, T1, 2b, K1 (`5fd08496`), K1.4 (`f2849647`, with K1.4b). In
-the working tree, not committed: B2.1 (family-quartet units, default off),
-the `covers()` dense predicate, HGP's K < 3 blocks on `vrr_lanes<1>`, F4
-redone in the SAD guess itself, and a NaN-safe K1.4 gate. Measured and
-declined: D1c (electron-transfer recurrence), 5b (a class-batched
-scheduler). Measured, not landed: D2a/B0 (shared-exponent families), B1
-(family-quartet loop order, parked as a git stash until B2). Open, in order:
-B2, the fixed accumulator partition, C5, P2, total L > 12, F3; D3 is
-independent, K2 conditional, C4b deprioritised. When those land or are
-abandoned, rewrite this as an answer.
+D1, F1, F2, F4, T1, 2b, K1 (`5fd08496`), K1.4 (`f2849647`, with K1.4b),
+B2.1 (`66669cd5`, family-quartet units, default off), the `covers()` dense
+predicate, HGP's K < 3 blocks on `vrr_lanes<1>`, F4 redone in the SAD guess
+(`0c8a9fc7`), W1 (round-robin bra schedule, 1.10–1.97× at four threads). Measured and declined: D1c (electron-transfer recurrence),
+5b (a class-batched scheduler). Measured, not landed: D2a/B0 (shared-exponent
+families). Open, in order: the fixed accumulator partition, B2.2–B2.3,
+C5, P2, total L > 12, F3; D3 is independent, K2 conditional, C4b
+deprioritised. When those land or are abandoned, rewrite this as an answer.
 
 ## Answer so far
 
@@ -650,8 +648,8 @@ hot calls were in the per-block test, and a table took the build from
 
 | step | what | bitwise? |
 |---|---|---|
-| B2.1–B2.3 | family-quartet loop order, closed-form families, then a probe decides HGP families | no; each lands alone |
-| partition | fixed accumulator partition | no; lands alone |
+| partition | fixed accumulator partition, cyclic bins | no; lands alone |
+| B2.2–B2.3 | closed-form families, then a probe decides HGP families | no; each lands alone |
 | C5 | screened kernels in both block kernels (then dense too) | screened kernels only |
 | P2 | quartet-level primitive screening | no (~1e-12); lands alone |
 | L > 12 | block kernel above total L = 12 | — |
@@ -659,7 +657,39 @@ hot calls were in the per-block test, and a table took the build from
 | D3 | RI-JK pair factors (independent) | per the BLAS doc |
 | K2 | batches across ket blocks (conditional) | no |
 
-**B2 — families on top of K1. Rescoped 2026-10-22 after a re-measure.**
+**W1 — balance the bra loop (rescoped in 2026-10-23, first).** The dense
+traversal is a triangle: bra p visits every ket q ≥ p. `schedule(static)`
+hands each thread a contiguous range of bras, so at four threads the first
+quarter carries 1 − (3/4)² = 44 % of the work, a 2.29× ceiling. Measured
+production dense, 1 → 4 threads: 2.32–2.33× on 6-31G\*, cc-pVDZ and
+cc-pVTZ, 1.72× on naphthalene; only 8 H2O / 6-31G (3.27×) escaped, because
+Schwarz thins its distant-water work. `schedule(static, 1)` deals bras
+round-robin, stays static (invariant 2 holds: reproducible at a given thread
+count, identical at one):
+
+| fixture, 4 threads | static | static, 1 | gain | 1 → 4 now |
+|---|---|---|---|---|
+| 8 H2O / 6-31G | 0.0353 s | 0.0320 s | 1.10× | 3.6× |
+| 4 H2O / 6-31G\* | 0.0291 s | 0.0190 s | 1.53× | 3.6× |
+| 4 H2O / cc-pVDZ | 0.1722 s | 0.1090 s | 1.58× | 3.7× |
+| 1 H2O / cc-pVTZ | 0.0320 s | 0.0209 s | 1.53× | 3.6× |
+| naphthalene / 6-31G | 0.1229 s | 0.0623 s | 1.97× | 3.4× |
+
+The per-component traversal shares the loop and gains too. This was the
+"four-thread drop" K1 recorded on cc-pVTZ, and it is also what B2.1's
+four-thread gains were: re-measured on the balanced schedule, family units
+against bra units are −4.7 % to +8.8 % at four threads and still
++3.5 % / +3.6 % / +7.4 % at one on 8 H2O, 6-31G\* and naphthalene (cc
+bases ±1 %). Gates: `planck-fock-accumulate` at 1/4/8 threads, smoke,
+extended (with the MPI smoke cases): smoke 43/45, extended 135/139, the
+known rccsdt cases. Landed.
+
+**B2 — families on top of K1. Rescoped 2026-10-22 after a re-measure;
+re-checked 2026-10-23 after W1:** B2.1's only remaining effect is its
+one-thread Pople cost, so B2.2 must repay 3.5–7.4 % there from kernel time
+alone. The build predictions below stand minus that on Pople bases
+(6-31G\* ~1.02×, naphthalene ~1.17×, cc-pVDZ ~1.35×); B2.2's stop rule
+(6-31G\* must not regress) is now tight.
 
 *What changed since B0.* Lanes (2b) and K1 both landed after the family
 numbers were taken. `--family` again, against today's production kernels
@@ -754,7 +784,10 @@ side is a few KB, but B2.3 would need a contracted table per member, which
 must be bounded before relying on it. Exactly-once now rests on the unit
 enumeration, so the counting-kernel gate is load-bearing.
 
-**The fixed accumulator partition.** The fused loop's partials are keyed by
+**The fixed accumulator partition.** After W1 it is cyclic bins: unit u
+accumulates into bin u mod 64, each bin's units in increasing order, bins
+merged in fixed order; a thread owns whole bins, so the round-robin balance
+is kept. The fused loop's partials are keyed by
 thread index, so a run is reproducible at a given thread count but not
 across counts (CO2 / 6-31G\* direct differs between 1 and 4 threads in the
 DIIS residual digits and the last kcal/mol digit; all 10 Hartree digits
