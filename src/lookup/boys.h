@@ -15,6 +15,10 @@ namespace HartreeFock
         // Bitwise-identical to looping boys(n, x).
         void boys_vec(double x, std::span<double> out) noexcept;
 
+        // Batched form: out[i * (nmax + 1) + n] = F_n(x[i]) for 0 <= n <= nmax.
+        // Bitwise-identical to boys_vec on each x[i].
+        void boys_batch(std::span<const double> x, int nmax, std::span<double> out) noexcept;
+
     } // namespace Lookup
 } // namespace HartreeFock
 

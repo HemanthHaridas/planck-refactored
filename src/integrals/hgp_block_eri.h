@@ -117,7 +117,8 @@ namespace HartreeFock::Integrals
             const int M = LAB + LCD, Ne = n_upto(LAB), Nf = n_upto(LCD), Md = M + 1;
             const auto v = [&](int e, int f) { return out + (static_cast<std::size_t>(e) * Nf + f) * Md * B; };
             const double two_over_sqrt_pi = 2.0 / std::sqrt(std::numbers::pi);
-            alignas(64) double pa[3][B], wp[3][B], qc[3][B], wq[3][B], i2z[B], rz[B], i2e[B], re[B], i2d[B];
+            alignas(64) double pa[3][B], wp[3][B], qc[3][B], wq[3][B], i2z[B], rz[B], i2e[B], re[B], i2d[B],
+                prefac[B], Tl[B];
             double *v00 = v(0, 0);
             for (int l = 0; l < B; ++l)
             {
@@ -135,14 +136,19 @@ namespace HartreeFock::Integrals
                     const double pq = p.center[x] - q.center[x];
                     PQ2 += pq * pq;
                 }
-                const double prefac = p.prefactor * q.prefactor * two_over_sqrt_pi * std::sqrt(rho);
-                double F[4 * MAX_L + 1];
-                HartreeFock::Lookup::boys_vec(rho * PQ2, std::span<double>(F, M + 1));
-                for (int m = 0; m <= M; ++m)
-                    v00[m * B + l] = prefac * F[m];
+                prefac[l] = p.prefactor * q.prefactor * two_over_sqrt_pi * std::sqrt(rho);
+                Tl[l] = rho * PQ2;
                 i2z[l] = 0.5 / zeta, i2e[l] = 0.5 / eta, i2d[l] = 0.5 / delta;
                 rz[l] = rho / zeta, re[l] = rho / eta;
             }
+            // One batched Boys call for the B lanes (bitwise equal to a
+            // boys_vec per lane).
+            double F[B * (4 * MAX_L + 1)];
+            HartreeFock::Lookup::boys_batch(std::span<const double>(Tl, B), M,
+                                            std::span<double>(F, static_cast<std::size_t>(B) * Md));
+            for (int l = 0; l < B; ++l)
+                for (int m = 0; m <= M; ++m)
+                    v00[m * B + l] = prefac[l] * F[l * Md + m];
             for (int e = 1; e < Ne; ++e)
             {
                 const Cart &c = T[e];

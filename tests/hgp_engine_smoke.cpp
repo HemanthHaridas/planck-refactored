@@ -179,7 +179,8 @@ namespace
                 const auto *ab0 = pair_of[first[ab.A._index] * nb + first[ab.B._index]];
                 const auto *cd0 = pair_of[first[cd.A._index] * nb + first[cd.B._index]];
                 std::array<double, 27> out{};
-                HartreeFock::Integrals::low_l_shell_eri(*ab0, *cd0, nr, cs, out);
+                std::vector<double> boys_scratch;
+                HartreeFock::Integrals::low_l_shell_eri(*ab0, *cd0, nr, cs, out, boys_scratch);
                 const int slot = nr == 3   ? 9 * axes[0] + 3 * axes[1] + axes[2]
                                  : nr == 2 ? 3 * axes[0] + axes[1]
                                            : axes[0];

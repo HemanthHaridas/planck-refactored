@@ -4,6 +4,8 @@
 #include <array>
 #include <cmath>
 #include <numbers>
+#include <span>
+#include <vector>
 
 #include "base/types.h"
 #include "block_eri.h"
@@ -40,15 +42,44 @@ namespace HartreeFock::Integrals
     // baked into coeff_product).
     // n_raise: 0..3; c[0] <= c[1] <= c[2] the raised centers (unused beyond
     // n_raise). out: out[0] with no raise, out[i] with one, out[3 i + j] with
-    // two, out[9 i + 3 j + k] with three.
+    // two, out[9 i + 3 j + k] with three. boys_scratch: caller-owned, reused
+    // across calls (one per thread).
+    //
+    // Two passes: T for every primitive quartet, one batched Boys call, then
+    // the accumulation. boys_batch is bitwise equal to boys_vec (and boys_vec
+    // to looped boys), and the accumulation order is unchanged, so the result
+    // is bitwise the per-quartet-call form's.
     inline void low_l_shell_eri(const HartreeFock::ShellPair &spAB,
                                 const HartreeFock::ShellPair &spCD,
                                 int n_raise, const int (&c)[3],
-                                std::array<double, 27> &out) noexcept
+                                std::array<double, 27> &out,
+                                std::vector<double> &boys_scratch)
     {
         const double two_over_sqrt_pi = 2.0 / std::sqrt(std::numbers::pi);
         out.fill(0.0);
 
+        const std::size_t n_quartets = spAB.primitive_pairs.size() * spCD.primitive_pairs.size();
+        const std::size_t width = static_cast<std::size_t>(n_raise) + 1;
+        boys_scratch.resize(n_quartets * (width + 1));
+        double *const Ts = boys_scratch.data();
+        double *const Fs = Ts + n_quartets;
+        {
+            std::size_t q = 0;
+            for (const auto &ab : spAB.primitive_pairs)
+                for (const auto &cd : spCD.primitive_pairs)
+                {
+                    const double delta = ab.zeta + cd.zeta;
+                    const double rho = ab.zeta * cd.zeta / delta;
+                    const double PQ[3] = {ab.center[0] - cd.center[0],
+                                          ab.center[1] - cd.center[1],
+                                          ab.center[2] - cd.center[2]};
+                    Ts[q++] = rho * (PQ[0] * PQ[0] + PQ[1] * PQ[1] + PQ[2] * PQ[2]);
+                }
+        }
+        HartreeFock::Lookup::boys_batch(std::span<const double>(Ts, n_quartets), n_raise,
+                                        std::span<double>(Fs, n_quartets * width));
+
+        std::size_t q = 0;
         for (const auto &ab : spAB.primitive_pairs)
         {
             for (const auto &cd : spCD.primitive_pairs)
@@ -58,14 +89,14 @@ namespace HartreeFock::Integrals
                 const double PQ[3] = {ab.center[0] - cd.center[0],
                                       ab.center[1] - cd.center[1],
                                       ab.center[2] - cd.center[2]};
-                const double T = rho * (PQ[0] * PQ[0] + PQ[1] * PQ[1] + PQ[2] * PQ[2]);
+                const double *const F = Fs + width * q++;
                 const double base = ab.coeff_product * cd.coeff_product *
                                     ab.prefactor * cd.prefactor *
                                     two_over_sqrt_pi * std::sqrt(rho);
 
                 if (n_raise == 0)
                 {
-                    out[0] += base * HartreeFock::Lookup::boys(0, T);
+                    out[0] += base * F[0];
                     continue;
                 }
 
@@ -80,8 +111,6 @@ namespace HartreeFock::Integrals
 
                 if (n_raise == 1)
                 {
-                    std::array<double, 2> F;
-                    HartreeFock::Lookup::boys_vec(T, F);
                     const double f0 = base * F[0], f1 = base * F[1] * s1;
                     for (int i = 0; i < 3; ++i)
                         out[i] += d1[i] * f0 + PQ[i] * f1;
@@ -93,8 +122,6 @@ namespace HartreeFock::Integrals
 
                 if (n_raise == 3)
                 {
-                    std::array<double, 4> F;
-                    HartreeFock::Lookup::boys_vec(T, F);
                     double th[4];
                     for (int m = 0; m < 4; ++m)
                         th[m] = base * F[m];
@@ -136,8 +163,6 @@ namespace HartreeFock::Integrals
                     continue;
                 }
 
-                std::array<double, 3> F;
-                HartreeFock::Lookup::boys_vec(T, F);
                 const double t0 = base * F[0], t1 = base * F[1], t2 = base * F[2];
 
                 double R0[3], R1[3];
@@ -185,7 +210,7 @@ namespace HartreeFock::Integrals
             for (int s = 0; s < 4; ++s)
                 for (int u = 0; u < r.L[s]; ++u)
                     c_[n_raise_++] = s;
-            low_l_shell_eri(*r.ab, *r.cd, n_raise_, c_, vals_);
+            low_l_shell_eri(*r.ab, *r.cd, n_raise_, c_, vals_, boys_);
             return true;
         }
 
@@ -216,6 +241,9 @@ namespace HartreeFock::Integrals
         int n_raise_ = 0;
         int c_[3] = {0, 0, 0};
         std::array<double, 27> vals_{};
+        // T and F per primitive quartet; a member, not thread_local: one
+        // kernel copy per thread (fused_fock.h), as HgpBlockKernel's scratch.
+        std::vector<double> boys_;
     };
 }
 

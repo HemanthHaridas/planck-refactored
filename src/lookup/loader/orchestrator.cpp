@@ -19,11 +19,14 @@ namespace HartreeFock
         {
             using BoysFn = double (*)(int, double);
             using BoysVecFn = void (*)(double, double *, std::size_t);
+            using BoysBatchFn = void (*)(const double *, std::size_t, int, double *);
 
             // Populated by initialize_boys_library(); read (never written)
             // by every boys()/boys_vec() call thereafter.
             BoysFn g_boys_fn = nullptr;
             BoysVecFn g_boys_vec_fn = nullptr;
+            // Optional (core v1.2.0+); null means boys_batch loops boys_vec.
+            BoysBatchFn g_boys_batch_fn = nullptr;
             void *g_library_handle = nullptr;
 
             std::string substitute_version(const std::string &url_template, const std::string &version)
@@ -91,6 +94,10 @@ namespace HartreeFock
                 g_library_handle = *handle;
                 g_boys_fn = reinterpret_cast<BoysFn>(*boys_sym);
                 g_boys_vec_fn = reinterpret_cast<BoysVecFn>(*boys_vec_sym);
+                // Optional: a v1.1.0 library (license) has no batched entry, and
+                // boys_batch then falls back to boys_vec, with the same values.
+                auto boys_batch_sym = resolve_symbol(*handle, "planck_boys_batch");
+                g_boys_batch_fn = boys_batch_sym ? reinterpret_cast<BoysBatchFn>(*boys_batch_sym) : nullptr;
                 return {};
             }
         }
@@ -213,6 +220,20 @@ namespace HartreeFock
         {
             assert(Loader::g_boys_vec_fn && "boys_vec() called before initialize_boys_library()");
             Loader::g_boys_vec_fn(x, out.data(), out.size());
+        }
+
+        void boys_batch(std::span<const double> x, int nmax, std::span<double> out) noexcept
+        {
+            assert(Loader::g_boys_vec_fn && "boys_batch() called before initialize_boys_library()");
+            assert(nmax >= 0 && out.size() >= x.size() * (static_cast<std::size_t>(nmax) + 1));
+            if (Loader::g_boys_batch_fn)
+            {
+                Loader::g_boys_batch_fn(x.data(), x.size(), nmax, out.data());
+                return;
+            }
+            const std::size_t width = static_cast<std::size_t>(nmax) + 1;
+            for (std::size_t i = 0; i < x.size(); ++i)
+                Loader::g_boys_vec_fn(x[i], out.data() + i * width, width);
         }
 
     } // namespace Lookup

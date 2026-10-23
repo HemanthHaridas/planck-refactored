@@ -1150,6 +1150,7 @@ if(BUILD_TESTING)
     # boys_vec vs scalar boys bitwise-equality gate.
     add_executable(planck-boys-vec
         ${CMAKE_SOURCE_DIR}/tests/boys_vec.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${LOOKUP_SRC}
     )
     target_include_directories(planck-boys-vec PRIVATE ${SRC_DIR})
@@ -2977,6 +2978,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-fock-accumulate
         COMMAND planck-fock-accumulate
+    )
+
+    add_test(
+        NAME planck-boys-vec
+        COMMAND planck-boys-vec
     )
 
     add_test(
