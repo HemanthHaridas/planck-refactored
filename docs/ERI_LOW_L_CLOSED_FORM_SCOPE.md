@@ -681,7 +681,7 @@ hot calls were in the per-block test, and a table took the build from
 | step | what | targets | bitwise? |
 |---|---|---|---|
 | R1 | closed-form readout as a flat, norm-folded per-component array filled in `prepare`; dense loop reads it directly | readout 2–12 %, part of digestion | yes |
-| R2 | Boys: fewer calls (P2 screening, a policy decision) or cheaper calls (a batched multi-T entry in the out-of-tree core) | Boys 9–32 % | P2 no; batched yes if the core is |
+| R2 | Boys: a batched multi-x entry in the out-of-tree core (next core release), resolved optionally by the loader; closed forms batch T per block, HGP per lane group. A probe measured 1.3–2.3× on the Boys evaluation, bitwise; scoped outside this repo. P2 (fewer calls) stays a separate policy decision | Boys 9–32 % | yes (batched); P2 no |
 | R3 | family sharing of T / Boys / prefactors across member blocks, *within* today's bra units (ket-side families, no B2.1 order); B2.2 proper only if this falls short | closed forms + Boys on cc / naphthalene | no |
 | partition | fixed accumulator partition, cyclic bins | determinism; naphthalene idle | no |
 | C5 | screened kernels in both block kernels (then dense too) | range-separated hybrids | screened only |

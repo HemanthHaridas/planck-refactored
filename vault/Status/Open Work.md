@@ -2004,7 +2004,7 @@ identify the path taken. Not required for correctness or performance.
     HGP VRR+HRR 49 % on cc-pVTZ, 25 % on 6-31G\*; idle <= 6 % (10 %
     naphthalene). B2.1 stays off (delete if unused), B2.3 dropped.
   - **Open, in order:** R1 closed-form readout as a flat array (in-tree),
-    R2 Boys calls (P2 policy, or a batched multi-T Boys entry), R3 ket-side
+    R2 a batched multi-x Boys entry (next core release, optional in the loader; probe 1.3-2.3x on the Boys evaluation, bitwise; scoped outside the repo), R3 ket-side
     family sharing within bra units (B2.2 proper only if short), the fixed
     partition, C5 (screened kernels in both block
     kernels; range-separated hybrids still take per-component HGP), D2a/D2b
