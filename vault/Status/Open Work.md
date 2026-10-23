@@ -1998,7 +1998,15 @@ identify the path taken. Not required for correctness or performance.
     four-thread gains were this imbalance: on the balanced schedule family
     units are only a one-thread Pople cost (+3.5-7.4 %), which B2.2 must repay.
     The fixed accumulator partition becomes cyclic bins (u mod 64).
-  - **Open, in order:** the fixed partition, B2.2-B2.3, C5 (screened kernels in both block
+  - **Re-profiled after W1 (2026-10-23); plan rebuilt from it.** Closed
+    forms + Boys are 41-66 % of the build except cc-pVTZ (22 %), Boys alone
+    18-32 % (out-of-tree core, one T per call); readout + digestion 15-30 %;
+    HGP VRR+HRR 49 % on cc-pVTZ, 25 % on 6-31G\*; idle <= 6 % (10 %
+    naphthalene). B2.1 stays off (delete if unused), B2.3 dropped.
+  - **Open, in order:** R1 closed-form readout as a flat array (in-tree),
+    R2 Boys calls (P2 policy, or a batched multi-T Boys entry), R3 ket-side
+    family sharing within bra units (B2.2 proper only if short), the fixed
+    partition, C5 (screened kernels in both block
     kernels; range-separated hybrids still take per-component HGP), D2a/D2b
     (shared-exponent families), P2 (ε screening, a policy decision), then
     total L > 12, then F3. D3 (RI-JK pair factors) is independent. T1

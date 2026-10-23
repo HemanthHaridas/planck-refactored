@@ -11,8 +11,9 @@ B2.1 (`66669cd5`, family-quartet units, default off), the `covers()` dense
 predicate, HGP's K < 3 blocks on `vrr_lanes<1>`, F4 redone in the SAD guess
 (`0c8a9fc7`), W1 (round-robin bra schedule, 1.10–1.97× at four threads). Measured and declined: D1c (electron-transfer recurrence),
 5b (a class-batched scheduler). Measured, not landed: D2a/B0 (shared-exponent
-families). Open, in order: the fixed accumulator partition, B2.2–B2.3,
-C5, P2, total L > 12, F3; D3 is independent, K2 conditional, C4b
+families). Open, in order (re-profiled 2026-10-23): R1 (closed-form readout),
+R2 (Boys calls), R3 (ket-side family sharing), the fixed accumulator
+partition, C5, total L > 12, F3; D3 is independent, K2 conditional, C4b
 deprioritised. When those land or are abandoned, rewrite this as an answer.
 
 ## Answer so far
@@ -151,6 +152,37 @@ Rules learned the hard way:
   default sweep for minutes with no matching output. Use `${=f}`.
 
 ## Where the time goes
+
+**Re-profile after W1 (2026-10-23), the basis for the open list.** `sample`
+self time over 10 s of `--profile` production builds, buckets by symbol,
+one and four threads (the shares barely move between them):
+
+| phase | 8 H2O 6-31G | 4 H2O 6-31G\* | 4 H2O cc-pVDZ | 1 H2O cc-pVTZ | naphthalene D2h |
+|---|---|---|---|---|---|
+| closed-form kernel (`low_l_shell_eri`) | 34–35 % | 23–25 % | 35 % | 13 % | 33–38 % |
+| Boys (out-of-tree core, one T per call) | 32 % | 18–19 % | 30–31 % | 9–10 % | 28–31 % |
+| closed-form readout (`value`) | 12 % | 9 % | 6 % | 2 % | 6–7 % |
+| digestion loop (`dense_body`) | 18 % | 17 % | 9 % | 19–20 % | 16–17 % |
+| HGP VRR (`vrr_lanes`) | 2 % | 17–18 % | 11–12 % | 33–36 % | 3–4 % |
+| HGP HRR / finish | 0 % | 7–8 % | 4 % | 12–13 % | 1 % |
+| HGP prepare (incl. `vector::resize`) | 0 % | 2–3 % | 2 % | 3–4 % | 0 % |
+| skeleton weight | — | — | — | — | 2–3 % |
+| idle at four threads | 3 % | 4 % | 2 % | 6 % | 10 % |
+
+- **The closed forms and Boys are the build** on sp, Pople-d and cc-pVDZ
+  bases (41–66 %). Every Boys call crosses into the out-of-tree core for one
+  T. Members of a family quartet share primitive pairs and so share T, the
+  Boys values and the prefactors; that, not the loop order, is what B2.2
+  would buy.
+- **The readout is avoidable overhead.** `ClosedFormBlockKernel::value`
+  re-decodes each component's Cartesian axes on every call (a loop over four
+  views to build the raise slot) and is called out of line through a
+  weak-symbol stub. HGP's readout is one indexed load. Readout plus
+  digestion is 15–30 %, the largest in-tree share outside the kernels.
+- **HGP matters on cc-pVTZ (49 %) and 6-31G\* (25 %)**, already laned.
+- **Idle is small after W1**, except naphthalene (10 %), where
+  `density_has_symmetry` and `symmetrize_over_ops` run serially.
+
 
 Self time of the production build after D1 (before 2b and K1), one thread,
 ~6 000 `sample` frames per fixture. K1 removed most of the "fused loop
@@ -646,16 +678,17 @@ hot calls were in the per-block test, and a table took the build from
 
 ## Open, in order
 
-| step | what | bitwise? |
-|---|---|---|
-| partition | fixed accumulator partition, cyclic bins | no; lands alone |
-| B2.2–B2.3 | closed-form families, then a probe decides HGP families | no; each lands alone |
-| C5 | screened kernels in both block kernels (then dense too) | screened kernels only |
-| P2 | quartet-level primitive screening | no (~1e-12); lands alone |
-| L > 12 | block kernel above total L = 12 | — |
-| F3 | full point-group skeleton from the block kernels | yes, per engine |
-| D3 | RI-JK pair factors (independent) | per the BLAS doc |
-| K2 | batches across ket blocks (conditional) | no |
+| step | what | targets | bitwise? |
+|---|---|---|---|
+| R1 | closed-form readout as a flat, norm-folded per-component array filled in `prepare`; dense loop reads it directly | readout 2–12 %, part of digestion | yes |
+| R2 | Boys: fewer calls (P2 screening, a policy decision) or cheaper calls (a batched multi-T entry in the out-of-tree core) | Boys 9–32 % | P2 no; batched yes if the core is |
+| R3 | family sharing of T / Boys / prefactors across member blocks, *within* today's bra units (ket-side families, no B2.1 order); B2.2 proper only if this falls short | closed forms + Boys on cc / naphthalene | no |
+| partition | fixed accumulator partition, cyclic bins | determinism; naphthalene idle | no |
+| C5 | screened kernels in both block kernels (then dense too) | range-separated hybrids | screened only |
+| L > 12, F3, D3, K2, C4b | as before | — | — |
+
+B2.1 stays default-off; delete it if neither R3 nor B2.2 needs the family
+order. B2.3 (HGP families) is dropped: lanes took its work (0.48–1.03×).
 
 **W1 — balance the bra loop (rescoped in 2026-10-23, first).** The dense
 traversal is a triangle: bra p visits every ket q ≥ p. `schedule(static)`
