@@ -163,24 +163,6 @@ namespace
         return dev;
     }
 
-    // Project a density onto its group-invariant part with the contravariant law
-    // (see density_symmetry_deviation): P <- (1/|G|) Σ_R O_R P O_Rᵀ. Used on the SAD
-    // guess, whose idempotent projection keeps the top n_occ natural orbitals and so
-    // splits a degenerate set (e, t) straddling that cutoff (NH3/6-31G* 8.0e-5,
-    // benzene 2.6e-3). The raw SAD density is already invariant; only the split
-    // breaks it. Trace(P S) is preserved because S is invariant (O_Rᵀ S O_R = S).
-    // The result is no longer idempotent, which an initial guess does not need.
-    Eigen::MatrixXd symmetrize_density(const Eigen::MatrixXd &P,
-                                       const HartreeFock::Symmetry::GroupOperations &ops)
-    {
-        if (!ops.valid || ops.operations.empty())
-            return P; // the iteration-1 deviation check reports this case
-        Eigen::MatrixXd acc = Eigen::MatrixXd::Zero(P.rows(), P.cols());
-        for (const auto &op : ops.operations)
-            acc.noalias() += op.matrix * P * op.matrix.transpose();
-        return acc / static_cast<double>(ops.operations.size());
-    }
-
     Eigen::MatrixXd make_level_shift_matrix(
         const Eigen::MatrixXd &S,
         const Eigen::MatrixXd &density,
@@ -449,8 +431,6 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
         if (!sad_res)
             return std::unexpected("RHF SAD guess failed: " + sad_res.error());
         P = std::move(*sad_res);
-        if (calculator._use_full_symmetry && sao_active)
-            P = symmetrize_density(P, calculator._group_operations);
     }
     else if (sao_active)
     {
@@ -1142,11 +1122,6 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             return std::unexpected("UHF SAD guess failed: " + sad_res.error());
         Pa = std::move(sad_res->first);
         Pb = std::move(sad_res->second);
-        if (calculator._use_full_symmetry && sao_active_uhf)
-        {
-            Pa = symmetrize_density(Pa, calculator._group_operations);
-            Pb = symmetrize_density(Pb, calculator._group_operations);
-        }
     }
     else
     {
@@ -1998,11 +1973,6 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
             return std::unexpected("ROHF SAD guess failed: " + sad_res.error());
         Pa = std::move(sad_res->first);
         Pb = std::move(sad_res->second);
-        if (calculator._use_full_symmetry && sao_active)
-        {
-            Pa = symmetrize_density(Pa, calculator._group_operations);
-            Pb = symmetrize_density(Pb, calculator._group_operations);
-        }
     }
     else
     {
