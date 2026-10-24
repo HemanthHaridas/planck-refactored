@@ -2024,9 +2024,16 @@ identify the path taken. Not required for correctness or performance.
     the zero/resize share was `vector::resize` re-zeroing regrown tails;
     `grow_to` keeps a high-water mark. Bitwise, zero/resize <= 0.1 %,
     1.03-1.04x on 6-31G\* and cc-pVTZ, neutral (+-1 %) elsewhere.
-  - **Open, in order (rescoped from that profile):** R3 ket-side
-    family sharing within bra units, probe first, land at >= 1.10x on
-    cc-pVDZ or naphthalene; S2 thread the serial symmetric phases
+  - **R3 declined at the probe (2026-10-24):** ket-side-only family
+    sharing (`--family ... bra`) is 0.90-1.13x on the closed forms
+    (cc-pVDZ 1.13x, naphthalene 0.95x), ~1.07x / ~0.98x of the build at
+    best, under the 1.10x gate: fixing the bra cuts the pass reduction from
+    5.91x to 2.31x on cc-pVDZ. Two-sided families (B2.2) are 1.58x on
+    cc-pVDZ's closed forms, and the family order costs only +-1 % on cc
+    bases.
+  - **Open, in order (rescoped from that profile):** B2.2 on cc bases
+    (decide first: a basis-dependent traversal, <= ~1.29x on cc-pVDZ,
+    ~1.04-1.08x on Pople after the order's cost); S2 thread the serial symmetric phases
     (`density_has_symmetry`, `symmetrize_over_ops`, naphthalene idle 11 %);
     R1b readout from a per-build per-AO decode table with `value()` kept lazy
     (conditional, >= 1.03x on 8 H2O); the fixed partition; C5 (screened

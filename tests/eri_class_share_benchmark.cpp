@@ -393,7 +393,9 @@ namespace
         }
     }
 
-    void report_families(const BuildSetup &s, bool within_l)
+    // bra_fixed (R3): each bra member is its own one-member family, so only the
+    // ket side shares; the member quartets visited are the same.
+    void report_families(const BuildSetup &s, bool within_l, bool bra_fixed = false)
     {
         using namespace HartreeFock;
         using namespace HartreeFock::Integrals;
@@ -513,6 +515,28 @@ namespace
                 fps.push_back(std::move(fp));
             }
 
+        std::vector<FamPair> singles;
+        std::vector<std::size_t> bra_fam; // family pair each bra came from
+        if (bra_fixed)
+            for (std::size_t P = 0; P < fps.size(); ++P)
+                for (const Member &mem : fps[P].m)
+                {
+                    FamPair one;
+                    Member m1 = mem;
+                    m1.w.clear();
+                    for (std::size_t k = 0; k < fps[P].u.size(); ++k)
+                        if (mem.w[k] != 0.0)
+                        {
+                            one.u.push_back(fps[P].u[k]);
+                            m1.w.push_back(mem.w[k]);
+                        }
+                    one.Lmax = m1.LA + m1.LB;
+                    one.m.push_back(std::move(m1));
+                    singles.push_back(std::move(one));
+                    bra_fam.push_back(P);
+                }
+        const std::vector<FamPair> &bras = bra_fixed ? singles : fps;
+
         const auto request = [&](const Member &x, const Member &y)
         {
             BlockEriRequest r;
@@ -564,10 +588,10 @@ namespace
                             dm = std::max(dm, std::abs(x - y) / std::max(1.0, std::abs(x)));
                         }
         };
-        for (std::size_t P = 0; P < fps.size(); ++P)
-            for (std::size_t Qi = P; Qi < fps.size(); ++Qi)
+        for (std::size_t P = 0; P < bras.size(); ++P)
+            for (std::size_t Qi = bra_fixed ? bra_fam[P] : P; Qi < fps.size(); ++Qi)
             {
-                const FamPair &fa = fps[P], &fc = fps[Qi];
+                const FamPair &fa = bras[P], &fc = fps[Qi];
                 const std::size_t na = fa.m.size(), nc = fc.m.size(), nm = na * nc;
                 ++nfq;
                 const auto ltot = [&](std::size_t i, std::size_t j) { return fa.m[i].LA + fa.m[i].LB + fc.m[j].LA + fc.m[j].LB; };
@@ -844,8 +868,8 @@ namespace
         std::size_t nmem = 0;
         for (const auto &F2 : fam)
             nmem += F2.size();
-        std::printf("  families (%s): %zu families over %zu shells, %zu family quartets\n",
-                    within_l ? "within L" : "across L", fam.size(), nmem, nfq);
+        std::printf("  families (%s%s): %zu families over %zu shells, %zu family quartets\n",
+                    within_l ? "within L" : "across L", bra_fixed ? ", bra fixed" : "", fam.size(), nmem, nfq);
         const char *nm2[2] = {"L_tot <= 3 (closed-form family)", "L_tot >= 4 (HGP family)    "};
         for (int h = 0; h < 2; ++h)
             std::printf("    %s: %zu member blocks, passes %.2fx fewer, members %.3f s, family %.3f s (%.2fx), max rel diff %.1e\n",
@@ -1315,13 +1339,16 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    // --family nwater basis [within]: the D2a shared-exponent family probe.
-    if ((argc == 4 || argc == 5) && std::string(argv[1]) == "--family")
+    // --family nwater basis [within] [bra]: the D2a shared-exponent family probe
+    // (bra: R3, ket-side sharing only).
+    if (argc >= 4 && argc <= 6 && std::string(argv[1]) == "--family")
     {
         const BuildSetup s = prepare({std::atoi(argv[2]), argv[3]});
-        const bool within = argc == 5 && std::string(argv[4]) == "within";
-        report_families(s, within); // warm-up
-        report_families(s, within);
+        bool within = false, bra = false;
+        for (int a = 4; a < argc; ++a)
+            within = within || std::string(argv[a]) == "within", bra = bra || std::string(argv[a]) == "bra";
+        report_families(s, within, bra); // warm-up
+        report_families(s, within, bra);
         return 0;
     }
 

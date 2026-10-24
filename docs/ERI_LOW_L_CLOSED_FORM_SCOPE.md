@@ -11,12 +11,12 @@ When the open steps land or are abandoned, rewrite this as an answer.
 - **Landed:** C0, C1, C2–C3.5, H1, L1–L3c, P1, S1, D1, F1, F2, F4, T1, 2b,
   K1, K1.4, B2.1 (default off), W1, core v1.2.0, R2 (batched Boys
   calls; Planck requires core v1.2.0) and grow-only scratch.
-- **Open, in order:** R3 (ket-side family sharing),
+- **Open, in order:** B2.2 on cc bases (decide first; see Families),
   S2 (serial symmetric phases), R1b (conditional), the fixed accumulator partition, C5
   (screened kernels), P2 (primitive screening, a policy call), total L > 12,
   F3. D3 is independent, K2 conditional, C4b deprioritised.
-- **Declined or superseded:** D1c, 5b, B1, B2.2 (by R3), B2.3, R1
-  (measured 0.92–1.00× slower).
+- **Declined or superseded:** D1c, 5b, B1, B2.3, R1
+  (measured 0.92–1.00× slower), R3 (probe 0.90–1.13× on the closed forms).
 
 ## Answer so far
 
@@ -65,8 +65,9 @@ D1 ~1.5×, 2b 1.07×, K1.4 1.32×, R2 1.11× (1.454 → 0.855 → 0.702 → 0.59
   cube.
 - **Inside the kernels, what is left is per-primitive-quartet overhead.** A
   cheaper recurrence (D1c) or a better layout does not help; several primitive
-  quartets per pass (lanes, 2b) and cheaper or shared per-quartet work (R2,
-  R3) do.
+  quartets per pass (lanes, 2b) and cheaper per-quartet work (R2) do.
+  Shared per-quartet work pays only when both sides share (B0 two-sided);
+  ket-side sharing alone (R3) did not.
 - **Outside the kernels, the cost was digesting one component at a time.**
   Digesting each block densely (K1) gave 1.11–1.22×, under the skeleton scheme
   (K1.4) 1.32×.
@@ -444,7 +445,7 @@ the build. cc-pVTZ's K = 1 blocks are 23 % of HGP kernel time but ~6 % of its
 primitive quartets: their cost is per block, which batching does not touch
 while each block is digested component by component (K1 landed on that).
 
-### Families: D2a, B0, B1, B2 (B2.1 landed off; B2.2 superseded by R3; B2.3 dropped)
+### Families: D2a, B0, B1, B2, R3 (B2.1 landed off; B2.2 open on cc bases; B2.3 and R3 dropped)
 
 A family is a set of shells on one atom whose exponent sets nest (cc general
 contractions within L, Pople SP across L). A family quartet runs one primitive
@@ -466,10 +467,30 @@ member's `finish()`).
   imbalance W1 fixed. A first B2.1 cut was +50 % / +84 % on 8 H2O until a
   unit-level Schwarz bound removed ~1.3 M fully screened units.
 - **Fate.** B2.1 is in the tree behind `family_units` (off); delete it if
-  neither R3 nor a later B2.2 needs the order. B2.2 (closed-form family
-  kernel in family order) is superseded by R3, which shares the same work
-  without the order. B2.3 (HGP families) is dropped. B1 remains a git stash
+  B2.2 does not land. B2.3 (HGP families) is dropped. B1 remains a git stash
   ("B1: fused loop in family-quartet order") for its history only.
+- **R3, ket-side sharing only (declined at the probe, 2026-10-24).** Fixing
+  the bra keeps today's order but discards most of the merge. `--family
+  nwater basis bra` makes each bra member its own family (same member
+  quartets, values within 7.2e-16). Closed-form rows, one thread:
+
+  | fixture | two-sided (B0) | bra fixed (R3) | passes fewer, two-sided → bra fixed | closed forms + Boys | R3 build, Amdahl |
+  |---|---|---|---|---|---|
+  | 8 H2O / 6-31G | 1.22× | 1.06× | 2.29× → 1.51× | 61 % | ~1.03× |
+  | 4 H2O / 6-31G\* | 1.04× | 0.90× | 2.17× → 1.45× | 38 % | ~0.96× |
+  | 4 H2O / cc-pVDZ | 1.58× | 1.13× | 5.91× → 2.31× | 61 % | ~1.07× |
+  | 1 H2O / cc-pVTZ | 1.56× | 1.08× | 5.88× → 2.06× | 20 % | ~1.01× |
+  | naphthalene / 6-31G | 1.20× | 0.95× | 3.61× → 1.79× | 62 % | ~0.98× |
+
+  Below the ≥ 1.10× gate on cc-pVDZ and naphthalene, and the Amdahl figure is
+  an upper bound (the probe skips screening and grouping overhead), so R3
+  stopped there.
+- **B2.2 is back as the open question, for cc bases only.** Two-sided, the
+  closed-form family pass is 1.58× on cc-pVDZ (≤ ~1.29× of the build), and
+  the family order costs ±1 % on cc bases (B2.1 above). On Pople bases the
+  order's +3.5–7.4 % leaves ~1.04–1.08×. Decide whether a basis-dependent
+  traversal (family order on cc bases only) is worth carrying before
+  building it.
 
 ### R1 — the closed-form readout as a flat array (declined)
 
@@ -606,7 +627,7 @@ kept only the identity operation, and the first K1.4 "C2v" gate passed with
 
 | step | what | targets | bitwise? |
 |---|---|---|---|
-| R3 | family sharing of T / Boys / prefactors across a bra unit's ket blocks, no family order | closed forms + Boys: 38–62 % (20 % cc-pVTZ) | no |
+| B2.2 | closed-form family kernel in family-quartet order, cc bases (decide first) | closed forms + Boys 61 % on cc-pVDZ | no |
 | S2 | thread the serial symmetric phases (`density_has_symmetry`, `symmetrize_over_ops`) in fixed order | idle 11 % at four threads, naphthalene | yes |
 | R1b | closed-form readout from a per-build decode table, `value()` still lazy (conditional) | readout 2–13 % | yes |
 | partition | fixed accumulator partition, cyclic bins | determinism across thread counts | no |
@@ -653,7 +674,7 @@ outside this repo:
    135/139.
 4. **Profiled at HEAD** (see "Where the time goes"): Boys is 14–23 %
    (7 % on cc-pVTZ), nearly all evaluation, so further Boys gains need
-   fewer evaluations (R3's sharing, P2) or a cheaper evaluation in the
+   fewer evaluations (family sharing, P2) or a cheaper evaluation in the
    core, not more batching. Sizing the scratch is now its own step.
 
 **Scratch, grow-only (landed `0e3e074d`).** Zeroing and `vector::resize`
@@ -670,20 +691,6 @@ against HEAD: 1.030× / 1.041× on 6-31G\* and 1.043× / 1.041× on cc-pVTZ
 seven on the first two), so the removed share converts to time only where
 HGP runs.
 
-**R3 — family sharing within today's bra units (not started).** For a fixed
-bra block, the ket blocks of one shared-exponent family share their primitive
-pairs, hence their T values, Boys values and prefactors. Group each bra
-unit's kets by family and evaluate that shared work once per family, inside
-K1's traversal: no family order, so no Pople cost, but only the ket side is
-shared. A family's T values form one batch for R2. First step: a bra-fixed
-mode in the `--family` probe against W1 + R2 production; land only at
-≥ 1.10× on cc-pVDZ or naphthalene, else record and stop. B2.2 in family order
-returns only if R3 falls short and the order can be repaid. Target at HEAD:
-closed forms + Boys are 38–62 % of the build except cc-pVTZ (20 %); the D0
-merge factors (within L 4.8–5.1× on cc bases, ~1.0× on Pople) bound what
-ket-side sharing can reach, so expect the gain on cc-pVDZ and little on
-Pople unless sharing crosses L.
-
 **S2 — serial symmetric phases.** At four threads naphthalene idles 11 %
 while `density_has_symmetry` and `symmetrize_over_ops` run on one thread.
 Both are independent per matrix element: split them into disjoint row slabs
@@ -691,7 +698,7 @@ Both are independent per matrix element: split them into disjoint row slabs
 four threads; check the idle is those two functions with a four-thread
 sample before writing it.
 
-**R1b — the readout from a per-build table (conditional, after R3).** R1
+**R1b — the readout from a per-build table (conditional, after B2.2).** R1
 lost because it moved the decode into `prepare` (inlined into the lazy loop,
 and filling unread components). The decode depends only on each AO's
 Cartesian exponents, not the block: precompute per AO its axis code and norm
@@ -746,7 +753,7 @@ twice per iteration, ~61 % of the RI Fock build (`docs/ERI_FOCK_BLAS_SCOPE.md`).
 
 **K2 (conditional).** Batches of same-class ket blocks for a fixed bra unit:
 lanes across kets, bra-side work hoisted, the HRR as array work, digestion as
-small matrix products. Only if a census after R3 shows per-block fixed
+small matrix products. Only if a census after B2.2 shows per-block fixed
 costs (setup, HRR at 10–16 % of the HGP kernel) still worth the largest
 restructure here.
 
