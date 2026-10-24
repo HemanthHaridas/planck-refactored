@@ -402,6 +402,18 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Batched Boys calls and grow-only kernel scratch in the fused Fock loop
+  (R2 `102f1d01`, `13c60826`, `0e3e074d`, 2026-10-23/24).** The closed forms
+  and the HGP block kernel make one batched Boys call per block / lane group
+  (core v1.2.0, now required: a v1.1.0 license fails at load naming
+  v1.2.0): 1.01-1.11x at one thread, 1.03-1.11x at four, not bitwise only
+  by g++ contracting one multiply-add (<= 1.1e-16). Block-kernel scratch is
+  grow-only (`grow_to`), removing per-block `vector::resize` and re-zeroed
+  tails (2.4-4.7 % of samples -> <= 0.1 %): bitwise, 1.03-1.04x on
+  6-31G\* / cc-pVTZ, neutral elsewhere. R1 (precomputed closed-form readout)
+  was measured slower and declined. Record:
+  `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
+
 - **Dense digestion per block in the fused Fock loop (K1 `5fd08496`, K1.4
   `f2849647`, 2026-10-22).** Instead of running every component through the
   canonical filter, orbit dedup and up to eight scattered writes, the loop

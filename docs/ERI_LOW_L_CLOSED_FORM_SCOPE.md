@@ -214,7 +214,8 @@ differ by more than a point:
 | skeleton weight | — | — | — | — | 3 % |
 | idle at four threads | 1 % | 5 % | 3 % | 6 % | 11 % |
 
-It matches the uncommitted-R2 profile to about a point.
+It matches the uncommitted-R2 profile to about a point. The scratch row has
+since gone to ≤ 0.1 % (grow-only scratch, `0e3e074d`).
 
 Boys fell from 18–32 % to 13–24 % (7 % on cc-pVTZ), nearly all of it now the
 core's evaluation itself: batching removed the call overhead, not the work.
@@ -319,9 +320,13 @@ fused build (F1 numbers predate K1).
 | B2.1 | `66669cd5` | family-quartet units in the dense traversal (`family_units`, off) | — (a cost; see below) | exactly-once counting gate; 2 mutations |
 | W1 | `ffc44caf` | contiguous-range thread schedule on a triangular loop | 1.10–1.97× at four threads | `planck-fock-accumulate` at 1/4/8 threads |
 | core v1.2.0 | `planck-boys-core` `aa44c44` | single-x evaluation overhead; adds a batched entry | ~1.01–1.02× on HEAD's builds | bitwise against v1.1.0 through the C ABI |
+| R2 | `102f1d01` | one Boys call per primitive quartet / lane → one batched call per block / lane group | 1.01–1.11× (1 thread), 1.03–1.11× (4) | tolerance, ≤ 1.1e-16 (g++ FMA contraction) |
+| loader | `13c60826` | the untested `boys_vec` fallback: core v1.2.0 is required, a v1.1.0 license fails at load | — | `planck-boys-vec`; v1.1.0 license checked by hand |
+| scratch | `0e3e074d` | per-block `vector::resize` and re-zeroed regrown tails | 1.03–1.04× on 6-31G\* / cc-pVTZ, ±1 % elsewhere | bitwise, 28 fingerprints |
 
 Suites after W1 and after R2's callers: smoke 43/45, extended 135/139 (the
-known rccsdt routing cases). Details worth keeping:
+known rccsdt routing cases). After the loader and scratch commits: smoke
+43/45 (same two); extended not re-run. Details worth keeping:
 
 - **Closed forms (C2–C3.5).** `low_l_shell_eri` treats a quartet as up to
   three *raises* (center, axis) in center order. Per primitive quartet, with
