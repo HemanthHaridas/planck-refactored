@@ -2299,10 +2299,15 @@ multiply:
 | HGP block kernel for total \(L \ge 4\) (next subsection) | ~1.5× | → ~0.13 s |
 | several primitive quartets per VRR pass (lanes) | 1.05× | → 0.129 s |
 | digest each block densely (§ "Digesting a whole block at once") | 1.14× | → 0.113 s |
+| one batched Boys call per block instead of one per primitive quartet | 1.05× | → 0.108 s |
+| grow-only kernel scratch (no per-block `resize`) | ~1.00× | → 0.105 s |
 
-That is about 13× overall. On d-containing 6-31G\* the closed forms alone
+That is about 14× overall. On d-containing 6-31G\* the closed forms alone
 gave about 2.3×, because the classes they cover are a smaller share of its
-build; the HGP block kernel then took it to about 11× too (4.9× on its own).
+build; the HGP block kernel (4.9× on its own) and the later steps took it to
+about 18×. The grow-only scratch is worth 1.03–1.04× there and on cc-pVTZ,
+where the HGP block kernel's buffers change size from block to block, and
+nothing measurable on 8 water.
 The gain always depends on how much of the build the covered classes account
 for.
 
@@ -2314,7 +2319,13 @@ for.
 - *Look for the cheap fix next to the hot frame.* The HGP seed made one Boys
   call per order through the loader's indirect call (6.8 % *self* time in the
   wrapper alone). One `boys_vec` call does the same work, bitwise-identically.
-  OS had already made that change; HGP and the RI kernels never got it.
+  OS had already made that change; HGP and the RI kernels never got it. The
+  same idea one level up, one `boys_batch` call for all of a block's
+  primitive quartets (core v1.2.0, now required), gave another 1.01–1.11×.
+- *A share is not a promise.* Boys was 9–32 % of the build, and a 1.3–2.3×
+  faster core plus batching realized only 1.03–1.13×: what remains is the
+  core's evaluation itself. Scratch zeroing was 3.5 % of 8 water, and
+  removing it bought nothing there.
 - *Predict before measuring, and say where the prediction came from.* Every
   step was projected from the class shares beforehand. When a projection was
   wrong (one table row had misread the class data) the measurement exposed
@@ -2554,9 +2565,9 @@ one body served every mode. It gave 1.09–1.18× against the census's
 | 1 H2O / cc-pVTZ | 0.092 s | 0.076 s | 1.22× | 1.09× |
 
 The four-thread drop on cc-pVTZ is load imbalance. Visiting \(p \le q\) gives
-the early bra pairs more kets than the late ones, and a single water has few
-pairs to spread. Grouping the work by shared-exponent families balances it;
-that change waits for the families themselves.
+the early bra pairs more kets than the late ones, and contiguous chunks hand
+the first thread most of the triangle. The schedule fixed it, not the
+families once expected to (§ "Threading").
 
 **With point-group symmetry.** In the skeleton scheme (§ "Symmetry inside the
 fused loop") each component of a dense block carries the skeleton weight of
@@ -2617,35 +2628,57 @@ Implementation: `src/integrals/fused_fock.h` (`dense_digest`, the build-level
 predicate, `dense_body`), `tests/fock_accumulate.cpp` (`check_dense_digest`),
 `tests/eri_class_share_benchmark.cpp` (`--k1`).
 
-#### Threading: why the reduction order is fixed
+#### Threading: the schedule and the partition of work
 
-The accumulations into \(\mathbf F\) are **read-modify-write**, unlike the
-store-only scatter of the tensor build. That difference matters. A store-only
-scatter is order-independent — every writer stores the same value, so the result
-is bitwise-identical no matter how threads interleave. A summation is not:
-floating-point addition is not associative, so summing partials in completion
-order makes the result drift with thread count.
+**A triangle needs a cyclic schedule.** Bra pair \(p\) visits every ket
+\(q \ge p\), so the work per bra falls linearly. Contiguous chunks
+(`schedule(static)`) handed the first of four threads
+\(1 - (3/4)^2 = 44\,\%\) of it, a 2.29× ceiling, and that is what four
+threads measured. Dealing the bras out round-robin, one at a time, spreads
+the long and short rows evenly: 1.10–1.97× at four threads for one changed
+line, and 3.4–3.7× scaling from one thread.
 
-Planck therefore gives each thread its own \(\mathbf G\) partial and sums the
-partials in **fixed thread-index order**, under `schedule(static)`. Never `omp
-atomic`, never `omp critical`, never `schedule(dynamic)` — each of those
-makes the result change from run to run. This is not a hypothetical concern:
-it is exactly the bug that produced the historical \(\sim10^{-10}\) jitter in
-the DFT XC grid reduction.
+**The reduction must be in a fixed order.** The accumulations into
+\(\mathbf F\) are **read-modify-write**, unlike the store-only scatter of
+the tensor build. A store-only scatter is order-independent: every writer
+stores the same value, so the result is bitwise-identical no matter how
+threads interleave. A summation is not: floating-point addition is not
+associative, so summing partials in completion order makes the result drift.
+Never `omp atomic`, never `omp critical`. That is exactly the bug that
+produced the historical \(\sim10^{-10}\) jitter in the DFT XC grid
+reduction.
 
-A fixed summation order is **necessary but not sufficient**, though. It makes
-a run reproducible *at a given thread count*. But with `schedule(static)` the
-set of bra pairs each thread owns, and so the set of terms in each partial,
-depends on how many threads there are. Change `OMP_NUM_THREADS` and the
-partials hold different subsets, so their sums round differently. Measured
-on CO\(_2\)/6-31G\* direct: all ten printed Hartree digits agree between 1 and
-4 threads, but the DIIS residuals and the last digit of the kcal/mol energy
-do not. For results independent of the thread count, the *partition* of
-work into accumulators must itself be fixed. One way is to key each
-partial on a fixed function of the bra index (a fixed number of bins, each
-one chunk of a `schedule(static, chunk)`), not on the thread that happened to
-run it. That is how the FCI sigma build achieves it. The fused Fock loop
-has not been changed yet.
+**A fixed summation order is necessary but not sufficient.** The first
+version gave each *thread* its own \(\mathbf G\) partial and summed them in
+thread-index order. That is reproducible at a given thread count, but the set
+of bras each thread owns, and so the set of terms in each partial, depends on
+how many threads there are. Change `OMP_NUM_THREADS` and the partials round
+differently. Measured on CO\(_2\)/6-31G\* direct: all ten printed Hartree
+digits agreed between 1 and 4 threads, but the DIIS residuals and the last
+digit of the kcal/mol energy did not.
+
+What must be fixed is the **partition of work into accumulators**, not just
+the order they are summed. The loop now keys each partial on a *bin*, a fixed
+function of the bra index (bra \(\bmod\) \(n_\text{bins}\)); each bin
+holds its bras in increasing order, and the merge sums the bins element by
+element in bin order. \(n_\text{bins}\) depends on \(n_b\) alone (64,
+fewer once \(64\,n_b^2\) doubles pass 256 MB per output, at least 8), never
+on the thread count. Now \(\mathbf G\) is bitwise identical at 1, 2, 4 and
+8 threads. This is the same rule the FCI sigma build and FCIQMC follow.
+
+**Determinism then frees the schedule.** Once a bin's result does not depend
+on which thread computes it, the bins can be handed out dynamically
+(`schedule(dynamic, 1)` over bins) without losing anything. That mattered
+under symmetry: the skeleton scheme skips work unevenly, and with a static
+deal three of four threads waited 10–17 % at the loop's closing barrier on
+naphthalene. Dynamic bins gave 1.06× there at four threads. The bin count is
+a trade: 16 or 32 bins balance worse, and 128 bins cost 1.4–2.2 % at one
+thread in zeroing and merging partials.
+
+The gate is `check_thread_count_invariance` in `planck-fock-accumulate`: the
+per-component path and the dense path (restricted and unrestricted) must give
+the same bits at every thread count. Tying the bin count to the thread count,
+the old behaviour in another form, fails all three.
 
 #### MPI distribution
 
@@ -9034,7 +9067,7 @@ driver.cpp
 | Point group detection and SAO blocking | Complete |
 | MO irrep labeling | Complete |
 | Full point-group ERI reduction (direct SCF, RHF/UHF) | Complete (Cartesian and spherical-harmonic basis; petite list + skeleton-Fock symmetrization; OpenMP + Schwarz screened; metric-correct spherical \(\mathbf O_R\); validated through \(d\)-shells, C2v→C3v→Td) |
-| Memory-direct fused Fock build | Complete (one shared quartet loop for OS / HGP / Rys / Auto; contracts each canonical quartet straight into \(\mathbf F\), so no \(n_b^4\) tensor is ever allocated; block-level Schwarz prescreen; handles integral symmetry natively; OpenMP with a fixed-order reduction, so it is bitwise thread-count-invariant) |
+| Memory-direct fused Fock build | Complete (one shared quartet loop for OS / HGP / Rys / Auto; contracts each canonical quartet straight into \(\mathbf F\), so no \(n_b^4\) tensor is ever allocated; block-level Schwarz prescreen; handles integral symmetry natively; OpenMP over a fixed partition of the work into 64 bins, scheduled dynamically and summed in fixed order, so it is bitwise thread-count-invariant) |
 | MPI-distributed direct SCF (`planck-mpi`) | Complete (bra-triangle stripe over the fused Fock loop, one \(n_b^2\) Allreduce per iteration; unified front end dispatching to both HF and DFT; bitwise-identical to the serial build, gated by `water_rhf_mpi_smoke` and `water_dft_mpi_smoke`). Build with `-DBUILD_MPI=ON` |
 | Python front end | Complete (`python/planck.py`; drives either binary and returns a results dict parsed from the binary's own `--json` dump, not from scraping the log) |
 | RMP2 and UMP2 energy | Complete |
