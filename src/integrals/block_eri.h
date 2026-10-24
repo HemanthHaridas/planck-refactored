@@ -2,7 +2,7 @@
 //
 // A block kernel evaluates every Cartesian component of one shell quartet
 // from a single primitive pass; the loop reads the components it needs out of
-// it (docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md, step D1). The contract:
+// it (docs/ERI_SHELL_QUARTET_FOCK_BUILD.md, step D1). The contract:
 //
 //   bool   prepare(const BlockEriRequest &)   // false: class not handled
 //   double value(ca, cb, cc, cd) const        // component (ca,cb|cc,cd)

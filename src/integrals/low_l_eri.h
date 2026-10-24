@@ -17,7 +17,7 @@
 // The per-component engines repeat the primitive loop (one Boys call and one
 // prefactor product per primitive quartet) once per Cartesian component. Here
 // one pass yields every component, which is where the speedup comes from
-// (docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md). The angular momentum is a list of at
+// (docs/ERI_SHELL_QUARTET_FOCK_BUILD.md). The angular momentum is a list of at
 // most three "raises", each a center (0..3 = A, B, C, D) and an axis, applied
 // in center order. Per primitive quartet, with
 // theta_m = c K_AB K_CD 2 sqrt(rho/pi) F_m(T):

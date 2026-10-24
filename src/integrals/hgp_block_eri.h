@@ -2,7 +2,7 @@
 //
 // The per-component HGP entry reruns its whole primitive loop (Boys, VRR,
 // contraction) once per Cartesian component, 27-78x per shell quartet
-// wherever it runs (docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md, D0). This kernel
+// wherever it runs (docs/ERI_SHELL_QUARTET_FOCK_BUILD.md, D0). This kernel
 // runs it once per shell quartet and returns every component
 // (block_eri.h contract):
 //
@@ -234,7 +234,7 @@ namespace HartreeFock::Integrals
             // Blocks with K >= kMinLaneK primitive quartets run them kLanes at a
             // time; below that, one at a time. Both are hgp_block::vrr_lanes, so
             // the recurrence exists once. Measured
-            // (docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md, 2b): 4 lanes beat 2 and 8,
+            // (docs/ERI_SHELL_QUARTET_FOCK_BUILD.md, 2b): 4 lanes beat 2 and 8,
             // and a K = 3 block is cheaper padded to 4 than run one at a time.
             const auto &P = r.ab->primitive_pairs, &Q = r.cd->primitive_pairs;
             const std::size_t K = P.size() * Q.size();

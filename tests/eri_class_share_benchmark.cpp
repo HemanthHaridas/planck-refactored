@@ -1,6 +1,6 @@
 // Where does the direct Fock build spend its ERI time, by angular-momentum class?
 //
-// C0 of docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md. Before writing any closed-form
+// C0 of docs/ERI_SHELL_QUARTET_FOCK_BUILD.md. Before writing any closed-form
 // low-L kernel we need the share of real Fock-build time each (L_AB, L_CD)
 // class takes, because that share -- not the per-quartet speedup -- caps what
 // a specialized kernel can buy (Amdahl).
@@ -298,7 +298,7 @@ namespace
         return seconds_since(t0) / n;
     }
 
-    // D2a (docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md): shared-exponent families.
+    // D2a (docs/ERI_SHELL_QUARTET_FOCK_BUILD.md): shared-exponent families.
     // A family is a set of shells on one atom whose exponent sets are contained
     // in the largest one's (cc general contractions within L; Pople SP shells
     // across L unless `within_l`). A family quartet runs ONE primitive pass over
@@ -878,7 +878,7 @@ namespace
                     (ta[0] + ta[1]) / (tf[0] + tf[1]));
     }
 
-    // 5b S0 (docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md): if the fused build collected
+    // 5b S0 (docs/ERI_SHELL_QUARTET_FOCK_BUILD.md): if the fused build collected
     // its surviving blocks per chunk of bra group pairs and pooled the
     // primitive quartets of same-class blocks into B = 4 lanes, how full would
     // the lanes be? Replays the fused loop's enumeration exactly (group pairs,
@@ -1008,7 +1008,7 @@ namespace
         }
     }
 
-    // K1 census (docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md, after D2b B1): today's
+    // K1 census (docs/ERI_SHELL_QUARTET_FOCK_BUILD.md, after D2b B1): today's
     // per-component digestion against dense digestion per block. Arm B visits
     // each unordered block pair (p <= q) once with block Schwarz only, reads
     // every component of the production kernels' dense block, and digests it

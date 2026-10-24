@@ -1802,7 +1802,7 @@ namespace
 
     // The Auto engine's block kernels (block_eri.h): the closed forms at total
     // L <= 3, the HGP block kernel at 4 <= L <= 12 (each class measured a win,
-    // 1.5-13x on the Fock build; docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md D1).
+    // 1.5-13x on the Fock build; docs/ERI_SHELL_QUARTET_FOCK_BUILD.md D1).
     // Above that, and for screened kernels, blocks stay on auto_eri_elem.
     inline auto auto_block_kernel()
     {

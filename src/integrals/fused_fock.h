@@ -276,7 +276,7 @@ namespace HartreeFock::Integrals
                     ao_views[groups[g].first_ao + comp]->_component_norm / first._component_norm;
         }
 
-        // K1: dense digestion per block (docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md).
+        // K1: dense digestion per block (docs/ERI_SHELL_QUARTET_FOCK_BUILD.md).
         // Decided per build, never per block: the dense loop visits block pairs
         // p <= q, while the per-component loop's canonical filter is by AO index
         // and needs kets with q < p, so the two cannot share a build. Needs a

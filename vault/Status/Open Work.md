@@ -1912,7 +1912,7 @@ identify the path taken. Not required for correctness or performance.
   on M3; OpenBLAS unmeasured), B2 RI-K from `C_occ` on the SCF caller only
   (4.4–4.8×), B3 `dsyevd` (diag is 0.08 % of an iteration today; deferred).
 - **Closed-form low-L ERI kernels and the fused Fock loop — in flight**
-  (`docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`, the source of truth; it carries
+  (`docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`, the source of truth; it carries
   every measurement, finding and ruled-out idea).
   - **Landed:** C0 (Boys v1.1.0), C1, C2–C3.5 (closed-form shell kernels
     through total L ≤ 3, Auto only), H1, L1, L2, L3a–c, P1, S1, D1. Measured:
@@ -2063,7 +2063,7 @@ identify the path taken. Not required for correctness or performance.
     `nh3_c3v_fullsym_631gd_sad_direct`; see Completion). **Open: F3**, feed the persisted
     skeleton build from the block kernels; it only shortens a one-time
     build now, so it is last. Record:
-    `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
+    `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`.
   - **Teaching guide (rewritten 2026-10-22).** §8 now covers the persist
     threshold, the fused D2h-subgroup path above it, Auto → HGP and the
     unprojected SAD guess (F1/F2/F4; §6 explains why the projection was

@@ -412,7 +412,7 @@ historical design context, but they are no longer the source of truth for
   tails (2.4-4.7 % of samples -> <= 0.1 %): bitwise, 1.03-1.04x on
   6-31G\* / cc-pVTZ, neutral elsewhere. R1 (precomputed closed-form readout)
   was measured slower and declined. Record:
-  `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
+  `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`.
 
 - **The fused Fock loop is thread-count invariant (`ea353a83`,
   2026-10-24).** Partials were keyed by thread, so G differed in its last
@@ -421,7 +421,7 @@ historical design context, but they are no longer the source of truth for
   the bins are scheduled dynamically: G is identical at 1/2/4/8 threads
   (28 fingerprints), and the load imbalance under symmetry is recovered
   (1.06x at four threads on naphthalene). Record:
-  `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
+  `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`.
 
 - **Dense digestion per block in the fused Fock loop (K1 `5fd08496`, K1.4
   `f2849647`, 2026-10-22).** Instead of running every component through the
@@ -438,14 +438,14 @@ historical design context, but they are no longer the source of truth for
   Gate: `check_dense_digest` (every `FusedTerm` mode, RHF/UHF, four bases,
   two tolerances, water's real C2v with the op count asserted, a counting
   kernel proving the dense path ran), 5 + 8 mutations; MPI 1/2/4 ranks
-  match. Record: `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
+  match. Record: `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`.
 
 - **Lanes across primitive quartets in the HGP block kernel (2b,
   2026-10-21).** `hgp_block::vrr_lanes<B>` runs the VRR for four primitive
   quartets at once in blocks with K >= 3 (scalar below). Fock build, one
   thread: cc-pVTZ 1.38x, 6-31G\* 1.23x, cc-pVDZ 1.21x, sp-only 1.05-1.07x.
   Not bitwise; block sweep <= 1.1e-14 on four bases, mutation-tested.
-  Record: `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
+  Record: `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`.
 
 - **No per-iteration skeleton rebuild on the full point-group path (F1,
   2026-10-21).** Above `threshold` the SAO-blocked direct SCF rebuilt its
@@ -455,7 +455,7 @@ historical design context, but they are no longer the source of truth for
   6-31G\* 17.7 -> 4.08 s, naphthalene / 6-31G 66.6 -> 6.35 s, energies
   equal to the persisted full-group path; the ten full-symmetry inputs at
   `threshold 1` match their default energies. Record:
-  `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
+  `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`.
 
 - **`engine auto` uses HGP on the full point-group path (F2, 2026-10-20).**
   The `{os,hgp,rys}_symm.cpp` skeleton loops have no Auto mode, so the three
@@ -463,7 +463,7 @@ historical design context, but they are no longer the source of truth for
   now resolves it to HGP, the faster per-component engine there: per rebuilt
   skeleton, benzene/6-31G\* 1.40 -> 1.31 s, naphthalene/6-31G 3.93 -> 3.51 s
   (Rys 6.9 s on benzene). Energies unchanged. Record:
-  `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
+  `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`.
 
 - **`guess sad` works with full point-group symmetry (F4, 2026-10-20).** It
   used to abort on C3v/D6h with "initial density is not symmetry-adapted"
@@ -482,7 +482,7 @@ historical design context, but they are no longer the source of truth for
   `src/scf/sad.cpp`). The projection and `symmetrize_density` are deleted.
   Gated by `nh3_c3v_fullsym_631gd_sad_direct` and the four
   `water_triplet_*` cases. Record:
-  `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
+  `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`.
 
 - **CC amplitude checkpoint (`.ccamp`): hand-written RCCSD can now write a
   spatial sidecar, a sector-drop defect in the shipped format is fixed, and

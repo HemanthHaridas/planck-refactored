@@ -985,7 +985,7 @@ namespace HartreeFock
                     // and exponent factors, so it contributes nothing at double
                     // precision. On water clusters these were ~19 % of all ERI
                     // primitive quartets; dropping them left G bit-identical on
-                    // every probe fixture (docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md, P1).
+                    // every probe fixture (docs/ERI_SHELL_QUARTET_FOCK_BUILD.md, P1).
                     // ponytail: fixed absolute cutoff, independent of tol_eri;
                     // tie it to the screening tolerance only if a case needs it.
                     constexpr double kNegligiblePrimitivePair = 1e-24;

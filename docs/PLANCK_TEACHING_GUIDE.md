@@ -2334,7 +2334,7 @@ Implementation: `src/integrals/low_l_eri.h` (kernel), `src/integrals/fused_fock.
 (block dispatch, axis readout, norm ratios), `tests/hgp_engine_smoke.cpp` (sweep),
 `tests/eri_class_share_benchmark.cpp` (`planck-eri-class-share`: class shares,
 fingerprints, `--profile`). The full record, including what is still open, is in
-`docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
+`docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`.
 
 #### The HGP block kernel: one primitive pass per shell quartet at any L
 
