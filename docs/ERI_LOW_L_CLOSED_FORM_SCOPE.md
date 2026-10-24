@@ -6,9 +6,8 @@ a block kernel above), and what else in the build stands in the way?
 
 **Status (2026-10-24).** The kernel work is done: a Fock build is 7–23×
 faster at one thread than before it started, and the remaining kernel ideas
-were measured and declined. Open: the fixed accumulator partition (in
-progress), then R1b (conditional), C5, F3; D3, K2 and C4b sit outside the
-main line. The step names (C1, D1, K1, …) are kept because commits, tests
+were measured and declined, and G no longer depends on the thread count.
+Open: R1b (conditional), C5, F3; D3, K2 and C4b sit outside the main line. The step names (C1, D1, K1, …) are kept because commits, tests
 and code comments cite them.
 
 ## Answer
@@ -64,17 +63,22 @@ schedule gives 1→4-thread scaling of 3.4–3.7×.
   (K1.4) 1.32×.
 - **Then the threads.** The dense traversal is a triangle; a contiguous
   schedule capped four threads at ~2.3×. Round-robin (W1) gave 1.10–1.97× at
-  four threads for one line. What is left is load imbalance under symmetry,
-  which the fixed partition addresses.
+  four threads for one line. Keying the partial Fock matrices by bin
+  instead of thread then made G independent of the thread count and let
+  the bins be scheduled dynamically, which recovered the load imbalance
+  under symmetry (1.06× at four threads on naphthalene).
 
 ## How the build works now
 
 `Integrals::fused_fock_build` (`src/integrals/fused_fock.h`) chooses one of
-two traversals **per build**. OpenMP `schedule(static, 1)` (round-robin, W1)
-and the MPI stripe run over bra units in both; partials are keyed by
-`omp_get_thread_num()` and summed in thread order, so a run is reproducible
-at a given thread count but not across counts (the fixed partition changes
-this; see Open).
+two traversals **per build**. Both run over bra units: the MPI stripe takes
+bra mod size, and OpenMP hands out **bins** (`schedule(dynamic, 1)`), bin b
+holding bras b, b + n_bins, … in increasing order (round-robin, as W1 found
+a triangle needs). Partials are keyed by bin, not thread, and summed per
+element in bin order, so G is identical at any thread count. n_bins is a
+function of nb only: 64, fewer once 64 nb² passes 256 MB per output, at
+least 8. Kernel scratch stays per thread; it carries no values across
+blocks.
 
 **Dense (K1, K1.4).** Taken when the block kernel `covers()` every total L the
 basis can produce (today: Auto, Coulomb, shells up to f, total L ≤ 12), every
@@ -189,10 +193,11 @@ threads in brackets where they differ by more than a point:
 - **HGP is the build on cc-pVTZ (52 %) and a third of 6-31G\***, already
   laned; no open item targets it except K2.
 - **Scratch zeroing has since gone** to ≤ 0.1 % (grow-only scratch).
-- **The four-thread idle is the barrier closing the parallel loop**
-  (`gomp_team_end`), not serial work: on naphthalene three threads wait
+- **The four-thread idle was the barrier closing the parallel loop**
+  (`gomp_team_end`), not serial work: on naphthalene three threads waited
   10.3 / 17.3 / 16.1 % and the fourth 0.6 %. Under S1 the work per bra unit
-  is uneven and a static schedule cannot adapt.
+  is uneven and a static schedule cannot adapt; dynamic bins (partition)
+  recover most of it.
 
 The HGP block kernel's cost by primitive quartet and by block, measured after
 D1 (temporary timers and counters):
@@ -292,12 +297,13 @@ fused build (F1 numbers predate K1).
 | R2 | `102f1d01` | one Boys call per primitive quartet / lane → one batched call per block / lane group | 1.01–1.11× (1 thread), 1.03–1.11× (4) | tolerance, ≤ 1.1e-16 (g++ FMA contraction) |
 | loader | `13c60826` | the untested `boys_vec` fallback: core v1.2.0 is required, a v1.1.0 license fails at load | — | `planck-boys-vec`; v1.1.0 license checked by hand |
 | scratch | `0e3e074d` | per-block `vector::resize` and re-zeroed regrown tails | 1.03–1.04× on 6-31G\* / cc-pVTZ, ±1 % elsewhere | bitwise, 28 fingerprints |
+| partition | `ea353a83` | partials keyed by thread (G depended on the thread count) and a static schedule under uneven S1 work | 1.06× naphthalene, 1.02× cc-pVTZ at four threads; ±1–2 % elsewhere | 28 fingerprints identical at 1/2/4/8 threads |
 
 B2.1 (`66669cd5`, family-quartet units in the dense traversal, off by
 default) landed and was deleted in `1e047aa2`; see Families.
 
 Suites: smoke 43/45 and extended 135/139 after W1 and R2 (the known rccsdt
-routing cases); smoke 43/45 after the loader and scratch commits, extended
+routing cases); smoke 43/45 after the loader, scratch and partition commits, extended
 not re-run. Details worth keeping:
 
 - **Closed forms (C2–C3.5).** `low_l_shell_eri` treats a quartet as up to
@@ -402,6 +408,22 @@ not re-run. Details worth keeping:
   largest size, which gets the effect of sizing once per build without a
   setup step; `acc` still zeroes its live extent. The removed share turned
   into time only where HGP runs.
+- **Partition.** Before, G at one thread was not G at four (CO2 / 6-31G\*
+  direct differed in the DIIS residual digits and the last kcal/mol digit;
+  all 10 Hartree digits identical). Keying partials by bin fixes which
+  terms each partial sums and in what order, whatever thread runs it; this
+  is the FCI sigma-build rule (what must be fixed is the partition of work
+  into accumulators, not just the order they are summed). Not bitwise
+  against the thread-keyed build, since one thread now sums 64 partials.
+  Bin count, five reps against the build before, four threads:
+
+  | fixture | 16 bins | 32 bins | 64 bins | 128 bins |
+  |---|---|---|---|---|
+  | 8 H2O / 6-31G | 0.950× | 0.969× | 0.982–0.990× | 0.972× |
+  | 1 H2O / cc-pVTZ | 0.985× | 1.010× | 1.021× | 1.037× |
+  | naphthalene / 6-31G | 0.987× | 1.026× | 1.058–1.064× | 1.075× |
+
+  At one thread 16–64 bins are within ±1.5 %; 128 costs 1.4–2.2 %, so 64.
 
 ## Measured, not landed
 
@@ -547,6 +569,10 @@ that capped the build at 2.29×, and one line (W1) recovered up to 1.97×.
 the four-thread idle on two serial functions; a per-thread split of the
 sample put every waiting sample at the loop's closing barrier.
 
+**Determinism and dynamic scheduling are compatible** once accumulators are
+keyed by a fixed partition of the work rather than by thread: the partition
+item made G thread-count invariant and dynamically balanced in one change.
+
 **A share of time is not a share of work, and an out-of-tree share is not a
 gain.** cc-pVTZ's K = 1 blocks are 23 % of HGP kernel time and ~6 % of its
 primitive quartets (5b). Boys profiled at 9–32 % of the build, and a 1.3–2.3×
@@ -620,20 +646,6 @@ kept only the identity operation, and the first K1.4 "C2v" gate passed with
 |G| = 1. Assert the fixture's defining property.
 
 ## Open
-
-**The fixed accumulator partition (in progress).** Partials keyed by thread
-index make G depend on the thread count (CO2 / 6-31G\* direct differs between
-1 and 4 threads in the DIIS residual digits and the last kcal/mol digit; all
-10 Hartree digits identical). Keying them by bin (bra mod n_bins, each bin's
-bras in increasing order, bins summed in fixed order per element) makes G
-independent of the thread count, and since a bin's result no longer depends
-on which thread runs it, bins can be scheduled dynamically, which removes the
-closing-barrier imbalance (naphthalene 11 %, 6-31G\* / cc-pVTZ 5–6 % idle at
-four threads). n_bins is a function of nb only: 64, fewer once 64 nb²
-passes 256 MB per output, at least 8. Not bitwise against today (one thread
-now sums 64 partials). Gate: G identical at 1/2/4/8 threads,
-`planck-fock-accumulate`, the suites. Expect ~1.1× at four threads on
-naphthalene, nothing at one.
 
 **R1b — the readout from a per-build table (conditional).** R1's lesson
 applied: the decode depends only on each AO's Cartesian exponents, so

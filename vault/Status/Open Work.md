@@ -2036,18 +2036,19 @@ identify the path taken. Not required for correctness or performance.
     reached production. S2's premise was wrong: the serial symmetric
     phases are 0.04 % of samples; the four-thread idle (naphthalene 11 %)
     is load imbalance at the barrier closing `fused_fock_build`'s loop.
-  - **Open, in order (rescoped from that profile):** the fixed partition
-    with 64 bins scheduled dynamically (deterministic across thread counts
-    AND removes the imbalance; ~1.1x at four threads on naphthalene); R1b readout from a per-build per-AO decode table with `value()` kept lazy
+  - **Fixed accumulator partition landed (`ea353a83`, 2026-10-24):**
+    partials keyed by bin (bra mod n_bins, 64 bins for nb up to ~700),
+    bins scheduled dynamically and summed in fixed order. G is identical at
+    1/2/4/8 threads; 1.06x at four threads on naphthalene, 1.02x cc-pVTZ,
+    within 1-2 % elsewhere. B2.1 (`family_units`) deleted (`1e047aa2`).
+    Scope doc rewritten as current state (`1319c559`).
+  - **Open, in order (rescoped from that profile):** R1b readout from a per-build per-AO decode table with `value()` kept lazy
     (conditional, >= 1.03x on 8 H2O); C5 (screened
     kernels; range-separated hybrids still take per-component HGP); F3.
     Declined 2026-10-24: P2 (G must stay accurate to 1e-10) and total
     L > 12 (not routine work). D3 (RI-JK pair
     factors) is independent, K2 conditional (the only lever left on HGP,
     which no open item targets), C4b deprioritised.
-  - **Known defect, scheduled (the fixed partition, after W1):** the fused
-    direct loop is not thread-count invariant (accumulators keyed by thread
-    index).
   - **The full point-group path (measured 2026-10-20, F1 2026-10-21).**
     Symmetric HF with SAO and direct SCF builds a dense n_b⁴ skeleton in a
     separate per-component loop (`Symmetry::build_skeleton_eri`), persisted

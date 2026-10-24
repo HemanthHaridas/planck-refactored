@@ -414,6 +414,15 @@ historical design context, but they are no longer the source of truth for
   was measured slower and declined. Record:
   `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
 
+- **The fused Fock loop is thread-count invariant (`ea353a83`,
+  2026-10-24).** Partials were keyed by thread, so G differed in its last
+  bits between 1 and 4 threads. They are now keyed by bin (bra mod n_bins,
+  n_bins a function of nb only), summed per element in fixed bin order, and
+  the bins are scheduled dynamically: G is identical at 1/2/4/8 threads
+  (28 fingerprints), and the load imbalance under symmetry is recovered
+  (1.06x at four threads on naphthalene). Record:
+  `docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md`.
+
 - **Dense digestion per block in the fused Fock loop (K1 `5fd08496`, K1.4
   `f2849647`, 2026-10-22).** Instead of running every component through the
   canonical filter, orbit dedup and up to eight scattered writes, the loop
