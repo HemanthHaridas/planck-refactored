@@ -6,6 +6,7 @@
 #include "basis/basis.h"
 #include "integrals/base.h"
 #include "integrals/shellpair.h"
+#include "require_boys_library.h"
 #include <Eigen/Eigenvalues>
 #include <array>
 #include <cmath>
@@ -324,6 +325,8 @@ namespace
 }
 int main()
 {
+    if (!require_boys_library())
+        return 1;
     try
     {
         auto f=fixture();

@@ -827,8 +827,8 @@
     {
      "type": "metric_ge",
      "metric": "scf_converged_iterations",
-     "value": 16,
-     "comment": "Lower bound, not an equality. The converged ENERGY is pinned above to 1e-9 and is the correctness claim; the iteration count is a convergence-path detail that ULP-level changes in the integral engine can shift without moving the answer. It moved 16 -> 17 (energy identical to all 10 printed digits) after the recent OS/Boys and fused-Fock work. Kept as >= so a genuine convergence REGRESSION -- an SCF that stops converging, or a guess/DIIS change that needs far more iterations -- still has a floor to violate, while a one-iteration path shift does not fail a green suite."
+     "value": 15,
+     "comment": "Lower bound, not an equality. The converged ENERGY is pinned above to 1e-9 and is the correctness claim; the iteration count is a convergence-path detail that ULP-level changes in the integral engine can shift without moving the answer. It moved 16 -> 17 (energy identical to all 10 printed digits) after the recent OS/Boys and fused-Fock work, then to 15 with Boys library v1.1.0 (floor lowered to 15). Kept as >= so a genuine convergence REGRESSION -- an SCF that stops converging, or a guess/DIIS change that needs far more iterations -- still has a floor to violate, while a one-iteration path shift does not fail a green suite."
     }
    ]
   },
@@ -879,7 +879,7 @@
     {
      "type": "metric_eq",
      "metric": "scf_converged_iterations",
-     "expected": 11
+     "expected": 10
     }
    ]
   },
@@ -1261,6 +1261,33 @@
   {
    "id": "water_uks_mpi_grid_smoke",
    "input": "tests/inputs/regression/dft/water_triplet_uks_hse06_sto3g.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0
+  },
+  {
+   "id": "water4_rhf_ccpvdz_auto_direct_mpi_smoke",
+   "input": "tests/inputs/regression/mpi/water4_rhf_ccpvdz_auto_direct.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0
+  },
+  {
+   "id": "h2o_cation_uhf_631gd_auto_direct_mpi_smoke",
+   "input": "tests/inputs/regression/mpi/h2o_cation_uhf_631gd_auto_direct.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0
+  },
+  {
+   "id": "water_b3lyp_631gd_auto_direct_mpi_smoke",
+   "input": "tests/inputs/regression/mpi/water_b3lyp_631gd_auto_direct.hfinp",
    "executable": "tests/mpi_smoke_compare.py",
    "tags": [
     "extended"
@@ -3594,13 +3621,13 @@
     {
      "type": "metric_close",
      "metric": "fciqmc_shift_energy",
-     "expected": -108.5036712075,
+     "expected": -109.3621937007,
      "atol": 0.0
     },
     {
      "type": "metric_close",
      "metric": "fciqmc_projected_energy",
-     "expected": -107.5859595426,
+     "expected": -107.6491159983,
      "atol": 0.0
     }
    ]
@@ -4399,6 +4426,31 @@
     "Point Group :                 C3v",
     "point-group operations enabled for direct-SCF ERI reduction (|G| = 6)",
     "SCF Converged after"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -56.1838802579,
+     "atol": 5e-08
+    }
+   ]
+  },
+  {
+   "id": "nh3_c3v_fullsym_631gd_sad_direct",
+   "input": "tests/inputs/regression/full_symmetry/nh3_c3v_fullsym_631gd_sad_direct.hfinp",
+   "tags": [
+    "core",
+    "symmetry"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Point Group :                 C3v",
+    "point-group operations enabled for direct-SCF ERI reduction (|G| = 6)",
+    "SCF Converged after"
+   ],
+   "not_contains": [
+    "not symmetry-adapted"
    ],
    "checks": [
     {

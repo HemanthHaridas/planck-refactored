@@ -13,6 +13,7 @@
 #include "dft/udh_ks_response.h"
 #include "integrals/base.h"
 #include "integrals/shellpair.h"
+#include "require_boys_library.h"
 
 using namespace DFT::Gradient;
 using Mat = Eigen::MatrixXd;
@@ -278,6 +279,8 @@ namespace
 
 int main()
 {
+    if (!require_boys_library())
+        return 1;
     try { detached_checks(); physical_checks(); }
     catch (const std::exception &e) { check(false,e.what()); }
     std::cout << (ok?"PASS":"FAIL") << " U2 checked physical two-spin KS response\n";

@@ -32,10 +32,15 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstddef>
+#include <ranges>
 #include <tuple>
 #include <utility>
 #include <vector>
+
+#include <Eigen/Dense>
 
 #include "base/types.h"
 
@@ -85,16 +90,142 @@ namespace HartreeFock::Integrals
         return true;
     }
 
+    // True iff canonical quartet (i,j,k,l) is its orbit's representative: no
+    // operation maps it (after canonicalization) to a lexicographically smaller
+    // quartet. Same answer as build_quartet_orbit(...).first.front() == (i,j,k,l)
+    // whenever the orbit is not forced to zero, but with no allocation, dedup or
+    // sort, and it returns at the first smaller image. Most canonical quartets
+    // are not representatives (about 7 in 8 under D2h), so the fused Fock loop
+    // calls this first and builds the full orbit only for representatives. A
+    // forbidden non-representative is skipped either way; a forbidden
+    // representative is still caught by build_quartet_orbit.
+    inline bool is_orbit_representative(
+        std::size_t i, std::size_t j, std::size_t k, std::size_t l,
+        const std::vector<HartreeFock::SignedAOSymOp> &sym_ops) noexcept
+    {
+        for (const auto &op : sym_ops)
+        {
+            std::size_t ii = static_cast<std::size_t>(op.ao_map[i]);
+            std::size_t jj = static_cast<std::size_t>(op.ao_map[j]);
+            std::size_t kk = static_cast<std::size_t>(op.ao_map[k]);
+            std::size_t ll = static_cast<std::size_t>(op.ao_map[l]);
+            canonicalize_orbit_quartet(ii, jj, kk, ll);
+            if (std::tie(ii, jj, kk, ll) < std::tie(i, j, k, l))
+                return false;
+        }
+        return true;
+    }
+
+    // Skeleton weight (S1): the orbit size of canonical (i,j,k,l) if it is its
+    // orbit's representative and not symmetry-forbidden, else 0. One pass over
+    // the ops, no allocation. Needs sym_ops to be a GROUP (update_integral_symmetry
+    // builds identity plus every valid axis flip, which is closed): then the ops
+    // that fix the quartet are its stabilizer, the orbit has |G|/|Stab| distinct
+    // members, and the quartet is forbidden iff some op fixes it with sign -1
+    // (two ops reaching one image with opposite signs compose to exactly that).
+    // Skipping a forbidden quartet only saves work: its contribution would be
+    // cancelled exactly by the final symmetrization (the op fixing it with sign
+    // -1 maps it to its own negative), so no value gate can see that test.
+    //
+    // The general form, for a caller that has already decided some ops for a
+    // whole block of quartets (fused_fock.h, K1.4): `stab0` ops are known to
+    // fix (a,b,c,d) with sign +1, `sign_ops` fix every AO and need only the sign
+    // test, and only `perm_ops` (op indices) can move it. (a,b,c,d) need not be
+    // canonical; it is canonicalized only when some perm op remains.
+    template <typename PermOps, typename SignOps>
+    inline double skeleton_orbit_weight(
+        std::size_t a, std::size_t b, std::size_t c, std::size_t d,
+        const std::vector<HartreeFock::SignedAOSymOp> &sym_ops,
+        const PermOps &perm_ops, const SignOps &sign_ops, std::size_t stab0) noexcept
+    {
+        for (const std::size_t o : sign_ops)
+        {
+            const auto &sg = sym_ops[o].ao_sign;
+            if (sg[a] * sg[b] * sg[c] * sg[d] < 0)
+                return 0.0;
+        }
+        std::size_t stab = stab0;
+        if (!std::ranges::empty(perm_ops))
+        {
+            std::size_t i = a, j = b, k = c, l = d;
+            canonicalize_orbit_quartet(i, j, k, l);
+            for (const std::size_t o : perm_ops)
+            {
+                const auto &op = sym_ops[o];
+                std::size_t ii = static_cast<std::size_t>(op.ao_map[i]);
+                std::size_t jj = static_cast<std::size_t>(op.ao_map[j]);
+                std::size_t kk = static_cast<std::size_t>(op.ao_map[k]);
+                std::size_t ll = static_cast<std::size_t>(op.ao_map[l]);
+                canonicalize_orbit_quartet(ii, jj, kk, ll);
+                const auto image = std::tie(ii, jj, kk, ll);
+                const auto self = std::tie(i, j, k, l);
+                if (image < self)
+                    return 0.0;
+                if (image == self)
+                {
+                    if (op.ao_sign[i] * op.ao_sign[j] * op.ao_sign[k] * op.ao_sign[l] < 0)
+                        return 0.0;
+                    ++stab;
+                }
+            }
+        }
+        return static_cast<double>(sym_ops.size()) / static_cast<double>(stab);
+    }
+
+    // Every op undecided.
+    inline double skeleton_orbit_weight(
+        std::size_t i, std::size_t j, std::size_t k, std::size_t l,
+        const std::vector<HartreeFock::SignedAOSymOp> &sym_ops) noexcept
+    {
+        return skeleton_orbit_weight(i, j, k, l, sym_ops,
+                                     std::views::iota(std::size_t{0}, sym_ops.size()),
+                                     std::array<std::size_t, 0>{}, 0);
+    }
+
+    // True iff s(a) s(b) P(R(a), R(b)) == P(a, b) within `tol` for every op: the
+    // density has the molecule's symmetry, which the skeleton scheme requires.
+    inline bool density_has_symmetry(
+        const Eigen::MatrixXd &P,
+        const std::vector<HartreeFock::SignedAOSymOp> &sym_ops, double tol) noexcept
+    {
+        const Eigen::Index nb = P.rows();
+        for (const auto &op : sym_ops)
+            for (Eigen::Index b = 0; b < nb; ++b)
+                for (Eigen::Index a = 0; a < nb; ++a)
+                    if (std::abs(op.ao_sign[a] * op.ao_sign[b] * P(op.ao_map[a], op.ao_map[b]) -
+                                 P(a, b)) > tol)
+                        return false;
+        return true;
+    }
+
+    // M <- (1/|G|) sum_R s(a) s(b) M(R(a), R(b)): turns a skeleton Fock matrix
+    // into the full one (Dupuis-King). A gather; nb^2 |G|.
+    inline void symmetrize_over_ops(
+        Eigen::MatrixXd &M, const std::vector<HartreeFock::SignedAOSymOp> &sym_ops)
+    {
+        const Eigen::Index nb = M.rows();
+        Eigen::MatrixXd out = Eigen::MatrixXd::Zero(nb, nb);
+        for (const auto &op : sym_ops)
+            for (Eigen::Index b = 0; b < nb; ++b)
+                for (Eigen::Index a = 0; a < nb; ++a)
+                    out(a, b) += op.ao_sign[a] * op.ao_sign[b] * M(op.ao_map[a], op.ao_map[b]);
+        M = out / static_cast<double>(sym_ops.size());
+    }
+
     // {orbit, forced_zero}. The orbit is sorted, so orbit.front() is the
     // representative: callers compute the ERI only when the incoming quartet IS
     // the representative, then replicate over the orbit.
-    inline std::pair<std::vector<QuartetOrbitElem>, bool> build_quartet_orbit(
+    // Fill `orbit` (cleared first) with the deduplicated, sorted orbit of
+    // (i,j,k,l); returns true if it is symmetry-forbidden (the orbit is then
+    // partial). Takes the caller's vector so a loop can reuse one buffer per
+    // thread instead of allocating per quartet: that allocation was ~13 % of a
+    // symmetric fused Fock build after the representative pre-check.
+    inline bool fill_quartet_orbit(
         std::size_t i, std::size_t j, std::size_t k, std::size_t l,
-        const std::vector<HartreeFock::SignedAOSymOp> &sym_ops)
+        const std::vector<HartreeFock::SignedAOSymOp> &sym_ops,
+        std::vector<QuartetOrbitElem> &orbit)
     {
-        std::vector<QuartetOrbitElem> orbit;
-        orbit.reserve(sym_ops.size());
-
+        orbit.clear();
         for (const auto &op : sym_ops)
         {
             std::size_t ii = static_cast<std::size_t>(op.ao_map[i]);
@@ -105,7 +236,7 @@ namespace HartreeFock::Integrals
                              static_cast<int>(op.ao_sign[k]) * static_cast<int>(op.ao_sign[l]);
             canonicalize_orbit_quartet(ii, jj, kk, ll);
             if (!append_quartet_orbit(orbit, ii, jj, kk, ll, sign))
-                return {orbit, true}; // symmetry-forbidden
+                return true; // symmetry-forbidden
         }
 
         std::sort(orbit.begin(), orbit.end(),
@@ -113,6 +244,16 @@ namespace HartreeFock::Integrals
                   {
                       return std::tie(a.i, a.j, a.k, a.l) < std::tie(b.i, b.j, b.k, b.l);
                   });
-        return {orbit, false};
+        return false;
+    }
+
+    inline std::pair<std::vector<QuartetOrbitElem>, bool> build_quartet_orbit(
+        std::size_t i, std::size_t j, std::size_t k, std::size_t l,
+        const std::vector<HartreeFock::SignedAOSymOp> &sym_ops)
+    {
+        std::vector<QuartetOrbitElem> orbit;
+        orbit.reserve(sym_ops.size());
+        const bool forced_zero = fill_quartet_orbit(i, j, k, l, sym_ops, orbit);
+        return {std::move(orbit), forced_zero};
     }
 }

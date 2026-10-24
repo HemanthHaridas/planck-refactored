@@ -9,7 +9,7 @@ tags: [status, completion, validated, canonical]
 
 # Completion Status
 
-Last updated: 2026-10-16
+Last updated: 2026-10-20
 
 This is the canonical completion-status document for the repository.
 Subsystem handoff, plan, benchmark, and fix-summary notes may still exist for
@@ -260,8 +260,13 @@ historical design context, but they are no longer the source of truth for
 - Active-integral-cache transform is landed and benchmarked
 - Per-root SA total-energy reporting is fixed
 - SA diagnostics are parsed by the regression runner
-- SAD-start uphill-enabled water SA-2 basin is validated and retained as a separate
-  regression mode
+- SAD-start uphill-enabled water SA-2 basin is retained as a separate
+  regression mode. Reaching it used to depend on ~1e-14 roundoff (`diis_dim`
+  6/7/10 and the integral engine flipped it); fixed 2026-10-23 by a noise
+  floor in the candidate selector (no gradient-only acceptance below
+  `tol_mcscf_grad`) and a plateau exit that counts "no step" as flat and, under
+  `mcscf_accept_uphill`, needs the escape probes offered first. All seven
+  variations now land at -74.7877864784
 - Plateau-escape convergence branch is hardened: the old rounding-sensitive
   `100·tol_mcscf_grad` screen is replaced by an explicit `sa_g`-stationarity
   bound `plateau_sa_g_bound = max(1e-6, tol_mcscf_grad)`, and a
@@ -396,6 +401,88 @@ historical design context, but they are no longer the source of truth for
 - PySCF-validated He2/cc-pVDZ counterpoise decomposition
 
 ### Recent fixes now considered landed
+
+- **Batched Boys calls and grow-only kernel scratch in the fused Fock loop
+  (R2 `102f1d01`, `13c60826`, `0e3e074d`, 2026-10-23/24).** The closed forms
+  and the HGP block kernel make one batched Boys call per block / lane group
+  (core v1.2.0, now required: a v1.1.0 license fails at load naming
+  v1.2.0): 1.01-1.11x at one thread, 1.03-1.11x at four, not bitwise only
+  by g++ contracting one multiply-add (<= 1.1e-16). Block-kernel scratch is
+  grow-only (`grow_to`), removing per-block `vector::resize` and re-zeroed
+  tails (2.4-4.7 % of samples -> <= 0.1 %): bitwise, 1.03-1.04x on
+  6-31G\* / cc-pVTZ, neutral elsewhere. R1 (precomputed closed-form readout)
+  was measured slower and declined. Record:
+  `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`.
+
+- **The fused Fock loop is thread-count invariant (`ea353a83`,
+  2026-10-24).** Partials were keyed by thread, so G differed in its last
+  bits between 1 and 4 threads. They are now keyed by bin (bra mod n_bins,
+  n_bins a function of nb only), summed per element in fixed bin order, and
+  the bins are scheduled dynamically: G is identical at 1/2/4/8 threads
+  (28 fingerprints), and the load imbalance under symmetry is recovered
+  (1.06x at four threads on naphthalene). Record:
+  `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`.
+
+- **Dense digestion per block in the fused Fock loop (K1 `5fd08496`, K1.4
+  `f2849647`, 2026-10-22).** Instead of running every component through the
+  canonical filter, orbit dedup and up to eight scattered writes, the loop
+  visits each unordered block pair once and digests the whole block, with
+  three shell-level degeneracy factors and one final symmetrization. Taken
+  per build when the block kernel `covers()` every total L of the basis
+  (Auto, Coulomb, shells up to f) and every density is symmetric. One
+  thread 1.11-1.22x, four 1.09-1.17x. K1.4 extends it to skeleton-mode (S1)
+  builds: a per-build table of each op's image of each shell pair decides
+  every op per block with two integer comparisons, identity-map ops get a
+  sign test, and only ops fixing the block are applied per component.
+  Naphthalene / 6-31G D2h 0.273 -> 0.206 s (1.32x), 1.33x at four threads.
+  Gate: `check_dense_digest` (every `FusedTerm` mode, RHF/UHF, four bases,
+  two tolerances, water's real C2v with the op count asserted, a counting
+  kernel proving the dense path ran), 5 + 8 mutations; MPI 1/2/4 ranks
+  match. Record: `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`.
+
+- **Lanes across primitive quartets in the HGP block kernel (2b,
+  2026-10-21).** `hgp_block::vrr_lanes<B>` runs the VRR for four primitive
+  quartets at once in blocks with K >= 3 (scalar below). Fock build, one
+  thread: cc-pVTZ 1.38x, 6-31G\* 1.23x, cc-pVDZ 1.21x, sp-only 1.05-1.07x.
+  Not bitwise; block sweep <= 1.1e-14 on four bases, mutation-tested.
+  Record: `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`.
+
+- **No per-iteration skeleton rebuild on the full point-group path (F1,
+  2026-10-21).** Above `threshold` the SAO-blocked direct SCF rebuilt its
+  n_b⁴ skeleton every iteration and was slower than no symmetry. It now
+  takes the fused direct build with the geometry's D2h-subgroup signed
+  operations (an SAO density is symmetric under any subgroup): benzene /
+  6-31G\* 17.7 -> 4.08 s, naphthalene / 6-31G 66.6 -> 6.35 s, energies
+  equal to the persisted full-group path; the ten full-symmetry inputs at
+  `threshold 1` match their default energies. Record:
+  `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`.
+
+- **`engine auto` uses HGP on the full point-group path (F2, 2026-10-20).**
+  The `{os,hgp,rys}_symm.cpp` skeleton loops have no Auto mode, so the three
+  dispatchers in `src/scf/scf.cpp` sent Auto to OS. `full_symmetry_engine`
+  now resolves it to HGP, the faster per-component engine there: per rebuilt
+  skeleton, benzene/6-31G\* 1.40 -> 1.31 s, naphthalene/6-31G 3.93 -> 3.51 s
+  (Rys 6.9 s on benzene). Energies unchanged. Record:
+  `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`.
+
+- **`guess sad` works with full point-group symmetry (F4, 2026-10-20).** It
+  used to abort on C3v/D6h with "initial density is not symmetry-adapted"
+  (NH3/6-31G\* 8.0e-5, benzene 2.6e-3). The raw SAD density is invariant;
+  the guess was not, because making it idempotent kept the top n natural
+  orbitals, which is ill-posed when a degenerate set straddles the cutoff (a
+  spherically averaged open-shell atom has one: O's three 2p at 1/3 beta).
+  The first fix (`d0224110`) group-averaged the guess. A later attempt
+  corrected the projection's metric (it used `S^{-1/2} P S^{-1/2}`, the
+  Fock-like transform) and made things worse: the wrong metric had been an
+  accidental tie-break, and triplet water fell into the UHF state 0.103 Eh
+  above the ground state (four regression cases). Now (2026-10-23) the guess
+  is the raw density scaled to the target count,
+  `P = (n / Tr(P_raw S)) P_raw`, not idempotent; open shell uses the
+  spin-summed raw density scaled to n_alpha and n_beta (`scale_raw_sad`,
+  `src/scf/sad.cpp`). The projection and `symmetrize_density` are deleted.
+  Gated by `nh3_c3v_fullsym_631gd_sad_direct` and the four
+  `water_triplet_*` cases. Record:
+  `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`.
 
 - **CC amplitude checkpoint (`.ccamp`): hand-written RCCSD can now write a
   spatial sidecar, a sector-drop defect in the shipped format is fixed, and
@@ -994,6 +1081,10 @@ historical design context, but they are no longer the source of truth for
   (B3LYP), with all energies unchanged. New gates: `planck-transform-eri`,
   `planck-transform-eri-sph`, `planck-compute-2e`. The DFT J/K builds were
   confirmed thread-count-invariant (no repeat of the grid-reduction jitter).
+  Those two dense-tensor builders were later deleted outright (2026-07-20):
+  the KS J/K now run memory-direct through the fused Fock loop
+  (`_compute_2e_j_direct` / `_compute_2e_k_direct`), cutting 8-water/6-31g
+  B3LYP peak RSS 1360 -> 427 MB at an identical energy; see `docs/HPC_MPI.md`.
   See the Integral Engine and DFT implementation notes.
 - ROHF references enabled for CASSCF and RASSCF. ROHF stores a single common
   spatial-orbital set in the alpha channel, so the MCSCF loop and CI engine

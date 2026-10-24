@@ -271,8 +271,10 @@ namespace
         const double rho_over_alpha = rho / alpha; // (β/(α+β)) = ρ/α
 
         TwoCenterScratch scratch(lAx, lAy, lAz, lBx, lBy, lBz, LT);
+        double F[4 * MAX_L + 1]; // one vector Boys call, bitwise = per-order loop
+        HartreeFock::Lookup::boys_vec(T, std::span<double>(F, LT + 1));
         for (int m = 0; m <= LT; ++m)
-            scratch.v(0, 0, 0, 0, 0, 0, m) = K * HartreeFock::Lookup::boys(m, T);
+            scratch.v(0, 0, 0, 0, 0, 0, m) = K * F[m];
 
         // ── A-VRR x ───────────────────────────────────────────────────────
         // Term (PA)·(a-1,m) vanishes because PA = (A−A) = 0 in 2-center.
@@ -477,8 +479,10 @@ namespace
         WmC *= (zetaAB / delta);
 
         ThreeCenterScratch scratch(lABx, lABy, lABz, lCx, lCy, lCz, LT);
+        double F[4 * MAX_L + 1]; // one vector Boys call, bitwise = per-order loop
+        HartreeFock::Lookup::boys_vec(T, std::span<double>(F, LT + 1));
         for (int m = 0; m <= LT; ++m)
-            scratch.v(0, 0, 0, 0, 0, 0, m) = prefac * HartreeFock::Lookup::boys(m, T);
+            scratch.v(0, 0, 0, 0, 0, 0, m) = prefac * F[m];
 
         for (int ax = 1; ax <= lABx; ++ax)
         {

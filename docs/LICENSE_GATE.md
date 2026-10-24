@@ -136,6 +136,7 @@ went wrong, and the binary exits with a non-zero status.
 | fetch / curl | No network, a proxy blocking the host, or `curl` missing | Check outbound HTTPS from that machine (from rank 0's node under MPI) |
 | decrypt | The license doesn't match this library version, or a fetched/cached blob was corrupted | A corrupted cache entry is retried automatically once (fetched fresh, cache entry replaced). If it still fails after that, the license and the library version don't match, so contact the maintainer |
 | resolve `planck_boys` | The library loaded but has an unexpected layout | Report it; this should not happen with a matching license |
+| resolve `planck_boys_batch` | The license is for library version 1.1.0 or earlier; this build needs 1.2.0 or later | Ask for a 1.2.0 license |
 
 When you report a problem, include the full `License Error` line, the
 platform, and `library_version` from your `license.json`. Don't send the

@@ -8,6 +8,8 @@
 #include "post_hf/fci.h"
 
 #include <cmath>
+#include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <limits>
@@ -26,6 +28,71 @@ namespace HartreeFock::Correlation
 
     namespace
     {
+        struct FCIQMCDriverWork
+        {
+            std::uint64_t steps = 0;
+            double prefill_seconds = 0.0;
+            double compress_seconds = 0.0;
+            double estimator_seconds = 0.0;
+        };
+
+        void log_profile(const std::string &phase,
+                         const FCIQMCDriverWork &driver,
+                         const FCIQMCPropagationProfile &propagation)
+        {
+            std::uint64_t parents = 0;
+            std::uint64_t attempts = 0;
+            std::uint64_t invalid = 0;
+            std::uint64_t zero_h = 0;
+            std::uint64_t initiator = 0;
+            std::uint64_t rounded = 0;
+            std::uint64_t raw_records = 0;
+            std::uint64_t finalized_records = 0;
+            double max_bin_seconds = 0.0;
+            for (const auto &bin : propagation.bins)
+            {
+                parents += bin.parents;
+                attempts += bin.spawn_attempts;
+                invalid += bin.invalid_excitations;
+                zero_h += bin.zero_hamiltonian;
+                initiator += bin.initiator_rejections;
+                rounded += bin.rounded_to_zero;
+                raw_records += bin.accumulator_records;
+                finalized_records += bin.finalized_records;
+                max_bin_seconds = std::max(max_bin_seconds, bin.worker_seconds);
+            }
+
+            // A deliberately flat, machine-readable line: benchmark scripts can
+            // retain the exact raw line while human logs stay compact. Worker wall
+            // time includes spawn/death plus the per-bin sort/fold; the sum of
+            // individual-bin times is intentionally not reported as a wall time.
+            logging(LogLevel::Info, "FCIQMC_PROFILE:",
+                    std::format("phase={} steps={} parents={} attempts={} "
+                                "invalid={} zero_h={} initiator_rejected={} "
+                                "rounded_zero={} records_raw={} records_folded={} "
+                                "prefill_s={:.6f} setup_s={:.6f} worker_wall_s={:.6f} "
+                                "max_bin_work_s={:.6f} merge_s={:.6f} merge_insert_s={:.6f} "
+                                "canonical_reserve_s={:.6f} canonical_frontier_s={:.6f} "
+                                "canonical_stream_s={:.6f} canonical_emitted={} "
+                                "canonical_pairwise_s={:.6f} "
+                                "parent_cleanup_s={:.6f} compress_s={:.6f} "
+                                "estimator_s={:.6f}",
+                                phase, driver.steps, parents, attempts, invalid,
+                                zero_h, initiator, rounded, raw_records,
+                                finalized_records, driver.prefill_seconds,
+                                propagation.setup_seconds,
+                                propagation.worker_wall_seconds,
+                                max_bin_seconds, propagation.merge_seconds,
+                                propagation.merge_insert_seconds,
+                                propagation.canonical_merge_reserve_seconds,
+                                propagation.canonical_merge_frontier_seconds,
+                                propagation.canonical_merge_stream_seconds,
+                                propagation.canonical_merge_emitted,
+                                propagation.canonical_pairwise_seconds,
+                                propagation.parent_cleanup_seconds,
+                                driver.compress_seconds, driver.estimator_seconds));
+        }
+
         // Adapt the shared all-MO setup to the callbacks the propagator wants.
         //
         // slater_condon_element is the SAME matrix-element routine the
@@ -218,8 +285,8 @@ namespace HartreeFock::Correlation
                             opt.spawn_attempts));
 
         // ── Propagate ──────────────────────────────────────────────────────────
-        WalkerPopulation pop;
-        pop.add(reference, opt.target_walkers);
+        CanonicalWalkerPopulation pop;
+        pop.assign_sorted({{reference, opt.target_walkers}});
 
         ShiftController ctl;
         ctl.shift = ops.diagonal(reference);
@@ -261,9 +328,23 @@ namespace HartreeFock::Correlation
         // a reused one produce the same bytes (SpawnAccumulator/vector reset
         // genuinely, unlike unordered_map::clear).
         SpawnWorkspace spawn_ws;
+        FCIQMCDriverWork equilibration_work;
+        FCIQMCDriverWork sampling_work;
+        FCIQMCPropagationProfile equilibration_profile;
+        FCIQMCPropagationProfile sampling_profile;
 
         for (int step = 0; step < total_steps; ++step)
         {
+            const bool sampling = step >= opt.equilibration_steps;
+            FCIQMCDriverWork &step_work = sampling ? sampling_work : equilibration_work;
+            FCIQMCPropagationProfile *step_profile = nullptr;
+            if (opt.profile)
+                step_profile = sampling ? &sampling_profile : &equilibration_profile;
+            if (opt.profile)
+                ++step_work.steps;
+            std::chrono::steady_clock::time_point prefill_start;
+            if (opt.profile)
+                prefill_start = std::chrono::steady_clock::now();
             // T2 scope step S3. `ops.diagonal` is memoized (T4) behind an
             // unordered_map that is NOT thread-safe -- every entry the parallel
             // region (S4) could possibly need must already be resident before
@@ -293,9 +374,8 @@ namespace HartreeFock::Correlation
             // that loop; it clears the flag and the buckets when done. `pop` is
             // an unordered_map, so this remains one traversal computing
             // hash(det) once where it was computed twice (here + inside the
-            // propagator). Bitwise identical: the bin a determinant lands in is
-            // a pure function of the determinant, and the per-bin spawn work is
-            // order-independent within a bin.
+            // propagator). The bin is a pure function of the determinant and
+            // the canonical owner already supplies a deterministic parent order.
             spawn_ws.ready(kFciqmcBins);
             spawn_ws.clear_parents();
             for (const auto &[det, w] : pop)
@@ -308,11 +388,19 @@ namespace HartreeFock::Correlation
             }
             spawn_ws.parents_prefilled = true;
 
-            WalkerPopulation next_pop;
+            if (opt.profile)
+            {
+                const auto propagation_start = std::chrono::steady_clock::now();
+                step_work.prefill_seconds += std::chrono::duration<double>(
+                    propagation_start - prefill_start).count();
+            }
+
+            CanonicalWalkerPopulation next_pop;
             propagate_stochastic(pop, setup->n_act, ops, opt.timestep,
                                  ctl.shift, rng, opt.spawn_attempts,
                                  opt.walker_granularity,
-                                 opt.initiator_threshold, spawn_ws, next_pop);
+                                 opt.initiator_threshold, spawn_ws, next_pop,
+                                 step_profile);
             pop = std::move(next_pop);
 
             // H2.8.4-b (fold B): compress + ordered L1 norm in one walk of the
@@ -320,7 +408,13 @@ namespace HartreeFock::Correlation
             // walk in `ordered_l1_norm(pop)`. The norm is byte-identical to the
             // old two-call form (same survivors, same fixed 64-bin partition,
             // same fixed summation order).
+            std::chrono::steady_clock::time_point compress_start;
+            if (opt.profile)
+                compress_start = std::chrono::steady_clock::now();
             const double n = pop.compress_with_l1_norm(1e-12).l1_norm;
+            if (opt.profile)
+                step_work.compress_seconds += std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - compress_start).count();
             // A collapsed or diverged population carries no energy. Reporting a
             // number from one would be the most misleading possible output, so
             // fail loudly instead.
@@ -430,6 +524,9 @@ namespace HartreeFock::Correlation
 
             if (step >= opt.equilibration_steps)
             {
+                std::chrono::steady_clock::time_point estimator_start;
+                if (opt.profile)
+                    estimator_start = std::chrono::steady_clock::now();
                 shift_samples.push_back(ctl.shift);
                 if (want_coefficient_ratios)
                     for (const auto &[det, w] : pop)
@@ -480,7 +577,16 @@ namespace HartreeFock::Correlation
                     ref_weight_min = std::min(ref_weight_min, std::abs(pe.reference_weight));
                     ++ref_weight_n;
                 }
+                if (opt.profile)
+                    step_work.estimator_seconds += std::chrono::duration<double>(
+                        std::chrono::steady_clock::now() - estimator_start).count();
             }
+        }
+
+        if (opt.profile)
+        {
+            log_profile("equilibration", equilibration_work, equilibration_profile);
+            log_profile("sampling", sampling_work, sampling_profile);
         }
 
         if (shift_samples.size() < 4)

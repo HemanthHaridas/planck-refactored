@@ -43,29 +43,40 @@
 
 namespace HartreeFock::Integrals
 {
-    // The distinct slots of the 8-fold orbit of canonical quartet (i,j,k,l).
-    // Returns the count; fills `out` with that many (a,b,c,d) tuples.
+    // The distinct slots of the 8-fold orbit of quartet (i,j,k,l), in the fixed
+    // order (ij|kl) (ji|kl) (ij|lk) (ji|lk) (kl|ij) (lk|ij) (kl|ji) (lk|ji),
+    // keeping each slot's first occurrence. Returns the count; fills `out`.
+    //
+    // Which tuples repeat an earlier one follows from three equalities, so no
+    // search is needed: (ji|..) repeats (ij|..) iff i == j, (..|lk) repeats
+    // (..|kl) iff k == l, and the bra-ket swapped half repeats the first half iff
+    // {k,l} == {i,j} as multisets. Holds for any (i,j,k,l), canonical or not.
+    // This replaced a pairwise first-occurrence search that was 17 % of a Fock
+    // build; tests/fock_accumulate.cpp checks the two agree, order included, on
+    // every tuple over a small index range.
     inline std::size_t distinct_eri_orbit(
         std::size_t i, std::size_t j, std::size_t k, std::size_t l,
         std::array<std::array<std::size_t, 4>, 8> &out) noexcept
     {
-        const std::array<std::array<std::size_t, 4>, 8> all = {{
-            {i, j, k, l}, {j, i, k, l}, {i, j, l, k}, {j, i, l, k},
-            {k, l, i, j}, {l, k, i, j}, {k, l, j, i}, {l, k, j, i},
-        }};
-
+        const bool bra = i != j, ket = k != l;
+        const bool swap = !((k == i && l == j) || (k == j && l == i));
         std::size_t n = 0;
-        for (const auto &t : all)
+        out[n++] = {i, j, k, l};
+        if (bra)
+            out[n++] = {j, i, k, l};
+        if (ket)
+            out[n++] = {i, j, l, k};
+        if (bra && ket)
+            out[n++] = {j, i, l, k};
+        if (swap)
         {
-            bool seen = false;
-            for (std::size_t m = 0; m < n; ++m)
-                if (out[m] == t)
-                {
-                    seen = true;
-                    break;
-                }
-            if (!seen)
-                out[n++] = t;
+            out[n++] = {k, l, i, j};
+            if (ket)
+                out[n++] = {l, k, i, j};
+            if (bra)
+                out[n++] = {k, l, j, i};
+            if (bra && ket)
+                out[n++] = {l, k, j, i};
         }
         return n;
     }

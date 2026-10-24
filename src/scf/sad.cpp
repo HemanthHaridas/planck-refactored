@@ -230,20 +230,6 @@ namespace
         return evecs * inv_evals.asDiagonal() * evecs.transpose();
     }
 
-    // Thresholded S^{-1/2}: zero eigenvalues of S below `thresh`.
-    static Eigen::MatrixXd make_thresholded_inverse_sqrt(const Eigen::MatrixXd &S, double thresh)
-    {
-        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(S);
-        const Eigen::VectorXd &evals = es.eigenvalues();
-        const Eigen::MatrixXd &evecs = es.eigenvectors();
-
-        Eigen::VectorXd inv_sqrt(evals.size());
-        for (Eigen::Index i = 0; i < evals.size(); ++i)
-            inv_sqrt[i] = (evals[i] > thresh) ? 1.0 / std::sqrt(evals[i]) : 0.0;
-
-        return evecs * inv_sqrt.asDiagonal() * evecs.transpose();
-    }
-
     // ── AO index map ─────────────────────────────────────────────────────────
 
     // Returns, for each atom A, the list of molecular AO indices (row/col in
@@ -495,61 +481,28 @@ namespace
         return Eigen::MatrixXd(C * P_cart * C.transpose());
     }
 
-    static std::expected<Eigen::MatrixXd, std::string> project_raw_sad_to_rhf_density(
-        const Eigen::MatrixXd &P_raw,
-        const Eigen::MatrixXd &S_mol,
-        int n_electrons,
-        double thresh)
+    // The SAD guess is the raw density itself, scaled to the target electron
+    // count: P = (n / Tr(P_raw S)) P_raw. It is NOT made idempotent.
+    //
+    // Keeping the top-n natural orbitals (the earlier projection) is ill-posed
+    // whenever a degenerate set straddles the cutoff, and SAD hits that
+    // routinely: a spherically averaged open-shell atom carries a degenerate
+    // fractional shell (O: three 2p at 1/3 beta), and atomic spin counts need
+    // not add to the molecule's (triplet water: 7 alpha / 3 beta raw against
+    // 6 / 4). Which orbitals of the set survived was then the eigensolver's
+    // choice, not chemistry's: it broke the point-group symmetry the raw
+    // density has (full-symmetry SCF aborted on C3v/D6h) and steered triplet
+    // water into the UHF state 0.103 Eh above the ground state. The first SCF
+    // iteration diagonalizes F[P] and occupies by orbital energy instead, which
+    // is the choice the projection was trying to make. The raw density is
+    // group-invariant, so the guess is too.
+    static std::expected<Eigen::MatrixXd, std::string> scale_raw_sad(
+        const Eigen::MatrixXd &P_raw, const Eigen::MatrixXd &S_mol, double n_target)
     {
-        const int n_occ = n_electrons / 2;
-
-        // X = S^{-1/2} with eigenvalue thresholding
-        const Eigen::MatrixXd X = make_thresholded_inverse_sqrt(S_mol, thresh);
-
-        // P_bar = X^T P_raw X  (orthonormal basis representation)
-        Eigen::MatrixXd P_bar = X.transpose() * P_raw * X;
-        P_bar = 0.5 * (P_bar + P_bar.transpose());
-
-        // Diagonalize: eigenvalues are natural occupation numbers in [0,1] (ideally)
-        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(P_bar);
-        if (es.info() != Eigen::Success)
-            return std::unexpected("SAD: failed to diagonalize orthogonalized density");
-
-        // Eigenvalues sorted ascending; take the top n_occ (rightmost columns).
-        const Eigen::MatrixXd U_occ = es.eigenvectors().rightCols(n_occ);
-        const Eigen::MatrixXd C_occ = X * U_occ;
-
-        Eigen::MatrixXd P = 2.0 * C_occ * C_occ.transpose();
-        return 0.5 * (P + P.transpose());
-    }
-
-    // Projects one raw spin channel onto the nearest proper idempotent
-    // spin-density with trace n_occ in the molecular AO metric.
-    static std::expected<Eigen::MatrixXd, std::string> project_raw_sad_to_spin_density(
-        const Eigen::MatrixXd &P_raw,
-        const Eigen::MatrixXd &S_mol,
-        int n_occ,
-        double thresh)
-    {
-        if (n_occ < 0)
-            return std::unexpected("SAD: spin occupation cannot be negative");
-        if (n_occ > P_raw.rows())
-            return std::unexpected("SAD: spin occupation exceeds AO dimension");
-
-        const Eigen::MatrixXd X = make_thresholded_inverse_sqrt(S_mol, thresh);
-
-        Eigen::MatrixXd P_bar = X.transpose() * P_raw * X;
-        P_bar = 0.5 * (P_bar + P_bar.transpose());
-
-        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> es(P_bar);
-        if (es.info() != Eigen::Success)
-            return std::unexpected("SAD: failed to diagonalize orthogonalized spin density");
-
-        const Eigen::MatrixXd U_occ = es.eigenvectors().rightCols(n_occ);
-        const Eigen::MatrixXd C_occ = X * U_occ;
-
-        Eigen::MatrixXd P = C_occ * C_occ.transpose();
-        return 0.5 * (P + P.transpose());
+        const double n_raw = (P_raw.array() * S_mol.array()).sum(); // Tr(P S), both symmetric
+        if (!(n_raw > 1e-8))
+            return std::unexpected("SAD: raw atomic density holds no electrons");
+        return Eigen::MatrixXd((n_target / n_raw) * P_raw);
     }
 
 } // anonymous namespace
@@ -611,17 +564,11 @@ namespace HartreeFock
             return result;
         }
 
-        std::expected<Eigen::MatrixXd, std::string> compute_sad_guess_rhf(
+        // Spin-summed raw SAD density in the working basis: atomic UHF per unique
+        // element, spin-summed and shell-averaged, assembled block-diagonally.
+        static std::expected<Eigen::MatrixXd, std::string> raw_sad_density(
             const HartreeFock::Calculator &calc)
         {
-            // total_nuclear_charge() excludes ghost atoms (BSSE counterpoise).
-            const int n_electrons =
-                calc._molecule.total_nuclear_charge() - calc._molecule.charge;
-
-            if (n_electrons % 2 != 0)
-                return std::unexpected("SAD: RHF requires an even number of electrons");
-
-            // ── Step 1: read atomic bases (one per unique element) ────────────
             const std::string gbs_file =
                 calc._basis._basis_path + "/" + calc._basis._basis_name;
             auto atomic_bases_res = read_gbs_basis_atomic(
@@ -632,9 +579,7 @@ namespace HartreeFock
                 return std::unexpected(atomic_bases_res.error());
             auto atomic_bases = std::move(*atomic_bases_res);
 
-            // ── Step 2: for each unique element, run atomic UHF and average ───
             std::unordered_map<std::string, Eigen::MatrixXd> atomic_P_cache;
-
             for (auto &[sym, atomic_basis] : atomic_bases)
             {
                 auto element = element_from_symbol(sym);
@@ -655,7 +600,6 @@ namespace HartreeFock
                 atomic_P_cache[sym] = std::move(P_atom);
             }
 
-            // ── Step 3: assemble block-diagonal molecular density ─────────────
             auto raw_density = assemble_raw_sad_density(calc, atomic_P_cache);
             if (!raw_density)
                 return std::unexpected(raw_density.error());
@@ -663,24 +607,37 @@ namespace HartreeFock
             P_raw = 0.5 * (P_raw + P_raw.transpose());
 
             // The raw SAD density is block-diagonal in the Cartesian AO basis. In
-            // spherical mode the overlap below (and the SCF that consumes the guess)
+            // spherical mode the overlap (and the SCF that consumes the guess)
             // are in the spherical basis, so map the guess into the spherical basis
             // first: P_sph = C P_cart C^T. The result is only an initial guess, so the
             // contamination subspace discarded by C is irrelevant. (No-op in
             // Cartesian mode, where _cart_to_sph is empty.)
             if (calc._shells._spherical)
-            {
-                if (auto t = transform_density_cart_to_sph(calc, P_raw); !t)
-                    return std::unexpected(t.error());
-                else
-                    P_raw = std::move(*t);
-            }
-
-            // ── Step 4: reconstruct proper RHF density ────────────────────────
-            return project_raw_sad_to_rhf_density(
-                P_raw, calc._overlap, n_electrons, 1e-8);
+                return transform_density_cart_to_sph(calc, P_raw);
+            return P_raw;
         }
 
+        std::expected<Eigen::MatrixXd, std::string> compute_sad_guess_rhf(
+            const HartreeFock::Calculator &calc)
+        {
+            // total_nuclear_charge() excludes ghost atoms (BSSE counterpoise).
+            const int n_electrons =
+                calc._molecule.total_nuclear_charge() - calc._molecule.charge;
+
+            if (n_electrons % 2 != 0)
+                return std::unexpected("SAD: RHF requires an even number of electrons");
+
+            auto P_raw = raw_sad_density(calc);
+            if (!P_raw)
+                return std::unexpected(P_raw.error());
+            return scale_raw_sad(*P_raw, calc._overlap, n_electrons);
+        }
+
+        // Spin-neutral: both channels are the spin-summed raw density scaled to
+        // their own counts. Per-atom spin densities are not used: atomic spin
+        // counts need not add to the molecule's (H atoms carry only alpha, so
+        // singlet-UHF H2 would get an empty beta guess), and the first SCF
+        // iteration polarizes the spins by occupation anyway.
         std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>
         compute_sad_guess_open_shell(
             const HartreeFock::Calculator &calc,
@@ -692,77 +649,16 @@ namespace HartreeFock
             if (n_alpha < n_beta)
                 return std::unexpected("SAD: expected n_alpha >= n_beta for open-shell SAD");
 
-            const std::string gbs_file =
-                calc._basis._basis_path + "/" + calc._basis._basis_name;
-            auto atomic_bases_res = read_gbs_basis_atomic(
-                gbs_file,
-                calc._molecule,
-                calc._basis._basis);
-            if (!atomic_bases_res)
-                return std::unexpected(atomic_bases_res.error());
-            auto atomic_bases = std::move(*atomic_bases_res);
-
-            std::unordered_map<std::string, Eigen::MatrixXd> atomic_Pa_cache;
-            std::unordered_map<std::string, Eigen::MatrixXd> atomic_Pb_cache;
-
-            for (auto &[sym, atomic_basis] : atomic_bases)
-            {
-                auto element = element_from_symbol(sym);
-                if (!element)
-                    return std::unexpected(element.error());
-                const int Z = static_cast<int>(element->Z);
-
-                auto atomic_res = run_atomic_uhf(Z, atomic_basis, calc);
-                if (!atomic_res)
-                    return std::unexpected(atomic_res.error());
-
-                Eigen::MatrixXd P_alpha = std::move(atomic_res->alpha);
-                Eigen::MatrixXd P_beta = std::move(atomic_res->beta);
-                const Eigen::MatrixXd &S_atom = atomic_res->overlap;
-
-                spherical_average_atomic_density(atomic_basis, S_atom, P_alpha, 1e-10);
-                spherical_average_atomic_density(atomic_basis, S_atom, P_beta, 1e-10);
-                P_alpha = 0.5 * (P_alpha + P_alpha.transpose());
-                P_beta = 0.5 * (P_beta + P_beta.transpose());
-
-                atomic_Pa_cache[sym] = std::move(P_alpha);
-                atomic_Pb_cache[sym] = std::move(P_beta);
-            }
-
-            auto raw_alpha = assemble_raw_sad_density(calc, atomic_Pa_cache);
-            if (!raw_alpha)
-                return std::unexpected(raw_alpha.error());
-            auto raw_beta = assemble_raw_sad_density(calc, atomic_Pb_cache);
-            if (!raw_beta)
-                return std::unexpected(raw_beta.error());
-
-            Eigen::MatrixXd Pa_raw = 0.5 * ((*raw_alpha) + raw_alpha->transpose());
-            Eigen::MatrixXd Pb_raw = 0.5 * ((*raw_beta) + raw_beta->transpose());
-
-            // Spherical mode: bring both raw spin densities into the spherical basis
-            // before projection (see compute_sad_guess_rhf for the rationale).
-            if (calc._shells._spherical)
-            {
-                auto ta = transform_density_cart_to_sph(calc, Pa_raw);
-                if (!ta)
-                    return std::unexpected(ta.error());
-                Pa_raw = std::move(*ta);
-                auto tb = transform_density_cart_to_sph(calc, Pb_raw);
-                if (!tb)
-                    return std::unexpected(tb.error());
-                Pb_raw = std::move(*tb);
-            }
-
-            auto Pa = project_raw_sad_to_spin_density(Pa_raw, calc._overlap, n_alpha, 1e-8);
+            auto P_raw = raw_sad_density(calc);
+            if (!P_raw)
+                return std::unexpected(P_raw.error());
+            auto Pa = scale_raw_sad(*P_raw, calc._overlap, n_alpha);
             if (!Pa)
                 return std::unexpected(Pa.error());
-            auto Pb = project_raw_sad_to_spin_density(Pb_raw, calc._overlap, n_beta, 1e-8);
+            auto Pb = scale_raw_sad(*P_raw, calc._overlap, n_beta);
             if (!Pb)
                 return std::unexpected(Pb.error());
-
-            return std::pair<Eigen::MatrixXd, Eigen::MatrixXd>{
-                std::move(*Pa),
-                std::move(*Pb)};
+            return std::pair<Eigen::MatrixXd, Eigen::MatrixXd>{std::move(*Pa), std::move(*Pb)};
         }
 
     } // namespace SCF

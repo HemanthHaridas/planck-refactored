@@ -30,10 +30,11 @@ namespace HartreeFock
         //      Shell populations are preserved in the full atomic AO metric, so
         //      zeroing cross-shell couplings does not leak charge.
         //
-        // Assembles a block-diagonal molecular density, then projects it to the
-        // nearest proper RHF density via:
-        //   X = S^{-1/2} (thresholded)  →  diagonalize X^T P X
-        //   →  take top n_occ eigenvectors  →  P = 2 C_occ C_occ^T
+        // Assembles a block-diagonal molecular density and scales it to
+        // n_electrons: P = (n / Tr(P_raw S)) P_raw. Deliberately not idempotent:
+        // choosing the top n natural orbitals is ill-posed when a degenerate set
+        // straddles the cutoff; the first SCF diagonalization occupies by orbital
+        // energy instead (see sad.cpp, scale_raw_sad).
         //
         // Requires:
         //   - calc._overlap already computed (molecular S matrix)
@@ -44,12 +45,9 @@ namespace HartreeFock
 
         // Compute spin-resolved SAD initial densities for open-shell SCF.
         //
-        // The atomic step is the same as in RHF SAD (atomic UHF + shell-wise
-        // spherical averaging), but the molecular projection is performed
-        // separately for alpha and beta occupations:
-        //   X = S^{-1/2}  →  diagonalize X^T P_alpha X and X^T P_beta X
-        //   → occupy the top n_alpha / n_beta natural orbitals with unit
-        //      occupancy in each spin channel.
+        // Spin-neutral: both channels are the spin-summed raw RHF-SAD density,
+        // scaled to n_alpha and n_beta electrons. The spins polarize at the first
+        // SCF iteration through their different occupations.
         //
         // The result can be used directly as the initial {P_alpha, P_beta}
         // guess for both UHF and ROHF.

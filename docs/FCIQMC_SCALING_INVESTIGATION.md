@@ -1,186 +1,227 @@
-# FCIQMC scaling investigation
+# FCIQMC Scalability
 
-Scoped 2026-10-11 against working-tree source at HEAD `6c7a02ac`.
-Status: investigation proposed; no new performance measurements or solver changes.
-The checkout contains unrelated local changes, so HEAD alone does not identify a
-future benchmark binary. Record the relevant source diff and build configuration.
+## Purpose
 
-## Decision to answer
+This document records the production FCIQMC propagation design, the measured
+performance envelope, and the evidence required before another optimization is
+accepted. It is deliberately a current-state document: superseded experiments
+are not retained as an implementation plan.
 
-Can the current implementation reduce wall time to a scientifically usable
-FCIQMC energy, or reach a larger problem within a fixed memory budget, while
-preserving fixed-seed reproducibility and bitwise thread-count invariance?
+The scope is one fixed-seed FCIQMC trajectory. An accepted optimization must
+not change its sampling law, support, `p_gen`, deterministic reduction order,
+or fixed-seed trajectory. Replica throughput, MPI/GPU execution, and
+active-space/frozen-core FCIQMC are separate capability projects.
 
-Separate three outcomes: faster individual trajectories, lower wall time to a
-specified statistical precision, and greater problem-size capacity. More steps
-per second does not establish better statistical efficiency; multiple replicas
-do not accelerate equilibration of one trajectory or remove systematic bias.
+## Production architecture
 
-**Working assessment:** further gains are plausible. There are concrete repeated
-work and allocation targets in the current source, but neither a dominant
-bottleneck nor a speedup magnitude is established. Start with a reproducible
-baseline and two small prototypes, not a distributed rewrite.
+`CanonicalWalkerPopulation` stores the live wavefunction as a sorted vector of
+`(DetKey, weight)` entries. This gives deterministic traversal, binary-search
+lookup for initiator and estimator queries, and in-place compaction.
 
-## What the current source establishes
+One propagation step is:
 
-| Area | Evidence | Investigation consequence |
+1. Partition parent determinants into 64 fixed bins by parent hash. The bin
+   count does not depend on the OpenMP thread count.
+2. Derive each parent's random stream from its determinant. Excitation and
+   stochastic-rounding draws therefore do not depend on container layout or
+   visitation order.
+3. Accumulate each bin privately, then sort and fold each bin in canonical key
+   order.
+4. Merge the 64 finalized streams through a tagged, balanced pairwise tree.
+   Equal keys retain ascending source-bin association at every tree node.
+5. Store the sorted result in the next canonical population, compact it, then
+   update population control and the projected estimator.
+
+The production merge is
+`merge_finalized_spawn_bins_pairwise_parallel` in
+`src/post_hf/ci/spawn_accumulator.h`. Independent pair merges at a tree level
+run in parallel, but each result is written to a predetermined slot; the tree
+shape and floating-point association are unchanged. The sequential pairwise
+tree is retained only as a test oracle.
+
+## Correctness contract
+
+The following properties are non-negotiable.
+
+- Parent partitioning, not child partitioning, defines independent work.
+- The 64-bin layout and ascending-bin equal-key reduction association are
+  invariant across OpenMP thread counts.
+- Parent-keyed RNG streams make generated excitations independent of traversal
+  order.
+- `p_gen` equals the probability for the exact generated excitation; support
+  and observed frequency are tested separately.
+- A mechanical optimization reproduces the fixed-seed trajectory bitwise. Any
+  intentional statistical change needs a new, explicitly documented reference.
+
+`planck-fciqmc-walkers` covers excitation support, `p_gen`, literal sampler
+equivalence, fixed-seed reproducibility, canonical-population propagation, and
+the parallel-tree raw-bit oracle. `planck-fciqmc-accumulator` covers local
+ordered folding and merge behavior. N2 S5 runs at one and four threads are the
+fixed-seed integration gate; H2/N2 exact-FCI cases remain statistical controls.
+
+## Measured performance
+
+The representative throughput fixture is
+`tests/inputs/exploratory/fciqmc/validation/hf_pop_50000.hfinp`: HF/6-31G,
+50,000 walkers, 20,000 equilibration steps, and 30,000 sampling steps. Each
+accepted figure uses the same seed, timestep, walker target, Hamiltonian, and
+step counts. Timings are three-run alternating medians unless stated otherwise.
+
+| configuration | 1 thread wall | 2 thread wall | 4 thread wall | 8 thread wall |
+|---|---:|---:|---:|---:|
+| map population baseline | 565.88 s | 374.18 s | 284.03 s | 258.41 s |
+| canonical population + pairwise merge | 474.54 s | 294.88 s | 203.221 s | 225.07 s |
+| E1 rank-select + M1 parallel tree | 403.748 s | — | **163.958 s** | — |
+
+Four threads are the best measured configuration for this workload. This is a
+recommendation, not a runtime limit; callers continue to select
+`OMP_NUM_THREADS`.
+
+At four threads, M1 changed the phase ledger as follows:
+
+| phase | E1 median | M1 median | change |
+|---|---:|---:|---:|
+| sampling worker | 50.233810 s | 51.357996 s | +2.2% |
+| sampling pairwise merge | 38.811332 s | 24.049039 s | -38.0% |
+| full wall | 182.431 s | 163.958 s | -10.1% |
+
+All three M1 runs have identical parent, attempt, raw-record, folded-record,
+and final-energy values. The small worker increase is the cost of materializing
+tree levels and is more than recovered by the parallel merge.
+
+## Landed optimization decisions
+
+| item | decision | evidence |
 |---|---|---|
-| Spawn parallelism | `ci/fciqmc.cpp:propagate_stochastic` uses 64 fixed parent bins and `omp parallel for schedule(static)`; each bin has its own RNG and accumulator. | Threading already exists. At most 64 bin iterations can execute concurrently; measure bin work and barriers before changing scheduling. |
-| Accumulation | `ci/spawn_accumulator.h` appends to vectors, sorts by determinant and weight bits, then folds; the cross-bin merge is serial in bin order. | Sorting already runs inside the parallel region. Separate its cost from the serial merge. |
-| Output allocation | `fciqmc_driver.cpp:run_fciqmc` constructs `WalkerPopulation next_pop` inside every step and move-assigns it to `pop`. | Workspace vectors persist, but the output map does not. Measure node allocation, bucket allocation, and destruction before claiming a warm-map baseline. |
-| Diagonal cache | `fciqmc_driver.cpp:make_ops` stores an unbounded map. The driver prefills it, and propagation looks up each parent's diagonal again. | Measure duplicate lookup cost and cumulative distinct determinants. Memory follows visited determinants, not just current occupancy. |
-| Projected estimator | `ci/fciqmc.cpp:projected_energy` enumerates reference connections every valid sampling step and evaluates matrix elements for occupied connections. | The Hamiltonian and sampling reference are fixed after re-anchoring. Repeated connection construction and matrix elements are candidates for caching. |
-| Serial tail | Prefill and partition are fused; compression and L1 norm are fused. Projected estimation and shift control remain outside propagation. Verbose mode also updates a cumulative coefficient map. | Profile the complete driver at normal verbosity, with a separate verbose diagnostic measurement. |
-| Reachability | `fci.cpp:build_all_mo_ci_setup` uses all MOs and all electrons, applies `ci_max_dim`, limits packed spatial orbitals to 31, and builds dense MO integrals. | Sparse walkers alone do not remove setup and admission limits. No active-space FCIQMC driver is wired here. |
+| Canonical population | landed | removes hash-layout traversal dependence |
+| Parent-derived RNG | landed | deterministic trajectory across layout and threads |
+| Tagged pairwise merge | landed | raw-bit equality with the heap/reference fold; faster than heap merge |
+| E0 literal excitation oracle | landed, test-only | exact excitation, `p_gen`, phase, validity, and RNG-state equality |
+| E1 rank selection | landed | 1.112x focused benchmark; 10.2% four-thread full-run wall reduction before M1 |
+| M1 level-parallel pairwise tree | landed | sequential-tree raw-bit oracle; N2 S5 1/4-thread gate; 10.1% additional wall reduction |
+| E2 table dispatch | rejected | exact supplied-input descriptor oracle, but 0.968x versus the switch |
+| Reused map populations | rejected | bucket layout changes parent traversal |
+| PMR node recycling | rejected | negligible end-to-end return |
+| Child-hash sharded merge | rejected | second sorting stage loses performance |
 
-Paths above are relative to `src/post_hf/`.
+E1 replaces a scan-to-the-selected-bit implementation of `nth_set_bit` with
+repeated least-significant-set-bit clearing followed by `countr_zero`. It does
+not change excitation classes, RNG calls, signs, or `p_gen` arithmetic order.
 
-The historical records need careful interpretation:
+## Profiling and acceptance workflow
 
-- `FCIQMC_PARALLELISM.md` records 2.42x at four threads and 2.87x at eight
-  for the workspace rewrite on HF/6-31G. Later sampler and driver changes also
-  landed. These are historical results, not a fresh measurement of this checkout.
-- That document reports only 2–2.5% serial merge/partition self-time in one
-  profile, but also calls the merge the dominant residual limit. Neither leaf
-  CPU samples nor worker barrier percentages alone determine serial wall time.
-  Reconcile the attribution before investing in another merge rewrite.
-- The same record describes a warm output map; the current driver constructs
-  a new one every step. The source takes precedence.
-- Saturation must be measured as occupied determinants and bin work. Nominal
-  walker weight divided by Hilbert-space size does not establish saturation.
-- S5 is already present: `n2_fciqmc_s5_threads1/4`. Older notes calling it
-  unbuilt, or FCIQMC entirely serial, are superseded.
-- The Cr2 target input selects CASSCF CAS(12,12), not FCIQMC CAS(12,18).
-  It cannot serve as a large FCIQMC benchmark without additional setup work.
+Use the phase ledger to establish the dominant phase, then use a CPU sample to
+identify the responsible routine. A stack sample is attribution evidence, not
+a performance result. Do not modify a candidate until both identify a concrete
+mechanism.
 
-## Stage 1: establish the scaling envelope
+```sh
+tests/run_fciqmc_cpu_profile.sh \
+  build/hartree-fock \
+  tests/inputs/exploratory/fciqmc/validation/hf_pop_50000.hfinp \
+  1 30 /private/tmp/fciqmc-profile
 
-Deliver one repeatable benchmark runner, a machine/build manifest, raw results,
-and a phase/memory report. Keep timing probes optional and verify their overhead
-against an uninstrumented build. Do not infer current results from existing
-`build` or `build-full` binaries without establishing their provenance.
+tests/run_fciqmc_cpu_profile.sh \
+  build/hartree-fock \
+  tests/inputs/exploratory/fciqmc/validation/hf_pop_50000.hfinp \
+  4 30 /private/tmp/fciqmc-profile
+```
 
-### Workloads and controls
+An accepted change requires:
 
-1. Use N2/STO-3G S5 for quick correctness and the full N2 gate for exact-FCI
-   agreement. Include N2 timings as the small-workload overhead control.
-2. Use the existing HF/6-31G validation inputs as the first throughput ladder:
-   target weights 10k, 25k, 50k, and 100k; measure actual occupancy at each.
-   Make benchmark copies at `verbosity normal` because `hf_base.hfinp` is
-   verbose. Preserve its other parameters and record every override.
-3. Screen one larger reachable, nondegenerate molecular fixture for sustained
-   occupancy materially above HF, ideally roughly 10x. Check orbital count,
-   electron count, dimension admission, SCF convergence, timestep stability,
-   and memory before accepting it. If none is practical, report that coverage
-   limit and use a synthetic population replay only for kernel measurements.
-4. Vary threads over 1/2/4/8 and available physical cores, avoiding unintended
-   oversubscription. Record CPU/core topology, affinity and OpenMP runtime,
-   compiler/optimization flags, other numerical-library thread settings, and
-   input/source hashes. On heterogeneous CPUs distinguish core types.
+1. an isolated, deterministic oracle for the altered operation;
+2. walker and accumulator invariant tests plus fixed-seed N2 S5 at one and
+   four threads;
+3. H2/N2 statistical regression controls when sampling behavior is involved;
+4. three alternating representative fixture runs; and
+5. at least 10% end-to-end improvement beyond noise, no unexplained control
+   regression above 5%, or a documented memory reduction that enables a
+   previously infeasible calculation.
 
-Start the full thread sweep at HF/50k, then expand population and problem size
-where it distinguishes hypotheses. Use at least three repeated runs, alternate
-configuration order, and report medians and dispersion. Separate setup,
-equilibration, and stationary sampling. Short smoke runs cannot establish
-equilibration or statistical precision; extend runs until blocking is useful.
+## Post-M1 attribution and next decision
 
-Hold seed, timestep, spawn attempts, granularity, initiator threshold, shift
-settings, and step counts fixed for each strong-scaling comparison. Use a
-separate seed ensemble for statistical efficiency. Treat population scaling
-and orbital/electron scaling as different experiments; do not fit one exponent
-across chemically different systems.
+Fresh 30-second one- and four-thread CPU samples were collected after M1 on
+the representative fixture. Their ledgers preserve the expected trajectory
+counts. At four threads, sampling spends `49.528 s` in worker propagation and
+`23.355 s` in pairwise merging; M1 therefore remains effective, but worker
+propagation is again the dominant scalable cost.
 
-### Required observations
+In the one-thread sample, `draw_excitation` accounts for 7,135 of 16,064
+propagation-stack samples (44.4%); at four threads it accounts for 3,544 of
+8,320 (42.6%). `slater_condon_element` and `SpawnAccumulator::finalize()` /
+sorting remain visible secondary costs. This authorizes an excitation-generator
+attribution benchmark, but not a production dispatch rewrite: the sampled
+frame still includes rank selection, random draws, orbital updates, parity,
+and class selection.
 
-- End-to-end and sampling wall time, time per step, speedup `T1/Tp`, parallel
-  efficiency `T1/(p*Tp)`, and attempted/accepted spawns per second.
-- Disjoint timings for diagonal prefill/partition, workspace reset/rekey,
-  spawn/death, per-bin sort/fold, fixed-order merge, map destruction,
-  compress/norm, projected estimation, population control, and diagnostics.
-  Separate per-thread CPU work from elapsed critical-path time; reconcile
-  phase totals with driver wall time and sampling profiles.
-- Per-bin parent counts, attempts, accepted children, elapsed work, and output
-  sizes; cross-bin collisions and barrier time. Weight alone is a poor work
-  proxy: attempts are per occupied parent in this implementation.
-- Live occupancy, cumulative diagonal-cache entries, cache misses, allocation
-  counts/bytes, vector capacities, and peak RSS. At fixed nominal population,
-  compare long-run memory against cumulative visitation.
-- Both energy estimates, blocked errors, reference-weight health, population
-  stability, and autocorrelation/blocking diagnostics. Compare time to a
-  predeclared precision after checking timestep, population/initiator, and
-  equilibration effects. Use `wall_time * SE^2` only in the converged sampling
-  regime where that efficiency comparison is meaningful.
+### E2 — decomposed excitation-generator benchmark
 
-## Stage 2: bounded prototypes, ordered by evidence
+Build a deterministic, test-only benchmark that measures the current literal
+generator and a candidate dispatch mapping separately from orbital updates,
+parity, and RNG generation. Both paths must consume the same supplied class
+and rank values and produce exactly the same excitation descriptor and
+`p_gen`. The benchmark must report a digest and per-component times over the
+same closed-shell, open-shell, and edge active-space corpus used by E0.
 
-Implement and measure one change at a time. These are hypotheses, not promised
-improvements; select at most two initial prototypes after Stage 1.
+Only if that benchmark attributes a material fraction to dispatch may a
+branch-only production candidate be written. It must preserve class order, RNG
+calls, signs, and `p_gen` operation order, then pass the normal exact and
+full-trajectory gates.
 
-| Priority | Hypothesis and experiment | Falsification / constraint |
+**Closed as a non-candidate (2026-10-20):** `planck-fciqmc-walkers` constructs
+plans with a supplied non-empty class and within-class rank. A literal `switch`
+and a table-dispatch candidate receive the same plans; neither path draws RNG,
+selects orbitals, evaluates parity, or updates a determinant. The invariant
+requires raw descriptor and `p_gen` equality, then materializes both results
+to confirm equal excitations. The opt-in benchmark is:
+
+```sh
+PLANCK_FCIQMC_DISPATCH_BENCHMARK=1 build/planck-fciqmc-walkers
+```
+
+`PLANCK_FCIQMC_DISPATCH_BENCHMARK_DRAWS` and
+`PLANCK_FCIQMC_DISPATCH_BENCHMARK_ROUNDS` override the defaults. Five
+alternating 10,000,000-draw rounds gave `0.033586 s` for the literal switch
+and `0.034704 s` for table dispatch: **0.968x**, with a matching digest. The
+indirect call loses, so production retains the switch and dispatch is closed.
+
+### E3 — generator-component attribution
+
+**Implemented, awaiting measurement:** the same supplied-input corpus now
+times five test-only stages independently: mask/popcount and class-size setup,
+rank decomposition, rank-to-orbital bit selection, parity/determinant
+materialization, and the recomposed no-RNG pipeline. The recomposed pipeline
+must produce the same final-excitation digest as the precomputed staged path.
+
+```sh
+PLANCK_FCIQMC_COMPONENT_BENCHMARK=1 build/planck-fciqmc-walkers
+```
+
+`PLANCK_FCIQMC_COMPONENT_BENCHMARK_DRAWS` and
+`PLANCK_FCIQMC_COMPONENT_BENCHMARK_ROUNDS` override the defaults. This is an
+attribution measurement, not a production candidate. It determines whether to
+investigate a local generator change or to stop generator work and move to
+sorting or the shared Hamiltonian.
+
+The following table describes the decision after E3:
+
+| observed limit | permitted next investigation | required isolation |
 |---|---|---|
-| A | Cache the ordered reference connections and their Hamiltonian elements once after sampling-reference selection. Reuse them in projected estimation. | Stop if estimator cost is negligible. Preserve connection order, occupancy checks, validity threshold, and ratio-of-sums semantics; account for the connection table's memory. |
-| A | Remove output-map churn using two caller-owned populations exchanged each step, then evaluate capacity reservation or a node pool if allocation remains significant. | Reusing buckets alone does not eliminate node allocation in `unordered_map::clear()`. Measure allocation and whole-run time. Map layout can change next-step parent order and RNG assignment, so this may require the reordering validation standard. |
-| B | Carry the prefilled diagonal with each parent record to avoid the second hash lookup. If the cache grows with visitation, compare a bounded cache or live-population diagonal storage. | Additional parent-record traffic may exceed lookup savings. Compute misses safely outside shared parallel reads. Check memory and speed on a churn-heavy workload, not only N2. |
-| B | If barriers or imbalance dominate, test scheduling over the same fixed bins and a persistent OpenMP team. | Preserve each bin's parent visitation/RNG order and fixed merge order. A persistent team removes repeated region entry, not serial dependencies. Do not scale bin count with thread count. |
-| C | If the measured merge remains material at large occupancy, test a contiguous population or deterministic ownership layout. Preserve per-child contribution order using explicit bin/order keys. | A parallel scatter alone does not perform annihilation. Include sorting/deduplication, lookup needs, and conversion costs. The previous extra-sort sharded merge was 3–8% slower on HF; do not repeat it without a changed cost regime. |
-| C | If excitation work dominates, cache invariant class counts/pair-unranking data; separately evaluate excitation-aware matrix-element calls. | Keep draw probabilities, support, RNG consumption, and fermionic signs correct. Shared Slater–Condon consumers need regression coverage if changed. |
+| setup, bit selection, or parity | local generator candidate | literal sampler oracle and full fixed-seed trajectory gate |
+| orbital updates or parity | local generator work, not dispatch rewrite | literal excitation oracle |
+| `SpawnAccumulator::finalize()` / sorting | local folding or allocation prototype | ordered-fold raw-bit oracle and memory accounting |
+| `slater_condon_element` | separate shared-Hamiltonian project | CI, CASSCF, open-shell, and FCIQMC validation |
+| residual pairwise merge | larger-population merge study | same tagged tree and explicit temporary-memory bound |
 
-For a changed sampler, increased spawn count, importance sampling, or a
-semi-stochastic extension, require a separate algorithm experiment judged by
-time to precision. Such changes can alter variance and bias and are not the
-first implementation-scaling prototypes.
+Descriptor caching is not authorized without a physical-population prototype
+that reports retained bytes and lookup cost. The reference estimator is not a
+candidate unless the ledger shows it is material.
 
-## Stage 3: throughput and capacity branches
+## Out of scope
 
-**Independent trajectories:** first compare separate processes at equal total
-core budgets (for example 1x8, 2x4, 4x2, 8x1) before adding a replica API.
-Measure repeated setup/equilibration and memory costs. Give every run a distinct
-recorded seed and private mutable state; avoid nested OpenMP oversubscription.
-Block within trajectories and combine estimates with a defined uncertainty
-calculation that preserves numerator/denominator covariance for projected
-ratios. Do not concatenate chains as one stationary series or assume replicas
-remove population/initiator bias. This tests throughput, not faster dynamics.
-
-**Larger scientific targets:** audit the FCI-derived dimension admission limit
-and input integer range separately from actual allocation limits. Scope an
-active-space/frozen-core Hamiltonian adapter if Cr2 CAS is the chosen target;
-include core-energy accounting, orbital selection, and small-space equivalence
-to deterministic CASCI. Measure integral setup/storage separately from walkers.
-Changing the 31-orbital representation is a further project, not a threading fix.
-
-MPI distribution and GPU work remain follow-ons only if the measured CPU/memory
-envelope fails an explicit target. Neither is required to answer this initial
-investigation, and no claim of near-linear scaling should precede measurements.
-
-## Correctness and acceptance
-
-- Retain `planck-fciqmc-walkers`, `planck-fciqmc-accumulator`, and
-  `planck-statistical-gate`, plus H2/N2 exact-FCI regression comparisons.
-- Run S5 at 1/2/4/8 threads and repeated fixed seeds. Its committed checks pin
-  or compare two *printed* energies at zero tolerance; strengthen investigation
-  checks with raw-bit trajectory/population digests so sub-print-precision or
-  transient differences cannot hide. Mutation-check the stronger comparison.
-- Canonicalizing accumulator input does not make a stochastic bin independent
-  of parent visitation order: its RNG draws are still consumed sequentially.
-  Preserve that order for changes claimed to be trajectory-identical.
-- Pure mechanical optimizations must retain the baseline trajectory. Deliberate
-  reordering must retain self-reproducibility and thread-count invariance, pass
-  exact-reference and multi-seed statistical checks, and document any pin change.
-  Never repin merely to make a failed test pass.
-- Changes to shared CI setup or matrix elements also run the affected deterministic
-  FCI/CASSCF tests. Exercise open-shell excitation support and initiator behavior
-  for changes touching those paths.
-
-Proposed acceptance threshold: at least 10% lower end-to-end wall time on a
-representative large fixture, beyond run-to-run noise, with no unexplained
-regression over 5% on controls; alternatively, demonstrate a useful reduction
-in peak memory that enables a previously infeasible run. Statistical changes
-must improve time to precision with bias checks, not just step rate. Small,
-simple gains may be recorded without justifying a larger redesign.
-
-Stop a prototype when its target is below the useful cost threshold, total
-runtime regresses, or gains disappear outside a microbenchmark. Re-profile after
-each accepted change. The final deliverable is a measured recommendation:
-which changes to land, which were rejected and why, and the remaining wall-time,
-memory, and scientific-accuracy limits. A defensible finding of little remaining
-headroom on the tested workloads is a successful investigation outcome.
+- Replica trajectories improve time-to-error-bar, not a single-chain step
+  rate, and must be compared at equal total core counts.
+- MPI and GPU work require an explicit CPU or memory target beyond this
+  measured envelope.
+- Active-space/frozen-core FCIQMC requires core-energy, orbital-selection, and
+  small-CASCI equivalence validation; it is not a propagation micro-optimization.

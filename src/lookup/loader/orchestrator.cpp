@@ -19,11 +19,13 @@ namespace HartreeFock
         {
             using BoysFn = double (*)(int, double);
             using BoysVecFn = void (*)(double, double *, std::size_t);
+            using BoysBatchFn = void (*)(const double *, std::size_t, int, double *);
 
             // Populated by initialize_boys_library(); read (never written)
             // by every boys()/boys_vec() call thereafter.
             BoysFn g_boys_fn = nullptr;
             BoysVecFn g_boys_vec_fn = nullptr;
+            BoysBatchFn g_boys_batch_fn = nullptr;
             void *g_library_handle = nullptr;
 
             std::string substitute_version(const std::string &url_template, const std::string &version)
@@ -88,9 +90,21 @@ namespace HartreeFock
                     return std::unexpected("Failed to resolve planck_boys_vec: " + boys_vec_sym.error());
                 }
 
+                // Core v1.2.0+. A v1.1.0 library (license) fails here, loudly:
+                // the ERI kernels call boys_batch on every block.
+                auto boys_batch_sym = resolve_symbol(*handle, "planck_boys_batch");
+                if (!boys_batch_sym)
+                {
+                    unload_library(*handle);
+                    return std::unexpected("Failed to resolve planck_boys_batch (needs Boys library v1.2.0 or "
+                                           "later; install a v1.2.0 license): " +
+                                           boys_batch_sym.error());
+                }
+
                 g_library_handle = *handle;
                 g_boys_fn = reinterpret_cast<BoysFn>(*boys_sym);
                 g_boys_vec_fn = reinterpret_cast<BoysVecFn>(*boys_vec_sym);
+                g_boys_batch_fn = reinterpret_cast<BoysBatchFn>(*boys_batch_sym);
                 return {};
             }
         }
@@ -213,6 +227,13 @@ namespace HartreeFock
         {
             assert(Loader::g_boys_vec_fn && "boys_vec() called before initialize_boys_library()");
             Loader::g_boys_vec_fn(x, out.data(), out.size());
+        }
+
+        void boys_batch(std::span<const double> x, int nmax, std::span<double> out) noexcept
+        {
+            assert(Loader::g_boys_batch_fn && "boys_batch() called before initialize_boys_library()");
+            assert(nmax >= 0 && out.size() >= x.size() * (static_cast<std::size_t>(nmax) + 1));
+            Loader::g_boys_batch_fn(x.data(), x.size(), nmax, out.data());
         }
 
     } // namespace Lookup

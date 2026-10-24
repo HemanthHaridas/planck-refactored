@@ -5,8 +5,10 @@
 // RNG honours its bitwise reproducibility contract.
 
 #include "post_hf/ci/fciqmc.h"
+#include "post_hf/ci/spawn_accumulator.h"
 
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -14,6 +16,7 @@
 #include <limits>
 #include <algorithm>
 #include <map>
+#include <random>
 #include <tuple>
 #include <vector>
 
@@ -823,6 +826,889 @@ static void test_production_generator_reproducible()
             return;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// E0 -- literal sampler oracle for mechanical draw_excitation changes
+// ---------------------------------------------------------------------------
+//
+// This is deliberately a TEST-ONLY copy of today's sampler.  It is not a
+// second production path: its sole job is to make E1/E2 candidates prove that
+// every draw, including the caller RNG state afterwards, is unchanged.  The
+// existing support/frequency tests cannot detect every deterministic
+// reassociation that happens to leave the distribution intact.
+
+namespace sampler_oracle
+{
+    struct SpinExcitation
+    {
+        CIString det = 0;
+        double phase = 0.0;
+        bool valid = false;
+    };
+
+    enum class Klass { SingleA, SingleB, DoubleAA, DoubleBB, DoubleAB };
+
+    double parity_phase(CIString det, int orb)
+    {
+        const int below = std::popcount(
+            det & HartreeFock::Correlation::CASSCFInternal::low_bit_mask(orb));
+        return (below % 2 == 0) ? 1.0 : -1.0;
+    }
+
+    SpinExcitation excite_one(CIString det, int from, int to)
+    {
+        const CIString from_bit =
+            HartreeFock::Correlation::CASSCFInternal::single_bit_mask(from);
+        if (!(det & from_bit))
+            return {};
+        const double ann = parity_phase(det, from);
+        const CIString after_ann = det ^ from_bit;
+        const CIString to_bit =
+            HartreeFock::Correlation::CASSCFInternal::single_bit_mask(to);
+        if (after_ann & to_bit)
+            return {};
+        return {after_ann | to_bit, ann * parity_phase(after_ann, to), true};
+    }
+
+    std::pair<int, int> unrank_pair(int k, int n)
+    {
+        int i = 0;
+        while (k >= n - 1 - i)
+        {
+            k -= n - 1 - i;
+            ++i;
+        }
+        return {i, i + 1 + k};
+    }
+
+    int nth_set_bit(CIString x, int i, bool rank_mutant)
+    {
+        if (rank_mutant)
+            i = (i + 1) % std::popcount(x);
+        for (int bit = 0;
+             bit < HartreeFock::Correlation::CASSCFInternal::kCIStringBits;
+             ++bit)
+        {
+            if (x & (CIString(1) << bit))
+            {
+                if (i == 0)
+                    return bit;
+                --i;
+            }
+        }
+        return -1;
+    }
+
+    // E2 uses a supplied class and within-class rank so dispatch can be timed
+    // without charging RNG generation, bit selection, fermionic parity, or
+    // orbital updates to the dispatch decision.  It intentionally lives in the
+    // test oracle: production continues to use draw_excitation unchanged.
+    struct DispatchPlan
+    {
+        CIString occ_a = 0, occ_b = 0, vir_a = 0, vir_b = 0;
+        int na = 0, nb = 0, va = 0, vb = 0;
+        Klass klass = Klass::SingleA;
+        int k = 0;
+        double p_gen = 0.0;
+    };
+
+    struct ExcitationDescriptor
+    {
+        Klass klass = Klass::SingleA;
+        int i0 = 0, a0 = 0, i1 = -1, a1 = -1;
+        double p_gen = 0.0;
+    };
+
+    // The selected physical orbital indices are deliberately distinct from the
+    // within-mask ranks above.  E3 can therefore separate rank decomposition
+    // from bit selection, and separate both from fermionic materialization.
+    struct OrbitalDescriptor
+    {
+        Klass klass = Klass::SingleA;
+        int from0 = 0, to0 = 0, from1 = -1, to1 = -1;
+        double p_gen = 0.0;
+    };
+
+    std::array<int, 5> class_sizes(const DispatchPlan &p)
+    {
+        const int n_sa = p.na * p.va;
+        const int n_sb = p.nb * p.vb;
+        const int n_daa = (p.na >= 2 && p.va >= 2)
+                              ? (p.na * (p.na - 1) / 2)
+                                    * (p.va * (p.va - 1) / 2)
+                              : 0;
+        const int n_dbb = (p.nb >= 2 && p.vb >= 2)
+                              ? (p.nb * (p.nb - 1) / 2)
+                                    * (p.vb * (p.vb - 1) / 2)
+                              : 0;
+        return {n_sa, n_sb, n_daa, n_dbb, n_sa * n_sb};
+    }
+
+    DispatchPlan make_dispatch_plan(const DetKey &parent, int n_act,
+                                    Klass klass, int k)
+    {
+        const CIString act_mask =
+            HartreeFock::Correlation::CASSCFInternal::low_bit_mask(n_act);
+        DispatchPlan plan;
+        plan.occ_a = parent.alpha & act_mask;
+        plan.occ_b = parent.beta & act_mask;
+        plan.vir_a = ~parent.alpha & act_mask;
+        plan.vir_b = ~parent.beta & act_mask;
+        plan.na = std::popcount(plan.occ_a);
+        plan.nb = std::popcount(plan.occ_b);
+        plan.va = std::popcount(plan.vir_a);
+        plan.vb = std::popcount(plan.vir_b);
+        plan.klass = klass;
+        const auto sizes = class_sizes(plan);
+        const int ordinal = static_cast<int>(klass);
+        const int class_size = sizes[static_cast<std::size_t>(ordinal)];
+        int n_live = 0;
+        for (const int size : sizes)
+            n_live += size > 0;
+        if (class_size == 0 || n_live == 0)
+            return {};
+        plan.k = k % class_size;
+        plan.p_gen = (1.0 / static_cast<double>(n_live))
+                     / static_cast<double>(class_size);
+        return plan;
+    }
+
+    ExcitationDescriptor dispatch_literal(const DispatchPlan &p)
+    {
+        switch (p.klass)
+        {
+        case Klass::SingleA:
+            return {p.klass, p.k / p.va, p.k % p.va, -1, -1, p.p_gen};
+        case Klass::SingleB:
+            return {p.klass, p.k / p.vb, p.k % p.vb, -1, -1, p.p_gen};
+        case Klass::DoubleAA:
+        {
+            const int n_occ_pairs = p.na * (p.na - 1) / 2;
+            const auto [i, j] = unrank_pair(p.k % n_occ_pairs, p.na);
+            const auto [a, b] = unrank_pair(p.k / n_occ_pairs, p.va);
+            return {p.klass, i, a, j, b, p.p_gen};
+        }
+        case Klass::DoubleBB:
+        {
+            const int n_occ_pairs = p.nb * (p.nb - 1) / 2;
+            const auto [i, j] = unrank_pair(p.k % n_occ_pairs, p.nb);
+            const auto [a, b] = unrank_pair(p.k / n_occ_pairs, p.vb);
+            return {p.klass, i, a, j, b, p.p_gen};
+        }
+        case Klass::DoubleAB:
+        {
+            const int n_sa = p.na * p.va;
+            const int ka = p.k % n_sa;
+            const int kb = p.k / n_sa;
+            return {p.klass, ka / p.va, ka % p.va, kb / p.vb, kb % p.vb,
+                    p.p_gen};
+        }
+        }
+        return {};
+    }
+
+    ExcitationDescriptor dispatch_single_a(const DispatchPlan &p)
+    {
+        return {p.klass, p.k / p.va, p.k % p.va, -1, -1, p.p_gen};
+    }
+
+    ExcitationDescriptor dispatch_single_b(const DispatchPlan &p)
+    {
+        return {p.klass, p.k / p.vb, p.k % p.vb, -1, -1, p.p_gen};
+    }
+
+    ExcitationDescriptor dispatch_double_aa(const DispatchPlan &p)
+    {
+        const int n_occ_pairs = p.na * (p.na - 1) / 2;
+        const auto [i, j] = unrank_pair(p.k % n_occ_pairs, p.na);
+        const auto [a, b] = unrank_pair(p.k / n_occ_pairs, p.va);
+        return {p.klass, i, a, j, b, p.p_gen};
+    }
+
+    ExcitationDescriptor dispatch_double_bb(const DispatchPlan &p)
+    {
+        const int n_occ_pairs = p.nb * (p.nb - 1) / 2;
+        const auto [i, j] = unrank_pair(p.k % n_occ_pairs, p.nb);
+        const auto [a, b] = unrank_pair(p.k / n_occ_pairs, p.vb);
+        return {p.klass, i, a, j, b, p.p_gen};
+    }
+
+    ExcitationDescriptor dispatch_double_ab(const DispatchPlan &p)
+    {
+        const int n_sa = p.na * p.va;
+        const int ka = p.k % n_sa;
+        const int kb = p.k / n_sa;
+        return {p.klass, ka / p.va, ka % p.va, kb / p.vb, kb % p.vb,
+                p.p_gen};
+    }
+
+    ExcitationDescriptor dispatch_table(const DispatchPlan &p)
+    {
+        using Handler = ExcitationDescriptor (*)(const DispatchPlan &);
+        static constexpr std::array<Handler, 5> handlers{
+            dispatch_single_a, dispatch_single_b, dispatch_double_aa,
+            dispatch_double_bb, dispatch_double_ab};
+        return handlers[static_cast<std::size_t>(p.klass)](p);
+    }
+
+    OrbitalDescriptor select_orbitals(const DispatchPlan &p,
+                                      const ExcitationDescriptor &d)
+    {
+        const auto select = [](CIString mask, int rank) {
+            return nth_set_bit(mask, rank, false);
+        };
+        switch (d.klass)
+        {
+        case Klass::SingleA:
+            return {d.klass, select(p.occ_a, d.i0), select(p.vir_a, d.a0),
+                    -1, -1, d.p_gen};
+        case Klass::SingleB:
+            return {d.klass, select(p.occ_b, d.i0), select(p.vir_b, d.a0),
+                    -1, -1, d.p_gen};
+        case Klass::DoubleAA:
+            return {d.klass, select(p.occ_a, d.i0), select(p.vir_a, d.a0),
+                    select(p.occ_a, d.i1), select(p.vir_a, d.a1), d.p_gen};
+        case Klass::DoubleBB:
+            return {d.klass, select(p.occ_b, d.i0), select(p.vir_b, d.a0),
+                    select(p.occ_b, d.i1), select(p.vir_b, d.a1), d.p_gen};
+        case Klass::DoubleAB:
+            return {d.klass, select(p.occ_a, d.i0), select(p.vir_a, d.a0),
+                    select(p.occ_b, d.i1), select(p.vir_b, d.a1), d.p_gen};
+        }
+        return {};
+    }
+
+    Excitation materialize_orbitals(const DetKey &parent,
+                                    const OrbitalDescriptor &d)
+    {
+        switch (d.klass)
+        {
+        case Klass::SingleA:
+        {
+            const auto e = excite_one(parent.alpha, d.from0, d.to0);
+            return e.valid ? Excitation{DetKey{e.det, parent.beta}, e.phase,
+                                        d.p_gen, true}
+                           : Excitation{};
+        }
+        case Klass::SingleB:
+        {
+            const auto e = excite_one(parent.beta, d.from0, d.to0);
+            return e.valid ? Excitation{DetKey{parent.alpha, e.det}, e.phase,
+                                        d.p_gen, true}
+                           : Excitation{};
+        }
+        case Klass::DoubleAA:
+        {
+            const auto e1 = excite_one(parent.alpha, d.from0, d.to0);
+            if (!e1.valid)
+                return {};
+            const auto e2 = excite_one(e1.det, d.from1, d.to1);
+            return e2.valid ? Excitation{DetKey{e2.det, parent.beta},
+                                         e1.phase * e2.phase, d.p_gen, true}
+                            : Excitation{};
+        }
+        case Klass::DoubleBB:
+        {
+            const auto e1 = excite_one(parent.beta, d.from0, d.to0);
+            if (!e1.valid)
+                return {};
+            const auto e2 = excite_one(e1.det, d.from1, d.to1);
+            return e2.valid ? Excitation{DetKey{parent.alpha, e2.det},
+                                         e1.phase * e2.phase, d.p_gen, true}
+                            : Excitation{};
+        }
+        case Klass::DoubleAB:
+        {
+            const auto ea = excite_one(parent.alpha, d.from0, d.to0);
+            if (!ea.valid)
+                return {};
+            const auto eb = excite_one(parent.beta, d.from1, d.to1);
+            return eb.valid ? Excitation{DetKey{ea.det, eb.det},
+                                         ea.phase * eb.phase, d.p_gen, true}
+                            : Excitation{};
+        }
+        }
+        return {};
+    }
+
+    Excitation materialize_descriptor(const DetKey &parent,
+                                      const DispatchPlan &p,
+                                      const ExcitationDescriptor &d)
+    {
+        return materialize_orbitals(parent, select_orbitals(p, d));
+    }
+
+    Excitation draw(const DetKey &parent, int n_act, RandomSource &rng,
+                    bool rank_mutant = false)
+    {
+        const CIString act_mask =
+            HartreeFock::Correlation::CASSCFInternal::low_bit_mask(n_act);
+        const CIString occ_a = parent.alpha & act_mask;
+        const CIString occ_b = parent.beta & act_mask;
+        const CIString vir_a = ~parent.alpha & act_mask;
+        const CIString vir_b = ~parent.beta & act_mask;
+        const int na = std::popcount(occ_a);
+        const int nb = std::popcount(occ_b);
+        const int va = std::popcount(vir_a);
+        const int vb = std::popcount(vir_b);
+        const int n_sa = na * va;
+        const int n_sb = nb * vb;
+        const int n_daa = (na >= 2 && va >= 2)
+                              ? (na * (na - 1) / 2) * (va * (va - 1) / 2)
+                              : 0;
+        const int n_dbb = (nb >= 2 && vb >= 2)
+                              ? (nb * (nb - 1) / 2) * (vb * (vb - 1) / 2)
+                              : 0;
+        const int n_dab = n_sa * n_sb;
+
+        std::array<std::pair<Klass, int>, 5> live{};
+        int n_live = 0;
+        const auto add = [&](Klass c, int n) {
+            if (n > 0)
+                live[static_cast<std::size_t>(n_live++)] = {c, n};
+        };
+        add(Klass::SingleA, n_sa);
+        add(Klass::SingleB, n_sb);
+        add(Klass::DoubleAA, n_daa);
+        add(Klass::DoubleBB, n_dbb);
+        add(Klass::DoubleAB, n_dab);
+        if (n_live == 0)
+            return {};
+
+        const auto [klass, class_size] =
+            live[static_cast<std::size_t>(rng.uniform_int(n_live))];
+        const double p_gen = (1.0 / static_cast<double>(n_live))
+                             / static_cast<double>(class_size);
+        const int k = rng.uniform_int(class_size);
+        const auto select = [&](CIString mask, int rank) {
+            return nth_set_bit(mask, rank, rank_mutant);
+        };
+
+        switch (klass)
+        {
+        case Klass::SingleA:
+        {
+            const auto e = excite_one(parent.alpha, select(occ_a, k / va),
+                                      select(vir_a, k % va));
+            return e.valid ? Excitation{DetKey{e.det, parent.beta}, e.phase, p_gen, true}
+                           : Excitation{};
+        }
+        case Klass::SingleB:
+        {
+            const auto e = excite_one(parent.beta, select(occ_b, k / vb),
+                                      select(vir_b, k % vb));
+            return e.valid ? Excitation{DetKey{parent.alpha, e.det}, e.phase, p_gen, true}
+                           : Excitation{};
+        }
+        case Klass::DoubleAA:
+        {
+            const int n_occ_pairs = na * (na - 1) / 2;
+            const auto [i, j] = unrank_pair(k % n_occ_pairs, na);
+            const auto [a, b] = unrank_pair(k / n_occ_pairs, va);
+            const auto e1 = excite_one(parent.alpha, select(occ_a, i), select(vir_a, a));
+            if (!e1.valid)
+                return {};
+            const auto e2 = excite_one(e1.det, select(occ_a, j), select(vir_a, b));
+            return e2.valid ? Excitation{DetKey{e2.det, parent.beta},
+                                         e1.phase * e2.phase, p_gen, true}
+                            : Excitation{};
+        }
+        case Klass::DoubleBB:
+        {
+            const int n_occ_pairs = nb * (nb - 1) / 2;
+            const auto [i, j] = unrank_pair(k % n_occ_pairs, nb);
+            const auto [a, b] = unrank_pair(k / n_occ_pairs, vb);
+            const auto e1 = excite_one(parent.beta, select(occ_b, i), select(vir_b, a));
+            if (!e1.valid)
+                return {};
+            const auto e2 = excite_one(e1.det, select(occ_b, j), select(vir_b, b));
+            return e2.valid ? Excitation{DetKey{parent.alpha, e2.det},
+                                         e1.phase * e2.phase, p_gen, true}
+                            : Excitation{};
+        }
+        case Klass::DoubleAB:
+        {
+            const int ka = k % n_sa;
+            const int kb = k / n_sa;
+            const auto ea = excite_one(parent.alpha, select(occ_a, ka / va),
+                                       select(vir_a, ka % va));
+            if (!ea.valid)
+                return {};
+            const auto eb = excite_one(parent.beta, select(occ_b, kb / vb),
+                                       select(vir_b, kb % vb));
+            return eb.valid ? Excitation{DetKey{ea.det, eb.det},
+                                         ea.phase * eb.phase, p_gen, true}
+                            : Excitation{};
+        }
+        }
+        return {};
+    }
+} // namespace sampler_oracle
+
+static bool same_excitation(const Excitation &a, const Excitation &b)
+{
+    return a.det.alpha == b.det.alpha && a.det.beta == b.det.beta
+           && a.phase == b.phase && a.p_gen == b.p_gen && a.valid == b.valid;
+}
+
+static bool same_rng_state(RandomSource a, RandomSource b)
+{
+    for (int i = 0; i < 4; ++i)
+        if (a.uniform() != b.uniform())
+            return false;
+    return true;
+}
+
+static CIString patterned_occupancy(int n_act, int variant, int spin)
+{
+    CIString bits = 0;
+    for (int p = 0; p < n_act; ++p)
+    {
+        const bool occupied = (variant == 0) ? (p < (n_act + spin + 1) / 2)
+                            : (variant == 1) ? (p >= (n_act - spin) / 2)
+                            : (variant == 2) ? ((p + spin) % 2 == 0)
+                                             : ((p + 2 * spin) % 3 != 0);
+        if (occupied)
+            bits |= CIString(1) << p;
+    }
+    return bits;
+}
+
+static void test_literal_sampler_oracle()
+{
+    // Four layouts across every supported active-space size exercise low/high
+    // and alternating orbital ranks.  Multiple stream seeds make both class
+    // and within-class draws traverse the literal path without a costly
+    // statistical experiment.
+    const std::uint64_t seeds[] = {1, 0x123456789abcdef0ULL, 20261020ULL};
+    bool rank_mutation_detected = false;
+    for (int n_act = 1;
+         n_act <= HartreeFock::Correlation::CASSCFInternal::kMaxPackedSpatialOrbitals;
+         ++n_act)
+        for (int variant = 0; variant < 4; ++variant)
+        {
+            const DetKey parent{patterned_occupancy(n_act, variant, 0),
+                                patterned_occupancy(n_act, variant, 1)};
+            for (const std::uint64_t seed : seeds)
+            {
+                RandomSource production(seed), reference(seed), mutant(seed);
+                for (int draw = 0; draw < 32; ++draw)
+                {
+                    const Excitation actual = draw_excitation(parent, n_act, production);
+                    const Excitation expected = sampler_oracle::draw(parent, n_act, reference);
+                    if (!same_excitation(actual, expected)
+                        || !same_rng_state(production, reference))
+                    {
+                        check(false, "literal sampler oracle matches production draw and RNG state");
+                        return;
+                    }
+                    const Excitation rank_mutant =
+                        sampler_oracle::draw(parent, n_act, mutant, true);
+                    rank_mutation_detected = rank_mutation_detected
+                                             || !same_excitation(actual, rank_mutant);
+                }
+            }
+        }
+    check(rank_mutation_detected,
+          "literal sampler oracle rejects an off-by-one rank-selection mutant");
+}
+
+static bool same_descriptor(const sampler_oracle::ExcitationDescriptor &a,
+                            const sampler_oracle::ExcitationDescriptor &b)
+{
+    return a.klass == b.klass && a.i0 == b.i0 && a.a0 == b.a0
+           && a.i1 == b.i1 && a.a1 == b.a1 && a.p_gen == b.p_gen;
+}
+
+struct DispatchRequest
+{
+    DetKey parent;
+    int n_act = 0;
+    sampler_oracle::Klass klass = sampler_oracle::Klass::SingleA;
+    int k = 0;
+};
+
+static std::vector<DispatchRequest> dispatch_request_corpus()
+{
+    std::vector<DispatchRequest> requests;
+    const std::vector<std::pair<DetKey, int>> parents{
+        {det(0b00000011111, 0b11111000000), 11},
+        {det(0b000000001111111, 0b111110000000001), 15},
+        {det(0b0010010010010010010, 0b0100100100100100100), 19},
+        {det(0b000111, 0b000011), 6}};
+    for (const auto &[parent, n_act] : parents)
+        for (int ordinal = 0; ordinal < 5; ++ordinal)
+        {
+            const auto klass = static_cast<sampler_oracle::Klass>(ordinal);
+            const auto probe = sampler_oracle::make_dispatch_plan(parent, n_act,
+                                                                    klass, 0);
+            const int class_size = sampler_oracle::class_sizes(probe)
+                                       [static_cast<std::size_t>(ordinal)];
+            if (class_size == 0)
+                continue;
+            const int ranks[] = {0, class_size / 2, class_size - 1};
+            for (const int rank : ranks)
+                requests.push_back({parent, n_act, klass, rank});
+        }
+    return requests;
+}
+
+static std::vector<sampler_oracle::DispatchPlan> dispatch_plan_corpus()
+{
+    std::vector<sampler_oracle::DispatchPlan> plans;
+    for (const auto &request : dispatch_request_corpus())
+        plans.push_back(sampler_oracle::make_dispatch_plan(
+            request.parent, request.n_act, request.klass, request.k));
+    return plans;
+}
+
+static void test_dispatch_table_matches_literal()
+{
+    const auto plans = dispatch_plan_corpus();
+    bool exact = !plans.empty();
+    for (const auto &plan : plans)
+    {
+        const auto literal = sampler_oracle::dispatch_literal(plan);
+        const auto candidate = sampler_oracle::dispatch_table(plan);
+        const DetKey parent{plan.occ_a, plan.occ_b};
+        const auto orbitals = sampler_oracle::select_orbitals(plan, literal);
+        exact = exact && same_descriptor(literal, candidate)
+                && same_excitation(
+                    sampler_oracle::materialize_descriptor(parent, plan, literal),
+                    sampler_oracle::materialize_descriptor(parent, plan, candidate))
+                && same_excitation(
+                    sampler_oracle::materialize_descriptor(parent, plan, literal),
+                    sampler_oracle::materialize_orbitals(parent, orbitals));
+    }
+    check(exact,
+          "E2 supplied class/rank table dispatch matches literal descriptor and p_gen");
+}
+
+// E1 measures only rank selection.  The literal E0 oracle is the retained
+// pre-E1 implementation, so this comparison has the same parent corpus, RNG
+// stream, and excitation arithmetic on both sides.  It is deliberately
+// opt-in: timing is evidence for a candidate, not a unit-test assertion.
+static std::uint64_t sampler_benchmark_digest(const Excitation &e)
+{
+    return e.det.alpha ^ std::rotl(e.det.beta, 11)
+           ^ std::rotl(std::bit_cast<std::uint64_t>(e.phase), 23)
+           ^ std::rotl(std::bit_cast<std::uint64_t>(e.p_gen), 37)
+           ^ static_cast<std::uint64_t>(e.valid);
+}
+
+static std::size_t sampler_benchmark_count(const char *name,
+                                           std::size_t default_value)
+{
+    const char *text = std::getenv(name);
+    if (text == nullptr || *text == '\0')
+        return default_value;
+    char *end = nullptr;
+    const auto value = std::strtoull(text, &end, 10);
+    if (*end != '\0' || value == 0)
+    {
+        std::fprintf(stderr, "Invalid %s=%s; using %zu\n", name, text,
+                     default_value);
+        return default_value;
+    }
+    return static_cast<std::size_t>(value);
+}
+
+static std::uint64_t dispatch_benchmark_digest(
+    const sampler_oracle::ExcitationDescriptor &d)
+{
+    return static_cast<std::uint64_t>(d.klass)
+           ^ std::rotl(static_cast<std::uint64_t>(d.i0 + 1), 7)
+           ^ std::rotl(static_cast<std::uint64_t>(d.a0 + 1), 17)
+           ^ std::rotl(static_cast<std::uint64_t>(d.i1 + 2), 29)
+           ^ std::rotl(static_cast<std::uint64_t>(d.a1 + 2), 41)
+           ^ std::rotl(std::bit_cast<std::uint64_t>(d.p_gen), 53);
+}
+
+template <typename Dispatch>
+static std::pair<double, std::uint64_t>
+time_dispatch_plans(const std::vector<sampler_oracle::DispatchPlan> &plans,
+                    std::size_t draws, Dispatch &&dispatch)
+{
+    std::uint64_t digest = 0;
+    const auto started = std::chrono::steady_clock::now();
+    for (std::size_t i = 0; i < draws; ++i)
+        digest ^= std::rotl(dispatch_benchmark_digest(dispatch(plans[i % plans.size()])),
+                            static_cast<int>(i & 63));
+    const double seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - started).count();
+    return {seconds, digest};
+}
+
+static void run_dispatch_benchmark_if_requested()
+{
+    if (std::getenv("PLANCK_FCIQMC_DISPATCH_BENCHMARK") == nullptr)
+        return;
+
+    const std::size_t draws = sampler_benchmark_count(
+        "PLANCK_FCIQMC_DISPATCH_BENCHMARK_DRAWS", 10000000);
+    const std::size_t rounds = sampler_benchmark_count(
+        "PLANCK_FCIQMC_DISPATCH_BENCHMARK_ROUNDS", 5);
+    const auto plans = dispatch_plan_corpus();
+    std::vector<double> literal_seconds, table_seconds;
+    literal_seconds.reserve(rounds);
+    table_seconds.reserve(rounds);
+    std::uint64_t literal_digest = 0, table_digest = 0;
+    for (std::size_t round = 0; round < rounds; ++round)
+    {
+        const bool literal_first = (round % 2 == 0);
+        const auto literal = [&] {
+            return time_dispatch_plans(plans, draws,
+                                       sampler_oracle::dispatch_literal);
+        };
+        const auto table = [&] {
+            return time_dispatch_plans(plans, draws,
+                                       sampler_oracle::dispatch_table);
+        };
+        const auto first = literal_first ? literal() : table();
+        const auto second = literal_first ? table() : literal();
+        const auto literal_result = literal_first ? first : second;
+        const auto table_result = literal_first ? second : first;
+        literal_seconds.push_back(literal_result.first);
+        table_seconds.push_back(table_result.first);
+        literal_digest ^= literal_result.second;
+        table_digest ^= table_result.second;
+    }
+    std::sort(literal_seconds.begin(), literal_seconds.end());
+    std::sort(table_seconds.begin(), table_seconds.end());
+    const double literal = literal_seconds[rounds / 2];
+    const double table = table_seconds[rounds / 2];
+    check(literal_digest == table_digest,
+          "E2 dispatch benchmark preserves the literal descriptor stream");
+    std::printf("E2 dispatch benchmark draws=%zu rounds=%zu "
+                "literal_median_s=%.6f table_median_s=%.6f speedup=%.3fx "
+                "digest=%s\n",
+                draws, rounds, literal, table, literal / table,
+                literal_digest == table_digest ? "match" : "MISMATCH");
+}
+
+static std::uint64_t dispatch_plan_digest(const sampler_oracle::DispatchPlan &p)
+{
+    return p.occ_a ^ std::rotl(p.occ_b, 9) ^ std::rotl(p.vir_a, 19)
+           ^ std::rotl(p.vir_b, 31) ^ std::rotl(static_cast<std::uint64_t>(p.na), 41)
+           ^ std::rotl(static_cast<std::uint64_t>(p.nb), 47)
+           ^ std::rotl(static_cast<std::uint64_t>(p.va), 53)
+           ^ std::rotl(static_cast<std::uint64_t>(p.vb), 59)
+           ^ static_cast<std::uint64_t>(p.klass)
+           ^ std::rotl(static_cast<std::uint64_t>(p.k), 23)
+           ^ std::bit_cast<std::uint64_t>(p.p_gen);
+}
+
+static std::uint64_t sampler_benchmark_digest(const Excitation &e);
+
+static std::uint64_t orbital_descriptor_digest(
+    const sampler_oracle::OrbitalDescriptor &d)
+{
+    return static_cast<std::uint64_t>(d.klass)
+           ^ std::rotl(static_cast<std::uint64_t>(d.from0 + 1), 7)
+           ^ std::rotl(static_cast<std::uint64_t>(d.to0 + 1), 17)
+           ^ std::rotl(static_cast<std::uint64_t>(d.from1 + 2), 29)
+           ^ std::rotl(static_cast<std::uint64_t>(d.to1 + 2), 41)
+           ^ std::rotl(std::bit_cast<std::uint64_t>(d.p_gen), 53);
+}
+
+template <typename Input, typename Transform, typename Digest>
+static std::pair<double, std::uint64_t>
+time_generator_stage(const std::vector<Input> &inputs, std::size_t draws,
+                     Transform &&transform, Digest &&digest_of)
+{
+    std::uint64_t digest = 0;
+    const auto started = std::chrono::steady_clock::now();
+    for (std::size_t i = 0; i < draws; ++i)
+        digest ^= std::rotl(digest_of(transform(inputs[i % inputs.size()])),
+                            static_cast<int>(i & 63));
+    const double seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - started).count();
+    return {seconds, digest};
+}
+
+struct PreparedDispatchCase
+{
+    DetKey parent;
+    sampler_oracle::DispatchPlan plan;
+    sampler_oracle::ExcitationDescriptor descriptor;
+    sampler_oracle::OrbitalDescriptor orbitals;
+};
+
+static void run_generator_component_benchmark_if_requested()
+{
+    if (std::getenv("PLANCK_FCIQMC_COMPONENT_BENCHMARK") == nullptr)
+        return;
+
+    const std::size_t draws = sampler_benchmark_count(
+        "PLANCK_FCIQMC_COMPONENT_BENCHMARK_DRAWS", 5000000);
+    const std::size_t rounds = sampler_benchmark_count(
+        "PLANCK_FCIQMC_COMPONENT_BENCHMARK_ROUNDS", 5);
+    const auto requests = dispatch_request_corpus();
+    std::vector<sampler_oracle::DispatchPlan> plans;
+    std::vector<PreparedDispatchCase> prepared;
+    plans.reserve(requests.size());
+    prepared.reserve(requests.size());
+    for (const auto &request : requests)
+    {
+        const auto plan = sampler_oracle::make_dispatch_plan(
+            request.parent, request.n_act, request.klass, request.k);
+        const auto descriptor = sampler_oracle::dispatch_literal(plan);
+        plans.push_back(plan);
+        prepared.push_back({request.parent, plan, descriptor,
+                            sampler_oracle::select_orbitals(plan, descriptor)});
+    }
+
+    std::vector<double> setup_seconds, rank_seconds, select_seconds,
+        materialize_seconds, pipeline_seconds;
+    setup_seconds.reserve(rounds);
+    rank_seconds.reserve(rounds);
+    select_seconds.reserve(rounds);
+    materialize_seconds.reserve(rounds);
+    pipeline_seconds.reserve(rounds);
+    std::uint64_t setup_digest = 0, rank_digest = 0, select_digest = 0,
+                  materialize_digest = 0, pipeline_digest = 0;
+    for (std::size_t round = 0; round < rounds; ++round)
+    {
+        const auto setup = time_generator_stage(
+            requests, draws,
+            [](const DispatchRequest &r) {
+                return sampler_oracle::make_dispatch_plan(r.parent, r.n_act,
+                                                          r.klass, r.k);
+            },
+            dispatch_plan_digest);
+        const auto rank = time_generator_stage(
+            plans, draws, sampler_oracle::dispatch_literal,
+            dispatch_benchmark_digest);
+        const auto select = time_generator_stage(
+            prepared, draws,
+            [](const PreparedDispatchCase &c) {
+                return sampler_oracle::select_orbitals(c.plan, c.descriptor);
+            },
+            orbital_descriptor_digest);
+        const auto materialize = time_generator_stage(
+            prepared, draws,
+            [](const PreparedDispatchCase &c) {
+                return sampler_oracle::materialize_orbitals(c.parent, c.orbitals);
+            },
+            sampler_benchmark_digest);
+        const auto pipeline = time_generator_stage(
+            requests, draws,
+            [](const DispatchRequest &r) {
+                const auto plan = sampler_oracle::make_dispatch_plan(
+                    r.parent, r.n_act, r.klass, r.k);
+                const auto descriptor = sampler_oracle::dispatch_literal(plan);
+                return sampler_oracle::materialize_orbitals(
+                    r.parent, sampler_oracle::select_orbitals(plan, descriptor));
+            },
+            sampler_benchmark_digest);
+        setup_seconds.push_back(setup.first);
+        rank_seconds.push_back(rank.first);
+        select_seconds.push_back(select.first);
+        materialize_seconds.push_back(materialize.first);
+        pipeline_seconds.push_back(pipeline.first);
+        setup_digest ^= setup.second;
+        rank_digest ^= rank.second;
+        select_digest ^= select.second;
+        materialize_digest ^= materialize.second;
+        pipeline_digest ^= pipeline.second;
+    }
+    const auto median = [](std::vector<double> values) {
+        std::sort(values.begin(), values.end());
+        return values[values.size() / 2];
+    };
+    // The precomputed materialization and the recomposed pipeline visit the
+    // same request sequence. Their final excitation digests must agree; the
+    // other digests make a removed or reordered intermediate stage observable.
+    check(!requests.empty() && pipeline_digest == materialize_digest,
+          "E3 recomposed generator matches the precomputed materialization stream");
+    std::printf("E3 generator components draws=%zu rounds=%zu "
+                "setup_median_s=%.6f rank_median_s=%.6f "
+                "select_median_s=%.6f materialize_median_s=%.6f "
+                "pipeline_median_s=%.6f digests=(%llx,%llx,%llx,%llx,%llx)\n",
+                draws, rounds, median(setup_seconds), median(rank_seconds),
+                median(select_seconds), median(materialize_seconds),
+                median(pipeline_seconds),
+                static_cast<unsigned long long>(setup_digest),
+                static_cast<unsigned long long>(rank_digest),
+                static_cast<unsigned long long>(select_digest),
+                static_cast<unsigned long long>(materialize_digest),
+                static_cast<unsigned long long>(pipeline_digest));
+}
+
+template <typename Draw>
+static std::pair<double, std::uint64_t>
+time_sampler_draws(const std::vector<std::pair<DetKey, int>> &corpus,
+                   std::size_t draws, Draw &&draw)
+{
+    RandomSource rng(0x4a8dd65031f47b29ULL);
+    std::uint64_t digest = 0;
+    const auto started = std::chrono::steady_clock::now();
+    for (std::size_t i = 0; i < draws; ++i)
+    {
+        const auto &[parent, n_act] = corpus[i % corpus.size()];
+        digest ^= std::rotl(sampler_benchmark_digest(draw(parent, n_act, rng)),
+                            static_cast<int>(i & 63));
+    }
+    const double seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - started).count();
+    return {seconds, digest};
+}
+
+static void run_rank_selection_benchmark_if_requested()
+{
+    if (std::getenv("PLANCK_FCIQMC_BENCHMARK") == nullptr)
+        return;
+
+    const std::size_t draws = sampler_benchmark_count(
+        "PLANCK_FCIQMC_BENCHMARK_DRAWS", 5000000);
+    const std::size_t rounds = sampler_benchmark_count(
+        "PLANCK_FCIQMC_BENCHMARK_ROUNDS", 5);
+    // Closed- and open-shell entries make the measured ranks span the five
+    // excitation classes rather than rewarding a single hand-picked class.
+    const std::vector<std::pair<DetKey, int>> corpus{
+        {det(0b00000011111, 0b11111000000), 11},
+        {det(0b000000001111111, 0b111110000000001), 15},
+        {det(0b0010010010010010010, 0b0100100100100100100), 19}};
+    std::vector<double> production_seconds, reference_seconds;
+    production_seconds.reserve(rounds);
+    reference_seconds.reserve(rounds);
+    std::uint64_t production_digest = 0, reference_digest = 0;
+    for (std::size_t round = 0; round < rounds; ++round)
+    {
+        const bool production_first = (round % 2 == 0);
+        const auto production = [&] {
+            return time_sampler_draws(corpus, draws,
+                                      [](const DetKey &d, int n, RandomSource &r) {
+                                          return draw_excitation(d, n, r);
+                                      });
+        };
+        const auto reference = [&] {
+            return time_sampler_draws(corpus, draws,
+                                      [](const DetKey &d, int n, RandomSource &r) {
+                                          return sampler_oracle::draw(d, n, r);
+                                      });
+        };
+        const auto first = production_first ? production() : reference();
+        const auto second = production_first ? reference() : production();
+        const auto result_production = production_first ? first : second;
+        const auto result_reference = production_first ? second : first;
+        production_seconds.push_back(result_production.first);
+        reference_seconds.push_back(result_reference.first);
+        production_digest ^= result_production.second;
+        reference_digest ^= result_reference.second;
+    }
+    std::sort(production_seconds.begin(), production_seconds.end());
+    std::sort(reference_seconds.begin(), reference_seconds.end());
+    const double production = production_seconds[rounds / 2];
+    const double reference = reference_seconds[rounds / 2];
+    check(production_digest == reference_digest,
+          "E1 benchmark preserves the literal sampler trajectory");
+    std::printf("E1 rank-select benchmark draws=%zu rounds=%zu "
+                "candidate_median_s=%.6f literal_median_s=%.6f speedup=%.3fx "
+                "digest=%s\n",
+                draws, rounds, production, reference, reference / production,
+                production_digest == reference_digest ? "match" : "MISMATCH");
 }
 
 // ---------------------------------------------------------------------------
@@ -2214,6 +3100,287 @@ static void test_trajectory_digest_is_sensitive()
     check(h1 != h2, "the trajectory digest distinguishes a one-ulp difference");
 }
 
+static void test_profile_is_a_passive_trajectory_observer()
+{
+    // The scaling ledger must be a side channel only.  This catches the easy
+    // mistake of conditioning a random draw, an arithmetic contribution, or an
+    // merge order on whether profiling was requested.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    WalkerPopulation start;
+    for (std::size_t i = 0; i < toy.dets.size(); ++i)
+        if (i % 3 == 0)
+            start.add(toy.dets[i], (i % 2 == 0) ? 2.0 : -1.0);
+
+    RandomSource plain_rng(741852), profiled_rng(741852);
+    const auto plain = propagate_stochastic(start, 4, ops, 0.01, -2.0,
+                                             plain_rng, 3, 1.0, 0.0);
+
+    SpawnWorkspace workspace;
+    WalkerPopulation profiled;
+    FCIQMCPropagationProfile profile;
+    propagate_stochastic(start, 4, ops, 0.01, -2.0, profiled_rng, 3, 1.0,
+                         0.0, workspace, profiled, &profile);
+
+    for (const auto &det : toy.dets)
+        check(plain.weight_at(det) == profiled.weight_at(det),
+              "FCIQMC profile preserves every walker weight bitwise");
+    check(plain_rng.raw64() == profiled_rng.raw64(),
+          "FCIQMC profile preserves caller RNG consumption");
+
+    std::uint64_t parents = 0, attempts = 0, raw = 0, folded = 0;
+    for (const auto &bin : profile.bins)
+    {
+        parents += bin.parents;
+        attempts += bin.spawn_attempts;
+        raw += bin.accumulator_records;
+        folded += bin.finalized_records;
+    }
+    check(profile.calls == 1, "FCIQMC profile records one propagation call");
+    check(parents == start.size(), "FCIQMC profile accounts for every parent");
+    check(attempts == 3 * start.size(), "FCIQMC profile accounts for every spawn draw");
+    check(raw >= parents && folded <= raw,
+          "FCIQMC profile records the accumulator before and after fold");
+}
+
+static void test_literal_canonical_merge_matches_map_output()
+{
+    // The candidate contiguous owner must begin as an oracle for today's merge,
+    // not as an independently assumed reduction.  In particular, equal children
+    // from different bins must fold in the existing ascending-bin order.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    WalkerPopulation start;
+    for (std::size_t i = 0; i < toy.dets.size(); ++i)
+        if (i % 2 == 0)
+            start.add(toy.dets[i], (i % 4 == 0) ? 3.0 : -2.0);
+
+    RandomSource rng(192837);
+    SpawnWorkspace workspace;
+    WalkerPopulation map_output;
+    propagate_stochastic(start, 4, ops, 0.01, -2.0, rng, 4, 0.0, 0.0,
+                         workspace, map_output);
+    const auto canonical = merge_finalized_spawn_bins(workspace.bins);
+    const auto pairwise = merge_finalized_spawn_bins_pairwise(workspace.bins);
+    CanonicalWalkerPopulation contiguous;
+    contiguous.assign_sorted(canonical.entries);
+
+    check(canonical.entries.size() == map_output.size(),
+          "literal canonical merge retains every map output determinant");
+    check(contiguous.size() == map_output.size(),
+          "contiguous canonical owner retains every map output determinant");
+    check(pairwise.entries.size() == canonical.entries.size(),
+          "pairwise canonical merge retains every heap-merge determinant");
+    for (std::size_t i = 0; i < canonical.entries.size(); ++i)
+    {
+        const auto &[key, weight] = canonical.entries[i];
+        check(std::bit_cast<std::uint64_t>(weight)
+                  == std::bit_cast<std::uint64_t>(map_output.weight_at(key)),
+              "literal canonical merge preserves current cross-bin fold bits");
+        check(std::bit_cast<std::uint64_t>(contiguous.weight_at(key))
+                  == std::bit_cast<std::uint64_t>(map_output.weight_at(key)),
+              "contiguous canonical owner preserves lookup bits");
+        check(i < pairwise.entries.size()
+                  && pairwise.entries[i].first == key
+                  && std::bit_cast<std::uint64_t>(pairwise.entries[i].second)
+                         == std::bit_cast<std::uint64_t>(weight),
+              "pairwise canonical merge preserves heap-merge bits");
+        if (i > 0)
+        {
+            const DetKey &previous = canonical.entries[i - 1].first;
+            check(previous.alpha < key.alpha
+                      || (previous.alpha == key.alpha && previous.beta < key.beta),
+                  "literal canonical merge emits a strict determinant order");
+        }
+    }
+    check(contiguous.weight_at(DetKey{CIString{0}, CIString{0}}) == 0.0,
+          "contiguous canonical owner reports absent determinant as unoccupied");
+
+    CanonicalWalkerPopulation compacted;
+    compacted.assign_sorted({
+        {DetKey{CIString{1}, CIString{1}}, 1.0},
+        {DetKey{CIString{1}, CIString{2}}, 0.0},
+        {DetKey{CIString{2}, CIString{1}}, -1.0e-13},
+        {DetKey{CIString{2}, CIString{2}}, -2.0},
+    });
+    const auto compressed = compacted.compress_with_l1_norm(1.0e-12);
+    check(compressed.removed == 2 && compacted.size() == 2,
+          "contiguous canonical owner compresses zero and threshold entries");
+    check(compressed.l1_norm == 3.0,
+          "contiguous canonical owner computes compacted L1 norm");
+    check(compacted.at(0).first == DetKey{CIString{1}, CIString{1}}
+              && compacted.at(1).first == DetKey{CIString{2}, CIString{2}},
+          "contiguous canonical compaction preserves determinant order");
+}
+
+// M1.1: each pair at a tree level has disjoint input and a predetermined
+// output slot.  Exercise every level with cross-bin duplicate keys whose
+// non-associative sums make a changed tree observable.
+static void test_level_parallel_pairwise_merge_matches_sequential()
+{
+    std::vector<SpawnAccumulator> bins(kFciqmcBins);
+    std::size_t tagged_entries = 0;
+    for (std::size_t bin = 0; bin < bins.size(); ++bin)
+    {
+        // The shared key crosses all 64 leaves. Its weights deliberately span
+        // a range that makes an accidental intermediate fold visible.
+        bins[bin].add(DetKey{CIString{0x55}, CIString{0xaa}},
+                      (bin % 3 == 0) ? 1.0 : ((bin % 3 == 1) ? 1.0e-15 : -1.0));
+        ++tagged_entries;
+        for (std::size_t record = 0; record < 1 + bin % 7; ++record)
+        {
+            const CIString alpha = static_cast<CIString>(1 + (17 * bin + record) % 251);
+            const CIString beta = static_cast<CIString>(1 + (29 * bin + 3 * record) % 251);
+            bins[bin].add(DetKey{alpha, beta},
+                          (record % 2 == 0 ? 1.0 : -1.0)
+                              * std::ldexp(1.0, -static_cast<int>((bin + record) % 40)));
+            ++tagged_entries;
+        }
+        bins[bin].finalize();
+    }
+
+    PairwiseSpawnMergeProfile sequential_profile, parallel_profile;
+    const auto sequential = merge_finalized_spawn_bins_pairwise(
+        bins, &sequential_profile);
+    const auto parallel = merge_finalized_spawn_bins_pairwise_parallel(
+        bins, &parallel_profile);
+    check(sequential.entries.size() == parallel.entries.size(),
+          "M1 level-parallel merge retains sequential entry count");
+    for (std::size_t i = 0; i < sequential.entries.size(); ++i)
+    {
+        check(i < parallel.entries.size()
+                  && sequential.entries[i].first == parallel.entries[i].first
+                  && std::bit_cast<std::uint64_t>(sequential.entries[i].second)
+                         == std::bit_cast<std::uint64_t>(parallel.entries[i].second),
+              "M1 level-parallel merge preserves sequential pairwise bits");
+    }
+    check(sequential_profile.levels == 6 && parallel_profile.levels == 6,
+          "M1 pairwise merge retains the six-level 64-bin tree");
+    check(sequential_profile.peak_live_entries <= 2 * tagged_entries
+              && parallel_profile.peak_live_entries <= 2 * tagged_entries,
+          "M1 pairwise merge retains at most two tagged tree levels");
+    check(sequential_profile.peak_live_bytes
+                  == sequential_profile.peak_live_entries
+                         * sequential_profile.tagged_entry_bytes
+              && parallel_profile.peak_live_bytes
+                     == parallel_profile.peak_live_entries
+                            * parallel_profile.tagged_entry_bytes,
+          "M1 tagged-entry byte accounting matches its storage contract");
+}
+
+static void test_parent_keyed_stream_is_independent_of_parent_visit_order()
+{
+    // This is the contract needed before a future contiguous/canonical
+    // population owner may replace unordered_map iteration.  Each parent owns
+    // its excitation and rounding variates, so reversing the visitation order
+    // changes neither the individual streams nor the folded contribution.
+    // propagate_stochastic uses the same convention; this small oracle keeps
+    // the invariant independent of its larger integration path.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    std::vector<std::pair<DetKey, Weight>> parents;
+    for (std::size_t i = 0; i < toy.dets.size(); ++i)
+        if (i % 3 == 0)
+            parents.push_back({toy.dets[i], (i % 2 == 0) ? 1.75 : -0.75});
+
+    const RandomSource bin_root = RandomSource(918273645ULL).derive(17);
+    auto sample = [&](bool reverse) {
+        SpawnAccumulator records;
+        for (std::size_t step = 0; step < parents.size(); ++step)
+        {
+            const std::size_t i = reverse ? parents.size() - 1 - step : step;
+            const auto &[parent, weight] = parents[i];
+            RandomSource parent_rng = bin_root.derive_parent(parent);
+            for (int attempt = 0; attempt < 5; ++attempt)
+            {
+                const auto exc = draw_excitation(parent, 4, parent_rng);
+                if (!exc.valid || exc.p_gen <= 0.0)
+                    continue;
+                const double h = ops.off_diagonal(parent, exc.det);
+                if (h == 0.0)
+                    continue;
+                const double raw = -0.01 * h * (weight / 5.0) / exc.p_gen;
+                const double child = parent_rng.stochastic_round(raw / 0.25) * 0.25;
+                if (child != 0.0)
+                    records.add(exc.det, child);
+            }
+        }
+        records.finalize();
+        return records;
+    };
+
+    const auto forward = sample(false);
+    const auto reverse = sample(true);
+    check(forward.size() == reverse.size(),
+          "parent-keyed streams preserve folded record count under reversal");
+    for (std::size_t i = 0; i < forward.size() && i < reverse.size(); ++i)
+    {
+        const auto &a = forward.at(i);
+        const auto &b = reverse.at(i);
+        check(a.first == b.first
+                  && std::bit_cast<std::uint64_t>(a.second)
+                         == std::bit_cast<std::uint64_t>(b.second),
+              "parent-keyed streams preserve folded contribution bits under reversal");
+    }
+
+    // Both spin strings must affect the stream.  This catches the subtle but
+    // catastrophic mistake of keying only on alpha occupation in an open-shell
+    // population.
+    check(bin_root.derive_parent(parents.front().first).raw64()
+              != bin_root.derive_parent(DetKey{parents.front().first.alpha,
+                                                parents.front().first.beta ^ CIString{1}}).raw64(),
+          "parent-keyed stream includes the beta determinant string");
+}
+
+static void test_canonical_owner_roundtrips_through_propagation()
+{
+    // This incremental adapter gate proves the direct read-side transfer:
+    // canonical storage and map storage must produce the identical following
+    // propagation now that each parent's stream is keyed by its determinant.
+    // Output remains the established map here; changing that owner is the next
+    // independently gated step.
+    const ToyHamiltonian toy(4, 2, 2);
+    const auto ops = toy.ops(4);
+    WalkerPopulation incoming;
+    for (std::size_t i = 0; i < toy.dets.size(); ++i)
+        if (i % 2 == 0)
+            incoming.add(toy.dets[i], (i % 4 == 0) ? 2.5 : -0.75);
+
+    RandomSource first_rng(741963);
+    SpawnWorkspace workspace;
+    WalkerPopulation map_owner;
+    propagate_stochastic(incoming, 4, ops, 0.01, -2.0, first_rng, 3, 1.0,
+                         0.0, workspace, map_owner);
+    const auto merge = merge_finalized_spawn_bins(workspace.bins);
+    CanonicalWalkerPopulation canonical;
+    canonical.assign_sorted(merge.entries);
+
+    RandomSource map_rng(1234567), canonical_rng(1234567);
+    const auto map_next = propagate_stochastic(map_owner, 4, ops, 0.01, -2.0,
+                                               map_rng, 3, 1.0, 0.0);
+    SpawnWorkspace canonical_workspace;
+    CanonicalWalkerPopulation canonical_next;
+    propagate_stochastic(canonical, 4, ops, 0.01, -2.0, canonical_rng,
+                         3, 1.0, 0.0, canonical_workspace, canonical_next);
+    const auto sequential_oracle = merge_finalized_spawn_bins_pairwise(
+        canonical_workspace.bins);
+    check(canonical_next.size() == sequential_oracle.entries.size(),
+          "M1 production population retains sequential merge entry count");
+    for (std::size_t i = 0; i < canonical_next.size()
+                            && i < sequential_oracle.entries.size(); ++i)
+        check(canonical_next.at(i).first == sequential_oracle.entries[i].first
+                  && std::bit_cast<std::uint64_t>(canonical_next.at(i).second)
+                         == std::bit_cast<std::uint64_t>(
+                             sequential_oracle.entries[i].second),
+              "M1 production propagation preserves sequential merge bits");
+    for (const auto &key : toy.dets)
+        check(std::bit_cast<std::uint64_t>(map_next.weight_at(key))
+                  == std::bit_cast<std::uint64_t>(canonical_next.weight_at(key)),
+          "canonical owner direct path preserves next propagation bits");
+    check(map_rng.raw64() == canonical_rng.raw64(),
+          "canonical owner direct path preserves caller RNG consumption");
+}
+
 static void test_compression_does_not_break_reproducibility()
 {
     // compress() erases from a hash map while iterating. If that ever became
@@ -3423,10 +4590,10 @@ static void test_initiator_judges_occupancy_before_the_sweep()
     for (std::size_t i = toy.dets.size(); i > 0; --i)
         reverse.add(toy.dets[i - 1], ((i - 1) % 2 == 0) ? 2.0 : 0.5);
 
-    // CONTROL FIRST: the same comparison with the initiator DISABLED. If that
-    // also differs, insertion order is changing the result for a reason unrelated
-    // to the initiator -- the population iterates in hash order and draws from a
-    // shared RNG, so a different order gives each parent different draws.
+    // CONTROL FIRST: the same comparison with the initiator DISABLED.  The
+    // parent-keyed RNG convention means both populations must now produce the
+    // exact same propagation result despite their deliberately different hash
+    // layouts.  This is the end-to-end production gate for the convention.
     RandomSource c0(13579), c1(13579);
     const auto ctrl_a = propagate_stochastic(forward, 4, ops, dt, -2.0, c0, 4, 1.0, 0.0);
     const auto ctrl_b = propagate_stochastic(reverse, 4, ops, dt, -2.0, c1, 4, 1.0, 0.0);
@@ -3443,16 +4610,10 @@ static void test_initiator_judges_occupancy_before_the_sweep()
         if (sa.weight_at(d) != sb.weight_at(d))
             initiator_differs = true;
 
-    // The claim is that the INITIATOR adds no order dependence beyond whatever
-    // the propagator already has. Comparing against the control is what isolates
-    // it -- asserting the initiator run alone is order-independent would fail for
-    // a reason that has nothing to do with the initiator.
-    if (initiator_differs && !control_differs)
-    {
-        check(false, "the initiator rule adds order dependence the propagator "
-                     "does not already have");
-        return;
-    }
+    check(!control_differs,
+          "parent-keyed streams make propagation independent of insertion order");
+    check(!initiator_differs,
+          "the initiator preserves parent-keyed insertion-order independence");
     if (std::getenv("PLANCK_FCIQMC_VERBOSE") != nullptr)
         std::printf("      order dependence: control=%s initiator=%s\n",
                     control_differs ? "yes" : "no",
@@ -3494,6 +4655,12 @@ int main()
     test_production_generator_reproducible();
     test_open_shell_support_and_frequency();
 
+    std::printf("E0 -- literal sampler oracle\n");
+    test_literal_sampler_oracle();
+
+    std::printf("E2 -- supplied-input dispatch oracle\n");
+    test_dispatch_table_matches_literal();
+
     std::printf("F2.4 -- the gate rejects broken generators\n");
     test_gate_rejects_broken_generators();
 
@@ -3530,6 +4697,11 @@ int main()
     std::printf("F3.5 -- fixed-seed trajectory reproducibility\n");
     test_trajectory_is_reproducible();
     test_trajectory_digest_is_sensitive();
+    test_profile_is_a_passive_trajectory_observer();
+    test_literal_canonical_merge_matches_map_output();
+    test_level_parallel_pairwise_merge_matches_sequential();
+    test_parent_keyed_stream_is_independent_of_parent_visit_order();
+    test_canonical_owner_roundtrips_through_propagation();
     test_compression_does_not_break_reproducibility();
 
     std::printf("F4.1 -- shift control\n");
@@ -3564,6 +4736,14 @@ int main()
 
     if (g_failures == 0)
     {
+        run_rank_selection_benchmark_if_requested();
+        run_dispatch_benchmark_if_requested();
+        run_generator_component_benchmark_if_requested();
+        if (g_failures != 0)
+        {
+            std::printf("%d FAILURE(S).\n", g_failures);
+            return 1;
+        }
         std::printf("All checks passed.\n");
         return 0;
     }

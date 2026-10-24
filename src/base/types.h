@@ -800,6 +800,11 @@ namespace HartreeFock
         int sampling_steps = 8000;         // averaged
         int spawn_attempts = 1;            // draws per walker per iteration
 
+        // Emit the opt-in scaling ledger.  This changes neither the stochastic
+        // evolution nor the estimator; it only records work and wall-time
+        // counters around the existing fixed-order propagation phases.
+        bool profile = false;
+
         // The seed is USER-VISIBLE on purpose. The reproducibility contract --
         // same seed reproduces the trajectory bitwise -- is worthless if the seed
         // cannot be set and is not recorded in the output.
@@ -972,6 +977,20 @@ namespace HartreeFock
                     pp.inv_zeta = inv_zeta;
                     pp.coeff_product = cA * cB * A._shell->_normalizations[i] * B._shell->_normalizations[j] * A._component_norm * B._component_norm;
                     pp.prefactor = std::pow(std::numbers::pi * inv_zeta, 1.5) * std::exp(-alpha_beta_over_zeta * R2);
+
+                    // Drop primitive pairs whose overlap prefactor has underflowed
+                    // to nothing: tight primitives on distant atoms, where
+                    // exp(-alpha beta R^2 / zeta) is ~e^-55 or smaller. Every
+                    // integral over the pair is bounded by this times polynomial
+                    // and exponent factors, so it contributes nothing at double
+                    // precision. On water clusters these were ~19 % of all ERI
+                    // primitive quartets; dropping them left G bit-identical on
+                    // every probe fixture (docs/ERI_SHELL_QUARTET_FOCK_BUILD.md, P1).
+                    // ponytail: fixed absolute cutoff, independent of tol_eri;
+                    // tie it to the screening tolerance only if a case needs it.
+                    constexpr double kNegligiblePrimitivePair = 1e-24;
+                    if (std::abs(pp.coeff_product * pp.prefactor) < kNegligiblePrimitivePair)
+                        continue;
 
                     // Gaussian product center
                     pp.center = (alpha * A._shell->_center + beta * B._shell->_center) * inv_zeta;

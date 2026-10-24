@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 
+#include "require_boys_library.h"
 #include "base/basis.h"
 #include "base/types.h"
 #include "basis/basis.h"
@@ -161,6 +162,8 @@ namespace
 
 int main()
 {
+    if (!require_boys_library())
+        return 1;
     HartreeFock::Calculator calc = make_water_sto3g();
     if (!g_ok)
     {

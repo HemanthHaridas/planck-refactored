@@ -1150,12 +1150,14 @@ if(BUILD_TESTING)
     # boys_vec vs scalar boys bitwise-equality gate.
     add_executable(planck-boys-vec
         ${CMAKE_SOURCE_DIR}/tests/boys_vec.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${LOOKUP_SRC}
     )
     target_include_directories(planck-boys-vec PRIVATE ${SRC_DIR})
 
     add_executable(planck-hgp-engine-smoke
         ${CMAKE_SOURCE_DIR}/tests/hgp_engine_smoke.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
@@ -1170,6 +1172,7 @@ if(BUILD_TESTING)
     # loop. Pins permutational symmetry + golden checksum/elements.
     add_executable(planck-compute-2e
         ${CMAKE_SOURCE_DIR}/tests/compute_2e_unit.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
@@ -1185,6 +1188,7 @@ if(BUILD_TESTING)
     # plus the ESP assembly itself.
     add_executable(planck-esp-points
         ${CMAKE_SOURCE_DIR}/tests/esp_points.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/populations/esp.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
@@ -1198,6 +1202,7 @@ if(BUILD_TESTING)
     add_executable(planck-fock-accumulate
         ${CMAKE_SOURCE_DIR}/tests/fock_accumulate.cpp
         ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
+        ${SRC_DIR}/symmetry/integral_symmetry.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
@@ -1237,6 +1242,7 @@ if(BUILD_TESTING)
     # Detached U2 physical two-spin AO response. No UKS gradient driver.
     add_executable(planck-udh-ks-response
         ${CMAKE_SOURCE_DIR}/tests/udh_ks_response.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/dft/udh_ks_response.cpp
         ${SRC_DIR}/dft/analytic_hessian.cpp
         ${SRC_DIR}/dft/xc_grid.cpp
@@ -1379,6 +1385,7 @@ if(BUILD_TESTING)
     # U7 detached spin-resolved ERI tensors and fixed-contract non-XC oracles.
     add_executable(planck-udh-two-particle-density
         ${CMAKE_SOURCE_DIR}/tests/udh_two_particle_density.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/dft/udh_two_particle_density.cpp
         ${SRC_DIR}/dft/udh_relaxed_density.cpp
         ${SRC_DIR}/dft/udh_pt2_gradient.cpp
@@ -1407,6 +1414,7 @@ if(BUILD_TESTING)
     # U8a detached complete polarized LDA XC-II, four geometry channels.
     add_executable(planck-udh-xc-ii-lda
         ${CMAKE_SOURCE_DIR}/tests/udh_xc_ii_lda.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/dft/udh_xc_ii.cpp
         ${SRC_DIR}/dft/ks_matrix.cpp
         ${SRC_DIR}/dft/dh_pt2_gradient.cpp
@@ -1434,6 +1442,7 @@ if(BUILD_TESTING)
     # U8b detached complete polarized GGA XC-II and Hessian-bearing oracles.
     add_executable(planck-udh-xc-ii-gga
         ${CMAKE_SOURCE_DIR}/tests/udh_xc_ii_gga.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/dft/udh_xc_ii_gga.cpp
         ${SRC_DIR}/dft/dh_pt2_gradient.cpp
         ${SRC_DIR}/dft/ks_matrix.cpp
@@ -1493,6 +1502,7 @@ if(BUILD_TESTING)
 
     add_executable(planck-hgp-quartet-validation
         ${CMAKE_SOURCE_DIR}/tests/hgp_quartet_validation.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
@@ -1504,6 +1514,7 @@ if(BUILD_TESTING)
 
     add_executable(planck-os-block-kernel
         ${CMAKE_SOURCE_DIR}/tests/os_block_kernel.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
@@ -1515,6 +1526,7 @@ if(BUILD_TESTING)
 
     add_executable(planck-hgp-triangular-contract
         ${CMAKE_SOURCE_DIR}/tests/hgp_triangular_contract.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp
@@ -1557,6 +1569,21 @@ if(BUILD_TESTING)
         ${LOOKUP_SRC}
     )
 
+    # Per-angular-momentum-class share of the direct Fock build (C0 of
+    # docs/ERI_SHELL_QUARTET_FOCK_BUILD.md). A measurement, not a ctest.
+    add_executable(planck-eri-class-share
+        ${CMAKE_SOURCE_DIR}/tests/eri_class_share_benchmark.cpp
+        ${SRC_DIR}/symmetry/integral_symmetry.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
+    )
+
     # POPULATIONS_SRC is a glob, so this target picks up every file added to
     # src/populations -- including esp.cpp, which unlike the Mulliken/Lowdin/
     # Mayer sources calls into the integral engine (_compute_electronic_potential)
@@ -1590,6 +1617,13 @@ if(BUILD_TESTING)
     add_executable(planck-fciqmc-accumulator
         ${CMAKE_SOURCE_DIR}/tests/fciqmc_accumulator.cpp
     )
+    # M1's level-parallel merge candidate is exercised directly by the walker
+    # invariant executable.  Link its test target with the same OpenMP runtime
+    # as production so this is a real parallel oracle, not a serial fallback.
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-fciqmc-walkers OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-fciqmc-walkers PRIVATE USE_OPENMP)
+    endif()
 
     add_executable(planck-cc-arbitrary-solver
         ${CMAKE_SOURCE_DIR}/tests/cc_arbitrary_solver.cpp
@@ -2023,6 +2057,7 @@ if(BUILD_TESTING)
 
     add_executable(planck-symm-fock-benchmark
         ${CMAKE_SOURCE_DIR}/tests/symm_fock_benchmark.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${INT_SRC}
         ${LOOKUP_SRC}
         ${SRC_DIR}/symmetry/hgp_symm.cpp
@@ -2041,6 +2076,7 @@ if(BUILD_TESTING)
 
     add_executable(planck-symm-fock-equivalence
         ${CMAKE_SOURCE_DIR}/tests/symm_fock_equivalence.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${INT_SRC}
         ${LOOKUP_SRC}
         ${SRC_DIR}/symmetry/os_symm.cpp
@@ -2188,6 +2224,11 @@ if(BUILD_TESTING)
     )
 
     target_include_directories(planck-auto-dispatch-benchmark PRIVATE
+        ${SRC_DIR}
+        ${eigen_SOURCE_DIR}
+    )
+
+    target_include_directories(planck-eri-class-share PRIVATE
         ${SRC_DIR}
         ${eigen_SOURCE_DIR}
     )
@@ -2519,6 +2560,11 @@ if(BUILD_TESTING)
         CXX_STANDARD_REQUIRED ON
         CXX_EXTENSIONS OFF
     )
+    set_target_properties(planck-eri-class-share PROPERTIES
+        CXX_STANDARD 23
+        CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF
+    )
 
     set_target_properties(planck-population-analysis PROPERTIES
         CXX_STANDARD 23
@@ -2687,6 +2733,10 @@ if(BUILD_TESTING)
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-auto-dispatch-benchmark OpenMP::OpenMP_CXX)
         target_compile_definitions(planck-auto-dispatch-benchmark PRIVATE USE_OPENMP)
+    endif()
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-eri-class-share OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-eri-class-share PRIVATE USE_OPENMP)
     endif()
     if(USE_OPENMP AND OpenMP_CXX_FOUND)
         target_link_libraries(planck-transform-eri OpenMP::OpenMP_CXX)
@@ -2928,6 +2978,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-fock-accumulate
         COMMAND planck-fock-accumulate
+    )
+
+    add_test(
+        NAME planck-boys-vec
+        COMMAND planck-boys-vec
     )
 
     add_test(

@@ -5,6 +5,7 @@
 #include "screening.h" // Shared HGP-based Schwarz table for the Auto path.
 #include "quartet_layout.h"
 #include "fused_fock.h"
+#include "hgp_block_eri.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1799,14 +1800,25 @@ namespace
             lCx, lCy, lCz, lDx, lDy, lDz, k, w);
     };
 
+    // The Auto engine's block kernels (block_eri.h): the closed forms at total
+    // L <= 3, the HGP block kernel at 4 <= L <= 12 (each class measured a win,
+    // 1.5-13x on the Fock build; docs/ERI_SHELL_QUARTET_FOCK_BUILD.md D1).
+    // Above that, and for screened kernels, blocks stay on auto_eri_elem.
+    inline auto auto_block_kernel()
+    {
+        return HartreeFock::Integrals::ChainBlockKernel<HartreeFock::Integrals::ClosedFormBlockKernel,
+                                                        HartreeFock::Integrals::HgpBlockKernel>{
+            HartreeFock::Integrals::ClosedFormBlockKernel{3}, HartreeFock::Integrals::HgpBlockKernel{4, 12}};
+    }
+
     // One body for all four entries; `elem` picks Rys or Auto.
-    template <typename Elem>
+    template <typename Elem, typename Block = HartreeFock::Integrals::NoBlockKernel>
     Eigen::MatrixXd rys_fused_rhf(
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const Eigen::MatrixXd &density, std::size_t nb,
         HartreeFock::ERIKernel kernel, double omega, double tol_eri,
         const std::vector<HartreeFock::SignedAOSymOp> *sym_ops, Elem elem,
-        HartreeFock::Integrals::FusedTerm term)
+        HartreeFock::Integrals::FusedTerm term, Block block = {})
     {
         const Eigen::MatrixXd Q = rys_schwarz_matrix(shell_pairs, nb, sym_ops);
         Eigen::MatrixXd G, Ga_unused, Gb_unused;
@@ -1814,16 +1826,18 @@ namespace
         dens.P = &density;
         HartreeFock::Integrals::fused_fock_build(
             shell_pairs, nb, Q, kernel, omega, tol_eri,
-            /*spin_resolved=*/false, dens, G, Ga_unused, Gb_unused, elem, sym_ops, term);
+            /*spin_resolved=*/false, dens, G, Ga_unused, Gb_unused, elem, sym_ops, term,
+            block);
         return G;
     }
 
-    template <typename Elem>
+    template <typename Elem, typename Block = HartreeFock::Integrals::NoBlockKernel>
     std::pair<Eigen::MatrixXd, Eigen::MatrixXd> rys_fused_raw_jk(
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const Eigen::MatrixXd &density, std::size_t nb,
         HartreeFock::ERIKernel kernel, double omega, double tol_eri,
-        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops, Elem elem)
+        const std::vector<HartreeFock::SignedAOSymOp> *sym_ops, Elem elem,
+        Block block = {})
     {
         const Eigen::MatrixXd Q = rys_schwarz_matrix(shell_pairs, nb, sym_ops);
         Eigen::MatrixXd J, K, unused;
@@ -1832,17 +1846,17 @@ namespace
         HartreeFock::Integrals::fused_fock_build(
             shell_pairs, nb, Q, kernel, omega, tol_eri,
             /*spin_resolved=*/false, dens, J, K, unused, elem, sym_ops,
-            HartreeFock::Integrals::FusedTerm::RawCoulombExchange);
+            HartreeFock::Integrals::FusedTerm::RawCoulombExchange, block);
         return {std::move(J), std::move(K)};
     }
 
-    template <typename Elem>
+    template <typename Elem, typename Block = HartreeFock::Integrals::NoBlockKernel>
     std::pair<Eigen::MatrixXd, Eigen::MatrixXd> rys_fused_uhf(
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb, std::size_t nb,
         HartreeFock::ERIKernel kernel, double omega, double tol_eri,
         const std::vector<HartreeFock::SignedAOSymOp> *sym_ops, Elem elem,
-        HartreeFock::Integrals::FusedTerm term)
+        HartreeFock::Integrals::FusedTerm term, Block block = {})
     {
         const Eigen::MatrixXd Q = rys_schwarz_matrix(shell_pairs, nb, sym_ops);
         const Eigen::MatrixXd Pt = Pa + Pb;
@@ -1853,7 +1867,8 @@ namespace
         dens.Pb = &Pb;
         HartreeFock::Integrals::fused_fock_build(
             shell_pairs, nb, Q, kernel, omega, tol_eri,
-            /*spin_resolved=*/true, dens, G_unused, Ga, Gb, elem, sym_ops, term);
+            /*spin_resolved=*/true, dens, G_unused, Ga, Gb, elem, sym_ops, term,
+            block);
         return {Ga, Gb};
     }
 }
@@ -1897,7 +1912,7 @@ Eigen::MatrixXd HartreeFock::RysQuad::_compute_2e_fock_auto_direct(
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops,
     HartreeFock::Integrals::FusedTerm term)
 {
-    return rys_fused_rhf(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem, term);
+    return rys_fused_rhf(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem, term, auto_block_kernel());
 }
 
 std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
@@ -1908,7 +1923,7 @@ HartreeFock::RysQuad::_compute_2e_jk_auto_direct(
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops)
 {
     return rys_fused_raw_jk(shell_pairs, density, nbasis, kernel, omega, tol_eri,
-        sym_ops, auto_eri_elem);
+        sym_ops, auto_eri_elem, auto_block_kernel());
 }
 
 std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
@@ -1919,6 +1934,6 @@ HartreeFock::RysQuad::_compute_2e_fock_uhf_auto_direct(
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops,
     HartreeFock::Integrals::FusedTerm term)
 {
-    return rys_fused_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem, term);
+    return rys_fused_uhf(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, auto_eri_elem, term, auto_block_kernel());
 }
 

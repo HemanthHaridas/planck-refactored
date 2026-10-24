@@ -5,8 +5,10 @@
 #include <cassert>
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <limits>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -308,24 +310,18 @@ namespace HartreeFock::Correlation::CI::QMC
         // mask to pick a class, and this select to map the drawn index k to an
         // orbital.
         //
-        // The caller guarantees 0 <= i < popcount(x & low n_act bits), so the
-        // loop always finds its target; the n_act bound keeps it to <= 31
-        // iterations and it exits at the i-th set bit (~half that on average).
-        // arm64 has no PDEP; this portable form is fine at this size. If x86_64
-        // ever matters, _pdep_u64(1ull<<i, x) then countr_zero is the 2-instr
-        // replacement.
+        // The caller guarantees 0 <= i < popcount(x & low n_act bits), so x
+        // remains nonzero after discarding the i lower set bits.  Clearing a
+        // set bit is one arithmetic operation; this therefore works in selected
+        // rank rather than scanning every orbital position up to the answer.
+        // `countr_zero` then returns the same bit position as the former
+        // position scan.  This is portable on arm64 (which has no PDEP) and
+        // deliberately changes no RNG draw or class-selection arithmetic.
         inline int nth_set_bit(CIString x, int i) noexcept
         {
-            for (int b = 0; b < CASSCFInternal::kCIStringBits; ++b)
-            {
-                if (x & (CIString(1) << b))
-                {
-                    if (i == 0)
-                        return b;
-                    --i;
-                }
-            }
-            return -1; // unreachable given the caller's contract
+            while (i-- > 0)
+                x &= x - 1;
+            return static_cast<int>(std::countr_zero(x));
         }
     } // namespace
 
@@ -573,8 +569,38 @@ namespace HartreeFock::Correlation::CI::QMC
     // H2.8.4-b pre-pass bins identically; this alias keeps the body readable.
     constexpr std::size_t kBins = kFciqmcBins;
 
-    void propagate_stochastic(
-        const WalkerPopulation &population,
+    namespace
+    {
+        void merge_spawn_bins_into(
+            const std::vector<SpawnAccumulator> &bins,
+            WalkerPopulation &out)
+        {
+            for (const auto &bin : bins)
+                for (const auto &[det, w] : bin)
+                    out.add(det, w);
+        }
+
+        void merge_spawn_bins_into(
+            const std::vector<SpawnAccumulator> &bins,
+            CanonicalWalkerPopulation &out,
+            FCIQMCPropagationProfile *profile)
+        {
+            const auto start = profile ? std::chrono::steady_clock::now()
+                                       : std::chrono::steady_clock::time_point{};
+            auto merged = merge_finalized_spawn_bins_pairwise_parallel(bins);
+            if (profile)
+            {
+                profile->canonical_merge_emitted += merged.entries.size();
+                profile->canonical_pairwise_seconds += std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - start).count();
+            }
+            out.assign_sorted(std::move(merged.entries));
+        }
+    }
+
+    template <typename Population, typename Output>
+    void propagate_stochastic_impl(
+        const Population &population,
         int n_act,
         const HamiltonianOps &ham,
         double dt,
@@ -584,7 +610,8 @@ namespace HartreeFock::Correlation::CI::QMC
         double granularity,
         double initiator_threshold,
         SpawnWorkspace &ws,
-        WalkerPopulation &out)
+        Output &out,
+        FCIQMCPropagationProfile *profile)
     {
         // H2.4/H2.5 (docs/FCIQMC_PARALLELISM.md): the per-call
         // scaffolding -- 64 accumulators, 64 parent buckets, 64 RNG streams --
@@ -599,6 +626,9 @@ namespace HartreeFock::Correlation::CI::QMC
         // every trajectory outright. Both are gated by self-reproducibility +
         // thread-count invariance (atol=0.0, 1/2/4/8) + metric_within_sigma
         // vs exact FCI -- T2 invariant 2.
+        std::chrono::steady_clock::time_point propagation_start;
+        if (profile)
+            propagation_start = std::chrono::steady_clock::now();
         out.clear();
         if (n_spawn_attempts < 1)
             return;
@@ -640,8 +670,11 @@ namespace HartreeFock::Correlation::CI::QMC
         // the 64 persistent `ws.bin_rngs` from this call's seed is ~4 multiplies
         // each rather than a 312-word mt19937_64 state fill (~600 ns each,
         // ~38 us/call for 64). The derivation recipe is unchanged, so the
-        // per-bin stream a given (call_seed, bin) sees is the same as the old
+        // per-bin root a given (call_seed, bin) sees is the same as the old
         // fresh-construction path would have produced -- for the same engine.
+        // Individual parent streams below are derived from this root, so a
+        // population container's visitation order cannot assign a different
+        // random sequence to a parent.
         ws.rekey_streams(rng.raw64());
         auto &bin_rngs = ws.bin_rngs;
 
@@ -667,19 +700,47 @@ namespace HartreeFock::Correlation::CI::QMC
                 bin_parents[DetKeyHash{}(det) % kBins].push_back({det, weight});
             }
 
+        std::chrono::steady_clock::time_point worker_start;
+        if (profile)
+        {
+            worker_start = std::chrono::steady_clock::now();
+            ++profile->calls;
+            profile->setup_seconds += std::chrono::duration<double>(
+                worker_start - propagation_start).count();
+        }
+
 #pragma omp parallel for schedule(static)
         for (std::size_t bin = 0; bin < kBins; ++bin)
         {
-            RandomSource &bin_rng = bin_rngs[bin];
+            const RandomSource &bin_rng = bin_rngs[bin];
             SpawnAccumulator &next_bin = next_bins[bin];
+            FCIQMCBinWork *work = profile ? &profile->bins[bin] : nullptr;
+            std::chrono::steady_clock::time_point bin_start;
+            if (work)
+                bin_start = std::chrono::steady_clock::now();
 
             for (const auto &[det, weight] : bin_parents[bin])
             {
+                if (work)
+                    ++work->parents;
                 // DEATH: deterministic, exactly as in propagate_deterministic.
                 // There is one diagonal element per determinant, so sampling it
                 // would add variance and buy nothing.
                 const double diag = ham.diagonal(det);
                 next_bin.add(det, weight * (1.0 - dt * (diag - shift)));
+                if (work)
+                    ++work->accumulator_records;
+
+                // The parent owns its complete stream for this propagation.
+                // `bin_rng` is a per-call/per-bin root, not a sequential
+                // generator: derive_parent uses both spin strings and does not
+                // advance it.  Thus the excitation and rounding variates for
+                // this determinant are invariant under unordered_map bucket
+                // layout, insertion order, workspace reuse, and thread count.
+                // It is intentionally a new FCIQMC trajectory, validated by
+                // the order-independence and statistical gates rather than by
+                // matching the old bin-sequential stream bitwise.
+                RandomSource parent_rng = bin_rng.derive_parent(det);
 
                 // SPAWN: draw connections instead of enumerating them. Each
                 // attempt carries 1/n_spawn_attempts of the parent's weight so
@@ -689,13 +750,23 @@ namespace HartreeFock::Correlation::CI::QMC
                 const double per_attempt = weight / static_cast<double>(n_spawn_attempts);
                 for (int attempt = 0; attempt < n_spawn_attempts; ++attempt)
                 {
-                    const auto exc = draw_excitation(det, n_act, bin_rng);
+                    if (work)
+                        ++work->spawn_attempts;
+                    const auto exc = draw_excitation(det, n_act, parent_rng);
                     if (!exc.valid || exc.p_gen <= 0.0)
+                    {
+                        if (work)
+                            ++work->invalid_excitations;
                         continue;
+                    }
 
                     const double h_ij = ham.off_diagonal(det, exc.det);
                     if (h_ij == 0.0)
+                    {
+                        if (work)
+                            ++work->zero_hamiltonian;
                         continue;
+                    }
                     // Initiator rule. Occupancy is judged against the INCOMING
                     // population, not the partially-built `out` -- see the
                     // header note on why order-dependence would otherwise creep
@@ -703,7 +774,11 @@ namespace HartreeFock::Correlation::CI::QMC
                     if (initiator_threshold > 0.0
                         && std::abs(weight) <= initiator_threshold
                         && population.weight_at(exc.det) == 0.0)
+                    {
+                        if (work)
+                            ++work->initiator_rejections;
                         continue;
+                    }
 
                     // The 1/p_gen reweighting. p_gen here is a deterministic
                     // property of the draw, not an estimate -- see the header
@@ -715,35 +790,148 @@ namespace HartreeFock::Correlation::CI::QMC
                         // unbiased in expectation, so the mean step is unchanged
                         // while the variance now depends on how large the spawn
                         // is relative to one walker.
-                        child = granularity * bin_rng.stochastic_round(child / granularity);
+                        child = granularity * parent_rng.stochastic_round(child / granularity);
                         if (child == 0.0)
+                        {
+                            if (work)
+                                ++work->rounded_to_zero;
                             continue;
+                        }
                     }
                     next_bin.add(exc.det, child);
+                    if (work)
+                        ++work->accumulator_records;
                 }
             }
+            const std::size_t raw_records = next_bin.size();
             next_bin.finalize();
+            if (work)
+            {
+                // accumulator_records is independently incremented so a future
+                // accumulator implementation cannot silently change the ledger.
+                assert(work->accumulator_records >= raw_records);
+                work->finalized_records += next_bin.size();
+                work->worker_seconds += std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - bin_start).count();
+            }
         }
 
-        // Merge in FIXED bin order, 0..kBins-1, regardless of thread count --
-        // never by completion order, which is the DFT-grid jitter defect this
-        // codebase specifically avoids elsewhere. Fixed bin order is what makes
-        // one call's result reproducible under threading (S4/R3): the same
-        // kBins accumulators are merged in the same order regardless of how
-        // many threads computed them. Within a bin, SpawnAccumulator's iteration
-        // is the canonical (alpha, beta, weight-bits) order -- a pure function
-        // of that bin's multiset, reproducible across calls no matter how many
-        // prior calls the workspace served (the property unordered_map::clear
-        // could not give, and the reason R2's reuse changed output values).
-        for (auto &bin : next_bins)
-            for (const auto &[det, w] : bin)
-                out.add(det, w);
+        std::chrono::steady_clock::time_point merge_start;
+        if (profile)
+        {
+            merge_start = std::chrono::steady_clock::now();
+            profile->worker_wall_seconds += std::chrono::duration<double>(
+                merge_start - worker_start).count();
+        }
+
+        // Merge through the fixed 64-leaf pairwise tree, never by completion
+        // order. M1 parallelizes only disjoint pairs within a tree level; every
+        // pair has a predetermined output slot and carries its source-bin tag,
+        // so OpenMP scheduling cannot alter equal-key addition association.
+        // Within a bin, SpawnAccumulator's iteration is the canonical
+        // (alpha, beta, weight-bits) order -- a pure function of that bin's
+        // multiset, reproducible across calls no matter how many prior calls
+        // the workspace served.
+        if constexpr (std::is_same_v<Output, CanonicalWalkerPopulation>)
+            merge_spawn_bins_into(next_bins, out, profile);
+        else
+            merge_spawn_bins_into(next_bins, out);
+
+        const auto merge_insert_end = profile
+            ? std::chrono::steady_clock::now()
+            : std::chrono::steady_clock::time_point{};
+        if (profile)
+            profile->merge_insert_seconds += std::chrono::duration<double>(
+                merge_insert_end - merge_start).count();
 
         // H2.8.4-b: the pre-fill was for THIS call only. Clear both the flag and
         // the buckets so the next call -- prefilled or not -- starts clean.
         if (prefilled)
             ws.clear_parents();
         ws.parents_prefilled = false;
+        if (profile)
+        {
+            profile->parent_cleanup_seconds += std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - merge_insert_end).count();
+            profile->merge_seconds += std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - merge_start).count();
+        }
+    }
+
+    void propagate_stochastic(
+        const WalkerPopulation &population,
+        int n_act,
+        const HamiltonianOps &ham,
+        double dt,
+        double shift,
+        RandomSource &rng,
+        int n_spawn_attempts,
+        double granularity,
+        double initiator_threshold,
+        SpawnWorkspace &ws,
+        WalkerPopulation &out,
+        FCIQMCPropagationProfile *profile)
+    {
+        propagate_stochastic_impl(population, n_act, ham, dt, shift, rng,
+                                  n_spawn_attempts, granularity,
+                                  initiator_threshold, ws, out, profile);
+    }
+
+    void propagate_stochastic(
+        const WalkerPopulation &population,
+        int n_act,
+        const HamiltonianOps &ham,
+        double dt,
+        double shift,
+        RandomSource &rng,
+        int n_spawn_attempts,
+        double granularity,
+        double initiator_threshold,
+        SpawnWorkspace &ws,
+        CanonicalWalkerPopulation &out,
+        FCIQMCPropagationProfile *profile)
+    {
+        propagate_stochastic_impl(population, n_act, ham, dt, shift, rng,
+                                  n_spawn_attempts, granularity,
+                                  initiator_threshold, ws, out, profile);
+    }
+
+    void propagate_stochastic(
+        const CanonicalWalkerPopulation &population,
+        int n_act,
+        const HamiltonianOps &ham,
+        double dt,
+        double shift,
+        RandomSource &rng,
+        int n_spawn_attempts,
+        double granularity,
+        double initiator_threshold,
+        SpawnWorkspace &ws,
+        WalkerPopulation &out,
+        FCIQMCPropagationProfile *profile)
+    {
+        propagate_stochastic_impl(population, n_act, ham, dt, shift, rng,
+                                  n_spawn_attempts, granularity,
+                                  initiator_threshold, ws, out, profile);
+    }
+
+    void propagate_stochastic(
+        const CanonicalWalkerPopulation &population,
+        int n_act,
+        const HamiltonianOps &ham,
+        double dt,
+        double shift,
+        RandomSource &rng,
+        int n_spawn_attempts,
+        double granularity,
+        double initiator_threshold,
+        SpawnWorkspace &ws,
+        CanonicalWalkerPopulation &out,
+        FCIQMCPropagationProfile *profile)
+    {
+        propagate_stochastic_impl(population, n_act, ham, dt, shift, rng,
+                                  n_spawn_attempts, granularity,
+                                  initiator_threshold, ws, out, profile);
     }
 
     // Convenience overload: builds a local workspace and returns a value. For
@@ -771,8 +959,9 @@ namespace HartreeFock::Correlation::CI::QMC
         return out;
     }
 
-    double max_stable_timestep(
-        const WalkerPopulation &population,
+    template <typename Population>
+    double max_stable_timestep_impl(
+        const Population &population,
         const HamiltonianOps &ham,
         double shift)
     {
@@ -785,6 +974,22 @@ namespace HartreeFock::Correlation::CI::QMC
         if (worst <= 0.0)
             return std::numeric_limits<double>::infinity();
         return 2.0 / worst;
+    }
+
+    double max_stable_timestep(
+        const WalkerPopulation &population,
+        const HamiltonianOps &ham,
+        double shift)
+    {
+        return max_stable_timestep_impl(population, ham, shift);
+    }
+
+    double max_stable_timestep(
+        const CanonicalWalkerPopulation &population,
+        const HamiltonianOps &ham,
+        double shift)
+    {
+        return max_stable_timestep_impl(population, ham, shift);
     }
 
     Weight ordered_l1_norm(const WalkerPopulation &population)
@@ -835,8 +1040,9 @@ namespace HartreeFock::Correlation::CI::QMC
         return total;
     }
 
-    ProjectedEnergy projected_energy(
-        const WalkerPopulation &population,
+    template <typename Population>
+    ProjectedEnergy projected_energy_impl(
+        const Population &population,
         const DetKey &reference,
         int n_act,
         const HamiltonianOps &ham,
@@ -866,6 +1072,28 @@ namespace HartreeFock::Correlation::CI::QMC
         out.energy = ham.diagonal(reference) + numerator / out.reference_weight;
         out.valid = true;
         return out;
+    }
+
+    ProjectedEnergy projected_energy(
+        const WalkerPopulation &population,
+        const DetKey &reference,
+        int n_act,
+        const HamiltonianOps &ham,
+        double min_reference_weight)
+    {
+        return projected_energy_impl(population, reference, n_act, ham,
+                                     min_reference_weight);
+    }
+
+    ProjectedEnergy projected_energy(
+        const CanonicalWalkerPopulation &population,
+        const DetKey &reference,
+        int n_act,
+        const HamiltonianOps &ham,
+        double min_reference_weight)
+    {
+        return projected_energy_impl(population, reference, n_act, ham,
+                                     min_reference_weight);
     }
 
     bool ShiftController::update(double population, double dt)

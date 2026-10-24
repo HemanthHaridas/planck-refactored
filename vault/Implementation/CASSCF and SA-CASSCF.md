@@ -58,19 +58,28 @@ binding (water SA-2 from sad/hcore takes `step_norm ≤ 0.11` even when
 optimizer reaches, since the search direction comes from a local-Newton
 step that points into the local well regardless of step size.
 
-**Plateau escape**: if `stagnation_streak ≥ 2`, the energy and accepted
-orbital step are flat, **and the SA gating gradient `sa_g` is already small**
-(`reported_gnorm < 100·tol_mcscf_grad`), convergence is declared with a `[WRN]`
-line. This is correct and load-bearing for state-averaged runs, not a hack: at
+**Plateau escape**: if `stagnation_streak ≥ 2`, the energy and the orbital
+step are flat (a micro step < 5e-5, or no step accepted), **and the SA gating
+gradient `sa_g` is already small** (`≤ max(1e-6, tol_mcscf_grad)`),
+convergence is declared with a `[WRN]` line. Under `mcscf_accept_uphill` the
+exit also requires that this macro's single-pair escape probes were offered
+and none was taken (`escape_tried`). This is correct and load-bearing for state-averaged runs, not a hack: at
 an SA stationary point `sa_g = Σ_I w_I g_I` goes to ~1e-10 while the per-root
 screens (`root_screen_g` / `max_root_g`) plateau at an O(1e-2) nonzero value,
 because state-averaging makes only the weighted gradient stationary, not each
 individual root. Under `mcscf_accept_uphill` the per-root convergence screen
 then never passes, so this branch is the intended exit. Exercised by
 `water_casscf_sa2_sto3g_sad_guess_uphill` (the other three SA-2 cases converge
-through the normal gate at `sa_g < 1e-5`). See `vault/Status/Open Work.md` for
-the narrow hardening still worth doing (an explicit `sa_g` assertion plus a
-`casscf_converged_via_plateau` diagnostic).
+through the normal gate at `sa_g < 1e-5`).
+
+**Noise floor in the selector (2026-10-23).** `select_best_candidate_step`
+counts a gradient-only improvement (`stationary_but_better_grad`) only while
+`sa_g > tol_mcscf_grad`; energy and merit improvements beyond 1e-10 still
+count. Before this, the uphill canary's basin was decided by a 2e-11 step that
+lowered `sa_g` from 1.56e-10 to 1.27e-10: accepting it fired the plateau exit
+in the upper basin, rejecting it let the probes escape. `diis_dim` 6/7/10 and
+the integral engine flipped it. Now all seven variations land at
+-74.7877864784.
 
 ## Shared-κ SA Coupled Solve
 

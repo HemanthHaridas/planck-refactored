@@ -5,6 +5,7 @@
 #include "basis/basis.h"
 #include "integrals/base.h"
 #include "integrals/shellpair.h"
+#include "require_boys_library.h"
 #include <Eigen/Eigenvalues>
 #include <Eigen/QR>
 #include <algorithm>
@@ -402,6 +403,8 @@ namespace
 }
 int main()
 {
+    if (!require_boys_library())
+        return 1;
     try
     {
         for(const auto dims:{std::array{2,2,2,2},std::array{2,1,2,3},std::array{1,2,2,2},

@@ -9,7 +9,7 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-10-16
+Last updated: 2026-10-20
 
 This is the canonical open-work document for the repository.
 Use it with `vault/Status/Completion.md`. Older status snapshots and handoff
@@ -845,8 +845,8 @@ parallelism. The entry keeps its original scoping record.
   64 bin streams be fresh and independent, not container overhead. Left
   unfixed.
 
-  **S5 (extending the invariance gate to an N2-sized pair) is the one piece
-  still unbuilt.** `h2_fciqmc_threads1/4` runs on 4 determinants against
+  **S5 (extending the invariance gate to an N2-sized pair) — LANDED later as
+  H2.1 (`n2_fciqmc_s5_threads1/4`, below).** `h2_fciqmc_threads1/4` runs on 4 determinants against
   `kBins = 64`, so at most one parent lands in each bin and a merge-order
   defect can never surface there — an N2 pair is needed, shown to go red
   under a perturbed (reversed) merge order before it is trusted.
@@ -991,6 +991,30 @@ parallelism. The entry keeps its original scoping record.
   by R). **Fixture: HF/6-31G or larger for all parallel-FCIQMC
   measurement; N2/STO-3G is the correctness gate only.** Full answer:
   `docs/FCIQMC_PARALLELISM.md`.
+
+  **IN FLIGHT: `docs/FCIQMC_SCALING_INVESTIGATION.md`** (scoped
+  2026-10-11, uncommitted working-tree work). Stage 1 is measured: a
+  `fciqmc_profile` phase ledger on HF/6-31G 50k walkers shows the worker
+  phase scaling 5.01x at 8 threads while the fixed-order merge stays ~107 s
+  at every thread count (58 % of 8-thread propagation; 99.996 % of it is
+  hash-map insertion), holding end-to-end at 2.19x. That settles what
+  `FCIQMC_PARALLELISM.md` left open (its 2 % "merge" self-time was hidden in
+  `operator[]`/allocator frames). Rejected: reusing two output maps (changes
+  the trajectory, since map iteration order decides parent RNG order) and a
+  pmr node pool (4.4 % of the merge, ~1.6 % of wall). Built and validated
+  since: parent-keyed RNG streams (`RandomSource::derive_parent`, S5
+  re-pinned, exact-FCI gates pass; performance neutral on their own) and a
+  determinant-sorted `CanonicalWalkerPopulation` built by a fixed 64-way
+  merge, now owned by the driver. **Since then (working tree):** the
+  canonical owner is kept, E1 (rank-select `nth_set_bit`, 1.112x focused)
+  and M1 (the pairwise merge tree parallel within each level, each pair
+  writing a fixed slot so the fold order is unchanged) landed. HF/6-31G 50k
+  walkers: 565.88 -> 403.75 s at one thread and 284.03 -> **163.96 s** at
+  four (best measured; eight threads is slower), fixed-seed trajectory
+  identical. E2 (table dispatch) was rejected at 0.968x. Post-M1 profile:
+  `draw_excitation` is ~43 % of propagation again; E3 (per-stage generator
+  attribution) is implemented and awaiting measurement. Full record:
+  `docs/FCIQMC_SCALING_INVESTIGATION.md`.
 
   **Three lessons, each of which cost a wrong number first.** (1) **A profile share
   is a lower bound on what removing that work is worth** — three for three now
@@ -1653,7 +1677,8 @@ ratio grows from 21.8× to 50.1× with no plateau, and the generated cost does n
   binary** goes **2.70 s -> 0.81 s (3.3x)**. That positive control is what makes it
   a measurement rather than an inference, and `build-full` is the baseline O2 must
   beat. (Pick the control carefully: a small DFT case shows nothing, and a larger
-  one is grid-bound because the DFT grid layer is itself unthreaded.) (2) "The emitter
+  one is grid-bound: AO-on-grid evaluation (`ao_grid.h`) and grid
+  construction still carry no OpenMP.) (2) "The emitter
   never emits a pragma" is false: `emit/cpp_loops.py:331` already emits
   `#pragma omp parallel for collapse(n) schedule(dynamic)`, and
   `print_cpp_optimized` defaults `use_openmp=True`. That is a *different* emit path
@@ -1875,10 +1900,192 @@ identify the path taken. Not required for correctness or performance.
 
 ## Performance and maintenance opportunities
 
-- The DFT Coulomb/exchange (`build_coulomb_from_eri` / `build_exchange_from_eri`)
-  contractions are now parallel and verified thread-count-invariant (see the
-  Integral Engine note). The remaining DFT parallelization target is the grid
-  layer, tracked above under the DFT gaps.
+- **ERI/Fock BLAS-LAPACK migration — scoped 2026-10-17, nothing landed**
+  (`docs/ERI_FOCK_BLAS_SCOPE.md`). BLAS buys nothing for the ERI kernels,
+  direct-SCF digestion, the conventional `nb⁴` contraction (bandwidth-bound,
+  `dsymv` 0.8–1.7× at 4 threads) or the cart→sph transform (dense `dgemm`
+  0.14–0.62×, `C` is 2.5–4 % nonzero). The real lever is **RI-JK**:
+  `build_ri_pair_factors` is density-independent but recomputed twice per
+  iteration, **~61 %** of the RI-JK Fock build (B0, no BLAS; invalidate with
+  `_ri_j3c`, and add the first RI-JK regression case). Then B1 optional
+  `USE_BLAS` (Accelerate RI-K GEMMs 4.3–7.8×, bitwise thread-count-invariant
+  on M3; OpenBLAS unmeasured), B2 RI-K from `C_occ` on the SCF caller only
+  (4.4–4.8×), B3 `dsyevd` (diag is 0.08 % of an iteration today; deferred).
+- **Closed-form low-L ERI kernels and the fused Fock loop — in flight**
+  (`docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`, the source of truth; it carries
+  every measurement, finding and ruled-out idea).
+  - **Landed:** C0 (Boys v1.1.0), C1, C2–C3.5 (closed-form shell kernels
+    through total L ≤ 3, Auto only), H1, L1, L2, L3a–c, P1, S1, D1. Measured:
+    A0, D0, C4a.
+  - **Fock build, one thread, Auto:** 8 H2O / 6-31G 1.50 → 0.137 s (~11×),
+    4 H2O / 6-31G\* ~11×, 1 H2O / cc-pVDZ ~8×, D2h naphthalene 1.454 →
+    0.301 s (4.8×), 1 H2O / cc-pVTZ 1.631 → 0.128 s (12.7× since D0).
+  - **D1 (2026-10-20):** the fused loop takes a block kernel
+    (`src/integrals/block_eri.h`: `prepare`/`value`, declined blocks fall back
+    to per-component `eri_elem`; explicit engines stay pure). Moving the
+    closed forms behind it was bitwise (20 fingerprints). The new HGP block
+    kernel (`hgp_block_eri.h`) runs one primitive pass per shell quartet with
+    an L-major triangle VRR (not the per-axis cube the failed hoist used),
+    then HRR once. Auto dispatches it for total L 4–12, where every class won:
+    1.5× on sp, 4.3–4.9× on d, 12.9× on cc-pVTZ over the closed forms alone.
+    Gated against per-component HGP on water 6-31G/6-31G\*/cc-pVDZ/cc-pVTZ
+    (4.6 M component quartets, 256 classes, ≤ 8.9e-15), mutation-verified.
+  - **S1 (2026-10-20):** skeleton accumulation plus final symmetrization when
+    every density is symmetric (tolerance 1e-10), else unchanged replication.
+    1.33× on D2h naphthalene. Gains land on symmetric DFT. Direct HF on linear
+    molecules falls back every iteration, because SAO blocking is not
+    implemented for infinite groups.
+  - **H1 shipped a stack overflow, fixed 2026-10-20:** `boys_vec` into
+    `F[4*MAX_L+1]`, while HGP's hoisted block path needs MMAX up to 36 for
+    (ff|ff). SIGBUS on conventional HGP with f+ shells; the f/g/h spherical
+    gates had been crashing among known failures.
+  - **Test triage (2026-10-20):** nine ctest binaries never called
+    `require_boys_library()` and segfaulted at startup (fixed). Two stale
+    Python tests updated: `test_udh_molecular_audit` (the U11 rejection
+    removed in `039bd2df`) and `test_udh_u0_fixtures` (the CN-radical fixture
+    from `de57169b`).
+  - **Post-D1 profile (2026-10-20):** the HGP block kernel's ket VRR is the
+    largest item on d/f bases (24 % 6-31G\*, 21 % cc-pVDZ, 41 % cc-pVTZ);
+    closed forms + Boys are ~60–67 % on sp bases; `skeleton_orbit_weight` is
+    13 % of the symmetric build; emulated thread-local access 2.5–4.7 % on
+    d/f; G writes 6–15 % everywhere.
+  - **D1c measured and declined (2026-10-21):** the electron-transfer
+    recurrence bought 1.06–1.18x for ~100x worse G (1.04–1.06x at VRR
+    precision). The ket VRR is per-primitive-quartet overhead (180–300
+    elements each, ~3 GFLOP/s), not arithmetic or memory, so the levers are
+    fewer primitive quartets (D2) or several per pass (SIMD lanes).
+  - **Lanes landed (2b, 2026-10-21; see Completion); D2a measured.** D2a shared-exponent
+    families: ~1.7x on the kernels for cc bases (est. 1.4-1.5x of the
+    build), not yet a win on Pople (probe overhead). Both work inside one
+    shell quartet. 5b (a SHARK-style class-batched scheduler) was
+    declined after its S0 census: within-block lanes already carry
+    94-99.8 % of primitive quartets, so pooling across blocks buys at
+    most ~1.15x on the lane work. B0 (a production-quality closed-form
+    family pass) has Pople merging across L at 1.04-1.34x. D2b B1 (the fused
+    loop in family-quartet order, working tree) is exactly-once and passes
+    MPI 1/2/4 ranks. The K1 census then showed the larger lever is
+    digestion: dense per-block digestion is 1.11-1.26x of the build at
+    today's precision.
+  - **K1 and K1.4 (dense digestion, also under S1) landed** (`5fd08496`,
+    `f2849647`; see Completion).
+  - **B2 rescoped (2026-10-22).** Re-measured after lanes and K1: the
+    closed-form family pass still gives 1.16–1.78× on its kernels, but the
+    scalar HGP family pass is now 0.48–1.03× against laned production, so
+    lanes took that half. Plan: B2.1 family-quartet loop order (B1 re-cut
+    for p ≤ q), B2.2 closed-form families (predicted build ~1.06–1.35×), B2.3
+    a laned HGP family probe that lands only at ≥ 1.15× on cc L ≥ 4.
+    **B2.1 is in the working tree, default off** (`family_units`): exactly
+    once, gated against bra units, but +4-8 % at one thread on Pople and it
+    did not fix cc-pVTZ's four-thread drop. It stays off until B2.2 repays
+    the order's cost.
+  - **Working-tree refactors:** each block kernel now
+    answers `covers(total_L, kernel)` and the dense predicate asks it,
+    instead of hard-coding Auto/Coulomb/L ≤ 12; HGP's K < 3 blocks run
+    `vrr_lanes<1>` (the scalar recurrence is deleted); the dense skeleton
+    weight and the per-component one are one `skeleton_orbit_weight`
+    overload. A K1.4 mutation re-run (2026-10-23) found the gate NaN-blind
+    (`std::max(worst, NaN)` returns `worst`) and unable to tell whether the
+    skeleton dense path ran when block counts tie; both closed
+    (`max_output_diff`, and a reversed-block counter in the counting
+    kernel). 7 of 9 mutations caught; the 2 survivors drop the sign test,
+    which only saves work.
+  - **W1 landed (2026-10-23):** the dense bra loop is a
+    triangle (bra p visits every ket q >= p) and `schedule(static)` gave the
+    first of four threads 44 % of it: a 2.29x ceiling, measured 2.32x on
+    6-31G\*/cc-pVDZ/cc-pVTZ and 1.72x on naphthalene. `schedule(static, 1)`
+    (round-robin, still deterministic at a fixed thread count) gives 1.10-1.97x
+    at four threads (scaling now 3.4-3.7x), unchanged at one. B2.1's
+    four-thread gains were this imbalance: on the balanced schedule family
+    units are only a one-thread Pople cost (+3.5-7.4 %), which B2.2 must repay.
+    The fixed accumulator partition becomes cyclic bins (u mod 64).
+  - **Re-profiled after W1 (2026-10-23); plan rebuilt from it.** Closed
+    forms + Boys are 41-66 % of the build except cc-pVTZ (22 %), Boys alone
+    18-32 % (out-of-tree core, one T per call); readout + digestion 15-30 %;
+    HGP VRR+HRR 49 % on cc-pVTZ, 25 % on 6-31G\*; idle <= 6 % (10 %
+    naphthalene). B2.1 stays off (delete if unused), B2.3 dropped.
+  - **Branch `perf/boys-batch-callers` (2026-10-24):** R2 landed
+    (`102f1d01`, batched Boys calls, 1.01-1.11x at one thread, 1.03-1.11x at
+    four; not bitwise only by g++ fusing one multiply-add, <= 1.1e-16). The
+    loader now requires `planck_boys_batch` (`13c60826`): a v1.1.0 license
+    fails at load naming v1.2.0; `planck-boys-vec` passes. Final suites on
+    the branch (2026-10-24): smoke 43/45, extended 135/139, the known
+    rccsdt routing cases only. Merged into `dft-dh-gradient-xc-kernel-rewrite`
+    (PR #176); the ERI shell-quartet work is closed.
+  - **R1 declined (2026-10-24):** precomputing the closed-form readout in
+    `prepare` was bitwise but 0.92-1.00x (slower) in production: the larger
+    `prepare` is inlined into the lazy hot loop (noinline recovers 2-3 %),
+    and it fills components the Schwarz mask / S1 weight never read (85 %
+    read on 8 H2O). The `--k1` timed arm showed a gain because it prepares
+    eagerly and reads everything. Record in the scope doc.
+  - **Profile at HEAD (2026-10-24), one thread:** closed forms + Boys 38-62 %
+    (20 % cc-pVTZ), Boys alone 14-23 % (7 % cc-pVTZ); readout 2-13 %;
+    digestion 11-21 %; HGP 29 % on 6-31G\*, 52 % on cc-pVTZ; scratch
+    zero/resize 2.4-4.7 %; idle at four threads <= 6 %, naphthalene 11 %.
+  - **Grow-only block-kernel scratch landed (`0e3e074d`, 2026-10-24):**
+    the zero/resize share was `vector::resize` re-zeroing regrown tails;
+    `grow_to` keeps a high-water mark. Bitwise, zero/resize <= 0.1 %,
+    1.03-1.04x on 6-31G\* and cc-pVTZ, neutral (+-1 %) elsewhere.
+  - **R3 declined at the probe (2026-10-24):** ket-side-only family
+    sharing (`--family ... bra`) is 0.90-1.13x on the closed forms
+    (cc-pVDZ 1.13x, naphthalene 0.95x), ~1.07x / ~0.98x of the build at
+    best, under the 1.10x gate: fixing the bra cuts the pass reduction from
+    5.91x to 2.31x on cc-pVDZ. Two-sided families (B2.2) are 1.58x on
+    cc-pVDZ's closed forms, and the family order costs only +-1 % on cc
+    bases.
+  - **B2.2 parked, S2 refuted (2026-10-24).** B2.2 would pay only as a
+    basis-dependent traversal (cc bases); not taken up, so no part of B2
+    reached production. S2's premise was wrong: the serial symmetric
+    phases are 0.04 % of samples; the four-thread idle (naphthalene 11 %)
+    is load imbalance at the barrier closing `fused_fock_build`'s loop.
+  - **Fixed accumulator partition landed (`ea353a83`, 2026-10-24):**
+    partials keyed by bin (bra mod n_bins, 64 bins for nb up to ~700),
+    bins scheduled dynamically and summed in fixed order. G is identical at
+    1/2/4/8 threads; 1.06x at four threads on naphthalene, 1.02x cc-pVTZ,
+    within 1-2 % elsewhere. B2.1 (`family_units`) deleted (`1e047aa2`).
+    Scope doc rewritten as current state (`1319c559`).
+  - **Work stopped 2026-10-24; not done, in the order it would go:** R1b readout from a per-build per-AO decode table with `value()` kept lazy
+    (conditional, >= 1.03x on 8 H2O); C5 (screened
+    kernels; range-separated hybrids still take per-component HGP); F3.
+    Declined 2026-10-24: P2 (G must stay accurate to 1e-10) and total
+    L > 12 (not routine work). D3 (RI-JK pair
+    factors) is independent, K2 conditional (the only lever left on HGP,
+    which no open item targets), C4b deprioritised.
+  - **The full point-group path (measured 2026-10-20, F1 2026-10-21).**
+    Symmetric HF with SAO and direct SCF builds a dense n_b⁴ skeleton in a
+    separate per-component loop (`Symmetry::build_skeleton_eri`), persisted
+    when n_b ≤ `threshold` (100). **F1 landed:** above that it no longer
+    rebuilds the skeleton every iteration but takes the fused direct build
+    with the geometry's D2h-subgroup signed operations: benzene / 6-31G\*
+    17.7 -> 4.08 s, naphthalene / 6-31G 66.6 -> 6.35 s (no symmetry 13.7 /
+    21.3 s), energies equal to the persisted full-group path. **F2 landed:**
+    Auto resolves to HGP there (`full_symmetry_engine`). **F4 landed**, and
+    is now fixed at the source: the SAD guess is the raw density scaled to
+    the electron count, not projected, so no group average is needed (gated by
+    `nh3_c3v_fullsym_631gd_sad_direct`; see Completion). **Open: F3**, feed the persisted
+    skeleton build from the block kernels; it only shortens a one-time
+    build now, so it is last. Record:
+    `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`.
+  - **Teaching guide (rewritten 2026-10-22).** §8 now covers the persist
+    threshold, the fused D2h-subgroup path above it, Auto → HGP and the
+    unprojected SAD guess (F1/F2/F4; §6 explains why the projection was
+    ill-posed). §9 covers lanes, dense digestion
+    (K1) and dense skeleton weighting (K1.4). §11 says where the per-bucket
+    table still decides (stored tensor, two-phase builds, screened kernels,
+    total L > 12). §12 is re-measured. One item remains open: **refit the
+    Auto table.** Its µs ladder predates H1 (HGP's per-component path is about
+    1.1× faster), so near-tied buckets may have moved. Rerun
+    `planck-auto-dispatch-benchmark` and `scripts/fit_auto_dispatch.py`; a
+    changed table means editing `kAutoEngine` in `rys.cpp`, not only the doc.
+    - **Correction:** the earlier note said §12's `nosym`/`d2h` columns go
+      through the fused loop. They do not. `planck-symm-fock-benchmark`
+      times the two-phase `_compute_2e_fock{,_auto}` builds, which is why
+      Auto tracked HGP there and still does. The re-measured table is
+      labelled accordingly.
+    - **`planck-symm-fock-benchmark` segfaulted at startup.** It never
+      loaded the Boys library (the same defect fixed in nine ctest binaries
+      on 2026-10-20). Fixed: `require_boys_library()` call plus its source
+      in the target.
+
 - **Shell-pair granularity follow-ons** (architecture in
   `docs/SHELLPAIR_GRANULARITY_HANDOFF.md`; none block the landed Auto-path Rys
   hoist):

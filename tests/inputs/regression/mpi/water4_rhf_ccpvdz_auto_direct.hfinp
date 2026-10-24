@@ -1,0 +1,39 @@
+%begin_control
+    basis       cc-pVDZ
+    calculation energy
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    engine      auto
+    scf_mode    direct
+    guess       hcore
+    max_cycles  100
+    tol_energy  1e-10
+    tol_density 1e-8
+    save_checkpoint .false.
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+12
+0   1
+O     0.000000     0.000000     0.000000
+H     0.757000     0.586000     0.000000
+H    -0.757000     0.586000     0.000000
+O     0.000000     0.000000     3.000000
+H     0.757000     0.586000     3.000000
+H    -0.757000     0.586000     3.000000
+O     0.000000     0.000000     6.000000
+H     0.757000     0.586000     6.000000
+H    -0.757000     0.586000     6.000000
+O     0.000000     0.000000     9.000000
+H     0.757000     0.586000     9.000000
+H    -0.757000     0.586000     9.000000
+%end_coords
