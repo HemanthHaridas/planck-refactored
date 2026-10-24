@@ -2042,7 +2042,7 @@ identify the path taken. Not required for correctness or performance.
     1/2/4/8 threads; 1.06x at four threads on naphthalene, 1.02x cc-pVTZ,
     within 1-2 % elsewhere. B2.1 (`family_units`) deleted (`1e047aa2`).
     Scope doc rewritten as current state (`1319c559`).
-  - **Open, in order (rescoped from that profile):** R1b readout from a per-build per-AO decode table with `value()` kept lazy
+  - **Work stopped 2026-10-24; not done, in the order it would go:** R1b readout from a per-build per-AO decode table with `value()` kept lazy
     (conditional, >= 1.03x on 8 H2O); C5 (screened
     kernels; range-separated hybrids still take per-component HGP); F3.
     Declined 2026-10-24: P2 (G must stay accurate to 1e-10) and total

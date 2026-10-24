@@ -4,11 +4,11 @@
 evaluating whole shell quartets at once (closed forms at low angular momentum,
 a block kernel above), and what else in the build stands in the way?
 
-**Status (2026-10-24).** The kernel work is done: a Fock build is 7–23×
-faster at one thread than before it started, and the remaining kernel ideas
-were measured and declined, and G no longer depends on the thread count.
-Open: R1b (conditional), C5, F3; D3, K2 and C4b sit outside the main line. The step names (C1, D1, K1, …) are kept because commits, tests
-and code comments cite them.
+**Status: answered; work stopped 2026-10-24.** A Fock build is 7–23×
+faster at one thread than before this work, and G no longer depends on the
+thread count. The remaining kernel ideas were measured and declined; what was
+left undone, and why, is under "Not done". The step names (C1, D1, K1, …)
+are kept because commits, tests and code comments cite them.
 
 ## Answer
 
@@ -645,7 +645,10 @@ loss and R3's shortfall.
 kept only the identity operation, and the first K1.4 "C2v" gate passed with
 |G| = 1. Assert the fixture's defining property.
 
-## Open
+## Not done
+
+None of these was started; each is recorded so a later attempt starts from
+the measurement, not from scratch.
 
 **R1b — the readout from a per-build table (conditional).** R1's lesson
 applied: the decode depends only on each AO's Cartesian exponents, so
@@ -666,7 +669,7 @@ feeding it from the block kernels shortens a one-time build (0.017–0.054 s on
 small molecules, 1.3–3.4 s near n_b = 100). Worth it only if `threshold` is
 raised routinely.
 
-**Outside the main line.** **D3:** RI-JK recomputes its density-independent
+**Outside this work.** **D3:** RI-JK recomputes its density-independent
 pair factors twice per iteration, ~61 % of the RI Fock build
 (`docs/ERI_FOCK_BLAS_SCOPE.md`). **K2 (conditional):** batches of same-class
 ket blocks for a fixed bra unit (lanes across kets, bra-side work hoisted, the
