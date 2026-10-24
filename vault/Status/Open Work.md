@@ -2003,9 +2003,20 @@ identify the path taken. Not required for correctness or performance.
     18-32 % (out-of-tree core, one T per call); readout + digestion 15-30 %;
     HGP VRR+HRR 49 % on cc-pVTZ, 25 % on 6-31G\*; idle <= 6 % (10 %
     naphthalene). B2.1 stays off (delete if unused), B2.3 dropped.
-  - **Open, in order:** R1 closed-form readout as a flat array (in-tree),
+  - **Working tree, branch `perf/boys-batch-callers` (2026-10-24):** the
+    loader change that makes `planck_boys_batch` required (fallback deleted;
+    `docs/LICENSE_GATE.md` row added) is built; `planck-boys-vec` passes and a
+    v1.1.0 license fails at load naming v1.2.0. Not yet suite-run or
+    committed. Merge into `dft-dh-gradient-xc-kernel-rewrite` after R3 lands.
+  - **R1 declined (2026-10-24):** precomputing the closed-form readout in
+    `prepare` was bitwise but 0.92-1.00x (slower) in production: the larger
+    `prepare` is inlined into the lazy hot loop (noinline recovers 2-3 %),
+    and it fills components the Schwarz mask / S1 weight never read (85 %
+    read on 8 H2O). The `--k1` timed arm showed a gain because it prepares
+    eagerly and reads everything. Record in the scope doc.
+  - **Open, in order:**
     R2 a batched multi-x Boys entry: core v1.2.0 released (bitwise against
-    v1.1.0 through the C ABI); Planck callers written, uncommitted, gates
+    v1.1.0 through the C ABI); Planck callers committed, gates
     pass (smoke 43/45, extended 135/139), not bitwise against HEAD by
     compiler fusion only: T and every Boys value are byte-identical, and 583
     of 67 032 closed-form outputs differ by <= 1.1e-16 because g++'s default
@@ -2014,8 +2025,9 @@ identify the path taken. Not required for correctness or performance.
     1.03-1.11x (4); with the core's own ~1-2 % that is 1.03-1.13x against a
     1.10-1.19x prediction. Re-profiled: Boys is still 13-24 % (7 % cc-pVTZ),
     nearly all core evaluation, so batching removed call overhead, not work.
-    The v1.1.0 fallback path is not yet run. Scope doc rewritten as current
-    state (2026-10-23).
+    Landed as `102f1d01`; the loader now requires the batched entry (a
+    v1.1.0 license fails at load; the untested fallback was deleted). Scope
+    doc rewritten as current state (2026-10-23).
     `planck-boys-vec` was a dead gate (segfaulted, unregistered), now fixed, R3 ket-side
     family sharing within bra units (B2.2 proper only if short), the fixed
     partition, C5 (screened kernels in both block

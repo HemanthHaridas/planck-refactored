@@ -9,14 +9,13 @@ revisions carried each step's plan, and their measurements are kept below.
 When the open steps land or are abandoned, rewrite this as an answer.
 
 - **Landed:** C0, C1, C2–C3.5, H1, L1–L3c, P1, S1, D1, F1, F2, F4, T1, 2b,
-  K1, K1.4, B2.1 (default off), W1, and core v1.2.0 (the Boys release R2
-  builds on).
-- **Written, not committed:** R2's Planck callers (batched Boys calls).
-- **Open, in order:** R1 (closed-form readout), R2 (land, then re-profile),
-  R3 (ket-side family sharing), the fixed accumulator partition, C5
+  K1, K1.4, B2.1 (default off), W1, core v1.2.0 and R2 (batched Boys
+  calls; Planck requires core v1.2.0).
+- **Open, in order:** R3 (ket-side family sharing), the fixed accumulator partition, C5
   (screened kernels), P2 (primitive screening, a policy call), total L > 12,
   F3. D3 is independent, K2 conditional, C4b deprioritised.
-- **Declined or superseded:** D1c, 5b, B1, B2.2 (by R3), B2.3.
+- **Declined or superseded:** D1c, 5b, B1, B2.2 (by R3), B2.3, R1
+  (measured 0.92–1.00× slower).
 
 ## Answer so far
 
@@ -187,9 +186,10 @@ of `--profile` production builds, bucketed by symbol, one and four threads
 
 - **The closed forms and Boys were the build** on sp, Pople-d and cc-pVDZ
   bases (41–66 %).
-- **The readout is avoidable overhead** (R1): `ClosedFormBlockKernel::value`
-  re-decodes each component's raise slot on every call, out of line through a
-  weak-symbol stub; HGP's readout is one indexed load.
+- **The readout looked like avoidable overhead**: `ClosedFormBlockKernel::value`
+  re-decodes each component's raise slot on every call; HGP's readout is one
+  indexed load. Moving the decode into `prepare` (R1) measured slower; see
+  "Measured, not landed".
 - **HGP matters on cc-pVTZ (49 %) and 6-31G\* (25 %)**, already laned.
 - **Idle after W1 is small**, except naphthalene (10 %), where
   `density_has_symmetry` and `symmetrize_over_ops` run serially.
@@ -212,7 +212,7 @@ of `--profile` production builds, bucketed by symbol, one and four threads
 Boys fell from 18–32 % to 13–24 % (7 % on cc-pVTZ), nearly all of it now the
 core's evaluation itself: batching removed the call overhead, not the work.
 The closed forms are now the largest phase on sp, cc-pVDZ and naphthalene,
-and readout + digestion (R1's target) is 17–33 %. The per-block
+and readout + digestion is 17–33 %. The per-block
 `vector::resize` of the new scratch is visible (~1–2 %); size it once per
 build if it stays.
 
@@ -459,6 +459,41 @@ member's `finish()`).
   without the order. B2.3 (HGP families) is dropped. B1 remains a git stash
   ("B1: fused loop in family-quartet order") for its history only.
 
+### R1 — the closed-form readout as a flat array (declined)
+
+`ClosedFormBlockKernel::value` re-derives each component's raise slot on every
+call (a loop over the four component views, the slot index, four norm-ratio
+loads). R1 step 1 moved that into `prepare`, filling a flat norm-folded
+`out_[27]` so `value()` is one load. Bitwise by construction (same product
+chain): the 28 G fingerprints matched R2. Predicted 1.03–1.12×.
+
+Production build vs R2, best of three interleaved (2026-10-24):
+
+| fixture | R1, 1 thread | R1, 4 threads | R1, `prepare` noinline, 1 thread |
+|---|---|---|---|
+| 8 H2O / 6-31G | 0.953× | 0.922× | 0.981× |
+| 4 H2O / 6-31G\* | 0.960× | 0.941× | — |
+| 1 H2O / cc-pVDZ | 0.957× | 1.000× | — |
+| 1 H2O / cc-pVTZ | 0.976× | 0.971× | 0.990× |
+| naphthalene / 6-31G | 0.933× | 0.942× | 0.941× |
+
+Two causes, each about half:
+
+- **Inlining.** Production prepares lazily from inside the component loop
+  (`ensure_prepared` in `fused_fock.h`), so the larger `prepare` is inlined
+  into the hot digestion nest of every mode. `noinline` recovers 2–3 %.
+- **Eager work.** `prepare` fills every component; production reads only those
+  passing the Schwarz mask and, under S1, with nonzero skeleton weight. On
+  8 H2O 85 % of filled values are read. The largest loss is the one symmetric
+  build (naphthalene), consistent with zero-weight skeleton components; its
+  read fraction was not counted.
+
+The `--k1` timed dense arm said the opposite (+12 ms in `prepare`, −16 ms in
+digestion on 8 H2O, a net gain) because it prepares outside the loop and
+reads every component unmasked. Step 2 (read the array from the dense loop)
+would add to the eager waste, so it was not tried. A lazy fill (compute on
+first read, `prepare` out of line) might break even; not worth it next to R3.
+
 ## Findings
 
 **The floor was the primitive loop, not the recurrence.** The (ss|ss) closed
@@ -492,6 +527,11 @@ faster Boys evaluation plus batching realized 1.03–1.13×.
 **An idea that measured slower may have been its first implementation.** A
 contract-once hoist measured 1.14–1.62× slower; D1's block kernel is the same
 idea at 1.5–13× faster, with L-major indexing.
+
+**Price a change to `prepare` on the production loop, not the `--k1` timed
+arm.** The timed arm prepares every block up front and reads every component
+unmasked; production prepares lazily inside the masked component loop. R1
+looked like a net gain in the timed split and was 2–8 % slower in production.
 
 **A profile share is a lower bound on what removing work is worth, and can
 mislead the other way.** The `ShellPair` rebuild was 8.4 % of samples and
@@ -554,28 +594,12 @@ kept only the identity operation, and the first K1.4 "C2v" gate passed with
 
 | step | what | targets | bitwise? |
 |---|---|---|---|
-| R1 | closed-form readout as a flat, norm-folded array filled in `prepare` | readout 2–12 %, part of digestion | yes |
-| R2 | land the batched Boys callers; re-profile; run the v1.1.0 fallback once | Boys 9–32 % (1.01–1.11× measured) | no (rounding, ≤ 1.1e-16) |
+| R2 | batched Boys callers (`102f1d01`); size the scratch once per build | Boys 9–32 % → 13–24 % (1.01–1.11× measured) | no (rounding, ≤ 1.1e-16) |
 | R3 | family sharing of T / Boys / prefactors across a bra unit's ket blocks, no family order | closed forms + Boys on cc / naphthalene | no |
 | partition | fixed accumulator partition, cyclic bins | determinism across thread counts | no |
 | C5 | screened kernels in both block kernels (then dense) | range-separated hybrids | screened only |
 | P2 | quartet-level primitive screening (policy) | ~20 % of primitive quartets | no (~1e-12 to 1e-10) |
 | L > 12, F3, D3, K2, C4b | see below | — | — |
-
-**R1 — the closed-form readout as a flat array (in-tree, not started).**
-`ClosedFormBlockKernel::value` re-derives each component's raise slot on every
-call (a loop over the four component views reading their Cartesian exponents,
-then the slot index, then four norm-ratio loads), out of line through a
-weak-symbol stub: 2–12 % of the build, plus part of the 9–20 % digestion loop
-that calls it. `prepare` fills a flat per-component array, norm ratios folded
-in, indexed `((ca·n_B + cb)·n_C + cc)·n_D + cd` as HGP's is; `value()`
-becomes that load, and the dense loop can read the array directly. Steps:
-fill the array in `prepare` (same multiplications done earlier; gate with the
-single-file old-vs-new comparison, not fingerprints), read it from the dense
-loop if the call still shows, then the suites and a re-profile. Prediction:
-1.03–1.12×, largest on 8 H2O / 6-31G. (A0 measured the readout at ≤ 3.6 %
-before K1 and ruled this out; K1 made the rest of the loop cheaper, and the
-readout is now 2–12 %.)
 
 **R2 — the batched Boys entry.** Every Boys call evaluated one x through the
 out-of-tree core: the closed forms once per primitive quartet (orders 0–3),
@@ -592,9 +616,10 @@ outside this repo:
    vector entry 1.03–2.27×, batched entry 1.53–2.26×. Through Planck's
    loader, the released blob's batched, vector and scalar entries agree byte
    for byte on 3.3 M points per order.
-2. **Planck callers (written, not committed).** The loader resolves
-   `planck_boys_batch` optionally; `Lookup::boys_batch` uses it, or loops
-   `boys_vec` for a v1.1.0 library (license), with the same values. The
+2. **Planck callers (`102f1d01`).** The loader requires
+   `planck_boys_batch`: a v1.1.0 library (license) fails at load with a
+   message naming v1.2.0, rather than running an untested fallback (one was
+   written and deleted unrun). The
    closed forms compute T for every primitive quartet of the block, make one
    batched call, then accumulate (scratch as a kernel member); the HGP
    kernel makes one batched call per lane group. `planck-boys-vec` now loads
@@ -613,9 +638,8 @@ outside this repo:
    forms within 1.3e-15 of HGP, `planck-hgp-engine-smoke`,
    `planck-compute-2e`, `planck-fock-accumulate`), smoke 43/45, extended
    135/139.
-4. **Open:** commit; run the v1.1.0 fallback once (swap in a v1.1.0 license,
-   run `planck-boys-vec`); size the scratch once per build (its per-block
-   `resize` is ~1–2 %). Re-profiled with R2 (see "Where the time goes"):
+4. **Open:** size the scratch once per build (its per-block `resize` is
+   ~1–2 %). Re-profiled with R2 (see "Where the time goes"):
    Boys is 13–24 % (7 % on cc-pVTZ), nearly all evaluation, so further
    Boys gains need either fewer evaluations (R3's sharing, P2) or a cheaper
    evaluation in the core, not more batching.
@@ -673,7 +697,7 @@ twice per iteration, ~61 % of the RI Fock build (`docs/ERI_FOCK_BLAS_SCOPE.md`).
 
 **K2 (conditional).** Batches of same-class ket blocks for a fixed bra unit:
 lanes across kets, bra-side work hoisted, the HRR as array work, digestion as
-small matrix products. Only if a census after R1–R3 shows per-block fixed
+small matrix products. Only if a census after R3 shows per-block fixed
 costs (setup, HRR at 10–16 % of the HGP kernel) still worth the largest
 restructure here.
 
@@ -697,6 +721,8 @@ builds.
   it would change the SCF trajectory.
 - **Demanding bitwise equality from a code restructure under g++'s default
   flags**: see R2.
+- **Precomputing the closed-form readout in `prepare` (R1)**: 0.92–1.00×; see
+  "Measured, not landed".
 
 ## Out of scope
 
