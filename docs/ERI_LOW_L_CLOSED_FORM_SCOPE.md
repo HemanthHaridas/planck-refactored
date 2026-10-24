@@ -1,60 +1,48 @@
-# Shell-Quartet ERI Kernels for the Fused Fock Build — Scope
+# Shell-Quartet ERI Kernels for the Fused Fock Build
 
 **Question:** How much faster can the memory-direct (fused) Fock build get by
 evaluating whole shell quartets at once (closed forms at low angular momentum,
 a block kernel above), and what else in the build stands in the way?
 
-**Status: in flight.** Rewritten 2026-10-23 as current state; earlier
-revisions carried each step's plan, and their measurements are kept below.
-When the open steps land or are abandoned, rewrite this as an answer.
+**Status (2026-10-24).** The kernel work is done: a Fock build is 7–23×
+faster at one thread than before it started, and the remaining kernel ideas
+were measured and declined. Open: the fixed accumulator partition (in
+progress), then R1b (conditional), C5, F3; D3, K2 and C4b sit outside the
+main line. The step names (C1, D1, K1, …) are kept because commits, tests
+and code comments cite them.
 
-- **Landed:** C0, C1, C2–C3.5, H1, L1–L3c, P1, S1, D1, F1, F2, F4, T1, 2b,
-  K1, K1.4, W1, core v1.2.0, R2 (batched Boys
-  calls; Planck requires core v1.2.0) and grow-only scratch.
-- **Open, in order:** the fixed accumulator partition with dynamic bins
-  (also the four-thread imbalance S2 found), R1b (conditional), C5
-  (screened kernels), F3. D3 is independent, K2 conditional, C4b
-  deprioritised.
-- **Declined or superseded:** D1c, 5b, B1, B2.2 (parked), B2.3,
-  R1 (measured 0.92–1.00× slower), R3 (probe 0.90–1.13× on the closed
-  forms), S2 (premise refuted; the idle is load imbalance), P2 (G must stay
-  accurate to 1e-10), total L > 12 (not routine work).
+## Answer
 
-## Answer so far
-
-| fixture (one thread, `engine auto`) | before this work | now (HEAD) | with R2 (uncommitted) | speedup |
+| fixture (one thread, `engine auto`) | before this work | now | speedup | now, four threads |
 |---|---|---|---|---|
-| 8 H2O / 6-31G (nb = 104) | 1.50 s | 0.1135 s | **0.1083 s** | **~14×** |
-| 4 H2O / 6-31G\* (nb = 76) | ~1.12 s† | 0.0679 s | **0.0654 s** | **~17×** |
-| 4 H2O / cc-pVDZ | 2.573 s§ | 0.4004 s | **0.3813 s** | **6.7×**§ |
-| 1 H2O / cc-pVTZ | 1.631 s§ | 0.0746 s | **0.0739 s** | **22×**§ |
-| naphthalene / 6-31G, D2h (nb = 106) | 1.454 s | 0.2072 s‡ | **0.1873 s**‡ | **7.8×** |
-
-At four threads (W1's round-robin schedule), HEAD → R2: 0.0309 → 0.0283 s,
-0.0186 → 0.0177 s, 0.1071 → 0.0987 s, 0.0208 → 0.0202 s, 0.0606 → 0.0547 s
-(1→4-thread scaling 3.4–3.7×).
+| 8 H2O / 6-31G (nb = 104) | 1.50 s | 0.105 s | **14×** | 0.0284 s |
+| 4 H2O / 6-31G\* (nb = 76) | ~1.12 s† | 0.0625 s | **~18×** | 0.0169 s |
+| 4 H2O / cc-pVDZ | 2.573 s§ | 0.358 s | **7.2×**§ | 0.0959 s |
+| 1 H2O / cc-pVTZ | 1.631 s§ | 0.0698 s | **23×**§ | 0.0193 s |
+| naphthalene / 6-31G, D2h (nb = 106) | 1.454 s | 0.188 s‡ | **7.7×** | 0.0548 s‡ |
 
 `planck-eri-class-share --k1` production arm, Apple M3, `build-full`
-(g++-15 `-O3`), best of three interleaved, Boys core v1.2.0, 2026-10-23.
-"Before" is the build before C1, after the Boys fix C0 (itself 1.37× / 1.13×).
-† The product of per-step ratios; never timed before C1. § Against the D0
-build (after P1, before S1 and D1). ‡ With `sym_ops`, on a group-averaged
-density. Explicit engines get only the engine-independent steps; on
-8 H2O / 6-31G and 4 H2O / 6-31G\* Auto is ~7× and ~11× faster than explicit
-`engine hgp`. Fock-build numbers, not SCF wall time. The ~200× libcint gap in
-`docs/ERI_PERFORMANCE_SCOPE.md` predates this work and has not been
-re-measured.
+(g++-15 `-O3`), Boys core v1.2.0, best of three (seven on 8 H2O and
+cc-pVDZ) interleaved, 2026-10-24. "Before" is the build before C1, after the
+Boys fix C0 (itself 1.37× / 1.13×). † The product of per-step ratios; never
+timed before C1. § Against the D0 build (after P1, before S1 and D1). ‡ With
+`sym_ops`, on a group-averaged density. Explicit engines get only the
+engine-independent steps; on 8 H2O / 6-31G and 4 H2O / 6-31G\* Auto is ~7×
+and ~11× faster than explicit `engine hgp`. Fock-build numbers, not SCF wall
+time. The ~200× libcint gap in `docs/ERI_PERFORMANCE_SCOPE.md` predates this
+work and has not been re-measured.
 
 Per step, each a ratio over the build with all previous steps (one thread):
 
-| fixture | C1 | C2 | H1 | C3 | C3.5 | L2 | L1 | P1+L3c | D1 | 2b | K1 | R2 | total |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 8 H2O / 6-31G | 1.26× | ~1.25× | 1.16× | 1.61× | 1.87× | 1.20× | 1.06× | 1.14× | 1.49× | 1.05× | 1.14× | 1.05× | **~14×** |
-| 4 H2O / 6-31G\* | 1.16× | ~1.04× | 1.16× | 1.13× | 1.26× | 1.09× | ~1.01× | 1.03× | 4.90× | 1.23× | 1.17× | 1.04× | **~17×** |
+| fixture | C1 | C2 | H1 | C3 | C3.5 | L2 | L1 | P1+L3c | D1 | 2b | K1 | R2 | scratch | total |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 8 H2O / 6-31G | 1.26× | ~1.25× | 1.16× | 1.61× | 1.87× | 1.20× | 1.06× | 1.14× | 1.49× | 1.05× | 1.14× | 1.05× | ~1.0× | **14×** |
+| 4 H2O / 6-31G\* | 1.16× | ~1.04× | 1.16× | 1.13× | 1.26× | 1.09× | ~1.01× | 1.03× | 4.90× | 1.23× | 1.17× | 1.04× | 1.03× | **~18×** |
 
 On the symmetric fixture: L3a 1.70×, L3b 1.23×, L3c+P1 1.16×, S1 1.33×,
 D1 ~1.5×, 2b 1.07×, K1.4 1.32×, R2 1.11× (1.454 → 0.855 → 0.702 → 0.597 →
-0.454 → 0.295 → 0.274 → 0.206 → 0.187 s).
+0.454 → 0.295 → 0.274 → 0.206 → 0.187 s). At four threads W1's round-robin
+schedule gives 1→4-thread scaling of 3.4–3.7×.
 
 **In short:**
 - **Evaluate shell quartets, not components.** Every engine returned one
@@ -67,15 +55,17 @@ D1 ~1.5×, 2b 1.07×, K1.4 1.32×, R2 1.11× (1.454 → 0.855 → 0.702 → 0.59
   cube.
 - **Inside the kernels, what is left is per-primitive-quartet overhead.** A
   cheaper recurrence (D1c) or a better layout does not help; several primitive
-  quartets per pass (lanes, 2b) and cheaper per-quartet work (R2) do.
-  Shared per-quartet work pays only when both sides share (B0 two-sided);
-  ket-side sharing alone (R3) did not.
+  quartets per pass (lanes, 2b) and cheaper per-quartet work (R2) do. Sharing
+  per-quartet work across shells that share exponents pays only when both
+  sides share and the visiting order is cheap, which held on cc bases alone;
+  no form of it reached production.
 - **Outside the kernels, the cost was digesting one component at a time.**
   Digesting each block densely (K1) gave 1.11–1.22×, under the skeleton scheme
   (K1.4) 1.32×.
 - **Then the threads.** The dense traversal is a triangle; a contiguous
   schedule capped four threads at ~2.3×. Round-robin (W1) gave 1.10–1.97× at
-  four threads for one line.
+  four threads for one line. What is left is load imbalance under symmetry,
+  which the fixed partition addresses.
 
 ## How the build works now
 
@@ -83,7 +73,8 @@ D1 ~1.5×, 2b 1.07×, K1.4 1.32×, R2 1.11× (1.454 → 0.855 → 0.702 → 0.59
 two traversals **per build**. OpenMP `schedule(static, 1)` (round-robin, W1)
 and the MPI stripe run over bra units in both; partials are keyed by
 `omp_get_thread_num()` and summed in thread order, so a run is reproducible
-at a given thread count (not yet across counts: the fixed partition).
+at a given thread count but not across counts (the fixed partition changes
+this; see Open).
 
 **Dense (K1, K1.4).** Taken when the block kernel `covers()` every total L the
 basis can produce (today: Auto, Coulomb, shells up to f, total L ≤ 12), every
@@ -94,9 +85,10 @@ mode. Per bra pair p, kets q ≥ p:
    entries of a per-build table `op_pair[o][p]`; an image that sorts lower
    skips the block, and permuting ops that map it onto itself go to
    `block_ops`.
-2. `prepare` the block, then every component above the component Schwarz
-   bound: v′ = deg · weight · value, deg = (A=B?1:2)(C=D?1:2)(p=q?1:2). Under
-   S1, weight is the S1 weight of the component's canonical form
+2. `prepare` the block lazily, at its first surviving component, then every
+   component above the component Schwarz bound:
+   v′ = deg · weight · value, deg = (A=B?1:2)(C=D?1:2)(p=q?1:2). Under S1,
+   weight is the S1 weight of the component's canonical form
    (`skeleton_orbit_weight` with what the block already decided: identity-map
    ops need only a sign test, only `block_ops` need canonicalization).
 3. Six writes per component (two Coulomb, four exchange), from a body
@@ -104,20 +96,22 @@ mode. Per bra pair p, kets q ≥ p:
    the group average under S1).
 
 **Per-component.** Everything else: explicit engines, screened kernels,
-L > 12, non-symmetric densities, replication-mode symmetry. Block filters
-(L1, block Schwarz, L3c), component filters (canonical order, component
-Schwarz, the orbit test), the block kernel prepared at the first surviving
-component (a declined block uses per-component `eri_elem`), and each value
-accumulated over its distinct 8-fold permutations (`distinct_eri_orbit`, L2).
+total L > 12, non-symmetric densities, replication-mode symmetry. Block
+filters (L1, block Schwarz, L3c), component filters (canonical order,
+component Schwarz, the orbit test), the block kernel prepared at the first
+surviving component (a declined block uses per-component `eri_elem`), and
+each value accumulated over its distinct 8-fold permutations
+(`distinct_eri_orbit`, L2).
 
 **Block kernels** (`src/integrals/block_eri.h`): `prepare(request)`,
 `value(ca, cb, cc, cd)`, `covers(total_L, kernel)`. `NoBlockKernel` for
 explicit engines; for Auto, `ClosedFormBlockKernel{3}` (`low_l_eri.h`)
 chained with `HgpBlockKernel{4, 12}` (`hgp_block_eri.h`, 4 lanes in blocks
-with K ≥ 3, `vrr_lanes<1>` below), one copy per thread, scratch as members
-(T1). Both are Coulomb only. With R2, the closed forms compute T for every
-primitive quartet of a block and make one batched Boys call; the HGP kernel
-makes one per lane group.
+with K ≥ 3, `vrr_lanes<1>` below), one copy per thread. Both are Coulomb
+only. The closed forms compute T for every primitive quartet of a block and
+make one batched Boys call; the HGP kernel makes one per lane group (R2).
+Scratch is a member (T1) and grow-only (`grow_to`): a buffer keeps its
+largest size, so a block neither calls `resize` nor re-zeroes a regrown tail.
 
 ## How it is measured
 
@@ -127,27 +121,29 @@ With no arguments it drives `fused_fock_build` on 1, 4 and 8 waters (6-31G,
 naphthalene / 6-31G (axis-aligned D2h, group-averaged density), printing
 per-class times, the closed-form builds at L ≤ 1, 2, 3, the block kernel one
 total-L class at a time, the symmetric build, and an FNV-1a **fingerprint of
-G** per build. Modes, where `nwater` 0 is naphthalene:
+G** per build (28 in all). Modes, where `nwater` 0 is naphthalene:
 
 - `--profile N [nwater basis]`: N production builds, for `sample`.
 - `--k1 nwater basis`: today's per-component loop against dense, plus the
-  production dense time (the headline numbers).
-- `--family nwater basis [within]`, `--census nwater basis`: the D2a family
-  probe and the 5b lane-fill census.
+  production dense time (the headline numbers). Its timed dense arm prepares
+  every block up front and reads every component unmasked, unlike
+  production; use the production time for decisions (R1).
+- `--family nwater basis [within] [bra]`: the shared-exponent family probe
+  (`bra`: each bra member its own family, R3). `--census nwater basis`: the
+  5b lane-fill census.
 
 Rules learned the hard way:
 - **Timings are bimodal under load** (P/E-core scheduling). Compare
-  interleaved binaries, best of three or five, or one binary with a switch.
-- **Build an A/B baseline as a whole target, never by mixing objects.**
-  Compiling one object from old headers and relinking with the target's
-  `link.txt` is safe only if no inline class it uses changed. When R2 added a
-  member to `ClosedFormBlockKernel`, the mixed binary violated the
-  one-definition rule and crashed in `--k1`. Stash, build the target, copy
-  the binary out, pop, rebuild.
-- **After `git stash pop`, touch the restored files.** A restored header can
-  get the same second as an object compiled just before the pop; `make` then
-  treats the object as current and links stale code (here: a crash rather
-  than a wrong number, by luck).
+  interleaved binaries, best of three or more, or one binary with a switch;
+  a 2–3 % difference at best of three can be noise (the scratch step's 8 H2O
+  "0.974×" was 1.01× at best of seven).
+- **Build an A/B baseline as a whole target, never by mixing objects.** When
+  R2 added a member to `ClosedFormBlockKernel`, a binary mixing old and new
+  objects violated the one-definition rule and crashed in `--k1`. Build the
+  target, copy the binary out, then change the source.
+- **Swapping a header within the same second as the last build can leave
+  objects stale**: `make` compares timestamps to the second here. Touch the
+  header, or wait, before rebuilding (a mixed binary aborted silently).
 - **A fingerprint, not a timestamp, says which code ran**, and a failed build
   silently reruns the old binary. Check the exit status and the new symbols.
 - **Fingerprints compare whole builds.** The test density comes from
@@ -158,72 +154,45 @@ Rules learned the hard way:
   call by call on real shell pairs.
 - **Restructured code is not bitwise under g++'s defaults.** g++ compiles C++
   with `-ffp-contract=fast`, so whether `a + b·c` becomes a fused
-  multiply-add depends on the surrounding code. Moving arithmetic into a
-  different loop shape can change last bits with identical inputs (R2). The
-  gate for a restructure is tolerance plus the suites; "bitwise" is a claim
-  to test, not to assume.
+  multiply-add depends on the surrounding code (R2). The gate for a
+  restructure is tolerance plus the suites; "bitwise" is a claim to test.
 - **Attribute before predicting.** Inlined helpers hide in their caller's self
   time; temporary builds route phases through named `noinline` wrappers and
-  add counters, never committed.
+  add counters, never committed. Read a `sample` call tree for who calls a
+  hot leaf (the scratch step's `memset` was inside `vector::resize`).
+- **Concurrent runs of a freshly linked binary have taken ~126 s each** to
+  start (cause not found; the Boys blob is cached and a lone start takes
+  0.07 s). Run benchmark binaries one at a time.
 - **zsh does not word-split an unquoted variable.** Use `${=f}` in loops over
   argument strings, or write the loop in bash.
 
 ## Where the time goes
 
-**Re-profile after W1 (2026-10-23), before R2.** `sample` self time over 10 s
-of `--profile` production builds, bucketed by symbol, one and four threads
-(the shares barely move between them):
+`sample` self time over 10 s of `--profile` production builds, bucketed by
+symbol, 2026-10-24 (after R2, before grow-only scratch). One thread; four
+threads in brackets where they differ by more than a point:
 
 | phase | 8 H2O 6-31G | 4 H2O 6-31G\* | 4 H2O cc-pVDZ | 1 H2O cc-pVTZ | naphthalene D2h |
 |---|---|---|---|---|---|
-| closed-form kernel (`low_l_shell_eri`) | 34–35 % | 23–25 % | 35 % | 13 % | 33–38 % |
-| Boys (out-of-tree core) | 32 % | 18–19 % | 30–31 % | 9–10 % | 28–31 % |
-| closed-form readout (`value`) | 12 % | 9 % | 6 % | 2 % | 6–7 % |
-| digestion loop (`dense_body`) | 18 % | 17 % | 9 % | 19–20 % | 16–17 % |
-| HGP VRR (`vrr_lanes`) | 2 % | 17–18 % | 11–12 % | 33–36 % | 3–4 % |
-| HGP HRR / finish | 0 % | 7–8 % | 4 % | 12–13 % | 1 % |
-| HGP prepare (incl. `vector::resize`) | 0 % | 2–3 % | 2 % | 3–4 % | 0 % |
-| skeleton weight | — | — | — | — | 2–3 % |
-| idle at four threads | 3 % | 4 % | 2 % | 6 % | 10 % |
-
-- **The closed forms and Boys were the build** on sp, Pople-d and cc-pVDZ
-  bases (41–66 %).
-- **The readout looked like avoidable overhead**: `ClosedFormBlockKernel::value`
-  re-decodes each component's raise slot on every call; HGP's readout is one
-  indexed load. Moving the decode into `prepare` (R1) measured slower; see
-  "Measured, not landed".
-- **HGP matters on cc-pVTZ (49 %) and 6-31G\* (25 %)**, already laned.
-- **Idle after W1 is small**, except naphthalene (10 %), where
-  `density_has_symmetry` and `symmetrize_over_ops` run serially.
-- **A Boys share did not convert into its expected gain.** The faster
-  single-x core (v1.2.0) moved HEAD's builds by ~1–2 % and the batched calls
-  by 1.01–1.11×, about 1.03–1.13× together against a 1.10–1.19× prediction
-  from the 9–32 % share.
-
-**Profile at HEAD (2026-10-24: R2 committed, R1 declined).** Same method,
-10 s of `--profile` builds; one thread, four threads in brackets where they
-differ by more than a point:
-
-| phase | 8 H2O 6-31G | 4 H2O 6-31G\* | 4 H2O cc-pVDZ | 1 H2O cc-pVTZ | naphthalene D2h |
-|---|---|---|---|---|---|
-| closed-form kernel | 39 % | 25 % | 39 % | 13 % | 40 % (35 %) |
-| Boys (core evaluation + entry) | **22 %** | **14 %** | **23 %** | **7 %** | **22 %** (20 %) |
-| closed-form readout | 13 % | 9 % | 6 % | 2 % | 7 % |
-| digestion loop | 20 % | 19 % | 11 % | 21 % (20 %) | 20 % (17 %) |
+| closed-form kernel (`low_l_shell_eri`) | 39 % | 25 % | 39 % | 13 % | 40 % (35 %) |
+| Boys (core evaluation + entry) | 22 % | 14 % | 23 % | 7 % | 22 % (20 %) |
+| closed-form readout (`value`) | 13 % | 9 % | 6 % | 2 % | 7 % |
+| digestion loop (`dense_body`) | 20 % | 19 % | 11 % | 21 % (20 %) | 20 % (17 %) |
 | HGP VRR + finish + prepare | 2 % | 29 % (28 %) | 19 % (18 %) | 52 % (50 %) | 5 % |
 | scratch zeroing + `vector::resize` | 3.5 % | 4.7 % | 2.8 % | 4.0 % | 2.4 % |
 | skeleton weight | — | — | — | — | 3 % |
 | idle at four threads | 1 % | 5 % | 3 % | 6 % | 11 % |
 
-It matches the uncommitted-R2 profile to about a point. The scratch row has
-since gone to ≤ 0.1 % (grow-only scratch, `0e3e074d`).
-
-Boys fell from 18–32 % to 13–24 % (7 % on cc-pVTZ), nearly all of it now the
-core's evaluation itself: batching removed the call overhead, not the work.
-The closed forms are now the largest phase on sp, cc-pVDZ and naphthalene,
-and readout + digestion is 17–33 %. The per-block
-`vector::resize` of the new scratch is visible (~1–2 %); size it once per
-build if it stays.
+- **The closed forms and Boys are the build** on sp, Pople-d and cc-pVDZ
+  bases (38–62 %); Boys is nearly all the core's evaluation, so batching
+  removed call overhead, not work.
+- **HGP is the build on cc-pVTZ (52 %) and a third of 6-31G\***, already
+  laned; no open item targets it except K2.
+- **Scratch zeroing has since gone** to ≤ 0.1 % (grow-only scratch).
+- **The four-thread idle is the barrier closing the parallel loop**
+  (`gomp_team_end`), not serial work: on naphthalene three threads wait
+  10.3 / 17.3 / 16.1 % and the fourth 0.6 %. Under S1 the work per bra unit
+  is uneven and a static schedule cannot adapt.
 
 The HGP block kernel's cost by primitive quartet and by block, measured after
 D1 (temporary timers and counters):
@@ -245,7 +214,7 @@ blocks with K > 64, at 7–13 ns per primitive quartet.
 
 **Shared exponents** (D0, after Schwarz and P1). The GBS reader stores a
 general contraction as separate shells over the same exponents, and Pople SP
-shells share exponents across L. Merging them cuts primitive passes by:
+shells share exponents across L. Merging them would cut primitive passes by:
 
 | fixture | merge within L | merge across L |
 |---|---|---|
@@ -318,16 +287,18 @@ fused build (F1 numbers predate K1).
 | K1 | `5fd08496` | per-component digestion on symmetric densities | 1.11–1.22× | `check_dense_digest`; 5 mutations; MPI 1/2/4 |
 | K1.4 | `f2849647` | per-component skeleton weight and per-block canonicalization under S1 | 1.32× (D2h) | 32 checks under real C2v; 8 mutations |
 | F4 | `d0224110`, `0c8a9fc7` | `guess sad` aborting full point-group SCF on C3v/D6h | correctness | `nh3_c3v_fullsym_631gd_sad_direct` |
-| B2.1 | `66669cd5` | family-quartet units in the dense traversal (`family_units`, off; deleted 2026-10-24) | — (a cost; see below) | exactly-once counting gate; 2 mutations |
 | W1 | `ffc44caf` | contiguous-range thread schedule on a triangular loop | 1.10–1.97× at four threads | `planck-fock-accumulate` at 1/4/8 threads |
-| core v1.2.0 | `planck-boys-core` `aa44c44` | single-x evaluation overhead; adds a batched entry | ~1.01–1.02× on HEAD's builds | bitwise against v1.1.0 through the C ABI |
+| core v1.2.0 | `planck-boys-core` `aa44c44` | single-x evaluation overhead; adds a batched entry | ~1.01–1.02× | bitwise against v1.1.0 through the C ABI |
 | R2 | `102f1d01` | one Boys call per primitive quartet / lane → one batched call per block / lane group | 1.01–1.11× (1 thread), 1.03–1.11× (4) | tolerance, ≤ 1.1e-16 (g++ FMA contraction) |
 | loader | `13c60826` | the untested `boys_vec` fallback: core v1.2.0 is required, a v1.1.0 license fails at load | — | `planck-boys-vec`; v1.1.0 license checked by hand |
 | scratch | `0e3e074d` | per-block `vector::resize` and re-zeroed regrown tails | 1.03–1.04× on 6-31G\* / cc-pVTZ, ±1 % elsewhere | bitwise, 28 fingerprints |
 
-Suites after W1 and after R2's callers: smoke 43/45, extended 135/139 (the
-known rccsdt routing cases). After the loader and scratch commits: smoke
-43/45 (same two); extended not re-run. Details worth keeping:
+B2.1 (`66669cd5`, family-quartet units in the dense traversal, off by
+default) landed and was deleted in `1e047aa2`; see Families.
+
+Suites: smoke 43/45 and extended 135/139 after W1 and R2 (the known rccsdt
+routing cases); smoke 43/45 after the loader and scratch commits, extended
+not re-run. Details worth keeping:
 
 - **Closed forms (C2–C3.5).** `low_l_shell_eri` treats a quartet as up to
   three *raises* (center, axis) in center order. Per primitive quartet, with
@@ -394,13 +365,13 @@ known rccsdt routing cases). After the loader and scratch commits: smoke
   ops fixing it are applied per component, identity-map ops get a sign test,
   and the per-block test reads a per-build pair-image table (0.273 → 0.206 s
   on naphthalene). Gate: dense against per-component under water's real C2v
-  (op count asserted), relative to max|G|. A mutation re-run (2026-10-23)
-  found the gate NaN-blind (`std::max(worst, NaN)` returns `worst`) and unable
-  to tell whether dense ran when block counts tie; both closed
-  (`max_output_diff` returns +inf on non-finite; the counting kernel records
-  blocks whose bra pair sorts after the ket pair, which only the
-  per-component loop prepares). 7 of 9 mutations caught; the 2 survivors drop
-  the sign test, which only saves work.
+  (op count asserted), relative to max|G|. A mutation re-run found the gate
+  NaN-blind (`std::max(worst, NaN)` returns `worst`) and unable to tell
+  whether dense ran when block counts tie; both closed (`max_output_diff`
+  returns +inf on non-finite; the counting kernel records blocks whose bra
+  pair sorts after the ket pair, which only the per-component loop
+  prepares). 7 of 9 mutations caught; the 2 survivors drop the sign test,
+  which only saves work.
 - **W1.** The dense traversal is a triangle (bra p visits every ket q ≥ p);
   `schedule(static)` gave the first of four threads 1 − (3/4)² = 44 % of it, a
   2.29× ceiling, measured 2.32–2.33× on 6-31G\*, cc-pVDZ, cc-pVTZ and 1.72× on
@@ -415,12 +386,27 @@ known rccsdt routing cases). After the loader and scratch commits: smoke
   | naphthalene / 6-31G | 0.1229 s | 0.0623 s | 1.97× | 3.4× |
 
   The per-component traversal shares the loop and gains too.
+- **R2.** Core v1.2.0 adds `planck_boys_batch(x, count, nmax, out)` with
+  `out[i·(nmax+1) + n] = F_n(x[i])`, bitwise equal to the vector entry for
+  every x (verified through the C ABI against v1.1.0 on 90 M single-x values,
+  the vector entry with its NaN tail, the batched entry at five widths, Apple
+  clang and g++-15; per x the batched entry is 1.53–2.26× faster). Not bitwise
+  in Planck, by the compiler: across 67 032 real quartet calls T and every
+  Boys value are byte-identical and 583 outputs differ by ≤ 1.1e-16, all in
+  the (ss|ss) branch `out[0] += base·F[0]`, which g++ fuses differently in the
+  two-pass loop (with `-ffp-contract=off` the rounding moves rather than
+  vanishes). The loader then made the batched entry required (`13c60826`).
+- **Scratch.** The 2.4–4.7 % of zero/resize was almost all inside
+  `vector::resize`: out of line, and a buffer shrunk by a small block
+  re-zeroes its tail when the next larger one regrows it. `grow_to` keeps the
+  largest size, which gets the effect of sizing once per build without a
+  setup step; `acc` still zeroes its live extent. The removed share turned
+  into time only where HGP runs.
 
 ## Measured, not landed
 
-### D1c — the electron-transfer recurrence (declined)
-
-Head-Gordon and Pople's ETR at m = 0 after a one-centre VRR out to |e| ≤ M:
+**D1c — the electron-transfer recurrence (declined).** Head-Gordon and
+Pople's ETR at m = 0 after a one-centre VRR out to |e| ≤ M:
 
 ```math
 [e|f{+}1_j] = \bigl(\tfrac{\zeta}{\eta}PA_j + QC_j\bigr)[e|f]
@@ -428,54 +414,44 @@ Head-Gordon and Pople's ETR at m = 0 after a one-centre VRR out to |e| ≤ M:
 - \tfrac{\zeta}{\eta}[e{+}1_j|f]
 ```
 
-- **Precision.** A fixed bra→ket direction was off by 2.8e-9 on cc-pVTZ;
-  transferring per primitive quartet toward the larger exponent sum gave
-  2.4e-13 (27× the VRR).
-- **Speed.** 1.04–1.06× at VRR precision against a predicted 1.1–2.3×: the
-  ket phase fell 2×, the bra VRR to |e| ≤ M grew 3.3–3.5×. A row layout was
-  bitwise and time-neutral: the cost is per primitive quartet.
+A fixed bra→ket direction was off by 2.8e-9 on cc-pVTZ; transferring per
+primitive quartet toward the larger exponent sum gave 2.4e-13 (27× the VRR).
+At that precision it was 1.04–1.06× against a predicted 1.1–2.3×: the ket
+phase fell 2×, the bra VRR to |e| ≤ M grew 3.3–3.5×. A row layout was bitwise
+and time-neutral: the cost is per primitive quartet.
 
-### 5b — a class-batched scheduler (declined after S0)
+**5b — a class-batched scheduler (declined).** Group surviving blocks by
+class and evaluate classes in batches across blocks. `--census`:
+93.9–99.5 % of HGP-class primitive quartets were already in within-block
+lanes (closed forms 99.5–99.8 %); pooling would buy at most ~1.15× on the
+lane work, and enumerating with a survival check cost 2–12 % of the build.
+cc-pVTZ's K = 1 blocks are 23 % of HGP kernel time but ~6 % of its primitive
+quartets: their cost is per block.
 
-Group surviving blocks by class and evaluate classes in batches across blocks.
-`--census`: 93.9–99.5 % of HGP-class primitive quartets were already in
-within-block lanes (closed forms 99.5–99.8 %); pooling would buy at most
-~1.15× on the lane work, and enumerating with a survival check cost 2–12 % of
-the build. cc-pVTZ's K = 1 blocks are 23 % of HGP kernel time but ~6 % of its
-primitive quartets: their cost is per block, which batching does not touch
-while each block is digested component by component (K1 landed on that).
-
-### Families: D2a, B0, B1, B2, R3 (B2.1 deleted; B2.2 parked; B2.3 and R3 dropped)
-
-A family is a set of shells on one atom whose exponent sets nest (cc general
-contractions within L, Pople SP across L). A family quartet runs one primitive
-pass over the union of its members' primitive pairs; members split by their
-own total L (L ≤ 3: T, prefactor and Boys once per primitive quartet, raises
-once per layout; L ≥ 4: one VRR pass at the high members' maximum L, then each
+**Families: D2a, B0, B1, B2, R3 (none in production).** A family is a set of
+shells on one atom whose exponent sets nest (cc general contractions within
+L, Pople SP across L). A family quartet runs one primitive pass over the
+union of its members' primitive pairs; members split by their own total L
+(L ≤ 3: T, prefactor and Boys once per primitive quartet, raises once per
+layout; L ≥ 4: one VRR pass at the high members' maximum L, then each
 member's `finish()`).
 
-- **Kernel gains (B0, against today's kernels on the same member blocks,
-  values within 7.2e-16).** After lanes and K1: L ≤ 3 1.17–1.78× (cc-pVTZ
-  1.78×, cc-pVDZ 1.73×, naphthalene 1.37×); L ≥ 4 a scalar family pass is
-  0.92–1.03× on cc bases and 0.48–0.81× where little merges. Lanes and
-  families compete for the same primitive work, so lanes took the HGP half.
-- **The loop order costs (B1, B2.1).** Visiting blocks in family-quartet
-  units is exactly-once and MPI-safe, but on the balanced (W1) schedule it is
-  only a cost: +3.5 % / +3.6 % / +7.4 % at one thread on 8 H2O, 6-31G\* and
-  naphthalene (cc bases ±1 %), −4.7 % to +8.8 % at four threads. Its earlier
-  four-thread "gains" (−12 to −14 % on cc-pVDZ and 6-31G\*) were the load
-  imbalance W1 fixed. A first B2.1 cut was +50 % / +84 % on 8 H2O until a
+- **Kernel gains (B0, both sides sharing, against today's kernels on the
+  same member blocks, values within 7.2e-16).** L ≤ 3: 1.17–1.78× (cc-pVTZ
+  1.78×, cc-pVDZ 1.73× then, 1.58× after R2; naphthalene 1.37×). L ≥ 4: a
+  scalar family pass is 0.92–1.03× on cc bases and 0.48–0.81× where little
+  merges; lanes and families compete for the same primitive work, so lanes
+  took the HGP half (B2.3 dropped).
+- **Sharing on both sides needs the blocks visited in family order, and that
+  order costs** (B1, B2.1): +3.5 % / +3.6 % / +7.4 % at one thread on 8 H2O,
+  6-31G\* and naphthalene, ±1 % on cc bases, −4.7 % to +8.8 % at four
+  threads. Its earlier four-thread "gains" (−12 to −14 %) were the load
+  imbalance W1 fixed. A first cut was +50 % / +84 % on 8 H2O until a
   unit-level Schwarz bound removed ~1.3 M fully screened units.
-- **Fate.** B2.1 (`family_units`, the `--b21` mode and its test arm) was
-  deleted once B2.2 was parked; `66669cd5` has it. B2.3 (HGP families) is
-  dropped. B1 remains a git stash
-  ("B1: fused loop in family-quartet order") for its history only.
-- **R3, ket-side sharing only (declined at the probe, 2026-10-24).** Fixing
-  the bra keeps today's order but discards most of the merge. `--family
-  nwater basis bra` makes each bra member its own family (same member
-  quartets, values within 7.2e-16). Closed-form rows, one thread:
+- **Sharing on the ket side only keeps today's order but loses most of the
+  merge** (R3). `--family nwater basis bra`, closed-form rows, one thread:
 
-  | fixture | two-sided (B0) | bra fixed (R3) | passes fewer, two-sided → bra fixed | closed forms + Boys | R3 build, Amdahl |
+  | fixture | two-sided | ket side only | passes fewer, two-sided → ket only | closed forms + Boys | ket only, build (Amdahl bound) |
   |---|---|---|---|---|---|
   | 8 H2O / 6-31G | 1.22× | 1.06× | 2.29× → 1.51× | 61 % | ~1.03× |
   | 4 H2O / 6-31G\* | 1.04× | 0.90× | 2.17× → 1.45× | 38 % | ~0.96× |
@@ -483,26 +459,21 @@ member's `finish()`).
   | 1 H2O / cc-pVTZ | 1.56× | 1.08× | 5.88× → 2.06× | 20 % | ~1.01× |
   | naphthalene / 6-31G | 1.20× | 0.95× | 3.61× → 1.79× | 62 % | ~0.98× |
 
-  Below the ≥ 1.10× gate on cc-pVDZ and naphthalene, and the Amdahl figure is
-  an upper bound (the probe skips screening and grouping overhead), so R3
-  stopped there.
-- **B2.2 parked (2026-10-24).** Two-sided, the closed-form family pass is
-  1.58× on cc-pVDZ (≤ ~1.29× of the build), and the family order costs ±1 %
-  on cc bases (B2.1 above); on Pople bases the order's +3.5–7.4 % leaves
-  ~1.04–1.08×. Only a basis-dependent traversal would pay, and it was not
-  taken up. No part of B2 has reached the production build.
+  Under the 1.10× gate set on cc-pVDZ and naphthalene, and the bound ignores
+  the production loop's screening and grouping overhead.
+- **What would pay**: two-sided sharing in family order on cc bases only
+  (≤ ~1.29× of a cc-pVDZ build); on Pople bases the order's cost leaves
+  ~1.04–1.08×. That means a traversal chosen by basis, which was not taken
+  up (B2.2 parked). The family-order traversal itself (B2.1, `family_units`)
+  was deleted (`1e047aa2`); B1 survives as a git stash.
 
-### R1 — the closed-form readout as a flat array (declined)
-
+**R1 — the closed-form readout as a flat array (declined).**
 `ClosedFormBlockKernel::value` re-derives each component's raise slot on every
-call (a loop over the four component views, the slot index, four norm-ratio
-loads). R1 step 1 moved that into `prepare`, filling a flat norm-folded
-`out_[27]` so `value()` is one load. Bitwise by construction (same product
-chain): the 28 G fingerprints matched R2. Predicted 1.03–1.12×.
+call. R1 moved that into `prepare`, filling a flat norm-folded `out_[27]` so
+`value()` is one load. Bitwise (28 fingerprints matched). Predicted
+1.03–1.12×; production build against R2, best of three interleaved:
 
-Production build vs R2, best of three interleaved (2026-10-24):
-
-| fixture | R1, 1 thread | R1, 4 threads | R1, `prepare` noinline, 1 thread |
+| fixture | 1 thread | 4 threads | `prepare` noinline, 1 thread |
 |---|---|---|---|
 | 8 H2O / 6-31G | 0.953× | 0.922× | 0.981× |
 | 4 H2O / 6-31G\* | 0.960× | 0.941× | — |
@@ -510,22 +481,33 @@ Production build vs R2, best of three interleaved (2026-10-24):
 | 1 H2O / cc-pVTZ | 0.976× | 0.971× | 0.990× |
 | naphthalene / 6-31G | 0.933× | 0.942× | 0.941× |
 
-Two causes, each about half:
+Two causes, each about half. **Inlining:** production prepares lazily inside
+the component loop, so the larger `prepare` is inlined into the hot
+digestion nest of every mode; `noinline` recovers 2–3 %. **Eager work:**
+`prepare` fills every component, production reads only those passing the
+Schwarz mask and, under S1, with nonzero weight (85 % read on 8 H2O; the
+symmetric build loses most, its read fraction not counted). The `--k1` timed
+arm showed a net gain (+12 ms prepare, −16 ms digestion) because it prepares
+outside the loop and reads everything.
 
-- **Inlining.** Production prepares lazily from inside the component loop
-  (`ensure_prepared` in `fused_fock.h`), so the larger `prepare` is inlined
-  into the hot digestion nest of every mode. `noinline` recovers 2–3 %.
-- **Eager work.** `prepare` fills every component; production reads only those
-  passing the Schwarz mask and, under S1, with nonzero skeleton weight. On
-  8 H2O 85 % of filled values are read. The largest loss is the one symmetric
-  build (naphthalene), consistent with zero-weight skeleton components; its
-  read fraction was not counted.
+**S2 — threading the serial symmetric phases (premise refuted).**
+`density_has_symmetry` and `symmetrize_over_ops` are 0.04 % of samples; the
+four-thread idle they were blamed for is load imbalance at the loop's closing
+barrier (see Where the time goes).
 
-The `--k1` timed dense arm said the opposite (+12 ms in `prepare`, −16 ms in
-digestion on 8 H2O, a net gain) because it prepares outside the loop and
-reads every component unmasked. Step 2 (read the array from the dense loop)
-would add to the eager waste, so it was not tried. A lazy fill (compute on
-first read, `prepare` out of line) might break even; not worth it next to R3.
+**P2 — quartet-level primitive screening (declined: G must stay accurate to
+1e-10).** After P1, ~20 % of primitive quartets on water clusters have a
+prefactor bound between 1e-24 and 1e-12. Skipping below ε, Schwarz held exact
+(before D1):
+
+| fixture | ε = 1e-14 | ε = 1e-12 | max\|ΔG\| at 1e-14 / 1e-12 |
+|---|---|---|---|
+| 8 H2O / 6-31G | 1.13× | 1.37× | 4.0e-12 / 3.3e-10 |
+| 4 H2O / 6-31G\* | 1.07× | 1.18× | 4.9e-12 / 3.7e-10 |
+| naphthalene D2h | 1.15× | 1.22× | 4.8e-12 / 4.8e-10 |
+
+**Total L > 12 (declined: g-shell bases are not routine work).** Those blocks
+take per-component HGP; the VRR table would be 3.7 MB for (gg|gg).
 
 ## Findings
 
@@ -543,6 +525,15 @@ While every integral leaves its kernel through `value()` and is digested
 alone, batching blocks changes nothing outside the kernels; dense per-block
 digestion did (K1).
 
+**Sharing work across shells needs both sides and a cheap order.** Two-sided
+family passes gain 1.2–1.8× on the closed forms, but the family order costs
+up to 7 % on Pople bases, and fixing the bra to keep today's order discards
+most of the merge (R3).
+
+**Moving work earlier is not removing it.** R1 moved the readout decode into
+`prepare` and lost 2–8 %: the bigger function inlined into the hot loop, and
+it computed values the loop never reads.
+
 **A four-thread gain can be load imbalance in disguise.** B2.1's family units
 measured 12–14 % faster at four threads; on a balanced schedule the gain
 vanished and only the one-thread cost remained. Check the scaling of the
@@ -552,19 +543,23 @@ baseline before crediting a parallel gain to the change.
 triangle hand the first thread 1 − (1 − 1/T)² of the work; at four threads
 that capped the build at 2.29×, and one line (W1) recovered up to 1.97×.
 
+**Idle time is not serial work until the waiting thread says so.** S2 blamed
+the four-thread idle on two serial functions; a per-thread split of the
+sample put every waiting sample at the loop's closing barrier.
+
 **A share of time is not a share of work, and an out-of-tree share is not a
 gain.** cc-pVTZ's K = 1 blocks are 23 % of HGP kernel time and ~6 % of its
 primitive quartets (5b). Boys profiled at 9–32 % of the build, and a 1.3–2.3×
-faster Boys evaluation plus batching realized 1.03–1.13×.
+faster Boys evaluation plus batching realized 1.03–1.13×. Scratch zeroing was
+3.5 % of 8 H2O and removing it was worth nothing measurable there.
 
 **An idea that measured slower may have been its first implementation.** A
 contract-once hoist measured 1.14–1.62× slower; D1's block kernel is the same
 idea at 1.5–13× faster, with L-major indexing.
 
-**Price a change to `prepare` on the production loop, not the `--k1` timed
-arm.** The timed arm prepares every block up front and reads every component
-unmasked; production prepares lazily inside the masked component loop. R1
-looked like a net gain in the timed split and was 2–8 % slower in production.
+**Price a change on the production loop.** The `--k1` timed arm prepares every
+block up front and reads every component unmasked; R1 looked like a net gain
+there and was 2–8 % slower in production.
 
 **A profile share is a lower bound on what removing work is worth, and can
 mislead the other way.** The `ShellPair` rebuild was 8.4 % of samples and
@@ -591,13 +586,13 @@ buffer was sized for one component; HGP's hoisted block path reached
 MMAX = 36 on (ff|ff): SIGBUS, hidden for two days among known failures. **A
 red gate that is "already failing" still needs its cause checked.**
 
-**A gate that never runs is worse than none.** `planck-boys-vec` (the
-`boys_vec`-vs-`boys` bitwise gate) was built but never registered in ctest
-and never loaded the Boys library, so it segfaulted unnoticed since the
-license gate. R2 found it by needing it.
+**A gate that never runs is worse than none.** `planck-boys-vec` was built but
+never registered in ctest and never loaded the Boys library, so it segfaulted
+unnoticed since the license gate. R2 found it by needing it.
 
 **Code layout can cost more than the change.** Hoisting L3b's orbit buffer
-slowed molecules without symmetry by 5 % through register allocation.
+slowed molecules without symmetry by 5 % through register allocation; R1's
+larger `prepare` cost 2–3 % the same way.
 
 **Screening must never reach the Schwarz table.** The first P2 experiment gave
 max|ΔG| = 3e-6 because `schwarz_table_hgp` builds Q with the same kernel.
@@ -617,110 +612,34 @@ never merged cc-pVDZ oxygen's equal-size 1s and 2s (1.47–1.83× instead of
 dropped component Schwarz.
 
 **Write the prediction down first.** It caught a misread class share, C4a's
-3–4× low predictions, 5b's premise, B1's Pople cost, and R2's shortfall.
+3–4× low predictions, 5b's premise, B1's Pople cost, R2's shortfall, R1's
+loss and R3's shortfall.
 
 **A copied fixture can hide the thing under test.** A copied `Calculator`
 kept only the identity operation, and the first K1.4 "C2v" gate passed with
 |G| = 1. Assert the fixture's defining property.
 
-## Open, in order
+## Open
 
-| step | what | targets | bitwise? |
-|---|---|---|---|
-| R1b | closed-form readout from a per-build decode table, `value()` still lazy (conditional) | readout 2–13 % | yes |
-| partition | fixed accumulator partition, 64 bins scheduled dynamically | determinism across thread counts; end-barrier idle 5–11 % at four threads | no |
-| C5 | screened kernels in both block kernels (then dense) | range-separated hybrids | screened only |
-| F3, D3, K2, C4b | see below | — | — |
-
-**R2 — the batched Boys entry.** Every Boys call evaluated one x through the
-out-of-tree core: the closed forms once per primitive quartet (orders 0–3),
-the HGP block kernel once per lane. Two halves, the core's internals scoped
-outside this repo:
-
-1. **Core v1.2.0 (released).** A faster single-x path and a batched export,
-   `planck_boys_batch(x, count, nmax, out)` with
-   `out[i·(nmax+1) + n] = F_n(x[i])`, bitwise equal to the vector entry for
-   every x. Verified through the C ABI against v1.1.0 (`tools/verify_abi.cpp`
-   in the core repo): 90 M single-x values over the table range, its row
-   edges, random x and the asymptotic range; the vector entry including its
-   NaN tail; the batched entry at five widths; Apple clang and g++-15. Per x:
-   vector entry 1.03–2.27×, batched entry 1.53–2.26×. Through Planck's
-   loader, the released blob's batched, vector and scalar entries agree byte
-   for byte on 3.3 M points per order.
-2. **Planck callers (`102f1d01`).** The loader requires
-   `planck_boys_batch`: a v1.1.0 library (license) fails at load with a
-   message naming v1.2.0, rather than running an untested fallback (one was
-   written and deleted unrun). The
-   closed forms compute T for every primitive quartet of the block, make one
-   batched call, then accumulate (scratch as a kernel member); the HGP
-   kernel makes one batched call per lane group. `planck-boys-vec` now loads
-   the library, runs under ctest and pins `boys_batch` to `boys_vec`.
-   Measured, HEAD → R2 on the same v1.2.0 library, best of three
-   interleaved: 1.01–1.11× at one thread, 1.03–1.11× at four (largest on
-   naphthalene and 8 H2O, smallest on cc-pVTZ, whose work is HGP).
-3. **Not bitwise, by the compiler.** Compiling HEAD's and the new
-   `low_l_shell_eri` into one test on the smoke fixtures' 67 032 real quartet
-   calls: under the production flags, T and every Boys value are
-   byte-identical in every call, and 583 outputs differ, all in the (ss|ss)
-   branch `out[0] += base·F[0]`, by at most 1.1e-16 (g++'s
-   `-ffp-contract=fast` fuses that multiply-add differently in the two loop
-   shapes). With `-ffp-contract=off` the rounding moves rather than
-   vanishes (43 261 outputs differ, ≤ 2.2e-16). Gates: tolerance (closed
-   forms within 1.3e-15 of HGP, `planck-hgp-engine-smoke`,
-   `planck-compute-2e`, `planck-fock-accumulate`), smoke 43/45, extended
-   135/139.
-4. **Profiled at HEAD** (see "Where the time goes"): Boys is 14–23 %
-   (7 % on cc-pVTZ), nearly all evaluation, so further Boys gains need
-   fewer evaluations or a cheaper evaluation in the
-   core, not more batching. Sizing the scratch is now its own step.
-
-**Scratch, grow-only (landed `0e3e074d`).** Zeroing and `vector::resize`
-were 2.4–4.7 % of every build. The call tree put nearly all of the `memset`
-/ `bzero` inside `vector::resize` itself: the call is out of line, and a
-buffer shrunk by a small block re-zeroes its tail when the next larger one
-regrows it. `grow_to` (`block_eri.h`) keeps each buffer at its high-water
-mark instead, which gets the "once per build" effect without a per-build
-setup; `acc` still zeroes its live extent. Bitwise (28 G fingerprints
-identical; `planck-hgp-engine-smoke`, `planck-fock-accumulate`, smoke
-43/45 as before). Zero/resize fell to ≤ 0.1 % of samples. Best of three
-against HEAD: 1.030× / 1.041× on 6-31G\* and 1.043× / 1.041× on cc-pVTZ
-(one / four threads); 8 H2O, cc-pVDZ and naphthalene within ±1 % (best of
-seven on the first two), so the removed share converts to time only where
-HGP runs.
-
-**S2 — serial symmetric phases (premise refuted, 2026-10-24).** The 11 %
-naphthalene idle at four threads is not `density_has_symmetry` /
-`symmetrize_over_ops` (0.04 % of samples together). Every waiting sample is
-the barrier closing `fused_fock_build`'s parallel loop (`gomp_team_end`):
-over the same 10 s three threads wait 10.3 / 17.3 / 16.1 % and the fourth
-0.6 %. That is load imbalance: under S1 the work per bra unit is uneven, and
-W1's static round-robin cannot adapt. It moves into the partition item.
-
-**R1b — the readout from a per-build table (conditional).** R1
-lost because it moved the decode into `prepare` (inlined into the lazy loop,
-and filling unread components). The decode depends only on each AO's
-Cartesian exponents, not the block: precompute per AO its axis code and norm
-ratio once per build, and keep `value()` lazy as a few table loads.
-Bitwise. Ceiling 2–13 % (largest on 8 H2O); land only at ≥ 1.03× on
-8 H2O, timed on the production loop, not the `--k1` timed arm.
-
-**HGP has no open item.** VRR + finish are 29 % on 6-31G\* and 50 % on
-cc-pVTZ. Lanes took the family gain there (B2.3), so the remaining lever is
-K2's per-block fixed costs.
-
-**The fixed accumulator partition.** Partials are keyed by thread index, so
-a run is reproducible at a given thread count but not across counts
-(CO2 / 6-31G\* direct differs between 1 and 4 threads in the DIIS residual
-digits and the last kcal/mol digit; all 10 Hartree digits identical). Key the
-partials by unit index mod 64, each bin's units in increasing order, bins
-merged in fixed order; a thread owns whole bins, keeping W1's balance (the
-FCI sigma-build rule). Memory 64 × nb² (64 × 2 MB at nb = 500). Gate: G
-bitwise identical at 1/2/4/8 threads. Because a bin's result no longer
-depends on which thread runs it, bins can be handed out dynamically
-(`schedule(dynamic, 1)` over bins) without losing determinism; that also
-removes the end-of-loop imbalance S2 found (naphthalene 11 %, 6-31G\* /
-cc-pVTZ 5–6 % idle at four threads). Expect ~1.1× at four threads on
+**The fixed accumulator partition (in progress).** Partials keyed by thread
+index make G depend on the thread count (CO2 / 6-31G\* direct differs between
+1 and 4 threads in the DIIS residual digits and the last kcal/mol digit; all
+10 Hartree digits identical). Keying them by bin (bra mod n_bins, each bin's
+bras in increasing order, bins summed in fixed order per element) makes G
+independent of the thread count, and since a bin's result no longer depends
+on which thread runs it, bins can be scheduled dynamically, which removes the
+closing-barrier imbalance (naphthalene 11 %, 6-31G\* / cc-pVTZ 5–6 % idle at
+four threads). n_bins is a function of nb only: 64, fewer once 64 nb²
+passes 256 MB per output, at least 8. Not bitwise against today (one thread
+now sums 64 partials). Gate: G identical at 1/2/4/8 threads,
+`planck-fock-accumulate`, the suites. Expect ~1.1× at four threads on
 naphthalene, nothing at one.
+
+**R1b — the readout from a per-build table (conditional).** R1's lesson
+applied: the decode depends only on each AO's Cartesian exponents, so
+precompute per AO its axis code and norm ratio once per build and keep
+`value()` lazy as a few table loads. Bitwise. Ceiling 2–13 % (largest on
+8 H2O); land only at ≥ 1.03× on 8 H2O, timed on the production loop.
 
 **C5 — screened kernels.** Both block kernels decline screened kernels, so
 range-separated hybrids take per-component HGP. They need `hgp_vrr`'s
@@ -730,62 +649,42 @@ scaling: T × `boys_scale`, prefactor × `prefactor_scale`, W−P/W−Q ×
 fixture for LongRange and ShortRange, plus the `water_*_engine_os_vs_hgp`
 comparators.
 
-**P2 — quartet-level primitive screening (declined 2026-10-24).** G must
-stay accurate to 1e-10, and the screening that pays (ε = 1e-12) moves G by
-3.3–4.8e-10; ε = 1e-14 stays near 5e-12 but buys only 1.07–1.15×. The
-measurement is kept. After P1,
-~20 % of primitive quartets on water clusters have a prefactor bound between
-1e-24 and 1e-12. Skipping below ε, Schwarz held exact (before D1):
-
-| fixture | ε = 1e-14 | ε = 1e-12 | max\|ΔG\| at 1e-14 / 1e-12 |
-|---|---|---|---|
-| 8 H2O / 6-31G | 1.13× | 1.37× | 4.0e-12 / 3.3e-10 |
-| 4 H2O / 6-31G\* | 1.07× | 1.18× | 4.9e-12 / 3.7e-10 |
-| naphthalene D2h | 1.15× | 1.22× | 4.8e-12 / 4.8e-10 |
-
-(The proposal was ε = 1e-4 · `tol_eri` through `BlockEriRequest::prim_eps`,
-with `schwarz_table_*` passing ε = 0.)
-
-**L > 12 (declined 2026-10-24).** Blocks above total L = 12 (g shells and
-up) take per-component HGP. Basis sets with g shells are not routine work
-here, so the block kernels stop at 12; the VRR table would be 3.7 MB for
-(gg|gg).
-
 **F3.** After F1 the full-group skeleton runs only where it is persisted, so
-this shortens a one-time build (0.017–0.054 s on small molecules, 1.3–3.4 s
-near n_b = 100). Worth it only if `threshold` is raised routinely.
+feeding it from the block kernels shortens a one-time build (0.017–0.054 s on
+small molecules, 1.3–3.4 s near n_b = 100). Worth it only if `threshold` is
+raised routinely.
 
-**D3 (independent).** RI-JK recomputes its density-independent pair factors
-twice per iteration, ~61 % of the RI Fock build (`docs/ERI_FOCK_BLAS_SCOPE.md`).
-
-**K2 (conditional).** Batches of same-class ket blocks for a fixed bra unit:
-lanes across kets, bra-side work hoisted, the HRR as array work, digestion as
-small matrix products. Only if a later census shows per-block fixed
-costs (setup, HRR at 10–16 % of the HGP kernel) still worth the largest
-restructure here.
-
-**C4b (deprioritised).** A four-raise closed form matched HGP to 1.3e-15 on
-every total-L = 4 layout and measured 10–16× over per-component HGP (C4a),
-but its competitor is now the block kernel, whose L = 4 work is 4–9 % of sp
-builds.
+**Outside the main line.** **D3:** RI-JK recomputes its density-independent
+pair factors twice per iteration, ~61 % of the RI Fock build
+(`docs/ERI_FOCK_BLAS_SCOPE.md`). **K2 (conditional):** batches of same-class
+ket blocks for a fixed bra unit (lanes across kets, bra-side work hoisted, the
+HRR as array work, digestion as small matrix products); the only lever left
+on HGP, and only if a census shows per-block fixed costs (setup, HRR at
+10–16 % of the HGP kernel) worth the largest restructure here. **C4b
+(deprioritised):** a four-raise closed form matched HGP to 1.3e-15 on every
+total-L = 4 layout and measured 10–16× over per-component HGP (C4a), but its
+competitor is now the block kernel, whose L = 4 work is 4–9 % of sp builds.
 
 ## Ruled out
 
 - **Forcing `accumulate_term` / `distinct_eri_orbit` inline**: stubs < 1 %.
 - **Avoiding `boys(0, T)` in the (ss|ss) branch**: the cost was the Boys
-  evaluation itself (now addressed in the core, R2).
+  evaluation itself (addressed in the core, R2).
 - **A generator for an L = 4 closed form**: the hand-written level was correct
   first time (C4a).
 - **The ETR (D1c), a unit-stride row layout for the VRR, and a class-batched
-  scheduler on per-component digestion (5b).**
-- **The family loop order as a lever (B1, B2.1)** and **HGP families against
-  laned production (B2.3)**: see Families.
+  scheduler (5b).**
+- **Family sharing in any form tried** (B1, B2.1, B2.3, R3), and the
+  basis-dependent traversal that would pay (B2.2, parked).
+- **Precomputing the closed-form readout in `prepare` (R1).**
+- **Threading the serial symmetric phases (S2)**: not where the idle is.
+- **Primitive screening (P2)**: breaks the 1e-10 accuracy requirement where
+  it pays.
+- **Block kernels above total L = 12**: not routine work.
 - **Loosening S1's density tolerance** so linear HF takes the skeleton path:
   it would change the SCF trajectory.
 - **Demanding bitwise equality from a code restructure under g++'s default
   flags**: see R2.
-- **Precomputing the closed-form readout in `prepare` (R1)**: 0.92–1.00×; see
-  "Measured, not landed".
 
 ## Out of scope
 
