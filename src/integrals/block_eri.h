@@ -17,11 +17,22 @@
 #pragma once
 
 #include <cstddef>
+#include <vector>
 
 #include "base/types.h"
 
 namespace HartreeFock::Integrals
 {
+    // Block-kernel scratch is grow-only: a smaller block leaves the size alone,
+    // so the next larger one neither calls resize nor re-zeroes the regrown
+    // tail (2.4-4.7 % of a build when sized per block). Readers index within
+    // the current block's extent and never use size().
+    inline void grow_to(std::vector<double> &v, std::size_t n)
+    {
+        if (v.size() < n)
+            v.resize(n);
+    }
+
     struct BlockEriRequest
     {
         // Pairs of the FIRST component of A,B and of C,D. Their coeff_product

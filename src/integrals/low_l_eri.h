@@ -60,7 +60,7 @@ namespace HartreeFock::Integrals
 
         const std::size_t n_quartets = spAB.primitive_pairs.size() * spCD.primitive_pairs.size();
         const std::size_t width = static_cast<std::size_t>(n_raise) + 1;
-        boys_scratch.resize(n_quartets * (width + 1));
+        grow_to(boys_scratch, n_quartets * (width + 1));
         double *const Ts = boys_scratch.data();
         double *const Fs = Ts + n_quartets;
         {

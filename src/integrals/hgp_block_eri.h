@@ -28,6 +28,7 @@
 // is not mirrored yet, so screened kernels decline and stay on eri_elem.
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -227,7 +228,8 @@ namespace HartreeFock::Integrals
             const int Ne = n_upto(LAB), Nf = n_upto(LCD), Md = M + 1;
             const int e0 = n_upto(LA - 1), f0 = n_upto(LC - 1);
 
-            acc.assign(static_cast<std::size_t>(Ne) * Nf, 0.0);
+            grow_to(acc, static_cast<std::size_t>(Ne) * Nf);
+            std::fill_n(acc.begin(), static_cast<std::size_t>(Ne) * Nf, 0.0);
 
             // Blocks with K >= kMinLaneK primitive quartets run them kLanes at a
             // time; below that, one at a time. Both are hgp_block::vrr_lanes, so
@@ -238,7 +240,7 @@ namespace HartreeFock::Integrals
             const std::size_t K = P.size() * Q.size();
             const auto pass = [&]<int B>()
             {
-                VL.resize(static_cast<std::size_t>(Ne) * Nf * Md * B);
+                grow_to(VL, static_cast<std::size_t>(Ne) * Nf * Md * B);
                 const PrimitivePair *pa[B], *pc[B];
                 double w[B];
                 for (std::size_t k0 = 0; k0 < K; k0 += B)
@@ -288,7 +290,7 @@ namespace HartreeFock::Integrals
 
             // Bra HRR: H[a][b][f - f0] for |a| in [LA, LAB - |b|], |b| <= LB.
             const int Nb = n_upto(LB), Nd = n_upto(LD), nfk = Nf - f0;
-            H.resize(static_cast<std::size_t>(Ne) * Nb * nfk);
+            grow_to(H, static_cast<std::size_t>(Ne) * Nb * nfk);
             const auto h = [&](int a, int b) { return &H[(static_cast<std::size_t>(a) * Nb + b) * nfk]; };
             for (int a = e0; a < Ne; ++a)
                 for (int f = 0; f < nfk; ++f)
@@ -308,8 +310,8 @@ namespace HartreeFock::Integrals
 
             // Ket HRR per final (a, b), then the component readout.
             n_[0] = r.n[0], n_[1] = r.n[1], n_[2] = r.n[2], n_[3] = r.n[3];
-            out_.resize(n_[0] * n_[1] * n_[2] * n_[3]);
-            K.resize(static_cast<std::size_t>(Nf) * Nd);
+            grow_to(out_, n_[0] * n_[1] * n_[2] * n_[3]);
+            grow_to(K, static_cast<std::size_t>(Nf) * Nd);
             const auto idx = [&](int s, std::size_t c)
             {
                 const auto &e = r.views[s][c]->_cartesian;
