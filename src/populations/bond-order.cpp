@@ -1,5 +1,7 @@
 #include "populations/population_detail.h"
 
+#include <format>
+
 namespace HartreeFock::SCF
 {
     std::expected<MayerBondOrderAnalysis, std::string> mayer_bond_order_analysis(
