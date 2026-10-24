@@ -13,11 +13,12 @@ When the open steps land or are abandoned, rewrite this as an answer.
   calls; Planck requires core v1.2.0) and grow-only scratch.
 - **Open, in order:** the fixed accumulator partition with dynamic bins
   (also the four-thread imbalance S2 found), R1b (conditional), C5
-  (screened kernels), P2 (primitive screening, a policy call), total L > 12,
-  F3. D3 is independent, K2 conditional, C4b deprioritised.
+  (screened kernels), F3. D3 is independent, K2 conditional, C4b
+  deprioritised.
 - **Declined or superseded:** D1c, 5b, B1, B2.2 (parked), B2.3,
   R1 (measured 0.92–1.00× slower), R3 (probe 0.90–1.13× on the closed
-  forms), S2 (premise refuted; the idle is load imbalance).
+  forms), S2 (premise refuted; the idle is load imbalance), P2 (G must stay
+  accurate to 1e-10), total L > 12 (not routine work).
 
 ## Answer so far
 
@@ -629,8 +630,7 @@ kept only the identity operation, and the first K1.4 "C2v" gate passed with
 | R1b | closed-form readout from a per-build decode table, `value()` still lazy (conditional) | readout 2–13 % | yes |
 | partition | fixed accumulator partition, 64 bins scheduled dynamically | determinism across thread counts; end-barrier idle 5–11 % at four threads | no |
 | C5 | screened kernels in both block kernels (then dense) | range-separated hybrids | screened only |
-| P2 | quartet-level primitive screening (policy) | ~20 % of primitive quartets | no (~1e-12 to 1e-10) |
-| L > 12, F3, D3, K2, C4b | see below | — | — |
+| F3, D3, K2, C4b | see below | — | — |
 
 **R2 — the batched Boys entry.** Every Boys call evaluated one x through the
 out-of-tree core: the closed forms once per primitive quartet (orders 0–3),
@@ -671,7 +671,7 @@ outside this repo:
    135/139.
 4. **Profiled at HEAD** (see "Where the time goes"): Boys is 14–23 %
    (7 % on cc-pVTZ), nearly all evaluation, so further Boys gains need
-   fewer evaluations (family sharing, P2) or a cheaper evaluation in the
+   fewer evaluations or a cheaper evaluation in the
    core, not more batching. Sizing the scratch is now its own step.
 
 **Scratch, grow-only (landed `0e3e074d`).** Zeroing and `vector::resize`
@@ -730,7 +730,10 @@ scaling: T × `boys_scale`, prefactor × `prefactor_scale`, W−P/W−Q ×
 fixture for LongRange and ShortRange, plus the `water_*_engine_os_vs_hgp`
 comparators.
 
-**P2 — quartet-level primitive screening (a policy decision).** After P1,
+**P2 — quartet-level primitive screening (declined 2026-10-24).** G must
+stay accurate to 1e-10, and the screening that pays (ε = 1e-12) moves G by
+3.3–4.8e-10; ε = 1e-14 stays near 5e-12 but buys only 1.07–1.15×. The
+measurement is kept. After P1,
 ~20 % of primitive quartets on water clusters have a prefactor bound between
 1e-24 and 1e-12. Skipping below ε, Schwarz held exact (before D1):
 
@@ -740,12 +743,13 @@ comparators.
 | 4 H2O / 6-31G\* | 1.07× | 1.18× | 4.9e-12 / 3.7e-10 |
 | naphthalene D2h | 1.15× | 1.22× | 4.8e-12 / 4.8e-10 |
 
-Proposed ε = 1e-4 · `tol_eri` through `BlockEriRequest::prim_eps`;
-`schwarz_table_*` must pass ε = 0. Re-measure on today's kernels before
-deciding.
+(The proposal was ε = 1e-4 · `tol_eri` through `BlockEriRequest::prim_eps`,
+with `schwarz_table_*` passing ε = 0.)
 
-**L > 12.** Blocks above total L = 12 (g shells and up) take per-component
-HGP. Extend when a fixture needs it; the VRR table is 3.7 MB for (gg|gg).
+**L > 12 (declined 2026-10-24).** Blocks above total L = 12 (g shells and
+up) take per-component HGP. Basis sets with g shells are not routine work
+here, so the block kernels stop at 12; the VRR table would be 3.7 MB for
+(gg|gg).
 
 **F3.** After F1 the full-group skeleton runs only where it is persisted, so
 this shortens a one-time build (0.017–0.054 s on small molecules, 1.3–3.4 s

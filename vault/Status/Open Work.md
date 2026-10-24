@@ -2040,8 +2040,9 @@ identify the path taken. Not required for correctness or performance.
     with 64 bins scheduled dynamically (deterministic across thread counts
     AND removes the imbalance; ~1.1x at four threads on naphthalene); R1b readout from a per-build per-AO decode table with `value()` kept lazy
     (conditional, >= 1.03x on 8 H2O); C5 (screened
-    kernels; range-separated hybrids still take per-component HGP); P2
-    (primitive screening, a policy call); total L > 12; F3. D3 (RI-JK pair
+    kernels; range-separated hybrids still take per-component HGP); F3.
+    Declined 2026-10-24: P2 (G must stay accurate to 1e-10) and total
+    L > 12 (not routine work). D3 (RI-JK pair
     factors) is independent, K2 conditional (the only lever left on HGP,
     which no open item targets), C4b deprioritised.
   - **Known defect, scheduled (the fixed partition, after W1):** the fused
