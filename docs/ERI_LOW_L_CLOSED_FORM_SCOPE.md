@@ -11,12 +11,13 @@ When the open steps land or are abandoned, rewrite this as an answer.
 - **Landed:** C0, C1, C2–C3.5, H1, L1–L3c, P1, S1, D1, F1, F2, F4, T1, 2b,
   K1, K1.4, B2.1 (default off), W1, core v1.2.0, R2 (batched Boys
   calls; Planck requires core v1.2.0) and grow-only scratch.
-- **Open, in order:** B2.2 on cc bases (decide first; see Families),
-  S2 (serial symmetric phases), R1b (conditional), the fixed accumulator partition, C5
+- **Open, in order:** the fixed accumulator partition with dynamic bins
+  (also the four-thread imbalance S2 found), R1b (conditional), C5
   (screened kernels), P2 (primitive screening, a policy call), total L > 12,
   F3. D3 is independent, K2 conditional, C4b deprioritised.
-- **Declined or superseded:** D1c, 5b, B1, B2.3, R1
-  (measured 0.92–1.00× slower), R3 (probe 0.90–1.13× on the closed forms).
+- **Declined or superseded:** D1c, 5b, B1, B2.2 (parked), B2.3,
+  R1 (measured 0.92–1.00× slower), R3 (probe 0.90–1.13× on the closed
+  forms), S2 (premise refuted; the idle is load imbalance).
 
 ## Answer so far
 
@@ -445,7 +446,7 @@ the build. cc-pVTZ's K = 1 blocks are 23 % of HGP kernel time but ~6 % of its
 primitive quartets: their cost is per block, which batching does not touch
 while each block is digested component by component (K1 landed on that).
 
-### Families: D2a, B0, B1, B2, R3 (B2.1 landed off; B2.2 open on cc bases; B2.3 and R3 dropped)
+### Families: D2a, B0, B1, B2, R3 (B2.1 landed off; B2.2 parked; B2.3 and R3 dropped)
 
 A family is a set of shells on one atom whose exponent sets nest (cc general
 contractions within L, Pople SP across L). A family quartet runs one primitive
@@ -485,12 +486,11 @@ member's `finish()`).
   Below the ≥ 1.10× gate on cc-pVDZ and naphthalene, and the Amdahl figure is
   an upper bound (the probe skips screening and grouping overhead), so R3
   stopped there.
-- **B2.2 is back as the open question, for cc bases only.** Two-sided, the
-  closed-form family pass is 1.58× on cc-pVDZ (≤ ~1.29× of the build), and
-  the family order costs ±1 % on cc bases (B2.1 above). On Pople bases the
-  order's +3.5–7.4 % leaves ~1.04–1.08×. Decide whether a basis-dependent
-  traversal (family order on cc bases only) is worth carrying before
-  building it.
+- **B2.2 parked (2026-10-24).** Two-sided, the closed-form family pass is
+  1.58× on cc-pVDZ (≤ ~1.29× of the build), and the family order costs ±1 %
+  on cc bases (B2.1 above); on Pople bases the order's +3.5–7.4 % leaves
+  ~1.04–1.08×. Only a basis-dependent traversal would pay, and it was not
+  taken up. No part of B2 has reached the production build.
 
 ### R1 — the closed-form readout as a flat array (declined)
 
@@ -627,10 +627,8 @@ kept only the identity operation, and the first K1.4 "C2v" gate passed with
 
 | step | what | targets | bitwise? |
 |---|---|---|---|
-| B2.2 | closed-form family kernel in family-quartet order, cc bases (decide first) | closed forms + Boys 61 % on cc-pVDZ | no |
-| S2 | thread the serial symmetric phases (`density_has_symmetry`, `symmetrize_over_ops`) in fixed order | idle 11 % at four threads, naphthalene | yes |
 | R1b | closed-form readout from a per-build decode table, `value()` still lazy (conditional) | readout 2–13 % | yes |
-| partition | fixed accumulator partition, cyclic bins | determinism across thread counts | no |
+| partition | fixed accumulator partition, 64 bins scheduled dynamically | determinism across thread counts; end-barrier idle 5–11 % at four threads | no |
 | C5 | screened kernels in both block kernels (then dense) | range-separated hybrids | screened only |
 | P2 | quartet-level primitive screening (policy) | ~20 % of primitive quartets | no (~1e-12 to 1e-10) |
 | L > 12, F3, D3, K2, C4b | see below | — | — |
@@ -691,14 +689,15 @@ against HEAD: 1.030× / 1.041× on 6-31G\* and 1.043× / 1.041× on cc-pVTZ
 seven on the first two), so the removed share converts to time only where
 HGP runs.
 
-**S2 — serial symmetric phases.** At four threads naphthalene idles 11 %
-while `density_has_symmetry` and `symmetrize_over_ops` run on one thread.
-Both are independent per matrix element: split them into disjoint row slabs
-(no reduction, so bitwise). Gains only on symmetric builds, at most ~1.1× at
-four threads; check the idle is those two functions with a four-thread
-sample before writing it.
+**S2 — serial symmetric phases (premise refuted, 2026-10-24).** The 11 %
+naphthalene idle at four threads is not `density_has_symmetry` /
+`symmetrize_over_ops` (0.04 % of samples together). Every waiting sample is
+the barrier closing `fused_fock_build`'s parallel loop (`gomp_team_end`):
+over the same 10 s three threads wait 10.3 / 17.3 / 16.1 % and the fourth
+0.6 %. That is load imbalance: under S1 the work per bra unit is uneven, and
+W1's static round-robin cannot adapt. It moves into the partition item.
 
-**R1b — the readout from a per-build table (conditional, after B2.2).** R1
+**R1b — the readout from a per-build table (conditional).** R1
 lost because it moved the decode into `prepare` (inlined into the lazy loop,
 and filling unread components). The decode depends only on each AO's
 Cartesian exponents, not the block: precompute per AO its axis code and norm
@@ -717,7 +716,12 @@ digits and the last kcal/mol digit; all 10 Hartree digits identical). Key the
 partials by unit index mod 64, each bin's units in increasing order, bins
 merged in fixed order; a thread owns whole bins, keeping W1's balance (the
 FCI sigma-build rule). Memory 64 × nb² (64 × 2 MB at nb = 500). Gate: G
-bitwise identical at 1/2/4/8 threads.
+bitwise identical at 1/2/4/8 threads. Because a bin's result no longer
+depends on which thread runs it, bins can be handed out dynamically
+(`schedule(dynamic, 1)` over bins) without losing determinism; that also
+removes the end-of-loop imbalance S2 found (naphthalene 11 %, 6-31G\* /
+cc-pVTZ 5–6 % idle at four threads). Expect ~1.1× at four threads on
+naphthalene, nothing at one.
 
 **C5 — screened kernels.** Both block kernels decline screened kernels, so
 range-separated hybrids take per-component HGP. They need `hgp_vrr`'s
@@ -753,7 +757,7 @@ twice per iteration, ~61 % of the RI Fock build (`docs/ERI_FOCK_BLAS_SCOPE.md`).
 
 **K2 (conditional).** Batches of same-class ket blocks for a fixed bra unit:
 lanes across kets, bra-side work hoisted, the HRR as array work, digestion as
-small matrix products. Only if a census after B2.2 shows per-block fixed
+small matrix products. Only if a later census shows per-block fixed
 costs (setup, HRR at 10–16 % of the HGP kernel) still worth the largest
 restructure here.
 

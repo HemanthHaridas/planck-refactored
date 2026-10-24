@@ -2031,12 +2031,15 @@ identify the path taken. Not required for correctness or performance.
     5.91x to 2.31x on cc-pVDZ. Two-sided families (B2.2) are 1.58x on
     cc-pVDZ's closed forms, and the family order costs only +-1 % on cc
     bases.
-  - **Open, in order (rescoped from that profile):** B2.2 on cc bases
-    (decide first: a basis-dependent traversal, <= ~1.29x on cc-pVDZ,
-    ~1.04-1.08x on Pople after the order's cost); S2 thread the serial symmetric phases
-    (`density_has_symmetry`, `symmetrize_over_ops`, naphthalene idle 11 %);
-    R1b readout from a per-build per-AO decode table with `value()` kept lazy
-    (conditional, >= 1.03x on 8 H2O); the fixed partition; C5 (screened
+  - **B2.2 parked, S2 refuted (2026-10-24).** B2.2 would pay only as a
+    basis-dependent traversal (cc bases); not taken up, so no part of B2
+    reached production. S2's premise was wrong: the serial symmetric
+    phases are 0.04 % of samples; the four-thread idle (naphthalene 11 %)
+    is load imbalance at the barrier closing `fused_fock_build`'s loop.
+  - **Open, in order (rescoped from that profile):** the fixed partition
+    with 64 bins scheduled dynamically (deterministic across thread counts
+    AND removes the imbalance; ~1.1x at four threads on naphthalene); R1b readout from a per-build per-AO decode table with `value()` kept lazy
+    (conditional, >= 1.03x on 8 H2O); C5 (screened
     kernels; range-separated hybrids still take per-component HGP); P2
     (primitive screening, a policy call); total L > 12; F3. D3 (RI-JK pair
     factors) is independent, K2 conditional (the only lever left on HGP,
