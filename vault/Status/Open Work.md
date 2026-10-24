@@ -2007,9 +2007,10 @@ identify the path taken. Not required for correctness or performance.
     (`102f1d01`, batched Boys calls, 1.01-1.11x at one thread, 1.03-1.11x at
     four; not bitwise only by g++ fusing one multiply-add, <= 1.1e-16). The
     loader now requires `planck_boys_batch` (`13c60826`): a v1.1.0 license
-    fails at load naming v1.2.0; `planck-boys-vec` passes. Smoke/extended not
-    re-run on that commit. Merge into `dft-dh-gradient-xc-kernel-rewrite`
-    after R3 lands.
+    fails at load naming v1.2.0; `planck-boys-vec` passes. Final suites on
+    the branch (2026-10-24): smoke 43/45, extended 135/139, the known
+    rccsdt routing cases only. Merged into `dft-dh-gradient-xc-kernel-rewrite`
+    (PR #176); the ERI shell-quartet work is closed.
   - **R1 declined (2026-10-24):** precomputing the closed-form readout in
     `prepare` was bitwise but 0.92-1.00x (slower) in production: the larger
     `prepare` is inlined into the lazy hot loop (noinline recovers 2-3 %),

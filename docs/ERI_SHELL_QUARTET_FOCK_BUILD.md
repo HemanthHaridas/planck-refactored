@@ -369,6 +369,11 @@ Design rule:
 
 ## Validation strategy that should remain in place
 
+At close (2026-10-24, after the partition): smoke 43/45 and extended
+135/139, the failures being the four known `rccsdt` routing cases;
+`planck-fock-accumulate`, `planck-hgp-engine-smoke` and `planck-boys-vec`
+pass.
+
 - `planck-fock-accumulate` (`tests/fock_accumulate.cpp`):
   `check_dense_digest` (dense against per-component in every `FusedTerm`
   mode, RHF/UHF, four bases, a counting kernel that proves the dense path
