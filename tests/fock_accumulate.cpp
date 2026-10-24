@@ -1189,15 +1189,13 @@ void check_dense_digest(const std::string &basis_name)
                 dens.P = &P;
                 if (uhf)
                     dens = {nullptr, &Pt, &Pa, &Pb};
-                // [0] per-component, [1] dense in family-quartet units (B2.1),
-                // [2] dense in bra-pair units (K1, the default for now).
-                Eigen::MatrixXd out[3][3];
-                std::atomic<std::size_t> count[3]{0, 0, 0};
-                for (int d = 0; d < 3; ++d)
+                // [0] per-component, [1] dense (K1).
+                Eigen::MatrixXd out[2][3];
+                std::atomic<std::size_t> count[2]{0, 0};
+                for (int d = 0; d < 2; ++d)
                     fused_fock_build(sp, nb, Q, HartreeFock::ERIKernel::Coulomb, 0.0, tol, uhf, dens,
                                      out[d][0], out[d][1], out[d][2], hgp_elem, nullptr, terms[t],
-                                     CountingBlockKernel{.count = &count[d]}, /*dense_digest=*/d >= 1,
-                                     /*family_units=*/d == 1);
+                                     CountingBlockKernel{.count = &count[d]}, /*dense_digest=*/d == 1);
                 const double worst = max_output_diff(out[0], out[1]);
                 const std::string tag = "K1 water/" + basis_name + " " + names[t] + (uhf ? " UHF" : " RHF") +
                                         " tol " + (tol < 1e-8 ? "1e-10" : "1e-6");
@@ -1214,16 +1212,6 @@ void check_dense_digest(const std::string &basis_name)
                 else if (count[1] != (uhf && terms[t] == FusedTerm::RawCoulombExchange ? 0 : expect))
                     fail(tag + ": dense prepared " + std::to_string(count[1].load()) + " blocks, expected " +
                          std::to_string(expect) + " (dense path not taken, or a block pair visited twice?)");
-                else if (count[2] != count[1] ||
-                         [&]
-                         {
-                             for (int m = 0; m < 3; ++m)
-                                 if (out[1][m].size() != out[2][m].size() ||
-                                     (out[1][m].size() && (out[1][m] - out[2][m]).cwiseAbs().maxCoeff() > 1e-13))
-                                     return true;
-                             return false;
-                         }())
-                    fail(tag + ": family units != bra units (B2.1)");
                 else
                     std::cout << "OK  " << tag << ": max|dG| = " << worst << ", " << expect << " blocks\n";
             }

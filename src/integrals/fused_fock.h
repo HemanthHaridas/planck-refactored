@@ -104,70 +104,6 @@ namespace HartreeFock::Integrals
         return groups;
     }
 
-    // Shared-exponent families of shell groups (D2b): per atom, a shell joins
-    // the first family, largest exponent set first, whose representative's
-    // exponents contain all of its own (exact match), across L. Pople SP shells
-    // and cc general contractions fall out of the same rule. Group pairs are
-    // then bucketed by their unordered family pair, ordered by (lower family,
-    // higher family).
-    struct FusedFamilies
-    {
-        std::vector<std::size_t> of_group;               // family index per group
-        std::vector<std::vector<std::size_t>> members;   // per family pair: group-pair indices
-    };
-
-    template <typename GroupPairs>
-    FusedFamilies fused_families(const std::vector<FusedShellGroup> &groups,
-                                 const std::vector<const HartreeFock::ContractedView *> &ao_views,
-                                 const GroupPairs &group_pairs)
-    {
-        const std::size_t ng = groups.size();
-        const auto shell_of = [&](std::size_t g) { return ao_views[groups[g].first_ao]->_shell; };
-        const auto contains = [](const HartreeFock::Shell &big, const HartreeFock::Shell &small)
-        {
-            for (Eigen::Index i = 0; i < small._primitives.size(); ++i)
-            {
-                bool hit = false;
-                for (Eigen::Index j = 0; j < big._primitives.size() && !hit; ++j)
-                    hit = big._primitives[j] == small._primitives[i];
-                if (!hit)
-                    return false;
-            }
-            return true;
-        };
-        std::vector<std::size_t> order(ng);
-        for (std::size_t g = 0; g < ng; ++g)
-            order[g] = g;
-        std::stable_sort(order.begin(), order.end(), [&](std::size_t a, std::size_t b)
-                         {
-                             const HartreeFock::Shell &x = *shell_of(a), &y = *shell_of(b);
-                             return x._atom_index != y._atom_index ? x._atom_index < y._atom_index
-                                                                   : x._primitives.size() > y._primitives.size();
-                         });
-        FusedFamilies F;
-        F.of_group.assign(ng, 0);
-        std::vector<std::size_t> rep; // representative group per family
-        for (const std::size_t g : order)
-        {
-            std::size_t f = 0;
-            while (f < rep.size() && !(shell_of(rep[f])->_atom_index == shell_of(g)->_atom_index &&
-                                       contains(*shell_of(rep[f]), *shell_of(g))))
-                ++f;
-            if (f == rep.size())
-                rep.push_back(g);
-            F.of_group[g] = f;
-        }
-        const std::size_t nf = rep.size();
-        F.members.assign(nf * (nf + 1) / 2, {});
-        const auto fp_index = [&](std::size_t p, std::size_t q) { return p * nf - p * (p - 1) / 2 + (q - p); };
-        for (std::size_t gp = 0; gp < group_pairs.size(); ++gp)
-        {
-            const std::size_t p = F.of_group[group_pairs[gp].a], q = F.of_group[group_pairs[gp].b];
-            F.members[fp_index(std::min(p, q), std::max(p, q))].push_back(gp);
-        }
-        return F;
-    }
-
     // Densities the fused driver contracts against. For RHF only `P` is read;
     // for UHF only `Pt`/`Pa`/`Pb`.
     struct FusedFockDensities
@@ -266,10 +202,7 @@ namespace HartreeFock::Integrals
         const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
         FusedTerm term = FusedTerm::Combined,
         BlockKernel block_kernel = {},
-        bool dense_digest = true,
-        // ponytail: off until B2.2's family kernels repay the order's cost
-        // (+4-8 % on Pople bases at one thread); the gate covers both orders.
-        bool family_units = false)
+        bool dense_digest = true)
     {
         const bool use_sym = (sym_ops != nullptr) && !sym_ops->empty();
 
@@ -938,70 +871,19 @@ namespace HartreeFock::Integrals
             });
         };
 
-        // B2.1: the dense path runs one unit per family quartet (P, Q), P <= Q,
-        // over the shared-exponent families' buckets of shell pairs. A unit
-        // visits every unordered block pair with one member in P and one in Q,
-        // each once: bra x in P against kets y in Q with y >= x, and for P < Q
-        // also bra y in Q against kets x in P with x > y. Without families the
-        // unit is a bra pair p against every q >= p, as in K1.
-        const bool use_units = dense && family_units;
-        FusedFamilies families;
-        std::vector<std::array<std::size_t, 2>> units;
-        if (use_units)
-        {
-            families = fused_families(groups, ao_views, group_pairs);
-            const auto &M = families.members;
-            // Unit-level Schwarz: every block of the unit is bounded by the
-            // product of the two buckets' largest shell-pair bounds, so a unit
-            // below tol_eri holds no surviving block. Exact, like block Schwarz;
-            // it keeps the many fully screened units of extended systems out of
-            // the loop entirely.
-            std::vector<double> bucket_qmax(M.size(), 0.0);
-            for (std::size_t P = 0; P < M.size(); ++P)
-                for (const std::size_t x : M[P])
-                    bucket_qmax[P] = std::max(bucket_qmax[P], qmax[x]);
-            units.reserve(M.size() * (M.size() + 1) / 2);
-            for (std::size_t P = 0; P < M.size(); ++P)
-                for (std::size_t Q = P; Q < M.size(); ++Q)
-                    if (!M[P].empty() && !M[Q].empty() && bucket_qmax[P] * bucket_qmax[Q] >= tol_eri)
-                        units.push_back({P, Q});
-        }
         const auto dense_unit = [&](std::size_t u, auto mode_tag, auto skel_tag)
         {
             if (mpi_size > 1 &&
                 static_cast<int>(u % static_cast<std::size_t>(mpi_size)) != mpi_rank)
                 return;
-            if (!use_units)
-            {
-                dense_body(u, [&](auto &&f)
-                           {
-                               for (std::size_t q = u; q < ngp; ++q)
-                                   f(q);
-                           },
-                           mode_tag, skel_tag);
-                return;
-            }
-            const auto &MP = families.members[units[u][0]];
-            const auto &MQ = families.members[units[u][1]];
-            for (const std::size_t x : MP)
-                dense_body(x, [&](auto &&f)
-                           {
-                               for (const std::size_t y : MQ)
-                                   if (y >= x)
-                                       f(y);
-                           },
-                           mode_tag, skel_tag);
-            if (units[u][0] != units[u][1])
-                for (const std::size_t y : MQ)
-                    dense_body(y, [&](auto &&f)
-                               {
-                                   for (const std::size_t x : MP)
-                                       if (x > y)
-                                           f(x);
-                               },
-                               mode_tag, skel_tag);
+            dense_body(u, [&](auto &&f)
+                       {
+                           for (std::size_t q = u; q < ngp; ++q)
+                               f(q);
+                       },
+                       mode_tag, skel_tag);
         };
-        const std::size_t n_units = use_units ? units.size() : ngp;
+        const std::size_t n_units = ngp;
 
         // Static, NOT dynamic: load-bearing, see the header note. Chunk 1
         // (round-robin) because bra p visits every ket q >= p: contiguous

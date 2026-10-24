@@ -9,7 +9,7 @@ revisions carried each step's plan, and their measurements are kept below.
 When the open steps land or are abandoned, rewrite this as an answer.
 
 - **Landed:** C0, C1, C2–C3.5, H1, L1–L3c, P1, S1, D1, F1, F2, F4, T1, 2b,
-  K1, K1.4, B2.1 (default off), W1, core v1.2.0, R2 (batched Boys
+  K1, K1.4, W1, core v1.2.0, R2 (batched Boys
   calls; Planck requires core v1.2.0) and grow-only scratch.
 - **Open, in order:** the fixed accumulator partition with dynamic bins
   (also the four-thread imbalance S2 found), R1b (conditional), C5
@@ -87,8 +87,7 @@ at a given thread count (not yet across counts: the fixed partition).
 **Dense (K1, K1.4).** Taken when the block kernel `covers()` every total L the
 basis can produce (today: Auto, Coulomb, shells up to f, total L ≤ 12), every
 density is symmetric to 1e-10, and there is either no symmetry or skeleton
-mode. Per bra pair p, kets q ≥ p (or per family-quartet unit with
-`family_units`, B2.1, off by default):
+mode. Per bra pair p, kets q ≥ p:
 
 1. Block Schwarz. Under S1, each op's image of the block is (min, max) of two
    entries of a per-build table `op_pair[o][p]`; an image that sorts lower
@@ -132,7 +131,6 @@ G** per build. Modes, where `nwater` 0 is naphthalene:
 - `--profile N [nwater basis]`: N production builds, for `sample`.
 - `--k1 nwater basis`: today's per-component loop against dense, plus the
   production dense time (the headline numbers).
-- `--b21 nwater basis`: family-quartet units against bra units.
 - `--family nwater basis [within]`, `--census nwater basis`: the D2a family
   probe and the 5b lane-fill census.
 
@@ -319,7 +317,7 @@ fused build (F1 numbers predate K1).
 | K1 | `5fd08496` | per-component digestion on symmetric densities | 1.11–1.22× | `check_dense_digest`; 5 mutations; MPI 1/2/4 |
 | K1.4 | `f2849647` | per-component skeleton weight and per-block canonicalization under S1 | 1.32× (D2h) | 32 checks under real C2v; 8 mutations |
 | F4 | `d0224110`, `0c8a9fc7` | `guess sad` aborting full point-group SCF on C3v/D6h | correctness | `nh3_c3v_fullsym_631gd_sad_direct` |
-| B2.1 | `66669cd5` | family-quartet units in the dense traversal (`family_units`, off) | — (a cost; see below) | exactly-once counting gate; 2 mutations |
+| B2.1 | `66669cd5` | family-quartet units in the dense traversal (`family_units`, off; deleted 2026-10-24) | — (a cost; see below) | exactly-once counting gate; 2 mutations |
 | W1 | `ffc44caf` | contiguous-range thread schedule on a triangular loop | 1.10–1.97× at four threads | `planck-fock-accumulate` at 1/4/8 threads |
 | core v1.2.0 | `planck-boys-core` `aa44c44` | single-x evaluation overhead; adds a batched entry | ~1.01–1.02× on HEAD's builds | bitwise against v1.1.0 through the C ABI |
 | R2 | `102f1d01` | one Boys call per primitive quartet / lane → one batched call per block / lane group | 1.01–1.11× (1 thread), 1.03–1.11× (4) | tolerance, ≤ 1.1e-16 (g++ FMA contraction) |
@@ -446,7 +444,7 @@ the build. cc-pVTZ's K = 1 blocks are 23 % of HGP kernel time but ~6 % of its
 primitive quartets: their cost is per block, which batching does not touch
 while each block is digested component by component (K1 landed on that).
 
-### Families: D2a, B0, B1, B2, R3 (B2.1 landed off; B2.2 parked; B2.3 and R3 dropped)
+### Families: D2a, B0, B1, B2, R3 (B2.1 deleted; B2.2 parked; B2.3 and R3 dropped)
 
 A family is a set of shells on one atom whose exponent sets nest (cc general
 contractions within L, Pople SP across L). A family quartet runs one primitive
@@ -467,8 +465,9 @@ member's `finish()`).
   four-thread "gains" (−12 to −14 % on cc-pVDZ and 6-31G\*) were the load
   imbalance W1 fixed. A first B2.1 cut was +50 % / +84 % on 8 H2O until a
   unit-level Schwarz bound removed ~1.3 M fully screened units.
-- **Fate.** B2.1 is in the tree behind `family_units` (off); delete it if
-  B2.2 does not land. B2.3 (HGP families) is dropped. B1 remains a git stash
+- **Fate.** B2.1 (`family_units`, the `--b21` mode and its test arm) was
+  deleted once B2.2 was parked; `66669cd5` has it. B2.3 (HGP families) is
+  dropped. B1 remains a git stash
   ("B1: fused loop in family-quartet order") for its history only.
 - **R3, ket-side sharing only (declined at the probe, 2026-10-24).** Fixing
   the bra keeps today's order but discards most of the merge. `--family

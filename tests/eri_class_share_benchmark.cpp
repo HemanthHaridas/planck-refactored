@@ -221,7 +221,7 @@ namespace
     // `block` is the block kernel (block_eri.h); the Auto engine uses the
     // closed forms (low_l_eri.h) at total L <= 3.
     template <typename Elem, typename Block>
-    double timed_build_block(const BuildSetup &s, Elem &&elem, Block block, bool dense_digest = true, bool family_units = false)
+    double timed_build_block(const BuildSetup &s, Elem &&elem, Block block, bool dense_digest = true)
     {
         Eigen::MatrixXd G, Ga, Gb;
         HartreeFock::Integrals::FusedFockDensities dens;
@@ -231,7 +231,7 @@ namespace
             s.pairs, s.nb, s.Q, HartreeFock::ERIKernel::Coulomb, 0.0, /*tol_eri=*/1e-10,
             /*spin_resolved=*/false, dens, G, Ga, Gb, elem,
             s.sym ? &s.calc._integral_symmetry_ops : nullptr,
-            HartreeFock::Integrals::FusedTerm::Combined, block, dense_digest, family_units);
+            HartreeFock::Integrals::FusedTerm::Combined, block, dense_digest);
         const double dt = seconds_since(t0);
         std::uint64_t h = 1469598103934665603ULL;
         const auto *bytes = reinterpret_cast<const unsigned char *>(G.data());
@@ -1307,27 +1307,6 @@ int main(int argc, char **argv)
     {
         const BuildSetup s = prepare({std::atoi(argv[2]), argv[3]});
         report_k1(s);
-        return 0;
-    }
-
-    // --b21 nwater basis: B2.1, the dense path in family-quartet units against
-    // bra-pair units (K1); interleaved, best of five, and max|dG|.
-    if (argc == 4 && std::string(argv[1]) == "--b21")
-    {
-        const BuildSetup s = prepare({std::atoi(argv[2]), argv[3]});
-        double best[2] = {1e30, 1e30};
-        Eigen::MatrixXd G[2];
-        for (int r = 0; r < 6; ++r)
-            for (int o = 0; o < 2; ++o)
-            {
-                const double t = timed_build_block(s, hgp_elem, production_kernel(), true, o == 1);
-                if (r > 0)
-                    best[o] = std::min(best[o], t);
-                G[o] = g_last;
-            }
-        std::printf("--b21 %d / %s: bra units %.4f s, family units %.4f s (%+.1f%%), max|dG| %.1e\n",
-                    std::atoi(argv[2]), argv[3], best[0], best[1], 100.0 * (best[1] / best[0] - 1.0),
-                    (G[1] - G[0]).cwiseAbs().maxCoeff());
         return 0;
     }
 
