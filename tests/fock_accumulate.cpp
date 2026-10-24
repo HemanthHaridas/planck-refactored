@@ -37,6 +37,10 @@
 
 #include <Eigen/Dense>
 
+#ifdef USE_OPENMP
+#include <omp.h>
+#endif
+
 #include "base/basis.h"
 #include "base/types.h"
 #include "basis/basis.h"
@@ -649,67 +653,6 @@ namespace
     }
 }
 
-// ── Step 3: determinism of the threaded fused build ─────────────────────────
-//
-// The fused accumulations are read-modify-write reductions into G, unlike the
-// store-only write_eri_permutations. A reduction summed in nondeterministic
-// order drifts, floating-point addition not being associative — the jitter the
-// DFT XC accumulation already had to fix (src/dft/ks_matrix.cpp).
-//
-// The achievable guarantee, and the one that file states, is *bitwise
-// reproducible at a fixed thread count*. It is NOT bitwise equality across
-// different thread counts: with per-thread partials, N threads necessarily sum
-// N different subsets, so the totals differ in the last bits no matter how the
-// partials are ordered. (The two-phase tensor build IS cross-count invariant,
-// but only because its scatter is store-only/idempotent — a genuine reduction
-// cannot be. The DFT grid XC reduction likewise still drifts ~1e-10 across
-// thread counts; the fused Fock build is ~1e-16 relative, far tighter.)
-//
-// So this checks the real contract: repeated runs at the SAME thread count must
-// be bitwise identical. That is what schedule(static) + fixed-thread-index
-// summation buys; with schedule(dynamic), or a critical-section reduction,
-// repeated runs at one count would already differ.
-void check_fixed_thread_determinism(const std::string &basis_name)
-{
-    HartreeFock::Calculator calc = make_water(basis_name);
-    if (!g_ok)
-        return;
-
-    const std::vector<HartreeFock::ShellPair> shell_pairs =
-        build_shellpairs(calc._shells);
-    const std::size_t nb = calc._shells._basis_functions.size();
-
-    std::mt19937 rng(7);
-    const Eigen::MatrixXd P = random_symmetric_density(nb, rng);
-
-    auto build = [&]()
-    {
-        return HartreeFock::ObaraSaika::_compute_2e_fock_direct(
-            shell_pairs, P, nb, HartreeFock::ERIKernel::Coulomb, 0.0, 1e-10,
-            nullptr);
-    };
-
-    const Eigen::MatrixXd first = build();
-    for (int rep = 0; rep < 4; ++rep)
-    {
-        const Eigen::MatrixXd again = build();
-        // Bitwise: not a tolerance. Same thread count, same partition, same
-        // summation order -> the identical bits, every time.
-        if (!(again.array() == first.array()).all())
-        {
-            fail("water/" + basis_name +
-                 ": fused build is not bitwise reproducible at a fixed thread "
-                 "count (repeat " + std::to_string(rep) + " differs)");
-            return;
-        }
-    }
-
-    std::cout << "OK  Step 3 / water/" << basis_name
-              << ": fused build bitwise-reproducible across 5 runs at a fixed "
-                 "thread count; checksum sum="
-              << std::setprecision(17) << first.sum() << '\n';
-}
-
 // ── Step 6: every engine's fused builder matches its two-phase builder ───────
 //
 // The fused loop (fused_fock.h) is shared; only the per-quartet ERI callable
@@ -789,7 +732,7 @@ void check_all_engines(const std::string &basis_name)
 //     J - K_sigma == G_sigma       (UHF, per spin channel)
 //
 // It goes through the base.h dispatchers, i.e. exactly the entries DFT will
-// call, so a mis-wired engine case shows up here rather than in Step 3.
+// call, so a mis-wired engine case shows up here rather than in the thread-count check.
 void check_single_term_builders(const std::string &basis_name)
 {
     HartreeFock::Calculator calc = make_water(basis_name);
@@ -1089,7 +1032,7 @@ void check_skeleton_symmetry(const std::string &basis_name)
 
 // ── K1: dense digestion per block against the per-component loop ─────────────
 //
-// docs/ERI_LOW_L_CLOSED_FORM_SCOPE.md, K1. Same production kernels both ways,
+// docs/ERI_SHELL_QUARTET_FOCK_BUILD.md, K1. Same production kernels both ways,
 // through fused_fock_build's dense_digest flag; every FusedTerm mode, RHF and
 // UHF, at tol 1e-10 and at 1e-6 (where the component Schwarz mask matters).
 // A counting kernel proves the dense path ran: it prepares every unordered
@@ -1141,6 +1084,85 @@ double hgp_elem(const HartreeFock::ShellPair &ab, const HartreeFock::ShellPair &
 {
     return HartreeFock::HeadGordonPople::_contracted_eri_elem(
         ab, cd, lAx, lAy, lAz, lBx, lBy, lBz, lCx, lCy, lCz, lDx, lDy, lDz, k, w);
+}
+
+// ── Determinism of the threaded fused build, across thread counts ───────────
+//
+// The fused accumulations are read-modify-write reductions into G, so a sum in
+// nondeterministic order drifts (the DFT XC jitter, src/dft/ks_matrix.cpp).
+// fused_fock_build keys its partials by bin (bra mod n_bins, n_bins a function
+// of nb only) and sums bins in fixed order, so G must be BITWISE identical at
+// any thread count, even though bins are scheduled dynamically. Checked on the
+// per-component path (OS direct), the dense path with RHF partials, and the
+// dense path with UHF partials, each at 1/2/4/8 threads and repeated.
+void check_thread_count_invariance(const std::string &basis_name)
+{
+#ifdef USE_OPENMP
+    using namespace HartreeFock::Integrals;
+    HartreeFock::Calculator calc = make_water(basis_name);
+    if (!g_ok)
+        return;
+    const std::vector<HartreeFock::ShellPair> sp = build_shellpairs(calc._shells);
+    const std::size_t nb = calc._shells._basis_functions.size();
+    const std::vector<double> flat = HartreeFock::Screening::schwarz_table_hgp(sp, nb, nullptr);
+    Eigen::MatrixXd Q(nb, nb);
+    for (std::size_t i = 0; i < nb; ++i)
+        for (std::size_t j = 0; j < nb; ++j)
+            Q(i, j) = flat[i * nb + j];
+    std::mt19937 rng(7);
+    const Eigen::MatrixXd P = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pa = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pb = random_symmetric_density(nb, rng);
+    const Eigen::MatrixXd Pt = Pa + Pb;
+    const ChainBlockKernel<ClosedFormBlockKernel, HgpBlockKernel> production{ClosedFormBlockKernel{3},
+                                                                            HgpBlockKernel{4, 12}};
+
+    // out[0..2] = G, Ga, Gb for one build of the given kind.
+    const auto build = [&](int kind, Eigen::MatrixXd (&out)[3])
+    {
+        if (kind == 0)
+        {
+            out[0] = HartreeFock::ObaraSaika::_compute_2e_fock_direct(sp, P, nb, HartreeFock::ERIKernel::Coulomb,
+                                                                       0.0, 1e-10, nullptr);
+            return;
+        }
+        FusedFockDensities dens;
+        if (kind == 1)
+            dens.P = &P;
+        else
+            dens = {nullptr, &Pt, &Pa, &Pb};
+        fused_fock_build(sp, nb, Q, HartreeFock::ERIKernel::Coulomb, 0.0, 1e-10, kind == 2, dens, out[0], out[1],
+                         out[2], hgp_elem, nullptr, FusedTerm::Combined, production, /*dense_digest=*/true);
+    };
+    const char *names[3] = {"per-component (OS direct)", "dense RHF", "dense UHF"};
+    const int saved = omp_get_max_threads();
+    for (int kind = 0; kind < 3; ++kind)
+    {
+        const std::string tag = "water/" + basis_name + " " + names[kind];
+        Eigen::MatrixXd ref[3];
+        omp_set_num_threads(1);
+        build(kind, ref);
+        bool same = true;
+        std::string where;
+        for (const int t : {2, 4, 8, 4})
+        {
+            omp_set_num_threads(t);
+            Eigen::MatrixXd got[3];
+            build(kind, got);
+            for (int m = 0; m < 3; ++m)
+                if (got[m].size() != ref[m].size() || !(got[m].array() == ref[m].array()).all())
+                    same = false, where = std::to_string(t) + " threads, output " + std::to_string(m);
+        }
+        omp_set_num_threads(saved);
+        // Bitwise: not a tolerance.
+        if (!same)
+            fail(tag + ": G differs from the 1-thread build at " + where);
+        else
+            std::cout << "OK  " << tag << ": G bitwise identical at 1/2/4/8 threads (and a repeat at 4)\n";
+    }
+#else
+    std::cout << "SKIP thread-count invariance on water/" << basis_name << ": built without OpenMP\n";
+#endif
 }
 
 void check_dense_digest(const std::string &basis_name)
@@ -1303,7 +1325,6 @@ int main()
     check_split_accumulators();
     check_real_integrals("sto-3g");
     check_real_integrals("6-31g*"); // d shells: exercises the multi-component orbit
-    check_fixed_thread_determinism("6-31g*");
     check_all_engines("sto-3g");
     check_all_engines("6-31g*");
     check_single_term_builders("sto-3g");
@@ -1316,6 +1337,7 @@ int main()
     check_skeleton_symmetry("6-31g*");
     for (const char *b : {"6-31g", "6-31g*", "cc-pVDZ", "cc-pVTZ"})
         check_dense_digest(b);
+    check_thread_count_invariance("6-31g*");
 
     if (!g_ok)
     {
