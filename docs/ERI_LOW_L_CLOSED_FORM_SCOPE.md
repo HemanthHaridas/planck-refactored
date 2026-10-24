@@ -11,7 +11,8 @@ When the open steps land or are abandoned, rewrite this as an answer.
 - **Landed:** C0, C1, C2–C3.5, H1, L1–L3c, P1, S1, D1, F1, F2, F4, T1, 2b,
   K1, K1.4, B2.1 (default off), W1, core v1.2.0 and R2 (batched Boys
   calls; Planck requires core v1.2.0).
-- **Open, in order:** R3 (ket-side family sharing), the fixed accumulator partition, C5
+- **Open, in order:** scratch once per build, R3 (ket-side family sharing),
+  S2 (serial symmetric phases), R1b (conditional), the fixed accumulator partition, C5
   (screened kernels), P2 (primitive screening, a policy call), total L > 12,
   F3. D3 is independent, K2 conditional, C4b deprioritised.
 - **Declined or superseded:** D1c, 5b, B1, B2.2 (by R3), B2.3, R1
@@ -198,16 +199,22 @@ of `--profile` production builds, bucketed by symbol, one and four threads
   by 1.01–1.11×, about 1.03–1.13× together against a 1.10–1.19× prediction
   from the 9–32 % share.
 
-**Re-profile with R2 (2026-10-23, one thread, uncommitted callers):**
+**Profile at HEAD (2026-10-24: R2 committed, R1 declined).** Same method,
+10 s of `--profile` builds; one thread, four threads in brackets where they
+differ by more than a point:
 
 | phase | 8 H2O 6-31G | 4 H2O 6-31G\* | 4 H2O cc-pVDZ | 1 H2O cc-pVTZ | naphthalene D2h |
 |---|---|---|---|---|---|
-| closed-form kernel | 39 % | 25 % | 40 % | 13 % | 39 % |
-| Boys (core evaluation + entry) | **22 %** | **13 %** | **22 %** | **7 %** | **24 %** |
-| closed-form readout | 13 % | 9 % | 7 % | 2 % | 7 % |
-| digestion loop | 20 % | 19 % | 10 % | 21 % | 19 % |
-| HGP VRR + HRR + prepare | 3 % | 30 % | 19 % | 53 % | 5 % |
-| scratch zeroing + `vector::resize` | 3 % | 5 % | 4 % | 5 % | 2 % |
+| closed-form kernel | 39 % | 25 % | 39 % | 13 % | 40 % (35 %) |
+| Boys (core evaluation + entry) | **22 %** | **14 %** | **23 %** | **7 %** | **22 %** (20 %) |
+| closed-form readout | 13 % | 9 % | 6 % | 2 % | 7 % |
+| digestion loop | 20 % | 19 % | 11 % | 21 % (20 %) | 20 % (17 %) |
+| HGP VRR + finish + prepare | 2 % | 29 % (28 %) | 19 % (18 %) | 52 % (50 %) | 5 % |
+| scratch zeroing + `vector::resize` | 3.5 % | 4.7 % | 2.8 % | 4.0 % | 2.4 % |
+| skeleton weight | — | — | — | — | 3 % |
+| idle at four threads | 1 % | 5 % | 3 % | 6 % | 11 % |
+
+It matches the uncommitted-R2 profile to about a point.
 
 Boys fell from 18–32 % to 13–24 % (7 % on cc-pVTZ), nearly all of it now the
 core's evaluation itself: batching removed the call overhead, not the work.
@@ -594,8 +601,10 @@ kept only the identity operation, and the first K1.4 "C2v" gate passed with
 
 | step | what | targets | bitwise? |
 |---|---|---|---|
-| R2 | batched Boys callers (`102f1d01`); size the scratch once per build | Boys 9–32 % → 13–24 % (1.01–1.11× measured) | no (rounding, ≤ 1.1e-16) |
-| R3 | family sharing of T / Boys / prefactors across a bra unit's ket blocks, no family order | closed forms + Boys on cc / naphthalene | no |
+| scratch | size both block kernels' scratch once per build, drop zero-fills the kernel overwrites | zero + resize 2.4–4.7 % | yes |
+| R3 | family sharing of T / Boys / prefactors across a bra unit's ket blocks, no family order | closed forms + Boys: 38–62 % (20 % cc-pVTZ) | no |
+| S2 | thread the serial symmetric phases (`density_has_symmetry`, `symmetrize_over_ops`) in fixed order | idle 11 % at four threads, naphthalene | yes |
+| R1b | closed-form readout from a per-build decode table, `value()` still lazy (conditional) | readout 2–13 % | yes |
 | partition | fixed accumulator partition, cyclic bins | determinism across thread counts | no |
 | C5 | screened kernels in both block kernels (then dense) | range-separated hybrids | screened only |
 | P2 | quartet-level primitive screening (policy) | ~20 % of primitive quartets | no (~1e-12 to 1e-10) |
@@ -638,11 +647,17 @@ outside this repo:
    forms within 1.3e-15 of HGP, `planck-hgp-engine-smoke`,
    `planck-compute-2e`, `planck-fock-accumulate`), smoke 43/45, extended
    135/139.
-4. **Open:** size the scratch once per build (its per-block `resize` is
-   ~1–2 %). Re-profiled with R2 (see "Where the time goes"):
-   Boys is 13–24 % (7 % on cc-pVTZ), nearly all evaluation, so further
-   Boys gains need either fewer evaluations (R3's sharing, P2) or a cheaper
-   evaluation in the core, not more batching.
+4. **Profiled at HEAD** (see "Where the time goes"): Boys is 14–23 %
+   (7 % on cc-pVTZ), nearly all evaluation, so further Boys gains need
+   fewer evaluations (R3's sharing, P2) or a cheaper evaluation in the
+   core, not more batching. Sizing the scratch is now its own step.
+
+**Scratch, once per build.** Zeroing and `vector::resize` are 2.4–4.7 % of
+every build, including 8 H2O where HGP barely runs, so the closed forms'
+per-block T/Boys scratch pays it too. Size both kernels' scratch to the
+build's largest block in a per-build setup, and drop zero-fills of buffers
+the kernel overwrites in full. Bitwise; gate with the 28 G fingerprints.
+Expected 1.02–1.04×; cheap, so first.
 
 **R3 — family sharing within today's bra units (not started).** For a fixed
 bra block, the ket blocks of one shared-exponent family share their primitive
@@ -652,7 +667,30 @@ K1's traversal: no family order, so no Pople cost, but only the ket side is
 shared. A family's T values form one batch for R2. First step: a bra-fixed
 mode in the `--family` probe against W1 + R2 production; land only at
 ≥ 1.10× on cc-pVDZ or naphthalene, else record and stop. B2.2 in family order
-returns only if R3 falls short and the order can be repaid.
+returns only if R3 falls short and the order can be repaid. Target at HEAD:
+closed forms + Boys are 38–62 % of the build except cc-pVTZ (20 %); the D0
+merge factors (within L 4.8–5.1× on cc bases, ~1.0× on Pople) bound what
+ket-side sharing can reach, so expect the gain on cc-pVDZ and little on
+Pople unless sharing crosses L.
+
+**S2 — serial symmetric phases.** At four threads naphthalene idles 11 %
+while `density_has_symmetry` and `symmetrize_over_ops` run on one thread.
+Both are independent per matrix element: split them into disjoint row slabs
+(no reduction, so bitwise). Gains only on symmetric builds, at most ~1.1× at
+four threads; check the idle is those two functions with a four-thread
+sample before writing it.
+
+**R1b — the readout from a per-build table (conditional, after R3).** R1
+lost because it moved the decode into `prepare` (inlined into the lazy loop,
+and filling unread components). The decode depends only on each AO's
+Cartesian exponents, not the block: precompute per AO its axis code and norm
+ratio once per build, and keep `value()` lazy as a few table loads.
+Bitwise. Ceiling 2–13 % (largest on 8 H2O); land only at ≥ 1.03× on
+8 H2O, timed on the production loop, not the `--k1` timed arm.
+
+**HGP has no open item.** VRR + finish are 29 % on 6-31G\* and 50 % on
+cc-pVTZ. Lanes took the family gain there (B2.3), so the remaining lever is
+K2's per-block fixed costs.
 
 **The fixed accumulator partition.** Partials are keyed by thread index, so
 a run is reproducible at a given thread count but not across counts

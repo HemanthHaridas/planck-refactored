@@ -2003,40 +2003,34 @@ identify the path taken. Not required for correctness or performance.
     18-32 % (out-of-tree core, one T per call); readout + digestion 15-30 %;
     HGP VRR+HRR 49 % on cc-pVTZ, 25 % on 6-31G\*; idle <= 6 % (10 %
     naphthalene). B2.1 stays off (delete if unused), B2.3 dropped.
-  - **Working tree, branch `perf/boys-batch-callers` (2026-10-24):** the
-    loader change that makes `planck_boys_batch` required (fallback deleted;
-    `docs/LICENSE_GATE.md` row added) is built; `planck-boys-vec` passes and a
-    v1.1.0 license fails at load naming v1.2.0. Not yet suite-run or
-    committed. Merge into `dft-dh-gradient-xc-kernel-rewrite` after R3 lands.
+  - **Branch `perf/boys-batch-callers` (2026-10-24):** R2 landed
+    (`102f1d01`, batched Boys calls, 1.01-1.11x at one thread, 1.03-1.11x at
+    four; not bitwise only by g++ fusing one multiply-add, <= 1.1e-16). The
+    loader now requires `planck_boys_batch` (`13c60826`): a v1.1.0 license
+    fails at load naming v1.2.0; `planck-boys-vec` passes. Smoke/extended not
+    re-run on that commit. Merge into `dft-dh-gradient-xc-kernel-rewrite`
+    after R3 lands.
   - **R1 declined (2026-10-24):** precomputing the closed-form readout in
     `prepare` was bitwise but 0.92-1.00x (slower) in production: the larger
     `prepare` is inlined into the lazy hot loop (noinline recovers 2-3 %),
     and it fills components the Schwarz mask / S1 weight never read (85 %
     read on 8 H2O). The `--k1` timed arm showed a gain because it prepares
     eagerly and reads everything. Record in the scope doc.
-  - **Open, in order:**
-    R2 a batched multi-x Boys entry: core v1.2.0 released (bitwise against
-    v1.1.0 through the C ABI); Planck callers committed, gates
-    pass (smoke 43/45, extended 135/139), not bitwise against HEAD by
-    compiler fusion only: T and every Boys value are byte-identical, and 583
-    of 67 032 closed-form outputs differ by <= 1.1e-16 because g++'s default
-    -ffp-contract=fast fuses `out + base*F` differently in the two-pass loop.
-    Measured HEAD -> R2 on the same v1.2.0 library: 1.01-1.11x (1 thread),
-    1.03-1.11x (4); with the core's own ~1-2 % that is 1.03-1.13x against a
-    1.10-1.19x prediction. Re-profiled: Boys is still 13-24 % (7 % cc-pVTZ),
-    nearly all core evaluation, so batching removed call overhead, not work.
-    Landed as `102f1d01`; the loader now requires the batched entry (a
-    v1.1.0 license fails at load; the untested fallback was deleted). Scope
-    doc rewritten as current state (2026-10-23).
-    `planck-boys-vec` was a dead gate (segfaulted, unregistered), now fixed, R3 ket-side
-    family sharing within bra units (B2.2 proper only if short), the fixed
-    partition, C5 (screened kernels in both block
-    kernels; range-separated hybrids still take per-component HGP), D2a/D2b
-    (shared-exponent families), P2 (ε screening, a policy decision), then
-    total L > 12, then F3. D3 (RI-JK pair factors) is independent. T1
-    (block-kernel scratch out of thread-local storage) landed 2026-10-21:
-    bitwise, time-neutral. C4b is
-    deprioritised: the block kernel leaves only 4–9 % at L = 4 on sp bases.
+  - **Profile at HEAD (2026-10-24), one thread:** closed forms + Boys 38-62 %
+    (20 % cc-pVTZ), Boys alone 14-23 % (7 % cc-pVTZ); readout 2-13 %;
+    digestion 11-21 %; HGP 29 % on 6-31G\*, 52 % on cc-pVTZ; scratch
+    zero/resize 2.4-4.7 %; idle at four threads <= 6 %, naphthalene 11 %.
+  - **Open, in order (rescoped from that profile):** size both block
+    kernels' scratch once per build (bitwise, ~1.02-1.04x); R3 ket-side
+    family sharing within bra units, probe first, land at >= 1.10x on
+    cc-pVDZ or naphthalene; S2 thread the serial symmetric phases
+    (`density_has_symmetry`, `symmetrize_over_ops`, naphthalene idle 11 %);
+    R1b readout from a per-build per-AO decode table with `value()` kept lazy
+    (conditional, >= 1.03x on 8 H2O); the fixed partition; C5 (screened
+    kernels; range-separated hybrids still take per-component HGP); P2
+    (primitive screening, a policy call); total L > 12; F3. D3 (RI-JK pair
+    factors) is independent, K2 conditional (the only lever left on HGP,
+    which no open item targets), C4b deprioritised.
   - **Known defect, scheduled (the fixed partition, after W1):** the fused
     direct loop is not thread-count invariant (accumulators keyed by thread
     index).
