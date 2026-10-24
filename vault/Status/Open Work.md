@@ -2020,8 +2020,11 @@ identify the path taken. Not required for correctness or performance.
     (20 % cc-pVTZ), Boys alone 14-23 % (7 % cc-pVTZ); readout 2-13 %;
     digestion 11-21 %; HGP 29 % on 6-31G\*, 52 % on cc-pVTZ; scratch
     zero/resize 2.4-4.7 %; idle at four threads <= 6 %, naphthalene 11 %.
-  - **Open, in order (rescoped from that profile):** size both block
-    kernels' scratch once per build (bitwise, ~1.02-1.04x); R3 ket-side
+  - **Grow-only block-kernel scratch landed (`0e3e074d`, 2026-10-24):**
+    the zero/resize share was `vector::resize` re-zeroing regrown tails;
+    `grow_to` keeps a high-water mark. Bitwise, zero/resize <= 0.1 %,
+    1.03-1.04x on 6-31G\* and cc-pVTZ, neutral (+-1 %) elsewhere.
+  - **Open, in order (rescoped from that profile):** R3 ket-side
     family sharing within bra units, probe first, land at >= 1.10x on
     cc-pVDZ or naphthalene; S2 thread the serial symmetric phases
     (`density_has_symmetry`, `symmetrize_over_ops`, naphthalene idle 11 %);

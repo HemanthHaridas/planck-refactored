@@ -9,9 +9,9 @@ revisions carried each step's plan, and their measurements are kept below.
 When the open steps land or are abandoned, rewrite this as an answer.
 
 - **Landed:** C0, C1, C2–C3.5, H1, L1–L3c, P1, S1, D1, F1, F2, F4, T1, 2b,
-  K1, K1.4, B2.1 (default off), W1, core v1.2.0 and R2 (batched Boys
-  calls; Planck requires core v1.2.0).
-- **Open, in order:** scratch once per build, R3 (ket-side family sharing),
+  K1, K1.4, B2.1 (default off), W1, core v1.2.0, R2 (batched Boys
+  calls; Planck requires core v1.2.0) and grow-only scratch.
+- **Open, in order:** R3 (ket-side family sharing),
   S2 (serial symmetric phases), R1b (conditional), the fixed accumulator partition, C5
   (screened kernels), P2 (primitive screening, a policy call), total L > 12,
   F3. D3 is independent, K2 conditional, C4b deprioritised.
@@ -601,7 +601,6 @@ kept only the identity operation, and the first K1.4 "C2v" gate passed with
 
 | step | what | targets | bitwise? |
 |---|---|---|---|
-| scratch | size both block kernels' scratch once per build, drop zero-fills the kernel overwrites | zero + resize 2.4–4.7 % | yes |
 | R3 | family sharing of T / Boys / prefactors across a bra unit's ket blocks, no family order | closed forms + Boys: 38–62 % (20 % cc-pVTZ) | no |
 | S2 | thread the serial symmetric phases (`density_has_symmetry`, `symmetrize_over_ops`) in fixed order | idle 11 % at four threads, naphthalene | yes |
 | R1b | closed-form readout from a per-build decode table, `value()` still lazy (conditional) | readout 2–13 % | yes |
@@ -652,12 +651,19 @@ outside this repo:
    fewer evaluations (R3's sharing, P2) or a cheaper evaluation in the
    core, not more batching. Sizing the scratch is now its own step.
 
-**Scratch, once per build.** Zeroing and `vector::resize` are 2.4–4.7 % of
-every build, including 8 H2O where HGP barely runs, so the closed forms'
-per-block T/Boys scratch pays it too. Size both kernels' scratch to the
-build's largest block in a per-build setup, and drop zero-fills of buffers
-the kernel overwrites in full. Bitwise; gate with the 28 G fingerprints.
-Expected 1.02–1.04×; cheap, so first.
+**Scratch, grow-only (landed `0e3e074d`).** Zeroing and `vector::resize`
+were 2.4–4.7 % of every build. The call tree put nearly all of the `memset`
+/ `bzero` inside `vector::resize` itself: the call is out of line, and a
+buffer shrunk by a small block re-zeroes its tail when the next larger one
+regrows it. `grow_to` (`block_eri.h`) keeps each buffer at its high-water
+mark instead, which gets the "once per build" effect without a per-build
+setup; `acc` still zeroes its live extent. Bitwise (28 G fingerprints
+identical; `planck-hgp-engine-smoke`, `planck-fock-accumulate`, smoke
+43/45 as before). Zero/resize fell to ≤ 0.1 % of samples. Best of three
+against HEAD: 1.030× / 1.041× on 6-31G\* and 1.043× / 1.041× on cc-pVTZ
+(one / four threads); 8 H2O, cc-pVDZ and naphthalene within ±1 % (best of
+seven on the first two), so the removed share converts to time only where
+HGP runs.
 
 **R3 — family sharing within today's bra units (not started).** For a fixed
 bra block, the ket blocks of one shared-exponent family share their primitive
