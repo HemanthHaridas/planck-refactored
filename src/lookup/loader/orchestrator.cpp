@@ -25,7 +25,6 @@ namespace HartreeFock
             // by every boys()/boys_vec() call thereafter.
             BoysFn g_boys_fn = nullptr;
             BoysVecFn g_boys_vec_fn = nullptr;
-            // Optional (core v1.2.0+); null means boys_batch loops boys_vec.
             BoysBatchFn g_boys_batch_fn = nullptr;
             void *g_library_handle = nullptr;
 
@@ -91,13 +90,21 @@ namespace HartreeFock
                     return std::unexpected("Failed to resolve planck_boys_vec: " + boys_vec_sym.error());
                 }
 
+                // Core v1.2.0+. A v1.1.0 library (license) fails here, loudly:
+                // the ERI kernels call boys_batch on every block.
+                auto boys_batch_sym = resolve_symbol(*handle, "planck_boys_batch");
+                if (!boys_batch_sym)
+                {
+                    unload_library(*handle);
+                    return std::unexpected("Failed to resolve planck_boys_batch (needs Boys library v1.2.0 or "
+                                           "later; install a v1.2.0 license): " +
+                                           boys_batch_sym.error());
+                }
+
                 g_library_handle = *handle;
                 g_boys_fn = reinterpret_cast<BoysFn>(*boys_sym);
                 g_boys_vec_fn = reinterpret_cast<BoysVecFn>(*boys_vec_sym);
-                // Optional: a v1.1.0 library (license) has no batched entry, and
-                // boys_batch then falls back to boys_vec, with the same values.
-                auto boys_batch_sym = resolve_symbol(*handle, "planck_boys_batch");
-                g_boys_batch_fn = boys_batch_sym ? reinterpret_cast<BoysBatchFn>(*boys_batch_sym) : nullptr;
+                g_boys_batch_fn = reinterpret_cast<BoysBatchFn>(*boys_batch_sym);
                 return {};
             }
         }
@@ -224,16 +231,9 @@ namespace HartreeFock
 
         void boys_batch(std::span<const double> x, int nmax, std::span<double> out) noexcept
         {
-            assert(Loader::g_boys_vec_fn && "boys_batch() called before initialize_boys_library()");
+            assert(Loader::g_boys_batch_fn && "boys_batch() called before initialize_boys_library()");
             assert(nmax >= 0 && out.size() >= x.size() * (static_cast<std::size_t>(nmax) + 1));
-            if (Loader::g_boys_batch_fn)
-            {
-                Loader::g_boys_batch_fn(x.data(), x.size(), nmax, out.data());
-                return;
-            }
-            const std::size_t width = static_cast<std::size_t>(nmax) + 1;
-            for (std::size_t i = 0; i < x.size(); ++i)
-                Loader::g_boys_vec_fn(x[i], out.data() + i * width, width);
+            Loader::g_boys_batch_fn(x.data(), x.size(), nmax, out.data());
         }
 
     } // namespace Lookup

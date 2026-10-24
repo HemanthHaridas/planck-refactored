@@ -1,8 +1,6 @@
 // boys_vec must be bitwise-identical to looping the scalar boys(n,x), and
 // boys_batch to boys_vec on each x. Covers the in-table path, the interval
 // boundaries, the asymptotic tail (x>=x_max) and orders past the table (NaN).
-// boys_batch runs the core's batched entry when the loaded library has one
-// (v1.2.0+), else the loader's fallback over boys_vec; both must pass.
 #include <cmath>
 #include <cstdio>
 #include <cstring>
