@@ -22,11 +22,13 @@
 //     is visited exactly ONCE, which is what makes the unweighted 8-fold-orbit
 //     accumulation in fock_accumulate.h correct.
 //
-//  2. schedule(static, 1) + per-thread partials summed in FIXED thread-index order.
+//  2. Partials keyed by BIN (bra mod n_bins, n_bins a function of nb only),
+//     each bin's bras in increasing order, bins summed in FIXED bin order.
 //     These accumulations are read-modify-write, unlike the store-only
-//     write_eri_permutations of the tensor build. A critical/atomic reduction,
-//     or schedule(dynamic), makes the result drift with thread count (measured);
-//     see the note in the loop and src/dft/ks_matrix.cpp.
+//     write_eri_permutations of the tensor build. Keying partials by thread
+//     made G depend on the thread count, and a critical/atomic reduction on
+//     completion order (measured; see src/dft/ks_matrix.cpp). With bins, which
+//     thread runs a bin cannot change G, so bins are scheduled dynamically.
 //
 // Integral symmetry (sym_ops) IS handled: the ERI is computed once at each
 // symmetry-orbit representative and replicated across the orbit with the
@@ -469,15 +471,17 @@ namespace HartreeFock::Integrals
         const bool need_uhf = spin_resolved;
         const bool raw_coulomb_exchange =
             !need_uhf && term == FusedTerm::RawCoulombExchange;
+        // ponytail: 64 bins, fewer once 64 x nb^2 passes 256 MB per output (8 at
+        // the least, ~1 GB at nb = 4000); a function of nb only, never of the
+        // thread count, or G would depend on it again.
+        const std::size_t n_bins = std::clamp<std::size_t>(
+            (std::size_t{256} << 20) / (sizeof(double) * std::max<std::size_t>(nb * nb, 1)), 8, 64);
         std::vector<Eigen::MatrixXd> g_partials(
-            need_uhf ? 0 : static_cast<std::size_t>(n_threads),
-            Eigen::MatrixXd::Zero(nb, nb));
+            need_uhf ? 0 : n_bins, Eigen::MatrixXd::Zero(nb, nb));
         std::vector<Eigen::MatrixXd> ga_partials(
-            (need_uhf || raw_coulomb_exchange) ? static_cast<std::size_t>(n_threads) : 0,
-            Eigen::MatrixXd::Zero(nb, nb));
+            (need_uhf || raw_coulomb_exchange) ? n_bins : 0, Eigen::MatrixXd::Zero(nb, nb));
         std::vector<Eigen::MatrixXd> gb_partials(
-            need_uhf ? static_cast<std::size_t>(n_threads) : 0,
-            Eigen::MatrixXd::Zero(nb, nb));
+            need_uhf ? n_bins : 0, Eigen::MatrixXd::Zero(nb, nb));
         // One block kernel per thread: it carries reusable scratch, so a copy per
         // bra would reallocate it every iteration.
         std::vector<BlockKernel> blocks(static_cast<std::size_t>(n_threads), block_kernel);
@@ -520,10 +524,11 @@ namespace HartreeFock::Integrals
             // In the RHF branch only g_partials is populated and only
             // fock_accumulate_rhf runs, so the beta reference is never read; it
             // aliases the alpha slot purely to keep both branches in one loop.
+            const std::size_t bin = bra % n_bins;
             Eigen::MatrixXd &G_local =
-                need_uhf ? ga_partials[thread_id] : g_partials[thread_id];
-            Eigen::MatrixXd &Gb_local = need_uhf ? gb_partials[thread_id]
-                : raw_coulomb_exchange ? ga_partials[thread_id] : g_partials[thread_id];
+                need_uhf ? ga_partials[bin] : g_partials[bin];
+            Eigen::MatrixXd &Gb_local = need_uhf ? gb_partials[bin]
+                : raw_coulomb_exchange ? ga_partials[bin] : g_partials[bin];
 
             const FusedShellGroup &gA = groups[group_pairs[bra].a];
 
@@ -761,10 +766,11 @@ namespace HartreeFock::Integrals
 #endif
             // the block's undecided permuting ops (per thread, reused)
             std::vector<std::size_t> &block_ops = block_ops_of[static_cast<std::size_t>(thread_id)];
+            const std::size_t bin = p % n_bins;
             Eigen::MatrixXd *out[2] = {
-                need_uhf ? &ga_partials[thread_id] : &g_partials[thread_id],
-                need_uhf ? &gb_partials[thread_id]
-                : raw_coulomb_exchange ? &ga_partials[thread_id] : &g_partials[thread_id]};
+                need_uhf ? &ga_partials[bin] : &g_partials[bin],
+                need_uhf ? &gb_partials[bin]
+                : raw_coulomb_exchange ? &ga_partials[bin] : &g_partials[bin]};
             // Column-major raw views: M(r, c) = M[c * nb + r].
             double *const o0 = out[0]->data(), *const o1 = out[1]->data();
             const auto raw = [](const Eigen::MatrixXd *M) { return M ? M->data() : nullptr; };
@@ -885,15 +891,18 @@ namespace HartreeFock::Integrals
         };
         const std::size_t n_units = ngp;
 
-        // Static, NOT dynamic: load-bearing, see the header note. Chunk 1
-        // (round-robin) because bra p visits every ket q >= p: contiguous
-        // quarters handed the first thread 44 % of the triangle and capped four
-        // threads at 2.29x (measured ~2.3x); round-robin gave 1.5-2.0x more at
-        // four threads and is identical at one.
+        // One bin at a time, its bras round-robin (bin, bin + n_bins, ...) in
+        // increasing order, so each bin's partial is fixed whoever runs it (see
+        // the header note). Round-robin because bra p visits every ket q >= p:
+        // contiguous ranges handed the first thread 44 % of the triangle (W1).
+        // Dynamic because under S1 the work per bra is uneven: a static
+        // round-robin left three of four threads waiting 10-17 % at the closing
+        // barrier on naphthalene.
 #ifdef USE_OPENMP
-#pragma omp parallel for schedule(static, 1)
+#pragma omp parallel for schedule(dynamic, 1)
 #endif
-        for (std::size_t bra = 0; bra < n_units; ++bra)
+        for (std::size_t bin = 0; bin < n_bins; ++bin)
+        for (std::size_t bra = bin; bra < n_units; bra += n_bins)
         {
             if (dense)
             {
@@ -925,16 +934,22 @@ namespace HartreeFock::Integrals
                 bra_body(bra, std::integral_constant<int, 0>{});
         }
 
-        // Fixed thread-index order — never completion order.
+        // Fixed bin order per element — never completion order. Columns are
+        // independent, so the merge itself threads without changing a sum.
+        const auto merge = [&](Eigen::MatrixXd &out, const std::vector<Eigen::MatrixXd> &parts)
+        {
+            out.setZero(nb, nb);
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+            for (Eigen::Index c = 0; c < static_cast<Eigen::Index>(nb); ++c)
+                for (const Eigen::MatrixXd &part : parts)
+                    out.col(c) += part.col(c);
+        };
         if (need_uhf)
         {
-            Ga.setZero(nb, nb);
-            Gb.setZero(nb, nb);
-            for (int t = 0; t < n_threads; ++t)
-            {
-                Ga += ga_partials[static_cast<std::size_t>(t)];
-                Gb += gb_partials[static_cast<std::size_t>(t)];
-            }
+            merge(Ga, ga_partials);
+            merge(Gb, gb_partials);
             // Merge the per-rank partial Focks. nb^2, not nb^4. No-op when serial.
             // Eigen's default storage is column-major and contiguous, so the raw
             // buffer is a plain nb*nb double array either way — the sum is
@@ -955,15 +970,11 @@ namespace HartreeFock::Integrals
         }
         else
         {
-            G.setZero(nb, nb);
-            for (int t = 0; t < n_threads; ++t)
-                G += g_partials[static_cast<std::size_t>(t)];
+            merge(G, g_partials);
             HartreeFock::Mpi::allreduce_inplace(G.data(), static_cast<std::size_t>(G.size()));
             if (raw_coulomb_exchange)
             {
-                Ga.setZero(nb, nb);
-                for (int t = 0; t < n_threads; ++t)
-                    Ga += ga_partials[static_cast<std::size_t>(t)];
+                merge(Ga, ga_partials);
                 HartreeFock::Mpi::allreduce_inplace(Ga.data(), static_cast<std::size_t>(Ga.size()));
                 if (dense)
                     Ga = (0.5 * (Ga + Ga.transpose())).eval();
