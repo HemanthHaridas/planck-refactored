@@ -1302,7 +1302,7 @@ namespace
                                 CintInt, double *, void *, double *);
     using OptFn = void (*)(void **, CintInt *, CintInt, CintInt *, CintInt, double *);
 
-    void report_libcint(const BuildSetup &s)
+    void report_libcint(const BuildSetup &s, bool k2 = false)
     {
         using namespace HartreeFock::Integrals;
         const char *path = std::getenv("PLANCK_LIBCINT");
@@ -1619,6 +1619,169 @@ namespace
         timed_build_block(s, hgp_elem, production_kernel());
         const double tf = timed_build_block(s, hgp_elem, production_kernel());
         std::printf("  production Fock build %.4f s: kernel sweep is %.0f%% of it\n", tf, 100.0 * TP / tf);
+
+        // ── K2.0 (docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md): single-primitive high-L ──
+        //
+        // For the K = 1, total L >= 4 classes, split the HGP block kernel into
+        // Boys / VRR+contract / HRR / readout by timing progressively fuller
+        // sweeps of the same quartets, and time the Rys hoisted block
+        // (_contracted_eri_block_hoisted_views, never wired into the fused loop)
+        // and libcint on them. Each phase is the difference between two sweeps,
+        // best of three each.
+        if (k2)
+        {
+            std::vector<Row> k2rows;
+            for (const Row &r : rows)
+                if (r.key[0] + r.key[1] + r.key[2] + r.key[3] >= 4 && r.key[4] == 1 && r.key[5] == 1 &&
+                    r.key[6] == 1 && r.key[7] == 1)
+                    k2rows.push_back(r);
+            std::sort(k2rows.begin(), k2rows.end(), [](const Row &x, const Row &y) { return x.tp > y.tp; });
+            if (k2rows.size() > 15)
+                k2rows.resize(15);
+
+            HgpBlockKernel hgp(0, 4 * MAX_L);
+            std::vector<double> rys_buf(max_out);
+            const auto best3 = [](auto &&sweep)
+            {
+                double t = 1e30;
+                for (int rep = 0; rep < 3; ++rep)
+                {
+                    const auto t0 = Clock::now();
+                    sweep();
+                    t = std::min(t, seconds_since(t0));
+                }
+                return t;
+            };
+            double S_boys = 0, S_vrr = 0, S_hgp = 0, S_full = 0, S_rys = 0, S_lib = 0;
+            std::printf("  K2.0, K = 1 classes at total L >= 4 (us per quartet; VRR table = e*f*m entries)\n");
+            std::printf("  %-14s %6s %7s %7s %7s %7s %7s | %7s %7s %7s | %7s %6s %9s\n", "class", "n", "Boys",
+                        "VRR", "HRR", "read", "HGP", "Rys", "lib", "HGP/lib", "Rys/lib", "VRRtab", "Rys-HGP");
+            for (const Row &r : k2rows)
+            {
+                const auto &list = classes.at(r.key);
+                const double n = static_cast<double>(list.size());
+                const int LAB = r.key[0] + r.key[1], LCD = r.key[2] + r.key[3], M = LAB + LCD;
+                using hgp_block::n_upto;
+                const int Ne = n_upto(LAB), Nf = n_upto(LCD);
+                std::size_t vrr_tab = 0;
+                for (int e = 0; e < Ne; ++e)
+                    for (int f = 0; f < Nf; ++f)
+                        vrr_tab += static_cast<std::size_t>(std::max(0, M - hgp_block::table()[e].L -
+                                                                         hgp_block::table()[f].L + 1));
+                std::vector<double> VL(static_cast<std::size_t>(Ne) * Nf * (M + 1));
+                // Boys alone: the argument and one boys_batch call per quartet.
+                const double t_boys = best3([&]
+                {
+                    double F[4 * MAX_L + 1];
+                    for (const auto &g4 : list)
+                    {
+                        set_req(g4[0], g4[1], g4[2], g4[3]);
+                        const auto &p = req.ab->primitive_pairs[0], &q = req.cd->primitive_pairs[0];
+                        const double rho = p.zeta * q.zeta / (p.zeta + q.zeta);
+                        double PQ2 = 0.0;
+                        for (int x = 0; x < 3; ++x)
+                            PQ2 += (p.center[x] - q.center[x]) * (p.center[x] - q.center[x]);
+                        const double T = rho * PQ2;
+                        HartreeFock::Lookup::boys_batch(std::span<const double>(&T, 1), M,
+                                                        std::span<double>(F, static_cast<std::size_t>(M) + 1));
+                        sink = sink + F[M];
+                    }
+                });
+                // VRR (includes Boys), the whole table, as prepare runs it for K = 1.
+                const double t_vrr = best3([&]
+                {
+                    for (const auto &g4 : list)
+                    {
+                        set_req(g4[0], g4[1], g4[2], g4[3]);
+                        const HartreeFock::PrimitivePair *pa[1] = {&req.ab->primitive_pairs[0]};
+                        const HartreeFock::PrimitivePair *pc[1] = {&req.cd->primitive_pairs[0]};
+                        hgp_block::vrr_lanes<1>(pa, pc, LAB, LCD, VL.data());
+                        sink = sink + VL[0];
+                    }
+                });
+                // VRR + contract + HRR (prepare), no readout.
+                const double t_hgp = best3([&]
+                {
+                    for (const auto &g4 : list)
+                    {
+                        set_req(g4[0], g4[1], g4[2], g4[3]);
+                        hgp.prepare(req);
+                        sink = sink + hgp.value(0, 0, 0, 0);
+                    }
+                });
+                // Everything, reading every component (the K0 Planck column).
+                const double t_full = best3([&]
+                {
+                    for (const auto &g4 : list)
+                    {
+                        set_req(g4[0], g4[1], g4[2], g4[3]);
+                        hgp.prepare(req);
+                        double acc = 0.0;
+                        for (std::size_t a = 0; a < req.n[0]; ++a)
+                            for (std::size_t b = 0; b < req.n[1]; ++b)
+                                for (std::size_t c = 0; c < req.n[2]; ++c)
+                                    for (std::size_t d = 0; d < req.n[3]; ++d)
+                                        acc += hgp.value(a, b, c, d);
+                        sink = sink + acc;
+                    }
+                });
+                const double t_rys = best3([&]
+                {
+                    for (const auto &g4 : list)
+                    {
+                        set_req(g4[0], g4[1], g4[2], g4[3]);
+                        HartreeFock::RysQuad::_contracted_eri_block_hoisted_views(
+                            req.views[0], req.n[0], req.views[1], req.n[1], req.views[2], req.n[2], req.views[3],
+                            req.n[3], HartreeFock::ERIKernel::Coulomb, 0.0, rys_buf.data());
+                        sink = sink + rys_buf[0];
+                    }
+                });
+                const double t_lib = best3([&]
+                {
+                    for (const auto &g4 : list)
+                    {
+                        lib_eval(g4);
+                        sink = sink + buf[0];
+                    }
+                });
+                // Rys block against the HGP block, every component, relative to
+                // the block's largest |value| (a per-component relative error is
+                // meaningless on components that are zero by symmetry).
+                double rel = 0.0;
+                for (const auto &g4 : list)
+                {
+                    set_req(g4[0], g4[1], g4[2], g4[3]);
+                    hgp.prepare(req);
+                    HartreeFock::RysQuad::_contracted_eri_block_hoisted_views(
+                        req.views[0], req.n[0], req.views[1], req.n[1], req.views[2], req.n[2], req.views[3],
+                        req.n[3], HartreeFock::ERIKernel::Coulomb, 0.0, rys_buf.data());
+                    std::size_t o = 0;
+                    double dmax = 0.0, hmax = 0.0;
+                    for (std::size_t a = 0; a < req.n[0]; ++a)
+                        for (std::size_t b = 0; b < req.n[1]; ++b)
+                            for (std::size_t c = 0; c < req.n[2]; ++c)
+                                for (std::size_t d = 0; d < req.n[3]; ++d, ++o)
+                                {
+                                    const double h = hgp.value(a, b, c, d);
+                                    dmax = std::max(dmax, std::abs(rys_buf[o] - h));
+                                    hmax = std::max(hmax, std::abs(h));
+                                }
+                    rel = std::max(rel, dmax / hmax);
+                }
+                char label[32];
+                std::snprintf(label, sizeof label, "(%d%d%d%d)", r.key[0], r.key[1], r.key[2], r.key[3]);
+                const double us = 1e6 / n;
+                std::printf("  %-14s %6.0f %7.3f %7.3f %7.3f %7.3f %7.3f | %7.3f %7.3f %6.2fx | %6.2fx %6zu %9.1e\n",
+                            label, n, us * t_boys, us * (t_vrr - t_boys), us * (t_hgp - t_vrr),
+                            us * (t_full - t_hgp), us * t_full, us * t_rys, us * t_lib, t_full / t_lib,
+                            t_rys / t_lib, vrr_tab, rel);
+                S_boys += t_boys, S_vrr += t_vrr, S_hgp += t_hgp, S_full += t_full, S_rys += t_rys, S_lib += t_lib;
+            }
+            std::printf("  these classes: HGP %.4f s (Boys %.0f%%, VRR %.0f%%, HRR %.0f%%, read %.0f%%), "
+                        "Rys %.4f s, libcint %.4f s\n",
+                        S_full, 100 * S_boys / S_full, 100 * (S_vrr - S_boys) / S_full,
+                        100 * (S_hgp - S_vrr) / S_full, 100 * (S_full - S_hgp) / S_full, S_rys, S_lib);
+        }
         (void)sink;
     }
 } // namespace
@@ -1662,11 +1825,13 @@ int main(int argc, char **argv)
 
     // --libcint nwater basis: K0, per-class kernel time against libcint
     // (docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md). Needs PLANCK_LIBCINT.
-    if (argc == 4 && std::string(argv[1]) == "--libcint")
+    // --k2 nwater basis: the same, then K2.0's split of the single-primitive
+    // high-L classes (HGP phases, Rys hoisted block, libcint).
+    if (argc == 4 && (std::string(argv[1]) == "--libcint" || std::string(argv[1]) == "--k2"))
     {
         const BuildSetup s = prepare({std::atoi(argv[2]), argv[3]});
-        std::printf("--libcint: %s H2O x%s\n", argv[3], argv[2]);
-        report_libcint(s);
+        std::printf("%s: %s H2O x%s\n", argv[1], argv[3], argv[2]);
+        report_libcint(s, std::string(argv[1]) == "--k2");
         return 0;
     }
 

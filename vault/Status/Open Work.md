@@ -18,6 +18,18 @@ truth for what remains.
 
 ## Highest-priority correctness and robustness work
 
+- **The hoisted Rys block is wrong for at least one class (found
+  2026-10-25, K2.0).** `RysQuad::_contracted_eri_block_hoisted_views`
+  disagrees with the HGP block kernel (which matches libcint to 7e-13) by
+  73 % of the block's largest value in `(p d|d d)`, K = 1, on 1 H2O cc-pVTZ;
+  fourteen other high-L classes agree to 1e-14. Repro:
+  `PLANCK_LIBCINT=… planck-eri-class-share --k2 1 cc-pVTZ`, column
+  `Rys-HGP`. Production reaches this function only through `_compute_2e_auto`
+  (the conventional full-tensor Auto build) for the Rys buckets of
+  `kAutoEngine`, (L_AB, L_CD) = (7, 8) and (8, 8) plus clamped L, i.e. g/h
+  quartets. Whether the defect hits those classes is unmeasured. Check them
+  against the HGP block, then fix or route those buckets away from the hoist.
+
 - **Yukawa / Gaussian screened-exchange functionals are evaluated with the
   erf kernel everywhere except TDDFT (found 2026-10-16).** `cam_coefficients()`
   (`src/dft/base/wrapper.h`) folds `XC_HYB_YUKAWA_SR` / `XC_HYB_GAUSSIAN_SR`
@@ -1927,9 +1939,13 @@ identify the path taken. Not required for correctness or performance.
     build is now 0.79–1.21× PySCF on cc-pVDZ and 1.0–2.75× on cc-pVTZ.
     In the same (segmented) representation Planck is faster on cc-pVDZ
     (0.47–0.75×) and 1.5–1.9× slower on cc-pVTZ, all of it at total
-    L ≥ 4, worst in single-primitive quartets (2.3–5.5× libcint). Next:
-    **K2** (microbenchmark K = 1 high-L classes: HGP block vs per-component
-    Rys vs libcint; then a Rys block kernel or a fixed-cost cut). **G**
+    L ≥ 4, worst in single-primitive quartets (2.3–5.5× libcint). **K2.0
+    done** (`planck-eri-class-share --k2`): for K = 1 the HGP block kernel
+    splits VRR 44 % / HRR 44 % / readout 12 %, Boys ~0, and the VRR alone
+    exceeds libcint's whole quartet, so the lever is the algorithm. Next:
+    **K2.1**, a libcint-style 2D Rys block kernel (per-root 2D tables, HRR in
+    2D), prototyped in the harness and landed only at ≥ 2× over HGP on the
+    K2.0 classes; then K2.2 (the K crossover). **G**
     (general contraction) is small: the post-K1 family probe gains 1.00×
     over a cc-pVDZ sweep; build only if closed-form-only families clear
     1.10×. Also: rerun `pyscf_bench.py` end to end; check the RI auxiliary

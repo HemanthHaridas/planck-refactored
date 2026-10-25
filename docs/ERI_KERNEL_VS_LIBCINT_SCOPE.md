@@ -163,21 +163,62 @@ of the work into these classes.
   class was a win over the per-component paths. A Rys *block* kernel was
   never built.
 
-**Steps:**
+**K2.0 result (2026-10-25): the algorithm, not the overhead.**
+`planck-eri-class-share --k2 nwater basis` splits the HGP block kernel into
+Boys / VRR+contract / HRR / readout by timing progressively fuller sweeps of
+the same quartets, and times the existing Rys hoisted block and libcint on
+them. 2 H2O cc-pVTZ, 1 thread, µs per quartet, the fifteen costliest K = 1
+classes at total L ≥ 4:
 
-- **K2.0, microbenchmark.** For five representative K = 1 classes
-  (`(1122)`, `(2221)`, `(2222)`, `(2322)`, `(3322)`) time, in isolation:
-  the HGP block kernel split into `prepare` / VRR / HRR / readout;
-  per-component Rys; libcint. Count operations per class for HGP and Rys.
-  Exit: a table saying which of H1–H3 carries the gap.
-- **K2.1, the change it points to.** If H1/H3: a Rys block kernel for
-  K = 1 (or small K) at total L ≥ 4, chained ahead of the HGP block kernel
-  by `covers()`. If H2: cut the fixed cost in the HGP block path. Neither is
-  built before K2.0 says which.
-- **K2.2, measure in production** on cc-pVTZ and on cc-pVDZ, where L ≥ 4 is
+| class | Boys | VRR | HRR | read | HGP | Rys hoist | libcint | HGP / lib |
+|---|---|---|---|---|---|---|---|---|
+| (2222) | 0.02 | 4.60 | 4.45 | 1.15 | 10.22 | 305.7 | 2.05 | 4.98× |
+| (1222) | 0.02 | 2.44 | 2.43 | 0.75 | 5.63 | 117.0 | 1.11 | 5.06× |
+| (1212) | 0.02 | 1.35 | 1.48 | 0.34 | 3.19 | 49.4 | 0.65 | 4.95× |
+| (1122) | 0.02 | 1.12 | 1.20 | 0.25 | 2.58 | 41.2 | 0.67 | 3.85× |
+| (1112) | 0.02 | 0.65 | 0.70 | 0.17 | 1.53 | 18.2 | 0.33 | 4.66× |
+| (2322) | 0.02 | 7.81 | 9.02 | 1.35 | 18.20 | 760.3 | 3.55 | 5.13× |
+
+Over these classes: Boys 0 %, VRR 44 %, HRR 44 %, readout 12 %; HGP 0.051 s,
+libcint 0.010 s. The ratio is 3.6–5.7× in every class.
+
+- **K2-H2 (fixed cost) is not enough.** The VRR *alone* exceeds libcint's
+  whole quartet in every class (4.60 against 2.05 µs on `(dd|dd)`), so no
+  cut to HRR, readout or `prepare` can close the gap. HRR is real work
+  here, not overhead: with K = 1 there is no contraction to amortize it
+  over, and it runs on the full Cartesian product.
+- **K2-H1 (algorithm) holds.** HGP's VRR builds \([e0|f0]^{(m)}\) over every
+  \(e, f, m\): 3675 entries for `(dd|dd)`, 6370 for `(fd|dd)`. A Rys code
+  builds three 2D tables per root, does its HRR in 2D, and assembles each
+  component as a sum over \(\lceil (L+1)/2 \rceil\) roots of \(I_x I_y I_z\).
+- **K2-H3 is half right.** No Rys kernel Planck has is the answer. The
+  existing hoisted Rys block (`_contracted_eri_block_hoisted_views`, a 6D
+  box per quartet) is 50–210× libcint. What wins is the 2D formulation.
+- **A latent defect, found by the value check.** The hoisted Rys block
+  disagrees with the HGP block (itself checked against libcint to 7e-13) by
+  73 % of the block's largest value in `(1222)` on 1 H2O cc-pVTZ; the other
+  fourteen classes agree to 1e-14. Production reaches it only through the
+  Auto table's Rys buckets, (L_AB, L_CD) = (7, 8) and (8, 8), in the
+  conventional full-tensor build. Recorded in Open Work.
+
+**Steps now:**
+
+- **K2.1, a 2D Rys block kernel.** libcint's formulation: per primitive
+  quartet, Rys roots and weights; per root, the 2D recurrence for
+  \(I_x(e, f)\), \(I_y\), \(I_z\) up to \((L_{AB}, L_{CD})\); HRR on the 2D
+  tables to \((a, b, c, d)\) per axis; then each component as
+  \(\sum_r I_x I_y I_z\). Reuse Planck's root finder (`rys.cpp`). A
+  `RysBlockKernel` under the block-kernel contract (`block_eri.h`), chained
+  ahead of `HgpBlockKernel` for the classes it wins, decided by `covers()`.
+  Prototype it in the harness first, against libcint and the HGP block, on
+  the K2.0 classes: build it into production only at ≥ 2× over HGP there.
+- **K2.2, which K it should own.** Rys does its assembly per primitive
+  quartet; HGP contracts before its HRR. Time both for K = 1, 2, 3, 4 at
+  each total L and set the crossover. On cc-pVTZ the high-L polarization
+  shells are uncontracted, so K = 1 carries the gap.
+- **K2.3, measure in production** on cc-pVTZ and on cc-pVDZ, where L ≥ 4 is
   a smaller share (32 % of the sweep, at 1.3–5.5× libcint), and on 6-31G\*,
   where a change must not cost.
-
 `docs/ERI_PERFORMANCE_SCOPE.md` invariant 1 applies: a profile share or an
 operation count is not evidence of removability. A candidate needs the
 K2.0 microbenchmark first.
