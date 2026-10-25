@@ -55,9 +55,31 @@ namespace
     // density-weighted screen drops most of G[dP] as P converges (1.19-1.33x on
     // the Fock build). PySCF does the same (get_veff with dm_last / vhf_last).
     // `ref` holds the densities and G of the previous build, one per spin.
+    //
+    // The screen drops a slightly different share of each G[dP], so the
+    // accumulated G drifts from G[P] and, at tight tolerances, the energy
+    // random-walks at ~1e-9 and DIIS stalls (water4 / cc-pVDZ, tol_energy
+    // 1e-10: 16 -> 29 iterations, and serial and MPI land 6.7e-9 apart). The
+    // DIIS error then stalls at 1-3e-10. So once the DIIS error falls below
+    // kOffBelow, `observe` drops the screen for the rest of the SCF and forces
+    // one full rebuild, which discards the drift. kOffBelow is not tol_density:
+    // the default tol_density (1e-10) is below that stall, so the switch would
+    // never fire. A loose run converges before reaching kOffBelow and keeps the
+    // screen throughout.
     struct IncrementalFock
     {
+        static constexpr double kOffBelow = 1e-8;
         std::vector<Eigen::MatrixXd> P, G;
+        bool screen = true;
+
+        void observe(double diis_err)
+        {
+            if (screen && diis_err > 0.0 && diis_err < kOffBelow)
+            {
+                screen = false;
+                G.clear();
+            }
+        }
     };
 
     const std::vector<HartreeFock::SignedAOSymOp> *integral_ops(const HartreeFock::Calculator &calc)
@@ -74,14 +96,16 @@ namespace
         const auto build = [&](const Eigen::MatrixXd &D_cart, std::size_t nb)
         {
             return _compute_2e_fock(shell_pairs, D_cart, nb, calc._integral._engine,
-                                    HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri, integral_ops(calc));
+                                    HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri, integral_ops(calc),
+                                    HartreeFock::Integrals::FusedTerm::Combined, ref.screen);
         };
         const Eigen::MatrixXd dG = calc._shells._spherical
             ? spherical_direct_fock(calc._shells._cart_to_sph, D,
                                     [&](const Eigen::MatrixXd &D_cart) { return build(D_cart, calc._shells.nbasis()); })
             : build(D, static_cast<std::size_t>(P.rows()));
         Eigen::MatrixXd G = inc ? Eigen::MatrixXd(ref.G[0] + dG) : dG;
-        ref = {{P}, {G}};
+        ref.P = {P};
+        ref.G = {G};
         return G;
     }
 
@@ -98,7 +122,8 @@ namespace
             const Eigen::MatrixXd &C = calc._shells._cart_to_sph;
             auto [ga, gb] = _compute_2e_fock_uhf(shell_pairs, C.transpose() * Da * C, C.transpose() * Db * C,
                                                  calc._shells.nbasis(), calc._integral._engine,
-                                                 HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri, integral_ops(calc));
+                                                 HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri, integral_ops(calc),
+                                                 HartreeFock::Integrals::FusedTerm::Combined, ref.screen);
             dGa = C * ga * C.transpose();
             dGb = C * gb * C.transpose();
         }
@@ -106,11 +131,13 @@ namespace
         {
             std::tie(dGa, dGb) = _compute_2e_fock_uhf(shell_pairs, Da, Db, static_cast<std::size_t>(Pa.rows()),
                                                       calc._integral._engine, HartreeFock::ERIKernel::Coulomb,
-                                                      0.0, tol_eri, integral_ops(calc));
+                                                      0.0, tol_eri, integral_ops(calc),
+                                                      HartreeFock::Integrals::FusedTerm::Combined, ref.screen);
         }
         Eigen::MatrixXd Ga = inc ? Eigen::MatrixXd(ref.G[0] + dGa) : dGa;
         Eigen::MatrixXd Gb = inc ? Eigen::MatrixXd(ref.G[1] + dGb) : dGb;
-        ref = {{Pa, Pb}, {Ga, Gb}};
+        ref.P = {Pa, Pb};
+        ref.G = {Ga, Gb};
         return {Ga, Gb};
     }
 
@@ -695,6 +722,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
             diis.push(F, e);
             diis_err = diis.error_norm();
         }
+        fock_ref.observe(diis_err);
 
         // ── Select Fock matrix for diagonalization ────────────────────────────
         // Once DIIS has ≥2 vectors, use the extrapolated Fock; otherwise plain F.
@@ -1381,6 +1409,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
             diis.push(Fa_s, Fb_s, ea, eb);
             diis_err = diis.error_norm();
             diis_err_prev = cur_err;
+            fock_ref.observe(diis_err);
 
             // Extrapolate both spins with one shared coefficient vector.
             if (diis.ready())
@@ -2139,6 +2168,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
             diis.push(F_rohf, e);
             diis_err = diis.error_norm();
         }
+        fock_ref.observe(diis_err);
 
         const Eigen::MatrixXd F_diag = (use_diis && diis.ready()) ? diis.extrapolate() : F_rohf;
 

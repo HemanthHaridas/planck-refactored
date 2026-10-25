@@ -2092,7 +2092,8 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock_direct(
     const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops,
-    HartreeFock::Integrals::FusedTerm term)
+    HartreeFock::Integrals::FusedTerm term,
+    bool density_screen)
 {
     const std::size_t nb = nbasis;
     const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
@@ -2112,7 +2113,7 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock_direct(
             return _contracted_eri(spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz,
                                    lCx, lCy, lCz, lDx, lDy, lDz, k, w);
         },
-        sym_ops, term);
+        sym_ops, term, {}, true, density_screen);
     return G;
 }
 
@@ -2155,7 +2156,8 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf_direct(
     const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops,
-    HartreeFock::Integrals::FusedTerm term)
+    HartreeFock::Integrals::FusedTerm term,
+    bool density_screen)
 {
     const std::size_t nb = nbasis;
     const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
@@ -2178,7 +2180,7 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf_direct(
             return _contracted_eri(spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz,
                                    lCx, lCy, lCz, lDx, lDy, lDz, k, w);
         },
-        sym_ops, term);
+        sym_ops, term, {}, true, density_screen);
     return {Ga, Gb};
 }
 

@@ -154,7 +154,8 @@ namespace HartreeFock
             double tol_eri = 1e-10,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
             HartreeFock::Integrals::FusedTerm term =
-                HartreeFock::Integrals::FusedTerm::Combined);
+                HartreeFock::Integrals::FusedTerm::Combined,
+            bool density_screen = true);
 
         // One memory-direct quartet traversal returning raw {J, K} for a
         // restricted density. Coefficients and signs remain the caller's job.
@@ -178,7 +179,8 @@ namespace HartreeFock
             double tol_eri = 1e-10,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
             HartreeFock::Integrals::FusedTerm term =
-                HartreeFock::Integrals::FusedTerm::Combined);
+                HartreeFock::Integrals::FusedTerm::Combined,
+            bool density_screen = true);
 
         // ── Gradient derivative integrals ──────────────────────────────────────────
 

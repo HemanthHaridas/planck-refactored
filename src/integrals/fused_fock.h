@@ -204,7 +204,8 @@ namespace HartreeFock::Integrals
         const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
         FusedTerm term = FusedTerm::Combined,
         BlockKernel block_kernel = {},
-        bool dense_digest = true)
+        bool dense_digest = true,
+        bool density_screen = true)
     {
         const bool use_sym = (sym_ops != nullptr) && !sym_ops->empty();
 
@@ -328,8 +329,10 @@ namespace HartreeFock::Integrals
         // over every density passed in (Haser-Ahlrichs). This is what makes an
         // incremental build (D = P - P_prev) cheap. Off in replication mode: a
         // representative block is scattered onto images whose density differs.
-        // The Schwarz table itself stays unscreened (invariant 8).
-        const bool density_screen = !use_sym || skeleton;
+        // The Schwarz table itself stays unscreened (invariant 8). The caller
+        // can switch it off: the SCF tail does, since the skipped share of an
+        // incremental G[dP] makes the energy random-walk at tight tolerances.
+        density_screen = density_screen && (!use_sym || skeleton);
         Eigen::MatrixXd dblk = Eigen::MatrixXd::Zero(ngroups, ngroups);
         if (density_screen)
             for (const Eigen::MatrixXd *D : {dens.P, dens.Pt, dens.Pa, dens.Pb})

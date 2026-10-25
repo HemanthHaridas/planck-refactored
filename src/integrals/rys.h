@@ -126,7 +126,8 @@ namespace HartreeFock
             double tol_eri = 1e-10,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
             HartreeFock::Integrals::FusedTerm term =
-                HartreeFock::Integrals::FusedTerm::Combined);
+                HartreeFock::Integrals::FusedTerm::Combined,
+            bool density_screen = true);
 
         std::pair<Eigen::MatrixXd, Eigen::MatrixXd> _compute_2e_jk_direct(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
@@ -147,7 +148,8 @@ namespace HartreeFock
             double tol_eri = 1e-10,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
             HartreeFock::Integrals::FusedTerm term =
-                HartreeFock::Integrals::FusedTerm::Combined);
+                HartreeFock::Integrals::FusedTerm::Combined,
+            bool density_screen = true);
 
         Eigen::MatrixXd _compute_2e_fock_auto_direct(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
@@ -158,7 +160,8 @@ namespace HartreeFock
             double tol_eri = 1e-10,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
             HartreeFock::Integrals::FusedTerm term =
-                HartreeFock::Integrals::FusedTerm::Combined);
+                HartreeFock::Integrals::FusedTerm::Combined,
+            bool density_screen = true);
 
         std::pair<Eigen::MatrixXd, Eigen::MatrixXd> _compute_2e_jk_auto_direct(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
@@ -179,7 +182,8 @@ namespace HartreeFock
             double tol_eri = 1e-10,
             const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
             HartreeFock::Integrals::FusedTerm term =
-                HartreeFock::Integrals::FusedTerm::Combined);
+                HartreeFock::Integrals::FusedTerm::Combined,
+            bool density_screen = true);
 
 
         // ── Test hook (Phase B / B-1): box-size invariance of the 6D sum ───────────
