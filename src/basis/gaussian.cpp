@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cmath>
 #include <expected>
 #include <fstream>
 #include <iostream>
@@ -15,6 +16,45 @@
 using HartreeFock::BasisFunctions::detail::GbsPrimitive;
 using HartreeFock::BasisFunctions::detail::GbsShell;
 using BasisSet = HartreeFock::BasisFunctions::detail::GbsBasisSet;
+
+namespace
+{
+    // Optimized general contraction (Hashimoto, Hirao, Tatewaki 1995; the form
+    // PySCF ships its cc-pVXZ files in). Correlation-consistent sets list an
+    // outer primitive both inside a contraction and as its own uncontracted
+    // shell of the same L. Dropping it from the contraction leaves the span
+    // unchanged -- the contraction only loses a multiple of a function the
+    // basis already holds, and the reader renormalizes it -- but every
+    // primitive quartet through that shell gets cheaper. Water cc-pVDZ goes
+    // from 28 to 24 primitives, cc-pVTZ from 42 to 34; the direct Fock build
+    // is 2.1-2.3x faster on cc-pVDZ and 1.5-1.8x on cc-pVTZ
+    // (docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md, K1). Energies are unchanged; MO
+    // coefficients and AO-partitioned properties (Mulliken, Mayer) are not,
+    // since the contracted functions themselves differ.
+    void drop_redundant_primitives(std::vector<GbsShell> &shells)
+    {
+        const auto same = [](double a, double b) { return std::abs(a - b) <= 1e-12 * std::abs(a); };
+        const auto free_shell = [&](const std::string &label, double exponent)
+        {
+            return std::ranges::any_of(shells, [&](const GbsShell &s)
+            {
+                return s.primitives.size() == 1 && s.label == label &&
+                       same(s.primitives[0].exponent, exponent);
+            });
+        };
+        for (GbsShell &shell : shells)
+        {
+            if (shell.primitives.size() < 2)
+                continue;
+            std::vector<GbsPrimitive> kept;
+            for (const GbsPrimitive &p : shell.primitives)
+                if (!free_shell(shell.label, p.exponent))
+                    kept.push_back(p);
+            if (!kept.empty())
+                shell.primitives = std::move(kept);
+        }
+    }
+} // namespace
 
 int HartreeFock::BasisFunctions::double_factorial(int n)
 {
@@ -79,6 +119,8 @@ std::expected<HartreeFock::Basis, std::string> HartreeFock::BasisFunctions::read
     if (!gbs_res)
         return std::unexpected(gbs_res.error());
     BasisSet gbs = std::move(*gbs_res);
+    for (auto &[element, shells] : gbs)
+        drop_redundant_primitives(shells);
 
     // Initialize Basis object
     HartreeFock::Basis basis;
