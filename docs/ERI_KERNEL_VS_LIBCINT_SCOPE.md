@@ -194,12 +194,13 @@ libcint 0.010 s. The ratio is 3.6–5.7× in every class.
 - **K2-H3 is half right.** No Rys kernel Planck has is the answer. The
   existing hoisted Rys block (`_contracted_eri_block_hoisted_views`, a 6D
   box per quartet) is 50–210× libcint. What wins is the 2D formulation.
-- **A latent defect, found by the value check.** The hoisted Rys block
-  disagrees with the HGP block (itself checked against libcint to 7e-13) by
-  73 % of the block's largest value in `(1222)` on 1 H2O cc-pVTZ; the other
-  fourteen classes agree to 1e-14. Production reaches it only through the
-  Auto table's Rys buckets, (L_AB, L_CD) = (7, 8) and (8, 8), in the
-  conventional full-tensor build. Recorded in Open Work.
+- **The hoisted Rys block agrees with HGP**, to ≤ 2.7e-14 of each class's
+  largest value on 1 and 2 H2O cc-pVTZ. A first version of the check divided
+  by each block's own maximum and reported a 73 % "defect" in `(1222)`: the
+  block was one that vanishes by symmetry but passes Schwarz screening, where
+  HGP returned 3.7e-16 and Rys 0. A ratio against a block's maximum is
+  meaningless when the maximum is roundoff; the check now uses the class
+  maximum.
 
 **Steps now:**
 

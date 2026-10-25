@@ -1744,10 +1744,12 @@ namespace
                         sink = sink + buf[0];
                     }
                 });
-                // Rys block against the HGP block, every component, relative to
-                // the block's largest |value| (a per-component relative error is
-                // meaningless on components that are zero by symmetry).
-                double rel = 0.0;
+                // Rys block against the HGP block, every component: the largest
+                // difference over the class relative to the class's largest
+                // |value|. Neither a per-component nor a per-block ratio works:
+                // blocks that vanish by symmetry still pass Schwarz screening, and
+                // there both codes return roundoff (~1e-16) that differs by O(1).
+                double rel = 0.0, dclass = 0.0, hclass = 0.0;
                 for (const auto &g4 : list)
                 {
                     set_req(g4[0], g4[1], g4[2], g4[3]);
@@ -1766,8 +1768,9 @@ namespace
                                     dmax = std::max(dmax, std::abs(rys_buf[o] - h));
                                     hmax = std::max(hmax, std::abs(h));
                                 }
-                    rel = std::max(rel, dmax / hmax);
+                    dclass = std::max(dclass, dmax), hclass = std::max(hclass, hmax);
                 }
+                rel = dclass / hclass;
                 char label[32];
                 std::snprintf(label, sizeof label, "(%d%d%d%d)", r.key[0], r.key[1], r.key[2], r.key[3]);
                 const double us = 1e6 / n;

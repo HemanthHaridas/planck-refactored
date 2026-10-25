@@ -18,17 +18,6 @@ truth for what remains.
 
 ## Highest-priority correctness and robustness work
 
-- **The hoisted Rys block is wrong for at least one class (found
-  2026-10-25, K2.0).** `RysQuad::_contracted_eri_block_hoisted_views`
-  disagrees with the HGP block kernel (which matches libcint to 7e-13) by
-  73 % of the block's largest value in `(p d|d d)`, K = 1, on 1 H2O cc-pVTZ;
-  fourteen other high-L classes agree to 1e-14. Repro:
-  `PLANCK_LIBCINT=… planck-eri-class-share --k2 1 cc-pVTZ`, column
-  `Rys-HGP`. Production reaches this function only through `_compute_2e_auto`
-  (the conventional full-tensor Auto build) for the Rys buckets of
-  `kAutoEngine`, (L_AB, L_CD) = (7, 8) and (8, 8) plus clamped L, i.e. g/h
-  quartets. Whether the defect hits those classes is unmeasured. Check them
-  against the HGP block, then fix or route those buckets away from the hoist.
 
 - **Yukawa / Gaussian screened-exchange functionals are evaluated with the
   erf kernel everywhere except TDDFT (found 2026-10-16).** `cam_coefficients()`
