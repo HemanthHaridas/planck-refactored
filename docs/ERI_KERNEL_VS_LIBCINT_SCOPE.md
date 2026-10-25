@@ -290,9 +290,11 @@ production today (explicit `engine rys`, the Auto table's Rys buckets).
   - End to end, 4 threads, best of 3, energies identical: ethylene
     cc-pVDZ with `engine rys` 1.55 → 0.70 s (2.22×); water RMP2/STO-3G
     `engine rys` 0.28 → 0.31 s (startup and one-time table build on a case
-    needing 1–2 roots). Not yet measured: 2 H2O cc-pVTZ with
-    `engine rys`, and 4 H2O cc-pVDZ with `engine auto` as the
-    no-regression control.
+    needing 1–2 roots); 2 H2O cc-pVTZ with `engine rys` 241.2 → 69.4 s
+    (3.48×); the control, 4 H2O cc-pVDZ with `engine auto`, 0.83 → 0.83 s
+    (1.00×). Even at 69 s, explicit Rys on cc-pVTZ is far slower than Auto,
+    because it still runs one component at a time: that is what K2.1b is
+    for.
   - **The default engine gains nothing**, and is not expected to: Auto's
     fused Fock build runs the closed forms and the HGP block kernel, and
     sends only the (7, 8) / (8, 8) buckets to Rys. K2.1a's payoff is

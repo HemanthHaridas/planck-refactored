@@ -414,8 +414,9 @@ historical design context, but they are no longer the source of truth for
   extended precision; naive sums over the 1200-point discretization left
   1e-14 of noise until compensated. 32–43 ns per call for every n, against
   0.46–3.04 µs; per-component Rys 2.1–3.2× faster (OS/HGP control
-  0.94–1.02×); ethylene cc-pVDZ with `engine rys` 2.22× end to end,
-  identical energy. The default engine is unaffected by design. Gated by
+  0.94–1.02×); end to end with `engine rys`, identical energies,
+  ethylene cc-pVDZ 2.22× and 2 H2O cc-pVTZ 3.48× (241 → 69 s). The default
+  engine is unaffected by design (4 H2O cc-pVDZ `engine auto` 1.00×). Gated by
   `planck-rys-roots` (fast vs reference ≤ 6.3e-15 for n ≤ 5, 4.2e-14 at
   n = 11; four mutations caught) and `planck-rys-box-invariance`, which
   the first, noisier generator failed. `planck-auto-dispatch-benchmark`
