@@ -402,6 +402,17 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Nuclear-attraction setup no longer zero-fills a 246 KB table per
+  primitive (S1, 2026-10-25).** `_os_nuclear_primitive` cleared
+  `double V[13][13][13][14]` on every primitive pair × charge × AO component,
+  whether the call came from H_core, PCM or ESP. That was 2.4 s of a 5.6 s RHF
+  on 12 H2O / 6-31G\*. The initializers on `V`, `V0` and the derivative's `dV0`
+  are dropped: every read is of an entry written first, so the result is
+  bitwise. Setup is now 0.05 s, and that run takes 3.3 s against PySCF's 6.3 s.
+  Gated by identical outputs on SCF / PCM / ESP / CHELPG / spherical-gradient
+  / RKS-PCM inputs and the core suite (80/80). Record:
+  `docs/SCF_VS_PYSCF_SCOPE.md`.
+
 - **Batched Boys calls and grow-only kernel scratch in the fused Fock loop
   (R2 `102f1d01`, `13c60826`, `0e3e074d`, 2026-10-23/24).** The closed forms
   and the HGP block kernel make one batched Boys call per block / lane group

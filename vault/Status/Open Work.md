@@ -1900,6 +1900,28 @@ identify the path taken. Not required for correctness or performance.
 
 ## Performance and maintenance opportunities
 
+- **RHF vs PySCF — scoped 2026-10-25; S1 landed**
+  (`docs/SCF_VS_PYSCF_SCOPE.md`). With matched tolerances the iteration
+  counts are identical, and Pople direct-SCF iterations are level with PySCF
+  (12 H2O / 6-31G\* 0.23 vs 0.42 s/iter). S1 (setup zero-fill) is fixed; see
+  Completion. Remaining: (S2) cc-pVXZ per-iteration cost is 4.5–7× PySCF; resume B2.2 families as a
+  basis-dependent traversal. (S3) No incremental ΔP build or density-weighted
+  block screening; a counting probe comes first. The `pyscf_bench.py`
+  iteration parser was fixed in the same pass: it counted MO-energy rows.
+- **Analytic gradients are 20–120× the SCF they follow — scoped 2026-10-25,
+  nothing landed** (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`). The ERI
+  Fock-build work never reached the derivative integrals: the 2e gradient is
+  per AO component (each of 12 derivative components from up to 24 fresh
+  contracted ERIs), runs the full square of AO pairs, is single-threaded, and
+  Auto routes it to per-component OS. 98 % of the gradient. Measured at four
+  threads: 4 H2O / 6-31G\* SCF 2.5 s vs gradient 54 s; 1 H2O / cc-pVTZ 0.9 s
+  vs 115 s. RMP2 gradients are dense unscreened `nao⁴` sweeps, and the second
+  RMP2 sweep only feeds a debug print (`PLANCK_DEBUG_RMP2_TERMS`), so it is
+  dead work on every run. UHF/ROHF carry their own copies of the 2e loop and
+  the 1e block is pasted four times. Plan: G1 dead work + Auto → HGP (1.5×),
+  G2 one threaded triangular loop, G3 a shell-quartet derivative block kernel
+  (the lever; this is shellpair Phase D), G4 MP2 onto the same loop, G5 1e
+  derivatives, G6 RI 3c (measure first).
 - **ERI/Fock BLAS-LAPACK migration — scoped 2026-10-17, nothing landed**
   (`docs/ERI_FOCK_BLAS_SCOPE.md`). BLAS buys nothing for the ERI kernels,
   direct-SCF digestion, the conventional `nb⁴` contraction (bandwidth-bound,
@@ -2097,7 +2119,9 @@ identify the path taken. Not required for correctness or performance.
     orbit per component. Unblocked: block kernels exist for all three engines.
   - **Phase D — gradient derivative ERIs** (`compute_eri_deriv_dispatch`) are
     still per-AO. Rys has no derivative kernel, so per-quartet Auto gradients need
-    one written first. The largest remaining piece.
+    one written first. The largest remaining piece. Now scoped as G3 of
+    `docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md` (an HGP-based derivative
+    block kernel, so the missing Rys derivative is not a blocker).
   - **Phase E — retire the per-AO adapter.** Make `build_shellpairs` emit
     shell-level `ShellPair` objects and drop `expand_shell_groups_to_ao_pairs`.
     Last, because it changes the shared `ShellPair` contract and must resolve

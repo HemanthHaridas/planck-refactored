@@ -37,12 +37,10 @@ import time
 from pathlib import Path
 
 ENERGY_RE = re.compile(r"Total Energy\s*:?\s+([-+0-9Ee\.]+)")
-# SCF table rows: "<iter> <E> <dE> <rms> <max> <diis> <damp> <time>" — exactly 8
-# whitespace-separated fields, the last being the per-iteration wall time. Anchor
-# on the full field count rather than a lazy .*? (which silently matched the wrong
-# column and reported an 8x-inflated per-iteration time).
-ITER_RE = re.compile(
-    r"^\s*\d+\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+([0-9.]+)\s*$", re.M)
+# Per-iteration wall time from the RHF phase probe (PLANCK_PHASE_TIMING). The
+# SCF table cannot be parsed reliably: an 8-field regex also matches MO-energy
+# rows, which inflated both the iteration count and the per-iteration time.
+ITER_RE = re.compile(r"^PLANCK_PHASE .*\biter_s=([0-9.]+)", re.M)
 NBASIS_RE = re.compile(r"Generated\s+\d+\s+Shells and\s+(\d+)\s+contracted functions")
 
 
@@ -98,7 +96,8 @@ def run_planck(exe: Path, atoms, basis: str, engine: str):
         inp.write_text(planck_input(atoms, basis, engine))
         before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
         t0 = time.perf_counter()
-        proc = subprocess.run([str(exe), str(inp)], capture_output=True, text=True)
+        proc = subprocess.run([str(exe), str(inp)], capture_output=True, text=True,
+                              env={**os.environ, "PLANCK_PHASE_TIMING": "1"})
         wall = time.perf_counter() - t0
         after = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
     out = proc.stdout
@@ -110,14 +109,14 @@ def run_planck(exe: Path, atoms, basis: str, engine: str):
     # not pay. Comparing raw wall clock at small nb would just measure exec().
     per_iter = sorted(iters)[len(iters) // 2] if iters else None
     if not e:
-        return None, None, wall, None, None
+        return None, None, wall, None, None, 0
     # ru_maxrss is bytes on macOS, KB on Linux.
     scale = 1.0 if sys.platform == "darwin" else 1024.0
     peak_mb = max(after - before, after) * scale / 1e6
-    return float(e[-1]), (int(nb[0]) if nb else None), wall, peak_mb, per_iter
+    return float(e[-1]), (int(nb[0]) if nb else None), wall, peak_mb, per_iter, len(iters)
 
 
-def run_pyscf(atoms, basis: str):
+def run_pyscf(atoms, basis: str, conv_tol_grad: float | None = None):
     from pyscf import gto, scf
 
     mol = gto.Mole()
@@ -135,6 +134,11 @@ def run_pyscf(atoms, basis: str):
     mf.conv_tol = 1e-9
     mf.init_guess = "hcore"  # match Planck guess hcore
     mf.max_cycle = 100
+    if conv_tol_grad is not None:
+        # PySCF's default orbital-gradient threshold is sqrt(conv_tol) = 3e-5,
+        # far looser than Planck's DIIS-error and density gates (1e-7), so the
+        # default comparison has PySCF stopping several iterations earlier.
+        mf.conv_tol_grad = conv_tol_grad
 
     t0 = time.perf_counter()
     e = mf.kernel()
@@ -161,6 +165,8 @@ def main() -> int:
     ap.add_argument("--basis", default="6-31g*")
     ap.add_argument("--engine", default="os")
     ap.add_argument("--threads", type=int, default=4)
+    ap.add_argument("--pyscf-conv-tol-grad", type=float, default=None,
+                    help="PySCF conv_tol_grad (default: PySCF's sqrt(conv_tol))")
     ap.add_argument("--sizes", type=int, nargs="+", default=[1, 2, 3, 4, 6])
     args = ap.parse_args()
 
@@ -176,7 +182,7 @@ def main() -> int:
 
     hdr = (f"{'system':>9} {'nb':>5} {'E_planck':>17} {'E_pyscf':>17} "
            f"{'|dE| (Eh)':>10} {'t/iter_pk':>10} {'t/iter_py':>10} {'slowdown':>9} "
-           f"{'RSS_planck':>11}")
+           f"{'it_pk':>6} {'it_py':>6} {'wall_pk':>8} {'wall_py':>8} {'RSS_planck':>11}")
     print(hdr)
     print("-" * len(hdr))
 
@@ -184,9 +190,9 @@ def main() -> int:
     for n in args.sizes:
         atoms = water_chain(n)
         label = f"{n}xH2O"
-        ep, nb_p, tp_wall, rss, pk_iter = run_planck(exe, atoms, args.basis, args.engine)
+        ep, nb_p, tp_wall, rss, pk_iter, pk_n = run_planck(exe, atoms, args.basis, args.engine)
         try:
-            es, nb_s, ts_wall, py_iter, n_it, conv = run_pyscf(atoms, args.basis)
+            es, nb_s, ts_wall, py_iter, n_it, conv = run_pyscf(atoms, args.basis, args.pyscf_conv_tol_grad)
         except Exception as exc:  # pragma: no cover
             print(f"{label:>9}  pyscf failed: {exc}")
             continue
@@ -202,10 +208,12 @@ def main() -> int:
         de = abs(ep - es)
         slow = (pk_iter / py_iter) if (pk_iter and py_iter) else float("nan")
         print(f"{label:>9} {nb_s:>5} {ep:>17.10f} {es:>17.10f} {de:>10.2e} "
-              f"{pk_iter:>9.3f}s {py_iter:>9.3f}s {slow:>8.1f}x {rss:>10.1f}M")
+              f"{pk_iter:>9.3f}s {py_iter:>9.3f}s {slow:>8.1f}x "
+              f"{pk_n:>6} {n_it:>6} {tp_wall:>7.2f}s {ts_wall:>7.2f}s {rss:>10.1f}M")
         rows.append(dict(system=label, nbasis=nb_s, e_planck=ep, e_pyscf=es,
                          delta=de, t_iter_planck=pk_iter, t_iter_pyscf=py_iter,
-                         slowdown=slow, rss_mb=rss))
+                         slowdown=slow, rss_mb=rss, iters_planck=pk_n,
+                         iters_pyscf=n_it, wall_planck=tp_wall, wall_pyscf=ts_wall))
 
     if rows:
         worst = max(r["delta"] for r in rows)
