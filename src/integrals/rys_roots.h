@@ -12,14 +12,22 @@ namespace HartreeFock
         // Maximum Rys roots for MAX_L=6 (H shells): n = floor(4*5/2)+1 = 11.
         static constexpr int RYS_MAX_ROOTS = 11;
 
-        // T thresholds for solver tier selection.
-        static constexpr double RYS_T_ZERO = 1.0e-14; // use Gauss-Legendre limit
+        // Below this T the one-root rule takes its T = 0 values.
+        static constexpr double RYS_T_ZERO = 1.0e-14;
 
         // Compute n Rys roots (t_r^2 in (0,1)) and weights (w_r > 0) for argument T.
         // Precondition: 1 <= n <= RYS_MAX_ROOTS, T >= 0.
+        // Fast: segment fits below 35 + 7n, the Laguerre asymptote above
+        // (rys_roots.cpp). The first call for each n builds its table.
         void rys_roots_weights(int n, double T,
                                double *__restrict__ roots,
                                double *__restrict__ weights) noexcept;
+
+        // The same rule by discretized Stieltjes in long double: accurate
+        // node by node (~1e-14), ~30 us at n = 11. Builds the fits; tests.
+        void rys_roots_weights_reference(int n, double T,
+                                         double *__restrict__ roots,
+                                         double *__restrict__ weights) noexcept;
 
         // Exact 1-point rule for the Rys/Boys measure:
         //   w_1   = F_0(T)

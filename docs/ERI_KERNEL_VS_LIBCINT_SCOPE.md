@@ -235,42 +235,69 @@ production today (explicit `engine rys`, the Auto table's Rys buckets).
 
 **Steps:**
 
-- **K2.1a, fast roots and weights (prerequisite).** Piecewise Chebyshev
-  fits in T for each n, with the coefficients generated once, at first use,
-  from the existing Golub–Welsch solver, which stays as the generator and
-  the reference. Above a cutoff T, the Gauss–Hermite asymptote: roots
-  \(x_i^2 / T\) and weights \(w_i / \sqrt{T}\) from the n-point Hermite
-  rule. One mechanism, no tables pasted into the source, and accuracy set
-  by the segment width. Rejected: porting libcint's / GAMESS's fitted
-  routines (thousands of lines of generated constants, and only n ≤ 5 in
-  the GAMESS form); a double-precision Golub–Welsch with a fixed-size QL
-  solve (the moment problem is ill-conditioned in double at large n and T,
-  which is why the current code uses `long double`; it would also stay at
-  roughly 0.2–0.5 µs).
-  - Gate: max relative error against `rys_roots_weights` ≤ 1e-14 on roots
-    and weights, n = 1..11, on a dense T sweep that includes every segment
-    boundary and the asymptotic cutoff; every per-component Rys regression
-    and the K0 value check (≤ 7e-13 against libcint) unchanged.
-  - Bar: ≤ 0.1 µs per call at n = 5. Replaces the solver in
-    `rys_roots_weights` itself, so the per-component Rys path gains too.
-  - **Progress (2026-10-25): the generator was broken first, and is
-    fixed.** The first fit prototype failed to converge, and so did the
-    asymptote cutoff search. Both pointed at the reference, not the fits. A
-    moment-reproduction check against long-double quadrature showed
-    `_boys_moment`'s upward recursion, used from T = 1, destroying the high
-    moments at T in [1, ~5]: n ≥ 7 rules with weights not summing to F_0,
-    moment errors up to 1.6e2 at n = 11. The one-root closed form cancelled
-    at small T (1.3e-10). Both are fixed (positive series below T = m, and
-    below T = 1 for one root) and gated by `planck-rys-roots`. The fixed
-    solver reproduces moments to 4e-14 for n ≤ 6, rising to 4.8e-11 at
-    n = 11 (the moment method's conditioning). That bounds what fits
-    generated from it can reach: the 1e-14 gate above holds for n ≤ 6 only,
-    and at n ≥ 7 the gate becomes "no worse than the generator".
-  - **Asymptote, measured.** Against the fixed reference the Laguerre
-    (α = −½) asymptote has to be compared at the generator's own accuracy,
-    not 1e-15; the first search used 1e-15 and so never found a cutoff.
-    Redo the cutoff search per n at the generator's measured precision
-    before fixing segment widths.
+- **K2.1a, fast roots and weights — DONE (2026-10-25).**
+  `rys_roots_weights` (`rys_roots.cpp`) is now three pieces:
+  - **Reference generator:** discretized Stieltjes (Gautschi). The Rys
+    measure is replaced by a 60-panel, 20-point Gauss–Legendre grid in t;
+    the recurrence is built on that discrete measure with Neumaier-
+    compensated sums; roots come from the Jacobi matrix and weights from the
+    Christoffel function. ~30 µs at n = 11, used only to build tables and in
+    the test. Exposed as `rys_roots_weights_reference`.
+  - **Asymptote** for T ≥ 35 + 7n: generalized Gauss–Laguerre (α = −½),
+    roots \(u_i/T\), weights \(\lambda_i / (2\sqrt T)\). The cutoff is where
+    it meets the generator's ~2e-15 floor, read off a measured table per n.
+  - **Fits** below it: Chebyshev degree 13 on unit T segments, built per n
+    on first use (0.01–0.04 s, 21–270 KB, 1.3 MB for all n), evaluated by
+    one Clenshaw pass over all 2n roots and weights.
+
+  The scoped plan (fit the old Golub–Welsch output) did not survive
+  measurement, in three ways worth keeping:
+  1. **The old solver was wrong** at T ∈ [1, ~5] for n ≥ 4 (upward Boys
+     recursion); fixed separately in `a1cf7403`.
+  2. **Even fixed, its nodes could not seed fits.** Built from moments, the
+     rule reproduces moments (≤ 5e-11) but its individual roots and weights
+     were off by up to 1e-7 (n = 8) and 8e-3 (n = 11): the moment problem is
+     ill-conditioned. Fitting them would interpolate between samples whose
+     errors are not consistent across T.
+  3. **`long double` is `double` on Apple silicon** (53-bit mantissa), so no
+     part of any of this had extra precision. The first discretized
+     Stieltjes still carried ~1e-14 of noise, which the fits reproduced
+     whatever their degree. The cause was naive summation over 1200 points
+     (~√N ε). Compensated sums brought the generator to ≤ 1.4e-15 for
+     n ≤ 5 and 5e-15 at n = 9.
+
+  **Accuracy** (`planck-rys-roots`), in max |Δr| and max |Δw|/F₀ against
+  the generator: ≤ 6.3e-15 for n ≤ 5, 4.2e-14 at n = 11, the same at degree
+  13, 16 and 19 (the generator's rounding, not the fits). Moments against
+  quadrature: 4e-14 (n = 1) to 1.0e-13 (n = 11), against 4.8e-11 for the
+  moment solver. The test catches an off-by-one segment (9.7e-6), degree 8
+  (6.6e-13), a cutoff of 25 + 5n (1.7e-12) and dropping the compensated sum.
+  `planck-rys-box-invariance` (max-box vs per-component, 1e-13) failed at
+  1.5e-13 with the first, noisier generator and passes now.
+
+  **Performance:**
+  - Root finder, per call, T ∈ [0, 40]: 32–43 ns for every n, against
+    0.46–3.04 µs (21× at n = 3, 44× at n = 5, 72× at n = 8).
+  - Per-component Rys (`planck-auto-dispatch-benchmark`, 1 thread, the old
+    `rys_roots.cpp` relinked into the same build for the "before"): 2.1–3.2×
+    per basis (geometric mean over buckets), up to 5.7× in a bucket. By
+    total L: unchanged at L ≤ 1 (one root, closed form), 2.8–4.5× at
+    L = 2–8, 1.4–1.9× at L ≥ 11 where the recurrences dominate. OS and HGP,
+    which do not use the roots, measured 0.94–1.02× (the control).
+  - Rys is now the fastest per-component engine in 15 of 238 buckets (none
+    before), all high L (He cc-pV5Z, one cc-pVTZ), by 1.0–1.5×. The Auto
+    table (`kAutoEngine`) predates this and should be refit.
+  - End to end, 4 threads, best of 3, energies identical: ethylene
+    cc-pVDZ with `engine rys` 1.55 → 0.70 s (2.22×); water RMP2/STO-3G
+    `engine rys` 0.28 → 0.31 s (startup and one-time table build on a case
+    needing 1–2 roots). Not yet measured: 2 H2O cc-pVTZ with
+    `engine rys`, and 4 H2O cc-pVDZ with `engine auto` as the
+    no-regression control.
+  - **The default engine gains nothing**, and is not expected to: Auto's
+    fused Fock build runs the closed forms and the HGP block kernel, and
+    sends only the (7, 8) / (8, 8) buckets to Rys. K2.1a's payoff is
+    `engine rys` and, above all, K2.1b, which could not beat libcint on
+    the old finder.
 - **K2.1b, prototype `RysBlockKernel` in the harness.** A header-only
   kernel under the `block_eri.h` contract, beside `hgp_block_eri.h`. The
   geometry and 1D VRR move out of `rys.cpp`'s anonymous namespace into a

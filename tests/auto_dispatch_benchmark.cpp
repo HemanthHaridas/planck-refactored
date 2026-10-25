@@ -33,6 +33,7 @@
 #include "integrals/os.h"
 #include "integrals/rys.h"
 #include "integrals/shellpair.h"
+#include "require_boys_library.h"
 
 namespace
 {
@@ -307,6 +308,11 @@ namespace
 
 int main(int argc, char **argv)
 {
+    // Without the out-of-tree Boys core every OS/HGP integral segfaults at
+    // the first call (the binary used to die with no output).
+    if (!require_boys_library())
+        return 1;
+
     int reps = 3;
     std::size_t max_quartets = 2000;
     std::string csv_path = "docs/auto_dispatch_timings.csv";

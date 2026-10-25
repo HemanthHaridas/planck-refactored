@@ -1,10 +1,17 @@
-// planck-rys-roots: the Rys rule against an independent reference.
+// planck-rys-roots: the Rys rule (rys_roots.cpp) checked three ways.
 //
-// An n-point Rys rule for argument T must reproduce the Boys moments
-//   F_k(T) = int_0^1 t^{2k} e^{-T t^2} dt,   k = 0 .. 2n-1,
-// as sum_i w_i r_i^k (r_i = t_i^2). The moments here come from composite
-// Gauss-Legendre quadrature in long double, which is stable at any T, so the
-// check shares no arithmetic with the solver in rys_roots.cpp.
+//   moments     an n-point rule for argument T must reproduce the Boys
+//               moments F_k(T) = int_0^1 t^{2k} e^{-T t^2} dt, k < 2n, as
+//               sum_i w_i r_i^k. They come from composite Gauss-Legendre
+//               quadrature (400 panels). The reference generator also
+//               discretizes with Gauss-Legendre (60 panels), so this is not
+//               independent of it, but it is of the fits and of any
+//               moment-based solver.
+//   scaling     above the asymptote cutoff the rule is exactly roots / T and
+//               weights / sqrt(T); the reference must obey it.
+//   fast        the fitted rule against the reference at every segment
+//               boundary and both sides of the cutoff (which also checks the
+//               fast path's Laguerre nodes).
 //
 // Why it exists: until 2026-10-25 the solver built its moments by upward
 // recursion from T = 1, which loses every digit at T in [1, ~5] for the
@@ -12,6 +19,9 @@
 // not sum to F_0. No test called rys_roots_weights directly; the Rys
 // regression cases never reach n >= 7, and the high-L Rys case is a single
 // atom (T = 0 for every quartet), so nothing exercised the window.
+//
+// "long double" below is double on Apple silicon; the bounds are set from
+// measurements there.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -111,12 +121,12 @@ int main()
                 err = std::max(err, static_cast<double>(std::abs(q - F[k]) / F[k]));
             }
             worst[n] = std::max(worst[n], err);
-            // n <= 6: the double-precision eigensolve's floor (4-5e-14
-            // measured). Above, the moment (Hankel) problem's own
-            // conditioning, about 4x per root: measured 1.7e-13 (n = 7) to
-            // 4.8e-11 (n = 11). The bound keeps a 2-3x margin. The old
-            // recursion failed it from n = 4 (5e-12) to n = 11 (1.6e2).
-            const double bound = 1e-13 * std::pow(4.0, std::max(0, n - 6));
+            // Measured 4.0e-14 (n = 1) to 1.0e-13 (n = 11); the floor is
+            // this file's quadrature reference, which runs in double on
+            // Apple silicon (long double is double there). The moment-based
+            // solver this replaced reached 4.8e-11 at n = 11, and its
+            // pre-2026-10-25 recursion failed from n = 1 to 1.6e2 at n = 11.
+            const double bound = 3e-13;
             if (!ok || !(err <= bound))
             {
                 if (++failures <= 10)
@@ -127,6 +137,68 @@ int main()
     }
     for (int n = 1; n <= kNMax; ++n)
         std::printf("n=%2d  worst moment error %.2e over %zu T values\n", n, worst[n], Ts.size());
+
+    // What an integral sees: max_i |dr_i| and max_i |dw_i| / F_0.
+    const auto rule_error = [](int n, const double *a, const double *b, const double *A, const double *B)
+    {
+        double F0 = 0.0, e = 0.0;
+        for (int i = 0; i < n; ++i)
+            F0 += B[i];
+        for (int i = 0; i < n; ++i)
+            e = std::max({e, std::abs(a[i] - A[i]), std::abs(b[i] - B[i]) / F0});
+        return e;
+    };
+    double R[kNMax], W[kNMax];
+
+    // Above the cutoff the rule scales exactly: roots as 1/T, weights as
+    // 1/sqrt(T). Check the reference obeys it, anchored at T = 1e4. (The
+    // fast path's own Laguerre nodes are checked below, against the
+    // reference, on both sides of the cutoff.)
+    double worst_asym = 0.0;
+    for (int n = 2; n <= kNMax; ++n)
+    {
+        double u[kNMax], lam[kNMax];
+        HartreeFock::Rys::rys_roots_weights_reference(n, 1.0e4, u, lam);
+        for (int i = 0; i < n; ++i)
+            u[i] *= 1.0e4, lam[i] *= 2.0 * std::sqrt(1.0e4);
+        for (double T : {35.0 + 7.0 * n, 150.0, 400.0, 1000.0})
+        {
+            HartreeFock::Rys::rys_roots_weights_reference(n, T, R, W);
+            for (int i = 0; i < n; ++i)
+                r[i] = u[i] / T, w[i] = lam[i] / (2.0 * std::sqrt(T));
+            worst_asym = std::max(worst_asym, rule_error(n, r, w, R, W));
+        }
+    }
+    std::printf("reference vs exact large-T scaling: %.2e\n", worst_asym);
+    if (!(worst_asym <= 1e-14))
+        ++failures, std::printf("FAIL: reference breaks the large-T scaling\n");
+
+    // The fast rule against the reference, on every segment boundary, segment
+    // midpoints, and both sides of the asymptote cutoff. Measured: <= 6.3e-15
+    // for n <= 5 (what planck-rys-box-invariance needs on water 6-31G*),
+    // rising to 4.2e-14 at n = 11, which is the reference's own rounding,
+    // not the fits (degree 13, 16 and 19 all give the same numbers). An
+    // off-by-one segment, degree 8 or a cutoff of 25 + 5n give 9.7e-6,
+    // 6.6e-13 and 1.7e-12.
+    for (int n = 1; n <= kNMax; ++n)
+    {
+        const double cut = 35.0 + 7.0 * n;
+        std::vector<double> Tf{0.0, 1e-12, 1e-6, cut - 1e-9, cut, cut + 1e-9, 2.0 * cut};
+        for (double T = 0.0; T < cut + 2.0; T += 0.5)
+            Tf.push_back(T), Tf.push_back(T + 0.123);
+        double worst_fast = 0.0;
+        for (double T : Tf)
+        {
+            HartreeFock::Rys::rys_roots_weights(n, T, r, w);
+            HartreeFock::Rys::rys_roots_weights_reference(n, T, R, W);
+            worst_fast = std::max(worst_fast, rule_error(n, r, w, R, W));
+        }
+        const double bound = n <= 5 ? 1e-14 : 1e-13;
+        std::printf("n=%2d  fast vs reference %.2e (bound %.0e)\n", n, worst_fast, bound);
+        if (!(worst_fast <= bound))
+            ++failures, std::printf("FAIL n=%d: fast rule departs from the reference\n", n);
+    }
+
     std::printf("%s\n", failures ? "FAILED" : "PASS");
     return failures ? 1 : 0;
 }

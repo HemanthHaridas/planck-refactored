@@ -1932,15 +1932,11 @@ identify the path taken. Not required for correctness or performance.
     done** (`planck-eri-class-share --k2`): for K = 1 the HGP block kernel
     splits VRR 44 % / HRR 44 % / readout 12 %, Boys ~0, and the VRR alone
     exceeds libcint's whole quartet, so the lever is the algorithm. **K2.1
-    scoped:** a libcint-style 2D Rys block kernel. Prerequisite K2.1a: the
-    Rys root finder (Golub–Welsch, `long double` moments, a heap Eigen
-    eigensolve) costs 0.78–1.42 µs for 3–5 roots, more than libcint's whole
-    quartet; replace it with Chebyshev fits generated from it at first use
-    (bar ≤ 0.1 µs at n = 5, ≤ 1e-14 relative for n ≤ 6, no worse than the
-    generator above). The generator itself was wrong at T in [1, 5] for
-    n ≥ 4 and is fixed (see Completion); the fits and the asymptote cutoff
-    are not built yet. Then K2.1b (prototype, land
-    at ≥ 2× over HGP), K2.1c (chain into Auto), K2.2 (the K crossover). **G**
+    scoped:** a libcint-style 2D Rys block kernel. **K2.1a done** (see
+    Completion): Rys roots and weights now cost 32–43 ns for every n.
+    Next: **K2.1b** (prototype `RysBlockKernel` in the harness; land at ≥ 2×
+    over the HGP block on K = 1, L ≥ 4), K2.1c (chain into Auto), K2.2
+    (the K crossover). **G**
     (general contraction) is small: the post-K1 family probe gains 1.00×
     over a cc-pVDZ sweep; build only if closed-form-only families clear
     1.10×. Also: rerun `pyscf_bench.py` end to end; check the RI auxiliary
@@ -2140,6 +2136,12 @@ identify the path taken. Not required for correctness or performance.
     1.1× faster), so near-tied buckets may have moved. Rerun
     `planck-auto-dispatch-benchmark` and `scripts/fit_auto_dispatch.py`; a
     changed table means editing `kAutoEngine` in `rys.cpp`, not only the doc.
+    **Now more pressing (2026-10-25):** after K2.1a the per-component Rys
+    path is 2.1–3.2× faster, and Rys is the fastest engine in 15 of 238
+    buckets where it won none (all high L: He cc-pV5Z, one cc-pVTZ, by
+    1.0–1.5×). Fresh before/after CSVs from that run, single thread:
+    `planck-auto-dispatch-benchmark` (which segfaulted at startup until its
+    Boys loader was added the same day).
     - **Correction:** the earlier note said §12's `nosym`/`d2h` columns go
       through the fused loop. They do not. `planck-symm-fock-benchmark`
       times the two-phase `_compute_2e_fock{,_auto}` builds, which is why

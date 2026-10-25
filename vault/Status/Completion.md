@@ -402,6 +402,27 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Fast Rys roots and weights (K2.1a, 2026-10-25).** `rys_roots_weights`
+  is now Chebyshev segment fits below T = 35 + 7n and the Laguerre(−½)
+  asymptote above, built per n on first use from a new reference generator
+  (discretized Stieltjes with compensated sums and Christoffel weights,
+  `rys_roots_weights_reference`). It replaces the moment-based
+  Golub–Welsch solver, whose nodes were off by up to 8e-3 at n = 11 even
+  after the recursion fix (moment problems are ill-conditioned; the rule
+  still reproduced moments, which is why integrals survived). Found along
+  the way: `long double` is `double` on Apple silicon, so nothing had
+  extended precision; naive sums over the 1200-point discretization left
+  1e-14 of noise until compensated. 32–43 ns per call for every n, against
+  0.46–3.04 µs; per-component Rys 2.1–3.2× faster (OS/HGP control
+  0.94–1.02×); ethylene cc-pVDZ with `engine rys` 2.22× end to end,
+  identical energy. The default engine is unaffected by design. Gated by
+  `planck-rys-roots` (fast vs reference ≤ 6.3e-15 for n ≤ 5, 4.2e-14 at
+  n = 11; four mutations caught) and `planck-rys-box-invariance`, which
+  the first, noisier generator failed. `planck-auto-dispatch-benchmark`
+  segfaulted at startup (no Boys loader, like nine others earlier); fixed.
+  Extended suite 135/139 (the known rccsdt cases). Record:
+  `docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md` (K2.1a).
+
 - **Rys roots and weights fixed at T >= 1 and at small T (2026-10-25).**
   Found while scoping K2.1a. `_boys_moment` (`rys_roots.cpp`) built the
   moments by upward recursion from T = 1, which is stable only for T >= m;

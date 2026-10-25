@@ -1567,6 +1567,7 @@ if(BUILD_TESTING)
 
     add_executable(planck-auto-dispatch-benchmark
         ${CMAKE_SOURCE_DIR}/tests/auto_dispatch_benchmark.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
         ${SRC_DIR}/basis/basis.cpp
         ${SRC_DIR}/basis/gaussian.cpp
         ${SRC_DIR}/basis/gbs_parser.cpp

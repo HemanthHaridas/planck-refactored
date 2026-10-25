@@ -3305,35 +3305,73 @@ from the positive series given below. The closed form
 \(F_1 = (F_0 - e^{-T})/(2T)\) subtracts two nearly equal numbers there and
 loses digits (1.3e-10 relative at \(T = 2\times10^{-6}\)).
 
-**General case (Stieltjes-Jacobi procedure)**: For \(n > 1\), the Rys
-measure is \(e^{-Tt^2} dt\) on \([0,1]\). The roots and weights are obtained by
-building the three-term recurrence (Jacobi) matrix of the orthogonal polynomial
-family with respect to this measure. The algorithm:
+**General case**: for \(n > 1\) the rule is the \(n\)-point Gauss rule of
+the measure \(e^{-Tt^2}\,dt\) on \([0,1]\), in the variable \(u = t^2\).
+Every Gauss rule comes from the three-term recurrence of the measure's
+orthogonal polynomials: its coefficients \(\alpha_k, \beta_k\) form a
+symmetric tridiagonal (Jacobi) matrix \(\mathbf J\) whose eigenvalues are
+the roots. The question is how to get \(\alpha_k, \beta_k\) accurately, and
+then how to make the result fast.
 
-1. Compute \(2n+1\) Boys moments
-   \(F_m(T) = \int_0^1 t^{2m} e^{-Tt^2} dt\) in long double precision.
-   In the \(T \to 0\) limit this reduces to the Gauss-Legendre moment
-   \(1/(2m+1)\). For \(T < m\) use the series
-   \[
-   F_m(T) = e^{-T} \sum_{n \ge 0}
-   \frac{(2T)^n}{(2m+1)(2m+3)\cdots(2m+2n+1)},
-   \]
-   whose terms are all positive; for \(T \ge m\), upward recursion from
-   \(F_0\) (see the pitfall below).
-2. Construct orthonormal polynomials via the Gram-Schmidt Stieltjes procedure,
-   recording the diagonal (\(\alpha_k\)) and sub-diagonal (\(\beta_k\)) entries
-   of the symmetric \(n \times n\) Jacobi matrix \(\mathbf J\).
-3. Diagonalize \(\mathbf J\) with a symmetric eigensolver. The eigenvalues are
-   the Rys roots \(t_r^2\); the weight for root \(r\) is
-   \(w_r = F_0(T) \cdot V_{0r}^2\) where \(V_{0r}\) is the first component of
-   the \(r\)-th eigenvector. This is the Golub–Welsch formula.
-4. If the Gram-Schmidt procedure encounters a degenerate norm or the Jacobi
-   matrix diagonalization fails, the algorithm falls back to pre-tabulated
-   Gauss-Legendre roots and weights on \([0,1]\). These tables are a safety net,
-   not the normal small-\(T\) path. They are the right rule only at
-   \(T = 0\), so reaching them at any other \(T\) means the moments were bad.
+**Not from moments.** The textbook route builds the recurrence from the
+moments \(F_0, \dots, F_{2n-1}\). That problem is ill-conditioned (it goes
+through a Hankel matrix), and it fails in an instructive way. Such a rule
+reproduces its moments well, to \(\le 5\times10^{-11}\) here, yet its
+individual roots and weights were off by up to \(10^{-7}\) at \(n = 8\) and
+\(8\times10^{-3}\) at \(n = 11\). For an integral that is harmless, because
+an integral only sees \(\sum_r w_r P(u_r)\) for a polynomial \(P\), which
+is a combination of moments. For anything that uses the nodes themselves,
+such as fitting them as functions of \(T\), it is fatal. Planck used this
+route until 2026-10-25.
+
+**Discretized Stieltjes** (Gautschi). Replace the measure by a fine
+quadrature, here 60 panels of 20-point Gauss–Legendre in \(t\), and run the
+Stieltjes procedure on that discrete measure: \(\alpha_k\) and \(\beta_k\)
+are ratios of sums \(\sum_j W_j\,p_k(u_j)^2\) and
+\(\sum_j W_j\,u_j\,p_k(u_j)^2\) of positive terms, with each \(p_k\)
+evaluated by the recurrence at the 1200 grid points. No moments appear,
+so there is nothing ill-conditioned to amplify. Two details carry the
+accuracy:
+
+- **Compensated sums.** Summed naively over 1200 points, the inner products
+  carry about \(\sqrt N\,\varepsilon \approx 10^{-14}\) of rounding noise,
+  and it shows up as noise in the nodes. Neumaier summation brings the
+  generator to \(\le 1.4\times10^{-15}\) for \(n \le 5\). This matters on
+  Apple silicon in particular, where `long double` is the same 53-bit
+  `double`. No part of Planck's Rys code may rely on extended precision.
+- **Christoffel weights.** The weights come from
+  \(w_r = 1 / \sum_k \hat p_k(u_r)^2\) over the orthonormal polynomials,
+  rather than from the eigenvectors of \(\mathbf J\) (the Golub–Welsch
+  formula), whose error grows as \(\varepsilon\) over the gap between
+  neighbouring roots.
+
+This generator costs about 30 µs per call at \(n = 11\). It is the
+reference (`rys_roots_weights_reference`), not what integrals call.
+
+**What integrals call** is cheap because the rule is a smooth function of
+\(T\) alone:
+
+- For \(T \ge 35 + 7n\) the upper limit of the integral stops mattering
+  (\(e^{-T}\) is below roundoff), and substituting \(x = T u\) turns the
+  measure into the generalized Laguerre weight \(x^{-1/2} e^{-x}\) on
+  \([0, \infty)\). So the roots are \(x_i / T\) and the weights
+  \(\lambda_i / (2\sqrt T)\), with \(x_i, \lambda_i\) the \(n\)-point
+  Gauss–Laguerre (\(\alpha = -\tfrac12\)) rule, computed once.
+- Below that, each root and weight is a degree-13 Chebyshev interpolant on
+  unit segments of \(T\), built from the reference the first time each
+  \(n\) is used (0.01–0.04 s). One Clenshaw pass evaluates all \(2n\)
+  functions together.
+
+The fast rule matches the reference to \(\le 6\times10^{-15}\) for
+\(n \le 5\) and \(4\times10^{-14}\) at \(n = 11\), and costs 32–43 ns per
+call for every \(n\). The moment solver it replaced cost 0.46–3.0 µs. A
+per-component Rys integral is 2–3× faster overall: the root finder used to
+be a large share of it.
 
 #### Pitfall: upward Boys recursion, and how it went unnoticed
+
+The moment-based solver described above is gone, but the defect that
+exposed it is worth keeping.
 
 The upward recursion
 \(F_k = \big((2k-1)F_{k-1} - e^{-T}\big)/(2T)\) multiplies whatever error
@@ -3347,17 +3385,26 @@ Planck's solver used to switch to upward recursion at \(T = 1\). For
 \(T \in [1, \sim 5]\) the high moments then had no correct digits, and the
 rules for \(n \ge 7\) roots had weights that did not even sum to \(F_0\);
 \(n = 4\)–6 were degraded to between \(5\times10^{-12}\) and
-\(5\times10^{-8}\). The fix is the switch at \(T = m\) above. It stayed
-hidden for a reason worth remembering. Every test checked Rys against
+\(5\times10^{-8}\). The fix was the positive-term series
+\(F_m(T) = e^{-T}\sum_{n\ge0} (2T)^n / \big((2m+1)(2m+3)\cdots(2m+2n+1)\big)\)
+below \(T = m\), where upward recursion is unstable. It stayed hidden for a
+reason worth remembering. Every test checked Rys against
 itself (box invariance) or against other engines on low-\(L\) molecules
 (\(n \le 5\)). The one high-\(L\) Rys case is a single neon atom, where
 every quartet sits on one centre, so \(\mathbf P = \mathbf Q\) and
 \(T = 0\). The window was never entered. The test that found it,
 `planck-rys-roots`, checks the rule against an independent reference
-instead: an \(n\)-point rule must reproduce \(F_0, \dots, F_{2n-1}\), and
-the moments come from long-double quadrature. It passes at 4e-14 for
-\(n \le 6\) and up to 4.8e-11 at \(n = 11\), which is the conditioning of
-building a rule from moments, and the old solver fails it from \(n = 1\).
+instead: an \(n\)-point rule must reproduce \(F_0, \dots, F_{2n-1}\), with
+the moments from an independent quadrature. The recursion-broken solver
+failed it from \(n = 1\) to a 1.6e2 error at \(n = 11\). The current rule
+passes at 4e-14 to 1.0e-13. The same test also checks the fast rule
+against the reference at every segment boundary.
+
+The broader lesson: **reproducing the moments is not the same as getting
+the nodes right**. The repaired moment solver passed the moment check while
+its nodes were off by up to \(8\times10^{-3}\). That only came out when its
+nodes were compared with the large-\(T\) asymptote, a check that does not
+go through moments at all.
 
 ### The Rys 1D VRR
 
@@ -3607,8 +3654,8 @@ mechanical copy with no risk of drift.
 | `src/integrals/rys.h` | Public API: `_compute_2e`, `_compute_2e_fock`, `_compute_2e_fock_uhf`, and `_auto` variants |
 | `src/integrals/rys.cpp` | VRR (`_rys_vrr_1d`), HRR (`_rys_hrr_ab`, `_rys_hrr_cd`), primitive and contracted ERI, Schwarz table, Fock builders, three-way auto-dispatch table + selector (`kAutoEngine`, `_auto_engine`) |
 | `src/integrals/rys_roots.h` | `rys_roots_weights` declaration; exact 1-point formula `rys_1pt` |
-| `src/integrals/rys_roots.cpp` | Pre-tabulated GL rules; Boys moments (positive series below T = m, upward recursion above); Stieltjes–Jacobi Gram-Schmidt + Eigen eigendecomposition |
-| `tests/rys_roots.cpp` | `planck-rys-roots`: every rule n = 1..11 against moments from long-double quadrature |
+| `src/integrals/rys_roots.cpp` | Fast rule: Chebyshev segment fits below T = 35 + 7n, Laguerre(−½) asymptote above; reference: discretized Stieltjes with compensated sums and Christoffel weights (`rys_roots_weights_reference`) |
+| `tests/rys_roots.cpp` | `planck-rys-roots`: moments against quadrature, large-T scaling, fast rule against the reference |
 | `tests/auto_dispatch_benchmark.cpp` | Per-bucket timing harness that produces `docs/auto_dispatch_timings.csv` |
 | `scripts/fit_auto_dispatch.py` | Fitter that consumes the CSV and emits `docs/auto_dispatch_fit.json` and `docs/auto_dispatch_curves.svg` |
 
