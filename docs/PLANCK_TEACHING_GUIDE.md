@@ -295,6 +295,60 @@ contraction coefficients during basis-set setup, so later integral code only
 needs the primitive normalization \(N_p\) and the already-normalized contracted
 coefficients.
 
+### Redundant Primitives and the Optimized General Contraction
+
+Correlation-consistent sets are published with redundant primitives. Water
+cc-pVDZ from the Basis Set Exchange lists hydrogen as
+
+```
+S    4    13.01  1.962  0.4446  0.1220     (contracted)
+S    1    0.1220                            (uncontracted)
+P    1    0.727
+```
+
+The outermost exponent, 0.1220, appears twice: once inside the contraction
+and once as its own shell. The second copy lets the variational calculation
+reshape the valence region, but it also means the first copy adds nothing to
+the space the basis spans. Call the contraction \(\chi = \sum_p d_p g_p\) and
+the free shell \(g_u\), with \(\alpha_u\) equal to one of the \(\alpha_p\).
+Then \(\chi' = \chi - d_u g_u\) is a linear combination of functions already
+in the basis, and \(\{\chi', g_u\}\) spans exactly what \(\{\chi, g_u\}\) did.
+The same holds component by component for \(L > 0\), since both shells carry
+the same Cartesian components.
+
+So the redundant primitive can be **dropped from the contraction**: delete
+its line and renormalize. Every quantity that is invariant to a change of
+basis within the same span is unchanged: SCF, MP2, CC and CI energies,
+densities in real space, gradients. What does change is anything that labels
+or partitions by individual basis function: MO coefficients, and Mulliken,
+Löwdin and Mayer analyses, because \(\chi'\) is a different function from
+\(\chi\).
+
+This is the *optimized general contraction* (Hashimoto, Hirao and Tatewaki,
+1995). PySCF ships its cc-pVXZ files in this form. It matters for cost
+because integral work scales with the number of primitive quartets, i.e.
+with the fourth power of the primitive counts on the shells involved:
+
+| water, per molecule | primitives as published | after dropping |
+|---|---|---|
+| cc-pVDZ | 28 (O s 9+9, O p 4, H s 4) | 24 (8+8, 3, 3) |
+| cc-pVTZ | 42 | 34 |
+
+Planck's reader applies it to every orbital basis it loads
+(`drop_redundant_primitives`, `src/basis/gaussian.cpp`). A primitive is
+dropped from a contracted shell when an uncontracted shell of the same L on
+the same element has the same exponent. A contraction is never emptied, and
+Pople sets, which carry no such duplicates, come through unchanged. On water
+chains the direct Fock build becomes 2.1–2.3× faster in cc-pVDZ and
+1.5–1.8× in cc-pVTZ, with SCF energies equal within the convergence
+tolerance (`docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`).
+
+The lesson in the measurement is the one worth keeping: before optimizing
+how an integral is computed, count how many are being computed. Each kernel
+change in this guide (closed forms, block kernels, lanes, batched Boys calls)
+was worth well under 2× on its own; the largest remaining cc-pVXZ gap to
+PySCF was in the basis file.
+
 ### Normalization of a Primitive
 
 For a Cartesian Gaussian with angular momentum \((l_x, l_y, l_z)\) and exponent \(\alpha\):
@@ -1819,6 +1873,23 @@ For large \(t\), the Boys function is computed via the asymptotic expansion
 Taylor series, polynomial approximation, or tabulated interpolation is
 typically used.
 
+**Precision has to be relative, at every order.** \(F_m(t)\) spans many
+orders of magnitude: it falls steeply with \(m\) at large \(t\). Any
+evaluation scheme whose error is fixed in *absolute* terms keeps few
+significant digits exactly where high-angular-momentum integrals need them.
+Planck's Boys core had such a defect until v1.2.1: high-order values came
+back with too few digits over part of the argument range. That put errors
+of up to 7e-6 into pure-f integrals (cc-pVTZ), growing with \(L\). Every
+cross-engine gate stayed green, because OS, HGP and the closed forms all
+share the same Boys function and agreed with each other. It was found by
+comparing against an independent code (libcint), and localized by Planck's
+own Rys engine, which uses quadrature roots instead of the Boys function and
+matched libcint to 2e-16. Two rules follow:
+- Test a special function against a high-precision reference (mpmath) at
+  every order and argument range in use, as a relative error.
+- Cross-engine agreement only proves something when the engines don't share
+  the code being tested.
+
 The vertical recursion for nuclear attraction auxiliary integrals:
 
 \[
@@ -1994,11 +2065,21 @@ error accumulates. Running the density test at `tol_eri / 10` fixes it:
 | \(10^{-11}\) (used) | 1.19–1.33× | \(\le 6\times10^{-10}\) | unchanged |
 | \(10^{-12}\) | 1.12–1.21× | below print precision | unchanged |
 
-(Water chains in 6-31G\*, cc-pVDZ and cc-pVTZ, four threads; the full
-record is in `docs/SCF_VS_PYSCF.md`, step S3.) The lesson is general:
-**a screening error that is consistent from iteration to iteration is
-harmless, but one that changes each iteration is noise the convergence
-test will see.** The Schwarz table itself is never density-screened.
+(Water chains in 6-31G\*, cc-pVDZ and cc-pVTZ, four threads, at
+`tol_density` \(10^{-7}\); the full record is in `docs/SCF_VS_PYSCF.md`,
+step S3.) The lesson is general: **a screening error that is consistent
+from iteration to iteration is harmless, but one that changes each iteration
+is noise the convergence test will see.** The Schwarz table itself is never
+density-screened.
+
+Tightening \(\epsilon\) only moves the noise floor; it cannot remove it. At
+the default `tol_density` (\(10^{-10}\)) even the \(10^{-11}\) test leaves the
+DIIS error stalled at 1–3\(\times10^{-10}\), right at the convergence gate,
+and 2 waters in cc-pVTZ took 88 iterations instead of 18. So the SCF drops
+the screen once the DIIS error is below \(10^{-8}\) and rebuilds G once from
+the full P, discarding the drift. The screen still pays over the middle of
+the run, where \(\Delta\mathbf P\) is small enough to skip most blocks but the
+DIIS error is still far above the noise; the tail is exact.
 
 ### Permutation Symmetry of the ERI Tensor
 
@@ -2163,7 +2244,9 @@ Skipping individual primitive quartets whose bound is below some
 \(\varepsilon\) removes another ~20 % on water clusters. The Fock error then
 grows like 300–500 × \(\varepsilon\), because many small omissions add up.
 That is an approximation with a tolerance, like Schwarz screening itself,
-not a free lunch. One trap is worth knowing in advance. The Schwarz table
+not a free lunch. (Primitives that are not small but *redundant* are a
+different matter: those are removed exactly, at basis-reading time — see
+"Redundant Primitives and the Optimized General Contraction" in §4.) One trap is worth knowing in advance. The Schwarz table
 \(Q(i,j) = \sqrt{(ij|ij)}\) is computed with the same integral kernel. If the
 primitive skip is active while \(Q\) is built, \(Q\) comes out *smaller*
 than the true \(\sqrt{(ij|ij)}\). Schwarz then stops being an upper bound, and

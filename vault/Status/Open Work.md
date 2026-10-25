@@ -33,6 +33,14 @@ truth for what remains.
 
 ## Build and packaging
 
+- **`ctest` runs Eigen's own test suite and reports 14 failures (found
+  2026-10-25).** `fetchcontent_makeavailable(eigen)` registers Eigen's tests
+  (`resize`, the `sblat*`/`dblat*`/`cblat*`/`zblat*` BLAS tests) in Planck's
+  CTest tree, but nothing builds them, so every one fails in ~0 s and buries
+  real failures in the summary. Fix: keep Eigen's testing off at fetch
+  (e.g. `set(EIGEN_BUILD_TESTING OFF)` / `BUILD_TESTING` scoped around the
+  `fetchcontent_makeavailable` call, depending on what Eigen 3.4.0 honors).
+
 - **Result-changing environment overrides still reach production binaries
   (scoped 2026-10-12, `docs/RUNTIME_ENV_OVERRIDES_SCOPE.md`).** Six unused ones
   were deleted, then E1 (`PLANCK_DFT_ALLOW_RS_WORKFLOWS`) and E4 (the
@@ -1902,15 +1910,35 @@ identify the path taken. Not required for correctness or performance.
 
 - **RHF vs PySCF — answered 2026-10-25; S1 and S3 landed, B2.2 declined**
   (`docs/SCF_VS_PYSCF.md`). With matched tolerances the iteration counts are
-  identical. After S1 (setup zero-fill) and S3 (incremental build), 12 H2O /
-  6-31G\* takes 3.1 s against PySCF's 7.2 s. What remains is a
-  per-primitive-quartet kernel gap in a full Fock build: 11–16× on small
-  cc-pVXZ systems, falling to 4–6× by nb ≈ 200. It is **not** general
-  contraction: PySCF fed the same segmented representation Planck uses is
-  just as fast (0.94–1.02×), so B2.2 is declined. Closing it needs
-  libcint-class kernels (`docs/ERI_PERFORMANCE_SCOPE.md`). Also open: the DFT
-  KS J/K direct builds (`_compute_2e_j_direct` / `_k_direct`) do not yet
-  build incrementally.
+  identical. **The "11–16× kernel gap" was a benchmark artifact:** PySCF
+  stores the ERI tensor in memory whenever it fits, regardless of
+  `direct_scf`, so it had been running conventional SCF.
+  `tests/benchmarks/pyscf_bench.py` now forces it direct and asserts it.
+  Direct against direct, a full Fock build is level or faster in Planck on
+  6-31G\* (0.27–0.95×) and 1.5–3.7× slower on cc-pVXZ. It is not general
+  contraction (B2.2 declined). Remaining open:
+  - **The end-to-end SCF table** in `docs/SCF_VS_PYSCF.md` is still the
+    in-core one; rerun the fixed harness.
+  - **The cc-pVXZ gap:** `docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`. K0 is done
+    (`planck-eri-class-share --libcint`): Planck's kernels beat libcint at
+    total L ≤ 3 and lose above, by 4–5× at L ≥ 8. K1 is done: the work gap
+    was redundant primitives in the GBS files, now dropped at read time
+    (see Completion). **Rescoped 2026-10-25.** Direct vs direct, a full
+    build is now 0.79–1.21× PySCF on cc-pVDZ and 1.0–2.75× on cc-pVTZ.
+    In the same (segmented) representation Planck is faster on cc-pVDZ
+    (0.47–0.75×) and 1.5–1.9× slower on cc-pVTZ, all of it at total
+    L ≥ 4, worst in single-primitive quartets (2.3–5.5× libcint). Next:
+    **K2** (microbenchmark K = 1 high-L classes: HGP block vs per-component
+    Rys vs libcint; then a Rys block kernel or a fixed-cost cut). **G**
+    (general contraction) is small: the post-K1 family probe gains 1.00×
+    over a cc-pVDZ sweep; build only if closed-form-only families clear
+    1.10×. Also: rerun `pyscf_bench.py` end to end; check the RI auxiliary
+    files for the same redundancy.
+  - **DFT:** the KS J/K direct builds (`_compute_2e_j_direct` / `_k_direct`)
+    do not yet build incrementally.
+  - **Boys v1.2.1 re-pins:** checks pinned to exact integral values move with
+    the corrected Boys core. The extended suite and `ctest` on v1.2.1 are
+    pending.
 - **Analytic gradients are 20–120× the SCF they follow — scoped 2026-10-25,
   nothing landed** (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`). The ERI
   Fock-build work never reached the derivative integrals: the 2e gradient is

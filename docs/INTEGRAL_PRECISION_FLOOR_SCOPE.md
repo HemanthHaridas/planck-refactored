@@ -10,6 +10,18 @@ This file answers a narrower architecture question:
 > history — it documents the investigation steps taken before the root cause
 > was isolated, including a red herring, and is retained rather than deleted.
 
+> **Correction (2026-10-25): the Boys function was not correct everywhere.**
+> The kernel comparison against libcint (`docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`,
+> K0) found that the out-of-tree Boys core returned high-order values with
+> too few significant digits over part of its argument range. That produced
+> integral errors up to 7e-6 on pure f quartets (cc-pVTZ) and ~5e-8 on d
+> quartets. It was fixed in core v1.2.1 (max relative error 1.45e-13 against
+> mpmath). The STO-3G cases this doc analysed need only low orders, where the
+> old core was accurate, so its conclusion stands for them: the ~1e-8 floor
+> there is basis-coefficient precision. For bases with d or f shells, part of
+> any pre-v1.2.1 disagreement with PySCF may have been the Boys defect.
+> "Verified correct" below means verified at the orders STO-3G uses.
+
 ## Short answer
 
 The entire ~1e-8 "integral floor" is a basis-set data-precision difference,

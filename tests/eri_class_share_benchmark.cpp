@@ -42,6 +42,8 @@
 #include <string>
 #include <vector>
 
+#include <dlfcn.h>
+
 #include <Eigen/Dense>
 
 #include "base/basis.h"
@@ -50,6 +52,8 @@
 #include "basis/basis.h"
 #include "integrals/fused_fock.h"
 #include "integrals/hgp.h"
+#include "integrals/os.h"
+#include "integrals/rys.h"
 #include "integrals/hgp_block_eri.h"
 #include "integrals/screening.h"
 #include "integrals/shellpair.h"
@@ -1279,6 +1283,344 @@ namespace
                         1.0 / (1.0 - cum + cum / 5.0), 1.0 / (1.0 - cum));
         }
     }
+
+    // ── K0 (docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md): per-class time against libcint ──
+    //
+    // The same canonical, Schwarz-surviving shell quartets (shell-pair blocks
+    // p <= q, as the dense traversal visits them) go through Planck's production
+    // block kernel (prepare + read every component) and through libcint's
+    // int2e_cart with its optimizer, single-threaded, timed per class with no
+    // per-quartet clock reads. libcint is dlopen'ed from $PLANCK_LIBCINT
+    // (PySCF's wheel ships pyscf/lib/deps/lib/libcint.6.dylib); nothing in the
+    // build links it.
+    //
+    // Values are checked without assuming either normalization convention: each
+    // AO i gets a scale g_i with lib(ii|ii) = g_i^4 planck(ii|ii), and every
+    // component of every quartet must then satisfy lib = g_i g_j g_k g_l planck.
+    using CintInt = int;
+    using Int2eFn = CintInt (*)(double *, CintInt *, CintInt *, CintInt *, CintInt, CintInt *,
+                                CintInt, double *, void *, double *);
+    using OptFn = void (*)(void **, CintInt *, CintInt, CintInt *, CintInt, double *);
+
+    void report_libcint(const BuildSetup &s)
+    {
+        using namespace HartreeFock::Integrals;
+        const char *path = std::getenv("PLANCK_LIBCINT");
+        if (!path)
+        {
+            std::printf("--libcint: set PLANCK_LIBCINT to libcint's shared library\n");
+            return;
+        }
+        void *lib = dlopen(path, RTLD_NOW);
+        if (!lib)
+        {
+            std::printf("--libcint: dlopen failed: %s\n", dlerror());
+            return;
+        }
+        const auto int2e = reinterpret_cast<Int2eFn>(dlsym(lib, "int2e_cart"));
+        const auto optimizer = reinterpret_cast<OptFn>(dlsym(lib, "int2e_optimizer"));
+        if (!int2e || !optimizer)
+        {
+            std::printf("--libcint: int2e_cart / int2e_optimizer not found\n");
+            return;
+        }
+
+        // Planck's shell groups, in AO order: libcint bas entry g is group g.
+        std::vector<const HartreeFock::ContractedView *> views;
+        const std::vector<FusedShellGroup> groups = fused_shell_groups(s.pairs, s.nb, views);
+        const std::size_t ng = groups.size();
+        const auto &mol = s.calc._molecule;
+
+        // libcint arrays. env[0..19] are global parameters (expcutoff 0 = its
+        // default, as PySCF leaves it).
+        std::vector<double> env(20, 0.0);
+        std::vector<CintInt> atm, bas;
+        for (std::size_t a = 0; a < mol.natoms; ++a)
+        {
+            const CintInt ptr = static_cast<CintInt>(env.size());
+            for (int q = 0; q < 3; ++q)
+                env.push_back(mol._standard(a, q));
+            atm.insert(atm.end(), {static_cast<CintInt>(mol.atomic_numbers[a]), ptr, 1, 0, 0, 0});
+        }
+        std::vector<int> group_L(ng);
+        std::vector<int> group_K(ng);
+        for (std::size_t g = 0; g < ng; ++g)
+        {
+            const HartreeFock::ContractedView &v = *views[groups[g].first_ao];
+            const HartreeFock::Shell &sh = *v._shell;
+            group_L[g] = v._cartesian[0] + v._cartesian[1] + v._cartesian[2];
+            group_K[g] = static_cast<int>(sh._primitives.size());
+            // Owning atom: the one at the shell's centre.
+            CintInt atom = 0;
+            for (std::size_t a = 0; a < mol.natoms; ++a)
+                if ((Eigen::Vector3d(mol._standard(a, 0), mol._standard(a, 1), mol._standard(a, 2)) - sh._center).norm() < 1e-8)
+                    atom = static_cast<CintInt>(a);
+            const CintInt pexp = static_cast<CintInt>(env.size());
+            for (Eigen::Index p = 0; p < sh._primitives.size(); ++p)
+                env.push_back(sh._primitives(p));
+            const CintInt pcoef = static_cast<CintInt>(env.size());
+            // Contraction shape d_p N_p; any per-shell constant is absorbed in g.
+            for (Eigen::Index p = 0; p < sh._primitives.size(); ++p)
+                env.push_back(sh._coefficients(p) * sh._normalizations(p));
+            bas.insert(bas.end(), {atom, group_L[g], group_K[g], 1, 0, pexp, pcoef, 0});
+        }
+        const CintInt natm = static_cast<CintInt>(mol.natoms), nbas = static_cast<CintInt>(ng);
+        void *opt = nullptr;
+        optimizer(&opt, atm.data(), natm, bas.data(), nbas, env.data());
+
+        // libcint's Cartesian order is lx descending, then ly descending; map it
+        // onto Planck's component index within each group.
+        std::vector<std::vector<int>> lib_to_planck(ng);
+        for (std::size_t g = 0; g < ng; ++g)
+        {
+            const int L = group_L[g];
+            for (int lx = L; lx >= 0; --lx)
+                for (int ly = L - lx; ly >= 0; --ly)
+                {
+                    const int lz = L - lx - ly;
+                    int found = -1;
+                    for (std::size_t c = 0; c < groups[g].n_components; ++c)
+                    {
+                        const auto &cc = views[groups[g].first_ao + c]->_cartesian;
+                        if (cc[0] == lx && cc[1] == ly && cc[2] == lz)
+                            found = static_cast<int>(c);
+                    }
+                    lib_to_planck[g].push_back(found);
+                }
+        }
+
+        // The fused loop's request plumbing.
+        std::vector<const HartreeFock::ShellPair *> pair_of(s.nb * s.nb, nullptr);
+        for (const auto &sp : s.pairs)
+            pair_of[sp.A._index * s.nb + sp.B._index] = &sp;
+        std::vector<double> norm_ratio(s.nb, 1.0);
+        for (std::size_t g = 0; g < ng; ++g)
+            for (std::size_t c = 0; c < groups[g].n_components; ++c)
+                norm_ratio[groups[g].first_ao + c] =
+                    views[groups[g].first_ao + c]->_component_norm / views[groups[g].first_ao]->_component_norm;
+        struct GP { std::size_t a, b; double q; };
+        std::vector<GP> gp;
+        for (std::size_t a = 0; a < ng; ++a)
+            for (std::size_t b = a; b < ng; ++b)
+            {
+                double m = 0.0;
+                for (std::size_t i = 0; i < groups[a].n_components; ++i)
+                    for (std::size_t j = 0; j < groups[b].n_components; ++j)
+                        m = std::max(m, s.Q(groups[a].first_ao + i, groups[b].first_ao + j));
+                gp.push_back({a, b, m});
+            }
+
+        auto kernel = production_kernel();
+        BlockEriRequest req;
+        req.norm_ratio = norm_ratio.data();
+        req.kernel = HartreeFock::ERIKernel::Coulomb;
+        const auto set_req = [&](std::size_t A, std::size_t B, std::size_t C, std::size_t D)
+        {
+            const std::size_t g4[4] = {A, B, C, D};
+            req.ab = pair_of[groups[A].first_ao * s.nb + groups[B].first_ao];
+            req.cd = pair_of[groups[C].first_ao * s.nb + groups[D].first_ao];
+            for (int k = 0; k < 4; ++k)
+            {
+                req.views[k] = &views[groups[g4[k]].first_ao];
+                req.n[k] = groups[g4[k]].n_components;
+                req.L[k] = group_L[g4[k]];
+            }
+        };
+
+        // Class = (L_A L_B L_C L_D | K_A K_B K_C K_D) of the block as visited.
+        using Key = std::array<int, 8>;
+        std::map<Key, std::vector<std::array<std::size_t, 4>>> classes;
+        std::size_t nquartets = 0;
+        for (std::size_t p = 0; p < gp.size(); ++p)
+            for (std::size_t q = p; q < gp.size(); ++q)
+            {
+                if (gp[p].q * gp[q].q < 1e-10)
+                    continue;
+                const std::array<std::size_t, 4> g4{gp[p].a, gp[p].b, gp[q].a, gp[q].b};
+                Key k;
+                for (int i = 0; i < 4; ++i)
+                    k[i] = group_L[g4[i]], k[4 + i] = group_K[g4[i]];
+                classes[k].push_back(g4);
+                ++nquartets;
+            }
+
+        // One output buffer and one cache, sized for the largest quartet, as
+        // PySCF's drivers do (a null cache makes libcint malloc per call).
+        std::size_t max_out = 0;
+        CintInt max_cache = 0;
+        for (const auto &[key, list] : classes)
+            for (const auto &g4 : list)
+            {
+                CintInt shls[4] = {static_cast<CintInt>(g4[0]), static_cast<CintInt>(g4[1]),
+                                   static_cast<CintInt>(g4[2]), static_cast<CintInt>(g4[3])};
+                max_cache = std::max(max_cache, int2e(nullptr, nullptr, shls, atm.data(), natm, bas.data(),
+                                                      nbas, env.data(), nullptr, nullptr));
+                max_out = std::max(max_out, groups[g4[0]].n_components * groups[g4[1]].n_components *
+                                                groups[g4[2]].n_components * groups[g4[3]].n_components);
+            }
+        // Sized without the optimizer; doubled in case it needs more.
+        std::vector<double> buf(max_out), cache(2 * static_cast<std::size_t>(max_cache) + 64);
+        const auto lib_eval = [&](const std::array<std::size_t, 4> &g4)
+        {
+            CintInt shls[4] = {static_cast<CintInt>(g4[0]), static_cast<CintInt>(g4[1]),
+                               static_cast<CintInt>(g4[2]), static_cast<CintInt>(g4[3])};
+            int2e(buf.data(), nullptr, shls, atm.data(), natm, bas.data(), nbas, env.data(), opt, cache.data());
+        };
+        // libcint buffer index of components (ca cb | cc cd) in libcint order.
+        const auto lib_at = [&](const std::array<std::size_t, 4> &g4, int a, int b, int c, int d)
+        {
+            const std::size_t na = groups[g4[0]].n_components, nbb = groups[g4[1]].n_components,
+                              nc = groups[g4[2]].n_components;
+            return buf[a + na * (b + nbb * (c + nc * d))];
+        };
+
+        // Value check, pass 1: per-AO scale g from the (ii|ii) diagonal.
+        std::vector<double> g(s.nb, 0.0);
+        for (std::size_t a = 0; a < ng; ++a)
+        {
+            const std::array<std::size_t, 4> g4{a, a, a, a};
+            set_req(a, a, a, a);
+            if (!kernel.prepare(req))
+            {
+                std::printf("--libcint: block kernel declined a diagonal block\n");
+                return;
+            }
+            lib_eval(g4);
+            for (std::size_t li = 0; li < groups[a].n_components; ++li)
+            {
+                const int c = lib_to_planck[a][li];
+                const double pv = kernel.value(c, c, c, c);
+                const double lv = lib_at(g4, li, li, li, li);
+                g[groups[a].first_ao + c] = std::pow(lv / pv, 0.25);
+            }
+        }
+        // Pass 2: every component of every quartet (one sweep, untimed).
+        double max_err = 0.0, max_val = 0.0, worst_lv = 0.0, worst_pv = 0.0, worst_scale = 1.0;
+        Key worst_key{};
+        std::array<std::size_t, 4> worst_ao{};
+        for (const auto &[key, list] : classes)
+            for (const auto &g4 : list)
+            {
+                set_req(g4[0], g4[1], g4[2], g4[3]);
+                kernel.prepare(req);
+                lib_eval(g4);
+                const std::size_t n0 = groups[g4[0]].n_components, n1 = groups[g4[1]].n_components,
+                                  n2 = groups[g4[2]].n_components, n3 = groups[g4[3]].n_components;
+                for (std::size_t a = 0; a < n0; ++a)
+                    for (std::size_t b = 0; b < n1; ++b)
+                        for (std::size_t c = 0; c < n2; ++c)
+                            for (std::size_t d = 0; d < n3; ++d)
+                            {
+                                const int pa = lib_to_planck[g4[0]][a], pb = lib_to_planck[g4[1]][b],
+                                          pc = lib_to_planck[g4[2]][c], pd = lib_to_planck[g4[3]][d];
+                                const double scale = g[groups[g4[0]].first_ao + pa] * g[groups[g4[1]].first_ao + pb] *
+                                                     g[groups[g4[2]].first_ao + pc] * g[groups[g4[3]].first_ao + pd];
+                                const double pv = scale * kernel.value(pa, pb, pc, pd);
+                                const double lv = lib_at(g4, static_cast<int>(a), static_cast<int>(b),
+                                                         static_cast<int>(c), static_cast<int>(d));
+                                if (std::abs(lv - pv) > max_err)
+                                {
+                                    max_err = std::abs(lv - pv);
+                                    worst_key = key, worst_lv = lv, worst_pv = pv, worst_scale = scale;
+                                    worst_ao = {groups[g4[0]].first_ao + pa, groups[g4[1]].first_ao + pb,
+                                                groups[g4[2]].first_ao + pc, groups[g4[3]].first_ao + pd};
+                                }
+                                max_val = std::max(max_val, std::abs(lv));
+                            }
+            }
+        std::printf("  %zu shell groups, %zu canonical quartets in %zu classes\n", ng, nquartets, classes.size());
+        std::printf("  value check: max |libcint - g g g g planck| = %.1e (max |value| %.1e)\n", max_err, max_val);
+        std::printf("    worst in (%d%d%d%d|%d,%d,%d,%d): libcint %.15e, planck %.15e\n", worst_key[0], worst_key[1],
+                    worst_key[2], worst_key[3], worst_key[4], worst_key[5], worst_key[6], worst_key[7], worst_lv,
+                    worst_pv);
+        // The same component through Planck's three per-component engines. Rys
+        // never calls the Boys function; OS and HGP do. In Planck's convention.
+        {
+            const auto &v = views;
+            const HartreeFock::ShellPair ab(*v[worst_ao[0]], *v[worst_ao[1]]), cd(*v[worst_ao[2]], *v[worst_ao[3]]);
+            const auto &A = v[worst_ao[0]]->_cartesian, &B = v[worst_ao[1]]->_cartesian,
+                       &C = v[worst_ao[2]]->_cartesian, &D = v[worst_ao[3]]->_cartesian;
+            const double os = HartreeFock::ObaraSaika::_contracted_eri_elem(
+                ab, cd, A[0], A[1], A[2], B[0], B[1], B[2], C[0], C[1], C[2], D[0], D[1], D[2]);
+            const double hgp = HartreeFock::HeadGordonPople::_contracted_eri_elem(
+                ab, cd, A[0], A[1], A[2], B[0], B[1], B[2], C[0], C[1], C[2], D[0], D[1], D[2]);
+            const double rys = HartreeFock::RysQuad::_rys_contracted_eri(
+                ab, cd, A[0], A[1], A[2], B[0], B[1], B[2], C[0], C[1], C[2], D[0], D[1], D[2]);
+            std::printf("    same component, Planck convention: block %.15e  OS %.15e\n"
+                        "                                        HGP   %.15e  Rys %.15e\n"
+                        "                                        libcint/g^4 %.15e\n",
+                        worst_pv / worst_scale, os, hgp, rys, worst_lv / worst_scale);
+        }
+
+        // Timing: best of three sweeps per class, each code separately.
+        struct Row { Key key; std::size_t n; double tp, tl; };
+        std::vector<Row> rows;
+        volatile double sink = 0.0;
+        double TP = 0.0, TL = 0.0;
+        for (const auto &[key, list] : classes)
+        {
+            double tp = 1e30, tl = 1e30;
+            for (int rep = 0; rep < 3; ++rep)
+            {
+                auto t0 = Clock::now();
+                for (const auto &g4 : list)
+                {
+                    set_req(g4[0], g4[1], g4[2], g4[3]);
+                    kernel.prepare(req);
+                    double acc = 0.0;
+                    const std::size_t n0 = groups[g4[0]].n_components, n1 = groups[g4[1]].n_components,
+                                      n2 = groups[g4[2]].n_components, n3 = groups[g4[3]].n_components;
+                    for (std::size_t a = 0; a < n0; ++a)
+                        for (std::size_t b = 0; b < n1; ++b)
+                            for (std::size_t c = 0; c < n2; ++c)
+                                for (std::size_t d = 0; d < n3; ++d)
+                                    acc += kernel.value(a, b, c, d);
+                    sink = sink + acc;
+                }
+                tp = std::min(tp, seconds_since(t0));
+                t0 = Clock::now();
+                for (const auto &g4 : list)
+                {
+                    lib_eval(g4);
+                    sink = sink + buf[0];
+                }
+                tl = std::min(tl, seconds_since(t0));
+            }
+            rows.push_back({key, list.size(), tp, tl});
+            TP += tp, TL += tl;
+        }
+        std::sort(rows.begin(), rows.end(), [](const Row &x, const Row &y) { return x.tp - x.tl > y.tp - y.tl; });
+        std::printf("  kernel total: Planck %.4f s, libcint %.4f s, ratio %.2fx\n", TP, TL, TP / TL);
+        std::printf("  %-22s %7s %10s %10s %7s %7s %7s\n", "class (L|K)", "n", "Planck us", "lib us", "ratio",
+                    "%Planck", "%gap");
+        int shown = 0;
+        for (const Row &r : rows)
+        {
+            if (shown++ == 20)
+                break;
+            char label[64];
+            std::snprintf(label, sizeof label, "(%d%d%d%d|%d,%d,%d,%d)", r.key[0], r.key[1], r.key[2], r.key[3],
+                          r.key[4], r.key[5], r.key[6], r.key[7]);
+            std::printf("  %-22s %7zu %10.3f %10.3f %6.2fx %6.1f%% %6.1f%%\n", label, r.n, 1e6 * r.tp / r.n,
+                        1e6 * r.tl / r.n, r.tp / r.tl, 100.0 * r.tp / TP, 100.0 * (r.tp - r.tl) / (TP - TL));
+        }
+        // By total L, so classes split only by contraction depth fold together.
+        std::map<int, std::array<double, 3>> by_l;
+        for (const Row &r : rows)
+        {
+            auto &v = by_l[r.key[0] + r.key[1] + r.key[2] + r.key[3]];
+            v[0] += r.n, v[1] += r.tp, v[2] += r.tl;
+        }
+        std::printf("  by total L:  %4s %8s %10s %10s %7s %7s\n", "L", "n", "Planck s", "lib s", "ratio", "%gap");
+        for (const auto &[L, v] : by_l)
+            std::printf("               %4d %8.0f %10.4f %10.4f %6.2fx %6.1f%%\n", L, v[0], v[1], v[2],
+                        v[1] / v[2], 100.0 * (v[1] - v[2]) / (TP - TL));
+        // Context: the production Fock build on the same fixture.
+        timed_build_block(s, hgp_elem, production_kernel());
+        const double tf = timed_build_block(s, hgp_elem, production_kernel());
+        std::printf("  production Fock build %.4f s: kernel sweep is %.0f%% of it\n", tf, 100.0 * TP / tf);
+        (void)sink;
+    }
 } // namespace
 
 int main(int argc, char **argv)
@@ -1315,6 +1657,16 @@ int main(int argc, char **argv)
     {
         const BuildSetup s = prepare({std::atoi(argv[2]), argv[3]});
         report_census(s);
+        return 0;
+    }
+
+    // --libcint nwater basis: K0, per-class kernel time against libcint
+    // (docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md). Needs PLANCK_LIBCINT.
+    if (argc == 4 && std::string(argv[1]) == "--libcint")
+    {
+        const BuildSetup s = prepare({std::atoi(argv[2]), argv[3]});
+        std::printf("--libcint: %s H2O x%s\n", argv[3], argv[2]);
+        report_libcint(s);
         return 0;
     }
 

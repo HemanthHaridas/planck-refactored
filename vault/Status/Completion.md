@@ -402,6 +402,47 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Redundant primitives dropped at basis-read time (K1, 2026-10-25).**
+  PySCF's cc-pVXZ files use the optimized general contraction: an outer
+  primitive that is also its own uncontracted shell of the same L is left out
+  of the contraction. The BSE GBS files Planck reads keep it, so Planck ran
+  28 primitives per water in cc-pVDZ against PySCF's 24 (42 against 34 in
+  cc-pVTZ) for the same span. `drop_redundant_primitives`
+  (`src/basis/gaussian.cpp`) now removes them for every orbital basis; Pople
+  sets are unchanged and RI auxiliary bases are not touched. Fock build
+  2.05–2.34× faster on cc-pVDZ water chains and 1.47–1.79× on cc-pVTZ, 1 and
+  4 threads, energies within the 1e-9 SCF tolerance and exactly equal to
+  hand-converted files. MO coefficients and population analyses change,
+  because the contracted functions do. Found by the K1 census, which also
+  refuted the scope's lead hypothesis (PySCF's density prescreen removes only
+  5–8 %, like Planck's) and showed B2.2 had been declined on an in-core test.
+  Extended suite 135/139 (the four known rccsdt routing cases); no case
+  moved. Record: `docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md` (K1).
+
+- **Boys core v1.2.1: high-order values fixed (2026-10-25).** The kernel
+  comparison against libcint (`docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`, K0)
+  found integral errors of up to 6.6e-8 (6-31G\*), 4.0e-8 (cc-pVDZ) and
+  7.2e-6 (cc-pVTZ, pure f quartets), growing with L. Planck's Rys engine,
+  which does not use the Boys function, matched libcint to 2e-16, while OS,
+  HGP and the block kernel matched each other. The out-of-tree core returned
+  high-order values with too few significant digits over part of its
+  argument range. v1.2.1 has max relative error 1.45e-13 against mpmath
+  (orders 0–59), gated on the macOS and Linux release builds by a new
+  accuracy check. After it, K0 agrees to 3.4e-14 / 2.6e-14 / 7.2e-13, and all
+  four Planck paths agree to 1e-16. Released, encrypted and served; the dev
+  license and the `PLANCK_LICENSE` CI secret are v1.2.1. Not bitwise against
+  v1.2.0. This bug sits under every OS/HGP/closed-form integral, so part of
+  the old ~1e-8 "precision floor" against PySCF on d/f bases may have been
+  this defect (`docs/INTEGRAL_PRECISION_FLOOR_SCOPE.md`, correction note).
+
+- **`pyscf_bench.py` now compares direct with direct (2026-10-25).**
+  PySCF's `RHF.get_jk` keeps the ERI tensor in memory whenever it fits,
+  whatever `direct_scf` says. So every Planck-vs-PySCF timing in the harness
+  had compared Planck's direct SCF with PySCF's conventional SCF (4 H2O
+  cc-pVDZ, one build: 0.030 s in-core, 0.205 s direct). The harness now
+  forces direct and asserts `mf._eri is None`. The matched `conv_tol_grad`
+  default and a `--spherical` flag are also new.
+
 - **Incremental direct Fock build with density-weighted block screening (S3,
   2026-10-25).** The direct RHF/UHF/ROHF loops build `G_prev + G[ΔP]`, and
   the fused loop skips a block when `Q_ab Q_cd · max|D| < tol_eri / 10`
@@ -412,6 +453,29 @@ historical design context, but they are no longer the source of truth for
   iterations); a periodic rebuild does not fix it, because the error is
   inconsistency, not accumulation. Core 80/80, extended 135/139 (the known
   rccsdt cases). Record: `docs/SCF_VS_PYSCF.md`.
+  **Follow-up the same day: the screen is now dropped for the SCF tail.**
+  "Unchanged iteration counts" held only at the bench's `tol_density 1e-7`.
+  At the default 1e-10 the `/10` screen still random-walked (2 H2O /
+  cc-pVTZ 88 iterations against 18), and planck-mpi landed 6.7e-9 from
+  serial, failing `water4_rhf_ccpvdz_auto_direct_mpi_smoke`. Once the DIIS
+  error is below 1e-8, `IncrementalFock::observe` (`src/scf/scf.cpp`) turns
+  the screen off and forces one full rebuild. The flag is threaded through
+  `fused_fock_build` and the engine direct entries as `density_screen`
+  (default on, so DFT and every other caller are unchanged). Energies now
+  equal the unscreened build's, serial and MPI agree bitwise, and the gain
+  is 1.17–1.26× (bench tolerances) / 1.05–1.28× (default).
+
+- **`planck-dft-coulomb-response` fixed: its t2 fixture lacked the pair
+  symmetry (2026-10-25).** The two Eq. 33 full-geometry FDs (LDA, complete
+  GGA) had missed by ~1e-6 since at least 2026-10-09. A channel probe put the
+  whole gap in the D-AO XC-II term: `relaxed.symmetric_mo` was asymmetric
+  (8.5e-5), because the synthetic t2 had no `t_ij^ab = t_ji^ba`, and the
+  tiled D' builder (`7239ebeb`) gives a symmetric D' only for amplitudes that
+  have it. `drho_channel` collapses its double sum assuming a symmetric
+  density. Production is unaffected (real RHF amplitudes always carry the
+  symmetry, and `RMP2Result`'s packed form stores only one of each pair);
+  the fixture now does too, and the failure messages print FD and analytic
+  values.
 
 - **UHF stability analysis now uses the real-rotation Hessian, and following
   escapes the saddle (2026-10-25).** The UHF→UHF check combined A − B
