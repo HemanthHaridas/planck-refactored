@@ -31,12 +31,12 @@ namespace HartreeFock::SCF
     struct StabilityReport
     {
         // RHF channels (populated when reference is RHF):
-        //   internal_real    — RHF → another real RHF (lowest eig of A^S - B^S)
-        //   internal_complex — RHF → complex orbital RHF (lowest eig of A^S + B^S)
+        //   internal_real    — RHF → another real RHF (lowest eig of A^S + B^S)
+        //   internal_complex — RHF → complex orbital RHF (lowest eig of A^S - B^S)
         //   external_triplet — RHF → UHF (lowest eig of A^T - B^T)
         //
         // UHF channels (populated when reference is UHF):
-        //   internal_uhf     — UHF → another UHF (full spin-conserving Hessian)
+        //   internal_uhf     — UHF → another real UHF (spin-conserving A + B)
         //   external_ghf     — UHF → GHF (spin-flip / non-collinear)
         std::vector<StabilityChannel> channels;
         bool any_unstable = false;
@@ -72,10 +72,9 @@ namespace HartreeFock::SCF
     // before re-running.
     //
     // `mode` is the eigenvector returned from analyze_*_stability, reshaped
-    // [n_virt x n_occ]. The rotation amplitude is taken as a fixed step
-    // (`step_scale * mode`) — small enough to leave the unstable basin but
-    // large enough to break orbital symmetry. Default 0.05 rad works for
-    // every regression case we've seen.
+    // [n_virt x n_occ]. The rotation is `step * mode` with step = step_scale
+    // (default 0.05 rad), raised to π/4 for deep instabilities (λ < −1e-2),
+    // where 0.05 rad does not leave the saddle's basin.
     std::expected<double, std::string> follow_instability_and_rerun(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
