@@ -3299,7 +3299,11 @@ counts are:
 Computing the roots and weights for a given \(T\) is the central numerical
 challenge. A common strategy is:
 
-**One-root case**: For \(n = 1\), use the exact closed-form one-point rule.
+**One-root case**: For \(n = 1\), use the exact closed-form one-point rule,
+\(w_1 = F_0(T)\), \(t_1^2 = F_1(T)/F_0(T)\). Below \(T = 1\) both moments come
+from the positive series given below. The closed form
+\(F_1 = (F_0 - e^{-T})/(2T)\) subtracts two nearly equal numbers there and
+loses digits (1.3e-10 relative at \(T = 2\times10^{-6}\)).
 
 **General case (Stieltjes-Jacobi procedure)**: For \(n > 1\), the Rys
 measure is \(e^{-Tt^2} dt\) on \([0,1]\). The roots and weights are obtained by
@@ -3309,8 +3313,13 @@ family with respect to this measure. The algorithm:
 1. Compute \(2n+1\) Boys moments
    \(F_m(T) = \int_0^1 t^{2m} e^{-Tt^2} dt\) in long double precision.
    In the \(T \to 0\) limit this reduces to the Gauss-Legendre moment
-   \(1/(2m+1)\); for small nonzero \(T\) a convergent power series is used, and
-   for larger \(T\) one switches to upward Boys recursion.
+   \(1/(2m+1)\). For \(T < m\) use the series
+   \[
+   F_m(T) = e^{-T} \sum_{n \ge 0}
+   \frac{(2T)^n}{(2m+1)(2m+3)\cdots(2m+2n+1)},
+   \]
+   whose terms are all positive; for \(T \ge m\), upward recursion from
+   \(F_0\) (see the pitfall below).
 2. Construct orthonormal polynomials via the Gram-Schmidt Stieltjes procedure,
    recording the diagonal (\(\alpha_k\)) and sub-diagonal (\(\beta_k\)) entries
    of the symmetric \(n \times n\) Jacobi matrix \(\mathbf J\).
@@ -3321,7 +3330,34 @@ family with respect to this measure. The algorithm:
 4. If the Gram-Schmidt procedure encounters a degenerate norm or the Jacobi
    matrix diagonalization fails, the algorithm falls back to pre-tabulated
    Gauss-Legendre roots and weights on \([0,1]\). These tables are a safety net,
-   not the normal small-\(T\) path.
+   not the normal small-\(T\) path. They are the right rule only at
+   \(T = 0\), so reaching them at any other \(T\) means the moments were bad.
+
+#### Pitfall: upward Boys recursion, and how it went unnoticed
+
+The upward recursion
+\(F_k = \big((2k-1)F_{k-1} - e^{-T}\big)/(2T)\) multiplies whatever error
+\(F_{k-1}\) carries by \((2k-1)/(2T)\) at every step. Over \(m\) steps the
+error in \(F_0\) is amplified by \(\prod_{k=1}^{m} (2k-1)/(2T)\): harmless
+once \(T \ge m\), catastrophic when \(T\) is small and \(m\) large. An
+\(n\)-root rule needs moments up to \(F_{2n-1}\), so eleven roots need
+\(F_{21}\).
+
+Planck's solver used to switch to upward recursion at \(T = 1\). For
+\(T \in [1, \sim 5]\) the high moments then had no correct digits, and the
+rules for \(n \ge 7\) roots had weights that did not even sum to \(F_0\);
+\(n = 4\)–6 were degraded to between \(5\times10^{-12}\) and
+\(5\times10^{-8}\). The fix is the switch at \(T = m\) above. It stayed
+hidden for a reason worth remembering. Every test checked Rys against
+itself (box invariance) or against other engines on low-\(L\) molecules
+(\(n \le 5\)). The one high-\(L\) Rys case is a single neon atom, where
+every quartet sits on one centre, so \(\mathbf P = \mathbf Q\) and
+\(T = 0\). The window was never entered. The test that found it,
+`planck-rys-roots`, checks the rule against an independent reference
+instead: an \(n\)-point rule must reproduce \(F_0, \dots, F_{2n-1}\), and
+the moments come from long-double quadrature. It passes at 4e-14 for
+\(n \le 6\) and up to 4.8e-11 at \(n = 11\), which is the conditioning of
+building a rule from moments, and the old solver fails it from \(n = 1\).
 
 ### The Rys 1D VRR
 
@@ -3571,7 +3607,8 @@ mechanical copy with no risk of drift.
 | `src/integrals/rys.h` | Public API: `_compute_2e`, `_compute_2e_fock`, `_compute_2e_fock_uhf`, and `_auto` variants |
 | `src/integrals/rys.cpp` | VRR (`_rys_vrr_1d`), HRR (`_rys_hrr_ab`, `_rys_hrr_cd`), primitive and contracted ERI, Schwarz table, Fock builders, three-way auto-dispatch table + selector (`kAutoEngine`, `_auto_engine`) |
 | `src/integrals/rys_roots.h` | `rys_roots_weights` declaration; exact 1-point formula `rys_1pt` |
-| `src/integrals/rys_roots.cpp` | Pre-tabulated GL rules; Boys moment recursion; Stieltjes–Jacobi Gram-Schmidt + Eigen eigendecomposition |
+| `src/integrals/rys_roots.cpp` | Pre-tabulated GL rules; Boys moments (positive series below T = m, upward recursion above); Stieltjes–Jacobi Gram-Schmidt + Eigen eigendecomposition |
+| `tests/rys_roots.cpp` | `planck-rys-roots`: every rule n = 1..11 against moments from long-double quadrature |
 | `tests/auto_dispatch_benchmark.cpp` | Per-bucket timing harness that produces `docs/auto_dispatch_timings.csv` |
 | `scripts/fit_auto_dispatch.py` | Fitter that consumes the CSV and emits `docs/auto_dispatch_fit.json` and `docs/auto_dispatch_curves.svg` |
 

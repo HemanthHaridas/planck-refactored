@@ -90,24 +90,25 @@ static long double _boys_moment(int m, long double T) noexcept
     if (T < static_cast<long double>(HartreeFock::Rys::RYS_T_ZERO))
         return 1.0L / static_cast<long double>(2 * m + 1);
 
-    // The upward Boys recursion loses many digits for small-but-nonzero T and
-    // can drive the moment sequence negative enough to break the Jacobi build.
-    // Use the convergent power series there instead:
-    //   F_m(T) = sum_{n>=0} (-T)^n / (n! (2m + 2n + 1)).
-    if (T < 1.0L)
+    // The upward recursion F_k = ((2k-1) F_{k-1} - e^-T) / (2T) multiplies the
+    // error in F_0 by prod (2k-1)/(2T), so it is stable only while T >= m. It
+    // used to run from T = 1, and at T in [1, ~5] the moments up to F_21 lost
+    // every digit: for n >= 7 roots the rule's weights no longer summed to F_0
+    // (up to 413 of 300k sampled T at n = 11). Below T = m use the series
+    //   F_m(T) = e^-T sum_{n>=0} (2T)^n / ((2m+1)(2m+3)...(2m+2n+1)),
+    // whose terms are all positive, so it cancels nothing at any T.
+    if (T < static_cast<long double>(m))
     {
-        long double sum = 0.0L;
-        long double coeff = 1.0L;
-        for (int n = 0; n < 256; ++n)
+        long double term = 1.0L / static_cast<long double>(2 * m + 1);
+        long double sum = term;
+        for (int n = 1; n < 4096; ++n)
         {
-            const long double term =
-                coeff / static_cast<long double>(2 * m + 2 * n + 1);
+            term *= 2.0L * T / static_cast<long double>(2 * m + 2 * n + 1);
             sum += term;
-            if (std::abs(term) < 1.0e-28L * std::abs(sum))
+            if (term < 1.0e-30L * sum)
                 break;
-            coeff *= -T / static_cast<long double>(n + 1);
         }
-        return sum;
+        return std::exp(-T) * sum;
     }
 
     const long double sqrtT = std::sqrt(T);

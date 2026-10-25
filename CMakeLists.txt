@@ -1147,6 +1147,13 @@ if(BUILD_TESTING)
         ${LOOKUP_SRC}
     )
 
+    # Rys rules against independent quadrature moments (n = 1..11, T to 2000).
+    add_executable(planck-rys-roots
+        ${CMAKE_SOURCE_DIR}/tests/rys_roots.cpp
+        ${SRC_DIR}/integrals/rys_roots.cpp
+    )
+    target_include_directories(planck-rys-roots PRIVATE ${SRC_DIR} ${eigen_SOURCE_DIR})
+
     # boys_vec vs scalar boys bitwise-equality gate.
     add_executable(planck-boys-vec
         ${CMAKE_SOURCE_DIR}/tests/boys_vec.cpp
@@ -2983,6 +2990,11 @@ if(BUILD_TESTING)
     add_test(
         NAME planck-boys-vec
         COMMAND planck-boys-vec
+    )
+
+    add_test(
+        NAME planck-rys-roots
+        COMMAND planck-rys-roots
     )
 
     add_test(

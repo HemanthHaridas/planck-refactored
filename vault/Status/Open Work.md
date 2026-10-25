@@ -1936,7 +1936,10 @@ identify the path taken. Not required for correctness or performance.
     Rys root finder (Golub–Welsch, `long double` moments, a heap Eigen
     eigensolve) costs 0.78–1.42 µs for 3–5 roots, more than libcint's whole
     quartet; replace it with Chebyshev fits generated from it at first use
-    (bar ≤ 0.1 µs at n = 5, ≤ 1e-14 relative). Then K2.1b (prototype, land
+    (bar ≤ 0.1 µs at n = 5, ≤ 1e-14 relative for n ≤ 6, no worse than the
+    generator above). The generator itself was wrong at T in [1, 5] for
+    n ≥ 4 and is fixed (see Completion); the fits and the asymptote cutoff
+    are not built yet. Then K2.1b (prototype, land
     at ≥ 2× over HGP), K2.1c (chain into Auto), K2.2 (the K crossover). **G**
     (general contraction) is small: the post-K1 family probe gains 1.00×
     over a cc-pVDZ sweep; build only if closed-form-only families clear

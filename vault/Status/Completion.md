@@ -402,6 +402,27 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Rys roots and weights fixed at T >= 1 and at small T (2026-10-25).**
+  Found while scoping K2.1a. `_boys_moment` (`rys_roots.cpp`) built the
+  moments by upward recursion from T = 1, which is stable only for T >= m;
+  at T in [1, ~5] the F_k up to k = 21 lost every digit. Rules for n >= 7
+  roots then had weights that did not sum to F_0 (up to 413 of 300k
+  sampled T at n = 11, moment errors to 1.6e2), and n = 4-6 were degraded
+  to 5e-12 - 4.6e-8. Fixed with the positive-term series below T = m. The
+  closed-form one-root rule (`rys_1pt`) also cancelled at small T (1.3e-10
+  relative at T = 2e-6); it now uses the same series below T = 1. Exposure:
+  explicit `engine rys` everywhere (~1e-10 integrals on d shells), and the
+  Auto Rys buckets (L_AB, L_CD) = (7, 8) / (8, 8) on molecules, i.e. g-shell
+  quartets in cc-pVQZ and larger, where the old rules were badly wrong. It
+  went unseen because nothing tested the rule against an independent
+  reference: the Rys regression cases stop at n = 5, the high-L Rys case
+  is a single Ne atom (T = 0 for every quartet), and the box-invariance
+  test compares Rys with Rys. New gate `planck-rys-roots`: every rule
+  n = 1..11 on T in [0, 2000] (dense over [0.5, 6]) must reproduce the
+  moments from long-double quadrature (4e-14 for n <= 6, up to 4.8e-11 at
+  n = 11, the moment method's conditioning); the old solver fails it from
+  n = 1.
+
 - **Redundant primitives dropped at basis-read time (K1, 2026-10-25).**
   PySCF's cc-pVXZ files use the optimized general contraction: an outer
   primitive that is also its own uncontracted shell of the same L is left out

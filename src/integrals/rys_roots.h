@@ -32,6 +32,22 @@ namespace HartreeFock
                 root = 1.0 / 3.0;
                 weight = 1.0;
             }
+            else if (T < 1.0)
+            {
+                // F_1 = (F_0 - e^-T) / (2T) cancels at small T (1.3e-10
+                // relative at T = 2e-6). The positive series
+                //   F_m = e^-T sum_n (2T)^n / ((2m+1)(2m+3)...(2m+2n+1))
+                // cancels nothing; below T = 1 it needs about 20 terms.
+                double t0 = 1.0, t1 = 1.0 / 3.0, s0 = t0, s1 = t1;
+                for (int n = 1; n < 64 && t0 > 1e-18 * s0; ++n)
+                {
+                    t0 *= 2.0 * T / (2 * n + 1);
+                    t1 *= 2.0 * T / (2 * n + 3);
+                    s0 += t0, s1 += t1;
+                }
+                root = s1 / s0;
+                weight = std::exp(-T) * s0;
+            }
             else
             {
                 const double sqrtT = std::sqrt(T);

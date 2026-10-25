@@ -253,6 +253,24 @@ production today (explicit `engine rys`, the Auto table's Rys buckets).
     and the K0 value check (≤ 7e-13 against libcint) unchanged.
   - Bar: ≤ 0.1 µs per call at n = 5. Replaces the solver in
     `rys_roots_weights` itself, so the per-component Rys path gains too.
+  - **Progress (2026-10-25): the generator was broken first, and is
+    fixed.** The first fit prototype failed to converge, and so did the
+    asymptote cutoff search. Both pointed at the reference, not the fits. A
+    moment-reproduction check against long-double quadrature showed
+    `_boys_moment`'s upward recursion, used from T = 1, destroying the high
+    moments at T in [1, ~5]: n ≥ 7 rules with weights not summing to F_0,
+    moment errors up to 1.6e2 at n = 11. The one-root closed form cancelled
+    at small T (1.3e-10). Both are fixed (positive series below T = m, and
+    below T = 1 for one root) and gated by `planck-rys-roots`. The fixed
+    solver reproduces moments to 4e-14 for n ≤ 6, rising to 4.8e-11 at
+    n = 11 (the moment method's conditioning). That bounds what fits
+    generated from it can reach: the 1e-14 gate above holds for n ≤ 6 only,
+    and at n ≥ 7 the gate becomes "no worse than the generator".
+  - **Asymptote, measured.** Against the fixed reference the Laguerre
+    (α = −½) asymptote has to be compared at the generator's own accuracy,
+    not 1e-15; the first search used 1e-15 and so never found a cutoff.
+    Redo the cutoff search per n at the generator's measured precision
+    before fixing segment widths.
 - **K2.1b, prototype `RysBlockKernel` in the harness.** A header-only
   kernel under the `block_eri.h` contract, beside `hgp_block_eri.h`. The
   geometry and 1D VRR move out of `rys.cpp`'s anonymous namespace into a
