@@ -19,11 +19,9 @@ remain:
 2. **Per-iteration cost on generally contracted bases**: 4.5–7× PySCF on
    cc-pVDZ / cc-pVTZ up to nb ≈ 150, narrowing to 2× by nb ≈ 200. The Pople
    bases do not show it.
-3. **No incremental Fock build and no density screening.** Every iteration
-   rebuilds G from the full density, and the block skip is
-   `qmax[bra] · qmax[ket] < tol_eri` alone. Today PySCF shows no per-iteration
-   drop from this on these systems either, so its value has to be measured
-   before it is built.
+3. **No incremental Fock build and no density screening** (fixed by S3,
+   1.19–1.33× on the Fock build). Every iteration rebuilt G from the full
+   density, and the block skip was `qmax[bra] · qmax[ket] < tol_eri` alone.
 
 ## Measured (M3, 4 threads, 2026-10-25)
 
@@ -103,7 +101,36 @@ regression suite 80/80. Not done, deliberately: batching the Boys orders (not
 bitwise, and Boys was not visible in the setup profile), and a per-shell 1e
 VRR. Setup is now ≲ 1 % of wall, so neither is worth it.
 
-### S2 — Generally contracted bases (measure, then resume B2.2)
+### S2 — Generally contracted bases — MEASURED 2026-10-25, deferred behind S3
+
+Like-for-like full builds (PySCF `get_veff` from scratch on the hcore guess,
+3 repeats; Planck median `fock_s`, which is always a full build):
+
+| case | Planck 1t / 4t | PySCF 1t / 4t | Planck / PySCF |
+|---|---|---|---|
+| 4 H2O cc-pVDZ (nb 100) | 0.386 / 0.108 s | 0.101 / 0.031 s | 3.8× / 3.5× |
+| 8 H2O cc-pVDZ (nb 200) | 1.85 / 0.55 s | 1.26 / 0.44 s | 1.5× / 1.25× |
+| 2 H2O cc-pVTZ (nb 130) | 0.90 / 0.27 s | 0.19 / 0.061 s | 4.8× / 4.4× |
+| 12 H2O 6-31G\* (nb 228) | 0.71 / 0.21 s | 1.51 / 0.61 s | 0.47× / 0.34× |
+
+- **What the gap is:** per-quartet kernel cost on dense blocks. It shrinks
+  with size as Planck's block screening wins it back. The one-thread profile
+  is the ERI record's: on 4 H2O cc-pVDZ, closed forms 41 % + Boys 23 %,
+  digestion 15 %, HGP VRR 13 %; on 2 H2O cc-pVTZ, HGP VRR + finish + prepare
+  58 %, digestion 21 %, closed forms 13 %.
+- **Why B2.2 is not the cure:** `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md` already
+  measured shared-exponent sharing. A basis-chosen traversal pays at most
+  ~1.29× of a cc-pVDZ build, and lanes took the HGP half (a scalar HGP family
+  pass was 0.48–1.03×).
+- **Incremental build is the larger lever:** PySCF's in-SCF iteration is 1.5–2×
+  cheaper than its own full `get_veff` (4 H2O cc-pVDZ 0.015 vs 0.031 s; 8 H2O
+  cc-pVDZ 0.249 vs 0.436 s; 2 H2O cc-pVTZ 0.038 vs 0.061 s; 12 H2O 6-31G\*
+  0.417 vs 0.611 s), on every basis.
+
+Decision: do S3 next. Revisit B2.2 only if cc-pVXZ is still the headline gap
+after S3, and then as the basis-chosen traversal.
+
+Original S2 note, kept for the record:
 
 The cc-pVXZ gap is per-iteration Fock build. cc bases share primitive
 exponents across contracted functions of one L, and Planck evaluates each
@@ -118,20 +145,45 @@ family order costs 3.5–7.4 %.
 Gate: as for the Fock-build work: block sweep against per-component HGP,
 thread-count invariance, every SCF regression, and this benchmark.
 
-### S3 — Incremental ΔP build with density-weighted screening (measure first)
+### S3 — Incremental ΔP build with density-weighted screening — LANDED 2026-10-25
 
-`G_n = G_{n-1} + G[ΔP_n]`, with a full rebuild every k iterations and on DIIS
-reset to bound accumulated error. The block test becomes
-`Q_ab Q_cd · max(4|D_ab|, 4|D_cd|, |D_ac|, |D_ad|, |D_bc|, |D_bd|) < tol`,
-with `D = ΔP` and `qmax` persisted across iterations instead of rebuilt per
-call. The Schwarz table itself stays unscreened (ERI scope invariant 8).
+`G_n = G_{n-1} + G[P_n − P_{n−1}]` in the direct RHF, UHF and ROHF loops
+(`direct_fock_rhf` / `direct_fock_uhf` in `src/scf/scf.cpp`, Cartesian and
+spherical). The fused loop skips a block when
+`Q_ab Q_cd · max(4|D_ab|, 4|D_cd|, |D_ac|, |D_ad|, |D_bc|, |D_bd|) < tol_eri / 10`,
+with |D| the shell-block maximum over every density passed in (`screened`
+in `src/integrals/fused_fock.h`, both traversals). It is off in replication
+mode, where a representative block is scattered onto images whose density
+differs. The Schwarz table itself stays unscreened (ERI scope invariant 8).
+There is no periodic rebuild, as in PySCF. Linearity makes the update exact
+however P was produced, so SOSCF, damping and level shifts need no special
+handling.
 
-First a counting probe (no new arithmetic): the fraction of blocks surviving
-the weighted bound with P and with ΔP per iteration, on 12 H2O / 6-31G\* and
-8 H2O / cc-pVDZ. Build only if late iterations drop well below half. PySCF
-does run an incremental build and its per-iteration time is still flat here,
-so the probe decides. Must compose with SOSCF, SAD, full-symmetry skeletons
-and the UHF/ROHF builds.
+**Probe first** (temporary, deleted): the fraction of Schwarz-surviving work,
+weighted by components × primitives, that also survives the density test.
+With full P it is 0.89–0.96 per iteration, worth 1.04–1.11×. With ΔP it
+falls below half by iterations 9–12 and ends at 0.18–0.37, worth 1.25–1.6×
+over a run.
+
+**The tolerance decided the design.** At `tol_eri` (1e-10) the skipped set
+changes with ΔP every iteration, the energy random-walks at 1e-8, and the
+energy gate fails (12 H2O / 6-31G\*: 15 → 24 iterations, |ΔE| 1.5e-8). A full
+rebuild every 5 iterations made it worse (35 iterations): the error is
+inconsistency, not accumulation. Fock-build time, best of 3 at 4 threads,
+against the pre-S3 binary:
+
+| case | `tol_eri` | `tol_eri/10` (used) | `tol_eri/100` |
+|---|---|---|---|
+| 12 H2O 6-31G\* | 1.19× (24 iters) | 1.24× | 1.15× |
+| 8 H2O cc-pVDZ | 1.46× | 1.33× | 1.21× |
+| 4 H2O cc-pVDZ | 1.34× | 1.23× | 1.14× |
+| 2 H2O cc-pVTZ | 1.28× | 1.19× | 1.12× |
+
+At `/10`, |ΔE| ≤ 6e-10 against the full build, with identical iteration
+counts. UHF (4 H2O⁺ / cc-pVDZ) matches to 5e-10 in the same iterations;
+ROHF matches to 3e-10 but took 71 iterations against 67. Gate: core 80/80
+and extended 135/139 (the four known rccsdt routing failures). The gain is
+below PySCF's 1.5–2×, because PySCF screens at 1e-13 and has more to drop.
 
 ## Not in this scope
 

@@ -206,6 +206,7 @@
 <li class="toc-level-3"><a href="#nuclear-attraction-integral">Nuclear Attraction Integral</a></li>
 <li class="toc-level-3"><a href="#two-electron-repulsion-integrals-eris">Two-Electron Repulsion Integrals (ERIs)</a></li>
 <li class="toc-level-3"><a href="#schwarz-screening">Schwarz Screening</a></li>
+<li class="toc-level-3"><a href="#density-weighted-screening-and-the-incremental-fock-build">Density-Weighted Screening and the Incremental Fock Build</a></li>
 <li class="toc-level-3"><a href="#permutation-symmetry-of-the-eri-tensor">Permutation Symmetry of the ERI Tensor</a></li>
 <li class="toc-level-3"><a href="#the-memory-direct-fock-build">The Memory-Direct Fock Build</a></li>
 <li class="toc-level-2"><a href="#10-spherical-harmonic-basis-functions">10. Spherical Harmonic Basis Functions</a></li>
@@ -412,7 +413,7 @@ Input file (.hfinp)
   → optional SAO basis construction (src/symmetry/mo_symmetry.cpp)
   → SCF loop (src/scf/scf.cpp)
        ├── conventional:  build the full ERI tensor once, reuse it
-       ├── direct:        rebuild G(P) each iteration, memory-direct — each
+       ├── direct:        G = G_prev + G(P − P_prev) each iteration, memory-direct — each
        │                  quartet is contracted straight into F and the nb^4
        │                  tensor is never allocated (src/integrals/fused_fock.h)
        └── RI:            fitted 3-center factors instead of 4-center ERIs
@@ -846,9 +847,24 @@ E(\kappa) - E(0)
 <h4 id="uhf-stability">UHF Stability</h4>
 <p>For UHF the orbital Hessian has <span class="math-inline">\(\alpha\alpha\)</span>, <span class="math-inline">\(\alpha\beta\)</span>, <span class="math-inline">\(\beta\alpha\)</span>, and <span class="math-inline">\(\beta\beta\)</span> blocks. Two physically distinct checks are reported:</p>
 <ul>
-<li><strong>Internal UHF→UHF</strong> (spin-conserving) — full <span class="math-inline">\(\alpha\alpha \oplus \beta\beta\)</span> Hessian with the <span class="math-inline">\(\alpha\beta\)</span> Coulomb cross-coupling included. Negative ⇒ another UHF stationary point is lower.</li>
+<li><strong>Internal UHF→UHF</strong> (spin-conserving) — the real-rotation Hessian <span class="math-inline">\(\mathbf A + \mathbf B\)</span> on <span class="math-inline">\(\alpha\alpha \oplus \beta\beta\)</span>, with the <span class="math-inline">\(\alpha\beta\)</span> Coulomb cross-coupling included. Negative ⇒ another UHF stationary point is lower.</li>
 <li><strong>External UHF→GHF</strong> (spin-flip) — couples <span class="math-inline">\(\alpha\)</span>-occupied to <span class="math-inline">\(\beta\)</span>-virtual rotations. Planck reports a diagonal-only approximation here (just <span class="math-inline">\(\varepsilon^\beta_a - \varepsilon^\alpha_i\)</span> gaps) since full GHF stability requires extra cross-spin two-electron blocks and Planck does not yet support a GHF reference to follow into.</li>
 </ul>
+<p>In spin orbitals, <span class="math-inline">\(A_{ia,jb} = (\varepsilon_a - \varepsilon_i)\delta +
+\langle aj\Vert ib\rangle\)</span> and <span class="math-inline">\(B_{ia,jb} = \langle ab\Vert ij\rangle\)</span>. Integrating out spin gives the internal matrix block by block:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Block</th>
+<th><span class="math-inline">\(\mathbf A + \mathbf B\)</span></th>
+</tr></thead>
+<tbody>
+<tr><td>same spin (<span class="math-inline">\(\alpha\alpha\)</span>, <span class="math-inline">\(\beta\beta\)</span>)</td><td><span class="math-inline">\((\varepsilon_a - \varepsilon_i)\delta + 2(ai|bj) - (ab|ij) - (aj|bi)\)</span></td></tr>
+<tr><td>opposite spin (<span class="math-inline">\(\alpha\beta\)</span>)</td><td><span class="math-inline">\(2(ai|bj)\)</span></td></tr>
+</tbody></table></div>
+<p>The opposite-spin block has no exchange, so there <span class="math-inline">\(\mathbf A = \mathbf B =
+(ai|bj)\)</span> and <span class="math-inline">\(\mathbf A - \mathbf B = 0\)</span>.</p>
+<p><strong>A pitfall worth knowing.</strong> Planck&#x27;s UHF check once used <span class="math-inline">\(\mathbf A -
+\mathbf B\)</span> in the same-spin blocks (the closed-shell complex/triplet form <span class="math-inline">\(-(ab|ij) + (aj|bi)\)</span>) and <span class="math-inline">\(\mathbf A + \mathbf B\)</span> in the cross-spin block. Each block looked plausible on its own, but together they make a matrix that is neither test. It still reported negative eigenvalues, but its lowest mode was not a direction in which the energy falls, so following it rotated the orbitals and the SCF slid straight back to the same saddle. The rule that would have caught it: <strong>every block of one stability matrix must come from the same combination, <span class="math-inline">\(\mathbf A + \mathbf B\)</span> for real rotations or <span class="math-inline">\(\mathbf A - \mathbf B\)</span> for complex ones.</strong></p>
 <h4 id="following-an-unstable-mode">Following an Unstable Mode</h4>
 <p>When a check fires, one can rotate the orbitals along the lowest unstable eigenvector and re-run SCF. Planck exposes this through <code>stability_follow .true.</code> and implements the rotation with the eigenvector <span class="math-inline">\(R_{ai}\)</span> (reshaped <span class="math-inline">\(n_v \times
 n_o\)</span>) by the standard SVD trick: writing <span class="math-inline">\(R = U_R \Sigma V_R^T\)</span>,</p>
@@ -866,10 +882,33 @@ n_o\)</span>) by the standard SVD trick: writing <span class="math-inline">\(R =
 <p>1. <strong>HOMO–LUMO mix on beta only.</strong> Rotate <span class="math-inline">\(\beta_{\text{HOMO}}\)</span> and <span class="math-inline">\(\beta_{\text{LUMO}}\)</span> by <span class="math-inline">\(\pi/8\)</span> (22.5°). This makes the alpha and beta occupied spaces explicitly different along the frontier, <em>regardless of what the unstable eigenvector mostly points at</em>. Without this step, unstable modes that pick up mostly core-orbital character leave the frontier closed-shell, and UHF re-symmetrizes back to the starting RHF. 2. <strong>Apply the eigenvector rotation as a sharpening step.</strong> Alpha gets <span class="math-inline">\(+\,s\,R\)</span>, beta gets <span class="math-inline">\(-\,s\,R\)</span>. This guides the SCF toward the specific lower stationary point identified by the analyzer.</p>
 <p>The step <span class="math-inline">\(s\)</span> is adaptive: <span class="math-inline">\(|\lambda| < 10^{-2}\)</span> uses the user-supplied default of <code>0.05 rad</code>; <span class="math-inline">\(|\lambda| \ge 10^{-2}\)</span> bumps to <span class="math-inline">\(\pi/4 = 0.785 rad\)</span>, the standard &quot;break-symmetry-hard&quot; amplitude.</p>
 <ul>
-<li><strong>Internal RHF→RHF or UHF→UHF</strong> — Planck applies the eigenvector rotation within the same SCF type and re-enters the same <code>run_*</code> entry point. The seeded density is read by SCF via the <code>ReadDensity</code> guess path, so no fresh HCore/SAD step happens.</li>
+<li><strong>Internal RHF→RHF or UHF→UHF</strong> — Planck applies the eigenvector rotation within the same SCF type and re-enters the same <code>run_*</code> entry point. The seeded density is read by SCF via the <code>ReadDensity</code> guess path, so no fresh HCore/SAD step happens. The step follows the same adaptive rule (<code>follow_step</code> in <code>stability.cpp</code>): 0.05 rad, or <span class="math-inline">\(\pi/4\)</span> when <span class="math-inline">\(\lambda < -10^{-2}\)</span>. A fixed 0.05 rad along a normalized mode spread over thousands of <span class="math-inline">\((a,i)\)</span> pairs barely moves any single orbital, and a deep saddle simply pulls the SCF back.</li>
 </ul>
 <h4 id="what-following-actually-finds">What Following Actually Finds</h4>
 <p>Following an instability is genuinely re-running SCF from a different starting point — it inherits all the convergence behavior of the underlying solver. In particular, if the rotated reference is close to <em>another</em> instability (e.g. ethylene RHF at small basis is itself unstable to UHF in addition to the broken-symmetry RHF), the follow may land on yet another stationary point lower than the original. This is correct behavior and matches every published stability code: the follow finds <em>some</em> lower stationary point, not necessarily the <em>physical</em> ground state. For ethylene/3-21G specifically, the post-follow UHF lands at <span class="math-inline">\(E = -77.5245\)</span> with <span class="math-inline">\(\langle S^2\rangle \approx 1.04\)</span>, which is a deeply spin-broken biradical solution — real, but unphysical for closed-shell ethylene at equilibrium. Larger basis sets and more correlation eliminate this spurious low UHF.</p>
+<h4 id="worked-example-when-rohf-comes-out-below-uhf">Worked Example: When ROHF Comes Out Below UHF</h4>
+<p>A variational argument says UHF can never lie above ROHF for the same state: an ROHF determinant is a UHF determinant with the extra constraint that the <span class="math-inline">\(\alpha\)</span> and <span class="math-inline">\(\beta\)</span> spatial orbitals coincide. So if a run reports <span class="math-inline">\(E_\text{ROHF} < E_\text{UHF}\)</span>, the UHF did not converge to a minimum. Here is a real case: the doublet cation of a four-water chain in cc-pVDZ (Cartesian), started from the core-Hamiltonian guess.</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Solution</th>
+<th>Energy (Eh)</th>
+<th>Status</th>
+</tr></thead>
+<tbody>
+<tr><td>UHF from <code>guess hcore</code> (Planck)</td><td>−303.6695294</td><td>saddle, above ROHF</td></tr>
+<tr><td>UHF from <code>guess sad</code> (Planck)</td><td>−303.6687483</td><td>saddle, above ROHF</td></tr>
+<tr><td>UHF from hcore (PySCF)</td><td>−303.6674821</td><td>saddle, above ROHF</td></tr>
+<tr><td>ROHF (Planck and PySCF)</td><td>−303.6870543</td><td>agree to 1e-8</td></tr>
+<tr><td>UHF hcore + <code>stability_follow</code> (Planck)</td><td><strong>−303.7136062</strong></td><td>stable</td></tr>
+<tr><td>UHF hcore + follow (PySCF)</td><td><strong>−303.7136062</strong></td><td>stable, within 1.7e-9</td></tr>
+<tr><td>UHF minao + follow (PySCF)</td><td>−303.7247803</td><td>stable, lower still</td></tr>
+</tbody></table></div>
+<p>Three lessons:</p>
+<ol>
+<li><strong>Converging is not the same as reaching a minimum.</strong> DIIS drives the orbital gradient to zero, and a saddle has zero gradient too. Here two different guesses converge to two different saddles, in both codes.</li>
+<li><strong>Stability analysis plus following is the remedy</strong>, and it is only as good as the Hessian it builds (the pitfall above) and the step it takes. With both right, the follow lands where PySCF&#x27;s does.</li>
+<li><strong>There is more than one stable minimum.</strong> PySCF&#x27;s minao path finds a lower one. Stability analysis guarantees a local minimum, not the global one, so for open-shell systems compare a few guesses when the answer matters.</li>
+</ol>
 <h4 id="planck-validation-note-twisted-ethylene-guess-sensitivity-and-the-sto-3g-pathology">Planck Validation Note: Twisted Ethylene, Guess Sensitivity, and the STO-3G Pathology</h4>
 <p>A clean illustration of how guess choice, basis flexibility, and the follow machinery interact comes from running 90°-twisted ethylene (<code>tests/inputs/regression/hf/ethylene_rhf_stability_unstable.hfinp</code>) across four basis sets with two guesses each (HCore vs SAD), once with <code>stability_follow .false.</code> and once with <code>.true.</code> and <code>max_cycles 300</code>.</p>
 <p><strong>Pre-follow RHF (just <code>stability_check</code>)</strong>:</p>
@@ -967,7 +1006,8 @@ n_o\)</span>) by the standard SVD trick: writing <span class="math-inline">\(R =
 <h3 id="scf-iteration-loop">SCF Iteration Loop</h3>
 <p>Each RHF iteration in <code>run_rhf</code>:</p>
 <ol>
-<li>Compute <span class="math-inline">\(G_{\mu\nu}[P]\)</span> from the current density (either from the stored ERI tensor via <code>_compute_fock_rhf</code>, or on-the-fly via <code>_compute_2e_fock</code>)</li>
+<li>Compute <span class="math-inline">\(G_{\mu\nu}[P]\)</span> from the current density: from the stored ERI tensor via <code>_compute_fock_rhf</code>, or on the fly. Direct SCF builds it incrementally, <span class="math-inline">\(\mathbf G = \mathbf G_\text{prev} + \mathbf G[\mathbf P -
+   \mathbf P_\text{prev}]\)</span> (<code>direct_fock_rhf</code> / <code>direct_fock_uhf</code> in <code>scf.cpp</code>; see &quot;Density-Weighted Screening and the Incremental Fock Build&quot; in §9)</li>
 <li>Form <span class="math-inline">\(\mathbf F = \mathbf H^{core} + \mathbf G\)</span></li>
 <li>Compute the current energy</li>
 <li>Form the DIIS error vector and call <code>diis.push(F, e)</code>; if DIIS is ready, replace <span class="math-inline">\(\mathbf F\)</span> with the extrapolated Fock</li>
@@ -1181,6 +1221,7 @@ F_m(t) = \int_0^1 u^{2m} e^{-t u^2}\, du
 + \frac{a_i}{2\zeta}\left[(a-1_i|0)^{(m)} - (a-1_i|0)^{(m+1)}\right]
 \]</span></p>
 <p>seeds at <span class="math-inline">\([0|0]^{(m)}\)</span> and builds up angular momentum.</p>
+<p><strong>An implementation note on cost.</strong> This recursion is evaluated once per primitive pair, per nucleus (or point charge), per AO component, so whatever it does per call is multiplied many times over. Planck&#x27;s <code>_os_nuclear_primitive</code> used to declare its table as a fixed <code>double V[13][13][13][14] = {}</code>, sized for the largest angular momentum. That is a 246 KB zero-fill on every call, even for an s–s pair. On 12 waters in 6-31G\* this made the nuclear-attraction matrix take 2.4 s of a 5.6 s RHF. Every entry the recurrence reads it has written first, so the initializer was simply dropped: same arithmetic, bitwise-identical results, and setup fell to 0.05 s. PCM evaluates the same primitive at every cavity point on every iteration, so it gained the same way. The general rule is <strong>never clear a worst-case-sized buffer in a per-primitive routine</strong>: clear the extent you use, or prove the reads are covered by writes.</p>
 <h3 id="two-electron-repulsion-integrals-eris">Two-Electron Repulsion Integrals (ERIs)</h3>
 <p>The electron repulsion integral over contracted Gaussians:</p>
 <p><span class="math-display">\[
@@ -1241,6 +1282,33 @@ F_m\!\left(\frac{\zeta\eta}{\zeta+\eta} R_{PQ}^2\right)
 Q(i,j) \cdot Q(k,l) < \epsilon_{ERI}
 \]</span></p>
 <p>The same criterion can be used in stored-ERI builds, direct Fock builders, symmetry-reduced quartet loops, and derivative-integral contractions. When symmetry is exploited, the Schwarz bound is constant across each quartet orbit, so screening one representative screens the whole orbit.</p>
+<h3 id="density-weighted-screening-and-the-incremental-fock-build">Density-Weighted Screening and the Incremental Fock Build</h3>
+<p>Schwarz bounds the integral, but a Fock build needs the integral <strong>times a density element</strong>. A quartet contributes to <span class="math-inline">\(\mathbf G\)</span> through <span class="math-inline">\(D_{\lambda\sigma}(\mu\nu|\lambda\sigma)\)</span> (Coulomb) and <span class="math-inline">\(D_{\nu\sigma}(\mu\lambda|\nu\sigma)\)</span>-type terms (exchange), so a sharper test (Häser–Ahlrichs) is</p>
+<p><span class="math-display">\[
+Q_{\mu\nu} Q_{\lambda\sigma}\,
+\max\bigl(4|D_{\mu\nu}|, 4|D_{\lambda\sigma}|, |D_{\mu\lambda}|,
+|D_{\mu\sigma}|, |D_{\nu\lambda}|, |D_{\nu\sigma}|\bigr) < \epsilon .
+\]</span></p>
+<p>With the full density <span class="math-inline">\(\mathbf D = \mathbf P\)</span> this buys little: on water chains it skips only 4–11 % more work than Schwarz alone. It pays because <span class="math-inline">\(\mathbf G\)</span> is <strong>linear in the density</strong>:</p>
+<p><span class="math-display">\[
+\mathbf G[\mathbf P_n] = \mathbf G[\mathbf P_{n-1}] + \mathbf G[\mathbf P_n - \mathbf P_{n-1}] .
+\]</span></p>
+<p>Near convergence <span class="math-inline">\(\Delta\mathbf P\)</span> is tiny, so most blocks fail the density-weighted test and are skipped. That holds however <span class="math-inline">\(\mathbf P_n\)</span> was produced (DIIS, SOSCF, damping, level shift); only linearity is needed. PySCF does the same (<code>get_veff</code> with <code>dm_last</code> / <code>vhf_last</code>).</p>
+<p>Planck applies the test per shell-quartet block in the fused loop (<code>screened</code> in <code>fused_fock.h</code>), with <span class="math-inline">\(|D|\)</span> taken as the shell-block maximum over every density passed in. The SCF loops pass <span class="math-inline">\(\Delta\mathbf P\)</span> (<code>direct_fock_rhf</code> / <code>direct_fock_uhf</code> in <code>scf.cpp</code>). In replication mode the test is skipped: a representative block there is scattered onto symmetry images whose density differs.</p>
+<p><strong>The tolerance is the subtle part.</strong> At <span class="math-inline">\(\epsilon = \)</span> <code>tol_eri</code> (<span class="math-inline">\(10^{-10}\)</span>) the skipped set changes with <span class="math-inline">\(\Delta\mathbf P\)</span> every iteration. The resulting error is no longer the same from one iteration to the next, so DIIS cannot absorb it: the energy random-walks at the <span class="math-inline">\(10^{-8}\)</span> level, and 12 waters in 6-31G\* need 24 iterations instead of 15. A periodic full rebuild does not help (35 iterations with a rebuild every 5), because the problem is that the screening is inconsistent, not that error accumulates. Running the density test at <code>tol_eri / 10</code> fixes it:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>test tolerance</th>
+<th>Fock-build speedup</th>
+<th><span class="math-inline">\(|\Delta E|\)</span> vs full build</th>
+<th>iterations</th>
+</tr></thead>
+<tbody>
+<tr><td><span class="math-inline">\(10^{-10}\)</span></td><td>1.19–1.46×</td><td>up to <span class="math-inline">\(1.5\times10^{-8}\)</span></td><td>15 → 24 on 12 waters</td></tr>
+<tr><td><span class="math-inline">\(10^{-11}\)</span> (used)</td><td>1.19–1.33×</td><td><span class="math-inline">\(\le 6\times10^{-10}\)</span></td><td>unchanged</td></tr>
+<tr><td><span class="math-inline">\(10^{-12}\)</span></td><td>1.12–1.21×</td><td>below print precision</td><td>unchanged</td></tr>
+</tbody></table></div>
+<p>(Water chains in 6-31G\*, cc-pVDZ and cc-pVTZ, four threads; the full record is in <code>docs/SCF_VS_PYSCF_SCOPE.md</code>, step S3.) The lesson is general: <strong>a screening error that is consistent from iteration to iteration is harmless, but one that changes each iteration is noise the convergence test will see.</strong> The Schwarz table itself is never density-screened.</p>
 <h3 id="permutation-symmetry-of-the-eri-tensor">Permutation Symmetry of the ERI Tensor</h3>
 <p>The ERI tensor has 8-fold permutation symmetry:</p>
 <p><span class="math-display">\[
@@ -4767,7 +4835,7 @@ driver.cpp
 <tr><td>Point group detection and SAO blocking</td><td>Complete</td></tr>
 <tr><td>MO irrep labeling</td><td>Complete</td></tr>
 <tr><td>Full point-group ERI reduction (direct SCF, RHF/UHF)</td><td>Complete (Cartesian and spherical-harmonic basis; petite list + skeleton-Fock symmetrization; OpenMP + Schwarz screened; metric-correct spherical <span class="math-inline">\(\mathbf O_R\)</span>; validated through <span class="math-inline">\(d\)</span>-shells, C2v→C3v→Td)</td></tr>
-<tr><td>Memory-direct fused Fock build</td><td>Complete (one shared quartet loop for OS / HGP / Rys / Auto; contracts each canonical quartet straight into <span class="math-inline">\(\mathbf F\)</span>, so no <span class="math-inline">\(n_b^4\)</span> tensor is ever allocated; block-level Schwarz prescreen; handles integral symmetry natively; OpenMP over a fixed partition of the work into 64 bins, scheduled dynamically and summed in fixed order, so it is bitwise thread-count-invariant)</td></tr>
+<tr><td>Memory-direct fused Fock build</td><td>Complete (one shared quartet loop for OS / HGP / Rys / Auto; contracts each canonical quartet straight into <span class="math-inline">\(\mathbf F\)</span>, so no <span class="math-inline">\(n_b^4\)</span> tensor is ever allocated; block-level Schwarz and density-weighted prescreen, with the SCF building incrementally from <span class="math-inline">\(\Delta\mathbf P\)</span>; handles integral symmetry natively; OpenMP over a fixed partition of the work into 64 bins, scheduled dynamically and summed in fixed order, so it is bitwise thread-count-invariant)</td></tr>
 <tr><td>MPI-distributed direct SCF (<code>planck-mpi</code>)</td><td>Complete (bra-triangle stripe over the fused Fock loop, one <span class="math-inline">\(n_b^2\)</span> Allreduce per iteration; unified front end dispatching to both HF and DFT; bitwise-identical to the serial build, gated by <code>water_rhf_mpi_smoke</code> and <code>water_dft_mpi_smoke</code>). Build with <code>-DBUILD_MPI=ON</code></td></tr>
 <tr><td>Python front end</td><td>Complete (<code>python/planck.py</code>; drives either binary and returns a results dict parsed from the binary&#x27;s own <code>--json</code> dump, not from scraping the log)</td></tr>
 <tr><td>RMP2 and UMP2 energy</td><td>Complete</td></tr>
@@ -4791,7 +4859,7 @@ driver.cpp
 <tr><td>Analytic ROHF gradient</td><td>Complete (Cartesian and spherical; <code>W = P^α F^α P^α + P^β F^β P^β</code>, no Z-vector — SCF is variational)</td></tr>
 <tr><td>Analytic RMP2 gradient (Z-vector)</td><td>Complete</td></tr>
 <tr><td>Analytic UMP2 gradient</td><td>Complete</td></tr>
-<tr><td>RHF/UHF wavefunction stability analysis</td><td>Complete (RHF real/complex singlet and external triplet; UHF internal plus diagonal-approximation GHF external; optional <code>stability_follow</code>)</td></tr>
+<tr><td>RHF/UHF wavefunction stability analysis</td><td>Complete (RHF real/complex singlet and external triplet; UHF internal real <span class="math-inline">\(\mathbf A + \mathbf B\)</span> plus diagonal-approximation GHF external; optional <code>stability_follow</code> with an adaptive step)</td></tr>
 <tr><td>FCI (full MO space, RHF/ROHF references)</td><td>Complete (dense at or below 500 determinants, otherwise Davidson with a threaded, thread-count-invariant sigma build)</td></tr>
 <tr><td>FCIQMC (<code>correlation fciqmc</code>)</td><td>Complete (shift and projected estimators with blocked error bars, initiator option, fixed-seed reproducibility; reproduces exact FCI on N2/STO-3G, gated by <code>n2_fciqmc_sto3g</code>)</td></tr>
 <tr><td>CASSCF / RASSCF</td><td>Complete</td></tr>

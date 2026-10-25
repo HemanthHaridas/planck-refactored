@@ -402,6 +402,30 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Incremental direct Fock build with density-weighted block screening (S3,
+  2026-10-25).** The direct RHF/UHF/ROHF loops build `G_prev + G[ΔP]`, and
+  the fused loop skips a block when `Q_ab Q_cd · max|D| < tol_eri / 10`
+  (Häser–Ahlrichs, both traversals; off in replication mode). Fock build
+  1.19–1.33× on water chains in 6-31G\* / cc-pVDZ / cc-pVTZ, with
+  |ΔE| ≤ 6e-10 against the full build and unchanged iteration counts. At
+  `tol_eri` itself the energy random-walks at 1e-8 and DIIS stalls (15 → 24
+  iterations); a periodic rebuild does not fix it, because the error is
+  inconsistency, not accumulation. Core 80/80, extended 135/139 (the known
+  rccsdt cases). Record: `docs/SCF_VS_PYSCF_SCOPE.md`.
+
+- **UHF stability analysis now uses the real-rotation Hessian, and following
+  escapes the saddle (2026-10-25).** The UHF→UHF check combined A − B
+  same-spin blocks with an A + B cross-spin block. The result was neither
+  test, its lowest mode was not a descent direction, and following it fell
+  back to the saddle. All blocks are now A + B. Internal follows use the same
+  adaptive step as the RHF→UHF branch (π/4 when λ < −1e-2), and the follow
+  returns the total energy instead of the electronic one. 4 H2O⁺ / cc-pVDZ
+  from hcore: before, a saddle at −303.6695 Eh, above ROHF (−303.6871); now
+  the follow re-converges at −303.7136061802, matching PySCF's hcore+follow
+  (−303.7136061785) to 1.7e-9. Core suite 80/80. Note: a lower stable UHF
+  minimum exists (PySCF minao: −303.7248), since stability guarantees a local
+  minimum only.
+
 - **Nuclear-attraction setup no longer zero-fills a 246 KB table per
   primitive (S1, 2026-10-25).** `_os_nuclear_primitive` cleared
   `double V[13][13][13][14]` on every primitive pair × charge × AO component,

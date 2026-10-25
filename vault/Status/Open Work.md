@@ -1900,13 +1900,17 @@ identify the path taken. Not required for correctness or performance.
 
 ## Performance and maintenance opportunities
 
-- **RHF vs PySCF — scoped 2026-10-25; S1 landed**
+- **RHF vs PySCF — scoped 2026-10-25; S1 and S3 landed**
   (`docs/SCF_VS_PYSCF_SCOPE.md`). With matched tolerances the iteration
   counts are identical, and Pople direct-SCF iterations are level with PySCF
   (12 H2O / 6-31G\* 0.23 vs 0.42 s/iter). S1 (setup zero-fill) is fixed; see
-  Completion. Remaining: (S2) cc-pVXZ per-iteration cost is 4.5–7× PySCF; resume B2.2 families as a
-  basis-dependent traversal. (S3) No incremental ΔP build or density-weighted
-  block screening; a counting probe comes first. The `pyscf_bench.py`
+  Completion. S2 measured: the full-build cc gap is 3.5–4.8× at nb 100–130,
+  shrinking to 1.25× at nb 200; B2.2's measured ceiling is ~1.29×, so S3 goes
+  first. Remaining: (S2) cc-pVXZ per-iteration cost is 4.5–7× PySCF; resume B2.2 families as a
+  basis-dependent traversal, only if cc-pVXZ is still the headline gap. S3
+  (incremental ΔP build) is landed; see Completion. Open: the DFT KS J/K
+  direct builds (`_compute_2e_j_direct` / `_k_direct`) do not yet build
+  incrementally. The `pyscf_bench.py`
   iteration parser was fixed in the same pass: it counted MO-energy rows.
 - **Analytic gradients are 20–120× the SCF they follow — scoped 2026-10-25,
   nothing landed** (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`). The ERI
