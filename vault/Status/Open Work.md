@@ -1931,10 +1931,13 @@ identify the path taken. Not required for correctness or performance.
     L ≥ 4, worst in single-primitive quartets (2.3–5.5× libcint). **K2.0
     done** (`planck-eri-class-share --k2`): for K = 1 the HGP block kernel
     splits VRR 44 % / HRR 44 % / readout 12 %, Boys ~0, and the VRR alone
-    exceeds libcint's whole quartet, so the lever is the algorithm. Next:
-    **K2.1**, a libcint-style 2D Rys block kernel (per-root 2D tables, HRR in
-    2D), prototyped in the harness and landed only at ≥ 2× over HGP on the
-    K2.0 classes; then K2.2 (the K crossover). **G**
+    exceeds libcint's whole quartet, so the lever is the algorithm. **K2.1
+    scoped:** a libcint-style 2D Rys block kernel. Prerequisite K2.1a: the
+    Rys root finder (Golub–Welsch, `long double` moments, a heap Eigen
+    eigensolve) costs 0.78–1.42 µs for 3–5 roots, more than libcint's whole
+    quartet; replace it with Chebyshev fits generated from it at first use
+    (bar ≤ 0.1 µs at n = 5, ≤ 1e-14 relative). Then K2.1b (prototype, land
+    at ≥ 2× over HGP), K2.1c (chain into Auto), K2.2 (the K crossover). **G**
     (general contraction) is small: the post-K1 family probe gains 1.00×
     over a cc-pVDZ sweep; build only if closed-form-only families clear
     1.10×. Also: rerun `pyscf_bench.py` end to end; check the RI auxiliary

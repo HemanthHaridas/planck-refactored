@@ -202,17 +202,86 @@ libcint 0.010 s. The ratio is 3.6–5.7× in every class.
   meaningless when the maximum is roundoff; the check now uses the class
   maximum.
 
-**Steps now:**
+### K2.1 — A 2D Rys block kernel (scoped 2026-10-25)
 
-- **K2.1, a 2D Rys block kernel.** libcint's formulation: per primitive
-  quartet, Rys roots and weights; per root, the 2D recurrence for
-  \(I_x(e, f)\), \(I_y\), \(I_z\) up to \((L_{AB}, L_{CD})\); HRR on the 2D
-  tables to \((a, b, c, d)\) per axis; then each component as
-  \(\sum_r I_x I_y I_z\). Reuse Planck's root finder (`rys.cpp`). A
-  `RysBlockKernel` under the block-kernel contract (`block_eri.h`), chained
-  ahead of `HgpBlockKernel` for the classes it wins, decided by `covers()`.
-  Prototype it in the harness first, against libcint and the HGP block, on
-  the K2.0 classes: build it into production only at ≥ 2× over HGP there.
+**Question:** can a Rys block kernel built libcint's way reach libcint's
+cost on the K = 1, total L ≥ 4 classes, and what has to exist first?
+
+**The formulation.** Per primitive quartet: the geometry (as
+`_rys_eri_prep`), n = ⌊L/2⌋ + 1 Rys roots and weights for T; per root, the
+1D recurrence `_rys_vrr_1d` on each axis up to \((L_{AB}, L_{CD})\); a 2D
+HRR per axis to \(I_q(a_q, b_q, c_q, d_q)\) for \(a_q \le L_A\), etc.; then
+every Cartesian component as \(\sum_r w_r I_x I_y I_z\). Contracted
+primitives accumulate into the component block. The per-axis tables are
+tiny (`(dd|dd)`: 3 × 81 entries per root), and the cost is the assembly:
+components × roots × 3 operations, 1296 × 5 × 3 ≈ 19k for `(dd|dd)` against
+HGP's 3675-entry VRR table plus a 6D HRR. libcint does exactly this and
+spends 2.05 µs on `(dd|dd)`.
+
+**Measured: the root finder rules out reusing what exists.**
+`Rys::rys_roots_weights` (`rys_roots.cpp`) builds moments in `long double`
+(with `erfl`), runs a Stieltjes recurrence, then solves the Jacobi matrix
+with Eigen's `SelfAdjointEigenSolver` on a heap-allocated `MatrixXd`
+(Golub–Welsch). Per call, T uniform in [0, 40], g++-15 -O3:
+
+| roots | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
+|---|---|---|---|---|---|---|---|---|
+| µs | 0.03 | 0.46 | 0.78 | 1.08 | 1.42 | 1.81 | 2.37 | 3.04 |
+
+Total L 4–5 needs 3 roots, 6–7 needs 4, 8–9 needs 5. The 4-root call alone
+(1.08 µs) is 1.7× libcint's whole `(pp|dd)` quartet (0.65 µs). No kernel on
+this finder can win. It also prices every per-component Rys evaluation in
+production today (explicit `engine rys`, the Auto table's Rys buckets).
+
+**Steps:**
+
+- **K2.1a, fast roots and weights (prerequisite).** Piecewise Chebyshev
+  fits in T for each n, with the coefficients generated once, at first use,
+  from the existing Golub–Welsch solver, which stays as the generator and
+  the reference. Above a cutoff T, the Gauss–Hermite asymptote: roots
+  \(x_i^2 / T\) and weights \(w_i / \sqrt{T}\) from the n-point Hermite
+  rule. One mechanism, no tables pasted into the source, and accuracy set
+  by the segment width. Rejected: porting libcint's / GAMESS's fitted
+  routines (thousands of lines of generated constants, and only n ≤ 5 in
+  the GAMESS form); a double-precision Golub–Welsch with a fixed-size QL
+  solve (the moment problem is ill-conditioned in double at large n and T,
+  which is why the current code uses `long double`; it would also stay at
+  roughly 0.2–0.5 µs).
+  - Gate: max relative error against `rys_roots_weights` ≤ 1e-14 on roots
+    and weights, n = 1..11, on a dense T sweep that includes every segment
+    boundary and the asymptotic cutoff; every per-component Rys regression
+    and the K0 value check (≤ 7e-13 against libcint) unchanged.
+  - Bar: ≤ 0.1 µs per call at n = 5. Replaces the solver in
+    `rys_roots_weights` itself, so the per-component Rys path gains too.
+- **K2.1b, prototype `RysBlockKernel` in the harness.** A header-only
+  kernel under the `block_eri.h` contract, beside `hgp_block_eri.h`. The
+  geometry and 1D VRR move out of `rys.cpp`'s anonymous namespace into a
+  shared header so the per-component path and the block kernel use one
+  copy. Layout: per-axis tables root-innermost, so the assembly is a dot
+  product over roots for each component; the component exponent tuples are
+  computed once per class, not per quartet. Measured with `--k2` beside the
+  HGP block and libcint.
+  - Gate: block values against the HGP block ≤ 1e-13 of the class maximum
+    on the four water bases (the `--k2` check), and against libcint via K0.
+  - Bar to land: ≥ 2× over the HGP block on the K = 1, L ≥ 4 classes of
+    2 H2O cc-pVTZ. Also report K = 2..9, which K2.2 needs.
+- **K2.1c, production.** Chain it in Auto: closed forms (L ≤ 3), then
+  `RysBlockKernel` for the L and K it wins, then `HgpBlockKernel`. K is per
+  block, so `RysBlockKernel::prepare` declines blocks above its K limit and
+  the chain hands them to HGP (`covers()` stays per total L, as the dense
+  digestion predicate needs). Coulomb only, as the other block kernels.
+  - Follow-on, not part of K2.1: once a 2D Rys block exists, the
+    conventional Auto build's 6D hoist (`_contracted_eri_block_hoisted_views`,
+    50–210× libcint) should go through it, and the hoist be deleted.
+
+**Expected:** if K2.1b reaches libcint on the K = 1 classes, the 2 H2O
+cc-pVTZ kernel sweep falls from 0.49 to about 0.24 s and the full build to
+about parity with PySCF-segmented (the K2 ceiling above). K2.1a alone does
+nothing for the HGP-served classes; its value is as the prerequisite and
+for the per-component Rys path.
+
+**Steps after K2.1:**
+
 - **K2.2, which K it should own.** Rys does its assembly per primitive
   quartet; HGP contracts before its HRR. Time both for K = 1, 2, 3, 4 at
   each total L and set the crossover. On cc-pVTZ the high-L polarization
