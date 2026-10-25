@@ -50,7 +50,7 @@ namespace
         return C * G_cart * C.transpose();
     }
 
-    // Incremental direct Fock build (docs/SCF_VS_PYSCF_SCOPE.md, S3). G is linear
+    // Incremental direct Fock build (docs/SCF_VS_PYSCF.md, S3). G is linear
     // in the densities, so G = G_ref + G[P - P_ref], and the fused loop's
     // density-weighted screen drops most of G[dP] as P converges (1.19-1.33x on
     // the Fock build). PySCF does the same (get_veff with dm_last / vhf_last).

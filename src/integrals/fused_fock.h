@@ -322,7 +322,7 @@ namespace HartreeFock::Integrals
             qmax[p] = m;
         }
 
-        // Density-weighted block screen (S3, docs/SCF_VS_PYSCF_SCOPE.md):
+        // Density-weighted block screen (S3, docs/SCF_VS_PYSCF.md):
         // skip a block when Qmax_bra * Qmax_ket * max(4|D_ab|, 4|D_cd|, |D_ac|,
         // |D_ad|, |D_bc|, |D_bd|) < tol_eri, with |D| the shell-block maximum
         // over every density passed in (Haser-Ahlrichs). This is what makes an

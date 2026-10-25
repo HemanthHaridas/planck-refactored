@@ -411,7 +411,7 @@ historical design context, but they are no longer the source of truth for
   `tol_eri` itself the energy random-walks at 1e-8 and DIIS stalls (15 → 24
   iterations); a periodic rebuild does not fix it, because the error is
   inconsistency, not accumulation. Core 80/80, extended 135/139 (the known
-  rccsdt cases). Record: `docs/SCF_VS_PYSCF_SCOPE.md`.
+  rccsdt cases). Record: `docs/SCF_VS_PYSCF.md`.
 
 - **UHF stability analysis now uses the real-rotation Hessian, and following
   escapes the saddle (2026-10-25).** The UHF→UHF check combined A − B
@@ -435,7 +435,7 @@ historical design context, but they are no longer the source of truth for
   bitwise. Setup is now 0.05 s, and that run takes 3.3 s against PySCF's 6.3 s.
   Gated by identical outputs on SCF / PCM / ESP / CHELPG / spherical-gradient
   / RKS-PCM inputs and the core suite (80/80). Record:
-  `docs/SCF_VS_PYSCF_SCOPE.md`.
+  `docs/SCF_VS_PYSCF.md`.
 
 - **Batched Boys calls and grow-only kernel scratch in the fused Fock loop
   (R2 `102f1d01`, `13c60826`, `0e3e074d`, 2026-10-23/24).** The closed forms

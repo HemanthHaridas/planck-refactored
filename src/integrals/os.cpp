@@ -600,7 +600,7 @@ static double _os_nuclear_primitive(
     // No initializer: every read below (VRR, the m=0 extraction, the HRR) is of
     // an entry the recurrence wrote first. Zero-filling the full 246 KB here
     // ran per primitive pair x charge x component and was most of setup
-    // (docs/SCF_VS_PYSCF_SCOPE.md, S1).
+    // (docs/SCF_VS_PYSCF.md, S1).
     double V[VRR_DIM][VRR_DIM][VRR_DIM][MMAX];
 
     // Compute all Boys values

@@ -1900,18 +1900,17 @@ identify the path taken. Not required for correctness or performance.
 
 ## Performance and maintenance opportunities
 
-- **RHF vs PySCF — scoped 2026-10-25; S1 and S3 landed**
-  (`docs/SCF_VS_PYSCF_SCOPE.md`). With matched tolerances the iteration
-  counts are identical, and Pople direct-SCF iterations are level with PySCF
-  (12 H2O / 6-31G\* 0.23 vs 0.42 s/iter). S1 (setup zero-fill) is fixed; see
-  Completion. S2 measured: the full-build cc gap is 3.5–4.8× at nb 100–130,
-  shrinking to 1.25× at nb 200; B2.2's measured ceiling is ~1.29×, so S3 goes
-  first. Remaining: (S2) cc-pVXZ per-iteration cost is 4.5–7× PySCF; resume B2.2 families as a
-  basis-dependent traversal, only if cc-pVXZ is still the headline gap. S3
-  (incremental ΔP build) is landed; see Completion. Open: the DFT KS J/K
-  direct builds (`_compute_2e_j_direct` / `_k_direct`) do not yet build
-  incrementally. The `pyscf_bench.py`
-  iteration parser was fixed in the same pass: it counted MO-energy rows.
+- **RHF vs PySCF — answered 2026-10-25; S1 and S3 landed, B2.2 declined**
+  (`docs/SCF_VS_PYSCF.md`). With matched tolerances the iteration counts are
+  identical. After S1 (setup zero-fill) and S3 (incremental build), 12 H2O /
+  6-31G\* takes 3.1 s against PySCF's 7.2 s. What remains is a
+  per-primitive-quartet kernel gap in a full Fock build: 11–16× on small
+  cc-pVXZ systems, falling to 4–6× by nb ≈ 200. It is **not** general
+  contraction: PySCF fed the same segmented representation Planck uses is
+  just as fast (0.94–1.02×), so B2.2 is declined. Closing it needs
+  libcint-class kernels (`docs/ERI_PERFORMANCE_SCOPE.md`). Also open: the DFT
+  KS J/K direct builds (`_compute_2e_j_direct` / `_k_direct`) do not yet
+  build incrementally.
 - **Analytic gradients are 20–120× the SCF they follow — scoped 2026-10-25,
   nothing landed** (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`). The ERI
   Fock-build work never reached the derivative integrals: the 2e gradient is

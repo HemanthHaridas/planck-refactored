@@ -1995,7 +1995,7 @@ error accumulates. Running the density test at `tol_eri / 10` fixes it:
 | \(10^{-12}\) | 1.12–1.21× | below print precision | unchanged |
 
 (Water chains in 6-31G\*, cc-pVDZ and cc-pVTZ, four threads; the full
-record is in `docs/SCF_VS_PYSCF_SCOPE.md`, step S3.) The lesson is general:
+record is in `docs/SCF_VS_PYSCF.md`, step S3.) The lesson is general:
 **a screening error that is consistent from iteration to iteration is
 harmless, but one that changes each iteration is noise the convergence
 test will see.** The Schwarz table itself is never density-screened.
