@@ -572,7 +572,7 @@ P    1    0.727
 <tr><td>cc-pVDZ</td><td>28 (O s 9+9, O p 4, H s 4)</td><td>24 (8+8, 3, 3)</td></tr>
 <tr><td>cc-pVTZ</td><td>42</td><td>34</td></tr>
 </tbody></table></div>
-<p>Planck&#x27;s reader applies it to every orbital basis it loads (<code>drop_redundant_primitives</code>, <code>src/basis/gaussian.cpp</code>). A primitive is dropped from a contracted shell when an uncontracted shell of the same L on the same element has the same exponent. A contraction is never emptied, and Pople sets, which carry no such duplicates, come through unchanged. On water chains the direct Fock build becomes 2.1–2.3× faster in cc-pVDZ and 1.5–1.8× in cc-pVTZ, with SCF energies equal within the convergence tolerance (<code>docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md</code>).</p>
+<p>Planck&#x27;s reader applies it to every orbital basis it loads (<code>drop_redundant_primitives</code>, <code>src/basis/gaussian.cpp</code>). A primitive is dropped from a contracted shell when an uncontracted shell of the same L on the same element has the same exponent. A contraction is never emptied, and Pople sets, which carry no such duplicates, come through unchanged. On water chains the direct Fock build becomes 2.1–2.3× faster in cc-pVDZ and 1.5–1.8× in cc-pVTZ, with SCF energies equal within the convergence tolerance (<code>docs/ERI_KERNEL_VS_LIBCINT.md</code>).</p>
 <p>The lesson in the measurement is the one worth keeping: before optimizing how an integral is computed, count how many are being computed. Each kernel change in this guide (closed forms, block kernels, lanes, batched Boys calls) was worth well under 2× on its own; the largest remaining cc-pVXZ gap to PySCF was in the basis file.</p>
 <h3 id="normalization-of-a-primitive">Normalization of a Primitive</h3>
 <p>For a Cartesian Gaussian with angular momentum <span class="math-inline">\((l_x, l_y, l_z)\)</span> and exponent <span class="math-inline">\(\alpha\)</span>:</p>
@@ -1909,7 +1909,7 @@ W[a_x][a_y][a_z][c_x][c_y][c_z]
 <tr><td>cc-pVDZ, 4 and 8 waters</td><td>1.01–1.04×</td><td>identical</td></tr>
 <tr><td>6-31G\*, 4 and 12 waters</td><td>0.99–1.01×</td><td>identical</td></tr>
 </tbody></table></div>
-<p>The whole build gains about 1.15×, not 2×, because Rys2D halves only the blocks it takes; contracted blocks stay on HGP. Pople bases are untouched, as they must be (<code>docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md</code>, K2.1c).</p>
+<p>The whole build gains about 1.15×, not 2×, because Rys2D halves only the blocks it takes; contracted blocks stay on HGP. Pople bases are untouched, as they must be (<code>docs/ERI_KERNEL_VS_LIBCINT.md</code> §4).</p>
 <p><strong>Lessons from tuning it.</strong> Only one of five layout changes paid, and it was not one the operation count pointed to. Splitting the time with early returns inside <code>prepare</code> showed that 1.0 µs of a 5 µs <span class="math-inline">\((dd|dd)\)</span> block went on recomputing each component&#x27;s table offsets from the shells&#x27; component views. Those offsets depend only on the class <span class="math-inline">\((l_A, l_B, l_C, l_D)\)</span>, because a shell&#x27;s Cartesian components come in a fixed order per <span class="math-inline">\(L\)</span>. Caching them per class took the kernel from 1.66× to 2.00× over HGP. Four other changes were slower or no better:</p>
 <ul>
 <li>folding the weight into one table;</li>

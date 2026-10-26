@@ -341,7 +341,7 @@ the same element has the same exponent. A contraction is never emptied, and
 Pople sets, which carry no such duplicates, come through unchanged. On water
 chains the direct Fock build becomes 2.1–2.3× faster in cc-pVDZ and
 1.5–1.8× in cc-pVTZ, with SCF energies equal within the convergence
-tolerance (`docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`).
+tolerance (`docs/ERI_KERNEL_VS_LIBCINT.md`).
 
 The lesson in the measurement is the one worth keeping: before optimizing
 how an integral is computed, count how many are being computed. Each kernel
@@ -3597,7 +3597,7 @@ takes those. Measured on whole SCF runs (RHF, direct, best of three):
 
 The whole build gains about 1.15×, not 2×, because Rys2D halves only the
 blocks it takes; contracted blocks stay on HGP. Pople bases are untouched,
-as they must be (`docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`, K2.1c).
+as they must be (`docs/ERI_KERNEL_VS_LIBCINT.md` §4).
 
 **Lessons from tuning it.** Only one of five layout changes paid, and it
 was not one the operation count pointed to. Splitting the time with early

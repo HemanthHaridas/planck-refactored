@@ -4,7 +4,7 @@
 //   closed forms     total L <= 3
 //   Rys2D block      K = 1 at L >= 4, K <= 3 at L >= 7 (K primitive quartets),
 //                    where it measured faster than the HGP block
-//                    (docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md, K2.1b b3)
+//                    (docs/ERI_KERNEL_VS_LIBCINT.md §4)
 //   HGP block        the rest of 4 <= L <= 12
 //
 // Above L = 12, and for screened kernels, blocks stay on the per-component

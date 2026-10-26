@@ -2,7 +2,7 @@
 #define HF_RYS_DETAIL_H
 
 // Rys pieces shared by the per-component path (rys.cpp) and the 2D Rys block
-// kernel (scope step K2.1b, docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md): the
+// kernel (docs/ERI_KERNEL_VS_LIBCINT.md §4): the
 // screened-kernel map, the per-primitive-pair geometry and the 1D VRR.
 
 #include <cmath>

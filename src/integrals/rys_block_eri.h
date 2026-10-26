@@ -1,5 +1,5 @@
-// rys_block_eri.h — the 2D Rys shell-quartet block kernel (K2.1b,
-// docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md).
+// rys_block_eri.h — the 2D Rys shell-quartet block kernel
+// (docs/ERI_KERNEL_VS_LIBCINT.md §4).
 //
 // libcint's formulation. Per primitive quartet and per Rys root r (n =
 // L/2 + 1 roots for total L):
@@ -12,7 +12,7 @@
 //
 // The per-component path instead sums the roots into a 6D box first and runs
 // its HRR on that box, which is what made the hoisted Rys block 50-210x
-// libcint (K2.0). Here the HRR runs on tables of (L_A+1)(L_B+1)(L_C+1)(L_D+1)
+// libcint. Here the HRR runs on tables of (L_A+1)(L_B+1)(L_C+1)(L_D+1)
 // entries per root and axis, and the assembly is the main cost.
 //
 // Tables are root-innermost: I_q[(((a dB + b) dC + c) dD + d) n + r], so a

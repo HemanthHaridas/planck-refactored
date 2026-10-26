@@ -315,7 +315,7 @@ namespace
 // from docs/auto_dispatch_fit.json's `rule_in_code`.
 //
 // Current shape (median of 9 runs, refit 2026-10-26 after the fast Rys root
-// finder, K2.1a, and HGP's batched Boys calls):
+// finder and HGP's batched Boys calls):
 //   - HGP wins the low/mid-L bulk (incl. the L_AB+L_CD<=1 corner).
 //   - Rys wins 14 high-L buckets: L_CD = 8 for L_AB >= 2, (4,7)-(8,7) and
 //     (7,6)/(8,6). Most are measured only on He/cc-pV5Z; some are within

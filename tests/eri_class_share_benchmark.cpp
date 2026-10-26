@@ -1281,7 +1281,7 @@ namespace
         }
     }
 
-    // ── K0 (docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md): per-class time against libcint ──
+    // ── docs/ERI_KERNEL_VS_LIBCINT.md §4: per-class time against libcint ──
     //
     // The same canonical, Schwarz-surviving shell quartets (shell-pair blocks
     // p <= q, as the dense traversal visits them) go through Planck's production
@@ -1617,11 +1617,11 @@ namespace
         const double tf = timed_build_block(s, hgp_elem, production_kernel());
         std::printf("  production Fock build %.4f s: kernel sweep is %.0f%% of it\n", tf, 100.0 * TP / tf);
 
-        // ── K2.0 (docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md): single-primitive high-L ──
+        // ── docs/ERI_KERNEL_VS_LIBCINT.md §4: single-primitive high-L ──
         //
         // For the K = 1, total L >= 4 classes, split the HGP block kernel into
         // Boys / VRR+contract / HRR / readout by timing progressively fuller
-        // sweeps of the same quartets, and time the 2D Rys block kernel (K2.1b)
+        // sweeps of the same quartets, and time the 2D Rys block kernel
         // and libcint on them. Each phase is the difference between two sweeps,
         // best of three each.
         if (k2)
@@ -1649,7 +1649,7 @@ namespace
                 return t;
             };
             double S_boys = 0, S_vrr = 0, S_hgp = 0, S_full = 0, S_rys = 0, S_lib = 0;
-            std::printf("  K2.0, K = 1 classes at total L >= 4 (us per quartet; VRR table = e*f*m entries)\n");
+            std::printf("  K = 1 classes at total L >= 4 (us per quartet; VRR table = e*f*m entries)\n");
             std::printf("  %-14s %6s %7s %7s %7s %7s %7s | %7s %7s %7s | %7s %6s %9s\n", "class", "n", "Boys",
                         "VRR", "HRR", "read", "HGP", "Rys2D", "lib", "HGP/lib", "Rys/lib", "VRRtab", "Rys-HGP");
             for (const Row &r : k2rows)
@@ -1784,7 +1784,7 @@ namespace
                         100 * (S_hgp - S_vrr) / S_full, 100 * (S_full - S_hgp) / S_full, S_rys, S_lib,
                         S_full / S_rys);
 
-            // K2.1b gate: the 2D Rys block against the HGP block and libcint on
+            // Rys2D gate: the 2D Rys block against the HGP block and libcint on
             // every class it accepts, every contraction depth. Differences are
             // relative to the largest |value| over the K group (never per
             // block: blocks that vanish by symmetry return O(1)-different
@@ -1822,18 +1822,18 @@ namespace
                 }
             }
             double worst = 0.0;
-            std::printf("  K2.1b gate, Rys2D on every class it covers (relative to the K group's max |value|)\n");
+            std::printf("  Rys2D gate, on every class it covers (relative to the K group's max |value|)\n");
             std::printf("  %4s %8s %12s %12s\n", "K", "classes", "Rys2D-HGP", "lib-Rys2D");
             for (const auto &[K, v] : by_k)
             {
                 std::printf("  %4d %8.0f %12.1e %12.1e\n", K, v[3], v[0] / v[1], v[2] / v[1]);
                 worst = std::max({worst, v[0] / v[1], v[2] / v[1]});
             }
-            std::printf("  K2.1b gate %s: worst %.1e (bar 1e-13)\n", worst <= 1e-13 ? "PASS" : "FAIL", worst);
+            std::printf("  Rys2D gate %s: worst %.1e (bar 1e-13)\n", worst <= 1e-13 ? "PASS" : "FAIL", worst);
 
-            // K2.1b b3: HGP block / Rys2D time by K (primitive quartets) and
+            // Crossover: HGP block / Rys2D time by K (primitive quartets) and
             // total L, both reading every component, best of three per class.
-            // The input to K2.2's crossover.
+            // It sets the crossover rule in auto_block_eri.h.
             std::map<std::pair<int, int>, std::array<double, 2>> by_kl; // (K, L) -> HGP s, Rys2D s
             const auto sweep = [&](auto &k, const auto &list)
             {
@@ -1861,7 +1861,7 @@ namespace
                 v[1] += best3([&] { sweep(rys2d, list); });
                 ls[L] = 1;
             }
-            std::printf("  K2.1b b3, HGP block / Rys2D by K (rows) and total L (columns); > 1: Rys2D faster\n  %5s", "K");
+            std::printf("  Crossover, HGP block / Rys2D by K (rows) and total L (columns); > 1: Rys2D faster\n  %5s", "K");
             for (const auto &[L, u] : ls)
                 std::printf(" %6d", L);
             std::printf("\n");
@@ -1928,8 +1928,8 @@ int main(int argc, char **argv)
     }
 
     // --libcint nwater basis: K0, per-class kernel time against libcint
-    // (docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md). Needs PLANCK_LIBCINT.
-    // --k2 nwater basis: the same, then K2.0's split of the single-primitive
+    // (docs/ERI_KERNEL_VS_LIBCINT.md). Needs PLANCK_LIBCINT.
+    // --k2 nwater basis: the same, then the split of the single-primitive
     // high-L classes (HGP phases, Rys hoisted block, libcint).
     if (argc == 4 && (std::string(argv[1]) == "--libcint" || std::string(argv[1]) == "--k2"))
     {

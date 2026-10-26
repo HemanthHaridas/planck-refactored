@@ -17,7 +17,7 @@ the wall time. Both are put in directly-comparable configurations:
   * Same convergence tolerance and the same thread count.
 
 PySCF's integral engine is libcint; Planck's is its own OS/HGP/Rys engine
-(docs/SCF_VS_PYSCF.md, docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md).
+(docs/SCF_VS_PYSCF.md, docs/ERI_KERNEL_VS_LIBCINT.md).
 
 Usage:
   tests/benchmarks/pyscf_bench.py [--build-dir build] [--basis 6-31g*]

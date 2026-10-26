@@ -20,19 +20,19 @@ Not where it looked, twice over.
   conventional SCF, not direct. Direct against direct, a full Fock build is
   level or faster in Planck on 6-31G\* (0.27–0.95×), and 1.5–3.7× slower on
   cc-pVXZ, not 4–16×. What remains is analysed in
-  `docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`: Planck's high-L kernels are slower
+  `docs/ERI_KERNEL_VS_LIBCINT.md`: Planck's high-L kernels are slower
   than libcint's, and its low-L kernels are faster.
 - **The basis file was a cause, and is fixed.** PySCF's cc-pVXZ files drop
   outer primitives that also appear as uncontracted shells (the optimized
   general contraction); the GBS files Planck reads keep them, 28 against 24
   primitives per water in cc-pVDZ. Planck now drops them at read time:
   the Fock build is 2.1–2.3× faster on cc-pVDZ and 1.5–1.8× on cc-pVTZ,
-  energies unchanged (`docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`, K1).
+  energies unchanged (`docs/ERI_KERNEL_VS_LIBCINT.md` §3).
 - **General contraction is a small lever for Planck.** It was first declined
   on an in-core test (§4). Remeasured direct, it is worth 1.6× to libcint but
   about 1.1× to Planck, whose per-primitive work is already cheaper.
 - **What remains is high-L kernel cost on cc-pVTZ**, rescoped in
-  `docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md` (K2).
+  `docs/ERI_KERNEL_VS_LIBCINT.md` §4.
 
 ## Measured: end to end, after both fixes (PySCF in-core)
 
@@ -193,7 +193,7 @@ full build after S3) against PySCF's `get_veff` **forced direct**
 | 2 H2O cc-pVTZ | 130 | 1.00 / 0.284 s | 0.280 / 0.101 s | 3.6× / 2.8× |
 | 3 H2O cc-pVTZ | 195 | 3.15 / 0.860 s | 0.852 / 0.243 s | 3.7× / 3.5× |
 
-- **Where it lies:** `docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md` (K0) timed both
+- **Where it lies:** `docs/ERI_KERNEL_VS_LIBCINT.md` §4 timed both
   codes' kernels on the same quartets. Planck is faster than libcint at total
   L ≤ 3 and slower above, up to 4–5× at L ≥ 8. On 4 H2O cc-pVDZ, Planck's
   kernels are faster overall (0.53×), so the remaining build gap there is
@@ -212,7 +212,7 @@ full build after S3) against PySCF's `get_veff` **forced direct**
   scheme. Forced direct, PySCF is 1.7–2.1× slower on Planck's GBS files than
   on its own, though that comparison mixes general contraction with the
   redundant-primitive difference, now removed on Planck's side
-  (`docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`, K1). After K1, splitting PySCF's
+  (`docs/ERI_KERNEL_VS_LIBCINT.md` §3). After K1, splitting PySCF's
   general contractions costs it 1.6–1.7× on cc-pVDZ, but Planck's family
   probe gains only 1.00× over a whole cc-pVDZ sweep (1.28× on the closed
   forms, a loss on the HGP half), because Planck's per-primitive work is
@@ -268,7 +268,7 @@ bitwise against v1.2.0, so checks pinned to exact integral values move.
   1.0–2.75× on cc-pVTZ (the 1.5–3.7× in §4 predates it). On cc-pVTZ it is
   high-L kernel cost (K2); on cc-pVDZ it is general contraction, which is
   worth 1.6× to libcint but about 1.1× to Planck. Rescoped in
-  `docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`.
+  `docs/ERI_KERNEL_VS_LIBCINT.md`.
 - **DFT:** the KS Coulomb/exchange direct builds (`_compute_2e_j_direct` /
   `_compute_2e_k_direct`) do not yet build incrementally.
 - **Gradients:** `docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`.

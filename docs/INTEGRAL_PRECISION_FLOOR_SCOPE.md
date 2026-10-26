@@ -11,7 +11,7 @@ This file answers a narrower architecture question:
 > was isolated, including a red herring, and is retained rather than deleted.
 
 > **Correction (2026-10-25): the Boys function was not correct everywhere.**
-> The kernel comparison against libcint (`docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`,
+> The kernel comparison against libcint (`docs/ERI_KERNEL_VS_LIBCINT.md`,
 > K0) found that the out-of-tree Boys core returned high-order values with
 > too few significant digits over part of its argument range. That produced
 > integral errors up to 7e-6 on pure f quartets (cc-pVTZ) and ~5e-8 on d

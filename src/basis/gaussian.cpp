@@ -28,7 +28,7 @@ namespace
     // primitive quartet through that shell gets cheaper. Water cc-pVDZ goes
     // from 28 to 24 primitives, cc-pVTZ from 42 to 34; the direct Fock build
     // is 2.1-2.3x faster on cc-pVDZ and 1.5-1.8x on cc-pVTZ
-    // (docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md, K1). Energies are unchanged; MO
+    // (docs/ERI_KERNEL_VS_LIBCINT.md §3). Energies are unchanged; MO
     // coefficients and AO-partitioned properties (Mulliken, Mayer) are not,
     // since the contracted functions themselves differ.
     void drop_redundant_primitives(std::vector<GbsShell> &shells)

@@ -422,7 +422,7 @@ historical design context, but they are no longer the source of truth for
   cc-pVDZ up, since 6-31G* H has no p) and `planck-fock-accumulate`
   (thread-count invariance now includes cc-pVTZ). Core 80/80, smoke
   43/45, extended 135/139 (known rccsdt cases). Record:
-  `docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`.
+  `docs/ERI_KERNEL_VS_LIBCINT.md`.
 
 - **Fast Rys roots and weights (K2.1a, 2026-10-25).** `rys_roots_weights`
   is now Chebyshev segment fits below T = 35 + 7n and the Laguerre(−½)
@@ -444,7 +444,7 @@ historical design context, but they are no longer the source of truth for
   the first, noisier generator failed. `planck-auto-dispatch-benchmark`
   segfaulted at startup (no Boys loader, like nine others earlier); fixed.
   Extended suite 135/139 (the known rccsdt cases). Record:
-  `docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md` (K2.1a).
+  `docs/ERI_KERNEL_VS_LIBCINT.md` §4.
 
 - **Rys roots and weights fixed at T >= 1 and at small T (2026-10-25).**
   Found while scoping K2.1a. `_boys_moment` (`rys_roots.cpp`) built the
@@ -482,10 +482,10 @@ historical design context, but they are no longer the source of truth for
   refuted the scope's lead hypothesis (PySCF's density prescreen removes only
   5–8 %, like Planck's) and showed B2.2 had been declined on an in-core test.
   Extended suite 135/139 (the four known rccsdt routing cases); no case
-  moved. Record: `docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md` (K1).
+  moved. Record: `docs/ERI_KERNEL_VS_LIBCINT.md` §3.
 
 - **Boys core v1.2.1: high-order values fixed (2026-10-25).** The kernel
-  comparison against libcint (`docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`, K0)
+  comparison against libcint (`docs/ERI_KERNEL_VS_LIBCINT.md` §2)
   found integral errors of up to 6.6e-8 (6-31G\*), 4.0e-8 (cc-pVDZ) and
   7.2e-6 (cc-pVTZ, pure f quartets), growing with L. Planck's Rys engine,
   which does not use the Boys function, matched libcint to 2e-16, while OS,

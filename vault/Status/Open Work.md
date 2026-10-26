@@ -1920,30 +1920,31 @@ identify the path taken. Not required for correctness or performance.
   contraction (B2.2 declined). Remaining open:
   - **The end-to-end SCF table** in `docs/SCF_VS_PYSCF.md` is still the
     in-core one; rerun the fixed harness.
-  - **The cc-pVXZ gap:** `docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`. K0 is done
-    (`planck-eri-class-share --libcint`): Planck's kernels beat libcint at
-    total L ≤ 3 and lose above, by 4–5× at L ≥ 8. K1 is done: the work gap
-    was redundant primitives in the GBS files, now dropped at read time
-    (see Completion). **Rescoped 2026-10-25.** Direct vs direct, a full
-    build is now 0.79–1.21× PySCF on cc-pVDZ and 1.0–2.75× on cc-pVTZ.
-    In the same (segmented) representation Planck is faster on cc-pVDZ
-    (0.47–0.75×) and 1.5–1.9× slower on cc-pVTZ, all of it at total
-    L ≥ 4, worst in single-primitive quartets (2.3–5.5× libcint). **K2.0
-    done** (`planck-eri-class-share --k2`): for K = 1 the HGP block kernel
-    splits VRR 44 % / HRR 44 % / readout 12 %, Boys ~0, and the VRR alone
-    exceeds libcint's whole quartet, so the lever is the algorithm. **K2.1
-    scoped:** a libcint-style 2D Rys block kernel. **K2.1a done** (see
-    Completion): Rys roots and weights now cost 32–43 ns for every n.
-    **K2.1b and K2.1c done (2026-10-26, see Completion):** the 2D Rys
-    block kernel is in Auto, cc-pVTZ Fock builds 1.11–1.16× faster per
-    iteration. Open: rescope gradient G3 on Rys2D; route the conventional
-    6D hoist through Rys2D and delete it; libcint is still 2.3–2.6×
-    faster on the K = 1 high-L classes (compare its `g`-tensor layout
-    only if that matters). **G**
-    (general contraction) is small: the post-K1 family probe gains 1.00×
-    over a cc-pVDZ sweep; build only if closed-form-only families clear
-    1.10×. Also: rerun `pyscf_bench.py` end to end; check the RI auxiliary
-    files for the same redundancy.
+  - **The cc-pVXZ gap — answered 2026-10-26** (`docs/ERI_KERNEL_VS_LIBCINT.md`,
+    rewritten from its scope). It was a benchmark artifact, a Boys defect,
+    redundant basis primitives, and high-L single-primitive kernel cost,
+    now served by the 2D Rys block kernel (cc-pVTZ Fock builds 1.11–1.16×;
+    see Completion). Still open:
+    - **Verify the Auto-table refit** (`45ef3cef`): `planck-compute-2e`,
+      `engine_scf_energy_compare.py` (incl. He₂/cc-pV5Z, which reaches the
+      changed buckets) and the regression suites have not run on it.
+    - **Rerun the Planck-vs-PySCF Fock table** (doc §3); it predates Rys2D.
+    - **Rescope gradient G3 on Rys2D** (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`):
+      differentiating the 2D per-axis tables is libcint's route to
+      derivative integrals and gives Rys the derivative kernel Phase D lacks.
+    - **Route the conventional Auto build's 6D hoist**
+      (`_contracted_eri_block_hoisted_views`, 50–210× libcint) through
+      Rys2D and delete the hoist.
+    - **libcint is still 2.3–2.6× faster** on the blocks Rys2D owns; compare
+      its `g`-tensor layout (`g0`/`g2d` strides in `cint2e.c`) only if that
+      matters. Four obvious layouts already lost (doc §4).
+    - **General contraction (G0):** rerun the family probe restricted to
+      closed-form classes on 4 and 8 H2O cc-pVDZ at 1 and 4 threads; build
+      only if the whole build gains ≥ 1.10× with Pople unchanged (doc §5).
+    - **Smaller:** rerun `pyscf_bench.py` end to end; check the `-RIFIT`
+      files for the same redundant primitives (JK-fit sets are usually
+      uncontracted); the non-kernel half of the 6-31G\* fused loop (low
+      priority, Planck already beats PySCF there).
   - **DFT:** the KS J/K direct builds (`_compute_2e_j_direct` / `_k_direct`)
     do not yet build incrementally.
   - **Boys v1.2.1 re-pins:** checks pinned to exact integral values move with

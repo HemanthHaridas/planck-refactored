@@ -9,7 +9,7 @@
 
 #include <Eigen/Eigenvalues>
 
-// Rys roots and weights (docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md, K2.1a).
+// Rys roots and weights (docs/ERI_KERNEL_VS_LIBCINT.md §4).
 //
 // The rule for n roots at argument T is the Gauss rule of the measure
 // e^{-T t^2} dt on [0, 1], in u = t^2. Three pieces:
