@@ -22,6 +22,8 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
 #include <cstddef>
 #include <vector>
 
@@ -98,24 +100,32 @@ namespace HartreeFock::Integrals
             for (auto &t : I_)
                 grow_to(t, nt);
 
-            // Row offsets of each component in the three axis tables.
             n_[0] = r.n[0], n_[1] = r.n[1], n_[2] = r.n[2], n_[3] = r.n[3];
             const std::size_t nc = n_[0] * n_[1] * n_[2] * n_[3];
             grow_to(out_, nc);
             std::fill_n(out_.begin(), nc, 0.0);
-            if (off_.size() < 3 * nc)
-                off_.resize(3 * nc);
-            std::size_t o = 0;
-            for (std::size_t ca = 0; ca < n_[0]; ++ca)
-                for (std::size_t cb = 0; cb < n_[1]; ++cb)
-                    for (std::size_t cc = 0; cc < n_[2]; ++cc)
-                        for (std::size_t cd = 0; cd < n_[3]; ++cd, ++o)
-                        {
-                            const auto &A = r.views[0][ca]->_cartesian, &B = r.views[1][cb]->_cartesian,
-                                       &C = r.views[2][cc]->_cartesian, &D = r.views[3][cd]->_cartesian;
-                            for (int q = 0; q < 3; ++q)
-                                off_[3 * o + q] = static_cast<std::size_t>(((A[q] * dB + B[q]) * dC + C[q]) * dD + D[q]) * n;
-                        }
+
+            // Row offsets of each component in the three axis tables, once per
+            // class: a shell's Cartesian components come in a fixed order per L
+            // (gaussian.cpp), so they depend only on (L_A, L_B, L_C, L_D).
+            // Walking the views per block was 1.0 us of a 5 us (dd|dd).
+            std::vector<std::uint32_t> &off = off_[((LA * (MAX_L + 1) + LB) * (MAX_L + 1) + LC) * (MAX_L + 1) + LD];
+            if (off.empty())
+            {
+                off.resize(3 * nc);
+                std::size_t o = 0;
+                for (std::size_t ca = 0; ca < n_[0]; ++ca)
+                    for (std::size_t cb = 0; cb < n_[1]; ++cb)
+                        for (std::size_t cc = 0; cc < n_[2]; ++cc)
+                            for (std::size_t cd = 0; cd < n_[3]; ++cd, ++o)
+                            {
+                                const auto &A = r.views[0][ca]->_cartesian, &B = r.views[1][cb]->_cartesian,
+                                           &C = r.views[2][cc]->_cartesian, &D = r.views[3][cd]->_cartesian;
+                                for (int q = 0; q < 3; ++q)
+                                    off[3 * o + q] =
+                                        static_cast<std::uint32_t>((((A[q] * dB + B[q]) * dC + C[q]) * dD + D[q]) * n);
+                            }
+            }
 
             double t2[HartreeFock::Rys::RYS_MAX_ROOTS], w[HartreeFock::Rys::RYS_MAX_ROOTS];
             double V[VRR_DIM][VRR_DIM];
@@ -143,7 +153,7 @@ namespace HartreeFock::Integrals
                     const double *X = I_[0].data(), *Y = I_[1].data(), *Z = I_[2].data();
                     for (std::size_t c = 0; c < nc; ++c)
                     {
-                        const double *x = X + off_[3 * c], *y = Y + off_[3 * c + 1], *z = Z + off_[3 * c + 2];
+                        const double *x = X + off[3 * c], *y = Y + off[3 * c + 1], *z = Z + off[3 * c + 2];
                         double s = 0.0;
                         for (int k = 0; k < n; ++k)
                             s += w[k] * x[k] * y[k] * z[k];
@@ -165,7 +175,8 @@ namespace HartreeFock::Integrals
         const BlockEriRequest *req_ = nullptr;
         // Scratch, reused across prepare() calls (one kernel copy per thread).
         std::vector<double> I_[3], out_;
-        std::vector<std::size_t> off_;
+        // Per-class component offsets, indexed by (L_A, L_B, L_C, L_D).
+        std::array<std::vector<std::uint32_t>, (MAX_L + 1) * (MAX_L + 1) * (MAX_L + 1) * (MAX_L + 1)> off_;
         std::size_t n_[4] = {};
     };
 }

@@ -1834,6 +1834,61 @@ namespace
                 worst = std::max({worst, v[0] / v[1], v[2] / v[1]});
             }
             std::printf("  K2.1b gate %s: worst %.1e (bar 1e-13)\n", worst <= 1e-13 ? "PASS" : "FAIL", worst);
+
+            // K2.1b b3: HGP block / Rys2D time by K (primitive quartets) and
+            // total L, both reading every component, best of three per class.
+            // The input to K2.2's crossover.
+            std::map<std::pair<int, int>, std::array<double, 2>> by_kl; // (K, L) -> HGP s, Rys2D s
+            const auto sweep = [&](auto &k, const auto &list)
+            {
+                for (const auto &g4 : list)
+                {
+                    set_req(g4[0], g4[1], g4[2], g4[3]);
+                    k.prepare(req);
+                    double acc = 0.0;
+                    for (std::size_t a = 0; a < req.n[0]; ++a)
+                        for (std::size_t b = 0; b < req.n[1]; ++b)
+                            for (std::size_t c = 0; c < req.n[2]; ++c)
+                                for (std::size_t d = 0; d < req.n[3]; ++d)
+                                    acc += k.value(a, b, c, d);
+                    sink = sink + acc;
+                }
+            };
+            std::map<int, int> ls;
+            for (const auto &[key, list] : classes)
+            {
+                const int L = key[0] + key[1] + key[2] + key[3];
+                if (!rys2d.covers(L, HartreeFock::ERIKernel::Coulomb))
+                    continue;
+                auto &v = by_kl[{key[4] * key[5] * key[6] * key[7], L}];
+                v[0] += best3([&] { sweep(hgp, list); });
+                v[1] += best3([&] { sweep(rys2d, list); });
+                ls[L] = 1;
+            }
+            std::printf("  K2.1b b3, HGP block / Rys2D by K (rows) and total L (columns); > 1: Rys2D faster\n  %5s", "K");
+            for (const auto &[L, u] : ls)
+                std::printf(" %6d", L);
+            std::printf("\n");
+            int lastK = -1;
+            for (const auto &[kl, v] : by_kl)
+            {
+                if (kl.first != lastK)
+                {
+                    if (lastK >= 0)
+                        std::printf("\n");
+                    std::printf("  %5d", kl.first);
+                    lastK = kl.first;
+                    for (const auto &[L, u] : ls)
+                    {
+                        const auto it = by_kl.find({kl.first, L});
+                        if (it == by_kl.end())
+                            std::printf(" %6s", "-");
+                        else
+                            std::printf(" %5.2fx", it->second[0] / it->second[1]);
+                    }
+                }
+            }
+            std::printf("\n");
         }
         (void)sink;
     }
