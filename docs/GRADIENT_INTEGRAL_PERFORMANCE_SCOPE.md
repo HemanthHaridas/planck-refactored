@@ -107,6 +107,27 @@ pass per shell quartet: an estimated 10× (s-rich) to 100×+ (d/f), before G2.
 - Sibling of `hgp_block_eri.h` behind the same `prepare`/`value`/`covers`
   contract, Coulomb under Auto first; explicit engines and screened kernels
   keep the per-component path (as the Fock build did before C5).
+- **Rescoped 2026-10-26: two derivative kernels, split like the Fock build.**
+  Since K2.1c the Fock build chains the closed forms, the 2D Rys block
+  kernel (`rys_block_eri.h`) for one-primitive blocks at L ≥ 4 and
+  three-quartet blocks at L ≥ 7, and the HGP block for the rest
+  (`auto_block_eri.h`; crossover in `docs/ERI_KERNEL_VS_LIBCINT.md` §4). The
+  derivative pass should follow the same split, for two reasons:
+  - **The 2D Rys form differentiates per axis.** A derivative with respect
+    to centre A on axis q changes only $I_q$:
+    $\partial_{A_q} I_q(a, b \mid c, d) = 2\alpha I_q(a{+}1, b \mid c, d) - a I_q(a{-}1, b \mid c, d)$,
+    built from tables one angular step larger, while $I_x I_y I_z$ for the
+    other two axes are reused. This is libcint's route, and it keeps the
+    per-primitive structure Rys2D already has (the exponent α is known per
+    primitive quartet). It is also the only route that gives Rys a
+    derivative kernel, which the shell-pair Phase D lacks.
+  - **HGP keeps contracted blocks.** The four weighted accumulators above
+    (2α, 2β, 2γ, 1) contract before the HRR, exactly why HGP wins those
+    blocks in the energy build.
+  Build HGP's derivative kernel first (it covers every class), then the Rys2D
+  derivative kernel for the classes where the energy-build crossover says
+  Rys wins, and re-measure the crossover for derivatives rather than
+  assuming it transfers.
 - The loop becomes shell-level (the shellpair-granularity Phase D). Add
   block-level density screening, `Q_ab Q_cd · max|Γ_block| < tol`; the Schwarz
   table itself stays unscreened (ERI scope invariant 8).

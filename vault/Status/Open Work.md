@@ -32,6 +32,41 @@ truth for what remains.
   initialization should reject them for every workflow, or accept and document
   the erf substitution.
 
+## Routine-use gaps (scoped 2026-10-26)
+
+What blocks Planck from routine DFT use, each with its own scope doc. Order
+is the recommended one; none blocks another except where noted.
+
+- **Spherical basis in `planck-dft`** (`docs/SPHERICAL_DFT_SCOPE.md`). The
+  DFT driver rejects `basis_type spherical`. The HF skin (lift the density,
+  build in Cartesian, project back) covers J, K, V_xc and V_rxn exactly; the
+  work is classifying ~48 Cartesian-dimension sites in `src/dft/` and routing
+  the DFT one-electron setup through `rebuild_basis_dependent_state`.
+  Prerequisite for useful def2 DFT.
+- **D3 dispersion** (`docs/DISPERSION_D3_SCOPE.md`). None in `src/`. A
+  geometry-only energy and gradient beside nuclear repulsion. Licence
+  checked 2026-10-26: simple-dftd3 is LGPL-3.0-or-later. Planck ships source
+  only, so fetching it at build time (as libxc is) carries no LGPL
+  obligations for the project; a native port would put LGPL files in the
+  tree. Recommended: `ExternalProject`, optional because it needs a Fortran
+  compiler.
+- **def2 basis sets and ECPs** (`docs/DEF2_ECP_SCOPE.md`). def2 for H–Kr is
+  just basis files (cheap, useful now for HF/post-HF). Heavy elements need
+  ECP parsing, core-electron bookkeeping (51 direct `atomic_numbers[...]`
+  reads to classify), and ECP integrals with gradients. Licence checked
+  2026-10-26: libecpint (MIT, with MIT/BSD dependencies) and BSE data
+  (BSD-3) are compatible; libecpint recommended.
+- **Gradient performance** (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`,
+  gradients 20–120× the SCF). G3 rescoped 2026-10-26 onto the energy build's
+  HGP/Rys2D split.
+- **Meta-GGA** (`docs/META_GGA_SCOPE.md`). Rejected in `xc_grid.cpp`. τ and
+  V^τ need only the AO gradients the GGA path has; nuclear gradients need the
+  AO Hessian, which exists. TDDFT/SOSCF kernels and VV10 are separate steps.
+- **PCM geometry optimizations and frequencies**
+  (`docs/PCM_GEOMETRY_SCOPE.md`). The cavity hard-prunes buried points, so
+  the energy jumps with geometry; a smooth (switching-function, Gaussian
+  charge) cavity matching PySCF's comes first, then the analytic gradient.
+
 ## Build and packaging
 
 - **`ctest` runs Eigen's own test suite and reports 14 failures (found
