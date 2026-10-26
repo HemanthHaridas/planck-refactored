@@ -1934,9 +1934,12 @@ identify the path taken. Not required for correctness or performance.
     exceeds libcint's whole quartet, so the lever is the algorithm. **K2.1
     scoped:** a libcint-style 2D Rys block kernel. **K2.1a done** (see
     Completion): Rys roots and weights now cost 32–43 ns for every n.
-    Next: **K2.1b** (prototype `RysBlockKernel` in the harness; land at ≥ 2×
-    over the HGP block on K = 1, L ≥ 4), K2.1c (chain into Auto), K2.2
-    (the K crossover). **G**
+    **K2.1b and K2.1c done (2026-10-26, see Completion):** the 2D Rys
+    block kernel is in Auto, cc-pVTZ Fock builds 1.11–1.16× faster per
+    iteration. Open: rescope gradient G3 on Rys2D; route the conventional
+    6D hoist through Rys2D and delete it; libcint is still 2.3–2.6×
+    faster on the K = 1 high-L classes (compare its `g`-tensor layout
+    only if that matters). **G**
     (general contraction) is small: the post-K1 family probe gains 1.00×
     over a cc-pVDZ sweep; build only if closed-form-only families clear
     1.10×. Also: rerun `pyscf_bench.py` end to end; check the RI auxiliary
@@ -2136,6 +2139,9 @@ identify the path taken. Not required for correctness or performance.
     1.1× faster), so near-tied buckets may have moved. Rerun
     `planck-auto-dispatch-benchmark` and `scripts/fit_auto_dispatch.py`; a
     changed table means editing `kAutoEngine` in `rys.cpp`, not only the doc.
+    **DONE 2026-10-26:** refit pasted into `kAutoEngine`; Rys 14 buckets
+    (was 2), HGP 67, OS none (was 13); fit gate 0/81; teaching guide §11
+    rewritten. The rest of this entry is the history.
     **Now more pressing (2026-10-25):** after K2.1a the per-component Rys
     path is 2.1–3.2× faster, and Rys is the fastest engine in 15 of 238
     buckets where it won none (all high L: He cc-pV5Z, one cc-pVTZ, by

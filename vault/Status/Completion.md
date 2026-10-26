@@ -402,6 +402,28 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **2D Rys block kernel in Auto's Fock build (K2.1b/K2.1c, 2026-10-26).**
+  `RysBlockKernel` (`src/integrals/rys_block_eri.h`) is libcint's
+  formulation: per root, a 1D VRR and a per-axis 1D HRR to
+  I_q(a,b,c,d), then each component as sum_r w_r I_x I_y I_z. The old
+  per-component path summed the roots into a 6D box before its HRR (the
+  hoisted block was 50-210x libcint). On the K = 1, L >= 4 classes of
+  2 H2O cc-pVTZ it is 2.00x the HGP block (every class faster; libcint
+  still 2.3-2.6x faster). The one change that paid in tuning was caching
+  component offsets per class (1.0 us of a 5 us (dd|dd)); four layout
+  variants lost. HGP wins under contraction (it contracts before its
+  HRR), so `auto_block_eri.h` chains closed forms (L <= 3), Rys2D in
+  crossover mode (K = 1 at L >= 4, K <= 3 at L >= 7), then the HGP block,
+  defined once for rys.cpp, the tests and the benchmark. RHF direct per
+  iteration: cc-pVTZ 1.11-1.16x, cc-pVDZ 1.01-1.04x, 6-31G* neutral,
+  energies and iteration counts unchanged. Gated by
+  `planck-hgp-engine-smoke` (Rys2D vs per-component HGP <= 6.4e-15 on
+  water 6-31G..cc-pVTZ; four mutations caught, the HRR sign only from
+  cc-pVDZ up, since 6-31G* H has no p) and `planck-fock-accumulate`
+  (thread-count invariance now includes cc-pVTZ). Core 80/80, smoke
+  43/45, extended 135/139 (known rccsdt cases). Record:
+  `docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`.
+
 - **Fast Rys roots and weights (K2.1a, 2026-10-25).** `rys_roots_weights`
   is now Chebyshev segment fits below T = 35 + 7n and the Laguerre(−½)
   asymptote above, built per n on first use from a new reference generator

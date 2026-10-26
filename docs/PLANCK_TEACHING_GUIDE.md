@@ -3671,55 +3671,57 @@ without manual edits.
 
 ![Per-quartet build time (ms) versus L_AB + L_CD for HGP, Rys, and OS, across the six calibration cases.](auto_dispatch_curves.svg)
 
-#### The current cost surface (three-way)
+#### The current cost surface
 
 The data below is the median of 9 benchmark runs at 10 000 sampled quartets per
-bucket, taken after both HGP and OS had their HRR hoisted to the contracted
-shell-quartet level (the "A4" rearrangement — VRR per primitive pair, HRR once
-per quartet; see §12). Cross-case median per-quartet build times, in
-microseconds (lower is faster), with the engine the fitted rule assigns:
+bucket, refit on 2026-10-26. That was after HGP's batched Boys calls and the
+fast Rys root finder (Root Finding, above), and both HGP and OS already had
+their HRR hoisted to the contracted shell-quartet level (the "A4"
+rearrangement: VRR per primitive pair, HRR once per quartet; see §12).
+Cross-case median per-quartet build times, in microseconds (lower is faster),
+with the engine the fitted rule assigns:
 
 | \(L_{AB}, L_{CD}\) | HGP / µs | Rys / µs | OS / µs | Rule pick |
 |---|---:|---:|---:|---|
-| 0, 0 | **1.0** | 4.0 | 1.3 | HGP |
-| 0, 1 / 1, 0 | **1.1 / 1.0** | 3.1 / 3.1 | 1.3 / 1.3 | HGP |
-| 1, 1 / 2, 0 | **0.9** / **0.9** | 9.0 / 10.2 | 1.0 / 1.1 | HGP |
-| 2, 2 | **0.7** | 6.8 | 0.8 | HGP |
-| 3, 3 | **0.6** | 3.6 | 0.7 | HGP |
-| 4, 4 | **0.6** | 1.8 | **0.6** | HGP |
-| 5, 5 | **1.3** | 3.0 | 1.4 | HGP |
-| 6, 6 | 2.8 | 4.4 | **2.8** | OS |
-| 7, 7 | 6.4 | 6.9 | **5.8** | OS |
-| 7, 8 | 9.0 | **7.6** | 8.1 | Rys |
-| 8, 8 | 12.8 | **10.5** | 11.0 | Rys |
+| 0, 0 | **0.69** | 2.49 | 0.81 | HGP |
+| 0, 1 / 1, 0 | **0.60 / 0.54** | 1.74 / 1.77 | 0.71 / 0.67 | HGP |
+| 1, 1 / 2, 0 | **0.53 / 0.46** | 1.63 / 1.62 | 0.63 / 0.59 | HGP |
+| 2, 2 | **0.48** | 1.02 | 0.53 | HGP |
+| 3, 3 | **0.43** | 0.76 | 0.51 | HGP |
+| 4, 4 | **0.51** | 0.71 | 0.66 | HGP |
+| 5, 5 | **1.12** | 1.37 | 1.37 | HGP |
+| 6, 6 | **2.39** | 2.49 | 2.83 | HGP |
+| 2, 8 | 1.03 | **0.99** | 1.16 | Rys |
+| 5, 8 | 3.37 | **2.58** | 3.79 | Rys |
+| 7, 7 | 5.38 | **4.74** | 5.78 | Rys |
+| 7, 8 | 7.30 | **5.53** | 8.12 | Rys |
+| 8, 8 | 9.92 | **7.23** | 10.81 | Rys |
 
-Across all 81 buckets the median-winner counts are **HGP 66, OS 13, Rys 2**.
-The three regions are:
+Across all 81 buckets the median-winner counts are **HGP 67, Rys 14, OS 0**:
 
-1. **HGP wins the entire low- and mid-L bulk** (66 buckets), including the
-   \(L_{AB}+L_{CD}\le 1\) corner — \((0,0)\), \((0,1)\), \((1,0)\) — that older
-   schemes handed to Rys. The HGP HRR-outside-the-primitive-loop factorization
-   makes it the fastest engine at low L *and* keeps it competitive far up the
-   ladder. At the d-shell sweet spot (e.g. \((2,2)\)) HGP is ~9× faster than
-   Rys and ~15% faster than OS.
-2. **OS re-enters in a high-L corner** (13 buckets:
-   \((6,6)\), \((6,7)\), \((6,8)\), \((7,6)\), \((7,7)\), \((8,5)\), \((8,6)\),
-   \((8,7)\), \((5,7)\), \((5,8)\), \((4,7)\), \((4,8)\), \((3,8)\)). Once total
-   angular momentum is large enough, HGP's per-shell-quartet HRR bookkeeping
-   overhead overtakes its primitive-loop savings and plain OS wins — but only by
-   single-digit percent (e.g. \((6,6)\): OS 2.79 vs HGP 2.81 µs). This corner
-   exists *because* OS itself was given the A4 hoist; before that optimization
-   OS was dominated almost everywhere and was not in the auto menu at all.
-3. **Rys survives only in the extreme corner**, \((7,8)\) and \((8,8)\), where
-   its quadrature cost grows more slowly than the OS/HGP recurrence tables
-   (\((8,8)\): Rys 10.5 vs OS 11.0 vs HGP 12.8 µs).
+1. **HGP wins the entire low- and mid-L bulk** (67 buckets), including the
+   \(L_{AB}+L_{CD}\le 1\) corner that older schemes handed to Rys. At the
+   d-shell sweet spot \((2,2)\) it is 2× faster than Rys and about 10 %
+   faster than OS.
+2. **Rys owns 14 buckets in the high-L corner**, those with
+   \(L_{CD} = 8\) from \(L_{AB} = 2\) up, \(L_{CD} = 7\) from
+   \(L_{AB} = 4\) up, and \((7,6)\), \((8,6)\): \((2,8)\), \((3,8)\),
+   \((4,7)\), \((4,8)\), \((5,7)\), \((5,8)\), \((6,7)\), \((6,8)\),
+   \((7,6)\), \((7,7)\), \((7,8)\), \((8,6)\), \((8,7)\), \((8,8)\).
+   It wins by up to 1.37× (\((8,8)\): 7.23 against HGP's 9.92 µs). Some
+   cells are close: \((2,8)\) by 3 %, \((8,6)\) by 2 %. Only one
+   calibration case reaches \(L_{AB}+L_{CD} \ge 11\) (helium/cc-pV5Z), so
+   most of this corner rests on one molecule.
+3. **OS wins nothing.** Its 13-bucket corner was a margin of a few percent
+   over HGP; HGP's 1.1× from batched Boys calls took the low end of it, and
+   Rys took the rest. OS stays in the code as an explicit engine and as the
+   reference the comparators check against.
 
 The median gate is clean: the fitted rule disagrees with the per-bucket median
-winner in **0 of 81** buckets, and the single per-case disagreement out of 238
-case-rows (water/cc-pVTZ \((5,6)\)) is an OS/HGP tie at **0.25%** — a noise-floor
-straddle, correctly not flipped. Earlier single-run benchmarks showed up to ~8%
-per-case overhead and a dozen disagreements; the median-of-9 data confirms those
-were run-to-run noise on near-tie boundary buckets, not real structure.
+winner in **0 of 81** buckets. Of 238 case-rows, three disagree, all ties the
+median correctly does not flip: helium/cc-pVQZ and water/cc-pVTZ \((5,6)\)
+(Rys by 0.07 % and 1.3 %), and water/STO-3G \((1,2)\) (OS by 4.3 %, a
+sub-microsecond bucket). Mean overhead against the per-case winner is 0.02 %.
 
 #### How the rule evolved (and why this matters pedagogically)
 
@@ -3735,6 +3737,14 @@ reasoned about once:
   made OS competitive again in the high-L corner, so OS re-enters with 13
   buckets, and re-measurement showed HGP — not Rys — is actually fastest at
   \((0,0)/(0,1)/(1,0)\). The rule is now genuinely three-way.
+
+- **Rys returns (refit 2026-10-26).** Neither Rys's recurrences nor OS changed.
+  What changed is the Rys root finder, which used to cost 0.5–3 µs per call
+  and now costs 30–40 ns, plus a 1.1× gain for HGP from batched Boys calls.
+  Rys took 12 of OS's 13 high-L buckets and one of HGP's, and HGP took the
+  other two. OS left the menu again. The cheapest part of an algorithm on
+  paper (finding n roots of a polynomial) had been deciding where the whole
+  engine was competitive.
 
 Each transition moved the boundaries in a way the previous analytic argument did
 not predict, which is exactly why the fitter derives the regions from measured
@@ -3789,21 +3799,7 @@ so `engine auto` matches an explicit engine to machine precision rather than
 bit for bit. The `engine_scf_energy_compare.py` comparator checks this
 (OS == HGP == Rys == Auto to `0.000e+00 Eh` at printed precision), including a
 He₂/cc-pV5Z case whose \(L > 12\) quartets reach the corner where the table
-picks OS (Lsum ≳ 11) and Rys (\((7,8)\)/\((8,8)\)).
-
-**The timings above are dated, and the Rys column most of all.** They were
-taken before one vectorized Boys call per primitive replaced HGP's per-order
-calls, which made HGP's per-component path about 1.1× faster. Since then the
-Rys root finder was replaced (Root Finding, above), which made the Rys column
-2.1–3.2× faster per basis and up to 5.7× in a bucket. A single
-before/after run of the benchmark (one thread, three repetitions, not the
-median of nine this table uses) shows the consequence. Per case-bucket, Rys
-was fastest in **0 of 238** before and is fastest in **15** after, all at
-high angular momentum: 14 helium/cc-pV5Z buckets from \((2,8)\) to \((8,8)\)
-and water/cc-pVTZ \((5,6)\), by 1.0–1.5× over HGP (\((8,8)\): 1.48×). HGP
-still wins 223. The table and `kAutoEngine` have not been refitted. Rerun the
-benchmark and the fitter before relying on the exact boundaries, and expect
-the Rys corner to grow.
+picks Rys (the high-L buckets listed above).
 
 When an engine is re-optimized: re-run `planck-auto-dispatch-benchmark`, re-run
 `scripts/fit_auto_dispatch.py`, then paste the regenerated table from

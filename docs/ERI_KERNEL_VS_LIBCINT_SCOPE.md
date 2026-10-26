@@ -64,8 +64,6 @@ VRR and a per-axis 1D HRR to \(I_q(a,b,c,d)\), then forms every component as
   L ≥ 4 is 0.41 s of its 0.49 s, but contracted blocks stay on HGP.
 
 **Next:**
-- **Refit the Auto table** (`kAutoEngine`, Smaller items). It has been
-  stale since K2.1a and is cheap.
 - **Rescope G3 of `docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`** (the
   shell-quartet derivative block kernel) on Rys2D. Differentiating the 2D
   per-axis tables is libcint's route to derivative integrals, and it gives
@@ -410,11 +408,13 @@ so it would have to be a traversal chosen by basis.
 
 ## Smaller items
 
-- **Refit the Auto table.** After K2.1a, Rys is the fastest per-component
-  engine in 15 of 238 buckets, and `kAutoEngine` (`rys.cpp`) still sends it
-  none of them. Rerun `planck-auto-dispatch-benchmark` and
-  `scripts/fit_auto_dispatch.py` after K2.1c. This only affects the paths
-  that use the per-bucket table, not the fused Fock build.
+- **Auto table refit — done (2026-10-26).** `planck-auto-dispatch-benchmark`
+  (median of 9, 10 000 quartets per bucket) and `scripts/fit_auto_dispatch.py`,
+  pasted into `kAutoEngine`. 14 of 81 buckets moved: Rys now wins 14 (was 2),
+  HGP 67 (was 66), OS none (was 13). Fit gate 0/81; three per-case ties of
+  0.07–4.3 %. The table only governs Auto's stored-tensor build, the
+  two-phase Fock builds, screened kernels and L > 12 blocks, not the fused
+  build's block kernels. Teaching guide §11 has the new surface.
 - **End-to-end table.** `tests/benchmarks/pyscf_bench.py` (forced direct)
   for the SCF-level numbers in `docs/SCF_VS_PYSCF.md`, which are still the
   in-core ones.
@@ -440,5 +440,5 @@ so it would have to be a traversal chosen by basis.
 
 The gradient work (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`, gaps of
 20–120×) outranks everything left here, and its G3 should now be rescoped
-on Rys2D. Within this scope: the Auto-table refit (cheap), then the libcint
-layout comparison only if the remaining cc-pVTZ gap matters, then G0.
+on Rys2D. Within this scope: the libcint layout comparison only if the
+remaining cc-pVTZ gap matters, then G0.
