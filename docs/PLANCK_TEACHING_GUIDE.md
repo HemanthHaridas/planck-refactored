@@ -2691,6 +2691,15 @@ orders no recurrence reads, and the per-component gathers cost more than the
 saved primitive loop. Before abandoning an idea that measured slower, check
 whether the measurement was of the idea or of its first implementation.
 
+**Where it is still slow: one primitive, high L.** Lanes need several
+primitive quartets, and cc-pVTZ's polarization shells have one. On those
+blocks (K = 1, \(L \ge 4\)) the HGP block kernel is 4–5.5× libcint, and
+its VRR *alone* costs more than libcint's whole quartet. The table
+\([e0|f0]^{(m)}\) over every \(e, f, m\) is simply more work than a Rys code
+does when there is no contraction to amortize it over. A 2D Rys block
+kernel (§11, "The 2D Rys Block Kernel") is twice as fast on exactly those
+blocks and slower everywhere else.
+
 Implementation: `src/integrals/block_eri.h` (interface, `NoBlockKernel`,
 `ChainBlockKernel`), `src/integrals/hgp_block_eri.h` (kernel),
 `src/integrals/rys.cpp` (`auto_block_kernel`), `tests/hgp_engine_smoke.cpp`
@@ -3364,9 +3373,44 @@ reference (`rys_roots_weights_reference`), not what integrals call.
 
 The fast rule matches the reference to \(\le 6\times10^{-15}\) for
 \(n \le 5\) and \(4\times10^{-14}\) at \(n = 11\), and costs 32–43 ns per
-call for every \(n\). The moment solver it replaced cost 0.46–3.0 µs. A
-per-component Rys integral is 2–3× faster overall: the root finder used to
-be a large share of it.
+call for every \(n\). The moment solver it replaced cost 0.46–3.0 µs.
+
+**What that bought.** The root finder had been a large share of every Rys
+integral. `planck-auto-dispatch-benchmark`, one thread, the same build with
+only `rys_roots.cpp` swapped, Rys time per shell quartet summed over all six
+calibration cases:
+
+| total \(L\) | roots | before / µs | after / µs | speedup |
+|---|---|---|---|---|
+| 0 | 1 | 3.39 | 3.47 | 0.98× |
+| 1 | 1 | 2.12 | 2.16 | 0.98× |
+| 2 | 2 | 5.59 | 1.49 | 3.75× |
+| 3 | 2 | 3.20 | 1.03 | 3.12× |
+| 4 | 3 | 3.90 | 0.88 | 4.45× |
+| 6 | 4 | 3.06 | 0.83 | 3.68× |
+| 8 | 5 | 2.71 | 0.96 | 2.82× |
+| 10 | 6 | 3.09 | 1.38 | 2.23× |
+| 12 | 7 | 4.24 | 2.37 | 1.79× |
+| 14 | 8 | 6.64 | 4.17 | 1.59× |
+| 16 | 9 | 9.95 | 6.66 | 1.49× |
+
+Nothing changes at \(L \le 1\), where one root uses the closed form. The gain
+peaks at \(L = 2\)–6, where finding the roots was most of the integral, and
+shrinks at high \(L\), where the recurrences and the 6D accumulation dominate.
+OS and HGP, which never call the root finder, measured 0.94–1.02× in the same
+runs, so the difference is the roots and nothing else. Per basis the
+geometric mean over buckets is 2.1× (STO-3G) to 3.2× (cc-pVDZ, cc-pVTZ).
+
+End to end, `engine rys`, four threads, best of three, energies identical:
+ethylene/cc-pVDZ 1.55 → 0.70 s (2.2×) and two waters in cc-pVTZ
+241 → 69 s (3.5×). `engine auto` on four waters in cc-pVDZ is unchanged
+(0.83 s both), as it should be: Auto's direct Fock build uses the closed
+forms and the HGP block kernel, not Rys. Even at 69 s, an explicit Rys run is
+far slower than Auto on the same system, because Rys still evaluates one
+Cartesian component at a time. The Rys *block* kernel built on this root
+finder is "The 2D Rys Block Kernel", below. On the old finder it could not
+have won, since a four-root call alone (1.08 µs) cost more than libcint's
+whole \((pp|dd)\) quartet (0.65 µs).
 
 #### Pitfall: upward Boys recursion, and how it went unnoticed
 
@@ -3467,6 +3511,105 @@ Angular momentum is then transferred to the second center of each shell pair
 using the same HRR as the OS path, first on the bra pair and then on the ket
 pair. The contracted ERI is obtained by summing the primitive results over all
 \((\alpha, \beta)\) and \((\gamma, \delta)\) primitive pairs.
+
+This is how Planck's per-component Rys path works, and it is the expensive
+order. Summing the roots *before* the HRR makes the HRR run on the full 6D
+product. A hoisted version that builds the 6D box once per shell quartet is
+still 50–210× libcint on high-\(L\) blocks.
+
+### The 2D Rys Block Kernel
+
+The 3D outer product factorizes per root, so the horizontal transfer can
+too. Each root's \(x\), \(y\) and \(z\) tables carry their own HRR, and the
+roots are summed last. This is libcint's formulation, and Planck's
+`RysBlockKernel` (`src/integrals/rys_block_eri.h`) follows it. For each
+primitive quartet and each root \(r\), and on each axis \(q\):
+
+1. **VRR**, the 1D table \(I_q[e][f]\) for \(e \le l_A + l_B\),
+   \(f \le l_C + l_D\) (the recurrence above).
+2. **Bra HRR**, in one dimension:
+   \(I_q(a, b{+}1 \mid f) = I_q(a{+}1, b \mid f) + (A_q - B_q)\, I_q(a, b \mid f)\).
+3. **Ket HRR**, the same with \(C_q - D_q\), giving
+   \(I_q(a, b \mid c, d)\) for \(a \le l_A\), \(b \le l_B\), \(c \le l_C\),
+   \(d \le l_D\).
+
+Then every Cartesian component is a short sum over roots:
+
+\[
+(a\,b \mid c\,d) \mathrel{+}= \sum_{r=1}^{n} w_r\,
+  I_x^{(r)}(a_x, b_x \mid c_x, d_x)\,
+  I_y^{(r)}(a_y, b_y \mid c_y, d_y)\,
+  I_z^{(r)}(a_z, b_z \mid c_z, d_z)
+\]
+
+with \(w_r\) the Rys weight times the primitive prefactor and contraction
+coefficients.
+
+**Why it is cheaper.** For \((dd|dd)\) each axis table has
+\(3^4 = 81\) entries per root, and there are \(n = 5\) roots. The table work
+is about 1.6k operations. The assembly is
+\(1296 \text{ components} \times 5 \text{ roots} \times 3\), about 19k.
+HGP's block kernel builds a 3675-entry \([e0|f0]^{(m)}\) table and then a
+full 6D HRR. With one primitive quartet nothing amortizes that, while the
+Rys form never touches a 6D object until the final sum.
+
+**Measured** on the fifteen costliest one-primitive classes at total
+\(L \ge 4\), 2 H2O / cc-pVTZ, one thread:
+
+| kernel | time | per class |
+|---|---|---|
+| HGP block | 0.0511 s | — |
+| Rys2D block | 0.0255 s | 1.70–2.39× faster than HGP |
+| libcint 6.1.3 | 0.0106 s | 2.3–2.6× faster than Rys2D |
+
+It agrees with the HGP block to \(\le 2.7\times10^{-14}\) and with libcint to
+\(\le 8.1\times10^{-14}\), relative to the largest value per
+contraction-depth group, over every class on water 6-31G through cc-pVTZ.
+
+**Where it loses: contraction.** HGP contracts its primitive tables
+*before* the HRR, so a deeper contraction costs it one more VRR pass and no
+more HRR. The Rys form runs its tables *and* its assembly per primitive
+quartet, so its cost grows with the number of primitive quartets \(K\). The
+crossover (HGP time / Rys2D time; above 1 means Rys2D wins), 2 H2O /
+cc-pVTZ:
+
+| \(K\) \ total \(L\) | 2 | 4 | 6 | 7 | 9 | 11 |
+|---|---|---|---|---|---|---|
+| 1 | 0.82 | 1.29 | 1.90 | 2.29 | 2.38 | 2.56 |
+| 3 | 0.39 | 0.55 | 0.86 | 1.16 | 1.32 | – |
+| 9 | 0.29 | 0.40 | 0.63 | 0.89 | – | – |
+| \(\ge 24\) | \(\le 0.22\) | \(\le 0.31\) | \(\le 0.51\) | 0.69 | – | – |
+
+So the two kernels split the work instead of one replacing the other. Rys2D
+takes one-primitive blocks at \(L \ge 4\), and three-quartet blocks at
+\(L \ge 7\). HGP keeps everything contracted, and the closed forms keep
+\(L \le 3\). cc-pVTZ-and-larger bases have uncontracted polarization
+shells, so that is where the gap was. As of this writing the kernel is
+validated in the benchmark harness but not yet chained into Auto
+(`docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`, K2.1c).
+
+**Lessons from tuning it.** Only one of five layout changes paid, and it
+was not one the operation count pointed to. Splitting the time with early
+returns inside `prepare` showed that 1.0 µs of a 5 µs \((dd|dd)\) block went
+on recomputing each component's table offsets from the shells' component
+views. Those offsets depend only on the class \((l_A, l_B, l_C, l_D)\),
+because a shell's Cartesian components come in a fixed order per \(L\).
+Caching them per class took the kernel from 1.66× to 2.00× over HGP. Four
+other changes were slower or no better:
+- folding the weight into one table;
+- a compile-time root count;
+- building the tables for all roots at once;
+- putting roots in the outer loop.
+
+With three to five roots, a loop over the roots is too short to unroll or
+vectorize profitably. Two measurement pitfalls also came up:
+- **A probe can time itself.** An environment switch read with `getenv`
+  inside a loop condition made the kernel look 10× slower. Read such
+  switches once.
+- **A fixture can be blind to a term.** In 6-31G\*, hydrogen has no p
+  shell. So every pair with \(l_B > 0\) has \(A = B\) or a hydrogen s on
+  B, and the bra HRR always multiplies a zero distance. A sign error in
+  \(A - B\) passes the gate there and fails it at 2.5 in cc-pVDZ.
 
 ### Auto-Dispatch: Calibrated Per-Bucket Engine Selection
 
@@ -3635,11 +3778,19 @@ bit for bit. The `engine_scf_energy_compare.py` comparator checks this
 He₂/cc-pV5Z case whose \(L > 12\) quartets reach the corner where the table
 picks OS (Lsum ≳ 11) and Rys (\((7,8)\)/\((8,8)\)).
 
-**The timings above are dated.** They were taken before one vectorized Boys
-call per primitive replaced HGP's per-order calls, which made HGP's
-per-component path about 1.1× faster, so buckets near a tie may have moved.
-The table has not been refitted since. Rerun the benchmark and the fitter
-before relying on the exact boundaries.
+**The timings above are dated, and the Rys column most of all.** They were
+taken before one vectorized Boys call per primitive replaced HGP's per-order
+calls, which made HGP's per-component path about 1.1× faster. Since then the
+Rys root finder was replaced (Root Finding, above), which made the Rys column
+2.1–3.2× faster per basis and up to 5.7× in a bucket. A single
+before/after run of the benchmark (one thread, three repetitions, not the
+median of nine this table uses) shows the consequence. Per case-bucket, Rys
+was fastest in **0 of 238** before and is fastest in **15** after, all at
+high angular momentum: 14 helium/cc-pV5Z buckets from \((2,8)\) to \((8,8)\)
+and water/cc-pVTZ \((5,6)\), by 1.0–1.5× over HGP (\((8,8)\): 1.48×). HGP
+still wins 223. The table and `kAutoEngine` have not been refitted. Rerun the
+benchmark and the fitter before relying on the exact boundaries, and expect
+the Rys corner to grow.
 
 When an engine is re-optimized: re-run `planck-auto-dispatch-benchmark`, re-run
 `scripts/fit_auto_dispatch.py`, then paste the regenerated table from
@@ -3652,7 +3803,10 @@ mechanical copy with no risk of drift.
 | File | Role |
 |---|---|
 | `src/integrals/rys.h` | Public API: `_compute_2e`, `_compute_2e_fock`, `_compute_2e_fock_uhf`, and `_auto` variants |
-| `src/integrals/rys.cpp` | VRR (`_rys_vrr_1d`), HRR (`_rys_hrr_ab`, `_rys_hrr_cd`), primitive and contracted ERI, Schwarz table, Fock builders, three-way auto-dispatch table + selector (`kAutoEngine`, `_auto_engine`) |
+| `src/integrals/rys.cpp` | 6D HRR (`_rys_hrr_ab`, `_rys_hrr_cd`), primitive and contracted ERI, Schwarz table, Fock builders, three-way auto-dispatch table + selector (`kAutoEngine`, `_auto_engine`) |
+| `src/integrals/rys_detail.h` | Shared with the block kernel: primitive-pair geometry (`_rys_eri_prep`), the 1D VRR (`_rys_vrr_1d`), the screened-kernel map |
+| `src/integrals/rys_block_eri.h` | `RysBlockKernel`: the 2D block kernel (per-root, per-axis HRR, then the root sum); harness only, not yet in Auto |
+| `tests/eri_class_share_benchmark.cpp` | `--k2`: Rys2D against the HGP block and libcint per class, the accuracy gate, and the K by L crossover table |
 | `src/integrals/rys_roots.h` | `rys_roots_weights` declaration; exact 1-point formula `rys_1pt` |
 | `src/integrals/rys_roots.cpp` | Fast rule: Chebyshev segment fits below T = 35 + 7n, Laguerre(−½) asymptote above; reference: discretized Stieltjes with compensated sums and Christoffel weights (`rys_roots_weights_reference`) |
 | `tests/rys_roots.cpp` | `planck-rys-roots`: moments against quadrature, large-T scaling, fast rule against the reference |
@@ -3907,7 +4061,11 @@ Four patterns:
 
 1. **Rys loses every cell.** These bases stop at d functions, and Rys's niche
    in the §11 calibration is the f/g/h tail, which none of them reach. It is
-   up to 6× slower here (CH₄ / 6-31G\*\* `nosym`: 136 against 23 ms).
+   up to 6× slower here (CH₄ / 6-31G\*\* `nosym`: 136 against 23 ms). **These
+   Rys rows predate the new root finder** (2026-10-25, §11 Root Finding),
+   which made per-component Rys 2–3× faster at the total L these bases reach
+   (L = 2–8: 2.8–4.5×). Expect Rys to stay last here, at roughly 2–3× HGP
+   rather than 4–6×; the table has not been re-run.
 2. **HGP wins the `full` column on every case, by 1.01–1.30× over OS.** That
    is the mode you run when the full group is available, and the reason
    Auto resolves to HGP on it. The lead is consistent but small, so the
