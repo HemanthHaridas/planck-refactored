@@ -228,6 +228,15 @@ namespace HartreeFock::SCF
         // calculator._info._scf.alpha.density (and beta.density for UHF)
         // when the guess is ReadDensity, so we flip the guess into that mode
         // and clear the converged flags.
+        // Rotation angle along a normalized unstable mode. For deeply unstable
+        // modes (λ ≲ −1e-2) step_scale (typically 0.05 rad) is too small to
+        // leave the saddle's basin, and the SCF slides back to it; use π/4.
+        double follow_step(const StabilityChannel &channel, double step_scale)
+        {
+            constexpr double pi_over_4 = 0.7853981633974483;
+            return channel.lowest_eigenvalue < -1e-2 ? std::max(step_scale, pi_over_4) : step_scale;
+        }
+
         void reset_for_rerun(HartreeFock::Calculator &calculator)
         {
             calculator._info._is_converged = false;
@@ -384,9 +393,14 @@ namespace HartreeFock::SCF
         const auto aibj_ab = HartreeFock::Correlation::transform_eri(
             eri, nb, Ca_virt, Ca_occ, Cb_virt, Cb_occ);
 
-        // Spin-conserving (A − B) matrix in the αα ⊕ ββ basis with cross-spin
-        // Coulomb coupling. Diagonal block algebra is the closed-shell
-        // (A^T − B^T) form per spin; off-diagonal block is +2(ai_α|bj_β).
+        // Spin-conserving real (A + B) matrix in the αα ⊕ ββ basis: the Hessian
+        // of a real UHF → UHF orbital rotation. Same spin:
+        //   (A + B)_{ai,bj} = (ε_a − ε_i)δ + 2(ai|bj) − (ab|ij) − (aj|bi)
+        // opposite spin: 2(ai_α|bj_β) (A = B = (ai|bj), no exchange).
+        // The same-spin blocks used to carry A − B (the complex-orbital test)
+        // while the cross-spin block carried A + B, so the matrix was neither
+        // test and its lowest mode was not a descent direction: following it
+        // fell straight back to the saddle (4 H2O+ / cc-pVDZ, hcore guess).
         const int nov_a = nva * n_alpha;
         const int nov_b = nvb * n_beta;
         const int nov = nov_a + nov_b;
@@ -405,9 +419,10 @@ namespace HartreeFock::SCF
                         double val = 0.0;
                         if (a == b && i == j)
                             val += eps_a(n_alpha + a) - eps_a(i);
+                        const double ai_bj = aibj_aa[ix4(a, i, b, j, n_alpha, nva, n_alpha)];
                         const double ab_ij = abij_aa[ix4(a, b, i, j, nva, n_alpha, n_alpha)];
                         const double aj_bi = aibj_aa[ix4(a, j, b, i, n_alpha, nva, n_alpha)];
-                        val += -ab_ij + aj_bi;
+                        val += 2.0 * ai_bj - ab_ij - aj_bi;
                         M(ai, bj) = val;
                     }
             }
@@ -424,16 +439,16 @@ namespace HartreeFock::SCF
                         double val = 0.0;
                         if (a == b && i == j)
                             val += eps_b(n_beta + a) - eps_b(i);
+                        const double ai_bj = aibj_bb[ix4(a, i, b, j, n_beta, nvb, n_beta)];
                         const double ab_ij = abij_bb[ix4(a, b, i, j, nvb, n_beta, n_beta)];
                         const double aj_bi = aibj_bb[ix4(a, j, b, i, n_beta, nvb, n_beta)];
-                        val += -ab_ij + aj_bi;
+                        val += 2.0 * ai_bj - ab_ij - aj_bi;
                         M(ai, bj) = val;
                     }
             }
 
-        // αβ off-diagonal: +2 (ai_α | bj_β). The factor of 2 comes from the
-        // Coulomb-like (A − B) coupling once the de-excitation block is
-        // folded in (no exchange between opposite spins).
+        // αβ off-diagonal: +2 (ai_α | bj_β), the A + B of an opposite-spin
+        // pair (no exchange between opposite spins).
         for (int a = 0; a < nva; ++a)
             for (int i = 0; i < n_alpha; ++i)
             {
@@ -558,14 +573,8 @@ namespace HartreeFock::SCF
             const Eigen::MatrixXd C_in = calculator._info._scf.alpha.mo_coefficients;
             const Eigen::VectorXd eps_in = calculator._info._scf.alpha.mo_energies;
 
-            // Adaptive step on the eigenvector rotation. For deeply unstable
-            // modes (|λ| ≳ 1e-2) use π/4; otherwise the user-supplied default
-            // step_scale (typically 0.05 rad).
             constexpr double pi_over_4 = 0.7853981633974483;
-            const double eig_step =
-                (channel.lowest_eigenvalue < -1e-2)
-                    ? std::max(step_scale, pi_over_4)
-                    : step_scale;
+            const double eig_step = follow_step(channel, step_scale);
 
             // Step 1: HOMO–LUMO mix beta. The mixing angle is π/8 (22.5°) —
             // enough to break spin symmetry without over-mixing into a
@@ -622,7 +631,7 @@ namespace HartreeFock::SCF
             if (!res)
                 return std::unexpected(std::format(
                     "follow_instability_and_rerun: UHF restart failed: {}", res.error()));
-            return calculator._info._energy;
+            return calculator._total_energy; // _info._energy is the electronic energy
         }
 
         // Internal instability (RHF→RHF or UHF→UHF): rotate within the same
@@ -635,7 +644,8 @@ namespace HartreeFock::SCF
         const int nva = static_cast<int>(nb) - n_alpha;
         const int nvb = static_cast<int>(nb) - n_beta;
 
-        const Eigen::MatrixXd kappa_a = step_scale * channel.lowest_mode;
+        const double step = follow_step(channel, step_scale);
+        const Eigen::MatrixXd kappa_a = step * channel.lowest_mode;
         const Eigen::MatrixXd U_a = build_rotation_matrix(kappa_a, n_alpha, nva);
         calculator._info._scf.alpha.mo_coefficients =
             calculator._info._scf.alpha.mo_coefficients * U_a;
@@ -647,7 +657,7 @@ namespace HartreeFock::SCF
 
         if (is_uhf && channel.lowest_mode_beta.size() > 0)
         {
-            const Eigen::MatrixXd kappa_b = step_scale * channel.lowest_mode_beta;
+            const Eigen::MatrixXd kappa_b = step * channel.lowest_mode_beta;
             const Eigen::MatrixXd U_b = build_rotation_matrix(kappa_b, n_beta, nvb);
             calculator._info._scf.beta.mo_coefficients =
                 calculator._info._scf.beta.mo_coefficients * U_b;
@@ -662,7 +672,7 @@ namespace HartreeFock::SCF
             HartreeFock::LogLevel::Info, "Stability :",
             std::format("Following internal instability '{}' (λ={:.6e}, step={:.3f}); "
                         "re-running SCF.",
-                        channel.label, channel.lowest_eigenvalue, step_scale));
+                        channel.label, channel.lowest_eigenvalue, step));
 
         std::expected<void, std::string> res;
         switch (calculator._scf._scf)
@@ -680,7 +690,7 @@ namespace HartreeFock::SCF
         if (!res)
             return std::unexpected(std::format(
                 "follow_instability_and_rerun: restart failed: {}", res.error()));
-        return calculator._info._energy;
+        return calculator._total_energy;
     }
 
 } // namespace HartreeFock::SCF

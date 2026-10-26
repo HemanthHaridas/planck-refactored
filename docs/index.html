@@ -175,6 +175,7 @@
 <li class="toc-level-2"><a href="#4-gaussian-basis-functions">4. Gaussian Basis Functions</a></li>
 <li class="toc-level-3"><a href="#primitive-gaussians">Primitive Gaussians</a></li>
 <li class="toc-level-3"><a href="#contracted-gaussians">Contracted Gaussians</a></li>
+<li class="toc-level-3"><a href="#redundant-primitives-and-the-optimized-general-contraction">Redundant Primitives and the Optimized General Contraction</a></li>
 <li class="toc-level-3"><a href="#normalization-of-a-primitive">Normalization of a Primitive</a></li>
 <li class="toc-level-2"><a href="#5-hartree-fock-theory">5. Hartree-Fock Theory</a></li>
 <li class="toc-level-3"><a href="#the-variational-principle">The Variational Principle</a></li>
@@ -206,6 +207,7 @@
 <li class="toc-level-3"><a href="#nuclear-attraction-integral">Nuclear Attraction Integral</a></li>
 <li class="toc-level-3"><a href="#two-electron-repulsion-integrals-eris">Two-Electron Repulsion Integrals (ERIs)</a></li>
 <li class="toc-level-3"><a href="#schwarz-screening">Schwarz Screening</a></li>
+<li class="toc-level-3"><a href="#density-weighted-screening-and-the-incremental-fock-build">Density-Weighted Screening and the Incremental Fock Build</a></li>
 <li class="toc-level-3"><a href="#permutation-symmetry-of-the-eri-tensor">Permutation Symmetry of the ERI Tensor</a></li>
 <li class="toc-level-3"><a href="#the-memory-direct-fock-build">The Memory-Direct Fock Build</a></li>
 <li class="toc-level-2"><a href="#10-spherical-harmonic-basis-functions">10. Spherical Harmonic Basis Functions</a></li>
@@ -223,6 +225,7 @@
 <li class="toc-level-3"><a href="#root-finding">Root Finding</a></li>
 <li class="toc-level-3"><a href="#the-rys-1d-vrr">The Rys 1D VRR</a></li>
 <li class="toc-level-3"><a href="#6d-accumulation-and-hrr">6D Accumulation and HRR</a></li>
+<li class="toc-level-3"><a href="#the-2d-rys-block-kernel">The 2D Rys Block Kernel</a></li>
 <li class="toc-level-3"><a href="#auto-dispatch-calibrated-per-bucket-engine-selection">Auto-Dispatch: Calibrated Per-Bucket Engine Selection</a></li>
 <li class="toc-level-3"><a href="#implementation-files">Implementation Files</a></li>
 <li class="toc-level-2"><a href="#12-the-head-gordon-pople-hgp-integral-scheme">12. The Head-Gordon-Pople (HGP) Integral Scheme</a></li>
@@ -412,7 +415,7 @@ Input file (.hfinp)
   → optional SAO basis construction (src/symmetry/mo_symmetry.cpp)
   → SCF loop (src/scf/scf.cpp)
        ├── conventional:  build the full ERI tensor once, reuse it
-       ├── direct:        rebuild G(P) each iteration, memory-direct — each
+       ├── direct:        G = G_prev + G(P − P_prev) each iteration, memory-direct — each
        │                  quartet is contracted straight into F and the nb^4
        │                  tensor is never allocated (src/integrals/fused_fock.h)
        └── RI:            fitted 3-center factors instead of 4-center ERIs
@@ -549,6 +552,28 @@ g(\mathbf r; \alpha, \mathbf A, l_x, l_y, l_z)
 \]</span></p>
 <p>where <span class="math-inline">\(d_p\)</span> are contraction coefficients, <span class="math-inline">\(N_p\)</span> is the primitive normalization, and <span class="math-inline">\(N_c\)</span> is the contracted normalization that ensures <span class="math-inline">\(\langle \chi_\mu | \chi_\mu \rangle = 1\)</span> for the <span class="math-inline">\(s\)</span>-type component.</p>
 <p><strong>Practical note</strong>: many Gaussian-basis implementations fold <span class="math-inline">\(N_c\)</span> into the contraction coefficients during basis-set setup, so later integral code only needs the primitive normalization <span class="math-inline">\(N_p\)</span> and the already-normalized contracted coefficients.</p>
+<h3 id="redundant-primitives-and-the-optimized-general-contraction">Redundant Primitives and the Optimized General Contraction</h3>
+<p>Correlation-consistent sets are published with redundant primitives. Water cc-pVDZ from the Basis Set Exchange lists hydrogen as</p>
+<pre><code>
+S    4    13.01  1.962  0.4446  0.1220     (contracted)
+S    1    0.1220                            (uncontracted)
+P    1    0.727
+</code></pre>
+<p>The outermost exponent, 0.1220, appears twice: once inside the contraction and once as its own shell. The second copy lets the variational calculation reshape the valence region, but it also means the first copy adds nothing to the space the basis spans. Call the contraction <span class="math-inline">\(\chi = \sum_p d_p g_p\)</span> and the free shell <span class="math-inline">\(g_u\)</span>, with <span class="math-inline">\(\alpha_u\)</span> equal to one of the <span class="math-inline">\(\alpha_p\)</span>. Then <span class="math-inline">\(\chi' = \chi - d_u g_u\)</span> is a linear combination of functions already in the basis, and <span class="math-inline">\(\{\chi', g_u\}\)</span> spans exactly what <span class="math-inline">\(\{\chi, g_u\}\)</span> did. The same holds component by component for <span class="math-inline">\(L > 0\)</span>, since both shells carry the same Cartesian components.</p>
+<p>So the redundant primitive can be <strong>dropped from the contraction</strong>: delete its line and renormalize. Every quantity that is invariant to a change of basis within the same span is unchanged: SCF, MP2, CC and CI energies, densities in real space, gradients. What does change is anything that labels or partitions by individual basis function: MO coefficients, and Mulliken, Löwdin and Mayer analyses, because <span class="math-inline">\(\chi'\)</span> is a different function from <span class="math-inline">\(\chi\)</span>.</p>
+<p>This is the <em>optimized general contraction</em> (Hashimoto, Hirao and Tatewaki, 1995). PySCF ships its cc-pVXZ files in this form. It matters for cost because integral work scales with the number of primitive quartets, i.e. with the fourth power of the primitive counts on the shells involved:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>water, per molecule</th>
+<th>primitives as published</th>
+<th>after dropping</th>
+</tr></thead>
+<tbody>
+<tr><td>cc-pVDZ</td><td>28 (O s 9+9, O p 4, H s 4)</td><td>24 (8+8, 3, 3)</td></tr>
+<tr><td>cc-pVTZ</td><td>42</td><td>34</td></tr>
+</tbody></table></div>
+<p>Planck&#x27;s reader applies it to every orbital basis it loads (<code>drop_redundant_primitives</code>, <code>src/basis/gaussian.cpp</code>). A primitive is dropped from a contracted shell when an uncontracted shell of the same L on the same element has the same exponent. A contraction is never emptied, and Pople sets, which carry no such duplicates, come through unchanged. On water chains the direct Fock build becomes 2.1–2.3× faster in cc-pVDZ and 1.5–1.8× in cc-pVTZ, with SCF energies equal within the convergence tolerance (<code>docs/ERI_KERNEL_VS_LIBCINT.md</code>).</p>
+<p>The lesson in the measurement is the one worth keeping: before optimizing how an integral is computed, count how many are being computed. Each kernel change in this guide (closed forms, block kernels, lanes, batched Boys calls) was worth well under 2× on its own; the largest remaining cc-pVXZ gap to PySCF was in the basis file.</p>
 <h3 id="normalization-of-a-primitive">Normalization of a Primitive</h3>
 <p>For a Cartesian Gaussian with angular momentum <span class="math-inline">\((l_x, l_y, l_z)\)</span> and exponent <span class="math-inline">\(\alpha\)</span>:</p>
 <p><span class="math-display">\[
@@ -846,9 +871,24 @@ E(\kappa) - E(0)
 <h4 id="uhf-stability">UHF Stability</h4>
 <p>For UHF the orbital Hessian has <span class="math-inline">\(\alpha\alpha\)</span>, <span class="math-inline">\(\alpha\beta\)</span>, <span class="math-inline">\(\beta\alpha\)</span>, and <span class="math-inline">\(\beta\beta\)</span> blocks. Two physically distinct checks are reported:</p>
 <ul>
-<li><strong>Internal UHF→UHF</strong> (spin-conserving) — full <span class="math-inline">\(\alpha\alpha \oplus \beta\beta\)</span> Hessian with the <span class="math-inline">\(\alpha\beta\)</span> Coulomb cross-coupling included. Negative ⇒ another UHF stationary point is lower.</li>
+<li><strong>Internal UHF→UHF</strong> (spin-conserving) — the real-rotation Hessian <span class="math-inline">\(\mathbf A + \mathbf B\)</span> on <span class="math-inline">\(\alpha\alpha \oplus \beta\beta\)</span>, with the <span class="math-inline">\(\alpha\beta\)</span> Coulomb cross-coupling included. Negative ⇒ another UHF stationary point is lower.</li>
 <li><strong>External UHF→GHF</strong> (spin-flip) — couples <span class="math-inline">\(\alpha\)</span>-occupied to <span class="math-inline">\(\beta\)</span>-virtual rotations. Planck reports a diagonal-only approximation here (just <span class="math-inline">\(\varepsilon^\beta_a - \varepsilon^\alpha_i\)</span> gaps) since full GHF stability requires extra cross-spin two-electron blocks and Planck does not yet support a GHF reference to follow into.</li>
 </ul>
+<p>In spin orbitals, <span class="math-inline">\(A_{ia,jb} = (\varepsilon_a - \varepsilon_i)\delta +
+\langle aj\Vert ib\rangle\)</span> and <span class="math-inline">\(B_{ia,jb} = \langle ab\Vert ij\rangle\)</span>. Integrating out spin gives the internal matrix block by block:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Block</th>
+<th><span class="math-inline">\(\mathbf A + \mathbf B\)</span></th>
+</tr></thead>
+<tbody>
+<tr><td>same spin (<span class="math-inline">\(\alpha\alpha\)</span>, <span class="math-inline">\(\beta\beta\)</span>)</td><td><span class="math-inline">\((\varepsilon_a - \varepsilon_i)\delta + 2(ai|bj) - (ab|ij) - (aj|bi)\)</span></td></tr>
+<tr><td>opposite spin (<span class="math-inline">\(\alpha\beta\)</span>)</td><td><span class="math-inline">\(2(ai|bj)\)</span></td></tr>
+</tbody></table></div>
+<p>The opposite-spin block has no exchange, so there <span class="math-inline">\(\mathbf A = \mathbf B =
+(ai|bj)\)</span> and <span class="math-inline">\(\mathbf A - \mathbf B = 0\)</span>.</p>
+<p><strong>A pitfall worth knowing.</strong> Planck&#x27;s UHF check once used <span class="math-inline">\(\mathbf A -
+\mathbf B\)</span> in the same-spin blocks (the closed-shell complex/triplet form <span class="math-inline">\(-(ab|ij) + (aj|bi)\)</span>) and <span class="math-inline">\(\mathbf A + \mathbf B\)</span> in the cross-spin block. Each block looked plausible on its own, but together they make a matrix that is neither test. It still reported negative eigenvalues, but its lowest mode was not a direction in which the energy falls, so following it rotated the orbitals and the SCF slid straight back to the same saddle. The rule that would have caught it: <strong>every block of one stability matrix must come from the same combination, <span class="math-inline">\(\mathbf A + \mathbf B\)</span> for real rotations or <span class="math-inline">\(\mathbf A - \mathbf B\)</span> for complex ones.</strong></p>
 <h4 id="following-an-unstable-mode">Following an Unstable Mode</h4>
 <p>When a check fires, one can rotate the orbitals along the lowest unstable eigenvector and re-run SCF. Planck exposes this through <code>stability_follow .true.</code> and implements the rotation with the eigenvector <span class="math-inline">\(R_{ai}\)</span> (reshaped <span class="math-inline">\(n_v \times
 n_o\)</span>) by the standard SVD trick: writing <span class="math-inline">\(R = U_R \Sigma V_R^T\)</span>,</p>
@@ -866,10 +906,33 @@ n_o\)</span>) by the standard SVD trick: writing <span class="math-inline">\(R =
 <p>1. <strong>HOMO–LUMO mix on beta only.</strong> Rotate <span class="math-inline">\(\beta_{\text{HOMO}}\)</span> and <span class="math-inline">\(\beta_{\text{LUMO}}\)</span> by <span class="math-inline">\(\pi/8\)</span> (22.5°). This makes the alpha and beta occupied spaces explicitly different along the frontier, <em>regardless of what the unstable eigenvector mostly points at</em>. Without this step, unstable modes that pick up mostly core-orbital character leave the frontier closed-shell, and UHF re-symmetrizes back to the starting RHF. 2. <strong>Apply the eigenvector rotation as a sharpening step.</strong> Alpha gets <span class="math-inline">\(+\,s\,R\)</span>, beta gets <span class="math-inline">\(-\,s\,R\)</span>. This guides the SCF toward the specific lower stationary point identified by the analyzer.</p>
 <p>The step <span class="math-inline">\(s\)</span> is adaptive: <span class="math-inline">\(|\lambda| < 10^{-2}\)</span> uses the user-supplied default of <code>0.05 rad</code>; <span class="math-inline">\(|\lambda| \ge 10^{-2}\)</span> bumps to <span class="math-inline">\(\pi/4 = 0.785 rad\)</span>, the standard &quot;break-symmetry-hard&quot; amplitude.</p>
 <ul>
-<li><strong>Internal RHF→RHF or UHF→UHF</strong> — Planck applies the eigenvector rotation within the same SCF type and re-enters the same <code>run_*</code> entry point. The seeded density is read by SCF via the <code>ReadDensity</code> guess path, so no fresh HCore/SAD step happens.</li>
+<li><strong>Internal RHF→RHF or UHF→UHF</strong> — Planck applies the eigenvector rotation within the same SCF type and re-enters the same <code>run_*</code> entry point. The seeded density is read by SCF via the <code>ReadDensity</code> guess path, so no fresh HCore/SAD step happens. The step follows the same adaptive rule (<code>follow_step</code> in <code>stability.cpp</code>): 0.05 rad, or <span class="math-inline">\(\pi/4\)</span> when <span class="math-inline">\(\lambda < -10^{-2}\)</span>. A fixed 0.05 rad along a normalized mode spread over thousands of <span class="math-inline">\((a,i)\)</span> pairs barely moves any single orbital, and a deep saddle simply pulls the SCF back.</li>
 </ul>
 <h4 id="what-following-actually-finds">What Following Actually Finds</h4>
 <p>Following an instability is genuinely re-running SCF from a different starting point — it inherits all the convergence behavior of the underlying solver. In particular, if the rotated reference is close to <em>another</em> instability (e.g. ethylene RHF at small basis is itself unstable to UHF in addition to the broken-symmetry RHF), the follow may land on yet another stationary point lower than the original. This is correct behavior and matches every published stability code: the follow finds <em>some</em> lower stationary point, not necessarily the <em>physical</em> ground state. For ethylene/3-21G specifically, the post-follow UHF lands at <span class="math-inline">\(E = -77.5245\)</span> with <span class="math-inline">\(\langle S^2\rangle \approx 1.04\)</span>, which is a deeply spin-broken biradical solution — real, but unphysical for closed-shell ethylene at equilibrium. Larger basis sets and more correlation eliminate this spurious low UHF.</p>
+<h4 id="worked-example-when-rohf-comes-out-below-uhf">Worked Example: When ROHF Comes Out Below UHF</h4>
+<p>A variational argument says UHF can never lie above ROHF for the same state: an ROHF determinant is a UHF determinant with the extra constraint that the <span class="math-inline">\(\alpha\)</span> and <span class="math-inline">\(\beta\)</span> spatial orbitals coincide. So if a run reports <span class="math-inline">\(E_\text{ROHF} < E_\text{UHF}\)</span>, the UHF did not converge to a minimum. Here is a real case: the doublet cation of a four-water chain in cc-pVDZ (Cartesian), started from the core-Hamiltonian guess.</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Solution</th>
+<th>Energy (Eh)</th>
+<th>Status</th>
+</tr></thead>
+<tbody>
+<tr><td>UHF from <code>guess hcore</code> (Planck)</td><td>−303.6695294</td><td>saddle, above ROHF</td></tr>
+<tr><td>UHF from <code>guess sad</code> (Planck)</td><td>−303.6687483</td><td>saddle, above ROHF</td></tr>
+<tr><td>UHF from hcore (PySCF)</td><td>−303.6674821</td><td>saddle, above ROHF</td></tr>
+<tr><td>ROHF (Planck and PySCF)</td><td>−303.6870543</td><td>agree to 1e-8</td></tr>
+<tr><td>UHF hcore + <code>stability_follow</code> (Planck)</td><td><strong>−303.7136062</strong></td><td>stable</td></tr>
+<tr><td>UHF hcore + follow (PySCF)</td><td><strong>−303.7136062</strong></td><td>stable, within 1.7e-9</td></tr>
+<tr><td>UHF minao + follow (PySCF)</td><td>−303.7247803</td><td>stable, lower still</td></tr>
+</tbody></table></div>
+<p>Three lessons:</p>
+<ol>
+<li><strong>Converging is not the same as reaching a minimum.</strong> DIIS drives the orbital gradient to zero, and a saddle has zero gradient too. Here two different guesses converge to two different saddles, in both codes.</li>
+<li><strong>Stability analysis plus following is the remedy</strong>, and it is only as good as the Hessian it builds (the pitfall above) and the step it takes. With both right, the follow lands where PySCF&#x27;s does.</li>
+<li><strong>There is more than one stable minimum.</strong> PySCF&#x27;s minao path finds a lower one. Stability analysis guarantees a local minimum, not the global one, so for open-shell systems compare a few guesses when the answer matters.</li>
+</ol>
 <h4 id="planck-validation-note-twisted-ethylene-guess-sensitivity-and-the-sto-3g-pathology">Planck Validation Note: Twisted Ethylene, Guess Sensitivity, and the STO-3G Pathology</h4>
 <p>A clean illustration of how guess choice, basis flexibility, and the follow machinery interact comes from running 90°-twisted ethylene (<code>tests/inputs/regression/hf/ethylene_rhf_stability_unstable.hfinp</code>) across four basis sets with two guesses each (HCore vs SAD), once with <code>stability_follow .false.</code> and once with <code>.true.</code> and <code>max_cycles 300</code>.</p>
 <p><strong>Pre-follow RHF (just <code>stability_check</code>)</strong>:</p>
@@ -967,7 +1030,8 @@ n_o\)</span>) by the standard SVD trick: writing <span class="math-inline">\(R =
 <h3 id="scf-iteration-loop">SCF Iteration Loop</h3>
 <p>Each RHF iteration in <code>run_rhf</code>:</p>
 <ol>
-<li>Compute <span class="math-inline">\(G_{\mu\nu}[P]\)</span> from the current density (either from the stored ERI tensor via <code>_compute_fock_rhf</code>, or on-the-fly via <code>_compute_2e_fock</code>)</li>
+<li>Compute <span class="math-inline">\(G_{\mu\nu}[P]\)</span> from the current density: from the stored ERI tensor via <code>_compute_fock_rhf</code>, or on the fly. Direct SCF builds it incrementally, <span class="math-inline">\(\mathbf G = \mathbf G_\text{prev} + \mathbf G[\mathbf P -
+   \mathbf P_\text{prev}]\)</span> (<code>direct_fock_rhf</code> / <code>direct_fock_uhf</code> in <code>scf.cpp</code>; see &quot;Density-Weighted Screening and the Incremental Fock Build&quot; in §9)</li>
 <li>Form <span class="math-inline">\(\mathbf F = \mathbf H^{core} + \mathbf G\)</span></li>
 <li>Compute the current energy</li>
 <li>Form the DIIS error vector and call <code>diis.push(F, e)</code>; if DIIS is ready, replace <span class="math-inline">\(\mathbf F\)</span> with the extrapolated Fock</li>
@@ -1175,12 +1239,18 @@ V_{\mu\nu} = -\sum_C Z_C \langle \chi_\mu | |\mathbf r - \mathbf C|^{-1} | \chi_
 F_m(t) = \int_0^1 u^{2m} e^{-t u^2}\, du
 \]</span></p>
 <p>For large <span class="math-inline">\(t\)</span>, the Boys function is computed via the asymptotic expansion <span class="math-inline">\(F_m(t) \approx (2m-1)!!/(2t)^{m+1}\sqrt{\pi/t}\)</span>. For small <span class="math-inline">\(t\)</span>, a Taylor series, polynomial approximation, or tabulated interpolation is typically used.</p>
+<p><strong>Precision has to be relative, at every order.</strong> <span class="math-inline">\(F_m(t)\)</span> spans many orders of magnitude: it falls steeply with <span class="math-inline">\(m\)</span> at large <span class="math-inline">\(t\)</span>. Any evaluation scheme whose error is fixed in <em>absolute</em> terms keeps few significant digits exactly where high-angular-momentum integrals need them. Planck&#x27;s Boys core had such a defect until v1.2.1: high-order values came back with too few digits over part of the argument range. That put errors of up to 7e-6 into pure-f integrals (cc-pVTZ), growing with <span class="math-inline">\(L\)</span>. Every cross-engine gate stayed green, because OS, HGP and the closed forms all share the same Boys function and agreed with each other. It was found by comparing against an independent code (libcint), and localized by Planck&#x27;s own Rys engine, which uses quadrature roots instead of the Boys function and matched libcint to 2e-16. Two rules follow:</p>
+<ul>
+<li>Test a special function against a high-precision reference (mpmath) at every order and argument range in use, as a relative error.</li>
+<li>Cross-engine agreement only proves something when the engines don&#x27;t share the code being tested.</li>
+</ul>
 <p>The vertical recursion for nuclear attraction auxiliary integrals:</p>
 <p><span class="math-display">\[
 (a+1_i|0)^{(m)} = (P_i - A_i)(a|0)^{(m)} - (P_i - C_i)(a|0)^{(m+1)}
 + \frac{a_i}{2\zeta}\left[(a-1_i|0)^{(m)} - (a-1_i|0)^{(m+1)}\right]
 \]</span></p>
 <p>seeds at <span class="math-inline">\([0|0]^{(m)}\)</span> and builds up angular momentum.</p>
+<p><strong>An implementation note on cost.</strong> This recursion is evaluated once per primitive pair, per nucleus (or point charge), per AO component, so whatever it does per call is multiplied many times over. Planck&#x27;s <code>_os_nuclear_primitive</code> used to declare its table as a fixed <code>double V[13][13][13][14] = {}</code>, sized for the largest angular momentum. That is a 246 KB zero-fill on every call, even for an s–s pair. On 12 waters in 6-31G\* this made the nuclear-attraction matrix take 2.4 s of a 5.6 s RHF. Every entry the recurrence reads it has written first, so the initializer was simply dropped: same arithmetic, bitwise-identical results, and setup fell to 0.05 s. PCM evaluates the same primitive at every cavity point on every iteration, so it gained the same way. The general rule is <strong>never clear a worst-case-sized buffer in a per-primitive routine</strong>: clear the extent you use, or prove the reads are covered by writes.</p>
 <h3 id="two-electron-repulsion-integrals-eris">Two-Electron Repulsion Integrals (ERIs)</h3>
 <p>The electron repulsion integral over contracted Gaussians:</p>
 <p><span class="math-display">\[
@@ -1241,6 +1311,34 @@ F_m\!\left(\frac{\zeta\eta}{\zeta+\eta} R_{PQ}^2\right)
 Q(i,j) \cdot Q(k,l) < \epsilon_{ERI}
 \]</span></p>
 <p>The same criterion can be used in stored-ERI builds, direct Fock builders, symmetry-reduced quartet loops, and derivative-integral contractions. When symmetry is exploited, the Schwarz bound is constant across each quartet orbit, so screening one representative screens the whole orbit.</p>
+<h3 id="density-weighted-screening-and-the-incremental-fock-build">Density-Weighted Screening and the Incremental Fock Build</h3>
+<p>Schwarz bounds the integral, but a Fock build needs the integral <strong>times a density element</strong>. A quartet contributes to <span class="math-inline">\(\mathbf G\)</span> through <span class="math-inline">\(D_{\lambda\sigma}(\mu\nu|\lambda\sigma)\)</span> (Coulomb) and <span class="math-inline">\(D_{\nu\sigma}(\mu\lambda|\nu\sigma)\)</span>-type terms (exchange), so a sharper test (Häser–Ahlrichs) is</p>
+<p><span class="math-display">\[
+Q_{\mu\nu} Q_{\lambda\sigma}\,
+\max\bigl(4|D_{\mu\nu}|, 4|D_{\lambda\sigma}|, |D_{\mu\lambda}|,
+|D_{\mu\sigma}|, |D_{\nu\lambda}|, |D_{\nu\sigma}|\bigr) < \epsilon .
+\]</span></p>
+<p>With the full density <span class="math-inline">\(\mathbf D = \mathbf P\)</span> this buys little: on water chains it skips only 4–11 % more work than Schwarz alone. It pays because <span class="math-inline">\(\mathbf G\)</span> is <strong>linear in the density</strong>:</p>
+<p><span class="math-display">\[
+\mathbf G[\mathbf P_n] = \mathbf G[\mathbf P_{n-1}] + \mathbf G[\mathbf P_n - \mathbf P_{n-1}] .
+\]</span></p>
+<p>Near convergence <span class="math-inline">\(\Delta\mathbf P\)</span> is tiny, so most blocks fail the density-weighted test and are skipped. That holds however <span class="math-inline">\(\mathbf P_n\)</span> was produced (DIIS, SOSCF, damping, level shift); only linearity is needed. PySCF does the same (<code>get_veff</code> with <code>dm_last</code> / <code>vhf_last</code>).</p>
+<p>Planck applies the test per shell-quartet block in the fused loop (<code>screened</code> in <code>fused_fock.h</code>), with <span class="math-inline">\(|D|\)</span> taken as the shell-block maximum over every density passed in. The SCF loops pass <span class="math-inline">\(\Delta\mathbf P\)</span> (<code>direct_fock_rhf</code> / <code>direct_fock_uhf</code> in <code>scf.cpp</code>). In replication mode the test is skipped: a representative block there is scattered onto symmetry images whose density differs.</p>
+<p><strong>The tolerance is the subtle part.</strong> At <span class="math-inline">\(\epsilon = \)</span> <code>tol_eri</code> (<span class="math-inline">\(10^{-10}\)</span>) the skipped set changes with <span class="math-inline">\(\Delta\mathbf P\)</span> every iteration. The resulting error is no longer the same from one iteration to the next, so DIIS cannot absorb it: the energy random-walks at the <span class="math-inline">\(10^{-8}\)</span> level, and 12 waters in 6-31G\* need 24 iterations instead of 15. A periodic full rebuild does not help (35 iterations with a rebuild every 5), because the problem is that the screening is inconsistent, not that error accumulates. Running the density test at <code>tol_eri / 10</code> fixes it:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>test tolerance</th>
+<th>Fock-build speedup</th>
+<th><span class="math-inline">\(|\Delta E|\)</span> vs full build</th>
+<th>iterations</th>
+</tr></thead>
+<tbody>
+<tr><td><span class="math-inline">\(10^{-10}\)</span></td><td>1.19–1.46×</td><td>up to <span class="math-inline">\(1.5\times10^{-8}\)</span></td><td>15 → 24 on 12 waters</td></tr>
+<tr><td><span class="math-inline">\(10^{-11}\)</span> (used)</td><td>1.19–1.33×</td><td><span class="math-inline">\(\le 6\times10^{-10}\)</span></td><td>unchanged</td></tr>
+<tr><td><span class="math-inline">\(10^{-12}\)</span></td><td>1.12–1.21×</td><td>below print precision</td><td>unchanged</td></tr>
+</tbody></table></div>
+<p>(Water chains in 6-31G\*, cc-pVDZ and cc-pVTZ, four threads, at <code>tol_density</code> <span class="math-inline">\(10^{-7}\)</span>; the full record is in <code>docs/SCF_VS_PYSCF.md</code>, step S3.) The lesson is general: <strong>a screening error that is consistent from iteration to iteration is harmless, but one that changes each iteration is noise the convergence test will see.</strong> The Schwarz table itself is never density-screened.</p>
+<p>Tightening <span class="math-inline">\(\epsilon\)</span> only moves the noise floor; it cannot remove it. At the default <code>tol_density</code> (<span class="math-inline">\(10^{-10}\)</span>) even the <span class="math-inline">\(10^{-11}\)</span> test leaves the DIIS error stalled at 1–3<span class="math-inline">\(\times10^{-10}\)</span>, right at the convergence gate, and 2 waters in cc-pVTZ took 88 iterations instead of 18. So the SCF drops the screen once the DIIS error is below <span class="math-inline">\(10^{-8}\)</span> and rebuilds G once from the full P, discarding the drift. The screen still pays over the middle of the run, where <span class="math-inline">\(\Delta\mathbf P\)</span> is small enough to skip most blocks but the DIIS error is still far above the noise; the tail is exact.</p>
 <h3 id="permutation-symmetry-of-the-eri-tensor">Permutation Symmetry of the ERI Tensor</h3>
 <p>The ERI tensor has 8-fold permutation symmetry:</p>
 <p><span class="math-display">\[
@@ -1286,7 +1384,7 @@ K_{ab} = \exp\!\Big(-\frac{\alpha\beta}{\alpha+\beta}\,R_{AB}^2\Big).
 2\sqrt{\rho/\pi}\,\Big(\tfrac{\pi}{\zeta}\Big)^{3/2}\Big(\tfrac{\pi}{\eta}\Big)^{3/2}.
 \]</span></p>
 <p>Higher angular momentum multiplies this by geometric and exponent factors of modest size: <span class="math-inline">\(PA\)</span>, <span class="math-inline">\(W-P\)</span>, <span class="math-inline">\(1/2\zeta\)</span>, and in gradients <span class="math-inline">\(2\alpha\)</span>. So a pair whose <span class="math-inline">\(|c_a c_b N_a N_b\,(\pi/\zeta)^{3/2} K_{ab}|\)</span> is below <span class="math-inline">\(10^{-24}\)</span>, about <span class="math-inline">\(e^{-55}\)</span> for a unit pair, cannot move any integral by more than <span class="math-inline">\(\sim 10^{-19}\)</span>, far below one ulp of a Fock element. Planck drops such pairs once, when the <code>ShellPair</code> is built. One place covers every engine, the one-electron integrals and the gradients. The measured result is a Fock matrix that is <strong>byte-identical</strong> on every probe fixture, with 18–19 % fewer primitive quartets and a 1.04–1.15× faster build.</p>
-<p><strong>Going further changes the answer, and that is a different decision.</strong> Skipping individual primitive quartets whose bound is below some <span class="math-inline">\(\varepsilon\)</span> removes another ~20 % on water clusters. The Fock error then grows like 300–500 × <span class="math-inline">\(\varepsilon\)</span>, because many small omissions add up. That is an approximation with a tolerance, like Schwarz screening itself, not a free lunch. One trap is worth knowing in advance. The Schwarz table <span class="math-inline">\(Q(i,j) = \sqrt{(ij|ij)}\)</span> is computed with the same integral kernel. If the primitive skip is active while <span class="math-inline">\(Q\)</span> is built, <span class="math-inline">\(Q\)</span> comes out <em>smaller</em> than the true <span class="math-inline">\(\sqrt{(ij|ij)}\)</span>. Schwarz then stops being an upper bound, and quartets that matter get screened out. In Planck&#x27;s first experiment this produced Fock errors of <span class="math-inline">\(3\times10^{-6}\)</span> at <span class="math-inline">\(\varepsilon = 10^{-14}\)</span>, and <span class="math-inline">\(4.6\times10^{-10}\)</span> even at <span class="math-inline">\(\varepsilon = 10^{-20}\)</span>. The rule: <strong>an approximation must never enter a quantity that is used as a bound.</strong></p>
+<p><strong>Going further changes the answer, and that is a different decision.</strong> Skipping individual primitive quartets whose bound is below some <span class="math-inline">\(\varepsilon\)</span> removes another ~20 % on water clusters. The Fock error then grows like 300–500 × <span class="math-inline">\(\varepsilon\)</span>, because many small omissions add up. That is an approximation with a tolerance, like Schwarz screening itself, not a free lunch. (Primitives that are not small but <em>redundant</em> are a different matter: those are removed exactly, at basis-reading time — see &quot;Redundant Primitives and the Optimized General Contraction&quot; in §4.) One trap is worth knowing in advance. The Schwarz table <span class="math-inline">\(Q(i,j) = \sqrt{(ij|ij)}\)</span> is computed with the same integral kernel. If the primitive skip is active while <span class="math-inline">\(Q\)</span> is built, <span class="math-inline">\(Q\)</span> comes out <em>smaller</em> than the true <span class="math-inline">\(\sqrt{(ij|ij)}\)</span>. Schwarz then stops being an upper bound, and quartets that matter get screened out. In Planck&#x27;s first experiment this produced Fock errors of <span class="math-inline">\(3\times10^{-6}\)</span> at <span class="math-inline">\(\varepsilon = 10^{-14}\)</span>, and <span class="math-inline">\(4.6\times10^{-10}\)</span> even at <span class="math-inline">\(\varepsilon = 10^{-20}\)</span>. The rule: <strong>an approximation must never enter a quantity that is used as a bound.</strong></p>
 <h4 id="symmetry-inside-the-fused-loop">Symmetry inside the fused loop</h4>
 <p>The ERI is computed once at each symmetry-orbit representative. When the density is symmetric, that value is accumulated once, weighted by the orbit size, and <span class="math-inline">\(\mathbf G\)</span> is symmetrized at the end (the skeleton scheme, below); otherwise it is replicated across the orbit with the accumulated AO sign, exactly as the tensor scatter does. Three things make finding the representatives cheap.</p>
 <p><strong>Recognize non-representatives without building the orbit.</strong> The representative is the lexicographically smallest canonical quartet in the orbit. As soon as one operation maps a quartet, after canonicalization, to something smaller, the quartet is not the representative. So the loop asks that cheap question first (<code>is_orbit_representative</code>) and builds the full orbit, into a reused buffer, only for representatives. Building every orbit just to discard most of them used to be ~60 % of a symmetric build.</p>
@@ -1463,6 +1561,7 @@ double value(ca, cb, cc, cd) const;              // component (ca cb | cc cd)
 </tbody></table></div>
 <p>The gate is the same block sweep (worst <span class="math-inline">\(1.1\times10^{-14}\)</span>), and three mutations aimed at the lanes each fail it: dropping the laned <span class="math-inline">\(W-Q\)</span> term, giving padding lanes a nonzero weight, contracting lane 0 only.</p>
 <p><strong>What it taught.</strong> The idea that failed (contract once per shell quartet) and the idea that worked are the same idea. The failure was in the data layout: an axis-indexed cube carries cells no component reaches and Boys orders no recurrence reads, and the per-component gathers cost more than the saved primitive loop. Before abandoning an idea that measured slower, check whether the measurement was of the idea or of its first implementation.</p>
+<p><strong>Where it is still slow: one primitive, high L.</strong> Lanes need several primitive quartets, and cc-pVTZ&#x27;s polarization shells have one. On those blocks (K = 1, <span class="math-inline">\(L \ge 4\)</span>) the HGP block kernel is 4–5.5× libcint, and its VRR <em>alone</em> costs more than libcint&#x27;s whole quartet. The table <span class="math-inline">\([e0|f0]^{(m)}\)</span> over every <span class="math-inline">\(e, f, m\)</span> is simply more work than a Rys code does when there is no contraction to amortize it over. A 2D Rys block kernel (§11, &quot;The 2D Rys Block Kernel&quot;) is twice as fast on exactly those blocks and slower everywhere else.</p>
 <p>Implementation: <code>src/integrals/block_eri.h</code> (interface, <code>NoBlockKernel</code>, <code>ChainBlockKernel</code>), <code>src/integrals/hgp_block_eri.h</code> (kernel), <code>src/integrals/rys.cpp</code> (<code>auto_block_kernel</code>), <code>tests/hgp_engine_smoke.cpp</code> (sweep), <code>tests/eri_class_share_benchmark.cpp</code> (per-class timing).</p>
 <h4 id="digesting-a-whole-block-at-once">Digesting a whole block at once</h4>
 <p>Once the kernels produce a whole shell quartet per call, the rest of the loop still treats integrals one at a time. Each component is read out of the block, run through the canonical filter, the component Schwarz test and the orbit dedup, and written into <span class="math-inline">\(\mathbf G\)</span> at up to eight places on its own. A census measured what that costs: digesting each block densely instead would make the whole build 1.11–1.26× faster at unchanged precision, because the per-component digestion took 1.8–2.6× the time of the dense one. It also explained why an earlier plan to batch same-class blocks across a bra pair had nothing to buy: as long as every value leaves its kernel and is digested alone, the cost outside the kernels does not move.</p>
@@ -1675,14 +1774,50 @@ n = \left\lfloor \frac{L}{2} \right\rfloor + 1
 </tbody></table></div>
 <h3 id="root-finding">Root Finding</h3>
 <p>Computing the roots and weights for a given <span class="math-inline">\(T\)</span> is the central numerical challenge. A common strategy is:</p>
-<p><strong>One-root case</strong>: For <span class="math-inline">\(n = 1\)</span>, use the exact closed-form one-point rule.</p>
-<p><strong>General case (Stieltjes-Jacobi procedure)</strong>: For <span class="math-inline">\(n > 1\)</span>, the Rys measure is <span class="math-inline">\(e^{-Tt^2} dt\)</span> on <span class="math-inline">\([0,1]\)</span>. The roots and weights are obtained by building the three-term recurrence (Jacobi) matrix of the orthogonal polynomial family with respect to this measure. The algorithm:</p>
-<ol>
-<li>Compute <span class="math-inline">\(2n+1\)</span> Boys moments <span class="math-inline">\(F_m(T) = \int_0^1 t^{2m} e^{-Tt^2} dt\)</span> in long double precision. In the <span class="math-inline">\(T \to 0\)</span> limit this reduces to the Gauss-Legendre moment <span class="math-inline">\(1/(2m+1)\)</span>; for small nonzero <span class="math-inline">\(T\)</span> a convergent power series is used, and for larger <span class="math-inline">\(T\)</span> one switches to upward Boys recursion.</li>
-<li>Construct orthonormal polynomials via the Gram-Schmidt Stieltjes procedure, recording the diagonal (<span class="math-inline">\(\alpha_k\)</span>) and sub-diagonal (<span class="math-inline">\(\beta_k\)</span>) entries of the symmetric <span class="math-inline">\(n \times n\)</span> Jacobi matrix <span class="math-inline">\(\mathbf J\)</span>.</li>
-<li>Diagonalize <span class="math-inline">\(\mathbf J\)</span> with a symmetric eigensolver. The eigenvalues are the Rys roots <span class="math-inline">\(t_r^2\)</span>; the weight for root <span class="math-inline">\(r\)</span> is <span class="math-inline">\(w_r = F_0(T) \cdot V_{0r}^2\)</span> where <span class="math-inline">\(V_{0r}\)</span> is the first component of the <span class="math-inline">\(r\)</span>-th eigenvector. This is the Golub–Welsch formula.</li>
-<li>If the Gram-Schmidt procedure encounters a degenerate norm or the Jacobi matrix diagonalization fails, the algorithm falls back to pre-tabulated Gauss-Legendre roots and weights on <span class="math-inline">\([0,1]\)</span>. These tables are a safety net, not the normal small-<span class="math-inline">\(T\)</span> path.</li>
-</ol>
+<p><strong>One-root case</strong>: For <span class="math-inline">\(n = 1\)</span>, use the exact closed-form one-point rule, <span class="math-inline">\(w_1 = F_0(T)\)</span>, <span class="math-inline">\(t_1^2 = F_1(T)/F_0(T)\)</span>. Below <span class="math-inline">\(T = 1\)</span> both moments come from the positive series given below. The closed form <span class="math-inline">\(F_1 = (F_0 - e^{-T})/(2T)\)</span> subtracts two nearly equal numbers there and loses digits (1.3e-10 relative at <span class="math-inline">\(T = 2\times10^{-6}\)</span>).</p>
+<p><strong>General case</strong>: for <span class="math-inline">\(n > 1\)</span> the rule is the <span class="math-inline">\(n\)</span>-point Gauss rule of the measure <span class="math-inline">\(e^{-Tt^2}\,dt\)</span> on <span class="math-inline">\([0,1]\)</span>, in the variable <span class="math-inline">\(u = t^2\)</span>. Every Gauss rule comes from the three-term recurrence of the measure&#x27;s orthogonal polynomials: its coefficients <span class="math-inline">\(\alpha_k, \beta_k\)</span> form a symmetric tridiagonal (Jacobi) matrix <span class="math-inline">\(\mathbf J\)</span> whose eigenvalues are the roots. The question is how to get <span class="math-inline">\(\alpha_k, \beta_k\)</span> accurately, and then how to make the result fast.</p>
+<p><strong>Not from moments.</strong> The textbook route builds the recurrence from the moments <span class="math-inline">\(F_0, \dots, F_{2n-1}\)</span>. That problem is ill-conditioned (it goes through a Hankel matrix), and it fails in an instructive way. Such a rule reproduces its moments well, to <span class="math-inline">\(\le 5\times10^{-11}\)</span> here, yet its individual roots and weights were off by up to <span class="math-inline">\(10^{-7}\)</span> at <span class="math-inline">\(n = 8\)</span> and <span class="math-inline">\(8\times10^{-3}\)</span> at <span class="math-inline">\(n = 11\)</span>. For an integral that is harmless, because an integral only sees <span class="math-inline">\(\sum_r w_r P(u_r)\)</span> for a polynomial <span class="math-inline">\(P\)</span>, which is a combination of moments. For anything that uses the nodes themselves, such as fitting them as functions of <span class="math-inline">\(T\)</span>, it is fatal. Planck used this route until 2026-10-25.</p>
+<p><strong>Discretized Stieltjes</strong> (Gautschi). Replace the measure by a fine quadrature, here 60 panels of 20-point Gauss–Legendre in <span class="math-inline">\(t\)</span>, and run the Stieltjes procedure on that discrete measure: <span class="math-inline">\(\alpha_k\)</span> and <span class="math-inline">\(\beta_k\)</span> are ratios of sums <span class="math-inline">\(\sum_j W_j\,p_k(u_j)^2\)</span> and <span class="math-inline">\(\sum_j W_j\,u_j\,p_k(u_j)^2\)</span> of positive terms, with each <span class="math-inline">\(p_k\)</span> evaluated by the recurrence at the 1200 grid points. No moments appear, so there is nothing ill-conditioned to amplify. Two details carry the accuracy:</p>
+<ul>
+<li><strong>Compensated sums.</strong> Summed naively over 1200 points, the inner products carry about <span class="math-inline">\(\sqrt N\,\varepsilon \approx 10^{-14}\)</span> of rounding noise, and it shows up as noise in the nodes. Neumaier summation brings the generator to <span class="math-inline">\(\le 1.4\times10^{-15}\)</span> for <span class="math-inline">\(n \le 5\)</span>. This matters on Apple silicon in particular, where <code>long double</code> is the same 53-bit <code>double</code>. No part of Planck&#x27;s Rys code may rely on extended precision.</li>
+<li><strong>Christoffel weights.</strong> The weights come from <span class="math-inline">\(w_r = 1 / \sum_k \hat p_k(u_r)^2\)</span> over the orthonormal polynomials, rather than from the eigenvectors of <span class="math-inline">\(\mathbf J\)</span> (the Golub–Welsch formula), whose error grows as <span class="math-inline">\(\varepsilon\)</span> over the gap between neighbouring roots.</li>
+</ul>
+<p>This generator costs about 30 µs per call at <span class="math-inline">\(n = 11\)</span>. It is the reference (<code>rys_roots_weights_reference</code>), not what integrals call.</p>
+<p><strong>What integrals call</strong> is cheap because the rule is a smooth function of <span class="math-inline">\(T\)</span> alone:</p>
+<ul>
+<li>For <span class="math-inline">\(T \ge 35 + 7n\)</span> the upper limit of the integral stops mattering (<span class="math-inline">\(e^{-T}\)</span> is below roundoff), and substituting <span class="math-inline">\(x = T u\)</span> turns the measure into the generalized Laguerre weight <span class="math-inline">\(x^{-1/2} e^{-x}\)</span> on <span class="math-inline">\([0, \infty)\)</span>. So the roots are <span class="math-inline">\(x_i / T\)</span> and the weights <span class="math-inline">\(\lambda_i / (2\sqrt T)\)</span>, with <span class="math-inline">\(x_i, \lambda_i\)</span> the <span class="math-inline">\(n\)</span>-point Gauss–Laguerre (<span class="math-inline">\(\alpha = -\tfrac12\)</span>) rule, computed once.</li>
+<li>Below that, each root and weight is a degree-13 Chebyshev interpolant on unit segments of <span class="math-inline">\(T\)</span>, built from the reference the first time each <span class="math-inline">\(n\)</span> is used (0.01–0.04 s). One Clenshaw pass evaluates all <span class="math-inline">\(2n\)</span> functions together.</li>
+</ul>
+<p>The fast rule matches the reference to <span class="math-inline">\(\le 6\times10^{-15}\)</span> for <span class="math-inline">\(n \le 5\)</span> and <span class="math-inline">\(4\times10^{-14}\)</span> at <span class="math-inline">\(n = 11\)</span>, and costs 32–43 ns per call for every <span class="math-inline">\(n\)</span>. The moment solver it replaced cost 0.46–3.0 µs.</p>
+<p><strong>What that bought.</strong> The root finder had been a large share of every Rys integral. <code>planck-auto-dispatch-benchmark</code>, one thread, the same build with only <code>rys_roots.cpp</code> swapped, Rys time per shell quartet summed over all six calibration cases:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>total <span class="math-inline">\(L\)</span></th>
+<th>roots</th>
+<th>before / µs</th>
+<th>after / µs</th>
+<th>speedup</th>
+</tr></thead>
+<tbody>
+<tr><td>0</td><td>1</td><td>3.39</td><td>3.47</td><td>0.98×</td></tr>
+<tr><td>1</td><td>1</td><td>2.12</td><td>2.16</td><td>0.98×</td></tr>
+<tr><td>2</td><td>2</td><td>5.59</td><td>1.49</td><td>3.75×</td></tr>
+<tr><td>3</td><td>2</td><td>3.20</td><td>1.03</td><td>3.12×</td></tr>
+<tr><td>4</td><td>3</td><td>3.90</td><td>0.88</td><td>4.45×</td></tr>
+<tr><td>6</td><td>4</td><td>3.06</td><td>0.83</td><td>3.68×</td></tr>
+<tr><td>8</td><td>5</td><td>2.71</td><td>0.96</td><td>2.82×</td></tr>
+<tr><td>10</td><td>6</td><td>3.09</td><td>1.38</td><td>2.23×</td></tr>
+<tr><td>12</td><td>7</td><td>4.24</td><td>2.37</td><td>1.79×</td></tr>
+<tr><td>14</td><td>8</td><td>6.64</td><td>4.17</td><td>1.59×</td></tr>
+<tr><td>16</td><td>9</td><td>9.95</td><td>6.66</td><td>1.49×</td></tr>
+</tbody></table></div>
+<p>Nothing changes at <span class="math-inline">\(L \le 1\)</span>, where one root uses the closed form. The gain peaks at <span class="math-inline">\(L = 2\)</span>–6, where finding the roots was most of the integral, and shrinks at high <span class="math-inline">\(L\)</span>, where the recurrences and the 6D accumulation dominate. OS and HGP, which never call the root finder, measured 0.94–1.02× in the same runs, so the difference is the roots and nothing else. Per basis the geometric mean over buckets is 2.1× (STO-3G) to 3.2× (cc-pVDZ, cc-pVTZ).</p>
+<p>End to end, <code>engine rys</code>, four threads, best of three, energies identical: ethylene/cc-pVDZ 1.55 → 0.70 s (2.2×) and two waters in cc-pVTZ 241 → 69 s (3.5×). <code>engine auto</code> on four waters in cc-pVDZ is unchanged (0.83 s both), as it should be: Auto&#x27;s direct Fock build uses the closed forms and the HGP block kernel, not Rys. Even at 69 s, an explicit Rys run is far slower than Auto on the same system, because Rys still evaluates one Cartesian component at a time. The Rys <em>block</em> kernel built on this root finder is &quot;The 2D Rys Block Kernel&quot;, below. On the old finder it could not have won, since a four-root call alone (1.08 µs) cost more than libcint&#x27;s whole <span class="math-inline">\((pp|dd)\)</span> quartet (0.65 µs).</p>
+<h4 id="pitfall-upward-boys-recursion-and-how-it-went-unnoticed">Pitfall: upward Boys recursion, and how it went unnoticed</h4>
+<p>The moment-based solver described above is gone, but the defect that exposed it is worth keeping.</p>
+<p>The upward recursion <span class="math-inline">\(F_k = \big((2k-1)F_{k-1} - e^{-T}\big)/(2T)\)</span> multiplies whatever error <span class="math-inline">\(F_{k-1}\)</span> carries by <span class="math-inline">\((2k-1)/(2T)\)</span> at every step. Over <span class="math-inline">\(m\)</span> steps the error in <span class="math-inline">\(F_0\)</span> is amplified by <span class="math-inline">\(\prod_{k=1}^{m} (2k-1)/(2T)\)</span>: harmless once <span class="math-inline">\(T \ge m\)</span>, catastrophic when <span class="math-inline">\(T\)</span> is small and <span class="math-inline">\(m\)</span> large. An <span class="math-inline">\(n\)</span>-root rule needs moments up to <span class="math-inline">\(F_{2n-1}\)</span>, so eleven roots need <span class="math-inline">\(F_{21}\)</span>.</p>
+<p>Planck&#x27;s solver used to switch to upward recursion at <span class="math-inline">\(T = 1\)</span>. For <span class="math-inline">\(T \in [1, \sim 5]\)</span> the high moments then had no correct digits, and the rules for <span class="math-inline">\(n \ge 7\)</span> roots had weights that did not even sum to <span class="math-inline">\(F_0\)</span>; <span class="math-inline">\(n = 4\)</span>–6 were degraded to between <span class="math-inline">\(5\times10^{-12}\)</span> and <span class="math-inline">\(5\times10^{-8}\)</span>. The fix was the positive-term series <span class="math-inline">\(F_m(T) = e^{-T}\sum_{n\ge0} (2T)^n / \big((2m+1)(2m+3)\cdots(2m+2n+1)\big)\)</span> below <span class="math-inline">\(T = m\)</span>, where upward recursion is unstable. It stayed hidden for a reason worth remembering. Every test checked Rys against itself (box invariance) or against other engines on low-<span class="math-inline">\(L\)</span> molecules (<span class="math-inline">\(n \le 5\)</span>). The one high-<span class="math-inline">\(L\)</span> Rys case is a single neon atom, where every quartet sits on one centre, so <span class="math-inline">\(\mathbf P = \mathbf Q\)</span> and <span class="math-inline">\(T = 0\)</span>. The window was never entered. The test that found it, <code>planck-rys-roots</code>, checks the rule against an independent reference instead: an <span class="math-inline">\(n\)</span>-point rule must reproduce <span class="math-inline">\(F_0, \dots, F_{2n-1}\)</span>, with the moments from an independent quadrature. The recursion-broken solver failed it from <span class="math-inline">\(n = 1\)</span> to a 1.6e2 error at <span class="math-inline">\(n = 11\)</span>. The current rule passes at 4e-14 to 1.0e-13. The same test also checks the fast rule against the reference at every segment boundary.</p>
+<p>The broader lesson: <strong>reproducing the moments is not the same as getting the nodes right</strong>. The repaired moment solver passed the moment check while its nodes were off by up to <span class="math-inline">\(8\times10^{-3}\)</span>. That only came out when its nodes were compared with the large-<span class="math-inline">\(T\)</span> asymptote, a check that does not go through moments at all.</p>
 <h3 id="the-rys-1d-vrr">The Rys 1D VRR</h3>
 <p>For each Rys root <span class="math-inline">\(u = t_r^2\)</span>, the ERI factorizes into three independent 1D integrals. Each 1D table <span class="math-inline">\(I[a][c]\)</span> is filled by its own three-term recursion:</p>
 <p><span class="math-display">\[
@@ -1715,6 +1850,78 @@ W[a_x][a_y][a_z][c_x][c_y][c_z]
 \]</span></p>
 <p>This sum runs over all <span class="math-inline">\(n\)</span> roots. After the root loop the buffer holds <span class="math-inline">\((a\,0\,|\,c\,0)\)</span> intermediates analogous to those produced by the OS VRR. A practical implementation stores this accumulated Rys intermediate in a reusable six-index work buffer. Because the root sum needs only the spatial slice and not the extra auxiliary-order dimension of OS, the scratch pattern is typically simpler than in a deep VRR stack.</p>
 <p>Angular momentum is then transferred to the second center of each shell pair using the same HRR as the OS path, first on the bra pair and then on the ket pair. The contracted ERI is obtained by summing the primitive results over all <span class="math-inline">\((\alpha, \beta)\)</span> and <span class="math-inline">\((\gamma, \delta)\)</span> primitive pairs.</p>
+<p>This is how Planck&#x27;s per-component Rys path works, and it is the expensive order. Summing the roots <em>before</em> the HRR makes the HRR run on the full 6D product. A hoisted version that builds the 6D box once per shell quartet is still 50–210× libcint on high-<span class="math-inline">\(L\)</span> blocks.</p>
+<h3 id="the-2d-rys-block-kernel">The 2D Rys Block Kernel</h3>
+<p>The 3D outer product factorizes per root, so the horizontal transfer can too. Each root&#x27;s <span class="math-inline">\(x\)</span>, <span class="math-inline">\(y\)</span> and <span class="math-inline">\(z\)</span> tables carry their own HRR, and the roots are summed last. This is libcint&#x27;s formulation, and Planck&#x27;s <code>RysBlockKernel</code> (<code>src/integrals/rys_block_eri.h</code>) follows it. For each primitive quartet and each root <span class="math-inline">\(r\)</span>, and on each axis <span class="math-inline">\(q\)</span>:</p>
+<ol>
+<li><strong>VRR</strong>, the 1D table <span class="math-inline">\(I_q[e][f]\)</span> for <span class="math-inline">\(e \le l_A + l_B\)</span>, <span class="math-inline">\(f \le l_C + l_D\)</span> (the recurrence above).</li>
+<li><strong>Bra HRR</strong>, in one dimension: <span class="math-inline">\(I_q(a, b{+}1 \mid f) = I_q(a{+}1, b \mid f) + (A_q - B_q)\, I_q(a, b \mid f)\)</span>.</li>
+<li><strong>Ket HRR</strong>, the same with <span class="math-inline">\(C_q - D_q\)</span>, giving <span class="math-inline">\(I_q(a, b \mid c, d)\)</span> for <span class="math-inline">\(a \le l_A\)</span>, <span class="math-inline">\(b \le l_B\)</span>, <span class="math-inline">\(c \le l_C\)</span>, <span class="math-inline">\(d \le l_D\)</span>.</li>
+</ol>
+<p>Then every Cartesian component is a short sum over roots:</p>
+<p><span class="math-display">\[
+(a\,b \mid c\,d) \mathrel{+}= \sum_{r=1}^{n} w_r\,
+  I_x^{(r)}(a_x, b_x \mid c_x, d_x)\,
+  I_y^{(r)}(a_y, b_y \mid c_y, d_y)\,
+  I_z^{(r)}(a_z, b_z \mid c_z, d_z)
+\]</span></p>
+<p>with <span class="math-inline">\(w_r\)</span> the Rys weight times the primitive prefactor and contraction coefficients.</p>
+<p><strong>Why it is cheaper.</strong> For <span class="math-inline">\((dd|dd)\)</span> each axis table has <span class="math-inline">\(3^4 = 81\)</span> entries per root, and there are <span class="math-inline">\(n = 5\)</span> roots. The table work is about 1.6k operations. The assembly is <span class="math-inline">\(1296 \text{ components} \times 5 \text{ roots} \times 3\)</span>, about 19k. HGP&#x27;s block kernel builds a 3675-entry <span class="math-inline">\([e0|f0]^{(m)}\)</span> table and then a full 6D HRR. With one primitive quartet nothing amortizes that, while the Rys form never touches a 6D object until the final sum.</p>
+<p><strong>Measured</strong> on the fifteen costliest one-primitive classes at total <span class="math-inline">\(L \ge 4\)</span>, 2 H2O / cc-pVTZ, one thread:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>kernel</th>
+<th>time</th>
+<th>per class</th>
+</tr></thead>
+<tbody>
+<tr><td>HGP block</td><td>0.0511 s</td><td>—</td></tr>
+<tr><td>Rys2D block</td><td>0.0255 s</td><td>1.70–2.39× faster than HGP</td></tr>
+<tr><td>libcint 6.1.3</td><td>0.0106 s</td><td>2.3–2.6× faster than Rys2D</td></tr>
+</tbody></table></div>
+<p>It agrees with the HGP block to <span class="math-inline">\(\le 2.7\times10^{-14}\)</span> and with libcint to <span class="math-inline">\(\le 8.1\times10^{-14}\)</span>, relative to the largest value per contraction-depth group, over every class on water 6-31G through cc-pVTZ.</p>
+<p><strong>Where it loses: contraction.</strong> HGP contracts its primitive tables <em>before</em> the HRR, so a deeper contraction costs it one more VRR pass and no more HRR. The Rys form runs its tables <em>and</em> its assembly per primitive quartet, so its cost grows with the number of primitive quartets <span class="math-inline">\(K\)</span>. The crossover (HGP time / Rys2D time; above 1 means Rys2D wins), 2 H2O / cc-pVTZ:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th><span class="math-inline">\(K\)</span> \ total <span class="math-inline">\(L\)</span></th>
+<th>2</th>
+<th>4</th>
+<th>6</th>
+<th>7</th>
+<th>9</th>
+<th>11</th>
+</tr></thead>
+<tbody>
+<tr><td>1</td><td>0.82</td><td>1.29</td><td>1.90</td><td>2.29</td><td>2.38</td><td>2.56</td></tr>
+<tr><td>3</td><td>0.39</td><td>0.55</td><td>0.86</td><td>1.16</td><td>1.32</td><td>–</td></tr>
+<tr><td>9</td><td>0.29</td><td>0.40</td><td>0.63</td><td>0.89</td><td>–</td><td>–</td></tr>
+<tr><td><span class="math-inline">\(\ge 24\)</span></td><td><span class="math-inline">\(\le 0.22\)</span></td><td><span class="math-inline">\(\le 0.31\)</span></td><td><span class="math-inline">\(\le 0.51\)</span></td><td>0.69</td><td>–</td><td>–</td></tr>
+</tbody></table></div>
+<p>So the two kernels split the work instead of one replacing the other. Rys2D takes one-primitive blocks at <span class="math-inline">\(L \ge 4\)</span>, and three-quartet blocks at <span class="math-inline">\(L \ge 7\)</span>. HGP keeps everything contracted, and the closed forms keep <span class="math-inline">\(L \le 3\)</span>. cc-pVTZ-and-larger bases have uncontracted polarization shells, so that is where the gap was. Auto chains the three (<code>src/integrals/auto_block_eri.h</code>). The Rys kernel runs in a <code>crossover</code> mode that declines every other block, and the HGP block kernel behind it takes those. Measured on whole SCF runs (RHF, direct, best of three):</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>basis</th>
+<th>per-iteration speedup</th>
+<th>energies</th>
+</tr></thead>
+<tbody>
+<tr><td>cc-pVTZ, 1–3 waters</td><td>1.11–1.16×</td><td>identical, same iterations</td></tr>
+<tr><td>cc-pVDZ, 4 and 8 waters</td><td>1.01–1.04×</td><td>identical</td></tr>
+<tr><td>6-31G\*, 4 and 12 waters</td><td>0.99–1.01×</td><td>identical</td></tr>
+</tbody></table></div>
+<p>The whole build gains about 1.15×, not 2×, because Rys2D halves only the blocks it takes; contracted blocks stay on HGP. Pople bases are untouched, as they must be (<code>docs/ERI_KERNEL_VS_LIBCINT.md</code> §4).</p>
+<p><strong>Lessons from tuning it.</strong> Only one of five layout changes paid, and it was not one the operation count pointed to. Splitting the time with early returns inside <code>prepare</code> showed that 1.0 µs of a 5 µs <span class="math-inline">\((dd|dd)\)</span> block went on recomputing each component&#x27;s table offsets from the shells&#x27; component views. Those offsets depend only on the class <span class="math-inline">\((l_A, l_B, l_C, l_D)\)</span>, because a shell&#x27;s Cartesian components come in a fixed order per <span class="math-inline">\(L\)</span>. Caching them per class took the kernel from 1.66× to 2.00× over HGP. Four other changes were slower or no better:</p>
+<ul>
+<li>folding the weight into one table;</li>
+<li>a compile-time root count;</li>
+<li>building the tables for all roots at once;</li>
+<li>putting roots in the outer loop.</li>
+</ul>
+<p>With three to five roots, a loop over the roots is too short to unroll or vectorize profitably. Two measurement pitfalls also came up:</p>
+<ul>
+<li><strong>A probe can time itself.</strong> An environment switch read with <code>getenv</code> inside a loop condition made the kernel look 10× slower. Read such switches once.</li>
+<li><strong>A fixture can be blind to a term.</strong> In 6-31G\*, hydrogen has no p shell. So every pair with <span class="math-inline">\(l_B > 0\)</span> has <span class="math-inline">\(A = B\)</span> or a hydrogen s on B, and the bra HRR always multiplies a zero distance. A sign error in <span class="math-inline">\(A - B\)</span> passes the gate there and fails it at 2.5 in cc-pVDZ.</li>
+</ul>
 <h3 id="auto-dispatch-calibrated-per-bucket-engine-selection">Auto-Dispatch: Calibrated Per-Bucket Engine Selection</h3>
 <p>When the user requests <code>engine auto</code>, every contracted shell quartet is routed to whichever integral engine is empirically fastest for that quartet&#x27;s angular-momentum bucket <span class="math-inline">\((L_{AB}, L_{CD})\)</span>, where <span class="math-inline">\(L_{AB} = l_A + l_B\)</span> and <span class="math-inline">\(L_{CD} = l_C + l_D\)</span>. Which engine that is has changed twice as the engines themselves were optimized, and the calibration machinery is built so the rule tracks those changes automatically rather than being hand-maintained. This section describes both the current data and how the rule is derived from it.</p>
 <h4 id="why-a-fitted-rule-and-not-an-analytic-flop-count">Why a fitted rule and not an analytic flop count</h4>
@@ -1736,8 +1943,8 @@ W[a_x][a_y][a_z][c_x][c_y][c_z]
 </tbody></table></div>
 <p><code>scripts/fit_auto_dispatch.py</code> then derives the rule <strong>directly from the data</strong>: for each <span class="math-inline">\((L_{AB}, L_{CD})\)</span> bucket it takes the median per-quartet time across the six cases and assigns the bucket to the engine with the lowest median. There are no hard-coded angular-momentum inequalities — the region map <em>is</em> the per-bucket median-winner table. The fitter emits <code>docs/auto_dispatch_fit.json</code> (the <code>region_table</code>, the per-bucket medians, and a generated C++ lookup) and <code>docs/auto_dispatch_curves.svg</code>. When an engine is later optimized, re-running the benchmark and the fitter moves the region boundaries on their own; the self-deriving fitter was introduced precisely so the rule survives engine work without manual edits.</p>
 <p><img src="auto_dispatch_curves.svg" alt="Per-quartet build time (ms) versus L_AB + L_CD for HGP, Rys, and OS, across the six calibration cases."></p>
-<h4 id="the-current-cost-surface-three-way">The current cost surface (three-way)</h4>
-<p>The data below is the median of 9 benchmark runs at 10 000 sampled quartets per bucket, taken after both HGP and OS had their HRR hoisted to the contracted shell-quartet level (the &quot;A4&quot; rearrangement — VRR per primitive pair, HRR once per quartet; see §12). Cross-case median per-quartet build times, in microseconds (lower is faster), with the engine the fitted rule assigns:</p>
+<h4 id="the-current-cost-surface">The current cost surface</h4>
+<p>The data below is the median of 9 benchmark runs at 10 000 sampled quartets per bucket, refit on 2026-10-26. That was after HGP&#x27;s batched Boys calls and the fast Rys root finder (Root Finding, above), and both HGP and OS already had their HRR hoisted to the contracted shell-quartet level (the &quot;A4&quot; rearrangement: VRR per primitive pair, HRR once per quartet; see §12). Cross-case median per-quartet build times, in microseconds (lower is faster), with the engine the fitted rule assigns:</p>
 <div class="table-wrap"><table>
 <thead><tr>
 <th><span class="math-inline">\(L_{AB}, L_{CD}\)</span></th>
@@ -1747,31 +1954,36 @@ W[a_x][a_y][a_z][c_x][c_y][c_z]
 <th>Rule pick</th>
 </tr></thead>
 <tbody>
-<tr><td>0, 0</td><td><strong>1.0</strong></td><td>4.0</td><td>1.3</td><td>HGP</td></tr>
-<tr><td>0, 1 / 1, 0</td><td><strong>1.1 / 1.0</strong></td><td>3.1 / 3.1</td><td>1.3 / 1.3</td><td>HGP</td></tr>
-<tr><td>1, 1 / 2, 0</td><td><strong>0.9</strong> / <strong>0.9</strong></td><td>9.0 / 10.2</td><td>1.0 / 1.1</td><td>HGP</td></tr>
-<tr><td>2, 2</td><td><strong>0.7</strong></td><td>6.8</td><td>0.8</td><td>HGP</td></tr>
-<tr><td>3, 3</td><td><strong>0.6</strong></td><td>3.6</td><td>0.7</td><td>HGP</td></tr>
-<tr><td>4, 4</td><td><strong>0.6</strong></td><td>1.8</td><td><strong>0.6</strong></td><td>HGP</td></tr>
-<tr><td>5, 5</td><td><strong>1.3</strong></td><td>3.0</td><td>1.4</td><td>HGP</td></tr>
-<tr><td>6, 6</td><td>2.8</td><td>4.4</td><td><strong>2.8</strong></td><td>OS</td></tr>
-<tr><td>7, 7</td><td>6.4</td><td>6.9</td><td><strong>5.8</strong></td><td>OS</td></tr>
-<tr><td>7, 8</td><td>9.0</td><td><strong>7.6</strong></td><td>8.1</td><td>Rys</td></tr>
-<tr><td>8, 8</td><td>12.8</td><td><strong>10.5</strong></td><td>11.0</td><td>Rys</td></tr>
+<tr><td>0, 0</td><td><strong>0.69</strong></td><td>2.49</td><td>0.81</td><td>HGP</td></tr>
+<tr><td>0, 1 / 1, 0</td><td><strong>0.60 / 0.54</strong></td><td>1.74 / 1.77</td><td>0.71 / 0.67</td><td>HGP</td></tr>
+<tr><td>1, 1 / 2, 0</td><td><strong>0.53 / 0.46</strong></td><td>1.63 / 1.62</td><td>0.63 / 0.59</td><td>HGP</td></tr>
+<tr><td>2, 2</td><td><strong>0.48</strong></td><td>1.02</td><td>0.53</td><td>HGP</td></tr>
+<tr><td>3, 3</td><td><strong>0.43</strong></td><td>0.76</td><td>0.51</td><td>HGP</td></tr>
+<tr><td>4, 4</td><td><strong>0.51</strong></td><td>0.71</td><td>0.66</td><td>HGP</td></tr>
+<tr><td>5, 5</td><td><strong>1.12</strong></td><td>1.37</td><td>1.37</td><td>HGP</td></tr>
+<tr><td>6, 6</td><td><strong>2.39</strong></td><td>2.49</td><td>2.83</td><td>HGP</td></tr>
+<tr><td>2, 8</td><td>1.03</td><td><strong>0.99</strong></td><td>1.16</td><td>Rys</td></tr>
+<tr><td>5, 8</td><td>3.37</td><td><strong>2.58</strong></td><td>3.79</td><td>Rys</td></tr>
+<tr><td>7, 7</td><td>5.38</td><td><strong>4.74</strong></td><td>5.78</td><td>Rys</td></tr>
+<tr><td>7, 8</td><td>7.30</td><td><strong>5.53</strong></td><td>8.12</td><td>Rys</td></tr>
+<tr><td>8, 8</td><td>9.92</td><td><strong>7.23</strong></td><td>10.81</td><td>Rys</td></tr>
 </tbody></table></div>
-<p>Across all 81 buckets the median-winner counts are <strong>HGP 66, OS 13, Rys 2</strong>. The three regions are:</p>
+<p>Across all 81 buckets the median-winner counts are <strong>HGP 67, Rys 14, OS 0</strong>:</p>
 <ol>
-<li><strong>HGP wins the entire low- and mid-L bulk</strong> (66 buckets), including the <span class="math-inline">\(L_{AB}+L_{CD}\le 1\)</span> corner — <span class="math-inline">\((0,0)\)</span>, <span class="math-inline">\((0,1)\)</span>, <span class="math-inline">\((1,0)\)</span> — that older schemes handed to Rys. The HGP HRR-outside-the-primitive-loop factorization makes it the fastest engine at low L <em>and</em> keeps it competitive far up the ladder. At the d-shell sweet spot (e.g. <span class="math-inline">\((2,2)\)</span>) HGP is ~9× faster than Rys and ~15% faster than OS.</li>
-<li><strong>OS re-enters in a high-L corner</strong> (13 buckets: <span class="math-inline">\((6,6)\)</span>, <span class="math-inline">\((6,7)\)</span>, <span class="math-inline">\((6,8)\)</span>, <span class="math-inline">\((7,6)\)</span>, <span class="math-inline">\((7,7)\)</span>, <span class="math-inline">\((8,5)\)</span>, <span class="math-inline">\((8,6)\)</span>, <span class="math-inline">\((8,7)\)</span>, <span class="math-inline">\((5,7)\)</span>, <span class="math-inline">\((5,8)\)</span>, <span class="math-inline">\((4,7)\)</span>, <span class="math-inline">\((4,8)\)</span>, <span class="math-inline">\((3,8)\)</span>). Once total angular momentum is large enough, HGP&#x27;s per-shell-quartet HRR bookkeeping overhead overtakes its primitive-loop savings and plain OS wins — but only by single-digit percent (e.g. <span class="math-inline">\((6,6)\)</span>: OS 2.79 vs HGP 2.81 µs). This corner exists <em>because</em> OS itself was given the A4 hoist; before that optimization OS was dominated almost everywhere and was not in the auto menu at all.</li>
-<li><strong>Rys survives only in the extreme corner</strong>, <span class="math-inline">\((7,8)\)</span> and <span class="math-inline">\((8,8)\)</span>, where its quadrature cost grows more slowly than the OS/HGP recurrence tables (<span class="math-inline">\((8,8)\)</span>: Rys 10.5 vs OS 11.0 vs HGP 12.8 µs).</li>
+<li><strong>HGP wins the entire low- and mid-L bulk</strong> (67 buckets), including the <span class="math-inline">\(L_{AB}+L_{CD}\le 1\)</span> corner that older schemes handed to Rys. At the d-shell sweet spot <span class="math-inline">\((2,2)\)</span> it is 2× faster than Rys and about 10 % faster than OS.</li>
+<li><strong>Rys owns 14 buckets in the high-L corner</strong>, those with <span class="math-inline">\(L_{CD} = 8\)</span> from <span class="math-inline">\(L_{AB} = 2\)</span> up, <span class="math-inline">\(L_{CD} = 7\)</span> from <span class="math-inline">\(L_{AB} = 4\)</span> up, and <span class="math-inline">\((7,6)\)</span>, <span class="math-inline">\((8,6)\)</span>: <span class="math-inline">\((2,8)\)</span>, <span class="math-inline">\((3,8)\)</span>, <span class="math-inline">\((4,7)\)</span>, <span class="math-inline">\((4,8)\)</span>, <span class="math-inline">\((5,7)\)</span>, <span class="math-inline">\((5,8)\)</span>, <span class="math-inline">\((6,7)\)</span>, <span class="math-inline">\((6,8)\)</span>, <span class="math-inline">\((7,6)\)</span>, <span class="math-inline">\((7,7)\)</span>, <span class="math-inline">\((7,8)\)</span>, <span class="math-inline">\((8,6)\)</span>, <span class="math-inline">\((8,7)\)</span>, <span class="math-inline">\((8,8)\)</span>. It wins by up to 1.37× (<span class="math-inline">\((8,8)\)</span>: 7.23 against HGP&#x27;s 9.92 µs). Some cells are close: <span class="math-inline">\((2,8)\)</span> by 3 %, <span class="math-inline">\((8,6)\)</span> by 2 %. Only one calibration case reaches <span class="math-inline">\(L_{AB}+L_{CD} \ge 11\)</span> (helium/cc-pV5Z), so most of this corner rests on one molecule.</li>
+<li><strong>OS wins nothing.</strong> Its 13-bucket corner was a margin of a few percent over HGP; HGP&#x27;s 1.1× from batched Boys calls took the low end of it, and Rys took the rest. OS stays in the code as an explicit engine and as the reference the comparators check against.</li>
 </ol>
-<p>The median gate is clean: the fitted rule disagrees with the per-bucket median winner in <strong>0 of 81</strong> buckets, and the single per-case disagreement out of 238 case-rows (water/cc-pVTZ <span class="math-inline">\((5,6)\)</span>) is an OS/HGP tie at <strong>0.25%</strong> — a noise-floor straddle, correctly not flipped. Earlier single-run benchmarks showed up to ~8% per-case overhead and a dozen disagreements; the median-of-9 data confirms those were run-to-run noise on near-tie boundary buckets, not real structure.</p>
+<p>The median gate is clean: the fitted rule disagrees with the per-bucket median winner in <strong>0 of 81</strong> buckets. Of 238 case-rows, three disagree, all ties the median correctly does not flip: helium/cc-pVQZ and water/cc-pVTZ <span class="math-inline">\((5,6)\)</span> (Rys by 0.07 % and 1.3 %), and water/STO-3G <span class="math-inline">\((1,2)\)</span> (OS by 4.3 %, a sub-microsecond bucket). Mean overhead against the per-case winner is 0.02 %.</p>
 <h4 id="how-the-rule-evolved-and-why-this-matters-pedagogically">How the rule evolved (and why this matters pedagogically)</h4>
 <p>This is a good illustration of why a dispatch rule must be re-measured, not reasoned about once:</p>
 <ul>
 <li><strong>Two engines, pre-HGP-A4.</strong> OS-vs-Rys only; Rys won the very-low-L corner and the rule was an analytic crossover.</li>
 <li><strong>Two engines, post-HGP-A4.</strong> HGP&#x27;s HRR hoist made it the broad winner and <em>took the low-L corner away from Rys</em>. The rule collapsed to &quot;Rys iff <span class="math-inline">\(L_{AB}+L_{CD}\le 1\)</span>, else HGP&quot;; OS dropped out of the menu.</li>
 <li><strong>Three engines, post-OS-A4 (current data).</strong> The same A4 hoist applied to OS made OS competitive again in the high-L corner, so OS re-enters with 13 buckets, and re-measurement showed HGP — not Rys — is actually fastest at <span class="math-inline">\((0,0)/(0,1)/(1,0)\)</span>. The rule is now genuinely three-way.</li>
+</ul>
+<ul>
+<li><strong>Rys returns (refit 2026-10-26).</strong> Neither Rys&#x27;s recurrences nor OS changed. What changed is the Rys root finder, which used to cost 0.5–3 µs per call and now costs 30–40 ns, plus a 1.1× gain for HGP from batched Boys calls. Rys took 12 of OS&#x27;s 13 high-L buckets and one of HGP&#x27;s, and HGP took the other two. OS left the menu again. The cheapest part of an algorithm on paper (finding n roots of a polynomial) had been deciding where the whole engine was competitive.</li>
 </ul>
 <p>Each transition moved the boundaries in a way the previous analytic argument did not predict, which is exactly why the fitter derives the regions from measured medians rather than from a formula.</p>
 <h4 id="runtime-implementation">Runtime implementation</h4>
@@ -1788,9 +2000,8 @@ default:                             return HeadGordonPople::_contracted_eri_ele
 <li><strong>The stored ERI tensor.</strong> <code>_compute_2e_auto</code> (conventional SCF, MP2, CC, CASSCF) and the two-phase Fock builds that contract it (<code>_compute_2e_fock_auto</code>, <code>_compute_2e_fock_uhf_auto</code>). Its HGP fast path fires only when the table picks HGP for the shell-group bucket; OS- and Rys-chosen quartets fall to the per-component path, which re-dispatches through <code>_auto_contracted_eri</code>.</li>
 <li><strong>Whatever the block kernels decline</strong> in the memory-direct Fock build (§9): screened (range-separated) kernels, and shell quartets with total <span class="math-inline">\(L > 12\)</span>.</li>
 </ul>
-<p>Everything else in the direct build no longer consults the table. Every Coulomb shell quartet with total <span class="math-inline">\(L \le 3\)</span> goes to the closed forms, and every one with <span class="math-inline">\(4 \le L \le 12\)</span> to the HGP block kernel. With symmetric densities, the whole block is then digested at once (&quot;Digesting a whole block at once&quot;). Since direct SCF and every DFT J/K build use this path, the table now governs only a minority of Auto&#x27;s work.</p>
-<p>The engines return identical integrals, so between them the table is purely a speed choice. The block kernels and dense digestion agree with the engines to about <span class="math-inline">\(10^{-15}\)</span>–<span class="math-inline">\(10^{-13}\)</span> in <span class="math-inline">\(\mathbf G\)</span> but are not bitwise-identical, so <code>engine auto</code> matches an explicit engine to machine precision rather than bit for bit. The <code>engine_scf_energy_compare.py</code> comparator checks this (OS == HGP == Rys == Auto to <code>0.000e+00 Eh</code> at printed precision), including a He₂/cc-pV5Z case whose <span class="math-inline">\(L > 12\)</span> quartets reach the corner where the table picks OS (Lsum ≳ 11) and Rys (<span class="math-inline">\((7,8)\)</span>/<span class="math-inline">\((8,8)\)</span>).</p>
-<p><strong>The timings above are dated.</strong> They were taken before one vectorized Boys call per primitive replaced HGP&#x27;s per-order calls, which made HGP&#x27;s per-component path about 1.1× faster, so buckets near a tie may have moved. The table has not been refitted since. Rerun the benchmark and the fitter before relying on the exact boundaries.</p>
+<p>Everything else in the direct build no longer consults the table. Every Coulomb shell quartet with total <span class="math-inline">\(L \le 3\)</span> goes to the closed forms. Above that, a one-primitive block (or a three-quartet block at <span class="math-inline">\(L \ge 7\)</span>) goes to the 2D Rys block kernel, and every other block with <span class="math-inline">\(L \le 12\)</span> to the HGP block kernel (<code>src/integrals/auto_block_eri.h</code>). With symmetric densities, the whole block is then digested at once (&quot;Digesting a whole block at once&quot;). Since direct SCF and every DFT J/K build use this path, the table now governs only a minority of Auto&#x27;s work.</p>
+<p>The engines return identical integrals, so between them the table is purely a speed choice. The block kernels and dense digestion agree with the engines to about <span class="math-inline">\(10^{-15}\)</span>–<span class="math-inline">\(10^{-13}\)</span> in <span class="math-inline">\(\mathbf G\)</span> but are not bitwise-identical, so <code>engine auto</code> matches an explicit engine to machine precision rather than bit for bit. The <code>engine_scf_energy_compare.py</code> comparator checks this (OS == HGP == Rys == Auto to <code>0.000e+00 Eh</code> at printed precision), including a He₂/cc-pV5Z case whose <span class="math-inline">\(L > 12\)</span> quartets reach the corner where the table picks Rys (the high-L buckets listed above).</p>
 <p>When an engine is re-optimized: re-run <code>planck-auto-dispatch-benchmark</code>, re-run <code>scripts/fit_auto_dispatch.py</code>, then paste the regenerated table from <code>docs/auto_dispatch_fit.json</code>&#x27;s <code>rule_in_code</code> into <code>kAutoEngine</code>. The table is kept verbatim (not reduced to inequalities) precisely so this step is a mechanical copy with no risk of drift.</p>
 <h3 id="implementation-files">Implementation Files</h3>
 <div class="table-wrap"><table>
@@ -1800,9 +2011,14 @@ default:                             return HeadGordonPople::_contracted_eri_ele
 </tr></thead>
 <tbody>
 <tr><td><code>src/integrals/rys.h</code></td><td>Public API: <code>_compute_2e</code>, <code>_compute_2e_fock</code>, <code>_compute_2e_fock_uhf</code>, and <code>_auto</code> variants</td></tr>
-<tr><td><code>src/integrals/rys.cpp</code></td><td>VRR (<code>_rys_vrr_1d</code>), HRR (<code>_rys_hrr_ab</code>, <code>_rys_hrr_cd</code>), primitive and contracted ERI, Schwarz table, Fock builders, three-way auto-dispatch table + selector (<code>kAutoEngine</code>, <code>_auto_engine</code>)</td></tr>
+<tr><td><code>src/integrals/rys.cpp</code></td><td>6D HRR (<code>_rys_hrr_ab</code>, <code>_rys_hrr_cd</code>), primitive and contracted ERI, Schwarz table, Fock builders, three-way auto-dispatch table + selector (<code>kAutoEngine</code>, <code>_auto_engine</code>)</td></tr>
+<tr><td><code>src/integrals/rys_detail.h</code></td><td>Shared with the block kernel: primitive-pair geometry (<code>_rys_eri_prep</code>), the 1D VRR (<code>_rys_vrr_1d</code>), the screened-kernel map</td></tr>
+<tr><td><code>src/integrals/rys_block_eri.h</code></td><td><code>RysBlockKernel</code>: the 2D block kernel (per-root, per-axis HRR, then the root sum); <code>crossover</code> mode for Auto</td></tr>
+<tr><td><code>src/integrals/auto_block_eri.h</code></td><td>The Auto block-kernel chain: closed forms, Rys2D, HGP block</td></tr>
+<tr><td><code>tests/eri_class_share_benchmark.cpp</code></td><td><code>--k2</code>: Rys2D against the HGP block and libcint per class, the accuracy gate, and the K by L crossover table</td></tr>
 <tr><td><code>src/integrals/rys_roots.h</code></td><td><code>rys_roots_weights</code> declaration; exact 1-point formula <code>rys_1pt</code></td></tr>
-<tr><td><code>src/integrals/rys_roots.cpp</code></td><td>Pre-tabulated GL rules; Boys moment recursion; Stieltjes–Jacobi Gram-Schmidt + Eigen eigendecomposition</td></tr>
+<tr><td><code>src/integrals/rys_roots.cpp</code></td><td>Fast rule: Chebyshev segment fits below T = 35 + 7n, Laguerre(−½) asymptote above; reference: discretized Stieltjes with compensated sums and Christoffel weights (<code>rys_roots_weights_reference</code>)</td></tr>
+<tr><td><code>tests/rys_roots.cpp</code></td><td><code>planck-rys-roots</code>: moments against quadrature, large-T scaling, fast rule against the reference</td></tr>
 <tr><td><code>tests/auto_dispatch_benchmark.cpp</code></td><td>Per-bucket timing harness that produces <code>docs/auto_dispatch_timings.csv</code></td></tr>
 <tr><td><code>scripts/fit_auto_dispatch.py</code></td><td>Fitter that consumes the CSV and emits <code>docs/auto_dispatch_fit.json</code> and <code>docs/auto_dispatch_curves.svg</code></td></tr>
 </tbody></table></div>
@@ -1943,7 +2159,7 @@ r_{12})/r_{12}\)</span>) drop in exactly as in OS: the long-range damping enters
 </tbody></table></div>
 <p>Four patterns:</p>
 <ol>
-<li><strong>Rys loses every cell.</strong> These bases stop at d functions, and Rys&#x27;s niche in the §11 calibration is the f/g/h tail, which none of them reach. It is up to 6× slower here (CH₄ / 6-31G\<em>\</em> <code>nosym</code>: 136 against 23 ms).</li>
+<li><strong>Rys loses every cell.</strong> These bases stop at d functions, and Rys&#x27;s niche in the §11 calibration is the f/g/h tail, which none of them reach. It is up to 6× slower here (CH₄ / 6-31G\<em>\</em> <code>nosym</code>: 136 against 23 ms). <strong>These Rys rows predate the new root finder</strong> (2026-10-25, §11 Root Finding), which made per-component Rys 2–3× faster at the total L these bases reach (L = 2–8: 2.8–4.5×). Expect Rys to stay last here, at roughly 2–3× HGP rather than 4–6×; the table has not been re-run.</li>
 <li><strong>HGP wins the <code>full</code> column on every case, by 1.01–1.30× over OS.</strong> That is the mode you run when the full group is available, and the reason Auto resolves to HGP on it. The lead is consistent but small, so the honest summary is &quot;HGP is a little faster on the symmetry path&quot;, not &quot;HGP dominates&quot;.</li>
 <li><strong>Without the full group the ranking is mixed.</strong> OS wins the small STO-3G cases and most <code>d2h</code> cells; HGP, or Auto picking per bucket, wins the larger polarized <code>nosym</code> cases. These are near-ties that depend on loop structure, and they do not drive any default.</li>
 <li><strong>The full group is the bigger lever.</strong> For any one engine, <code>nosym</code> → <code>full</code> gains 2.2–5.5× here, far more than the gap between OS and HGP. <code>d2h</code> gets only part of that, and on H₂O / 6-31G\<em>\</em> OS&#x27;s <code>d2h</code> (5.41 ms) even edges out its own <code>full</code> (5.48 ms).</li>
@@ -4767,7 +4983,7 @@ driver.cpp
 <tr><td>Point group detection and SAO blocking</td><td>Complete</td></tr>
 <tr><td>MO irrep labeling</td><td>Complete</td></tr>
 <tr><td>Full point-group ERI reduction (direct SCF, RHF/UHF)</td><td>Complete (Cartesian and spherical-harmonic basis; petite list + skeleton-Fock symmetrization; OpenMP + Schwarz screened; metric-correct spherical <span class="math-inline">\(\mathbf O_R\)</span>; validated through <span class="math-inline">\(d\)</span>-shells, C2v→C3v→Td)</td></tr>
-<tr><td>Memory-direct fused Fock build</td><td>Complete (one shared quartet loop for OS / HGP / Rys / Auto; contracts each canonical quartet straight into <span class="math-inline">\(\mathbf F\)</span>, so no <span class="math-inline">\(n_b^4\)</span> tensor is ever allocated; block-level Schwarz prescreen; handles integral symmetry natively; OpenMP over a fixed partition of the work into 64 bins, scheduled dynamically and summed in fixed order, so it is bitwise thread-count-invariant)</td></tr>
+<tr><td>Memory-direct fused Fock build</td><td>Complete (one shared quartet loop for OS / HGP / Rys / Auto; contracts each canonical quartet straight into <span class="math-inline">\(\mathbf F\)</span>, so no <span class="math-inline">\(n_b^4\)</span> tensor is ever allocated; block-level Schwarz and density-weighted prescreen, with the SCF building incrementally from <span class="math-inline">\(\Delta\mathbf P\)</span>; handles integral symmetry natively; OpenMP over a fixed partition of the work into 64 bins, scheduled dynamically and summed in fixed order, so it is bitwise thread-count-invariant)</td></tr>
 <tr><td>MPI-distributed direct SCF (<code>planck-mpi</code>)</td><td>Complete (bra-triangle stripe over the fused Fock loop, one <span class="math-inline">\(n_b^2\)</span> Allreduce per iteration; unified front end dispatching to both HF and DFT; bitwise-identical to the serial build, gated by <code>water_rhf_mpi_smoke</code> and <code>water_dft_mpi_smoke</code>). Build with <code>-DBUILD_MPI=ON</code></td></tr>
 <tr><td>Python front end</td><td>Complete (<code>python/planck.py</code>; drives either binary and returns a results dict parsed from the binary&#x27;s own <code>--json</code> dump, not from scraping the log)</td></tr>
 <tr><td>RMP2 and UMP2 energy</td><td>Complete</td></tr>
@@ -4791,7 +5007,7 @@ driver.cpp
 <tr><td>Analytic ROHF gradient</td><td>Complete (Cartesian and spherical; <code>W = P^α F^α P^α + P^β F^β P^β</code>, no Z-vector — SCF is variational)</td></tr>
 <tr><td>Analytic RMP2 gradient (Z-vector)</td><td>Complete</td></tr>
 <tr><td>Analytic UMP2 gradient</td><td>Complete</td></tr>
-<tr><td>RHF/UHF wavefunction stability analysis</td><td>Complete (RHF real/complex singlet and external triplet; UHF internal plus diagonal-approximation GHF external; optional <code>stability_follow</code>)</td></tr>
+<tr><td>RHF/UHF wavefunction stability analysis</td><td>Complete (RHF real/complex singlet and external triplet; UHF internal real <span class="math-inline">\(\mathbf A + \mathbf B\)</span> plus diagonal-approximation GHF external; optional <code>stability_follow</code> with an adaptive step)</td></tr>
 <tr><td>FCI (full MO space, RHF/ROHF references)</td><td>Complete (dense at or below 500 determinants, otherwise Davidson with a threaded, thread-count-invariant sigma build)</td></tr>
 <tr><td>FCIQMC (<code>correlation fciqmc</code>)</td><td>Complete (shift and projected estimators with blocked error bars, initiator option, fixed-seed reproducibility; reproduces exact FCI on N2/STO-3G, gated by <code>n2_fciqmc_sto3g</code>)</td></tr>
 <tr><td>CASSCF / RASSCF</td><td>Complete</td></tr>

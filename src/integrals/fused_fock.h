@@ -204,7 +204,8 @@ namespace HartreeFock::Integrals
         const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
         FusedTerm term = FusedTerm::Combined,
         BlockKernel block_kernel = {},
-        bool dense_digest = true)
+        bool dense_digest = true,
+        bool density_screen = true)
     {
         const bool use_sym = (sym_ops != nullptr) && !sym_ops->empty();
 
@@ -321,6 +322,46 @@ namespace HartreeFock::Integrals
                 }
             qmax[p] = m;
         }
+
+        // Density-weighted block screen (S3, docs/SCF_VS_PYSCF.md):
+        // skip a block when Qmax_bra * Qmax_ket * max(4|D_ab|, 4|D_cd|, |D_ac|,
+        // |D_ad|, |D_bc|, |D_bd|) < tol_eri, with |D| the shell-block maximum
+        // over every density passed in (Haser-Ahlrichs). This is what makes an
+        // incremental build (D = P - P_prev) cheap. Off in replication mode: a
+        // representative block is scattered onto images whose density differs.
+        // The Schwarz table itself stays unscreened (invariant 8). The caller
+        // can switch it off: the SCF tail does, since the skipped share of an
+        // incremental G[dP] makes the energy random-walk at tight tolerances.
+        density_screen = density_screen && (!use_sym || skeleton);
+        Eigen::MatrixXd dblk = Eigen::MatrixXd::Zero(ngroups, ngroups);
+        if (density_screen)
+            for (const Eigen::MatrixXd *D : {dens.P, dens.Pt, dens.Pa, dens.Pb})
+                if (D)
+                    for (std::size_t a = 0; a < ngroups; ++a)
+                        for (std::size_t b = 0; b < ngroups; ++b)
+                            dblk(a, b) = std::max(dblk(a, b),
+                                D->block(groups[a].first_ao, groups[b].first_ao,
+                                         groups[a].n_components, groups[b].n_components)
+                                    .cwiseAbs().maxCoeff());
+        // The density test runs at tol_eri / 10. At tol_eri itself the skipped
+        // set changes with dP every iteration, the SCF energy random-walks at
+        // 1e-8 and DIIS stalls (12 H2O 6-31G*: 15 -> 24 iterations). At /10 the
+        // energy is within 6e-10 of the full build, with the same iteration
+        // count, and keeps 1.19-1.33x of the 1.28-1.46x (S3 scan).
+        constexpr double kDensityScreenFactor = 0.1;
+        const auto screened = [&](std::size_t bra, std::size_t ket)
+        {
+            const double qq = qmax[bra] * qmax[ket];
+            if (qq < tol_eri)
+                return true;
+            if (!density_screen)
+                return false;
+            const std::size_t a = group_pairs[bra].a, b = group_pairs[bra].b;
+            const std::size_t c = group_pairs[ket].a, d = group_pairs[ket].b;
+            const double dm = std::max({4.0 * dblk(a, b), 4.0 * dblk(c, d), dblk(a, c),
+                                        dblk(a, d), dblk(b, c), dblk(b, d)});
+            return qq * dm < tol_eri * kDensityScreenFactor;
+        };
 
         // op_group[o * ngroups + g]: the group op o maps group g onto, used by
         // the block-level orbit tests (below). Needs each
@@ -550,7 +591,7 @@ namespace HartreeFock::Integrals
                 // Block-level Schwarz: every component of this block is below
                 // tolerance, so skip all of them without touching the component
                 // loops or building a single ShellPair. Exact — same bound.
-                if (qmax[bra] * qmax[ket] < tol_eri)
+                if (screened(bra, ket))
                     continue;
 
                 const FusedShellGroup &gC = groups[group_pairs[ket].a];
@@ -789,7 +830,7 @@ namespace HartreeFock::Integrals
 
             kets([&](std::size_t q)
             {
-                if (qmax[p] * qmax[q] < tol_eri)
+                if (screened(p, q))
                     return;
                 const std::size_t sC = group_pairs[q].a, sD = group_pairs[q].b;
                 if constexpr (kSkel)

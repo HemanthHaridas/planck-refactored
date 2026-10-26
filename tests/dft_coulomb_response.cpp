@@ -30,6 +30,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <format>
 #include <iostream>
 #include <limits>
 #include <random>
@@ -313,9 +314,20 @@ namespace
         HartreeFock::Correlation::RMP2Result result;
         result.n_occ = no;
         result.n_virt = nv;
+        // Canonical RHF amplitudes carry the pair symmetry t_ij^ab = t_ji^ba
+        // (RMP2Result's packed form stores only one of each pair), and the
+        // tiled D' builder relies on it for a symmetric D'. A fixture without
+        // it gives an asymmetric D, and drho_channel's symmetric-P collapse
+        // then misses the D-AO XC-II channel by ~1e-6 on the water FDs below.
         result.t2.resize(static_cast<std::size_t>(no) * no * nv * nv);
-        for (std::size_t q = 0; q < result.t2.size(); ++q)
-            result.t2[q] = 1e-3 * static_cast<double>((q % 11) + 1);
+        const auto t2_index = [no, nv](int i, int j, int a, int b)
+        { return ((static_cast<std::size_t>(i) * no + j) * nv + a) * nv + b; };
+        for (int i = 0; i < no; ++i)
+            for (int j = 0; j < no; ++j)
+                for (int a = 0; a < nv; ++a)
+                    for (int b = 0; b < nv; ++b)
+                        result.t2[t2_index(i, j, a, b)] = 0.5e-3 * static_cast<double>(
+                            (t2_index(i, j, a, b) % 11) + 1 + (t2_index(j, i, b, a) % 11) + 1);
         const auto amplitudes = DFT::Gradient::build_dh_pt2_amplitude_density(result, 0.27);
         const Eigen::MatrixXd z = Eigen::MatrixXd::Zero(nv, no);
         const auto relaxed = amplitudes
@@ -1085,7 +1097,8 @@ namespace
         const double total_fd = (*phi_plus - *phi_minus) / (2.0 * grid_step);
         const double analytic_total = lda_complete->total(fd_atom, fd_cart);
         if (std::abs(total_fd - analytic_total) > 3e-7)
-            fail("Eq. 33 LDA moving-grid water finite difference failed");
+            fail(std::format("Eq. 33 LDA moving-grid water finite difference failed: fd {:.6e} analytic {:.6e}",
+                             total_fd, analytic_total));
 
         // GGA translation needs the spatial density Hessians.  Use independent
         // PBE exchange and correlation pieces, then translate only the points
@@ -1208,7 +1221,8 @@ namespace
         const double gga_geometry_fd = (*gga_geometry_plus - *gga_geometry_minus) / (2.0 * grid_step);
         const double gga_geometry_analytic = gga_complete->total(fd_atom, fd_cart);
         if (std::abs(gga_geometry_fd - gga_geometry_analytic) > 3e-7)
-            fail("Eq. 33 complete GGA geometry-displacement finite difference failed");
+            fail(std::format("Eq. 33 complete GGA geometry-displacement finite difference failed: fd {:.6e} analytic {:.6e}",
+                             gga_geometry_fd, gga_geometry_analytic));
 
         // The driver contract is the sole paper-object assembly boundary: it
         // must reproduce the independently built water objects without

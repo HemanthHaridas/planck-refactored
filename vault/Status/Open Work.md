@@ -18,6 +18,7 @@ truth for what remains.
 
 ## Highest-priority correctness and robustness work
 
+
 - **Yukawa / Gaussian screened-exchange functionals are evaluated with the
   erf kernel everywhere except TDDFT (found 2026-10-16).** `cam_coefficients()`
   (`src/dft/base/wrapper.h`) folds `XC_HYB_YUKAWA_SR` / `XC_HYB_GAUSSIAN_SR`
@@ -32,6 +33,14 @@ truth for what remains.
   the erf substitution.
 
 ## Build and packaging
+
+- **`ctest` runs Eigen's own test suite and reports 14 failures (found
+  2026-10-25).** `fetchcontent_makeavailable(eigen)` registers Eigen's tests
+  (`resize`, the `sblat*`/`dblat*`/`cblat*`/`zblat*` BLAS tests) in Planck's
+  CTest tree, but nothing builds them, so every one fails in ~0 s and buries
+  real failures in the summary. Fix: keep Eigen's testing off at fetch
+  (e.g. `set(EIGEN_BUILD_TESTING OFF)` / `BUILD_TESTING` scoped around the
+  `fetchcontent_makeavailable` call, depending on what Eigen 3.4.0 honors).
 
 - **Result-changing environment overrides still reach production binaries
   (scoped 2026-10-12, `docs/RUNTIME_ENV_OVERRIDES_SCOPE.md`).** Six unused ones
@@ -1900,6 +1909,61 @@ identify the path taken. Not required for correctness or performance.
 
 ## Performance and maintenance opportunities
 
+- **RHF vs PySCF — answered 2026-10-25; S1 and S3 landed, B2.2 declined**
+  (`docs/SCF_VS_PYSCF.md`). With matched tolerances the iteration counts are
+  identical. **The "11–16× kernel gap" was a benchmark artifact:** PySCF
+  stores the ERI tensor in memory whenever it fits, regardless of
+  `direct_scf`, so it had been running conventional SCF.
+  `tests/benchmarks/pyscf_bench.py` now forces it direct and asserts it.
+  Direct against direct, a full Fock build is level or faster in Planck on
+  6-31G\* (0.27–0.95×) and 1.5–3.7× slower on cc-pVXZ. It is not general
+  contraction (B2.2 declined). Remaining open:
+  - **The end-to-end SCF table** in `docs/SCF_VS_PYSCF.md` is still the
+    in-core one; rerun the fixed harness.
+  - **The cc-pVXZ gap — answered 2026-10-26** (`docs/ERI_KERNEL_VS_LIBCINT.md`,
+    rewritten from its scope). It was a benchmark artifact, a Boys defect,
+    redundant basis primitives, and high-L single-primitive kernel cost,
+    now served by the 2D Rys block kernel (cc-pVTZ Fock builds 1.11–1.16×;
+    see Completion). Still open:
+    - **Verify the Auto-table refit** (`45ef3cef`): `planck-compute-2e`,
+      `engine_scf_energy_compare.py` (incl. He₂/cc-pV5Z, which reaches the
+      changed buckets) and the regression suites have not run on it.
+    - **Rerun the Planck-vs-PySCF Fock table** (doc §3); it predates Rys2D.
+    - **Rescope gradient G3 on Rys2D** (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`):
+      differentiating the 2D per-axis tables is libcint's route to
+      derivative integrals and gives Rys the derivative kernel Phase D lacks.
+    - **Route the conventional Auto build's 6D hoist**
+      (`_contracted_eri_block_hoisted_views`, 50–210× libcint) through
+      Rys2D and delete the hoist.
+    - **libcint is still 2.3–2.6× faster** on the blocks Rys2D owns; compare
+      its `g`-tensor layout (`g0`/`g2d` strides in `cint2e.c`) only if that
+      matters. Four obvious layouts already lost (doc §4).
+    - **General contraction (G0):** rerun the family probe restricted to
+      closed-form classes on 4 and 8 H2O cc-pVDZ at 1 and 4 threads; build
+      only if the whole build gains ≥ 1.10× with Pople unchanged (doc §5).
+    - **Smaller:** rerun `pyscf_bench.py` end to end; check the `-RIFIT`
+      files for the same redundant primitives (JK-fit sets are usually
+      uncontracted); the non-kernel half of the 6-31G\* fused loop (low
+      priority, Planck already beats PySCF there).
+  - **DFT:** the KS J/K direct builds (`_compute_2e_j_direct` / `_k_direct`)
+    do not yet build incrementally.
+  - **Boys v1.2.1 re-pins:** checks pinned to exact integral values move with
+    the corrected Boys core. The extended suite and `ctest` on v1.2.1 are
+    pending.
+- **Analytic gradients are 20–120× the SCF they follow — scoped 2026-10-25,
+  nothing landed** (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`). The ERI
+  Fock-build work never reached the derivative integrals: the 2e gradient is
+  per AO component (each of 12 derivative components from up to 24 fresh
+  contracted ERIs), runs the full square of AO pairs, is single-threaded, and
+  Auto routes it to per-component OS. 98 % of the gradient. Measured at four
+  threads: 4 H2O / 6-31G\* SCF 2.5 s vs gradient 54 s; 1 H2O / cc-pVTZ 0.9 s
+  vs 115 s. RMP2 gradients are dense unscreened `nao⁴` sweeps, and the second
+  RMP2 sweep only feeds a debug print (`PLANCK_DEBUG_RMP2_TERMS`), so it is
+  dead work on every run. UHF/ROHF carry their own copies of the 2e loop and
+  the 1e block is pasted four times. Plan: G1 dead work + Auto → HGP (1.5×),
+  G2 one threaded triangular loop, G3 a shell-quartet derivative block kernel
+  (the lever; this is shellpair Phase D), G4 MP2 onto the same loop, G5 1e
+  derivatives, G6 RI 3c (measure first).
 - **ERI/Fock BLAS-LAPACK migration — scoped 2026-10-17, nothing landed**
   (`docs/ERI_FOCK_BLAS_SCOPE.md`). BLAS buys nothing for the ERI kernels,
   direct-SCF digestion, the conventional `nb⁴` contraction (bandwidth-bound,
@@ -2076,6 +2140,15 @@ identify the path taken. Not required for correctness or performance.
     1.1× faster), so near-tied buckets may have moved. Rerun
     `planck-auto-dispatch-benchmark` and `scripts/fit_auto_dispatch.py`; a
     changed table means editing `kAutoEngine` in `rys.cpp`, not only the doc.
+    **DONE 2026-10-26:** refit pasted into `kAutoEngine`; Rys 14 buckets
+    (was 2), HGP 67, OS none (was 13); fit gate 0/81; teaching guide §11
+    rewritten. The rest of this entry is the history.
+    **Now more pressing (2026-10-25):** after K2.1a the per-component Rys
+    path is 2.1–3.2× faster, and Rys is the fastest engine in 15 of 238
+    buckets where it won none (all high L: He cc-pV5Z, one cc-pVTZ, by
+    1.0–1.5×). Fresh before/after CSVs from that run, single thread:
+    `planck-auto-dispatch-benchmark` (which segfaulted at startup until its
+    Boys loader was added the same day).
     - **Correction:** the earlier note said §12's `nosym`/`d2h` columns go
       through the fused loop. They do not. `planck-symm-fock-benchmark`
       times the two-phase `_compute_2e_fock{,_auto}` builds, which is why
@@ -2097,7 +2170,9 @@ identify the path taken. Not required for correctness or performance.
     orbit per component. Unblocked: block kernels exist for all three engines.
   - **Phase D — gradient derivative ERIs** (`compute_eri_deriv_dispatch`) are
     still per-AO. Rys has no derivative kernel, so per-quartet Auto gradients need
-    one written first. The largest remaining piece.
+    one written first. The largest remaining piece. Now scoped as G3 of
+    `docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md` (an HGP-based derivative
+    block kernel, so the missing Rys derivative is not a blocker).
   - **Phase E — retire the per-AO adapter.** Make `build_shellpairs` emit
     shell-level `ShellPair` objects and drop `expand_shell_groups_to_ao_pairs`.
     Last, because it changes the shared `ShellPair` contract and must resolve

@@ -402,6 +402,170 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **2D Rys block kernel in Auto's Fock build (K2.1b/K2.1c, 2026-10-26).**
+  `RysBlockKernel` (`src/integrals/rys_block_eri.h`) is libcint's
+  formulation: per root, a 1D VRR and a per-axis 1D HRR to
+  I_q(a,b,c,d), then each component as sum_r w_r I_x I_y I_z. The old
+  per-component path summed the roots into a 6D box before its HRR (the
+  hoisted block was 50-210x libcint). On the K = 1, L >= 4 classes of
+  2 H2O cc-pVTZ it is 2.00x the HGP block (every class faster; libcint
+  still 2.3-2.6x faster). The one change that paid in tuning was caching
+  component offsets per class (1.0 us of a 5 us (dd|dd)); four layout
+  variants lost. HGP wins under contraction (it contracts before its
+  HRR), so `auto_block_eri.h` chains closed forms (L <= 3), Rys2D in
+  crossover mode (K = 1 at L >= 4, K <= 3 at L >= 7), then the HGP block,
+  defined once for rys.cpp, the tests and the benchmark. RHF direct per
+  iteration: cc-pVTZ 1.11-1.16x, cc-pVDZ 1.01-1.04x, 6-31G* neutral,
+  energies and iteration counts unchanged. Gated by
+  `planck-hgp-engine-smoke` (Rys2D vs per-component HGP <= 6.4e-15 on
+  water 6-31G..cc-pVTZ; four mutations caught, the HRR sign only from
+  cc-pVDZ up, since 6-31G* H has no p) and `planck-fock-accumulate`
+  (thread-count invariance now includes cc-pVTZ). Core 80/80, smoke
+  43/45, extended 135/139 (known rccsdt cases). Record:
+  `docs/ERI_KERNEL_VS_LIBCINT.md`.
+
+- **Fast Rys roots and weights (K2.1a, 2026-10-25).** `rys_roots_weights`
+  is now Chebyshev segment fits below T = 35 + 7n and the Laguerre(−½)
+  asymptote above, built per n on first use from a new reference generator
+  (discretized Stieltjes with compensated sums and Christoffel weights,
+  `rys_roots_weights_reference`). It replaces the moment-based
+  Golub–Welsch solver, whose nodes were off by up to 8e-3 at n = 11 even
+  after the recursion fix (moment problems are ill-conditioned; the rule
+  still reproduced moments, which is why integrals survived). Found along
+  the way: `long double` is `double` on Apple silicon, so nothing had
+  extended precision; naive sums over the 1200-point discretization left
+  1e-14 of noise until compensated. 32–43 ns per call for every n, against
+  0.46–3.04 µs; per-component Rys 2.1–3.2× faster (OS/HGP control
+  0.94–1.02×); end to end with `engine rys`, identical energies,
+  ethylene cc-pVDZ 2.22× and 2 H2O cc-pVTZ 3.48× (241 → 69 s). The default
+  engine is unaffected by design (4 H2O cc-pVDZ `engine auto` 1.00×). Gated by
+  `planck-rys-roots` (fast vs reference ≤ 6.3e-15 for n ≤ 5, 4.2e-14 at
+  n = 11; four mutations caught) and `planck-rys-box-invariance`, which
+  the first, noisier generator failed. `planck-auto-dispatch-benchmark`
+  segfaulted at startup (no Boys loader, like nine others earlier); fixed.
+  Extended suite 135/139 (the known rccsdt cases). Record:
+  `docs/ERI_KERNEL_VS_LIBCINT.md` §4.
+
+- **Rys roots and weights fixed at T >= 1 and at small T (2026-10-25).**
+  Found while scoping K2.1a. `_boys_moment` (`rys_roots.cpp`) built the
+  moments by upward recursion from T = 1, which is stable only for T >= m;
+  at T in [1, ~5] the F_k up to k = 21 lost every digit. Rules for n >= 7
+  roots then had weights that did not sum to F_0 (up to 413 of 300k
+  sampled T at n = 11, moment errors to 1.6e2), and n = 4-6 were degraded
+  to 5e-12 - 4.6e-8. Fixed with the positive-term series below T = m. The
+  closed-form one-root rule (`rys_1pt`) also cancelled at small T (1.3e-10
+  relative at T = 2e-6); it now uses the same series below T = 1. Exposure:
+  explicit `engine rys` everywhere (~1e-10 integrals on d shells), and the
+  Auto Rys buckets (L_AB, L_CD) = (7, 8) / (8, 8) on molecules, i.e. g-shell
+  quartets in cc-pVQZ and larger, where the old rules were badly wrong. It
+  went unseen because nothing tested the rule against an independent
+  reference: the Rys regression cases stop at n = 5, the high-L Rys case
+  is a single Ne atom (T = 0 for every quartet), and the box-invariance
+  test compares Rys with Rys. New gate `planck-rys-roots`: every rule
+  n = 1..11 on T in [0, 2000] (dense over [0.5, 6]) must reproduce the
+  moments from long-double quadrature (4e-14 for n <= 6, up to 4.8e-11 at
+  n = 11, the moment method's conditioning); the old solver fails it from
+  n = 1.
+
+- **Redundant primitives dropped at basis-read time (K1, 2026-10-25).**
+  PySCF's cc-pVXZ files use the optimized general contraction: an outer
+  primitive that is also its own uncontracted shell of the same L is left out
+  of the contraction. The BSE GBS files Planck reads keep it, so Planck ran
+  28 primitives per water in cc-pVDZ against PySCF's 24 (42 against 34 in
+  cc-pVTZ) for the same span. `drop_redundant_primitives`
+  (`src/basis/gaussian.cpp`) now removes them for every orbital basis; Pople
+  sets are unchanged and RI auxiliary bases are not touched. Fock build
+  2.05–2.34× faster on cc-pVDZ water chains and 1.47–1.79× on cc-pVTZ, 1 and
+  4 threads, energies within the 1e-9 SCF tolerance and exactly equal to
+  hand-converted files. MO coefficients and population analyses change,
+  because the contracted functions do. Found by the K1 census, which also
+  refuted the scope's lead hypothesis (PySCF's density prescreen removes only
+  5–8 %, like Planck's) and showed B2.2 had been declined on an in-core test.
+  Extended suite 135/139 (the four known rccsdt routing cases); no case
+  moved. Record: `docs/ERI_KERNEL_VS_LIBCINT.md` §3.
+
+- **Boys core v1.2.1: high-order values fixed (2026-10-25).** The kernel
+  comparison against libcint (`docs/ERI_KERNEL_VS_LIBCINT.md` §2)
+  found integral errors of up to 6.6e-8 (6-31G\*), 4.0e-8 (cc-pVDZ) and
+  7.2e-6 (cc-pVTZ, pure f quartets), growing with L. Planck's Rys engine,
+  which does not use the Boys function, matched libcint to 2e-16, while OS,
+  HGP and the block kernel matched each other. The out-of-tree core returned
+  high-order values with too few significant digits over part of its
+  argument range. v1.2.1 has max relative error 1.45e-13 against mpmath
+  (orders 0–59), gated on the macOS and Linux release builds by a new
+  accuracy check. After it, K0 agrees to 3.4e-14 / 2.6e-14 / 7.2e-13, and all
+  four Planck paths agree to 1e-16. Released, encrypted and served; the dev
+  license and the `PLANCK_LICENSE` CI secret are v1.2.1. Not bitwise against
+  v1.2.0. This bug sits under every OS/HGP/closed-form integral, so part of
+  the old ~1e-8 "precision floor" against PySCF on d/f bases may have been
+  this defect (`docs/INTEGRAL_PRECISION_FLOOR_SCOPE.md`, correction note).
+
+- **`pyscf_bench.py` now compares direct with direct (2026-10-25).**
+  PySCF's `RHF.get_jk` keeps the ERI tensor in memory whenever it fits,
+  whatever `direct_scf` says. So every Planck-vs-PySCF timing in the harness
+  had compared Planck's direct SCF with PySCF's conventional SCF (4 H2O
+  cc-pVDZ, one build: 0.030 s in-core, 0.205 s direct). The harness now
+  forces direct and asserts `mf._eri is None`. The matched `conv_tol_grad`
+  default and a `--spherical` flag are also new.
+
+- **Incremental direct Fock build with density-weighted block screening (S3,
+  2026-10-25).** The direct RHF/UHF/ROHF loops build `G_prev + G[ΔP]`, and
+  the fused loop skips a block when `Q_ab Q_cd · max|D| < tol_eri / 10`
+  (Häser–Ahlrichs, both traversals; off in replication mode). Fock build
+  1.19–1.33× on water chains in 6-31G\* / cc-pVDZ / cc-pVTZ, with
+  |ΔE| ≤ 6e-10 against the full build and unchanged iteration counts. At
+  `tol_eri` itself the energy random-walks at 1e-8 and DIIS stalls (15 → 24
+  iterations); a periodic rebuild does not fix it, because the error is
+  inconsistency, not accumulation. Core 80/80, extended 135/139 (the known
+  rccsdt cases). Record: `docs/SCF_VS_PYSCF.md`.
+  **Follow-up the same day: the screen is now dropped for the SCF tail.**
+  "Unchanged iteration counts" held only at the bench's `tol_density 1e-7`.
+  At the default 1e-10 the `/10` screen still random-walked (2 H2O /
+  cc-pVTZ 88 iterations against 18), and planck-mpi landed 6.7e-9 from
+  serial, failing `water4_rhf_ccpvdz_auto_direct_mpi_smoke`. Once the DIIS
+  error is below 1e-8, `IncrementalFock::observe` (`src/scf/scf.cpp`) turns
+  the screen off and forces one full rebuild. The flag is threaded through
+  `fused_fock_build` and the engine direct entries as `density_screen`
+  (default on, so DFT and every other caller are unchanged). Energies now
+  equal the unscreened build's, serial and MPI agree bitwise, and the gain
+  is 1.17–1.26× (bench tolerances) / 1.05–1.28× (default).
+
+- **`planck-dft-coulomb-response` fixed: its t2 fixture lacked the pair
+  symmetry (2026-10-25).** The two Eq. 33 full-geometry FDs (LDA, complete
+  GGA) had missed by ~1e-6 since at least 2026-10-09. A channel probe put the
+  whole gap in the D-AO XC-II term: `relaxed.symmetric_mo` was asymmetric
+  (8.5e-5), because the synthetic t2 had no `t_ij^ab = t_ji^ba`, and the
+  tiled D' builder (`7239ebeb`) gives a symmetric D' only for amplitudes that
+  have it. `drho_channel` collapses its double sum assuming a symmetric
+  density. Production is unaffected (real RHF amplitudes always carry the
+  symmetry, and `RMP2Result`'s packed form stores only one of each pair);
+  the fixture now does too, and the failure messages print FD and analytic
+  values.
+
+- **UHF stability analysis now uses the real-rotation Hessian, and following
+  escapes the saddle (2026-10-25).** The UHF→UHF check combined A − B
+  same-spin blocks with an A + B cross-spin block. The result was neither
+  test, its lowest mode was not a descent direction, and following it fell
+  back to the saddle. All blocks are now A + B. Internal follows use the same
+  adaptive step as the RHF→UHF branch (π/4 when λ < −1e-2), and the follow
+  returns the total energy instead of the electronic one. 4 H2O⁺ / cc-pVDZ
+  from hcore: before, a saddle at −303.6695 Eh, above ROHF (−303.6871); now
+  the follow re-converges at −303.7136061802, matching PySCF's hcore+follow
+  (−303.7136061785) to 1.7e-9. Core suite 80/80. Note: a lower stable UHF
+  minimum exists (PySCF minao: −303.7248), since stability guarantees a local
+  minimum only.
+
+- **Nuclear-attraction setup no longer zero-fills a 246 KB table per
+  primitive (S1, 2026-10-25).** `_os_nuclear_primitive` cleared
+  `double V[13][13][13][14]` on every primitive pair × charge × AO component,
+  whether the call came from H_core, PCM or ESP. That was 2.4 s of a 5.6 s RHF
+  on 12 H2O / 6-31G\*. The initializers on `V`, `V0` and the derivative's `dV0`
+  are dropped: every read is of an entry written first, so the result is
+  bitwise. Setup is now 0.05 s, and that run takes 3.3 s against PySCF's 6.3 s.
+  Gated by identical outputs on SCF / PCM / ESP / CHELPG / spherical-gradient
+  / RKS-PCM inputs and the core suite (80/80). Record:
+  `docs/SCF_VS_PYSCF.md`.
+
 - **Batched Boys calls and grow-only kernel scratch in the fused Fock loop
   (R2 `102f1d01`, `13c60826`, `0e3e074d`, 2026-10-23/24).** The closed forms
   and the HGP block kernel make one batched Boys call per block / lane group

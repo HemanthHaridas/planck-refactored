@@ -597,7 +597,11 @@ static double _os_nuclear_primitive(
     // Spatial dims: each axis runs 0..lAq+lBq ≤ 2*MAX_L, so VRR_DIM = 2*MAX_L+1.
     // m dimension: m+1 is accessed up to L+1 ≤ 2*MAX_L+1, so MMAX = 2*MAX_L+2.
     constexpr int MMAX = 2 * MAX_L + 2;
-    double V[VRR_DIM][VRR_DIM][VRR_DIM][MMAX] = {};
+    // No initializer: every read below (VRR, the m=0 extraction, the HRR) is of
+    // an entry the recurrence wrote first. Zero-filling the full 246 KB here
+    // ran per primitive pair x charge x component and was most of setup
+    // (docs/SCF_VS_PYSCF.md, S1).
+    double V[VRR_DIM][VRR_DIM][VRR_DIM][MMAX];
 
     // Compute all Boys values
     for (int m = 0; m <= L; m++)
@@ -665,8 +669,8 @@ static double _os_nuclear_primitive(
         }
     }
 
-    // Extract m=0 slice for HRR
-    double V0[VRR_DIM][VRR_DIM][VRR_DIM] = {};
+    // Extract m=0 slice for HRR (only [0, l*_max] is read, all of it written)
+    double V0[VRR_DIM][VRR_DIM][VRR_DIM];
     for (int ix = 0; ix <= lx_max; ix++)
     {
         for (int iy = 0; iy <= ly_max; iy++)
@@ -1569,7 +1573,7 @@ static double _os_nuclear_primitive_dC(
     }
 
     // Extract m=0 slice of dV for HRR
-    double dV0[VRR_DIM][VRR_DIM][VRR_DIM] = {};
+    double dV0[VRR_DIM][VRR_DIM][VRR_DIM]; // [0, l*_max] written below, nothing else read
     for (int ix = 0; ix <= lx_max; ix++)
         for (int iy = 0; iy <= ly_max; iy++)
             for (int iz = 0; iz <= lz_max; iz++)
@@ -2088,7 +2092,8 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock_direct(
     const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops,
-    HartreeFock::Integrals::FusedTerm term)
+    HartreeFock::Integrals::FusedTerm term,
+    bool density_screen)
 {
     const std::size_t nb = nbasis;
     const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
@@ -2108,7 +2113,7 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_2e_fock_direct(
             return _contracted_eri(spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz,
                                    lCx, lCy, lCz, lDx, lDy, lDz, k, w);
         },
-        sym_ops, term);
+        sym_ops, term, {}, true, density_screen);
     return G;
 }
 
@@ -2151,7 +2156,8 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf_direct(
     const double omega,
     const double tol_eri,
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops,
-    HartreeFock::Integrals::FusedTerm term)
+    HartreeFock::Integrals::FusedTerm term,
+    bool density_screen)
 {
     const std::size_t nb = nbasis;
     const Eigen::MatrixXd Q = _compute_schwarz_table(shell_pairs, nb, sym_ops);
@@ -2174,7 +2180,7 @@ HartreeFock::ObaraSaika::_compute_2e_fock_uhf_direct(
             return _contracted_eri(spAB, spCD, lAx, lAy, lAz, lBx, lBy, lBz,
                                    lCx, lCy, lCz, lDx, lDy, lDz, k, w);
         },
-        sym_ops, term);
+        sym_ops, term, {}, true, density_screen);
     return {Ga, Gb};
 }
 

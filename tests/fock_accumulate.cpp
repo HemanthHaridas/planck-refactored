@@ -47,7 +47,7 @@
 #include "integrals/base.h"
 #include "integrals/fock_accumulate.h"
 #include "integrals/fused_fock.h"
-#include "integrals/hgp_block_eri.h"
+#include "integrals/auto_block_eri.h"
 #include "integrals/screening.h"
 #include "integrals/hgp.h"
 #include "integrals/os.h"
@@ -1040,9 +1040,7 @@ void check_skeleton_symmetry(const std::string &basis_name)
 // density must take the per-component path, so it must come out bitwise equal.
 struct CountingBlockKernel
 {
-    HartreeFock::Integrals::ChainBlockKernel<HartreeFock::Integrals::ClosedFormBlockKernel,
-                                             HartreeFock::Integrals::HgpBlockKernel>
-        inner{HartreeFock::Integrals::ClosedFormBlockKernel{3}, HartreeFock::Integrals::HgpBlockKernel{4, 12}};
+    HartreeFock::Integrals::AutoBlockKernel inner = HartreeFock::Integrals::auto_block_kernel();
     std::atomic<std::size_t> *count = nullptr;
     // Blocks whose bra pair sorts after the ket pair (by first AO). The dense
     // traversal visits only p <= q, so it never prepares one; the
@@ -1114,8 +1112,7 @@ void check_thread_count_invariance(const std::string &basis_name)
     const Eigen::MatrixXd Pa = random_symmetric_density(nb, rng);
     const Eigen::MatrixXd Pb = random_symmetric_density(nb, rng);
     const Eigen::MatrixXd Pt = Pa + Pb;
-    const ChainBlockKernel<ClosedFormBlockKernel, HgpBlockKernel> production{ClosedFormBlockKernel{3},
-                                                                            HgpBlockKernel{4, 12}};
+    const AutoBlockKernel production = auto_block_kernel();
 
     // out[0..2] = G, Ga, Gb for one build of the given kind.
     const auto build = [&](int kind, Eigen::MatrixXd (&out)[3])
@@ -1338,6 +1335,9 @@ int main()
     for (const char *b : {"6-31g", "6-31g*", "cc-pVDZ", "cc-pVTZ"})
         check_dense_digest(b);
     check_thread_count_invariance("6-31g*");
+    // cc-pVTZ's one-primitive polarization shells route many blocks to the
+    // Rys2D block kernel (auto_block_eri.h), which 6-31G* barely reaches.
+    check_thread_count_invariance("cc-pVTZ");
 
     if (!g_ok)
     {

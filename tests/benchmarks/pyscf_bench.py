@@ -4,23 +4,24 @@
 Runs the SAME geometry/basis through both codes and reports the energy delta and
 the wall time. Both are put in directly-comparable configurations:
 
-  * Cartesian basis on both (PySCF mol.cart = True == Planck basis_type cartesian).
-    Without this the two use different numbers of basis functions and neither the
-    energy nor the timing means anything.
-  * Direct SCF on both (PySCF's default; Planck scf_mode direct).
+  * The same basis type on both: Cartesian by default (PySCF mol.cart = True ==
+    Planck basis_type cartesian), spherical with --spherical.
+  * Direct SCF on both: Planck scf_mode direct, and PySCF with its in-core test
+    (_is_mem_enough) forced False.
+    PySCF's RHF.get_jk stores the 8-fold ERI tensor whenever it fits under
+    max_memory, whatever direct_scf says, so without this it runs conventional
+    SCF (a dense contraction per iteration). The script asserts PySCF never
+    stored the tensor.
   * Symmetry OFF on both, so the comparison is of the plain direct-SCF Fock
     build. Planck's use_symm routes to a different (full-symmetry) code path.
   * Same convergence tolerance and the same thread count.
 
-Speed caveat, stated up front: PySCF's integral engine is libcint, a mature
-hand-tuned C library. Planck's is a from-scratch C++ Obara-Saika/HGP/Rys. A
-per-iteration time gap is expected and is a kernel-quality statement, not a
-statement about the memory-direct Fock work -- that work changed the MEMORY
-profile (nb^4 -> nb^2), which this script also reports.
+PySCF's integral engine is libcint; Planck's is its own OS/HGP/Rys engine
+(docs/SCF_VS_PYSCF.md, docs/ERI_KERNEL_VS_LIBCINT.md).
 
 Usage:
   tests/benchmarks/pyscf_bench.py [--build-dir build] [--basis 6-31g*]
-                                  [--threads 4] [--engine os]
+                                  [--threads 4] [--engine os] [--spherical]
 """
 
 from __future__ import annotations
@@ -37,12 +38,10 @@ import time
 from pathlib import Path
 
 ENERGY_RE = re.compile(r"Total Energy\s*:?\s+([-+0-9Ee\.]+)")
-# SCF table rows: "<iter> <E> <dE> <rms> <max> <diis> <damp> <time>" — exactly 8
-# whitespace-separated fields, the last being the per-iteration wall time. Anchor
-# on the full field count rather than a lazy .*? (which silently matched the wrong
-# column and reported an 8x-inflated per-iteration time).
-ITER_RE = re.compile(
-    r"^\s*\d+\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+\S+\s+([0-9.]+)\s*$", re.M)
+# Per-iteration wall time from the RHF phase probe (PLANCK_PHASE_TIMING). The
+# SCF table cannot be parsed reliably: an 8-field regex also matches MO-energy
+# rows, which inflated both the iteration count and the per-iteration time.
+ITER_RE = re.compile(r"^PLANCK_PHASE .*\biter_s=([0-9.]+)", re.M)
 NBASIS_RE = re.compile(r"Generated\s+\d+\s+Shells and\s+(\d+)\s+contracted functions")
 
 
@@ -57,13 +56,13 @@ def water_chain(n: int, spacing: float = 3.0) -> list[tuple[str, float, float, f
     return atoms
 
 
-def planck_input(atoms, basis: str, engine: str) -> str:
+def planck_input(atoms, basis: str, engine: str, spherical: bool = False) -> str:
     coords = "\n".join(f"{s}  {x:.6f}  {y:.6f}  {z:.6f}" for s, x, y, z in atoms)
     return f"""%begin_control
     basis       {basis}
     calculation energy
     verbosity   normal
-    basis_type  cartesian
+    basis_type  {"spherical" if spherical else "cartesian"}
 %end_control
 
 %begin_scf
@@ -92,13 +91,14 @@ def planck_input(atoms, basis: str, engine: str) -> str:
 """
 
 
-def run_planck(exe: Path, atoms, basis: str, engine: str):
+def run_planck(exe: Path, atoms, basis: str, engine: str, spherical: bool = False):
     with tempfile.TemporaryDirectory() as td:
         inp = Path(td) / "bench.hfinp"
-        inp.write_text(planck_input(atoms, basis, engine))
+        inp.write_text(planck_input(atoms, basis, engine, spherical))
         before = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
         t0 = time.perf_counter()
-        proc = subprocess.run([str(exe), str(inp)], capture_output=True, text=True)
+        proc = subprocess.run([str(exe), str(inp)], capture_output=True, text=True,
+                              env={**os.environ, "PLANCK_PHASE_TIMING": "1"})
         wall = time.perf_counter() - t0
         after = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
     out = proc.stdout
@@ -110,20 +110,20 @@ def run_planck(exe: Path, atoms, basis: str, engine: str):
     # not pay. Comparing raw wall clock at small nb would just measure exec().
     per_iter = sorted(iters)[len(iters) // 2] if iters else None
     if not e:
-        return None, None, wall, None, None
+        return None, None, wall, None, None, 0
     # ru_maxrss is bytes on macOS, KB on Linux.
     scale = 1.0 if sys.platform == "darwin" else 1024.0
     peak_mb = max(after - before, after) * scale / 1e6
-    return float(e[-1]), (int(nb[0]) if nb else None), wall, peak_mb, per_iter
+    return float(e[-1]), (int(nb[0]) if nb else None), wall, peak_mb, per_iter, len(iters)
 
 
-def run_pyscf(atoms, basis: str):
+def run_pyscf(atoms, basis: str, conv_tol_grad: float | None = None, spherical: bool = False):
     from pyscf import gto, scf
 
     mol = gto.Mole()
     mol.atom = [(s, (x, y, z)) for s, x, y, z in atoms]
     mol.basis = basis
-    mol.cart = True          # match Planck basis_type cartesian
+    mol.cart = not spherical  # match Planck basis_type
     mol.symmetry = False     # match Planck use_symm .false.
     mol.charge = 0
     mol.spin = 0
@@ -131,14 +131,23 @@ def run_pyscf(atoms, basis: str):
     mol.build()
 
     mf = scf.RHF(mol)
-    mf.direct_scf = True     # match Planck scf_mode direct
+    mf.direct_scf = True     # match Planck scf_mode direct...
+    # ...and keep get_jk from storing the ERI tensor. max_memory alone is not
+    # enough: a small molecule's tensor fits under any positive budget.
+    mf._is_mem_enough = lambda: False
     mf.conv_tol = 1e-9
     mf.init_guess = "hcore"  # match Planck guess hcore
     mf.max_cycle = 100
+    if conv_tol_grad is not None:
+        # PySCF's default orbital-gradient threshold is sqrt(conv_tol) = 3e-5,
+        # far looser than Planck's DIIS-error and density gates (1e-7), so the
+        # default comparison has PySCF stopping several iterations earlier.
+        mf.conv_tol_grad = conv_tol_grad
 
     t0 = time.perf_counter()
     e = mf.kernel()
     wall = time.perf_counter() - t0
+    assert mf._eri is None, "PySCF stored the ERI tensor: this is not a direct SCF"
     # PySCF does not expose a per-iteration timer; divide the kernel time by the
     # cycle count. Same quantity Planck's SCF table prints per row.
     n_iter = max(getattr(mf, "cycles", 0) or 1, 1)
@@ -161,6 +170,12 @@ def main() -> int:
     ap.add_argument("--basis", default="6-31g*")
     ap.add_argument("--engine", default="os")
     ap.add_argument("--threads", type=int, default=4)
+    ap.add_argument("--pyscf-conv-tol-grad", type=float, default=1e-7,
+                    help="PySCF conv_tol_grad; 1e-7 matches Planck's DIIS-error and "
+                         "density gates (PySCF's own default, sqrt(conv_tol), stops "
+                         "2-4 iterations earlier)")
+    ap.add_argument("--spherical", action="store_true",
+                    help="spherical basis on both (default Cartesian)")
     ap.add_argument("--sizes", type=int, nargs="+", default=[1, 2, 3, 4, 6])
     args = ap.parse_args()
 
@@ -171,12 +186,13 @@ def main() -> int:
         raise SystemExit(f"planck binary not found: {exe}")
 
     print(f"Planck vs PySCF — RHF direct SCF, basis {args.basis}, engine {args.engine}, "
-          f"{args.threads} threads, Cartesian, no symmetry\n")
+          f"{args.threads} threads, {'spherical' if args.spherical else 'Cartesian'}, "
+          f"no symmetry, PySCF forced direct\n")
     pyscf_warmup()  # so the first timed case is not measuring the import
 
     hdr = (f"{'system':>9} {'nb':>5} {'E_planck':>17} {'E_pyscf':>17} "
            f"{'|dE| (Eh)':>10} {'t/iter_pk':>10} {'t/iter_py':>10} {'slowdown':>9} "
-           f"{'RSS_planck':>11}")
+           f"{'it_pk':>6} {'it_py':>6} {'wall_pk':>8} {'wall_py':>8} {'RSS_planck':>11}")
     print(hdr)
     print("-" * len(hdr))
 
@@ -184,9 +200,9 @@ def main() -> int:
     for n in args.sizes:
         atoms = water_chain(n)
         label = f"{n}xH2O"
-        ep, nb_p, tp_wall, rss, pk_iter = run_planck(exe, atoms, args.basis, args.engine)
+        ep, nb_p, tp_wall, rss, pk_iter, pk_n = run_planck(exe, atoms, args.basis, args.engine, args.spherical)
         try:
-            es, nb_s, ts_wall, py_iter, n_it, conv = run_pyscf(atoms, args.basis)
+            es, nb_s, ts_wall, py_iter, n_it, conv = run_pyscf(atoms, args.basis, args.pyscf_conv_tol_grad, args.spherical)
         except Exception as exc:  # pragma: no cover
             print(f"{label:>9}  pyscf failed: {exc}")
             continue
@@ -202,10 +218,12 @@ def main() -> int:
         de = abs(ep - es)
         slow = (pk_iter / py_iter) if (pk_iter and py_iter) else float("nan")
         print(f"{label:>9} {nb_s:>5} {ep:>17.10f} {es:>17.10f} {de:>10.2e} "
-              f"{pk_iter:>9.3f}s {py_iter:>9.3f}s {slow:>8.1f}x {rss:>10.1f}M")
+              f"{pk_iter:>9.3f}s {py_iter:>9.3f}s {slow:>8.1f}x "
+              f"{pk_n:>6} {n_it:>6} {tp_wall:>7.2f}s {ts_wall:>7.2f}s {rss:>10.1f}M")
         rows.append(dict(system=label, nbasis=nb_s, e_planck=ep, e_pyscf=es,
                          delta=de, t_iter_planck=pk_iter, t_iter_pyscf=py_iter,
-                         slowdown=slow, rss_mb=rss))
+                         slowdown=slow, rss_mb=rss, iters_planck=pk_n,
+                         iters_pyscf=n_it, wall_planck=tp_wall, wall_pyscf=ts_wall))
 
     if rows:
         worst = max(r["delta"] for r in rows)

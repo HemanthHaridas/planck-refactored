@@ -75,18 +75,19 @@ inline Eigen::MatrixXd _compute_2e_fock(const std::vector<HartreeFock::ShellPair
                                         double tol_eri = 1e-10,
                                         const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
                                         HartreeFock::Integrals::FusedTerm term =
-                                            HartreeFock::Integrals::FusedTerm::Combined)
+                                            HartreeFock::Integrals::FusedTerm::Combined,
+                                        bool density_screen = true)
 {
     // The Fock-build wrappers follow the same dispatch policy as the raw ERI
     // tensor path so higher layers can swap engines without changing algebra.
     switch (engine)
     {
     case HartreeFock::IntegralMethod::RysQuadrature:
-        return HartreeFock::RysQuad::_compute_2e_fock_direct(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, term);
+        return HartreeFock::RysQuad::_compute_2e_fock_direct(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, term, density_screen);
     case HartreeFock::IntegralMethod::HeadGordonPople:
-        return HartreeFock::HeadGordonPople::_compute_2e_fock_direct(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, term);
+        return HartreeFock::HeadGordonPople::_compute_2e_fock_direct(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, term, density_screen);
     case HartreeFock::IntegralMethod::Auto:
-        return HartreeFock::RysQuad::_compute_2e_fock_auto_direct(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, term);
+        return HartreeFock::RysQuad::_compute_2e_fock_auto_direct(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, term, density_screen);
     default:
         // OS (the default engine) uses the MEMORY-DIRECT builder: it contracts
         // each quartet straight into G and never allocates the nb^4 tensor. The
@@ -99,7 +100,7 @@ inline Eigen::MatrixXd _compute_2e_fock(const std::vector<HartreeFock::ShellPair
         // symmetry (sym_ops) natively rather than delegating back to two-phase.
         // So all four engines share one loop here — the switch selects only the
         // per-quartet ERI kernel.
-        return HartreeFock::ObaraSaika::_compute_2e_fock_direct(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, term);
+        return HartreeFock::ObaraSaika::_compute_2e_fock_direct(shell_pairs, density, nbasis, kernel, omega, tol_eri, sym_ops, term, density_screen);
     }
 }
 
@@ -114,21 +115,22 @@ _compute_2e_fock_uhf(const std::vector<HartreeFock::ShellPair> &shell_pairs,
                      double tol_eri = 1e-10,
                      const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr,
                      HartreeFock::Integrals::FusedTerm term =
-                         HartreeFock::Integrals::FusedTerm::Combined)
+                         HartreeFock::Integrals::FusedTerm::Combined,
+                     bool density_screen = true)
 {
     // UHF reuses the same engine selection, but returns separate alpha/beta
     // effective Fock contributions from one spin-coupled density pair.
     switch (engine)
     {
     case HartreeFock::IntegralMethod::RysQuadrature:
-        return HartreeFock::RysQuad::_compute_2e_fock_uhf_direct(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, term);
+        return HartreeFock::RysQuad::_compute_2e_fock_uhf_direct(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, term, density_screen);
     case HartreeFock::IntegralMethod::HeadGordonPople:
-        return HartreeFock::HeadGordonPople::_compute_2e_fock_uhf_direct(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, term);
+        return HartreeFock::HeadGordonPople::_compute_2e_fock_uhf_direct(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, term, density_screen);
     case HartreeFock::IntegralMethod::Auto:
-        return HartreeFock::RysQuad::_compute_2e_fock_uhf_auto_direct(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, term);
+        return HartreeFock::RysQuad::_compute_2e_fock_uhf_auto_direct(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, term, density_screen);
     default:
         // Memory-direct: see the RHF dispatcher above.
-        return HartreeFock::ObaraSaika::_compute_2e_fock_uhf_direct(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, term);
+        return HartreeFock::ObaraSaika::_compute_2e_fock_uhf_direct(shell_pairs, Pa, Pb, nbasis, kernel, omega, tol_eri, sym_ops, term, density_screen);
     }
 }
 
