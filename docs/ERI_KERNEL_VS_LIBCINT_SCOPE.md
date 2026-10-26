@@ -300,23 +300,75 @@ production today (explicit `engine rys`, the Auto table's Rys buckets).
     sends only the (7, 8) / (8, 8) buckets to Rys. K2.1a's payoff is
     `engine rys` and, above all, K2.1b, which could not beat libcint on
     the old finder.
-- **K2.1b, prototype `RysBlockKernel` in the harness.** A header-only
-  kernel under the `block_eri.h` contract, beside `hgp_block_eri.h`. The
-  geometry and 1D VRR move out of `rys.cpp`'s anonymous namespace into a
-  shared header so the per-component path and the block kernel use one
-  copy. Layout: per-axis tables root-innermost, so the assembly is a dot
-  product over roots for each component; the component exponent tuples are
-  computed once per class, not per quartet. Measured with `--k2` beside the
-  HGP block and libcint.
-  - Gate: block values against the HGP block ≤ 1e-13 of the class maximum
-    on the four water bases (the `--k2` check), and against libcint via K0.
-  - Bar to land: ≥ 2× over the HGP block on the K = 1, L ≥ 4 classes of
-    2 H2O cc-pVTZ. Also report K = 2..9, which K2.2 needs.
+- **K2.1b, prototype `RysBlockKernel` in the harness** (scoped 2026-10-26).
+  Header-only, under the `block_eri.h` contract, beside `hgp_block_eri.h`.
+  It is not a block version of today's per-component Rys path. That path
+  (`_rys_eri_build_sum` → `_rys_eri_hrr_to_eri`) sums
+  \(w_r I_x I_y I_z\) into a 6D box *before* its HRR, so the HRR runs on
+  the 6D product; that is the shape that makes the hoisted block 50–210×
+  libcint. The 2D form runs the HRR per axis, per root, on tables of at most
+  \((L_A+1)(L_B+1)(L_C+1)(L_D+1)\) entries, and assembles last.
+
+  Back-of-envelope figure (an expectation, not evidence; invariant 1):
+  `(dd|dd)` K = 1 is n = 5 roots, 3 axes × 5 roots × (25-entry VRR + 81-entry
+  HRR) ≈ 1.6k operations of table work, plus 1296 components × 5 roots × 3
+  ≈ 19k in assembly. At 4–8 flops per cycle that is 1–2 µs, against HGP
+  10.2 and libcint 2.05. The assembly dominates, so the layout of the
+  assembly is what decides the result.
+
+  - **b0, extract (pure move) — DONE (2026-10-26).** `VRR_DIM`,
+    `ScreenedKernelData`/`screened_kernel_data`, `RysPrimGeom`,
+    `_rys_eri_prep` and `_rys_vrr_1d` moved verbatim from `rys.cpp` into
+    `src/integrals/rys_detail.h` (namespace `RysQuad::detail`). Gates:
+    `planck-compute-2e`, `planck-hgp-engine-smoke`, `planck-rys-roots` and
+    `planck-rys-box-invariance` pass. Outputs are byte-identical to a HEAD
+    build, apart from timing columns, on water RMP2 (`engine rys`/`auto`),
+    ethylene cc-pVDZ (`rys`/`auto`), the H2O⁺ 6-31G\* UHF case and 4 H2O
+    cc-pVDZ direct.
+  - **b1, correct, untuned.** For each primitive quartet: prep, then
+    `rys_roots_weights(n, T)` with n = ⌊L/2⌋ + 1. For each root and axis,
+    run `_rys_vrr_1d` to \((L_A+L_B, L_C+L_D)\), then a 1D HRR in each
+    pair to \(I_q(a,b,c,d)\). Accumulate \(\sum_r w_r I_x I_y I_z\) into
+    the component block. Apply the norm handling exactly as
+    `HgpBlockKernel` does (`coeff_product` carries the first component's
+    norm, outputs × `norm_ratio`). Add it as a column in `--k2`.
+    - Gate: against the HGP block, ≤ 1e-13 of the **class** maximum (never
+      a per-block maximum; see K2.0) on water 6-31G / 6-31G\* / cc-pVDZ /
+      cc-pVTZ, every class it accepts, K = 1..9. Also against libcint via
+      K0. Mutation-check it: a wrong root count (n − 1), a dropped
+      `norm_ratio`, and swapped A/B in the HRR must each fail.
+  - **b2, tune for K = 1, L ≥ 4.** Each change is measured on its own in
+    `--k2`:
+    1. Fold \(w_r\) and the prefactor into one axis table per root, so the
+       assembly is two multiplies and an add.
+    2. Store the tables root-innermost (`I[q][idx][r]`), so each component
+       is a length-n dot product over three contiguous rows.
+    3. Compute each component's `(ix, iy, iz)` row indices once per class
+       \((L_A, L_B, L_C, L_D)\), in a lazily built table bounded by
+       `MAX_L`, and not again per quartet.
+    4. Use fixed-size stack tables (n ≤ 11, per-axis L ≤ 2·`MAX_L`) and no
+       heap allocation in `prepare`.
+    - If it still misses the bar, try roots-outer with the components
+      streamed inner. That layout gathers instead of taking a dot product,
+      which is why it is second.
+  - **Bar to land:** ≥ 2× over the HGP block on the K = 1, L ≥ 4 classes of
+    2 H2O cc-pVTZ (summed time, and no class slower than HGP).
+    **Stop condition:** under 1.3× after b2 → decline and record why.
+    Between 1.3× and 2×, compare against libcint's `g`-tensor layout
+    (`g0`/`g2d` strides in `cint2e.c`) before doing more work.
+  - **b3, the K table, from the same run.** Rys block against HGP block
+    for K = 1..9 at each total L. This is K2.2's input, so K2.2 only has to
+    pick the crossover.
 - **K2.1c, production.** Chain it in Auto: closed forms (L ≤ 3), then
   `RysBlockKernel` for the L and K it wins, then `HgpBlockKernel`. K is per
   block, so `RysBlockKernel::prepare` declines blocks above its K limit and
   the chain hands them to HGP (`covers()` stays per total L, as the dense
   digestion predicate needs). Coulomb only, as the other block kernels.
+  - Follow-on, not part of K2.1: once `RysBlockKernel` lands, rescope G3 of
+    `docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md` (the shell-quartet
+    derivative block kernel) on top of it. Differentiating the 2D per-axis
+    tables is libcint's route to derivative integrals, and it would give
+    Rys a derivative kernel, which Phase D lacks.
   - Follow-on, not part of K2.1: once a 2D Rys block exists, the
     conventional Auto build's 6D hoist (`_contracted_eri_block_hoisted_views`,
     50–210× libcint) should go through it, and the hoist be deleted.
@@ -376,6 +428,12 @@ so it would have to be a traversal chosen by basis.
   6-31G\* build, so the rest of the fused loop costs about as much as the
   kernels there. Planck already beats PySCF on Pople bases, so this is low
   priority.
+- **Refit the Auto table after K2.1a.** Rys is now the fastest
+  per-component engine in 15 of 238 buckets, and `kAutoEngine` (`rys.cpp`)
+  still sends it none of them. Rerun `planck-auto-dispatch-benchmark` and
+  `scripts/fit_auto_dispatch.py`. This only affects the paths that use the
+  per-bucket table, not the fused Fock build. It is cheap and independent of
+  K2.1b, but if K2.1c lands first, refit after it.
 - **RI auxiliary bases** could take the K1 transform. Measure the primitive
   counts in the shipped `-RIFIT` files first; JK-fit sets are usually
   uncontracted, so it may be zero.
