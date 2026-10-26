@@ -55,6 +55,7 @@
 #include "integrals/os.h"
 #include "integrals/rys.h"
 #include "integrals/hgp_block_eri.h"
+#include "integrals/rys_block_eri.h"
 #include "integrals/screening.h"
 #include "integrals/shellpair.h"
 #include "require_boys_library.h"
@@ -1624,8 +1625,7 @@ namespace
         //
         // For the K = 1, total L >= 4 classes, split the HGP block kernel into
         // Boys / VRR+contract / HRR / readout by timing progressively fuller
-        // sweeps of the same quartets, and time the Rys hoisted block
-        // (_contracted_eri_block_hoisted_views, never wired into the fused loop)
+        // sweeps of the same quartets, and time the 2D Rys block kernel (K2.1b)
         // and libcint on them. Each phase is the difference between two sweeps,
         // best of three each.
         if (k2)
@@ -1640,7 +1640,7 @@ namespace
                 k2rows.resize(15);
 
             HgpBlockKernel hgp(0, 4 * MAX_L);
-            std::vector<double> rys_buf(max_out);
+            RysBlockKernel rys2d;
             const auto best3 = [](auto &&sweep)
             {
                 double t = 1e30;
@@ -1655,7 +1655,7 @@ namespace
             double S_boys = 0, S_vrr = 0, S_hgp = 0, S_full = 0, S_rys = 0, S_lib = 0;
             std::printf("  K2.0, K = 1 classes at total L >= 4 (us per quartet; VRR table = e*f*m entries)\n");
             std::printf("  %-14s %6s %7s %7s %7s %7s %7s | %7s %7s %7s | %7s %6s %9s\n", "class", "n", "Boys",
-                        "VRR", "HRR", "read", "HGP", "Rys", "lib", "HGP/lib", "Rys/lib", "VRRtab", "Rys-HGP");
+                        "VRR", "HRR", "read", "HGP", "Rys2D", "lib", "HGP/lib", "Rys/lib", "VRRtab", "Rys-HGP");
             for (const Row &r : k2rows)
             {
                 const auto &list = classes.at(r.key);
@@ -1725,15 +1725,20 @@ namespace
                         sink = sink + acc;
                     }
                 });
+                // The 2D Rys block, reading every component (as t_full).
                 const double t_rys = best3([&]
                 {
                     for (const auto &g4 : list)
                     {
                         set_req(g4[0], g4[1], g4[2], g4[3]);
-                        HartreeFock::RysQuad::_contracted_eri_block_hoisted_views(
-                            req.views[0], req.n[0], req.views[1], req.n[1], req.views[2], req.n[2], req.views[3],
-                            req.n[3], HartreeFock::ERIKernel::Coulomb, 0.0, rys_buf.data());
-                        sink = sink + rys_buf[0];
+                        rys2d.prepare(req);
+                        double acc = 0.0;
+                        for (std::size_t a = 0; a < req.n[0]; ++a)
+                            for (std::size_t b = 0; b < req.n[1]; ++b)
+                                for (std::size_t c = 0; c < req.n[2]; ++c)
+                                    for (std::size_t d = 0; d < req.n[3]; ++d)
+                                        acc += rys2d.value(a, b, c, d);
+                        sink = sink + acc;
                     }
                 });
                 const double t_lib = best3([&]
@@ -1754,18 +1759,15 @@ namespace
                 {
                     set_req(g4[0], g4[1], g4[2], g4[3]);
                     hgp.prepare(req);
-                    HartreeFock::RysQuad::_contracted_eri_block_hoisted_views(
-                        req.views[0], req.n[0], req.views[1], req.n[1], req.views[2], req.n[2], req.views[3],
-                        req.n[3], HartreeFock::ERIKernel::Coulomb, 0.0, rys_buf.data());
-                    std::size_t o = 0;
+                    rys2d.prepare(req);
                     double dmax = 0.0, hmax = 0.0;
                     for (std::size_t a = 0; a < req.n[0]; ++a)
                         for (std::size_t b = 0; b < req.n[1]; ++b)
                             for (std::size_t c = 0; c < req.n[2]; ++c)
-                                for (std::size_t d = 0; d < req.n[3]; ++d, ++o)
+                                for (std::size_t d = 0; d < req.n[3]; ++d)
                                 {
                                     const double h = hgp.value(a, b, c, d);
-                                    dmax = std::max(dmax, std::abs(rys_buf[o] - h));
+                                    dmax = std::max(dmax, std::abs(rys2d.value(a, b, c, d) - h));
                                     hmax = std::max(hmax, std::abs(h));
                                 }
                     dclass = std::max(dclass, dmax), hclass = std::max(hclass, hmax);
@@ -1781,9 +1783,57 @@ namespace
                 S_boys += t_boys, S_vrr += t_vrr, S_hgp += t_hgp, S_full += t_full, S_rys += t_rys, S_lib += t_lib;
             }
             std::printf("  these classes: HGP %.4f s (Boys %.0f%%, VRR %.0f%%, HRR %.0f%%, read %.0f%%), "
-                        "Rys %.4f s, libcint %.4f s\n",
+                        "Rys2D %.4f s, libcint %.4f s; HGP/Rys2D %.2fx\n",
                         S_full, 100 * S_boys / S_full, 100 * (S_vrr - S_boys) / S_full,
-                        100 * (S_hgp - S_vrr) / S_full, 100 * (S_full - S_hgp) / S_full, S_rys, S_lib);
+                        100 * (S_hgp - S_vrr) / S_full, 100 * (S_full - S_hgp) / S_full, S_rys, S_lib,
+                        S_full / S_rys);
+
+            // K2.1b gate: the 2D Rys block against the HGP block and libcint on
+            // every class it accepts, every contraction depth. Differences are
+            // relative to the largest |value| over the K group (never per
+            // block: blocks that vanish by symmetry return O(1)-different
+            // roundoff). K is the number of primitive quartets.
+            std::map<int, std::array<double, 4>> by_k; // max|R-H|, max|H|, max|lib-R|, classes
+            for (const auto &[key, list] : classes)
+            {
+                if (!rys2d.covers(key[0] + key[1] + key[2] + key[3], HartreeFock::ERIKernel::Coulomb))
+                    continue;
+                auto &v = by_k[key[4] * key[5] * key[6] * key[7]];
+                v[3] += 1;
+                for (const auto &g4 : list)
+                {
+                    set_req(g4[0], g4[1], g4[2], g4[3]);
+                    hgp.prepare(req);
+                    rys2d.prepare(req);
+                    lib_eval(g4);
+                    for (std::size_t a = 0; a < req.n[0]; ++a)
+                        for (std::size_t b = 0; b < req.n[1]; ++b)
+                            for (std::size_t c = 0; c < req.n[2]; ++c)
+                                for (std::size_t d = 0; d < req.n[3]; ++d)
+                                {
+                                    const int pa = lib_to_planck[g4[0]][a], pb = lib_to_planck[g4[1]][b],
+                                              pc = lib_to_planck[g4[2]][c], pd = lib_to_planck[g4[3]][d];
+                                    const double h = hgp.value(pa, pb, pc, pd), ry = rys2d.value(pa, pb, pc, pd);
+                                    const double scale =
+                                        g[groups[g4[0]].first_ao + pa] * g[groups[g4[1]].first_ao + pb] *
+                                        g[groups[g4[2]].first_ao + pc] * g[groups[g4[3]].first_ao + pd];
+                                    v[0] = std::max(v[0], std::abs(ry - h));
+                                    v[1] = std::max(v[1], std::abs(h));
+                                    v[2] = std::max(v[2], std::abs(lib_at(g4, static_cast<int>(a), static_cast<int>(b),
+                                                                          static_cast<int>(c), static_cast<int>(d)) -
+                                                                   scale * ry) / scale);
+                                }
+                }
+            }
+            double worst = 0.0;
+            std::printf("  K2.1b gate, Rys2D on every class it covers (relative to the K group's max |value|)\n");
+            std::printf("  %4s %8s %12s %12s\n", "K", "classes", "Rys2D-HGP", "lib-Rys2D");
+            for (const auto &[K, v] : by_k)
+            {
+                std::printf("  %4d %8.0f %12.1e %12.1e\n", K, v[3], v[0] / v[1], v[2] / v[1]);
+                worst = std::max({worst, v[0] / v[1], v[2] / v[1]});
+            }
+            std::printf("  K2.1b gate %s: worst %.1e (bar 1e-13)\n", worst <= 1e-13 ? "PASS" : "FAIL", worst);
         }
         (void)sink;
     }

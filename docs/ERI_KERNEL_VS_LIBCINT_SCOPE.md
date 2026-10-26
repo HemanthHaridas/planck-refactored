@@ -337,6 +337,31 @@ production today (explicit `engine rys`, the Auto table's Rys buckets).
       cc-pVTZ, every class it accepts, K = 1..9. Also against libcint via
       K0. Mutation-check it: a wrong root count (n − 1), a dropped
       `norm_ratio`, and swapped A/B in the HRR must each fail.
+    - **DONE (2026-10-26).** `src/integrals/rys_block_eri.h`
+      (`RysBlockKernel`, total L ≤ 20, the 11-root limit). It has no
+      production caller yet. `--k2` now times it in place of the hoisted
+      block and runs the gate over every class it covers, grouped by K
+      (the number of primitive quartets). Worst difference relative to
+      the K group's maximum:
+
+      | basis (1 H2O; cc-pVTZ 2 H2O) | K groups | Rys2D − HGP | libcint − Rys2D |
+      |---|---|---|---|
+      | 6-31G | 1–1296 | 5.1e-15 | 3.1e-14 |
+      | 6-31G\* | 1–1296 | 5.0e-15 | 2.8e-14 |
+      | cc-pVDZ | 1–4096 | 5.7e-15 | 8.1e-14 |
+      | cc-pVTZ | 1–4096 | 2.7e-14 | 5.2e-14 |
+
+      Mutations: n − 1 roots fails at 5.1e-2, a dropped A `norm_ratio` at
+      3.8e-1, and a negated A − B or C − D at 2.5. **The HRR sign is
+      invisible on 1 H2O 6-31G\***: hydrogen has no p shell there, so
+      every canonical pair with L_B > 0 is on one centre or has B = H s,
+      and the transfer always multiplies zero. Check sign mutations on
+      cc-pVDZ or larger.
+
+      **Untuned, it is already 1.63× faster than the HGP block** on the
+      fifteen costliest K = 1, L ≥ 4 classes of 2 H2O cc-pVTZ (0.0304
+      against 0.0494 s; per class 1.37–1.91×; libcint 0.0105 s). It is
+      still 2.6–3.5× slower than libcint in every one of those classes.
   - **b2, tune for K = 1, L ≥ 4.** Each change is measured on its own in
     `--k2`:
     1. Fold \(w_r\) and the prefactor into one axis table per root, so the
