@@ -176,11 +176,11 @@ Over these classes: Boys 0 %, VRR 44 %, HRR 44 %, readout 12 %. HGP takes
   `(dd|dd)`), so no cut to HRR, readout or `prepare` could close the gap.
   With K = 1 there is no contraction to amortize the HRR over, and it runs
   on the full Cartesian product.
-- **The algorithm is the cause.** HGP's VRR builds \([e0|f0]^{(m)}\) over
-  every \(e, f, m\): 3675 entries for `(dd|dd)`, 6370 for `(fd|dd)`. A Rys
+- **The algorithm is the cause.** HGP's VRR builds $[e0|f0]^{(m)}$ over
+  every $e, f, m$: 3675 entries for `(dd|dd)`, 6370 for `(fd|dd)`. A Rys
   code builds three small tables per root, does its HRR per axis, and
-  assembles each component as a sum over \(\lceil (L+1)/2 \rceil\) roots of
-  \(I_x I_y I_z\).
+  assembles each component as a sum over $\lceil (L+1)/2 \rceil$ roots of
+  $I_x I_y I_z$.
 - **Planck's existing Rys code was not the answer.** The hoisted Rys block
   (`_contracted_eri_block_hoisted_views`) sums the roots into a 6D box
   *before* its HRR, so the HRR runs on the 6D product. It is 50–210×
@@ -209,7 +209,7 @@ kernel built on it could win. It is now three pieces (`rys_roots.cpp`):
   function. About 30 µs at n = 11; used only to build tables and in the
   test (`rys_roots_weights_reference`).
 - **Asymptote** for T ≥ 35 + 7n: generalized Gauss–Laguerre (α = −½),
-  with roots \(u_i/T\) and weights \(\lambda_i / (2\sqrt T)\), where it
+  with roots $u_i/T$ and weights $\lambda_i / (2\sqrt T)$, where it
   meets the generator's ~2e-15 floor.
 - **Fits** below that: Chebyshev degree 13 on unit T segments, built per n
   on first use (0.01–0.04 s, 1.3 MB for all n), with one Clenshaw pass for
@@ -237,14 +237,14 @@ basis; with `engine rys`, ethylene cc-pVDZ is 2.22× faster end to end and
 
 `RysBlockKernel` (`src/integrals/rys_block_eri.h`) is libcint's
 formulation, under the `block_eri.h` contract, for total L ≤ 20 (the
-11-root limit). For each primitive quartet and root \(r\), on each axis
-\(q\):
+11-root limit). For each primitive quartet and root $r$, on each axis
+$q$:
 
-1. the 1D VRR \(I_q[e][f]\) for \(e \le l_A + l_B\), \(f \le l_C + l_D\);
-2. the bra HRR in 1D: \(I_q(a, b{+}1 \mid f) = I_q(a{+}1, b \mid f) + (A_q - B_q)\, I_q(a, b \mid f)\);
-3. the ket HRR, the same with \(C_q - D_q\), giving \(I_q(a, b \mid c, d)\).
+1. the 1D VRR $I_q[e][f]$ for $e \le l_A + l_B$, $f \le l_C + l_D$;
+2. the bra HRR in 1D: $I_q(a, b{+}1 \mid f) = I_q(a{+}1, b \mid f) + (A_q - B_q) I_q(a, b \mid f)$;
+3. the ket HRR, the same with $C_q - D_q$, giving $I_q(a, b \mid c, d)$.
 
-Then every Cartesian component is \(\sum_r w_r I_x I_y I_z\). The
+Then every Cartesian component is $\sum_r w_r I_x I_y I_z$. The
 primitive-pair geometry and the 1D VRR are shared with the per-component
 path through `src/integrals/rys_detail.h`. For `(dd|dd)`, the table work
 is about 1.6k operations and the assembly about 19k, against HGP's
@@ -292,7 +292,7 @@ inside `prepare` (µs per quartet, `(dd|dd)`):
 - tables and assembly: 3.9;
 - the harness reading every component: ~1.3, which HGP pays too.
 
-The offsets depend only on the class \((l_A, l_B, l_C, l_D)\), because a
+The offsets depend only on the class $(l_A, l_B, l_C, l_D)$, because a
 shell's Cartesian components come in a fixed order per L
 (`gaussian.cpp`). With three to five roots, a loop over the roots is too
 short for unrolling or vectorizing to pay. A first version of the split
