@@ -3584,9 +3584,20 @@ So the two kernels split the work instead of one replacing the other. Rys2D
 takes one-primitive blocks at \(L \ge 4\), and three-quartet blocks at
 \(L \ge 7\). HGP keeps everything contracted, and the closed forms keep
 \(L \le 3\). cc-pVTZ-and-larger bases have uncontracted polarization
-shells, so that is where the gap was. As of this writing the kernel is
-validated in the benchmark harness but not yet chained into Auto
-(`docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`, K2.1c).
+shells, so that is where the gap was. Auto chains the three
+(`src/integrals/auto_block_eri.h`). The Rys kernel runs in a `crossover`
+mode that declines every other block, and the HGP block kernel behind it
+takes those. Measured on whole SCF runs (RHF, direct, best of three):
+
+| basis | per-iteration speedup | energies |
+|---|---|---|
+| cc-pVTZ, 1–3 waters | 1.11–1.16× | identical, same iterations |
+| cc-pVDZ, 4 and 8 waters | 1.01–1.04× | identical |
+| 6-31G\*, 4 and 12 waters | 0.99–1.01× | identical |
+
+The whole build gains about 1.15×, not 2×, because Rys2D halves only the
+blocks it takes; contracted blocks stay on HGP. Pople bases are untouched,
+as they must be (`docs/ERI_KERNEL_VS_LIBCINT_SCOPE.md`, K2.1c).
 
 **Lessons from tuning it.** Only one of five layout changes paid, and it
 was not one the operation count pointed to. Splitting the time with early
@@ -3763,8 +3774,10 @@ the engine per quartet:
   \(L > 12\).
 
 Everything else in the direct build no longer consults the table. Every
-Coulomb shell quartet with total \(L \le 3\) goes to the closed forms, and
-every one with \(4 \le L \le 12\) to the HGP block kernel. With symmetric
+Coulomb shell quartet with total \(L \le 3\) goes to the closed forms. Above
+that, a one-primitive block (or a three-quartet block at \(L \ge 7\)) goes to
+the 2D Rys block kernel, and every other block with \(L \le 12\) to the HGP
+block kernel (`src/integrals/auto_block_eri.h`). With symmetric
 densities, the whole block is then digested at once ("Digesting a whole block
 at once"). Since direct SCF and every DFT J/K build use this path, the table
 now governs only a minority of Auto's work.
@@ -3805,7 +3818,8 @@ mechanical copy with no risk of drift.
 | `src/integrals/rys.h` | Public API: `_compute_2e`, `_compute_2e_fock`, `_compute_2e_fock_uhf`, and `_auto` variants |
 | `src/integrals/rys.cpp` | 6D HRR (`_rys_hrr_ab`, `_rys_hrr_cd`), primitive and contracted ERI, Schwarz table, Fock builders, three-way auto-dispatch table + selector (`kAutoEngine`, `_auto_engine`) |
 | `src/integrals/rys_detail.h` | Shared with the block kernel: primitive-pair geometry (`_rys_eri_prep`), the 1D VRR (`_rys_vrr_1d`), the screened-kernel map |
-| `src/integrals/rys_block_eri.h` | `RysBlockKernel`: the 2D block kernel (per-root, per-axis HRR, then the root sum); harness only, not yet in Auto |
+| `src/integrals/rys_block_eri.h` | `RysBlockKernel`: the 2D block kernel (per-root, per-axis HRR, then the root sum); `crossover` mode for Auto |
+| `src/integrals/auto_block_eri.h` | The Auto block-kernel chain: closed forms, Rys2D, HGP block |
 | `tests/eri_class_share_benchmark.cpp` | `--k2`: Rys2D against the HGP block and libcint per class, the accuracy gate, and the K by L crossover table |
 | `src/integrals/rys_roots.h` | `rys_roots_weights` declaration; exact 1-point formula `rys_1pt` |
 | `src/integrals/rys_roots.cpp` | Fast rule: Chebyshev segment fits below T = 35 + 7n, Laguerre(−½) asymptote above; reference: discretized Stieltjes with compensated sums and Christoffel weights (`rys_roots_weights_reference`) |

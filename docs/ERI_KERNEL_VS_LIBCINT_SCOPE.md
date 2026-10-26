@@ -3,21 +3,50 @@
 Research scope. It expires when the investigation answers its question;
 rewrite it then as the answer. It follows `docs/SCF_VS_PYSCF.md` and
 `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md` (closed), whose measurements are not
-repeated here. Last updated 2026-10-26, after K2.1b.
+repeated here. Last updated 2026-10-26, after K2.1c.
 
 ## Current result
 
-**The 2D Rys block kernel is built and twice as fast as the HGP block on
-the classes that carry the cc-pVTZ gap, but it is not in production yet.**
-`RysBlockKernel` (`src/integrals/rys_block_eri.h`) is libcint's formulation.
-For each primitive quartet and Rys root, it runs a 1D VRR and a per-axis 1D
-HRR to \(I_q(a,b,c,d)\), then forms every component as
+**The 2D Rys block kernel is in production (K2.1c): Auto's Fock build is
+1.11–1.16× faster per iteration on cc-pVTZ, with identical energies.**
+`src/integrals/auto_block_eri.h` defines the Auto chain once for the engine,
+its tests and the benchmark: closed forms (L ≤ 3), then `RysBlockKernel` in
+`crossover` mode (K = 1 at L ≥ 4, K ≤ 3 at L ≥ 7), then the HGP block
+(4 ≤ L ≤ 12). Before and after on `pyscf_bench.py`'s inputs (RHF, direct,
+`engine auto`, Cartesian, best of three per-iteration medians; after is the
+production binary from K2.1c):
+
+| case | 1 thread | 4 threads | wall, 1 thread |
+|---|---|---|---|
+| 1 H2O cc-pVTZ | 1.12× | 1.11× | 0.75 → 0.76 s |
+| 2 H2O cc-pVTZ | 1.16× | 1.14× | 6.99 → 6.09 s |
+| 3 H2O cc-pVTZ | 1.16× | 1.15× | 21.26 → 18.05 s |
+| 4 H2O cc-pVDZ | 1.02× | 1.01× | 2.40 → 2.40 s |
+| 8 H2O cc-pVDZ | 1.02× | 1.04× | 10.69 → 10.54 s |
+| 4 H2O 6-31G\* | 1.01× | 0.99× | 0.83 → 0.86 s |
+| 12 H2O 6-31G\* | 1.01× | 1.01× | 9.16 → 9.06 s |
+
+Total energies agree to every printed digit and iteration counts are
+unchanged. cc-pVDZ gains little: total L ≥ 4 is only about a third of its
+kernel sweep (K0), and only part of that is single-primitive. 6-31G\* is
+neutral, as required. Gates:
+- `planck-hgp-engine-smoke` now sweeps Rys2D beside the HGP block against
+  per-component HGP: ≤ 6.4e-15 on water 6-31G through cc-pVTZ (4.6 M
+  component quartets on cc-pVTZ).
+- `planck-fock-accumulate`'s dense-digestion check runs the production
+  chain on all four bases. Its thread-count check (G bitwise at
+  1/2/4/8 threads) now includes cc-pVTZ, where many blocks reach Rys2D.
+- Core 80/80; extended 135/139 (the four known rccsdt routing cases).
+
+The kernel itself: `RysBlockKernel` (`src/integrals/rys_block_eri.h`) is
+libcint's formulation. For each primitive quartet and Rys root, it runs a 1D
+VRR and a per-axis 1D HRR to \(I_q(a,b,c,d)\), then forms every component as
 \(\sum_r w_r I_x I_y I_z\). On the fifteen costliest single-primitive
 (K = 1) classes at total L ≥ 4 of 2 H2O cc-pVTZ, one thread:
 
 | kernel | time | per class | against libcint |
 |---|---|---|---|
-| HGP block (production today) | 0.0511 s | — | 4.0–5.5× slower |
+| HGP block | 0.0511 s | — | 4.0–5.5× slower |
 | **Rys2D** | **0.0255 s** | **1.70–2.39× faster than HGP**, none slower | 2.3–2.6× slower |
 | libcint 6.1.3 | 0.0106 s | — | — |
 
@@ -28,35 +57,20 @@ HRR to \(I_q(a,b,c,d)\), then forms every component as
 - **Where it wins** (b3). Rys2D wins at K = 1 for L ≥ 3 (1.14–2.56×) and at
   K = 3 for L ≥ 7 (1.10–1.50×). HGP wins everywhere else, down to 0.17×,
   because it contracts before its HRR, while Rys2D works per primitive
-  quartet. The closed forms already own L ≤ 3, so the production rule is:
-  **Rys2D takes K = 1 at L ≥ 4 and K ≤ 3 at L ≥ 7; HGP keeps the rest.**
-  This answers the old K2.2.
-- **What it is worth to the build is unmeasured.** These classes are about
-  0.051 s of the 0.49 s cc-pVTZ kernel sweep. All of K = 1 at L ≥ 4 is a
-  larger share, which is what K2.1c measures.
+  quartet. The closed forms already own L ≤ 3, so the production rule is
+  K = 1 at L ≥ 4 and K ≤ 3 at L ≥ 7.
+- **Why the build gains 1.15× and not 2×.** Rys2D halves only the blocks it
+  takes. On 2 H2O cc-pVTZ the kernel sweep is 80–82 % of the build and
+  L ≥ 4 is 0.41 s of its 0.49 s, but contracted blocks stay on HGP.
 
-**Next: K2.1c, wire it into production.**
-
-1. Chain it in Auto's block kernel: closed forms (L ≤ 3), then
-   `RysBlockKernel`, then `HgpBlockKernel`.
-   - `RysBlockKernel::prepare` declines blocks outside the b3 rule
-     (K = 1 at L ≥ 4, K ≤ 3 at L ≥ 7), and the chain hands them to HGP.
-   - `covers()` stays per total L, since the dense-digestion predicate
-     needs it, and HGP covers what Rys declines.
-   - Coulomb only, like the other block kernels.
-2. Gate it (see "Gates for anything that lands"):
-   - block sweep against per-component HGP;
-   - G identical at 1/2/4/8 threads;
-   - core and extended regressions;
-   - `pyscf_bench.py` wall times on cc-pVTZ, cc-pVDZ and 6-31G\*. 6-31G\*
-     must not get slower.
-3. Then refit the Auto table (below), which K2.1a already made stale.
-
-**Follow-ons, once it lands:**
-- Rescope G3 of `docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md` (the
+**Next:**
+- **Refit the Auto table** (`kAutoEngine`, Smaller items). It has been
+  stale since K2.1a and is cheap.
+- **Rescope G3 of `docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`** (the
   shell-quartet derivative block kernel) on Rys2D. Differentiating the 2D
   per-axis tables is libcint's route to derivative integrals, and it gives
-  Rys a derivative kernel, which Phase D lacks.
+  Rys a derivative kernel, which Phase D lacks. The gradient gap (20–120×)
+  outranks everything else here.
 - Route the conventional Auto build's 6D hoist
   (`_contracted_eri_block_hoisted_views`, 50–210× libcint) through Rys2D,
   and delete the hoist.
@@ -99,9 +113,9 @@ functions, energies within 1e-13):
 
 Two gaps remain, and they separate cleanly:
 
-- **cc-pVTZ: high-L kernel cost (K2).** In the same representation Planck is
-  still 1.5–1.9× slower, all of it at total L ≥ 4 (K0). K2.1c is the step
-  that addresses it.
+- **cc-pVTZ: high-L kernel cost (K2).** In the same representation Planck was
+  1.5–1.9× slower, all of it at total L ≥ 4 (K0). K2.1c took 1.11–1.16×
+  off the build; the table above has not been rerun against PySCF since.
 - **cc-pVDZ: general contraction (G).** In the same representation Planck is
   faster than PySCF (0.47–0.75×). What PySCF has left is general
   contraction, worth 1.6–1.7× to libcint and much less to Planck (G below).
@@ -288,7 +302,7 @@ end with `engine rys`: ethylene cc-pVDZ 2.22×, 2 H2O cc-pVTZ 241 → 69 s.
 `engine auto` is unchanged (1.00×), as expected, since Auto's fused build
 does not use per-component Rys.
 
-### K2.1b: the 2D Rys block kernel (done 2026-10-26, harness only)
+### K2.1b: the 2D Rys block kernel (done 2026-10-26)
 
 `RysBlockKernel`, header-only under the `block_eri.h` contract, total L ≤ 20
 (the 11-root limit). Back-of-envelope before building: `(dd|dd)` is
@@ -424,8 +438,7 @@ so it would have to be a traversal chosen by basis.
 
 ## Priority
 
-K2.1c first: it is the only lever left on cc-pVTZ and above, where the gap
-is largest. G after it, and only if G0 clears its bar. The gradient work
-(`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`, gaps of 20–120×) still
-outranks all of this, and its G3 should be rescoped on Rys2D once K2.1c
-lands.
+The gradient work (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`, gaps of
+20–120×) outranks everything left here, and its G3 should now be rescoped
+on Rys2D. Within this scope: the Auto-table refit (cheap), then the libcint
+layout comparison only if the remaining cc-pVTZ gap matters, then G0.

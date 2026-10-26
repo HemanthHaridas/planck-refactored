@@ -56,6 +56,7 @@
 #include "integrals/rys.h"
 #include "integrals/hgp_block_eri.h"
 #include "integrals/rys_block_eri.h"
+#include "integrals/auto_block_eri.h"
 #include "integrals/screening.h"
 #include "integrals/shellpair.h"
 #include "require_boys_library.h"
@@ -247,13 +248,8 @@ namespace
         return dt;
     }
 
-    // The Auto engine's block kernels (rys.cpp auto_block_kernel): closed forms
-    // at total L <= 3, HGP block kernel at 4-12.
-    auto production_kernel()
-    {
-        using namespace HartreeFock::Integrals;
-        return ChainBlockKernel<ClosedFormBlockKernel, HgpBlockKernel>{ClosedFormBlockKernel{3}, HgpBlockKernel{4, 12}};
-    }
+    // The Auto engine's block kernels (auto_block_eri.h).
+    auto production_kernel() { return HartreeFock::Integrals::auto_block_kernel(); }
 
     // closed_form_max_l routes total-L <= max quartets through the closed forms.
     template <typename Elem>

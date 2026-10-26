@@ -74,13 +74,18 @@ namespace HartreeFock::Integrals
 
         int min_l = 0; // handle total L in [min_l, max_l]
         int max_l = kMaxTotalL;
+        // Only the blocks where Rys2D beats the HGP block (b3): K = 1, or
+        // K <= 3 at L >= 7, with K the number of primitive quartets. It then
+        // declines some blocks of every L, so covers() is false and a chain
+        // must put a kernel that covers them behind it.
+        bool crossover = false;
 
-        explicit RysBlockKernel(int lo = 0, int hi = kMaxTotalL) noexcept
-            : min_l(lo), max_l(std::min(hi, kMaxTotalL)) {}
+        explicit RysBlockKernel(int lo = 0, int hi = kMaxTotalL, bool only_crossover = false) noexcept
+            : min_l(lo), max_l(std::min(hi, kMaxTotalL)), crossover(only_crossover) {}
 
         bool covers(int total_l, HartreeFock::ERIKernel k) const noexcept
         {
-            return total_l >= min_l && total_l <= max_l && k == HartreeFock::ERIKernel::Coulomb;
+            return !crossover && total_l >= min_l && total_l <= max_l && k == HartreeFock::ERIKernel::Coulomb;
         }
         bool prepare(const BlockEriRequest &r)
         {
@@ -89,6 +94,12 @@ namespace HartreeFock::Integrals
             if (lt < min_l || lt > max_l || !r.ab || !r.cd ||
                 r.kernel != HartreeFock::ERIKernel::Coulomb || r.prim_eps != 0.0)
                 return false;
+            if (crossover)
+            {
+                const std::size_t K = r.ab->primitive_pairs.size() * r.cd->primitive_pairs.size();
+                if (K > 3 || (K > 1 && lt < 7))
+                    return false;
+            }
             req_ = &r;
 
             using HartreeFock::RysQuad::detail::_rys_eri_prep;

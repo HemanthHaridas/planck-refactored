@@ -16,6 +16,7 @@
 #include "integrals/base.h"
 #include "integrals/hgp.h"
 #include "integrals/hgp_block_eri.h"
+#include "integrals/rys_block_eri.h"
 #include "integrals/low_l_eri.h"
 #include "integrals/os.h"
 #include "integrals/shellpair.h"
@@ -232,8 +233,11 @@ namespace
     // component pairs, component views, and a per-AO norm ratio. Every
     // (L_A, L_B, L_C, L_D) class of the basis is visited, so the triangle
     // VRR, both HRRs and the readout are checked on every layout it has.
-    void check_hgp_block_kernel(const std::vector<HartreeFock::ShellPair> &pairs, std::size_t nb,
-                                const std::string &label)
+    // A block kernel (HGP block, Rys2D block) against per-component HGP on
+    // every canonical shell quartet: it must accept and match each one.
+    template <typename Kernel>
+    void check_block_kernel(const std::vector<HartreeFock::ShellPair> &pairs, std::size_t nb,
+                            const std::string &label, const std::string &name)
     {
         std::vector<const HartreeFock::ShellPair *> pair_of(nb * nb, nullptr);
         std::vector<const HartreeFock::ContractedView *> views(nb, nullptr);
@@ -279,10 +283,10 @@ namespace
                             req.n[s] = groups[g4[s]].second;
                             req.L[s] = group_L[g4[s]];
                         }
-                        HartreeFock::Integrals::HgpBlockKernel kernel;
+                        Kernel kernel;
                         if (!kernel.prepare(req))
                         {
-                            fail(label + ": HGP block kernel declined a Coulomb quartet");
+                            fail(label + ": " + name + " declined a Coulomb quartet");
                             return;
                         }
                         ++classes[{req.L[0], req.L[1], req.L[2], req.L[3]}];
@@ -301,11 +305,11 @@ namespace
                                         ++n;
                                     }
                     }
-        std::cout << "[INFO] HGP block kernel vs per-component HGP (" << label << "): " << n
+        std::cout << "[INFO] " << name << " vs per-component HGP (" << label << "): " << n
                   << " component quartets in " << classes.size() << " (L_A,L_B,L_C,L_D) classes, max rel diff "
                   << max_rel << '\n';
         require_true(n > 0, label + ": no quartets swept");
-        require_near(max_rel, 0.0, 1e-13, label + ": HGP block kernel must match per-component HGP");
+        require_near(max_rel, 0.0, 1e-13, label + ": " + name + " must match per-component HGP");
     }
 } // namespace
 
@@ -416,9 +420,12 @@ int main()
     }
     const auto cc_pairs = build_shellpairs(cc_calc->_shells);
     check_low_l_kernel(cc_pairs, cc_calc->_shells.nbasis(), "water/cc-pVDZ", true);
-    check_hgp_block_kernel(sp_pairs, sp_calc->_shells.nbasis(), "water/6-31g");
-    check_hgp_block_kernel(d_pairs, d_calc->_shells.nbasis(), "water/6-31g*");
-    check_hgp_block_kernel(cc_pairs, cc_calc->_shells.nbasis(), "water/cc-pVDZ");
+    check_block_kernel<HartreeFock::Integrals::HgpBlockKernel>(sp_pairs, sp_calc->_shells.nbasis(), "water/6-31g", "HGP block kernel");
+    check_block_kernel<HartreeFock::Integrals::RysBlockKernel>(sp_pairs, sp_calc->_shells.nbasis(), "water/6-31g", "Rys2D block kernel");
+    check_block_kernel<HartreeFock::Integrals::HgpBlockKernel>(d_pairs, d_calc->_shells.nbasis(), "water/6-31g*", "HGP block kernel");
+    check_block_kernel<HartreeFock::Integrals::RysBlockKernel>(d_pairs, d_calc->_shells.nbasis(), "water/6-31g*", "Rys2D block kernel");
+    check_block_kernel<HartreeFock::Integrals::HgpBlockKernel>(cc_pairs, cc_calc->_shells.nbasis(), "water/cc-pVDZ", "HGP block kernel");
+    check_block_kernel<HartreeFock::Integrals::RysBlockKernel>(cc_pairs, cc_calc->_shells.nbasis(), "water/cc-pVDZ", "Rys2D block kernel");
     // cc-pVTZ adds f shells: every class up to (ff|ff), ~4.6M component
     // quartets, a few seconds.
     auto tz_calc = make_water_calculator("cc-pVTZ");
@@ -428,7 +435,8 @@ int main()
         return 1;
     }
     const auto tz_pairs = build_shellpairs(tz_calc->_shells);
-    check_hgp_block_kernel(tz_pairs, tz_calc->_shells.nbasis(), "water/cc-pVTZ");
+    check_block_kernel<HartreeFock::Integrals::HgpBlockKernel>(tz_pairs, tz_calc->_shells.nbasis(), "water/cc-pVTZ", "HGP block kernel");
+    check_block_kernel<HartreeFock::Integrals::RysBlockKernel>(tz_pairs, tz_calc->_shells.nbasis(), "water/cc-pVTZ", "Rys2D block kernel");
 
     if (!g_ok)
         return 1;

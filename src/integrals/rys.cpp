@@ -6,7 +6,7 @@
 #include "screening.h" // Shared HGP-based Schwarz table for the Auto path.
 #include "quartet_layout.h"
 #include "fused_fock.h"
-#include "hgp_block_eri.h"
+#include "auto_block_eri.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1655,16 +1655,8 @@ namespace
             lCx, lCy, lCz, lDx, lDy, lDz, k, w);
     };
 
-    // The Auto engine's block kernels (block_eri.h): the closed forms at total
-    // L <= 3, the HGP block kernel at 4 <= L <= 12 (each class measured a win,
-    // 1.5-13x on the Fock build; docs/ERI_SHELL_QUARTET_FOCK_BUILD.md D1).
-    // Above that, and for screened kernels, blocks stay on auto_eri_elem.
-    inline auto auto_block_kernel()
-    {
-        return HartreeFock::Integrals::ChainBlockKernel<HartreeFock::Integrals::ClosedFormBlockKernel,
-                                                        HartreeFock::Integrals::HgpBlockKernel>{
-            HartreeFock::Integrals::ClosedFormBlockKernel{3}, HartreeFock::Integrals::HgpBlockKernel{4, 12}};
-    }
+    // The Auto engine's block kernels: auto_block_eri.h.
+    using HartreeFock::Integrals::auto_block_kernel;
 
     // One body for all four entries; `elem` picks Rys or Auto.
     template <typename Elem, typename Block = HartreeFock::Integrals::NoBlockKernel>
