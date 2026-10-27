@@ -82,6 +82,19 @@ price them on the production loop (ERI scope invariant 5).
 Gate: every gradient / geomopt / freq regression, the RMP2/UMP2 FD and PySCF
 cases; RMP2 output unchanged to the printed digit.
 
+**Landed 2026-10-27** (all three, the second as "skip unless the flag is
+on"). Measured at four threads, M3, quiet machine:
+
+| change | case | before | after |
+|---|---|---|---|
+| Auto → HGP | 4 H2O / 6-31G\* RHF | 56.4 s (`os`) | 29.7 s, 1.90× |
+| skip debug sweep | 1 H2O / 6-31G\* RMP2, `os` | 6.78 s (flag on) | 4.27 s, 1.59× |
+| all of G1 | same RMP2 case | 6.78 s | 3.17 s (`auto`), 2.14× |
+
+Auto → HGP gave 1.9×, not the estimated 1.5×. Every printed gradient
+component was identical across all three pairs. Extended suite 135/139 (the
+four known rccsdt cases). The pair-table hoist was not timed on its own.
+
 ### G2 — One threaded, symmetric 2e loop
 
 1. Fold the UHF and ROHF loops onto `accumulate_shell_pair_eri_gradient`

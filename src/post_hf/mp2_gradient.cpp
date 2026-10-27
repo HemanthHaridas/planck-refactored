@@ -1,6 +1,7 @@
 #include "mp2_gradient.h"
 
 #include <cstdlib>
+#include <deque>
 #include <cstdio>
 #include <expected>
 #include <format>
@@ -19,10 +20,30 @@
 
 namespace
 {
-    void maybe_print_rmp2_term_matrix(const char *name, const Eigen::MatrixXd &term)
+    bool rmp2_term_debug_enabled()
     {
         const char *enabled = std::getenv("PLANCK_DEBUG_RMP2_TERMS");
-        if (enabled == nullptr || std::string_view(enabled) != "1")
+        return enabled != nullptr && std::string_view(enabled) == "1";
+    }
+
+    // Every AO pair (p, q) at index p * nao + q, built once per gradient. The
+    // MP2 derivative sweeps used to construct two ShellPairs (primitive pairs
+    // included) in their innermost nao⁴ loop.
+    std::vector<HartreeFock::ShellPair> build_ao_pair_table(
+        const std::deque<HartreeFock::ContractedView> &bfs)
+    {
+        const std::size_t nao = bfs.size();
+        std::vector<HartreeFock::ShellPair> pairs;
+        pairs.reserve(nao * nao);
+        for (std::size_t p = 0; p < nao; ++p)
+            for (std::size_t q = 0; q < nao; ++q)
+                pairs.emplace_back(bfs[p], bfs[q]);
+        return pairs;
+    }
+
+    void maybe_print_rmp2_term_matrix(const char *name, const Eigen::MatrixXd &term)
+    {
+        if (!rmp2_term_debug_enabled())
             return;
 
         std::cout << "PLANCK_RMP2_TERM " << name << "\n";
@@ -556,6 +577,7 @@ namespace HartreeFock::Correlation
 
         const auto &bfs = calculator._shells._basis_functions;
         const Eigen::MatrixXd hf_dm1 = 2.0 * C_occ * C_occ.transpose();
+        const auto ao_pairs = build_ao_pair_table(bfs);
 
         for (std::size_t atom = 0; atom < atom_aos.size(); ++atom)
         {
@@ -564,9 +586,8 @@ namespace HartreeFock::Correlation
                     for (int r = 0; r < nao; ++r)
                         for (int s = 0; s < nao; ++s)
                         {
-                            const HartreeFock::ShellPair spAB(bfs[p], bfs[q]);
-                            const HartreeFock::ShellPair spCD(bfs[r], bfs[s]);
-                            const auto dI = HartreeFock::Gradient::compute_eri_deriv_dispatch(calculator, spAB, spCD);
+                            const auto dI = HartreeFock::Gradient::compute_eri_deriv_dispatch(
+                                calculator, ao_pairs[p * nao + q], ao_pairs[r * nao + s]);
                             // PySCF contracts the pair density with the ERI derivative
                             // with an overall factor of 2 (grad/mp2.py: de -= ... * 2);
                             // dm2buf_full carries only one bra-derivative permutation here.
@@ -724,15 +745,17 @@ namespace HartreeFock::Correlation
                 electronic(atom, q) += vhf1_terms(atom, q);
             }
 
+        // A second full derivative sweep that only splits vhf1_terms into its
+        // four pieces for the debug print; skipped unless that print is on.
+        if (rmp2_term_debug_enabled())
         for (std::size_t atom = 0; atom < atom_aos.size(); ++atom)
             for (int p : atom_aos[atom])
                 for (int q = 0; q < nao; ++q)
                     for (int r = 0; r < nao; ++r)
                         for (int s = 0; s < nao; ++s)
                         {
-                            const HartreeFock::ShellPair spAB(bfs[p], bfs[q]);
-                            const HartreeFock::ShellPair spCD(bfs[r], bfs[s]);
-                            const auto dI = HartreeFock::Gradient::compute_eri_deriv_dispatch(calculator, spAB, spCD);
+                            const auto dI = HartreeFock::Gradient::compute_eri_deriv_dispatch(
+                                calculator, ao_pairs[p * nao + q], ao_pairs[r * nao + s]);
                             for (int comp = 0; comp < 3; ++comp)
                             {
                                 vhf1_rs_terms(atom, comp) += dI[comp] * hf_dm1(p, q) * dm1p(r, s);
@@ -906,6 +929,7 @@ namespace HartreeFock::Correlation
             dm2b_ao.assign(nao4, 0.0);
         }
         const auto &bfs = calculator._shells._basis_functions;
+        const auto ao_pairs = build_ao_pair_table(bfs);
 
         for (std::size_t atom = 0; atom < atom_aos.size(); ++atom)
             for (int p : atom_aos[atom])
@@ -951,12 +975,11 @@ namespace HartreeFock::Correlation
 
                             pair_dm2_ao[idx_dm2(p, q, r, s, nao)] += dm2a + dm2b;
 
-                            const HartreeFock::ShellPair spAB(bfs[p], bfs[q]);
-                            const HartreeFock::ShellPair spCD(bfs[r], bfs[s]);
                             // dI is still needed by the vhf1 block below: the HF
                             // reference is always dense (RI fits only the MP2
                             // correlation), so those derivative terms stay dense.
-                            const auto dI = HartreeFock::Gradient::compute_eri_deriv_dispatch(calculator, spAB, spCD);
+                            const auto dI = HartreeFock::Gradient::compute_eri_deriv_dispatch(
+                                calculator, ao_pairs[p * nao + q], ao_pairs[r * nao + s]);
                             // Under RI the correlation 2e-gradient term is built
                             // from the 3-center derivative tensors after the loop
                             // (RG4.3), so skip the dense 4-center contraction.

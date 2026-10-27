@@ -191,7 +191,13 @@ std::array<double, 12> HartreeFock::Gradient::compute_eri_deriv_dispatch(
     HartreeFock::ERIKernel kernel,
     double omega)
 {
-    if (calc._integral._engine == HartreeFock::IntegralMethod::HeadGordonPople)
+    // Auto resolves to HGP, the faster per-component derivative engine
+    // (4 H2O / 6-31G*, one thread: HGP 47.0 s, OS 71.4 s); same precedent as
+    // full_symmetry_engine in scf.cpp. Rys has no derivative kernel and stays
+    // on OS.
+    const auto engine = calc._integral._engine;
+    if (engine == HartreeFock::IntegralMethod::HeadGordonPople ||
+        engine == HartreeFock::IntegralMethod::Auto)
     {
         return HartreeFock::HeadGordonPople::_compute_eri_deriv_elem(
             spAB, spCD, kernel, omega);

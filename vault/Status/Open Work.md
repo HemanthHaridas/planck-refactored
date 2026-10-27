@@ -1986,17 +1986,18 @@ identify the path taken. Not required for correctness or performance.
     the corrected Boys core. The extended suite and `ctest` on v1.2.1 are
     pending.
 - **Analytic gradients are 20–120× the SCF they follow — scoped 2026-10-25,
-  nothing landed** (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`). The ERI
-  Fock-build work never reached the derivative integrals: the 2e gradient is
-  per AO component (each of 12 derivative components from up to 24 fresh
-  contracted ERIs), runs the full square of AO pairs, is single-threaded, and
-  Auto routes it to per-component OS. 98 % of the gradient. Measured at four
-  threads: 4 H2O / 6-31G\* SCF 2.5 s vs gradient 54 s; 1 H2O / cc-pVTZ 0.9 s
-  vs 115 s. RMP2 gradients are dense unscreened `nao⁴` sweeps, and the second
-  RMP2 sweep only feeds a debug print (`PLANCK_DEBUG_RMP2_TERMS`), so it is
-  dead work on every run. UHF/ROHF carry their own copies of the 2e loop and
-  the 1e block is pasted four times. Plan: G1 dead work + Auto → HGP (1.5×),
-  G2 one threaded triangular loop, G3 a shell-quartet derivative block kernel
+  G1 landed 2026-10-27** (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`). The
+  ERI Fock-build work never reached the derivative integrals: the 2e gradient
+  is per AO component (each of 12 derivative components from up to 24 fresh
+  contracted ERIs), runs the full square of AO pairs, and is single-threaded.
+  98 % of the gradient. Measured at four threads before G1: 4 H2O / 6-31G\*
+  SCF 2.5 s vs gradient 54 s; 1 H2O / cc-pVTZ 0.9 s vs 115 s. UHF/ROHF carry
+  their own copies of the 2e loop and the 1e block is pasted four times.
+  **G1 done:** Auto now routes derivative ERIs to HGP (4 H2O / 6-31G\*
+  gradient 56.4 → 29.7 s), the RMP2 second sweep runs only under
+  `PLANCK_DEBUG_RMP2_TERMS=1`, and the MP2 sweeps build their AO `ShellPair`s
+  once (1 H2O / 6-31G\* RMP2 gradient 6.78 → 3.17 s). Printed gradients
+  unchanged. Next: G2 one threaded triangular loop, G3 a shell-quartet derivative block kernel
   (the lever; this is shellpair Phase D), G4 MP2 onto the same loop, G5 1e
   derivatives, G6 RI 3c (measure first).
 - **ERI/Fock BLAS-LAPACK migration — scoped 2026-10-17, nothing landed**
