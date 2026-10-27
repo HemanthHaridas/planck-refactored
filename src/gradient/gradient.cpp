@@ -131,57 +131,25 @@ static Eigen::MatrixXd build_pair_schwarz_table(
     return Q;
 }
 
+// Γ summed over the (ij)/(kl) index swaps of one quartet. Every swap sends
+// each centre's derivative to that centre's own atom, so the swaps differ only
+// in their Γ weight and can share one dI.
 template <typename GammaFn>
-static void accumulate_eri_gradient_permutations(
-    Eigen::MatrixXd &grad,
-    const std::array<double, 12> &dI,
-    GammaFn &&gamma_fn,
+static double pair_permuted_gamma(
+    const GammaFn &gamma_fn,
     std::size_t ii,
     std::size_t jj,
     std::size_t kk,
-    std::size_t ll,
-    int atom_A,
-    int atom_B,
-    int atom_C,
-    int atom_D)
+    std::size_t ll)
 {
-    // A shell-pair ERI derivative arrives in one canonical ordering. Fold the
-    // AB/CD exchange-related permutations back in here so the higher-level
-    // gradient builders only need to provide the effective Gamma contraction.
-    const auto accumulate_perm = [&](double gamma,
-                                     bool swap_ab,
-                                     bool swap_cd)
-    {
-        if (std::abs(gamma) < 1e-14)
-            return;
-
-        const int deriv_a = swap_ab ? 1 : 0;
-        const int deriv_b = swap_ab ? 0 : 1;
-        const int deriv_c = swap_cd ? 3 : 2;
-        const int deriv_d = swap_cd ? 2 : 3;
-
-        const int atom_a = swap_ab ? atom_B : atom_A;
-        const int atom_b = swap_ab ? atom_A : atom_B;
-        const int atom_c = swap_cd ? atom_D : atom_C;
-        const int atom_d = swap_cd ? atom_C : atom_D;
-
-        const double fac = 0.25 * gamma;
-        for (int q = 0; q < 3; ++q)
-        {
-            grad(atom_a, q) += fac * dI[deriv_a * 3 + q];
-            grad(atom_b, q) += fac * dI[deriv_b * 3 + q];
-            grad(atom_c, q) += fac * dI[deriv_c * 3 + q];
-            grad(atom_d, q) += fac * dI[deriv_d * 3 + q];
-        }
-    };
-
-    accumulate_perm(gamma_fn(ii, jj, kk, ll), false, false);
+    double gamma = gamma_fn(ii, jj, kk, ll);
     if (kk != ll)
-        accumulate_perm(gamma_fn(ii, jj, ll, kk), false, true);
+        gamma += gamma_fn(ii, jj, ll, kk);
     if (ii != jj)
-        accumulate_perm(gamma_fn(jj, ii, kk, ll), true, false);
+        gamma += gamma_fn(jj, ii, kk, ll);
     if (ii != jj && kk != ll)
-        accumulate_perm(gamma_fn(jj, ii, ll, kk), true, true);
+        gamma += gamma_fn(jj, ii, ll, kk);
+    return gamma;
 }
 
 std::array<double, 12> HartreeFock::Gradient::compute_eri_deriv_dispatch(
@@ -219,97 +187,67 @@ static void accumulate_shell_pair_eri_gradient(
     const std::vector<int> &bf_shell,
     const Eigen::MatrixXd &schwarz_q,
     Eigen::MatrixXd &grad,
-    GammaFn &&gamma_fn,
+    const GammaFn &gamma_fn,
     HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
-    double omega = 0.0,
-    bool assume_pair_exchange_symmetry = true)
+    double omega = 0.0)
 {
-    const auto &bfs = calc._shells._basis_functions;
-    const std::size_t nb = calc._shells.nbasis();
+    // shell_pairs holds each unordered AO pair once, so visiting q >= p covers
+    // each unordered pair of pairs once; the bra-ket swap (q, p) shares dI and
+    // only adds its Γ. Any Γ works, symmetric or not.
+    //
+    // Threads take bins of bra pairs (p mod kBins), dynamically scheduled; each
+    // bin owns a gradient partial and the partials are summed in bin order, so
+    // the result does not depend on the thread count.
+    constexpr int kBins = 64;
+    const std::size_t npairs = shell_pairs.size();
+    const double tol_eri = calc._integral._tol_eri;
+    std::vector<Eigen::MatrixXd> partial(kBins, Eigen::MatrixXd::Zero(grad.rows(), 3));
 
-    if (assume_pair_exchange_symmetry)
+#pragma omp parallel for schedule(dynamic, 1)
+    for (int bin = 0; bin < kBins; ++bin)
     {
-        // Most closed-shell and hybrid contractions keep the usual (ij|kl) =
-        // (ji|kl) = (ij|lk) symmetry, so we can iterate only over the stored
-        // shell-pair list and recover the missing permutations analytically.
-        for (const auto &spAB : shell_pairs)
+        Eigen::MatrixXd &g = partial[bin];
+        for (std::size_t p = bin; p < npairs; p += kBins)
         {
+            const auto &spAB = shell_pairs[p];
             const std::size_t ii = spAB.A._index;
             const std::size_t jj = spAB.B._index;
             const int atom_A = shell_atom[bf_shell[ii]];
             const int atom_B = shell_atom[bf_shell[jj]];
 
-            for (const auto &spCD : shell_pairs)
+            for (std::size_t q = p; q < npairs; ++q)
             {
+                const auto &spCD = shell_pairs[q];
                 const std::size_t kk = spCD.A._index;
                 const std::size_t ll = spCD.B._index;
-                const int atom_C = shell_atom[bf_shell[kk]];
-                const int atom_D = shell_atom[bf_shell[ll]];
 
-                if (schwarz_q(ii, jj) * schwarz_q(kk, ll) < calc._integral._tol_eri)
+                if (schwarz_q(ii, jj) * schwarz_q(kk, ll) < tol_eri)
                     continue;
 
+                double gamma = pair_permuted_gamma(gamma_fn, ii, jj, kk, ll);
+                if (q != p)
+                    gamma += pair_permuted_gamma(gamma_fn, kk, ll, ii, jj);
+                if (std::abs(gamma) < 1e-14)
+                    continue;
+
+                const int atom_C = shell_atom[bf_shell[kk]];
+                const int atom_D = shell_atom[bf_shell[ll]];
                 const auto dI = compute_eri_deriv_dispatch(
                     calc, spAB, spCD, kernel, omega);
-                accumulate_eri_gradient_permutations(
-                    grad,
-                    dI,
-                    gamma_fn,
-                    ii,
-                    jj,
-                    kk,
-                    ll,
-                    atom_A,
-                    atom_B,
-                    atom_C,
-                    atom_D);
-            }
-        }
-        return;
-    }
-
-    // Some unrestricted/range-separated exchange corrections are easier to
-    // express without assuming pair-exchange symmetry. Fall back to the full
-    // ordered pair list in that case.
-    std::vector<HartreeFock::ShellPair> all_pairs;
-    all_pairs.reserve(nb * nb);
-    for (std::size_t ii = 0; ii < nb; ++ii)
-        for (std::size_t jj = 0; jj < nb; ++jj)
-            all_pairs.emplace_back(bfs[ii], bfs[jj]);
-
-    for (const auto &spAB : all_pairs)
-    {
-        const std::size_t ii = spAB.A._index;
-        const std::size_t jj = spAB.B._index;
-        const int atom_A = shell_atom[bf_shell[ii]];
-        const int atom_B = shell_atom[bf_shell[jj]];
-
-        for (const auto &spCD : all_pairs)
-        {
-            const std::size_t kk = spCD.A._index;
-            const std::size_t ll = spCD.B._index;
-            const int atom_C = shell_atom[bf_shell[kk]];
-            const int atom_D = shell_atom[bf_shell[ll]];
-
-            if (schwarz_q(ii, jj) * schwarz_q(kk, ll) < calc._integral._tol_eri)
-                continue;
-
-            const double gamma = gamma_fn(ii, jj, kk, ll);
-            if (std::abs(gamma) < 1e-14)
-                continue;
-
-            const auto dI = compute_eri_deriv_dispatch(
-                calc, spAB, spCD, kernel, omega);
-            const double fac = 0.25 * gamma;
-            for (int q = 0; q < 3; ++q)
-            {
-                grad(atom_A, q) += fac * dI[q];
-                grad(atom_B, q) += fac * dI[3 + q];
-                grad(atom_C, q) += fac * dI[6 + q];
-                grad(atom_D, q) += fac * dI[9 + q];
+                const double fac = 0.25 * gamma;
+                for (int c = 0; c < 3; ++c)
+                {
+                    g(atom_A, c) += fac * dI[c];
+                    g(atom_B, c) += fac * dI[3 + c];
+                    g(atom_C, c) += fac * dI[6 + c];
+                    g(atom_D, c) += fac * dI[9 + c];
+                }
             }
         }
     }
+
+    for (const auto &g : partial)
+        grad += g;
 }
 
 template <typename GammaFn>
@@ -318,8 +256,7 @@ static std::expected<Eigen::MatrixXd, std::string> compute_two_electron_kernel_g
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     GammaFn &&gamma_fn,
     HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
-    double omega = 0.0,
-    bool assume_pair_exchange_symmetry = true)
+    double omega = 0.0)
 {
     // Shared "differentiate and contract ERIs" helper used by RHF/UHF and the
     // HF-like parts of RKS/UKS. The caller supplies only the effective Gamma
@@ -352,8 +289,7 @@ static std::expected<Eigen::MatrixXd, std::string> compute_two_electron_kernel_g
         grad,
         gamma_fn,
         kernel,
-        omega,
-        assume_pair_exchange_symmetry);
+        omega);
     return grad;
 }
 
@@ -364,7 +300,6 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_gradient
     const Eigen::MatrixXd &P,
     const Eigen::MatrixXd &W,
     GammaFn &&gamma_fn,
-    bool assume_pair_exchange_symmetry = true,
     HartreeFock::Gradient::WavefunctionGradientBreakdown *breakdown = nullptr)
 {
     // Shared restricted-reference gradient builder:
@@ -461,10 +396,7 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_gradient
         bf_shell,
         schwarz_q,
         two_electron,
-        gamma_fn,
-        HartreeFock::ERIKernel::Coulomb,
-        0.0,
-        assume_pair_exchange_symmetry);
+        gamma_fn);
     const Eigen::MatrixXd nuclear_repulsion = compute_nuclear_repulsion_gradient(calc);
     const Eigen::MatrixXd total = core_pulay + two_electron + nuclear_repulsion;
     if (breakdown)
@@ -588,7 +520,7 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rks_g
     };
     WavefunctionGradientBreakdown breakdown;
     auto grad = compute_closed_shell_gradient_from_density(
-        calc, shell_pairs, P, W, gamma_fn, true, &breakdown);
+        calc, shell_pairs, P, W, gamma_fn, &breakdown);
     if (!grad)
         return grad;
 
@@ -766,39 +698,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_g
                2.0 * P_b(ii, kk) * P_b(jj, ll);
     };
 
-    for (const auto &spAB : shell_pairs)
-    {
-        const std::size_t ii = spAB.A._index;
-        const std::size_t jj = spAB.B._index;
-        const int atom_A = shell_atom[bf_shell[ii]];
-        const int atom_B = shell_atom[bf_shell[jj]];
-
-        for (const auto &spCD : shell_pairs)
-        {
-            const std::size_t kk = spCD.A._index;
-            const std::size_t ll = spCD.B._index;
-            const int atom_C = shell_atom[bf_shell[kk]];
-            const int atom_D = shell_atom[bf_shell[ll]];
-
-            if (schwarz_q(ii, jj) * schwarz_q(kk, ll) < calc._integral._tol_eri)
-                continue;
-
-            const auto dI = compute_eri_deriv_dispatch(
-                calc, spAB, spCD, HartreeFock::ERIKernel::Coulomb, 0.0);
-            accumulate_eri_gradient_permutations(
-                grad,
-                dI,
-                gamma_fn,
-                ii,
-                jj,
-                kk,
-                ll,
-                atom_A,
-                atom_B,
-                atom_C,
-                atom_D);
-        }
-    }
+    accumulate_shell_pair_eri_gradient(
+        calc, shell_pairs, shell_atom, bf_shell, schwarz_q, grad, gamma_fn);
 
     // ── Term 4: nuclear repulsion ─────────────────────────────────────────────
     for (std::size_t a = 0; a < natoms; ++a)
@@ -960,30 +861,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rohf_
                2.0 * P_b(ii, kk) * P_b(jj, ll);
     };
 
-    for (const auto &spAB : shell_pairs)
-    {
-        const std::size_t ii = spAB.A._index;
-        const std::size_t jj = spAB.B._index;
-        const int atom_A = shell_atom[bf_shell[ii]];
-        const int atom_B = shell_atom[bf_shell[jj]];
-
-        for (const auto &spCD : shell_pairs)
-        {
-            const std::size_t kk = spCD.A._index;
-            const std::size_t ll = spCD.B._index;
-            const int atom_C = shell_atom[bf_shell[kk]];
-            const int atom_D = shell_atom[bf_shell[ll]];
-
-            if (schwarz_q(ii, jj) * schwarz_q(kk, ll) < calc._integral._tol_eri)
-                continue;
-
-            const auto dI = compute_eri_deriv_dispatch(
-                calc, spAB, spCD, HartreeFock::ERIKernel::Coulomb, 0.0);
-            accumulate_eri_gradient_permutations(
-                grad, dI, gamma_fn, ii, jj, kk, ll,
-                atom_A, atom_B, atom_C, atom_D);
-        }
-    }
+    accumulate_shell_pair_eri_gradient(
+        calc, shell_pairs, shell_atom, bf_shell, schwarz_q, grad, gamma_fn);
 
     // ── Term 4: nuclear repulsion ─────────────────────────────────────────────
     for (std::size_t a = 0; a < natoms; ++a)
@@ -1165,26 +1044,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_g
             return cx_short *
                    (2.0 * P_a(ii, kk) * P_a(jj, ll) + 2.0 * P_b(ii, kk) * P_b(jj, ll));
         };
-        accumulate_shell_pair_eri_gradient(
-            calc,
-            shell_pairs,
-            shell_atom,
-            bf_shell,
-            schwarz_q,
-            two_electron,
-            long_range_gamma,
-            HartreeFock::ERIKernel::LongRange,
-            exchange_kernel.range_separation_omega);
-        accumulate_shell_pair_eri_gradient(
-            calc,
-            shell_pairs,
-            shell_atom,
-            bf_shell,
-            schwarz_q,
-            exchange_two_electron,
-            long_range_gamma,
-            HartreeFock::ERIKernel::LongRange,
-            exchange_kernel.range_separation_omega);
+        // One long-range sweep, shared by the three matrices it feeds (it used
+        // to run once per matrix).
         accumulate_shell_pair_eri_gradient(
             calc,
             shell_pairs,
@@ -1195,6 +1056,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_g
             long_range_gamma,
             HartreeFock::ERIKernel::LongRange,
             exchange_kernel.range_separation_omega);
+        two_electron += exchange_long_range_correction;
+        exchange_two_electron += exchange_long_range_correction;
     }
 
     const Eigen::MatrixXd nuclear_repulsion = compute_nuclear_repulsion_gradient(calc);

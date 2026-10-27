@@ -1986,18 +1986,23 @@ identify the path taken. Not required for correctness or performance.
     the corrected Boys core. The extended suite and `ctest` on v1.2.1 are
     pending.
 - **Analytic gradients are 20–120× the SCF they follow — scoped 2026-10-25,
-  G1 landed 2026-10-27** (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`). The
+  G1 and G2 landed 2026-10-27** (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`). The
   ERI Fock-build work never reached the derivative integrals: the 2e gradient
   is per AO component (each of 12 derivative components from up to 24 fresh
   contracted ERIs), runs the full square of AO pairs, and is single-threaded.
   98 % of the gradient. Measured at four threads before G1: 4 H2O / 6-31G\*
-  SCF 2.5 s vs gradient 54 s; 1 H2O / cc-pVTZ 0.9 s vs 115 s. UHF/ROHF carry
-  their own copies of the 2e loop and the 1e block is pasted four times.
+  SCF 2.5 s vs gradient 54 s; 1 H2O / cc-pVTZ 0.9 s vs 115 s. The 1e block
+  is still pasted four times (G5).
   **G1 done:** Auto now routes derivative ERIs to HGP (4 H2O / 6-31G\*
   gradient 56.4 → 29.7 s), the RMP2 second sweep runs only under
   `PLANCK_DEBUG_RMP2_TERMS=1`, and the MP2 sweeps build their AO `ShellPair`s
   once (1 H2O / 6-31G\* RMP2 gradient 6.78 → 3.17 s). Printed gradients
-  unchanged. Next: G2 one threaded triangular loop, G3 a shell-quartet derivative block kernel
+  unchanged. **G2 done:** one shared 2e loop for every SCF reference (the UHF
+  and ROHF copies are gone), a `q ≥ p` triangle with the bra-ket swap folded
+  into Γ, threaded over 64 fixed bins summed in bin order. 4 H2O / 6-31G\*
+  gradient at four threads 30.5 → 3.42 s (16× over pre-G1), identical at
+  1/2/4/8 threads. Next: drop the RKS/UKS Coulomb-only breakdown sweep,
+  then G3 a shell-quartet derivative block kernel
   (the lever; this is shellpair Phase D), G4 MP2 onto the same loop, G5 1e
   derivatives, G6 RI 3c (measure first).
 - **ERI/Fock BLAS-LAPACK migration — scoped 2026-10-17, nothing landed**

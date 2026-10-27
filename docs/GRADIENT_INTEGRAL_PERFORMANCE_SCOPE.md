@@ -45,10 +45,8 @@ A concurrent compile and concurrent runs were on the machine, so read ±20 %.
 ## Where the logic lives
 
 - `src/gradient/gradient.cpp`
-  - `accumulate_shell_pair_eri_gradient` — the shared 2e loop (RHF, RKS, UKS
-    via `compute_two_electron_kernel_gradient`); square pair×pair, Schwarz only.
-  - `compute_uhf_gradient` (~l. 763) and `compute_rohf_gradient` (~l. 957) —
-    **their own copies** of the same loop.
+  - `accumulate_shell_pair_eri_gradient` — the one 2e loop (RHF, RKS, UHF,
+    ROHF, UKS); since G2 a threaded `q ≥ p` triangle, Schwarz only.
   - The 1e block (`_compute_1e_deriv_A`, `_compute_nuclear_deriv_{A,C}_elem`)
     is pasted four times (~l. 401, 704, 898, 1067); the C-derivative is
     re-evaluated per (atom, q), so each pair's primitives run 3× per atom.
@@ -108,6 +106,35 @@ four known rccsdt cases). The pair-table hoist was not timed on its own.
    four threads. Thread-count invariant, not bitwise against serial.
 
 Gate: regressions above; gradients identical at `OMP_NUM_THREADS` 1/2/4/8.
+
+**Landed 2026-10-27**, all three steps, plus two simplifications found on the
+way:
+
+- In every index-swap permutation each centre's derivative goes to that
+  centre's own atom, so the permutations differ only in Γ. The loop sums Γ
+  over the (ij)/(kl) swaps and, for q > p, the bra-ket swap, then applies one
+  dI. That is exact for any Γ, so no bra-ket symmetry assertion is needed.
+  The zero-Γ test now runs before the derivative integral, not after.
+- The `assume_pair_exchange_symmetry = false` fallback (a full `nb²` ordered
+  pair list) had no callers and is deleted.
+- UKS ran the long-range exchange sweep three times, once per breakdown
+  matrix; it now runs once.
+
+4 H2O / 6-31G\* RHF gradient, `engine auto`, M3:
+
+| | 1 thread | 2 | 4 | 8 |
+|---|---|---|---|---|
+| G1 | | | 30.5 s | |
+| G2 | 12.8 s | 6.45 s | 3.42 s | 2.43 s |
+
+8.9× over G1 at four threads (16× over the pre-G1 56.4 s). The single-thread
+run beats G1 at four threads by 2.4×: G1 never used more than one core, and
+the triangle halves the work. All 36 printed components equal G1's; outputs
+identical at 1/2/4/8 threads.
+
+Still open from the profile: RKS and UKS run a second full Coulomb-only sweep
+just to fill `WavefunctionGradientBreakdown`. One sweep with separate Coulomb
+and exchange Γ would remove it.
 
 ### G3 — A shell-quartet derivative block kernel (the lever)
 
