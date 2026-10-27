@@ -402,6 +402,24 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Converged SCF orbitals come from the true Fock, not the DIIS
+  extrapolation (2026-10-27).** RHF, UHF, RKS and UKS stored the eigenpairs of
+  the DIIS-extrapolated Fock at convergence. These usually agree with the true
+  Fock to the DIIS residual, but when every error vector is ~0 (H2/STO-3G: any
+  symmetric density commutes with F) the DIIS weights are arbitrary and the
+  extrapolated matrix carries other iterations' eigenvalues with the same
+  eigenvectors. The gradient's energy-weighted density W is built from those
+  energies: in the H2 geometry optimization, the step-1 1e/Pulay term was off
+  by 1.6e-3 Ha/Bohr and the line search failed. It was hidden whenever the
+  error came out exactly 0, and surfaced when G2's new summation order moved
+  the geometry by 1e-16 (G1 with `engine hgp` failed the same way). Now each
+  path re-diagonalizes the true Fock once at convergence when DIIS
+  extrapolated, and rebuilds the density from those orbitals, as PySCF does
+  (UHF already did this for level shift; UKS only for the DH PT2 handoff).
+  ROHF was unaffected (its stored energies are diag(Cᵀ F_α C) and its W is
+  built from Fock matrices). Gated by `h2_optfreq_smoke`; extended suite
+  135/139 (the known rccsdt cases).
+
 - **2D Rys block kernel in Auto's Fock build (K2.1b/K2.1c, 2026-10-26).**
   `RysBlockKernel` (`src/integrals/rys_block_eri.h`) is libcint's
   formulation: per root, a 1D VRR and a per-axis 1D HRR to

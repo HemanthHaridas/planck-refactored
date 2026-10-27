@@ -2321,6 +2321,21 @@ namespace DFT::Driver
 
                     if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter))
                     {
+                        // Store orbitals of the true KS matrix, not the DIIS
+                        // extrapolation (same reason as run_rhf: with ~0 error
+                        // vectors the extrapolated eigenvalues are arbitrary,
+                        // and the gradient's W is built from them).
+                        if (do_diis)
+                        {
+                            auto final_diag = diagonalize_in_ao_basis(calculator, X, fock, "KS");
+                            if (!final_diag)
+                                return std::unexpected(final_diag.error());
+                            auto &alpha = calculator._info._scf.alpha;
+                            alpha.mo_coefficients = final_diag->coefficients;
+                            alpha.mo_energies = final_diag->energies;
+                            alpha.mo_symmetry = final_diag->mo_symmetry;
+                            alpha.density = density_from_orbitals(alpha.mo_coefficients, n_occ, 2.0);
+                        }
                         calculator._info._is_converged = true;
                         result.converged = true;
                         HartreeFock::Logger::scf_footer();
@@ -2616,7 +2631,8 @@ namespace DFT::Driver
                 }
 
                 const bool do_diis_uks = use_diis && !soscf_active;
-                const auto fock_pair_diag = (do_diis_uks && diis.ready())
+                const bool uks_extrapolated = do_diis_uks && diis.ready();
+                const auto fock_pair_diag = uks_extrapolated
                     ? diis.extrapolate() : std::make_pair(fock_alpha_iteration, fock_beta_iteration);
                 const Eigen::MatrixXd &fock_alpha_diag = fock_pair_diag.first;
                 const Eigen::MatrixXd &fock_beta_diag = fock_pair_diag.second;
@@ -3024,6 +3040,28 @@ namespace DFT::Driver
                         HartreeFock::Logger::logging(
                             HartreeFock::LogLevel::Info, "DFT UKS level shift :",
                             "Unshifted canonical orbitals verified for post-KS handoff");
+                    }
+                    // Store orbitals of the true KS matrices, not the DIIS
+                    // extrapolation (same reason as run_uhf; the PT2 check above
+                    // guards the same defect for double hybrids only).
+                    if (uks_extrapolated)
+                    {
+                        auto final_a = diagonalize_in_ao_basis(calculator, X, fock_alpha, "Alpha KS");
+                        if (!final_a)
+                            return std::unexpected(final_a.error());
+                        auto final_b = diagonalize_in_ao_basis(calculator, X, fock_beta, "Beta KS");
+                        if (!final_b)
+                            return std::unexpected(final_b.error());
+                        auto &alpha = calculator._info._scf.alpha;
+                        auto &beta = calculator._info._scf.beta;
+                        alpha.mo_coefficients = std::move(final_a->coefficients);
+                        alpha.mo_energies = std::move(final_a->energies);
+                        alpha.mo_symmetry = std::move(final_a->mo_symmetry);
+                        beta.mo_coefficients = std::move(final_b->coefficients);
+                        beta.mo_energies = std::move(final_b->energies);
+                        beta.mo_symmetry = std::move(final_b->mo_symmetry);
+                        alpha.density = density_from_orbitals(alpha.mo_coefficients, n_alpha, 1.0);
+                        beta.density = density_from_orbitals(beta.mo_coefficients, n_beta, 1.0);
                     }
                     calculator._info._is_converged = true;
                     result.converged = true;
