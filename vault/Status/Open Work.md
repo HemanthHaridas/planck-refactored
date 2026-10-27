@@ -2008,7 +2008,9 @@ identify the path taken. Not required for correctness or performance.
   drive the 2e gradient under `engine auto`. Whole run at four threads: 4 H2O
   / 6-31G\* 4.75 → 1.21 s, 1 H2O / cc-pVTZ 3.58 → 0.67 s; gradients identical
   to OS. Gated by `planck-eri-derivative-kernels` and six
-  `*_engine_os_vs_auto` comparators. Next: G4 MP2 onto the same loop, G5 1e
+  `*_engine_os_vs_auto` comparators. An SCF gradient run is now 1.1–1.6× the
+  SCF itself (was 22–124×); RMP2 gradients are now the problem, 39× (1 H2O)
+  to ~2100× (2 H2O, 358 s) the SCF. Next: G4 MP2 onto the same loop, G5 1e
   derivatives (now a larger share), G6 RI 3c (measure first).
   The regression runner now passes `--build-dir` to its `.py` comparators,
   which had been running whatever binary sat in `./build`.
