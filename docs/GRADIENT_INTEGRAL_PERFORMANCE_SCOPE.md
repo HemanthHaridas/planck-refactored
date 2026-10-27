@@ -31,9 +31,10 @@ ratios across dates. The UMP2 "after G3" figure was measured on the pre-G4
 binary on 2026-10-27.
 
 **What is left.** The UMP2 gradient's remaining cost is orbital-side, not
-derivative integrals: building D_α and D_β (`nao⁴ · nocc²`) and the Imat
-contraction (`nao⁵`), dense and single-pass. RMP2 has the same shape with one
-spin. G4 is done. Next G5 (1e derivatives, a larger
+derivative integrals. A profile puts 59 % of it in the Z-vector solve, which
+builds the UHF orbital Hessian with one full Fock build per column (541 of
+them on 2 H2O⁺ / 6-31G\*), and most of the rest in N⁶ back-transforms. That
+is **G7, scoped below and next**. Then G5 (1e derivatives, a larger
 share now that the 2e term is cheap) and G6 (RI three-centre, measure first).
 Two G3 items are not built: block-level density screening and
 screened-kernel (range-separated) block derivatives.
@@ -131,6 +132,68 @@ Gate: `water_rmp2_gradient_engine_os_vs_hgp`,
 `water_radical_cation_ump2_gradient_smoke`, the RMP2 FD/PySCF cases, the RI-MP2
 gradient gates (the dense HF-reference term is shared), plus an `os,auto`
 comparator on an RMP2 gradient.
+
+### G7 — MP2 orbital-side cost (scoped 2026-10-27, next)
+
+After G4 the UMP2 gradient is the one left far above its SCF (2 H2O⁺ /
+6-31G\*: 3.5 s against 0.16 s), and almost none of that is derivative
+integrals any more. `sample` of that run (main thread, ~3,040 samples inside
+`compute_ump2_gradient`):
+
+| share | where |
+|---|---|
+| **59 %** (1,792) | `solve_uhf_cphf` → `build_uhf_cphf_matrix`: 1,443 in direct UHF Fock builds, **333 recomputing the Schwarz table** inside each one |
+| 23 % (697) | the threaded D_σ build and Imat contraction |
+| 14 % (438) | serial self time in the builder: the `part_dm2` transforms |
+| < 1 % | the 2e derivative term (G4) |
+
+**Why the Z-vector solve costs so much.** `build_uhf_cphf_matrix` forms the
+full (n_ov^α + n_ov^β)² orbital Hessian one column at a time: a unit trial
+rotation, its AO density response, then one complete direct UHF Fock build
+for the induced J/K, per column. Here that is 28·10 + 29·9 = **541 Fock
+builds**, followed by a dense QR, to solve one linear system. The cost grows
+as n_ov · (Fock build), so it gets worse faster than anything else in the
+gradient.
+
+Steps, in order of measured share. Each lands alone with its gate.
+
+1. **O1 — matrix-free Z-vector for UHF.** `solve_uhf_cphf` applies the same
+   operator (diagonal ε_a − ε_i plus the J/K response of the trial density
+   through `_compute_2e_fock_uhf`, or `RI::build_ri_fock_uhf` under RI) inside
+   an iterative solve, so each iteration costs one Fock build instead of each
+   column. The operator is symmetric (its coupling is 2(ai|bj) across spins
+   minus (ab|ij) + (aj|ib) within a spin, all invariant under ai ↔ bj) and
+   positive definite at a stable UHF minimum, so preconditioned conjugate
+   gradients with the diagonal ε_a − ε_i preconditioner applies. Check both
+   properties numerically against the dense matrix before relying on them,
+   and fall back to the GMRES already used for the double-hybrid Z-vector
+   (`solve_dh_zvector`, `src/dft/dh_zvector.h`) if either fails. Expected ~15–30 Fock builds instead
+   of 541. If so, about 55 % of the run goes, ~2.2× end to end on this case.
+   `build_uhf_cphf_matrix` stays: SOSCF (docs/SOSCF_UHF.md) needs the dense
+   matrix.
+   Gate: the Z-vector against the dense QR solution to ≤ 1e-10 on the UMP2
+   regression inputs (dense and RI), UMP2 gradients unchanged to the printed
+   digit, `water_radical_cation_ump2_gradient_smoke` and the RI-UMP2 FD cases.
+   Report iteration counts, not only time.
+2. **O2 — the 4-index back-transforms as matrix products, one helper for both
+   MP2 flavours.** `part_dm2` (Σ_ab C_pa C_qb T_ij^ab per (i,j): one
+   `C_v T_ij C_vᵀ` product each, threaded over (i,j)) and the D_σ / `dm2buf`
+   build (Σ_ij C_pi P_i…j C_sj, done today as an n_occ² sum per element:
+   n_ao⁴·n_occ², which as two half-transforms is n_ao⁴·n_occ). RMP2's
+   `dm2buf_full` has the same shape with one spin, so this is one mechanism
+   with a spin parameter, not two copies. Not bitwise; gate D_σ and
+   `dm2buf_full` elementwise against the current loops (relative to the
+   tensor's largest element, never per element) and the gradients to the
+   printed digit.
+3. **O3 — measure Imat after O2.** The `nao⁵` contraction
+   Imat_σ(q,v) = ½ Σ_prs (pq|rs) D_σ[p,v,r,s] is already threaded. It is a
+   GEMM in disguise ((pq|rs) reshaped as nao × nao³ against D reshaped
+   nao³ × nao); build only if the profile after O1–O2 still shows it.
+
+Expected end state for this case: well under 1 s, i.e. a few times the SCF,
+in line with RMP2. Not in scope: the dense `nao⁴` tensors themselves
+(D_α, D_β, the ERI), which cap the conventional UMP2 gradient's system size;
+RI-MP2 is the route past that.
 
 ### G5 — 1e derivative integrals
 
