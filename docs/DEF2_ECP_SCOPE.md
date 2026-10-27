@@ -44,17 +44,48 @@ are all-electron only, with no scalar-relativistic treatment.
 4. **SAD guess** needs atomic densities consistent with the ECP (fewer
    electrons per atom), or a fallback to the core-Hamiltonian guess for ECP
    atoms.
+5. **Checkpoint restart.** Cross-basis Löwdin projection must check that
+   source and target agree on each atom's core-electron count, or it projects
+   onto the wrong occupied space.
+
+Data model: an ECP channel is a list of `(n, ζ, c)` primitives, so it carries
+a radial power that `Shell` does not. Store ECPs per atom beside the shells
+rather than as a `Shell` variant.
+
+What needs no change: SCF, MP2, CC, CASSCF/RASSCF, DFT, TDDFT and PCM consume
+H_core and an electron count and do not care why H_core has a third term,
+provided steps 2–4 are right. Population analyses will show fewer core
+electrons on ECP atoms; that is expected, not a defect.
+
+### Boundaries until each piece lands
+
+Fail cleanly, never return an incomplete answer:
+
+- A basis file with an ECP block parses, but the driver rejects the run until
+  ECP integrals are in H_core.
+- Gradient-consuming workflows (gradient, geomopt, frequency, imaginary
+  follow) reject ECP input until step 5, with a boundary-marker regression
+  case like `water_rmp2_spherical_gradient_rejected`.
+- Full point-group direct SCF (`src/symmetry/{os,rys,hgp}_symm.cpp`) builds
+  its own Fock skeleton and would ignore the ECP operator: reject ECP with
+  `use_symm` there until it is wired in.
+
+PySCF's `gto/ecp.py` (`type1_by_shell`, `type2_by_shell`) in the test venv is
+a readable reference for the local/semilocal split if libecpint's output
+ever needs debugging.
 
 ## The decision: library or native ECP integrals
 
 | option | for | against |
 |---|---|---|
-| **libecpint** (C++) via `ExternalProject` | complete type-1/type-2 integrals and first derivatives; used by Psi4 and PySCF-adjacent tools | a new dependency; its licence must be checked against Planck's PolyForm Noncommercial licence before adoption |
+| **libecpint** (C++) via `ExternalProject` | complete type-1/type-2 integrals and first derivatives; used by Psi4 and PySCF-adjacent tools | a new dependency (licence checked below: compatible) |
 | **native** | no dependency | type-2 integrals are the hard part of ECP work (angular projection, numerical radial quadrature with screening); long validation tail |
 
 Recommendation: libecpint, because the integrals and their derivatives are
 the risky part and it has them (its README lists analytic first and second
-derivatives).
+derivatives). This supersedes the earlier `ECP_SUPPORT_SCOPE.md` plan for a
+native `src/integrals/ecp.{h,cpp}` engine; that doc is merged here and
+deleted.
 
 ### Licence findings (checked 2026-10-26; not legal advice)
 
@@ -79,7 +110,7 @@ derivatives).
    (every regression bitwise).
 3. **ECP parsing and storage** on the basis object; `nuclear_charge` returns
    $Z - n_\text{core}$; electron count follows.
-4. **ECP integrals in H_core** (library or native). Gate: the ECP matrix
+4. **ECP integrals in H_core** via libecpint. Gate: the ECP matrix
    against PySCF's `mol.intor('ECPscalar')` element by element on e.g. HI,
    AgCl, a Pd complex; then SCF energies against PySCF to 1e-9 Eh.
 5. **ECP gradients.** Gate: FD and PySCF gradients; geometry optimization of
