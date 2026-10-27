@@ -226,9 +226,20 @@ def resolve_executable(case: dict[str, Any], repo_root: Path, build_dir: str, de
     return repo_root / executable_path
 
 
-def build_command(executable: Path, input_path: Path) -> list[str]:
+def build_command(
+    executable: Path,
+    input_path: Path,
+    build_dir: Path | None = None,
+    args: list[str] | None = None,
+) -> list[str]:
+    """A binary gets the input only. A .py driver (the engine comparators) also
+    gets --build-dir, so it runs the binaries under test rather than its own
+    default (./build), plus the case's optional `args` list."""
     if executable.suffix == ".py":
-        return [sys.executable, str(executable), str(input_path)]
+        command = [sys.executable, str(executable), str(input_path)]
+        if build_dir is not None:
+            command += ["--build-dir", str(build_dir)]
+        return command + list(args or [])
     return [str(executable), str(input_path)]
 
 
@@ -364,7 +375,7 @@ def run_case(
         case_env = case.get("env")
         run_env = {**os.environ, **case_env} if case_env else None
         proc = subprocess.run(
-            build_command(executable, input_path),
+            build_command(executable, input_path, repo_root / build_dir, case.get("args")),
             cwd=repo_root,
             text=True,
             capture_output=True,

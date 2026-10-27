@@ -10,7 +10,10 @@
 
 #include "base/basis.h"
 #include "base/types.h"
+#include "integrals/fused_fock.h"
 #include "integrals/hgp.h"
+#include "integrals/hgp_deriv_block_eri.h"
+#include "integrals/rys_deriv_block_eri.h"
 #include "basis/basis.h"
 #include "integrals/os.h"
 #include "integrals/rys.h"
@@ -1137,6 +1140,104 @@ namespace
                   << " quartets, max |OS-HGP| = " << sweep_max_diff << '\n';
     }
 
+    // G3: the shell-quartet derivative block kernel against per-component OS,
+    // every component and all 12 derivatives (D included, which the kernel
+    // takes from translational invariance and OS computes directly). Bigger
+    // bases sample every `stride`-th block. Errors are measured against the
+    // sweep's largest derivative, never per block (symmetry-zero blocks give
+    // O(1) relative roundoff).
+    template <typename Kernel>
+    void test_deriv_block_kernel_against_os(const char *name)
+    {
+        using HartreeFock::Integrals::BlockEriRequest;
+        struct Case { const char *basis; std::size_t stride; };
+        for (const Case c : {Case{"6-31g", 1}, Case{"6-31g*", 1}, Case{"cc-pvdz", 7}, Case{"cc-pvtz", 97}})
+        {
+            auto calc_res = make_water_calculator(c.basis);
+            if (!calc_res)
+            {
+                fail("setup failed: " + calc_res.error());
+                return;
+            }
+            const auto shell_pairs = build_shellpairs(calc_res->_shells);
+            const std::size_t nb = calc_res->_shells.nbasis();
+            std::vector<const HartreeFock::ContractedView *> views;
+            const auto groups = HartreeFock::Integrals::fused_shell_groups(shell_pairs, nb, views);
+            std::vector<double> norm_ratio(nb, 1.0);
+            std::vector<int> group_L(groups.size());
+            for (std::size_t g = 0; g < groups.size(); ++g)
+            {
+                const auto &first = *views[groups[g].first_ao];
+                group_L[g] = first._cartesian[0] + first._cartesian[1] + first._cartesian[2];
+                for (std::size_t k = 0; k < groups[g].n_components; ++k)
+                    norm_ratio[groups[g].first_ao + k] =
+                        views[groups[g].first_ao + k]->_component_norm / first._component_norm;
+            }
+
+            Kernel kernel;
+            double max_ref = 0.0, max_diff = 0.0, max_diff_hgp = 0.0, max_os_hgp = 0.0;
+            std::size_t blocks = 0, comps = 0, declined = 0, counter = 0;
+            const std::size_t ng = groups.size();
+            for (std::size_t a = 0; a < ng; ++a)
+                for (std::size_t b = 0; b < ng; ++b)
+                    for (std::size_t cc = 0; cc < ng; ++cc)
+                        for (std::size_t d = 0; d < ng; ++d)
+                        {
+                            if (counter++ % c.stride != 0)
+                                continue;
+                            const std::size_t s4[4] = {a, b, cc, d};
+                            const HartreeFock::ShellPair ab(*views[groups[a].first_ao], *views[groups[b].first_ao]);
+                            const HartreeFock::ShellPair cd(*views[groups[cc].first_ao], *views[groups[d].first_ao]);
+                            BlockEriRequest r;
+                            r.ab = &ab;
+                            r.cd = &cd;
+                            r.norm_ratio = norm_ratio.data();
+                            for (int s = 0; s < 4; ++s)
+                            {
+                                r.views[s] = &views[groups[s4[s]].first_ao];
+                                r.n[s] = groups[s4[s]].n_components;
+                                r.L[s] = group_L[s4[s]];
+                            }
+                            if (!kernel.prepare(r))
+                            {
+                                ++declined;
+                                continue;
+                            }
+                            ++blocks;
+                            std::array<double, 12> got{};
+                            for (std::size_t i = 0; i < r.n[0]; ++i)
+                                for (std::size_t j = 0; j < r.n[1]; ++j)
+                                    for (std::size_t k = 0; k < r.n[2]; ++k)
+                                        for (std::size_t l = 0; l < r.n[3]; ++l)
+                                        {
+                                            const HartreeFock::ShellPair pij(*r.views[0][i], *r.views[1][j]);
+                                            const HartreeFock::ShellPair pkl(*r.views[2][k], *r.views[3][l]);
+                                            const auto ref = HartreeFock::ObaraSaika::_compute_eri_deriv_elem(pij, pkl);
+                                            const auto ref_hgp = HartreeFock::HeadGordonPople::_compute_eri_deriv_elem(pij, pkl);
+                                            kernel.deriv(i, j, k, l, got);
+                                            max_ref = std::max(max_ref, max_abs(ref));
+                                            max_diff = std::max(max_diff, max_abs_diff(ref, got));
+                                            max_diff_hgp = std::max(max_diff_hgp, max_abs_diff(ref_hgp, got));
+                                            max_os_hgp = std::max(max_os_hgp, max_abs_diff(ref, ref_hgp));
+                                            if (!std::isfinite(max_abs(got)))
+                                                max_diff = INFINITY;
+                                            ++comps;
+                                        }
+                        }
+            const double rel = max_diff / std::max(max_ref, 1e-300);
+            std::cout << name << " deriv block kernel " << c.basis << ": " << blocks << " blocks, "
+                      << comps << " component quartets, declined " << declined
+                      << ", max |ref| " << max_ref << ", max |diff| " << max_diff
+                      << " (rel " << rel << "); vs per-component HGP " << max_diff_hgp
+                      << "; OS vs HGP per-component " << max_os_hgp << "\n";
+            // 5e-13: on cc-pVTZ (f raised to g) the two per-component engines
+            // themselves differ by 5.4e-13 (2.7e-13 relative); the block
+            // kernel sits closer to OS (1.8e-13) than per-component HGP does.
+            if (!(rel <= 5e-13) || blocks == 0)
+                fail(std::string(name) + " derivative block kernel diverged from OS on " + c.basis);
+        }
+    }
+
 } // namespace
 
 int main()
@@ -1147,5 +1248,7 @@ int main()
     test_long_range_quartet_derivative_against_finite_difference();
     test_hgp_screened_quartet_derivatives_s_p();
     test_hgp_unweighted_screened_eri_against_os();
+    test_deriv_block_kernel_against_os<HartreeFock::Integrals::HgpDerivBlockKernel>("HGP");
+    test_deriv_block_kernel_against_os<HartreeFock::Integrals::RysDerivBlockKernel>("Rys2D");
     return g_ok ? 0 : 1;
 }

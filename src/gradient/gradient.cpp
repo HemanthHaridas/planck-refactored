@@ -1,4 +1,5 @@
 #include "gradient.h"
+#include "two_electron_gradient.h"
 
 #include <array>
 #include <cmath>
@@ -45,7 +46,7 @@ static std::expected<Eigen::MatrixXd, std::string> lift_ao_matrix_if_spherical(
 
 // Build a map: shell index in _shells._shells → atom index in _molecule.
 // Matches shell._center ≈ _molecule._standard.row(a) within 1e-6 Bohr.
-static std::expected<std::vector<int>, std::string> build_shell_atom_map(
+std::expected<std::vector<int>, std::string> HartreeFock::Gradient::detail::build_shell_atom_map(
     const HartreeFock::Calculator &calc)
 {
     const auto &shells = calc._shells._shells;
@@ -111,7 +112,7 @@ HartreeFock::Gradient::last_wavefunction_gradient_breakdown()
     return g_last_wavefunction_gradient_breakdown;
 }
 
-static Eigen::MatrixXd build_pair_schwarz_table(
+Eigen::MatrixXd HartreeFock::Gradient::detail::build_pair_schwarz_table(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     std::size_t nbasis)
 {
@@ -131,59 +132,6 @@ static Eigen::MatrixXd build_pair_schwarz_table(
     return Q;
 }
 
-template <typename GammaFn>
-static void accumulate_eri_gradient_permutations(
-    Eigen::MatrixXd &grad,
-    const std::array<double, 12> &dI,
-    GammaFn &&gamma_fn,
-    std::size_t ii,
-    std::size_t jj,
-    std::size_t kk,
-    std::size_t ll,
-    int atom_A,
-    int atom_B,
-    int atom_C,
-    int atom_D)
-{
-    // A shell-pair ERI derivative arrives in one canonical ordering. Fold the
-    // AB/CD exchange-related permutations back in here so the higher-level
-    // gradient builders only need to provide the effective Gamma contraction.
-    const auto accumulate_perm = [&](double gamma,
-                                     bool swap_ab,
-                                     bool swap_cd)
-    {
-        if (std::abs(gamma) < 1e-14)
-            return;
-
-        const int deriv_a = swap_ab ? 1 : 0;
-        const int deriv_b = swap_ab ? 0 : 1;
-        const int deriv_c = swap_cd ? 3 : 2;
-        const int deriv_d = swap_cd ? 2 : 3;
-
-        const int atom_a = swap_ab ? atom_B : atom_A;
-        const int atom_b = swap_ab ? atom_A : atom_B;
-        const int atom_c = swap_cd ? atom_D : atom_C;
-        const int atom_d = swap_cd ? atom_C : atom_D;
-
-        const double fac = 0.25 * gamma;
-        for (int q = 0; q < 3; ++q)
-        {
-            grad(atom_a, q) += fac * dI[deriv_a * 3 + q];
-            grad(atom_b, q) += fac * dI[deriv_b * 3 + q];
-            grad(atom_c, q) += fac * dI[deriv_c * 3 + q];
-            grad(atom_d, q) += fac * dI[deriv_d * 3 + q];
-        }
-    };
-
-    accumulate_perm(gamma_fn(ii, jj, kk, ll), false, false);
-    if (kk != ll)
-        accumulate_perm(gamma_fn(ii, jj, ll, kk), false, true);
-    if (ii != jj)
-        accumulate_perm(gamma_fn(jj, ii, kk, ll), true, false);
-    if (ii != jj && kk != ll)
-        accumulate_perm(gamma_fn(jj, ii, ll, kk), true, true);
-}
-
 std::array<double, 12> HartreeFock::Gradient::compute_eri_deriv_dispatch(
     const HartreeFock::Calculator &calc,
     const HartreeFock::ShellPair &spAB,
@@ -191,7 +139,13 @@ std::array<double, 12> HartreeFock::Gradient::compute_eri_deriv_dispatch(
     HartreeFock::ERIKernel kernel,
     double omega)
 {
-    if (calc._integral._engine == HartreeFock::IntegralMethod::HeadGordonPople)
+    // Auto resolves to HGP, the faster per-component derivative engine
+    // (4 H2O / 6-31G*, one thread: HGP 47.0 s, OS 71.4 s); same precedent as
+    // full_symmetry_engine in scf.cpp. Rys has no derivative kernel and stays
+    // on OS.
+    const auto engine = calc._integral._engine;
+    if (engine == HartreeFock::IntegralMethod::HeadGordonPople ||
+        engine == HartreeFock::IntegralMethod::Auto)
     {
         return HartreeFock::HeadGordonPople::_compute_eri_deriv_elem(
             spAB, spCD, kernel, omega);
@@ -204,152 +158,10 @@ std::array<double, 12> HartreeFock::Gradient::compute_eri_deriv_dispatch(
 // File-scope alias so the SCF/KS gradient assembly below can keep calling the
 // dispatcher unqualified.
 using HartreeFock::Gradient::compute_eri_deriv_dispatch;
-
-template <typename GammaFn>
-static void accumulate_shell_pair_eri_gradient(
-    const HartreeFock::Calculator &calc,
-    const std::vector<HartreeFock::ShellPair> &shell_pairs,
-    const std::vector<int> &shell_atom,
-    const std::vector<int> &bf_shell,
-    const Eigen::MatrixXd &schwarz_q,
-    Eigen::MatrixXd &grad,
-    GammaFn &&gamma_fn,
-    HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
-    double omega = 0.0,
-    bool assume_pair_exchange_symmetry = true)
-{
-    const auto &bfs = calc._shells._basis_functions;
-    const std::size_t nb = calc._shells.nbasis();
-
-    if (assume_pair_exchange_symmetry)
-    {
-        // Most closed-shell and hybrid contractions keep the usual (ij|kl) =
-        // (ji|kl) = (ij|lk) symmetry, so we can iterate only over the stored
-        // shell-pair list and recover the missing permutations analytically.
-        for (const auto &spAB : shell_pairs)
-        {
-            const std::size_t ii = spAB.A._index;
-            const std::size_t jj = spAB.B._index;
-            const int atom_A = shell_atom[bf_shell[ii]];
-            const int atom_B = shell_atom[bf_shell[jj]];
-
-            for (const auto &spCD : shell_pairs)
-            {
-                const std::size_t kk = spCD.A._index;
-                const std::size_t ll = spCD.B._index;
-                const int atom_C = shell_atom[bf_shell[kk]];
-                const int atom_D = shell_atom[bf_shell[ll]];
-
-                if (schwarz_q(ii, jj) * schwarz_q(kk, ll) < calc._integral._tol_eri)
-                    continue;
-
-                const auto dI = compute_eri_deriv_dispatch(
-                    calc, spAB, spCD, kernel, omega);
-                accumulate_eri_gradient_permutations(
-                    grad,
-                    dI,
-                    gamma_fn,
-                    ii,
-                    jj,
-                    kk,
-                    ll,
-                    atom_A,
-                    atom_B,
-                    atom_C,
-                    atom_D);
-            }
-        }
-        return;
-    }
-
-    // Some unrestricted/range-separated exchange corrections are easier to
-    // express without assuming pair-exchange symmetry. Fall back to the full
-    // ordered pair list in that case.
-    std::vector<HartreeFock::ShellPair> all_pairs;
-    all_pairs.reserve(nb * nb);
-    for (std::size_t ii = 0; ii < nb; ++ii)
-        for (std::size_t jj = 0; jj < nb; ++jj)
-            all_pairs.emplace_back(bfs[ii], bfs[jj]);
-
-    for (const auto &spAB : all_pairs)
-    {
-        const std::size_t ii = spAB.A._index;
-        const std::size_t jj = spAB.B._index;
-        const int atom_A = shell_atom[bf_shell[ii]];
-        const int atom_B = shell_atom[bf_shell[jj]];
-
-        for (const auto &spCD : all_pairs)
-        {
-            const std::size_t kk = spCD.A._index;
-            const std::size_t ll = spCD.B._index;
-            const int atom_C = shell_atom[bf_shell[kk]];
-            const int atom_D = shell_atom[bf_shell[ll]];
-
-            if (schwarz_q(ii, jj) * schwarz_q(kk, ll) < calc._integral._tol_eri)
-                continue;
-
-            const double gamma = gamma_fn(ii, jj, kk, ll);
-            if (std::abs(gamma) < 1e-14)
-                continue;
-
-            const auto dI = compute_eri_deriv_dispatch(
-                calc, spAB, spCD, kernel, omega);
-            const double fac = 0.25 * gamma;
-            for (int q = 0; q < 3; ++q)
-            {
-                grad(atom_A, q) += fac * dI[q];
-                grad(atom_B, q) += fac * dI[3 + q];
-                grad(atom_C, q) += fac * dI[6 + q];
-                grad(atom_D, q) += fac * dI[9 + q];
-            }
-        }
-    }
-}
-
-template <typename GammaFn>
-static std::expected<Eigen::MatrixXd, std::string> compute_two_electron_kernel_gradient(
-    const HartreeFock::Calculator &calc,
-    const std::vector<HartreeFock::ShellPair> &shell_pairs,
-    GammaFn &&gamma_fn,
-    HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
-    double omega = 0.0,
-    bool assume_pair_exchange_symmetry = true)
-{
-    // Shared "differentiate and contract ERIs" helper used by RHF/UHF and the
-    // HF-like parts of RKS/UKS. The caller supplies only the effective Gamma
-    // tensor element through gamma_fn.
-    const auto &basis = calc._shells;
-    const std::size_t nb = basis.nbasis();
-    Eigen::MatrixXd grad = Eigen::MatrixXd::Zero(calc._molecule.natoms, 3);
-
-    auto shell_atom_res = build_shell_atom_map(calc);
-    if (!shell_atom_res)
-        return std::unexpected(shell_atom_res.error());
-    const std::vector<int> shell_atom = std::move(*shell_atom_res);
-    const auto &shells = basis._shells;
-    const auto &bfs = basis._basis_functions;
-    const std::size_t nshells = shells.size();
-    const Eigen::MatrixXd schwarz_q = build_pair_schwarz_table(shell_pairs, nb);
-
-    std::vector<int> bf_shell(nb, -1);
-    for (std::size_t s = 0; s < nshells; ++s)
-        for (std::size_t mu = 0; mu < nb; ++mu)
-            if (bfs[mu]._shell == &shells[s])
-                bf_shell[mu] = static_cast<int>(s);
-
-    accumulate_shell_pair_eri_gradient(
-        calc,
-        shell_pairs,
-        shell_atom,
-        bf_shell,
-        schwarz_q,
-        grad,
-        gamma_fn,
-        kernel,
-        omega,
-        assume_pair_exchange_symmetry);
-    return grad;
-}
+using HartreeFock::Gradient::two_electron_gradient;
+using HartreeFock::Gradient::detail::accumulate_shell_pair_eri_gradient;
+using HartreeFock::Gradient::detail::build_pair_schwarz_table;
+using HartreeFock::Gradient::detail::build_shell_atom_map;
 
 template <typename GammaFn>
 static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_gradient_from_density(
@@ -358,7 +170,6 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_gradient
     const Eigen::MatrixXd &P,
     const Eigen::MatrixXd &W,
     GammaFn &&gamma_fn,
-    bool assume_pair_exchange_symmetry = true,
     HartreeFock::Gradient::WavefunctionGradientBreakdown *breakdown = nullptr)
 {
     // Shared restricted-reference gradient builder:
@@ -455,10 +266,7 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_gradient
         bf_shell,
         schwarz_q,
         two_electron,
-        gamma_fn,
-        HartreeFock::ERIKernel::Coulomb,
-        0.0,
-        assume_pair_exchange_symmetry);
+        gamma_fn);
     const Eigen::MatrixXd nuclear_repulsion = compute_nuclear_repulsion_gradient(calc);
     const Eigen::MatrixXd total = core_pulay + two_electron + nuclear_repulsion;
     if (breakdown)
@@ -487,7 +295,7 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_exchange
     {
         return -exchange_coefficient * P(ii, kk) * P(jj, ll);
     };
-    return compute_two_electron_kernel_gradient(
+    return two_electron_gradient(
         calc,
         shell_pairs,
         gamma_fn,
@@ -556,7 +364,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rhf_g
 std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rks_gradient(
     const HartreeFock::Calculator &calc,
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
-    const ExchangeGradientKernel &exchange_kernel)
+    const ExchangeGradientKernel &exchange_kernel,
+    bool with_breakdown)
 {
     g_last_wavefunction_gradient_breakdown.reset();
     const Eigen::MatrixXd &P = calc._info._scf.alpha.density;
@@ -582,26 +391,11 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rks_g
     };
     WavefunctionGradientBreakdown breakdown;
     auto grad = compute_closed_shell_gradient_from_density(
-        calc, shell_pairs, P, W, gamma_fn, true, &breakdown);
+        calc, shell_pairs, P, W, gamma_fn, &breakdown);
     if (!grad)
         return grad;
 
-    auto coulomb_gamma = [&P](std::size_t ii, std::size_t jj, std::size_t kk, std::size_t ll) -> double
-    {
-        return 2.0 * P(ii, jj) * P(kk, ll);
-    };
-    auto coulomb_two_electron = compute_two_electron_kernel_gradient(
-        calc,
-        shell_pairs,
-        coulomb_gamma);
-    if (!coulomb_two_electron)
-        return std::unexpected(coulomb_two_electron.error());
-    breakdown.coulomb_two_electron = *coulomb_two_electron;
-    breakdown.exchange_two_electron = breakdown.two_electron - breakdown.coulomb_two_electron;
-    breakdown.exchange_full_range = breakdown.exchange_two_electron;
-    breakdown.exchange_long_range_correction =
-        Eigen::MatrixXd::Zero(calc._molecule.natoms, 3);
-
+    Eigen::MatrixXd long_range = Eigen::MatrixXd::Zero(calc._molecule.natoms, 3);
     const double cx_short = exchange_kernel.short_range_exchange_coefficient;
     if (std::abs(cx_short) > 1.0e-14)
     {
@@ -614,14 +408,32 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rks_g
             exchange_kernel.range_separation_omega);
         if (!long_range_exchange)
             return std::unexpected(long_range_exchange.error());
-        *grad += *long_range_exchange;
-        breakdown.exchange_long_range_correction = *long_range_exchange;
-        breakdown.exchange_two_electron += *long_range_exchange;
-        breakdown.two_electron = breakdown.coulomb_two_electron + breakdown.exchange_two_electron;
-        breakdown.total = breakdown.core_pulay + breakdown.two_electron + breakdown.nuclear_repulsion;
+        long_range = *long_range_exchange;
+        *grad += long_range;
     }
 
-    g_last_wavefunction_gradient_breakdown = breakdown;
+    // The Coulomb/exchange split costs a second full derivative sweep and only
+    // feeds the DFT gradient debug report.
+    if (with_breakdown)
+    {
+        auto coulomb_gamma = [&P](std::size_t ii, std::size_t jj, std::size_t kk, std::size_t ll) -> double
+        {
+            return 2.0 * P(ii, jj) * P(kk, ll);
+        };
+        auto coulomb_two_electron = two_electron_gradient(
+            calc,
+            shell_pairs,
+            coulomb_gamma);
+        if (!coulomb_two_electron)
+            return std::unexpected(coulomb_two_electron.error());
+        breakdown.coulomb_two_electron = *coulomb_two_electron;
+        breakdown.exchange_full_range = breakdown.two_electron - breakdown.coulomb_two_electron;
+        breakdown.exchange_long_range_correction = long_range;
+        breakdown.exchange_two_electron = breakdown.exchange_full_range + long_range;
+        breakdown.two_electron = breakdown.coulomb_two_electron + breakdown.exchange_two_electron;
+        breakdown.total = breakdown.core_pulay + breakdown.two_electron + breakdown.nuclear_repulsion;
+        g_last_wavefunction_gradient_breakdown = breakdown;
+    }
     return grad;
 }
 
@@ -760,39 +572,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_g
                2.0 * P_b(ii, kk) * P_b(jj, ll);
     };
 
-    for (const auto &spAB : shell_pairs)
-    {
-        const std::size_t ii = spAB.A._index;
-        const std::size_t jj = spAB.B._index;
-        const int atom_A = shell_atom[bf_shell[ii]];
-        const int atom_B = shell_atom[bf_shell[jj]];
-
-        for (const auto &spCD : shell_pairs)
-        {
-            const std::size_t kk = spCD.A._index;
-            const std::size_t ll = spCD.B._index;
-            const int atom_C = shell_atom[bf_shell[kk]];
-            const int atom_D = shell_atom[bf_shell[ll]];
-
-            if (schwarz_q(ii, jj) * schwarz_q(kk, ll) < calc._integral._tol_eri)
-                continue;
-
-            const auto dI = compute_eri_deriv_dispatch(
-                calc, spAB, spCD, HartreeFock::ERIKernel::Coulomb, 0.0);
-            accumulate_eri_gradient_permutations(
-                grad,
-                dI,
-                gamma_fn,
-                ii,
-                jj,
-                kk,
-                ll,
-                atom_A,
-                atom_B,
-                atom_C,
-                atom_D);
-        }
-    }
+    accumulate_shell_pair_eri_gradient(
+        calc, shell_pairs, shell_atom, bf_shell, schwarz_q, grad, gamma_fn);
 
     // ── Term 4: nuclear repulsion ─────────────────────────────────────────────
     for (std::size_t a = 0; a < natoms; ++a)
@@ -954,30 +735,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rohf_
                2.0 * P_b(ii, kk) * P_b(jj, ll);
     };
 
-    for (const auto &spAB : shell_pairs)
-    {
-        const std::size_t ii = spAB.A._index;
-        const std::size_t jj = spAB.B._index;
-        const int atom_A = shell_atom[bf_shell[ii]];
-        const int atom_B = shell_atom[bf_shell[jj]];
-
-        for (const auto &spCD : shell_pairs)
-        {
-            const std::size_t kk = spCD.A._index;
-            const std::size_t ll = spCD.B._index;
-            const int atom_C = shell_atom[bf_shell[kk]];
-            const int atom_D = shell_atom[bf_shell[ll]];
-
-            if (schwarz_q(ii, jj) * schwarz_q(kk, ll) < calc._integral._tol_eri)
-                continue;
-
-            const auto dI = compute_eri_deriv_dispatch(
-                calc, spAB, spCD, HartreeFock::ERIKernel::Coulomb, 0.0);
-            accumulate_eri_gradient_permutations(
-                grad, dI, gamma_fn, ii, jj, kk, ll,
-                atom_A, atom_B, atom_C, atom_D);
-        }
-    }
+    accumulate_shell_pair_eri_gradient(
+        calc, shell_pairs, shell_atom, bf_shell, schwarz_q, grad, gamma_fn);
 
     // ── Term 4: nuclear repulsion ─────────────────────────────────────────────
     for (std::size_t a = 0; a < natoms; ++a)
@@ -1012,7 +771,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rohf_
 std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_gradient(
     const HartreeFock::Calculator &calc,
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
-    const ExchangeGradientKernel &exchange_kernel)
+    const ExchangeGradientKernel &exchange_kernel,
+    bool with_breakdown)
 {
     g_last_wavefunction_gradient_breakdown.reset();
     const auto &mol = calc._molecule;
@@ -1133,20 +893,6 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_g
         two_electron,
         gamma_fn);
 
-    auto coulomb_gamma = [&P_t](std::size_t ii, std::size_t jj,
-                                std::size_t kk, std::size_t ll) -> double
-    {
-        return 2.0 * P_t(ii, jj) * P_t(kk, ll);
-    };
-    auto coulomb_two_electron = compute_two_electron_kernel_gradient(
-        calc,
-        shell_pairs,
-        coulomb_gamma);
-    if (!coulomb_two_electron)
-        return std::unexpected(coulomb_two_electron.error());
-
-    Eigen::MatrixXd exchange_two_electron = two_electron - *coulomb_two_electron;
-    Eigen::MatrixXd exchange_full_range = exchange_two_electron;
     Eigen::MatrixXd exchange_long_range_correction =
         Eigen::MatrixXd::Zero(natoms, 3);
 
@@ -1165,44 +911,43 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_g
             shell_atom,
             bf_shell,
             schwarz_q,
-            two_electron,
-            long_range_gamma,
-            HartreeFock::ERIKernel::LongRange,
-            exchange_kernel.range_separation_omega);
-        accumulate_shell_pair_eri_gradient(
-            calc,
-            shell_pairs,
-            shell_atom,
-            bf_shell,
-            schwarz_q,
-            exchange_two_electron,
-            long_range_gamma,
-            HartreeFock::ERIKernel::LongRange,
-            exchange_kernel.range_separation_omega);
-        accumulate_shell_pair_eri_gradient(
-            calc,
-            shell_pairs,
-            shell_atom,
-            bf_shell,
-            schwarz_q,
             exchange_long_range_correction,
             long_range_gamma,
             HartreeFock::ERIKernel::LongRange,
             exchange_kernel.range_separation_omega);
+        two_electron += exchange_long_range_correction;
     }
 
     const Eigen::MatrixXd nuclear_repulsion = compute_nuclear_repulsion_gradient(calc);
     Eigen::MatrixXd grad = core_pulay + two_electron + nuclear_repulsion;
-    g_last_wavefunction_gradient_breakdown =
-        WavefunctionGradientBreakdown{
-            .core_pulay = core_pulay,
-            .coulomb_two_electron = *coulomb_two_electron,
-            .exchange_full_range = exchange_full_range,
-            .exchange_long_range_correction = exchange_long_range_correction,
-            .exchange_two_electron = exchange_two_electron,
-            .two_electron = two_electron,
-            .nuclear_repulsion = nuclear_repulsion,
-            .total = grad};
+
+    // The Coulomb/exchange split costs a second full derivative sweep and only
+    // feeds the DFT gradient debug report.
+    if (with_breakdown)
+    {
+        auto coulomb_gamma = [&P_t](std::size_t ii, std::size_t jj,
+                                    std::size_t kk, std::size_t ll) -> double
+        {
+            return 2.0 * P_t(ii, jj) * P_t(kk, ll);
+        };
+        auto coulomb_two_electron = two_electron_gradient(
+            calc,
+            shell_pairs,
+            coulomb_gamma);
+        if (!coulomb_two_electron)
+            return std::unexpected(coulomb_two_electron.error());
+        const Eigen::MatrixXd exchange_two_electron = two_electron - *coulomb_two_electron;
+        g_last_wavefunction_gradient_breakdown =
+            WavefunctionGradientBreakdown{
+                .core_pulay = core_pulay,
+                .coulomb_two_electron = *coulomb_two_electron,
+                .exchange_full_range = exchange_two_electron - exchange_long_range_correction,
+                .exchange_long_range_correction = exchange_long_range_correction,
+                .exchange_two_electron = exchange_two_electron,
+                .two_electron = two_electron,
+                .nuclear_repulsion = nuclear_repulsion,
+                .total = grad};
+    }
     return grad;
 }
 

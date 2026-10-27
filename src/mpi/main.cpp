@@ -36,6 +36,7 @@
 
 #include "base/types.h"
 #include "io/io.h"
+#include "io/external_libraries.h"
 #include "io/logging.h"
 #include "lookup/loader/license_path.h"
 #include "lookup/loader/orchestrator.h"
@@ -184,6 +185,7 @@ int main(int argc, const char *argv[])
         }
 #endif
     }
+    HartreeFock::Logger::external_libraries();
 
     // Args: <input file> [--json <path>]. Only rank 0 emits usage errors.
     std::string input_file;

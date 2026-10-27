@@ -1234,6 +1234,10 @@ Each RHF iteration in `run_rhf`:
 7. Back-transform: \(\mathbf C = \mathbf X \mathbf C'\)
 8. Build new density \(P_{\mu\nu} = 2\sum_i^{occ} C_{\mu i} C_{\nu i}\)
 9. Test convergence: \(|\Delta E| < \epsilon_E\) and \(\|\Delta P\|_{max} < \epsilon_P\)
+10. On convergence, if step 4 extrapolated, diagonalize the true \(\mathbf F\)
+    once more and store those orbitals, energies and density
+    (`diagonalize_fock`; see "The Converged Orbitals Must Come From the True
+    Fock" in §7)
 
 Convergence is declared when both criteria are simultaneously satisfied.
 
@@ -1298,6 +1302,43 @@ In practice this constrained linear system is solved with a numerically stable
 factorization of the augmented matrix. The DIIS subspace is typically capped at
 a small fixed dimension, with the oldest vectors discarded when the subspace
 fills.
+
+### The Converged Orbitals Must Come From the True Fock
+
+Each iteration diagonalizes \(\mathbf F^{extrap}\), not the Fock matrix built
+from the current density. Near convergence the two agree to within the DIIS
+residual, so it is tempting to keep the eigenpairs of \(\mathbf F^{extrap}\)
+as "the" converged orbitals and orbital energies. That is wrong, and Planck
+did it until 2026-10-27.
+
+The extrapolation is chosen to make the *commutator* small, and the
+commutator does not see eigenvalues. Take H2 in STO-3G: there are two
+spatial functions, and symmetry fixes the occupied orbital, so every symmetric
+density commutes with every Fock matrix and every error vector is \(\sim
+10^{-16}\). The DIIS weights are then decided by rounding noise, and
+\(\mathbf F^{extrap}\) can carry an earlier iteration's Fock matrix (in a
+geometry optimization, one built from the previous geometry's density). It has
+the right eigenvectors and the wrong eigenvalues.
+
+Nothing in the SCF output notices: the energy depends on the density, which
+is right. The analytic gradient notices, because its Pulay term uses
+\(W = \sum_i \varepsilon_i C_i C_i^{\mathsf T}\) (§14). In the H2 geometry
+optimization the step-1 Pulay term was off by \(1.6\times10^{-3}\) Ha/Bohr,
+and the line search failed. The bug was hidden whenever the DIIS error came
+out exactly zero, which turns on the last bits of the geometry, so it appeared
+or vanished with unrelated summation-order changes.
+
+The fix is the one PySCF uses: when an iteration converges after a DIIS
+extrapolation, diagonalize the true Fock once more and store those orbitals,
+energies and density (`diagonalize_fock` in `run_rhf`; the same step in
+`run_uhf` and in the RKS/UKS loops). UHF already did this for a level shift,
+for the same reason: a shifted Fock has the right eigenvectors and shifted
+eigenvalues. ROHF is unaffected, since its stored energies are
+\(\mathrm{diag}(C^{\mathsf T} F^\alpha C)\) of the true Fock and its \(W\) is
+built from Fock matrices (§14).
+
+The general lesson: a quantity whose convergence test cannot see it is not
+converged just because the test passed.
 
 ### SOSCF: Second-Order SCF
 
@@ -3790,7 +3831,9 @@ the 2D Rys block kernel, and every other block with \(L \le 12\) to the HGP
 block kernel (`src/integrals/auto_block_eri.h`). With symmetric
 densities, the whole block is then digested at once ("Digesting a whole block
 at once"). Since direct SCF and every DFT J/K build use this path, the table
-now governs only a minority of Auto's work.
+now governs only a minority of Auto's work. The analytic gradient uses the
+same Rys2D/HGP split for its derivative block kernels (§14), where it was
+re-measured and also won.
 
 The engines return identical integrals, so between them the table is purely a
 speed choice. The block kernels and dense digestion agree with the engines to
@@ -4481,7 +4524,9 @@ where:
 - \(P_{\mu\nu}\) is the one-particle density matrix
 - \(\Gamma_{\mu\nu\lambda\sigma} = 2P_{\mu\nu}P_{\lambda\sigma} - P_{\mu\lambda}P_{\nu\sigma}\) is the two-particle density for RHF
 - \(W_{\mu\nu} = \sum_{i}^{occ} \varepsilon_i C_{\mu i} C_{\nu i}\) is the
-  **energy-weighted density matrix** (the Pulay term coefficient)
+  **energy-weighted density matrix** (the Pulay term coefficient). The
+  \(\varepsilon_i\) must be eigenvalues of the true converged Fock, not of a
+  DIIS-extrapolated one (§7).
 
 ### Derivative Integrals
 
@@ -4493,14 +4538,86 @@ The derivative of the overlap integral with respect to center \(\mathbf A\):
 \]
 
 by the Gaussian angular-momentum shift rule. Similarly for kinetic, nuclear
-attraction, and ERI derivative integrals. These are computed in
-`_compute_1e_deriv_A`, `_compute_nuclear_deriv_A_elem`,
-`_compute_nuclear_deriv_C_elem`, and `_compute_eri_deriv_elem` in `os.cpp`.
+attraction, and ERI derivative integrals. The one-electron derivatives are
+`_compute_1e_deriv_A`, `_compute_nuclear_deriv_A_elem` and
+`_compute_nuclear_deriv_C_elem` in `os.cpp`. The ERI derivative
+\(\partial(\mu\nu|\lambda\sigma)/\partial \mathbf X\) for the four centres
+(12 numbers) goes through `compute_eri_deriv_dispatch`, which sends
+`engine auto` and `engine hgp` to HGP and everything else to OS. Rys has no
+per-component derivative.
 
-The gradient assembly loops over all contributing shell pairs/quartets,
-contracts the derivative integrals against the appropriate density matrices,
-and accumulates into the \(N_{atoms} \times 3\) gradient array.
-Implemented in `compute_rhf_gradient` in `src/gradient/gradient.cpp`.
+The ERI derivative is 98 % of an SCF gradient, so how the loop runs matters
+more than anything else in this section.
+
+**One loop, every reference.** RHF, RKS, UHF, ROHF, UKS and the RMP2/UMP2
+gradients all go through `two_electron_gradient`
+(`src/gradient/two_electron_gradient.h`) with their own \(\Gamma\); only the
+two-particle density differs between them (§15 shows why the MP2 densities
+fit).
+
+**Permutations only change \(\Gamma\).** A quartet \((ij|kl)\) appears eight
+ways in \(\sum \Gamma\,\partial(ij|kl)\). Swapping \(i\leftrightarrow j\),
+\(k\leftrightarrow l\) or bra and ket does not change which atom each centre's
+derivative belongs to: the derivative with respect to the centre of \(k\) is
+the same number whether \(k\) sits in the bra or the ket. So the loop visits
+each unordered pair of AO pairs once (\(q \ge p\)), sums \(\Gamma\) over the
+swaps, and applies a single \(\partial(ij|kl)\). This is exact for any
+\(\Gamma\), symmetric or not, and it skips the derivative integral entirely
+when the summed \(\Gamma\) is zero.
+
+**Threads and determinism.** Bra pairs are dealt into 64 fixed bins
+(\(p \bmod 64\)), each bin with its own \(N_{atoms}\times 3\) partial, summed
+in bin order at the end. The bin a pair lands in does not depend on the
+thread count, so neither does the gradient, to the last bit. This is the
+same rule as the Fock build and the FCI sigma build: fix the partition of work
+into accumulators, not just the order they are summed.
+
+On 4 H2O / 6-31G\* at four threads this loop takes the RHF gradient from
+56.4 s (square loop, OS, one core in practice) to 3.42 s.
+
+**Shell-quartet derivative kernels.** The per-component derivative (still
+used by explicit engines) evaluates up to 24 contracted ERIs for each AO
+quartet, each
+with its own primitive loop. The block kernels compute every component of a
+shell quartet from one primitive pass:
+
+- `HgpDerivBlockKernel` (`hgp_deriv_block_eri.h`): one VRR to
+  \((L_A+L_B+1 \mid L_C+L_D+1)\), contracted four ways (weights \(1\),
+  \(2\alpha\), \(2\beta\), \(2\gamma\)), then the energy kernel's HRR
+  (`hgp_block::hrr`) on each raised and lowered shell quartet. Contracting
+  before the HRR is why HGP wins on contracted shells.
+- `RysDerivBlockKernel` (`rys_deriv_block_eri.h`): libcint's route. A
+  component is \(\sum_r w_r I_x I_y I_z\), and differentiating along axis
+  \(q\) touches only \(I_q\):
+  \(\partial_{A_q} I_q(a) = 2\alpha I_q(a+1) - a\, I_q(a-1)\). The axis
+  tables are built one step higher on A, B and C, and each derivative is one
+  root dot product with the differentiated axis swapped in. The exponent is
+  known per primitive quartet, so no extra contraction is needed.
+
+Both take \(\mathbf D = -(\mathbf A + \mathbf B + \mathbf C)\) from
+translational invariance: moving all four centres together leaves the
+integral unchanged. Both apply the component norm of the *unraised*
+function, because the derivative raises the bare angular factor, not the
+normalized function.
+
+They are gated in `planck-eri-derivative-kernels` against per-component OS for
+every component and all 12 derivatives (D included, which OS computes
+explicitly) on water in 6-31G, 6-31G\*, cc-pVDZ and cc-pVTZ. Agreement is
+\(\le 6\times10^{-15}\) relative through cc-pVDZ. On cc-pVTZ the two
+per-component engines OS and HGP themselves differ by \(5.4\times10^{-13}\),
+and the block kernels sit inside that spread (Rys2D \(1.0\times10^{-13}\),
+HGP \(1.8\times10^{-13}\) relative to OS).
+
+Under `engine auto` the gradient loop walks shell quartets
+(`accumulate_block_eri_gradient`) and visits exactly the AO quartets the AO
+loop did, with the same \(\Gamma\) folding and bins. Each block's derivatives
+come from `auto_deriv_kernel()`: Rys2D for one-primitive blocks at
+\(L \ge 4\) and three-quartet blocks at \(L \ge 7\), HGP for the rest, the
+same split as the energy build. That split was measured for derivatives
+rather than assumed, and it beat both HGP-only and Rys2D-everywhere. On 4 H2O
+/ 6-31G\* the whole gradient run falls from 4.75 s to 1.21 s at four threads.
+Explicit engines keep the AO loop, so `--engines os,auto` comparisons test the
+kernels against an independent path.
 
 ### UHF Gradient
 
@@ -4821,6 +4938,54 @@ These amplitudes populate spin-specific occupied/virtual 1-PDM corrections
 gradient combines those objects with the UHF reference two-particle density
 expression and reuses the same derivative-integral contraction infrastructure
 as the RHF, UHF, and RMP2 gradients.
+
+### Assembling the MP2 Two-Electron Term
+
+The MP2 gradient's derivative-integral term has two parts: the correlation
+pair density (\(2\,\mathrm{dm2buf}\) for RMP2, \(D^\alpha + D^\beta\) for
+UMP2) and a separable part that pairs the HF density with the relaxed
+density \(\mathbf P^{HF} + 2\mathbf P^{corr}\). The natural way to write it,
+following PySCF's `grad/mp2.py`, differentiates only the first function:
+
+\[
+g_A = \sum_{p \in A} \sum_{qrs} X_{pqrs}\, \partial_p (pq|rs).
+\]
+
+Planck used to evaluate exactly that: a loop over the AO functions on each
+atom times \(n_b^3\), one thread, no screening, a fresh per-component
+derivative integral per quartet. The SCF gradients use a different loop
+(§14) that computes \(\tfrac14 \sum_{pqrs} \Gamma_{pqrs}\, d(pq|rs)/dR_A\)
+over all four centres, with every symmetry folded in.
+
+The two agree when \(\Gamma = X\), provided \(X\) symmetrized over
+\(r \leftrightarrow s\) has the full 8-fold symmetry of \((pq|rs)\). Each
+of the four slots can then be moved to the first position, so the
+all-centre sum is four copies of the first-centre sum. Both parts qualify.
+The separable part does by inspection. For RMP2 the pair density
+\(\sum_{ijab} \tilde T_{ij}^{ab}\,(C_{pi}C_{qa} + C_{qi}C_{pa})\,C_{rb}C_{sj}\),
+with \(\tilde T_{ij}^{ab} = 4t_{ij}^{ab} - 2t_{ij}^{ba}\), does because
+\(\tilde T\) is symmetric under \((i,a)\leftrightarrow(j,b)\). So
+`build_rmp2_gradient_intermediates` and `build_ump2_gradient_intermediates`
+now hand their \(\Gamma\) to `two_electron_gradient`
+(`src/gradient/two_electron_gradient.h`), the loop the SCF gradients use.
+The gradient is identical to the old one in every printed digit, and MP2
+gradients get threads, Schwarz screening and the shell-quartet derivative
+kernels without any MP2-specific integral code.
+
+Two things in the old code are worth knowing as patterns:
+
+- **A quantity nobody read cost \(O(N^8)\).** The RMP2 builder formed an AO
+  pair density over \(\mu\nu\lambda\sigma \times ijab\) and stored it in a
+  struct field that no caller used. For 2 H2O / 6-31G\* that one loop was
+  essentially the whole 358 s gradient. With it deleted and the sweep moved
+  to the shared loop, the run takes 0.65 s.
+- **Work inside a loop that does not depend on the loop index.** The UMP2
+  sweep rebuilt the separable density \(D^\sigma[p,v,r,s]\) inside its
+  \(q\) loop, which \(D^\sigma\) does not depend on, so the same tensor was
+  recomputed \(n_b\) times: \(O(n_b^5 n_{occ}^2)\). It is now built once,
+  and the Lagrangian \(\mathrm{Imat}_\sigma(q,v) = \tfrac12 \sum_{prs}
+  (pq|rs) D^\sigma[p,v,r,s]\) is a separate \(n_b^5\) contraction, threaded
+  over \(q\). A 2 H2O⁺ / 6-31G\* UMP2 gradient went from 136 s to 3.5 s.
 
 ### Double-Hybrid Analytic Gradients
 
@@ -9411,7 +9576,10 @@ driver.cpp
 | Symmetry-orbit dedup and skeleton helpers for the fused loop | `src/integrals/quartet_orbit.h` | `is_orbit_representative`, `skeleton_orbit_weight`, `density_has_symmetry`, `symmetrize_over_ops` |
 | Block-kernel interface of the fused loop | `src/integrals/block_eri.h` | `BlockEriRequest`, `NoBlockKernel`, `ChainBlockKernel` |
 | Closed-form shell kernels, total L ≤ 3 | `src/integrals/low_l_eri.h` | `low_l_shell_eri`, `ClosedFormBlockKernel` |
-| HGP shell-quartet block kernel | `src/integrals/hgp_block_eri.h` | `HgpBlockKernel` |
+| HGP shell-quartet block kernel | `src/integrals/hgp_block_eri.h` | `HgpBlockKernel`, `hgp_block::vrr_lanes`, `hgp_block::hrr` |
+| 2D Rys shell-quartet block kernel | `src/integrals/rys_block_eri.h` | `RysBlockKernel`, `rys_block::axis_table` |
+| Auto engine's block-kernel chain | `src/integrals/auto_block_eri.h` | `auto_block_kernel` |
+| Shell-quartet derivative block kernels | `src/integrals/hgp_deriv_block_eri.h`, `src/integrals/rys_deriv_block_eri.h`, `src/integrals/auto_deriv_block_eri.h` | `HgpDerivBlockKernel`, `RysDerivBlockKernel`, `auto_deriv_kernel` |
 | Shared per-quartet scratch layout | `src/integrals/quartet_layout.h` | `SpatialQuartetLayout::configure`, `spatial_index` |
 | MPI environment (rank, size, Allreduce) | `src/base/mpi_env.h` | `Mpi::rank`, `Mpi::size`, `Mpi::allreduce_inplace` |
 | `planck-mpi` unified front end | `src/mpi/main.cpp` | rank-gated dispatch to `HartreeFock::Driver::run` / `DFT::Driver::run` |
@@ -9462,7 +9630,7 @@ driver.cpp
 | Restricted double-hybrid gradient | `src/dft/dh_pt2_gradient.cpp`, `src/dft/driver.cpp` | `DHGradientDriverContract`; correction-only KS Z-vector, literal pair RHS/overlap, Eq. 33 assembly |
 | Double-hybrid XC-II geometry response | `src/dft/dh_pt2_gradient.cpp`, `src/dft/dft_gradient.cpp` | `DHEq33CompleteXCIIGradient`; P-side, D-side, Becke partition, point translation |
 | Unrestricted double-hybrid gradient | `src/dft/udh_driver.cpp`, `src/dft/udh_*.cpp` | `build_udh_gradient_correction`; `build_udh_pt2_stationary_contract`, `solve_udh_zvector`, `build_udh_overlap_density`, `build_udh_two_particle_density`, `build_udh_{lda,gga}_complete_xc_ii_gradient` |
-| UMP2 gradient intermediates | `src/post_hf/mp2_gradient.cpp` | `build_ump2_gradient_intermediates` |
+| UMP2 gradient intermediates | `src/post_hf/mp2_gradient.cpp` | `build_ump2_gradient_intermediates` (separable densities \(D^\sigma\) built once; 2e term through `two_electron_gradient`) |
 | CI string generation | `src/post_hf/ci/strings.cpp` | `generate_strings`, `parity_between`, `select_active_orbitals` |
 | CI determinant space + sigma | `src/post_hf/ci/ci.cpp` | `build_ci_space`, `apply_ci_hamiltonian`, `slater_condon_element` |
 | CI solve (Davidson) | `src/post_hf/ci/ci.cpp` | `solve_ci`, `solve_ci_dense`, `build_ci_diagonal` |
@@ -9478,7 +9646,9 @@ driver.cpp
 | UHF gradient | `src/gradient/gradient.cpp` | `compute_uhf_gradient` |
 | ROHF gradient | `src/gradient/gradient.cpp` | `compute_rohf_gradient`, `build_rohf_energy_weighted_density` |
 | UMP2 gradient | `src/gradient/gradient.cpp` | `compute_ump2_gradient` |
-| Derivative integrals | `src/integrals/os.cpp` | `_compute_1e_deriv_A`, `_compute_eri_deriv_elem` |
+| Derivative integrals (per component) | `src/integrals/os.cpp`, `src/integrals/hgp.cpp`, `src/gradient/gradient.cpp` | `_compute_1e_deriv_A`, `_compute_eri_deriv_elem`, `compute_eri_deriv_dispatch` |
+| Two-electron gradient loop (SCF and MP2) | `src/gradient/two_electron_gradient.h` | `two_electron_gradient`; `detail::accumulate_block_eri_gradient` (Auto, shell quartets), `detail::accumulate_shell_pair_eri_gradient` (AO pairs), `detail::pair_permuted_gamma` |
+| Converged SCF orbitals from the true Fock | `src/scf/scf.cpp`, `src/dft/driver.cpp` | `diagonalize_fock` in `run_rhf`; final re-diagonalization in `run_uhf` and the RKS/UKS loops |
 | L-BFGS optimizer | `src/opt/geomopt.cpp` | `run_geomopt` |
 | Internal coordinates | `src/opt/intcoords.cpp` | Wilson B matrix |
 | Semi-numerical Hessian | `src/freq/hessian.cpp` | `compute_hessian` |

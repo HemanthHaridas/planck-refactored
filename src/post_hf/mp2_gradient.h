@@ -24,10 +24,6 @@ namespace HartreeFock::Correlation
         Eigen::MatrixXd im1_ao;
         Eigen::MatrixXd zeta_ao;
         Eigen::MatrixXd vhf_s1occ_ao;
-        std::vector<double> Gamma_pair_ao;
-        // Exposed for the DH B2 direct Eq. (46)/(47) equivalence gate.
-        Eigen::MatrixXd two_e_nonseparable_gradient;
-        Eigen::MatrixXd two_e_separable_gradient;
         Eigen::MatrixXd overlap_gradient;
     };
 
@@ -104,7 +100,6 @@ namespace HartreeFock::Correlation
         Eigen::MatrixXd P_beta_corr_ao;
         Eigen::MatrixXd P_total_ao;
         Eigen::MatrixXd W_ao;
-        std::vector<double> Gamma_pair_ao;
     };
 
     // Optionally hand build_rmp2_gradient_intermediates a Lagrangian + Z-vector

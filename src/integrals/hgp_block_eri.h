@@ -201,6 +201,66 @@ namespace HartreeFock::Integrals
                 }
             }
         }
+
+        // HRR for one shell quartet (LA LB | LC LD) from the contracted [e0|f0]
+        // in acc (row e, column f, row stride acc_stride; rows |e| in [LA, LA+LB]
+        // and columns |f| in [LC, LC+LD] are read). Bra: (a, b+1_i| = (a+1_i, b| +
+        // (A-B)_i (a, b|; then the same on the ket per final (a, b). Writes
+        // out[((ca * n1 + cb) * n2 + cc) * n3 + cd] for the components listed in
+        // idx[s][c] (L-major table indices). H and K are grow-only scratch.
+        inline void hrr(const double *acc, int acc_stride, int LA, int LB, int LC, int LD,
+                        const Eigen::Vector3d &Rab, const Eigen::Vector3d &Rcd,
+                        const int *const (&idx)[4], const std::size_t (&n)[4],
+                        std::vector<double> &H, std::vector<double> &K, double *out)
+        {
+            const auto &T = table();
+            const int LAB = LA + LB, LCD = LC + LD;
+            const int Ne = n_upto(LAB), Nf = n_upto(LCD);
+            const int e0 = n_upto(LA - 1), f0 = n_upto(LC - 1);
+
+            // Bra HRR: H[a][b][f - f0] for |a| in [LA, LAB - |b|], |b| <= LB.
+            const int Nb = n_upto(LB), Nd = n_upto(LD), nfk = Nf - f0;
+            grow_to(H, static_cast<std::size_t>(Ne) * Nb * nfk);
+            const auto h = [&](int a, int b) { return &H[(static_cast<std::size_t>(a) * Nb + b) * nfk]; };
+            for (int a = e0; a < Ne; ++a)
+                for (int f = 0; f < nfk; ++f)
+                    h(a, 0)[f] = acc[static_cast<std::size_t>(a) * acc_stride + f0 + f];
+            for (int b = 1; b < Nb; ++b)
+            {
+                const int i = T[b].axis, bm = T[b].down[i];
+                const double ab_i = Rab[i];
+                for (int a = e0; a < n_upto(LAB - T[b].L); ++a)
+                {
+                    double *dst = h(a, b);
+                    const double *s1 = h(T[a].up[i], bm), *s2 = h(a, bm);
+                    for (int f = 0; f < nfk; ++f)
+                        dst[f] = s1[f] + ab_i * s2[f];
+                }
+            }
+
+            // Ket HRR per final (a, b), then the component readout.
+            grow_to(K, static_cast<std::size_t>(Nf) * Nd);
+            std::size_t o = 0;
+            for (std::size_t ca = 0; ca < n[0]; ++ca)
+                for (std::size_t cb = 0; cb < n[1]; ++cb)
+                {
+                    const double *g = h(idx[0][ca], idx[1][cb]);
+                    for (int c = f0; c < Nf; ++c)
+                        K[static_cast<std::size_t>(c) * Nd] = g[c - f0];
+                    for (int d = 1; d < Nd; ++d)
+                    {
+                        const int j = T[d].axis, dm = T[d].down[j];
+                        const double cd_j = Rcd[j];
+                        for (int c = f0; c < n_upto(LCD - T[d].L); ++c)
+                            K[static_cast<std::size_t>(c) * Nd + d] =
+                                K[static_cast<std::size_t>(T[c].up[j]) * Nd + dm] +
+                                cd_j * K[static_cast<std::size_t>(c) * Nd + dm];
+                    }
+                    for (std::size_t cc = 0; cc < n[2]; ++cc)
+                        for (std::size_t cdc = 0; cdc < n[3]; ++cdc)
+                            out[o++] = K[static_cast<std::size_t>(idx[2][cc]) * Nd + idx[3][cdc]];
+                }
+        }
     }
 
     struct HgpBlockKernel
@@ -281,62 +341,21 @@ namespace HartreeFock::Integrals
         void finish(const BlockEriRequest &r)
         {
             req_ = &r;
-            using hgp_block::n_upto;
-            const auto &T = hgp_block::table();
-            const int LA = r.L[0], LB = r.L[1], LC = r.L[2], LD = r.L[3];
-            const int LAB = LA + LB, LCD = LC + LD;
-            const int Ne = n_upto(LAB), Nf = n_upto(LCD);
-            const int e0 = n_upto(LA - 1), f0 = n_upto(LC - 1);
-
-            // Bra HRR: H[a][b][f - f0] for |a| in [LA, LAB - |b|], |b| <= LB.
-            const int Nb = n_upto(LB), Nd = n_upto(LD), nfk = Nf - f0;
-            grow_to(H, static_cast<std::size_t>(Ne) * Nb * nfk);
-            const auto h = [&](int a, int b) { return &H[(static_cast<std::size_t>(a) * Nb + b) * nfk]; };
-            for (int a = e0; a < Ne; ++a)
-                for (int f = 0; f < nfk; ++f)
-                    h(a, 0)[f] = acc[static_cast<std::size_t>(a) * Nf + f0 + f];
-            for (int b = 1; b < Nb; ++b)
+            n_[0] = r.n[0], n_[1] = r.n[1], n_[2] = r.n[2], n_[3] = r.n[3];
+            for (int s = 0; s < 4; ++s)
             {
-                const int i = T[b].axis, bm = T[b].down[i];
-                const double ab_i = r.ab->R[i];
-                for (int a = e0; a < n_upto(LAB - T[b].L); ++a)
+                ci_[s].resize(n_[s]);
+                for (std::size_t c = 0; c < n_[s]; ++c)
                 {
-                    double *dst = h(a, b);
-                    const double *s1 = h(T[a].up[i], bm), *s2 = h(a, bm);
-                    for (int f = 0; f < nfk; ++f)
-                        dst[f] = s1[f] + ab_i * s2[f];
+                    const auto &e = r.views[s][c]->_cartesian;
+                    ci_[s][c] = hgp_block::index(e[0], e[1], e[2]);
                 }
             }
-
-            // Ket HRR per final (a, b), then the component readout.
-            n_[0] = r.n[0], n_[1] = r.n[1], n_[2] = r.n[2], n_[3] = r.n[3];
+            const int *const idx[4] = {ci_[0].data(), ci_[1].data(), ci_[2].data(), ci_[3].data()};
             grow_to(out_, n_[0] * n_[1] * n_[2] * n_[3]);
-            grow_to(K, static_cast<std::size_t>(Nf) * Nd);
-            const auto idx = [&](int s, std::size_t c)
-            {
-                const auto &e = r.views[s][c]->_cartesian;
-                return hgp_block::index(e[0], e[1], e[2]);
-            };
-            std::size_t o = 0;
-            for (std::size_t ca = 0; ca < n_[0]; ++ca)
-                for (std::size_t cb = 0; cb < n_[1]; ++cb)
-                {
-                    const double *g = h(idx(0, ca), idx(1, cb));
-                    for (int c = f0; c < Nf; ++c)
-                        K[static_cast<std::size_t>(c) * Nd] = g[c - f0];
-                    for (int d = 1; d < Nd; ++d)
-                    {
-                        const int j = T[d].axis, dm = T[d].down[j];
-                        const double cd_j = r.cd->R[j];
-                        for (int c = f0; c < n_upto(LCD - T[d].L); ++c)
-                            K[static_cast<std::size_t>(c) * Nd + d] =
-                                K[static_cast<std::size_t>(T[c].up[j]) * Nd + dm] +
-                                cd_j * K[static_cast<std::size_t>(c) * Nd + dm];
-                    }
-                    for (std::size_t cc = 0; cc < n_[2]; ++cc)
-                        for (std::size_t cdc = 0; cdc < n_[3]; ++cdc)
-                            out_[o++] = K[static_cast<std::size_t>(idx(2, cc)) * Nd + idx(3, cdc)];
-                }
+            hgp_block::hrr(acc.data(), hgp_block::n_upto(r.L[2] + r.L[3]),
+                           r.L[0], r.L[1], r.L[2], r.L[3], r.ab->R, r.cd->R,
+                           idx, n_, H, K, out_.data());
         }
 
         // The contracted [e0|f0] that finish() reads (D2a probe fills it directly).
@@ -358,6 +377,7 @@ namespace HartreeFock::Integrals
         // (fused_fock.h), so members rather than thread_local (emulated TLS on
         // macOS g++ was 2.5-4.7 % of d/f builds).
         std::vector<double> acc, H, K;
+        std::vector<int> ci_[4]; // table index of each requested component
         std::size_t n_[4] = {};
         std::vector<double> out_;
     };
