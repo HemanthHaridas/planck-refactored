@@ -2001,8 +2001,9 @@ identify the path taken. Not required for correctness or performance.
   and ROHF copies are gone), a `q ≥ p` triangle with the bra-ket swap folded
   into Γ, threaded over 64 fixed bins summed in bin order. 4 H2O / 6-31G\*
   gradient at four threads 30.5 → 3.42 s (16× over pre-G1), identical at
-  1/2/4/8 threads. Next: drop the RKS/UKS Coulomb-only breakdown sweep,
-  then G3 a shell-quartet derivative block kernel
+  1/2/4/8 threads. RKS/UKS no longer run a second Coulomb-only sweep for the
+  debug-only breakdown (4 H2O / 6-31G\* B3LYP gradient run 7.94 → 5.36 s).
+  Next: G3 a shell-quartet derivative block kernel
   (the lever; this is shellpair Phase D), G4 MP2 onto the same loop, G5 1e
   derivatives, G6 RI 3c (measure first).
 - **ERI/Fock BLAS-LAPACK migration — scoped 2026-10-17, nothing landed**

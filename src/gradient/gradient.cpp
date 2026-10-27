@@ -494,7 +494,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rhf_g
 std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rks_gradient(
     const HartreeFock::Calculator &calc,
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
-    const ExchangeGradientKernel &exchange_kernel)
+    const ExchangeGradientKernel &exchange_kernel,
+    bool with_breakdown)
 {
     g_last_wavefunction_gradient_breakdown.reset();
     const Eigen::MatrixXd &P = calc._info._scf.alpha.density;
@@ -524,22 +525,7 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rks_g
     if (!grad)
         return grad;
 
-    auto coulomb_gamma = [&P](std::size_t ii, std::size_t jj, std::size_t kk, std::size_t ll) -> double
-    {
-        return 2.0 * P(ii, jj) * P(kk, ll);
-    };
-    auto coulomb_two_electron = compute_two_electron_kernel_gradient(
-        calc,
-        shell_pairs,
-        coulomb_gamma);
-    if (!coulomb_two_electron)
-        return std::unexpected(coulomb_two_electron.error());
-    breakdown.coulomb_two_electron = *coulomb_two_electron;
-    breakdown.exchange_two_electron = breakdown.two_electron - breakdown.coulomb_two_electron;
-    breakdown.exchange_full_range = breakdown.exchange_two_electron;
-    breakdown.exchange_long_range_correction =
-        Eigen::MatrixXd::Zero(calc._molecule.natoms, 3);
-
+    Eigen::MatrixXd long_range = Eigen::MatrixXd::Zero(calc._molecule.natoms, 3);
     const double cx_short = exchange_kernel.short_range_exchange_coefficient;
     if (std::abs(cx_short) > 1.0e-14)
     {
@@ -552,14 +538,32 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rks_g
             exchange_kernel.range_separation_omega);
         if (!long_range_exchange)
             return std::unexpected(long_range_exchange.error());
-        *grad += *long_range_exchange;
-        breakdown.exchange_long_range_correction = *long_range_exchange;
-        breakdown.exchange_two_electron += *long_range_exchange;
-        breakdown.two_electron = breakdown.coulomb_two_electron + breakdown.exchange_two_electron;
-        breakdown.total = breakdown.core_pulay + breakdown.two_electron + breakdown.nuclear_repulsion;
+        long_range = *long_range_exchange;
+        *grad += long_range;
     }
 
-    g_last_wavefunction_gradient_breakdown = breakdown;
+    // The Coulomb/exchange split costs a second full derivative sweep and only
+    // feeds the DFT gradient debug report.
+    if (with_breakdown)
+    {
+        auto coulomb_gamma = [&P](std::size_t ii, std::size_t jj, std::size_t kk, std::size_t ll) -> double
+        {
+            return 2.0 * P(ii, jj) * P(kk, ll);
+        };
+        auto coulomb_two_electron = compute_two_electron_kernel_gradient(
+            calc,
+            shell_pairs,
+            coulomb_gamma);
+        if (!coulomb_two_electron)
+            return std::unexpected(coulomb_two_electron.error());
+        breakdown.coulomb_two_electron = *coulomb_two_electron;
+        breakdown.exchange_full_range = breakdown.two_electron - breakdown.coulomb_two_electron;
+        breakdown.exchange_long_range_correction = long_range;
+        breakdown.exchange_two_electron = breakdown.exchange_full_range + long_range;
+        breakdown.two_electron = breakdown.coulomb_two_electron + breakdown.exchange_two_electron;
+        breakdown.total = breakdown.core_pulay + breakdown.two_electron + breakdown.nuclear_repulsion;
+        g_last_wavefunction_gradient_breakdown = breakdown;
+    }
     return grad;
 }
 
@@ -897,7 +901,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rohf_
 std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_gradient(
     const HartreeFock::Calculator &calc,
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
-    const ExchangeGradientKernel &exchange_kernel)
+    const ExchangeGradientKernel &exchange_kernel,
+    bool with_breakdown)
 {
     g_last_wavefunction_gradient_breakdown.reset();
     const auto &mol = calc._molecule;
@@ -1018,20 +1023,6 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_g
         two_electron,
         gamma_fn);
 
-    auto coulomb_gamma = [&P_t](std::size_t ii, std::size_t jj,
-                                std::size_t kk, std::size_t ll) -> double
-    {
-        return 2.0 * P_t(ii, jj) * P_t(kk, ll);
-    };
-    auto coulomb_two_electron = compute_two_electron_kernel_gradient(
-        calc,
-        shell_pairs,
-        coulomb_gamma);
-    if (!coulomb_two_electron)
-        return std::unexpected(coulomb_two_electron.error());
-
-    Eigen::MatrixXd exchange_two_electron = two_electron - *coulomb_two_electron;
-    Eigen::MatrixXd exchange_full_range = exchange_two_electron;
     Eigen::MatrixXd exchange_long_range_correction =
         Eigen::MatrixXd::Zero(natoms, 3);
 
@@ -1044,8 +1035,6 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_g
             return cx_short *
                    (2.0 * P_a(ii, kk) * P_a(jj, ll) + 2.0 * P_b(ii, kk) * P_b(jj, ll));
         };
-        // One long-range sweep, shared by the three matrices it feeds (it used
-        // to run once per matrix).
         accumulate_shell_pair_eri_gradient(
             calc,
             shell_pairs,
@@ -1057,21 +1046,38 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_g
             HartreeFock::ERIKernel::LongRange,
             exchange_kernel.range_separation_omega);
         two_electron += exchange_long_range_correction;
-        exchange_two_electron += exchange_long_range_correction;
     }
 
     const Eigen::MatrixXd nuclear_repulsion = compute_nuclear_repulsion_gradient(calc);
     Eigen::MatrixXd grad = core_pulay + two_electron + nuclear_repulsion;
-    g_last_wavefunction_gradient_breakdown =
-        WavefunctionGradientBreakdown{
-            .core_pulay = core_pulay,
-            .coulomb_two_electron = *coulomb_two_electron,
-            .exchange_full_range = exchange_full_range,
-            .exchange_long_range_correction = exchange_long_range_correction,
-            .exchange_two_electron = exchange_two_electron,
-            .two_electron = two_electron,
-            .nuclear_repulsion = nuclear_repulsion,
-            .total = grad};
+
+    // The Coulomb/exchange split costs a second full derivative sweep and only
+    // feeds the DFT gradient debug report.
+    if (with_breakdown)
+    {
+        auto coulomb_gamma = [&P_t](std::size_t ii, std::size_t jj,
+                                    std::size_t kk, std::size_t ll) -> double
+        {
+            return 2.0 * P_t(ii, jj) * P_t(kk, ll);
+        };
+        auto coulomb_two_electron = compute_two_electron_kernel_gradient(
+            calc,
+            shell_pairs,
+            coulomb_gamma);
+        if (!coulomb_two_electron)
+            return std::unexpected(coulomb_two_electron.error());
+        const Eigen::MatrixXd exchange_two_electron = two_electron - *coulomb_two_electron;
+        g_last_wavefunction_gradient_breakdown =
+            WavefunctionGradientBreakdown{
+                .core_pulay = core_pulay,
+                .coulomb_two_electron = *coulomb_two_electron,
+                .exchange_full_range = exchange_two_electron - exchange_long_range_correction,
+                .exchange_long_range_correction = exchange_long_range_correction,
+                .exchange_two_electron = exchange_two_electron,
+                .two_electron = two_electron,
+                .nuclear_repulsion = nuclear_repulsion,
+                .total = grad};
+    }
     return grad;
 }
 

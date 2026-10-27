@@ -4395,10 +4395,11 @@ namespace DFT::Driver
             // Assemble the KS gradient as HF-like derivative terms plus the XC
             // grid derivative. Range separation only changes the exchange-kernel
             // metadata passed into the HF-like piece.
+            const bool with_breakdown = dft_gradient_debug_enabled();
             auto wf_grad =
                 calculator._scf._scf == HartreeFock::SCFType::UHF
-                    ? HartreeFock::Gradient::compute_uks_gradient(calculator, prepared.shell_pairs, exchange_kernel)
-                    : HartreeFock::Gradient::compute_rks_gradient(calculator, prepared.shell_pairs, exchange_kernel);
+                    ? HartreeFock::Gradient::compute_uks_gradient(calculator, prepared.shell_pairs, exchange_kernel, with_breakdown)
+                    : HartreeFock::Gradient::compute_rks_gradient(calculator, prepared.shell_pairs, exchange_kernel, with_breakdown);
             if (!wf_grad)
                 return std::unexpected("DFT Coulomb/exchange gradient failed: " + wf_grad.error());
 

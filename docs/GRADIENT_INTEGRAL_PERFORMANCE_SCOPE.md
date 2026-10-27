@@ -132,9 +132,13 @@ run beats G1 at four threads by 2.4×: G1 never used more than one core, and
 the triangle halves the work. All 36 printed components equal G1's; outputs
 identical at 1/2/4/8 threads.
 
-Still open from the profile: RKS and UKS run a second full Coulomb-only sweep
-just to fill `WavefunctionGradientBreakdown`. One sweep with separate Coulomb
-and exchange Γ would remove it.
+**Follow-on landed 2026-10-27:** RKS and UKS ran a second full Coulomb-only
+sweep on every gradient to fill `WavefunctionGradientBreakdown`, which only the
+`PLANCK_DFT_GRADIENT_DEBUG` report reads. `compute_{rks,uks}_gradient` now take
+`with_breakdown` (default false; the DFT driver passes the debug flag), and the
+split sweep runs only then. 4 H2O / 6-31G\* B3LYP gradient run, four threads,
+SCF included: 7.94 → 5.36 s. Gradient identical in all 36 components; the
+debug report is byte-identical when requested.
 
 ### G3 — A shell-quartet derivative block kernel (the lever)
 
