@@ -182,6 +182,18 @@ pass per shell quartet: an estimated 10× (s-rich) to 100×+ (d/f), before G2.
   gradient comparator (the existing ones compare two explicit engines and
   would not see the block path).
 
+**Progress 2026-10-27: both kernels written and gated, not yet wired.**
+`HgpDerivBlockKernel` (`hgp_deriv_block_eri.h`; the energy kernel's HRR moved
+into the shared `hgp_block::hrr`) and `RysDerivBlockKernel`
+(`rys_deriv_block_eri.h`, per-axis differentiation of the 2D tables). Gate in
+`planck-eri-derivative-kernels`, every component and all 12 derivatives against
+per-component OS: ≤ 6e-15 relative through cc-pVDZ. On cc-pVTZ the scoped
+1e-13 bar is below the floor: per-component OS and HGP themselves differ by
+5.4e-13 (2.7e-13 relative), with Rys2D at 1.0e-13 and the HGP block at 1.8e-13,
+so the gate is 5e-13 relative. Remaining: mutation checks (drop a weight, drop a
+lowered term, break D), the shell-quartet gradient loop, the derivative
+crossover, and the Auto-vs-OS gradient comparator.
+
 ### G4 — MP2/UMP2 gradients onto the same loop
 
 Express the dense pair-density term and the separable `vhf1` term as one Γ
