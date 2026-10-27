@@ -6,15 +6,15 @@ memory-direct Fock build fast and is closed.
 
 ## Where it stands (2026-10-27)
 
-**SCF and RMP2 gradients now cost about as much as the energy; UMP2 is the
-one left at ~20×.** G1–G4 have landed: the 2e
-gradient of every SCF reference and both MP2 flavours runs through one
-threaded loop, by shell quartet on two derivative block kernels under
-`engine auto`.
+**SCF and RMP2 gradients now cost about as much as the energy. UMP2 is the
+one left, at 22×, and its cost is the Z-vector solve, not integrals: that is
+G7, next.**
 
-Same systems as the original measurement, plus a UMP2 case (M3,
-`build-full`, direct SCF, `engine auto`, SAD, no symmetry, four threads,
-best of three, whole run including the SCF):
+G1–G4 have landed: the 2e gradient of every SCF reference and both MP2
+flavours runs through one threaded loop, by shell quartet on two derivative
+block kernels under `engine auto`. Same systems as the original measurement,
+plus a UMP2 case (M3, `build-full`, direct SCF, `engine auto`, SAD, no
+symmetry, four threads, best of three, whole run including the SCF):
 
 | system | SCF now | gradient run 2026-10-25 | after G3 | **now** | now ÷ SCF |
 |---|---|---|---|---|---|
@@ -30,114 +30,14 @@ SCF itself got faster in between, so compare the gradient columns rather than
 ratios across dates. The UMP2 "after G3" figure was measured on the pre-G4
 binary on 2026-10-27.
 
-**What is left.** The UMP2 gradient's remaining cost is orbital-side, not
-derivative integrals. A profile puts 59 % of it in the Z-vector solve, which
-builds the UHF orbital Hessian with one full Fock build per column (541 of
-them on 2 H2O⁺ / 6-31G\*), and most of the rest in N⁶ back-transforms. That
-is **G7, scoped below and next**. Then G5 (1e derivatives, a larger
-share now that the 2e term is cheap) and G6 (RI three-centre, measure first).
-Two G3 items are not built: block-level density screening and
-screened-kernel (range-separated) block derivatives.
+**Order from here:** G7 (UMP2 orbital side), then G5 (1e derivatives, a larger
+share now that the 2e term is cheap), G6 (RI three-centre, measure first), and
+two G3 leftovers (block density screening, screened-kernel block derivatives).
 
-## How the 2e gradient runs now
+## Next: G7 — MP2 orbital-side cost (scoped 2026-10-27)
 
-The loop lives in `src/gradient/two_electron_gradient.h` (moved out of `gradient.cpp` in G4); everything else in `src/gradient/gradient.cpp` unless noted.
-
-- **One loop for every SCF reference.** RHF, RKS, UHF, ROHF and UKS call
-  `accumulate_shell_pair_eri_gradient` with their own Γ.
-- **Permutations only change Γ.** In every index swap of a quartet, each
-  centre's derivative still goes to that centre's own atom, so
-  `pair_permuted_gamma` sums Γ over the (ij)/(kl) swaps and the bra–ket swap,
-  and one derivative evaluation serves them all. Exact for any Γ. A zero Γ
-  skips the derivative entirely.
-- **`engine auto`, Coulomb kernel: shell quartets.**
-  `accumulate_block_eri_gradient` walks shell-group pairs Q ≥ P and visits
-  exactly the AO quartets the AO loop would (i ≤ j within a group; each
-  unordered AO pair of pairs once in a diagonal block). Each block's 12
-  derivatives per component come from one primitive pass of
-  `auto_deriv_kernel()` (`src/integrals/auto_deriv_block_eri.h`):
-  - `RysDerivBlockKernel` (`rys_deriv_block_eri.h`) for one-primitive blocks
-    at L ≥ 4 and three-quartet blocks at L ≥ 7 (the energy build's
-    crossover, re-measured for derivatives, below). Per-axis
-    differentiation of the 2D Rys tables, libcint's route.
-  - `HgpDerivBlockKernel` (`hgp_deriv_block_eri.h`) for the rest: one VRR to
-    (L_A+L_B+1 | L_C+L_D+1) contracted with weights 1, 2α, 2β, 2γ, then the
-    shared `hgp_block::hrr` on each raised and lowered quartet.
-  - D from translational invariance in both. A block the chain declines falls
-    back to the per-component derivative.
-- **Explicit engines and screened kernels: AO pairs.** The same `q ≥ p`
-  triangle over AO pairs with per-component `compute_eri_deriv_dispatch`
-  (HGP for `hgp`, OS otherwise). This keeps the `--engines os,auto`
-  comparators independent of the kernels they check.
-- **Threads.** Both loops deal bra units into 64 fixed bins (unit mod 64),
-  each with its own `natoms × 3` partial summed in bin order. The result is
-  identical at any thread count.
-
-Still as before:
-
-- 1e derivatives (`_compute_1e_deriv_A`, `_compute_nuclear_deriv_{A,C}_elem`,
-  `os.cpp`): per AO pair, serial, the block pasted four times in
-  `gradient.cpp`; the C-derivative is re-evaluated per (atom, q).
-- `src/post_hf/mp2_gradient.cpp` (G4): both MP2 builders now
-  pass their Γ to `two_electron_gradient`. Their orbital-side intermediates
-  (`dm2buf_full`, D_σ, Imat) are still dense `nao⁴` tensors built in N⁵–N⁶.
-- `src/post_hf/ri/ri_eri.cpp`: `compute_3c_eri`, `compute_2c_eri`,
-  `compute_3c_deriv_elem` per component, serial, unscreened.
-
-## Remaining work, in order
-
-### G4 — MP2/UMP2 gradients onto the shared loop (2026-10-27)
-
-- The 2e loop moved out of `gradient.cpp` into
-  `src/gradient/two_electron_gradient.h` (`two_electron_gradient`, with the
-  loops in `detail`). Pure move; SCF gradients identical.
-- **RMP2.** A profile of the 2 H2O / 6-31G\* RMP2 gradient put every busy
-  sample in `build_rmp2_gradient_intermediates`' own loops, none in derivative
-  integrals. The cause was an AO pair density over μνλσ × ijab, O(N⁸), stored
-  in `Gamma_pair_ao`, a field nothing read. Deleted, along with the equally
-  unread `two_e_{non,}separable_gradient` fields. The per-atom derivative
-  sweep and the `vhf1` matrices are replaced by one `two_electron_gradient`
-  call after `dm1p` exists, Γ = 2 dm2buf (dense only) + the separable term.
-  No explicit symmetrization was needed: symmetrized over r ↔ s both parts
-  are already 8-fold symmetric (T̃ = 4t − 2t is symmetric under
-  (i,a) ↔ (j,b)), which is the condition for the bra-only and all-centre
-  forms to agree (teaching guide §15). Under `PLANCK_DEBUG_RMP2_TERMS` one
-  extra sweep splits off the separable part for the print.
-  Result: gradients identical in every printed component (STO-3G regression
-  input, 1 H2O / 6-31G\*); 2 H2O / 6-31G\* RMP2 gradient run 358 → 0.67 s.
-- **UMP2.** Its sweep rebuilt the separable
-  densities D_σ[p,v,r,s] inside the q loop, which they do not depend on:
-  O(nao⁵ nocc²). D_α and D_β are now built once (threaded over p), Imat_σ is
-  a separate nao⁵ contraction threaded over q (or `build_ri_imat` under RI),
-  and the 2e term is one `two_electron_gradient` call with Γ = D_α + D_β
-  (dense only) + the per-spin separable term. `build_ao_pair_table` (G1) and
-  `Gamma_pair_ao` are gone.
-  Result: gradients identical in every printed component on dense UMP2
-  (water cation, triplet water), RI-UMP2 and RI-RMP2; 2 H2O⁺ / 6-31G\*
-  UMP2 gradient run 136.2 → 3.98 s.
-
-- **Gates.** Two more `os,auto` comparators:
-  `water_rmp2_gradient_engine_os_vs_auto` (core) and
-  `water_radical_cation_ump2_gradient_engine_os_vs_auto`. Extended suite
-  143/147 (the four known rccsdt cases), all eight `os_vs_auto` cases passing.
-
-Verified after a full rebuild (including `planck-dft`, which links both
-`gradient.cpp` and `mp2_gradient.cpp`): the 35 Planck ctest gates selected for
-derivative kernels, engines, Fock accumulation, gradients and double hybrids
-pass, and the extended suite is again 143/147. (The ctest run also reports
-three Eigen `conjugate_gradient_*` tests as Not Run; that is the known Eigen
-test registration issue in Open Work, not a regression.)
-
-Gate: `water_rmp2_gradient_engine_os_vs_hgp`,
-`water_radical_cation_ump2_gradient_smoke`, the RMP2 FD/PySCF cases, the RI-MP2
-gradient gates (the dense HF-reference term is shared), plus an `os,auto`
-comparator on an RMP2 gradient.
-
-### G7 — MP2 orbital-side cost (scoped 2026-10-27, next)
-
-After G4 the UMP2 gradient is the one left far above its SCF (2 H2O⁺ /
-6-31G\*: 3.5 s against 0.16 s), and almost none of that is derivative
-integrals any more. `sample` of that run (main thread, ~3,040 samples inside
+After G4 almost none of the UMP2 gradient is derivative integrals. `sample`
+of the 2 H2O⁺ / 6-31G\* run (main thread, ~3,040 samples inside
 `compute_ump2_gradient`):
 
 | share | where |
@@ -167,10 +67,10 @@ Steps, in order of measured share. Each lands alone with its gate.
    gradients with the diagonal ε_a − ε_i preconditioner applies. Check both
    properties numerically against the dense matrix before relying on them,
    and fall back to the GMRES already used for the double-hybrid Z-vector
-   (`solve_dh_zvector`, `src/dft/dh_zvector.h`) if either fails. Expected ~15–30 Fock builds instead
-   of 541. If so, about 55 % of the run goes, ~2.2× end to end on this case.
-   `build_uhf_cphf_matrix` stays: SOSCF (docs/SOSCF_UHF.md) needs the dense
-   matrix.
+   (`solve_dh_zvector`, `src/dft/dh_zvector.h`) if either fails. Expected
+   ~15–30 Fock builds instead of 541. If so, about 55 % of the run goes,
+   ~2.2× end to end on this case. `build_uhf_cphf_matrix` stays: SOSCF
+   (`docs/SOSCF_UHF.md`) needs the dense matrix.
    Gate: the Z-vector against the dense QR solution to ≤ 1e-10 on the UMP2
    regression inputs (dense and RI), UMP2 gradients unchanged to the printed
    digit, `water_radical_cation_ump2_gradient_smoke` and the RI-UMP2 FD cases.
@@ -190,10 +90,64 @@ Steps, in order of measured share. Each lands alone with its gate.
    GEMM in disguise ((pq|rs) reshaped as nao × nao³ against D reshaped
    nao³ × nao); build only if the profile after O1–O2 still shows it.
 
-Expected end state for this case: well under 1 s, i.e. a few times the SCF,
-in line with RMP2. Not in scope: the dense `nao⁴` tensors themselves
-(D_α, D_β, the ERI), which cap the conventional UMP2 gradient's system size;
-RI-MP2 is the route past that.
+Expected end state for this case: well under 1 s, a few times the SCF, in line
+with RMP2. Not in scope: the dense `nao⁴` tensors themselves (D_α, D_β, the
+ERI), which cap the conventional UMP2 gradient's system size; RI-MP2 is the
+route past that.
+
+## How the 2e gradient runs now
+
+The loop lives in `src/gradient/two_electron_gradient.h`; the SCF-reference
+gradients are in `src/gradient/gradient.cpp`, the MP2 ones in
+`src/post_hf/mp2_gradient.cpp`.
+
+- **One loop for every reference.** RHF, RKS, UHF, ROHF, UKS, RMP2 and UMP2
+  all call `two_electron_gradient(calc, shell_pairs, gamma_fn)` with their own
+  Γ. The result is ¼ Σ over ordered AO quartets of Γ(p,q,r,s) d(pq|rs)/dR.
+- **Permutations only change Γ.** In every index swap of a quartet, each
+  centre's derivative still goes to that centre's own atom, so
+  `pair_permuted_gamma` sums Γ over the (ij)/(kl) swaps and the bra–ket swap,
+  and one derivative evaluation serves them all. Exact for any Γ. A zero Γ
+  skips the derivative entirely.
+- **MP2 fits the same loop.** The MP2 terms were written as a bra-only
+  contraction Σ_{p on A} X ∂_p(pq|rs); with X symmetrized over r ↔ s 8-fold
+  symmetric (true for both the pair density and the separable part), that
+  equals the loop's all-centre form with Γ = X (teaching guide §15).
+- **`engine auto`, Coulomb kernel: shell quartets.**
+  `accumulate_block_eri_gradient` walks shell-group pairs Q ≥ P and visits
+  exactly the AO quartets the AO loop would (i ≤ j within a group; each
+  unordered AO pair of pairs once in a diagonal block). Each block's 12
+  derivatives per component come from one primitive pass of
+  `auto_deriv_kernel()` (`src/integrals/auto_deriv_block_eri.h`):
+  - `RysDerivBlockKernel` (`rys_deriv_block_eri.h`) for one-primitive blocks
+    at L ≥ 4 and three-quartet blocks at L ≥ 7 (the energy build's crossover,
+    re-measured for derivatives). Per-axis differentiation of the 2D Rys
+    tables, libcint's route.
+  - `HgpDerivBlockKernel` (`hgp_deriv_block_eri.h`) for the rest: one VRR to
+    (L_A+L_B+1 | L_C+L_D+1) contracted with weights 1, 2α, 2β, 2γ, then the
+    shared `hgp_block::hrr` on each raised and lowered quartet.
+  - D from translational invariance in both. A block the chain declines falls
+    back to the per-component derivative.
+- **Explicit engines and screened kernels: AO pairs.** The same `q ≥ p`
+  triangle over AO pairs with per-component `compute_eri_deriv_dispatch`
+  (HGP for `hgp`, OS otherwise). This keeps the `--engines os,auto`
+  comparators independent of the kernels they check.
+- **Threads.** Both loops deal bra units into 64 fixed bins (unit mod 64),
+  each with its own `natoms × 3` partial summed in bin order. The result is
+  identical at any thread count.
+
+Not yet touched:
+
+- MP2 orbital side (`mp2_gradient.cpp`): `dm2buf_full`, D_σ and Imat are dense
+  `nao⁴` tensors built in N⁵–N⁶, and the UHF Z-vector builds its full matrix
+  (G7).
+- 1e derivatives (`_compute_1e_deriv_A`, `_compute_nuclear_deriv_{A,C}_elem`,
+  `os.cpp`): per AO pair, serial, the block pasted four times in
+  `gradient.cpp`; the C-derivative is re-evaluated per (atom, q) (G5).
+- `src/post_hf/ri/ri_eri.cpp`: `compute_3c_eri`, `compute_2c_eri`,
+  `compute_3c_deriv_elem` per component, serial, unscreened (G6).
+
+## After G7
 
 ### G5 — 1e derivative integrals
 
@@ -220,55 +174,41 @@ before building. D3 (RI pair factors recomputed per iteration,
 
 ## Record of what landed
 
-### G1 — dead work and routing (2026-10-27)
+### G4 — MP2/UMP2 gradients onto the shared loop (2026-10-27)
 
-- `compute_eri_deriv_dispatch` resolves Auto to HGP (precedent:
-  `full_symmetry_engine`). 4 H2O / 6-31G\* RHF gradient, four threads:
-  56.4 → 29.7 s (1.90×, against an estimated 1.5×).
-- The second RMP2 derivative sweep fed only the `PLANCK_DEBUG_RMP2_TERMS`
-  print; it now runs only when that flag is set. 1 H2O / 6-31G\* RMP2:
-  6.78 → 4.27 s.
-- The MP2 sweeps build their `nao²` AO `ShellPair`s once
-  (`build_ao_pair_table`) instead of two per innermost iteration. With all of
-  G1: 6.78 → 3.17 s.
-
-Printed gradients identical.
-
-### The DIIS fix G2 exposed (2026-10-27)
-
-G2's new summation order moved an H2 geometry-optimization step by 1e-16, and
-`h2_optfreq_smoke` started failing. The cause was in the SCF, not the
-gradient. RHF, UHF, RKS and UKS stored the eigenpairs of the
-**DIIS-extrapolated** Fock at convergence. For H2/STO-3G every DIIS error
-vector is ~1e-16, the DIIS weights are arbitrary, and the extrapolated matrix
-carries other iterations' eigenvalues with the right eigenvectors. The
-gradient's `W = Σ εᵢ Cᵢ Cᵢᵀ` then had the wrong εᵢ: the 1e/Pulay term was off
-by 1.6e-3 Ha/Bohr and the line search failed. It was hidden whenever the
-error came out exactly zero. Every path now re-diagonalizes the true Fock once
-at convergence when DIIS extrapolated, as PySCF does (teaching guide §7).
-
-### G2 — one threaded triangular loop (2026-10-27)
-
-UHF and ROHF dropped their loop copies. The loop visits `q ≥ p` with Γ
-folded as above, threaded over 64 fixed bins. The unused
-`assume_pair_exchange_symmetry = false` fallback (a full `nb²` ordered pair
-list) is deleted; UKS ran its long-range exchange sweep three times, now once.
-
-4 H2O / 6-31G\* RHF gradient, `engine auto`:
-
-| | 1 thread | 2 | 4 | 8 |
-|---|---|---|---|---|
-| G1 | | | 30.5 s | |
-| G2 | 12.8 s | 6.45 s | 3.42 s | 2.43 s |
-
-One thread beats G1 at four by 2.4×: G1 never used more than one core, and
-the triangle halves the work. Identical output at 1/2/4/8 threads.
-
-Follow-on: RKS and UKS ran a second full Coulomb-only sweep on every gradient
-to fill `WavefunctionGradientBreakdown`, which only the
-`PLANCK_DFT_GRADIENT_DEBUG` report reads. `compute_{rks,uks}_gradient` take
-`with_breakdown` (default false). 4 H2O / 6-31G\* B3LYP gradient run:
-7.94 → 5.36 s.
+- The 2e loop moved out of `gradient.cpp` into
+  `src/gradient/two_electron_gradient.h` (`two_electron_gradient`, with the
+  loops in `detail`). Pure move; SCF gradients identical.
+- **RMP2.** A profile of the 2 H2O / 6-31G\* RMP2 gradient put every busy
+  sample in `build_rmp2_gradient_intermediates`' own loops, none in derivative
+  integrals. The cause was an AO pair density over μνλσ × ijab, O(N⁸), stored
+  in `Gamma_pair_ao`, a field nothing read. Deleted, along with the equally
+  unread `two_e_{non,}separable_gradient` fields. The per-atom derivative
+  sweep and the `vhf1` matrices are replaced by one `two_electron_gradient`
+  call after `dm1p` exists, Γ = 2 dm2buf (dense only) + the separable term.
+  No explicit symmetrization was needed: symmetrized over r ↔ s both parts
+  are already 8-fold symmetric (T̃ = 4t − 2t is symmetric under
+  (i,a) ↔ (j,b)). Under `PLANCK_DEBUG_RMP2_TERMS` one extra sweep splits off
+  the separable part for the print. 2 H2O / 6-31G\* RMP2 gradient run
+  358 → 0.65 s.
+- **UMP2.** Its sweep rebuilt the separable densities D_σ[p,v,r,s] inside the
+  q loop, which they do not depend on: O(nao⁵ nocc²). D_α and D_β are now
+  built once (threaded over p), Imat_σ is a separate nao⁵ contraction
+  threaded over q (or `build_ri_imat` under RI), and the 2e term is one
+  `two_electron_gradient` call with Γ = D_α + D_β (dense only) + the per-spin
+  separable term. `build_ao_pair_table` (G1) and `Gamma_pair_ao` are gone.
+  2 H2O⁺ / 6-31G\* UMP2 gradient run 136 → 3.5 s.
+- Gradients identical in every printed component on dense RMP2 and UMP2
+  (water cation, triplet water), RI-RMP2 and RI-UMP2.
+- **Gates.** Two more `os,auto` comparators:
+  `water_rmp2_gradient_engine_os_vs_auto` (core) and
+  `water_radical_cation_ump2_gradient_engine_os_vs_auto`. After a full rebuild
+  (including `planck-dft`, which links both `gradient.cpp` and
+  `mp2_gradient.cpp`), the 35 Planck ctest gates for derivative kernels,
+  engines, Fock accumulation, gradients and double hybrids pass, and the
+  extended suite is 143/147 (the four known rccsdt cases). The ctest run also
+  reports three Eigen `conjugate_gradient_*` tests as Not Run: the known Eigen
+  test registration issue in Open Work, not a regression.
 
 ### G3 — shell-quartet derivative block kernels (2026-10-27)
 
@@ -313,6 +253,55 @@ path to `.py` cases, and every comparator defaulted `--build-dir` to `./build`.
 So under `--build-dir build-full` the engine comparators (gradient, geomopt,
 SCF energy, MPI smoke) had been running whatever stale binary sat in
 `./build`. The runner now passes `--build-dir` and a case's optional `args`.
+
+### G2 — one threaded triangular loop (2026-10-27)
+
+UHF and ROHF dropped their loop copies. The loop visits `q ≥ p` with Γ
+folded as above, threaded over 64 fixed bins. The unused
+`assume_pair_exchange_symmetry = false` fallback (a full `nb²` ordered pair
+list) is deleted; UKS ran its long-range exchange sweep three times, now once.
+
+4 H2O / 6-31G\* RHF gradient, `engine auto`:
+
+| | 1 thread | 2 | 4 | 8 |
+|---|---|---|---|---|
+| G1 | | | 30.5 s | |
+| G2 | 12.8 s | 6.45 s | 3.42 s | 2.43 s |
+
+One thread beats G1 at four by 2.4×: G1 never used more than one core, and
+the triangle halves the work. Identical output at 1/2/4/8 threads.
+
+Follow-on: RKS and UKS ran a second full Coulomb-only sweep on every gradient
+to fill `WavefunctionGradientBreakdown`, which only the
+`PLANCK_DFT_GRADIENT_DEBUG` report reads. `compute_{rks,uks}_gradient` take
+`with_breakdown` (default false). 4 H2O / 6-31G\* B3LYP gradient run:
+7.94 → 5.36 s.
+
+### The DIIS fix G2 exposed (2026-10-27)
+
+G2's new summation order moved an H2 geometry-optimization step by 1e-16, and
+`h2_optfreq_smoke` started failing. The cause was in the SCF, not the
+gradient. RHF, UHF, RKS and UKS stored the eigenpairs of the
+**DIIS-extrapolated** Fock at convergence. For H2/STO-3G every DIIS error
+vector is ~1e-16, the DIIS weights are arbitrary, and the extrapolated matrix
+carries other iterations' eigenvalues with the right eigenvectors. The
+gradient's `W = Σ εᵢ Cᵢ Cᵢᵀ` then had the wrong εᵢ: the 1e/Pulay term was off
+by 1.6e-3 Ha/Bohr and the line search failed. It was hidden whenever the
+error came out exactly zero. Every path now re-diagonalizes the true Fock once
+at convergence when DIIS extrapolated, as PySCF does (teaching guide §7).
+
+### G1 — dead work and routing (2026-10-27)
+
+- `compute_eri_deriv_dispatch` resolves Auto to HGP (precedent:
+  `full_symmetry_engine`). 4 H2O / 6-31G\* RHF gradient, four threads:
+  56.4 → 29.7 s (1.90×, against an estimated 1.5×).
+- The second RMP2 derivative sweep fed only the `PLANCK_DEBUG_RMP2_TERMS`
+  print; it now runs only when that flag is set. 1 H2O / 6-31G\* RMP2:
+  6.78 → 4.27 s.
+- The MP2 sweeps built their `nao²` AO `ShellPair`s once instead of two per
+  innermost iteration (superseded by G4). With all of G1: 6.78 → 3.17 s.
+
+Printed gradients identical.
 
 ## Original measurement (2026-10-25, before G1)
 
