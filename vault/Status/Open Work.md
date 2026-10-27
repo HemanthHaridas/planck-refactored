@@ -2003,9 +2003,15 @@ identify the path taken. Not required for correctness or performance.
   gradient at four threads 30.5 → 3.42 s (16× over pre-G1), identical at
   1/2/4/8 threads. RKS/UKS no longer run a second Coulomb-only sweep for the
   debug-only breakdown (4 H2O / 6-31G\* B3LYP gradient run 7.94 → 5.36 s).
-  Next: G3 a shell-quartet derivative block kernel
-  (the lever; this is shellpair Phase D), G4 MP2 onto the same loop, G5 1e
-  derivatives, G6 RI 3c (measure first).
+  **G3 done:** HGP and Rys2D shell-quartet derivative block kernels, chained
+  by the energy build's crossover (measured best of three for derivatives),
+  drive the 2e gradient under `engine auto`. Whole run at four threads: 4 H2O
+  / 6-31G\* 4.75 → 1.21 s, 1 H2O / cc-pVTZ 3.58 → 0.67 s; gradients identical
+  to OS. Gated by `planck-eri-derivative-kernels` and six
+  `*_engine_os_vs_auto` comparators. Next: G4 MP2 onto the same loop, G5 1e
+  derivatives (now a larger share), G6 RI 3c (measure first).
+  The regression runner now passes `--build-dir` to its `.py` comparators,
+  which had been running whatever binary sat in `./build`.
 - **ERI/Fock BLAS-LAPACK migration — scoped 2026-10-17, nothing landed**
   (`docs/ERI_FOCK_BLAS_SCOPE.md`). BLAS buys nothing for the ERI kernels,
   direct-SCF digestion, the conventional `nb⁴` contraction (bandwidth-bound,

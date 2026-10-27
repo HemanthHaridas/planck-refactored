@@ -1106,6 +1106,116 @@
    ]
   },
   {
+   "id": "water_rhf_gradient_engine_os_vs_auto",
+   "input": "tests/inputs/regression/geometry/water_rhf_gradient.hfinp",
+   "executable": "tests/engine_gradient_compare.py",
+   "args": [
+    "--engines",
+    "os,auto"
+   ],
+   "tags": [
+    "core",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "OS gradient (Ha/Bohr):",
+    "AUTO gradient (Ha/Bohr):",
+    "PASS"
+   ]
+  },
+  {
+   "id": "water_rhf_631gd_gradient_engine_os_vs_auto",
+   "input": "tests/inputs/regression/geometry/water_rhf_gradient_631gd.hfinp",
+   "executable": "tests/engine_gradient_compare.py",
+   "args": [
+    "--engines",
+    "os,auto"
+   ],
+   "tags": [
+    "core",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "OS gradient (Ha/Bohr):",
+    "AUTO gradient (Ha/Bohr):",
+    "PASS"
+   ]
+  },
+  {
+   "id": "water_triplet_uhf_gradient_engine_os_vs_auto",
+   "input": "tests/inputs/regression/open_shell/water_triplet_uhf_gradient_sto3g.hfinp",
+   "executable": "tests/engine_gradient_compare.py",
+   "args": [
+    "--engines",
+    "os,auto"
+   ],
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "OS gradient (Ha/Bohr):",
+    "AUTO gradient (Ha/Bohr):",
+    "PASS"
+   ]
+  },
+  {
+   "id": "ch3_radical_rohf_gradient_engine_os_vs_auto",
+   "input": "tests/inputs/regression/open_shell/ch3_radical_rohf_gradient_sto3g.hfinp",
+   "executable": "tests/engine_gradient_compare.py",
+   "args": [
+    "--engines",
+    "os,auto"
+   ],
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "OS gradient (Ha/Bohr):",
+    "AUTO gradient (Ha/Bohr):",
+    "PASS"
+   ]
+  },
+  {
+   "id": "water_b3lyp_gradient_engine_os_vs_auto",
+   "input": "tests/inputs/regression/dft/water_dft_b3lyp_gradient.hfinp",
+   "executable": "tests/engine_gradient_compare.py",
+   "args": [
+    "--engines",
+    "os,auto"
+   ],
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "OS gradient (Ha/Bohr):",
+    "AUTO gradient (Ha/Bohr):",
+    "PASS"
+   ]
+  },
+  {
+   "id": "h2_hse06_ccpvtz_gradient_engine_os_vs_auto",
+   "input": "tests/inputs/regression/dft/h2_dft_hse06_gradient.hfinp",
+   "executable": "tests/engine_gradient_compare.py",
+   "args": [
+    "--engines",
+    "os,auto"
+   ],
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "OS gradient (Ha/Bohr):",
+    "AUTO gradient (Ha/Bohr):",
+    "PASS"
+   ]
+  },
+  {
    "id": "water_b3lyp_gradient_engine_os_vs_hgp",
    "input": "tests/inputs/regression/dft/water_dft_b3lyp_gradient.hfinp",
    "executable": "tests/engine_gradient_compare.py",

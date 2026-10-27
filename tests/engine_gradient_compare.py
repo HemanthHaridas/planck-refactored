@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Cross-engine analytic-gradient validation.
 
-Runs the supplied .hfinp twice, once with `engine os` and once with
-`engine hgp`, parses the analytic nuclear gradient from each output, and
-fails if any per-atom Cartesian component disagrees by more than --atol.
+Runs the supplied .hfinp twice, once per engine in --engines (default
+`os,hgp`; `os,auto` checks Auto's shell-quartet derivative kernels against
+the per-component OS path), parses the analytic nuclear gradient from each
+output, and fails if any per-atom Cartesian component disagrees by more
+than --atol.
 
 Covers HF and DFT gradient inputs by selecting the right binary via
 --binary (default `hartree-fock`). Reuses the existing OS-engine inputs
@@ -79,7 +81,7 @@ def max_abs_diff(
     where = (0, 0)
     if len(left) != len(right):
         raise SystemExit(
-            f"gradient atom-count mismatch: os={len(left)} hgp={len(right)}"
+            f"gradient atom-count mismatch: {len(left)} vs {len(right)}"
         )
     for atom, (left_row, right_row) in enumerate(zip(left, right)):
         if len(left_row) != len(right_row):
@@ -127,6 +129,12 @@ def main(argv: Iterable[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--engines",
+        type=str,
+        default="os,hgp",
+        help="the two engines to compare, reference first (default: os,hgp)",
+    )
+    parser.add_argument(
         "--keep-tmp",
         action="store_true",
         help="keep the scratch directory with both inputs and outputs",
@@ -147,8 +155,12 @@ def main(argv: Iterable[str] | None = None) -> int:
     if args.keep_tmp:
         tmp._finalizer.detach()  # type: ignore[attr-defined]
 
+    engines = [e.strip() for e in args.engines.split(",")]
+    if len(engines) != 2:
+        raise SystemExit("--engines takes exactly two engines")
+    ref, other = engines
     results: dict[str, list[list[float]]] = {}
-    for engine in ("os", "hgp"):
+    for engine in engines:
         rendered = render_with_engine(template, engine)
         path = workdir / f"{engine}.hfinp"
         path.write_text(rendered, encoding="utf-8")
@@ -156,16 +168,14 @@ def main(argv: Iterable[str] | None = None) -> int:
         (workdir / f"{engine}.log").write_text(output, encoding="utf-8")
         results[engine] = parse_gradient(output)
 
-    print("OS gradient (Ha/Bohr):")
-    for atom, row in enumerate(results["os"], start=1):
-        print(f"  Atom {atom}: {row[0]:14.10f}  {row[1]:14.10f}  {row[2]:14.10f}")
-    print("HGP gradient (Ha/Bohr):")
-    for atom, row in enumerate(results["hgp"], start=1):
-        print(f"  Atom {atom}: {row[0]:14.10f}  {row[1]:14.10f}  {row[2]:14.10f}")
+    for engine in engines:
+        print(f"{engine.upper()} gradient (Ha/Bohr):")
+        for atom, row in enumerate(results[engine], start=1):
+            print(f"  Atom {atom}: {row[0]:14.10f}  {row[1]:14.10f}  {row[2]:14.10f}")
 
-    worst, (atom, axis) = max_abs_diff(results["os"], results["hgp"])
+    worst, (atom, axis) = max_abs_diff(results[ref], results[other])
     print(
-        f"max |g_os - g_hgp| = {worst:.3e} Ha/Bohr "
+        f"max |g_{ref} - g_{other}| = {worst:.3e} Ha/Bohr "
         f"(atom {atom + 1}, axis {'xyz'[axis]})"
     )
     print(f"tolerance          = {args.atol:.3e} Ha/Bohr")
@@ -174,7 +184,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         print(f"work directory kept at: {workdir}")
 
     if worst > args.atol:
-        print("FAIL: HGP analytic gradient diverges from OS reference")
+        print(f"FAIL: {other.upper()} analytic gradient diverges from {ref.upper()} reference")
         return 1
     print("PASS")
     return 0

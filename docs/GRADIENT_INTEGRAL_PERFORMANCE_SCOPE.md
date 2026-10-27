@@ -190,9 +190,45 @@ into the shared `hgp_block::hrr`) and `RysDerivBlockKernel`
 per-component OS: ≤ 6e-15 relative through cc-pVDZ. On cc-pVTZ the scoped
 1e-13 bar is below the floor: per-component OS and HGP themselves differ by
 5.4e-13 (2.7e-13 relative), with Rys2D at 1.0e-13 and the HGP block at 1.8e-13,
-so the gate is 5e-13 relative. Remaining: mutation checks (drop a weight, drop a
-lowered term, break D), the shell-quartet gradient loop, the derivative
-crossover, and the Auto-vs-OS gradient comparator.
+so the gate is 5e-13 relative. Mutations (2β → β, lowered term dropped,
+D without C) each fail on every basis.
+
+**Wired 2026-10-27.** Under `engine auto` with the Coulomb kernel,
+`accumulate_block_eri_gradient` walks shell-group pairs Q ≥ P and keeps exactly
+the AO quartets of the AO loop (i ≤ j within a group; each unordered AO pair of
+pairs once in a diagonal block), with the same Γ folding and the same 64 fixed
+bins, one kernel per thread. Blocks the chain declines fall back to the
+per-component derivative. Explicit engines and screened kernels keep the AO
+loop, so the cross-engine comparators still compare engines.
+
+The chain is `auto_deriv_kernel()` (`auto_deriv_block_eri.h`): Rys2D, then
+HGP, with `ChainBlockKernel` gaining a `deriv()` forwarder. Crossover measured
+end to end (whole run, four threads, best of two), three variants:
+
+| | energy crossover rule | HGP only | Rys2D everywhere |
+|---|---|---|---|
+| 4 H2O / 6-31G\* | **0.57 s** | 0.58 s | 0.72 s |
+| 4 H2O / cc-pVDZ | **1.46 s** | 1.63 s | 2.02 s |
+| 1 H2O / cc-pVTZ | **0.62 s** | 0.68 s | 0.69 s |
+
+The energy build's rule (Rys2D at K = 1 for L ≥ 4, K ≤ 3 for L ≥ 7) also wins
+for derivatives, so it stays.
+
+Against G2 (`engine auto`, whole run, four threads): 4 H2O / 6-31G\* 4.75 →
+1.21 s, 1 H2O / cc-pVTZ 3.58 → 0.67 s (per-component OS: 10.43 s and 12.23 s).
+Gradients identical in every printed component to OS and to G2.
+
+New gates: six `*_engine_os_vs_auto` cases (`tests/engine_gradient_compare.py
+--engines os,auto`), covering RHF STO-3G and Cartesian 6-31G\*, UHF, ROHF (C1
+CH3), B3LYP, and HSE06/cc-pVTZ (block Coulomb, AO-loop long range).
+Re-introducing "D without C" fails them end to end.
+
+**Coverage gap found and fixed on the way.** `run_regressions.py` passed only
+the input path to `.py` cases, and every comparator defaults `--build-dir` to
+`./build`. So under `--build-dir build-full` the engine comparators
+(gradient, geomopt, SCF energy, MPI smoke) silently ran whatever stale binary
+sat in `./build`. The runner now passes `--build-dir` and a case's optional
+`args` list to `.py` cases.
 
 ### G4 — MP2/UMP2 gradients onto the same loop
 

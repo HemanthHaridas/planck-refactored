@@ -1234,6 +1234,10 @@ Each RHF iteration in `run_rhf`:
 7. Back-transform: \(\mathbf C = \mathbf X \mathbf C'\)
 8. Build new density \(P_{\mu\nu} = 2\sum_i^{occ} C_{\mu i} C_{\nu i}\)
 9. Test convergence: \(|\Delta E| < \epsilon_E\) and \(\|\Delta P\|_{max} < \epsilon_P\)
+10. On convergence, if step 4 extrapolated, diagonalize the true \(\mathbf F\)
+    once more and store those orbitals, energies and density
+    (`diagonalize_fock`; see "The Converged Orbitals Must Come From the True
+    Fock" in §7)
 
 Convergence is declared when both criteria are simultaneously satisfied.
 
@@ -3827,7 +3831,9 @@ the 2D Rys block kernel, and every other block with \(L \le 12\) to the HGP
 block kernel (`src/integrals/auto_block_eri.h`). With symmetric
 densities, the whole block is then digested at once ("Digesting a whole block
 at once"). Since direct SCF and every DFT J/K build use this path, the table
-now governs only a minority of Auto's work.
+now governs only a minority of Auto's work. The analytic gradient uses the
+same Rys2D/HGP split for its derivative block kernels (§14), where it was
+re-measured and also won.
 
 The engines return identical integrals, so between them the table is purely a
 speed choice. The block kernels and dense digestion agree with the engines to
@@ -4567,8 +4573,9 @@ into accumulators, not just the order they are summed.
 On 4 H2O / 6-31G\* at four threads this loop takes the RHF gradient from
 56.4 s (square loop, OS, one core in practice) to 3.42 s.
 
-**Shell-quartet derivative kernels (G3, in progress).** The per-component
-derivative still evaluates up to 24 contracted ERIs for each AO quartet, each
+**Shell-quartet derivative kernels.** The per-component derivative (still
+used by explicit engines) evaluates up to 24 contracted ERIs for each AO
+quartet, each
 with its own primitive loop. The block kernels compute every component of a
 shell quartet from one primitive pass:
 
@@ -4597,10 +4604,18 @@ explicitly) on water in 6-31G, 6-31G\*, cc-pVDZ and cc-pVTZ. Agreement is
 \(\le 6\times10^{-15}\) relative through cc-pVDZ. On cc-pVTZ the two
 per-component engines OS and HGP themselves differ by \(5.4\times10^{-13}\),
 and the block kernels sit inside that spread (Rys2D \(1.0\times10^{-13}\),
-HGP \(1.8\times10^{-13}\) relative to OS). The gradient loop does not use the
-kernels yet: it still walks AO pairs. Moving it to shell quartets, with the
-two kernels chained by a measured crossover the way `auto_block_eri.h` chains
-the energy kernels, is the next step.
+HGP \(1.8\times10^{-13}\) relative to OS).
+
+Under `engine auto` the gradient loop walks shell quartets
+(`accumulate_block_eri_gradient`) and visits exactly the AO quartets the AO
+loop did, with the same \(\Gamma\) folding and bins. Each block's derivatives
+come from `auto_deriv_kernel()`: Rys2D for one-primitive blocks at
+\(L \ge 4\) and three-quartet blocks at \(L \ge 7\), HGP for the rest, the
+same split as the energy build. That split was measured for derivatives
+rather than assumed, and it beat both HGP-only and Rys2D-everywhere. On 4 H2O
+/ 6-31G\* the whole gradient run falls from 4.75 s to 1.21 s at four threads.
+Explicit engines keep the AO loop, so `--engines os,auto` comparisons test the
+kernels against an independent path.
 
 ### UHF Gradient
 
@@ -9511,7 +9526,10 @@ driver.cpp
 | Symmetry-orbit dedup and skeleton helpers for the fused loop | `src/integrals/quartet_orbit.h` | `is_orbit_representative`, `skeleton_orbit_weight`, `density_has_symmetry`, `symmetrize_over_ops` |
 | Block-kernel interface of the fused loop | `src/integrals/block_eri.h` | `BlockEriRequest`, `NoBlockKernel`, `ChainBlockKernel` |
 | Closed-form shell kernels, total L ≤ 3 | `src/integrals/low_l_eri.h` | `low_l_shell_eri`, `ClosedFormBlockKernel` |
-| HGP shell-quartet block kernel | `src/integrals/hgp_block_eri.h` | `HgpBlockKernel` |
+| HGP shell-quartet block kernel | `src/integrals/hgp_block_eri.h` | `HgpBlockKernel`, `hgp_block::vrr_lanes`, `hgp_block::hrr` |
+| 2D Rys shell-quartet block kernel | `src/integrals/rys_block_eri.h` | `RysBlockKernel`, `rys_block::axis_table` |
+| Auto engine's block-kernel chain | `src/integrals/auto_block_eri.h` | `auto_block_kernel` |
+| Shell-quartet derivative block kernels | `src/integrals/hgp_deriv_block_eri.h`, `src/integrals/rys_deriv_block_eri.h`, `src/integrals/auto_deriv_block_eri.h` | `HgpDerivBlockKernel`, `RysDerivBlockKernel`, `auto_deriv_kernel` |
 | Shared per-quartet scratch layout | `src/integrals/quartet_layout.h` | `SpatialQuartetLayout::configure`, `spatial_index` |
 | MPI environment (rank, size, Allreduce) | `src/base/mpi_env.h` | `Mpi::rank`, `Mpi::size`, `Mpi::allreduce_inplace` |
 | `planck-mpi` unified front end | `src/mpi/main.cpp` | rank-gated dispatch to `HartreeFock::Driver::run` / `DFT::Driver::run` |
@@ -9578,7 +9596,9 @@ driver.cpp
 | UHF gradient | `src/gradient/gradient.cpp` | `compute_uhf_gradient` |
 | ROHF gradient | `src/gradient/gradient.cpp` | `compute_rohf_gradient`, `build_rohf_energy_weighted_density` |
 | UMP2 gradient | `src/gradient/gradient.cpp` | `compute_ump2_gradient` |
-| Derivative integrals | `src/integrals/os.cpp` | `_compute_1e_deriv_A`, `_compute_eri_deriv_elem` |
+| Derivative integrals (per component) | `src/integrals/os.cpp`, `src/integrals/hgp.cpp`, `src/gradient/gradient.cpp` | `_compute_1e_deriv_A`, `_compute_eri_deriv_elem`, `compute_eri_deriv_dispatch` |
+| Two-electron gradient loop | `src/gradient/gradient.cpp` | `accumulate_block_eri_gradient` (Auto, shell quartets), `accumulate_shell_pair_eri_gradient` (AO pairs), `pair_permuted_gamma` |
+| Converged SCF orbitals from the true Fock | `src/scf/scf.cpp`, `src/dft/driver.cpp` | `diagonalize_fock` in `run_rhf`; final re-diagonalization in `run_uhf` and the RKS/UKS loops |
 | L-BFGS optimizer | `src/opt/geomopt.cpp` | `run_geomopt` |
 | Internal coordinates | `src/opt/intcoords.cpp` | Wilson B matrix |
 | Semi-numerical Hessian | `src/freq/hessian.cpp` | `compute_hessian` |
