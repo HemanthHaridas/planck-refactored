@@ -4549,9 +4549,11 @@ per-component derivative.
 The ERI derivative is 98 % of an SCF gradient, so how the loop runs matters
 more than anything else in this section.
 
-**One loop, every reference.** RHF, RKS, UHF, ROHF and UKS all call
-`accumulate_shell_pair_eri_gradient` with their own \(\Gamma\); only the
-two-particle density differs between them.
+**One loop, every reference.** RHF, RKS, UHF, ROHF, UKS and the RMP2/UMP2
+gradients all go through `two_electron_gradient`
+(`src/gradient/two_electron_gradient.h`) with their own \(\Gamma\); only the
+two-particle density differs between them (§15 shows why the MP2 densities
+fit).
 
 **Permutations only change \(\Gamma\).** A quartet \((ij|kl)\) appears eight
 ways in \(\sum \Gamma\,\partial(ij|kl)\). Swapping \(i\leftrightarrow j\),
@@ -4936,6 +4938,54 @@ These amplitudes populate spin-specific occupied/virtual 1-PDM corrections
 gradient combines those objects with the UHF reference two-particle density
 expression and reuses the same derivative-integral contraction infrastructure
 as the RHF, UHF, and RMP2 gradients.
+
+### Assembling the MP2 Two-Electron Term
+
+The MP2 gradient's derivative-integral term has two parts: the correlation
+pair density (\(2\,\mathrm{dm2buf}\) for RMP2, \(D^\alpha + D^\beta\) for
+UMP2) and a separable part that pairs the HF density with the relaxed
+density \(\mathbf P^{HF} + 2\mathbf P^{corr}\). The natural way to write it,
+following PySCF's `grad/mp2.py`, differentiates only the first function:
+
+\[
+g_A = \sum_{p \in A} \sum_{qrs} X_{pqrs}\, \partial_p (pq|rs).
+\]
+
+Planck used to evaluate exactly that: a loop over the AO functions on each
+atom times \(n_b^3\), one thread, no screening, a fresh per-component
+derivative integral per quartet. The SCF gradients use a different loop
+(§14) that computes \(\tfrac14 \sum_{pqrs} \Gamma_{pqrs}\, d(pq|rs)/dR_A\)
+over all four centres, with every symmetry folded in.
+
+The two agree when \(\Gamma = X\), provided \(X\) symmetrized over
+\(r \leftrightarrow s\) has the full 8-fold symmetry of \((pq|rs)\). Each
+of the four slots can then be moved to the first position, so the
+all-centre sum is four copies of the first-centre sum. Both parts qualify.
+The separable part does by inspection. For RMP2 the pair density
+\(\sum_{ijab} \tilde T_{ij}^{ab}\,(C_{pi}C_{qa} + C_{qi}C_{pa})\,C_{rb}C_{sj}\),
+with \(\tilde T_{ij}^{ab} = 4t_{ij}^{ab} - 2t_{ij}^{ba}\), does because
+\(\tilde T\) is symmetric under \((i,a)\leftrightarrow(j,b)\). So
+`build_rmp2_gradient_intermediates` and `build_ump2_gradient_intermediates`
+now hand their \(\Gamma\) to `two_electron_gradient`
+(`src/gradient/two_electron_gradient.h`), the loop the SCF gradients use.
+The gradient is identical to the old one in every printed digit, and MP2
+gradients get threads, Schwarz screening and the shell-quartet derivative
+kernels without any MP2-specific integral code.
+
+Two things in the old code are worth knowing as patterns:
+
+- **A quantity nobody read cost \(O(N^8)\).** The RMP2 builder formed an AO
+  pair density over \(\mu\nu\lambda\sigma \times ijab\) and stored it in a
+  struct field that no caller used. For 2 H2O / 6-31G\* that one loop was
+  essentially the whole 358 s gradient. With it deleted and the sweep moved
+  to the shared loop, the run takes 0.65 s.
+- **Work inside a loop that does not depend on the loop index.** The UMP2
+  sweep rebuilt the separable density \(D^\sigma[p,v,r,s]\) inside its
+  \(q\) loop, which \(D^\sigma\) does not depend on, so the same tensor was
+  recomputed \(n_b\) times: \(O(n_b^5 n_{occ}^2)\). It is now built once,
+  and the Lagrangian \(\mathrm{Imat}_\sigma(q,v) = \tfrac12 \sum_{prs}
+  (pq|rs) D^\sigma[p,v,r,s]\) is a separate \(n_b^5\) contraction, threaded
+  over \(q\). A 2 H2O⁺ / 6-31G\* UMP2 gradient went from 136 s to 3.5 s.
 
 ### Double-Hybrid Analytic Gradients
 
@@ -9580,7 +9630,7 @@ driver.cpp
 | Restricted double-hybrid gradient | `src/dft/dh_pt2_gradient.cpp`, `src/dft/driver.cpp` | `DHGradientDriverContract`; correction-only KS Z-vector, literal pair RHS/overlap, Eq. 33 assembly |
 | Double-hybrid XC-II geometry response | `src/dft/dh_pt2_gradient.cpp`, `src/dft/dft_gradient.cpp` | `DHEq33CompleteXCIIGradient`; P-side, D-side, Becke partition, point translation |
 | Unrestricted double-hybrid gradient | `src/dft/udh_driver.cpp`, `src/dft/udh_*.cpp` | `build_udh_gradient_correction`; `build_udh_pt2_stationary_contract`, `solve_udh_zvector`, `build_udh_overlap_density`, `build_udh_two_particle_density`, `build_udh_{lda,gga}_complete_xc_ii_gradient` |
-| UMP2 gradient intermediates | `src/post_hf/mp2_gradient.cpp` | `build_ump2_gradient_intermediates` |
+| UMP2 gradient intermediates | `src/post_hf/mp2_gradient.cpp` | `build_ump2_gradient_intermediates` (separable densities \(D^\sigma\) built once; 2e term through `two_electron_gradient`) |
 | CI string generation | `src/post_hf/ci/strings.cpp` | `generate_strings`, `parity_between`, `select_active_orbitals` |
 | CI determinant space + sigma | `src/post_hf/ci/ci.cpp` | `build_ci_space`, `apply_ci_hamiltonian`, `slater_condon_element` |
 | CI solve (Davidson) | `src/post_hf/ci/ci.cpp` | `solve_ci`, `solve_ci_dense`, `build_ci_diagonal` |
@@ -9597,7 +9647,7 @@ driver.cpp
 | ROHF gradient | `src/gradient/gradient.cpp` | `compute_rohf_gradient`, `build_rohf_energy_weighted_density` |
 | UMP2 gradient | `src/gradient/gradient.cpp` | `compute_ump2_gradient` |
 | Derivative integrals (per component) | `src/integrals/os.cpp`, `src/integrals/hgp.cpp`, `src/gradient/gradient.cpp` | `_compute_1e_deriv_A`, `_compute_eri_deriv_elem`, `compute_eri_deriv_dispatch` |
-| Two-electron gradient loop | `src/gradient/gradient.cpp` | `accumulate_block_eri_gradient` (Auto, shell quartets), `accumulate_shell_pair_eri_gradient` (AO pairs), `pair_permuted_gamma` |
+| Two-electron gradient loop (SCF and MP2) | `src/gradient/two_electron_gradient.h` | `two_electron_gradient`; `detail::accumulate_block_eri_gradient` (Auto, shell quartets), `detail::accumulate_shell_pair_eri_gradient` (AO pairs), `detail::pair_permuted_gamma` |
 | Converged SCF orbitals from the true Fock | `src/scf/scf.cpp`, `src/dft/driver.cpp` | `diagonalize_fock` in `run_rhf`; final re-diagonalization in `run_uhf` and the RKS/UKS loops |
 | L-BFGS optimizer | `src/opt/geomopt.cpp` | `run_geomopt` |
 | Internal coordinates | `src/opt/intcoords.cpp` | Wilson B matrix |

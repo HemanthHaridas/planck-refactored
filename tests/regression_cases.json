@@ -1216,6 +1216,43 @@
    ]
   },
   {
+   "id": "water_rmp2_gradient_engine_os_vs_auto",
+   "input": "tests/inputs/regression/post_hf/water_rmp2_gradient_sto3g.hfinp",
+   "executable": "tests/engine_gradient_compare.py",
+   "args": [
+    "--engines",
+    "os,auto"
+   ],
+   "tags": [
+    "core",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "OS gradient (Ha/Bohr):",
+    "AUTO gradient (Ha/Bohr):",
+    "PASS"
+   ]
+  },
+  {
+   "id": "water_radical_cation_ump2_gradient_engine_os_vs_auto",
+   "input": "tests/inputs/regression/open_shell/water_radical_cation_uhf_ump2_gradient_sto3g.hfinp",
+   "executable": "tests/engine_gradient_compare.py",
+   "args": [
+    "--engines",
+    "os,auto"
+   ],
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "OS gradient (Ha/Bohr):",
+    "AUTO gradient (Ha/Bohr):",
+    "PASS"
+   ]
+  },
+  {
    "id": "water_b3lyp_gradient_engine_os_vs_hgp",
    "input": "tests/inputs/regression/dft/water_dft_b3lyp_gradient.hfinp",
    "executable": "tests/engine_gradient_compare.py",

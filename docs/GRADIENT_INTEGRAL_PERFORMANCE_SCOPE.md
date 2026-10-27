@@ -6,36 +6,41 @@ memory-direct Fock build fast and is closed.
 
 ## Where it stands (2026-10-27)
 
-**SCF gradients are done. MP2 gradients are now the problem.** G1–G3 have
-landed: the 2e gradient runs by shell quartet on two derivative block kernels,
-threaded, and an SCF gradient now costs about as much as the SCF itself.
-The MP2/UMP2 gradients still run their own dense, unscreened, single-threaded
-`nao⁴` sweeps, and against a now-cheap SCF they are 40× to 2000× it.
+**SCF and RMP2 gradients now cost about as much as the energy; UMP2 is the
+one left at ~20×.** G1–G4 have landed: the 2e
+gradient of every SCF reference and both MP2 flavours runs through one
+threaded loop, by shell quartet on two derivative block kernels under
+`engine auto`.
 
-Same systems as the original measurement (M3, `build-full`, direct SCF,
-`engine auto`, SAD, no symmetry, four threads; "now" is best of three, whole
-run including the SCF):
+Same systems as the original measurement, plus a UMP2 case (M3,
+`build-full`, direct SCF, `engine auto`, SAD, no symmetry, four threads,
+best of three, whole run including the SCF):
 
-| system | SCF now | gradient run 2026-10-25 | gradient run now | now ÷ SCF |
-|---|---|---|---|---|
-| 4 H2O / 6-31G\* (nb 76) | 0.39 s | 53.9 s | 0.56 s | 1.4× |
-| 8 H2O / 6-31G (nb 104) | 0.55 s | 68.0 s | 0.89 s | 1.6× |
-| 1 H2O / cc-pVTZ (nb 65 Cart.) | 0.54 s | 114.9 s | 0.62 s | 1.1× |
-| 1 H2O / 6-31G\* RMP2 (conventional) | 0.08 s | 7.30 s | 3.13 s | 39× |
-| 2 H2O / 6-31G\* RMP2 (conventional) | 0.17 s | > 5 min | 358 s | ≈ 2100× |
+| system | SCF now | gradient run 2026-10-25 | after G3 | **now** | now ÷ SCF |
+|---|---|---|---|---|---|
+| 4 H2O / 6-31G\* (nb 76) | 0.38 s | 53.9 s | 0.56 s | **0.56 s** | 1.5× |
+| 8 H2O / 6-31G (nb 104) | 0.56 s | 68.0 s | 0.89 s | **0.90 s** | 1.6× |
+| 1 H2O / cc-pVTZ (nb 65 Cart.) | 0.54 s | 114.9 s | 0.62 s | **0.61 s** | 1.1× |
+| 1 H2O / 6-31G\* RMP2 (conventional) | 0.08 s | 7.30 s | 3.13 s | **0.12 s** | 1.5× |
+| 2 H2O / 6-31G\* RMP2 (conventional) | 0.15 s | > 5 min | 358 s | **0.65 s** | 4.3× |
+| 2 H2O⁺ / 6-31G\* UMP2 (conventional) | 0.16 s | | 136 s | **3.5 s** | 22× |
 
-The 2026-10-25 runs had a concurrent compile on the machine (±20 %); the SCF
-itself also got faster in between, so compare the gradient columns, not the
-ratios across dates.
+The 2026-10-25 runs had a concurrent compile on the machine (±20 %), and the
+SCF itself got faster in between, so compare the gradient columns rather than
+ratios across dates. The UMP2 "after G3" figure was measured on the pre-G4
+binary on 2026-10-27.
 
-**Next: G4** (MP2/UMP2 onto the shared loop). Then G5 (1e derivatives, a
-larger share now that the 2e term is cheap) and G6 (RI three-centre, measure
-first). Two G3 items are also not built: block-level density screening and
+**What is left.** The UMP2 gradient's remaining cost is orbital-side, not
+derivative integrals: building D_α and D_β (`nao⁴ · nocc²`) and the Imat
+contraction (`nao⁵`), dense and single-pass. RMP2 has the same shape with one
+spin. G4 is done. Next G5 (1e derivatives, a larger
+share now that the 2e term is cheap) and G6 (RI three-centre, measure first).
+Two G3 items are not built: block-level density screening and
 screened-kernel (range-separated) block derivatives.
 
 ## How the 2e gradient runs now
 
-All in `src/gradient/gradient.cpp` unless noted.
+The loop lives in `src/gradient/two_electron_gradient.h` (moved out of `gradient.cpp` in G4); everything else in `src/gradient/gradient.cpp` unless noted.
 
 - **One loop for every SCF reference.** RHF, RKS, UHF, ROHF and UKS call
   `accumulate_shell_pair_eri_gradient` with their own Γ.
@@ -72,24 +77,55 @@ Still as before:
 - 1e derivatives (`_compute_1e_deriv_A`, `_compute_nuclear_deriv_{A,C}_elem`,
   `os.cpp`): per AO pair, serial, the block pasted four times in
   `gradient.cpp`; the C-derivative is re-evaluated per (atom, q).
-- `src/post_hf/mp2_gradient.cpp`: the RMP2 sweep (`build_rmp2_gradient_intermediates`)
-  and the UMP2 sweep (`build_ump2_gradient_intermediates`) are `nao⁴` loops
-  over `atom_aos[atom] × nao³`, unscreened and serial, calling the
-  per-component derivative and using only `dI[0..2]` (centre A). The UMP2
-  AO pair-density back-transform is fused inside the derivative loop.
+- `src/post_hf/mp2_gradient.cpp` (G4): both MP2 builders now
+  pass their Γ to `two_electron_gradient`. Their orbital-side intermediates
+  (`dm2buf_full`, D_σ, Imat) are still dense `nao⁴` tensors built in N⁵–N⁶.
 - `src/post_hf/ri/ri_eri.cpp`: `compute_3c_eri`, `compute_2c_eri`,
   `compute_3c_deriv_elem` per component, serial, unscreened.
 
 ## Remaining work, in order
 
-### G4 — MP2/UMP2 gradients onto the shared loop
+### G4 — MP2/UMP2 gradients onto the shared loop (2026-10-27)
 
-Express the dense pair-density term and the separable `vhf1` term as one Γ
-through the shell-quartet loop instead of the hand-written `nao⁴` sweeps.
-Symmetrize Γ first (`dm2buf_full` carries one bra-derivative permutation),
-then let `pair_permuted_gamma` handle the rest. Pull the UMP2 AO pair-density
-back-transform out of the derivative loop. This gives MP2 gradients
-threading, the block kernels and Schwarz screening at once.
+- The 2e loop moved out of `gradient.cpp` into
+  `src/gradient/two_electron_gradient.h` (`two_electron_gradient`, with the
+  loops in `detail`). Pure move; SCF gradients identical.
+- **RMP2.** A profile of the 2 H2O / 6-31G\* RMP2 gradient put every busy
+  sample in `build_rmp2_gradient_intermediates`' own loops, none in derivative
+  integrals. The cause was an AO pair density over μνλσ × ijab, O(N⁸), stored
+  in `Gamma_pair_ao`, a field nothing read. Deleted, along with the equally
+  unread `two_e_{non,}separable_gradient` fields. The per-atom derivative
+  sweep and the `vhf1` matrices are replaced by one `two_electron_gradient`
+  call after `dm1p` exists, Γ = 2 dm2buf (dense only) + the separable term.
+  No explicit symmetrization was needed: symmetrized over r ↔ s both parts
+  are already 8-fold symmetric (T̃ = 4t − 2t is symmetric under
+  (i,a) ↔ (j,b)), which is the condition for the bra-only and all-centre
+  forms to agree (teaching guide §15). Under `PLANCK_DEBUG_RMP2_TERMS` one
+  extra sweep splits off the separable part for the print.
+  Result: gradients identical in every printed component (STO-3G regression
+  input, 1 H2O / 6-31G\*); 2 H2O / 6-31G\* RMP2 gradient run 358 → 0.67 s.
+- **UMP2.** Its sweep rebuilt the separable
+  densities D_σ[p,v,r,s] inside the q loop, which they do not depend on:
+  O(nao⁵ nocc²). D_α and D_β are now built once (threaded over p), Imat_σ is
+  a separate nao⁵ contraction threaded over q (or `build_ri_imat` under RI),
+  and the 2e term is one `two_electron_gradient` call with Γ = D_α + D_β
+  (dense only) + the per-spin separable term. `build_ao_pair_table` (G1) and
+  `Gamma_pair_ao` are gone.
+  Result: gradients identical in every printed component on dense UMP2
+  (water cation, triplet water), RI-UMP2 and RI-RMP2; 2 H2O⁺ / 6-31G\*
+  UMP2 gradient run 136.2 → 3.98 s.
+
+- **Gates.** Two more `os,auto` comparators:
+  `water_rmp2_gradient_engine_os_vs_auto` (core) and
+  `water_radical_cation_ump2_gradient_engine_os_vs_auto`. Extended suite
+  143/147 (the four known rccsdt cases), all eight `os_vs_auto` cases passing.
+
+Verified after a full rebuild (including `planck-dft`, which links both
+`gradient.cpp` and `mp2_gradient.cpp`): the 35 Planck ctest gates selected for
+derivative kernels, engines, Fock accumulation, gradients and double hybrids
+pass, and the extended suite is again 143/147. (The ctest run also reports
+three Eigen `conjugate_gradient_*` tests as Not Run; that is the known Eigen
+test registration issue in Open Work, not a regression.)
 
 Gate: `water_rmp2_gradient_engine_os_vs_hgp`,
 `water_radical_cation_ump2_gradient_smoke`, the RMP2 FD/PySCF cases, the RI-MP2
