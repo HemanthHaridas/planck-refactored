@@ -1,5 +1,6 @@
 #include "post_hf/casscf_internal.h"
 #include "post_hf/ci/ci.h"
+#include "post_hf/casscf/casscf_utils.h"
 #include "post_hf/casscf/orbital.h"
 #include "post_hf/ci/rdm.h"
 #include "post_hf/casscf/response.h"
@@ -324,6 +325,118 @@ namespace
 int main()
 {
     bool ok = true;
+
+    {
+        // Orbital-CI coupling against exact finite differences, with real AO
+        // data in the context (the production path).
+        //   A: the CI RHS dH c0 must equal the central FD of H(C e^{eps R}) c0,
+        //      rebuilding h_eff (= F_I active block) and the active ERIs.
+        //   B: the orbital correction H_oc c1 must equal the central FD of the
+        //      fixed-orbital gradient along c0 +- eps c1 (exact: gamma and Gamma
+        //      are quadratic in c, so the central difference has no eps^2 term).
+        constexpr int nb = 6, nc = 1, na = 2, nv = nb - nc - na;
+        auto idx = [](int p, int q, int r, int s)
+        { return static_cast<std::size_t>(((p * nb + q) * nb + r) * nb + s); };
+        auto f = [](int p, int q, int r, int s)
+        { return std::cos(0.5 * p + 1.1 * q + 0.3 * r * s + 0.17 * (q + 1) * (r + 2)) / (2.0 + p + q + r + s); };
+        std::vector<double> eri(static_cast<std::size_t>(nb) * nb * nb * nb);
+        for (int p = 0; p < nb; ++p)
+            for (int q = 0; q < nb; ++q)
+                for (int r = 0; r < nb; ++r)
+                    for (int s = 0; s < nb; ++s)
+                        eri[idx(p, q, r, s)] =
+                            f(p, q, r, s) + f(q, p, r, s) + f(p, q, s, r) + f(q, p, s, r) +
+                            f(r, s, p, q) + f(s, r, p, q) + f(r, s, q, p) + f(s, r, q, p);
+        Eigen::MatrixXd M(nb, nb), H(nb, nb);
+        for (int i = 0; i < nb; ++i)
+            for (int j = 0; j < nb; ++j)
+            {
+                M(i, j) = std::sin(0.41 * i + 0.83 * j + 0.07 * i * j) + (i == j);
+                H(i, j) = 0.2 * std::cos(0.5 * (i + j)) - 0.4 * (i == j) * (i + 1);
+            }
+        const Eigen::MatrixXd C = Eigen::HouseholderQR<Eigen::MatrixXd>(M).householderQ();
+        const Eigen::MatrixXd S = Eigen::MatrixXd::Identity(nb, nb);
+
+        std::vector<CIString> a_strs, b_strs;
+        build_spin_strings_unfiltered(na, 1, 1, a_strs, b_strs);
+        RASParams ras;
+        auto hamiltonian = [&](const Eigen::MatrixXd &Cx, std::vector<std::pair<int, int>> &dets_out)
+        {
+            const Eigen::MatrixXd F_I = build_inactive_fock_mo(Cx, H, eri, nc, nb, nullptr);
+            const Eigen::MatrixXd h_eff = F_I.block(nc, nc, na, na);
+            const std::vector<double> ga = HartreeFock::Correlation::transform_eri_internal(eri, nb, Cx.middleCols(nc, na));
+            const CIDeterminantSpace sp = build_ci_space(a_strs, b_strs, ras, h_eff, ga, na, {}, nullptr, 0, 64);
+            dets_out = sp.dets;
+            return build_ci_hamiltonian_dense(a_strs, b_strs, sp.dets, h_eff, ga, na);
+        };
+
+        const Eigen::MatrixXd F_I = build_inactive_fock_mo(C, H, eri, nc, nb, nullptr);
+        const Eigen::MatrixXd h_eff = F_I.block(nc, nc, na, na);
+        const std::vector<double> ga = HartreeFock::Correlation::transform_eri_internal(eri, nb, C.middleCols(nc, na));
+        const CIDeterminantSpace space = build_ci_space(a_strs, b_strs, ras, h_eff, ga, na, {}, nullptr, 0, 64);
+        std::vector<std::pair<int, int>> dets0;
+        const Eigen::MatrixXd H0 = hamiltonian(C, dets0);
+        Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> eig(H0);
+        const Eigen::VectorXd c0 = eig.eigenvectors().col(0);
+        const double E0 = eig.eigenvalues()(0);
+        const ActiveIntegralCache cache = build_active_integral_cache(eri, C, nc, na, nb, nullptr);
+        const auto apply = [&H0](const Eigen::VectorXd &c, Eigen::VectorXd &s) { s = H0 * c; };
+
+        Eigen::MatrixXd R = Eigen::MatrixXd::Zero(nb, nb);
+        auto cls = [](int k) { return k < nc ? 0 : (k < nc + na ? 1 : 2); };
+        for (int p = 0; p < nb; ++p)
+            for (int q = p + 1; q < nb; ++q)
+                if (cls(p) != cls(q))
+                {
+                    R(p, q) = std::cos(0.9 * p - 0.4 * q + 0.3);
+                    R(q, p) = -R(p, q);
+                }
+
+        const Eigen::MatrixXd gamma0 = compute_1rdm(as_single_column_matrix(c0), single_weight(1.0), a_strs, b_strs, space.dets, na);
+        const std::vector<double> Gamma0 = compute_2rdm(as_single_column_matrix(c0), single_weight(1.0), a_strs, b_strs, space.dets, na);
+        const OrbitalHessianContext ctx{.C = &C, .S = &S, .H_core = &H, .eri = &eri,
+                                        .gamma = &gamma0, .Gamma_vec = &Gamma0};
+
+        // A
+        const Eigen::VectorXd rhs = build_ci_response_rhs(
+            ResponseRHSMode::ExactActiveSpaceOrbitalDerivative, R, F_I, h_eff, ga, cache,
+            space, a_strs, b_strs, c0, nc, na, &ctx);
+        // Richardson on the central FD (error O(h^4)), as in the analytic
+        // Hessian gate: plain central FD only resolves ~1e-7 here.
+        std::vector<std::pair<int, int>> dp, dm;
+        auto central = [&](double h)
+        {
+            const Eigen::MatrixXd Hp = hamiltonian(apply_orbital_rotation(C, h * R, S), dp);
+            const Eigen::MatrixXd Hm = hamiltonian(apply_orbital_rotation(C, -h * R, S), dm);
+            return Eigen::VectorXd((Hp - Hm) * c0 / (2.0 * h));
+        };
+        const Eigen::VectorXd rhs_fd = (4.0 * central(1e-3) - central(2e-3)) / 3.0;
+        const double errA = (rhs - rhs_fd).cwiseAbs().maxCoeff() / rhs_fd.cwiseAbs().maxCoeff();
+        std::cerr << "CI RHS vs FD: rel err = " << errA << '\n';
+        ok &= expect(dp == space.dets && dm == space.dets && errA < 1e-9,
+                     "exact CI RHS (with the core-density term) should match the FD of H(C) c0");
+
+        // B
+        const CoupledResponseBlocks blocks = build_coupled_response_blocks(
+            ResponseRHSMode::ExactActiveSpaceOrbitalDerivative, R, F_I, h_eff, ga, space,
+            a_strs, b_strs, space.dets, cache, apply, c0, E0, H0.diagonal(),
+            nb, nc, na, nv, 1e-10, 200, 1e-4, &ctx);
+        const Eigen::VectorXd &c1 = blocks.ci_response.c1;
+        auto gradient_at = [&](const Eigen::VectorXd &c)
+        {
+            const Eigen::MatrixXd cm = as_single_column_matrix(c);
+            const Eigen::MatrixXd g1 = compute_1rdm(cm, single_weight(1.0), a_strs, b_strs, space.dets, na);
+            const std::vector<double> G2 = compute_2rdm(cm, single_weight(1.0), a_strs, b_strs, space.dets, na);
+            return compute_orbital_gradient(F_I, build_active_fock_mo(C, g1, eri, nc, na, nb, nullptr),
+                                            compute_Q_matrix(cache, G2), g1, nc, na, nv, {}, false);
+        };
+        constexpr double eps = 1e-4;
+        const Eigen::MatrixXd corr_fd = (gradient_at(c0 + eps * c1) - gradient_at(c0 - eps * c1)) / (2.0 * eps);
+        const double errB = (blocks.orbital_correction - corr_fd).cwiseAbs().maxCoeff() / corr_fd.cwiseAbs().maxCoeff();
+        std::cerr << "H_oc c1 vs FD: rel err = " << errB << " (|c1| = " << c1.norm() << ")\n";
+        ok &= expect(c1.norm() > 1e-3 && errB < 1e-9,
+                     "CI->orbital coupling (with the 1-RDM response) should match the FD of the gradient in c");
+    }
 
     {
         // Analytic fixed-CI orbital Hessian action against the central-FD

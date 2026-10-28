@@ -1,6 +1,7 @@
 #include "post_hf/casscf/casscf.h"
 
 #include "base/tables.h"
+#include "integrals/os.h"
 #include "io/logging.h"
 #include "post_hf/casscf.h"
 #include "post_hf/casscf/aug-hessian-orbital.h"
@@ -994,7 +995,9 @@ namespace HartreeFock::Correlation::CASSCF
                             nbasis,
                             n_core,
                             n_act,
-                            n_virt);
+                            n_virt,
+                            1e-8, 64, 1e-4,
+                            &sa_hessian_ctx);
                     if (!blocks.ci_response.converged)
                         diag.ci_response_fallback_used = true;
 
@@ -1105,7 +1108,8 @@ namespace HartreeFock::Correlation::CASSCF
                             configured_rhs_mode, R, st_current.F_I_mo, st_current.h_eff, st_current.ga,
                             st_current.ci_space, a_strs, b_strs, st_current.dets,
                             st_current.active_integrals, ci_apply, root.ci_vector, root.ci_energy,
-                            st_current.H_CI_diag, nbasis, n_core, n_act, n_virt);
+                            st_current.H_CI_diag, nbasis, n_core, n_act, n_virt,
+                            1e-8, 64, 1e-4, &sa_hessian_ctx);
                         v_cpl += root.weight * b.orbital_correction;
                     }
                     if (gp && gm)
@@ -1128,6 +1132,78 @@ namespace HartreeFock::Correlation::CASSCF
                                             macro, alpha, dr.norm() / rel.norm(),
                                             (dr - alpha * dc).norm() / rel.norm(),
                                             (dc.norm() > 0 && dr.norm() > 0) ? dc.dot(dr) / (dc.norm() * dr.norm()) : 0.0));
+
+                        // Attribute the mismatch. A: add the core-density term
+                        // C^T G[dD_c] C to the CI RHS's one-body derivative.
+                        // B: add the 1-RDM response (F_A and gamma·F_I) to the
+                        // CI->orbital back-coupling, not just Q(Gamma1).
+                        const Eigen::MatrixXd Pc_R = [&]
+                        {
+                            Eigen::MatrixXd m = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                            m.leftCols(n_core) = R.leftCols(n_core);
+                            return m;
+                        }();
+                        const Eigen::MatrixXd dDc = 2.0 * C * (Pc_R + Pc_R.transpose()) * C.transpose();
+                        const Eigen::MatrixXd dh_core =
+                            (C.transpose() * HartreeFock::ObaraSaika::_compute_fock_rhf(eri, dDc, nbasis) * C)
+                                .block(n_core, n_core, n_act, n_act);
+                        const std::vector<double> zero_ga(st_current.ga.size(), 0.0);
+                        const Eigen::MatrixXd zero_gamma = Eigen::MatrixXd::Zero(n_act, n_act);
+                        const Eigen::MatrixXd g_FI_only = compute_orbital_gradient(
+                            st_current.F_I_mo, Eigen::MatrixXd::Zero(nbasis, nbasis),
+                            Eigen::MatrixXd::Zero(nbasis, n_act), zero_gamma,
+                            n_core, n_act, n_virt, all_mo_irr, use_sym);
+                        auto ci_coupling = [&](bool fix_rhs, bool fix_back)
+                        {
+                            Eigen::MatrixXd total = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                            for (const auto &root : st_current.roots)
+                            {
+                                const Eigen::VectorXd &c0 = root.ci_vector;
+                                Eigen::VectorXd rhs = build_ci_response_rhs(
+                                    configured_rhs_mode, R, st_current.F_I_mo, st_current.h_eff, st_current.ga,
+                                    st_current.active_integrals, st_current.ci_space, a_strs, b_strs, c0,
+                                    n_core, n_act);
+                                if (fix_rhs)
+                                    rhs += build_ci_hamiltonian_dense(a_strs, b_strs, st_current.dets,
+                                                                      dh_core, zero_ga, n_act) * c0;
+                                const Eigen::VectorXd c1 = solve_ci_response_davidson(
+                                    ci_apply, c0, root.ci_energy, st_current.H_CI_diag, rhs, 1e-10, 200, 1e-4).c1;
+                                const Eigen::MatrixXd cp = as_single_column_matrix(c0 + c1);
+                                const Eigen::MatrixXd cm = as_single_column_matrix(c0 - c1);
+                                const std::vector<double> Gp = compute_2rdm(cp, single_weight(1.0), a_strs, b_strs, st_current.dets, n_act);
+                                const std::vector<double> Gm = compute_2rdm(cm, single_weight(1.0), a_strs, b_strs, st_current.dets, n_act);
+                                std::vector<double> Gamma1(Gp.size());
+                                for (std::size_t k = 0; k < Gp.size(); ++k)
+                                    Gamma1[k] = 0.5 * (Gp[k] - Gm[k]);
+                                const Eigen::MatrixXd Q1 = compute_Q_matrix(st_current.active_integrals, Gamma1);
+                                Eigen::MatrixXd dFA = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                                Eigen::MatrixXd gamma1 = zero_gamma;
+                                if (fix_back)
+                                {
+                                    gamma1 = 0.5 * (compute_1rdm(cp, single_weight(1.0), a_strs, b_strs, st_current.dets, n_act) -
+                                                    compute_1rdm(cm, single_weight(1.0), a_strs, b_strs, st_current.dets, n_act));
+                                    const Eigen::MatrixXd Ca = C.middleCols(n_core, n_act);
+                                    dFA = C.transpose() *
+                                          HartreeFock::ObaraSaika::_compute_fock_rhf(eri, Ca * gamma1 * Ca.transpose(), nbasis) * C;
+                                }
+                                total += root.weight * (compute_orbital_gradient(
+                                                            st_current.F_I_mo, dFA, Q1, gamma1,
+                                                            n_core, n_act, n_virt, all_mo_irr, use_sym) -
+                                                        g_FI_only);
+                            }
+                            return Eigen::VectorXd(pack_pairs(total));
+                        };
+                        for (int variant = 0; variant < 4; ++variant)
+                        {
+                            const bool fa = variant & 1, fb = variant & 2;
+                            const Eigen::VectorXd d = ci_coupling(fa, fb);
+                            logging(LogLevel::Info, tag + " :",
+                                    std::format("fix_probe macro={:d} rhs_core={:d} back_gamma1={:d} cos(d,dr)={:.6f} "
+                                                "|d|/|dr|={:.4f} |dr-d|/|rel|={:.2e}",
+                                                macro, fa ? 1 : 0, fb ? 1 : 0,
+                                                (d.norm() > 0) ? d.dot(dr) / (d.norm() * dr.norm()) : 0.0,
+                                                d.norm() / dr.norm(), (dr - d).norm() / rel.norm()));
+                        }
                     }
                 }
                 append_candidate_step(step_candidates, kappa_newton, "numeric-newton");

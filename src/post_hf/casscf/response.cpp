@@ -541,20 +541,36 @@ namespace
         return kappa;
     }
 
-    Eigen::MatrixXd orbital_correction_from_ci_step(
+    struct CIOrbitalCoupling
+    {
+        std::vector<double> Gamma1_vec;
+        Eigen::MatrixXd Q1;
+        Eigen::MatrixXd correction;
+    };
+
+    // Change of the orbital gradient when the CI vector moves c0 -> c0 + c1 at
+    // fixed orbitals (H_oc c1). The gradient depends on the 2-RDM through Q and
+    // on the 1-RDM through F_A (core columns) and gamma·F_I (active columns).
+    // The 1-RDM terms need the AO integrals, so without `ctx` only the Q term is
+    // kept; with it the coupling is exact.
+    CIOrbitalCoupling ci_orbital_coupling(
         const Eigen::VectorXd &c1,
         const Eigen::VectorXd &c0,
         const std::vector<CIString> &a_strs,
         const std::vector<CIString> &b_strs,
         const std::vector<std::pair<int, int>> &dets,
         const ActiveIntegralCache &active_integrals,
+        const Eigen::MatrixXd &F_I_mo,
         int nbasis,
         int n_core,
         int n_act,
-        int n_virt)
+        int n_virt,
+        const OrbitalHessianContext *ctx)
     {
+        CIOrbitalCoupling out;
+        out.correction = Eigen::MatrixXd::Zero(nbasis, nbasis);
         if (c1.size() == 0 || c0.size() == 0)
-            return Eigen::MatrixXd::Zero(nbasis, nbasis);
+            return out;
 
         const Eigen::MatrixXd c1_vec = as_single_column_matrix(c1);
         const Eigen::MatrixXd c0_vec = as_single_column_matrix(c0);
@@ -565,12 +581,52 @@ namespace
             c0_vec, c1_vec, single_weight(1.0),
             a_strs, b_strs, dets, n_act);
 
-        std::vector<double> Gamma1_vec(Gamma1_r.size(), 0.0);
+        out.Gamma1_vec.assign(Gamma1_r.size(), 0.0);
         for (std::size_t i = 0; i < Gamma1_r.size(); ++i)
-            Gamma1_vec[i] = Gamma1_r[i] + Gamma1_rt[i];
+            out.Gamma1_vec[i] = Gamma1_r[i] + Gamma1_rt[i];
+        out.Q1 = compute_Q_matrix(active_integrals, out.Gamma1_vec);
 
-        const Eigen::MatrixXd Q1 = compute_Q_matrix(active_integrals, Gamma1_vec);
-        return build_ci_orbital_gradient_correction(Q1, nbasis, n_core, n_act, n_virt);
+        if (ctx == nullptr || ctx->C == nullptr)
+        {
+            out.correction = build_ci_orbital_gradient_correction(out.Q1, nbasis, n_core, n_act, n_virt);
+            return out;
+        }
+
+        // gamma is quadratic in c, so its first-order change is exact as a
+        // symmetric difference: gamma1 = [gamma(c0+c1) - gamma(c0-c1)] / 2.
+        using HartreeFock::Correlation::CASSCF::compute_1rdm;
+        const Eigen::MatrixXd gamma1 =
+            0.5 * (compute_1rdm(as_single_column_matrix(c0 + c1), single_weight(1.0), a_strs, b_strs, dets, n_act) -
+                   compute_1rdm(as_single_column_matrix(c0 - c1), single_weight(1.0), a_strs, b_strs, dets, n_act));
+        const Eigen::MatrixXd Ca = ctx->C->middleCols(n_core, n_act);
+        const Eigen::MatrixXd dFA =
+            HartreeFock::Correlation::CASSCF::fock_response_mo(Ca * gamma1 * Ca.transpose(), *ctx);
+        // Active column t of the generalized Fock is sum_u gamma(t,u) F_I(p,u) + Q(p,t),
+        // so the gamma1 term folds into Q.
+        const Eigen::MatrixXd Q_eff = out.Q1 + F_I_mo.middleCols(n_core, n_act) * gamma1.transpose();
+        out.correction = HartreeFock::Correlation::CASSCF::compute_orbital_gradient(
+            Eigen::MatrixXd::Zero(nbasis, nbasis), dFA, Q_eff, Eigen::MatrixXd::Zero(n_act, n_act),
+            n_core, n_act, n_virt, {}, false);
+        return out;
+    }
+
+    Eigen::MatrixXd orbital_correction_from_ci_step(
+        const Eigen::VectorXd &c1,
+        const Eigen::VectorXd &c0,
+        const std::vector<CIString> &a_strs,
+        const std::vector<CIString> &b_strs,
+        const std::vector<std::pair<int, int>> &dets,
+        const ActiveIntegralCache &active_integrals,
+        const Eigen::MatrixXd &F_I_mo,
+        int nbasis,
+        int n_core,
+        int n_act,
+        int n_virt,
+        const OrbitalHessianContext *ctx)
+    {
+        return ci_orbital_coupling(c1, c0, a_strs, b_strs, dets, active_integrals, F_I_mo,
+                                   nbasis, n_core, n_act, n_virt, ctx)
+            .correction;
     }
 
     CoupledResidualEvaluation evaluate_coupled_residual(
@@ -600,7 +656,8 @@ namespace
     {
         CoupledResidualEvaluation evaluation;
         evaluation.orbital_correction = orbital_correction_from_ci_step(
-            c1, c0, a_strs, b_strs, dets, active_integrals, nbasis, n_core, n_act, n_virt);
+            c1, c0, a_strs, b_strs, dets, active_integrals, F_I_mo,
+            nbasis, n_core, n_act, n_virt, orbital_hessian_ctx);
         evaluation.orbital_residual =
             orbital_gradient +
             delta_g_sa_action(
@@ -609,7 +666,7 @@ namespace
             evaluation.orbital_correction;
         const Eigen::VectorXd rhs = build_ci_response_rhs(
             mode, kappa, F_I_mo, h_eff, ga, active_integrals,
-            space, a_strs, b_strs, c0, n_core, n_act);
+            space, a_strs, b_strs, c0, n_core, n_act, orbital_hessian_ctx);
         evaluation.ci_residual = response_residual(apply, c1, c0, E0, rhs);
         return evaluation;
     }
@@ -675,12 +732,13 @@ namespace
             const Eigen::VectorXd &c1 =
                 (i < static_cast<int>(ci_steps.size())) ? ci_steps[static_cast<std::size_t>(i)] : empty;
             const Eigen::MatrixXd root_orbital_correction = orbital_correction_from_ci_step(
-                c1, root.ci_vector, a_strs, b_strs, dets, active_integrals, nbasis, n_core, n_act, n_virt);
+                c1, root.ci_vector, a_strs, b_strs, dets, active_integrals, F_I_mo,
+                nbasis, n_core, n_act, n_virt, orbital_hessian_ctx);
             evaluation.orbital_correction.noalias() += root.weight * root_orbital_correction;
 
             const Eigen::VectorXd rhs = build_ci_response_rhs(
                 mode, kappa, F_I_mo, h_eff, ga, active_integrals,
-                space, a_strs, b_strs, root.ci_vector, n_core, n_act);
+                space, a_strs, b_strs, root.ci_vector, n_core, n_act, orbital_hessian_ctx);
             evaluation.ci_residuals.push_back(
                 response_residual(apply, c1, root.ci_vector, root.ci_energy, rhs));
         }
@@ -791,7 +849,8 @@ namespace HartreeFock::Correlation::CASSCF
         const std::vector<CIString> &b_strs,
         const Eigen::VectorXd &c0,
         int n_core,
-        int n_act)
+        int n_act,
+        const OrbitalHessianContext *ctx)
     {
         if (c0.size() == 0 || space.dets.empty())
             return Eigen::VectorXd::Zero(c0.size());
@@ -808,8 +867,14 @@ namespace HartreeFock::Correlation::CASSCF
             F_I_mo.cols() < n_core + n_act)
             return Eigen::VectorXd::Zero(c0.size());
 
-        const Eigen::MatrixXd dh =
+        Eigen::MatrixXd dh =
             exact_active_one_body_derivative(kappa, F_I_mo, n_core, n_act);
+        // h_eff is the active block of F_I, which also moves with the core
+        // density. Rotations touching core orbitals change it through
+        // G[dD_c]; without the AO integrals that term is unavailable.
+        if (ctx != nullptr && ctx->C != nullptr && n_core > 0)
+            dh += fock_response_mo(core_density_response(kappa, *ctx->C, n_core), *ctx)
+                      .block(n_core, n_core, n_act, n_act);
         const std::vector<double> dga =
             exact_active_two_body_derivative(kappa, ga, active_integrals, n_core, n_act);
         const Eigen::MatrixXd dH = build_ci_hamiltonian_dense(a_strs, b_strs, space.dets, dh, dga, n_act);
@@ -901,7 +966,8 @@ namespace HartreeFock::Correlation::CASSCF
             nbasis,
             n_core,
             n_act,
-            n_virt);
+            n_virt,
+                1e-8, 64, 1e-4, orbital_hessian_ctx);
         result.ci_step = seed_blocks.ci_response.c1;
 
         CoupledResidualEvaluation current = evaluate_coupled_residual(
@@ -1096,7 +1162,8 @@ namespace HartreeFock::Correlation::CASSCF
                 nbasis,
                 n_core,
                 n_act,
-                n_virt);
+                n_virt,
+                1e-8, 64, 1e-4, orbital_hessian_ctx);
             result.ci_steps[static_cast<std::size_t>(i)] = seed_blocks.ci_response.c1;
         }
 
@@ -1241,7 +1308,8 @@ namespace HartreeFock::Correlation::CASSCF
         int n_virt,
         double tol,
         int max_iter,
-        double precond_floor)
+        double precond_floor,
+        const OrbitalHessianContext *ctx)
     {
         CoupledResponseBlocks blocks;
         blocks.ci_rhs = build_ci_response_rhs(
@@ -1256,7 +1324,8 @@ namespace HartreeFock::Correlation::CASSCF
             b_strs,
             c0,
             n_core,
-            n_act);
+            n_act,
+            ctx);
 
         blocks.ci_response =
             solve_ci_response_davidson(apply, c0, E0, H_diag, blocks.ci_rhs, tol, max_iter, precond_floor);
@@ -1264,20 +1333,12 @@ namespace HartreeFock::Correlation::CASSCF
             blocks.ci_response = solve_ci_response_single_step(
                 apply, c0, E0, H_diag, blocks.ci_rhs, precond_floor, tol);
 
-        const Eigen::MatrixXd c1_vec = as_single_column_matrix(blocks.ci_response.c1);
-        const Eigen::MatrixXd c0_vec = as_single_column_matrix(c0);
-        const auto Gamma1_r = compute_2rdm_bilinear(
-            c1_vec, c0_vec, single_weight(1.0),
-            a_strs, b_strs, dets, n_act);
-        const auto Gamma1_rt = compute_2rdm_bilinear(
-            c0_vec, c1_vec, single_weight(1.0),
-            a_strs, b_strs, dets, n_act);
-        blocks.Gamma1_vec.resize(Gamma1_r.size(), 0.0);
-        for (std::size_t i = 0; i < Gamma1_r.size(); ++i)
-            blocks.Gamma1_vec[i] = Gamma1_r[i] + Gamma1_rt[i];
-        blocks.Q1 = compute_Q_matrix(active_integrals, blocks.Gamma1_vec);
-        blocks.orbital_correction =
-            build_ci_orbital_gradient_correction(blocks.Q1, nbasis, n_core, n_act, n_virt);
+        CIOrbitalCoupling coupling = ci_orbital_coupling(
+            blocks.ci_response.c1, c0, a_strs, b_strs, dets, active_integrals, F_I_mo,
+            nbasis, n_core, n_act, n_virt, ctx);
+        blocks.Gamma1_vec = std::move(coupling.Gamma1_vec);
+        blocks.Q1 = std::move(coupling.Q1);
+        blocks.orbital_correction = std::move(coupling.correction);
         blocks.ci_residual = response_residual(
             apply, blocks.ci_response.c1, c0, E0, blocks.ci_rhs);
         return blocks;

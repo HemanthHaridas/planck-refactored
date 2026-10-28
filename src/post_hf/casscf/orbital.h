@@ -84,6 +84,19 @@ namespace HartreeFock::Correlation::CASSCF
         const AnalyticOrbitalHessian *analytic = nullptr;
     };
 
+    // C^T G[D] C for an AO density D, with G the closed-shell two-electron
+    // operator of the context's integrals (dense or RI).
+    Eigen::MatrixXd fock_response_mo(
+        const Eigen::MatrixXd &D_ao,
+        const OrbitalHessianContext &ctx);
+
+    // First-order change of the closed-shell core density 2 C P_c C^T under
+    // C -> C (I + R): 2 C (R P_c + P_c R^T) C^T.
+    Eigen::MatrixXd core_density_response(
+        const Eigen::MatrixXd &R,
+        const Eigen::MatrixXd &C,
+        int n_core);
+
     // Cache the active-space integral transform and reuse it across all response
     // contractions in a macroiteration.
     // When ri_calc is non-null and RI is enabled on it, the ERI-dependent Fock /

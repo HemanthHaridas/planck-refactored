@@ -153,33 +153,120 @@ R = the current gradient direction, compare three actions:
 `rel ~ oo + alpha·dc` wanders from -2.1 to 5.5. That is not a prefactor
 error. The coupling term points the wrong way.
 
-So the defect is in one of the three pieces of the CI relaxation:
+**5. Two omissions, and nothing else.** Reading the coupling code gave two
+candidates, one on each side:
 
-- `build_ci_response_rhs`: the orbital-to-CI coupling H_co R.
-- the CI response solve: H_cc, including the `1e-4` preconditioner floor,
-  the projection against c0, and E0.
-- `orbital_correction_from_ci_step`: the CI-to-orbital coupling H_oc c1.
+- **A. The CI RHS H_co drops the core-density response.**
+  `exact_active_one_body_derivative` returns only the commutator
+  `F_I·kappa - kappa·F_I`, restricted to the active block. But `h_eff` is the
+  active block of `F_I`, and `F_I` depends on the core density through
+  `G[D_core]`. The missing term is `(C^T G[dD_c] C)_act`, with
+  `dD_c = 2C(kappa P_c + P_c kappa^T)C^T`: the same term P2's `dF_I` needed.
+  For core-virtual rotations the commutator's active block is exactly zero,
+  so those rotations had no CI coupling at all.
+- **B. The back-coupling H_oc drops the 1-RDM response.**
+  `orbital_correction_from_ci_step` passes only Gamma1 through Q. The
+  gradient also depends on gamma, through `F_A` (core columns) and
+  `gamma·F_I` (active columns). Adding gamma1 needs one Fock build for
+  `F_A(gamma1)`.
 
-### Next
+`fix_probe` rebuilds the coupling term four ways: as is, A only, B only, and
+A+B. It uses `gamma1 = [gamma(c0+c1) - gamma(c0-c1)]/2` (exact, since gamma is
+quadratic in c) and a tightly converged CI solve. Against `dr`, over 16
+macros of 6-31G and cc-pVDZ:
 
-Gate each piece separately against a finite difference, in the same style as
-P2's gate:
+| variant | cos(d, dr) | \|d\|/\|dr\| | \|dr - d\|/\|rel\| |
+|---|---|---|---|
+| as is | -0.50 .. 0.75 | 0.08 .. 2.9 | 1e-2 .. 3e-1 |
+| A only | 0.07 .. 0.75 | 0.66 .. 3.4 | 3e-2 .. 3e-1 |
+| B only | -0.80 .. 0.99999 | 0.13 .. 1.4 | 9e-3 .. 2e-1 |
+| **A + B** | **1.000000** | **1.0000** | **7e-10 .. 1e-8** |
 
-- **H_co R:** FD of the CI gradient `(H - E)c0` along an orbital rotation,
-  CI fixed.
-- **H_oc c1:** FD of the orbital gradient along `c0 + eps·c1` (renormalized),
-  orbitals fixed.
-- **The solve:** check `(H - E0)c1 = rhs` directly.
+With both, the coupled system's effective Hessian equals the CI-relaxed
+Hessian to the FD reference's own noise floor, on every macro. Neither fix
+alone comes close. The CI solve itself (H_cc, projection, E0) is fine.
 
-Fix the piece that fails, then confirm `cos(dc, dr) -> 1` and that the coupled
-solve converges. Only then rerun the accepted-candidate sweep and, if
-`sa-coupled` wins, return `numeric-newton` to stagnation-only. It is
-load-bearing today (the uphill canary's path runs through it), so that is a
-measured decision, not a cleanup.
+### P3b status (2026-10-28, implemented, NOT committed: breaks the canary)
 
-Not yet ruled out but now secondary: block-Jacobi stalling in the coupled
-iteration (it stops at the first scale that fails to reduce the residual).
-Fixing the coupling block may or may not fix convergence on its own.
+Both fixes are in the working tree. The context reaches the coupling through
+one optional `ctx` argument; without it the old behaviour is kept
+bitwise. `ci_orbital_coupling` is now the single builder behind both
+`orbital_correction_from_ci_step` and `build_coupled_response_blocks`, and
+`fock_response_mo` / `core_density_response` are shared with P2's analytic
+action.
+
+- **Unit gate** (`planck-casscf-internal`), on a synthetic system with real
+  AO data:
+  - A: CI RHS vs Richardson FD of `H(C) c0`, 1.9e-10.
+  - B: H_oc c1 vs central FD of the gradient along `c0 +- eps c1`, 1.4e-11
+    (central differencing cancels the eps^2 term exactly, since the RDMs are
+    quadratic in c).
+  - Dropping the core term fails A at 0.24; dropping gamma1 fails B at 0.42.
+- **End to end:** `cos(cpl, rel) = 1.000000` on every macro of all three water
+  cases.
+- **Energies:** within 1.2e-9 Eh on all 11 table inputs.
+- **The coupled step now wins more where symmetry is on:** 6-31G 7/13 (was
+  2/13), cc-pVDZ 12/17 (was 10/16).
+- **C1 unchanged:** 26/27 `numeric-newton`.
+- **The coupled solve still never converges.**
+
+**Canary failure.** `water_casscf_sa2_sto3g_sad_guess_uphill` reaches the
+right energy (-74.7877864783) and then limit-cycles to the 100-macro cap. The
+sequence:
+
+1. `sa-coupled` stops at sa_g = 7.9e-7: it is good but not exact, because the
+   coupled solve is unconverged.
+2. The selector's noise floor forbids gradient-only gains below
+   `tol_mcscf_grad`, so `numeric-newton` cannot polish it further.
+3. `mcscf_accept_uphill`'s pass 2 then accepts a gradient-fallback step that
+   trims the worst per-root gradient by 0.4 % for +1.8e-5 Eh. `numeric-newton`
+   brings the state back, and the cycle repeats.
+
+Before P3b, `numeric-newton` won the final macros and drove sa_g to ~1e-10,
+where the fallback step is negligible and the plateau exit fires.
+
+**So P3b needs P3c before it can land.** Do not loosen the uphill policy to
+compensate; that would hide the real gap.
+
+### Next: P3c, make the coupled solve converge
+
+The equations are exact now; the block-Jacobi iteration is what fails. With
+`npairs <= 128` the orbital operator is already built densely, column by
+column. Build the **CI-relaxed** effective Hessian the same way: column `k` is
+`H_oo e_k + sum_I w_I H_oc c1_I(e_k)`, each costing about four Fock builds
+plus a small CI solve and no transforms. Then solve it directly with the
+eigenvalue floor and level shift `numeric-newton` uses. That is
+`numeric-newton`'s Hessian computed analytically:
+
+- the coupled step becomes exact, so `coupled_converged` can be true;
+- `numeric-newton` stops being offered every macro;
+- its 2·npairs full evaluations go away.
+
+Above 128 pairs, use a Krylov solve on the same action. Gate: the canary
+converges in its basin, then every CASSCF gate.
+
+### Superseded plan: P3b, fix A and B in production
+
+- `build_ci_response_rhs` (exact mode): add `(C^T G[dD_c] C)_act` to `dh`.
+- `orbital_correction_from_ci_step` and `build_coupled_response_blocks`:
+  build gamma1 as well as Gamma1, and return the full
+  `compute_orbital_gradient(F_I, F_A(gamma1), Q(Gamma1), gamma1)
+   - compute_orbital_gradient(F_I, 0, 0, 0)` instead of the Q-only
+  correction.
+- Both need `C` and the ERIs; they already travel in `OrbitalHessianContext`,
+  so pass that rather than new parameters. The RI path needs the RI Fock
+  build in the same two places.
+
+Gate: a unit test that pins `cpl == rel` along random directions on a
+synthetic system (the `fix_probe` comparison, made permanent), then every
+CASSCF gate. This changes the optimizer's path, so energies may move within
+tolerance and the uphill canary's basin must be checked explicitly. Then
+measure whether the coupled solve now converges, rerun the candidate sweep,
+and decide on returning `numeric-newton` to stagnation-only.
+
+Still open: block-Jacobi stalling in the coupled iteration (it stops at the
+first scale that fails to reduce the residual). With the equations now
+correct, that may or may not still limit convergence.
 
 ## Follow-ups, not started
 

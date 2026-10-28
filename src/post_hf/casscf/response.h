@@ -146,7 +146,8 @@ namespace HartreeFock::Correlation::CASSCF
         const std::vector<CIString> &b_strs,
         const Eigen::VectorXd &c0,
         int n_core,
-        int n_act);
+        int n_act,
+        const OrbitalHessianContext *ctx = nullptr);
 
     // Solve the first-order CI block induced by an orbital trial step and
     // return the explicit CO/CC/OC pieces needed by later coupled-step
@@ -173,7 +174,8 @@ namespace HartreeFock::Correlation::CASSCF
         int n_virt,
         double tol = 1e-8,
         int max_iter = 64,
-        double precond_floor = 1e-4);
+        double precond_floor = 1e-4,
+        const OrbitalHessianContext *ctx = nullptr);
 
     // Solve the linearized coupled orbital/CI stationarity system with a
     // matrix-free block iteration. The OO and CC blocks use diagonal
