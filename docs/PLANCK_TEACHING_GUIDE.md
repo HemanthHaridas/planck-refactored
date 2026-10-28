@@ -4540,7 +4540,33 @@ The derivative of the overlap integral with respect to center \(\mathbf A\):
 by the Gaussian angular-momentum shift rule. Similarly for kinetic, nuclear
 attraction, and ERI derivative integrals. The one-electron derivatives are
 `_compute_1e_deriv_A`, `_compute_nuclear_deriv_A_elem` and
-`_compute_nuclear_deriv_C_elem` in `os.cpp`. The ERI derivative
+`_compute_nuclear_deriv_C_xyz` in `os.cpp`.
+
+**The one-electron terms, once.** Every gradient that has a one-electron
+part (RHF, RKS, UHF, ROHF, UKS, RMP2, UMP2, the double-hybrid Eq. 33 term)
+calls `one_electron_gradient(calc, ao_pairs, D, W)` in `gradient.cpp`. It
+returns four \(N_{atoms}\times 3\) pieces: the kinetic and basis-function
+nuclear-attraction parts of \(\sum D\,\partial h/\partial R\), the
+nucleus-position part, and \(\sum W\,\partial S/\partial R\). Each caller
+keeps the pieces it needs: an SCF gradient takes `total()`
+(\(h\) minus \(S\)), the MP2 and DH paths take `core()` and build their own
+overlap term. Because \(h\) and \(S\) are symmetric, only the symmetric parts
+of \(D\) and \(W\) contribute, so the function symmetrizes them and walks
+each unordered AO pair once. Pair \((i,j)\) gets weight \(2D_{ij}\), plus the
+bra derivative of \((j,i)\) on \(j\)'s atom when \(i \ne j\).
+
+Two things made this term cheaper (G5 in
+`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`). The nucleus-position
+derivative \(\partial V^C_{\mu\nu}/\partial C\) used to run the whole nuclear
+VRR once per axis. The Boys values and the \(V\) recurrence do not depend on
+the axis, so `_compute_nuclear_deriv_C_xyz` builds them once and runs only
+the derivative recurrence and HRR per axis. The loop is also threaded over
+AO pairs in 64 fixed bins, the same determinism rule as the 2e loop below.
+Before this, six copies of the block existed, and two of them (MP2's and the
+DH contraction) did several times the necessary work. The term had been
+priced at 14–32 % of an RHF gradient call before anything was built, and
+the measured gain matched that: 8 H2O / 6-31G 0.87 → 0.78 s for the whole
+run. The ERI derivative
 \(\partial(\mu\nu|\lambda\sigma)/\partial \mathbf X\) for the four centres
 (12 numbers) goes through `compute_eri_deriv_dispatch`, which sends
 `engine auto` and `engine hgp` to HGP and everything else to OS. Rys has no
@@ -4904,6 +4930,32 @@ where \(\mathbf A\) is the orbital Hessian (also the CPHF matrix) and
 \(\mathbf L\) is the MP2 Lagrangian source term. The final gradient is then
 assembled from the relaxed density and the appropriate derivative integrals.
 
+**Solve the system, don't build the matrix.** One linear system needs
+\(\mathbf A\) only through its action on a vector:
+\(\mathbf A\mathbf x = (\varepsilon_a - \varepsilon_i)\,x_{ai}\) plus the
+Coulomb/exchange response of the trial density \(C_v\,x\,C_o^{\mathsf T}\),
+which is one Fock build. RHF builds \(\mathbf A\) cheaply from MO integrals
+(`build_rhf_cphf_matrix`). The UHF solve used to build its
+\((n_{ov}^\alpha + n_{ov}^\beta)^2\) matrix one column at a time, one full
+direct UHF Fock build per unit column, then factor it. On 2 H2O⁺ / 6-31G\*
+that was 541 Fock builds, 59 % of the gradient. `solve_uhf_cphf` now hands
+the same operator (`UHFOrbitalHessian` in `uhf_response.cpp`) to the
+restarted GMRES the double-hybrid Z-vector already uses
+(`DFT::Response::gmres`), preconditioned by the orbital-gap diagonal. It
+converges in 16 iterations, or 33 Fock builds, since GMRES spends one action
+per iteration on a fresh residual check. The operator is symmetric and
+positive definite at a stable minimum, so conjugate gradients would also
+work, but a second solver was not worth what it would save. The dense
+builder stays: SOSCF needs the matrix itself (§7), and it applies the same
+operator to unit vectors, so the two cannot drift apart.
+
+The comparison against the dense solution is worth knowing how to read: the
+two agree to \(1.2\times10^{-8}\) of \(\max|z|\), and tightening GMRES stops
+at about \(5\times10^{-10}\) instead of improving. That floor is the dense
+reference's own error, 541 screened direct builds each carrying a little
+noise, so the "reference" is not exact either. The printed gradient is the
+same either way.
+
 ### UMP2 Gradient Intermediates
 
 The UMP2 gradient starts from canonical UHF orbitals and keeps the MP2
@@ -4985,7 +5037,48 @@ Two things in the old code are worth knowing as patterns:
   recomputed \(n_b\) times: \(O(n_b^5 n_{occ}^2)\). It is now built once,
   and the Lagrangian \(\mathrm{Imat}_\sigma(q,v) = \tfrac12 \sum_{prs}
   (pq|rs) D^\sigma[p,v,r,s]\) is a separate \(n_b^5\) contraction, threaded
-  over \(q\). A 2 H2O⁺ / 6-31G\* UMP2 gradient went from 136 s to 3.5 s.
+  over \(q\). A 2 H2O⁺ / 6-31G\* UMP2 gradient went from 136 s to 3.5 s,
+  and to 0.53 s after the Z-vector and the back-transforms below.
+
+### The T2 → AO Back-Transforms
+
+Both MP2 gradients turn amplitudes into AO four-index densities. Written out
+per element, RMP2's pair density is
+
+\[
+\mathrm{dm2buf}_{pqrs} = \sum_{ij} \bigl(C_{pi}\,H^{ij}_{qr}
+ + C_{qi}\,H^{ij}_{pr}\bigr) C_{sj},
+\qquad
+H^{ij} = C_v\,\tilde T_{ij}\,C_v^{\mathsf T},
+\]
+
+and UMP2's \(D^\alpha\), \(D^\beta\) have the same shape per spin pair with
+four index images instead of two. The old loops computed \(H\) with a scalar
+\(\sum_{ab}\) per element (\(n_{occ}^2 n_b^2 n_v^2\), serial) and then did
+the whole \(\sum_{ij}\) for every output element
+(\(n_b^4 n_{occ}^2\)). That was 83 % of the UMP2 gradient once the Z-vector
+was fixed.
+
+Three helpers in `mp2_gradient.cpp` now serve both flavours:
+
+- `pair_half_density`: \(H^{ij} = C_l\,T_{ij}\,C_r^{\mathsf T}\), one small
+  matrix product per \((i,j)\), threaded over pairs. \(T_{ij}\) is
+  \(4T - 2T^{\mathsf T}\) for RMP2, \(\tfrac12(T - T^{\mathsf T})\) for a
+  same-spin UMP2 block, and \(T\) itself for \(\alpha\beta\).
+- `back_transform_half_density`:
+  \(B_{pqrs} = \sum_{ij} C_{pi} H^{ij}_{qr} C'_{sj}\) as two half-transforms,
+  each one reshaped matrix product: first over \(j\), then over \(i\). That
+  is \(n_b^4 n_{occ}\) work instead of \(n_b^4 n_{occ}^2\).
+- `add_symmetrized`: adds the \(p\leftrightarrow q\) (and for UMP2
+  \(r\leftrightarrow s\)) images of \(B\) into the output.
+
+One detail removes a whole transform. \(D^\beta\)'s \(\alpha\beta\) term is
+\(B_{\alpha\beta}\) read with bra and ket swapped,
+\(B_{\alpha\beta}[r,s,p,q]\), so one \(B_{\alpha\beta}\) serves both spins.
+The new densities agree with the old loops to \(\le 1.9\times10^{-15}\) of
+the tensor's largest element. The gradient is unchanged, the 2 H2O⁺ run went
+from 1.83 s to 0.55 s, and RMP2's `dm2buf_full`, serial until then, is now
+threaded too.
 
 ### Double-Hybrid Analytic Gradients
 
@@ -9626,11 +9719,12 @@ driver.cpp
 | The CC equation generator itself | `python/ccgen/` | see `docs/CCGEN_TEACHING_GUIDE.md` |
 | CC denominators/DIIS | `src/post_hf/cc/amplitudes.cpp`, `src/post_hf/cc/diis.cpp` | `build_denominator_cache`, `AmplitudeDIIS` |
 | CPHF Z-vector | `src/post_hf/rhf_response.cpp` | `build_rhf_cphf_matrix` |
+| UHF CPHF Z-vector (matrix-free) | `src/post_hf/uhf_response.cpp` | `solve_uhf_cphf` (GMRES over `UHFOrbitalHessian`); `build_uhf_cphf_matrix` (dense, for SOSCF) |
 | RMP2 gradient | `src/post_hf/mp2_gradient.cpp` | `compute_rmp2_gradient` |
 | Restricted double-hybrid gradient | `src/dft/dh_pt2_gradient.cpp`, `src/dft/driver.cpp` | `DHGradientDriverContract`; correction-only KS Z-vector, literal pair RHS/overlap, Eq. 33 assembly |
 | Double-hybrid XC-II geometry response | `src/dft/dh_pt2_gradient.cpp`, `src/dft/dft_gradient.cpp` | `DHEq33CompleteXCIIGradient`; P-side, D-side, Becke partition, point translation |
 | Unrestricted double-hybrid gradient | `src/dft/udh_driver.cpp`, `src/dft/udh_*.cpp` | `build_udh_gradient_correction`; `build_udh_pt2_stationary_contract`, `solve_udh_zvector`, `build_udh_overlap_density`, `build_udh_two_particle_density`, `build_udh_{lda,gga}_complete_xc_ii_gradient` |
-| UMP2 gradient intermediates | `src/post_hf/mp2_gradient.cpp` | `build_ump2_gradient_intermediates` (separable densities \(D^\sigma\) built once; 2e term through `two_electron_gradient`) |
+| UMP2 gradient intermediates | `src/post_hf/mp2_gradient.cpp` | `build_ump2_gradient_intermediates` (separable densities \(D^\sigma\) built once via `pair_half_density` / `back_transform_half_density` / `add_symmetrized`, shared with RMP2; 2e term through `two_electron_gradient`) |
 | CI string generation | `src/post_hf/ci/strings.cpp` | `generate_strings`, `parity_between`, `select_active_orbitals` |
 | CI determinant space + sigma | `src/post_hf/ci/ci.cpp` | `build_ci_space`, `apply_ci_hamiltonian`, `slater_condon_element` |
 | CI solve (Davidson) | `src/post_hf/ci/ci.cpp` | `solve_ci`, `solve_ci_dense`, `build_ci_diagonal` |
@@ -9646,6 +9740,7 @@ driver.cpp
 | UHF gradient | `src/gradient/gradient.cpp` | `compute_uhf_gradient` |
 | ROHF gradient | `src/gradient/gradient.cpp` | `compute_rohf_gradient`, `build_rohf_energy_weighted_density` |
 | UMP2 gradient | `src/gradient/gradient.cpp` | `compute_ump2_gradient` |
+| One-electron gradient (all references, DH Eq. 33) | `src/gradient/gradient.cpp`, `src/integrals/os.cpp` | `one_electron_gradient` (threaded, 64 fixed bins); `_compute_nuclear_deriv_C_xyz` |
 | Derivative integrals (per component) | `src/integrals/os.cpp`, `src/integrals/hgp.cpp`, `src/gradient/gradient.cpp` | `_compute_1e_deriv_A`, `_compute_eri_deriv_elem`, `compute_eri_deriv_dispatch` |
 | Two-electron gradient loop (SCF and MP2) | `src/gradient/two_electron_gradient.h` | `two_electron_gradient`; `detail::accumulate_block_eri_gradient` (Auto, shell quartets), `detail::accumulate_shell_pair_eri_gradient` (AO pairs), `detail::pair_permuted_gamma` |
 | Converged SCF orbitals from the true Fock | `src/scf/scf.cpp`, `src/dft/driver.cpp` | `diagonalize_fock` in `run_rhf`; final re-diagonalization in `run_uhf` and the RKS/UKS loops |
