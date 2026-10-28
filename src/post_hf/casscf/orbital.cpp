@@ -276,6 +276,120 @@ namespace HartreeFock::Correlation::CASSCF
         return HR;
     }
 
+    AnalyticOrbitalHessian build_analytic_orbital_hessian(
+        const std::vector<double> &eri,
+        const Eigen::MatrixXd &C,
+        const std::vector<double> &Gamma_vec,
+        int n_core,
+        int n_act)
+    {
+        const int nb = static_cast<int>(C.rows());
+        const int na = n_act;
+        AnalyticOrbitalHessian out;
+        out.nbasis = nb;
+        out.nact = na;
+        out.Q = Eigen::MatrixXd::Zero(nb, na);
+        out.Y.assign(static_cast<std::size_t>(nb) * nb * na * na, 0.0);
+        if (na == 0)
+            return out;
+
+        // Active legs first in both transforms, so each is O(nb^4 na):
+        //   X[v,w,p,a] = (vw|pa) = (pa|vw)     Z[u,p,w,a] = (up|wa) = (pu|aw)
+        const Eigen::MatrixXd C_act = C.middleCols(n_core, na);
+        const std::vector<double> X = HartreeFock::Correlation::transform_eri(eri, nb, C_act, C_act, C, C);
+        const std::vector<double> Z = HartreeFock::Correlation::transform_eri(eri, nb, C_act, C, C_act, C);
+        auto ppaa = [&](int p, int a, int v, int w)
+        { return X[((static_cast<std::size_t>(v) * na + w) * nb + p) * nb + a]; };
+        auto papa = [&](int p, int u, int a, int w)
+        { return Z[((static_cast<std::size_t>(u) * nb + p) * na + w) * nb + a]; };
+        auto G = [&](int t, int u, int v, int w)
+        { return Gamma_vec[((static_cast<std::size_t>(t) * na + u) * na + v) * na + w]; };
+
+        // dQ(p,t) = sum_a R(a,p) Q(a,t)
+        //         + sum_{a,x} R(a, n_core + x) Y[p,a,t,x]
+        // with Y collecting the one-index transforms of the u, v and w legs of
+        // Q(p,t) = sum_{uvw} (pu|vw) Gamma[t,u,v,w].
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+        for (int p = 0; p < nb; ++p)
+        {
+            for (int t = 0; t < na; ++t)
+            {
+                double q = 0.0;
+                for (int u = 0; u < na; ++u)
+                    for (int v = 0; v < na; ++v)
+                        for (int w = 0; w < na; ++w)
+                            q += papa(p, u, n_core + v, w) * G(t, u, v, w);
+                out.Q(p, t) = q;
+            }
+            for (int a = 0; a < nb; ++a)
+                for (int t = 0; t < na; ++t)
+                    for (int x = 0; x < na; ++x)
+                    {
+                        double y = 0.0;
+                        for (int i = 0; i < na; ++i)
+                            for (int j = 0; j < na; ++j)
+                                y += ppaa(p, a, i, j) * G(t, x, i, j)    // u leg
+                                     + papa(p, i, a, j) * G(t, i, x, j)  // v leg
+                                     + papa(p, i, a, j) * G(t, i, j, x); // w leg, (pu|va) = (pu|av)
+                        out.Y[((static_cast<std::size_t>(p) * nb + a) * na + t) * na + x] = y;
+                    }
+        }
+        return out;
+    }
+
+    namespace
+    {
+        Eigen::MatrixXd analytic_g_action(
+            const Eigen::MatrixXd &R,
+            const OrbitalHessianContext &ctx,
+            const Eigen::MatrixXd &F_I_mo,
+            const Eigen::MatrixXd &F_A_mo,
+            int n_core,
+            int n_act,
+            int n_virt,
+            const std::vector<int> &mo_irreps,
+            bool use_sym)
+        {
+            // C(eps) = C (I + eps R) to first order (Cayley step), CI fixed.
+            //   X_mo = C^T X_ao C  ->  dX_mo = R^T X_mo + X_mo R + C^T dX_ao C
+            // and the core / active densities move as D = C P C^T.
+            const AnalyticOrbitalHessian &A = *ctx.analytic;
+            const Eigen::MatrixXd &C = *ctx.C;
+            const int nb = A.nbasis;
+
+            Eigen::MatrixXd RPc = Eigen::MatrixXd::Zero(nb, nb);
+            RPc.leftCols(n_core) = R.leftCols(n_core);
+            Eigen::MatrixXd RPg = Eigen::MatrixXd::Zero(nb, nb);
+            RPg.middleCols(n_core, n_act) = R.middleCols(n_core, n_act) * (*ctx.gamma);
+            const Eigen::MatrixXd dDc = 2.0 * C * (RPc + RPc.transpose()) * C.transpose();
+            const Eigen::MatrixXd dDa = C * (RPg + RPg.transpose()) * C.transpose();
+
+            const Eigen::MatrixXd dFI = R.transpose() * F_I_mo + F_I_mo * R +
+                                        C.transpose() * HartreeFock::ObaraSaika::_compute_fock_rhf(*ctx.eri, dDc, nb) * C;
+            const Eigen::MatrixXd dFA = R.transpose() * F_A_mo + F_A_mo * R +
+                                        C.transpose() * HartreeFock::ObaraSaika::_compute_fock_rhf(*ctx.eri, dDa, nb) * C;
+
+            Eigen::MatrixXd dQ = R.transpose() * A.Q;
+            const Eigen::MatrixXd Ract = R.middleCols(n_core, n_act);
+            for (int p = 0; p < nb; ++p)
+                for (int t = 0; t < n_act; ++t)
+                {
+                    const double *y = A.Y.data() + (static_cast<std::size_t>(p) * nb * n_act + t) * n_act;
+                    double s = 0.0;
+                    for (int a = 0; a < nb; ++a)
+                        for (int x = 0; x < n_act; ++x)
+                            s += Ract(a, x) * y[static_cast<std::size_t>(a) * n_act * n_act + x];
+                    dQ(p, t) += s;
+                }
+
+            // compute_orbital_gradient is linear in (F_I, F_A, Q) at fixed gamma.
+            return compute_orbital_gradient(dFI, dFA, dQ, *ctx.gamma,
+                                            n_core, n_act, n_virt, mo_irreps, use_sym);
+        }
+    } // namespace
+
     Eigen::MatrixXd delta_g_sa_action(
         const Eigen::MatrixXd &R,
         const OrbitalHessianContext *context,
@@ -295,6 +409,9 @@ namespace HartreeFock::Correlation::CASSCF
             context->gamma == nullptr ||
             context->Gamma_vec == nullptr)
             return hessian_action(R, F_I_mo, F_A_mo, n_core, n_act, n_virt);
+        if (context->analytic != nullptr)
+            return analytic_g_action(R, *context, F_I_mo, F_A_mo,
+                                     n_core, n_act, n_virt, mo_irreps, use_sym);
 
         const double max_elem = (R.size() > 0) ? R.cwiseAbs().maxCoeff() : 0.0;
         const double fd_step = std::max(context->fd_step, 1e-6);

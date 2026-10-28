@@ -1921,6 +1921,12 @@ re-measure whether `numeric-newton` is still needed, P4 macro count.
 cc-pVDZ 13.4 -> 3.5 s, C1 44.5 -> 11.1 s, energies unchanged. PySCF is still
 13x / 26x faster; what remains is call count (Fock 40 %, generic transform
 57 %), so P2 is next.
+**P2 done (2026-10-28):** the orbital Hessian action is analytic (FD kept
+as the test oracle; RI still FD). Energies and every macro's winning
+candidate unchanged; cc-pVDZ 3.5 -> 2.7 s, C1 11.1 -> 10.0 s. Exact curvature
+did not make `sa-coupled` win, so its weakness is in the step model or the
+scoring. The remaining cost is `numeric-newton`'s 2·npairs full evaluations
+per macro; next is finding why the coupled step loses (P3/P4 merged).
 
 #### Unreproduced OpenMP hang in CASSCF (seen once, 2026-10-28)
 

@@ -326,6 +326,75 @@ int main()
     bool ok = true;
 
     {
+        // Analytic fixed-CI orbital Hessian action against the central-FD
+        // oracle (same context minus `analytic`). Real 8-fold-symmetric ERIs,
+        // orthonormal dense C, arbitrary 1-/2-RDMs with no symmetry assumed.
+        constexpr int nb = 7, nc = 2, na = 3, nv = nb - nc - na;
+        auto idx = [](int p, int q, int r, int s)
+        { return static_cast<std::size_t>(((p * nb + q) * nb + r) * nb + s); };
+        auto f = [](int p, int q, int r, int s)
+        { return std::sin(0.7 * p + 1.3 * q + 0.4 * r * s + 0.11 * (p + 1) * (s + 2)) / (1.0 + p + q + r + s); };
+        std::vector<double> eri(static_cast<std::size_t>(nb) * nb * nb * nb);
+        for (int p = 0; p < nb; ++p)
+            for (int q = 0; q < nb; ++q)
+                for (int r = 0; r < nb; ++r)
+                    for (int s = 0; s < nb; ++s)
+                        eri[idx(p, q, r, s)] =
+                            f(p, q, r, s) + f(q, p, r, s) + f(p, q, s, r) + f(q, p, s, r) +
+                            f(r, s, p, q) + f(s, r, p, q) + f(r, s, q, p) + f(s, r, q, p);
+
+        Eigen::MatrixXd M(nb, nb), H(nb, nb);
+        for (int i = 0; i < nb; ++i)
+            for (int j = 0; j < nb; ++j)
+            {
+                M(i, j) = std::cos(0.37 * i - 0.91 * j + 0.05 * i * j);
+                H(i, j) = std::cos(0.3 * (i + j)) - 0.2 * (i == j) * i;
+            }
+        const Eigen::MatrixXd C = Eigen::HouseholderQR<Eigen::MatrixXd>(M).householderQ();
+        const Eigen::MatrixXd S = Eigen::MatrixXd::Identity(nb, nb);
+
+        Eigen::MatrixXd gamma(na, na);
+        for (int i = 0; i < na; ++i)
+            for (int j = 0; j < na; ++j)
+                gamma(i, j) = 0.3 * std::cos(i + 2.0 * j) + 0.3 * std::cos(j + 2.0 * i) + (i == j);
+        std::vector<double> Gamma(static_cast<std::size_t>(na) * na * na * na);
+        for (std::size_t k = 0; k < Gamma.size(); ++k)
+            Gamma[k] = std::sin(1.7 * static_cast<double>(k) + 0.3);
+
+        Eigen::MatrixXd R = Eigen::MatrixXd::Zero(nb, nb);
+        auto cls = [](int k) { return k < nc ? 0 : (k < nc + na ? 1 : 2); };
+        for (int p = 0; p < nb; ++p)
+            for (int q = p + 1; q < nb; ++q)
+                if (cls(p) != cls(q))
+                {
+                    R(p, q) = std::sin(1.1 * p + 0.6 * q + 0.2);
+                    R(q, p) = -R(p, q);
+                }
+
+        const std::vector<int> no_irreps;
+        const Eigen::MatrixXd F_I = build_inactive_fock_mo(C, H, eri, nc, nb, nullptr);
+        const Eigen::MatrixXd F_A = build_active_fock_mo(C, gamma, eri, nc, na, nb, nullptr);
+        const AnalyticOrbitalHessian analytic = build_analytic_orbital_hessian(eri, C, Gamma, nc, na);
+
+        OrbitalHessianContext ctx{.C = &C, .S = &S, .H_core = &H, .eri = &eri,
+                                  .gamma = &gamma, .Gamma_vec = &Gamma, .fd_step = 2e-3};
+        // Richardson on the central FD: error O(h^4), so a real mismatch is
+        // not hidden under truncation error.
+        const Eigen::MatrixXd fd_h = delta_g_sa_action(R, &ctx, F_I, F_A, nc, na, nv, no_irreps, false);
+        ctx.fd_step = 1e-3;
+        const Eigen::MatrixXd fd_h2 = delta_g_sa_action(R, &ctx, F_I, F_A, nc, na, nv, no_irreps, false);
+        const Eigen::MatrixXd fd = (4.0 * fd_h2 - fd_h) / 3.0;
+        ctx.analytic = &analytic;
+        const Eigen::MatrixXd an = delta_g_sa_action(R, &ctx, F_I, F_A, nc, na, nv, no_irreps, false);
+
+        const double scale = fd.cwiseAbs().maxCoeff();
+        const double err = (an - fd).cwiseAbs().maxCoeff();
+        std::cerr << "analytic orbital Hessian: max|an-fd| = " << err << " (scale " << scale << ")\n";
+        ok &= expect(scale > 1e-3 && err < 1e-9 * scale,
+                     "analytic orbital Hessian action should match the central-FD oracle");
+    }
+
+    {
         ok &= expect(single_bit_mask(-1) == 0,
                      "single_bit_mask should guard negative bit indices");
         ok &= expect(single_bit_mask(kCIStringBits) == 0,

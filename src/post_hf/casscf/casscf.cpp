@@ -914,6 +914,13 @@ namespace HartreeFock::Correlation::CASSCF
             for (const auto &root : st_current.roots)
                 sa_coupled_roots.push_back({root.weight, root.ci_vector, root.ci_energy});
 
+            // ponytail: RI keeps the FD Hessian; the analytic action needs RI
+            // twins of its two transforms and the JK build first.
+            std::optional<AnalyticOrbitalHessian> analytic_hessian;
+            if (!calc._mp2.use_ri)
+                analytic_hessian = build_analytic_orbital_hessian(
+                    eri, C, st_current.Gamma_vec, n_core, n_act);
+
             const OrbitalHessianContext sa_hessian_ctx{
                 .C = &C,
                 .S = &calc._overlap,
@@ -924,6 +931,7 @@ namespace HartreeFock::Correlation::CASSCF
                 // Keep the FD Hessian on the same (RI or dense) integrals the
                 // energy/gradient used, so the curvature is consistent.
                 .ri_calc = calc._mp2.use_ri ? &calc : nullptr,
+                .analytic = analytic_hessian ? &*analytic_hessian : nullptr,
             };
 
             const SACoupledStepSolveResult sa_coupled_result =

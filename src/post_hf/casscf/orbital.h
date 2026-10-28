@@ -48,6 +48,24 @@ namespace HartreeFock::Correlation::CASSCF
     // current MO coefficients, AO overlap, one-/two-electron integrals, and the
     // state-specific (or state-averaged) active-space densities held fixed while
     // differentiating the orbital gradient.
+    // Per-macro data for the analytic fixed-CI orbital Hessian action: the
+    // current Q matrix and Y[p,a,t,x], the 2-RDM contracted with the
+    // (pa|vw) and (pu|aw) integrals that carry the active legs' response.
+    struct AnalyticOrbitalHessian
+    {
+        Eigen::MatrixXd Q;
+        std::vector<double> Y;
+        int nbasis = 0;
+        int nact = 0;
+    };
+
+    AnalyticOrbitalHessian build_analytic_orbital_hessian(
+        const std::vector<double> &eri,
+        const Eigen::MatrixXd &C,
+        const std::vector<double> &Gamma_vec,
+        int n_core,
+        int n_act);
+
     struct OrbitalHessianContext
     {
         const Eigen::MatrixXd *C = nullptr;
@@ -61,6 +79,9 @@ namespace HartreeFock::Correlation::CASSCF
         // gradient it curves). Left null in the dense path.
         HartreeFock::Calculator *ri_calc = nullptr;
         double fd_step = 5e-4;
+        // When set, delta_g_sa_action is analytic; otherwise it is the central
+        // finite difference of fixed_ci_orbital_gradient (kept as the oracle).
+        const AnalyticOrbitalHessian *analytic = nullptr;
     };
 
     // Cache the active-space integral transform and reuse it across all response

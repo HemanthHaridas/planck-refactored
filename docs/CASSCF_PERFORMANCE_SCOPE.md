@@ -156,21 +156,61 @@ Follow-ups, not done:
   3.6 s for the tensor cc-pVDZ case. Measure before assuming the same defect;
   the RI cost model differs.
 
-### P2: analytic orbital Hessian-vector product
+### P2: analytic orbital Hessian-vector product (DONE 2026-10-28)
 
-Replace `delta_g_sa_action`'s central FD with the analytic fixed-CI orbital
-Hessian action (PySCF `mc1step.gen_g_hop`): built from `F_I`, `F_A`, the
-1-/2-RDMs, the cached `(p u|v w)`, and **one** JK build on a trial-rotated
-density per product. This removes the two full gradient rebuilds per product,
-so the dense-Hessian build drops from 100 rebuilds to ~50 JK.
+`delta_g_sa_action` is now the exact first derivative of the fixed-CI orbital
+gradient along `R` when the context carries an `AnalyticOrbitalHessian`
+(`orbital.{h,cpp}`). With `C(eps) = C(I + eps R)` (the Cayley step to first
+order):
 
-- Gate: analytic vs current FD action on random `R` to FD precision, on RHF,
-  ROHF and SA-2 references and in C1. Then the suite.
-- Keep FD as a debug oracle (`mcscf_debug_fd_hessian`), not a second
-  production path.
-- Open question: does PySCF's `h_op` include the orbital-CI coupling block
-  the shared-kappa SA solve handles separately in `response.cpp`? Map the
-  blocks before writing code.
+- `dF_I = R^T F_I + F_I R + C^T G[dD_c] C`, `dD_c = 2C(R P_c + P_c R^T)C^T`;
+  `dF_A` likewise with `P_gamma`. Two `_compute_fock_rhf` per product.
+- `dQ(p,t) = (R^T Q)(p,t) + sum_{a,x} R(a, n_core+x) Y[p,a,t,x]`, where `Y`
+  holds the u-, v- and w-leg one-index transforms. It is built once per macro
+  from `(pa|vw)` and `(pu|aw)`, both transformed active-legs-first
+  (O(nb^4 n_act)).
+- `compute_orbital_gradient` is linear in `(F_I, F_A, Q)` at fixed gamma, so
+  the action is that function applied to the derivatives.
+
+The per-product cost drops from four Fock contractions plus two `(pu|vw)`
+transforms to two Fock contractions. The CI coupling stays where it was, in
+the coupled solve in `response.cpp`; only the orbital-orbital block changed.
+
+- **Gate** (`planck-casscf-internal`): analytic vs a Richardson-extrapolated
+  central FD (h = 2e-3, 1e-3) on a 7-AO, 2-core / 3-active system with real
+  8-fold-symmetric ERIs and arbitrary RDMs: 1.8e-9 on a scale of 19
+  (9e-11 relative). Plain central FD at 1e-4 only resolves 1.3e-6, which
+  cannot distinguish truncation from a small bug. Zeroing the w-leg term
+  fails it at 5.3.
+- **RI keeps FD**: the analytic path needs RI twins of the two transforms and
+  of the JK build. Not done.
+- **No FD keyword was added.** The oracle stays reachable by leaving
+  `analytic` null (the unit test does exactly that).
+
+Results: energies identical to P1 at every printed digit on all 11 table
+inputs; all 15 CASSCF/RASSCF/FCI regression cases pass; **the same candidate
+wins every macro** and macro counts are unchanged.
+
+| case | P1 | P2 | per macro: FD rebuilds |
+|---|---|---|---|
+| 6-31G | 0.66 s | 0.58 s | 74 -> 0 |
+| cc-pVDZ | 3.5 s | 2.7 s | 128 -> 0 |
+| cc-pVDZ C1 | 11.1 s | 10.0 s | 122 -> 0 |
+
+**What this establishes, and it changes the plan:**
+
+1. **The FD Hessian was not why `sa-coupled` loses.** Exact curvature left
+   every candidate choice unchanged, so the coupled step's poor quality (the
+   wrong-sign predicted dE) is in the step model or in how candidates are
+   scored, not in Hessian accuracy. The P0 note "P2 is about step quality"
+   is refuted.
+2. **What is left is `numeric-newton`**: 2·npairs full `evaluate`s per macro
+   (100 at cc-pVDZ, 276 in C1), each a CI solve plus two Fock builds plus a
+   transform. That is now nearly all the remaining time.
+
+So P3 and P4 merge into one question: why does the coupled step lose to
+`numeric-newton`, and once that is fixed, can `numeric-newton` go back to
+the stagnation-only fallback its comments describe?
 
 ### P3: is `numeric-newton` still needed?
 
