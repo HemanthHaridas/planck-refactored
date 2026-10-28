@@ -275,10 +275,14 @@ namespace
         int n_virt,
         double level_shift,
         const std::vector<int> &mo_irreps,
-        bool use_sym)
+        bool use_sym,
+        const std::function<Eigen::MatrixXd(const Eigen::MatrixXd &)> &ci_relaxation = nullptr,
+        int max_dense_pairs = 128)
     {
-        constexpr int max_dense_pairs = 128;
-
+        // With ci_relaxation, each column also carries the CI response to the
+        // trial rotation, so the matrix is the CI-relaxed orbital Hessian
+        // H_oo + H_oc (H_cc)^-1 H_co: the Hessian numeric-newton estimates by
+        // finite differences of fully re-solved gradients.
         OrbitalLinearOperator op;
         op.pairs = symmetry_allowed_pairs(n_core, n_act, n_virt, mo_irreps, use_sym);
         op.nbasis = nbasis;
@@ -300,6 +304,8 @@ namespace
             Eigen::MatrixXd action = delta_g_sa_action(
                 trial, orbital_hessian_ctx, F_I_mo, F_A_mo,
                 n_core, n_act, n_virt, mo_irreps, use_sym);
+            if (ci_relaxation)
+                action.noalias() += ci_relaxation(trial);
             action.noalias() += level_shift * trial;
             op.matrix.col(col) = pack_orbital_pairs(action, op.pairs);
         }
@@ -1121,9 +1127,35 @@ namespace HartreeFock::Correlation::CASSCF
                 max_ci_residual_norm(evaluation.ci_residuals, roots));
         };
 
+        // With the AO data in the context the orbital-CI coupling is exact
+        // (P3b), so the CI-relaxed Hessian can be built column by column and
+        // solved directly. The dense limit matches numeric-newton's, whose FD
+        // Hessian this replaces at npairs actions instead of 2·npairs full
+        // evaluations.
+        const bool relaxed = orbital_hessian_ctx != nullptr && orbital_hessian_ctx->C != nullptr;
+        std::function<Eigen::MatrixXd(const Eigen::MatrixXd &)> ci_relaxation;
+        if (relaxed)
+            ci_relaxation = [&](const Eigen::MatrixXd &trial)
+            {
+                Eigen::MatrixXd sum = Eigen::MatrixXd::Zero(nbasis, nbasis);
+                for (const auto &root : roots)
+                {
+                    if (root.weight == 0.0 || root.ci_vector.size() == 0 || H_diag.size() != root.ci_vector.size())
+                        continue;
+                    sum.noalias() += root.weight *
+                                     build_coupled_response_blocks(
+                                         mode, trial, F_I_mo, h_eff, ga, space, a_strs, b_strs, dets,
+                                         active_integrals, apply, root.ci_vector, root.ci_energy, H_diag,
+                                         nbasis, n_core, n_act, n_virt, 1e-8, 64, response_precond_floor,
+                                         orbital_hessian_ctx)
+                                         .orbital_correction;
+                }
+                return sum;
+            };
         const OrbitalLinearOperator orbital_operator = build_orbital_linear_operator(
             orbital_hessian_ctx, F_I_mo, F_A_mo, nbasis, n_core, n_act, n_virt,
-            level_shift, mo_irreps, use_sym);
+            level_shift, mo_irreps, use_sym, ci_relaxation, relaxed ? 256 : 128);
+        const bool direct = relaxed && orbital_operator.available;
 
         result.orbital_step = solve_orbital_action_system(
             orbital_gradient,
@@ -1174,7 +1206,13 @@ namespace HartreeFock::Correlation::CASSCF
             mo_irreps, use_sym, orbital_hessian_ctx);
         double current_metric = residual_metric(current);
 
-        for (int iter = 1; iter <= max_iter; ++iter)
+        // A direct solve of the CI-relaxed system is the coupled step; the
+        // residual below measures the unshifted, uncapped equations and so
+        // stays at level_shift·kappa by design. Only the iterative path refines.
+        if (direct)
+            result.converged = result.orbital_step.allFinite() && std::isfinite(current_metric);
+
+        for (int iter = 1; iter <= (direct ? 0 : max_iter); ++iter)
         {
             result.iterations = iter;
             if (!std::isfinite(current_metric))

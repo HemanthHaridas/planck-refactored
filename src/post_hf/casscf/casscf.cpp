@@ -816,6 +816,13 @@ namespace HartreeFock::Correlation::CASSCF
         double level_shift = 0.2;
         int rejected_streak = 0;
         int stagnation_streak = 0;
+        // Energy an accepted uphill escape started from. If the optimizer comes
+        // back to it, that escape has been tried and led nowhere: at a true SA
+        // minimum the per-root gradients are nonzero by construction, so the
+        // uphill pass can always find a step that trims them and the run
+        // limit-cycles (up, then straight back down). The first escape from any
+        // point is still allowed, so a genuine move to a deeper basin is kept.
+        double uphill_origin_energy = std::numeric_limits<double>::quiet_NaN();
         RootReference root_reference;
 
         for (unsigned int macro = 1; macro <= as.mcscf_max_iter; ++macro)
@@ -1265,8 +1272,13 @@ namespace HartreeFock::Correlation::CASSCF
                     as.tol_mcscf_energy,
                     as.tol_mcscf_grad,
                     evaluate,
-                    as.mcscf_accept_uphill,
+                    as.mcscf_accept_uphill &&
+                        !(std::isfinite(uphill_origin_energy) &&
+                          std::abs(st_current.E_cas - uphill_origin_energy) <= as.tol_mcscf_energy),
                     as.mcscf_uphill_max_eh);
+
+            if (accepted_candidate.accepted && accepted_candidate.label.ends_with("[uphill]"))
+                uphill_origin_energy = st_current.E_cas;
 
             if (accepted_candidate.accepted)
             {

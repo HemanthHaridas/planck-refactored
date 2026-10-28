@@ -1927,6 +1927,19 @@ candidate unchanged; cc-pVDZ 3.5 -> 2.7 s, C1 11.1 -> 10.0 s. Exact curvature
 did not make `sa-coupled` win, so its weakness is in the step model or the
 scoring. The remaining cost is `numeric-newton`'s 2·npairs full evaluations
 per macro; next is finding why the coupled step loses (P3/P4 merged).
+**P3/P3b done (2026-10-28):** the coupled solve never converged (0/56
+macros), because the orbital-CI coupling dropped two terms: the core-density
+response in the CI RHS, and the 1-RDM response in the back-coupling. Both are
+fixed and FD-gated (`69728821`); the coupled Hessian now equals the CI-relaxed
+one exactly.
+**P3c in the working tree, blocked:** the CI-relaxed Hessian is solved
+directly (`numeric-newton` no longer used; evaluate/macro 129 -> 22), plus an
+escape-return guard for the uphill pass. 6-31G 0.33 s (PySCF 0.34),
+cc-pVDZ 1.21 s (0.27), C1 2.70 s (0.43). But `water_casscf_sa2_sto3g` and
+`..._sad_guess` now land in the deeper -74.7877864783 SA-2 basin instead of
+PySCF's -74.7751377977. Undiagnosed; leading suspect is the uncapped Newton
+step along negative curvature, where PySCF uses an augmented-Hessian step.
+Some symmetric cases also take more macros (6-31G 13 -> 17).
 
 #### Unreproduced OpenMP hang in CASSCF (seen once, 2026-10-28)
 
