@@ -66,6 +66,66 @@ namespace
         return ((static_cast<std::size_t>(p) * nmo + q) * nmo + r) * nmo + s;
     }
 
+    using RowMajorMatrix = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+
+    // T2 -> AO half density, the first of the two back-transforms the MP2
+    // gradients share: half[i,p,q,j] = (C_l T_ij C_rᵀ)(p,q), where
+    // amplitude(i, j) returns the (nv_l x nv_r) virtual block T_ij. One small
+    // GEMM per (i,j); each pair writes its own elements.
+    template <class Amplitude>
+    std::vector<double> pair_half_density(
+        int ni, int nj, const Eigen::MatrixXd &C_l, const Eigen::MatrixXd &C_r, Amplitude amplitude)
+    {
+        const int nao = static_cast<int>(C_l.rows());
+        std::vector<double> half(static_cast<std::size_t>(ni) * nao * nao * nj);
+#pragma omp parallel for collapse(2) schedule(static)
+        for (int i = 0; i < ni; ++i)
+            for (int j = 0; j < nj; ++j)
+            {
+                const Eigen::MatrixXd P = C_l * amplitude(i, j) * C_r.transpose();
+                for (int p = 0; p < nao; ++p)
+                    for (int q = 0; q < nao; ++q)
+                        half[((static_cast<std::size_t>(i) * nao + p) * nao + q) * nj + j] = P(p, q);
+            }
+        return half;
+    }
+
+    // The second back-transform: B[p,q,r,s] = Σ_ij C_i(p,i) half[i,q,r,j] C_j(s,j),
+    // as two GEMMs over reshaped views (nao⁴·nocc, not nao⁴·nocc²).
+    std::vector<double> back_transform_half_density(
+        const std::vector<double> &half, const Eigen::MatrixXd &C_i, const Eigen::MatrixXd &C_j)
+    {
+        const Eigen::Index nao = C_i.rows(), ni = C_i.cols(), nj = C_j.cols();
+        const Eigen::Index nao3 = nao * nao * nao;
+        // X[i,q,r,s] = Σ_j half[i,q,r,j] C_j(s,j)
+        const RowMajorMatrix X =
+            Eigen::Map<const RowMajorMatrix>(half.data(), ni * nao * nao, nj) * C_j.transpose();
+        std::vector<double> B(static_cast<std::size_t>(nao * nao3));
+        Eigen::Map<RowMajorMatrix>(B.data(), nao, nao3).noalias() =
+            C_i * Eigen::Map<const RowMajorMatrix>(X.data(), ni, nao3);
+        return B;
+    }
+
+    // dst[p,q,r,s] += Σ over the p<->q (and, with swap_rs, r<->s) images of B,
+    // read as B[r,s,p,q] when bra_ket. Threaded over p, each writing its own rows.
+    void add_symmetrized(std::vector<double> &dst, const std::vector<double> &B, int nao,
+                         bool swap_rs, bool bra_ket)
+    {
+        const auto b = [&](int p, int q, int r, int s)
+        { return bra_ket ? B[idx_dm2(r, s, p, q, nao)] : B[idx_dm2(p, q, r, s, nao)]; };
+#pragma omp parallel for schedule(static)
+        for (int p = 0; p < nao; ++p)
+            for (int q = 0; q < nao; ++q)
+                for (int r = 0; r < nao; ++r)
+                    for (int s = 0; s < nao; ++s)
+                    {
+                        double v = b(p, q, r, s) + b(q, p, r, s);
+                        if (swap_rs)
+                            v += b(p, q, s, r) + b(q, p, s, r);
+                        dst[idx_dm2(p, q, r, s, nao)] += v;
+                    }
+    }
+
     Eigen::MatrixXd build_veff_from_density(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
@@ -311,44 +371,17 @@ namespace HartreeFock::Correlation
                 ? empty_eri
                 : ensure_eri(calculator, shell_pairs, eri_local, "RMP2 Lagrangian :");
 
-        // part_dm2 and dm2buf_full: T2 -> AO 2-RDM buffer. Verbatim from
-        // build_rmp2_gradient_intermediates.
-        std::vector<double> part_dm2(static_cast<std::size_t>(nocc) * nao * nao * nocc, 0.0);
-        auto idx_part = [nao, nocc](int i, int p, int q, int j) -> std::size_t
+        // T2 -> AO 2-RDM buffer: dm2buf[p,q,r,s] = Σ_ij C(p,i) C(s,j)
+        // (C_v (4T_ij - 2T_ijᵀ) C_vᵀ)(q,r), symmetrized over p <-> q.
+        const auto half = pair_half_density(nocc, nocc, C_virt, C_virt, [&](int i, int j)
         {
-            return ((static_cast<std::size_t>(i) * nao + p) * nao + q) * nocc + j;
-        };
-        for (int i = 0; i < nocc; ++i)
-            for (int j = 0; j < nocc; ++j)
-                for (int p = 0; p < nao; ++p)
-                    for (int q = 0; q < nao; ++q)
-                    {
-                        double val = 0.0;
-                        for (int a = 0; a < nvirt; ++a)
-                            for (int b = 0; b < nvirt; ++b)
-                            {
-                                const double tab = result.t2[detail::idx_t2(i, j, a, b, nocc, nvirt)];
-                                const double tba = result.t2[detail::idx_t2(i, j, b, a, nocc, nvirt)];
-                                val += C_virt(p, a) * C_virt(q, b) * (4.0 * tab - 2.0 * tba);
-                            }
-                        part_dm2[idx_part(i, p, q, j)] = val;
-                    }
-
+            const Eigen::Map<const RowMajorMatrix> T(
+                result.t2.data() + detail::idx_t2(i, j, 0, 0, nocc, nvirt), nvirt, nvirt);
+            return Eigen::MatrixXd(4.0 * T - 2.0 * T.transpose());
+        });
         out.dm2buf_full.assign(static_cast<std::size_t>(nao) * nao * nao * nao, 0.0);
-        for (int p = 0; p < nao; ++p)
-            for (int q = 0; q < nao; ++q)
-                for (int r = 0; r < nao; ++r)
-                    for (int s = 0; s < nao; ++s)
-                    {
-                        double val = 0.0;
-                        for (int i = 0; i < nocc; ++i)
-                            for (int j = 0; j < nocc; ++j)
-                            {
-                                val += C_occ(p, i) * part_dm2[idx_part(i, q, r, j)] * C_occ(s, j);
-                                val += C_occ(q, i) * part_dm2[idx_part(i, p, r, j)] * C_occ(s, j);
-                            }
-                        out.dm2buf_full[idx_dm2(p, q, r, s, nao)] = val;
-                    }
+        add_symmetrized(out.dm2buf_full, back_transform_half_density(half, C_occ, C_occ),
+                        nao, /*swap_rs=*/false, /*bra_ket=*/false);
 
         // Orbital Lagrangian imat(q,v) += sum_{p,r,s} (pq|rs) dm2buf[p,v,r,s].
         // In build_rmp2_gradient_intermediates this contraction is fused into
@@ -743,77 +776,6 @@ namespace HartreeFock::Correlation
         const Eigen::MatrixXd Cb_occ = result.mo_coeff_beta.leftCols(noccb);
         const Eigen::MatrixXd Cb_virt = result.mo_coeff_beta.middleCols(noccb, nvirb);
 
-        auto idx_aa_part = [nao, nocca](int i, int p, int q, int j) -> std::size_t
-        {
-            return ((static_cast<std::size_t>(i) * nao + p) * nao + q) * nocca + j;
-        };
-        auto idx_bb_part = [nao, noccb](int i, int p, int q, int j) -> std::size_t
-        {
-            return ((static_cast<std::size_t>(i) * nao + p) * nao + q) * noccb + j;
-        };
-        auto idx_ab_part = [nao, noccb](int i, int p, int q, int j) -> std::size_t
-        {
-            return ((static_cast<std::size_t>(i) * nao + p) * nao + q) * noccb + j;
-        };
-
-        std::vector<double> part_dm2aa(static_cast<std::size_t>(nocca) * nao * nao * nocca, 0.0);
-        std::vector<double> part_dm2bb(static_cast<std::size_t>(noccb) * nao * nao * noccb, 0.0);
-        std::vector<double> part_dm2ab(static_cast<std::size_t>(nocca) * nao * nao * noccb, 0.0);
-
-        for (int i = 0; i < nocca; ++i)
-            for (int j = 0; j < nocca; ++j)
-                for (int p = 0; p < nao; ++p)
-                    for (int q = 0; q < nao; ++q)
-                    {
-                        double v = 0.0;
-                        for (int a = 0; a < nvira; ++a)
-                            for (int b = 0; b < nvira; ++b)
-                                v += Cb_virt.rows() ? Ca_virt(p, a) * Ca_virt(q, b) *
-                                         result.t2_aa[detail::idx_t2(i, j, a, b, nocca, nvira)]
-                                                   : 0.0;
-                        part_dm2aa[idx_aa_part(i, p, q, j)] = 0.5 * (v - [&]() {
-                            double x = 0.0;
-                            for (int a = 0; a < nvira; ++a)
-                                for (int b = 0; b < nvira; ++b)
-                                    x += Ca_virt(p, b) * Ca_virt(q, a) *
-                                         result.t2_aa[detail::idx_t2(i, j, a, b, nocca, nvira)];
-                            return x;
-                        }());
-                    }
-
-        for (int i = 0; i < noccb; ++i)
-            for (int j = 0; j < noccb; ++j)
-                for (int p = 0; p < nao; ++p)
-                    for (int q = 0; q < nao; ++q)
-                    {
-                        double v = 0.0;
-                        for (int a = 0; a < nvirb; ++a)
-                            for (int b = 0; b < nvirb; ++b)
-                                v += Cb_virt(p, a) * Cb_virt(q, b) *
-                                     result.t2_bb[detail::idx_t2(i, j, a, b, noccb, nvirb)];
-                        part_dm2bb[idx_bb_part(i, p, q, j)] = 0.5 * (v - [&]() {
-                            double x = 0.0;
-                            for (int a = 0; a < nvirb; ++a)
-                                for (int b = 0; b < nvirb; ++b)
-                                    x += Cb_virt(p, b) * Cb_virt(q, a) *
-                                         result.t2_bb[detail::idx_t2(i, j, a, b, noccb, nvirb)];
-                            return x;
-                        }());
-                    }
-
-        for (int i = 0; i < nocca; ++i)
-            for (int j = 0; j < noccb; ++j)
-                for (int p = 0; p < nao; ++p)
-                    for (int q = 0; q < nao; ++q)
-                    {
-                        double v = 0.0;
-                        for (int a = 0; a < nvira; ++a)
-                            for (int b = 0; b < nvirb; ++b)
-                                v += Ca_virt(p, a) * Cb_virt(q, b) *
-                                     result.t2_ab[detail::idx_t2_ab(i, j, a, b, nocca, noccb, nvira, nvirb)];
-                        part_dm2ab[idx_ab_part(i, p, q, j)] = v;
-                    }
-
         const Eigen::MatrixXd hf_dm1a = calculator._info._scf.alpha.density;
         const Eigen::MatrixXd hf_dm1b = calculator._info._scf.beta.density;
         const Eigen::MatrixXd hf_dm1 = hf_dm1a + hf_dm1b;
@@ -826,51 +788,34 @@ namespace HartreeFock::Correlation
         // inside a per-atom derivative sweep, once per q for every v: N^7.)
         const std::size_t nao4 =
             static_cast<std::size_t>(nao) * nao * nao * nao;
-        std::vector<double> Da(nao4), Db(nao4);
-#pragma omp parallel for schedule(static)
-        for (int p = 0; p < nao; ++p)
-            for (int v = 0; v < nao; ++v)
-                for (int r = 0; r < nao; ++r)
-                    for (int s = 0; s < nao; ++s)
-                    {
-                        double da = 0.0;
-                        for (int i = 0; i < nocca; ++i)
-                            for (int j = 0; j < nocca; ++j)
-                            {
-                                da += Ca_occ(p, i) * part_dm2aa[idx_aa_part(i, v, r, j)] * Ca_occ(s, j);
-                                da += Ca_occ(v, i) * part_dm2aa[idx_aa_part(i, p, r, j)] * Ca_occ(s, j);
-                                da += Ca_occ(p, i) * part_dm2aa[idx_aa_part(i, v, s, j)] * Ca_occ(r, j);
-                                da += Ca_occ(v, i) * part_dm2aa[idx_aa_part(i, p, s, j)] * Ca_occ(r, j);
-                            }
-                        for (int i = 0; i < nocca; ++i)
-                            for (int j = 0; j < noccb; ++j)
-                            {
-                                da += Ca_occ(p, i) * part_dm2ab[idx_ab_part(i, v, r, j)] * Cb_occ(s, j);
-                                da += Ca_occ(v, i) * part_dm2ab[idx_ab_part(i, p, r, j)] * Cb_occ(s, j);
-                                da += Ca_occ(p, i) * part_dm2ab[idx_ab_part(i, v, s, j)] * Cb_occ(r, j);
-                                da += Ca_occ(v, i) * part_dm2ab[idx_ab_part(i, p, s, j)] * Cb_occ(r, j);
-                            }
-
-                        double db = 0.0;
-                        for (int i = 0; i < noccb; ++i)
-                            for (int j = 0; j < noccb; ++j)
-                            {
-                                db += Cb_occ(p, i) * part_dm2bb[idx_bb_part(i, v, r, j)] * Cb_occ(s, j);
-                                db += Cb_occ(v, i) * part_dm2bb[idx_bb_part(i, p, r, j)] * Cb_occ(s, j);
-                                db += Cb_occ(p, i) * part_dm2bb[idx_bb_part(i, v, s, j)] * Cb_occ(r, j);
-                                db += Cb_occ(v, i) * part_dm2bb[idx_bb_part(i, p, s, j)] * Cb_occ(r, j);
-                            }
-                        for (int i = 0; i < nocca; ++i)
-                            for (int j = 0; j < noccb; ++j)
-                            {
-                                db += Ca_occ(r, i) * part_dm2ab[idx_ab_part(i, s, v, j)] * Cb_occ(p, j);
-                                db += Ca_occ(r, i) * part_dm2ab[idx_ab_part(i, s, p, j)] * Cb_occ(v, j);
-                                db += Ca_occ(s, i) * part_dm2ab[idx_ab_part(i, r, v, j)] * Cb_occ(p, j);
-                                db += Ca_occ(s, i) * part_dm2ab[idx_ab_part(i, r, p, j)] * Cb_occ(v, j);
-                            }
-                        Da[idx_dm2(p, v, r, s, nao)] = da;
-                        Db[idx_dm2(p, v, r, s, nao)] = db;
-                    }
+        // T_ij virtual block of one spin case, antisymmetrized (½(T - Tᵀ)) for
+        // the same-spin amplitudes.
+        const auto spin_half = [](int ni, int nj, int nvi, int nvj, const std::vector<double> &t2,
+                                     const Eigen::MatrixXd &Cl, const Eigen::MatrixXd &Cr, bool same_spin)
+        {
+            return pair_half_density(ni, nj, Cl, Cr, [&, same_spin](int i, int j)
+            {
+                const Eigen::Map<const RowMajorMatrix> T(
+                    t2.data() + (static_cast<std::size_t>(i) * nj + j) * nvi * nvj, nvi, nvj);
+                return same_spin ? Eigen::MatrixXd(0.5 * (T - T.transpose())) : Eigen::MatrixXd(T);
+            });
+        };
+        // D_α = sym(B_αα) + sym(B_αβ), D_β = sym(B_ββ) + sym(B_αβ) read bra<->ket,
+        // where B_στ[p,q,r,s] = Σ_ij C_σ(p,i) half_στ[i,q,r,j] C_τ(s,j) and sym
+        // sums the p<->q, r<->s images. One B is alive at a time.
+        std::vector<double> Da(nao4, 0.0), Db(nao4, 0.0);
+        add_symmetrized(Da, back_transform_half_density(
+            spin_half(nocca, nocca, nvira, nvira, result.t2_aa, Ca_virt, Ca_virt, true), Ca_occ, Ca_occ),
+            nao, /*swap_rs=*/true, /*bra_ket=*/false);
+        {
+            const auto Bab = back_transform_half_density(
+                spin_half(nocca, noccb, nvira, nvirb, result.t2_ab, Ca_virt, Cb_virt, false), Ca_occ, Cb_occ);
+            add_symmetrized(Da, Bab, nao, /*swap_rs=*/true, /*bra_ket=*/false);
+            add_symmetrized(Db, Bab, nao, /*swap_rs=*/true, /*bra_ket=*/true);
+        }
+        add_symmetrized(Db, back_transform_half_density(
+            spin_half(noccb, noccb, nvirb, nvirb, result.t2_bb, Cb_virt, Cb_virt, true), Cb_occ, Cb_occ),
+            nao, /*swap_rs=*/true, /*bra_ket=*/false);
 
         // Lagrangians Imat_σ(q,v) = ½ Σ_{p,r,s} (pq|rs) D_σ[p,v,r,s]: the dense
         // nao⁴ ERI, or under RI the 3-center factors (Step RG4.3, the dense

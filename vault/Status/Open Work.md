@@ -2018,9 +2018,11 @@ identify the path taken. Not required for correctness or performance.
   **G7, UMP2 orbital side, in flight:** O1 landed (working tree): the UHF
   Z-vector is matrix-free GMRES (`DFT::Response::gmres`, shared with the DH
   Z-vector), 33 Fock builds instead of 541 on 2 H2O⁺ / 6-31G\*, gradient run
-  3.5 → 1.83 s, printed gradient identical. **Next: O2**, the D_σ build (51 %)
-  and serial `part_dm2` loops (32 %) as half-transforms / matrix products
-  (shared with RMP2's serial `dm2buf_full`). O3 (Imat, 1.3 %) dropped. Then G5 1e
+  3.5 → 1.83 s, printed gradient identical. O2 landed (working tree): the
+  D_σ / `part_dm2` / RMP2 `dm2buf_full` back-transforms are shared GEMM
+  helpers, 1.83 → 0.55 s (3.4× the SCF), gradient identical, thread-invariant.
+  O3 (Imat) dropped. The Z-vector (~35 %) could use the stored ERI tensor
+  instead of direct builds; not yet worth it. Then G5 1e
   derivatives (now a larger share), G6 RI 3c (measure first).
   The regression runner now passes `--build-dir` to its `.py` comparators,
   which had been running whatever binary sat in `./build`.

@@ -1,131 +1,63 @@
 # Why is an analytic gradient 20–120× the SCF it follows?
 
-Scope for in-flight work (it expires when the work lands; rewrite it then as
-the answer). Follows `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`, which made the
-memory-direct Fock build fast and is closed.
+It no longer is. **Every analytic gradient in the HF binary (RHF, UHF, ROHF,
+RKS/UKS through the same 2e loop, RMP2 and UMP2) now costs 1.1–4.3× the SCF
+it follows, down from 20–120× and, for the MP2 cases, minutes.** The cause
+was never one thing: the derivative ERIs were per AO component, untriangled
+and single-threaded (G1–G3), the MP2 gradients carried an unread O(N⁸)
+density and rebuilt N⁵ intermediates in their innermost loop (G4), and the
+UMP2 Z-vector built its full orbital Hessian with one Fock build per column
+while its back-transforms ran as scalar n_occ² sums (G7).
 
-## Where it stands (2026-10-27)
+Measured on M3, `build-full`, direct SCF, `engine auto`, SAD, no symmetry,
+four threads, best of three, whole run including the SCF:
 
-**SCF and RMP2 gradients now cost about as much as the energy. UMP2 is the
-one left: G7's O1 (matrix-free Z-vector) took it from 22× to 11×. What
-remains is the two 4-index back-transforms (O2, 83 % of the gradient), not
-integrals.**
+| system | SCF | gradient run 2026-10-25 | **now** | now ÷ SCF |
+|---|---|---|---|---|
+| 4 H2O / 6-31G\* (nb 76) | 0.38 s | 53.9 s | **0.56 s** | 1.5× |
+| 8 H2O / 6-31G (nb 104) | 0.56 s | 68.0 s | **0.90 s** | 1.6× |
+| 1 H2O / cc-pVTZ (nb 65 Cart.) | 0.54 s | 114.9 s | **0.61 s** | 1.1× |
+| 1 H2O / 6-31G\* RMP2 (conventional) | 0.08 s | 7.30 s | **0.12 s** | 1.5× |
+| 2 H2O / 6-31G\* RMP2 (conventional) | 0.15 s | > 5 min | **0.65 s** | 4.3× |
+| 2 H2O⁺ / 6-31G\* UMP2 (conventional) | 0.16 s | 136 s (after G3) | **0.55 s** | 3.4× |
 
-G1–G4 have landed: the 2e gradient of every SCF reference and both MP2
-flavours runs through one threaded loop, by shell quartet on two derivative
-block kernels under `engine auto`. Same systems as the original measurement,
-plus a UMP2 case (M3, `build-full`, direct SCF, `engine auto`, SAD, no
-symmetry, four threads, best of three, whole run including the SCF):
+The 2026-10-25 runs had a concurrent compile on the machine (±20 %) and the
+SCF got faster in between, so compare gradient columns, not ratios across
+dates. Printed gradients are unchanged by every step, and identical at any
+thread count.
 
-| system | SCF now | gradient run 2026-10-25 | after G3 | **now** | now ÷ SCF |
-|---|---|---|---|---|---|
-| 4 H2O / 6-31G\* (nb 76) | 0.38 s | 53.9 s | 0.56 s | **0.56 s** | 1.5× |
-| 8 H2O / 6-31G (nb 104) | 0.56 s | 68.0 s | 0.89 s | **0.90 s** | 1.6× |
-| 1 H2O / cc-pVTZ (nb 65 Cart.) | 0.54 s | 114.9 s | 0.62 s | **0.61 s** | 1.1× |
-| 1 H2O / 6-31G\* RMP2 (conventional) | 0.08 s | 7.30 s | 3.13 s | **0.12 s** | 1.5× |
-| 2 H2O / 6-31G\* RMP2 (conventional) | 0.15 s | > 5 min | 358 s | **0.65 s** | 4.3× |
-| 2 H2O⁺ / 6-31G\* UMP2 (conventional) | 0.16 s | | 136 s | 3.5 s → **1.83 s** (O1) | 11× |
+Scope status: the 2e and MP2-orbital work is done; G5, G6 and two G3
+leftovers below are still open, so this file stays a scope until they land
+or are declined. It follows `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`, which
+made the memory-direct Fock build fast and is closed.
 
-The 2026-10-25 runs had a concurrent compile on the machine (±20 %), and the
-SCF itself got faster in between, so compare the gradient columns rather than
-ratios across dates. The UMP2 "after G3" figure was measured on the pre-G4
-binary on 2026-10-27.
+## What is still open
 
-**Order from here:** G7 (UMP2 orbital side), then G5 (1e derivatives, a larger
-share now that the 2e term is cheap), G6 (RI three-centre, measure first), and
-two G3 leftovers (block density screening, screened-kernel block derivatives).
+In order:
 
-## Next: G7 — MP2 orbital-side cost (scoped 2026-10-27)
-
-After G4 almost none of the UMP2 gradient is derivative integrals. `sample`
-of the 2 H2O⁺ / 6-31G\* run (main thread, ~3,040 samples inside
-`compute_ump2_gradient`):
-
-| share | where |
-|---|---|
-| **59 %** (1,792) | `solve_uhf_cphf` → `build_uhf_cphf_matrix`: 1,443 in direct UHF Fock builds, **333 recomputing the Schwarz table** inside each one |
-| 23 % (697) | the threaded D_σ build and Imat contraction |
-| 14 % (438) | serial self time in the builder: the `part_dm2` transforms |
-| < 1 % | the 2e derivative term (G4) |
-
-**Why the Z-vector solve costs so much.** `build_uhf_cphf_matrix` forms the
-full (n_ov^α + n_ov^β)² orbital Hessian one column at a time: a unit trial
-rotation, its AO density response, then one complete direct UHF Fock build
-for the induced J/K, per column. Here that is 28·10 + 29·9 = **541 Fock
-builds**, followed by a dense QR, to solve one linear system. The cost grows
-as n_ov · (Fock build), so it gets worse faster than anything else in the
-gradient.
-
-Steps, in order of measured share. Each lands alone with its gate.
-
-**O1 landed (2026-10-28, working tree).** GMRES converges in 16 iterations,
-**33 Fock builds instead of 541** (n = 541). 2 H2O⁺ / 6-31G\* gradient run
-3.5 → 1.83 s (best of three; energy-only run 0.23 s). Against the dense QR, z
-agrees to 1.2e-8 of max|z| at tolerance 1e-10. Tightening to 1e-12 or 1e-14
-leaves a ~5e-10 floor, which is the dense reference's own screening noise.
-The printed gradient is identical at either tolerance. STO-3G cation/triplet
-and RI: 1.6e-15 / 2.0e-15 / 1.3e-14. All 8 UMP2 regression cases pass. UHF
-SOSCF (which uses the dense builder) still converges superlinearly to the
-DIIS energy (water cation / 6-31G, -75.5085348059). No ctest was added: no C++
-test harness runs an SCF, so the dense comparison was a temporary probe.
-
-**Profile after O1** (main thread, 1,340 samples in `compute_ump2_gradient`):
-D_σ build (`mp2_gradient.cpp:830`) **51 %**, serial self time (the
-`part_dm2` loops, 759-815) **32 %**, Z-vector 8 %, ERI tensor 3 %, 2e
-derivative term 1.6 %, Imat 1.3 %. O2 covers 83 %; Imat (O3) is already
-negligible, so O3 is dropped unless O2 changes that.
-
-1. **O1 — matrix-free Z-vector for UHF (landed, above).** Before it, `build_uhf_cphf_matrix`
-   (`src/post_hf/uhf_response.cpp:57-102`) applies the orbital Hessian to one
-   unit vector per column, and `solve_uhf_cphf` QR-solves the result. Split
-   that column body into one function, `apply_uhf_orbital_hessian(x_α, x_β)`
-   (diagonal ε_a − ε_i plus the J/K response through `_compute_2e_fock_uhf`,
-   or `RI::build_ri_fock_uhf` under RI). The dense builder keeps calling it on
-   unit vectors (SOSCF, `docs/SOSCF_UHF.md`, needs the matrix, and the gate
-   needs a reference); `solve_uhf_cphf` passes it as the action to
-   `DFT::Response::gmres` (`src/dft/response_gmres.h`) with the ε_a − ε_i
-   diagonal as preconditioner. That solver is header-only (Eigen only), already
-   gated by the double-hybrid Z-vector, and checks its unpreconditioned
-   residual with a fresh action, so no second solver is written and no SPD
-   assumption needs checking. (The operator is symmetric and, at a stable
-   minimum, positive definite, so CG would also work; that saves at most the
-   Krylov storage at this n_ov, which is not worth another solver.) Fail with
-   the GMRES error on non-convergence; no dense fallback.
-   Expected ~10–25 Fock builds instead of 541. If so about 55 % of the run
-   goes (the 333 Schwarz-recompute samples shrink with it, so they need no
-   step of their own), ~2.2× end to end on this case.
-   Gate: a ctest that solves both ways on the UMP2 inputs (dense and RI) and
-   requires ≤ 1e-10 relative to max|z|; UMP2 gradients unchanged to the
-   printed digit on `water_radical_cation_ump2_gradient_smoke`,
-   `water_radical_cation_ump2_gradient_engine_os_vs_auto` and the RI-UMP2 FD
-   cases; mutation (drop the cross-spin J) must fail. Report the GMRES action
-   count, not only time.
-   **RHF is left alone.** `solve_rhf_cphf` builds its matrix from MO ERIs
-   (`rhf_response.cpp:132-168`), no Fock build per column, and RMP2 is already
-   1.5–4.3× the SCF. The same action pattern fits it if a larger RMP2 case
-   shows the nao⁵ MO transform or the (n_v n_o)³ QR; not before.
-2. **O2 — the 4-index back-transforms as matrix products, one helper for both
-   MP2 flavours.** `part_dm2` (Σ_ab C_pa C_qb T_ij^ab per (i,j): one
-   `C_v T_ij C_vᵀ` product each, threaded over (i,j)) and the D_σ / `dm2buf`
-   build (Σ_ij C_pi P_i…j C_sj, done today as an n_occ² sum per element:
-   n_ao⁴·n_occ², which as two half-transforms is n_ao⁴·n_occ). RMP2's
-   `dm2buf_full` (`mp2_gradient.cpp:337-350`) has the same shape with one spin
-   and is still **serial** (the file's only pragmas are the UMP2 D_σ and Imat
-   loops), so this is one mechanism with a spin parameter, not two copies.
-   Profile first on 2 H2O⁺ after O1: at 14 % + part of 23 % today it becomes
-   the largest share once the Z-vector goes. Not bitwise; gate D_σ and
-   `dm2buf_full` elementwise against the current loops (relative to the
-   tensor's largest element, never per element) and the gradients to the
-   printed digit.
-3. **O3 — measure Imat after O2.** The `nao⁵` contraction
-   Imat_σ(q,v) = ½ Σ_prs (pq|rs) D_σ[p,v,r,s] is already threaded. It is a
-   GEMM in disguise ((pq|rs) reshaped as nao × nao³ against D reshaped
-   nao³ × nao); build only if the profile after O1–O2 still shows it.
-
-Expected end state for this case: well under 1 s, a few times the SCF, in line
-with RMP2. Not in scope: the dense `nao⁴` tensors themselves (D_α, D_β, the
-ERI), which cap the conventional UMP2 gradient's system size; RI-MP2 is the
-route past that.
+1. **G5 — 1e derivative integrals.** `_compute_1e_deriv_A`,
+   `_compute_nuclear_deriv_{A,C}_elem` (`os.cpp`): per AO pair, serial, the
+   block pasted four times in `gradient.cpp`, the C-derivative re-evaluated
+   per (atom, q). Plan: all three Cartesian components per pair in one
+   primitive pass, threaded over atoms, one shared block. Measure its share
+   first: ~5 % of the old gradient, now a visible fraction of a ~0.2 s 2e term.
+2. **G6 — RI three-centre integrals (measure first).** `compute_3c_eri`,
+   `compute_2c_eri`, `compute_3c_deriv_elem` (`src/post_hf/ri/ri_eri.cpp`):
+   per component, serial, unscreened. Thread over aux shells (disjoint
+   columns, bitwise). Price the share on an RI-MP2 gradient and an RI-JK SCF
+   before building. D3 (RI pair factors recomputed per iteration,
+   `docs/ERI_FOCK_BLAS_SCOPE.md`) is the larger RI-JK lever and stays separate.
+3. **G3 leftovers, not yet needed at these sizes.** Block-level density
+   screening `Q_ab Q_cd · max|Γ_block| < tol` (the Schwarz table itself stays
+   unscreened, invariant 8); screened (range-separated) kernels in the block
+   derivative kernels, since HSE06's long-range term still takes the AO loop.
+4. **UMP2 residue, not worth a step yet.** After G7 the 2 H2O⁺ gradient is
+   ~35 % Z-vector, ~16 % ERI tensor, ~7 % each 2e derivative term and Imat.
+   The conventional path already holds the AO ERI tensor, so the Z-vector
+   action could contract against it instead of 33 direct Fock builds. GMRES
+   also spends a second action per iteration on its fresh-residual check, by
+   design. The dense `nao⁴` tensors (D_α, D_β, the ERI) cap the conventional
+   UMP2 gradient's system size; RI-MP2 is the route past that.
 
 ## How the 2e gradient runs now
 
@@ -167,44 +99,52 @@ gradients are in `src/gradient/gradient.cpp`, the MP2 ones in
 - **Threads.** Both loops deal bra units into 64 fixed bins (unit mod 64),
   each with its own `natoms × 3` partial summed in bin order. The result is
   identical at any thread count.
-
-Not yet touched:
-
-- MP2 orbital side (`mp2_gradient.cpp`): `dm2buf_full`, D_σ and Imat are dense
-  `nao⁴` tensors built in N⁵–N⁶, and the UHF Z-vector builds its full matrix
-  (G7).
-- 1e derivatives (`_compute_1e_deriv_A`, `_compute_nuclear_deriv_{A,C}_elem`,
-  `os.cpp`): per AO pair, serial, the block pasted four times in
-  `gradient.cpp`; the C-derivative is re-evaluated per (atom, q) (G5).
-- `src/post_hf/ri/ri_eri.cpp`: `compute_3c_eri`, `compute_2c_eri`,
-  `compute_3c_deriv_elem` per component, serial, unscreened (G6).
-
-## After G7
-
-### G5 — 1e derivative integrals
-
-All three Cartesian components per pair in one primitive pass, threaded over
-atoms; one shared 1e block instead of four copies. Measure its share first:
-it was ~5 % of the old gradient and is now a visible fraction of a ~0.2 s
-2e term.
-
-### G6 — RI three-centre integrals (measure first)
-
-`compute_3c_eri` / `compute_3c_deriv_elem` thread over aux shells (disjoint
-columns, bitwise). Price their share on an RI-MP2 gradient and RI-JK SCF
-before building. D3 (RI pair factors recomputed per iteration,
-`docs/ERI_FOCK_BLAS_SCOPE.md`) is the larger RI-JK lever and stays separate.
-
-### Open from G3
-
-- **Block-level density screening**, `Q_ab Q_cd · max|Γ_block| < tol`, the
-  Häser–Ahlrichs screen the Fock build uses. The loop screens on Schwarz and
-  on a zero component Γ only. The Schwarz table itself stays unscreened
-  (invariant 8). Not yet needed at these sizes.
-- **Screened (range-separated) kernels in the block derivative kernels** (a
-  C5 analogue). HSE06's long-range term still takes the AO loop.
+- **MP2 orbital side** (`mp2_gradient.cpp`, `uhf_response.cpp`): the UHF
+  Z-vector is matrix-free GMRES; the T2 → AO back-transforms are the shared
+  `pair_half_density` / `back_transform_half_density` / `add_symmetrized`
+  helpers (G7).
 
 ## Record of what landed
+
+### G7 — UMP2 orbital side (2026-10-28)
+
+Profile before it (2 H2O⁺ / 6-31G\*, ~3,040 main-thread samples in
+`compute_ump2_gradient`): 59 % `solve_uhf_cphf` (1,443 samples in direct UHF
+Fock builds, 333 recomputing the Schwarz table inside each), 23 % D_σ and
+Imat, 14 % serial `part_dm2`, < 1 % the 2e derivative term.
+
+- **O1 — matrix-free UHF Z-vector** (`7f436276`). `build_uhf_cphf_matrix`
+  formed the (n_ov^α + n_ov^β)² orbital Hessian one unit column at a time,
+  one full direct UHF Fock build each (28·10 + 29·9 = 541 here), then QR.
+  The column body is now one operator (`UHFOrbitalHessian`,
+  `uhf_response.cpp`); the dense builder still applies it to unit vectors
+  (SOSCF needs the matrix), and `solve_uhf_cphf` hands it to
+  `DFT::Response::gmres`, the solver the DH Z-vector already uses, with the
+  ε_a − ε_i diagonal as preconditioner. No CG and no SPD check: GMRES checks
+  its unpreconditioned residual with a fresh action, so one solver suffices.
+  16 iterations, **33 Fock builds instead of 541**; run 3.5 → 1.83 s. z agrees
+  with the dense QR to 1.2e-8 of max|z| at tolerance 1e-10; tightening to
+  1e-12/1e-14 floors at ~5e-10, the dense reference's own screening noise,
+  and the printed gradient is identical either way. STO-3G cation / triplet /
+  RI: 1.6e-15 / 2.0e-15 / 1.3e-14. UHF SOSCF still converges superlinearly to
+  the DIIS energy. RHF is left alone: `solve_rhf_cphf` builds its matrix from
+  MO ERIs, no Fock build per column.
+- **O2 — back-transforms as matrix products, one mechanism for both MP2
+  flavours.** Three helpers in `mp2_gradient.cpp` replace RMP2's serial
+  `dm2buf_full` loop and UMP2's `part_dm2` + D_σ loops:
+  `pair_half_density` (C_l T_ij C_rᵀ per (i,j), threaded over pairs),
+  `back_transform_half_density` (two reshaped GEMMs, nao⁴·n_occ instead of
+  nao⁴·n_occ²) and `add_symmetrized` (the p↔q / r↔s / bra↔ket image sums,
+  threaded over p). D_β's αβ term is B_αβ read bra↔ket, so one B_αβ serves
+  both spins. Run 1.83 → **0.55 s**. Elementwise against the old loops
+  (relative to the tensor's largest element): ≤ 6.1e-16 on the STO-3G
+  cation, triplet, RI-UMP2 and RMP2 inputs, 1.9e-15 on 2 H2O⁺ / 6-31G\*.
+  Peak memory grows by one nao⁴ buffer during the D_σ build.
+- **O3 (Imat as a GEMM) dropped:** 1.3 % after O1.
+- **Gates.** All 19 MP2-gradient and double-hybrid regression cases and the
+  32 DH/MP2/gradient ctests pass (the three Eigen `conjugate_gradient_*`
+  Not Run are the known registration issue). No new ctest: no C++ harness
+  runs an SCF, so both dense/old-loop comparisons were temporary probes.
 
 ### G4 — MP2/UMP2 gradients onto the shared loop (2026-10-27)
 
