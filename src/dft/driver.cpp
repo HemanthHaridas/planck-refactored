@@ -4676,49 +4676,20 @@ namespace DFT::Driver
                 overlap_ao.rows() != nbasis || overlap_ao.cols() != nbasis ||
                 !relaxed_ao.allFinite() || !overlap_ao.allFinite())
                 return std::unexpected("DH Eq. 33 direct h/S contraction: invalid AO density dimensions.");
-            auto bf_atom = dh_eq33_basis_function_atoms(calculator);
-            if (!bf_atom) return std::unexpected(bf_atom.error());
+            // Σ D dh/dR and Σ W dS/dR; only the symmetric parts of D and W enter.
+            auto g = HartreeFock::Gradient::one_electron_gradient(
+                calculator, build_shellpairs(calculator._shells), relaxed_ao, overlap_ao);
+            if (!g) return std::unexpected("DH Eq. 33 direct h/S contraction: " + g.error());
 
             const int ncoord = static_cast<int>(3 * calculator._molecule.natoms);
             Gradient::DHEq33OneElectronOverlapGradient out{
                 Eigen::VectorXd::Zero(ncoord), Eigen::VectorXd::Zero(ncoord)};
-            const auto &basis_functions = calculator._shells._basis_functions;
-            for (int mu = 0; mu < nbasis; ++mu)
-                for (int nu = 0; nu < nbasis; ++nu)
+            const Eigen::MatrixXd core = g->core();
+            for (Eigen::Index atom = 0; atom < core.rows(); ++atom)
+                for (int q = 0; q < 3; ++q)
                 {
-                    const HartreeFock::ShellPair pair_mu_nu(
-                        basis_functions[static_cast<std::size_t>(mu)], basis_functions[static_cast<std::size_t>(nu)]);
-                    const HartreeFock::ShellPair pair_nu_mu(
-                        basis_functions[static_cast<std::size_t>(nu)], basis_functions[static_cast<std::size_t>(mu)]);
-                    const auto derivative_mu = HartreeFock::ObaraSaika::_compute_1e_deriv_A(pair_mu_nu);
-                    const auto derivative_nu = HartreeFock::ObaraSaika::_compute_1e_deriv_A(pair_nu_mu);
-                    const double d = relaxed_ao(mu, nu);
-                    const double w = overlap_ao(mu, nu);
-                    for (std::size_t atom = 0; atom < calculator._molecule.natoms; ++atom)
-                        for (int q = 0; q < 3; ++q)
-                        {
-                            const Eigen::Index coordinate = 3 * static_cast<Eigen::Index>(atom) + q;
-                            double h = HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(
-                                pair_mu_nu, calculator._molecule._standard.row(static_cast<Eigen::Index>(atom)).transpose(),
-                                calculator._molecule.atomic_numbers[atom], q);
-                            double s = 0.0;
-                            if ((*bf_atom)[static_cast<std::size_t>(mu)] == static_cast<int>(atom))
-                            {
-                                s += derivative_mu[q];
-                                h += derivative_mu[q + 3] +
-                                    HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(
-                                        pair_mu_nu, calculator._molecule)[q];
-                            }
-                            if ((*bf_atom)[static_cast<std::size_t>(nu)] == static_cast<int>(atom))
-                            {
-                                s += derivative_nu[q];
-                                h += derivative_nu[q + 3] +
-                                    HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(
-                                        pair_nu_mu, calculator._molecule)[q];
-                            }
-                            out.one_electron(coordinate) += d * h;
-                            out.overlap(coordinate) += w * s;
-                        }
+                    out.one_electron(3 * atom + q) = core(atom, q);
+                    out.overlap(3 * atom + q) = g->overlap(atom, q);
                 }
             return out;
         }

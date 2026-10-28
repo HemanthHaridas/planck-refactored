@@ -7,26 +7,27 @@ was never one thing: the derivative ERIs were per AO component, untriangled
 and single-threaded (G1–G3), the MP2 gradients carried an unread O(N⁸)
 density and rebuilt N⁵ intermediates in their innermost loop (G4), and the
 UMP2 Z-vector built its full orbital Hessian with one Fock build per column
-while its back-transforms ran as scalar n_occ² sums (G7).
+while its back-transforms ran as scalar n_occ² sums (G7), and the serial 1e
+block, pasted six times, re-ran the nuclear recurrence for every axis (G5).
 
 Measured on M3, `build-full`, direct SCF, `engine auto`, SAD, no symmetry,
 four threads, best of three, whole run including the SCF:
 
 | system | SCF | gradient run 2026-10-25 | **now** | now ÷ SCF |
 |---|---|---|---|---|
-| 4 H2O / 6-31G\* (nb 76) | 0.38 s | 53.9 s | **0.56 s** | 1.5× |
-| 8 H2O / 6-31G (nb 104) | 0.56 s | 68.0 s | **0.90 s** | 1.6× |
-| 1 H2O / cc-pVTZ (nb 65 Cart.) | 0.54 s | 114.9 s | **0.61 s** | 1.1× |
+| 4 H2O / 6-31G\* (nb 76) | 0.38 s | 53.9 s | **0.50 s** | 1.3× |
+| 8 H2O / 6-31G (nb 104) | 0.56 s | 68.0 s | **0.78 s** | 1.4× |
+| 1 H2O / cc-pVTZ (nb 65 Cart.) | 0.54 s | 114.9 s | **0.59 s** | 1.1× |
 | 1 H2O / 6-31G\* RMP2 (conventional) | 0.08 s | 7.30 s | **0.12 s** | 1.5× |
 | 2 H2O / 6-31G\* RMP2 (conventional) | 0.15 s | > 5 min | **0.65 s** | 4.3× |
-| 2 H2O⁺ / 6-31G\* UMP2 (conventional) | 0.16 s | 136 s (after G3) | **0.55 s** | 3.4× |
+| 2 H2O⁺ / 6-31G\* UMP2 (conventional) | 0.16 s | 136 s (after G3) | **0.53 s** | 3.3× |
 
 The 2026-10-25 runs had a concurrent compile on the machine (±20 %) and the
 SCF got faster in between, so compare gradient columns, not ratios across
 dates. Printed gradients are unchanged by every step, and identical at any
 thread count.
 
-Scope status: the 2e and MP2-orbital work is done; G5, G6 and two G3
+Scope status: the 2e, MP2-orbital and 1e work is done; G6 and two G3
 leftovers below are still open, so this file stays a scope until they land
 or are declined. It follows `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`, which
 made the memory-direct Fock build fast and is closed.
@@ -35,23 +36,17 @@ made the memory-direct Fock build fast and is closed.
 
 In order:
 
-1. **G5 — 1e derivative integrals.** `_compute_1e_deriv_A`,
-   `_compute_nuclear_deriv_{A,C}_elem` (`os.cpp`): per AO pair, serial, the
-   block pasted four times in `gradient.cpp`, the C-derivative re-evaluated
-   per (atom, q). Plan: all three Cartesian components per pair in one
-   primitive pass, threaded over atoms, one shared block. Measure its share
-   first: ~5 % of the old gradient, now a visible fraction of a ~0.2 s 2e term.
-2. **G6 — RI three-centre integrals (measure first).** `compute_3c_eri`,
+1. **G6 — RI three-centre integrals (measure first).** `compute_3c_eri`,
    `compute_2c_eri`, `compute_3c_deriv_elem` (`src/post_hf/ri/ri_eri.cpp`):
    per component, serial, unscreened. Thread over aux shells (disjoint
    columns, bitwise). Price the share on an RI-MP2 gradient and an RI-JK SCF
    before building. D3 (RI pair factors recomputed per iteration,
    `docs/ERI_FOCK_BLAS_SCOPE.md`) is the larger RI-JK lever and stays separate.
-3. **G3 leftovers, not yet needed at these sizes.** Block-level density
+2. **G3 leftovers, not yet needed at these sizes.** Block-level density
    screening `Q_ab Q_cd · max|Γ_block| < tol` (the Schwarz table itself stays
    unscreened, invariant 8); screened (range-separated) kernels in the block
    derivative kernels, since HSE06's long-range term still takes the AO loop.
-4. **UMP2 residue, not worth a step yet.** After G7 the 2 H2O⁺ gradient is
+3. **UMP2 residue, not worth a step yet.** After G7 the 2 H2O⁺ gradient is
    ~35 % Z-vector, ~16 % ERI tensor, ~7 % each 2e derivative term and Imat.
    The conventional path already holds the AO ERI tensor, so the Z-vector
    action could contract against it instead of 33 direct Fock builds. GMRES
@@ -105,6 +100,40 @@ gradients are in `src/gradient/gradient.cpp`, the MP2 ones in
   helpers (G7).
 
 ## Record of what landed
+
+### G5 — one threaded 1e derivative block (2026-10-28)
+
+Priced first: on the RHF gradients the 1e term was 14–32 % of the gradient
+call (main-thread samples: 8 H2O / 6-31G 64 of 203, 4 H2O / 6-31G\* 29 of
+108, 1 H2O / cc-pVTZ 8 of 57), almost all of it the nucleus-position
+derivative, which ran the whole nuclear VRR once per (atom, axis).
+
+- **One function** `Gradient::one_electron_gradient(calc, ao_pairs, D, W)`
+  returns the kinetic / basis-function nuclear / nucleus-position nuclear /
+  overlap parts (Σ D dh/dR, Σ W dS/dR; only the symmetric parts of D and W
+  enter). It replaces six copies: four in `gradient.cpp` (RHF/RKS, UHF,
+  ROHF, UKS), the MP2 helper (which allocated nine nao² matrices per atom and
+  re-ran the C-derivative over all AO pairs per (atom, axis)), and the DH
+  Eq. 33 h/S contraction in `dft/driver.cpp` (ordered nao² pairs, the
+  all-nuclei A-derivative recomputed per (atom, axis)). The unused public
+  `contract_rmp2_one_electron_gradient` is deleted. The two overlap-only MP2
+  loops stay: their weight includes `vhf_s1occ`, so symmetrizing it is not
+  obviously safe, and they are cheap.
+- **`_compute_nuclear_deriv_C_xyz`**: the Boys values and V VRR are shared by
+  the three directions; only the dVRR and HRR run per direction. Same
+  recurrences, so per direction bitwise the old kernel;
+  `_compute_nuclear_deriv_C_elem` is now a wrapper.
+- **Threaded** over AO pairs in 64 fixed bins (pair index mod 64) summed in
+  order: identical at any thread count.
+
+Whole run, four threads, best of three: 8 H2O / 6-31G 0.87 → 0.78 s,
+4 H2O / 6-31G\* 0.54 → 0.50 s, 1 H2O / cc-pVTZ 0.60 → 0.59 s, 2 H2O⁺ UMP2
+0.54 → 0.53 s. 1e main-thread samples on 8 H2O 64 → 19. Printed gradients
+identical to the old binary on all four (one symmetry-zero component on
+8 H2O changes the sign of its printed zero) and identical at 1 and 4
+threads. 72 gradient / geomopt / freq / FD / MP2 / DH regression cases and
+35 DH/MP2/gradient/derivative ctests pass (plus the three known Eigen Not
+Run).
 
 ### G7 — UMP2 orbital side (2026-10-28)
 

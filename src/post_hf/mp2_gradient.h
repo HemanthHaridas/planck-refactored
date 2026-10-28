@@ -125,13 +125,6 @@ namespace HartreeFock::Correlation
         const RMP2Result &result,
         RMP2PreSolved presolved = {});
 
-    // Correction-only <D h^(x)> primitive shared by the direct double-hybrid
-    // Eq. (33) assembly. `density` is not augmented with the HF reference.
-    Eigen::MatrixXd contract_rmp2_one_electron_gradient(
-        const HartreeFock::Calculator &calculator,
-        const std::vector<HartreeFock::ShellPair> &shell_pairs,
-        const Eigen::MatrixXd &density);
-
     std::expected<UMP2GradientIntermediates, std::string> build_ump2_gradient_intermediates(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,

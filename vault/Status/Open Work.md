@@ -2022,8 +2022,10 @@ identify the path taken. Not required for correctness or performance.
   D_σ / `part_dm2` / RMP2 `dm2buf_full` back-transforms are shared GEMM
   helpers, 1.83 → 0.55 s (3.4× the SCF), gradient identical, thread-invariant.
   O3 (Imat) dropped. The Z-vector (~35 %) could use the stored ERI tensor
-  instead of direct builds; not yet worth it. Then G5 1e
-  derivatives (now a larger share), G6 RI 3c (measure first).
+  instead of direct builds; not yet worth it. G5 landed (working tree): one
+  threaded 1e derivative block replaces six copies, the nucleus-position
+  derivative shares one VRR across x/y/z; 8 H2O / 6-31G gradient run
+  0.87 → 0.78 s, gradients identical. Next: G6 RI 3c (measure first).
   The regression runner now passes `--build-dir` to its `.py` comparators,
   which had been running whatever binary sat in `./build`.
 - **ERI/Fock BLAS-LAPACK migration — scoped 2026-10-17, nothing landed**

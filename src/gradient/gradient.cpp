@@ -6,6 +6,7 @@
 #include <format>
 #include <memory>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 #include "basis/basis.h"
@@ -132,6 +133,87 @@ Eigen::MatrixXd HartreeFock::Gradient::detail::build_pair_schwarz_table(
     return Q;
 }
 
+std::expected<HartreeFock::Gradient::OneElectronGradient, std::string>
+HartreeFock::Gradient::one_electron_gradient(
+    const HartreeFock::Calculator &calc,
+    const std::vector<HartreeFock::ShellPair> &ao_pairs,
+    const Eigen::MatrixXd &D_in,
+    const Eigen::MatrixXd &W_in)
+{
+    const auto &mol = calc._molecule;
+    const Eigen::Index natoms = static_cast<Eigen::Index>(mol.natoms);
+    const Eigen::MatrixXd D = 0.5 * (D_in + D_in.transpose());
+    const Eigen::MatrixXd W = W_in.size() ? Eigen::MatrixXd(0.5 * (W_in + W_in.transpose()))
+                                          : Eigen::MatrixXd::Zero(D.rows(), D.cols());
+
+    auto shell_atom = detail::build_shell_atom_map(calc);
+    if (!shell_atom)
+        return std::unexpected(shell_atom.error());
+    const auto &shells = calc._shells._shells;
+    const auto &bfs = calc._shells._basis_functions;
+    std::unordered_map<const HartreeFock::Shell *, int> atom_of_shell; // _shells is a deque
+    for (std::size_t s = 0; s < shells.size(); ++s)
+        atom_of_shell[&shells[s]] = (*shell_atom)[s];
+    std::vector<int> ao_atom(bfs.size());
+    for (std::size_t mu = 0; mu < bfs.size(); ++mu)
+        ao_atom[mu] = atom_of_shell.at(bfs[mu]._shell);
+    std::vector<Eigen::Vector3d> centers(mol.natoms);
+    for (std::size_t a = 0; a < mol.natoms; ++a)
+        centers[a] = mol._standard.row(static_cast<Eigen::Index>(a)).transpose();
+
+    // Each unordered pair (i,j) stands for both orderings: dh_ij/dR gets the
+    // bra derivative on i's atom and, for i != j, the bra derivative of (j,i)
+    // on j's atom; the pair weight is 2·D_ij (D_ii once on the diagonal).
+    constexpr std::size_t kBins = 64;
+    const std::size_t npairs = ao_pairs.size();
+    std::vector<OneElectronGradient> bins(kBins, OneElectronGradient{
+        Eigen::MatrixXd::Zero(natoms, 3), Eigen::MatrixXd::Zero(natoms, 3),
+        Eigen::MatrixXd::Zero(natoms, 3), Eigen::MatrixXd::Zero(natoms, 3)});
+#pragma omp parallel for schedule(dynamic)
+    for (std::size_t bin = 0; bin < kBins; ++bin)
+    {
+        auto &g = bins[bin];
+        for (std::size_t k = bin; k < npairs; k += kBins)
+        {
+            const auto &sp = ao_pairs[k];
+            const std::size_t i = sp.A._index, j = sp.B._index;
+            const double d = 2.0 * D(i, j), w = 2.0 * W(i, j);
+            const auto bra = [&](const HartreeFock::ShellPair &pair, int atom)
+            {
+                const auto dST = HartreeFock::ObaraSaika::_compute_1e_deriv_A(pair);
+                const auto dV = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(pair, mol);
+                for (int q = 0; q < 3; ++q)
+                {
+                    g.kinetic(atom, q) += d * dST[q + 3];
+                    g.nuc_a(atom, q) += d * dV[q];
+                    g.overlap(atom, q) += w * dST[q];
+                }
+            };
+            bra(sp, ao_atom[i]);
+            if (i != j)
+                bra(HartreeFock::ShellPair(sp.B, sp.A), ao_atom[j]);
+
+            const double dc = (i == j) ? D(i, j) : d;
+            for (Eigen::Index a = 0; a < natoms; ++a)
+            {
+                const auto dV = HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_xyz(
+                    sp, centers[a], static_cast<double>(mol.atomic_numbers[a]));
+                for (int q = 0; q < 3; ++q)
+                    g.nuc_c(a, q) += dc * dV[q];
+            }
+        }
+    }
+    OneElectronGradient out = bins[0];
+    for (std::size_t bin = 1; bin < kBins; ++bin)
+    {
+        out.kinetic += bins[bin].kinetic;
+        out.nuc_a += bins[bin].nuc_a;
+        out.nuc_c += bins[bin].nuc_c;
+        out.overlap += bins[bin].overlap;
+    }
+    return out;
+}
+
 std::array<double, 12> HartreeFock::Gradient::compute_eri_deriv_dispatch(
     const HartreeFock::Calculator &calc,
     const HartreeFock::ShellPair &spAB,
@@ -191,7 +273,6 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_gradient
     const auto &bfs = basis._basis_functions;
     const std::size_t nshells = shells.size();
     const Eigen::MatrixXd schwarz_q = build_pair_schwarz_table(shell_pairs, nb);
-    std::vector<std::unique_ptr<HartreeFock::ShellPair>> reversed_pairs(shell_pairs.size());
 
     std::vector<int> bf_shell(nb, -1);
     for (std::size_t s = 0; s < nshells; ++s)
@@ -201,62 +282,11 @@ static std::expected<Eigen::MatrixXd, std::string> compute_closed_shell_gradient
                 bf_shell[mu] = static_cast<int>(s);
     }
 
-    for (const auto &sp : shell_pairs)
     {
-        const std::size_t pair_index = static_cast<std::size_t>(&sp - shell_pairs.data());
-        const std::size_t ii = sp.A._index;
-        const std::size_t jj = sp.B._index;
-        const int atom_ii = shell_atom[bf_shell[ii]];
-        const int atom_jj = shell_atom[bf_shell[jj]];
-
-        const auto dST_A = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp);
-        const auto dV_A = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(sp, mol);
-
-        for (int q = 0; q < 3; ++q)
-        {
-            const double contrib = 2.0 * P(ii, jj) * (dST_A[q + 3] + dV_A[q]) - 2.0 * W(ii, jj) * dST_A[q];
-            core_pulay(atom_ii, q) += contrib;
-        }
-
-        if (ii != jj)
-        {
-            if (!reversed_pairs[pair_index])
-                reversed_pairs[pair_index] = std::make_unique<HartreeFock::ShellPair>(sp.B, sp.A);
-            const auto &sp_rev = *reversed_pairs[pair_index];
-            const auto dST_B = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp_rev);
-            const auto dV_B = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(sp_rev, mol);
-
-            for (int q = 0; q < 3; ++q)
-            {
-                const double contrib = 2.0 * P(jj, ii) * (dST_B[q + 3] + dV_B[q]) - 2.0 * W(jj, ii) * dST_B[q];
-                core_pulay(atom_jj, q) += contrib;
-            }
-        }
-    }
-
-    for (std::size_t atom_a = 0; atom_a < natoms; ++atom_a)
-    {
-        const double Z_A = static_cast<double>(mol.atomic_numbers[atom_a]);
-        const Eigen::Vector3d C_A(mol._standard(atom_a, 0),
-                                  mol._standard(atom_a, 1),
-                                  mol._standard(atom_a, 2));
-
-        for (int q = 0; q < 3; ++q)
-        {
-            double dV_sum = 0.0;
-            for (const auto &sp : shell_pairs)
-            {
-                const std::size_t ii = sp.A._index;
-                const std::size_t jj = sp.B._index;
-                const double dv = HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(
-                    sp, C_A, Z_A, q);
-                if (ii == jj)
-                    dV_sum += P(ii, jj) * dv;
-                else
-                    dV_sum += 2.0 * P(ii, jj) * dv;
-            }
-            core_pulay(atom_a, q) += dV_sum;
-        }
+        auto one_e = HartreeFock::Gradient::one_electron_gradient(calc, shell_pairs, P, W);
+        if (!one_e)
+            return std::unexpected(one_e.error());
+        core_pulay += one_e->total();
     }
 
     accumulate_shell_pair_eri_gradient(
@@ -505,61 +535,11 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_g
             if (bfs[mu]._shell == &shells[s])
                 bf_shell[mu] = static_cast<int>(s);
 
-    // ── Term 1+Pulay (same structure as RHF but using P_t and W) ─────────────
-    for (const auto &sp : shell_pairs)
     {
-        const std::size_t ii = sp.A._index;
-        const std::size_t jj = sp.B._index;
-        const int atom_ii = shell_atom[bf_shell[ii]];
-        const int atom_jj = shell_atom[bf_shell[jj]];
-
-        const auto dST_A = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp);
-        const auto dV_A = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(sp, mol);
-
-        for (int q = 0; q < 3; ++q)
-        {
-            const double contrib = 2.0 * P_t(ii, jj) * (dST_A[q + 3] + dV_A[q]) - 2.0 * W(ii, jj) * dST_A[q];
-            grad(atom_ii, q) += contrib;
-        }
-
-        if (ii != jj)
-        {
-            HartreeFock::ShellPair sp_rev(sp.B, sp.A);
-            const auto dST_B = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp_rev);
-            const auto dV_B = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(sp_rev, mol);
-
-            for (int q = 0; q < 3; ++q)
-            {
-                const double contrib = 2.0 * P_t(jj, ii) * (dST_B[q + 3] + dV_B[q]) - 2.0 * W(jj, ii) * dST_B[q];
-                grad(atom_jj, q) += contrib;
-            }
-        }
-    }
-
-    // ── Term 2: nucleus-position V ────────────────────────────────────────────
-    for (std::size_t atom_a = 0; atom_a < natoms; ++atom_a)
-    {
-        const double Z_A = static_cast<double>(mol.atomic_numbers[atom_a]);
-        const Eigen::Vector3d C_A(mol._standard(atom_a, 0),
-                                  mol._standard(atom_a, 1),
-                                  mol._standard(atom_a, 2));
-
-        for (int q = 0; q < 3; ++q)
-        {
-            double dV_sum = 0.0;
-            for (const auto &sp : shell_pairs)
-            {
-                const std::size_t ii = sp.A._index;
-                const std::size_t jj = sp.B._index;
-                const double dv = HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(
-                    sp, C_A, Z_A, q);
-                if (ii == jj)
-                    dV_sum += P_t(ii, jj) * dv;
-                else
-                    dV_sum += 2.0 * P_t(ii, jj) * dv;
-            }
-            grad(atom_a, q) += dV_sum;
-        }
+        auto one_e = HartreeFock::Gradient::one_electron_gradient(calc, shell_pairs, P_t, W);
+        if (!one_e)
+            return std::unexpected(one_e.error());
+        grad += one_e->total();
     }
 
     // ── Term 3: ERI gradient ──────────────────────────────────────────────────
@@ -668,61 +648,11 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rohf_
             if (bfs[mu]._shell == &shells[s])
                 bf_shell[mu] = static_cast<int>(s);
 
-    // ── Term 1+Pulay (P_t and W) ─────────────────────────────────────────────
-    for (const auto &sp : shell_pairs)
     {
-        const std::size_t ii = sp.A._index;
-        const std::size_t jj = sp.B._index;
-        const int atom_ii = shell_atom[bf_shell[ii]];
-        const int atom_jj = shell_atom[bf_shell[jj]];
-
-        const auto dST_A = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp);
-        const auto dV_A = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(sp, mol);
-
-        for (int q = 0; q < 3; ++q)
-        {
-            const double contrib = 2.0 * P_t(ii, jj) * (dST_A[q + 3] + dV_A[q]) - 2.0 * W(ii, jj) * dST_A[q];
-            grad(atom_ii, q) += contrib;
-        }
-
-        if (ii != jj)
-        {
-            HartreeFock::ShellPair sp_rev(sp.B, sp.A);
-            const auto dST_B = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp_rev);
-            const auto dV_B = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(sp_rev, mol);
-
-            for (int q = 0; q < 3; ++q)
-            {
-                const double contrib = 2.0 * P_t(jj, ii) * (dST_B[q + 3] + dV_B[q]) - 2.0 * W(jj, ii) * dST_B[q];
-                grad(atom_jj, q) += contrib;
-            }
-        }
-    }
-
-    // ── Term 2: nucleus-position V ────────────────────────────────────────────
-    for (std::size_t atom_a = 0; atom_a < natoms; ++atom_a)
-    {
-        const double Z_A = static_cast<double>(mol.atomic_numbers[atom_a]);
-        const Eigen::Vector3d C_A(mol._standard(atom_a, 0),
-                                  mol._standard(atom_a, 1),
-                                  mol._standard(atom_a, 2));
-
-        for (int q = 0; q < 3; ++q)
-        {
-            double dV_sum = 0.0;
-            for (const auto &sp : shell_pairs)
-            {
-                const std::size_t ii = sp.A._index;
-                const std::size_t jj = sp.B._index;
-                const double dv = HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(
-                    sp, C_A, Z_A, q);
-                if (ii == jj)
-                    dV_sum += P_t(ii, jj) * dv;
-                else
-                    dV_sum += 2.0 * P_t(ii, jj) * dv;
-            }
-            grad(atom_a, q) += dV_sum;
-        }
+        auto one_e = HartreeFock::Gradient::one_electron_gradient(calc, shell_pairs, P_t, W);
+        if (!one_e)
+            return std::unexpected(one_e.error());
+        grad += one_e->total();
     }
 
     // ── Term 3: ERI gradient ──────────────────────────────────────────────────
@@ -817,59 +747,11 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_g
             if (bfs[mu]._shell == &shells[s])
                 bf_shell[mu] = static_cast<int>(s);
 
-    for (const auto &sp : shell_pairs)
     {
-        const std::size_t ii = sp.A._index;
-        const std::size_t jj = sp.B._index;
-        const int atom_ii = shell_atom[bf_shell[ii]];
-        const int atom_jj = shell_atom[bf_shell[jj]];
-
-        const auto dST_A = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp);
-        const auto dV_A = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(sp, mol);
-
-        for (int q = 0; q < 3; ++q)
-        {
-            const double contrib = 2.0 * P_t(ii, jj) * (dST_A[q + 3] + dV_A[q]) - 2.0 * W(ii, jj) * dST_A[q];
-            core_pulay(atom_ii, q) += contrib;
-        }
-
-        if (ii != jj)
-        {
-            HartreeFock::ShellPair sp_rev(sp.B, sp.A);
-            const auto dST_B = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp_rev);
-            const auto dV_B = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(sp_rev, mol);
-
-            for (int q = 0; q < 3; ++q)
-            {
-                const double contrib = 2.0 * P_t(jj, ii) * (dST_B[q + 3] + dV_B[q]) - 2.0 * W(jj, ii) * dST_B[q];
-                core_pulay(atom_jj, q) += contrib;
-            }
-        }
-    }
-
-    for (std::size_t atom_a = 0; atom_a < natoms; ++atom_a)
-    {
-        const double Z_A = static_cast<double>(mol.atomic_numbers[atom_a]);
-        const Eigen::Vector3d C_A(mol._standard(atom_a, 0),
-                                  mol._standard(atom_a, 1),
-                                  mol._standard(atom_a, 2));
-
-        for (int q = 0; q < 3; ++q)
-        {
-            double dV_sum = 0.0;
-            for (const auto &sp : shell_pairs)
-            {
-                const std::size_t ii = sp.A._index;
-                const std::size_t jj = sp.B._index;
-                const double dv = HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(
-                    sp, C_A, Z_A, q);
-                if (ii == jj)
-                    dV_sum += P_t(ii, jj) * dv;
-                else
-                    dV_sum += 2.0 * P_t(ii, jj) * dv;
-            }
-            core_pulay(atom_a, q) += dV_sum;
-        }
+        auto one_e = HartreeFock::Gradient::one_electron_gradient(calc, shell_pairs, P_t, W);
+        if (!one_e)
+            return std::unexpected(one_e.error());
+        core_pulay += one_e->total();
     }
 
     const double cx_total =

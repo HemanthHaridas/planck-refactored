@@ -232,100 +232,10 @@ namespace
         return grad;
     }
 
-    struct OneElectronGradientTerms
-    {
-        Eigen::MatrixXd total;
-        Eigen::MatrixXd kinetic;
-        Eigen::MatrixXd nuc_a;
-        Eigen::MatrixXd nuc_c;
-    };
-
-    OneElectronGradientTerms one_electron_gradient_terms_from_density(
-        const HartreeFock::Calculator &calculator,
-        const std::vector<HartreeFock::ShellPair> & /*shell_pairs*/,
-        const Eigen::MatrixXd &density)
-    {
-        OneElectronGradientTerms terms{
-            .total = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3),
-            .kinetic = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3),
-            .nuc_a = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3),
-            .nuc_c = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3)};
-        const auto &mol = calculator._molecule;
-        const int nao = static_cast<int>(calculator._shells.nbasis());
-        const auto &bfs = calculator._shells._basis_functions;
-        const auto atom_aos = build_atom_ao_lists(calculator);
-        for (std::size_t atom = 0; atom < mol.natoms; ++atom)
-        {
-            std::array<Eigen::MatrixXd, 3> kinetic_ao{
-                Eigen::MatrixXd::Zero(nao, nao),
-                Eigen::MatrixXd::Zero(nao, nao),
-                Eigen::MatrixXd::Zero(nao, nao)};
-            std::array<Eigen::MatrixXd, 3> nuc_a_ao{
-                Eigen::MatrixXd::Zero(nao, nao),
-                Eigen::MatrixXd::Zero(nao, nao),
-                Eigen::MatrixXd::Zero(nao, nao)};
-            std::array<Eigen::MatrixXd, 3> nuc_c_ao{
-                Eigen::MatrixXd::Zero(nao, nao),
-                Eigen::MatrixXd::Zero(nao, nao),
-                Eigen::MatrixXd::Zero(nao, nao)};
-
-            for (int p : atom_aos[atom])
-                for (int nu = 0; nu < nao; ++nu)
-                {
-                    const HartreeFock::ShellPair sp(bfs[p], bfs[nu]);
-                    const auto dST_A = HartreeFock::ObaraSaika::_compute_1e_deriv_A(sp);
-                    const auto dV_A = HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(sp, mol);
-                    for (int q = 0; q < 3; ++q)
-                    {
-                        kinetic_ao[q](p, nu) += dST_A[q + 3];
-                        nuc_a_ao[q](p, nu) += dV_A[q];
-                    }
-                }
-
-            const double Z = static_cast<double>(mol.atomic_numbers[atom]);
-            const Eigen::Vector3d center(mol._standard(atom, 0), mol._standard(atom, 1), mol._standard(atom, 2));
-            for (int q = 0; q < 3; ++q)
-            {
-                kinetic_ao[q] = kinetic_ao[q] + kinetic_ao[q].transpose().eval();
-                nuc_a_ao[q] = nuc_a_ao[q] + nuc_a_ao[q].transpose().eval();
-                for (int ii = 0; ii < nao; ++ii)
-                    for (int jj = 0; jj <= ii; ++jj)
-                    {
-                        const HartreeFock::ShellPair sp(bfs[ii], bfs[jj]);
-                        const double dv = HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(sp, center, Z, q);
-                        nuc_c_ao[q](ii, jj) += dv;
-                        if (ii != jj)
-                            nuc_c_ao[q](jj, ii) += dv;
-                    }
-                terms.kinetic(atom, q) = (kinetic_ao[q].cwiseProduct(density.transpose())).sum();
-                terms.nuc_a(atom, q) = (nuc_a_ao[q].cwiseProduct(density.transpose())).sum();
-                terms.nuc_c(atom, q) = (nuc_c_ao[q].cwiseProduct(density.transpose())).sum();
-                terms.total(atom, q) = terms.kinetic(atom, q) + terms.nuc_a(atom, q) + terms.nuc_c(atom, q);
-            }
-        }
-        return terms;
-    }
-
-    Eigen::MatrixXd one_electron_gradient_from_density(
-        const HartreeFock::Calculator &calculator,
-        const std::vector<HartreeFock::ShellPair> &shell_pairs,
-        const Eigen::MatrixXd &density)
-    {
-        return one_electron_gradient_terms_from_density(calculator, shell_pairs, density).total;
-    }
-
 }
 
 namespace HartreeFock::Correlation
 {
-    Eigen::MatrixXd contract_rmp2_one_electron_gradient(
-        const HartreeFock::Calculator &calculator,
-        const std::vector<HartreeFock::ShellPair> &shell_pairs,
-        const Eigen::MatrixXd &density)
-    {
-        return one_electron_gradient_from_density(calculator, shell_pairs, density);
-    }
-
     std::expected<RMP2Lagrangian, std::string> build_rmp2_lagrangian(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
@@ -647,8 +557,11 @@ namespace HartreeFock::Correlation
         imat_ao = rel.imat_ao; // symmetrized, used by the s_im1 overlap term below
 
         const Eigen::MatrixXd dm1_total_ao = hf_dm1 + dm1_corr_relaxed_ao;
-        const auto one_e_terms = one_electron_gradient_terms_from_density(calculator, shell_pairs, dm1_total_ao);
-        electronic += one_e_terms.total;
+        const auto one_e_res = HartreeFock::Gradient::one_electron_gradient(calculator, shell_pairs, dm1_total_ao);
+        if (!one_e_res)
+            return std::unexpected(one_e_res.error());
+        const auto &one_e_terms = *one_e_res;
+        electronic += one_e_terms.core();
 
         const Eigen::MatrixXd dm1p = hf_dm1 + 2.0 * dm1_corr_relaxed_ao;
 
@@ -726,7 +639,7 @@ namespace HartreeFock::Correlation
         }
 
         maybe_print_rmp2_term_matrix("two_e", two_e_terms);
-        maybe_print_rmp2_term_matrix("h1", one_e_terms.total);
+        maybe_print_rmp2_term_matrix("h1", one_e_terms.core());
         maybe_print_rmp2_term_matrix("h1_kinetic", one_e_terms.kinetic);
         maybe_print_rmp2_term_matrix("h1_nuc_a", one_e_terms.nuc_a);
         maybe_print_rmp2_term_matrix("h1_nuc_c", one_e_terms.nuc_c);
@@ -965,8 +878,10 @@ namespace HartreeFock::Correlation
         const Eigen::MatrixXd dm1pa = hf_dm1a + 2.0 * Pa_corr;
         const Eigen::MatrixXd dm1pb = hf_dm1b + 2.0 * Pb_corr;
         const Eigen::MatrixXd dm1tot = hf_dm1a + hf_dm1b + Pa_corr + Pb_corr;
-        const Eigen::MatrixXd one_e = one_electron_gradient_from_density(calculator, shell_pairs, dm1tot);
-        electronic += one_e;
+        const auto one_e = HartreeFock::Gradient::one_electron_gradient(calculator, shell_pairs, dm1tot);
+        if (!one_e)
+            return std::unexpected(one_e.error());
+        electronic += one_e->core();
 
         const Eigen::MatrixXd zeta_total = zeta;
         Eigen::MatrixXd overlap_terms = Eigen::MatrixXd::Zero(calculator._molecule.natoms, 3);
