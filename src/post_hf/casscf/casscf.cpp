@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <format>
 #include <limits>
 #include <numeric>
@@ -545,6 +546,8 @@ namespace HartreeFock::Correlation::CASSCF
             // basis imply?". Every candidate orbital step and every final accepted
             // macroiteration comes back through this full reevaluation path.
             McscfState st;
+            ++call_probe.evaluate;
+            ++call_probe.active_transform;
             // Density-fitted path: when mp2_use_ri is set, the four ERI-dependent
             // pieces (inactive Fock, active-space transform, active cache, and the
             // active Fock built later) all route through the validated RI builders
@@ -1236,6 +1239,16 @@ namespace HartreeFock::Correlation::CASSCF
                         diag.max_response_residual,
                         diag.max_response_iterations,
                         level_shift));
+            if (std::getenv("PLANCK_CASSCF_CALL_PROBE"))
+                logging(LogLevel::Info, tag + " :",
+                        std::format("call_probe macro={:d} evaluate={:d} fixed_ci_gradient={:d} "
+                                    "active_cache={:d} active_transform={:d} fock={:d} npairs={:d}",
+                                    macro, call_probe.evaluate.exchange(0),
+                                    call_probe.fixed_ci_gradient.exchange(0),
+                                    call_probe.active_cache.exchange(0),
+                                    call_probe.active_transform.exchange(0),
+                                    call_probe.fock.exchange(0),
+                                    static_cast<int>(opt_pairs.size())));
             if (diag.ci_response_fallback_used)
                 logging(LogLevel::Warning, tag + " :",
                         "CI response Davidson solve did not fully converge for at least one root; using single-step fallback.");

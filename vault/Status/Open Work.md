@@ -1904,6 +1904,32 @@ serial path).
 
 ### Remaining work
 
+#### Performance: ~50x slower than PySCF at cc-pVDZ (scoped 2026-10-28)
+
+`docs/CASSCF_PERFORMANCE_SCOPE.md`. Water CAS(4,4)/cc-pVDZ takes 12.7 s
+(16 macros) in Planck and 0.26 s (9 macros) in PySCF, and the ratio grows
+with basis size (2.9x at 6-31G; ~176 s per macro at cc-pVTZ against PySCF's
+1.0 s for the whole run). Profile: 87 % in
+`transform_eri_active_cache`, which is O(nb^5 n_act) because its `p` loop sits
+outside the first contraction. The optimizer also calls it >= 200 times per
+macro: the dense orbital Hessian is a central FD of full gradient rebuilds,
+and `numeric-newton` (2·npairs full evaluations) runs every macro when
+`npairs <= 256`, not only under stagnation. Plan: P0 counters + PySCF script,
+P1 fix the transform (mechanical), P2 analytic orbital Hessian action, P3
+re-measure whether `numeric-newton` is still needed, P4 macro count.
+
+#### Unreproduced OpenMP hang in CASSCF (seen once, 2026-10-28)
+
+One `water_cas44_631g` run (4 threads, `build-full`, g++-15 libgomp, macOS)
+hung at 0 % CPU: every thread parked in `gomp_team_barrier_wait` at the end
+of the `parallel for` in `compute_orbital_gradient` (`orbital.cpp`), reached
+from `select_best_candidate_step` -> `evaluate`, with `nr_used = 1` (no
+nesting). 60 reruns (probe on, off, and a pre-probe build) did not hang, so
+the rate is around 1 in 60 or rarer. Nothing in that loop is shared-mutable,
+so suspect libgomp on macOS before Planck code. If it recurs, capture
+`sample <pid>` and check whether other `parallel for` regions in `orbital.cpp`
+are involved.
+
 #### P2: Optimizer simplification pass — mostly resolved; only cosmetic remainder
 
 A suite-wide sweep of every CAS input recorded which candidate the merit

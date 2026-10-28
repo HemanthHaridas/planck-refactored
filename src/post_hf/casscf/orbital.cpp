@@ -44,6 +44,7 @@ namespace HartreeFock::Correlation::CASSCF
         cache.nact = n_act;
         if (n_act == 0)
             return cache;
+        ++call_probe.active_cache;
 
         // Cache the AO->(p, u, v, w) transformed ERIs once per macroiteration so
         // repeated Q-matrix contractions do not pay the four-index transform again.
@@ -87,6 +88,7 @@ namespace HartreeFock::Correlation::CASSCF
         // by doubly occupied core orbitals, transformed back into the current MO basis.
         if (n_core == 0)
             return C.transpose() * H_core * C;
+        ++call_probe.fock;
         const Eigen::MatrixXd D = 2.0 * C.leftCols(n_core) * C.leftCols(n_core).transpose();
         const Eigen::MatrixXd G =
             ri_active(ri_calc)
@@ -109,6 +111,7 @@ namespace HartreeFock::Correlation::CASSCF
         if (n_act == 0)
             return Eigen::MatrixXd::Zero(nbasis, nbasis);
         const Eigen::MatrixXd C_act = C.middleCols(n_core, n_act);
+        ++call_probe.fock;
         const Eigen::MatrixXd D_act = C_act * gamma * C_act.transpose();
         const Eigen::MatrixXd G =
             ri_active(ri_calc)
@@ -201,6 +204,7 @@ namespace HartreeFock::Correlation::CASSCF
         bool use_sym,
         HartreeFock::Calculator *ri_calc)
     {
+        ++call_probe.fixed_ci_gradient;
         const int nbasis = static_cast<int>(C.rows());
         const Eigen::MatrixXd F_I_mo =
             build_inactive_fock_mo(C, H_core, eri, n_core, nbasis, ri_calc);
