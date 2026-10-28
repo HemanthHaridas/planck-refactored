@@ -2015,11 +2015,12 @@ identify the path taken. Not required for correctness or performance.
   1.1–1.6× (were 22–124×); RMP2 1.5× (1 H2O) and 4.3× (2 H2O, was 358 s →
   0.65 s); 2 H2O⁺ UMP2 22× (136 → 3.5 s), its remaining cost orbital-side
   (D_σ build, Imat). Gradients identical; eight `os_vs_auto` comparators.
-  **Next: G7, UMP2 orbital side (scoped):** 59 % of the remaining UMP2
-  gradient is the Z-vector solve building the UHF orbital Hessian with one
-  full Fock build per column (541 on 2 H2O⁺ / 6-31G\*); plan O1 matrix-free
-  preconditioned CG, O2 the N⁶ back-transforms as matrix products (shared
-  with RMP2), O3 Imat only if still visible. Then G5 1e
+  **G7, UMP2 orbital side, in flight:** O1 landed (working tree): the UHF
+  Z-vector is matrix-free GMRES (`DFT::Response::gmres`, shared with the DH
+  Z-vector), 33 Fock builds instead of 541 on 2 H2O⁺ / 6-31G\*, gradient run
+  3.5 → 1.83 s, printed gradient identical. **Next: O2**, the D_σ build (51 %)
+  and serial `part_dm2` loops (32 %) as half-transforms / matrix products
+  (shared with RMP2's serial `dm2buf_full`). O3 (Imat, 1.3 %) dropped. Then G5 1e
   derivatives (now a larger share), G6 RI 3c (measure first).
   The regression runner now passes `--build-dir` to its `.py` comparators,
   which had been running whatever binary sat in `./build`.

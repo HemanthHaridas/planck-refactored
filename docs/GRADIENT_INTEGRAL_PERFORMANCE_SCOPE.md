@@ -7,8 +7,9 @@ memory-direct Fock build fast and is closed.
 ## Where it stands (2026-10-27)
 
 **SCF and RMP2 gradients now cost about as much as the energy. UMP2 is the
-one left, at 22×, and its cost is the Z-vector solve, not integrals: that is
-G7, next.**
+one left: G7's O1 (matrix-free Z-vector) took it from 22× to 11×. What
+remains is the two 4-index back-transforms (O2, 83 % of the gradient), not
+integrals.**
 
 G1–G4 have landed: the 2e gradient of every SCF reference and both MP2
 flavours runs through one threaded loop, by shell quartet on two derivative
@@ -23,7 +24,7 @@ symmetry, four threads, best of three, whole run including the SCF):
 | 1 H2O / cc-pVTZ (nb 65 Cart.) | 0.54 s | 114.9 s | 0.62 s | **0.61 s** | 1.1× |
 | 1 H2O / 6-31G\* RMP2 (conventional) | 0.08 s | 7.30 s | 3.13 s | **0.12 s** | 1.5× |
 | 2 H2O / 6-31G\* RMP2 (conventional) | 0.15 s | > 5 min | 358 s | **0.65 s** | 4.3× |
-| 2 H2O⁺ / 6-31G\* UMP2 (conventional) | 0.16 s | | 136 s | **3.5 s** | 22× |
+| 2 H2O⁺ / 6-31G\* UMP2 (conventional) | 0.16 s | | 136 s | 3.5 s → **1.83 s** (O1) | 11× |
 
 The 2026-10-25 runs had a concurrent compile on the machine (±20 %), and the
 SCF itself got faster in between, so compare the gradient columns rather than
@@ -57,31 +58,62 @@ gradient.
 
 Steps, in order of measured share. Each lands alone with its gate.
 
-1. **O1 — matrix-free Z-vector for UHF.** `solve_uhf_cphf` applies the same
-   operator (diagonal ε_a − ε_i plus the J/K response of the trial density
-   through `_compute_2e_fock_uhf`, or `RI::build_ri_fock_uhf` under RI) inside
-   an iterative solve, so each iteration costs one Fock build instead of each
-   column. The operator is symmetric (its coupling is 2(ai|bj) across spins
-   minus (ab|ij) + (aj|ib) within a spin, all invariant under ai ↔ bj) and
-   positive definite at a stable UHF minimum, so preconditioned conjugate
-   gradients with the diagonal ε_a − ε_i preconditioner applies. Check both
-   properties numerically against the dense matrix before relying on them,
-   and fall back to the GMRES already used for the double-hybrid Z-vector
-   (`solve_dh_zvector`, `src/dft/dh_zvector.h`) if either fails. Expected
-   ~15–30 Fock builds instead of 541. If so, about 55 % of the run goes,
-   ~2.2× end to end on this case. `build_uhf_cphf_matrix` stays: SOSCF
-   (`docs/SOSCF_UHF.md`) needs the dense matrix.
-   Gate: the Z-vector against the dense QR solution to ≤ 1e-10 on the UMP2
-   regression inputs (dense and RI), UMP2 gradients unchanged to the printed
-   digit, `water_radical_cation_ump2_gradient_smoke` and the RI-UMP2 FD cases.
-   Report iteration counts, not only time.
+**O1 landed (2026-10-28, working tree).** GMRES converges in 16 iterations,
+**33 Fock builds instead of 541** (n = 541). 2 H2O⁺ / 6-31G\* gradient run
+3.5 → 1.83 s (best of three; energy-only run 0.23 s). Against the dense QR, z
+agrees to 1.2e-8 of max|z| at tolerance 1e-10. Tightening to 1e-12 or 1e-14
+leaves a ~5e-10 floor, which is the dense reference's own screening noise.
+The printed gradient is identical at either tolerance. STO-3G cation/triplet
+and RI: 1.6e-15 / 2.0e-15 / 1.3e-14. All 8 UMP2 regression cases pass. UHF
+SOSCF (which uses the dense builder) still converges superlinearly to the
+DIIS energy (water cation / 6-31G, -75.5085348059). No ctest was added: no C++
+test harness runs an SCF, so the dense comparison was a temporary probe.
+
+**Profile after O1** (main thread, 1,340 samples in `compute_ump2_gradient`):
+D_σ build (`mp2_gradient.cpp:830`) **51 %**, serial self time (the
+`part_dm2` loops, 759-815) **32 %**, Z-vector 8 %, ERI tensor 3 %, 2e
+derivative term 1.6 %, Imat 1.3 %. O2 covers 83 %; Imat (O3) is already
+negligible, so O3 is dropped unless O2 changes that.
+
+1. **O1 — matrix-free Z-vector for UHF (landed, above).** Before it, `build_uhf_cphf_matrix`
+   (`src/post_hf/uhf_response.cpp:57-102`) applies the orbital Hessian to one
+   unit vector per column, and `solve_uhf_cphf` QR-solves the result. Split
+   that column body into one function, `apply_uhf_orbital_hessian(x_α, x_β)`
+   (diagonal ε_a − ε_i plus the J/K response through `_compute_2e_fock_uhf`,
+   or `RI::build_ri_fock_uhf` under RI). The dense builder keeps calling it on
+   unit vectors (SOSCF, `docs/SOSCF_UHF.md`, needs the matrix, and the gate
+   needs a reference); `solve_uhf_cphf` passes it as the action to
+   `DFT::Response::gmres` (`src/dft/response_gmres.h`) with the ε_a − ε_i
+   diagonal as preconditioner. That solver is header-only (Eigen only), already
+   gated by the double-hybrid Z-vector, and checks its unpreconditioned
+   residual with a fresh action, so no second solver is written and no SPD
+   assumption needs checking. (The operator is symmetric and, at a stable
+   minimum, positive definite, so CG would also work; that saves at most the
+   Krylov storage at this n_ov, which is not worth another solver.) Fail with
+   the GMRES error on non-convergence; no dense fallback.
+   Expected ~10–25 Fock builds instead of 541. If so about 55 % of the run
+   goes (the 333 Schwarz-recompute samples shrink with it, so they need no
+   step of their own), ~2.2× end to end on this case.
+   Gate: a ctest that solves both ways on the UMP2 inputs (dense and RI) and
+   requires ≤ 1e-10 relative to max|z|; UMP2 gradients unchanged to the
+   printed digit on `water_radical_cation_ump2_gradient_smoke`,
+   `water_radical_cation_ump2_gradient_engine_os_vs_auto` and the RI-UMP2 FD
+   cases; mutation (drop the cross-spin J) must fail. Report the GMRES action
+   count, not only time.
+   **RHF is left alone.** `solve_rhf_cphf` builds its matrix from MO ERIs
+   (`rhf_response.cpp:132-168`), no Fock build per column, and RMP2 is already
+   1.5–4.3× the SCF. The same action pattern fits it if a larger RMP2 case
+   shows the nao⁵ MO transform or the (n_v n_o)³ QR; not before.
 2. **O2 — the 4-index back-transforms as matrix products, one helper for both
    MP2 flavours.** `part_dm2` (Σ_ab C_pa C_qb T_ij^ab per (i,j): one
    `C_v T_ij C_vᵀ` product each, threaded over (i,j)) and the D_σ / `dm2buf`
    build (Σ_ij C_pi P_i…j C_sj, done today as an n_occ² sum per element:
    n_ao⁴·n_occ², which as two half-transforms is n_ao⁴·n_occ). RMP2's
-   `dm2buf_full` has the same shape with one spin, so this is one mechanism
-   with a spin parameter, not two copies. Not bitwise; gate D_σ and
+   `dm2buf_full` (`mp2_gradient.cpp:337-350`) has the same shape with one spin
+   and is still **serial** (the file's only pragmas are the UMP2 D_σ and Imat
+   loops), so this is one mechanism with a spin parameter, not two copies.
+   Profile first on 2 H2O⁺ after O1: at 14 % + part of 23 % today it becomes
+   the largest share once the Z-vector goes. Not bitwise; gate D_σ and
    `dm2buf_full` elementwise against the current loops (relative to the
    tensor's largest element, never per element) and the gradients to the
    printed digit.
