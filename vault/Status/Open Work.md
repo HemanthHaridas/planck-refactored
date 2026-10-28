@@ -1917,6 +1917,10 @@ and `numeric-newton` (2·npairs full evaluations) runs every macro when
 `npairs <= 256`, not only under stagnation. Plan: P0 counters + PySCF script,
 P1 fix the transform (mechanical), P2 analytic orbital Hessian action, P3
 re-measure whether `numeric-newton` is still needed, P4 macro count.
+**P0 and P1 done (2026-10-28):** the transform is O(nb^4 n_act) now,
+cc-pVDZ 13.4 -> 3.5 s, C1 44.5 -> 11.1 s, energies unchanged. PySCF is still
+13x / 26x faster; what remains is call count (Fock 40 %, generic transform
+57 %), so P2 is next.
 
 #### Unreproduced OpenMP hang in CASSCF (seen once, 2026-10-28)
 

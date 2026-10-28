@@ -507,35 +507,33 @@ int main()
     }
 
     {
-        constexpr int nbasis = 4;
+        // A valid AO ERI tensor has 8-fold symmetry, which the dedicated
+        // transform relies on ((pu|vw) = (vw|up)). Non-square and dense so a
+        // leg-order or stride bug is observable.
+        constexpr int nbasis = 6;
         constexpr int n_core = 1;
-        constexpr int n_act = 2;
+        constexpr int n_act = 3;
         std::vector<double> eri_ao(static_cast<std::size_t>(nbasis) * nbasis * nbasis * nbasis, 0.0);
         auto idx4_ao = [nbasis](int p, int q, int r, int s)
         {
             return static_cast<std::size_t>(((p * nbasis + q) * nbasis + r) * nbasis + s);
+        };
+        auto f = [](int p, int q, int r, int s)
+        {
+            return std::sin(0.7 * p + 1.3 * q + 0.4 * r * s + 0.11 * (p + 1) * (s + 2));
         };
         for (int p = 0; p < nbasis; ++p)
             for (int q = 0; q < nbasis; ++q)
                 for (int r = 0; r < nbasis; ++r)
                     for (int s = 0; s < nbasis; ++s)
                         eri_ao[idx4_ao(p, q, r, s)] =
-                            0.1 * static_cast<double>(p + 1) -
-                            0.05 * static_cast<double>(q + 2) +
-                            0.03 * static_cast<double>(r + 3) -
-                            0.02 * static_cast<double>(s + 4);
+                            f(p, q, r, s) + f(q, p, r, s) + f(p, q, s, r) + f(q, p, s, r) +
+                            f(r, s, p, q) + f(s, r, p, q) + f(r, s, q, p) + f(s, r, q, p);
 
-        Eigen::MatrixXd C = Eigen::MatrixXd::Identity(nbasis, nbasis);
-        const double theta01 = 0.31;
-        const double theta23 = -0.27;
-        C(0, 0) = std::cos(theta01);
-        C(0, 1) = -std::sin(theta01);
-        C(1, 0) = std::sin(theta01);
-        C(1, 1) = std::cos(theta01);
-        C(2, 2) = std::cos(theta23);
-        C(2, 3) = -std::sin(theta23);
-        C(3, 2) = std::sin(theta23);
-        C(3, 3) = std::cos(theta23);
+        Eigen::MatrixXd C(nbasis, nbasis);
+        for (int i = 0; i < nbasis; ++i)
+            for (int j = 0; j < nbasis; ++j)
+                C(i, j) = std::cos(0.37 * i - 0.91 * j + 0.05 * i * j);
 
         const Eigen::MatrixXd C_act = C.middleCols(n_core, n_act);
         const std::vector<double> generic =

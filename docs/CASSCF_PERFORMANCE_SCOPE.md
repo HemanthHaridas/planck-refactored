@@ -115,20 +115,46 @@ wrong-sign predicted dE. So P3 cannot demote `numeric-newton` until P2 has
 made the coupled step good enough to win; P2 is about step quality as much
 as cost.
 
-### P1: fix the transform's complexity
+### P1: fix the transform's complexity (DONE 2026-10-28)
 
-Restructure `transform_eri_active_cache` to O(nb^4 n_act): contract
-`sigma->w`, `lam->v`, `nu->u` over the full AO tensor once, then `mu->p` as a
-GEMM. Keep the `(p,u,v,w)` output layout so no caller changes. Also check the
-RI twin (`transform_eri_active_cache_ri`) and `transform_eri_internal` for the
-same loop shape.
+`transform_eri_active_cache` is now the generic quarter-transform with the
+legs reordered: `(pu|vw) = (vw|up)` under the AO tensor's 8-fold symmetry, so
+`transform_eri(eri, nb, C_act, C_act, C_act, C)` contracts the three active
+legs first (O(nb^4 n_act)) and a permutation restores `(p,u,v,w)`. The
+hand-rolled O(nb^5 n_act) routine and its thread-local scratch are deleted
+(net -116 lines). `transform_eri_internal` already used the generic routine
+with active legs only, so it never had the defect.
 
-- Gate: element-wise against the current routine on water 6-31G / cc-pVDZ /
-  cc-pVTZ to <= 1e-13 relative to the tensor max (not per element; see the
-  zero-block memory), then the suite above.
-- Expected: tens of times faster on cc-pVDZ (Amdahl on 87 % with a ~25x
-  factor). It does not touch the call count, so the gap to PySCF stays.
-- Cheapest and safest step. Do it first, then re-profile before choosing P2/P3.
+Gate: `planck-casscf-internal` compares against `transform_eri(C, C_act,
+C_act, C_act)` (an independent leg order) on a 6-AO, 3-active fixture. The old
+fixture was a tensor with **no** ERI symmetry, which no real integral tensor
+has and which the new routine correctly rejects. It is now 8-fold symmetric,
+non-square and dense; swapping `u` and `w` in the permutation fails it.
+Energies are unchanged to every printed digit with identical macro counts; all
+15 CASSCF/RASSCF/FCI regression cases (uphill SA-2 canary included) and the 11
+PySCF-table inputs pass, the latter within 2e-9 Eh of their recorded Planck
+values.
+
+| case | before | after | speedup |
+|---|---|---|---|
+| 6-31G | 1.3-1.9 s | 0.66 s | 2-3x |
+| cc-pVDZ | 13.4 s | 3.5 s | 3.8x |
+| cc-pVDZ C1 | 44.5 s | 11.1 s | 4.0x |
+
+PySCF is still 13x (cc-pVDZ) and 26x (C1) faster. The re-profile (cc-pVDZ, 1
+thread) moved from 24 792 to 7 026 samples: generic `transform_eri` 57 %,
+`_compute_fock_rhf` 40 %. Both scale with the rebuild count, so the
+multiplicity (P2/P3) is now the lever, as predicted.
+
+Follow-ups, not done:
+
+- `transform_eri`'s first quarter has `mu` innermost at stride `nb^3`, which
+  is cache-hostile. Making it GEMM-shaped would speed this and MP2/CC; its own
+  gate is `planck-transform-eri`. Worth less than P2, which removes calls.
+- The RI twin `transform_eri_active_cache_ri` is `transform_eri_ri(C, C_act,
+  C_act, C_act)`, full leg first. `water_casscf_ri_ccpvdz` takes 14 s against
+  3.6 s for the tensor cc-pVDZ case. Measure before assuming the same defect;
+  the RI cost model differs.
 
 ### P2: analytic orbital Hessian-vector product
 
