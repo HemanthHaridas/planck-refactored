@@ -1,6 +1,6 @@
 // auto_deriv_block_eri.h — the Auto engine's derivative block-kernel chain,
 // defined once for the gradient and every test or benchmark that measures it
-// (docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md, G3).
+// (docs/GRADIENT_INTEGRAL_PERFORMANCE.md, G3).
 //
 //   Rys2D derivative  its crossover blocks (rys_deriv_block_eri.h)
 //   HGP derivative    everything else up to its limits

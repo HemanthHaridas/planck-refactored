@@ -1,5 +1,5 @@
 // rys_deriv_block_eri.h — first nuclear derivatives of a whole shell quartet
-// with the 2D Rys formulation (docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md, G3).
+// with the 2D Rys formulation (docs/GRADIENT_INTEGRAL_PERFORMANCE.md, G3).
 //
 // libcint's route. A component is sum_r w_r I_x I_y I_z, and a derivative
 // with respect to centre A on axis q changes only I_q:

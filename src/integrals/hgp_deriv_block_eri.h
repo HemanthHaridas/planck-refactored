@@ -1,5 +1,5 @@
 // hgp_deriv_block_eri.h — first nuclear derivatives of a whole shell quartet
-// from one primitive pass (docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md, G3).
+// from one primitive pass (docs/GRADIENT_INTEGRAL_PERFORMANCE.md, G3).
 //
 // The per-component derivative (_compute_eri_deriv_elem) builds each of its 12
 // outputs from up to two fresh contracted ERIs. Differentiating a Cartesian

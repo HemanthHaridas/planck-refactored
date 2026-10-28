@@ -2,7 +2,7 @@
 // shared by every SCF reference (gradient.cpp) and the MP2 gradients
 // (mp2_gradient.cpp). The caller supplies only Γ through gamma_fn; the result
 // is ¼ Σ over ordered AO quartets of Γ(p,q,r,s) d(pq|rs)/dR
-// (docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md).
+// (docs/GRADIENT_INTEGRAL_PERFORMANCE.md).
 #pragma once
 
 #include <array>
@@ -73,7 +73,7 @@ namespace HartreeFock::Gradient
         // thread count.
         inline constexpr int kGradientBins = 64;
 
-        // The 2e gradient by shell quartet (docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md,
+        // The 2e gradient by shell quartet (docs/GRADIENT_INTEGRAL_PERFORMANCE.md,
         // G3): each block's derivatives come from one primitive pass of the Auto
         // derivative chain, and blocks it declines fall back to the per-component
         // derivative. Visits exactly the AO quartets of the AO loop below: shell-group

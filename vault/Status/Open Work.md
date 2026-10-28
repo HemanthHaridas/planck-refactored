@@ -56,7 +56,7 @@ is the recommended one; none blocks another except where noted.
   reads to classify), and ECP integrals with gradients. Licence checked
   2026-10-26: libecpint (MIT, with MIT/BSD dependencies) and BSE data
   (BSD-3) are compatible; libecpint recommended.
-- **Gradient performance** (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`,
+- **Gradient performance** (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`,
   gradients 20–120× the SCF). G3 rescoped 2026-10-26 onto the energy build's
   HGP/Rys2D split.
 - **Meta-GGA** (`docs/META_GGA_SCOPE.md`). Rejected in `xc_grid.cpp`. τ and
@@ -1964,7 +1964,7 @@ identify the path taken. Not required for correctness or performance.
       `engine_scf_energy_compare.py` (incl. He₂/cc-pV5Z, which reaches the
       changed buckets) and the regression suites have not run on it.
     - **Rerun the Planck-vs-PySCF Fock table** (doc §3); it predates Rys2D.
-    - **Rescope gradient G3 on Rys2D** (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`):
+    - **Rescope gradient G3 on Rys2D** (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`):
       differentiating the 2D per-axis tables is libcint's route to
       derivative integrals and gives Rys the derivative kernel Phase D lacks.
     - **Route the conventional Auto build's 6D hoist**
@@ -1986,7 +1986,7 @@ identify the path taken. Not required for correctness or performance.
     the corrected Boys core. The extended suite and `ctest` on v1.2.1 are
     pending.
 - **Analytic gradients are 20–120× the SCF they follow — scoped 2026-10-25,
-  G1 and G2 landed 2026-10-27** (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`). The
+  G1 and G2 landed 2026-10-27** (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`). The
   ERI Fock-build work never reached the derivative integrals: the 2e gradient
   is per AO component (each of 12 derivative components from up to 24 fresh
   contracted ERIs), runs the full square of AO pairs, and is single-threaded.
@@ -2235,7 +2235,7 @@ identify the path taken. Not required for correctness or performance.
   - **Phase D — gradient derivative ERIs** (`compute_eri_deriv_dispatch`) are
     still per-AO. Rys has no derivative kernel, so per-quartet Auto gradients need
     one written first. The largest remaining piece. Now scoped as G3 of
-    `docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md` (an HGP-based derivative
+    `docs/GRADIENT_INTEGRAL_PERFORMANCE.md` (an HGP-based derivative
     block kernel, so the missing Rys derivative is not a blocker).
   - **Phase E — retire the per-AO adapter.** Make `build_shellpairs` emit
     shell-level `ShellPair` objects and drop `expand_shell_groups_to_ao_pairs`.

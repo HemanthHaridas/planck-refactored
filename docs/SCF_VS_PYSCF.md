@@ -271,7 +271,7 @@ bitwise against v1.2.0, so checks pinned to exact integral values move.
   `docs/ERI_KERNEL_VS_LIBCINT.md`.
 - **DFT:** the KS Coulomb/exchange direct builds (`_compute_2e_j_direct` /
   `_compute_2e_k_direct`) do not yet build incrementally.
-- **Gradients:** `docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`.
+- **Gradients:** `docs/GRADIENT_INTEGRAL_PERFORMANCE.md`.
 - **RI-JK:** D3 in `docs/ERI_FOCK_BLAS_SCOPE.md`.
 
 ## Harness fixes made while measuring

@@ -4556,7 +4556,7 @@ each unordered AO pair once. Pair \((i,j)\) gets weight \(2D_{ij}\), plus the
 bra derivative of \((j,i)\) on \(j\)'s atom when \(i \ne j\).
 
 Two things made this term cheaper (G5 in
-`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`). The nucleus-position
+`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`). The nucleus-position
 derivative \(\partial V^C_{\mu\nu}/\partial C\) used to run the whole nuclear
 VRR once per axis. The Boys values and the \(V\) recurrence do not depend on
 the axis, so `_compute_nuclear_deriv_C_xyz` builds them once and runs only
