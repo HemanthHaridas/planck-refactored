@@ -890,16 +890,6 @@ namespace HartreeFock::Correlation::CASSCF
             }
 
             Eigen::MatrixXd kappa_total = Eigen::MatrixXd::Zero(nbasis, nbasis);
-            Eigen::MatrixXd kappa_newton = Eigen::MatrixXd::Zero(nbasis, nbasis);
-            const bool build_numeric_newton_candidate =
-                use_numeric_newton_debug || static_cast<int>(opt_pairs.size()) <= numeric_newton_pair_limit;
-            if (build_numeric_newton_candidate)
-            {
-                kappa_newton = build_numeric_newton_step(st_current, C, level_shift, diag);
-                if (diag.numeric_newton_attempted && diag.numeric_newton_failed)
-                    logging(LogLevel::Warning, tag + " :",
-                            "Finite-difference Newton fallback produced an inconsistent column and was discarded.");
-            }
 
             const CISigmaApplier ci_apply = [&](const Eigen::VectorXd &vec, Eigen::VectorXd &sigma_vec)
             {
@@ -1075,8 +1065,73 @@ namespace HartreeFock::Correlation::CASSCF
                 sa_aug_hess.kappa.cwiseAbs().maxCoeff() > 1e-12 &&
                 !sa_aug_hess.ah.orbital_only_fallback)
                 append_candidate_step(step_candidates, kappa_aug_hess, "sa-aug-hessian");
+            // Built only when offered: it costs 2·npairs full evaluations, and it
+            // used to be built every macro and discarded when the gate was shut.
             if (use_numeric_newton_fallback)
+            {
+                const Eigen::MatrixXd kappa_newton =
+                    build_numeric_newton_step(st_current, C, level_shift, diag);
+                if (diag.numeric_newton_attempted && diag.numeric_newton_failed)
+                    logging(LogLevel::Warning, tag + " :",
+                            "Finite-difference Newton fallback produced an inconsistent column and was discarded.");
+                if (std::getenv("PLANCK_CASSCF_CALL_PROBE"))
+                {
+                    const double nc = kappa_coupled.norm(), nn = kappa_newton.norm();
+                    logging(LogLevel::Info, tag + " :",
+                            std::format("nn_probe macro={:d} coupled_converged={:d} coupled_reliable={:d} "
+                                        "stagnation={:d} cos={:.4f} |k_coupled|={:.3e} |k_newton|={:.3e} "
+                                        "orb_resid={:.2e} ci_resid={:.2e}",
+                                        macro, sa_coupled_result.converged ? 1 : 0,
+                                        coupled_step_reliable ? 1 : 0, stagnation_streak,
+                                        (nc > 0 && nn > 0) ? kappa_coupled.cwiseProduct(kappa_newton).sum() / (nc * nn) : 0.0,
+                                        nc, nn, sa_coupled_result.orbital_residual_max,
+                                        sa_coupled_result.max_ci_residual_norm));
+
+                    // Is the coupled system's effective Hessian the CI-relaxed
+                    // one? Along R, H_oo R + sum_I w_I G_oc c1_I(R) must equal
+                    // the central FD of the fully re-solved gradient.
+                    const Eigen::MatrixXd R = st_current.g_orb / st_current.g_orb.norm();
+                    constexpr double eps = 1e-4;
+                    const RootReference ref{st_current.ci_energies, st_current.ci_vecs, true};
+                    auto gp = evaluate(apply_orbital_rotation(C, eps * R, calc._overlap), &ref, false);
+                    auto gm = evaluate(apply_orbital_rotation(C, -eps * R, calc._overlap), &ref, false);
+                    const Eigen::MatrixXd v_oo = delta_g_sa_action(
+                        R, &sa_hessian_ctx, st_current.F_I_mo, st_current.F_A_mo,
+                        n_core, n_act, n_virt, all_mo_irr, use_sym);
+                    Eigen::MatrixXd v_cpl = v_oo;
+                    for (const auto &root : st_current.roots)
+                    {
+                        const CoupledResponseBlocks b = build_coupled_response_blocks(
+                            configured_rhs_mode, R, st_current.F_I_mo, st_current.h_eff, st_current.ga,
+                            st_current.ci_space, a_strs, b_strs, st_current.dets,
+                            st_current.active_integrals, ci_apply, root.ci_vector, root.ci_energy,
+                            st_current.H_CI_diag, nbasis, n_core, n_act, n_virt);
+                        v_cpl += root.weight * b.orbital_correction;
+                    }
+                    if (gp && gm)
+                    {
+                        const Eigen::VectorXd rel = pack_pairs((gp->g_orb - gm->g_orb) / (2.0 * eps));
+                        const Eigen::VectorXd cpl = pack_pairs(v_cpl), oo = pack_pairs(v_oo);
+                        auto cosv = [](const Eigen::VectorXd &a, const Eigen::VectorXd &b)
+                        { return a.dot(b) / (a.norm() * b.norm()); };
+                        logging(LogLevel::Info, tag + " :",
+                                std::format("schur_probe macro={:d} cos(cpl,rel)={:.6f} |cpl|/|rel|={:.4f} "
+                                            "cos(oo,rel)={:.6f} |oo|/|rel|={:.4f} |cpl-rel|/|rel|={:.2e}",
+                                            macro, cosv(cpl, rel), cpl.norm() / rel.norm(),
+                                            cosv(oo, rel), oo.norm() / rel.norm(),
+                                            (cpl - rel).norm() / rel.norm()));
+                        const Eigen::VectorXd dc = cpl - oo, dr = rel - oo;
+                        const double alpha = dc.squaredNorm() > 0 ? dr.dot(dc) / dc.squaredNorm() : 0.0;
+                        logging(LogLevel::Info, tag + " :",
+                                std::format("alpha_probe macro={:d} alpha={:.4f} |rel-oo|/|rel|={:.2e} "
+                                            "|rel-oo-alpha*dc|/|rel|={:.2e} cos(dc,dr)={:.4f}",
+                                            macro, alpha, dr.norm() / rel.norm(),
+                                            (dr - alpha * dc).norm() / rel.norm(),
+                                            (dc.norm() > 0 && dr.norm() > 0) ? dc.dot(dr) / (dc.norm() * dr.norm()) : 0.0));
+                    }
+                }
                 append_candidate_step(step_candidates, kappa_newton, "numeric-newton");
+            }
             if (use_diagonal_fallback)
                 append_candidate_step(step_candidates, kappa_total, "sa-diag-fallback");
             append_candidate_step(step_candidates, kappa_grad, "sa-grad-fallback");
