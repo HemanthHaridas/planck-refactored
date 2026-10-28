@@ -14,27 +14,28 @@ working tree:
 - a finite-difference orbital Hessian (P2);
 - two missing terms in the orbital-CI coupling (P3b);
 - an iterative coupled solve that could never converge, now a direct solve of
-  the exact CI-relaxed Hessian (P3c, uncommitted).
+  the exact CI-relaxed Hessian (P3c).
 
 With P3c, `numeric-newton`, built every macro at 2·npairs full evaluations,
 is no longer used at all.
 
-**P3c is blocked by a basin change.** The water SA-2 hcore-start cases now
-converge to the deeper -74.7877864783 stationary point instead of PySCF's
--74.7751377977. Two regression cases fail. See P3c below.
+**The water SA-2 references were re-pinned.** With the exact Hessian, the
+hcore and SAD starts leave a measured saddle (-74.7751377977) for the true
+minimum (-74.7877864783, PySCF's own SAD-start answer). All 15 CASSCF
+regression cases pass. See P3c below.
 
 Water CAS(4,4), Cartesian, 4 threads, `build-full`. PySCF 2.13.0
 (`tests/benchmarks/casscf/pyscf_casscf_timing.py`).
 
-| case | AOs / pairs | start | P2 | P3c (uncommitted) | PySCF | P3c vs PySCF |
+| case | AOs / pairs | start | P2 | P3c | PySCF | P3c vs PySCF |
 |---|---|---|---|---|---|---|
 | 6-31G, C2v | 13 / 22 | 1.3-1.9 s | 0.58 s | **0.33 s** | 0.34 s | 1.0x |
 | cc-pVDZ, C2v | 25 / 50 | 13.4 s | 2.7 s | **1.21 s** | 0.27 s | 4.5x |
 | cc-pVDZ, C1 | 25 / 138 | 44.5 s | 10.0 s | **2.70 s** | 0.43 s | 6.3x |
 | cc-pVTZ, C2v | 65 / - | ~176 s per macro | not rerun | not rerun | 1.0 s total | |
 
-Energies are within 3e-9 Eh of the start everywhere except the SA-2 basin
-change (cc-pVDZ -76.0440109021, PySCF -76.0440109018; C1 -76.0781256197 vs
+Energies are within 3e-9 Eh of the start everywhere except the re-pinned
+SA-2 cases (cc-pVDZ -76.0440109021, PySCF -76.0440109018; C1 -76.0781256197 vs
 -76.0781256214). C1 now takes 17 macros, the same as PySCF.
 
 ## Where the time went
@@ -156,7 +157,7 @@ B is exact because the RDMs are quadratic in c.
 At this commit the uphill canary limit-cycles: the still-iterative coupled
 solve stopped at sa_g 7.9e-7, where the uphill pass fires. P3c addresses it.
 
-## In progress: P3c, direct solve of the CI-relaxed Hessian (uncommitted)
+### P3c: direct solve of the CI-relaxed Hessian (`7a5031a8`, references re-pinned after)
 
 **What changed (`response.cpp`, `casscf.cpp`):**
 
@@ -191,41 +192,53 @@ solve stopped at sa_g 7.9e-7, where the uphill pass fires. P3c addresses it.
   `numeric-newton` is never offered.
 - **Uphill canary:** passes, -74.7877864784 via the plateau exit, in 22 macros
   (was 46), with one uphill escape that came back and was not repeated.
-- **Gates:** 13 of 15 regression cases pass. The 11 table inputs are within
-  3e-9 Eh except one (below).
+- **Gates:** 15 of 15 regression cases pass after the SA-2 re-pin (below).
+  The table inputs are within 3e-9 Eh except the re-pinned water SA-2 row.
 - **Macro counts went up on some symmetric cases:** 6-31G 13 -> 17, water
   STO-3G 7 -> 11, ethylene 3-21G 3 -> 5. Each macro is far cheaper, so wall
   time still drops, but the step policy is leaving iterations on the table.
 
-### Blocker: the SA-2 hcore/SAD cases change basin
+### Resolved: the SA-2 hcore/SAD basin change (re-pinned)
 
-`water_casscf_sa2_sto3g` and `water_casscf_sa2_sto3g_sad_guess` (and the
-table input `water_cas44_sto3g_sa2`) now converge to -74.7877864783 instead of
--74.7751377977, PySCF's answer from the same start.
+`water_casscf_sa2_sto3g` and `water_casscf_sa2_sto3g_sad_guess` now converge
+to -74.7877864783 instead of the pinned -74.7751377977. Measured with a
+temporary `hess_probe` (the CI-relaxed Hessian's spectrum per macro):
 
-- Both are valid SA-2 stationary points; the new one is deeper.
-- These cases do not enable uphill steps, so the escape guard is not
-  involved. They passed at P3b, so the direct relaxed step itself takes a
-  different path.
-- The ethylene SA-2 case is unaffected (7e-10).
+- **The old point is a saddle.** Near -74.7751 the Hessian has exactly one
+  negative eigenvalue (-0.054 to -0.065).
+- **The gradient has no component along that mode:** |g·v0| ~ 1e-16. It is
+  symmetry-breaking, and these inputs run with symmetry off.
+- **Planck still leaves it, by amplifying roundoff.** The eigenvalue floor
+  (1e-4) multiplies the 1e-16 component by ~1e4 per macro (1e-16 -> 1e-12 ->
+  1e-9 -> 8e-7 -> 3e-4), and the run falls off at macro 9.
+- **The new point is a true minimum.** At -74.7877864783 the Hessian is
+  positive definite (lowest eigenvalue +2.5e-2). It is also PySCF's own
+  SAD-start answer.
 
-Not yet diagnosed. Candidates, cheapest first:
+Before P3c, the coupling Hessian was wrong and `numeric-newton` happened not
+to amplify the component, so Planck stayed on the saddle.
 
-1. **Step size.** The direct step is the full CI-relaxed Newton step, capped
-   only by `max_rot`. Early in the run, far from either minimum, it may jump
-   further than the old block-Jacobi step and cross into the deeper basin.
-   Compare the first few macros' steps and energies against P3b.
-2. **Indefinite Hessian.** Away from a minimum the relaxed Hessian can have
-   negative eigenvalues. The eigenvalue floor (1e-4) turns those directions
-   into large steps along negative curvature, which is exactly what crosses a
-   ridge. PySCF's `mc1step` uses an augmented-Hessian (trust-region) step
-   there instead.
-3. **Root ordering.** With two roots, an exact step may swap the tracked
-   roots' character.
+**Suppressing the escape was tried and rejected.** The variant dropped clamped
+modes whose gradient component is at noise level (<= 1e-8·|g|). It kept the
+SA-2 hcore case on the saddle (-74.7751377973) but broke three others:
 
-Decide by matching PySCF macro by macro on `water_casscf_sa2_sto3g`. The
-regression tests pin PySCF's basin from these starts, so landing in a
-different (even if deeper) one is a regression until shown otherwise.
+| case | result with suppression | expected |
+|---|---|---|
+| uphill canary | stuck on the saddle | -74.7878 |
+| `water_casscf44_spherical_631gd` | -76.0256 | -76.0610 |
+| C1 water/cc-pVDZ | -76.0440 | -76.0781, where PySCF itself escapes |
+
+Following negative curvature is correct optimizer behaviour. So the two SA-2
+references were re-pinned to the minimum (decided 2026-10-28), with the
+evidence in `pyscf_reference/pyscf_reference_energies.md` and the
+Completion gate table.
+
+After the re-pin, all 15 CASSCF/RASSCF/FCI regression cases pass.
+
+**Caveat worth keeping.** Which basin a symmetric start reaches is still set
+by roundoff growing along a zero-gradient mode, in both codes. Running these
+inputs with symmetry on would make the constrained answer deterministic; that
+is a separate decision.
 
 ## Follow-ups, not started
 
@@ -238,7 +251,11 @@ different (even if deeper) one is a regression until shown otherwise.
   A GEMM shape would also speed MP2/CC (gate `planck-transform-eri`).
 - **cc-pVTZ** has not been rerun since P1.
 - **Delete the P0/P3 probes** (`CallProbe`, `nn_probe`, `schur_probe`,
-  `alpha_probe`, `fix_probe`) once this scope is answered.
+  `alpha_probe`, `fix_probe`, `hess_probe`) once this scope is answered.
+- **Macro counts went up on some symmetric cases** (6-31G 13 -> 17, water
+  STO-3G 7 -> 11, ethylene 3-21G 3 -> 5). Each macro is far cheaper, but the
+  step policy (trust cap, level shift, candidate cascade) now dominates what
+  is left; compare macro by macro with PySCF's `mc1step`.
 
 ## Out of scope
 

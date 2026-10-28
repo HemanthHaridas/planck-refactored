@@ -1932,14 +1932,20 @@ macros), because the orbital-CI coupling dropped two terms: the core-density
 response in the CI RHS, and the 1-RDM response in the back-coupling. Both are
 fixed and FD-gated (`69728821`); the coupled Hessian now equals the CI-relaxed
 one exactly.
-**P3c in the working tree, blocked:** the CI-relaxed Hessian is solved
-directly (`numeric-newton` no longer used; evaluate/macro 129 -> 22), plus an
-escape-return guard for the uphill pass. 6-31G 0.33 s (PySCF 0.34),
-cc-pVDZ 1.21 s (0.27), C1 2.70 s (0.43). But `water_casscf_sa2_sto3g` and
-`..._sad_guess` now land in the deeper -74.7877864783 SA-2 basin instead of
-PySCF's -74.7751377977. Undiagnosed; leading suspect is the uncapped Newton
-step along negative curvature, where PySCF uses an augmented-Hessian step.
-Some symmetric cases also take more macros (6-31G 13 -> 17).
+**P3c done (`7a5031a8`, re-pinned 2026-10-28):** the CI-relaxed Hessian is
+solved directly (`numeric-newton` no longer used; evaluate/macro 129 -> 22),
+plus an escape-return guard for the uphill pass. 6-31G 0.33 s (PySCF 0.34),
+cc-pVDZ 1.21 s (0.27), C1 2.70 s (0.43). The water SA-2 hcore/SAD references
+were re-pinned from -74.7751377977 to -74.7877864783. The old value is a
+measured saddle (one negative relaxed-Hessian eigenvalue, along a
+symmetry-breaking mode with zero gradient); the new one is the minimum and
+PySCF's SAD-start answer. 15/15 CASSCF regressions pass.
+**Remaining:**
+- some symmetric cases take more macros (6-31G 13 -> 17), so the step policy
+  is now the lever;
+- the RI path is still FD-Hessian;
+- above 256 pairs the operator falls back to the weak matrix-free path;
+- the temporary probes are still to be deleted.
 
 #### Unreproduced OpenMP hang in CASSCF (seen once, 2026-10-28)
 

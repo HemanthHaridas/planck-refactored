@@ -1306,7 +1306,12 @@ historical design context, but they are no longer the source of truth for
 
 ## CASSCF PySCF Gate Table
 
-Suite status: **11/11 passing**
+Suite status: **10/10 passing, 1 re-pinned** (2026-10-28). The water SA-2
+hcore reference, -74.7751378, is a measured saddle of the SA-2 energy (one
+negative CI-relaxed Hessian eigenvalue). With the exact Hessian (CASSCF
+performance scope, P3c) Planck descends to the minimum, -74.7877864783, which
+is also PySCF's own SAD-start answer. See
+`tests/benchmarks/casscf/pyscf_reference/pyscf_reference_energies.md`.
 
 PySCF version: 2.12.1. All scripts use `mol.cart = True` to match Planck
 Cartesian-basis references. Tolerance: `1e-5 Eh`.
@@ -1322,7 +1327,7 @@ Cartesian-basis references. Tolerance: `1e-5 Eh`.
 | ethylene_casscf_321g | CAS(2e,2o) | 3-21G | -77.5145223959 | -77.5145223872 | 8.7e-09 | PASS |
 | ethylene_casscf_321g_nroot2 | CAS(2e,2o) | 3-21G | -77.5145223959 | -77.5145223872 | 8.7e-09 | PASS |
 | ethylene_casscf_ccpvdz | CAS(2e,2o) | cc-pVDZ | -77.9524856209 | -77.9524855977 | 2.3e-08 | PASS |
-| water_cas44_sto3g_sa2 | CAS(4e,4o) SA-2 | STO-3G | -74.7751378317 | -74.7751377977 | 3.4e-08 | PASS |
+| water_cas44_sto3g_sa2 | CAS(4e,4o) SA-2 | STO-3G | -74.7751378317 | -74.7877864783 | 1.26e-02 | RE-PINNED (PySCF value is a saddle) |
 | ethylene_cas44_sto3g_sa2 | CAS(4e,4o) SA-2 | STO-3G | -77.0034974774 | -77.0034974301 | 4.7e-08 | PASS |
 
 ### CASSCF validation notes

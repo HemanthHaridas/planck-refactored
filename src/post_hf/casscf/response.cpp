@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <format>
 
 namespace
@@ -422,6 +423,19 @@ namespace
                     use_sym);
 
             Eigen::VectorXd evals = eig.eigenvalues();
+            if (std::getenv("PLANCK_CASSCF_CALL_PROBE"))
+            {
+                int n_neg = 0;
+                for (int i = 0; i < evals.size(); ++i)
+                    n_neg += evals(i) < 0.0;
+                const Eigen::VectorXd gk = eig.eigenvectors().transpose() * g;
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info, "CASSCF Response :",
+                    std::format("hess_probe n={} n_neg={} eval0={:.4e} eval1={:.4e} eval2={:.4e} "
+                                "|g.v0|={:.3e} |g|={:.3e}",
+                                evals.size(), n_neg, evals(0), evals.size() > 1 ? evals(1) : 0.0,
+                                evals.size() > 2 ? evals(2) : 0.0, std::abs(gk(0)), g.norm()));
+            }
             int clamped_count = 0;
             for (int i = 0; i < evals.size(); ++i)
             {
