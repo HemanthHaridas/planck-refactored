@@ -504,7 +504,11 @@ namespace HartreeFock::Correlation::CASSCF
         const int numeric_newton_pair_limit = 256;
         const int ci_dense_threshold = 500;
         const double max_rot = (as.mcscf_max_rot > 0.0) ? as.mcscf_max_rot : 0.20;
-        const double trust_radius_frob = 4.0 * max_rot;
+        // Trust region on the largest rotation of a macro step. It starts at
+        // mcscf_max_rot and adapts to how well the exact CI-relaxed quadratic
+        // model predicted the last accepted step (see the update after
+        // acceptance). The single-pair probes keep the fixed max_rot.
+        double trust_rot = max_rot;
 
         logging(LogLevel::Info, tag + " :",
                 std::format("Active space: ({:d}e, {:d}o)  n_core={:d}  n_virt={:d}  CI dim ≤ {:d}",
@@ -516,8 +520,8 @@ namespace HartreeFock::Correlation::CASSCF
                 std::format("CI response RHS: {}",
                             response_rhs_mode_name(configured_rhs_mode)));
         logging(LogLevel::Info, tag + " :",
-                std::format("Orbital trust region: max_rot={:.3f}  Frobenius cap={:.3f}",
-                            max_rot, trust_radius_frob));
+                std::format("Orbital trust region: max_rot={:.3f} (adaptive, up to {:.3f})  Frobenius cap=4 x max_rot",
+                            max_rot, 5.0 * max_rot));
         if (configured_rhs_mode == ResponseRHSMode::CommutatorOnlyApproximate)
             logging(LogLevel::Warning, tag + " :",
                     "Using debug-only approximate commutator RHS instead of the default exact orbital-derivative response.");
@@ -745,24 +749,24 @@ namespace HartreeFock::Correlation::CASSCF
 
             Eigen::MatrixXd kappa = unpack_pairs(step);
             const double max_elem = kappa.cwiseAbs().maxCoeff();
-            if (max_elem > max_rot)
-                kappa *= max_rot / max_elem;
+            if (max_elem > trust_rot)
+                kappa *= trust_rot / max_elem;
 
             const double frob = kappa.norm();
-            if (frob > trust_radius_frob)
-                kappa *= trust_radius_frob / frob;
+            if (frob > 4.0 * trust_rot)
+                kappa *= 4.0 * trust_rot / frob;
             return kappa;
         };
 
         auto cap_orbital_step = [&](Eigen::MatrixXd kappa)
         {
             const double max_elem = kappa.cwiseAbs().maxCoeff();
-            if (max_elem > max_rot)
-                kappa *= max_rot / max_elem;
+            if (max_elem > trust_rot)
+                kappa *= trust_rot / max_elem;
 
             const double frob = kappa.norm();
-            if (frob > trust_radius_frob)
-                kappa *= trust_radius_frob / frob;
+            if (frob > 4.0 * trust_rot)
+                kappa *= 4.0 * trust_rot / frob;
             return kappa;
         };
 
@@ -813,7 +817,9 @@ namespace HartreeFock::Correlation::CASSCF
         double prev_sa_gnorm = std::numeric_limits<double>::infinity();
         bool converged = false;
         bool converged_via_plateau = false;
-        double level_shift = 0.2;
+        // With the exact CI-relaxed Hessian the step needs no presumed damping:
+        // start at the floor and let rejections and stagnation raise it.
+        double level_shift = 1e-3;
         int rejected_streak = 0;
         int stagnation_streak = 0;
         // Energy an accepted uphill escape started from. If the optimizer comes
@@ -953,7 +959,7 @@ namespace HartreeFock::Correlation::CASSCF
                     n_act,
                     n_virt,
                     level_shift,
-                    max_rot,
+                    trust_rot,
                     all_mo_irr,
                     use_sym,
                     &sa_hessian_ctx,
@@ -973,7 +979,7 @@ namespace HartreeFock::Correlation::CASSCF
                 const RootResolvedOrbitalStepSet kappa_step_set = build_root_resolved_orbital_step_set(
                     st_current.roots, st_current.F_I_mo, nbasis,
                     n_core, n_act, n_virt,
-                    level_shift, max_rot, all_mo_irr, use_sym);
+                    level_shift, trust_rot, all_mo_irr, use_sym);
                 const Eigen::MatrixXd &kappa = kappa_step_set.weighted;
                 kappa_total += kappa;
 
@@ -1028,8 +1034,8 @@ namespace HartreeFock::Correlation::CASSCF
                 }
             }
             const double max_k = kappa_total.cwiseAbs().maxCoeff();
-            if (max_k > max_rot)
-                kappa_total *= max_rot / max_k;
+            if (max_k > trust_rot)
+                kappa_total *= trust_rot / max_k;
             const Eigen::MatrixXd &kappa_coupled = sa_coupled_result.orbital_step;
             const RootResolvedOrbitalStepSet kappa_grad_step_set =
                 build_root_resolved_gradient_fallback_step_set(st_current.roots);
@@ -1065,7 +1071,7 @@ namespace HartreeFock::Correlation::CASSCF
                     n_act,
                     n_virt,
                     level_shift,
-                    max_rot,
+                    trust_rot,
                     all_mo_irr,
                     use_sym);
             const Eigen::MatrixXd &kappa_aug_hess = sa_aug_hess.kappa;
@@ -1280,6 +1286,7 @@ namespace HartreeFock::Correlation::CASSCF
             if (accepted_candidate.accepted && accepted_candidate.label.ends_with("[uphill]"))
                 uphill_origin_energy = st_current.E_cas;
 
+            double accepted_candidate_max_elem = 0.0;
             if (accepted_candidate.accepted)
             {
                 diag.step_accepted = true;
@@ -1287,10 +1294,29 @@ namespace HartreeFock::Correlation::CASSCF
                 diag.accepted_sa_gnorm = accepted_candidate.sa_gnorm;
                 diag.accepted_weighted_root_gnorm = accepted_candidate.weighted_root_gnorm;
                 diag.accepted_max_root_gnorm = accepted_candidate.max_root_gnorm;
-                diag.predicted_delta = accepted_candidate.predicted_delta;
+                {
+                    // Quadratic model of the accepted step with the exact
+                    // CI-relaxed Hessian at the old point: g·s + ½ s·H s.
+                    const Eigen::MatrixXd &s = accepted_candidate.step;
+                    Eigen::MatrixXd Hs = delta_g_sa_action(
+                        s, &sa_hessian_ctx, st_current.F_I_mo, st_current.F_A_mo,
+                        n_core, n_act, n_virt, all_mo_irr, use_sym);
+                    for (const auto &root : st_current.roots)
+                        Hs += root.weight *
+                              build_coupled_response_blocks(
+                                  configured_rhs_mode, s, st_current.F_I_mo, st_current.h_eff, st_current.ga,
+                                  st_current.ci_space, a_strs, b_strs, st_current.dets,
+                                  st_current.active_integrals, ci_apply, root.ci_vector, root.ci_energy,
+                                  st_current.H_CI_diag, nbasis, n_core, n_act, n_virt, 1e-8, 64, 1e-4,
+                                  &sa_hessian_ctx)
+                                  .orbital_correction;
+                    const Eigen::VectorXd x = pack_pairs(s);
+                    diag.predicted_delta = pack_pairs(st_current.g_orb).dot(x) + 0.5 * x.dot(pack_pairs(Hs));
+                }
                 diag.max_root_predicted_delta_deviation =
                     accepted_candidate.max_root_predicted_delta_deviation;
                 diag.accepted_step_norm = accepted_candidate.step.norm();
+                accepted_candidate_max_elem = accepted_candidate.step.cwiseAbs().maxCoeff();
                 diag.actual_delta = accepted_candidate.energy - st_current.E_cas;
                 C = accepted_candidate.coefficients;
                 st_current = std::move(accepted_candidate.state);
@@ -1300,10 +1326,23 @@ namespace HartreeFock::Correlation::CASSCF
                     true};
                 level_shift = std::max(1e-3, level_shift * 0.7);
                 rejected_streak = 0;
+
+                // Trust-region update from the exact model's ratio
+                // rho = actual / predicted. Grow only when the step was limited
+                // by the radius and the model held; shrink when it did not.
+                const double rho = diag.actual_delta / diag.predicted_delta;
+                const bool hit_radius =
+                    diag.accepted_step_norm > 0.0 &&
+                    accepted_candidate_max_elem >= 0.9 * trust_rot;
+                if (!(diag.predicted_delta < 0.0) || rho < 0.25)
+                    trust_rot = std::max(0.25 * trust_rot, max_rot / 16.0);
+                else if (rho >= 0.75 && hit_radius)
+                    trust_rot = std::min(2.0 * trust_rot, 5.0 * max_rot);
             }
             else
             {
                 level_shift = std::min(20.0, level_shift * 2.0);
+                trust_rot = std::max(0.5 * trust_rot, max_rot / 16.0);
                 ++rejected_streak;
                 logging(LogLevel::Warning, tag + " :",
                         "No orbital step candidate improved the merit function; increasing damping and retrying next macroiteration.");

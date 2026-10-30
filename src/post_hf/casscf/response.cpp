@@ -215,6 +215,9 @@ namespace
         Eigen::MatrixXd matrix;
         int nbasis = 0;
         bool available = false;
+        // CI relaxation added to every action (dense columns and matrix-free
+        // products alike), making this the CI-relaxed orbital Hessian.
+        std::function<Eigen::MatrixXd(const Eigen::MatrixXd &)> ci_relaxation;
     };
 
     std::vector<RotPair> symmetry_allowed_pairs(
@@ -287,6 +290,7 @@ namespace
         OrbitalLinearOperator op;
         op.pairs = symmetry_allowed_pairs(n_core, n_act, n_virt, mo_irreps, use_sym);
         op.nbasis = nbasis;
+        op.ci_relaxation = ci_relaxation;
 
         // For modest pair counts we explicitly build the orbital-response
         // matrix and solve in that reduced pair basis.  Larger problems fall
@@ -338,6 +342,8 @@ namespace
         Eigen::MatrixXd action = delta_g_sa_action(
             trial, orbital_hessian_ctx, F_I_mo, F_A_mo,
             n_core, n_act, n_virt, mo_irreps, use_sym);
+        if (op.ci_relaxation)
+            action.noalias() += op.ci_relaxation(trial);
         action.noalias() += level_shift * trial;
         return pack_orbital_pairs(action, op.pairs);
     }
@@ -468,6 +474,51 @@ namespace
             step =
                 -eig.eigenvectors() * evals.cwiseInverse().asDiagonal() * eig.eigenvectors().transpose() * g;
             step = cap_packed_step(std::move(step));
+        }
+        else if (op.ci_relaxation)
+        {
+            // Too many pairs for the dense CI-relaxed matrix: solve the same
+            // floored system in the Krylov space of g. Lanczos with full
+            // reorthogonalization; the step is the dense recipe (eigenvalue
+            // floor 1e-4) applied to the tridiagonal projection, so it tends
+            // to the dense step as the subspace grows. One action per vector.
+            const int n = static_cast<int>(g.size());
+            const int kmax = std::min(n, 64);
+            const double gnorm = g.norm();
+            Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(n, kmax);
+            Eigen::VectorXd alpha = Eigen::VectorXd::Zero(kmax), beta = Eigen::VectorXd::Zero(kmax);
+            Q.col(0) = g / gnorm;
+            int k = 0;
+            Eigen::VectorXd y;
+            for (; k < kmax; ++k)
+            {
+                Eigen::VectorXd w = apply_orbital_linear_operator_packed(
+                    Q.col(k), op, orbital_hessian_ctx, F_I_mo, F_A_mo,
+                    n_core, n_act, n_virt, level_shift, mo_irreps, use_sym);
+                alpha(k) = Q.col(k).dot(w);
+                for (int pass = 0; pass < 2; ++pass)
+                    w -= Q.leftCols(k + 1) * (Q.leftCols(k + 1).transpose() * w);
+                beta(k) = w.norm();
+
+                Eigen::MatrixXd T = Eigen::MatrixXd::Zero(k + 1, k + 1);
+                for (int i = 0; i <= k; ++i)
+                {
+                    T(i, i) = alpha(i);
+                    if (i < k)
+                        T(i, i + 1) = T(i + 1, i) = beta(i);
+                }
+                Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> teig(T);
+                const Eigen::VectorXd tev = teig.eigenvalues().cwiseMax(1e-4);
+                y = -teig.eigenvectors() * tev.cwiseInverse().asDiagonal() *
+                    (teig.eigenvectors().row(0).transpose() * gnorm);
+                if (beta(k) * std::abs(y(k)) <= 1e-8 * gnorm || beta(k) < 1e-12 || k + 1 == kmax)
+                {
+                    ++k;
+                    break;
+                }
+                Q.col(k + 1) = w / beta(k);
+            }
+            step = cap_packed_step(Q.leftCols(k) * y);
         }
         else
         {
@@ -1169,7 +1220,7 @@ namespace HartreeFock::Correlation::CASSCF
         const OrbitalLinearOperator orbital_operator = build_orbital_linear_operator(
             orbital_hessian_ctx, F_I_mo, F_A_mo, nbasis, n_core, n_act, n_virt,
             level_shift, mo_irreps, use_sym, ci_relaxation, relaxed ? 256 : 128);
-        const bool direct = relaxed && orbital_operator.available;
+        const bool direct = relaxed;
 
         result.orbital_step = solve_orbital_action_system(
             orbital_gradient,

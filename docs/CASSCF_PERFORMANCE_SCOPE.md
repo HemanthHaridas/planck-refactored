@@ -4,39 +4,50 @@ Canonical status lives in `vault/Status/Completion.md` and
 `vault/Status/Open Work.md`. This is an in-flight scope; when the work lands,
 rewrite it as the answer to the question in the title.
 
-## Headline (2026-10-28)
+## Headline (2026-10-30)
 
-**CASSCF is now 4-16x faster than at the start, level with PySCF at 6-31G and
-4.5-6x behind it at cc-pVDZ.** Three defects are fixed and a fourth is in the
-working tree:
+**CASSCF is now 12-75x faster than at the start: ahead of PySCF at 6-31G,
+2-5x behind at cc-pVDZ, and 20-40x behind at cc-pVTZ.** It takes as many or
+fewer macroiterations than PySCF everywhere. What is left is per-macro cost
+at large bases, not the optimizer.
+
+Four defects are fixed and the step policy rebuilt:
 
 - an O(nb^5) integral transform (P1);
 - a finite-difference orbital Hessian (P2);
 - two missing terms in the orbital-CI coupling (P3b);
 - an iterative coupled solve that could never converge, now a direct solve of
-  the exact CI-relaxed Hessian (P3c).
+  the exact CI-relaxed Hessian, with a Lanczos solve above 256 pairs (P3c,
+  P4a);
+- a level shift and step cap tuned for an approximate Hessian, now a trust
+  region driven by the exact model (P4b).
 
-With P3c, `numeric-newton`, built every macro at 2·npairs full evaluations,
-is no longer used at all.
+`numeric-newton`, built every macro at 2·npairs full evaluations, is no longer
+used.
 
 **The water SA-2 references were re-pinned.** With the exact Hessian, the
 hcore and SAD starts leave a measured saddle (-74.7751377977) for the true
 minimum (-74.7877864783, PySCF's own SAD-start answer). All 15 CASSCF
-regression cases pass. See P3c below.
+regression cases pass.
 
 Water CAS(4,4), Cartesian, 4 threads, `build-full`. PySCF 2.13.0
-(`tests/benchmarks/casscf/pyscf_casscf_timing.py`).
+(`tests/benchmarks/casscf/pyscf_casscf_timing.py`). Times are wall time;
+macros in brackets.
 
-| case | AOs / pairs | start | P2 | P3c | PySCF | P3c vs PySCF |
-|---|---|---|---|---|---|---|
-| 6-31G, C2v | 13 / 22 | 1.3-1.9 s | 0.58 s | **0.33 s** | 0.34 s | 1.0x |
-| cc-pVDZ, C2v | 25 / 50 | 13.4 s | 2.7 s | **1.21 s** | 0.27 s | 4.5x |
-| cc-pVDZ, C1 | 25 / 138 | 44.5 s | 10.0 s | **2.70 s** | 0.43 s | 6.3x |
-| cc-pVTZ, C2v | 65 / - | ~176 s per macro | not rerun | not rerun | 1.0 s total | |
+| case | AOs / pairs | start | P2 | P3c | **now (P4)** | PySCF | now vs PySCF |
+|---|---|---|---|---|---|---|---|
+| 6-31G, C2v | 13 / 22 | 1.3-1.9 s | 0.58 s | 0.33 s (17) | **0.18 s (8)** | 0.34 s (10) | **0.5x** |
+| cc-pVDZ, C2v | 25 / 50 | 13.4 s | 2.7 s | 1.21 s (17) | **0.58 s (8)** | 0.27 s (9) | 2.1x |
+| cc-pVDZ, C1 | 25 / 138 | 44.5 s | 10.0 s | 2.70 s (17) | **2.35 s (17)** | 0.43 s (17) | 5.5x |
+| cc-pVTZ, C2v | 65 / 142 | ~176 s per macro | - | 85.6 s (17) | **43.5 s (9)** | 1.16 s (9) | 38x |
+| cc-pVTZ, C1 | 65 / 418 | - | - | 72.0 s (24)* | **51.8 s (17)** | 2.30 s (20) | 23x |
 
-Energies are within 3e-9 Eh of the start everywhere except the re-pinned
-SA-2 cases (cc-pVDZ -76.0440109021, PySCF -76.0440109018; C1 -76.0781256197 vs
--76.0781256214). C1 now takes 17 macros, the same as PySCF.
+\* with the P4a Lanczos solve; before it, 418 pairs fell to the weak
+diagonal fallback.
+
+Energies agree with PySCF to <= 3.4e-8 Eh (cc-pVDZ -76.0440109039 vs
+-76.0440109018; C1 -76.0781256170 vs -76.0781256214; cc-pVTZ -76.0754286537
+vs -76.0754286541; cc-pVTZ C1 -76.1092535258 vs -76.1092535271).
 
 ## Where the time went
 
@@ -240,22 +251,99 @@ by roundoff growing along a zero-gradient mode, in both codes. Running these
 inputs with symmetry on would make the constrained answer deterministic; that
 is a separate decision.
 
+### P4a: CI-relaxed Lanczos solve above 256 pairs (2026-10-30)
+
+Above the dense limit the relaxed operator used to fall back to six
+diagonal-preconditioned line-search steps on the **orbital-only** action, with
+no CI relaxation. `OrbitalLinearOperator` now carries the CI-relaxation action
+(so matrix-free products include it too). `solve_orbital_action_system` runs
+Lanczos on it from g, with full reorthogonalization, up to 64 vectors. It
+applies the dense recipe (eigenvalue floor 1e-4) to the tridiagonal
+projection, and stops when `beta_k |y_k| <= 1e-8 |g|`. It tends to the dense
+step as the subspace grows; one action per vector.
+
+Validated by forcing it on (dense limit 0, temporary override since removed):
+
+| case | dense | Lanczos |
+|---|---|---|
+| cc-pVDZ C1 | -76.0781256195, 17 macros, 2.67 s | -76.0781256198, 18, 1.82 s |
+| cc-pVDZ C2v | -76.0440109021, 17, 1.16 s | -76.0440109018, 17, 1.21 s |
+
+At cc-pVTZ C1 (418 pairs, the natural path) it reaches PySCF's energy to
+1.3e-9.
+
+### P4b: trust region from the exact model (2026-10-30)
+
+**The diagnosis.** After P3c the Hessian was exact and positive definite on
+6-31G, yet the energy fell linearly for ten macros. Two policy knobs tuned for
+the old approximate Hessian were the brake:
+
+- **The level shift** started at 0.2 and decayed only x0.7 per accepted
+  macro, reaching its 1e-3 floor at macro 15. Early on it exceeded the
+  Hessian's smallest eigenvalue, so "Newton" steps were damped gradient steps.
+- **The step cap** (0.2 per element) rescaled the whole step uniformly.
+  Sweeps (initial shift 0.2 / 0.05 / 0.01 / 0.001; cap 0.2 / 0.5 / 10) showed
+  the low shift alone helps C2v but hurts C1 (17 -> 20-22 macros). Loosening
+  the cap is what C1 needs (shift 0.001, cap 0.5: 6-31G 8 macros, C1 14).
+
+**The model.** The printed `predicted_dE` came from a diagonal
+orbital-energy Hessian (`hess_diag`) and was often the wrong sign; nothing
+read it. It is now `g.s + ½ s.H s` with the exact CI-relaxed action at the
+old point (one extra action per macro). Measured: rho = actual/predicted is
+0.89-1.30 on every macro of 6-31G and C1 cc-pVDZ, and -> 1.000 near
+convergence. The units are right and the model is trustworthy far from the
+solution.
+
+**The policy** (`casscf.cpp`):
+
+- The level shift starts at its floor (1e-3). The existing rules still raise
+  it on rejection (x2) and stagnation (x1.5).
+- `trust_rot` replaces the fixed `max_rot` everywhere a macro step is formed
+  or capped (coupled solve, diagonal and fallback steps, aug-Hessian,
+  `numeric-newton`, the cap helper; Frobenius cap 4 x `trust_rot`). The
+  single-pair probes keep the fixed `max_rot`. It starts at `mcscf_max_rot`
+  and moves with the exact model:
+  - doubles (up to 5 x `mcscf_max_rot`) when rho >= 0.75 and the step hit the
+    radius;
+  - shrinks x4 (floor `mcscf_max_rot`/16) when rho < 0.25 or the model
+    predicts an increase;
+  - halves when no step is accepted.
+
+**Results.** All 15 CASSCF/RASSCF/FCI regression cases pass, including the
+uphill canary. The 11 table inputs are within 2e-9 Eh of their recorded
+values. Macro counts fell everywhere:
+
+| input | macros before -> after |
+|---|---|
+| water STO-3G | 11 -> 4 |
+| water 6-31G | 17 -> 8 |
+| water cc-pVDZ | 17 -> 8 |
+| water SA-2 | 16 -> 10 |
+| ethylene SA-2 | 17 -> 9 |
+| water cc-pVTZ | 17 -> 9 (PySCF 9) |
+| water cc-pVTZ C1 | 24 -> 17 (PySCF 20) |
+
 ## Follow-ups, not started
 
-- **RI path.** Still FD-Hessian for the orbital-orbital block, and still
-  `transform_eri_ri(C, C_act, C_act, C_act)` (full leg first).
-  `water_casscf_ri_ccpvdz` takes 8.4 s.
-- **Above 256 pairs**, the relaxed operator falls back to the old weak
-  matrix-free path. It needs a Krylov solve on the same action.
-- **`transform_eri`'s first quarter** has `mu` innermost at stride `nb^3`.
-  A GEMM shape would also speed MP2/CC (gate `planck-transform-eri`).
-- **cc-pVTZ** has not been rerun since P1.
-- **Delete the P0/P3 probes** (`CallProbe`, `nn_probe`, `schur_probe`,
+- **Per-macro cost at large bases is now the gap** (cc-pVTZ ~4.8 s per macro
+  against PySCF's ~0.13 s). Profile cc-pVTZ before choosing. Likely
+  candidates:
+  - the dense relaxed-operator build (142 columns of ~4 nb^4 Fock
+    contractions each);
+  - the nb^4 Fock contractions in general (PySCF builds JK directly from
+    shell quartets, not from a stored tensor);
+  - `transform_eri`'s first quarter, which has `mu` innermost at stride
+    `nb^3` (a GEMM shape would also speed MP2/CC; gate
+    `planck-transform-eri`).
+- **RI path.** The orbital-orbital block is still FD-Hessian, and the
+  transform is still `transform_eri_ri(C, C_act, C_act, C_act)` (full leg
+  first). `water_casscf_ri_ccpvdz` takes 4.1 s.
+- **Delete the temporary probes** (`CallProbe`, `nn_probe`, `schur_probe`,
   `alpha_probe`, `fix_probe`, `hess_probe`) once this scope is answered.
-- **Macro counts went up on some symmetric cases** (6-31G 13 -> 17, water
-  STO-3G 7 -> 11, ethylene 3-21G 3 -> 5). Each macro is far cheaper, but the
-  step policy (trust cap, level shift, candidate cascade) now dominates what
-  is left; compare macro by macro with PySCF's `mc1step`.
+- **Symmetric starts and saddles.** Which basin a symmetric start reaches is
+  set by roundoff growing along a zero-gradient mode, in both codes. Running
+  such inputs with symmetry on would make the constrained answer
+  deterministic.
 
 ## Out of scope
 

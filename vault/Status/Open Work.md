@@ -1940,11 +1940,22 @@ were re-pinned from -74.7751377977 to -74.7877864783. The old value is a
 measured saddle (one negative relaxed-Hessian eigenvalue, along a
 symmetry-breaking mode with zero gradient); the new one is the minimum and
 PySCF's SAD-start answer. 15/15 CASSCF regressions pass.
+**P4 done (2026-10-30):**
+- *Above 256 pairs:* the CI-relaxed operator is solved by Lanczos (dense
+  recipe on the tridiagonal projection), matching the dense solve to 3e-10
+  Eh.
+- *Step policy:* the 0.2 decaying level shift and fixed 0.2 cap are replaced
+  by a trust region driven by the exact model's actual/predicted ratio (rho
+  0.89-1.30 on every macro measured).
+- *Macro counts:* now at or below PySCF's. Water CAS(4,4) 6-31G 0.18 s (PySCF
+  0.34), cc-pVDZ 0.58 s (0.27), C1 2.35 s (0.43), cc-pVTZ 43.5 s (1.16),
+  cc-pVTZ C1 51.8 s (2.30). 15/15 CASSCF regressions pass; table energies
+  within 2e-9 Eh.
+
 **Remaining:**
-- some symmetric cases take more macros (6-31G 13 -> 17), so the step policy
-  is now the lever;
-- the RI path is still FD-Hessian;
-- above 256 pairs the operator falls back to the weak matrix-free path;
+- per-macro cost at cc-pVTZ (~4.8 s per macro against PySCF's ~0.13 s);
+  profile before choosing;
+- the RI path is still FD-Hessian with a full-leg-first transform;
 - the temporary probes are still to be deleted.
 
 #### Unreproduced OpenMP hang in CASSCF (seen once, 2026-10-28)
