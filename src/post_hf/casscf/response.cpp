@@ -477,48 +477,54 @@ namespace
         }
         else if (op.ci_relaxation)
         {
-            // Too many pairs for the dense CI-relaxed matrix: solve the same
-            // floored system in the Krylov space of g. Lanczos with full
-            // reorthogonalization; the step is the dense recipe (eigenvalue
-            // floor 1e-4) applied to the tridiagonal projection, so it tends
-            // to the dense step as the subspace grows. One action per vector.
+            // Matrix-free CI-relaxed solve: a preconditioned subspace
+            // (Davidson-style) Newton step. The subspace grows by the residual
+            // r = H x + g divided by the diagonal orbital Hessian, and the step
+            // in it uses the dense recipe (eigenvalue floor 1e-4), so it tends
+            // to the dense step as the subspace grows. It stops at an
+            // inexact-Newton residual ||r|| <= 1e-5 |g|; the outer iteration
+            // absorbs the rest. One action per subspace vector.
             const int n = static_cast<int>(g.size());
             const int kmax = std::min(n, 64);
             const double gnorm = g.norm();
-            Eigen::MatrixXd Q = Eigen::MatrixXd::Zero(n, kmax);
-            Eigen::VectorXd alpha = Eigen::VectorXd::Zero(kmax), beta = Eigen::VectorXd::Zero(kmax);
-            Q.col(0) = g / gnorm;
+            const Eigen::VectorXd denom =
+                orbital_pair_preconditioner(op.pairs, F_I_mo, F_A_mo, level_shift).cwiseAbs();
+            Eigen::MatrixXd V(n, kmax), HV(n, kmax);
+            Eigen::VectorXd x = Eigen::VectorXd::Zero(n);
+            Eigen::VectorXd next = g.cwiseQuotient(denom);
             int k = 0;
-            Eigen::VectorXd y;
             for (; k < kmax; ++k)
             {
-                Eigen::VectorXd w = apply_orbital_linear_operator_packed(
-                    Q.col(k), op, orbital_hessian_ctx, F_I_mo, F_A_mo,
-                    n_core, n_act, n_virt, level_shift, mo_irreps, use_sym);
-                alpha(k) = Q.col(k).dot(w);
                 for (int pass = 0; pass < 2; ++pass)
-                    w -= Q.leftCols(k + 1) * (Q.leftCols(k + 1).transpose() * w);
-                beta(k) = w.norm();
+                    next -= V.leftCols(k) * (V.leftCols(k).transpose() * next);
+                const double nn = next.norm();
+                if (!(nn > 1e-12 * gnorm))
+                    break;
+                V.col(k) = next / nn;
+                HV.col(k) = apply_orbital_linear_operator_packed(
+                    V.col(k), op, orbital_hessian_ctx, F_I_mo, F_A_mo,
+                    n_core, n_act, n_virt, level_shift, mo_irreps, use_sym);
 
-                Eigen::MatrixXd T = Eigen::MatrixXd::Zero(k + 1, k + 1);
-                for (int i = 0; i <= k; ++i)
-                {
-                    T(i, i) = alpha(i);
-                    if (i < k)
-                        T(i, i + 1) = T(i + 1, i) = beta(i);
-                }
+                Eigen::MatrixXd T = V.leftCols(k + 1).transpose() * HV.leftCols(k + 1);
+                T = 0.5 * (T + T.transpose());
                 Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> teig(T);
                 const Eigen::VectorXd tev = teig.eigenvalues().cwiseMax(1e-4);
-                y = -teig.eigenvectors() * tev.cwiseInverse().asDiagonal() *
-                    (teig.eigenvectors().row(0).transpose() * gnorm);
-                if (beta(k) * std::abs(y(k)) <= 1e-8 * gnorm || beta(k) < 1e-12 || k + 1 == kmax)
+                const Eigen::VectorXd y =
+                    -teig.eigenvectors() * tev.cwiseInverse().asDiagonal() *
+                    (teig.eigenvectors().transpose() * (V.leftCols(k + 1).transpose() * g));
+                x = V.leftCols(k + 1) * y;
+                const Eigen::VectorXd r = HV.leftCols(k + 1) * y + g;
+                if (r.norm() <= 1e-5 * gnorm)
                 {
                     ++k;
                     break;
                 }
-                Q.col(k + 1) = w / beta(k);
+                next = r.cwiseQuotient(denom);
             }
-            step = cap_packed_step(Q.leftCols(k) * y);
+            step = cap_packed_step(std::move(x));
+            if (std::getenv("PLANCK_CASSCF_CALL_PROBE"))
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "CASSCF Response :",
+                                             std::format("lanczos_probe vectors={} n={}", k, n));
         }
         else
         {
@@ -1219,7 +1225,8 @@ namespace HartreeFock::Correlation::CASSCF
             };
         const OrbitalLinearOperator orbital_operator = build_orbital_linear_operator(
             orbital_hessian_ctx, F_I_mo, F_A_mo, nbasis, n_core, n_act, n_virt,
-            level_shift, mo_irreps, use_sym, ci_relaxation, relaxed ? 256 : 128);
+            level_shift, mo_irreps, use_sym, ci_relaxation,
+            relaxed ? (std::getenv("PLANCK_CASSCF_DENSE_PAIRS") ? std::atoi(std::getenv("PLANCK_CASSCF_DENSE_PAIRS")) : 256) : 128);
         const bool direct = relaxed;
 
         result.orbital_step = solve_orbital_action_system(

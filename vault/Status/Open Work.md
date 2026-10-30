@@ -1953,8 +1953,13 @@ PySCF's SAD-start answer. 15/15 CASSCF regressions pass.
   within 2e-9 Eh.
 
 **Remaining:**
-- per-macro cost at cc-pVTZ (~4.8 s per macro against PySCF's ~0.13 s);
-  profile before choosing;
+- per-macro cost at cc-pVTZ (P5, in progress). Profiled: 76 % is
+  `_compute_fock_rhf`, about 570 full nb^4 Fock passes per macro to build the
+  dense CI-relaxed operator one column per pair. A matrix-free preconditioned
+  subspace solve already cuts cc-pVTZ 43.9 -> 28.7 s, cc-pVTZ C1
+  51.8 -> 40.2 s and C1 cc-pVDZ 2.09 -> 1.01 s at unchanged energies. Its stopping tolerance is still too
+  strict (it uses the full space or the 64 cap); next is an inexact-Newton
+  forcing term, then dropping the dense build;
 - the RI path is still FD-Hessian with a full-leg-first transform;
 - the temporary probes are still to be deleted.
 
