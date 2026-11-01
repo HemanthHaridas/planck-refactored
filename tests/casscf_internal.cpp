@@ -505,6 +505,21 @@ int main()
         std::cerr << "analytic orbital Hessian: max|an-fd| = " << err << " (scale " << scale << ")\n";
         ok &= expect(scale > 1e-3 && err < 1e-9 * scale,
                      "analytic orbital Hessian action should match the central-FD oracle");
+
+        // G[X Y^T + Y X^T] from the half-transformed H against the dense
+        // build, for an arbitrary Y over the core and active columns.
+        Eigen::MatrixXd Y(nb, nc + na);
+        for (int i = 0; i < nb; ++i)
+            for (int j = 0; j < nc + na; ++j)
+                Y(i, j) = std::sin(0.9 * i - 0.4 * j + 0.3 * i * j + 0.1);
+        const Eigen::MatrixXd X = C.leftCols(nc + na);
+        const Eigen::MatrixXd dense = fock_response_mo(X * Y.transpose() + Y * X.transpose(), ctx);
+        const Eigen::MatrixXd low = occupied_fock_response_mo(Y, ctx);
+        const double gscale = dense.cwiseAbs().maxCoeff();
+        const double gerr = (low - dense).cwiseAbs().maxCoeff();
+        std::cerr << "occupied Fock response: max|low-dense| = " << gerr << " (scale " << gscale << ")\n";
+        ok &= expect(gscale > 1e-3 && gerr < 1e-12 * gscale,
+                     "half-transformed G[X Y^T + Y X^T] should match the dense Fock build");
     }
 
     {

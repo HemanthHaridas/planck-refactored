@@ -683,8 +683,11 @@ namespace
             0.5 * (compute_1rdm(as_single_column_matrix(c0 + c1), single_weight(1.0), a_strs, b_strs, dets, n_act) -
                    compute_1rdm(as_single_column_matrix(c0 - c1), single_weight(1.0), a_strs, b_strs, dets, n_act));
         const Eigen::MatrixXd Ca = ctx->C->middleCols(n_core, n_act);
-        const Eigen::MatrixXd dFA =
-            HartreeFock::Correlation::CASSCF::fock_response_mo(Ca * gamma1 * Ca.transpose(), *ctx);
+        // Ca gamma1 Ca^T = X Y^T + Y X^T with X = C_occ, Y = Ca gamma1 / 2 on the
+        // active columns (gamma1 is symmetric).
+        Eigen::MatrixXd Y1 = Eigen::MatrixXd::Zero(ctx->C->rows(), n_core + n_act);
+        Y1.middleCols(n_core, n_act) = 0.5 * Ca * gamma1;
+        const Eigen::MatrixXd dFA = HartreeFock::Correlation::CASSCF::occupied_fock_response_mo(Y1, *ctx);
         // Active column t of the generalized Fock is sum_u gamma(t,u) F_I(p,u) + Q(p,t),
         // so the gamma1 term folds into Q.
         const Eigen::MatrixXd Q_eff = out.Q1 + F_I_mo.middleCols(n_core, n_act) * gamma1.transpose();
@@ -957,8 +960,11 @@ namespace HartreeFock::Correlation::CASSCF
         // density. Rotations touching core orbitals change it through
         // G[dD_c]; without the AO integrals that term is unavailable.
         if (ctx != nullptr && ctx->C != nullptr && n_core > 0)
-            dh += fock_response_mo(core_density_response(kappa, *ctx->C, n_core), *ctx)
-                      .block(n_core, n_core, n_act, n_act);
+        {
+            Eigen::MatrixXd Yc = Eigen::MatrixXd::Zero(ctx->C->rows(), n_core + n_act);
+            Yc.leftCols(n_core) = 2.0 * (*ctx->C) * kappa.leftCols(n_core);
+            dh += occupied_fock_response_mo(Yc, *ctx).block(n_core, n_core, n_act, n_act);
+        }
         const std::vector<double> dga =
             exact_active_two_body_derivative(kappa, ga, active_integrals, n_core, n_act);
         const Eigen::MatrixXd dH = build_ci_hamiltonian_dense(a_strs, b_strs, space.dets, dh, dga, n_act);

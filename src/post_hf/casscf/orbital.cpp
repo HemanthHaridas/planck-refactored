@@ -276,46 +276,73 @@ namespace HartreeFock::Correlation::CASSCF
         return HR;
     }
 
-    std::vector<Eigen::MatrixXd> fock_responses_mo(
-        const std::vector<const Eigen::MatrixXd *> &D_ao,
-        const OrbitalHessianContext &ctx)
-    {
-        const Eigen::MatrixXd &C = *ctx.C;
-        std::vector<Eigen::MatrixXd> G;
-        const bool hit = !D_ao.empty() && ctx.memo_D.size() == D_ao.front()->size() &&
-                         ctx.memo_D == *D_ao.front();
-        if (D_ao.size() == 1 && hit)
-            G.push_back(ctx.memo_G);
-        else if (ri_active(ctx.ri_calc))
-            for (const Eigen::MatrixXd *D : D_ao)
-                G.push_back(HartreeFock::Correlation::RI::build_ri_fock_rhf(*ctx.ri_calc, *D));
-        else
-            G = HartreeFock::ObaraSaika::_compute_fock_rhf(*ctx.eri, D_ao, C.rows());
-        if (!D_ao.empty() && !hit)
-        {
-            ctx.memo_D = *D_ao.front();
-            ctx.memo_G = G.front();
-        }
-        for (Eigen::MatrixXd &g : G)
-            g = C.transpose() * g * C;
-        return G;
-    }
-
     Eigen::MatrixXd fock_response_mo(
         const Eigen::MatrixXd &D_ao,
         const OrbitalHessianContext &ctx)
     {
-        return std::move(fock_responses_mo({&D_ao}, ctx).front());
+        const Eigen::MatrixXd &C = *ctx.C;
+        const Eigen::MatrixXd G =
+            ri_active(ctx.ri_calc)
+                ? HartreeFock::Correlation::RI::build_ri_fock_rhf(*ctx.ri_calc, D_ao)
+                : HartreeFock::ObaraSaika::_compute_fock_rhf(*ctx.eri, D_ao, static_cast<int>(C.rows()));
+        return C.transpose() * G * C;
     }
 
-    Eigen::MatrixXd core_density_response(
-        const Eigen::MatrixXd &R,
-        const Eigen::MatrixXd &C,
-        int n_core)
+    Eigen::MatrixXd occupied_fock_response_mo(
+        const Eigen::MatrixXd &Y,
+        const OrbitalHessianContext &ctx)
     {
-        Eigen::MatrixXd RPc = Eigen::MatrixXd::Zero(R.rows(), R.cols());
-        RPc.leftCols(n_core) = R.leftCols(n_core);
-        return 2.0 * C * (RPc + RPc.transpose()) * C.transpose();
+        const Eigen::MatrixXd &C = *ctx.C;
+        const int m = static_cast<int>(Y.cols());
+        if (ctx.analytic == nullptr || ctx.analytic->H.empty() || ctx.analytic->nocc != m)
+        {
+            const Eigen::MatrixXd X = C.leftCols(m);
+            return fock_response_mo(X * Y.transpose() + Y * X.transpose(), ctx);
+        }
+
+        // G = J - K/2 for D = X Y^T + Y X^T, using the ERI permutation symmetry:
+        //   J(mu,nu) = 2 sum_{lam,i} (mu nu|lam i) Y(lam,i)
+        //   K = T + T^T,  T(mu,nu) = sum_{lam,i} Y(lam,i) (mu lam|nu i)
+        const std::size_t nb = static_cast<std::size_t>(C.rows());
+        const std::size_t mm = static_cast<std::size_t>(m);
+        const double *H = ctx.analytic->H.data();
+        std::vector<double> yr(nb * mm);
+        for (std::size_t lam = 0; lam < nb; ++lam)
+            for (std::size_t i = 0; i < mm; ++i)
+                yr[lam * mm + i] = Y(static_cast<Eigen::Index>(lam), static_cast<Eigen::Index>(i));
+
+        Eigen::MatrixXd J(nb, nb), T(nb, nb);
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+        for (std::size_t mu = 0; mu < nb; ++mu)
+        {
+            for (std::size_t nu = 0; nu < nb; ++nu)
+            {
+                const double *h = H + (mu * nb + nu) * nb * mm;
+                double s = 0.0;
+                for (std::size_t k = 0; k < nb * mm; ++k)
+                    s += h[k] * yr[k];
+                J(mu, nu) = 2.0 * s;
+            }
+            std::vector<double> t(nb, 0.0);
+            for (std::size_t lam = 0; lam < nb; ++lam)
+            {
+                const double *h = H + (mu * nb + lam) * nb * mm;
+                const double *y = yr.data() + lam * mm;
+                for (std::size_t nu = 0; nu < nb; ++nu)
+                {
+                    double s = 0.0;
+                    for (std::size_t i = 0; i < mm; ++i)
+                        s += y[i] * h[nu * mm + i];
+                    t[nu] += s;
+                }
+            }
+            for (std::size_t nu = 0; nu < nb; ++nu)
+                T(mu, nu) = t[nu];
+        }
+        const Eigen::MatrixXd G = J - 0.5 * (T + T.transpose());
+        return C.transpose() * G * C;
     }
 
     AnalyticOrbitalHessian build_analytic_orbital_hessian(
@@ -334,6 +361,34 @@ namespace HartreeFock::Correlation::CASSCF
         out.Y.assign(static_cast<std::size_t>(nb) * nb * na * na, 0.0);
         if (na == 0)
             return out;
+
+        // H[mu,nu,lam,i] = sum_sig (mu nu|lam sig) C(sig,i), one pass over the
+        // tensor per macro; each Hessian product then contracts H instead.
+        const std::size_t nbz = static_cast<std::size_t>(nb);
+        const std::size_t m = static_cast<std::size_t>(n_core + na);
+        out.nocc = static_cast<int>(m);
+        out.H.assign(nbz * nbz * nbz * m, 0.0);
+        std::vector<double> xr(nbz * m);
+        for (std::size_t sig = 0; sig < nbz; ++sig)
+            for (std::size_t i = 0; i < m; ++i)
+                xr[sig * m + i] = C(static_cast<Eigen::Index>(sig), static_cast<Eigen::Index>(i));
+#ifdef USE_OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
+        for (std::size_t mu = 0; mu < nbz; ++mu)
+            for (std::size_t nu = 0; nu < nbz; ++nu)
+                for (std::size_t lam = 0; lam < nbz; ++lam)
+                {
+                    const double *e = eri.data() + ((mu * nbz + nu) * nbz + lam) * nbz;
+                    double *h = out.H.data() + ((mu * nbz + nu) * nbz + lam) * m;
+                    for (std::size_t sig = 0; sig < nbz; ++sig)
+                    {
+                        const double v = e[sig];
+                        const double *x = xr.data() + sig * m;
+                        for (std::size_t i = 0; i < m; ++i)
+                            h[i] += v * x[i];
+                    }
+                }
 
         // Active legs first in both transforms, so each is O(nb^4 na):
         //   X[v,w,p,a] = (vw|pa) = (pa|vw)     Z[u,p,w,a] = (up|wa) = (pu|aw)
@@ -401,14 +456,13 @@ namespace HartreeFock::Correlation::CASSCF
             const Eigen::MatrixXd &C = *ctx.C;
             const int nb = A.nbasis;
 
-            Eigen::MatrixXd RPg = Eigen::MatrixXd::Zero(nb, nb);
-            RPg.middleCols(n_core, n_act) = R.middleCols(n_core, n_act) * (*ctx.gamma);
-            const Eigen::MatrixXd dDa = C * (RPg + RPg.transpose()) * C.transpose();
-
-            const Eigen::MatrixXd dDc = core_density_response(R, C, n_core);
-            const std::vector<Eigen::MatrixXd> dG = fock_responses_mo({&dDc, &dDa}, ctx);
-            const Eigen::MatrixXd dFI = R.transpose() * F_I_mo + F_I_mo * R + dG[0];
-            const Eigen::MatrixXd dFA = R.transpose() * F_A_mo + F_A_mo * R + dG[1];
+            // dD_c = X Yc^T + Yc X^T and dD_a = X Ya^T + Ya X^T with X = C_occ.
+            Eigen::MatrixXd Yc = Eigen::MatrixXd::Zero(nb, n_core + n_act);
+            Eigen::MatrixXd Ya = Eigen::MatrixXd::Zero(nb, n_core + n_act);
+            Yc.leftCols(n_core) = 2.0 * C * R.leftCols(n_core);
+            Ya.middleCols(n_core, n_act) = C * R.middleCols(n_core, n_act) * (*ctx.gamma);
+            const Eigen::MatrixXd dFI = R.transpose() * F_I_mo + F_I_mo * R + occupied_fock_response_mo(Yc, ctx);
+            const Eigen::MatrixXd dFA = R.transpose() * F_A_mo + F_A_mo * R + occupied_fock_response_mo(Ya, ctx);
 
             Eigen::MatrixXd dQ = R.transpose() * A.Q;
             const Eigen::MatrixXd Ract = R.middleCols(n_core, n_act);

@@ -55,8 +55,13 @@ namespace HartreeFock::Correlation::CASSCF
     {
         Eigen::MatrixXd Q;
         std::vector<double> Y;
+        // H[mu,nu,lam,i] = (mu nu|lam i), i over the core and active orbitals
+        // (nocc of them): enough for G[X Y^T + Y X^T] with X = C_occ, which is
+        // every density a Hessian product contracts.
+        std::vector<double> H;
         int nbasis = 0;
         int nact = 0;
+        int nocc = 0;
     };
 
     AnalyticOrbitalHessian build_analytic_orbital_hessian(
@@ -82,10 +87,6 @@ namespace HartreeFock::Correlation::CASSCF
         // When set, delta_g_sa_action is analytic; otherwise it is the central
         // finite difference of fixed_ci_orbital_gradient (kept as the oracle).
         const AnalyticOrbitalHessian *analytic = nullptr;
-        // Last G[D] (AO basis) built through this context. One Hessian product
-        // needs G of the trial's core-density response twice: in the orbital
-        // action and again in each root's CI right-hand side.
-        mutable Eigen::MatrixXd memo_D, memo_G;
     };
 
     // C^T G[D] C for an AO density D, with G the closed-shell two-electron
@@ -94,18 +95,13 @@ namespace HartreeFock::Correlation::CASSCF
         const Eigen::MatrixXd &D_ao,
         const OrbitalHessianContext &ctx);
 
-    // fock_response_mo for several densities, in one sweep over the dense
-    // tensor. The first density is memoized.
-    std::vector<Eigen::MatrixXd> fock_responses_mo(
-        const std::vector<const Eigen::MatrixXd *> &D_ao,
+    // C^T G[X Y^T + Y X^T] C with X = the first Y.cols() columns of C (the
+    // core and active orbitals). With the analytic context's H this is
+    // O(nb^3 nocc) instead of a pass over the nb^4 tensor; otherwise it forms
+    // the density and calls fock_response_mo.
+    Eigen::MatrixXd occupied_fock_response_mo(
+        const Eigen::MatrixXd &Y,
         const OrbitalHessianContext &ctx);
-
-    // First-order change of the closed-shell core density 2 C P_c C^T under
-    // C -> C (I + R): 2 C (R P_c + P_c R^T) C^T.
-    Eigen::MatrixXd core_density_response(
-        const Eigen::MatrixXd &R,
-        const Eigen::MatrixXd &C,
-        int n_core);
 
     // Cache the active-space integral transform and reuse it across all response
     // contractions in a macroiteration.

@@ -1976,8 +1976,12 @@ PySCF's SAD-start answer. 15/15 CASSCF regressions pass.
 - N6 (2026-11-01): the step selector takes the full Newton step when it
   improves instead of scoring 3 candidates x 7 scales: 22 -> 2 evaluations
   per macro. cc-pVDZ now beats PySCF (0.245 vs 0.27 s; C1 0.367 vs 0.43 s);
-  cc-pVTZ 7.3 s, C1 8.5 s. Next: low-rank G[D] from half-transformed
-  integrals in the Hessian product (each product still sweeps nb^4 twice);
+  cc-pVTZ 7.3 s, C1 8.5 s;
+- N7 (2026-11-01): Hessian products build G[D] from half-transformed
+  (mu nu|lam i) integrals (i over core + active, built once per macro):
+  O(nb^3 n_occ) per density instead of an nb^4 pass. cc-pVTZ 7.3 -> 3.0 s,
+  C1 8.5 -> 3.7 s (PySCF 1.16 / 2.30 s). N4's batching and memo deleted.
+  Next: the relaxed solve's preconditioner (28-64 vectors per macro);
 - the RI path is still FD-Hessian with a full-leg-first transform.
 
 #### Unreproduced OpenMP hang in CASSCF (seen once, 2026-10-28)

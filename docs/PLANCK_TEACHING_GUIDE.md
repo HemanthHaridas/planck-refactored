@@ -7364,12 +7364,27 @@ So the Hessian-vector product \(\mathbf A\mathbf R\) is the orbital gradient
 evaluated on the derivatives of \(F^I\), \(F^A\) and \(Q\). The AO parts need two
 Fock builds, \(\mathbf G[d\mathbf D_c]\) and \(\mathbf G[d\mathbf D_a]\);
 \(dQ\) uses a per-macro intermediate built from \((pa|vw)\) and \((pu|aw)\).
-Both densities are contracted in one sweep over the stored tensor
-(`fock_responses_mo`, which calls the multi-density `_compute_fock_rhf`): the
-sweep is limited by reading the tensor, so a second density costs little. The
-CI right-hand side below needs \(\mathbf G[d\mathbf D_c]\) again for every
-root, and gets it from a one-entry memo on the context instead of another
-sweep. This is `analytic_g_action` in `orbital.cpp`. The older central finite
+**These Fock builds never touch the full tensor.** Every density a product
+needs is low rank in a fixed basis: \(d\mathbf D_c = \mathbf X\mathbf Y^T +
+\mathbf Y\mathbf X^T\) with \(\mathbf X = \mathbf C_{\text{core}}\) and
+\(\mathbf Y = 2\mathbf C\mathbf R_{:,\text{core}}\), \(d\mathbf D_a\) likewise with
+\(\mathbf X = \mathbf C_{\text{act}}\), \(\mathbf Y = \mathbf C\mathbf
+R_{:,\text{act}}\boldsymbol\gamma\), and the CI-response density below with
+\(\mathbf Y = \tfrac12\mathbf C_{\text{act}}\boldsymbol\gamma_1\). With the
+half-transformed integrals \(H[\mu,\nu,\lambda,i] = (\mu\nu|\lambda i)\), \(i\) over the
+core and active orbitals, built once per macroiteration, the ERI permutation
+symmetry gives
+
+\[
+J_{\mu\nu} = 2\sum_{\lambda i} H[\mu,\nu,\lambda,i]\,Y_{\lambda i},\qquad
+K = T + T^T,\quad T_{\mu\nu} = \sum_{\lambda i} Y_{\lambda i}\,H[\mu,\lambda,\nu,i],
+\]
+
+and \(\mathbf G = \mathbf J - \tfrac12\mathbf K\): \(O(n_b^3 n_{\text{occ}})\) per
+density instead of a pass over the \(n_b^4\) tensor
+(`occupied_fock_response_mo`). PySCF's in-core CASSCF uses the same idea
+through its `ppaa`/`papa` blocks. This is `analytic_g_action` in `orbital.cpp`.
+The older central finite
 difference of two gradient rebuilds is kept only as the test oracle and for
 the RI path.
 
@@ -7384,8 +7399,8 @@ Hessian no longer matches a finite difference of the fully re-solved gradient;
 with both it agrees to \(10^{-9}\).
 
 **Solving \(\mathbf H\boldsymbol\kappa = -\mathbf g\) without building \(\mathbf H\).**
-Each product costs a few full passes over the ERI tensor, and a dense build
-needs one product per orbital pair (142 at water/cc-pVTZ). So
+A dense build needs one product per orbital pair (142 at water/cc-pVTZ,
+418 without symmetry), each with its own CI response solve. So
 `solve_orbital_action_system` (`response.cpp`) runs a preconditioned subspace
 (Davidson-style) Newton solve instead:
 
@@ -7401,8 +7416,8 @@ needs one product per orbital pair (142 at water/cc-pVTZ). So
   \(\mathbf g\) is orthogonal to, which is exactly the mode needed to leave a
   saddle (see below).
 
-Together with the batched Fock sweep above, water/cc-pVTZ C1 went from
-51.8 s (dense) to 23.6 s, at the same energy.
+With the low-rank Fock builds above, water/cc-pVTZ C1 went from 51.8 s
+(dense) to 3.7 s at the same energy (PySCF: 2.3 s).
 
 **Step control.** The step is scaled to a trust radius `trust_rot`
 (element-wise, and \(4\times\) that in the Frobenius norm). The radius follows
