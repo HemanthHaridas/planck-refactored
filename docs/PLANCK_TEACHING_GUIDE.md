@@ -7363,7 +7363,10 @@ core and active densities move as \(d\mathbf D = \mathbf C(\mathbf R\mathbf P + 
 So the Hessian-vector product \(\mathbf A\mathbf R\) is the orbital gradient
 evaluated on the derivatives of \(F^I\), \(F^A\) and \(Q\). The AO parts need two
 Fock builds, \(\mathbf G[d\mathbf D_c]\) and \(\mathbf G[d\mathbf D_a]\);
-\(dQ\) uses a per-macro intermediate built from \((pa|vw)\) and \((pu|aw)\).
+\(dQ\) uses a per-macro intermediate built from \((pa|vw)\) and \((pu|aw)\);
+both come from the half-transformed integrals \(H\) below (its last index
+already runs over the active orbitals), so they need no pass over the full
+tensor either.
 **These Fock builds never touch the full tensor.** Every density a product
 needs is low rank in a fixed basis: \(d\mathbf D_c = \mathbf X\mathbf Y^T +
 \mathbf Y\mathbf X^T\) with \(\mathbf X = \mathbf C_{\text{core}}\) and
@@ -7417,7 +7420,7 @@ A dense build needs one product per orbital pair (142 at water/cc-pVTZ,
   saddle (see below).
 
 With the low-rank Fock builds above, water/cc-pVTZ C1 went from 51.8 s
-(dense) to 3.7 s at the same energy (PySCF: 2.3 s).
+(dense) to 2.3 s at the same energy, level with PySCF.
 
 **Step control.** The step is scaled to a trust radius `trust_rot`
 (element-wise, and \(4\times\) that in the Frobenius norm). The radius follows

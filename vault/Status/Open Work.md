@@ -1982,6 +1982,11 @@ PySCF's SAD-start answer. 15/15 CASSCF regressions pass.
   O(nb^3 n_occ) per density instead of an nb^4 pass. cc-pVTZ 7.3 -> 3.0 s,
   C1 8.5 -> 3.7 s (PySCF 1.16 / 2.30 s). N4's batching and memo deleted.
   Next: the relaxed solve's preconditioner (28-64 vectors per macro);
+- N8 (2026-11-01): one pass over H for J and K; (pa|vw) and (pu|aw) for the
+  analytic Hessian derived from H instead of two tensor transforms.
+  cc-pVTZ 1.85 s (PySCF 1.16), cc-pVTZ C1 2.33 s (PySCF 2.30, parity),
+  cc-pVDZ 0.18 s (0.27). Next: build H at the trial C in `evaluate` so the
+  cache and F_I/F_A come from it too;
 - the RI path is still FD-Hessian with a full-leg-first transform.
 
 #### Unreproduced OpenMP hang in CASSCF (seen once, 2026-10-28)

@@ -4,62 +4,54 @@ Canonical status lives in `vault/Status/Completion.md` and
 `vault/Status/Open Work.md`. This is an in-flight scope; when the work lands,
 rewrite it as the answer to the question in the title.
 
-## Latest: N7 (2026-11-01, uncommitted)
+## Latest: N8 (2026-11-01, uncommitted)
 
-**Hessian products no longer sweep the nb^4 tensor: cc-pVTZ 7.3 -> 3.0 s,
-cc-pVTZ C1 8.5 -> 3.7 s, now 2.6x and 1.6x behind PySCF (from 6.3x and
-3.7x).**
+**cc-pVTZ C1 is level with PySCF (2.33 s vs 2.30 s); cc-pVTZ 3.0 -> 1.85 s
+(PySCF 1.16 s), cc-pVDZ 0.25 -> 0.18 s.** Two changes, both using N7's H.
 
-Every density a Hessian product contracts has the form `X Y^T + Y X^T` with
-X = fixed core or active columns of C:
+The post-N7 profile (cc-pVTZ C1) was `transform_eri` 24 %, thread wait 19 %,
+`occupied_fock_response_mo` 19 %, single-density `_compute_fock_rhf` 12 %
+(the inactive/active Fock in `evaluate`), building H 6 %.
 
-| density | X | Y |
-|---|---|---|
-| dD_c (orbital action, CI right-hand side) | C_core | 2 C R[:, core] |
-| dD_a (orbital action) | C_act | C R[:, act] gamma |
-| C_a gamma1 C_a^T (after each root's CI response) | C_act | C_act gamma1 / 2 |
-
-So `build_analytic_orbital_hessian` now also builds, once per macro,
-`H[mu,nu,lam,i] = (mu nu|lam i)` with i over the n_core + n_act occupied
-orbitals (one nb^4·n_occ pass; 11 MB at water cc-pVTZ). Then
-`occupied_fock_response_mo(Y, ctx)` forms `J = 2 sum H Y` and `K = T + T^T`,
-`T(mu,nu) = sum_{lam,i} Y(lam,i) H[mu,lam,nu,i]`, in O(nb^3 n_occ) per density
-instead of a full pass over the tensor. This is PySCF's in-core `ppaa`/`papa`
-idea. Without an analytic context (the RI path) it forms the density and
-calls `fock_response_mo` as before.
-
-It makes N4's batching and memo pointless, so they are deleted: the
-multi-density `_compute_fock_rhf` overload, `fock_responses_mo`, the
-`memo_D`/`memo_G` context members, and `core_density_response`.
+- **One pass over H per density.** `occupied_fock_response_mo` read H twice,
+  once for J and once for T, and T's inner loop ran over the 5 occupied
+  orbitals only. The block H[mu,a,:,:] is contiguous and gives both J(mu,a)
+  (a dot product with Y) and Y(a,:)·H[mu,a,nu,:] for every T(mu,nu), so one
+  pass now forms both. cc-pVTZ 3.0 -> 2.02 s, C1 3.7 -> 2.54 s.
+- **X = (pa|vw) and Z = (pu|aw) from H.** `build_analytic_orbital_hessian`
+  built them with two `transform_eri` passes over the tensor
+  (O(nb^4 n_act) each), for the same C as H. H's last index already runs
+  over the active orbitals, so each is three O(nb^3 n_act^2) contractions of
+  H (`transform_occupied_half`), contracting the leg paired with the active
+  index first (lam for X, nu for Z; the other order is O(nb^4 n_act) again).
+  Two of the four tensor transforms per macro are gone. cc-pVTZ
+  2.02 -> 1.85 s, C1 2.54 -> 2.33 s.
 
 **Gates.** 19/19 CASSCF/RASSCF/FCI cases, core suite 85/85, table energies
-within 1e-10 of N6. `planck-casscf-internal` gains a direct check of the
-low-rank G against the dense build on an arbitrary Y (2.8e-15 relative to a
-scale of 3.7); the existing analytic-vs-FD Hessian check still passes at 9e-11
-relative. Dropping the factor 2 in J fails both (5.1 and 6.7 absolute).
-
-**Next (see "What is left"):** the solve still uses 28-64 vectors per macro
-at cc-pVTZ; the preconditioner is now the lever.
+within 1e-10 of N7. The analytic-vs-FD Hessian check, which depends on X and
+Z through Q and Y, is unchanged at 1.76844e-09 to every printed digit; the
+low-rank G check is 3.1e-15.
 
 ## Where it stands
 
-**CASSCF is 17-135x faster than when this started and beats PySCF at 6-31G
-and cc-pVDZ (with and without symmetry). It is 1.6-2.6x behind at cc-pVTZ.** It needs no
+**CASSCF is 19-156x faster than when this started. It beats PySCF at 6-31G
+and cc-pVDZ (with and without symmetry), matches it at cc-pVTZ C1, and is
+1.6x behind at cc-pVTZ C2v.** It needs no
 more macroiterations than PySCF anywhere.
 
 Water CAS(4,4), Cartesian, 4 threads, `build-full`; PySCF 2.13.0
 (`tests/benchmarks/casscf/pyscf_casscf_timing.py`). Wall time.
 
-| case | AOs / pairs | start | P4 `1468a4f7` | P5 `305de17a` | N4 `c3095a53` | N5 `bc36af7b` | N6 `80eb776d` | **N7** | PySCF | N7 vs PySCF |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 6-31G | 13 / 22 | 1.3-1.9 s | 0.18 s | 0.16 s | 0.15 s | 0.16 s | 0.064 s | **0.078 s** | 0.34 s | **0.23x** |
-| cc-pVDZ | 25 / 50 | 13.4 s | 0.58 s | 0.59 s | 0.45 s | 0.43 s | 0.245 s | **0.248 s** | 0.27 s | **0.92x** |
-| cc-pVDZ, C1 | 25 / 138 | 44.5 s | 2.35 s | 0.72 s | 0.58 s | 0.59 s | 0.367 s | **0.328 s** | 0.43 s | **0.76x** |
-| cc-pVTZ | 65 / 142 | ~176 s per macro | 43.5 s | 24.3 s | 19.6 s | 13.3 s | 7.3 s | **3.0 s** | 1.16 s | 2.6x |
-| cc-pVTZ, C1 | 65 / 418 | - | 51.8 s | 27.4 s | 23.6 s | 15.0 s | 8.5 s | **3.7 s** | 2.30 s | 1.6x |
+| case | AOs / pairs | start | P4 `1468a4f7` | P5 `305de17a` | N4 `c3095a53` | N5 `bc36af7b` | N6 `80eb776d` | N7 `9e55b67a` | **N8** | PySCF | N8 vs PySCF |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 6-31G | 13 / 22 | 1.3-1.9 s | 0.18 s | 0.16 s | 0.15 s | 0.16 s | 0.064 s | 0.078 s | **0.069 s** | 0.34 s | **0.20x** |
+| cc-pVDZ | 25 / 50 | 13.4 s | 0.58 s | 0.59 s | 0.45 s | 0.43 s | 0.245 s | 0.248 s | **0.180 s** | 0.27 s | **0.67x** |
+| cc-pVDZ, C1 | 25 / 138 | 44.5 s | 2.35 s | 0.72 s | 0.58 s | 0.59 s | 0.367 s | 0.328 s | **0.285 s** | 0.43 s | **0.66x** |
+| cc-pVTZ | 65 / 142 | ~176 s per macro | 43.5 s | 24.3 s | 19.6 s | 13.3 s | 7.3 s | 3.0 s | **1.85 s** | 1.16 s | 1.6x |
+| cc-pVTZ, C1 | 65 / 418 | - | 51.8 s | 27.4 s | 23.6 s | 15.0 s | 8.5 s | 3.7 s | **2.33 s** | 2.30 s | **1.0x** |
 
-N7 energies: cc-pVDZ -76.0440109040 (PySCF -76.0440109018), C1
--76.0781256193 (-76.0781256214), cc-pVTZ -76.0754286346 (-76.0754286541; 2e-8,
+N8 energies: cc-pVDZ -76.0440109040 (PySCF -76.0440109018), C1
+-76.0781256186 (-76.0781256214), cc-pVTZ -76.0754286346 (-76.0754286541; 2e-8,
 set by `tol_mcscf_grad 1e-5`), cc-pVTZ C1 -76.1092535252 (-76.1092535271).
 
 **Two references were re-pinned from saddles to minima.** Water SA-2
@@ -70,9 +62,9 @@ component on; both new values are PySCF's own tight answers.
 
 ## Handoff
 
-**Committed through `80eb776d` (N6).** **Uncommitted, gated, ready to commit
-as N7:** `src/post_hf/casscf/orbital.{h,cpp}`, `src/post_hf/casscf/response.cpp`,
-`src/integrals/os.{h,cpp}` (overload deleted), `tests/casscf_internal.cpp`.
+**Committed through `9e55b67a` (N7).** **Uncommitted, gated, ready to commit
+as N8:** `src/post_hf/casscf/orbital.cpp` (fused pass in
+`occupied_fock_response_mo`; `transform_occupied_half` for X and Z).
 
 **How to reproduce:**
 
@@ -126,22 +118,28 @@ as N7:** `src/post_hf/casscf/orbital.{h,cpp}`, `src/post_hf/casscf/response.cpp`
 | 7 | each product swept the ERI tensor 4 times, once for a density it had already built | two densities per sweep, memoized G[dD_c] | N4 `c3095a53` |
 | 8 | `transform_eri` read the AO tensor at stride nb^3 in its first quarter | contracted index outside a unit-stride loop | N5 `bc36af7b` |
 | 9 | the selector scored 3 candidates x 7 scales (22 evaluations) every macro | take the full Newton step when it improves | N6 `80eb776d` |
-| 10 | each Hessian product made 2 full passes over the nb^4 tensor for densities of rank <= 2 n_occ | half-transformed (mu nu|lam i), J/K in O(nb^3 n_occ) | N7 |
+| 10 | each Hessian product made 2 full passes over the nb^4 tensor for densities of rank <= 2 n_occ | half-transformed (mu nu|lam i), J/K in O(nb^3 n_occ) | N7 `9e55b67a` |
+| 11 | J and K read H separately; X and Z took two more passes over the nb^4 tensor per macro | one pass over H for J and K; X and Z from H | N8 |
 
 ## What is left
 
-1. **A better preconditioner for the relaxed solve.** The solve still uses
-   28-64 vectors per macro at cc-pVTZ, and near convergence, with a
-   positive-definite Hessian, cc-pVDZ needs 34-50 of 50 for a relative
-   residual of ~4e-3. The diagonal is F_I + F_A differences only; the exact
-   fixed-CI diagonal (or the active-active block) is the candidate. Re-profile
-   first: with products now cheap, the per-macro transforms may dominate.
-2. **The single-density `_compute_fock_rhf`** (inactive/active Fock in
-   `evaluate`; also the conventional SCF's hot path) in a register-accumulator
-   form; measure first, needs the SCF gates.
-3. **RI path:** still an FD orbital Hessian, and a full-leg-first transform
+1. **`evaluate` still makes its own passes over the tensor**: each of the 2
+   evaluations per macro runs the active-cache transform and two
+   single-density Fock builds (inactive, active) at the trial C. Building H
+   at the trial C instead (one nb^4·n_occ pass) would give all three
+   cheaply, F_I and F_A as `occupied_fock_response_mo` with Y = C_core and
+   C_act gamma / 2, the cache like X and Z, and the accepted trial's H could
+   be reused by the next macro's `build_analytic_orbital_hessian`. Roughly
+   6 tensor passes per macro -> 2. Touches `build_active_integral_cache` and
+   the RI split; re-profile first.
+2. **A better preconditioner for the relaxed solve.** 28-64 vectors per macro
+   at cc-pVTZ; near convergence cc-pVDZ still needs 34-50 of 50 for a
+   relative residual of ~4e-3. The diagonal is F_I + F_A differences only.
+3. **The single-density `_compute_fock_rhf`** (also the conventional SCF's
+   hot path) in a register-accumulator form; item 1 removes its CASSCF use.
+4. **RI path:** still an FD orbital Hessian, and a full-leg-first transform
    (`water_casscf_ri_ccpvdz` 4.1 s).
-4. **Delete `CallProbe`** once this scope is answered.
+5. **Delete `CallProbe`** once this scope is answered.
 
 Not needed: a new Davidson implementation, the AH solver for the relaxed
 step (N2: seeded from g, it has the subspace solve's blind spot, and the
@@ -163,6 +161,38 @@ case", direct or cached Fock builds (disproven, `CASSCF_FOCK_REBUILD_COST.md`).
 - Stop if any gated energy moves by more than 1e-8 Eh or a basin changes.
 
 ## Record (newest first)
+
+### N7: Hessian-product Fock builds from half-transformed integrals (`9e55b67a`)
+
+cc-pVTZ 7.3 -> 3.0 s, cc-pVTZ C1 8.5 -> 3.7 s.
+
+Every density a Hessian product contracts has the form `X Y^T + Y X^T` with
+X = fixed core or active columns of C:
+
+| density | X | Y |
+|---|---|---|
+| dD_c (orbital action, CI right-hand side) | C_core | 2 C R[:, core] |
+| dD_a (orbital action) | C_act | C R[:, act] gamma |
+| C_a gamma1 C_a^T (after each root's CI response) | C_act | C_act gamma1 / 2 |
+
+So `build_analytic_orbital_hessian` now also builds, once per macro,
+`H[mu,nu,lam,i] = (mu nu|lam i)` with i over the n_core + n_act occupied
+orbitals (one nb^4·n_occ pass; 11 MB at water cc-pVTZ). Then
+`occupied_fock_response_mo(Y, ctx)` forms `J = 2 sum H Y` and `K = T + T^T`,
+`T(mu,nu) = sum_{lam,i} Y(lam,i) H[mu,lam,nu,i]`, in O(nb^3 n_occ) per density
+instead of a full pass over the tensor. This is PySCF's in-core `ppaa`/`papa`
+idea. Without an analytic context (the RI path) it forms the density and
+calls `fock_response_mo` as before.
+
+It makes N4's batching and memo pointless, so they are deleted: the
+multi-density `_compute_fock_rhf` overload, `fock_responses_mo`, the
+`memo_D`/`memo_G` context members, and `core_density_response`.
+
+**Gates.** 19/19 CASSCF/RASSCF/FCI cases, core suite 85/85, table energies
+within 1e-10 of N6. `planck-casscf-internal` gains a direct check of the
+low-rank G against the dense build on an arbitrary Y (2.8e-15 relative to a
+scale of 3.7); the existing analytic-vs-FD Hessian check still passes at 9e-11
+relative. Dropping the factor 2 in J fails both (5.1 and 6.7 absolute).
 
 ### N6: take the full Newton step (`80eb776d`)
 

@@ -311,32 +311,35 @@ namespace HartreeFock::Correlation::CASSCF
             for (std::size_t i = 0; i < mm; ++i)
                 yr[lam * mm + i] = Y(static_cast<Eigen::Index>(lam), static_cast<Eigen::Index>(i));
 
+        // One pass over H: the contiguous block H[mu,a,:,:] gives J(mu,a) as a
+        // dot product with Y, and adds Y(a,:) . H[mu,a,nu,:] to every T(mu,nu)
+        // (T(mu,nu) = sum_{a,i} Y(a,i) H[mu,a,nu,i]).
         Eigen::MatrixXd J(nb, nb), T(nb, nb);
 #ifdef USE_OPENMP
 #pragma omp parallel for schedule(static)
 #endif
         for (std::size_t mu = 0; mu < nb; ++mu)
         {
-            for (std::size_t nu = 0; nu < nb; ++nu)
-            {
-                const double *h = H + (mu * nb + nu) * nb * mm;
-                double s = 0.0;
-                for (std::size_t k = 0; k < nb * mm; ++k)
-                    s += h[k] * yr[k];
-                J(mu, nu) = 2.0 * s;
-            }
             std::vector<double> t(nb, 0.0);
-            for (std::size_t lam = 0; lam < nb; ++lam)
+            for (std::size_t a = 0; a < nb; ++a)
             {
-                const double *h = H + (mu * nb + lam) * nb * mm;
-                const double *y = yr.data() + lam * mm;
+                const double *h = H + (mu * nb + a) * nb * mm;
+                const double *ya = yr.data() + a * mm;
+                double j = 0.0;
                 for (std::size_t nu = 0; nu < nb; ++nu)
                 {
-                    double s = 0.0;
+                    const double *hn = h + nu * mm;
+                    const double *yn = yr.data() + nu * mm;
+                    double tj = 0.0, tt = 0.0;
                     for (std::size_t i = 0; i < mm; ++i)
-                        s += y[i] * h[nu * mm + i];
-                    t[nu] += s;
+                    {
+                        tj += hn[i] * yn[i];
+                        tt += ya[i] * hn[i];
+                    }
+                    j += tj;
+                    t[nu] += tt;
                 }
+                J(mu, a) = 2.0 * j;
             }
             for (std::size_t nu = 0; nu < nb; ++nu)
                 T(mu, nu) = t[nu];
@@ -344,6 +347,94 @@ namespace HartreeFock::Correlation::CASSCF
         const Eigen::MatrixXd G = J - 0.5 * (T + T.transpose());
         return C.transpose() * G * C;
     }
+
+    namespace
+    {
+        // out[a1,a2,a3,w] = sum_{mu,nu,lam} C1(mu,a1) C2(nu,a2) C3(lam,a3)
+        // H[mu,nu,lam,n_core+w], w over the active orbitals. lam_first contracts
+        // the lam leg before nu; pass the cheaper order (contract the leg with
+        // the fewest columns first).
+        std::vector<double> transform_occupied_half(
+            const AnalyticOrbitalHessian &A,
+            const Eigen::MatrixXd &C1,
+            const Eigen::MatrixXd &C2,
+            const Eigen::MatrixXd &C3,
+            int n_core,
+            bool lam_first)
+        {
+            const std::size_t nb = static_cast<std::size_t>(A.nbasis);
+            const std::size_t m = static_cast<std::size_t>(A.nocc);
+            const std::size_t na = static_cast<std::size_t>(A.nact);
+            const std::size_t n1 = static_cast<std::size_t>(C1.cols());
+            const std::size_t n2 = static_cast<std::size_t>(C2.cols());
+            const std::size_t n3 = static_cast<std::size_t>(C3.cols());
+            const std::size_t nc = static_cast<std::size_t>(n_core);
+            auto h = [&](std::size_t mu, std::size_t nu, std::size_t lam, std::size_t w)
+            { return A.H[((mu * nb + nu) * nb + lam) * m + nc + w]; };
+
+            // T2[mu,a2,a3,w]
+            std::vector<double> T2(nb * n2 * n3 * na, 0.0);
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+            for (std::size_t mu = 0; mu < nb; ++mu)
+            {
+                if (lam_first)
+                {
+                    std::vector<double> T1(nb * n3 * na, 0.0); // [nu,a3,w]
+                    for (std::size_t nu = 0; nu < nb; ++nu)
+                        for (std::size_t lam = 0; lam < nb; ++lam)
+                            for (std::size_t a3 = 0; a3 < n3; ++a3)
+                            {
+                                const double c = C3(static_cast<Eigen::Index>(lam), static_cast<Eigen::Index>(a3));
+                                for (std::size_t w = 0; w < na; ++w)
+                                    T1[(nu * n3 + a3) * na + w] += c * h(mu, nu, lam, w);
+                            }
+                    for (std::size_t a2 = 0; a2 < n2; ++a2)
+                        for (std::size_t nu = 0; nu < nb; ++nu)
+                        {
+                            const double c = C2(static_cast<Eigen::Index>(nu), static_cast<Eigen::Index>(a2));
+                            for (std::size_t k = 0; k < n3 * na; ++k)
+                                T2[(mu * n2 + a2) * n3 * na + k] += c * T1[nu * n3 * na + k];
+                        }
+                }
+                else
+                {
+                    std::vector<double> T1(n2 * nb * na, 0.0); // [a2,lam,w]
+                    for (std::size_t nu = 0; nu < nb; ++nu)
+                        for (std::size_t a2 = 0; a2 < n2; ++a2)
+                        {
+                            const double c = C2(static_cast<Eigen::Index>(nu), static_cast<Eigen::Index>(a2));
+                            for (std::size_t lam = 0; lam < nb; ++lam)
+                                for (std::size_t w = 0; w < na; ++w)
+                                    T1[(a2 * nb + lam) * na + w] += c * h(mu, nu, lam, w);
+                        }
+                    for (std::size_t a2 = 0; a2 < n2; ++a2)
+                        for (std::size_t lam = 0; lam < nb; ++lam)
+                            for (std::size_t a3 = 0; a3 < n3; ++a3)
+                            {
+                                const double c = C3(static_cast<Eigen::Index>(lam), static_cast<Eigen::Index>(a3));
+                                for (std::size_t w = 0; w < na; ++w)
+                                    T2[((mu * n2 + a2) * n3 + a3) * na + w] += c * T1[(a2 * nb + lam) * na + w];
+                            }
+                }
+            }
+
+            std::vector<double> out(n1 * n2 * n3 * na, 0.0);
+            const std::size_t blk = n2 * n3 * na;
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+            for (std::size_t a1 = 0; a1 < n1; ++a1)
+                for (std::size_t mu = 0; mu < nb; ++mu)
+                {
+                    const double c = C1(static_cast<Eigen::Index>(mu), static_cast<Eigen::Index>(a1));
+                    for (std::size_t k = 0; k < blk; ++k)
+                        out[a1 * blk + k] += c * T2[mu * blk + k];
+                }
+            return out;
+        }
+    } // namespace
 
     AnalyticOrbitalHessian build_analytic_orbital_hessian(
         const std::vector<double> &eri,
@@ -390,15 +481,16 @@ namespace HartreeFock::Correlation::CASSCF
                     }
                 }
 
-        // Active legs first in both transforms, so each is O(nb^4 na):
-        //   X[v,w,p,a] = (vw|pa) = (pa|vw)     Z[u,p,w,a] = (up|wa) = (pu|aw)
+        // Both mixed transforms come from H, whose last index already runs over
+        // the active orbitals: X[p,a,v,w] = (pa|vw) and Z[p,u,a,w] = (pu|aw),
+        // each O(nb^3 na^2) instead of an O(nb^4 na) pass over the tensor.
         const Eigen::MatrixXd C_act = C.middleCols(n_core, na);
-        const std::vector<double> X = HartreeFock::Correlation::transform_eri(eri, nb, C_act, C_act, C, C);
-        const std::vector<double> Z = HartreeFock::Correlation::transform_eri(eri, nb, C_act, C, C_act, C);
+        const std::vector<double> X = transform_occupied_half(out, C, C, C_act, n_core, true);
+        const std::vector<double> Z = transform_occupied_half(out, C, C_act, C, n_core, false);
         auto ppaa = [&](int p, int a, int v, int w)
-        { return X[((static_cast<std::size_t>(v) * na + w) * nb + p) * nb + a]; };
+        { return X[((static_cast<std::size_t>(p) * nb + a) * na + v) * na + w]; };
         auto papa = [&](int p, int u, int a, int w)
-        { return Z[((static_cast<std::size_t>(u) * nb + p) * na + w) * nb + a]; };
+        { return Z[((static_cast<std::size_t>(p) * na + u) * nb + a) * na + w]; };
         auto G = [&](int t, int u, int v, int w)
         { return Gamma_vec[((static_cast<std::size_t>(t) * na + u) * na + v) * na + w]; };
 
