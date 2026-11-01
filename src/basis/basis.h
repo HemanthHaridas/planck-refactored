@@ -30,11 +30,6 @@ namespace HartreeFock
         // Read Gaussian94 basis sets
         std::expected<HartreeFock::Basis, std::string> read_gbs_basis(const std::string file_name, const HartreeFock::Molecule &molecule, const HartreeFock::BasisType &basis_type);
 
-        // ponytail: ECP integrals are not in H_core yet (docs/DEF2_ECP_SCOPE.md
-        // step 4), so any basis that carries an ECP is refused here. The error
-        // lists what was parsed. Delete once step 4 lands.
-        std::expected<void, std::string> reject_ecp_until_integrals(const HartreeFock::Basis &basis, const HartreeFock::Molecule &molecule);
-
     } // namespace BasisFunctions
 } // namespace HartreeFock
 #endif // !HF_BASIS_H

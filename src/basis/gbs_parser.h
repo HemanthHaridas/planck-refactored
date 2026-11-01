@@ -15,6 +15,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "base/types.h"
+
 namespace HartreeFock::BasisFunctions::detail
 {
     struct GbsPrimitive
@@ -57,6 +59,10 @@ namespace HartreeFock::BasisFunctions::detail
     // and any ECP blocks. Handles the SP "fused" shell type by splitting into
     // separate S and P shells. Returns a human-readable error on failure.
     std::expected<GbsFile, std::string> read_gbs(std::ifstream &input);
+
+    // The ECP operator a parsed block places on atom `atom_index` at `center` (Bohr).
+    HartreeFock::ECPPotential make_ecp_potential(const GbsEcp &ecp, const Eigen::Vector3d &center,
+                                                 std::size_t atom_index);
 } // namespace HartreeFock::BasisFunctions::detail
 
 #endif // HF_BASIS_GBS_PARSER_H

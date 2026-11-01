@@ -134,6 +134,7 @@ namespace HartreeFock
                 if (!basis_res)
                     return std::unexpected(basis_res.error());
                 sub._shells = std::move(*basis_res);
+                sub.sync_ecp_core_electrons();
 
                 // Nuclear repulsion + SCF data structures
                 if (auto res = sub.initialize(); !res)
@@ -145,8 +146,8 @@ namespace HartreeFock
 
                 auto [S, T] = _compute_1e(shellpairs, sub._shells.nbasis(),
                                           sub._integral._engine, nullptr);
-                Eigen::MatrixXd V = _compute_nuclear_attraction(
-                    shellpairs, sub._shells.nbasis(), sub._molecule,
+                Eigen::MatrixXd V = _compute_potential(
+                    shellpairs, sub._shells, sub._molecule,
                     sub._integral._engine, nullptr);
                 sub._overlap = S;
                 sub._hcore = T + V;

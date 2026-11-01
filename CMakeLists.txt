@@ -326,6 +326,42 @@ externalproject_add(
     BUILD_BYPRODUCTS ${LIBXC_INSTALL_DIR}/lib/libxc.a
 )
 
+# libecpint (MIT): ECP integrals and derivatives (docs/DEF2_ECP_SCOPE.md).
+# Pinned past v1.0.7 for two correctness fixes (#71 steep type-1 ECPs collapsing
+# to zero, #72 small-z Bessel). Built with Planck's own C++ compiler because its
+# API passes std::vector across the boundary (libc++ vs libstdc++ would not link).
+set(LIBECPINT_GIT_TAG 95203c68d1bb4134a235480d8c69c3014faaccf9)
+set(LIBECPINT_INSTALL_DIR ${SRC_DIR}/external/libecpint/install)
+externalproject_add(
+    libecpint_ep
+    PREFIX ${SRC_DIR}/external/libecpint
+    GIT_REPOSITORY https://github.com/robashaw/libecpint.git
+    GIT_TAG ${LIBECPINT_GIT_TAG}
+    UPDATE_DISCONNECTED TRUE
+    PATCH_COMMAND ${CMAKE_COMMAND} -P ${CMAKE_SOURCE_DIR}/cmake/patch_libecpint.cmake
+    CMAKE_ARGS
+        -DCMAKE_INSTALL_PREFIX=${LIBECPINT_INSTALL_DIR}
+        -DCMAKE_INSTALL_LIBDIR:STRING=lib
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+        -DBUILD_SHARED_LIBS:BOOL=OFF
+        -DLIBECPINT_USE_PUGIXML:BOOL=OFF
+        -DLIBECPINT_BUILD_TESTS:BOOL=OFF
+        -DLIBECPINT_BUILD_DOCS:BOOL=OFF
+    BUILD_BYPRODUCTS ${LIBECPINT_INSTALL_DIR}/lib/libecpint.a ${LIBECPINT_INSTALL_DIR}/lib/libFaddeeva.a
+)
+# H_core (src/integrals/ecp.cpp, in INT_SRC) needs it, and INT_SRC is compiled
+# into most targets, so link it everywhere rather than per target. Static, so
+# targets that never call it pull in nothing.
+file(MAKE_DIRECTORY ${LIBECPINT_INSTALL_DIR}/include/libecpint)
+add_library(ecpint STATIC IMPORTED GLOBAL)
+set_target_properties(ecpint PROPERTIES
+    IMPORTED_LOCATION ${LIBECPINT_INSTALL_DIR}/lib/libecpint.a
+    INTERFACE_LINK_LIBRARIES ${LIBECPINT_INSTALL_DIR}/lib/libFaddeeva.a
+    INTERFACE_INCLUDE_DIRECTORIES "${LIBECPINT_INSTALL_DIR}/include;${LIBECPINT_INSTALL_DIR}/include/libecpint")
+add_dependencies(ecpint libecpint_ep)
+link_libraries(ecpint)
+
 # Collect sources automatically
 file(GLOB BASE_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/base/*.h
@@ -779,6 +815,9 @@ endif()
 
 # Install executable
 install(TARGETS hartree-fock DESTINATION bin)
+# libecpint is linked statically, so its MIT notice ships with the binaries.
+install(FILES ${SRC_DIR}/external/libecpint/src/libecpint_ep/LICENSE
+        DESTINATION share/doc/planck RENAME libecpint-LICENSE)
 install(TARGETS planck-dft DESTINATION bin)
 
 # ── planck-mpi: unified hybrid MPI/OpenMP front end (opt-in) ───────────────────
@@ -2017,6 +2056,7 @@ if(BUILD_TESTING)
     add_executable(planck-working-state-rebuild
         ${CMAKE_SOURCE_DIR}/tests/working_state_rebuild.cpp
         ${SRC_DIR}/scf/working_state.cpp
+        ${SRC_DIR}/integrals/ecp.cpp
         ${SRC_DIR}/symmetry/symmetry.cpp
         ${SRC_DIR}/symmetry/integral_symmetry.cpp
         ${SRC_DIR}/basis/basis.cpp

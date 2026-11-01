@@ -12,7 +12,7 @@
 
 #include "basis/basis.h"
 #include "basis/gbs_parser.h"
-#include "integrals/os.h"
+#include "integrals/base.h"
 #include "integrals/shellpair.h"
 #include "io/logging.h"
 #include "lookup/elements.h"
@@ -154,7 +154,9 @@ namespace
                    const HartreeFock::Basis &atomic_basis,
                    const HartreeFock::Calculator &mol_calc)
     {
-        const unsigned int mult = atomic_minimal_multiplicity(Z);
+        // An ECP removes n_core electrons; the atom keeps Z for element lookups.
+        const int n_core = atomic_basis._ecps.empty() ? 0 : atomic_basis._ecps.front()._n_core;
+        const unsigned int mult = atomic_minimal_multiplicity(Z - n_core);
 
         // ── Build atomic Calculator ───────────────────────────────────────────
         HartreeFock::Calculator atom;
@@ -163,6 +165,7 @@ namespace
         atom._molecule.natoms = 1;
         atom._molecule.atomic_numbers.resize(1);
         atom._molecule.atomic_numbers[0] = Z;
+        atom._molecule.ecp_core_electrons.assign(1, n_core);
         atom._molecule.atomic_masses.resize(1);
         auto atom_element = element_from_z(static_cast<uint64_t>(Z));
         if (!atom_element)
@@ -200,8 +203,8 @@ namespace
         auto atom_pairs = build_shellpairs(atom._shells);
 
         auto [S_at, T_at] = HartreeFock::ObaraSaika::_compute_1e(atom_pairs, n_at, nullptr);
-        Eigen::MatrixXd V_at = HartreeFock::ObaraSaika::_compute_nuclear_attraction(
-            atom_pairs, n_at, atom._molecule, nullptr);
+        Eigen::MatrixXd V_at = _compute_potential(
+            atom_pairs, atom._shells, atom._molecule, atom._integral._engine, nullptr);
 
         atom._overlap = S_at;
         atom._hcore = T_at + V_at;
@@ -418,6 +421,7 @@ namespace HartreeFock
             if (!gbs_res)
                 return std::unexpected(gbs_res.error());
             const BasisSet &gbs = gbs_res->shells;
+            const auto &gbs_ecps = gbs_res->ecps;
 
             std::unordered_set<std::string> seen;
             std::unordered_map<std::string, HartreeFock::Basis> result;
@@ -440,6 +444,9 @@ namespace HartreeFock
                 auto atomic_basis = build_atomic_basis(it->second);
                 if (!atomic_basis)
                     return std::unexpected(atomic_basis.error());
+                if (auto ecp = gbs_ecps.find(sym); ecp != gbs_ecps.end())
+                    atomic_basis->_ecps.push_back(HartreeFock::BasisFunctions::detail::make_ecp_potential(
+                        ecp->second, Eigen::Vector3d::Zero(), 0));
                 result.emplace(sym, std::move(*atomic_basis));
             }
 

@@ -146,23 +146,10 @@ std::expected<HartreeFock::Basis, std::string> HartreeFock::BasisFunctions::read
         const bool ghost = i < molecule.is_ghost.size() && molecule.is_ghost[i];
         if (auto ecp_it = gbs_ecps.find(element); ecp_it != gbs_ecps.end() && !ghost)
         {
-            const auto to_terms = [](const auto &channel)
-            {
-                std::vector<HartreeFock::ECPTerm> terms;
-                for (const auto &t : channel)
-                    terms.push_back({t.n, t.exponent, t.coefficient});
-                return terms;
-            };
-            HartreeFock::ECPPotential ecp;
-            ecp._center = molecule._standard.row(i).transpose();
-            ecp._atom_index = i;
-            ecp._n_core = ecp_it->second.n_core;
-            ecp._local = to_terms(ecp_it->second.channels.front());
-            for (std::size_t c = 1; c < ecp_it->second.channels.size(); ++c)
-                ecp._semilocal.push_back(to_terms(ecp_it->second.channels[c]));
-            if (ecp._n_core >= molecule.atomic_numbers[i])
+            if (ecp_it->second.n_core >= molecule.atomic_numbers[i])
                 return std::unexpected("ECP core count >= Z for " + element);
-            basis._ecps.push_back(std::move(ecp));
+            basis._ecps.push_back(HartreeFock::BasisFunctions::detail::make_ecp_potential(
+                ecp_it->second, molecule._standard.row(i).transpose(), i));
         }
 
         // Now create Cartesian shells
@@ -236,21 +223,22 @@ std::expected<HartreeFock::Basis, std::string> HartreeFock::BasisFunctions::read
     return basis;
 }
 
-std::expected<void, std::string> HartreeFock::BasisFunctions::reject_ecp_until_integrals(
-    const HartreeFock::Basis &basis, const HartreeFock::Molecule &molecule)
+HartreeFock::ECPPotential HartreeFock::BasisFunctions::detail::make_ecp_potential(
+    const GbsEcp &gbs, const Eigen::Vector3d &center, std::size_t atom_index)
 {
-    if (basis._ecps.empty())
-        return {};
-    std::string msg = "ECP integrals are not implemented yet (docs/DEF2_ECP_SCOPE.md step 4).";
-    for (const HartreeFock::ECPPotential &ecp : basis._ecps)
+    const auto to_terms = [](const std::vector<GbsEcpTerm> &channel)
     {
-        auto element = element_from_z(molecule.atomic_numbers[ecp._atom_index]);
-        std::string terms = std::to_string(ecp._local.size());
-        for (const auto &channel : ecp._semilocal)
-            terms += "/" + std::to_string(channel.size());
-        msg += std::format("\n  atom {} {}: {} core electrons, Z_eff {}, L {}, terms {}",
-                           ecp._atom_index + 1, element ? element->symbol : "?", ecp._n_core,
-                           molecule.nuclear_charge(ecp._atom_index), ecp._semilocal.size(), terms);
-    }
-    return std::unexpected(msg);
+        std::vector<HartreeFock::ECPTerm> terms;
+        for (const auto &t : channel)
+            terms.push_back({t.n, t.exponent, t.coefficient});
+        return terms;
+    };
+    HartreeFock::ECPPotential ecp;
+    ecp._center = center;
+    ecp._atom_index = atom_index;
+    ecp._n_core = gbs.n_core;
+    ecp._local = to_terms(gbs.channels.front());
+    for (std::size_t c = 1; c < gbs.channels.size(); ++c)
+        ecp._semilocal.push_back(to_terms(gbs.channels[c]));
+    return ecp;
 }

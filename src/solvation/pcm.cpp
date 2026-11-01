@@ -159,7 +159,7 @@ HartreeFock::Solvation::build_pcm_state(
         for (std::size_t atom = 0; atom < calculator._molecule.natoms; ++atom)
         {
             const Eigen::Vector3d nucleus = calculator._molecule._standard.row(static_cast<Eigen::Index>(atom));
-            const double charge = static_cast<double>(calculator._molecule.atomic_numbers(static_cast<Eigen::Index>(atom)));
+            const double charge = calculator._molecule.nuclear_charge(atom);
             const double distance = (site.position - nucleus).norm();
             if (distance < 1.0e-6)
                 return std::unexpected("PCM tessera coincides with a nucleus");

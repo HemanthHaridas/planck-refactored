@@ -1,6 +1,5 @@
-# Boundary marker (docs/DEF2_ECP_SCOPE.md step 3): the iodine ECP block is
-# parsed (28 core electrons, Z_eff 25) but the run is refused until ECP
-# integrals are in H_core (step 4). planck-dft path.
+# Boundary marker (docs/DEF2_ECP_SCOPE.md step 6): planck-dft refuses an ECP
+# basis until DFT with ECPs is validated (H_core already carries the ECP).
 %begin_control
     basis       def2-SVP
     calculation energy

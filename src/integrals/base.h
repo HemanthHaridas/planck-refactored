@@ -4,6 +4,7 @@
 #include <utility>
 
 #include "base/types.h"
+#include "ecp.h"
 #include "hgp.h"
 #include "os.h"
 #include "rys.h"
@@ -29,6 +30,21 @@ inline Eigen::MatrixXd _compute_nuclear_attraction(
     const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr)
 {
     return HartreeFock::ObaraSaika::_compute_nuclear_attraction(shell_pairs, nbasis, molecule, sym_ops);
+}
+
+// The one-electron potential that goes into H_core: nuclear attraction (with
+// Z - n_core on ECP atoms) plus the ECP operator itself.
+inline Eigen::MatrixXd _compute_potential(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const HartreeFock::Basis &basis,
+    const HartreeFock::Molecule &molecule,
+    const HartreeFock::IntegralMethod &engine,
+    const std::vector<HartreeFock::SignedAOSymOp> *sym_ops = nullptr)
+{
+    Eigen::MatrixXd V = _compute_nuclear_attraction(shell_pairs, basis.nbasis(), molecule, engine, sym_ops);
+    if (!basis._ecps.empty())
+        V += HartreeFock::ECP::_compute_ecp(basis);
+    return V;
 }
 
 inline Eigen::MatrixXd _compute_external_charge_attraction(

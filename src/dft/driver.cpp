@@ -548,10 +548,11 @@ namespace DFT::Driver
                 return std::unexpected("DFT basis setup failed: " + basis_res.error());
             calculator._shells = std::move(*basis_res);
             calculator.sync_ecp_core_electrons();
-            if (auto ecp = HartreeFock::BasisFunctions::reject_ecp_until_integrals(
-                    calculator._shells, calculator._molecule);
-                !ecp)
-                return std::unexpected(ecp.error());
+            // ponytail: ECP DFT waits for spherical DFT (docs/DEF2_ECP_SCOPE.md
+            // step 6); H_core already carries the ECP, so lifting this is the gate.
+            if (!calculator._shells._ecps.empty())
+                return std::unexpected("ECP basis sets are not supported in planck-dft yet "
+                                       "(docs/DEF2_ECP_SCOPE.md step 6)");
             calculator.initialize();
             return {};
         }
@@ -633,9 +634,9 @@ namespace DFT::Driver
                 calculator._integral._engine,
                 calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
 
-            const Eigen::MatrixXd V = _compute_nuclear_attraction(
+            const Eigen::MatrixXd V = _compute_potential(
                 shell_pairs,
-                calculator._shells.nbasis(),
+                calculator._shells,
                 calculator._molecule,
                 calculator._integral._engine,
                 calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);

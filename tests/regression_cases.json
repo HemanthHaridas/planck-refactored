@@ -1695,7 +1695,7 @@
     "Zero-point energy :",
     "Converged :                   true"
    ],
-   "_pyscf_reference": "d-function guard for the range-separated (HSE06) Hessian/optimizer path. PySCF 2.13.0 RKS HSE06/6-31G* cart, geomTRIC opt + analytic Hessian, grids.level=4: freqs 1722.07/3794.20/3919.88 cm-1, E=-76.33242903 Eh. Planck (fine grid, semi-numerical Hessian): 1722.70/3789.39/3915.57 cm-1, E=-76.33235594 Eh -> max |\u0394freq| 4.8 cm-1, \u0394E ~7e-5 Eh (different grids/convergence, nearby stationary points). Confirms no d-function failure mode; smoke-gated only (semi-numerical freqs drift with grid/step, so no exact cm-1 pin)."
+   "_pyscf_reference": "d-function guard for the range-separated (HSE06) Hessian/optimizer path. PySCF 2.13.0 RKS HSE06/6-31G* cart, geomTRIC opt + analytic Hessian, grids.level=4: freqs 1722.07/3794.20/3919.88 cm-1, E=-76.33242903 Eh. Planck (fine grid, semi-numerical Hessian): 1722.70/3789.39/3915.57 cm-1, E=-76.33235594 Eh -> max |Δfreq| 4.8 cm-1, ΔE ~7e-5 Eh (different grids/convergence, nearby stationary points). Confirms no d-function failure mode; smoke-gated only (semi-numerical freqs drift with grid/step, so no exact cm-1 pin)."
   },
   {
    "id": "water_radical_cation_ump2_gradient_smoke",
@@ -2488,7 +2488,7 @@
    "contains": [
     "Point Group :                 C2v",
     "Vibrational Frequencies :",
-    "Mode    Symmetry    Frequency (cm\u207b\u00b9)",
+    "Mode    Symmetry    Frequency (cm⁻¹)",
     "1  A1",
     "2  A1",
     "3  B2",
@@ -4056,7 +4056,7 @@
     "Computing analytic nuclear gradient",
     "Nuclear Gradient (Ha/Bohr) :"
    ],
-   "_pyscf_reference": "PySCF 6-31g* RHF, mol.cart=False (spherical AO), water at the input geometry: E=-76.009125642007 Eh, gradient max|g|=1.47293665e-2 Ha/Bohr, rms|g|=6.9308072e-3 Ha/Bohr. Reference computed by tests/pyscf-style script; per-component values: O z = +0.0147293665, H y = \u00b10.0073107264, H z = -0.0073646832 Ha/Bohr.",
+   "_pyscf_reference": "PySCF 6-31g* RHF, mol.cart=False (spherical AO), water at the input geometry: E=-76.009125642007 Eh, gradient max|g|=1.47293665e-2 Ha/Bohr, rms|g|=6.9308072e-3 Ha/Bohr. Reference computed by tests/pyscf-style script; per-component values: O z = +0.0147293665, H y = ±0.0073107264, H z = -0.0073646832 Ha/Bohr.",
    "checks": [
     {
      "type": "metric_close",
@@ -5228,8 +5228,123 @@
    "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP, first-row transition metal), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903). Residual 1.2e-9 (4.5e-13 relative) survives tight convergence in both codes; not the Bohr constant."
   },
   {
-   "id": "hi_rhf_def2svp_ecp_rejected",
-   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp_rejected.hfinp",
+   "id": "hi_rhf_def2svp_ecp",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "smoke",
+    "def2",
+    "ecp"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -297.2315316634,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP_SCOPE.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr."
+  },
+  {
+   "id": "hi_rhf_def2tzvp_ecp_sad_symm",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2tzvp_ecp_sad_symm.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -297.2420092462,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP_SCOPE.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr."
+  },
+  {
+   "id": "agcl_rhf_def2svp_ecp",
+   "input": "tests/inputs/regression/hf/agcl_rhf_def2svp_ecp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -605.4799989662,
+     "atol": 2e-09
+    }
+   ],
+   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP_SCOPE.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr. Planck sits 1.1e-9 off (4.5e-13 relative); pinned at 2e-9 like zncl2_rhf_spherical_def2svp, the other Cl case."
+  },
+  {
+   "id": "pdco_rhf_def2svp_ecp",
+   "input": "tests/inputs/regression/hf/pdco_rhf_def2svp_ecp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -239.6604996193,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP_SCOPE.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr."
+  },
+  {
+   "id": "auh_h2o_rhf_def2svp_ecp",
+   "input": "tests/inputs/regression/hf/auh_h2o_rhf_def2svp_ecp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -211.3002206624,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP_SCOPE.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr."
+  },
+  {
+   "id": "hi_rhf_def2svp_ecp_gradient_rejected",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp_gradient_rejected.hfinp",
    "executable": "hartree-fock",
    "tags": [
     "smoke",
@@ -5238,10 +5353,10 @@
    ],
    "expected_exit_code": 1,
    "contains": [
-    "ECP integrals are not implemented yet",
+    "ECP analytic gradients are not implemented yet",
     "atom 2 I: 28 core electrons, Z_eff 25, L 3, terms 4/7/8/10"
    ],
-   "_note": "Boundary marker, docs/DEF2_ECP_SCOPE.md step 3: the iodine ECP block parses (term counts match def2-SVP) and Z_eff = 53 - 28 reaches nuclear_charge(); the run is refused until step 4. Replace with an energy gate when ECP integrals land."
+   "_note": "Boundary marker, docs/DEF2_ECP_SCOPE.md step 5: gradient-consuming workflows refuse an ECP basis until the ECP nuclear derivative lands."
   },
   {
    "id": "hi_rks_def2svp_ecp_rejected",
@@ -5254,10 +5369,9 @@
    ],
    "expected_exit_code": 1,
    "contains": [
-    "ECP integrals are not implemented yet",
-    "atom 2 I: 28 core electrons, Z_eff 25, L 3, terms 4/7/8/10"
+    "ECP basis sets are not supported in planck-dft yet"
    ],
-   "_note": "Boundary marker, docs/DEF2_ECP_SCOPE.md step 3: the iodine ECP block parses (term counts match def2-SVP) and Z_eff = 53 - 28 reaches nuclear_charge(); the run is refused until step 4. Replace with an energy gate when ECP integrals land."
+   "_note": "Boundary marker, docs/DEF2_ECP_SCOPE.md step 6: planck-dft refuses an ECP basis until DFT with ECPs is validated against PySCF."
   }
  ]
 }

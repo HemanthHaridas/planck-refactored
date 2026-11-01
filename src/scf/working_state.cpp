@@ -46,8 +46,8 @@ HartreeFock::SCF::rebuild_basis_dependent_state(HartreeFock::Calculator &calc)
     auto [S, T] =
         _compute_1e(shellpairs, calc._shells.nbasis(), calc._integral._engine,
                     calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
-    Eigen::MatrixXd V = _compute_nuclear_attraction(
-        shellpairs, calc._shells.nbasis(), calc._molecule, calc._integral._engine,
+    Eigen::MatrixXd V = _compute_potential(
+        shellpairs, calc._shells, calc._molecule, calc._integral._engine,
         calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
 
     // Cartesian engine output → working basis. In spherical mode the lift uses

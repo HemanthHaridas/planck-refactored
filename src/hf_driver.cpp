@@ -452,10 +452,22 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     }
     calculator._shells = std::move(*basis_res);
     calculator.sync_ecp_core_electrons();
-    if (auto ecp = HartreeFock::BasisFunctions::reject_ecp_until_integrals(calculator._shells, calculator._molecule); !ecp)
+    if (auto ecp = HartreeFock::ECP::describe_ecps(calculator._shells, calculator._molecule); !ecp)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "ECP :", ecp.error());
         return EXIT_FAILURE;
+    }
+    else if (!ecp->empty())
+    {
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "ECP :", *ecp);
+        // ponytail: no ECP nuclear derivative yet (docs/DEF2_ECP_SCOPE.md step 5).
+        if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "ECP :",
+                                         "ECP analytic gradients are not implemented yet "
+                                         "(docs/DEF2_ECP_SCOPE.md step 5); only single points run");
+            return EXIT_FAILURE;
+        }
     }
 
     // ── Spherical-harmonic basis: supported-feature gate (Phase 2, Step 2.0) ─────
@@ -757,7 +769,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                 auto [S, T] = _compute_1e(shellpairs, large_nb, calculator._integral._engine,
                                           calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
                 HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing nuclear attraction matrix");
-                Eigen::MatrixXd V = _compute_nuclear_attraction(shellpairs, large_nb, calculator._molecule,
+                Eigen::MatrixXd V = _compute_potential(shellpairs, calculator._shells, calculator._molecule,
                                                                 calculator._integral._engine,
                                                                 calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
                 HartreeFock::Logger::blank();
@@ -969,7 +981,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Overlap and kinetic done");
 
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Computing nuclear attraction matrix");
-        Eigen::MatrixXd V = _compute_nuclear_attraction(shellpairs, calculator._shells.nbasis(),
+        Eigen::MatrixXd V = _compute_potential(shellpairs, calculator._shells,
                                                         calculator._molecule, calculator._integral._engine,
                                                         calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "1e Integrals :", "Nuclear attraction done");
