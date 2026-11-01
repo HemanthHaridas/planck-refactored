@@ -1965,10 +1965,14 @@ PySCF's SAD-start answer. 15/15 CASSCF regressions pass.
   `_compute_fock_rhf`, G[dD_c] memoized for the CI right-hand side).
   cc-pVTZ 24.3 -> 19.6 s, cc-pVTZ C1 27.4 -> 23.6 s, cc-pVDZ 0.59 -> 0.45 s.
   Still 10-17x PySCF at cc-pVTZ; next is a re-profile;
-- C1 CASSCF runs are not bitwise reproducible: water/cc-pVDZ C1 at 4 threads
-  varies -76.0781256180 .. -76.0781256195 across identical runs (also on
-  `305de17a`). Diverges ~1e-10 in macro 2; symmetric cases repeat exactly.
-  Below every gate; source not found;
+- C1 CASSCF run-to-run nondeterminism (~1e-9 Eh) FIXED (N5, 2026-11-01):
+  the 1-/2-RDM builds (`src/post_hf/ci/rdm.cpp`) merged per-thread partials
+  under `omp critical`. Now fixed-bin partials summed in bin order, like the
+  FCI sigma build; gated by `water_casscf44_c1_ccpvdz_threads1/4` (atol 0);
+- N5 (2026-11-01): `transform_eri` quarters 1-3 had the contracted index
+  innermost (first quarter read the AO tensor at stride nb^3, 37 % of a
+  cc-pVTZ CASSCF run); interchanged, bit-identical. cc-pVTZ 19.6 -> 13.3 s,
+  cc-pVTZ C1 23.6 -> 15.0 s (PySCF 1.16 / 2.30 s). Shared with MP2/CC;
 - the RI path is still FD-Hessian with a full-leg-first transform.
 
 #### Unreproduced OpenMP hang in CASSCF (seen once, 2026-10-28)

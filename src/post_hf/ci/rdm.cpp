@@ -2,7 +2,9 @@
 
 #include "post_hf/ci/strings.h"
 
+#include <algorithm>
 #include <bit>
+#include <vector>
 
 namespace
 {
@@ -35,6 +37,25 @@ namespace
         for_each_set_bit((~bits) & mask, fn);
     }
 
+    // The RDM builds scatter into per-bin partials summed in fixed bin order,
+    // the same discipline as the FCI sigma build (ci.cpp): bins are a fixed
+    // function of the task index and schedule(static, bin_size) makes one chunk
+    // exactly one bin, so every partial, and the sum, is independent of the
+    // thread count and of timing. A per-thread partial merged under
+    // omp critical (the old form) summed in completion order and moved CASSCF
+    // energies by ~1e-9 between identical runs.
+    constexpr int kRdmBins = 64;
+
+    inline int rdm_bin_size(int total_tasks)
+    {
+        return std::max(1, (total_tasks + kRdmBins - 1) / kRdmBins);
+    }
+
+    inline int rdm_bin_count(int total_tasks, int bin_size)
+    {
+        return (total_tasks + bin_size - 1) / bin_size;
+    }
+
     inline std::size_t idx4(int p, int q, int r, int s, int n_act)
     {
         return static_cast<std::size_t>(((p * n_act + q) * n_act + r) * n_act + s);
@@ -57,16 +78,16 @@ namespace
         Eigen::MatrixXd gamma = Eigen::MatrixXd::Zero(n_act, n_act);
 
         const int total_tasks = nr * dim;
-#ifdef USE_OPENMP
-#pragma omp parallel
-#endif
+        const int bin_size = rdm_bin_size(total_tasks);
+        std::vector<Eigen::MatrixXd> partials(
+            static_cast<std::size_t>(rdm_bin_count(total_tasks, bin_size)), Eigen::MatrixXd::Zero(n_act, n_act));
         {
-            Eigen::MatrixXd gamma_local = Eigen::MatrixXd::Zero(n_act, n_act);
 #ifdef USE_OPENMP
-#pragma omp for nowait schedule(dynamic)
+#pragma omp parallel for schedule(static, bin_size)
 #endif
             for (int task = 0; task < total_tasks; ++task)
             {
+                Eigen::MatrixXd &gamma_local = partials[static_cast<std::size_t>(task / bin_size)];
                 const int root = task / dim;
                 const int j = task % dim;
                 const double w = weights(root);
@@ -124,10 +145,8 @@ namespace
                 }
             }
 
-#ifdef USE_OPENMP
-#pragma omp critical
-#endif
-            gamma.noalias() += gamma_local;
+            for (const Eigen::MatrixXd &partial : partials)
+                gamma += partial;
         }
 
         return gamma;
@@ -150,16 +169,16 @@ namespace
         std::vector<double> Gamma(static_cast<std::size_t>(n_act) * n_act * n_act * n_act, 0.0);
 
         const int total_tasks = nr * dim;
-#ifdef USE_OPENMP
-#pragma omp parallel
-#endif
+        const int bin_size = rdm_bin_size(total_tasks);
+        std::vector<std::vector<double>> partials(
+            static_cast<std::size_t>(rdm_bin_count(total_tasks, bin_size)), std::vector<double>(Gamma.size(), 0.0));
         {
-            std::vector<double> gamma_local(Gamma.size(), 0.0);
 #ifdef USE_OPENMP
-#pragma omp for nowait schedule(dynamic)
+#pragma omp parallel for schedule(static, bin_size)
 #endif
             for (int task = 0; task < total_tasks; ++task)
             {
+                std::vector<double> &gamma_local = partials[static_cast<std::size_t>(task / bin_size)];
                 const int root = task / dim;
                 const int j = task % dim;
                 const double w = weights(root);
@@ -249,11 +268,9 @@ namespace
                 }); });
             }
 
-#ifdef USE_OPENMP
-#pragma omp critical
-#endif
-            for (std::size_t i = 0; i < Gamma.size(); ++i)
-                Gamma[i] += gamma_local[i];
+            for (const std::vector<double> &partial : partials)
+                for (std::size_t i = 0; i < Gamma.size(); ++i)
+                    Gamma[i] += partial[i];
         }
 
         return Gamma;

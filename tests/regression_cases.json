@@ -3916,6 +3916,54 @@
    ]
   },
   {
+   "id": "water_casscf44_c1_ccpvdz_threads1",
+   "env": {
+    "OMP_NUM_THREADS": "1"
+   },
+   "input": "tests/inputs/regression/post_hf/water_casscf44_c1_ccpvdz.hfinp",
+   "tags": [
+    "core",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "CASSCF :                      Converged."
+   ],
+   "timeout_s": 120,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "casscf_total_energy",
+     "expected": -76.0781256214,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "water_casscf44_c1_ccpvdz_threads4",
+   "env": {
+    "OMP_NUM_THREADS": "4"
+   },
+   "input": "tests/inputs/regression/post_hf/water_casscf44_c1_ccpvdz.hfinp",
+   "tags": [
+    "core",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "CASSCF :                      Converged."
+   ],
+   "timeout_s": 120,
+   "checks": [
+    {
+     "type": "metric_close_case",
+     "metric": "casscf_total_energy",
+     "case": "water_casscf44_c1_ccpvdz_threads1",
+     "atol": 0.0
+    }
+   ]
+  },
+  {
    "id": "water_fcidump_c2v_sto3g",
    "input": "tests/inputs/regression/post_hf/water_fcidump_c2v_sto3g.hfinp",
    "tags": [

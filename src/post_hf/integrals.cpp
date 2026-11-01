@@ -93,13 +93,25 @@ namespace HartreeFock::Correlation
 #ifdef USE_OPENMP
 #pragma omp parallel for collapse(2) schedule(dynamic)
 #endif
+        //
+        // The contracted index sits outside the contiguous sigma loop, so both
+        // tensors stream with unit stride; each element still sums over the
+        // contracted index in ascending order, so the result is unchanged. With
+        // mu innermost the AO read strode nb^3 and this quarter was 37 % of a
+        // water/cc-pVTZ CASSCF run. Quarters 2 and 3 have the same shape.
         for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t nu = 0; nu < nb; ++nu)
                 for (std::size_t lam = 0; lam < nb; ++lam)
-                    for (std::size_t sig = 0; sig < nb; ++sig)
-                        for (std::size_t mu = 0; mu < nb; ++mu)
-                            T1[i * nb3 + nu * nb2 + lam * nb + sig] +=
-                                C1(mu, i) * eri[mu * nb3 + nu * nb2 + lam * nb + sig];
+                {
+                    double *t = T1.data() + i * nb3 + nu * nb2 + lam * nb;
+                    for (std::size_t mu = 0; mu < nb; ++mu)
+                    {
+                        const double c = C1(mu, i);
+                        const double *e = eri.data() + mu * nb3 + nu * nb2 + lam * nb;
+                        for (std::size_t sig = 0; sig < nb; ++sig)
+                            t[sig] += c * e[sig];
+                    }
+                }
 
         // T2[i,a,λ,σ] = Σ_ν C2(ν,a) * T1[i,ν,λ,σ]   shape: n1 × n2 × nb × nb
         std::vector<double> T2(n1 * n2 * nb * nb, 0.0);
@@ -109,10 +121,16 @@ namespace HartreeFock::Correlation
         for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t a = 0; a < n2; ++a)
                 for (std::size_t lam = 0; lam < nb; ++lam)
-                    for (std::size_t sig = 0; sig < nb; ++sig)
-                        for (std::size_t nu = 0; nu < nb; ++nu)
-                            T2[i * n2 * nb * nb + a * nb * nb + lam * nb + sig] +=
-                                C2(nu, a) * T1[i * nb3 + nu * nb2 + lam * nb + sig];
+                {
+                    double *t = T2.data() + i * n2 * nb * nb + a * nb * nb + lam * nb;
+                    for (std::size_t nu = 0; nu < nb; ++nu)
+                    {
+                        const double c = C2(nu, a);
+                        const double *e = T1.data() + i * nb3 + nu * nb2 + lam * nb;
+                        for (std::size_t sig = 0; sig < nb; ++sig)
+                            t[sig] += c * e[sig];
+                    }
+                }
 
         T1.clear();
         T1.shrink_to_fit();
@@ -125,10 +143,16 @@ namespace HartreeFock::Correlation
         for (std::size_t i = 0; i < n1; ++i)
             for (std::size_t a = 0; a < n2; ++a)
                 for (std::size_t j = 0; j < n3; ++j)
-                    for (std::size_t sig = 0; sig < nb; ++sig)
-                        for (std::size_t lam = 0; lam < nb; ++lam)
-                            T3[i * n2 * n3 * nb + a * n3 * nb + j * nb + sig] +=
-                                C3(lam, j) * T2[i * n2 * nb * nb + a * nb * nb + lam * nb + sig];
+                {
+                    double *t = T3.data() + i * n2 * n3 * nb + a * n3 * nb + j * nb;
+                    for (std::size_t lam = 0; lam < nb; ++lam)
+                    {
+                        const double c = C3(lam, j);
+                        const double *e = T2.data() + i * n2 * nb * nb + a * nb * nb + lam * nb;
+                        for (std::size_t sig = 0; sig < nb; ++sig)
+                            t[sig] += c * e[sig];
+                    }
+                }
 
         T2.clear();
         T2.shrink_to_fit();
