@@ -2321,6 +2321,21 @@ namespace DFT::Driver
 
                     if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter))
                     {
+                        // Store orbitals of the true KS matrix, not the DIIS
+                        // extrapolation (same reason as run_rhf: with ~0 error
+                        // vectors the extrapolated eigenvalues are arbitrary,
+                        // and the gradient's W is built from them).
+                        if (do_diis)
+                        {
+                            auto final_diag = diagonalize_in_ao_basis(calculator, X, fock, "KS");
+                            if (!final_diag)
+                                return std::unexpected(final_diag.error());
+                            auto &alpha = calculator._info._scf.alpha;
+                            alpha.mo_coefficients = final_diag->coefficients;
+                            alpha.mo_energies = final_diag->energies;
+                            alpha.mo_symmetry = final_diag->mo_symmetry;
+                            alpha.density = density_from_orbitals(alpha.mo_coefficients, n_occ, 2.0);
+                        }
                         calculator._info._is_converged = true;
                         result.converged = true;
                         HartreeFock::Logger::scf_footer();
@@ -2616,7 +2631,8 @@ namespace DFT::Driver
                 }
 
                 const bool do_diis_uks = use_diis && !soscf_active;
-                const auto fock_pair_diag = (do_diis_uks && diis.ready())
+                const bool uks_extrapolated = do_diis_uks && diis.ready();
+                const auto fock_pair_diag = uks_extrapolated
                     ? diis.extrapolate() : std::make_pair(fock_alpha_iteration, fock_beta_iteration);
                 const Eigen::MatrixXd &fock_alpha_diag = fock_pair_diag.first;
                 const Eigen::MatrixXd &fock_beta_diag = fock_pair_diag.second;
@@ -3024,6 +3040,28 @@ namespace DFT::Driver
                         HartreeFock::Logger::logging(
                             HartreeFock::LogLevel::Info, "DFT UKS level shift :",
                             "Unshifted canonical orbitals verified for post-KS handoff");
+                    }
+                    // Store orbitals of the true KS matrices, not the DIIS
+                    // extrapolation (same reason as run_uhf; the PT2 check above
+                    // guards the same defect for double hybrids only).
+                    if (uks_extrapolated)
+                    {
+                        auto final_a = diagonalize_in_ao_basis(calculator, X, fock_alpha, "Alpha KS");
+                        if (!final_a)
+                            return std::unexpected(final_a.error());
+                        auto final_b = diagonalize_in_ao_basis(calculator, X, fock_beta, "Beta KS");
+                        if (!final_b)
+                            return std::unexpected(final_b.error());
+                        auto &alpha = calculator._info._scf.alpha;
+                        auto &beta = calculator._info._scf.beta;
+                        alpha.mo_coefficients = std::move(final_a->coefficients);
+                        alpha.mo_energies = std::move(final_a->energies);
+                        alpha.mo_symmetry = std::move(final_a->mo_symmetry);
+                        beta.mo_coefficients = std::move(final_b->coefficients);
+                        beta.mo_energies = std::move(final_b->energies);
+                        beta.mo_symmetry = std::move(final_b->mo_symmetry);
+                        alpha.density = density_from_orbitals(alpha.mo_coefficients, n_alpha, 1.0);
+                        beta.density = density_from_orbitals(beta.mo_coefficients, n_beta, 1.0);
                     }
                     calculator._info._is_converged = true;
                     result.converged = true;
@@ -4357,10 +4395,11 @@ namespace DFT::Driver
             // Assemble the KS gradient as HF-like derivative terms plus the XC
             // grid derivative. Range separation only changes the exchange-kernel
             // metadata passed into the HF-like piece.
+            const bool with_breakdown = dft_gradient_debug_enabled();
             auto wf_grad =
                 calculator._scf._scf == HartreeFock::SCFType::UHF
-                    ? HartreeFock::Gradient::compute_uks_gradient(calculator, prepared.shell_pairs, exchange_kernel)
-                    : HartreeFock::Gradient::compute_rks_gradient(calculator, prepared.shell_pairs, exchange_kernel);
+                    ? HartreeFock::Gradient::compute_uks_gradient(calculator, prepared.shell_pairs, exchange_kernel, with_breakdown)
+                    : HartreeFock::Gradient::compute_rks_gradient(calculator, prepared.shell_pairs, exchange_kernel, with_breakdown);
             if (!wf_grad)
                 return std::unexpected("DFT Coulomb/exchange gradient failed: " + wf_grad.error());
 
@@ -4637,49 +4676,20 @@ namespace DFT::Driver
                 overlap_ao.rows() != nbasis || overlap_ao.cols() != nbasis ||
                 !relaxed_ao.allFinite() || !overlap_ao.allFinite())
                 return std::unexpected("DH Eq. 33 direct h/S contraction: invalid AO density dimensions.");
-            auto bf_atom = dh_eq33_basis_function_atoms(calculator);
-            if (!bf_atom) return std::unexpected(bf_atom.error());
+            // Σ D dh/dR and Σ W dS/dR; only the symmetric parts of D and W enter.
+            auto g = HartreeFock::Gradient::one_electron_gradient(
+                calculator, build_shellpairs(calculator._shells), relaxed_ao, overlap_ao);
+            if (!g) return std::unexpected("DH Eq. 33 direct h/S contraction: " + g.error());
 
             const int ncoord = static_cast<int>(3 * calculator._molecule.natoms);
             Gradient::DHEq33OneElectronOverlapGradient out{
                 Eigen::VectorXd::Zero(ncoord), Eigen::VectorXd::Zero(ncoord)};
-            const auto &basis_functions = calculator._shells._basis_functions;
-            for (int mu = 0; mu < nbasis; ++mu)
-                for (int nu = 0; nu < nbasis; ++nu)
+            const Eigen::MatrixXd core = g->core();
+            for (Eigen::Index atom = 0; atom < core.rows(); ++atom)
+                for (int q = 0; q < 3; ++q)
                 {
-                    const HartreeFock::ShellPair pair_mu_nu(
-                        basis_functions[static_cast<std::size_t>(mu)], basis_functions[static_cast<std::size_t>(nu)]);
-                    const HartreeFock::ShellPair pair_nu_mu(
-                        basis_functions[static_cast<std::size_t>(nu)], basis_functions[static_cast<std::size_t>(mu)]);
-                    const auto derivative_mu = HartreeFock::ObaraSaika::_compute_1e_deriv_A(pair_mu_nu);
-                    const auto derivative_nu = HartreeFock::ObaraSaika::_compute_1e_deriv_A(pair_nu_mu);
-                    const double d = relaxed_ao(mu, nu);
-                    const double w = overlap_ao(mu, nu);
-                    for (std::size_t atom = 0; atom < calculator._molecule.natoms; ++atom)
-                        for (int q = 0; q < 3; ++q)
-                        {
-                            const Eigen::Index coordinate = 3 * static_cast<Eigen::Index>(atom) + q;
-                            double h = HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(
-                                pair_mu_nu, calculator._molecule._standard.row(static_cast<Eigen::Index>(atom)).transpose(),
-                                calculator._molecule.atomic_numbers[atom], q);
-                            double s = 0.0;
-                            if ((*bf_atom)[static_cast<std::size_t>(mu)] == static_cast<int>(atom))
-                            {
-                                s += derivative_mu[q];
-                                h += derivative_mu[q + 3] +
-                                    HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(
-                                        pair_mu_nu, calculator._molecule)[q];
-                            }
-                            if ((*bf_atom)[static_cast<std::size_t>(nu)] == static_cast<int>(atom))
-                            {
-                                s += derivative_nu[q];
-                                h += derivative_nu[q + 3] +
-                                    HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(
-                                        pair_nu_mu, calculator._molecule)[q];
-                            }
-                            out.one_electron(coordinate) += d * h;
-                            out.overlap(coordinate) += w * s;
-                        }
+                    out.one_electron(3 * atom + q) = core(atom, q);
+                    out.overlap(3 * atom + q) = g->overlap(atom, q);
                 }
             return out;
         }

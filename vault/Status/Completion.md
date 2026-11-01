@@ -254,6 +254,19 @@ historical design context, but they are no longer the source of truth for
 
 ### CASSCF / SA-CASSCF status
 
+- **Performance (2026-10-28..11-01, P1-N9, through `a224881a`):** water
+  CAS(4,4) is faster than PySCF at 6-31G (0.069 vs 0.34 s), cc-pVDZ (0.177 vs
+  0.27 s; C1 0.266 vs 0.43 s) and cc-pVTZ C1 (1.86 vs 2.30 s), and 1.3x
+  behind at cc-pVTZ C2v (1.49 vs 1.16 s); it started at 13.4 s for cc-pVDZ and
+  ~176 s per macro at cc-pVTZ. Exact CI-relaxed orbital Hessian (two missing
+  coupling terms restored), solved matrix-free with a seed vector so it still
+  leaves zero-gradient saddles; trust region from the exact model; the Newton
+  step taken as soon as it improves (22 -> 2 evaluations per macro); and one
+  half transform (mu nu|lam i) per evaluation from which every Fock build and
+  mixed integral block is an O(nb^3) contraction. RDM reductions made
+  thread-count invariant. Two saddle pins re-pinned to minima (water SA-2,
+  `oh_casscf_rohf_sto3g`). Answer: `docs/CASSCF_PERFORMANCE.md`.
+
 - Shared-kappa state-averaged coupled orbital/CI solve is the primary production path
 - Exact CI-response RHS is the default
 - FD-based SA orbital Hessian action (`delta_g_sa_action`) is implemented and wired
@@ -401,6 +414,24 @@ historical design context, but they are no longer the source of truth for
 - PySCF-validated He2/cc-pVDZ counterpoise decomposition
 
 ### Recent fixes now considered landed
+
+- **Converged SCF orbitals come from the true Fock, not the DIIS
+  extrapolation (2026-10-27).** RHF, UHF, RKS and UKS stored the eigenpairs of
+  the DIIS-extrapolated Fock at convergence. These usually agree with the true
+  Fock to the DIIS residual, but when every error vector is ~0 (H2/STO-3G: any
+  symmetric density commutes with F) the DIIS weights are arbitrary and the
+  extrapolated matrix carries other iterations' eigenvalues with the same
+  eigenvectors. The gradient's energy-weighted density W is built from those
+  energies: in the H2 geometry optimization, the step-1 1e/Pulay term was off
+  by 1.6e-3 Ha/Bohr and the line search failed. It was hidden whenever the
+  error came out exactly 0, and surfaced when G2's new summation order moved
+  the geometry by 1e-16 (G1 with `engine hgp` failed the same way). Now each
+  path re-diagonalizes the true Fock once at convergence when DIIS
+  extrapolated, and rebuilds the density from those orbitals, as PySCF does
+  (UHF already did this for level shift; UKS only for the DH PT2 handoff).
+  ROHF was unaffected (its stored energies are diag(Cᵀ F_α C) and its W is
+  built from Fock matrices). Gated by `h2_optfreq_smoke`; extended suite
+  135/139 (the known rccsdt cases).
 
 - **2D Rys block kernel in Auto's Fock build (K2.1b/K2.1c, 2026-10-26).**
   `RysBlockKernel` (`src/integrals/rys_block_eri.h`) is libcint's
@@ -1288,7 +1319,12 @@ historical design context, but they are no longer the source of truth for
 
 ## CASSCF PySCF Gate Table
 
-Suite status: **11/11 passing**
+Suite status: **10/10 passing, 1 re-pinned** (2026-10-28). The water SA-2
+hcore reference, -74.7751378, is a measured saddle of the SA-2 energy (one
+negative CI-relaxed Hessian eigenvalue). With the exact Hessian (CASSCF
+performance scope, P3c) Planck descends to the minimum, -74.7877864783, which
+is also PySCF's own SAD-start answer. See
+`tests/benchmarks/casscf/pyscf_reference/pyscf_reference_energies.md`.
 
 PySCF version: 2.12.1. All scripts use `mol.cart = True` to match Planck
 Cartesian-basis references. Tolerance: `1e-5 Eh`.
@@ -1304,7 +1340,7 @@ Cartesian-basis references. Tolerance: `1e-5 Eh`.
 | ethylene_casscf_321g | CAS(2e,2o) | 3-21G | -77.5145223959 | -77.5145223872 | 8.7e-09 | PASS |
 | ethylene_casscf_321g_nroot2 | CAS(2e,2o) | 3-21G | -77.5145223959 | -77.5145223872 | 8.7e-09 | PASS |
 | ethylene_casscf_ccpvdz | CAS(2e,2o) | cc-pVDZ | -77.9524856209 | -77.9524855977 | 2.3e-08 | PASS |
-| water_cas44_sto3g_sa2 | CAS(4e,4o) SA-2 | STO-3G | -74.7751378317 | -74.7751377977 | 3.4e-08 | PASS |
+| water_cas44_sto3g_sa2 | CAS(4e,4o) SA-2 | STO-3G | -74.7751378317 | -74.7877864783 | 1.26e-02 | RE-PINNED (PySCF value is a saddle) |
 | ethylene_cas44_sto3g_sa2 | CAS(4e,4o) SA-2 | STO-3G | -77.0034974774 | -77.0034974301 | 4.7e-08 | PASS |
 
 ### CASSCF validation notes
@@ -1312,7 +1348,8 @@ Cartesian-basis references. Tolerance: `1e-5 Eh`.
 - The committed gate suite is still the clearest validation point for the CASSCF stack.
 - Two ROHF CASSCF cases are gated alongside the RHF table: `o2_casscf_rohf_sto3g`
   (triplet O2 CAS(8,6), Δ ~9e-9 Eh) and `oh_casscf_rohf_sto3g` (doublet OH
-  CAS(5,4), Δ ~1.6e-8 Eh), both vs PySCF 2.13.0 with `mol.cart = True`.
+  CAS(5,4), Δ ~7e-9 Eh; re-pinned 2026-11-01 from a saddle at -74.3854277 to
+  the minimum -74.3867176233), both vs PySCF 2.13.0 with `mol.cart = True`.
 - The water SA-2 SAD-start uphill-enabled case reaches the PySCF SAD-start basin
   within `3.6e-08 Eh`.
 - The baseline monotone SAD-start landing is also intentionally preserved as a

@@ -34,6 +34,8 @@ namespace HartreeFock
             Eigen::MatrixXd total;
         };
 
+        // Set by compute_rks_gradient / compute_uks_gradient only when called
+        // with with_breakdown (it costs a second derivative sweep).
         const std::optional<WavefunctionGradientBreakdown> &last_wavefunction_gradient_breakdown();
 
         // Engine-agnostic 12-component ERI derivative for a shell-pair quartet.
@@ -48,6 +50,24 @@ namespace HartreeFock
             const HartreeFock::ShellPair &spCD,
             HartreeFock::ERIKernel kernel = HartreeFock::ERIKernel::Coulomb,
             double omega = 0.0);
+
+        // One-electron gradient terms, each natoms×3 in Ha/Bohr:
+        //   kinetic = Σ_μν D_μν dT_μν/dR, nuc_a = Σ D dV_μν/dR from basis-function
+        //   motion, nuc_c = Σ D dV_μν/dR from nucleus motion, overlap = Σ W dS_μν/dR.
+        // Only the symmetric parts of D and W enter (h and S are symmetric); W may be
+        // empty. ao_pairs is the AO-level pair list (each unordered pair once).
+        // Threaded over pairs in 64 fixed bins, so identical at any thread count.
+        struct OneElectronGradient
+        {
+            Eigen::MatrixXd kinetic, nuc_a, nuc_c, overlap;
+            Eigen::MatrixXd core() const { return kinetic + nuc_a + nuc_c; }
+            Eigen::MatrixXd total() const { return core() - overlap; }
+        };
+        std::expected<OneElectronGradient, std::string> one_electron_gradient(
+            const HartreeFock::Calculator &calc,
+            const std::vector<HartreeFock::ShellPair> &ao_pairs,
+            const Eigen::MatrixXd &D,
+            const Eigen::MatrixXd &W = {});
 
         // Analytic RHF nuclear gradient.
         // Returns natoms×3 matrix in Ha/Bohr.
@@ -79,7 +99,8 @@ namespace HartreeFock
         std::expected<Eigen::MatrixXd, std::string> compute_rks_gradient(
             const HartreeFock::Calculator &calc,
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
-            const ExchangeGradientKernel &exchange_kernel);
+            const ExchangeGradientKernel &exchange_kernel,
+            bool with_breakdown = false);
 
         // Unrestricted Kohn-Sham (UKS): UHF-like Coulomb/exchange derivatives
         // with hybrid/range-separated scaling applied to the same-spin
@@ -87,7 +108,8 @@ namespace HartreeFock
         std::expected<Eigen::MatrixXd, std::string> compute_uks_gradient(
             const HartreeFock::Calculator &calc,
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
-            const ExchangeGradientKernel &exchange_kernel);
+            const ExchangeGradientKernel &exchange_kernel,
+            bool with_breakdown = false);
 
         // Analytic RMP2 nuclear gradient from the relaxed MP2 density and
         // Z-vector response.

@@ -250,10 +250,25 @@ option(LIBXC_ENABLE_XHOST
 
 include(ExternalProject)
 
+# Pinned external commits. The binaries print them at startup
+# (src/io/external_libraries.h), so the pin and the report cannot disagree.
+# libmsym was unpinned (default branch); pinned to the commit the existing
+# checkout was on, which declares version 0.2.4 in its CMakeLists.
+set(LIBMSYM_GIT_TAG 85e47232376a8e735c2a7b5283f40b59b3953db1)
+set(LIBMSYM_VERSION 0.2.4)
+set(LIBXC_GIT_TAG 4bd0e1e36347c6d0a4e378a2c8d891ae43f8c951)
+# Only the binaries' main.cpp files print them, so only they get the
+# definitions (a global definition would rebuild every object on a change).
+set_source_files_properties(
+    ${SRC_DIR}/driver.cpp ${SRC_DIR}/dft/main.cpp ${SRC_DIR}/mpi/main.cpp
+    PROPERTIES COMPILE_DEFINITIONS
+    "PLANCK_LIBMSYM_VERSION=\"${LIBMSYM_VERSION}\";PLANCK_LIBMSYM_COMMIT=\"${LIBMSYM_GIT_TAG}\";PLANCK_LIBXC_COMMIT=\"${LIBXC_GIT_TAG}\"")
+
 externalproject_add(
     libmsym
     PREFIX ${SRC_DIR}/external/libmsym
     GIT_REPOSITORY https://github.com/mcodev31/libmsym.git
+    GIT_TAG ${LIBMSYM_GIT_TAG}
     UPDATE_DISCONNECTED TRUE
     CMAKE_ARGS 
         -DCMAKE_INSTALL_PREFIX=${MSYM_INSTALL_DIR} 
@@ -274,7 +289,7 @@ externalproject_add(
     # unpinned default-branch fetch is what drifted onto the dead URL. (Bumping
     # to 6.x/7.x would need a DFT build + regression check first.)
     GIT_REPOSITORY https://gitlab.com/libxc/libxc.git
-    GIT_TAG 4bd0e1e36347c6d0a4e378a2c8d891ae43f8c951
+    GIT_TAG ${LIBXC_GIT_TAG}
     UPDATE_DISCONNECTED TRUE
     GIT_PROGRESS TRUE
     CMAKE_ARGS

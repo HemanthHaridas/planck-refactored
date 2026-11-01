@@ -27,6 +27,7 @@ namespace HartreeFock
             BoysVecFn g_boys_vec_fn = nullptr;
             BoysBatchFn g_boys_batch_fn = nullptr;
             void *g_library_handle = nullptr;
+            std::string g_library_version; // the license's library_version, once loaded
 
             std::string substitute_version(const std::string &url_template, const std::string &version)
             {
@@ -70,7 +71,8 @@ namespace HartreeFock
                 return decrypt_library_blob(blob, license.decryption_key);
             }
 
-            std::expected<void, std::string> load_and_resolve(const std::vector<std::uint8_t> &plaintext)
+            std::expected<void, std::string> load_and_resolve(const std::vector<std::uint8_t> &plaintext,
+                                                              const std::string &library_version)
             {
                 auto handle = load_library_from_memory(plaintext);
                 if (!handle)
@@ -105,6 +107,7 @@ namespace HartreeFock
                 g_boys_fn = reinterpret_cast<BoysFn>(*boys_sym);
                 g_boys_vec_fn = reinterpret_cast<BoysVecFn>(*boys_vec_sym);
                 g_boys_batch_fn = reinterpret_cast<BoysBatchFn>(*boys_batch_sym);
+                g_library_version = library_version;
                 return {};
             }
         }
@@ -161,7 +164,7 @@ namespace HartreeFock
             if (!plaintext)
                 return std::unexpected("Failed to decrypt library blob: " + plaintext.error());
 
-            return load_and_resolve(*plaintext);
+            return load_and_resolve(*plaintext, license.library_version);
         }
 
         std::expected<void, std::string> initialize_boys_library(
@@ -202,8 +205,10 @@ namespace HartreeFock
                     return std::unexpected("Failed to decrypt library blob: " + plaintext.error());
             }
 
-            return load_and_resolve(*plaintext);
+            return load_and_resolve(*plaintext, license->library_version);
         }
+
+        const std::string &loaded_boys_library_version() noexcept { return g_library_version; }
 
     } // namespace Loader
 

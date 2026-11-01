@@ -29,14 +29,14 @@ implementation status and remaining work.
 
 | Input | Active space | Basis | Roots | Planck SA / Eh | PySCF SA / Eh | Delta / Eh | Status |
 |---|---|---|---|---|---|---|---|
-| water_cas44_sto3g_sa2 | CAS(4e,4o) | STO-3G | 2 | −74.7751377977 | −74.7751378317 | 3.4e-08 | **PASS** |
+| water_cas44_sto3g_sa2 | CAS(4e,4o) | STO-3G | 2 | −74.7877864783 | −74.7751378317 | 1.26e-02 | **Re-pinned 2026-10-28** — PySCF value is a saddle; see Water SA-2 note |
 | ethylene_cas44_sto3g_sa2 | CAS(4e,4o) | STO-3G | 2 | −77.0034974301 | −77.0034974774 | 4.7e-08 | **PASS** |
 
 ### SAD-guess companions (P3 update, 2026-05-02)
 
 | Input | Active space | Basis | Roots | Guess | Planck SA / Eh | PySCF SAD-start / Eh | Delta / Eh | Note |
 |---|---|---|---|---|---|---|---|---|
-| water_cas44_sto3g_sa2_sad | CAS(4e,4o) | STO-3G | 2 | sad (original) | −74.7751377977 | −74.7877865139 | 1.26e-02 | Baseline monotone SAD landing (upper/local SA basin). Kept as regression control. |
+| water_cas44_sto3g_sa2_sad | CAS(4e,4o) | STO-3G | 2 | sad (original) | −74.7877864783 | −74.7877865139 | 3.6e-08 | Matches PySCF SAD-start since 2026-10-28 (was −74.7751377977, a saddle). |
 | water_cas44_sto3g_sa2_sad_uphill | CAS(4e,4o) | STO-3G | 2 | sad + `mcscf_accept_uphill` | −74.7877864784 | −74.7877865139 | 3.6e-08 | Uphill-enabled landing matches PySCF SAD-start basin. |
 
 ---
@@ -52,7 +52,21 @@ SAD-guess companion input. See `vault/Status/Completion.md` for the live gate
 summary and `vault/Status/Open Work.md` for remaining optimizer follow-up.
 
 ### Water SA-2
-Both codes converge from `guess hcore` to −74.7751378 Eh. For `guess sad`,
+**Re-pinned 2026-10-28 (CASSCF performance scope, P3c).** −74.7751378 Eh is a
+saddle point of the SA-2 energy, not a minimum: the exact CI-relaxed orbital
+Hessian there has one negative eigenvalue (−0.054 to −0.065), whose mode the
+gradient has no component along (|g·v| ~ 1e-16), since it breaks the
+molecule's symmetry and these inputs run with symmetry off. −74.7877864783 Eh
+is the minimum it falls to: its Hessian is positive definite (lowest
+eigenvalue +2.5e-2). It is also PySCF's own SAD-start answer.
+Before P3c, Planck's coupled orbital-CI Hessian was missing two terms, and
+`numeric-newton` (a finite difference of the same Hessian) happened not to
+amplify the zero component, so Planck stayed on the saddle from both starts.
+With the exact Hessian a Newton step leaves it, as PySCF does without symmetry
+on C1 water/cc-pVDZ (−76.0440 → −76.0781). Suppressing that escape was tried
+and broke the C1, spherical and uphill cases.
+
+Historical (pre-2026-10-28): both codes converged from `guess hcore` to −74.7751378 Eh. For `guess sad`,
 Planck reaches −74.7877864784 Eh when uphill acceptance is enabled
 (`mcscf_accept_uphill .true.`), matching the PySCF SAD-start basin to
 3.6e-08 Eh.

@@ -32,6 +32,41 @@ truth for what remains.
   initialization should reject them for every workflow, or accept and document
   the erf substitution.
 
+## Routine-use gaps (scoped 2026-10-26)
+
+What blocks Planck from routine DFT use, each with its own scope doc. Order
+is the recommended one; none blocks another except where noted.
+
+- **Spherical basis in `planck-dft`** (`docs/SPHERICAL_DFT_SCOPE.md`). The
+  DFT driver rejects `basis_type spherical`. The HF skin (lift the density,
+  build in Cartesian, project back) covers J, K, V_xc and V_rxn exactly; the
+  work is classifying ~48 Cartesian-dimension sites in `src/dft/` and routing
+  the DFT one-electron setup through `rebuild_basis_dependent_state`.
+  Prerequisite for useful def2 DFT.
+- **D3 dispersion** (`docs/DISPERSION_D3_SCOPE.md`). None in `src/`. A
+  geometry-only energy and gradient beside nuclear repulsion. Licence
+  checked 2026-10-26: simple-dftd3 is LGPL-3.0-or-later. Planck ships source
+  only, so fetching it at build time (as libxc is) carries no LGPL
+  obligations for the project; a native port would put LGPL files in the
+  tree. Recommended: `ExternalProject`, optional because it needs a Fortran
+  compiler.
+- **def2 basis sets and ECPs** (`docs/DEF2_ECP_SCOPE.md`). def2 for H–Kr is
+  just basis files (cheap, useful now for HF/post-HF). Heavy elements need
+  ECP parsing, core-electron bookkeeping (51 direct `atomic_numbers[...]`
+  reads to classify), and ECP integrals with gradients. Licence checked
+  2026-10-26: libecpint (MIT, with MIT/BSD dependencies) and BSE data
+  (BSD-3) are compatible; libecpint recommended.
+- **Gradient performance** (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`,
+  gradients 20–120× the SCF). G3 rescoped 2026-10-26 onto the energy build's
+  HGP/Rys2D split.
+- **Meta-GGA** (`docs/META_GGA_SCOPE.md`). Rejected in `xc_grid.cpp`. τ and
+  V^τ need only the AO gradients the GGA path has; nuclear gradients need the
+  AO Hessian, which exists. TDDFT/SOSCF kernels and VV10 are separate steps.
+- **PCM geometry optimizations and frequencies**
+  (`docs/PCM_GEOMETRY_SCOPE.md`). The cavity hard-prunes buried points, so
+  the energy jumps with geometry; a smooth (switching-function, Gaussian
+  charge) cavity matching PySCF's comes first, then the analytic gradient.
+
 ## Build and packaging
 
 - **`ctest` runs Eigen's own test suite and reports 14 failures (found
@@ -1869,6 +1904,31 @@ serial path).
 
 ### Remaining work
 
+#### Performance: leftovers, not scheduled (answered 2026-11-01)
+
+The performance question is answered in `docs/CASSCF_PERFORMANCE.md` (see
+Completion). The user accepted 1.3x behind PySCF at water cc-pVTZ C2v and
+stopped the work. Not scheduled; take up only with a new target:
+
+- re-profile cc-pVTZ C2v (where the last 1.3x goes is unmeasured);
+- a better preconditioner for the relaxed solve (28-64 vectors per macro at
+  cc-pVTZ; the diagonal is F_I + F_A differences only);
+- the RI path has none of the speed-ups (FD orbital Hessian, full-leg-first
+  transform, dense-density Fock builds; `water_casscf_ri_ccpvdz` 4.1 s);
+- delete the temporary `CallProbe` (`PLANCK_CASSCF_CALL_PROBE`).
+
+#### Unreproduced OpenMP hang in CASSCF (seen once, 2026-10-28)
+
+One `water_cas44_631g` run (4 threads, `build-full`, g++-15 libgomp, macOS)
+hung at 0 % CPU: every thread parked in `gomp_team_barrier_wait` at the end
+of the `parallel for` in `compute_orbital_gradient` (`orbital.cpp`), reached
+from `select_best_candidate_step` -> `evaluate`, with `nr_used = 1` (no
+nesting). 60 reruns (probe on, off, and a pre-probe build) did not hang, so
+the rate is around 1 in 60 or rarer. Nothing in that loop is shared-mutable,
+so suspect libgomp on macOS before Planck code. If it recurs, capture
+`sample <pid>` and check whether other `parallel for` regions in `orbital.cpp`
+are involved.
+
 #### P2: Optimizer simplification pass — mostly resolved; only cosmetic remainder
 
 A suite-wide sweep of every CAS input recorded which candidate the merit
@@ -1929,7 +1989,7 @@ identify the path taken. Not required for correctness or performance.
       `engine_scf_energy_compare.py` (incl. He₂/cc-pV5Z, which reaches the
       changed buckets) and the regression suites have not run on it.
     - **Rerun the Planck-vs-PySCF Fock table** (doc §3); it predates Rys2D.
-    - **Rescope gradient G3 on Rys2D** (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`):
+    - **Rescope gradient G3 on Rys2D** (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`):
       differentiating the 2D per-axis tables is libcint's route to
       derivative integrals and gives Rys the derivative kernel Phase D lacks.
     - **Route the conventional Auto build's 6D hoist**
@@ -1951,19 +2011,48 @@ identify the path taken. Not required for correctness or performance.
     the corrected Boys core. The extended suite and `ctest` on v1.2.1 are
     pending.
 - **Analytic gradients are 20–120× the SCF they follow — scoped 2026-10-25,
-  nothing landed** (`docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md`). The ERI
-  Fock-build work never reached the derivative integrals: the 2e gradient is
-  per AO component (each of 12 derivative components from up to 24 fresh
-  contracted ERIs), runs the full square of AO pairs, is single-threaded, and
-  Auto routes it to per-component OS. 98 % of the gradient. Measured at four
-  threads: 4 H2O / 6-31G\* SCF 2.5 s vs gradient 54 s; 1 H2O / cc-pVTZ 0.9 s
-  vs 115 s. RMP2 gradients are dense unscreened `nao⁴` sweeps, and the second
-  RMP2 sweep only feeds a debug print (`PLANCK_DEBUG_RMP2_TERMS`), so it is
-  dead work on every run. UHF/ROHF carry their own copies of the 2e loop and
-  the 1e block is pasted four times. Plan: G1 dead work + Auto → HGP (1.5×),
-  G2 one threaded triangular loop, G3 a shell-quartet derivative block kernel
-  (the lever; this is shellpair Phase D), G4 MP2 onto the same loop, G5 1e
-  derivatives, G6 RI 3c (measure first).
+  G1 and G2 landed 2026-10-27** (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`). The
+  ERI Fock-build work never reached the derivative integrals: the 2e gradient
+  is per AO component (each of 12 derivative components from up to 24 fresh
+  contracted ERIs), runs the full square of AO pairs, and is single-threaded.
+  98 % of the gradient. Measured at four threads before G1: 4 H2O / 6-31G\*
+  SCF 2.5 s vs gradient 54 s; 1 H2O / cc-pVTZ 0.9 s vs 115 s. The 1e block
+  is still pasted four times (G5).
+  **G1 done:** Auto now routes derivative ERIs to HGP (4 H2O / 6-31G\*
+  gradient 56.4 → 29.7 s), the RMP2 second sweep runs only under
+  `PLANCK_DEBUG_RMP2_TERMS=1`, and the MP2 sweeps build their AO `ShellPair`s
+  once (1 H2O / 6-31G\* RMP2 gradient 6.78 → 3.17 s). Printed gradients
+  unchanged. **G2 done:** one shared 2e loop for every SCF reference (the UHF
+  and ROHF copies are gone), a `q ≥ p` triangle with the bra-ket swap folded
+  into Γ, threaded over 64 fixed bins summed in bin order. 4 H2O / 6-31G\*
+  gradient at four threads 30.5 → 3.42 s (16× over pre-G1), identical at
+  1/2/4/8 threads. RKS/UKS no longer run a second Coulomb-only sweep for the
+  debug-only breakdown (4 H2O / 6-31G\* B3LYP gradient run 7.94 → 5.36 s).
+  **G3 done:** HGP and Rys2D shell-quartet derivative block kernels, chained
+  by the energy build's crossover (measured best of three for derivatives),
+  drive the 2e gradient under `engine auto`. Whole run at four threads: 4 H2O
+  / 6-31G\* 4.75 → 1.21 s, 1 H2O / cc-pVTZ 3.58 → 0.67 s; gradients identical
+  to OS. Gated by `planck-eri-derivative-kernels` and six
+  `*_engine_os_vs_auto` comparators. **G4 done:** RMP2/UMP2 gradients go
+  through the same loop (`src/gradient/two_electron_gradient.h`); an unread
+  O(N⁸) AO pair density deleted from RMP2, UMP2's separable densities built
+  once instead of per q. Gradient run vs SCF, four threads: SCF gradients
+  1.1–1.6× (were 22–124×); RMP2 1.5× (1 H2O) and 4.3× (2 H2O, was 358 s →
+  0.65 s); 2 H2O⁺ UMP2 22× (136 → 3.5 s), its remaining cost orbital-side
+  (D_σ build, Imat). Gradients identical; eight `os_vs_auto` comparators.
+  **G7, UMP2 orbital side, in flight:** O1 landed (working tree): the UHF
+  Z-vector is matrix-free GMRES (`DFT::Response::gmres`, shared with the DH
+  Z-vector), 33 Fock builds instead of 541 on 2 H2O⁺ / 6-31G\*, gradient run
+  3.5 → 1.83 s, printed gradient identical. O2 landed (working tree): the
+  D_σ / `part_dm2` / RMP2 `dm2buf_full` back-transforms are shared GEMM
+  helpers, 1.83 → 0.55 s (3.4× the SCF), gradient identical, thread-invariant.
+  O3 (Imat) dropped. The Z-vector (~35 %) could use the stored ERI tensor
+  instead of direct builds; not yet worth it. G5 landed (working tree): one
+  threaded 1e derivative block replaces six copies, the nucleus-position
+  derivative shares one VRR across x/y/z; 8 H2O / 6-31G gradient run
+  0.87 → 0.78 s, gradients identical. Next: G6 RI 3c (measure first).
+  The regression runner now passes `--build-dir` to its `.py` comparators,
+  which had been running whatever binary sat in `./build`.
 - **ERI/Fock BLAS-LAPACK migration — scoped 2026-10-17, nothing landed**
   (`docs/ERI_FOCK_BLAS_SCOPE.md`). BLAS buys nothing for the ERI kernels,
   direct-SCF digestion, the conventional `nb⁴` contraction (bandwidth-bound,
@@ -2171,7 +2260,7 @@ identify the path taken. Not required for correctness or performance.
   - **Phase D — gradient derivative ERIs** (`compute_eri_deriv_dispatch`) are
     still per-AO. Rys has no derivative kernel, so per-quartet Auto gradients need
     one written first. The largest remaining piece. Now scoped as G3 of
-    `docs/GRADIENT_INTEGRAL_PERFORMANCE_SCOPE.md` (an HGP-based derivative
+    `docs/GRADIENT_INTEGRAL_PERFORMANCE.md` (an HGP-based derivative
     block kernel, so the missing Rys derivative is not a blocker).
   - **Phase E — retire the per-AO adapter.** Make `build_shellpairs` emit
     shell-level `ShellPair` objects and drop `expand_shell_groups_to_ao_pairs`.

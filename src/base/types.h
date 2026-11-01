@@ -110,7 +110,7 @@ namespace HartreeFock
         ObaraSaika,       // Obara-Saika recursion (default)
         RysQuadrature,    // Rys quadrature for all quartets
         HeadGordonPople,  // Head-Gordon-Pople recurrence engine
-        Auto              // OS for L<4, Rys for L>=4 per quartet
+        Auto              // Block-kernel chain in the fused Fock loop, per-bucket table otherwise
     };
 
     enum class ERIKernel
@@ -637,13 +637,12 @@ namespace HartreeFock
     struct OptionsIntegral
     {
         double _tol_eri = 1E-10;                       // ERI tolerance for Schwarz screening
-        // Default to Auto: the SCF ERI/Fock builds dispatch per shell quartet
-        // through HGP, with a Rys tail for the lowest-angular-momentum quartets
-        // (L_AB+L_CD <= 1), which is faster across the mix than any single fixed
-        // engine. Gradient/geomopt/freq derivative ERIs do not recognize Auto and
-        // fall back to OS (see Gradient::compute_eri_deriv_dispatch); both engines
-        // are validated, so the fallback is correct, just not uniform within a
-        // gradient run. Set `engine os/rys/hgp` explicitly to override.
+        // Default to Auto. The fused Fock loop runs the block-kernel chain
+        // (closed forms for total L <= 3, then the Rys2D and HGP blocks;
+        // integrals/auto_block_eri.h), and per-component work takes the
+        // per-(L_AB, L_CD) engine table (kAutoEngine, rys.cpp). Gradients run
+        // the derivative chain (integrals/auto_deriv_block_eri.h). Set
+        // `engine os/rys/hgp` explicitly to override.
         IntegralMethod _engine = IntegralMethod::Auto; // Integral Engine
     };
 

@@ -6,10 +6,24 @@
 
 #include <Eigen/Core>
 
+#include <atomic>
+#include <memory>
 #include <vector>
 
 namespace HartreeFock::Correlation::CASSCF
 {
+
+    // ponytail: temporary P0 probe for docs/CASSCF_PERFORMANCE.md; printed per
+    // macro under PLANCK_CASSCF_CALL_PROBE. Safe to delete.
+    struct CallProbe
+    {
+        std::atomic<long> evaluate{0};
+        std::atomic<long> fixed_ci_gradient{0};
+        std::atomic<long> active_cache{0};
+        std::atomic<long> active_transform{0};
+        std::atomic<long> fock{0};
+    };
+    inline CallProbe call_probe;
 
     using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
 
@@ -35,6 +49,71 @@ namespace HartreeFock::Correlation::CASSCF
     // current MO coefficients, AO overlap, one-/two-electron integrals, and the
     // state-specific (or state-averaged) active-space densities held fixed while
     // differentiating the orbital gradient.
+    // Per-macro data for the analytic fixed-CI orbital Hessian action: the
+    // current Q matrix and Y[p,a,t,x], the 2-RDM contracted with the
+    // (pa|vw) and (pu|aw) integrals that carry the active legs' response.
+    // H[mu,nu,lam,i] = (mu nu|lam i) for i over the first nocc MOs (core and
+    // active). One pass over the nb^4 tensor builds it; then G[X Y^T + Y X^T]
+    // with X = C_occ, which covers the inactive and active Fock densities and
+    // every density a Hessian product contracts, and the mixed (p u|v w)-type
+    // blocks all cost O(nb^3) contractions of H.
+    struct OccupiedHalfTransform
+    {
+        std::vector<double> H;
+        int nbasis = 0;
+        int nocc = 0;
+    };
+
+    OccupiedHalfTransform build_occupied_half_transform(
+        const std::vector<double> &eri,
+        const Eigen::MatrixXd &C,
+        int nocc);
+
+    // G[X Y^T + Y X^T] in the AO basis, X = the half transform's occupied
+    // columns of C, Y (nb x nocc) arbitrary. O(nb^3 nocc).
+    Eigen::MatrixXd occupied_two_electron_ao(
+        const OccupiedHalfTransform &half,
+        const Eigen::MatrixXd &Y);
+
+    // out[a1,a2,a3,w] = (a1 a2|a3 n_core+w) with a_k over the columns of C_k and
+    // w over the active MOs. lam_first contracts the C3 leg before the C2 leg:
+    // contract the leg with fewer columns first, or the cost is O(nb^4 n_act).
+    std::vector<double> transform_occupied_half(
+        const OccupiedHalfTransform &half,
+        const Eigen::MatrixXd &C1,
+        const Eigen::MatrixXd &C2,
+        const Eigen::MatrixXd &C3,
+        int n_core,
+        int n_act,
+        bool lam_first);
+
+    struct AnalyticOrbitalHessian
+    {
+        Eigen::MatrixXd Q;
+        std::vector<double> Y;
+        // The half transform at the same C (shared with the McscfState it came
+        // from).
+        std::shared_ptr<const OccupiedHalfTransform> half;
+        int nbasis = 0;
+        int nact = 0;
+    };
+
+    // Builds the half transform at C itself (one pass over eri).
+    AnalyticOrbitalHessian build_analytic_orbital_hessian(
+        const std::vector<double> &eri,
+        const Eigen::MatrixXd &C,
+        const std::vector<double> &Gamma_vec,
+        int n_core,
+        int n_act);
+
+    // Reuses a half transform already built at C.
+    AnalyticOrbitalHessian build_analytic_orbital_hessian(
+        std::shared_ptr<const OccupiedHalfTransform> half,
+        const Eigen::MatrixXd &C,
+        const std::vector<double> &Gamma_vec,
+        int n_core,
+        int n_act);
+
     struct OrbitalHessianContext
     {
         const Eigen::MatrixXd *C = nullptr;
@@ -48,7 +127,24 @@ namespace HartreeFock::Correlation::CASSCF
         // gradient it curves). Left null in the dense path.
         HartreeFock::Calculator *ri_calc = nullptr;
         double fd_step = 5e-4;
+        // When set, delta_g_sa_action is analytic; otherwise it is the central
+        // finite difference of fixed_ci_orbital_gradient (kept as the oracle).
+        const AnalyticOrbitalHessian *analytic = nullptr;
     };
+
+    // C^T G[D] C for an AO density D, with G the closed-shell two-electron
+    // operator of the context's integrals (dense or RI).
+    Eigen::MatrixXd fock_response_mo(
+        const Eigen::MatrixXd &D_ao,
+        const OrbitalHessianContext &ctx);
+
+    // C^T G[X Y^T + Y X^T] C with X = the first Y.cols() columns of C (the
+    // core and active orbitals). With the analytic context's H this is
+    // O(nb^3 nocc) instead of a pass over the nb^4 tensor; otherwise it forms
+    // the density and calls fock_response_mo.
+    Eigen::MatrixXd occupied_fock_response_mo(
+        const Eigen::MatrixXd &Y,
+        const OrbitalHessianContext &ctx);
 
     // Cache the active-space integral transform and reuse it across all response
     // contractions in a macroiteration.

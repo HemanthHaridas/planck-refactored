@@ -2,11 +2,93 @@
 
 #include <format>
 
+#include "dft/response_gmres.h"
 #include "integrals/base.h"
 #include "post_hf/ri/ri_eri.h"
 
 namespace HartreeFock::Correlation
 {
+    namespace
+    {
+        // The coupled alpha/beta orbital Hessian applied to one packed trial
+        // rotation x = [x_alpha (a*nocc_alpha+i) | x_beta]. The dense builder
+        // calls it on unit vectors; solve_uhf_cphf calls it from GMRES.
+        struct UHFOrbitalHessian
+        {
+            HartreeFock::Calculator &calculator;
+            const std::vector<HartreeFock::ShellPair> &shell_pairs;
+            Eigen::MatrixXd Ca_occ, Ca_virt, Cb_occ, Cb_virt;
+            Eigen::VectorXd diagonal;
+
+            UHFOrbitalHessian(
+                HartreeFock::Calculator &calc,
+                const std::vector<HartreeFock::ShellPair> &pairs,
+                const Eigen::MatrixXd &coeff_alpha,
+                const Eigen::MatrixXd &coeff_beta,
+                const Eigen::VectorXd &energy_alpha,
+                const Eigen::VectorXd &energy_beta,
+                int nocc_alpha,
+                int nocc_beta)
+                : calculator(calc), shell_pairs(pairs)
+            {
+                const int nva = static_cast<int>(coeff_alpha.cols()) - nocc_alpha;
+                const int nvb = static_cast<int>(coeff_beta.cols()) - nocc_beta;
+                Ca_occ = coeff_alpha.leftCols(nocc_alpha);
+                Ca_virt = coeff_alpha.middleCols(nocc_alpha, nva);
+                Cb_occ = coeff_beta.leftCols(nocc_beta);
+                Cb_virt = coeff_beta.middleCols(nocc_beta, nvb);
+                const int nova = nva * nocc_alpha;
+                diagonal.resize(nova + nvb * nocc_beta);
+                for (int a = 0; a < nva; ++a)
+                    for (int i = 0; i < nocc_alpha; ++i)
+                        diagonal(a * nocc_alpha + i) = energy_alpha(nocc_alpha + a) - energy_alpha(i);
+                for (int a = 0; a < nvb; ++a)
+                    for (int i = 0; i < nocc_beta; ++i)
+                        diagonal(nova + a * nocc_beta + i) = energy_beta(nocc_beta + a) - energy_beta(i);
+            }
+
+            Eigen::VectorXd operator()(const Eigen::VectorXd &x) const
+            {
+                const int noa = static_cast<int>(Ca_occ.cols()), nva = static_cast<int>(Ca_virt.cols());
+                const int nob = static_cast<int>(Cb_occ.cols()), nvb = static_cast<int>(Cb_virt.cols());
+                const int nova = nva * noa;
+                // x is packed a-major (a*nocc+i), i.e. the row-major (nv x nocc) block.
+                using RowMajor = Eigen::Matrix<double, Eigen::Dynamic, Eigen::Dynamic, Eigen::RowMajor>;
+                const Eigen::MatrixXd xa = Eigen::Map<const RowMajor>(x.data(), nva, noa);
+                const Eigen::MatrixXd xb = Eigen::Map<const RowMajor>(x.data() + nova, nvb, nob);
+
+                // Trial rotation -> AO density response -> induced Coulomb/exchange.
+                const Eigen::MatrixXd dm1a = Ca_virt * xa * Ca_occ.transpose();
+                const Eigen::MatrixXd dm1b = Cb_virt * xb * Cb_occ.transpose();
+                const Eigen::MatrixXd dm1a_sym = dm1a + dm1a.transpose();
+                const Eigen::MatrixXd dm1b_sym = dm1b + dm1b.transpose();
+                // RI-consistent CPHF operator under MP2 RI (Step RG4.2): the induced
+                // Coulomb/exchange response is the same {J(Pa+Pb) - K(P_sigma)}
+                // quantity, built from the 3-center factors instead of the dense ERI.
+                const auto [va_ao, vb_ao] =
+                    calculator._mp2.use_ri
+                        ? RI::build_ri_fock_uhf(calculator, dm1a_sym, dm1b_sym)
+                        : _compute_2e_fock_uhf(
+                              shell_pairs,
+                              dm1a_sym,
+                              dm1b_sym,
+                              calculator._shells.nbasis(),
+                              calculator._integral._engine,
+                              HartreeFock::ERIKernel::Coulomb,
+                              0.0,
+                              calculator._integral._tol_eri,
+                              calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+
+                const RowMajor va = Ca_virt.transpose() * va_ao * Ca_occ;
+                const RowMajor vb = Cb_virt.transpose() * vb_ao * Cb_occ;
+                Eigen::VectorXd y = diagonal.cwiseProduct(x);
+                y.head(nova) += Eigen::Map<const Eigen::VectorXd>(va.data(), nova);
+                y.tail(nvb * nob) += Eigen::Map<const Eigen::VectorXd>(vb.data(), nvb * nob);
+                return y;
+            }
+        };
+    } // namespace
+
     // Coupled alpha/beta orbital-Hessian matrix (docs/SOSCF_UHF.md,
     // U1). Split out of solve_uhf_cphf so SOSCF can call it directly with the
     // CURRENT (not yet converged) MO coefficients/energies, mirroring
@@ -27,80 +109,21 @@ namespace HartreeFock::Correlation
         if (calculator._scf._scf != HartreeFock::SCFType::UHF || !calculator._info._scf.is_uhf)
             return std::unexpected("build_uhf_cphf_matrix: UHF reference required.");
 
-        const int nb = static_cast<int>(calculator._shells.nbasis());
         const int nva = static_cast<int>(coeff_alpha.cols()) - nocc_alpha;
         const int nvb = static_cast<int>(coeff_beta.cols()) - nocc_beta;
         if (nocc_alpha <= 0 || nocc_beta < 0 || nva <= 0 || nvb <= 0)
             return std::unexpected("build_uhf_cphf_matrix: invalid occupied/virtual dimensions.");
 
-        const Eigen::MatrixXd Ca_occ = coeff_alpha.leftCols(nocc_alpha);
-        const Eigen::MatrixXd Ca_virt = coeff_alpha.middleCols(nocc_alpha, nva);
-        const Eigen::MatrixXd Cb_occ = coeff_beta.leftCols(nocc_beta);
-        const Eigen::MatrixXd Cb_virt = coeff_beta.middleCols(nocc_beta, nvb);
-
-        const int nova = nva * nocc_alpha;
-        const int novb = nvb * nocc_beta;
-        // The unrestricted response problem is one coupled alpha/beta linear
-        // system. We lay it out as a single dense matrix so the block structure
-        // stays visible in a debugger or when cross-checking with reference code.
-        Eigen::MatrixXd A = Eigen::MatrixXd::Zero(nova + novb, nova + novb);
-
-        for (int a = 0; a < nva; ++a)
-            for (int i = 0; i < nocc_alpha; ++i)
-                A(a * nocc_alpha + i, a * nocc_alpha + i) =
-                    energy_alpha(nocc_alpha + a) - energy_alpha(i);
-        for (int a = 0; a < nvb; ++a)
-            for (int i = 0; i < nocc_beta; ++i)
-                A(nova + a * nocc_beta + i, nova + a * nocc_beta + i) =
-                    energy_beta(nocc_beta + a) - energy_beta(i);
-
-        for (int col = 0; col < nova + novb; ++col)
-        {
-            Eigen::MatrixXd xa = Eigen::MatrixXd::Zero(nva, nocc_alpha);
-            Eigen::MatrixXd xb = Eigen::MatrixXd::Zero(nvb, nocc_beta);
-            if (col < nova)
-                xa(col / nocc_alpha, col % nocc_alpha) = 1.0;
-            else
-            {
-                const int local = col - nova;
-                xb(local / nocc_beta, local % nocc_beta) = 1.0;
-            }
-
-            // Apply one trial orbital rotation, form the AO density response,
-            // and ask the integral layer for the induced Coulomb/exchange
-            // response. This mirrors the matrix-free view of CPHF, but here we
-            // materialize the full Jacobian column by column for transparency.
-            const Eigen::MatrixXd dm1a = Ca_virt * xa * Ca_occ.transpose();
-            const Eigen::MatrixXd dm1b = Cb_virt * xb * Cb_occ.transpose();
-            const Eigen::MatrixXd dm1a_sym = dm1a + dm1a.transpose();
-            const Eigen::MatrixXd dm1b_sym = dm1b + dm1b.transpose();
-            // RI-consistent CPHF operator under MP2 RI (Step RG4.2): the induced
-            // Coulomb/exchange response is the same {J(Pa+Pb) - K(P_sigma)}
-            // quantity, built from the 3-center factors instead of the dense ERI.
-            const auto [va_ao, vb_ao] =
-                calculator._mp2.use_ri
-                    ? RI::build_ri_fock_uhf(calculator, dm1a_sym, dm1b_sym)
-                    : _compute_2e_fock_uhf(
-                          shell_pairs,
-                          dm1a_sym,
-                          dm1b_sym,
-                          static_cast<std::size_t>(nb),
-                          calculator._integral._engine,
-                          HartreeFock::ERIKernel::Coulomb,
-                          0.0,
-                          calculator._integral._tol_eri,
-                          calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
-
-            const Eigen::MatrixXd va = Ca_virt.transpose() * va_ao * Ca_occ;
-            const Eigen::MatrixXd vb = Cb_virt.transpose() * vb_ao * Cb_occ;
-            for (int a = 0; a < nva; ++a)
-                for (int i = 0; i < nocc_alpha; ++i)
-                    A(a * nocc_alpha + i, col) += va(a, i);
-            for (int a = 0; a < nvb; ++a)
-                for (int i = 0; i < nocc_beta; ++i)
-                    A(nova + a * nocc_beta + i, col) += vb(a, i);
-        }
-
+        // Materialize the Hessian column by column from unit trial rotations.
+        // One full UHF Fock build per column: use only where the dense matrix
+        // itself is needed (SOSCF); solve_uhf_cphf stays matrix-free.
+        const UHFOrbitalHessian hessian(
+            calculator, shell_pairs, coeff_alpha, coeff_beta,
+            energy_alpha, energy_beta, nocc_alpha, nocc_beta);
+        const int n = static_cast<int>(hessian.diagonal.size());
+        Eigen::MatrixXd A(n, n);
+        for (int col = 0; col < n; ++col)
+            A.col(col) = hessian(Eigen::VectorXd::Unit(n, col));
         return A;
     }
 
@@ -119,15 +142,10 @@ namespace HartreeFock::Correlation
         if (!calculator._info._is_converged)
             return std::unexpected("solve_uhf_cphf: SCF not converged.");
 
-        auto A_res = build_uhf_cphf_matrix(
-            calculator, shell_pairs, coeff_alpha, coeff_beta,
-            energy_alpha, energy_beta, nocc_alpha, nocc_beta);
-        if (!A_res)
-            return std::unexpected(A_res.error());
-        const Eigen::MatrixXd &A = *A_res;
-
         const int nva = static_cast<int>(coeff_alpha.cols()) - nocc_alpha;
         const int nvb = static_cast<int>(coeff_beta.cols()) - nocc_beta;
+        if (nocc_alpha <= 0 || nocc_beta < 0 || nva <= 0 || nvb <= 0)
+            return std::unexpected("solve_uhf_cphf: invalid occupied/virtual dimensions.");
         const int nova = nva * nocc_alpha;
         const int novb = nvb * nocc_beta;
 
@@ -139,7 +157,26 @@ namespace HartreeFock::Correlation
             for (int i = 0; i < nocc_beta; ++i)
                 rhs(nova + a * nocc_beta + i) = -rhs_beta(a, i);
 
-        const Eigen::VectorXd sol = A.colPivHouseholderQr().solve(rhs);
+        // Matrix-free: GMRES with the orbital-gap diagonal as preconditioner,
+        // one Fock build per action instead of one per Hessian column.
+        const UHFOrbitalHessian hessian(
+            calculator, shell_pairs, coeff_alpha, coeff_beta,
+            energy_alpha, energy_beta, nocc_alpha, nocc_beta);
+        const DFT::Response::Action action =
+            [&hessian](const Eigen::VectorXd &x) -> std::expected<Eigen::VectorXd, std::string>
+        { return hessian(x); };
+        // 1e-10 of max|rhs|: on 2 H2O+ / 6-31G* (n=541) this is 33 actions and
+        // agrees with the dense QR to 1.2e-8 of max|z|; the dense reference's
+        // own screening noise floors that at ~5e-10, and the printed gradient
+        // is identical either way.
+        auto solve = DFT::Response::gmres(action, rhs, hessian.diagonal, 1e-10);
+        if (!solve)
+            return std::unexpected("solve_uhf_cphf: " + solve.error());
+        if (!solve->converged)
+            return std::unexpected(std::format(
+                "solve_uhf_cphf: GMRES did not converge (iterations={}, actions={}, residual={:.3e}).",
+                solve->iterations, solve->action_count, solve->true_residuals.back()));
+        const Eigen::VectorXd &sol = solve->x;
         UHFCphfSolution out;
         out.alpha = Eigen::MatrixXd::Zero(nva, nocc_alpha);
         out.beta = Eigen::MatrixXd::Zero(nvb, nocc_beta);

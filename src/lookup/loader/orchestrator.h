@@ -99,6 +99,10 @@ namespace HartreeFock
             const License &license,
             const std::vector<std::uint8_t> &blob);
 
+        // The library_version of the loaded Boys library; empty before a
+        // successful initialize_boys_library{,_from_blob}().
+        const std::string &loaded_boys_library_version() noexcept;
+
         // Compile-time OS+architecture tag matching planck-boys-core's release
         // asset naming (planck_boys-<platform>.enc, e.g. "macos-arm64",
         // "linux-x86_64") — this identifies which binary is running, a fact

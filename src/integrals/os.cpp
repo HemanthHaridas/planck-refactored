@@ -1462,124 +1462,128 @@ static std::pair<double, double> _st_raw(
     return {Sx * Sy * Sz, Tx * Sy * Sz + Sx * Ty * Sz + Sx * Sy * Tz};
 }
 
-// dV_μν^{C}/dC_{direction} for one primitive pair.
-// Runs VRR+dVRR in parallel, then applies HRR to the dV m=0 slice.
-// Returns value without -Z or coeff_product (caller applies those).
-static double _os_nuclear_primitive_dC(
+// dV_μν^{C}/dC_{x,y,z} for one primitive pair. The Boys values and the V
+// VRR are shared by the three directions; only the dVRR and HRR run per
+// direction. Returns values without -Z or coeff_product (caller applies those).
+static std::array<double, 3> _os_nuclear_primitive_dC(
     const HartreeFock::PrimitivePair &pp,
     const int lAx, const int lAy, const int lAz,
     const int lBx, const int lBy, const int lBz,
     const double ABx, const double ABy, const double ABz,
-    const Eigen::Vector3d &nuc_pos,
-    const int direction)
+    const Eigen::Vector3d &nuc_pos)
 {
     const int L = lAx + lAy + lAz + lBx + lBy + lBz;
     const int lx_max = lAx + lBx, ly_max = lAy + lBy, lz_max = lAz + lBz;
 
-    const double pCx = pp.center[0] - nuc_pos[0];
-    const double pCy = pp.center[1] - nuc_pos[1];
-    const double pCz = pp.center[2] - nuc_pos[2];
+    const double pC[3] = {pp.center[0] - nuc_pos[0], pp.center[1] - nuc_pos[1], pp.center[2] - nuc_pos[2]};
+    const double pCx = pC[0], pCy = pC[1], pCz = pC[2];
     const double T = pp.zeta * (pCx * pCx + pCy * pCy + pCz * pCz);
 
     const double nuc_pref = pp.prefactor * 2.0 * std::sqrt(pp.zeta / std::numbers::pi);
     const double pAx = pp.pA[0], pAy = pp.pA[1], pAz = pp.pA[2];
     const double hiz = pp.inv_zeta * 0.5;
-    const double PC_dir = (direction == 0) ? pCx : (direction == 1) ? pCy
-                                                                    : pCz;
 
     auto &V = _nuc_vrr_d;
     auto &dV = _nuc_dvrr_d;
 
-    // Zero needed region (+2 in m for m+1 accesses)
+    double F[MMAX_NUC_D];
+    for (int m = 0; m <= L + 2; m++)
+        F[m] = nuc_pref * HartreeFock::Lookup::boys(m, T);
+
+    // V VRR (m up to L+1, read at m+1 by the dVRR).
     const int mclr = L + 3;
     for (int ix = 0; ix <= lx_max; ix++)
         for (int iy = 0; iy <= ly_max; iy++)
             for (int iz = 0; iz <= lz_max; iz++)
                 for (int m = 0; m < mclr; m++)
-                    V[ix][iy][iz][m] = dV[ix][iy][iz][m] = 0.0;
-
-    // Seed Boys values
+                    V[ix][iy][iz][m] = 0.0;
     for (int m = 0; m <= L + 2; m++)
-        V[0][0][0][m] = nuc_pref * HartreeFock::Lookup::boys(m, T);
-
-    // dVRR base case: 2*zeta*PC_dir * F_{m+1}
-    for (int m = 0; m <= L + 1; m++)
-        dV[0][0][0][m] = 2.0 * pp.zeta * PC_dir * nuc_pref * HartreeFock::Lookup::boys(m + 1, T);
-
-    // x-VRR + x-dVRR
+        V[0][0][0][m] = F[m];
     for (int ix = 1; ix <= lx_max; ix++)
-    {
-        for (int m = 0; m <= L - ix; m++)
+        for (int m = 0; m <= L + 1 - ix; m++)
         {
             V[ix][0][0][m] = pAx * V[ix - 1][0][0][m] - pCx * V[ix - 1][0][0][m + 1];
-            dV[ix][0][0][m] = pAx * dV[ix - 1][0][0][m] - pCx * dV[ix - 1][0][0][m + 1];
-            if (direction == 0)
-                dV[ix][0][0][m] += V[ix - 1][0][0][m + 1];
             if (ix > 1)
-            {
                 V[ix][0][0][m] += (ix - 1) * hiz * (V[ix - 2][0][0][m] - V[ix - 2][0][0][m + 1]);
-                dV[ix][0][0][m] += (ix - 1) * hiz * (dV[ix - 2][0][0][m] - dV[ix - 2][0][0][m + 1]);
-            }
         }
-    }
-
-    // y-VRR + y-dVRR
     for (int ix = 0; ix <= lx_max; ix++)
-    {
         for (int iy = 1; iy <= ly_max; iy++)
-        {
-            const int mmax = L - ix - iy;
-            if (mmax < 0)
-                continue;
-            for (int m = 0; m <= mmax; m++)
+            for (int m = 0; m <= L + 1 - ix - iy; m++)
             {
                 V[ix][iy][0][m] = pAy * V[ix][iy - 1][0][m] - pCy * V[ix][iy - 1][0][m + 1];
-                dV[ix][iy][0][m] = pAy * dV[ix][iy - 1][0][m] - pCy * dV[ix][iy - 1][0][m + 1];
-                if (direction == 1)
-                    dV[ix][iy][0][m] += V[ix][iy - 1][0][m + 1];
                 if (iy > 1)
-                {
                     V[ix][iy][0][m] += (iy - 1) * hiz * (V[ix][iy - 2][0][m] - V[ix][iy - 2][0][m + 1]);
-                    dV[ix][iy][0][m] += (iy - 1) * hiz * (dV[ix][iy - 2][0][m] - dV[ix][iy - 2][0][m + 1]);
-                }
             }
-        }
-    }
-
-    // z-VRR + z-dVRR
     for (int ix = 0; ix <= lx_max; ix++)
-    {
         for (int iy = 0; iy <= ly_max; iy++)
-        {
             for (int iz = 1; iz <= lz_max; iz++)
-            {
-                const int mmax = L - ix - iy - iz;
-                if (mmax < 0)
-                    continue;
-                for (int m = 0; m <= mmax; m++)
+                for (int m = 0; m <= L + 1 - ix - iy - iz; m++)
                 {
                     V[ix][iy][iz][m] = pAz * V[ix][iy][iz - 1][m] - pCz * V[ix][iy][iz - 1][m + 1];
-                    dV[ix][iy][iz][m] = pAz * dV[ix][iy][iz - 1][m] - pCz * dV[ix][iy][iz - 1][m + 1];
-                    if (direction == 2)
-                        dV[ix][iy][iz][m] += V[ix][iy][iz - 1][m + 1];
                     if (iz > 1)
-                    {
                         V[ix][iy][iz][m] += (iz - 1) * hiz * (V[ix][iy][iz - 2][m] - V[ix][iy][iz - 2][m + 1]);
-                        dV[ix][iy][iz][m] += (iz - 1) * hiz * (dV[ix][iy][iz - 2][m] - dV[ix][iy][iz - 2][m + 1]);
-                    }
+                }
+
+    std::array<double, 3> out{};
+    for (int direction = 0; direction < 3; ++direction)
+    {
+        const double PC_dir = pC[direction];
+        for (int ix = 0; ix <= lx_max; ix++)
+            for (int iy = 0; iy <= ly_max; iy++)
+                for (int iz = 0; iz <= lz_max; iz++)
+                    for (int m = 0; m < mclr; m++)
+                        dV[ix][iy][iz][m] = 0.0;
+
+        // dVRR base case: 2*zeta*PC_dir * F_{m+1}
+        for (int m = 0; m <= L + 1; m++)
+            dV[0][0][0][m] = 2.0 * pp.zeta * PC_dir * F[m + 1];
+
+        for (int ix = 1; ix <= lx_max; ix++)
+            for (int m = 0; m <= L - ix; m++)
+            {
+                dV[ix][0][0][m] = pAx * dV[ix - 1][0][0][m] - pCx * dV[ix - 1][0][0][m + 1];
+                if (direction == 0)
+                    dV[ix][0][0][m] += V[ix - 1][0][0][m + 1];
+                if (ix > 1)
+                    dV[ix][0][0][m] += (ix - 1) * hiz * (dV[ix - 2][0][0][m] - dV[ix - 2][0][0][m + 1]);
+            }
+        for (int ix = 0; ix <= lx_max; ix++)
+            for (int iy = 1; iy <= ly_max; iy++)
+            {
+                const int mmax = L - ix - iy;
+                for (int m = 0; m <= mmax; m++)
+                {
+                    dV[ix][iy][0][m] = pAy * dV[ix][iy - 1][0][m] - pCy * dV[ix][iy - 1][0][m + 1];
+                    if (direction == 1)
+                        dV[ix][iy][0][m] += V[ix][iy - 1][0][m + 1];
+                    if (iy > 1)
+                        dV[ix][iy][0][m] += (iy - 1) * hiz * (dV[ix][iy - 2][0][m] - dV[ix][iy - 2][0][m + 1]);
                 }
             }
-        }
+        for (int ix = 0; ix <= lx_max; ix++)
+            for (int iy = 0; iy <= ly_max; iy++)
+                for (int iz = 1; iz <= lz_max; iz++)
+                {
+                    const int mmax = L - ix - iy - iz;
+                    for (int m = 0; m <= mmax; m++)
+                    {
+                        dV[ix][iy][iz][m] = pAz * dV[ix][iy][iz - 1][m] - pCz * dV[ix][iy][iz - 1][m + 1];
+                        if (direction == 2)
+                            dV[ix][iy][iz][m] += V[ix][iy][iz - 1][m + 1];
+                        if (iz > 1)
+                            dV[ix][iy][iz][m] += (iz - 1) * hiz * (dV[ix][iy][iz - 2][m] - dV[ix][iy][iz - 2][m + 1]);
+                    }
+                }
+
+        // Extract m=0 slice of dV for HRR
+        double dV0[VRR_DIM][VRR_DIM][VRR_DIM]; // [0, l*_max] written below, nothing else read
+        for (int ix = 0; ix <= lx_max; ix++)
+            for (int iy = 0; iy <= ly_max; iy++)
+                for (int iz = 0; iz <= lz_max; iz++)
+                    dV0[ix][iy][iz] = dV[ix][iy][iz][0];
+        out[direction] = _nuclear_hrr(dV0, lAx, lAy, lAz, lBx, lBy, lBz, ABx, ABy, ABz);
     }
-
-    // Extract m=0 slice of dV for HRR
-    double dV0[VRR_DIM][VRR_DIM][VRR_DIM]; // [0, l*_max] written below, nothing else read
-    for (int ix = 0; ix <= lx_max; ix++)
-        for (int iy = 0; iy <= ly_max; iy++)
-            for (int iz = 0; iz <= lz_max; iz++)
-                dV0[ix][iy][iz] = dV[ix][iy][iz][0];
-
-    return _nuclear_hrr(dV0, lAx, lAy, lAz, lBx, lBy, lBz, ABx, ABy, ABz);
+    return out;
 }
 
 // ─── Public: 1e GTO-centre derivatives ───────────────────────────────────────
@@ -1682,18 +1686,28 @@ double HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_elem(
     const HartreeFock::ShellPair &sp,
     const Eigen::Vector3d &C, const double Z, const int direction)
 {
+    return _compute_nuclear_deriv_C_xyz(sp, C, Z)[direction];
+}
+
+std::array<double, 3> HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_xyz(
+    const HartreeFock::ShellPair &sp,
+    const Eigen::Vector3d &C, const double Z)
+{
     const int lAx = sp.A._cartesian[0], lAy = sp.A._cartesian[1], lAz = sp.A._cartesian[2];
     const int lBx = sp.B._cartesian[0], lBy = sp.B._cartesian[1], lBz = sp.B._cartesian[2];
     const double ABx = sp.R[0], ABy = sp.R[1], ABz = sp.R[2];
 
-    double dV = 0.0;
+    std::array<double, 3> dV{};
     for (const auto &pp : sp.primitive_pairs)
     {
-        double dv = _os_nuclear_primitive_dC(pp, lAx, lAy, lAz, lBx, lBy, lBz,
-                                             ABx, ABy, ABz, C, direction);
-        dV += pp.coeff_product * dv;
+        const auto dv = _os_nuclear_primitive_dC(pp, lAx, lAy, lAz, lBx, lBy, lBz,
+                                                 ABx, ABy, ABz, C);
+        for (int q = 0; q < 3; ++q)
+            dV[q] += pp.coeff_product * dv[q];
     }
-    return -Z * dV; // -Z factor (V includes nuclear charge sign)
+    for (double &d : dV)
+        d *= -Z; // -Z factor (V includes nuclear charge sign)
+    return dV;
 }
 
 // ─── Public: ERI derivatives for one contracted (μν|λσ) quartet ──────────────

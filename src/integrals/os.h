@@ -200,6 +200,11 @@ namespace HartreeFock
             const HartreeFock::ShellPair &sp,
             const Eigen::Vector3d &C, double Z, int direction);
 
+        // All three directions of the above; one Boys/VRR pass per primitive.
+        std::array<double, 3> _compute_nuclear_deriv_C_xyz(
+            const HartreeFock::ShellPair &sp,
+            const Eigen::Vector3d &C, double Z);
+
         // Returns flat array of ERI derivatives for one (μν|λσ) contracted quartet.
         // Layout: [cen*3 + dir], cen∈{0=A,1=B,2=C,3=D}, dir∈{0,1,2}
         std::array<double, 12> _compute_eri_deriv_elem(

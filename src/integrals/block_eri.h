@@ -16,6 +16,7 @@
 // One kernel object lives per bra iteration, so per thread.
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <vector>
 
@@ -80,6 +81,13 @@ namespace HartreeFock::Integrals
         double value(std::size_t ca, std::size_t cb, std::size_t cc, std::size_t cd) const
         {
             return use_first ? first.value(ca, cb, cc, cd) : second.value(ca, cb, cc, cd);
+        }
+        // Derivative kernels (hgp_deriv_block_eri.h, rys_deriv_block_eri.h):
+        // all 12 nuclear derivatives of one component.
+        void deriv(std::size_t ca, std::size_t cb, std::size_t cc, std::size_t cd,
+                   std::array<double, 12> &out) const
+        {
+            use_first ? first.deriv(ca, cb, cc, cd, out) : second.deriv(ca, cb, cc, cd, out);
         }
     };
 }
