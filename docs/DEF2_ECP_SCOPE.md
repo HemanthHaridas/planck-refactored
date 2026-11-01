@@ -106,6 +106,24 @@ deleted.
    `cart=False` with the same files on water, third-row molecules (H2S,
    SiH4) and a first-row transition-metal complex, to
    1e-9 Eh.
+   **Landed at 5e-8, not 1e-9** (`6e5f191a`). Deltas vs PySCF:
+   SiH4/SVP 4e-10, H2S/TZVP 1.5e-9, water/SVP 3.7e-9, water/QZVP 5.0e-9,
+   ZnCl2/SVP 1.3e-8.
+1b. **Find where the missing digits go.** The first guess was f shells, but
+   it does not fit: water/def2-SVP has no f functions (O s,p,d; H s,p) and
+   misses at 3.7e-9, while H2S/def2-TZVP has an f shell on S and is at
+   1.5e-9. Separate the candidates before fixing anything:
+   - SCF convergence: rerun both codes tighter (Planck `tol_density`
+     1e-12, PySCF `conv_tol_grad` 1e-8) and see if the gap moves.
+   - Basis handling: Planck drops redundant primitives at read time
+     (`drop_redundant_primitives`); PySCF does not. Same span, but check
+     the energy with the drop disabled.
+   - One-electron vs two-electron: compare S, T, V and the ERI tensor
+     element by element against `mol.intor` on water/def2-SVP, in the
+     spherical basis, normalized by the matrix max (not per block).
+   - Nuclear repulsion and geometry: compare E_nn to 1e-12 first.
+   Gate: whichever term carries the gap is named; tighten the five cases
+   to 1e-9 if it is fixed, or record why 5e-8 is the floor.
 2. **Nuclear-charge audit** of the 51 direct reads, with no behaviour change
    (every regression bitwise).
 3. **ECP parsing and storage** on the basis object; `nuclear_charge` returns

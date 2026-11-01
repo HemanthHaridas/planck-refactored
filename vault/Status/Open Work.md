@@ -56,6 +56,12 @@ is the recommended one; none blocks another except where noted.
   reads to classify), and ECP integrals with gradients. Licence checked
   2026-10-26: libecpint (MIT, with MIT/BSD dependencies) and BSE data
   (BSD-3) are compatible; libecpint recommended.
+  Branch `feat/def2-ecp`: steps 1 (def2 H–Kr files, five PySCF gates) and
+  2 (nuclear-charge audit: 46 reads, 16 physical, switched) landed.
+  **Open, step 1b:** the def2 gates match PySCF only to 4e-10..1.3e-8, so
+  they are pinned at 5e-8, not the scoped 1e-9. Not an f-shell effect:
+  water/def2-SVP (no f) misses at 3.7e-9. Isolate convergence, primitive
+  dropping, 1e vs 2e integrals and E_nn before fixing.
 - **Gradient performance** (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`,
   gradients 20–120× the SCF). G3 rescoped 2026-10-26 onto the energy build's
   HGP/Rys2D split.
