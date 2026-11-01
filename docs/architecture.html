@@ -286,413 +286,329 @@
         <nav id="toc-nav" class="sidebar-nav">
           <ul>
 <li class="toc-level-1"><a href="#planck-architecture-reference">Planck — Architecture Reference</a></li>
-<li class="toc-level-2"><a href="#build-system-cmakelists-txt">Build System (`CMakeLists.txt`)</a></li>
+<li class="toc-level-2"><a href="#binaries-and-build-cmakelists-txt">Binaries and Build (`CMakeLists.txt`)</a></li>
+<li class="toc-level-2"><a href="#error-handling-and-logging">Error Handling and Logging</a></li>
 <li class="toc-level-2"><a href="#central-type-system-src-base">Central Type System (`src/base/`)</a></li>
 <li class="toc-level-3"><a href="#enumerations">Enumerations</a></li>
-<li class="toc-level-3"><a href="#molecule">`Molecule`</a></li>
-<li class="toc-level-3"><a href="#shell-and-contractedview">`Shell` and `ContractedView`</a></li>
-<li class="toc-level-3"><a href="#basis">`Basis`</a></li>
+<li class="toc-level-3"><a href="#molecule-and-the-three-coordinate-frames">`Molecule` and the three coordinate frames</a></li>
+<li class="toc-level-3"><a href="#shell-contractedview-basis">`Shell`, `ContractedView`, `Basis`</a></li>
 <li class="toc-level-3"><a href="#shellpair-and-primitivepair">`ShellPair` and `PrimitivePair`</a></li>
-<li class="toc-level-3"><a href="#diisstate">`DIISState`</a></li>
-<li class="toc-level-3"><a href="#datascf-and-spinchannel">`DataSCF` and `SpinChannel`</a></li>
-<li class="toc-level-3"><a href="#calculator">`Calculator`</a></li>
+<li class="toc-level-3"><a href="#scf-data-and-diis">SCF data and DIIS</a></li>
+<li class="toc-level-3"><a href="#options-structs-and-calculator">Options structs and `Calculator`</a></li>
+<li class="toc-level-3"><a href="#mpi-surface-mpi-env-h">MPI surface (`mpi_env.h`)</a></li>
 <li class="toc-level-2"><a href="#input-output-src-io">Input/Output (`src/io/`)</a></li>
-<li class="toc-level-3"><a href="#parser-io-h-io-cpp">Parser — `io.h` / `io.cpp`</a></li>
-<li class="toc-level-3"><a href="#logger-logging-h">Logger — `logging.h`</a></li>
-<li class="toc-level-3"><a href="#checkpoint-checkpoint-h-checkpoint-cpp">Checkpoint — `checkpoint.h` / `checkpoint.cpp`</a></li>
-<li class="toc-level-2"><a href="#element-data-src-lookup">Element Data (`src/lookup/`)</a></li>
-<li class="toc-level-2"><a href="#basis-set-src-basis">Basis Set (`src/basis/`)</a></li>
-<li class="toc-level-3"><a href="#normalization-basis-cpp">Normalization — `basis.cpp`</a></li>
-<li class="toc-level-3"><a href="#gbs-reader-gaussian-cpp">GBS Reader — `gaussian.cpp`</a></li>
+<li class="toc-level-2"><a href="#lookup-and-the-boys-library-src-lookup">Lookup and the Boys Library (`src/lookup/`)</a></li>
+<li class="toc-level-2"><a href="#basis-sets-src-basis">Basis Sets (`src/basis/`)</a></li>
 <li class="toc-level-2"><a href="#symmetry-src-symmetry">Symmetry (`src/symmetry/`)</a></li>
-<li class="toc-level-3"><a href="#point-group-detection-symmetry-h-symmetry-cpp">Point-group detection — `symmetry.h` / `symmetry.cpp`</a></li>
-<li class="toc-level-3"><a href="#sao-blocking-mo-symmetry-h">SAO blocking — `mo_symmetry.h`</a></li>
-<li class="toc-level-3"><a href="#integral-symmetry-integral-symmetry-h">Integral symmetry — `integral_symmetry.h`</a></li>
 <li class="toc-level-2"><a href="#integrals-src-integrals">Integrals (`src/integrals/`)</a></li>
-<li class="toc-level-3"><a href="#shell-pairs-shellpair-h">Shell pairs — `shellpair.h`</a></li>
-<li class="toc-level-3"><a href="#obara-saika-engine-os-h-os-cpp">Obara-Saika engine — `os.h` / `os.cpp`</a></li>
-<li class="toc-level-3"><a href="#rys-quadrature-engine-rys-h-rys-cpp">Rys quadrature engine — `rys.h` / `rys.cpp`</a></li>
-<li class="toc-level-3"><a href="#engine-dispatch-base-h">Engine dispatch — `base.h`</a></li>
+<li class="toc-level-3"><a href="#block-kernels-and-the-fused-fock-loop">Block kernels and the fused Fock loop</a></li>
+<li class="toc-level-3"><a href="#derivatives">Derivatives</a></li>
 <li class="toc-level-2"><a href="#scf-src-scf">SCF (`src/scf/`)</a></li>
-<li class="toc-level-3"><a href="#scf-loop-conceptual">SCF loop (conceptual)</a></li>
-<li class="toc-level-3"><a href="#conventional-vs-direct-scf">Conventional vs. direct SCF</a></li>
-<li class="toc-level-3"><a href="#sad-guess">SAD guess</a></li>
+<li class="toc-level-2"><a href="#solvation-properties-counterpoise">Solvation, Properties, Counterpoise</a></li>
 <li class="toc-level-2"><a href="#post-hf-correlation-src-post-hf">Post-HF Correlation (`src/post_hf/`)</a></li>
-<li class="toc-level-3"><a href="#mp2-mp2-h-mp2-cpp">MP2 — `mp2.h` / `mp2.cpp`</a></li>
-<li class="toc-level-4"><a href="#rmp2-run-rmp2">RMP2 (`run_rmp2`)</a></li>
-<li class="toc-level-4"><a href="#ump2-run-ump2">UMP2 (`run_ump2`)</a></li>
-<li class="toc-level-3"><a href="#casscf-rasscf-casscf-h-and-casscf">CASSCF / RASSCF — `casscf.h` and `casscf/`</a></li>
-<li class="toc-level-4"><a href="#ci-strings-casscf-internal-h-casscf-strings-h">CI strings — `casscf_internal.h` / `casscf/strings.h`</a></li>
-<li class="toc-level-4"><a href="#ci-hamiltonian-casscf-ci-h-ci-cpp">CI Hamiltonian — `casscf/ci.h` / `ci.cpp`</a></li>
-<li class="toc-level-4"><a href="#reduced-density-matrices-casscf-rdm-h-rdm-cpp">Reduced density matrices — `casscf/rdm.h` / `rdm.cpp`</a></li>
-<li class="toc-level-4"><a href="#orbital-optimization-mcscf-loop-casscf-casscf-h">Orbital optimization — MCSCF loop (`casscf/casscf.h`)</a></li>
-<li class="toc-level-2"><a href="#coupled-cluster-src-post-hf-cc">Coupled Cluster (`src/post_hf/cc/`)</a></li>
-<li class="toc-level-3"><a href="#file-map">File map</a></li>
-<li class="toc-level-3"><a href="#tensor-types-common-h">Tensor types (`common.h`)</a></li>
-<li class="toc-level-3"><a href="#reference-types-common-h">Reference types (`common.h`)</a></li>
-<li class="toc-level-3"><a href="#amplitude-and-denominator-storage-amplitudes-h">Amplitude and denominator storage (`amplitudes.h`)</a></li>
-<li class="toc-level-3"><a href="#mo-integral-blocks-mo-blocks-h">MO integral blocks (`mo_blocks.h`)</a></li>
-<li class="toc-level-3"><a href="#diis-for-amplitudes-diis-h">DIIS for amplitudes (`diis.h`)</a></li>
-<li class="toc-level-3"><a href="#rccsd-solver-ccsd-cpp">RCCSD solver (`ccsd.cpp`)</a></li>
-<li class="toc-level-3"><a href="#rccsdt-backend-dispatch-ccsdt-cpp-tensor-backend">RCCSDT backend dispatch (`ccsdt.cpp`, `tensor_backend.*`)</a></li>
-<li class="toc-level-3"><a href="#determinant-space-backend-determinant-space">Determinant-space backend (`determinant_space.*`)</a></li>
-<li class="toc-level-3"><a href="#uccsd-and-uccsdt-ccsd-cpp-ccsdt-cpp">UCCSD and UCCSDT (`ccsd.cpp`, `ccsdt.cpp`)</a></li>
-<li class="toc-level-3"><a href="#arbitrary-order-tensor-runtime-solver-arbitrary-generated-arbitrary-runtime-generated-kernel-registry">Arbitrary-order tensor runtime (`solver_arbitrary.*`, `generated_arbitrary_runtime.*`, `generated_kernel_registry.*`)</a></li>
+<li class="toc-level-3"><a href="#integral-transforms-and-ri-integrals-h-cpp-ri">Integral transforms and RI (`integrals.{h,cpp}`, `ri/`)</a></li>
+<li class="toc-level-3"><a href="#mp2-and-orbital-response">MP2 and orbital response</a></li>
+<li class="toc-level-3"><a href="#ci-engine-fci-and-fciqmc-ci-fci-h-cpp-fciqmc-driver-h-cpp">CI engine, FCI and FCIQMC (`ci/`, `fci.{h,cpp}`, `fciqmc_driver.{h,cpp}`)</a></li>
+<li class="toc-level-3"><a href="#casscf-and-rasscf-casscf-h-casscf-internal-h-casscf">CASSCF and RASSCF (`casscf.h`, `casscf_internal.h`, `casscf/`)</a></li>
+<li class="toc-level-3"><a href="#coupled-cluster-cc-namespace-hartreefock-correlation-cc">Coupled cluster (`cc/`, namespace `HartreeFock::Correlation::CC`)</a></li>
 <li class="toc-level-2"><a href="#analytic-gradients-src-gradient">Analytic Gradients (`src/gradient/`)</a></li>
-<li class="toc-level-2"><a href="#geometry-optimization-src-opt">Geometry Optimization (`src/opt/`)</a></li>
-<li class="toc-level-3"><a href="#cartesian-l-bfgs-geomopt-h-geomopt-cpp">Cartesian L-BFGS — `geomopt.h` / `geomopt.cpp`</a></li>
-<li class="toc-level-3"><a href="#internal-coordinate-bfgs-intcoords-h-geomopt-cpp">Internal-coordinate BFGS — `intcoords.h` / `geomopt.cpp`</a></li>
-<li class="toc-level-2"><a href="#vibrational-frequencies-src-freq">Vibrational Frequencies (`src/freq/`)</a></li>
-<li class="toc-level-2"><a href="#ks-dft-src-dft">KS-DFT (`src/dft/`)</a></li>
-<li class="toc-level-3"><a href="#driver-dft-driver-h-driver-cpp">Driver — `dft/driver.h` / `driver.cpp`</a></li>
-<li class="toc-level-3"><a href="#grid-dft-base-grid-h-radial-h-angular-h">Grid — `dft/base/grid.h`, `radial.h`, `angular.h`</a></li>
-<li class="toc-level-3"><a href="#libxc-wrapper-dft-base-wrapper-h">libxc wrapper — `dft/base/wrapper.h`</a></li>
-<li class="toc-level-3"><a href="#ao-evaluation-on-grid-dft-ao-grid-h">AO evaluation on grid — `dft/ao_grid.h`</a></li>
-<li class="toc-level-3"><a href="#xc-on-grid-dft-xc-grid-h-xc-grid-cpp">XC on grid — `dft/xc_grid.h` / `xc_grid.cpp`</a></li>
-<li class="toc-level-3"><a href="#ks-potential-matrix-dft-ks-matrix-h-ks-matrix-cpp">KS potential matrix — `dft/ks_matrix.h` / `ks_matrix.cpp`</a></li>
-<li class="toc-level-2"><a href="#entry-points-src-driver-cpp-src-dft-main-cpp">Entry Points (`src/driver.cpp`, `src/dft/main.cpp`)</a></li>
-<li class="toc-level-3"><a href="#hf-driver-src-driver-cpp">HF driver — `src/driver.cpp`</a></li>
-<li class="toc-level-3"><a href="#dft-driver-src-dft-main-cpp">DFT driver — `src/dft/main.cpp`</a></li>
-<li class="toc-level-2"><a href="#data-flow-summary">Data Flow Summary</a></li>
+<li class="toc-level-2"><a href="#geometry-optimization-and-frequencies-src-opt-src-freq">Geometry Optimization and Frequencies (`src/opt/`, `src/freq/`)</a></li>
+<li class="toc-level-2"><a href="#kohn-sham-dft-src-dft">Kohn-Sham DFT (`src/dft/`)</a></li>
+<li class="toc-level-2"><a href="#entry-points-and-data-flow">Entry Points and Data Flow</a></li>
+<li class="toc-level-2"><a href="#determinism">Determinism</a></li>
 <li class="toc-level-2"><a href="#key-invariants-and-pitfalls">Key Invariants and Pitfalls</a></li>
 </ul>
         </nav>
       </aside>
       <main class="content">
         <h1 id="planck-architecture-reference">Planck — Architecture Reference</h1>
-<p>Planck is a C++23 quantum chemistry engine implementing Hartree-Fock SCF, post-HF correlation, and Kohn-Sham DFT from first principles. The codebase is organized around two standalone binaries — <code>hartree-fock</code> and <code>planck-dft</code> — that share a common library of integrals, basis-set handling, symmetry, I/O, and geometry optimization. The dominant architecture is a <code>Calculator</code>-centric pipeline with subsystem namespaces (<code>SCF</code>, <code>Correlation</code>, <code>DFT</code>, etc.), but a few larger subsystems such as coupled cluster and CASSCF also use method-local state objects and backend dispatch layers. Most recoverable failures propagate through <code>std::expected&lt;T, std::string&gt;</code>; a smaller number of debug invariants still use <code>assert(...)</code>, and a few narrow test-hook / guard paths still throw exceptions.</p>
+<p>Planck is a C++23 quantum chemistry engine: Hartree-Fock (RHF, UHF, ROHF), post-HF correlation (MP2, coupled cluster to arbitrary order, CASSCF/RASSCF, FCI, FCIQMC), Kohn-Sham DFT (LDA through double hybrids, TDDFT), analytic gradients, geometry optimization, frequencies, PCM solvation, and counterpoise. It ships as three binaries that share one library of integrals, basis handling, symmetry, SCF, I/O and geometry code. Every subsystem receives a <code>Calculator &amp;</code> (the root aggregate in <code>src/base/types.h</code>) and reads or writes its fields; larger subsystems (coupled cluster, CASSCF, double-hybrid gradients) keep method-local state objects on top of it. Recoverable failures propagate as <code>std::expected&lt;T, std::string&gt;</code> up to the driver, which logs them and exits; there are no exceptions on the hot paths.</p>
+<p>This document is the map: what lives where, how the pieces connect, and the invariants that are not enforced by types. The <em>why</em> of individual design decisions, with measurements, lives in the topic documents under <code>docs/</code> that each section names. Canonical done/open status lives in <code>vault/Status/</code>.</p>
 <hr>
-<h2 id="build-system-cmakelists-txt">Build System (<code>CMakeLists.txt</code>)</h2>
-<p>The project uses CMake 3.5+ with C++23 required and extensions disabled. Two primary executables are defined alongside an optional utility binary:</p>
+<h2 id="binaries-and-build-cmakelists-txt">Binaries and Build (<code>CMakeLists.txt</code>)</h2>
 <div class="table-wrap"><table>
 <thead><tr>
 <th>Binary</th>
+<th>Entry</th>
 <th>Purpose</th>
 </tr></thead>
 <tbody>
-<tr><td><code>hartree-fock</code></td><td>RHF/UHF SCF, MP2, CASSCF/RASSCF, CCSD/CCSDT/CCSDTQ, analytic gradients, geometry optimization, frequencies</td></tr>
-<tr><td><code>planck-dft</code></td><td>Kohn-Sham DFT (RKS/UKS) using the same SCF infrastructure plus libxc and a numerical grid</td></tr>
-<tr><td><code>chkdump</code></td><td>Checkpoint file inspector (optional, <code>BUILD_TOOLS=ON</code> by default)</td></tr>
+<tr><td><code>hartree-fock</code></td><td><code>src/driver.cpp</code> → <code>src/hf_driver.cpp</code></td><td>HF SCF, MP2, CC, CASSCF/RASSCF, FCI, FCIQMC, gradients, geomopt, frequencies, PCM, counterpoise</td></tr>
+<tr><td><code>planck-dft</code></td><td><code>src/dft/main.cpp</code> → <code>src/dft/driver.cpp</code></td><td>RKS/UKS, hybrids, range-separated and double hybrids, TDDFT, gradients, geomopt, frequencies, PCM</td></tr>
+<tr><td><code>planck-mpi</code></td><td><code>src/mpi/main.cpp</code> (<code>BUILD_MPI=ON</code>)</td><td>One binary for both; selects HF or DFT on <code>calculator.is_dft_run()</code>. Links MPI and defines <code>USE_MPI</code> when MPI is found, otherwise builds as a serial binary</td></tr>
+<tr><td><code>chkdump</code></td><td><code>tools/chkdump.cpp</code> (<code>BUILD_TOOLS=ON</code>)</td><td>Checkpoint inspector</td></tr>
 </tbody></table></div>
-<p>Dependencies are acquired at configure time through two mechanisms. <strong>Eigen 3.4.0</strong> is fetched via <code>FetchContent</code> and is header-only — it is never compiled separately. <strong>libmsym</strong> (point-group detection) and <strong>libxc</strong> (exchange-correlation functionals) are built as static archives via <code>ExternalProject_Add</code> and linked directly. This keeps all three dependencies hermetic: no system-level installs are needed, and the build is fully reproducible across machines.</p>
-<p>Source files are collected with <code>file(GLOB ...)</code> per module directory (<code>BASE_SRC</code>, <code>IO_SRC</code>, <code>LOOKUP_SRC</code>, <code>SYMM_SRC</code>, <code>BASIS_SRC</code>, <code>INT_SRC</code>, <code>SCF_SRC</code>, <code>POSTHF_SRC</code>, <code>GRADIENT_SRC</code>, <code>OPT_SRC</code>, <code>FREQ_SRC</code>). <code>planck-dft</code> adds <code>DFT_SRC</code> and links <code>libxc.a</code>; <code>hartree-fock</code> does not. Both binaries compile with <code>USE_OPENMP</code> enabled by default — if <code>find_package(OpenMP)</code> succeeds, <code>OpenMP::OpenMP_CXX</code> is linked and <code>USE_OPENMP</code> is defined, which activates <code>#pragma omp parallel</code> regions in the ERI inner loops and in the finite-difference Hessian. CUDA acceleration is opt-in (<code>-DUSE_CUDA=ON</code>) and routes through a separate <code>gpu/</code> subdirectory that is not documented here. Basis sets are installed under <code>share/basis-sets/</code>; the configure step writes <code>src/base/basis.h</code> from <code>basis.h.in</code> so that <code>get_basis_path()</code> resolves at runtime without hard-coded paths.</p>
-<p><strong>Trade-off:</strong> <code>file(GLOB ...)</code> does not automatically detect new files added after <code>cmake ..</code> without re-running CMake. This is a deliberate ergonomic choice — the glob strategy avoids maintaining explicit file lists and is acceptable because source-file additions are comparatively rare and always require a reconfigure anyway.</p>
+<p>CMake 3.5+, C++23, extensions off. Sources are gathered per directory with <code>file(GLOB ...)</code>, so a new source file needs a reconfigure. The repository also defines about eighty unit-test executables (<code>planck-*</code>, under <code>tests/</code>), registered with CTest.</p>
+<p><strong>Dependencies.</strong></p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Dependency</th>
+<th>How</th>
+<th>Notes</th>
+</tr></thead>
+<tbody>
+<tr><td>Eigen 3.4.0</td><td><code>FetchContent</code></td><td>Header-only. <code>EIGEN_DONT_PARALLELIZE</code> is defined globally: Planck owns its OpenMP parallelism, and Eigen&#x27;s own thread pool nested against it (measured ~26 % slower on 8-thread conventional RHF)</td></tr>
+<tr><td>libmsym</td><td><code>ExternalProject_Add</code>, pinned commit</td><td>Point-group detection</td></tr>
+<tr><td>libxc</td><td><code>ExternalProject_Add</code>, pinned commit</td><td>XC functionals; <code>planck-dft</code> and <code>planck-mpi</code> only. Built without <code>-march=native</code> unless <code>LIBXC_ENABLE_XHOST=ON</code> (portability)</td></tr>
+<tr><td>OpenSSL (Crypto)</td><td><code>find_package</code></td><td>Licence-signature verification and decryption for the Boys library loader</td></tr>
+<tr><td>Boys-function core</td><td>fetched at run time</td><td>Encrypted, licence-gated shared library; see <code>src/lookup/loader/</code> below</td></tr>
+<tr><td>OpenMP</td><td><code>find_package</code>, <code>USE_OPENMP=ON</code> default</td><td>Defines <code>USE_OPENMP</code></td></tr>
+<tr><td>MPI</td><td><code>find_package</code>, <code>planck-mpi</code> only</td><td>Defines <code>USE_MPI</code></td></tr>
+<tr><td>Python 3</td><td><code>find_package</code></td><td>Runs the <code>ccgen</code> generator at build time for the generated CC kernels</td></tr>
+</tbody></table></div>
+<p><strong>Generated code.</strong> The coupled-cluster residual kernels for the generated arbitrary-order solvers are emitted by the <code>ccgen</code> Python package (<code>python/ccgen/</code>) at build time. CMake options select what is generated: <code>PLANCK_CC_SPIN_ADAPT</code> (spin-adapted closed-shell kernels; ON, and required for correct generated RCC energies), <code>PLANCK_CC_UCC</code> (unrestricted generated CC; OFF by default), <code>PLANCK_CC_ARBITRARY_LOWER_RANKS</code> (route generated rank 2/3 through the arbitrary-order harness), <code>PLANCK_CC_DRESS_OPERATORS</code> and <code>PLANCK_CC_INCLUDE_INTERMEDIATES</code> (dressing experiments; OFF). See <code>docs/CCGEN_KERNEL_WIRING.md</code>.</p>
+<p><strong>Configure-time headers.</strong> <code>src/base/basis.h</code> (from <code>basis.h.in</code>) bakes in the basis-set install path, overridable by <code>$BASIS_PATH</code>; <code>src/lookup/loader/license_path.h</code> and <code>cache_path.h</code> fix where the Boys licence and its cached blob live under the install prefix.</p>
+<hr>
+<h2 id="error-handling-and-logging">Error Handling and Logging</h2>
+<p>Public functions return <code>std::expected&lt;T, std::string&gt;</code>; callers propagate with an early <code>return std::unexpected(...)</code> or the monadic <code>.and_then</code> / <code>.transform</code>. The driver prints the final error. Debug invariants use <code>assert</code>, which compiles out in Release builds (so <code>assert</code>-only unit tests pass vacuously there; see <code>vault/Status/Open Work.md</code>).</p>
+<p><code>src/io/logging.h</code> is a header-only logger with a global mutex and a <code>thread_local</code> silence depth. The <code>ScopedSilence</code> RAII guard mutes all output while an inner calculation runs (finite-difference Hessian points, SAD atoms, counterpoise sub-calculations, geometry-optimization inner SCFs). <code>map_enum&lt;T&gt;</code> turns enums into printable names.</p>
 <hr>
 <h2 id="central-type-system-src-base">Central Type System (<code>src/base/</code>)</h2>
-<p><code>types.h</code> is the single header that every other module includes. It defines the shared data-carrying structs and enums in the <code>HartreeFock</code> namespace, plus a small number of lightweight stateful helpers that are used across subsystems (for example the SCF DIIS containers). Most business logic still lives in the subsystem modules.</p>
+<p><code>types.h</code> (~1700 lines) is the one header every module includes: options structs, data structs, enums, and a few shared helpers (the SCF DIIS containers and their coefficient solve). <code>tables.h</code> holds constants, <code>sphere.h</code> the Lebedev/sphere point tables used by PCM and ESP, <code>mpi_env.h</code> the whole MPI surface (below), and <code>basis.h.in</code> the basis path template.</p>
 <h3 id="enumerations">Enumerations</h3>
-<p>All user-visible options are encoded as scoped enums, preventing accidental integer misuse and making <code>switch</code> exhaustiveness errors visible at compile time.</p>
 <div class="table-wrap"><table>
 <thead><tr>
 <th>Enum</th>
 <th>Values</th>
 </tr></thead>
 <tbody>
-<tr><td><code>ShellType</code></td><td><code>S(0)</code>, <code>P(1)</code>, <code>D(2)</code>, <code>F(3)</code>, <code>G(4)</code>, <code>H(5)</code>, <code>I(6)</code></td></tr>
+<tr><td><code>ShellType</code></td><td><code>S</code> … <code>I</code> (L = 0 … 6)</td></tr>
+<tr><td><code>BasisType</code></td><td><code>Cartesian</code>, <code>Spherical</code></td></tr>
 <tr><td><code>SCFType</code></td><td><code>RHF</code>, <code>ROHF</code>, <code>UHF</code></td></tr>
-<tr><td><code>PostHF</code></td><td><code>None</code>, <code>RMP2</code>, <code>UMP2</code>, <code>RCCSD</code>, <code>UCCSD</code>, <code>RCCSDT</code>, <code>UCCSDT</code>, <code>RCCSDTQ</code>, <code>CASSCF</code>, <code>RASSCF</code>, <code>FCI</code></td></tr>
-<tr><td><code>CalculationType</code></td><td><code>SinglePoint</code>, <code>Gradient</code>, <code>GeomOpt</code>, <code>Frequency</code>, <code>GeomOptFrequency</code>, <code>ImaginaryFollow</code>, <code>LinearResponse</code></td></tr>
 <tr><td><code>SCFMode</code></td><td><code>Conventional</code>, <code>Direct</code>, <code>Auto</code></td></tr>
-<tr><td><code>IntegralMethod</code></td><td><code>ObaraSaika</code>, <code>RysQuadrature</code>, <code>HeadGordonPople</code>, <code>Auto</code></td></tr>
 <tr><td><code>SCFGuess</code></td><td><code>HCore</code>, <code>SAD</code>, <code>ReadDensity</code>, <code>ReadFull</code></td></tr>
+<tr><td><code>IntegralMethod</code></td><td><code>ObaraSaika</code>, <code>RysQuadrature</code>, <code>HeadGordonPople</code>, <code>Auto</code> (default)</td></tr>
+<tr><td><code>ERIKernel</code></td><td><code>Coulomb</code>, <code>LongRange</code> (erf), <code>ShortRange</code> (erfc)</td></tr>
+<tr><td><code>PostHF</code></td><td><code>None</code>, <code>RMP2</code>, <code>UMP2</code>, <code>RCCSD</code>, <code>UCCSD</code>, <code>RCCSDT</code>, <code>UCCSDT</code>, <code>RCCSDTQ</code>, <code>UCCGEN</code>, <code>CASSCF</code>, <code>RASSCF</code>, <code>FCI</code>, <code>FCIQMC</code></td></tr>
+<tr><td><code>CalculationType</code></td><td><code>SinglePoint</code>, <code>Gradient</code>, <code>GeomOpt</code>, <code>Frequency</code>, <code>GeomOptFrequency</code>, <code>ImaginaryFollow</code>, <code>LinearResponse</code></td></tr>
 <tr><td><code>OptCoords</code></td><td><code>Cartesian</code>, <code>Internal</code></td></tr>
 <tr><td><code>DFTGridQuality</code></td><td><code>Coarse</code>, <code>Normal</code>, <code>Fine</code>, <code>UltraFine</code></td></tr>
-<tr><td><code>XCExchangeFunctional</code></td><td><code>Custom</code>, <code>Slater</code>, <code>B88</code>, <code>PW91</code>, <code>PBE</code>, <code>B3LYP</code>, <code>PBE0</code></td></tr>
-<tr><td><code>XCCorrelationFunctional</code></td><td><code>Custom</code>, <code>VWN5</code>, <code>LYP</code>, <code>P86</code>, <code>PW91</code>, <code>PBE</code></td></tr>
+<tr><td><code>XCExchangeFunctional</code> / <code>XCCorrelationFunctional</code></td><td>named aliases plus <code>Custom</code> (any libxc name or ID)</td></tr>
+<tr><td><code>LinearResponseMethod</code> / <code>LinearResponseSpin</code></td><td>Casida or TDA; singlet, triplet, spin-conserving</td></tr>
+<tr><td><code>SolvationModel</code></td><td>none or C-PCM</td></tr>
 </tbody></table></div>
-<h3 id="molecule"><code>Molecule</code></h3>
-<p>Holds all per-molecule data. The coordinate layout follows a strict three-frame convention:</p>
-<ul>
-<li><code>coordinates</code> — raw input geometry, in Angstrom as given by the user</li>
-<li><code>_coordinates</code> — same geometry converted to Bohr by <code>prepare_coordinates()</code></li>
-<li><code>_standard</code> — symmetry-reoriented geometry in Bohr, set by <code>detectSymmetry()</code> (or equal to <code>_coordinates</code> when symmetry is disabled)</li>
-</ul>
-<p><strong>Critical invariant:</strong> All downstream code — basis set construction, nuclear repulsion, integral evaluation, and gradients — consumes <code>_standard</code>. The <code>_angstrom_to_bohr()</code> helper only converts <code>coordinates → _coordinates</code>; it does not touch <code>_standard</code>. This separation means symmetry reorientation is transparent to all downstream modules.</p>
-<h3 id="shell-and-contractedview"><code>Shell</code> and <code>ContractedView</code></h3>
-<p><code>Shell</code> stores the raw data for one contracted Gaussian shell: center (Bohr), shell type, primitive exponents <code>_primitives</code>, contracted coefficients <code>_coefficients</code>, and per-primitive normalizations <code>_normalizations</code>. The contracted norm <code>Nc</code> is folded into <code>_coefficients</code> during GBS file parsing — there is no separate <code>Nc</code> factor anywhere in the integral code.</p>
-<p><code>ContractedView</code> is a lightweight span-based reference into a shell. It adds a Cartesian angular-momentum tuple <code>_cartesian = (lx, ly, lz)</code>, a component norm <code>_component_norm = 1/sqrt((2lx-1)!! (2ly-1)!! (2lz-1)!!)</code>, and crucially <code>_index</code> — the position of this basis function in <code>Basis::_basis_functions</code>. This index is what the integral engine uses to place each computed integral into the correct matrix element.</p>
-<p><strong>Key invariant:</strong> <code>ContractedView._index</code> must be set correctly for every basis function. The OS integral engine uses it directly to index into output matrices; an incorrect or default-zero index silently misplaces all integrals for that function.</p>
-<h3 id="basis"><code>Basis</code></h3>
-<p>Holds <code>_shells</code> (one entry per contracted shell) and <code>_basis_functions</code> (one <code>ContractedView</code> per Cartesian basis function — multiple entries per shell for angular momentum L≥1). <code>nbasis()</code> returns the number of Cartesian basis functions; <code>nshells()</code> returns the number of shells.</p>
+<h3 id="molecule-and-the-three-coordinate-frames"><code>Molecule</code> and the three coordinate frames</h3>
+<p><code>coordinates</code> is the input geometry (Angstrom); <code>_coordinates</code> is the same in Bohr; <code>_standard</code> is the symmetry-reoriented geometry in Bohr, set by <code>detectSymmetry()</code> or copied from <code>_coordinates</code> when symmetry is off. Basis centres, nuclear repulsion and every integral use <code>_standard</code>. DFT additionally reads <code>_coordinates</code> for the grid, so after symmetry detection the DFT path calls <code>sync_coordinate_frames_from_standard()</code> to keep both in one frame (a split frame once produced symmetry-forbidden gradient components). Ghost atoms (for counterpoise) carry basis functions but no nuclear charge.</p>
+<h3 id="shell-contractedview-basis"><code>Shell</code>, <code>ContractedView</code>, <code>Basis</code></h3>
+<p><code>Shell</code> holds one contracted shell: centre, L, exponents, coefficients (with the contracted norm already folded in at read time), and primitive norms. <code>ContractedView</code> is a span-based view of one Cartesian component with its <code>(lx, ly, lz)</code>, component norm, and <code>_index</code>, its position in <code>Basis::_basis_functions</code>, which is how integral code places results in AO matrices. <code>Basis</code> holds the shells and the per-component views. For a spherical basis it also holds <code>_cart_to_sph</code>, the block-diagonal <code>[n_sph × n_cart]</code> transform; <code>working_nbasis()</code> is the size of the basis SCF actually works in (spherical or Cartesian) and <code>nbasis()</code> the Cartesian count the integral engines use.</p>
 <h3 id="shellpair-and-primitivepair"><code>ShellPair</code> and <code>PrimitivePair</code></h3>
-<p><code>ShellPair</code> is computed once before SCF and cached. Its constructor evaluates all <code>nA × nB</code> primitive-pair Gaussian products: the product center <code>P</code>, displacement vectors <code>pA = P − A</code> and <code>pB = P − B</code>, the exponential prefactor, and the product of contracted coefficients and normalizations. The Schwarz screening value is also pre-computed. <code>build_shellpairs</code> in <code>shellpair.h</code> generates all unique <code>(i, j)</code> pairs with <code>i ≥ j</code> in row-major order. To recover the shell indices from a <code>ShellPair</code>, use <code>sp.A._index</code> and <code>sp.B._index</code> directly — do not call <code>invert_pair_index</code> on a shell-pair position.</p>
-<h3 id="diisstate"><code>DIISState</code></h3>
-<p>Implements Pulay&#x27;s Direct Inversion in the Iterative Subspace inline in <code>types.h</code>. Each iteration <code>push(F, e)</code> appends the current Fock matrix and DIIS error <code>e = X^T (FPS − SPF) X</code> to a <code>std::deque</code> capped at <code>max_vecs</code> (default 8). <code>extrapolate()</code> solves the augmented linear system <code>B c = [0…0, −1]^T</code> where <code>B_{ij} = Tr(e_i^T e_j)</code> and returns the linear combination of Fock matrices minimizing the error norm subject to <code>Σ c_i = 1</code>. The DIIS restart factor in <code>OptionsSCF</code> causes the subspace to be cleared when the error grows by more than a threshold, preventing stagnation.</p>
-<h3 id="datascf-and-spinchannel"><code>DataSCF</code> and <code>SpinChannel</code></h3>
-<p><code>SpinChannel</code> holds the density matrix, Fock matrix, MO energies, MO coefficients, and MO symmetry labels for one spin. <code>DataSCF</code> aggregates an alpha and a beta channel; for RHF the beta channel is allocated but unused. <code>Calculator::initialize()</code> allocates all matrices to <code>nbasis × nbasis</code> zero matrices after the basis is loaded.</p>
-<h3 id="calculator"><code>Calculator</code></h3>
-<p>The root aggregate. Every module receives a <code>Calculator &amp;</code> and reads/writes its fields. The public fields include all <code>Options*</code> structs, the <code>Molecule</code>, the <code>Basis</code>, the SCF data (<code>_info._scf</code>), the stored ERI tensor (<code>_eri</code>), the overlap and core Hamiltonian matrices, CASSCF results, gradient, Hessian, frequencies, and SAO blocking data. For SA-CASSCF runs, <code>_cas_root_energies</code> stores per-root total CASSCF energies (not bare CI eigenvalues), so the final root table can be averaged directly with the configured SA weights. <code>_compute_nuclear_repulsion()</code> uses <code>_molecule._standard</code> — it must be called after <code>_standard</code> is populated in Bohr.</p>
+<p>Built once per geometry by <code>build_shellpairs</code>: for every unique pair (upper triangle, row-major), the Gaussian product centres, prefactors and exponent sums of all primitive pairs, plus the Schwarz bound. AO placement always uses <code>sp.A._index</code> / <code>sp.B._index</code>, never arithmetic on the pair&#x27;s position in the vector.</p>
+<h3 id="scf-data-and-diis">SCF data and DIIS</h3>
+<p><code>SpinChannel</code> (density, Fock, MO coefficients, energies, irrep labels) ×2 make <code>DataSCF</code>; ROHF and RHF keep one spatial MO set in both channels. <code>DIISState</code> / <code>UHFDIISState</code> implement Pulay DIIS with error <code>e = FPS − SPF</code>; both route their coefficient solve through <code>solve_diis_coefficients</code>, which drops the oldest vector only on a genuine breakdown (indefinite Gram block, non-finite coefficients), not on the Gram condition number.</p>
+<h3 id="options-structs-and-calculator">Options structs and <code>Calculator</code></h3>
+<p>Each input section parses into an <code>Options*</code> struct (<code>OptionsSCF</code>, <code>OptionsBasis</code>, <code>OptionsGeometry</code>, <code>OptionsIntegral</code>, <code>OptionsDFT</code>, <code>OptionsSolvation</code>, <code>OptionsActiveSpace</code>, <code>OptionsFCIQMC</code>, <code>OptionsBSSE</code>, <code>OptionsESP</code>, <code>OptionsOutput</code>). <code>Calculator</code> aggregates all of them with the molecule, basis, shell pairs, overlap and core Hamiltonian, the stored ERI tensor (conventional mode), SCF results, post-HF results, gradient, Hessian and frequencies. <code>Calculator::initialize()</code> allocates matrices after the basis is loaded and must run before any integral or SCF code.</p>
+<h3 id="mpi-surface-mpi-env-h">MPI surface (<code>mpi_env.h</code>)</h3>
+<p>The only place <code>&lt;mpi.h&gt;</code> is included below the driver. Without <code>USE_MPI</code> every function is a no-op returning rank 0, size 1, so the compute kernels carry identical source in all three binaries. Distributed work splits the shell-quartet or grid-point loop by rank and reduces in fixed rank order, so results are independent of rank count. See <code>docs/HPC_MPI.md</code>.</p>
 <hr>
 <h2 id="input-output-src-io">Input/Output (<code>src/io/</code>)</h2>
-<h3 id="parser-io-h-io-cpp">Parser — <code>io.h</code> / <code>io.cpp</code></h3>
-<p>The input format is section-based. <code>_split_into_sections()</code> reads the file and builds a <code>SectionMap</code> (<code>unordered_map&lt;string, vector&lt;string&gt;&gt;</code>) keyed on section headers (<code>%begin_control</code>, <code>%begin_scf</code>, etc.). Each section parser receives its corresponding line vector and writes into the appropriate <code>Options*</code> struct. The parser stack uses <code>std::expected&lt;void, std::string&gt;</code> for recoverable input failures, propagating errors to <code>parse_input()</code> which assembles the complete <code>Calculator</code>. Constraints are parsed from an optional <code>%begin_constraints</code> block into <code>vector&lt;GeomConstraint&gt;</code>.</p>
-<p><strong>Design trade-off:</strong> A single flat section map is simpler than a recursive grammar but requires every section name to be globally unique. This is acceptable for the modest vocabulary of a quantum chemistry input file.</p>
-<h3 id="logger-logging-h">Logger — <code>logging.h</code></h3>
-<p>A header-only namespace with a global <code>std::mutex log_mutex</code> and <code>thread_local int silence_depth</code>. The <code>ScopedSilence</code> RAII guard increments <code>silence_depth</code> on construction and decrements on destruction; all logging functions return immediately when <code>silence_depth &gt; 0</code>. This mechanism is used during gradient finite-difference steps (the inner SCF runs silently) and during the SAD guess (atomic SCF runs are silenced). <code>map_enum&lt;T&gt;</code> specializations for all enum types live here, converting enum values to human-readable strings for log output.</p>
-<h3 id="checkpoint-checkpoint-h-checkpoint-cpp">Checkpoint — <code>checkpoint.h</code> / <code>checkpoint.cpp</code></h3>
-<p>Binary checkpoint files use the magic bytes <code>&quot;PLNKCHK\0&quot;</code> and a versioned layout (currently v6). The format stores everything needed to restart or continue a calculation: geometry in the standard frame (Bohr), basis shell data, SCF matrices, CASSCF MOs, and active natural occupations. Three restart modes exist:</p>
-<ol>
-<li><strong><code>ReadDensity</code></strong> — loads density/Fock/MOs only; geometry comes from the input file. Use when re-running the same system in a different basis or with different options.</li>
-<li><strong><code>ReadFull</code></strong> — <code>load_geometry()</code> is called first (before basis/symmetry setup) to restore the optimized geometry, charge, and multiplicity; then <code>load()</code> supplies the density. Use to restart from a converged geometry optimization.</li>
-<li><strong>Basis projection</strong> — <code>load_mos()</code> reads MO coefficients without enforcing <code>nbasis</code> agreement; <code>project_density()</code> then uses SVD Löwdin projection via the cross-overlap matrix to produce a starting density in the larger basis. Use to bootstrap a larger-basis calculation from a smaller-basis checkpoint.</li>
-</ol>
-<p><strong>Trade-off:</strong> The versioned binary format is compact and fast but not human-readable. The <code>chkdump</code> utility provides inspection. Each version increment is additive (old files remain loadable), but the reader must handle <code>has_*</code> flags that indicate whether optional blocks are present.</p>
-<hr>
-<h2 id="element-data-src-lookup">Element Data (<code>src/lookup/</code>)</h2>
-<p><code>elements.h</code> / <code>elements.cpp</code> provide lookup tables for atomic numbers, symbols, masses, and covalent radii. Used by the input parser to map element symbols to atomic numbers, by the SAD guess to identify atomic occupations, and by the geometry optimizer to infer connectivity for internal coordinate generation.</p>
-<hr>
-<h2 id="basis-set-src-basis">Basis Set (<code>src/basis/</code>)</h2>
-<h3 id="normalization-basis-cpp">Normalization — <code>basis.cpp</code></h3>
-<p><code>primitive_normalization(L, exponents)</code> computes the per-primitive normalization <code>N_i = (2α/π)^{3/4} (4α)^{L/2} / sqrt((2L-1)!!)</code> for each primitive in the shell. <code>contracted_normalization(L, exponents, coefficients, prim_norms)</code> computes the contracted-shell norm <code>Nc</code> such that <code>⟨χ|χ⟩ = 1</code>. The norm <code>Nc</code> is immediately multiplied into <code>Shell._coefficients</code>; downstream code never applies a separate <code>Nc</code> factor. <code>_cartesian_shell_order(L)</code> generates the canonical ordering of Cartesian angular-momentum tuples <code>(lx, ly, lz)</code> with <code>lx + ly + lz = L</code>, matching the convention used by Gaussian94 GBS files.</p>
-<h3 id="gbs-reader-gaussian-cpp">GBS Reader — <code>gaussian.cpp</code></h3>
-<p><code>read_gbs_basis()</code> parses Gaussian94 <code>.gbs</code> format files. For each atom in the molecule it locates the matching element block, reads all shells, computes primitive and contracted normalizations, and populates <code>Shell._center</code> from <code>molecule._standard</code> (Bohr). After reading, it builds <code>Basis._basis_functions</code> by calling <code>_cartesian_shell_order</code> and stamping <code>ContractedView._index</code> with the running basis-function counter.</p>
-<hr>
-<h2 id="symmetry-src-symmetry">Symmetry (<code>src/symmetry/</code>)</h2>
-<h3 id="point-group-detection-symmetry-h-symmetry-cpp">Point-group detection — <code>symmetry.h</code> / <code>symmetry.cpp</code></h3>
-<p><code>detectSymmetry(molecule)</code> wraps libmsym via RAII <code>SymmetryContext</code> and <code>SymmetryElements</code> classes. libmsym identifies the molecular point group, returns the symmetry-adapted coordinates in the standard frame (<code>_standard</code>), and provides symmetry operations expressed as permutations of atoms. The detected point group string is stored in <code>molecule._point_group</code>. When symmetry is disabled, <code>_standard</code> is set to <code>_coordinates</code> unchanged.</p>
-<h3 id="sao-blocking-mo-symmetry-h">SAO blocking — <code>mo_symmetry.h</code></h3>
-<p><code>build_sao_basis()</code> assembles the symmetry-adapted AO basis. The SAO transform matrix <code>_sao_transform</code> is a unitary matrix <code>U</code> that block-diagonalizes the overlap and Fock matrices by irrep. During SCF, <code>run_rhf</code> / <code>run_uhf</code> use per-irrep diagonalization instead of a global eigensolve, ensuring that the resulting MOs carry clean irrep labels (<code>SpinChannel.mo_symmetry</code>). The irrep-per-column arrays <code>_sao_irrep_index</code> and <code>_sao_irrep_names</code> allow the CASSCF active-orbital picker to filter MOs by symmetry.</p>
-<h3 id="integral-symmetry-integral-symmetry-h">Integral symmetry — <code>integral_symmetry.h</code></h3>
-<p><code>build_integral_symmetry_ops()</code> generates <code>SignedAOSymOp</code> records — permutation/phase tables on AO indices — for each symmetry operation of the molecular point group. When <code>_use_integral_symmetry</code> is active, the OS integral engine uses these to skip symmetry-equivalent shell quartets, reducing the ERI cost by approximately the order of the point group.</p>
-<hr>
-<h2 id="integrals-src-integrals">Integrals (<code>src/integrals/</code>)</h2>
-<h3 id="shell-pairs-shellpair-h">Shell pairs — <code>shellpair.h</code></h3>
-<p><code>build_shellpairs(basis)</code> iterates over all unique <code>(i, j)</code> basis-function pairs with <code>i ≥ j</code> and constructs a <code>ShellPair</code> for each. The shell-pair index is <code>pair_index(i, j) = i(i+1)/2 + j</code>. <code>invert_pair_index(k)</code> inverts this mapping arithmetically, but to recover shell indices from a <code>ShellPair</code> in the ERI loop it is always better to read <code>sp.A._index</code> and <code>sp.B._index</code> directly from the stored references.</p>
-<h3 id="obara-saika-engine-os-h-os-cpp">Obara-Saika engine — <code>os.h</code> / <code>os.cpp</code></h3>
-<p>The primary integral engine implements the Obara-Saika vertical and horizontal recurrence relations (VRR+HRR). It provides:</p>
-<ul>
-<li><code>_compute_1e(shell_pairs, nbasis, sym_ops)</code> — overlap <code>S</code> and kinetic <code>T</code> matrices in one pass</li>
-<li><code>_compute_nuclear_attraction(shell_pairs, nbasis, molecule, sym_ops)</code> — nuclear attraction <code>V</code> using the Boys function</li>
-<li><code>_compute_2e(shell_pairs, nbasis, tol_eri, sym_ops)</code> — full AO ERI tensor with Schwarz screening; returns a flat <code>vector&lt;double&gt;</code> in chemist&#x27;s notation <code>(μν|λσ)</code></li>
-<li><code>_compute_2e_fock(shell_pairs, density, nbasis, tol_eri, sym_ops)</code> — direct-SCF Fock contribution builder; it avoids storing the tensor on <code>Calculator</code>, but currently builds a local screened ERI tensor before the density contraction</li>
-<li><code>_compute_2e_fock_uhf(shell_pairs, Pa, Pb, nbasis, tol_eri, sym_ops)</code> — UHF direct-SCF variant that builds one local spin-independent ERI tensor and contracts alpha/beta Fock contributions together</li>
-<li><code>_compute_eri_deriv_elem(spAB, spCD)</code> — 12-element gradient of a contracted ERI quartet used by analytic gradient code</li>
-<li><code>_compute_1e_deriv_A(sp)</code>, <code>_compute_nuclear_deriv_A_elem(sp, mol)</code>, <code>_compute_nuclear_deriv_C_elem(sp, C, Z, dir)</code> — 1e gradient derivatives</li>
-<li><code>_compute_multipole_matrices(shell_pairs, nbasis, origin)</code> — dipole and quadrupole integral matrices</li>
-<li><code>_compute_cross_overlap(large_basis, small_basis)</code> — cross-basis overlap for Löwdin basis-set projection</li>
-</ul>
-<p>The four-center OS kernel uses a thread-local <code>EriScratch</code> object. Its <code>vrr</code> and <code>hrr</code> vectors are resized to the actual angular momentum extents of each primitive quartet, replacing the previous fixed worst-case per-thread VRR/HRR arrays. This keeps OpenMP scratch private without paying the memory cost of gigabyte-scale scratch buffers on every thread.</p>
-<p>The Schwarz screening criterion discards quartets where <code>Q(AB) × Q(CD) &lt; tol_eri</code>. <code>Q(AB) = sqrt((AB|AB))</code> is pre-computed per shell pair during ERI construction. The OS Schwarz table also respects AO integral symmetry operations by evaluating a canonical pair and assigning the same bound across its symmetry orbit. The stored-ERI and local-ERI Fock builders iterate only canonical pair quartets, scatter all eight ERI permutation slots, and use OpenMP atomic writes in <code>write_eri_permutations(...)</code> so overlapping permutation fills are race-free.</p>
-<h3 id="rys-quadrature-engine-rys-h-rys-cpp">Rys quadrature engine — <code>rys.h</code> / <code>rys.cpp</code></h3>
-<p>The Rys backend provides the same public ERI and Fock-building surface as the OS engine: <code>_compute_2e</code>, <code>_compute_2e_fock</code>, <code>_compute_2e_fock_uhf</code>, plus <code>_auto</code> variants. At the primitive level, <code>_rys_eri_primitive(...)</code> converts the Boys-function dependence into Rys roots and weights, builds three 1D VRR tables per root, accumulates the root-summed six-dimensional spatial buffer <code>_rys_sum_buf</code>, and then applies AB/CD HRR to obtain the requested Cartesian quartet. <code>_rys_contracted_eri(...)</code> sums the primitive-pair products.</p>
-<p>Root generation lives in <code>rys_roots.cpp</code>. The one-root case uses an exact closed form; multi-root cases build a Stieltjes-Jacobi recurrence from long-double Boys moments and diagonalize the Jacobi matrix with Eigen. The Gauss-Legendre tables are retained as a numerical fallback if the recurrence or diagonalization degenerates.</p>
-<p>The Rys stored-ERI builders mirror the OS loop shape: build a Schwarz table, iterate pair quartets with <code>p &lt;= q</code>, screen on <code>Q(AB) × Q(CD)</code>, compute the contracted ERI, and scatter the eight permutation-equivalent tensor slots. The Rys API accepts <code>sym_ops</code> for signature parity with OS, but quartet-orbit pruning from AO integral symmetry is currently only applied in the OS backend.</p>
-<h3 id="engine-dispatch-base-h">Engine dispatch — <code>base.h</code></h3>
-<p><code>IntegralMethod</code> selects <code>ObaraSaika</code>, <code>RysQuadrature</code>, <code>HeadGordonPople</code>, or <code>Auto</code> in <code>integrals/base.h</code>. <code>Auto</code> dispatches at the contracted quartet level through <code>_auto_contracted_eri(...)</code>: it estimates OS and Rys work in <code>_auto_prefers_rys(...)</code> and chooses Rys only when the Rys estimate is cheaper. <code>HeadGordonPople</code> is also available as an explicit user-selected engine and is favored in the documented low-to-medium-angular-momentum contracted regime because it factors HRR outside the primitive contraction loop. The public <code>RYS_CROSSOVER_L = 4</code> constant documents the intended high-angular-momentum crossover, but the actual <code>Auto</code> branch is cost-model based rather than a hard <code>L &gt;= 4</code> rule.</p>
-<hr>
-<h2 id="scf-src-scf">SCF (<code>src/scf/</code>)</h2>
-<p>The SCF module implements <code>run_rhf()</code> and <code>run_uhf()</code>. Both functions share the same structural loop but differ in how the Fock matrix is built — RHF uses a single total density; UHF maintains separate alpha and beta densities and builds <code>G_alpha</code> and <code>G_beta</code> independently.</p>
-<h3 id="scf-loop-conceptual">SCF loop (conceptual)</h3>
-<p>The SCF loop (implemented in <code>src/scf/</code>) follows the standard algorithm:</p>
-<ol>
-<li>Form initial density from core Hamiltonian diagonalization (H-core guess) or SAD guess</li>
-<li>Each iteration: 1. Form the two-electron Fock contribution G (conventional: from stored ERI; direct: recompute) 2. Build F = H_core + G 3. Compute DIIS error <code>e = X^T (F P S - S P F) X</code> and push to <code>DIISState</code> 4. If DIIS is ready, replace F with the extrapolated Fock 5. Transform to orthogonal basis: F&#x27; = X^T F X 6. Diagonalize F&#x27; → C&#x27;, ε 7. Back-transform: C = X C&#x27; 8. Form new density P = 2 C_occ C_occ^T 9. Check convergence on ΔE and ΔP; if converged, break</li>
-</ol>
-<p>For SAO-blocked SCF, step 2.6 is replaced by block-diagonal diagonalization in the symmetry-adapted basis, guaranteeing MOs with clean irrep labels.</p>
-<h3 id="conventional-vs-direct-scf">Conventional vs. direct SCF</h3>
-<p>In <code>Conventional</code> mode, <code>_compute_2e()</code> builds the full ERI tensor once before the SCF loop. Every iteration reads from the stored tensor in O(N^4) memory. In <code>Direct</code> mode, <code>_compute_2e_fock()</code> recomputes the two-electron contribution from shell pairs on every iteration, using O(N^2) memory at the cost of repeated integral evaluation. <code>Auto</code> mode selects <code>Conventional</code> when <code>nbasis ≤ threshold</code> (default 100) and <code>Direct</code> otherwise. This threshold is tunable via <code>OptionsSCF._threshold</code>.</p>
-<p><strong>Trade-off:</strong> Conventional SCF is faster for small systems (cache-friendly reads of the ERI array dominate) but becomes memory-prohibitive at ~250+ basis functions. Direct SCF has a higher per-iteration cost but constant memory.</p>
-<h3 id="sad-guess">SAD guess</h3>
-<p>The Superposition of Atomic Densities guess runs a minimal-basis atomic SCF for each unique element in the molecule (with all output silenced via <code>ScopedSilence</code>). The resulting atomic densities are superimposed to form the initial molecular density. This provides a substantially better starting point than the H-core guess for transition metals and multi-reference systems.</p>
-<hr>
-<h2 id="post-hf-correlation-src-post-hf">Post-HF Correlation (<code>src/post_hf/</code>)</h2>
-<h3 id="mp2-mp2-h-mp2-cpp">MP2 — <code>mp2.h</code> / <code>mp2.cpp</code></h3>
-<h4 id="rmp2-run-rmp2">RMP2 (<code>run_rmp2</code>)</h4>
-<p>The restricted MP2 energy is evaluated as:</p>
-<pre><code>
-E_MP2 = Σ_{i&lt;j, a&lt;b} |(ia|jb) - (ib|ja)|² / (ε_i + ε_j - ε_a - ε_b)
-</code></pre>
-<p>The AO→MO transformation uses a quarter-transform strategy. If <code>_eri</code> is populated from a conventional SCF, it is reused directly; otherwise the ERI tensor is rebuilt from shell pairs. The generic transform entry points in <code>src/post_hf/integrals.cpp</code> remain the shared path for MP2 and for the fully internal CASSCF integral builds. RMP2 natural orbitals are available through <code>compute_rmp2_natural_orbitals()</code>, which diagonalizes the MP2 one-particle density matrix.</p>
-<h4 id="ump2-run-ump2">UMP2 (<code>run_ump2</code>)</h4>
-<p>Unrestricted MP2 maintains separate α-α, β-β, and α-β orbital-pair contributions. The quarter-transform operates independently on the alpha and beta MO spaces.</p>
-<h3 id="casscf-rasscf-casscf-h-and-casscf">CASSCF / RASSCF — <code>casscf.h</code> and <code>casscf/</code></h3>
-<p><code>run_casscf()</code> and <code>run_rasscf()</code> are thin wrappers around a shared MCSCF driver that alternates CI diagonalization and orbital optimization until both the energy and orbital gradient converge. The active-space specification in <code>OptionsActiveSpace</code> controls the number of active electrons, active orbitals, number of CI roots (state averaging), SA weights, RAS partitioning, and convergence thresholds.</p>
-<h4 id="ci-strings-casscf-internal-h-casscf-strings-h">CI strings — <code>casscf_internal.h</code> / <code>casscf/strings.h</code></h4>
-<p>Determinants are represented as <code>uint64_t</code> bitmasks (<code>CIString</code>). Each bit position corresponds to one active spatial orbital. Separate alpha and beta strings are enumerated by <code>generate_strings(n_orb, n_occ)</code> using fixed-popcount bitstring enumeration in ascending order. The <code>kMaxSeparateSpinOrbitals = 63</code> limit on the active space (64-bit type minus the sign bit) sets the hard ceiling on the active-orbital count. For RASSCF, <code>RASParams</code> encodes the three-space partition (RAS1/RAS2/RAS3) and screening caps (<code>max_holes</code>, <code>max_elec</code>); <code>ras1_holes()</code> and <code>ras3_elec()</code> enforce these constraints during determinant filtering.</p>
-<h4 id="ci-hamiltonian-casscf-ci-h-ci-cpp">CI Hamiltonian — <code>casscf/ci.h</code> / <code>ci.cpp</code></h4>
-<p><code>CIDeterminantSpace</code> bundles the filtered determinant list, the diagonal, a packed key array, a lookup table, and optionally the full dense Hamiltonian matrix. Matrix elements are computed by <code>slater_condon_element()</code> using the Slater-Condon rules applied to the bitmask strings. <code>build_ci_space()</code> assembles the space and applies the density threshold <code>dense_threshold</code> (default 500) to decide whether to materialize the full matrix or use iterative sigma application via <code>apply_ci_hamiltonian()</code>. <code>solve_ci()</code> is overloaded for the dense path (direct <code>SelfAdjointEigenSolver</code>) and the iterative path (Davidson method with a diagonal preconditioner).</p>
-<h4 id="reduced-density-matrices-casscf-rdm-h-rdm-cpp">Reduced density matrices — <code>casscf/rdm.h</code> / <code>rdm.cpp</code></h4>
-<p><code>compute_1rdm()</code> and <code>compute_2rdm()</code> build the state-averaged active-space 1-RDM and 2-RDM by traversing all determinant pairs and accumulating contributions weighted by the SA weights. <code>compute_2rdm_bilinear()</code> computes the bilinear form <code>Γ_{pq,rs} = Σ_I w_I ⟨Ψ^bra_I | â_p† â_r â_s â_q | Ψ^ket_I ⟩</code> needed by the CI response solver. Reference implementations (<code>_reference</code> suffix) use explicit spin-orbital traversal and serve as validation targets.</p>
-<h4 id="orbital-optimization-mcscf-loop-casscf-casscf-h">Orbital optimization — MCSCF loop (<code>casscf/casscf.h</code>)</h4>
-<p>The macro/micro iteration structure alternates: (1) CI solve to get CI vectors and state-averaged energy, (2) 1-RDM and 2-RDM construction, (3) orbital gradient and approximate Hessian computation, (4) orbital rotation by a Cayley-transformed antisymmetric matrix <code>κ</code>. The micro iterations apply a matrix-free orbital Hessian action to the orbital gradient via the Lagrangian formulation, with a diagonal preconditioner fallback and a small-space finite-difference Newton escape hatch. Convergence is assessed on both ΔE and the state-averaged orbital-gradient screen. Hungarian root tracking ensures consistent state labeling across macro iterations when multiple roots are computed.</p>
-<p>The orbital-gradient and CI-response path relies on a mixed-basis active-integral cache built by <code>build_active_integral_cache(...)</code> in <code>casscf/orbital.cpp</code>. That cache is produced by the dedicated <code>transform_eri_active_cache(...)</code> kernel in <code>src/post_hf/integrals.cpp</code>, not by the fully generic four-leg AO→MO transform. The cached tensor is stored row-major as <code>(p,u,v,w)</code>, with one full-space MO index <code>p</code> and three active-space indices <code>u,v,w</code>. Each fixed-<code>p</code> slab is contiguous, so the builder can parallelize safely over <code>p</code> with OpenMP and reuse thread-local scratch buffers across repeated macro-iteration rebuilds.</p>
-<p>On the consumer side, <code>compute_Q_matrix(...)</code> contracts the cached <code>(p,u,v,w)</code> slabs with the active-space 2-RDM to form the Q matrix used in the orbital gradient and response equations. Because both the <code>puvw</code> cache and <code>Γ[t,u,v,w]</code> are traversed as contiguous <code>n_act^3</code> slabs, the hot contraction path reduces to repeated dot products rather than repeated four-index address arithmetic.</p>
-<p><strong>Trade-off:</strong> The matrix-free Hessian avoids explicitly forming the O(N^4) orbital Hessian tensor but requires a CI response solve at each micro step. This is the correct asymptotic choice for large active spaces. For small active spaces (≤10 orbitals), the dense path may be faster in practice.</p>
-<hr>
-<h2 id="coupled-cluster-src-post-hf-cc">Coupled Cluster (<code>src/post_hf/cc/</code>)</h2>
-<p>All coupled-cluster code lives under <code>src/post_hf/cc/</code> in namespace <code>HartreeFock::Correlation::CC</code>. Five user-visible solver paths are available: <code>run_rccsd</code>, <code>run_uccsd</code>, <code>run_rccsdt</code>, <code>run_uccsdt</code>, and <code>run_rccsdtq</code>. The hand-written CCSD/CCSDT solvers follow a two-phase <code>prepare</code> / <code>run</code> API: <code>prepare_X</code> validates the SCF result, transforms integrals, and allocates amplitude tensors; <code>run_X</code> calls <code>prepare_X</code> internally and then drives the iterative loop to convergence. The higher-rank <code>run_rccsdtq</code> path routes entirely through the generated arbitrary-order tensor runtime — its kernels are emitted ahead of time by the <code>ccgen</code> Python package (see <code>python/ccgen/</code>) and compiled into the binary as the <code>generated_arbitrary_*</code> translation units.</p>
-<h3 id="file-map">File map</h3>
 <div class="table-wrap"><table>
 <thead><tr>
 <th>File</th>
-<th>Owns</th>
+<th>Role</th>
 </tr></thead>
 <tbody>
-<tr><td><code>common.h</code> / <code>common.cpp</code></td><td>Tensor types (<code>Tensor2D/4D/6D</code>), <code>RHFReference</code>, <code>UHFReference</code>, reference builders</td></tr>
-<tr><td><code>amplitudes.h</code> / <code>amplitudes.cpp</code></td><td><code>DenominatorCache</code>, <code>RCCSDAmplitudes</code>, <code>RCCSDTAmplitudes</code>, zero-amplitude factories</td></tr>
-<tr><td><code>mo_blocks.h</code> / <code>mo_blocks.cpp</code></td><td><code>MOBlockCache</code>, AO→MO four-index transform for the teaching solver</td></tr>
-<tr><td><code>diis.h</code> / <code>diis.cpp</code></td><td><code>AmplitudeDIIS</code> — DIIS on flattened amplitude vectors</td></tr>
-<tr><td><code>ccsd.h</code> / <code>ccsd.cpp</code></td><td><code>RCCSDState</code>, <code>UCCSDState</code>, <code>prepare_rccsd</code>, <code>run_rccsd</code>, <code>prepare_uccsd</code>, <code>run_uccsd</code></td></tr>
-<tr><td><code>ccsdt.h</code> / <code>ccsdt.cpp</code></td><td><code>RCCSDTState</code>, <code>UCCSDTState</code>, <code>prepare_rccsdt</code>, <code>run_rccsdt</code>, <code>prepare_uccsdt</code>, <code>run_uccsdt</code>, three-way backend dispatch with <code>PLANCK_RCCSDT_BACKEND</code> env override</td></tr>
-<tr><td><code>ccsdtq.h</code> / <code>ccsdtq.cpp</code></td><td><code>run_rccsdtq</code> — thin driver that wires the generated RCCSDTQ kernels into the arbitrary-order runtime</td></tr>
-<tr><td><code>determinant_space.h</code> / <code>determinant_space.cpp</code></td><td><code>SpinOrbitalSystem</code>, <code>DeterminantCCSpinOrbitalSeed</code>, <code>build_rhf/uhf_spin_orbital_system</code>, <code>solve_determinant_cc</code></td></tr>
-<tr><td><code>tensor_backend.h</code> / <code>tensor_backend.cpp</code></td><td><code>CanonicalRHFCCReference</code>, <code>TensorCCBlockCache</code>, <code>TensorTriplesWorkspace</code>, <code>TensorRCCSDTState</code>, <code>run_tensor_rccsdt</code>, <code>choose_rccsdt_backend</code>, <code>RCCSDTBackend</code> enum</td></tr>
-<tr><td><code>tensor_optimized.h</code> / <code>tensor_optimized.cpp</code></td><td><code>run_tensor_optimized_rccsdt</code> — ccgen-optimized RCCSDT kernel path (third backend option, selected by <code>TensorOptimized</code>)</td></tr>
-<tr><td><code>solver_arbitrary.h</code> / <code>solver_arbitrary.cpp</code></td><td>Arbitrary-order solver: <code>ArbitraryOrderResiduals</code>, <code>ArbitraryOrderIterationMetrics</code>, pack/unpack, <code>update_amplitudes_with_jacobi_diis</code> (rank-indexed Jacobi + DIIS)</td></tr>
-<tr><td><code>generated_arbitrary_runtime.h</code> / <code>generated_arbitrary_runtime.cpp</code> / <code>generated_arbitrary_prepare.cpp</code></td><td><code>ArbitraryOrderTensorCCState</code>, <code>GeneratedArbitraryOrderKernels</code> (function-object energy + per-rank residual kernels), <code>prepare_generated_arbitrary_order_state</code>, <code>run_generated_arbitrary_order_iterations</code></td></tr>
-<tr><td><code>generated_kernel_registry.h</code> / <code>generated_kernel_registry.cpp</code></td><td>Registry mapping generated kernel bundles to methods (e.g. <code>make_generated_rccsdtq_kernels</code>)</td></tr>
+<tr><td><code>io.{h,cpp}</code></td><td>Section-based input parser (<code>%begin_control</code>, <code>%begin_scf</code>, <code>%begin_geom</code>, <code>%begin_coords</code>, <code>%begin_dft</code>, …) into the <code>Options*</code> structs; <code>std::expected</code> on every parse error, naming the keyword</td></tr>
+<tr><td><code>checkpoint.{h,cpp}</code></td><td>Binary <code>.hfchk</code> (magic <code>PLNKCHK</code>, version 7, additive optional blocks): geometry, basis, SCF matrices, CASSCF MOs. Restart modes <code>ReadDensity</code>, <code>ReadFull</code>, and cross-basis Löwdin projection</td></tr>
+<tr><td><code>fcidump.{h,cpp}</code></td><td>MOLPRO FCIDUMP export of the MO Hamiltonian for external FCI/DMRG/FCIQMC codes</td></tr>
+<tr><td><code>results_json.h</code></td><td><code>--json &lt;path&gt;</code>: the stable machine-readable results schema for <code>python/planck.py</code></td></tr>
+<tr><td><code>external_libraries.h</code></td><td>Startup table of every linked library with version, licence and role</td></tr>
+<tr><td><code>logging.h</code></td><td>Logger (above)</td></tr>
 </tbody></table></div>
-<h3 id="tensor-types-common-h">Tensor types (<code>common.h</code>)</h3>
-<p><code>Tensor2D</code>, <code>Tensor4D</code>, and <code>Tensor6D</code> store flat <code>std::vector&lt;double&gt;</code> with row-major layout and expose a call-operator for multi-index access. Indexing follows chemists&#x27; notation throughout: <code>Tensor4D(i,j,k,l)</code> stores <code>(ij|kl)</code>, not the physicist antisymmetrized bracket. The antisymmetrized form <code>&lt;ij||kl&gt; = (ij|kl) - (il|kj)</code> is computed on the fly where needed.</p>
-<h3 id="reference-types-common-h">Reference types (<code>common.h</code>)</h3>
-<p><code>RHFReference</code> holds the canonical closed-shell partition: <code>C_occ</code> [n_ao×n_occ], <code>C_virt</code> [n_ao×n_virt], <code>eps_occ</code>, <code>eps_virt</code>. All restricted CC paths use this struct. <code>UHFReference</code> holds the full alpha and beta MO coefficient matrices and orbital energies; the unrestricted determinant-space paths use this. Both are produced by <code>build_rhf_reference</code> / <code>build_uhf_reference</code> in <code>common.cpp</code>, which run basic dimension and occupation sanity checks before returning.</p>
-<h3 id="amplitude-and-denominator-storage-amplitudes-h">Amplitude and denominator storage (<code>amplitudes.h</code>)</h3>
-<p><code>DenominatorCache</code> pre-computes the Møller-Plesset denominators <code>d1(i,a)</code>, <code>d2(i,j,a,b)</code>, and optionally <code>d3(i,j,k,a,b,c)</code>. The <code>include_triples</code> flag allows CCSD paths to skip the <span class="math-inline">\(O(o^3 v^3)\)</span> T3 allocation. <code>RCCSDAmplitudes</code> bundles T1 and T2; <code>RCCSDTAmplitudes</code> adds T3 as a <code>Tensor6D</code>.</p>
-<h3 id="mo-integral-blocks-mo-blocks-h">MO integral blocks (<code>mo_blocks.h</code>)</h3>
-<p><code>MOBlockCache</code> stores the AO→MO transformed ERIs as named sub-tensors (<code>oooo</code>, <code>ooov</code>, <code>oovv</code>, <code>ovov</code>, <code>ovvo</code>, <code>ovvv</code>, <code>vvvv</code>) plus the full spatial tensor <code>full</code>. <code>build_mo_block_cache</code> performs the quarter-transform using <code>C_occ</code> and <code>C_virt</code> from <code>RHFReference</code>. The teaching paths use <code>full</code> to build the antisymmetrized spin-orbital two-body tensor on the fly. The production tensor backend (<code>TensorCCBlockCache</code>) omits <code>full</code> and stores only the seven named blocks to reduce memory.</p>
-<h3 id="diis-for-amplitudes-diis-h">DIIS for amplitudes (<code>diis.h</code>)</h3>
-<p><code>AmplitudeDIIS</code> mirrors the SCF DIIS helper (<code>src/scf/diis.cpp</code>) but accepts flattened <code>Eigen::VectorXd</code> amplitude vectors and residual vectors. T1 and T2 (and T3 for CCSDT) are concatenated into one vector before each <code>push</code> call, so a single <code>AmplitudeDIIS</code> instance accelerates all amplitude blocks simultaneously. Queue size defaults to 8.</p>
-<h3 id="rccsd-solver-ccsd-cpp">RCCSD solver (<code>ccsd.cpp</code>)</h3>
-<p><code>run_rccsd</code> operates in the spin-orbital basis. Each iteration: (1) builds <code>τ</code> and <code>τ̃</code>, (2) builds the five standard CCSD intermediates <code>F_ae</code>, <code>F_mi</code>, <code>F_me</code>, <code>W_mnij</code>, <code>W_abef</code>, <code>W_mbej</code>, (3) forms <code>R1</code> and <code>R2</code> by contracting amplitudes against those intermediates, (4) applies the Jacobi update using <code>DenominatorCache</code>, (5) accelerates with <code>AmplitudeDIIS</code>. The correlation energy uses the antisymmetrized form <code>E = f_{ia} t_i^a + ¼ &lt;ij||ab&gt; t_{ij}^{ab} + ½ &lt;ij||ab&gt; t_i^a t_j^b</code>.</p>
-<h3 id="rccsdt-backend-dispatch-ccsdt-cpp-tensor-backend">RCCSDT backend dispatch (<code>ccsdt.cpp</code>, <code>tensor_backend.*</code>)</h3>
-<p><code>run_rccsdt</code> calls <code>choose_rccsdt_backend(reference)</code> before doing any work and then checks the <code>PLANCK_RCCSDT_BACKEND</code> environment variable, which can force any of the three backends (<code>determinant</code> / <code>tensor</code> / <code>optimized</code>, plus longer aliases) regardless of the size-based default. The three backends are:</p>
-<ul>
-<li><strong><code>DeterminantPrototype</code></strong> — selected when n_spin_orb ≤ 12. Delegates to <code>solve_determinant_cc(max_rank=3)</code>.</li>
-<li><strong><code>TensorProduction</code></strong> — selected for larger systems. Delegates to <code>run_tensor_rccsdt</code> in <code>tensor_backend.*</code>, which runs a staged pipeline: CCSD warm-start → T1-dress Fock and ERIs → restricted R1/R2/R3 equations → restricted T3 symmetry restoration → DIIS. For moderate systems (n_spin_orb ≤ 16, det count ≤ 10000) a determinant backstop cross-check is optionally run from the warm-started tensor amplitudes via <code>DeterminantCCSpinOrbitalSeed</code>.</li>
-<li><strong><code>TensorOptimized</code></strong> — opt-in via <code>PLANCK_RCCSDT_BACKEND=optimized</code>. Delegates to <code>run_tensor_optimized_rccsdt</code> in <code>tensor_optimized.*</code>, which uses kernels emitted by the <code>ccgen</code> Python package with algebraic optimizations (CSE, intermediate extraction, BLAS-lowered contractions) in place of the hand-written <code>tensor_backend</code> kernels.</li>
-</ul>
-<h3 id="determinant-space-backend-determinant-space">Determinant-space backend (<code>determinant_space.*</code>)</h3>
-<p><code>SpinOrbitalSystem</code> holds the spin-orbital one-body tensor <code>h1</code> and antisymmetrized two-body tensor <code>g2</code>. <code>build_rhf_spin_orbital_system</code> and <code>build_uhf_spin_orbital_system</code> construct it from the respective reference and MO blocks. <code>solve_determinant_cc(system, max_rank)</code> enumerates all unique excitations up to <code>max_rank</code> out of the reference determinant, assembles the cluster operator <code>T</code>, evaluates <code>exp(-T) H exp(T) |Φ₀⟩</code> by the finite nilpotent series in the determinant basis, projects onto S/D/T manifolds to get residuals, and iterates with Jacobi updates and DIIS. Hard limits: <code>n_spin_orb ≤ 12</code>, det count ≤ 1200 (teaching / correctness use only).</p>
-<h3 id="uccsd-and-uccsdt-ccsd-cpp-ccsdt-cpp">UCCSD and UCCSDT (<code>ccsd.cpp</code>, <code>ccsdt.cpp</code>)</h3>
-<p>Both unrestricted paths call <code>build_uhf_spin_orbital_system</code> to construct a spin-orbital Hamiltonian from the UHF alpha and beta MO spaces, then forward to <code>solve_determinant_cc</code> with <code>max_rank=2</code> (UCCSD) or <code>max_rank=3</code> (UCCSDT). No separate tensor production path exists for the unrestricted methods; they are teaching-scale solvers subject to the same determinant-space size limits.</p>
-<h3 id="arbitrary-order-tensor-runtime-solver-arbitrary-generated-arbitrary-runtime-generated-kernel-registry">Arbitrary-order tensor runtime (<code>solver_arbitrary.<em></code>, <code>generated_arbitrary_runtime.</em></code>, <code>generated_kernel_registry.*</code>)</h3>
-<p>For excitation ranks beyond T3, the hand-written kernel approach does not scale: the residual tensors grow in rank and the equations get too verbose to maintain by hand. Instead, the equations are derived symbolically in the <code>ccgen</code> Python package (<code>python/ccgen/</code>) — BCH expansion + Wick contraction + canonicalization — and lowered to C++ tensor kernels ahead of time. The emitted kernels are compiled into the binary as the <code>generated_arbitrary_*</code> translation units and wired through a small runtime.</p>
-<p>The runtime is organized around three layers:</p>
-<ul>
-<li><strong><code>ArbitraryOrderRCCAmplitudes</code> / <code>ArbitraryOrderDenominatorCache</code> / <code>ArbitraryOrderResiduals</code></strong> (in <code>amplitudes.h</code> and <code>solver_arbitrary.h</code>) — rank-indexed packs of <code>TensorND</code> tensors with one entry per excitation rank (<code>by_rank[r-1]</code> holds the rank-<code>r</code> tensor). <code>DenseTensorView</code> / <code>ConstDenseTensorView</code> provide strided access without copying.</li>
-<li><strong><code>GeneratedArbitraryOrderKernels</code></strong> (in <code>generated_arbitrary_runtime.h</code>) — a bundle of <code>std::function</code> objects: one energy kernel returning <code>double</code> and a <code>residuals_by_rank</code> vector of kernels each returning a <code>TensorND</code>. The kernel bodies come from <code>ccgen</code> emission; the registry (e.g. <code>make_generated_rccsdtq_kernels</code>) assembles them into an owned bundle.</li>
-<li><strong>Solver loop</strong> — <code>prepare_generated_arbitrary_order_state</code> builds the canonical RHF reference, MO block cache, denominator cache, and zero amplitudes. <code>run_generated_arbitrary_order_iterations</code> then iterates: evaluate energy and per-rank residuals through the kernel bundle, update amplitudes via <code>update_amplitudes_with_jacobi_diis</code> (rank-by-rank Jacobi with a single unified DIIS on the concatenated amplitude vector), report <code>ArbitraryOrderIterationMetrics</code> (global and per-rank residual RMS and step RMS), and stop on energy + residual tolerance.</li>
-</ul>
-<p><code>run_rccsdtq</code> is currently the only user of this pipeline; it is restricted to single-point calculations and drives the runtime with <code>max_excitation_rank = 4</code> and the RCCSDTQ kernel bundle from the registry. Adding a new arbitrary-order method is a matter of generating its kernels with <code>ccgen</code>, registering them, and adding a thin driver alongside <code>run_rccsdtq</code>.</p>
 <hr>
-<h2 id="analytic-gradients-src-gradient">Analytic Gradients (<code>src/gradient/</code>)</h2>
-<p><code>compute_rhf_gradient()</code> and <code>compute_uhf_gradient()</code> return the natoms×3 nuclear gradient in Ha/Bohr via the Hellmann-Feynman and Pulay contributions. The Hellmann-Feynman term includes dV/dR (nuclear-attraction derivative with respect to nucleus coordinates). The Pulay term accounts for the basis-function center dependence and requires the energy-weighted density matrix. All derivative integrals are computed analytically via <code>_compute_1e_deriv_A</code>, <code>_compute_nuclear_deriv_A_elem</code>, and <code>_compute_eri_deriv_elem</code>.</p>
-<p><code>compute_rmp2_gradient()</code> implements the relaxed MP2 density and Z-vector (coupled-perturbed HF / CPHF) response. The Z-vector equation is solved iteratively to avoid storing the full CPHF response matrices. The relaxed density then enters the same Hellmann-Feynman + Pulay gradient evaluation as the HF case.</p>
+<h2 id="lookup-and-the-boys-library-src-lookup">Lookup and the Boys Library (<code>src/lookup/</code>)</h2>
+<p><code>elements.{h,cpp}</code> holds atomic numbers, symbols, masses and covalent radii. <code>boys.h</code> declares <code>boys</code>, <code>boys_vec</code> and the batched <code>boys_batch</code>, which dispatch to function pointers resolved at start-up.</p>
+<p>The Boys function is not compiled into Planck. <code>loader/</code> implements a licence-gated loader: <code>orchestrator</code> reads the local signed <code>license.json</code>, verifies its Ed25519 signature (<code>signing_key.cpp</code>, <code>license.cpp</code>), fetches the matching encrypted library blob for the platform (<code>fetch.cpp</code>, with a local cache in <code>cache.cpp</code>), decrypts it with AES-256-GCM (<code>decrypt.cpp</code>), and loads it from memory (<code>memory_load.cpp</code>). It runs once, first thing in <code>main</code>; failure is terminal. <code>planck-mpi</code> fetches once on one rank and broadcasts the ciphertext. Every integral that needs the Boys function (OS, HGP, closed forms, nuclear attraction) depends on this core; Rys quadrature uses its own roots.</p>
 <hr>
-<h2 id="geometry-optimization-src-opt">Geometry Optimization (<code>src/opt/</code>)</h2>
-<h3 id="cartesian-l-bfgs-geomopt-h-geomopt-cpp">Cartesian L-BFGS — <code>geomopt.h</code> / <code>geomopt.cpp</code></h3>
-<p><code>run_geomopt()</code> implements the two-loop L-BFGS recursion with Armijo backtracking line search. The gradient runner is a <code>std::function&lt;Eigen::VectorXd(Calculator &amp;)&gt;</code> callback, allowing the optimizer to drive any level of theory without knowing the details of the energy and gradient computation. Convergence is assessed on the maximum absolute gradient element (<code>_geomopt_grad_tol</code>, default 3×10⁻⁴ Ha/Bohr). The L-BFGS history size <code>_geomopt_lbfgs_m</code> (default 10) controls the memory-precision trade-off. On convergence, <code>calc._molecule._standard</code> holds the optimized geometry in Bohr and the result struct contains the per-step energy trajectory.</p>
-<h3 id="internal-coordinate-bfgs-intcoords-h-geomopt-cpp">Internal-coordinate BFGS — <code>intcoords.h</code> / <code>geomopt.cpp</code></h3>
-<p><code>run_geomopt_ic()</code> optimizes in redundant generalized internal coordinates (GIC). <code>IntCoordSystem::build()</code> automatically generates all bonds (using covalent radii from the element lookup), all valence bends, and all proper torsions. The Wilson B-matrix <code>B_{qi,a} = ∂q_i/∂x_a</code> is evaluated analytically for each IC type. The BFGS Hessian update operates in the redundant IC space; the Cartesian back-transform uses the iterative Schlegel procedure (Newton steps in the pseudo-inverse of B until the IC values converge). Geometry constraints from <code>%begin_constraints</code> are enforced by projecting the gradient and Hessian step into the constraint-compliant subspace. <code>GeomConstraint::Type</code> supports <code>Bond</code>, <code>Angle</code>, <code>Dihedral</code>, and <code>FrozenAtom</code>.</p>
-<p><strong>Trade-off:</strong> IC-BFGS typically converges in fewer steps than Cartesian L-BFGS for systems with strained internal coordinates (rings, transition states), but the Schlegel back-transform adds iteration overhead per step.</p>
-<hr>
-<h2 id="vibrational-frequencies-src-freq">Vibrational Frequencies (<code>src/freq/</code>)</h2>
-<p><code>compute_hessian()</code> builds the 3N×3N Cartesian Hessian by central finite differences of analytic gradients: <code>H_{ij} = (g_i(x + h ê_j) − g_i(x − h ê_j)) / (2h)</code> where <code>h = _hessian_step</code> (default 5×10⁻³ Bohr). The 6N gradient evaluations are parallelized with OpenMP when available. <code>vibrational_analysis()</code> mass-weights the Hessian, projects out translations and rotations using Eckart conditions, diagonalizes the resulting 3N−6 (or 3N−5 for linear molecules) subspace, converts eigenvalues to cm⁻¹, and computes the zero-point energy. When symmetry is active, normal modes are assigned Mulliken labels by projecting onto the SAO basis. Imaginary frequencies are reported as negative values in cm⁻¹.</p>
-<p><code>ImaginaryFollow</code> mode runs a frequency calculation, displaces the geometry along the largest imaginary normal mode by <code>_imag_follow_step</code> (default 0.2 Bohr), then runs a geometry optimization to locate the adjacent minimum.</p>
-<hr>
-<h2 id="ks-dft-src-dft">KS-DFT (<code>src/dft/</code>)</h2>
-<p>The <code>planck-dft</code> binary provides Kohn-Sham DFT by augmenting the shared SCF infrastructure with a numerical integration grid and an XC functional evaluator. The DFT pipeline is cleanly separated from the HF pipeline: <code>DFT::Driver::run()</code> calls <code>DFT::Driver::prepare()</code> to build the grid and AO-on-grid evaluations, then enters the KS-SCF loop.</p>
-<h3 id="driver-dft-driver-h-driver-cpp">Driver — <code>dft/driver.h</code> / <code>driver.cpp</code></h3>
-<p><code>DFT::Driver::prepare()</code> constructs the <code>PreparedSystem</code> containing the shell pairs, the molecular grid, and the pre-evaluated AO basis functions on every grid point. <code>DFT::Driver::run()</code> then enters the KS-SCF loop, which follows the standard SCF structure but replaces the HF exchange contribution with the XC potential assembled from the grid. <code>evaluate_current_density_and_xc()</code> and <code>assemble_current_ks_potential()</code> are exposed as public functions so that external tools can evaluate XC contributions without running a full SCF loop — useful for testing grid integration quality independently.</p>
-<h3 id="grid-dft-base-grid-h-radial-h-angular-h">Grid — <code>dft/base/grid.h</code>, <code>radial.h</code>, <code>angular.h</code></h3>
-<p>The molecular integration grid uses the Becke partitioning scheme to assign multi-center weights to a superposition of atom-centered grids. Each atom-centered grid combines a <strong>Treutler-Ahlrichs M4</strong> radial grid (which maps the semi-infinite radial interval onto [−1, 1] with a logarithmic transformation optimized for exponentially decaying functions) with a <strong>Lebedev</strong> angular grid. The <code>GridPreset</code> struct encodes the angular scheme (1–7) and radial accuracy factor for each of the four quality levels:</p>
+<h2 id="basis-sets-src-basis">Basis Sets (<code>src/basis/</code>)</h2>
 <div class="table-wrap"><table>
 <thead><tr>
-<th>Level</th>
-<th>Angular scheme</th>
-<th>Approx. points/atom</th>
+<th>File</th>
+<th>Role</th>
 </tr></thead>
 <tbody>
-<tr><td>Coarse</td><td>1</td><td>~3 000</td></tr>
-<tr><td>Normal</td><td>3</td><td>~12 000</td></tr>
-<tr><td>Fine</td><td>5</td><td>~30 000</td></tr>
-<tr><td>UltraFine</td><td>7</td><td>~75 000</td></tr>
+<tr><td><code>gaussian.cpp</code>, <code>gbs_parser.{h,cpp}</code></td><td>Gaussian94 <code>.gbs</code> reader. Folds the contracted norm into coefficients, stamps <code>_index</code>, and drops redundant primitives (an outer primitive that is also its own uncontracted shell of the same L, as in the BSE cc-pVXZ files), which matches PySCF&#x27;s primitive count</td></tr>
+<tr><td><code>basis.{h,cpp}</code></td><td>Primitive and contracted normalization, Cartesian component order</td></tr>
+<tr><td><code>spherical.{h,cpp}</code>, <code>spherical_recurrence.{h,cpp}</code></td><td>Cartesian → real-spherical transform per shell (pseudo-inverse of the unit-normalized components for L = 3–5; recurrence for L = 6), and the density lift <code>M_cart = Cᵀ M_sph C</code></td></tr>
+<tr><td><code>rifit.{h,cpp}</code></td><td>RI / density-fitting auxiliary basis loader, kept separate from the orbital basis</td></tr>
 </tbody></table></div>
-<p>Five-region pruning reduces the angular order near the nucleus (where the density is nearly spherical) and far from the nucleus (where it is negligible), substantially reducing the total grid point count without affecting accuracy.</p>
-<h3 id="libxc-wrapper-dft-base-wrapper-h">libxc wrapper — <code>dft/base/wrapper.h</code></h3>
-<p><code>XC::Functional</code> is an RAII wrapper around a libxc <code>xc_func_type</code>. The <code>evaluate()</code> method takes a density array (and gradient array for GGA functionals) and fills the XC energy density and potential arrays. The wrapper also exposes libxc hybrid metadata, including the global exact-exchange coefficient. The libxc functional ID is resolved from the <code>XCExchangeFunctional</code> / <code>XCCorrelationFunctional</code> enums; <code>Custom</code> mode accepts a raw libxc integer ID for any functional in the libxc library. The <code>USING_Libxc</code> preprocessor guard ensures that this header (and its libxc dependency) is only compiled into <code>planck-dft</code> and not <code>hartree-fock</code>.</p>
-<h3 id="ao-evaluation-on-grid-dft-ao-grid-h">AO evaluation on grid — <code>dft/ao_grid.h</code></h3>
-<p><code>evaluate_ao_basis_on_grid()</code> evaluates all <code>nbasis</code> contracted Cartesian Gaussian basis functions at every grid point and returns an <code>AOGridEvaluation</code> struct (<code>npoints × nbasis</code> matrix). This evaluation is done once before the SCF loop and reused every iteration. For GGA functionals, the gradient of the AO basis (<code>npoints × nbasis × 3</code>) is also evaluated and stored.</p>
-<h3 id="xc-on-grid-dft-xc-grid-h-xc-grid-cpp">XC on grid — <code>dft/xc_grid.h</code> / <code>xc_grid.cpp</code></h3>
-<p><code>evaluate_density_on_grid()</code> contracts the density matrix with the AO values to produce the electron density at each grid point: <code>ρ(r) = Σ_{μν} P_{μν} χ_μ(r) χ_ν(r)</code>. <code>evaluate_xc_on_grid()</code> passes ρ (and ∇ρ for GGA) to the libxc wrapper and returns the XC energy density and potential at each point. Combined exchange-correlation functionals such as B3LYP and PBE0 are evaluated once through the exchange slot, and the separate correlation slot is ignored to avoid double counting. The integrated electron count <code>∫ρ dV</code> is checked as a grid quality diagnostic.</p>
-<h3 id="ks-potential-matrix-dft-ks-matrix-h-ks-matrix-cpp">KS potential matrix — <code>dft/ks_matrix.h</code> / <code>ks_matrix.cpp</code></h3>
-<p><code>assemble_xc_matrix()</code> integrates <code>V_{XC,μν} = ∫ v_xc(r) χ_μ(r) χ_ν(r) dV</code> using the pre-evaluated AO grid values and quadrature weights. <code>combine_ks_potential()</code> assembles the full KS Fock matrix <code>F_KS = H_core + J + V_XC + V_X^exact</code> where J is the Coulomb contribution from the SCF infrastructure and <code>V_X^exact</code> is present for global hybrids. The hybrid exchange energy is accumulated alongside the semilocal grid energy. The resulting <code>KSPotentialMatrices</code> are passed back to the SCF loop, which diagonalizes <code>F_KS</code> exactly as it would diagonalize a HF Fock matrix.</p>
+<p><strong>Spherical bases</strong> reuse the Cartesian integral engines unchanged: integrals are computed Cartesian and transformed at the skin (<code>_overlap = C S Cᵀ</code>, <code>_hcore = C (T+V) Cᵀ</code>), and gradients lift the spherical density and energy-weighted density back to Cartesian once. <code>SCF::rebuild_basis_dependent_state</code> (<code>src/scf/working_state.cpp</code>) redoes this, including the geometry-dependent row normalization of <code>_cart_to_sph</code>, at every displaced geometry in geomopt and frequency loops.</p>
 <hr>
-<h2 id="entry-points-src-driver-cpp-src-dft-main-cpp">Entry Points (<code>src/driver.cpp</code>, <code>src/dft/main.cpp</code>)</h2>
-<h3 id="hf-driver-src-driver-cpp">HF driver — <code>src/driver.cpp</code></h3>
-<p><code>main()</code> orchestrates the full HF calculation pipeline:</p>
-<ol>
-<li>Parse input → <code>Calculator</code></li>
-<li>Derive checkpoint path from input filename stem</li>
-<li>Detect symmetry, build SAO basis and integral symmetry ops</li>
-<li>Read GBS basis</li>
-<li>If <code>ReadFull</code> guess: <code>load_geometry()</code> then repopulate basis and symmetry</li>
-<li>If <code>ReadDensity</code> or <code>ReadFull</code>: <code>load()</code> checkpoint</li>
-<li><code>Calculator::initialize()</code> — allocate SCF matrices, set auto SCF mode</li>
-<li>Build shell pairs</li>
-<li>Compute 1e integrals (S, T, V → H_core); optionally compute ERI tensor</li>
-<li>If <code>Conventional</code> mode: store ERI</li>
-<li>Optionally build SAO blocking data</li>
-<li>Run SCF via <code>run_rhf()</code> or <code>run_uhf()</code></li>
-<li>Save checkpoint</li>
-<li>Dispatch to gradient, geomopt, frequency, or post-HF based on <code>CalculationType</code> and <code>PostHF</code></li>
-<li>Report multipole moments and timing</li>
-</ol>
-<h3 id="dft-driver-src-dft-main-cpp">DFT driver — <code>src/dft/main.cpp</code></h3>
-<p>The DFT entry point follows the same setup sequence as the HF driver (parse → symmetry → basis → shell pairs → 1e integrals) but then calls <code>DFT::Driver::run()</code> instead of <code>run_rhf()</code>. Gradient, geometry optimization, and frequency analysis route through the same <code>src/gradient/</code>, <code>src/opt/</code>, and <code>src/freq/</code> modules, using the DFT energy and gradient as the callback.</p>
+<h2 id="symmetry-src-symmetry">Symmetry (<code>src/symmetry/</code>)</h2>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>File</th>
+<th>Role</th>
+</tr></thead>
+<tbody>
+<tr><td><code>symmetry.{h,cpp}</code>, <code>wrapper.h</code></td><td>libmsym wrapper: point group, standard orientation (<code>_standard</code>), atom permutations</td></tr>
+<tr><td><code>mo_symmetry.{h,cpp}</code></td><td>SAO basis and per-irrep blocked diagonalization; MO irrep labels (Abelian subgroup labels for non-Abelian groups)</td></tr>
+<tr><td><code>group_operations.{h,cpp}</code></td><td>AO-basis group operators; spherical operators are <code>S_sph⁻¹ (C S_cart O_cart Cᵀ)</code></td></tr>
+<tr><td><code>integral_symmetry.{h,cpp}</code></td><td><code>SignedAOSymOp</code>: signed AO permutations per operation</td></tr>
+<tr><td><code>skeleton_eri.h</code>, <code>{os,hgp,rys}_symm.cpp</code></td><td>Full-point-group skeleton ERI build (petite list, orbit multiplicity) per engine</td></tr>
+<tr><td><code>fock_symmetrization.{h,cpp}</code></td><td>Skeleton Fock → full Fock by group averaging, `F = (1/</td><td>G</td><td>) Σ_R O_Rᵀ F_skel O_R`</td></tr>
+<tr><td><code>vibrational_symmetry.{h,cpp}</code></td><td>Mulliken labels for normal modes</td></tr>
+</tbody></table></div>
+<p><strong>Two symmetry paths in direct SCF.</strong> Below <code>threshold</code> basis functions the full-point-group skeleton ERI is built once and persisted. Above it, the fused direct Fock loop (below) runs with the geometry&#x27;s D2h-subgroup signed operations and skeleton accumulation, then symmetrizes; an SAO density is symmetric under any subgroup, so this is exact. Under <code>engine auto</code> the full-symmetry skeleton path uses HGP. The density convention is contravariant: <code>O P Oᵀ = P</code>.</p>
 <hr>
-<h2 id="data-flow-summary">Data Flow Summary</h2>
+<h2 id="integrals-src-integrals">Integrals (<code>src/integrals/</code>)</h2>
+<p>Three ERI engines share one public surface (full tensor <code>_compute_2e</code>, two-phase and memory-direct Fock builds, single contracted quartet, 12-component derivative quartet), selected by <code>OptionsIntegral::_engine</code>:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Engine</th>
+<th>Files</th>
+<th>Scheme</th>
+</tr></thead>
+<tbody>
+<tr><td>Obara-Saika</td><td><code>os.{h,cpp}</code></td><td>VRR + HRR per primitive quartet. Also owns every one-electron integral (overlap, kinetic, nuclear attraction, multipoles, cross-basis overlap, ESP) and their derivatives</td></tr>
+<tr><td>Head-Gordon-Pople</td><td><code>hgp.{h,cpp}</code></td><td>VRR per primitive pair, contracted, then HRR once per contracted quartet. Serves Coulomb and the screened <code>LongRange</code>/<code>ShortRange</code> kernels natively</td></tr>
+<tr><td>Rys quadrature</td><td><code>rys.{h,cpp}</code>, <code>rys_roots.{h,cpp}</code>, <code>rys_detail.h</code></td><td>Roots and weights from per-n Chebyshev segment fits plus the large-T asymptote, built on first use from a reference generator; per-quartet <code>RysScratch</code></td></tr>
+<tr><td>Auto (default)</td><td><code>base.h</code>, <code>auto_block_eri.h</code></td><td>Block-kernel chain (below) in the fused Fock loop; a per-(L_AB, L_CD) engine table (<code>kAutoEngine</code>, fitted from benchmarks) for per-component work</td></tr>
+</tbody></table></div>
+<h3 id="block-kernels-and-the-fused-fock-loop">Block kernels and the fused Fock loop</h3>
+<p>The SCF Fock build is memory-direct: <code>fused_fock.h</code> runs one shell-quartet loop over canonical quartets and contracts each one straight into the Fock matrix (<code>fock_accumulate.h</code>), so nothing of size nb⁴ is allocated. The loop is parameterized on the engine&#x27;s per-quartet callable, so OS, HGP, Rys and Auto share it. Under symmetry, <code>quartet_orbit.h</code> maps a canonical quartet to its orbit.</p>
+<p>A <strong>block kernel</strong> (<code>block_eri.h</code>) evaluates every Cartesian component of one shell quartet from a single primitive pass, with <code>prepare</code> / <code>value</code> / <code>covers</code>. <code>auto_block_eri.h</code> chains closed forms (<code>low_l_eri.h</code>, total L ≤ 3), the 2D Rys block (<code>rys_block_eri.h</code>; one primitive quartet at L ≥ 4, up to three at L ≥ 7) and the HGP block (<code>hgp_block_eri.h</code>, lanes across primitive quartets, up to L = 12). When a block kernel covers every total L in the basis and the densities are symmetric, the loop digests whole blocks densely with shell-level degeneracy factors. Partial Fock matrices are binned by bra shell pair and summed in fixed bin order, so the result is identical at any thread count.</p>
+<p>The direct SCF builds incrementally, <code>G_prev + G[ΔP]</code>, with density-weighted block screening, which is switched off once the DIIS error is below 1e-8 so the final iterations are exact. Schwarz tables come from <code>screening.{h,cpp}</code> (HGP-evaluated, engine-independent).</p>
+<p>The <em>why</em> and the measurements are in <code>docs/ERI_SHELL_QUARTET_FOCK_BUILD.md</code> and <code>docs/ERI_KERNEL_VS_LIBCINT.md</code>.</p>
+<h3 id="derivatives">Derivatives</h3>
+<p><code>hgp_deriv_block_eri.h</code>, <code>rys_deriv_block_eri.h</code> and <code>auto_deriv_block_eri.h</code> are the derivative counterparts, used by the shared two-electron gradient loop (see Gradients). <code>Gradient::compute_eri_deriv_dispatch</code> routes per-component derivative quartets to HGP or OS.</p>
+<p><strong>Invariants.</strong> Coefficients already carry the contracted norm; never multiply by it again. Any screened-kernel scaling in the OS recurrences must be mirrored in HGP&#x27;s <code>hgp_vrr</code> (a missing <code>boys_scale</code> on the C-VRR coupling term once corrupted only matching-axis quartets).</p>
+<hr>
+<h2 id="scf-src-scf">SCF (<code>src/scf/</code>)</h2>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>File</th>
+<th>Role</th>
+</tr></thead>
+<tbody>
+<tr><td><code>scf.{h,cpp}</code></td><td><code>run_rhf</code>, <code>run_uhf</code>, <code>run_rohf</code>: conventional or direct, SAO-blocked or plain, DIIS, level shift, damping, SOSCF, incremental direct Fock</td></tr>
+<tr><td><code>sad.{h,cpp}</code></td><td>SAD guess: the raw superposed atomic density scaled to the electron count (not projected to idempotency; the projection was ill-posed for open-shell atoms)</td></tr>
+<tr><td><code>stability.{h,cpp}</code></td><td>RHF/UHF stability: real/complex internal, external triplet, UHF real-rotation Hessian; optional instability following</td></tr>
+<tr><td><code>working_state.{h,cpp}</code></td><td><code>rebuild_basis_dependent_state</code>: shell pairs, 1e integrals and the spherical working-basis lift at a new geometry</td></tr>
+</tbody></table></div>
+<p>The loop is standard: build G, F = H + G (RHF), α/β Fock (UHF), or the Roothaan effective Fock (ROHF); DIIS on <code>FPS − SPF</code>; diagonalize in the orthogonal (or SAO) basis; rebuild the density; converge on ΔE, ΔP and the DIIS error (the last guards against a ΔP = 0 false convergence on SAD-started atoms). At convergence, when DIIS extrapolated, the true Fock is re-diagonalized once so the stored orbital energies belong to the true Fock; gradients&#x27; energy-weighted densities depend on that.</p>
+<p><strong>SOSCF</strong> (RHF, UHF, RKS, UKS) reuses the CASSCF augmented-Hessian solver (<code>src/post_hf/casscf/aug-hessian.h</code>) and Cayley rotation, as a transient window that hands back to DIIS by default. ROHF SOSCF is not implemented (there is no ROHF orbital response machinery). See <code>docs/SOSCF*.md</code>.</p>
+<p><code>Auto</code> mode picks conventional SCF below <code>threshold</code> basis functions (stored ERI tensor) and direct above.</p>
+<hr>
+<h2 id="solvation-properties-counterpoise">Solvation, Properties, Counterpoise</h2>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Directory</th>
+<th>Role</th>
+</tr></thead>
+<tbody>
+<tr><td><code>src/solvation/pcm.{h,cpp}</code></td><td>C-PCM: tessellated cavity, apparent surface charges, reaction field added to the Fock matrix each iteration; shared by HF and DFT single points</td></tr>
+<tr><td><code>src/populations/</code></td><td>Mulliken, Löwdin, Mayer bond orders, multipoles, ESP and CHELPG charges</td></tr>
+<tr><td><code>src/bsse/counterpoise.{h,cpp}</code></td><td>Two-fragment Boys-Bernardi counterpoise: five silenced sub-SCFs with ghost atoms, per-fragment charge and multiplicity</td></tr>
+</tbody></table></div>
+<p><strong>Mayer bond order density convention:</strong> the closed-shell branch contracts the total density with no prefactor (H₂ gives 1); the open-shell branch contracts per-spin densities and needs an explicit factor 2 to agree. PCM is single-point only; its cavity hard-prunes buried points, so the energy is not smooth in the geometry (see <code>docs/PCM_GEOMETRY_SCOPE.md</code>).</p>
+<hr>
+<h2 id="post-hf-correlation-src-post-hf">Post-HF Correlation (<code>src/post_hf/</code>)</h2>
+<h3 id="integral-transforms-and-ri-integrals-h-cpp-ri">Integral transforms and RI (<code>integrals.{h,cpp}</code>, <code>ri/</code>)</h3>
+<p><code>transform_eri(eri, nb, C1, C2, C3, C4)</code> is the shared quarter-by-quarter AO→MO transform: each quarter contracts one leg with the contracted index outside a unit-stride inner loop, parallel over disjoint output slabs, so the result is bitwise independent of thread count. <code>transform_eri_internal</code> (all four legs the same) and <code>transform_eri_active_cache</code> (<code>(pu|vw)</code>, active legs first) build on it. The RI path (<code>ri/ri_eri.{h,cpp}</code>, <code>transform_eri_ri</code>, <code>RI::build_ri_fock_rhf</code>) builds 2- and 3-centre integrals against the auxiliary basis and factors <code>(μν|λσ) ≈ Σ (μν|P) V⁻¹_PQ (Q|λσ)</code>; it serves RI-MP2 energies and gradients, an RI-JK Fock build, and RI-routed CASSCF and FCI.</p>
+<h3 id="mp2-and-orbital-response">MP2 and orbital response</h3>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>File</th>
+<th>Role</th>
+</tr></thead>
+<tbody>
+<tr><td><code>mp2.h</code>, <code>mp2_rmp2.cpp</code>, <code>mp2_ump2.cpp</code>, <code>mp2_internal.{h,cpp}</code>, <code>mp2_t2_storage.cpp</code></td><td><code>rmp2_kernel</code> / <code>ump2_kernel</code> (energies, frozen core), <code>rmp2_make_natural_orbitals</code>; layouts mirror PySCF&#x27;s <code>_ChemistsERIs</code></td></tr>
+<tr><td><code>mp2_gradient.{h,cpp}</code></td><td>RMP2 and UMP2 relaxed densities and gradient intermediates</td></tr>
+<tr><td><code>rhf_response.{h,cpp}</code>, <code>uhf_response.{h,cpp}</code></td><td>CPHF / Z-vector machinery and orbital Hessians (<code>build_rhf_cphf_matrix</code>, <code>build_uhf_cphf_matrix</code>), shared with SOSCF and stability; the UHF Z-vector is matrix-free GMRES</td></tr>
+</tbody></table></div>
+<h3 id="ci-engine-fci-and-fciqmc-ci-fci-h-cpp-fciqmc-driver-h-cpp">CI engine, FCI and FCIQMC (<code>ci/</code>, <code>fci.{h,cpp}</code>, <code>fciqmc_driver.{h,cpp}</code>)</h3>
+<p><code>ci/strings.{h,cpp}</code> enumerates determinants as packed <code>uint64_t</code> bit strings (up to 31 spatial orbitals per spin packed together); <code>ci/ci.{h,cpp}</code> holds the determinant space, Slater-Condon elements, a dense Hamiltonian below 500 determinants and an iterative sigma build with Davidson above. The sigma build is a scatter into 64 fixed bins by ket index, <code>schedule(static, bin_size)</code>, summed in bin order (bitwise thread-count invariant). <code>ci/rdm.{h,cpp}</code> builds 1- and 2-RDMs (and the bilinear 2-RDM for CI response) with the same binned, fixed-order reduction.</p>
+<p><code>run_fci</code> is CASCI over the whole MO space. <code>build_all_mo_ci_setup</code> produces the integrals and Hamiltonian callbacks shared by <code>run_fci</code> and <code>run_fciqmc</code>, so the two can only differ in how they solve. <code>ci/fciqmc.{h,cpp}</code> and <code>ci/spawn_accumulator.h</code> hold the walker population, a deterministic per-parent RNG, the excitation generator with consistent <code>p_gen</code>, spawn/death/annihilation, shift control with the initiator approximation, and both energy estimators with blocked error bars. See <code>docs/FCIQMC_*.md</code>.</p>
+<h3 id="casscf-and-rasscf-casscf-h-casscf-internal-h-casscf">CASSCF and RASSCF (<code>casscf.h</code>, <code>casscf_internal.h</code>, <code>casscf/</code>)</h3>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>File</th>
+<th>Role</th>
+</tr></thead>
+<tbody>
+<tr><td><code>casscf/casscf.cpp</code></td><td><code>run_mcscf_loop</code>: macroiterations, candidate selection, trust region, convergence, output</td></tr>
+<tr><td><code>casscf/casscf_driver_internal.{h,cpp}</code></td><td><code>McscfState</code>, root tracking (Hungarian assignment), SA helpers, candidate assembly</td></tr>
+<tr><td><code>casscf/orbital.{h,cpp}</code></td><td>Fock builds, orbital gradient, <code>OccupiedHalfTransform</code>, analytic orbital Hessian action</td></tr>
+<tr><td><code>casscf/response.{h,cpp}</code></td><td>CI response, orbital-CI coupling, the matrix-free CI-relaxed Newton solve</td></tr>
+<tr><td><code>casscf/aug-hessian{,-orbital}.{h,cpp}</code></td><td>Generic augmented-Hessian Davidson (also used by SCF SOSCF)</td></tr>
+</tbody></table></div>
+<p>Each energy evaluation (<code>evaluate</code> in <code>casscf.cpp</code>) builds the half-transformed integrals <code>H = (μν|λi)</code>, i over core and active MOs, once at the trial orbitals. F_I, F_A, (tu|vw) and the <code>(pu|vw)</code> cache are O(nb³) contractions of it (<code>occupied_two_electron_ao</code>, <code>transform_occupied_half</code>), because every density involved is <code>X Yᵀ + Y Xᵀ</code> with X the occupied columns of C. The orbital step is a Newton step on the exact CI-relaxed orbital Hessian (analytic fixed-CI action plus per-root CI response with both orbital-CI coupling terms), solved matrix-free by a preconditioned subspace solve with an inexact-Newton stop and a fixed seed vector (so it still sees negative modes the gradient is orthogonal to). Steps are scaled by a trust region driven by the exact model; the Newton step is taken as soon as it improves, otherwise further candidates and stagnation probes are scored by the merit <code>E + 0.1‖g‖²</code>. RHF and ROHF references are accepted (unpaired electrons must sit in the active space). RAS constraints act on the determinant strings only. RI runs keep the dense-density builds and a finite-difference Hessian. See <code>docs/CASSCF_PERFORMANCE.md</code>.</p>
+<h3 id="coupled-cluster-cc-namespace-hartreefock-correlation-cc">Coupled cluster (<code>cc/</code>, namespace <code>HartreeFock::Correlation::CC</code>)</h3>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Entry</th>
+<th>Path</th>
+</tr></thead>
+<tbody>
+<tr><td><code>run_rccsd</code>, <code>run_uccsd</code> (<code>ccsd.{h,cpp}</code>)</td><td>Hand-written CCSD; UCCSD and small cases via the determinant-space solver</td></tr>
+<tr><td><code>run_rccsdt</code>, <code>run_uccsdt</code> (<code>ccsdt.{h,cpp}</code>)</td><td>RCCSDT routes to the determinant prototype (small: <code>nso ≤ 16</code> and <code>ndet ≤ 10000</code>), the hand-written tensor backend (<code>tensor_backend*.cpp</code>), or the generated harness; <code>PLANCK_RCCSDT_BACKEND</code> overrides</td></tr>
+<tr><td><code>run_rccgen</code> (<code>rccgen.{h,cpp}</code>)</td><td>Generated arbitrary-order RCC (<code>cc2</code> … <code>cc6</code>, <code>ccsdt_gen</code>, RCCSDTQ) through <code>solver_arbitrary</code>, <code>generated_arbitrary_{prepare,runtime}</code> and <code>generated_kernel_registry</code></td></tr>
+<tr><td><code>run_uccgen</code> (<code>uccgen.cpp</code>, <code>ucc_blocks.cpp</code>)</td><td>Generated unrestricted CC (<code>ucc2</code> … <code>ucc6</code>), <code>PLANCK_CC_UCC=ON</code> builds only</td></tr>
+</tbody></table></div>
+<p>Supporting files: <code>common.{h,cpp}</code> (tensor types with inlined row-major accessors, RHF/UHF references), <code>amplitudes.{h,cpp}</code> (amplitude and denominator packs, spin-orbital → spatial projection), <code>mo_blocks.{h,cpp}</code> (MO integral blocks), <code>diis.{h,cpp}</code> (amplitude DIIS), <code>determinant_space.{h,cpp}</code> (exact-in-the-space determinant CC for validation), <code>tensor_optimized.{h,cpp}</code>, and <code>cc_amplitude_checkpoint.{h,cpp}</code> (the <code>.ccamp</code> amplitude sidecar for generated RCC and UCC restarts, kept separate from <code>.hfchk</code>). Generated kernels index amplitudes <code>(occ…, virt…)</code>; ccgen&#x27;s own fixtures are <code>(virt…, occ…)</code>. All CC references are canonical (<code>f_ov = 0</code>). See the <code>docs/CCGEN_*.md</code> answers.</p>
+<hr>
+<h2 id="analytic-gradients-src-gradient">Analytic Gradients (<code>src/gradient/</code>)</h2>
+<p><code>gradient.{h,cpp}</code> assembles nuclear gradients for RHF, UHF, ROHF, RKS, UKS (with the HF-like exchange of hybrids and range-separated hybrids), and, with <code>mp2_gradient.cpp</code>, RMP2 and UMP2. The one-electron part (Hellmann-Feynman plus Pulay with the energy-weighted density W) runs in one threaded block; the two-electron part for every reference goes through one loop, <code>two_electron_gradient.h</code>: the caller supplies Γ, the loop visits the <code>q ≥ p</code> shell-pair triangle, evaluates derivative blocks through the Auto derivative chain, and sums 64 fixed bins in order (thread-count invariant).</p>
+<p>ROHF uses <code>W = Pα Fα Pα + Pβ Fβ Pβ</code>, built in the SCF&#x27;s own basis and lifted to Cartesian once (lifting the factors separately is wrong because the cart←sph transform is not square). Spherical gradients for RHF/UHF/ROHF lift P and W at the skin; spherical MP2 gradients are rejected. See <code>docs/GRADIENT_INTEGRAL_PERFORMANCE.md</code>.</p>
+<hr>
+<h2 id="geometry-optimization-and-frequencies-src-opt-src-freq">Geometry Optimization and Frequencies (<code>src/opt/</code>, <code>src/freq/</code>)</h2>
+<p><code>run_geomopt</code> is Cartesian L-BFGS with backtracking; <code>run_geomopt_ic</code> is BFGS in redundant internal coordinates (<code>intcoords.{h,cpp}</code>: bonds from covalent radii, bends, torsions, Wilson B matrix, iterative back-transform, constraints for bonds, angles, dihedrals and frozen atoms). Both take the energy-and-gradient as a callback, so any method with a gradient can be optimized. <code>compute_hessian</code> (<code>hessian.{h,cpp}</code>) builds the semi-numerical Hessian by central differences of analytic gradients (parallel over displacements), and <code>vibrational_analysis</code> mass-weights, projects out translations and rotations, and labels modes by symmetry. <code>ImaginaryFollow</code> displaces along the largest imaginary mode and re-optimizes (HF driver only). Each displaced geometry rebuilds the basis-dependent state through <code>rebuild_basis_dependent_state</code>.</p>
+<hr>
+<h2 id="kohn-sham-dft-src-dft">Kohn-Sham DFT (<code>src/dft/</code>)</h2>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Area</th>
+<th>Files</th>
+</tr></thead>
+<tbody>
+<tr><td>Driver</td><td><code>driver.{h,cpp}</code> (<code>DFT::Driver::prepare</code> / <code>run</code>): KS-SCF, hybrids, PCM, TDDFT, SOSCF, double hybrids, gradient and workflow dispatch; <code>main.cpp</code></td></tr>
+<tr><td>Grid</td><td><code>base/grid.h</code>, <code>radial.h</code> (radial counts from PySCF&#x27;s period × level table, Treutler-Ahlrichs mapping), <code>angular.h</code> (Lebedev), Becke partition; versioned pruning policies (<code>legacy</code>, <code>g4-3-v4</code>)</td></tr>
+<tr><td>libxc</td><td><code>base/wrapper.h</code>: functional metadata (hybrid, range-separated, double hybrid, coefficients)</td></tr>
+<tr><td>AO and XC on the grid</td><td><code>ao_grid.h</code>, <code>xc_grid.{h,cpp}</code> (density and libxc evaluation in disjoint slabs, no cross-thread reduction), <code>ks_matrix.{h,cpp}</code></td></tr>
+<tr><td>Gradients</td><td><code>dft_gradient.{h,cpp}</code>: XC nuclear gradient including Becke-weight motion</td></tr>
+<tr><td>Analytic XC Hessian action</td><td><code>analytic_hessian.{h,cpp}</code>, <code>ks_orbital_hessian.{h,cpp}</code>: fxc products for SOSCF (LDA, GGA, polarized)</td></tr>
+<tr><td>TDDFT</td><td>in <code>driver.cpp</code>; <code>tddft_exchange.h</code> owns the exact-exchange response blocks (full-range and erf short-range)</td></tr>
+<tr><td>Double-hybrid gradients</td><td>RKS: <code>dh_pt2_gradient.{h,cpp}</code>, <code>dh_zvector.h</code>, <code>response_gmres.h</code> (matrix-free GMRES Z-vector, streamed pair density); UKS: <code>udh_*.cpp</code> (dense implementation, pinned V4 grid)</td></tr>
+<tr><td>Helpers</td><td><code>response_packing.{h,cpp}</code>, <code>uks_level_shift.{h,cpp}</code>, diagnostic probes (<code>dh_hessian_probe.*</code>, <code>dh_probe_gmres.h</code>)</td></tr>
+</tbody></table></div>
+<p>The KS Coulomb and exact-exchange matrices are built memory-direct through the same fused Fock loop as HF (<code>_compute_2e_j_direct</code>, <code>_compute_2e_k_direct</code>), with unscaled K; each caller applies its own exchange prefactor. Range-separated hybrids add <code>ShortRange</code>/<code>LongRange</code> kernel builds. Double hybrids run the KS SCF and then a non-self-consistent MP2 on the KS orbitals. Spherical basis sets and meta-GGAs are rejected in <code>planck-dft</code> today (see <code>vault/Status/Open Work.md</code>).</p>
+<hr>
+<h2 id="entry-points-and-data-flow">Entry Points and Data Flow</h2>
+<p><code>main</code> in each binary first initializes the Boys library (licence check, fetch, decrypt, load), prints the banner and external-library table, parses arguments (<code>&lt;input&gt; [--json &lt;path&gt;]</code>) and the input, and hands the <code>Calculator</code> to <code>HartreeFock::Driver::run</code> (<code>hf_driver.cpp</code>) or <code>DFT::Driver::run</code>. <code>planck-mpi</code> does the same and picks the driver from the input.</p>
 <pre><code>
-Input file
-    │
-    ▼
-IO::parse_input()          → Calculator (options, molecule)
-    │
-    ▼
-Symmetry::detectSymmetry() → molecule._standard (Bohr, reoriented)
-    │
-    ▼
-BasisFunctions::read_gbs_basis() → Basis (_shells, _basis_functions)
-    │
-    ▼
-build_shellpairs()         → vector&lt;ShellPair&gt;
-    │
-    ▼
-ObaraSaika::_compute_1e()  → overlap S, core Hamiltonian H
-ObaraSaika::_compute_2e()  → ERI tensor (conventional mode)
-    │
-    ▼
-run_rhf() / run_uhf()      → DataSCF (density, Fock, MOs, energies)
-    │
-    ├─ SinglePoint → energies + properties
-    ├─ Gradient    → Gradient::compute_*_gradient()
-    ├─ GeomOpt     → Opt::run_geomopt() / run_geomopt_ic()
-    ├─ Frequency   → Freq::compute_hessian() → vibrational_analysis()
-    ├─ RMP2/UMP2   → Correlation::run_rmp2() / run_ump2()
-    ├─ RCCSD/UCCSD/RCCSDT/UCCSDT → Correlation::CC::run_r/uccsd[t]()
-    ├─ RCCSDTQ     → Correlation::CC::run_rccsdtq() (ccgen-generated kernels)
-    └─ CASSCF      → Correlation::run_casscf()
-                         │
-                         ├─ CASSCF::build_ci_space()
-                         ├─ CASSCF::solve_ci()
-                         ├─ CASSCF::compute_1rdm() / compute_2rdm()
-                         ├─ CASSCF::build_active_integral_cache()
-                         ├─ CASSCF::compute_Q_matrix()
-                         └─ orbital rotation loop
+input file
+  └─ IO::parse_input()                → Calculator (options, molecule)
+       └─ detectSymmetry()            → _standard (Bohr, reoriented), point group
+            └─ read_gbs_basis()       → Basis (shells, _index, cart→sph)
+                 └─ build_shellpairs, 1e integrals, SAO basis, ERI (conventional)
+                      └─ run_rhf / run_uhf / run_rohf   (or DFT::Driver::run)
+                           ├─ properties, populations, PCM, FCIDUMP, checkpoint
+                           ├─ Gradient          → compute_*_gradient
+                           ├─ GeomOpt           → run_geomopt / run_geomopt_ic
+                           ├─ Frequency         → compute_hessian → vibrational_analysis
+                           ├─ RMP2 / UMP2       → rmp2_kernel / ump2_kernel
+                           ├─ CC                → run_rccsd[t] / run_uccsd[t] / run_rccgen / run_uccgen
+                           ├─ CASSCF / RASSCF   → run_casscf / run_rasscf
+                           ├─ FCI / FCIQMC      → run_fci / run_fciqmc
+                           └─ counterpoise      → BSSE::run_counterpoise
 </code></pre>
 <hr>
+<h2 id="determinism">Determinism</h2>
+<p>Every parallel reduction in the tree is fixed-order: work is partitioned by a fixed function of the work index (never by thread id, never with dynamic scheduling into a shared accumulator), and partial results are summed in a fixed order. This covers the fused Fock loop, the gradient loop, the CI sigma build, the RDM builds, the DFT grid, the transforms and MPI reductions. Results are therefore bitwise identical at any thread or rank count, and regression pairs (<code>*_threads1/4</code>) hold several paths there. Merging per-thread partials under <code>omp critical</code> or with <code>omp atomic</code> reintroduces run-to-run differences and is not used.</p>
+<hr>
 <h2 id="key-invariants-and-pitfalls">Key Invariants and Pitfalls</h2>
-<p>The following invariants are not enforced by the type system and must be maintained by callers:</p>
 <ul>
-<li><strong><code>_standard</code> must be in Bohr</strong> before <code>read_gbs_basis()</code>, <code>_compute_nuclear_repulsion()</code>, and any integral evaluation. <code>detectSymmetry()</code> sets it in Bohr automatically. When symmetry is disabled, <code>prepare_coordinates()</code> must have been called first.</li>
-<li><strong><code>ContractedView._index</code></strong> must equal the position of the basis function in <code>Basis._basis_functions</code>. A missing or zero-initialized index silently misplaces all integrals for that function.</li>
-<li><strong><code>Nc</code> is folded into <code>Shell._coefficients</code></strong> during GBS parsing. No external <code>Nc</code> factor should ever be applied in integral code.</li>
-<li><strong>Shell-pair index recovery</strong>: Use <code>sp.A._index</code> and <code>sp.B._index</code> from the stored <code>ContractedView</code> references. Do not use <code>invert_pair_index</code> on a shell-pair vector position to recover shell indices — it operates on triangular pair indices, not vector positions.</li>
-<li><strong><code>Calculator::initialize()</code></strong> must be called after the basis is loaded and before any integral or SCF code runs. It allocates all matrix storage.</li>
-<li><strong>SAO blocking</strong> is valid only after <code>build_sao_basis()</code> sets <code>_sao_transform</code> and related arrays. The SCF code checks <code>_use_sao_blocking</code> before attempting block-diagonal diagonalization.</li>
-<li><strong>DIIS restart</strong>: <code>DIISState::clear()</code> is called automatically when the error grows by more than <code>_diis_restart_factor</code>. Callers should not manually clear the DIIS state unless explicitly restarting from scratch.</li>
-<li><strong><code>ActiveIntegralCache::puvw</code> layout</strong> is row-major <code>(p,u,v,w)</code>. Every producer and consumer must agree on that exact ordering; <code>compute_Q_matrix()</code> assumes each fixed-<code>p</code> slab is one contiguous block of length <code>n_act^3</code>.</li>
-<li><strong>Per-root SA energies</strong> stored in <code>Calculator::_cas_root_energies</code> are full CASSCF total energies. Do not replace them with raw CI eigenvalues unless the logging and checkpoint consumers are updated accordingly.</li>
+<li><strong><code>_standard</code> must be in Bohr</strong> before basis construction, nuclear repulsion and any integral. In DFT, also keep <code>_coordinates</code> in the same frame (<code>sync_coordinate_frames_from_standard</code>).</li>
+<li><strong><code>ContractedView._index</code></strong> is the AO position used for placement; never recover AO positions from a shell pair&#x27;s vector index (<code>invert_pair_index</code> is not valid for multi-function shells).</li>
+<li><strong>The contracted norm is folded into <code>Shell._coefficients</code></strong>; never apply it again. Primitive norms are handled inside the recurrences.</li>
+<li><strong>Spherical runs:</strong> integral code is Cartesian (<code>nbasis()</code>); SCF state is sized by <code>working_nbasis()</code>. Rebuild <code>_cart_to_sph</code> normalization at every new geometry.</li>
+<li><strong>ROHF energy-weighted density</strong> is <code>Pα Fα Pα + Pβ Fβ Pβ</code>, built in the working basis and lifted once.</li>
+<li><strong>Stored orbital energies at convergence</strong> come from the true Fock, not the DIIS-extrapolated one; gradients depend on it.</li>
+<li><strong>K from the shared builders is unscaled</strong> in DFT; the ½ (RKS) or 1 (UKS) and the exchange coefficient are applied by the caller.</li>
+<li><strong><code>ActiveIntegralCache::puvw</code></strong> is row-major <code>(p,u,v,w)</code>; <code>compute_Q_matrix</code> assumes contiguous <code>n_act³</code> slabs.</li>
+<li><strong>Generated CC</strong> needs <code>PLANCK_CC_SPIN_ADAPT=ON</code>; the OFF emit gives wrong correlation energies. Cases that depend on build options declare <code>requires_build_option</code> in <code>tests/regression_cases.json</code>.</li>
+<li><strong>Saddle points:</strong> a symmetric start can sit on a stationary point whose negative mode the gradient cannot see. Iterative solvers seeded only from the gradient cannot leave it; that is why the CASSCF solve carries a seed vector.</li>
+<li><strong>Release builds define <code>NDEBUG</code></strong>, so <code>assert</code>-only tests do not run their checks there.</li>
 </ul>
       </main>
     </div>
