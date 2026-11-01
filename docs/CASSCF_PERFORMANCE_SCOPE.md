@@ -4,48 +4,47 @@ Canonical status lives in `vault/Status/Completion.md` and
 `vault/Status/Open Work.md`. This is an in-flight scope; when the work lands,
 rewrite it as the answer to the question in the title.
 
-## Latest: N5 (2026-11-01, uncommitted)
+## Latest: N6 (2026-11-01, uncommitted)
 
-**cc-pVTZ 19.6 -> 13.3 s and cc-pVTZ C1 23.6 -> 15.0 s, from a loop
-interchange in `transform_eri`; and C1 CASSCF is now bitwise reproducible.**
+**The step selector stops at the Newton step: 2 evaluations per macro instead
+of 22. cc-pVDZ is now faster than PySCF (0.245 s vs 0.27 s; C1 0.367 vs
+0.43 s), and cc-pVTZ 13.3 -> 7.3 s (C1 15.0 -> 8.5 s).**
 
-- **`transform_eri` (`src/post_hf/integrals.cpp`).** Quarters 1-3 had the
-  contracted index innermost, so the first quarter read the AO tensor at
-  stride nb^3; it was 37 % of a cc-pVTZ run. The contracted index now sits
-  outside a unit-stride sigma loop. Each element still sums over the
-  contracted index in ascending order, so the output is bit-identical: every
-  table energy matches N4 to all printed digits, `planck-transform-eri`
-  passes at 1 and 4 threads, and the core suite passes 85/85. MP2, CC,
-  stability and hybrid-DFT exchange use the same routine.
-- **RDM reductions (`src/post_hf/ci/rdm.cpp`).** The 1- and 2-RDM builds
-  scheduled tasks dynamically and merged per-thread partials under
-  `omp critical`, so they summed in completion order. Water/cc-pVDZ C1 at 4
-  threads gave -76.0781256180 .. -76.0781256195 across identical runs
-  (P5 and N4 too). They now use the FCI sigma build's discipline: 64 bins
-  fixed by task index, `schedule(static, bin_size)`, bins summed in fixed
-  order. The energy is -76.0781256190 in five 4-thread runs and at 1/2/8
-  threads, and the whole trace is identical at 1/4/8 threads. New gate:
-  `water_casscf44_c1_ccpvdz_threads1/4` (`atol 0`, threads1 pinned to PySCF
-  at 1e-8); the pair fails on the old `rdm.cpp`.
+After N5, `call_probe` showed 22 `evaluate` calls per macro at cc-pVTZ, each
+a full active transform and two Fock builds: `select_best_candidate_step`
+scored every candidate (coupled Newton, augmented Hessian, gradient) at all 7
+scales and kept the best merit. Now the first candidate, the Newton step on
+the exact CI-relaxed Hessian, is taken without scoring the rest when at full
+scale it lowers the energy and either does not hurt the gradient or lowers
+the merit. (The first version required the gradient not to rise; far from
+convergence the Newton step raises it while lowering energy and merit, so
+macros 1-2 still scored all 21.) When it does not, the full search and the
+stagnation probes run as before. All 19 cases pass, including the uphill
+canary; table energies move <= 2e-10 Eh (water 6-31G, water SA-2).
+
+**What the profile shows next (cc-pVTZ):** 80 % `_compute_fock_rhf`, 95 % of
+the loop inside the coupled solve (the augmented-Hessian candidate is 3 %).
+The solves are long, 28-64 vectors at cc-pVTZ and 34-50 of 50 at cc-pVDZ even
+near convergence, at 2 full nb^4 sweeps each. See "What is left" items 1-2.
 
 ## Where it stands
 
-**CASSCF is 8-76x faster than when this started and beats PySCF at 6-31G.
-It is 1.4-1.6x behind at cc-pVDZ and 6.5-11x behind at cc-pVTZ.** It needs no
+**CASSCF is 20-120x faster than when this started and beats PySCF at 6-31G
+and cc-pVDZ (with and without symmetry). It is 3.7-6.3x behind at cc-pVTZ.** It needs no
 more macroiterations than PySCF anywhere.
 
 Water CAS(4,4), Cartesian, 4 threads, `build-full`; PySCF 2.13.0
 (`tests/benchmarks/casscf/pyscf_casscf_timing.py`). Wall time.
 
-| case | AOs / pairs | start | P4 `1468a4f7` | P5 `305de17a` | N4 `c3095a53` | **N5** | PySCF | N5 vs PySCF |
-|---|---|---|---|---|---|---|---|---|
-| 6-31G | 13 / 22 | 1.3-1.9 s | 0.18 s | 0.16 s | 0.15 s | **0.16 s** | 0.34 s | **0.46x** |
-| cc-pVDZ | 25 / 50 | 13.4 s | 0.58 s | 0.59 s | 0.45 s | **0.43 s** | 0.27 s | 1.6x |
-| cc-pVDZ, C1 | 25 / 138 | 44.5 s | 2.35 s | 0.72 s | 0.58 s | **0.59 s** | 0.43 s | 1.4x |
-| cc-pVTZ | 65 / 142 | ~176 s per macro | 43.5 s | 24.3 s | 19.6 s | **13.3 s** | 1.16 s | 11x |
-| cc-pVTZ, C1 | 65 / 418 | - | 51.8 s | 27.4 s | 23.6 s | **15.0 s** | 2.30 s | 6.5x |
+| case | AOs / pairs | start | P4 `1468a4f7` | P5 `305de17a` | N4 `c3095a53` | N5 `bc36af7b` | **N6** | PySCF | N6 vs PySCF |
+|---|---|---|---|---|---|---|---|---|---|
+| 6-31G | 13 / 22 | 1.3-1.9 s | 0.18 s | 0.16 s | 0.15 s | 0.16 s | **0.064 s** | 0.34 s | **0.19x** |
+| cc-pVDZ | 25 / 50 | 13.4 s | 0.58 s | 0.59 s | 0.45 s | 0.43 s | **0.245 s** | 0.27 s | **0.91x** |
+| cc-pVDZ, C1 | 25 / 138 | 44.5 s | 2.35 s | 0.72 s | 0.58 s | 0.59 s | **0.367 s** | 0.43 s | **0.85x** |
+| cc-pVTZ | 65 / 142 | ~176 s per macro | 43.5 s | 24.3 s | 19.6 s | 13.3 s | **7.3 s** | 1.16 s | 6.3x |
+| cc-pVTZ, C1 | 65 / 418 | - | 51.8 s | 27.4 s | 23.6 s | 15.0 s | **8.5 s** | 2.30 s | 3.7x |
 
-N5 energies: cc-pVDZ -76.0440109040 (PySCF -76.0440109018), C1
+N6 energies: cc-pVDZ -76.0440109040 (PySCF -76.0440109018), C1
 -76.0781256190 (-76.0781256214), cc-pVTZ -76.0754286346 (-76.0754286541; 2e-8,
 set by `tol_mcscf_grad 1e-5`), cc-pVTZ C1 -76.1092535242 (-76.1092535271).
 
@@ -57,12 +56,10 @@ component on; both new values are PySCF's own tight answers.
 
 ## Handoff
 
-**Committed through `c3095a53` (N4).** **Uncommitted, gated, ready to commit
-as N5:** `src/post_hf/integrals.cpp`, `src/post_hf/ci/rdm.cpp`, the new input
-`tests/inputs/regression/post_hf/water_casscf44_c1_ccpvdz.hfinp` and its two
-cases in `tests/regression_cases.json`. On that tree: 19/19
-CASSCF/RASSCF/FCI cases, core suite 85/85, `planck-transform-eri` and
-`planck-casscf-internal` pass, table energies bit-identical to N4.
+**Committed through `bc36af7b` (N5).** **Uncommitted, gated, ready to commit
+as N6:** `select_best_candidate_step` in `src/post_hf/casscf/casscf.cpp`. On
+that tree: 19/19 CASSCF/RASSCF/FCI cases, `planck-casscf-internal` passes,
+table energies within 2e-10 Eh of N5.
 
 **How to reproduce:**
 
@@ -114,21 +111,33 @@ CASSCF/RASSCF/FCI cases, core suite 85/85, `planck-transform-eri` and
 | 5 | a 0.2 decaying level shift and a fixed 0.2 step cap, tuned for an approximate Hessian, halved the convergence rate | trust region driven by the exact model | P4b `1468a4f7` |
 | 6 | the dense CI-relaxed operator costs ~570 nb^4 Fock passes per macro at cc-pVTZ | matrix-free preconditioned solve, with a seed vector so it still sees zero-gradient negative modes | P5 `305de17a` |
 | 7 | each product swept the ERI tensor 4 times, once for a density it had already built | two densities per sweep, memoized G[dD_c] | N4 `c3095a53` |
-| 8 | `transform_eri` read the AO tensor at stride nb^3 in its first quarter | contracted index outside a unit-stride loop | N5 |
+| 8 | `transform_eri` read the AO tensor at stride nb^3 in its first quarter | contracted index outside a unit-stride loop | N5 `bc36af7b` |
+| 9 | the selector scored 3 candidates x 7 scales (22 evaluations) every macro | take the full Newton step when it improves | N6 |
 
 ## What is left
 
-1. **Re-profile cc-pVTZ** after N5. Before it: `transform_eri` first quarter
-   37 %, batched `_compute_fock_rhf` 35 %, single-density
-   `_compute_fock_rhf` 14 %, thread wait 10 %.
-2. **The single-density `_compute_fock_rhf`** (inactive/active Fock and the
-   post-response G[C_a gamma1 C_a^T]; also the conventional SCF's hot path)
-   could use N4's register-accumulator form. Measure first; it needs the SCF
-   gates, not just CASSCF's.
-3. **RI path:** still an FD orbital Hessian, and a full-leg-first transform
+1. **Low-rank G[D] in the Hessian product (the big lever).** Every density a
+   product contracts is low rank in a fixed basis: dD_c = C(R P_c + P_c R^T)C^T
+   has rank <= 2 n_core, dD_a rank <= 2 n_act, and C_a gamma1 C_a^T rank
+   n_act. So J and K need only half-transformed integrals (mu nu|lam p) with
+   p in core + active, built once per macro (it is `transform_eri`'s first
+   quarter, n_occ·nb^3 doubles), not a full nb^4 sweep per product. At water
+   cc-pVTZ that is ~nb^3·(n_core+n_act) = 1.4M flops against nb^4 = 18M per
+   density, and the 143 MB tensor stays out of the inner loop. This is what
+   PySCF's in-core CASSCF does (its `ppaa`/`papa` blocks). Gate: the P2 FD
+   oracle in `planck-casscf-internal`, plus every product compared with the
+   full-sweep path to round-off.
+2. **A better preconditioner for the relaxed solve.** Near convergence, with a
+   positive-definite Hessian, cc-pVDZ still needs 34-50 of 50 vectors for a
+   relative residual of ~4e-3. The diagonal is F_I + F_A differences only;
+   the exact fixed-CI diagonal (or the active-active block) is the candidate.
+   Do it after item 1, when products are cheap and the count matters less.
+3. **The single-density `_compute_fock_rhf`** (SCF hot path) in N4's
+   register form; measure first, needs the SCF gates. Item 1 removes most of
+   its CASSCF use.
+4. **RI path:** still an FD orbital Hessian, and a full-leg-first transform
    (`water_casscf_ri_ccpvdz` 4.1 s).
-4. **Delete `CallProbe`** (`PLANCK_CASSCF_CALL_PROBE`) once this scope is
-   answered.
+5. **Delete `CallProbe`** once this scope is answered.
 
 Not needed: a new Davidson implementation, the AH solver for the relaxed
 step (N2: seeded from g, it has the subspace solve's blind spot, and the
@@ -150,6 +159,30 @@ case", direct or cached Fock builds (disproven, `CASSCF_FOCK_REBUILD_COST.md`).
 - Stop if any gated energy moves by more than 1e-8 Eh or a basin changes.
 
 ## Record (newest first)
+
+### N5: unit-stride `transform_eri`; deterministic RDMs (`bc36af7b`)
+
+cc-pVTZ 19.6 -> 13.3 s and cc-pVTZ C1 23.6 -> 15.0 s, from a loop
+interchange in `transform_eri`; and C1 CASSCF is now bitwise reproducible.
+
+- **`transform_eri` (`src/post_hf/integrals.cpp`).** Quarters 1-3 had the
+  contracted index innermost, so the first quarter read the AO tensor at
+  stride nb^3; it was 37 % of a cc-pVTZ run. The contracted index now sits
+  outside a unit-stride sigma loop. Each element still sums over the
+  contracted index in ascending order, so the output is bit-identical: every
+  table energy matches N4 to all printed digits, `planck-transform-eri`
+  passes at 1 and 4 threads, and the core suite passes 85/85. MP2, CC,
+  stability and hybrid-DFT exchange use the same routine.
+- **RDM reductions (`src/post_hf/ci/rdm.cpp`).** The 1- and 2-RDM builds
+  scheduled tasks dynamically and merged per-thread partials under
+  `omp critical`, so they summed in completion order. Water/cc-pVDZ C1 at 4
+  threads gave -76.0781256180 .. -76.0781256195 across identical runs
+  (P5 and N4 too). They now use the FCI sigma build's discipline: 64 bins
+  fixed by task index, `schedule(static, bin_size)`, bins summed in fixed
+  order. The energy is -76.0781256190 in five 4-thread runs and at 1/2/8
+  threads, and the whole trace is identical at 1/4/8 threads. New gate:
+  `water_casscf44_c1_ccpvdz_threads1/4` (`atol 0`, threads1 pinned to PySCF
+  at 1e-8); the pair fails on the old `rdm.cpp`.
 
 ### N4: two ERI sweeps per Hessian product (`c3095a53`)
 

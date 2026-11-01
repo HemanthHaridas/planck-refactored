@@ -1973,6 +1973,11 @@ PySCF's SAD-start answer. 15/15 CASSCF regressions pass.
   innermost (first quarter read the AO tensor at stride nb^3, 37 % of a
   cc-pVTZ CASSCF run); interchanged, bit-identical. cc-pVTZ 19.6 -> 13.3 s,
   cc-pVTZ C1 23.6 -> 15.0 s (PySCF 1.16 / 2.30 s). Shared with MP2/CC;
+- N6 (2026-11-01): the step selector takes the full Newton step when it
+  improves instead of scoring 3 candidates x 7 scales: 22 -> 2 evaluations
+  per macro. cc-pVDZ now beats PySCF (0.245 vs 0.27 s; C1 0.367 vs 0.43 s);
+  cc-pVTZ 7.3 s, C1 8.5 s. Next: low-rank G[D] from half-transformed
+  integrals in the Hessian product (each product still sweeps nb^4 twice);
 - the RI path is still FD-Hessian with a full-leg-first transform.
 
 #### Unreproduced OpenMP hang in CASSCF (seen once, 2026-10-28)

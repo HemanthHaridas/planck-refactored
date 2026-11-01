@@ -93,8 +93,16 @@ namespace
         // orbitals, re-evaluating the MCSCF state, and accepting only moves
         // that improve energy/merit without clearly destabilizing the SA
         // gradient.
-        for (const auto &candidate : candidates)
+        //
+        // The first candidate is the Newton step on the exact CI-relaxed
+        // Hessian. When it lowers the energy at full scale it is taken without
+        // scoring the rest: each evaluation is a full active transform and two
+        // Fock builds, and scoring 3 candidates x 7 scales made the selector
+        // most of a macro's cost once the solve itself was cheap.
+        bool newton_accepted = false;
+        for (std::size_t ci = 0; ci < candidates.size() && !newton_accepted; ++ci)
         {
+            const auto &candidate = candidates[ci];
             for (double scale : CASSCF_MACRO_STEP_SCALES)
             {
                 Eigen::MatrixXd trial_step = scale * candidate.step;
@@ -166,6 +174,12 @@ namespace
                         current_state.roots, current_state.F_I_mo, opt_pairs, selection.step);
                 selection.predicted_delta = prediction.weighted_delta;
                 selection.max_root_predicted_delta_deviation = prediction.max_root_deviation;
+                if (ci == 0 && std::abs(scale - 1.0) < 1e-12 &&
+                    (energy_improved_without_hurting_gradient || (energy_improved && merit_improved)))
+                {
+                    newton_accepted = true;
+                    break;
+                }
             }
         }
 
