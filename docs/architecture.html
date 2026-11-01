@@ -350,6 +350,7 @@
 <tr><td>Eigen 3.4.0</td><td><code>FetchContent</code></td><td>Header-only. <code>EIGEN_DONT_PARALLELIZE</code> is defined globally: Planck owns its OpenMP parallelism, and Eigen&#x27;s own thread pool nested against it (measured ~26 % slower on 8-thread conventional RHF)</td></tr>
 <tr><td>libmsym</td><td><code>ExternalProject_Add</code>, pinned commit</td><td>Point-group detection</td></tr>
 <tr><td>libxc</td><td><code>ExternalProject_Add</code>, pinned commit</td><td>XC functionals; <code>planck-dft</code> and <code>planck-mpi</code> only. Built without <code>-march=native</code> unless <code>LIBXC_ENABLE_XHOST=ON</code> (portability)</td></tr>
+<tr><td>libecpint</td><td><code>ExternalProject_Add</code>, pinned commit</td><td>ECP integrals, linked into every target (<code>src/integrals/ecp.cpp</code> is in the shared integral sources). Built with Planck&#x27;s C++ compiler (its API passes <code>std::vector</code>). <code>cmake/patch_libecpint.cmake</code> fixes its generator writing kernel constants at 6 digits</td></tr>
 <tr><td>OpenSSL (Crypto)</td><td><code>find_package</code></td><td>Licence-signature verification and decryption for the Boys library loader</td></tr>
 <tr><td>Boys-function core</td><td>fetched at run time</td><td>Encrypted, licence-gated shared library; see <code>src/lookup/loader/</code> below</td></tr>
 <tr><td>OpenMP</td><td><code>find_package</code>, <code>USE_OPENMP=ON</code> default</td><td>Defines <code>USE_OPENMP</code></td></tr>
@@ -462,6 +463,7 @@
 <tr><td>Obara-Saika</td><td><code>os.{h,cpp}</code></td><td>VRR + HRR per primitive quartet. Also owns every one-electron integral (overlap, kinetic, nuclear attraction, multipoles, cross-basis overlap, ESP) and their derivatives</td></tr>
 <tr><td>Head-Gordon-Pople</td><td><code>hgp.{h,cpp}</code></td><td>VRR per primitive pair, contracted, then HRR once per contracted quartet. Serves Coulomb and the screened <code>LongRange</code>/<code>ShortRange</code> kernels natively</td></tr>
 <tr><td>Rys quadrature</td><td><code>rys.{h,cpp}</code>, <code>rys_roots.{h,cpp}</code>, <code>rys_detail.h</code></td><td>Roots and weights from per-n Chebyshev segment fits plus the large-T asymptote, built on first use from a reference generator; per-quartet <code>RysScratch</code></td></tr>
+<tr><td>ECP (one-electron)</td><td><code>ecp.{h,cpp}</code></td><td>libecpint type-1/type-2 integrals into a Cartesian U matrix; <code>base.h</code> <code>_compute_potential</code> returns V_ne + U for every H_core build</td></tr>
 <tr><td>Auto (default)</td><td><code>base.h</code>, <code>auto_block_eri.h</code></td><td>Block-kernel chain (below) in the fused Fock loop; a per-(L_AB, L_CD) engine table (<code>kAutoEngine</code>, fitted from benchmarks) for per-component work</td></tr>
 </tbody></table></div>
 <h3 id="block-kernels-and-the-fused-fock-loop">Block kernels and the fused Fock loop</h3>

@@ -416,6 +416,19 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **ECP integrals in H_core (2026-11-01, branch `feat/def2-ecp`,
+  `docs/DEF2_ECP_SCOPE.md` step 4).** def2 bases from Rb onward run
+  single points through libecpint (MIT, `ExternalProject`).
+  `_compute_potential` (`src/integrals/base.h`) is V_ne + U_ECP at every
+  H_core site; SAD runs ECP atoms with Z − n_core electrons. libecpint's
+  code generator wrote its type-2 angular prefactors at 6 digits
+  (157.914 for 16π²), putting every off-centre semilocal integral 2.09e-6
+  too large; patched at fetch (`cmake/patch_libecpint.cmake`). Found by a
+  brute-force radial × Lebedev integral that agreed with PySCF to 12
+  digits. Five PySCF gates (HI SVP/TZVP+SAD+symmetry, AgCl, PdCO,
+  AuH·H2O): 0 to 1.1e-9 Eh, matrices to ≤1.3e-9. Gradients (step 5) and
+  DFT (step 6) refuse ECP bases.
+
 - **Å→Bohr conversion constant fixed (2026-11-01, branch `feat/def2-ecp`).**
   `src/base/tables.h` paired `BOHR_TO_ANGSTROM = 0.529177210903` (CODATA
   2018) with `ANGSTROM_TO_BOHR = 1.8897259886`, an older literal 7.2e-8

@@ -59,11 +59,15 @@ is the recommended one; none blocks another except where noted.
   Branch `feat/def2-ecp`: steps 1 (def2 H–Kr files, five PySCF gates at
   1e-9), 1b (the gap was the Å→Bohr constant, fixed — see Completion) and
   2 (nuclear-charge audit: 46 reads, 16 physical, switched) and 3 (ECP
-  parsing and storage; Z − n_core reaches every electron count; ECP runs
-  refused, gated by `hi_{rhf,rks}_def2svp_ecp_rejected`) landed. Next:
-  step 4, ECP integrals in H_core via libecpint, plus SAD/PCM/counterpoise
-  on ECP atoms (they still read Z). Open, minor: ZnCl2/def2-SVP sits 1.2e-9 (4.5e-13
-  relative) from PySCF for an unexplained reason; pinned at 2e-9.
+  parsing and storage; Z − n_core reaches every electron count) and 4
+  (ECP integrals in H_core via libecpint, single-point RHF/UHF/ROHF; see
+  Completion) landed. Next: step 5, ECP gradients (gradient workflows are
+  refused, `hi_rhf_def2svp_ecp_gradient_rejected`); step 6 DFT
+  (`planck-dft` refuses ECP bases). Open, minor: the two Cl cases
+  (ZnCl2, AgCl, def2-SVP) sit 1.1-1.2e-9 (~4e-13 relative) from PySCF,
+  unexplained, pinned at 2e-9; cross-basis checkpoint restart does not
+  check that both bases agree on each atom's ECP core count; report the
+  libecpint generator precision bug upstream.
 - **Gradient performance** (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`,
   gradients 20–120× the SCF). G3 rescoped 2026-10-26 onto the energy build's
   HGP/Rys2D split.

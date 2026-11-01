@@ -59,14 +59,13 @@ electrons on ECP atoms; that is expected, not a defect.
 
 Fail cleanly, never return an incomplete answer:
 
-- A basis file with an ECP block parses, but the driver rejects the run until
-  ECP integrals are in H_core.
-- Gradient-consuming workflows (gradient, geomopt, frequency, imaginary
-  follow) reject ECP input until step 5, with a boundary-marker regression
-  case like `water_rmp2_spherical_gradient_rejected`.
-- Full point-group direct SCF (`src/symmetry/{os,rys,hgp}_symm.cpp`) builds
-  its own Fock skeleton and would ignore the ECP operator: reject ECP with
-  `use_symm` there until it is wired in.
+- Gradient-consuming workflows (anything but a single point) refuse an ECP
+  basis until step 5, gated by `hi_rhf_def2svp_ecp_gradient_rejected`.
+- `planck-dft` refuses an ECP basis until step 6
+  (`hi_rks_def2svp_ecp_rejected`). Its H_core already carries the ECP.
+- Full point-group symmetry needs no gate: the symmetry skeleton covers the
+  two-electron Fock build only, and H_core (with the ECP) is built in full.
+  `hi_rhf_def2tzvp_ecp_sad_symm` runs with `use_symm .true.`.
 
 PySCF's `gto/ecp.py` (`type1_by_shell`, `type2_by_shell`) in the test venv is
 a readable reference for the local/semilocal split if libecpint's output
@@ -169,17 +168,57 @@ deleted.
    - **SAD had a private copy of the GBS reader**, so it still failed on
      `RB` after the fix. The copy is deleted (−123 lines); SAD uses the
      shared reader, which is now the only one.
-   Boundary: both drivers refuse any ECP basis
-   (`reject_ecp_until_integrals`, marked `ponytail:` for deletion at step
-   4) and print what was parsed. Gated by `hi_{rhf,rks}_def2svp_ecp_rejected`
-   (smoke), which pin "I: 28 core electrons, Z_eff 25, L 3, terms
-   4/7/8/10". That checks counts, not values; the exponents and
-   coefficients are first checked by step 4's ECP-matrix comparison.
-   Still reading Z on ECP atoms, to fix at step 4: the SAD atomic UHF
-   (runs with Z electrons), PCM and counterpoise.
-4. **ECP integrals in H_core** via libecpint. Gate: the ECP matrix
-   against PySCF's `mol.intor('ECPscalar')` element by element on e.g. HI,
-   AgCl, a Pd complex; then SCF energies against PySCF to 1e-9 Eh.
+   The parsed counts ("I: 28 core electrons, Z_eff 25, L 3, terms
+   4/7/8/10") are printed at startup and pinned by
+   `hi_rhf_def2svp_ecp_gradient_rejected`.
+4. **ECP integrals in H_core — LANDED.** libecpint (MIT) is an
+   `ExternalProject` pinned past v1.0.7 for upstream fixes #71/#72, built
+   with Planck's C++ compiler (its API passes `std::vector`, so a libc++
+   build would not link against libstdc++), and linked into every target,
+   since `src/integrals/ecp.cpp` sits in the shared integral sources.
+   `HartreeFock::ECP::_compute_ecp` builds the Cartesian U matrix:
+   libecpint takes `n` as written in the file and treats the largest-l
+   channel as local, so U_L goes in at l = L; coefficients are passed as
+   (c_p Nc) N_p and `_component_norm` applied per element (same xx, xy, xz,
+   ... order). `_compute_potential` (`src/integrals/base.h`) returns
+   V_ne + U and replaces the nuclear-attraction call at every H_core site
+   (HF driver both paths, `working_state`, DFT driver, counterpoise), so
+   geomopt rebuilds and restarts inherit it. Also fixed: SAD attaches each
+   element's ECP to its atomic basis and runs the atom with Z − n_core
+   electrons; PCM's nuclear potential and counterpoise fragments read
+   `nuclear_charge()` / the core counts.
+
+   **libecpint's generated kernels carried 6-digit constants.** The first
+   matrix check missed PySCF by up to 1.9e-7, on H–H elements only.
+   Localised in five eliminations: a brute-force radial × Lebedev integral
+   agreed with PySCF to 12 digits (so PySCF was right); libecpint's local
+   and d channels matched, its s and p projectors did not; the error was
+   blind to grid size and threshold; its Bessel table and Gauss–Chebyshev
+   quadrature were exact to ~1e-14; and against an exact 1-D integral every
+   off-centre type-2 integral was off by the same 1 + 2.09e-6 for every
+   exponent and power of r (on-centre was exact). That is 157.914 /
+   (16π²): the generator writes the angular prefactors into `Q*.cpp` at
+   default ostream precision. `cmake/patch_libecpint.cmake` sets precision
+   17 at fetch time. Worth reporting upstream.
+
+   Gates (PySCF 2.13.0, basis and ECP both from Planck's GBS,
+   `tests/pyscf/def2_ecp_references.py`, which converts the Gaussian94 ECP
+   block PySCF's reader skips; run with a dump directory it also compares
+   Planck's Cartesian V_ne + U element by element):
+
+   | case | ECP | Planck − PySCF | max matrix diff |
+   |---|---|---|---|
+   | HI/def2-SVP (smoke) | I, 28e | 0 | 1.6e-11 |
+   | HI/def2-TZVP, SAD, `use_symm` | I, 28e, f shells | 0 | 6.3e-11 |
+   | AgCl/def2-SVP | Ag, 28e | 1.1e-9 | 1.3e-9 |
+   | PdCO/def2-SVP, SAD | Pd, 28e | 5e-10 | 4.2e-10 |
+   | AuH·H2O/def2-SVP, C1 | Au, 60e | 2e-10 | 9.2e-10 |
+
+   Pinned at 1e-9, AgCl at 2e-9: like ZnCl2 in step 1b it is the case with
+   Cl, ~4e-13 relative, unexplained. Not done: cross-basis checkpoint
+   restart does not check that both bases agree on each atom's core count
+   (only a guess is affected, but an ECP/all-electron mismatch projects
+   onto the wrong occupied count).
 5. **ECP gradients.** Gate: FD and PySCF gradients; geometry optimization of
    a small heavy-element molecule against PySCF.
 6. **DFT with ECPs** after spherical DFT lands: same gates in `planck-dft`.

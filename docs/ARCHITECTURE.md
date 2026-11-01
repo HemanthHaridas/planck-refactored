@@ -32,6 +32,7 @@ CMake 3.5+, C++23, extensions off. Sources are gathered per directory with `file
 | Eigen 3.4.0 | `FetchContent` | Header-only. `EIGEN_DONT_PARALLELIZE` is defined globally: Planck owns its OpenMP parallelism, and Eigen's own thread pool nested against it (measured ~26 % slower on 8-thread conventional RHF) |
 | libmsym | `ExternalProject_Add`, pinned commit | Point-group detection |
 | libxc | `ExternalProject_Add`, pinned commit | XC functionals; `planck-dft` and `planck-mpi` only. Built without `-march=native` unless `LIBXC_ENABLE_XHOST=ON` (portability) |
+| libecpint | `ExternalProject_Add`, pinned commit | ECP integrals, linked into every target (`src/integrals/ecp.cpp` is in the shared integral sources). Built with Planck's C++ compiler (its API passes `std::vector`). `cmake/patch_libecpint.cmake` fixes its generator writing kernel constants at 6 digits |
 | OpenSSL (Crypto) | `find_package` | Licence-signature verification and decryption for the Boys library loader |
 | Boys-function core | fetched at run time | Encrypted, licence-gated shared library; see `src/lookup/loader/` below |
 | OpenMP | `find_package`, `USE_OPENMP=ON` default | Defines `USE_OPENMP` |
@@ -212,6 +213,7 @@ Three ERI engines share one public surface (full tensor `_compute_2e`, two-phase
 | Obara-Saika | `os.{h,cpp}` | VRR + HRR per primitive quartet. Also owns every one-electron integral (overlap, kinetic, nuclear attraction, multipoles, cross-basis overlap, ESP) and their derivatives |
 | Head-Gordon-Pople | `hgp.{h,cpp}` | VRR per primitive pair, contracted, then HRR once per contracted quartet. Serves Coulomb and the screened `LongRange`/`ShortRange` kernels natively |
 | Rys quadrature | `rys.{h,cpp}`, `rys_roots.{h,cpp}`, `rys_detail.h` | Roots and weights from per-n Chebyshev segment fits plus the large-T asymptote, built on first use from a reference generator; per-quartet `RysScratch` |
+| ECP (one-electron) | `ecp.{h,cpp}` | libecpint type-1/type-2 integrals into a Cartesian U matrix; `base.h` `_compute_potential` returns V_ne + U for every H_core build |
 | Auto (default) | `base.h`, `auto_block_eri.h` | Block-kernel chain (below) in the fused Fock loop; a per-(L_AB, L_CD) engine table (`kAutoEngine`, fitted from benchmarks) for per-component work |
 
 ### Block kernels and the fused Fock loop

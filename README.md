@@ -43,7 +43,7 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 - **Geometry optimization** — optimizer in Cartesian coordinates or redundant generalized internal coordinates (GIC); optional constraints (fixed bonds, angles, dihedrals, frozen atoms) via `%begin_constraints`
 - **Vibrational frequency analysis** — semi-numerical Hessian from finite differences of analytic gradients; mass-weighted normal mode analysis with translational/rotational projection; frequencies in cm⁻¹ and zero-point energy
 - **Checkpoint system** — binary `.hfchk` files; same-basis restart, full geometry+density restart, and cross-basis density projection; `chkdump` tool can export CASSCF active orbital coefficients as volumetric files
-- **Basis sets** — Gaussian94 (`.gbs`) format; STO-nG, Pople split-valence and triple-zeta (with diffuse/polarization variants), and Dunning correlation-consistent families. Missing sets are fetched automatically from the Basis Set Exchange at build time (see *Basis Sets* below)
+- **Basis sets** — Gaussian94 (`.gbs`) format; STO-nG, Pople split-valence and triple-zeta (with diffuse/polarization variants), Dunning correlation-consistent, and Karlsruhe def2 families. def2 from Rb onward uses effective core potentials, supported for `hartree-fock` single points (not yet gradients, or `planck-dft`). Missing sets are fetched automatically from the Basis Set Exchange at build time (see *Basis Sets* below)
 
 </div>
 
@@ -64,6 +64,7 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 | Eigen | 3.4.0 | Fetched automatically at configure time |
 | libmsym | latest | Fetched automatically |
 | libxc | latest | Fetched automatically (`planck-dft` only) |
+| libecpint | pinned commit | Fetched automatically; ECP integrals (MIT, notice installed to `share/doc/planck`) |
 | OpenMP | any | Optional; system package manager |
 
 <p align="justify">
@@ -764,6 +765,7 @@ cmake --build build --target fetch-basis-sets
 | Core-valence Dunning | `cc-pCVDZ`, `cc-pCVTZ`, `cc-pCVQZ`, `cc-pCV5Z` |
 | Augmented Dunning | `aug-cc-pVDZ`, `aug-cc-pVTZ`, `aug-cc-pVQZ`, `aug-cc-pV5Z`, `aug-cc-pV6Z`, `aug-cc-pV7Z` |
 | Augmented core-valence Dunning | `aug-cc-pCVDZ`, `aug-cc-pCVTZ`, `aug-cc-pCVQZ`, `aug-cc-pCV5Z` |
+| Karlsruhe def2 (H–Rn) | `def2-SVP`, `def2-SVPD`, `def2-TZVP`, `def2-TZVPP`, `def2-QZVP`. Rb onward carry ECPs: single points in `hartree-fock` only; gradient workflows and `planck-dft` refuse them |
 
 ### Checkpoint System
 

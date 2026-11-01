@@ -35,7 +35,8 @@ src/
   io/          — io.cpp (parser), checkpoint.cpp, logging.h
   lookup/      — elements.cpp (atomic data)
   basis/       — gaussian.cpp (GBS reader), basis.cpp (normalization)
-  integrals/   — shellpair.cpp, os.cpp (Obara-Saika ERI), rys.cpp (Rys quadrature)
+  integrals/   — shellpair.cpp, os.cpp (Obara-Saika ERI), rys.cpp (Rys quadrature),
+                 ecp.cpp (ECP integrals via libecpint)
   symmetry/    — symmetry.cpp (libmsym wrapper), wrapper.h
   scf/         — scf.cpp (RHF/UHF/ROHF loop), diis.cpp, stability.cpp, sad.cpp
   solvation/   — pcm.cpp (shared C-PCM implementation)
