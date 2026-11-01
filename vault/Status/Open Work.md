@@ -1953,15 +1953,16 @@ PySCF's SAD-start answer. 15/15 CASSCF regressions pass.
   within 2e-9 Eh.
 
 **Remaining:**
-- per-macro cost at cc-pVTZ (P5, in progress). Profiled: 76 % is
-  `_compute_fock_rhf`, about 570 full nb^4 Fock passes per macro to build the
-  dense CI-relaxed operator one column per pair. A matrix-free preconditioned
-  subspace solve already cuts cc-pVTZ 43.9 -> 28.7 s, cc-pVTZ C1
-  51.8 -> 40.2 s and C1 cc-pVDZ 2.09 -> 1.01 s at unchanged energies. Its stopping tolerance is still too
-  strict (it uses the full space or the 64 cap); next is an inexact-Newton
-  forcing term, then dropping the dense build;
-- the RI path is still FD-Hessian with a full-leg-first transform;
-- the temporary probes are still to be deleted.
+- P5 landed (2026-11-01): the CI-relaxed solve is matrix-free everywhere
+  (no dense build), with an inexact-Newton forcing term and a fixed seed
+  vector so it still sees zero-gradient negative modes. cc-pVDZ C1
+  2.35 -> 0.72 s, cc-pVTZ 43.5 -> 24.3 s, cc-pVTZ C1 51.8 -> 27.4 s (PySCF
+  0.43 / 1.16 / 2.30 s). `oh_casscf_rohf_sto3g` re-pinned from a saddle to
+  the minimum PySCF reaches (-74.3867176233). Diagnostic probes deleted;
+  `CallProbe` kept for N4.
+- per-macro cost at cc-pVTZ is still 12-21x PySCF: each Hessian product does
+  ~4 separate nb^4 Fock passes; N4 batches them into one sweep;
+- the RI path is still FD-Hessian with a full-leg-first transform.
 
 #### Unreproduced OpenMP hang in CASSCF (seen once, 2026-10-28)
 

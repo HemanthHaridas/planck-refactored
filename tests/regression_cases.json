@@ -3905,7 +3905,7 @@
     {
      "type": "metric_close",
      "metric": "casscf_total_energy",
-     "expected": -74.3854276959,
+     "expected": -74.3867176233,
      "atol": 1e-07
     },
     {

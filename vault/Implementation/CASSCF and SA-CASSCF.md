@@ -123,7 +123,8 @@ returns the lowest root there. RASSCF inherits all of this since its RAS
 constraints act only on the active-space determinant strings.
 
 PySCF-gated by `o2_casscf_rohf_sto3g` (triplet O2 CAS(8,6), Δ ~9e-9 Eh) and
-`oh_casscf_rohf_sto3g` (doublet OH CAS(5,4), Δ ~1.6e-8 Eh). The repo-root
+`oh_casscf_rohf_sto3g` (doublet OH CAS(5,4), Δ ~7e-9 Eh; re-pinned
+2026-11-01 from a saddle at -74.3854277 to the minimum -74.3867176233). The repo-root
 `ROHF_CASSCF_HANDOFF.md` carries the same architecture summary.
 
 ## Active Space Setup

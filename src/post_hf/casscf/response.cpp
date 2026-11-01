@@ -429,19 +429,6 @@ namespace
                     use_sym);
 
             Eigen::VectorXd evals = eig.eigenvalues();
-            if (std::getenv("PLANCK_CASSCF_CALL_PROBE"))
-            {
-                int n_neg = 0;
-                for (int i = 0; i < evals.size(); ++i)
-                    n_neg += evals(i) < 0.0;
-                const Eigen::VectorXd gk = eig.eigenvectors().transpose() * g;
-                HartreeFock::Logger::logging(
-                    HartreeFock::LogLevel::Info, "CASSCF Response :",
-                    std::format("hess_probe n={} n_neg={} eval0={:.4e} eval1={:.4e} eval2={:.4e} "
-                                "|g.v0|={:.3e} |g|={:.3e}",
-                                evals.size(), n_neg, evals(0), evals.size() > 1 ? evals(1) : 0.0,
-                                evals.size() > 2 ? evals(2) : 0.0, std::abs(gk(0)), g.norm()));
-            }
             int clamped_count = 0;
             for (int i = 0; i < evals.size(); ++i)
             {
@@ -481,12 +468,17 @@ namespace
             // (Davidson-style) Newton step. The subspace grows by the residual
             // r = H x + g divided by the diagonal orbital Hessian, and the step
             // in it uses the dense recipe (eigenvalue floor 1e-4), so it tends
-            // to the dense step as the subspace grows. It stops at an
-            // inexact-Newton residual ||r|| <= 1e-5 |g|; the outer iteration
-            // absorbs the rest. One action per subspace vector.
+            // to the dense step as the subspace grows. It stops when the
+            // residual outside the subspace meets an inexact-Newton forcing
+            // term; the outer iteration absorbs the rest. One action per
+            // subspace vector.
             const int n = static_cast<int>(g.size());
             const int kmax = std::min(n, 64);
             const double gnorm = g.norm();
+            // Inexact-Newton forcing term: loose far from convergence,
+            // tightening with the gradient so the outer iteration stays
+            // superlinear.
+            const double forcing = std::min(0.1, std::sqrt(gnorm));
             const Eigen::VectorXd denom =
                 orbital_pair_preconditioner(op.pairs, F_I_mo, F_A_mo, level_shift).cwiseAbs();
             Eigen::MatrixXd V(n, kmax), HV(n, kmax);
@@ -513,18 +505,33 @@ namespace
                     -teig.eigenvectors() * tev.cwiseInverse().asDiagonal() *
                     (teig.eigenvectors().transpose() * (V.leftCols(k + 1).transpose() * g));
                 x = V.leftCols(k + 1) * y;
-                const Eigen::VectorXd r = HV.leftCols(k + 1) * y + g;
-                if (r.norm() <= 1e-5 * gnorm)
+                // Davidson residual: only the part of H x + g outside the
+                // subspace. Inside it the residual is (T - T_floor) y, the
+                // deliberate floor modification, which never vanishes when a
+                // mode is clamped.
+                Eigen::VectorXd r = HV.leftCols(k + 1) * y + g;
+                r -= V.leftCols(k + 1) * (V.leftCols(k + 1).transpose() * r);
+                if (k > 0 && r.norm() <= forcing * gnorm)
                 {
                     ++k;
                     break;
                 }
-                next = r.cwiseQuotient(denom);
+                // The second vector is a fixed generic seed, not a residual:
+                // a Krylov space grown from g never contains a negative mode
+                // g is orthogonal to (a symmetry-breaking saddle direction),
+                // so without it the solve cannot leave such a saddle the way
+                // the dense solve does.
+                if (k == 0)
+                {
+                    next.resize(n);
+                    for (int i = 0; i < n; ++i)
+                        next(i) = 1.0 + 0.5 * std::sin(1.0 + i);
+                    next = next.cwiseQuotient(denom);
+                }
+                else
+                    next = r.cwiseQuotient(denom);
             }
             step = cap_packed_step(std::move(x));
-            if (std::getenv("PLANCK_CASSCF_CALL_PROBE"))
-                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "CASSCF Response :",
-                                             std::format("lanczos_probe vectors={} n={}", k, n));
         }
         else
         {
@@ -1199,10 +1206,8 @@ namespace HartreeFock::Correlation::CASSCF
         };
 
         // With the AO data in the context the orbital-CI coupling is exact
-        // (P3b), so the CI-relaxed Hessian can be built column by column and
-        // solved directly. The dense limit matches numeric-newton's, whose FD
-        // Hessian this replaces at npairs actions instead of 2·npairs full
-        // evaluations.
+        // (P3b), so the CI-relaxed Hessian is solved matrix-free: never more
+        // actions than the npairs a dense build would take.
         const bool relaxed = orbital_hessian_ctx != nullptr && orbital_hessian_ctx->C != nullptr;
         std::function<Eigen::MatrixXd(const Eigen::MatrixXd &)> ci_relaxation;
         if (relaxed)
@@ -1226,7 +1231,7 @@ namespace HartreeFock::Correlation::CASSCF
         const OrbitalLinearOperator orbital_operator = build_orbital_linear_operator(
             orbital_hessian_ctx, F_I_mo, F_A_mo, nbasis, n_core, n_act, n_virt,
             level_shift, mo_irreps, use_sym, ci_relaxation,
-            relaxed ? (std::getenv("PLANCK_CASSCF_DENSE_PAIRS") ? std::atoi(std::getenv("PLANCK_CASSCF_DENSE_PAIRS")) : 256) : 128);
+            relaxed ? 0 : 128);
         const bool direct = relaxed;
 
         result.orbital_step = solve_orbital_action_system(

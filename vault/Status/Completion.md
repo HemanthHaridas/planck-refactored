@@ -1335,7 +1335,8 @@ Cartesian-basis references. Tolerance: `1e-5 Eh`.
 - The committed gate suite is still the clearest validation point for the CASSCF stack.
 - Two ROHF CASSCF cases are gated alongside the RHF table: `o2_casscf_rohf_sto3g`
   (triplet O2 CAS(8,6), Δ ~9e-9 Eh) and `oh_casscf_rohf_sto3g` (doublet OH
-  CAS(5,4), Δ ~1.6e-8 Eh), both vs PySCF 2.13.0 with `mol.cart = True`.
+  CAS(5,4), Δ ~7e-9 Eh; re-pinned 2026-11-01 from a saddle at -74.3854277 to
+  the minimum -74.3867176233), both vs PySCF 2.13.0 with `mol.cart = True`.
 - The water SA-2 SAD-start uphill-enabled case reaches the PySCF SAD-start basin
   within `3.6e-08 Eh`.
 - The baseline monotone SAD-start landing is also intentionally preserved as a

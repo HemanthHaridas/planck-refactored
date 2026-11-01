@@ -4,37 +4,80 @@ Canonical status lives in `vault/Status/Completion.md` and
 `vault/Status/Open Work.md`. This is an in-flight scope; when the work lands,
 rewrite it as the answer to the question in the title.
 
-## Headline (2026-10-30)
+## Headline (2026-11-01)
 
-**CASSCF is 7-44x faster than when this started (6-31G 7-10x, cc-pVDZ 23x,
-cc-pVDZ C1 44x; cc-pVTZ was ~176 s per macro and never run to convergence),
+**CASSCF is 7-62x faster than when this started (6-31G 8-12x, cc-pVDZ 23x,
+cc-pVDZ C1 62x; cc-pVTZ was ~176 s per macro and never run to convergence),
 and beats PySCF at 6-31G.
-It is 2x behind at cc-pVDZ, 2-4x behind without symmetry, and 17-25x behind at
-cc-pVTZ.** It needs no more macroiterations than PySCF anywhere. What is left
-is the cost of each macro at large bases, which is dominated by full passes
-over the stored ERI tensor.
+It is 2x behind at cc-pVDZ (C1 1.7x) and 12-21x behind at cc-pVTZ.** It needs
+no more macroiterations than PySCF anywhere. What is left is the cost of each
+macro at large bases: full passes over the stored ERI tensor (N4).
 
 Water CAS(4,4), Cartesian, 4 threads, `build-full`; PySCF 2.13.0
-(`tests/benchmarks/casscf/pyscf_casscf_timing.py`). Wall time, macros in
-brackets.
+(`tests/benchmarks/casscf/pyscf_casscf_timing.py`). Wall time.
 
-| case | AOs / pairs | start | committed (P4, `1468a4f7`) | working tree (P5) | PySCF | best vs PySCF |
+| case | AOs / pairs | start | P4 (`1468a4f7`, dense <= 256 pairs) | P5 (working tree) | PySCF | P5 vs PySCF |
 |---|---|---|---|---|---|---|
-| 6-31G | 13 / 22 | 1.3-1.9 s | 0.18 s (8) | 0.19 s (8) | 0.34 s (10) | **0.5x** |
-| cc-pVDZ | 25 / 50 | 13.4 s | 0.58 s (8) | 0.59 s (8) | 0.27 s (9) | 2.1x |
-| cc-pVDZ, C1 | 25 / 138 | 44.5 s | 2.35 s (17) | **1.01 s (11)** | 0.43 s (17) | 2.3x |
-| cc-pVTZ | 65 / 142 | ~176 s per macro | 43.5 s (9) | **28.7 s (9)** | 1.16 s (9) | 25x |
-| cc-pVTZ, C1 | 65 / 418 | - | 51.8 s (17) | **40.2 s (13)** | 2.30 s (20) | 17x |
+| 6-31G | 13 / 22 | 1.3-1.9 s | 0.18 s | 0.16 s | 0.34 s | **0.5x** |
+| cc-pVDZ | 25 / 50 | 13.4 s | 0.58 s | 0.59 s | 0.27 s | 2.2x |
+| cc-pVDZ, C1 | 25 / 138 | 44.5 s | 2.35 s | **0.72 s** | 0.43 s | 1.7x |
+| cc-pVTZ | 65 / 142 | ~176 s per macro | 43.5 s | **24.3 s** | 1.16 s | 21x |
+| cc-pVTZ, C1 | 65 / 418 | - | 51.8 s | **27.4 s** | 2.30 s | 12x |
 
-Energies agree with PySCF to <= 4.4e-9 Eh: cc-pVDZ -76.0440109039 vs
--76.0440109018, C1 -76.0781256191 vs -76.0781256214, cc-pVTZ -76.0754286515
-vs -76.0754286541, cc-pVTZ C1 -76.1092535260 vs -76.1092535271. The
-working-tree column has not been through the regression gates yet.
+P5 energies: cc-pVDZ -76.0440109040 (PySCF -76.0440109018), C1
+-76.0781256196 (-76.0781256214), cc-pVTZ -76.0754286346 (-76.0754286541;
+2e-8, set by `tol_mcscf_grad 1e-5`), cc-pVTZ C1 -76.1092535241
+(-76.1092535271).
 
-**The water SA-2 references were re-pinned** (2026-10-28). With the exact
-Hessian, the hcore and SAD starts leave a measured saddle (-74.7751377977) for
-the true minimum (-74.7877864783). The minimum is PySCF's own SAD-start
-answer. At P4, all 15 CASSCF/RASSCF/FCI regression cases pass.
+**Two references were re-pinned from saddles to minima.** Water SA-2
+(2026-10-28, -74.7751377977 -> -74.7877864783) and, in P5,
+`oh_casscf_rohf_sto3g` (-74.3854276959 -> -74.3867176233, see P5 below).
+Both old values have one negative relaxed-Hessian eigenvalue along a mode the
+gradient has no component on; both new values are PySCF's own tight answers.
+
+## Handoff (end of session, 2026-11-01)
+
+**Where things stand.** Committed through `776b2223`. **Uncommitted, gated,
+ready to commit as P5:** N1 and N3 below (`response.cpp`, `casscf.cpp`, the
+OH re-pin in `tests/regression_cases.json`). On that tree all 17
+CASSCF/RASSCF/FCI regression cases pass, the 14 table inputs match the P4
+dense energies to <= 1e-10 Eh, and `planck-casscf-internal` passes. N2 was
+dropped. Next is N4.
+
+**How to reproduce:**
+
+- *Inputs.* Copy `tests/benchmarks/casscf/pyscf_reference/water_cas44_{631g,
+  ccpvdz}.hfinp`. C1 variants: `sed 's/use_symm    .true./use_symm
+  .false./'`. cc-pVTZ: `sed 's/cc-pvdz/cc-pvtz/'`. The uphill canary is
+  `water_cas44_sto3g_sa2_sad_uphill.hfinp`.
+- *Planck.* `export BASIS_PATH=$PWD/basis-sets`, then
+  `OMP_NUM_THREADS=4 build-full/hartree-fock <input>`.
+  `PLANCK_CASSCF_CALL_PROBE=1` prints the per-macro call counters.
+- *PySCF.* `OMP_NUM_THREADS=4 tests/pyscf/.venv/bin/python
+  tests/benchmarks/casscf/pyscf_casscf_timing.py [--c1] [basis ...]`.
+- *Gates.*
+  - `python3 tests/run_regressions.py --build-dir build-full --suite all
+    --case <id>` for the 17 CASSCF/RASSCF/FCI cases (ids: grep
+    `casscf|rasscf|_fci_` in `regression_cases.json`, minus fciqmc). `--case` without
+    `--suite all` silently selects nothing.
+  - The 14 inputs in `pyscf_reference/`, run directly, compared with
+    `pyscf_reference_energies.md`.
+  - `build-full/planck-casscf-internal`. Read its exit code directly, not
+    through a pipe.
+
+**Traps hit this session:**
+
+- **The scratchpad was wiped** when the date rolled over. Keep nothing there
+  that cannot be regenerated.
+- **Build with `-j4`.**
+- **Check the binary is newer than every edited source before trusting a
+  run.** A `cp`-restored file keeps its old mtime, and a restore plus
+  `touch` within the same second as the last link also skips the rebuild;
+  `sleep 1` first.
+- **`PLANCK_X=""` is set, not unset**: `getenv` returns non-null and
+  `atoi("")` is 0. Use `env -u`.
+- **A Python edit that asserts uniqueness writes nothing when it fails.**
+  The `response.cpp` loop text appears twice (single-root and SA solves).
 
 ## What made it slow
 
@@ -45,31 +88,55 @@ answer. At P4, all 15 CASSCF/RASSCF/FCI regression cases pass.
 | 3 | the orbital-CI coupling dropped two terms, so the coupled solve never converged and `numeric-newton` (2·npairs full evaluations) ran every macro | exact coupling, then a direct solve of the CI-relaxed Hessian | P3b `69728821`, P3c `7a5031a8` |
 | 4 | above 256 pairs the solve fell back to a few orbital-only diagonal steps | CI-relaxed subspace solve | P4a `1468a4f7` |
 | 5 | a 0.2 decaying level shift and a fixed 0.2 step cap, tuned for an approximate Hessian, halved the convergence rate | trust region driven by the exact model | P4b `1468a4f7` |
-| 6 | the dense CI-relaxed operator costs ~570 nb^4 Fock passes per macro at cc-pVTZ | matrix-free preconditioned solve | P5, in progress |
+| 6 | the dense CI-relaxed operator costs ~570 nb^4 Fock passes per macro at cc-pVTZ | matrix-free preconditioned solve, with a seed vector so it still sees zero-gradient negative modes | P5 (uncommitted) |
 
 ## What is left
 
-1. **Stop the P5 subspace solve early** (it still uses the full space or the
-   64-vector cap). Then drop the dense build, remove the temporary switches,
-   and run the gates.
-2. **Fewer passes over the ERI tensor.** Each `_compute_fock_rhf` is a
-   bandwidth-bound sweep over 143 MB at cc-pVTZ; batch several densities into
-   one sweep.
-3. **`transform_eri`'s first quarter** has `mu` innermost at stride `nb^3`.
-   A GEMM shape would also speed MP2/CC (gate `planck-transform-eri`).
-4. **RI path:** still an FD orbital Hessian, and a full-leg-first transform
-   (`water_casscf_ri_ccpvdz` 4.1 s).
-5. **Delete the temporary probes** (`CallProbe`, `nn_probe`, `schur_probe`,
-   `alpha_probe`, `fix_probe`, `hess_probe`, `lanczos_probe`,
-   `PLANCK_CASSCF_DENSE_PAIRS`) once this scope is answered.
+Rough budget at cc-pVTZ: ~10 macros x ~15-30 products x ~4 Fock passes, a
+few hundred to ~1200 passes over the ERI tensor, against PySCF's ~17 JK
+builds. N4 (4 passes -> 1) is the next lever.
+
+**N1. Done: the 1-2e-8 Eh drift was not the solve.** The matrix-free run
+crossed `tol_mcscf_grad 1e-5` one macro earlier (6-31G: 7.8e-6 at macro 7,
+dense 1.01e-5 there and 2.1e-6 at macro 8); dense at macro 7 is just as far
+from the converged energy. A tighter forcing cap changed nothing and was
+reverted. With the seed vector (N3) the drift is gone anyway.
+
+**N2. Dropped.** The AH solver is seeded from g too, so it has the same blind
+spot as the subspace solve (below), and the seeded subspace solve already
+beats dense everywhere.
+
+**N3. Done (uncommitted): matrix-free everywhere.** The relaxed solve uses
+`max_dense_pairs = 0`; `PLANCK_CASSCF_DENSE_PAIRS` and the `nn`/`schur`/
+`alpha`/`fix`/`hess`/`subspace`/`lanczos` probes are deleted. `CallProbe`
+stays until N4 is measured. The non-relaxed coupled solve keeps its dense
+limit (it has no matrix-free branch). See P5 below for the seed vector and
+the OH re-pin this needed.
+
+**N4. Batch the Fock passes inside one product.** Each product does ~4
+independent nb^4 Fock contractions; contract all of them in one sweep over
+the 143 MB tensor (up to ~4x on the 76 % share). Davidson products are
+sequential, so batching inside a product is the only batching available.
+Gate: products identical to round-off, run identical at 1 and 4 threads.
+
+**N5. Re-measure, then the tail.**
+
+- `transform_eri`'s first quarter (15.6 %) has `mu` innermost at stride
+  `nb^3`. A GEMM shape would also speed MP2/CC (gate `planck-transform-eri`).
+- RI path: still an FD orbital Hessian, and a full-leg-first transform
+  (`water_casscf_ri_ccpvdz` 4.1 s).
+
+Not needed: a new Davidson implementation (one exists), a dense/matrix-free
+switch kept "just in case", direct or cached Fock builds (disproven,
+`CASSCF_FOCK_REBUILD_COST.md`).
 
 ## Gates (every step)
 
-- All 15 CASSCF/RASSCF/FCI regression cases (`tests/run_regressions.py
+- All 17 CASSCF/RASSCF/FCI regression cases (`tests/run_regressions.py
   --suite all --case ...`). The uphill canary
   `water_casscf_sa2_sto3g_sad_guess_uphill` and the two hcore/SAD SA-2 cases
-  pin which basin each start reaches.
-- The 11 PySCF-table inputs in `tests/benchmarks/casscf/pyscf_reference/`,
+  pin which basin each start reaches, as does `oh_casscf_rohf_sto3g`.
+- The 14 inputs in `tests/benchmarks/casscf/pyscf_reference/`,
   against their recorded Planck energies.
 - `planck-casscf-internal`.
 - Stop if any gated energy moves by more than 1e-8 Eh or a basin changes.
@@ -238,36 +305,41 @@ model:
 | water cc-pVTZ | 17 | 9 (PySCF 9) |
 | water cc-pVTZ C1 | 24 | 17 (PySCF 20) |
 
-### P5: matrix-free per-macro cost (in progress, uncommitted)
+### P5: matrix-free relaxed solve everywhere (uncommitted)
 
 **Profile** (cc-pVTZ C2v after P4, whole run, 4 threads):
+`_compute_fock_rhf` 76.3 %, `transform_eri` 15.6 %, thread wait 7.3 %. The
+dense relaxed operator is built one column per pair (142 at cc-pVTZ C2v), ~4
+nb^4 Fock contractions per column: ~570 passes over a 143 MB tensor per
+macro, against PySCF's ~17 JK builds.
 
-| function | share |
-|---|---|
-| `_compute_fock_rhf` | **76.3 %** |
-| `transform_eri` | 15.6 % |
-| thread wait | 7.3 % |
-| everything else | < 1 % |
+**Tried and dropped:** plain Lanczos at every size. Its 1e-8 |g| test never
+stopped early; at cc-pVTZ the 64 cap made steps inexact (25 macros, 74 s).
 
-The dense relaxed operator is built one column per pair (142 at cc-pVTZ C2v),
-at ~4 nb^4 Fock contractions per column. That is ~570 full passes over a 143
-MB tensor per macro, against PySCF's ~17 JK builds, because PySCF's
-augmented-Hessian solve uses ~10 products instead of the whole matrix.
+**What landed:** a preconditioned subspace (Davidson-style) Newton solve.
 
-**Tried:**
+- Expand with `r_perp / |diag H|`, where `r_perp = r - V V^T r` is the
+  residual outside the subspace. Inside it the residual is the deliberate
+  floor modification `(T - T_floor) y`, which never vanishes once a mode is
+  clamped; testing the full residual made every solve run to n or the cap.
+- Stop at the inexact-Newton forcing term
+  `||r_perp|| <= min(0.1, sqrt|g|)·|g|`.
+- **The second vector is a fixed generic seed** (`1 + 0.5 sin(1+i)`, over
+  the symmetry-allowed pairs), not a residual. Without it, forced on
+  everywhere, the SA-2 hcore and SAD starts returned to the -74.7751 saddle:
+  a Krylov space grown from g never contains a negative mode g is orthogonal
+  to, so the solve cannot amplify it the way the dense floor recipe does
+  (1e-16 -> 3e-4 over ~9 macros). With the seed it can, and every table
+  input matches dense to <= 1e-10 Eh.
 
-1. *Plain Lanczos at every size.* Never stopped early: its 1e-8 |g| test
-   needed the full space (22, 50 vectors) or hit the 64 cap. At cc-pVTZ the
-   cap made steps inexact: 25 macros, 74 s. Not taken.
-2. *Preconditioned subspace solve* (working tree). The subspace grows by
-   `(H x + g)` divided by the diagonal orbital Hessian, with the dense
-   floor recipe in the subspace, and stops at `||H x + g|| <= 1e-5 |g|`. It
-   still uses the full space or the cap, but is already faster and keeps the
-   energies: see the headline's working-tree column.
-
-**Next:** an inexact-Newton forcing term (e.g. `||r|| <= min(0.1, sqrt|g|)·|g|`)
-to stop at ~10 products. Check whether the floor or the CI-response
-tolerance keeps the residual from falling. Then drop the dense build and gate.
+**The seed exposed a second saddle pin.** `oh_casscf_rohf_sto3g` (CAS(5,4),
+`use_symm .false.`) went to -74.3867176162. Dense ends at -74.3854277116 with
+one negative eigenvalue (-3.8e-3, |g.v0| ~ 2e-16) and converges before the
+roundoff grows. PySCF (cart, `conv_tol 1e-10`, `conv_tol_grad 1e-6`) reaches
+-74.3867176233 from its own unperturbed ROHF start and from three perturbed
+ones, so the old pin was a saddle. Re-pinned to -74.3867176233 (Planck 7e-9
+away). `use_symm .true.` does not change it: matrix-free still reaches
+-74.3867, so the descent mode is symmetry-allowed in the group used.
 
 ## Out of scope
 
