@@ -5111,6 +5111,121 @@
      "atol": 2.0
     }
    ]
+  },
+  {
+   "id": "water_rhf_spherical_def2svp",
+   "input": "tests/inputs/regression/spherical/water_rhf_spherical_def2svp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "spherical",
+    "def2"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.9609839871,
+     "atol": 5e-08
+    }
+   ],
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's."
+  },
+  {
+   "id": "water_rhf_spherical_def2qzvp",
+   "input": "tests/inputs/regression/spherical/water_rhf_spherical_def2qzvp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "spherical",
+    "def2"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0667381021,
+     "atol": 5e-08
+    }
+   ],
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-QZVP (g shells)), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's."
+  },
+  {
+   "id": "h2s_rhf_spherical_def2tzvp",
+   "input": "tests/inputs/regression/spherical/h2s_rhf_spherical_def2tzvp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "spherical",
+    "def2"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -398.7065995926,
+     "atol": 5e-08
+    }
+   ],
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-TZVP, third row), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's."
+  },
+  {
+   "id": "sih4_rhf_spherical_def2svp",
+   "input": "tests/inputs/regression/spherical/sih4_rhf_spherical_def2svp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "spherical",
+    "def2"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -291.1539248719,
+     "atol": 5e-08
+    }
+   ],
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP, third row), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's."
+  },
+  {
+   "id": "zncl2_rhf_spherical_def2svp",
+   "input": "tests/inputs/regression/spherical/zncl2_rhf_spherical_def2svp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "spherical",
+    "def2"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -2696.3869858561,
+     "atol": 5e-08
+    }
+   ],
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP, first-row transition metal), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's."
   }
  ]
 }

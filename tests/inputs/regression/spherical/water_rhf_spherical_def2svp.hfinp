@@ -1,0 +1,31 @@
+# def2 all-electron cross-code gate (docs/DEF2_ECP_SCOPE.md step 1).
+# Reference: tests/pyscf/def2_rhf_references.py (PySCF, cart=False, Planck's own GBS).
+%begin_control
+    basis       def2-SVP
+    calculation energy
+    basis_type  spherical
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    use_diis    .true.
+    diis_dim    8
+    guess       hcore
+    max_cycles  200
+    tol_energy  1.0e-10
+    tol_density 1.0e-10
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000     0.000000     0.117300
+H     0.000000     0.757200    -0.469200
+H     0.000000    -0.757200    -0.469200
+%end_coords
