@@ -38,9 +38,9 @@ were all-electron only, with no relativistic treatment.
    for gradients.
 4. **SAD guess — done (step 4).** The atomic UHF carries the element's ECP and
    runs with Z − n_core electrons.
-5. **Checkpoint restart — open.** Cross-basis Löwdin projection should check
-   that source and target agree on each atom's core-electron count, or it
-   projects onto the wrong occupied space. Only the guess is affected.
+5. **Checkpoint restart and FCIDUMP — open (step 4b).** The checkpoint does
+   not store core counts, so cross-basis projection cannot tell an ECP basis
+   from an all-electron one. FCIDUMP looks right but is ungated.
 
 Data model: an ECP channel carries a radial power that `Shell` does not, so
 ECPs are stored per atom beside the shells (`ECPPotential`, `src/base/types.h`)
@@ -216,6 +216,46 @@ patched at fetch time (step 4).
    restart does not check that both bases agree on each atom's core count
    (only a guess is affected, but an ECP/all-electron mismatch projects
    onto the wrong occupied count).
+4b. **Checkpointing and FCIDUMP with ECPs — OPEN.** Step 4 changed what
+   H_core and the electron count mean on ECP atoms. Neither the checkpoint
+   nor the FCIDUMP writer was checked against that. Read so far:
+
+   - **FCIDUMP** (`src/io/fcidump.cpp`) builds h_pq from `calc._hcore`, so it
+     includes U_ECP. NELEC comes from `total_nuclear_charge()` (Z − n_core)
+     and ECORE from `_nuclear_repulsion` (also Z − n_core). It looks right by
+     construction, and nothing gates it. The open question is the
+     convention: the file describes the valence-only Hamiltonian, and a
+     reader has no way to tell that a core was removed. Decide whether to
+     say so in a header comment.
+   - **Checkpoint** (`src/io/checkpoint.cpp`) stores atomic numbers,
+     geometry, the basis name, density, MOs and `_hcore`. It does not store
+     the ECP core counts. That is harmless for same-basis restart, which
+     re-reads the basis and so gets the same ECPs. The two cases to settle:
+     - `guess full` restores geometry and charge from the file. Check that
+       the core counts are re-synced from the re-read basis before
+       `initialize()` and the electron count.
+     - Cross-basis projection between an ECP basis and an all-electron one
+       (or two ECPs with different core sizes) projects a density with the
+       wrong electron count. Store the per-atom core counts in the
+       checkpoint, and refuse (fall back to the core guess) when they differ.
+   - **A Σ Z bug the step-2 audit missed.** `hf_driver.cpp` counts electrons
+     as `Σ atomic_numbers − charge` for the MO-energy printout (two copies,
+     at the single-point and post-geomopt reports). With an ECP that marks
+     n_core too many orbitals as occupied, and it counts ghost atoms too.
+     Only the printout is affected, not the SCF. Use
+     `total_nuclear_charge()`; grep for any other Σ Z loops the audit
+     classified as printing.
+
+   Gates:
+   - FCIDUMP for HI/def2-SVP, read back with PySCF's `fcidump.read`. An FCI
+     (or CASCI over all orbitals) on the file must reproduce Planck's RHF
+     energy as its reference determinant, and match a PySCF FCI built on the
+     same ECP Hamiltonian.
+   - Same-basis restart and `guess full` on an ECP case converge in one or
+     two iterations to the same energy.
+   - A cross-basis restart of HI from 3-21G (all-electron iodine) into
+     def2-SVP falls back with a message instead of projecting.
+   - The MO printout for HI marks 13 occupied orbitals, not 27.
 5. **ECP gradients — OPEN.** libecpint has the derivative:
    `ECPIntegral::compute_shell_pair_derivative` returns nine blocks in the
    order Ax, Ay, Az, Bx, By, Bz, Cx, Cy, Cz (C the ECP centre). Each adds to

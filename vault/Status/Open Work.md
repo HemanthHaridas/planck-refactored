@@ -65,9 +65,12 @@ is the recommended one; none blocks another except where noted.
   refused, `hi_rhf_def2svp_ecp_gradient_rejected`); step 6 DFT
   (`planck-dft` refuses ECP bases). Open, minor: the two Cl cases
   (ZnCl2, AgCl, def2-SVP) sit 1.1-1.2e-9 (~4e-13 relative) from PySCF,
-  unexplained, pinned at 2e-9; cross-basis checkpoint restart does not
-  check that both bases agree on each atom's ECP core count; report the
-  libecpint generator precision bug upstream.
+  unexplained, pinned at 2e-9; report the libecpint generator precision
+  bug upstream. Step 4b (scoped): checkpoint and FCIDUMP with ECPs. The
+  checkpoint stores no core counts, so cross-basis projection between ECP
+  and all-electron bases goes unchecked; FCIDUMP looks right but is
+  ungated; and the MO printout in `hf_driver.cpp` counts electrons as
+  Σ Z, marking n_core too many orbitals occupied (and counting ghosts).
 - **Gradient performance** (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`,
   gradients 20–120× the SCF). G3 rescoped 2026-10-26 onto the energy build's
   HGP/Rys2D split.
