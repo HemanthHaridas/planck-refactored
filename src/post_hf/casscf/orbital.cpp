@@ -288,24 +288,52 @@ namespace HartreeFock::Correlation::CASSCF
         return C.transpose() * G * C;
     }
 
-    Eigen::MatrixXd occupied_fock_response_mo(
-        const Eigen::MatrixXd &Y,
-        const OrbitalHessianContext &ctx)
+    OccupiedHalfTransform build_occupied_half_transform(
+        const std::vector<double> &eri,
+        const Eigen::MatrixXd &C,
+        int nocc)
     {
-        const Eigen::MatrixXd &C = *ctx.C;
-        const int m = static_cast<int>(Y.cols());
-        if (ctx.analytic == nullptr || ctx.analytic->H.empty() || ctx.analytic->nocc != m)
-        {
-            const Eigen::MatrixXd X = C.leftCols(m);
-            return fock_response_mo(X * Y.transpose() + Y * X.transpose(), ctx);
-        }
+        OccupiedHalfTransform out;
+        const std::size_t nbz = static_cast<std::size_t>(C.rows());
+        const std::size_t m = static_cast<std::size_t>(nocc);
+        out.nbasis = static_cast<int>(nbz);
+        out.nocc = nocc;
+        out.H.assign(nbz * nbz * nbz * m, 0.0);
+        std::vector<double> xr(nbz * m);
+        for (std::size_t sig = 0; sig < nbz; ++sig)
+            for (std::size_t i = 0; i < m; ++i)
+                xr[sig * m + i] = C(static_cast<Eigen::Index>(sig), static_cast<Eigen::Index>(i));
+#ifdef USE_OPENMP
+#pragma omp parallel for collapse(2) schedule(static)
+#endif
+        for (std::size_t mu = 0; mu < nbz; ++mu)
+            for (std::size_t nu = 0; nu < nbz; ++nu)
+                for (std::size_t lam = 0; lam < nbz; ++lam)
+                {
+                    const double *e = eri.data() + ((mu * nbz + nu) * nbz + lam) * nbz;
+                    double *h = out.H.data() + ((mu * nbz + nu) * nbz + lam) * m;
+                    for (std::size_t sig = 0; sig < nbz; ++sig)
+                    {
+                        const double v = e[sig];
+                        const double *x = xr.data() + sig * m;
+                        for (std::size_t i = 0; i < m; ++i)
+                            h[i] += v * x[i];
+                    }
+                }
 
+        return out;
+    }
+
+    Eigen::MatrixXd occupied_two_electron_ao(
+        const OccupiedHalfTransform &half,
+        const Eigen::MatrixXd &Y)
+    {
         // G = J - K/2 for D = X Y^T + Y X^T, using the ERI permutation symmetry:
         //   J(mu,nu) = 2 sum_{lam,i} (mu nu|lam i) Y(lam,i)
         //   K = T + T^T,  T(mu,nu) = sum_{lam,i} Y(lam,i) (mu lam|nu i)
-        const std::size_t nb = static_cast<std::size_t>(C.rows());
-        const std::size_t mm = static_cast<std::size_t>(m);
-        const double *H = ctx.analytic->H.data();
+        const std::size_t nb = static_cast<std::size_t>(half.nbasis);
+        const std::size_t mm = static_cast<std::size_t>(half.nocc);
+        const double *H = half.H.data();
         std::vector<double> yr(nb * mm);
         for (std::size_t lam = 0; lam < nb; ++lam)
             for (std::size_t i = 0; i < mm; ++i)
@@ -344,100 +372,123 @@ namespace HartreeFock::Correlation::CASSCF
             for (std::size_t nu = 0; nu < nb; ++nu)
                 T(mu, nu) = t[nu];
         }
-        const Eigen::MatrixXd G = J - 0.5 * (T + T.transpose());
-        return C.transpose() * G * C;
+        return J - 0.5 * (T + T.transpose());
     }
 
-    namespace
+    Eigen::MatrixXd occupied_fock_response_mo(
+        const Eigen::MatrixXd &Y,
+        const OrbitalHessianContext &ctx)
     {
-        // out[a1,a2,a3,w] = sum_{mu,nu,lam} C1(mu,a1) C2(nu,a2) C3(lam,a3)
-        // H[mu,nu,lam,n_core+w], w over the active orbitals. lam_first contracts
-        // the lam leg before nu; pass the cheaper order (contract the leg with
-        // the fewest columns first).
-        std::vector<double> transform_occupied_half(
-            const AnalyticOrbitalHessian &A,
-            const Eigen::MatrixXd &C1,
-            const Eigen::MatrixXd &C2,
-            const Eigen::MatrixXd &C3,
-            int n_core,
-            bool lam_first)
+        const Eigen::MatrixXd &C = *ctx.C;
+        const int m = static_cast<int>(Y.cols());
+        if (ctx.analytic == nullptr || !ctx.analytic->half || ctx.analytic->half->nocc != m)
         {
-            const std::size_t nb = static_cast<std::size_t>(A.nbasis);
-            const std::size_t m = static_cast<std::size_t>(A.nocc);
-            const std::size_t na = static_cast<std::size_t>(A.nact);
-            const std::size_t n1 = static_cast<std::size_t>(C1.cols());
-            const std::size_t n2 = static_cast<std::size_t>(C2.cols());
-            const std::size_t n3 = static_cast<std::size_t>(C3.cols());
-            const std::size_t nc = static_cast<std::size_t>(n_core);
-            auto h = [&](std::size_t mu, std::size_t nu, std::size_t lam, std::size_t w)
-            { return A.H[((mu * nb + nu) * nb + lam) * m + nc + w]; };
+            const Eigen::MatrixXd X = C.leftCols(m);
+            return fock_response_mo(X * Y.transpose() + Y * X.transpose(), ctx);
+        }
+        return C.transpose() * occupied_two_electron_ao(*ctx.analytic->half, Y) * C;
+    }
 
-            // T2[mu,a2,a3,w]
-            std::vector<double> T2(nb * n2 * n3 * na, 0.0);
+    // out[a1,a2,a3,w] = sum_{mu,nu,lam} C1(mu,a1) C2(nu,a2) C3(lam,a3)
+    // H[mu,nu,lam,n_core+w], w over the active orbitals. lam_first contracts
+    // the lam leg before nu; pass the cheaper order (contract the leg with
+    // the fewest columns first).
+    std::vector<double> transform_occupied_half(
+        const OccupiedHalfTransform &half,
+        const Eigen::MatrixXd &C1,
+        const Eigen::MatrixXd &C2,
+        const Eigen::MatrixXd &C3,
+        int n_core,
+        int n_act,
+        bool lam_first)
+    {
+        const std::size_t nb = static_cast<std::size_t>(half.nbasis);
+        const std::size_t m = static_cast<std::size_t>(half.nocc);
+        const std::size_t na = static_cast<std::size_t>(n_act);
+        const std::size_t n1 = static_cast<std::size_t>(C1.cols());
+        const std::size_t n2 = static_cast<std::size_t>(C2.cols());
+        const std::size_t n3 = static_cast<std::size_t>(C3.cols());
+        const std::size_t nc = static_cast<std::size_t>(n_core);
+        auto h = [&](std::size_t mu, std::size_t nu, std::size_t lam, std::size_t w)
+        { return half.H[((mu * nb + nu) * nb + lam) * m + nc + w]; };
+
+        // T2[mu,a2,a3,w]
+        std::vector<double> T2(nb * n2 * n3 * na, 0.0);
 #ifdef USE_OPENMP
 #pragma omp parallel for schedule(static)
 #endif
+        for (std::size_t mu = 0; mu < nb; ++mu)
+        {
+            if (lam_first)
+            {
+                std::vector<double> T1(nb * n3 * na, 0.0); // [nu,a3,w]
+                for (std::size_t nu = 0; nu < nb; ++nu)
+                    for (std::size_t lam = 0; lam < nb; ++lam)
+                        for (std::size_t a3 = 0; a3 < n3; ++a3)
+                        {
+                            const double c = C3(static_cast<Eigen::Index>(lam), static_cast<Eigen::Index>(a3));
+                            for (std::size_t w = 0; w < na; ++w)
+                                T1[(nu * n3 + a3) * na + w] += c * h(mu, nu, lam, w);
+                        }
+                for (std::size_t a2 = 0; a2 < n2; ++a2)
+                    for (std::size_t nu = 0; nu < nb; ++nu)
+                    {
+                        const double c = C2(static_cast<Eigen::Index>(nu), static_cast<Eigen::Index>(a2));
+                        for (std::size_t k = 0; k < n3 * na; ++k)
+                            T2[(mu * n2 + a2) * n3 * na + k] += c * T1[nu * n3 * na + k];
+                    }
+            }
+            else
+            {
+                std::vector<double> T1(n2 * nb * na, 0.0); // [a2,lam,w]
+                for (std::size_t nu = 0; nu < nb; ++nu)
+                    for (std::size_t a2 = 0; a2 < n2; ++a2)
+                    {
+                        const double c = C2(static_cast<Eigen::Index>(nu), static_cast<Eigen::Index>(a2));
+                        for (std::size_t lam = 0; lam < nb; ++lam)
+                            for (std::size_t w = 0; w < na; ++w)
+                                T1[(a2 * nb + lam) * na + w] += c * h(mu, nu, lam, w);
+                    }
+                for (std::size_t a2 = 0; a2 < n2; ++a2)
+                    for (std::size_t lam = 0; lam < nb; ++lam)
+                        for (std::size_t a3 = 0; a3 < n3; ++a3)
+                        {
+                            const double c = C3(static_cast<Eigen::Index>(lam), static_cast<Eigen::Index>(a3));
+                            for (std::size_t w = 0; w < na; ++w)
+                                T2[((mu * n2 + a2) * n3 + a3) * na + w] += c * T1[(a2 * nb + lam) * na + w];
+                        }
+            }
+        }
+
+        std::vector<double> out(n1 * n2 * n3 * na, 0.0);
+        const std::size_t blk = n2 * n3 * na;
+#ifdef USE_OPENMP
+#pragma omp parallel for schedule(static)
+#endif
+        for (std::size_t a1 = 0; a1 < n1; ++a1)
             for (std::size_t mu = 0; mu < nb; ++mu)
             {
-                if (lam_first)
-                {
-                    std::vector<double> T1(nb * n3 * na, 0.0); // [nu,a3,w]
-                    for (std::size_t nu = 0; nu < nb; ++nu)
-                        for (std::size_t lam = 0; lam < nb; ++lam)
-                            for (std::size_t a3 = 0; a3 < n3; ++a3)
-                            {
-                                const double c = C3(static_cast<Eigen::Index>(lam), static_cast<Eigen::Index>(a3));
-                                for (std::size_t w = 0; w < na; ++w)
-                                    T1[(nu * n3 + a3) * na + w] += c * h(mu, nu, lam, w);
-                            }
-                    for (std::size_t a2 = 0; a2 < n2; ++a2)
-                        for (std::size_t nu = 0; nu < nb; ++nu)
-                        {
-                            const double c = C2(static_cast<Eigen::Index>(nu), static_cast<Eigen::Index>(a2));
-                            for (std::size_t k = 0; k < n3 * na; ++k)
-                                T2[(mu * n2 + a2) * n3 * na + k] += c * T1[nu * n3 * na + k];
-                        }
-                }
-                else
-                {
-                    std::vector<double> T1(n2 * nb * na, 0.0); // [a2,lam,w]
-                    for (std::size_t nu = 0; nu < nb; ++nu)
-                        for (std::size_t a2 = 0; a2 < n2; ++a2)
-                        {
-                            const double c = C2(static_cast<Eigen::Index>(nu), static_cast<Eigen::Index>(a2));
-                            for (std::size_t lam = 0; lam < nb; ++lam)
-                                for (std::size_t w = 0; w < na; ++w)
-                                    T1[(a2 * nb + lam) * na + w] += c * h(mu, nu, lam, w);
-                        }
-                    for (std::size_t a2 = 0; a2 < n2; ++a2)
-                        for (std::size_t lam = 0; lam < nb; ++lam)
-                            for (std::size_t a3 = 0; a3 < n3; ++a3)
-                            {
-                                const double c = C3(static_cast<Eigen::Index>(lam), static_cast<Eigen::Index>(a3));
-                                for (std::size_t w = 0; w < na; ++w)
-                                    T2[((mu * n2 + a2) * n3 + a3) * na + w] += c * T1[(a2 * nb + lam) * na + w];
-                            }
-                }
+                const double c = C1(static_cast<Eigen::Index>(mu), static_cast<Eigen::Index>(a1));
+                for (std::size_t k = 0; k < blk; ++k)
+                    out[a1 * blk + k] += c * T2[mu * blk + k];
             }
-
-            std::vector<double> out(n1 * n2 * n3 * na, 0.0);
-            const std::size_t blk = n2 * n3 * na;
-#ifdef USE_OPENMP
-#pragma omp parallel for schedule(static)
-#endif
-            for (std::size_t a1 = 0; a1 < n1; ++a1)
-                for (std::size_t mu = 0; mu < nb; ++mu)
-                {
-                    const double c = C1(static_cast<Eigen::Index>(mu), static_cast<Eigen::Index>(a1));
-                    for (std::size_t k = 0; k < blk; ++k)
-                        out[a1 * blk + k] += c * T2[mu * blk + k];
-                }
-            return out;
-        }
-    } // namespace
+        return out;
+    }
 
     AnalyticOrbitalHessian build_analytic_orbital_hessian(
         const std::vector<double> &eri,
+        const Eigen::MatrixXd &C,
+        const std::vector<double> &Gamma_vec,
+        int n_core,
+        int n_act)
+    {
+        return build_analytic_orbital_hessian(
+            std::make_shared<const OccupiedHalfTransform>(build_occupied_half_transform(eri, C, n_core + n_act)),
+            C, Gamma_vec, n_core, n_act);
+    }
+
+    AnalyticOrbitalHessian build_analytic_orbital_hessian(
+        std::shared_ptr<const OccupiedHalfTransform> half,
         const Eigen::MatrixXd &C,
         const std::vector<double> &Gamma_vec,
         int n_core,
@@ -450,43 +501,16 @@ namespace HartreeFock::Correlation::CASSCF
         out.nact = na;
         out.Q = Eigen::MatrixXd::Zero(nb, na);
         out.Y.assign(static_cast<std::size_t>(nb) * nb * na * na, 0.0);
+        out.half = std::move(half);
         if (na == 0)
             return out;
-
-        // H[mu,nu,lam,i] = sum_sig (mu nu|lam sig) C(sig,i), one pass over the
-        // tensor per macro; each Hessian product then contracts H instead.
-        const std::size_t nbz = static_cast<std::size_t>(nb);
-        const std::size_t m = static_cast<std::size_t>(n_core + na);
-        out.nocc = static_cast<int>(m);
-        out.H.assign(nbz * nbz * nbz * m, 0.0);
-        std::vector<double> xr(nbz * m);
-        for (std::size_t sig = 0; sig < nbz; ++sig)
-            for (std::size_t i = 0; i < m; ++i)
-                xr[sig * m + i] = C(static_cast<Eigen::Index>(sig), static_cast<Eigen::Index>(i));
-#ifdef USE_OPENMP
-#pragma omp parallel for collapse(2) schedule(static)
-#endif
-        for (std::size_t mu = 0; mu < nbz; ++mu)
-            for (std::size_t nu = 0; nu < nbz; ++nu)
-                for (std::size_t lam = 0; lam < nbz; ++lam)
-                {
-                    const double *e = eri.data() + ((mu * nbz + nu) * nbz + lam) * nbz;
-                    double *h = out.H.data() + ((mu * nbz + nu) * nbz + lam) * m;
-                    for (std::size_t sig = 0; sig < nbz; ++sig)
-                    {
-                        const double v = e[sig];
-                        const double *x = xr.data() + sig * m;
-                        for (std::size_t i = 0; i < m; ++i)
-                            h[i] += v * x[i];
-                    }
-                }
 
         // Both mixed transforms come from H, whose last index already runs over
         // the active orbitals: X[p,a,v,w] = (pa|vw) and Z[p,u,a,w] = (pu|aw),
         // each O(nb^3 na^2) instead of an O(nb^4 na) pass over the tensor.
         const Eigen::MatrixXd C_act = C.middleCols(n_core, na);
-        const std::vector<double> X = transform_occupied_half(out, C, C, C_act, n_core, true);
-        const std::vector<double> Z = transform_occupied_half(out, C, C_act, C, n_core, false);
+        const std::vector<double> X = transform_occupied_half(*out.half, C, C, C_act, n_core, na, true);
+        const std::vector<double> Z = transform_occupied_half(*out.half, C, C_act, C, n_core, na, false);
         auto ppaa = [&](int p, int a, int v, int w)
         { return X[((static_cast<std::size_t>(p) * nb + a) * na + v) * na + w]; };
         auto papa = [&](int p, int u, int a, int w)

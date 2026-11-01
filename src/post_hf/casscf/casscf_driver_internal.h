@@ -42,6 +42,10 @@ namespace HartreeFock::Correlation::CASSCF
         Eigen::MatrixXd g_orb;
         std::vector<double> Gamma_vec;
         ActiveIntegralCache active_integrals;
+        // (mu nu|lam i) at this state's C, i over core + active (null on the RI
+        // path). evaluate builds F_I, F_A, ga and the active cache from it, and
+        // the next macro's analytic Hessian reuses it.
+        std::shared_ptr<const OccupiedHalfTransform> half;
         Eigen::VectorXd H_CI_diag;
         Eigen::VectorXd ci_energies;
         Eigen::MatrixXd ci_vecs;

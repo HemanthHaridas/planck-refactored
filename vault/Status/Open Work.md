@@ -1985,8 +1985,12 @@ PySCF's SAD-start answer. 15/15 CASSCF regressions pass.
 - N8 (2026-11-01): one pass over H for J and K; (pa|vw) and (pu|aw) for the
   analytic Hessian derived from H instead of two tensor transforms.
   cc-pVTZ 1.85 s (PySCF 1.16), cc-pVTZ C1 2.33 s (PySCF 2.30, parity),
-  cc-pVDZ 0.18 s (0.27). Next: build H at the trial C in `evaluate` so the
-  cache and F_I/F_A come from it too;
+  cc-pVDZ 0.18 s (0.27);
+- N9 (2026-11-01): `evaluate` builds the half transform at the trial C and
+  derives F_I, F_A, (tu|vw) and (pu|vw) from it; the next macro's analytic
+  Hessian reuses it. One tensor pass per evaluation. cc-pVTZ 1.49 s (PySCF
+  1.16), cc-pVTZ C1 1.86 s (PySCF 2.30). RI path unchanged. Next:
+  re-profile, then the relaxed solve's preconditioner;
 - the RI path is still FD-Hessian with a full-leg-first transform.
 
 #### Unreproduced OpenMP hang in CASSCF (seen once, 2026-10-28)

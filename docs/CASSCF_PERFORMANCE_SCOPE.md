@@ -4,55 +4,55 @@ Canonical status lives in `vault/Status/Completion.md` and
 `vault/Status/Open Work.md`. This is an in-flight scope; when the work lands,
 rewrite it as the answer to the question in the title.
 
-## Latest: N8 (2026-11-01, uncommitted)
+## Latest: N9 (2026-11-01)
 
-**cc-pVTZ C1 is level with PySCF (2.33 s vs 2.30 s); cc-pVTZ 3.0 -> 1.85 s
-(PySCF 1.16 s), cc-pVDZ 0.25 -> 0.18 s.** Two changes, both using N7's H.
+**cc-pVTZ C1 is now faster than PySCF (1.86 s vs 2.30 s); cc-pVTZ
+1.85 -> 1.49 s (PySCF 1.16 s).** `evaluate` builds the half transform at the
+trial C and derives everything else from it.
 
-The post-N7 profile (cc-pVTZ C1) was `transform_eri` 24 %, thread wait 19 %,
-`occupied_fock_response_mo` 19 %, single-density `_compute_fock_rhf` 12 %
-(the inactive/active Fock in `evaluate`), building H 6 %.
+Each `evaluate` (2 per macro) made its own passes over the nb^4 tensor: one
+for F_I, one for `transform_eri_internal` (the (tu|vw) block), one for the
+active cache (pu|vw), and one per root for F_A. Then the next macro's
+`build_analytic_orbital_hessian` built H again at the same C. Now, on the
+non-RI path:
 
-- **One pass over H per density.** `occupied_fock_response_mo` read H twice,
-  once for J and once for T, and T's inner loop ran over the 5 occupied
-  orbitals only. The block H[mu,a,:,:] is contiguous and gives both J(mu,a)
-  (a dot product with Y) and Y(a,:)·H[mu,a,nu,:] for every T(mu,nu), so one
-  pass now forms both. cc-pVTZ 3.0 -> 2.02 s, C1 3.7 -> 2.54 s.
-- **X = (pa|vw) and Z = (pu|aw) from H.** `build_analytic_orbital_hessian`
-  built them with two `transform_eri` passes over the tensor
-  (O(nb^4 n_act) each), for the same C as H. H's last index already runs
-  over the active orbitals, so each is three O(nb^3 n_act^2) contractions of
-  H (`transform_occupied_half`), contracting the leg paired with the active
-  index first (lam for X, nu for Z; the other order is O(nb^4 n_act) again).
-  Two of the four tensor transforms per macro are gone. cc-pVTZ
-  2.02 -> 1.85 s, C1 2.54 -> 2.33 s.
+- `evaluate` builds `OccupiedHalfTransform` (H at C_trial, one pass) and
+  stores it in `McscfState::half` (shared pointer);
+- F_I = C^T (h + G[2 C_c C_c^T]) C and F_A = C^T G[C_a gamma C_a^T] C come
+  from `occupied_two_electron_ao` with Y = C_core and Y = C_act gamma / 2;
+- (tu|vw) and (pu|vw) come from `transform_occupied_half` with
+  (C_act, C_act, C_act) and (C, C_act, C_act);
+- `build_analytic_orbital_hessian` takes the accepted state's `half` instead
+  of rebuilding it (an `eri` overload remains for the test and the fallback).
 
-**Gates.** 19/19 CASSCF/RASSCF/FCI cases, core suite 85/85, table energies
-within 1e-10 of N7. The analytic-vs-FD Hessian check, which depends on X and
-Z through Q and Y, is unchanged at 1.76844e-09 to every printed digit; the
-low-rank G check is 3.1e-15.
+One pass over the tensor per evaluation, about 2 per macro (from ~9 before
+N7). The RI path is unchanged.
+
+**Gates.** 19/19 CASSCF/RASSCF/FCI cases (the C1 thread pair included),
+core suite 85/85, `planck-casscf-internal` passes, table energies within
+1e-10 of N8.
 
 ## Where it stands
 
-**CASSCF is 19-156x faster than when this started. It beats PySCF at 6-31G
-and cc-pVDZ (with and without symmetry), matches it at cc-pVTZ C1, and is
-1.6x behind at cc-pVTZ C2v.** It needs no
+**CASSCF is 19-167x faster than when this started. It beats PySCF at 6-31G,
+cc-pVDZ (with and without symmetry) and cc-pVTZ C1, and is 1.3x behind at
+cc-pVTZ C2v.** It needs no
 more macroiterations than PySCF anywhere.
 
 Water CAS(4,4), Cartesian, 4 threads, `build-full`; PySCF 2.13.0
 (`tests/benchmarks/casscf/pyscf_casscf_timing.py`). Wall time.
 
-| case | AOs / pairs | start | P4 `1468a4f7` | P5 `305de17a` | N4 `c3095a53` | N5 `bc36af7b` | N6 `80eb776d` | N7 `9e55b67a` | **N8** | PySCF | N8 vs PySCF |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| 6-31G | 13 / 22 | 1.3-1.9 s | 0.18 s | 0.16 s | 0.15 s | 0.16 s | 0.064 s | 0.078 s | **0.069 s** | 0.34 s | **0.20x** |
-| cc-pVDZ | 25 / 50 | 13.4 s | 0.58 s | 0.59 s | 0.45 s | 0.43 s | 0.245 s | 0.248 s | **0.180 s** | 0.27 s | **0.67x** |
-| cc-pVDZ, C1 | 25 / 138 | 44.5 s | 2.35 s | 0.72 s | 0.58 s | 0.59 s | 0.367 s | 0.328 s | **0.285 s** | 0.43 s | **0.66x** |
-| cc-pVTZ | 65 / 142 | ~176 s per macro | 43.5 s | 24.3 s | 19.6 s | 13.3 s | 7.3 s | 3.0 s | **1.85 s** | 1.16 s | 1.6x |
-| cc-pVTZ, C1 | 65 / 418 | - | 51.8 s | 27.4 s | 23.6 s | 15.0 s | 8.5 s | 3.7 s | **2.33 s** | 2.30 s | **1.0x** |
+| case | AOs / pairs | start | P4 `1468a4f7` | P5 `305de17a` | N4 `c3095a53` | N5 `bc36af7b` | N6 `80eb776d` | N7 `9e55b67a` | N8 `aad9d399` | **N9** | PySCF | N9 vs PySCF |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 6-31G | 13 / 22 | 1.3-1.9 s | 0.18 s | 0.16 s | 0.15 s | 0.16 s | 0.064 s | 0.078 s | 0.069 s | **0.069 s** | 0.34 s | **0.20x** |
+| cc-pVDZ | 25 / 50 | 13.4 s | 0.58 s | 0.59 s | 0.45 s | 0.43 s | 0.245 s | 0.248 s | 0.180 s | **0.177 s** | 0.27 s | **0.66x** |
+| cc-pVDZ, C1 | 25 / 138 | 44.5 s | 2.35 s | 0.72 s | 0.58 s | 0.59 s | 0.367 s | 0.328 s | 0.285 s | **0.266 s** | 0.43 s | **0.62x** |
+| cc-pVTZ | 65 / 142 | ~176 s per macro | 43.5 s | 24.3 s | 19.6 s | 13.3 s | 7.3 s | 3.0 s | 1.85 s | **1.49 s** | 1.16 s | 1.3x |
+| cc-pVTZ, C1 | 65 / 418 | - | 51.8 s | 27.4 s | 23.6 s | 15.0 s | 8.5 s | 3.7 s | 2.33 s | **1.86 s** | 2.30 s | **0.81x** |
 
-N8 energies: cc-pVDZ -76.0440109040 (PySCF -76.0440109018), C1
--76.0781256186 (-76.0781256214), cc-pVTZ -76.0754286346 (-76.0754286541; 2e-8,
-set by `tol_mcscf_grad 1e-5`), cc-pVTZ C1 -76.1092535252 (-76.1092535271).
+N9 energies: cc-pVDZ -76.0440109040 (PySCF -76.0440109018), C1
+-76.0781256196 (-76.0781256214), cc-pVTZ -76.0754286346 (-76.0754286541; 2e-8,
+set by `tol_mcscf_grad 1e-5`), cc-pVTZ C1 -76.1092535257 (-76.1092535271).
 
 **Two references were re-pinned from saddles to minima.** Water SA-2
 (2026-10-28, -74.7751377977 -> -74.7877864783) and, in P5,
@@ -62,9 +62,9 @@ component on; both new values are PySCF's own tight answers.
 
 ## Handoff
 
-**Committed through `9e55b67a` (N7).** **Uncommitted, gated, ready to commit
-as N8:** `src/post_hf/casscf/orbital.cpp` (fused pass in
-`occupied_fock_response_mo`; `transform_occupied_half` for X and Z).
+**Stopped here (2026-11-01), committed through N9.** 1.3x behind PySCF at
+cc-pVTZ C2v (and faster at cc-pVTZ C1) was judged acceptable. The items under
+"What is left" are not scheduled; pick them up only with a new target.
 
 **How to reproduce:**
 
@@ -119,26 +119,23 @@ as N8:** `src/post_hf/casscf/orbital.cpp` (fused pass in
 | 8 | `transform_eri` read the AO tensor at stride nb^3 in its first quarter | contracted index outside a unit-stride loop | N5 `bc36af7b` |
 | 9 | the selector scored 3 candidates x 7 scales (22 evaluations) every macro | take the full Newton step when it improves | N6 `80eb776d` |
 | 10 | each Hessian product made 2 full passes over the nb^4 tensor for densities of rank <= 2 n_occ | half-transformed (mu nu|lam i), J/K in O(nb^3 n_occ) | N7 `9e55b67a` |
-| 11 | J and K read H separately; X and Z took two more passes over the nb^4 tensor per macro | one pass over H for J and K; X and Z from H | N8 |
+| 11 | J and K read H separately; X and Z took two more passes over the nb^4 tensor per macro | one pass over H for J and K; X and Z from H | N8 `aad9d399` |
+| 12 | each evaluation made ~4 passes over the tensor (F_I, F_A per root, (tu|vw), the cache) and the analytic Hessian rebuilt H | build H once per evaluation, derive the rest, reuse it for the Hessian | N9 |
 
 ## What is left
 
-1. **`evaluate` still makes its own passes over the tensor**: each of the 2
-   evaluations per macro runs the active-cache transform and two
-   single-density Fock builds (inactive, active) at the trial C. Building H
-   at the trial C instead (one nb^4·n_occ pass) would give all three
-   cheaply, F_I and F_A as `occupied_fock_response_mo` with Y = C_core and
-   C_act gamma / 2, the cache like X and Z, and the accepted trial's H could
-   be reused by the next macro's `build_analytic_orbital_hessian`. Roughly
-   6 tensor passes per macro -> 2. Touches `build_active_integral_cache` and
-   the RI split; re-profile first.
+1. **Re-profile cc-pVTZ.** After N9 the tensor is read about twice per
+   macro; whether the remaining time is the H build, the Hessian products
+   (now O(nb^3) each, but 28-64 per macro), the SCF before CASSCF, or thread
+   wait has not been measured.
 2. **A better preconditioner for the relaxed solve.** 28-64 vectors per macro
    at cc-pVTZ; near convergence cc-pVDZ still needs 34-50 of 50 for a
    relative residual of ~4e-3. The diagonal is F_I + F_A differences only.
-3. **The single-density `_compute_fock_rhf`** (also the conventional SCF's
-   hot path) in a register-accumulator form; item 1 removes its CASSCF use.
-4. **RI path:** still an FD orbital Hessian, and a full-leg-first transform
-   (`water_casscf_ri_ccpvdz` 4.1 s).
+3. **RI path:** still an FD orbital Hessian, a full-leg-first transform, and
+   none of N7-N9 (`water_casscf_ri_ccpvdz` 4.1 s). An RI twin of the half
+   transform (B^Q_{mu i}) would give it the same structure.
+4. **The single-density `_compute_fock_rhf`** (the conventional SCF's hot
+   path) in a register-accumulator form; CASSCF no longer uses it outside RI.
 5. **Delete `CallProbe`** once this scope is answered.
 
 Not needed: a new Davidson implementation, the AH solver for the relaxed
@@ -161,6 +158,34 @@ case", direct or cached Fock builds (disproven, `CASSCF_FOCK_REBUILD_COST.md`).
 - Stop if any gated energy moves by more than 1e-8 Eh or a basin changes.
 
 ## Record (newest first)
+
+### N8: one pass over H for J/K; (pa|vw), (pu|aw) from H (`aad9d399`)
+
+cc-pVTZ 3.0 -> 1.85 s, C1 3.7 -> 2.33 s, cc-pVDZ 0.25 -> 0.18 s. Two
+changes, both using N7's H.
+
+The post-N7 profile (cc-pVTZ C1) was `transform_eri` 24 %, thread wait 19 %,
+`occupied_fock_response_mo` 19 %, single-density `_compute_fock_rhf` 12 %
+(the inactive/active Fock in `evaluate`), building H 6 %.
+
+- **One pass over H per density.** `occupied_fock_response_mo` read H twice,
+  once for J and once for T, and T's inner loop ran over the 5 occupied
+  orbitals only. The block H[mu,a,:,:] is contiguous and gives both J(mu,a)
+  (a dot product with Y) and Y(a,:)·H[mu,a,nu,:] for every T(mu,nu), so one
+  pass now forms both. cc-pVTZ 3.0 -> 2.02 s, C1 3.7 -> 2.54 s.
+- **X = (pa|vw) and Z = (pu|aw) from H.** `build_analytic_orbital_hessian`
+  built them with two `transform_eri` passes over the tensor
+  (O(nb^4 n_act) each), for the same C as H. H's last index already runs
+  over the active orbitals, so each is three O(nb^3 n_act^2) contractions of
+  H (`transform_occupied_half`), contracting the leg paired with the active
+  index first (lam for X, nu for Z; the other order is O(nb^4 n_act) again).
+  Two of the four tensor transforms per macro are gone. cc-pVTZ
+  2.02 -> 1.85 s, C1 2.54 -> 2.33 s.
+
+**Gates.** 19/19 CASSCF/RASSCF/FCI cases, core suite 85/85, table energies
+within 1e-10 of N7. The analytic-vs-FD Hessian check, which depends on X and
+Z through Q and Y, is unchanged at 1.76844e-09 to every printed digit; the
+low-rank G check is 3.1e-15.
 
 ### N7: Hessian-product Fock builds from half-transformed integrals (`9e55b67a`)
 

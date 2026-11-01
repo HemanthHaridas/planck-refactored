@@ -7,6 +7,7 @@
 #include <Eigen/Core>
 
 #include <atomic>
+#include <memory>
 #include <vector>
 
 namespace HartreeFock::Correlation::CASSCF
@@ -51,21 +52,63 @@ namespace HartreeFock::Correlation::CASSCF
     // Per-macro data for the analytic fixed-CI orbital Hessian action: the
     // current Q matrix and Y[p,a,t,x], the 2-RDM contracted with the
     // (pa|vw) and (pu|aw) integrals that carry the active legs' response.
+    // H[mu,nu,lam,i] = (mu nu|lam i) for i over the first nocc MOs (core and
+    // active). One pass over the nb^4 tensor builds it; then G[X Y^T + Y X^T]
+    // with X = C_occ, which covers the inactive and active Fock densities and
+    // every density a Hessian product contracts, and the mixed (p u|v w)-type
+    // blocks all cost O(nb^3) contractions of H.
+    struct OccupiedHalfTransform
+    {
+        std::vector<double> H;
+        int nbasis = 0;
+        int nocc = 0;
+    };
+
+    OccupiedHalfTransform build_occupied_half_transform(
+        const std::vector<double> &eri,
+        const Eigen::MatrixXd &C,
+        int nocc);
+
+    // G[X Y^T + Y X^T] in the AO basis, X = the half transform's occupied
+    // columns of C, Y (nb x nocc) arbitrary. O(nb^3 nocc).
+    Eigen::MatrixXd occupied_two_electron_ao(
+        const OccupiedHalfTransform &half,
+        const Eigen::MatrixXd &Y);
+
+    // out[a1,a2,a3,w] = (a1 a2|a3 n_core+w) with a_k over the columns of C_k and
+    // w over the active MOs. lam_first contracts the C3 leg before the C2 leg:
+    // contract the leg with fewer columns first, or the cost is O(nb^4 n_act).
+    std::vector<double> transform_occupied_half(
+        const OccupiedHalfTransform &half,
+        const Eigen::MatrixXd &C1,
+        const Eigen::MatrixXd &C2,
+        const Eigen::MatrixXd &C3,
+        int n_core,
+        int n_act,
+        bool lam_first);
+
     struct AnalyticOrbitalHessian
     {
         Eigen::MatrixXd Q;
         std::vector<double> Y;
-        // H[mu,nu,lam,i] = (mu nu|lam i), i over the core and active orbitals
-        // (nocc of them): enough for G[X Y^T + Y X^T] with X = C_occ, which is
-        // every density a Hessian product contracts.
-        std::vector<double> H;
+        // The half transform at the same C (shared with the McscfState it came
+        // from).
+        std::shared_ptr<const OccupiedHalfTransform> half;
         int nbasis = 0;
         int nact = 0;
-        int nocc = 0;
     };
 
+    // Builds the half transform at C itself (one pass over eri).
     AnalyticOrbitalHessian build_analytic_orbital_hessian(
         const std::vector<double> &eri,
+        const Eigen::MatrixXd &C,
+        const std::vector<double> &Gamma_vec,
+        int n_core,
+        int n_act);
+
+    // Reuses a half transform already built at C.
+    AnalyticOrbitalHessian build_analytic_orbital_hessian(
+        std::shared_ptr<const OccupiedHalfTransform> half,
         const Eigen::MatrixXd &C,
         const std::vector<double> &Gamma_vec,
         int n_core,

@@ -7420,7 +7420,9 @@ A dense build needs one product per orbital pair (142 at water/cc-pVTZ,
   saddle (see below).
 
 With the low-rank Fock builds above, water/cc-pVTZ C1 went from 51.8 s
-(dense) to 2.3 s at the same energy, level with PySCF.
+(dense) to 1.9 s at the same energy (PySCF: 2.3 s). The same \(H\), built at
+each trial orbital set, also gives that set's \(F^I\), \(F^A\), \((tu|vw)\) and
+\((pu|vw)\), so an energy evaluation reads the full tensor once.
 
 **Step control.** The step is scaled to a trust radius `trust_rot`
 (element-wise, and \(4\times\) that in the Frobenius norm). The radius follows
