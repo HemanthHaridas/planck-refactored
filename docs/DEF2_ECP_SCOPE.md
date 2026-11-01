@@ -1,59 +1,56 @@
 # What does Planck need to run def2 basis sets, including the ECPs for heavy elements?
 
-Research scope, opened 2026-10-26. It expires when the work lands; rewrite it
-then as the answer. Status lives in `vault/Status/Open Work.md`.
+Research scope, opened 2026-10-26. Steps 1–4 have landed: def2 runs for H–Rn
+in `hartree-fock` single points. Steps 5 (ECP gradients) and 6 (DFT with ECPs)
+are open, so this is still a scope. Rewrite it as the answer when they land.
+Status lives in `vault/Status/Open Work.md`.
 
 ## Why it matters
 
 def2-SVP and def2-TZVP(P) are the default bases of ORCA and Turbomole and the
-most common choice for routine DFT. `basis-sets/` has Pople and Dunning
-families but no def2. For Rb onwards the def2 family uses effective core
-potentials (ECPs), and Planck has no ECP support: no parser for ECP blocks,
-no ECP integrals, no core-electron bookkeeping. Without ECPs, heavy elements
-are all-electron only, with no scalar-relativistic treatment.
+most common choice for routine DFT. From Rb onward the def2 family replaces
+the core electrons with effective core potentials (ECPs), which also carry
+scalar-relativistic effects. Without ECP support, heavy elements in Planck
+were all-electron only, with no relativistic treatment.
 
 ## Split by element
 
-- **H–Kr: all-electron.** def2 for these needs only basis files. The GBS
-  reader (`src/basis/gbs_parser.h`, `read_gbs`) already handles Gaussian94
-  shells including fused SP. This is cheap and useful immediately for HF
-  and post-HF (which run spherical today) and for DFT once spherical DFT
-  lands (`docs/SPHERICAL_DFT_SCOPE.md`). def2 is defined for spherical
-  functions.
-- **Rb onwards: ECP.** Needs everything below.
+- **H–Kr: all-electron.** Only basis files were needed (step 1). def2 is
+  defined for spherical functions, so this serves HF and post-HF today and DFT
+  once spherical DFT lands (`docs/SPHERICAL_DFT_SCOPE.md`).
+- **Rb onward: ECP.** Needs everything below.
 
-## What ECPs require
+## What ECPs require, and where each piece stands
 
-1. **Parsing.** BSE's Gaussian94 output appends ECP blocks per element
-   (core-electron count, then per angular-momentum channel a list of
-   `(power r^n, exponent, coefficient)` terms). `read_gbs` stops at shells.
-2. **Core-electron bookkeeping.** Removing $n_\text{core}$ electrons means
-   the atom's charge, as seen by every physical term, is $Z - n_\text{core}$.
-   `Molecule::nuclear_charge(a)` is already the single source for that (it
-   zeroes ghost atoms), and the comment above it forbids reading
-   `atomic_numbers[a]` for physical quantities. The audit of the direct
-   `atomic_numbers[...]` reads is done (step 2): 46 reads, 16 physical
-   ones switched to `nuclear_charge`, the rest element lookups that keep Z.
-3. **ECP integrals.** A semilocal ECP is a local part plus angular-momentum
-   projectors. The one-electron matrix $U_{\mu\nu}$ has type-1 (local) and
-   type-2 (projector) parts, both needing radial quadrature or recurrence
-   schemes. It is added to H_core, and its nuclear derivative is needed for
-   gradients.
-4. **SAD guess** needs atomic densities consistent with the ECP (fewer
-   electrons per atom), or a fallback to the core-Hamiltonian guess for ECP
-   atoms.
-5. **Checkpoint restart.** Cross-basis Löwdin projection must check that
-   source and target agree on each atom's core-electron count, or it projects
-   onto the wrong occupied space.
+1. **Parsing — done (step 3).** BSE's Gaussian94 output appends an ECP block
+   per element: core-electron count, then for each angular-momentum channel a
+   list of `(n, exponent, coefficient)` terms, with power r^(n−2). `read_gbs`
+   returns them, and `read_gbs_basis` stores one `ECPPotential` per non-ghost
+   atom on `Basis::_ecps`.
+2. **Core-electron bookkeeping — done (steps 2, 3).** Every physical term sees
+   a charge of Z − n_core. `Molecule::nuclear_charge(a)` is the single source
+   (it also zeroes ghost atoms), and `Calculator::sync_ecp_core_electrons()`
+   feeds it the core counts. Element lookups keep reading Z.
+3. **ECP integrals — done for energies (step 4); derivatives open (step 5).**
+   A semilocal ECP is a local part plus angular-momentum projectors, giving
+   type-1 (local) and type-2 (projector) integrals. libecpint computes both,
+   and `_compute_potential` adds U to H_core. The nuclear derivative is needed
+   for gradients.
+4. **SAD guess — done (step 4).** The atomic UHF carries the element's ECP and
+   runs with Z − n_core electrons.
+5. **Checkpoint restart — open.** Cross-basis Löwdin projection should check
+   that source and target agree on each atom's core-electron count, or it
+   projects onto the wrong occupied space. Only the guess is affected.
 
-Data model: an ECP channel is a list of `(n, ζ, c)` primitives, so it carries
-a radial power that `Shell` does not. Store ECPs per atom beside the shells
+Data model: an ECP channel carries a radial power that `Shell` does not, so
+ECPs are stored per atom beside the shells (`ECPPotential`, `src/base/types.h`)
 rather than as a `Shell` variant.
 
-What needs no change: SCF, MP2, CC, CASSCF/RASSCF, DFT, TDDFT and PCM consume
-H_core and an electron count and do not care why H_core has a third term,
-provided steps 2–4 are right. Population analyses will show fewer core
-electrons on ECP atoms; that is expected, not a defect.
+What needed no change: SCF, MP2, CC, CASSCF/RASSCF and PCM consume H_core and
+an electron count, and do not care why H_core has a third term. Population
+analyses show fewer core electrons on ECP atoms; that is expected, not a
+defect. Open-shell and post-HF energies with ECPs take this path but are not
+gated yet.
 
 ### Boundaries until each piece lands
 
@@ -67,33 +64,34 @@ Fail cleanly, never return an incomplete answer:
   two-electron Fock build only, and H_core (with the ECP) is built in full.
   `hi_rhf_def2tzvp_ecp_sad_symm` runs with `use_symm .true.`.
 
-PySCF's `gto/ecp.py` (`type1_by_shell`, `type2_by_shell`) in the test venv is
-a readable reference for the local/semilocal split if libecpint's output
-ever needs debugging.
+For debugging libecpint, compare against PySCF (`mol.intor('ECPscalar')`) and,
+when the two disagree, against a brute-force radial × Lebedev integral around
+the ECP centre. That third answer is what located the bug in step 4.
 
-## The decision: library or native ECP integrals
+## The decision: library or native ECP integrals — libecpint, taken
 
 | option | for | against |
 |---|---|---|
-| **libecpint** (C++) via `ExternalProject` | complete type-1/type-2 integrals and first derivatives; used by Psi4 and PySCF-adjacent tools | a new dependency (licence checked below: compatible) |
-| **native** | no dependency | type-2 integrals are the hard part of ECP work (angular projection, numerical radial quadrature with screening); long validation tail |
+| **libecpint** (C++) via `ExternalProject` | complete type-1/type-2 integrals and first and second derivatives; used by Psi4 | a new dependency |
+| **native** | no dependency | type-2 integrals are the hard part of ECP work (angular projection, radial quadrature with screening); long validation tail |
 
-Recommendation: libecpint, because the integrals and their derivatives are
-the risky part and it has them (its README lists analytic first and second
-derivatives). This supersedes the earlier `ECP_SUPPORT_SCOPE.md` plan for a
-native `src/integrals/ecp.{h,cpp}` engine; that doc is merged here and
-deleted.
+libecpint was chosen because the integrals and their derivatives are the risky
+part and it has them. This superseded the earlier `ECP_SUPPORT_SCOPE.md` plan
+for a native engine (that doc was merged here and deleted). The cost turned
+out to be one upstream bug: its generator wrote kernel constants at 6 digits,
+patched at fetch time (step 4).
 
-### Licence findings (checked 2026-10-26; not legal advice)
+### Licence (checked 2026-10-26; not legal advice)
 
-- **libecpint: MIT** (Copyright 2021 Robert A. Shaw). It bundles
-  Faddeeva (MIT, MIT 2012) and fetches pugixml (MIT); GoogleTest
-  (BSD-3-Clause) is for its own tests only. All permissive: compatible with
-  Planck's PolyForm Noncommercial licence. The only obligation is keeping
-  the copyright and permission notices with source and binary copies.
-- **Basis data:** def2 files and their ECP blocks would come from the Basis
-  Set Exchange (BSD-3-Clause), like the existing files in `basis-sets/`.
-  Keep the BSE header in each file; it carries the citation.
+- **libecpint: MIT** (Copyright 2021 Robert A. Shaw). It bundles Faddeeva
+  (MIT); pugixml (MIT) is disabled in Planck's build; GoogleTest is for its
+  own tests only. Compatible with Planck's PolyForm Noncommercial licence.
+  The obligation is keeping the notice with source and binary copies: the
+  fetched source carries it, and `CMakeLists.txt` installs it with the
+  binaries as `share/doc/planck/libecpint-LICENSE`.
+- **Basis data:** the def2 files and their ECP blocks come from the Basis Set
+  Exchange (BSD-3-Clause), like the rest of `basis-sets/`. Each file keeps its
+  BSE header, which carries the citation.
 
 ## Steps
 
@@ -149,9 +147,8 @@ deleted.
    SAD), printing, IO/checkpoint, symmetry atom matching or counterpoise
    copying, and keep Z. No change without ghost atoms (core suite 85/85);
    with ghosts the gradient and multipole code had been counting the
-   ghost's charge. SAD, PCM and counterpoise still read Z and are revisited
-   with step 3's core count.
-3. **ECP parsing and storage — LANDED.** The def2 files now cover H–Rn
+   ghost's charge. SAD, PCM and counterpoise were fixed at step 4.
+3. **ECP parsing and storage — LANDED** (`99f142d1`). The def2 files now cover H–Rn
    (50 ECP elements, Rb onward). `detail::read_gbs` returns a `GbsFile`
    (shells + ECP blocks); `read_gbs_basis` stores one `ECPPotential` per
    non-ghost atom on `Basis::_ecps` — center, core count, local channel
@@ -171,7 +168,7 @@ deleted.
    The parsed counts ("I: 28 core electrons, Z_eff 25, L 3, terms
    4/7/8/10") are printed at startup and pinned by
    `hi_rhf_def2svp_ecp_gradient_rejected`.
-4. **ECP integrals in H_core — LANDED.** libecpint (MIT) is an
+4. **ECP integrals in H_core — LANDED** (`749c8355`). libecpint (MIT) is an
    `ExternalProject` pinned past v1.0.7 for upstream fixes #71/#72, built
    with Planck's C++ compiler (its API passes `std::vector`, so a libc++
    build would not link against libstdc++), and linked into every target,
@@ -219,8 +216,16 @@ deleted.
    restart does not check that both bases agree on each atom's core count
    (only a guess is affected, but an ECP/all-electron mismatch projects
    onto the wrong occupied count).
-5. **ECP gradients.** Gate: FD and PySCF gradients; geometry optimization of
-   a small heavy-element molecule against PySCF.
+5. **ECP gradients — OPEN.** libecpint has the derivative:
+   `ECPIntegral::compute_shell_pair_derivative` returns nine blocks in the
+   order Ax, Ay, Az, Bx, By, Bz, Cx, Cy, Cz (C the ECP centre). Each adds to
+   its own atom's gradient, so when centres coincide the components sum, and
+   translational invariance ties the three together. Construct the engine with `deriv = 1`, which raises the
+   L ceiling to basis L + 1 ≤ `LIBECPINT_MAX_L` (5); g shells still fit.
+   Contract with the density in the gradient's spherical-lift skin like the
+   other 1e derivatives, then lift the step-4 rejection in `hf_driver.cpp`.
+   Gate: FD and PySCF gradients; geometry optimization of a small
+   heavy-element molecule against PySCF.
 6. **DFT with ECPs** after spherical DFT lands: same gates in `planck-dft`.
 
 ## Not in this scope
