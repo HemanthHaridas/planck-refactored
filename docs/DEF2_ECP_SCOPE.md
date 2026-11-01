@@ -99,7 +99,8 @@ deleted.
 ## Steps
 
 1. **def2 basis files for H–Kr — LANDED** (`6e5f191a`). def2-SVP, -SVPD,
-   -TZVP, -TZVPP and -QZVP from BSE, elements 1–36 (no ECP blocks there).
+   -TZVP, -TZVPP and -QZVP from BSE (first H–Kr; extended to H–Rn with the
+   ECP blocks at step 3).
    RI fitting sets not added; add them when density fitting needs them.
    Five spherical RHF gates against PySCF 2.13.0, basis parsed from the same
    GBS files (`tests/pyscf/def2_rhf_references.py`):
@@ -151,8 +152,31 @@ deleted.
    with ghosts the gradient and multipole code had been counting the
    ghost's charge. SAD, PCM and counterpoise still read Z and are revisited
    with step 3's core count.
-3. **ECP parsing and storage** on the basis object; `nuclear_charge` returns
-   $Z - n_\text{core}$; electron count follows.
+3. **ECP parsing and storage — LANDED.** The def2 files now cover H–Rn
+   (50 ECP elements, Rb onward). `detail::read_gbs` returns a `GbsFile`
+   (shells + ECP blocks); `read_gbs_basis` stores one `ECPPotential` per
+   non-ghost atom on `Basis::_ecps` — center, core count, local channel
+   U_L and semilocal U_l − U_L channels, with each term's `n` kept as
+   written (r^(n−2), Gaussian94 convention; convert at step 4).
+   `Calculator::sync_ecp_core_electrons()` copies the core counts to
+   `Molecule::ecp_core_electrons` after the primary basis read in both
+   drivers, so `nuclear_charge()` returns Z − n_core and every electron
+   count (all of which go through `total_nuclear_charge()`) follows.
+   Two traps found on the way:
+   - **BSE writes the ECP section's headers uppercase** (`RB 0`,
+     `RB-ECP`) while the shells use `Rb`; the case-sensitive element
+     lookup failed every def2 run. The reader now normalizes symbols.
+   - **SAD had a private copy of the GBS reader**, so it still failed on
+     `RB` after the fix. The copy is deleted (−123 lines); SAD uses the
+     shared reader, which is now the only one.
+   Boundary: both drivers refuse any ECP basis
+   (`reject_ecp_until_integrals`, marked `ponytail:` for deletion at step
+   4) and print what was parsed. Gated by `hi_{rhf,rks}_def2svp_ecp_rejected`
+   (smoke), which pin "I: 28 core electrons, Z_eff 25, L 3, terms
+   4/7/8/10". That checks counts, not values; the exponents and
+   coefficients are first checked by step 4's ECP-matrix comparison.
+   Still reading Z on ECP atoms, to fix at step 4: the SAD atomic UHF
+   (runs with Z electrons), PCM and counterpoise.
 4. **ECP integrals in H_core** via libecpint. Gate: the ECP matrix
    against PySCF's `mol.intor('ECPscalar')` element by element on e.g. HI,
    AgCl, a Pd complex; then SCF energies against PySCF to 1e-9 Eh.

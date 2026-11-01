@@ -451,6 +451,12 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         return EXIT_FAILURE;
     }
     calculator._shells = std::move(*basis_res);
+    calculator.sync_ecp_core_electrons();
+    if (auto ecp = HartreeFock::BasisFunctions::reject_ecp_until_integrals(calculator._shells, calculator._molecule); !ecp)
+    {
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "ECP :", ecp.error());
+        return EXIT_FAILURE;
+    }
 
     // ── Spherical-harmonic basis: supported-feature gate (Phase 2, Step 2.0) ─────
     // The spherical path covers single-point RHF/UHF/ROHF energies (Conventional and

@@ -53,7 +53,7 @@
    "expected_exit_code": 0,
    "contains": [
     "Mayer Bond Orders :",
-    "1       2         O         H        0.76017799"
+    "1       2         O         H        0.76017801"
    ]
   },
   {
@@ -76,7 +76,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9458807581,
+     "expected": -74.9458807841,
      "atol": 1e-09
     }
    ]
@@ -100,7 +100,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9458807581,
+     "expected": -74.9458807841,
      "atol": 1e-09
     }
    ]
@@ -116,9 +116,9 @@
    "expected_exit_code": 0,
    "contains": [
     "ESP Charges (Connolly) :",
-    "1       O       8             -0.70025568",
-    "2       H       1              0.35011239",
-    "3       H       1              0.35014328",
+    "1       O       8             -0.70025559",
+    "2       H       1              0.35011235",
+    "3       H       1              0.35014324",
     "ESP Grid Points :             1012"
    ],
    "checks": [
@@ -142,15 +142,15 @@
     "ESP + PCM :",
     "the PCM reaction field is excluded",
     "ESP Charges (Connolly) :",
-    "1       O       8             -0.73345627",
-    "2       H       1              0.36665044",
-    "3       H       1              0.36680583"
+    "1       O       8             -0.73345619",
+    "2       H       1              0.36665040",
+    "3       H       1              0.36680579"
    ],
    "checks": [
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9515732413,
+     "expected": -74.9515732656,
      "atol": 1e-09
     }
    ]
@@ -175,7 +175,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9515732413,
+     "expected": -74.9515732656,
      "atol": 1e-09
     }
    ]
@@ -224,7 +224,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9458807581,
+     "expected": -74.9458807841,
      "atol": 1e-09
     }
    ]
@@ -241,7 +241,7 @@
    "expected_exit_code": 0,
    "contains": [
     "Electrostatic Potential :",
-    "1      1.300000     -0.700000      2.100000          0.14583892",
+    "1      1.300000     -0.700000      2.100000          0.14583893",
     "2     -2.400000      1.900000     -0.600000         -0.01147406",
     "3      0.400000      0.300000      3.700000          0.04083082",
     "4     -5.000000     -4.000000      1.200000          0.00386944",
@@ -251,7 +251,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9458807581,
+     "expected": -74.9458807841,
      "atol": 1e-09
     }
    ]
@@ -873,7 +873,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9458807581,
+     "expected": -74.9458807841,
      "atol": 1e-09
     },
     {
@@ -1955,7 +1955,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -39.7267328271,
+     "expected": -39.726732824,
      "atol": 1e-09
     },
     {
@@ -4004,7 +4004,7 @@
     {
      "type": "metric_close",
      "metric": "rccsd_total_energy",
-     "expected": -75.0123309822,
+     "expected": -75.012331001,
      "atol": 1e-09
     },
     {
@@ -5226,6 +5226,38 @@
     }
    ],
    "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP, first-row transition metal), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903). Residual 1.2e-9 (4.5e-13 relative) survives tight convergence in both codes; not the Bohr constant."
+  },
+  {
+   "id": "hi_rhf_def2svp_ecp_rejected",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp_rejected.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "smoke",
+    "def2",
+    "ecp"
+   ],
+   "expected_exit_code": 1,
+   "contains": [
+    "ECP integrals are not implemented yet",
+    "atom 2 I: 28 core electrons, Z_eff 25, L 3, terms 4/7/8/10"
+   ],
+   "_note": "Boundary marker, docs/DEF2_ECP_SCOPE.md step 3: the iodine ECP block parses (term counts match def2-SVP) and Z_eff = 53 - 28 reaches nuclear_charge(); the run is refused until step 4. Replace with an energy gate when ECP integrals land."
+  },
+  {
+   "id": "hi_rks_def2svp_ecp_rejected",
+   "input": "tests/inputs/regression/dft/hi_rks_def2svp_ecp_rejected.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "smoke",
+    "def2",
+    "ecp"
+   ],
+   "expected_exit_code": 1,
+   "contains": [
+    "ECP integrals are not implemented yet",
+    "atom 2 I: 28 core electrons, Z_eff 25, L 3, terms 4/7/8/10"
+   ],
+   "_note": "Boundary marker, docs/DEF2_ECP_SCOPE.md step 3: the iodine ECP block parses (term counts match def2-SVP) and Z_eff = 53 - 28 reaches nuclear_charge(); the run is refused until step 4. Replace with an energy gate when ECP integrals land."
   }
  ]
 }

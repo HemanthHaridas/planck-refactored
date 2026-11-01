@@ -547,6 +547,11 @@ namespace DFT::Driver
             if (!basis_res)
                 return std::unexpected("DFT basis setup failed: " + basis_res.error());
             calculator._shells = std::move(*basis_res);
+            calculator.sync_ecp_core_electrons();
+            if (auto ecp = HartreeFock::BasisFunctions::reject_ecp_until_integrals(
+                    calculator._shells, calculator._molecule);
+                !ecp)
+                return std::unexpected(ecp.error());
             calculator.initialize();
             return {};
         }

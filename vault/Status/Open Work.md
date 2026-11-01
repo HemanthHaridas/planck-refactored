@@ -52,15 +52,17 @@ is the recommended one; none blocks another except where noted.
   compiler.
 - **def2 basis sets and ECPs** (`docs/DEF2_ECP_SCOPE.md`). def2 for H–Kr is
   just basis files (cheap, useful now for HF/post-HF). Heavy elements need
-  ECP parsing, core-electron bookkeeping (51 direct `atomic_numbers[...]`
-  reads to classify), and ECP integrals with gradients. Licence checked
+  ECP parsing, core-electron bookkeeping, and ECP integrals with
+  gradients. Licence checked
   2026-10-26: libecpint (MIT, with MIT/BSD dependencies) and BSE data
   (BSD-3) are compatible; libecpint recommended.
   Branch `feat/def2-ecp`: steps 1 (def2 H–Kr files, five PySCF gates at
   1e-9), 1b (the gap was the Å→Bohr constant, fixed — see Completion) and
-  2 (nuclear-charge audit: 46 reads, 16 physical, switched) landed. Next:
-  step 3, ECP parsing and storage, with ECP runs rejected until the
-  integrals land. Open, minor: ZnCl2/def2-SVP sits 1.2e-9 (4.5e-13
+  2 (nuclear-charge audit: 46 reads, 16 physical, switched) and 3 (ECP
+  parsing and storage; Z − n_core reaches every electron count; ECP runs
+  refused, gated by `hi_{rhf,rks}_def2svp_ecp_rejected`) landed. Next:
+  step 4, ECP integrals in H_core via libecpint, plus SAD/PCM/counterpoise
+  on ECP atoms (they still read Z). Open, minor: ZnCl2/def2-SVP sits 1.2e-9 (4.5e-13
   relative) from PySCF for an unexplained reason; pinned at 2e-9.
 - **Gradient performance** (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`,
   gradients 20–120× the SCF). G3 rescoped 2026-10-26 onto the energy build's

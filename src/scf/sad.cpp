@@ -11,136 +11,18 @@
 #include <vector>
 
 #include "basis/basis.h"
+#include "basis/gbs_parser.h"
 #include "integrals/os.h"
 #include "integrals/shellpair.h"
 #include "io/logging.h"
 #include "lookup/elements.h"
 #include "scf.h"
 
-// ---------------------------------------------------------------------------
-// GBS parsing utilities — mirror of the static helpers in gaussian.cpp.
-// Kept file-local so the two TUs remain independent.
-// ---------------------------------------------------------------------------
 namespace
 {
-    // ── GBS parsing types ────────────────────────────────────────────────────
-
-    struct GbsPrimitive
-    {
-        double exponent;
-        double coefficient;
-    };
-
-    struct GbsShell
-    {
-        std::string label;
-        std::vector<GbsPrimitive> primitives;
-    };
-
-    using BasisSet = std::unordered_map<std::string, std::vector<GbsShell>>;
-
-    static bool starts_with_alpha(const std::string &line)
-    {
-        for (char c : line)
-        {
-            if (!std::isspace(static_cast<unsigned char>(c)))
-                return std::isalpha(static_cast<unsigned char>(c));
-        }
-        return false;
-    }
-
-    static bool is_shell_label(const std::string &s)
-    {
-        return s == "S" || s == "P" || s == "D" ||
-               s == "F" || s == "G" || s == "H" ||
-               s == "I" || s == "SP";
-    }
-
-    static void normalize_fortran_exponents(std::string &line)
-    {
-        for (char &c : line)
-            if (c == 'D' || c == 'd')
-                c = 'E';
-    }
-
-    static std::expected<BasisSet, std::string> read_gbs(std::ifstream &input)
-    {
-        BasisSet basis;
-        std::string line;
-        std::string current_element;
-
-        while (std::getline(input, line))
-        {
-            if (line.empty() || line.starts_with("!"))
-                continue;
-
-            if (line == "****")
-            {
-                current_element.clear();
-                continue;
-            }
-
-            std::istringstream header(line);
-            std::string symbol;
-            int charge;
-            if ((header >> symbol >> charge) && header.eof())
-            {
-                auto element = element_from_symbol(symbol);
-                if (!element)
-                    return std::unexpected(element.error());
-                current_element = symbol;
-                basis.try_emplace(symbol);
-                continue;
-            }
-
-            if (!starts_with_alpha(line))
-                return std::unexpected("Expected shell header, got: " + line);
-
-            if (current_element.empty())
-                return std::unexpected("Shell before element header");
-
-            std::istringstream iss(line);
-            std::string label;
-            std::size_t nprim;
-            double scale = 1.0;
-            iss >> label >> nprim >> scale;
-
-            if (!iss || !is_shell_label(label))
-                return std::unexpected("Malformed shell line: " + line);
-
-            if (label == "SP")
-            {
-                GbsShell s{"S"}, p{"P"};
-                for (std::size_t i = 0; i < nprim; ++i)
-                {
-                    std::getline(input, line);
-                    normalize_fortran_exponents(line);
-                    std::istringstream prim(line);
-                    double expn, cs, cp;
-                    prim >> expn >> cs >> cp;
-                    s.primitives.push_back({expn, cs * scale});
-                    p.primitives.push_back({expn, cp * scale});
-                }
-                basis[current_element].push_back(std::move(s));
-                basis[current_element].push_back(std::move(p));
-            }
-            else
-            {
-                GbsShell shell{label};
-                for (std::size_t i = 0; i < nprim; ++i)
-                {
-                    std::getline(input, line);
-                    normalize_fortran_exponents(line);
-                    std::istringstream prim(line);
-                    double expn, cs;
-                    prim >> expn >> cs;
-                    shell.primitives.push_back({expn, cs * scale});
-                }
-                basis[current_element].push_back(std::move(shell));
-            }
-        }
-        return basis;
-    }
+    using HartreeFock::BasisFunctions::detail::GbsShell;
+    using BasisSet = HartreeFock::BasisFunctions::detail::GbsBasisSet;
+    using HartreeFock::BasisFunctions::detail::read_gbs;
 
     // Build a single-atom Basis for element `sym` at the origin.
     // Convention matches read_gbs_basis exactly: primitive norms folded into
@@ -535,7 +417,7 @@ namespace HartreeFock
             auto gbs_res = read_gbs(file);
             if (!gbs_res)
                 return std::unexpected(gbs_res.error());
-            const BasisSet &gbs = *gbs_res;
+            const BasisSet &gbs = gbs_res->shells;
 
             std::unordered_set<std::string> seen;
             std::unordered_map<std::string, HartreeFock::Basis> result;

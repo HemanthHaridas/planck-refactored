@@ -427,9 +427,13 @@ historical design context, but they are no longer the source of truth for
   after the fix four of the five match PySCF to every printed digit
   (`docs/DEF2_ECP_SCOPE.md` step 1b). 26 extended cases pinned to Planck's
   own output moved 2e-9..1.9e-7 Eh and were re-pinned; water SA-2 CASSCF
-  moved from 3.6e-8 to 1.1e-8 off PySCF's SAD-start minimum. Extended
-  suite 150/154 (the known rccsdt cases). Rebuild `planck-mpi` with the
-  other binaries, or the MPI smoke cases compare old against new.
+  moved from 3.6e-8 to 1.1e-8 off PySCF's SAD-start minimum. Ten core
+  cases moved too and were missed until step 3 (only the extended suite
+  was run): water/STO-3G energies (2.6e-8) and printed ESP charges and
+  values in the 8th decimal; the Mayer O–H bond order moved toward PySCF
+  (0.76017799 → 0.76017801, PySCF 0.76017810). Run `--suite all` after a
+  change like this, not one tag. Rebuild `planck-mpi` with the other
+  binaries, or the MPI smoke cases compare old against new.
 
 - **Converged SCF orbitals come from the true Fock, not the DIIS
   extrapolation (2026-10-27).** RHF, UHF, RKS and UKS stored the eigenpairs of
