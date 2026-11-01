@@ -7330,12 +7330,13 @@ legs:
 \text{puvw}[p,u,v,w] = (p\,u|v\,w)
 \]
 
-This cache is built by `build_active_integral_cache(...)` in `orbital.cpp` via
-the dedicated `transform_eri_active_cache(...)` entry point in
-`src/post_hf/integrals.cpp`. The tensor is stored row-major as `(p,u,v,w)`, so
-each fixed-`p` slab is one contiguous block of length \(n_{\text{act}}^3\). That
-layout is chosen specifically to match the Q-matrix contraction used throughout
-the orbital-response code.
+It is stored row-major as `(p,u,v,w)`, so each fixed-`p` slab is one
+contiguous block of length \(n_{\text{act}}^3\), the layout the Q-matrix
+contraction wants. On the dense-integral path it is not transformed from the
+AO tensor directly: it is a cheap contraction of the half-transformed
+integrals \(H\) described below, as are the all-active \((tu|vw)\) and the Fock
+matrices. The RI path builds it with `build_active_integral_cache(...)` from
+the density-fitted factors.
 
 ### Orbital Update: Augmented-Hessian Step and Cayley Transform
 
@@ -7367,6 +7368,7 @@ Fock builds, \(\mathbf G[d\mathbf D_c]\) and \(\mathbf G[d\mathbf D_a]\);
 both come from the half-transformed integrals \(H\) below (its last index
 already runs over the active orbitals), so they need no pass over the full
 tensor either.
+
 **These Fock builds never touch the full tensor.** Every density a product
 needs is low rank in a fixed basis: \(d\mathbf D_c = \mathbf X\mathbf Y^T +
 \mathbf Y\mathbf X^T\) with \(\mathbf X = \mathbf C_{\text{core}}\) and
@@ -7375,8 +7377,9 @@ needs is low rank in a fixed basis: \(d\mathbf D_c = \mathbf X\mathbf Y^T +
 R_{:,\text{act}}\boldsymbol\gamma\), and the CI-response density below with
 \(\mathbf Y = \tfrac12\mathbf C_{\text{act}}\boldsymbol\gamma_1\). With the
 half-transformed integrals \(H[\mu,\nu,\lambda,i] = (\mu\nu|\lambda i)\), \(i\) over the
-core and active orbitals, built once per macroiteration, the ERI permutation
-symmetry gives
+core and active orbitals, built once per energy evaluation at that
+evaluation's orbitals (`OccupiedHalfTransform`, one pass over the tensor), the
+ERI permutation symmetry gives
 
 \[
 J_{\mu\nu} = 2\sum_{\lambda i} H[\mu,\nu,\lambda,i]\,Y_{\lambda i},\qquad
@@ -7385,7 +7388,13 @@ K = T + T^T,\quad T_{\mu\nu} = \sum_{\lambda i} Y_{\lambda i}\,H[\mu,\lambda,\nu
 
 and \(\mathbf G = \mathbf J - \tfrac12\mathbf K\): \(O(n_b^3 n_{\text{occ}})\) per
 density instead of a pass over the \(n_b^4\) tensor
-(`occupied_fock_response_mo`). PySCF's in-core CASSCF uses the same idea
+(`occupied_two_electron_ao`). One pass over \(H\) forms both \(J\) and \(T\): the
+contiguous block \(H[\mu,a,:,:]\) gives \(J_{\mu a}\) and adds to every
+\(T_{\mu\nu}\). The mixed blocks \((tu|vw)\), \((pu|vw)\), \((pa|vw)\) and
+\((pu|aw)\) are three \(O(n_b^3 n_{\text{act}}^2)\) contractions of \(H\) each
+(`transform_occupied_half`), provided the leg paired with \(H\)'s active
+index is contracted first; the other order costs \(O(n_b^4 n_{\text{act}})\)
+again. PySCF's in-core CASSCF uses the same idea
 through its `ppaa`/`papa` blocks. This is `analytic_g_action` in `orbital.cpp`.
 The older central finite
 difference of two gradient rebuilds is kept only as the test oracle and for
@@ -7420,9 +7429,9 @@ A dense build needs one product per orbital pair (142 at water/cc-pVTZ,
   saddle (see below).
 
 With the low-rank Fock builds above, water/cc-pVTZ C1 went from 51.8 s
-(dense) to 1.9 s at the same energy (PySCF: 2.3 s). The same \(H\), built at
-each trial orbital set, also gives that set's \(F^I\), \(F^A\), \((tu|vw)\) and
-\((pu|vw)\), so an energy evaluation reads the full tensor once.
+(dense) to 1.9 s at the same energy (PySCF: 2.3 s). Each energy evaluation
+reads the full tensor once (to build \(H\)), and the accepted evaluation's
+\(H\) is reused by the next macroiteration's Hessian.
 
 **Step control.** The step is scaled to a trust radius `trust_rot`
 (element-wise, and \(4\times\) that in the Frobenius norm). The radius follows
@@ -7439,36 +7448,42 @@ approximate Hessian) had halved the convergence rate.
 
 The full CASSCF macro-iteration (one pass of `run_casscf`):
 
-1. Form one-electron integrals in the current MO basis (transform \(h_{\mu\nu}\))
-2. Form active-active two-electron integrals from AO ERIs; cache the mixed-basis
-   `puvw` tensor (`build_active_integral_cache`). This uses the dedicated
-   `transform_eri_active_cache(...)` kernel rather than the fully generic
-   four-leg AO→MO transform.
+1. Build the half-transformed integrals \(H = (\mu\nu|\lambda i)\) at the current
+   orbitals: the only pass over the AO tensor (dense-integral path).
+2. From \(H\): the inactive Fock \(F^I\) (so \(h_{\text{eff}}\)), the all-active
+   integrals \((tu|vw)\), and the mixed `puvw` cache.
 3. Solve CI eigenproblem to get \(\{c_I^{(r)}\}\) and \(\{E_{CI}^{(r)}\}\) for all roots;
    reorder roots by maximum CI-vector overlap to prevent state flipping
 4. Compute per-root 1-RDM and 2-RDM; form state-averaged \(\bar{\gamma}\) and
    \(\bar{\Gamma}\) weighted by the SA weights
-5. Compute inactive Fock \(F^I\), active Fock \(F^A\), Q matrix, and orbital
+5. Compute the active Fock \(F^A\) (from \(H\)), the Q matrix, and the orbital
    gradient \(\mathbf g\)
 6. Solve for the orbital step on the CI-relaxed Hessian (matrix-free
    subspace solve, above). Each Hessian product carries an
    `OrbitalHessianContext` (pointers to \(\mathbf C\), overlap, core
    Hamiltonian, AO ERIs and the frozen RDMs) and solves each root's CI response
    to the trial rotation.
-7. Score the candidate steps (the coupled Newton step, an augmented-Hessian
-   step, a gradient step, and under stagnation a diagonal step and single-pair
-   probes) with the merit \(m = E_{\text{CAS}} + 0.1\,\|\mathbf g\|^2\) and
-   keep the lowest.
+7. Evaluate the coupled Newton step at full scale and take it if it lowers
+   the energy (and does not hurt the gradient, or lowers the merit
+   \(m = E_{\text{CAS}} + 0.1\,\|\mathbf g\|^2\)). Only if it does not, score the
+   other candidates (an augmented-Hessian step, a gradient step, and under
+   stagnation a diagonal step and single-pair probes) at seven scales each and
+   keep the lowest merit.
 8. Apply the accepted \(\boldsymbol\kappa\) via the Cayley transform followed by
    Löwdin re-orthogonalization: \(\mathbf C \leftarrow \mathbf C\,\mathbf U\)
 9. Check convergence: \(\|\mathbf g\| < \epsilon_{\text{grad}}\) and
    \(|\Delta E| < \epsilon_E\)
 
-The dedicated active-cache builder is organized around fixed-`p` output slabs.
-Each slab owns one contiguous `(u,v,w)` block, so the OpenMP implementation can
-parallelize safely over `p` with static scheduling and no reductions. Thread-local
-scratch buffers are reused across cache rebuilds to avoid repeated allocation of
-the temporary intermediates needed for the \(\lambda\) and \(\sigma\) contractions.
+Every threaded loop in this path writes disjoint outputs (rows of \(H\), \(J\),
+\(T\), or slabs of a transform) and sums each element in a fixed order, and the
+1- and 2-RDM builds bin their partial sums by task index and add the bins in a
+fixed order. So a CASSCF run is bitwise identical at any thread count; a
+regression pair (`water_casscf44_c1_ccpvdz_threads1/4`) holds it there.
+Merging per-thread partials under `omp critical` instead had made C1 energies
+wander by \(10^{-9}\) between identical runs.
+
+Why each of these choices was needed, with the measurements and the
+approaches that did not work, is in `docs/CASSCF_PERFORMANCE.md`.
 
 ### State-Averaged CASSCF
 
@@ -7511,10 +7526,11 @@ debug flag.
 
 ### Convergence and Robustness
 
-The orbital macro-step uses **merit-function-based step selection**: the
-candidate steps (step 7 above) are each evaluated by a full CASSCF energy
-computation, and the step that minimizes
-\(m = E_{\text{CAS}} + 0.1\,\|\mathbf g\|^2\) is accepted.
+The orbital macro-step uses **merit-function-based step selection** as a
+safety net (step 7 above): each candidate is checked by a full CASSCF energy
+evaluation. With an exact Newton model the Newton step almost always passes
+at full scale, so a macroiteration costs two energy evaluations; scoring every
+candidate at every scale had cost 22.
 
 When repeated macro-iterations accept only negligibly small steps without
 reducing the true orbital gradient (stagnation), the driver switches to direct

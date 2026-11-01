@@ -1904,94 +1904,18 @@ serial path).
 
 ### Remaining work
 
-#### Performance: ~50x slower than PySCF at cc-pVDZ (scoped 2026-10-28)
+#### Performance: leftovers, not scheduled (answered 2026-11-01)
 
-`docs/CASSCF_PERFORMANCE_SCOPE.md`. Water CAS(4,4)/cc-pVDZ takes 12.7 s
-(16 macros) in Planck and 0.26 s (9 macros) in PySCF, and the ratio grows
-with basis size (2.9x at 6-31G; ~176 s per macro at cc-pVTZ against PySCF's
-1.0 s for the whole run). Profile: 87 % in
-`transform_eri_active_cache`, which is O(nb^5 n_act) because its `p` loop sits
-outside the first contraction. The optimizer also calls it >= 200 times per
-macro: the dense orbital Hessian is a central FD of full gradient rebuilds,
-and `numeric-newton` (2·npairs full evaluations) runs every macro when
-`npairs <= 256`, not only under stagnation. Plan: P0 counters + PySCF script,
-P1 fix the transform (mechanical), P2 analytic orbital Hessian action, P3
-re-measure whether `numeric-newton` is still needed, P4 macro count.
-**P0 and P1 done (2026-10-28):** the transform is O(nb^4 n_act) now,
-cc-pVDZ 13.4 -> 3.5 s, C1 44.5 -> 11.1 s, energies unchanged. PySCF is still
-13x / 26x faster; what remains is call count (Fock 40 %, generic transform
-57 %), so P2 is next.
-**P2 done (2026-10-28):** the orbital Hessian action is analytic (FD kept
-as the test oracle; RI still FD). Energies and every macro's winning
-candidate unchanged; cc-pVDZ 3.5 -> 2.7 s, C1 11.1 -> 10.0 s. Exact curvature
-did not make `sa-coupled` win, so its weakness is in the step model or the
-scoring. The remaining cost is `numeric-newton`'s 2·npairs full evaluations
-per macro; next is finding why the coupled step loses (P3/P4 merged).
-**P3/P3b done (2026-10-28):** the coupled solve never converged (0/56
-macros), because the orbital-CI coupling dropped two terms: the core-density
-response in the CI RHS, and the 1-RDM response in the back-coupling. Both are
-fixed and FD-gated (`69728821`); the coupled Hessian now equals the CI-relaxed
-one exactly.
-**P3c done (`7a5031a8`, re-pinned 2026-10-28):** the CI-relaxed Hessian is
-solved directly (`numeric-newton` no longer used; evaluate/macro 129 -> 22),
-plus an escape-return guard for the uphill pass. 6-31G 0.33 s (PySCF 0.34),
-cc-pVDZ 1.21 s (0.27), C1 2.70 s (0.43). The water SA-2 hcore/SAD references
-were re-pinned from -74.7751377977 to -74.7877864783. The old value is a
-measured saddle (one negative relaxed-Hessian eigenvalue, along a
-symmetry-breaking mode with zero gradient); the new one is the minimum and
-PySCF's SAD-start answer. 15/15 CASSCF regressions pass.
-**P4 done (2026-10-30):**
-- *Above 256 pairs:* the CI-relaxed operator is solved by Lanczos (dense
-  recipe on the tridiagonal projection), matching the dense solve to 3e-10
-  Eh.
-- *Step policy:* the 0.2 decaying level shift and fixed 0.2 cap are replaced
-  by a trust region driven by the exact model's actual/predicted ratio (rho
-  0.89-1.30 on every macro measured).
-- *Macro counts:* now at or below PySCF's. Water CAS(4,4) 6-31G 0.18 s (PySCF
-  0.34), cc-pVDZ 0.58 s (0.27), C1 2.35 s (0.43), cc-pVTZ 43.5 s (1.16),
-  cc-pVTZ C1 51.8 s (2.30). 15/15 CASSCF regressions pass; table energies
-  within 2e-9 Eh.
+The performance question is answered in `docs/CASSCF_PERFORMANCE.md` (see
+Completion). The user accepted 1.3x behind PySCF at water cc-pVTZ C2v and
+stopped the work. Not scheduled; take up only with a new target:
 
-**Remaining:**
-- P5 landed (2026-11-01): the CI-relaxed solve is matrix-free everywhere
-  (no dense build), with an inexact-Newton forcing term and a fixed seed
-  vector so it still sees zero-gradient negative modes. cc-pVDZ C1
-  2.35 -> 0.72 s, cc-pVTZ 43.5 -> 24.3 s, cc-pVTZ C1 51.8 -> 27.4 s (PySCF
-  0.43 / 1.16 / 2.30 s). `oh_casscf_rohf_sto3g` re-pinned from a saddle to
-  the minimum PySCF reaches (-74.3867176233). Diagnostic probes deleted;
-  `CallProbe` kept for N4.
-- N4 (2026-11-01, uncommitted when written): each Hessian product sweeps the
-  ERI tensor twice instead of four times (dD_c and dD_a in one multi-density
-  `_compute_fock_rhf`, G[dD_c] memoized for the CI right-hand side).
-  cc-pVTZ 24.3 -> 19.6 s, cc-pVTZ C1 27.4 -> 23.6 s, cc-pVDZ 0.59 -> 0.45 s.
-  Still 10-17x PySCF at cc-pVTZ; next is a re-profile;
-- C1 CASSCF run-to-run nondeterminism (~1e-9 Eh) FIXED (N5, 2026-11-01):
-  the 1-/2-RDM builds (`src/post_hf/ci/rdm.cpp`) merged per-thread partials
-  under `omp critical`. Now fixed-bin partials summed in bin order, like the
-  FCI sigma build; gated by `water_casscf44_c1_ccpvdz_threads1/4` (atol 0);
-- N5 (2026-11-01): `transform_eri` quarters 1-3 had the contracted index
-  innermost (first quarter read the AO tensor at stride nb^3, 37 % of a
-  cc-pVTZ CASSCF run); interchanged, bit-identical. cc-pVTZ 19.6 -> 13.3 s,
-  cc-pVTZ C1 23.6 -> 15.0 s (PySCF 1.16 / 2.30 s). Shared with MP2/CC;
-- N6 (2026-11-01): the step selector takes the full Newton step when it
-  improves instead of scoring 3 candidates x 7 scales: 22 -> 2 evaluations
-  per macro. cc-pVDZ now beats PySCF (0.245 vs 0.27 s; C1 0.367 vs 0.43 s);
-  cc-pVTZ 7.3 s, C1 8.5 s;
-- N7 (2026-11-01): Hessian products build G[D] from half-transformed
-  (mu nu|lam i) integrals (i over core + active, built once per macro):
-  O(nb^3 n_occ) per density instead of an nb^4 pass. cc-pVTZ 7.3 -> 3.0 s,
-  C1 8.5 -> 3.7 s (PySCF 1.16 / 2.30 s). N4's batching and memo deleted.
-  Next: the relaxed solve's preconditioner (28-64 vectors per macro);
-- N8 (2026-11-01): one pass over H for J and K; (pa|vw) and (pu|aw) for the
-  analytic Hessian derived from H instead of two tensor transforms.
-  cc-pVTZ 1.85 s (PySCF 1.16), cc-pVTZ C1 2.33 s (PySCF 2.30, parity),
-  cc-pVDZ 0.18 s (0.27);
-- N9 (2026-11-01): `evaluate` builds the half transform at the trial C and
-  derives F_I, F_A, (tu|vw) and (pu|vw) from it; the next macro's analytic
-  Hessian reuses it. One tensor pass per evaluation. cc-pVTZ 1.49 s (PySCF
-  1.16), cc-pVTZ C1 1.86 s (PySCF 2.30). RI path unchanged. Next:
-  re-profile, then the relaxed solve's preconditioner;
-- the RI path is still FD-Hessian with a full-leg-first transform.
+- re-profile cc-pVTZ C2v (where the last 1.3x goes is unmeasured);
+- a better preconditioner for the relaxed solve (28-64 vectors per macro at
+  cc-pVTZ; the diagonal is F_I + F_A differences only);
+- the RI path has none of the speed-ups (FD orbital Hessian, full-leg-first
+  transform, dense-density Fock builds; `water_casscf_ri_ccpvdz` 4.1 s);
+- delete the temporary `CallProbe` (`PLANCK_CASSCF_CALL_PROBE`).
 
 #### Unreproduced OpenMP hang in CASSCF (seen once, 2026-10-28)
 

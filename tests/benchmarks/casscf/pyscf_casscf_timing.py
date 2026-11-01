@@ -1,4 +1,4 @@
-"""PySCF side of the CASSCF timing table in docs/CASSCF_PERFORMANCE_SCOPE.md.
+"""PySCF side of the CASSCF timing table in docs/CASSCF_PERFORMANCE.md.
 
 Water CAS(4,4), the geometry of the water_cas44_* PySCF gates, Cartesian basis.
 Run with the repo's venv:

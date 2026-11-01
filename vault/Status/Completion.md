@@ -254,6 +254,19 @@ historical design context, but they are no longer the source of truth for
 
 ### CASSCF / SA-CASSCF status
 
+- **Performance (2026-10-28..11-01, P1-N9, through `a224881a`):** water
+  CAS(4,4) is faster than PySCF at 6-31G (0.069 vs 0.34 s), cc-pVDZ (0.177 vs
+  0.27 s; C1 0.266 vs 0.43 s) and cc-pVTZ C1 (1.86 vs 2.30 s), and 1.3x
+  behind at cc-pVTZ C2v (1.49 vs 1.16 s); it started at 13.4 s for cc-pVDZ and
+  ~176 s per macro at cc-pVTZ. Exact CI-relaxed orbital Hessian (two missing
+  coupling terms restored), solved matrix-free with a seed vector so it still
+  leaves zero-gradient saddles; trust region from the exact model; the Newton
+  step taken as soon as it improves (22 -> 2 evaluations per macro); and one
+  half transform (mu nu|lam i) per evaluation from which every Fock build and
+  mixed integral block is an O(nb^3) contraction. RDM reductions made
+  thread-count invariant. Two saddle pins re-pinned to minima (water SA-2,
+  `oh_casscf_rohf_sto3g`). Answer: `docs/CASSCF_PERFORMANCE.md`.
+
 - Shared-kappa state-averaged coupled orbital/CI solve is the primary production path
 - Exact CI-response RHS is the default
 - FD-based SA orbital Hessian action (`delta_g_sa_action`) is implemented and wired

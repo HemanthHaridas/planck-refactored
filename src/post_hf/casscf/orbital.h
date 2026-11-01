@@ -13,8 +13,8 @@
 namespace HartreeFock::Correlation::CASSCF
 {
 
-    // ponytail: temporary P0 probe for docs/CASSCF_PERFORMANCE_SCOPE.md; printed
-    // per macro under PLANCK_CASSCF_CALL_PROBE. Delete once the scope is answered.
+    // ponytail: temporary P0 probe for docs/CASSCF_PERFORMANCE.md; printed per
+    // macro under PLANCK_CASSCF_CALL_PROBE. Safe to delete.
     struct CallProbe
     {
         std::atomic<long> evaluate{0};
