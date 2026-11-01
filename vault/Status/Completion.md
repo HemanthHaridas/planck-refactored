@@ -416,6 +416,19 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Checkpoint and FCIDUMP with ECPs (2026-11-01, branch `feat/def2-ecp`,
+  `docs/DEF2_ECP_SCOPE.md` step 4b).** Checkpoint version 8 stores each
+  atom's ECP core count; a load or cross-basis projection between different
+  cores is refused (v7 files read as all-electron, which is exact). FCIDUMP
+  needed no change: PySCF reproduces its ECP RHF energy from the file to
+  2e-12. Found on the way: (1) a failed cross-basis projection in any
+  spherical run kept the Cartesian S/H_core and diverged; the fallback now
+  rebuilds them; (2) six Σ Z electron counts the step-2 audit missed (HF MO
+  printout, four in the DFT driver) now use `total_nuclear_charge()`;
+  (3) `chkdump` reports valence electrons and fchk Nuclear charges
+  Z − n_core. Gates: `hi_rhf_def2svp_ecp_{fcidump,projection_refused,
+  restart_full}`.
+
 - **ECP integrals in H_core (2026-11-01, branch `feat/def2-ecp`,
   `docs/DEF2_ECP_SCOPE.md` step 4).** def2 bases from Rb onward run
   single points through libecpint (MIT, `ExternalProject`).

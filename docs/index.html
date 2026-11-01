@@ -359,6 +359,7 @@
 <li class="toc-level-2"><a href="#26-checkpoint-and-restart">26. Checkpoint and Restart</a></li>
 <li class="toc-level-3"><a href="#binary-checkpoint-format">Binary Checkpoint Format</a></li>
 <li class="toc-level-3"><a href="#cross-basis-density-projection">Cross-Basis Density Projection</a></li>
+<li class="toc-level-3"><a href="#restart-and-effective-core-potentials">Restart and Effective Core Potentials</a></li>
 <li class="toc-level-2"><a href="#27-execution-flow-of-a-typical-run">27. Execution Flow of a Typical Run</a></li>
 <li class="toc-level-2"><a href="#28-theory-to-code-map">28. Theory-to-Code Map</a></li>
 <li class="toc-level-2"><a href="#29-current-implementation-status">29. Current Implementation Status</a></li>
@@ -537,6 +538,7 @@ CMake configure
 </ol>
 <p>When symmetry is available, Planck also fills the <code>ORBSYM</code> field using the standard MOLPRO/PySCF integer numbering for supported Abelian point groups. When the point group is unsupported or non-Abelian, it safely falls back to all ones, which means &quot;treat every orbital as totally symmetric.&quot;</p>
 <p>To request a dump in an input file, set the <code>fcidump</code> keyword to an output path. The driver performs the export immediately after SCF convergence, even if no in-house post-HF method is requested. Conceptually, that makes FCIDUMP a bridge from Planck&#x27;s SCF/integral machinery to the broader ecosystem of external correlated solvers.</p>
+<p><strong>With an ECP, an FCIDUMP describes the valence-only problem.</strong> h<span class="math-inline">\(_{pq}\)</span> is built from <span class="math-inline">\(\mathbf H_\text{core}\)</span>, which already contains the ECP operator; NELEC counts valence electrons (<span class="math-inline">\(Z - n_\text{core}\)</span> per atom) and ECORE is the nuclear repulsion between those reduced charges. Nothing in the format says a core was removed, and nothing a reader computes needs to know: the file is a complete Hamiltonian for 26 electrons in HI/def2-SVP, and PySCF solving it reproduces the ECP RHF energy to 2e-12.</p>
 <hr>
 <h2 id="4-gaussian-basis-functions">4. Gaussian Basis Functions</h2>
 <h3 id="primitive-gaussians">Primitive Gaussians</h3>
@@ -4858,8 +4860,8 @@ T^+ \in \mathbb{R}^{N_{sph} \times N_{cart}}, \qquad N_{sph} = \sum_s (2L_s+1), 
 <h3 id="binary-checkpoint-format">Binary Checkpoint Format</h3>
 <p>The checkpoint file (<code>*.hfchk</code>) stores:</p>
 <ul>
-<li>A 4-byte magic number and format version (v2)</li>
-<li>Molecular geometry (standard-orientation, Bohr)</li>
+<li>An 8-byte magic string and a format version (currently 8; versions 2–8 load)</li>
+<li>Molecular geometry (standard-orientation, Bohr), atomic numbers, and from version 8 each atom&#x27;s ECP core-electron count</li>
 <li>Basis set name</li>
 <li>Density matrices (alpha and optionally beta)</li>
 <li>Total SCF energy</li>
@@ -4878,6 +4880,9 @@ P^{small}_{\lambda'\sigma'}\, (S^{cross})^T_{\sigma'\mu}\,
 (S^{LL})^{-1}_{\mu\nu}
 \]</span></p>
 <p>This is a Löwdin-style cross-basis projection. In Planck, the required cross-overlap matrix is computed by <code>_compute_cross_overlap</code> in <code>os.cpp</code>, and the projection itself is implemented in <code>src/io/checkpoint.cpp</code> via an SVD of the cross-overlap. This provides a physically motivated initial density for the new basis, significantly reducing the number of SCF iterations required.</p>
+<h3 id="restart-and-effective-core-potentials">Restart and Effective Core Potentials</h3>
+<p>A density is only meaningful for the electron count it was converged with. An ECP removes core electrons, so the same molecule holds 54 electrons in an all-electron iodine basis (3-21G) and 26 in def2-SVP. The projection above cannot see this: it maps orbitals between bases, and both bases happily represent the stored occupied orbitals. Planck therefore stores each atom&#x27;s ECP core count in the checkpoint (version 8) and compares it with the current basis. A same-basis load with different counts is refused, and a cross-basis restart between different cores falls back to the core-Hamiltonian guess. Files older than version 8 read as &quot;no ECPs&quot;, which is exact rather than a guess: ECP calculations were refused before version 8 existed.</p>
+<p><strong>A fallback has to restore the state the normal path would have built.</strong> Gating this exposed an older bug. The projection branch computes Cartesian <span class="math-inline">\(\mathbf S\)</span> and <span class="math-inline">\(\mathbf H_\text{core}\)</span> and lifts them to the spherical working basis only when the projection succeeds. When it failed, for any reason, the driver switched to the core guess but kept the Cartesian matrices, so a spherical SCF ran on matrices of the wrong basis and diverged. Any failed spherical projection would have hit it; no test had ever made one fail. The fallback now discards them and lets the ordinary one-electron block run.</p>
 <hr>
 <h2 id="27-execution-flow-of-a-typical-run">27. Execution Flow of a Typical Run</h2>
 <pre><code>
@@ -5171,7 +5176,7 @@ driver.cpp
 <tr><td>PCM gradients / geometry optimization / frequencies</td><td>Not implemented</td></tr>
 <tr><td>PCM coupling to post-HF (MP2, CC, CASSCF)</td><td>Not implemented</td></tr>
 <tr><td>Ghost atoms (basis-only centers; <code>Gh()</code>/<code>@</code>/<code>:</code> syntax)</td><td>Complete</td></tr>
-<tr><td>Effective core potentials (def2, Rb onward)</td><td>Single points in <code>hartree-fock</code> via libecpint. RHF is PySCF-gated (HI, AgCl, PdCO, AuH·H2O, to 1.1e-9 Eh); UHF/ROHF and post-HF energies take the same H_core but are not gated yet. ECP gradients, geometry optimization and frequencies are rejected; <code>planck-dft</code> rejects ECP bases</td></tr>
+<tr><td>Effective core potentials (def2, Rb onward)</td><td>Single points in <code>hartree-fock</code> via libecpint. RHF is PySCF-gated (HI, AgCl, PdCO, AuH·H2O, to 1.1e-9 Eh); UHF/ROHF and post-HF energies take the same H_core but are not gated yet. Checkpoints (version 8) store ECP core counts and refuse to mix cores; FCIDUMP writes the valence-only Hamiltonian (PySCF-checked). ECP gradients, geometry optimization and frequencies are rejected; <code>planck-dft</code> rejects ECP bases</td></tr>
 <tr><td>Counterpoise / BSSE correction (two-fragment dimer, RHF/UHF/ROHF energy)</td><td>Complete (PySCF-validated to <span class="math-inline">\(4\times10^{-11}\)</span> Eh)</td></tr>
 <tr><td>BSSE for DFT / N-body / gradients / post-HF references</td><td>Not implemented</td></tr>
 </tbody></table></div>

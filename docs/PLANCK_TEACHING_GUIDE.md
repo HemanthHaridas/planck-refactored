@@ -253,6 +253,14 @@ in-house post-HF method is requested. Conceptually, that makes FCIDUMP a bridge
 from Planck's SCF/integral machinery to the broader ecosystem of external
 correlated solvers.
 
+**With an ECP, an FCIDUMP describes the valence-only problem.** h\(_{pq}\) is
+built from \(\mathbf H_\text{core}\), which already contains the ECP operator;
+NELEC counts valence electrons (\(Z - n_\text{core}\) per atom) and ECORE is
+the nuclear repulsion between those reduced charges. Nothing in the format
+says a core was removed, and nothing a reader computes needs to know: the file
+is a complete Hamiltonian for 26 electrons in HI/def2-SVP, and PySCF solving
+it reproduces the ECP RHF energy to 2e-12.
+
 ---
 
 ## 4. Gaussian Basis Functions
@@ -9737,8 +9745,9 @@ Planck-specific.
 
 The checkpoint file (`*.hfchk`) stores:
 
-- A 4-byte magic number and format version (v2)
-- Molecular geometry (standard-orientation, Bohr)
+- An 8-byte magic string and a format version (currently 8; versions 2–8 load)
+- Molecular geometry (standard-orientation, Bohr), atomic numbers, and from
+  version 8 each atom's ECP core-electron count
 - Basis set name
 - Density matrices (alpha and optionally beta)
 - Total SCF energy
@@ -9769,6 +9778,29 @@ cross-overlap matrix is computed by `_compute_cross_overlap` in `os.cpp`, and
 the projection itself is implemented in `src/io/checkpoint.cpp` via an SVD of
 the cross-overlap. This provides a physically motivated initial density for the
 new basis, significantly reducing the number of SCF iterations required.
+
+### Restart and Effective Core Potentials
+
+A density is only meaningful for the electron count it was converged with. An
+ECP removes core electrons, so the same molecule holds 54 electrons in an
+all-electron iodine basis (3-21G) and 26 in def2-SVP. The projection above
+cannot see this: it maps orbitals between bases, and both bases happily
+represent the stored occupied orbitals. Planck therefore stores each atom's
+ECP core count in the checkpoint (version 8) and compares it with the current
+basis. A same-basis load with different counts is refused, and a cross-basis
+restart between different cores falls back to the core-Hamiltonian guess.
+Files older than version 8 read as "no ECPs", which is exact rather than a
+guess: ECP calculations were refused before version 8 existed.
+
+**A fallback has to restore the state the normal path would have built.**
+Gating this exposed an older bug. The projection branch computes Cartesian
+\(\mathbf S\) and \(\mathbf H_\text{core}\) and lifts them to the spherical
+working basis only when the projection succeeds. When it failed, for any
+reason, the driver switched to the core guess but kept the Cartesian
+matrices, so a spherical SCF ran on matrices of the wrong basis and diverged.
+Any failed spherical projection would have hit it; no test had ever made one
+fail. The fallback now discards them and lets the ordinary one-electron block
+run.
 
 ---
 
@@ -10061,7 +10093,7 @@ driver.cpp
 | PCM gradients / geometry optimization / frequencies | Not implemented |
 | PCM coupling to post-HF (MP2, CC, CASSCF) | Not implemented |
 | Ghost atoms (basis-only centers; `Gh()`/`@`/`:` syntax) | Complete |
-| Effective core potentials (def2, Rb onward) | Single points in `hartree-fock` via libecpint. RHF is PySCF-gated (HI, AgCl, PdCO, AuH·H2O, to 1.1e-9 Eh); UHF/ROHF and post-HF energies take the same H_core but are not gated yet. ECP gradients, geometry optimization and frequencies are rejected; `planck-dft` rejects ECP bases |
+| Effective core potentials (def2, Rb onward) | Single points in `hartree-fock` via libecpint. RHF is PySCF-gated (HI, AgCl, PdCO, AuH·H2O, to 1.1e-9 Eh); UHF/ROHF and post-HF energies take the same H_core but are not gated yet. Checkpoints (version 8) store ECP core counts and refuse to mix cores; FCIDUMP writes the valence-only Hamiltonian (PySCF-checked). ECP gradients, geometry optimization and frequencies are rejected; `planck-dft` rejects ECP bases |
 | Counterpoise / BSSE correction (two-fragment dimer, RHF/UHF/ROHF energy) | Complete (PySCF-validated to \(4\times10^{-11}\) Eh) |
 | BSSE for DFT / N-body / gradients / post-HF references | Not implemented |
 

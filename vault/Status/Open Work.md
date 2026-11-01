@@ -61,16 +61,13 @@ is the recommended one; none blocks another except where noted.
   2 (nuclear-charge audit: 46 reads, 16 physical, switched) and 3 (ECP
   parsing and storage; Z − n_core reaches every electron count) and 4
   (ECP integrals in H_core via libecpint, single-point RHF/UHF/ROHF; see
-  Completion) landed. Next: step 5, ECP gradients (gradient workflows are
+  Completion) and 4b landed. Next: step 5, ECP gradients (gradient workflows are
   refused, `hi_rhf_def2svp_ecp_gradient_rejected`); step 6 DFT
   (`planck-dft` refuses ECP bases). Open, minor: the two Cl cases
   (ZnCl2, AgCl, def2-SVP) sit 1.1-1.2e-9 (~4e-13 relative) from PySCF,
   unexplained, pinned at 2e-9; report the libecpint generator precision
-  bug upstream. Step 4b (scoped): checkpoint and FCIDUMP with ECPs. The
-  checkpoint stores no core counts, so cross-basis projection between ECP
-  and all-electron bases goes unchecked; FCIDUMP looks right but is
-  ungated; and the MO printout in `hf_driver.cpp` counts electrons as
-  Σ Z, marking n_core too many orbitals occupied (and counting ghosts).
+  bug upstream. Step 4b (checkpoint v8 with ECP core counts, FCIDUMP
+  checked against PySCF) landed; see Completion.
 - **Gradient performance** (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`,
   gradients 20–120× the SCF). G3 rescoped 2026-10-26 onto the energy build's
   HGP/Rys2D split.

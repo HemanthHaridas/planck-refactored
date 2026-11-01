@@ -1,6 +1,6 @@
 # What does Planck need to run def2 basis sets, including the ECPs for heavy elements?
 
-Research scope, opened 2026-10-26. Steps 1–4 have landed: def2 runs for H–Rn
+Research scope, opened 2026-10-26. Steps 1–4b have landed: def2 runs for H–Rn
 in `hartree-fock` single points. Steps 5 (ECP gradients) and 6 (DFT with ECPs)
 are open, so this is still a scope. Rewrite it as the answer when they land.
 Status lives in `vault/Status/Open Work.md`.
@@ -38,9 +38,9 @@ were all-electron only, with no relativistic treatment.
    for gradients.
 4. **SAD guess — done (step 4).** The atomic UHF carries the element's ECP and
    runs with Z − n_core electrons.
-5. **Checkpoint restart and FCIDUMP — open (step 4b).** The checkpoint does
-   not store core counts, so cross-basis projection cannot tell an ECP basis
-   from an all-electron one. FCIDUMP looks right but is ungated.
+5. **Checkpoint restart and FCIDUMP — done (step 4b).** Checkpoint version 8
+   stores the core counts and refuses to mix cores; FCIDUMP writes the
+   valence-only Hamiltonian, checked against PySCF.
 
 Data model: an ECP channel carries a radial power that `Shell` does not, so
 ECPs are stored per atom beside the shells (`ECPPotential`, `src/base/types.h`)
@@ -216,46 +216,50 @@ patched at fetch time (step 4).
    restart does not check that both bases agree on each atom's core count
    (only a guess is affected, but an ECP/all-electron mismatch projects
    onto the wrong occupied count).
-4b. **Checkpointing and FCIDUMP with ECPs — OPEN.** Step 4 changed what
-   H_core and the electron count mean on ECP atoms. Neither the checkpoint
-   nor the FCIDUMP writer was checked against that. Read so far:
+4b. **Checkpointing and FCIDUMP with ECPs — LANDED.** Step 4 changed what
+   H_core and the electron count mean on ECP atoms; this step checked every
+   consumer of those that writes or reads them back.
 
-   - **FCIDUMP** (`src/io/fcidump.cpp`) builds h_pq from `calc._hcore`, so it
-     includes U_ECP. NELEC comes from `total_nuclear_charge()` (Z − n_core)
-     and ECORE from `_nuclear_repulsion` (also Z − n_core). It looks right by
-     construction, and nothing gates it. The open question is the
-     convention: the file describes the valence-only Hamiltonian, and a
-     reader has no way to tell that a core was removed. Decide whether to
-     say so in a header comment.
-   - **Checkpoint** (`src/io/checkpoint.cpp`) stores atomic numbers,
-     geometry, the basis name, density, MOs and `_hcore`. It does not store
-     the ECP core counts. That is harmless for same-basis restart, which
-     re-reads the basis and so gets the same ECPs. The two cases to settle:
-     - `guess full` restores geometry and charge from the file. Check that
-       the core counts are re-synced from the re-read basis before
-       `initialize()` and the electron count.
-     - Cross-basis projection between an ECP basis and an all-electron one
-       (or two ECPs with different core sizes) projects a density with the
-       wrong electron count. Store the per-atom core counts in the
-       checkpoint, and refuse (fall back to the core guess) when they differ.
-   - **A Σ Z bug the step-2 audit missed.** `hf_driver.cpp` counts electrons
-     as `Σ atomic_numbers − charge` for the MO-energy printout (two copies,
-     at the single-point and post-geomopt reports). With an ECP that marks
-     n_core too many orbitals as occupied, and it counts ghost atoms too.
-     Only the printout is affected, not the SCF. Use
-     `total_nuclear_charge()`; grep for any other Σ Z loops the audit
-     classified as printing.
+   - **FCIDUMP needed no change.** `src/io/fcidump.cpp` builds h_pq from
+     `calc._hcore` (so U_ECP is in it), NELEC from `total_nuclear_charge()`
+     and ECORE from `_nuclear_repulsion`, both Z − n_core. The file is a
+     consistent valence-only Hamiltonian. No note about the removed core is
+     written: the format has no standard field for it, and nothing a reader
+     computes from the file depends on it. PySCF reading the HI file
+     reproduces its own ECP RHF energy to 2e-12, both from the reference
+     determinant and from an RHF solved on the file
+     (`def2_ecp_references.py --fcidump`).
+   - **Checkpoint version 8 stores each atom's ECP core count**, right after
+     its atomic number (`src/io/checkpoint.cpp`, `tools/chkdump.cpp`).
+     Version 7 and older files read as all zero, which is exact: ECP runs
+     were refused before version 8 existed. A same-basis load whose core
+     counts differ from the current basis is refused, and cross-basis
+     projection between different cores (an ECP basis and an all-electron
+     one, or two core sizes) falls back to the core guess. `guess full`
+     needed nothing: the core counts are re-synced from the re-read basis
+     before any electron count is taken. `chkdump` now reports the valence
+     electron count and writes Z − n_core as the fchk "Nuclear charges"
+     (Gaussian's convention), keeping Z as "Atomic numbers".
+   - **The projection fallback was broken in every spherical run.** When
+     projection failed for any reason, the driver set the core guess but kept
+     the Cartesian S and H_core the projection branch had computed, while the
+     working basis was spherical. The SCF then ran on mismatched matrices and
+     diverged (HI: no convergence in 50 iterations). The fallback now lets the
+     normal one-electron block rebuild them.
+   - **Six Σ Z electron counts the step-2 audit missed**: two in the HF MO
+     printout (HI marked 27 orbitals occupied instead of 13), four in
+     `src/dft/driver.cpp` (KS electron counts and the grid-integration check,
+     which would have been wrong under ECP DFT at step 6). All now use
+     `total_nuclear_charge()`; no `Σ atomic_numbers` loop is left in `src/`.
 
    Gates:
-   - FCIDUMP for HI/def2-SVP, read back with PySCF's `fcidump.read`. An FCI
-     (or CASCI over all orbitals) on the file must reproduce Planck's RHF
-     energy as its reference determinant, and match a PySCF FCI built on the
-     same ECP Hamiltonian.
-   - Same-basis restart and `guess full` on an ECP case converge in one or
-     two iterations to the same energy.
-   - A cross-basis restart of HI from 3-21G (all-electron iodine) into
-     def2-SVP falls back with a message instead of projecting.
-   - The MO printout for HI marks 13 occupied orbitals, not 27.
+
+   | case | what it pins |
+   |---|---|
+   | `hi_rhf_def2svp_ecp_fcidump` (smoke) | NELEC 26; HOMO is orbital 13 at −0.384222 (PySCF's); RHF energy |
+   | `hi_rhf_def2svp_ecp_projection_refused` (smoke) | a 3-21G checkpoint is not projected into def2-SVP, and the fallback converges to PySCF's energy |
+   | `hi_rhf_def2svp_ecp_restart_full` | `guess full` from a v8 ECP checkpoint converges in 2 iterations to the same energy |
+
 5. **ECP gradients — OPEN.** libecpint has the derivative:
    `ECPIntegral::compute_shell_pair_derivative` returns nine blocks in the
    order Ax, Ay, Az, Bx, By, Bz, Cx, Cy, Cz (C the ECP centre). Each adds to
