@@ -93,7 +93,7 @@ int main()
     geomA << 0.0, 0.0, 0.117176,
         0.0, 0.757005, -0.468704,
         0.0, -0.757005, -0.468704;
-    geomA *= 1.8897259886; // Angstrom -> Bohr
+    geomA *= ANGSTROM_TO_BOHR;
 
     // Geometry B: same atoms/basis, O pushed along z — npair × naux unchanged,
     // so the dimension guard cannot tell A from B.

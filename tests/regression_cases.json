@@ -821,7 +821,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -78.040190575,
+     "expected": -78.0401905726,
      "atol": 1e-09
     },
     {
@@ -847,7 +847,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -78.040190575,
+     "expected": -78.0401905726,
      "atol": 1e-09
     },
     {
@@ -905,7 +905,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -77.4195705536,
+     "expected": -77.4195705637,
      "atol": 1e-09
     }
    ]
@@ -927,7 +927,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9458807581,
+     "expected": -74.9458807841,
      "atol": 1e-09
     },
     {
@@ -965,7 +965,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -77.3837525262,
+     "expected": -77.3837525369,
      "atol": 1e-09
     },
     {
@@ -1008,7 +1008,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9458807581,
+     "expected": -74.9458807841,
      "atol": 1e-09
     }
    ]
@@ -1037,7 +1037,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9516348849,
+     "expected": -74.9516349092,
      "atol": 1e-09
     }
    ]
@@ -2224,7 +2224,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -148.4133957644,
+     "expected": -148.4133957907,
      "atol": 1e-08
     }
    ]
@@ -2250,7 +2250,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.5911327976,
+     "expected": -74.5911328753,
      "atol": 1e-08
     }
    ]
@@ -2275,7 +2275,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.4880704826,
+     "expected": -74.4880706089,
      "atol": 1e-07
     }
    ]
@@ -2349,7 +2349,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.6536945264,
+     "expected": -74.6536945515,
      "atol": 1e-09
     },
     {
@@ -2387,7 +2387,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.6536945264,
+     "expected": -74.6536945515,
      "atol": 1e-09
     }
    ]
@@ -2609,7 +2609,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -75.8097355638,
+     "expected": -75.80973558374832,
      "atol": 1e-09
     },
     {
@@ -2638,7 +2638,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -76.289436536,
+     "expected": -76.2894365556365,
      "atol": 1e-09
     }
    ],
@@ -2665,7 +2665,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -76.3779007886,
+     "expected": -76.37790080626966,
      "atol": 1e-09
     },
     {
@@ -2697,7 +2697,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -76.3015412696,
+     "expected": -76.30154128641203,
      "atol": 1e-09
     },
     {
@@ -2729,7 +2729,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -75.8372242895,
+     "expected": -75.83722431703502,
      "atol": 1e-09
     },
     {
@@ -3435,7 +3435,7 @@
     {
      "type": "metric_close",
      "metric": "casscf_total_energy",
-     "expected": -74.9641867771,
+     "expected": -74.9641867871,
      "atol": 1e-09
     }
    ]
@@ -3463,7 +3463,7 @@
     {
      "type": "metric_close",
      "metric": "casscf_total_energy",
-     "expected": -77.5145223873,
+     "expected": -77.5145224053,
      "atol": 1e-09
     }
    ]
@@ -3483,7 +3483,7 @@
     {
      "type": "metric_close",
      "metric": "casscf_total_energy",
-     "expected": -74.7877864783,
+     "expected": -74.7877865251,
      "atol": 1e-09
     },
     {
@@ -3513,7 +3513,7 @@
     {
      "type": "metric_close",
      "metric": "casscf_total_energy",
-     "expected": -74.7877864783,
+     "expected": -74.7877865269,
      "atol": 1e-09
     },
     {
@@ -3543,7 +3543,7 @@
     {
      "type": "metric_close",
      "metric": "casscf_total_energy",
-     "expected": -74.7877864784,
+     "expected": -74.787786527,
      "atol": 1e-09
     },
     {
@@ -3580,7 +3580,7 @@
     {
      "type": "metric_close",
      "metric": "casscf_total_energy",
-     "expected": -77.0034974301,
+     "expected": -77.0034974724,
      "atol": 1e-09
     },
     {
@@ -3768,13 +3768,13 @@
     {
      "type": "metric_close",
      "metric": "fciqmc_shift_energy",
-     "expected": -109.3621937007,
+     "expected": -109.3621938886,
      "atol": 0.0
     },
     {
      "type": "metric_close",
      "metric": "fciqmc_projected_energy",
-     "expected": -107.6491159983,
+     "expected": -107.6491160356,
      "atol": 0.0
     }
    ]
@@ -3824,7 +3824,7 @@
     {
      "type": "metric_close",
      "metric": "fci_total_energy",
-     "expected": -75.0124130264,
+     "expected": -75.0124130517,
      "atol": 1e-08
     },
     {
@@ -3851,7 +3851,7 @@
     {
      "type": "metric_close",
      "metric": "fci_total_energy",
-     "expected": -147.7441885427,
+     "expected": -147.7441885782,
      "atol": 1e-08
     },
     {
@@ -5130,10 +5130,10 @@
      "type": "metric_close",
      "metric": "rhf_total_energy",
      "expected": -75.9609839871,
-     "atol": 5e-08
+     "atol": 1e-09
     }
    ],
-   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's."
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903)."
   },
   {
    "id": "water_rhf_spherical_def2qzvp",
@@ -5153,10 +5153,10 @@
      "type": "metric_close",
      "metric": "rhf_total_energy",
      "expected": -76.0667381021,
-     "atol": 5e-08
+     "atol": 1e-09
     }
    ],
-   "_pyscf_reference": "def2 all-electron cross-code gate (def2-QZVP (g shells)), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's."
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-QZVP (g shells)), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903)."
   },
   {
    "id": "h2s_rhf_spherical_def2tzvp",
@@ -5176,10 +5176,10 @@
      "type": "metric_close",
      "metric": "rhf_total_energy",
      "expected": -398.7065995926,
-     "atol": 5e-08
+     "atol": 1e-09
     }
    ],
-   "_pyscf_reference": "def2 all-electron cross-code gate (def2-TZVP, third row), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's."
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-TZVP, third row), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903)."
   },
   {
    "id": "sih4_rhf_spherical_def2svp",
@@ -5199,10 +5199,10 @@
      "type": "metric_close",
      "metric": "rhf_total_energy",
      "expected": -291.1539248719,
-     "atol": 5e-08
+     "atol": 1e-09
     }
    ],
-   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP, third row), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's."
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP, third row), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903)."
   },
   {
    "id": "zncl2_rhf_spherical_def2svp",
@@ -5222,10 +5222,10 @@
      "type": "metric_close",
      "metric": "rhf_total_energy",
      "expected": -2696.3869858561,
-     "atol": 5e-08
+     "atol": 2e-09
     }
    ],
-   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP, first-row transition metal), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's."
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP, first-row transition metal), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903). Residual 1.2e-9 (4.5e-13 relative) survives tight convergence in both codes; not the Bohr constant."
   }
  ]
 }

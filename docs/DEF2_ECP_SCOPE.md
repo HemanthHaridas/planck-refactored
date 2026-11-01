@@ -31,11 +31,9 @@ are all-electron only, with no scalar-relativistic treatment.
    the atom's charge, as seen by every physical term, is $Z - n_\text{core}$.
    `Molecule::nuclear_charge(a)` is already the single source for that (it
    zeroes ghost atoms), and the comment above it forbids reading
-   `atomic_numbers[a]` for physical quantities. There are still **51 direct
-   `atomic_numbers[...]` reads** in `src/`; each must be classified as
-   physical (switch to `nuclear_charge`) or an element lookup such as basis
-   files, Bragg radii, SAD densities or masses (keeps Z). This audit is the
-   part most likely to hide a silent wrong answer.
+   `atomic_numbers[a]` for physical quantities. The audit of the direct
+   `atomic_numbers[...]` reads is done (step 2): 46 reads, 16 physical
+   ones switched to `nuclear_charge`, the rest element lookups that keep Z.
 3. **ECP integrals.** A semilocal ECP is a local part plus angular-momentum
    projectors. The one-electron matrix $U_{\mu\nu}$ has type-1 (local) and
    type-2 (projector) parts, both needing radial quadrature or recurrence
@@ -100,32 +98,59 @@ deleted.
 
 ## Steps
 
-1. **def2 basis files for H–Kr** from BSE (def2-SVP, def2-SVPD, def2-TZVP,
-   def2-TZVPP, def2-QZVP and the matching def2 RI-J/JK fitting sets if
-   density fitting is wanted). Gate: HF spherical energies against PySCF
-   `cart=False` with the same files on water, third-row molecules (H2S,
-   SiH4) and a first-row transition-metal complex, to
-   1e-9 Eh.
-   **Landed at 5e-8, not 1e-9** (`6e5f191a`). Deltas vs PySCF:
-   SiH4/SVP 4e-10, H2S/TZVP 1.5e-9, water/SVP 3.7e-9, water/QZVP 5.0e-9,
-   ZnCl2/SVP 1.3e-8.
-1b. **Find where the missing digits go.** The first guess was f shells, but
-   it does not fit: water/def2-SVP has no f functions (O s,p,d; H s,p) and
-   misses at 3.7e-9, while H2S/def2-TZVP has an f shell on S and is at
-   1.5e-9. Separate the candidates before fixing anything:
-   - SCF convergence: rerun both codes tighter (Planck `tol_density`
-     1e-12, PySCF `conv_tol_grad` 1e-8) and see if the gap moves.
-   - Basis handling: Planck drops redundant primitives at read time
-     (`drop_redundant_primitives`); PySCF does not. Same span, but check
-     the energy with the drop disabled.
-   - One-electron vs two-electron: compare S, T, V and the ERI tensor
-     element by element against `mol.intor` on water/def2-SVP, in the
-     spherical basis, normalized by the matrix max (not per block).
-   - Nuclear repulsion and geometry: compare E_nn to 1e-12 first.
-   Gate: whichever term carries the gap is named; tighten the five cases
-   to 1e-9 if it is fixed, or record why 5e-8 is the floor.
-2. **Nuclear-charge audit** of the 51 direct reads, with no behaviour change
-   (every regression bitwise).
+1. **def2 basis files for H–Kr — LANDED** (`6e5f191a`). def2-SVP, -SVPD,
+   -TZVP, -TZVPP and -QZVP from BSE, elements 1–36 (no ECP blocks there).
+   RI fitting sets not added; add them when density fitting needs them.
+   Five spherical RHF gates against PySCF 2.13.0, basis parsed from the same
+   GBS files (`tests/pyscf/def2_rhf_references.py`):
+
+   | case | Planck − PySCF |
+   |---|---|
+   | water/def2-SVP | 0 |
+   | water/def2-QZVP (g shells) | 0 |
+   | H2S/def2-TZVP | 0 |
+   | SiH4/def2-SVP | 0 |
+   | ZnCl2/def2-SVP | 1.2e-9 |
+
+   Pinned at 1e-9 (ZnCl2 2e-9). They first landed at 4e-10..1.3e-8 and
+   5e-8 tolerances; step 1b found why.
+1b. **Where the missing digits went — ANSWERED: the Å→Bohr constant, not
+   the integrals.** The first guess, f shells, did not fit: water/def2-SVP
+   has no f functions and missed at 3.7e-9 while H2S/def2-TZVP, which has
+   one, was at 1.5e-9. Nuclear repulsion settled it: water E_nn differed by
+   6.6e-7 Eh (Planck 9.1895344241, PySCF 9.1895337629). `src/base/tables.h`
+   paired `BOHR_TO_ANGSTROM = 0.529177210903` (CODATA 2018) with
+   `ANGSTROM_TO_BOHR = 1.8897259886`, an older literal 7.2e-8 smaller than
+   the reciprocal — exactly the relative E_nn gap — so every Ångström input
+   ran at a geometry 7.2e-8 too small, and Å → Bohr → Å round trips drifted
+   by the same amount. Confirmed before fixing: PySCF at Planck's Bohr
+   coordinates reproduced four cases to every printed digit.
+   **Fix:** `ANGSTROM_TO_BOHR = 1.0 / BOHR_TO_ANGSTROM`, and three copies
+   of either literal (`types.h`, two RI tests) now use the constants.
+   PySCF defaults to the CODATA 2010 Bohr (0.52917721092, 3e-11 away), so
+   the reference script passes `unit=0.529177210903`.
+   Ruled out on the way: SCF convergence (both codes unchanged at tighter
+   tolerances; PySCF also at `direct_scf_tol` 1e-16). Primitive dropping
+   and the integrals needed no check once the geometry closed the gap.
+   **ZnCl2's 1.2e-9 is not the constant** — it was 1.2e-9 before the fix
+   too, survives tight convergence in both codes, and is 4.5e-13 relative
+   to a 2696 Eh energy. Unexplained, left at a 2e-9 pin.
+   **Suite impact:** 26 extended cases pinned to Planck's own past output
+   moved 2e-9..1.9e-7 Eh and were re-pinned. The one with a PySCF anchor in
+   reach moved toward it: water SA-2 CASSCF went from 3.6e-8 to 1.1e-8 off
+   PySCF's SAD-start minimum (-74.7877865139). Five MPI smoke failures
+   were a stale `planck-mpi` binary, not a regression.
+2. **Nuclear-charge audit — LANDED** (`2d3956e5`). 46 direct
+   `atomic_numbers[...]` reads in `src/` (not 51). 16 physical — nuclear
+   repulsion and its gradient (`gradient.cpp`, `mp2_gradient.cpp`), the
+   nuclear-attraction derivative (`gradient.cpp`, `os.cpp`), gradient
+   electron counts, multipole nuclear charges — now read `nuclear_charge()`
+   / `total_nuclear_charge()`. 30 are element lookups (basis, RI basis,
+   SAD), printing, IO/checkpoint, symmetry atom matching or counterpoise
+   copying, and keep Z. No change without ghost atoms (core suite 85/85);
+   with ghosts the gradient and multipole code had been counting the
+   ghost's charge. SAD, PCM and counterpoise still read Z and are revisited
+   with step 3's core count.
 3. **ECP parsing and storage** on the basis object; `nuclear_charge` returns
    $Z - n_\text{core}$; electron count follows.
 4. **ECP integrals in H_core** via libecpint. Gate: the ECP matrix

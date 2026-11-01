@@ -12,6 +12,8 @@ from pyscf.gto.basis import parse_gaussian
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 CASES = ROOT / "tests/inputs/regression/spherical"
+# Planck uses CODATA 2018 (src/base/tables.h); PySCF defaults to 2010.
+BOHR_ANGSTROM = 0.529177210903
 
 
 def read_case(path):
@@ -26,7 +28,7 @@ for case in sorted(CASES.glob("*def2*.hfinp")):
     basis, atoms = read_case(case)
     gbs = str(ROOT / "basis-sets" / basis)
     elements = {line.split()[0] for line in atoms.splitlines()}
-    mol = gto.M(atom=atoms, unit="angstrom", cart=False, verbose=0,
+    mol = gto.M(atom=atoms, unit=BOHR_ANGSTROM, cart=False, verbose=0,
                 basis={e: parse_gaussian.load(gbs, e) for e in elements})
     mf = scf.RHF(mol)
     mf.conv_tol = 1e-12

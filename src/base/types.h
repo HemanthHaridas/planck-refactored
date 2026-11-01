@@ -1690,7 +1690,7 @@ namespace HartreeFock
         // Getter
         Eigen::MatrixXd _bohr_to_angstrom() const noexcept
         {
-            return _molecule._standard * 0.529177210903;
+            return _molecule._standard * BOHR_TO_ANGSTROM;
         }
 
         // Run Calculation

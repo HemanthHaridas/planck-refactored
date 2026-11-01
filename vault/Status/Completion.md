@@ -280,6 +280,7 @@ historical design context, but they are no longer the source of truth for
   `tol_mcscf_grad`) and a plateau exit that counts "no step" as flat and, under
   `mcscf_accept_uphill`, needs the escape probes offered first. All seven
   variations now land at -74.7877864784
+  (-74.787786527 since the 2026-11-01 Bohr-constant fix)
 - Plateau-escape convergence branch is hardened: the old rounding-sensitive
   `100·tol_mcscf_grad` screen is replaced by an explicit `sa_g`-stationarity
   bound `plateau_sa_g_bound = max(1e-6, tol_mcscf_grad)`, and a
@@ -414,6 +415,21 @@ historical design context, but they are no longer the source of truth for
 - PySCF-validated He2/cc-pVDZ counterpoise decomposition
 
 ### Recent fixes now considered landed
+
+- **Å→Bohr conversion constant fixed (2026-11-01, branch `feat/def2-ecp`).**
+  `src/base/tables.h` paired `BOHR_TO_ANGSTROM = 0.529177210903` (CODATA
+  2018) with `ANGSTROM_TO_BOHR = 1.8897259886`, an older literal 7.2e-8
+  smaller than its reciprocal, so every Ångström input ran at a geometry
+  7.2e-8 too small and Å → Bohr → Å round trips drifted. Now
+  `ANGSTROM_TO_BOHR = 1.0 / BOHR_TO_ANGSTROM`; two other literal copies
+  (`types.h`, two RI tests) use the constants. Found because the new def2
+  gates missed PySCF by up to 1.3e-8 while E_nn on water was 6.6e-7 off;
+  after the fix four of the five match PySCF to every printed digit
+  (`docs/DEF2_ECP_SCOPE.md` step 1b). 26 extended cases pinned to Planck's
+  own output moved 2e-9..1.9e-7 Eh and were re-pinned; water SA-2 CASSCF
+  moved from 3.6e-8 to 1.1e-8 off PySCF's SAD-start minimum. Extended
+  suite 150/154 (the known rccsdt cases). Rebuild `planck-mpi` with the
+  other binaries, or the MPI smoke cases compare old against new.
 
 - **Converged SCF orbitals come from the true Fock, not the DIIS
   extrapolation (2026-10-27).** RHF, UHF, RKS and UKS stored the eigenpairs of
@@ -1322,7 +1338,8 @@ historical design context, but they are no longer the source of truth for
 Suite status: **10/10 passing, 1 re-pinned** (2026-10-28). The water SA-2
 hcore reference, -74.7751378, is a measured saddle of the SA-2 energy (one
 negative CI-relaxed Hessian eigenvalue). With the exact Hessian (CASSCF
-performance scope, P3c) Planck descends to the minimum, -74.7877864783, which
+performance scope, P3c) Planck descends to the minimum, -74.7877864783 (-74.7877865251 since the
+2026-11-01 Bohr-constant fix), which
 is also PySCF's own SAD-start answer. See
 `tests/benchmarks/casscf/pyscf_reference/pyscf_reference_energies.md`.
 
