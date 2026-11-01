@@ -67,6 +67,29 @@ def read_dump(path):
     return np.array(vals, float).reshape(int(rows), int(cols))
 
 
+if len(sys.argv) == 3 and sys.argv[1] == "--fcidump":
+    # The FCIDUMP describes the valence-only Hamiltonian: its reference
+    # determinant, and an RHF solved on it, must both give PySCF's ECP energy.
+    from pyscf.tools import fcidump
+    path = pathlib.Path(sys.argv[2])
+    case = CASES / f"{path.stem}.hfinp"
+    mf_ref = scf.RHF(build(case, cart=False))
+    mf_ref.conv_tol = 1e-12
+    e_ref = mf_ref.kernel()
+    d = fcidump.read(str(path))
+    h, g, n = d["H1"], d["H2"], d["NELEC"] // 2
+    from pyscf import ao2mo
+    g = ao2mo.restore(1, g, d["NORB"])
+    e_det = (d["ECORE"] + 2 * np.trace(h[:n, :n])
+             + 2 * np.einsum("iijj", g[:n, :n, :n, :n]) - np.einsum("ijji", g[:n, :n, :n, :n]))
+    mf = fcidump.to_scf(str(path))
+    mf.conv_tol = 1e-12
+    e_scf = mf.kernel()
+    print(f"NELEC {d['NELEC']}  PySCF ECP RHF {e_ref:.10f}  HOMO {mf_ref.mo_energy[n - 1]:.6f}")
+    print(f"FCIDUMP reference determinant {e_det:.10f}  (diff {e_det - e_ref:+.1e})")
+    print(f"FCIDUMP RHF                   {e_scf:.10f}  (diff {e_scf - e_ref:+.1e})")
+    sys.exit()
+
 if len(sys.argv) == 3:
     dump, case = pathlib.Path(sys.argv[1]), CASES / f"{sys.argv[2]}.hfinp"
     mol = build(case, cart=True)

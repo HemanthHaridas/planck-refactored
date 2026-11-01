@@ -11,7 +11,7 @@
 // Binary checkpoint format (.hfchk).  Layout (in order, all little-endian):
 //
 //  [8]  magic: "PLNKCHK\0"
-//  [4]  version: uint32 = 6
+//  [4]  version: uint32 = 8
 //  [8]  nbasis: uint64
 //  [1]  is_uhf: uint8   (1 when the checkpoint carries separate alpha/beta
 //                       spin channels; used for both UHF and ROHF)
@@ -23,6 +23,7 @@
 //  [4]  charge: int32
 //  [4]  multiplicity: uint32
 //  [natoms × 4]     atomic_numbers: int32[]
+//  [natoms × 4]     ecp_core_electrons: int32[] [version 8+; absent means all 0]
 //  [natoms × 3 × 8] coordinates_bohr: double[] (row-major: x0y0z0 x1y1z1 ...)
 //                    → always the final (possibly optimized) geometry in standard frame
 //  [4 + len]        basis name: uint32 length + chars (no null terminator)
@@ -143,6 +144,7 @@ namespace HartreeFock
             Eigen::MatrixXd C_alpha;  // all alpha MO columns (nbasis × nbasis)
             Eigen::MatrixXd C_beta;   // beta MOs if is_uhf
             Eigen::MatrixXd C_casscf; // converged CASSCF MOs if present
+            std::vector<int> ecp_core_electrons; // per atom; all zero before version 8
         };
 
         // Read MO coefficients from checkpoint without enforcing nbasis match.

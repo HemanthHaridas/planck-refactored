@@ -5359,6 +5359,84 @@
    "_note": "Boundary marker, docs/DEF2_ECP_SCOPE.md step 5: gradient-consuming workflows refuse an ECP basis until the ECP nuclear derivative lands."
   },
   {
+   "id": "hi_rhf_def2svp_ecp_restart_full",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp_restart_full.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "setup": {
+    "seed_input": "tests/inputs/regression/seeds/hi_rhf_def2svp_ecp_restart_seed.hfinp"
+   },
+   "expected_exit_code": 0,
+   "contains": [
+    "Checkpoint :                  Loaded from",
+    "SCF Converged after 2 iterations"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -297.2315316634,
+     "atol": 1e-09
+    }
+   ],
+   "_note": "docs/DEF2_ECP_SCOPE.md step 4b: guess-full restart from a version-8 checkpoint carrying the iodine ECP core count. Energy is PySCF's."
+  },
+  {
+   "id": "hi_rhf_def2svp_ecp_projection_refused",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp_projection_refused.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "smoke",
+    "def2",
+    "ecp"
+   ],
+   "setup": {
+    "seed_input": "tests/inputs/regression/seeds/hi_rhf_321g_ecp_projection_seed.hfinp"
+   },
+   "expected_exit_code": 0,
+   "contains": [
+    "Projection skipped: ECP core electrons differ",
+    "SCF Converged after"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -297.2315316634,
+     "atol": 1e-09
+    }
+   ],
+   "_note": "docs/DEF2_ECP_SCOPE.md step 4b: a 3-21G (all-electron iodine, 54 electrons) density must not be projected into def2-SVP (26 electrons). Also gates the fallback rebuilding the spherical 1e matrices: before the fix it kept the Cartesian ones and diverged."
+  },
+  {
+   "id": "hi_rhf_def2svp_ecp_fcidump",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp_fcidump.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "smoke",
+    "def2",
+    "ecp"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "FCIDUMP :                     Wrote 31 orbitals, 26 electrons",
+    "13                -0.384222  <-- HOMO"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -297.2315316634,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "docs/DEF2_ECP_SCOPE.md step 4b. tests/pyscf/def2_ecp_references.py --fcidump <file>: the FCIDUMP's reference determinant and an RHF solved on it both equal PySCF's ECP RHF energy to 2e-12; PySCF HOMO -0.384222. The HOMO line gates the MO printout's electron count (Z - n_core, was sum Z)."
+  },
+  {
    "id": "hi_rks_def2svp_ecp_rejected",
    "input": "tests/inputs/regression/dft/hi_rks_def2svp_ecp_rejected.hfinp",
    "executable": "planck-dft",

@@ -652,10 +652,7 @@ namespace DFT::Driver
             if (!X)
                 return std::unexpected("DFT orthogonalizer build failed: " + X.error());
 
-            int n_electrons = 0;
-            for (auto z : calculator._molecule.atomic_numbers)
-                n_electrons += z;
-            n_electrons -= calculator._molecule.charge;
+            int n_electrons = calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
 
             const auto make_spin_density = [&calculator, &X](std::size_t n_occ, bool doubled_occupancy) -> Eigen::MatrixXd
             {
@@ -752,10 +749,7 @@ namespace DFT::Driver
                     calculator._shells,
                     *small_shells);
 
-            int n_electrons = 0;
-            for (auto z : calculator._molecule.atomic_numbers)
-                n_electrons += z;
-            n_electrons -= calculator._molecule.charge;
+            int n_electrons = calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
 
             const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
             const int n_alpha = (n_electrons + n_unpaired) / 2;
@@ -2319,10 +2313,9 @@ namespace DFT::Driver
                             HartreeFock::LogLevel::Info, "Grid Accuracy :",
                             std::format("integrated_electrons = {:.10f}, deviation = {:.3e}",
                                         xc_grid->integrated_electrons,
-                                        [&]{ int ne = 0;
-                                             for (auto z : calculator._molecule.atomic_numbers) ne += static_cast<int>(z);
-                                             ne -= calculator._molecule.charge;
-                                             return std::abs(xc_grid->integrated_electrons - static_cast<double>(ne)); }()));
+                                        std::abs(xc_grid->integrated_electrons -
+                                                 static_cast<double>(calculator._molecule.total_nuclear_charge() -
+                                                                     calculator._molecule.charge))));
                     result.solvation_energy = pcm_energy;
 
                     if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter))
@@ -5277,10 +5270,7 @@ namespace DFT::Driver
         // h2o2-cation UKS stall needed a temporary probe for exactly this.
         void log_mo_energy_report(HartreeFock::Calculator &calculator)
         {
-            int n_elec = 0;
-            for (auto z : calculator._molecule.atomic_numbers)
-                n_elec += z;
-            n_elec -= calculator._molecule.charge;
+            int n_elec = calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
             if (n_elec <= 0)
                 return;
 

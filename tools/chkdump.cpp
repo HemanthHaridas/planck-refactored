@@ -538,10 +538,10 @@ int main(int argc, char* argv[])
     }
 
     const uint32_t version = read_pod<uint32_t>(in);
-    if (version < 2 || version > 7)
+    if (version < 2 || version > 8)
     {
         std::cerr << "chkdump: unsupported checkpoint version " << version
-                  << " (expected 2–7)\n";
+                  << " (expected 2–8)\n";
         return EXIT_FAILURE;
     }
 
@@ -559,6 +559,15 @@ int main(int argc, char* argv[])
     std::vector<int32_t> atomic_numbers(natoms);
     for (uint64_t i = 0; i < natoms; ++i)
         atomic_numbers[static_cast<std::size_t>(i)] = read_pod<int32_t>(in);
+    std::vector<int32_t> ecp_core(natoms, 0); // version 8+; older files carry no ECPs
+    if (version >= 8)
+        for (uint64_t i = 0; i < natoms; ++i)
+            ecp_core[static_cast<std::size_t>(i)] = read_pod<int32_t>(in);
+    // Z - n_core: what every electron count and the fchk "Nuclear charges" see.
+    std::vector<int32_t> valence_charges(natoms);
+    for (uint64_t i = 0; i < natoms; ++i)
+        valence_charges[static_cast<std::size_t>(i)] =
+            atomic_numbers[static_cast<std::size_t>(i)] - ecp_core[static_cast<std::size_t>(i)];
 
     std::vector<double> coords(natoms * 3);
     for (uint64_t i = 0; i < natoms * 3; ++i)
@@ -865,14 +874,14 @@ int main(int argc, char* argv[])
     std::ostream& out = *outp;
 
     int z_total = 0;
-    for (int32_t z : atomic_numbers)
+    for (int32_t z : valence_charges)
         z_total += z;
     const int n_elec = z_total - charge;
     const int n_unpaired = static_cast<int>(mult) - 1;
     const int n_alpha = (n_elec + n_unpaired) / 2;
     const int n_beta  = (n_elec - n_unpaired) / 2;
 
-    std::vector<double> nuclear_charges = to_double_vector(atomic_numbers);
+    std::vector<double> nuclear_charges = to_double_vector(valence_charges);
     std::vector<double> overlap_packed  = packed_lower_triangle(overlap);
     std::vector<double> hcore_packed    = packed_lower_triangle(hcore);
     std::vector<double> alpha_density_packed = packed_lower_triangle(alpha_density);

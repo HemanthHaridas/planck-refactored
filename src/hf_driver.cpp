@@ -793,6 +793,15 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                                                  std::format("Projection failed: {} — using H_core guess", small_shells_res.error()));
                     projection_ok = false;
                 }
+                else if (mos_res->ecp_core_electrons != calculator._molecule.ecp_core_electrons)
+                {
+                    // The stored orbitals hold a different electron count: an ECP
+                    // basis against an all-electron one, or two different cores.
+                    HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Checkpoint :",
+                                                 "Projection skipped: ECP core electrons differ between the "
+                                                 "checkpoint and current basis — using H_core guess");
+                    projection_ok = false;
+                }
                 else
                 {
                     const HartreeFock::Basis &small_shells = *small_shells_res;
@@ -951,7 +960,13 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                 }
 
                 if (!projection_ok)
+                {
+                    // The matrices above are Cartesian, and only a successful
+                    // projection lifts them to a spherical working basis. Let the
+                    // normal 1e block below rebuild them.
                     calculator._scf._guess = HartreeFock::SCFGuess::HCore;
+                    loaded_from_checkpoint = false;
+                }
             }
             else
             {
@@ -1274,10 +1289,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         }
 
         const bool have_symm = !calculator._info._scf.alpha.mo_symmetry.empty();
-        int n_elec = 0;
-        for (auto z : calculator._molecule.atomic_numbers)
-            n_elec += z;
-        n_elec -= calculator._molecule.charge;
+        int n_elec = calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
 
         if (calculator._scf._scf == HartreeFock::SCFType::RHF)
         {
@@ -1967,10 +1979,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
 
                 // Print MO table
                 const bool have_symm_f = !calculator._info._scf.alpha.mo_symmetry.empty();
-                int n_elec_f = 0;
-                for (auto z : calculator._molecule.atomic_numbers)
-                    n_elec_f += z;
-                n_elec_f -= calculator._molecule.charge;
+                int n_elec_f = calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
 
                 if (calculator._scf._scf == HartreeFock::SCFType::RHF)
                 {

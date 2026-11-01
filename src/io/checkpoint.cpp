@@ -343,7 +343,7 @@ static std::expected<void, std::string> adapt_restart_spin_state(
 // IEEE-754 `double` layout. MAGIC/VERSION let us reject incompatible files
 // explicitly rather than silently interpreting foreign-endian data.
 static constexpr char MAGIC[8] = {'P', 'L', 'N', 'K', 'C', 'H', 'K', '\0'};
-static constexpr uint32_t VERSION = 7;
+static constexpr uint32_t VERSION = 8;
 
 static uint8_t encode_basis_type(HartreeFock::BasisType basis_type)
 {
@@ -369,6 +369,33 @@ static std::expected<HartreeFock::BasisType, std::string> decode_basis_type(uint
         return std::unexpected(std::format(
             "Checkpoint basis_type tag {} is not recognized", raw));
     }
+}
+
+// ECP core-electron count per atom, stored after the atomic numbers [version 8+].
+// Version 7 and older carry no ECP data, and ECP runs were refused before
+// version 8 existed, so an older file means every core count is zero.
+static std::expected<std::vector<int>, std::string> read_core_counts(
+    std::istream &in, uint32_t version, std::size_t natoms)
+{
+    std::vector<int> counts(natoms, 0);
+    if (version < 8)
+        return counts;
+    for (std::size_t i = 0; i < natoms; ++i)
+    {
+        auto n = read_pod<int32_t>(in);
+        if (!n)
+            return std::unexpected(n.error());
+        counts[i] = *n;
+    }
+    return counts;
+}
+
+static std::vector<int> core_counts(const HartreeFock::Molecule &mol)
+{
+    std::vector<int> counts(mol.natoms, 0);
+    for (std::size_t i = 0; i < mol.natoms && i < mol.ecp_core_electrons.size(); ++i)
+        counts[i] = mol.ecp_core_electrons[i];
+    return counts;
 }
 
 std::expected<void, std::string> HartreeFock::Checkpoint::save(
@@ -401,6 +428,8 @@ std::expected<void, std::string> HartreeFock::Checkpoint::save(
 
     for (std::size_t i = 0; i < natoms; ++i)
         write_pod<int32_t>(out, static_cast<int32_t>(calc._molecule.atomic_numbers[i]));
+    for (int n_core : core_counts(calc._molecule))
+        write_pod<int32_t>(out, static_cast<int32_t>(n_core));
 
     // Coordinates in Bohr (standard frame, natoms × 3, row-major)
     for (std::size_t i = 0; i < natoms; ++i)
@@ -580,6 +609,14 @@ std::expected<void, std::string> HartreeFock::Checkpoint::load(
         if (!atomic_number)
             return std::unexpected(atomic_number.error());
     }
+    auto chk_cores = read_core_counts(in, *version, static_cast<std::size_t>(*natoms));
+    if (!chk_cores)
+        return std::unexpected(chk_cores.error());
+    // A density converged with a different core is for a different electron
+    // count; the nbasis check below cannot see that.
+    if (*chk_cores != core_counts(calc._molecule))
+        return std::unexpected("Checkpoint ECP core electrons do not match the current basis; "
+                               "regenerate the checkpoint with this basis.");
 
     for (uint64_t i = 0; i < *natoms; ++i)
     {
@@ -773,6 +810,10 @@ HartreeFock::Checkpoint::load_mos(const std::string &path)
         if (!atomic_number)
             return std::unexpected(atomic_number.error());
     }
+    auto ecp_cores = read_core_counts(in, *version, static_cast<std::size_t>(*natoms));
+    if (!ecp_cores)
+        return std::unexpected(ecp_cores.error());
+    result.ecp_core_electrons = std::move(*ecp_cores);
 
     for (uint64_t i = 0; i < *natoms; ++i)
     {
@@ -928,6 +969,9 @@ HartreeFock::Checkpoint::load_geometry(const std::string &path)
             return std::unexpected(atomic_number.error());
         geo.atomic_numbers[static_cast<int>(i)] = *atomic_number;
     }
+    // Core counts come from the basis the run re-reads, so they are only skipped here.
+    if (auto cores = read_core_counts(in, *version, geo.natoms); !cores)
+        return std::unexpected(cores.error());
 
     geo.coords_bohr.resize(*natoms_int, 3);
     for (std::size_t i = 0; i < geo.natoms; ++i)
