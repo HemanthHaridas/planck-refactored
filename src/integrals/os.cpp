@@ -2536,6 +2536,51 @@ Eigen::MatrixXd HartreeFock::ObaraSaika::_compute_fock_rhf(const std::vector<dou
     return G;
 }
 
+std::vector<Eigen::MatrixXd> HartreeFock::ObaraSaika::_compute_fock_rhf(
+    const std::vector<double> &_eri,
+    const std::vector<const Eigen::MatrixXd *> &densities,
+    const std::size_t nbasis)
+{
+    const std::size_t nb = nbasis;
+    const std::size_t nb2 = nb * nb;
+    const std::size_t nb3 = nb * nb * nb;
+    const std::size_t nd = densities.size();
+    std::vector<Eigen::MatrixXd> G(nd, Eigen::MatrixXd::Zero(nb, nb));
+
+    // Same schedule as the single-density build. Up to four densities per
+    // sweep, summed in local accumulators so they stay in registers; each
+    // accumulates in the same (lam, sig) order as a single build.
+    constexpr std::size_t kChunk = 4;
+    for (std::size_t d0 = 0; d0 < nd; d0 += kChunk)
+    {
+        const std::size_t nc = std::min(kChunk, nd - d0);
+        const double *D[kChunk];
+        for (std::size_t d = 0; d < nc; ++d)
+            D[d] = densities[d0 + d]->data();
+#pragma omp parallel for schedule(dynamic, 4)
+        for (std::size_t mu = 0; mu < nb; ++mu)
+            for (std::size_t nu = 0; nu < nb; ++nu)
+            {
+                double acc[kChunk] = {};
+                const double *coul = _eri.data() + mu * nb3 + nu * nb2;
+                for (std::size_t lam = 0; lam < nb; ++lam)
+                {
+                    const double *exch = _eri.data() + mu * nb3 + lam * nb2 + nu * nb;
+                    for (std::size_t sig = 0; sig < nb; ++sig)
+                    {
+                        const double v = coul[lam * nb + sig] - 0.5 * exch[sig];
+                        for (std::size_t d = 0; d < nc; ++d)
+                            acc[d] += D[d][lam + sig * nb] * v;
+                    }
+                }
+                for (std::size_t d = 0; d < nc; ++d)
+                    G[d0 + d](mu, nu) = acc[d];
+            }
+    }
+
+    return G;
+}
+
 std::pair<Eigen::MatrixXd, Eigen::MatrixXd> HartreeFock::ObaraSaika::_compute_fock_uhf(
     const std::vector<double> &_eri,
     const Eigen::MatrixXd &Pa,

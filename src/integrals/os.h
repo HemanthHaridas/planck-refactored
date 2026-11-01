@@ -100,6 +100,12 @@ namespace HartreeFock
                                           const Eigen::MatrixXd &density,
                                           const std::size_t nbasis);
 
+        // G[D_k] for several densities in one sweep over the stored tensor,
+        // which the single-density build is bound by.
+        std::vector<Eigen::MatrixXd> _compute_fock_rhf(const std::vector<double> &_eri,
+                                                       const std::vector<const Eigen::MatrixXd *> &densities,
+                                                       const std::size_t nbasis);
+
         std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
         _compute_fock_uhf(const std::vector<double> &_eri,
                           const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb,

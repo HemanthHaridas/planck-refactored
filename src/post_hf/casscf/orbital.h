@@ -82,12 +82,22 @@ namespace HartreeFock::Correlation::CASSCF
         // When set, delta_g_sa_action is analytic; otherwise it is the central
         // finite difference of fixed_ci_orbital_gradient (kept as the oracle).
         const AnalyticOrbitalHessian *analytic = nullptr;
+        // Last G[D] (AO basis) built through this context. One Hessian product
+        // needs G of the trial's core-density response twice: in the orbital
+        // action and again in each root's CI right-hand side.
+        mutable Eigen::MatrixXd memo_D, memo_G;
     };
 
     // C^T G[D] C for an AO density D, with G the closed-shell two-electron
     // operator of the context's integrals (dense or RI).
     Eigen::MatrixXd fock_response_mo(
         const Eigen::MatrixXd &D_ao,
+        const OrbitalHessianContext &ctx);
+
+    // fock_response_mo for several densities, in one sweep over the dense
+    // tensor. The first density is memoized.
+    std::vector<Eigen::MatrixXd> fock_responses_mo(
+        const std::vector<const Eigen::MatrixXd *> &D_ao,
         const OrbitalHessianContext &ctx);
 
     // First-order change of the closed-shell core density 2 C P_c C^T under

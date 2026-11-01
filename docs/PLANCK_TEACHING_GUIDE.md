@@ -7352,30 +7352,68 @@ This approximates \(\mathbf C_{\text{old}}\,e^{\boldsymbol\kappa}\) to second or
 computing a matrix exponential. After the Cayley step, a Löwdin symmetric
 re-orthogonalization restores exact S-orthonormality in the AO metric.
 
-The rotation matrix \(\boldsymbol\kappa\) comes from an orbital Newton step that
-uses the **matrix-free finite-difference orbital Hessian** when the full MO context
-is available. Given the current MO coefficients \(\mathbf C\), the frozen 1-RDM
-\(\boldsymbol\gamma\), and the frozen 2-RDM \(\boldsymbol\Gamma\), a Hessian-vector
-product \(\mathbf A \mathbf R\) is obtained by central finite differences of the
-orbital gradient:
+The rotation \(\boldsymbol\kappa\) comes from a Newton step on the
+**CI-relaxed orbital Hessian**: the curvature of the energy when the CI vector
+is re-optimized for every trial rotation, not held fixed.
 
-\[
-(\mathbf A \mathbf R)_{pq} \approx \frac{g_{pq}(\mathbf C_+) - g_{pq}(\mathbf C_-)}{2\delta}
-\]
+**Fixed-CI part.** With \(\mathbf C(\epsilon) = \mathbf C(\mathbf I + \epsilon\mathbf R)\),
+every MO-basis matrix moves as \(d\mathbf X_{\text{mo}} = \mathbf R^T\mathbf X_{\text{mo}}
++ \mathbf X_{\text{mo}}\mathbf R + \mathbf C^T d\mathbf X_{\text{ao}}\mathbf C\), and the
+core and active densities move as \(d\mathbf D = \mathbf C(\mathbf R\mathbf P + \mathbf P\mathbf R^T)\mathbf C^T\).
+So the Hessian-vector product \(\mathbf A\mathbf R\) is the orbital gradient
+evaluated on the derivatives of \(F^I\), \(F^A\) and \(Q\). The AO parts need two
+Fock builds, \(\mathbf G[d\mathbf D_c]\) and \(\mathbf G[d\mathbf D_a]\);
+\(dQ\) uses a per-macro intermediate built from \((pa|vw)\) and \((pu|aw)\).
+Both densities are contracted in one sweep over the stored tensor
+(`fock_responses_mo`, which calls the multi-density `_compute_fock_rhf`): the
+sweep is limited by reading the tensor, so a second density costs little. The
+CI right-hand side below needs \(\mathbf G[d\mathbf D_c]\) again for every
+root, and gets it from a one-entry memo on the context instead of another
+sweep. This is `analytic_g_action` in `orbital.cpp`. The older central finite
+difference of two gradient rebuilds is kept only as the test oracle and for
+the RI path.
 
-where \(\mathbf C_{\pm} = \text{Cayley}(\mathbf C, \pm\delta\mathbf R)\) and
-\(\delta = 5 \times 10^{-4}\) by default (`OrbitalHessianContext::fd_step`). This
-is implemented in `matrix_free_hessian_action` (`orbital.cpp`) and falls back to
-the diagonal approximation (`hessian_action`) when the context is incomplete.
+**CI relaxation.** For each root, the trial rotation drives a first-order CI
+response \(c_1\) (`solve_ci_response_davidson`) from the exact right-hand side
+\(\partial H/\partial\kappa\, c_0\). That includes the change of
+\(h_{\text{eff}} = F^I_{\text{act}}\) through the core density, \((\mathbf C^T
+\mathbf G[d\mathbf D_c]\mathbf C)_{\text{act}}\). \(c_1\) feeds back into the orbital
+gradient through both its 2-RDM response (\(Q_1\)) and its 1-RDM response
+(through \(F^A\) and \(\gamma_1 F^I\)). Drop either term and the coupled
+Hessian no longer matches a finite difference of the fully re-solved gradient;
+with both it agrees to \(10^{-9}\).
 
-For small active spaces where the number of non-redundant orbital pairs is
-\(\le 128\), the response solver probes `matrix_free_hessian_action` column-by-column
-to assemble a dense Hessian matrix, symmetrizes it, and solves the Newton equation
-by `SelfAdjointEigenSolver` exact diagonalization (`build_orbital_linear_operator` +
-`solve_orbital_action_system` in `response.cpp`). Eigenvalues below \(10^{-4}\) are
-floored before inversion. When the dense Hessian is unavailable (too many pairs or
-null context), the solver falls back to the diagonal-preconditioned step with a
-level shift. In all paths the step is capped at \(|\boldsymbol\kappa|_{\max} \le 0.20\).
+**Solving \(\mathbf H\boldsymbol\kappa = -\mathbf g\) without building \(\mathbf H\).**
+Each product costs a few full passes over the ERI tensor, and a dense build
+needs one product per orbital pair (142 at water/cc-pVTZ). So
+`solve_orbital_action_system` (`response.cpp`) runs a preconditioned subspace
+(Davidson-style) Newton solve instead:
+
+- the subspace grows by the residual divided by the diagonal orbital Hessian;
+- inside it, the step uses the same recipe a dense solve would: eigenvalues
+  below \(10^{-4}\) are floored before inversion;
+- it stops when the residual *outside* the subspace meets an inexact-Newton
+  forcing term, \(\|r_\perp\| \le \min(0.1, \sqrt{\|g\|})\,\|g\|\). The residual
+  inside the subspace is the deliberate floor modification and never vanishes
+  once a mode is clamped, so it must not be tested;
+- **its second vector is a fixed generic seed, not a residual.** A Krylov space
+  grown from \(\mathbf g\) can never contain a negative-curvature mode that
+  \(\mathbf g\) is orthogonal to, which is exactly the mode needed to leave a
+  saddle (see below).
+
+Together with the batched Fock sweep above, water/cc-pVTZ C1 went from
+51.8 s (dense) to 23.6 s, at the same energy.
+
+**Step control.** The step is scaled to a trust radius `trust_rot`
+(element-wise, and \(4\times\) that in the Frobenius norm). The radius follows
+the ratio of the actual energy change to the model's prediction
+\(\mathbf g\cdot\mathbf s + \tfrac12\mathbf s\cdot\mathbf H\mathbf s\): it doubles
+(up to \(5\times\) `mcscf_max_rot`) when the ratio is \(\ge 0.75\) and the step
+hit the radius, shrinks \(4\times\) when it is \(< 0.25\), and halves when no step
+is accepted. The level shift stays at \(10^{-3}\) unless steps are rejected.
+Because the model is exact, the ratio sits at 0.9–1.3 and the radius rarely
+binds; a fixed 0.2 cap plus a decaying 0.2 level shift (both tuned for an
+approximate Hessian) had halved the convergence rate.
 
 ### Macro-Iteration Structure
 
@@ -7392,22 +7430,15 @@ The full CASSCF macro-iteration (one pass of `run_casscf`):
    \(\bar{\Gamma}\) weighted by the SA weights
 5. Compute inactive Fock \(F^I\), active Fock \(F^A\), Q matrix, and orbital
    gradient \(\mathbf g\)
-6. Run micro-iterations: for each micro-step,
-   a. Form an orbital step \(\boldsymbol\kappa\): for ≤ 128 non-redundant pairs the
-      matrix-free Hessian path builds a dense Hessian and solves by exact
-      diagonalization; otherwise a diagonal-preconditioned augmented-Hessian step is
-      used. Both paths receive an `OrbitalHessianContext` struct carrying pointers to
-      the current \(\mathbf C\), overlap, core Hamiltonian, AO ERIs, and the frozen
-      active-space RDMs.
-   b. Compute the first-order CI response per root (`solve_ci_response_davidson`)
-      to account for the change in CI coefficients driven by the full
-      \(\delta h_{\text{eff}} = [F^I, \boldsymbol\kappa]_{\text{act}}\) and the
-      inter-subspace two-electron derivative
-   c. Update the gradient with the response correction (`fep1_gradient_update` + CI contribution)
-   d. Accumulate the total rotation \(\boldsymbol\kappa_{\text{total}}\)
-7. Select the best orbital step from a set of candidates (full-Hessian Newton step,
-   first micro-step only, gradient fallback, and pairwise averages) using a merit
-   function \(m = E_{\text{CAS}} + w\,\|\mathbf g\|^2\).
+6. Solve for the orbital step on the CI-relaxed Hessian (matrix-free
+   subspace solve, above). Each Hessian product carries an
+   `OrbitalHessianContext` (pointers to \(\mathbf C\), overlap, core
+   Hamiltonian, AO ERIs and the frozen RDMs) and solves each root's CI response
+   to the trial rotation.
+7. Score the candidate steps (the coupled Newton step, an augmented-Hessian
+   step, a gradient step, and under stagnation a diagonal step and single-pair
+   probes) with the merit \(m = E_{\text{CAS}} + 0.1\,\|\mathbf g\|^2\) and
+   keep the lowest.
 8. Apply the accepted \(\boldsymbol\kappa\) via the Cayley transform followed by
    Löwdin re-orthogonalization: \(\mathbf C \leftarrow \mathbf C\,\mathbf U\)
 9. Check convergence: \(\|\mathbf g\| < \epsilon_{\text{grad}}\) and
@@ -7460,52 +7491,60 @@ debug flag.
 
 ### Convergence and Robustness
 
-The orbital macro-step uses **merit-function-based step selection**: multiple
-candidate orbital steps (augmented-Hessian result, first micro-step, gradient
-fallback, and their pairwise averages) are each evaluated by a full CASSCF
-energy computation, and the step that minimizes
-\(m = E_{\text{CAS}} + w\,\|\mathbf g\|^2\) is accepted. This avoids the sign
-ambiguity that plagued earlier Cayley-map implementations and removes any
-dependence on DIIS extrapolation.
+The orbital macro-step uses **merit-function-based step selection**: the
+candidate steps (step 7 above) are each evaluated by a full CASSCF energy
+computation, and the step that minimizes
+\(m = E_{\text{CAS}} + 0.1\,\|\mathbf g\|^2\) is accepted.
 
 When repeated macro-iterations accept only negligibly small steps without
 reducing the true orbital gradient (stagnation), the driver switches to direct
 orbital-gradient probe steps and single-pair directional probes, letting the
 exact CASSCF energy screen pick the productive rotations.
 
-#### Why uphill climbing was required (water SA-2, SAD start)
+#### Saddles that the gradient cannot see (water SA-2, OH)
 
-The water CAS(4,4)/STO-3G SA-2 SAD-start case is a useful teaching example
-because it has two nearby SA stationary basins:
+The water CAS(4,4)/STO-3G SA-2 case is a useful teaching example because it
+has a stationary point that is **not** a minimum:
 
-- **Upper/local basin** around `-74.7751377977 Eh`
-- **Deeper basin** around `-74.7877865 Eh` (PySCF SAD-start minimum)
+- **A saddle** at `-74.7751377977 Eh`. The CI-relaxed Hessian there has one
+  negative eigenvalue (about \(-0.06\)), along a symmetry-breaking mode.
+- **The minimum** at `-74.7877864783 Eh` (lowest eigenvalue \(+2.5\times10^{-2}\)),
+  which is also PySCF's SAD-start answer.
 
-With strictly monotone acceptance, the optimizer can get trapped in the upper
-basin even when the SA gradient is tiny. The reason is specific to
-state-averaging: the weighted SA gradient can cancel across roots
-(\(g_{\mathrm{SA}}=\sum_r w_r g_r \approx 0\)) while individual per-root
-gradients are still sizable. In that regime, the physically useful move is
-often a **small uphill step** in \(E_{\mathrm{SA}}\) that crosses a barrier;
-the next macro step then descends into the deeper well.
+The trap is that the gradient is *exactly* orthogonal to the negative mode
+(\(|\mathbf g\cdot\mathbf v_0| \sim 10^{-16}\)): the input runs with symmetry
+off, but the starting orbitals are still symmetric, and a symmetric gradient
+has no component along a symmetry-breaking direction. So the gradient alone
+never points off the saddle. A Newton step does, but only through roundoff:
+the \(10^{-4}\) eigenvalue floor multiplies that \(10^{-16}\) component by
+\(10^4\) per macroiteration until it is large enough to descend. Both Planck and
+PySCF leave such saddles this way, which is why **which stationary point a
+symmetric start reaches is set by roundoff along a zero-gradient mode**.
 
-This is exactly what the PySCF CIAH/newton trajectory does on this system:
-it accepts a bounded uphill move and then takes a larger downhill move into the
-lower-energy basin. To mirror that behavior, Planck exposes
-`mcscf_accept_uphill` with an energy cap `mcscf_uphill_max_eh`.
+Two consequences for the code:
 
-Planck now keeps two regression fixtures for this one input family:
+- **A Krylov solver started from \(\mathbf g\) cannot leave.** Its subspace is
+  built from \(\mathbf g\) and \(\mathbf H\) applied to it, so it never contains
+  \(\mathbf v_0\), never sees the negative eigenvalue, and has nothing to
+  amplify. That is why the matrix-free solve takes one fixed generic seed
+  vector as well. With it, the solve sees the same negative mode a dense
+  solve sees and leaves the saddle the same way.
+- **References can be saddles.** Before the exact relaxed Hessian, Planck
+  stayed on the water SA-2 saddle from both hcore and SAD starts, and the
+  regression pinned it. Doublet OH CAS(5,4) (`oh_casscf_rohf_sto3g`) had the
+  same problem: the pinned `-74.3854277` has one negative eigenvalue
+  (\(-3.8\times10^{-3}\)) and PySCF at tight tolerance reaches `-74.3867176`. Both
+  references were re-pinned to the minimum. Suppressing the escape instead
+  (dropping clamped modes the gradient does not touch) was tried; it kept
+  the saddles but sent three other inputs, including C1 water/cc-pVDZ, where
+  PySCF itself escapes, to the wrong answer.
 
-- `water_cas44_sto3g_sa2_sad.hfinp` (default monotone mode) validates the
-  historical upper-basin landing near `-74.7751377977 Eh`.
-- `water_cas44_sto3g_sa2_sad_uphill.hfinp` (`mcscf_accept_uphill .true.`)
-  validates the basin-escape path and lands near `-74.7877864784 Eh`,
-  matching PySCF SAD-start to within `~3.6e-08 Eh`.
-
-Keeping both is intentional: it teaches that AH/CIAH quality alone is not the
-whole story in SA-CASSCF; **acceptance policy is part of the algorithm**.
-The paired fixtures also prevent accidental drift in either mode
-(strict-monotone robustness or uphill-enabled global-basin reachability).
+Separately, `mcscf_accept_uphill` (with cap `mcscf_uphill_max_eh`) lets the
+optimizer accept a bounded uphill step. In state averaging the weighted
+gradient \(g_{\mathrm{SA}}=\sum_r w_r g_r\) can vanish while each root's gradient
+does not, and a small uphill move in \(E_{\mathrm{SA}}\) is sometimes the way
+across. The uphill fixture `water_cas44_sto3g_sa2_sad_uphill.hfinp` keeps that
+path gated; it lands at `-74.7877864784 Eh` like the default starts.
 
 **Acceptance has to ignore noise.** For a while the uphill fixture reached
 the deeper basin by luck. Both trajectories reach the upper plateau, where

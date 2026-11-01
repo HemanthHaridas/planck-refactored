@@ -1960,8 +1960,15 @@ PySCF's SAD-start answer. 15/15 CASSCF regressions pass.
   0.43 / 1.16 / 2.30 s). `oh_casscf_rohf_sto3g` re-pinned from a saddle to
   the minimum PySCF reaches (-74.3867176233). Diagnostic probes deleted;
   `CallProbe` kept for N4.
-- per-macro cost at cc-pVTZ is still 12-21x PySCF: each Hessian product does
-  ~4 separate nb^4 Fock passes; N4 batches them into one sweep;
+- N4 (2026-11-01, uncommitted when written): each Hessian product sweeps the
+  ERI tensor twice instead of four times (dD_c and dD_a in one multi-density
+  `_compute_fock_rhf`, G[dD_c] memoized for the CI right-hand side).
+  cc-pVTZ 24.3 -> 19.6 s, cc-pVTZ C1 27.4 -> 23.6 s, cc-pVDZ 0.59 -> 0.45 s.
+  Still 10-17x PySCF at cc-pVTZ; next is a re-profile;
+- C1 CASSCF runs are not bitwise reproducible: water/cc-pVDZ C1 at 4 threads
+  varies -76.0781256180 .. -76.0781256195 across identical runs (also on
+  `305de17a`). Diverges ~1e-10 in macro 2; symmetric cases repeat exactly.
+  Below every gate; source not found;
 - the RI path is still FD-Hessian with a full-leg-first transform.
 
 #### Unreproduced OpenMP hang in CASSCF (seen once, 2026-10-28)

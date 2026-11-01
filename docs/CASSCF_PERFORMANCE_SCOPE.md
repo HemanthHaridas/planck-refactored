@@ -6,28 +6,29 @@ rewrite it as the answer to the question in the title.
 
 ## Headline (2026-11-01)
 
-**CASSCF is 7-62x faster than when this started (6-31G 8-12x, cc-pVDZ 23x,
-cc-pVDZ C1 62x; cc-pVTZ was ~176 s per macro and never run to convergence),
+**CASSCF is 8-76x faster than when this started (6-31G 8-12x, cc-pVDZ 30x,
+cc-pVDZ C1 76x; cc-pVTZ was ~176 s per macro and never run to convergence),
 and beats PySCF at 6-31G.
-It is 2x behind at cc-pVDZ (C1 1.7x) and 12-21x behind at cc-pVTZ.** It needs
-no more macroiterations than PySCF anywhere. What is left is the cost of each
-macro at large bases: full passes over the stored ERI tensor (N4).
+It is 1.4-1.7x behind at cc-pVDZ and 10-17x behind at cc-pVTZ.** It needs no
+more macroiterations than PySCF anywhere. What is left is the cost of each
+macro at large bases, still dominated by full passes over the stored ERI
+tensor.
 
 Water CAS(4,4), Cartesian, 4 threads, `build-full`; PySCF 2.13.0
 (`tests/benchmarks/casscf/pyscf_casscf_timing.py`). Wall time.
 
-| case | AOs / pairs | start | P4 (`1468a4f7`, dense <= 256 pairs) | P5 (working tree) | PySCF | P5 vs PySCF |
-|---|---|---|---|---|---|---|
-| 6-31G | 13 / 22 | 1.3-1.9 s | 0.18 s | 0.16 s | 0.34 s | **0.5x** |
-| cc-pVDZ | 25 / 50 | 13.4 s | 0.58 s | 0.59 s | 0.27 s | 2.2x |
-| cc-pVDZ, C1 | 25 / 138 | 44.5 s | 2.35 s | **0.72 s** | 0.43 s | 1.7x |
-| cc-pVTZ | 65 / 142 | ~176 s per macro | 43.5 s | **24.3 s** | 1.16 s | 21x |
-| cc-pVTZ, C1 | 65 / 418 | - | 51.8 s | **27.4 s** | 2.30 s | 12x |
+| case | AOs / pairs | start | P4 (`1468a4f7`) | P5 (`305de17a`) | N4 (working tree) | PySCF | N4 vs PySCF |
+|---|---|---|---|---|---|---|---|
+| 6-31G | 13 / 22 | 1.3-1.9 s | 0.18 s | 0.16 s | 0.15 s | 0.34 s | **0.45x** |
+| cc-pVDZ | 25 / 50 | 13.4 s | 0.58 s | 0.59 s | **0.45 s** | 0.27 s | 1.7x |
+| cc-pVDZ, C1 | 25 / 138 | 44.5 s | 2.35 s | 0.72 s | **0.58 s** | 0.43 s | 1.4x |
+| cc-pVTZ | 65 / 142 | ~176 s per macro | 43.5 s | 24.3 s | **19.6 s** | 1.16 s | 17x |
+| cc-pVTZ, C1 | 65 / 418 | - | 51.8 s | 27.4 s | **23.6 s** | 2.30 s | 10x |
 
-P5 energies: cc-pVDZ -76.0440109040 (PySCF -76.0440109018), C1
--76.0781256196 (-76.0781256214), cc-pVTZ -76.0754286346 (-76.0754286541;
-2e-8, set by `tol_mcscf_grad 1e-5`), cc-pVTZ C1 -76.1092535241
-(-76.1092535271).
+N4 energies: cc-pVDZ -76.0440109040 (PySCF -76.0440109018), C1
+-76.0781256180..-76.0781256195 (-76.0781256214; see the nondeterminism note in
+"What is left"), cc-pVTZ -76.0754286346 (-76.0754286541; 2e-8, set by
+`tol_mcscf_grad 1e-5`), cc-pVTZ C1 -76.1092535245 (-76.1092535271).
 
 **Two references were re-pinned from saddles to minima.** Water SA-2
 (2026-10-28, -74.7751377977 -> -74.7877864783) and, in P5,
@@ -37,12 +38,11 @@ gradient has no component on; both new values are PySCF's own tight answers.
 
 ## Handoff (end of session, 2026-11-01)
 
-**Where things stand.** Committed through `776b2223`. **Uncommitted, gated,
-ready to commit as P5:** N1 and N3 below (`response.cpp`, `casscf.cpp`, the
-OH re-pin in `tests/regression_cases.json`). On that tree all 17
-CASSCF/RASSCF/FCI regression cases pass, the 14 table inputs match the P4
-dense energies to <= 1e-10 Eh, and `planck-casscf-internal` passes. N2 was
-dropped. Next is N4.
+**Where things stand.** Committed through `305de17a` (P5). **Uncommitted,
+gated, ready to commit as N4:** the multi-density `_compute_fock_rhf`
+(`os.{h,cpp}`) and `fock_responses_mo` with its memo (`orbital.{h,cpp}`). On
+that tree all 17 CASSCF/RASSCF/FCI regression cases pass, the 14 table inputs
+match P5 to <= 1e-9 Eh, and `planck-casscf-internal` passes.
 
 **How to reproduce:**
 
@@ -88,13 +88,13 @@ dropped. Next is N4.
 | 3 | the orbital-CI coupling dropped two terms, so the coupled solve never converged and `numeric-newton` (2·npairs full evaluations) ran every macro | exact coupling, then a direct solve of the CI-relaxed Hessian | P3b `69728821`, P3c `7a5031a8` |
 | 4 | above 256 pairs the solve fell back to a few orbital-only diagonal steps | CI-relaxed subspace solve | P4a `1468a4f7` |
 | 5 | a 0.2 decaying level shift and a fixed 0.2 step cap, tuned for an approximate Hessian, halved the convergence rate | trust region driven by the exact model | P4b `1468a4f7` |
-| 6 | the dense CI-relaxed operator costs ~570 nb^4 Fock passes per macro at cc-pVTZ | matrix-free preconditioned solve, with a seed vector so it still sees zero-gradient negative modes | P5 (uncommitted) |
+| 6 | the dense CI-relaxed operator costs ~570 nb^4 Fock passes per macro at cc-pVTZ | matrix-free preconditioned solve, with a seed vector so it still sees zero-gradient negative modes | P5 `305de17a` |
+| 7 | each product swept the ERI tensor 4 times, once for a density it had already built | two densities per sweep, memoized G[dD_c] | N4 (uncommitted) |
 
 ## What is left
 
-Rough budget at cc-pVTZ: ~10 macros x ~15-30 products x ~4 Fock passes, a
-few hundred to ~1200 passes over the ERI tensor, against PySCF's ~17 JK
-builds. N4 (4 passes -> 1) is the next lever.
+After N4 a product makes 2 tensor sweeps (1 + nroots for SA), against
+PySCF's ~17 JK builds per run. Next: re-profile cc-pVTZ (N5).
 
 **N1. Done: the 1-2e-8 Eh drift was not the solve.** The matrix-free run
 crossed `tol_mcscf_grad 1e-5` one macro earlier (6-31G: 7.8e-6 at macro 7,
@@ -106,20 +106,51 @@ reverted. With the seed vector (N3) the drift is gone anyway.
 spot as the subspace solve (below), and the seeded subspace solve already
 beats dense everywhere.
 
-**N3. Done (uncommitted): matrix-free everywhere.** The relaxed solve uses
+**N3. Done (`305de17a`): matrix-free everywhere.** The relaxed solve uses
 `max_dense_pairs = 0`; `PLANCK_CASSCF_DENSE_PAIRS` and the `nn`/`schur`/
 `alpha`/`fix`/`hess`/`subspace`/`lanczos` probes are deleted. `CallProbe`
 stays until N4 is measured. The non-relaxed coupled solve keeps its dense
 limit (it has no matrix-free branch). See P5 below for the seed vector and
 the OH re-pin this needed.
 
-**N4. Batch the Fock passes inside one product.** Each product does ~4
-independent nb^4 Fock contractions; contract all of them in one sweep over
-the 143 MB tensor (up to ~4x on the 76 % share). Davidson products are
-sequential, so batching inside a product is the only batching available.
-Gate: products identical to round-off, run identical at 1 and 4 threads.
+**N4. Done (uncommitted): fewer tensor sweeps per product.** A product made
+four `_compute_fock_rhf` sweeps for one root: G[dD_c] and G[dD_a] in
+`analytic_g_action`, G[dD_c] again in each root's CI right-hand side, and
+G[C_a gamma1 C_a^T] after each root's CI response. Now:
 
-**N5. Re-measure, then the tail.**
+- **dD_c and dD_a share one sweep** (`fock_responses_mo`, new multi-density
+  `_compute_fock_rhf` overload, up to four densities per sweep);
+- **the CI right-hand side reuses G[dD_c]** through a one-entry memo on
+  `OrbitalHessianContext`, keyed on the AO density itself (so a stale C can
+  never give a wrong hit; the MO transform uses the current C);
+- the post-response G[C_a gamma1 C_a^T] depends on the CI solve, so it stays
+  its own sweep.
+
+That is 4 -> 2 sweeps per product (2 + nroots -> 1 + nroots for SA).
+
+**The first version was 12 % slower at cc-pVTZ** (24.3 -> 27.2 s) while
+faster at cc-pVDZ. It accumulated into `G[d](mu, nu)` through a vector of
+matrices, which kept the sums out of registers. Local accumulators over raw
+pointers gave the table above: cc-pVTZ 24.3 -> 19.6 s, cc-pVTZ C1
+27.4 -> 23.6 s. The single-density build is untouched (it is also the
+conventional SCF's hot path).
+
+**Found while gating, not caused by N4: C1 runs are not reproducible.**
+cc-pVDZ C1 at 4 threads gives -76.0781256180 .. -76.0781256195 across
+identical runs, on the committed P5 code as well (-76.0781256194 /
+-76.0781256178 at 4 / 1 threads). The trace diverges at ~1e-10 in macro 2
+and the indefinite early region amplifies it. The symmetric 6-31G case repeats
+to every digit. Below every gate tolerance; source not yet found (candidates:
+a completion-order reduction somewhere in the per-product path, or Eigen's
+threaded products).
+
+**N5. Re-profile cc-pVTZ, then the tail.**
+
+- Find the C1 nondeterminism above; the fix is a fixed-order reduction, as
+  everywhere else in the code.
+- Route the single-density `_compute_fock_rhf` (inactive/active Fock,
+  conventional SCF) through the register-accumulator form if it measures
+  faster; it needs the SCF gates, not just CASSCF's.
 
 - `transform_eri`'s first quarter (15.6 %) has `mu` innermost at stride
   `nb^3`. A GEMM shape would also speed MP2/CC (gate `planck-transform-eri`).
@@ -305,7 +336,7 @@ model:
 | water cc-pVTZ | 17 | 9 (PySCF 9) |
 | water cc-pVTZ C1 | 24 | 17 (PySCF 20) |
 
-### P5: matrix-free relaxed solve everywhere (uncommitted)
+### P5: matrix-free relaxed solve everywhere (`305de17a`)
 
 **Profile** (cc-pVTZ C2v after P4, whole run, 4 threads):
 `_compute_fock_rhf` 76.3 %, `transform_eri` 15.6 %, thread wait 7.3 %. The

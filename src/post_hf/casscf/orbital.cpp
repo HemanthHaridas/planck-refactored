@@ -276,16 +276,36 @@ namespace HartreeFock::Correlation::CASSCF
         return HR;
     }
 
+    std::vector<Eigen::MatrixXd> fock_responses_mo(
+        const std::vector<const Eigen::MatrixXd *> &D_ao,
+        const OrbitalHessianContext &ctx)
+    {
+        const Eigen::MatrixXd &C = *ctx.C;
+        std::vector<Eigen::MatrixXd> G;
+        const bool hit = !D_ao.empty() && ctx.memo_D.size() == D_ao.front()->size() &&
+                         ctx.memo_D == *D_ao.front();
+        if (D_ao.size() == 1 && hit)
+            G.push_back(ctx.memo_G);
+        else if (ri_active(ctx.ri_calc))
+            for (const Eigen::MatrixXd *D : D_ao)
+                G.push_back(HartreeFock::Correlation::RI::build_ri_fock_rhf(*ctx.ri_calc, *D));
+        else
+            G = HartreeFock::ObaraSaika::_compute_fock_rhf(*ctx.eri, D_ao, C.rows());
+        if (!D_ao.empty() && !hit)
+        {
+            ctx.memo_D = *D_ao.front();
+            ctx.memo_G = G.front();
+        }
+        for (Eigen::MatrixXd &g : G)
+            g = C.transpose() * g * C;
+        return G;
+    }
+
     Eigen::MatrixXd fock_response_mo(
         const Eigen::MatrixXd &D_ao,
         const OrbitalHessianContext &ctx)
     {
-        const Eigen::MatrixXd &C = *ctx.C;
-        const Eigen::MatrixXd G =
-            ri_active(ctx.ri_calc)
-                ? HartreeFock::Correlation::RI::build_ri_fock_rhf(*ctx.ri_calc, D_ao)
-                : HartreeFock::ObaraSaika::_compute_fock_rhf(*ctx.eri, D_ao, static_cast<int>(C.rows()));
-        return C.transpose() * G * C;
+        return std::move(fock_responses_mo({&D_ao}, ctx).front());
     }
 
     Eigen::MatrixXd core_density_response(
@@ -385,9 +405,10 @@ namespace HartreeFock::Correlation::CASSCF
             RPg.middleCols(n_core, n_act) = R.middleCols(n_core, n_act) * (*ctx.gamma);
             const Eigen::MatrixXd dDa = C * (RPg + RPg.transpose()) * C.transpose();
 
-            const Eigen::MatrixXd dFI = R.transpose() * F_I_mo + F_I_mo * R +
-                                        fock_response_mo(core_density_response(R, C, n_core), ctx);
-            const Eigen::MatrixXd dFA = R.transpose() * F_A_mo + F_A_mo * R + fock_response_mo(dDa, ctx);
+            const Eigen::MatrixXd dDc = core_density_response(R, C, n_core);
+            const std::vector<Eigen::MatrixXd> dG = fock_responses_mo({&dDc, &dDa}, ctx);
+            const Eigen::MatrixXd dFI = R.transpose() * F_I_mo + F_I_mo * R + dG[0];
+            const Eigen::MatrixXd dFA = R.transpose() * F_A_mo + F_A_mo * R + dG[1];
 
             Eigen::MatrixXd dQ = R.transpose() * A.Q;
             const Eigen::MatrixXd Ract = R.middleCols(n_core, n_act);
