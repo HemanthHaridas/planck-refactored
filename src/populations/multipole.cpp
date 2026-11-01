@@ -237,7 +237,7 @@ HartreeFock::ObaraSaika::_compute_multipole_moments(
 
     for (std::size_t atom = 0; atom < calculator._molecule.natoms; ++atom)
     {
-        const double charge = static_cast<double>(calculator._molecule.atomic_numbers[atom]);
+        const double charge = calculator._molecule.nuclear_charge(atom);
         const Eigen::Vector3d position =
             calculator._molecule._standard.row(static_cast<Eigen::Index>(atom)).transpose() - origin;
         moments.nuclear_dipole += charge * position;
@@ -258,7 +258,7 @@ HartreeFock::ObaraSaika::_compute_multipole_moments(
     Eigen::Matrix3d raw_nuclear = Eigen::Matrix3d::Zero();
     for (std::size_t atom = 0; atom < calculator._molecule.natoms; ++atom)
     {
-        const double charge = static_cast<double>(calculator._molecule.atomic_numbers[atom]);
+        const double charge = calculator._molecule.nuclear_charge(atom);
         const Eigen::Vector3d position =
             calculator._molecule._standard.row(static_cast<Eigen::Index>(atom)).transpose() - origin;
         raw_nuclear += charge * (position * position.transpose());

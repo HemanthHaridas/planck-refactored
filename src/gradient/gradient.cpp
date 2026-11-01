@@ -91,8 +91,8 @@ static Eigen::MatrixXd compute_nuclear_repulsion_gradient(
         {
             if (a == b)
                 continue;
-            const double Za = static_cast<double>(mol.atomic_numbers[a]);
-            const double Zb = static_cast<double>(mol.atomic_numbers[b]);
+            const double Za = mol.nuclear_charge(a);
+            const double Zb = mol.nuclear_charge(b);
             const double dx = mol._standard(a, 0) - mol._standard(b, 0);
             const double dy = mol._standard(a, 1) - mol._standard(b, 1);
             const double dz = mol._standard(a, 2) - mol._standard(b, 2);
@@ -197,7 +197,7 @@ HartreeFock::Gradient::one_electron_gradient(
             for (Eigen::Index a = 0; a < natoms; ++a)
             {
                 const auto dV = HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_xyz(
-                    sp, centers[a], static_cast<double>(mol.atomic_numbers[a]));
+                    sp, centers[a], mol.nuclear_charge(a));
                 for (int q = 0; q < 3; ++q)
                     g.nuc_c(a, q) += dc * dV[q];
             }
@@ -367,9 +367,7 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rhf_g
         return std::unexpected(P_lifted.error());
     const Eigen::MatrixXd P = std::move(*P_lifted); // already has factor 2
 
-    int n_elec = 0;
-    for (std::size_t a = 0; a < calc._molecule.natoms; ++a)
-        n_elec += calc._molecule.atomic_numbers[a];
+    int n_elec = calc._molecule.total_nuclear_charge();
     n_elec -= calc._molecule.charge;
     const int n_occ = n_elec / 2;
 
@@ -399,9 +397,7 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rks_g
 {
     g_last_wavefunction_gradient_breakdown.reset();
     const Eigen::MatrixXd &P = calc._info._scf.alpha.density;
-    int n_elec = 0;
-    for (std::size_t a = 0; a < calc._molecule.natoms; ++a)
-        n_elec += calc._molecule.atomic_numbers[a];
+    int n_elec = calc._molecule.total_nuclear_charge();
     n_elec -= calc._molecule.charge;
     const int n_occ = n_elec / 2;
 
@@ -497,9 +493,7 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_g
     const Eigen::MatrixXd P_t = P_a + P_b; // total density
 
     // Electron counts
-    int n_elec = 0;
-    for (std::size_t a = 0; a < natoms; ++a)
-        n_elec += mol.atomic_numbers[a];
+    int n_elec = mol.total_nuclear_charge();
     n_elec -= mol.charge;
     const int n_unpaired = static_cast<int>(mol.multiplicity) - 1;
     const int n_alpha = (n_elec + n_unpaired) / 2;
@@ -562,8 +556,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_g
         {
             if (a == b)
                 continue;
-            const double Za = static_cast<double>(mol.atomic_numbers[a]);
-            const double Zb = static_cast<double>(mol.atomic_numbers[b]);
+            const double Za = mol.nuclear_charge(a);
+            const double Zb = mol.nuclear_charge(b);
             const double dx = mol._standard(a, 0) - mol._standard(b, 0);
             const double dy = mol._standard(a, 1) - mol._standard(b, 1);
             const double dz = mol._standard(a, 2) - mol._standard(b, 2);
@@ -675,8 +669,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rohf_
         {
             if (a == b)
                 continue;
-            const double Za = static_cast<double>(mol.atomic_numbers[a]);
-            const double Zb = static_cast<double>(mol.atomic_numbers[b]);
+            const double Za = mol.nuclear_charge(a);
+            const double Zb = mol.nuclear_charge(b);
             const double dx = mol._standard(a, 0) - mol._standard(b, 0);
             const double dy = mol._standard(a, 1) - mol._standard(b, 1);
             const double dz = mol._standard(a, 2) - mol._standard(b, 2);
@@ -714,9 +708,7 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_g
     const Eigen::MatrixXd &P_b = calc._info._scf.beta.density;
     const Eigen::MatrixXd P_t = P_a + P_b;
 
-    int n_elec = 0;
-    for (std::size_t a = 0; a < natoms; ++a)
-        n_elec += mol.atomic_numbers[a];
+    int n_elec = mol.total_nuclear_charge();
     n_elec -= mol.charge;
     const int n_unpaired = static_cast<int>(mol.multiplicity) - 1;
     const int n_alpha = (n_elec + n_unpaired) / 2;
