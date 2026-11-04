@@ -1,7 +1,7 @@
 # Can `planck-dft` run in a spherical-harmonic basis?
 
 Research scope, opened 2026-10-26, rewritten 2026-11-04 after a code audit.
-S0.1–S0.3 have landed; the rest is open. It expires when the work lands; rewrite it then as the
+S0.1–S0.4 have landed; S0.5 and the DFT steps are open. It expires when the work lands; rewrite it then as the
 answer. Status lives in `vault/Status/Open Work.md`.
 
 ## Why it matters
@@ -129,12 +129,50 @@ Each fixes one mechanism that DFT would otherwise work around:
    inputs, 32 outputs are identical and 4 move only in late-iteration
    residuals and the last kcal/mol digit (~1e-13 Eh); every Eh energy
    matches to 10 digits. Unit-tested in `planck-spherical-density-lift`.
-4. **RKS/UKS gradient lift** in `compute_rks_gradient` /
-   `compute_uks_gradient` (identity in Cartesian, so no DFT case moves).
+4. **RKS/UKS gradient lift — LANDED 2026-11-04.** `compute_rks_gradient`
+   and `compute_uks_gradient` now lift P and build W in the working basis and
+   lift it once, as the RHF/UHF paths do. Unreachable until DFT accepts a
+   spherical basis; Cartesian DFT gradients are byte-identical (B3LYP, HSE06
+   with long-range exchange, symmetry on, geomopt+freq, and a UKS doublet,
+   diffed against the previous `planck-dft`).
+5. **Renormalize C once, when the basis is read (scoped 2026-11-04).** Three
+   copies scale each row of C by 1/√((C S_cart Cᵀ)_mm) so diag(S_sph) = 1:
+   `hf_driver.cpp` at startup, a `normalize_cart_to_sph` lambda for the
+   checkpoint projection's second basis, and `rebuild_basis_dependent_state`
+   at every displaced geometry. Each builds a full Cartesian S with
+   `_compute_1e` just to read one diagonal element per row. **The premise
+   that this must re-run at every geometry is false.** C is block-diagonal
+   by shell, so (C S Cᵀ)_mm only involves overlaps between components of one
+   shell on one centre, which do not depend on geometry. Measured: on
+   water/cc-pVTZ (f shells), with the H atoms moved, `S_cart` changes and
+   the renormalized C is byte-identical.
+
+   Fix: do it in `read_gbs_basis` (`src/basis/gaussian.cpp`), right after
+   `build_cart_to_sph`, from the shell's own same-centre Cartesian overlap.
+   That overlap has a closed form: for components (a,b,c), (a′,b′,c′) and
+   primitives α, β with p = α + β it is
+   Σ_pq c_p c_q N_p N_q · I(a+a′) I(b+b′) I(c+c′), with I(n) = 0 for odd n
+   and (n−1)!! / (2p)^{n/2} · √(π/p) for even n, times both
+   `_component_norm`s. Then delete all three copies, the `S_cart` builds that
+   exist only to feed them, and the "kept in lockstep" comments. Every basis
+   then arrives normalized, including the checkpoint's small basis and
+   `planck-dft`'s per-geometry re-read, so DFT step 2 needs no
+   renormalization of its own.
+
+   Gates:
+   - unit: the read-time C equals the old S_cart-based renormalization to
+     ≤1e-14 relative per row, s through h shells (cc-pV5Z), on two
+     geometries, plus diag(C S_cart Cᵀ) = 1 (`planck-working-state-rebuild`
+     already checks the diagonal);
+   - every spherical and ECP case, the spherical cross-basis restart, and
+     spherical geomopt/freq.
+
+   Not bitwise: the closed form and `_compute_1e` round differently at the
+   ulp level, so spherical outputs will move at roundoff, as S0.3 did.
 
 ## Steps
 
-1. **S0.4** (S0.1–S0.3 done). HF-side gates as listed. All Cartesian DFT cases stay
+1. **S0.5** (S0.1–S0.4 done). HF-side gates as listed. All Cartesian DFT cases stay
    bitwise.
 2. **RKS and UKS single points**: LDA, GGA, global and range-separated
    hybrids, with SAD and SAO symmetry. Switch `prepare_current_geometry` to

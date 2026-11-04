@@ -383,14 +383,20 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rks_g
     bool with_breakdown)
 {
     g_last_wavefunction_gradient_breakdown.reset();
-    const Eigen::MatrixXd &P = calc._info._scf.alpha.density;
     int n_elec = calc._molecule.total_nuclear_charge();
     n_elec -= calc._molecule.charge;
     const int n_occ = n_elec / 2;
 
+    // P and W are built in the working basis and lifted once, as in the RHF path.
     const Eigen::MatrixXd C_occ = calc._info._scf.alpha.mo_coefficients.leftCols(n_occ);
     const Eigen::VectorXd eps = calc._info._scf.alpha.mo_energies.head(n_occ);
-    const Eigen::MatrixXd W = 2.0 * C_occ * eps.asDiagonal() * C_occ.transpose();
+    auto P_lifted = HartreeFock::BasisFunctions::to_cartesian(calc._shells, calc._info._scf.alpha.density);
+    auto W_lifted = HartreeFock::BasisFunctions::to_cartesian(
+        calc._shells, 2.0 * C_occ * eps.asDiagonal() * C_occ.transpose());
+    if (!P_lifted || !W_lifted)
+        return std::unexpected("RKS gradient: " + (!P_lifted ? P_lifted.error() : W_lifted.error()));
+    const Eigen::MatrixXd &P = *P_lifted;
+    const Eigen::MatrixXd &W = *W_lifted;
     const double cx_total =
         exchange_kernel.full_range_exchange_coefficient +
         exchange_kernel.short_range_exchange_coefficient;
@@ -691,8 +697,12 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_g
     const std::size_t natoms = mol.natoms;
     const std::size_t nb = basis.nbasis();
 
-    const Eigen::MatrixXd &P_a = calc._info._scf.alpha.density;
-    const Eigen::MatrixXd &P_b = calc._info._scf.beta.density;
+    auto Pa_lifted = HartreeFock::BasisFunctions::to_cartesian(basis, calc._info._scf.alpha.density);
+    auto Pb_lifted = HartreeFock::BasisFunctions::to_cartesian(basis, calc._info._scf.beta.density);
+    if (!Pa_lifted || !Pb_lifted)
+        return std::unexpected("UKS gradient: " + (!Pa_lifted ? Pa_lifted.error() : Pb_lifted.error()));
+    const Eigen::MatrixXd &P_a = *Pa_lifted;
+    const Eigen::MatrixXd &P_b = *Pb_lifted;
     const Eigen::MatrixXd P_t = P_a + P_b;
 
     int n_elec = mol.total_nuclear_charge();
@@ -706,7 +716,11 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_g
     const Eigen::MatrixXd Cb_occ = calc._info._scf.beta.mo_coefficients.leftCols(n_beta);
     const Eigen::VectorXd eb = calc._info._scf.beta.mo_energies.head(n_beta);
 
-    const Eigen::MatrixXd W = Ca_occ * ea.asDiagonal() * Ca_occ.transpose() + Cb_occ * eb.asDiagonal() * Cb_occ.transpose();
+    auto W_lifted = HartreeFock::BasisFunctions::to_cartesian(
+        basis, Ca_occ * ea.asDiagonal() * Ca_occ.transpose() + Cb_occ * eb.asDiagonal() * Cb_occ.transpose());
+    if (!W_lifted)
+        return std::unexpected("UKS gradient: " + W_lifted.error());
+    const Eigen::MatrixXd &W = *W_lifted;
 
     Eigen::MatrixXd core_pulay = Eigen::MatrixXd::Zero(natoms, 3);
     Eigen::MatrixXd two_electron = Eigen::MatrixXd::Zero(natoms, 3);

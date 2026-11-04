@@ -43,7 +43,7 @@ is the recommended one; none blocks another except where noted.
   in `src/dft/` check against the AO grid and need no edit). First shared fixes
   (S0): the HF spherical ESP defect (S0.1, fixed) and `ensure_eri` crashing its callers
   in spherical mode after a direct SCF (S0.2, fixed; both in Completion); public `to_cartesian`/`to_working` helpers replacing seven
-  hand-written copies (S0.3, landed); and `compute_rks/uks_gradient` not lifting P and W. Then
+  hand-written copies (S0.3, landed); `compute_rks/uks_gradient` not lifting P and W (S0.4, landed); and S0.5, renormalizing C once in `read_gbs_basis` instead of three copies that rebuild S_cart (its per-geometry premise is false: C is identical at any geometry). Then
   single points, gradients, TDDFT, SOSCF, DH single points; PCM and DH
   gradients stay rejected. Prerequisite for def2 and ECP DFT.
 - **D3 dispersion** (`docs/DISPERSION_D3_SCOPE.md`). None in `src/`. A
