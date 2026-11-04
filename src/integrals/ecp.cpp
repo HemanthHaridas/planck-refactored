@@ -163,7 +163,7 @@ Eigen::MatrixXd HartreeFock::ECP::_compute_ecp_gradient(const HartreeFock::Basis
 }
 
 std::expected<std::string, std::string> HartreeFock::ECP::describe_ecps(
-    const HartreeFock::Basis &basis, const HartreeFock::Molecule &molecule)
+    const HartreeFock::Basis &basis, const HartreeFock::Molecule &molecule, int deriv)
 {
     if (basis._ecps.empty())
         return std::string{};
@@ -175,10 +175,11 @@ std::expected<std::string, std::string> HartreeFock::ECP::describe_ecps(
     {
         const int L = static_cast<int>(ecp._semilocal.size());
         // libecpint only asserts these limits, and its asserts are compiled out in Release.
-        if (max_lb > LIBECPINT_MAX_L || L > LIBECPINT_MAX_L)
+        if (max_lb + deriv > LIBECPINT_MAX_L || L > LIBECPINT_MAX_L)
             return std::unexpected(std::format(
-                "ECP integrals: basis L {} / ECP L {} exceed libecpint's LIBECPINT_MAX_L {}",
-                max_lb, L, LIBECPINT_MAX_L));
+                "ECP integrals: basis L {} (+{} for derivatives) / ECP L {} exceed libecpint's "
+                "LIBECPINT_MAX_L {}",
+                max_lb, deriv, L, LIBECPINT_MAX_L));
         auto element = element_from_z(molecule.atomic_numbers[ecp._atom_index]);
         std::string terms = std::to_string(ecp._local.size());
         for (const auto &channel : ecp._semilocal)

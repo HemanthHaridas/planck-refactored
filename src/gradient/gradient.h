@@ -60,7 +60,8 @@ namespace HartreeFock
         struct OneElectronGradient
         {
             Eigen::MatrixXd kinetic, nuc_a, nuc_c, overlap;
-            Eigen::MatrixXd core() const { return kinetic + nuc_a + nuc_c; }
+            Eigen::MatrixXd ecp; // sum D dU_ECP/dR; zero without an ECP
+            Eigen::MatrixXd core() const { return kinetic + nuc_a + nuc_c + ecp; }
             Eigen::MatrixXd total() const { return core() - overlap; }
         };
         std::expected<OneElectronGradient, std::string> one_electron_gradient(

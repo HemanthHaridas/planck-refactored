@@ -3081,6 +3081,9 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-ecp-gradient-fd PRIVATE USE_OPENMP)
     endif()
     add_test(NAME planck-ecp-gradient-fd COMMAND planck-ecp-gradient-fd)
+    # def2 lives in the source tree; an older install may predate it.
+    set_tests_properties(planck-ecp-gradient-fd PROPERTIES
+        ENVIRONMENT BASIS_PATH=${CMAKE_SOURCE_DIR}/basis-sets)
 
     add_test(
         NAME planck-dft-coulomb-response

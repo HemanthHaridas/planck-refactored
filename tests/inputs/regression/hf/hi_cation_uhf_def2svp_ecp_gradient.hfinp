@@ -1,5 +1,5 @@
-# Boundary marker (docs/DEF2_ECP_SCOPE.md step 5): no ECP nuclear derivative
-# yet, so gradient-consuming workflows refuse an ECP basis.
+# def2 ECP gradient gate (docs/DEF2_ECP_SCOPE.md step 5): HI+ doublet, uhf, iodine 28-electron ECP.
+# Reference: PySCF 2.13.0 uhf analytic gradient, same GBS file (def2_ecp_references.py loader).
 %begin_control
     basis       def2-SVP
     calculation gradient
@@ -7,7 +7,7 @@
 %end_control
 
 %begin_scf
-    scf_type    rhf
+    scf_type    uhf
     guess       hcore
 %end_scf
 
@@ -19,7 +19,7 @@
 
 %begin_coords
 2
-0   1
+1   2
 H     0.000000     0.000000     0.000000
 I     0.000000     0.000000     1.609000
 %end_coords

@@ -1,25 +1,29 @@
 # What does Planck need to run def2 basis sets, including the ECPs for heavy elements?
 
-Research scope, opened 2026-10-26. Steps 1–4b have landed (branch
-`feat/def2-ecp`, PR #180); steps 5 (ECP gradients) and 6 (DFT with ECPs) are
-open, so this is still a scope. Rewrite it as the answer when they land.
+Research scope, opened 2026-10-26. Steps 1–5 have landed (branch
+`feat/def2-ecp`, PR #180); step 6 (DFT with ECPs) is open, so this is still a
+scope. Rewrite it as the answer when step 6 lands.
 Status lives in `vault/Status/Open Work.md`.
 
 ## Current result
 
-**def2 runs for H–Rn in `hartree-fock` single points, and matches PySCF to
-≤1.2e-9 Eh.** From Rb onward the core electrons are replaced by the def2
-effective core potentials (ECPs), computed by libecpint.
+**def2 runs for H–Rn in `hartree-fock` single points, gradients, geometry
+optimizations and frequencies, and matches PySCF to ≤1.2e-9 Eh and ≤3e-8
+Ha/Bohr.** From Rb onward the core electrons are replaced by the def2
+effective core potentials (ECPs), computed by libecpint (pinned to unmerged
+upstream PR #81; see Findings).
 
 | works | refused, with a message |
 |---|---|
-| def2-SVP, -SVPD, -TZVP, -TZVPP, -QZVP for H–Rn, spherical | ECP gradients, geometry optimization, frequencies, imaginary follow (step 5) |
-| RHF single points with ECPs, PySCF-gated | `planck-dft` with an ECP basis (step 6) |
-| SAD guess, full point-group symmetry, with ECPs | A checkpoint load or cross-basis projection between different ECP cores (falls back to the core guess) |
+| def2-SVP, -SVPD, -TZVP, -TZVPP, -QZVP for H–Rn, spherical | `planck-dft` with an ECP basis (step 6) |
+| RHF single points with ECPs, PySCF-gated | A checkpoint load or cross-basis projection between different ECP cores (falls back to the core guess) |
+| RHF/UHF/ROHF gradients, geometry optimization, frequencies with ECPs, PySCF-gated | MP2 gradients (refused for every spherical basis, not ECP-specific) |
+| SAD guess, full point-group symmetry, with ECPs | |
 | Checkpoint restart (version 8 stores core counts), FCIDUMP | |
 
-UHF, ROHF and post-HF energies with ECPs go through the same H_core and
-electron count but have no regression cases yet.
+UHF and ROHF energies with ECPs are gated through the gradient cases;
+post-HF energies go through the same H_core and electron count but have no
+regression cases yet.
 
 ### Validation
 
@@ -54,79 +58,43 @@ Restart, FCIDUMP and boundaries:
 | `hi_rhf_def2svp_ecp_fcidump` (smoke) | NELEC 26; HOMO is orbital 13 at −0.384222 (PySCF's). PySCF reading the file reproduces its ECP RHF energy to 2e-12, from the reference determinant and from an RHF solved on the file (`def2_ecp_references.py --fcidump`) |
 | `hi_rhf_def2svp_ecp_projection_refused` (smoke) | a 3-21G checkpoint (all-electron iodine, 54 electrons) is not projected into def2-SVP (26), and the fallback converges to PySCF's energy |
 | `hi_rhf_def2svp_ecp_restart_full` | `guess full` from a v8 ECP checkpoint converges in 2 iterations to the same energy |
-| `hi_rhf_def2svp_ecp_gradient_rejected` (smoke) | gradients refused; pins the parsed ECP ("I: 28 core electrons, Z_eff 25, L 3, terms 4/7/8/10") |
 | `hi_rks_def2svp_ecp_rejected` (smoke) | `planck-dft` refuses ECP bases |
 
-Full regression suite at step 4b: 207/211, the four failures being the known
-`*_rccsdt_sto3g` routing cases. `ctest` (the C++ unit binaries) has not been
-run on the branch.
+Gradients (step 5). PySCF references are `mf.nuc_grad_method()` on the same
+loader; geomopt against `geometric_solver`, frequencies against central
+differences of PySCF analytic gradients (1e-3 Bohr):
+
+| case | Planck − PySCF |
+|---|---|
+| `planck-ecp-gradient-fd` (ctest): tr(D U) FD vs analytic, random D, HI SVP/TZVP/QZVP, I2/TZVP, AuH·H2O/SVP | ≤ 4e-9 relative (not PySCF) |
+| `hi_rhf_def2svp_ecp_gradient` (smoke) | every printed digit; also pins the parsed ECP line |
+| `auh_h2o_rhf_def2svp_ecp_gradient`, C1, 15 nonzero components | ≤ 3e-8 Ha/Bohr |
+| `auh_h2o_rhf_def2svp_ecp_gradient_fd` (extended): vs Planck energy FD | 1.6e-7 Ha/Bohr (three-point FD truncation) |
+| `hi_cation_{uhf,rohf}_def2svp_ecp_gradient` | energy and gradient, every printed digit |
+| `hi_rhf_def2svp_ecp_geomopt` | E_opt 1.6e-9 Eh (r 1.60180 vs 1.60186 Å at Planck's default max\|g\| 2.7e-5) |
+| `hi_rhf_def2svp_ecp_freq` | 2421.83 vs 2421.80 cm⁻¹ |
+
+Core suite at step 5: 86/86. All 13 FD-driver cases pass (their Å→Bohr
+literal was also corrected, see Findings).
 
 ## What remains
 
-1. **Step 5, ECP gradients.** libecpint has the derivative:
-   `ECPIntegral::compute_shell_pair_derivative` returns nine blocks in the
-   order Ax, Ay, Az, Bx, By, Bz, Cx, Cy, Cz (C the ECP centre). Each adds to
-   its own atom's gradient, so when centres coincide the components sum, and
-   translational invariance ties the three together. Its header still says
-   "derivs currently being implemented", so trust nothing before the FD gate.
-
-   **One seam.** Every gradient (RHF, UHF, ROHF, RKS, UKS, RMP2, UMP2, the DH
-   path) gets its 1e term from `Gradient::one_electron_gradient`, already
-   called on the lifted Cartesian D. Adding the ECP term there reaches all of
-   them, and geomopt, frequencies and imaginary follow call those gradients.
-   Nothing per caller.
-
-   - **5a. `ECP::_compute_ecp_gradient(basis, shell_atom, D)` → natoms × 3**
-     (`src/integrals/ecp.cpp`), beside `_compute_ecp`, sharing its
-     shell/ECP conversion (factor it out, do not copy it). Engine built with
-     `deriv = 1`. Loop the same `b ≥ a` triangle with weight 2·D_μν off the
-     diagonal (D_μμ on it), `_component_norm` per element; A and B blocks go
-     to their shells' atoms, C to `ecp._atom_index`. Several pairs write one
-     atom row, so accumulate in the fixed 64-bin pattern of
-     `one_electron_gradient`, summed in bin order (thread-count invariant).
-   - **5b. Wire it in.** `OneElectronGradient` gains an `ecp` field, included
-     in `core()`; zero when the basis has no ECP, so every all-electron
-     gradient is byte-identical (check on the core suite).
-   - **5c. L ceiling.** `describe_ecps` takes the derivative order: libecpint
-     needs basis L + 1 ≤ `LIBECPINT_MAX_L` (5) for gradients. def2 tops out
-     at g, so it fits; the check is for safety, since libecpint only asserts.
-   - **5d. Lift the refusal** in `src/hf_driver.cpp` for Gradient, GeomOpt,
-     Frequency, GeomOptFrequency and ImaginaryFollow. MP2 gradients stay
-     refused by the existing spherical gate (def2 is spherical); no ECP code
-     needed for that. Confirm the geomopt inner loop moves the ECP centres
-     (`read_gbs_basis` → `rebuild_basis_dependent_state`): the final geomopt
-     energy must equal a single point at the printed geometry.
-   - **5e. Gates**, PySCF 2.13.0 `cart=False` (`mf.nuc_grad_method()`
-     includes the ECP term), extending `tests/pyscf/def2_ecp_references.py`:
-
-     | case | why |
-     |---|---|
-     | HI/def2-SVP RHF gradient (smoke) | smallest; the C term on I is the bulk |
-     | AuH·H2O/def2-SVP RHF gradient, C1 | all components nonzero, off-axis; H/O shells off the ECP centre exercise A, B and C separately |
-     | HI/def2-SVP energy FD, two steps | a third answer that shares no code with libecpint's derivative or PySCF |
-     | translational sum ≤ 1e-10 | ties A + B + C together cheaply |
-     | HI or AgH geomopt vs PySCF `geometric_solver` | E_opt, bond length |
-     | HI frequency vs PySCF FD-of-analytic Hessian | one stretch, < 0.1 cm⁻¹ |
-     | HI⁺ UHF and ROHF gradient | closes the "gate UHF/ROHF with an ECP" item at the same time |
-
-     Tolerance 1e-7 Ha/Bohr (print precision), as the other gradient gates.
-   - **Order:** 5a+5b with the HI FD and PySCF checks first; 5c–5d only once
-     those pass; geomopt/freq/UHF/ROHF gates last.
-2. **Step 6, DFT with ECPs**, after spherical DFT lands
+1. **Step 6, DFT with ECPs**, after spherical DFT lands
    (`docs/SPHERICAL_DFT_SCOPE.md`). H_core and the KS electron counts are
    already ECP-aware; lifting the rejection in `src/dft/driver.cpp` is the
-   gate. Same PySCF gates in `planck-dft`.
-3. **Smaller open items** (none blocks step 5; run `ctest` before starting
-   it, since it has never run on the branch):
-   - gate UHF, ROHF (folded into 5e) and post-HF energies (one RMP2 and one
-     CASSCF energy on HI vs PySCF) with an ECP;
+   gate. The DFT gradient calls `one_electron_gradient`, so it inherits the
+   ECP term. Same PySCF gates in `planck-dft`.
+2. **Smaller open items:**
+   - gate post-HF energies (one RMP2 and one CASSCF energy on HI vs PySCF)
+     with an ECP;
    - the two Cl cases (ZnCl2, AgCl) sit 1.1–1.2e-9 (~4e-13 relative) from
      PySCF for an unexplained reason. It is not the Å→Bohr constant (ZnCl2
      was 1.2e-9 before that fix too) and survives tight convergence in both
      codes;
    - when upstream PR #81 merges, repin `LIBECPINT_GIT_TAG` to the merge
      commit (the generator precision bug is in it, so nothing to report);
-   - run `ctest` on the branch.
+   - run the full `ctest` on the branch (only `planck-ecp-gradient-fd` has
+     run).
 
 ## How it works
 
@@ -171,17 +139,25 @@ rather than as a `Shell` variant, with `n` kept as written.
    Z − n_core, so the file is a consistent valence-only Hamiltonian. No note
    about the removed core is written; the format has no field for it and
    nothing a reader computes depends on it.
+8. Gradients: `ECP::_compute_ecp_gradient` contracts libecpint's shell-pair
+   derivatives (`deriv = 1`; blocks Ax..Cz, each added to its own centre's
+   atom) with the lifted Cartesian density, binned in fixed order.
+   `Gradient::one_electron_gradient` adds it as `OneElectronGradient::ecp`,
+   inside `core()`, so every gradient (RHF, UHF, ROHF, RKS, UKS, MP2, DH) and
+   the geomopt/frequency loops built on them inherit it; the inner loops
+   re-read the basis, so the ECP centres move with their atoms.
+   `describe_ecps` checks basis L + 1 ≤ `LIBECPINT_MAX_L` for every
+   non-single-point run.
 
 What needed no change: SCF, MP2, CC, CASSCF/RASSCF and PCM consume H_core and
 an electron count. Full point-group symmetry needed no change either: its
 skeleton covers only the two-electron Fock build, and H_core is built in full.
 Population analyses show fewer core electrons on ECP atoms, as expected.
 
-**Boundaries.** Fail cleanly, never return an incomplete answer: gradient
-workflows refuse ECP bases in `hf_driver.cpp` (step 5), `planck-dft` refuses
-them (step 6), and `describe_ecps` refuses basis or ECP L above libecpint's
-`LIBECPINT_MAX_L` (5), which libecpint only asserts (and asserts are off in
-Release).
+**Boundaries.** Fail cleanly, never return an incomplete answer: `planck-dft`
+refuses ECP bases (step 6), and `describe_ecps` refuses basis L (+1 for
+derivatives) or ECP L above libecpint's `LIBECPINT_MAX_L` (5), which libecpint
+only asserts (and asserts are off in Release).
 
 **Debugging ECP integrals.** Compare against PySCF (`mol.intor('ECPscalar')`),
 and when the two disagree, against a brute-force radial × Lebedev integral
@@ -236,7 +212,10 @@ CODATA 2010 Bohr (3e-11 away), so the reference scripts pass
 unchanged at tighter tolerances; PySCF also at `direct_scf_tol` 1e-16). Suite
 impact: 26 extended and 10 core cases pinned to Planck's own past output
 moved 2e-9..1.9e-7 Eh and were re-pinned; water SA-2 CASSCF moved from 3.6e-8
-to 1.1e-8 off PySCF's SAD-start minimum.
+to 1.1e-8 off PySCF's SAD-start minimum. Four FD drivers
+(`tests/{hf,dft,rmp2}_gradient_fd.py`, `dh_channel_fd_audit.py`) kept a third
+literal, 1.8897261254535, until step 5; it only scales their displacement by
+4e-10, and all their cases pass after the fix.
 
 **The nuclear-charge audit missed six electron counts (steps 2, 4b).** Step 2
 switched 16 of 46 direct `atomic_numbers[...]` reads to `nuclear_charge()`
@@ -315,8 +294,8 @@ and repin to it.
 | 3 | `99f142d1` | ECP parsing and storage; Z − n_core reaches the electron counts |
 | 4 | `749c8355` | ECP integrals in H_core via libecpint; SAD/PCM/counterpoise; precision patch |
 | 4b | `2c9009f0` | checkpoint v8 core counts; FCIDUMP checked; spherical projection fallback; six Σ Z counts |
-| 5a | — (working tree) | `_compute_ecp_gradient`, `planck-ecp-gradient-fd`; stock libecpint fails it beyond TZVP (Findings) |
-| 5 | — | ECP gradients (open) |
+| 5a | `b7962015` | `_compute_ecp_gradient`, `planck-ecp-gradient-fd`; libecpint pinned to PR #81 (Findings) |
+| 5 | — (working tree) | ECP term in `one_electron_gradient`; refusal lifted; RHF/UHF/ROHF gradient, geomopt, freq gates |
 | 6 | — | DFT with ECPs (open, after spherical DFT) |
 
 ## Not in this scope

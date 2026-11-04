@@ -10094,7 +10094,7 @@ driver.cpp
 | PCM gradients / geometry optimization / frequencies | Not implemented |
 | PCM coupling to post-HF (MP2, CC, CASSCF) | Not implemented |
 | Ghost atoms (basis-only centers; `Gh()`/`@`/`:` syntax) | Complete |
-| Effective core potentials (def2, Rb onward) | Single points in `hartree-fock` via libecpint. RHF is PySCF-gated (HI, AgCl, PdCO, AuH·H2O, to 1.1e-9 Eh); UHF/ROHF and post-HF energies take the same H_core but are not gated yet. Checkpoints (version 8) store ECP core counts and refuse to mix cores; FCIDUMP writes the valence-only Hamiltonian (PySCF-checked). ECP gradients, geometry optimization and frequencies are rejected; `planck-dft` rejects ECP bases |
+| Effective core potentials (def2, Rb onward) | Single points in `hartree-fock` via libecpint. RHF is PySCF-gated (HI, AgCl, PdCO, AuH·H2O, to 1.1e-9 Eh); post-HF energies take the same H_core but are not gated yet. Checkpoints (version 8) store ECP core counts and refuse to mix cores; FCIDUMP writes the valence-only Hamiltonian (PySCF-checked). RHF/UHF/ROHF ECP gradients, geometry optimization and frequencies are PySCF-gated (≤3e-8 Ha/Bohr, 0.03 cm⁻¹); `planck-dft` rejects ECP bases |
 | Counterpoise / BSSE correction (two-fragment dimer, RHF/UHF/ROHF energy) | Complete (PySCF-validated to \(4\times10^{-11}\) Eh) |
 | BSSE for DFT / N-body / gradients / post-HF references | Not implemented |
 

@@ -12,6 +12,7 @@
 #include "basis/basis.h"
 #include "basis/spherical.h"
 #include "integrals/base.h"
+#include "integrals/ecp.h"
 #include "integrals/hgp.h"
 #include "integrals/os.h"
 #include "integrals/shellpair.h"
@@ -168,7 +169,8 @@ HartreeFock::Gradient::one_electron_gradient(
     const std::size_t npairs = ao_pairs.size();
     std::vector<OneElectronGradient> bins(kBins, OneElectronGradient{
         Eigen::MatrixXd::Zero(natoms, 3), Eigen::MatrixXd::Zero(natoms, 3),
-        Eigen::MatrixXd::Zero(natoms, 3), Eigen::MatrixXd::Zero(natoms, 3)});
+        Eigen::MatrixXd::Zero(natoms, 3), Eigen::MatrixXd::Zero(natoms, 3),
+        Eigen::MatrixXd::Zero(natoms, 3)});
 #pragma omp parallel for schedule(dynamic)
     for (std::size_t bin = 0; bin < kBins; ++bin)
     {
@@ -211,6 +213,7 @@ HartreeFock::Gradient::one_electron_gradient(
         out.nuc_c += bins[bin].nuc_c;
         out.overlap += bins[bin].overlap;
     }
+    out.ecp = HartreeFock::ECP::_compute_ecp_gradient(calc._shells, *shell_atom, mol.natoms, D);
     return out;
 }
 

@@ -61,14 +61,13 @@ is the recommended one; none blocks another except where noted.
   2 (nuclear-charge audit: 46 reads, 16 physical, switched) and 3 (ECP
   parsing and storage; Z − n_core reaches every electron count) and 4
   (ECP integrals in H_core via libecpint, single-point RHF/UHF/ROHF; see
-  Completion) and 4b landed. Next: step 5, ECP gradients (gradient workflows are
-  refused, `hi_rhf_def2svp_ecp_gradient_rejected`); step 6 DFT
+  Completion) and 4b landed, then step 5 (ECP gradients). Next: step 6 DFT
   (`planck-dft` refuses ECP bases). Open, minor: the two Cl cases
   (ZnCl2, AgCl, def2-SVP) sit 1.1-1.2e-9 (~4e-13 relative) from PySCF,
   unexplained, pinned at 2e-9. Step 4b (checkpoint v8 with ECP core counts,
-  FCIDUMP checked against PySCF) landed; see Completion. Step 5a
-  (`_compute_ecp_gradient`, gated by `planck-ecp-gradient-fd`) is in the
-  working tree.
+  FCIDUMP checked against PySCF) and step 5 (ECP gradients) landed; see
+  Completion. Remaining: step 6 (DFT, after spherical DFT), post-HF energy
+  gates with an ECP, and a full `ctest` run on the branch.
 - **libecpint is pinned to an UNMERGED upstream PR — recheck when it merges
   (decided 2026-11-04).** Stock libecpint (upstream HEAD `95203c68`; no
   release since v1.0.7) has ECP derivatives that miss finite differences by

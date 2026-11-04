@@ -452,23 +452,16 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     }
     calculator._shells = std::move(*basis_res);
     calculator.sync_ecp_core_electrons();
-    if (auto ecp = HartreeFock::ECP::describe_ecps(calculator._shells, calculator._molecule); !ecp)
+    // Every non-single-point workflow takes nuclear gradients (frequencies by
+    // finite differences of them), which need the ECP derivative.
+    const int ecp_deriv = calculator._calculation == HartreeFock::CalculationType::SinglePoint ? 0 : 1;
+    if (auto ecp = HartreeFock::ECP::describe_ecps(calculator._shells, calculator._molecule, ecp_deriv); !ecp)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "ECP :", ecp.error());
         return EXIT_FAILURE;
     }
     else if (!ecp->empty())
-    {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "ECP :", *ecp);
-        // ponytail: no ECP nuclear derivative yet (docs/DEF2_ECP_SCOPE.md step 5).
-        if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
-        {
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "ECP :",
-                                         "ECP analytic gradients are not implemented yet "
-                                         "(docs/DEF2_ECP_SCOPE.md step 5); only single points run");
-            return EXIT_FAILURE;
-        }
-    }
 
     // ── Spherical-harmonic basis: supported-feature gate (Phase 2, Step 2.0) ─────
     // The spherical path covers single-point RHF/UHF/ROHF energies (Conventional and

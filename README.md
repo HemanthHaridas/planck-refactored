@@ -765,7 +765,7 @@ cmake --build build --target fetch-basis-sets
 | Core-valence Dunning | `cc-pCVDZ`, `cc-pCVTZ`, `cc-pCVQZ`, `cc-pCV5Z` |
 | Augmented Dunning | `aug-cc-pVDZ`, `aug-cc-pVTZ`, `aug-cc-pVQZ`, `aug-cc-pV5Z`, `aug-cc-pV6Z`, `aug-cc-pV7Z` |
 | Augmented core-valence Dunning | `aug-cc-pCVDZ`, `aug-cc-pCVTZ`, `aug-cc-pCVQZ`, `aug-cc-pCV5Z` |
-| Karlsruhe def2 (H–Rn) | `def2-SVP`, `def2-SVPD`, `def2-TZVP`, `def2-TZVPP`, `def2-QZVP`. Rb onward carry ECPs: single points in `hartree-fock` only; gradient workflows and `planck-dft` refuse them |
+| Karlsruhe def2 (H–Rn) | `def2-SVP`, `def2-SVPD`, `def2-TZVP`, `def2-TZVPP`, `def2-QZVP`. Rb onward carry ECPs: `hartree-fock` single points, RHF/UHF/ROHF gradients, geometry optimization and frequencies; `planck-dft` refuses them |
 
 ### Checkpoint System
 

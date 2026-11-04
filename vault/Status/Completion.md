@@ -416,6 +416,19 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **ECP gradients, geometry optimization and frequencies (2026-11-04, branch
+  `feat/def2-ecp`, `docs/DEF2_ECP_SCOPE.md` step 5).**
+  `ECP::_compute_ecp_gradient` contracts libecpint's shell-pair derivatives
+  with the density; `one_electron_gradient` adds it inside `core()`, so
+  RHF/UHF/ROHF (and the RKS/UKS/MP2/DH paths once those accept ECPs) inherit
+  it with no per-caller code. Stock libecpint's derivatives miss FD by 4.6e-5
+  relative on HI/def2-QZVP; libecpint is pinned to unmerged upstream PR #81,
+  which passes (see Open Work for the repin). PySCF gates: HI and C1 AuH·H2O
+  RHF gradients (≤3e-8 Ha/Bohr), HI⁺ UHF/ROHF (every printed digit), HI
+  geomopt (E_opt 1.6e-9 Eh) and frequency (0.03 cm⁻¹); plus
+  `planck-ecp-gradient-fd` (ctest) and an AuH·H2O energy-FD case. Found on
+  the way: four FD drivers kept a stale Å→Bohr literal (fixed).
+
 - **Checkpoint and FCIDUMP with ECPs (2026-11-01, branch `feat/def2-ecp`,
   `docs/DEF2_ECP_SCOPE.md` step 4b).** Checkpoint version 8 stores each
   atom's ECP core count; a load or cross-basis projection between different

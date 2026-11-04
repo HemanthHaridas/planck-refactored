@@ -5343,20 +5343,192 @@
    "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP_SCOPE.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr."
   },
   {
-   "id": "hi_rhf_def2svp_ecp_gradient_rejected",
-   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp_gradient_rejected.hfinp",
+   "id": "hi_rhf_def2svp_ecp_gradient",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp_gradient.hfinp",
    "executable": "hartree-fock",
    "tags": [
     "smoke",
     "def2",
     "ecp"
    ],
-   "expected_exit_code": 1,
+   "_pyscf_reference": "PySCF 2.13.0 RHF/def2-SVP analytic gradient (cart=False, ECP from Planck's GBS, def2_ecp_references.py loader): z = -/+3.0433018574e-03 Ha/Bohr on H/I, max 3.0433018574e-03, rms 1.7570511466e-03. Planck agrees in every printed digit.",
+   "expected_exit_code": 0,
    "contains": [
-    "ECP analytic gradients are not implemented yet",
     "atom 2 I: 28 core electrons, Z_eff 25, L 3, terms 4/7/8/10"
    ],
-   "_note": "Boundary marker, docs/DEF2_ECP_SCOPE.md step 5: gradient-consuming workflows refuse an ECP basis until the ECP nuclear derivative lands."
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "gradient_max",
+     "expected": 3.0433018574e-03,
+     "atol": 1e-07
+    },
+    {
+     "type": "metric_close",
+     "metric": "gradient_rms",
+     "expected": 1.7570511466e-03,
+     "atol": 1e-07
+    }
+   ]
+  },
+  {
+   "id": "auh_h2o_rhf_def2svp_ecp_gradient",
+   "input": "tests/inputs/regression/hf/auh_h2o_rhf_def2svp_ecp_gradient.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "core",
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 RHF/def2-SVP analytic gradient, C1, all 15 components nonzero; max 4.8635659355e-02, rms 1.9234832752e-02. Planck matches every component to <= 3e-8 Ha/Bohr.",
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "gradient_max",
+     "expected": 4.8635659355e-02,
+     "atol": 1e-07
+    },
+    {
+     "type": "metric_close",
+     "metric": "gradient_rms",
+     "expected": 1.9234832752e-02,
+     "atol": 1e-07
+    }
+   ]
+  },
+  {
+   "id": "auh_h2o_rhf_def2svp_ecp_gradient_fd",
+   "input": "tests/inputs/regression/hf/auh_h2o_rhf_def2svp_ecp_gradient.hfinp",
+   "executable": "tests/hf_gradient_fd.py",
+   "args": [
+    "--atol",
+    "1e-6"
+   ],
+   "tags": [
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "timeout_s": 600,
+   "_note": "Analytic ECP gradient against Planck's own central-difference energies (30 SCFs): a check sharing no code with libecpint's derivative or PySCF.",
+   "expected_exit_code": 0,
+   "contains": [
+    "PASS"
+   ]
+  },
+  {
+   "id": "hi_rhf_def2svp_ecp_geomopt",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp_geomopt.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "timeout_s": 300,
+   "_pyscf_reference": "PySCF 2.13.0 RHF/def2-SVP + geometric_solver (gmax/grms 1e-6): E_opt = -297.2315523046 Eh, r(H-I) = 1.6018605 Ang. Planck IC-BFGS: -297.2315523030 Eh (Delta 1.6e-9), r = 1.6017967 Ang at final max|g| 2.7e-5.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Geometry Optimization",
+    "Final Energy",
+    "Optimized Geometry"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -297.2315523046,
+     "atol": 1e-07
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 0.0005
+    }
+   ]
+  },
+  {
+   "id": "hi_rhf_def2svp_ecp_freq",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp_freq.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "timeout_s": 300,
+   "_pyscf_reference": "PySCF 2.13.0 RHF/def2-SVP at the input geometry (r = 1.609 Ang): central differences of analytic gradients (1e-3 Bohr) + thermo.harmonic_analysis, stretch = 2421.80 cm-1. Planck semi-numerical Hessian: 2421.83 cm-1 (Delta 0.03).",
+   "expected_exit_code": 0,
+   "contains": [
+    "Vibrational Frequencies",
+    "Frequency (cm"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 2421.80,
+     "atol": 1.0
+    }
+   ]
+  },
+  {
+   "id": "hi_cation_uhf_def2svp_ecp_gradient",
+   "input": "tests/inputs/regression/hf/hi_cation_uhf_def2svp_ecp_gradient.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "core",
+    "extended",
+    "def2",
+    "ecp",
+    "open_shell"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 UHF/def2-SVP, HI+ doublet: E = -296.8760702707 Eh, analytic gradient max 4.1303019051e-03, rms 2.3846309167e-03 Ha/Bohr. Planck agrees in every printed digit (energy and gradient).",
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "gradient_max",
+     "expected": 4.1303019051e-03,
+     "atol": 1e-07
+    },
+    {
+     "type": "metric_close",
+     "metric": "gradient_rms",
+     "expected": 2.3846309167e-03,
+     "atol": 1e-07
+    }
+   ]
+  },
+  {
+   "id": "hi_cation_rohf_def2svp_ecp_gradient",
+   "input": "tests/inputs/regression/hf/hi_cation_rohf_def2svp_ecp_gradient.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "core",
+    "extended",
+    "def2",
+    "ecp",
+    "open_shell"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 ROHF/def2-SVP, HI+ doublet: E = -296.8724707727 Eh, analytic gradient max 3.9617395647e-03, rms 2.2873114041e-03 Ha/Bohr. Planck agrees in every printed digit (energy and gradient).",
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "gradient_max",
+     "expected": 3.9617395647e-03,
+     "atol": 1e-07
+    },
+    {
+     "type": "metric_close",
+     "metric": "gradient_rms",
+     "expected": 2.2873114041e-03,
+     "atol": 1e-07
+    }
+   ]
   },
   {
    "id": "hi_rhf_def2svp_ecp_restart_full",

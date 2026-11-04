@@ -27,10 +27,12 @@ namespace HartreeFock
                                               const Eigen::MatrixXd &D);
 
         // One line per ECP atom (core electrons, Z_eff, channel term counts), or an
-        // error when an angular momentum exceeds what libecpint was built for.
+        // error when an angular momentum exceeds what libecpint was built for:
+        // derivatives need basis L + deriv <= LIBECPINT_MAX_L.
         // Empty string when the basis carries no ECP.
         std::expected<std::string, std::string> describe_ecps(const HartreeFock::Basis &basis,
-                                                              const HartreeFock::Molecule &molecule);
+                                                              const HartreeFock::Molecule &molecule,
+                                                              int deriv = 0);
     } // namespace ECP
 } // namespace HartreeFock
 
