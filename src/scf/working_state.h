@@ -22,15 +22,9 @@ namespace HartreeFock
         //
         // What this does:
         //   1. Builds shell pairs from the current shells.
-        //   2. In spherical mode, row-normalizes calc._shells._cart_to_sph
-        //      so diag(C S_cart Cᵀ) = 1 in the new basis. The transform
-        //      directions depend only on L (geometry-independent), but the
-        //      row scaling depends on S_cart, which moves with geometry.
-        //      Skipping this on a geometry change silently corrupts every
-        //      downstream spherical AO matrix element.
-        //   3. Computes Cartesian S, T, V using the calc._integral._engine
+        //   2. Computes Cartesian S, T, V using the calc._integral._engine
         //      and the current integral-symmetry ops.
-        //   4. Stores the working-basis 1e matrices on calc:
+        //   3. Stores the working-basis 1e matrices on calc:
         //        Cartesian mode: _overlap = S,           _hcore = T + V
         //        Spherical mode: _overlap = C·S·Cᵀ,      _hcore = C·(T+V)·Cᵀ
         //
@@ -41,9 +35,11 @@ namespace HartreeFock
         // that lives inline at the top of src/driver.cpp. The geomopt and
         // freq inner loops (src/opt/geomopt.cpp, src/freq/hessian.cpp) call
         // this helper at every geometry step to stay in sync with the
-        // driver's spherical-aware setup; without it, a stale _cart_to_sph
-        // and Cartesian-stored _overlap / _hcore would silently break the
-        // spherical SCF at displaced geometries.
+        // driver's spherical-aware setup; without it, Cartesian-stored
+        // _overlap / _hcore would silently break the spherical SCF at
+        // displaced geometries. (C itself needs nothing per geometry:
+        // read_gbs_basis row-normalizes it from same-centre overlaps, which
+        // do not depend on the geometry.)
         std::expected<std::vector<HartreeFock::ShellPair>, std::string>
         rebuild_basis_dependent_state(HartreeFock::Calculator &calc);
     } // namespace SCF

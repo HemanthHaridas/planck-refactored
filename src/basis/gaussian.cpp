@@ -55,6 +55,51 @@ namespace
                 shell.primitives = std::move(kept);
         }
     }
+
+    // ∫ xⁿ e^(−p x²) dx over the real line: 0 for odd n, (n−1)!!/(2p)^(n/2) √(π/p).
+    double gaussian_moment(int n, double p)
+    {
+        constexpr double pi = 3.1415926535897932384626433832795;
+        if (n % 2)
+            return 0.0;
+        return HartreeFock::BasisFunctions::double_factorial(n - 1) / std::pow(2.0 * p, n / 2) *
+               std::sqrt(pi / p);
+    }
+
+    // Scale each row m of C by 1/√((C S Cᵀ)_mm) so diag(S_sph) = 1. C is
+    // block-diagonal by shell, so (C S Cᵀ)_mm only needs the overlap between
+    // components of one shell on one centre, which has a closed form and does
+    // not depend on the geometry: one normalization at read time holds for
+    // every geometry the basis is later used at.
+    void normalize_cart_to_sph_rows(const HartreeFock::Basis &basis, Eigen::MatrixXd &C)
+    {
+        const auto &bfs = basis._basis_functions;
+        const Eigen::Index n = static_cast<Eigen::Index>(bfs.size());
+        Eigen::MatrixXd S = Eigen::MatrixXd::Zero(n, n); // same-shell blocks only
+        for (Eigen::Index mu = 0; mu < n; ++mu)
+            for (Eigen::Index nu = mu; nu < n && bfs[nu]._shell == bfs[mu]._shell; ++nu)
+            {
+                const HartreeFock::Shell &sh = *bfs[mu]._shell;
+                const Eigen::Vector3i a = bfs[mu]._cartesian + bfs[nu]._cartesian;
+                double sum = 0.0;
+                for (Eigen::Index i = 0; i < sh._primitives.size(); ++i)
+                    for (Eigen::Index j = 0; j < sh._primitives.size(); ++j)
+                    {
+                        const double p = sh._primitives[i] + sh._primitives[j];
+                        sum += sh._coefficients[i] * sh._normalizations[i] * sh._coefficients[j] *
+                               sh._normalizations[j] * gaussian_moment(a[0], p) * gaussian_moment(a[1], p) *
+                               gaussian_moment(a[2], p);
+                    }
+                S(mu, nu) = S(nu, mu) = sum * bfs[mu]._component_norm * bfs[nu]._component_norm;
+            }
+        const Eigen::MatrixXd CS = C * S;
+        for (Eigen::Index m = 0; m < C.rows(); ++m)
+        {
+            const double norm2 = CS.row(m).dot(C.row(m));
+            if (norm2 > 0.0)
+                C.row(m) /= std::sqrt(norm2);
+        }
+    }
 } // namespace
 
 int HartreeFock::BasisFunctions::double_factorial(int n)
@@ -217,6 +262,7 @@ std::expected<HartreeFock::Basis, std::string> HartreeFock::BasisFunctions::read
         auto C = HartreeFock::BasisFunctions::build_cart_to_sph(basis);
         if (!C)
             return std::unexpected(C.error());
+        normalize_cart_to_sph_rows(basis, *C);
         basis._cart_to_sph = std::move(*C);
     }
 

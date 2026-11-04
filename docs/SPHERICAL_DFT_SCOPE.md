@@ -1,7 +1,7 @@
 # Can `planck-dft` run in a spherical-harmonic basis?
 
 Research scope, opened 2026-10-26, rewritten 2026-11-04 after a code audit.
-S0.1–S0.4 have landed; S0.5 and the DFT steps are open. It expires when the work lands; rewrite it then as the
+S0.1–S0.5 have landed; the DFT steps are open. It expires when the work lands; rewrite it then as the
 answer. Status lives in `vault/Status/Open Work.md`.
 
 ## Why it matters
@@ -135,7 +135,7 @@ Each fixes one mechanism that DFT would otherwise work around:
    spherical basis; Cartesian DFT gradients are byte-identical (B3LYP, HSE06
    with long-range exchange, symmetry on, geomopt+freq, and a UKS doublet,
    diffed against the previous `planck-dft`).
-5. **Renormalize C once, when the basis is read (scoped 2026-11-04).** Three
+5. **Renormalize C once, when the basis is read — LANDED 2026-11-04.** Three
    copies scale each row of C by 1/√((C S_cart Cᵀ)_mm) so diag(S_sph) = 1:
    `hf_driver.cpp` at startup, a `normalize_cart_to_sph` lambda for the
    checkpoint projection's second basis, and `rebuild_basis_dependent_state`
@@ -168,11 +168,20 @@ Each fixes one mechanism that DFT would otherwise work around:
      spherical geomopt/freq.
 
    Not bitwise: the closed form and `_compute_1e` round differently at the
-   ulp level, so spherical outputs will move at roundoff, as S0.3 did.
+   ulp level, so spherical outputs move at roundoff, as S0.3 did.
+
+   Landed as written: `normalize_cart_to_sph_rows` in `gaussian.cpp`, called
+   after `build_cart_to_sph`; the three copies and their S_cart builds are
+   deleted (the checkpoint projection now uses the small basis's C as read).
+   `planck-working-state-rebuild` gains the gate: on water/cc-pV5Z at two
+   geometries the read-time C matches the S_cart normalization to ≤1e-14
+   relative per row, is identical between geometries, and the first
+   geometry's C gives diag(C S Cᵀ) = 1 with the second's overlap. With the
+   read-time call removed, both checks fail (0.999 relative).
 
 ## Steps
 
-1. **S0.5** (S0.1–S0.4 done). HF-side gates as listed. All Cartesian DFT cases stay
+1. **S0 is done** (S0.1–S0.5). HF-side gates as listed. All Cartesian DFT cases stay
    bitwise.
 2. **RKS and UKS single points**: LDA, GGA, global and range-separated
    hybrids, with SAD and SAO symmetry. Switch `prepare_current_geometry` to

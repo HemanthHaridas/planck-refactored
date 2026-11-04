@@ -687,29 +687,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Number of Shell pairs :", shellpairs.size());
     HartreeFock::Logger::blank();
 
-    // ── Spherical transform normalization (must precede every consumer) ──────────
-    // The load-time C produces correct spherical directions but unnormalized rows.
-    // Normalize each row m by 1/√((C S_cart Cᵀ)_mm) so diag(S_sph) = 1, using the
-    // real Cartesian overlap. This is done here — once, right after the basis exists
-    // and before any S/H/ERI transform — so it is independent of the SCF guess. (On a
-    // "guess full" checkpoint restart the 1e block below is skipped, but the ERI is
-    // still rebuilt and transformed with C, so C must already be normalized here.)
-    if (calculator._shells._spherical)
-    {
-        const auto [S_cart, T_cart_unused] =
-            _compute_1e(shellpairs, calculator._shells.nbasis(),
-                        calculator._integral._engine, nullptr);
-        (void)T_cart_unused;
-        Eigen::MatrixXd C = calculator._shells._cart_to_sph;
-        const Eigen::MatrixXd CS = C * S_cart; // [n_sph × n_cart]
-        for (Eigen::Index m = 0; m < C.rows(); ++m)
-        {
-            const double norm2 = CS.row(m).dot(C.row(m));
-            if (norm2 > 0.0)
-                C.row(m) /= std::sqrt(norm2);
-        }
-        calculator._shells._cart_to_sph = std::move(C);
-    }
+    // C arrives row-normalized from read_gbs_basis (diag(S_sph) = 1 at any geometry).
 
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "SCF Mode :", map_enum<HartreeFock::SCFMode>(calculator._scf._mode));
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Nuclear Repulsion :", std::format("{:.10f} Eh", calculator._nuclear_repulsion));
@@ -799,33 +777,6 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                 else
                 {
                     const HartreeFock::Basis &small_shells = *small_shells_res;
-                    auto normalize_cart_to_sph =
-                        [](const HartreeFock::Basis &basis,
-                           const Eigen::MatrixXd &S_cart,
-                           const std::string &label)
-                        -> std::expected<Eigen::MatrixXd, std::string>
-                    {
-                        if (!basis._spherical)
-                            return std::unexpected(label + " basis is not spherical");
-
-                        Eigen::MatrixXd C = basis._cart_to_sph;
-                        if (static_cast<std::size_t>(C.rows()) != basis.nbasis_sph() ||
-                            static_cast<std::size_t>(C.cols()) != basis.nbasis())
-                        {
-                            return std::unexpected(
-                                label + " spherical transform shape does not match nbasis_sph() x nbasis()");
-                        }
-
-                        const Eigen::MatrixXd CS = C * S_cart;
-                        for (Eigen::Index m = 0; m < C.rows(); ++m)
-                        {
-                            const double norm2 = CS.row(m).dot(C.row(m));
-                            if (norm2 > 0.0)
-                                C.row(m) /= std::sqrt(norm2);
-                        }
-                        return C;
-                    };
-
                     Eigen::MatrixXd S_proj = S;
                     Eigen::MatrixXd H_proj = H_cart;
                     Eigen::MatrixXd S_cross;
@@ -856,32 +807,16 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                         }
                         else
                         {
+                            // Both transforms arrive row-normalized from read_gbs_basis.
                             const Eigen::MatrixXd &C_large = calculator._shells._cart_to_sph;
-                            auto small_shellpairs = build_shellpairs(small_shells);
-                            const auto [S_small_cart, T_small_unused] =
-                                _compute_1e(small_shellpairs, small_shells.nbasis(),
-                                            calculator._integral._engine, nullptr);
-                            (void)T_small_unused;
-                            auto C_small_res =
-                                normalize_cart_to_sph(small_shells, S_small_cart, "checkpoint projection");
-                            if (!C_small_res)
-                            {
-                                HartreeFock::Logger::logging(
-                                    HartreeFock::LogLevel::Warning, "Checkpoint :",
-                                    std::format("Projection failed: {} — using H_core guess", C_small_res.error()));
-                                projection_ok = false;
-                            }
-                            else
-                            {
-                                S_proj = C_large * S * C_large.transpose();
-                                H_proj = C_large * H_cart * C_large.transpose();
-                                const Eigen::MatrixXd S_cross_cart =
-                                    HartreeFock::ObaraSaika::_compute_cross_overlap(
-                                        calculator._shells, small_shells);
-                                S_cross = C_large * S_cross_cart * C_small_res->transpose();
-                                calculator._overlap = S_proj;
-                                calculator._hcore = H_proj;
-                            }
+                            S_proj = C_large * S * C_large.transpose();
+                            H_proj = C_large * H_cart * C_large.transpose();
+                            const Eigen::MatrixXd S_cross_cart =
+                                HartreeFock::ObaraSaika::_compute_cross_overlap(
+                                    calculator._shells, small_shells);
+                            S_cross = C_large * S_cross_cart * small_shells._cart_to_sph.transpose();
+                            calculator._overlap = S_proj;
+                            calculator._hcore = H_proj;
                         }
                     }
                     else
@@ -1892,8 +1827,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             }
 
             // Rebuild the geometry-derived working state via the spherical-aware
-            // helper (renormalizes _cart_to_sph, writes _overlap/_hcore in the
-            // working basis). Same call shape as the geomopt/freq inner loops.
+            // helper (writes _overlap/_hcore in the working basis). Same call shape as the geomopt/freq inner loops.
             auto sp_sym_res = HartreeFock::SCF::rebuild_basis_dependent_state(calculator);
             if (!sp_sym_res)
             {

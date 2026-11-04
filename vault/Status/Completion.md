@@ -416,6 +416,17 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Spherical prerequisites S0.3–S0.5 (2026-11-04, `docs/SPHERICAL_DFT_SCOPE.md`).**
+  One pair of shape-checked `BasisFunctions::to_cartesian` / `to_working`
+  helpers replaces seven hand-written C·M·Cᵀ copies (S0.3); the RKS/UKS
+  gradients lift P and W like the HF ones (S0.4, Cartesian byte-identical);
+  and C is row-normalized once in `read_gbs_basis` from the closed-form
+  same-centre overlap instead of by three copies that built S_cart at every
+  geometry (S0.5). The per-geometry premise was false: C is block-diagonal by
+  shell, so its normalization is geometry-independent (renormalized C
+  byte-identical at two water/cc-pVTZ geometries). Spherical outputs move at
+  roundoff only.
+
 - **Spherical post-HF after a direct SCF no longer crashes (2026-11-04,
   `docs/SPHERICAL_DFT_SCOPE.md` S0.2).** `Correlation::ensure_eri` returned
   an empty tensor in spherical mode when the SCF had cached none, and its
