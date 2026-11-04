@@ -4464,6 +4464,148 @@
    ]
   },
   {
+   "id": "water_rks_b3lyp_spherical_ccpvtz",
+   "input": "tests/inputs/regression/spherical/water_rks_b3lyp_spherical_ccpvtz.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "spherical",
+    "dft"
+   ],
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4537170708,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 RKS B3LYP cart=False, Planck's GBS and Bohr, 150 radial x 590 Lebedev, unpruned (grid_radial_points / grid_angular_points; PySCF atom_grid=(150,590), prune=None): -76.45371707079 (Planck -76.45371707079, 2.8e-13). Same comparison cart=True: 5.8e-13, the grid floor."
+  },
+  {
+   "id": "water_rks_hse06_spherical_ccpvtz",
+   "input": "tests/inputs/regression/spherical/water_rks_hse06_spherical_ccpvtz.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "spherical",
+    "dft"
+   ],
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3757510018,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 RKS HSE06 cart=False, 150 radial x 590 Lebedev, unpruned (grid_radial_points / grid_angular_points; PySCF atom_grid=(150,590), prune=None): Planck - PySCF 8.5e-14 (cart=True 4.3e-13). Exercises the short-range exchange K through the spherical boundary."
+  },
+  {
+   "id": "water_cation_uks_pbe_spherical_ccpvtz",
+   "input": "tests/inputs/regression/spherical/water_cation_uks_pbe_spherical_ccpvtz.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "spherical",
+    "dft",
+    "open_shell"
+   ],
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.8961252144,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 UKS PBE cart=False, water cation doublet, 150 radial x 590 Lebedev, unpruned (grid_radial_points / grid_angular_points; PySCF atom_grid=(150,590), prune=None): Planck - PySCF 3.6e-13 (cart=True 7.0e-13)."
+  },
+  {
+   "id": "h2o2_rks_b3lyp_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_rks_b3lyp_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "spherical",
+    "dft"
+   ],
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -151.5284586353,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 RKS B3LYP cart=False, C1 H2O2 (unequal O-H, non-planar), 150 radial x 590 Lebedev, unpruned (grid_radial_points / grid_angular_points; PySCF atom_grid=(150,590), prune=None): Planck - PySCF 2.1e-12 (cart=True 2.5e-12)."
+  },
+  {
+   "id": "h2o2_cation_uks_pbe_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_cation_uks_pbe_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "spherical",
+    "dft",
+    "open_shell"
+   ],
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -150.9912749866,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 UKS PBE cart=False, C1 H2O2 cation doublet, 150 radial x 590 Lebedev, unpruned (grid_radial_points / grid_angular_points; PySCF atom_grid=(150,590), prune=None): Planck - PySCF 2.1e-12 (cart=True 2.1e-12)."
+  },
+  {
+   "id": "water_rks_b3lyp_spherical_631g_exact",
+   "input": "tests/inputs/regression/spherical/water_rks_b3lyp_spherical_631g_exact.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "smoke",
+    "core",
+    "spherical",
+    "dft"
+   ],
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3780274825,
+     "atol": 1e-09
+    }
+   ],
+   "_note": "Exact gate: equals the Cartesian B3LYP/6-31G energy of the same input with basis_type cartesian (-76.3780274825); measured difference 8.5e-14."
+  },
+  {
+   "id": "water_rks_spherical_gradient_rejected",
+   "input": "tests/inputs/regression/spherical/water_rks_spherical_gradient_rejected.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "smoke",
+    "spherical",
+    "dft"
+   ],
+   "expected_exit_code": 1,
+   "contains": [
+    "analytic gradients is not yet supported by planck-dft with basis_type spherical"
+   ],
+   "_note": "Boundary marker: gradient workflows refuse a spherical basis in planck-dft until step 2 of docs/SPHERICAL_DFT_SCOPE.md."
+  },
+  {
    "id": "water_rmp2_spherical_631gd",
    "input": "tests/inputs/regression/spherical/water_rmp2_spherical_631gd.hfinp",
    "tags": [

@@ -42,6 +42,11 @@ namespace HartreeFock
         // do not depend on the geometry.)
         std::expected<std::vector<HartreeFock::ShellPair>, std::string>
         rebuild_basis_dependent_state(HartreeFock::Calculator &calc);
+
+        // Steps 2-3 above for shell pairs the caller already built: Cartesian
+        // S, T, V (+ ECP) brought to the working basis as _overlap, _hcore.
+        std::expected<void, std::string> compute_working_one_electron(
+            HartreeFock::Calculator &calc, const std::vector<HartreeFock::ShellPair> &shellpairs);
     } // namespace SCF
 } // namespace HartreeFock
 

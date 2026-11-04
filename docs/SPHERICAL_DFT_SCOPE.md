@@ -1,7 +1,8 @@
 # Can `planck-dft` run in a spherical-harmonic basis?
 
-Research scope, opened 2026-10-26. The shared prerequisites (S0.1–S0.5) have
-landed; the DFT steps are open, so this is still a scope. Rewrite it as the
+Research scope, opened 2026-10-26. The shared prerequisites (S0.1–S0.5) and
+step 1 (RKS/UKS single points) have landed; steps 2–6 are open, so this is
+still a scope. Rewrite it as the
 answer when they land. Status lives in `vault/Status/Open Work.md`.
 
 ## Why it matters
@@ -54,12 +55,9 @@ What `planck-dft` can rely on now:
 
 | site (`src/dft/driver.cpp`) | today | needed |
 |---|---|---|
-| `run()` entry | rejects spherical | lift per step, for the workflows gated so far |
-| `prepare_current_geometry` | `build_shellpairs` + `compute_one_electron_terms` (Cartesian S, H) | call `rebuild_basis_dependent_state`; delete `compute_one_electron_terms` |
-| `prepare_current_geometry` (3 sites), `run_ks_scf_scaffold`, `diagonalize_in_ao_basis`, `project_ks_restart_density` | size by `_shells.nbasis()` | `working_nbasis()` |
-| `evaluate_current_density_and_xc` | stored density to the grid | `to_cartesian` at entry |
-| `assemble_current_ks_potential` | J, K (all kernels) and V_xc from the stored density | `to_cartesian` the densities at entry, `to_working` J/K/V_xc at exit; builders stay Cartesian |
-| SOSCF window (`run_ks_scf_scaffold`) | trial δP into the analytic XC Hessian and direct J/K response | the same pair around each linear-in-density build |
+| `validate_spherical_support` | admits SinglePoint only; refuses DH, PCM, checkpoint restart and SOSCF by name | widen per step |
+| SOSCF window (`run_ks_scf_scaffold`) | trial δP into the analytic XC Hessian and direct J/K response | the helper pair around each linear-in-density build |
+| checkpoint restart (`load_ks_restart_state`, `project_ks_restart_density`) | refused in spherical | the cross-basis projection needs the spherical overlaps, as HF's does |
 | XC nuclear gradient (`compute_analytic_ks_gradient`) | stored densities to `compute_xc_nuclear_gradient_{rks,uks}` | `to_cartesian` |
 | TDDFT (`run_linear_response`) | `n_virt = nbasis − n_occ` | `n_virt` from `mo_coefficients.cols()`; tensor from `ensure_eri` |
 | PCM reaction field | stored density | stays rejected (HF rejects spherical PCM too) |
@@ -74,19 +72,36 @@ stays Cartesian; a site that sizes an SCF object becomes `working_nbasis()`.
 
 ### Steps
 
-1. **RKS and UKS single points**: LDA, GGA, global and range-separated
-   hybrids, with SAD and SAO symmetry. Switch `prepare_current_geometry` to
-   `rebuild_basis_dependent_state`, apply the sizing rows, put the helpers on
-   the two seams, and lift the entry rejection for SinglePoint only.
-   - Gate A, exact: in a basis with only s and p shells (6-31G), spherical and
-     Cartesian span the same space and the grid is identical, so energies must
-     agree to ≤1e-10, RKS and UKS.
-   - Gate B, PySCF 2.13.0 `cart=False`: water and a C1 molecule, 6-31G* and
-     cc-pVTZ, PBE / B3LYP / HSE06, RKS and a UKS doublet. Set the tolerance by
-     first running the same comparison with `cart=True`, which measures the
-     grid floor between the two codes; spherical must land inside it.
-   - Gate C: `water_rhf_spherical_esp_points_631gd`'s points through
-     `planck-dft`, and a spherical SAO (`use_symm`) run equal to C1.
+1. **RKS and UKS single points — LANDED 2026-11-04.** The DFT driver's 1e
+   copy is deleted in favour of `SCF::compute_working_one_electron` (split out
+   of `rebuild_basis_dependent_state`); SCF objects are sized by
+   `working_nbasis()` (also in `Calculator::initialize`, while `scf_mode`
+   and `max_cycles` stay on the Cartesian count because the ERIs are built
+   in Cartesian); `evaluate_current_density_and_xc` and
+   `assemble_current_ks_potential` lift the densities and project every
+   matrix of `KSPotentialMatrices`; `validate_spherical_support` replaces the
+   blanket rejection. Measured:
+   - Gate A, exact, 6-31G: spherical = Cartesian to ≤3.4e-13 on water and C1
+     H2O2, PBE / B3LYP / HSE06, RKS and UKS (12 combinations).
+   - Gate B, PySCF 2.13.0: at `fine` both bases sit 1e-6..2e-5 from PySCF, a
+     floor set by the two codes' different pruned grids, with the spherical
+     gap tracking the Cartesian one. With matched unpruned grids (150 × 590)
+     the floor vanishes: water/cc-pVTZ PBE, B3LYP, HSE06 RKS and PBE UKS, and
+     C1 H2O2 B3LYP RKS / H2O2⁺ PBE UKS at 6-31G*, all ≤2.5e-12 in both
+     bases. The regression cases use those grids and pin PySCF at 1e-9.
+   - Gate C: with SAO on (C2v water), spherical = Cartesian exactly in 6-31G
+     and the symmetric-minus-C1 shift is ≤2e-13 in both bases; ESP at four
+     points through `planck-dft` is identical in both bases in 6-31G.
+   - Cartesian DFT is byte-identical on all 42 `tests/inputs/regression/dft`
+     inputs (double hybrids excluded) against the previous `planck-dft`.
+   - Refusals verified for gradient, TDDFT, double hybrid, PCM, restart and
+     SOSCF.
+
+   Cases: `water_rks_b3lyp_spherical_631g_exact` (smoke),
+   `water_rks_b3lyp_spherical_ccpvtz`, `water_rks_hse06_spherical_ccpvtz`,
+   `water_cation_uks_pbe_spherical_ccpvtz`, `h2o2_rks_b3lyp_spherical_631gd`,
+   `h2o2_cation_uks_pbe_spherical_631gd`,
+   `water_rks_spherical_gradient_rejected` (smoke).
 2. **Gradients, geometry optimization, frequencies.** The working basis is
    rebuilt per geometry by step 1 and the gradient lift is in place; add the
    XC-nuclear-gradient lift. Gates: energy FD (`tests/dft_gradient_fd.py`),
@@ -198,7 +213,8 @@ checks at 0.999 relative.
 | S0.3 | `eeb6eb34` | `to_cartesian` / `to_working`; seven copies folded |
 | S0.4 | `50cbc3b9` | RKS/UKS gradient lift |
 | S0.5 | `e565e4fd` | C normalized once at read; three copies deleted |
-| 1–6 | — | DFT workflows (open) |
+| 1 | — (working tree) | spherical RKS/UKS single points; PySCF-gated |
+| 2–6 | — | gradients, TDDFT, SOSCF, DH single points, PCM (open) |
 
 ## Not in this scope
 

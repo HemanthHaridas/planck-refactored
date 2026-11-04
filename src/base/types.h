@@ -1738,10 +1738,12 @@ namespace HartreeFock
                 // First set the spin channel information
                 _info._scf = DataSCF(_scf._scf != SCFType::RHF);
 
-                // Now initialize the matrices
-                _info._scf.initialize(_shells.nbasis());
+                // Now initialize the matrices (working basis: spherical when
+                // _shells._spherical).
+                _info._scf.initialize(working_nbasis());
 
-                // Set SCF Mode
+                // Set SCF Mode. Cartesian count on purpose: the ERIs are always
+                // built in Cartesian, so that is what conventional mode costs.
                 _scf.set_scf_mode_auto(_shells.nbasis());
 
                 // Set Max SCF cycles (only if not explicitly set by the user)

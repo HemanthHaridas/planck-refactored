@@ -31,6 +31,13 @@ truth for what remains.
   initialization should reject them for every workflow, or accept and document
   the erf substitution.
 
+- **UKS HSE06 water⁺/cc-pVTZ converges to a state 0.066 Eh above PySCF's
+  (found 2026-11-04, spherical DFT gate B).** Same in Cartesian and
+  spherical, `guess hcore`, `grid fine`; PBE and B3LYP on the same cation
+  match PySCF to 1e-5 at that grid. Not investigated: check whether a SAD
+  guess or stability following reaches PySCF's state, and whether PySCF's is
+  the lower one by an independent route.
+
 ## Routine-use gaps (scoped 2026-10-26)
 
 What blocks Planck from routine DFT use, each with its own scope doc. Order
@@ -41,7 +48,9 @@ is the recommended one; none blocks another except where noted.
   audit: the grid and integral layers stay Cartesian, and a lift/project
   boundary goes on ~10 `driver.cpp` call sites (the other 30 `nbasis()` sites
   in `src/dft/` check against the AO grid and need no edit). First shared fixes
-  (S0): the HF spherical ESP defect (S0.1, fixed) and `ensure_eri` crashing its callers
+  Step 1 (spherical RKS/UKS single points, PySCF-gated to ≤2.5e-12 at
+  matched grids) landed 2026-11-04; gradients, TDDFT, SOSCF and DH single
+  points are next. (S0): the HF spherical ESP defect (S0.1, fixed) and `ensure_eri` crashing its callers
   in spherical mode after a direct SCF (S0.2, fixed; both in Completion); public `to_cartesian`/`to_working` helpers replacing seven
   hand-written copies (S0.3, landed); `compute_rks/uks_gradient` not lifting P and W (S0.4, landed); and S0.5, C renormalized once in `read_gbs_basis` instead of three per-geometry copies (landed; the per-geometry premise was false). Then
   single points, gradients, TDDFT, SOSCF, DH single points; PCM and DH

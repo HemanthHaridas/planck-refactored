@@ -41,7 +41,9 @@
 #include "populations/multipole.h"
 #include "post_hf/integrals.h"
 #include "post_hf/mp2.h"
+#include "basis/spherical.h"
 #include "scf/sad.h"
+#include "scf/working_state.h"
 #include "scf/scf.h"
 #include "symmetry/integral_symmetry.h"
 #include "symmetry/mo_symmetry.h"
@@ -619,33 +621,6 @@ namespace DFT::Driver
             calculator._use_sao_blocking = false;
         }
 
-        std::expected<void, std::string> compute_one_electron_terms(
-            HartreeFock::Calculator &calculator,
-            const std::vector<HartreeFock::ShellPair> &shell_pairs)
-        {
-            // Integral symmetry metadata depends on the current molecular
-            // orientation and shell layout, so refresh it before every one-
-            // electron build for the current geometry.
-            HartreeFock::Symmetry::update_integral_symmetry(calculator);
-
-            auto [S, T] = _compute_1e(
-                shell_pairs,
-                calculator._shells.nbasis(),
-                calculator._integral._engine,
-                calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
-
-            const Eigen::MatrixXd V = _compute_potential(
-                shell_pairs,
-                calculator._shells,
-                calculator._molecule,
-                calculator._integral._engine,
-                calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
-
-            calculator._overlap = std::move(S);
-            calculator._hcore = T + V;
-            return {};
-        }
-
         std::expected<void, std::string> initialize_ks_guess(HartreeFock::Calculator &calculator)
         {
             const auto X = HartreeFock::SCF::build_orthogonalizer(calculator._overlap);
@@ -718,7 +693,7 @@ namespace DFT::Driver
             if (!mos)
                 return std::unexpected(mos.error());
 
-            if (mos->nbasis == calculator._shells.nbasis())
+            if (mos->nbasis == calculator.working_nbasis())
                 return false;
 
             HartreeFock::Logger::logging(
@@ -728,7 +703,7 @@ namespace DFT::Driver
                             mos->basis_name,
                             calculator._basis._basis_name));
 
-            if (auto one_e = compute_one_electron_terms(calculator, shell_pairs); !one_e)
+            if (auto one_e = HartreeFock::SCF::compute_working_one_electron(calculator, shell_pairs); !one_e)
                 return std::unexpected("Current-basis 1e integral build failed before density projection: " + one_e.error());
 
             const std::string small_gbs =
@@ -873,7 +848,7 @@ namespace DFT::Driver
             const Eigen::Ref<const Eigen::MatrixXd> &fock,
             const std::string &label)
         {
-            const Eigen::Index nbasis = static_cast<Eigen::Index>(calculator._shells.nbasis());
+            const Eigen::Index nbasis = static_cast<Eigen::Index>(calculator.working_nbasis());
             const bool sao_active = calculator._use_sao_blocking &&
                                     calculator._sao_transform.rows() == nbasis &&
                                     calculator._sao_transform.cols() == nbasis &&
@@ -1888,7 +1863,7 @@ namespace DFT::Driver
             if (prepared.ao_grid.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
                 return std::unexpected("DFT KS-SCF scaffold reached with inconsistent AO/basis dimensions");
 
-            const std::size_t nbasis = calculator._shells.nbasis();
+            const std::size_t nbasis = calculator.working_nbasis();
             const bool unrestricted = calculator._scf._scf == HartreeFock::SCFType::UHF;
             const int n_electrons = static_cast<int>(
                 calculator._molecule.atomic_numbers.cast<int>().sum() - calculator._molecule.charge);
@@ -3121,6 +3096,33 @@ namespace DFT::Driver
             return "this workflow";
         }
 
+        // Spherical (basis_type spherical) KS runs: what is wired and gated so far
+        // (docs/SPHERICAL_DFT_SCOPE.md). Everything else is refused by name.
+        std::expected<void, std::string> validate_spherical_support(
+            const HartreeFock::Calculator &calculator, const InitializedFunctionals &functionals)
+        {
+            if (calculator._basis._basis != HartreeFock::BasisType::Spherical)
+                return {};
+            const auto refuse = [](const std::string &what) -> std::expected<void, std::string>
+            {
+                return std::unexpected(what + " is not yet supported by planck-dft with basis_type spherical "
+                                              "(docs/SPHERICAL_DFT_SCOPE.md); spherical RKS/UKS single points "
+                                              "are. Use basis_type cartesian for this calculation.");
+            };
+            if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+                return refuse(workflow_label(calculator._calculation));
+            if (functionals.has_double_hybrid_pt2)
+                return refuse("A double-hybrid functional");
+            if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+                return refuse("PCM solvation");
+            if (wants_checkpoint_restart(calculator))
+                return refuse("Checkpoint restart (guess density / full)");
+            if (calculator._scf._scf_soscf_diis_tol > 0.0 || calculator._scf._scf_soscf_start > 0 ||
+                calculator._scf._scf_soscf_auto_stall > 0)
+                return refuse("SOSCF");
+            return {};
+        }
+
         std::expected<void, std::string> validate_workflow_support(
             const HartreeFock::Calculator &calculator,
             const InitializedFunctionals &functionals,const Options &options)
@@ -3417,7 +3419,8 @@ namespace DFT::Driver
 
             calculator._info._scf = HartreeFock::DataSCF(
                 calculator._scf._scf == HartreeFock::SCFType::UHF);
-            calculator._info._scf.initialize(calculator._shells.nbasis());
+            calculator._info._scf.initialize(calculator.working_nbasis());
+            // Cartesian count, as Calculator::initialize: the ERIs are built in Cartesian.
             calculator._scf.set_scf_mode_auto(calculator._shells.nbasis());
             // Match Calculator::initialize(): displacements must not replace
             // an explicit user SCF limit with the size-based default.
@@ -3436,7 +3439,7 @@ namespace DFT::Driver
             prepared.grid_preset = grid_spec->preset;
             prepared.shell_pairs = build_shellpairs(calculator._shells);
 
-            if (auto res = compute_one_electron_terms(calculator, prepared.shell_pairs); !res)
+            if (auto res = HartreeFock::SCF::compute_working_one_electron(calculator, prepared.shell_pairs); !res)
                 return std::unexpected(res.error());
 
             auto molecular_grid = MakeMolecularGrid(calculator._molecule, *grid_spec);
@@ -3457,7 +3460,7 @@ namespace DFT::Driver
                 prepared.pcm = std::move(*pcm);
             }
 
-            const Eigen::Index nbasis = static_cast<Eigen::Index>(calculator._shells.nbasis());
+            const Eigen::Index nbasis = static_cast<Eigen::Index>(calculator.working_nbasis());
             const bool can_reuse_alpha =
                 preserve_previous_density &&
                 previous_alpha_density.rows() == nbasis &&
@@ -4303,14 +4306,21 @@ namespace DFT::Driver
         if (prepared.ao_grid.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
             return std::unexpected("AO grid basis dimension does not match the calculator basis");
 
+        // The grid is Cartesian; the stored densities are in the working basis.
         const Eigen::Index nbasis = prepared.ao_grid.nbasis();
-        const auto &alpha_density = calculator._info._scf.alpha.density;
+        auto alpha_lifted = HartreeFock::BasisFunctions::to_cartesian(calculator._shells, calculator._info._scf.alpha.density);
+        if (!alpha_lifted)
+            return std::unexpected("alpha density: " + alpha_lifted.error());
+        const Eigen::MatrixXd &alpha_density = *alpha_lifted;
         if (alpha_density.rows() != nbasis || alpha_density.cols() != nbasis)
             return std::unexpected("alpha density matrix is not initialized for the current basis size");
 
         if (calculator._scf._scf == HartreeFock::SCFType::UHF)
         {
-            const auto &beta_density = calculator._info._scf.beta.density;
+            auto beta_lifted = HartreeFock::BasisFunctions::to_cartesian(calculator._shells, calculator._info._scf.beta.density);
+            if (!beta_lifted)
+                return std::unexpected("beta density: " + beta_lifted.error());
+            const Eigen::MatrixXd &beta_density = *beta_lifted;
             if (beta_density.rows() != nbasis || beta_density.cols() != nbasis)
                 return std::unexpected("beta density matrix is not initialized for the current basis size");
 
@@ -4498,8 +4508,13 @@ namespace DFT::Driver
                 xc_matrix->beta.data(), static_cast<std::size_t>(xc_matrix->beta.size()));
         }
 
+        // J, K and V_xc are built in Cartesian from lifted densities and the
+        // result is projected to the working basis on return.
         const Eigen::Index nbasis = prepared.ao_grid.nbasis();
-        const auto &alpha_density = calculator._info._scf.alpha.density;
+        auto alpha_lifted = HartreeFock::BasisFunctions::to_cartesian(calculator._shells, calculator._info._scf.alpha.density);
+        if (!alpha_lifted)
+            return std::unexpected("alpha density: " + alpha_lifted.error());
+        const Eigen::MatrixXd &alpha_density = *alpha_lifted;
         if (alpha_density.rows() != nbasis || alpha_density.cols() != nbasis)
             return std::unexpected("alpha density matrix is not initialized for KS matrix assembly");
 
@@ -4507,7 +4522,10 @@ namespace DFT::Driver
         Eigen::MatrixXd beta_density;
         if (calculator._scf._scf == HartreeFock::SCFType::UHF)
         {
-            beta_density = calculator._info._scf.beta.density;
+            auto beta_lifted = HartreeFock::BasisFunctions::to_cartesian(calculator._shells, calculator._info._scf.beta.density);
+            if (!beta_lifted)
+                return std::unexpected("beta density: " + beta_lifted.error());
+            beta_density = std::move(*beta_lifted);
             if (beta_density.rows() != nbasis || beta_density.cols() != nbasis)
                 return std::unexpected("beta density matrix is not initialized for KS matrix assembly");
             total_density += beta_density;
@@ -4619,13 +4637,24 @@ namespace DFT::Driver
             }
         }
 
-        return combine_ks_potential(
+        KSPotentialMatrices potential = combine_ks_potential(
             coulomb,
             *xc_matrix,
             exact_exchange_coefficient,
             exact_exchange_alpha,
             exact_exchange_beta,
             exact_exchange_energy);
+        if (calculator._shells._spherical)
+            for (Eigen::MatrixXd *M : {&potential.coulomb, &potential.xc_alpha, &potential.xc_beta,
+                                       &potential.exact_exchange_alpha, &potential.exact_exchange_beta,
+                                       &potential.alpha, &potential.beta})
+            {
+                auto M_w = HartreeFock::BasisFunctions::to_working(calculator._shells, *M);
+                if (!M_w)
+                    return std::unexpected("KS potential: " + M_w.error());
+                *M = std::move(*M_w);
+            }
+        return potential;
     }
 
     namespace
@@ -4948,7 +4977,7 @@ namespace DFT::Driver
 
         if (!restart_state.one_e_ready)
         {
-            if (auto res = compute_one_electron_terms(calculator, prepared.shell_pairs); !res)
+            if (auto res = HartreeFock::SCF::compute_working_one_electron(calculator, prepared.shell_pairs); !res)
                 return std::unexpected(res.error());
         }
 
@@ -5035,22 +5064,14 @@ namespace DFT::Driver
     std::expected<Result, std::string>
     run(HartreeFock::Calculator &calculator, const Options &options)
     {
-        // Spherical-harmonic basis is not yet wired through the DFT path (KS matrix,
-        // grid AO evaluation, exact-exchange assembly all assume Cartesian AO counts).
-        // Reject at the entry point — before functional resolution or any basis load —
-        // rather than risk a silent wrong answer. The HF driver supports spherical
-        // single-point RHF/UHF energies.
-        if (calculator._basis._basis == HartreeFock::BasisType::Spherical)
-            return std::unexpected(
-                "Spherical basis (basis_type spherical) is not supported by planck-dft; "
-                "use basis_type cartesian, or run spherical single points through hartree-fock.");
-
         if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
             return std::unexpected("ROKS/ROHF DFT references are not implemented; use UKS for open-shell DFT");
 
         auto functionals = initialize_functionals(calculator);
         if (!functionals)
             return std::unexpected(functionals.error());
+        if (auto spherical = validate_spherical_support(calculator, *functionals); !spherical)
+            return std::unexpected(spherical.error());
 
         if(options.udh_gradient_validation && options.udh_pt2_scale_validation)
         {
