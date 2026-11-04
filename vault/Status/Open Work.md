@@ -18,7 +18,6 @@ truth for what remains.
 
 ## Highest-priority correctness and robustness work
 
-
 - **Yukawa / Gaussian screened-exchange functionals are evaluated with the
   erf kernel everywhere except TDDFT (found 2026-10-16).** `cam_coefficients()`
   (`src/dft/base/wrapper.h`) folds `XC_HYB_YUKAWA_SR` / `XC_HYB_GAUSSIAN_SR`
@@ -38,11 +37,16 @@ What blocks Planck from routine DFT use, each with its own scope doc. Order
 is the recommended one; none blocks another except where noted.
 
 - **Spherical basis in `planck-dft`** (`docs/SPHERICAL_DFT_SCOPE.md`). The
-  DFT driver rejects `basis_type spherical`. The HF skin (lift the density,
-  build in Cartesian, project back) covers J, K, V_xc and V_rxn exactly; the
-  work is classifying ~48 Cartesian-dimension sites in `src/dft/` and routing
-  the DFT one-electron setup through `rebuild_basis_dependent_state`.
-  Prerequisite for useful def2 DFT.
+  DFT driver rejects `basis_type spherical`. Rescoped 2026-11-04 from a code
+  audit: the grid and integral layers stay Cartesian, and a lift/project
+  boundary goes on ~10 `driver.cpp` call sites (the other 30 `nbasis()` sites
+  in `src/dft/` check against the AO grid and need no edit). First shared fixes
+  (S0): the HF spherical ESP defect (S0.1, fixed, see Completion); `ensure_eri` refusing in
+  spherical mode instead of transforming a Cartesian tensor (blocks TDDFT
+  and DH PT2); public `to_cartesian`/`to_working` helpers replacing HF's
+  three copies; and `compute_rks/uks_gradient` not lifting P and W. Then
+  single points, gradients, TDDFT, SOSCF, DH single points; PCM and DH
+  gradients stay rejected. Prerequisite for def2 and ECP DFT.
 - **D3 dispersion** (`docs/DISPERSION_D3_SCOPE.md`). None in `src/`. A
   geometry-only energy and gradient beside nuclear repulsion. Licence
   checked 2026-10-26: simple-dftd3 is LGPL-3.0-or-later. Planck ships source

@@ -1,6 +1,7 @@
 #include "populations/esp.h"
 
 #include "base/sphere.h"
+#include "basis/spherical.h"
 #include "integrals/os.h"
 #include "io/logging.h"
 #include "lookup/elements.h"
@@ -21,6 +22,16 @@ HartreeFock::SCF::electrostatic_potential(
 {
     if (density.rows() != density.cols())
         return std::unexpected("ESP: density matrix must be square");
+
+    // The integrals are Cartesian; a working-basis (spherical) density has fewer
+    // rows and would be read at the wrong AO indices without complaint.
+    Eigen::Index n_cart = 0;
+    for (const ShellPair &sp : shell_pairs)
+        n_cart = std::max<Eigen::Index>(n_cart, std::max(sp.A._index, sp.B._index) + 1);
+    if (density.rows() != n_cart)
+        return std::unexpected("ESP: density is " + std::to_string(density.rows()) +
+                               " x " + std::to_string(density.cols()) + " but the shell pairs span " +
+                               std::to_string(n_cart) + " Cartesian AOs (lift a spherical density first)");
 
     if (molecule._standard.rows() != static_cast<Eigen::Index>(molecule.natoms))
         return std::unexpected(
@@ -706,6 +717,19 @@ void HartreeFock::SCF::log_esp_report(
     Eigen::MatrixXd total_density = calculator._info._scf.alpha.density;
     if (has_spin_channels)
         total_density += calculator._info._scf.beta.density;
+    if (calculator._shells._spherical)
+    {
+        auto lifted = HartreeFock::BasisFunctions::lift_density_sph_to_cart(
+            total_density, calculator._shells._cart_to_sph);
+        if (!lifted)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                                         "Electrostatic Potential :", "Unavailable: " + lifted.error());
+            HartreeFock::Logger::blank();
+            return;
+        }
+        total_density = std::move(*lifted);
+    }
 
     auto phi = HartreeFock::SCF::electrostatic_potential(
         calculator._molecule, shell_pairs, total_density, points);

@@ -416,6 +416,16 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Spherical-basis ESP fixed (2026-11-04, `docs/SPHERICAL_DFT_SCOPE.md`
+  S0.1).** `SCF::log_esp_report` handed the spherical (working-basis) density
+  to Cartesian ESP integrals; `electrostatic_potential` only checked
+  squareness, so the wrong AO elements were read with no error (water/6-31G*
+  HF Connolly charges O −2.94, H 1.461/1.474; now O −0.811). The density is
+  lifted first, and `electrostatic_potential` now refuses a density whose
+  size differs from the AO count of its shell pairs. Gated by
+  `water_rhf_spherical_esp_points_631gd` (PySCF `cart=False` `int1e_grids`,
+  ≤1.8e-9), which fails on the old code.
+
 - **ECP gradients, geometry optimization and frequencies (2026-11-04, branch
   `feat/def2-ecp`, `docs/DEF2_ECP_SCOPE.md` step 5).**
   `ECP::_compute_ecp_gradient` contracts libecpint's shell-pair derivatives
