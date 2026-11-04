@@ -67,23 +67,65 @@ run on the branch.
    `ECPIntegral::compute_shell_pair_derivative` returns nine blocks in the
    order Ax, Ay, Az, Bx, By, Bz, Cx, Cy, Cz (C the ECP centre). Each adds to
    its own atom's gradient, so when centres coincide the components sum, and
-   translational invariance ties the three together. Construct the engine
-   with `deriv = 1`, which raises the L ceiling to basis L + 1 ≤
-   `LIBECPINT_MAX_L` (5); g shells still fit. Contract with the density in
-   the gradient's spherical-lift skin like the other 1e derivatives, then
-   lift the rejection in `hf_driver.cpp`. Gate: FD and PySCF gradients;
-   geometry optimization of a small heavy-element molecule against PySCF.
+   translational invariance ties the three together. Its header still says
+   "derivs currently being implemented", so trust nothing before the FD gate.
+
+   **One seam.** Every gradient (RHF, UHF, ROHF, RKS, UKS, RMP2, UMP2, the DH
+   path) gets its 1e term from `Gradient::one_electron_gradient`, already
+   called on the lifted Cartesian D. Adding the ECP term there reaches all of
+   them, and geomopt, frequencies and imaginary follow call those gradients.
+   Nothing per caller.
+
+   - **5a. `ECP::_compute_ecp_gradient(basis, shell_atom, D)` → natoms × 3**
+     (`src/integrals/ecp.cpp`), beside `_compute_ecp`, sharing its
+     shell/ECP conversion (factor it out, do not copy it). Engine built with
+     `deriv = 1`. Loop the same `b ≥ a` triangle with weight 2·D_μν off the
+     diagonal (D_μμ on it), `_component_norm` per element; A and B blocks go
+     to their shells' atoms, C to `ecp._atom_index`. Several pairs write one
+     atom row, so accumulate in the fixed 64-bin pattern of
+     `one_electron_gradient`, summed in bin order (thread-count invariant).
+   - **5b. Wire it in.** `OneElectronGradient` gains an `ecp` field, included
+     in `core()`; zero when the basis has no ECP, so every all-electron
+     gradient is byte-identical (check on the core suite).
+   - **5c. L ceiling.** `describe_ecps` takes the derivative order: libecpint
+     needs basis L + 1 ≤ `LIBECPINT_MAX_L` (5) for gradients. def2 tops out
+     at g, so it fits; the check is for safety, since libecpint only asserts.
+   - **5d. Lift the refusal** in `src/hf_driver.cpp` for Gradient, GeomOpt,
+     Frequency, GeomOptFrequency and ImaginaryFollow. MP2 gradients stay
+     refused by the existing spherical gate (def2 is spherical); no ECP code
+     needed for that. Confirm the geomopt inner loop moves the ECP centres
+     (`read_gbs_basis` → `rebuild_basis_dependent_state`): the final geomopt
+     energy must equal a single point at the printed geometry.
+   - **5e. Gates**, PySCF 2.13.0 `cart=False` (`mf.nuc_grad_method()`
+     includes the ECP term), extending `tests/pyscf/def2_ecp_references.py`:
+
+     | case | why |
+     |---|---|
+     | HI/def2-SVP RHF gradient (smoke) | smallest; the C term on I is the bulk |
+     | AuH·H2O/def2-SVP RHF gradient, C1 | all components nonzero, off-axis; H/O shells off the ECP centre exercise A, B and C separately |
+     | HI/def2-SVP energy FD, two steps | a third answer that shares no code with libecpint's derivative or PySCF |
+     | translational sum ≤ 1e-10 | ties A + B + C together cheaply |
+     | HI or AgH geomopt vs PySCF `geometric_solver` | E_opt, bond length |
+     | HI frequency vs PySCF FD-of-analytic Hessian | one stretch, < 0.1 cm⁻¹ |
+     | HI⁺ UHF and ROHF gradient | closes the "gate UHF/ROHF with an ECP" item at the same time |
+
+     Tolerance 1e-7 Ha/Bohr (print precision), as the other gradient gates.
+   - **Order:** 5a+5b with the HI FD and PySCF checks first; 5c–5d only once
+     those pass; geomopt/freq/UHF/ROHF gates last.
 2. **Step 6, DFT with ECPs**, after spherical DFT lands
    (`docs/SPHERICAL_DFT_SCOPE.md`). H_core and the KS electron counts are
    already ECP-aware; lifting the rejection in `src/dft/driver.cpp` is the
    gate. Same PySCF gates in `planck-dft`.
-3. **Smaller open items:**
-   - gate UHF, ROHF and post-HF energies with an ECP;
+3. **Smaller open items** (none blocks step 5; run `ctest` before starting
+   it, since it has never run on the branch):
+   - gate UHF, ROHF (folded into 5e) and post-HF energies (one RMP2 and one
+     CASSCF energy on HI vs PySCF) with an ECP;
    - the two Cl cases (ZnCl2, AgCl) sit 1.1–1.2e-9 (~4e-13 relative) from
      PySCF for an unexplained reason. It is not the Å→Bohr constant (ZnCl2
      was 1.2e-9 before that fix too) and survives tight convergence in both
      codes;
-   - report the libecpint generator precision bug upstream;
+   - when upstream PR #81 merges, repin `LIBECPINT_GIT_TAG` to the merge
+     commit (the generator precision bug is in it, so nothing to report);
    - run `ctest` on the branch.
 
 ## How it works
@@ -155,14 +197,16 @@ around the ECP centre. That third answer located the libecpint bug below.
 The integrals and their derivatives are the risky part, and libecpint has
 them. This superseded an earlier `ECP_SUPPORT_SCOPE.md` plan for a native
 engine (merged here and deleted). Build details:
-- pinned past v1.0.7 for upstream fixes #71 (steep type-1 ECPs collapsing to
-  zero) and #72 (small-z Bessel);
+- pinned to the head of open upstream PR #81 (`loriab/libecpint`
+  `4e8767fc`), which sits on upstream HEAD `95203c68` (itself past v1.0.7 for
+  fixes #71 and #72) and fixes seven type-2/quadrature defects, our 6-digit
+  constants among them. **Decision 2026-11-04: when PR #81 merges, repin to
+  the upstream merge commit and rerun `planck-ecp-gradient-fd` and the
+  `*_ecp` cases** (Findings, step 5a);
 - built with Planck's C++ compiler, because its API passes `std::vector` and
   a libc++ build would not link against libstdc++;
 - linked into every target, since `ecp.cpp` sits in the shared integral
-  sources;
-- `cmake/patch_libecpint.cmake` fixes its generator's 6-digit constants
-  (below).
+  sources.
 
 Licence (checked 2026-10-26; not legal advice): libecpint is MIT (Copyright
 2021 Robert A. Shaw) and bundles Faddeeva (MIT); pugixml is disabled in
@@ -229,7 +273,8 @@ off the iodine centre); the HI energy was 2.3e-8 off. Five eliminations:
 A constant relative factor is a constant: libecpint's generator writes the
 type-2 angular prefactors into its `Q*.cpp` kernels at default stream
 precision, `157.914` for 16π² = 157.91367…, and 157.914 / 16π² = 1 + 2.09e-6.
-`cmake/patch_libecpint.cmake` sets precision 17 at fetch time. After it, the
+Planck patched the generator to 17 digits at fetch time (now carried by
+PR #81, so the patch is deleted). After it, the
 matrices agree to ~1e-11 relative and HI to every printed digit. **When two
 codes disagree, build a third answer that shares nothing with either; and a
 relative error that is the same for every input is a wrong constant.**
@@ -242,6 +287,24 @@ SCF ran on matrices of the wrong basis (HI: no convergence in 50 iterations).
 No test had ever made a spherical projection fail. The fallback now lets the
 normal one-electron block rebuild them.
 
+**Stock libecpint's derivatives are wrong past def2-TZVP (step 5a).** No
+release since v1.0.7 (2021); the pin, `95203c68`, is upstream HEAD, and the
+"derivs being implemented" header comment is stale. `planck-ecp-gradient-fd`
+(tr(D U) FD vs `_compute_ecp_gradient`, random D, five-point, basis re-read at
+each displacement) on the pin: HI/def2-SVP and -TZVP agree to 7e-10 relative;
+I2/def2-TZVP misses by 2.6e-7 and HI/def2-QZVP by 4.6e-5, the latter the same
+at every step (a wrong derivative), while AuH·H2O worsens as h shrinks
+(non-smooth U(R)). Open upstream PR #81 (loriab, `4e8767fc`, on top of the
+pin) fixes seven type-2/quadrature defects, the first being our 6-digit
+constants; against it all five cases pass at ≤4e-9 relative (h = 1e-3, 2e-3).
+A ~1e-10 step in U(R) remains for AuH·H2O at h = 5e-4. The maintainer
+acknowledged the PR on 2026-11-04 but warned review will be slow.
+**Decision (2026-11-04): pin `LIBECPINT_GIT_TAG` to the PR head on the fork**
+(`CMakeLists.txt`) and delete `cmake/patch_libecpint.cmake`, whose fix the PR
+carries. All ten `*_ecp` cases pass unchanged at their 1e-9/2e-9 pins. When
+the PR merges upstream, check the merged commit (the PR may change in review)
+and repin to it.
+
 ## Step log
 
 | step | commit | what |
@@ -252,6 +315,7 @@ normal one-electron block rebuild them.
 | 3 | `99f142d1` | ECP parsing and storage; Z − n_core reaches the electron counts |
 | 4 | `749c8355` | ECP integrals in H_core via libecpint; SAD/PCM/counterpoise; precision patch |
 | 4b | `2c9009f0` | checkpoint v8 core counts; FCIDUMP checked; spherical projection fallback; six Σ Z counts |
+| 5a | — (working tree) | `_compute_ecp_gradient`, `planck-ecp-gradient-fd`; stock libecpint fails it beyond TZVP (Findings) |
 | 5 | — | ECP gradients (open) |
 | 6 | — | DFT with ECPs (open, after spherical DFT) |
 

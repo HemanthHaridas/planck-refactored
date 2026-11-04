@@ -2080,8 +2080,9 @@ iodine centre. The SCF energy was 2.3e-8 off. Five eliminations found it:
 A constant relative factor is a constant. libecpint *generates* its type-2
 kernels at build time, and its generator wrote the angular prefactors at
 default stream precision: `157.914` for \(16\pi^2 = 157.91367\ldots\), and
-\(157.914/16\pi^2 = 1 + 2.09\times10^{-6}\). Planck patches the generator at
-fetch time (`cmake/patch_libecpint.cmake`, 17 digits). Afterwards HI matches
+\(157.914/16\pi^2 = 1 + 2.09\times10^{-6}\). Planck patched the generator at
+fetch time to 17 digits; the fix now comes from upstream PR #81, which Planck
+pins. Afterwards HI matches
 PySCF to every printed digit and the matrices agree to about 1e-11 relative.
 
 Two rules carry over:

@@ -327,18 +327,22 @@ externalproject_add(
 )
 
 # libecpint (MIT): ECP integrals and derivatives (docs/DEF2_ECP_SCOPE.md).
-# Pinned past v1.0.7 for two correctness fixes (#71 steep type-1 ECPs collapsing
-# to zero, #72 small-z Bessel). Built with Planck's own C++ compiler because its
-# API passes std::vector across the boundary (libc++ vs libstdc++ would not link).
-set(LIBECPINT_GIT_TAG 95203c68d1bb4134a235480d8c69c3014faaccf9)
+# ponytail: pinned to the head of UNMERGED upstream PR #81 (loriab's fork), which
+# sits on upstream HEAD 95203c68 and fixes seven type-2/quadrature defects,
+# including the 6-digit kernel constants Planck used to patch. Stock derivatives
+# miss finite differences by 4.6e-5 on HI/def2-QZVP (planck-ecp-gradient-fd).
+# When robashaw/libecpint#81 merges, repin to the upstream merge commit and
+# rerun planck-ecp-gradient-fd plus the *_ecp regression cases.
+# Built with Planck's own C++ compiler because its API passes std::vector across
+# the boundary (libc++ vs libstdc++ would not link).
+set(LIBECPINT_GIT_TAG 4e8767fc8d74fd2f23f70d75ae2af2ddf4a01dec)
 set(LIBECPINT_INSTALL_DIR ${SRC_DIR}/external/libecpint/install)
 externalproject_add(
     libecpint_ep
     PREFIX ${SRC_DIR}/external/libecpint
-    GIT_REPOSITORY https://github.com/robashaw/libecpint.git
+    GIT_REPOSITORY https://github.com/loriab/libecpint.git
     GIT_TAG ${LIBECPINT_GIT_TAG}
     UPDATE_DISCONNECTED TRUE
-    PATCH_COMMAND ${CMAKE_COMMAND} -P ${CMAKE_SOURCE_DIR}/cmake/patch_libecpint.cmake
     CMAKE_ARGS
         -DCMAKE_INSTALL_PREFIX=${LIBECPINT_INSTALL_DIR}
         -DCMAKE_INSTALL_LIBDIR:STRING=lib
@@ -3057,6 +3061,26 @@ if(BUILD_TESTING)
         NAME planck-esp-points
         COMMAND planck-esp-points
     )
+
+    # ECP nuclear derivative vs finite differences (docs/DEF2_ECP_SCOPE.md step 5a).
+    add_executable(planck-ecp-gradient-fd
+        ${CMAKE_SOURCE_DIR}/tests/ecp_gradient_fd.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-ecp-gradient-fd PRIVATE ${SRC_DIR} ${eigen_SOURCE_DIR})
+    set_target_properties(planck-ecp-gradient-fd PROPERTIES
+        CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-ecp-gradient-fd OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-ecp-gradient-fd PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-ecp-gradient-fd COMMAND planck-ecp-gradient-fd)
 
     add_test(
         NAME planck-dft-coulomb-response

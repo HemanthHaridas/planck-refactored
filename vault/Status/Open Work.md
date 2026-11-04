@@ -65,9 +65,21 @@ is the recommended one; none blocks another except where noted.
   refused, `hi_rhf_def2svp_ecp_gradient_rejected`); step 6 DFT
   (`planck-dft` refuses ECP bases). Open, minor: the two Cl cases
   (ZnCl2, AgCl, def2-SVP) sit 1.1-1.2e-9 (~4e-13 relative) from PySCF,
-  unexplained, pinned at 2e-9; report the libecpint generator precision
-  bug upstream. Step 4b (checkpoint v8 with ECP core counts, FCIDUMP
-  checked against PySCF) landed; see Completion.
+  unexplained, pinned at 2e-9. Step 4b (checkpoint v8 with ECP core counts,
+  FCIDUMP checked against PySCF) landed; see Completion. Step 5a
+  (`_compute_ecp_gradient`, gated by `planck-ecp-gradient-fd`) is in the
+  working tree.
+- **libecpint is pinned to an UNMERGED upstream PR — recheck when it merges
+  (decided 2026-11-04).** Stock libecpint (upstream HEAD `95203c68`; no
+  release since v1.0.7) has ECP derivatives that miss finite differences by
+  4.6e-5 relative on HI/def2-QZVP and 2.6e-7 on I2/def2-TZVP.
+  robashaw/libecpint#81 fixes seven type-2/quadrature defects (including the
+  6-digit kernel constants Planck used to patch; `cmake/patch_libecpint.cmake`
+  is deleted) and passes all five FD cases at ≤4e-9. `LIBECPINT_GIT_TAG` is
+  `4e8767fc` on `loriab/libecpint`. **When #81 merges: repin to the upstream
+  merge commit (review may change it), then rerun `planck-ecp-gradient-fd` and
+  every `*_ecp` regression case.** If the fork branch disappears first, the
+  commit is still reachable as upstream `refs/pull/81/head`.
 - **Gradient performance** (`docs/GRADIENT_INTEGRAL_PERFORMANCE.md`,
   gradients 20–120× the SCF). G3 rescoped 2026-10-26 onto the energy build's
   HGP/Rys2D split.

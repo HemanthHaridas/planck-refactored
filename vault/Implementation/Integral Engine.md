@@ -134,7 +134,9 @@ directly for H_core, or ECP atoms lose their core operator.
   element afterwards. Cartesian order matches Planck's.
 - libecpint's generator printed kernel constants at 6 digits (157.914 for
   16π²), a constant 2.09e-6 error on every off-centre type-2 integral;
-  `cmake/patch_libecpint.cmake` fixes it at fetch time.
+  fixed by upstream PR #81 (with six further type-2/quadrature defects that
+  broke derivatives past def2-TZVP). Planck pins the PR head on
+  `loriab/libecpint`; repin to upstream once it merges.
 - `describe_ecps` checks basis L and ECP L against `LIBECPINT_MAX_L` (5);
   libecpint only asserts it, and asserts are off in Release.
 

@@ -32,7 +32,7 @@ CMake 3.5+, C++23, extensions off. Sources are gathered per directory with `file
 | Eigen 3.4.0 | `FetchContent` | Header-only. `EIGEN_DONT_PARALLELIZE` is defined globally: Planck owns its OpenMP parallelism, and Eigen's own thread pool nested against it (measured ~26 % slower on 8-thread conventional RHF) |
 | libmsym | `ExternalProject_Add`, pinned commit | Point-group detection |
 | libxc | `ExternalProject_Add`, pinned commit | XC functionals; `planck-dft` and `planck-mpi` only. Built without `-march=native` unless `LIBXC_ENABLE_XHOST=ON` (portability) |
-| libecpint | `ExternalProject_Add`, pinned commit | ECP integrals, linked into every target (`src/integrals/ecp.cpp` is in the shared integral sources). Built with Planck's C++ compiler (its API passes `std::vector`). `cmake/patch_libecpint.cmake` fixes its generator writing kernel constants at 6 digits |
+| libecpint | `ExternalProject_Add`, pinned commit | ECP integrals, linked into every target (`src/integrals/ecp.cpp` is in the shared integral sources). Built with Planck's C++ compiler (its API passes `std::vector`). Pinned to the head of unmerged upstream PR #81 (fork `loriab/libecpint`), which fixes kernel constants and derivative accuracy; repin to upstream when it merges |
 | OpenSSL (Crypto) | `find_package` | Licence-signature verification and decryption for the Boys library loader |
 | Boys-function core | fetched at run time | Encrypted, licence-gated shared library; see `src/lookup/loader/` below |
 | OpenMP | `find_package`, `USE_OPENMP=ON` default | Defines `USE_OPENMP` |
