@@ -1,7 +1,7 @@
 # Can `planck-dft` run in a spherical-harmonic basis?
 
 Research scope, opened 2026-10-26, rewritten 2026-11-04 after a code audit.
-S0.1 and S0.2 have landed; the rest is open. It expires when the work lands; rewrite it then as the
+S0.1–S0.3 have landed; the rest is open. It expires when the work lands; rewrite it then as the
 answer. Status lives in `vault/Status/Open Work.md`.
 
 ## Why it matters
@@ -36,11 +36,14 @@ those is a wrong answer HF ships today.
   `_overlap` and `_hcore` (V_ne + ECP via `_compute_potential`). It returns the
   shell pairs. The DFT driver does not call it: `compute_one_electron_terms`
   (`driver.cpp`) is a Cartesian-only copy of its body.
-- **Lift helpers.** `BasisFunctions::lift_density_sph_to_cart` (public,
-  `src/basis/spherical.h`) does Cᵀ M C. There is no public projection back
-  (C M Cᵀ): HF has a file-local `spherical_direct_fock` template plus an
-  inline UHF copy in `src/scf/scf.cpp`, and `gradient.cpp` has its own
-  `lift_ao_matrix_if_spherical`.
+- **Lift helpers (S0.3, landed).** `BasisFunctions::to_cartesian(basis, M)`
+  (Cᵀ M C, wrapping `lift_density_sph_to_cart`) and `to_working(basis, M)`
+  (C M Cᵀ), shape-checked and unchanged in Cartesian mode. They replaced
+  seven hand-written copies: HF's `spherical_direct_fock` and its UHF twin,
+  `gradient.cpp`'s `lift_ao_matrix_if_spherical`, the 1e transforms in
+  `hf_driver.cpp` and `working_state.cpp`, multipoles, and SAD's
+  `transform_density_cart_to_sph`. Three copies of the C *renormalization*
+  remain (`hf_driver.cpp` twice, `working_state.cpp`); a separate item.
 - **Already spherical-aware:** the SAD guess (it maps into the working basis
   against `_overlap`), SAO blocking (`build_sao_basis`), the checkpoint
   (stores the basis type), multipoles (`populations/multipole.cpp`), and
@@ -119,14 +122,19 @@ Each fixes one mechanism that DFT would otherwise work around:
    `h2o_cation_ump2_spherical_631gd_direct` reproduce the conventional
    energies (RMP2 to 1e-13 Eh) and crash on the old code. This serves TDDFT,
    double-hybrid PT2, and every spherical post-HF method after a direct SCF.
-3. **The two helpers above**, with the HF consolidation (bitwise on the HF
-   spherical gates: water/6-31g* gradient, geomopt, freq, f/g/h shells).
+3. **The two helpers above — LANDED 2026-11-04.** Cartesian runs are
+   bitwise. Spherical runs are not quite: the same C M Cᵀ, now compiled in
+   `spherical.cpp` instead of inline, rounds 2 of 1444 S/H_core elements
+   differently (≤2.2e-16, one ulp; sih4/def2-SVP). Across 36 spherical/ECP
+   inputs, 32 outputs are identical and 4 move only in late-iteration
+   residuals and the last kcal/mol digit (~1e-13 Eh); every Eh energy
+   matches to 10 digits. Unit-tested in `planck-spherical-density-lift`.
 4. **RKS/UKS gradient lift** in `compute_rks_gradient` /
    `compute_uks_gradient` (identity in Cartesian, so no DFT case moves).
 
 ## Steps
 
-1. **S0.3–S0.4** (S0.1, S0.2 done). HF-side gates as listed. All Cartesian DFT cases stay
+1. **S0.4** (S0.1–S0.3 done). HF-side gates as listed. All Cartesian DFT cases stay
    bitwise.
 2. **RKS and UKS single points**: LDA, GGA, global and range-separated
    hybrids, with SAD and SAO symmetry. Switch `prepare_current_geometry` to

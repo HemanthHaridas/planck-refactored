@@ -28,28 +28,6 @@
 
 namespace
 {
-    // Direct-mode two-electron build in spherical mode.
-    //
-    // The per-quartet builder (_compute_2e_fock / _uhf) works in the Cartesian basis,
-    // but in spherical mode the density and the Fock are spherical-dimensioned. We
-    // back-project the spherical density to Cartesian (P_cart = C^T P_sph C), build the
-    // Cartesian G, then forward-transform (G_sph = C G_cart C^T). G = J − ½K is linear
-    // in the density and built from the same Cartesian ERIs the conventional path
-    // contracts, so this reproduces the conventional spherical G exactly (validated
-    // against the conventional spherical energy). The contamination subspace discarded
-    // by C never enters the spherical G because both the density it is built from and
-    // the result are projected through C. RHF helper; the UHF variant mirrors it inline.
-    template <typename BuildCartFock>
-    Eigen::MatrixXd spherical_direct_fock(
-        const Eigen::MatrixXd &C,        // [n_sph × n_cart] S-normalized transform
-        const Eigen::MatrixXd &P_sph,    // [n_sph × n_sph] spherical density
-        BuildCartFock &&build_cart_fock) // (P_cart) -> G_cart [n_cart × n_cart]
-    {
-        const Eigen::MatrixXd P_cart = C.transpose() * P_sph * C;
-        const Eigen::MatrixXd G_cart = build_cart_fock(P_cart);
-        return C * G_cart * C.transpose();
-    }
-
     // Incremental direct Fock build (docs/SCF_VS_PYSCF.md, S3). G is linear
     // in the densities, so G = G_ref + G[P - P_ref], and the fused loop's
     // density-weighted screen drops most of G[dP] as P converges (1.19-1.33x on
@@ -87,58 +65,55 @@ namespace
         return calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr;
     }
 
-    Eigen::MatrixXd direct_fock_rhf(const HartreeFock::Calculator &calc,
-                                    const std::vector<HartreeFock::ShellPair> &shell_pairs,
-                                    const Eigen::MatrixXd &P, double tol_eri, IncrementalFock &ref)
+    // The direct builders work in Cartesian. In spherical mode the density goes
+    // to Cartesian (P_cart = Cᵀ P C) and G comes back (G = C G_cart Cᵀ). G is
+    // linear in P and built from the same Cartesian ERIs the conventional path
+    // contracts, so this reproduces the conventional spherical G exactly.
+    std::expected<Eigen::MatrixXd, std::string> direct_fock_rhf(
+        const HartreeFock::Calculator &calc, const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const Eigen::MatrixXd &P, double tol_eri, IncrementalFock &ref)
     {
+        using HartreeFock::BasisFunctions::to_cartesian;
+        using HartreeFock::BasisFunctions::to_working;
         const bool inc = !ref.G.empty();
-        const Eigen::MatrixXd D = inc ? Eigen::MatrixXd(P - ref.P[0]) : P;
-        const auto build = [&](const Eigen::MatrixXd &D_cart, std::size_t nb)
-        {
-            return _compute_2e_fock(shell_pairs, D_cart, nb, calc._integral._engine,
-                                    HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri, integral_ops(calc),
-                                    HartreeFock::Integrals::FusedTerm::Combined, ref.screen);
-        };
-        const Eigen::MatrixXd dG = calc._shells._spherical
-            ? spherical_direct_fock(calc._shells._cart_to_sph, D,
-                                    [&](const Eigen::MatrixXd &D_cart) { return build(D_cart, calc._shells.nbasis()); })
-            : build(D, static_cast<std::size_t>(P.rows()));
-        Eigen::MatrixXd G = inc ? Eigen::MatrixXd(ref.G[0] + dG) : dG;
+        auto D = to_cartesian(calc._shells, inc ? Eigen::MatrixXd(P - ref.P[0]) : P);
+        if (!D)
+            return std::unexpected(D.error());
+        auto dG = to_working(calc._shells,
+                             _compute_2e_fock(shell_pairs, *D, calc._shells.nbasis(), calc._integral._engine,
+                                              HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri, integral_ops(calc),
+                                              HartreeFock::Integrals::FusedTerm::Combined, ref.screen));
+        if (!dG)
+            return std::unexpected(dG.error());
+        Eigen::MatrixXd G = inc ? Eigen::MatrixXd(ref.G[0] + *dG) : *dG;
         ref.P = {P};
         ref.G = {G};
         return G;
     }
 
-    std::pair<Eigen::MatrixXd, Eigen::MatrixXd> direct_fock_uhf(
+    std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string> direct_fock_uhf(
         const HartreeFock::Calculator &calc, const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const Eigen::MatrixXd &Pa, const Eigen::MatrixXd &Pb, double tol_eri, IncrementalFock &ref)
     {
+        using HartreeFock::BasisFunctions::to_cartesian;
+        using HartreeFock::BasisFunctions::to_working;
         const bool inc = !ref.G.empty();
-        const Eigen::MatrixXd Da = inc ? Eigen::MatrixXd(Pa - ref.P[0]) : Pa;
-        const Eigen::MatrixXd Db = inc ? Eigen::MatrixXd(Pb - ref.P[1]) : Pb;
-        Eigen::MatrixXd dGa, dGb;
-        if (calc._shells._spherical)
-        {
-            const Eigen::MatrixXd &C = calc._shells._cart_to_sph;
-            auto [ga, gb] = _compute_2e_fock_uhf(shell_pairs, C.transpose() * Da * C, C.transpose() * Db * C,
-                                                 calc._shells.nbasis(), calc._integral._engine,
-                                                 HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri, integral_ops(calc),
-                                                 HartreeFock::Integrals::FusedTerm::Combined, ref.screen);
-            dGa = C * ga * C.transpose();
-            dGb = C * gb * C.transpose();
-        }
-        else
-        {
-            std::tie(dGa, dGb) = _compute_2e_fock_uhf(shell_pairs, Da, Db, static_cast<std::size_t>(Pa.rows()),
-                                                      calc._integral._engine, HartreeFock::ERIKernel::Coulomb,
-                                                      0.0, tol_eri, integral_ops(calc),
-                                                      HartreeFock::Integrals::FusedTerm::Combined, ref.screen);
-        }
-        Eigen::MatrixXd Ga = inc ? Eigen::MatrixXd(ref.G[0] + dGa) : dGa;
-        Eigen::MatrixXd Gb = inc ? Eigen::MatrixXd(ref.G[1] + dGb) : dGb;
+        auto Da = to_cartesian(calc._shells, inc ? Eigen::MatrixXd(Pa - ref.P[0]) : Pa);
+        auto Db = to_cartesian(calc._shells, inc ? Eigen::MatrixXd(Pb - ref.P[1]) : Pb);
+        if (!Da || !Db)
+            return std::unexpected(!Da ? Da.error() : Db.error());
+        auto [ga, gb] = _compute_2e_fock_uhf(shell_pairs, *Da, *Db, calc._shells.nbasis(), calc._integral._engine,
+                                             HartreeFock::ERIKernel::Coulomb, 0.0, tol_eri, integral_ops(calc),
+                                             HartreeFock::Integrals::FusedTerm::Combined, ref.screen);
+        auto dGa = to_working(calc._shells, ga);
+        auto dGb = to_working(calc._shells, gb);
+        if (!dGa || !dGb)
+            return std::unexpected(!dGa ? dGa.error() : dGb.error());
+        Eigen::MatrixXd Ga = inc ? Eigen::MatrixXd(ref.G[0] + *dGa) : *dGa;
+        Eigen::MatrixXd Gb = inc ? Eigen::MatrixXd(ref.G[1] + *dGb) : *dGb;
         ref.P = {Pa, Pb};
         ref.G = {Ga, Gb};
-        return {Ga, Gb};
+        return std::pair{Ga, Gb};
     }
 
     // The full-symmetry loops ({os,hgp,rys}_symm.cpp) evaluate the skeleton one
@@ -712,8 +687,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
         // ── Build two-electron contribution G = J - 0.5*K ────────────────────
         // Conventional: contract the (spherical, in spherical mode) ERI tensor.
         // Direct: the per-quartet builder works in Cartesian; in spherical mode the
-        // density is back-projected and the result forward-transformed (see
-        // spherical_direct_fock). In Cartesian mode the builder is called directly.
+        // density is lifted and the result projected (see direct_fock_rhf).
         Eigen::MatrixXd G;
         if (calculator._scf._ri_jk)
         {
@@ -755,7 +729,10 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
         }
         else
         {
-            G = direct_fock_rhf(calculator, shell_pairs, P, tol_eri, fock_ref);
+            auto G_res = direct_fock_rhf(calculator, shell_pairs, P, tol_eri, fock_ref);
+            if (!G_res)
+                return std::unexpected(G_res.error());
+            G = std::move(*G_res);
         }
 
         // ponytail: phase timers, env-gated, RHF only -- the Amdahl probe for
@@ -1369,7 +1346,10 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         }
         else
         {
-            std::tie(Ga, Gb) = direct_fock_uhf(calculator, shell_pairs, Pa, Pb, tol_eri, fock_ref);
+            auto G_res = direct_fock_uhf(calculator, shell_pairs, Pa, Pb, tol_eri, fock_ref);
+            if (!G_res)
+                return std::unexpected(G_res.error());
+            std::tie(Ga, Gb) = std::move(*G_res);
         }
 
         const Eigen::MatrixXd P_total = Pa + Pb;
@@ -2174,7 +2154,10 @@ std::expected<void, std::string> HartreeFock::SCF::run_rohf(
         }
         else
         {
-            std::tie(Ga, Gb) = direct_fock_uhf(calculator, shell_pairs, Pa, Pb, tol_eri, fock_ref);
+            auto G_res = direct_fock_uhf(calculator, shell_pairs, Pa, Pb, tol_eri, fock_ref);
+            if (!G_res)
+                return std::unexpected(G_res.error());
+            std::tie(Ga, Gb) = std::move(*G_res);
         }
 
         const Eigen::MatrixXd Fa = H + Ga;

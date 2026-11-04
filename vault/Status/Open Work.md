@@ -42,8 +42,8 @@ is the recommended one; none blocks another except where noted.
   boundary goes on ~10 `driver.cpp` call sites (the other 30 `nbasis()` sites
   in `src/dft/` check against the AO grid and need no edit). First shared fixes
   (S0): the HF spherical ESP defect (S0.1, fixed) and `ensure_eri` crashing its callers
-  in spherical mode after a direct SCF (S0.2, fixed; both in Completion); public `to_cartesian`/`to_working` helpers replacing HF's
-  three copies; and `compute_rks/uks_gradient` not lifting P and W. Then
+  in spherical mode after a direct SCF (S0.2, fixed; both in Completion); public `to_cartesian`/`to_working` helpers replacing seven
+  hand-written copies (S0.3, landed); and `compute_rks/uks_gradient` not lifting P and W. Then
   single points, gradients, TDDFT, SOSCF, DH single points; PCM and DH
   gradients stay rejected. Prerequisite for def2 and ECP DFT.
 - **D3 dispersion** (`docs/DISPERSION_D3_SCOPE.md`). None in `src/`. A

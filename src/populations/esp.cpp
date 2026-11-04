@@ -717,18 +717,14 @@ void HartreeFock::SCF::log_esp_report(
     Eigen::MatrixXd total_density = calculator._info._scf.alpha.density;
     if (has_spin_channels)
         total_density += calculator._info._scf.beta.density;
-    if (calculator._shells._spherical)
-    {
-        auto lifted = HartreeFock::BasisFunctions::lift_density_sph_to_cart(
-            total_density, calculator._shells._cart_to_sph);
-        if (!lifted)
-        {
-            HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
-                                         "Electrostatic Potential :", "Unavailable: " + lifted.error());
-            HartreeFock::Logger::blank();
-            return;
-        }
+    if (auto lifted = HartreeFock::BasisFunctions::to_cartesian(calculator._shells, total_density); lifted)
         total_density = std::move(*lifted);
+    else
+    {
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning,
+                                     "Electrostatic Potential :", "Unavailable: " + lifted.error());
+        HartreeFock::Logger::blank();
+        return;
     }
 
     auto phi = HartreeFock::SCF::electrostatic_potential(

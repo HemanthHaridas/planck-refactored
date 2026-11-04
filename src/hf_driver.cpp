@@ -12,6 +12,7 @@
 #include "driver.h"
 
 #include "base/types.h"
+#include "basis/spherical.h"
 #include "basis/basis.h"
 #include "bsse/counterpoise.h"
 #include "freq/hessian.h"
@@ -1018,17 +1019,12 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         // diagonal transform C: M_sph = C · M_cart · Cᵀ. C was normalized right after
         // the basis was built (above), so diag(_overlap) = 1 and SCF works entirely in
         // the spherical basis. (Step 2.2; the Cartesian path is unchanged.)
-        if (calculator._shells._spherical)
-        {
-            const Eigen::MatrixXd &C = calculator._shells._cart_to_sph;
-            calculator._overlap = C * S * C.transpose();
-            calculator._hcore = C * (T + V) * C.transpose();
-        }
-        else
-        {
-            calculator._overlap = S;
-            calculator._hcore = T + V;
-        }
+        auto S_w = HartreeFock::BasisFunctions::to_working(calculator._shells, S);
+        auto H_w = HartreeFock::BasisFunctions::to_working(calculator._shells, T + V);
+        if (!S_w || !H_w)
+            return std::unexpected(!S_w ? S_w.error() : H_w.error());
+        calculator._overlap = std::move(*S_w);
+        calculator._hcore = std::move(*H_w);
 
         // F1 debug dump (env-gated): write the WORKING-basis overlap (spherical
         // after the cart→sph transform, or Cartesian) for f-block inspection vs

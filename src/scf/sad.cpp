@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "basis/basis.h"
+#include "basis/spherical.h"
 #include "basis/gbs_parser.h"
 #include "integrals/base.h"
 #include "integrals/shellpair.h"
@@ -350,22 +351,6 @@ namespace
     //
     // Guarantees Tr(P * S) = n_electrons (up to the linear-dependence threshold).
     // Map a Cartesian-basis density into the spherical AO basis: P_sph = C P_cart C^T.
-    // Used to bring the block-diagonal raw SAD guess into the working spherical basis
-    // before projection. C is the S-normalized whole-basis transform built at load.
-    static std::expected<Eigen::MatrixXd, std::string> transform_density_cart_to_sph(
-        const HartreeFock::Calculator &calc,
-        const Eigen::MatrixXd &P_cart)
-    {
-        const Eigen::MatrixXd &C = calc._shells._cart_to_sph;
-        const Eigen::Index n_cart = static_cast<Eigen::Index>(calc._shells.nbasis());
-        const Eigen::Index n_sph = static_cast<Eigen::Index>(calc._shells.nbasis_sph());
-        if (C.rows() != n_sph || C.cols() != n_cart)
-            return std::unexpected("SAD: spherical transform has unexpected shape");
-        if (P_cart.rows() != n_cart || P_cart.cols() != n_cart)
-            return std::unexpected("SAD: raw density has unexpected (non-Cartesian) shape");
-        return Eigen::MatrixXd(C * P_cart * C.transpose());
-    }
-
     // The SAD guess is the raw density itself, scaled to the target electron
     // count: P = (n / Tr(P_raw S)) P_raw. It is NOT made idempotent.
     //
@@ -500,10 +485,8 @@ namespace HartreeFock
             // are in the spherical basis, so map the guess into the spherical basis
             // first: P_sph = C P_cart C^T. The result is only an initial guess, so the
             // contamination subspace discarded by C is irrelevant. (No-op in
-            // Cartesian mode, where _cart_to_sph is empty.)
-            if (calc._shells._spherical)
-                return transform_density_cart_to_sph(calc, P_raw);
-            return P_raw;
+            // Cartesian mode.)
+            return HartreeFock::BasisFunctions::to_working(calc._shells, P_raw);
         }
 
         std::expected<Eigen::MatrixXd, std::string> compute_sad_guess_rhf(

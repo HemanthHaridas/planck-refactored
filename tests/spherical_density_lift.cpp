@@ -112,6 +112,40 @@ namespace
         if (res)
             fail("expected dimension-mismatch error, got success");
     }
+
+    // to_cartesian / to_working: unchanged in Cartesian mode, C M Cᵀ (and the
+    // lift) in spherical mode, and a wrong shape refused.
+    void check_mode_aware_helpers()
+    {
+        auto C_res = HartreeFock::BasisFunctions::cart_to_sph_block(2);
+        if (!C_res)
+        {
+            fail("cart_to_sph_block(L=2) failed: " + C_res.error());
+            return;
+        }
+        const Eigen::MatrixXd C = *C_res; // 5 x 6
+        const Eigen::MatrixXd M6 = Eigen::MatrixXd::Random(6, 6);
+        const Eigen::MatrixXd M5 = Eigen::MatrixXd::Random(5, 5);
+
+        HartreeFock::Basis cart; // _spherical false
+        auto a = HartreeFock::BasisFunctions::to_working(cart, M6);
+        auto b = HartreeFock::BasisFunctions::to_cartesian(cart, M6);
+        if (!a || !b || *a != M6 || *b != M6)
+            fail("Cartesian-mode helpers must return M unchanged");
+
+        HartreeFock::Basis sph;
+        sph._spherical = true;
+        sph._cart_to_sph = C;
+        auto w = HartreeFock::BasisFunctions::to_working(sph, M6);
+        auto c = HartreeFock::BasisFunctions::to_cartesian(sph, M5);
+        if (!w || (*w - C * M6 * C.transpose()).norm() != 0.0)
+            fail("to_working must equal C M Cᵀ");
+        if (!c || (*c - C.transpose() * M5 * C).norm() != 0.0)
+            fail("to_cartesian must equal Cᵀ M C");
+        if (HartreeFock::BasisFunctions::to_working(sph, M5) ||
+            HartreeFock::BasisFunctions::to_cartesian(sph, M6))
+            fail("helpers must refuse a wrong shape");
+    }
 } // namespace
 
 int main()
@@ -119,6 +153,7 @@ int main()
     for (int L = 0; L <= 4; ++L)
         check_for_L(L);
     check_dimension_mismatch_errors();
+    check_mode_aware_helpers();
 
     if (g_ok)
     {

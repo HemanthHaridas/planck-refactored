@@ -2,6 +2,7 @@
 
 #include <array>
 
+#include "basis/spherical.h"
 #include "integrals/os.h"
 
 namespace
@@ -216,17 +217,22 @@ HartreeFock::ObaraSaika::_compute_multipole_moments(
     // Spherical mode: map each Cartesian AO multipole matrix M into the spherical
     // basis (M_sph = C M C^T) so it contracts dimension-consistently with the
     // spherical density. C is the S-normalized transform stored on the basis.
-    if (calculator._shells._spherical)
+    // The density is in the working basis; bring each Cartesian matrix there.
+    std::string transform_error;
+    const auto to_working = [&](Eigen::MatrixXd &M)
     {
-        const Eigen::MatrixXd &C = calculator._shells._cart_to_sph;
-        if (C.rows() != nbasis_idx ||
-            C.cols() != static_cast<Eigen::Index>(nbasis_cart))
-            return std::unexpected("multipole analysis: spherical transform has unexpected shape");
-        for (int axis = 0; axis < 3; ++axis)
-            matrices.dipole[axis] = C * matrices.dipole[axis] * C.transpose();
-        for (int k = 0; k < 6; ++k)
-            matrices.quadrupole[k] = C * matrices.quadrupole[k] * C.transpose();
-    }
+        auto M_w = HartreeFock::BasisFunctions::to_working(calculator._shells, M);
+        if (M_w)
+            M = std::move(*M_w);
+        else
+            transform_error = M_w.error();
+    };
+    for (auto &M : matrices.dipole)
+        to_working(M);
+    for (auto &M : matrices.quadrupole)
+        to_working(M);
+    if (!transform_error.empty())
+        return std::unexpected("multipole analysis: " + transform_error);
 
     HartreeFock::MultipoleMoments moments{};
     moments.origin = origin;

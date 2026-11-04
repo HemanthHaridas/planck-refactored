@@ -404,3 +404,24 @@ HartreeFock::BasisFunctions::lift_density_sph_to_cart(
     // M_cart = Cᵀ · M_sph · C   →   [n_cart × n_cart]
     return Eigen::MatrixXd(C.transpose() * M_sph * C);
 }
+
+std::expected<Eigen::MatrixXd, std::string>
+HartreeFock::BasisFunctions::to_cartesian(const HartreeFock::Basis &basis, const Eigen::MatrixXd &M_working)
+{
+    if (!basis._spherical)
+        return M_working;
+    return lift_density_sph_to_cart(M_working, basis._cart_to_sph);
+}
+
+std::expected<Eigen::MatrixXd, std::string>
+HartreeFock::BasisFunctions::to_working(const HartreeFock::Basis &basis, const Eigen::MatrixXd &M_cart)
+{
+    if (!basis._spherical)
+        return M_cart;
+    const Eigen::MatrixXd &C = basis._cart_to_sph;
+    if (M_cart.rows() != C.cols() || M_cart.cols() != C.cols())
+        return std::unexpected("to_working: M_cart is " + std::to_string(M_cart.rows()) + "×" +
+                               std::to_string(M_cart.cols()) + " but C has " + std::to_string(C.cols()) +
+                               " Cartesian columns");
+    return Eigen::MatrixXd(C * M_cart * C.transpose());
+}

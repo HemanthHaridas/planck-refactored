@@ -91,6 +91,19 @@ namespace HartreeFock
             const Eigen::MatrixXd &M_sph,
             const Eigen::MatrixXd &C);
 
+        // ── Working basis ↔ Cartesian, mode-aware ─────────────────────────────────
+        //
+        // The one boundary between the SCF's working basis (spherical when
+        // basis._spherical) and the Cartesian integral and grid layers:
+        //   to_cartesian: M_cart = Cᵀ M_working C   (densities, W, MO-built matrices)
+        //   to_working:   M_working = C M_cart Cᵀ   (Fock/potential/1e matrices)
+        // In Cartesian mode both return M unchanged (bitwise). Shapes are checked,
+        // since a mismatched Eigen product is undefined behaviour in Release.
+        std::expected<Eigen::MatrixXd, std::string> to_cartesian(
+            const HartreeFock::Basis &basis, const Eigen::MatrixXd &M_working);
+        std::expected<Eigen::MatrixXd, std::string> to_working(
+            const HartreeFock::Basis &basis, const Eigen::MatrixXd &M_cart);
+
     } // namespace BasisFunctions
 } // namespace HartreeFock
 

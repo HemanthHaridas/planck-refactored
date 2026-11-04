@@ -4,6 +4,7 @@
 #include <cmath>
 #include <utility>
 
+#include "basis/spherical.h"
 #include "integrals/base.h"
 #include "symmetry/integral_symmetry.h"
 
@@ -53,17 +54,12 @@ HartreeFock::SCF::rebuild_basis_dependent_state(HartreeFock::Calculator &calc)
     // Cartesian engine output → working basis. In spherical mode the lift uses
     // the C that was just normalized above, so diag(_overlap) = 1 holds and
     // SCF works entirely in the spherical basis.
-    if (calc._shells._spherical)
-    {
-        const Eigen::MatrixXd &C = calc._shells._cart_to_sph;
-        calc._overlap = C * S * C.transpose();
-        calc._hcore = C * (T + V) * C.transpose();
-    }
-    else
-    {
-        calc._overlap = S;
-        calc._hcore = T + V;
-    }
+    auto S_w = HartreeFock::BasisFunctions::to_working(calc._shells, S);
+    auto H_w = HartreeFock::BasisFunctions::to_working(calc._shells, T + V);
+    if (!S_w || !H_w)
+        return std::unexpected(!S_w ? S_w.error() : H_w.error());
+    calc._overlap = std::move(*S_w);
+    calc._hcore = std::move(*H_w);
 
     return shellpairs;
 }
