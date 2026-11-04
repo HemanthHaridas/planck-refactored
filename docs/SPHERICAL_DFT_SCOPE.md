@@ -1,7 +1,7 @@
 # Can `planck-dft` run in a spherical-harmonic basis?
 
 Research scope, opened 2026-10-26, rewritten 2026-11-04 after a code audit.
-S0.1 has landed; the rest is open. It expires when the work lands; rewrite it then as the
+S0.1 and S0.2 have landed; the rest is open. It expires when the work lands; rewrite it then as the
 answer. Status lives in `vault/Status/Open Work.md`.
 
 ## Why it matters
@@ -107,13 +107,18 @@ Each fixes one mechanism that DFT would otherwise work around:
    (smoke) matches PySCF `cart=False` `int1e_grids` to ≤1.8e-9 at five
    off-axis points, and fails on the pre-fix code. The Connolly charges are
    now O −0.811 (Cartesian −0.812).
-2. **`Correlation::ensure_eri` refuses in spherical mode when nothing is
-   cached** (`src/post_hf/integrals.cpp`). Its comment says to avoid pairing
-   a Cartesian tensor with spherical MO coefficients. The fix is to build the
-   Cartesian tensor and transform it with the existing
-   `transform_eri_cart_to_sph`, which is exact. The memory is the same n⁴.
-   This serves TDDFT, double-hybrid PT2, and spherical post-HF after a direct
-   HF SCF.
+2. **`Correlation::ensure_eri` in spherical mode with nothing cached — FIXED
+   2026-11-04** (`src/post_hf/integrals.cpp`). It logged an error and returned
+   an empty tensor, and none of its ~20 callers checks for that: spherical
+   RMP2 after `scf_mode direct` died with SIGSEGV after a converged SCF, the
+   error message lost in the crash. It now builds the Cartesian tensor and
+   transforms it with `transform_eri_cart_to_sph` (exact; the 150-AO cap is
+   lifted there, since the Cartesian n⁴ build is the dominant cost and an
+   error return would crash the caller). Gates
+   `water_rmp2_spherical_631gd_direct` and
+   `h2o_cation_ump2_spherical_631gd_direct` reproduce the conventional
+   energies (RMP2 to 1e-13 Eh) and crash on the old code. This serves TDDFT,
+   double-hybrid PT2, and every spherical post-HF method after a direct SCF.
 3. **The two helpers above**, with the HF consolidation (bitwise on the HF
    spherical gates: water/6-31g* gradient, geomopt, freq, f/g/h shells).
 4. **RKS/UKS gradient lift** in `compute_rks_gradient` /
@@ -121,7 +126,7 @@ Each fixes one mechanism that DFT would otherwise work around:
 
 ## Steps
 
-1. **S0.2–S0.4** (S0.1 done). HF-side gates as listed. All Cartesian DFT cases stay
+1. **S0.3–S0.4** (S0.1, S0.2 done). HF-side gates as listed. All Cartesian DFT cases stay
    bitwise.
 2. **RKS and UKS single points**: LDA, GGA, global and range-separated
    hybrids, with SAD and SAO symmetry. Switch `prepare_current_geometry` to

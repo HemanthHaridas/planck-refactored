@@ -416,6 +416,15 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Spherical post-HF after a direct SCF no longer crashes (2026-11-04,
+  `docs/SPHERICAL_DFT_SCOPE.md` S0.2).** `Correlation::ensure_eri` returned
+  an empty tensor in spherical mode when the SCF had cached none, and its
+  ~20 callers index it unchecked: `scf_mode direct` + `basis_type spherical`
+  + RMP2 died with SIGSEGV. It now builds the Cartesian tensor and
+  transforms it to spherical. Gated by
+  `{water_rmp2,h2o_cation_ump2}_spherical_631gd_direct` (same energies as
+  the conventional cases).
+
 - **Spherical-basis ESP fixed (2026-11-04, `docs/SPHERICAL_DFT_SCOPE.md`
   S0.1).** `SCF::log_esp_report` handed the spherical (working-basis) density
   to Cartesian ESP integrals; `electrostatic_potential` only checked

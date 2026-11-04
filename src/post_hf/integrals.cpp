@@ -1,7 +1,9 @@
 #include <algorithm>
 #include <format>
+#include <limits>
 
 #include "integrals.h"
+#include "basis/spherical.h"
 #include "integrals/base.h"
 #include "io/logging.h"
 #include "post_hf/ri/ri_eri.h"
@@ -17,26 +19,33 @@ namespace HartreeFock::Correlation
         std::vector<double> &eri_local,
         const std::string &tag)
     {
-        // Spherical mode: the cached calc._eri is the SCF's spherical AO ERI
-        // (dimension working_nbasis() == nbasis_sph), and the MO coefficients the
-        // post-HF consumers slice are also spherical, so the cached tensor and the
-        // MO basis are self-consistent for the AO→MO transform — no C is needed
-        // here. Every post-HF AO-leg dimension keys off working_nbasis(), which
-        // matches this tensor. The one thing we must not do is rebuild a *fresh*
-        // tensor below: the integral engine only produces Cartesian ERIs, which
-        // would silently mismatch the spherical MO coefficients. So if the cached
-        // spherical tensor is somehow absent, refuse rather than fabricate a
-        // Cartesian one.
+        // Spherical mode: every post-HF AO leg keys off working_nbasis(), so the
+        // tensor must be the spherical one. A conventional SCF caches it in
+        // calc._eri; a direct SCF (or the DFT driver) does not, so build the
+        // Cartesian tensor and transform it, (pq|rs)_sph = C C C C (μν|λσ)_cart,
+        // which is exact. Never return the bare Cartesian tensor: it would be
+        // read at spherical indices.
         if (calc._shells._spherical)
         {
             if (!calc._eri.empty())
                 return calc._eri;
-            HartreeFock::Logger::logging(
-                HartreeFock::LogLevel::Error, tag,
-                "spherical post-HF requires the SCF's cached spherical AO ERI, "
-                "but it is unavailable; a fresh AO tensor would be Cartesian and "
-                "inconsistent with the spherical MO coefficients.");
-            eri_local.clear();
+            const std::size_t nb = calc._shells.nbasis();
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, tag,
+                                         std::format("Building spherical AO ERI tensor from {} Cartesian AOs", nb));
+            const std::vector<double> eri_cart =
+                _compute_2e(shell_pairs, nb, calc._integral._engine, HartreeFock::ERIKernel::Coulomb, 0.0, 1e-10,
+                            calc._use_integral_symmetry ? &calc._integral_symmetry_ops : nullptr);
+            // No size cap: the Cartesian n^4 tensor above is already the dominant
+            // cost, and none of the ~20 callers survives an empty return.
+            auto eri_sph = HartreeFock::BasisFunctions::transform_eri_cart_to_sph(
+                eri_cart, calc._shells._cart_to_sph, nb, std::numeric_limits<std::size_t>::max());
+            if (!eri_sph)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, tag, eri_sph.error());
+                eri_local.clear();
+                return eri_local;
+            }
+            eri_local = std::move(*eri_sph);
             return eri_local;
         }
 
