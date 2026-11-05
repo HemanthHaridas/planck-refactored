@@ -939,6 +939,54 @@
    ]
   },
   {
+   "id": "h2_rhf_triplet_instability_sto3g",
+   "input": "tests/inputs/regression/hf/h2_rhf_triplet_instability_sto3g.hfinp",
+   "tags": [
+    "smoke",
+    "core",
+    "extended"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 RHF/STO-3G H2 at 2.5 A: rhf_external lowest eigenvalue -0.51090553 (an RHF/RKS -> UHF/UKS instability); rhf_real2complex +0.05351456. Before R0 Planck's triplet channel computed A^T - B^T and printed the complex value, +0.0535 [stable].",
+   "expected_exit_code": 0,
+   "contains": [
+    "RHF -> UHF (triplet, external)",
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "stability_triplet_external",
+     "expected": -0.5109055,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_complex_internal",
+     "expected": 0.0535146,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -0.7029436002,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "h2_rhf_triplet_follow_sto3g",
+   "input": "tests/inputs/regression/hf/h2_rhf_triplet_follow_sto3g.hfinp",
+   "tags": [
+    "core",
+    "extended"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 broken-symmetry UHF/STO-3G H2 at 2.5 A (one electron per atom guess): -0.9338672048, <S^2> 0.9908. Planck's follow reaches it to every digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Re-converged after follow: E = -0.9338672048 Eh"
+   ]
+  },
+  {
    "id": "water_rhf_stability_stable",
    "input": "tests/inputs/regression/hf/water_rhf_stability_stable.hfinp",
    "tags": [
@@ -972,6 +1020,18 @@
      "type": "metric_ge",
      "metric": "stability_triplet_external",
      "value": 0.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_complex_internal",
+     "expected": 0.4798247,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_triplet_external",
+     "expected": 0.3988887,
+     "atol": 1e-06
     }
    ]
   },

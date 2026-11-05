@@ -109,20 +109,27 @@ Per product, before the kernel change: J 0.011 s, XC 0.53 s, short-range K
 0.49 s. K is what remains; a trial density gets no help from the SCF's density
 screening, so it is left. λ_min and the follow result are unchanged.
 
-**R0 — fix the HF RHF → UHF channel first (found while scoping).**
-`analyze_rhf_stability` builds its "external triplet" matrix as A^T − B^T
-(`TripletAminusB`, `src/scf/stability.cpp`), which is algebraically identical
-to the complex-orbital test it also reports. A real RHF → UHF rotation's
-Hessian is A^T + B^T = (ε_a − ε_i)δ − (ab|ij) − (aj|ib). Measured on H₂/STO-3G
-at 2.5 Å: Planck reports +0.0535 [stable]; A^T + B^T is −0.5109, and PySCF's
-`rhf_external` agrees (−0.5109, "RHF/RKS → UHF/UKS instability"). At 1.6 Å:
-Planck +0.2157 [stable], true −0.2561. So the textbook triplet instability of
-stretched H₂ is reported stable. It is the same A − B / A + B mix-up the UHF
-channel had (the comment above its matrix records that fix). Fix: the triplet
-channel uses −(ab|ij) − (aj|ib); keep A^S − B^S as the complex test. Gates:
-stretched H₂ unstable at both distances with PySCF's value, water/STO-3G
-stable, and the RHF → UHF follow reaching PySCF's broken-symmetry UHF energy.
-R2 below mirrors this channel, so it must be right first.
+**R0 — the HF RHF → UHF channel — FIXED 2026-11-05.** `analyze_rhf_stability`
+built its "external triplet" matrix as A^T − B^T, algebraically the
+complex-orbital test it also reports, so the triplet row repeated the complex
+row. The real RHF → UHF Hessian is A^T + B^T = (ε_a − ε_i)δ − (ab|ij) −
+(aj|ib); the channel now uses it (`TripletAplusB`, `src/scf/stability.cpp`).
+The same A − B / A + B mix-up the UHF channel had.
+
+| case | before | after | PySCF |
+|---|---|---|---|
+| H₂/STO-3G 2.5 Å, triplet | +0.0535 [stable] | −0.5109055 [UNSTABLE] | `rhf_external` −0.51090553 |
+| H₂/STO-3G 1.6 Å, triplet | +0.2157 [stable] | −0.2560807 [UNSTABLE] | — |
+| water/STO-3G, triplet | +0.4798247 (the complex value) | +0.3988887 | `rhf_external` +0.39888868 |
+
+With the channel right, the follow now fires on stretched H₂ and reaches
+PySCF's broken-symmetry UHF to every digit: −0.9338672048 at 2.5 Å,
+−0.9502279135 at 1.6 Å. Gates: `h2_rhf_triplet_instability_sto3g` (smoke),
+`h2_rhf_triplet_follow_sto3g`, and `water_rhf_stability_stable` now pins the
+complex and triplet values at 1e-6; all three fail on the old algebra.
+`ethylene_rhf_stability_unstable` (signs only) still passes; its triplet
+value moved −0.0754 → −0.0806. Not compared to PySCF, whose guess reaches a
+lower RHF than that case's charge-localized one.
 
 ### RKS stability
 

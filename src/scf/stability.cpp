@@ -57,16 +57,17 @@ namespace HartreeFock::SCF
         // Three standard checks (Seeger-Pople 1977; Bauernschmitt-Ahlrichs 1996):
         //   • internal real     →  lowest eig of (A^S + B^S)  — another real RHF
         //   • internal complex  →  lowest eig of (A^S − B^S)  — complex orbitals
-        //   • external triplet  →  lowest eig of (A^T − B^T)  — RHF→UHF spin flip
+        //   • external triplet  →  lowest eig of (A^T + B^T)  — real RHF→UHF
         //
-        // The singlet (A−B) and triplet (A−B) matrices reduce to the same
-        // algebraic form once the (ai|bj) Coulomb pieces cancel, but they
-        // diagnose physically distinct instabilities.
+        // The triplet channel used to be A^T − B^T, which is algebraically the
+        // complex test (A^S − B^S) again, so it reported stretched H2/STO-3G
+        // stable (+0.0535) where A^T + B^T is −0.511 (PySCF rhf_external
+        // −0.5109): the same A − B / A + B mix-up the UHF channel had.
         enum class RHFChannel
         {
             SingletAplusB,  // internal, real    — RHF → another RHF
             SingletAminusB, // internal, complex — RHF → complex orbital RHF
-            TripletAminusB, // external, triplet — RHF → UHF
+            TripletAplusB,  // external, triplet — real RHF → UHF
         };
 
         // Build a closed-shell response matrix in MO basis, reusing the
@@ -104,15 +105,13 @@ namespace HartreeFock::SCF
                                 val += 4.0 * ai_bj - ab_ij - aj_bi;
                                 break;
                             case RHFChannel::SingletAminusB:
-                                // (A^S − B^S) = εδ − (ab|ij) + (aj|ib)
-                                // Algebraically identical to (A^T − B^T) below;
-                                // physically tests stability against complex
-                                // orbital rotations, not spin-symmetry breaking.
+                                // (A^S − B^S) = εδ − (ab|ij) + (aj|ib):
+                                // stability against complex orbital rotations.
                                 val += -ab_ij + aj_bi;
                                 break;
-                            case RHFChannel::TripletAminusB:
-                                // (A^T − B^T) = εδ − (ab|ij) + (aj|ib)
-                                val += -ab_ij + aj_bi;
+                            case RHFChannel::TripletAplusB:
+                                // (A^T + B^T) = εδ − (ab|ij) − (aj|ib)
+                                val += -ab_ij - aj_bi;
                                 break;
                             }
                             M(ai, bj) = val;
@@ -297,7 +296,7 @@ namespace HartreeFock::SCF
         } channels[3] = {
             {RHFChannel::SingletAplusB, "RHF -> RHF (real, internal)"},
             {RHFChannel::SingletAminusB, "RHF -> complex RHF (internal)"},
-            {RHFChannel::TripletAminusB, "RHF -> UHF (triplet, external)"},
+            {RHFChannel::TripletAplusB, "RHF -> UHF (triplet, external)"},
         };
 
         for (const auto &c : channels)

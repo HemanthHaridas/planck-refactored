@@ -416,6 +416,16 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **HF RHF → UHF stability channel fixed (2026-11-05,
+  `docs/KS_STABILITY_SCOPE.md` R0).** The "external triplet" channel built
+  A^T − B^T, which is the complex-orbital test again, so the triplet row
+  repeated the complex row and stretched H₂/STO-3G was reported stable
+  (+0.0535) where A^T + B^T is −0.5109 (PySCF `rhf_external` −0.51090553).
+  Now A^T + B^T; the follow reaches PySCF's broken-symmetry UHF to every digit
+  (−0.9338672048 at 2.5 Å). Water's triplet value is now PySCF's +0.3988887.
+  Gated by `h2_rhf_triplet_{instability,follow}_sto3g` and tightened
+  `water_rhf_stability_stable`, all failing on the old algebra.
+
 - **UKS stability analysis and following in `planck-dft` (2026-11-05,
   `docs/KS_STABILITY_SCOPE.md`).** `stability_check` / `stability_follow` now
   work for UKS: the lowest eigenvalue of the spin-conserving A + B by Davidson

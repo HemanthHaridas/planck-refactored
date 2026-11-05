@@ -54,10 +54,9 @@ truth for what remains.
     λ_min = −0.069 and re-converges to −75.6490088941. KS has no stability
     analysis, so the UKS run has no way to notice.
   - Remedy chosen: Kohn-Sham stability analysis and follow
-    (`docs/KS_STABILITY_SCOPE.md`). UKS landed; still open there: R0, the HF
-    RHF → UHF channel computes A^T − B^T and reports stretched H₂ stable
-    (true A^T + B^T −0.511 at 2.5 Å, PySCF `rhf_external` −0.5109); then RKS
-    → RKS (R1), RKS → UKS (R2), spherical (R3). Only HSE06/cc-pVTZ traps
+    (`docs/KS_STABILITY_SCOPE.md`). UKS and R0 (the HF RHF → UHF channel,
+    see Completion) landed; still open there: RKS → RKS (R1), RKS → UKS (R2),
+    spherical (R3). Only HSE06/cc-pVTZ traps
     among the water⁺ variants tried. Not measured: how many open-shell
     regression cases sit on a saddle; SAD as the open-shell default was not
     pursued.
