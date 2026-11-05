@@ -315,7 +315,7 @@ namespace HartreeFock::Correlation::CASSCF
         // local, so flipping it here propagates the spherical sizing throughout.
         const int nbasis = static_cast<int>(calc.working_nbasis());
         const int n_total_elec =
-            static_cast<int>(calc._molecule.atomic_numbers.cast<int>().sum()) - calc._molecule.charge;
+            static_cast<int>(calc._molecule.total_nuclear_charge()) - calc._molecule.charge;
         // The non-active electrons must form a closed, doubly-occupied inactive
         // core: build_inactive_fock_mo / compute_core_energy assume the core
         // density is 2 * C_core C_core^T. An odd (n_elec - nactele) cannot pair

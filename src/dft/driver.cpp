@@ -1405,8 +1405,7 @@ namespace DFT::Driver
 
             if (!unrestricted)
             {
-                const int n_electrons = static_cast<int>(
-                    calculator._molecule.atomic_numbers.cast<int>().sum() - calculator._molecule.charge);
+                const int n_electrons = static_cast<int>(calculator._molecule.total_nuclear_charge() - calculator._molecule.charge);
                 if (n_electrons % 2 != 0)
                     return std::unexpected("Closed-shell RKS TDDFT / linear response requires an even number of electrons");
 
@@ -1431,8 +1430,7 @@ namespace DFT::Driver
             }
             else
             {
-                const int n_electrons = static_cast<int>(
-                    calculator._molecule.atomic_numbers.cast<int>().sum() - calculator._molecule.charge);
+                const int n_electrons = static_cast<int>(calculator._molecule.total_nuclear_charge() - calculator._molecule.charge);
                 const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
                 const int n_alpha = (n_electrons + n_unpaired) / 2;
                 const int n_beta = (n_electrons - n_unpaired) / 2;
@@ -1877,8 +1875,7 @@ namespace DFT::Driver
 
             const std::size_t nbasis = calculator.working_nbasis();
             const bool unrestricted = calculator._scf._scf == HartreeFock::SCFType::UHF;
-            const int n_electrons = static_cast<int>(
-                calculator._molecule.atomic_numbers.cast<int>().sum() - calculator._molecule.charge);
+            const int n_electrons = static_cast<int>(calculator._molecule.total_nuclear_charge() - calculator._molecule.charge);
 
             if (!unrestricted && (n_electrons % 2 != 0))
                 return std::unexpected("RKS requires an even number of electrons; use UKS for open-shell systems");
@@ -3619,6 +3616,38 @@ namespace DFT::Driver
             return gradient;
         }
 
+        // Lowest eigenpair of a stability operator by matrix-free Davidson.
+        // Several roots: a symmetry-breaking mode is reached only from start
+        // vectors that touch it, and the lowest few orbital-gap sectors do.
+        std::expected<std::pair<double, Eigen::VectorXd>, std::string> lowest_hessian_root(
+            const std::string &tag, int dim, const Eigen::VectorXd &diagonal,
+            const std::function<Eigen::VectorXd(const Eigen::VectorXd &)> &h_op)
+        {
+            const int nroots = std::min(4, dim);
+            int products = 0;
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto counted = [&](const Eigen::VectorXd &x)
+            {
+                ++products;
+                return h_op(x);
+            };
+            auto eig = davidson_lowest_eigenpairs(dim, nroots, diagonal, counted, 1e-4, 100,
+                                                  std::min(dim, 20 * nroots));
+            if (!eig)
+                return std::unexpected(eig.error());
+            const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, "Stability :",
+                std::format("{} Davidson: {} iterations, {} Hessian products, {:.2f} s ({:.3f} s per product)",
+                            tag, eig->iterations, products, seconds, products ? seconds / products : 0.0));
+            if (!eig->converged)
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Stability :",
+                                             tag + " Davidson did not reach 1e-4; reporting its lowest estimate");
+            Eigen::Index k = 0;
+            eig->eigenvalues.minCoeff(&k);
+            return std::pair<double, Eigen::VectorXd>{eig->eigenvalues(k), eig->eigenvectors.col(k)};
+        }
+
         // UKS internal (spin-conserving) stability: lowest eigenvalue of the UKS
         // orbital Hessian (A + B), the operator UKS SOSCF uses, by Davidson.
         // Same convention as the UHF analysis (SCF::analyze_uhf_stability).
@@ -3636,8 +3665,14 @@ namespace DFT::Driver
             const int nmo_a = static_cast<int>(scf.alpha.mo_coefficients.cols());
             const int nmo_b = static_cast<int>(scf.beta.mo_coefficients.cols());
             const int nva = nmo_a - n_alpha, nvb = nmo_b - n_beta;
-            if (n_alpha <= 0 || nva <= 0 || n_beta < 0 || nvb <= 0)
-                return std::unexpected("UKS stability: needs occupied and virtual orbitals in each spin.");
+            if (n_alpha <= 0 || n_beta < 0)
+                return std::unexpected("UKS stability: needs at least one alpha electron.");
+            if (nva * n_alpha + nvb * n_beta == 0)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Stability :",
+                                             "No occupied-virtual rotations; nothing to analyze.");
+                return HartreeFock::SCF::StabilityReport{};
+            }
 
             auto xc_grid = evaluate_current_density_and_xc(
                 calculator, prepared, functionals.exchange, functionals.correlation);
@@ -3673,41 +3708,101 @@ namespace DFT::Driver
             Eigen::VectorXd diagonal(nova + novb);
             diagonal << DFT::Driver::orbital_energy_difference_diagonal(scf.alpha.mo_energies, n_alpha),
                 DFT::Driver::orbital_energy_difference_diagonal(scf.beta.mo_energies, n_beta);
-            // Several roots: a symmetry-breaking mode is reached only from start
-            // vectors that touch it, and the lowest few orbital-gap sectors do.
-            const int nroots = std::min(4, nova + novb);
-            int products = 0;
-            const auto t0 = std::chrono::steady_clock::now();
-            const auto counted = [&](const Eigen::VectorXd &x)
-            {
-                ++products;
-                return h_op(x);
-            };
-            auto eig = davidson_lowest_eigenpairs(nova + novb, nroots, diagonal, counted, 1e-4, 100,
-                                                  std::min(nova + novb, 20 * nroots));
-            if (!eig)
-                return std::unexpected("UKS stability: " + eig.error());
-            const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-            HartreeFock::Logger::logging(
-                HartreeFock::LogLevel::Info, "Stability :",
-                std::format("UKS Davidson: {} iterations, {} Hessian products, {:.2f} s ({:.3f} s per product)",
-                            eig->iterations, products, seconds, products ? seconds / products : 0.0));
-            if (!eig->converged)
-                HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Stability :",
-                                             "UKS Davidson did not reach 1e-6; reporting its lowest estimate");
-
-            Eigen::Index k = 0;
-            eig->eigenvalues.minCoeff(&k);
-            const Eigen::VectorXd v = eig->eigenvectors.col(k);
+            auto root = lowest_hessian_root("UKS", nova + novb, diagonal, h_op);
+            if (!root)
+                return std::unexpected("UKS stability: " + root.error());
+            const auto &[lambda, v] = *root;
             HartreeFock::SCF::StabilityChannel ch;
             ch.label = "UKS -> UKS (spin-conserving, internal)";
-            ch.lowest_eigenvalue = eig->eigenvalues(k);
+            ch.lowest_eigenvalue = lambda;
             ch.is_unstable = ch.lowest_eigenvalue < -tol;
             ch.lowest_mode = Eigen::Map<const Eigen::MatrixXd>(v.head(nova).data(), n_alpha, nva).transpose();
             ch.lowest_mode_beta = Eigen::Map<const Eigen::MatrixXd>(v.tail(novb).data(), n_beta, nvb).transpose();
             HartreeFock::SCF::StabilityReport report;
             report.any_unstable = ch.is_unstable;
             report.channels.push_back(std::move(ch));
+            return report;
+        }
+
+        // RKS stability, both channels from the UKS operator at the closed-shell
+        // reference (C_a = C_b = C, P_a = P_b = P/2): on [k, k] its alpha block is
+        // the singlet A + B (RKS -> RKS), on [k, -k] the triplet A + B (RKS -> UKS),
+        // in the HF analysis's convention (SCF::analyze_rhf_stability).
+        std::expected<HartreeFock::SCF::StabilityReport, std::string> analyze_rks_stability(
+            HartreeFock::Calculator &calculator,
+            const PreparedSystem &prepared,
+            const InitializedFunctionals &functionals,
+            double tol = 1e-5)
+        {
+            const auto &scf = calculator._info._scf;
+            const int n_electrons = calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
+            const int nocc = n_electrons / 2;
+            const int nvirt = static_cast<int>(scf.alpha.mo_coefficients.cols()) - nocc;
+            if (n_electrons % 2 != 0 || nocc <= 0)
+                return std::unexpected("RKS stability: closed-shell reference required.");
+            if (nvirt <= 0)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Stability :",
+                                             "No occupied-virtual rotations; nothing to analyze.");
+                return HartreeFock::SCF::StabilityReport{};
+            }
+
+            auto xc_grid = evaluate_current_density_and_xc(
+                calculator, prepared, functionals.exchange, functionals.correlation);
+            if (!xc_grid)
+                return std::unexpected("RKS stability: XC evaluation failed: " + xc_grid.error());
+            // The polarized kernel needs polarized libxc handles (as RKS TDDFT).
+            auto x_pol = DFT::XC::Functional::create(calculator._dft._exchange_id, DFT::XC::Spin::Polarized);
+            auto c_pol = DFT::XC::Functional::create(calculator._dft._correlation_id, DFT::XC::Spin::Polarized);
+            if (!x_pol || !c_pol)
+                return std::unexpected("RKS stability: polarized functional initialization failed: " +
+                                       (x_pol ? c_pol.error() : x_pol.error()));
+
+            DFT::Driver::UksOrbitalHessianInputs h_in;
+            h_in.shell_pairs = &prepared.shell_pairs;
+            h_in.molecular_grid = &prepared.molecular_grid;
+            h_in.ao_grid = &prepared.ao_grid;
+            h_in.alpha_density = 0.5 * scf.alpha.density; // RKS stores the total density
+            h_in.beta_density = h_in.alpha_density;
+            h_in.Ca_occ = h_in.Cb_occ = scf.alpha.mo_coefficients.leftCols(nocc);
+            h_in.Ca_virt = h_in.Cb_virt = scf.alpha.mo_coefficients.rightCols(nvirt);
+            h_in.eps_a = h_in.eps_b = scf.alpha.mo_energies;
+            h_in.x_functional = &*x_pol;
+            h_in.c_functional = &*c_pol;
+            h_in.engine = calculator._integral._engine;
+            h_in.tol_eri = calculator._integral._tol_eri;
+            h_in.sym_ops = calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr;
+            h_in.full_range_exchange_coefficient = xc_grid->full_range_exchange_coefficient;
+            h_in.short_range_exchange_coefficient = xc_grid->short_range_exchange_coefficient;
+            h_in.range_separation_omega = xc_grid->range_separation_omega;
+            auto uks_op = DFT::Driver::build_uks_orbital_hessian_op(h_in);
+            if (!uks_op)
+                return std::unexpected("RKS stability: " + uks_op.error());
+
+            const int nov = nocc * nvirt;
+            const Eigen::VectorXd diagonal = DFT::Driver::orbital_energy_difference_diagonal(scf.alpha.mo_energies, nocc);
+            HartreeFock::SCF::StabilityReport report;
+            for (const double beta_sign : {1.0, -1.0})
+            {
+                const auto channel_op = [&](const Eigen::VectorXd &x)
+                {
+                    Eigen::VectorXd xx(2 * nov);
+                    xx << x, beta_sign * x;
+                    return Eigen::VectorXd((*uks_op)(xx).head(nov));
+                };
+                const bool singlet = beta_sign > 0.0;
+                auto root = lowest_hessian_root(singlet ? "RKS singlet" : "RKS triplet", nov, diagonal, channel_op);
+                if (!root)
+                    return std::unexpected("RKS stability: " + root.error());
+                HartreeFock::SCF::StabilityChannel ch;
+                // "RKS -> UKS" selects the triplet follow in run_initial_single_point.
+                ch.label = singlet ? "RKS -> RKS (real, internal)" : "RKS -> UKS (triplet, external)";
+                ch.lowest_eigenvalue = root->first;
+                ch.is_unstable = ch.lowest_eigenvalue < -tol;
+                ch.lowest_mode = Eigen::Map<const Eigen::MatrixXd>(root->second.data(), nocc, nvirt).transpose();
+                report.any_unstable = report.any_unstable || ch.is_unstable;
+                report.channels.push_back(std::move(ch));
+            }
             return report;
         }
 
@@ -3725,7 +3820,7 @@ namespace DFT::Driver
         std::expected<Result, std::string> run_initial_single_point(
             HartreeFock::Calculator &calculator,
             const Options &options,
-            const InitializedFunctionals &functionals)
+            InitializedFunctionals &functionals)
         {
             auto prepared = prepare(calculator, options);
             if (!prepared)
@@ -3746,18 +3841,39 @@ namespace DFT::Driver
 
             if (calculator._scf._stability_check && result->converged)
             {
-                auto report = analyze_uks_stability(calculator, *prepared, functionals);
+                const auto analyze = [&]
+                {
+                    return calculator._scf._scf == HartreeFock::SCFType::UHF
+                               ? analyze_uks_stability(calculator, *prepared, functionals)
+                               : analyze_rks_stability(calculator, *prepared, functionals);
+                };
+                auto report = analyze();
                 if (!report)
                     return std::unexpected(report.error());
                 log_stability_report(*report);
                 if (report->any_unstable && calculator._scf._stability_follow)
                 {
-                    // Follow once, as HF does: rotate along the lowest mode and
-                    // re-converge, then report the new point's stability.
-                    if (auto rotated = HartreeFock::SCF::rotate_along_internal_mode(
-                            calculator, report->channels.front());
-                        !rotated)
-                        return std::unexpected("UKS stability follow: " + rotated.error());
+                    // Follow the most negative channel once, as HF does: rotate (or,
+                    // for RKS -> UKS, promote to UKS), re-converge, re-check.
+                    const auto &ch = *std::min_element(
+                        report->channels.begin(), report->channels.end(),
+                        [](const auto &x, const auto &y) { return x.lowest_eigenvalue < y.lowest_eigenvalue; });
+                    auto moved = ch.label.find("RKS -> UKS") != std::string::npos
+                                     ? HartreeFock::SCF::promote_rhf_to_uhf_along_triplet_mode(calculator, ch)
+                                     : HartreeFock::SCF::rotate_along_internal_mode(calculator, ch);
+                    if (!moved)
+                        return std::unexpected("KS stability follow: " + moved.error());
+                    if (ch.label.find("RKS -> UKS") != std::string::npos)
+                    {
+                        // Now UKS for the rest of the run: polarized handles, and the
+                        // workflow re-validated for a UKS reference.
+                        auto polarized = initialize_functionals(calculator);
+                        if (!polarized)
+                            return std::unexpected("KS stability follow: " + polarized.error());
+                        functionals = std::move(*polarized);
+                        if (auto ok = validate_workflow_support(calculator, functionals, options); !ok)
+                            return std::unexpected("after the RKS -> UKS stability follow: " + ok.error());
+                    }
                     result = run_ks_scf_scaffold(calculator, *prepared, functionals.exchange,
                                                  functionals.correlation);
                     if (!result)
@@ -3767,7 +3883,7 @@ namespace DFT::Driver
                         std::format("Re-converged after follow: E = {:.10f} Eh", result->total_energy));
                     if (result->converged)
                     {
-                        if (auto again = analyze_uks_stability(calculator, *prepared, functionals); again)
+                        if (auto again = analyze(); again)
                             log_stability_report(*again);
                     }
                 }
@@ -5146,9 +5262,6 @@ namespace DFT::Driver
             return std::unexpected(functionals.error());
         if (auto spherical = validate_spherical_support(calculator, *functionals); !spherical)
             return std::unexpected(spherical.error());
-        if (calculator._scf._stability_check && calculator._scf._scf != HartreeFock::SCFType::UHF)
-            return std::unexpected("stability_check in planck-dft is implemented for UKS only "
-                                   "(the RKS check needs the spin-flip XC kernel); use scf_type uhf.");
 
         if(options.udh_gradient_validation && options.udh_pt2_scale_validation)
         {

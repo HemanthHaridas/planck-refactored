@@ -90,10 +90,7 @@ namespace HartreeFock::Correlation::CC
     {
         [[nodiscard]] int count_electrons(const HartreeFock::Calculator &calculator)
         {
-            int n_electrons = 0;
-            for (const auto Z : calculator._molecule.atomic_numbers)
-                n_electrons += static_cast<int>(Z);
-            n_electrons -= calculator._molecule.charge;
+            int n_electrons = calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
             return n_electrons;
         }
     } // namespace

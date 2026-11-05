@@ -123,6 +123,12 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     "stability_uhf_internal": re.compile(
         r"UHF -> UHF \(spin-conserving, internal\)\s+λ_min\s*=\s*([-+0-9Ee\.]+)"
     ),
+    "stability_rks_internal": re.compile(
+        r"RKS -> RKS \(real, internal\)\s+λ_min\s*=\s*([-+0-9Ee\.]+)"
+    ),
+    "stability_rks_triplet": re.compile(
+        r"RKS -> UKS \(triplet, external\)\s+λ_min\s*=\s*([-+0-9Ee\.]+)"
+    ),
 }
 
 COUNT_PATTERNS: dict[str, re.Pattern[str]] = {

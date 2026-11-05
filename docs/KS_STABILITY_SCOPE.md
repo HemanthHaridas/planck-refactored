@@ -1,159 +1,209 @@
 # Can `planck-dft` detect, and leave, an unstable Kohn-Sham solution?
 
-Research scope, opened 2026-11-04. UKS internal stability and following are
-implemented in the working tree (see Handoff); RKS stability is scoped below.
-Status lives in `vault/Status/Open Work.md`.
+**Yes, for RKS and UKS in the Cartesian basis.** `stability_check` reports the
+lowest orbital-Hessian eigenvalue of each channel:
+
+- UKS: UKS → UKS.
+- RKS: RKS → RKS (singlet) and RKS → UKS (triplet).
+
+`stability_follow` rotates along the lowest unstable mode and re-converges.
+A triplet instability promotes the run to UKS. Eigenvalues match PySCF to the
+grid floor (≤ 2e-5) on every case below, and the follows land on PySCF's
+lower state.
+
+Open: the spherical basis (refused; see Open), and regression gates for the
+HF-side fixes found on the way. Status: `vault/Status/Open Work.md`.
+
+| case | channel | Planck | PySCF 2.13.0 |
+|---|---|---|---|
+| water⁺/cc-pVTZ UKS HSE06, `hcore` | UKS → UKS | −0.063853 [UNSTABLE] | −0.063809 |
+| | after follow | −75.9126471254 (²B₁) | −75.9126406581 |
+| water⁺/6-31G* UKS HSE06 | UKS → UKS | +0.069275 | +0.069241 |
+| H₂/STO-3G 2.5 Å RKS PBE | singlet / triplet | +0.9301766 / −0.1448062 | +0.9301607 / −0.1448208 |
+| | after follow (UKS) | −0.9302662713 | −0.9303000702 |
+| H₂ 2.5 Å RKS B3LYP | singlet / triplet | +0.8647756 / −0.2230623 | +0.8647606 / −0.2230807 |
+| | after follow (UKS) | −0.9377524499 | −0.9377675629 |
+| water/6-31G* RKS B3LYP | singlet / triplet | +0.3080848 / +0.2522772 | +0.3080762 / +0.2522700 |
+| water/6-31G* RKS HSE06 | singlet / triplet | +0.3367296 / +0.2817728 | +0.3367223 / +0.2817651 |
+
+The ≤ 3.4e-5 energy gaps on stretched H₂ are the grid. The RKS energies
+differ by 2.4e-5 before any follow; water differs by 8.5e-7.
 
 ## Why it matters
 
 The default `hcore` guess can converge an open-shell SCF onto an excited,
-symmetry-trapped saddle with nothing reported. Water⁺/cc-pVTZ: the core
-Hamiltonian orbitals order 1a₁ 2a₁ 1b₂ 1b₁ 3a₁, so the guess already holds the
-²A₁ beta hole, and UKS HSE06 converges to ²A₁ at −75.8470063, 0.066 Eh above
-the ²B₁ ground state (−75.9126471 from `guess sad`; PySCF agrees with both to
-the grid floor, 7e-6). ²A₁ is a saddle, but its descent direction mixes a₁
-and b₁, which breaks C₂ᵥ, so a symmetric density never leaves it; PySCF's own
-SCF started from the ²A₁ density stays there too. UHF does the same from
-`hcore` and HF already escapes it (`stability_check` + `stability_follow`:
-λ = −0.069, re-converges to the ²B₁ energy to every digit). Kohn-Sham had no
-stability analysis, so a KS run could not notice.
+symmetry-trapped saddle and report nothing. Example, water⁺/cc-pVTZ:
 
-## Design
+- The core-Hamiltonian orbitals order 1a₁ 2a₁ 1b₂ 1b₁ 3a₁, so the guess
+  already holds the ²A₁ beta hole.
+- UKS HSE06 converges to ²A₁ at −75.8470063, 0.066 Eh above the ²B₁ ground
+  state.
+- ²A₁ is a saddle, but its descent direction mixes a₁ and b₁, which breaks
+  C₂ᵥ. A symmetric density therefore never leaves it, and PySCF's SCF started
+  from that density stays there too.
 
-The stability Hessian is the operator second-order SCF already applies, so no
-new response code is needed:
+UHF behaves the same and could already escape through its stability follow.
+Kohn-Sham had no stability analysis.
 
-- **UKS → UKS** (landed): the spin-conserving A + B is the UKS SOSCF operator,
-  now `DFT::Driver::build_uks_orbital_hessian_op` (`src/dft/ks_orbital_hessian.cpp`):
-  orbital-energy differences, J from the total trial density, the polarized
-  analytic XC kernel, and −(c_fr K + c_sr K_SR) per spin, with
-  dP_σ = C_v x_σ C_oᵀ + transpose.
-- **RKS → RKS** (scoped): the singlet A^S + B^S is the RKS SOSCF operator
-  `build_ks_orbital_hessian_op` with `kernel_scale = 2`. With dP = d₁ + d₁ᵀ,
-  2·J[dP] gives 4(ai|bj) and 2·(−½K[dP]) gives −(ab|ij) − (aj|ib), exactly
-  `analyze_rhf_stability`'s internal-real matrix plus the XC kernel.
-- **RKS → UKS** (scoped): the triplet A^T + B^T is the UKS operator at the
-  closed-shell reference (C_α = C_β = C, P_α = P_β = P/2) applied to the
-  spin-antisymmetric rotation [κ, −κ]; the output is [y, −y] with
-  y = (A^T + B^T)κ, and the triplet XC kernel (f_αα − f_αβ) comes from the
-  polarized kernel unchanged. [κ, κ] gives the singlet, a cross-check of the
-  RKS operator.
+## How it works
 
-Eigenvalues come from the matrix-free `davidson_lowest_eigenpairs` with the
-orbital-energy differences as preconditioner and 4 roots (a symmetry-breaking
-mode is reached only from start vectors that touch it). The follow reuses
-`SCF::rotate_along_internal_mode` (split out of the HF follow) and re-runs the
-KS SCF.
+The stability Hessian is the operator second-order SCF already applies, so
+there is no new response code.
 
-**Eigenvalue convention.** Planck reports eigenvalues of A ± B, as the HF
-analysis does, and they equal the eigenvalues of PySCF's orbital-Hessian
-operator directly: UKS `gen_g_hop_uhf` gives −0.063809 for water⁺/cc-pVTZ ²A₁
-(Planck −0.063853) and +0.069241 at 6-31G* (Planck +0.069275), differences at
-the grid floor. What PySCF *prints* differs by a fixed factor per channel:
-`uhf_internal` ×2 (−0.1276), `rhf_internal` ×4 (2.4717 vs 0.6179, H₂ 2.5 Å);
-`rhf_external` ×1 (−0.5109 = A^T + B^T).
+- **UKS → UKS.** The spin-conserving A + B is the UKS SOSCF operator,
+  `build_uks_orbital_hessian_op` (`src/dft/ks_orbital_hessian.cpp`). Its terms
+  are:
+  - orbital-energy differences;
+  - J from the total trial density;
+  - the prepared polarized XC kernel (`UKSXCKernel`);
+  - −(c_fr K + c_sr K_SR) per spin, with dP_σ = C_v x_σ C_oᵀ + transpose.
+- **Both RKS channels, one operator.** `analyze_rks_stability` builds that same
+  UKS operator at the closed-shell reference (C_α = C_β = C,
+  P_α = P_β = P/2). It needs polarized libxc handles, created from the
+  resolved IDs as RKS TDDFT does.
+  - The α block of its action on [κ, κ] is the singlet A^S + B^S:
+    4(ai|bj) − (ab|ij) − (aj|ib) + XC, which is `analyze_rhf_stability`'s
+    internal-real matrix.
+  - On [κ, −κ] it is the triplet A^T + B^T, with the triplet kernel
+    f_αα − f_αβ coming from the polarized kernel unchanged.
+  - No RKS operator is involved, so the two channels cannot disagree about
+    the kernel.
+- **Eigenvalues.** `lowest_hessian_root` runs a matrix-free Davidson with
+  4 roots, the orbital-energy differences as preconditioner, and a 1e-4
+  residual. The eigenvalue error goes as residual², so λ is good to 7 digits.
+  Four roots are needed because a symmetry-breaking mode is reached only from
+  start vectors that touch it.
+- **Follow** (`run_initial_single_point`). The most negative unstable channel
+  is followed once, then the SCF re-converges and is re-checked.
+  - Internal channels use `SCF::rotate_along_internal_mode`.
+  - The RKS → UKS triplet uses `SCF::promote_rhf_to_uhf_along_triplet_mode`:
+    β HOMO–LUMO mix plus ±κ, with the calculator switched to UHF.
+  - Both functions are split out of the HF follow, so HF and KS share them.
+  - The KS SCF reads the SCF type and seeded densities at call time, so the
+    switch needs no plumbing.
+  - After a promotion the run is UKS for every later step. `functionals` is
+    therefore re-initialized polarized, and `validate_workflow_support` re-runs:
+    a workflow UKS does not support (e.g. UKS double-hybrid geomopt) is refused
+    rather than run unchecked.
 
-## Handoff
+### Eigenvalue convention
 
-State on `feat/def2-ecp` as of 2026-11-05 (UKS check, follow and cost landed;
-R0–R3 open):
+Planck reports eigenvalues of A + B, as the HF analysis does. Against PySCF:
 
-- `src/dft/ks_orbital_hessian.{h,cpp}` — `UksOrbitalHessianInputs` and
-  `build_uks_orbital_hessian_op`, lifted from the inline UKS SOSCF lambda. It
-  prepares the polarized XC kernel once and returns `expected`.
-- `src/dft/analytic_hessian.{h,cpp}` — `UKSXCKernel` (`prepare_uks_xc_kernel`
-  / `apply`), the polarized twin of `RKSXCKernel`: ground densities and Libxc
-  second derivatives once, GEMM contractions over 128-point blocks per apply.
-  `compute_analytic_xc_hessian_vector_product_polarized` is prepare + apply,
-  so the UKS double-hybrid response shares it.
-- `src/dft/driver.cpp` — UKS SOSCF and `analyze_uks_stability` use the
-  builder; `davidson_lowest_eigenpairs` caches each basis vector's product
-  (it recomputed all of them every iteration); `run_initial_single_point`
-  checks after a converged SCF and, with `stability_follow`, rotates once,
-  re-converges and re-checks. RKS (`"UKS only"`) and spherical stability are
-  refused.
-- `src/scf/stability.{h,cpp}` — `rotate_along_internal_mode`, the rotation
-  half of `follow_instability_and_rerun`, shared with the KS follow.
+| channel | PySCF operator | factor vs Planck | what PySCF prints |
+|---|---|---|---|
+| UKS → UKS | `newton_ah.gen_g_hop_uhf` | ×1 | `uhf_internal` ×2 |
+| RKS/RHF → RKS/RHF | `newton_ah.gen_g_hop_rhf` | **×2** | `rhf_internal` ×4 |
+| RKS/RHF → UKS/UHF | `stability._gen_hop_rhf_external` (2nd) | ×1 | `rhf_external` ×1 |
 
-Verified:
-- Water⁺/cc-pVTZ UKS HSE06 from `hcore`: λ_min −6.385299e-02 [UNSTABLE]; the
-  follow re-converges to −75.9126471254 (the ²B₁ state Planck reaches from
-  SAD) and re-checks stable (+6.650649e-02).
-- Only that combination traps: water⁺ from `hcore` with PBE or B3LYP at
-  6-31G*, 6-311G, cc-pVDZ and cc-pVTZ, and HSE06 at STO-3G and 6-31G*, all
-  land on the ground state (λ_min ≈ +0.06–0.07).
-- `planck-dft-analytic-hessian-polarized-production` passes on the prepared
-  kernel and fails a mutated cross-spin slot (1e-8 tolerance).
-- 16 SOSCF/UKS/double-hybrid regression cases, core 98/98, smoke 51/53 (the
-  known `rccsdt` routing cases).
-- Cases: `water_cation_uks_hse06_stability_ccpvtz` (extended, 51 s; unstable,
-  follow, ground-state energy), `water_cation_uks_hse06_stability_631gd`
-  (core; stable, λ pinned), `water_rks_stability_rejected` (smoke).
+The ×2 for the singlet was pinned on HF: Planck water/STO-3G internal-real
+gives 0.5607608, PySCF `gen_g_hop_rhf` gives 1.1215215. An earlier draft of
+this doc assumed ×4, which is what `rhf_internal` *prints*.
 
-Pending: `docs/SOSCF_DFT.md` and the README keyword list should mention the
-shared builder and `stability_check` in `planck-dft`.
+## Cost
 
-## Next steps, in order
-
-**C — cost of the UKS check — DONE 2026-11-05.** Measured first, on
-water⁺/cc-pVTZ `grid fine` (SCF ~8 s):
+Measured on water⁺/cc-pVTZ UKS, `grid fine`, where the SCF itself takes
+about 8 s:
 
 | change | Davidson products | time |
 |---|---|---|
-| as landed | 167 | 172 s |
-| cache each basis vector's product (it recomputed every one every iteration) | 30 | 31 s |
-| residual tolerance 1e-6 → 1e-4 (λ unchanged to 7 digits; eigenvalue error ~ residual²) | 23 | 24 s |
+| first version | 167 | 172 s |
+| cache each basis vector's product (it recomputed every one each iteration) | 30 | 31 s |
+| residual 1e-6 → 1e-4 (λ unchanged to 7 digits) | 23 | 24 s |
 | prepared polarized XC kernel (1.03 → 0.60 s per product) | 23 | 14 s |
 
-Per product, before the kernel change: J 0.011 s, XC 0.53 s, short-range K
-0.49 s. K is what remains; a trial density gets no help from the SCF's density
-screening, so it is left. λ_min and the follow result are unchanged.
+Before the kernel change, each product cost J 0.011 s, XC 0.53 s and
+short-range K 0.49 s. K is what remains. A trial density gets no help from
+the SCF's density screening, so it was left alone.
 
-**R0 — the HF RHF → UHF channel — FIXED 2026-11-05.** `analyze_rhf_stability`
-built its "external triplet" matrix as A^T − B^T, algebraically the
+## Defects found on the way (all fixed)
+
+**HF RHF → UHF channel computed the wrong matrix.** `analyze_rhf_stability`
+built its triplet matrix as A^T − B^T. That is algebraically the
 complex-orbital test it also reports, so the triplet row repeated the complex
-row. The real RHF → UHF Hessian is A^T + B^T = (ε_a − ε_i)δ − (ab|ij) −
-(aj|ib); the channel now uses it (`TripletAplusB`, `src/scf/stability.cpp`).
-The same A − B / A + B mix-up the UHF channel had.
+row. It now uses A^T + B^T = (ε_a − ε_i)δ − (ab|ij) − (aj|ib)
+(`TripletAplusB`).
 
-| case | before | after | PySCF |
+| case | before | after | PySCF `rhf_external` |
 |---|---|---|---|
-| H₂/STO-3G 2.5 Å, triplet | +0.0535 [stable] | −0.5109055 [UNSTABLE] | `rhf_external` −0.51090553 |
-| H₂/STO-3G 1.6 Å, triplet | +0.2157 [stable] | −0.2560807 [UNSTABLE] | — |
-| water/STO-3G, triplet | +0.4798247 (the complex value) | +0.3988887 | `rhf_external` +0.39888868 |
+| H₂/STO-3G 2.5 Å | +0.0535 [stable] | −0.5109055 [UNSTABLE] | −0.51090553 |
+| H₂/STO-3G 1.6 Å | +0.2157 [stable] | −0.2560807 [UNSTABLE] | — |
+| water/STO-3G | +0.4798247 (the complex value) | +0.3988887 | +0.39888868 |
 
-With the channel right, the follow now fires on stretched H₂ and reaches
-PySCF's broken-symmetry UHF to every digit: −0.9338672048 at 2.5 Å,
-−0.9502279135 at 1.6 Å. Gates: `h2_rhf_triplet_instability_sto3g` (smoke),
-`h2_rhf_triplet_follow_sto3g`, and `water_rhf_stability_stable` now pins the
-complex and triplet values at 1e-6; all three fail on the old algebra.
-`ethylene_rhf_stability_unstable` (signs only) still passes; its triplet
-value moved −0.0754 → −0.0806. Not compared to PySCF, whose guess reaches a
-lower RHF than that case's charge-localized one.
+The follow now reaches PySCF's broken-symmetry UHF to every digit:
+−0.9338672048 at 2.5 Å and −0.9502279135 at 1.6 Å. The UHF channel had the
+same A − B / A + B mix-up.
 
-### RKS stability
+**A sweep of the suite.** All 38 open-shell (`scf_type uhf`) regression inputs
+were re-run with `stability_check`. Results:
 
-**R1 — RKS → RKS (internal, real).** Davidson on `build_ks_orbital_hessian_op`
-at the converged RKS orbitals (`kernel_scale = 2`). Follow with
-`rotate_along_internal_mode`, re-run RKS. Gate: PySCF `rks.stability()`
-internal (with its factor) on a stable case (water, B3LYP) and on one with a
-real internal instability if one can be found at small size; else a gate that
-λ_min matches PySCF on stable systems.
+- **30 stable.** B/STO-3G UHF gives λ = −3.9e-17: the zero mode of the
+  degenerate 2p, correctly reported stable.
+- **One unintended saddle: `h2o2_cation_uhf_tight_tol_sto3g`.** λ = −0.07384714,
+  the same as PySCF. Its pinned energy is PySCF's own hcore-guess SCF, and the
+  follow lowers it 0.051 Eh. The case gates DIIS termination, not the ground
+  state, so it was kept.
+- **Spherical HF stability was broken.** The ERI transform was sized with the
+  Cartesian `_shells.nbasis()`, while `ensure_eri` returns the spherical
+  tensor:
+  - Li/6-31G* failed to diagonalize;
+  - water⁺/6-31G* reported λ = −15 [UNSTABLE];
+  - HI⁺/def2-SVP segfaulted.
 
-**R2 — RKS → UKS (external, triplet).** The UKS operator at the closed-shell
-reference on [κ, −κ], Davidson in the κ space (dimension n_occ·n_virt). Follow
-as HF does for RHF → UHF: switch the calculator to UKS (`DataSCF(true)`),
-β HOMO–LUMO mix plus ±κ rotation, re-run the UKS SCF; `prepared` is reusable
-since the geometry is unchanged. Gates: stretched H₂/STO-3G and N₂ at a
-stretched bond (PBE and B3LYP), PySCF `rks.stability(external=True)`; the
-follow lands on PySCF's UKS broken-symmetry energy; water stays stable.
-Then lift the "UKS only" refusal.
+  Now `working_nbasis()`. Water⁺ spherical gives +0.08441901 against PySCF
+  +0.08441900, and the conventional and direct runs are identical.
+- **Eleven electron counts ignored ECP cores.** They summed `atomic_numbers`
+  (Σ Z), which is also wrong with ghost atoms. Locations: stability,
+  `rhf_response.cpp` (2), `mp2_internal.cpp` (2), CC `common.cpp`, FCI,
+  CASSCF, the KS SCF scaffold, and RKS/UKS TDDFT.
+  - On HI⁺ the occupied/virtual split was wrong: λ came out −0.1865 against
+    PySCF +3.9e-10, and the follow *raised* the energy 0.14 Eh.
+  - **HI/def2-SVP RMP2 returned E_corr −0.0059849856 against PySCF
+    −0.1434184970, with no warning.**
+  - All sites now use `total_nuclear_charge() − charge`. HI RMP2 gives
+    −0.1434184969, HI⁺ λ −7.3e-12.
+  - The ECP audit missed them because it searched for `nuclear_charge`,
+    not for loops over `atomic_numbers`.
+- **A spin with no occupied-virtual rotations** (H/STO-3G UKS) used to fail the
+  run; it is now reported as an empty space.
 
-**R3 — spherical.** The operators take working-basis C; the trial densities
-go to the Cartesian J/K/XC builds through `to_cartesian` and the outputs back
-through `to_working`, like the KS potential (`docs/SPHERICAL_DFT_SCOPE.md`).
-Until then `validate_spherical_support` refuses stability analysis.
+## Gates
 
-Not in scope: spin-flip UKS → GKS (the UHF analysis only has a diagonal
-approximation, and Planck has no GHF/GKS to follow into); stability inside
-geometry optimization steps.
+| case | suite | asserts |
+|---|---|---|
+| `water_cation_uks_hse06_stability_ccpvtz` | extended (51 s) | UKS unstable, follow to ²B₁ energy, re-check stable |
+| `water_cation_uks_hse06_stability_631gd` | core | UKS stable, λ pinned |
+| `water_rks_hse06_stability_631gd` | smoke, core | both RKS channels stable, λ pinned at 1e-6 |
+| `h2_rks_{pbe,b3lyp}_triplet_follow_sto3g` | core (PBE also smoke) | triplet unstable, both λ, follow energy |
+| `h2_rhf_triplet_{instability,follow}_sto3g`, `water_rhf_stability_stable` | smoke/core | the HF triplet fix; all fail on the old algebra |
+
+- Runner metrics: `stability_rks_internal`, `stability_rks_triplet`.
+- Building the RKS triplet on [κ, κ] fails all three RKS gates.
+- `planck-dft-analytic-hessian-polarized-production` fails a mutated
+  cross-spin kernel slot.
+
+## Open
+
+- **Spherical KS stability.** `validate_spherical_support` refuses it. The
+  operators take working-basis C. The trial densities need to go to the
+  Cartesian J/K/XC builds through `to_cartesian`, and the outputs come back
+  through `to_working`, as the KS potential does
+  (`docs/SPHERICAL_DFT_SCOPE.md`). Gates: the existing
+  `water_cation_uks_pbe_spherical_ccpvtz` and
+  `h2o2_cation_uks_pbe_spherical_631gd` inputs, against PySCF `cart=False`.
+- **Regression gates for the HF-side fixes:**
+  - spherical UHF stability (water⁺/6-31G*, λ +0.08441900 at 1e-6);
+  - HI⁺ ECP stability (|λ| < 1e-8);
+  - HI RMP2 with an ECP (E_corr −0.1434184970 at 1e-8): the first post-HF
+    ECP energy gate.
+- **HI CCSD with an ECP** gives −0.1558819666 against PySCF −0.1558820517
+  (8.5e-8). Check whether CC convergence explains it before pinning.
+- **Does `SCF::analyze_uhf_stability` handle a spin with no rotations?** The
+  UKS path does now.
+- **`rhf_response.cpp` still sizes with `_shells.nbasis()`.** Harmless while
+  spherical MP2 gradients are rejected; wrong once they are allowed.
+
+Not in scope:
+- spin-flip UKS → GKS (the UHF analysis has only a diagonal approximation,
+  and Planck has no GHF/GKS to follow into);
+- stability inside geometry-optimization steps.

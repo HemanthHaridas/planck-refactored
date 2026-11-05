@@ -85,10 +85,7 @@ namespace HartreeFock::Correlation::detail
             return std::unexpected("resolve_rmp2_dims: SCF not converged.");
 
         const int n_mo_full = static_cast<int>(calculator.working_nbasis());
-        int n_electrons = 0;
-        for (auto Z : calculator._molecule.atomic_numbers)
-            n_electrons += static_cast<int>(Z);
-        n_electrons -= calculator._molecule.charge;
+        int n_electrons = calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
         if (n_electrons % 2 != 0)
             return std::unexpected("resolve_rmp2_dims: closed-shell RHF reference required.");
 
@@ -127,10 +124,7 @@ namespace HartreeFock::Correlation::detail
             return std::unexpected("resolve_ump2_dims: SCF not converged.");
 
         const int nb = static_cast<int>(calculator.working_nbasis());
-        int n_electrons = 0;
-        for (auto Z : calculator._molecule.atomic_numbers)
-            n_electrons += static_cast<int>(Z);
-        n_electrons -= calculator._molecule.charge;
+        int n_electrons = calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
         const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
 
         UMP2Dims dims;

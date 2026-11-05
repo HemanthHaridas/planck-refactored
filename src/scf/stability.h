@@ -83,6 +83,13 @@ namespace HartreeFock::SCF
         const StabilityChannel &channel,
         double step_scale = 0.05);
 
+    // RHF → UHF triplet mode: switch the calculator to UHF, β HOMO–LUMO mix
+    // plus ±step·mode, densities seeded for a re-run (HF and RKS → UKS).
+    std::expected<void, std::string> promote_rhf_to_uhf_along_triplet_mode(
+        HartreeFock::Calculator &calculator,
+        const StabilityChannel &channel,
+        double step_scale = 0.05);
+
     std::expected<double, std::string> follow_instability_and_rerun(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,

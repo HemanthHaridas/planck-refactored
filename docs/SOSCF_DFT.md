@@ -55,7 +55,13 @@ one-time warning and fall back to plain DIIS.
   `epsa_soscf_prev`/`epsb_soscf_prev` (UKS) persisted every iteration;
   `soscf_enabled` gate excluding only `pcm` / SAO; the one-time
   `[WRN] DFT SOSCF :` warning block; the step deadband (invariant 7)
+- `src/dft/ks_orbital_hessian.{h,cpp}` — the orbital-Hessian operators both
+  branches call: `build_ks_orbital_hessian_op` (RKS) and
+  `build_uks_orbital_hessian_op` (UKS). The UKS one is also the operator
+  `stability_check` diagonalizes in `planck-dft` (`analyze_uks_stability`,
+  `docs/KS_STABILITY_SCOPE.md`), so a change to it moves both
 - `src/dft/analytic_hessian.{h,cpp}` — `orbital_energy_difference_diagonal`,
+  `RKSXCKernel` / `UKSXCKernel` (the XC kernel prepared once per operator),
   and the `compute_analytic_xc_hessian_vector_product{,_polarized}`
   functions (`docs/DFT_ANALYTIC_FXC_HESSIAN.md`, including invariant 3a
   there — the combined-XC `fxc` guard)

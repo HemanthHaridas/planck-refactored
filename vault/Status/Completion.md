@@ -426,6 +426,33 @@ historical design context, but they are no longer the source of truth for
   Gated by `h2_rhf_triplet_{instability,follow}_sto3g` and tightened
   `water_rhf_stability_stable`, all failing on the old algebra.
 
+- **RKS stability analysis and following in `planck-dft` (2026-11-05,
+  `docs/KS_STABILITY_SCOPE.md` S2).** Both RKS channels, `RKS -> RKS` (singlet)
+  and `RKS -> UKS` (triplet), from one prepared UKS operator at the
+  closed-shell reference, on [κ, κ] and [κ, −κ]. The triplet follow promotes to
+  UKS through `promote_rhf_to_uhf_along_triplet_mode` (split out of the HF
+  follow). After the promotion the run re-initializes polarized functionals and
+  re-validates the workflow. Stretched H₂/STO-3G PBE and B3LYP: triplet −0.1448
+  / −0.2231 (PySCF ≤ 2e-5, the grid floor), and the follow reaches PySCF's
+  broken-symmetry UKS. Water stays stable in both channels (B3LYP, HSE06). PySCF
+  `gen_g_hop_rhf` is 2× Planck's singlet convention, not 4×. Gated by
+  `water_rks_hse06_stability_631gd` (replaces `water_rks_stability_rejected`)
+  and `h2_rks_{pbe,b3lyp}_triplet_follow_sto3g`; a mutation (triplet built as
+  singlet) fails all three.
+
+- **Stability sweep over open-shell regression inputs; spherical HF stability
+  and ECP electron counts fixed (2026-11-05, `docs/KS_STABILITY_SCOPE.md`
+  S1).** 38 `scf_type uhf` inputs re-run with `stability_check`. One saddle the
+  suite did not intend: `h2o2_cation_uhf_tight_tol_sto3g`, λ −0.0738, same as
+  PySCF. Two defects in the check:
+  - **Spherical HF stability** sized the ERI transform with the Cartesian
+    `nbasis()`. Li failed, water⁺ reported λ −15 [UNSTABLE], HI⁺ segfaulted.
+    Now `working_nbasis()`; water⁺ matches PySCF to 1e-8.
+  - **Eleven Σ Z electron counts** that ignored ECP cores (and ghosts), in
+    stability, RHF response, MP2, CC, FCI, CASSCF, TDDFT and the KS scaffold.
+    **HI/def2-SVP RMP2 was 24× too small with no warning** (E_corr −0.00598 vs
+    PySCF −0.14342); it now matches. All use `total_nuclear_charge()`.
+
 - **UKS stability analysis and following in `planck-dft` (2026-11-05,
   `docs/KS_STABILITY_SCOPE.md`).** `stability_check` / `stability_follow` now
   work for UKS: the lowest eigenvalue of the spin-conserving A + B by Davidson
@@ -438,7 +465,7 @@ historical design context, but they are no longer the source of truth for
   vector each iteration), a 1e-4 residual, and a prepared polarized XC kernel
   (`UKSXCKernel`, GEMM point blocks; also used by the UKS DH response). Gated
   by `water_cation_uks_hse06_stability_{ccpvtz,631gd}` and
-  `water_rks_stability_rejected`; UKS SOSCF bitwise through the builder before
+  `water_rks_stability_rejected` (since replaced by the RKS gates); UKS SOSCF bitwise through the builder before
   the kernel change.
 
 - **Spherical prerequisites S0.3–S0.5 (2026-11-04, `docs/SPHERICAL_DFT_SCOPE.md`).**

@@ -54,12 +54,13 @@ truth for what remains.
     λ_min = −0.069 and re-converges to −75.6490088941. KS has no stability
     analysis, so the UKS run has no way to notice.
   - Remedy chosen: Kohn-Sham stability analysis and follow
-    (`docs/KS_STABILITY_SCOPE.md`). UKS and R0 (the HF RHF → UHF channel,
-    see Completion) landed; still open there: RKS → RKS (R1), RKS → UKS (R2),
-    spherical (R3). Only HSE06/cc-pVTZ traps
-    among the water⁺ variants tried. Not measured: how many open-shell
-    regression cases sit on a saddle; SAD as the open-shell default was not
-    pursued.
+    (`docs/KS_STABILITY_SCOPE.md`). UKS, RKS (both channels) and R0 (the HF
+    RHF → UHF channel) landed; see Completion. Still open there: spherical KS
+    stability (S3), and gates for the S1 fixes (spherical UHF stability, HI⁺
+    ECP stability, HI RMP2/CCSD energies). Only HSE06/cc-pVTZ traps among the
+    water⁺ variants tried. The S1 sweep found one unintended saddle among 38
+    open-shell regression inputs (`h2o2_cation_uhf_tight_tol_sto3g`, kept: it
+    gates DIIS termination). SAD as the open-shell default was not pursued.
 
 ## Routine-use gaps (scoped 2026-10-26)
 

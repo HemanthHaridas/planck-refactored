@@ -2885,17 +2885,119 @@
    ]
   },
   {
-   "id": "water_rks_stability_rejected",
-   "input": "tests/inputs/regression/dft/water_rks_stability_rejected.hfinp",
+   "id": "water_rks_hse06_stability_631gd",
+   "input": "tests/inputs/regression/dft/water_rks_hse06_stability_631gd.hfinp",
    "executable": "planck-dft",
    "tags": [
     "smoke",
+    "core",
     "dft"
    ],
-   "_note": "Boundary marker (docs/KS_STABILITY_SCOPE.md): planck-dft stability analysis is UKS-only until R1/R2.",
-   "expected_exit_code": 1,
+   "_pyscf_reference": "RKS HSE06 water/6-31G*: singlet Planck +3.367296e-01, PySCF gen_g_hop_rhf/2 +3.3672234e-01; triplet Planck +2.817728e-01, PySCF rhf_external +2.8176513e-01 (grid floor, level 9). Energy Planck -76.3251576281, PySCF level 9 -76.3251760724. PySCF 2.13.0 gen_g_hop_rhf eigenvalues are twice Planck's singlet (Planck HF water/STO-3G internal-real 0.5607608, PySCF 1.1215215); rhf_external's RHF->UHF Hessian equals Planck's triplet.",
+   "expected_exit_code": 0,
    "contains": [
-    "stability_check in planck-dft is implemented for UKS only"
+    "RKS -> RKS (real, internal)",
+    "RKS -> UKS (triplet, external)"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_internal",
+     "expected": 0.3367296,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_triplet",
+     "expected": 0.2817728,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3251576281,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "h2_rks_pbe_triplet_follow_sto3g",
+   "input": "tests/inputs/regression/dft/h2_rks_pbe_triplet_follow_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "smoke",
+    "core",
+    "dft"
+   ],
+   "_pyscf_reference": "H2/STO-3G 2.5 A RKS pbe from hcore: singlet Planck +9.301766e-01, PySCF gen_g_hop_rhf/2 +9.3016072e-01; triplet Planck -1.448062e-01, PySCF rhf_external -1.4482081e-01. RKS energy Planck -0.8619160788, PySCF level 9 -0.8619399700 (stretched-bond grid floor). Follow: Planck UKS -0.9302662713, PySCF broken-symmetry UKS -0.9303000702. PySCF 2.13.0 gen_g_hop_rhf eigenvalues are twice Planck's singlet (Planck HF water/STO-3G internal-real 0.5607608, PySCF 1.1215215); rhf_external's RHF->UHF Hessian equals Planck's triplet.",
+   "expected_exit_code": 0,
+   "contains": [
+    "RKS -> UKS (triplet, external)",
+    "[UNSTABLE]",
+    "Following RHF→UHF triplet instability",
+    "Re-converged after follow: E = -0.9302662713 Eh",
+    "UKS -> UKS (spin-conserving, internal)"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_internal",
+     "expected": 0.9301766,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_triplet",
+     "expected": -0.1448062,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -0.9302662713,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "h2_rks_b3lyp_triplet_follow_sto3g",
+   "input": "tests/inputs/regression/dft/h2_rks_b3lyp_triplet_follow_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "dft"
+   ],
+   "_pyscf_reference": "H2/STO-3G 2.5 A RKS b3lyp from hcore: singlet Planck +8.647756e-01, PySCF gen_g_hop_rhf/2 +8.6476058e-01; triplet Planck -2.230623e-01, PySCF rhf_external -2.2308066e-01. RKS energy Planck -0.8515211282, PySCF level 9 -0.8515249709 (stretched-bond grid floor). Follow: Planck UKS -0.9377524499, PySCF broken-symmetry UKS -0.9377675629. PySCF 2.13.0 gen_g_hop_rhf eigenvalues are twice Planck's singlet (Planck HF water/STO-3G internal-real 0.5607608, PySCF 1.1215215); rhf_external's RHF->UHF Hessian equals Planck's triplet.",
+   "expected_exit_code": 0,
+   "contains": [
+    "RKS -> UKS (triplet, external)",
+    "[UNSTABLE]",
+    "Following RHF→UHF triplet instability",
+    "Re-converged after follow: E = -0.9377524499 Eh",
+    "UKS -> UKS (spin-conserving, internal)"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_internal",
+     "expected": 0.8647756,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_triplet",
+     "expected": -0.2230623,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -0.9377524499,
+     "atol": 1e-08
+    }
    ]
   },
   {
