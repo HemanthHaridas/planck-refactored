@@ -416,6 +416,21 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **UKS stability analysis and following in `planck-dft` (2026-11-05,
+  `docs/KS_STABILITY_SCOPE.md`).** `stability_check` / `stability_follow` now
+  work for UKS: the lowest eigenvalue of the spin-conserving A + B by Davidson
+  on the UKS SOSCF operator (lifted into `build_uks_orbital_hessian_op`), and a
+  follow through `rotate_along_internal_mode` (split out of the HF follow).
+  Water⁺/cc-pVTZ UKS HSE06 from `hcore` lands on the ²A₁ saddle; the check
+  reports λ_min −0.06385 (PySCF `gen_g_hop_uhf` −0.06381) and the follow
+  reaches the ²B₁ ground state, −75.9126471254, re-checked stable. Cost cut
+  172 → 14 s by caching Davidson products (the solver recomputed every basis
+  vector each iteration), a 1e-4 residual, and a prepared polarized XC kernel
+  (`UKSXCKernel`, GEMM point blocks; also used by the UKS DH response). Gated
+  by `water_cation_uks_hse06_stability_{ccpvtz,631gd}` and
+  `water_rks_stability_rejected`; UKS SOSCF bitwise through the builder before
+  the kernel change.
+
 - **Spherical prerequisites S0.3–S0.5 (2026-11-04, `docs/SPHERICAL_DFT_SCOPE.md`).**
   One pair of shape-checked `BasisFunctions::to_cartesian` / `to_working`
   helpers replaces seven hand-written C·M·Cᵀ copies (S0.3); the RKS/UKS

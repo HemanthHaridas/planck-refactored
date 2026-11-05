@@ -34,6 +34,31 @@ namespace DFT::Driver
         const Eigen::Ref<const Eigen::MatrixXd> &ground_density,
         const XC::Functional &exchange, const XC::Functional &correlation);
 
+    // The polarized (UKS) counterpart: ground densities and Libxc second
+    // derivatives evaluated once; apply() is one trial-density evaluation plus
+    // GEMM contractions over point blocks. compute_analytic_xc_hessian_vector_
+    // product_polarized below is prepare + one apply.
+    struct UKSXCKernelData;
+    class UKSXCKernel
+    {
+        std::shared_ptr<const UKSXCKernelData> data_;
+        explicit UKSXCKernel(std::shared_ptr<const UKSXCKernelData> data) : data_(std::move(data)) {}
+        friend std::expected<UKSXCKernel,std::string> prepare_uks_xc_kernel(
+            const MolecularGrid &, const AOGridEvaluation &, const Eigen::Ref<const Eigen::MatrixXd> &,
+            const Eigen::Ref<const Eigen::MatrixXd> &, const XC::Functional &, const XC::Functional &);
+    public:
+        // (delta_V_xc^a, delta_V_xc^b) for trial (dP^a, dP^b).
+        [[nodiscard]] std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>
+        apply(const Eigen::Ref<const Eigen::MatrixXd> &trial_alpha,
+              const Eigen::Ref<const Eigen::MatrixXd> &trial_beta) const;
+    };
+
+    [[nodiscard]] std::expected<UKSXCKernel,std::string> prepare_uks_xc_kernel(
+        const MolecularGrid &grid, const AOGridEvaluation &ao,
+        const Eigen::Ref<const Eigen::MatrixXd> &ground_alpha,
+        const Eigen::Ref<const Eigen::MatrixXd> &ground_beta,
+        const XC::Functional &exchange, const XC::Functional &correlation);
+
     // D2.0 (docs/SOSCF_DFT.md): promotes the analytic XC
     // Hessian-vector product derived and point-level-verified in
     // docs/DFT_ANALYTIC_FXC_HESSIAN.md (F3.1 LDA, F3.3.1-F3.3.3 GGA

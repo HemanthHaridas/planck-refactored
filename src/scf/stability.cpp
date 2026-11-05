@@ -519,6 +519,62 @@ namespace HartreeFock::SCF
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Rotate the MOs along an internal unstable mode and seed the densities
+    // for a re-run. Shared by the HF follow below and the UKS follow in
+    // planck-dft, which re-runs its own KS SCF afterwards.
+    // ─────────────────────────────────────────────────────────────────────────
+    std::expected<void, std::string> rotate_along_internal_mode(
+        HartreeFock::Calculator &calculator,
+        const StabilityChannel &channel,
+        double step_scale)
+    {
+        if (channel.lowest_mode.size() == 0)
+            return std::unexpected(std::format("no follow-mode available for channel '{}'.", channel.label));
+        // For UHF this rotates the alpha block with lowest_mode and the beta
+        // block with lowest_mode_beta (when present).
+        const int n_electrons = total_electrons(calculator);
+        const bool is_uhf = calculator._info._scf.is_uhf;
+        const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
+        const int n_alpha = is_uhf ? (n_electrons + n_unpaired) / 2 : n_electrons / 2;
+        const int n_beta = is_uhf ? (n_electrons - n_unpaired) / 2 : n_electrons / 2;
+        const int nmo_a = static_cast<int>(calculator._info._scf.alpha.mo_coefficients.cols());
+        const int nmo_b = static_cast<int>(calculator._info._scf.beta.mo_coefficients.cols());
+        const int nva = nmo_a - n_alpha;
+        const int nvb = nmo_b - n_beta;
+
+        const double step = follow_step(channel, step_scale);
+        const Eigen::MatrixXd kappa_a = step * channel.lowest_mode;
+        const Eigen::MatrixXd U_a = build_rotation_matrix(kappa_a, n_alpha, nva);
+        calculator._info._scf.alpha.mo_coefficients =
+            calculator._info._scf.alpha.mo_coefficients * U_a;
+        calculator._info._scf.alpha.density =
+            calculator._info._scf.alpha.mo_coefficients.leftCols(n_alpha) *
+            calculator._info._scf.alpha.mo_coefficients.leftCols(n_alpha).transpose();
+        if (!is_uhf)
+            calculator._info._scf.alpha.density *= 2.0; // RHF closed-shell density
+
+        if (is_uhf && channel.lowest_mode_beta.size() > 0)
+        {
+            const Eigen::MatrixXd kappa_b = step * channel.lowest_mode_beta;
+            const Eigen::MatrixXd U_b = build_rotation_matrix(kappa_b, n_beta, nvb);
+            calculator._info._scf.beta.mo_coefficients =
+                calculator._info._scf.beta.mo_coefficients * U_b;
+            calculator._info._scf.beta.density =
+                calculator._info._scf.beta.mo_coefficients.leftCols(n_beta) *
+                calculator._info._scf.beta.mo_coefficients.leftCols(n_beta).transpose();
+        }
+
+        reset_for_rerun(calculator);
+
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "Stability :",
+            std::format("Following internal instability '{}' (λ={:.6e}, step={:.3f}); "
+                        "re-running SCF.",
+                        channel.label, channel.lowest_eigenvalue, step));
+        return {};
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Follow an unstable mode: rotate orbitals, optionally promote RHF→UHF,
     // re-run SCF.
     // ─────────────────────────────────────────────────────────────────────────
@@ -635,44 +691,9 @@ namespace HartreeFock::SCF
         }
 
         // Internal instability (RHF→RHF or UHF→UHF): rotate within the same
-        // SCF type and re-run. For UHF this rotates only the alpha block;
-        // the beta lowest_mode (when present) is applied to the beta channel.
-        const bool is_uhf = calculator._info._scf.is_uhf;
-        const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
-        const int n_alpha = is_uhf ? (n_electrons + n_unpaired) / 2 : n_electrons / 2;
-        const int n_beta = is_uhf ? (n_electrons - n_unpaired) / 2 : n_electrons / 2;
-        const int nva = static_cast<int>(nb) - n_alpha;
-        const int nvb = static_cast<int>(nb) - n_beta;
-
-        const double step = follow_step(channel, step_scale);
-        const Eigen::MatrixXd kappa_a = step * channel.lowest_mode;
-        const Eigen::MatrixXd U_a = build_rotation_matrix(kappa_a, n_alpha, nva);
-        calculator._info._scf.alpha.mo_coefficients =
-            calculator._info._scf.alpha.mo_coefficients * U_a;
-        calculator._info._scf.alpha.density =
-            calculator._info._scf.alpha.mo_coefficients.leftCols(n_alpha) *
-            calculator._info._scf.alpha.mo_coefficients.leftCols(n_alpha).transpose();
-        if (!is_uhf)
-            calculator._info._scf.alpha.density *= 2.0; // RHF closed-shell density
-
-        if (is_uhf && channel.lowest_mode_beta.size() > 0)
-        {
-            const Eigen::MatrixXd kappa_b = step * channel.lowest_mode_beta;
-            const Eigen::MatrixXd U_b = build_rotation_matrix(kappa_b, n_beta, nvb);
-            calculator._info._scf.beta.mo_coefficients =
-                calculator._info._scf.beta.mo_coefficients * U_b;
-            calculator._info._scf.beta.density =
-                calculator._info._scf.beta.mo_coefficients.leftCols(n_beta) *
-                calculator._info._scf.beta.mo_coefficients.leftCols(n_beta).transpose();
-        }
-
-        reset_for_rerun(calculator);
-
-        HartreeFock::Logger::logging(
-            HartreeFock::LogLevel::Info, "Stability :",
-            std::format("Following internal instability '{}' (λ={:.6e}, step={:.3f}); "
-                        "re-running SCF.",
-                        channel.label, channel.lowest_eigenvalue, step));
+        // SCF type and re-run.
+        if (auto rotated = rotate_along_internal_mode(calculator, channel, step_scale); !rotated)
+            return std::unexpected(rotated.error());
 
         std::expected<void, std::string> res;
         switch (calculator._scf._scf)

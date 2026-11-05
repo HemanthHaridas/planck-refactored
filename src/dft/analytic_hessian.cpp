@@ -324,6 +324,177 @@ namespace DFT::Driver
         return diag;
     }
 
+    struct UKSXCKernelData
+    {
+        AOGridEvaluation ao;
+        Eigen::VectorXd weights;
+        DensityChannelOnGrid ground_a, ground_b;
+        // Per point: rr = v2rho2 [aa,ab,bb]; rs = v2rhosigma [a-aa,a-ab,a-bb,
+        // b-aa,b-ab,b-bb]; ss = v2sigma2 [aa-aa,aa-ab,aa-bb,ab-ab,ab-bb,bb-bb];
+        // vs = vsigma [aa,ab,bb] (Libxc's polarized layout, x + c summed).
+        std::vector<double> rr, rs, ss, vs;
+        bool gga = false;
+    };
+
+    std::expected<UKSXCKernel,std::string> prepare_uks_xc_kernel(
+        const MolecularGrid &grid, const AOGridEvaluation &ao,
+        const Eigen::Ref<const Eigen::MatrixXd> &ground_alpha,
+        const Eigen::Ref<const Eigen::MatrixXd> &ground_beta,
+        const XC::Functional &x, const XC::Functional &c)
+    {
+        const auto n = ao.npoints(), nb = ao.nbasis();
+        if (x.is_lda_like() != c.is_lda_like() || x.is_gga_like() != c.is_gga_like() ||
+            (!x.is_lda_like() && !x.is_gga_like()))
+            return std::unexpected("UKS XC kernel: exchange and correlation must both be LDA-like or both "
+                                   "GGA-like");
+        if (n < 0 || n > std::numeric_limits<int>::max() || nb <= 0 || grid.points.rows() != n ||
+            ground_alpha.rows() != nb || ground_beta.rows() != nb)
+            return std::unexpected("UKS XC kernel: grid, AO and density dimensions disagree.");
+        auto ground = evaluate_density_on_grid(ao, ground_alpha, ground_beta);
+        if (!ground)
+            return std::unexpected("UKS XC kernel: " + ground.error());
+        auto data = std::make_shared<UKSXCKernelData>();
+        data->ao = ao;
+        data->weights = grid.points.col(3);
+        data->ground_a = std::move(ground->alpha);
+        data->ground_b = std::move(ground->beta);
+        data->gga = x.is_gga_like();
+
+        const std::size_t np = static_cast<std::size_t>(n);
+        std::vector<double> rho(2 * np), sigma;
+        for (std::size_t p = 0; p < np; ++p)
+        {
+            rho[2 * p] = data->ground_a.rho(static_cast<Eigen::Index>(p));
+            rho[2 * p + 1] = data->ground_b.rho(static_cast<Eigen::Index>(p));
+        }
+        std::vector<double> rr_c, rs_c, ss_c, vs_c;
+        if (!data->gga)
+        {
+            auto fx = x.evaluate_lda_fxc(rho, static_cast<int>(n), data->rr);
+            if (!fx) return std::unexpected("UKS XC kernel: " + fx.error());
+            auto fc = c.evaluate_lda_fxc(rho, static_cast<int>(n), rr_c);
+            if (!fc) return std::unexpected("UKS XC kernel: " + fc.error());
+            drop_correlation_if_combined(x, rr_c);
+        }
+        else
+        {
+            sigma.resize(3 * np);
+            const auto &ga = data->ground_a;
+            const auto &gb = data->ground_b;
+            for (std::size_t p = 0; p < np; ++p)
+            {
+                const auto i = static_cast<Eigen::Index>(p);
+                sigma[3 * p] = ga.grad_x(i) * ga.grad_x(i) + ga.grad_y(i) * ga.grad_y(i) + ga.grad_z(i) * ga.grad_z(i);
+                sigma[3 * p + 1] = ga.grad_x(i) * gb.grad_x(i) + ga.grad_y(i) * gb.grad_y(i) + ga.grad_z(i) * gb.grad_z(i);
+                sigma[3 * p + 2] = gb.grad_x(i) * gb.grad_x(i) + gb.grad_y(i) * gb.grad_y(i) + gb.grad_z(i) * gb.grad_z(i);
+            }
+            std::vector<double> exc, vrho;
+            auto vx = x.evaluate_gga_exc_vxc(rho, sigma, static_cast<int>(n), exc, vrho, data->vs);
+            if (!vx) return std::unexpected("UKS XC kernel: " + vx.error());
+            auto vc = c.evaluate_gga_exc_vxc(rho, sigma, static_cast<int>(n), exc, vrho, vs_c);
+            if (!vc) return std::unexpected("UKS XC kernel: " + vc.error());
+            auto fx = x.evaluate_gga_fxc(rho, sigma, static_cast<int>(n), data->rr, data->rs, data->ss);
+            if (!fx) return std::unexpected("UKS XC kernel: " + fx.error());
+            auto fc = c.evaluate_gga_fxc(rho, sigma, static_cast<int>(n), rr_c, rs_c, ss_c);
+            if (!fc) return std::unexpected("UKS XC kernel: " + fc.error());
+            // vsigma_c feeds the polarized gradient-coupling terms, so it is
+            // dropped with the fxc_c arrays for a combined XC functional.
+            drop_correlation_if_combined(x, rr_c, rs_c, ss_c, vs_c);
+        }
+        const auto combine = [](std::vector<double> &a, const std::vector<double> &b)
+        {
+            if (b.size() != a.size()) return false;
+            for (std::size_t k = 0; k < a.size(); ++k)
+                a[k] += b[k];
+            return true;
+        };
+        if (data->rr.size() != 3 * np || !combine(data->rr, rr_c) ||
+            (data->gga && (data->rs.size() != 6 * np || data->ss.size() != 6 * np || data->vs.size() != 3 * np ||
+                           !combine(data->rs, rs_c) || !combine(data->ss, ss_c) || !combine(data->vs, vs_c))))
+            return std::unexpected("UKS XC kernel: invalid functional derivative arrays.");
+        return UKSXCKernel(std::move(data));
+    }
+
+    std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string> UKSXCKernel::apply(
+        const Eigen::Ref<const Eigen::MatrixXd> &trial_alpha, const Eigen::Ref<const Eigen::MatrixXd> &trial_beta) const
+    {
+        if (!data_) return std::unexpected("UKS XC kernel: moved-from kernel.");
+        const auto &d = *data_;
+        const auto &ao = d.ao;
+        const Eigen::Index nbasis = ao.nbasis(), npoints = ao.npoints();
+        if (trial_alpha.rows() != nbasis || trial_beta.rows() != nbasis)
+            return std::unexpected("UKS XC kernel: invalid trial density.");
+        auto trial = evaluate_density_on_grid(ao, trial_alpha, trial_beta);
+        if (!trial) return std::unexpected("UKS XC kernel: " + trial.error());
+        const auto &ta = trial->alpha;
+        const auto &tb = trial->beta;
+        const auto &ga = d.ground_a;
+        const auto &gb = d.ground_b;
+
+        // Point blocks contracted as GEMM, reduced in increasing grid order,
+        // as RKSXCKernel::apply does.
+        constexpr Eigen::Index kPointBlock = 128;
+        Eigen::MatrixXd out_a = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        Eigen::MatrixXd out_b = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        for (Eigen::Index first = 0; first < npoints; first += kPointBlock)
+        {
+            const Eigen::Index count = std::min(kPointBlock, npoints - first);
+            const auto phi = ao.values.middleRows(first, count);
+            Eigen::VectorXd ca(count), cb(count);
+            Eigen::MatrixXd tva(count, 3), tvb(count, 3); // gradient-coupling vectors per point
+            for (Eigen::Index local = 0; local < count; ++local)
+            {
+                const Eigen::Index p = first + local;
+                const std::size_t i = static_cast<std::size_t>(p);
+                const double w = d.weights(p);
+                const double dra = ta.rho(p), drb = tb.rho(p);
+                const double rr_aa = d.rr[3 * i], rr_ab = d.rr[3 * i + 1], rr_bb = d.rr[3 * i + 2];
+                if (!d.gga)
+                {
+                    ca(local) = w * (rr_aa * dra + rr_ab * drb);
+                    cb(local) = w * (rr_ab * dra + rr_bb * drb);
+                    continue;
+                }
+                const Eigen::Vector3d gra{ga.grad_x(p), ga.grad_y(p), ga.grad_z(p)};
+                const Eigen::Vector3d grb{gb.grad_x(p), gb.grad_y(p), gb.grad_z(p)};
+                const Eigen::Vector3d dga{ta.grad_x(p), ta.grad_y(p), ta.grad_z(p)};
+                const Eigen::Vector3d dgb{tb.grad_x(p), tb.grad_y(p), tb.grad_z(p)};
+                const double *rs = &d.rs[6 * i], *ss = &d.ss[6 * i], *vs = &d.vs[3 * i];
+                const double dsaa = 2.0 * gra.dot(dga);
+                const double dsab = grb.dot(dga) + gra.dot(dgb);
+                const double dsbb = 2.0 * grb.dot(dgb);
+
+                const double dvrho_a = rr_aa * dra + rr_ab * drb + rs[0] * dsaa + rs[1] * dsab + rs[2] * dsbb;
+                const double dvsaa = rs[0] * dra + rs[3] * drb + ss[0] * dsaa + ss[1] * dsab + ss[2] * dsbb;
+                const double dvsab_a = rs[1] * dra + rs[4] * drb + ss[1] * dsaa + ss[3] * dsab + ss[4] * dsbb;
+                ca(local) = w * dvrho_a;
+                tva.row(local) = w * (2.0 * dvsaa * gra + 2.0 * vs[0] * dga + dvsab_a * grb + vs[1] * dgb).transpose();
+
+                const double dvrho_b = rr_bb * drb + rr_ab * dra + rs[5] * dsbb + rs[4] * dsab + rs[3] * dsaa;
+                const double dvsbb = rs[5] * drb + rs[2] * dra + ss[5] * dsbb + ss[4] * dsab + ss[2] * dsaa;
+                const double dvsab_b = rs[4] * drb + rs[1] * dra + ss[4] * dsbb + ss[3] * dsab + ss[1] * dsaa;
+                cb(local) = w * dvrho_b;
+                tvb.row(local) = w * (2.0 * dvsbb * grb + 2.0 * vs[2] * dgb + dvsab_b * gra + vs[1] * dga).transpose();
+            }
+            out_a.noalias() += phi.transpose() * (phi.array().colwise() * ca.array()).matrix();
+            out_b.noalias() += phi.transpose() * (phi.array().colwise() * cb.array()).matrix();
+            if (!d.gga)
+                continue;
+            const auto project = [&](const Eigen::MatrixXd &t) -> Eigen::MatrixXd
+            {
+                return ao.grad_x.middleRows(first, count).array().colwise() * t.col(0).array() +
+                       ao.grad_y.middleRows(first, count).array().colwise() * t.col(1).array() +
+                       ao.grad_z.middleRows(first, count).array().colwise() * t.col(2).array();
+            };
+            const Eigen::MatrixXd pa = project(tva), pb = project(tvb);
+            out_a.noalias() += phi.transpose() * pa + pa.transpose() * phi;
+            out_b.noalias() += phi.transpose() * pb + pb.transpose() * phi;
+        }
+        if (!out_a.allFinite() || !out_b.allFinite())
+            return std::unexpected("UKS XC kernel: nonfinite action.");
+        return std::make_pair(std::move(out_a), std::move(out_b));
+    }
+
     std::expected<std::pair<Eigen::MatrixXd, Eigen::MatrixXd>, std::string>
     compute_analytic_xc_hessian_vector_product_polarized(
         const MolecularGrid &molecular_grid,
@@ -335,231 +506,10 @@ namespace DFT::Driver
         const XC::Functional &exchange_functional,
         const XC::Functional &correlation_functional)
     {
-        if (exchange_functional.is_lda_like() != correlation_functional.is_lda_like() ||
-            exchange_functional.is_gga_like() != correlation_functional.is_gga_like())
-            return std::unexpected(
-                "compute_analytic_xc_hessian_vector_product_polarized: exchange and correlation "
-                "functionals must be the same family (both LDA-like or both GGA-like)");
-
-        auto ground = evaluate_density_on_grid(ao_grid, ground_alpha_density, ground_beta_density);
-        if (!ground)
-            return std::unexpected(
-                "compute_analytic_xc_hessian_vector_product_polarized: " + ground.error());
-        auto trial = evaluate_density_on_grid(ao_grid, trial_alpha_density, trial_beta_density);
-        if (!trial)
-            return std::unexpected(
-                "compute_analytic_xc_hessian_vector_product_polarized: " + trial.error());
-
-        const Eigen::Index npoints = ao_grid.npoints();
-        const Eigen::Index nbasis = ao_grid.nbasis();
-
-        if (exchange_functional.is_lda_like())
-        {
-            // Polarized LDA analogue of F3.1's formula: no gradient terms
-            // at all (V_xc^sigma = vrho_sigma alone), so the only
-            // cross-spin coupling is the single v2rho2_ab slot shared by
-            // both channels' formulas.
-            std::vector<double> rho_vec_lda(static_cast<std::size_t>(npoints) * 2);
-            for (Eigen::Index p = 0; p < npoints; ++p)
-            {
-                const std::size_t pi = static_cast<std::size_t>(p);
-                rho_vec_lda[2 * pi] = ground->alpha.rho(p);
-                rho_vec_lda[2 * pi + 1] = ground->beta.rho(p);
-            }
-
-            std::vector<double> v2rho2_x, v2rho2_c;
-            auto fxc_x = exchange_functional.evaluate_lda_fxc(rho_vec_lda, static_cast<int>(npoints), v2rho2_x);
-            if (!fxc_x)
-                return std::unexpected(
-                    "compute_analytic_xc_hessian_vector_product_polarized: " + fxc_x.error());
-            auto fxc_c = correlation_functional.evaluate_lda_fxc(rho_vec_lda, static_cast<int>(npoints), v2rho2_c);
-            if (!fxc_c)
-                return std::unexpected(
-                    "compute_analytic_xc_hessian_vector_product_polarized: " + fxc_c.error());
-            drop_correlation_if_combined(exchange_functional, v2rho2_c);
-
-            Eigen::MatrixXd delta_v_xc_a = Eigen::MatrixXd::Zero(nbasis, nbasis);
-            Eigen::MatrixXd delta_v_xc_b = Eigen::MatrixXd::Zero(nbasis, nbasis);
-
-            for (Eigen::Index p = 0; p < npoints; ++p)
-            {
-                const double weight = molecular_grid.points(p, 3);
-                if (weight == 0.0)
-                    continue;
-                const std::size_t pi = static_cast<std::size_t>(p);
-
-                // v2rho2 layout: [aa, ab, bb] per point (F3.4.1's own
-                // confirmed ordering, same as the GGA branch below).
-                const double v2rho2_aa = v2rho2_x[3 * pi] + v2rho2_c[3 * pi];
-                const double v2rho2_ab = v2rho2_x[3 * pi + 1] + v2rho2_c[3 * pi + 1];
-                const double v2rho2_bb = v2rho2_x[3 * pi + 2] + v2rho2_c[3 * pi + 2];
-
-                const double drho_a = trial->alpha.rho(p);
-                const double drho_b = trial->beta.rho(p);
-
-                const double delta_vrho_a = v2rho2_aa * drho_a + v2rho2_ab * drho_b;
-                const double delta_vrho_b = v2rho2_ab * drho_a + v2rho2_bb * drho_b;
-
-                const auto phi = ao_grid.values.row(p).transpose();
-                delta_v_xc_a.noalias() += (weight * delta_vrho_a) * (phi * phi.transpose());
-                delta_v_xc_b.noalias() += (weight * delta_vrho_b) * (phi * phi.transpose());
-            }
-
-            return std::make_pair(delta_v_xc_a, delta_v_xc_b);
-        }
-
-        if (!exchange_functional.is_gga_like())
-            return std::unexpected(
-                "compute_analytic_xc_hessian_vector_product_polarized: functional is neither "
-                "LDA-like nor GGA-like");
-
-        // Polarized libxc packing: rho = [rho_a, rho_b] per point,
-        // sigma = [sigma_aa, sigma_ab, sigma_bb] per point (F3.4.1's own
-        // confirmed ordering).
-        std::vector<double> rho_vec(static_cast<std::size_t>(npoints) * 2);
-        std::vector<double> sigma_vec(static_cast<std::size_t>(npoints) * 3);
-        for (Eigen::Index p = 0; p < npoints; ++p)
-        {
-            const std::size_t pi = static_cast<std::size_t>(p);
-            const double gax = ground->alpha.grad_x(p), gay = ground->alpha.grad_y(p), gaz = ground->alpha.grad_z(p);
-            const double gbx = ground->beta.grad_x(p), gby = ground->beta.grad_y(p), gbz = ground->beta.grad_z(p);
-            rho_vec[2 * pi] = ground->alpha.rho(p);
-            rho_vec[2 * pi + 1] = ground->beta.rho(p);
-            sigma_vec[3 * pi] = gax * gax + gay * gay + gaz * gaz;
-            sigma_vec[3 * pi + 1] = gax * gbx + gay * gby + gaz * gbz;
-            sigma_vec[3 * pi + 2] = gbx * gbx + gby * gby + gbz * gbz;
-        }
-
-        std::vector<double> exc_x, vrho_x, vsigma_x;
-        std::vector<double> exc_c, vrho_c, vsigma_c;
-        auto vxc_x = exchange_functional.evaluate_gga_exc_vxc(
-            rho_vec, sigma_vec, static_cast<int>(npoints), exc_x, vrho_x, vsigma_x);
-        if (!vxc_x)
-            return std::unexpected(
-                "compute_analytic_xc_hessian_vector_product_polarized: " + vxc_x.error());
-        auto vxc_c = correlation_functional.evaluate_gga_exc_vxc(
-            rho_vec, sigma_vec, static_cast<int>(npoints), exc_c, vrho_c, vsigma_c);
-        if (!vxc_c)
-            return std::unexpected(
-                "compute_analytic_xc_hessian_vector_product_polarized: " + vxc_c.error());
-
-        std::vector<double> v2rho2_x, v2rhosigma_x, v2sigma2_x;
-        std::vector<double> v2rho2_c, v2rhosigma_c, v2sigma2_c;
-        auto fxc_x = exchange_functional.evaluate_gga_fxc(
-            rho_vec, sigma_vec, static_cast<int>(npoints), v2rho2_x, v2rhosigma_x, v2sigma2_x);
-        if (!fxc_x)
-            return std::unexpected(
-                "compute_analytic_xc_hessian_vector_product_polarized: " + fxc_x.error());
-        auto fxc_c = correlation_functional.evaluate_gga_fxc(
-            rho_vec, sigma_vec, static_cast<int>(npoints), v2rho2_c, v2rhosigma_c, v2sigma2_c);
-        if (!fxc_c)
-            return std::unexpected(
-                "compute_analytic_xc_hessian_vector_product_polarized: " + fxc_c.error());
-        // vsigma_c feeds the polarized T2..T5 gradient-coupling terms, so it is
-        // dropped alongside the fxc_c arrays for a combined XC functional.
-        drop_correlation_if_combined(exchange_functional, v2rho2_c, v2rhosigma_c, v2sigma2_c, vsigma_c);
-
-        Eigen::MatrixXd delta_v_xc_a = Eigen::MatrixXd::Zero(nbasis, nbasis);
-        Eigen::MatrixXd delta_v_xc_b = Eigen::MatrixXd::Zero(nbasis, nbasis);
-
-        for (Eigen::Index p = 0; p < npoints; ++p)
-        {
-            const double weight = molecular_grid.points(p, 3);
-            if (weight == 0.0)
-                continue;
-
-            const std::size_t pi = static_cast<std::size_t>(p);
-
-            // vsigma layout: [vsigma_aa, vsigma_ab, vsigma_bb] per point
-            // (matches ks_matrix.cpp's own polarized convention and the
-            // test file's vsigma0[0]/[1]/[2]).
-            const double vsigma_aa0 = vsigma_x[3 * pi] + vsigma_c[3 * pi];
-            const double vsigma_ab0 = vsigma_x[3 * pi + 1] + vsigma_c[3 * pi + 1];
-            const double vsigma_bb0 = vsigma_x[3 * pi + 2] + vsigma_c[3 * pi + 2];
-
-            // v2rho2: [aa, ab, bb]. v2rhosigma: [a-aa,a-ab,a-bb,b-aa,b-ab,b-bb].
-            // v2sigma2: [aa-aa,aa-ab,aa-bb,ab-ab,ab-bb,bb-bb]. F3.4.1's own
-            // confirmed layout.
-            const double v2rho2_aa = v2rho2_x[3 * pi] + v2rho2_c[3 * pi];
-            const double v2rho2_ab = v2rho2_x[3 * pi + 1] + v2rho2_c[3 * pi + 1];
-            const double v2rho2_bb = v2rho2_x[3 * pi + 2] + v2rho2_c[3 * pi + 2];
-            double v2rhosigma[6], v2sigma2[6];
-            for (int k = 0; k < 6; ++k)
-            {
-                v2rhosigma[k] = v2rhosigma_x[6 * pi + static_cast<std::size_t>(k)] +
-                                v2rhosigma_c[6 * pi + static_cast<std::size_t>(k)];
-                v2sigma2[k] = v2sigma2_x[6 * pi + static_cast<std::size_t>(k)] +
-                              v2sigma2_c[6 * pi + static_cast<std::size_t>(k)];
-            }
-
-            const Eigen::Vector3d grad_rho_a{ground->alpha.grad_x(p), ground->alpha.grad_y(p),
-                                             ground->alpha.grad_z(p)};
-            const Eigen::Vector3d grad_rho_b{ground->beta.grad_x(p), ground->beta.grad_y(p),
-                                             ground->beta.grad_z(p)};
-            const Eigen::Vector3d delta_grad_rho_a{trial->alpha.grad_x(p), trial->alpha.grad_y(p),
-                                                   trial->alpha.grad_z(p)};
-            const Eigen::Vector3d delta_grad_rho_b{trial->beta.grad_x(p), trial->beta.grad_y(p),
-                                                   trial->beta.grad_z(p)};
-            const double drho_a = trial->alpha.rho(p);
-            const double drho_b = trial->beta.rho(p);
-
-            const double dsigma_aa = 2.0 * grad_rho_a.dot(delta_grad_rho_a);
-            const double dsigma_ab = grad_rho_b.dot(delta_grad_rho_a) + grad_rho_a.dot(delta_grad_rho_b);
-            const double dsigma_bb = 2.0 * grad_rho_b.dot(delta_grad_rho_b);
-
-            const auto phi = ao_grid.values.row(p).transpose();
-            const auto project = [&](const Eigen::Vector3d &v) -> Eigen::VectorXd
-            {
-                return v.x() * ao_grid.grad_x.row(p).transpose() + v.y() * ao_grid.grad_y.row(p).transpose() +
-                       v.z() * ao_grid.grad_z.row(p).transpose();
-            };
-
-            // ---- Alpha channel: T1..T5 (check_mixed's own formula) ----
-            {
-                const double delta_vrho_a = v2rho2_aa * drho_a + v2rho2_ab * drho_b +
-                                             v2rhosigma[0] * dsigma_aa + v2rhosigma[1] * dsigma_ab +
-                                             v2rhosigma[2] * dsigma_bb;
-                const double delta_vsigma_aa = v2rhosigma[0] * drho_a + v2rhosigma[3] * drho_b +
-                                                v2sigma2[0] * dsigma_aa + v2sigma2[1] * dsigma_ab +
-                                                v2sigma2[2] * dsigma_bb;
-                const double delta_vsigma_ab = v2rhosigma[1] * drho_a + v2rhosigma[4] * drho_b +
-                                                v2sigma2[1] * dsigma_aa + v2sigma2[3] * dsigma_ab +
-                                                v2sigma2[4] * dsigma_bb;
-
-                // T2+T3 (self, grad_rho_a) + T4+T5 (cross, grad_rho_b).
-                const Eigen::Vector3d gradient_term_self =
-                    2.0 * delta_vsigma_aa * grad_rho_a + 2.0 * vsigma_aa0 * delta_grad_rho_a;
-                const Eigen::Vector3d gradient_term_cross =
-                    delta_vsigma_ab * grad_rho_b + vsigma_ab0 * delta_grad_rho_b;
-                const Eigen::VectorXd projected = project(gradient_term_self + gradient_term_cross);
-
-                delta_v_xc_a.noalias() += (weight * delta_vrho_a) * (phi * phi.transpose());
-                delta_v_xc_a.noalias() += weight * (phi * projected.transpose() + projected * phi.transpose());
-            }
-
-            // ---- Beta channel: T1'..T5' (check_beta's own formula) ----
-            {
-                const double delta_vrho_b = v2rho2_bb * drho_b + v2rho2_ab * drho_a +
-                                             v2rhosigma[5] * dsigma_bb + v2rhosigma[4] * dsigma_ab +
-                                             v2rhosigma[3] * dsigma_aa;
-                const double delta_vsigma_bb = v2rhosigma[5] * drho_b + v2rhosigma[2] * drho_a +
-                                                v2sigma2[5] * dsigma_bb + v2sigma2[4] * dsigma_ab +
-                                                v2sigma2[2] * dsigma_aa;
-                const double delta_vsigma_ab = v2rhosigma[4] * drho_b + v2rhosigma[1] * drho_a +
-                                                v2sigma2[4] * dsigma_bb + v2sigma2[3] * dsigma_ab +
-                                                v2sigma2[1] * dsigma_aa;
-
-                const Eigen::Vector3d gradient_term_self =
-                    2.0 * delta_vsigma_bb * grad_rho_b + 2.0 * vsigma_bb0 * delta_grad_rho_b;
-                const Eigen::Vector3d gradient_term_cross =
-                    delta_vsigma_ab * grad_rho_a + vsigma_ab0 * delta_grad_rho_a;
-                const Eigen::VectorXd projected = project(gradient_term_self + gradient_term_cross);
-
-                delta_v_xc_b.noalias() += (weight * delta_vrho_b) * (phi * phi.transpose());
-                delta_v_xc_b.noalias() += weight * (phi * projected.transpose() + projected * phi.transpose());
-            }
-        }
-
-        return std::make_pair(delta_v_xc_a, delta_v_xc_b);
+        auto kernel = prepare_uks_xc_kernel(molecular_grid, ao_grid, ground_alpha_density, ground_beta_density,
+                                            exchange_functional, correlation_functional);
+        if (!kernel)
+            return std::unexpected("compute_analytic_xc_hessian_vector_product_polarized: " + kernel.error());
+        return kernel->apply(trial_alpha_density, trial_beta_density);
     }
 } // namespace DFT::Driver

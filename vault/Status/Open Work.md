@@ -31,12 +31,36 @@ truth for what remains.
   initialization should reject them for every workflow, or accept and document
   the erf substitution.
 
-- **UKS HSE06 water⁺/cc-pVTZ converges to a state 0.066 Eh above PySCF's
-  (found 2026-11-04, spherical DFT gate B).** Same in Cartesian and
-  spherical, `guess hcore`, `grid fine`; PBE and B3LYP on the same cation
-  match PySCF to 1e-5 at that grid. Not investigated: check whether a SAD
-  guess or stability following reaches PySCF's state, and whether PySCF's is
-  the lower one by an independent route.
+- **Open-shell SCF from the default `hcore` guess can converge to an
+  excited, symmetry-trapped saddle (investigated 2026-11-04; UKS can now
+  detect and follow it, 2026-11-05 — see Completion).** Found as UKS HSE06 water⁺/cc-pVTZ sitting 0.066 Eh above
+  PySCF. Not an energy defect: Planck's state is the ²A₁ excited state
+  (beta hole in 3a₁), and both states match PySCF to the grid floor (²A₁
+  7.2e-6, ²B₁ from `guess sad` 6.5e-6). Plain UHF does the same: from
+  `hcore` it returns ²A₁ at −75.5798415962, PySCF's ²A₁ to every digit,
+  0.069 Eh above the ²B₁ ground state (−75.6490088941).
+  - Cause: the hcore guess fills the lowest 5 alpha / 4 beta core-Hamiltonian
+    orbitals, which order 1a₁ 2a₁ 1b₂ 1b₁ 3a₁, so the guess already has the
+    ²A₁ hole. ²A₁ is a saddle (PySCF UKS internal stability: lowest
+    orbital-Hessian eigenvalue −0.128), but its descent direction mixes a₁
+    and b₁, which breaks C₂ᵥ, so a symmetric density never leaves it.
+    PySCF's own unconstrained SCF started from the ²A₁ density stays there
+    too; its `1e` guess reaching ²B₁ is trajectory luck (its guess has the
+    same symmetric 5/4 occupation, and its symmetry breaking only applies
+    to spin-0 guesses).
+  - `hcore` is the default guess (`SCFGuess::HCore`, `types.h`), for both
+    binaries.
+  - UHF already has the remedy: `stability_check` + `stability_follow` finds
+    λ_min = −0.069 and re-converges to −75.6490088941. KS has no stability
+    analysis, so the UKS run has no way to notice.
+  - Remedy chosen: Kohn-Sham stability analysis and follow
+    (`docs/KS_STABILITY_SCOPE.md`). UKS landed; still open there: R0, the HF
+    RHF → UHF channel computes A^T − B^T and reports stretched H₂ stable
+    (true A^T + B^T −0.511 at 2.5 Å, PySCF `rhf_external` −0.5109); then RKS
+    → RKS (R1), RKS → UKS (R2), spherical (R3). Only HSE06/cc-pVTZ traps
+    among the water⁺ variants tried. Not measured: how many open-shell
+    regression cases sit on a saddle; SAD as the open-shell default was not
+    pursued.
 
 ## Routine-use gaps (scoped 2026-10-26)
 

@@ -2769,6 +2769,76 @@
    "_note": "UKS global-hybrid DFT SOSCF (SOSCF_DFT.md invariant 3). PBE0 water-cation doublet: the polarized h_op gains the spin-resolved K response (-1*(c_fr*K_C + c_sr*K_SR) per spin, from _compute_2e_k_uhf_direct); UKS h_op stays uniform 1x. PBE0 chosen (PBE GGA base) because the polarized fxc is exact there -- B88/LYP-based B3LYP has a pre-existing polarized-fxc residual on small directions, unrelated to the K term (PBE0 scale probe lands on ratio 1.000000). Water cation is a clean single-minimum doublet so SOSCF and DIIS agree to 10 digits (triplet water does not -- SOSCF finds a lower UHF basin there)."
   },
   {
+   "id": "water_cation_uks_hse06_stability_ccpvtz",
+   "input": "tests/inputs/regression/dft/water_cation_uks_hse06_stability_ccpvtz.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "open_shell"
+   ],
+   "timeout_s": 600,
+   "_pyscf_reference": "From hcore, UKS HSE06 converges to the 2A1 saddle, -75.8470063038 (PySCF 2A1 with pinned irrep occupations: -75.8469990888, grid floor 7e-6). Lowest UKS orbital-Hessian eigenvalue: Planck -6.385299e-02, PySCF gen_g_hop_uhf -6.380856e-02 (same convention; uhf_internal prints twice this). The follow re-converges to the 2B1 ground state, -75.9126471254 (Planck from guess sad gives the same; PySCF 2B1 -75.9126406581), and the re-check is stable (+6.65e-02).",
+   "expected_exit_code": 0,
+   "contains": [
+    "UKS -> UKS (spin-conserving, internal)",
+    "[UNSTABLE]",
+    "Re-converged after follow: E = -75.9126471254 Eh",
+    "[stable]"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.9126471254,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_hse06_stability_631gd",
+   "input": "tests/inputs/regression/dft/water_cation_uks_hse06_stability_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "open_shell"
+   ],
+   "_pyscf_reference": "UKS HSE06 water+/6-31G* from hcore reaches the ground state. Lowest UKS orbital-Hessian eigenvalue: Planck +6.927525e-02, PySCF gen_g_hop_uhf +6.924065e-02 (grid floor). Energy Planck -75.8691301978, PySCF grids.level 5 -75.8691440229 (the known fine-grid floor between the codes).",
+   "expected_exit_code": 0,
+   "contains": [
+    "UKS -> UKS (spin-conserving, internal)",
+    "λ_min = +6.927",
+    "[stable]"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.8691301978,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "water_rks_stability_rejected",
+   "input": "tests/inputs/regression/dft/water_rks_stability_rejected.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "smoke",
+    "dft"
+   ],
+   "_note": "Boundary marker (docs/KS_STABILITY_SCOPE.md): planck-dft stability analysis is UKS-only until R1/R2.",
+   "expected_exit_code": 1,
+   "contains": [
+    "stability_check in planck-dft is implemented for UKS only"
+   ]
+  },
+  {
    "id": "h2_dft_tddft_pbe_sto3g",
    "input": "tests/inputs/regression/dft/h2_dft_tddft_pbe.hfinp",
    "executable": "planck-dft",
