@@ -1,8 +1,10 @@
 #include "uhf_response.h"
 
 #include <format>
+#include <limits>
 
 #include "dft/response_gmres.h"
+#include "basis/spherical.h"
 #include "integrals/base.h"
 #include "post_hf/ri/ri_eri.h"
 
@@ -65,19 +67,32 @@ namespace HartreeFock::Correlation
                 // RI-consistent CPHF operator under MP2 RI (Step RG4.2): the induced
                 // Coulomb/exchange response is the same {J(Pa+Pb) - K(P_sigma)}
                 // quantity, built from the 3-center factors instead of the dense ERI.
-                const auto [va_ao, vb_ao] =
-                    calculator._mp2.use_ri
-                        ? RI::build_ri_fock_uhf(calculator, dm1a_sym, dm1b_sym)
-                        : _compute_2e_fock_uhf(
-                              shell_pairs,
-                              dm1a_sym,
-                              dm1b_sym,
-                              calculator._shells.nbasis(),
-                              calculator._integral._engine,
-                              HartreeFock::ERIKernel::Coulomb,
-                              0.0,
-                              calculator._integral._tol_eri,
-                              calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+                const auto [va_ao, vb_ao] = [&]() -> std::pair<Eigen::MatrixXd, Eigen::MatrixXd>
+                {
+                    if (calculator._mp2.use_ri)
+                    {
+                        auto [fa, fb] = RI::build_ri_fock_uhf(calculator, dm1a_sym, dm1b_sym);
+                        return {std::move(fa), std::move(fb)};
+                    }
+                    // The Fock build is Cartesian; the densities and C are in the
+                    // working basis (identity in Cartesian mode).
+                    const auto &basis = calculator._shells;
+                    const auto da = BasisFunctions::to_cartesian(basis, dm1a_sym);
+                    const auto db = BasisFunctions::to_cartesian(basis, dm1b_sym);
+                    const Eigen::MatrixXd nan = Eigen::MatrixXd::Constant(
+                        dm1a_sym.rows(), dm1a_sym.cols(), std::numeric_limits<double>::quiet_NaN());
+                    if (!da || !db)
+                        return {nan, nan}; // cannot happen with consistent C; poisons the step visibly
+                    const auto [fa, fb] = _compute_2e_fock_uhf(
+                        shell_pairs, *da, *db, calculator._shells.nbasis(), calculator._integral._engine,
+                        HartreeFock::ERIKernel::Coulomb, 0.0, calculator._integral._tol_eri,
+                        calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+                    const auto wa = BasisFunctions::to_working(basis, fa);
+                    const auto wb = BasisFunctions::to_working(basis, fb);
+                    if (!wa || !wb)
+                        return {nan, nan};
+                    return {*wa, *wb};
+                }();
 
                 const RowMajor va = Ca_virt.transpose() * va_ao * Ca_occ;
                 const RowMajor vb = Cb_virt.transpose() * vb_ao * Cb_occ;

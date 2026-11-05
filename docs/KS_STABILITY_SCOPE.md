@@ -11,8 +11,10 @@ A triplet instability promotes the run to UKS. Eigenvalues match PySCF to the
 grid floor (≤ 2e-5) on every case below, and the follows land on PySCF's
 lower state.
 
-Open: the spherical basis (refused; see Open), and regression gates for the
-HF-side fixes found on the way. Status: `vault/Status/Open Work.md`.
+Open: the spherical basis, which is step 4 of `docs/SPHERICAL_DFT_SCOPE.md`,
+and through it KS stability with ECPs (`docs/DEF2_ECP_SCOPE.md` step 6).
+Regression gates for the HF-side fixes are also open. Status:
+`vault/Status/Open Work.md`.
 
 | case | channel | Planck | PySCF 2.13.0 |
 |---|---|---|---|
@@ -184,24 +186,19 @@ were re-run with `stability_check`. Results:
 
 ## Open
 
-- **Spherical KS stability.** `validate_spherical_support` refuses it. The
-  operators take working-basis C. The trial densities need to go to the
-  Cartesian J/K/XC builds through `to_cartesian`, and the outputs come back
-  through `to_working`, as the KS potential does
-  (`docs/SPHERICAL_DFT_SCOPE.md`). Gates: the existing
-  `water_cation_uks_pbe_spherical_ccpvtz` and
-  `h2o2_cation_uks_pbe_spherical_631gd` inputs, against PySCF `cart=False`.
-- **Regression gates for the HF-side fixes:**
-  - spherical UHF stability (water⁺/6-31G*, λ +0.08441900 at 1e-6);
-  - HI⁺ ECP stability (|λ| < 1e-8);
-  - HI RMP2 with an ECP (E_corr −0.1434184970 at 1e-8): the first post-HF
-    ECP energy gate.
-- **HI CCSD with an ECP** gives −0.1558819666 against PySCF −0.1558820517
-  (8.5e-8). Check whether CC convergence explains it before pinning.
-- **Does `SCF::analyze_uhf_stability` handle a spin with no rotations?** The
-  UKS path does now.
-- **`rhf_response.cpp` still sizes with `_shells.nbasis()`.** Harmless while
-  spherical MP2 gradients are rejected; wrong once they are allowed.
+The rest of this work lives in the two scopes it depends on:
+
+| item | where | depends on |
+|---|---|---|
+| **Spherical KS stability.** Lift the trial densities inside the two `ks_orbital_hessian.cpp` builders, which SOSCF shares. Drop the `validate_spherical_support` refusal. Gates on `water_cation_uks_pbe_spherical_ccpvtz`, `h2o2_cation_uks_pbe_spherical_631gd`, `water_rks_b3lyp_spherical_ccpvtz` vs PySCF `cart=False` | `SPHERICAL_DFT_SCOPE.md` step 4 (with SOSCF) | spherical DFT step 1 (landed) |
+| **KS stability with ECPs.** No new code: the ECP enters through H_core. Gate: HI⁺ UKS def2-SVP vs PySCF | `DEF2_ECP_SCOPE.md` step 6 | spherical step 4 and ECP step 6 |
+| Gate HI⁺ UHF stability (\|λ\| < 1e-8) and HI RMP2 (E_corr −0.1434184970 at 1e-8). Settle HI CCSD's 8.5e-8 first | `DEF2_ECP_SCOPE.md` smaller items | — |
+
+Done since: the spherical HF gates, and the `rhf_response.cpp` site (it was
+live through RHF SOSCF; `SPHERICAL_DFT_SCOPE.md` S0.6).
+
+One open item stays here: does `SCF::analyze_uhf_stability` handle a spin
+with no rotations? The UKS path does now.
 
 Not in scope:
 - spin-flip UKS → GKS (the UHF analysis has only a diagonal approximation,

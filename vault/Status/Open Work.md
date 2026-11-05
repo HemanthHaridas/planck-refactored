@@ -55,9 +55,12 @@ truth for what remains.
     analysis, so the UKS run has no way to notice.
   - Remedy chosen: Kohn-Sham stability analysis and follow
     (`docs/KS_STABILITY_SCOPE.md`). UKS, RKS (both channels) and R0 (the HF
-    RHF → UHF channel) landed; see Completion. Still open there: spherical KS
-    stability (S3), and gates for the S1 fixes (spherical UHF stability, HI⁺
-    ECP stability, HI RMP2/CCSD energies). Only HSE06/cc-pVTZ traps among the
+    RHF → UHF channel) landed; see Completion. What remains is tracked in the
+    scopes it depends on: spherical KS stability is `SPHERICAL_DFT_SCOPE.md`
+    step 4 (with SOSCF, same builders); KS stability with ECPs follows from
+    that plus `DEF2_ECP_SCOPE.md` step 6; the HF-side ECP gates (HI⁺
+    stability, HI RMP2/CCSD) are in `DEF2_ECP_SCOPE.md` (spherical HF
+    gates landed, S0.6). Only HSE06/cc-pVTZ traps among the
     water⁺ variants tried. The S1 sweep found one unintended saddle among 38
     open-shell regression inputs (`h2o2_cation_uhf_tight_tol_sto3g`, kept: it
     gates DIIS termination). SAD as the open-shell default was not pursued.
@@ -73,7 +76,7 @@ is the recommended one; none blocks another except where noted.
   boundary goes on ~10 `driver.cpp` call sites (the other 30 `nbasis()` sites
   in `src/dft/` check against the AO grid and need no edit). First shared fixes
   Step 1 (spherical RKS/UKS single points, PySCF-gated to ≤2.5e-12 at
-  matched grids) landed 2026-11-04; gradients, TDDFT, SOSCF and DH single
+  matched grids) landed 2026-11-04; gradients, TDDFT, SOSCF + KS stability (one lift in `ks_orbital_hessian.cpp`) and DH single
   points are next. (S0): the HF spherical ESP defect (S0.1, fixed) and `ensure_eri` crashing its callers
   in spherical mode after a direct SCF (S0.2, fixed; both in Completion); public `to_cartesian`/`to_working` helpers replacing seven
   hand-written copies (S0.3, landed); `compute_rks/uks_gradient` not lifting P and W (S0.4, landed); and S0.5, C renormalized once in `read_gbs_basis` instead of three per-geometry copies (landed; the per-geometry premise was false). Then

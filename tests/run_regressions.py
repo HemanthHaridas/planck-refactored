@@ -109,6 +109,9 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     # SOSCF_DFT.md invariants 2 and 3).
     "dft_soscf_last_gradient": re.compile(
         r"DFT (?:UKS )?SOSCF\s*:\s*step at iter \d+:\s*\|g\|=([-+0-9Ee\.]+)", re.MULTILINE),
+    # HF SOSCF window (scf.cpp): the last step's orbital gradient.
+    "soscf_last_gradient": re.compile(
+        r"^\[INF\] SOSCF :\s*step at iter \d+:\s*\|g\|=([-+0-9Ee\.]+)", re.MULTILINE),
     "zero_point_energy_eh": re.compile(r"Zero-point energy\s*:\s*([-+0-9Ee\.]+)\s+Eh"),
     "point_group": re.compile(r"(?:Point Group\s*:\s*|Detected point group\s+)([A-Za-z0-9_+\-]+)"),
     "stability_real_internal": re.compile(

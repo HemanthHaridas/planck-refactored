@@ -426,6 +426,17 @@ historical design context, but they are no longer the source of truth for
   Gated by `h2_rhf_triplet_{instability,follow}_sto3g` and tightened
   `water_rhf_stability_stable`, all failing on the old algebra.
 
+- **Spherical HF SOSCF and stability gated (2026-11-05,
+  `docs/SPHERICAL_DFT_SCOPE.md` S0.6).** RHF SOSCF's CPHF Hessian indexed the
+  spherical ERI tensor with Cartesian strides. |g| grew and every
+  augmented-Hessian solve failed, and only the DIIS handback converged it. UHF
+  SOSCF passed spherical densities to the Cartesian Fock build. Both are now in
+  the working basis and converge superlinearly. Gated with the spherical
+  stability fix from `100675e4` by `water_rhf_stability_spherical_631gd`,
+  `water_cation_uhf_stability_follow_spherical_631gd` and
+  `water_{rhf,cation_uhf}_soscf_spherical_631gd` (PySCF `cart=False`), all
+  failing on the old code.
+
 - **RKS stability analysis and following in `planck-dft` (2026-11-05,
   `docs/KS_STABILITY_SCOPE.md` S2).** Both RKS channels, `RKS -> RKS` (singlet)
   and `RKS -> UKS` (triplet), from one prepared UKS operator at the

@@ -100,7 +100,7 @@ namespace HartreeFock::Correlation
         if (calculator._scf._scf != HartreeFock::SCFType::RHF || calculator._info._scf.is_uhf)
             return std::unexpected("build_rhf_cphf_matrix: RHF reference required.");
 
-        const int nb = static_cast<int>(calculator._shells.nbasis());
+        const int nb = static_cast<int>(calculator.working_nbasis());
         const Eigen::MatrixXd &C = mo_coeff;
         const Eigen::VectorXd &eps = mo_energy;
 
@@ -180,7 +180,7 @@ namespace HartreeFock::Correlation
 
         int n_electrons = calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
         const int n_occ = n_electrons / 2;
-        const int n_virt = static_cast<int>(calculator._shells.nbasis()) - n_occ;
+        const int n_virt = static_cast<int>(calculator.working_nbasis()) - n_occ;
 
         if (rhs.rows() != n_virt || rhs.cols() != n_occ)
         {

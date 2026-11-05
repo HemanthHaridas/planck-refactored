@@ -4344,6 +4344,122 @@
    ]
   },
   {
+   "id": "water_rhf_stability_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_rhf_stability_spherical_631gd.hfinp",
+   "tags": [
+    "core",
+    "spherical"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 RHF/6-31G* cart=False: E -76.0091256420; real internal +3.6595924e-01 (gen_g_hop_rhf/2), complex +3.3520547e-01, triplet +2.8865272e-01 (_gen_hop_rhf_external). S0.6 (docs/SPHERICAL_DFT_SCOPE.md): before 100675e4 / this fix the HF stability and CPHF code sized the spherical ERI tensor with the Cartesian nbasis().",
+   "expected_exit_code": 0,
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "stability_real_internal",
+     "expected": 0.3659592,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_complex_internal",
+     "expected": 0.3352054,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_triplet_external",
+     "expected": 0.2886527,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.00912564,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uhf_stability_follow_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_cation_uhf_stability_follow_spherical_631gd.hfinp",
+   "tags": [
+    "core",
+    "spherical",
+    "open_shell"
+   ],
+   "_pyscf_reference": "From hcore Planck converges a saddle at -75.5250137274 (lambda -8.542422e-02, not reachable in PySCF, whose 1e guess lands on the ground state). The follow reaches -75.6104747910; PySCF cart=False UHF -75.6104747768 with gen_g_hop_uhf lambda +8.4419004e-02 (Planck from guess sad: +8.441901e-02). S0.6 (docs/SPHERICAL_DFT_SCOPE.md): before 100675e4 / this fix the HF stability and CPHF code sized the spherical ERI tensor with the Cartesian nbasis().",
+   "expected_exit_code": 0,
+   "contains": [
+    "UHF -> UHF (spin-conserving, internal)",
+    "[UNSTABLE]",
+    "Following internal instability"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "stability_uhf_internal",
+     "expected": -0.08542422,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.610474791,
+     "atol": 1e-07
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_soscf_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_rhf_soscf_spherical_631gd.hfinp",
+   "tags": [
+    "core",
+    "spherical"
+   ],
+   "_note": "Before the fix the spherical RHF SOSCF Hessian indexed the spherical ERI tensor with Cartesian strides: |g| grew 0.23 -> 0.86 -> 0.64, every AH solve hit 30 iterations with residual > 1, and DIIS rescued convergence (19 iterations). Fixed: 0.23 -> 0.039 -> 0.0025, 14 iterations. Energy equals DIIS (-76.0091256400).",
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_le",
+     "metric": "soscf_last_gradient",
+     "value": 0.01
+    },
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.00912564,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uhf_soscf_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_cation_uhf_soscf_spherical_631gd.hfinp",
+   "tags": [
+    "core",
+    "spherical",
+    "open_shell"
+   ],
+   "_note": "Before the fix the UHF CPHF build passed working-basis (spherical) densities to the Cartesian Fock build; last SOSCF |g| 9.5e-2 with AH residual ~0.1. Fixed (lifted with to_cartesian/to_working): 0.26 -> 0.030 -> 0.0022. Energy equals DIIS from the same hcore guess (-75.5250137274, the 2A1 saddle).",
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_le",
+     "metric": "soscf_last_gradient",
+     "value": 0.01
+    },
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.5250137274,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
    "id": "water_rmp2_spherical_gradient_rejected",
    "input": "tests/inputs/regression/spherical/water_rmp2_spherical_gradient_rejected.hfinp",
    "tags": [

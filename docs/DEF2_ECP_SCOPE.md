@@ -84,9 +84,21 @@ literal was also corrected, see Findings).
    already ECP-aware; lifting the rejection in `src/dft/driver.cpp` is the
    gate. The DFT gradient calls `one_electron_gradient`, so it inherits the
    ECP term. Same PySCF gates in `planck-dft`.
+   - KS stability follows with no ECP-specific code: the ECP enters only
+     through H_core, and so through the orbital energies. It also needs
+     spherical KS stability (`SPHERICAL_DFT_SCOPE.md` step 4).
+   - Gate once both land: HI⁺ UKS stability with def2-SVP against PySCF
+     `gen_g_hop_uhf`.
 2. **Smaller open items:**
-   - gate post-HF energies (one RMP2 and one CASSCF energy on HI vs PySCF)
-     with an ECP;
+   - gate post-HF energies with an ECP. Measured after `100675e4` on
+     HI/def2-SVP:
+     - RMP2 E_corr −0.1434184969 vs PySCF −0.1434184970. Pin at 1e-8. It
+       would have caught the electron-count bug.
+     - CCSD −0.1558819666 vs −0.1558820517 (8.5e-8). Check CC convergence
+       before pinning.
+     - CASSCF not yet measured.
+   - gate HI⁺ UHF stability (λ_min the Π zero mode, |λ| < 1e-8, stable;
+     `docs/KS_STABILITY_SCOPE.md`);
    - the two Cl cases (ZnCl2, AgCl) sit 1.1–1.2e-9 (~4e-13 relative) from
      PySCF for an unexplained reason. It is not the Å→Bohr constant (ZnCl2
      was 1.2e-9 before that fix too) and survives tight convergence in both
@@ -226,8 +238,25 @@ gradient and multipole code had been counting the ghost's charge. The other
 copying. But six `Σ atomic_numbers` loops were not indexed reads and escaped
 it: two in the HF MO printout (HI marked 27 orbitals occupied instead of 13)
 and four in `src/dft/driver.cpp` (KS electron counts and the grid-integration
-check). All use `total_nuclear_charge()` now, and none is left in `src/`.
-**Audit sums as well as indexed reads.**
+check). All use `total_nuclear_charge()` now. That fix did not cover every
+sum: the KS stability sweep (`docs/KS_STABILITY_SCOPE.md`, `100675e4`) found
+**eleven more** Σ `atomic_numbers` counts:
+- stability;
+- `rhf_response.cpp` ×2, `mp2_internal.cpp` ×2;
+- CC `common.cpp`;
+- FCI, CASSCF;
+- the KS SCF scaffold, RKS/UKS TDDFT.
+
+They escaped because some were written as `atomic_numbers.cast<int>().sum()`
+and some as range-for loops, and neither matches a search for indexed reads
+or for `for (auto Z`. Consequences:
+- **HI/def2-SVP RMP2 gave E_corr −0.0059849856 against PySCF −0.1434184970,
+  with no warning.**
+- HI⁺ UHF stability reported a −0.19 instability that is really the Π zero
+  mode.
+
+`grep -rn atomic_numbers src | grep -E 'sum|for \('` now matches only the
+JSON writer, which prints the atomic numbers. **Audit sums as well as indexed reads, in every spelling.**
 
 **BSE writes the ECP headers uppercase (step 3).** The ECP section uses `RB 0`
 and `RB-ECP` while the shells use `Rb`; the case-sensitive lookup failed
@@ -296,6 +325,7 @@ and repin to it.
 | 4b | `2c9009f0` | checkpoint v8 core counts; FCIDUMP checked; spherical projection fallback; six Σ Z counts |
 | 5a | `b7962015` | `_compute_ecp_gradient`, `planck-ecp-gradient-fd`; libecpint pinned to PR #81 (Findings) |
 | 5 | — (working tree) | ECP term in `one_electron_gradient`; refusal lifted; RHF/UHF/ROHF gradient, geomopt, freq gates |
+| — | `100675e4` | eleven more Σ Z electron counts (found by the KS stability sweep); RMP2 with ECPs now correct |
 | 6 | — | DFT with ECPs (open, after spherical DFT) |
 
 ## Not in this scope
