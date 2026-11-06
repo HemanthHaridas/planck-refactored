@@ -1,7 +1,8 @@
 # Why is PySCF's DFT gradient wrong on ECP atoms, and what is the upstream fix?
 
-Research scope, opened 2026-11-06. The root cause is identified and confirmed;
-nothing has been reported upstream yet. **When this work lands, it must be
+Research scope, opened 2026-11-06. The root cause is identified and confirmed,
+and R1 (a pure-PySCF reproducer) is done; nothing has been reported upstream
+yet. **When this work lands, it must be
 reported to PySCF** (step R5). Status lives in `vault/Status/Open Work.md`.
 
 ## The finding
@@ -86,10 +87,23 @@ finite differences. Planck's reference script applies this workaround
 
 ## Steps
 
-- **R1. A minimal reproducer in pure PySCF**, no Planck: a small ECP molecule
-  (HI or AgH·H₂O with a standard PySCF basis name), the analytic gradient with
-  grid response, and the energy finite difference, showing the gap and its
-  disappearance with the fix. This is the core of the upstream report.
+- **R1. A minimal reproducer in pure PySCF — DONE 2026-11-06.**
+  `tests/pyscf/pyscf_ecp_grid_response_repro.py`: PySCF built-ins only
+  (`basis="def2-svp"`, `ecp={"Au": "def2-svp"}`), C1 AuH·H₂O, PBE, grid level
+  5, about a minute. It prints the stock analytic gradient, the analytic
+  gradient with the one-line fix, and a central difference of the energy
+  (δ 1e-3 Bohr) for all 15 components. PySCF 2.13.0:
+
+  | | max \|analytic − energy FD\| |
+  |---|---|
+  | stock | 4.3e-6 Ha/Bohr (worst on Au z and O z) |
+  | one-line fix | 1.4e-7 Ha/Bohr (the δ² truncation of the central difference) |
+
+  `atom_charges()` is 19 for Au against a proton number of 79. **A diatomic
+  does not reproduce it:** on HI the stock and fixed gradients agree to
+  1e-10. Why two atoms are immune is an R2 question; the report should say
+  that at least three atoms are needed. This is the core of the upstream
+  report.
 - **R2. Reach and size** (questions 1–2): a table over elements, core sizes,
   functionals (LDA, GGA, hybrid, range-separated), RKS/UKS, radius schemes and
   grid sizes.
