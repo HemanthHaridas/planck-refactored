@@ -3044,10 +3044,10 @@ namespace DFT::Driver
             const auto refuse = [](const std::string &what) -> std::expected<void, std::string>
             {
                 return std::unexpected(what + " is not yet supported by planck-dft with basis_type spherical "
-                                              "(docs/SPHERICAL_DFT_SCOPE.md); spherical RKS/UKS single points "
-                                              "are. Use basis_type cartesian for this calculation.");
+                                              "(docs/SPHERICAL_DFT_SCOPE.md); spherical RKS/UKS single points, "
+                                              "gradients, geometry optimization and frequencies are. Use basis_type cartesian for this calculation.");
             };
-            if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+            if (calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow)
                 return refuse(workflow_label(calculator._calculation));
             if (functionals.has_double_hybrid_pt2)
                 return refuse("A double-hybrid functional");
@@ -4619,17 +4619,27 @@ namespace DFT::Driver
                 }
             }
 
+            // The XC derivative runs on the Cartesian grid AOs: lift the stored
+            // working-basis densities (identity in a Cartesian basis).
+            auto P_alpha = HartreeFock::BasisFunctions::to_cartesian(calculator._shells,
+                                                                     calculator._info._scf.alpha.density);
+            const bool uks = calculator._scf._scf == HartreeFock::SCFType::UHF;
+            auto P_beta = uks ? HartreeFock::BasisFunctions::to_cartesian(calculator._shells,
+                                                                          calculator._info._scf.beta.density)
+                              : std::expected<Eigen::MatrixXd, std::string>(Eigen::MatrixXd());
+            if (!P_alpha || !P_beta)
+                return std::unexpected("DFT XC nuclear gradient: " +
+                                       (P_alpha ? P_beta.error() : P_alpha.error()));
             auto xc_grad =
-                calculator._scf._scf == HartreeFock::SCFType::UHF
-                    ? DFT::Gradient::compute_xc_nuclear_gradient_uks(
+                uks ? DFT::Gradient::compute_xc_nuclear_gradient_uks(
                           calculator._molecule,
                           calculator._shells,
                           prepared.molecular_grid,
                           prepared.ao_grid,
                           hess,
                           *xc_grid,
-                          calculator._info._scf.alpha.density,
-                          calculator._info._scf.beta.density)
+                          *P_alpha,
+                          *P_beta)
                     : DFT::Gradient::compute_xc_nuclear_gradient_rks(
                           calculator._molecule,
                           calculator._shells,
@@ -4637,7 +4647,7 @@ namespace DFT::Driver
                           prepared.ao_grid,
                           hess,
                           *xc_grid,
-                          calculator._info._scf.alpha.density);
+                          *P_alpha);
             if (!xc_grad)
                 return std::unexpected("DFT XC nuclear gradient failed: " + xc_grad.error());
 

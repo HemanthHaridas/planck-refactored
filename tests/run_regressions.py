@@ -476,6 +476,27 @@ def run_case(
                 passed = False
                 details.append(f"{metric} expected <= {threshold}, got {actual}")
 
+        elif ctype == "gradient_close":
+            # Every component of the first printed gradient block, so a sign flip or
+            # an atom swap fails (gradient_max / gradient_rms cannot see either).
+            expected_rows = check["expected"]
+            atol = float(check["atol"])
+            rows = re.findall(
+                r"Atom\s+\d+\s*:\s+([-+0-9Ee\.]+)\s+([-+0-9Ee\.]+)\s+([-+0-9Ee\.]+)", output
+            )[: len(expected_rows)]
+            if len(rows) != len(expected_rows):
+                passed = False
+                details.append(f"gradient: expected {len(expected_rows)} atom rows, got {len(rows)}")
+            else:
+                worst = max(
+                    abs(float(a) - float(e))
+                    for row, exp in zip(rows, expected_rows)
+                    for a, e in zip(row, exp)
+                )
+                if worst > atol:
+                    passed = False
+                    details.append(f"gradient component off by {worst:.2e} (atol {atol:.2e})")
+
         elif ctype == "metric_ge":
             metric = check["metric"]
             threshold = float(check["value"])

@@ -79,8 +79,9 @@ literal was also corrected, see Findings).
 
 ## What remains
 
-1. **Step 6, DFT with ECPs**, after spherical DFT lands
-   (`docs/SPHERICAL_DFT_SCOPE.md`). H_core and the KS electron counts are
+1. **Step 6, DFT with ECPs.** Unblocked for single points and gradients:
+   spherical DFT steps 1 and 2 landed (`docs/SPHERICAL_DFT_SCOPE.md`;
+   TDDFT and DH there are still open). H_core and the KS electron counts are
    already ECP-aware; lifting the rejection in `src/dft/driver.cpp` is the
    gate. The DFT gradient calls `one_electron_gradient`, so it inherits the
    ECP term. Same PySCF gates in `planck-dft`.

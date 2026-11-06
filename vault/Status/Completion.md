@@ -437,6 +437,19 @@ historical design context, but they are no longer the source of truth for
   `water_{rhf,cation_uhf}_soscf_spherical_631gd` (PySCF `cart=False`), all
   failing on the old code.
 
+- **Spherical KS gradients, geometry optimization and frequencies
+  (2026-11-06, `docs/SPHERICAL_DFT_SCOPE.md` step 2).** One change in
+  `compute_analytic_ks_gradient`: the stored densities are lifted with
+  `to_cartesian` before the XC nuclear gradient (the HF-like terms and the XC
+  evaluation already lifted). Against PySCF `cart=False` with grid response on
+  C1 H₂O₂/6-31G*: RKS B3LYP 1.7e-10, RKS HSE06 1.2e-10, UKS PBE 3.4e-10
+  Ha/Bohr; UKS energy FD 1.2e-9. Water B3LYP geomopt E_opt 3.2e-7 above
+  PySCF's gau_tight minimum (Planck's default 3e-4 force threshold),
+  frequencies within 1.6 cm⁻¹. A 3.2e-8 UKS gap first blamed on Planck was
+  PySCF's default `conv_tol_grad` (√conv_tol). New runner check
+  `gradient_close` (every component). An HSE06 energy-FD miss surfaced on
+  the way; it is present in Cartesian too (see Open Work).
+
 - **Spherical KS stability and SOSCF (2026-11-06,
   `docs/SPHERICAL_DFT_SCOPE.md` step 4).** The two orbital-Hessian builders
   (`src/dft/ks_orbital_hessian.cpp`), shared by SOSCF and stability, take a

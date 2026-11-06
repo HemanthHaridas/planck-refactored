@@ -5123,6 +5123,206 @@
    ]
   },
   {
+   "id": "h2o2_rks_b3lyp_gradient_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_rks_b3lyp_gradient_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "gradient"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_ks_gradient_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned, grid_response=True, conv_tol_grad 1e-9): E -151.5284586353; C1 H2O2, all 12 components independent. Planck max |dg| 1.7e-10.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -151.5284586353,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       -0.004339447059,
+       -0.016725462658,
+       9.5743587e-05
+      ],
+      [
+       0.023342421176,
+       0.017904465707,
+       -0.008981575084
+      ],
+      [
+       0.004740019261,
+       0.002289448145,
+       0.001370715081
+      ],
+      [
+       -0.023742993378,
+       -0.003468451194,
+       0.007515116415
+      ]
+     ],
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rks_hse06_gradient_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_rks_hse06_gradient_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "spherical",
+    "gradient"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_ks_gradient_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned, grid_response=True, conv_tol_grad 1e-9): E -151.3823120967; C1 H2O2, all 12 components independent. Planck max |dg| 1.2e-10 (exercises the long-range exchange derivative).",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -151.3823120967,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       -0.006657475211,
+       -0.005785596212,
+       -0.002172406944
+      ],
+      [
+       0.02609008536,
+       0.006787929077,
+       -0.009481796289
+      ],
+      [
+       0.007641301289,
+       0.003661454631,
+       0.002926986909
+      ],
+      [
+       -0.027073911438,
+       -0.004663787496,
+       0.008727216324
+      ]
+     ],
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "h2o2_cation_uks_pbe_gradient_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_cation_uks_pbe_gradient_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "gradient",
+    "open_shell"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_ks_gradient_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned, grid_response=True, conv_tol_grad 1e-9): E -150.9912749866; C1 H2O2, all 12 components independent. Planck max |dg| 3.4e-10. With PySCF's default conv_tol_grad (sqrt(conv_tol) = 1e-6) the reference was 3.2e-8 off; the gap was PySCF's, not Planck's.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -150.9912749866,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.034001625389,
+       0.054405178396,
+       -0.00509086286
+      ],
+      [
+       -0.013589716382,
+       -0.052752121636,
+       -0.0116445496
+      ],
+      [
+       -0.035476907643,
+       -0.007341386008,
+       0.002323585233
+      ],
+      [
+       0.015064998635,
+       0.005688329248,
+       0.014411827226
+      ]
+     ],
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rks_b3lyp_geomoptfreq_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_rks_b3lyp_geomoptfreq_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "spherical",
+    "geomopt"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_ks_gradient_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned, grid_response=True, conv_tol_grad 1e-9): geometric_solver gau_tight E_opt -76.4070241417, analytic Hessian freqs 1710.70 / 3720.74 / 3844.54 cm^-1. Planck stops at its default max|g| 3e-4 (2.2e-4 here; the tolerance is not an input keyword), so E_opt sits 3.2e-7 above and the semi-numerical freqs (1711.55 / 3722.27 / 3845.30) within 1.6 cm^-1.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Vibrational Frequencies"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4070241417,
+     "atol": 5e-07
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 0.0003
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1710.7,
+     "atol": 2.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 3720.74,
+     "atol": 2.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 3844.54,
+     "atol": 2.0
+    }
+   ]
+  },
+  {
    "id": "water_rks_b3lyp_spherical_631g_exact",
    "input": "tests/inputs/regression/spherical/water_rks_b3lyp_spherical_631g_exact.hfinp",
    "executable": "planck-dft",

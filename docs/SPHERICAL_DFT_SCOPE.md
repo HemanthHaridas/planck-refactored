@@ -1,8 +1,9 @@
 # Can `planck-dft` run in a spherical-harmonic basis?
 
 Research scope, opened 2026-10-26. The shared prerequisites (S0.1–S0.6),
-step 1 (RKS/UKS single points) and step 4 (SOSCF and KS stability) have
-landed; steps 2, 3, 5 and 6 are open, so this is still a scope. Rewrite it as the
+step 1 (RKS/UKS single points), step 2 (gradients, geomopt, frequencies) and
+step 4 (SOSCF and KS stability) have landed; steps 3, 5 and 6 are open, so
+this is still a scope. Rewrite it as the
 answer when they land. Status lives in `vault/Status/Open Work.md`.
 
 ## Why it matters
@@ -55,9 +56,8 @@ What `planck-dft` can rely on now:
 
 | site (`src/dft/driver.cpp`) | today | needed |
 |---|---|---|
-| `validate_spherical_support` | admits SinglePoint, SOSCF and stability analysis; refuses other workflows, DH, PCM and checkpoint restart by name | widen per step |
+| `validate_spherical_support` | admits single points, gradients, geomopt, frequencies, SOSCF and stability; refuses ImaginaryFollow, DH, PCM and checkpoint restart by name | widen per step |
 | checkpoint restart (`load_ks_restart_state`, `project_ks_restart_density`) | refused in spherical | the cross-basis projection needs the spherical overlaps, as HF's does |
-| XC nuclear gradient (`compute_analytic_ks_gradient`) | stored densities to `compute_xc_nuclear_gradient_{rks,uks}` | `to_cartesian` |
 | TDDFT (`run_linear_response`) | `n_virt = nbasis − n_occ` | `n_virt` from `mo_coefficients.cols()`; tensor from `ensure_eri` |
 | PCM reaction field | stored density | stays rejected (HF rejects spherical PCM too) |
 | DH gradients (`dh_pt2_gradient.cpp`, `udh_*`) | require a Cartesian basis | stay rejected |
@@ -69,12 +69,15 @@ once their inputs arrive lifted, and their dimension checks turn a missed lift
 into an error. **Audit rule:** a site that sizes a grid or integral object
 stays Cartesian; a site that sizes an SCF object becomes `working_nbasis()`.
 
-**Remaining, in order:** step 2 (gradients, geomopt, frequencies: the XC
-nuclear-gradient lift), step 3 (TDDFT: `n_virt` from `mo_coefficients.cols()`,
-tensor from `ensure_eri`), step 5 (DH single points), then checkpoint restart
-(the cross-basis projection needs spherical overlaps, as HF's does). Step 6
-(PCM) stays rejected. After step 2, `DEF2_ECP_SCOPE.md` step 6 can lift the
-ECP refusal for single points and gradients together. The SOSCF paths size
+**Remaining, in order:**
+1. Step 3, TDDFT: `n_virt` from `mo_coefficients.cols()`, tensor from
+   `ensure_eri`.
+2. Step 5, DH single points.
+3. Checkpoint restart: the cross-basis projection needs spherical overlaps,
+   as HF's does.
+
+Step 6 (PCM) stays rejected. With step 2 landed, `DEF2_ECP_SCOPE.md` step 6
+can lift the ECP refusal for single points and gradients together. The SOSCF paths size
 `n_virt` from `working_nbasis()`, which is safe only because no
 linear-dependence removal exists; switch them to `mo_coefficients.cols()` if
 that ever lands.
@@ -111,11 +114,46 @@ that ever lands.
    `water_cation_uks_pbe_spherical_ccpvtz`, `h2o2_rks_b3lyp_spherical_631gd`,
    `h2o2_cation_uks_pbe_spherical_631gd`,
    `water_rks_spherical_gradient_rejected` (smoke).
-2. **Gradients, geometry optimization, frequencies.** The working basis is
-   rebuilt per geometry by step 1 and the gradient lift is in place; add the
-   XC-nuclear-gradient lift. Gates: energy FD (`tests/dft_gradient_fd.py`),
-   PySCF `cart=False` gradients for B3LYP and HSE06 (the long-range
-   derivative), water/6-31G* geomopt E_opt against PySCF, one frequency.
+2. **Gradients, geometry optimization, frequencies — LANDED 2026-11-06.**
+   One change: `compute_analytic_ks_gradient` lifts the stored densities with
+   `to_cartesian` before `compute_xc_nuclear_gradient_{rks,uks}` (beta only
+   under UKS; RKS stores none). The HF-like terms already lifted (S0.4), the XC
+   evaluation already lifted (step 1), and the per-geometry rebuild already
+   re-reads the basis in the working basis. `validate_spherical_support` now
+   admits every gradient workflow except ImaginaryFollow, which the DFT
+   driver does not implement in any basis.
+   - **Analytic gradient vs PySCF `cart=False`** on C1 H₂O₂ / 6-31G*
+     (all 12 components independent), grid response on, 150 × 590 unpruned
+     (`tests/pyscf/spherical_ks_gradient_references.py`):
+
+     | case | max \|Δg\| (Ha/Bohr) |
+     |---|---|
+     | RKS B3LYP | 1.7e-10 |
+     | RKS HSE06 (long-range derivative) | 1.2e-10 |
+     | UKS PBE (cation) | 3.4e-10 |
+
+   - **The UKS gap that wasn't.** UKS PBE first sat 3.2e-8 from PySCF, 2.1e-8
+     in a Cartesian control too, and looked like a UKS/GGA defect. It was
+     PySCF's reference: its default `conv_tol_grad` is √`conv_tol` = 1e-6, and a
+     gradient is linear in the density error. With `conv_tol_grad = 1e-9` the
+     gap is 3.4e-10. Tightening Planck's own SCF moved its gradient 3e-10.
+   - **Energy FD** (`tests/dft_gradient_fd.py`, fourth order, δ 2e-3/4e-3 Bohr):
+     UKS PBE 1.2e-9. HSE06 misses by 1.5e-5 (atom 1 y), and the Cartesian
+     control on the same input misses by 8.0e-6 (atom 3 z), so this is **not
+     spherical-specific**; it is tracked in `vault/Status/Open Work.md`. The
+     analytic HSE06 gradient matches PySCF to 1.2e-10, so the suspect is
+     Planck's HSE06 energy across displaced geometries, not the gradient.
+   - **Geomopt + frequencies**, water RKS B3LYP: E_opt −76.4070238183 vs
+     PySCF gau_tight −76.4070241417 (3.2e-7: Planck stops at its default
+     max|g| 3e-4, here 2.2e-4, and that tolerance is not an input keyword);
+     frequencies 1711.55 / 3722.27 / 3845.30 vs 1710.70 / 3720.74 / 3844.54
+     cm⁻¹ (≤ 1.6).
+   - Cases: `h2o2_rks_b3lyp_gradient_spherical_631gd`,
+     `h2o2_cation_uks_pbe_gradient_spherical_631gd` (core),
+     `h2o2_rks_hse06_gradient_spherical_631gd`,
+     `water_rks_b3lyp_geomoptfreq_spherical_631gd` (extended). New runner
+     check `gradient_close` compares every printed component, since
+     `gradient_max`/`gradient_rms` cannot see a sign flip or an atom swap.
 3. **TDDFT.** Gate: PySCF `cart=False` TDA and Casida, RKS singlet/triplet and
    UKS, B3LYP and HSE06, at the existing tolerances (4e-4 eV,
    `docs/RS_TDDFT.md`).
@@ -305,8 +343,9 @@ Gates, all four failing on the old code:
 | S0.5 | `e565e4fd` | C normalized once at read; three copies deleted |
 | S0.6 | `100675e4`, `8745c07a` | HF stability and RHF/UHF CPHF (SOSCF) in the working basis; four gates |
 | 1 | `8bc9c7c6` | spherical RKS/UKS single points; PySCF-gated |
-| 4 | — (working tree) | SOSCF and KS stability: MO-lifted orbital-Hessian builders; six gates |
-| 2, 3, 5, 6 | — | gradients, TDDFT, DH single points, PCM (open) |
+| 4 | `7cf32683` | SOSCF and KS stability: MO-lifted orbital-Hessian builders; six gates |
+| 2 | — (working tree) | gradients, geomopt, frequencies: XC nuclear-gradient lift; four gates |
+| 3, 5, 6 | — | TDDFT, DH single points, PCM (open) |
 
 ## Not in this scope
 
@@ -316,6 +355,7 @@ a spherical basis; RI-J/K for DFT.
 ## Depends on / enables
 
 Nothing blocks it. It enables def2 DFT and ECP DFT
-(`docs/DEF2_ECP_SCOPE.md` step 6). Step 4 (landed) gave spherical KS
+(`docs/DEF2_ECP_SCOPE.md` step 6), which steps 1 and 2 now unblock for
+single points and gradients. Step 4 (landed) gave spherical KS
 stability (`docs/KS_STABILITY_SCOPE.md`); with ECP step 6 that covers ECP
 bases too.

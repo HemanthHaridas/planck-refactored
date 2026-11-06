@@ -66,6 +66,19 @@ truth for what remains.
     open-shell regression inputs (`h2o2_cation_uhf_tight_tol_sto3g`, kept: it
     gates DIIS termination). SAD as the open-shell default was not pursued.
 
+- **HSE06 analytic gradient disagrees with Planck's own energy finite
+  difference (found 2026-11-06).** C1 H2O2 / 6-31G*, RKS HSE06, 150 x 590
+  grid, fourth-order FD (`tests/dft_gradient_fd.py --delta 2e-3
+  --outer-delta 4e-3 --scf-tolerance 1e-11`): max deviation 8.0e-6 Ha/Bohr in
+  Cartesian, 1.5e-5 in spherical. The same analytic gradient matches PySCF
+  (grid response on) to 1.2e-10, and UKS PBE passes FD at 1.2e-9, so the
+  suspect is the HSE06 *energy* across displaced geometries (e.g. short-range
+  K screening or the erf-kernel Schwarz bounds), not the gradient. The
+  committed `water_dft_hse06_gradient_symm_ultrafine_fd` passes, so first
+  check what differs (C2v water has 3 independent components, C1 H2O2 has 12).
+  Input: `tests/inputs/regression/spherical/h2o2_rks_hse06_gradient_spherical_631gd.hfinp`
+  (switch `basis_type` for the Cartesian control).
+
 ## Routine-use gaps (scoped 2026-10-26)
 
 What blocks Planck from routine DFT use, each with its own scope doc. Order
@@ -78,9 +91,11 @@ is the recommended one; none blocks another except where noted.
   in `src/dft/` check against the AO grid and need no edit). First shared fixes
   Step 1 (spherical RKS/UKS single points, PySCF-gated to ≤2.5e-12 at
   matched grids) landed 2026-11-04; step 4 (SOSCF + KS stability, the
-  orbital-Hessian builders lift the MO coefficients) landed 2026-11-06.
-  Next, in order: step 2 gradients/geomopt/freq (XC nuclear-gradient lift),
-  step 3 TDDFT, step 5 DH single points, checkpoint restart. (S0): the HF spherical ESP defect (S0.1, fixed) and `ensure_eri` crashing its callers
+  orbital-Hessian builders lift the MO coefficients) and step 2 (gradients,
+  geomopt, frequencies; PySCF-gated to ≤ 3.4e-10 Ha/Bohr) landed 2026-11-06.
+  Next, in order: step 3 TDDFT, step 5 DH single points, checkpoint
+  restart. ECP DFT (DEF2 step 6) is unblocked for single points
+  and gradients. (S0): the HF spherical ESP defect (S0.1, fixed) and `ensure_eri` crashing its callers
   in spherical mode after a direct SCF (S0.2, fixed; both in Completion); public `to_cartesian`/`to_working` helpers replacing seven
   hand-written copies (S0.3, landed); `compute_rks/uks_gradient` not lifting P and W (S0.4, landed); and S0.5, C renormalized once in `read_gbs_basis` instead of three per-geometry copies (landed; the per-geometry premise was false). Then
   single points, gradients, TDDFT, SOSCF, DH single points; PCM and DH
