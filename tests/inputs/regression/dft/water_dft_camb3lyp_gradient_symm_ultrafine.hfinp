@@ -1,3 +1,7 @@
+# Symmetry-on DFT gradient vs energy finite difference (DFT Symmetry Frames gotcha): water/STO-3G,
+# use_symm on, ultrafine grid. Range-separated (erf) exchange exercises the long-range gradient term.
+# CAM-B3LYP, not HSE06: libxc's wPBEh (HSE) energy jumps at s = 1, so an HSE06 energy FD passes
+# only by luck (docs/WPBEH_S_SCALING_SCOPE.md); HSE06 gradients are gated against PySCF instead.
 %begin_control
     basis       sto-3g
     calculation gradient
@@ -18,7 +22,7 @@
 
 %begin_dft
     grid                ultrafine
-    exchange            hse06
+    exchange            hyb_gga_xc_cam_b3lyp
     correlation         pbe
     print_grid_summary  .true.
 %end_dft

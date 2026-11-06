@@ -80,19 +80,21 @@ step 3 shows a real workflow cost.
 
 ## Steps
 
-1. **List the affected functionals.** From `hyb_gga_xc_hse.c` and every
-   `XC_GGA_X_WPBEH` user, map libxc IDs to the names Planck accepts. Add a
-   one-line check to `DFT::XC` (or the wrapper) that reports whether a
-   functional contains `GGA_X_WPBEH`, so the next two steps have one source of
-   truth.
-2. **Gate around it (option A).**
-   - Replace `water_dft_hse06_gradient_symm_ultrafine_fd` with a PySCF
-     comparison (grid response on, `conv_tol_grad` set). Keep the water
-     symmetry-frame coverage it was added for (`vault` DFT Symmetry Frames
-     gotcha), so compare the symmetry-on Planck gradient against PySCF.
-   - Make `tests/dft_gradient_fd.py` print a warning naming the discontinuity
-     when the functional contains `GGA_X_WPBEH`, so the next FD miss is not
-     re-investigated.
+1. **One check — done (working tree).** `DFT::XC::Functional::uses_wpbeh_exchange()`
+   (`src/dft/base/wrapper.h`) looks for `XC_GGA_X_WPBEH` in the functional or
+   its libxc components, so the affected list comes from libxc itself rather
+   than a hand-kept table. `planck-dft` logs one Info note when it is true.
+2. **Gate around it — done (working tree; build and runs pending).**
+   - `tests/dft_gradient_fd.py` prints a warning when Planck's output carries
+     that note, so the next FD miss is not re-investigated.
+   - `water_dft_hse06_gradient_symm_ultrafine_fd` became
+     `water_dft_camb3lyp_gradient_symm_ultrafine_fd`. A PySCF comparison could
+     not keep what the case is for: Planck reorients the molecule under
+     symmetry and the grid is not rotation-invariant, so the symmetry-on
+     gradient differs from an unrotated PySCF one at the grid floor. Swapping
+     to CAM-B3LYP keeps the symmetry-frame and range-separated (erf) gradient
+     coverage and removes the s = 1 jump. HSE06 gradients are gated against
+     PySCF (`h2o2_rks_hse06_gradient_spherical_631gd`).
 3. **Measure the unmeasured.**
    - Frequencies: water and C1 H₂O₂ HSE06, Planck semi-numerical vs PySCF
      analytic Hessian, and Planck at two FD steps (0.005 and 0.002 Bohr). A

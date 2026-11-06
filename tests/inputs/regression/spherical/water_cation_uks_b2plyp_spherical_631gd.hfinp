@@ -1,6 +1,6 @@
 # Spherical DFT step 5 gate (docs/SPHERICAL_DFT.md): double-hybrid (B2PLYP) energy in a
 # spherical basis vs PySCF cart=False (tests/pyscf/spherical_dh_references.py), 150 x 590 grid.
-# guess sad: from hcore water+ lands on the 2A1 saddle (docs/KS_STABILITY_SCOPE.md), PySCF on 2B1.
+# guess sad: from hcore water+ lands on the 2A1 saddle (docs/KS_STABILITY.md), PySCF on 2B1.
 %begin_control
     basis       6-31g*
     calculation energy

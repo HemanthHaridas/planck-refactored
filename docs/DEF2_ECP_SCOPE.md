@@ -79,16 +79,33 @@ literal was also corrected, see Findings).
 
 ## What remains
 
-1. **Step 6, DFT with ECPs.** Unblocked: spherical DFT is complete
-   (`docs/SPHERICAL_DFT.md`) for every workflow except PCM and DH gradients. H_core and the KS electron counts are
-   already ECP-aware; lifting the rejection in `src/dft/driver.cpp` is the
-   gate. The DFT gradient calls `one_electron_gradient`, so it inherits the
-   ECP term. Same PySCF gates in `planck-dft`.
-   - KS stability follows with no ECP-specific code: the ECP enters only
-     through H_core, and so through the orbital energies. Spherical KS
-     stability landed (`SPHERICAL_DFT.md` step 4, 2026-11-06).
-   - Gate once both land: HI⁺ UKS stability with def2-SVP against PySCF
-     `gen_g_hop_uhf`.
+1. **Step 6, DFT with ECPs — LANDED 2026-11-06.** The refusal in
+   `read_basis_and_initialize` is lifted; no other code changed, since H_core,
+   the electron counts and `one_electron_gradient` were already ECP-aware.
+   References: `tests/pyscf/def2_ecp_dft_references.py` (spherical def2-SVP,
+   ECP read from Planck's GBS, matched 150 × 590 grid; it imports `load_ecp`
+   from `def2_ecp_references.py`, which now has a main guard). Every result
+   matches PySCF:
+
+   | case | Planck vs PySCF |
+   |---|---|
+   | HI RKS PBE energy | every printed digit (−298.2788754666) |
+   | C1 AuH·H₂O RKS B3LYP gradient | ≤ 2.4e-10 Ha/Bohr, all 15 components (against corrected PySCF, below); fourth-order energy FD 1.6e-8 |
+   | HI⁺ UKS PBE stability | λ_min +2.3e-9 vs −1.4e-8, both the π-hole zero mode; energy 2e-10 |
+   | HI RKS B3LYP TDDFT (Casida) | every printed digit, roots and oscillator strengths |
+
+   - **PySCF's DFT gradient is wrong on ECP atoms.** Stock PySCF 2.13.0 is
+     1.1e-5 Ha/Bohr off its own energy FD on AuH·H₂O: its grid-response
+     derivative looks Bragg radii up by Z − n_core while the energy uses the
+     proton number. Not fixed upstream as of 2026-11-06; the reference script
+     corrects it at runtime. Research scope and upstream report:
+     `docs/PYSCF_ECP_GRID_RESPONSE_SCOPE.md`.
+   - **HI⁺ never meets a tight density tolerance**, in either code: the hole
+     sits in a degenerate π pair whose mix is free, so the density wanders
+     while the energy holds to 1e-10. The input uses `tol_density 1e-6`.
+   - Cases: `hi_rks_pbe_def2svp_ecp` (smoke), `hi_cation_uks_pbe_def2svp_ecp_stability`,
+     `hi_rks_b3lyp_def2svp_ecp_tddft` (core), `auh_h2o_rks_b3lyp_def2svp_ecp_gradient`
+     (extended). The `hi_rks_def2svp_ecp_rejected` boundary case is gone.
 2. **Smaller open items:**
    - gate post-HF energies with an ECP. Measured after `100675e4` on
      HI/def2-SVP:
@@ -239,7 +256,7 @@ copying. But six `Σ atomic_numbers` loops were not indexed reads and escaped
 it: two in the HF MO printout (HI marked 27 orbitals occupied instead of 13)
 and four in `src/dft/driver.cpp` (KS electron counts and the grid-integration
 check). All use `total_nuclear_charge()` now. That fix did not cover every
-sum: the KS stability sweep (`docs/KS_STABILITY_SCOPE.md`, `100675e4`) found
+sum: the KS stability sweep (`docs/KS_STABILITY.md`, `100675e4`) found
 **eleven more** Σ `atomic_numbers` counts:
 - stability;
 - `rhf_response.cpp` ×2, `mp2_internal.cpp` ×2;

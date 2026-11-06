@@ -562,12 +562,6 @@ namespace DFT::Driver
                 return std::unexpected("DFT basis setup failed: " + basis_res.error());
             calculator._shells = std::move(*basis_res);
             calculator.sync_ecp_core_electrons();
-            // ponytail: ECP DFT is unblocked (spherical DFT is done) but ungated
-            // (docs/DEF2_ECP_SCOPE.md step 6); H_core already carries the ECP, so
-            // lifting this plus PySCF gates is the work.
-            if (!calculator._shells._ecps.empty())
-                return std::unexpected("ECP basis sets are not supported in planck-dft yet "
-                                       "(docs/DEF2_ECP_SCOPE.md step 6)");
             calculator.initialize();
             return {};
         }
@@ -5207,6 +5201,12 @@ namespace DFT::Driver
                 DFT::XC::version_string(),
                 functionals->exchange.name(),
                 functionals->correlation.name()));
+        if (functionals->exchange.uses_wpbeh_exchange() || functionals->correlation.uses_wpbeh_exchange())
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, "Libxc :",
+                "wPBEh exchange: the energy is discontinuous at reduced gradient s = 1 "
+                "(libxc s_scaling_2), so energy finite differences cannot validate gradients "
+                "(docs/WPBEH_S_SCALING_SCOPE.md)");
 
         // All higher-level DFT workflows start from the same converged KS
         // reference.  Gradient, optimization, and frequency branches then build

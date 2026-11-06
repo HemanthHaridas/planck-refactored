@@ -1,4 +1,4 @@
-# RHF -> UHF stability gate (docs/KS_STABILITY_SCOPE.md R0): stretched H2 (2.5 A) is the textbook
+# RHF -> UHF stability gate (docs/KS_STABILITY.md R0): stretched H2 (2.5 A) is the textbook
 # triplet instability; the channel must be A^T + B^T (PySCF rhf_external), not A^T - B^T.
 %begin_control
     basis       sto-3g

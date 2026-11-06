@@ -1,4 +1,4 @@
-# KS stability gate (docs/KS_STABILITY_SCOPE.md): water+/6-31G* UKS HSE06 from hcore reaches the
+# KS stability gate (docs/KS_STABILITY.md): water+/6-31G* UKS HSE06 from hcore reaches the
 # ground state, and the check must report it stable.
 %begin_control
     basis       6-31g*

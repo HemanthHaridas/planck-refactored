@@ -1,4 +1,4 @@
-# KS stability gate (docs/KS_STABILITY_SCOPE.md S2): water/6-31G* RKS HSE06 is stable in both the singlet (RKS -> RKS) and triplet (RKS -> UKS) channels.
+# KS stability gate (docs/KS_STABILITY.md S2): water/6-31G* RKS HSE06 is stable in both the singlet (RKS -> RKS) and triplet (RKS -> UKS) channels.
 %begin_control
     basis       6-31g*
     calculation energy

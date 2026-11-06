@@ -1,4 +1,4 @@
-# RHF -> UHF stability follow (docs/KS_STABILITY_SCOPE.md R0): from the unstable RHF of stretched H2
+# RHF -> UHF stability follow (docs/KS_STABILITY.md R0): from the unstable RHF of stretched H2
 # the follow must reach the broken-symmetry UHF.
 %begin_control
     basis       sto-3g

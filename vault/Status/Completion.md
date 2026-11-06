@@ -417,7 +417,7 @@ historical design context, but they are no longer the source of truth for
 ### Recent fixes now considered landed
 
 - **HF RHF → UHF stability channel fixed (2026-11-05,
-  `docs/KS_STABILITY_SCOPE.md` R0).** The "external triplet" channel built
+  `docs/KS_STABILITY.md` R0).** The "external triplet" channel built
   A^T − B^T, which is the complex-orbital test again, so the triplet row
   repeated the complex row and stretched H₂/STO-3G was reported stable
   (+0.0535) where A^T + B^T is −0.5109 (PySCF `rhf_external` −0.51090553).
@@ -436,6 +436,16 @@ historical design context, but they are no longer the source of truth for
   `water_cation_uhf_stability_follow_spherical_631gd` and
   `water_{rhf,cation_uhf}_soscf_spherical_631gd` (PySCF `cart=False`), all
   failing on the old code.
+
+- **DFT with ECPs (2026-11-06, `docs/DEF2_ECP_SCOPE.md` step 6).** Lifting
+  the refusal was the only code change: H_core, the electron counts and
+  `one_electron_gradient` were already ECP-aware. HI RKS PBE energy and HI
+  B3LYP TDDFT match PySCF `cart=False` to every printed digit, the C1 AuH·H₂O
+  B3LYP gradient to 2.4e-10 Ha/Bohr (fourth-order energy FD 1.6e-8), and HI⁺
+  UKS stability gives the π-hole zero mode (+2.3e-9 vs PySCF −1.4e-8), which
+  closes the KS stability work (`docs/KS_STABILITY.md`). Found on the way: a
+  PySCF defect in its DFT gradient grid response on ECP atoms
+  (`docs/PYSCF_ECP_GRID_RESPONSE_SCOPE.md`, see Open Work).
 
 - **Spherical DFT complete: double-hybrid single points and checkpoint restart
   (2026-11-06, `docs/SPHERICAL_DFT.md`, now an answer doc).** Double-hybrid
@@ -496,7 +506,7 @@ historical design context, but they are no longer the source of truth for
   `tests/pyscf/spherical_ks_stability_references.py`.
 
 - **RKS stability analysis and following in `planck-dft` (2026-11-05,
-  `docs/KS_STABILITY_SCOPE.md` S2).** Both RKS channels, `RKS -> RKS` (singlet)
+  `docs/KS_STABILITY.md` S2).** Both RKS channels, `RKS -> RKS` (singlet)
   and `RKS -> UKS` (triplet), from one prepared UKS operator at the
   closed-shell reference, on [κ, κ] and [κ, −κ]. The triplet follow promotes to
   UKS through `promote_rhf_to_uhf_along_triplet_mode` (split out of the HF
@@ -510,7 +520,7 @@ historical design context, but they are no longer the source of truth for
   singlet) fails all three.
 
 - **Stability sweep over open-shell regression inputs; spherical HF stability
-  and ECP electron counts fixed (2026-11-05, `docs/KS_STABILITY_SCOPE.md`
+  and ECP electron counts fixed (2026-11-05, `docs/KS_STABILITY.md`
   S1).** 38 `scf_type uhf` inputs re-run with `stability_check`. One saddle the
   suite did not intend: `h2o2_cation_uhf_tight_tol_sto3g`, λ −0.0738, same as
   PySCF. Two defects in the check:
@@ -523,7 +533,7 @@ historical design context, but they are no longer the source of truth for
     PySCF −0.14342); it now matches. All use `total_nuclear_charge()`.
 
 - **UKS stability analysis and following in `planck-dft` (2026-11-05,
-  `docs/KS_STABILITY_SCOPE.md`).** `stability_check` / `stability_follow` now
+  `docs/KS_STABILITY.md`).** `stability_check` / `stability_follow` now
   work for UKS: the lowest eigenvalue of the spin-conserving A + B by Davidson
   on the UKS SOSCF operator (lifted into `build_uks_orbital_hessian_op`), and a
   follow through `rotate_along_internal_mode` (split out of the HF follow).

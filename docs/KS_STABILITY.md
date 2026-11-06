@@ -11,9 +11,10 @@ A triplet instability promotes the run to UKS. Eigenvalues match PySCF to the
 grid floor (≤ 2e-5) on every case below, and the follows land on PySCF's
 lower state.
 
-Spherical landed as step 4 of `docs/SPHERICAL_DFT.md` (λ ≤ 1.2e-7
-from PySCF `cart=False`, follow to every digit). Open: KS stability with
-ECPs, which waits on `docs/DEF2_ECP_SCOPE.md` step 6.
+Also in the spherical basis (`docs/SPHERICAL_DFT.md`: λ ≤ 1.2e-7 from PySCF
+`cart=False`, follow to every digit) and with ECPs (`docs/DEF2_ECP_SCOPE.md`
+step 6: HI⁺ UKS PBE/def2-SVP λ_min +2.3e-9, the π-hole zero mode, PySCF
+−1.4e-8). Nothing is open.
 The HF-side fixes are gated. Status:
 `vault/Status/Open Work.md`.
 
@@ -185,14 +186,9 @@ were re-run with `stability_check`. Results:
 - `planck-dft-analytic-hessian-polarized-production` fails a mutated
   cross-spin kernel slot.
 
-## Open
+## What else landed
 
-The rest of this work lives in the two scopes it depends on:
-
-| item | where | depends on |
-|---|---|---|
-| **KS stability with ECPs.** No new code: the ECP enters through H_core. Gate: HI⁺ UKS def2-SVP vs PySCF | `DEF2_ECP_SCOPE.md` step 6 | ECP step 6 (spherical step 4 landed) |
-Done since: spherical KS stability and SOSCF (`SPHERICAL_DFT.md`
+Spherical KS stability and SOSCF (`SPHERICAL_DFT.md`
 step 4: the builders lift the MO coefficients, six gates), the spherical HF gates, the `rhf_response.cpp` site (it was
 live through RHF SOSCF; `SPHERICAL_DFT.md` S0.6), and the ECP gates
 `hi_cation_uhf_def2svp_ecp_stability` and `hi_rmp2_def2svp_ecp`. HI CCSD

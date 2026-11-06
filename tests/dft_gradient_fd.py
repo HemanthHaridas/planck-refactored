@@ -302,6 +302,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     if args.keep_tmp:
         print(f"work directory kept at: {workdir}")
 
+    if "wPBEh exchange: the energy is discontinuous" in analytic_out:
+        # planck-dft flags libxc's wPBEh (HSE family): its energy jumps at s = 1,
+        # so a miss here is expected and says nothing about the gradient.
+        print("WARNING: wPBEh-based functional; energy finite differences are unreliable "
+              "(docs/WPBEH_S_SCALING_SCOPE.md). Validate this gradient against PySCF instead.")
     if not report["passed"]:
         print("FAIL: analytic DFT gradient deviates from finite difference")
         return 1

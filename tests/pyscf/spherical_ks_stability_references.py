@@ -2,7 +2,7 @@
 
 Lowest orbital-Hessian eigenvalue of each channel, cart=False, Planck's own GBS,
 its CODATA 2018 Bohr and its unpruned 150 x 590 grid. Planck reports A + B, so
-(docs/KS_STABILITY_SCOPE.md, eigenvalue convention):
+(docs/KS_STABILITY.md, eigenvalue convention):
   UKS -> UKS   gen_g_hop_uhf                  x1
   RKS -> RKS   gen_g_hop_rhf                  /2
   RKS -> UKS   _gen_hop_rhf_external (3rd)    x1

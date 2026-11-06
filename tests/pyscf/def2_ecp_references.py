@@ -67,47 +67,52 @@ def read_dump(path):
     return np.array(vals, float).reshape(int(rows), int(cols))
 
 
-if len(sys.argv) == 3 and sys.argv[1] == "--fcidump":
-    # The FCIDUMP describes the valence-only Hamiltonian: its reference
-    # determinant, and an RHF solved on it, must both give PySCF's ECP energy.
-    from pyscf.tools import fcidump
-    path = pathlib.Path(sys.argv[2])
-    case = CASES / f"{path.stem}.hfinp"
-    mf_ref = scf.RHF(build(case, cart=False))
-    mf_ref.conv_tol = 1e-12
-    e_ref = mf_ref.kernel()
-    d = fcidump.read(str(path))
-    h, g, n = d["H1"], d["H2"], d["NELEC"] // 2
-    from pyscf import ao2mo
-    g = ao2mo.restore(1, g, d["NORB"])
-    e_det = (d["ECORE"] + 2 * np.trace(h[:n, :n])
-             + 2 * np.einsum("iijj", g[:n, :n, :n, :n]) - np.einsum("ijji", g[:n, :n, :n, :n]))
-    mf = fcidump.to_scf(str(path))
-    mf.conv_tol = 1e-12
-    e_scf = mf.kernel()
-    print(f"NELEC {d['NELEC']}  PySCF ECP RHF {e_ref:.10f}  HOMO {mf_ref.mo_energy[n - 1]:.6f}")
-    print(f"FCIDUMP reference determinant {e_det:.10f}  (diff {e_det - e_ref:+.1e})")
-    print(f"FCIDUMP RHF                   {e_scf:.10f}  (diff {e_scf - e_ref:+.1e})")
-    sys.exit()
+def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--fcidump":
+        # The FCIDUMP describes the valence-only Hamiltonian: its reference
+        # determinant, and an RHF solved on it, must both give PySCF's ECP energy.
+        from pyscf.tools import fcidump
+        path = pathlib.Path(sys.argv[2])
+        case = CASES / f"{path.stem}.hfinp"
+        mf_ref = scf.RHF(build(case, cart=False))
+        mf_ref.conv_tol = 1e-12
+        e_ref = mf_ref.kernel()
+        d = fcidump.read(str(path))
+        h, g, n = d["H1"], d["H2"], d["NELEC"] // 2
+        from pyscf import ao2mo
+        g = ao2mo.restore(1, g, d["NORB"])
+        e_det = (d["ECORE"] + 2 * np.trace(h[:n, :n])
+                 + 2 * np.einsum("iijj", g[:n, :n, :n, :n]) - np.einsum("ijji", g[:n, :n, :n, :n]))
+        mf = fcidump.to_scf(str(path))
+        mf.conv_tol = 1e-12
+        e_scf = mf.kernel()
+        print(f"NELEC {d['NELEC']}  PySCF ECP RHF {e_ref:.10f}  HOMO {mf_ref.mo_energy[n - 1]:.6f}")
+        print(f"FCIDUMP reference determinant {e_det:.10f}  (diff {e_det - e_ref:+.1e})")
+        print(f"FCIDUMP RHF                   {e_scf:.10f}  (diff {e_scf - e_ref:+.1e})")
+        sys.exit()
 
-if len(sys.argv) == 3:
-    dump, case = pathlib.Path(sys.argv[1]), CASES / f"{sys.argv[2]}.hfinp"
-    mol = build(case, cart=True)
-    S = mol.intor("int1e_ovlp")
-    V = mol.intor("int1e_nuc") + mol.intor("ECPscalar")
-    S_p, V_p = read_dump(dump / "Scart.txt"), read_dump(dump / "Vcart.txt")
-    # PySCF and Planck normalize Cartesian components differently; compare in
-    # the per-function-normalized form, which both must agree on.
-    d, d_p = 1 / np.sqrt(np.diag(S)), 1 / np.sqrt(np.diag(S_p))
-    print(f"overlap   max |dS| = {np.abs(d[:, None] * S * d - d_p[:, None] * S_p * d_p).max():.2e}")
-    print(f"V_ne+ECP  max |dV| = {np.abs(d[:, None] * V * d - d_p[:, None] * V_p * d_p).max():.2e}"
-          f"  (max |V| {np.abs(V).max():.1f})")
-    sys.exit()
+    if len(sys.argv) == 3:
+        dump, case = pathlib.Path(sys.argv[1]), CASES / f"{sys.argv[2]}.hfinp"
+        mol = build(case, cart=True)
+        S = mol.intor("int1e_ovlp")
+        V = mol.intor("int1e_nuc") + mol.intor("ECPscalar")
+        S_p, V_p = read_dump(dump / "Scart.txt"), read_dump(dump / "Vcart.txt")
+        # PySCF and Planck normalize Cartesian components differently; compare in
+        # the per-function-normalized form, which both must agree on.
+        d, d_p = 1 / np.sqrt(np.diag(S)), 1 / np.sqrt(np.diag(S_p))
+        print(f"overlap   max |dS| = {np.abs(d[:, None] * S * d - d_p[:, None] * S_p * d_p).max():.2e}")
+        print(f"V_ne+ECP  max |dV| = {np.abs(d[:, None] * V * d - d_p[:, None] * V_p * d_p).max():.2e}"
+              f"  (max |V| {np.abs(V).max():.1f})")
+        sys.exit()
 
-for case in sorted(CASES.glob("*def2*ecp*.hfinp")):
-    mol = build(case, cart=False)
-    mf = scf.RHF(mol) if mol.spin == 0 else scf.UHF(mol)
-    mf.conv_tol = 1e-12
-    e = mf.kernel()
-    assert mf.converged, case.stem
-    print(f"{case.stem:40s} nao={mol.nao:4d}  E = {e:.10f}")
+    for case in sorted(CASES.glob("*def2*ecp*.hfinp")):
+        mol = build(case, cart=False)
+        mf = scf.RHF(mol) if mol.spin == 0 else scf.UHF(mol)
+        mf.conv_tol = 1e-12
+        e = mf.kernel()
+        assert mf.converged, case.stem
+        print(f"{case.stem:40s} nao={mol.nao:4d}  E = {e:.10f}")
+
+
+if __name__ == "__main__":
+    main()

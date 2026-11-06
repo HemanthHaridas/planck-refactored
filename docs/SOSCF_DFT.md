@@ -59,7 +59,7 @@ one-time warning and fall back to plain DIIS.
   branches call: `build_ks_orbital_hessian_op` (RKS) and
   `build_uks_orbital_hessian_op` (UKS). The UKS one is also the operator
   `stability_check` diagonalizes in `planck-dft` (`analyze_uks_stability`,
-  `docs/KS_STABILITY_SCOPE.md`), so a change to it moves both
+  `docs/KS_STABILITY.md`), so a change to it moves both
 - `src/dft/analytic_hessian.{h,cpp}` — `orbital_energy_difference_diagonal`,
   `RKSXCKernel` / `UKSXCKernel` (the XC kernel prepared once per operator),
   and the `compute_analytic_xc_hessian_vector_product{,_polarized}`

@@ -1754,8 +1754,8 @@
    ]
   },
   {
-   "id": "water_dft_hse06_gradient_symm_ultrafine_fd",
-   "input": "tests/inputs/regression/dft/water_dft_hse06_gradient_symm_ultrafine.hfinp",
+   "id": "water_dft_camb3lyp_gradient_symm_ultrafine_fd",
+   "input": "tests/inputs/regression/dft/water_dft_camb3lyp_gradient_symm_ultrafine.hfinp",
    "executable": "tests/dft_gradient_fd.py",
    "tags": [
     "extended"
@@ -7000,19 +7000,173 @@
    "_pyscf_reference": "docs/DEF2_ECP_SCOPE.md step 4b. tests/pyscf/def2_ecp_references.py --fcidump <file>: the FCIDUMP's reference determinant and an RHF solved on it both equal PySCF's ECP RHF energy to 2e-12; PySCF HOMO -0.384222. The HOMO line gates the MO printout's electron count (Z - n_core, was sum Z)."
   },
   {
-   "id": "hi_rks_def2svp_ecp_rejected",
-   "input": "tests/inputs/regression/dft/hi_rks_def2svp_ecp_rejected.hfinp",
+   "id": "hi_rks_pbe_def2svp_ecp",
+   "input": "tests/inputs/regression/dft/hi_rks_pbe_def2svp_ecp.hfinp",
    "executable": "planck-dft",
    "tags": [
     "smoke",
+    "core",
+    "dft",
     "def2",
     "ecp"
    ],
-   "expected_exit_code": 1,
+   "_pyscf_reference": "tests/pyscf/def2_ecp_dft_references.py (PySCF 2.13.0, cart=False, basis and ECP from Planck's GBS, 150 x 590 unpruned): E -298.2788754666; Planck matches every printed digit.",
+   "expected_exit_code": 0,
    "contains": [
-    "ECP basis sets are not supported in planck-dft yet"
+    "DFT Energy :"
    ],
-   "_note": "Boundary marker, docs/DEF2_ECP_SCOPE.md step 6: planck-dft refuses an ECP basis until DFT with ECPs is validated against PySCF."
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -298.2788754666,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "auh_h2o_rks_b3lyp_def2svp_ecp_gradient",
+   "input": "tests/inputs/regression/dft/auh_h2o_rks_b3lyp_def2svp_ecp_gradient.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "def2",
+    "ecp",
+    "gradient"
+   ],
+   "_pyscf_reference": "tests/pyscf/def2_ecp_dft_references.py (PySCF 2.13.0, cart=False, basis and ECP from Planck's GBS, 150 x 590 unpruned): E -212.7277364439. Gradient from PySCF with its grid-response radius lookup corrected for ECP atoms (docs/PYSCF_ECP_GRID_RESPONSE_SCOPE.md); stock PySCF is 1.1e-5 Ha/Bohr off its own energy FD. Planck agrees with the corrected PySCF to 2.4e-10 and with its own fourth-order energy FD to 1.6e-8 on all 15 components.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -212.7277364439,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.004384254344,
+       -0.00139363954,
+       0.005985537844
+      ],
+      [
+       0.008195912048,
+       0.00237270481,
+       -0.016587874332
+      ],
+      [
+       -0.021456173943,
+       0.00940883025,
+       0.004448081102
+      ],
+      [
+       0.003391911481,
+       -0.003198879193,
+       0.000896056789
+      ],
+      [
+       0.00548409607,
+       -0.007189016327,
+       0.005258198596
+      ]
+     ],
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "hi_cation_uks_pbe_def2svp_ecp_stability",
+   "input": "tests/inputs/regression/dft/hi_cation_uks_pbe_def2svp_ecp_stability.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "def2",
+    "ecp",
+    "open_shell"
+   ],
+   "_pyscf_reference": "tests/pyscf/def2_ecp_dft_references.py (PySCF 2.13.0, cart=False, basis and ECP from Planck's GBS, 150 x 590 unpruned): E -297.8923504804, gen_g_hop_uhf lowest eigenvalue -1.4e-8 (the zero mode of the degenerate pi hole); Planck +2.3e-9 [stable]. tol_density 1e-6 in both codes: the hole's pi_x/pi_y mix is free, so a tight density tolerance cannot be met.",
+   "expected_exit_code": 0,
+   "contains": [
+    "UKS -> UKS (spin-conserving, internal)"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -297.8923504804,
+     "atol": 1e-08
+    },
+    {
+     "type": "metric_le",
+     "metric": "stability_uks_internal",
+     "value": 1e-06
+    },
+    {
+     "type": "metric_ge",
+     "metric": "stability_uks_internal",
+     "value": -1e-06
+    }
+   ]
+  },
+  {
+   "id": "hi_rks_b3lyp_def2svp_ecp_tddft",
+   "input": "tests/inputs/regression/dft/hi_rks_b3lyp_def2svp_ecp_tddft.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "def2",
+    "ecp",
+    "tddft"
+   ],
+   "_pyscf_reference": "tests/pyscf/def2_ecp_dft_references.py (PySCF 2.13.0, cart=False, basis and ECP from Planck's GBS, 150 x 590 unpruned): E -298.3926813623; Casida roots 5.4741456 (x2, Pi) / 10.7665928 / 13.0840862 eV, f 0.000012 / 0.000012 / 0.782558 / 0.349500. Planck matches every printed digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -298.3926813623,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 5.4741456,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 5.4741456,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 10.7665928,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 13.0840862,
+     "atol": 1e-05
+    }
+   ]
   }
  ]
 }

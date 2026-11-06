@@ -1,4 +1,4 @@
-# KS stability gate (docs/KS_STABILITY_SCOPE.md S2): H2/STO-3G at 2.5 A, RKS b3lyp from hcore, is RKS -> UKS (triplet) unstable; the follow promotes to UKS and reaches the broken-symmetry minimum.
+# KS stability gate (docs/KS_STABILITY.md S2): H2/STO-3G at 2.5 A, RKS b3lyp from hcore, is RKS -> UKS (triplet) unstable; the follow promotes to UKS and reaches the broken-symmetry minimum.
 %begin_control
     basis       sto-3g
     calculation energy

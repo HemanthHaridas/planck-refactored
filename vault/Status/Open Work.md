@@ -54,11 +54,11 @@ truth for what remains.
     λ_min = −0.069 and re-converges to −75.6490088941. KS has no stability
     analysis, so the UKS run has no way to notice.
   - Remedy chosen: Kohn-Sham stability analysis and follow
-    (`docs/KS_STABILITY_SCOPE.md`). UKS, RKS (both channels) and R0 (the HF
-    RHF → UHF channel) landed; see Completion. What remains is tracked in the
-    scopes it depends on: spherical KS stability landed 2026-11-06 with
-    `SPHERICAL_DFT.md` step 4; KS stability with ECPs waits only on
-    `DEF2_ECP_SCOPE.md` step 6; the HF-side ECP gates landed
+    (`docs/KS_STABILITY.md`). UKS, RKS (both channels) and R0 (the HF
+    RHF → UHF channel) landed; see Completion. Spherical KS stability
+    (`SPHERICAL_DFT.md` step 4) and KS stability with ECPs
+    (`DEF2_ECP_SCOPE.md` step 6) landed 2026-11-06, so KS stability is
+    complete; the HF-side ECP gates landed
     2026-11-06 (`hi_cation_uhf_def2svp_ecp_stability`,
     `hi_rmp2_def2svp_ecp`; spherical HF gates in S0.6); HI CCSD (8.5e-8
     off PySCF) stays unpinned in `DEF2_ECP_SCOPE.md`. Only HSE06/cc-pVTZ traps among the
@@ -76,8 +76,9 @@ truth for what remains.
   carry 2.796e-8 Eh, the whole FD error; removing them leaves 4.4e-8 Ha/Bohr
   of ordinary step error (`tests/pyscf/hse06_s_scaling_jump.py`). Planck's
   energy and analytic gradient match PySCF to ≤ 1.2e-10, and PySCF reproduces
-  the FD miss to 1e-12. `water_dft_hse06_gradient_symm_ultrafine_fd` passes
-  because none of its points happen to cross. Upstream kept the jump on
+  the FD miss to 1e-12. `water_dft_hse06_gradient_symm_ultrafine_fd` passed
+  only because none of its points happened to cross; it is now the CAM-B3LYP
+  `water_dft_camb3lyp_gradient_symm_ultrafine_fd`. Upstream kept the jump on
   purpose (libxc `173000399`, 2020, "follow the old convention"), and it
   affects every `GGA_X_WPBEH`-based hybrid. Fix scoped in
   `docs/WPBEH_S_SCALING_SCOPE.md`: gate around it now (PySCF comparisons,
@@ -95,7 +96,14 @@ is the recommended one; none blocks another except where noted.
 - **Spherical basis in `planck-dft` — DONE 2026-11-06** (`docs/SPHERICAL_DFT.md`;
   see Completion). Every DFT workflow runs spherical except PCM and
   double-hybrid gradients, which are refused by name. ECP DFT
-  (`DEF2_ECP_SCOPE.md` step 6) is now unblocked for every supported workflow.
+  (`DEF2_ECP_SCOPE.md` step 6) landed 2026-11-06 as well (see Completion).
+- **PySCF's DFT gradient is wrong on ECP atoms; report upstream once the
+  research lands** (`docs/PYSCF_ECP_GRID_RESPONSE_SCOPE.md`, found
+  2026-11-06). `grad/rks.py` `grids_response_becke` looks Bragg radii up by
+  `mol.atom_charges()` (Z − n_core) while the energy's partition uses the
+  proton number: AuH·H₂O B3LYP 1.1e-5 Ha/Bohr off PySCF's own energy FD,
+  2.4e-10 from Planck once corrected. Still on master and hotfix; no issue or
+  PR. Planck's reference script patches it at runtime meanwhile.
 - **D3 dispersion** (`docs/DISPERSION_D3_SCOPE.md`). None in `src/`. A
   geometry-only energy and gradient beside nuclear repulsion. Licence
   checked 2026-10-26: simple-dftd3 is LGPL-3.0-or-later. Planck ships source

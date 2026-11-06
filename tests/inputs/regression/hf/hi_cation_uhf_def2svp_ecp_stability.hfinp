@@ -1,4 +1,4 @@
-# def2 ECP stability gate (docs/KS_STABILITY_SCOPE.md): HI+ doublet UHF, iodine 28-electron ECP.
+# def2 ECP stability gate (docs/KS_STABILITY.md): HI+ doublet UHF, iodine 28-electron ECP.
 # lambda_min is the zero mode of the degenerate Pi hole, so the check must report stable.
 # Electron counts once ignored the ECP core: lambda came out -0.1865 [UNSTABLE] and the follow raised E by 0.14 Eh.
 %begin_control
