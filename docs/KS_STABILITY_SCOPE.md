@@ -1,6 +1,6 @@
 # Can `planck-dft` detect, and leave, an unstable Kohn-Sham solution?
 
-**Yes, for RKS and UKS in the Cartesian basis.** `stability_check` reports the
+**Yes, for RKS and UKS, in the Cartesian and spherical bases.** `stability_check` reports the
 lowest orbital-Hessian eigenvalue of each channel:
 
 - UKS: UKS → UKS.
@@ -11,8 +11,9 @@ A triplet instability promotes the run to UKS. Eigenvalues match PySCF to the
 grid floor (≤ 2e-5) on every case below, and the follows land on PySCF's
 lower state.
 
-Open: the spherical basis, which is step 4 of `docs/SPHERICAL_DFT_SCOPE.md`,
-and through it KS stability with ECPs (`docs/DEF2_ECP_SCOPE.md` step 6).
+Spherical landed as step 4 of `docs/SPHERICAL_DFT_SCOPE.md` (λ ≤ 1.2e-7
+from PySCF `cart=False`, follow to every digit). Open: KS stability with
+ECPs, which waits on `docs/DEF2_ECP_SCOPE.md` step 6.
 The HF-side fixes are gated. Status:
 `vault/Status/Open Work.md`.
 
@@ -190,9 +191,9 @@ The rest of this work lives in the two scopes it depends on:
 
 | item | where | depends on |
 |---|---|---|
-| **Spherical KS stability.** Lift the trial densities inside the two `ks_orbital_hessian.cpp` builders, which SOSCF shares. Drop the `validate_spherical_support` refusal. Gates on `water_cation_uks_pbe_spherical_ccpvtz`, `h2o2_cation_uks_pbe_spherical_631gd`, `water_rks_b3lyp_spherical_ccpvtz` vs PySCF `cart=False` | `SPHERICAL_DFT_SCOPE.md` step 4 (with SOSCF) | spherical DFT step 1 (landed) |
-| **KS stability with ECPs.** No new code: the ECP enters through H_core. Gate: HI⁺ UKS def2-SVP vs PySCF | `DEF2_ECP_SCOPE.md` step 6 | spherical step 4 and ECP step 6 |
-Done since: the spherical HF gates, the `rhf_response.cpp` site (it was
+| **KS stability with ECPs.** No new code: the ECP enters through H_core. Gate: HI⁺ UKS def2-SVP vs PySCF | `DEF2_ECP_SCOPE.md` step 6 | ECP step 6 (spherical step 4 landed) |
+Done since: spherical KS stability and SOSCF (`SPHERICAL_DFT_SCOPE.md`
+step 4: the builders lift the MO coefficients, six gates), the spherical HF gates, the `rhf_response.cpp` site (it was
 live through RHF SOSCF; `SPHERICAL_DFT_SCOPE.md` S0.6), and the ECP gates
 `hi_cation_uhf_def2svp_ecp_stability` and `hi_rmp2_def2svp_ecp`. HI CCSD
 (8.5e-8 off PySCF) stays unpinned in `DEF2_ECP_SCOPE.md`.

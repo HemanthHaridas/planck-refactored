@@ -85,8 +85,8 @@ literal was also corrected, see Findings).
    gate. The DFT gradient calls `one_electron_gradient`, so it inherits the
    ECP term. Same PySCF gates in `planck-dft`.
    - KS stability follows with no ECP-specific code: the ECP enters only
-     through H_core, and so through the orbital energies. It also needs
-     spherical KS stability (`SPHERICAL_DFT_SCOPE.md` step 4).
+     through H_core, and so through the orbital energies. Spherical KS
+     stability landed (`SPHERICAL_DFT_SCOPE.md` step 4, 2026-11-06).
    - Gate once both land: HI⁺ UKS stability with def2-SVP against PySCF
      `gen_g_hop_uhf`.
 2. **Smaller open items:**

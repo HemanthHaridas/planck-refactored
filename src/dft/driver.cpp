@@ -2116,6 +2116,7 @@ namespace DFT::Driver
                         // diag + s*(J + xc + K) with s = 2 for RKS
                         // (docs/SOSCF_DFT.md invariant 2/3).
                         DFT::Driver::KsOrbitalHessianInputs h_in;
+                        h_in.basis = &calculator._shells;
                         h_in.shell_pairs = &prepared.shell_pairs;
                         h_in.molecular_grid = &prepared.molecular_grid;
                         h_in.ao_grid = &prepared.ao_grid;
@@ -2136,7 +2137,10 @@ namespace DFT::Driver
                             xc_grid->short_range_exchange_coefficient;
                         h_in.range_separation_omega = xc_grid->range_separation_omega;
                         h_in.kernel_scale = 2.0; // RKS
-                        const auto h_op = DFT::Driver::build_ks_orbital_hessian_op(h_in);
+                        auto h_op_res = DFT::Driver::build_ks_orbital_hessian_op(h_in);
+                        if (!h_op_res)
+                            return std::unexpected("DFT RKS SOSCF: " + h_op_res.error());
+                        const auto &h_op = *h_op_res;
                         const auto g_op = [&g]() -> Eigen::VectorXd
                         { return g; };
 
@@ -2660,6 +2664,7 @@ namespace DFT::Driver
                             g(nova + a * n_beta_i + i) = Fb_mo(n_beta_i + a, i);
 
                     DFT::Driver::UksOrbitalHessianInputs h_in;
+                    h_in.basis = &calculator._shells;
                     h_in.shell_pairs = &prepared.shell_pairs;
                     h_in.molecular_grid = &prepared.molecular_grid;
                     h_in.ao_grid = &prepared.ao_grid;
@@ -3050,11 +3055,6 @@ namespace DFT::Driver
                 return refuse("PCM solvation");
             if (wants_checkpoint_restart(calculator))
                 return refuse("Checkpoint restart (guess density / full)");
-            if (calculator._scf._scf_soscf_diis_tol > 0.0 || calculator._scf._scf_soscf_start > 0 ||
-                calculator._scf._scf_soscf_auto_stall > 0)
-                return refuse("SOSCF");
-            if (calculator._scf._stability_check)
-                return refuse("Stability analysis");
             return {};
         }
 
@@ -3680,6 +3680,7 @@ namespace DFT::Driver
                 return std::unexpected("UKS stability: XC evaluation failed: " + xc_grid.error());
 
             DFT::Driver::UksOrbitalHessianInputs h_in;
+            h_in.basis = &calculator._shells;
             h_in.shell_pairs = &prepared.shell_pairs;
             h_in.molecular_grid = &prepared.molecular_grid;
             h_in.ao_grid = &prepared.ao_grid;
@@ -3759,6 +3760,7 @@ namespace DFT::Driver
                                        (x_pol ? c_pol.error() : x_pol.error()));
 
             DFT::Driver::UksOrbitalHessianInputs h_in;
+            h_in.basis = &calculator._shells;
             h_in.shell_pairs = &prepared.shell_pairs;
             h_in.molecular_grid = &prepared.molecular_grid;
             h_in.ao_grid = &prepared.ao_grid;

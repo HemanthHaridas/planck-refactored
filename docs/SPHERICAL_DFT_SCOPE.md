@@ -1,8 +1,8 @@
 # Can `planck-dft` run in a spherical-harmonic basis?
 
-Research scope, opened 2026-10-26. The shared prerequisites (S0.1–S0.5) and
-step 1 (RKS/UKS single points) have landed; steps 2–6 are open, so this is
-still a scope. Rewrite it as the
+Research scope, opened 2026-10-26. The shared prerequisites (S0.1–S0.6),
+step 1 (RKS/UKS single points) and step 4 (SOSCF and KS stability) have
+landed; steps 2, 3, 5 and 6 are open, so this is still a scope. Rewrite it as the
 answer when they land. Status lives in `vault/Status/Open Work.md`.
 
 ## Why it matters
@@ -55,8 +55,7 @@ What `planck-dft` can rely on now:
 
 | site (`src/dft/driver.cpp`) | today | needed |
 |---|---|---|
-| `validate_spherical_support` | admits SinglePoint only; refuses DH, PCM, checkpoint restart, SOSCF and stability analysis by name | widen per step |
-| orbital-Hessian builders (`src/dft/ks_orbital_hessian.cpp`) — used by the SOSCF window *and* by `stability_check` (`analyze_{rks,uks}_stability`) | trial δP into the analytic XC Hessian and direct J/K response | the helper pair around each linear-in-density build, inside the two builders, so both callers get it |
+| `validate_spherical_support` | admits SinglePoint, SOSCF and stability analysis; refuses other workflows, DH, PCM and checkpoint restart by name | widen per step |
 | checkpoint restart (`load_ks_restart_state`, `project_ks_restart_density`) | refused in spherical | the cross-basis projection needs the spherical overlaps, as HF's does |
 | XC nuclear gradient (`compute_analytic_ks_gradient`) | stored densities to `compute_xc_nuclear_gradient_{rks,uks}` | `to_cartesian` |
 | TDDFT (`run_linear_response`) | `n_virt = nbasis − n_occ` | `n_virt` from `mo_coefficients.cols()`; tensor from `ensure_eri` |
@@ -69,6 +68,16 @@ check against the AO grid's dimension and stay Cartesian. They need no edit
 once their inputs arrive lifted, and their dimension checks turn a missed lift
 into an error. **Audit rule:** a site that sizes a grid or integral object
 stays Cartesian; a site that sizes an SCF object becomes `working_nbasis()`.
+
+**Remaining, in order:** step 2 (gradients, geomopt, frequencies: the XC
+nuclear-gradient lift), step 3 (TDDFT: `n_virt` from `mo_coefficients.cols()`,
+tensor from `ensure_eri`), step 5 (DH single points), then checkpoint restart
+(the cross-basis projection needs spherical overlaps, as HF's does). Step 6
+(PCM) stays rejected. After step 2, `DEF2_ECP_SCOPE.md` step 6 can lift the
+ECP refusal for single points and gradients together. The SOSCF paths size
+`n_virt` from `working_nbasis()`, which is safe only because no
+linear-dependence removal exists; switch them to `mo_coefficients.cols()` if
+that ever lands.
 
 ### Steps
 
@@ -110,24 +119,48 @@ stays Cartesian; a site that sizes an SCF object becomes `working_nbasis()`.
 3. **TDDFT.** Gate: PySCF `cart=False` TDA and Casida, RKS singlet/triplet and
    UKS, B3LYP and HSE06, at the existing tolerances (4e-4 eV,
    `docs/RS_TDDFT.md`).
-4. **SOSCF and KS stability.** Both go through `build_ks_orbital_hessian_op`
-   and `build_uks_orbital_hessian_op`. The RKS stability check uses the UKS
-   one at the closed-shell reference (`docs/KS_STABILITY_SCOPE.md`).
-   - **Lift.** The builders take working-basis C. Lift each trial density with
-     `to_cartesian` before J/K/XC, and project the result with `to_working`.
-     Do this inside the builders, not at the callers.
-   - **Refusals.** Drop both SOSCF and stability from
+4. **SOSCF and KS stability — LANDED 2026-11-06.** Both go through
+   `build_ks_orbital_hessian_op` and `build_uks_orbital_hessian_op`
+   (`src/dft/ks_orbital_hessian.cpp`); the RKS stability check uses the UKS
+   one at the closed-shell reference.
+   - **Lift: the MO coefficients, not each trial density.** The builders take
+     a `basis` pointer and, when spherical, copy their inputs once with the
+     ground density lifted by `to_cartesian` and every MO block replaced by
+     Cᵀ C_mo. Then C_vᵀ x C_o in Cartesian *is* the lifted trial density, and
+     the packing (Cᵀ C_mo)ᵀ M_cart (Cᵀ C_mo) = C_moᵀ to_working(M_cart) C_mo,
+     so the operator bodies needed no change. MO row counts are checked
+     against the working basis. Both builders now return `expected` and own
+     their inputs (they used to capture them by reference).
+   - **Refusals** for SOSCF and stability are gone from
      `validate_spherical_support`.
-   - **SOSCF gate:** same energy as DIIS to 10 digits, RKS and UKS, as in
-     `docs/SOSCF_DFT.md`.
-   - **Stability gates:** spherical λ_min against PySCF `cart=False`
-     (`gen_g_hop_uhf`; `gen_g_hop_rhf`/2 and `rhf_external` for RKS), on
-     inputs already in the suite: `water_cation_uks_pbe_spherical_ccpvtz`,
-     `h2o2_cation_uks_pbe_spherical_631gd`, `water_rks_b3lyp_spherical_ccpvtz`.
-   - **Follow check:** a stretched-H₂ RKS → UKS follow in spherical cc-pVDZ
-     lands on PySCF `cart=False`'s broken-symmetry UKS energy.
-   - This step unblocks KS stability with ECPs: def2 is spherical, so that
-     also needs `DEF2_ECP_SCOPE.md` step 6.
+   - **Cartesian unchanged:** all ten DFT SOSCF / stability / follow cases
+     pass.
+   - **Stability vs PySCF `cart=False`** (Planck's GBS and Bohr, 150 × 590
+     unpruned; `tests/pyscf/spherical_ks_stability_references.py`), all
+     ≤ 1.2e-7, the precision of the 1e-4 Davidson residual:
+
+     | case | channel | Planck | PySCF |
+     |---|---|---|---|
+     | water/cc-pVTZ RKS B3LYP | singlet / triplet | +0.2999874 / +0.2569170 | +0.2999875 / +0.2569171 |
+     | water⁺/cc-pVTZ UKS PBE | UKS → UKS | +0.06595028 | +0.0659503 |
+     | H₂O₂⁺/6-31G* UKS PBE | UKS → UKS | +0.08105482 | +0.0810548 |
+     | H₂ 2.5 Å cc-pVDZ RKS PBE | triplet | −0.09923338 | −0.0992334 |
+     | | after follow (UKS) | −0.9997290788 | −0.9997290788 |
+
+   - **SOSCF** (6-31G* H₂O₂ RKS B3LYP and H₂O₂⁺ UKS PBE, 3-step window):
+     energies equal the PySCF-pinned DIIS energies to 10 digits. The energy
+     alone is not the gate, since DIIS takes over after the window and would
+     converge with a wrong Hessian (the S0.6 HF defect hid that way). The
+     gradient is: RKS 9.8e-2 → 9.5e-3 → 5.9e-4, UKS 1.6e-1 → 1.5e-2 →
+     4.8e-3, against a Cartesian control of 1.4e-1 → 1.0e-2 → 8.8e-4 (RKS)
+     and a worse UKS one (trust cap fires, last |g| 5.0e-2).
+   - Cases: `water_rks_b3lyp_stability_spherical_ccpvtz`,
+     `water_cation_uks_pbe_stability_spherical_ccpvtz` (extended),
+     `h2o2_cation_uks_pbe_stability_spherical_631gd`,
+     `h2_rks_pbe_triplet_follow_spherical_ccpvdz`,
+     `h2o2_{rks_b3lyp,cation_uks_pbe}_soscf_spherical_631gd` (core). New runner
+     metric `stability_uks_internal`.
+   - KS stability with ECPs now waits only on `DEF2_ECP_SCOPE.md` step 6.
 5. **Double-hybrid single points.** Gate: PySCF `cart=False` B2PLYP. DH
    gradients stay rejected with a message naming the spherical basis.
 6. **PCM** stays rejected in spherical mode for both binaries; a separate
@@ -270,9 +303,10 @@ Gates, all four failing on the old code:
 | S0.3 | `eeb6eb34` | `to_cartesian` / `to_working`; seven copies folded |
 | S0.4 | `50cbc3b9` | RKS/UKS gradient lift |
 | S0.5 | `e565e4fd` | C normalized once at read; three copies deleted |
-| S0.6 | `100675e4`, — (working tree) | HF stability and RHF/UHF CPHF (SOSCF) in the working basis; four gates |
-| 1 | — (working tree) | spherical RKS/UKS single points; PySCF-gated |
-| 2–6 | — | gradients, TDDFT, SOSCF + KS stability, DH single points, PCM (open) |
+| S0.6 | `100675e4`, `8745c07a` | HF stability and RHF/UHF CPHF (SOSCF) in the working basis; four gates |
+| 1 | `8bc9c7c6` | spherical RKS/UKS single points; PySCF-gated |
+| 4 | — (working tree) | SOSCF and KS stability: MO-lifted orbital-Hessian builders; six gates |
+| 2, 3, 5, 6 | — | gradients, TDDFT, DH single points, PCM (open) |
 
 ## Not in this scope
 
@@ -282,5 +316,6 @@ a spherical basis; RI-J/K for DFT.
 ## Depends on / enables
 
 Nothing blocks it. It enables def2 DFT and ECP DFT
-(`docs/DEF2_ECP_SCOPE.md` step 6). Step 4 also enables spherical KS stability
-(`docs/KS_STABILITY_SCOPE.md`), and with step 6 KS stability on ECP bases.
+(`docs/DEF2_ECP_SCOPE.md` step 6). Step 4 (landed) gave spherical KS
+stability (`docs/KS_STABILITY_SCOPE.md`); with ECP step 6 that covers ECP
+bases too.

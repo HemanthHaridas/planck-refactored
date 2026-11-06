@@ -4918,6 +4918,211 @@
    "_pyscf_reference": "PySCF 2.13.0 UKS PBE cart=False, C1 H2O2 cation doublet, 150 radial x 590 Lebedev, unpruned (grid_radial_points / grid_angular_points; PySCF atom_grid=(150,590), prune=None): Planck - PySCF 2.1e-12 (cart=True 2.1e-12)."
   },
   {
+   "id": "water_rks_b3lyp_stability_spherical_ccpvtz",
+   "input": "tests/inputs/regression/spherical/water_rks_b3lyp_stability_spherical_ccpvtz.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "spherical"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_ks_stability_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned): E -76.4537170708, singlet gen_g_hop_rhf/2 +0.2999875, triplet rhf_external +0.2569171. Planck +0.2999874 / +0.2569170.",
+   "expected_exit_code": 0,
+   "contains": [
+    "RKS -> RKS (real, internal)",
+    "RKS -> UKS (triplet, external)"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4537170708,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_internal",
+     "expected": 0.2999875,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_triplet",
+     "expected": 0.2569171,
+     "atol": 1e-06
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_pbe_stability_spherical_ccpvtz",
+   "input": "tests/inputs/regression/spherical/water_cation_uks_pbe_stability_spherical_ccpvtz.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "spherical",
+    "open_shell"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_ks_stability_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned): E -75.8961252144, gen_g_hop_uhf +0.0659503. Planck +0.06595028.",
+   "expected_exit_code": 0,
+   "contains": [
+    "UKS -> UKS (spin-conserving, internal)"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.8961252144,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_uks_internal",
+     "expected": 0.0659503,
+     "atol": 1e-06
+    }
+   ]
+  },
+  {
+   "id": "h2o2_cation_uks_pbe_stability_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_cation_uks_pbe_stability_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "open_shell"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_ks_stability_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned): E -150.9912749866, gen_g_hop_uhf +0.0810548. Planck +0.08105482.",
+   "expected_exit_code": 0,
+   "contains": [
+    "UKS -> UKS (spin-conserving, internal)"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -150.9912749866,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_uks_internal",
+     "expected": 0.0810548,
+     "atol": 1e-06
+    }
+   ]
+  },
+  {
+   "id": "h2_rks_pbe_triplet_follow_spherical_ccpvdz",
+   "input": "tests/inputs/regression/spherical/h2_rks_pbe_triplet_follow_spherical_ccpvdz.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_ks_stability_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned): RKS -0.9582355548, triplet rhf_external -0.0992334; broken-symmetry UKS from a +-45 deg HOMO/LUMO guess -0.9997290788 (<S^2> 0.948). Planck triplet -0.09923338, follow -0.9997290788.",
+   "expected_exit_code": 0,
+   "contains": [
+    "RKS -> UKS (triplet, external)",
+    "Following RHF→UHF triplet instability",
+    "UKS -> UKS (spin-conserving, internal)"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_triplet",
+     "expected": -0.0992334,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -0.9997290788,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rks_b3lyp_soscf_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_rks_b3lyp_soscf_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical"
+   ],
+   "_pyscf_reference": "Same energy as the DIIS case h2o2_rks_b3lyp_spherical_631gd (PySCF cart=False -151.5284586353). Gradient over the 3-step window 9.8e-2 -> 9.5e-3 -> 5.9e-4; the Cartesian control decays at the same rate (1.4e-1 -> 1.0e-2 -> 8.8e-4). The energy alone cannot gate this: DIIS takes over after the window and would converge with a wrong Hessian.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT SOSCF :",
+    "DFT Energy :"
+   ],
+   "not_contains": [
+    "requested but disabled"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -151.5284586353,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_le",
+     "metric": "dft_soscf_last_gradient",
+     "value": 0.001
+    }
+   ]
+  },
+  {
+   "id": "h2o2_cation_uks_pbe_soscf_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_cation_uks_pbe_soscf_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "open_shell"
+   ],
+   "_pyscf_reference": "Same energy as the DIIS case h2o2_cation_uks_pbe_spherical_631gd (PySCF cart=False -150.9912749866). Gradient 1.6e-1 -> 1.5e-2 -> 4.8e-3; the Cartesian control is worse on this system (trust cap fires, last |g| 5.0e-2), so the slow last step is the system's, not the lift's.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT UKS SOSCF :",
+    "DFT Energy :"
+   ],
+   "not_contains": [
+    "requested but disabled"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -150.9912749866,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_le",
+     "metric": "dft_soscf_last_gradient",
+     "value": 0.01
+    }
+   ]
+  },
+  {
    "id": "water_rks_b3lyp_spherical_631g_exact",
    "input": "tests/inputs/regression/spherical/water_rks_b3lyp_spherical_631g_exact.hfinp",
    "executable": "planck-dft",

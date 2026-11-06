@@ -2,17 +2,51 @@
 #include "analytic_hessian.h"
 #include "response_packing.h"
 #include "integrals/base.h"
+#include "basis/spherical.h"
 
 namespace DFT::Driver
 {
-    std::function<Eigen::VectorXd(const Eigen::VectorXd &)>
-    build_ks_orbital_hessian_op(const KsOrbitalHessianInputs &in)
+    namespace
     {
+        bool spherical(const HartreeFock::Basis *basis) { return basis && basis->_spherical; }
+
+        // MO coefficients working -> Cartesian: C^T C_mo (see the header).
+        Eigen::MatrixXd cartesian_mos(const HartreeFock::Basis &basis, const Eigen::MatrixXd &C_mo)
+        {
+            return basis._cart_to_sph.transpose() * C_mo;
+        }
+
+        std::expected<void, std::string> check_mo_rows(const HartreeFock::Basis &basis,
+                                                       std::initializer_list<const Eigen::MatrixXd *> mos)
+        {
+            for (const Eigen::MatrixXd *C : mos)
+                if (C->rows() != basis._cart_to_sph.rows())
+                    return std::unexpected("orbital Hessian: MO coefficients are not in the working basis");
+            return {};
+        }
+    }
+
+    std::expected<std::function<Eigen::VectorXd(const Eigen::VectorXd &)>, std::string>
+    build_ks_orbital_hessian_op(const KsOrbitalHessianInputs &in_working)
+    {
+        KsOrbitalHessianInputs in = in_working;
+        if (spherical(in.basis))
+        {
+            if (auto ok = check_mo_rows(*in.basis, {&in.C_occ, &in.C_virt}); !ok)
+                return std::unexpected(ok.error());
+            auto density = HartreeFock::BasisFunctions::to_cartesian(*in.basis, in.density);
+            if (!density)
+                return std::unexpected(density.error());
+            in.density = std::move(*density);
+            in.C_occ = cartesian_mos(*in.basis, in.C_occ);
+            in.C_virt = cartesian_mos(*in.basis, in.C_virt);
+        }
         const int nocc = static_cast<int>(in.C_occ.cols());
         const int nvirt = static_cast<int>(in.C_virt.cols());
         const std::size_t nb = static_cast<std::size_t>(in.density.rows());
         const Eigen::VectorXd diag = orbital_energy_difference_diagonal(in.eps, nocc);
-        return [&in, nocc, nvirt, nb, diag](const Eigen::VectorXd &x) -> Eigen::VectorXd
+        return std::function<Eigen::VectorXd(const Eigen::VectorXd &)>(
+            [in = std::move(in), nocc, nvirt, nb, diag](const Eigen::VectorXd &x) -> Eigen::VectorXd
         {
             Eigen::MatrixXd xm(nvirt, nocc);
             for (int a = 0; a < nvirt; ++a)
@@ -41,12 +75,26 @@ namespace DFT::Driver
                 pack_hessian_vector_product_cphf_order(dj, in.C_occ, in.C_virt) +
                 pack_hessian_vector_product_cphf_order(*dvxc, in.C_occ, in.C_virt) +
                 pack_hessian_vector_product_cphf_order(-0.5 * dk, in.C_occ, in.C_virt));
-        };
+        });
     }
 
     std::expected<std::function<Eigen::VectorXd(const Eigen::VectorXd &)>, std::string>
-    build_uks_orbital_hessian_op(const UksOrbitalHessianInputs &in)
+    build_uks_orbital_hessian_op(const UksOrbitalHessianInputs &in_working)
     {
+        UksOrbitalHessianInputs in = in_working;
+        if (spherical(in.basis))
+        {
+            if (auto ok = check_mo_rows(*in.basis, {&in.Ca_occ, &in.Ca_virt, &in.Cb_occ, &in.Cb_virt}); !ok)
+                return std::unexpected(ok.error());
+            auto pa = HartreeFock::BasisFunctions::to_cartesian(*in.basis, in.alpha_density);
+            auto pb = HartreeFock::BasisFunctions::to_cartesian(*in.basis, in.beta_density);
+            if (!pa || !pb)
+                return std::unexpected(pa ? pb.error() : pa.error());
+            in.alpha_density = std::move(*pa);
+            in.beta_density = std::move(*pb);
+            for (Eigen::MatrixXd *C : {&in.Ca_occ, &in.Ca_virt, &in.Cb_occ, &in.Cb_virt})
+                *C = cartesian_mos(*in.basis, *C);
+        }
         auto kernel = prepare_uks_xc_kernel(*in.molecular_grid, *in.ao_grid, in.alpha_density, in.beta_density,
                                             *in.x_functional, *in.c_functional);
         if (!kernel)
@@ -58,7 +106,7 @@ namespace DFT::Driver
         const Eigen::VectorXd diag_a = orbital_energy_difference_diagonal(in.eps_a, na);
         const Eigen::VectorXd diag_b = orbital_energy_difference_diagonal(in.eps_b, nb_occ);
         return std::function<Eigen::VectorXd(const Eigen::VectorXd &)>(
-            [&in, kernel = std::move(*kernel), na, nva, nb_occ, nvb, nova, novb, nb, diag_a,
+            [in = std::move(in), kernel = std::move(*kernel), na, nva, nb_occ, nvb, nova, novb, nb, diag_a,
              diag_b](const Eigen::VectorXd &x) -> Eigen::VectorXd
         {
             Eigen::MatrixXd xa(nva, na), xb(nvb, nb_occ);

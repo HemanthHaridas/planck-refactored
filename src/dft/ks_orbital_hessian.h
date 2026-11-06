@@ -13,10 +13,18 @@
 
 namespace DFT::Driver
 {
-    // Shared RKS SOSCF orbital Hessian; retained independently of the removed
-    // double-hybrid derivative path.
+    // Both builders take the density and MO coefficients in the SCF's working
+    // basis. When `basis` is spherical they lift them to Cartesian once (density
+    // C^T P C, MOs C^T C_mo), so every trial density, J/K/XC response and the
+    // MO packing run in the Cartesian integral/grid basis with no further
+    // transform: (C^T C_mo)^T M_cart (C^T C_mo) = C_mo^T to_working(M_cart) C_mo.
+    // `basis` null means Cartesian. The operators keep their own copy of the
+    // inputs; only the pointed-to objects must outlive them.
+
+    // Shared RKS SOSCF orbital Hessian.
     struct KsOrbitalHessianInputs
     {
+        const HartreeFock::Basis *basis = nullptr;
         const std::vector<HartreeFock::ShellPair> *shell_pairs = nullptr;
         const MolecularGrid *molecular_grid = nullptr;
         const AOGridEvaluation *ao_grid = nullptr;
@@ -33,7 +41,7 @@ namespace DFT::Driver
         double kernel_scale = 2.0;
     };
 
-    [[nodiscard]] std::function<Eigen::VectorXd(const Eigen::VectorXd &)>
+    [[nodiscard]] std::expected<std::function<Eigen::VectorXd(const Eigen::VectorXd &)>, std::string>
     build_ks_orbital_hessian_op(const KsOrbitalHessianInputs &in);
 
     // UKS spin-conserving orbital Hessian (A + B) acting on packed rotations
@@ -41,9 +49,10 @@ namespace DFT::Driver
     // differences plus J from the total trial density, the polarized XC kernel
     // and -(c_fr K + c_sr K_SR) per spin, with dP_s = C_v x_s C_o^T + transpose.
     // d2E/dkappa2 = 2 * this (docs/SOSCF_DFT.md). Shared by UKS SOSCF and
-    // UKS stability analysis. `in` must outlive the returned operator.
+    // UKS stability analysis.
     struct UksOrbitalHessianInputs
     {
+        const HartreeFock::Basis *basis = nullptr;
         const std::vector<HartreeFock::ShellPair> *shell_pairs = nullptr;
         const MolecularGrid *molecular_grid = nullptr;
         const AOGridEvaluation *ao_grid = nullptr;

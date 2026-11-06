@@ -437,6 +437,22 @@ historical design context, but they are no longer the source of truth for
   `water_{rhf,cation_uhf}_soscf_spherical_631gd` (PySCF `cart=False`), all
   failing on the old code.
 
+- **Spherical KS stability and SOSCF (2026-11-06,
+  `docs/SPHERICAL_DFT_SCOPE.md` step 4).** The two orbital-Hessian builders
+  (`src/dft/ks_orbital_hessian.cpp`), shared by SOSCF and stability, take a
+  `basis` pointer and lift the ground density and the MO coefficients
+  (Cᵀ C_mo) once; the trial densities and the MO packing are then exact in
+  Cartesian with no change to the operator bodies. The SOSCF and stability
+  refusals are gone. λ_min matches PySCF `cart=False` to ≤ 1.2e-7 on water
+  RKS B3LYP and water⁺ UKS PBE (cc-pVTZ) and H₂O₂⁺ UKS PBE (6-31G*); the
+  stretched-H₂ cc-pVDZ triplet follow lands on PySCF's broken-symmetry UKS
+  to every digit (−0.9997290788). SOSCF reaches the DIIS energy with the same
+  gradient decay as the Cartesian control. Cartesian SOSCF/stability cases
+  unchanged. Six cases (`*_stability_spherical_*`, `*_soscf_spherical_631gd`,
+  `h2_rks_pbe_triplet_follow_spherical_ccpvdz`) and runner metric
+  `stability_uks_internal`; references from
+  `tests/pyscf/spherical_ks_stability_references.py`.
+
 - **RKS stability analysis and following in `planck-dft` (2026-11-05,
   `docs/KS_STABILITY_SCOPE.md` S2).** Both RKS channels, `RKS -> RKS` (singlet)
   and `RKS -> UKS` (triplet), from one prepared UKS operator at the

@@ -56,9 +56,9 @@ truth for what remains.
   - Remedy chosen: Kohn-Sham stability analysis and follow
     (`docs/KS_STABILITY_SCOPE.md`). UKS, RKS (both channels) and R0 (the HF
     RHF → UHF channel) landed; see Completion. What remains is tracked in the
-    scopes it depends on: spherical KS stability is `SPHERICAL_DFT_SCOPE.md`
-    step 4 (with SOSCF, same builders); KS stability with ECPs follows from
-    that plus `DEF2_ECP_SCOPE.md` step 6; the HF-side ECP gates landed
+    scopes it depends on: spherical KS stability landed 2026-11-06 with
+    `SPHERICAL_DFT_SCOPE.md` step 4; KS stability with ECPs waits only on
+    `DEF2_ECP_SCOPE.md` step 6; the HF-side ECP gates landed
     2026-11-06 (`hi_cation_uhf_def2svp_ecp_stability`,
     `hi_rmp2_def2svp_ecp`; spherical HF gates in S0.6); HI CCSD (8.5e-8
     off PySCF) stays unpinned in `DEF2_ECP_SCOPE.md`. Only HSE06/cc-pVTZ traps among the
@@ -77,8 +77,10 @@ is the recommended one; none blocks another except where noted.
   boundary goes on ~10 `driver.cpp` call sites (the other 30 `nbasis()` sites
   in `src/dft/` check against the AO grid and need no edit). First shared fixes
   Step 1 (spherical RKS/UKS single points, PySCF-gated to ≤2.5e-12 at
-  matched grids) landed 2026-11-04; gradients, TDDFT, SOSCF + KS stability (one lift in `ks_orbital_hessian.cpp`) and DH single
-  points are next. (S0): the HF spherical ESP defect (S0.1, fixed) and `ensure_eri` crashing its callers
+  matched grids) landed 2026-11-04; step 4 (SOSCF + KS stability, the
+  orbital-Hessian builders lift the MO coefficients) landed 2026-11-06.
+  Next, in order: step 2 gradients/geomopt/freq (XC nuclear-gradient lift),
+  step 3 TDDFT, step 5 DH single points, checkpoint restart. (S0): the HF spherical ESP defect (S0.1, fixed) and `ensure_eri` crashing its callers
   in spherical mode after a direct SCF (S0.2, fixed; both in Completion); public `to_cartesian`/`to_working` helpers replacing seven
   hand-written copies (S0.3, landed); `compute_rks/uks_gradient` not lifting P and W (S0.4, landed); and S0.5, C renormalized once in `read_gbs_basis` instead of three per-geometry copies (landed; the per-geometry premise was false). Then
   single points, gradients, TDDFT, SOSCF, DH single points; PCM and DH

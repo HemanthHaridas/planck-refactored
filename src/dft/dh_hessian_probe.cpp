@@ -112,10 +112,12 @@ namespace DFT::Driver
             return total;
         };
 
-        // Keep shared_inputs alive: the original shared operator captures it by reference.
         // Decompose that convention separately, including its ov projection, to
         // distinguish density factors and packing from the iterative solver.
-        const auto shared_op = build_ks_orbital_hessian_op(shared_inputs);
+        auto shared_op_res = build_ks_orbital_hessian_op(shared_inputs);
+        if (!shared_op_res)
+            return std::unexpected(shared_op_res.error());
+        const auto &shared_op = *shared_op_res;
         const auto shared_channels = [&](const Eigen::VectorXd &x) -> std::expected<Channels, std::string>
         {
             const Eigen::MatrixXd raw = cv * unpack(x, no, nv) * co.transpose();
