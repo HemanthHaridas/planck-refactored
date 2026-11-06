@@ -1,4 +1,4 @@
-# Spherical DFT step 4 gate (docs/SPHERICAL_DFT_SCOPE.md): SOSCF in a spherical basis must reach
+# Spherical DFT step 4 gate (docs/SPHERICAL_DFT.md): SOSCF in a spherical basis must reach
 # the DIIS energy of h2o2_rks_b3lyp_spherical_631gd (PySCF cart=False) with superlinear gradient decay.
 %begin_control
     basis       6-31g*

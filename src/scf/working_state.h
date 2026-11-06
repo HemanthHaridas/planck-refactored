@@ -7,6 +7,7 @@
 
 #include "base/types.h"
 #include "integrals/shellpair.h"
+#include "io/checkpoint.h"
 
 namespace HartreeFock
 {
@@ -47,6 +48,18 @@ namespace HartreeFock
         // S, T, V (+ ECP) brought to the working basis as _overlap, _hcore.
         std::expected<void, std::string> compute_working_one_electron(
             HartreeFock::Calculator &calc, const std::vector<HartreeFock::ShellPair> &shellpairs);
+
+        // Cross-basis checkpoint restart: project the occupied orbitals stored in
+        // `mos` (another basis) onto the current working basis and store them as
+        // the guess density (RHF: total in alpha; UHF/ROHF: alpha and beta).
+        // Expects calc._overlap to hold the current working overlap
+        // (compute_working_one_electron). The cross overlap is built in the
+        // working basis on both sides, so spherical restarts are exact.
+        // Refuses (returns the reason) when the ECP cores differ, or in a
+        // spherical basis when the checkpoint is not spherical; the caller then
+        // falls back to its default guess. Shared by hartree-fock and planck-dft.
+        std::expected<void, std::string> project_checkpoint_density(
+            HartreeFock::Calculator &calc, const HartreeFock::Checkpoint::MOData &mos);
     } // namespace SCF
 } // namespace HartreeFock
 

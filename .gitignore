@@ -57,6 +57,7 @@ CODE_REVIEW.md
 # Already-tracked baseline checkpoints (e.g. water_rhf_pcm_water_sto3g.hfchk)
 # are unaffected because git skips ignore-rules for tracked files.
 tests/inputs/**/*.hfchk
+tests/inputs/**/*.dftchk
 tests/inputs/**/*.uvvis.dat
 tests/inputs/**/*.fcidump
 tests/benchmarks/**/*.hfchk
@@ -65,6 +66,7 @@ tests/benchmarks/**/*.uvvis.dat
 *.log
 tests/*/__pycache__
 *.hfchk
+*.dftchk
 *.fcidump
 *.ccamp
 __pycache__

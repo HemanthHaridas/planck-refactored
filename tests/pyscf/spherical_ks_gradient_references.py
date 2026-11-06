@@ -1,4 +1,4 @@
-"""PySCF references for spherical KS gradients (docs/SPHERICAL_DFT_SCOPE.md step 2).
+"""PySCF references for spherical KS gradients (docs/SPHERICAL_DFT.md step 2).
 
 Analytic RKS/UKS gradients, cart=False, Planck's own GBS, its CODATA 2018 Bohr
 and its unpruned 150 x 590 grid. grid_response=True because Planck's gradient

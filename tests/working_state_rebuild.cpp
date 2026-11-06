@@ -15,7 +15,7 @@
 //      This is the property the geomopt inner loop relies on when the basis
 //      object happens to be reused unchanged across a step.
 //   4. read_gbs_basis normalizes C at read time from the closed-form
-//      same-centre overlap (docs/SPHERICAL_DFT_SCOPE.md S0.5): it must match
+//      same-centre overlap (docs/SPHERICAL_DFT.md S0.5): it must match
 //      the S_cart-based normalization, s through h (cc-pV5Z), and the C read
 //      at one geometry must give diag(C S Cᵀ) = 1 at another.
 

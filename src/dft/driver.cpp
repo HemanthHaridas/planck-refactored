@@ -562,8 +562,9 @@ namespace DFT::Driver
                 return std::unexpected("DFT basis setup failed: " + basis_res.error());
             calculator._shells = std::move(*basis_res);
             calculator.sync_ecp_core_electrons();
-            // ponytail: ECP DFT waits for spherical DFT (docs/DEF2_ECP_SCOPE.md
-            // step 6); H_core already carries the ECP, so lifting this is the gate.
+            // ponytail: ECP DFT is unblocked (spherical DFT is done) but ungated
+            // (docs/DEF2_ECP_SCOPE.md step 6); H_core already carries the ECP, so
+            // lifting this plus PySCF gates is the work.
             if (!calculator._shells._ecps.empty())
                 return std::unexpected("ECP basis sets are not supported in planck-dft yet "
                                        "(docs/DEF2_ECP_SCOPE.md step 6)");
@@ -717,68 +718,8 @@ namespace DFT::Driver
 
             if (auto one_e = HartreeFock::SCF::compute_working_one_electron(calculator, shell_pairs); !one_e)
                 return std::unexpected("Current-basis 1e integral build failed before density projection: " + one_e.error());
-
-            const std::string small_gbs =
-                calculator._basis._basis_path + "/" + mos->basis_name;
-            auto small_shells = HartreeFock::BasisFunctions::read_gbs_basis(
-                small_gbs,
-                calculator._molecule,
-                calculator._basis._basis);
-            if (!small_shells)
-                return std::unexpected(small_shells.error());
-
-            auto orthogonalizer = HartreeFock::SCF::build_orthogonalizer(calculator._overlap);
-            if (!orthogonalizer)
-                return std::unexpected("Orthogonalizer failed before density projection: " + orthogonalizer.error());
-
-            const Eigen::MatrixXd cross_overlap =
-                HartreeFock::ObaraSaika::_compute_cross_overlap(
-                    calculator._shells,
-                    *small_shells);
-
-            int n_electrons = calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
-
-            const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
-            const int n_alpha = (n_electrons + n_unpaired) / 2;
-            const int n_beta = (n_electrons - n_unpaired) / 2;
-            const bool current_unrestricted =
-                calculator._scf._scf == HartreeFock::SCFType::UHF;
-
-            if (mos->is_uhf)
-            {
-                calculator._info._scf.alpha.density =
-                    HartreeFock::Checkpoint::project_density(
-                        *orthogonalizer,
-                        cross_overlap,
-                        mos->C_alpha.leftCols(n_alpha),
-                        1.0);
-                calculator._info._scf.beta.density =
-                    HartreeFock::Checkpoint::project_density(
-                        *orthogonalizer,
-                        cross_overlap,
-                        mos->C_beta.leftCols(n_beta),
-                        1.0);
-            }
-            else
-            {
-                const double alpha_factor = current_unrestricted ? 1.0 : 2.0;
-                calculator._info._scf.alpha.density =
-                    HartreeFock::Checkpoint::project_density(
-                        *orthogonalizer,
-                        cross_overlap,
-                        mos->C_alpha.leftCols(n_alpha),
-                        alpha_factor);
-
-                if (current_unrestricted)
-                {
-                    calculator._info._scf.beta.density =
-                        HartreeFock::Checkpoint::project_density(
-                            *orthogonalizer,
-                            cross_overlap,
-                            mos->C_alpha.leftCols(n_beta),
-                            1.0);
-                }
-            }
+            if (auto projected = HartreeFock::SCF::project_checkpoint_density(calculator, *mos); !projected)
+                return std::unexpected(projected.error());
 
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Info,
@@ -3057,7 +2998,7 @@ namespace DFT::Driver
         }
 
         // Spherical (basis_type spherical) KS runs: what is wired and gated so far
-        // (docs/SPHERICAL_DFT_SCOPE.md). Everything else is refused by name.
+        // (docs/SPHERICAL_DFT.md). Everything else is refused by name.
         std::expected<void, std::string> validate_spherical_support(
             const HartreeFock::Calculator &calculator, const InitializedFunctionals &functionals)
         {
@@ -3066,17 +3007,17 @@ namespace DFT::Driver
             const auto refuse = [](const std::string &what) -> std::expected<void, std::string>
             {
                 return std::unexpected(what + " is not yet supported by planck-dft with basis_type spherical "
-                                              "(docs/SPHERICAL_DFT_SCOPE.md); spherical RKS/UKS single points, "
-                                              "gradients, geometry optimization and frequencies are. Use basis_type cartesian for this calculation.");
+                                              "(docs/SPHERICAL_DFT.md); spherical RKS/UKS single points (double "
+                                              "hybrids included), gradients, geometry optimization, frequencies, "
+                                              "TDDFT, SOSCF, stability analysis and checkpoint restart are. Use basis_type cartesian for this calculation.");
             };
             if (calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow)
                 return refuse(workflow_label(calculator._calculation));
-            if (functionals.has_double_hybrid_pt2)
-                return refuse("A double-hybrid functional");
+            if (functionals.has_double_hybrid_pt2 &&
+                calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+                return refuse("A double-hybrid functional with " + workflow_label(calculator._calculation));
             if (calculator._solvation._model != HartreeFock::SolvationModel::None)
                 return refuse("PCM solvation");
-            if (wants_checkpoint_restart(calculator))
-                return refuse("Checkpoint restart (guess density / full)");
             return {};
         }
 

@@ -1,4 +1,4 @@
-"""PySCF references for spherical TDDFT (docs/SPHERICAL_DFT_SCOPE.md step 3).
+"""PySCF references for spherical TDDFT (docs/SPHERICAL_DFT.md step 3).
 
 Water / 6-31G*, cart=False, Planck's own GBS, its CODATA 2018 Bohr and its
 unpruned 150 x 590 grid. Prints the four lowest excitation energies (eV) and

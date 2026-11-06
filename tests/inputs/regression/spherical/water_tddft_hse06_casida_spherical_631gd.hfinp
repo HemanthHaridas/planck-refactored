@@ -1,4 +1,4 @@
-# Spherical DFT step 3 gate (docs/SPHERICAL_DFT_SCOPE.md): TDDFT in a spherical basis vs PySCF
+# Spherical DFT step 3 gate (docs/SPHERICAL_DFT.md): TDDFT in a spherical basis vs PySCF
 # cart=False (tests/pyscf/spherical_tddft_references.py), matched 150 x 590 unpruned grid.
 %begin_control
     basis       6-31g*

@@ -1,4 +1,4 @@
-# Spherical HF stability gate (docs/SPHERICAL_DFT_SCOPE.md S0.6): RHF water/6-31G* spherical, all three channels vs PySCF cart=False.
+# Spherical HF stability gate (docs/SPHERICAL_DFT.md S0.6): RHF water/6-31G* spherical, all three channels vs PySCF cart=False.
 %begin_control
     basis       6-31g*
     calculation energy

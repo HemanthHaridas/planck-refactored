@@ -1,4 +1,4 @@
-# Spherical DFT step 1 exact gate (docs/SPHERICAL_DFT_SCOPE.md): 6-31G has only s and p
+# Spherical DFT step 1 exact gate (docs/SPHERICAL_DFT.md): 6-31G has only s and p
 # shells, so spherical and Cartesian span the same space on the same grid and the energy
 # must equal the Cartesian one (measured 8.5e-14).
 %begin_control

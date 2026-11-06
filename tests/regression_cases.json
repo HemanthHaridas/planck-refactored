@@ -231,7 +231,7 @@
   },
   {
    "id": "water_rhf_spherical_esp_points_631gd",
-   "_note": "docs/SPHERICAL_DFT_SCOPE.md S0.1: the ESP integrals are Cartesian, so a spherical density must be lifted first. Before the fix the working-basis density was read at Cartesian AO indices with no error (water/6-31G* Connolly charges O -2.94, H 1.461/1.474). Same points as water_rhf_esp_points_sto3g; 8 decimals asserted, as there, except 7 at point 3, where the 1.8e-9 cross-code gap straddles the 8th digit.",
+   "_note": "docs/SPHERICAL_DFT.md S0.1: the ESP integrals are Cartesian, so a spherical density must be lifted first. Before the fix the working-basis density was read at Cartesian AO indices with no error (water/6-31G* Connolly charges O -2.94, H 1.461/1.474). Same points as water_rhf_esp_points_sto3g; 8 decimals asserted, as there, except 7 at point 3, where the 1.8e-9 cross-code gap straddles the 8th digit.",
    "_pyscf_reference": "PySCF 2.13.0 RHF/6-31G* cart=False (basis parsed from Planck's GBS, Bohr 0.529177210903), int1e_grids contracted with the converged density plus the nuclear sum: phi = 0.157560912963, -0.010961551560, 0.042079010558, 0.005242044332, 0.000008873192. Max abs diff vs Planck 1.8e-09. E_RHF -76.0052429766 (Planck identical).",
    "input": "tests/inputs/regression/spherical/water_rhf_spherical_esp_points_631gd.hfinp",
    "tags": [
@@ -4350,7 +4350,7 @@
     "core",
     "spherical"
    ],
-   "_pyscf_reference": "PySCF 2.13.0 RHF/6-31G* cart=False: E -76.0091256420; real internal +3.6595924e-01 (gen_g_hop_rhf/2), complex +3.3520547e-01, triplet +2.8865272e-01 (_gen_hop_rhf_external). S0.6 (docs/SPHERICAL_DFT_SCOPE.md): before 100675e4 / this fix the HF stability and CPHF code sized the spherical ERI tensor with the Cartesian nbasis().",
+   "_pyscf_reference": "PySCF 2.13.0 RHF/6-31G* cart=False: E -76.0091256420; real internal +3.6595924e-01 (gen_g_hop_rhf/2), complex +3.3520547e-01, triplet +2.8865272e-01 (_gen_hop_rhf_external). S0.6 (docs/SPHERICAL_DFT.md): before 100675e4 / this fix the HF stability and CPHF code sized the spherical ERI tensor with the Cartesian nbasis().",
    "expected_exit_code": 0,
    "not_contains": [
     "UNSTABLE"
@@ -4390,7 +4390,7 @@
     "spherical",
     "open_shell"
    ],
-   "_pyscf_reference": "From hcore Planck converges a saddle at -75.5250137274 (lambda -8.542422e-02, not reachable in PySCF, whose 1e guess lands on the ground state). The follow reaches -75.6104747910; PySCF cart=False UHF -75.6104747768 with gen_g_hop_uhf lambda +8.4419004e-02 (Planck from guess sad: +8.441901e-02). S0.6 (docs/SPHERICAL_DFT_SCOPE.md): before 100675e4 / this fix the HF stability and CPHF code sized the spherical ERI tensor with the Cartesian nbasis().",
+   "_pyscf_reference": "From hcore Planck converges a saddle at -75.5250137274 (lambda -8.542422e-02, not reachable in PySCF, whose 1e guess lands on the ground state). The follow reaches -75.6104747910; PySCF cart=False UHF -75.6104747768 with gen_g_hop_uhf lambda +8.4419004e-02 (Planck from guess sad: +8.441901e-02). S0.6 (docs/SPHERICAL_DFT.md): before 100675e4 / this fix the HF stability and CPHF code sized the spherical ERI tensor with the Cartesian nbasis().",
    "expected_exit_code": 0,
    "contains": [
     "UHF -> UHF (spin-conserving, internal)",
@@ -5518,6 +5518,167 @@
    ]
   },
   {
+   "id": "water_rks_b2plyp_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_rks_b2plyp_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "double_hybrid"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_dh_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned; B2PLYP as 0.53*HF + 0.47*B88, 0.73*LYP plus 0.27 x all-electron MP2): E_scf -76.2733602848, bare PT2 -0.2219830098, E -76.3332956974. Planck matches every printed digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Double Hybrid :",
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3332956974,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_b2plyp_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_cation_uks_b2plyp_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "spherical",
+    "double_hybrid",
+    "open_shell"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_dh_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned; B2PLYP as 0.53*HF + 0.47*B88, 0.73*LYP plus 0.27 x all-electron MP2): E_scf -75.8396557483, bare PT2 -0.1628046292, E -75.8836129982 (the 2B1 ground state; guess sad, since hcore reaches the 2A1 saddle 0.083 Eh above). Planck matches every printed digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Double Hybrid :",
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.8836129982,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rks_b2plyp_gradient_spherical_rejected",
+   "input": "tests/inputs/regression/spherical/water_rks_b2plyp_gradient_spherical_rejected.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "smoke",
+    "core",
+    "dft",
+    "spherical",
+    "double_hybrid"
+   ],
+   "_note": "Double-hybrid gradients need a Cartesian basis (docs/SPHERICAL_DFT.md step 5); the refusal must name the workflow.",
+   "expected_exit_code": 1,
+   "contains": [
+    "A double-hybrid functional with analytic gradients is not yet supported by planck-dft with basis_type spherical"
+   ]
+  },
+  {
+   "id": "water_rks_b3lyp_projected_restart_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_rks_b3lyp_projected_restart_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "checkpoint"
+   ],
+   "setup": {
+    "seed_input": "tests/inputs/regression/seeds/water_rks_b3lyp_projection_seed_spherical_sto3g.hfinp"
+   },
+   "_note": "Spherical RKS B3LYP restart: sto-3g checkpoint projected onto 6-31G* through SCF::project_checkpoint_density (shared with hartree-fock). Must reach the fresh hcore-start energy -76.4067826755.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Basis change detected (sto-3g",
+    "Density projection successful",
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4067826755,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_pbe_full_restart_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_cation_uks_pbe_full_restart_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "checkpoint",
+    "open_shell"
+   ],
+   "setup": {
+    "seed_input": "tests/inputs/regression/seeds/water_cation_uks_pbe_restart_seed_spherical_631gd.hfinp"
+   },
+   "_note": "Spherical UKS water+ PBE same-basis guess full restart from a SAD-start seed (-75.8658339680, the 2B1 state). Must stay on the seed's state.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Loaded from",
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.865833968,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "water_rks_b3lyp_cartesian_checkpoint_refused_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_rks_b3lyp_cartesian_checkpoint_refused_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "checkpoint"
+   ],
+   "setup": {
+    "seed_input": "tests/inputs/regression/seeds/water_rks_b3lyp_cartesian_seed_sto3g.hfinp"
+   },
+   "_note": "A spherical restart from a Cartesian checkpoint is refused by name and falls back to H_core, reaching the fresh energy -76.4067826755.",
+   "expected_exit_code": 0,
+   "contains": [
+    "a spherical cross-basis restart requires a spherical checkpoint",
+    "DFT Energy :"
+   ],
+   "not_contains": [
+    "Density projection successful"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4067826755,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
    "id": "water_rks_b3lyp_spherical_631g_exact",
    "input": "tests/inputs/regression/spherical/water_rks_b3lyp_spherical_631g_exact.hfinp",
    "executable": "planck-dft",
@@ -5537,21 +5698,6 @@
     }
    ],
    "_note": "Exact gate: equals the Cartesian B3LYP/6-31G energy of the same input with basis_type cartesian (-76.3780274825); measured difference 8.5e-14."
-  },
-  {
-   "id": "water_rks_spherical_gradient_rejected",
-   "input": "tests/inputs/regression/spherical/water_rks_spherical_gradient_rejected.hfinp",
-   "executable": "planck-dft",
-   "tags": [
-    "smoke",
-    "spherical",
-    "dft"
-   ],
-   "expected_exit_code": 1,
-   "contains": [
-    "analytic gradients is not yet supported by planck-dft with basis_type spherical"
-   ],
-   "_note": "Boundary marker: gradient workflows refuse a spherical basis in planck-dft until step 2 of docs/SPHERICAL_DFT_SCOPE.md."
   },
   {
    "id": "water_rmp2_spherical_631gd",
@@ -5608,7 +5754,7 @@
      "atol": 1e-07
     }
    ],
-   "_note": "docs/SPHERICAL_DFT_SCOPE.md S0.2: same system as water_rmp2_spherical_631gd after a direct SCF, which caches no ERI tensor; ensure_eri now builds the Cartesian tensor and transforms it. Before the fix this crashed (SIGSEGV) after SCF."
+   "_note": "docs/SPHERICAL_DFT.md S0.2: same system as water_rmp2_spherical_631gd after a direct SCF, which caches no ERI tensor; ensure_eri now builds the Cartesian tensor and transforms it. Before the fix this crashed (SIGSEGV) after SCF."
   },
   {
    "id": "h2o_cation_ump2_spherical_631gd",
@@ -5665,7 +5811,7 @@
      "atol": 1e-07
     }
    ],
-   "_note": "docs/SPHERICAL_DFT_SCOPE.md S0.2: same system as h2o_cation_ump2_spherical_631gd after a direct SCF, which caches no ERI tensor; ensure_eri now builds the Cartesian tensor and transforms it. Before the fix this crashed (SIGSEGV) after SCF."
+   "_note": "docs/SPHERICAL_DFT.md S0.2: same system as h2o_cation_ump2_spherical_631gd after a direct SCF, which caches no ERI tensor; ensure_eri now builds the Cartesian tensor and transforms it. Before the fix this crashed (SIGSEGV) after SCF."
   },
   {
    "id": "water_casscf44_spherical_631gd",
@@ -6816,7 +6962,7 @@
    },
    "expected_exit_code": 0,
    "contains": [
-    "Projection skipped: ECP core electrons differ",
+    "Projection failed: ECP core electrons differ between the checkpoint and current basis",
     "SCF Converged after"
    ],
    "checks": [

@@ -1,4 +1,4 @@
-# Spherical DFT step 4 gate (docs/SPHERICAL_DFT_SCOPE.md): KS stability in a spherical basis,
+# Spherical DFT step 4 gate (docs/SPHERICAL_DFT.md): KS stability in a spherical basis,
 # lambda_min against PySCF cart=False (tests/pyscf/spherical_ks_stability_references.py).
 %begin_control
     basis       cc-pVTZ

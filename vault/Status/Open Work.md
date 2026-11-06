@@ -57,7 +57,7 @@ truth for what remains.
     (`docs/KS_STABILITY_SCOPE.md`). UKS, RKS (both channels) and R0 (the HF
     RHF → UHF channel) landed; see Completion. What remains is tracked in the
     scopes it depends on: spherical KS stability landed 2026-11-06 with
-    `SPHERICAL_DFT_SCOPE.md` step 4; KS stability with ECPs waits only on
+    `SPHERICAL_DFT.md` step 4; KS stability with ECPs waits only on
     `DEF2_ECP_SCOPE.md` step 6; the HF-side ECP gates landed
     2026-11-06 (`hi_cation_uhf_def2svp_ecp_stability`,
     `hi_rmp2_def2svp_ecp`; spherical HF gates in S0.6); HI CCSD (8.5e-8
@@ -92,22 +92,10 @@ truth for what remains.
 What blocks Planck from routine DFT use, each with its own scope doc. Order
 is the recommended one; none blocks another except where noted.
 
-- **Spherical basis in `planck-dft`** (`docs/SPHERICAL_DFT_SCOPE.md`). The
-  DFT driver rejects `basis_type spherical`. Rescoped 2026-11-04 from a code
-  audit: the grid and integral layers stay Cartesian, and a lift/project
-  boundary goes on ~10 `driver.cpp` call sites (the other 30 `nbasis()` sites
-  in `src/dft/` check against the AO grid and need no edit). First shared fixes
-  Step 1 (spherical RKS/UKS single points, PySCF-gated to ≤2.5e-12 at
-  matched grids) landed 2026-11-04; step 4 (SOSCF + KS stability, the
-  orbital-Hessian builders lift the MO coefficients) and step 2 (gradients,
-  geomopt, frequencies; PySCF-gated to ≤ 3.4e-10 Ha/Bohr) landed 2026-11-06.
-  Step 3 (TDDFT) landed 2026-11-06 as well. Next: step 5 DH single
-  points, then checkpoint restart. ECP DFT (DEF2 step 6) is unblocked for single points
-  and gradients. (S0): the HF spherical ESP defect (S0.1, fixed) and `ensure_eri` crashing its callers
-  in spherical mode after a direct SCF (S0.2, fixed; both in Completion); public `to_cartesian`/`to_working` helpers replacing seven
-  hand-written copies (S0.3, landed); `compute_rks/uks_gradient` not lifting P and W (S0.4, landed); and S0.5, C renormalized once in `read_gbs_basis` instead of three per-geometry copies (landed; the per-geometry premise was false). Then
-  single points, gradients, TDDFT, SOSCF, DH single points; PCM and DH
-  gradients stay rejected. Prerequisite for def2 and ECP DFT.
+- **Spherical basis in `planck-dft` — DONE 2026-11-06** (`docs/SPHERICAL_DFT.md`;
+  see Completion). Every DFT workflow runs spherical except PCM and
+  double-hybrid gradients, which are refused by name. ECP DFT
+  (`DEF2_ECP_SCOPE.md` step 6) is now unblocked for every supported workflow.
 - **D3 dispersion** (`docs/DISPERSION_D3_SCOPE.md`). None in `src/`. A
   geometry-only energy and gradient beside nuclear repulsion. Licence
   checked 2026-10-26: simple-dftd3 is LGPL-3.0-or-later. Planck ships source
@@ -1532,10 +1520,9 @@ were corrected in the same pass: `CCGEN_UNRESTRICTED_CC` (U0) and
   still need the response-machinery audit before the same lift adapter (Phase 1)
   can be wired through `compute_rmp2_gradient` / `compute_ump2_gradient`.
   Boundary markers: `water_rmp2_spherical_{gradient,geomopt}_rejected`.
-- Spherical PCM
-- Spherical DFT and TDDFT
-- Any additional spherical workflows not already covered by the landed
-  single-point, RHF/UHF-gradient, and RHF/UHF-geomopt-and-freq allow-list
+- Spherical PCM (both binaries)
+- Spherical double-hybrid gradients (the DH gradient code is Cartesian-only);
+  boundary marker `water_rks_b2plyp_gradient_spherical_rejected`
 
 ## Symmetry follow-up
 

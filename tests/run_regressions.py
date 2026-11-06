@@ -300,9 +300,10 @@ def within_sigma_failure(
     )
 
 
-def checkpoint_path_for(input_path: Path) -> Path:
-    # Mirror the driver's rule (src/driver.cpp): parent_dir / stem + ".hfchk".
-    return input_path.with_suffix(".hfchk")
+def checkpoint_path_for(input_path: Path, executable: Path) -> Path:
+    # Mirror the drivers' rule: parent_dir / stem + ".hfchk" (src/driver.cpp),
+    # or ".dftchk" for planck-dft (src/dft/main.cpp).
+    return input_path.with_suffix(".dftchk" if executable.name == "planck-dft" else ".hfchk")
 
 
 def run_setup(
@@ -345,11 +346,11 @@ def run_setup(
         tail = (proc.stdout + proc.stderr).strip().splitlines()[-10:]
         return "setup seed run failed:\n" + "\n".join(tail)
 
-    seed_chk = checkpoint_path_for(seed_input)
+    seed_chk = checkpoint_path_for(seed_input, executable)
     if not seed_chk.exists():
         return f"setup seed did not produce a checkpoint at {seed_chk}"
 
-    target_chk = checkpoint_path_for(repo_root / case["input"])
+    target_chk = checkpoint_path_for(repo_root / case["input"], executable)
     if seed_chk != target_chk:
         shutil.copyfile(seed_chk, target_chk)
     return None

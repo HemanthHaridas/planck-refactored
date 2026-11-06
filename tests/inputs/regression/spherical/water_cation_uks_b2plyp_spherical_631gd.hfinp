@@ -1,0 +1,35 @@
+# Spherical DFT step 5 gate (docs/SPHERICAL_DFT.md): double-hybrid (B2PLYP) energy in a
+# spherical basis vs PySCF cart=False (tests/pyscf/spherical_dh_references.py), 150 x 590 grid.
+# guess sad: from hcore water+ lands on the 2A1 saddle (docs/KS_STABILITY_SCOPE.md), PySCF on 2B1.
+%begin_control
+    basis       6-31g*
+    calculation energy
+    basis_type  spherical
+%end_control
+%begin_scf
+    scf_type        uhf
+    guess           sad
+    max_cycles      200
+    tol_energy      1.0e-10
+    tol_density     1.0e-10
+    save_checkpoint .false.
+%end_scf
+%begin_dft
+    grid        fine
+    grid_radial_points 150
+    grid_angular_points 590
+    exchange    b2plyp
+    correlation pbe
+%end_dft
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+%begin_coords
+3
+1   2
+O     0.000000    0.000000     0.117176
+H     0.000000    0.756950    -0.468703
+H     0.000000   -0.756950    -0.468703
+%end_coords

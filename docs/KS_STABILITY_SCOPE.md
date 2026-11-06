@@ -11,7 +11,7 @@ A triplet instability promotes the run to UKS. Eigenvalues match PySCF to the
 grid floor (≤ 2e-5) on every case below, and the follows land on PySCF's
 lower state.
 
-Spherical landed as step 4 of `docs/SPHERICAL_DFT_SCOPE.md` (λ ≤ 1.2e-7
+Spherical landed as step 4 of `docs/SPHERICAL_DFT.md` (λ ≤ 1.2e-7
 from PySCF `cart=False`, follow to every digit). Open: KS stability with
 ECPs, which waits on `docs/DEF2_ECP_SCOPE.md` step 6.
 The HF-side fixes are gated. Status:
@@ -192,9 +192,9 @@ The rest of this work lives in the two scopes it depends on:
 | item | where | depends on |
 |---|---|---|
 | **KS stability with ECPs.** No new code: the ECP enters through H_core. Gate: HI⁺ UKS def2-SVP vs PySCF | `DEF2_ECP_SCOPE.md` step 6 | ECP step 6 (spherical step 4 landed) |
-Done since: spherical KS stability and SOSCF (`SPHERICAL_DFT_SCOPE.md`
+Done since: spherical KS stability and SOSCF (`SPHERICAL_DFT.md`
 step 4: the builders lift the MO coefficients, six gates), the spherical HF gates, the `rhf_response.cpp` site (it was
-live through RHF SOSCF; `SPHERICAL_DFT_SCOPE.md` S0.6), and the ECP gates
+live through RHF SOSCF; `SPHERICAL_DFT.md` S0.6), and the ECP gates
 `hi_cation_uhf_def2svp_ecp_stability` and `hi_rmp2_def2svp_ecp`. HI CCSD
 (8.5e-8 off PySCF) stays unpinned in `DEF2_ECP_SCOPE.md`.
 

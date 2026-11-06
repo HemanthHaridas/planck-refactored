@@ -1,4 +1,4 @@
-# Spherical DFT step 1 gate (docs/SPHERICAL_DFT_SCOPE.md): RKS/UKS single point in a
+# Spherical DFT step 1 gate (docs/SPHERICAL_DFT.md): RKS/UKS single point in a
 # spherical basis through planck-dft's Cartesian grid/integral layer.
 %begin_control
     basis       6-31g*

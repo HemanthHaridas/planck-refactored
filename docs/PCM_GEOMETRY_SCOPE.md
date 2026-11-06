@@ -69,7 +69,7 @@ No CPHF is needed: the SCF with PCM is variational in the charges.
    in water optimized against PySCF; frequencies against a PySCF
    FD-of-analytic-gradient Hessian.
 4. **Spherical basis**: follows from the spherical-DFT skin
-   (`docs/SPHERICAL_DFT_SCOPE.md`) once that lands; V_rxn is built in
+   (`docs/SPHERICAL_DFT.md`) once that lands; V_rxn is built in
    Cartesian and projected.
 
 ## Not in this scope

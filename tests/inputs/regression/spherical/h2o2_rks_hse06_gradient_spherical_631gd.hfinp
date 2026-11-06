@@ -1,4 +1,4 @@
-# Spherical DFT step 2 gate (docs/SPHERICAL_DFT_SCOPE.md): analytic KS gradient in a spherical
+# Spherical DFT step 2 gate (docs/SPHERICAL_DFT.md): analytic KS gradient in a spherical
 # basis vs PySCF cart=False with grid response (tests/pyscf/spherical_ks_gradient_references.py).
 %begin_control
     basis       6-31g*

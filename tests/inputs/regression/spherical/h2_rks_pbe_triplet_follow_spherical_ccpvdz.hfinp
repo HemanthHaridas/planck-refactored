@@ -1,4 +1,4 @@
-# Spherical DFT step 4 gate (docs/SPHERICAL_DFT_SCOPE.md): H2 at 2.5 A, RKS PBE in spherical
+# Spherical DFT step 4 gate (docs/SPHERICAL_DFT.md): H2 at 2.5 A, RKS PBE in spherical
 # cc-pVDZ, is RKS -> UKS (triplet) unstable; the follow promotes to UKS and must reach PySCF
 # cart=False's broken-symmetry UKS (tests/pyscf/spherical_ks_stability_references.py).
 %begin_control

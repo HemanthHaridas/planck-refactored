@@ -1,4 +1,4 @@
-# Spherical DFT step 2 gate (docs/SPHERICAL_DFT_SCOPE.md): RKS B3LYP geometry optimization and
+# Spherical DFT step 2 gate (docs/SPHERICAL_DFT.md): RKS B3LYP geometry optimization and
 # frequencies in a spherical basis vs PySCF cart=False geometric_solver + analytic Hessian
 # (tests/pyscf/spherical_ks_gradient_references.py).
 %begin_control

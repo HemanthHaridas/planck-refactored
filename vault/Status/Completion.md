@@ -427,7 +427,7 @@ historical design context, but they are no longer the source of truth for
   `water_rhf_stability_stable`, all failing on the old algebra.
 
 - **Spherical HF SOSCF and stability gated (2026-11-05,
-  `docs/SPHERICAL_DFT_SCOPE.md` S0.6).** RHF SOSCF's CPHF Hessian indexed the
+  `docs/SPHERICAL_DFT.md` S0.6).** RHF SOSCF's CPHF Hessian indexed the
   spherical ERI tensor with Cartesian strides. |g| grew and every
   augmented-Hessian solve failed, and only the DIIS handback converged it. UHF
   SOSCF passed spherical densities to the Cartesian Fock build. Both are now in
@@ -437,8 +437,24 @@ historical design context, but they are no longer the source of truth for
   `water_{rhf,cation_uhf}_soscf_spherical_631gd` (PySCF `cart=False`), all
   failing on the old code.
 
+- **Spherical DFT complete: double-hybrid single points and checkpoint restart
+  (2026-11-06, `docs/SPHERICAL_DFT.md`, now an answer doc).** Double-hybrid
+  single points needed only the refusal narrowed (PT2 is the HF MP2 kernel on
+  the spherical ERI tensor): water RKS and water⁺ UKS B2PLYP/6-31G* match
+  PySCF `cart=False` to every printed digit; DH gradients stay refused by name.
+  Checkpoint restart: the DFT and HF cross-basis projections were two copies,
+  and the DFT one built its cross overlap in Cartesian against a working-basis
+  orthogonalizer, lacked the ECP-core check, and dropped the beta part of a UHF
+  checkpoint loaded into RKS. Both drivers now call one
+  `SCF::project_checkpoint_density` (`src/scf/working_state.cpp`). Spherical
+  projected and same-basis restarts reach the fresh-run energy to 1e-8, and a
+  spherical restart from a Cartesian checkpoint is refused by name. The
+  regression runner's seeding assumed `.hfchk` and now follows the executable
+  (`planck-dft` writes `.dftchk`). A stale smoke case
+  (`water_rks_spherical_gradient_rejected`, failing since step 2) was removed.
+
 - **Spherical TDDFT, and an analytic TDDFT XC kernel (2026-11-06,
-  `docs/SPHERICAL_DFT_SCOPE.md` step 3).** `run_linear_response` lifts the MO
+  `docs/SPHERICAL_DFT.md` step 3).** `run_linear_response` lifts the MO
   coefficients (TᵀC) and densities once and builds the Coulomb ERIs in
   Cartesian; `n_virt` now comes from the MO count (spherical TDDFT was not
   refused before and read past the MO matrix). The TDDFT XC kernel was a
@@ -450,7 +466,7 @@ historical design context, but they are no longer the source of truth for
   unchanged.
 
 - **Spherical KS gradients, geometry optimization and frequencies
-  (2026-11-06, `docs/SPHERICAL_DFT_SCOPE.md` step 2).** One change in
+  (2026-11-06, `docs/SPHERICAL_DFT.md` step 2).** One change in
   `compute_analytic_ks_gradient`: the stored densities are lifted with
   `to_cartesian` before the XC nuclear gradient (the HF-like terms and the XC
   evaluation already lifted). Against PySCF `cart=False` with grid response on
@@ -464,7 +480,7 @@ historical design context, but they are no longer the source of truth for
   Planck (see Open Work).
 
 - **Spherical KS stability and SOSCF (2026-11-06,
-  `docs/SPHERICAL_DFT_SCOPE.md` step 4).** The two orbital-Hessian builders
+  `docs/SPHERICAL_DFT.md` step 4).** The two orbital-Hessian builders
   (`src/dft/ks_orbital_hessian.cpp`), shared by SOSCF and stability, take a
   `basis` pointer and lift the ground density and the MO coefficients
   (Cᵀ C_mo) once; the trial densities and the MO packing are then exact in
@@ -521,7 +537,7 @@ historical design context, but they are no longer the source of truth for
   `water_rks_stability_rejected` (since replaced by the RKS gates); UKS SOSCF bitwise through the builder before
   the kernel change.
 
-- **Spherical prerequisites S0.3–S0.5 (2026-11-04, `docs/SPHERICAL_DFT_SCOPE.md`).**
+- **Spherical prerequisites S0.3–S0.5 (2026-11-04, `docs/SPHERICAL_DFT.md`).**
   One pair of shape-checked `BasisFunctions::to_cartesian` / `to_working`
   helpers replaces seven hand-written C·M·Cᵀ copies (S0.3); the RKS/UKS
   gradients lift P and W like the HF ones (S0.4, Cartesian byte-identical);
@@ -533,7 +549,7 @@ historical design context, but they are no longer the source of truth for
   roundoff only.
 
 - **Spherical post-HF after a direct SCF no longer crashes (2026-11-04,
-  `docs/SPHERICAL_DFT_SCOPE.md` S0.2).** `Correlation::ensure_eri` returned
+  `docs/SPHERICAL_DFT.md` S0.2).** `Correlation::ensure_eri` returned
   an empty tensor in spherical mode when the SCF had cached none, and its
   ~20 callers index it unchecked: `scf_mode direct` + `basis_type spherical`
   + RMP2 died with SIGSEGV. It now builds the Cartesian tensor and
@@ -541,7 +557,7 @@ historical design context, but they are no longer the source of truth for
   `{water_rmp2,h2o_cation_ump2}_spherical_631gd_direct` (same energies as
   the conventional cases).
 
-- **Spherical-basis ESP fixed (2026-11-04, `docs/SPHERICAL_DFT_SCOPE.md`
+- **Spherical-basis ESP fixed (2026-11-04, `docs/SPHERICAL_DFT.md`
   S0.1).** `SCF::log_esp_report` handed the spherical (working-basis) density
   to Cartesian ESP integrals; `electrostatic_potential` only checked
   squareness, so the wrong AO elements were read with no error (water/6-31G*

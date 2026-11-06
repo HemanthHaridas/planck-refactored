@@ -1,13 +1,12 @@
-# Boundary marker (docs/SPHERICAL_DFT_SCOPE.md): spherical planck-dft runs single points only
-# until step 2 gates gradients.
+# Spherical DFT checkpoint restart gate (docs/SPHERICAL_DFT.md): a spherical 6-31G* restart from a Cartesian checkpoint is refused and falls back to H_core.
 %begin_control
-    basis       6-31g
-    calculation gradient
+    basis       6-31g*
+    calculation energy
     basis_type  spherical
 %end_control
 %begin_scf
     scf_type        rhf
-    guess           hcore
+    guess           density
     max_cycles      200
     tol_energy      1.0e-10
     tol_density     1.0e-9
@@ -26,7 +25,7 @@
 %begin_coords
 3
 0   1
-O 0.000000 0.000000 0.000000
-H 0.758602 0.000000 0.504284
-H -0.758602 0.000000 0.504284
+O     0.000000     0.000000     0.117176
+H     0.000000     0.757200    -0.468704
+H     0.000000    -0.757200    -0.468704
 %end_coords

@@ -20,7 +20,7 @@
     use_symm    .false.
 %end_geom
 
-# Spherical-basis ESP gate (docs/SPHERICAL_DFT_SCOPE.md S0.1): the density must be
+# Spherical-basis ESP gate (docs/SPHERICAL_DFT.md S0.1): the density must be
 # lifted to Cartesian before the ESP integrals. Electrostatic potential at explicit
 # points, for the cross-code check against
 # PySCF's int1e_grids (docs/ESP_CHARGES_SCOPE.md, E1). The points are off-axis

@@ -1,4 +1,4 @@
-# Spherical post-HF after a DIRECT SCF (docs/SPHERICAL_DFT_SCOPE.md S0.2): no ERI tensor
+# Spherical post-HF after a DIRECT SCF (docs/SPHERICAL_DFT.md S0.2): no ERI tensor
 # is cached, so ensure_eri must build the Cartesian one and transform it. Same
 # system as h2o_cation_ump2_spherical_631gd.hfinp; must reproduce its energies. Before the fix: SIGSEGV.
 %begin_control
