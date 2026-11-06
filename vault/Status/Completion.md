@@ -437,6 +437,18 @@ historical design context, but they are no longer the source of truth for
   `water_{rhf,cation_uhf}_soscf_spherical_631gd` (PySCF `cart=False`), all
   failing on the old code.
 
+- **Spherical TDDFT, and an analytic TDDFT XC kernel (2026-11-06,
+  `docs/SPHERICAL_DFT_SCOPE.md` step 3).** `run_linear_response` lifts the MO
+  coefficients (TᵀC) and densities once and builds the Coulomb ERIs in
+  Cartesian; `n_virt` now comes from the MO count (spherical TDDFT was not
+  refused before and read past the MO matrix). The TDDFT XC kernel was a
+  central difference of V_xc; on libxc's discontinuous wPBEh (HSE) potential
+  it shifted spherical water/6-31G* HSE06 roots by up to 4.4e-4 eV. It now
+  applies the analytic f_xc (`prepare_uks_xc_kernel`) and the FD helper is
+  deleted. Water RKS B3LYP singlet/triplet, HSE06 and UKS B3LYP match PySCF
+  `cart=False` to 1e-7 eV in every root; the 13 Cartesian TDDFT cases are
+  unchanged.
+
 - **Spherical KS gradients, geometry optimization and frequencies
   (2026-11-06, `docs/SPHERICAL_DFT_SCOPE.md` step 2).** One change in
   `compute_analytic_ks_gradient`: the stored densities are lifted with

@@ -138,19 +138,11 @@ namespace DFT::Driver
         const Eigen::Ref<const Eigen::VectorXd> &occupied,
         const Eigen::Ref<const Eigen::VectorXd> &virtual_orbital);
 
-    std::expected<XCMatrixContribution, std::string> evaluate_xc_matrix_from_spin_densities(
-        const PreparedSystem &prepared,
-        const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
-        const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
-        const XC::Functional &exchange_functional,
-        const XC::Functional &correlation_functional);
-
-    // The finite-difference XC kernel oracle (D1's chosen path,
-    // docs/SOSCF_DFT.md). Perturbs the density along each
-    // (occ,virt) direction in `spaces` and finite-differences the full
-    // first-derivative XC potential -- O(n_occ*n_virt) grid passes, the
-    // correctness-only reference every analytic Hessian-vector product in
-    // F3 must be checked against.
+    // TDDFT XC kernel blocks: the analytic f_xc (prepare_uks_xc_kernel) applied
+    // to each (occ,virt) transition density in `spaces`, projected onto every
+    // target space. Expects polarized functionals and Cartesian AO quantities.
+    // It used to be a central difference of V_xc, which broke on the
+    // discontinuous wPBEh (HSE) potential (docs/WPBEH_S_SCALING_SCOPE.md).
     std::expected<std::vector<std::vector<Eigen::MatrixXd>>, std::string> build_unrestricted_xc_kernel_blocks(
         const PreparedSystem &prepared,
         const std::vector<ResponseExcitationSpace> &spaces,

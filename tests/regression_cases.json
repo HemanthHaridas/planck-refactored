@@ -5323,6 +5323,201 @@
    ]
   },
   {
+   "id": "water_tddft_b3lyp_casida_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_tddft_b3lyp_casida_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "tddft"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_tddft_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned, conv_tol_grad 1e-9): E -76.4067844645; roots (eV) 8.0728669 / 10.0762857 / 10.5567590 / 12.7429909; f 0.015990 / 0 / 0.090983 / 0.072565. Planck agrees to the 1e-7 printed precision in energies and oscillator strengths.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4067844645,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 8.0728669,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 10.0762857,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 10.556759,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 12.7429909,
+     "atol": 1e-05
+    }
+   ]
+  },
+  {
+   "id": "water_tddft_b3lyp_triplet_tda_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_tddft_b3lyp_triplet_tda_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "spherical",
+    "tddft"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_tddft_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned, conv_tol_grad 1e-9): E -76.4067844645; roots (eV) 7.3292924 / 9.4544582 / 9.5485905 / 11.4711246; triplet TDA. Planck agrees to the 1e-7 printed precision in energies and oscillator strengths.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4067844645,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 7.3292924,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 9.4544582,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 9.5485905,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 11.4711246,
+     "atol": 1e-05
+    }
+   ]
+  },
+  {
+   "id": "water_tddft_hse06_casida_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_tddft_hse06_casida_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "tddft"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_tddft_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned, conv_tol_grad 1e-9): E -76.3305499778; roots (eV) 8.3937098 / 10.3967999 / 10.9029251 / 13.0846357; f 0.017180 / 0 / 0.096319 / 0.077613. Roots 3-4 were 1.1e-4 / 4.4e-4 eV off with the old finite-difference XC kernel, whose central difference straddled libxc's wPBEh s = 1 discontinuity; the analytic f_xc kernel removed it. Planck agrees to the 1e-7 printed precision in energies and oscillator strengths.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3305499778,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 8.3937098,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 10.3967999,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 10.9029251,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 13.0846357,
+     "atol": 1e-05
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_tddft_b3lyp_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_cation_uks_tddft_b3lyp_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "spherical",
+    "tddft",
+    "open_shell"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_tddft_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned, conv_tol_grad 1e-9): E -75.9512104442; roots (eV) 2.4476834 / 6.5853574 / 13.2499391 / 14.2236962; UKS spin-conserving Casida, f 0.001205 / 0 / 0.003660 / 0.016352. Planck agrees to the 1e-7 printed precision in energies and oscillator strengths.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.9512104442,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 2.4476834,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 6.5853574,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 13.2499391,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 14.2236962,
+     "atol": 1e-05
+    }
+   ]
+  },
+  {
    "id": "water_rks_b3lyp_spherical_631g_exact",
    "input": "tests/inputs/regression/spherical/water_rks_b3lyp_spherical_631g_exact.hfinp",
    "executable": "planck-dft",

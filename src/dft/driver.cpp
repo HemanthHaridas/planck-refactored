@@ -944,10 +944,10 @@ namespace DFT::Driver
         }
 
         // ResponseExcitationSpace, ResponseEigenpair, transition_density_matrix,
-        // evaluate_xc_matrix_from_spin_densities, build_unrestricted_xc_kernel_blocks,
+        // build_unrestricted_xc_kernel_blocks,
         // and build_closed_shell_xc_kernel_blocks moved to driver.h/below the
         // anonymous namespace (F3.1, docs/DFT_ANALYTIC_FXC_HESSIAN.md) so
-        // F3's verification can call the FD-kernel oracle from a standalone
+        // F3's verification can call the kernel builders from a standalone
         // test binary. driver.h is included at the top of this file, so their
         // declarations are visible here unchanged.
 
@@ -1399,7 +1399,23 @@ namespace DFT::Driver
                     "UKS linear response currently supports spin-conserving roots only; singlet/triplet spin adaptation is restricted to closed-shell RKS");
             }
 
+            // The response runs entirely in the Cartesian AO basis (grid, ERIs,
+            // dipoles). In a spherical basis the MO coefficients are lifted once,
+            // C_cart = T^T C (T = _cart_to_sph), and the densities with
+            // to_cartesian; MO counts come from the coefficient columns.
             const Eigen::Index nbasis = static_cast<Eigen::Index>(calculator._shells.nbasis());
+            const bool spherical = calculator._shells._spherical;
+            const auto cartesian_mos = [&](const Eigen::MatrixXd &C) -> Eigen::MatrixXd
+            { return spherical ? Eigen::MatrixXd(calculator._shells._cart_to_sph.transpose() * C) : C; };
+            auto P_alpha = HartreeFock::BasisFunctions::to_cartesian(calculator._shells,
+                                                                     calculator._info._scf.alpha.density);
+            if (!P_alpha)
+                return std::unexpected("TDDFT: " + P_alpha.error());
+            auto P_beta = unrestricted ? HartreeFock::BasisFunctions::to_cartesian(
+                                             calculator._shells, calculator._info._scf.beta.density)
+                                       : std::expected<Eigen::MatrixXd, std::string>(Eigen::MatrixXd());
+            if (!P_beta)
+                return std::unexpected("TDDFT: " + P_beta.error());
             std::vector<ResponseExcitationSpace> spaces;
             spaces.reserve(unrestricted ? 2 : 1);
 
@@ -1409,12 +1425,12 @@ namespace DFT::Driver
                 if (n_electrons % 2 != 0)
                     return std::unexpected("Closed-shell RKS TDDFT / linear response requires an even number of electrons");
 
+                const Eigen::MatrixXd coefficients = cartesian_mos(calculator._info._scf.alpha.mo_coefficients);
                 const int n_occ = n_electrons / 2;
-                const int n_virt = static_cast<int>(nbasis) - n_occ;
+                const int n_virt = static_cast<int>(coefficients.cols()) - n_occ;
                 if (n_occ <= 0 || n_virt <= 0)
                     return std::unexpected("TDDFT / linear response requires at least one occupied and one virtual orbital");
 
-                const Eigen::MatrixXd &coefficients = calculator._info._scf.alpha.mo_coefficients;
                 const Eigen::VectorXd &energies = calculator._info._scf.alpha.mo_energies;
                 spaces.push_back(
                     ResponseExcitationSpace{
@@ -1434,14 +1450,14 @@ namespace DFT::Driver
                 const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
                 const int n_alpha = (n_electrons + n_unpaired) / 2;
                 const int n_beta = (n_electrons - n_unpaired) / 2;
-                const int n_virt_alpha = static_cast<int>(nbasis) - n_alpha;
-                const int n_virt_beta = static_cast<int>(nbasis) - n_beta;
+                const Eigen::MatrixXd coeff_alpha = cartesian_mos(calculator._info._scf.alpha.mo_coefficients);
+                const Eigen::MatrixXd coeff_beta = cartesian_mos(calculator._info._scf.beta.mo_coefficients);
+                const int n_virt_alpha = static_cast<int>(coeff_alpha.cols()) - n_alpha;
+                const int n_virt_beta = static_cast<int>(coeff_beta.cols()) - n_beta;
                 if (n_alpha <= 0 || n_beta < 0 || n_virt_alpha <= 0 || n_virt_beta <= 0)
                     return std::unexpected("UKS TDDFT / linear response requires occupied and virtual alpha/beta spaces");
 
-                const Eigen::MatrixXd &coeff_alpha = calculator._info._scf.alpha.mo_coefficients;
                 const Eigen::VectorXd &eps_alpha = calculator._info._scf.alpha.mo_energies;
-                const Eigen::MatrixXd &coeff_beta = calculator._info._scf.beta.mo_coefficients;
                 const Eigen::VectorXd &eps_beta = calculator._info._scf.beta.mo_energies;
 
                 spaces.push_back(
@@ -1498,12 +1514,18 @@ namespace DFT::Driver
                 std::max(requested_nroots, std::max(requested_root, 1)),
                 total_dimension);
             const auto shell_pairs = build_shellpairs(calculator._shells);
+            // ensure_eri returns the working-basis (spherical) tensor; the lifted
+            // MOs need the Cartesian one.
             std::vector<double> eri_local;
-            const std::vector<double> &eri = HartreeFock::Correlation::ensure_eri(
-                calculator,
-                shell_pairs,
-                eri_local,
-                "TDDFT / Linear Response :");
+            if (spherical)
+                eri_local = _compute_2e(
+                    shell_pairs, static_cast<std::size_t>(nbasis), calculator._integral._engine,
+                    HartreeFock::ERIKernel::Coulomb, 0.0, calculator._integral._tol_eri,
+                    calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+            const std::vector<double> &eri =
+                spherical ? eri_local
+                          : HartreeFock::Correlation::ensure_eri(calculator, shell_pairs, eri_local,
+                                                                 "TDDFT / Linear Response :");
 
             // Same coefficient source as the SCF (xc_grid.cpp): c_fr K[Coulomb]
             // + c_sr K[erf short-range, omega].  For a global hybrid c_sr = 0
@@ -1597,7 +1619,7 @@ namespace DFT::Driver
                 auto kxc_blocks = build_closed_shell_xc_kernel_blocks(
                     prepared,
                     space,
-                    calculator._info._scf.alpha.density,
+                    *P_alpha,
                     *response_exchange,
                     *response_correlation);
                 if (!kxc_blocks)
@@ -1646,8 +1668,8 @@ namespace DFT::Driver
                 auto kxc_blocks = build_unrestricted_xc_kernel_blocks(
                     prepared,
                     spaces,
-                    calculator._info._scf.alpha.density,
-                    calculator._info._scf.beta.density,
+                    *P_alpha,
+                    *P_beta,
                     exchange_functional,
                     correlation_functional);
                 if (!kxc_blocks)
@@ -4341,33 +4363,6 @@ namespace DFT::Driver
         return (0.5 * (unsymmetrized + unsymmetrized.transpose())).eval();
     }
 
-    std::expected<XCMatrixContribution, std::string> evaluate_xc_matrix_from_spin_densities(
-        const PreparedSystem &prepared,
-        const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
-        const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
-        const DFT::XC::Functional &exchange_functional,
-        const DFT::XC::Functional &correlation_functional)
-    {
-        auto xc_grid = evaluate_xc_on_grid(
-            prepared.molecular_grid,
-            prepared.ao_grid,
-            alpha_density,
-            beta_density,
-            exchange_functional,
-            correlation_functional);
-        if (!xc_grid)
-            return std::unexpected(xc_grid.error());
-
-        auto xc_matrix = assemble_xc_matrix(
-            prepared.molecular_grid,
-            prepared.ao_grid,
-            *xc_grid);
-        if (!xc_matrix)
-            return std::unexpected(xc_matrix.error());
-
-        return *xc_matrix;
-    }
-
     std::expected<std::vector<std::vector<Eigen::MatrixXd>>, std::string> build_unrestricted_xc_kernel_blocks(
         const PreparedSystem &prepared,
         const std::vector<ResponseExcitationSpace> &spaces,
@@ -4387,6 +4382,19 @@ namespace DFT::Driver
                     Eigen::MatrixXd::Zero(spaces[static_cast<std::size_t>(target)].nov(),
                                           spaces[static_cast<std::size_t>(source)].nov());
 
+        // Analytic f_xc (libxc second derivatives), not a finite difference of
+        // V_xc: wPBEh-based functionals (HSE family) have a discontinuous V_xc at
+        // reduced gradient s = 1 (libxc s_scaling_2), and a central difference
+        // straddling it put a spurious jump/(2 step) into the kernel, shifting
+        // spherical water/6-31G* HSE06 roots by up to 4.4e-4 eV
+        // (docs/WPBEH_S_SCALING_SCOPE.md).
+        auto kernel = prepare_uks_xc_kernel(prepared.molecular_grid, prepared.ao_grid, ground_alpha_density,
+                                            ground_beta_density, exchange_functional, correlation_functional);
+        if (!kernel)
+            return std::unexpected("TDDFT XC kernel: " + kernel.error());
+        const Eigen::Index nao = ground_alpha_density.rows();
+        const Eigen::MatrixXd zero = Eigen::MatrixXd::Zero(nao, nao);
+
         for (int source = 0; source < nspaces; ++source)
         {
             const ResponseExcitationSpace &source_space = spaces[static_cast<std::size_t>(source)];
@@ -4395,47 +4403,12 @@ namespace DFT::Driver
                 {
                     const Eigen::MatrixXd delta_density =
                         transition_density_matrix(source_space.C_occ.col(j), source_space.C_virt.col(b));
-                    const double delta_scale = std::max(1.0, delta_density.cwiseAbs().maxCoeff());
-                    const double step = 1.0e-5 / delta_scale;
-
-                    Eigen::MatrixXd alpha_plus = ground_alpha_density;
-                    Eigen::MatrixXd alpha_minus = ground_alpha_density;
-                    Eigen::MatrixXd beta_plus = ground_beta_density;
-                    Eigen::MatrixXd beta_minus = ground_beta_density;
-
-                    if (source == 0)
-                    {
-                        alpha_plus += step * delta_density;
-                        alpha_minus -= step * delta_density;
-                    }
-                    else
-                    {
-                        beta_plus += step * delta_density;
-                        beta_minus -= step * delta_density;
-                    }
-
-                    auto plus = evaluate_xc_matrix_from_spin_densities(
-                        prepared,
-                        alpha_plus,
-                        beta_plus,
-                        exchange_functional,
-                        correlation_functional);
-                    if (!plus)
-                        return std::unexpected("TDDFT XC kernel (+) evaluation failed: " + plus.error());
-
-                    auto minus = evaluate_xc_matrix_from_spin_densities(
-                        prepared,
-                        alpha_minus,
-                        beta_minus,
-                        exchange_functional,
-                        correlation_functional);
-                    if (!minus)
-                        return std::unexpected("TDDFT XC kernel (-) evaluation failed: " + minus.error());
-
-                    const Eigen::MatrixXd delta_v_alpha =
-                        (plus->alpha - minus->alpha) / (2.0 * step);
-                    const Eigen::MatrixXd delta_v_beta =
-                        (plus->beta - minus->beta) / (2.0 * step);
+                    auto response = (source == 0) ? kernel->apply(delta_density, zero)
+                                                  : kernel->apply(zero, delta_density);
+                    if (!response)
+                        return std::unexpected("TDDFT XC kernel: " + response.error());
+                    const Eigen::MatrixXd &delta_v_alpha = response->first;
+                    const Eigen::MatrixXd &delta_v_beta = response->second;
 
                     const int source_column = source_space.flat_index(j, b);
                     for (int target = 0; target < nspaces; ++target)

@@ -1,9 +1,9 @@
 # Can `planck-dft` run in a spherical-harmonic basis?
 
 Research scope, opened 2026-10-26. The shared prerequisites (S0.1–S0.6),
-step 1 (RKS/UKS single points), step 2 (gradients, geomopt, frequencies) and
-step 4 (SOSCF and KS stability) have landed; steps 3, 5 and 6 are open, so
-this is still a scope. Rewrite it as the
+steps 1 (RKS/UKS single points), 2 (gradients, geomopt, frequencies),
+3 (TDDFT) and 4 (SOSCF and KS stability) have landed; step 5 and checkpoint
+restart are open (step 6, PCM, stays rejected), so this is still a scope. Rewrite it as the
 answer when they land. Status lives in `vault/Status/Open Work.md`.
 
 ## Why it matters
@@ -58,7 +58,6 @@ What `planck-dft` can rely on now:
 |---|---|---|
 | `validate_spherical_support` | admits single points, gradients, geomopt, frequencies, SOSCF and stability; refuses ImaginaryFollow, DH, PCM and checkpoint restart by name | widen per step |
 | checkpoint restart (`load_ks_restart_state`, `project_ks_restart_density`) | refused in spherical | the cross-basis projection needs the spherical overlaps, as HF's does |
-| TDDFT (`run_linear_response`) | `n_virt = nbasis − n_occ` | `n_virt` from `mo_coefficients.cols()`; tensor from `ensure_eri` |
 | PCM reaction field | stored density | stays rejected (HF rejects spherical PCM too) |
 | DH gradients (`dh_pt2_gradient.cpp`, `udh_*`) | require a Cartesian basis | stay rejected |
 
@@ -70,10 +69,8 @@ into an error. **Audit rule:** a site that sizes a grid or integral object
 stays Cartesian; a site that sizes an SCF object becomes `working_nbasis()`.
 
 **Remaining, in order:**
-1. Step 3, TDDFT: `n_virt` from `mo_coefficients.cols()`, tensor from
-   `ensure_eri`.
-2. Step 5, DH single points.
-3. Checkpoint restart: the cross-basis projection needs spherical overlaps,
+1. Step 5, DH single points.
+2. Checkpoint restart: the cross-basis projection needs spherical overlaps,
    as HF's does.
 
 Step 6 (PCM) stays rejected. With step 2 landed, `DEF2_ECP_SCOPE.md` step 6
@@ -155,9 +152,28 @@ that ever lands.
      `water_rks_b3lyp_geomoptfreq_spherical_631gd` (extended). New runner
      check `gradient_close` compares every printed component, since
      `gradient_max`/`gradient_rms` cannot see a sign flip or an atom swap.
-3. **TDDFT.** Gate: PySCF `cart=False` TDA and Casida, RKS singlet/triplet and
-   UKS, B3LYP and HSE06, at the existing tolerances (4e-4 eV,
-   `docs/RS_TDDFT.md`).
+3. **TDDFT — LANDED 2026-11-06.** `run_linear_response` works in the
+   Cartesian AO basis throughout, like the orbital Hessians: MO coefficients
+   are lifted once (TᵀC), the densities with `to_cartesian`, the Coulomb ERI
+   tensor is built Cartesian (`ensure_eri` would return the spherical one),
+   and `n_virt` comes from `mo_coefficients.cols()`. Before this, spherical
+   TDDFT was not refused: it sized `n_virt` from the Cartesian count and
+   read past the MO matrix.
+   - **vs PySCF `cart=False`** (water / 6-31G*, 150 × 590 unpruned;
+     `tests/pyscf/spherical_tddft_references.py`): RKS B3LYP singlet Casida,
+     triplet TDA, HSE06 Casida and UKS water⁺ B3LYP agree to the printed
+     1e-7 eV in all four roots, oscillator strengths included.
+   - **Found on the way: a finite-difference XC kernel.** The TDDFT kernel
+     was a central difference of V_xc (step 1e-5). In spherical HSE06, grid
+     points within one step of libxc's wPBEh s = 1 discontinuity
+     (`docs/WPBEH_S_SCALING_SCOPE.md`) shifted roots 3–4 by 1.1e-4 and
+     4.4e-4 eV; with a 1e-6 step they matched PySCF, and B3LYP and
+     CAM-B3LYP never moved. `build_unrestricted_xc_kernel_blocks` now applies
+     the analytic f_xc (`prepare_uks_xc_kernel`, the stability kernel) and
+     the FD helper is deleted. All 13 Cartesian TDDFT cases unchanged.
+   - Cases: `water_tddft_{b3lyp_casida,hse06_casida}_spherical_631gd` (core),
+     `water_tddft_b3lyp_triplet_tda_spherical_631gd`,
+     `water_cation_uks_tddft_b3lyp_spherical_631gd` (extended).
 4. **SOSCF and KS stability — LANDED 2026-11-06.** Both go through
    `build_ks_orbital_hessian_op` and `build_uks_orbital_hessian_op`
    (`src/dft/ks_orbital_hessian.cpp`); the RKS stability check uses the UKS
@@ -345,8 +361,9 @@ Gates, all four failing on the old code:
 | S0.6 | `100675e4`, `8745c07a` | HF stability and RHF/UHF CPHF (SOSCF) in the working basis; four gates |
 | 1 | `8bc9c7c6` | spherical RKS/UKS single points; PySCF-gated |
 | 4 | `7cf32683` | SOSCF and KS stability: MO-lifted orbital-Hessian builders; six gates |
-| 2 | — (working tree) | gradients, geomopt, frequencies: XC nuclear-gradient lift; four gates |
-| 3, 5, 6 | — | TDDFT, DH single points, PCM (open) |
+| 2 | `a39f5ee5` | gradients, geomopt, frequencies: XC nuclear-gradient lift; four gates |
+| 3 | — (working tree) | TDDFT in Cartesian AO with lifted MOs; analytic f_xc kernel; four gates |
+| 5, 6 | — | DH single points, PCM (open) |
 
 ## Not in this scope
 
