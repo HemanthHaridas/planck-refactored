@@ -44,6 +44,13 @@ list is step 1.
 - **Passes by luck:** `water_dft_hse06_gradient_symm_ultrafine_fd`. None of its
   grid points cross s = 1 at the displacements it uses.
 
+- **Finite-difference XC kernels (fixed).** Planck's TDDFT kernel was a
+  central difference of V_xc. In spherical water/6-31G* HSE06, points within
+  one step of s = 1 shifted Casida roots 3–4 by 1.1e-4 and 4.4e-4 eV (Cartesian
+  water happened to have none). Fixed 2026-11-06 by applying the analytic
+  f_xc instead (`build_unrestricted_xc_kernel_blocks`); all roots now match
+  PySCF to 1e-7 eV.
+
 ## What it might break, not measured
 
 - **Semi-numerical frequencies.** They difference analytic gradients at
@@ -95,6 +102,12 @@ step 3 shows a real workflow cost.
    - SCF/SOSCF: count points with s within 1e-3 of 1 at convergence and check
      whether tight-tolerance HSE06 runs ever fail to converge.
 4. **Decide B, C or nothing** from step 3, and record the answer here.
+
+## Related
+
+The research question behind this (a smooth wPBEh that agrees with HSE06,
+written up for publication) is `docs/WPBEH_SMOOTH_RESEARCH_SCOPE.md`.
+This scope stays the engineering response inside Planck.
 
 ## Not in scope
 

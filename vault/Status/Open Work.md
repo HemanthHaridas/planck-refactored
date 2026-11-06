@@ -82,7 +82,10 @@ truth for what remains.
   affects every `GGA_X_WPBEH`-based hybrid. Fix scoped in
   `docs/WPBEH_S_SCALING_SCOPE.md`: gate around it now (PySCF comparisons,
   an FD warning), measure the effect on frequencies, geomopt and SCF, then
-  decide whether a smooth variant is ever needed.
+  decide whether a smooth variant is ever needed. The scientific question
+  (characterize every libxc wPBEh seam, measure consequences, construct a
+  C² variant that agrees with HSE06) is a separate, publishable research
+  scope: `docs/WPBEH_SMOOTH_RESEARCH_SCOPE.md`.
 
 ## Routine-use gaps (scoped 2026-10-26)
 
@@ -98,8 +101,8 @@ is the recommended one; none blocks another except where noted.
   matched grids) landed 2026-11-04; step 4 (SOSCF + KS stability, the
   orbital-Hessian builders lift the MO coefficients) and step 2 (gradients,
   geomopt, frequencies; PySCF-gated to ≤ 3.4e-10 Ha/Bohr) landed 2026-11-06.
-  Next, in order: step 3 TDDFT, step 5 DH single points, checkpoint
-  restart. ECP DFT (DEF2 step 6) is unblocked for single points
+  Step 3 (TDDFT) landed 2026-11-06 as well. Next: step 5 DH single
+  points, then checkpoint restart. ECP DFT (DEF2 step 6) is unblocked for single points
   and gradients. (S0): the HF spherical ESP defect (S0.1, fixed) and `ensure_eri` crashing its callers
   in spherical mode after a direct SCF (S0.2, fixed; both in Completion); public `to_cartesian`/`to_working` helpers replacing seven
   hand-written copies (S0.3, landed); `compute_rks/uks_gradient` not lifting P and W (S0.4, landed); and S0.5, C renormalized once in `read_gbs_basis` instead of three per-geometry copies (landed; the per-geometry premise was false). Then
