@@ -6107,6 +6107,75 @@
    ]
   },
   {
+   "id": "hi_rmp2_def2svp_ecp",
+   "input": "tests/inputs/regression/post_hf/hi_rmp2_def2svp_ecp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "core",
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 RMP2/def2-SVP, cart=False, basis and ECP from Planck's GBS (tests/pyscf/def2_ecp_references.py loader): E_corr = -0.1434184970. Before 100675e4 the MP2 electron count summed Z and ignored the 28-electron ECP core, giving -0.0059849856 with no warning.",
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged",
+    "Total MP2 Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -297.2315316634,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "mp2_corr_energy",
+     "expected": -0.1434184970,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "hi_cation_uhf_def2svp_ecp_stability",
+   "input": "tests/inputs/regression/hf/hi_cation_uhf_def2svp_ecp_stability.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "core",
+    "extended",
+    "def2",
+    "ecp",
+    "open_shell"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 UHF/def2-SVP HI+ doublet: E = -296.8760702707 Eh, internal stability lowest eigenvalue +3.9e-10 (the zero mode of the degenerate Pi hole). Before 100675e4 the stability electron count ignored the ECP core: lambda -0.1865 [UNSTABLE], and the follow raised the energy 0.14 Eh.",
+   "expected_exit_code": 0,
+   "contains": [
+    "UHF -> UHF (spin-conserving, internal)"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -296.8760702707,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_le",
+     "metric": "stability_uhf_internal",
+     "value": 1e-08
+    },
+    {
+     "type": "metric_ge",
+     "metric": "stability_uhf_internal",
+     "value": -1e-08
+    }
+   ]
+  },
+  {
    "id": "hi_rhf_def2svp_ecp_restart_full",
    "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp_restart_full.hfinp",
    "executable": "hartree-fock",

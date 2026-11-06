@@ -92,13 +92,13 @@ literal was also corrected, see Findings).
 2. **Smaller open items:**
    - gate post-HF energies with an ECP. Measured after `100675e4` on
      HI/def2-SVP:
-     - RMP2 E_corr −0.1434184969 vs PySCF −0.1434184970. Pin at 1e-8. It
-       would have caught the electron-count bug.
+     - RMP2 E_corr −0.1434184969 vs PySCF −0.1434184970. Gated at 1e-8 by
+       `hi_rmp2_def2svp_ecp` (2026-11-06).
      - CCSD −0.1558819666 vs −0.1558820517 (8.5e-8). Check CC convergence
        before pinning.
      - CASSCF not yet measured.
-   - gate HI⁺ UHF stability (λ_min the Π zero mode, |λ| < 1e-8, stable;
-     `docs/KS_STABILITY_SCOPE.md`);
+   - HI⁺ UHF stability (λ_min −7.3e-12, the Π zero mode) is gated at
+     |λ| ≤ 1e-8 by `hi_cation_uhf_def2svp_ecp_stability` (2026-11-06);
    - the two Cl cases (ZnCl2, AgCl) sit 1.1–1.2e-9 (~4e-13 relative) from
      PySCF for an unexplained reason. It is not the Å→Bohr constant (ZnCl2
      was 1.2e-9 before that fix too) and survives tight convergence in both

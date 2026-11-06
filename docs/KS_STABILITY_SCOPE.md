@@ -13,7 +13,7 @@ lower state.
 
 Open: the spherical basis, which is step 4 of `docs/SPHERICAL_DFT_SCOPE.md`,
 and through it KS stability with ECPs (`docs/DEF2_ECP_SCOPE.md` step 6).
-Regression gates for the HF-side fixes are also open. Status:
+The HF-side fixes are gated. Status:
 `vault/Status/Open Work.md`.
 
 | case | channel | Planck | PySCF 2.13.0 |
@@ -192,13 +192,16 @@ The rest of this work lives in the two scopes it depends on:
 |---|---|---|
 | **Spherical KS stability.** Lift the trial densities inside the two `ks_orbital_hessian.cpp` builders, which SOSCF shares. Drop the `validate_spherical_support` refusal. Gates on `water_cation_uks_pbe_spherical_ccpvtz`, `h2o2_cation_uks_pbe_spherical_631gd`, `water_rks_b3lyp_spherical_ccpvtz` vs PySCF `cart=False` | `SPHERICAL_DFT_SCOPE.md` step 4 (with SOSCF) | spherical DFT step 1 (landed) |
 | **KS stability with ECPs.** No new code: the ECP enters through H_core. Gate: HI⁺ UKS def2-SVP vs PySCF | `DEF2_ECP_SCOPE.md` step 6 | spherical step 4 and ECP step 6 |
-| Gate HI⁺ UHF stability (\|λ\| < 1e-8) and HI RMP2 (E_corr −0.1434184970 at 1e-8). Settle HI CCSD's 8.5e-8 first | `DEF2_ECP_SCOPE.md` smaller items | — |
+Done since: the spherical HF gates, the `rhf_response.cpp` site (it was
+live through RHF SOSCF; `SPHERICAL_DFT_SCOPE.md` S0.6), and the ECP gates
+`hi_cation_uhf_def2svp_ecp_stability` and `hi_rmp2_def2svp_ecp`. HI CCSD
+(8.5e-8 off PySCF) stays unpinned in `DEF2_ECP_SCOPE.md`.
 
-Done since: the spherical HF gates, and the `rhf_response.cpp` site (it was
-live through RHF SOSCF; `SPHERICAL_DFT_SCOPE.md` S0.6).
-
-One open item stays here: does `SCF::analyze_uhf_stability` handle a spin
-with no rotations? The UKS path does now.
+`SCF::analyze_uhf_stability` with an empty spin (checked 2026-11-06): an
+empty β occupied space works (H/6-31G UHF reports both channels stable).
+A spin with no virtuals logs `[WRN] Skipped` and the run continues. That
+happens only when every orbital is occupied (H/STO-3G), where there is
+nothing to rotate, so it is left as is.
 
 Not in scope:
 - spin-flip UKS → GKS (the UHF analysis has only a diagonal approximation,

@@ -58,9 +58,10 @@ truth for what remains.
     RHF → UHF channel) landed; see Completion. What remains is tracked in the
     scopes it depends on: spherical KS stability is `SPHERICAL_DFT_SCOPE.md`
     step 4 (with SOSCF, same builders); KS stability with ECPs follows from
-    that plus `DEF2_ECP_SCOPE.md` step 6; the HF-side ECP gates (HI⁺
-    stability, HI RMP2/CCSD) are in `DEF2_ECP_SCOPE.md` (spherical HF
-    gates landed, S0.6). Only HSE06/cc-pVTZ traps among the
+    that plus `DEF2_ECP_SCOPE.md` step 6; the HF-side ECP gates landed
+    2026-11-06 (`hi_cation_uhf_def2svp_ecp_stability`,
+    `hi_rmp2_def2svp_ecp`; spherical HF gates in S0.6); HI CCSD (8.5e-8
+    off PySCF) stays unpinned in `DEF2_ECP_SCOPE.md`. Only HSE06/cc-pVTZ traps among the
     water⁺ variants tried. The S1 sweep found one unintended saddle among 38
     open-shell regression inputs (`h2o2_cation_uhf_tight_tol_sto3g`, kept: it
     gates DIIS termination). SAD as the open-shell default was not pursued.
