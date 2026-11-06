@@ -447,8 +447,9 @@ historical design context, but they are no longer the source of truth for
   PySCF's gau_tight minimum (Planck's default 3e-4 force threshold),
   frequencies within 1.6 cm⁻¹. A 3.2e-8 UKS gap first blamed on Planck was
   PySCF's default `conv_tol_grad` (√conv_tol). New runner check
-  `gradient_close` (every component). An HSE06 energy-FD miss surfaced on
-  the way; it is present in Cartesian too (see Open Work).
+  `gradient_close` (every component). An HSE06 energy-FD miss that surfaced
+  on the way is libxc's HSE06 `s_scaling_2` discontinuity at s = 1, not
+  Planck (see Open Work).
 
 - **Spherical KS stability and SOSCF (2026-11-06,
   `docs/SPHERICAL_DFT_SCOPE.md` step 4).** The two orbital-Hessian builders

@@ -66,18 +66,23 @@ truth for what remains.
     open-shell regression inputs (`h2o2_cation_uhf_tight_tol_sto3g`, kept: it
     gates DIIS termination). SAD as the open-shell default was not pursued.
 
-- **HSE06 analytic gradient disagrees with Planck's own energy finite
-  difference (found 2026-11-06).** C1 H2O2 / 6-31G*, RKS HSE06, 150 x 590
-  grid, fourth-order FD (`tests/dft_gradient_fd.py --delta 2e-3
-  --outer-delta 4e-3 --scf-tolerance 1e-11`): max deviation 8.0e-6 Ha/Bohr in
-  Cartesian, 1.5e-5 in spherical. The same analytic gradient matches PySCF
-  (grid response on) to 1.2e-10, and UKS PBE passes FD at 1.2e-9, so the
-  suspect is the HSE06 *energy* across displaced geometries (e.g. short-range
-  K screening or the erf-kernel Schwarz bounds), not the gradient. The
-  committed `water_dft_hse06_gradient_symm_ultrafine_fd` passes, so first
-  check what differs (C2v water has 3 independent components, C1 H2O2 has 12).
-  Input: `tests/inputs/regression/spherical/h2o2_rks_hse06_gradient_spherical_631gd.hfinp`
-  (switch `basis_type` for the Cartesian control).
+- **HSE06 energy finite differences are unreliable by construction (answered
+  2026-11-06; one decision open).** Not a Planck defect. libxc's HSE06 rescales
+  the reduced gradient with `s_scaling_2` (`maple/scaling.mpl`, "first version
+  of the scaling by TM Henderson, apparently used by Gaussian"), which jumps by
+  5.15e-4 at s = 1, so the energy density jumps by ~1e-4 relative there. A grid
+  point whose s crosses 1 between FD geometries adds its weighted jump to the
+  difference. On C1 H2O2/6-31G* (δ = 5e-4 Bohr) 7 of 354000 points cross and
+  carry 2.796e-8 Eh, the whole FD error; removing them leaves 4.4e-8 Ha/Bohr
+  of ordinary step error (`tests/pyscf/hse06_s_scaling_jump.py`). Planck's
+  energy and analytic gradient match PySCF to ≤ 1.2e-10, and PySCF reproduces
+  the FD miss to 1e-12. `water_dft_hse06_gradient_symm_ultrafine_fd` passes
+  because none of its points happen to cross. Upstream kept the jump on
+  purpose (libxc `173000399`, 2020, "follow the old convention"), and it
+  affects every `GGA_X_WPBEH`-based hybrid. Fix scoped in
+  `docs/WPBEH_S_SCALING_SCOPE.md`: gate around it now (PySCF comparisons,
+  an FD warning), measure the effect on frequencies, geomopt and SCF, then
+  decide whether a smooth variant is ever needed.
 
 ## Routine-use gaps (scoped 2026-10-26)
 

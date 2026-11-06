@@ -138,11 +138,12 @@ that ever lands.
      gradient is linear in the density error. With `conv_tol_grad = 1e-9` the
      gap is 3.4e-10. Tightening Planck's own SCF moved its gradient 3e-10.
    - **Energy FD** (`tests/dft_gradient_fd.py`, fourth order, δ 2e-3/4e-3 Bohr):
-     UKS PBE 1.2e-9. HSE06 misses by 1.5e-5 (atom 1 y), and the Cartesian
-     control on the same input misses by 8.0e-6 (atom 3 z), so this is **not
-     spherical-specific**; it is tracked in `vault/Status/Open Work.md`. The
-     analytic HSE06 gradient matches PySCF to 1.2e-10, so the suspect is
-     Planck's HSE06 energy across displaced geometries, not the gradient.
+     UKS PBE 1.2e-9. HSE06 misses by 1.5e-5 (Cartesian control 8.0e-6). That
+     is libxc's HSE06 definition, not Planck: its `s_scaling_2` jumps at
+     s = 1, so the energy jumps whenever a grid point's s crosses 1 between FD
+     geometries (`tests/pyscf/hse06_s_scaling_jump.py` accounts for the whole
+     error; PySCF reproduces it to 1e-12). HSE06 gradients are gated against
+     PySCF instead.
    - **Geomopt + frequencies**, water RKS B3LYP: E_opt −76.4070238183 vs
      PySCF gau_tight −76.4070241417 (3.2e-7: Planck stops at its default
      max|g| 3e-4, here 2.2e-4, and that tolerance is not an input keyword);
