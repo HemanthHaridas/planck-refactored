@@ -11,14 +11,19 @@ what do the cluster measurements show?**
 
 `planck-mpi` is a third executable, built only with `-DBUILD_MPI=ON`. It parses
 the input once and dispatches to the same HF or DFT driver the serial binaries
-use. Only two things are distributed:
+use. Three things are distributed:
 
 1. the **direct-SCF Fock build** (HF Fock in #146; DFT J/K in #151), which
-   stripes the bra triangle of the fused quartet loop across ranks, and
+   stripes the bra triangle of the fused quartet loop across ranks;
 2. the **DFT SCF-energy grid** (#156), where each rank takes a contiguous slice
-   of grid points.
+   of grid points; and
+3. the **conventional ERI tensor build** (`_compute_2e`) for every engine: OS
+   from the start, HGP, Rys and `auto` (the default engine) since #181. Each
+   rank fills the canonical entries of its bras, and one `nb⁴` allreduce
+   merges them.
 
-Each is followed by one dense `nb²` `MPI_Allreduce`, summed in fixed rank order.
+Each is followed by one dense `MPI_Allreduce` (`nb²`, or `nb⁴` for the tensor),
+summed in fixed rank order.
 Diagonalization, setup and everything else are replicated. Every distributed
 result is **bitwise equal** to the serial binary.
 
@@ -194,14 +199,15 @@ nameable set, but it is why the CI gap below matters.
 
 ## What remains (tracked in Open Work)
 
-- **No CI scale gate.** The largest regression input is 4 atoms, so nothing
-  fails if distribution regresses to replication. The cheap fix is one
-  16-water / 6-31G (nb=208) case asserting `-n 2 == -n 4 == serial` bitwise.
-- **HGP and Rys conventional `_compute_2e` replicate.** Each rank builds the
-  full tensor (`hgp.cpp:1392`, `rys.cpp:1460`). The result is correct but the
-  extra ranks are wasted. Either stripe them (the OS pattern is six lines plus
-  one reduce) or reject `-n > 1` for them. Direct SCF, which is what cluster
-  runs use, is striped for every engine.
+- **Scale gate and engine coverage: done (#181).**
+  `water16_rhf_631g_auto_direct_mpi_scale` (16 waters / 6-31G, nb=208, direct
+  SCF) requires serial, 2 and 4 ranks to agree on every printed digit
+  (−1215.7179682094 Eh; about 12 s for all three runs on a workstation). The
+  HGP, Rys and `auto` conventional builds are striped, with one case per
+  engine at 2 and 3 ranks (water/6-31G*). An exact energy alone cannot tell
+  "striped and reduced" from "replicated and not reduced", so the stripe was
+  checked by mutation: dropping the `auto` reduce gives −137.47 Eh against
+  −76.01 at 2 ranks.
 - **Post-HF is not distributed.** Generated CC kernels are OpenMP-threaded
   behind `CCGEN_OMP_COLLAPSE`, but the hand-written CC and MP2 paths are serial,
   and no post-HF path is MPI-striped. Dense post-HF can be rank-striped on the
