@@ -455,11 +455,11 @@ Optional continuum-solvation settings for a self-consistent conductor-like PCM s
 
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
-| `model` | enum | `pcm`, `cpcm`, `none` | `none` | Solvation model selector. `pcm` and `cpcm` currently map to the same conductor-like PCM implementation. |
+| `model` | enum | `pcm`, `cpcm`, `none` | `none` | Solvation model selector. `pcm` and `cpcm` map to the same C-PCM: f(ε) = (ε−1)/ε on a SWIG cavity (Lange-Herbert switching function and Gaussian surface charges, the same scheme as PySCF's default C-PCM). |
 | `solvent` | string | `water`, `acetonitrile`, `methanol`, `ethanol`, `dmso`, `dichloromethane`, `chloroform`, `thf`, `toluene`, `benzene`, `hexane` | — | Named solvent shortcut that sets the dielectric constant. |
 | `dielectric` / `epsilon` / `eps` | float | > 1 | `1.0` | Dielectric constant of the continuum. Overrides the solvent preset when both are given. |
-| `cavity_scale` | float | > 0 | `1.2` | Scale factor applied to the atom-centered radii used to build the PCM cavity. |
-| `surface_points` / `surface_points_per_atom` | int | ≥ 6 | `60` | Number of Fibonacci-distributed surface points generated per atom before overlap culling. |
+| `cavity_scale` | float | > 0 | `1.2` | Scale factor applied to the atom-centered radii (modified Bondi: Bondi with H = 1.1 Å) used to build the PCM cavity. |
+| `surface_points` / `surface_points_per_atom` | int | Lebedev size | `302` | Lebedev points per atomic sphere before the switching function fades out buried points. Must be a Lebedev size with a SWIG constant: 6, 14, 26, 38, 50, 86, 110, 146, 170, 194, 302, 350, 434, 590, or larger (74, 230 and 266 are rejected). |
 
 #### DFT grid presets
 
@@ -634,7 +634,7 @@ diagnostic point list into a charge fit.
 | `resp_tightness` | float | > 0 | `0.1` | Restraint width *b* in atomic units |
 | `resp_exempt_hydrogen` | bool | `.true.`, `.false.` | `.true.` | Exempt hydrogens from the restraint. The restraint exists to tame buried heavy atoms that the potential barely constrains; hydrogens sit on the surface where the data is good. |
 | `equivalent` | ints | 1-based atom indices | — | Force the listed atoms to share one charge, repeatable. These are hard constraints in the same Lagrange block as the total charge, so grouped atoms agree exactly rather than approximately. |
-| `include_reaction_field` | bool | `.true.`, `.false.` | `.false.` | Under `%begin_pcm`, add the PCM reaction field `sum_i q_i/\|r - s_i\|` to the fitted potential, giving the total in-solvent potential instead of the solute one. No effect without a solvation model. See below. |
+| `include_reaction_field` | bool | `.true.`, `.false.` | `.false.` | Under `%begin_pcm`, add the PCM reaction field `sum_i q_i erf(xi_i \|r - s_i\|)/\|r - s_i\|` to the fitted potential, giving the total in-solvent potential instead of the solute one. No effect without a solvation model. See below. |
 
 ```
 %begin_esp

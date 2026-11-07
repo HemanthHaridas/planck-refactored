@@ -13,18 +13,19 @@
 // In the C-PCM (conductor-like) approximation the surface integral equation
 // reduces to a single dense linear system
 //
-//      D q = -f(eps) phi_tot,        f(eps) = (eps - 1) / (eps + 1/2),
+//      D q = -f(eps) phi_tot,        f(eps) = (eps - 1) / eps,
 //
 // where D is the symmetric "surface influence matrix" of Coulomb couplings
 // between tesserae and phi_tot is the total electrostatic potential the solute
 // produces at each tessera (nuclei + electrons). The reaction-field potential
 // felt by the solute electrons is then
 //
-//      phi_rxn(r) = sum_i q_i / |r - s_i|
+//      phi_rxn(r) = sum_i q_i erf(xi_i |r - s_i|) / |r - s_i|
 //
-// and the matching one-electron operator added to the Fock / Kohn-Sham matrix
-// is V_rxn_munu = sum_i q_i V^(i)_munu, where V^(i) is the AO matrix of a
-// unit point charge at s_i. The reaction-field contribution to the energy is
+// (each q_i is a normalized Gaussian of width xi_i: the SWIG cavity, see
+// pcm.cpp) and the matching one-electron operator added to the Fock /
+// Kohn-Sham matrix is V_rxn_munu = sum_i q_i V^(i)_munu, where V^(i) is the
+// AO matrix of a unit Gaussian charge at s_i. The reaction-field contribution to the energy is
 //
 //      G_rxn = (1/2) q . phi_tot,
 //
@@ -46,12 +47,14 @@
 
 namespace HartreeFock::Solvation
 {
-    // One tessera of the cavity surface. The cavity is built once at the start
-    // of the calculation and never re-tessellated (PCM is single-point only).
+    // One tessera of the cavity surface. The cavity is built once per geometry;
+    // every tessera property is smooth in the nuclear coordinates (SWIG).
     struct PCMSurfacePoint
     {
         Eigen::Vector3d position = Eigen::Vector3d::Zero(); // s_i, in Bohr
-        double area = 0.0;                                  // a_i, in Bohr^2
+        double area = 0.0;                                  // a_i = w_i R^2 F_i, in Bohr^2
+        double exponent = 0.0;                              // Gaussian width xi_i, in 1/Bohr
+        double switching = 1.0;                             // SWIG switching value F_i in (0, 1]
         std::size_t atom_index = 0;                         // owning atom (for diagnostics)
     };
 
@@ -62,7 +65,7 @@ namespace HartreeFock::Solvation
         std::vector<PCMSurfacePoint> surface_points;
 
         // unit_potential_matrices[i] is the AO matrix of a unit point charge
-        // placed at surface_points[i].position. Storing one matrix per tessera
+        // (Gaussian, width xi_i) placed at surface_points[i].position. Storing one matrix per tessera
         // up front means the only density-dependent surface work per SCF
         // iteration is a Frobenius product against the current density and a
         // linear combination to assemble V_rxn — no shell-pair integrals are
@@ -73,16 +76,16 @@ namespace HartreeFock::Solvation
         // Density-independent, cached up front.
         Eigen::VectorXd nuclear_potential;
 
-        // Symmetric, positive-definite Coulomb interaction matrix between tesserae
-        // (off-diagonals 1/|s_i - s_j|, diagonals via the ISWIG self-energy
-        // prescription). Solved every SCF iteration to obtain the apparent
+        // Symmetric, positive-definite Coulomb interaction matrix between the
+        // Gaussian tessera charges (S in Lange-Herbert: erf(xi_ij r_ij)/r_ij,
+        // diagonal xi_i sqrt(2/pi) / F_i). Solved every SCF iteration to obtain the apparent
         // charges; could in principle be factored once and re-solved, but the
         // current implementation re-factors it for clarity.
         Eigen::MatrixXd influence_matrix;
 
-        // f(epsilon) = (epsilon - 1) / (epsilon + 1/2). Klamt-Schuurmann
-        // C-PCM scaling — interpolates between vacuum (eps=1, f=0) and a
-        // perfect conductor (eps -> inf, f -> 1).
+        // f(epsilon) = (epsilon - 1) / epsilon, the C-PCM scaling —
+        // interpolates between vacuum (eps=1, f=0) and a perfect conductor
+        // (eps -> inf, f -> 1).
         double dielectric_factor = 0.0;
 
         // True iff the cavity actually has tesserae (i.e. PCM is requested
@@ -108,8 +111,8 @@ namespace HartreeFock::Solvation
     // One-shot setup: build the cavity, precompute the influence matrix, the
     // nuclear potential at each tessera, and one unit-charge AO matrix per
     // tessera. Returns an empty (disabled) state when SolvationModel::None is
-    // requested. Errors out if surface_points_per_atom < 6 or if every
-    // candidate surface point is buried inside another atom's sphere.
+    // requested. Errors out if surface_points_per_atom is not a supported
+    // Lebedev size or if every candidate surface point is buried.
     std::expected<PCMState, std::string> build_pcm_state(
         const HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs);

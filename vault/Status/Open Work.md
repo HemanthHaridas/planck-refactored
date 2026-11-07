@@ -86,10 +86,13 @@ rerun for it.
   non-SCF workflow refuse meta-GGA by name: the KS gradient picks its terms by
   `vsigma.cols()` and would otherwise silently drop the τ term.
 - **PCM geometry optimizations and frequencies**
-  (`docs/PCM_GEOMETRY_SCOPE.md`). The cavity hard-prunes buried points, so
-  the energy jumps with geometry. A smooth cavity comes first, then the
-  analytic gradient. PCM is still single-point only, in both binaries and in
-  both bases, and spherical PCM is refused.
+  (`docs/PCM_GEOMETRY_SCOPE.md`). Step 1, the smooth SWIG cavity, is
+  implemented (2026-11-07) and matches PySCF to every printed digit on four
+  cases. Still to do: re-pin the five existing PCM cases (they use 24 points,
+  which is now rejected), register the new gates, and confirm that
+  point-charge integrals are bitwise unchanged. The analytic gradient comes next. PCM is still
+  single-point only, in both binaries and in both bases, and spherical PCM is
+  refused.
 - **Double hybrids** (`docs/DH_IMPLEMENTATION.md` §9):
   - UKS DH geometry optimization and frequencies are rejected. The gradient
     they would call already passes FD.

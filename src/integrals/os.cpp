@@ -572,26 +572,35 @@ static double _nuclear_hrr(
 
 // Compute <A| -Z/|r-C| |B> for a single primitive pair and a single nucleus.
 // Returns the unnormalized primitive integral (coeff_product applied by caller).
+//
+// charge_exponent > 0 replaces the point charge by a normalized Gaussian
+// charge (eta/pi)^1.5 exp(-eta |r-C|^2), i.e. the operator erf(sqrt(eta) r)/r
+// (the 3-centre (ab|c) with c an s Gaussian). With s = eta/(zeta+eta) the OS
+// recurrence is the point-charge one with PC -> s PC, the (m+1) term of the
+// a/2zeta step scaled by s, T -> s T, and the prefactor by sqrt(s). eta -> inf
+// (s = 1) is the point charge. Used by the SWIG C-PCM cavity (pcm.cpp).
 static double _os_nuclear_primitive(
     const HartreeFock::PrimitivePair &pp,
     const int lAx, const int lAy, const int lAz,
     const int lBx, const int lBy, const int lBz,
     const double ABx, const double ABy, const double ABz,
-    const Eigen::Vector3d &nuc_pos)
+    const Eigen::Vector3d &nuc_pos,
+    const double charge_exponent = 0.0)
 {
     const int L = lAx + lAy + lAz + lBx + lBy + lBz;
+    const double s = charge_exponent > 0.0 ? charge_exponent / (pp.zeta + charge_exponent) : 1.0;
 
-    // P - C
-    const double pCx = pp.center[0] - nuc_pos[0];
-    const double pCy = pp.center[1] - nuc_pos[1];
-    const double pCz = pp.center[2] - nuc_pos[2];
-    const double T = pp.zeta * (pCx * pCx + pCy * pCy + pCz * pCz);
+    // s (P - C)
+    const double pCx = s * (pp.center[0] - nuc_pos[0]);
+    const double pCy = s * (pp.center[1] - nuc_pos[1]);
+    const double pCz = s * (pp.center[2] - nuc_pos[2]);
+    const double T = pp.zeta * (pCx * pCx + pCy * pCy + pCz * pCz) / s;
 
     // pp.prefactor = (pi/zeta)^1.5 * exp(-alpha*beta/zeta * |AB|^2)
     // Nuclear prefactor = 2*pi/zeta * exp(-alpha*beta/zeta * |AB|^2)
     //                   = pp.prefactor * 2*pi/zeta * (zeta/pi)^1.5
     //                   = pp.prefactor * 2 * sqrt(zeta/pi)
-    const double nuc_pref = pp.prefactor * 2.0 * std::sqrt(pp.zeta / std::numbers::pi);
+    const double nuc_pref = pp.prefactor * 2.0 * std::sqrt(s * pp.zeta / std::numbers::pi);
 
     // VRR table V[ix][iy][iz][m]
     // Spatial dims: each axis runs 0..lAq+lBq ≤ 2*MAX_L, so VRR_DIM = 2*MAX_L+1.
@@ -623,7 +632,7 @@ static double _os_nuclear_primitive(
             V[ix][0][0][m] = pAx * V[ix - 1][0][0][m] - pCx * V[ix - 1][0][0][m + 1];
             if (ix > 1)
             {
-                V[ix][0][0][m] += (ix - 1) * hiz * (V[ix - 2][0][0][m] - V[ix - 2][0][0][m + 1]);
+                V[ix][0][0][m] += (ix - 1) * hiz * (V[ix - 2][0][0][m] - s * V[ix - 2][0][0][m + 1]);
             }
         }
     }
@@ -641,7 +650,7 @@ static double _os_nuclear_primitive(
                 V[ix][iy][0][m] = pAy * V[ix][iy - 1][0][m] - pCy * V[ix][iy - 1][0][m + 1];
                 if (iy > 1)
                 {
-                    V[ix][iy][0][m] += (iy - 1) * hiz * (V[ix][iy - 2][0][m] - V[ix][iy - 2][0][m + 1]);
+                    V[ix][iy][0][m] += (iy - 1) * hiz * (V[ix][iy - 2][0][m] - s * V[ix][iy - 2][0][m + 1]);
                 }
             }
         }
@@ -662,7 +671,7 @@ static double _os_nuclear_primitive(
                     V[ix][iy][iz][m] = pAz * V[ix][iy][iz - 1][m] - pCz * V[ix][iy][iz - 1][m + 1];
                     if (iz > 1)
                     {
-                        V[ix][iy][iz][m] += (iz - 1) * hiz * (V[ix][iy][iz - 2][m] - V[ix][iy][iz - 2][m + 1]);
+                        V[ix][iy][iz][m] += (iz - 1) * hiz * (V[ix][iy][iz - 2][m] - s * V[ix][iy][iz - 2][m + 1]);
                     }
                 }
             }
@@ -1161,7 +1170,7 @@ static Eigen::MatrixXd compute_external_charge_attraction_impl(
                                lAx, lAy, lAz,
                                lBx, lBy, lBz,
                                ABx, ABy, ABz,
-                               charge.position) *
+                               charge.position, charge.exponent) *
                            pp.coeff_product;
 
             v_elem -= charge.charge * v_point;

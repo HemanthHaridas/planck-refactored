@@ -98,6 +98,10 @@ construction remain serial; any future reduction there must use fixed order.
 
 `planck-dft` can add a self-consistent C-PCM reaction field for single-point RKS/UKS calculations. The DFT driver builds a reusable `PCMState` once, then adds the reaction potential and solvation energy during each SCF iteration.
 
+The cavity is SWIG (Lange-Herbert: Lebedev points, a smooth switching
+function, Gaussian surface charges) with f(ε) = (ε−1)/ε, the same scheme as
+PySCF's default C-PCM. See `docs/PCM_GEOMETRY_SCOPE.md`.
+
 Key pieces:
 - setup: `HartreeFock::Solvation::build_pcm_state`
 - per-iteration reaction field: `HartreeFock::Solvation::evaluate_pcm_reaction_field`

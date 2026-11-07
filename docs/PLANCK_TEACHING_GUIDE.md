@@ -9085,12 +9085,16 @@ In an apparent-surface-charge (ASC) formulation, the polarization of the
 dielectric is represented by a layer of charges \(q_i\) that lives on the
 boundary \(\Gamma\) of the molecular cavity. Each surface element (tessera)
 \(i\) has position \(\mathbf{s}_i\) and area \(a_i\). The reaction potential
-felt by the solute is, to a first approximation, the Coulomb potential of these
-surface charges:
+felt by the solute is the Coulomb potential of these surface charges. Planck
+smears each one into a normalized Gaussian of width \(\xi_i\) (see the cavity
+section below), so
 
 \[
-\phi^{\text{rxn}}(\mathbf{r}) = \sum_i \frac{q_i}{|\mathbf{r} - \mathbf{s}_i|}.
+\phi^{\text{rxn}}(\mathbf{r}) = \sum_i q_i\,\frac{\operatorname{erf}(\xi_i |\mathbf{r} - \mathbf{s}_i|)}{|\mathbf{r} - \mathbf{s}_i|},
 \]
+
+which is \(\sum_i q_i / |\mathbf{r} - \mathbf{s}_i|\) a few widths away from
+the surface.
 
 The surface charges respond to the *total* electrostatic potential
 \(\phi^{\text{tot}}(\mathbf{s}_i)\) produced by the solute at each tessera —
@@ -9100,15 +9104,18 @@ that integral equation reduces to a single dense linear system
 \[
 \mathbf{D}\,\mathbf{q} = -f(\varepsilon)\,\boldsymbol{\phi}^{\text{tot}},
 \qquad
-f(\varepsilon) = \frac{\varepsilon - 1}{\varepsilon + 1/2},
+f(\varepsilon) = \frac{\varepsilon - 1}{\varepsilon},
 \]
 
 where \(\mathbf{D}\) is the *surface influence matrix* (Coulomb interaction
 between tesserae) and \(f(\varepsilon)\) is the C-PCM dielectric scaling
-factor. The form \((\varepsilon - 1)/(\varepsilon + 1/2)\) is Klamt and
-Schüürmann's COSMO/C-PCM choice — it interpolates smoothly between vacuum
+factor of Barone and Cossi. It interpolates between vacuum
 (\(\varepsilon \to 1\), \(f \to 0\), no polarization) and a perfect conductor
-(\(\varepsilon \to \infty\), \(f \to 1\)).
+(\(\varepsilon \to \infty\), \(f \to 1\)). Klamt and Schüürmann's COSMO uses
+\((\varepsilon - 1)/(\varepsilon + 1/2)\) instead. For water the two differ
+by 0.6 %, about 7e-5 Eh of a typical small-molecule solvation energy. Planck
+used the COSMO factor under the C-PCM name until the SWIG cavity landed;
+PySCF's `C-PCM` uses \((\varepsilon - 1)/\varepsilon\).
 
 Once the apparent charges are known, the reaction-field contribution to the
 electronic energy is
@@ -9123,73 +9130,88 @@ and the *operator* that the solute electrons feel is
 \hat{V}^{\text{rxn}} = \sum_i q_i \int \frac{\chi_\mu^*(\mathbf{r})\,\chi_\nu(\mathbf{r})}{|\mathbf{r} - \mathbf{s}_i|}\,\mathrm{d}\mathbf{r}.
 \]
 
-In matrix form this is just a weighted sum of one-electron nuclear-attraction-
-like integrals against unit point charges placed at the tesserae; that is
-exactly the integral primitive `_compute_external_charge_attraction` already
-provides in the Obara-Saika engine.
+In matrix form this is a weighted sum of one-electron nuclear-attraction-like
+integrals against unit Gaussian charges at the tesserae (with
+\(\operatorname{erf}(\xi_i r)/r\) in place of \(1/r\)). The Obara-Saika
+primitive `_os_nuclear_primitive` handles a Gaussian charge of exponent
+\(\eta = \xi^2\) with one scale factor \(s = \eta/(\zeta + \eta)\), where
+\(\zeta\) is the primitive pair's exponent. In the point-charge recurrence,
+\(\mathbf{P}-\mathbf{C}\) becomes \(s(\mathbf{P}-\mathbf{C})\), the \((m+1)\)
+term of the \(a/2\zeta\) step is scaled by \(s\), the Boys argument by \(s\),
+and the prefactor by \(\sqrt{s}\). A point charge is \(s = 1\).
+`_compute_external_charge_attraction` takes the exponent from
+`ExternalCharge::exponent` (0 means a point charge).
 
-### Cavity Construction (Fibonacci-Sphere Tessellation)
+### Cavity Construction (SWIG)
 
-Each atom \(A\) is wrapped in a sphere of radius
+A cavity whose tesserae appear and vanish as atoms move gives an energy with
+jumps, and its gradient does not exist at those geometries. Planck therefore
+uses the switching/Gaussian (SWIG) discretization of Lange and Herbert
+(J. Chem. Phys. 133, 244111 (2010)), which is also PySCF's default C-PCM
+cavity. Every tessera property is a smooth function of the nuclear
+coordinates.
+
+Each atom \(J\) is wrapped in a sphere of radius
 
 \[
-R_A = s \cdot R_A^{\text{vdW}},
+R_J = s \cdot R_J^{\text{vdW}},
 \]
 
-where \(R_A^{\text{vdW}}\) is the element's van der Waals radius (from
-`src/lookup/elements.cpp`, converted to Bohr) and \(s\) is the user-controlled
-cavity scale (`cavity_scale`, default \(s = 1.2\), matching common Bondi-radius
-PCM conventions). On each sphere, `points_per_atom` surface points are placed
-using a *Fibonacci-sphere* (golden-angle) distribution — `fibonacci_sphere` in
-`pcm.cpp`. This gives a quasi-uniform tiling on the sphere with a single
-parameter and no special-case handling at the poles.
+where \(R_J^{\text{vdW}}\) is the modified Bondi radius (the table in
+`src/lookup/elements.cpp`, with H at 1.1 Å instead of 1.2 Å) and \(s\) is
+`cavity_scale` (default 1.2). Each sphere is sampled by an \(N\)-point Lebedev
+grid (`surface_points_per_atom`, default 302) with weights \(w_i\) that sum
+to \(4\pi\).
 
-Each candidate point gets an area
+**Switching.** Instead of a buried/exposed test, a point \(i\) on atom
+\(A\)'s sphere is faded out as it enters other spheres:
 
 \[
-a_i = \frac{4\pi R_A^2}{N_{\text{points/atom}}}.
+F_i = \prod_{J \ne A} h\!\left(\frac{r_{iJ} - R_{\text{in},J}}{R_{\text{sw},J}}\right),
+\qquad
+h(x) = x^3(10 - 15x + 6x^2) \text{ on } [0, 1],
 \]
 
-The atomic spheres overlap in molecules. Points that fall *inside* another
-atom's sphere are *buried* and discarded — only the exposed surface (the
-solvent-accessible patches) is kept. After this pruning, the surviving points
-\(\{\mathbf{s}_i, a_i\}\) form the cavity discretization. If every point is
-buried (an unlikely pathological case for tiny `points_per_atom`), the build
-returns an error rather than silently producing an empty cavity.
+with \(h = 0\) below 0 and \(h = 1\) above 1. Here
+\(R_{\text{sw}} = R\sqrt{14/N}\),
+\(\alpha = \tfrac12 + R/R_{\text{sw}} - \sqrt{(R/R_{\text{sw}})^2 - 1/28}\) and
+\(R_{\text{in}} = R - \alpha R_{\text{sw}}\). The tessera area is
+\(a_i = w_i R_A^2 F_i\). Points with \(w_i F_i \le 10^{-16}\) are dropped;
+their weight has already faded to zero, so dropping them changes nothing.
 
-The cavity construction is carried out once at the start of the calculation;
-because Planck currently restricts PCM to single-point energies, the cavity
-does not need to be rebuilt at each geometry step.
+**Gaussian charges.** Each tessera carries a normalized Gaussian charge of
+width
+
+\[
+\xi_i = \frac{\zeta_N}{R_A \sqrt{w_i}},
+\]
+
+where \(\zeta_N\) is the York-Karplus constant for the \(N\)-point Lebedev
+grid (`SWIG_ZETA` in `pcm.cpp`). Lebedev sizes with no published constant
+(74, 230, 266) are rejected.
+
+The cavity is built once per geometry. A geometry optimization would rebuild
+it at each step.
 
 ### The Surface Influence Matrix \(\mathbf{D}\)
 
-For \(i \ne j\), the off-diagonal element is the Coulomb interaction between
-two unit charges placed on tesserae \(i\) and \(j\):
+Two Gaussian charges interact through
+\(\operatorname{erf}(\xi_{ij} r_{ij})/r_{ij}\), with
+\(\xi_{ij} = \xi_i\xi_j/\sqrt{\xi_i^2 + \xi_j^2}\). This is finite at every
+separation, so
 
 \[
-D_{ij} = \frac{1}{|\mathbf{s}_i - \mathbf{s}_j|}.
+D_{ij} = \frac{\operatorname{erf}(\xi_{ij}\,|\mathbf{s}_i - \mathbf{s}_j|)}{|\mathbf{s}_i - \mathbf{s}_j|},
+\qquad
+D_{ii} = \frac{\xi_i\sqrt{2/\pi}}{F_i}.
 \]
 
-The diagonal elements are *singular* under a strict point-charge model — a
-point charge interacting with itself diverges. The standard cure is to spread
-each surface charge over its tessera and approximate the self-interaction by
-
-\[
-D_{ii} = k\,\sqrt{\frac{4\pi}{a_i}},
-\]
-
-which is the Coulomb self-energy of a uniformly charged disc of area \(a_i\)
-up to a small numerical factor. A common practical choice is
-
-\[
-k = 1.07 \quad (\texttt{ISWIG\_DIAGONAL\_SCALE} \text{ in } \texttt{pcm.cpp}),
-\]
-
-the empirical correction of Pascual-Ahuir, Silla and Tuñon (the "ISWIG"
-prescription), which gives accurate solvation free energies for a range of
-solvents. The matrix \(\mathbf{D}\) is dense, symmetric, and positive-definite,
-which is why a Cholesky-class factorization is a natural way to solve for the
-apparent charges.
+The diagonal is a Gaussian's self-energy divided by its switching value. As a
+tessera fades (\(F_i \to 0\)) its self-energy diverges, so its charge goes
+smoothly to zero. This is what makes the energy continuous as points cross
+sphere boundaries. The old scheme's empirical disc self-energy
+(\(1.07\sqrt{4\pi/a_i}\)) is gone. \(\mathbf{D}\) is dense, symmetric and
+positive-definite, and is solved by LDLT.
 
 ### Total Solute Potential at the Surface
 
@@ -9198,15 +9220,15 @@ potential the solute produces at each tessera. It splits into a nuclear and
 an electronic piece:
 
 \[
-\phi^{\text{tot}}(\mathbf{s}_i) = \underbrace{\sum_A \frac{Z_A}{|\mathbf{s}_i - \mathbf{R}_A|}}_{\phi^{\text{nuc}}_i}
+\phi^{\text{tot}}(\mathbf{s}_i) = \underbrace{\sum_A Z_A\,\frac{\operatorname{erf}(\xi_i|\mathbf{s}_i - \mathbf{R}_A|)}{|\mathbf{s}_i - \mathbf{R}_A|}}_{\phi^{\text{nuc}}_i}
 + \sum_{\mu\nu} P_{\mu\nu}\,\Bigl[\!\!\!\!
-\underbrace{- \int \frac{\chi_\mu^*(\mathbf{r})\,\chi_\nu(\mathbf{r})}{|\mathbf{r} - \mathbf{s}_i|}\,\mathrm{d}\mathbf{r}}_{V^{(i)}_{\mu\nu}}
+\underbrace{- \int \chi_\mu^*(\mathbf{r})\,\chi_\nu(\mathbf{r})\,\frac{\operatorname{erf}(\xi_i|\mathbf{r} - \mathbf{s}_i|)}{|\mathbf{r} - \mathbf{s}_i|}\,\mathrm{d}\mathbf{r}}_{V^{(i)}_{\mu\nu}}
 \Bigr],
 \]
 
 where one may choose a sign convention that folds the electron sign into the
 integral matrix \(\mathbf{V}^{(i)}\). The matrices \(\mathbf{V}^{(i)}\) are
-*independent of the density*: each is just the AO matrix of a unit point
+*independent of the density*: each is just the AO matrix of a unit Gaussian
 charge placed at \(\mathbf{s}_i\), and is computed exactly once during the
 cavity build. The cost of one cavity build is therefore \(N_{\text{tess}}\)
 one-electron nuclear-attraction builds, each cheap relative to the two-electron
@@ -9285,14 +9307,14 @@ total.
 ### Input Format and Solvent Library
 
 PCM is requested with a `%begin_pcm` block. A representative input
-(`tests/inputs/regression/hf/water_rhf_pcm_water_sto3g.hfinp`) reads:
+(`tests/inputs/regression/hf/water_rhf_pcm_swig_631gd.hfinp`) reads:
 
 ```
 %begin_pcm
-    model       pcm
-    solvent     water
-    cavity_scale 1.2
-    surface_points_per_atom 24
+    model                   pcm
+    solvent                 water
+    cavity_scale            1.2
+    surface_points_per_atom 302
 %end_pcm
 ```
 
@@ -9304,7 +9326,7 @@ Recognized keywords (parsed by `_parse_pcm` in `src/io/io.cpp`):
 | `solvent` | Named solvent; sets dielectric from a small built-in table |
 | `dielectric` / `epsilon` / `eps` | Override the dielectric directly |
 | `cavity_scale` | van der Waals radius scale \(s\) (default 1.2) |
-| `surface_points` / `surface_points_per_atom` | tesserae per atom (default 60, minimum 6) |
+| `surface_points` / `surface_points_per_atom` | Lebedev points per atomic sphere before SWIG pruning (default 302; must be a Lebedev size with a SWIG constant) |
 
 Built-in solvent dielectrics (`dielectric_from_solvent_name` in `io.cpp`):
 water (78.3553), acetonitrile (35.688), methanol (32.613), ethanol (24.852),
@@ -9325,19 +9347,19 @@ reaction-field operator) are not implemented.
 - **Single-point only.** No PCM gradient, geometry optimization, or
   frequencies. Post-HF (MP2, CC, CASSCF) is not coupled to PCM either — the
   reaction field is enforced only at the SCF/KS level.
-- **C-PCM only.** The dielectric scaling \((\varepsilon - 1)/(\varepsilon + \tfrac{1}{2})\)
-  is the conductor-like form. IEF-PCM and SS(V)PE are not implemented.
-- **Vacuum-style cavity.** The cavity uses scaled van der Waals spheres with a
-  Fibonacci-sphere tessellation and bury-test pruning. There is no smoothing
-  layer between spheres (no GEPOL/SES), which can introduce small ripples in
-  the energy as a function of geometry.
+- **C-PCM only.** The dielectric scaling is \((\varepsilon - 1)/\varepsilon\).
+  IEF-PCM, SS(V)PE and COSMO's \(\varepsilon + \tfrac12\) form are not
+  implemented.
+- **Orientation dependence.** The Lebedev grid is fixed to the lab axes, so
+  the energy changes slightly under rigid rotation. A denser grid reduces the
+  change but does not remove it; PySCF behaves the same way.
 - **Cost.** Each SCF iteration adds:
   one \(N_{\text{tess}}\)-by-\(N_{\text{basis}}^2\) Frobenius reduction to
   build \(\boldsymbol{\phi}^{\text{tot}}\); one \(O(N_{\text{tess}}^3)\)
   Cholesky-class solve on \(\mathbf{D}\); and one
   \(N_{\text{tess}}\)-by-\(N_{\text{basis}}^2\) accumulation to assemble
   \(\mathbf{V}^{\text{rxn}}\). For typical organic molecules with
-  `surface_points_per_atom` \(\sim 60\), this is dominated by the
+  the default 302 Lebedev points per sphere, this is dominated by the
   precomputation of the unit-charge attraction matrices, which happens once
   in `build_pcm_state`.
 
@@ -9348,7 +9370,8 @@ reaction-field operator) are not implemented.
 | `OptionsSolvation` (model, dielectric, scale, npoints) | `src/base/types.h` | `OptionsSolvation` |
 | `SolvationModel::{None, PCM}` | `src/base/types.h` | enum |
 | `%begin_pcm` parser + solvent table | `src/io/io.cpp` | `_parse_pcm`, `dielectric_from_solvent_name` |
-| Cavity build, influence matrix, unit-charge matrices | `src/solvation/pcm.cpp` | `build_pcm_state`, `fibonacci_sphere` |
+| SWIG cavity, influence matrix, unit-charge matrices | `src/solvation/pcm.cpp` | `build_pcm_state`, `switch_h`, `SWIG_ZETA` |
+| Gaussian-charge nuclear-attraction primitive | `src/integrals/os.cpp` | `_os_nuclear_primitive` (`charge_exponent`) |
 | SCF reaction field per iteration | `src/solvation/pcm.cpp` | `evaluate_pcm_reaction_field` |
 | RHF + PCM coupling | `src/scf/scf.cpp` | `run_rhf` (PCM block near line 286) |
 | UHF + PCM coupling | `src/scf/scf.cpp` | `run_uhf` (PCM block near line 589) |

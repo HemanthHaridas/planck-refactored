@@ -165,8 +165,9 @@ C1 but makes axes swap discontinuously when moments of inertia are degenerate or
 nearly so, trading a bounded variance for a discontinuity. Orientation averaging
 is trivially correct but N× the cost and still only mitigates.
 
-`fibonacci_sphere` lives in `src/base/sphere.h` because both the PCM cavity and
-these shells need it; two copies would be free to drift apart.
+`fibonacci_sphere` lives in `src/base/sphere.h`. The PCM cavity used it too
+until it moved to Lebedev points (SWIG, `docs/PCM_GEOMETRY_SCOPE.md`); these
+shells are now its only consumer.
 
 ---
 
@@ -180,7 +181,8 @@ scaling covalent radii — was correct all along.
 
 One genuine data error: F was 1.350, matching no published set against Bondi
 1.47, Mantina 1.47, Alvarez 1.46, Batsanov 1.45 and Hu 1.48. Corrected to 1.470.
-Blast radius was nil: the radius has one consumer (`pcm.cpp:103`), the only
+Blast radius was nil: the radius had two consumers (the PCM cavity and these
+shells), the only
 fluorine-bearing registered case is gas phase, and both PCM cases are water.
 
 **Alvarez 2013 is deliberately not imported** despite being newest and broadest
