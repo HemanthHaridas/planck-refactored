@@ -85,5 +85,5 @@ error. Where it matters, a denser grid reduces it (590 points: 1.1e-6).
 ## Not answered here
 
 Whether to raise the default grid density. Each step up costs more: the
-influence matrix is n_tess², with one AO matrix per tessera. 302 matches
-PySCF's default.
+influence-matrix factor is n_tess², and each SCF iteration does two integral
+sweeps over the tesserae. 302 matches PySCF's default.

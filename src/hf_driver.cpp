@@ -935,7 +935,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     std::optional<HartreeFock::Solvation::PCMState> pcm_state;
     if (calculator._solvation._model != HartreeFock::SolvationModel::None)
     {
-        auto pcm_res = HartreeFock::Solvation::build_pcm_state(calculator, shellpairs);
+        auto pcm_res = HartreeFock::Solvation::build_pcm_state(calculator);
         if (!pcm_res)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "PCM Failed :", pcm_res.error());
@@ -1141,7 +1141,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             pcm_density += calculator._info._scf.beta.density;
 
         auto pcm = HartreeFock::Solvation::evaluate_pcm_reaction_field(
-            calculator, *pcm_state, pcm_density);
+            calculator, shellpairs, *pcm_state, pcm_density);
         if (!pcm)
             // Degrade to the solute potential; log_esp_report labels whichever
             // quantity it actually printed.

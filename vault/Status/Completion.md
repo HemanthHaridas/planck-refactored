@@ -447,6 +447,13 @@ historical design context, but they are no longer the source of truth for
   were re-pinned. The orientation dependence (5.2e-6 Eh at 302 points, the
   same as PySCF) is accepted: `docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md`.
 
+  Step 2 followed: the cavity stores no AO matrices. S is factored once,
+  and φ_el and V_rxn are one fused integral sweep each per SCF iteration.
+  On naphthalene/6-31G* (2138 tesserae), the two binaries run back to back
+  gave 157 → 118 s and a peak RSS of 3.27 → 1.87 GB, with the same energy
+  and the same 19 iterations. Each iteration costs about 1.2 s more, and
+  setup about 38 s less.
+
 - **Test infrastructure: live asserts, no Eigen tests, CI builds the tests
   (2026-11-07).** Three fixes in `CMakeLists.txt` and
   `.github/workflows/cmake-multi-platform.yml`:

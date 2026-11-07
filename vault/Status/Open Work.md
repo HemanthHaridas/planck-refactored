@@ -87,10 +87,9 @@ rerun for it.
   `vsigma.cols()` and would otherwise silently drop the τ term.
 - **PCM geometry optimizations and frequencies**
   (`docs/PCM_GEOMETRY_SCOPE.md`). Step 1, the smooth SWIG cavity, landed
-  2026-11-07 (see Completion). Next, step 2: factor S once and replace the
-  per-tessera AO matrices with fused sweeps, because the 302-point default
-  makes them scale badly. Then the analytic gradient (3), geomopt and
-  frequencies (4), and spherical PCM (5, now unblocked). PCM is still
+  2026-11-07, and step 2 (fused sweeps, S factored once) the same day; see
+  Completion. Next: the analytic gradient (3), then geomopt and frequencies
+  (4). Spherical PCM (5) is now unblocked and independent of 3–4. PCM is still
   single-point only, in both binaries and in both bases, and spherical PCM is
   refused.
 - **Double hybrids** (`docs/DH_IMPLEMENTATION.md` §9):

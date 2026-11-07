@@ -3,7 +3,7 @@
 Research scope, opened 2026-10-26. It expires when the work lands; rewrite it
 then as the answer. Status lives in `vault/Status/Open Work.md`.
 
-## Result so far: the cavity is smooth and matches PySCF (step 1, 2026-11-07)
+## Result so far: the cavity is smooth, matches PySCF, and scales (steps 1–2, 2026-11-07)
 
 The energy is now a smooth function of the geometry. That was the
 prerequisite for a gradient: the old cavity jumped. Planck's C-PCM uses the
@@ -66,6 +66,41 @@ Water RHF/STO-3G now matches PySCF to every printed digit. The RKS PBE case
 is 9.5e-7 from PySCF (it was 6.1e-4); what remains is the DFT grid
 difference.
 
+### What a PCM run costs (step 2)
+
+The cavity stores no AO matrices. `build_pcm_state` builds S and keeps
+only its LDLT factor. Each SCF iteration then does three things in
+`evaluate_pcm_reaction_field`:
+
+- φ_el at every tessera, in one sweep: `_compute_electronic_potential`
+  with a Gaussian exponent per point, parallel over tesserae;
+- one back-substitution with the stored factor;
+- V_rxn as one `_compute_external_charge_attraction` call over all the
+  tessera charges.
+
+Memory is O(n_tess²) instead of O(n_tess · n_basis²). The cost is two
+integral sweeps per iteration, as in PySCF.
+
+Measured on naphthalene/6-31G* RHF (2138 tesserae, 166 basis functions,
+8 threads), with the two binaries run back to back:
+
+| | Stored matrices (before) | Fused sweeps (after) |
+|---|---|---|
+| Wall time | 157 s | 118 s |
+| Time until the ERI tensor is ready (includes cavity setup) | 86 s | 48.5 s |
+| Late SCF iteration | ~1.0–1.2 s | ~2.1–2.5 s |
+| Peak RSS | 3.27 GB | 1.87 GB (the gas-phase run peaks at 2.10 GB) |
+
+Both give the same energy, −383.3608259764 Eh, in 19 iterations. Setup
+saves about 38 s, and each iteration costs about 1.2 s more. The old design
+would only win again past roughly 30 SCF iterations, and it cannot avoid
+its memory: the stored matrices alone were 471 MB here. Wall times vary by
+about 10 % from run to run on this machine, so compare only runs made back
+to back. Screening the two sweeps (skipping far shell pairs) is not done,
+and would be the next lever if PCM iterations ever dominate.
+
+All nine PCM regression cases and the smoothness gate pass unchanged.
+
 ## What the gradient contains
 
 dG_rxn/dR has three parts, matching PySCF's `solvent/grad/pcm.py`:
@@ -95,25 +130,8 @@ s = η/(ζ + η) scaling added.
 
 1. **Smooth cavity.** Done (above).
 
-2. **Make the cavity's cost scale.** The 302-point default yields roughly
-   180 tesserae per atom (542 for water), and two parts of the design now
-   scale badly with it:
-   - `PCMState` stores one n_basis² AO matrix per tessera. That is
-     n_tess · n_basis² · 8 bytes; for example, about 2 GB at 3000 tesserae
-     and n_basis = 300.
-   - `evaluate_pcm_reaction_field` refactors the n_tess × n_tess matrix S
-     every SCF iteration, which is O(n_tess³) per iteration.
-
-   Fix: factor S once in `build_pcm_state`. Replace the per-tessera
-   matrices with two fused sweeps: φ_el at every tessera, done like
-   `_compute_electronic_potential` (which takes point charges only today),
-   and V_rxn as one `_compute_external_charge_attraction` call over all the
-   charges. This comes before the gradient, because `grad_qv` needs the same
-   two contractions in derivative form.
-   - Gate: the four SWIG cases and the five re-pinned ones are unchanged to
-     their printed digits.
-   - Gate: peak RSS and the setup/iteration timings on a medium molecule,
-     measured before and after.
+2. **Make the cavity's cost scale.** Done (above). `grad_qv` will need
+   the same two sweeps in derivative form.
 
 3. **Analytic gradient**, RHF/UHF and RKS/UKS, Cartesian, energy-only
    workflow `calculation gradient`. Lift the `calculation` gate in

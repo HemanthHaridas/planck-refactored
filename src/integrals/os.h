@@ -58,10 +58,15 @@ namespace HartreeFock
         // No sym_ops overload: symmetry folding reconstructs AO-pair orbits,
         // which is a property of the MATRIX, not of a contraction already
         // reduced against a full (unfolded) density.
+        //
+        // `exponents`, when given (one per point), makes each point a
+        // normalized Gaussian charge exp(-eta r^2): the operator is
+        // erf(sqrt(eta) r)/r. The SWIG C-PCM cavity uses this (pcm.cpp).
         Eigen::VectorXd _compute_electronic_potential(
             const std::vector<HartreeFock::ShellPair> &shell_pairs,
             const Eigen::MatrixXd &density,
-            const std::vector<Eigen::Vector3d> &points);
+            const std::vector<Eigen::Vector3d> &points,
+            const std::vector<double> *exponents = nullptr);
         // Build the full AO ERI tensor. Applies Schwarz screening:
         // quartets with Q(i,j)·Q(k,l) < tol_eri are skipped.
         std::vector<double> _compute_2e(const std::vector<HartreeFock::ShellPair> &shell_pairs,

@@ -1950,6 +1950,7 @@ namespace DFT::Driver
                     {
                         auto pcm_result = HartreeFock::Solvation::evaluate_pcm_reaction_field(
                             calculator,
+                            prepared.shell_pairs,
                             *prepared.pcm,
                             density);
                         if (!pcm_result)
@@ -2443,6 +2444,7 @@ namespace DFT::Driver
                 {
                     auto pcm_result = HartreeFock::Solvation::evaluate_pcm_reaction_field(
                         calculator,
+                        prepared.shell_pairs,
                         *prepared.pcm,
                         total_density);
                     if (!pcm_result)
@@ -3353,7 +3355,7 @@ namespace DFT::Driver
 
             if (calculator._solvation._model != HartreeFock::SolvationModel::None)
             {
-                auto pcm = HartreeFock::Solvation::build_pcm_state(calculator, prepared.shell_pairs);
+                auto pcm = HartreeFock::Solvation::build_pcm_state(calculator);
                 if (!pcm)
                     return std::unexpected("DFT PCM setup failed: " + pcm.error());
                 prepared.pcm = std::move(*pcm);
@@ -3409,7 +3411,7 @@ namespace DFT::Driver
 
             if (calculator._solvation._model != HartreeFock::SolvationModel::None)
             {
-                auto pcm = HartreeFock::Solvation::build_pcm_state(calculator, prepared.shell_pairs);
+                auto pcm = HartreeFock::Solvation::build_pcm_state(calculator);
                 if (!pcm)
                     return std::unexpected("DFT PCM setup failed: " + pcm.error());
                 prepared.pcm = std::move(*pcm);
@@ -5082,7 +5084,7 @@ namespace DFT::Driver
 
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)
         {
-            auto pcm = HartreeFock::Solvation::build_pcm_state(calculator, prepared.shell_pairs);
+            auto pcm = HartreeFock::Solvation::build_pcm_state(calculator);
             if (!pcm)
                 return std::unexpected("DFT PCM setup failed: " + pcm.error());
             prepared.pcm = std::move(*pcm);
@@ -5453,7 +5455,7 @@ namespace DFT::Driver
                 calculator._esp._include_reaction_field)
             {
                 auto state =
-                    HartreeFock::Solvation::build_pcm_state(calculator, shell_pairs);
+                    HartreeFock::Solvation::build_pcm_state(calculator);
                 if (!state)
                     // Degrade to the solute potential rather than failing the
                     // run; log_esp_report labels whichever it actually printed.
@@ -5472,7 +5474,7 @@ namespace DFT::Driver
                         pcm_density += calculator._info._scf.beta.density;
 
                     auto pcm = HartreeFock::Solvation::evaluate_pcm_reaction_field(
-                        calculator, *pcm_state, pcm_density);
+                        calculator, shell_pairs, *pcm_state, pcm_density);
                     if (!pcm)
                         HartreeFock::Logger::logging(
                             HartreeFock::LogLevel::Warning, "ESP Reaction Field :",

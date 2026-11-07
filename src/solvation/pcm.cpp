@@ -5,14 +5,15 @@
 //   build_pcm_state            — one-shot cavity + density-independent setup
 //   evaluate_pcm_reaction_field — per-SCF-iteration density-dependent solve
 //
-// The split is deliberate: every quantity that depends only on the geometry
-// (tesserae positions, areas, influence matrix, nuclear potential at the
-// surface, AO matrices for unit point charges at each tessera) is built once
-// in build_pcm_state. The hot-path evaluator only does:
-//   1. one Frobenius product per tessera against the current density,
-//   2. one Cholesky-class linear solve on the (npts x npts) influence matrix,
-//   3. one weighted sum of the cached unit-charge matrices to assemble V_rxn.
-// No shell-pair integrals are recomputed inside the SCF loop.
+// Everything that depends only on the geometry (tesserae, the LDLT factor of
+// the influence matrix, the nuclear potential at the surface) is built once
+// in build_pcm_state. Each SCF iteration then does:
+//   1. one fused sweep for the electronic potential at every tessera,
+//   2. one back-substitution with the stored factor,
+//   3. one attraction build over all the tessera charges for V_rxn.
+// No per-tessera AO matrix is stored: memory is O(n_tess^2), not
+// O(n_tess * nbasis^2), at the cost of two integral sweeps per iteration
+// (as PySCF does).
 // ─────────────────────────────────────────────────────────────────────────────
 
 #include "pcm.h"
@@ -78,9 +79,7 @@ namespace
 // The self term S_ii = xi_i sqrt(2/pi) / F_i diverges as F_i -> 0, so a
 // fading tessera's charge goes smoothly to zero.
 std::expected<HartreeFock::Solvation::PCMState, std::string>
-HartreeFock::Solvation::build_pcm_state(
-    const HartreeFock::Calculator &calculator,
-    const std::vector<HartreeFock::ShellPair> &shell_pairs)
+HartreeFock::Solvation::build_pcm_state(const HartreeFock::Calculator &calculator)
 {
     PCMState state;
     // Solvation off → return an "enabled() == false" state. Callers can pass
@@ -161,16 +160,13 @@ HartreeFock::Solvation::build_pcm_state(
     // ── Density-independent precomputation ───────────────────────────────────
     // For each tessera i:
     //   - phi_nuc_i = sum_A Z_A erf(xi_i r_iA) / r_iA
-    //   - V^(i): AO matrix of a unit Gaussian charge at s_i, which the SCF
-    //     loop weights by the (density-dependent) apparent charge q_i
     //   - S_ij = erf(xi_ij r_ij) / r_ij, xi_ij = xi_i xi_j / sqrt(xi_i^2 + xi_j^2);
-    //     S_ii = xi_i sqrt(2/pi) / F_i
-    // ponytail: one nbasis^2 matrix per tessera; a fused sweep (as
-    // _compute_electronic_potential) if PCM memory ever matters.
+    //     S_ii = xi_i sqrt(2/pi) / F_i, factored once here.
+    // No AO integrals: the electronic potential and V_rxn are fused sweeps in
+    // evaluate_pcm_reaction_field, so nothing n_tess x nbasis^2 is stored.
     const Eigen::Index npoints = static_cast<Eigen::Index>(state.surface_points.size());
     state.nuclear_potential = Eigen::VectorXd::Zero(npoints);
-    state.influence_matrix = Eigen::MatrixXd::Zero(npoints, npoints);
-    state.unit_potential_matrices.reserve(static_cast<std::size_t>(npoints));
+    Eigen::MatrixXd influence = Eigen::MatrixXd::Zero(npoints, npoints);
 
     for (Eigen::Index i = 0; i < npoints; ++i)
     {
@@ -184,17 +180,7 @@ HartreeFock::Solvation::build_pcm_state(
                 molecule.nuclear_charge(atom) * std::erf(site.exponent * distance) / distance;
         }
 
-        std::vector<HartreeFock::ExternalCharge> unit_charge{HartreeFock::ExternalCharge{
-            .position = site.position, .charge = 1.0, .exponent = site.exponent * site.exponent}};
-        state.unit_potential_matrices.push_back(
-            _compute_external_charge_attraction(
-                shell_pairs,
-                calculator._shells.nbasis(),
-                unit_charge,
-                calculator._integral._engine,
-                nullptr));
-
-        state.influence_matrix(i, i) =
+        influence(i, i) =
             site.exponent * std::sqrt(2.0 / std::numbers::pi) / site.switching;
         for (Eigen::Index j = 0; j < i; ++j)
         {
@@ -202,10 +188,13 @@ HartreeFock::Solvation::build_pcm_state(
             const double xi_ij = site.exponent * other.exponent /
                                  std::hypot(site.exponent, other.exponent);
             const double distance = (site.position - other.position).norm();
-            state.influence_matrix(i, j) = state.influence_matrix(j, i) =
-                std::erf(xi_ij * distance) / distance;
+            influence(i, j) = influence(j, i) = std::erf(xi_ij * distance) / distance;
         }
     }
+
+    state.influence_factor.compute(influence);
+    if (state.influence_factor.info() != Eigen::Success)
+        return std::unexpected("PCM surface linear system factorization failed");
 
     // C-PCM: f(eps) = (eps - 1) / eps (Barone and Cossi 1998; PySCF's
     // 'C-PCM'). Klamt's COSMO uses (eps - 1) / (eps + 1/2); this code used
@@ -241,62 +230,56 @@ HartreeFock::Solvation::build_pcm_state(
 std::expected<HartreeFock::Solvation::PCMResult, std::string>
 HartreeFock::Solvation::evaluate_pcm_reaction_field(
     const HartreeFock::Calculator &calculator,
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const PCMState &state,
     const Eigen::MatrixXd &total_density)
 {
     PCMResult result;
+    const auto nbasis = calculator._shells.nbasis();
     // Solvation off → hand back a zero reaction field so the caller can
     // unconditionally do F = F_gas + V_rxn without branching.
     if (!state.enabled())
     {
-        result.reaction_potential =
-            Eigen::MatrixXd::Zero(calculator._shells.nbasis(), calculator._shells.nbasis());
+        result.reaction_potential = Eigen::MatrixXd::Zero(nbasis, nbasis);
         return result;
     }
 
-    const Eigen::Index npoints = static_cast<Eigen::Index>(state.surface_points.size());
+    std::vector<Eigen::Vector3d> positions;
+    std::vector<double> exponents;
+    positions.reserve(state.surface_points.size());
+    exponents.reserve(state.surface_points.size());
+    for (const auto &site : state.surface_points)
+    {
+        positions.push_back(site.position);
+        exponents.push_back(site.exponent * site.exponent);
+    }
 
-    // ── 1. phi_tot at each tessera = phi_nuc + phi_elec ──────────────────────
-    // The electronic part is sum_munu P_munu * V^(i)_munu — a single Frobenius
-    // product per tessera against the current density. The nuclear part is
-    // already cached in state.nuclear_potential.
-    //
-    // Sign convention: _compute_external_charge_attraction returns a matrix
-    // with the electron sign already folded in (it is built like a nuclear-
-    // attraction integral, which is conventionally negative). So the
-    // contraction P : V^(i) directly gives the electronic contribution to
-    // phi_tot with the correct sign.
-    result.total_potential = state.nuclear_potential;
-    for (Eigen::Index i = 0; i < npoints; ++i)
-        result.total_potential(i) +=
-            (total_density.array() * state.unit_potential_matrices[static_cast<std::size_t>(i)].array()).sum();
+    // ── 1. phi_tot at each tessera = phi_nuc - P : <mu| erf(xi r)/r |nu> ─────
+    // One fused sweep over the shell pairs, parallel over tesserae. It returns
+    // the positive contraction; the electron's charge is applied here.
+    result.total_potential =
+        state.nuclear_potential -
+        HartreeFock::ObaraSaika::_compute_electronic_potential(
+            shell_pairs, total_density, positions, &exponents);
 
-    // ── 2. Solve D q = -f(eps) phi_tot ───────────────────────────────────────
-    // D is the symmetric positive-definite Coulomb matrix of the Gaussian
-    // surface charges, so an LDLT factorization is the natural choice.
-    //
-    // We re-factor D every iteration. It only depends on the cavity (not on
-    // the density), so this could be cached across SCF iterations; we trade a
-    // small amount of repeated work for code clarity.
-    Eigen::LDLT<Eigen::MatrixXd> solver(state.influence_matrix);
-    if (solver.info() != Eigen::Success)
-        return std::unexpected("PCM surface linear system factorization failed");
-
+    // ── 2. Solve S q = -f(eps) phi_tot with the factor from build_pcm_state ──
     result.apparent_charges =
-        solver.solve(-state.dielectric_factor * result.total_potential);
-    if (solver.info() != Eigen::Success)
+        state.influence_factor.solve(-state.dielectric_factor * result.total_potential);
+    if (state.influence_factor.info() != Eigen::Success)
         return std::unexpected("PCM surface linear system solve failed");
 
-    // ── 3. V_rxn_munu = sum_i q_i V^(i)_munu ─────────────────────────────────
-    // A single weighted sum of the cached unit-charge matrices. This is the
-    // operator that gets added to the Fock / Kohn-Sham matrix; it is what
-    // makes the dielectric polarization "feed back" on the solute orbitals
-    // at every SCF iteration.
-    result.reaction_potential =
-        Eigen::MatrixXd::Zero(calculator._shells.nbasis(), calculator._shells.nbasis());
-    for (Eigen::Index i = 0; i < npoints; ++i)
-        result.reaction_potential +=
-            result.apparent_charges(i) * state.unit_potential_matrices[static_cast<std::size_t>(i)];
+    // ── 3. V_rxn_munu = -sum_i q_i <mu| erf(xi_i r)/r |nu> ───────────────────
+    // One attraction build over all the Gaussian charges: the operator that
+    // feeds the dielectric polarization back into the Fock / KS matrix.
+    std::vector<HartreeFock::ExternalCharge> charges;
+    charges.reserve(positions.size());
+    for (std::size_t i = 0; i < positions.size(); ++i)
+        charges.push_back(HartreeFock::ExternalCharge{
+            .position = positions[i],
+            .charge = result.apparent_charges(static_cast<Eigen::Index>(i)),
+            .exponent = exponents[i]});
+    result.reaction_potential = _compute_external_charge_attraction(
+        shell_pairs, nbasis, charges, calculator._integral._engine, nullptr);
 
     // ── 4. Solvation energy contribution G_rxn = (1/2) q . phi_tot ───────────
     // The 1/2 is what prevents double counting when V_rxn is also added to F:

@@ -1206,7 +1206,8 @@ static Eigen::MatrixXd compute_external_charge_attraction_impl(
 Eigen::VectorXd HartreeFock::ObaraSaika::_compute_electronic_potential(
     const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const Eigen::MatrixXd &density,
-    const std::vector<Eigen::Vector3d> &points)
+    const std::vector<Eigen::Vector3d> &points,
+    const std::vector<double> *exponents)
 {
     const std::size_t npoints = points.size();
     const std::size_t npairs = shell_pairs.size();
@@ -1216,6 +1217,7 @@ Eigen::VectorXd HartreeFock::ObaraSaika::_compute_electronic_potential(
     for (std::size_t k = 0; k < npoints; k++)
     {
         const Eigen::Vector3d &r = points[k];
+        const double eta = exponents ? (*exponents)[k] : 0.0;
         double acc = 0.0;
 
         for (std::size_t p = 0; p < npairs; p++)
@@ -1235,7 +1237,7 @@ Eigen::VectorXd HartreeFock::ObaraSaika::_compute_electronic_potential(
                                lAx, lAy, lAz,
                                lBx, lBy, lBz,
                                ABx, ABy, ABz,
-                               r) *
+                               r, eta) *
                            pp.coeff_product;
 
             // build_shellpairs emits the upper triangle only (jj >= ii), while

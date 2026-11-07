@@ -40,6 +40,7 @@
 #include <string>
 #include <vector>
 
+#include <Eigen/Cholesky>
 #include <Eigen/Core>
 
 #include "base/types.h"
@@ -64,24 +65,15 @@ namespace HartreeFock::Solvation
     {
         std::vector<PCMSurfacePoint> surface_points;
 
-        // unit_potential_matrices[i] is the AO matrix of a unit point charge
-        // (Gaussian, width xi_i) placed at surface_points[i].position. Storing one matrix per tessera
-        // up front means the only density-dependent surface work per SCF
-        // iteration is a Frobenius product against the current density and a
-        // linear combination to assemble V_rxn — no shell-pair integrals are
-        // re-evaluated inside the SCF loop.
-        std::vector<Eigen::MatrixXd> unit_potential_matrices;
-
         // Nuclear contribution to phi_tot at each tessera: phi_nuc_i = sum_A Z_A / |s_i - R_A|.
         // Density-independent, cached up front.
         Eigen::VectorXd nuclear_potential;
 
-        // Symmetric, positive-definite Coulomb interaction matrix between the
-        // Gaussian tessera charges (S in Lange-Herbert: erf(xi_ij r_ij)/r_ij,
-        // diagonal xi_i sqrt(2/pi) / F_i). Solved every SCF iteration to obtain the apparent
-        // charges; could in principle be factored once and re-solved, but the
-        // current implementation re-factors it for clarity.
-        Eigen::MatrixXd influence_matrix;
+        // LDLT factor of S, the symmetric positive-definite Coulomb matrix of
+        // the Gaussian tessera charges (Lange-Herbert: erf(xi_ij r_ij)/r_ij,
+        // diagonal xi_i sqrt(2/pi) / F_i). Factored once per geometry; each
+        // SCF iteration only back-substitutes.
+        Eigen::LDLT<Eigen::MatrixXd> influence_factor;
 
         // f(epsilon) = (epsilon - 1) / epsilon, the C-PCM scaling —
         // interpolates between vacuum (eps=1, f=0) and a perfect conductor
@@ -108,23 +100,24 @@ namespace HartreeFock::Solvation
         double solvation_energy = 0.0;      // G_rxn = (1/2) q . phi_tot
     };
 
-    // One-shot setup: build the cavity, precompute the influence matrix, the
-    // nuclear potential at each tessera, and one unit-charge AO matrix per
-    // tessera. Returns an empty (disabled) state when SolvationModel::None is
+    // One-shot setup: build the cavity, factor the influence matrix and
+    // compute the nuclear potential at each tessera. Returns an empty (disabled) state when SolvationModel::None is
     // requested. Errors out if surface_points_per_atom is not a supported
     // Lebedev size or if every candidate surface point is buried.
     std::expected<PCMState, std::string> build_pcm_state(
-        const HartreeFock::Calculator &calculator,
-        const std::vector<HartreeFock::ShellPair> &shell_pairs);
+        const HartreeFock::Calculator &calculator);
 
     // Per-iteration evaluation: given the current total density (P_alpha + P_beta
     // for unrestricted, or P for restricted), assemble phi_tot, solve the C-PCM
     // linear system for the apparent charges, build V_rxn, and return G_rxn.
+    // phi_el and V_rxn are each one fused sweep over the shell pairs, so no
+    // per-tessera AO matrix is stored: memory is O(n_tess^2) for the factor.
     // When the state is disabled (no PCM), returns a zero reaction-field matrix
     // and zero energy so the SCF caller does not need to special-case the
     // gas-phase branch.
     std::expected<PCMResult, std::string> evaluate_pcm_reaction_field(
         const HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const PCMState &state,
         const Eigen::MatrixXd &total_density);
 
