@@ -141,27 +141,20 @@ rerun for it.
 
 ## 3. Build, test and CI
 
-- **CI's first full-test run is unverified.** The workflow now builds every
-  target (see Completion, 2026-11-07), but it sets no basis path and no
-  Boys-core license (`PLANCK_LICENSE`), which the test binaries may need.
-  Check the first run and wire in whatever it is missing.
-- **Result-changing environment overrides** in production binaries
-  (`docs/RUNTIME_ENV_OVERRIDES_SCOPE.md`):
-  - E2: turn `PLANCK_RCCSDT_BACKEND` (`src/post_hf/cc/ccsdt.cpp`) into an
-    input keyword.
-  - E3: delete the `PLANCK_DFT_DH_HESSIAN_PROBE_LOG` swap probe
-    (`src/dft/driver.cpp`), which replaces the returned DH gradient, or gate
-    it at compile time. Deleting it is the recommended option.
-  - Delete the temporary `PLANCK_CASSCF_CALL_PROBE` (`casscf.cpp`,
-    `orbital.h`).
-- **No scale-proving MPI fixture** (`docs/HPC_MPI.md` Gap 3). Every
-  regression input is ≤ 6 atoms, so a regression from distribution to
-  replication would pass. Add one 16-water/6-31G (nb = 208) case asserting
-  `energy(-n 2) == energy(-n 4) == serial` bitwise.
-- **HGP and Rys one-shot `_compute_2e` silently replicate under MPI** (Gap 1;
-  in-tree notes in `hgp.cpp`, `rys.cpp`). Stripe them like OS
-  (`bra % nranks` + one `allreduce_inplace`), or reject `-n > 1`. Do not leave
-  it silent.
+- **Every executable recompiles the shared sources**
+  (`docs/BUILD_SHARED_OBJECTS_SCOPE.md`). The build has no library of Planck
+  sources, so 82 distinct `src/` files cost 860 compile jobs (90 %
+  duplicates) on a header change, and hand-written per-test source lists
+  break silently (three on 2026-11-07). Plan: one static `planck_core` plus
+  a small `planck_dft`. `USE_OPENMP`, `USING_Libxc`, `USE_MPI` and the
+  `PLANCK_CC_*` options currently vary per target and decide what can be
+  shared. `planck-mpi` also omits two `PLANCK_CC_*` options the other
+  binaries define; check whether that was intended.
+- **CI's first full-test run is unverified.** The workflow builds every
+  target and every test now gets `BASIS_PATH` from the source tree (#181).
+  No CI run has happened yet: #181 is stacked on #180, and CI runs only on
+  PRs into `devel`. Check the first run after retargeting; the Boys-core
+  license (`PLANCK_LICENSE`) is the remaining unknown.
 
 ## 4. Verification gaps
 

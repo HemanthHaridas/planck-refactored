@@ -434,10 +434,44 @@ historical design context, but they are no longer the source of truth for
     built before `ctest`. It now builds every target. The `-j$(nprocs)` typo
     (not a command, so `-j` got no value) is now `-j$(nproc)`.
 
-  Verification: reconfigure confirmed (94 tests, 0 Eigen). The full
-  `build-full` build and `ctest` with live asserts are pending. CI itself has
-  not run yet; it may also need the basis path and the Boys-core license,
-  which the workflow does not set.
+  - The first full build found three test targets that had never linked,
+    because CI never built them. `planck-multipole-integrals` and
+    `planck-population-analysis` lacked `spherical_recurrence.cpp`.
+    `planck-working-state-rebuild` broke when `project_checkpoint_density`
+    moved into `working_state.cpp`; the function now lives, unchanged, in
+    `src/scf/checkpoint_projection.cpp`.
+  - Tests read basis sets from the install prefix, which CI never populates
+    and an older install can lack (27 def2 cases failed on it locally). Every
+    CTest test now gets `BASIS_PATH=<source>/basis-sets`, appended to its
+    environment.
+
+  Verification (2026-11-07, `build-full`, PR #181): 92 tests. Every unit
+  test passes with live asserts. Regression core 126/126, smoke 54/56,
+  extended 202/206; the failures are only the four known RCCSDT routing
+  cases (`h2`/`lih`/`water`/`ch4_rccsdt_sto3g`). CI has not run yet (#181 is
+  stacked on #180).
+
+- **Result-changing environment overrides removed; HGP/Rys/auto ERI builds
+  striped under MPI (2026-11-07, PR #181).**
+  - E2/E3 (`docs/RUNTIME_ENV_OVERRIDES.md`, now an answer):
+    - `PLANCK_RCCSDT_BACKEND` is the input keyword
+      `rccsdt_backend auto|determinant|tensor|optimized`, and
+      `ch4_rccsdt_generated_sto3g` has its own input.
+    - The `PLANCK_DFT_DH_HESSIAN_PROBE_LOG` swap probe, which returned a
+      different DH gradient, is deleted, as are the `PLANCK_CASSCF_CALL_PROBE`
+      counters.
+    - Every remaining `getenv` in `src/` only changes printed output.
+  - MPI (`docs/HPC_MPI.md`):
+    - The conventional ERI tensor builds for HGP, Rys and **`auto` (the
+      default engine)** ran in full on every rank. They now stripe bras
+      across ranks and merge with one allreduce, as OS does.
+    - Gated by water/6-31G* conventional cases per engine, exact against
+      serial at 2 and 3 ranks. The exact energy cannot tell the stripe from
+      plain replication, so it was checked by mutation: without the reduce,
+      2 ranks give -137.47 Eh against -76.01.
+    - The scale gate `water16_rhf_631g_auto_direct_mpi_scale` (nb=208, direct
+      SCF): serial, 2 and 4 ranks all give -1215.7179682094 Eh; 11.7 s for
+      all three runs on a laptop, 73 MB serial peak.
 
 - **RCCSD doubles equation was missing its F_me terms (2026-11-07).**
   Stanton-Gauss T2 uses `F_be − ½ t_m^b F_me` and `F_mj + ½ t_j^e F_me`;
