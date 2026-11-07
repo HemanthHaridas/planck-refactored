@@ -3,145 +3,147 @@
 Research scope, opened 2026-10-26. It expires when the work lands; rewrite it
 then as the answer. Status lives in `vault/Status/Open Work.md`.
 
-## Why it matters
+## Result so far: the cavity is smooth and matches PySCF (step 1, 2026-11-07)
 
-Solution-phase structures and frequencies are routine. Planck's C-PCM
-(`src/solvation/pcm.{h,cpp}`) is single-point only for HF and DFT, and is
-not coupled to TDDFT or post-HF.
+The energy is now a smooth function of the geometry. That was the
+prerequisite for a gradient: the old cavity jumped. Planck's C-PCM uses the
+same SWIG discretization as PySCF's default C-PCM and reproduces it to every
+printed digit:
 
-## Why gradients were not built: the cavity was not smooth
+| Case (6-31G*, ε = 78.3553, 302 points) | PySCF 2.13.0 E / Eh | G_pcm / Eh | Tesserae |
+|---|---|---|---|
+| `water_rhf_pcm_swig_631gd` | −76.0172764854 | −0.0115156556 | 542 |
+| `h2o2_rhf_pcm_swig_631gd` (C1) | −150.7676892561 | −0.0153189621 | 705 |
+| `water_cation_uhf_pcm_swig_631gd` | −75.7506843658 | −0.1478733174 | 542 |
+| `water_rks_pbe_pcm_swig_631gd` | −76.3221197790 | −0.0102913608 | 542 |
 
-Until step 1 (below), `build_pcm_state` placed a fixed number of Fibonacci-sphere points on each
-atom's scaled van der Waals sphere, gives every point the area
-$4\pi R^2 / N$, and **discarded any point inside another atom's sphere**. The
-code's own comment said this "can introduce small ripples in the energy as a
-function of geometry … a reason analytic gradients are not implemented".
+The references come from `tests/pyscf/pcm_swig_references.py` (`cart=True`,
+Planck's GBS files, its Bohr constant and its unpruned 150 × 590 DFT grid).
+Each case also matches PySCF's tessera count.
 
-The effect is worse than ripples for optimization. As atoms move, points
-cross sphere boundaries and appear or vanish, so the energy is piecewise
-continuous with jumps, and its derivative does not exist at those geometries.
-An analytic gradient of this surface would disagree with finite differences
-and stall optimizers. A smooth cavity has to come first.
+**Smoothness.** `water_rhf_pcm_smoothness_sto3g` scans an O–H stretch over
+101 points, h = 0.002 Å. The fourth difference of the energy stays below
+2.3e-9 Eh, against a 5e-9 bound. A binary built before the change fails the
+same scan at 4.4e-5 Eh, because tesserae appeared and vanished at sphere
+boundaries.
 
-## Smooth discretizations
+**Orientation.** The energy still depends slightly on orientation:
+5.2e-6 Eh over five rigid rotations of C1 H2O2 at 302 points, the same as
+PySCF. This is accepted; `docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md` gives
+the reasons.
 
-The standard fixes replace the hard in/out test with a switching function
-that fades a tessera out as it is buried, and smear each point charge into a
-Gaussian so that coincident charges do not blow up the self-interaction:
+### What the cavity is
 
-- **SWIG / ISWIG** (Lange and Herbert, 2010): Lebedev points, Gaussian
-  charges, a smooth switching function. Energy and gradient continuous.
-- **CSC** (Scalmani and Frisch, 2010): the Gaussian scheme in Gaussian.
+`build_pcm_state` (`src/solvation/pcm.cpp`) follows PySCF's
+`solvent/pcm.py` (`gen_surface`, `get_D_S`) term for term:
 
-PySCF's `solvent.pcm` implements C-PCM with Lebedev points, Gaussian charges
-and a switching function, and has analytic gradients. **Adopting the same
-scheme is what makes a tight PySCF gate possible**; with a different
-discretization only loose agreement can be expected.
+- Atom J has a sphere of radius R_J = 1.2 × the modified Bondi radius, with
+  H at 1.1 Å. Each sphere is sampled by an N-point Lebedev grid whose
+  weights w_i sum to 4π.
+- A point on atom A's sphere is faded out by
+  F_i = ∏_{J≠A} h((r_iJ − R_in,J)/R_sw,J), with h(x) = x³(10 − 15x + 6x²).
+  Points with w_i F_i ≤ 1e-16 are dropped.
+- Each tessera carries a Gaussian charge of width ξ_i = ζ_N/(R√w_i), with
+  ζ_N from the York-Karplus table. Then S_ij = erf(ξ_ij r)/r and
+  S_ii = ξ_i√(2/π)/F_i. As a point fades, S_ii diverges, so its charge
+  goes smoothly to zero.
+- `_os_nuclear_primitive` takes a Gaussian-charge exponent
+  (`ExternalCharge::exponent`, 0 = point charge). Point-charge output is
+  identical, timings aside, on eight non-PCM inputs against a pre-change
+  binary.
+
+Three user-visible changes came with it, all to match PySCF's C-PCM:
+
+- f(ε) is now (ε−1)/ε. The old (ε−1)/(ε+½) is COSMO's factor, used under
+  the C-PCM name; for water it moves G_pcm by about 0.6 %.
+- H uses the modified Bondi radius, 1.1 Å, in the cavity only.
+- `surface_points_per_atom` must be a Lebedev size, default 302. It was a
+  Fibonacci count, default 60. 74, 230 and 266 have no SWIG constant and are
+  rejected.
+
+The five existing PCM cases moved from 24 points to 302 and were re-pinned.
+Water RHF/STO-3G now matches PySCF to every printed digit. The RKS PBE case
+is 9.5e-7 from PySCF (it was 6.1e-4); what remains is the DFT grid
+difference.
 
 ## What the gradient contains
 
-With the smooth cavity, $dG_\text{rxn}/dR$ collects:
-- the solute potential's derivative at fixed tesserae: nuclear part and
-  electronic part (derivatives of point-charge AO integrals with respect to
-  the basis centres; `os.cpp` already has nuclear-attraction derivatives with
-  respect to both the AO centre and the charge centre);
-- the tesserae moving with their owning atoms (derivative with respect to
-  the charge centre);
-- the derivative of the switching weights and the Gaussian-charge D matrix.
+dG_rxn/dR has three parts, matching PySCF's `solvent/grad/pcm.py`:
+
+- **`grad_nuc`:** the nuclear potential at the tesserae,
+  Z erf(ξr)/r, differentiated with respect to both the nucleus and the
+  tessera. A tessera moves with its owning atom.
+- **`grad_qv`:** the electronic potential, with the AO-pair integrals
+  against Gaussian charges differentiated with respect to the basis centres
+  (`int3c2e_ip1`) and to the charge centre (`int3c2e_ip2`).
+- **`grad_solver`:** the derivative of S at fixed potential. With
+  q = −f S⁻¹φ this is qᵀ(dS)q / (2f). S changes in two ways: off the
+  diagonal because the tesserae move, and on the diagonal through F_i
+  (S_ii = ξ_i√(2/π)/F_i, so through h′). ξ_i depends only on the weights
+  and radii, not on the geometry. Under C-PCM the areas do not enter.
 
 No CPHF is needed: the SCF with PCM is variational in the charges.
 
+The OS engine already has the two integral derivatives for point charges:
+`_os_nuclear_primitive_dC` (charge centre) and a raised/lowered angular
+momentum form of `_os_nuclear_primitive` (basis centre). The basis-centre
+form inherits the Gaussian exponent from the primitive unchanged.
+`_os_nuclear_primitive_dC` has its own recurrence and needs the same
+s = η/(ζ + η) scaling added.
+
 ## Steps
 
-1. **Smooth cavity** (Lebedev, Gaussian charges, switching function),
-   energy only, replacing the Fibonacci hard-pruned surface behind the
-   existing input keywords.
-   - Gate: an energy scan along a bond stretch and a rotation, showing no
-     jumps (finite-difference second derivative bounded).
-   - Gate: PySCF C-PCM energies with the same Lebedev order, radii and
-     scaling, HF and DFT, water and a C1 molecule, at ~1e-8 Eh.
-   - The existing PCM regression references move; they are re-pinned to
-     the new scheme, with the change recorded.
-2. **Analytic gradient**, HF (RHF/UHF) and DFT (RKS/UKS), Cartesian.
-   Gate: FD of the energy to 1e-7 Eh/Bohr, and PySCF PCM gradients.
-3. **Geometry optimization and frequencies** through the gradient, and
-   removal of the current gradient-workflow rejections for PCM. Gate: water
-   in water optimized against PySCF; frequencies against a PySCF
-   FD-of-analytic-gradient Hessian.
-4. **Spherical basis**: follows from the spherical-DFT skin
-   (`docs/SPHERICAL_DFT.md`) once that lands; V_rxn is built in
-   Cartesian and projected.
+1. **Smooth cavity.** Done (above).
 
-## Step 1 status (2026-11-07): done
+2. **Make the cavity's cost scale.** The 302-point default yields roughly
+   180 tesserae per atom (542 for water), and two parts of the design now
+   scale badly with it:
+   - `PCMState` stores one n_basis² AO matrix per tessera. That is
+     n_tess · n_basis² · 8 bytes; for example, about 2 GB at 3000 tesserae
+     and n_basis = 300.
+   - `evaluate_pcm_reaction_field` refactors the n_tess × n_tess matrix S
+     every SCF iteration, which is O(n_tess³) per iteration.
 
-Done:
+   Fix: factor S once in `build_pcm_state`. Replace the per-tessera
+   matrices with two fused sweeps: φ_el at every tessera, done like
+   `_compute_electronic_potential` (which takes point charges only today),
+   and V_rxn as one `_compute_external_charge_attraction` call over all the
+   charges. This comes before the gradient, because `grad_qv` needs the same
+   two contractions in derivative form.
+   - Gate: the four SWIG cases and the five re-pinned ones are unchanged to
+     their printed digits.
+   - Gate: peak RSS and the setup/iteration timings on a medium molecule,
+     measured before and after.
 
-- `build_pcm_state` (`src/solvation/pcm.cpp`) is SWIG and follows PySCF
-  `solvent/pcm.py` `gen_surface` / `get_D_S` term for term:
-  - Lebedev grids from `DFT::MakeLebedevGrid` (weights sum to $4\pi$, which is
-    PySCF's $4\pi w$);
-  - the switching function `switch_h` with PySCF's $10^{-8}$ argument cutoff;
-  - the $w F > 10^{-16}$ prune;
-  - $\xi_i = \zeta_N / (R\sqrt{w_i})$ from the York-Karplus table;
-  - $S_{ij} = \operatorname{erf}(\xi_{ij} r)/r$ and
-    $S_{ii} = \xi_i\sqrt{2/\pi}/F_i$;
-  - nuclear potential $Z\operatorname{erf}(\xi r)/r$.
-- `_os_nuclear_primitive` (`src/integrals/os.cpp`) takes a Gaussian-charge
-  exponent (`ExternalCharge::exponent`, 0 = point charge). The point-charge
-  arithmetic is meant to be bitwise unchanged. The ESP reaction field
-  (`esp.cpp`) uses $\operatorname{erf}(\xi r)/r$.
+3. **Analytic gradient**, RHF/UHF and RKS/UKS, Cartesian, energy-only
+   workflow `calculation gradient`. Lift the `calculation` gate in
+   `src/io/io.cpp` for gradients only.
+   - Gate: fourth-order finite difference of the energy to 1e-7 Ha/Bohr on
+     C1 H2O2. FD is clean now that the energy is smooth.
+   - Gate: PySCF's PCM gradient (`make_grad_object`) on the four SWIG cases.
+   - Gate: the force components sum to zero. The atom-centred cavity
+     translates with the molecule, so the sum must vanish to roundoff. Net
+     torque does not vanish (see Orientation) and is not a gate.
 
-Decisions taken with it, all to match PySCF's C-PCM:
+4. **Geometry optimization and frequencies** through the gradient, and
+   removal of the remaining `calculation` gate. The DFT double-hybrid
+   gradients keep refusing solvent: they have no solvent response.
+   - Gate: water in water optimized against PySCF's `geometric_solver`.
+   - Gate: frequencies against a PySCF Hessian from finite differences of
+     its analytic gradient.
 
-- **f(ε) is now (ε−1)/ε.** The old (ε−1)/(ε+½) is COSMO's factor, labelled
-  C-PCM. For water it moves G_pcm by about 0.6 %.
-- **Modified Bondi radii in the cavity:** H is 1.1 Å. The shared radius
-  table, used by the ESP shells, keeps H at 1.2 Å.
-- **`surface_points_per_atom` is a Lebedev size, default 302** (was a
-  Fibonacci count, default 60). 74, 230 and 266 have no SWIG constant and
-  are rejected. The `io.cpp` check (≥ 6) still runs first.
-
-Gates (registered, `extended`):
-
-- PySCF 2.13.0 references from `tests/pyscf/pcm_swig_references.py`
-  (`cart=True`, Planck's GBS and Bohr, 150 × 590 unpruned DFT grid):
-
-  | Input | PySCF E / Eh | G_pcm / Eh | tesserae |
-  |---|---|---|---|
-  | `water_rhf_pcm_swig_631gd` | −76.0172764854 | −0.0115156556 | 542 |
-  | `h2o2_rhf_pcm_swig_631gd` (C1) | −150.7676892561 | −0.0153189621 | 705 |
-  | `water_cation_uhf_pcm_swig_631gd` | −75.7506843658 | −0.1478733174 | 542 |
-  | `water_rks_pbe_pcm_swig_631gd` | −76.3221197790 | −0.0102913608 | 542 |
-
-  Planck matches all four to every printed digit, with the same tessera
-  counts.
-
-- `tests/pcm_smoothness_scan.py`: an O–H stretch scan (water/STO-3G,
-  110 points, h = 0.002 Å). It passes: the third difference is smooth
-  (−1.7e-7 to −6e-8 Eh) and the fourth stays below 2.3e-9 Eh, against a
-  5e-9 bound. A binary built before the change (Fibonacci cavity) fails
-  it at 4.4e-5 Eh. Registered as `water_rhf_pcm_smoothness_sto3g`.
-- Rotation: 5.21e-6 Eh spread at 302 points on C1 H2O2, the same as PySCF
-  (`docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md`).
-
-- Point-charge integrals unchanged: eight non-PCM inputs (HF and ECP
-  gradients, CHELPG, ESP points, spherical ESP, DFT ESP) print identical
-  output, timings aside, against a binary built before the change.
-- The five existing PCM cases moved from 24 Fibonacci points to 302 Lebedev
-  points and were re-pinned. Water RHF/STO-3G now matches PySCF to every
-  printed digit, with symmetry on (−74.9522662931, was −74.9516349092). The
-  RKS PBE case's 6.1e-4 gap to PySCF shrank to 9.5e-7, which is the DFT grid
-  difference. The near-zero reaction-field ESP charges flipped sign
-  (O −0.0042 → +0.0043); that residual has no physical sign.
+5. **Spherical basis.** This was waiting on spherical DFT, which has landed,
+   so it is now independent of steps 2–4. Lift the density to Cartesian
+   before φ_el (as the ESP fix S0.1 did) and transform V_rxn to the working
+   basis. Then remove the "PCM solvation" refusal in both binaries
+   (`src/hf_driver.cpp` and the DFT `validate_spherical_support`).
+   - Gate: PySCF `cart=False` on water/6-31G*, RHF and RKS. The gradient
+     follows through the existing lift once step 3 lands.
 
 ## Not in this scope
 
-IEF-PCM / SS(V)PE, non-electrostatic terms (cavitation, dispersion-
-repulsion, as in SMD), PCM for TDDFT (linear-response or state-specific) and
-for post-HF.
-
-## Note
-
-The known rotation dependence of the PCM energy (~5e-5 Eh, from the fixed
-point orientation) shrinks with a denser Lebedev grid but does not vanish
-with a smooth scheme either; PySCF has the same property.
+IEF-PCM, SS(V)PE, COSMO's (ε−1)/(ε+½) as an option, and non-electrostatic
+terms (cavitation, dispersion-repulsion, as in SMD). Also out: PCM for TDDFT
+(linear-response or state-specific), for post-HF, and for ROHF. Restoring
+SAO blocking under PCM is out too: the cavity is not symmetry-adapted
+(`docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md`).
