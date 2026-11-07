@@ -118,6 +118,31 @@ are now thin aliases of the production entries. They predate the screened-
 guard lift, when the test hooks were the only way to exercise the native
 path. Kept so existing test code links unchanged.
 
+## ECP Integrals (`src/integrals/ecp.cpp`)
+
+Effective core potentials (def2, Rb onward) come from libecpint.
+`HartreeFock::ECP::_compute_ecp(basis)` returns the Cartesian U matrix over
+`Basis::_ecps`; `_compute_potential` in `base.h` returns V_ne + U and is the
+call every H_core build uses (HF driver, `rebuild_basis_dependent_state`, DFT
+driver, counterpoise, SAD atoms). Never call `_compute_nuclear_attraction`
+directly for H_core, or ECP atoms lose their core operator.
+
+- V_ne uses `nuclear_charge()` = Z − n_core on ECP atoms.
+- libecpint takes Gaussian94 `n` (power n − 2) and treats the largest-l channel
+  as local, so U_L is added at l = L.
+- Coefficients go in as `(c_p · Nc) · N_p`; `_component_norm` is applied per
+  element afterwards. Cartesian order matches Planck's.
+- libecpint's generator printed kernel constants at 6 digits (157.914 for
+  16π²), a constant 2.09e-6 error on every off-centre type-2 integral;
+  fixed by upstream PR #81 (with six further type-2/quadrature defects that
+  broke derivatives past def2-TZVP). Planck pins the PR head on
+  `loriab/libecpint`; repin to upstream once it merges.
+- `describe_ecps` checks basis L and ECP L against `LIBECPINT_MAX_L` (5);
+  libecpint only asserts it, and asserts are off in Release.
+
+PySCF-gated to ≤1.1e-9 Eh on HI, AgCl, PdCO, AuH·H2O
+(`tests/pyscf/def2_ecp_references.py`). Scope: `docs/DEF2_ECP.md`.
+
 ## Index Placement
 
 After computing a block of ERIs for shell quartet (μν|λσ), the result is placed at:

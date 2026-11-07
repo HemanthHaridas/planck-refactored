@@ -75,6 +75,21 @@ namespace HartreeFock::SCF
     // [n_virt x n_occ]. The rotation is `step * mode` with step = step_scale
     // (default 0.05 rad), raised to π/4 for deep instabilities (λ < −1e-2),
     // where 0.05 rad does not leave the saddle's basin.
+    // The rotation half of an internal follow: U = exp(step * mode) applied to
+    // the occupied/virtual MOs of each spin, densities rebuilt, SCF state reset
+    // so the next SCF starts from them. The caller re-runs the SCF.
+    std::expected<void, std::string> rotate_along_internal_mode(
+        HartreeFock::Calculator &calculator,
+        const StabilityChannel &channel,
+        double step_scale = 0.05);
+
+    // RHF → UHF triplet mode: switch the calculator to UHF, β HOMO–LUMO mix
+    // plus ±step·mode, densities seeded for a re-run (HF and RKS → UKS).
+    std::expected<void, std::string> promote_rhf_to_uhf_along_triplet_mode(
+        HartreeFock::Calculator &calculator,
+        const StabilityChannel &channel,
+        double step_scale = 0.05);
+
     std::expected<double, std::string> follow_instability_and_rerun(
         HartreeFock::Calculator &calculator,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,

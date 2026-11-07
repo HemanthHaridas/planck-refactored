@@ -44,7 +44,7 @@ namespace HartreeFock::BasisFunctions
         auto gbs_res = detail::read_gbs(file);
         if (!gbs_res)
             return std::unexpected(gbs_res.error());
-        const auto &gbs = *gbs_res;
+        const auto &gbs = gbs_res->shells;
 
         AuxBasis aux;
         aux.cartesian = true;

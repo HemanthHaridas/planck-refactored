@@ -8,6 +8,7 @@
 %begin_scf
     scf_type    rhf
     correlation ccsdt
+    rccsdt_backend optimized
     use_diis    .false.
     diis_dim    8
     save_checkpoint .false.

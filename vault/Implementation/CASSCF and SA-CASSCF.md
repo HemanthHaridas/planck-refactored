@@ -79,7 +79,7 @@ count. Before this, the uphill canary's basin was decided by a 2e-11 step that
 lowered `sa_g` from 1.56e-10 to 1.27e-10: accepting it fired the plateau exit
 in the upper basin, rejecting it let the probes escape. `diis_dim` 6/7/10 and
 the integral engine flipped it. Now all seven variations land at
--74.7877864784.
+-74.7877864784 (-74.787786527 since the 2026-11-01 Bohr-constant fix).
 
 ## Shared-κ SA Coupled Solve
 

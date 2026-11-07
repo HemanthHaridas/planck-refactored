@@ -12,6 +12,7 @@
 #include "basis/basis.h"
 #include "basis/spherical.h"
 #include "integrals/base.h"
+#include "integrals/ecp.h"
 #include "integrals/hgp.h"
 #include "integrals/os.h"
 #include "integrals/shellpair.h"
@@ -27,26 +28,10 @@ namespace
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-// In spherical mode, the density / energy-weighted density that SCF produces
-// live in the (2L+1)-per-shell spherical AO basis, but the derivative integral
-// engine (integrals/os.cpp) emits Cartesian shell-pair blocks indexed by
-// shell offsets. To keep the gradient kernel basis-agnostic, lift any AO matrix
-// from the spherical basis back to the Cartesian one via M_cart = Cᵀ · M_sph · C.
-// In Cartesian mode this is a no-op pass-through.
-//
-// See basis/spherical.h::lift_density_sph_to_cart for the energy-invariance
-// contract that justifies this lift.
-static std::expected<Eigen::MatrixXd, std::string> lift_ao_matrix_if_spherical(
-    const HartreeFock::Calculator &calc, const Eigen::MatrixXd &M)
-{
-    if (!calc._shells._spherical)
-        return M;
-    return HartreeFock::BasisFunctions::lift_density_sph_to_cart(
-        M, calc._shells._cart_to_sph);
-}
+// The SCF's density and W live in the working basis (spherical when
+// basis._spherical); the derivative integrals are Cartesian, so every AO matrix
+// is lifted with BasisFunctions::to_cartesian (a no-op in Cartesian mode).
 
-// Build a map: shell index in _shells._shells → atom index in _molecule.
-// Matches shell._center ≈ _molecule._standard.row(a) within 1e-6 Bohr.
 std::expected<std::vector<int>, std::string> HartreeFock::Gradient::detail::build_shell_atom_map(
     const HartreeFock::Calculator &calc)
 {
@@ -91,8 +76,8 @@ static Eigen::MatrixXd compute_nuclear_repulsion_gradient(
         {
             if (a == b)
                 continue;
-            const double Za = static_cast<double>(mol.atomic_numbers[a]);
-            const double Zb = static_cast<double>(mol.atomic_numbers[b]);
+            const double Za = mol.nuclear_charge(a);
+            const double Zb = mol.nuclear_charge(b);
             const double dx = mol._standard(a, 0) - mol._standard(b, 0);
             const double dy = mol._standard(a, 1) - mol._standard(b, 1);
             const double dz = mol._standard(a, 2) - mol._standard(b, 2);
@@ -168,7 +153,8 @@ HartreeFock::Gradient::one_electron_gradient(
     const std::size_t npairs = ao_pairs.size();
     std::vector<OneElectronGradient> bins(kBins, OneElectronGradient{
         Eigen::MatrixXd::Zero(natoms, 3), Eigen::MatrixXd::Zero(natoms, 3),
-        Eigen::MatrixXd::Zero(natoms, 3), Eigen::MatrixXd::Zero(natoms, 3)});
+        Eigen::MatrixXd::Zero(natoms, 3), Eigen::MatrixXd::Zero(natoms, 3),
+        Eigen::MatrixXd::Zero(natoms, 3)});
 #pragma omp parallel for schedule(dynamic)
     for (std::size_t bin = 0; bin < kBins; ++bin)
     {
@@ -197,7 +183,7 @@ HartreeFock::Gradient::one_electron_gradient(
             for (Eigen::Index a = 0; a < natoms; ++a)
             {
                 const auto dV = HartreeFock::ObaraSaika::_compute_nuclear_deriv_C_xyz(
-                    sp, centers[a], static_cast<double>(mol.atomic_numbers[a]));
+                    sp, centers[a], mol.nuclear_charge(a));
                 for (int q = 0; q < 3; ++q)
                     g.nuc_c(a, q) += dc * dV[q];
             }
@@ -211,6 +197,7 @@ HartreeFock::Gradient::one_electron_gradient(
         out.nuc_c += bins[bin].nuc_c;
         out.overlap += bins[bin].overlap;
     }
+    out.ecp = HartreeFock::ECP::_compute_ecp_gradient(calc._shells, *shell_atom, mol.natoms, D);
     return out;
 }
 
@@ -362,14 +349,12 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rhf_g
     // spherical AO basis; lift it back to the Cartesian basis (Cᵀ P_sph C) so
     // the Cartesian derivative-integral kernel below can contract against it
     // with shell-pair offsets. In Cartesian mode this is a value copy of P.
-    auto P_lifted = lift_ao_matrix_if_spherical(calc, calc._info._scf.alpha.density);
+    auto P_lifted = HartreeFock::BasisFunctions::to_cartesian(calc._shells, calc._info._scf.alpha.density);
     if (!P_lifted)
         return std::unexpected(P_lifted.error());
     const Eigen::MatrixXd P = std::move(*P_lifted); // already has factor 2
 
-    int n_elec = 0;
-    for (std::size_t a = 0; a < calc._molecule.natoms; ++a)
-        n_elec += calc._molecule.atomic_numbers[a];
+    int n_elec = calc._molecule.total_nuclear_charge();
     n_elec -= calc._molecule.charge;
     const int n_occ = n_elec / 2;
 
@@ -379,7 +364,7 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rhf_g
     // the stored MOs use (spherical when _spherical, Cartesian otherwise); the
     // same Cartesian lift applies.
     const Eigen::MatrixXd W_native = 2.0 * C_occ * eps.asDiagonal() * C_occ.transpose();
-    auto W_lifted = lift_ao_matrix_if_spherical(calc, W_native);
+    auto W_lifted = HartreeFock::BasisFunctions::to_cartesian(calc._shells, W_native);
     if (!W_lifted)
         return std::unexpected(W_lifted.error());
     const Eigen::MatrixXd W = std::move(*W_lifted);
@@ -398,16 +383,20 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rks_g
     bool with_breakdown)
 {
     g_last_wavefunction_gradient_breakdown.reset();
-    const Eigen::MatrixXd &P = calc._info._scf.alpha.density;
-    int n_elec = 0;
-    for (std::size_t a = 0; a < calc._molecule.natoms; ++a)
-        n_elec += calc._molecule.atomic_numbers[a];
+    int n_elec = calc._molecule.total_nuclear_charge();
     n_elec -= calc._molecule.charge;
     const int n_occ = n_elec / 2;
 
+    // P and W are built in the working basis and lifted once, as in the RHF path.
     const Eigen::MatrixXd C_occ = calc._info._scf.alpha.mo_coefficients.leftCols(n_occ);
     const Eigen::VectorXd eps = calc._info._scf.alpha.mo_energies.head(n_occ);
-    const Eigen::MatrixXd W = 2.0 * C_occ * eps.asDiagonal() * C_occ.transpose();
+    auto P_lifted = HartreeFock::BasisFunctions::to_cartesian(calc._shells, calc._info._scf.alpha.density);
+    auto W_lifted = HartreeFock::BasisFunctions::to_cartesian(
+        calc._shells, 2.0 * C_occ * eps.asDiagonal() * C_occ.transpose());
+    if (!P_lifted || !W_lifted)
+        return std::unexpected("RKS gradient: " + (!P_lifted ? P_lifted.error() : W_lifted.error()));
+    const Eigen::MatrixXd &P = *P_lifted;
+    const Eigen::MatrixXd &W = *W_lifted;
     const double cx_total =
         exchange_kernel.full_range_exchange_coefficient +
         exchange_kernel.short_range_exchange_coefficient;
@@ -486,10 +475,10 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_g
     // from SCF in the (2L+1)-per-shell basis; lift each spin block back to the
     // Cartesian basis (Cᵀ P_sph C) so the Cartesian derivative kernel indexing
     // (sp.A._index, sp.B._index) lines up. In Cartesian mode the lift is a copy.
-    auto Pa_lifted = lift_ao_matrix_if_spherical(calc, calc._info._scf.alpha.density);
+    auto Pa_lifted = HartreeFock::BasisFunctions::to_cartesian(calc._shells, calc._info._scf.alpha.density);
     if (!Pa_lifted)
         return std::unexpected(Pa_lifted.error());
-    auto Pb_lifted = lift_ao_matrix_if_spherical(calc, calc._info._scf.beta.density);
+    auto Pb_lifted = HartreeFock::BasisFunctions::to_cartesian(calc._shells, calc._info._scf.beta.density);
     if (!Pb_lifted)
         return std::unexpected(Pb_lifted.error());
     const Eigen::MatrixXd P_a = std::move(*Pa_lifted);
@@ -497,9 +486,7 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_g
     const Eigen::MatrixXd P_t = P_a + P_b; // total density
 
     // Electron counts
-    int n_elec = 0;
-    for (std::size_t a = 0; a < natoms; ++a)
-        n_elec += mol.atomic_numbers[a];
+    int n_elec = mol.total_nuclear_charge();
     n_elec -= mol.charge;
     const int n_unpaired = static_cast<int>(mol.multiplicity) - 1;
     const int n_alpha = (n_elec + n_unpaired) / 2;
@@ -513,7 +500,7 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_g
     // Energy-weighted density (no factor 2 for UHF). Built from MOs in whichever
     // basis SCF used (spherical or Cartesian); lifted the same way as P_a/P_b.
     const Eigen::MatrixXd W_native = Ca_occ * ea.asDiagonal() * Ca_occ.transpose() + Cb_occ * eb.asDiagonal() * Cb_occ.transpose();
-    auto W_lifted = lift_ao_matrix_if_spherical(calc, W_native);
+    auto W_lifted = HartreeFock::BasisFunctions::to_cartesian(calc._shells, W_native);
     if (!W_lifted)
         return std::unexpected(W_lifted.error());
     const Eigen::MatrixXd W = std::move(*W_lifted);
@@ -562,8 +549,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uhf_g
         {
             if (a == b)
                 continue;
-            const double Za = static_cast<double>(mol.atomic_numbers[a]);
-            const double Zb = static_cast<double>(mol.atomic_numbers[b]);
+            const double Za = mol.nuclear_charge(a);
+            const double Zb = mol.nuclear_charge(b);
             const double dx = mol._standard(a, 0) - mol._standard(b, 0);
             const double dy = mol._standard(a, 1) - mol._standard(b, 1);
             const double dz = mol._standard(a, 2) - mol._standard(b, 2);
@@ -599,10 +586,10 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rohf_
     const std::size_t natoms = mol.natoms;
     const std::size_t nb = basis.nbasis();
 
-    auto Pa_lifted = lift_ao_matrix_if_spherical(calc, calc._info._scf.alpha.density);
+    auto Pa_lifted = HartreeFock::BasisFunctions::to_cartesian(calc._shells, calc._info._scf.alpha.density);
     if (!Pa_lifted)
         return std::unexpected(Pa_lifted.error());
-    auto Pb_lifted = lift_ao_matrix_if_spherical(calc, calc._info._scf.beta.density);
+    auto Pb_lifted = HartreeFock::BasisFunctions::to_cartesian(calc._shells, calc._info._scf.beta.density);
     if (!Pb_lifted)
         return std::unexpected(Pb_lifted.error());
     const Eigen::MatrixXd P_a = std::move(*Pa_lifted);
@@ -626,7 +613,7 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rohf_
     const Eigen::MatrixXd W_native = build_rohf_energy_weighted_density(
         calc._info._scf.alpha.density, calc._info._scf.beta.density,
         calc._info._scf.alpha.fock, calc._info._scf.beta.fock);
-    auto W_lifted = lift_ao_matrix_if_spherical(calc, W_native);
+    auto W_lifted = HartreeFock::BasisFunctions::to_cartesian(calc._shells, W_native);
     if (!W_lifted)
         return std::unexpected(W_lifted.error());
     const Eigen::MatrixXd W = std::move(*W_lifted);
@@ -675,8 +662,8 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_rohf_
         {
             if (a == b)
                 continue;
-            const double Za = static_cast<double>(mol.atomic_numbers[a]);
-            const double Zb = static_cast<double>(mol.atomic_numbers[b]);
+            const double Za = mol.nuclear_charge(a);
+            const double Zb = mol.nuclear_charge(b);
             const double dx = mol._standard(a, 0) - mol._standard(b, 0);
             const double dy = mol._standard(a, 1) - mol._standard(b, 1);
             const double dz = mol._standard(a, 2) - mol._standard(b, 2);
@@ -710,13 +697,15 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_g
     const std::size_t natoms = mol.natoms;
     const std::size_t nb = basis.nbasis();
 
-    const Eigen::MatrixXd &P_a = calc._info._scf.alpha.density;
-    const Eigen::MatrixXd &P_b = calc._info._scf.beta.density;
+    auto Pa_lifted = HartreeFock::BasisFunctions::to_cartesian(basis, calc._info._scf.alpha.density);
+    auto Pb_lifted = HartreeFock::BasisFunctions::to_cartesian(basis, calc._info._scf.beta.density);
+    if (!Pa_lifted || !Pb_lifted)
+        return std::unexpected("UKS gradient: " + (!Pa_lifted ? Pa_lifted.error() : Pb_lifted.error()));
+    const Eigen::MatrixXd &P_a = *Pa_lifted;
+    const Eigen::MatrixXd &P_b = *Pb_lifted;
     const Eigen::MatrixXd P_t = P_a + P_b;
 
-    int n_elec = 0;
-    for (std::size_t a = 0; a < natoms; ++a)
-        n_elec += mol.atomic_numbers[a];
+    int n_elec = mol.total_nuclear_charge();
     n_elec -= mol.charge;
     const int n_unpaired = static_cast<int>(mol.multiplicity) - 1;
     const int n_alpha = (n_elec + n_unpaired) / 2;
@@ -727,7 +716,11 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_uks_g
     const Eigen::MatrixXd Cb_occ = calc._info._scf.beta.mo_coefficients.leftCols(n_beta);
     const Eigen::VectorXd eb = calc._info._scf.beta.mo_energies.head(n_beta);
 
-    const Eigen::MatrixXd W = Ca_occ * ea.asDiagonal() * Ca_occ.transpose() + Cb_occ * eb.asDiagonal() * Cb_occ.transpose();
+    auto W_lifted = HartreeFock::BasisFunctions::to_cartesian(
+        basis, Ca_occ * ea.asDiagonal() * Ca_occ.transpose() + Cb_occ * eb.asDiagonal() * Cb_occ.transpose());
+    if (!W_lifted)
+        return std::unexpected("UKS gradient: " + W_lifted.error());
+    const Eigen::MatrixXd &W = *W_lifted;
 
     Eigen::MatrixXd core_pulay = Eigen::MatrixXd::Zero(natoms, 3);
     Eigen::MatrixXd two_electron = Eigen::MatrixXd::Zero(natoms, 3);

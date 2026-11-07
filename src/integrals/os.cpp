@@ -1649,7 +1649,7 @@ std::array<double, 3> HartreeFock::ObaraSaika::_compute_nuclear_deriv_A_elem(
 
         for (std::size_t a = 0; a < mol.natoms; ++a)
         {
-            const double Z = static_cast<double>(mol.atomic_numbers[a]);
+            const double Z = mol.nuclear_charge(a);
             const Eigen::Vector3d C(mol._standard(a, 0),
                                     mol._standard(a, 1),
                                     mol._standard(a, 2));

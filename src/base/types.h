@@ -223,12 +223,18 @@ namespace HartreeFock
         // nuclear_charge(a), never atomic_numbers[a], for any physical quantity.
         std::vector<bool> is_ghost = {};
 
-        // Effective nuclear charge of atom a: 0 for ghosts, else its atomic number.
+        // Core electrons an ECP replaces on each atom; empty or 0 => all-electron.
+        // Set from the basis by Calculator::sync_ecp_core_electrons().
+        std::vector<int> ecp_core_electrons = {};
+
+        // Effective nuclear charge of atom a: 0 for ghosts, else its atomic
+        // number minus any ECP core electrons.
         double nuclear_charge(std::size_t a) const noexcept
         {
             if (a < is_ghost.size() && is_ghost[a])
                 return 0.0;
-            return static_cast<double>(atomic_numbers[static_cast<Eigen::Index>(a)]);
+            const int core = a < ecp_core_electrons.size() ? ecp_core_electrons[a] : 0;
+            return static_cast<double>(atomic_numbers[static_cast<Eigen::Index>(a)] - core);
         }
 
         // True if any atom is a ghost (i.e. this is a counterpoise sub-calculation).
@@ -365,8 +371,28 @@ namespace HartreeFock
         }
     };
 
+    // One ECP term c · r^(n-2) · exp(-ζ r²), n as written in the Gaussian94 file.
+    struct ECPTerm
+    {
+        int n;
+        double exponent;
+        double coefficient;
+    };
+
+    // Semilocal ECP on one atom: U(r) = U_L(r) + Σ_{l<L} Σ_m |lm⟩ U_l(r) ⟨lm|,
+    // where U_l is already the l - L difference the basis file stores.
+    struct ECPPotential
+    {
+        Eigen::Vector3d _center = Eigen::Vector3d::Zero(); // Bohr, same frame as shells
+        std::size_t _atom_index = 0;
+        int _n_core = 0;
+        std::vector<ECPTerm> _local;                 // U_L, L = _semilocal.size()
+        std::vector<std::vector<ECPTerm>> _semilocal; // _semilocal[l], l < L
+    };
+
     struct Basis
     {
+        std::vector<ECPPotential> _ecps; // non-ghost atoms whose basis carries an ECP
         std::deque<Shell> _shells;                   // Shells; deque keeps Shell* stable across push_back
         std::deque<ContractedView> _basis_functions; // Basis functions; deque keeps references stable across push_back
 
@@ -410,6 +436,7 @@ namespace HartreeFock
             _basis_functions.clear();
             _spherical = false;
             _cart_to_sph = Eigen::MatrixXd();
+            _ecps.clear();
         }
     };
 
@@ -431,6 +458,7 @@ namespace HartreeFock
         double _cc_max_memory_gb = 4.0;    // Soft cap for large tensor-CC intermediates (0 = off)
         int _cc_generated_rank = 4;        // Excitation rank for the generated arbitrary-order RCC path (cc4=4, cc5=5, cc6=6)
         bool _cc_warm_start = true;        // Warm-start the generated arbitrary-order RCC path from a rank-(n-1) solve (cc_warm_start .false. = cold)
+        std::string _rccsdt_backend = "auto"; // RCCSDT backend: auto (size-based), determinant, tensor, optimized (generated kernels)
 
         // SOSCF (docs/SOSCF.md, S2/S3): fixed-iteration switch,
         // superseded by the DIIS-error criterion below once
@@ -1672,6 +1700,16 @@ namespace HartreeFock
             _molecule._is_bohr = true;
         }
 
+        // Copy the basis's per-atom ECP core counts onto the molecule, so
+        // nuclear_charge() and every electron count see Z - n_core. Call once
+        // after the primary read_gbs_basis(); geometry rebuilds keep it.
+        void sync_ecp_core_electrons()
+        {
+            _molecule.ecp_core_electrons.assign(_molecule.natoms, 0);
+            for (const ECPPotential &ecp : _shells._ecps)
+                _molecule.ecp_core_electrons[ecp._atom_index] = ecp._n_core;
+        }
+
         void sync_coordinate_frames_from_standard() noexcept
         {
             assert(_molecule._standard.rows() == static_cast<Eigen::Index>(_molecule.natoms) &&
@@ -1690,7 +1728,7 @@ namespace HartreeFock
         // Getter
         Eigen::MatrixXd _bohr_to_angstrom() const noexcept
         {
-            return _molecule._standard * 0.529177210903;
+            return _molecule._standard * BOHR_TO_ANGSTROM;
         }
 
         // Run Calculation
@@ -1701,10 +1739,12 @@ namespace HartreeFock
                 // First set the spin channel information
                 _info._scf = DataSCF(_scf._scf != SCFType::RHF);
 
-                // Now initialize the matrices
-                _info._scf.initialize(_shells.nbasis());
+                // Now initialize the matrices (working basis: spherical when
+                // _shells._spherical).
+                _info._scf.initialize(working_nbasis());
 
-                // Set SCF Mode
+                // Set SCF Mode. Cartesian count on purpose: the ERIs are always
+                // built in Cartesian, so that is what conventional mode costs.
                 _scf.set_scf_mode_auto(_shells.nbasis());
 
                 // Set Max SCF cycles (only if not explicitly set by the user)

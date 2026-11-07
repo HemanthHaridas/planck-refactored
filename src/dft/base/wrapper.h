@@ -243,6 +243,21 @@ namespace DFT
                 return false;
             }
 
+            // libxc's wPBEh exchange (the HSE family and the wPBEh-based LC
+            // hybrids) rescales s with Henderson's first scaling, which jumps at
+            // s = 1, so the energy and V_xc are discontinuous there and energy
+            // finite differences are unreliable (docs/WPBEH_S_SCALING_SCOPE.md).
+            bool uses_wpbeh_exchange() const noexcept
+            {
+                if (func_.info && func_.info->number == XC_GGA_X_WPBEH)
+                    return true;
+                for (int i = 0; i < func_.n_func_aux; ++i)
+                    if (func_.func_aux[i] && func_.func_aux[i]->info &&
+                        func_.func_aux[i]->info->number == XC_GGA_X_WPBEH)
+                        return true;
+                return false;
+            }
+
             bool has_pt2_term() const noexcept
             {
                 if (func_.hyb_type == nullptr || func_.hyb_coeff == nullptr)

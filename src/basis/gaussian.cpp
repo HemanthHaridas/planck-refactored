@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <cmath>
 #include <expected>
+#include <format>
 #include <fstream>
 #include <iostream>
 
@@ -52,6 +53,51 @@ namespace
                     kept.push_back(p);
             if (!kept.empty())
                 shell.primitives = std::move(kept);
+        }
+    }
+
+    // ∫ xⁿ e^(−p x²) dx over the real line: 0 for odd n, (n−1)!!/(2p)^(n/2) √(π/p).
+    double gaussian_moment(int n, double p)
+    {
+        constexpr double pi = 3.1415926535897932384626433832795;
+        if (n % 2)
+            return 0.0;
+        return HartreeFock::BasisFunctions::double_factorial(n - 1) / std::pow(2.0 * p, n / 2) *
+               std::sqrt(pi / p);
+    }
+
+    // Scale each row m of C by 1/√((C S Cᵀ)_mm) so diag(S_sph) = 1. C is
+    // block-diagonal by shell, so (C S Cᵀ)_mm only needs the overlap between
+    // components of one shell on one centre, which has a closed form and does
+    // not depend on the geometry: one normalization at read time holds for
+    // every geometry the basis is later used at.
+    void normalize_cart_to_sph_rows(const HartreeFock::Basis &basis, Eigen::MatrixXd &C)
+    {
+        const auto &bfs = basis._basis_functions;
+        const Eigen::Index n = static_cast<Eigen::Index>(bfs.size());
+        Eigen::MatrixXd S = Eigen::MatrixXd::Zero(n, n); // same-shell blocks only
+        for (Eigen::Index mu = 0; mu < n; ++mu)
+            for (Eigen::Index nu = mu; nu < n && bfs[nu]._shell == bfs[mu]._shell; ++nu)
+            {
+                const HartreeFock::Shell &sh = *bfs[mu]._shell;
+                const Eigen::Vector3i a = bfs[mu]._cartesian + bfs[nu]._cartesian;
+                double sum = 0.0;
+                for (Eigen::Index i = 0; i < sh._primitives.size(); ++i)
+                    for (Eigen::Index j = 0; j < sh._primitives.size(); ++j)
+                    {
+                        const double p = sh._primitives[i] + sh._primitives[j];
+                        sum += sh._coefficients[i] * sh._normalizations[i] * sh._coefficients[j] *
+                               sh._normalizations[j] * gaussian_moment(a[0], p) * gaussian_moment(a[1], p) *
+                               gaussian_moment(a[2], p);
+                    }
+                S(mu, nu) = S(nu, mu) = sum * bfs[mu]._component_norm * bfs[nu]._component_norm;
+            }
+        const Eigen::MatrixXd CS = C * S;
+        for (Eigen::Index m = 0; m < C.rows(); ++m)
+        {
+            const double norm2 = CS.row(m).dot(C.row(m));
+            if (norm2 > 0.0)
+                C.row(m) /= std::sqrt(norm2);
         }
     }
 } // namespace
@@ -118,7 +164,8 @@ std::expected<HartreeFock::Basis, std::string> HartreeFock::BasisFunctions::read
     auto gbs_res = HartreeFock::BasisFunctions::detail::read_gbs(file);
     if (!gbs_res)
         return std::unexpected(gbs_res.error());
-    BasisSet gbs = std::move(*gbs_res);
+    BasisSet gbs = std::move(gbs_res->shells);
+    const auto &gbs_ecps = gbs_res->ecps;
     for (auto &[element, shells] : gbs)
         drop_redundant_primitives(shells);
 
@@ -138,6 +185,16 @@ std::expected<HartreeFock::Basis, std::string> HartreeFock::BasisFunctions::read
         if (it == gbs.end())
         {
             return std::unexpected("Unsupported Element: " + element);
+        }
+
+        // A ghost carries basis functions only, so it gets no ECP operator.
+        const bool ghost = i < molecule.is_ghost.size() && molecule.is_ghost[i];
+        if (auto ecp_it = gbs_ecps.find(element); ecp_it != gbs_ecps.end() && !ghost)
+        {
+            if (ecp_it->second.n_core >= molecule.atomic_numbers[i])
+                return std::unexpected("ECP core count >= Z for " + element);
+            basis._ecps.push_back(HartreeFock::BasisFunctions::detail::make_ecp_potential(
+                ecp_it->second, molecule._standard.row(i).transpose(), i));
         }
 
         // Now create Cartesian shells
@@ -205,8 +262,29 @@ std::expected<HartreeFock::Basis, std::string> HartreeFock::BasisFunctions::read
         auto C = HartreeFock::BasisFunctions::build_cart_to_sph(basis);
         if (!C)
             return std::unexpected(C.error());
+        normalize_cart_to_sph_rows(basis, *C);
         basis._cart_to_sph = std::move(*C);
     }
 
     return basis;
+}
+
+HartreeFock::ECPPotential HartreeFock::BasisFunctions::detail::make_ecp_potential(
+    const GbsEcp &gbs, const Eigen::Vector3d &center, std::size_t atom_index)
+{
+    const auto to_terms = [](const std::vector<GbsEcpTerm> &channel)
+    {
+        std::vector<HartreeFock::ECPTerm> terms;
+        for (const auto &t : channel)
+            terms.push_back({t.n, t.exponent, t.coefficient});
+        return terms;
+    };
+    HartreeFock::ECPPotential ecp;
+    ecp._center = center;
+    ecp._atom_index = atom_index;
+    ecp._n_core = gbs.n_core;
+    ecp._local = to_terms(gbs.channels.front());
+    for (std::size_t c = 1; c < gbs.channels.size(); ++c)
+        ecp._semilocal.push_back(to_terms(gbs.channels[c]));
+    return ecp;
 }

@@ -6,24 +6,11 @@
 
 #include <Eigen/Core>
 
-#include <atomic>
 #include <memory>
 #include <vector>
 
 namespace HartreeFock::Correlation::CASSCF
 {
-
-    // ponytail: temporary P0 probe for docs/CASSCF_PERFORMANCE.md; printed per
-    // macro under PLANCK_CASSCF_CALL_PROBE. Safe to delete.
-    struct CallProbe
-    {
-        std::atomic<long> evaluate{0};
-        std::atomic<long> fixed_ci_gradient{0};
-        std::atomic<long> active_cache{0};
-        std::atomic<long> active_transform{0};
-        std::atomic<long> fock{0};
-    };
-    inline CallProbe call_probe;
 
     using HartreeFock::Correlation::CASSCFInternal::ActiveIntegralCache;
 

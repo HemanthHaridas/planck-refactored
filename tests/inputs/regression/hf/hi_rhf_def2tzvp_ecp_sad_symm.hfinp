@@ -1,0 +1,25 @@
+# def2 ECP gate (docs/DEF2_ECP.md step 4): HI with f shells on I, SAD guess on the ECP atom, C_inf_v symmetry
+# Reference: tests/pyscf/def2_ecp_references.py (PySCF 2.13.0, same GBS file).
+%begin_control
+    basis       def2-TZVP
+    calculation energy
+    basis_type  spherical
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    guess       sad
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .true.
+%end_geom
+
+%begin_coords
+2
+0   1
+H     0.000000     0.000000     0.000000
+I     0.000000     0.000000     1.609000
+%end_coords

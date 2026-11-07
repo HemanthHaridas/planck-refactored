@@ -1,7 +1,6 @@
 #include "driver.h"
 
 #include "analytic_hessian.h"
-#include "dh_hessian_probe.h"
 #include "ks_orbital_hessian.h"
 #include "tddft_exchange.h"
 #include "uks_level_shift.h"
@@ -41,7 +40,10 @@
 #include "populations/multipole.h"
 #include "post_hf/integrals.h"
 #include "post_hf/mp2.h"
+#include "basis/spherical.h"
 #include "scf/sad.h"
+#include "scf/stability.h"
+#include "scf/working_state.h"
 #include "scf/scf.h"
 #include "symmetry/integral_symmetry.h"
 #include "symmetry/mo_symmetry.h"
@@ -242,11 +244,17 @@ namespace DFT::Driver
                 .iterations = 0,
                 .converged = false};
 
+            // sigma_basis caches apply(basis) column by column: a basis vector,
+            // once added, is never modified until a restart, so only new columns
+            // cost an operator application (one per vector, not one per vector
+            // per iteration).
+            Eigen::MatrixXd sigma_basis(dimension, 0);
             for (int iteration = 0; iteration < max_iterations; ++iteration)
             {
                 const int m = static_cast<int>(basis.cols());
-                Eigen::MatrixXd sigma_basis(dimension, m);
-                for (int col = 0; col < m; ++col)
+                const int have = static_cast<int>(sigma_basis.cols());
+                sigma_basis.conservativeResize(Eigen::NoChange, m);
+                for (int col = have; col < m; ++col)
                     sigma_basis.col(col) = apply(basis.col(col));
 
                 const Eigen::MatrixXd projected = basis.transpose() * sigma_basis;
@@ -300,8 +308,11 @@ namespace DFT::Driver
                 if (corrections.empty())
                     return result;
 
+                int first_new = m; // columns before this keep their cached sigma
                 if (m + static_cast<int>(corrections.size()) > subspace_limit)
                 {
+                    sigma_basis.resize(dimension, 0); // restart: basis changes, recompute
+                    first_new = 0;
                     basis = result.eigenvectors.leftCols(nr);
                     for (int col = 0; col < static_cast<int>(basis.cols()); ++col)
                     {
@@ -324,7 +335,9 @@ namespace DFT::Driver
                         basis.col(old_cols + idx) = corrections[static_cast<std::size_t>(idx)];
                 }
 
-                for (int col = 0; col < static_cast<int>(basis.cols()); ++col)
+                // Re-orthogonalize only the new columns; the cached ones are
+                // already orthonormal and must not change.
+                for (int col = first_new; col < static_cast<int>(basis.cols()); ++col)
                 {
                     for (int prev = 0; prev < col; ++prev)
                         basis.col(col) -= basis.col(prev).dot(basis.col(col)) * basis.col(prev);
@@ -547,6 +560,7 @@ namespace DFT::Driver
             if (!basis_res)
                 return std::unexpected("DFT basis setup failed: " + basis_res.error());
             calculator._shells = std::move(*basis_res);
+            calculator.sync_ecp_core_electrons();
             calculator.initialize();
             return {};
         }
@@ -613,43 +627,13 @@ namespace DFT::Driver
             calculator._use_sao_blocking = false;
         }
 
-        std::expected<void, std::string> compute_one_electron_terms(
-            HartreeFock::Calculator &calculator,
-            const std::vector<HartreeFock::ShellPair> &shell_pairs)
-        {
-            // Integral symmetry metadata depends on the current molecular
-            // orientation and shell layout, so refresh it before every one-
-            // electron build for the current geometry.
-            HartreeFock::Symmetry::update_integral_symmetry(calculator);
-
-            auto [S, T] = _compute_1e(
-                shell_pairs,
-                calculator._shells.nbasis(),
-                calculator._integral._engine,
-                calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
-
-            const Eigen::MatrixXd V = _compute_nuclear_attraction(
-                shell_pairs,
-                calculator._shells.nbasis(),
-                calculator._molecule,
-                calculator._integral._engine,
-                calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
-
-            calculator._overlap = std::move(S);
-            calculator._hcore = T + V;
-            return {};
-        }
-
         std::expected<void, std::string> initialize_ks_guess(HartreeFock::Calculator &calculator)
         {
             const auto X = HartreeFock::SCF::build_orthogonalizer(calculator._overlap);
             if (!X)
                 return std::unexpected("DFT orthogonalizer build failed: " + X.error());
 
-            int n_electrons = 0;
-            for (auto z : calculator._molecule.atomic_numbers)
-                n_electrons += z;
-            n_electrons -= calculator._molecule.charge;
+            int n_electrons = calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
 
             const auto make_spin_density = [&calculator, &X](std::size_t n_occ, bool doubled_occupancy) -> Eigen::MatrixXd
             {
@@ -715,7 +699,7 @@ namespace DFT::Driver
             if (!mos)
                 return std::unexpected(mos.error());
 
-            if (mos->nbasis == calculator._shells.nbasis())
+            if (mos->nbasis == calculator.working_nbasis())
                 return false;
 
             HartreeFock::Logger::logging(
@@ -725,73 +709,10 @@ namespace DFT::Driver
                             mos->basis_name,
                             calculator._basis._basis_name));
 
-            if (auto one_e = compute_one_electron_terms(calculator, shell_pairs); !one_e)
+            if (auto one_e = HartreeFock::SCF::compute_working_one_electron(calculator, shell_pairs); !one_e)
                 return std::unexpected("Current-basis 1e integral build failed before density projection: " + one_e.error());
-
-            const std::string small_gbs =
-                calculator._basis._basis_path + "/" + mos->basis_name;
-            auto small_shells = HartreeFock::BasisFunctions::read_gbs_basis(
-                small_gbs,
-                calculator._molecule,
-                calculator._basis._basis);
-            if (!small_shells)
-                return std::unexpected(small_shells.error());
-
-            auto orthogonalizer = HartreeFock::SCF::build_orthogonalizer(calculator._overlap);
-            if (!orthogonalizer)
-                return std::unexpected("Orthogonalizer failed before density projection: " + orthogonalizer.error());
-
-            const Eigen::MatrixXd cross_overlap =
-                HartreeFock::ObaraSaika::_compute_cross_overlap(
-                    calculator._shells,
-                    *small_shells);
-
-            int n_electrons = 0;
-            for (auto z : calculator._molecule.atomic_numbers)
-                n_electrons += z;
-            n_electrons -= calculator._molecule.charge;
-
-            const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
-            const int n_alpha = (n_electrons + n_unpaired) / 2;
-            const int n_beta = (n_electrons - n_unpaired) / 2;
-            const bool current_unrestricted =
-                calculator._scf._scf == HartreeFock::SCFType::UHF;
-
-            if (mos->is_uhf)
-            {
-                calculator._info._scf.alpha.density =
-                    HartreeFock::Checkpoint::project_density(
-                        *orthogonalizer,
-                        cross_overlap,
-                        mos->C_alpha.leftCols(n_alpha),
-                        1.0);
-                calculator._info._scf.beta.density =
-                    HartreeFock::Checkpoint::project_density(
-                        *orthogonalizer,
-                        cross_overlap,
-                        mos->C_beta.leftCols(n_beta),
-                        1.0);
-            }
-            else
-            {
-                const double alpha_factor = current_unrestricted ? 1.0 : 2.0;
-                calculator._info._scf.alpha.density =
-                    HartreeFock::Checkpoint::project_density(
-                        *orthogonalizer,
-                        cross_overlap,
-                        mos->C_alpha.leftCols(n_alpha),
-                        alpha_factor);
-
-                if (current_unrestricted)
-                {
-                    calculator._info._scf.beta.density =
-                        HartreeFock::Checkpoint::project_density(
-                            *orthogonalizer,
-                            cross_overlap,
-                            mos->C_alpha.leftCols(n_beta),
-                            1.0);
-                }
-            }
+            if (auto projected = HartreeFock::SCF::project_checkpoint_density(calculator, *mos); !projected)
+                return std::unexpected(projected.error());
 
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Info,
@@ -873,7 +794,7 @@ namespace DFT::Driver
             const Eigen::Ref<const Eigen::MatrixXd> &fock,
             const std::string &label)
         {
-            const Eigen::Index nbasis = static_cast<Eigen::Index>(calculator._shells.nbasis());
+            const Eigen::Index nbasis = static_cast<Eigen::Index>(calculator.working_nbasis());
             const bool sao_active = calculator._use_sao_blocking &&
                                     calculator._sao_transform.rows() == nbasis &&
                                     calculator._sao_transform.cols() == nbasis &&
@@ -957,10 +878,10 @@ namespace DFT::Driver
         }
 
         // ResponseExcitationSpace, ResponseEigenpair, transition_density_matrix,
-        // evaluate_xc_matrix_from_spin_densities, build_unrestricted_xc_kernel_blocks,
+        // build_unrestricted_xc_kernel_blocks,
         // and build_closed_shell_xc_kernel_blocks moved to driver.h/below the
         // anonymous namespace (F3.1, docs/DFT_ANALYTIC_FXC_HESSIAN.md) so
-        // F3's verification can call the FD-kernel oracle from a standalone
+        // F3's verification can call the kernel builders from a standalone
         // test binary. driver.h is included at the top of this file, so their
         // declarations are visible here unchanged.
 
@@ -1412,23 +1333,38 @@ namespace DFT::Driver
                     "UKS linear response currently supports spin-conserving roots only; singlet/triplet spin adaptation is restricted to closed-shell RKS");
             }
 
+            // The response runs entirely in the Cartesian AO basis (grid, ERIs,
+            // dipoles). In a spherical basis the MO coefficients are lifted once,
+            // C_cart = T^T C (T = _cart_to_sph), and the densities with
+            // to_cartesian; MO counts come from the coefficient columns.
             const Eigen::Index nbasis = static_cast<Eigen::Index>(calculator._shells.nbasis());
+            const bool spherical = calculator._shells._spherical;
+            const auto cartesian_mos = [&](const Eigen::MatrixXd &C) -> Eigen::MatrixXd
+            { return spherical ? Eigen::MatrixXd(calculator._shells._cart_to_sph.transpose() * C) : C; };
+            auto P_alpha = HartreeFock::BasisFunctions::to_cartesian(calculator._shells,
+                                                                     calculator._info._scf.alpha.density);
+            if (!P_alpha)
+                return std::unexpected("TDDFT: " + P_alpha.error());
+            auto P_beta = unrestricted ? HartreeFock::BasisFunctions::to_cartesian(
+                                             calculator._shells, calculator._info._scf.beta.density)
+                                       : std::expected<Eigen::MatrixXd, std::string>(Eigen::MatrixXd());
+            if (!P_beta)
+                return std::unexpected("TDDFT: " + P_beta.error());
             std::vector<ResponseExcitationSpace> spaces;
             spaces.reserve(unrestricted ? 2 : 1);
 
             if (!unrestricted)
             {
-                const int n_electrons = static_cast<int>(
-                    calculator._molecule.atomic_numbers.cast<int>().sum() - calculator._molecule.charge);
+                const int n_electrons = static_cast<int>(calculator._molecule.total_nuclear_charge() - calculator._molecule.charge);
                 if (n_electrons % 2 != 0)
                     return std::unexpected("Closed-shell RKS TDDFT / linear response requires an even number of electrons");
 
+                const Eigen::MatrixXd coefficients = cartesian_mos(calculator._info._scf.alpha.mo_coefficients);
                 const int n_occ = n_electrons / 2;
-                const int n_virt = static_cast<int>(nbasis) - n_occ;
+                const int n_virt = static_cast<int>(coefficients.cols()) - n_occ;
                 if (n_occ <= 0 || n_virt <= 0)
                     return std::unexpected("TDDFT / linear response requires at least one occupied and one virtual orbital");
 
-                const Eigen::MatrixXd &coefficients = calculator._info._scf.alpha.mo_coefficients;
                 const Eigen::VectorXd &energies = calculator._info._scf.alpha.mo_energies;
                 spaces.push_back(
                     ResponseExcitationSpace{
@@ -1444,19 +1380,18 @@ namespace DFT::Driver
             }
             else
             {
-                const int n_electrons = static_cast<int>(
-                    calculator._molecule.atomic_numbers.cast<int>().sum() - calculator._molecule.charge);
+                const int n_electrons = static_cast<int>(calculator._molecule.total_nuclear_charge() - calculator._molecule.charge);
                 const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
                 const int n_alpha = (n_electrons + n_unpaired) / 2;
                 const int n_beta = (n_electrons - n_unpaired) / 2;
-                const int n_virt_alpha = static_cast<int>(nbasis) - n_alpha;
-                const int n_virt_beta = static_cast<int>(nbasis) - n_beta;
+                const Eigen::MatrixXd coeff_alpha = cartesian_mos(calculator._info._scf.alpha.mo_coefficients);
+                const Eigen::MatrixXd coeff_beta = cartesian_mos(calculator._info._scf.beta.mo_coefficients);
+                const int n_virt_alpha = static_cast<int>(coeff_alpha.cols()) - n_alpha;
+                const int n_virt_beta = static_cast<int>(coeff_beta.cols()) - n_beta;
                 if (n_alpha <= 0 || n_beta < 0 || n_virt_alpha <= 0 || n_virt_beta <= 0)
                     return std::unexpected("UKS TDDFT / linear response requires occupied and virtual alpha/beta spaces");
 
-                const Eigen::MatrixXd &coeff_alpha = calculator._info._scf.alpha.mo_coefficients;
                 const Eigen::VectorXd &eps_alpha = calculator._info._scf.alpha.mo_energies;
-                const Eigen::MatrixXd &coeff_beta = calculator._info._scf.beta.mo_coefficients;
                 const Eigen::VectorXd &eps_beta = calculator._info._scf.beta.mo_energies;
 
                 spaces.push_back(
@@ -1513,12 +1448,18 @@ namespace DFT::Driver
                 std::max(requested_nroots, std::max(requested_root, 1)),
                 total_dimension);
             const auto shell_pairs = build_shellpairs(calculator._shells);
+            // ensure_eri returns the working-basis (spherical) tensor; the lifted
+            // MOs need the Cartesian one.
             std::vector<double> eri_local;
-            const std::vector<double> &eri = HartreeFock::Correlation::ensure_eri(
-                calculator,
-                shell_pairs,
-                eri_local,
-                "TDDFT / Linear Response :");
+            if (spherical)
+                eri_local = _compute_2e(
+                    shell_pairs, static_cast<std::size_t>(nbasis), calculator._integral._engine,
+                    HartreeFock::ERIKernel::Coulomb, 0.0, calculator._integral._tol_eri,
+                    calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr);
+            const std::vector<double> &eri =
+                spherical ? eri_local
+                          : HartreeFock::Correlation::ensure_eri(calculator, shell_pairs, eri_local,
+                                                                 "TDDFT / Linear Response :");
 
             // Same coefficient source as the SCF (xc_grid.cpp): c_fr K[Coulomb]
             // + c_sr K[erf short-range, omega].  For a global hybrid c_sr = 0
@@ -1612,7 +1553,7 @@ namespace DFT::Driver
                 auto kxc_blocks = build_closed_shell_xc_kernel_blocks(
                     prepared,
                     space,
-                    calculator._info._scf.alpha.density,
+                    *P_alpha,
                     *response_exchange,
                     *response_correlation);
                 if (!kxc_blocks)
@@ -1661,8 +1602,8 @@ namespace DFT::Driver
                 auto kxc_blocks = build_unrestricted_xc_kernel_blocks(
                     prepared,
                     spaces,
-                    calculator._info._scf.alpha.density,
-                    calculator._info._scf.beta.density,
+                    *P_alpha,
+                    *P_beta,
                     exchange_functional,
                     correlation_functional);
                 if (!kxc_blocks)
@@ -1888,10 +1829,9 @@ namespace DFT::Driver
             if (prepared.ao_grid.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
                 return std::unexpected("DFT KS-SCF scaffold reached with inconsistent AO/basis dimensions");
 
-            const std::size_t nbasis = calculator._shells.nbasis();
+            const std::size_t nbasis = calculator.working_nbasis();
             const bool unrestricted = calculator._scf._scf == HartreeFock::SCFType::UHF;
-            const int n_electrons = static_cast<int>(
-                calculator._molecule.atomic_numbers.cast<int>().sum() - calculator._molecule.charge);
+            const int n_electrons = static_cast<int>(calculator._molecule.total_nuclear_charge() - calculator._molecule.charge);
 
             if (!unrestricted && (n_electrons % 2 != 0))
                 return std::unexpected("RKS requires an even number of electrons; use UKS for open-shell systems");
@@ -2132,6 +2072,7 @@ namespace DFT::Driver
                         // diag + s*(J + xc + K) with s = 2 for RKS
                         // (docs/SOSCF_DFT.md invariant 2/3).
                         DFT::Driver::KsOrbitalHessianInputs h_in;
+                        h_in.basis = &calculator._shells;
                         h_in.shell_pairs = &prepared.shell_pairs;
                         h_in.molecular_grid = &prepared.molecular_grid;
                         h_in.ao_grid = &prepared.ao_grid;
@@ -2152,7 +2093,10 @@ namespace DFT::Driver
                             xc_grid->short_range_exchange_coefficient;
                         h_in.range_separation_omega = xc_grid->range_separation_omega;
                         h_in.kernel_scale = 2.0; // RKS
-                        const auto h_op = DFT::Driver::build_ks_orbital_hessian_op(h_in);
+                        auto h_op_res = DFT::Driver::build_ks_orbital_hessian_op(h_in);
+                        if (!h_op_res)
+                            return std::unexpected("DFT RKS SOSCF: " + h_op_res.error());
+                        const auto &h_op = *h_op_res;
                         const auto g_op = [&g]() -> Eigen::VectorXd
                         { return g; };
 
@@ -2313,10 +2257,9 @@ namespace DFT::Driver
                             HartreeFock::LogLevel::Info, "Grid Accuracy :",
                             std::format("integrated_electrons = {:.10f}, deviation = {:.3e}",
                                         xc_grid->integrated_electrons,
-                                        [&]{ int ne = 0;
-                                             for (auto z : calculator._molecule.atomic_numbers) ne += static_cast<int>(z);
-                                             ne -= calculator._molecule.charge;
-                                             return std::abs(xc_grid->integrated_electrons - static_cast<double>(ne)); }()));
+                                        std::abs(xc_grid->integrated_electrons -
+                                                 static_cast<double>(calculator._molecule.total_nuclear_charge() -
+                                                                     calculator._molecule.charge))));
                     result.solvation_energy = pcm_energy;
 
                     if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter))
@@ -2676,106 +2619,31 @@ namespace DFT::Driver
                         for (int i = 0; i < n_beta_i; ++i)
                             g(nova + a * n_beta_i + i) = Fb_mo(n_beta_i + a, i);
 
-                    const Eigen::VectorXd diag_a =
-                        DFT::Driver::orbital_energy_difference_diagonal(epsa_soscf_prev, n_alpha_i);
-                    const Eigen::VectorXd diag_b =
-                        DFT::Driver::orbital_energy_difference_diagonal(epsb_soscf_prev, n_beta_i);
-
-                    const auto h_op = [&](const Eigen::VectorXd &x) -> Eigen::VectorXd
-                    {
-                        Eigen::MatrixXd xa_mat(n_virt_a_i, n_alpha_i);
-                        for (int a = 0; a < n_virt_a_i; ++a)
-                            for (int i = 0; i < n_alpha_i; ++i)
-                                xa_mat(a, i) = x(a * n_alpha_i + i);
-                        Eigen::MatrixXd xb_mat(n_virt_b_i, n_beta_i);
-                        for (int a = 0; a < n_virt_b_i; ++a)
-                            for (int i = 0; i < n_beta_i; ++i)
-                                xb_mat(a, i) = x(nova + a * n_beta_i + i);
-
-                        const Eigen::MatrixXd d1a = Ca_virt * xa_mat * Ca_occ.transpose();
-                        const Eigen::MatrixXd dPa = d1a + d1a.transpose();
-                        const Eigen::MatrixXd d1b = Cb_virt * xb_mat * Cb_occ.transpose();
-                        const Eigen::MatrixXd dPb = d1b + d1b.transpose();
-
-                        // J is built from the TOTAL trial density (same as
-                        // UKS's own per-iteration Coulomb build), one call.
-                        const Eigen::MatrixXd dJ = _compute_2e_j_direct(
-                            prepared.shell_pairs, dPa + dPb, calculator._shells.nbasis(),
-                            calculator._integral._engine, HartreeFock::ERIKernel::Coulomb,
-                            0.0, calculator._integral._tol_eri,
-                            calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
-                                                              : nullptr);
-                        const Eigen::VectorXd Ja_packed =
-                            DFT::Driver::pack_hessian_vector_product_cphf_order(dJ, Ca_occ, Ca_virt);
-                        const Eigen::VectorXd Jb_packed =
-                            DFT::Driver::pack_hessian_vector_product_cphf_order(dJ, Cb_occ, Cb_virt);
-
-                        const auto dV_xc = DFT::Driver::compute_analytic_xc_hessian_vector_product_polarized(
-                            prepared.molecular_grid, prepared.ao_grid,
-                            alpha_density, beta_density, dPa, dPb,
-                            x_functional, c_functional);
-                        if (!dV_xc)
-                            return Eigen::VectorXd::Zero(x.size());
-                        const Eigen::VectorXd xca_packed =
-                            DFT::Driver::pack_hessian_vector_product_cphf_order(
-                                dV_xc->first, Ca_occ, Ca_virt);
-                        const Eigen::VectorXd xcb_packed =
-                            DFT::Driver::pack_hessian_vector_product_cphf_order(
-                                dV_xc->second, Cb_occ, Cb_virt);
-
-                        // K response (SOSCF_DFT.md invariant 3 (UKS hybrids)): the UKS KS
-                        // Fock carries -1*(c_fr*K_C + c_sr*K_SR) per spin from
-                        // _compute_2e_k_uhf_direct (K_alpha from Pa, K_beta from
-                        // Pb in ONE sweep per kernel) -- see
-                        // assemble_current_ks_potential's UHF branch. K linear in
-                        // the density like J, and UKS h_op is uniform 1x (no
-                        // RKS-style 2x on the kernel -- occupancy-1 makes diag and
-                        // kernel scale identically, docs/SOSCF_DFT.md invariant 2).
-                        Eigen::VectorXd Ka_packed = Eigen::VectorXd::Zero(nova);
-                        Eigen::VectorXd Kb_packed = Eigen::VectorXd::Zero(novb);
-                        {
-                            const double c_fr = xc_grid->full_range_exchange_coefficient;
-                            const double c_sr = xc_grid->short_range_exchange_coefficient;
-                            if (c_fr != 0.0 || c_sr != 0.0)
-                            {
-                                Eigen::MatrixXd dKa = Eigen::MatrixXd::Zero(nbasis, nbasis);
-                                Eigen::MatrixXd dKb = Eigen::MatrixXd::Zero(nbasis, nbasis);
-                                if (c_fr != 0.0)
-                                {
-                                    const auto [Ka, Kb] = _compute_2e_k_uhf_direct(
-                                        prepared.shell_pairs, dPa, dPb, calculator._shells.nbasis(),
-                                        calculator._integral._engine, HartreeFock::ERIKernel::Coulomb,
-                                        0.0, calculator._integral._tol_eri,
-                                        calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
-                                                                          : nullptr);
-                                    dKa.noalias() += c_fr * Ka;
-                                    dKb.noalias() += c_fr * Kb;
-                                }
-                                if (c_sr != 0.0)
-                                {
-                                    const auto [Ka, Kb] = _compute_2e_k_uhf_direct(
-                                        prepared.shell_pairs, dPa, dPb, calculator._shells.nbasis(),
-                                        calculator._integral._engine, HartreeFock::ERIKernel::ShortRange,
-                                        xc_grid->range_separation_omega, calculator._integral._tol_eri,
-                                        calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops
-                                                                          : nullptr);
-                                    dKa.noalias() += c_sr * Ka;
-                                    dKb.noalias() += c_sr * Kb;
-                                }
-                                Ka_packed = DFT::Driver::pack_hessian_vector_product_cphf_order(
-                                    -1.0 * dKa, Ca_occ, Ca_virt);
-                                Kb_packed = DFT::Driver::pack_hessian_vector_product_cphf_order(
-                                    -1.0 * dKb, Cb_occ, Cb_virt);
-                            }
-                        }
-
-                        Eigen::VectorXd out(nova + novb);
-                        out.head(nova) =
-                            diag_a.cwiseProduct(x.head(nova)) + Ja_packed + xca_packed + Ka_packed;
-                        out.tail(novb) =
-                            diag_b.cwiseProduct(x.tail(novb)) + Jb_packed + xcb_packed + Kb_packed;
-                        return out;
-                    };
+                    DFT::Driver::UksOrbitalHessianInputs h_in;
+                    h_in.basis = &calculator._shells;
+                    h_in.shell_pairs = &prepared.shell_pairs;
+                    h_in.molecular_grid = &prepared.molecular_grid;
+                    h_in.ao_grid = &prepared.ao_grid;
+                    h_in.alpha_density = alpha_density;
+                    h_in.beta_density = beta_density;
+                    h_in.Ca_occ = Ca_occ;
+                    h_in.Ca_virt = Ca_virt;
+                    h_in.Cb_occ = Cb_occ;
+                    h_in.Cb_virt = Cb_virt;
+                    h_in.eps_a = epsa_soscf_prev;
+                    h_in.eps_b = epsb_soscf_prev;
+                    h_in.x_functional = &x_functional;
+                    h_in.c_functional = &c_functional;
+                    h_in.engine = calculator._integral._engine;
+                    h_in.tol_eri = calculator._integral._tol_eri;
+                    h_in.sym_ops = calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr;
+                    h_in.full_range_exchange_coefficient = xc_grid->full_range_exchange_coefficient;
+                    h_in.short_range_exchange_coefficient = xc_grid->short_range_exchange_coefficient;
+                    h_in.range_separation_omega = xc_grid->range_separation_omega;
+                    auto h_op_res = DFT::Driver::build_uks_orbital_hessian_op(h_in);
+                    if (!h_op_res)
+                        return std::unexpected("DFT UKS SOSCF: " + h_op_res.error());
+                    const auto &h_op = *h_op_res;
                     const auto g_op = [&g]() -> Eigen::VectorXd
                     { return g; };
 
@@ -3122,6 +2990,30 @@ namespace DFT::Driver
             return "this workflow";
         }
 
+        // Spherical (basis_type spherical) KS runs: what is wired and gated so far
+        // (docs/SPHERICAL_DFT.md). Everything else is refused by name.
+        std::expected<void, std::string> validate_spherical_support(
+            const HartreeFock::Calculator &calculator, const InitializedFunctionals &functionals)
+        {
+            if (calculator._basis._basis != HartreeFock::BasisType::Spherical)
+                return {};
+            const auto refuse = [](const std::string &what) -> std::expected<void, std::string>
+            {
+                return std::unexpected(what + " is not yet supported by planck-dft with basis_type spherical "
+                                              "(docs/SPHERICAL_DFT.md); spherical RKS/UKS single points (double "
+                                              "hybrids included), gradients, geometry optimization, frequencies, "
+                                              "TDDFT, SOSCF, stability analysis and checkpoint restart are. Use basis_type cartesian for this calculation.");
+            };
+            if (calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow)
+                return refuse(workflow_label(calculator._calculation));
+            if (functionals.has_double_hybrid_pt2 &&
+                calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+                return refuse("A double-hybrid functional with " + workflow_label(calculator._calculation));
+            if (calculator._solvation._model != HartreeFock::SolvationModel::None)
+                return refuse("PCM solvation");
+            return {};
+        }
+
         std::expected<void, std::string> validate_workflow_support(
             const HartreeFock::Calculator &calculator,
             const InitializedFunctionals &functionals,const Options &options)
@@ -3418,7 +3310,8 @@ namespace DFT::Driver
 
             calculator._info._scf = HartreeFock::DataSCF(
                 calculator._scf._scf == HartreeFock::SCFType::UHF);
-            calculator._info._scf.initialize(calculator._shells.nbasis());
+            calculator._info._scf.initialize(calculator.working_nbasis());
+            // Cartesian count, as Calculator::initialize: the ERIs are built in Cartesian.
             calculator._scf.set_scf_mode_auto(calculator._shells.nbasis());
             // Match Calculator::initialize(): displacements must not replace
             // an explicit user SCF limit with the size-based default.
@@ -3437,7 +3330,7 @@ namespace DFT::Driver
             prepared.grid_preset = grid_spec->preset;
             prepared.shell_pairs = build_shellpairs(calculator._shells);
 
-            if (auto res = compute_one_electron_terms(calculator, prepared.shell_pairs); !res)
+            if (auto res = HartreeFock::SCF::compute_working_one_electron(calculator, prepared.shell_pairs); !res)
                 return std::unexpected(res.error());
 
             auto molecular_grid = MakeMolecularGrid(calculator._molecule, *grid_spec);
@@ -3458,7 +3351,7 @@ namespace DFT::Driver
                 prepared.pcm = std::move(*pcm);
             }
 
-            const Eigen::Index nbasis = static_cast<Eigen::Index>(calculator._shells.nbasis());
+            const Eigen::Index nbasis = static_cast<Eigen::Index>(calculator.working_nbasis());
             const bool can_reuse_alpha =
                 preserve_previous_density &&
                 previous_alpha_density.rows() == nbasis &&
@@ -3559,11 +3452,8 @@ namespace DFT::Driver
             const InitializedFunctionals &functionals,
             const HartreeFock::Correlation::RMP2Result &pt2_result)
         {
-            Gradient::DHZVectorOptions z_options;
-            // Dense work is opt-in through the existing explicit swap probe.
-            // Ordinary gradients/optimization/frequencies use only GMRES.
-            if (std::getenv("PLANCK_DFT_DH_HESSIAN_PROBE_LOG"))
-                z_options.backend=Gradient::DHZVectorBackend::DenseReference;
+            // Default options: matrix-free GMRES. The dense backend is a test oracle only.
+            const Gradient::DHZVectorOptions z_options;
             auto zvector = build_dh_eq41_response_and_solve_zvector(
                 calculator, prepared, functionals.exchange, functionals.correlation,
                 functionals.implemented_exact_exchange_coefficient,
@@ -3610,40 +3500,7 @@ namespace DFT::Driver
                 ks_gradient->cols() != 3 || pt2_correction->total.cols() != 3 ||
                 !ks_gradient->allFinite() || !pt2_correction->total.allFinite())
                 return std::unexpected("DFT double-hybrid gradient has invalid dimensions or values.");
-            Eigen::MatrixXd total_gradient = *ks_gradient + pt2_correction->total;
-            // Explicit diagnostic swap only. A requested ledger selected the
-            // dense reference baseline above; ordinary calls use GMRES.
-            // The probe keeps this same SCF/PT2 state and changes only Z.
-            if (const char *probe_log = std::getenv("PLANCK_DFT_DH_HESSIAN_PROBE_LOG"))
-            {
-                if (*probe_log == '\0')
-                    return std::unexpected("DH Hessian probe requires a nonempty log path.");
-                if (HartreeFock::Mpi::distributed())
-                    return std::unexpected("DH Hessian swap probe is serial/OpenMP only, not MPI.");
-                KsOrbitalHessianInputs shared_inputs;
-                shared_inputs.shell_pairs = &prepared.shell_pairs;
-                shared_inputs.molecular_grid = &prepared.molecular_grid;
-                shared_inputs.ao_grid = &prepared.ao_grid;
-                shared_inputs.density = calculator._info._scf.alpha.density;
-                shared_inputs.C_occ = pt2_result.mo_coeff.leftCols(pt2_result.n_occ);
-                shared_inputs.C_virt = pt2_result.mo_coeff.rightCols(pt2_result.n_virt);
-                shared_inputs.eps = pt2_result.mo_energy;
-                shared_inputs.x_functional = &functionals.exchange;
-                shared_inputs.c_functional = &functionals.correlation;
-                shared_inputs.engine = calculator._integral._engine;
-                shared_inputs.tol_eri = calculator._integral._tol_eri;
-                shared_inputs.sym_ops = calculator._use_integral_symmetry
-                    ? &calculator._integral_symmetry_ops : nullptr;
-                shared_inputs.full_range_exchange_coefficient = functionals.implemented_exact_exchange_coefficient;
-                shared_inputs.kernel_scale = 2.0;
-                const auto swapped = run_dh_hessian_swap_probe(
-                    contract_inputs, *contract, shared_inputs, *ks_gradient, probe_log);
-                if (!swapped) return std::unexpected(swapped.error());
-                total_gradient = *ks_gradient + *swapped;
-                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "DH Hessian Probe :",
-                    std::string("Returning shared-action Z gradient; diagnostic ledger: ") + probe_log);
-            }
-            return total_gradient;
+            return Eigen::MatrixXd(*ks_gradient + pt2_correction->total);
         }
 
         // Optimizers read current_total_energy() after this callback. Keep the
@@ -3679,10 +3536,213 @@ namespace DFT::Driver
             return gradient;
         }
 
+        // Lowest eigenpair of a stability operator by matrix-free Davidson.
+        // Several roots: a symmetry-breaking mode is reached only from start
+        // vectors that touch it, and the lowest few orbital-gap sectors do.
+        std::expected<std::pair<double, Eigen::VectorXd>, std::string> lowest_hessian_root(
+            const std::string &tag, int dim, const Eigen::VectorXd &diagonal,
+            const std::function<Eigen::VectorXd(const Eigen::VectorXd &)> &h_op)
+        {
+            const int nroots = std::min(4, dim);
+            int products = 0;
+            const auto t0 = std::chrono::steady_clock::now();
+            const auto counted = [&](const Eigen::VectorXd &x)
+            {
+                ++products;
+                return h_op(x);
+            };
+            auto eig = davidson_lowest_eigenpairs(dim, nroots, diagonal, counted, 1e-4, 100,
+                                                  std::min(dim, 20 * nroots));
+            if (!eig)
+                return std::unexpected(eig.error());
+            const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, "Stability :",
+                std::format("{} Davidson: {} iterations, {} Hessian products, {:.2f} s ({:.3f} s per product)",
+                            tag, eig->iterations, products, seconds, products ? seconds / products : 0.0));
+            if (!eig->converged)
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Warning, "Stability :",
+                                             tag + " Davidson did not reach 1e-4; reporting its lowest estimate");
+            Eigen::Index k = 0;
+            eig->eigenvalues.minCoeff(&k);
+            return std::pair<double, Eigen::VectorXd>{eig->eigenvalues(k), eig->eigenvectors.col(k)};
+        }
+
+        // UKS internal (spin-conserving) stability: lowest eigenvalue of the UKS
+        // orbital Hessian (A + B), the operator UKS SOSCF uses, by Davidson.
+        // Same convention as the UHF analysis (SCF::analyze_uhf_stability).
+        std::expected<HartreeFock::SCF::StabilityReport, std::string> analyze_uks_stability(
+            HartreeFock::Calculator &calculator,
+            const PreparedSystem &prepared,
+            const InitializedFunctionals &functionals,
+            double tol = 1e-5)
+        {
+            const auto &scf = calculator._info._scf;
+            const int n_electrons = calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
+            const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
+            const int n_alpha = (n_electrons + n_unpaired) / 2;
+            const int n_beta = (n_electrons - n_unpaired) / 2;
+            const int nmo_a = static_cast<int>(scf.alpha.mo_coefficients.cols());
+            const int nmo_b = static_cast<int>(scf.beta.mo_coefficients.cols());
+            const int nva = nmo_a - n_alpha, nvb = nmo_b - n_beta;
+            if (n_alpha <= 0 || n_beta < 0)
+                return std::unexpected("UKS stability: needs at least one alpha electron.");
+            if (nva * n_alpha + nvb * n_beta == 0)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Stability :",
+                                             "No occupied-virtual rotations; nothing to analyze.");
+                return HartreeFock::SCF::StabilityReport{};
+            }
+
+            auto xc_grid = evaluate_current_density_and_xc(
+                calculator, prepared, functionals.exchange, functionals.correlation);
+            if (!xc_grid)
+                return std::unexpected("UKS stability: XC evaluation failed: " + xc_grid.error());
+
+            DFT::Driver::UksOrbitalHessianInputs h_in;
+            h_in.basis = &calculator._shells;
+            h_in.shell_pairs = &prepared.shell_pairs;
+            h_in.molecular_grid = &prepared.molecular_grid;
+            h_in.ao_grid = &prepared.ao_grid;
+            h_in.alpha_density = scf.alpha.density;
+            h_in.beta_density = scf.beta.density;
+            h_in.Ca_occ = scf.alpha.mo_coefficients.leftCols(n_alpha);
+            h_in.Ca_virt = scf.alpha.mo_coefficients.rightCols(nva);
+            h_in.Cb_occ = scf.beta.mo_coefficients.leftCols(n_beta);
+            h_in.Cb_virt = scf.beta.mo_coefficients.rightCols(nvb);
+            h_in.eps_a = scf.alpha.mo_energies;
+            h_in.eps_b = scf.beta.mo_energies;
+            h_in.x_functional = &functionals.exchange;
+            h_in.c_functional = &functionals.correlation;
+            h_in.engine = calculator._integral._engine;
+            h_in.tol_eri = calculator._integral._tol_eri;
+            h_in.sym_ops = calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr;
+            h_in.full_range_exchange_coefficient = xc_grid->full_range_exchange_coefficient;
+            h_in.short_range_exchange_coefficient = xc_grid->short_range_exchange_coefficient;
+            h_in.range_separation_omega = xc_grid->range_separation_omega;
+            auto h_op_res = DFT::Driver::build_uks_orbital_hessian_op(h_in);
+            if (!h_op_res)
+                return std::unexpected("UKS stability: " + h_op_res.error());
+            const auto &h_op = *h_op_res;
+
+            const int nova = nva * n_alpha, novb = nvb * n_beta;
+            Eigen::VectorXd diagonal(nova + novb);
+            diagonal << DFT::Driver::orbital_energy_difference_diagonal(scf.alpha.mo_energies, n_alpha),
+                DFT::Driver::orbital_energy_difference_diagonal(scf.beta.mo_energies, n_beta);
+            auto root = lowest_hessian_root("UKS", nova + novb, diagonal, h_op);
+            if (!root)
+                return std::unexpected("UKS stability: " + root.error());
+            const auto &[lambda, v] = *root;
+            HartreeFock::SCF::StabilityChannel ch;
+            ch.label = "UKS -> UKS (spin-conserving, internal)";
+            ch.lowest_eigenvalue = lambda;
+            ch.is_unstable = ch.lowest_eigenvalue < -tol;
+            ch.lowest_mode = Eigen::Map<const Eigen::MatrixXd>(v.head(nova).data(), n_alpha, nva).transpose();
+            ch.lowest_mode_beta = Eigen::Map<const Eigen::MatrixXd>(v.tail(novb).data(), n_beta, nvb).transpose();
+            HartreeFock::SCF::StabilityReport report;
+            report.any_unstable = ch.is_unstable;
+            report.channels.push_back(std::move(ch));
+            return report;
+        }
+
+        // RKS stability, both channels from the UKS operator at the closed-shell
+        // reference (C_a = C_b = C, P_a = P_b = P/2): on [k, k] its alpha block is
+        // the singlet A + B (RKS -> RKS), on [k, -k] the triplet A + B (RKS -> UKS),
+        // in the HF analysis's convention (SCF::analyze_rhf_stability).
+        std::expected<HartreeFock::SCF::StabilityReport, std::string> analyze_rks_stability(
+            HartreeFock::Calculator &calculator,
+            const PreparedSystem &prepared,
+            const InitializedFunctionals &functionals,
+            double tol = 1e-5)
+        {
+            const auto &scf = calculator._info._scf;
+            const int n_electrons = calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
+            const int nocc = n_electrons / 2;
+            const int nvirt = static_cast<int>(scf.alpha.mo_coefficients.cols()) - nocc;
+            if (n_electrons % 2 != 0 || nocc <= 0)
+                return std::unexpected("RKS stability: closed-shell reference required.");
+            if (nvirt <= 0)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Stability :",
+                                             "No occupied-virtual rotations; nothing to analyze.");
+                return HartreeFock::SCF::StabilityReport{};
+            }
+
+            auto xc_grid = evaluate_current_density_and_xc(
+                calculator, prepared, functionals.exchange, functionals.correlation);
+            if (!xc_grid)
+                return std::unexpected("RKS stability: XC evaluation failed: " + xc_grid.error());
+            // The polarized kernel needs polarized libxc handles (as RKS TDDFT).
+            auto x_pol = DFT::XC::Functional::create(calculator._dft._exchange_id, DFT::XC::Spin::Polarized);
+            auto c_pol = DFT::XC::Functional::create(calculator._dft._correlation_id, DFT::XC::Spin::Polarized);
+            if (!x_pol || !c_pol)
+                return std::unexpected("RKS stability: polarized functional initialization failed: " +
+                                       (x_pol ? c_pol.error() : x_pol.error()));
+
+            DFT::Driver::UksOrbitalHessianInputs h_in;
+            h_in.basis = &calculator._shells;
+            h_in.shell_pairs = &prepared.shell_pairs;
+            h_in.molecular_grid = &prepared.molecular_grid;
+            h_in.ao_grid = &prepared.ao_grid;
+            h_in.alpha_density = 0.5 * scf.alpha.density; // RKS stores the total density
+            h_in.beta_density = h_in.alpha_density;
+            h_in.Ca_occ = h_in.Cb_occ = scf.alpha.mo_coefficients.leftCols(nocc);
+            h_in.Ca_virt = h_in.Cb_virt = scf.alpha.mo_coefficients.rightCols(nvirt);
+            h_in.eps_a = h_in.eps_b = scf.alpha.mo_energies;
+            h_in.x_functional = &*x_pol;
+            h_in.c_functional = &*c_pol;
+            h_in.engine = calculator._integral._engine;
+            h_in.tol_eri = calculator._integral._tol_eri;
+            h_in.sym_ops = calculator._use_integral_symmetry ? &calculator._integral_symmetry_ops : nullptr;
+            h_in.full_range_exchange_coefficient = xc_grid->full_range_exchange_coefficient;
+            h_in.short_range_exchange_coefficient = xc_grid->short_range_exchange_coefficient;
+            h_in.range_separation_omega = xc_grid->range_separation_omega;
+            auto uks_op = DFT::Driver::build_uks_orbital_hessian_op(h_in);
+            if (!uks_op)
+                return std::unexpected("RKS stability: " + uks_op.error());
+
+            const int nov = nocc * nvirt;
+            const Eigen::VectorXd diagonal = DFT::Driver::orbital_energy_difference_diagonal(scf.alpha.mo_energies, nocc);
+            HartreeFock::SCF::StabilityReport report;
+            for (const double beta_sign : {1.0, -1.0})
+            {
+                const auto channel_op = [&](const Eigen::VectorXd &x)
+                {
+                    Eigen::VectorXd xx(2 * nov);
+                    xx << x, beta_sign * x;
+                    return Eigen::VectorXd((*uks_op)(xx).head(nov));
+                };
+                const bool singlet = beta_sign > 0.0;
+                auto root = lowest_hessian_root(singlet ? "RKS singlet" : "RKS triplet", nov, diagonal, channel_op);
+                if (!root)
+                    return std::unexpected("RKS stability: " + root.error());
+                HartreeFock::SCF::StabilityChannel ch;
+                // "RKS -> UKS" selects the triplet follow in run_initial_single_point.
+                ch.label = singlet ? "RKS -> RKS (real, internal)" : "RKS -> UKS (triplet, external)";
+                ch.lowest_eigenvalue = root->first;
+                ch.is_unstable = ch.lowest_eigenvalue < -tol;
+                ch.lowest_mode = Eigen::Map<const Eigen::MatrixXd>(root->second.data(), nocc, nvirt).transpose();
+                report.any_unstable = report.any_unstable || ch.is_unstable;
+                report.channels.push_back(std::move(ch));
+            }
+            return report;
+        }
+
+        void log_stability_report(const HartreeFock::SCF::StabilityReport &report)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Stability :",
+                                         "Wavefunction stability analysis:");
+            for (const auto &ch : report.channels)
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Info, "Stability :",
+                    std::format("  {:<48}  λ_min = {:+.6e}  [{}]", ch.label, ch.lowest_eigenvalue,
+                                ch.is_unstable ? "UNSTABLE" : "stable"));
+        }
+
         std::expected<Result, std::string> run_initial_single_point(
             HartreeFock::Calculator &calculator,
             const Options &options,
-            const InitializedFunctionals &functionals)
+            InitializedFunctionals &functionals)
         {
             auto prepared = prepare(calculator, options);
             if (!prepared)
@@ -3700,6 +3760,60 @@ namespace DFT::Driver
                 functionals.correlation);
             if (!result)
                 return result;
+
+            if (calculator._scf._stability_check && result->converged)
+            {
+                const auto analyze = [&]
+                {
+                    return calculator._scf._scf == HartreeFock::SCFType::UHF
+                               ? analyze_uks_stability(calculator, *prepared, functionals)
+                               : analyze_rks_stability(calculator, *prepared, functionals);
+                };
+                auto report = analyze();
+                if (!report)
+                    return std::unexpected(report.error());
+                log_stability_report(*report);
+                if (report->any_unstable && calculator._scf._stability_follow)
+                {
+                    // Follow the most negative channel once, as HF does: rotate (or,
+                    // for RKS -> UKS, promote to UKS), re-converge, re-check.
+                    const auto &ch = *std::min_element(
+                        report->channels.begin(), report->channels.end(),
+                        [](const auto &x, const auto &y) { return x.lowest_eigenvalue < y.lowest_eigenvalue; });
+                    auto moved = ch.label.find("RKS -> UKS") != std::string::npos
+                                     ? HartreeFock::SCF::promote_rhf_to_uhf_along_triplet_mode(calculator, ch)
+                                     : HartreeFock::SCF::rotate_along_internal_mode(calculator, ch);
+                    if (!moved)
+                        return std::unexpected("KS stability follow: " + moved.error());
+                    if (ch.label.find("RKS -> UKS") != std::string::npos)
+                    {
+                        // Now UKS for the rest of the run: polarized handles, and the
+                        // workflow re-validated for a UKS reference.
+                        auto polarized = initialize_functionals(calculator);
+                        if (!polarized)
+                            return std::unexpected("KS stability follow: " + polarized.error());
+                        functionals = std::move(*polarized);
+                        if (auto ok = validate_workflow_support(calculator, functionals, options); !ok)
+                            return std::unexpected("after the RKS -> UKS stability follow: " + ok.error());
+                    }
+                    result = run_ks_scf_scaffold(calculator, *prepared, functionals.exchange,
+                                                 functionals.correlation);
+                    if (!result)
+                        return result;
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Info, "Stability :",
+                        std::format("Re-converged after follow: E = {:.10f} Eh", result->total_energy));
+                    if (result->converged)
+                    {
+                        if (auto again = analyze(); again)
+                            log_stability_report(*again);
+                    }
+                }
+                else if (report->any_unstable)
+                    HartreeFock::Logger::logging(
+                        HartreeFock::LogLevel::Warning, "Stability :",
+                        "Wavefunction is unstable. Set 'stability_follow true' to follow the lowest mode.");
+            }
 
             if (auto correction = apply_post_ks_double_hybrid_correction(
                     calculator,
@@ -4147,33 +4261,6 @@ namespace DFT::Driver
         return (0.5 * (unsymmetrized + unsymmetrized.transpose())).eval();
     }
 
-    std::expected<XCMatrixContribution, std::string> evaluate_xc_matrix_from_spin_densities(
-        const PreparedSystem &prepared,
-        const Eigen::Ref<const Eigen::MatrixXd> &alpha_density,
-        const Eigen::Ref<const Eigen::MatrixXd> &beta_density,
-        const DFT::XC::Functional &exchange_functional,
-        const DFT::XC::Functional &correlation_functional)
-    {
-        auto xc_grid = evaluate_xc_on_grid(
-            prepared.molecular_grid,
-            prepared.ao_grid,
-            alpha_density,
-            beta_density,
-            exchange_functional,
-            correlation_functional);
-        if (!xc_grid)
-            return std::unexpected(xc_grid.error());
-
-        auto xc_matrix = assemble_xc_matrix(
-            prepared.molecular_grid,
-            prepared.ao_grid,
-            *xc_grid);
-        if (!xc_matrix)
-            return std::unexpected(xc_matrix.error());
-
-        return *xc_matrix;
-    }
-
     std::expected<std::vector<std::vector<Eigen::MatrixXd>>, std::string> build_unrestricted_xc_kernel_blocks(
         const PreparedSystem &prepared,
         const std::vector<ResponseExcitationSpace> &spaces,
@@ -4193,6 +4280,19 @@ namespace DFT::Driver
                     Eigen::MatrixXd::Zero(spaces[static_cast<std::size_t>(target)].nov(),
                                           spaces[static_cast<std::size_t>(source)].nov());
 
+        // Analytic f_xc (libxc second derivatives), not a finite difference of
+        // V_xc: wPBEh-based functionals (HSE family) have a discontinuous V_xc at
+        // reduced gradient s = 1 (libxc s_scaling_2), and a central difference
+        // straddling it put a spurious jump/(2 step) into the kernel, shifting
+        // spherical water/6-31G* HSE06 roots by up to 4.4e-4 eV
+        // (docs/WPBEH_S_SCALING_SCOPE.md).
+        auto kernel = prepare_uks_xc_kernel(prepared.molecular_grid, prepared.ao_grid, ground_alpha_density,
+                                            ground_beta_density, exchange_functional, correlation_functional);
+        if (!kernel)
+            return std::unexpected("TDDFT XC kernel: " + kernel.error());
+        const Eigen::Index nao = ground_alpha_density.rows();
+        const Eigen::MatrixXd zero = Eigen::MatrixXd::Zero(nao, nao);
+
         for (int source = 0; source < nspaces; ++source)
         {
             const ResponseExcitationSpace &source_space = spaces[static_cast<std::size_t>(source)];
@@ -4201,47 +4301,12 @@ namespace DFT::Driver
                 {
                     const Eigen::MatrixXd delta_density =
                         transition_density_matrix(source_space.C_occ.col(j), source_space.C_virt.col(b));
-                    const double delta_scale = std::max(1.0, delta_density.cwiseAbs().maxCoeff());
-                    const double step = 1.0e-5 / delta_scale;
-
-                    Eigen::MatrixXd alpha_plus = ground_alpha_density;
-                    Eigen::MatrixXd alpha_minus = ground_alpha_density;
-                    Eigen::MatrixXd beta_plus = ground_beta_density;
-                    Eigen::MatrixXd beta_minus = ground_beta_density;
-
-                    if (source == 0)
-                    {
-                        alpha_plus += step * delta_density;
-                        alpha_minus -= step * delta_density;
-                    }
-                    else
-                    {
-                        beta_plus += step * delta_density;
-                        beta_minus -= step * delta_density;
-                    }
-
-                    auto plus = evaluate_xc_matrix_from_spin_densities(
-                        prepared,
-                        alpha_plus,
-                        beta_plus,
-                        exchange_functional,
-                        correlation_functional);
-                    if (!plus)
-                        return std::unexpected("TDDFT XC kernel (+) evaluation failed: " + plus.error());
-
-                    auto minus = evaluate_xc_matrix_from_spin_densities(
-                        prepared,
-                        alpha_minus,
-                        beta_minus,
-                        exchange_functional,
-                        correlation_functional);
-                    if (!minus)
-                        return std::unexpected("TDDFT XC kernel (-) evaluation failed: " + minus.error());
-
-                    const Eigen::MatrixXd delta_v_alpha =
-                        (plus->alpha - minus->alpha) / (2.0 * step);
-                    const Eigen::MatrixXd delta_v_beta =
-                        (plus->beta - minus->beta) / (2.0 * step);
+                    auto response = (source == 0) ? kernel->apply(delta_density, zero)
+                                                  : kernel->apply(zero, delta_density);
+                    if (!response)
+                        return std::unexpected("TDDFT XC kernel: " + response.error());
+                    const Eigen::MatrixXd &delta_v_alpha = response->first;
+                    const Eigen::MatrixXd &delta_v_beta = response->second;
 
                     const int source_column = source_space.flat_index(j, b);
                     for (int target = 0; target < nspaces; ++target)
@@ -4304,14 +4369,21 @@ namespace DFT::Driver
         if (prepared.ao_grid.nbasis() != static_cast<Eigen::Index>(calculator._shells.nbasis()))
             return std::unexpected("AO grid basis dimension does not match the calculator basis");
 
+        // The grid is Cartesian; the stored densities are in the working basis.
         const Eigen::Index nbasis = prepared.ao_grid.nbasis();
-        const auto &alpha_density = calculator._info._scf.alpha.density;
+        auto alpha_lifted = HartreeFock::BasisFunctions::to_cartesian(calculator._shells, calculator._info._scf.alpha.density);
+        if (!alpha_lifted)
+            return std::unexpected("alpha density: " + alpha_lifted.error());
+        const Eigen::MatrixXd &alpha_density = *alpha_lifted;
         if (alpha_density.rows() != nbasis || alpha_density.cols() != nbasis)
             return std::unexpected("alpha density matrix is not initialized for the current basis size");
 
         if (calculator._scf._scf == HartreeFock::SCFType::UHF)
         {
-            const auto &beta_density = calculator._info._scf.beta.density;
+            auto beta_lifted = HartreeFock::BasisFunctions::to_cartesian(calculator._shells, calculator._info._scf.beta.density);
+            if (!beta_lifted)
+                return std::unexpected("beta density: " + beta_lifted.error());
+            const Eigen::MatrixXd &beta_density = *beta_lifted;
             if (beta_density.rows() != nbasis || beta_density.cols() != nbasis)
                 return std::unexpected("beta density matrix is not initialized for the current basis size");
 
@@ -4418,17 +4490,27 @@ namespace DFT::Driver
                 }
             }
 
+            // The XC derivative runs on the Cartesian grid AOs: lift the stored
+            // working-basis densities (identity in a Cartesian basis).
+            auto P_alpha = HartreeFock::BasisFunctions::to_cartesian(calculator._shells,
+                                                                     calculator._info._scf.alpha.density);
+            const bool uks = calculator._scf._scf == HartreeFock::SCFType::UHF;
+            auto P_beta = uks ? HartreeFock::BasisFunctions::to_cartesian(calculator._shells,
+                                                                          calculator._info._scf.beta.density)
+                              : std::expected<Eigen::MatrixXd, std::string>(Eigen::MatrixXd());
+            if (!P_alpha || !P_beta)
+                return std::unexpected("DFT XC nuclear gradient: " +
+                                       (P_alpha ? P_beta.error() : P_alpha.error()));
             auto xc_grad =
-                calculator._scf._scf == HartreeFock::SCFType::UHF
-                    ? DFT::Gradient::compute_xc_nuclear_gradient_uks(
+                uks ? DFT::Gradient::compute_xc_nuclear_gradient_uks(
                           calculator._molecule,
                           calculator._shells,
                           prepared.molecular_grid,
                           prepared.ao_grid,
                           hess,
                           *xc_grid,
-                          calculator._info._scf.alpha.density,
-                          calculator._info._scf.beta.density)
+                          *P_alpha,
+                          *P_beta)
                     : DFT::Gradient::compute_xc_nuclear_gradient_rks(
                           calculator._molecule,
                           calculator._shells,
@@ -4436,7 +4518,7 @@ namespace DFT::Driver
                           prepared.ao_grid,
                           hess,
                           *xc_grid,
-                          calculator._info._scf.alpha.density);
+                          *P_alpha);
             if (!xc_grad)
                 return std::unexpected("DFT XC nuclear gradient failed: " + xc_grad.error());
 
@@ -4499,8 +4581,13 @@ namespace DFT::Driver
                 xc_matrix->beta.data(), static_cast<std::size_t>(xc_matrix->beta.size()));
         }
 
+        // J, K and V_xc are built in Cartesian from lifted densities and the
+        // result is projected to the working basis on return.
         const Eigen::Index nbasis = prepared.ao_grid.nbasis();
-        const auto &alpha_density = calculator._info._scf.alpha.density;
+        auto alpha_lifted = HartreeFock::BasisFunctions::to_cartesian(calculator._shells, calculator._info._scf.alpha.density);
+        if (!alpha_lifted)
+            return std::unexpected("alpha density: " + alpha_lifted.error());
+        const Eigen::MatrixXd &alpha_density = *alpha_lifted;
         if (alpha_density.rows() != nbasis || alpha_density.cols() != nbasis)
             return std::unexpected("alpha density matrix is not initialized for KS matrix assembly");
 
@@ -4508,7 +4595,10 @@ namespace DFT::Driver
         Eigen::MatrixXd beta_density;
         if (calculator._scf._scf == HartreeFock::SCFType::UHF)
         {
-            beta_density = calculator._info._scf.beta.density;
+            auto beta_lifted = HartreeFock::BasisFunctions::to_cartesian(calculator._shells, calculator._info._scf.beta.density);
+            if (!beta_lifted)
+                return std::unexpected("beta density: " + beta_lifted.error());
+            beta_density = std::move(*beta_lifted);
             if (beta_density.rows() != nbasis || beta_density.cols() != nbasis)
                 return std::unexpected("beta density matrix is not initialized for KS matrix assembly");
             total_density += beta_density;
@@ -4620,13 +4710,24 @@ namespace DFT::Driver
             }
         }
 
-        return combine_ks_potential(
+        KSPotentialMatrices potential = combine_ks_potential(
             coulomb,
             *xc_matrix,
             exact_exchange_coefficient,
             exact_exchange_alpha,
             exact_exchange_beta,
             exact_exchange_energy);
+        if (calculator._shells._spherical)
+            for (Eigen::MatrixXd *M : {&potential.coulomb, &potential.xc_alpha, &potential.xc_beta,
+                                       &potential.exact_exchange_alpha, &potential.exact_exchange_beta,
+                                       &potential.alpha, &potential.beta})
+            {
+                auto M_w = HartreeFock::BasisFunctions::to_working(calculator._shells, *M);
+                if (!M_w)
+                    return std::unexpected("KS potential: " + M_w.error());
+                *M = std::move(*M_w);
+            }
+        return potential;
     }
 
     namespace
@@ -4949,7 +5050,7 @@ namespace DFT::Driver
 
         if (!restart_state.one_e_ready)
         {
-            if (auto res = compute_one_electron_terms(calculator, prepared.shell_pairs); !res)
+            if (auto res = HartreeFock::SCF::compute_working_one_electron(calculator, prepared.shell_pairs); !res)
                 return std::unexpected(res.error());
         }
 
@@ -5036,22 +5137,14 @@ namespace DFT::Driver
     std::expected<Result, std::string>
     run(HartreeFock::Calculator &calculator, const Options &options)
     {
-        // Spherical-harmonic basis is not yet wired through the DFT path (KS matrix,
-        // grid AO evaluation, exact-exchange assembly all assume Cartesian AO counts).
-        // Reject at the entry point — before functional resolution or any basis load —
-        // rather than risk a silent wrong answer. The HF driver supports spherical
-        // single-point RHF/UHF energies.
-        if (calculator._basis._basis == HartreeFock::BasisType::Spherical)
-            return std::unexpected(
-                "Spherical basis (basis_type spherical) is not supported by planck-dft; "
-                "use basis_type cartesian, or run spherical single points through hartree-fock.");
-
         if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
             return std::unexpected("ROKS/ROHF DFT references are not implemented; use UKS for open-shell DFT");
 
         auto functionals = initialize_functionals(calculator);
         if (!functionals)
             return std::unexpected(functionals.error());
+        if (auto spherical = validate_spherical_support(calculator, *functionals); !spherical)
+            return std::unexpected(spherical.error());
 
         if(options.udh_gradient_validation && options.udh_pt2_scale_validation)
         {
@@ -5071,6 +5164,12 @@ namespace DFT::Driver
                 DFT::XC::version_string(),
                 functionals->exchange.name(),
                 functionals->correlation.name()));
+        if (functionals->exchange.uses_wpbeh_exchange() || functionals->correlation.uses_wpbeh_exchange())
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, "Libxc :",
+                "wPBEh exchange: the energy is discontinuous at reduced gradient s = 1 "
+                "(libxc s_scaling_2), so energy finite differences cannot validate gradients "
+                "(docs/WPBEH_S_SCALING_SCOPE.md)");
 
         // All higher-level DFT workflows start from the same converged KS
         // reference.  Gradient, optimization, and frequency branches then build
@@ -5271,10 +5370,7 @@ namespace DFT::Driver
         // h2o2-cation UKS stall needed a temporary probe for exactly this.
         void log_mo_energy_report(HartreeFock::Calculator &calculator)
         {
-            int n_elec = 0;
-            for (auto z : calculator._molecule.atomic_numbers)
-                n_elec += z;
-            n_elec -= calculator._molecule.charge;
+            int n_elec = calculator._molecule.total_nuclear_charge() - calculator._molecule.charge;
             if (n_elec <= 0)
                 return;
 

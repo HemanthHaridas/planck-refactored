@@ -1,0 +1,36 @@
+%begin_control
+    basis       sto-3g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation ccsdt
+    # Generated rank-3 kernels through the arbitrary-order harness. Same system
+    # as ch4_rccsdt_sto3g.hfinp (hand-written path); kept as its own file so the
+    # two cases cannot break each other through a shared setting (70a587d).
+    rccsdt_backend optimized
+    use_diis    .true.
+    diis_dim    8
+    save_checkpoint .false.
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+5
+0   1
+C     0.000000     0.000000     0.000000
+H     0.000000     0.000000     1.090000
+H     1.030000     0.000000    -0.360000
+H    -0.510000     0.890000    -0.360000
+H    -0.510000    -0.890000    -0.360000
+%end_coords

@@ -253,6 +253,14 @@ in-house post-HF method is requested. Conceptually, that makes FCIDUMP a bridge
 from Planck's SCF/integral machinery to the broader ecosystem of external
 correlated solvers.
 
+**With an ECP, an FCIDUMP describes the valence-only problem.** h\(_{pq}\) is
+built from \(\mathbf H_\text{core}\), which already contains the ECP operator;
+NELEC counts valence electrons (\(Z - n_\text{core}\) per atom) and ECORE is
+the nuclear repulsion between those reduced charges. Nothing in the format
+says a core was removed, and nothing a reader computes needs to know: the file
+is a complete Hamiltonian for 26 electrons in HI/def2-SVP, and PySCF solving
+it reproduces the ECP RHF energy to 2e-12.
+
 ---
 
 ## 4. Gaussian Basis Functions
@@ -672,7 +680,10 @@ Planck builds that guess in four stages:
    molecular calculation.
 2. **Run atomic UHF calculations** — for each unique element, `run_atomic_uhf`
    builds an isolated atom at the origin, computes its one-electron integrals,
-   and runs a silent atomic UHF with an HCore guess.
+   and runs a silent atomic UHF with an HCore guess. An atom whose basis carries
+   an ECP (§9) gets that ECP in its core Hamiltonian and runs with
+   \(Z - n_\text{core}\) electrons, so its density matches the valence-only
+   molecule.
 3. **Apply shell-wise spherical averaging** — the raw atomic density is not
    rotationally invariant because Cartesian \(p,d,f,\dots\) components can
    carry directional bias. `spherical_average_atomic_density` replaces each
@@ -1953,6 +1964,162 @@ and setup fell to 0.05 s. PCM evaluates the same primitive at every cavity
 point on every iteration, so it gained the same way. The general rule is
 **never clear a worst-case-sized buffer in a per-primitive routine**: clear
 the extent you use, or prove the reads are covered by writes.
+
+### Effective Core Potentials
+
+From Rb onward the def2 basis sets do not describe the core electrons at all.
+They replace them with an **effective core potential** (ECP): a one-electron
+operator that mimics the core's repulsion and the orthogonality constraint it
+imposes on valence orbitals, and that carries scalar-relativistic effects fitted
+into it. Iodine in def2-SVP keeps 25 of its 53 electrons; the other 28 are an
+operator.
+
+**Bookkeeping first.** Removing \(n_\text{core}\) electrons from atom \(A\)
+means every physical term sees a nucleus of charge \(Z_A - n_\text{core}\):
+nuclear attraction, nuclear repulsion, the electron count, multipole moments,
+the PCM nuclear potential. Planck routes all of them through
+`Molecule::nuclear_charge(a)`, which returns \(Z - n_\text{core}\) (and 0 for a
+ghost atom). \(Z\) itself is still read for element lookups: which basis block
+to load, atomic masses, covalent radii. Mixing the two up is silent: the SCF
+converges, to the wrong molecule.
+
+#### The semilocal form
+
+An ECP on centre \(C\) is a **local** part plus angular-momentum
+**projectors**:
+
+\[
+\hat U = U_L(r) + \sum_{l=0}^{L-1}\sum_{m=-l}^{l} |lm\rangle\,\big[U_l(r) - U_L(r)\big]\,\langle lm|,
+\qquad r = |\mathbf r - \mathbf C|
+\]
+
+where \(|lm\rangle\langle lm|\) projects onto angular momentum \(l\) **about
+\(C\)**. Each radial function is a short sum of Gaussians with a power of
+\(r\):
+
+\[
+U(r) = \sum_k d_k\, r^{\,n_k - 2}\, e^{-\zeta_k r^2}.
+\]
+
+Two conventions in the Gaussian94 file format are easy to get wrong:
+- the file writes \(n_k\), and the power is \(n_k - 2\);
+- after the local channel (written first, labelled e.g. `f potential` for
+  \(L = 3\)), the channels `s-f`, `p-f`, ... already hold the **differences**
+  \(U_l - U_L\), not \(U_l\).
+
+The matrix \(U_{\mu\nu} = \langle\chi_\mu|\hat U|\chi_\nu\rangle\) has two
+kinds of integral:
+- **Type 1** (local): \(\int \chi_\mu \chi_\nu U_L(r)\,d\mathbf r\), an
+  ordinary three-centre integral with an unusual radial weight.
+- **Type 2** (semilocal): \(\sum_m \int r^2\, [U_l - U_L](r)\,
+  \big[\int \chi_\mu Y_{lm}\,d\Omega\big]\big[\int \chi_\nu Y_{lm}\,d\Omega\big]\,dr\).
+  A Gaussian centred away from \(C\) has to be expanded in spherical
+  harmonics about \(C\) (which brings in modified spherical Bessel functions
+  \(i_\lambda(2\alpha|\mathbf A - \mathbf C|\,r)\)) before it can be projected,
+  and the radial integral is done by quadrature.
+
+Type 2 is the hard part, so Planck does not implement either type itself.
+It uses **libecpint** (MIT), fetched and built as an `ExternalProject`.
+
+#### Planck's ECP path
+
+Parsing (`src/basis/gbs_parser.cpp`) stores one `ECPPotential` per non-ghost
+atom on `Basis::_ecps`: centre, core count, `_local` (\(U_L\)) and
+`_semilocal[l]` (\(U_l - U_L\)), with each term's \(n\) kept as written.
+`Calculator::sync_ecp_core_electrons()` then copies the core counts onto the
+`Molecule`, which is what makes `nuclear_charge()` return \(Z - n_\text{core}\).
+
+`HartreeFock::ECP::_compute_ecp` (`src/integrals/ecp.cpp`) builds the
+Cartesian AO matrix. Three things have to line up with libecpint:
+- **Channels.** libecpint treats the channel with the largest \(l\) as local,
+  so \(U_L\) goes in tagged \(l = L\). It takes \(n\) in the file convention.
+- **Normalization.** libecpint integrates exactly the coefficients it is
+  given against bare monomials \(x^i y^j z^k e^{-\alpha r^2}\). Planck's AO is
+  `_component_norm` \(\times \sum_p (c_p N_c) N_p\, x^i y^j z^k e^{-\alpha_p r^2}\)
+  (§4), so the code passes \((c_p N_c) N_p\) as the coefficient and applies
+  `_component_norm` to each matrix element afterwards.
+- **Order.** Both enumerate Cartesian components as \(xx, xy, xz, yy, yz,
+  zz\), so a shell block copies straight across.
+
+The ECP enters the SCF through one function. `_compute_potential`
+(`src/integrals/base.h`) returns \(\mathbf V_{ne} + \mathbf U\), and every
+place that builds \(\mathbf H_\text{core}\) calls it: both HF driver paths,
+`rebuild_basis_dependent_state` (so geometry steps inherit it), the DFT
+driver, counterpoise fragments, and the SAD atomic calculation. SAD gives each
+ECP atom its own ECP and runs it with \(Z - n_\text{core}\) electrons. The
+spherical transform needs nothing new: \(\mathbf U\) is a Cartesian one-electron
+matrix like \(\mathbf V\), and \(\mathbf C\,\mathbf U\,\mathbf C^\mathsf T\)
+lifts it with the rest of \(\mathbf H_\text{core}\).
+
+Full point-group symmetry needs nothing new either. The symmetry skeleton
+(§8) only touches the two-electron Fock build; \(\mathbf H_\text{core}\) is
+built in full, ECP included.
+
+**Everything else inherits the ECP from \(\mathbf H_\text{core}\) and the
+electron count.** MP2, CC, CASSCF, FCIDUMP and Kohn-Sham DFT need no
+ECP-specific code. Neither do TDDFT and stability analysis. The one new term
+is in the gradient. \(\mathbf U\) moves with its centre, so
+\(\partial E/\partial \mathbf R\) gains \(\mathrm{tr}(\mathbf D\,\partial\mathbf U/\partial\mathbf R)\).
+`ECP::_compute_ecp_gradient` contracts libecpint's shell-pair derivatives with
+the density, and `Gradient::one_electron_gradient` adds the result inside the
+core-Hamiltonian term. Every gradient (RHF, UHF, ROHF, RKS, UKS) therefore
+inherits it, and so do the geometry and frequency loops built on them. Stock
+libecpint's derivatives missed finite differences by 4.6e-5 relative on
+HI/def2-QZVP. The same upstream PR #81 fixes them, and `planck-ecp-gradient-fd`
+pins the fix.
+
+#### Validation case study: the electron counts nobody indexed
+
+Step 2 of the ECP work audited every `atomic_numbers[a]` read and switched
+the physical ones to `nuclear_charge(a)`. It missed the *sums*. There were
+seventeen of them, written as `atomic_numbers.cast<int>().sum()` or as
+range-for loops, which match neither a search for indexed reads nor
+`for (auto Z`. They counted electrons in the MO printout, the DFT driver,
+stability analysis, the RHF response, MP2, CC, FCI, CASSCF and TDDFT. The
+worst result had no warning at all: **HI/def2-SVP RMP2 gave
+\(E_\text{corr} = -0.00598\) against PySCF's \(-0.14342\)**, 24 times too
+small, because MP2 counted iodine's 53 electrons instead of its 25 valence
+electrons, so its occupied/virtual split was wrong. All of them now go through
+`total_nuclear_charge()`. The lesson: **when a quantity changes meaning,
+audit every way the code can spell its use, sums as well as reads.**
+
+#### Validation case study: a six-digit constant
+
+The first comparison of Planck's \(\mathbf V_{ne} + \mathbf U\) against PySCF
+(`mol.intor('int1e_nuc') + mol.intor('ECPscalar')`) on HI/def2-SVP missed by
+up to 1.9e-7, and only on H–H elements: shells that are both away from the
+iodine centre. The SCF energy was 2.3e-8 off. Five eliminations found it:
+
+1. **Which code is wrong?** A third, brute-force answer: put a radial \(\times\)
+   Lebedev grid on the iodine centre, evaluate the AOs there, and do the
+   local and projector integrals directly. It agreed with PySCF to 12 digits,
+   so PySCF was right.
+2. **Which channel?** libecpint's local and \(d\) channels matched; the \(s\)
+   and \(p\) projectors did not.
+3. **Is it quadrature?** No. The answer did not move in any digit when the
+   radial grids were quadrupled or the threshold tightened.
+4. **Are the pieces right?** libecpint's Bessel table and its Gauss–Chebyshev
+   quadrature were each exact to about 1e-14 when tested alone.
+5. **What is the shape of the error?** Against an exact one-dimensional
+   integral, every off-centre type-2 integral was too large by the same factor,
+   \(1 + 2.09\times10^{-6}\), for every exponent and power of \(r\). On-centre
+   integrals were exact.
+
+A constant relative factor is a constant. libecpint *generates* its type-2
+kernels at build time, and its generator wrote the angular prefactors at
+default stream precision: `157.914` for \(16\pi^2 = 157.91367\ldots\), and
+\(157.914/16\pi^2 = 1 + 2.09\times10^{-6}\). Planck patched the generator at
+fetch time to 17 digits; the fix now comes from upstream PR #81, which Planck
+pins. Afterwards HI matches
+PySCF to every printed digit and the matrices agree to about 1e-11 relative.
+
+Two rules carry over:
+- **When two codes disagree, build a third answer that shares nothing with
+  either.** The brute-force integral is slow and crude, but it depends on
+  neither library and settled which one was wrong in one run.
+- **Look at the shape of an error before its size.** A relative error that is
+  the same for every input is a wrong constant, not a numerical method. Code
+  generators that print numbers are a classic source of one.
 
 ### Two-Electron Repulsion Integrals (ERIs)
 
@@ -5964,8 +6131,8 @@ rather than writing one giant formula inline. Its grouped form is
 \[
 R_{ij}^{ab} =
 \langle ij || ab \rangle
-+ P(ab)\sum_e t_{ij}^{ae} F_{be}
-- P(ij)\sum_m t_{im}^{ab} F_{mj}
++ P(ab)\sum_e t_{ij}^{ae}\Big(F_{be} - \frac{1}{2}\sum_m t_m^b F_{me}\Big)
+- P(ij)\sum_m t_{im}^{ab}\Big(F_{mj} + \frac{1}{2}\sum_e t_j^e F_{me}\Big)
 + \frac{1}{2}\sum_{mn}\tau_{mn}^{ab} W_{mnij}
 + \frac{1}{2}\sum_{ef}\tau_{ij}^{ef} W_{abef}
 + P(ij)P(ab)\sum_{me} t_{im}^{ae} W_{mbej}
@@ -5991,6 +6158,37 @@ These appear in practice in the code as the explicit `t1 * ovvv`,
 residual. These were important enough to show up in regression testing: if
 they are omitted or indexed with the wrong antisymmetry, the solver can still
 look stable while converging to the wrong CCSD energy.
+
+#### Case study: the \(F_{me}\) terms that vanish "by Brillouin"
+
+Until 2026-11, `build_residuals` used bare \(F_{be}\) and \(F_{mj}\) in the
+doubles residual and dropped the two \(\frac{1}{2} t\,F_{me}\) corrections
+above. The argument for dropping them sounds right: canonical RHF has
+\(f_{ia} = 0\), so "\(F_{me}\) is zero". It is not.
+\(F_{me} = f_{me} + \sum_{nf} t_n^f \langle mn||ef\rangle\), and the second term
+is nonzero as soon as \(T_1\) is. The lost contribution is
+\(O(t_1^2 t_2)\): tiny on small molecules and growing with system size.
+
+| system | Planck − PySCF \(E_\text{corr}\) before the fix |
+|---|---|
+| water/STO-3G (spherical) | 6.2e-7 |
+| water/6-31G | 5.4e-7 |
+| Be/6-31G\* | 1.4e-6 |
+| HI/def2-SVP (ECP) | 7.4e-8 |
+| HBr/def2-SVP | 1.1e-6 |
+
+With the terms restored, every case matches PySCF in every printed digit, and
+water/6-31G converges in 15 iterations instead of 22.
+
+Two lessons:
+- **The regression gates could not catch it, because they were pinned to
+  Planck's own output.** Two committed CCSD cases had been "agreeing" with the
+  bug at 1e-9. A pinned number guards against change, not against error. Pin
+  to an independent code whenever one exists.
+- **A control with the suspected cause removed moves the search.** The gap
+  was found on HI with an ECP, and the ECP was the obvious suspect. The
+  all-electron control HBr was *worse*, which ruled the ECP out at once and
+  pointed at the CC equations.
 
 So the `RCCSD` update pattern is:
 
@@ -9607,8 +9805,9 @@ Planck-specific.
 
 The checkpoint file (`*.hfchk`) stores:
 
-- A 4-byte magic number and format version (v2)
-- Molecular geometry (standard-orientation, Bohr)
+- An 8-byte magic string and a format version (currently 8; versions 2–8 load)
+- Molecular geometry (standard-orientation, Bohr), atomic numbers, and from
+  version 8 each atom's ECP core-electron count
 - Basis set name
 - Density matrices (alpha and optionally beta)
 - Total SCF energy
@@ -9640,6 +9839,29 @@ the projection itself is implemented in `src/io/checkpoint.cpp` via an SVD of
 the cross-overlap. This provides a physically motivated initial density for the
 new basis, significantly reducing the number of SCF iterations required.
 
+### Restart and Effective Core Potentials
+
+A density is only meaningful for the electron count it was converged with. An
+ECP removes core electrons, so the same molecule holds 54 electrons in an
+all-electron iodine basis (3-21G) and 26 in def2-SVP. The projection above
+cannot see this: it maps orbitals between bases, and both bases happily
+represent the stored occupied orbitals. Planck therefore stores each atom's
+ECP core count in the checkpoint (version 8) and compares it with the current
+basis. A same-basis load with different counts is refused, and a cross-basis
+restart between different cores falls back to the core-Hamiltonian guess.
+Files older than version 8 read as "no ECPs", which is exact rather than a
+guess: ECP calculations were refused before version 8 existed.
+
+**A fallback has to restore the state the normal path would have built.**
+Gating this exposed an older bug. The projection branch computes Cartesian
+\(\mathbf S\) and \(\mathbf H_\text{core}\) and lifts them to the spherical
+working basis only when the projection succeeds. When it failed, for any
+reason, the driver switched to the core guess but kept the Cartesian
+matrices, so a spherical SCF ran on matrices of the wrong basis and diverged.
+Any failed spherical projection would have hit it; no test had ever made one
+fail. The fallback now discards them and lets the ordinary one-electron block
+run.
+
 ---
 
 ## 27. Execution Flow of a Typical Run
@@ -9653,7 +9875,7 @@ driver.cpp
   read_gbs_basis()             → shells, basis functions, normalization
   build_shellpairs()           → shell_pairs[0..nb*(nb+1)/2-1]
   _compute_1e()                → S, T  (os.cpp)
-  _compute_nuclear_attraction()→ V     (os.cpp)
+  _compute_potential()         → V = V_ne + U_ECP  (os.cpp, ecp.cpp; base.h)
   H_core = T + V
   build_sao_basis()            → U, block sizes, irrep names
   update_integral_symmetry()   → _integral_symmetry_ops
@@ -9839,6 +10061,9 @@ driver.cpp
 | External-charge AO matrices (PCM unit potentials) | `src/integrals/os.cpp` | `_compute_external_charge_attraction` |
 | PCM input parsing + solvent table | `src/io/io.cpp` | `_parse_pcm`, `dielectric_from_solvent_name` |
 | Ghost atoms (BSSE) | `src/base/types.h` | `Molecule::is_ghost`, `nuclear_charge`, `total_nuclear_charge` |
+| ECP parsing and storage | `src/basis/gbs_parser.cpp`, `src/basis/gaussian.cpp` | `read_gbs`, `make_ecp_potential`, `Basis::_ecps`, `Calculator::sync_ecp_core_electrons` |
+| ECP integrals (libecpint) | `src/integrals/ecp.cpp` | `HartreeFock::ECP::_compute_ecp`, `describe_ecps` |
+| One-electron potential for H_core | `src/integrals/base.h` | `_compute_potential` (V_ne + U_ECP) |
 | Counterpoise driver | `src/bsse/counterpoise.cpp` | `run_counterpoise` |
 | Ghost / `%begin_bsse` parsing | `src/io/io.cpp` | `parse_atom_token`, `_parse_bsse` |
 | Mulliken population analysis | `src/populations/mulliken.cpp` | `mulliken_population_analysis`, `gross_ao_population` |
@@ -9928,6 +10153,7 @@ driver.cpp
 | PCM gradients / geometry optimization / frequencies | Not implemented |
 | PCM coupling to post-HF (MP2, CC, CASSCF) | Not implemented |
 | Ghost atoms (basis-only centers; `Gh()`/`@`/`:` syntax) | Complete |
+| Effective core potentials (def2, Rb onward) | Single points in `hartree-fock` via libecpint. RHF is PySCF-gated (HI, AgCl, PdCO, AuH·H2O, to 1.1e-9 Eh); post-HF energies take the same H_core but are not gated yet. Checkpoints (version 8) store ECP core counts and refuse to mix cores; FCIDUMP writes the valence-only Hamiltonian (PySCF-checked). RHF/UHF/ROHF ECP gradients, geometry optimization and frequencies are PySCF-gated (≤3e-8 Ha/Bohr, 0.03 cm⁻¹); `planck-dft` rejects ECP bases |
 | Counterpoise / BSSE correction (two-fragment dimer, RHF/UHF/ROHF energy) | Complete (PySCF-validated to \(4\times10^{-11}\) Eh) |
 | BSSE for DFT / N-body / gradients / post-HF references | Not implemented |
 

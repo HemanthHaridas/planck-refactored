@@ -9,7 +9,7 @@ tags: [status, completion, validated, canonical]
 
 # Completion Status
 
-Last updated: 2026-10-20
+Last updated: 2026-11-07
 
 This is the canonical completion-status document for the repository.
 Subsystem handoff, plan, benchmark, and fix-summary notes may still exist for
@@ -280,6 +280,7 @@ historical design context, but they are no longer the source of truth for
   `tol_mcscf_grad`) and a plateau exit that counts "no step" as flat and, under
   `mcscf_accept_uphill`, needs the escape probes offered first. All seven
   variations now land at -74.7877864784
+  (-74.787786527 since the 2026-11-01 Bohr-constant fix)
 - Plateau-escape convergence branch is hardened: the old rounding-sensitive
   `100·tol_mcscf_grad` screen is replaced by an explicit `sa_g`-stationarity
   bound `plateau_sa_g_bound = max(1e-6, tol_mcscf_grad)`, and a
@@ -414,6 +415,306 @@ historical design context, but they are no longer the source of truth for
 - PySCF-validated He2/cc-pVDZ counterpoise decomposition
 
 ### Recent fixes now considered landed
+
+- **Test infrastructure: live asserts, no Eigen tests, CI builds the tests
+  (2026-11-07).** Three fixes in `CMakeLists.txt` and
+  `.github/workflows/cmake-multi-platform.yml`:
+  - Release's `-DNDEBUG` compiled every `assert()` in a test out, so those
+    gates passed vacuously. Seen on `cc_spatial_amplitude_projection`, whose
+    fixture bug surfaced only under `-UNDEBUG`. Every `tests/*.cpp` source now
+    gets `-UNDEBUG` as a source-file property. The production sources linked
+    into the test binaries keep `-DNDEBUG`. Only three tests use `assert()`
+    (`cc_amplitude_checkpoint`, `cc_amplitude_sector_seed`,
+    `cc_spatial_amplitude_projection`); the rest use their own checks.
+  - Eigen reads Planck's own `BUILD_TESTING` switch, so
+    `fetchcontent_makeavailable(eigen)` registered 109 Eigen tests that
+    nothing built (14 failed in ~0 s). A normal variable now shadows the
+    switch around the fetch. `ctest -N` lists 94 tests, none from Eigen.
+  - CI built only `--target hartree-fock`, so no `planck-*` test binary was
+    built before `ctest`. It now builds every target. The `-j$(nprocs)` typo
+    (not a command, so `-j` got no value) is now `-j$(nproc)`.
+
+  - The first full build found three test targets that had never linked,
+    because CI never built them. `planck-multipole-integrals` and
+    `planck-population-analysis` lacked `spherical_recurrence.cpp`.
+    `planck-working-state-rebuild` broke when `project_checkpoint_density`
+    moved into `working_state.cpp`; the function now lives, unchanged, in
+    `src/scf/checkpoint_projection.cpp`.
+  - Tests read basis sets from the install prefix, which CI never populates
+    and an older install can lack (27 def2 cases failed on it locally). Every
+    CTest test now gets `BASIS_PATH=<source>/basis-sets`, appended to its
+    environment.
+
+  Verification (2026-11-07, `build-full`, PR #181): 92 tests. Every unit
+  test passes with live asserts. Regression core 126/126, smoke 54/56,
+  extended 202/206; the failures are only the four known RCCSDT routing
+  cases (`h2`/`lih`/`water`/`ch4_rccsdt_sto3g`). CI has not run yet (#181 is
+  stacked on #180).
+
+- **Result-changing environment overrides removed; HGP/Rys/auto ERI builds
+  striped under MPI (2026-11-07, PR #181).**
+  - E2/E3 (`docs/RUNTIME_ENV_OVERRIDES.md`, now an answer):
+    - `PLANCK_RCCSDT_BACKEND` is the input keyword
+      `rccsdt_backend auto|determinant|tensor|optimized`, and
+      `ch4_rccsdt_generated_sto3g` has its own input.
+    - The `PLANCK_DFT_DH_HESSIAN_PROBE_LOG` swap probe, which returned a
+      different DH gradient, is deleted, as are the `PLANCK_CASSCF_CALL_PROBE`
+      counters.
+    - Every remaining `getenv` in `src/` only changes printed output.
+  - MPI (`docs/HPC_MPI.md`):
+    - The conventional ERI tensor builds for HGP, Rys and **`auto` (the
+      default engine)** ran in full on every rank. They now stripe bras
+      across ranks and merge with one allreduce, as OS does.
+    - Gated by water/6-31G* conventional cases per engine, exact against
+      serial at 2 and 3 ranks. The exact energy cannot tell the stripe from
+      plain replication, so it was checked by mutation: without the reduce,
+      2 ranks give -137.47 Eh against -76.01.
+    - The scale gate `water16_rhf_631g_auto_direct_mpi_scale` (nb=208, direct
+      SCF): serial, 2 and 4 ranks all give -1215.7179682094 Eh; 11.7 s for
+      all three runs on a laptop, 73 MB serial peak.
+
+- **RCCSD doubles equation was missing its F_me terms (2026-11-07).**
+  Stanton-Gauss T2 uses `F_be − ½ t_m^b F_me` and `F_mj + ½ t_j^e F_me`;
+  `build_residuals` (`src/post_hf/cc/ccsd.cpp`) used bare `F_be`/`F_mj`.
+  Canonical RHF has f_ov = 0, but `F_me = t_n^f <mn||ef>` is not, so the
+  error is O(t1² t2): small, growing with system size, and invisible to the
+  gates because they were pinned to Planck's own output. Fixed there and in
+  the identical RCCSDT stage-1 warm start (`tensor_backend.cpp`; the generated
+  RCCSDT route never called it). Now every printed digit of PySCF: water/6-31G
+  (was 5.4e-7 off), HI/def2-SVP with ECP (7.4e-8, new gate
+  `hi_rccsd_def2svp_ecp`); `water_spherical_ccsd_sto3g` (6.2e-7) and
+  `be_ccsd_spherical_631gd` (1.4e-6, tightened to 1e-9) re-pinned to PySCF.
+  It also converges faster (water/6-31G 22 → 15 iterations). Found by the
+  def2 post-HF gates; the "HBr 1.1e-6" gap recorded then was this bug, not
+  an ECP effect.
+
+- **def2 / ECP work complete (2026-11-07, `docs/DEF2_ECP.md`).** Closing
+  items: HI CAS(2,2) gate; the ZnCl₂/AgCl ~1e-9 offsets were Planck's default
+  `tol_eri` 1e-10 screening (at 1e-12 every printed digit of PySCF; both
+  inputs tightened, gates 2e-9 → 5e-10); `planck-compute-2e` goldens
+  re-pinned after the 2026-11-01 Å→Bohr fix (the one-centre element did not
+  move); `planck-population-analysis` linked `spherical.cpp`. Planck ctest
+  (`-R ^planck`): 94 tests, failures only the four known RCCSDT routing
+  cases. Open: the libecpint repin when PR #81 merges.
+
+- **HF RHF → UHF stability channel fixed (2026-11-05,
+  `docs/KS_STABILITY.md` R0).** The "external triplet" channel built
+  A^T − B^T, which is the complex-orbital test again, so the triplet row
+  repeated the complex row and stretched H₂/STO-3G was reported stable
+  (+0.0535) where A^T + B^T is −0.5109 (PySCF `rhf_external` −0.51090553).
+  Now A^T + B^T; the follow reaches PySCF's broken-symmetry UHF to every digit
+  (−0.9338672048 at 2.5 Å). Water's triplet value is now PySCF's +0.3988887.
+  Gated by `h2_rhf_triplet_{instability,follow}_sto3g` and tightened
+  `water_rhf_stability_stable`, all failing on the old algebra.
+
+- **Spherical HF SOSCF and stability gated (2026-11-05,
+  `docs/SPHERICAL_DFT.md` S0.6).** RHF SOSCF's CPHF Hessian indexed the
+  spherical ERI tensor with Cartesian strides. |g| grew and every
+  augmented-Hessian solve failed, and only the DIIS handback converged it. UHF
+  SOSCF passed spherical densities to the Cartesian Fock build. Both are now in
+  the working basis and converge superlinearly. Gated with the spherical
+  stability fix from `100675e4` by `water_rhf_stability_spherical_631gd`,
+  `water_cation_uhf_stability_follow_spherical_631gd` and
+  `water_{rhf,cation_uhf}_soscf_spherical_631gd` (PySCF `cart=False`), all
+  failing on the old code.
+
+- **DFT with ECPs (2026-11-06, `docs/DEF2_ECP.md` step 6).** Lifting
+  the refusal was the only code change: H_core, the electron counts and
+  `one_electron_gradient` were already ECP-aware. HI RKS PBE energy and HI
+  B3LYP TDDFT match PySCF `cart=False` to every printed digit, the C1 AuH·H₂O
+  B3LYP gradient to 2.4e-10 Ha/Bohr (fourth-order energy FD 1.6e-8), and HI⁺
+  UKS stability gives the π-hole zero mode (+2.3e-9 vs PySCF −1.4e-8), which
+  closes the KS stability work (`docs/KS_STABILITY.md`). Found on the way: a
+  PySCF defect in its DFT gradient grid response on ECP atoms
+  (`docs/PYSCF_ECP_GRID_RESPONSE_SCOPE.md`, see Open Work).
+
+- **Spherical DFT complete: double-hybrid single points and checkpoint restart
+  (2026-11-06, `docs/SPHERICAL_DFT.md`, now an answer doc).** Double-hybrid
+  single points needed only the refusal narrowed (PT2 is the HF MP2 kernel on
+  the spherical ERI tensor): water RKS and water⁺ UKS B2PLYP/6-31G* match
+  PySCF `cart=False` to every printed digit; DH gradients stay refused by name.
+  Checkpoint restart: the DFT and HF cross-basis projections were two copies,
+  and the DFT one built its cross overlap in Cartesian against a working-basis
+  orthogonalizer, lacked the ECP-core check, and dropped the beta part of a UHF
+  checkpoint loaded into RKS. Both drivers now call one
+  `SCF::project_checkpoint_density` (`src/scf/working_state.cpp`). Spherical
+  projected and same-basis restarts reach the fresh-run energy to 1e-8, and a
+  spherical restart from a Cartesian checkpoint is refused by name. The
+  regression runner's seeding assumed `.hfchk` and now follows the executable
+  (`planck-dft` writes `.dftchk`). A stale smoke case
+  (`water_rks_spherical_gradient_rejected`, failing since step 2) was removed.
+
+- **Spherical TDDFT, and an analytic TDDFT XC kernel (2026-11-06,
+  `docs/SPHERICAL_DFT.md` step 3).** `run_linear_response` lifts the MO
+  coefficients (TᵀC) and densities once and builds the Coulomb ERIs in
+  Cartesian; `n_virt` now comes from the MO count (spherical TDDFT was not
+  refused before and read past the MO matrix). The TDDFT XC kernel was a
+  central difference of V_xc; on libxc's discontinuous wPBEh (HSE) potential
+  it shifted spherical water/6-31G* HSE06 roots by up to 4.4e-4 eV. It now
+  applies the analytic f_xc (`prepare_uks_xc_kernel`) and the FD helper is
+  deleted. Water RKS B3LYP singlet/triplet, HSE06 and UKS B3LYP match PySCF
+  `cart=False` to 1e-7 eV in every root; the 13 Cartesian TDDFT cases are
+  unchanged.
+
+- **Spherical KS gradients, geometry optimization and frequencies
+  (2026-11-06, `docs/SPHERICAL_DFT.md` step 2).** One change in
+  `compute_analytic_ks_gradient`: the stored densities are lifted with
+  `to_cartesian` before the XC nuclear gradient (the HF-like terms and the XC
+  evaluation already lifted). Against PySCF `cart=False` with grid response on
+  C1 H₂O₂/6-31G*: RKS B3LYP 1.7e-10, RKS HSE06 1.2e-10, UKS PBE 3.4e-10
+  Ha/Bohr; UKS energy FD 1.2e-9. Water B3LYP geomopt E_opt 3.2e-7 above
+  PySCF's gau_tight minimum (Planck's default 3e-4 force threshold),
+  frequencies within 1.6 cm⁻¹. A 3.2e-8 UKS gap first blamed on Planck was
+  PySCF's default `conv_tol_grad` (√conv_tol). New runner check
+  `gradient_close` (every component). An HSE06 energy-FD miss that surfaced
+  on the way is libxc's HSE06 `s_scaling_2` discontinuity at s = 1, not
+  Planck (see Open Work).
+
+- **Spherical KS stability and SOSCF (2026-11-06,
+  `docs/SPHERICAL_DFT.md` step 4).** The two orbital-Hessian builders
+  (`src/dft/ks_orbital_hessian.cpp`), shared by SOSCF and stability, take a
+  `basis` pointer and lift the ground density and the MO coefficients
+  (Cᵀ C_mo) once; the trial densities and the MO packing are then exact in
+  Cartesian with no change to the operator bodies. The SOSCF and stability
+  refusals are gone. λ_min matches PySCF `cart=False` to ≤ 1.2e-7 on water
+  RKS B3LYP and water⁺ UKS PBE (cc-pVTZ) and H₂O₂⁺ UKS PBE (6-31G*); the
+  stretched-H₂ cc-pVDZ triplet follow lands on PySCF's broken-symmetry UKS
+  to every digit (−0.9997290788). SOSCF reaches the DIIS energy with the same
+  gradient decay as the Cartesian control. Cartesian SOSCF/stability cases
+  unchanged. Six cases (`*_stability_spherical_*`, `*_soscf_spherical_631gd`,
+  `h2_rks_pbe_triplet_follow_spherical_ccpvdz`) and runner metric
+  `stability_uks_internal`; references from
+  `tests/pyscf/spherical_ks_stability_references.py`.
+
+- **RKS stability analysis and following in `planck-dft` (2026-11-05,
+  `docs/KS_STABILITY.md` S2).** Both RKS channels, `RKS -> RKS` (singlet)
+  and `RKS -> UKS` (triplet), from one prepared UKS operator at the
+  closed-shell reference, on [κ, κ] and [κ, −κ]. The triplet follow promotes to
+  UKS through `promote_rhf_to_uhf_along_triplet_mode` (split out of the HF
+  follow). After the promotion the run re-initializes polarized functionals and
+  re-validates the workflow. Stretched H₂/STO-3G PBE and B3LYP: triplet −0.1448
+  / −0.2231 (PySCF ≤ 2e-5, the grid floor), and the follow reaches PySCF's
+  broken-symmetry UKS. Water stays stable in both channels (B3LYP, HSE06). PySCF
+  `gen_g_hop_rhf` is 2× Planck's singlet convention, not 4×. Gated by
+  `water_rks_hse06_stability_631gd` (replaces `water_rks_stability_rejected`)
+  and `h2_rks_{pbe,b3lyp}_triplet_follow_sto3g`; a mutation (triplet built as
+  singlet) fails all three.
+
+- **Stability sweep over open-shell regression inputs; spherical HF stability
+  and ECP electron counts fixed (2026-11-05, `docs/KS_STABILITY.md`
+  S1).** 38 `scf_type uhf` inputs re-run with `stability_check`. One saddle the
+  suite did not intend: `h2o2_cation_uhf_tight_tol_sto3g`, λ −0.0738, same as
+  PySCF. Two defects in the check:
+  - **Spherical HF stability** sized the ERI transform with the Cartesian
+    `nbasis()`. Li failed, water⁺ reported λ −15 [UNSTABLE], HI⁺ segfaulted.
+    Now `working_nbasis()`; water⁺ matches PySCF to 1e-8.
+  - **Eleven Σ Z electron counts** that ignored ECP cores (and ghosts), in
+    stability, RHF response, MP2, CC, FCI, CASSCF, TDDFT and the KS scaffold.
+    **HI/def2-SVP RMP2 was 24× too small with no warning** (E_corr −0.00598 vs
+    PySCF −0.14342); it now matches. All use `total_nuclear_charge()`.
+
+- **UKS stability analysis and following in `planck-dft` (2026-11-05,
+  `docs/KS_STABILITY.md`).** `stability_check` / `stability_follow` now
+  work for UKS: the lowest eigenvalue of the spin-conserving A + B by Davidson
+  on the UKS SOSCF operator (lifted into `build_uks_orbital_hessian_op`), and a
+  follow through `rotate_along_internal_mode` (split out of the HF follow).
+  Water⁺/cc-pVTZ UKS HSE06 from `hcore` lands on the ²A₁ saddle; the check
+  reports λ_min −0.06385 (PySCF `gen_g_hop_uhf` −0.06381) and the follow
+  reaches the ²B₁ ground state, −75.9126471254, re-checked stable. Cost cut
+  172 → 14 s by caching Davidson products (the solver recomputed every basis
+  vector each iteration), a 1e-4 residual, and a prepared polarized XC kernel
+  (`UKSXCKernel`, GEMM point blocks; also used by the UKS DH response). Gated
+  by `water_cation_uks_hse06_stability_{ccpvtz,631gd}` and
+  `water_rks_stability_rejected` (since replaced by the RKS gates); UKS SOSCF bitwise through the builder before
+  the kernel change.
+
+- **Spherical prerequisites S0.3–S0.5 (2026-11-04, `docs/SPHERICAL_DFT.md`).**
+  One pair of shape-checked `BasisFunctions::to_cartesian` / `to_working`
+  helpers replaces seven hand-written C·M·Cᵀ copies (S0.3); the RKS/UKS
+  gradients lift P and W like the HF ones (S0.4, Cartesian byte-identical);
+  and C is row-normalized once in `read_gbs_basis` from the closed-form
+  same-centre overlap instead of by three copies that built S_cart at every
+  geometry (S0.5). The per-geometry premise was false: C is block-diagonal by
+  shell, so its normalization is geometry-independent (renormalized C
+  byte-identical at two water/cc-pVTZ geometries). Spherical outputs move at
+  roundoff only.
+
+- **Spherical post-HF after a direct SCF no longer crashes (2026-11-04,
+  `docs/SPHERICAL_DFT.md` S0.2).** `Correlation::ensure_eri` returned
+  an empty tensor in spherical mode when the SCF had cached none, and its
+  ~20 callers index it unchecked: `scf_mode direct` + `basis_type spherical`
+  + RMP2 died with SIGSEGV. It now builds the Cartesian tensor and
+  transforms it to spherical. Gated by
+  `{water_rmp2,h2o_cation_ump2}_spherical_631gd_direct` (same energies as
+  the conventional cases).
+
+- **Spherical-basis ESP fixed (2026-11-04, `docs/SPHERICAL_DFT.md`
+  S0.1).** `SCF::log_esp_report` handed the spherical (working-basis) density
+  to Cartesian ESP integrals; `electrostatic_potential` only checked
+  squareness, so the wrong AO elements were read with no error (water/6-31G*
+  HF Connolly charges O −2.94, H 1.461/1.474; now O −0.811). The density is
+  lifted first, and `electrostatic_potential` now refuses a density whose
+  size differs from the AO count of its shell pairs. Gated by
+  `water_rhf_spherical_esp_points_631gd` (PySCF `cart=False` `int1e_grids`,
+  ≤1.8e-9), which fails on the old code.
+
+- **ECP gradients, geometry optimization and frequencies (2026-11-04, branch
+  `feat/def2-ecp`, `docs/DEF2_ECP.md` step 5).**
+  `ECP::_compute_ecp_gradient` contracts libecpint's shell-pair derivatives
+  with the density; `one_electron_gradient` adds it inside `core()`, so
+  RHF/UHF/ROHF (and the RKS/UKS/MP2/DH paths once those accept ECPs) inherit
+  it with no per-caller code. Stock libecpint's derivatives miss FD by 4.6e-5
+  relative on HI/def2-QZVP; libecpint is pinned to unmerged upstream PR #81,
+  which passes (see Open Work for the repin). PySCF gates: HI and C1 AuH·H2O
+  RHF gradients (≤3e-8 Ha/Bohr), HI⁺ UHF/ROHF (every printed digit), HI
+  geomopt (E_opt 1.6e-9 Eh) and frequency (0.03 cm⁻¹); plus
+  `planck-ecp-gradient-fd` (ctest) and an AuH·H2O energy-FD case. Found on
+  the way: four FD drivers kept a stale Å→Bohr literal (fixed).
+
+- **Checkpoint and FCIDUMP with ECPs (2026-11-01, branch `feat/def2-ecp`,
+  `docs/DEF2_ECP.md` step 4b).** Checkpoint version 8 stores each
+  atom's ECP core count; a load or cross-basis projection between different
+  cores is refused (v7 files read as all-electron, which is exact). FCIDUMP
+  needed no change: PySCF reproduces its ECP RHF energy from the file to
+  2e-12. Found on the way: (1) a failed cross-basis projection in any
+  spherical run kept the Cartesian S/H_core and diverged; the fallback now
+  rebuilds them; (2) six Σ Z electron counts the step-2 audit missed (HF MO
+  printout, four in the DFT driver) now use `total_nuclear_charge()`;
+  (3) `chkdump` reports valence electrons and fchk Nuclear charges
+  Z − n_core. Gates: `hi_rhf_def2svp_ecp_{fcidump,projection_refused,
+  restart_full}`.
+
+- **ECP integrals in H_core (2026-11-01, branch `feat/def2-ecp`,
+  `docs/DEF2_ECP.md` step 4).** def2 bases from Rb onward run
+  single points through libecpint (MIT, `ExternalProject`).
+  `_compute_potential` (`src/integrals/base.h`) is V_ne + U_ECP at every
+  H_core site; SAD runs ECP atoms with Z − n_core electrons. libecpint's
+  code generator wrote its type-2 angular prefactors at 6 digits
+  (157.914 for 16π²), putting every off-centre semilocal integral 2.09e-6
+  too large; patched at fetch (since 2026-11-04 carried by the pinned upstream PR #81 instead). Found by a
+  brute-force radial × Lebedev integral that agreed with PySCF to 12
+  digits. Five PySCF gates (HI SVP/TZVP+SAD+symmetry, AgCl, PdCO,
+  AuH·H2O): 0 to 1.1e-9 Eh, matrices to ≤1.3e-9. Gradients (step 5) and
+  DFT (step 6) refuse ECP bases.
+
+- **Å→Bohr conversion constant fixed (2026-11-01, branch `feat/def2-ecp`).**
+  `src/base/tables.h` paired `BOHR_TO_ANGSTROM = 0.529177210903` (CODATA
+  2018) with `ANGSTROM_TO_BOHR = 1.8897259886`, an older literal 7.2e-8
+  smaller than its reciprocal, so every Ångström input ran at a geometry
+  7.2e-8 too small and Å → Bohr → Å round trips drifted. Now
+  `ANGSTROM_TO_BOHR = 1.0 / BOHR_TO_ANGSTROM`; two other literal copies
+  (`types.h`, two RI tests) use the constants. Found because the new def2
+  gates missed PySCF by up to 1.3e-8 while E_nn on water was 6.6e-7 off;
+  after the fix four of the five match PySCF to every printed digit
+  (`docs/DEF2_ECP.md` step 1b). 26 extended cases pinned to Planck's
+  own output moved 2e-9..1.9e-7 Eh and were re-pinned; water SA-2 CASSCF
+  moved from 3.6e-8 to 1.1e-8 off PySCF's SAD-start minimum. Ten core
+  cases moved too and were missed until step 3 (only the extended suite
+  was run): water/STO-3G energies (2.6e-8) and printed ESP charges and
+  values in the 8th decimal; the Mayer O–H bond order moved toward PySCF
+  (0.76017799 → 0.76017801, PySCF 0.76017810). Run `--suite all` after a
+  change like this, not one tag. Rebuild `planck-mpi` with the other
+  binaries, or the MPI smoke cases compare old against new.
 
 - **Converged SCF orbitals come from the true Fock, not the DIIS
   extrapolation (2026-10-27).** RHF, UHF, RKS and UKS stored the eigenpairs of
@@ -1322,7 +1623,8 @@ historical design context, but they are no longer the source of truth for
 Suite status: **10/10 passing, 1 re-pinned** (2026-10-28). The water SA-2
 hcore reference, -74.7751378, is a measured saddle of the SA-2 energy (one
 negative CI-relaxed Hessian eigenvalue). With the exact Hessian (CASSCF
-performance scope, P3c) Planck descends to the minimum, -74.7877864783, which
+performance scope, P3c) Planck descends to the minimum, -74.7877864783 (-74.7877865251 since the
+2026-11-01 Bohr-constant fix), which
 is also PySCF's own SAD-start answer. See
 `tests/benchmarks/casscf/pyscf_reference/pyscf_reference_energies.md`.
 

@@ -11,136 +11,19 @@
 #include <vector>
 
 #include "basis/basis.h"
-#include "integrals/os.h"
+#include "basis/spherical.h"
+#include "basis/gbs_parser.h"
+#include "integrals/base.h"
 #include "integrals/shellpair.h"
 #include "io/logging.h"
 #include "lookup/elements.h"
 #include "scf.h"
 
-// ---------------------------------------------------------------------------
-// GBS parsing utilities — mirror of the static helpers in gaussian.cpp.
-// Kept file-local so the two TUs remain independent.
-// ---------------------------------------------------------------------------
 namespace
 {
-    // ── GBS parsing types ────────────────────────────────────────────────────
-
-    struct GbsPrimitive
-    {
-        double exponent;
-        double coefficient;
-    };
-
-    struct GbsShell
-    {
-        std::string label;
-        std::vector<GbsPrimitive> primitives;
-    };
-
-    using BasisSet = std::unordered_map<std::string, std::vector<GbsShell>>;
-
-    static bool starts_with_alpha(const std::string &line)
-    {
-        for (char c : line)
-        {
-            if (!std::isspace(static_cast<unsigned char>(c)))
-                return std::isalpha(static_cast<unsigned char>(c));
-        }
-        return false;
-    }
-
-    static bool is_shell_label(const std::string &s)
-    {
-        return s == "S" || s == "P" || s == "D" ||
-               s == "F" || s == "G" || s == "H" ||
-               s == "I" || s == "SP";
-    }
-
-    static void normalize_fortran_exponents(std::string &line)
-    {
-        for (char &c : line)
-            if (c == 'D' || c == 'd')
-                c = 'E';
-    }
-
-    static std::expected<BasisSet, std::string> read_gbs(std::ifstream &input)
-    {
-        BasisSet basis;
-        std::string line;
-        std::string current_element;
-
-        while (std::getline(input, line))
-        {
-            if (line.empty() || line.starts_with("!"))
-                continue;
-
-            if (line == "****")
-            {
-                current_element.clear();
-                continue;
-            }
-
-            std::istringstream header(line);
-            std::string symbol;
-            int charge;
-            if ((header >> symbol >> charge) && header.eof())
-            {
-                auto element = element_from_symbol(symbol);
-                if (!element)
-                    return std::unexpected(element.error());
-                current_element = symbol;
-                basis.try_emplace(symbol);
-                continue;
-            }
-
-            if (!starts_with_alpha(line))
-                return std::unexpected("Expected shell header, got: " + line);
-
-            if (current_element.empty())
-                return std::unexpected("Shell before element header");
-
-            std::istringstream iss(line);
-            std::string label;
-            std::size_t nprim;
-            double scale = 1.0;
-            iss >> label >> nprim >> scale;
-
-            if (!iss || !is_shell_label(label))
-                return std::unexpected("Malformed shell line: " + line);
-
-            if (label == "SP")
-            {
-                GbsShell s{"S"}, p{"P"};
-                for (std::size_t i = 0; i < nprim; ++i)
-                {
-                    std::getline(input, line);
-                    normalize_fortran_exponents(line);
-                    std::istringstream prim(line);
-                    double expn, cs, cp;
-                    prim >> expn >> cs >> cp;
-                    s.primitives.push_back({expn, cs * scale});
-                    p.primitives.push_back({expn, cp * scale});
-                }
-                basis[current_element].push_back(std::move(s));
-                basis[current_element].push_back(std::move(p));
-            }
-            else
-            {
-                GbsShell shell{label};
-                for (std::size_t i = 0; i < nprim; ++i)
-                {
-                    std::getline(input, line);
-                    normalize_fortran_exponents(line);
-                    std::istringstream prim(line);
-                    double expn, cs;
-                    prim >> expn >> cs;
-                    shell.primitives.push_back({expn, cs * scale});
-                }
-                basis[current_element].push_back(std::move(shell));
-            }
-        }
-        return basis;
-    }
+    using HartreeFock::BasisFunctions::detail::GbsShell;
+    using BasisSet = HartreeFock::BasisFunctions::detail::GbsBasisSet;
+    using HartreeFock::BasisFunctions::detail::read_gbs;
 
     // Build a single-atom Basis for element `sym` at the origin.
     // Convention matches read_gbs_basis exactly: primitive norms folded into
@@ -272,7 +155,9 @@ namespace
                    const HartreeFock::Basis &atomic_basis,
                    const HartreeFock::Calculator &mol_calc)
     {
-        const unsigned int mult = atomic_minimal_multiplicity(Z);
+        // An ECP removes n_core electrons; the atom keeps Z for element lookups.
+        const int n_core = atomic_basis._ecps.empty() ? 0 : atomic_basis._ecps.front()._n_core;
+        const unsigned int mult = atomic_minimal_multiplicity(Z - n_core);
 
         // ── Build atomic Calculator ───────────────────────────────────────────
         HartreeFock::Calculator atom;
@@ -281,6 +166,7 @@ namespace
         atom._molecule.natoms = 1;
         atom._molecule.atomic_numbers.resize(1);
         atom._molecule.atomic_numbers[0] = Z;
+        atom._molecule.ecp_core_electrons.assign(1, n_core);
         atom._molecule.atomic_masses.resize(1);
         auto atom_element = element_from_z(static_cast<uint64_t>(Z));
         if (!atom_element)
@@ -318,8 +204,8 @@ namespace
         auto atom_pairs = build_shellpairs(atom._shells);
 
         auto [S_at, T_at] = HartreeFock::ObaraSaika::_compute_1e(atom_pairs, n_at, nullptr);
-        Eigen::MatrixXd V_at = HartreeFock::ObaraSaika::_compute_nuclear_attraction(
-            atom_pairs, n_at, atom._molecule, nullptr);
+        Eigen::MatrixXd V_at = _compute_potential(
+            atom_pairs, atom._shells, atom._molecule, atom._integral._engine, nullptr);
 
         atom._overlap = S_at;
         atom._hcore = T_at + V_at;
@@ -465,22 +351,6 @@ namespace
     //
     // Guarantees Tr(P * S) = n_electrons (up to the linear-dependence threshold).
     // Map a Cartesian-basis density into the spherical AO basis: P_sph = C P_cart C^T.
-    // Used to bring the block-diagonal raw SAD guess into the working spherical basis
-    // before projection. C is the S-normalized whole-basis transform built at load.
-    static std::expected<Eigen::MatrixXd, std::string> transform_density_cart_to_sph(
-        const HartreeFock::Calculator &calc,
-        const Eigen::MatrixXd &P_cart)
-    {
-        const Eigen::MatrixXd &C = calc._shells._cart_to_sph;
-        const Eigen::Index n_cart = static_cast<Eigen::Index>(calc._shells.nbasis());
-        const Eigen::Index n_sph = static_cast<Eigen::Index>(calc._shells.nbasis_sph());
-        if (C.rows() != n_sph || C.cols() != n_cart)
-            return std::unexpected("SAD: spherical transform has unexpected shape");
-        if (P_cart.rows() != n_cart || P_cart.cols() != n_cart)
-            return std::unexpected("SAD: raw density has unexpected (non-Cartesian) shape");
-        return Eigen::MatrixXd(C * P_cart * C.transpose());
-    }
-
     // The SAD guess is the raw density itself, scaled to the target electron
     // count: P = (n / Tr(P_raw S)) P_raw. It is NOT made idempotent.
     //
@@ -535,7 +405,8 @@ namespace HartreeFock
             auto gbs_res = read_gbs(file);
             if (!gbs_res)
                 return std::unexpected(gbs_res.error());
-            const BasisSet &gbs = *gbs_res;
+            const BasisSet &gbs = gbs_res->shells;
+            const auto &gbs_ecps = gbs_res->ecps;
 
             std::unordered_set<std::string> seen;
             std::unordered_map<std::string, HartreeFock::Basis> result;
@@ -558,6 +429,9 @@ namespace HartreeFock
                 auto atomic_basis = build_atomic_basis(it->second);
                 if (!atomic_basis)
                     return std::unexpected(atomic_basis.error());
+                if (auto ecp = gbs_ecps.find(sym); ecp != gbs_ecps.end())
+                    atomic_basis->_ecps.push_back(HartreeFock::BasisFunctions::detail::make_ecp_potential(
+                        ecp->second, Eigen::Vector3d::Zero(), 0));
                 result.emplace(sym, std::move(*atomic_basis));
             }
 
@@ -611,10 +485,8 @@ namespace HartreeFock
             // are in the spherical basis, so map the guess into the spherical basis
             // first: P_sph = C P_cart C^T. The result is only an initial guess, so the
             // contamination subspace discarded by C is irrelevant. (No-op in
-            // Cartesian mode, where _cart_to_sph is empty.)
-            if (calc._shells._spherical)
-                return transform_density_cart_to_sph(calc, P_raw);
-            return P_raw;
+            // Cartesian mode.)
+            return HartreeFock::BasisFunctions::to_working(calc._shells, P_raw);
         }
 
         std::expected<Eigen::MatrixXd, std::string> compute_sad_guess_rhf(

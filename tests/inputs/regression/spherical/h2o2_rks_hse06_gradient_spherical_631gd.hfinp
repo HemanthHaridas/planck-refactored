@@ -1,0 +1,35 @@
+# Spherical DFT step 2 gate (docs/SPHERICAL_DFT.md): analytic KS gradient in a spherical
+# basis vs PySCF cart=False with grid response (tests/pyscf/spherical_ks_gradient_references.py).
+%begin_control
+    basis       6-31g*
+    calculation gradient
+    basis_type  spherical
+%end_control
+%begin_scf
+    scf_type        rhf
+    guess           hcore
+    max_cycles      200
+    tol_energy      1.0e-10
+    tol_density     1.0e-9
+    save_checkpoint .false.
+%end_scf
+%begin_dft
+    grid        fine
+    grid_radial_points 150
+    grid_angular_points 590
+    exchange    hse06
+    correlation pbe
+%end_dft
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+%begin_coords
+4
+0   1
+O 0.000000 0.710000 -0.050000
+O 0.020000 -0.720000 0.040000
+H 0.830000 0.930000 0.420000
+H -0.910000 -0.880000 0.380000
+%end_coords

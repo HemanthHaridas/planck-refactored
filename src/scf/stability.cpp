@@ -34,11 +34,8 @@ namespace HartreeFock::SCF
         // Total number of electrons minus charge.
         int total_electrons(const HartreeFock::Calculator &calc)
         {
-            int n_electrons = 0;
-            for (auto Z : calc._molecule.atomic_numbers)
-                n_electrons += static_cast<int>(Z);
-            n_electrons -= calc._molecule.charge;
-            return n_electrons;
+            // Z - n_core on ECP atoms (docs/DEF2_ECP.md step 2).
+            return calc._molecule.total_nuclear_charge() - calc._molecule.charge;
         }
 
         // ── Closed-shell singlet/triplet response matrices ─────────────────────
@@ -57,16 +54,17 @@ namespace HartreeFock::SCF
         // Three standard checks (Seeger-Pople 1977; Bauernschmitt-Ahlrichs 1996):
         //   • internal real     →  lowest eig of (A^S + B^S)  — another real RHF
         //   • internal complex  →  lowest eig of (A^S − B^S)  — complex orbitals
-        //   • external triplet  →  lowest eig of (A^T − B^T)  — RHF→UHF spin flip
+        //   • external triplet  →  lowest eig of (A^T + B^T)  — real RHF→UHF
         //
-        // The singlet (A−B) and triplet (A−B) matrices reduce to the same
-        // algebraic form once the (ai|bj) Coulomb pieces cancel, but they
-        // diagnose physically distinct instabilities.
+        // The triplet channel used to be A^T − B^T, which is algebraically the
+        // complex test (A^S − B^S) again, so it reported stretched H2/STO-3G
+        // stable (+0.0535) where A^T + B^T is −0.511 (PySCF rhf_external
+        // −0.5109): the same A − B / A + B mix-up the UHF channel had.
         enum class RHFChannel
         {
             SingletAplusB,  // internal, real    — RHF → another RHF
             SingletAminusB, // internal, complex — RHF → complex orbital RHF
-            TripletAminusB, // external, triplet — RHF → UHF
+            TripletAplusB,  // external, triplet — real RHF → UHF
         };
 
         // Build a closed-shell response matrix in MO basis, reusing the
@@ -104,15 +102,13 @@ namespace HartreeFock::SCF
                                 val += 4.0 * ai_bj - ab_ij - aj_bi;
                                 break;
                             case RHFChannel::SingletAminusB:
-                                // (A^S − B^S) = εδ − (ab|ij) + (aj|ib)
-                                // Algebraically identical to (A^T − B^T) below;
-                                // physically tests stability against complex
-                                // orbital rotations, not spin-symmetry breaking.
+                                // (A^S − B^S) = εδ − (ab|ij) + (aj|ib):
+                                // stability against complex orbital rotations.
                                 val += -ab_ij + aj_bi;
                                 break;
-                            case RHFChannel::TripletAminusB:
-                                // (A^T − B^T) = εδ − (ab|ij) + (aj|ib)
-                                val += -ab_ij + aj_bi;
+                            case RHFChannel::TripletAplusB:
+                                // (A^T + B^T) = εδ − (ab|ij) − (aj|ib)
+                                val += -ab_ij - aj_bi;
                                 break;
                             }
                             M(ai, bj) = val;
@@ -264,7 +260,7 @@ namespace HartreeFock::SCF
         if (n_electrons <= 0 || n_electrons % 2 != 0)
             return std::unexpected("analyze_rhf_stability: closed-shell reference required.");
 
-        const std::size_t nb = calculator._shells.nbasis();
+        const std::size_t nb = calculator.working_nbasis();
         const int n_occ = n_electrons / 2;
         const int n_virt = static_cast<int>(nb) - n_occ;
         if (n_occ <= 0 || n_virt <= 0)
@@ -297,7 +293,7 @@ namespace HartreeFock::SCF
         } channels[3] = {
             {RHFChannel::SingletAplusB, "RHF -> RHF (real, internal)"},
             {RHFChannel::SingletAminusB, "RHF -> complex RHF (internal)"},
-            {RHFChannel::TripletAminusB, "RHF -> UHF (triplet, external)"},
+            {RHFChannel::TripletAplusB, "RHF -> UHF (triplet, external)"},
         };
 
         for (const auto &c : channels)
@@ -359,7 +355,7 @@ namespace HartreeFock::SCF
 
         const int n_alpha = (n_electrons + n_unpaired) / 2;
         const int n_beta = (n_electrons - n_unpaired) / 2;
-        const std::size_t nb = calculator._shells.nbasis();
+        const std::size_t nb = calculator.working_nbasis();
         const int nva = static_cast<int>(nb) - n_alpha;
         const int nvb = static_cast<int>(nb) - n_beta;
         if (nva <= 0 || nvb <= 0)
@@ -519,130 +515,28 @@ namespace HartreeFock::SCF
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Follow an unstable mode: rotate orbitals, optionally promote RHF→UHF,
-    // re-run SCF.
+    // Rotate the MOs along an internal unstable mode and seed the densities
+    // for a re-run. Shared by the HF follow below and the UKS follow in
+    // planck-dft, which re-runs its own KS SCF afterwards.
     // ─────────────────────────────────────────────────────────────────────────
-    std::expected<double, std::string> follow_instability_and_rerun(
+    std::expected<void, std::string> rotate_along_internal_mode(
         HartreeFock::Calculator &calculator,
-        const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const StabilityChannel &channel,
         double step_scale)
     {
-        if (!channel.is_unstable)
-            return std::unexpected("follow_instability_and_rerun: channel is not flagged unstable.");
         if (channel.lowest_mode.size() == 0)
-            return std::unexpected(std::format(
-                "follow_instability_and_rerun: no follow-mode available for channel '{}'.",
-                channel.label));
-
+            return std::unexpected(std::format("no follow-mode available for channel '{}'.", channel.label));
+        // For UHF this rotates the alpha block with lowest_mode and the beta
+        // block with lowest_mode_beta (when present).
         const int n_electrons = total_electrons(calculator);
-        const std::size_t nb = calculator._shells.nbasis();
-        const bool was_rhf = calculator._scf._scf == HartreeFock::SCFType::RHF;
-        const bool is_triplet_external =
-            channel.label.find("RHF -> UHF") != std::string::npos;
-
-        // For an RHF → UHF triplet instability we need to promote the
-        // calculator to a UHF reference and break spin symmetry strongly
-        // enough that the post-rotation density is *not* in the
-        // closed-shell-mimicking UHF stationary point.
-        //
-        // Two-step strategy (standard "Pople / Noodleman broken-symmetry guess"):
-        //
-        //   1. HOMO–LUMO mix the beta orbitals only. β_HOMO and β_LUMO are
-        //      rotated by 45° (cos·HOMO ± sin·LUMO). This makes the alpha
-        //      and beta occupied spaces explicitly different along the
-        //      frontier — independent of whatever the unstable eigenvector
-        //      happens to point at. Without this step the eigenvector may
-        //      pick up mostly core-orbital character, leaving the frontier
-        //      closed-shell, and UHF re-symmetrizes back to RHF.
-        //
-        //   2. Apply ±step·R rotation on top, alpha = +R, beta = −R.
-        //      Guides the SCF toward the *specific* lower stationary point
-        //      identified by the stability analyzer.
-        //
-        // Step 1 alone usually suffices; step 2 sharpens the direction.
-        if (is_triplet_external && was_rhf)
-        {
-            if (n_electrons % 2 != 0)
-                return std::unexpected("follow_instability_and_rerun: RHF→UHF requires closed-shell.");
-
-            const int n_alpha = n_electrons / 2;
-            const int n_beta = n_electrons / 2;
-            const int n_virt = static_cast<int>(nb) - n_alpha;
-
-            const Eigen::MatrixXd C_in = calculator._info._scf.alpha.mo_coefficients;
-            const Eigen::VectorXd eps_in = calculator._info._scf.alpha.mo_energies;
-
-            constexpr double pi_over_4 = 0.7853981633974483;
-            const double eig_step = follow_step(channel, step_scale);
-
-            // Step 1: HOMO–LUMO mix beta. The mixing angle is π/8 (22.5°) —
-            // enough to break spin symmetry without over-mixing into a
-            // genuinely homolytic state. Production codes vary between π/8
-            // and π/4 for this; we use the smaller value to stay close to
-            // the physical RHF→UHF transition.
-            //
-            //   β_HOMO_new =  cos · β_HOMO + sin · β_LUMO
-            //   β_LUMO_new = -sin · β_HOMO + cos · β_LUMO
-            const int homo_idx = n_alpha - 1;
-            const int lumo_idx = n_alpha;             // first virtual
-            const double mix_angle = pi_over_4 / 2.0; // π/8
-            const double cs = std::cos(mix_angle);
-            const double sn = std::sin(mix_angle);
-
-            Eigen::MatrixXd C_beta = C_in;
-            const Eigen::VectorXd homo_col = C_in.col(homo_idx);
-            const Eigen::VectorXd lumo_col = C_in.col(lumo_idx);
-            C_beta.col(homo_idx) = cs * homo_col + sn * lumo_col;
-            C_beta.col(lumo_idx) = -sn * homo_col + cs * lumo_col;
-
-            // Step 2: apply the eigenvector rotation as a sharpening step.
-            // Sign convention: +eig_step for alpha, −eig_step for beta.
-            const Eigen::MatrixXd kappa = eig_step * channel.lowest_mode;
-            const Eigen::MatrixXd U_pos = build_rotation_matrix(kappa, n_alpha, n_virt);
-            const Eigen::MatrixXd U_neg = build_rotation_matrix(-kappa, n_alpha, n_virt);
-
-            // Promote DataSCF to a UHF container before writing the mixed MOs.
-            calculator._scf._scf = HartreeFock::SCFType::UHF;
-            calculator._info._scf = HartreeFock::DataSCF(true);
-            calculator._info._scf.initialize(nb);
-
-            calculator._info._scf.alpha.mo_coefficients = C_in * U_pos;
-            calculator._info._scf.beta.mo_coefficients = C_beta * U_neg;
-            calculator._info._scf.alpha.mo_energies = eps_in;
-            calculator._info._scf.beta.mo_energies = eps_in;
-            calculator._info._scf.alpha.density =
-                calculator._info._scf.alpha.mo_coefficients.leftCols(n_alpha) *
-                calculator._info._scf.alpha.mo_coefficients.leftCols(n_alpha).transpose();
-            calculator._info._scf.beta.density =
-                calculator._info._scf.beta.mo_coefficients.leftCols(n_beta) *
-                calculator._info._scf.beta.mo_coefficients.leftCols(n_beta).transpose();
-
-            reset_for_rerun(calculator);
-
-            HartreeFock::Logger::logging(
-                HartreeFock::LogLevel::Info, "Stability :",
-                std::format("Following RHF→UHF triplet instability "
-                            "(λ={:.6e}, eig_step={:.3f}, β HOMO-LUMO mix={:.3f}); "
-                            "re-running as UHF.",
-                            channel.lowest_eigenvalue, eig_step, mix_angle));
-
-            auto res = HartreeFock::SCF::run_uhf(calculator, shell_pairs, nullptr);
-            if (!res)
-                return std::unexpected(std::format(
-                    "follow_instability_and_rerun: UHF restart failed: {}", res.error()));
-            return calculator._total_energy; // _info._energy is the electronic energy
-        }
-
-        // Internal instability (RHF→RHF or UHF→UHF): rotate within the same
-        // SCF type and re-run. For UHF this rotates only the alpha block;
-        // the beta lowest_mode (when present) is applied to the beta channel.
         const bool is_uhf = calculator._info._scf.is_uhf;
         const int n_unpaired = static_cast<int>(calculator._molecule.multiplicity) - 1;
         const int n_alpha = is_uhf ? (n_electrons + n_unpaired) / 2 : n_electrons / 2;
         const int n_beta = is_uhf ? (n_electrons - n_unpaired) / 2 : n_electrons / 2;
-        const int nva = static_cast<int>(nb) - n_alpha;
-        const int nvb = static_cast<int>(nb) - n_beta;
+        const int nmo_a = static_cast<int>(calculator._info._scf.alpha.mo_coefficients.cols());
+        const int nmo_b = static_cast<int>(calculator._info._scf.beta.mo_coefficients.cols());
+        const int nva = nmo_a - n_alpha;
+        const int nvb = nmo_b - n_beta;
 
         const double step = follow_step(channel, step_scale);
         const Eigen::MatrixXd kappa_a = step * channel.lowest_mode;
@@ -673,6 +567,147 @@ namespace HartreeFock::SCF
             std::format("Following internal instability '{}' (λ={:.6e}, step={:.3f}); "
                         "re-running SCF.",
                         channel.label, channel.lowest_eigenvalue, step));
+        return {};
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Promote a converged RHF/RKS reference to UHF/UKS along a triplet
+    // (RHF → UHF) mode and seed the densities for a re-run. Shared by the HF
+    // follow below and the RKS → UKS follow in planck-dft.
+    // ─────────────────────────────────────────────────────────────────────────
+    std::expected<void, std::string> promote_rhf_to_uhf_along_triplet_mode(
+        HartreeFock::Calculator &calculator,
+        const StabilityChannel &channel,
+        double step_scale)
+    {
+        if (channel.lowest_mode.size() == 0)
+            return std::unexpected(std::format("no follow-mode available for channel '{}'.", channel.label));
+        if (calculator._scf._scf != HartreeFock::SCFType::RHF)
+            return std::unexpected("RHF→UHF promotion requires an RHF/RKS reference.");
+        const int n_electrons = total_electrons(calculator);
+        const std::size_t nb = calculator.working_nbasis();
+        // For an RHF → UHF triplet instability we need to promote the
+        // calculator to a UHF reference and break spin symmetry strongly
+        // enough that the post-rotation density is *not* in the
+        // closed-shell-mimicking UHF stationary point.
+        //
+        // Two-step strategy (standard "Pople / Noodleman broken-symmetry guess"):
+        //
+        //   1. HOMO–LUMO mix the beta orbitals only. β_HOMO and β_LUMO are
+        //      rotated by 45° (cos·HOMO ± sin·LUMO). This makes the alpha
+        //      and beta occupied spaces explicitly different along the
+        //      frontier — independent of whatever the unstable eigenvector
+        //      happens to point at. Without this step the eigenvector may
+        //      pick up mostly core-orbital character, leaving the frontier
+        //      closed-shell, and UHF re-symmetrizes back to RHF.
+        //
+        //   2. Apply ±step·R rotation on top, alpha = +R, beta = −R.
+        //      Guides the SCF toward the *specific* lower stationary point
+        //      identified by the stability analyzer.
+        //
+        // Step 1 alone usually suffices; step 2 sharpens the direction.
+        if (n_electrons % 2 != 0)
+            return std::unexpected("RHF→UHF promotion requires a closed-shell reference.");
+
+        const int n_alpha = n_electrons / 2;
+        const int n_beta = n_electrons / 2;
+        const int n_virt = static_cast<int>(nb) - n_alpha;
+
+        const Eigen::MatrixXd C_in = calculator._info._scf.alpha.mo_coefficients;
+        const Eigen::VectorXd eps_in = calculator._info._scf.alpha.mo_energies;
+
+        constexpr double pi_over_4 = 0.7853981633974483;
+        const double eig_step = follow_step(channel, step_scale);
+
+        // Step 1: HOMO–LUMO mix beta. The mixing angle is π/8 (22.5°) —
+        // enough to break spin symmetry without over-mixing into a
+        // genuinely homolytic state. Production codes vary between π/8
+        // and π/4 for this; we use the smaller value to stay close to
+        // the physical RHF→UHF transition.
+        //
+        //   β_HOMO_new =  cos · β_HOMO + sin · β_LUMO
+        //   β_LUMO_new = -sin · β_HOMO + cos · β_LUMO
+        const int homo_idx = n_alpha - 1;
+        const int lumo_idx = n_alpha;             // first virtual
+        const double mix_angle = pi_over_4 / 2.0; // π/8
+        const double cs = std::cos(mix_angle);
+        const double sn = std::sin(mix_angle);
+
+        Eigen::MatrixXd C_beta = C_in;
+        const Eigen::VectorXd homo_col = C_in.col(homo_idx);
+        const Eigen::VectorXd lumo_col = C_in.col(lumo_idx);
+        C_beta.col(homo_idx) = cs * homo_col + sn * lumo_col;
+        C_beta.col(lumo_idx) = -sn * homo_col + cs * lumo_col;
+
+        // Step 2: apply the eigenvector rotation as a sharpening step.
+        // Sign convention: +eig_step for alpha, −eig_step for beta.
+        const Eigen::MatrixXd kappa = eig_step * channel.lowest_mode;
+        const Eigen::MatrixXd U_pos = build_rotation_matrix(kappa, n_alpha, n_virt);
+        const Eigen::MatrixXd U_neg = build_rotation_matrix(-kappa, n_alpha, n_virt);
+
+        // Promote DataSCF to a UHF container before writing the mixed MOs.
+        calculator._scf._scf = HartreeFock::SCFType::UHF;
+        calculator._info._scf = HartreeFock::DataSCF(true);
+        calculator._info._scf.initialize(nb);
+
+        calculator._info._scf.alpha.mo_coefficients = C_in * U_pos;
+        calculator._info._scf.beta.mo_coefficients = C_beta * U_neg;
+        calculator._info._scf.alpha.mo_energies = eps_in;
+        calculator._info._scf.beta.mo_energies = eps_in;
+        calculator._info._scf.alpha.density =
+            calculator._info._scf.alpha.mo_coefficients.leftCols(n_alpha) *
+            calculator._info._scf.alpha.mo_coefficients.leftCols(n_alpha).transpose();
+        calculator._info._scf.beta.density =
+            calculator._info._scf.beta.mo_coefficients.leftCols(n_beta) *
+            calculator._info._scf.beta.mo_coefficients.leftCols(n_beta).transpose();
+
+        reset_for_rerun(calculator);
+
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "Stability :",
+            std::format("Following RHF→UHF triplet instability "
+                        "(λ={:.6e}, eig_step={:.3f}, β HOMO-LUMO mix={:.3f}); "
+                        "re-running as UHF.",
+                        channel.lowest_eigenvalue, eig_step, mix_angle));
+        return {};
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Follow an unstable mode: rotate orbitals, optionally promote RHF→UHF,
+    // re-run SCF.
+    // ─────────────────────────────────────────────────────────────────────────
+    std::expected<double, std::string> follow_instability_and_rerun(
+        HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const StabilityChannel &channel,
+        double step_scale)
+    {
+        if (!channel.is_unstable)
+            return std::unexpected("follow_instability_and_rerun: channel is not flagged unstable.");
+        if (channel.lowest_mode.size() == 0)
+            return std::unexpected(std::format(
+                "follow_instability_and_rerun: no follow-mode available for channel '{}'.",
+                channel.label));
+
+        const bool was_rhf = calculator._scf._scf == HartreeFock::SCFType::RHF;
+        const bool is_triplet_external =
+            channel.label.find("RHF -> UHF") != std::string::npos;
+
+        if (is_triplet_external && was_rhf)
+        {
+            if (auto promoted = promote_rhf_to_uhf_along_triplet_mode(calculator, channel, step_scale); !promoted)
+                return std::unexpected("follow_instability_and_rerun: " + promoted.error());
+            auto res = HartreeFock::SCF::run_uhf(calculator, shell_pairs, nullptr);
+            if (!res)
+                return std::unexpected(std::format(
+                    "follow_instability_and_rerun: UHF restart failed: {}", res.error()));
+            return calculator._total_energy; // _info._energy is the electronic energy
+        }
+
+        // Internal instability (RHF→RHF or UHF→UHF): rotate within the same
+        // SCF type and re-run.
+        if (auto rotated = rotate_along_internal_mode(calculator, channel, step_scale); !rotated)
+            return std::unexpected(rotated.error());
 
         std::expected<void, std::string> res;
         switch (calculator._scf._scf)

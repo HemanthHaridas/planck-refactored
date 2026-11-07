@@ -1,0 +1,28 @@
+# def2 ECP gate (docs/DEF2_ECP.md step 4): AuH plus a water off axis: 60-electron ECP, low symmetry
+# Reference: tests/pyscf/def2_ecp_references.py (PySCF 2.13.0, same GBS file).
+%begin_control
+    basis       def2-SVP
+    calculation energy
+    basis_type  spherical
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+5
+0   1
+Au    0.000000     0.000000     0.000000
+H     0.000000     0.000000     1.524000
+O     2.300000     0.400000    -0.900000
+H     2.900000     1.100000    -0.600000
+H     2.700000    -0.400000    -0.500000
+%end_coords

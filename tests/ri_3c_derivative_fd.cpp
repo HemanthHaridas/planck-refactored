@@ -143,7 +143,7 @@ int main()
     geom << 0.0, 0.0, 0.117176,
         0.0, 0.757005, -0.468704,
         0.0, -0.757005, -0.468704;
-    geom *= 1.8897259886; // Angstrom -> Bohr
+    geom *= ANGSTROM_TO_BOHR;
 
     const double delta = 1e-4; // Bohr
 

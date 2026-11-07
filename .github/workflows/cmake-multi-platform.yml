@@ -70,7 +70,9 @@ jobs:
 
     - name: Build
       # Build your program with the given configuration. Note that --config is needed because the default Windows generator is a multi-config generator (Visual Studio generator).
-      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} -j$(nprocs) --target hartree-fock
+      # Build every target: ctest runs the planck-* test binaries, so building
+      # only hartree-fock left ctest with nothing real to run.
+      run: cmake --build ${{ steps.strings.outputs.build-output-dir }} --config ${{ matrix.build_type }} -j$(nproc)
 
     - name: Test
       working-directory: ${{ steps.strings.outputs.build-output-dir }}

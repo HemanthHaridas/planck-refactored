@@ -109,6 +109,9 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     # SOSCF_DFT.md invariants 2 and 3).
     "dft_soscf_last_gradient": re.compile(
         r"DFT (?:UKS )?SOSCF\s*:\s*step at iter \d+:\s*\|g\|=([-+0-9Ee\.]+)", re.MULTILINE),
+    # HF SOSCF window (scf.cpp): the last step's orbital gradient.
+    "soscf_last_gradient": re.compile(
+        r"^\[INF\] SOSCF :\s*step at iter \d+:\s*\|g\|=([-+0-9Ee\.]+)", re.MULTILINE),
     "zero_point_energy_eh": re.compile(r"Zero-point energy\s*:\s*([-+0-9Ee\.]+)\s+Eh"),
     "point_group": re.compile(r"(?:Point Group\s*:\s*|Detected point group\s+)([A-Za-z0-9_+\-]+)"),
     "stability_real_internal": re.compile(
@@ -122,6 +125,15 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     ),
     "stability_uhf_internal": re.compile(
         r"UHF -> UHF \(spin-conserving, internal\)\s+λ_min\s*=\s*([-+0-9Ee\.]+)"
+    ),
+    "stability_uks_internal": re.compile(
+        r"UKS -> UKS \(spin-conserving, internal\)\s+λ_min\s*=\s*([-+0-9Ee\.]+)"
+    ),
+    "stability_rks_internal": re.compile(
+        r"RKS -> RKS \(real, internal\)\s+λ_min\s*=\s*([-+0-9Ee\.]+)"
+    ),
+    "stability_rks_triplet": re.compile(
+        r"RKS -> UKS \(triplet, external\)\s+λ_min\s*=\s*([-+0-9Ee\.]+)"
     ),
 }
 
@@ -288,9 +300,10 @@ def within_sigma_failure(
     )
 
 
-def checkpoint_path_for(input_path: Path) -> Path:
-    # Mirror the driver's rule (src/driver.cpp): parent_dir / stem + ".hfchk".
-    return input_path.with_suffix(".hfchk")
+def checkpoint_path_for(input_path: Path, executable: Path) -> Path:
+    # Mirror the drivers' rule: parent_dir / stem + ".hfchk" (src/driver.cpp),
+    # or ".dftchk" for planck-dft (src/dft/main.cpp).
+    return input_path.with_suffix(".dftchk" if executable.name == "planck-dft" else ".hfchk")
 
 
 def run_setup(
@@ -333,11 +346,11 @@ def run_setup(
         tail = (proc.stdout + proc.stderr).strip().splitlines()[-10:]
         return "setup seed run failed:\n" + "\n".join(tail)
 
-    seed_chk = checkpoint_path_for(seed_input)
+    seed_chk = checkpoint_path_for(seed_input, executable)
     if not seed_chk.exists():
         return f"setup seed did not produce a checkpoint at {seed_chk}"
 
-    target_chk = checkpoint_path_for(repo_root / case["input"])
+    target_chk = checkpoint_path_for(repo_root / case["input"], executable)
     if seed_chk != target_chk:
         shutil.copyfile(seed_chk, target_chk)
     return None
@@ -369,9 +382,9 @@ def run_case(
 
     try:
         # A case may declare `env`: extra environment variables for this run only.
-        # Needed where a code path is reachable only by env override and has no
-        # input keyword -- PLANCK_RCCSDT_BACKEND being the case in point. Layered
-        # over the inherited environment so the basis path and toolchain survive.
+        # Used for run-time settings such as OMP_NUM_THREADS (the FCIQMC
+        # thread-count cases). Layered over the inherited environment so the
+        # basis path and toolchain survive.
         case_env = case.get("env")
         run_env = {**os.environ, **case_env} if case_env else None
         proc = subprocess.run(
@@ -463,6 +476,27 @@ def run_case(
             if actual is None or not float(actual) <= threshold:
                 passed = False
                 details.append(f"{metric} expected <= {threshold}, got {actual}")
+
+        elif ctype == "gradient_close":
+            # Every component of the first printed gradient block, so a sign flip or
+            # an atom swap fails (gradient_max / gradient_rms cannot see either).
+            expected_rows = check["expected"]
+            atol = float(check["atol"])
+            rows = re.findall(
+                r"Atom\s+\d+\s*:\s+([-+0-9Ee\.]+)\s+([-+0-9Ee\.]+)\s+([-+0-9Ee\.]+)", output
+            )[: len(expected_rows)]
+            if len(rows) != len(expected_rows):
+                passed = False
+                details.append(f"gradient: expected {len(expected_rows)} atom rows, got {len(rows)}")
+            else:
+                worst = max(
+                    abs(float(a) - float(e))
+                    for row, exp in zip(rows, expected_rows)
+                    for a, e in zip(row, exp)
+                )
+                if worst > atol:
+                    passed = False
+                    details.append(f"gradient component off by {worst:.2e} (atol {atol:.2e})")
 
         elif ctype == "metric_ge":
             metric = check["metric"]

@@ -53,7 +53,7 @@
    "expected_exit_code": 0,
    "contains": [
     "Mayer Bond Orders :",
-    "1       2         O         H        0.76017799"
+    "1       2         O         H        0.76017801"
    ]
   },
   {
@@ -76,7 +76,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9458807581,
+     "expected": -74.9458807841,
      "atol": 1e-09
     }
    ]
@@ -100,7 +100,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9458807581,
+     "expected": -74.9458807841,
      "atol": 1e-09
     }
    ]
@@ -116,9 +116,9 @@
    "expected_exit_code": 0,
    "contains": [
     "ESP Charges (Connolly) :",
-    "1       O       8             -0.70025568",
-    "2       H       1              0.35011239",
-    "3       H       1              0.35014328",
+    "1       O       8             -0.70025559",
+    "2       H       1              0.35011235",
+    "3       H       1              0.35014324",
     "ESP Grid Points :             1012"
    ],
    "checks": [
@@ -142,15 +142,15 @@
     "ESP + PCM :",
     "the PCM reaction field is excluded",
     "ESP Charges (Connolly) :",
-    "1       O       8             -0.73345627",
-    "2       H       1              0.36665044",
-    "3       H       1              0.36680583"
+    "1       O       8             -0.73345619",
+    "2       H       1              0.36665040",
+    "3       H       1              0.36680579"
    ],
    "checks": [
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9515732413,
+     "expected": -74.9515732656,
      "atol": 1e-09
     }
    ]
@@ -175,7 +175,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9515732413,
+     "expected": -74.9515732656,
      "atol": 1e-09
     }
    ]
@@ -224,7 +224,35 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9458807581,
+     "expected": -74.9458807841,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_spherical_esp_points_631gd",
+   "_note": "docs/SPHERICAL_DFT.md S0.1: the ESP integrals are Cartesian, so a spherical density must be lifted first. Before the fix the working-basis density was read at Cartesian AO indices with no error (water/6-31G* Connolly charges O -2.94, H 1.461/1.474). Same points as water_rhf_esp_points_sto3g; 8 decimals asserted, as there, except 7 at point 3, where the 1.8e-9 cross-code gap straddles the 8th digit.",
+   "_pyscf_reference": "PySCF 2.13.0 RHF/6-31G* cart=False (basis parsed from Planck's GBS, Bohr 0.529177210903), int1e_grids contracted with the converged density plus the nuclear sum: phi = 0.157560912963, -0.010961551560, 0.042079010558, 0.005242044332, 0.000008873192. Max abs diff vs Planck 1.8e-09. E_RHF -76.0052429766 (Planck identical).",
+   "input": "tests/inputs/regression/spherical/water_rhf_spherical_esp_points_631gd.hfinp",
+   "tags": [
+    "smoke",
+    "core",
+    "spherical"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Electrostatic Potential :",
+    "1      1.300000     -0.700000      2.100000          0.15756091",
+    "2     -2.400000      1.900000     -0.600000         -0.01096155",
+    "3      0.400000      0.300000      3.700000          0.0420790",
+    "4     -5.000000     -4.000000      1.200000          0.00524204",
+    "5     60.000000      0.000000      0.000000          0.00000887"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0052429766,
      "atol": 1e-09
     }
    ]
@@ -241,7 +269,7 @@
    "expected_exit_code": 0,
    "contains": [
     "Electrostatic Potential :",
-    "1      1.300000     -0.700000      2.100000          0.14583892",
+    "1      1.300000     -0.700000      2.100000          0.14583893",
     "2     -2.400000      1.900000     -0.600000         -0.01147406",
     "3      0.400000      0.300000      3.700000          0.04083082",
     "4     -5.000000     -4.000000      1.200000          0.00386944",
@@ -251,7 +279,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9458807581,
+     "expected": -74.9458807841,
      "atol": 1e-09
     }
    ]
@@ -821,7 +849,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -78.040190575,
+     "expected": -78.0401905726,
      "atol": 1e-09
     },
     {
@@ -847,7 +875,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -78.040190575,
+     "expected": -78.0401905726,
      "atol": 1e-09
     },
     {
@@ -873,7 +901,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9458807581,
+     "expected": -74.9458807841,
      "atol": 1e-09
     },
     {
@@ -905,9 +933,57 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -77.4195705536,
+     "expected": -77.4195705637,
      "atol": 1e-09
     }
+   ]
+  },
+  {
+   "id": "h2_rhf_triplet_instability_sto3g",
+   "input": "tests/inputs/regression/hf/h2_rhf_triplet_instability_sto3g.hfinp",
+   "tags": [
+    "smoke",
+    "core",
+    "extended"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 RHF/STO-3G H2 at 2.5 A: rhf_external lowest eigenvalue -0.51090553 (an RHF/RKS -> UHF/UKS instability); rhf_real2complex +0.05351456. Before R0 Planck's triplet channel computed A^T - B^T and printed the complex value, +0.0535 [stable].",
+   "expected_exit_code": 0,
+   "contains": [
+    "RHF -> UHF (triplet, external)",
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "stability_triplet_external",
+     "expected": -0.5109055,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_complex_internal",
+     "expected": 0.0535146,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -0.7029436002,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "h2_rhf_triplet_follow_sto3g",
+   "input": "tests/inputs/regression/hf/h2_rhf_triplet_follow_sto3g.hfinp",
+   "tags": [
+    "core",
+    "extended"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 broken-symmetry UHF/STO-3G H2 at 2.5 A (one electron per atom guess): -0.9338672048, <S^2> 0.9908. Planck's follow reaches it to every digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Re-converged after follow: E = -0.9338672048 Eh"
    ]
   },
   {
@@ -927,7 +1003,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9458807581,
+     "expected": -74.9458807841,
      "atol": 1e-09
     },
     {
@@ -944,6 +1020,18 @@
      "type": "metric_ge",
      "metric": "stability_triplet_external",
      "value": 0.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_complex_internal",
+     "expected": 0.4798247,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_triplet_external",
+     "expected": 0.3988887,
+     "atol": 1e-06
     }
    ]
   },
@@ -965,7 +1053,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -77.3837525262,
+     "expected": -77.3837525369,
      "atol": 1e-09
     },
     {
@@ -1008,7 +1096,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9458807581,
+     "expected": -74.9458807841,
      "atol": 1e-09
     }
    ]
@@ -1037,7 +1125,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.9516348849,
+     "expected": -74.9516349092,
      "atol": 1e-09
     }
    ]
@@ -1442,6 +1530,75 @@
    "expected_exit_code": 0
   },
   {
+   "id": "water_rhf_631gd_conventional_auto_mpi_smoke",
+   "input": "tests/inputs/regression/mpi/water_rhf_631gd_conventional_auto.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended"
+   ],
+   "args": [
+    "--ranks",
+    "2",
+    "3",
+    "--atol",
+    "0"
+   ],
+   "expected_exit_code": 0,
+   "_note": "Conventional ERI tensor built with engine auto, striped across ranks and summed by one allreduce (Gap 1, docs/HPC_MPI.md). Every printed digit must match serial at 2 and 3 ranks: a missing stripe double-counts, a missing reduce drops entries."
+  },
+  {
+   "id": "water_rhf_631gd_conventional_hgp_mpi_smoke",
+   "input": "tests/inputs/regression/mpi/water_rhf_631gd_conventional_hgp.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended"
+   ],
+   "args": [
+    "--ranks",
+    "2",
+    "3",
+    "--atol",
+    "0"
+   ],
+   "expected_exit_code": 0,
+   "_note": "Conventional ERI tensor built with engine hgp, striped across ranks and summed by one allreduce (Gap 1, docs/HPC_MPI.md). Every printed digit must match serial at 2 and 3 ranks: a missing stripe double-counts, a missing reduce drops entries."
+  },
+  {
+   "id": "water_rhf_631gd_conventional_rys_mpi_smoke",
+   "input": "tests/inputs/regression/mpi/water_rhf_631gd_conventional_rys.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended"
+   ],
+   "args": [
+    "--ranks",
+    "2",
+    "3",
+    "--atol",
+    "0"
+   ],
+   "expected_exit_code": 0,
+   "_note": "Conventional ERI tensor built with engine rys, striped across ranks and summed by one allreduce (Gap 1, docs/HPC_MPI.md). Every printed digit must match serial at 2 and 3 ranks: a missing stripe double-counts, a missing reduce drops entries."
+  },
+  {
+   "id": "water16_rhf_631g_auto_direct_mpi_scale",
+   "input": "tests/inputs/regression/mpi/water16_rhf_631g_auto_direct.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended"
+   ],
+   "timeout_s": 1800,
+   "args": [
+    "--ranks",
+    "2",
+    "4",
+    "--atol",
+    "0"
+   ],
+   "expected_exit_code": 0,
+   "_note": "Gap 3 (docs/HPC_MPI.md): 16 waters, 6-31G, nb=208, direct SCF with the default engine. Large enough for a partition defect to show; serial, 2 and 4 ranks must agree on every printed digit."
+  },
+  {
    "id": "h2_rmp2_gradient_smoke",
    "input": "tests/inputs/regression/post_hf/h2_rmp2_gradient.hfinp",
    "tags": [
@@ -1666,8 +1823,8 @@
    ]
   },
   {
-   "id": "water_dft_hse06_gradient_symm_ultrafine_fd",
-   "input": "tests/inputs/regression/dft/water_dft_hse06_gradient_symm_ultrafine.hfinp",
+   "id": "water_dft_camb3lyp_gradient_symm_ultrafine_fd",
+   "input": "tests/inputs/regression/dft/water_dft_camb3lyp_gradient_symm_ultrafine.hfinp",
    "executable": "tests/dft_gradient_fd.py",
    "tags": [
     "extended"
@@ -1695,7 +1852,7 @@
     "Zero-point energy :",
     "Converged :                   true"
    ],
-   "_pyscf_reference": "d-function guard for the range-separated (HSE06) Hessian/optimizer path. PySCF 2.13.0 RKS HSE06/6-31G* cart, geomTRIC opt + analytic Hessian, grids.level=4: freqs 1722.07/3794.20/3919.88 cm-1, E=-76.33242903 Eh. Planck (fine grid, semi-numerical Hessian): 1722.70/3789.39/3915.57 cm-1, E=-76.33235594 Eh -> max |\u0394freq| 4.8 cm-1, \u0394E ~7e-5 Eh (different grids/convergence, nearby stationary points). Confirms no d-function failure mode; smoke-gated only (semi-numerical freqs drift with grid/step, so no exact cm-1 pin)."
+   "_pyscf_reference": "d-function guard for the range-separated (HSE06) Hessian/optimizer path. PySCF 2.13.0 RKS HSE06/6-31G* cart, geomTRIC opt + analytic Hessian, grids.level=4: freqs 1722.07/3794.20/3919.88 cm-1, E=-76.33242903 Eh. Planck (fine grid, semi-numerical Hessian): 1722.70/3789.39/3915.57 cm-1, E=-76.33235594 Eh -> max |Δfreq| 4.8 cm-1, ΔE ~7e-5 Eh (different grids/convergence, nearby stationary points). Confirms no d-function failure mode; smoke-gated only (semi-numerical freqs drift with grid/step, so no exact cm-1 pin)."
   },
   {
    "id": "water_radical_cation_ump2_gradient_smoke",
@@ -1955,7 +2112,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -39.7267328271,
+     "expected": -39.726732824,
      "atol": 1e-09
     },
     {
@@ -1973,7 +2130,7 @@
   },
   {
    "id": "ch4_rccsdt_generated_sto3g",
-   "input": "tests/inputs/regression/post_hf/ch4_rccsdt_sto3g.hfinp",
+   "input": "tests/inputs/regression/post_hf/ch4_rccsdt_generated_sto3g.hfinp",
    "tags": [
     "extended",
     "generated-kernel"
@@ -1983,9 +2140,6 @@
     "PLANCK_CC_ARBITRARY_LOWER_RANKS",
     "PLANCK_CC_SPIN_ADAPT"
    ],
-   "env": {
-    "PLANCK_RCCSDT_BACKEND": "optimized"
-   },
    "expected_exit_code": 0,
    "contains": [
     "Routing the ccgen-generated rank-3 CCSDT kernels through the arbitrary-order harness",
@@ -2013,9 +2167,6 @@
     "PLANCK_CC_ARBITRARY_LOWER_RANKS",
     "PLANCK_CC_SPIN_ADAPT"
    ],
-   "env": {
-    "PLANCK_RCCSDT_BACKEND": "optimized"
-   },
    "contains": [
     "Routing the ccgen-generated rank-3 CCSDT kernels through the arbitrary-order harness",
     "Running generated arbitrary-order RCC tensor kernels (rank=3"
@@ -2034,7 +2185,7 @@
      "atol": 1e-07
     }
    ],
-   "_note": "W4.5: the SECOND case exercising the ccgen-generated rank-3 route, so it no longer rests on ch4_rccsdt_generated_sto3g alone. Reaches the generated kernel despite nso=12/ndet=495 being far below choose_determinant_backstop's nso>16||ndet>10000 threshold, because PLANCK_RCCSDT_BACKEND=optimized routes through rccgen.cpp to the arbitrary-order harness, which never consults the backstop -- that constraint binds the HAND-WRITTEN tensor path only. Matches the hand-written CCSDT (-7.8823242576) to all ten digits, and runs at 0.04 s/iter against CH4's ~7 min. Requires PLANCK_CC_SPIN_ADAPT: without it the generated emit is the ~4x-wrong historical one (docs/CCGEN_SPIN_ADAPT_DEFAULT.md). Distinct from lih_rccsdt_sto3g, which is 1.595 A with DIIS on and gates the hand-written path."
+   "_note": "W4.5: the SECOND case exercising the ccgen-generated rank-3 route, so it no longer rests on ch4_rccsdt_generated_sto3g alone. Reaches the generated kernel despite nso=12/ndet=495 being far below choose_determinant_backstop's nso>16||ndet>10000 threshold, because rccsdt_backend optimized routes through rccgen.cpp to the arbitrary-order harness, which never consults the backstop -- that constraint binds the HAND-WRITTEN tensor path only. Matches the hand-written CCSDT (-7.8823242576) to all ten digits, and runs at 0.04 s/iter against CH4's ~7 min. Requires PLANCK_CC_SPIN_ADAPT: without it the generated emit is the ~4x-wrong historical one (docs/CCGEN_SPIN_ADAPT_DEFAULT.md). Distinct from lih_rccsdt_sto3g, which is 1.595 A with DIIS on and gates the hand-written path."
   },
   {
    "id": "b_uccsd_sto3g",
@@ -2224,7 +2375,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -148.4133957644,
+     "expected": -148.4133957907,
      "atol": 1e-08
     }
    ]
@@ -2250,7 +2401,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.5911327976,
+     "expected": -74.5911328753,
      "atol": 1e-08
     }
    ]
@@ -2275,7 +2426,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.4880704826,
+     "expected": -74.4880706089,
      "atol": 1e-07
     }
    ]
@@ -2349,7 +2500,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.6536945264,
+     "expected": -74.6536945515,
      "atol": 1e-09
     },
     {
@@ -2387,7 +2538,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -74.6536945264,
+     "expected": -74.6536945515,
      "atol": 1e-09
     }
    ]
@@ -2488,7 +2639,7 @@
    "contains": [
     "Point Group :                 C2v",
     "Vibrational Frequencies :",
-    "Mode    Symmetry    Frequency (cm\u207b\u00b9)",
+    "Mode    Symmetry    Frequency (cm⁻¹)",
     "1  A1",
     "2  A1",
     "3  B2",
@@ -2609,7 +2760,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -75.8097355638,
+     "expected": -75.80973558374832,
      "atol": 1e-09
     },
     {
@@ -2638,7 +2789,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -76.289436536,
+     "expected": -76.2894365556365,
      "atol": 1e-09
     }
    ],
@@ -2665,7 +2816,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -76.3779007886,
+     "expected": -76.37790080626966,
      "atol": 1e-09
     },
     {
@@ -2697,7 +2848,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -76.3015412696,
+     "expected": -76.30154128641203,
      "atol": 1e-09
     },
     {
@@ -2729,7 +2880,7 @@
     {
      "type": "metric_close",
      "metric": "dft_total_energy",
-     "expected": -75.8372242895,
+     "expected": -75.83722431703502,
      "atol": 1e-09
     },
     {
@@ -2739,6 +2890,178 @@
     }
    ],
    "_note": "UKS global-hybrid DFT SOSCF (SOSCF_DFT.md invariant 3). PBE0 water-cation doublet: the polarized h_op gains the spin-resolved K response (-1*(c_fr*K_C + c_sr*K_SR) per spin, from _compute_2e_k_uhf_direct); UKS h_op stays uniform 1x. PBE0 chosen (PBE GGA base) because the polarized fxc is exact there -- B88/LYP-based B3LYP has a pre-existing polarized-fxc residual on small directions, unrelated to the K term (PBE0 scale probe lands on ratio 1.000000). Water cation is a clean single-minimum doublet so SOSCF and DIIS agree to 10 digits (triplet water does not -- SOSCF finds a lower UHF basin there)."
+  },
+  {
+   "id": "water_cation_uks_hse06_stability_ccpvtz",
+   "input": "tests/inputs/regression/dft/water_cation_uks_hse06_stability_ccpvtz.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "open_shell"
+   ],
+   "timeout_s": 600,
+   "_pyscf_reference": "From hcore, UKS HSE06 converges to the 2A1 saddle, -75.8470063038 (PySCF 2A1 with pinned irrep occupations: -75.8469990888, grid floor 7e-6). Lowest UKS orbital-Hessian eigenvalue: Planck -6.385299e-02, PySCF gen_g_hop_uhf -6.380856e-02 (same convention; uhf_internal prints twice this). The follow re-converges to the 2B1 ground state, -75.9126471254 (Planck from guess sad gives the same; PySCF 2B1 -75.9126406581), and the re-check is stable (+6.65e-02).",
+   "expected_exit_code": 0,
+   "contains": [
+    "UKS -> UKS (spin-conserving, internal)",
+    "[UNSTABLE]",
+    "Re-converged after follow: E = -75.9126471254 Eh",
+    "[stable]"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.9126471254,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_hse06_stability_631gd",
+   "input": "tests/inputs/regression/dft/water_cation_uks_hse06_stability_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "open_shell"
+   ],
+   "_pyscf_reference": "UKS HSE06 water+/6-31G* from hcore reaches the ground state. Lowest UKS orbital-Hessian eigenvalue: Planck +6.927525e-02, PySCF gen_g_hop_uhf +6.924065e-02 (grid floor). Energy Planck -75.8691301978, PySCF grids.level 5 -75.8691440229 (the known fine-grid floor between the codes).",
+   "expected_exit_code": 0,
+   "contains": [
+    "UKS -> UKS (spin-conserving, internal)",
+    "λ_min = +6.927",
+    "[stable]"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.8691301978,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "water_rks_hse06_stability_631gd",
+   "input": "tests/inputs/regression/dft/water_rks_hse06_stability_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "smoke",
+    "core",
+    "dft"
+   ],
+   "_pyscf_reference": "RKS HSE06 water/6-31G*: singlet Planck +3.367296e-01, PySCF gen_g_hop_rhf/2 +3.3672234e-01; triplet Planck +2.817728e-01, PySCF rhf_external +2.8176513e-01 (grid floor, level 9). Energy Planck -76.3251576281, PySCF level 9 -76.3251760724. PySCF 2.13.0 gen_g_hop_rhf eigenvalues are twice Planck's singlet (Planck HF water/STO-3G internal-real 0.5607608, PySCF 1.1215215); rhf_external's RHF->UHF Hessian equals Planck's triplet.",
+   "expected_exit_code": 0,
+   "contains": [
+    "RKS -> RKS (real, internal)",
+    "RKS -> UKS (triplet, external)"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_internal",
+     "expected": 0.3367296,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_triplet",
+     "expected": 0.2817728,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3251576281,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "h2_rks_pbe_triplet_follow_sto3g",
+   "input": "tests/inputs/regression/dft/h2_rks_pbe_triplet_follow_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "smoke",
+    "core",
+    "dft"
+   ],
+   "_pyscf_reference": "H2/STO-3G 2.5 A RKS pbe from hcore: singlet Planck +9.301766e-01, PySCF gen_g_hop_rhf/2 +9.3016072e-01; triplet Planck -1.448062e-01, PySCF rhf_external -1.4482081e-01. RKS energy Planck -0.8619160788, PySCF level 9 -0.8619399700 (stretched-bond grid floor). Follow: Planck UKS -0.9302662713, PySCF broken-symmetry UKS -0.9303000702. PySCF 2.13.0 gen_g_hop_rhf eigenvalues are twice Planck's singlet (Planck HF water/STO-3G internal-real 0.5607608, PySCF 1.1215215); rhf_external's RHF->UHF Hessian equals Planck's triplet.",
+   "expected_exit_code": 0,
+   "contains": [
+    "RKS -> UKS (triplet, external)",
+    "[UNSTABLE]",
+    "Following RHF→UHF triplet instability",
+    "Re-converged after follow: E = -0.9302662713 Eh",
+    "UKS -> UKS (spin-conserving, internal)"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_internal",
+     "expected": 0.9301766,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_triplet",
+     "expected": -0.1448062,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -0.9302662713,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "h2_rks_b3lyp_triplet_follow_sto3g",
+   "input": "tests/inputs/regression/dft/h2_rks_b3lyp_triplet_follow_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "dft"
+   ],
+   "_pyscf_reference": "H2/STO-3G 2.5 A RKS b3lyp from hcore: singlet Planck +8.647756e-01, PySCF gen_g_hop_rhf/2 +8.6476058e-01; triplet Planck -2.230623e-01, PySCF rhf_external -2.2308066e-01. RKS energy Planck -0.8515211282, PySCF level 9 -0.8515249709 (stretched-bond grid floor). Follow: Planck UKS -0.9377524499, PySCF broken-symmetry UKS -0.9377675629. PySCF 2.13.0 gen_g_hop_rhf eigenvalues are twice Planck's singlet (Planck HF water/STO-3G internal-real 0.5607608, PySCF 1.1215215); rhf_external's RHF->UHF Hessian equals Planck's triplet.",
+   "expected_exit_code": 0,
+   "contains": [
+    "RKS -> UKS (triplet, external)",
+    "[UNSTABLE]",
+    "Following RHF→UHF triplet instability",
+    "Re-converged after follow: E = -0.9377524499 Eh",
+    "UKS -> UKS (spin-conserving, internal)"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_internal",
+     "expected": 0.8647756,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_triplet",
+     "expected": -0.2230623,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -0.9377524499,
+     "atol": 1e-08
+    }
+   ]
   },
   {
    "id": "h2_dft_tddft_pbe_sto3g",
@@ -3435,7 +3758,7 @@
     {
      "type": "metric_close",
      "metric": "casscf_total_energy",
-     "expected": -74.9641867771,
+     "expected": -74.9641867871,
      "atol": 1e-09
     }
    ]
@@ -3463,7 +3786,7 @@
     {
      "type": "metric_close",
      "metric": "casscf_total_energy",
-     "expected": -77.5145223873,
+     "expected": -77.5145224053,
      "atol": 1e-09
     }
    ]
@@ -3483,7 +3806,7 @@
     {
      "type": "metric_close",
      "metric": "casscf_total_energy",
-     "expected": -74.7877864783,
+     "expected": -74.7877865251,
      "atol": 1e-09
     },
     {
@@ -3513,7 +3836,7 @@
     {
      "type": "metric_close",
      "metric": "casscf_total_energy",
-     "expected": -74.7877864783,
+     "expected": -74.7877865269,
      "atol": 1e-09
     },
     {
@@ -3543,7 +3866,7 @@
     {
      "type": "metric_close",
      "metric": "casscf_total_energy",
-     "expected": -74.7877864784,
+     "expected": -74.787786527,
      "atol": 1e-09
     },
     {
@@ -3580,7 +3903,7 @@
     {
      "type": "metric_close",
      "metric": "casscf_total_energy",
-     "expected": -77.0034974301,
+     "expected": -77.0034974724,
      "atol": 1e-09
     },
     {
@@ -3768,13 +4091,13 @@
     {
      "type": "metric_close",
      "metric": "fciqmc_shift_energy",
-     "expected": -109.3621937007,
+     "expected": -109.3621938886,
      "atol": 0.0
     },
     {
      "type": "metric_close",
      "metric": "fciqmc_projected_energy",
-     "expected": -107.6491159983,
+     "expected": -107.6491160356,
      "atol": 0.0
     }
    ]
@@ -3824,7 +4147,7 @@
     {
      "type": "metric_close",
      "metric": "fci_total_energy",
-     "expected": -75.0124130264,
+     "expected": -75.0124130517,
      "atol": 1e-08
     },
     {
@@ -3851,7 +4174,7 @@
     {
      "type": "metric_close",
      "metric": "fci_total_energy",
-     "expected": -147.7441885427,
+     "expected": -147.7441885782,
      "atol": 1e-08
     },
     {
@@ -3989,6 +4312,7 @@
   {
    "id": "water_spherical_ccsd_sto3g",
    "input": "tests/inputs/regression/spherical/water_spherical_ccsd_sto3g.hfinp",
+   "_pyscf_reference": "PySCF 2.13.0 RCCSD, cart=False, Planck's GBS: -75.0123316192. Re-pinned 2026-11-07 from Planck's own output (-75.0123310010), which lacked the F_me terms of the Stanton-Gauss doubles equation.",
    "tags": [
     "smoke",
     "core",
@@ -4004,7 +4328,7 @@
     {
      "type": "metric_close",
      "metric": "rccsd_total_energy",
-     "expected": -75.0123309822,
+     "expected": -75.0123316192,
      "atol": 1e-09
     },
     {
@@ -4017,6 +4341,7 @@
   {
    "id": "be_ccsd_spherical_631gd",
    "input": "tests/inputs/regression/spherical/be_ccsd_spherical_631gd.hfinp",
+   "_pyscf_reference": "PySCF 2.13.0 RCCSD, cart=False, Planck's GBS: -14.6138661380. Re-pinned 2026-11-07 from Planck's own output (-14.6138647122), which lacked the F_me terms of the Stanton-Gauss doubles equation.",
    "tags": [
     "extended",
     "spherical"
@@ -4032,8 +4357,8 @@
     {
      "type": "metric_close",
      "metric": "rccsd_total_energy",
-     "expected": -14.6138647122,
-     "atol": 1e-08
+     "expected": -14.613866138,
+     "atol": 1e-09
     },
     {
      "type": "metric_lt_metric",
@@ -4056,7 +4381,7 @@
     "Computing analytic nuclear gradient",
     "Nuclear Gradient (Ha/Bohr) :"
    ],
-   "_pyscf_reference": "PySCF 6-31g* RHF, mol.cart=False (spherical AO), water at the input geometry: E=-76.009125642007 Eh, gradient max|g|=1.47293665e-2 Ha/Bohr, rms|g|=6.9308072e-3 Ha/Bohr. Reference computed by tests/pyscf-style script; per-component values: O z = +0.0147293665, H y = \u00b10.0073107264, H z = -0.0073646832 Ha/Bohr.",
+   "_pyscf_reference": "PySCF 6-31g* RHF, mol.cart=False (spherical AO), water at the input geometry: E=-76.009125642007 Eh, gradient max|g|=1.47293665e-2 Ha/Bohr, rms|g|=6.9308072e-3 Ha/Bohr. Reference computed by tests/pyscf-style script; per-component values: O z = +0.0147293665, H y = ±0.0073107264, H z = -0.0073646832 Ha/Bohr.",
    "checks": [
     {
      "type": "metric_close",
@@ -4080,6 +4405,122 @@
      "type": "metric_eq",
      "metric": "gradient_atom_lines",
      "expected": 3
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_stability_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_rhf_stability_spherical_631gd.hfinp",
+   "tags": [
+    "core",
+    "spherical"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 RHF/6-31G* cart=False: E -76.0091256420; real internal +3.6595924e-01 (gen_g_hop_rhf/2), complex +3.3520547e-01, triplet +2.8865272e-01 (_gen_hop_rhf_external). S0.6 (docs/SPHERICAL_DFT.md): before 100675e4 / this fix the HF stability and CPHF code sized the spherical ERI tensor with the Cartesian nbasis().",
+   "expected_exit_code": 0,
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "stability_real_internal",
+     "expected": 0.3659592,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_complex_internal",
+     "expected": 0.3352054,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_triplet_external",
+     "expected": 0.2886527,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.00912564,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uhf_stability_follow_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_cation_uhf_stability_follow_spherical_631gd.hfinp",
+   "tags": [
+    "core",
+    "spherical",
+    "open_shell"
+   ],
+   "_pyscf_reference": "From hcore Planck converges a saddle at -75.5250137274 (lambda -8.542422e-02, not reachable in PySCF, whose 1e guess lands on the ground state). The follow reaches -75.6104747910; PySCF cart=False UHF -75.6104747768 with gen_g_hop_uhf lambda +8.4419004e-02 (Planck from guess sad: +8.441901e-02). S0.6 (docs/SPHERICAL_DFT.md): before 100675e4 / this fix the HF stability and CPHF code sized the spherical ERI tensor with the Cartesian nbasis().",
+   "expected_exit_code": 0,
+   "contains": [
+    "UHF -> UHF (spin-conserving, internal)",
+    "[UNSTABLE]",
+    "Following internal instability"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "stability_uhf_internal",
+     "expected": -0.08542422,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.610474791,
+     "atol": 1e-07
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_soscf_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_rhf_soscf_spherical_631gd.hfinp",
+   "tags": [
+    "core",
+    "spherical"
+   ],
+   "_note": "Before the fix the spherical RHF SOSCF Hessian indexed the spherical ERI tensor with Cartesian strides: |g| grew 0.23 -> 0.86 -> 0.64, every AH solve hit 30 iterations with residual > 1, and DIIS rescued convergence (19 iterations). Fixed: 0.23 -> 0.039 -> 0.0025, 14 iterations. Energy equals DIIS (-76.0091256400).",
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_le",
+     "metric": "soscf_last_gradient",
+     "value": 0.01
+    },
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.00912564,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uhf_soscf_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_cation_uhf_soscf_spherical_631gd.hfinp",
+   "tags": [
+    "core",
+    "spherical",
+    "open_shell"
+   ],
+   "_note": "Before the fix the UHF CPHF build passed working-basis (spherical) densities to the Cartesian Fock build; last SOSCF |g| 9.5e-2 with AH residual ~0.1. Fixed (lifted with to_cartesian/to_working): 0.26 -> 0.030 -> 0.0022. Energy equals DIIS from the same hcore guess (-75.5250137274, the 2A1 saddle).",
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_le",
+     "metric": "soscf_last_gradient",
+     "value": 0.01
+    },
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.5250137274,
+     "atol": 1e-08
     }
    ]
   },
@@ -4436,6 +4877,894 @@
    ]
   },
   {
+   "id": "water_rks_b3lyp_spherical_ccpvtz",
+   "input": "tests/inputs/regression/spherical/water_rks_b3lyp_spherical_ccpvtz.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "spherical",
+    "dft"
+   ],
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4537170708,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 RKS B3LYP cart=False, Planck's GBS and Bohr, 150 radial x 590 Lebedev, unpruned (grid_radial_points / grid_angular_points; PySCF atom_grid=(150,590), prune=None): -76.45371707079 (Planck -76.45371707079, 2.8e-13). Same comparison cart=True: 5.8e-13, the grid floor."
+  },
+  {
+   "id": "water_rks_hse06_spherical_ccpvtz",
+   "input": "tests/inputs/regression/spherical/water_rks_hse06_spherical_ccpvtz.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "spherical",
+    "dft"
+   ],
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3757510018,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 RKS HSE06 cart=False, 150 radial x 590 Lebedev, unpruned (grid_radial_points / grid_angular_points; PySCF atom_grid=(150,590), prune=None): Planck - PySCF 8.5e-14 (cart=True 4.3e-13). Exercises the short-range exchange K through the spherical boundary."
+  },
+  {
+   "id": "water_cation_uks_pbe_spherical_ccpvtz",
+   "input": "tests/inputs/regression/spherical/water_cation_uks_pbe_spherical_ccpvtz.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "spherical",
+    "dft",
+    "open_shell"
+   ],
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.8961252144,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 UKS PBE cart=False, water cation doublet, 150 radial x 590 Lebedev, unpruned (grid_radial_points / grid_angular_points; PySCF atom_grid=(150,590), prune=None): Planck - PySCF 3.6e-13 (cart=True 7.0e-13)."
+  },
+  {
+   "id": "h2o2_rks_b3lyp_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_rks_b3lyp_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "spherical",
+    "dft"
+   ],
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -151.5284586353,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 RKS B3LYP cart=False, C1 H2O2 (unequal O-H, non-planar), 150 radial x 590 Lebedev, unpruned (grid_radial_points / grid_angular_points; PySCF atom_grid=(150,590), prune=None): Planck - PySCF 2.1e-12 (cart=True 2.5e-12)."
+  },
+  {
+   "id": "h2o2_cation_uks_pbe_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_cation_uks_pbe_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "spherical",
+    "dft",
+    "open_shell"
+   ],
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -150.9912749866,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 UKS PBE cart=False, C1 H2O2 cation doublet, 150 radial x 590 Lebedev, unpruned (grid_radial_points / grid_angular_points; PySCF atom_grid=(150,590), prune=None): Planck - PySCF 2.1e-12 (cart=True 2.1e-12)."
+  },
+  {
+   "id": "water_rks_b3lyp_stability_spherical_ccpvtz",
+   "input": "tests/inputs/regression/spherical/water_rks_b3lyp_stability_spherical_ccpvtz.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "spherical"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_ks_stability_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned): E -76.4537170708, singlet gen_g_hop_rhf/2 +0.2999875, triplet rhf_external +0.2569171. Planck +0.2999874 / +0.2569170.",
+   "expected_exit_code": 0,
+   "contains": [
+    "RKS -> RKS (real, internal)",
+    "RKS -> UKS (triplet, external)"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4537170708,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_internal",
+     "expected": 0.2999875,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_triplet",
+     "expected": 0.2569171,
+     "atol": 1e-06
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_pbe_stability_spherical_ccpvtz",
+   "input": "tests/inputs/regression/spherical/water_cation_uks_pbe_stability_spherical_ccpvtz.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "spherical",
+    "open_shell"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_ks_stability_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned): E -75.8961252144, gen_g_hop_uhf +0.0659503. Planck +0.06595028.",
+   "expected_exit_code": 0,
+   "contains": [
+    "UKS -> UKS (spin-conserving, internal)"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.8961252144,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_uks_internal",
+     "expected": 0.0659503,
+     "atol": 1e-06
+    }
+   ]
+  },
+  {
+   "id": "h2o2_cation_uks_pbe_stability_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_cation_uks_pbe_stability_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "open_shell"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_ks_stability_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned): E -150.9912749866, gen_g_hop_uhf +0.0810548. Planck +0.08105482.",
+   "expected_exit_code": 0,
+   "contains": [
+    "UKS -> UKS (spin-conserving, internal)"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -150.9912749866,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "stability_uks_internal",
+     "expected": 0.0810548,
+     "atol": 1e-06
+    }
+   ]
+  },
+  {
+   "id": "h2_rks_pbe_triplet_follow_spherical_ccpvdz",
+   "input": "tests/inputs/regression/spherical/h2_rks_pbe_triplet_follow_spherical_ccpvdz.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_ks_stability_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned): RKS -0.9582355548, triplet rhf_external -0.0992334; broken-symmetry UKS from a +-45 deg HOMO/LUMO guess -0.9997290788 (<S^2> 0.948). Planck triplet -0.09923338, follow -0.9997290788.",
+   "expected_exit_code": 0,
+   "contains": [
+    "RKS -> UKS (triplet, external)",
+    "Following RHF→UHF triplet instability",
+    "UKS -> UKS (spin-conserving, internal)"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "stability_rks_triplet",
+     "expected": -0.0992334,
+     "atol": 1e-06
+    },
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -0.9997290788,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rks_b3lyp_soscf_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_rks_b3lyp_soscf_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical"
+   ],
+   "_pyscf_reference": "Same energy as the DIIS case h2o2_rks_b3lyp_spherical_631gd (PySCF cart=False -151.5284586353). Gradient over the 3-step window 9.8e-2 -> 9.5e-3 -> 5.9e-4; the Cartesian control decays at the same rate (1.4e-1 -> 1.0e-2 -> 8.8e-4). The energy alone cannot gate this: DIIS takes over after the window and would converge with a wrong Hessian.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT SOSCF :",
+    "DFT Energy :"
+   ],
+   "not_contains": [
+    "requested but disabled"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -151.5284586353,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_le",
+     "metric": "dft_soscf_last_gradient",
+     "value": 0.001
+    }
+   ]
+  },
+  {
+   "id": "h2o2_cation_uks_pbe_soscf_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_cation_uks_pbe_soscf_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "open_shell"
+   ],
+   "_pyscf_reference": "Same energy as the DIIS case h2o2_cation_uks_pbe_spherical_631gd (PySCF cart=False -150.9912749866). Gradient 1.6e-1 -> 1.5e-2 -> 4.8e-3; the Cartesian control is worse on this system (trust cap fires, last |g| 5.0e-2), so the slow last step is the system's, not the lift's.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT UKS SOSCF :",
+    "DFT Energy :"
+   ],
+   "not_contains": [
+    "requested but disabled"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -150.9912749866,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_le",
+     "metric": "dft_soscf_last_gradient",
+     "value": 0.01
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rks_b3lyp_gradient_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_rks_b3lyp_gradient_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "gradient"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_ks_gradient_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned, grid_response=True, conv_tol_grad 1e-9): E -151.5284586353; C1 H2O2, all 12 components independent. Planck max |dg| 1.7e-10.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -151.5284586353,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       -0.004339447059,
+       -0.016725462658,
+       9.5743587e-05
+      ],
+      [
+       0.023342421176,
+       0.017904465707,
+       -0.008981575084
+      ],
+      [
+       0.004740019261,
+       0.002289448145,
+       0.001370715081
+      ],
+      [
+       -0.023742993378,
+       -0.003468451194,
+       0.007515116415
+      ]
+     ],
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rks_hse06_gradient_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_rks_hse06_gradient_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "spherical",
+    "gradient"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_ks_gradient_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned, grid_response=True, conv_tol_grad 1e-9): E -151.3823120967; C1 H2O2, all 12 components independent. Planck max |dg| 1.2e-10 (exercises the long-range exchange derivative).",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -151.3823120967,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       -0.006657475211,
+       -0.005785596212,
+       -0.002172406944
+      ],
+      [
+       0.02609008536,
+       0.006787929077,
+       -0.009481796289
+      ],
+      [
+       0.007641301289,
+       0.003661454631,
+       0.002926986909
+      ],
+      [
+       -0.027073911438,
+       -0.004663787496,
+       0.008727216324
+      ]
+     ],
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "h2o2_cation_uks_pbe_gradient_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_cation_uks_pbe_gradient_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "gradient",
+    "open_shell"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_ks_gradient_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned, grid_response=True, conv_tol_grad 1e-9): E -150.9912749866; C1 H2O2, all 12 components independent. Planck max |dg| 3.4e-10. With PySCF's default conv_tol_grad (sqrt(conv_tol) = 1e-6) the reference was 3.2e-8 off; the gap was PySCF's, not Planck's.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -150.9912749866,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.034001625389,
+       0.054405178396,
+       -0.00509086286
+      ],
+      [
+       -0.013589716382,
+       -0.052752121636,
+       -0.0116445496
+      ],
+      [
+       -0.035476907643,
+       -0.007341386008,
+       0.002323585233
+      ],
+      [
+       0.015064998635,
+       0.005688329248,
+       0.014411827226
+      ]
+     ],
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rks_b3lyp_geomoptfreq_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_rks_b3lyp_geomoptfreq_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "spherical",
+    "geomopt"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_ks_gradient_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned, grid_response=True, conv_tol_grad 1e-9): geometric_solver gau_tight E_opt -76.4070241417, analytic Hessian freqs 1710.70 / 3720.74 / 3844.54 cm^-1. Planck stops at its default max|g| 3e-4 (2.2e-4 here; the tolerance is not an input keyword), so E_opt sits 3.2e-7 above and the semi-numerical freqs (1711.55 / 3722.27 / 3845.30) within 1.6 cm^-1.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Vibrational Frequencies"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4070241417,
+     "atol": 5e-07
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 0.0003
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1710.7,
+     "atol": 2.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 3720.74,
+     "atol": 2.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 3844.54,
+     "atol": 2.0
+    }
+   ]
+  },
+  {
+   "id": "water_tddft_b3lyp_casida_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_tddft_b3lyp_casida_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "tddft"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_tddft_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned, conv_tol_grad 1e-9): E -76.4067844645; roots (eV) 8.0728669 / 10.0762857 / 10.5567590 / 12.7429909; f 0.015990 / 0 / 0.090983 / 0.072565. Planck agrees to the 1e-7 printed precision in energies and oscillator strengths.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4067844645,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 8.0728669,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 10.0762857,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 10.556759,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 12.7429909,
+     "atol": 1e-05
+    }
+   ]
+  },
+  {
+   "id": "water_tddft_b3lyp_triplet_tda_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_tddft_b3lyp_triplet_tda_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "spherical",
+    "tddft"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_tddft_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned, conv_tol_grad 1e-9): E -76.4067844645; roots (eV) 7.3292924 / 9.4544582 / 9.5485905 / 11.4711246; triplet TDA. Planck agrees to the 1e-7 printed precision in energies and oscillator strengths.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4067844645,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 7.3292924,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 9.4544582,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 9.5485905,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 11.4711246,
+     "atol": 1e-05
+    }
+   ]
+  },
+  {
+   "id": "water_tddft_hse06_casida_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_tddft_hse06_casida_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "tddft"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_tddft_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned, conv_tol_grad 1e-9): E -76.3305499778; roots (eV) 8.3937098 / 10.3967999 / 10.9029251 / 13.0846357; f 0.017180 / 0 / 0.096319 / 0.077613. Roots 3-4 were 1.1e-4 / 4.4e-4 eV off with the old finite-difference XC kernel, whose central difference straddled libxc's wPBEh s = 1 discontinuity; the analytic f_xc kernel removed it. Planck agrees to the 1e-7 printed precision in energies and oscillator strengths.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3305499778,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 8.3937098,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 10.3967999,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 10.9029251,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 13.0846357,
+     "atol": 1e-05
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_tddft_b3lyp_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_cation_uks_tddft_b3lyp_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "spherical",
+    "tddft",
+    "open_shell"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_tddft_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned, conv_tol_grad 1e-9): E -75.9512104442; roots (eV) 2.4476834 / 6.5853574 / 13.2499391 / 14.2236962; UKS spin-conserving Casida, f 0.001205 / 0 / 0.003660 / 0.016352. Planck agrees to the 1e-7 printed precision in energies and oscillator strengths.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.9512104442,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 2.4476834,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 6.5853574,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 13.2499391,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 14.2236962,
+     "atol": 1e-05
+    }
+   ]
+  },
+  {
+   "id": "water_rks_b2plyp_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_rks_b2plyp_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "double_hybrid"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_dh_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned; B2PLYP as 0.53*HF + 0.47*B88, 0.73*LYP plus 0.27 x all-electron MP2): E_scf -76.2733602848, bare PT2 -0.2219830098, E -76.3332956974. Planck matches every printed digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Double Hybrid :",
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3332956974,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_b2plyp_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_cation_uks_b2plyp_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "spherical",
+    "double_hybrid",
+    "open_shell"
+   ],
+   "_pyscf_reference": "tests/pyscf/spherical_dh_references.py (PySCF 2.13.0, cart=False, Planck's GBS and Bohr, 150 x 590 unpruned; B2PLYP as 0.53*HF + 0.47*B88, 0.73*LYP plus 0.27 x all-electron MP2): E_scf -75.8396557483, bare PT2 -0.1628046292, E -75.8836129982 (the 2B1 ground state; guess sad, since hcore reaches the 2A1 saddle 0.083 Eh above). Planck matches every printed digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Double Hybrid :",
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.8836129982,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rks_b2plyp_gradient_spherical_rejected",
+   "input": "tests/inputs/regression/spherical/water_rks_b2plyp_gradient_spherical_rejected.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "smoke",
+    "core",
+    "dft",
+    "spherical",
+    "double_hybrid"
+   ],
+   "_note": "Double-hybrid gradients need a Cartesian basis (docs/SPHERICAL_DFT.md step 5); the refusal must name the workflow.",
+   "expected_exit_code": 1,
+   "contains": [
+    "A double-hybrid functional with analytic gradients is not yet supported by planck-dft with basis_type spherical"
+   ]
+  },
+  {
+   "id": "water_rks_b3lyp_projected_restart_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_rks_b3lyp_projected_restart_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "checkpoint"
+   ],
+   "setup": {
+    "seed_input": "tests/inputs/regression/seeds/water_rks_b3lyp_projection_seed_spherical_sto3g.hfinp"
+   },
+   "_note": "Spherical RKS B3LYP restart: sto-3g checkpoint projected onto 6-31G* through SCF::project_checkpoint_density (shared with hartree-fock). Must reach the fresh hcore-start energy -76.4067826755.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Basis change detected (sto-3g",
+    "Density projection successful",
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4067826755,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_pbe_full_restart_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_cation_uks_pbe_full_restart_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "checkpoint",
+    "open_shell"
+   ],
+   "setup": {
+    "seed_input": "tests/inputs/regression/seeds/water_cation_uks_pbe_restart_seed_spherical_631gd.hfinp"
+   },
+   "_note": "Spherical UKS water+ PBE same-basis guess full restart from a SAD-start seed (-75.8658339680, the 2B1 state). Must stay on the seed's state.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Loaded from",
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.865833968,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "water_rks_b3lyp_cartesian_checkpoint_refused_spherical_631gd",
+   "input": "tests/inputs/regression/spherical/water_rks_b3lyp_cartesian_checkpoint_refused_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "spherical",
+    "checkpoint"
+   ],
+   "setup": {
+    "seed_input": "tests/inputs/regression/seeds/water_rks_b3lyp_cartesian_seed_sto3g.hfinp"
+   },
+   "_note": "A spherical restart from a Cartesian checkpoint is refused by name and falls back to H_core, reaching the fresh energy -76.4067826755.",
+   "expected_exit_code": 0,
+   "contains": [
+    "a spherical cross-basis restart requires a spherical checkpoint",
+    "DFT Energy :"
+   ],
+   "not_contains": [
+    "Density projection successful"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.4067826755,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "water_rks_b3lyp_spherical_631g_exact",
+   "input": "tests/inputs/regression/spherical/water_rks_b3lyp_spherical_631g_exact.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "smoke",
+    "core",
+    "spherical",
+    "dft"
+   ],
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3780274825,
+     "atol": 1e-09
+    }
+   ],
+   "_note": "Exact gate: equals the Cartesian B3LYP/6-31G energy of the same input with basis_type cartesian (-76.3780274825); measured difference 8.5e-14."
+  },
+  {
    "id": "water_rmp2_spherical_631gd",
    "input": "tests/inputs/regression/spherical/water_rmp2_spherical_631gd.hfinp",
    "tags": [
@@ -4464,6 +5793,35 @@
    ]
   },
   {
+   "id": "water_rmp2_spherical_631gd_direct",
+   "input": "tests/inputs/regression/spherical/water_rmp2_spherical_631gd_direct.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "spherical"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged after",
+    "Building spherical AO ERI tensor"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.009125642,
+     "atol": 1e-08
+    },
+    {
+     "type": "metric_close",
+     "metric": "mp2_total_energy",
+     "expected": -76.19532147291,
+     "atol": 1e-07
+    }
+   ],
+   "_note": "docs/SPHERICAL_DFT.md S0.2: same system as water_rmp2_spherical_631gd after a direct SCF, which caches no ERI tensor; ensure_eri now builds the Cartesian tensor and transforms it. Before the fix this crashed (SIGSEGV) after SCF."
+  },
+  {
    "id": "h2o_cation_ump2_spherical_631gd",
    "input": "tests/inputs/regression/spherical/h2o_cation_ump2_spherical_631gd.hfinp",
    "tags": [
@@ -4490,6 +5848,35 @@
      "atol": 1e-07
     }
    ]
+  },
+  {
+   "id": "h2o_cation_ump2_spherical_631gd_direct",
+   "input": "tests/inputs/regression/spherical/h2o_cation_ump2_spherical_631gd_direct.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "spherical"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "UHF Converged :",
+    "Building spherical AO ERI tensor"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.6104747767,
+     "atol": 1e-07
+    },
+    {
+     "type": "metric_close",
+     "metric": "mp2_total_energy",
+     "expected": -75.747266982,
+     "atol": 1e-07
+    }
+   ],
+   "_note": "docs/SPHERICAL_DFT.md S0.2: same system as h2o_cation_ump2_spherical_631gd after a direct SCF, which caches no ERI tensor; ensure_eri now builds the Cartesian tensor and transforms it. Before the fix this crashed (SIGSEGV) after SCF."
   },
   {
    "id": "water_casscf44_spherical_631gd",
@@ -5109,6 +6496,789 @@
      "metric": "vib_freq_3",
      "expected": 4038.8,
      "atol": 2.0
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_spherical_def2svp",
+   "input": "tests/inputs/regression/spherical/water_rhf_spherical_def2svp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "spherical",
+    "def2"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.9609839871,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP), docs/DEF2_ECP.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903)."
+  },
+  {
+   "id": "water_rhf_spherical_def2qzvp",
+   "input": "tests/inputs/regression/spherical/water_rhf_spherical_def2qzvp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "spherical",
+    "def2"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0667381021,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-QZVP (g shells)), docs/DEF2_ECP.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903)."
+  },
+  {
+   "id": "h2s_rhf_spherical_def2tzvp",
+   "input": "tests/inputs/regression/spherical/h2s_rhf_spherical_def2tzvp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "spherical",
+    "def2"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -398.7065995926,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-TZVP, third row), docs/DEF2_ECP.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903)."
+  },
+  {
+   "id": "sih4_rhf_spherical_def2svp",
+   "input": "tests/inputs/regression/spherical/sih4_rhf_spherical_def2svp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "spherical",
+    "def2"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -291.1539248719,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP, third row), docs/DEF2_ECP.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903)."
+  },
+  {
+   "id": "zncl2_rhf_spherical_def2svp",
+   "input": "tests/inputs/regression/spherical/zncl2_rhf_spherical_def2svp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "spherical",
+    "def2"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -2696.3869858561,
+     "atol": 5e-10
+    }
+   ],
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP, first-row transition metal), docs/DEF2_ECP.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903). The old 1.2e-9 residual was Planck's default tol_eri (1e-10) screening; with tol_eri 1e-12 Planck matches every printed digit."
+  },
+  {
+   "id": "hi_rhf_def2svp_ecp",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "smoke",
+    "def2",
+    "ecp"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -297.2315316634,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr."
+  },
+  {
+   "id": "hi_rhf_def2tzvp_ecp_sad_symm",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2tzvp_ecp_sad_symm.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -297.2420092462,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr."
+  },
+  {
+   "id": "agcl_rhf_def2svp_ecp",
+   "input": "tests/inputs/regression/hf/agcl_rhf_def2svp_ecp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -605.4799989662,
+     "atol": 5e-10
+    }
+   ],
+   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr. The earlier ~1e-9 gap was Planck's default tol_eri (1e-10) integral screening; the input sets tol_eri 1e-12 and Planck matches every printed digit."
+  },
+  {
+   "id": "pdco_rhf_def2svp_ecp",
+   "input": "tests/inputs/regression/hf/pdco_rhf_def2svp_ecp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -239.6604996193,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr."
+  },
+  {
+   "id": "auh_h2o_rhf_def2svp_ecp",
+   "input": "tests/inputs/regression/hf/auh_h2o_rhf_def2svp_ecp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -211.3002206624,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr."
+  },
+  {
+   "id": "hi_rhf_def2svp_ecp_gradient",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp_gradient.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "smoke",
+    "def2",
+    "ecp"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 RHF/def2-SVP analytic gradient (cart=False, ECP from Planck's GBS, def2_ecp_references.py loader): z = -/+3.0433018574e-03 Ha/Bohr on H/I, max 3.0433018574e-03, rms 1.7570511466e-03. Planck agrees in every printed digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "atom 2 I: 28 core electrons, Z_eff 25, L 3, terms 4/7/8/10"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "gradient_max",
+     "expected": 3.0433018574e-03,
+     "atol": 1e-07
+    },
+    {
+     "type": "metric_close",
+     "metric": "gradient_rms",
+     "expected": 1.7570511466e-03,
+     "atol": 1e-07
+    }
+   ]
+  },
+  {
+   "id": "auh_h2o_rhf_def2svp_ecp_gradient",
+   "input": "tests/inputs/regression/hf/auh_h2o_rhf_def2svp_ecp_gradient.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "core",
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 RHF/def2-SVP analytic gradient, C1, all 15 components nonzero; max 4.8635659355e-02, rms 1.9234832752e-02. Planck matches every component to <= 3e-8 Ha/Bohr.",
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "gradient_max",
+     "expected": 4.8635659355e-02,
+     "atol": 1e-07
+    },
+    {
+     "type": "metric_close",
+     "metric": "gradient_rms",
+     "expected": 1.9234832752e-02,
+     "atol": 1e-07
+    }
+   ]
+  },
+  {
+   "id": "auh_h2o_rhf_def2svp_ecp_gradient_fd",
+   "input": "tests/inputs/regression/hf/auh_h2o_rhf_def2svp_ecp_gradient.hfinp",
+   "executable": "tests/hf_gradient_fd.py",
+   "args": [
+    "--atol",
+    "1e-6"
+   ],
+   "tags": [
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "timeout_s": 600,
+   "_note": "Analytic ECP gradient against Planck's own central-difference energies (30 SCFs): a check sharing no code with libecpint's derivative or PySCF.",
+   "expected_exit_code": 0,
+   "contains": [
+    "PASS"
+   ]
+  },
+  {
+   "id": "hi_rhf_def2svp_ecp_geomopt",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp_geomopt.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "timeout_s": 300,
+   "_pyscf_reference": "PySCF 2.13.0 RHF/def2-SVP + geometric_solver (gmax/grms 1e-6): E_opt = -297.2315523046 Eh, r(H-I) = 1.6018605 Ang. Planck IC-BFGS: -297.2315523030 Eh (Delta 1.6e-9), r = 1.6017967 Ang at final max|g| 2.7e-5.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Geometry Optimization",
+    "Final Energy",
+    "Optimized Geometry"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -297.2315523046,
+     "atol": 1e-07
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 0.0005
+    }
+   ]
+  },
+  {
+   "id": "hi_rhf_def2svp_ecp_freq",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp_freq.hfinp",
+   "tags": [
+    "core",
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "timeout_s": 300,
+   "_pyscf_reference": "PySCF 2.13.0 RHF/def2-SVP at the input geometry (r = 1.609 Ang): central differences of analytic gradients (1e-3 Bohr) + thermo.harmonic_analysis, stretch = 2421.80 cm-1. Planck semi-numerical Hessian: 2421.83 cm-1 (Delta 0.03).",
+   "expected_exit_code": 0,
+   "contains": [
+    "Vibrational Frequencies",
+    "Frequency (cm"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 2421.80,
+     "atol": 1.0
+    }
+   ]
+  },
+  {
+   "id": "hi_cation_uhf_def2svp_ecp_gradient",
+   "input": "tests/inputs/regression/hf/hi_cation_uhf_def2svp_ecp_gradient.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "core",
+    "extended",
+    "def2",
+    "ecp",
+    "open_shell"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 UHF/def2-SVP, HI+ doublet: E = -296.8760702707 Eh, analytic gradient max 4.1303019051e-03, rms 2.3846309167e-03 Ha/Bohr. Planck agrees in every printed digit (energy and gradient).",
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "gradient_max",
+     "expected": 4.1303019051e-03,
+     "atol": 1e-07
+    },
+    {
+     "type": "metric_close",
+     "metric": "gradient_rms",
+     "expected": 2.3846309167e-03,
+     "atol": 1e-07
+    }
+   ]
+  },
+  {
+   "id": "hi_cation_rohf_def2svp_ecp_gradient",
+   "input": "tests/inputs/regression/hf/hi_cation_rohf_def2svp_ecp_gradient.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "core",
+    "extended",
+    "def2",
+    "ecp",
+    "open_shell"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 ROHF/def2-SVP, HI+ doublet: E = -296.8724707727 Eh, analytic gradient max 3.9617395647e-03, rms 2.2873114041e-03 Ha/Bohr. Planck agrees in every printed digit (energy and gradient).",
+   "expected_exit_code": 0,
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "gradient_max",
+     "expected": 3.9617395647e-03,
+     "atol": 1e-07
+    },
+    {
+     "type": "metric_close",
+     "metric": "gradient_rms",
+     "expected": 2.2873114041e-03,
+     "atol": 1e-07
+    }
+   ]
+  },
+  {
+   "id": "hi_rccsd_def2svp_ecp",
+   "input": "tests/inputs/regression/post_hf/hi_rccsd_def2svp_ecp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 CCSD/def2-SVP, cart=False, basis and ECP from Planck's GBS (tests/pyscf/def2_ecp_post_hf_references.py): RHF -297.2315316634, E_corr -0.1558820405, total -297.3874137039. Before 2026-11-07 Planck's RCCSD lacked the F_me terms of the doubles equation (E_corr -0.1558819666).",
+   "expected_exit_code": 0,
+   "timeout_s": 600,
+   "contains": [
+    "Total RCCSD Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rccsd_total_energy",
+     "expected": -297.3874137039,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "hi_rmp2_def2svp_ecp",
+   "input": "tests/inputs/regression/post_hf/hi_rmp2_def2svp_ecp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "core",
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 RMP2/def2-SVP, cart=False, basis and ECP from Planck's GBS (tests/pyscf/def2_ecp_references.py loader): E_corr = -0.1434184970. Before 100675e4 the MP2 electron count summed Z and ignored the 28-electron ECP core, giving -0.0059849856 with no warning.",
+   "expected_exit_code": 0,
+   "contains": [
+    "SCF Converged",
+    "Total MP2 Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -297.2315316634,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "mp2_corr_energy",
+     "expected": -0.1434184970,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "hi_casscf_def2svp_ecp",
+   "input": "tests/inputs/regression/post_hf/hi_casscf_def2svp_ecp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "core",
+    "extended",
+    "def2",
+    "ecp",
+    "casscf"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 CASSCF(2,2) (H-I sigma/sigma*), cart=False, basis and ECP from Planck's GBS (tests/pyscf/def2_ecp_post_hf_references.py 2 2): E -297.2376744586. Planck -297.2376744585 (1e-10).",
+   "expected_exit_code": 0,
+   "contains": [
+    "CASSCF Total Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "casscf_total_energy",
+     "expected": -297.2376744586,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "hi_cation_uhf_def2svp_ecp_stability",
+   "input": "tests/inputs/regression/hf/hi_cation_uhf_def2svp_ecp_stability.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "core",
+    "extended",
+    "def2",
+    "ecp",
+    "open_shell"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 UHF/def2-SVP HI+ doublet: E = -296.8760702707 Eh, internal stability lowest eigenvalue +3.9e-10 (the zero mode of the degenerate Pi hole). Before 100675e4 the stability electron count ignored the ECP core: lambda -0.1865 [UNSTABLE], and the follow raised the energy 0.14 Eh.",
+   "expected_exit_code": 0,
+   "contains": [
+    "UHF -> UHF (spin-conserving, internal)"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -296.8760702707,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_le",
+     "metric": "stability_uhf_internal",
+     "value": 1e-08
+    },
+    {
+     "type": "metric_ge",
+     "metric": "stability_uhf_internal",
+     "value": -1e-08
+    }
+   ]
+  },
+  {
+   "id": "hi_rhf_def2svp_ecp_restart_full",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp_restart_full.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "setup": {
+    "seed_input": "tests/inputs/regression/seeds/hi_rhf_def2svp_ecp_restart_seed.hfinp"
+   },
+   "expected_exit_code": 0,
+   "contains": [
+    "Checkpoint :                  Loaded from",
+    "SCF Converged after 2 iterations"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -297.2315316634,
+     "atol": 1e-09
+    }
+   ],
+   "_note": "docs/DEF2_ECP.md step 4b: guess-full restart from a version-8 checkpoint carrying the iodine ECP core count. Energy is PySCF's."
+  },
+  {
+   "id": "hi_rhf_def2svp_ecp_projection_refused",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp_projection_refused.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "smoke",
+    "def2",
+    "ecp"
+   ],
+   "setup": {
+    "seed_input": "tests/inputs/regression/seeds/hi_rhf_321g_ecp_projection_seed.hfinp"
+   },
+   "expected_exit_code": 0,
+   "contains": [
+    "Projection failed: ECP core electrons differ between the checkpoint and current basis",
+    "SCF Converged after"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -297.2315316634,
+     "atol": 1e-09
+    }
+   ],
+   "_note": "docs/DEF2_ECP.md step 4b: a 3-21G (all-electron iodine, 54 electrons) density must not be projected into def2-SVP (26 electrons). Also gates the fallback rebuilding the spherical 1e matrices: before the fix it kept the Cartesian ones and diverged."
+  },
+  {
+   "id": "hi_rhf_def2svp_ecp_fcidump",
+   "input": "tests/inputs/regression/hf/hi_rhf_def2svp_ecp_fcidump.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "smoke",
+    "def2",
+    "ecp"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "FCIDUMP :                     Wrote 31 orbitals, 26 electrons",
+    "13                -0.384222  <-- HOMO"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -297.2315316634,
+     "atol": 1e-09
+    }
+   ],
+   "_pyscf_reference": "docs/DEF2_ECP.md step 4b. tests/pyscf/def2_ecp_references.py --fcidump <file>: the FCIDUMP's reference determinant and an RHF solved on it both equal PySCF's ECP RHF energy to 2e-12; PySCF HOMO -0.384222. The HOMO line gates the MO printout's electron count (Z - n_core, was sum Z)."
+  },
+  {
+   "id": "hi_rks_pbe_def2svp_ecp",
+   "input": "tests/inputs/regression/dft/hi_rks_pbe_def2svp_ecp.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "smoke",
+    "core",
+    "dft",
+    "def2",
+    "ecp"
+   ],
+   "_pyscf_reference": "tests/pyscf/def2_ecp_dft_references.py (PySCF 2.13.0, cart=False, basis and ECP from Planck's GBS, 150 x 590 unpruned): E -298.2788754666; Planck matches every printed digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -298.2788754666,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "auh_h2o_rks_b3lyp_def2svp_ecp_gradient",
+   "input": "tests/inputs/regression/dft/auh_h2o_rks_b3lyp_def2svp_ecp_gradient.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "def2",
+    "ecp",
+    "gradient"
+   ],
+   "_pyscf_reference": "tests/pyscf/def2_ecp_dft_references.py (PySCF 2.13.0, cart=False, basis and ECP from Planck's GBS, 150 x 590 unpruned): E -212.7277364439. Gradient from PySCF with its grid-response radius lookup corrected for ECP atoms (docs/PYSCF_ECP_GRID_RESPONSE_SCOPE.md); stock PySCF is 1.1e-5 Ha/Bohr off its own energy FD. Planck agrees with the corrected PySCF to 2.4e-10 and with its own fourth-order energy FD to 1.6e-8 on all 15 components.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -212.7277364439,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.004384254344,
+       -0.00139363954,
+       0.005985537844
+      ],
+      [
+       0.008195912048,
+       0.00237270481,
+       -0.016587874332
+      ],
+      [
+       -0.021456173943,
+       0.00940883025,
+       0.004448081102
+      ],
+      [
+       0.003391911481,
+       -0.003198879193,
+       0.000896056789
+      ],
+      [
+       0.00548409607,
+       -0.007189016327,
+       0.005258198596
+      ]
+     ],
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "hi_cation_uks_pbe_def2svp_ecp_stability",
+   "input": "tests/inputs/regression/dft/hi_cation_uks_pbe_def2svp_ecp_stability.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended",
+    "dft",
+    "def2",
+    "ecp",
+    "open_shell"
+   ],
+   "_pyscf_reference": "tests/pyscf/def2_ecp_dft_references.py (PySCF 2.13.0, cart=False, basis and ECP from Planck's GBS, 150 x 590 unpruned): E -297.8923504804, gen_g_hop_uhf lowest eigenvalue -1.4e-8 (the zero mode of the degenerate pi hole); Planck +2.3e-9 [stable]. tol_density 1e-6 in both codes: the hole's pi_x/pi_y mix is free, so a tight density tolerance cannot be met.",
+   "expected_exit_code": 0,
+   "contains": [
+    "UKS -> UKS (spin-conserving, internal)"
+   ],
+   "not_contains": [
+    "UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -297.8923504804,
+     "atol": 1e-08
+    },
+    {
+     "type": "metric_le",
+     "metric": "stability_uks_internal",
+     "value": 1e-06
+    },
+    {
+     "type": "metric_ge",
+     "metric": "stability_uks_internal",
+     "value": -1e-06
+    }
+   ]
+  },
+  {
+   "id": "hi_rks_b3lyp_def2svp_ecp_tddft",
+   "input": "tests/inputs/regression/dft/hi_rks_b3lyp_def2svp_ecp_tddft.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended",
+    "dft",
+    "def2",
+    "ecp",
+    "tddft"
+   ],
+   "_pyscf_reference": "tests/pyscf/def2_ecp_dft_references.py (PySCF 2.13.0, cart=False, basis and ECP from Planck's GBS, 150 x 590 unpruned): E -298.3926813623; Casida roots 5.4741456 (x2, Pi) / 10.7665928 / 13.0840862 eV, f 0.000012 / 0.000012 / 0.782558 / 0.349500. Planck matches every printed digit.",
+   "expected_exit_code": 0,
+   "contains": [
+    "DFT Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -298.3926813623,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root1_energy_ev",
+     "expected": 5.4741456,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root2_energy_ev",
+     "expected": 5.4741456,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root3_energy_ev",
+     "expected": 10.7665928,
+     "atol": 1e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "lr_root4_energy_ev",
+     "expected": 13.0840862,
+     "atol": 1e-05
     }
    ]
   }

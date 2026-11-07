@@ -1,0 +1,35 @@
+# KS stability gate (docs/KS_STABILITY.md): from the default hcore guess UKS HSE06 water+/cc-pVTZ
+# converges to the 2A1 saddle (beta hole in 3a1); stability_check finds the a1/b1 mode and the
+# follow re-converges to the 2B1 ground state.
+%begin_control
+    basis       cc-pVTZ
+    calculation energy
+    basis_type  cartesian
+%end_control
+%begin_scf
+    scf_type        uhf
+    guess           hcore
+    max_cycles      200
+    tol_energy      1.0e-10
+    tol_density     1.0e-9
+    save_checkpoint .false.
+    stability_check .true.
+    stability_follow .true.
+%end_scf
+%begin_dft
+    grid        fine
+    exchange    hse06
+    correlation pbe
+%end_dft
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+%begin_coords
+3
+1   2
+O 0.000000 0.000000 0.000000
+H 0.758602 0.000000 0.504284
+H -0.758602 0.000000 0.504284
+%end_coords

@@ -218,8 +218,8 @@ namespace
             {
                 if (a == b)
                     continue;
-                const double Za = static_cast<double>(mol.atomic_numbers[a]);
-                const double Zb = static_cast<double>(mol.atomic_numbers[b]);
+                const double Za = mol.nuclear_charge(a);
+                const double Zb = mol.nuclear_charge(b);
                 const double dx = mol._standard(a, 0) - mol._standard(b, 0);
                 const double dy = mol._standard(a, 1) - mol._standard(b, 1);
                 const double dz = mol._standard(a, 2) - mol._standard(b, 2);

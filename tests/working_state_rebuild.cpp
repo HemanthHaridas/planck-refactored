@@ -14,6 +14,10 @@
 //      normalized C and should leave it alone, since norm² = 1 already).
 //      This is the property the geomopt inner loop relies on when the basis
 //      object happens to be reused unchanged across a step.
+//   4. read_gbs_basis normalizes C at read time from the closed-form
+//      same-centre overlap (docs/SPHERICAL_DFT.md S0.5): it must match
+//      the S_cart-based normalization, s through h (cc-pV5Z), and the C read
+//      at one geometry must give diag(C S Cᵀ) = 1 at another.
 
 #include <Eigen/Dense>
 #include <array>
@@ -26,6 +30,9 @@
 #include "base/basis.h"
 #include "base/types.h"
 #include "basis/basis.h"
+#include "basis/spherical.h"
+#include "integrals/base.h"
+#include "integrals/shellpair.h"
 #include "scf/working_state.h"
 #include "symmetry/symmetry.h"
 #include "require_boys_library.h"
@@ -42,7 +49,8 @@ namespace
 
     std::expected<HartreeFock::Calculator, std::string> make_water_calculator(
         const std::string &basis_name,
-        HartreeFock::BasisType basis_type)
+        HartreeFock::BasisType basis_type,
+        double h_shift = 0.0) // Å added to both H z coordinates
     {
         HartreeFock::Calculator calc;
         HartreeFock::Molecule &mol = calc._molecule;
@@ -67,7 +75,7 @@ namespace
             mol.atomic_numbers[static_cast<Eigen::Index>(i)] = Z[i];
             mol.atomic_masses[static_cast<Eigen::Index>(i)] = 1.0;
             for (int q = 0; q < 3; ++q)
-                mol.coordinates(static_cast<Eigen::Index>(i), q) = xyz[i][q];
+                mol.coordinates(static_cast<Eigen::Index>(i), q) = xyz[i][q] + (q == 2 && Z[i] == 1 ? h_shift : 0.0);
         }
 
         calc._basis._basis = basis_type;
@@ -202,6 +210,66 @@ namespace
         if (dS > 1e-14)
             fail("spherical: second call moved _overlap by " + std::to_string(dS));
     }
+
+    Eigen::MatrixXd overlap_cart(const HartreeFock::Basis &basis)
+    {
+        return _compute_1e(build_shellpairs(basis), basis.nbasis(), HartreeFock::IntegralMethod::ObaraSaika,
+                           nullptr)
+            .first;
+    }
+
+    void check_read_time_normalization()
+    {
+        Eigen::MatrixXd C_first;
+        for (const double shift : {0.0, 0.25})
+        {
+            auto calc_res = make_water_calculator("cc-pV5Z", HartreeFock::BasisType::Spherical, shift);
+            if (!calc_res)
+            {
+                fail("read-time normalization: setup failed: " + calc_res.error());
+                return;
+            }
+            const HartreeFock::Basis &basis = calc_res->_shells;
+            const Eigen::MatrixXd S = overlap_cart(basis);
+
+            // The pre-S0.5 normalization, applied to a freshly built C.
+            auto C_raw = HartreeFock::BasisFunctions::build_cart_to_sph(basis);
+            if (!C_raw)
+            {
+                fail("read-time normalization: build_cart_to_sph: " + C_raw.error());
+                return;
+            }
+            Eigen::MatrixXd C_ref = *C_raw;
+            const Eigen::MatrixXd CS = C_ref * S;
+            for (Eigen::Index m = 0; m < C_ref.rows(); ++m)
+                C_ref.row(m) /= std::sqrt(CS.row(m).dot(C_ref.row(m)));
+
+            const Eigen::MatrixXd &C = basis._cart_to_sph;
+            double worst = 0.0;
+            for (Eigen::Index m = 0; m < C.rows(); ++m)
+                worst = std::max(worst, (C.row(m) - C_ref.row(m)).cwiseAbs().maxCoeff() /
+                                            C_ref.row(m).cwiseAbs().maxCoeff());
+            if (worst > 1e-14)
+                fail("read-time C differs from the S_cart normalization by " + std::to_string(worst) +
+                     " (relative, worst row)");
+
+            if (C_first.size() == 0)
+                C_first = C;
+            else
+            {
+                // C from the first geometry, overlap from the second.
+                const double diag_err =
+                    ((C_first * S * C_first.transpose()).diagonal() - Eigen::VectorXd::Ones(C.rows()))
+                        .cwiseAbs()
+                        .maxCoeff();
+                if (diag_err > 1e-13)
+                    fail("C read at one geometry is not normalized at another: diag error " +
+                         std::to_string(diag_err));
+                if ((C - C_first).cwiseAbs().maxCoeff() != 0.0)
+                    fail("read-time C depends on the geometry");
+            }
+        }
+    }
 } // namespace
 
 int main()
@@ -210,6 +278,7 @@ int main()
 
     check_cartesian();
     check_spherical();
+    check_read_time_normalization();
 
     if (g_ok)
     {

@@ -42,16 +42,15 @@ class O3ZVectorTests(unittest.TestCase):
         self.assertIn("std::min({restart,", self.gmres)
         self.assertIn("action_count", self.gmres)
         self.assertIn("krylov_matrix_bytes", self.gmres)
-        bridge = (ROOT / "src/dft/dh_probe_gmres.h").read_text()
-        self.assertIn("using DFT::Response::gmres", bridge)
-        self.assertNotIn("while (", bridge)
 
-    def test_production_defaults_iterative_and_probe_explicitly_dense(self):
+    def test_production_always_iterative_with_no_env_override(self):
+        # The DenseReference backend is a test oracle (tests/dh_zvector.cpp);
+        # no environment variable may switch the production gradient to it.
         self.assertIn("backend = DHZVectorBackend::MatrixFreeGMRES", self.solver)
         production = self.driver.split("compute_analytic_dh_gradient(", 1)[1].split(
             "run_analytic_gradient_current_geometry(", 1)[0]
-        self.assertIn('if (std::getenv("PLANCK_DFT_DH_HESSIAN_PROBE_LOG"))', production)
-        self.assertIn("z_options.backend=Gradient::DHZVectorBackend::DenseReference", production)
+        self.assertNotIn("getenv", production)
+        self.assertNotIn("DenseReference", production)
         self.assertIn("contract_residual > 1e-9", production)
 
 

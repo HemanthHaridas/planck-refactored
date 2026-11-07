@@ -226,7 +226,13 @@ FetchContent_Declare(
     URL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
+# Eigen reads the same BUILD_TESTING switch as Planck and would register its
+# own (never built) tests in Planck's CTest tree. A normal variable shadows the
+# cache entry for Eigen's scope only.
+set(_planck_build_testing ${BUILD_TESTING})
+set(BUILD_TESTING OFF)
 fetchcontent_makeavailable(eigen)
+set(BUILD_TESTING ${_planck_build_testing})
 
 # Run Eigen's GEMMs serially on the calling thread. This code owns its own
 # OpenMP parallelism at the ERI/Fock level; letting Eigen spawn a second thread
@@ -325,6 +331,46 @@ externalproject_add(
         -DENABLE_XHOST:BOOL=${LIBXC_ENABLE_XHOST}
     BUILD_BYPRODUCTS ${LIBXC_INSTALL_DIR}/lib/libxc.a
 )
+
+# libecpint (MIT): ECP integrals and derivatives (docs/DEF2_ECP.md).
+# ponytail: pinned to the head of UNMERGED upstream PR #81 (loriab's fork), which
+# sits on upstream HEAD 95203c68 and fixes seven type-2/quadrature defects,
+# including the 6-digit kernel constants Planck used to patch. Stock derivatives
+# miss finite differences by 4.6e-5 on HI/def2-QZVP (planck-ecp-gradient-fd).
+# When robashaw/libecpint#81 merges, repin to the upstream merge commit and
+# rerun planck-ecp-gradient-fd plus the *_ecp regression cases.
+# Built with Planck's own C++ compiler because its API passes std::vector across
+# the boundary (libc++ vs libstdc++ would not link).
+set(LIBECPINT_GIT_TAG 4e8767fc8d74fd2f23f70d75ae2af2ddf4a01dec)
+set(LIBECPINT_INSTALL_DIR ${SRC_DIR}/external/libecpint/install)
+externalproject_add(
+    libecpint_ep
+    PREFIX ${SRC_DIR}/external/libecpint
+    GIT_REPOSITORY https://github.com/loriab/libecpint.git
+    GIT_TAG ${LIBECPINT_GIT_TAG}
+    UPDATE_DISCONNECTED TRUE
+    CMAKE_ARGS
+        -DCMAKE_INSTALL_PREFIX=${LIBECPINT_INSTALL_DIR}
+        -DCMAKE_INSTALL_LIBDIR:STRING=lib
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+        -DBUILD_SHARED_LIBS:BOOL=OFF
+        -DLIBECPINT_USE_PUGIXML:BOOL=OFF
+        -DLIBECPINT_BUILD_TESTS:BOOL=OFF
+        -DLIBECPINT_BUILD_DOCS:BOOL=OFF
+    BUILD_BYPRODUCTS ${LIBECPINT_INSTALL_DIR}/lib/libecpint.a ${LIBECPINT_INSTALL_DIR}/lib/libFaddeeva.a
+)
+# H_core (src/integrals/ecp.cpp, in INT_SRC) needs it, and INT_SRC is compiled
+# into most targets, so link it everywhere rather than per target. Static, so
+# targets that never call it pull in nothing.
+file(MAKE_DIRECTORY ${LIBECPINT_INSTALL_DIR}/include/libecpint)
+add_library(ecpint STATIC IMPORTED GLOBAL)
+set_target_properties(ecpint PROPERTIES
+    IMPORTED_LOCATION ${LIBECPINT_INSTALL_DIR}/lib/libecpint.a
+    INTERFACE_LINK_LIBRARIES ${LIBECPINT_INSTALL_DIR}/lib/libFaddeeva.a
+    INTERFACE_INCLUDE_DIRECTORIES "${LIBECPINT_INSTALL_DIR}/include;${LIBECPINT_INSTALL_DIR}/include/libecpint")
+add_dependencies(ecpint libecpint_ep)
+link_libraries(ecpint)
 
 # Collect sources automatically
 file(GLOB BASE_SRC CONFIGURE_DEPENDS
@@ -507,9 +553,6 @@ set(DFT_LIB_SRC
     ${SRC_DIR}/dft/udh_two_particle_density.cpp
     ${SRC_DIR}/dft/udh_xc_ii.cpp
     ${SRC_DIR}/dft/udh_xc_ii_gga.cpp
-    ${SRC_DIR}/dft/dh_hessian_probe.cpp
-    ${SRC_DIR}/dft/dh_hessian_probe.h
-    ${SRC_DIR}/dft/dh_probe_gmres.h
     ${SRC_DIR}/dft/driver.cpp
     ${SRC_DIR}/dft/driver.h
     ${SRC_DIR}/dft/ks_matrix.cpp
@@ -779,6 +822,9 @@ endif()
 
 # Install executable
 install(TARGETS hartree-fock DESTINATION bin)
+# libecpint is linked statically, so its MIT notice ships with the binaries.
+install(FILES ${SRC_DIR}/external/libecpint/src/libecpint_ep/LICENSE
+        DESTINATION share/doc/planck RENAME libecpint-LICENSE)
 install(TARGETS planck-dft DESTINATION bin)
 
 # ── planck-mpi: unified hybrid MPI/OpenMP front end (opt-in) ───────────────────
@@ -872,6 +918,12 @@ endif()
 find_package(Python3 COMPONENTS Interpreter)
 
 if(BUILD_TESTING)
+    # Release adds -DNDEBUG, which compiles every assert() in a test out and
+    # lets it pass vacuously. Keep asserts live in the test sources only; the
+    # production sources linked into the test binaries are unchanged.
+    file(GLOB _planck_test_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/*.cpp)
+    set_source_files_properties(${_planck_test_sources} PROPERTIES COMPILE_OPTIONS -UNDEBUG)
+
     # Test-only front end of the same driver, with a typed UDH validation
     # ledger. Not installed; normal CLI/MPI guards remain unchanged.
     add_executable(planck-udh-validation
@@ -895,13 +947,7 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-udh-validation PRIVATE USE_OPENMP)
     endif()
 
-    add_executable(planck-dh-probe-gmres ${CMAKE_SOURCE_DIR}/tests/dh_probe_gmres.cpp)
-    target_include_directories(planck-dh-probe-gmres PRIVATE ${SRC_DIR} ${eigen_SOURCE_DIR})
-    add_test(NAME planck-dh-probe-gmres COMMAND planck-dh-probe-gmres)
     if(Python3_Interpreter_FOUND)
-        add_test(NAME planck-dh-hessian-swap-runner
-            COMMAND ${Python3_EXECUTABLE} -m unittest discover
-                -s ${CMAKE_SOURCE_DIR}/tests -p test_dh_hessian_swap_audit.py -v)
         add_test(NAME planck-dh-workflow-runner
             COMMAND ${Python3_EXECUTABLE} -m unittest discover
                 -s ${CMAKE_SOURCE_DIR}/tests -p test_dh_workflow_audit.py -v)
@@ -1160,6 +1206,8 @@ if(BUILD_TESTING)
         ${INT_SRC}
         ${POPULATIONS_SRC}
         ${LOOKUP_SRC}
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
     )
 
     # Rys rules against independent quadrature moments (n = 1..11, T to 2000).
@@ -1617,6 +1665,8 @@ if(BUILD_TESTING)
         ${POPULATIONS_SRC}
         ${INT_SRC}
         ${LOOKUP_SRC}
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
     )
 
     add_executable(planck-symmetry-units
@@ -2017,6 +2067,7 @@ if(BUILD_TESTING)
     add_executable(planck-working-state-rebuild
         ${CMAKE_SOURCE_DIR}/tests/working_state_rebuild.cpp
         ${SRC_DIR}/scf/working_state.cpp
+        ${SRC_DIR}/integrals/ecp.cpp
         ${SRC_DIR}/symmetry/symmetry.cpp
         ${SRC_DIR}/symmetry/integral_symmetry.cpp
         ${SRC_DIR}/basis/basis.cpp
@@ -3018,6 +3069,26 @@ if(BUILD_TESTING)
         COMMAND planck-esp-points
     )
 
+    # ECP nuclear derivative vs finite differences (docs/DEF2_ECP.md step 5a).
+    add_executable(planck-ecp-gradient-fd
+        ${CMAKE_SOURCE_DIR}/tests/ecp_gradient_fd.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-ecp-gradient-fd PRIVATE ${SRC_DIR} ${eigen_SOURCE_DIR})
+    set_target_properties(planck-ecp-gradient-fd PROPERTIES
+        CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-ecp-gradient-fd OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-ecp-gradient-fd PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-ecp-gradient-fd COMMAND planck-ecp-gradient-fd)
+
     add_test(
         NAME planck-dft-coulomb-response
         COMMAND planck-dft-coulomb-response
@@ -3349,3 +3420,12 @@ endif()
 # )
 
 # add_dependencies(hartree-fock fetch-basis-sets)
+
+# Every test reads basis sets from the source tree, not the install prefix:
+# an uninstalled build (CI) has none there, and an older install can predate
+# newer sets (def2). Appended, so per-test ENVIRONMENT entries are kept.
+if(BUILD_TESTING)
+    get_directory_property(_planck_tests TESTS)
+    set_property(TEST ${_planck_tests} APPEND PROPERTY
+        ENVIRONMENT BASIS_PATH=${CMAKE_SOURCE_DIR}/basis-sets)
+endif()

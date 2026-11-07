@@ -18,7 +18,7 @@ import tempfile
 from pathlib import Path
 from typing import Iterable
 
-ANGSTROM_TO_BOHR = 1.8897261254535
+ANGSTROM_TO_BOHR = 1.0 / 0.529177210903  # CODATA 2018, as src/base/tables.h
 
 ATOM_LINE_RE = re.compile(
     r"Atom\s+(\d+)\s*:\s*([-+0-9Ee\.]+)\s+([-+0-9Ee\.]+)\s+([-+0-9Ee\.]+)"

@@ -41,7 +41,7 @@ namespace HartreeFock::Correlation
                 tag, n_act, CASSCFInternal::kMaxPackedSpatialOrbitals));
 
         const int n_total_elec =
-            static_cast<int>(calc._molecule.atomic_numbers.cast<int>().sum()) - calc._molecule.charge;
+            static_cast<int>(calc._molecule.total_nuclear_charge()) - calc._molecule.charge;
         if (n_total_elec <= 0)
             return std::unexpected(tag + ": non-positive electron count.");
 

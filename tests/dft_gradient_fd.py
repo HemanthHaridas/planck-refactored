@@ -25,7 +25,7 @@ import tempfile
 from pathlib import Path
 from typing import Iterable
 
-ANGSTROM_TO_BOHR = 1.8897261254535
+ANGSTROM_TO_BOHR = 1.0 / 0.529177210903  # CODATA 2018, as src/base/tables.h
 
 
 ATOM_LINE_RE = re.compile(
@@ -302,6 +302,11 @@ def main(argv: Iterable[str] | None = None) -> int:
     if args.keep_tmp:
         print(f"work directory kept at: {workdir}")
 
+    if "wPBEh exchange: the energy is discontinuous" in analytic_out:
+        # planck-dft flags libxc's wPBEh (HSE family): its energy jumps at s = 1,
+        # so a miss here is expected and says nothing about the gradient.
+        print("WARNING: wPBEh-based functional; energy finite differences are unreliable "
+              "(docs/WPBEH_S_SCALING_SCOPE.md). Validate this gradient against PySCF instead.")
     if not report["passed"]:
         print("FAIL: analytic DFT gradient deviates from finite difference")
         return 1

@@ -15,6 +15,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include "base/types.h"
+
 namespace HartreeFock::BasisFunctions::detail
 {
     struct GbsPrimitive
@@ -31,10 +33,36 @@ namespace HartreeFock::BasisFunctions::detail
 
     using GbsBasisSet = std::unordered_map<std::string, std::vector<GbsShell>>;
 
-    // Parse a Gaussian94 (.gbs) stream into element-keyed shell descriptors.
-    // Handles the SP "fused" shell type by splitting into separate S and P shells.
-    // Returns the parsed element→shells map on success or a human-readable error.
-    std::expected<GbsBasisSet, std::string> read_gbs(std::ifstream &input);
+    // One ECP term c · r^(n-2) · exp(-ζ r²); n kept as written in the file.
+    struct GbsEcpTerm
+    {
+        int n;
+        double exponent;
+        double coefficient;
+    };
+
+    // Gaussian94 ECP block: channels[0] is the local (L = l_max) potential,
+    // channels[1 + l] the semilocal l - l_max projector channel, l < l_max.
+    struct GbsEcp
+    {
+        int n_core;
+        std::vector<std::vector<GbsEcpTerm>> channels;
+    };
+
+    struct GbsFile
+    {
+        GbsBasisSet shells;
+        std::unordered_map<std::string, GbsEcp> ecps;
+    };
+
+    // Parse a Gaussian94 (.gbs) stream into element-keyed shell descriptors
+    // and any ECP blocks. Handles the SP "fused" shell type by splitting into
+    // separate S and P shells. Returns a human-readable error on failure.
+    std::expected<GbsFile, std::string> read_gbs(std::ifstream &input);
+
+    // The ECP operator a parsed block places on atom `atom_index` at `center` (Bohr).
+    HartreeFock::ECPPotential make_ecp_potential(const GbsEcp &ecp, const Eigen::Vector3d &center,
+                                                 std::size_t atom_index);
 } // namespace HartreeFock::BasisFunctions::detail
 
 #endif // HF_BASIS_GBS_PARSER_H
