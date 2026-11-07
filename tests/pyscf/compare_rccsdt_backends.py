@@ -9,10 +9,10 @@ both backends converge to the same final energy.
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -37,20 +37,23 @@ def parse_last_float(pattern: re.Pattern[str], text: str, label: str) -> float:
 
 
 def run_backend(input_path: Path, backend: str | None) -> tuple[float, float, str]:
-    env = os.environ.copy()
-    if backend is None:
-        env.pop("PLANCK_RCCSDT_BACKEND", None)
-    else:
-        env["PLANCK_RCCSDT_BACKEND"] = backend
-
-    proc = subprocess.run(
-        [str(PLANCK_EXE), str(input_path)],
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        env=env,
-        check=False,
-    )
+    """Run Planck on input_path with `rccsdt_backend <backend>` (None = auto)."""
+    text = re.sub(r"^\s*rccsdt_backend\s+\S+\n", "", input_path.read_text(), flags=re.MULTILINE)
+    if backend is not None:
+        text, n = re.subn(r"^(\s*correlation\s+ccsdt\s*)$", rf"\1\n    rccsdt_backend {backend}",
+                          text, count=1, flags=re.MULTILINE)
+        if n != 1:
+            raise RuntimeError(f"{input_path} has no 'correlation ccsdt' line")
+    with tempfile.TemporaryDirectory() as tmp:
+        run_input = Path(tmp) / input_path.name
+        run_input.write_text(text)
+        proc = subprocess.run(
+            [str(PLANCK_EXE), str(run_input)],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
     output = proc.stdout + proc.stderr
     if proc.returncode != 0:
         raise RuntimeError(
@@ -100,14 +103,14 @@ def main() -> int:
     status |= compare_case(
         label="LiH determinant vs optimized",
         input_relpath="tests/inputs/regression/post_hf/lih_rccsdt_sto3g.hfinp",
-        current_backend="determinant_prototype",
-        new_backend="tensor_optimized",
+        current_backend="determinant",
+        new_backend="optimized",
     )
     status |= compare_case(
         label="Water tensor vs optimized",
         input_relpath="tests/inputs/regression/post_hf/water_rccsdt_sto3g.hfinp",
-        current_backend="tensor_production",
-        new_backend="tensor_optimized",
+        current_backend="tensor",
+        new_backend="optimized",
     )
     return status
 

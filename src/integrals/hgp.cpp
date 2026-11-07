@@ -1,4 +1,5 @@
 #include "hgp.h"
+#include "base/mpi_env.h"
 
 #include "boys.h"
 #include "os.h"
@@ -1380,13 +1381,18 @@ std::vector<double> HartreeFock::HeadGordonPople::_compute_2e(
 
     const std::size_t ngp = group_pairs.size();
 
-    // ponytail: HGP is NOT MPI-distributed — every rank builds the full tensor
-    // (correct, just replicated work); no allreduce here. Only OS (the default
-    // engine) is striped. Same upgrade path as the matching note in rys.cpp:
-    // `bra % nranks == rank` + one Mpi::allreduce_inplace on the tensor.
+    // MPI: each rank takes every size-th bra and fills a disjoint set of
+    // canonical entries (with their permutations and symmetry orbit); the
+    // allreduce(SUM) after the loop merges them exactly. Serial: rank 0 of 1,
+    // the full loop and a no-op reduce. Same scheme as os.cpp.
+    const int mpi_rank = HartreeFock::Mpi::rank();
+    const int mpi_size = HartreeFock::Mpi::size();
 #pragma omp parallel for schedule(dynamic, 8)
     for (std::size_t bra = 0; bra < ngp; ++bra)
     {
+        if (mpi_size > 1 &&
+            static_cast<int>(bra % static_cast<std::size_t>(mpi_size)) != mpi_rank)
+            continue;
         const HgpShellGroup &gA = groups[group_pairs[bra].a];
         const HgpShellGroup &gB = groups[group_pairs[bra].b];
 
@@ -1481,6 +1487,7 @@ std::vector<double> HartreeFock::HeadGordonPople::_compute_2e(
         }
     }
 
+    HartreeFock::Mpi::allreduce_inplace(eri.data(), eri.size());
     return eri;
 }
 

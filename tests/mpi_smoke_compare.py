@@ -60,12 +60,13 @@ def main(argv: Iterable[str] | None = None) -> int:
         type=Path,
         default=Path(__file__).resolve().parent.parent / "build",
     )
-    parser.add_argument("--ranks", type=int, default=2)
+    parser.add_argument("--ranks", type=int, nargs="+", default=[2],
+                        help="one or more rank counts, each compared with serial")
     parser.add_argument(
         "--atol",
         type=float,
         default=5.0e-9,
-        help="tolerance on |E_serial - E_mpi| (Eh); Tier 3 is bitwise so 5e-9 is slack",
+        help="tolerance on |E_serial - E_mpi| (Eh); 0 demands every printed digit agree",
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
@@ -85,17 +86,18 @@ def main(argv: Iterable[str] | None = None) -> int:
         raise SystemExit(f"serial binary not found at {serial_bin}")
 
     e_serial = parse_energy(run([str(serial_bin), str(args.input)]))
-    # --oversubscribe so the test runs on a machine with fewer cores than ranks.
-    e_mpi = parse_energy(
-        run([mpirun, "--oversubscribe", "-n", str(args.ranks), str(mpi_bin), str(args.input)])
-    )
+    print(f"Energy (serial)          : {e_serial:.10f} Eh")
+    failed = False
+    for ranks in args.ranks:
+        # --oversubscribe so the test runs on a machine with fewer cores than ranks.
+        e_mpi = parse_energy(
+            run([mpirun, "--oversubscribe", "-n", str(ranks), str(mpi_bin), str(args.input)])
+        )
+        delta = abs(e_serial - e_mpi)
+        print(f"Energy (mpi -n {ranks:<2})       : {e_mpi:.10f} Eh   |delta| {delta:.3e} (tol {args.atol:.3e})")
+        failed |= delta > args.atol
 
-    delta = abs(e_serial - e_mpi)
-    print(f"Energy (serial)         : {e_serial:.10f} Eh")
-    print(f"Energy (mpi -n {args.ranks})       : {e_mpi:.10f} Eh")
-    print(f"|delta E (mpi - serial)| : {delta:.3e} Eh (tol {args.atol:.3e})")
-
-    if delta > args.atol:
+    if failed:
         print("FAIL: planck-mpi energy diverges from serial reference")
         return 1
     print("PASS")

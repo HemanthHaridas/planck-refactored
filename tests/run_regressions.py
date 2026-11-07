@@ -382,9 +382,9 @@ def run_case(
 
     try:
         # A case may declare `env`: extra environment variables for this run only.
-        # Needed where a code path is reachable only by env override and has no
-        # input keyword -- PLANCK_RCCSDT_BACKEND being the case in point. Layered
-        # over the inherited environment so the basis path and toolchain survive.
+        # Used for run-time settings such as OMP_NUM_THREADS (the FCIQMC
+        # thread-count cases). Layered over the inherited environment so the
+        # basis path and toolchain survive.
         case_env = case.get("env")
         run_env = {**os.environ, **case_env} if case_env else None
         proc = subprocess.run(

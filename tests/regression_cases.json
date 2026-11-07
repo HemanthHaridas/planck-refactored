@@ -1530,6 +1530,75 @@
    "expected_exit_code": 0
   },
   {
+   "id": "water_rhf_631gd_conventional_auto_mpi_smoke",
+   "input": "tests/inputs/regression/mpi/water_rhf_631gd_conventional_auto.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended"
+   ],
+   "args": [
+    "--ranks",
+    "2",
+    "3",
+    "--atol",
+    "0"
+   ],
+   "expected_exit_code": 0,
+   "_note": "Conventional ERI tensor built with engine auto, striped across ranks and summed by one allreduce (Gap 1, docs/HPC_MPI.md). Every printed digit must match serial at 2 and 3 ranks: a missing stripe double-counts, a missing reduce drops entries."
+  },
+  {
+   "id": "water_rhf_631gd_conventional_hgp_mpi_smoke",
+   "input": "tests/inputs/regression/mpi/water_rhf_631gd_conventional_hgp.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended"
+   ],
+   "args": [
+    "--ranks",
+    "2",
+    "3",
+    "--atol",
+    "0"
+   ],
+   "expected_exit_code": 0,
+   "_note": "Conventional ERI tensor built with engine hgp, striped across ranks and summed by one allreduce (Gap 1, docs/HPC_MPI.md). Every printed digit must match serial at 2 and 3 ranks: a missing stripe double-counts, a missing reduce drops entries."
+  },
+  {
+   "id": "water_rhf_631gd_conventional_rys_mpi_smoke",
+   "input": "tests/inputs/regression/mpi/water_rhf_631gd_conventional_rys.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended"
+   ],
+   "args": [
+    "--ranks",
+    "2",
+    "3",
+    "--atol",
+    "0"
+   ],
+   "expected_exit_code": 0,
+   "_note": "Conventional ERI tensor built with engine rys, striped across ranks and summed by one allreduce (Gap 1, docs/HPC_MPI.md). Every printed digit must match serial at 2 and 3 ranks: a missing stripe double-counts, a missing reduce drops entries."
+  },
+  {
+   "id": "water16_rhf_631g_auto_direct_mpi_scale",
+   "input": "tests/inputs/regression/mpi/water16_rhf_631g_auto_direct.hfinp",
+   "executable": "tests/mpi_smoke_compare.py",
+   "tags": [
+    "extended"
+   ],
+   "timeout_s": 1800,
+   "args": [
+    "--ranks",
+    "2",
+    "4",
+    "--atol",
+    "0"
+   ],
+   "expected_exit_code": 0,
+   "_note": "Gap 3 (docs/HPC_MPI.md): 16 waters, 6-31G, nb=208, direct SCF with the default engine. Large enough for a partition defect to show; serial, 2 and 4 ranks must agree on every printed digit."
+  },
+  {
    "id": "h2_rmp2_gradient_smoke",
    "input": "tests/inputs/regression/post_hf/h2_rmp2_gradient.hfinp",
    "tags": [
@@ -2061,7 +2130,7 @@
   },
   {
    "id": "ch4_rccsdt_generated_sto3g",
-   "input": "tests/inputs/regression/post_hf/ch4_rccsdt_sto3g.hfinp",
+   "input": "tests/inputs/regression/post_hf/ch4_rccsdt_generated_sto3g.hfinp",
    "tags": [
     "extended",
     "generated-kernel"
@@ -2071,9 +2140,6 @@
     "PLANCK_CC_ARBITRARY_LOWER_RANKS",
     "PLANCK_CC_SPIN_ADAPT"
    ],
-   "env": {
-    "PLANCK_RCCSDT_BACKEND": "optimized"
-   },
    "expected_exit_code": 0,
    "contains": [
     "Routing the ccgen-generated rank-3 CCSDT kernels through the arbitrary-order harness",
@@ -2101,9 +2167,6 @@
     "PLANCK_CC_ARBITRARY_LOWER_RANKS",
     "PLANCK_CC_SPIN_ADAPT"
    ],
-   "env": {
-    "PLANCK_RCCSDT_BACKEND": "optimized"
-   },
    "contains": [
     "Routing the ccgen-generated rank-3 CCSDT kernels through the arbitrary-order harness",
     "Running generated arbitrary-order RCC tensor kernels (rank=3"
@@ -2122,7 +2185,7 @@
      "atol": 1e-07
     }
    ],
-   "_note": "W4.5: the SECOND case exercising the ccgen-generated rank-3 route, so it no longer rests on ch4_rccsdt_generated_sto3g alone. Reaches the generated kernel despite nso=12/ndet=495 being far below choose_determinant_backstop's nso>16||ndet>10000 threshold, because PLANCK_RCCSDT_BACKEND=optimized routes through rccgen.cpp to the arbitrary-order harness, which never consults the backstop -- that constraint binds the HAND-WRITTEN tensor path only. Matches the hand-written CCSDT (-7.8823242576) to all ten digits, and runs at 0.04 s/iter against CH4's ~7 min. Requires PLANCK_CC_SPIN_ADAPT: without it the generated emit is the ~4x-wrong historical one (docs/CCGEN_SPIN_ADAPT_DEFAULT.md). Distinct from lih_rccsdt_sto3g, which is 1.595 A with DIIS on and gates the hand-written path."
+   "_note": "W4.5: the SECOND case exercising the ccgen-generated rank-3 route, so it no longer rests on ch4_rccsdt_generated_sto3g alone. Reaches the generated kernel despite nso=12/ndet=495 being far below choose_determinant_backstop's nso>16||ndet>10000 threshold, because rccsdt_backend optimized routes through rccgen.cpp to the arbitrary-order harness, which never consults the backstop -- that constraint binds the HAND-WRITTEN tensor path only. Matches the hand-written CCSDT (-7.8823242576) to all ten digits, and runs at 0.04 s/iter against CH4's ~7 min. Requires PLANCK_CC_SPIN_ADAPT: without it the generated emit is the ~4x-wrong historical one (docs/CCGEN_SPIN_ADAPT_DEFAULT.md). Distinct from lih_rccsdt_sto3g, which is 1.595 A with DIIS on and gates the hand-written path."
   },
   {
    "id": "b_uccsd_sto3g",

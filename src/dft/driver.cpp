@@ -1,7 +1,6 @@
 #include "driver.h"
 
 #include "analytic_hessian.h"
-#include "dh_hessian_probe.h"
 #include "ks_orbital_hessian.h"
 #include "tddft_exchange.h"
 #include "uks_level_shift.h"
@@ -3453,11 +3452,8 @@ namespace DFT::Driver
             const InitializedFunctionals &functionals,
             const HartreeFock::Correlation::RMP2Result &pt2_result)
         {
-            Gradient::DHZVectorOptions z_options;
-            // Dense work is opt-in through the existing explicit swap probe.
-            // Ordinary gradients/optimization/frequencies use only GMRES.
-            if (std::getenv("PLANCK_DFT_DH_HESSIAN_PROBE_LOG"))
-                z_options.backend=Gradient::DHZVectorBackend::DenseReference;
+            // Default options: matrix-free GMRES. The dense backend is a test oracle only.
+            const Gradient::DHZVectorOptions z_options;
             auto zvector = build_dh_eq41_response_and_solve_zvector(
                 calculator, prepared, functionals.exchange, functionals.correlation,
                 functionals.implemented_exact_exchange_coefficient,
@@ -3504,40 +3500,7 @@ namespace DFT::Driver
                 ks_gradient->cols() != 3 || pt2_correction->total.cols() != 3 ||
                 !ks_gradient->allFinite() || !pt2_correction->total.allFinite())
                 return std::unexpected("DFT double-hybrid gradient has invalid dimensions or values.");
-            Eigen::MatrixXd total_gradient = *ks_gradient + pt2_correction->total;
-            // Explicit diagnostic swap only. A requested ledger selected the
-            // dense reference baseline above; ordinary calls use GMRES.
-            // The probe keeps this same SCF/PT2 state and changes only Z.
-            if (const char *probe_log = std::getenv("PLANCK_DFT_DH_HESSIAN_PROBE_LOG"))
-            {
-                if (*probe_log == '\0')
-                    return std::unexpected("DH Hessian probe requires a nonempty log path.");
-                if (HartreeFock::Mpi::distributed())
-                    return std::unexpected("DH Hessian swap probe is serial/OpenMP only, not MPI.");
-                KsOrbitalHessianInputs shared_inputs;
-                shared_inputs.shell_pairs = &prepared.shell_pairs;
-                shared_inputs.molecular_grid = &prepared.molecular_grid;
-                shared_inputs.ao_grid = &prepared.ao_grid;
-                shared_inputs.density = calculator._info._scf.alpha.density;
-                shared_inputs.C_occ = pt2_result.mo_coeff.leftCols(pt2_result.n_occ);
-                shared_inputs.C_virt = pt2_result.mo_coeff.rightCols(pt2_result.n_virt);
-                shared_inputs.eps = pt2_result.mo_energy;
-                shared_inputs.x_functional = &functionals.exchange;
-                shared_inputs.c_functional = &functionals.correlation;
-                shared_inputs.engine = calculator._integral._engine;
-                shared_inputs.tol_eri = calculator._integral._tol_eri;
-                shared_inputs.sym_ops = calculator._use_integral_symmetry
-                    ? &calculator._integral_symmetry_ops : nullptr;
-                shared_inputs.full_range_exchange_coefficient = functionals.implemented_exact_exchange_coefficient;
-                shared_inputs.kernel_scale = 2.0;
-                const auto swapped = run_dh_hessian_swap_probe(
-                    contract_inputs, *contract, shared_inputs, *ks_gradient, probe_log);
-                if (!swapped) return std::unexpected(swapped.error());
-                total_gradient = *ks_gradient + *swapped;
-                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "DH Hessian Probe :",
-                    std::string("Returning shared-action Z gradient; diagnostic ledger: ") + probe_log);
-            }
-            return total_gradient;
+            return Eigen::MatrixXd(*ks_gradient + pt2_correction->total);
         }
 
         // Optimizers read current_total_energy() after this callback. Keep the

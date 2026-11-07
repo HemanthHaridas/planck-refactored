@@ -1,4 +1,5 @@
 #include "rys.h"
+#include "base/mpi_env.h"
 #include "hgp.h"       // Auto path picks between OS, HGP and Rys per quartet.
 #include "os.h"        // Auto path OS branch (high-L corner).
 #include "rys_roots.h"
@@ -1181,9 +1182,19 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e(
     const auto tri_base = [npairs](std::size_t r) -> std::size_t
     { return r * npairs - r * (r - 1) / 2; };
 
+    // MPI: each rank takes every size-th (p,q) pair and fills a disjoint set of
+    // canonical entries (with their permutations and symmetry orbit); the
+    // allreduce(SUM) after the loop merges them exactly. Serial: rank 0 of 1,
+    // the full loop and a no-op reduce. Same scheme as os.cpp.
+    const int mpi_rank = HartreeFock::Mpi::rank();
+    const int mpi_size = HartreeFock::Mpi::size();
+
 #pragma omp parallel for schedule(dynamic, 64)
     for (std::size_t t = 0; t < ntri; ++t)
     {
+        if (mpi_size > 1 &&
+            static_cast<int>(t % static_cast<std::size_t>(mpi_size)) != mpi_rank)
+            continue;
         long long pp = static_cast<long long>(std::floor(
             (static_cast<double>(2 * npairs + 1) -
              std::sqrt(static_cast<double>(2 * npairs + 1) *
@@ -1248,6 +1259,7 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e(
         }
     }
 
+    HartreeFock::Mpi::allreduce_inplace(eri.data(), eri.size());
     return eri;
 }
 
@@ -1315,18 +1327,18 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
 
     const std::size_t ngp = group_pairs.size();
 
-    // ponytail: Rys is NOT MPI-distributed — every rank builds the full tensor
-    // (correct, just replicated work) since there is no allreduce here. Only OS
-    // (the default engine) is striped, covering RHF/UHF/DFT. To distribute:
-    // apply the same `bra % nranks == rank` stride as os.cpp's
-    // build_eri_tensor_shellwise plus one Mpi::allreduce_inplace on the tensor.
-    // Deliberately not copied here yet — three near-identical copies of the
-    // stride+reduce want the shell-quartet loop itself factored first (a
-    // separate job from SpatialQuartetLayout, which shares only scratch
-    // indexing). Add when a run actually needs Rys at rank count > 1.
+    // MPI: each rank takes every size-th bra and fills a disjoint set of
+    // canonical entries (with their permutations and symmetry orbit); the
+    // allreduce(SUM) after the loop merges them exactly. Serial: rank 0 of 1,
+    // the full loop and a no-op reduce. Same scheme as os.cpp.
+    const int mpi_rank = HartreeFock::Mpi::rank();
+    const int mpi_size = HartreeFock::Mpi::size();
 #pragma omp parallel for schedule(dynamic, 8)
     for (std::size_t bra = 0; bra < ngp; ++bra)
     {
+        if (mpi_size > 1 &&
+            static_cast<int>(bra % static_cast<std::size_t>(mpi_size)) != mpi_rank)
+            continue;
         const RysShellGroup &gA = groups[group_pairs[bra].a];
         const RysShellGroup &gB = groups[group_pairs[bra].b];
 
@@ -1474,6 +1486,7 @@ std::vector<double> HartreeFock::RysQuad::_compute_2e_auto(
         }
     }
 
+    HartreeFock::Mpi::allreduce_inplace(eri.data(), eri.size());
     return eri;
 }
 
