@@ -429,6 +429,24 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Smooth SWIG PCM cavity (2026-11-07, `docs/PCM_GEOMETRY_SCOPE.md` step
+  1).** The cavity used Fibonacci points with a hard bury test, so the
+  energy jumped as points crossed sphere boundaries. It is now SWIG, as in
+  PySCF's C-PCM: Lebedev points, a smooth switching function, and Gaussian
+  surface charges. `_os_nuclear_primitive` takes the Gaussian exponent; point
+  charges print identical output on eight non-PCM inputs. Three things a
+  user sees change:
+  - f(ε) is (ε−1)/ε (the old factor was COSMO's);
+  - H uses the modified Bondi radius 1.1 Å;
+  - `surface_points_per_atom` is a Lebedev size, default 302.
+
+  Four new 6-31G* gates (water RHF, C1 H2O2 RHF, water⁺ UHF, water RKS PBE)
+  match PySCF 2.13.0 to every printed digit. An O–H stretch gate
+  (`water_rhf_pcm_smoothness_sto3g`) holds the fourth difference of E to
+  2.3e-9; the old cavity fails it at 4.4e-5. The five existing PCM cases
+  were re-pinned. The orientation dependence (5.2e-6 Eh at 302 points, the
+  same as PySCF) is accepted: `docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md`.
+
 - **Test infrastructure: live asserts, no Eigen tests, CI builds the tests
   (2026-11-07).** Three fixes in `CMakeLists.txt` and
   `.github/workflows/cmake-multi-platform.yml`:

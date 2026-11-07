@@ -72,7 +72,7 @@ No CPHF is needed: the SCF with PCM is variational in the charges.
    (`docs/SPHERICAL_DFT.md`) once that lands; V_rxn is built in
    Cartesian and projected.
 
-## Step 1 status (2026-11-07): implemented, PySCF-matched, not yet registered
+## Step 1 status (2026-11-07): done
 
 Done:
 
@@ -101,7 +101,7 @@ Decisions taken with it, all to match PySCF's C-PCM:
   Fibonacci count, default 60). 74, 230 and 266 have no SWIG constant and
   are rejected. The `io.cpp` check (≥ 6) still runs first.
 
-Gates (unregistered):
+Gates (registered, `extended`):
 
 - PySCF 2.13.0 references from `tests/pyscf/pcm_swig_references.py`
   (`cart=True`, Planck's GBS and Bohr, 150 × 590 unpruned DFT grid):
@@ -119,18 +119,20 @@ Gates (unregistered):
 - `tests/pcm_smoothness_scan.py`: an O–H stretch scan (water/STO-3G,
   110 points, h = 0.002 Å). It passes: the third difference is smooth
   (−1.7e-7 to −6e-8 Eh) and the fourth stays below 2.3e-9 Eh, against a
-  5e-9 bound. It has not been run against the old cavity, so it is not
-  mutation-checked.
+  5e-9 bound. A binary built before the change (Fibonacci cavity) fails
+  it at 4.4e-5 Eh. Registered as `water_rhf_pcm_smoothness_sto3g`.
 - Rotation: 5.21e-6 Eh spread at 302 points on C1 H2O2, the same as PySCF
   (`docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md`).
 
-Remaining for step 1:
-
-1. Check that the point-charge integrals are bitwise unchanged (any
-   non-PCM regression case).
-2. Re-pin the five existing PCM cases. They use 24 points, which is not a
-   Lebedev size, so they now fail at input. Their inputs change too.
-3. Register the new cases and the smoothness scan.
+- Point-charge integrals unchanged: eight non-PCM inputs (HF and ECP
+  gradients, CHELPG, ESP points, spherical ESP, DFT ESP) print identical
+  output, timings aside, against a binary built before the change.
+- The five existing PCM cases moved from 24 Fibonacci points to 302 Lebedev
+  points and were re-pinned. Water RHF/STO-3G now matches PySCF to every
+  printed digit, with symmetry on (−74.9522662931, was −74.9516349092). The
+  RKS PBE case's 6.1e-4 gap to PySCF shrank to 9.5e-7, which is the DFT grid
+  difference. The near-zero reaction-field ESP charges flipped sign
+  (O −0.0042 → +0.0043); that residual has no physical sign.
 
 ## Not in this scope
 
