@@ -1301,6 +1301,9 @@ U(r) = \sum_k d_k\, r^{\,n_k - 2}\, e^{-\zeta_k r^2}.
 </ul>
 <p>The ECP enters the SCF through one function. <code>_compute_potential</code> (<code>src/integrals/base.h</code>) returns <span class="math-inline">\(\mathbf V_{ne} + \mathbf U\)</span>, and every place that builds <span class="math-inline">\(\mathbf H_\text{core}\)</span> calls it: both HF driver paths, <code>rebuild_basis_dependent_state</code> (so geometry steps inherit it), the DFT driver, counterpoise fragments, and the SAD atomic calculation. SAD gives each ECP atom its own ECP and runs it with <span class="math-inline">\(Z - n_\text{core}\)</span> electrons. The spherical transform needs nothing new: <span class="math-inline">\(\mathbf U\)</span> is a Cartesian one-electron matrix like <span class="math-inline">\(\mathbf V\)</span>, and <span class="math-inline">\(\mathbf C\,\mathbf U\,\mathbf C^\mathsf T\)</span> lifts it with the rest of <span class="math-inline">\(\mathbf H_\text{core}\)</span>.</p>
 <p>Full point-group symmetry needs nothing new either. The symmetry skeleton (§8) only touches the two-electron Fock build; <span class="math-inline">\(\mathbf H_\text{core}\)</span> is built in full, ECP included.</p>
+<p><strong>Everything else inherits the ECP from <span class="math-inline">\(\mathbf H_\text{core}\)</span> and the electron count.</strong> MP2, CC, CASSCF, FCIDUMP and Kohn-Sham DFT need no ECP-specific code. Neither do TDDFT and stability analysis. The one new term is in the gradient. <span class="math-inline">\(\mathbf U\)</span> moves with its centre, so <span class="math-inline">\(\partial E/\partial \mathbf R\)</span> gains <span class="math-inline">\(\mathrm{tr}(\mathbf D\,\partial\mathbf U/\partial\mathbf R)\)</span>. <code>ECP::_compute_ecp_gradient</code> contracts libecpint&#x27;s shell-pair derivatives with the density, and <code>Gradient::one_electron_gradient</code> adds the result inside the core-Hamiltonian term. Every gradient (RHF, UHF, ROHF, RKS, UKS) therefore inherits it, and so do the geometry and frequency loops built on them. Stock libecpint&#x27;s derivatives missed finite differences by 4.6e-5 relative on HI/def2-QZVP. The same upstream PR #81 fixes them, and <code>planck-ecp-gradient-fd</code> pins the fix.</p>
+<h4 id="validation-case-study-the-electron-counts-nobody-indexed">Validation case study: the electron counts nobody indexed</h4>
+<p>Step 2 of the ECP work audited every <code>atomic_numbers[a]</code> read and switched the physical ones to <code>nuclear_charge(a)</code>. It missed the <em>sums</em>. There were seventeen of them, written as <code>atomic_numbers.cast&lt;int&gt;().sum()</code> or as range-for loops, which match neither a search for indexed reads nor <code>for (auto Z</code>. They counted electrons in the MO printout, the DFT driver, stability analysis, the RHF response, MP2, CC, FCI, CASSCF and TDDFT. The worst result had no warning at all: <strong>HI/def2-SVP RMP2 gave <span class="math-inline">\(E_\text{corr} = -0.00598\)</span> against PySCF&#x27;s <span class="math-inline">\(-0.14342\)</span></strong>, 24 times too small, because MP2 counted iodine&#x27;s 53 electrons instead of its 25 valence electrons, so its occupied/virtual split was wrong. All of them now go through <code>total_nuclear_charge()</code>. The lesson: <strong>when a quantity changes meaning, audit every way the code can spell its use, sums as well as reads.</strong></p>
 <h4 id="validation-case-study-a-six-digit-constant">Validation case study: a six-digit constant</h4>
 <p>The first comparison of Planck&#x27;s <span class="math-inline">\(\mathbf V_{ne} + \mathbf U\)</span> against PySCF (<code>mol.intor(&#x27;int1e_nuc&#x27;) + mol.intor(&#x27;ECPscalar&#x27;)</code>) on HI/def2-SVP missed by up to 1.9e-7, and only on H–H elements: shells that are both away from the iodine centre. The SCF energy was 2.3e-8 off. Five eliminations found it:</p>
 <ol>
@@ -3112,8 +3115,8 @@ f_{ia}
 <p><span class="math-display">\[
 R_{ij}^{ab} =
 \langle ij || ab \rangle
-+ P(ab)\sum_e t_{ij}^{ae} F_{be}
-- P(ij)\sum_m t_{im}^{ab} F_{mj}
++ P(ab)\sum_e t_{ij}^{ae}\Big(F_{be} - \frac{1}{2}\sum_m t_m^b F_{me}\Big)
+- P(ij)\sum_m t_{im}^{ab}\Big(F_{mj} + \frac{1}{2}\sum_e t_j^e F_{me}\Big)
 + \frac{1}{2}\sum_{mn}\tau_{mn}^{ab} W_{mnij}
 + \frac{1}{2}\sum_{ef}\tau_{ij}^{ef} W_{abef}
 + P(ij)P(ab)\sum_{me} t_{im}^{ae} W_{mbej}
@@ -3128,6 +3131,26 @@ R_{ij}^{ab} =
 \]</span></p>
 <p>together with the explicit singles-doubles contractions built from the <code>ovvv</code> and <code>ooov</code> blocks.</p>
 <p>These appear in practice in the code as the explicit <code>t1 <em> ovvv</code>, <code>t1 </em> ooov</code>, and antisymmetrized <code>t1 <em> t1 </em> ovov</code> corrections in the doubles residual. These were important enough to show up in regression testing: if they are omitted or indexed with the wrong antisymmetry, the solver can still look stable while converging to the wrong CCSD energy.</p>
+<h4 id="case-study-the-terms-that-vanish-by-brillouin">Case study: the <span class="math-inline">\(F_{me}\)</span> terms that vanish &quot;by Brillouin&quot;</h4>
+<p>Until 2026-11, <code>build_residuals</code> used bare <span class="math-inline">\(F_{be}\)</span> and <span class="math-inline">\(F_{mj}\)</span> in the doubles residual and dropped the two <span class="math-inline">\(\frac{1}{2} t\,F_{me}\)</span> corrections above. The argument for dropping them sounds right: canonical RHF has <span class="math-inline">\(f_{ia} = 0\)</span>, so &quot;<span class="math-inline">\(F_{me}\)</span> is zero&quot;. It is not. <span class="math-inline">\(F_{me} = f_{me} + \sum_{nf} t_n^f \langle mn||ef\rangle\)</span>, and the second term is nonzero as soon as <span class="math-inline">\(T_1\)</span> is. The lost contribution is <span class="math-inline">\(O(t_1^2 t_2)\)</span>: tiny on small molecules and growing with system size.</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>system</th>
+<th>Planck − PySCF <span class="math-inline">\(E_\text{corr}\)</span> before the fix</th>
+</tr></thead>
+<tbody>
+<tr><td>water/STO-3G (spherical)</td><td>6.2e-7</td></tr>
+<tr><td>water/6-31G</td><td>5.4e-7</td></tr>
+<tr><td>Be/6-31G\*</td><td>1.4e-6</td></tr>
+<tr><td>HI/def2-SVP (ECP)</td><td>7.4e-8</td></tr>
+<tr><td>HBr/def2-SVP</td><td>1.1e-6</td></tr>
+</tbody></table></div>
+<p>With the terms restored, every case matches PySCF in every printed digit, and water/6-31G converges in 15 iterations instead of 22.</p>
+<p>Two lessons:</p>
+<ul>
+<li><strong>The regression gates could not catch it, because they were pinned to Planck&#x27;s own output.</strong> Two committed CCSD cases had been &quot;agreeing&quot; with the bug at 1e-9. A pinned number guards against change, not against error. Pin to an independent code whenever one exists.</li>
+<li><strong>A control with the suspected cause removed moves the search.</strong> The gap was found on HI with an ECP, and the ECP was the obvious suspect. The all-electron control HBr was <em>worse</em>, which ruled the ECP out at once and pointed at the CC equations.</li>
+</ul>
 <p>So the <code>RCCSD</code> update pattern is:</p>
 <ol>
 <li>build <span class="math-inline">\(\tau\)</span> and <span class="math-inline">\(\tilde\tau\)</span></li>

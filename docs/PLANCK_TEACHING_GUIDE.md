@@ -2055,6 +2055,34 @@ Full point-group symmetry needs nothing new either. The symmetry skeleton
 (§8) only touches the two-electron Fock build; \(\mathbf H_\text{core}\) is
 built in full, ECP included.
 
+**Everything else inherits the ECP from \(\mathbf H_\text{core}\) and the
+electron count.** MP2, CC, CASSCF, FCIDUMP and Kohn-Sham DFT need no
+ECP-specific code. Neither do TDDFT and stability analysis. The one new term
+is in the gradient. \(\mathbf U\) moves with its centre, so
+\(\partial E/\partial \mathbf R\) gains \(\mathrm{tr}(\mathbf D\,\partial\mathbf U/\partial\mathbf R)\).
+`ECP::_compute_ecp_gradient` contracts libecpint's shell-pair derivatives with
+the density, and `Gradient::one_electron_gradient` adds the result inside the
+core-Hamiltonian term. Every gradient (RHF, UHF, ROHF, RKS, UKS) therefore
+inherits it, and so do the geometry and frequency loops built on them. Stock
+libecpint's derivatives missed finite differences by 4.6e-5 relative on
+HI/def2-QZVP. The same upstream PR #81 fixes them, and `planck-ecp-gradient-fd`
+pins the fix.
+
+#### Validation case study: the electron counts nobody indexed
+
+Step 2 of the ECP work audited every `atomic_numbers[a]` read and switched
+the physical ones to `nuclear_charge(a)`. It missed the *sums*. There were
+seventeen of them, written as `atomic_numbers.cast<int>().sum()` or as
+range-for loops, which match neither a search for indexed reads nor
+`for (auto Z`. They counted electrons in the MO printout, the DFT driver,
+stability analysis, the RHF response, MP2, CC, FCI, CASSCF and TDDFT. The
+worst result had no warning at all: **HI/def2-SVP RMP2 gave
+\(E_\text{corr} = -0.00598\) against PySCF's \(-0.14342\)**, 24 times too
+small, because MP2 counted iodine's 53 electrons instead of its 25 valence
+electrons, so its occupied/virtual split was wrong. All of them now go through
+`total_nuclear_charge()`. The lesson: **when a quantity changes meaning,
+audit every way the code can spell its use, sums as well as reads.**
+
 #### Validation case study: a six-digit constant
 
 The first comparison of Planck's \(\mathbf V_{ne} + \mathbf U\) against PySCF
@@ -6103,8 +6131,8 @@ rather than writing one giant formula inline. Its grouped form is
 \[
 R_{ij}^{ab} =
 \langle ij || ab \rangle
-+ P(ab)\sum_e t_{ij}^{ae} F_{be}
-- P(ij)\sum_m t_{im}^{ab} F_{mj}
++ P(ab)\sum_e t_{ij}^{ae}\Big(F_{be} - \frac{1}{2}\sum_m t_m^b F_{me}\Big)
+- P(ij)\sum_m t_{im}^{ab}\Big(F_{mj} + \frac{1}{2}\sum_e t_j^e F_{me}\Big)
 + \frac{1}{2}\sum_{mn}\tau_{mn}^{ab} W_{mnij}
 + \frac{1}{2}\sum_{ef}\tau_{ij}^{ef} W_{abef}
 + P(ij)P(ab)\sum_{me} t_{im}^{ae} W_{mbej}
@@ -6130,6 +6158,37 @@ These appear in practice in the code as the explicit `t1 * ovvv`,
 residual. These were important enough to show up in regression testing: if
 they are omitted or indexed with the wrong antisymmetry, the solver can still
 look stable while converging to the wrong CCSD energy.
+
+#### Case study: the \(F_{me}\) terms that vanish "by Brillouin"
+
+Until 2026-11, `build_residuals` used bare \(F_{be}\) and \(F_{mj}\) in the
+doubles residual and dropped the two \(\frac{1}{2} t\,F_{me}\) corrections
+above. The argument for dropping them sounds right: canonical RHF has
+\(f_{ia} = 0\), so "\(F_{me}\) is zero". It is not.
+\(F_{me} = f_{me} + \sum_{nf} t_n^f \langle mn||ef\rangle\), and the second term
+is nonzero as soon as \(T_1\) is. The lost contribution is
+\(O(t_1^2 t_2)\): tiny on small molecules and growing with system size.
+
+| system | Planck − PySCF \(E_\text{corr}\) before the fix |
+|---|---|
+| water/STO-3G (spherical) | 6.2e-7 |
+| water/6-31G | 5.4e-7 |
+| Be/6-31G\* | 1.4e-6 |
+| HI/def2-SVP (ECP) | 7.4e-8 |
+| HBr/def2-SVP | 1.1e-6 |
+
+With the terms restored, every case matches PySCF in every printed digit, and
+water/6-31G converges in 15 iterations instead of 22.
+
+Two lessons:
+- **The regression gates could not catch it, because they were pinned to
+  Planck's own output.** Two committed CCSD cases had been "agreeing" with the
+  bug at 1e-9. A pinned number guards against change, not against error. Pin
+  to an independent code whenever one exists.
+- **A control with the suspected cause removed moves the search.** The gap
+  was found on HI with an ECP, and the ECP was the obvious suspect. The
+  all-electron control HBr was *worse*, which ruled the ECP out at once and
+  pointed at the CC equations.
 
 So the `RCCSD` update pattern is:
 
