@@ -86,12 +86,13 @@ rerun for it.
   non-SCF workflow refuse meta-GGA by name: the KS gradient picks its terms by
   `vsigma.cols()` and would otherwise silently drop the τ term.
 - **PCM geometry optimizations and frequencies**
-  (`docs/PCM_GEOMETRY_SCOPE.md`). Step 1, the smooth SWIG cavity, landed
-  2026-11-07, and step 2 (fused sweeps, S factored once) the same day; see
-  Completion. Next: the analytic gradient (3), then geomopt and frequencies
-  (4). Spherical PCM (5) is now unblocked and independent of 3–4. PCM is still
-  single-point only, in both binaries and in both bases, and spherical PCM is
-  refused.
+  (`docs/PCM_GEOMETRY_SCOPE.md`). Steps 1–3 landed 2026-11-07: the smooth
+  SWIG cavity, then fused integral sweeps with S factored once, then a
+  shell-block point-charge kernel (see Completion). Next: the analytic
+  gradient (4), then geomopt and frequencies (5). Spherical PCM (6) is
+  unblocked and independent of 4–5. Deferred from step 3: tolerance-linked
+  pair screening, and a cheaper φ_el contraction. PCM is still single-point
+  only, in both binaries and in both bases, and spherical PCM is refused.
 - **Double hybrids** (`docs/DH_IMPLEMENTATION.md` §9):
   - UKS DH geometry optimization and frequencies are rejected. The gradient
     they would call already passes FD.

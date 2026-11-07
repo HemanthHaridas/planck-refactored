@@ -60,8 +60,8 @@ at every angle. It is not adopted, for three reasons:
   calculation displaces from them.
 - **It adds a gradient term.** A frame that depends on the geometry makes
   every tessera position depend on all the atoms, through the frame
-  rotation, and not only on its own atom. The analytic gradient (scope step
-  2) would need the derivative of the eigenvectors of the inertia tensor,
+  rotation, and not only on its own atom. The analytic gradient (step 4 of
+  `docs/PCM_GEOMETRY_SCOPE.md`) would need the derivative of the eigenvectors of the inertia tensor,
   which diverges at those degeneracies.
 - **It would break the PySCF gate.** PySCF uses the lab-frame grid, so a
   rotated grid would only agree with it loosely.

@@ -1038,6 +1038,7 @@
   {
    "id": "ethylene_rhf_stability_unstable",
    "input": "tests/inputs/regression/hf/ethylene_rhf_stability_unstable.hfinp",
+   "_note": "Re-pinned 2026-11-07 from -77.3837525369 after the shell-block V_ne kernel moved the old input to another SCF basin. The old input was exact 90-degree twisted ethylene (D2d): the two carbon p orbitals are degenerate, the HOMO/LUMO gap at iteration 2 is ~1e-15, and roundoff chose between a zwitterion (dipole 2.78 D, unstable in all three channels, the pinned state) and a covalent state (-77.4195705637, real-internal stable). PySCF behaves identically: its hcore guess gives the zwitterion, minao/huckel the covalent state, and 1e-15 noise on H_core flips the hcore result in 9 of 10 seeds. The input now pyramidalizes the second CH2 by 0.20 A and uses guess sad: the gap opens to 8.4e-4, every PySCF guess and every noisy seed reaches the same zwitterion, -77.3844126695 (dipole -2.83 D), Planck SAD matches it to every printed digit with old and new kernels, and real-internal / complex / triplet lambda_min are -0.068 / -0.073 / -0.078. The case still is the suite's only gate on a negative RHF real-internal eigenvalue.",
    "tags": [
     "core",
     "extended"
@@ -1053,7 +1054,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -77.3837525369,
+     "expected": -77.3844126695,
      "atol": 1e-09
     },
     {

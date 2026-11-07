@@ -1089,6 +1089,35 @@ Three observations are useful for teaching:
    mEh lower. 6-31G and cc-pVDZ both have enough flexibility that DIIS funnels
    both guesses into the same RHF basin (they converge to identical Fock
    matrices to all printed digits).
+
+   **What actually decides the 3-21G basin (found 2026-11-07): roundoff, not
+   only the guess.** At the exact 90° twist the molecule is D2d. The two carbon
+   p orbitals then form a degenerate e pair, and at the second SCF iteration
+   that pair is exactly the HOMO/LUMO pair (gap ~1e-15). Closed-shell RHF must
+   doubly occupy one direction in that pair. The eigensolver's choice of
+   direction is set by last-bit noise, and two different solutions lie
+   downhill from it:
+   - a **zwitterion**, with both electrons on one carbon: −77.38375253,
+     dipole 2.78 D, unstable in every channel;
+   - a **covalent** state, with the pair shared by both carbons:
+     −77.41957055, no dipole, real-internally stable.
+
+   PySCF behaves the same way. Its `1e` and `atom` guesses give the zwitterion
+   (on opposite carbons) and `minao`/`huckel` the covalent state. Adding
+   1e-15 of random noise to H_core flips its `1e` result to the covalent state
+   in 9 of 10 seeds. Planck's HCore run reached the zwitterion only by roundoff
+   luck. A change to the nuclear-attraction kernel that reordered a sum moved
+   it to the covalent state.
+
+   The regression input is therefore no longer exactly D2d. It pyramidalizes
+   the second CH₂ by 0.20 Å and uses `guess sad`. That opens the gap to
+   8.4e-4, and every PySCF guess and noisy seed reaches one zwitterion,
+   −77.3844126695 (dipole −2.83 D). Planck matches it to every printed digit.
+   The tables here were measured on the exact D2d geometry.
+
+   **The lesson:** when a test pins a symmetry-broken solution, check whether
+   a degenerate HOMO/LUMO pair exists at some SCF iteration. If it does,
+   break the symmetry in the input, not by luck.
 3. **For 6-31G and cc-pVDZ the converged RHF is itself real-internally unstable.**
    The guess didn't matter because there's only one RHF basin reachable from
    either guess — but that basin is not even an RHF minimum.
@@ -9142,6 +9171,18 @@ and the prefactor by \(\sqrt{s}\). A point charge is \(s = 1\).
 `_compute_external_charge_attraction` takes the exponent from
 `ExternalCharge::exponent` (0 means a point charge).
 
+These integrals are evaluated per *shell* pair, not per Cartesian component
+pair (`nuclear_vrr_accumulate` and `nuclear_block_from_slice` in
+`os.cpp`). For one primitive pair and one charge, the vertical recurrence
+\((\mathbf{a}+\mathbf{b}\,|\,0)^{(0)}\) does not depend on how the angular
+momentum is split between the two shells. The horizontal recurrence that
+splits it is linear, with a fixed \(\mathbf{A}-\mathbf{B}\). So the
+\(m = 0\) slices are summed over primitives first (and over charges, when
+a summed matrix is wanted), and the horizontal step runs once per shell
+pair. The component normalizations are applied at the end. Every
+point-charge integral in Planck takes this path: \(V_{ne}\), the PCM
+reaction field and the electrostatic potential.
+
 ### Cavity Construction (SWIG)
 
 A cavity whose tesserae appear and vanish as atoms move gives an energy with
@@ -9356,11 +9397,14 @@ reaction-field operator) are not implemented.
   (\(O(N_{\text{tess}}^3)\)). Each SCF iteration adds two integral sweeps,
   each \(O(N_{\text{tess}} \times \text{shell-pair primitives})\), plus an
   \(O(N_{\text{tess}}^2)\) back-substitution. Memory is the
-  \(N_{\text{tess}}^2\) factor. On naphthalene/6-31G* RHF the PCM run takes
-  118 s and peaks at 1.87 GB. The earlier design, which stored one AO matrix
-  per tessera, took 157 s and peaked at 3.27 GB. Its setup was about 38 s
-  longer, and its iterations were about 1.2 s cheaper each, so it would win
-  again after roughly 30 SCF iterations.
+  \(N_{\text{tess}}^2\) factor. With direct SCF, naphthalene/6-31G* RHF
+  with PCM (2160 tesserae) takes 13.7–13.9 s and 0.13 GB; the two sweeps
+  cost about 0.3 s per iteration. The earlier design stored one AO matrix
+  per tessera and took 13.5–13.7 s and 0.63 GB: it paid for the matrices
+  once and then did only a Frobenius product per tessera each iteration.
+  The per-shell-pair kernel is what brought the sweeps level with it (they
+  took about 1.05 s per iteration with a per-component kernel).
+  `docs/PCM_GEOMETRY_SCOPE.md` has the measurements.
 
 ### Code Map
 
@@ -9371,7 +9415,7 @@ reaction-field operator) are not implemented.
 | `%begin_pcm` parser + solvent table | `src/io/io.cpp` | `_parse_pcm`, `dielectric_from_solvent_name` |
 | SWIG cavity, influence-matrix factor, nuclear potential | `src/solvation/pcm.cpp` | `build_pcm_state`, `switch_h`, `SWIG_ZETA` |
 | Fused electronic potential at the tesserae | `src/integrals/os.cpp` | `_compute_electronic_potential` (`exponents`) |
-| Gaussian-charge nuclear-attraction primitive | `src/integrals/os.cpp` | `_os_nuclear_primitive` (`charge_exponent`) |
+| Shell-block point-charge integrals (Gaussian or point) | `src/integrals/os.cpp` | `nuclear_shell_blocks`, `nuclear_vrr_accumulate`, `nuclear_block_from_slice` |
 | SCF reaction field per iteration | `src/solvation/pcm.cpp` | `evaluate_pcm_reaction_field` |
 | RHF + PCM coupling | `src/scf/scf.cpp` | `run_rhf` (PCM block near line 286) |
 | UHF + PCM coupling | `src/scf/scf.cpp` | `run_uhf` (PCM block near line 589) |

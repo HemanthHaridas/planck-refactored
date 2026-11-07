@@ -449,10 +449,28 @@ historical design context, but they are no longer the source of truth for
 
   Step 2 followed: the cavity stores no AO matrices. S is factored once,
   and φ_el and V_rxn are one fused integral sweep each per SCF iteration.
-  On naphthalene/6-31G* (2138 tesserae), the two binaries run back to back
-  gave 157 → 118 s and a peak RSS of 3.27 → 1.87 GB, with the same energy
-  and the same 19 iterations. Each iteration costs about 1.2 s more, and
-  setup about 38 s less.
+  It trades time for memory. With direct SCF and the two binaries run back
+  to back: naphthalene/6-31G* went from 14.3 s and 0.63 GB to 30.1 s and
+  0.13 GB, and anthracene from 37.4 s and 1.40 GB to 76.6 s and 0.20 GB,
+  with the same energies and iteration counts. (A first report of
+  157 → 118 s came from a conventional run whose 6 GB ERI tensor put this
+  8 GiB machine under memory pressure. It was wrong.)
+
+  Step 3 won the time back. Point-charge integrals (V_ne, V_rxn, ESP, φ_el)
+  are now built per shell pair: one VRR per primitive pair and charge,
+  contracted over primitives (and charges), one HRR per component pair, and
+  batched Boys. φ_el is dynamically scheduled. Per iteration, φ_el is
+  2.6–2.8× faster and V_rxn 4.8–5.3× faster. Back to back, naphthalene
+  and anthracene PCM runs take 13.7–13.9 s and 35.8–35.9 s, against
+  13.5–13.7 s and 35.2–35.3 s for the stored-matrix design, with 5–7× less
+  memory. Non-PCM output is unchanged to printed digits, apart from signed
+  zeros and two basin selections. HI⁺'s degenerate π hole picks a different
+  orientation at the same energy. `ethylene_rhf_stability_unstable` was
+  exact D2d twisted ethylene, whose basin roundoff chose (in PySCF too).
+  Its input now pyramidalizes one CH₂ by 0.20 Å and uses SAD, and is
+  re-pinned to −77.3844126695, matching PySCF to every printed digit.
+  Core 132/132; extended 215/219, the failures being the four known RCCSDT
+  routing cases.
 
 - **Test infrastructure: live asserts, no Eigen tests, CI builds the tests
   (2026-11-07).** Three fixes in `CMakeLists.txt` and

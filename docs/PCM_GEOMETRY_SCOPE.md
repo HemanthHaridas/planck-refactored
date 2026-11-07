@@ -3,7 +3,7 @@
 Research scope, opened 2026-10-26. It expires when the work lands; rewrite it
 then as the answer. Status lives in `vault/Status/Open Work.md`.
 
-## Result so far: the cavity is smooth, matches PySCF, and scales (steps 1–2, 2026-11-07)
+## Result so far: the cavity is smooth, matches PySCF, and scales (steps 1–3, 2026-11-07)
 
 The energy is now a smooth function of the geometry. That was the
 prerequisite for a gradient: the old cavity jumped. Planck's C-PCM uses the
@@ -81,23 +81,30 @@ only its LDLT factor. Each SCF iteration then does three things in
 Memory is O(n_tess²) instead of O(n_tess · n_basis²). The cost is two
 integral sweeps per iteration, as in PySCF.
 
-Measured on naphthalene/6-31G* RHF (2138 tesserae, 166 basis functions,
-8 threads), with the two binaries run back to back:
+**It is a memory win and a time loss.** With direct SCF, so that memory
+pressure plays no part, and the two binaries run back to back (6-31G* RHF,
+8 threads):
 
-| | Stored matrices (before) | Fused sweeps (after) |
+| Run | Stored matrices (before) | Fused sweeps (after) |
 |---|---|---|
-| Wall time | 157 s | 118 s |
-| Time until the ERI tensor is ready (includes cavity setup) | 86 s | 48.5 s |
-| Late SCF iteration | ~1.0–1.2 s | ~2.1–2.5 s |
-| Peak RSS | 3.27 GB | 1.87 GB (the gas-phase run peaks at 2.10 GB) |
+| Naphthalene, 2160 tesserae, 166 basis functions | 14.3 s, 0.63 GB | 30.1 s, 0.13 GB |
+| Anthracene, 2782 tesserae, 230 basis functions | 37.4 s, 1.40 GB | 76.6 s, 0.20 GB |
 
-Both give the same energy, −383.3608259764 Eh, in 19 iterations. Setup
-saves about 38 s, and each iteration costs about 1.2 s more. The old design
-would only win again past roughly 30 SCF iterations, and it cannot avoid
-its memory: the stored matrices alone were 471 MB here. Wall times vary by
-about 10 % from run to run on this machine, so compare only runs made back
-to back. Screening the two sweeps (skipping far shell pairs) is not done,
-and would be the next lever if PCM iterations ever dominate.
+Both designs give the same energies and iteration counts. The old design
+paid for its matrices once, at roughly the cost of one V_rxn sweep. After
+that it spent only a Frobenius product per tessera per iteration. The fused
+design pays two full integral sweeps every iteration, which is about 1.05 s
+on naphthalene. Step 3 won that time back with a shell-block integral
+kernel: the fused design now matches the stored-matrix design's wall time
+to within 3 %, with 5–7× less memory (see step 3 below).
+
+**Correction.** This section first reported 157 → 118 s and 3.27 → 1.87 GB
+for the default (conventional) SCF on naphthalene. Those numbers are
+artifacts. That run builds a 6.07 GB ERI tensor on an 8 GiB machine. The
+old design's extra 476 MB of stored matrices pushed it into compression and
+paging, which slowed the "before" run. Peak RSS under that pressure (2.4 to
+4.6 GB for a 6 GB tensor) does not measure memory use either. Do not time
+conventional runs whose ERI tensor approaches RAM.
 
 All nine PCM regression cases and the smoothness gate pass unchanged.
 
@@ -130,10 +137,166 @@ s = η/(ζ + η) scaling added.
 
 1. **Smooth cavity.** Done (above).
 
-2. **Make the cavity's cost scale.** Done (above). `grad_qv` will need
+2. **Make the cavity's memory scale.** Done (above). `grad_qv` will need
    the same two sweeps in derivative form.
 
-3. **Analytic gradient**, RHF/UHF and RKS/UKS, Cartesian, energy-only
+3. **Profile and fix the per-iteration PCM cost.** Step 2 made each
+   iteration pay two full integral sweeps, which roughly doubled PCM run
+   time with direct SCF (above). Planck is still cheaper than PySCF per
+   evaluation: PySCF's `_get_vind` takes 3.1 s on naphthalene (1.5 s
+   `_get_v` plus 1.5 s `_get_vmat`; its build takes 2.0 s), against
+   Planck's ~1.05 s. The targets are Planck's own Fock build and the
+   stored-matrix design it replaced.
+
+   **Profile (item 1, done 2026-11-07).** Timers in `pcm.cpp` print at
+   `verbosity verbose` (`PCM Setup Timing`, `PCM Timing`). The ladder is
+   the acenes, built the same way (C–C 1.40 Å, C–H 1.08 Å), 6-31G* RHF,
+   direct SCF, 8 threads (4 performance + 4 efficiency cores), run back to
+   back. Medians over SCF iterations:
+
+   | Molecule | AO pairs | Tesserae | φ_el / s | V_rxn / s | Solve / s | Late gas iteration / s | PCM overhead |
+   |---|---|---|---|---|---|---|---|
+   | Benzene | 5253 | 1538 | 0.160 | 0.140 | 0.001 | 0.098 | 309 % |
+   | Naphthalene | 13861 | 2160 | 0.566 | 0.486 | 0.001 | 0.473 | 219 % |
+   | Anthracene | 26565 | 2782 | 1.227 | 1.065 | 0.001 | 1.179 | 197 % |
+
+   - **Setup is negligible.** Building S takes 0.012–0.030 s and the LDLT
+     0.065–0.375 s, once per run. The back-substitution takes ~1 ms per
+     iteration.
+   - **The two sweeps are all of it, in equal parts.** Their cost tracks
+     (AO pairs × tesserae) almost exactly: 37, 35 and 31 ns per
+     pair-tessera for both sweeps together. That is the unscreened
+     O(pairs × n_tess) growth.
+   - **Idle time is end-of-region imbalance, not serial work.** In the
+     earlier `sample` profile (conventional SCF), the main thread spent
+     only ~2 % in serial code; the largest piece was the LDLT
+     back-substitution at 1.2 %. Its barrier waits split 1147 samples at
+     the end of the Fock build and 622 at the end of the φ_el sweep; the
+     workers' 8.2k idle samples are the same barriers. φ_el uses
+     `schedule(static)` over tesserae, so each thread gets an equal number
+     of points, and on mixed performance/efficiency cores those shares
+     finish at different times.
+   - Inside the sweeps, the earlier profile has `_os_nuclear_primitive`
+     10.3k samples, scalar Boys 5.4k and `_nuclear_hrr` 3.6k.
+
+   Three structural costs follow from the code:
+   - **Per-component evaluation.** The sweeps walk `build_shellpairs`'s
+     list, which has one entry per Cartesian AO pair (13861 for
+     naphthalene). Each entry reruns the full primitive VRR and HRR, so a
+     (d|d) shell pair repeats the same VRR 36 times. Naphthalene has 2926
+     shell pairs, a 4.7× smaller count; the gain in work depends on the
+     primitive and angular-momentum mix and has to be measured.
+   - **Scalar Boys.** `_os_nuclear_primitive` calls `boys(m, T)` once per
+     order. The ERI kernels use the batched `boys_vec`.
+   - **Screening, smaller than it first looked.** The `ShellPair`
+     constructor already drops primitive pairs with
+     |c·prefactor| < 1e-24 (`kNegligiblePrimitivePair`), so distant pairs
+     carry short or empty primitive lists and cost close to nothing. A
+     tighter, tolerance-linked screen would gain less than the N³ argument
+     suggested.
+
+   **Shell-block kernel and dynamic schedule (items 2 and 4, done
+   2026-11-07).** `src/integrals/os.cpp` now builds point-charge integrals
+   per shell pair:
+   - `nuclear_shell_blocks` groups the per-component pair list into shell
+     pairs, finding each shell pair's first-component `ShellPair` by
+     scanning the list rather than assuming its order.
+   - `nuclear_vrr_accumulate` runs one VRR per primitive pair and charge
+     over the triangle ix+iy+iz ≤ LA+LB, with batched `boys_vec` and the
+     same Gaussian-charge scaling as before. It contracts the m = 0 slice
+     into one accumulator, over primitives (and over charges, for a summed
+     matrix).
+   - `nuclear_block_from_slice` runs the HRR once per component pair and
+     applies the component norms.
+
+   Both sweeps use it: `compute_external_charge_attraction_impl` (V_rxn,
+   and V_ne for every calculation) and `_compute_electronic_potential`
+   (φ_el, and ESP). The φ_el sweep is now `schedule(dynamic, 8)` over
+   points. That stays deterministic, because each point is written by one
+   thread.
+
+   Per-iteration medians, direct SCF, same ladder:
+
+   | Molecule | φ_el / s (before → after) | V_rxn / s (before → after) |
+   |---|---|---|
+   | Benzene | 0.160 → 0.058 | 0.140 → 0.029 |
+   | Naphthalene | 0.566 → 0.202 | 0.486 → 0.092 |
+   | Anthracene | 1.227 → 0.466 | 1.065 → 0.200 |
+
+   V_rxn gains more (4.8–5.3×) than φ_el (2.6–2.8×). V_rxn does one HRR
+   per shell pair for all charges together. φ_el still does one HRR and
+   one density contraction per (point, shell pair).
+
+   Whole PCM runs against the stored-matrix design, both binaries run back
+   to back twice:
+
+   | Run | Stored matrices | Shell-block fused |
+   |---|---|---|
+   | Naphthalene | 13.67 / 13.46 s, 0.63 GB | 13.65 / 13.93 s, 0.13 GB |
+   | Anthracene | 35.22 / 35.31 s, 1.40 GB | 35.80 / 35.93 s, 0.21 GB |
+
+   Time is back to parity, 0–3 % slower, with 5–7× less memory. Energies
+   are unchanged.
+
+   **Effect on non-PCM output.** V_ne and ESP for every calculation now go
+   through this kernel. That changes the summation order, so results are
+   not bitwise identical. Against the pre-change binary, on HF and ECP
+   gradients, CHELPG, ESP points and spherical ESP:
+   - gradients and ESP/CHELPG charges are identical to every printed digit;
+   - otherwise only signed zeros (−0.000000 against 0.000000) and the tenth
+     digit of the kJ/mol and kcal/mol columns differ;
+   - two cases move by basin selection, not by error:
+     - **HI⁺ UHF:** its degenerate π hole picks a different px/py mixture.
+       The quadrupole's xy part rotates (XX 218.172892 → 218.122246,
+       XY −0.754 → −0.404) with unchanged magnitude and trace, and the
+       energy is unchanged.
+     - **`ethylene_rhf_stability_unstable`:** from `guess hcore`, its
+       trajectory matches to every printed digit through iteration 2 and
+       then reaches a lower solution (−77.4195705637 instead of the pinned
+       saddle −77.3837525369). That solution is still unstable in the
+       triplet and complex channels, but no longer in the real-internal
+       one. The input was exact 90° twisted ethylene (D2d): the two carbon
+       p orbitals are degenerate, so the HOMO/LUMO gap at iteration 2 is
+       ~1e-15 and roundoff picks between a zwitterion and a covalent state.
+       PySCF does the same. Its `1e` guess gives the zwitterion and
+       `minao`/`huckel` the covalent state, and 1e-15 of noise on H_core
+       flips its `1e` result in 9 of 10 seeds. **Resolved:** the input now
+       pyramidalizes the second CH₂ by 0.20 Å and uses `guess sad`. The gap
+       opens to 8.4e-4, and every PySCF guess and noisy seed reaches one
+       zwitterion. Planck SAD matches it to every printed digit
+       (−77.3844126695) with both kernels, and the real-internal, complex
+       and triplet λ_min are −0.068, −0.073 and −0.078. The case remains
+       the suite's only gate on a negative RHF real-internal eigenvalue.
+
+   **Remaining:**
+   3. **Pair screening** by a tolerance-linked prefactor bound, only if a
+      larger system shows the sweeps dominating again (see the correction
+      above).
+   - φ_el's per-(point, shell pair) HRR and density contraction are its
+     remaining cost. Contracting the density into the HRR's output, or
+     transposing the loop so each shell pair handles a batch of points,
+     would be the next lever.
+
+   **Gates:**
+   - Every PCM regression case and the four SWIG gates are unchanged to
+     their printed digits. This is not bitwise, because the summation order
+     changes.
+   - Non-PCM point-charge paths (V_ne, ESP, CHELPG) keep their printed
+     output, or are rebased deliberately if they move to the new kernel.
+   - The ladder above, with direct SCF, before and after, run back to back.
+     Do not time conventional runs whose ERI tensor approaches RAM (see the
+     correction under step 2).
+
+   **Stop** when a direct-SCF PCM run on naphthalene and on anthracene is
+   no slower than the stored-matrix design was (14.3 s and 37.4 s back to
+   back). That needs about 3.5× on the PCM share of the run. Stop earlier
+   if the remaining PCM time leaves these kernels. (An earlier stop
+   criterion, "PCM adds ≤ 25 % to a late iteration", did not say which
+   SCF mode. It reads 44 % under conventional SCF and ~200 % under direct.)
+   **Status:** met to within 3 % (above). Items 2 and 4 are done; item 3
+   is deferred.
+
+4. **Analytic gradient**, RHF/UHF and RKS/UKS, Cartesian, energy-only
    workflow `calculation gradient`. Lift the `calculation` gate in
    `src/io/io.cpp` for gradients only.
    - Gate: fourth-order finite difference of the energy to 1e-7 Ha/Bohr on
@@ -143,20 +306,20 @@ s = η/(ζ + η) scaling added.
      translates with the molecule, so the sum must vanish to roundoff. Net
      torque does not vanish (see Orientation) and is not a gate.
 
-4. **Geometry optimization and frequencies** through the gradient, and
+5. **Geometry optimization and frequencies** through the gradient, and
    removal of the remaining `calculation` gate. The DFT double-hybrid
    gradients keep refusing solvent: they have no solvent response.
    - Gate: water in water optimized against PySCF's `geometric_solver`.
    - Gate: frequencies against a PySCF Hessian from finite differences of
      its analytic gradient.
 
-5. **Spherical basis.** This was waiting on spherical DFT, which has landed,
-   so it is now independent of steps 2–4. Lift the density to Cartesian
+6. **Spherical basis.** This was waiting on spherical DFT, which has landed,
+   so it is now independent of steps 3–5. Lift the density to Cartesian
    before φ_el (as the ESP fix S0.1 did) and transform V_rxn to the working
    basis. Then remove the "PCM solvation" refusal in both binaries
    (`src/hf_driver.cpp` and the DFT `validate_spherical_support`).
    - Gate: PySCF `cart=False` on water/6-31G*, RHF and RKS. The gradient
-     follows through the existing lift once step 3 lands.
+     follows through the existing lift once step 4 lands.
 
 ## Not in this scope
 

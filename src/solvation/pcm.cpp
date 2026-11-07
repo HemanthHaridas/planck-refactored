@@ -18,6 +18,7 @@
 
 #include "pcm.h"
 
+#include <chrono>
 #include <cmath>
 #include <format>
 #include <map>
@@ -87,6 +88,7 @@ HartreeFock::Solvation::build_pcm_state(const HartreeFock::Calculator &calculato
     // operator.
     if (calculator._solvation._model == HartreeFock::SolvationModel::None)
         return state;
+    const auto t_setup = std::chrono::steady_clock::now();
 
     const int ngrid = calculator._solvation._surface_points_per_atom;
     const auto zeta = SWIG_ZETA.find(ngrid);
@@ -192,9 +194,19 @@ HartreeFock::Solvation::build_pcm_state(const HartreeFock::Calculator &calculato
         }
     }
 
+    const auto t_factor = std::chrono::steady_clock::now();
     state.influence_factor.compute(influence);
     if (state.influence_factor.info() != Eigen::Success)
         return std::unexpected("PCM surface linear system factorization failed");
+    if (calculator._output._verbosity >= HartreeFock::Verbosity::Verbose)
+    {
+        const auto t_end = std::chrono::steady_clock::now();
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "PCM Setup Timing :",
+            std::format("cavity + S {:.3f} s, LDLT {:.3f} s",
+                        std::chrono::duration<double>(t_factor - t_setup).count(),
+                        std::chrono::duration<double>(t_end - t_factor).count()));
+    }
 
     // C-PCM: f(eps) = (eps - 1) / eps (Barone and Cossi 1998; PySCF's
     // 'C-PCM'). Klamt's COSMO uses (eps - 1) / (eps + 1/2); this code used
@@ -254,6 +266,7 @@ HartreeFock::Solvation::evaluate_pcm_reaction_field(
         exponents.push_back(site.exponent * site.exponent);
     }
 
+    const auto t0 = std::chrono::steady_clock::now();
     // ── 1. phi_tot at each tessera = phi_nuc - P : <mu| erf(xi r)/r |nu> ─────
     // One fused sweep over the shell pairs, parallel over tesserae. It returns
     // the positive contraction; the electron's charge is applied here.
@@ -262,12 +275,14 @@ HartreeFock::Solvation::evaluate_pcm_reaction_field(
         HartreeFock::ObaraSaika::_compute_electronic_potential(
             shell_pairs, total_density, positions, &exponents);
 
+    const auto t1 = std::chrono::steady_clock::now();
     // ── 2. Solve S q = -f(eps) phi_tot with the factor from build_pcm_state ──
     result.apparent_charges =
         state.influence_factor.solve(-state.dielectric_factor * result.total_potential);
     if (state.influence_factor.info() != Eigen::Success)
         return std::unexpected("PCM surface linear system solve failed");
 
+    const auto t2 = std::chrono::steady_clock::now();
     // ── 3. V_rxn_munu = -sum_i q_i <mu| erf(xi_i r)/r |nu> ───────────────────
     // One attraction build over all the Gaussian charges: the operator that
     // feeds the dielectric polarization back into the Fock / KS matrix.
@@ -280,6 +295,15 @@ HartreeFock::Solvation::evaluate_pcm_reaction_field(
             .exponent = exponents[i]});
     result.reaction_potential = _compute_external_charge_attraction(
         shell_pairs, nbasis, charges, calculator._integral._engine, nullptr);
+    if (calculator._output._verbosity >= HartreeFock::Verbosity::Verbose)
+    {
+        const auto t3 = std::chrono::steady_clock::now();
+        const auto sec = [](auto a, auto b) { return std::chrono::duration<double>(b - a).count(); };
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "PCM Timing :",
+            std::format("phi_el {:.3f} s, solve {:.3f} s, V_rxn {:.3f} s",
+                        sec(t0, t1), sec(t1, t2), sec(t2, t3)));
+    }
 
     // ── 4. Solvation energy contribution G_rxn = (1/2) q . phi_tot ───────────
     // The 1/2 is what prevents double counting when V_rxn is also added to F:
