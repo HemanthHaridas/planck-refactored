@@ -9,7 +9,7 @@ tags: [status, completion, validated, canonical]
 
 # Completion Status
 
-Last updated: 2026-10-20
+Last updated: 2026-11-07
 
 This is the canonical completion-status document for the repository.
 Subsystem handoff, plan, benchmark, and fix-summary notes may still exist for
@@ -415,6 +415,29 @@ historical design context, but they are no longer the source of truth for
 - PySCF-validated He2/cc-pVDZ counterpoise decomposition
 
 ### Recent fixes now considered landed
+
+- **Test infrastructure: live asserts, no Eigen tests, CI builds the tests
+  (2026-11-07).** Three fixes in `CMakeLists.txt` and
+  `.github/workflows/cmake-multi-platform.yml`:
+  - Release's `-DNDEBUG` compiled every `assert()` in a test out, so those
+    gates passed vacuously. Seen on `cc_spatial_amplitude_projection`, whose
+    fixture bug surfaced only under `-UNDEBUG`. Every `tests/*.cpp` source now
+    gets `-UNDEBUG` as a source-file property. The production sources linked
+    into the test binaries keep `-DNDEBUG`. Only three tests use `assert()`
+    (`cc_amplitude_checkpoint`, `cc_amplitude_sector_seed`,
+    `cc_spatial_amplitude_projection`); the rest use their own checks.
+  - Eigen reads Planck's own `BUILD_TESTING` switch, so
+    `fetchcontent_makeavailable(eigen)` registered 109 Eigen tests that
+    nothing built (14 failed in ~0 s). A normal variable now shadows the
+    switch around the fetch. `ctest -N` lists 94 tests, none from Eigen.
+  - CI built only `--target hartree-fock`, so no `planck-*` test binary was
+    built before `ctest`. It now builds every target. The `-j$(nprocs)` typo
+    (not a command, so `-j` got no value) is now `-j$(nproc)`.
+
+  Verification: reconfigure confirmed (94 tests, 0 Eigen). The full
+  `build-full` build and `ctest` with live asserts are pending. CI itself has
+  not run yet; it may also need the basis path and the Boys-core license,
+  which the workflow does not set.
 
 - **RCCSD doubles equation was missing its F_me terms (2026-11-07).**
   Stanton-Gauss T2 uses `F_be − ½ t_m^b F_me` and `F_mj + ½ t_j^e F_me`;

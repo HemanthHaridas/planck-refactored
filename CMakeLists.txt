@@ -226,7 +226,13 @@ FetchContent_Declare(
     URL https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
+# Eigen reads the same BUILD_TESTING switch as Planck and would register its
+# own (never built) tests in Planck's CTest tree. A normal variable shadows the
+# cache entry for Eigen's scope only.
+set(_planck_build_testing ${BUILD_TESTING})
+set(BUILD_TESTING OFF)
 fetchcontent_makeavailable(eigen)
+set(BUILD_TESTING ${_planck_build_testing})
 
 # Run Eigen's GEMMs serially on the calling thread. This code owns its own
 # OpenMP parallelism at the ERI/Fock level; letting Eigen spawn a second thread
@@ -915,6 +921,12 @@ endif()
 find_package(Python3 COMPONENTS Interpreter)
 
 if(BUILD_TESTING)
+    # Release adds -DNDEBUG, which compiles every assert() in a test out and
+    # lets it pass vacuously. Keep asserts live in the test sources only; the
+    # production sources linked into the test binaries are unchanged.
+    file(GLOB _planck_test_sources CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/tests/*.cpp)
+    set_source_files_properties(${_planck_test_sources} PROPERTIES COMPILE_OPTIONS -UNDEBUG)
+
     # Test-only front end of the same driver, with a typed UDH validation
     # ledger. Not installed; normal CLI/MPI guards remain unchanged.
     add_executable(planck-udh-validation
@@ -1204,6 +1216,7 @@ if(BUILD_TESTING)
         ${POPULATIONS_SRC}
         ${LOOKUP_SRC}
         ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
     )
 
     # Rys rules against independent quadrature moments (n = 1..11, T to 2000).
