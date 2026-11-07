@@ -43,42 +43,8 @@ def _strip_div_tags(text: str) -> str:
 
 # ── Math extraction ───────────────────────────────────────────────────────
 
-def _extract_math(text: str) -> tuple[str, dict[str, str]]:
-    """Replace math regions with placeholder tokens."""
-    store: dict[str, str] = {}
-    counter = [0]
-
-    def _token() -> str:
-        tok = f"XMATHX{counter[0]}XMATHX"
-        counter[0] += 1
-        return tok
-
-    def _sub_display(m: re.Match) -> str:
-        tok = _token()
-        store[tok] = m.group(0)
-        return tok
-
-    text = re.sub(r"\\\[.*?\\\]", _sub_display, text, flags=re.DOTALL)
-
-    def _sub_inline(m: re.Match) -> str:
-        tok = _token()
-        store[tok] = m.group(0)
-        return tok
-
-    text = re.sub(r"\\\(.*?\\\)", _sub_inline, text, flags=re.DOTALL)
-
-    return text, store
-
-
-def _restore_math(html_text: str, store: dict[str, str]) -> str:
-    """Put math back, wrapped in a <span> so MathJax can locate it."""
-    for tok, latex in store.items():
-        if latex.startswith(r"\["):
-            replacement = f'<span class="math-display">{latex}</span>'
-        else:
-            replacement = f'<span class="math-inline">{latex}</span>'
-        html_text = html_text.replace(tok, replacement)
-    return html_text
+# One implementation for both sites (it HTML-escapes the restored LaTeX).
+from build_teaching_site import _extract_math, _restore_math  # noqa: E402
 
 
 # ── Inline Markdown formatting ────────────────────────────────────────────
