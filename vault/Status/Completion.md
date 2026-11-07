@@ -328,6 +328,19 @@ historical design context, but they are no longer the source of truth for
 
 - RKS and UKS
 - LDA, GGA, global hybrids, and arbitrary libxc functional selection
+- **Grimme D3 dispersion** (2026-11-07, `docs/DISPERSION_D3.md`):
+  `dispersion d3bj|d3zero|d3bj-atm|d3zero-atm` through simple-dftd3 v1.7.0
+  (LGPL, fetched at build time, needs Fortran; `PLANCK_WITH_DFTD3`). It is
+  added once per KS scaffold call and once in `compute_analytic_ks_gradient`,
+  so single points, gradients, geomopt, frequencies and the KS half of DH
+  gradients all carry it. Parameter names are derived from the resolved libxc
+  ids; a functional without parameters is rejected by name. Against PySCF
+  `mf.disp` over a separately built simple-dftd3 v1.0.0: D3 energies to every
+  printed digit; totals ≤ 3e-11; water-dimer gradient ≤ 8.2e-10 Ha/Bohr, also
+  under Cs reorientation; geomopt E_opt 1.0e-8. Eight cases, `*d3*_sto3g`;
+  mutation-checked. pyscf-dispersion 1.0.0 does not load on macOS arm64
+  (numpy 2 loader call, x86_64 dylib), and its wrapper turns unknown names
+  into a zero energy; the reference script works around both.
 - Range-separated libxc functionals for single-point, analytic-gradient,
   geometry-optimization, frequency, and geomopt+frequency workflows
 - Double-hybrid libxc functionals for single-point energies (RKS and UKS;

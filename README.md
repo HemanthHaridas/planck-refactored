@@ -65,6 +65,7 @@ A quantum chemistry program implementing restricted, unrestricted, and restricte
 | libmsym | latest | Fetched automatically |
 | libxc | latest | Fetched automatically (`planck-dft` only) |
 | libecpint | pinned commit | Fetched automatically; ECP integrals (MIT, notice installed to `share/doc/planck`) |
+| simple-dftd3 | 1.7.0 | Fetched automatically; D3 dispersion (LGPL-3.0-or-later). Needs a Fortran compiler (e.g. gfortran); without one the build continues with `PLANCK_WITH_DFTD3=OFF`. It is linked statically, so anyone who redistributes a built binary must meet the LGPL's terms for it |
 | OpenMP | any | Optional; system package manager |
 
 <p align="justify">
@@ -200,6 +201,7 @@ compile time for higher excitation ranks.
 | `USE_CUDA` | `OFF` | CUDA GPU acceleration (requires the CUDA toolkit). |
 | `BUILD_TOOLS` | `ON` | Build `chkdump`. |
 | `BUILD_MPI` | `OFF` | Build the unified `planck-mpi` front end. |
+| `PLANCK_WITH_DFTD3` | `ON` | D3 dispersion through simple-dftd3. Switches itself off, with a configure warning, when no Fortran compiler is found; `dispersion` inputs then fail by name. |
 | `CMAKE_BUILD_TYPE` | *(empty)* | **Set this explicitly to `Release` for any timing or production run.** An empty value drops `-DNDEBUG`, which re-enables the CC tensor bounds assertions and makes benchmarks meaningless. |
 
 #### Coupled-cluster kernel generation (ccgen)
@@ -432,6 +434,8 @@ Kohn-Sham DFT settings. Only read by `planck-dft`; ignored by `hartree-fock`. Th
 | `use_sao_blocking` | bool | `.true.`, `.false.` | `.true.` | Enable symmetry-adapted AO blocking for the Coulomb matrix assembly. |
 | `print_grid_summary` | bool | `.true.`, `.false.` | `.true.` | Print a per-atom grid point count summary before the KS iterations. |
 | `save_checkpoint` | bool | `.true.`, `.false.` | `.false.` | Write a `.dftchk` checkpoint file after successful convergence. |
+| `dispersion` | enum | `none`, `d3bj`, `d3zero`, `d3bj-atm`, `d3zero-atm` | `none` | Grimme D3 correction with Becke-Johnson or zero damping; `-atm` adds the three-body term. Included in the energy, gradient, geometry optimization and frequencies, and printed as `Dispersion Energy`. |
+| `dispersion_functional` | string | any simple-dftd3 parameter-set name | derived | Parameters to use. By default derived from the functional (`b3lyp`, `pbe0`, `hse06`, `b2plyp`, `pbe`, `blyp`, `bp86`, ...); a functional without D3 parameters is rejected by name. |
 
 <p align="justify">
 Range-separated hybrids are supported for single-point energies, analytic

@@ -699,6 +699,10 @@ namespace HartreeFock
         bool _use_sao_blocking = true;
         bool _print_grid_summary = true;
         bool _save_checkpoint = false;
+        // Grimme D3: none, d3bj, d3zero, d3bj-atm or d3zero-atm (src/dft/dispersion.cpp).
+        std::string _dispersion = "none";
+        // simple-dftd3 parameter-set name; empty derives it from the functional.
+        std::string _dispersion_functional;
     };
 
     // User-controllable knobs for the polarizable continuum model. Currently

@@ -5061,7 +5061,9 @@ Planck’s implementation follows the decomposition above:
   `src/gradient/gradient.cpp` provide the HF-like skeleton with Coulomb and
   exact-exchange scaling
 - `DFT::Driver::compute_analytic_ks_gradient(...)` in `src/dft/driver.cpp`
-  sums the two pieces into the final \(N_{atoms} \times 3\) gradient
+  sums the two pieces into the final \(N_{atoms} \times 3\) gradient, plus the
+  geometry-only D3 dispersion gradient when `dispersion` is set (§22,
+  "Dispersion Correction (D3)")
 
 ---
 
@@ -8551,7 +8553,154 @@ Matrix".
 | KS-DFT main loop | `src/dft/driver.cpp` | `DFT::Driver::run`, `run_ks_scf_scaffold` |
 | Analytic XC Hessian-vector product (`fxc`, for SOSCF) | `src/dft/analytic_hessian.cpp` | `compute_analytic_xc_hessian_vector_product{,_polarized}`, `orbital_energy_difference_diagonal` |
 | libxc `fxc` wrapper | `src/dft/base/wrapper.h` | `evaluate_{lda,gga}_fxc` |
+| D3 dispersion energy and gradient | `src/dft/dispersion.cpp` | `DFT::Dispersion::compute`, `parameter_set_name` |
 | DFT entry point | `src/dft/main.cpp` | `main` |
+
+### Dispersion Correction (D3)
+
+**Why it is needed.** London dispersion is a correlation effect between
+electrons that are far apart: instantaneous density fluctuations on one
+fragment induce a dipole on the other, and the two attract. The energy falls
+off as \(-C_6/r^6\). A semilocal functional sees only \(\rho\) and
+\(\nabla\rho\) at one point. Two closed-shell fragments whose densities do not
+overlap therefore get no dispersion at all from LDA or GGA, and hybrids add
+only exact exchange, which has none either. The result is predictable: stacked
+aromatics come out unbound, conformers that fold onto themselves come out too
+high, and van der Waals complexes are underbound. Hartree-Fock has the same
+gap. That is why He\(_2\) in §24 is unbound.
+
+Grimme's D3 adds the missing term after the fact, as an explicit pairwise sum
+over atoms. Nearly every routine DFT geometry, conformer search or interaction
+energy is run with it (or with its successor D4).
+
+**The two-body energy.** With Becke-Johnson (BJ) damping,
+
+\[
+E_\text{disp}^{(2)} = -\sum_{A<B} \sum_{n=6,8} s_n
+\frac{C_n^{AB}}{r_{AB}^n + \left(a_1 R_0^{AB} + a_2\right)^n},
+\qquad R_0^{AB} = \sqrt{C_8^{AB}/C_6^{AB}} .
+\]
+
+The damping replaces the \(1/r^n\) singularity by a finite constant at short
+range, where the functional already describes the interaction and the
+asymptotic form would double-count it. The original **zero damping**
+multiplies each term by \(1/\bigl(1 + 6\,(r_{AB}/s_{r,n}R_0^{AB})^{-\alpha_n}\bigr)\)
+(\(\alpha_6 = 14\), \(\alpha_8 = 16\)), which takes the term to zero at short
+range. That gives a small spurious repulsive force at intermediate distances,
+which is why BJ is the usual recommendation. The scaling factors
+\(s_6, s_8\) and the damping parameters (\(a_1, a_2\) for BJ, \(s_{r,6}\) for
+zero damping) are fitted per functional. Different functionals miss different
+amounts of mid-range correlation, so D3 parameters are a property of the
+functional: there is no "D3 for any functional".
+
+**Where the C\(_6\) comes from.** The coefficients are not constants per
+element. A carbon atom in an alkane is less polarizable than a carbon atom
+in an alkyne. D3 captures this through a fractional **coordination number**
+
+\[
+\text{CN}_A = \sum_{B\neq A}
+\frac{1}{1 + \exp\!\left[-k_1\left(k_2\,\frac{R_A^\text{cov} + R_B^\text{cov}}{r_{AB}} - 1\right)\right]},
+\qquad k_1 = 16,\ k_2 = 4/3,
+\]
+
+a smooth count of bonded neighbours. For each element pair there are up to
+five reference \(C_6\) values, computed by TDDFT on small hydrides at known
+coordination numbers. The \(C_6\) actually used is a Gaussian-weighted
+interpolation between them:
+
+\[
+C_6^{AB} = \frac{\sum_{ij} C_{6,\text{ref}}^{AB}(i,j)\, L_{ij}}{\sum_{ij} L_{ij}},
+\qquad
+L_{ij} = \exp\!\left[-k_3\left((\text{CN}_A - \text{CN}_A^i)^2 + (\text{CN}_B - \text{CN}_B^j)^2\right)\right],
+\]
+
+with \(k_3 = 4\). Then \(C_8^{AB} = 3\,C_6^{AB}\sqrt{Q_A Q_B}\), where \(Q_A\)
+comes from tabulated \(\langle r^4\rangle/\langle r^2\rangle\) expectation
+values. The reference table holds about 32 000 pairwise values. It is the
+bulk of any D3 implementation, and it is why Planck links a library instead
+of retyping it.
+
+**The three-body term.** The optional Axilrod-Teller-Muto (ATM) term adds,
+for each triple of atoms,
+
+\[
+E^{ABC} = C_9^{ABC}\,
+\frac{3\cos\theta_a\cos\theta_b\cos\theta_c + 1}{\left(r_{AB}\, r_{BC}\, r_{CA}\right)^3},
+\qquad C_9^{ABC} \approx \sqrt{C_6^{AB} C_6^{BC} C_6^{CA}},
+\]
+
+damped and scaled by \(s_9\). It is repulsive for compact, near-equilateral
+triples and small for molecules. It matters in dense systems: molecular
+crystals and large supramolecular complexes.
+
+**Why it enters like nuclear repulsion.** Everything above depends on the
+atomic numbers and positions and on nothing else. There is no density in it,
+so D3 adds nothing to the Fock matrix and does not change the orbitals. It is
+one scalar per geometry, exactly like \(E_{nuc}\), and one
+\(N_\text{atoms}\times 3\) gradient. Adding a constant to every SCF iteration's
+energy leaves the SCF convergence untouched. Frequencies, as central
+differences of gradients, need nothing extra.
+
+The gradient is analytic but not trivial. \(C_6^{AB}\) depends on
+\(\text{CN}_A\) and \(\text{CN}_B\), and each coordination number depends on
+the positions of *every* atom. The chain rule therefore adds
+\(\sum_C (\partial E/\partial \text{CN}_C)(\partial \text{CN}_C/\partial
+\mathbf R_A)\) to the explicit \(\partial E/\partial r_{AB}\) terms. An
+implementation that forgets it gets an energy that is right and a gradient
+that is not.
+
+**How Planck does it.** `dispersion d3bj | d3zero | d3bj-atm | d3zero-atm` in
+`%begin_dft` selects the variant. The energy and gradient come from
+simple-dftd3, Grimme's reference implementation (LGPL, fetched at build
+time), through one function, `DFT::Dispersion::compute` in
+`src/dft/dispersion.cpp`. It is called in exactly two places:
+
+- once per `run_ks_scf_scaffold` call, before the SCF loop. The value is added
+  to the RKS and UKS totals next to `_nuclear_repulsion`;
+- once in `compute_analytic_ks_gradient`, next to the HF-like and XC terms
+  (§14).
+
+Every DFT energy goes through the scaffold, including single points, finite-
+difference displacements, geometry steps and the KS half of a double hybrid.
+Every KS gradient goes through `compute_analytic_ks_gradient`, double-hybrid
+ones included. So two call sites cover every workflow. Both read
+`_molecule._standard`, the same frame as the rest of the gradient, and nothing
+is cached between geometries. The energy is printed as `Dispersion Energy :`,
+already included in `DFT Energy :`.
+
+The functional's parameter set is looked up by name. `parameter_set_name`
+derives it from the resolved libxc ids, so the built-in aliases and raw libxc
+names behave the same way. A combined functional names itself
+(`hyb_gga_xc_cam_b3lyp` → `camb3lyp`). A matching exchange/correlation pair
+gives the shared name (`pbe` + `pbe` → `pbe`), and B88 with LYP or P86 gives
+`blyp` or `bp86`. Anything else, LDA for example, is rejected with an error
+naming both functionals. `dispersion_functional` overrides the derivation.
+Two traps worth knowing:
+
+- libxc's `b3lyp` is the VWN-RPA (Gaussian) variant, while simple-dftd3's
+  `b3lyp` names the VWN5 one. Their D3 parameters are identical, so the name
+  mismatch is harmless. It is still the kind of thing to check rather than
+  assume.
+- A D3 term that silently comes out as zero looks like a valid result. PySCF's
+  D3 wrapper does exactly this for an unknown name (Planck's reference script
+  had to assert against it). Planck turns every lookup failure into an error.
+
+**What it does to numbers.** Water/STO-3G with B3LYP-D3(BJ) gets
+\(-5.74\times10^{-4}\) Eh of dispersion, all of it intramolecular. The PBE
+water dimer gets \(-1.38\times10^{-3}\) Eh (\(-0.87\) kcal/mol) in total, and
+PBE0-D3(0) benzene \(-3.11\times10^{-3}\) Eh (\(-1.95\) kcal/mol). These are
+small next to total energies. They are not small next to the interaction
+energies and conformer gaps D3 exists to correct, which are typically a few
+kcal/mol. In the water-dimer gradient D3 contributes up to
+\(1.2\times10^{-4}\) Ha/Bohr, comparable to the force threshold at which a
+geometry optimization stops, so it moves the optimized structure.
+
+Validation, against PySCF `mf.disp` over a separately built simple-dftd3
+release: D3 energies agree to every printed digit, totals to \(3\times10^{-11}\)
+Eh, and the dimer gradient to \(8.2\times10^{-10}\) Ha/Bohr per component,
+also with symmetry reorientation on. The dimer geometry optimization lands
+\(1.0\times10^{-8}\) Eh above PySCF's tightly converged optimum. Full record:
+`docs/DISPERSION_D3.md`.
 
 ### TD-DFT / Linear Response
 
@@ -10055,6 +10204,7 @@ driver.cpp
 | XC matrix assembly | `src/dft/ks_matrix.cpp` | `assemble_xc_matrix` |
 | KS potential matrices | `src/dft/ks_matrix.cpp` | `combine_ks_potential` |
 | KS-DFT driver | `src/dft/driver.cpp` | `DFT::Driver::run` |
+| D3 dispersion (simple-dftd3) | `src/dft/dispersion.cpp` | `DFT::Dispersion::compute`, `parameter_set_name` |
 | TD-DFT / linear response | `src/dft/driver.cpp` | `run_linear_response`, `print_linear_response_report` |
 | C-PCM cavity + influence matrix | `src/solvation/pcm.cpp` | `build_pcm_state`, `fibonacci_sphere` |
 | C-PCM reaction-field operator | `src/solvation/pcm.cpp` | `evaluate_pcm_reaction_field` |
@@ -10141,6 +10291,7 @@ driver.cpp
 | Analytic KS-DFT gradient (RKS/UKS, LDA/GGA/global hybrid, range-separated hybrid) | Complete |
 | TD-DFT / linear response (RKS singlet/triplet, UKS spin-conserving, Casida/TDA, semilocal XC kernels) | Complete, including global-hybrid and erf range-separated exact exchange (B3LYP, HSE06, CAM-B3LYP, wB97X; PySCF-gated to 4e-4 eV per root). Yukawa/Gaussian screened-exchange functionals are rejected for TDDFT |
 | DFT geometry optimization / gradients | Complete within the functional-specific workflow restrictions; for double hybrids see the three DH rows below |
+| D3 dispersion (`d3bj`, `d3zero`, `-atm` variants) | Complete for `planck-dft`: energy, analytic gradient, geomopt, frequencies, and the KS half of DH gradients, through simple-dftd3 (needs a Fortran compiler, `PLANCK_WITH_DFTD3`). PySCF-gated: D3 energies to every printed digit, totals ≤ 3e-11 Eh, gradient ≤ 8.2e-10 Ha/Bohr. HF-D3, D4 and modified damping are not implemented |
 | Global hybrid XC functionals (B3LYP, PBE0, compatible libxc IDs) | Complete |
 | Range-separated hybrid XC functionals (for example HSE06) | Complete for single-point, gradient, geometry optimization, frequency, and geomopt+frequency workflows |
 | Double-hybrid XC functionals (for example B2PLYP) | Single-point energies for RKS and UKS; derivative workflows per the next two rows |

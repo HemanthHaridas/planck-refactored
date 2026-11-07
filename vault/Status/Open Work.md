@@ -19,7 +19,8 @@ which is not a work queue.
 
 The 2026-11-07 rewrite removed items that have landed: def2/ECP (all steps),
 spherical DFT, KS stability, the installed basis path, and the RCCSD F_me
-fix. It also re-checked the items below against the tree. No test suite was
+fix. D3 dispersion landed later the same day (#183) and its follow-ups are
+listed below. It also re-checked the items below against the tree. No test suite was
 rerun for it.
 
 ## 1. Correctness decisions and external dependencies
@@ -79,10 +80,6 @@ rerun for it.
 
 ### DFT, in the recommended order
 
-- **D3 dispersion** (`docs/DISPERSION_D3_SCOPE.md`). There is none in `src/`.
-  The recommended route is simple-dftd3 (LGPL-3.0-or-later) through an
-  optional `ExternalProject`, because it needs a Fortran compiler. A native
-  port would put LGPL files in the tree.
 - **Meta-GGA** (`docs/META_GGA_SCOPE.md`). Rejected in `xc_grid.cpp`. Step 1
   is τ and V^τ in the SCF (AO gradients only). Steps 2–4 are gradients (AO
   Hessian, no CPHF), the response kernel, and VV10. Step 1 must make every
@@ -120,6 +117,18 @@ rerun for it.
 - **Large water chains fail to converge.** 32-water RKS hits `max_cycles` at
   serial (4.8 GB; it ran and iterated). This is an SCF-robustness item, not
   a scaling defect.
+- **D3 follow-ups** (`docs/DISPERSION_D3.md`, Not done). D3(BJ), D3(0) and
+  ATM landed for `planck-dft` (#183). None of these is wanted yet:
+  - HF-D3: the same two call sites in the HF SCF and gradient; `hf`
+    parameters exist.
+  - Modified damping (`d3mbj`, `d3mzero`, `d3op`): one branch each in
+    `DFT::Dispersion::compute`.
+  - D4, which needs atomic partial charges.
+  - A separate D3 field in the results JSON. `electronic_energy` there is
+    total minus nuclear repulsion, so it currently includes D3.
+  - Regenerating the references needs a hand-built shared simple-dftd3
+    (`DFTD3_LIBRARY`): pyscf-dispersion 1.0.0 does not load on macOS arm64.
+    Replace the workaround when a fixed wheel ships.
 
 ### HF and post-HF
 
@@ -132,7 +141,8 @@ rerun for it.
   that need them) wait on a response-machinery audit before the lift adapter
   can go through `compute_rmp2_gradient` / `compute_ump2_gradient`. Refused
   by `water_rmp2_spherical_{gradient,geomopt}_rejected`.
-- **BSSE:** DFT ghost atoms and counterpoise, N-body counterpoise beyond two
+- **BSSE:** DFT ghost atoms and counterpoise (D3 already leaves ghost
+  atoms out, which is the counterpoise-consistent choice), N-body counterpoise beyond two
   fragments, counterpoise-corrected gradients and geomopt, and post-HF
   ghost-reference verification beyond the SCF-level gates.
 - **Symmetry:** conventional-path symmetry-unique ERI storage is out of scope
@@ -152,9 +162,10 @@ rerun for it.
   binaries define; check whether that was intended.
 - **CI's first full-test run is unverified.** The workflow builds every
   target and every test now gets `BASIS_PATH` from the source tree (#181).
-  No CI run has happened yet: #181 is stacked on #180, and CI runs only on
-  PRs into `devel`. Check the first run after retargeting; the Boys-core
-  license (`PLANCK_LICENSE`) is the remaining unknown.
+  #181 is now in `devel`, so the first CI run on a PR into `devel` (#183,
+  D3) is the first full-test run, and also the first that installs gfortran
+  and builds simple-dftd3 on Ubuntu. Unknowns: the Boys-core license
+  (`PLANCK_LICENSE`) and the Fortran link on Linux.
 
 ## 4. Verification gaps
 
