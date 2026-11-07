@@ -4530,18 +4530,17 @@ D_{ii} = \frac{\xi_i\sqrt{2/\pi}}{F_i}.
 \underbrace{- \int \chi_\mu^*(\mathbf{r})\,\chi_\nu(\mathbf{r})\,\frac{\operatorname{erf}(\xi_i|\mathbf{r} - \mathbf{s}_i|)}{|\mathbf{r} - \mathbf{s}_i|}\,\mathrm{d}\mathbf{r}}_{V^{(i)}_{\mu\nu}}
 \Bigr],
 \]</span></p>
-<p>where one may choose a sign convention that folds the electron sign into the integral matrix <span class="math-inline">\(\mathbf{V}^{(i)}\)</span>. The matrices <span class="math-inline">\(\mathbf{V}^{(i)}\)</span> are <em>independent of the density</em>: each is just the AO matrix of a unit Gaussian charge placed at <span class="math-inline">\(\mathbf{s}_i\)</span>, and is computed exactly once during the cavity build. The cost of one cavity build is therefore <span class="math-inline">\(N_{\text{tess}}\)</span> one-electron nuclear-attraction builds, each cheap relative to the two-electron problem.</p>
-<p>The nuclear potential <span class="math-inline">\(\phi^{\text{nuc}}_i\)</span> is also density-independent and is cached up front. During the SCF loop, the only <span class="math-inline">\(O(N_{\text{tess}})\)</span> work that depends on the current density is the contraction</p>
+<p>where one may choose a sign convention that folds the electron sign into the integral matrix <span class="math-inline">\(\mathbf{V}^{(i)}\)</span>. The matrices <span class="math-inline">\(\mathbf{V}^{(i)}\)</span> are <em>independent of the density</em>: each is the AO matrix of a unit Gaussian charge at <span class="math-inline">\(\mathbf{s}_i\)</span>. Planck does <strong>not</strong> store them. Storing them costs <span class="math-inline">\(N_{\text{tess}} N_{\text{basis}}^2\)</span> doubles: 471 MB for naphthalene/6-31G* (2138 tesserae, 166 functions), and gigabytes for larger molecules. Instead, every SCF iteration contracts the density on the fly in one sweep over the shell pairs, parallel over tesserae:</p>
 <p><span class="math-display">\[
-\phi^{\text{el}}_i = \sum_{\mu\nu} P_{\mu\nu}\,V^{(i)}_{\mu\nu}
+\phi^{\text{el}}_i = \sum_{\mu\nu} P_{\mu\nu}\,V^{(i)}_{\mu\nu}.
 \]</span></p>
-<p>— a single Frobenius product per tessera per SCF iteration.</p>
+<p>This is <code>_compute_electronic_potential</code> with a Gaussian exponent per point. The nuclear potential <span class="math-inline">\(\phi^{\text{nuc}}_i\)</span> and the factor of <span class="math-inline">\(\mathbf{D}\)</span> depend only on the geometry and are built once.</p>
 <h3 id="apparent-charges-and-the-reaction-field-operator">Apparent Charges and the Reaction-Field Operator</h3>
 <p>With the precomputed pieces in hand, each SCF iteration does:</p>
 <ol>
 <li><strong>Total potential at the surface:</strong> <span class="math-inline">\(\phi^{\text{tot}}_i = \phi^{\text{nuc}}_i + \sum_{\mu\nu} P_{\mu\nu}\,V^{(i)}_{\mu\nu}\)</span>.</li>
-<li><strong>Solve C-PCM linear system:</strong> <span class="math-inline">\(\mathbf{D}\,\mathbf{q} = -f(\varepsilon)\,\boldsymbol{\phi}^{\text{tot}}\)</span> via a Cholesky-class factorization built once and re-solved each iteration.</li>
-<li><strong>Reaction-field operator in AO basis:</strong> <span class="math-inline">\(V^{\text{rxn}}_{\mu\nu} = \sum_i q_i \, V^{(i)}_{\mu\nu}\)</span> — a linear combination of the precomputed unit-charge matrices.</li>
+<li><strong>Solve C-PCM linear system:</strong> <span class="math-inline">\(\mathbf{D}\,\mathbf{q} = -f(\varepsilon)\,\boldsymbol{\phi}^{\text{tot}}\)</span> by back-substitution with the LDLT factor stored in <code>PCMState</code>.</li>
+<li><strong>Reaction-field operator in AO basis:</strong> <span class="math-inline">\(V^{\text{rxn}}_{\mu\nu} = \sum_i q_i \, V^{(i)}_{\mu\nu}\)</span> — one nuclear-attraction-like build with all tessera charges at once (<code>_compute_external_charge_attraction</code>).</li>
 <li><strong>Solvation energy contribution:</strong> <span class="math-inline">\(G^{\text{rxn}} = \tfrac{1}{2}\,\mathbf{q}^\top \boldsymbol{\phi}^{\text{tot}}\)</span>.</li>
 </ol>
 <p>Because both <span class="math-inline">\(\mathbf{q}\)</span> and <span class="math-inline">\(\boldsymbol{\phi}^{\text{tot}}\)</span> depend on <span class="math-inline">\(\mathbf{P}\)</span>, <span class="math-inline">\(V^{\text{rxn}}_{\mu\nu}\)</span> depends on the density, and the problem is genuinely self-consistent — the reaction field must be rebuilt at every SCF iteration alongside the Coulomb and exchange terms.</p>
@@ -4592,7 +4591,7 @@ E^{\text{elec}} = E^{\text{gas}}_{\text{elec}} + G^{\text{rxn}},
 <li><strong>Single-point only.</strong> No PCM gradient, geometry optimization, or frequencies. Post-HF (MP2, CC, CASSCF) is not coupled to PCM either — the reaction field is enforced only at the SCF/KS level.</li>
 <li><strong>C-PCM only.</strong> The dielectric scaling is <span class="math-inline">\((\varepsilon - 1)/\varepsilon\)</span>. IEF-PCM, SS(V)PE and COSMO&#x27;s <span class="math-inline">\(\varepsilon + \tfrac12\)</span> form are not implemented.</li>
 <li><strong>Orientation dependence.</strong> The Lebedev grid is fixed to the lab axes, so the energy changes slightly under rigid rotation. A denser grid reduces the change but does not remove it; PySCF behaves the same way.</li>
-<li><strong>Cost.</strong> Each SCF iteration adds: one <span class="math-inline">\(N_{\text{tess}}\)</span>-by-<span class="math-inline">\(N_{\text{basis}}^2\)</span> Frobenius reduction to build <span class="math-inline">\(\boldsymbol{\phi}^{\text{tot}}\)</span>; one <span class="math-inline">\(O(N_{\text{tess}}^3)\)</span> Cholesky-class solve on <span class="math-inline">\(\mathbf{D}\)</span>; and one <span class="math-inline">\(N_{\text{tess}}\)</span>-by-<span class="math-inline">\(N_{\text{basis}}^2\)</span> accumulation to assemble <span class="math-inline">\(\mathbf{V}^{\text{rxn}}\)</span>. For typical organic molecules with the default 302 Lebedev points per sphere, this is dominated by the precomputation of the unit-charge attraction matrices, which happens once in <code>build_pcm_state</code>.</li>
+<li><strong>Cost.</strong> Setup builds <span class="math-inline">\(\mathbf{D}\)</span> and factors it once (<span class="math-inline">\(O(N_{\text{tess}}^3)\)</span>). Each SCF iteration adds two integral sweeps, each <span class="math-inline">\(O(N_{\text{tess}} \times \text{shell-pair primitives})\)</span>, plus an <span class="math-inline">\(O(N_{\text{tess}}^2)\)</span> back-substitution. Memory is the <span class="math-inline">\(N_{\text{tess}}^2\)</span> factor. On naphthalene/6-31G* RHF the PCM run takes 118 s and peaks at 1.87 GB. The earlier design, which stored one AO matrix per tessera, took 157 s and peaked at 3.27 GB. Its setup was about 38 s longer, and its iterations were about 1.2 s cheaper each, so it would win again after roughly 30 SCF iterations.</li>
 </ul>
 <h3 id="code-map">Code Map</h3>
 <div class="table-wrap"><table>
@@ -4605,7 +4604,8 @@ E^{\text{elec}} = E^{\text{gas}}_{\text{elec}} + G^{\text{rxn}},
 <tr><td><code>OptionsSolvation</code> (model, dielectric, scale, npoints)</td><td><code>src/base/types.h</code></td><td><code>OptionsSolvation</code></td></tr>
 <tr><td><code>SolvationModel::{None, PCM}</code></td><td><code>src/base/types.h</code></td><td>enum</td></tr>
 <tr><td><code>%begin_pcm</code> parser + solvent table</td><td><code>src/io/io.cpp</code></td><td><code>_parse_pcm</code>, <code>dielectric_from_solvent_name</code></td></tr>
-<tr><td>SWIG cavity, influence matrix, unit-charge matrices</td><td><code>src/solvation/pcm.cpp</code></td><td><code>build_pcm_state</code>, <code>switch_h</code>, <code>SWIG_ZETA</code></td></tr>
+<tr><td>SWIG cavity, influence-matrix factor, nuclear potential</td><td><code>src/solvation/pcm.cpp</code></td><td><code>build_pcm_state</code>, <code>switch_h</code>, <code>SWIG_ZETA</code></td></tr>
+<tr><td>Fused electronic potential at the tesserae</td><td><code>src/integrals/os.cpp</code></td><td><code>_compute_electronic_potential</code> (<code>exponents</code>)</td></tr>
 <tr><td>Gaussian-charge nuclear-attraction primitive</td><td><code>src/integrals/os.cpp</code></td><td><code>_os_nuclear_primitive</code> (<code>charge_exponent</code>)</td></tr>
 <tr><td>SCF reaction field per iteration</td><td><code>src/solvation/pcm.cpp</code></td><td><code>evaluate_pcm_reaction_field</code></td></tr>
 <tr><td>RHF + PCM coupling</td><td><code>src/scf/scf.cpp</code></td><td><code>run_rhf</code> (PCM block near line 286)</td></tr>
