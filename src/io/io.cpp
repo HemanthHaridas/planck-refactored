@@ -1336,6 +1336,19 @@ namespace HartreeFock::IO
                      dft._grid_policy = value;
                      return {};
                  }},
+                {"dispersion", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     if (value != "none" && value != "d3bj" && value != "d3zero" &&
+                         value != "d3bj-atm" && value != "d3zero-atm")
+                         return std::unexpected("dispersion must be none, d3bj, d3zero, d3bj-atm or d3zero-atm");
+                     dft._dispersion = value;
+                     return {};
+                 }},
+                {"dispersion_functional", [&dft](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     dft._dispersion_functional = value;
+                     return {};
+                 }},
 
                 {"exchange", [&dft](const std::string &value) -> std::expected<void, std::string>
                  {

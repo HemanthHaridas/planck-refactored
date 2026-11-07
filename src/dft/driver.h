@@ -59,6 +59,7 @@ namespace DFT::Driver
         double xc_energy = 0.0;
         double integrated_electrons = 0.0;
         double solvation_energy = 0.0;
+        double dispersion_energy = 0.0; // D3, already in total_energy
         bool converged = false;
     };
 

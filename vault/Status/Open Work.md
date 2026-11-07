@@ -79,10 +79,10 @@ rerun for it.
 
 ### DFT, in the recommended order
 
-- **D3 dispersion** (`docs/DISPERSION_D3_SCOPE.md`). There is none in `src/`.
-  The recommended route is simple-dftd3 (LGPL-3.0-or-later) through an
-  optional `ExternalProject`, because it needs a Fortran compiler. A native
-  port would put LGPL files in the tree.
+- **D3 follow-ups** (`docs/DISPERSION_D3.md`, Not done). D3(BJ)/D3(0)/ATM
+  landed for `planck-dft`. Open: HF-D3, the modified damping variants, D4,
+  and a separate D3 field in the results JSON. Not yet seen in CI: the first
+  run with gfortran installed.
 - **Meta-GGA** (`docs/META_GGA_SCOPE.md`). Rejected in `xc_grid.cpp`. Step 1
   is τ and V^τ in the SCF (AO gradients only). Steps 2–4 are gradients (AO
   Hessian, no CPHF), the response kernel, and VV10. Step 1 must make every

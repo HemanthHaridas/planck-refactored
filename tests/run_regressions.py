@@ -58,6 +58,7 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
     "fciqmc_projected_error": re.compile(
         r"Projected energy\s+[-+0-9Ee\.]+\s+\+/-\s+([-+0-9Ee\.]+)", re.MULTILINE),
     "dft_total_energy": re.compile(r"^\s*(?:\[INF\]\s+)?DFT Energy\s*:\s*([-+0-9Ee\.]+)\s+Eh", re.MULTILINE),
+    "dispersion_energy": re.compile(r"Dispersion Energy\s*:\s*([-+0-9Ee\.]+)\s+Eh"),
     # TDDFT table rows have eight numeric columns after the integer root
     # label. Use horizontal whitespace exclusively: `\s` crosses line
     # boundaries and previously let an SCF iteration be mistaken for a root.

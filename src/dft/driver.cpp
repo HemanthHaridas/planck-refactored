@@ -1,6 +1,7 @@
 #include "driver.h"
 
 #include "analytic_hessian.h"
+#include "dispersion.h"
 #include "ks_orbital_hessian.h"
 #include "tddft_exchange.h"
 #include "uks_level_shift.h"
@@ -1843,10 +1844,17 @@ namespace DFT::Driver
 
             calculator._info._is_converged = false;
 
+            // Geometry-only, like nuclear repulsion: one value per scaffold call.
+            auto dispersion = DFT::Dispersion::compute(calculator);
+            if (!dispersion)
+                return std::unexpected(dispersion.error());
+            const double dispersion_energy = dispersion->energy;
+
             const unsigned int max_iter = calculator._scf.get_max_cycles(nbasis);
             HartreeFock::Logger::scf_header();
 
             Result result;
+            result.dispersion_energy = dispersion_energy;
 
             if (!unrestricted)
             {
@@ -1957,7 +1965,7 @@ namespace DFT::Driver
                         xc_grid->total_energy +
                         ks_potential->exact_exchange_energy;
                     const double electronic_energy = electronic_energy_gas + pcm_energy;
-                    const double total_energy = electronic_energy + calculator._nuclear_repulsion;
+                    const double total_energy = electronic_energy + calculator._nuclear_repulsion + dispersion_energy;
 
                     double diis_error = 0.0;
                     if (use_diis)
@@ -2452,7 +2460,7 @@ namespace DFT::Driver
                     xc_grid->total_energy +
                     ks_potential->exact_exchange_energy;
                 const double electronic_energy = electronic_energy_gas + pcm_energy;
-                const double total_energy = electronic_energy + calculator._nuclear_repulsion;
+                const double total_energy = electronic_energy + calculator._nuclear_repulsion + dispersion_energy;
 
                 // Keep physical F/energy untouched. Shift the iteration
                 // matrices before DIIS, separately for occupancy-one spins.
@@ -4528,7 +4536,13 @@ namespace DFT::Driver
                 print_gradient_component_report("XC-grid", *xc_grad);
             }
 
-            calculator._gradient = *wf_grad + *xc_grad;
+            auto dispersion = DFT::Dispersion::compute(calculator);
+            if (!dispersion)
+                return std::unexpected(dispersion.error());
+            if (dft_gradient_debug_enabled())
+                print_gradient_component_report("D3", dispersion->gradient);
+
+            calculator._gradient = *wf_grad + *xc_grad + dispersion->gradient;
             if (dft_gradient_debug_enabled())
                 print_gradient_component_report("KS-total", calculator._gradient);
 
@@ -5541,6 +5555,13 @@ namespace DFT::Driver
             // induce a 1e-7 Ha/Bohr quantization error at its 5e-4 Bohr
             // stencil; retain enough digits for a 5e-8 comparison.
             std::format("{:.14f} Eh", result->total_energy));
+        if (calculator._dft._dispersion != "none")
+        {
+            HartreeFock::Logger::logging(
+                HartreeFock::LogLevel::Info, "Dispersion Energy :",
+                std::format("{:.14f} Eh ({}, included above)", result->dispersion_energy,
+                            calculator._dft._dispersion));
+        }
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)
         {
             HartreeFock::Logger::logging(

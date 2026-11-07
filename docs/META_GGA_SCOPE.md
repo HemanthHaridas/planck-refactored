@@ -153,7 +153,7 @@ energy. Stability λ_min against PySCF.
 
 ωB97M-V, B97M-V and ωB97X-V need VV10. It is a separate two-grid integral with
 its own potential and gradient, and it is not specific to meta-GGA. Scope it
-only if those functionals are wanted. `docs/DISPERSION_D3_SCOPE.md` points
+only if those functionals are wanted. `docs/DISPERSION_D3.md` points
 here for it.
 
 ## Out of scope

@@ -21,6 +21,9 @@
 #ifdef USING_Libxc
 #include <xc.h>
 #endif
+#ifdef PLANCK_WITH_DFTD3
+#include "s-dftd3.h"
+#endif
 #ifdef USE_MPI
 #include <mpi.h>
 #endif
@@ -68,6 +71,11 @@ namespace HartreeFock::Logger
 #ifdef USING_Libxc
             libs.push_back({"libxc", std::format("{} (git {})", xc_version_string(), short_commit(PLANCK_LIBXC_COMMIT)),
                             "MPL-2.0", "exchange-correlation functionals"});
+#endif
+#ifdef PLANCK_WITH_DFTD3
+            const int d3 = dftd3_get_version(); // 10700 = 1.7.0
+            libs.push_back({"simple-dftd3", std::format("{}.{}.{}", d3 / 10000, d3 / 100 % 100, d3 % 100),
+                            "LGPL-3.0-or-later", "D3 dispersion"});
 #endif
             const std::string &boys = HartreeFock::Loader::loaded_boys_library_version();
             libs.push_back({"Planck Boys core", boys.empty() ? "not loaded" : boys,

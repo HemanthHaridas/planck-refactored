@@ -372,6 +372,67 @@ set_target_properties(ecpint PROPERTIES
 add_dependencies(ecpint libecpint_ep)
 link_libraries(ecpint)
 
+# simple-dftd3 (LGPL-3.0-or-later): Grimme D3 dispersion (docs/DISPERSION_D3.md).
+# Fetched at build time and never vendored, so no LGPL file enters the tree.
+# Fortran, so it needs a Fortran compiler; without one the option switches off
+# and `dispersion` inputs fail by name. Its own CMake fetches mctc-lib v0.7.0
+# and toml-f v0.5.1 at pinned tags; `fetch` keeps a system copy from being used.
+option(PLANCK_WITH_DFTD3 "Build Grimme D3 dispersion via simple-dftd3 (needs Fortran)" ON)
+if(PLANCK_WITH_DFTD3)
+    include(CheckLanguage)
+    check_language(Fortran)
+    if(CMAKE_Fortran_COMPILER)
+        enable_language(Fortran)
+    else()
+        message(WARNING "No Fortran compiler found: building without D3 dispersion (PLANCK_WITH_DFTD3=OFF)")
+        set(PLANCK_WITH_DFTD3 OFF CACHE BOOL "" FORCE)
+    endif()
+endif()
+if(PLANCK_WITH_DFTD3)
+    set(DFTD3_GIT_TAG 84cb7cddd8d6669c4ecd59b06d53e0d373656239) # v1.7.0
+    set(DFTD3_INSTALL_DIR ${SRC_DIR}/external/dftd3/install)
+    # It enables C for its header install; pass ours when given (the system cc
+    # may not link). Unset falls back to its own detection.
+    set(_dftd3_c_compiler)
+    if(CMAKE_C_COMPILER)
+        set(_dftd3_c_compiler -DCMAKE_C_COMPILER=${CMAKE_C_COMPILER})
+    endif()
+    externalproject_add(
+        dftd3_ep
+        PREFIX ${SRC_DIR}/external/dftd3
+        GIT_REPOSITORY https://github.com/dftd3/simple-dftd3.git
+        GIT_TAG ${DFTD3_GIT_TAG}
+        UPDATE_DISCONNECTED TRUE
+        CMAKE_ARGS
+            -DCMAKE_INSTALL_PREFIX=${DFTD3_INSTALL_DIR}
+            -DCMAKE_INSTALL_LIBDIR:STRING=lib
+            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_Fortran_COMPILER=${CMAKE_Fortran_COMPILER}
+            ${_dftd3_c_compiler}
+            -DBUILD_SHARED_LIBS:BOOL=OFF
+            -DWITH_API:BOOL=ON
+            -DWITH_OpenMP:BOOL=OFF
+            -DWITH_TESTS:BOOL=OFF
+            -Ds-dftd3-dependency-method=fetch
+        BUILD_BYPRODUCTS ${DFTD3_INSTALL_DIR}/lib/libs-dftd3.a ${DFTD3_INSTALL_DIR}/lib/libmctc-lib.a
+    )
+    # Same global link as libecpint: src/dft/dispersion.cpp is in DFT_LIB_SRC,
+    # which several test targets compile. The Fortran link language pulls in
+    # libgfortran.
+    file(MAKE_DIRECTORY ${DFTD3_INSTALL_DIR}/include)
+    add_library(dftd3 STATIC IMPORTED GLOBAL)
+    set_target_properties(dftd3 PROPERTIES
+        IMPORTED_LOCATION ${DFTD3_INSTALL_DIR}/lib/libs-dftd3.a
+        IMPORTED_LINK_INTERFACE_LANGUAGES Fortran
+        INTERFACE_LINK_LIBRARIES ${DFTD3_INSTALL_DIR}/lib/libmctc-lib.a
+        INTERFACE_INCLUDE_DIRECTORIES ${DFTD3_INSTALL_DIR}/include)
+    add_dependencies(dftd3 dftd3_ep)
+    link_libraries(dftd3)
+    # dispersion.cpp, plus the startup library report of the binaries that use it.
+    set_property(SOURCE ${SRC_DIR}/dft/dispersion.cpp ${SRC_DIR}/dft/main.cpp ${SRC_DIR}/mpi/main.cpp
+        APPEND PROPERTY COMPILE_DEFINITIONS PLANCK_WITH_DFTD3)
+endif()
+
 # Collect sources automatically
 file(GLOB BASE_SRC CONFIGURE_DEPENDS
     ${SRC_DIR}/base/*.h
@@ -542,6 +603,8 @@ set(DFT_LIB_SRC
     ${SRC_DIR}/dft/dft_gradient.h
     ${SRC_DIR}/dft/dh_pt2_gradient.cpp
     ${SRC_DIR}/dft/dh_pt2_gradient.h
+    ${SRC_DIR}/dft/dispersion.cpp
+    ${SRC_DIR}/dft/dispersion.h
     ${SRC_DIR}/dft/udh_ks_response.cpp
     ${SRC_DIR}/dft/udh_ks_response.h
     ${SRC_DIR}/dft/udh_driver.cpp

@@ -7281,6 +7281,274 @@
      "atol": 1e-05
     }
    ]
+  },
+  {
+   "id": "water_rks_b3lyp_d3bj_sto3g",
+   "input": "tests/inputs/regression/dft/water_rks_b3lyp_d3bj_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "smoke",
+    "core",
+    "extended"
+   ],
+   "_pyscf_reference": "tests/pyscf/d3_references.py (PySCF 2.13.0 mf.disp + pyscf-dispersion over simple-dftd3 v1.0.0, a different release and binary from Planck's v1.7.0; cart=True, Planck's GBS and Bohr, 150 x 590 unpruned): D3 -0.00057366166775, total -75.2899128207 (Planck 3e-11 off).",
+   "expected_exit_code": 0,
+   "contains": [
+    "Dispersion Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dispersion_energy",
+     "expected": -0.00057366166775,
+     "atol": 1e-11
+    },
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -75.2899128207,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_b3lyp_d3bj_sto3g",
+   "input": "tests/inputs/regression/dft/water_cation_uks_b3lyp_d3bj_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended"
+   ],
+   "_pyscf_reference": "tests/pyscf/d3_references.py (PySCF 2.13.0 mf.disp + pyscf-dispersion over simple-dftd3 v1.0.0, a different release and binary from Planck's v1.7.0; cart=True, Planck's GBS and Bohr, 150 x 590 unpruned): UKS scaffold carries D3; total -74.9265823445 (Planck 7e-12 off).",
+   "expected_exit_code": 0,
+   "contains": [
+    "Dispersion Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dispersion_energy",
+     "expected": -0.00057366166775,
+     "atol": 1e-11
+    },
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -74.9265823445,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "water_dimer_rks_pbe_d3bj_gradient_sto3g",
+   "input": "tests/inputs/regression/dft/water_dimer_rks_pbe_d3bj_gradient_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended"
+   ],
+   "_pyscf_reference": "tests/pyscf/d3_references.py (PySCF 2.13.0 mf.disp + pyscf-dispersion over simple-dftd3 v1.0.0, a different release and binary from Planck's v1.7.0; cart=True, Planck's GBS and Bohr, 150 x 590 unpruned), grid_response=True: every component within 8.2e-10 Ha/Bohr; the D3 part is up to 1.2e-4.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Dispersion Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dispersion_energy",
+     "expected": -0.0013790899594,
+     "atol": 1e-11
+    },
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -150.4695607123,
+     "atol": 1e-08
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.050757483166,
+       0.1022071724,
+       0.0
+      ],
+      [
+       0.018627969988,
+       -0.077446651625,
+       0.0
+      ],
+      [
+       -0.083355974572,
+       -0.024414301134,
+       0.0
+      ],
+      [
+       0.075353967262,
+       -0.094009049954,
+       0.0
+      ],
+      [
+       -0.030691722922,
+       0.046831415156,
+       0.051223081126
+      ],
+      [
+       -0.030691722922,
+       0.046831415156,
+       -0.051223081126
+      ]
+     ],
+     "atol": 2e-09
+    }
+   ]
+  },
+  {
+   "id": "water_dimer_rks_pbe_d3bj_gradient_symm_sto3g",
+   "input": "tests/inputs/regression/dft/water_dimer_rks_pbe_d3bj_gradient_symm_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended"
+   ],
+   "_pyscf_reference": "Same reference as water_dimer_rks_pbe_d3bj_gradient_sto3g: under use_symm the gradient is built in the Cs standard frame and rotated back (Planck agrees with the C1 run to 2e-12).",
+   "expected_exit_code": 0,
+   "contains": [
+    "Dispersion Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dispersion_energy",
+     "expected": -0.0013790899594,
+     "atol": 1e-11
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.050757483166,
+       0.1022071724,
+       0.0
+      ],
+      [
+       0.018627969988,
+       -0.077446651625,
+       0.0
+      ],
+      [
+       -0.083355974572,
+       -0.024414301134,
+       0.0
+      ],
+      [
+       0.075353967262,
+       -0.094009049954,
+       0.0
+      ],
+      [
+       -0.030691722922,
+       0.046831415156,
+       0.051223081126
+      ],
+      [
+       -0.030691722922,
+       0.046831415156,
+       -0.051223081126
+      ]
+     ],
+     "atol": 2e-09
+    }
+   ]
+  },
+  {
+   "id": "benzene_rks_pbe0_d3zero_sto3g",
+   "input": "tests/inputs/regression/dft/benzene_rks_pbe0_d3zero_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended"
+   ],
+   "_pyscf_reference": "tests/pyscf/d3_references.py (PySCF 2.13.0 mf.disp + pyscf-dispersion over simple-dftd3 v1.0.0, a different release and binary from Planck's v1.7.0; cart=True, Planck's GBS and Bohr, 150 x 590 unpruned): D3(0) -0.00311244711812, total -229.1652438268. Planck derives 'pbeh' from libxc's hyb_gga_xc_pbeh, a simple-dftd3 alias of pbe0.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Dispersion Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dispersion_energy",
+     "expected": -0.00311244711812,
+     "atol": 1e-11
+    },
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -229.1652438268,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rks_b2plyp_d3bj_atm_sto3g",
+   "input": "tests/inputs/regression/dft/h2o2_rks_b2plyp_d3bj_atm_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended"
+   ],
+   "_pyscf_reference": "tests/pyscf/d3_references.py (PySCF 2.13.0 mf.disp + pyscf-dispersion over simple-dftd3 v1.0.0, a different release and binary from Planck's v1.7.0; cart=True, Planck's GBS and Bohr, 150 x 590 unpruned): D3(BJ)+ATM alone -0.00056121918062 for 'b2plyp' derived from the libxc name. PySCF RKS has no PT2 half, so no total is pinned.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Dispersion Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dispersion_energy",
+     "expected": -0.00056121918062,
+     "atol": 1e-11
+    }
+   ]
+  },
+  {
+   "id": "water_dimer_rks_pbe_d3bj_geomopt_sto3g",
+   "input": "tests/inputs/regression/dft/water_dimer_rks_pbe_d3bj_geomopt_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended"
+   ],
+   "_pyscf_reference": "tests/pyscf/d3_references.py (PySCF 2.13.0 mf.disp + pyscf-dispersion over simple-dftd3 v1.0.0, a different release and binary from Planck's v1.7.0; cart=True, Planck's GBS and Bohr, 150 x 590 unpruned): geometric_solver gau_tight E_opt -150.5010637452; Planck stops at max|g| 4.6e-5, 1.0e-8 Eh above. D3 moves this energy by 1.4e-3.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Dispersion Energy :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -150.5010637452,
+     "atol": 1e-07
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 0.0003
+    }
+   ]
+  },
+  {
+   "id": "water_rks_lda_d3bj_rejected_sto3g",
+   "input": "tests/inputs/regression/dft/water_rks_lda_d3bj_rejected_sto3g.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended"
+   ],
+   "expected_exit_code": 1,
+   "contains": [
+    "D3 dispersion: no parameter set is known for exchange 'lda_x' + correlation 'lda_c_vwn'"
+   ],
+   "_note": "Boundary marker: LDA has no D3 parameters; the run must fail naming the functionals, never add zero."
   }
  ]
 }

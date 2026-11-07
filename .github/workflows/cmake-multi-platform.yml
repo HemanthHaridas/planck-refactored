@@ -56,6 +56,11 @@ jobs:
       run: |
         echo "build-output-dir=${{ github.workspace }}/build" >> "$GITHUB_OUTPUT"
 
+    - name: Install Fortran
+      # simple-dftd3 (D3 dispersion) is Fortran. Naming the compiler below makes
+      # a missing one fail the configure instead of quietly building without D3.
+      run: sudo apt-get update && sudo apt-get install -y gfortran
+
     - name: Configure CMake
       # Configure CMake in a 'build' subdirectory. `CMAKE_BUILD_TYPE` is only required if you are using a single-configuration generator such as make.
       # See https://cmake.org/cmake/help/latest/variable/CMAKE_BUILD_TYPE.html?highlight=cmake_build_type
@@ -64,6 +69,7 @@ jobs:
         -DCMAKE_CXX_COMPILER=${{ matrix.cpp_compiler }}
         -DCMAKE_CXX_STANDARD=23
         -DCMAKE_C_COMPILER=${{ matrix.c_compiler }}
+        -DCMAKE_Fortran_COMPILER=gfortran
         -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
         -DPLANCK_CC_MAXORDER=${{ matrix.cc_maxorder }}
         -S ${{ github.workspace }}
