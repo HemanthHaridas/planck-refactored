@@ -22,8 +22,10 @@ from pyscf import dft, gto
 from pyscf.dft import radi
 
 XC, GRID_LEVEL, DELTA = "pbe", 5, 1e-3   # DELTA in Bohr
-# C1 AuH.H2O (Angstrom). A diatomic (HI) does not show the defect: there the
-# stock and fixed gradients agree to 1e-10, so at least three atoms are needed.
+# C1 AuH.H2O (Angstrom). Any molecule with an ECP atom shows the defect,
+# diatomics included (AuH, AgH, CsH), unless the Bragg radius at Z - n_core
+# happens to equal the one at Z: I (-> Mn), Te (-> Cr) and Y (-> Na) are immune,
+# which is why HI showed nothing (pyscf_ecp_grid_response_survey.py).
 ATOM = [("Au", (0.0, 0.0, 0.0)), ("H", (0.0, 0.0, 1.524)), ("O", (2.3, 0.4, -0.9)),
         ("H", (2.9, 1.1, -0.6)), ("H", (2.7, -0.4, -0.5))]
 
