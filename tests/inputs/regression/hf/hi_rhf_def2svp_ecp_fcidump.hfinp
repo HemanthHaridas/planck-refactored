@@ -1,4 +1,4 @@
-# FCIDUMP of a valence-only ECP Hamiltonian (docs/DEF2_ECP_SCOPE.md step 4b).
+# FCIDUMP of a valence-only ECP Hamiltonian (docs/DEF2_ECP.md step 4b).
 # Checked against PySCF by tests/pyscf/def2_ecp_references.py --fcidump.
 %begin_control
     basis       def2-SVP

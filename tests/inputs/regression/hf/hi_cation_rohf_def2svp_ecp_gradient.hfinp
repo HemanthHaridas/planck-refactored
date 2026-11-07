@@ -1,4 +1,4 @@
-# def2 ECP gradient gate (docs/DEF2_ECP_SCOPE.md step 5): HI+ doublet, rohf, iodine 28-electron ECP.
+# def2 ECP gradient gate (docs/DEF2_ECP.md step 5): HI+ doublet, rohf, iodine 28-electron ECP.
 # Reference: PySCF 2.13.0 rohf analytic gradient, same GBS file (def2_ecp_references.py loader).
 %begin_control
     basis       def2-SVP

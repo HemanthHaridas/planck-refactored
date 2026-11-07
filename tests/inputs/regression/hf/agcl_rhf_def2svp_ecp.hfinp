@@ -1,5 +1,7 @@
-# def2 ECP gate (docs/DEF2_ECP_SCOPE.md step 4): AgCl, ECP atom bonded to an all-electron atom
+# def2 ECP gate (docs/DEF2_ECP.md step 4): AgCl, ECP atom bonded to an all-electron atom
 # Reference: tests/pyscf/def2_ecp_references.py (PySCF 2.13.0, same GBS file).
+# tol_eri 1e-12: at the default 1e-10 the integral screening alone puts the energy ~1e-9 above
+# PySCF on this ~600-2700 Eh system; at 1e-12 the two codes agree in every printed digit.
 %begin_control
     basis       def2-SVP
     calculation energy
@@ -9,6 +11,7 @@
 %begin_scf
     scf_type    rhf
     guess       hcore
+    tol_eri     1.0e-12
 %end_scf
 
 %begin_geom

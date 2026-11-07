@@ -12,7 +12,7 @@ grid floor (≤ 2e-5) on every case below, and the follows land on PySCF's
 lower state.
 
 Also in the spherical basis (`docs/SPHERICAL_DFT.md`: λ ≤ 1.2e-7 from PySCF
-`cart=False`, follow to every digit) and with ECPs (`docs/DEF2_ECP_SCOPE.md`
+`cart=False`, follow to every digit) and with ECPs (`docs/DEF2_ECP.md`
 step 6: HI⁺ UKS PBE/def2-SVP λ_min +2.3e-9, the π-hole zero mode, PySCF
 −1.4e-8). Nothing is open.
 The HF-side fixes are gated. Status:
@@ -192,7 +192,7 @@ Spherical KS stability and SOSCF (`SPHERICAL_DFT.md`
 step 4: the builders lift the MO coefficients, six gates), the spherical HF gates, the `rhf_response.cpp` site (it was
 live through RHF SOSCF; `SPHERICAL_DFT.md` S0.6), and the ECP gates
 `hi_cation_uhf_def2svp_ecp_stability` and `hi_rmp2_def2svp_ecp`. HI CCSD
-(8.5e-8 off PySCF) stays unpinned in `DEF2_ECP_SCOPE.md`.
+(8.5e-8 off PySCF) stays unpinned in `DEF2_ECP.md`.
 
 `SCF::analyze_uhf_stability` with an empty spin (checked 2026-11-06): an
 empty β occupied space works (H/6-31G UHF reports both channels stable).

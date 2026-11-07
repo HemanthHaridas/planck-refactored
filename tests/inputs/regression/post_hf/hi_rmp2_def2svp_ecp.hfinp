@@ -1,4 +1,4 @@
-# def2 ECP post-HF gate (docs/DEF2_ECP_SCOPE.md smaller items): HI RMP2, iodine 28-electron ECP.
+# def2 ECP post-HF gate (docs/DEF2_ECP.md smaller items): HI RMP2, iodine 28-electron ECP.
 # Electron counts once summed Z and ignored the ECP core: E_corr came out -0.0059849856 (24x too small).
 # Reference: PySCF 2.13.0 RMP2, cart=False, basis/ECP from Planck's GBS (def2_ecp_references.py loader).
 %begin_control

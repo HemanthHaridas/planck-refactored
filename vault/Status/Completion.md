@@ -416,6 +416,30 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **RCCSD doubles equation was missing its F_me terms (2026-11-07).**
+  Stanton-Gauss T2 uses `F_be − ½ t_m^b F_me` and `F_mj + ½ t_j^e F_me`;
+  `build_residuals` (`src/post_hf/cc/ccsd.cpp`) used bare `F_be`/`F_mj`.
+  Canonical RHF has f_ov = 0, but `F_me = t_n^f <mn||ef>` is not, so the
+  error is O(t1² t2): small, growing with system size, and invisible to the
+  gates because they were pinned to Planck's own output. Fixed there and in
+  the identical RCCSDT stage-1 warm start (`tensor_backend.cpp`; the generated
+  RCCSDT route never called it). Now every printed digit of PySCF: water/6-31G
+  (was 5.4e-7 off), HI/def2-SVP with ECP (7.4e-8, new gate
+  `hi_rccsd_def2svp_ecp`); `water_spherical_ccsd_sto3g` (6.2e-7) and
+  `be_ccsd_spherical_631gd` (1.4e-6, tightened to 1e-9) re-pinned to PySCF.
+  It also converges faster (water/6-31G 22 → 15 iterations). Found by the
+  def2 post-HF gates; the "HBr 1.1e-6" gap recorded then was this bug, not
+  an ECP effect.
+
+- **def2 / ECP work complete (2026-11-07, `docs/DEF2_ECP.md`).** Closing
+  items: HI CAS(2,2) gate; the ZnCl₂/AgCl ~1e-9 offsets were Planck's default
+  `tol_eri` 1e-10 screening (at 1e-12 every printed digit of PySCF; both
+  inputs tightened, gates 2e-9 → 5e-10); `planck-compute-2e` goldens
+  re-pinned after the 2026-11-01 Å→Bohr fix (the one-centre element did not
+  move); `planck-population-analysis` linked `spherical.cpp`. Planck ctest
+  (`-R ^planck`): 94 tests, failures only the four known RCCSDT routing
+  cases. Open: the libecpint repin when PR #81 merges.
+
 - **HF RHF → UHF stability channel fixed (2026-11-05,
   `docs/KS_STABILITY.md` R0).** The "external triplet" channel built
   A^T − B^T, which is the complex-orbital test again, so the triplet row
@@ -437,7 +461,7 @@ historical design context, but they are no longer the source of truth for
   `water_{rhf,cation_uhf}_soscf_spherical_631gd` (PySCF `cart=False`), all
   failing on the old code.
 
-- **DFT with ECPs (2026-11-06, `docs/DEF2_ECP_SCOPE.md` step 6).** Lifting
+- **DFT with ECPs (2026-11-06, `docs/DEF2_ECP.md` step 6).** Lifting
   the refusal was the only code change: H_core, the electron counts and
   `one_electron_gradient` were already ECP-aware. HI RKS PBE energy and HI
   B3LYP TDDFT match PySCF `cart=False` to every printed digit, the C1 AuH·H₂O
@@ -578,7 +602,7 @@ historical design context, but they are no longer the source of truth for
   ≤1.8e-9), which fails on the old code.
 
 - **ECP gradients, geometry optimization and frequencies (2026-11-04, branch
-  `feat/def2-ecp`, `docs/DEF2_ECP_SCOPE.md` step 5).**
+  `feat/def2-ecp`, `docs/DEF2_ECP.md` step 5).**
   `ECP::_compute_ecp_gradient` contracts libecpint's shell-pair derivatives
   with the density; `one_electron_gradient` adds it inside `core()`, so
   RHF/UHF/ROHF (and the RKS/UKS/MP2/DH paths once those accept ECPs) inherit
@@ -591,7 +615,7 @@ historical design context, but they are no longer the source of truth for
   the way: four FD drivers kept a stale Å→Bohr literal (fixed).
 
 - **Checkpoint and FCIDUMP with ECPs (2026-11-01, branch `feat/def2-ecp`,
-  `docs/DEF2_ECP_SCOPE.md` step 4b).** Checkpoint version 8 stores each
+  `docs/DEF2_ECP.md` step 4b).** Checkpoint version 8 stores each
   atom's ECP core count; a load or cross-basis projection between different
   cores is refused (v7 files read as all-electron, which is exact). FCIDUMP
   needed no change: PySCF reproduces its ECP RHF energy from the file to
@@ -604,7 +628,7 @@ historical design context, but they are no longer the source of truth for
   restart_full}`.
 
 - **ECP integrals in H_core (2026-11-01, branch `feat/def2-ecp`,
-  `docs/DEF2_ECP_SCOPE.md` step 4).** def2 bases from Rb onward run
+  `docs/DEF2_ECP.md` step 4).** def2 bases from Rb onward run
   single points through libecpint (MIT, `ExternalProject`).
   `_compute_potential` (`src/integrals/base.h`) is V_ne + U_ECP at every
   H_core site; SAD runs ECP atoms with Z − n_core electrons. libecpint's
@@ -625,7 +649,7 @@ historical design context, but they are no longer the source of truth for
   (`types.h`, two RI tests) use the constants. Found because the new def2
   gates missed PySCF by up to 1.3e-8 while E_nn on water was 6.6e-7 off;
   after the fix four of the five match PySCF to every printed digit
-  (`docs/DEF2_ECP_SCOPE.md` step 1b). 26 extended cases pinned to Planck's
+  (`docs/DEF2_ECP.md` step 1b). 26 extended cases pinned to Planck's
   own output moved 2e-9..1.9e-7 Eh and were re-pinned; water SA-2 CASSCF
   moved from 3.6e-8 to 1.1e-8 off PySCF's SAD-start minimum. Ten core
   cases moved too and were missed until step 3 (only the extended suite

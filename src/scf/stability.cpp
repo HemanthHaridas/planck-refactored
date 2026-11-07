@@ -34,7 +34,7 @@ namespace HartreeFock::SCF
         // Total number of electrons minus charge.
         int total_electrons(const HartreeFock::Calculator &calc)
         {
-            // Z - n_core on ECP atoms (docs/DEF2_ECP_SCOPE.md step 2).
+            // Z - n_core on ECP atoms (docs/DEF2_ECP.md step 2).
             return calc._molecule.total_nuclear_charge() - calc._molecule.charge;
         }
 

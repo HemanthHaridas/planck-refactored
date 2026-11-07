@@ -7,7 +7,7 @@ reported to PySCF** (step R5). Status lives in `vault/Status/Open Work.md`.
 
 ## The finding
 
-Found while gating ECP DFT in Planck (`docs/DEF2_ECP_SCOPE.md` step 6). On
+Found while gating ECP DFT in Planck (`docs/DEF2_ECP.md` step 6). On
 C1 AuH·H₂O / def2-SVP (60-electron Au ECP), RKS B3LYP, 150 × 590 unpruned grid:
 
 | quantity | Planck | PySCF 2.13.0 |

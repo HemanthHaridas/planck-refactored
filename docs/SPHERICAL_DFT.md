@@ -168,7 +168,7 @@ Each fixed one shared mechanism instead of a DFT-side workaround.
 
 PCM in a spherical basis (both binaries); double-hybrid gradients in a
 spherical basis; RI-J/K for DFT. DFT with ECPs is unblocked for every
-supported workflow (`docs/DEF2_ECP_SCOPE.md` step 6).
+supported workflow (`docs/DEF2_ECP.md` step 6).
 
 ## Commit log
 

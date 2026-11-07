@@ -2,7 +2,7 @@
 
 Builds each basis from Planck's own GBS file (pyscf.gto.basis.parse_gaussian),
 so the comparison tests the integrals and transform, not basis coefficients.
-docs/DEF2_ECP_SCOPE.md step 1.
+docs/DEF2_ECP.md step 1.
 """
 import pathlib
 import re

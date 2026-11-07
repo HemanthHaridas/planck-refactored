@@ -1,4 +1,4 @@
-"""PySCF references for the def2 ECP gates (docs/DEF2_ECP_SCOPE.md step 4).
+"""PySCF references for the def2 ECP gates (docs/DEF2_ECP.md step 4).
 
 Basis and ECP both come from Planck's own GBS file. PySCF's Gaussian94 reader
 skips ECP blocks, so `load_ecp` converts the block to PySCF's internal format.

@@ -1,4 +1,4 @@
-# def2 ECP DFT gate (docs/DEF2_ECP_SCOPE.md step 6): energy, spherical def2-SVP, matched 150 x 590 grid,
+# def2 ECP DFT gate (docs/DEF2_ECP.md step 6): energy, spherical def2-SVP, matched 150 x 590 grid,
 # vs PySCF cart=False with the ECP read from Planck's GBS (tests/pyscf/def2_ecp_dft_references.py).
 # tol_density 1e-6: the hole sits in a degenerate pi pair, so the density is not unique and wanders
 # while the energy holds to 1e-10; that rotation is the zero mode the stability check must report.

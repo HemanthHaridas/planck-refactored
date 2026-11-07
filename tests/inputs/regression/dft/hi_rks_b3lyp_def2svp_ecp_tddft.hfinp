@@ -1,4 +1,4 @@
-# def2 ECP DFT gate (docs/DEF2_ECP_SCOPE.md step 6): tddft, spherical def2-SVP, matched 150 x 590 grid,
+# def2 ECP DFT gate (docs/DEF2_ECP.md step 6): tddft, spherical def2-SVP, matched 150 x 590 grid,
 # vs PySCF cart=False with the ECP read from Planck's GBS (tests/pyscf/def2_ecp_dft_references.py).
 %begin_control
     basis       def2-SVP

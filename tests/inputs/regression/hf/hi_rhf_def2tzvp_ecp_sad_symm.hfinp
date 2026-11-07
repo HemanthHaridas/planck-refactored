@@ -1,4 +1,4 @@
-# def2 ECP gate (docs/DEF2_ECP_SCOPE.md step 4): HI with f shells on I, SAD guess on the ECP atom, C_inf_v symmetry
+# def2 ECP gate (docs/DEF2_ECP.md step 4): HI with f shells on I, SAD guess on the ECP atom, C_inf_v symmetry
 # Reference: tests/pyscf/def2_ecp_references.py (PySCF 2.13.0, same GBS file).
 %begin_control
     basis       def2-TZVP

@@ -1,37 +1,38 @@
 # What does Planck need to run def2 basis sets, including the ECPs for heavy elements?
 
-Research scope, opened 2026-10-26. Steps 1–5 have landed (branch
-`feat/def2-ecp`, PR #180); step 6 (DFT with ECPs) is open, so this is still a
-scope. Rewrite it as the answer when step 6 lands.
-Status lives in `vault/Status/Open Work.md`.
+Answered 2026-11-07 (branch `feat/def2-ecp`, PR #180). Status lives in
+`vault/Status/Completion.md`; the one open item, a libecpint repin, is in
+`vault/Status/Open Work.md`.
 
-## Current result
+## Answer
 
-**def2 runs for H–Rn in `hartree-fock` single points, gradients, geometry
-optimizations and frequencies, and matches PySCF to ≤1.2e-9 Eh and ≤3e-8
-Ha/Bohr.** From Rb onward the core electrons are replaced by the def2
-effective core potentials (ECPs), computed by libecpint (pinned to unmerged
-upstream PR #81; see Findings).
+**def2 runs for H–Rn in both binaries: HF, post-HF and DFT single points,
+gradients, geometry optimizations, frequencies, TDDFT and stability analysis,
+matching PySCF to ≤1e-9 Eh and ≤3e-8 Ha/Bohr.** H–Kr needed only basis files.
+From Rb onward the core electrons are replaced by the def2 effective core
+potentials (ECPs), computed by libecpint, pinned to unmerged upstream PR #81
+(see Findings). The ECP reaches every method through two things only: H_core
+(`_compute_potential` = V_ne + U) and the electron count (Z − n_core via
+`total_nuclear_charge()`), plus one gradient term.
 
 | works | refused, with a message |
 |---|---|
-| def2-SVP, -SVPD, -TZVP, -TZVPP, -QZVP for H–Rn, spherical | `planck-dft` with an ECP basis (step 6) |
-| RHF single points with ECPs, PySCF-gated | A checkpoint load or cross-basis projection between different ECP cores (falls back to the core guess) |
-| RHF/UHF/ROHF gradients, geometry optimization, frequencies with ECPs, PySCF-gated | MP2 gradients (refused for every spherical basis, not ECP-specific) |
-| SAD guess, full point-group symmetry, with ECPs | |
-| Checkpoint restart (version 8 stores core counts), FCIDUMP | |
+| def2-SVP, -SVPD, -TZVP, -TZVPP, -QZVP for H–Rn, spherical | A checkpoint load or cross-basis projection between different ECP cores (falls back to the core guess) |
+| RHF/UHF/ROHF energies, gradients, geometry optimization, frequencies | Basis or ECP L above libecpint's `LIBECPINT_MAX_L` (5) |
+| RMP2, RCCSD, CASSCF with an ECP | MP2 gradients (refused for every spherical basis, not ECP-specific) |
+| RKS/UKS energies and gradients, TDDFT, KS stability | |
+| SAD guess, full point-group symmetry, checkpoint restart (v8), FCIDUMP | |
 
-UHF and ROHF energies with ECPs are gated through the gradient cases;
-post-HF energies go through the same H_core and electron count but have no
-regression cases yet.
-
-### Validation
+## Validation
 
 All references are PySCF 2.13.0 with the basis (and ECP) parsed from Planck's
 own GBS file, at Planck's CODATA 2018 Bohr:
-`tests/pyscf/def2_rhf_references.py` (all-electron) and
+`tests/pyscf/def2_rhf_references.py` (all-electron),
 `tests/pyscf/def2_ecp_references.py` (ECP; it converts the Gaussian94 ECP
-block, which PySCF's reader skips).
+block, which PySCF's reader skips), `def2_ecp_post_hf_references.py` and
+`def2_ecp_dft_references.py`.
+
+**Energies and integrals.**
 
 | case | ECP | Planck − PySCF (Eh) | max ‖ΔV‖ |
 |---|---|---|---|
@@ -39,28 +40,49 @@ block, which PySCF's reader skips).
 | water/def2-QZVP (g shells) | — | 0 | |
 | H2S/def2-TZVP | — | 0 | |
 | SiH4/def2-SVP | — | 0 | |
-| ZnCl2/def2-SVP | — | 1.2e-9 | |
+| ZnCl2/def2-SVP (`tol_eri` 1e-12) | — | 0 | |
 | HI/def2-SVP (smoke) | I, 28e | 0 | 1.6e-11 |
 | HI/def2-TZVP, SAD, `use_symm` | I, 28e, f shells | 0 | 6.3e-11 |
-| AgCl/def2-SVP | Ag, 28e | 1.1e-9 | 1.3e-9 |
+| AgCl/def2-SVP (`tol_eri` 1e-12) | Ag, 28e | 0 | 1.3e-9 |
 | PdCO/def2-SVP, SAD | Pd, 28e | 5e-10 | 4.2e-10 |
 | AuH·H2O/def2-SVP, C1 | Au, 60e | 2e-10 | 9.2e-10 |
 
 ‖ΔV‖ compares Planck's dumped Cartesian V_ne + U against PySCF's
 `int1e_nuc + ECPscalar`, element by element, after normalizing both by
 √diag(S) (run the script with a dump directory and case name). All energies
-are pinned at 1e-9 except the two Cl cases at 2e-9.
+are pinned at 1e-9 (the two Cl cases at 5e-10).
 
-Restart, FCIDUMP and boundaries:
+**Post-HF** (HI/def2-SVP):
+
+| case | Planck | PySCF |
+|---|---|---|
+| `hi_rmp2_def2svp_ecp` E_corr | −0.1434184969 | −0.1434184970 |
+| `hi_rccsd_def2svp_ecp` E_corr | −0.1558820405 | −0.1558820405 |
+| `hi_casscf_def2svp_ecp` CAS(2,2) H–I σ/σ* | −297.2376744585 | −297.2376744586 |
+| `hi_cation_uhf_def2svp_ecp_stability` λ_min | −7.3e-12 | the Π zero mode |
+
+**DFT** (`def2_ecp_dft_references.py`, matched 150 × 590 grid):
+
+| case | Planck vs PySCF |
+|---|---|
+| `hi_rks_pbe_def2svp_ecp` (smoke) | every printed digit (−298.2788754666) |
+| `auh_h2o_rks_b3lyp_def2svp_ecp_gradient`, C1 | ≤ 2.4e-10 Ha/Bohr, all 15 components, against corrected PySCF (Findings); fourth-order energy FD 1.6e-8 |
+| `hi_cation_uks_pbe_def2svp_ecp_stability` | λ_min +2.3e-9 vs −1.4e-8, both the π-hole zero mode; energy 2e-10 |
+| `hi_rks_b3lyp_def2svp_ecp_tddft` (Casida) | every printed digit, roots and oscillator strengths |
+
+HI⁺ never meets a tight density tolerance, in either code: the hole sits in a
+degenerate π pair whose mix is free, so the density wanders while the energy
+holds to 1e-10. Its inputs use `tol_density 1e-6`.
+
+**Restart, FCIDUMP and boundaries.**
 
 | case | what it pins |
 |---|---|
 | `hi_rhf_def2svp_ecp_fcidump` (smoke) | NELEC 26; HOMO is orbital 13 at −0.384222 (PySCF's). PySCF reading the file reproduces its ECP RHF energy to 2e-12, from the reference determinant and from an RHF solved on the file (`def2_ecp_references.py --fcidump`) |
 | `hi_rhf_def2svp_ecp_projection_refused` (smoke) | a 3-21G checkpoint (all-electron iodine, 54 electrons) is not projected into def2-SVP (26), and the fallback converges to PySCF's energy |
 | `hi_rhf_def2svp_ecp_restart_full` | `guess full` from a v8 ECP checkpoint converges in 2 iterations to the same energy |
-| `hi_rks_def2svp_ecp_rejected` (smoke) | `planck-dft` refuses ECP bases |
 
-Gradients (step 5). PySCF references are `mf.nuc_grad_method()` on the same
+**Gradients.** PySCF references are `mf.nuc_grad_method()` on the same
 loader; geomopt against `geometric_solver`, frequencies against central
 differences of PySCF analytic gradients (1e-3 Bohr):
 
@@ -74,62 +96,21 @@ differences of PySCF analytic gradients (1e-3 Bohr):
 | `hi_rhf_def2svp_ecp_geomopt` | E_opt 1.6e-9 Eh (r 1.60180 vs 1.60186 Å at Planck's default max\|g\| 2.7e-5) |
 | `hi_rhf_def2svp_ecp_freq` | 2421.83 vs 2421.80 cm⁻¹ |
 
-Core suite at step 5: 86/86. All 13 FD-driver cases pass (their Å→Bohr
-literal was also corrected, see Findings).
+## Open
 
-## What remains
-
-1. **Step 6, DFT with ECPs — LANDED 2026-11-06.** The refusal in
-   `read_basis_and_initialize` is lifted; no other code changed, since H_core,
-   the electron counts and `one_electron_gradient` were already ECP-aware.
-   References: `tests/pyscf/def2_ecp_dft_references.py` (spherical def2-SVP,
-   ECP read from Planck's GBS, matched 150 × 590 grid; it imports `load_ecp`
-   from `def2_ecp_references.py`, which now has a main guard). Every result
-   matches PySCF:
-
-   | case | Planck vs PySCF |
-   |---|---|
-   | HI RKS PBE energy | every printed digit (−298.2788754666) |
-   | C1 AuH·H₂O RKS B3LYP gradient | ≤ 2.4e-10 Ha/Bohr, all 15 components (against corrected PySCF, below); fourth-order energy FD 1.6e-8 |
-   | HI⁺ UKS PBE stability | λ_min +2.3e-9 vs −1.4e-8, both the π-hole zero mode; energy 2e-10 |
-   | HI RKS B3LYP TDDFT (Casida) | every printed digit, roots and oscillator strengths |
-
-   - **PySCF's DFT gradient is wrong on ECP atoms.** Stock PySCF 2.13.0 is
-     1.1e-5 Ha/Bohr off its own energy FD on AuH·H₂O: its grid-response
-     derivative looks Bragg radii up by Z − n_core while the energy uses the
-     proton number. Not fixed upstream as of 2026-11-06; the reference script
-     corrects it at runtime. Research scope and upstream report:
-     `docs/PYSCF_ECP_GRID_RESPONSE_SCOPE.md`.
-   - **HI⁺ never meets a tight density tolerance**, in either code: the hole
-     sits in a degenerate π pair whose mix is free, so the density wanders
-     while the energy holds to 1e-10. The input uses `tol_density 1e-6`.
-   - Cases: `hi_rks_pbe_def2svp_ecp` (smoke), `hi_cation_uks_pbe_def2svp_ecp_stability`,
-     `hi_rks_b3lyp_def2svp_ecp_tddft` (core), `auh_h2o_rks_b3lyp_def2svp_ecp_gradient`
-     (extended). The `hi_rks_def2svp_ecp_rejected` boundary case is gone.
-2. **Smaller open items:**
-   - gate post-HF energies with an ECP. Measured after `100675e4` on
-     HI/def2-SVP:
-     - RMP2 E_corr −0.1434184969 vs PySCF −0.1434184970. Gated at 1e-8 by
-       `hi_rmp2_def2svp_ecp` (2026-11-06).
-     - CCSD −0.1558819666 vs −0.1558820517 (8.5e-8). Check CC convergence
-       before pinning.
-     - CASSCF not yet measured.
-   - HI⁺ UHF stability (λ_min −7.3e-12, the Π zero mode) is gated at
-     |λ| ≤ 1e-8 by `hi_cation_uhf_def2svp_ecp_stability` (2026-11-06);
-   - the two Cl cases (ZnCl2, AgCl) sit 1.1–1.2e-9 (~4e-13 relative) from
-     PySCF for an unexplained reason. It is not the Å→Bohr constant (ZnCl2
-     was 1.2e-9 before that fix too) and survives tight convergence in both
-     codes;
-   - when upstream PR #81 merges, repin `LIBECPINT_GIT_TAG` to the merge
-     commit (the generator precision bug is in it, so nothing to report);
-   - run the full `ctest` on the branch (only `planck-ecp-gradient-fd` has
-     run).
+- **libecpint PR #81** was still open on 2026-11-06, head `4e8767fc`
+  (exactly Planck's pin). When it merges, repin `LIBECPINT_GIT_TAG` to the
+  merge commit (review may change it) and rerun `planck-ecp-gradient-fd` and
+  every `*_ecp` case.
+- **PySCF's DFT gradient is wrong on ECP atoms**; reporting it upstream is
+  `docs/PYSCF_ECP_GRID_RESPONSE_SCOPE.md`. Planck's reference script
+  corrects it at runtime.
 
 ## How it works
 
 **Split by element.** H–Kr def2 is all-electron and needed only basis files.
-Rb onward needs ECPs. def2 is defined for spherical functions, so it serves HF
-and post-HF today and DFT once spherical DFT lands.
+Rb onward needs ECPs. def2 is defined for spherical functions, so it needed spherical DFT
+(`docs/SPHERICAL_DFT.md`) before `planck-dft` could run it.
 
 **Data.** BSE's Gaussian94 output appends an ECP block per element: the core
 count, then the local channel U_L and the semilocal channels U_l − U_L (already
@@ -183,8 +164,8 @@ an electron count. Full point-group symmetry needed no change either: its
 skeleton covers only the two-electron Fock build, and H_core is built in full.
 Population analyses show fewer core electrons on ECP atoms, as expected.
 
-**Boundaries.** Fail cleanly, never return an incomplete answer: `planck-dft`
-refuses ECP bases (step 6), and `describe_ecps` refuses basis L (+1 for
+**Boundaries.** Fail cleanly, never return an incomplete answer:
+`describe_ecps` refuses basis L (+1 for
 derivatives) or ECP L above libecpint's `LIBECPINT_MAX_L` (5), which libecpint
 only asserts (and asserts are off in Release).
 
@@ -330,6 +311,22 @@ carries. All ten `*_ecp` cases pass unchanged at their 1e-9/2e-9 pins. When
 the PR merges upstream, check the merged commit (the PR may change in review)
 and repin to it.
 
+**The CCSD gap was a Planck RCCSD bug, not the ECP.** HI/def2-SVP CCSD sat
+7.4e-8 from PySCF after both were converged tightly, and the all-electron
+control HBr/def2-SVP was *worse* (1.1e-6), so the ECP was ruled out first.
+The doubles residual was missing the `F_me` corrections of Stanton–Gauss
+(`F_be − ½ t_m^b F_me`, `F_mj + ½ t_j^e F_me`). They vanish only when T1
+does, so the error is O(t1² t2) and grows with system size. The two existing
+CCSD gates moved 6e-7 and 1.4e-6 on the fix: they had been pinned to Planck's
+own output. **A control with the suspected cause removed is what moves the
+search off it.**
+
+**The Cl offsets were integral screening.** ZnCl₂ and AgCl sat 1.1–1.2e-9
+from PySCF, the only cases not matching every digit. At Planck's default
+`tol_eri` 1e-10 that is screening accumulated over a 600–2700 Eh energy; at
+1e-12 or 1e-14 both match PySCF exactly, and PySCF does not move between
+`direct_scf_tol` 1e-13 and 1e-16. Both inputs set `tol_eri 1e-12`.
+
 ## Step log
 
 | step | commit | what |
@@ -343,7 +340,8 @@ and repin to it.
 | 5a | `b7962015` | `_compute_ecp_gradient`, `planck-ecp-gradient-fd`; libecpint pinned to PR #81 (Findings) |
 | 5 | — (working tree) | ECP term in `one_electron_gradient`; refusal lifted; RHF/UHF/ROHF gradient, geomopt, freq gates |
 | — | `100675e4` | eleven more Σ Z electron counts (found by the KS stability sweep); RMP2 with ECPs now correct |
-| 6 | — | DFT with ECPs (open, after spherical DFT) |
+| 6 | `195399ce` | DFT with ECPs (refusal lifted; PySCF ECP grid-response defect found) |
+| — | working tree | post-HF gates (RMP2, RCCSD, CASSCF); Cl offsets explained; RCCSD F_me fix |
 
 ## Not in this scope
 

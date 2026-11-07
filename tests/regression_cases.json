@@ -4249,6 +4249,7 @@
   {
    "id": "water_spherical_ccsd_sto3g",
    "input": "tests/inputs/regression/spherical/water_spherical_ccsd_sto3g.hfinp",
+   "_pyscf_reference": "PySCF 2.13.0 RCCSD, cart=False, Planck's GBS: -75.0123316192. Re-pinned 2026-11-07 from Planck's own output (-75.0123310010), which lacked the F_me terms of the Stanton-Gauss doubles equation.",
    "tags": [
     "smoke",
     "core",
@@ -4264,7 +4265,7 @@
     {
      "type": "metric_close",
      "metric": "rccsd_total_energy",
-     "expected": -75.012331001,
+     "expected": -75.0123316192,
      "atol": 1e-09
     },
     {
@@ -4277,6 +4278,7 @@
   {
    "id": "be_ccsd_spherical_631gd",
    "input": "tests/inputs/regression/spherical/be_ccsd_spherical_631gd.hfinp",
+   "_pyscf_reference": "PySCF 2.13.0 RCCSD, cart=False, Planck's GBS: -14.6138661380. Re-pinned 2026-11-07 from Planck's own output (-14.6138647122), which lacked the F_me terms of the Stanton-Gauss doubles equation.",
    "tags": [
     "extended",
     "spherical"
@@ -4292,8 +4294,8 @@
     {
      "type": "metric_close",
      "metric": "rccsd_total_energy",
-     "expected": -14.6138647122,
-     "atol": 1e-08
+     "expected": -14.613866138,
+     "atol": 1e-09
     },
     {
      "type": "metric_lt_metric",
@@ -6455,7 +6457,7 @@
      "atol": 1e-09
     }
    ],
-   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903)."
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP), docs/DEF2_ECP.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903)."
   },
   {
    "id": "water_rhf_spherical_def2qzvp",
@@ -6478,7 +6480,7 @@
      "atol": 1e-09
     }
    ],
-   "_pyscf_reference": "def2 all-electron cross-code gate (def2-QZVP (g shells)), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903)."
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-QZVP (g shells)), docs/DEF2_ECP.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903)."
   },
   {
    "id": "h2s_rhf_spherical_def2tzvp",
@@ -6501,7 +6503,7 @@
      "atol": 1e-09
     }
    ],
-   "_pyscf_reference": "def2 all-electron cross-code gate (def2-TZVP, third row), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903)."
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-TZVP, third row), docs/DEF2_ECP.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903)."
   },
   {
    "id": "sih4_rhf_spherical_def2svp",
@@ -6524,7 +6526,7 @@
      "atol": 1e-09
     }
    ],
-   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP, third row), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903)."
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP, third row), docs/DEF2_ECP.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903)."
   },
   {
    "id": "zncl2_rhf_spherical_def2svp",
@@ -6544,10 +6546,10 @@
      "type": "metric_close",
      "metric": "rhf_total_energy",
      "expected": -2696.3869858561,
-     "atol": 2e-09
+     "atol": 5e-10
     }
    ],
-   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP, first-row transition metal), docs/DEF2_ECP_SCOPE.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903). Residual 1.2e-9 (4.5e-13 relative) survives tight convergence in both codes; not the Bohr constant."
+   "_pyscf_reference": "def2 all-electron cross-code gate (def2-SVP, first-row transition metal), docs/DEF2_ECP.md step 1. PySCF 2.13.0 RHF, cart=False, basis parsed from Planck's own GBS by tests/pyscf/def2_rhf_references.py. Expected value is PySCF's, at Planck's CODATA 2018 Bohr (unit=0.529177210903). The old 1.2e-9 residual was Planck's default tol_eri (1e-10) screening; with tol_eri 1e-12 Planck matches every printed digit."
   },
   {
    "id": "hi_rhf_def2svp_ecp",
@@ -6570,7 +6572,7 @@
      "atol": 1e-09
     }
    ],
-   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP_SCOPE.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr."
+   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr."
   },
   {
    "id": "hi_rhf_def2tzvp_ecp_sad_symm",
@@ -6593,7 +6595,7 @@
      "atol": 1e-09
     }
    ],
-   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP_SCOPE.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr."
+   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr."
   },
   {
    "id": "agcl_rhf_def2svp_ecp",
@@ -6613,10 +6615,10 @@
      "type": "metric_close",
      "metric": "rhf_total_energy",
      "expected": -605.4799989662,
-     "atol": 2e-09
+     "atol": 5e-10
     }
    ],
-   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP_SCOPE.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr. Planck sits 1.1e-9 off (4.5e-13 relative); pinned at 2e-9 like zncl2_rhf_spherical_def2svp, the other Cl case."
+   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr. The earlier ~1e-9 gap was Planck's default tol_eri (1e-10) integral screening; the input sets tol_eri 1e-12 and Planck matches every printed digit."
   },
   {
    "id": "pdco_rhf_def2svp_ecp",
@@ -6639,7 +6641,7 @@
      "atol": 1e-09
     }
    ],
-   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP_SCOPE.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr."
+   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr."
   },
   {
    "id": "auh_h2o_rhf_def2svp_ecp",
@@ -6662,7 +6664,7 @@
      "atol": 1e-09
     }
    ],
-   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP_SCOPE.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr."
+   "_pyscf_reference": "def2 ECP cross-code gate, docs/DEF2_ECP.md step 4. PySCF 2.13.0 RHF, cart=False, basis and ECP parsed from Planck's own GBS by tests/pyscf/def2_ecp_references.py, at Planck's CODATA 2018 Bohr."
   },
   {
    "id": "hi_rhf_def2svp_ecp_gradient",
@@ -6853,6 +6855,30 @@
    ]
   },
   {
+   "id": "hi_rccsd_def2svp_ecp",
+   "input": "tests/inputs/regression/post_hf/hi_rccsd_def2svp_ecp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "extended",
+    "def2",
+    "ecp"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 CCSD/def2-SVP, cart=False, basis and ECP from Planck's GBS (tests/pyscf/def2_ecp_post_hf_references.py): RHF -297.2315316634, E_corr -0.1558820405, total -297.3874137039. Before 2026-11-07 Planck's RCCSD lacked the F_me terms of the doubles equation (E_corr -0.1558819666).",
+   "expected_exit_code": 0,
+   "timeout_s": 600,
+   "contains": [
+    "Total RCCSD Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rccsd_total_energy",
+     "expected": -297.3874137039,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
    "id": "hi_rmp2_def2svp_ecp",
    "input": "tests/inputs/regression/post_hf/hi_rmp2_def2svp_ecp.hfinp",
    "executable": "hartree-fock",
@@ -6880,6 +6906,31 @@
      "metric": "mp2_corr_energy",
      "expected": -0.1434184970,
      "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "hi_casscf_def2svp_ecp",
+   "input": "tests/inputs/regression/post_hf/hi_casscf_def2svp_ecp.hfinp",
+   "executable": "hartree-fock",
+   "tags": [
+    "core",
+    "extended",
+    "def2",
+    "ecp",
+    "casscf"
+   ],
+   "_pyscf_reference": "PySCF 2.13.0 CASSCF(2,2) (H-I sigma/sigma*), cart=False, basis and ECP from Planck's GBS (tests/pyscf/def2_ecp_post_hf_references.py 2 2): E -297.2376744586. Planck -297.2376744585 (1e-10).",
+   "expected_exit_code": 0,
+   "contains": [
+    "CASSCF Total Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "casscf_total_energy",
+     "expected": -297.2376744586,
+     "atol": 1e-09
     }
    ]
   },
@@ -6946,7 +6997,7 @@
      "atol": 1e-09
     }
    ],
-   "_note": "docs/DEF2_ECP_SCOPE.md step 4b: guess-full restart from a version-8 checkpoint carrying the iodine ECP core count. Energy is PySCF's."
+   "_note": "docs/DEF2_ECP.md step 4b: guess-full restart from a version-8 checkpoint carrying the iodine ECP core count. Energy is PySCF's."
   },
   {
    "id": "hi_rhf_def2svp_ecp_projection_refused",
@@ -6973,7 +7024,7 @@
      "atol": 1e-09
     }
    ],
-   "_note": "docs/DEF2_ECP_SCOPE.md step 4b: a 3-21G (all-electron iodine, 54 electrons) density must not be projected into def2-SVP (26 electrons). Also gates the fallback rebuilding the spherical 1e matrices: before the fix it kept the Cartesian ones and diverged."
+   "_note": "docs/DEF2_ECP.md step 4b: a 3-21G (all-electron iodine, 54 electrons) density must not be projected into def2-SVP (26 electrons). Also gates the fallback rebuilding the spherical 1e matrices: before the fix it kept the Cartesian ones and diverged."
   },
   {
    "id": "hi_rhf_def2svp_ecp_fcidump",
@@ -6997,7 +7048,7 @@
      "atol": 1e-09
     }
    ],
-   "_pyscf_reference": "docs/DEF2_ECP_SCOPE.md step 4b. tests/pyscf/def2_ecp_references.py --fcidump <file>: the FCIDUMP's reference determinant and an RHF solved on it both equal PySCF's ECP RHF energy to 2e-12; PySCF HOMO -0.384222. The HOMO line gates the MO printout's electron count (Z - n_core, was sum Z)."
+   "_pyscf_reference": "docs/DEF2_ECP.md step 4b. tests/pyscf/def2_ecp_references.py --fcidump <file>: the FCIDUMP's reference determinant and an RHF solved on it both equal PySCF's ECP RHF energy to 2e-12; PySCF HOMO -0.384222. The HOMO line gates the MO printout's electron count (Z - n_core, was sum Z)."
   },
   {
    "id": "hi_rks_pbe_def2svp_ecp",

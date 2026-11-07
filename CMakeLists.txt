@@ -326,7 +326,7 @@ externalproject_add(
     BUILD_BYPRODUCTS ${LIBXC_INSTALL_DIR}/lib/libxc.a
 )
 
-# libecpint (MIT): ECP integrals and derivatives (docs/DEF2_ECP_SCOPE.md).
+# libecpint (MIT): ECP integrals and derivatives (docs/DEF2_ECP.md).
 # ponytail: pinned to the head of UNMERGED upstream PR #81 (loriab's fork), which
 # sits on upstream HEAD 95203c68 and fixes seven type-2/quadrature defects,
 # including the 6-digit kernel constants Planck used to patch. Stock derivatives
@@ -1203,6 +1203,7 @@ if(BUILD_TESTING)
         ${INT_SRC}
         ${POPULATIONS_SRC}
         ${LOOKUP_SRC}
+        ${SRC_DIR}/basis/spherical.cpp
     )
 
     # Rys rules against independent quadrature moments (n = 1..11, T to 2000).
@@ -1660,6 +1661,7 @@ if(BUILD_TESTING)
         ${POPULATIONS_SRC}
         ${INT_SRC}
         ${LOOKUP_SRC}
+        ${SRC_DIR}/basis/spherical.cpp
     )
 
     add_executable(planck-symmetry-units
@@ -3062,7 +3064,7 @@ if(BUILD_TESTING)
         COMMAND planck-esp-points
     )
 
-    # ECP nuclear derivative vs finite differences (docs/DEF2_ECP_SCOPE.md step 5a).
+    # ECP nuclear derivative vs finite differences (docs/DEF2_ECP.md step 5a).
     add_executable(planck-ecp-gradient-fd
         ${CMAKE_SOURCE_DIR}/tests/ecp_gradient_fd.cpp
         ${SRC_DIR}/basis/basis.cpp

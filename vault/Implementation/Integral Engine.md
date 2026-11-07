@@ -141,7 +141,7 @@ directly for H_core, or ECP atoms lose their core operator.
   libecpint only asserts it, and asserts are off in Release.
 
 PySCF-gated to ≤1.1e-9 Eh on HI, AgCl, PdCO, AuH·H2O
-(`tests/pyscf/def2_ecp_references.py`). Scope: `docs/DEF2_ECP_SCOPE.md`.
+(`tests/pyscf/def2_ecp_references.py`). Scope: `docs/DEF2_ECP.md`.
 
 ## Index Placement
 

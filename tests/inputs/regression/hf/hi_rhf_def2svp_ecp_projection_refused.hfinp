@@ -1,6 +1,6 @@
 # Cross-basis restart from all-electron 3-21G into def2-SVP (28-electron iodine ECP):
 # the densities hold different electron counts, so projection must be refused
-# (docs/DEF2_ECP_SCOPE.md step 4b).
+# (docs/DEF2_ECP.md step 4b).
 %begin_control
     basis       def2-SVP
     calculation energy

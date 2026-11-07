@@ -997,6 +997,19 @@ namespace
                 out.r1(i, a) = value;
             }
 
+        // F_be - 1/2 t_m^b F_me and F_mj + 1/2 t_j^e F_me (see ccsd.cpp build_residuals).
+        Tensor2D fae2 = ints.fae;
+        Tensor2D fmi2 = ints.fmi;
+        for (int m = 0; m < reference.n_occ; ++m)
+            for (int e = 0; e < reference.n_virt; ++e)
+            {
+                const double f = ints.fme(m, e);
+                for (int b = 0; b < reference.n_virt; ++b)
+                    fae2(b, e) -= 0.5 * amps.t1(m, b) * f;
+                for (int j = 0; j < reference.n_occ; ++j)
+                    fmi2(m, j) += 0.5 * amps.t1(j, e) * f;
+            }
+
         for (int i = 0; i < reference.n_occ; ++i)
             for (int j = 0; j < reference.n_occ; ++j)
                 for (int a = 0; a < reference.n_virt; ++a)
@@ -1004,11 +1017,11 @@ namespace
                     {
                         double value = blocks.oovv(i, j, a, b);
                         for (int e = 0; e < reference.n_virt; ++e)
-                            value += amps.t2(i, j, a, e) * ints.fae(b, e) -
-                                     amps.t2(i, j, b, e) * ints.fae(a, e);
+                            value += amps.t2(i, j, a, e) * fae2(b, e) -
+                                     amps.t2(i, j, b, e) * fae2(a, e);
                         for (int m = 0; m < reference.n_occ; ++m)
-                            value -= amps.t2(i, m, a, b) * ints.fmi(m, j) -
-                                     amps.t2(j, m, a, b) * ints.fmi(m, i);
+                            value -= amps.t2(i, m, a, b) * fmi2(m, j) -
+                                     amps.t2(j, m, a, b) * fmi2(m, i);
                         for (int m = 0; m < reference.n_occ; ++m)
                             for (int n = 0; n < reference.n_occ; ++n)
                                 value += 0.5 * tau_cache.tau(m, n, a, b) * ints.wmnij(m, n, i, j);

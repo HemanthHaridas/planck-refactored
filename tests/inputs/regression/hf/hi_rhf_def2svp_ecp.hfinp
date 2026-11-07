@@ -1,4 +1,4 @@
-# def2 ECP gate (docs/DEF2_ECP_SCOPE.md step 4): HI, iodine 28-electron ECP, L 3
+# def2 ECP gate (docs/DEF2_ECP.md step 4): HI, iodine 28-electron ECP, L 3
 # Reference: tests/pyscf/def2_ecp_references.py (PySCF 2.13.0, same GBS file).
 %begin_control
     basis       def2-SVP

@@ -1,4 +1,4 @@
-// ECP nuclear-derivative gate (docs/DEF2_ECP_SCOPE.md step 5a).
+// ECP nuclear-derivative gate (docs/DEF2_ECP.md step 5a).
 //
 // For a fixed random symmetric density D, E(R) = tr(D U(R)) with U the ECP
 // matrix from libecpint. The analytic gradient (_compute_ecp_gradient, from

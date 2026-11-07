@@ -1,4 +1,4 @@
-"""PySCF references for the def2 ECP DFT gates (docs/DEF2_ECP_SCOPE.md step 6).
+"""PySCF references for the def2 ECP DFT gates (docs/DEF2_ECP.md step 6).
 
 Spherical def2-SVP with the basis and ECP read from Planck's own GBS file
 (load_ecp from def2_ecp_references.py), Planck's CODATA 2018 Bohr, and the

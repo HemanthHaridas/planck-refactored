@@ -1,4 +1,4 @@
-# def2 all-electron cross-code gate (docs/DEF2_ECP_SCOPE.md step 1).
+# def2 all-electron cross-code gate (docs/DEF2_ECP.md step 1).
 # Reference: tests/pyscf/def2_rhf_references.py (PySCF, cart=False, Planck's own GBS).
 %begin_control
     basis       def2-QZVP

@@ -41,8 +41,10 @@ namespace
     // Frozen baselines, measured from the production OS _compute_2e when this
     // test was added. The test prints the live values so re-pinning is trivial
     // if the inputs ever change. (NaN until pinned: see check_golden.)
-    constexpr double GOLDEN_SUM = 75.205770786685136;
-    constexpr double GOLDEN_SUMSQ = 66.562378763425713;
+    // Re-pinned 2026-11-07: the 2026-11-01 Angstrom->Bohr constant fix grew the
+    // geometry by 7.2e-8 relative; the one-centre (0000) did not move.
+    constexpr double GOLDEN_SUM = 75.205766085523024;
+    constexpr double GOLDEN_SUMSQ = 66.562375188054659;
     constexpr double GOLDEN_0000 = 4.7850657518157149;
     constexpr double GOLDEN_MIX = 0.13687336735613378; // element (0,1,1,0)
 

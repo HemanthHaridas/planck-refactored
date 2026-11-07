@@ -1,4 +1,4 @@
-# def2 ECP geomopt gate (docs/DEF2_ECP_SCOPE.md step 5): HI, iodine 28-electron ECP.
+# def2 ECP geomopt gate (docs/DEF2_ECP.md step 5): HI, iodine 28-electron ECP.
 # Reference: PySCF 2.13.0 (geometric_solver / FD-of-analytic Hessian), same GBS file; see regression_cases.json.
 %begin_control
     basis       def2-SVP

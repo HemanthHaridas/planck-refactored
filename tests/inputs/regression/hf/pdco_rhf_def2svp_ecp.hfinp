@@ -1,4 +1,4 @@
-# def2 ECP gate (docs/DEF2_ECP_SCOPE.md step 4): PdCO, two neighbours of the ECP atom, SAD guess
+# def2 ECP gate (docs/DEF2_ECP.md step 4): PdCO, two neighbours of the ECP atom, SAD guess
 # Reference: tests/pyscf/def2_ecp_references.py (PySCF 2.13.0, same GBS file).
 %begin_control
     basis       def2-SVP

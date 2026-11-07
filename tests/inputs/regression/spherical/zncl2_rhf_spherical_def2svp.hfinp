@@ -1,5 +1,7 @@
-# def2 all-electron cross-code gate (docs/DEF2_ECP_SCOPE.md step 1).
+# def2 all-electron cross-code gate (docs/DEF2_ECP.md step 1).
 # Reference: tests/pyscf/def2_rhf_references.py (PySCF, cart=False, Planck's own GBS).
+# tol_eri 1e-12: at the default 1e-10 the integral screening alone puts the energy ~1e-9 above
+# PySCF on this ~600-2700 Eh system; at 1e-12 the two codes agree in every printed digit.
 %begin_control
     basis       def2-SVP
     calculation energy
@@ -11,6 +13,7 @@
     use_diis    .true.
     diis_dim    8
     guess       sad
+    tol_eri     1.0e-12
     max_cycles  200
     tol_energy  1.0e-10
     tol_density 1.0e-10
