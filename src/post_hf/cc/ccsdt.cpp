@@ -1,9 +1,7 @@
 #include "post_hf/cc/ccsdt.h"
 
-#include <cstdlib>
 #include <format>
 #include <optional>
-#include <string_view>
 
 #include "io/logging.h"
 #include "post_hf/cc/determinant_space.h"
@@ -14,21 +12,14 @@ namespace
 {
     using HartreeFock::Correlation::CC::RCCSDTBackend;
 
-    [[nodiscard]] std::optional<RCCSDTBackend> parse_rccsdt_backend_override() noexcept
+    // rccsdt_backend in the input; "auto" means the size-based choice.
+    [[nodiscard]] std::optional<RCCSDTBackend> requested_rccsdt_backend(const std::string &choice) noexcept
     {
-        // A simple environment-variable override is enough for development and
-        // regression testing: it lets us force a backend without threading a
-        // debugging option through the public input language.
-        const char *value = std::getenv("PLANCK_RCCSDT_BACKEND");
-        if (value == nullptr)
-            return std::nullopt;
-
-        const std::string_view override(value);
-        if (override == "determinant" || override == "determinant_prototype")
+        if (choice == "determinant")
             return RCCSDTBackend::DeterminantPrototype;
-        if (override == "tensor" || override == "tensor_production")
+        if (choice == "tensor")
             return RCCSDTBackend::TensorProduction;
-        if (override == "optimized" || override == "tensor_optimized")
+        if (choice == "optimized")
             return RCCSDTBackend::TensorOptimized;
         return std::nullopt;
     }
@@ -91,20 +82,20 @@ namespace HartreeFock::Correlation::CC
         if (!selector_ref)
             return std::unexpected(selector_ref.error());
 
-        const std::optional<RCCSDTBackend> override = parse_rccsdt_backend_override();
+        const std::optional<RCCSDTBackend> override = requested_rccsdt_backend(calculator._scf._rccsdt_backend);
         const RCCSDTBackend backend = override.value_or(choose_rccsdt_backend(*selector_ref));
 
         // Backend choice is centralized here so all RCCSDT entry points share
         // the same policy: small systems can use the determinant-space teaching
         // backend, larger ones move to tensor implementations, and developers
-        // can still pin a backend explicitly for debugging.
+        // can pin a backend explicitly with rccsdt_backend.
         if (override.has_value())
         {
             HartreeFock::Logger::logging(
                 HartreeFock::LogLevel::Info,
                 "RCCSDT :",
                 std::format(
-                    "Honoring PLANCK_RCCSDT_BACKEND={} override.",
+                    "Using rccsdt_backend {} from the input.",
                     backend_label(backend)));
         }
 

@@ -12,10 +12,9 @@
     # tensor CCSDT solver (run_restricted_tensor_rccsdt_no_fallback) DIVERGES on
     # this system without it: rms(R3) grows 1.7e-03 -> 6.1e-03 -> 2.4e-02 over
     # three iterations and the run fails. With DIIS it converges in 24 steps to
-    # -0.0791116825. This input is shared with ch4_rccsdt_generated_sto3g, whose
-    # generated path is indifferent to the setting -- so flipping it to test the
-    # generated path silently breaks the hand-written one, which is exactly how
-    # it was broken once (70a587d).
+    # -0.0791116825. The generated-path case has its own input
+    # (ch4_rccsdt_generated_sto3g.hfinp); this one was once broken by sharing
+    # it (70a587d).
     use_diis    .true.
     diis_dim    8
     save_checkpoint .false.

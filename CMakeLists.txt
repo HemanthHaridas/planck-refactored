@@ -553,9 +553,6 @@ set(DFT_LIB_SRC
     ${SRC_DIR}/dft/udh_two_particle_density.cpp
     ${SRC_DIR}/dft/udh_xc_ii.cpp
     ${SRC_DIR}/dft/udh_xc_ii_gga.cpp
-    ${SRC_DIR}/dft/dh_hessian_probe.cpp
-    ${SRC_DIR}/dft/dh_hessian_probe.h
-    ${SRC_DIR}/dft/dh_probe_gmres.h
     ${SRC_DIR}/dft/driver.cpp
     ${SRC_DIR}/dft/driver.h
     ${SRC_DIR}/dft/ks_matrix.cpp
@@ -950,13 +947,7 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-udh-validation PRIVATE USE_OPENMP)
     endif()
 
-    add_executable(planck-dh-probe-gmres ${CMAKE_SOURCE_DIR}/tests/dh_probe_gmres.cpp)
-    target_include_directories(planck-dh-probe-gmres PRIVATE ${SRC_DIR} ${eigen_SOURCE_DIR})
-    add_test(NAME planck-dh-probe-gmres COMMAND planck-dh-probe-gmres)
     if(Python3_Interpreter_FOUND)
-        add_test(NAME planck-dh-hessian-swap-runner
-            COMMAND ${Python3_EXECUTABLE} -m unittest discover
-                -s ${CMAKE_SOURCE_DIR}/tests -p test_dh_hessian_swap_audit.py -v)
         add_test(NAME planck-dh-workflow-runner
             COMMAND ${Python3_EXECUTABLE} -m unittest discover
                 -s ${CMAKE_SOURCE_DIR}/tests -p test_dh_workflow_audit.py -v)
@@ -1675,6 +1666,7 @@ if(BUILD_TESTING)
         ${INT_SRC}
         ${LOOKUP_SRC}
         ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
     )
 
     add_executable(planck-symmetry-units
@@ -3096,9 +3088,6 @@ if(BUILD_TESTING)
         target_compile_definitions(planck-ecp-gradient-fd PRIVATE USE_OPENMP)
     endif()
     add_test(NAME planck-ecp-gradient-fd COMMAND planck-ecp-gradient-fd)
-    # def2 lives in the source tree; an older install may predate it.
-    set_tests_properties(planck-ecp-gradient-fd PROPERTIES
-        ENVIRONMENT BASIS_PATH=${CMAKE_SOURCE_DIR}/basis-sets)
 
     add_test(
         NAME planck-dft-coulomb-response
@@ -3431,3 +3420,12 @@ endif()
 # )
 
 # add_dependencies(hartree-fock fetch-basis-sets)
+
+# Every test reads basis sets from the source tree, not the install prefix:
+# an uninstalled build (CI) has none there, and an older install can predate
+# newer sets (def2). Appended, so per-test ENVIRONMENT entries are kept.
+if(BUILD_TESTING)
+    get_directory_property(_planck_tests TESTS)
+    set_property(TEST ${_planck_tests} APPEND PROPERTY
+        ENVIRONMENT BASIS_PATH=${CMAKE_SOURCE_DIR}/basis-sets)
+endif()
