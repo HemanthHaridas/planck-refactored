@@ -4075,6 +4075,251 @@
    "timeout_s": 180
   },
   {
+   "id": "be_fciqmc_spherical_631gd",
+   "input": "tests/inputs/regression/post_hf/be_fciqmc_spherical_631gd.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "env": {
+    "OMP_NUM_THREADS": "2"
+   },
+   "expected_exit_code": 0,
+   "contains": [
+    "Sampling 14 orbitals, 2 alpha / 2 beta electrons  (CI dim = 8281)",
+    "phase=result id=",
+    "Shift energy",
+    "Projected energy"
+   ],
+   "not_contains": [
+    "SIGN-UNSTABLE",
+    "Building spherical AO ERI tensor from 15 Cartesian AOs"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "fciqmc_nuclear_energy",
+     "expected": 0.0,
+     "atol": 1e-10
+    },
+    {
+     "type": "metric_le",
+     "metric": "fciqmc_mo_orthogonality_error",
+     "value": 1e-10
+    },
+    {
+     "type": "metric_within_sigma",
+     "metric": "fciqmc_shift_energy",
+     "sigma_metric": "fciqmc_shift_error",
+     "expected": -14.6139425466,
+     "n_sigma": 5.0
+    },
+    {
+     "type": "metric_within_sigma",
+     "metric": "fciqmc_projected_energy",
+     "sigma_metric": "fciqmc_projected_error",
+     "expected": -14.6139425466,
+     "n_sigma": 5.0
+    }
+   ],
+   "timeout_s": 180
+  },
+  {
+   "id": "be_fciqmc_spherical_direct_631gd",
+   "input": "tests/inputs/regression/post_hf/be_fciqmc_spherical_direct_631gd.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "env": {
+    "OMP_NUM_THREADS": "2"
+   },
+   "expected_exit_code": 0,
+   "contains": [
+    "Sampling 14 orbitals, 2 alpha / 2 beta electrons  (CI dim = 8281)",
+    "phase=result id=",
+    "Shift energy",
+    "Projected energy",
+    "Building spherical AO ERI tensor from 15 Cartesian AOs"
+   ],
+   "not_contains": [
+    "SIGN-UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "fciqmc_nuclear_energy",
+     "expected": 0.0,
+     "atol": 1e-10
+    },
+    {
+     "type": "metric_le",
+     "metric": "fciqmc_mo_orthogonality_error",
+     "value": 1e-10
+    },
+    {
+     "type": "metric_within_sigma",
+     "metric": "fciqmc_shift_energy",
+     "sigma_metric": "fciqmc_shift_error",
+     "expected": -14.6139425466,
+     "n_sigma": 5.0
+    },
+    {
+     "type": "metric_within_sigma",
+     "metric": "fciqmc_projected_energy",
+     "sigma_metric": "fciqmc_projected_error",
+     "expected": -14.6139425466,
+     "n_sigma": 5.0
+    }
+   ],
+   "timeout_s": 180
+  },
+  {
+   "id": "o2_fciqmc_rohf_sto3g",
+   "input": "tests/inputs/regression/post_hf/o2_fciqmc_rohf_sto3g.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "env": {
+    "OMP_NUM_THREADS": "2"
+   },
+   "expected_exit_code": 0,
+   "contains": [
+    "Sampling 10 orbitals, 9 alpha / 7 beta electrons  (CI dim = 1200)",
+    "phase=result id=",
+    "Shift energy",
+    "Projected energy"
+   ],
+   "not_contains": [
+    "SIGN-UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "fciqmc_nuclear_energy",
+     "expected": 28.035878723338,
+     "atol": 1e-10
+    },
+    {
+     "type": "metric_le",
+     "metric": "fciqmc_mo_orthogonality_error",
+     "value": 1e-10
+    },
+    {
+     "type": "metric_within_sigma",
+     "metric": "fciqmc_shift_energy",
+     "sigma_metric": "fciqmc_shift_error",
+     "expected": -147.7441885782,
+     "n_sigma": 5.0
+    },
+    {
+     "type": "metric_within_sigma",
+     "metric": "fciqmc_projected_energy",
+     "sigma_metric": "fciqmc_projected_error",
+     "expected": -147.7441885782,
+     "n_sigma": 5.0
+    }
+   ],
+   "timeout_s": 180
+  },
+  {
+   "id": "rbh_8plus_fci_def2svp_ecp",
+   "input": "tests/inputs/regression/post_hf/rbh_8plus_fci_def2svp_ecp.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "env": {
+    "OMP_NUM_THREADS": "2"
+   },
+   "expected_exit_code": 0,
+   "contains": [
+    "29 orbitals, 1 alpha / 1 beta electrons"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "fci_total_energy",
+     "expected": -8.772519943865,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
+   "id": "rbh_8plus_fciqmc_def2svp_ecp",
+   "input": "tests/inputs/regression/post_hf/rbh_8plus_fciqmc_def2svp_ecp.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "env": {
+    "OMP_NUM_THREADS": "2"
+   },
+   "expected_exit_code": 0,
+   "contains": [
+    "Sampling 29 orbitals, 1 alpha / 1 beta electrons  (CI dim = 841)",
+    "phase=result id=",
+    "Shift energy",
+    "Projected energy"
+   ],
+   "not_contains": [
+    "SIGN-UNSTABLE"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "fciqmc_nuclear_energy",
+     "expected": 1.984414540886,
+     "atol": 1e-10
+    },
+    {
+     "type": "metric_le",
+     "metric": "fciqmc_mo_orthogonality_error",
+     "value": 1e-10
+    },
+    {
+     "type": "metric_within_sigma",
+     "metric": "fciqmc_shift_energy",
+     "sigma_metric": "fciqmc_shift_error",
+     "expected": -8.7725199439,
+     "n_sigma": 5.0
+    },
+    {
+     "type": "metric_within_sigma",
+     "metric": "fciqmc_projected_energy",
+     "sigma_metric": "fciqmc_projected_error",
+     "expected": -8.7725199439,
+     "n_sigma": 5.0
+    }
+   ],
+   "timeout_s": 180
+  },
+  {
+   "id": "h2_fciqmc_uhf_after_follow_rejected",
+   "input": "tests/inputs/regression/post_hf/h2_fciqmc_uhf_after_follow_rejected.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 1,
+   "contains": [
+    "Re-converged after follow:",
+    "FCIQMC: only RHF or ROHF references supported."
+   ],
+   "not_contains": [
+    "reference determinant",
+    "Shift energy"
+   ]
+  },
+  {
+   "id": "n2_fciqmc_s5_raw_thread_identity",
+   "input": "tests/inputs/regression/post_hf/n2_fciqmc_s5_short.hfinp",
+   "executable": "tests/fciqmc_thread_identity.py",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Thread identities match:"
+   ],
+   "timeout_s": 120
+  },
+  {
    "id": "n2_fciqmc_s5_threads1",
    "input": "tests/inputs/regression/post_hf/n2_fciqmc_s5_short.hfinp",
    "tags": [
@@ -5904,6 +6149,28 @@
      "metric": "casscf_total_energy",
      "expected": -76.06098305048,
      "atol": 1e-07
+    }
+   ]
+  },
+  {
+   "id": "be_fci_spherical_direct_631gd",
+   "input": "tests/inputs/regression/spherical/be_fci_spherical_direct_631gd.hfinp",
+   "tags": [
+    "extended",
+    "spherical"
+   ],
+   "timeout_s": 300,
+   "expected_exit_code": 0,
+   "contains": [
+    "Full CI over 14 orbitals",
+    "Building spherical AO ERI tensor from 15 Cartesian AOs"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "fci_total_energy",
+     "expected": -14.613942546561,
+     "atol": 1e-08
     }
    ]
   },

@@ -1385,6 +1385,102 @@ static void test_dispatch_table_matches_literal()
           "E2 supplied class/rank table dispatch matches literal descriptor and p_gen");
 }
 
+// E4 candidates are kept entirely in the test binary.  The production path
+// remains the compact clear-lowest-set-bit loop until the oracle and benchmark
+// both justify replacing it.
+static int select_set_bit_clear(CIString bits, int rank)
+{
+    while (rank-- > 0)
+        bits &= bits - 1;
+    return static_cast<int>(std::countr_zero(bits));
+}
+
+static int select_set_bit_byte_table(CIString bits, int rank)
+{
+    static const auto table = [] {
+        std::array<std::array<unsigned char, 8>, 256> result{};
+        for (int value = 0; value < 256; ++value)
+        {
+            int slot = 0;
+            for (int bit = 0; bit < 8; ++bit)
+                if (value & (1 << bit))
+                    result[static_cast<std::size_t>(value)]
+                          [static_cast<std::size_t>(slot++)]
+                        = static_cast<unsigned char>(bit);
+        }
+        return result;
+    }();
+
+    for (int byte = 0; byte < static_cast<int>(sizeof(CIString)); ++byte)
+    {
+        const unsigned char value = static_cast<unsigned char>(bits >> (8 * byte));
+        const int count = std::popcount(value);
+        if (rank < count)
+            return 8 * byte + table[static_cast<std::size_t>(value)]
+                                     [static_cast<std::size_t>(rank)];
+        rank -= count;
+    }
+    return -1;
+}
+
+static void test_byte_table_selector_matches_clear_loop()
+{
+    bool exact = true;
+    for (int n_act = 1;
+         n_act <= HartreeFock::Correlation::CASSCFInternal::kMaxPackedSpatialOrbitals;
+         ++n_act)
+        for (int variant = 0; variant < 4; ++variant)
+        {
+            const DetKey parent{patterned_occupancy(n_act, variant, 0),
+                                patterned_occupancy(n_act, variant, 1)};
+            const CIString active =
+                HartreeFock::Correlation::CASSCFInternal::low_bit_mask(n_act);
+            const CIString masks[]{parent.alpha & active, parent.beta & active,
+                                   ~parent.alpha & active, ~parent.beta & active};
+            for (const CIString mask : masks)
+                for (int rank = 0; rank < std::popcount(mask); ++rank)
+                    exact = exact && select_set_bit_clear(mask, rank)
+                                == select_set_bit_byte_table(mask, rank);
+        }
+    check(exact,
+          "E4 byte-table selector matches clear-lowest-set-bit over the E0 corpus");
+}
+
+struct SelectorRequest
+{
+    CIString mask = 0;
+    int rank = 0;
+};
+
+static std::vector<SelectorRequest> selector_request_corpus()
+{
+    std::vector<SelectorRequest> requests;
+    for (const auto &plan : dispatch_plan_corpus())
+    {
+        const auto d = sampler_oracle::dispatch_literal(plan);
+        const auto add = [&](CIString mask, int rank) {
+            requests.push_back({mask, rank});
+        };
+        switch (d.klass)
+        {
+        case sampler_oracle::Klass::SingleA:
+            add(plan.occ_a, d.i0); add(plan.vir_a, d.a0); break;
+        case sampler_oracle::Klass::SingleB:
+            add(plan.occ_b, d.i0); add(plan.vir_b, d.a0); break;
+        case sampler_oracle::Klass::DoubleAA:
+            add(plan.occ_a, d.i0); add(plan.vir_a, d.a0);
+            add(plan.occ_a, d.i1); add(plan.vir_a, d.a1); break;
+        case sampler_oracle::Klass::DoubleBB:
+            add(plan.occ_b, d.i0); add(plan.vir_b, d.a0);
+            add(plan.occ_b, d.i1); add(plan.vir_b, d.a1); break;
+        case sampler_oracle::Klass::DoubleAB:
+            add(plan.occ_a, d.i0); add(plan.vir_a, d.a0);
+            add(plan.occ_b, d.i1); add(plan.vir_b, d.a1); break;
+        }
+    }
+    return requests;
+}
+
 // E1 measures only rank selection.  The literal E0 oracle is the retained
 // pre-E1 implementation, so this comparison has the same parent corpus, RNG
 // stream, and excitation arithmetic on both sides.  It is deliberately
@@ -1412,6 +1508,70 @@ static std::size_t sampler_benchmark_count(const char *name,
         return default_value;
     }
     return static_cast<std::size_t>(value);
+}
+
+template <typename Select>
+static std::pair<double, std::uint64_t>
+time_selector_requests(const std::vector<SelectorRequest> &requests,
+                       std::size_t draws, Select &&select)
+{
+    std::uint64_t digest = 0;
+    const auto started = std::chrono::steady_clock::now();
+    for (std::size_t i = 0; i < draws; ++i)
+    {
+        const auto &request = requests[i % requests.size()];
+        digest ^= std::rotl(static_cast<std::uint64_t>(
+                                 select(request.mask, request.rank) + 1),
+                             static_cast<int>(i & 63));
+    }
+    const double seconds = std::chrono::duration<double>(
+        std::chrono::steady_clock::now() - started).count();
+    return {seconds, digest};
+}
+
+static void run_byte_table_selector_benchmark_if_requested()
+{
+    if (std::getenv("PLANCK_FCIQMC_SELECTOR_BENCHMARK") == nullptr)
+        return;
+
+    const std::size_t draws = sampler_benchmark_count(
+        "PLANCK_FCIQMC_SELECTOR_BENCHMARK_DRAWS", 10000000);
+    const std::size_t rounds = sampler_benchmark_count(
+        "PLANCK_FCIQMC_SELECTOR_BENCHMARK_ROUNDS", 5);
+    const auto requests = selector_request_corpus();
+    std::vector<double> clear_seconds, table_seconds;
+    clear_seconds.reserve(rounds);
+    table_seconds.reserve(rounds);
+    std::uint64_t clear_digest = 0, table_digest = 0;
+    for (std::size_t round = 0; round < rounds; ++round)
+    {
+        const bool clear_first = (round % 2 == 0);
+        const auto clear = [&] {
+            return time_selector_requests(requests, draws, select_set_bit_clear);
+        };
+        const auto table = [&] {
+            return time_selector_requests(requests, draws, select_set_bit_byte_table);
+        };
+        const auto first = clear_first ? clear() : table();
+        const auto second = clear_first ? table() : clear();
+        const auto clear_result = clear_first ? first : second;
+        const auto table_result = clear_first ? second : first;
+        clear_seconds.push_back(clear_result.first);
+        table_seconds.push_back(table_result.first);
+        clear_digest ^= clear_result.second;
+        table_digest ^= table_result.second;
+    }
+    std::sort(clear_seconds.begin(), clear_seconds.end());
+    std::sort(table_seconds.begin(), table_seconds.end());
+    const double clear = clear_seconds[rounds / 2];
+    const double table = table_seconds[rounds / 2];
+    check(clear_digest == table_digest,
+          "E4 selector benchmark preserves the E3 selection stream");
+    std::printf("E4 byte-selector benchmark draws=%zu rounds=%zu "
+                "clear_median_s=%.6f table_median_s=%.6f speedup=%.3fx "
+                "digest=%s\n",
+                draws, rounds, clear, table, clear / table,
+                clear_digest == table_digest ? "match" : "MISMATCH");
 }
 
 static std::uint64_t dispatch_benchmark_digest(
@@ -4661,6 +4821,9 @@ int main()
     std::printf("E2 -- supplied-input dispatch oracle\n");
     test_dispatch_table_matches_literal();
 
+    std::printf("E4 -- byte-table bit-selection oracle\n");
+    test_byte_table_selector_matches_clear_loop();
+
     std::printf("F2.4 -- the gate rejects broken generators\n");
     test_gate_rejects_broken_generators();
 
@@ -4739,6 +4902,7 @@ int main()
         run_rank_selection_benchmark_if_requested();
         run_dispatch_benchmark_if_requested();
         run_generator_component_benchmark_if_requested();
+        run_byte_table_selector_benchmark_if_requested();
         if (g_failures != 0)
         {
             std::printf("%d FAILURE(S).\n", g_failures);

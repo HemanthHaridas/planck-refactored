@@ -21,7 +21,7 @@ namespace HartreeFock::Correlation
     // engine in namespace HartreeFock::Correlation::CI without any orbital
     // optimization.
     //
-    // Requires a converged RHF reference (the CI engine works in a spatial-orbital
+    // Requires a converged RHF or ROHF reference (the CI engine works in a spatial-orbital
     // / shared alpha-beta MO basis). Single-point only.
     //
     // Reads from calc._active_space:

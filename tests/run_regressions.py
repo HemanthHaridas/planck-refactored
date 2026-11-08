@@ -57,6 +57,8 @@ METRIC_PATTERNS: dict[str, re.Pattern[str]] = {
         r"Projected energy\s+([-+0-9Ee\.]+)\s+\+/-", re.MULTILINE),
     "fciqmc_projected_error": re.compile(
         r"Projected energy\s+[-+0-9Ee\.]+\s+\+/-\s+([-+0-9Ee\.]+)", re.MULTILINE),
+    "fciqmc_nuclear_energy": re.compile(r"phase=hamiltonian id=\w+ nuclear_e=([-+0-9Ee\.]+)"),
+    "fciqmc_mo_orthogonality_error": re.compile(r"mo_orthogonality_max_error=([-+0-9Ee\.]+)"),
     "dft_total_energy": re.compile(r"^\s*(?:\[INF\]\s+)?DFT Energy\s*:\s*([-+0-9Ee\.]+)\s+Eh", re.MULTILINE),
     "dispersion_energy": re.compile(r"Dispersion Energy\s*:\s*([-+0-9Ee\.]+)\s+Eh"),
     # TDDFT table rows have eight numeric columns after the integer root

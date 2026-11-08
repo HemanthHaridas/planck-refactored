@@ -28,7 +28,16 @@ namespace HartreeFock::Correlation
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const std::string &tag)
     {
-        const int nbasis = static_cast<int>(calc._info._scf.alpha.mo_coefficients.rows());
+        // Both solvers consume a common spatial MO set. Check the *final*
+        // reference: a stability follow can turn an input RHF into a UHF.
+        if (!calc._info._is_converged)
+            return std::unexpected(tag + ": requires a converged RHF or ROHF reference.");
+        if (calc._scf._scf != SCFType::RHF && calc._scf._scf != SCFType::ROHF)
+            return std::unexpected(tag + ": only RHF or ROHF references supported.");
+
+        const int nbasis = static_cast<int>(calc.working_nbasis());
+        if (nbasis <= 0)
+            return std::unexpected(tag + ": empty basis.");
         const int n_act = nbasis;
 
         // The packed alpha/beta determinant encoding caps how many spatial
@@ -84,6 +93,13 @@ namespace HartreeFock::Correlation
         if (C.rows() != nbasis || C.cols() != nbasis)
             return std::unexpected(tag + ": MO coefficient matrix has wrong size.");
 
+        if (calc._hcore.rows() != nbasis || calc._hcore.cols() != nbasis ||
+            calc._overlap.rows() != nbasis || calc._overlap.cols() != nbasis)
+            return std::unexpected(tag + ": one-electron matrices do not match the working basis.");
+        // The packed-orbital guard above bounds this product.
+        const auto n = static_cast<std::size_t>(nbasis);
+        const auto integral_count = n * n * n * n;
+
         // With no inactive core, the effective one-electron integrals are just the
         // core Hamiltonian in the MO basis, and the core energy is zero — so the CI
         // eigenvalue plus nuclear repulsion is the total electronic energy.
@@ -106,8 +122,13 @@ namespace HartreeFock::Correlation
             std::vector<double> eri_local;
             const std::vector<double> &eri =
                 ensure_eri(calc, shell_pairs, eri_local, tag + " :");
+            if (eri.size() != integral_count)
+                return std::unexpected(tag + ": AO ERI tensor does not match the working basis.");
             ga = transform_eri_internal(eri, nbasis, C);
         }
+
+        if (ga.size() != integral_count)
+            return std::unexpected(tag + ": transformed ERI tensor does not match the MO space.");
 
         AllMOCISetup out;
         out.n_act = n_act;
@@ -125,33 +146,10 @@ namespace HartreeFock::Correlation
     {
         const std::string tag = "FCI";
 
-        // ── Reference and method guards ────────────────────────────────────────
-        // FCI here is CASCI over the whole basis; it reuses the spatial-orbital CI
-        // engine, which assumes a single common spatial-orbital set for both spins.
-        // Both RHF and ROHF satisfy that (ROHF stores one common orbital set for
-        // alpha and beta), so either can serve as the reference. The FCI energy is
-        // invariant to the orbital choice; only the correlation energy
-        // (E_FCI - E_ref) depends on which reference was used.
-        if (!calc._info._is_converged)
-            return std::unexpected(tag + ": requires a converged RHF or ROHF reference.");
-        if (calc._scf._scf != HartreeFock::SCFType::RHF &&
-            calc._scf._scf != HartreeFock::SCFType::ROHF)
-            return std::unexpected(tag + ": only RHF or ROHF references supported.");
-
-        // Spherical mode: the CI active space is the full MO space, whose dimension
-        // is the spherical working basis (working_nbasis()), not the larger Cartesian
-        // nbasis(). The cached ERI and MO coefficients are both spherical.
-        const int nbasis = static_cast<int>(calc.working_nbasis());
-        if (nbasis <= 0)
-            return std::unexpected(tag + ": empty basis.");
-
-        // The whole basis becomes the active space: no inactive core, no virtuals.
-        const int n_core = 0;
-        const int n_act = nbasis;
-
         auto setup = build_all_mo_ci_setup(calc, shell_pairs, tag);
         if (!setup)
             return std::unexpected(setup.error());
+        const int n_act = setup->n_act;
         const int n_alpha = setup->n_alpha;
         const int n_beta = setup->n_beta;
         const long long ci_dim_est = setup->ci_dim;

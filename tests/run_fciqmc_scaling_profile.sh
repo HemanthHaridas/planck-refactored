@@ -33,21 +33,25 @@ trap 'rm -f "$temporary_input"' EXIT HUP INT TERM
 # normal boolean spelling is used so the emitted file is independently readable.
 python3 - "$fixture" "$temporary_input" <<'PY'
 from pathlib import Path
+import re
 import sys
 
 source = Path(sys.argv[1]).read_text()
-if 'fciqmc_profile' in source:
-    raise SystemExit('fixture already declares fciqmc_profile; refuse to override it')
-if 'fciqmc_seed' not in source:
-    raise SystemExit('fixture has no fciqmc_seed insertion point')
-
-source = source.replace('verbosity   verbose', 'verbosity   normal')
-source = source.replace('fciqmc_seed', 'fciqmc_profile         true\n    fciqmc_seed', 1)
+seed = re.search(r'(?im)^([ \t]*)fciqmc_seed\b', source)
+if not seed:
+    raise SystemExit('fixture has no explicit fciqmc_seed')
+profile = re.findall(r'(?im)^[ \t]*fciqmc_profile[ \t]+([^\s#]+)', source)
+if not profile:
+    source = source[:seed.start()] + seed[1] + 'fciqmc_profile         true\n' + source[seed.start():]
+elif len(profile) != 1 or profile[0].lower() not in ('true', '.true.'):
+    raise SystemExit('fixture explicitly sets a conflicting fciqmc_profile value')
+source = re.sub(r'(?im)^([ \t]*verbosity[ \t]+)verbose\b', r'\g<1>normal', source)
 Path(sys.argv[2]).write_text(source)
 PY
 
 name=$(basename "$fixture" .hfinp)
 log="$out_dir/${name}.threads-${threads}.log"
+cp "$temporary_input" "$out_dir/${name}.threads-${threads}.hfinp"
 printf 'FCIQMC scaling: fixture=%s threads=%s log=%s\n' "$fixture" "$threads" "$log"
 OMP_NUM_THREADS="$threads" "$binary" "$temporary_input" >"$log" 2>&1
 

@@ -1184,10 +1184,11 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         if (calculator._scf._scf == HartreeFock::SCFType::ROHF &&
             calculator._correlation != HartreeFock::PostHF::None &&
             calculator._correlation != HartreeFock::PostHF::FCI &&
+            calculator._correlation != HartreeFock::PostHF::FCIQMC &&
             calculator._correlation != HartreeFock::PostHF::CASSCF &&
             calculator._correlation != HartreeFock::PostHF::RASSCF)
         {
-            // FCI, CASSCF, and RASSCF are exempt: they consume the common
+            // FCI, FCIQMC, CASSCF, and RASSCF are exempt: they consume the common
             // spatial-orbital set ROHF stores in the alpha channel directly. FCI
             // diagonalizes the full determinant space (reference-invariant); the
             // MCSCF methods carry open-shell occupation in the active-space spin

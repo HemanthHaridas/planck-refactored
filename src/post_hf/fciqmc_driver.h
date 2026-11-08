@@ -27,6 +27,7 @@ namespace HartreeFock::Correlation
     // for why the projected energy is biased at finite population and why the
     // error bar must be blocked rather than naive.
     //
+    // Requires a converged RHF or ROHF common spatial-orbital reference.
     // Reads from calc._active_space (ci_max_dim) and calc._fciqmc.
     //
     // Writes to:

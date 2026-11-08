@@ -7,6 +7,7 @@
 #include "post_hf/ci/spawn_accumulator.h"
 #include "post_hf/fci.h"
 
+#include <bit>
 #include <cmath>
 #include <chrono>
 #include <cstdint>
@@ -28,6 +29,42 @@ namespace HartreeFock::Correlation
 
     namespace
     {
+        // Diagnostic only. FNV-1a on little-endian words, including all bits
+        // of every double. An identity for comparing runs, not a physics oracle.
+        struct RunFingerprint
+        {
+            std::uint64_t value = 14695981039346656037ULL;
+            void word(std::uint64_t x)
+            {
+                for (int i = 0; i < 8; ++i, x >>= 8)
+                    value = (value ^ (x & 255)) * 1099511628211ULL;
+            }
+            void real(double x) { word(std::bit_cast<std::uint64_t>(x)); }
+        };
+
+        void log_hamiltonian_identity(const AllMOCISetup &setup,
+                                      const HartreeFock::Calculator &calc, double build_seconds)
+        {
+            RunFingerprint id;
+            id.word(setup.n_act);
+            id.word(setup.n_alpha);
+            id.word(setup.n_beta);
+            id.real(calc._nuclear_repulsion);
+            for (int i = 0; i < setup.n_act; ++i)
+                for (int j = 0; j < setup.n_act; ++j)
+                    id.real(setup.h_eff(i, j));
+            for (double g : setup.ga)
+                id.real(g);
+            const auto &C = calc._info._scf.alpha.mo_coefficients;
+            const Eigen::MatrixXd metric = C.transpose() * calc._overlap * C;
+            const double error = (metric - Eigen::MatrixXd::Identity(
+                setup.n_act, setup.n_act)).cwiseAbs().maxCoeff();
+            logging(LogLevel::Info, "FCIQMC_PROFILE:",
+                    std::format("phase=hamiltonian id={:016x} nuclear_e={:.12f} "
+                                "mo_orthogonality_max_error={:.3e} build_s={:.6f}",
+                                id.value, calc._nuclear_repulsion, error, build_seconds));
+        }
+
         struct FCIQMCDriverWork
         {
             std::uint64_t steps = 0;
@@ -38,7 +75,7 @@ namespace HartreeFock::Correlation
 
         void log_profile(const std::string &phase,
                          const FCIQMCDriverWork &driver,
-                         const FCIQMCPropagationProfile &propagation)
+                         const FCIQMCPropagationProfile &propagation, double phase_seconds)
         {
             std::uint64_t parents = 0;
             std::uint64_t attempts = 0;
@@ -76,7 +113,7 @@ namespace HartreeFock::Correlation
                                 "canonical_stream_s={:.6f} canonical_emitted={} "
                                 "canonical_pairwise_s={:.6f} "
                                 "parent_cleanup_s={:.6f} compress_s={:.6f} "
-                                "estimator_s={:.6f}",
+                                "estimator_s={:.6f} phase_wall_s={:.6f}",
                                 phase, driver.steps, parents, attempts, invalid,
                                 zero_h, initiator, rounded, raw_records,
                                 finalized_records, driver.prefill_seconds,
@@ -90,7 +127,7 @@ namespace HartreeFock::Correlation
                                 propagation.canonical_merge_emitted,
                                 propagation.canonical_pairwise_seconds,
                                 propagation.parent_cleanup_seconds,
-                                driver.compress_seconds, driver.estimator_seconds));
+                                driver.compress_seconds, driver.estimator_seconds, phase_seconds));
         }
 
         // Adapt the shared all-MO setup to the callbacks the propagator wants.
@@ -234,12 +271,16 @@ namespace HartreeFock::Correlation
         const std::vector<HartreeFock::ShellPair> &shell_pairs)
     {
         const std::string tag = "FCIQMC";
-
+        const auto &opt = calc._fciqmc;
+        using Clock = std::chrono::steady_clock;
+        using Seconds = std::chrono::duration<double>;
+        const auto setup_start = opt.profile ? Clock::now() : Clock::time_point{};
         auto setup = build_all_mo_ci_setup(calc, shell_pairs, tag);
         if (!setup)
             return std::unexpected(setup.error());
+        if (opt.profile)
+            log_hamiltonian_identity(*setup, calc, Seconds(Clock::now() - setup_start).count());
 
-        const auto &opt = calc._fciqmc;
         if (!(opt.target_walkers > 0.0))
             return std::unexpected(tag + ": fciqmc_walkers must be positive.");
         if (!(opt.timestep > 0.0))
@@ -333,8 +374,12 @@ namespace HartreeFock::Correlation
         FCIQMCPropagationProfile equilibration_profile;
         FCIQMCPropagationProfile sampling_profile;
 
+        const auto equilibration_start = opt.profile ? Clock::now() : Clock::time_point{};
+        auto sampling_start = equilibration_start;
         for (int step = 0; step < total_steps; ++step)
         {
+            if (opt.profile && step == opt.equilibration_steps && step > 0)
+                sampling_start = Clock::now();
             const bool sampling = step >= opt.equilibration_steps;
             FCIQMCDriverWork &step_work = sampling ? sampling_work : equilibration_work;
             FCIQMCPropagationProfile *step_profile = nullptr;
@@ -585,8 +630,33 @@ namespace HartreeFock::Correlation
 
         if (opt.profile)
         {
-            log_profile("equilibration", equilibration_work, equilibration_profile);
-            log_profile("sampling", sampling_work, sampling_profile);
+            const auto end = Clock::now();
+            log_profile("equilibration", equilibration_work, equilibration_profile,
+                        Seconds(sampling_start - equilibration_start).count());
+            log_profile("sampling", sampling_work, sampling_profile,
+                        Seconds(end - sampling_start).count());
+            // Sample-series and endpoint check, outside the step timings. The
+            // canonical population already iterates in determinant order.
+            RunFingerprint result;
+            result.word(shift_samples.size());
+            for (double v : shift_samples)
+                result.real(v);
+            result.word(projected_samples.size());
+            for (double v : projected_samples)
+                result.real(v);
+            result.real(proj_numerator_sum);
+            result.real(proj_denominator_sum);
+            result.word(reference.alpha);
+            result.word(reference.beta);
+            result.word(pop.size());
+            for (const auto &[det, weight] : pop)
+            {
+                result.word(det.alpha);
+                result.word(det.beta);
+                result.real(weight);
+            }
+            logging(LogLevel::Info, "FCIQMC_PROFILE:",
+                    std::format("phase=result id={:016x}", result.value));
         }
 
         if (shift_samples.size() < 4)

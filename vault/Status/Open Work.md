@@ -231,7 +231,9 @@ suite was 132/132 at `1b3ffc9b`.
 - **CASSCF optimizer changes must rerun the PySCF gates and both SA-2 SAD
   policies.** Both `water_casscf_sa2_sto3g_sad_guess_uphill` (asserts the
   plateau exit, `true`) and `water_casscf_sa2_sto3g_sad_guess` (`false`) are
-  tagged `extended`. Run them with `--suite all --case <id>`, because the
+  tagged `extended`. The uphill case is registered in `tests/regression_cases.json`
+  and uses `tests/benchmarks/casscf/pyscf_reference/water_cas44_sto3g_sa2_sad_uphill.hfinp`.
+  Run them with `--suite all --case <id>`, because the
   default `core` filter skips them even when `--case` is given. Preserve the
   plateau exit (`sa_g ≤ max(1e-6, tol_mcscf_grad)`): at an SA stationary
   point individual root gradients need not vanish.
@@ -289,9 +291,10 @@ None of these blocks correctness. Take each up only with a current profile.
   (`src/post_hf/ci/ci.cpp`, ~0.1–0.2 %). Validate any sigma change on an
   iterative case (`o2_fci_rohf_sto3g`, `be_fci_spherical_631gd`).
 - **FCIQMC** (`docs/FCIQMC_SCALING_INVESTIGATION.md`), in order:
-  - R0: qualify the HF-to-CI handoff after the true-Fock, spherical and ECP
-    changes, and explain any moved fixed-seed pins.
-  - R1: remeasure on an identified build.
+  - R1 has the spherical Be thread ladder and one four-thread HF/6-31G 50k
+    timing. Repeat the full HF ladder at 1/2/4/8 threads and break down setup
+    and peak memory. Be’s merge cost grew beyond two threads. Test a sequential
+    merge for small tree levels against both workloads.
   - R2: choose a kernel from current attribution. E2 was rejected. Keep E4
     test-only until a paired retest passes.
   - R3, conditional: a fixed-orbital active-space adapter.
