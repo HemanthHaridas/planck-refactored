@@ -7869,7 +7869,7 @@
   },
   {
    "id": "water_rhf_pcm_swig_geomoptfreq_631gd",
-   "_note": "PCM geometry optimization + frequencies (docs/PCM_GEOMETRY.md step 5). Every geomopt step, every Hessian displacement and the post-optimization symmetry SCF rebuild the cavity at their own geometry and add Gradient::pcm_gradient. PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py: geometric_solver gau_tight optimum -76.0222209775 Eh (Planck's default thresholds land 1.3e-9 above), harmonic frequencies from PySCF's analytic PCM Hessian 1791.47 / 4044.57 / 4142.67 cm^-1 (Planck's FD of analytic gradients 1791.40 / 4044.88 / 4142.97). The final energy is checked after the symmetry-reoriented SCF: without the cavity there it would be the gas-phase energy, 0.0127 Eh higher.",
+   "_note": "PCM geometry optimization + frequencies (docs/PCM_GEOMETRY.md step 5). Every geomopt step, every Hessian displacement and the post-optimization symmetry SCF rebuild the cavity at their own geometry and add Gradient::pcm_gradient. PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py: geometric_solver gau_tight optimum -76.0222209775 Eh (Planck's default thresholds land 1.3e-9 above), harmonic frequencies from PySCF's analytic PCM Hessian 1791.47 / 4044.57 / 4142.67 cm^-1 (Planck's FD of analytic gradients 1791.40 / 4044.88 / 4142.97). The final energy is checked after the symmetry-reoriented SCF: without the cavity there it ends on the gas-phase energy, -76.0106984804 (0.0115 Eh higher; measured by mutation).",
    "input": "tests/inputs/regression/hf/water_rhf_pcm_swig_geomoptfreq_631gd.hfinp",
    "tags": [
     "extended"

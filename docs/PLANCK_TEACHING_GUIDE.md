@@ -9089,7 +9089,8 @@ peaks in energy and wavelength units.
 ## 23. Polarizable Continuum Solvation (C-PCM)
 
 Planck implements a conductor-like polarizable continuum model (C-PCM) for
-single-point HF (RHF/UHF) and KS-DFT (RKS/UKS) calculations. The solvent is
+HF (RHF/UHF) and KS-DFT (RKS/UKS): energies, analytic gradients, geometry
+optimization and frequencies, in the Cartesian and spherical bases. The solvent is
 treated as a structureless dielectric medium of relative permittivity
 \(\varepsilon\) that surrounds a molecule-shaped cavity. The solute polarizes
 the dielectric; the polarized dielectric back-polarizes the solute via a
@@ -9103,9 +9104,12 @@ limitations remain Planck-specific.
 Implementation files:
 
 - `src/solvation/pcm.{h,cpp}` — cavity construction, surface-charge solver,
-  reaction-field assembly
+  reaction-field assembly, and the cavity terms of the gradient
+- `src/integrals/os.cpp` — point-charge integrals and their nuclear gradient
 - `src/scf/scf.cpp` — RHF/UHF reaction-field coupling inside the SCF loop
 - `src/dft/driver.cpp` — RKS/UKS reaction-field coupling
+- `src/gradient/gradient.cpp` — `pcm_gradient`, the PCM term of every SCF/KS gradient
+- `src/opt/geomopt.cpp`, `src/freq/hessian.cpp` — the cavity rebuilt at each geometry
 - `src/io/io.cpp` — `%begin_pcm` block parser
 
 ### The Apparent-Surface-Charge Picture
@@ -9231,8 +9235,9 @@ where \(\zeta_N\) is the York-Karplus constant for the \(N\)-point Lebedev
 grid (`SWIG_ZETA` in `pcm.cpp`). Lebedev sizes with no published constant
 (74, 230, 266) are rejected.
 
-The cavity is built once per geometry. A geometry optimization would rebuild
-it at each step.
+The cavity is built once per geometry: once for a single point, and again at
+every step of a geometry optimization and every displacement of a frequency
+calculation (see below).
 
 ### The Surface Influence Matrix \(\mathbf{D}\)
 
@@ -9344,6 +9349,161 @@ Many program outputs also report the converged solvation energy separately so
 the user can see the dielectric stabilization distinct from the gas-phase
 total.
 
+### Spherical Basis
+
+The point-charge integrals, like every integral in Planck, are evaluated in
+the Cartesian basis. In a spherical run the SCF density lives in the
+spherical working basis, so `evaluate_pcm_reaction_field` converts it once
+on entry (\(\mathbf{P}_{\text{cart}} = \mathbf{C}^\top \mathbf{P}_{\text{sph}} \mathbf{C}\),
+`BasisFunctions::to_cartesian`) before the \(\phi^{\text{el}}\) sweep. It
+returns \(\mathbf{V}^{\text{rxn}}\) in the working basis
+(\(\mathbf{C}\,\mathbf{V}_{\text{cart}}\,\mathbf{C}^\top\), `to_working`). Every
+caller already passes and expects working-basis matrices, so nothing else
+changes; in a Cartesian run both conversions are the identity. The gradient
+term below converts the density the same way.
+
+### The Analytic Gradient
+
+**Why no response term is needed.** Write the solvation energy in terms of
+the potential alone. With \(\mathbf{q} = -f\,\mathbf{D}^{-1}\boldsymbol{\phi}\),
+
+\[
+G^{\text{rxn}} = \tfrac12\,\mathbf{q}^\top\boldsymbol{\phi}
+= -\tfrac{f}{2}\,\boldsymbol{\phi}^\top \mathbf{D}^{-1} \boldsymbol{\phi}.
+\]
+
+The SCF with PCM minimizes the total energy, \(G^{\text{rxn}}\) included,
+with respect to the orbitals, and \(\mathbf{q}\) is a function of the density.
+So the energy is stationary in every wavefunction parameter, and its nuclear
+gradient needs only the *explicit* geometry dependence at fixed density, as
+for a plain SCF. No CPHF or Z-vector solve is involved. Differentiating at
+fixed \(\mathbf{P}\):
+
+\[
+\frac{\partial G^{\text{rxn}}}{\partial R}
+= -f\,\boldsymbol{\phi}^\top \mathbf{D}^{-1}\frac{\partial\boldsymbol{\phi}}{\partial R}
++ \frac{f}{2}\,\boldsymbol{\phi}^\top \mathbf{D}^{-1}\frac{\partial\mathbf{D}}{\partial R}\mathbf{D}^{-1}\boldsymbol{\phi}
+= \mathbf{q}^\top\frac{\partial\boldsymbol{\phi}}{\partial R}
++ \frac{1}{2f}\,\mathbf{q}^\top\frac{\partial\mathbf{D}}{\partial R}\,\mathbf{q}.
+\]
+
+Splitting \(\boldsymbol{\phi} = \boldsymbol{\phi}^{\text{nuc}} + \boldsymbol{\phi}^{\text{el}}\)
+gives the three terms PySCF also uses (`solvent/grad/pcm.py`). Planck has
+one function for each:
+
+| Term | Expression | Function |
+|---|---|---|
+| `grad_nuc` | \(\mathbf{q}^\top\,\partial\boldsymbol{\phi}^{\text{nuc}}/\partial R\) | `Solvation::pcm_grad_nuc` |
+| `grad_qv` | \(\mathbf{q}^\top\,\partial\boldsymbol{\phi}^{\text{el}}/\partial R\) at fixed \(\mathbf{P}\) | `Solvation::pcm_grad_qv` |
+| `grad_solver` | \(\mathbf{q}^\top(\partial\mathbf{D}/\partial R)\,\mathbf{q}/(2f)\) | `Solvation::pcm_grad_solver` |
+
+`Gradient::pcm_gradient` re-solves \(\mathbf{q}\) at the converged density
+with one `evaluate_pcm_reaction_field` call and returns the sum. The HF
+driver and the KS gradient each add it once.
+
+**How the geometry enters.** A tessera lives on its owning atom's sphere,
+\(\mathbf{s}_i = \mathbf{R}_A + R_A\mathbf{u}_i\), so it moves rigidly with
+atom \(A\): \(\partial\mathbf{s}_i/\partial\mathbf{R}_A = \mathbf{I}\). The
+widths \(\xi_i\) depend only on the Lebedev weights and the radii, so they
+do not move. Under C-PCM the areas do not enter at all. Every distance-dependent
+piece goes through the radial derivative of the Gaussian-charge kernel,
+
+\[
+\frac{\mathrm{d}}{\mathrm{d}r}\,\frac{\operatorname{erf}(\xi r)}{r}
+= \frac{2\xi}{\sqrt{\pi}}\,\frac{e^{-\xi^2 r^2}}{r} - \frac{\operatorname{erf}(\xi r)}{r^2}.
+\]
+
+**`grad_nuc`.** Each pair (tessera \(i\), nucleus \(J\)) contributes
+\(q_i Z_J k'(r)\,\hat{\mathbf{r}}\) with \(\mathbf{r} = \mathbf{s}_i - \mathbf{R}_J\),
+added to the owning atom \(A\) and subtracted from \(J\). The \(J = A\) term
+cancels exactly, because that distance is the sphere radius, so it is skipped.
+
+**`grad_solver`.** Off the diagonal, \(D_{ij}\) depends on
+\(\mathbf{s}_i - \mathbf{s}_j\) through the same kernel with
+\(\xi_{ij}\). Pairs on the same sphere are rigid and skipped. The diagonal is
+the part a hard cavity would not have:
+\(D_{ii} = \xi_i\sqrt{2/\pi}/F_i\), so
+
+\[
+\frac{\partial D_{ii}}{\partial R} = -\frac{D_{ii}}{F_i}\frac{\partial F_i}{\partial R}
+= -D_{ii}\sum_{J\ne A}\frac{h'(x_{iJ})}{h(x_{iJ})}\,\frac{\partial x_{iJ}}{\partial R},
+\qquad
+h'(x) = 30x^2(1-x)^2,
+\]
+
+where \(x_{iJ} = (|\mathbf{s}_i - \mathbf{R}_J| - R_{\text{in},J})/R_{\text{sw},J}\)
+moves with both \(A\) and \(J\). The division by \(h\) is safe: a tessera
+that survived pruning has \(h > 0\) for every \(J\). `build_pcm_state` keeps
+\(R_{\text{in}}\) and \(R_{\text{sw}}\) per atom for this.
+
+**`grad_qv`.** The electronic potential at tessera \(i\) is
+\(\phi^{\text{el}}_i = -\mathbf{P} : \mathbf{V}^{(i)}\), and
+\(V^{(i)}_{\mu\nu}\) depends on three centres: the two basis-function
+centres \(\mathbf{A}\), \(\mathbf{B}\) and the charge centre
+\(\mathbf{C} = \mathbf{s}_i\). Two facts make it cheap:
+
+- The derivative of a Cartesian Gaussian with respect to its centre is two
+  Gaussians with shifted angular momentum:
+  \(\partial_{A_x}\,\chi_{\mathbf{a}} = 2\alpha\,\chi_{\mathbf{a}+1_x} - a_x\,\chi_{\mathbf{a}-1_x}\),
+  and the same for \(\mathbf{B}\) with \(\beta\).
+- The integral depends only on relative positions, so
+  \(\partial_{\mathbf{C}} = -(\partial_{\mathbf{A}} + \partial_{\mathbf{B}})\).
+  No separate charge-centre recurrence is needed.
+
+`ObaraSaika::_compute_electronic_potential_gradient` therefore runs the same
+shell-block vertical recurrence as the energy, one angular-momentum level
+higher (to \(L_A + L_B + 1\)). It accumulates three slices per primitive
+pair, weighted by \(w\), \(2\alpha w\) and \(2\beta w\). They cannot share
+one slice, because \(\alpha\) and \(\beta\) differ between primitives. The
+horizontal recurrence then reads the shifted components. Tesserae are
+grouped by owning atom, so the charge-centre term lands on that atom once
+per (shell pair, atom), and the per-block results are summed in a fixed
+order, which keeps the gradient independent of the thread count.
+
+**Validation, and two lessons from it.** Each term was checked against a
+finite difference before the terms were summed. The finite difference of
+`grad_solver` taught two things:
+
+- *Use physical charges.* Random charges of size \(10^{-2}\) put a large
+  \(q_i\) on tesserae that have nearly faded out (\(F_i \sim 10^{-16}\), so
+  \(D_{ii} \sim 10^{16}\)), where a real solve gives \(q_i \sim F_i\). The
+  term \(q_i^2 D_{ii}\) then dominates and the finite difference means
+  nothing. The test uses \(\mathbf{q} = -f\mathbf{D}^{-1}\boldsymbol{\phi}^{\text{nuc}}\).
+- *The switching function limits the step.* \(h\) is only \(C^2\) at
+  \(x = 0\) and \(x = 1\), so a stencil that straddles either end is poor.
+  The error fell from \(3\times10^{-4}\) at a step of \(10^{-3}\) Bohr to
+  \(10^{-9}\) at \(10^{-4}\), converging on the analytic value.
+
+Against PySCF 2.13.0 each term matches its namesake (`grad_nuc`, `grad_qv`,
+`grad_solver`) to all ten printed digits on C1 H₂O₂/6-31G*. The total
+matches to every printed digit (DFT to \(1.6\times10^{-11}\) Ha/Bohr), and
+a five-point finite difference of the SCF energy agrees to
+\(4.2\times10^{-8}\) Ha/Bohr. That last check is the end-to-end proof that
+no response term was missed. The PCM terms are cheap: 0.46 s of a 33 s
+anthracene/6-31G* gradient run.
+
+### Geometry Optimization and Frequencies
+
+With the gradient in place, optimization and frequencies need no new
+derivatives, only the right cavity at every geometry. This is easy to get
+silently wrong: a loop that rebuilds the basis but reuses, or omits, the
+cavity still converges, just to the wrong answer. Three loops each build
+their own cavity with `build_pcm_state`, pass it to the SCF and add
+`pcm_gradient`:
+
+- the geometry-optimization step (`src/opt/geomopt.cpp`);
+- every displaced geometry of the semi-numerical Hessian (`src/freq/hessian.cpp`);
+- the final symmetry SCF after an optimization (`src/hf_driver.cpp`), which
+  reorients the molecule. Without the cavity there, a PCM optimization of
+  water ended on the gas-phase energy, 0.0115 Eh above the solvated one.
+
+`build_pcm_state` returns a disabled state when no solvent is requested, so
+the gas-phase path is unchanged. `planck-dft` already rebuilt the cavity in
+`prepare_current_geometry`. Against PySCF's `geometric_solver` and its
+analytic PCM Hessian, water/6-31G* reaches the same optimum (RHF
+\(1.3\times10^{-9}\) Eh, RKS PBE to every printed digit) and the RHF
+frequencies agree within 0.31 cm⁻¹.
+
 ### Input Format and Solvent Library
 
 PCM is requested with a `%begin_pcm` block. A representative input
@@ -9375,18 +9535,16 @@ toluene (2.3741), benzene (2.2706), hexane (1.8819). Listing a `solvent`
 overrides any prior `dielectric` value; passing both is allowed but the
 solvent name wins.
 
-PCM is currently **gated to single-point energy calculations only** (see the
-check around `src/io/io.cpp:1729`). Combining `model pcm` with
-`calculation gradient`, `geomopt`, or `frequency` produces an explicit input
-error rather than a silently incomplete result, because analytic PCM gradients
-(which require derivatives of the cavity, the influence matrix, and the
-reaction-field operator) are not implemented.
+PCM works with `calculation energy`, `gradient`, `geomopt`, `frequency` and
+`geomoptfreq`. The validation in `src/io/io.cpp` rejects, with an explicit
+message, the combinations that are not implemented: imaginary-mode following
+(not yet tested with PCM), post-HF correlation, and ROHF references.
 
 ### Limitations and Cost
 
-- **Single-point only.** No PCM gradient, geometry optimization, or
-  frequencies. Post-HF (MP2, CC, CASSCF) is not coupled to PCM either — the
-  reaction field is enforced only at the SCF/KS level.
+- **SCF/KS level only.** Post-HF (MP2, CC, CASSCF), TDDFT, ROHF and the
+  double-hybrid gradients are not coupled to PCM. Imaginary-mode following
+  is rejected under PCM.
 - **C-PCM only.** The dielectric scaling is \((\varepsilon - 1)/\varepsilon\).
   IEF-PCM, SS(V)PE and COSMO's \(\varepsilon + \tfrac12\) form are not
   implemented.
@@ -9420,7 +9578,13 @@ reaction-field operator) are not implemented.
 | RHF + PCM coupling | `src/scf/scf.cpp` | `run_rhf` (PCM block near line 286) |
 | UHF + PCM coupling | `src/scf/scf.cpp` | `run_uhf` (PCM block near line 589) |
 | RKS / UKS + PCM coupling | `src/dft/driver.cpp` | KS Fock assembly with `pcm_potential` |
-| Single-point gating | `src/io/io.cpp` | check around line 1266 |
+| Spherical-basis conversion | `src/solvation/pcm.cpp` | `evaluate_pcm_reaction_field` (`to_cartesian`, `to_working`) |
+| Influence matrix (for the gradient test too) | `src/solvation/pcm.cpp` | `pcm_influence_matrix` |
+| Cavity gradient terms | `src/solvation/pcm.cpp` | `pcm_grad_nuc`, `pcm_grad_solver` (`switch_dh`, `erf_kernel_dr`) |
+| Integral gradient term | `src/integrals/os.cpp`, `src/solvation/pcm.cpp` | `_compute_electronic_potential_gradient`, `pcm_grad_qv` |
+| PCM term of every SCF/KS gradient | `src/gradient/gradient.cpp` | `Gradient::pcm_gradient` |
+| Cavity rebuilt per geometry | `src/opt/geomopt.cpp`, `src/freq/hessian.cpp`, `src/hf_driver.cpp` | `build_pcm_state` in each loop |
+| Workflow gating | `src/io/io.cpp` | PCM block of the input validation |
 
 ---
 
@@ -10273,8 +10437,9 @@ driver.cpp
 | KS-DFT driver | `src/dft/driver.cpp` | `DFT::Driver::run` |
 | D3 dispersion (simple-dftd3) | `src/dft/dispersion.cpp` | `DFT::Dispersion::compute`, `parameter_set_name` |
 | TD-DFT / linear response | `src/dft/driver.cpp` | `run_linear_response`, `print_linear_response_report` |
-| C-PCM cavity + influence matrix | `src/solvation/pcm.cpp` | `build_pcm_state`, `fibonacci_sphere` |
+| C-PCM cavity + influence matrix | `src/solvation/pcm.cpp` | `build_pcm_state`, `pcm_influence_matrix` |
 | C-PCM reaction-field operator | `src/solvation/pcm.cpp` | `evaluate_pcm_reaction_field` |
+| C-PCM analytic gradient | `src/gradient/gradient.cpp`, `src/solvation/pcm.cpp` | `Gradient::pcm_gradient`, `pcm_grad_{nuc,qv,solver}` |
 | External-charge AO matrices (PCM unit potentials) | `src/integrals/os.cpp` | `_compute_external_charge_attraction` |
 | PCM input parsing + solvent table | `src/io/io.cpp` | `_parse_pcm`, `dielectric_from_solvent_name` |
 | Ghost atoms (BSSE) | `src/base/types.h` | `Molecule::is_ghost`, `nuclear_charge`, `total_nuclear_charge` |
@@ -10365,10 +10530,9 @@ driver.cpp
 | Restricted global-double-hybrid analytic gradient | Complete for Cartesian AOs and LDA/GGA XC-II: gradient, geometry optimization, frequencies (central differences of analytic gradients) and geomopt+frequency. Water and C1 H2O2 B2PLYP/STO-3G energy-FD validated at two steps (Section 15). Range separation, solvent response, and DH response (TDDFT) workflows remain excluded |
 | UKS global-double-hybrid analytic gradient | Complete for `calculation gradient` only, with conventional all-active UMP2 (stored T2, no RI, no frozen core, no level shift), no solvent, and the qualified grid `grid_policy g4-3-v4` + `grid_radial_points 135` with no angular override. UKS DH geometry optimization and frequencies are rejected |
 | Range-separated double hybrids (for example \(\omega\)B2PLYP) | Complete for single-point energies |
-| Spherical harmonic basis | Complete for `hartree-fock` (real-spherical AO basis via fixed cart→sph transform; SCF, SAO blocking + MO irreps, full point-group ERI reduction, post-HF, RHF/UHF/ROHF gradients, geomopt and frequencies). `planck-dft` rejects `basis_type spherical`; spherical MP2 gradients and spherical PCM are rejected |
-| C-PCM solvation (RHF/UHF/RKS/UKS, single-point energy) | Complete |
+| Spherical harmonic basis | Complete for `hartree-fock` (real-spherical AO basis via fixed cart→sph transform; SCF, SAO blocking + MO irreps, full point-group ERI reduction, post-HF, RHF/UHF/ROHF gradients, geomopt and frequencies, PCM). `planck-dft` runs spherical RKS/UKS single points, gradients, geomopt, frequencies, TDDFT, SOSCF, stability, checkpoint restart and PCM (`docs/SPHERICAL_DFT.md`). Spherical MP2 and double-hybrid gradients are rejected |
+| C-PCM solvation (RHF/UHF/RKS/UKS, Cartesian and spherical) | Complete: energies, analytic gradients, geometry optimization and frequencies (imaginary-mode following rejected) |
 | ESP-derived charges (CHELPG, RESP) | Complete for HF and DFT, optionally including the PCM reaction field |
-| PCM gradients / geometry optimization / frequencies | Not implemented |
 | PCM coupling to post-HF (MP2, CC, CASSCF) | Not implemented |
 | Ghost atoms (basis-only centers; `Gh()`/`@`/`:` syntax) | Complete |
 | Effective core potentials (def2, Rb onward) | Single points in `hartree-fock` via libecpint. RHF is PySCF-gated (HI, AgCl, PdCO, AuH·H2O, to 1.1e-9 Eh); post-HF energies take the same H_core but are not gated yet. Checkpoints (version 8) store ECP core counts and refuse to mix cores; FCIDUMP writes the valence-only Hamiltonian (PySCF-checked). RHF/UHF/ROHF ECP gradients, geometry optimization and frequencies are PySCF-gated (≤3e-8 Ha/Bohr, 0.03 cm⁻¹); `planck-dft` rejects ECP bases |
