@@ -126,12 +126,15 @@ dG_rxn/dR has three parts, matching PySCF's `solvent/grad/pcm.py`:
 
 No CPHF is needed: the SCF with PCM is variational in the charges.
 
-The OS engine already has the two integral derivatives for point charges:
-`_os_nuclear_primitive_dC` (charge centre) and a raised/lowered angular
-momentum form of `_os_nuclear_primitive` (basis centre). The basis-centre
-form inherits the Gaussian exponent from the primitive unchanged.
-`_os_nuclear_primitive_dC` has its own recurrence and needs the same
-s = η/(ζ + η) scaling added.
+The integral derivatives do not need `_os_nuclear_primitive_dC`, which has
+its own recurrence without the s = η/(ζ + η) Gaussian scaling. The integral
+depends only on relative positions, so the charge-centre derivative is
+−(dA + dB). dA and dB come from the angular-momentum shift
+(2α·[a+1] − a·[a−1], and the same for b with β) on one VRR taken to
+L_A + L_B + 1. That VRR is `nuclear_vrr_accumulate` with L raised by one,
+which already carries the Gaussian scaling. The per-component
+`_compute_nuclear_deriv_A_elem` would also work, but it is the slow
+pre-step-3 path, called six times per derivative.
 
 ## Steps
 
@@ -296,30 +299,104 @@ s = η/(ζ + η) scaling added.
    **Status:** met to within 3 % (above). Items 2 and 4 are done; item 3
    is deferred.
 
-4. **Analytic gradient**, RHF/UHF and RKS/UKS, Cartesian, energy-only
-   workflow `calculation gradient`. Lift the `calculation` gate in
-   `src/io/io.cpp` for gradients only.
-   - Gate: fourth-order finite difference of the energy to 1e-7 Ha/Bohr on
-     C1 H2O2. FD is clean now that the energy is smooth.
-   - Gate: PySCF's PCM gradient (`make_grad_object`) on the four SWIG cases.
-   - Gate: the force components sum to zero. The atom-centred cavity
-     translates with the molecule, so the sum must vanish to roundoff. Net
-     torque does not vanish (see Orientation) and is not a gate.
+4. **Analytic gradient**, RHF/UHF and RKS/UKS, Cartesian,
+   `calculation gradient` only. One function,
+   `Solvation::pcm_gradient(calc, shell_pairs, state, P_total)` returning
+   natoms × 3, added once at each gradient skin:
+   `compute_{rhf,uhf}_gradient` take an optional `const PCMState *`, and the
+   DFT `compute_analytic_ks_gradient` replaces its "omits PCM geometry
+   response" warning (`src/dft/driver.cpp`) with the term. That warning is
+   dead code today, because `io.cpp` rejects every non-single-point PCM run.
+   It recomputes q and φ from the final density with one
+   `evaluate_pcm_reaction_field` call.
 
-5. **Geometry optimization and frequencies** through the gradient, and
-   removal of the remaining `calculation` gate. The DFT double-hybrid
-   gradients keep refusing solvent: they have no solvent response.
+   - **4a. Cavity data.** `grad_solver` needs dF_i/dR, which
+     `PCMSurfacePoint` cannot give. Store the Lebedev weight w_i (so ξ_i
+     needs no recomputation) on each point, and R, R_in and R_sw per atom on
+     `PCMState`. All three are already computed in `build_pcm_state`.
+     Factor the S build out of `build_pcm_state` so a test can rebuild S at
+     a displaced geometry.
+   - **4b. `grad_nuc` and `grad_solver`.** These need geometry only, no
+     integrals. Tessera i moves rigidly with its owning atom A
+     (ds_i/dR_A = I). Off the diagonal, S_ij = erf(ξ_ij r)/r with ξ_ij
+     constant. On the diagonal, dS_ii = −S_ii · dF_i/F_i. dF_i/dR comes
+     from h′ for every J ≠ A and touches both R_A and R_J. `grad_nuc` is
+     the derivative of Z_J erf(ξ_i r)/r with respect to the nucleus and to
+     the tessera.
+     - Unit gate: the analytic qᵀ(dS)q/(2f) against a central difference of
+       qᵀSq at fixed q, with S rebuilt at ±h, on C1 H2O2. Do it before any
+       integral work. A displacement can change the pruned tessera set
+       (w F ≤ 1e-16); the test must keep the set fixed.
+   - **4c. `grad_qv`.** A new shell-block derivative kernel, built as
+     described under "What the gradient contains". Parallelize over shell
+     pairs, using fixed-order per-thread partials of the natoms × 3 result.
+     Never `omp atomic` (see the DFT XC reduction memory). It runs once per
+     gradient, not once per iteration, so the φ_el-style cost is
+     acceptable.
+     - Unit gate: against the per-component `_compute_nuclear_deriv_A_elem`
+       / `_C_xyz` with point charges (η = 0), which already exist and are
+       already gated. Then against a finite difference of φ_el with a
+       Gaussian charge.
+   - **4d. Gates.**
+     - PySCF per term. `solvent/grad/pcm.py` exposes `grad_nuc`,
+       `grad_qv` and `grad_solver` separately. Compare each on C1 H2O2
+       before comparing the total: when the total is the only check,
+       partial cancellations hide which term is wrong (see the DH
+       KS/PT2-halves lesson in Completion).
+     - PySCF total (`make_grad_object`) on the four SWIG cases, extending
+       `tests/pyscf/pcm_swig_references.py`. Set `conv_tol_grad` (see the
+       PySCF `conv_tol_grad` memory).
+     - Fourth-order FD of the energy to 1e-7 Ha/Bohr on C1 H2O2.
+     - The forces sum to zero to roundoff. Torque is not a gate (see
+       Orientation).
+     - Mutation check: drop each of the three terms in turn and confirm
+       that every gate fails.
+   - **Lift in `io.cpp`:** `calculation gradient` only. ROHF and post-HF
+     stay rejected. DH gradients keep their own solvent refusals.
+
+5. **Geometry optimization and frequencies.** Lifting the gate is not enough
+   here: the inner loops lose PCM without any error.
+   `src/opt/geomopt.cpp` (`run_*` at ~95–99), `src/freq/hessian.cpp`
+   (~84–88) and the post-optimization symmetry SCF in `src/hf_driver.cpp`
+   (~1735) all call `run_*` without a PCM state. Each displaced geometry
+   needs its own `build_pcm_state`, at 0.08–0.4 s per build on the acene
+   ladder. Put the build in `rebuild_basis_dependent_state` or next to it,
+   so all three loops share one path. Check that the DFT geomopt/freq
+   callbacks rebuild through `prepare` (`prepared.pcm`) at every geometry.
    - Gate: water in water optimized against PySCF's `geometric_solver`.
    - Gate: frequencies against a PySCF Hessian from finite differences of
      its analytic gradient.
+   - Gate: a geomopt case that asserts the final energy is the PCM energy.
+     This catches the silent loss of PCM in the inner loop.
 
-6. **Spherical basis.** This was waiting on spherical DFT, which has landed,
-   so it is now independent of steps 3–5. Lift the density to Cartesian
-   before φ_el (as the ESP fix S0.1 did) and transform V_rxn to the working
-   basis. Then remove the "PCM solvation" refusal in both binaries
-   (`src/hf_driver.cpp` and the DFT `validate_spherical_support`).
-   - Gate: PySCF `cart=False` on water/6-31G*, RHF and RKS. The gradient
-     follows through the existing lift once step 4 lands.
+6. **Spherical basis. Done (2026-11-08).** `evaluate_pcm_reaction_field`
+   lifts the working density with `BasisFunctions::to_cartesian` before
+   φ_el, and returns V_rxn through `to_working`. The disabled-state zero
+   matrix is now sized by `working_nbasis()`. Every caller (the RHF/UHF SCF,
+   the DFT SCF and the ESP reaction-field report) already passes and expects
+   working-basis matrices, so nothing changed at the call sites. Both
+   refusals are removed. In Cartesian mode both lifts are the identity, so
+   the Cartesian output is unchanged.
+
+   | Case (6-31G*, `cart=False`) | PySCF 2.13.0 E / Eh | Tesserae |
+   |---|---|---|
+   | `water_rhf_pcm_swig_spherical_631gd` | −76.0158401249 | 542 |
+   | `water_cation_uhf_pcm_swig_spherical_631gd` | −75.6750550413 | 542 |
+   | `water_rks_pbe_pcm_swig_spherical_631gd` | −76.3201409489 | 542 |
+
+   Planck matches each case to every printed digit, which covers the RHF,
+   UHF and DFT call sites. The water cation lands 0.076 Eh above its
+   Cartesian counterpart, in both codes, from the hcore guess. This is the
+   open-shell hcore saddle (vault Open Work), not PCM. When step 4 lands,
+   `pcm_gradient` must lift P_total once at entry, the same way.
+
+   **Cleanup while here:** the SAO-suppression comment in
+   `src/hf_driver.cpp` (~841) still describes the Fibonacci cavity. The
+   reason (the cavity is not symmetry-adapted) still holds for SWIG.
+
+**Recommended order:** 4a–4b, 4c, 4d, then 5 (6 is done). 4b and 4c are
+independent of each other, and each has its own unit gate, so a failing
+total in 4d can be traced to a term.
 
 ## Not in this scope
 

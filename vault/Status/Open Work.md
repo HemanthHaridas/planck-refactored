@@ -9,7 +9,7 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-11-07 (rewrite at `631d5c6b`).
+Last updated: 2026-11-08 (rewrite at `631d5c6b`, 2026-11-07).
 
 This is the canonical list of what remains. What is done lives in
 `vault/Status/Completion.md`. Each item names its scope or answer doc, which
@@ -88,11 +88,13 @@ rerun for it.
 - **PCM geometry optimizations and frequencies**
   (`docs/PCM_GEOMETRY_SCOPE.md`). Steps 1–3 landed 2026-11-07: the smooth
   SWIG cavity, then fused integral sweeps with S factored once, then a
-  shell-block point-charge kernel (see Completion). Next: the analytic
-  gradient (4), then geomopt and frequencies (5). Spherical PCM (6) is
-  unblocked and independent of 4–5. Deferred from step 3: tolerance-linked
-  pair screening, and a cheaper φ_el contraction. PCM is still single-point
-  only, in both binaries and in both bases, and spherical PCM is refused.
+  shell-block point-charge kernel (see Completion). Spherical PCM (6)
+  landed 2026-11-08. Next: the analytic gradient (4), then geomopt and
+  frequencies (5). The geomopt, frequency and post-optimization symmetry
+  SCF loops call `run_*` without a PCM state, so lifting the input gate
+  alone would silently drop the solvent. Deferred from step 3:
+  tolerance-linked pair screening, and a cheaper φ_el contraction. PCM is
+  still single-point only, in both binaries and in both bases.
 - **Double hybrids** (`docs/DH_IMPLEMENTATION.md` §9):
   - UKS DH geometry optimization and frequencies are rejected. The gradient
     they would call already passes FD.

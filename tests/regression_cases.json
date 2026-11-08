@@ -7633,6 +7633,67 @@
    ]
   },
   {
+   "id": "water_rhf_pcm_swig_spherical_631gd",
+   "_note": "SWIG C-PCM spherical gate (docs/PCM_GEOMETRY_SCOPE.md step 6). PySCF 2.13.0 C-PCM cart=False reference from tests/pyscf/pcm_swig_references.py (Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). The density is lifted to Cartesian for phi_el and V_rxn is brought back to the working basis inside evaluate_pcm_reaction_field; Planck matches to every printed digit with the same tessera count. Before step 6 this input was refused.",
+   "input": "tests/inputs/regression/hf/water_rhf_pcm_swig_spherical_631gd.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with 542 surface points"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0158401249,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uhf_pcm_swig_spherical_631gd",
+   "_note": "SWIG C-PCM spherical gate (docs/PCM_GEOMETRY_SCOPE.md step 6). PySCF 2.13.0 C-PCM cart=False reference from tests/pyscf/pcm_swig_references.py (Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). The density is lifted to Cartesian for phi_el and V_rxn is brought back to the working basis inside evaluate_pcm_reaction_field; Planck matches to every printed digit with the same tessera count. Before step 6 this input was refused. Exercises the UHF call site. The state is 0.076 Eh above the Cartesian case's: from the hcore guess both Planck and PySCF land on the same higher water-cation state in the spherical basis (the open-shell hcore saddle, vault Open Work), not a PCM effect.",
+   "input": "tests/inputs/regression/hf/water_cation_uhf_pcm_swig_spherical_631gd.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with 542 surface points"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.6750550413,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "water_rks_pbe_pcm_swig_spherical_631gd",
+   "_note": "SWIG C-PCM spherical gate (docs/PCM_GEOMETRY_SCOPE.md step 6). PySCF 2.13.0 C-PCM cart=False reference from tests/pyscf/pcm_swig_references.py (Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). The density is lifted to Cartesian for phi_el and V_rxn is brought back to the working basis inside evaluate_pcm_reaction_field; Planck matches to every printed digit with the same tessera count. Before step 6 this input was refused.",
+   "input": "tests/inputs/regression/dft/water_rks_pbe_pcm_swig_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with 542 surface points"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3201409489,
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
    "id": "water_rhf_pcm_smoothness_sto3g",
    "_note": "SWIG C-PCM smoothness gate (docs/PCM_GEOMETRY_SCOPE.md step 1): 101-point O-H stretch, asserts the fourth difference of E stays below 5e-9 Eh. Measured 2.3e-9 on the SWIG cavity; the pre-SWIG Fibonacci cavity fails it at 4.4e-5 (checked against a pre-change binary).",
    "input": "tests/inputs/regression/hf/water_rhf_pcm_smoothness_sto3g.hfinp",

@@ -26,6 +26,7 @@
 
 #include <Eigen/Cholesky>
 
+#include "basis/spherical.h"
 #include "dft/base/angular.h"
 #include "integrals/base.h"
 #include "io/logging.h"
@@ -247,14 +248,20 @@ HartreeFock::Solvation::evaluate_pcm_reaction_field(
     const Eigen::MatrixXd &total_density)
 {
     PCMResult result;
+    // The density arrives and V_rxn leaves in the SCF's working basis; the
+    // integrals run in Cartesian. Both lifts are the identity in Cartesian mode.
     const auto nbasis = calculator._shells.nbasis();
     // Solvation off → hand back a zero reaction field so the caller can
     // unconditionally do F = F_gas + V_rxn without branching.
     if (!state.enabled())
     {
-        result.reaction_potential = Eigen::MatrixXd::Zero(nbasis, nbasis);
+        const auto nwork = static_cast<Eigen::Index>(calculator.working_nbasis());
+        result.reaction_potential = Eigen::MatrixXd::Zero(nwork, nwork);
         return result;
     }
+    auto cart_density = HartreeFock::BasisFunctions::to_cartesian(calculator._shells, total_density);
+    if (!cart_density)
+        return std::unexpected("PCM density lift failed: " + cart_density.error());
 
     std::vector<Eigen::Vector3d> positions;
     std::vector<double> exponents;
@@ -273,7 +280,7 @@ HartreeFock::Solvation::evaluate_pcm_reaction_field(
     result.total_potential =
         state.nuclear_potential -
         HartreeFock::ObaraSaika::_compute_electronic_potential(
-            shell_pairs, total_density, positions, &exponents);
+            shell_pairs, *cart_density, positions, &exponents);
 
     const auto t1 = std::chrono::steady_clock::now();
     // ── 2. Solve S q = -f(eps) phi_tot with the factor from build_pcm_state ──
@@ -293,8 +300,13 @@ HartreeFock::Solvation::evaluate_pcm_reaction_field(
             .position = positions[i],
             .charge = result.apparent_charges(static_cast<Eigen::Index>(i)),
             .exponent = exponents[i]});
-    result.reaction_potential = _compute_external_charge_attraction(
-        shell_pairs, nbasis, charges, calculator._integral._engine, nullptr);
+    auto working_potential = HartreeFock::BasisFunctions::to_working(
+        calculator._shells,
+        _compute_external_charge_attraction(
+            shell_pairs, nbasis, charges, calculator._integral._engine, nullptr));
+    if (!working_potential)
+        return std::unexpected("PCM reaction-field transform failed: " + working_potential.error());
+    result.reaction_potential = std::move(*working_potential);
     if (calculator._output._verbosity >= HartreeFock::Verbosity::Verbose)
     {
         const auto t3 = std::chrono::steady_clock::now();

@@ -551,8 +551,6 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         case HartreeFock::PostHF::UCCGEN:
             break;
         }
-        if (calculator._solvation._model != HartreeFock::SolvationModel::None)
-            return reject("PCM solvation");
         // Symmetry / SAO blocking is supported in the spherical basis: build_sao_basis
         // now uses the same metric-correct spherical AO representation as the
         // full-symmetry direct-SCF path and returns a working_nbasis()-sized

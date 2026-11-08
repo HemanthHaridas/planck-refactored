@@ -9,7 +9,7 @@ tags: [status, completion, validated, canonical]
 
 # Completion Status
 
-Last updated: 2026-11-07
+Last updated: 2026-11-08
 
 This is the canonical completion-status document for the repository.
 Subsystem handoff, plan, benchmark, and fix-summary notes may still exist for
@@ -428,6 +428,15 @@ historical design context, but they are no longer the source of truth for
 - PySCF-validated He2/cc-pVDZ counterpoise decomposition
 
 ### Recent fixes now considered landed
+
+- **Spherical PCM single points (2026-11-08, `docs/PCM_GEOMETRY_SCOPE.md`
+  step 6).** `evaluate_pcm_reaction_field` lifts the working density to
+  Cartesian for φ_el and returns V_rxn in the working basis, so every
+  caller (HF SCF, DFT SCF, ESP reaction field) works unchanged. The
+  refusals in both binaries are removed. Water RHF, water⁺ UHF and water
+  RKS PBE/6-31G* match PySCF 2.13.0 `cart=False` C-PCM to every printed
+  digit (`*_pcm_swig_spherical_631gd`). The Cartesian path is unchanged:
+  both lifts are the identity there.
 
 - **Smooth SWIG PCM cavity (2026-11-07, `docs/PCM_GEOMETRY_SCOPE.md` step
   1).** The cavity used Fibonacci points with a hard bury test, so the

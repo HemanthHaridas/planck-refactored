@@ -2,7 +2,7 @@
 
 PySCF's default C-PCM (SWIG, lebedev_order 29 = 302 points, vdw_scale 1.2,
 modified Bondi, eps 78.3553) on each tests/inputs/regression/*/*pcm_swig*
-input, cart=True, Planck's GBS and its CODATA 2018 Bohr; DFT on Planck's
+input, cart following its basis_type (step 6 added the spherical cases), Planck's GBS and its CODATA 2018 Bohr; DFT on Planck's
 unpruned 150 x 590 grid.
   tests/pyscf/.venv/bin/python tests/pyscf/pcm_swig_references.py
 """
@@ -28,7 +28,8 @@ def run(path):
     charge, mult = map(int, coords[1].split())
     gbs = str(ROOT / "basis-sets" / basis)
     elements = {line.split()[0] for line in coords[2:]}
-    mol = gto.M(atom="\n".join(coords[2:]), unit=BOHR_ANGSTROM, cart=True, verbose=0,
+    cart = field(text, "basis_type") != "spherical"
+    mol = gto.M(atom="\n".join(coords[2:]), unit=BOHR_ANGSTROM, cart=cart, verbose=0,
                 charge=charge, spin=mult - 1,
                 basis={e: parse_gaussian.load(gbs, e) for e in elements})
     if exchange:

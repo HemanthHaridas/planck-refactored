@@ -3012,15 +3012,13 @@ namespace DFT::Driver
                 return std::unexpected(what + " is not yet supported by planck-dft with basis_type spherical "
                                               "(docs/SPHERICAL_DFT.md); spherical RKS/UKS single points (double "
                                               "hybrids included), gradients, geometry optimization, frequencies, "
-                                              "TDDFT, SOSCF, stability analysis and checkpoint restart are. Use basis_type cartesian for this calculation.");
+                                              "TDDFT, SOSCF, stability analysis, checkpoint restart and PCM single points are. Use basis_type cartesian for this calculation.");
             };
             if (calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow)
                 return refuse(workflow_label(calculator._calculation));
             if (functionals.has_double_hybrid_pt2 &&
                 calculator._calculation != HartreeFock::CalculationType::SinglePoint)
                 return refuse("A double-hybrid functional with " + workflow_label(calculator._calculation));
-            if (calculator._solvation._model != HartreeFock::SolvationModel::None)
-                return refuse("PCM solvation");
             return {};
         }
 
