@@ -310,23 +310,46 @@ pre-step-3 path, called six times per derivative.
    It recomputes q and φ from the final density with one
    `evaluate_pcm_reaction_field` call.
 
-   - **4a. Cavity data.** `grad_solver` needs dF_i/dR, which
-     `PCMSurfacePoint` cannot give. Store the Lebedev weight w_i (so ξ_i
-     needs no recomputation) on each point, and R, R_in and R_sw per atom on
-     `PCMState`. All three are already computed in `build_pcm_state`.
-     Factor the S build out of `build_pcm_state` so a test can rebuild S at
-     a displaced geometry.
-   - **4b. `grad_nuc` and `grad_solver`.** These need geometry only, no
-     integrals. Tessera i moves rigidly with its owning atom A
-     (ds_i/dR_A = I). Off the diagonal, S_ij = erf(ξ_ij r)/r with ξ_ij
-     constant. On the diagonal, dS_ii = −S_ii · dF_i/F_i. dF_i/dR comes
-     from h′ for every J ≠ A and touches both R_A and R_J. `grad_nuc` is
-     the derivative of Z_J erf(ξ_i r)/r with respect to the nucleus and to
-     the tessera.
-     - Unit gate: the analytic qᵀ(dS)q/(2f) against a central difference of
-       qᵀSq at fixed q, with S rebuilt at ±h, on C1 H2O2. Do it before any
-       integral work. A displacement can change the pruned tessera set
-       (w F ≤ 1e-16); the test must keep the set fixed.
+   - **4a. Cavity data. Done (2026-11-08).** `PCMState` now keeps R_in,J
+     and R_sw,J per atom (`switch_inner`, `switch_width`). The S build is
+     `pcm_influence_matrix(points)`, and `build_pcm_state` factors its
+     result. That was all the gradient needed. The planned per-point w_i and
+     per-atom R are not stored: ξ_i is already on each point and does not
+     depend on geometry.
+   - **4b. `grad_nuc` and `grad_solver`. Done (2026-11-08).**
+     `pcm_grad_nuc` and `pcm_grad_solver` (`src/solvation/pcm.cpp`) take
+     the charges q and return natoms × 3. They are separate functions so
+     that 4d can compare each one with PySCF. Tessera i moves rigidly with
+     its owning atom A (ds_i/dR_A = I). Off the diagonal,
+     S_ij = erf(ξ_ij r)/r with ξ_ij constant. On the diagonal,
+     dS_ii = −S_ii · Σ_J (h′/h)(x_iJ) · dx_iJ, with
+     h′(x) = 30x²(1 − x)². That term is safe to divide: a tessera that was
+     kept has h > 0 for every J. Terms where both points sit on the same
+     sphere, and the owner's own nucleus in `grad_nuc`, cancel exactly and
+     are skipped. `grad_solver` is a serial O(n_tess²) loop that runs once
+     per gradient, marked `ponytail:` with its upgrade path.
+     - **Gate: `planck-pcm-cavity-gradient-fd`** (ctest). C1 H2O2, 302
+       points, 705 tesserae. Every displaced geometry rebuilds the cavity
+       from scratch. The FD is a five-point stencil at h = 1e-4 Bohr
+       (`PCM_FD_H` overrides it). Worst errors: `grad_nuc` 2.8e-10,
+       `grad_solver` 1.1e-9 Ha/Bohr, against a tolerance of 1e-8. Both
+       terms sum to zero over atoms to 1e-14. The test fails if a
+       displacement changes the tessera set: at h ≥ 2e-3 the count moves
+       from 705 to 706.
+     - **The charges must be physical: q = −f S⁻¹ φ_nuc.** Random
+       |q| ~ 1e-2 was the first fixture, and it made the FD meaningless.
+       Nearly-faded tesserae have F_i down to 1e-16, so S_ii reaches about
+       1e16. A real solve gives q_i ~ F_i on those points, but a random
+       charge makes q_i² S_ii dominate the energy (FD error 1.4e7).
+     - **Step-size scan.** The `grad_solver` error is 3.3e-4 at h = 1e-3,
+       9.9e-7 at 5e-4, 4.9e-8 at 2.5e-4 and 1.1e-9 at 1e-4. It falls
+       faster than h⁴ and converges on the analytic value. This is FD
+       error: h is only C² at x = 0 and x = 1, so a stencil that
+       straddles either end is poor. It is not a missing term.
+     - **Mutations.** Dropping the F_i term fails the gate at 0.49.
+       Dropping the off-diagonal factor of 2 fails it at 1.08. Removing
+       either skip passes, which confirms they skip only terms that cancel
+       exactly.
    - **4c. `grad_qv`.** A new shell-block derivative kernel, built as
      described under "What the gradient contains". Parallelize over shell
      pairs, using fixed-order per-thread partials of the natoms × 3 result.

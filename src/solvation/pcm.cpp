@@ -60,6 +60,22 @@ namespace
             return 1.0;
         return x * x * x * (10.0 - 15.0 * x + 6.0 * x * x);
     }
+
+    // h'(x) = 30 x^2 (1 - x)^2 inside (0, 1), zero outside.
+    double switch_dh(double x)
+    {
+        if (x <= 0.0 || x >= 1.0)
+            return 0.0;
+        return 30.0 * x * x * (1.0 - x) * (1.0 - x);
+    }
+
+    // d/dr [erf(xi r) / r], the radial derivative of the Gaussian-charge
+    // Coulomb kernel.
+    double erf_kernel_dr(double xi, double r)
+    {
+        return 2.0 * xi / std::sqrt(std::numbers::pi) * std::exp(-xi * xi * r * r) / r -
+               std::erf(xi * r) / (r * r);
+    }
 } // namespace
 
 // One-shot cavity + density-independent precomputation. After this returns,
@@ -169,12 +185,12 @@ HartreeFock::Solvation::build_pcm_state(const HartreeFock::Calculator &calculato
     // evaluate_pcm_reaction_field, so nothing n_tess x nbasis^2 is stored.
     const Eigen::Index npoints = static_cast<Eigen::Index>(state.surface_points.size());
     state.nuclear_potential = Eigen::VectorXd::Zero(npoints);
-    Eigen::MatrixXd influence = Eigen::MatrixXd::Zero(npoints, npoints);
+    state.switch_inner = std::move(r_in);
+    state.switch_width = std::move(r_sw);
 
     for (Eigen::Index i = 0; i < npoints; ++i)
     {
         const auto &site = state.surface_points[static_cast<std::size_t>(i)];
-
         for (std::size_t atom = 0; atom < natoms; ++atom)
         {
             const Eigen::Vector3d nucleus = molecule._standard.row(static_cast<Eigen::Index>(atom));
@@ -182,19 +198,9 @@ HartreeFock::Solvation::build_pcm_state(const HartreeFock::Calculator &calculato
             state.nuclear_potential(i) +=
                 molecule.nuclear_charge(atom) * std::erf(site.exponent * distance) / distance;
         }
-
-        influence(i, i) =
-            site.exponent * std::sqrt(2.0 / std::numbers::pi) / site.switching;
-        for (Eigen::Index j = 0; j < i; ++j)
-        {
-            const auto &other = state.surface_points[static_cast<std::size_t>(j)];
-            const double xi_ij = site.exponent * other.exponent /
-                                 std::hypot(site.exponent, other.exponent);
-            const double distance = (site.position - other.position).norm();
-            influence(i, j) = influence(j, i) = std::erf(xi_ij * distance) / distance;
-        }
     }
 
+    const Eigen::MatrixXd influence = pcm_influence_matrix(state.surface_points);
     const auto t_factor = std::chrono::steady_clock::now();
     state.influence_factor.compute(influence);
     if (state.influence_factor.info() != Eigen::Success)
@@ -324,4 +330,104 @@ HartreeFock::Solvation::evaluate_pcm_reaction_field(
     // factor of 1/2 makes the total energy stationary at convergence.
     result.solvation_energy = 0.5 * result.apparent_charges.dot(result.total_potential);
     return result;
+}
+
+Eigen::MatrixXd HartreeFock::Solvation::pcm_influence_matrix(const std::vector<PCMSurfacePoint> &points)
+{
+    const Eigen::Index n = static_cast<Eigen::Index>(points.size());
+    Eigen::MatrixXd influence(n, n);
+    for (Eigen::Index i = 0; i < n; ++i)
+    {
+        const auto &site = points[static_cast<std::size_t>(i)];
+        influence(i, i) = site.exponent * std::sqrt(2.0 / std::numbers::pi) / site.switching;
+        for (Eigen::Index j = 0; j < i; ++j)
+        {
+            const auto &other = points[static_cast<std::size_t>(j)];
+            const double xi_ij = site.exponent * other.exponent / std::hypot(site.exponent, other.exponent);
+            const double distance = (site.position - other.position).norm();
+            influence(i, j) = influence(j, i) = std::erf(xi_ij * distance) / distance;
+        }
+    }
+    return influence;
+}
+
+// q . dphi_nuc. phi_nuc_i depends on r = s_i - R_J only; s_i moves with its
+// owning atom A, so each (i, J) term adds k'(r) r_hat to A and subtracts it
+// from J (the J = A term cancels, as it must: that distance is the radius).
+Eigen::MatrixXd HartreeFock::Solvation::pcm_grad_nuc(const HartreeFock::Molecule &molecule,
+                                                     const PCMState &state, const Eigen::VectorXd &q)
+{
+    Eigen::MatrixXd grad = Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(molecule.natoms), 3);
+    for (std::size_t i = 0; i < state.surface_points.size(); ++i)
+    {
+        const auto &site = state.surface_points[i];
+        const double qi = q(static_cast<Eigen::Index>(i));
+        for (std::size_t atom = 0; atom < molecule.natoms; ++atom)
+        {
+            if (atom == site.atom_index)
+                continue;
+            const Eigen::Vector3d d =
+                site.position - molecule._standard.row(static_cast<Eigen::Index>(atom)).transpose();
+            const double r = d.norm();
+            const Eigen::RowVector3d v =
+                (qi * molecule.nuclear_charge(atom) * erf_kernel_dr(site.exponent, r) / r) * d.transpose();
+            grad.row(static_cast<Eigen::Index>(site.atom_index)) += v;
+            grad.row(static_cast<Eigen::Index>(atom)) -= v;
+        }
+    }
+    return grad;
+}
+
+// q^T dS q / (2 f).
+//   off-diagonal: S_ij = k(|s_i - s_j|), both orderings, so 2 q_i q_j k' r_hat
+//     onto A_i and off A_j;
+//   diagonal: S_ii = xi_i sqrt(2/pi) / F_i, F_i = prod_{J != A} h(x_iJ),
+//     x_iJ = (|s_i - R_J| - R_in,J) / R_sw,J, so
+//     dS_ii = -S_ii sum_J (h'(x)/h(x)) dx_iJ, dx_iJ = +-r_hat / R_sw,J on A / J.
+//     Every kept tessera has h(x_iJ) > 0 for all J (else F_i = 0 and it was
+//     pruned), so the division is safe.
+// ponytail: serial O(n_tess^2) pair loop (~2.3M erf/exp on naphthalene, once
+// per gradient); thread it with fixed-order per-thread partials if it shows up.
+Eigen::MatrixXd HartreeFock::Solvation::pcm_grad_solver(const HartreeFock::Molecule &molecule,
+                                                        const PCMState &state, const Eigen::VectorXd &q)
+{
+    const auto &pts = state.surface_points;
+    Eigen::MatrixXd grad = Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(molecule.natoms), 3);
+    for (std::size_t i = 0; i < pts.size(); ++i)
+    {
+        const double qi = q(static_cast<Eigen::Index>(i));
+        const auto Ai = static_cast<Eigen::Index>(pts[i].atom_index);
+        for (std::size_t j = 0; j < i; ++j)
+        {
+            const auto Aj = static_cast<Eigen::Index>(pts[j].atom_index);
+            if (Ai == Aj)
+                continue; // same sphere: the distance is rigid
+            const double xi_ij = pts[i].exponent * pts[j].exponent / std::hypot(pts[i].exponent, pts[j].exponent);
+            const Eigen::Vector3d d = pts[i].position - pts[j].position;
+            const double r = d.norm();
+            const Eigen::RowVector3d v =
+                (2.0 * qi * q(static_cast<Eigen::Index>(j)) * erf_kernel_dr(xi_ij, r) / r) * d.transpose();
+            grad.row(Ai) += v;
+            grad.row(Aj) -= v;
+        }
+
+        const double s_ii = pts[i].exponent * std::sqrt(2.0 / std::numbers::pi) / pts[i].switching;
+        for (std::size_t atom = 0; atom < molecule.natoms; ++atom)
+        {
+            if (atom == pts[i].atom_index)
+                continue;
+            const Eigen::Vector3d d =
+                pts[i].position - molecule._standard.row(static_cast<Eigen::Index>(atom)).transpose();
+            const double r = d.norm();
+            const double x = (r - state.switch_inner[atom]) / state.switch_width[atom];
+            const double dh = switch_dh(x);
+            if (dh == 0.0)
+                continue;
+            const Eigen::RowVector3d v =
+                (-qi * qi * s_ii * dh / switch_h(x) / (state.switch_width[atom] * r)) * d.transpose();
+            grad.row(Ai) += v;
+            grad.row(static_cast<Eigen::Index>(atom)) -= v;
+        }
+    }
+    return grad / (2.0 * state.dielectric_factor);
 }

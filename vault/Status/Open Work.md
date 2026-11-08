@@ -89,8 +89,11 @@ rerun for it.
   (`docs/PCM_GEOMETRY_SCOPE.md`). Steps 1–3 landed 2026-11-07: the smooth
   SWIG cavity, then fused integral sweeps with S factored once, then a
   shell-block point-charge kernel (see Completion). Spherical PCM (6)
-  landed 2026-11-08. Next: the analytic gradient (4), then geomopt and
-  frequencies (5). The geomopt, frequency and post-optimization symmetry
+  landed 2026-11-08, and so did the gradient's cavity terms (4a–4b:
+  `pcm_grad_nuc` and `pcm_grad_solver`, FD-gated by
+  `planck-pcm-cavity-gradient-fd`). Next: the `grad_qv` integral kernel
+  (4c), the wired, PySCF-gated gradient (4d), then geomopt and frequencies
+  (5). The geomopt, frequency and post-optimization symmetry
   SCF loops call `run_*` without a PCM state, so lifting the input gate
   alone would silently drop the solvent. Deferred from step 3:
   tolerance-linked pair screening, and a cheaper φ_el contraction. PCM is

@@ -80,6 +80,11 @@ namespace HartreeFock::Solvation
         // (eps -> inf, f -> 1).
         double dielectric_factor = 0.0;
 
+        // Per-atom SWIG switching radii R_in,J and R_sw,J (Bohr). The cavity
+        // build uses them for F_i; the gradient needs them again for dF_i/dR.
+        std::vector<double> switch_inner;
+        std::vector<double> switch_width;
+
         // True iff the cavity actually has tesserae (i.e. PCM is requested
         // and not all surface points were buried). Used by callers to skip
         // the reaction-field branch entirely when solvation is off.
@@ -120,6 +125,22 @@ namespace HartreeFock::Solvation
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const PCMState &state,
         const Eigen::MatrixXd &total_density);
+
+    // S_ij = erf(xi_ij r_ij)/r_ij, S_ii = xi_i sqrt(2/pi)/F_i for the given
+    // tesserae: the matrix build_pcm_state factors.
+    Eigen::MatrixXd pcm_influence_matrix(const std::vector<PCMSurfacePoint> &points);
+
+    // The two cavity-geometry terms of dG_rxn/dR at fixed apparent charges q
+    // (natoms x 3, Hartree/Bohr; docs/PCM_GEOMETRY_SCOPE.md step 4). Every
+    // tessera moves rigidly with its owning atom, and xi_i is geometry-free.
+    //   grad_nuc:    q . dphi_nuc, phi_nuc_i = sum_J Z_J erf(xi_i r_iJ)/r_iJ
+    //   grad_solver: q^T dS q / (2 f), through the tessera positions off the
+    //                diagonal and through F_i on it
+    // The state must have been built at the molecule's current geometry.
+    Eigen::MatrixXd pcm_grad_nuc(const HartreeFock::Molecule &molecule,
+                                 const PCMState &state, const Eigen::VectorXd &q);
+    Eigen::MatrixXd pcm_grad_solver(const HartreeFock::Molecule &molecule,
+                                    const PCMState &state, const Eigen::VectorXd &q);
 
 } // namespace HartreeFock::Solvation
 
