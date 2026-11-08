@@ -9,7 +9,7 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-11-08 (rewrite at `631d5c6b`, 2026-11-07).
+Last updated: 2026-11-08 (rewrite at `8570139a`).
 
 This is the canonical list of what remains. What is done lives in
 `vault/Status/Completion.md`. Each item names its scope or answer doc, which
@@ -17,11 +17,12 @@ holds the measurements and the ruled-out routes. Superseded plans are in
 [the historical archive](History/Open%20Work%20investigations%20through%202026-11-06.md),
 which is not a work queue.
 
-The 2026-11-07 rewrite removed items that have landed: def2/ECP (all steps),
-spherical DFT, KS stability, the installed basis path, and the RCCSD F_me
-fix. D3 dispersion landed later the same day (#183) and its follow-ups are
-listed below. It also re-checked the items below against the tree. No test suite was
-rerun for it.
+This rewrite removed what landed since the 2026-11-07 one: D3 dispersion
+(#183, merged) and the whole PCM geometry scope (smooth cavity, spherical
+PCM, analytic gradients, geometry optimization and frequencies;
+`docs/PCM_GEOMETRY.md`). Every item below was re-checked on 2026-11-08
+against the tree, and the upstream and CI items against GitHub. The core
+suite was 132/132 at `1b3ffc9b`.
 
 ## 1. Correctness decisions and external dependencies
 
@@ -39,9 +40,11 @@ rerun for it.
   Example: water⁺ UHF and UKS land on ²A₁, 0.069 Eh above ²B₁. The hcore
   guess fills 1a₁ 2a₁ 1b₂ 1b₁ 3a₁, and the descent direction breaks C₂ᵥ.
   Both energies match PySCF. `stability_check` + `stability_follow` (HF and
-  KS, Cartesian, spherical and ECP) find the minimum. **Decide:** whether the
-  default guess, or a warning, should change. Making SAD the open-shell
-  default was not pursued. Answer: `docs/KS_STABILITY.md`.
+  KS, Cartesian, spherical and ECP) find the minimum. The same trap hit the
+  spherical water⁺ PCM gate (λ_min −0.0715 from `hcore`, in PySCF too),
+  which now starts from `guess sad`. **Decide:** whether the default guess,
+  or a warning, should change. Making SAD the open-shell default was not
+  pursued. Answer: `docs/KS_STABILITY.md`.
 
 - **HSE06 energy finite differences are unreliable by construction.** libxc's
   wPBEh `s_scaling_2` jumps by 5.15e-4 at s = 1, and grid points crossing the
@@ -51,7 +54,8 @@ rerun for it.
   The research question of characterizing every seam is separate:
   `docs/WPBEH_SMOOTH_RESEARCH_SCOPE.md`.
 
-- **libecpint is pinned to an unmerged upstream PR.** Planck pins
+- **libecpint is pinned to an unmerged upstream PR** (still open on
+  2026-11-08). Planck pins
   robashaw/libecpint#81 at `4e8767fc` on `loriab/libecpint`, because stock
   libecpint's derivatives miss FD by 4.6e-5 relative on HI/def2-QZVP. When #81
   merges: repin to the merge commit, then rerun `planck-ecp-gradient-fd` and
@@ -70,8 +74,9 @@ rerun for it.
   patch. R4 also found that ghost atoms trigger the same mismatch on
   PySCF ≥ 2.14 (#3302 updated `radi.py` but not the gradient): 1.4e-5
   Ha/Bohr on a counterpoise water dimer. R5 filed
-  2026-11-07: issue pyscf/pyscf#3597, PR pyscf/pyscf#3598. Remaining: follow
-  the review. Once a release carries the fix, R6: drop
+  2026-11-07: issue pyscf/pyscf#3597, PR pyscf/pyscf#3598 (both open,
+  review required, on 2026-11-08). Remaining: follow the review. Once a
+  release carries the fix, R6: drop
   `patch_pyscf_grid_response_radii` and pin that PySCF version
   (`docs/PYSCF_ECP_GRID_RESPONSE_SCOPE.md`).
   Planck's reference script patches it at runtime meanwhile.
@@ -161,12 +166,15 @@ rerun for it.
   `PLANCK_CC_*` options currently vary per target and decide what can be
   shared. `planck-mpi` also omits two `PLANCK_CC_*` options the other
   binaries define; check whether that was intended.
-- **CI's first full-test run is unverified.** The workflow builds every
-  target and every test now gets `BASIS_PATH` from the source tree (#181).
-  #181 is now in `devel`, so the first CI run on a PR into `devel` (#183,
-  D3) is the first full-test run, and also the first that installs gfortran
-  and builds simple-dftd3 on Ubuntu. Unknowns: the Boys-core license
-  (`PLANCK_LICENSE`) and the Fortran link on Linux.
+- **No build-and-test CI runs.** The "CMake on multiple platforms"
+  workflow (`.github/workflows/cmake-multi-platform.yml`) is
+  `disabled_manually`; its last run was 2026-04-26. It did not run on #181
+  or #183, so the workflow fixes in #181 (build every target, `BASIS_PATH`
+  for every test) have never executed on CI. **Decide:** whether to
+  re-enable it. A first run is also the first Linux build of simple-dftd3
+  with gfortran, and it needs the `PLANCK_LICENSE` secret for the Boys core.
+  Separately, "Callgraph Profiling" failed on the 2026-11-07 `devel` push
+  because the runner ran out of disk, not because of the code.
 
 ## 4. Verification gaps
 

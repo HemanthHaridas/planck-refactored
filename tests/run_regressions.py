@@ -669,6 +669,10 @@ def main() -> int:
     args = parser.parse_args()
 
     repo_root = Path(__file__).resolve().parents[1]
+    # Read basis sets from the source tree, as ctest does (#181). The install
+    # prefix may lack files (it had no def2, so every ECP case failed at basis
+    # loading). An explicit BASIS_PATH from the caller still wins.
+    os.environ.setdefault("BASIS_PATH", str(repo_root / "basis-sets"))
     manifest_path = repo_root / args.manifest
     manifest = load_manifest(manifest_path)
     pyscf_references = load_pyscf_references(repo_root / args.pyscf_refs if args.pyscf_refs else None)
