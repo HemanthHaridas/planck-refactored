@@ -142,6 +142,18 @@ namespace HartreeFock::Solvation
     Eigen::MatrixXd pcm_grad_solver(const HartreeFock::Molecule &molecule,
                                     const PCMState &state, const Eigen::VectorXd &q);
 
+    // The integral term of dG_rxn/dR: q . dphi_el at fixed density and q,
+    // through the AO centres (ao_atom[mu], Cartesian AO index) and the
+    // tessera centres. total_density is in the working basis, as for
+    // evaluate_pcm_reaction_field.
+    std::expected<Eigen::MatrixXd, std::string> pcm_grad_qv(
+        const HartreeFock::Calculator &calculator,
+        const std::vector<HartreeFock::ShellPair> &shell_pairs,
+        const PCMState &state,
+        const Eigen::MatrixXd &total_density,
+        const Eigen::VectorXd &q,
+        const std::vector<int> &ao_atom);
+
 } // namespace HartreeFock::Solvation
 
 #endif // PLANCK_SOLVATION_PCM_H

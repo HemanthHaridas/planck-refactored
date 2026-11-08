@@ -3174,6 +3174,29 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME planck-pcm-cavity-gradient-fd COMMAND planck-pcm-cavity-gradient-fd)
 
+    # PCM integral gradient term (grad_qv) vs finite differences
+    # (docs/PCM_GEOMETRY_SCOPE.md step 4c).
+    add_executable(planck-pcm-qv-gradient-fd
+        ${CMAKE_SOURCE_DIR}/tests/pcm_qv_gradient_fd.cpp
+        ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp
+        ${SRC_DIR}/solvation/pcm.cpp
+        ${SRC_DIR}/basis/basis.cpp
+        ${SRC_DIR}/basis/gaussian.cpp
+        ${SRC_DIR}/basis/gbs_parser.cpp
+        ${SRC_DIR}/basis/spherical.cpp
+        ${SRC_DIR}/basis/spherical_recurrence.cpp
+        ${INT_SRC}
+        ${LOOKUP_SRC}
+    )
+    target_include_directories(planck-pcm-qv-gradient-fd PRIVATE ${SRC_DIR} ${eigen_SOURCE_DIR})
+    set_target_properties(planck-pcm-qv-gradient-fd PROPERTIES
+        CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    if(USE_OPENMP AND OpenMP_CXX_FOUND)
+        target_link_libraries(planck-pcm-qv-gradient-fd OpenMP::OpenMP_CXX)
+        target_compile_definitions(planck-pcm-qv-gradient-fd PRIVATE USE_OPENMP)
+    endif()
+    add_test(NAME planck-pcm-qv-gradient-fd COMMAND planck-pcm-qv-gradient-fd)
+
     add_test(
         NAME planck-dft-coulomb-response
         COMMAND planck-dft-coulomb-response

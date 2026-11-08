@@ -431,3 +431,35 @@ Eigen::MatrixXd HartreeFock::Solvation::pcm_grad_solver(const HartreeFock::Molec
     }
     return grad / (2.0 * state.dielectric_factor);
 }
+
+// q . dphi_el at fixed density and charges: phi_el,k = -P : V^k, so this is
+// -dE/dR of sum_k q_k (P : V^k) from the shell-block kernel, with the
+// working-basis density lifted to Cartesian as in evaluate_pcm_reaction_field.
+std::expected<Eigen::MatrixXd, std::string> HartreeFock::Solvation::pcm_grad_qv(
+    const HartreeFock::Calculator &calculator,
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const PCMState &state,
+    const Eigen::MatrixXd &total_density,
+    const Eigen::VectorXd &q,
+    const std::vector<int> &ao_atom)
+{
+    auto cart_density = HartreeFock::BasisFunctions::to_cartesian(calculator._shells, total_density);
+    if (!cart_density)
+        return std::unexpected("PCM gradient density lift failed: " + cart_density.error());
+
+    std::vector<Eigen::Vector3d> positions;
+    std::vector<double> exponents;
+    std::vector<std::size_t> owners;
+    for (const auto &site : state.surface_points)
+    {
+        positions.push_back(site.position);
+        exponents.push_back(site.exponent * site.exponent);
+        owners.push_back(site.atom_index);
+    }
+    auto grad = HartreeFock::ObaraSaika::_compute_electronic_potential_gradient(
+        shell_pairs, *cart_density, positions, &exponents, q, owners, ao_atom,
+        calculator._molecule.natoms);
+    if (!grad)
+        return std::unexpected("PCM gradient: " + grad.error());
+    return Eigen::MatrixXd(-*grad);
+}

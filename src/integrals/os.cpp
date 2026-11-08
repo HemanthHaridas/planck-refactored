@@ -15,6 +15,7 @@
 #include <span>
 #include <cmath>
 #include <cstdint>
+#include <format>
 #include <numbers>
 #include <vector>
 
@@ -1199,9 +1200,14 @@ namespace
     // W[ix][iy][iz] += weight * (ix iy iz | 0)^(0) for ix + iy + iz <= L, one
     // primitive pair and one (point or Gaussian) charge. Same recurrence and
     // Gaussian-charge scaling as _os_nuclear_primitive, with batched Boys.
+    // The optional (weight_a, Wa) and (weight_b, Wb) reuse the same VRR for the
+    // gradient, whose basis-centre derivative needs 2 alpha- and 2 beta-
+    // weighted slices that cannot be contracted over primitives together.
     void nuclear_vrr_accumulate(
         const HartreeFock::PrimitivePair &pp, int L,
-        const Eigen::Vector3d &C, double eta, double weight, NuclearSlice &W)
+        const Eigen::Vector3d &C, double eta, double weight, NuclearSlice &W,
+        double weight_a = 0.0, NuclearSlice *Wa = nullptr,
+        double weight_b = 0.0, NuclearSlice *Wb = nullptr)
     {
         const double s = eta > 0.0 ? eta / (pp.zeta + eta) : 1.0;
         const double pCx = s * (pp.center[0] - C[0]);
@@ -1249,7 +1255,14 @@ namespace
         for (int ix = 0; ix <= L; ++ix)
             for (int iy = 0; iy <= L - ix; ++iy)
                 for (int iz = 0; iz <= L - ix - iy; ++iz)
+                {
                     W[ix][iy][iz] += weight * V[ix][iy][iz][0];
+                    if (Wa)
+                    {
+                        (*Wa)[ix][iy][iz] += weight_a * V[ix][iy][iz][0];
+                        (*Wb)[ix][iy][iz] += weight_b * V[ix][iy][iz][0];
+                    }
+                }
     }
 
     // block[a * nb + b] = N_a N_b * HRR(W) for every component pair.
@@ -1377,6 +1390,129 @@ Eigen::VectorXd HartreeFock::ObaraSaika::_compute_electronic_potential(
     }
 
     return phi;
+}
+
+// Nuclear gradient of E = sum_k w_k (P : V^k), the weighted electronic
+// potentials of _compute_electronic_potential, with charge k moving rigidly
+// with atom point_atom[k]. Per shell pair (A, B) and per owning atom g:
+//   - one VRR to L+1 per primitive pair and charge, accumulated into three
+//     slices weighted by w, 2 alpha w and 2 beta w;
+//   - d/dA_q (a|b) = 2 alpha (a+1_q|b) - a_q (a-1_q|b), and the same on b;
+//   - the charge-centre term is -(dA + dB): the integral depends only on
+//     relative positions.
+// Results are stored per (block, atom) and summed serially in block order, so
+// the gradient is bitwise thread-count invariant.
+std::expected<Eigen::MatrixXd, std::string> HartreeFock::ObaraSaika::_compute_electronic_potential_gradient(
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const Eigen::MatrixXd &density,
+    const std::vector<Eigen::Vector3d> &points,
+    const std::vector<double> *exponents,
+    const Eigen::VectorXd &weights,
+    const std::vector<std::size_t> &point_atom,
+    const std::vector<int> &ao_atom,
+    const std::size_t natoms)
+{
+    const auto all = nuclear_shell_blocks(shell_pairs, static_cast<std::size_t>(density.rows()));
+    for (const auto &blk : all.blocks)
+        if (blk.L + 1 > 2 * MAX_L)
+            return std::unexpected(std::format(
+                "electronic-potential gradient: shell pair with L_A + L_B = {} exceeds the supported {}",
+                blk.L, 2 * MAX_L - 1));
+
+    std::vector<std::vector<std::size_t>> by_atom(natoms);
+    for (std::size_t k = 0; k < points.size(); ++k)
+        by_atom[point_atom[k]].push_back(k);
+
+    // per[block * natoms + g] = {dA_x, dA_y, dA_z, dB_x, dB_y, dB_z}
+    std::vector<std::array<double, 6>> per(all.blocks.size() * natoms, std::array<double, 6>{});
+
+#pragma omp parallel for schedule(dynamic)
+    for (std::size_t kb = 0; kb < all.blocks.size(); ++kb)
+    {
+        const auto &blk = all.blocks[kb];
+        const auto &sp = *blk.pair;
+        const int L1 = blk.L + 1;
+        const double factor = blk.diagonal ? 1.0 : 2.0;
+        NuclearSlice W, Wa, Wb;
+
+        for (std::size_t g = 0; g < natoms; ++g)
+        {
+            if (by_atom[g].empty())
+                continue;
+            zero_slice(W, L1);
+            zero_slice(Wa, L1);
+            zero_slice(Wb, L1);
+            for (const std::size_t k : by_atom[g])
+            {
+                const double eta = exponents ? (*exponents)[k] : 0.0;
+                const double wk = weights(static_cast<Eigen::Index>(k));
+                for (const auto &pp : sp.primitive_pairs)
+                {
+                    const double w = wk * pp.coeff_product * blk.inv_norm0;
+                    nuclear_vrr_accumulate(pp, L1, points[k], eta, w, W,
+                                           2.0 * pp.alpha * w, &Wa, 2.0 * pp.beta * w, &Wb);
+                }
+            }
+
+            auto &out = per[kb * natoms + g];
+            for (int a = 0; a < blk.na; ++a)
+            {
+                const auto *va = all.ao_views[blk.a0 + static_cast<std::size_t>(a)];
+                for (int b = 0; b < blk.nb; ++b)
+                {
+                    const auto *vb = all.ao_views[blk.b0 + static_cast<std::size_t>(b)];
+                    const double pn = factor * va->_component_norm * vb->_component_norm *
+                                      density(static_cast<Eigen::Index>(blk.a0 + a),
+                                              static_cast<Eigen::Index>(blk.b0 + b));
+                    if (pn == 0.0)
+                        continue;
+                    const auto hrr = [&](const NuclearSlice &S, std::array<int, 3> ca, std::array<int, 3> cb)
+                    { return _nuclear_hrr(S, ca[0], ca[1], ca[2], cb[0], cb[1], cb[2], sp.R[0], sp.R[1], sp.R[2]); };
+                    const std::array<int, 3> ca{va->_cartesian[0], va->_cartesian[1], va->_cartesian[2]};
+                    const std::array<int, 3> cb{vb->_cartesian[0], vb->_cartesian[1], vb->_cartesian[2]};
+                    for (int q = 0; q < 3; ++q)
+                    {
+                        auto up = ca, dn = ca;
+                        ++up[q];
+                        double dA = hrr(Wa, up, cb);
+                        if (ca[q] > 0)
+                        {
+                            --dn[q];
+                            dA -= ca[q] * hrr(W, dn, cb);
+                        }
+                        auto bup = cb, bdn = cb;
+                        ++bup[q];
+                        double dB = hrr(Wb, ca, bup);
+                        if (cb[q] > 0)
+                        {
+                            --bdn[q];
+                            dB -= cb[q] * hrr(W, ca, bdn);
+                        }
+                        out[q] += pn * dA;
+                        out[3 + q] += pn * dB;
+                    }
+                }
+            }
+        }
+    }
+
+    Eigen::MatrixXd grad = Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(natoms), 3);
+    for (std::size_t kb = 0; kb < all.blocks.size(); ++kb)
+    {
+        const auto atomA = static_cast<Eigen::Index>(ao_atom[all.blocks[kb].a0]);
+        const auto atomB = static_cast<Eigen::Index>(ao_atom[all.blocks[kb].b0]);
+        for (std::size_t g = 0; g < natoms; ++g)
+        {
+            const auto &d = per[kb * natoms + g];
+            for (int q = 0; q < 3; ++q)
+            {
+                grad(atomA, q) += d[q];
+                grad(atomB, q) += d[3 + q];
+                grad(static_cast<Eigen::Index>(g), q) -= d[q] + d[3 + q];
+            }
+        }
+    }
+    return grad;
 }
 
 // Contract the per-primitive (a0|c0; m=0) blocks across all primitive pairs
