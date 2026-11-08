@@ -54,6 +54,9 @@ def read_run(directory, threads):
         for key in ("steps", "parents", "attempts", "invalid", "zero_h", "initiator_rejected",
                     "rounded_zero", "records_raw", "records_folded", "canonical_emitted"):
             identity[f"{name}.{key}"] = int(phases[name][key])
+        if "bin_count" in phases[name]:  # Absent in the original R1 archive.
+            for key in ("bin_count", "min_bin_parents", "max_bin_parents"):
+                identity[f"{name}.{key}"] = int(phases[name][key])
     sample = phases["sampling"]
     peak_bytes = meta["peak_rss_bytes"]
     values = {
@@ -90,7 +93,8 @@ def main():
             if baseline is None:
                 baseline = identity
             elif baseline != identity:
-                changed = [key for key in baseline if baseline[key] != identity[key]]
+                changed = [key for key in sorted(baseline.keys() | identity.keys())
+                           if baseline.get(key) != identity.get(key)]
                 parser.exit(1, f"{directory}: differing {', '.join(changed)}\n")
             runs.append(run)
         by_threads[threads] = runs

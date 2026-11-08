@@ -29,25 +29,7 @@ mkdir -p "$out_dir"
 temporary_input=$(mktemp "${TMPDIR:-/tmp}/planck-fciqmc-profile-XXXXXXXX")
 trap 'rm -f "$temporary_input"' EXIT HUP INT TERM
 
-# Use Python rather than platform-specific sed -i syntax.  The input parser's
-# normal boolean spelling is used so the emitted file is independently readable.
-python3 - "$fixture" "$temporary_input" <<'PY'
-from pathlib import Path
-import re
-import sys
-
-source = Path(sys.argv[1]).read_text()
-seed = re.search(r'(?im)^([ \t]*)fciqmc_seed\b', source)
-if not seed:
-    raise SystemExit('fixture has no explicit fciqmc_seed')
-profile = re.findall(r'(?im)^[ \t]*fciqmc_profile[ \t]+([^\s#]+)', source)
-if not profile:
-    source = source[:seed.start()] + seed[1] + 'fciqmc_profile         true\n' + source[seed.start():]
-elif len(profile) != 1 or profile[0].lower() not in ('true', '.true.'):
-    raise SystemExit('fixture explicitly sets a conflicting fciqmc_profile value')
-source = re.sub(r'(?im)^([ \t]*verbosity[ \t]+)verbose\b', r'\g<1>normal', source)
-Path(sys.argv[2]).write_text(source)
-PY
+python3 "$repo/tests/fciqmc_profile_input.py" "$fixture" "$temporary_input"
 
 name=$(basename "$fixture" .hfinp)
 log="$out_dir/${name}.threads-${threads}.log"

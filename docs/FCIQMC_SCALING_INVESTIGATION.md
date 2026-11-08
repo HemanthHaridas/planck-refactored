@@ -2,10 +2,11 @@
 
 ## Current status — 2026-11-08
 
-R0 qualified the HF-to-FCIQMC handoff on the cases below. R1 is measuring
-where time and memory go on the current solver. The next decision is whether
-the evidence favors a propagation change, a setup change, or a larger
-admissible active space. The canonical population, parent-derived RNG, E1
+R0 qualified the HF-to-FCIQMC handoff. R1 is complete on this host:
+eight threads gave the lowest median time for 50k hydrogen fluoride, and two
+for spherical Be. At 50k, water occupied 3.69× as many determinants as HF;
+its serial diagonal prefill and parent binning consumed 33.8% of sampling.
+Start R2 there for larger populations. The canonical population, parent-derived RNG, E1
 selector, and M1 parallel merge are in production. E4 is still test-only.
 
 The upstream audit began on 2026-11-06 at `22da4338`. The November 8
@@ -85,6 +86,9 @@ Each sampling phase processed 1,454,552,910 parents in 30,000 steps.
 
 Wall times and component medians are seconds. Worker, merge and prefill are
 sampling-only. RSS is the median of the three whole-process peaks.
+The [per-run archive](../tests/benchmarks/fciqmc/hf50k_m3_r1.json) preserves the
+individual phase, CPU, RSS and launcher measurements, host load, common work
+counters and source/input hashes even after the build directory is cleaned.
 
 | Threads | Wall, repeats 1 / 2 / 3 | Median wall | Speedup vs 1 | Sampling | Worker | Merge | Prefill | Peak RSS (MiB) |
 |---:|---|---:|---:|---:|---:|---:|---:|---:|
@@ -138,6 +142,13 @@ opens a parallel loop at each tree level, down to the last pair. A focused
 A/B can use the existing sequential pair merge for small levels and retain
 the same reduction order. Measure the cutoff on both occupancies before
 changing production.
+
+On the 50k HF trajectory, 1,446,049,135 of 1,454,552,910 sampling attempts
+rounded to zero (99.42%); none were invalid, had a zero matrix element or
+were rejected by the initiator rule. The selector and matrix-element evaluation
+still ran on those attempts. This explains why accepted spawns alone are a
+poor measure of worker throughput; it does not justify dropping attempts or
+changing the sampling law.
 
 To reproduce the Be ladder from the repository root:
 
@@ -207,29 +218,18 @@ reference selection. Sample-series capacity is in bytes. Verbose coefficient
 tracking is counted in determinant entries. These components have different
 lifetimes. The process peak RSS is measured independently.
 
-#### Follow-up controls
+#### Setup and profiling controls
 
-Use the diagnostic build separately from the original thread sweep. Hold the
-seed, timestep, sampling length and numerical-library thread limits fixed.
-For hydrogen fluoride, compare the original result fingerprint and all work
-counters to the diagnostic build; also check the printed estimators against
-the same build with profiling disabled. A single on/off timing is a check
-for gross probe cost, not a precise overhead estimate.
+The diagnostic runs used the same seed, timestep and numerical-library thread
+limits as the original HF sweep. The four-thread population series varied
+only target weight. The water/6-31G control kept 5α/5β and the 50k target,
+but increased the spatial orbitals from 11 to 13 and the determinant space
+from 213,444 to 1,656,369. Neither comparison establishes an asymptotic
+scaling law.
 
-At four threads, vary HF target weight (10k/25k/50k/100k) and record actual
-sampled parents per step, rejections, phase wall times and memory. For the
-larger water/6-31G control, keep 5α/5β and 50k target weight but increase
-the spatial orbitals from 11 to 13. Its determinant space is 1,656,369,
-compared with 213,444 for HF. A short water pilot screens for sign instability
-and reference drift; assess the production-length estimators against a
-separate PySCF FCI energy. Neither varying the walker weight nor comparing
-two molecules establishes an asymptotic scaling law.
-
-For the upstream checks, compare the explicit OS and Auto engine on short HF
-runs. Compare the Hamiltonian fingerprints before attributing any difference
-to propagation. Use the cached/direct spherical Be and Rb ECP setups for
-route-specific timings; four propagation steps suffice to reach the profile
-output and do not estimate an energy.
+The cached/direct spherical Be and Rb ECP controls used four propagation steps
+to reach the setup counters; their energies are not estimates. The short HF
+OS/Auto comparison used matching propagation settings.
 
 The separate diagnostic binary was
 `8701846674b0df7d6ea4ae68a659ca5e818935ab0e368b1da722aeada9e883a7`.
@@ -246,6 +246,67 @@ identical Hamiltonian and result fingerprints (`f032498d77f973b5` and
 `8884c6b583a040a8`). SCF took 2.39 and 2.30 ms, respectively, and the MO
 transform 0.13 and 0.14 ms. Neither timing establishes an engine advantage.
 
+The full diagnostic HF 50k run reproduced both original fingerprints and
+all integer work counters. Parsing took 0.92 ms, basis setup 1.84 ms,
+one-electron work 0.49 ms, SCF 3.01 ms, and the post-HF Hamiltonian build
+0.17 ms. Equilibration and sampling together accounted for 178.639 of
+178.652 s on the driver clock. Profiling disabled on the same binary gave
+178.867 s, with identical printed projected and shift energies, errors,
+numerator/denominator sums and reference weights. This single pair shows no
+resolvable probe penalty on this host.
+
+#### Occupancy and memory at four threads
+
+Each row is a single 20,000-equilibration/30,000-sampling trajectory. Times
+are seconds; worker, merge and prefill are parts of sampling. Each occupied
+parent drew one spawn attempt per step. No invalid draws, zero Hamiltonian
+elements, or initiator rejections were recorded in these sampling phases.
+
+| Fixture | Parents/step | Rounded to zero | Wall | Equilibration | Sampling | Worker | Merge | Prefill |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| HF 10k | 34,358 | 99.74% | 122.52 | 44.93 | 77.57 | 39.17 | 19.76 | 14.96 |
+| HF 25k | 42,145 | 99.59% | 149.69 | 60.79 | 88.88 | 45.36 | 22.28 | 17.29 |
+| HF 50k | 48,485 | 99.42% | 178.65 | 67.50 | 111.14 | 57.76 | 26.26 | 22.71 |
+| HF 100k | 54,841 | 99.18% | 195.24 | 74.48 | 120.74 | 62.90 | 28.53 | 24.64 |
+| H₂O 50k | 178,914 | 99.66% | 904.82 | 346.97 | 557.82 | 268.05 | 88.86 | 188.54 |
+
+All storage columns below are MiB except the count of cached determinants.
+The two sample series together retained 0.50 MiB on every row; normal
+verbosity retained no coefficient-ratio entries. The tagged-tree column is
+a bound, and the capacity columns are not an additive breakdown of peak RSS.
+The [individual control measurements](../tests/benchmarks/fciqmc/controls_m3_r1.json)
+include both phases’ work counts, fingerprints, input hashes and estimators.
+
+| Fixture | Setup RSS | Process RSS | Cached determinants | Walker vectors | Accumulators | Parent bins | Tagged bound | Merge output |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| HF 10k | 14.4 | 37.5 | 103,511 | 1.62 | 1.46 | 1.45 | 2.17 | 0.81 |
+| HF 25k | 13.9 | 37.6 | 104,362 | 2.00 | 1.50 | 1.50 | 2.67 | 1.00 |
+| HF 50k | 14.0 | 46.6 | 105,050 | 2.30 | 1.50 | 1.50 | 3.08 | 1.16 |
+| HF 100k | 13.9 | 52.6 | 105,685 | 2.59 | 1.59 | 1.57 | 3.48 | 1.30 |
+| H₂O 50k | 14.1 | 295.9 | 414,055 | 8.37 | 6.00 | 6.00 | 11.19 | 4.20 |
+
+At equal 50k target weight, water averaged 3.69× as many occupied parents
+as HF and took 5.06× as long on four threads. Sampling prefill (diagonal
+lookups and parent binning together) rose from 15.61 to 35.13 ns per
+parent; merge went from 18.05 to 16.56 ns per parent. On water, prefill
+was 33.8% of sampling versus 15.9% for merge. The integral setup peak stayed
+near 14 MiB on both molecules. A walker target controls total absolute weight;
+many nonzero determinants can carry weights below one, so target weight is
+not a bound on memory.
+
+Within HF, increasing target weight tenfold raised mean occupied parents
+1.60× and wall time 1.59×. All four populations shared the same Hamiltonian,
+and all projected energies were within one reported standard error of
+−100.1156979102 Eh. Each population used a single seed: these runs measure
+work and memory, not statistical convergence with walker weight.
+
+The water reference from PySCF FCI was −76.120842405967 Eh. The full
+trajectory gave a projected energy of −76.1176558035 ± 0.00846 Eh and a
+shift of −76.1109377950 ± 0.0329 Eh (0.38 and 0.30 reported standard
+errors from FCI). The minimum absolute reference weight was 642.75, with
+30,000 valid projected samples and no sign-instability or reference-drift
+warning. Treat this as a validated throughput control at the measured seed.
+
 To repeat an individual measurement and the water reference:
 
 ```sh
@@ -256,12 +317,40 @@ tests/pyscf/.venv/bin/python tests/pyscf/fciqmc_handoff_references.py \
   tests/inputs/exploratory/fciqmc/validation/water_pop_50000.hfinp
 ```
 
-For future CPU sampling, `tests/run_fciqmc_cpu_profile.sh` currently waits one
-second before sampling. Identify the sampled phase explicitly if setup might
-last that long. Kernel A/B runs should alternate the separately built binaries
-and retain dispersion and load observations.
+For CPU sampling, `tests/run_fciqmc_cpu_profile.sh` waits for the driver's
+flushed `phase=sampling_begin` record before attaching macOS `sample`. Use a
+marker-capable binary and choose a sampling phase long enough for the requested
+capture. The timed runs above did not have a sampler attached. The phase
+summary on newer builds also reports the minimum and maximum accumulated parent
+visits across the logical bins, alongside their count and the busiest bin's
+elapsed work time. Kernel A/B runs should alternate the separately built
+binaries and retain dispersion and load observations.
+
+An eight-second macOS capture on the four-thread water pilot started at the
+sampling marker and reproduced the unobserved pilot's result
+(`918505f133d70d02`). The most frequent application leaf frames were
+excitation drawing (3,737 samples), the diagonal callback (2,992), and
+Slater–Condon evaluation (2,658). These are samples across threads, not
+wall-time fractions. Across 64 bins, the sampling parent counts ranged from
+5,419,573 to 5,783,945 (mean 5,577,365). A separate four-step H₂/cc-pVDZ
+smoke run exercised the RI branch and the zero-equilibration marker; fitting
+and reconstruction took 1.96 ms. Neither run is included in the timing tables.
 
 ### R2 — select a bounded optimization from the refreshed evidence
+
+For larger occupied populations, investigate the serial diagonal prefill and
+parent-binning pass first. The driver looks up every parent before distributing
+parents to bins; workers then look up the same diagonal again. Time the lookup
+and binning paths separately. A candidate could retain the diagonal for
+surviving parents and pass it to the worker, evaluating a new determinant
+before workers start. Measure the extra storage and require the original
+Hamiltonian, trajectory and work counts. Test on water and HF and keep Be as
+a small-workload control. No speedup has been measured for this proposal.
+
+If the target is specifically high thread counts on a *small* population,
+the Be measurements support a separate, cheaper experiment: run the last
+few tree levels sequentially with the existing pair merge and reduction order.
+Do not combine the two changes in the first A/B.
 
 | Measured limit | Next candidate | Acceptance evidence |
 |---|---|---|
@@ -554,7 +643,8 @@ sampling worker time of `54.713 s`, merge time of `25.329 s`, and wall time of
 All stochastic counters remained identical, but worker, merge, and prefill
 time moved together. This suggests host load, but does not establish causality:
 cache and thermal interactions can affect unchanged code too. The run is
-inconclusive for candidate attribution; the R1 paired retest is required.
+inconclusive for candidate attribution. The current plan defers an E4 paired
+retest to R2 if bit selection is chosen over the merge candidate.
 
 Production retains the compact clear-lowest-set-bit loop while the candidate
 remains test-only. On an uncontended machine, apply the byte-table selector in

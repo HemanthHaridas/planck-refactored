@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <limits>
 #include <format>
+#include <iostream>
 #include <algorithm>
 #include <memory>
 #include <unordered_map>
@@ -107,10 +108,13 @@ namespace HartreeFock::Correlation
             std::uint64_t rounded = 0;
             std::uint64_t raw_records = 0;
             std::uint64_t finalized_records = 0;
+            std::uint64_t min_bin_parents = propagation.bins.front().parents, max_bin_parents = 0;
             double max_bin_seconds = 0.0;
             for (const auto &bin : propagation.bins)
             {
                 parents += bin.parents;
+                min_bin_parents = std::min(min_bin_parents, bin.parents);
+                max_bin_parents = std::max(max_bin_parents, bin.parents);
                 attempts += bin.spawn_attempts;
                 invalid += bin.invalid_excitations;
                 zero_h += bin.zero_hamiltonian;
@@ -135,7 +139,8 @@ namespace HartreeFock::Correlation
                                 "canonical_stream_s={:.6f} canonical_emitted={} "
                                 "canonical_pairwise_s={:.6f} "
                                 "parent_cleanup_s={:.6f} compress_s={:.6f} "
-                                "estimator_s={:.6f} phase_wall_s={:.6f}",
+                                "estimator_s={:.6f} phase_wall_s={:.6f} "
+                                "bin_count={} min_bin_parents={} max_bin_parents={}",
                                 phase, driver.steps, parents, attempts, invalid,
                                 zero_h, initiator, rounded, raw_records,
                                 finalized_records, driver.prefill_seconds,
@@ -149,7 +154,8 @@ namespace HartreeFock::Correlation
                                 propagation.canonical_merge_emitted,
                                 propagation.canonical_pairwise_seconds,
                                 propagation.parent_cleanup_seconds,
-                                driver.compress_seconds, driver.estimator_seconds, phase_seconds));
+                                driver.compress_seconds, driver.estimator_seconds, phase_seconds,
+                                propagation.bins.size(), min_bin_parents, max_bin_parents));
         }
 
         // Adapt the shared all-MO setup to the callbacks the propagator wants.
@@ -416,8 +422,15 @@ namespace HartreeFock::Correlation
         auto sampling_start = equilibration_start;
         for (int step = 0; step < total_steps; ++step)
         {
-            if (opt.profile && step == opt.equilibration_steps && step > 0)
-                sampling_start = Clock::now();
+            if (opt.profile && step == opt.equilibration_steps)
+            {
+                // The macOS CPU sampler waits for this event in a redirected
+                // log. Emit it once, including for a zero-equilibration run.
+                logging(LogLevel::Info, "FCIQMC_PROFILE:", "phase=sampling_begin");
+                std::cout.flush();
+                if (step > 0)
+                    sampling_start = Clock::now();
+            }
             const bool sampling = step >= opt.equilibration_steps;
             FCIQMCDriverWork &step_work = sampling ? sampling_work : equilibration_work;
             FCIQMCPropagationProfile *step_profile = nullptr;

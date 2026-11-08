@@ -291,13 +291,15 @@ None of these blocks correctness. Take each up only with a current profile.
   (`src/post_hf/ci/ci.cpp`, ~0.1–0.2 %). Validate any sigma change on an
   iterative case (`o2_fci_rohf_sto3g`, `be_fci_spherical_631gd`).
 - **FCIQMC** (`docs/FCIQMC_SCALING_INVESTIGATION.md`), in order:
-  - R1: both three-repeat thread sweeps are complete. On this M3, HF/6-31G
-    at 50k walkers was fastest at eight threads (151.51 s; 2.80× over one),
-    while spherical Be was fastest at two. Finish the setup, memory, population
-    and larger-system comparisons before interpreting these as general limits.
-  - R2: test a sequential merge at small tree levels against both workloads;
-    require matching trajectories and a repeatable end-to-end gain. E2 was
-    rejected. Keep E4 test-only until a paired retest passes.
+  - R1 is complete on the M3: HF/6-31G at 50k was fastest at eight threads
+    (151.51 s; 2.80× over one); small spherical Be was fastest at two.
+    The 10k–100k HF and 50k water controls separate memory and time from setup.
+  - R2 for larger populations: isolate the repeated diagonal lookup and
+    parent binning. Prefill took 34% of sampling on water versus 20% on HF at
+    four threads. Measure a candidate against water, HF and small Be with
+    identical trajectories. If small-population threading is the target, test
+    a sequential merge for the last tree levels separately. E2 was rejected;
+    E4 stays test-only.
   - R3, conditional: a fixed-orbital active-space adapter.
   - A scientific target and a resource budget are still unselected.
 - **ccgen generated kernels** (`docs/CCGEN_CC_OPENMP.md`,
