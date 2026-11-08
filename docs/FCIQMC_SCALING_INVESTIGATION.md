@@ -9,8 +9,8 @@ admissible active space. The canonical population, parent-derived RNG, E1
 selector, and M1 parallel merge are in production. E4 is still test-only.
 
 The upstream audit began on 2026-11-06 at `22da4338`. The November 8
-measurements use `cf74abe2` plus the working-tree handoff and profiling
-changes. Earlier timing tables retain their original configurations.
+handoff and initial timing measurements use the solver now committed as
+`936d7e7a`. Earlier timing tables retain their original configurations.
 
 ### Upstream changes that affect this investigation
 
@@ -73,8 +73,43 @@ and seed fixed and require matching Hamiltonian IDs before comparing results.
 
 ### R1 — rebaseline setup, propagation, and memory separately
 
-On hydrogen fluoride/6-31G (50,000 walkers, four threads), the current
-solver took **170.099 s** for one full trajectory. The shared CI Hamiltonian
+#### 50,000-walker hydrogen fluoride thread sweep
+
+Eight threads had the lowest median wall time on this Apple M3 (four performance
+and four efficiency cores, 8 GB RAM). Each run used the same committed solver
+(`936d7e7a`), generated input, seed, OS integral engine and conventional RHF
+reference. Energy, density and Schwarz tolerances defaulted to 1e−10.
+All 12 runs reproduced Hamiltonian `f032498d77f973b5`, result
+`ea152a6472c1789b` and every recorded integer work counter in both phases.
+Each sampling phase processed 1,454,552,910 parents in 30,000 steps.
+
+Wall times and component medians are seconds. Worker, merge and prefill are
+sampling-only. RSS is the median of the three whole-process peaks.
+
+| Threads | Wall, repeats 1 / 2 / 3 | Median wall | Speedup vs 1 | Sampling | Worker | Merge | Prefill | Peak RSS (MiB) |
+|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 426.07 / 415.27 / 424.83 | 424.83 | 1.00× | 260.85 | 195.06 | 39.39 | 21.85 | 45.05 |
+| 2 | 250.39 / 245.46 / 564.09 | 250.39 | 1.70× | 154.17 | 99.83 | 28.44 | 21.54 | 44.41 |
+| 4 | 172.85 / 163.12 / 169.38 | 169.38 | 2.51× | 104.86 | 54.40 | 24.90 | 21.23 | 43.44 |
+| 8 | 151.51 / 149.47 / 157.81 | 151.51 | 2.80× | 92.95 | 41.02 | 27.88 | 19.80 | 45.53 |
+
+From four to eight threads the median sampling worker time fell by 13.38 s.
+Merge time rose by 2.98 s, and the complete calculation fell by 17.86 s.
+The eight-thread speedup over one thread was 2.80×. Prefill still consumed
+19.80 s during sampling at eight threads.
+
+Two attempts had incompatible clocks. The one-thread driver logged 1,083.48 s
+inside a 407.50 s launcher interval, and the two-thread driver logged 428.55 s
+inside 246.67 s. Their logs are retained separately and both were rerun.
+One earlier startup failed to fetch the Boys library before reaching SCF.
+The valid 564.09 s two-thread repeat is included. It took 564.88 s on the
+launcher clock and used 803.44 s of user CPU. Its trajectory and work counts
+matched the faster repeats. The cause of that slowdown was not established.
+
+#### Initial HF timing and spherical control
+
+In the initial hydrogen fluoride/6-31G pilot (50,000 walkers, four threads),
+the solver took **170.099 s** for one full trajectory. The shared CI Hamiltonian
 build took 0.000186 s after conventional SCF, equilibration took 68.133 s
 and sampling took 101.955 s. Those phases account for 170.088 s. Sampling
 worker time was 52.701 s, merge 24.521 s and diagonal prefill 20.463 s.
@@ -82,8 +117,7 @@ Merge includes the pairwise tree. Peak solver RSS over the complete run was
 48.5 MiB (macOS child-process `ru_maxrss`). The projected energy was
 −100.1155051 ± 0.00841 Eh, against the fixture’s exact −100.1156979 Eh.
 Hamiltonian ID `f032498d77f973b5`, result ID `ea152a6472c1789b`.
-One four-thread observation cannot establish the HF scaling curve or a change
-from the historical median.
+This pilot is separate from the repeated thread measurements.
 
 On cached spherical Be/6-31G*, two threads gave the lowest median wall time.
 Each of three repetitions ran 1, 2, 4 and 8 threads in that order. All twelve
@@ -128,50 +162,104 @@ hash and orthogonality check. `phase_wall_s` covers each complete propagation
 phase, including its existing nested counters. The runner saves the generated
 input beside its raw log.
 
-#### Remaining R1 measurements
+#### Reproducing the HF thread sweep
 
-Reuse `tests/run_fciqmc_scaling_profile.sh`,
-`tests/run_fciqmc_cpu_profile.sh`, and the E1 ladder for the remaining measurements.
+Run from the repository root. The script writes one directory per repetition
+and thread count. Set `ladder_dir` to the timestamped directory it prints.
 
-1. Record source diff and binary hash, compiler flags, Boys-library version,
-   basis/ECP files, engine, SCF tolerances, symmetry, cached/direct/RI route,
-   generated input, hardware/core topology, and numerical-library thread counts.
-   Persist generated inputs; use distinct directories for every repetition.
-2. Time input/basis/one-electron setup, SCF, AO ERI materialization, AO-to-MO
-   transformation, equilibration, and sampling separately. The current
-   `FCIQMC_PROFILE setup_s` measures propagation scaffolding, **not** SCF or
-   `build_all_mo_ci_setup`. Reconcile disjoint phase times with total wall time;
-   do not double-count nested merge counters.
-3. Keep HF/6-31G 50k as the continuity fixture at normal verbosity, with the
-   same stochastic settings. Its input pins `engine os`; newer Auto/HGP/Rys
-   improvements cannot be inferred from that case. Compare an Auto setup run
-   separately and validate its Hamiltonian before interpreting the difference.
-4. Refresh 1/2/4/8-thread results with at least three repeats, then the existing
-   10k/25k/50k/100k population ladder where informative. Four threads were best
-   historically, not necessarily on the current build/host. Track actual live
-   occupancy, attempts, rejected/zero spawns, and per-bin work, not just weight.
-5. Add one larger, reachable throughput case alongside the measured spherical control.
-   Screen timestep stability, reference occupancy, and equilibration before
-   long timing runs. Keep correctness, occupancy scaling, and orbital/electron
-   scaling as separate experiments.
-6. Report peak process RSS plus canonical population capacity, accumulator and
-   tagged-merge temporary storage, diagonal-cache size/misses, and retained
-   estimator/verbose data. The diagonal memo still retains visited determinants;
-   canonicalizing the live population did not bound it. The current driver
-   creates a fresh canonical `next_pop` each step: measure vector allocation
-   and merge-level temporaries, not the retired map-node allocation cost.
+```sh
+BASIS_PATH="$PWD/basis-sets" OMP_DYNAMIC=false \
+OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
+  tests/run_fciqmc_e1_profile_ladder.sh build/hartree-fock \
+  tests/inputs/exploratory/fciqmc/validation/hf_pop_50000.hfinp \
+  build/fciqmc-r1-hf50k 3 '1 2 4 8'
+python3 tests/summarize_fciqmc_ladder.py "$ladder_dir" \
+  --threads 1 2 4 8 --repetitions 3
+```
 
-The CPU sampling script currently waits one second before sampling. On a
-larger spherical/ECP setup that may profile SCF or integral construction;
-identify the sampled phase or trigger sampling at an explicit phase boundary.
-The ladder accepts a space-separated list of thread counts for one binary. Alternate separately built binaries
-as well when testing E4 or another change. Check probe overhead with profiling
-disabled and retain dispersion and host-load observations.
+Each JSON sidecar records the binary and generated-input SHA-256, thread
+environment, start/end host load, process wall and CPU times, and the solver's
+peak RSS. The summarizer checks the saved input against its hash, verifies
+the Hamiltonian/result fingerprints and integer work counters across runs,
+and reports medians and wall-time ranges. A driver interval longer than the
+enclosing process interval flags a clock discrepancy. The wall column uses
+Planck's driver timer. Process wall time also includes startup, input parsing and exit.
 
-Exit: current phase/memory tables and a decision whether the limiting resource
-is setup, worker propagation, merging, or problem admission. Do not fit a scaling
-exponent across different electron counts or quote the old wall times as a new
-baseline.
+#### Reading the setup and memory counters
+
+The serial executable times input parsing. The HF driver times geometry/basis
+and shell-pair setup, one-electron integrals or checkpoint loading, pre-SCF
+preparation, and the SCF call. The SCF call includes any conventional AO ERI
+build it performs. Stability following and property output run after that call.
+
+Within the post-HF Hamiltonian build, `ao_eri_s` times retrieval or construction
+of the AO tensor and `mo_eri_s` times its transformation. The RI route includes
+fitting and reconstruction in `mo_eri_s`. These are parts of `build_s`.
+`setup_peak_rss_bytes` is the process high-water mark from startup through
+Hamiltonian construction, measured before fingerprinting or starting walkers.
+The executable reports −1 when the platform cannot supply it.
+
+The `memory` record reports the maximum combined capacity of the incoming and
+outgoing canonical walker vectors, the retained parent/accumulator bin capacities,
+the two-level tagged merge bound, and the peak capacity of the temporary merged
+output vector. `diagonal_entries` counts unique cache insertions, including
+reference selection. Sample-series capacity is in bytes. Verbose coefficient
+tracking is counted in determinant entries. These components have different
+lifetimes. The process peak RSS is measured independently.
+
+#### Follow-up controls
+
+Use the diagnostic build separately from the original thread sweep. Hold the
+seed, timestep, sampling length and numerical-library thread limits fixed.
+For hydrogen fluoride, compare the original result fingerprint and all work
+counters to the diagnostic build; also check the printed estimators against
+the same build with profiling disabled. A single on/off timing is a check
+for gross probe cost, not a precise overhead estimate.
+
+At four threads, vary HF target weight (10k/25k/50k/100k) and record actual
+sampled parents per step, rejections, phase wall times and memory. For the
+larger water/6-31G control, keep 5α/5β and 50k target weight but increase
+the spatial orbitals from 11 to 13. Its determinant space is 1,656,369,
+compared with 213,444 for HF. A short water pilot screens for sign instability
+and reference drift; assess the production-length estimators against a
+separate PySCF FCI energy. Neither varying the walker weight nor comparing
+two molecules establishes an asymptotic scaling law.
+
+For the upstream checks, compare the explicit OS and Auto engine on short HF
+runs. Compare the Hamiltonian fingerprints before attributing any difference
+to propagation. Use the cached/direct spherical Be and Rb ECP setups for
+route-specific timings; four propagation steps suffice to reach the profile
+output and do not estimate an energy.
+
+The separate diagnostic binary was
+`8701846674b0df7d6ea4ae68a659ca5e818935ab0e368b1da722aeada9e883a7`.
+Two-thread setup controls (single observations; durations in milliseconds):
+
+| Fixture | Route | Basis/setup | One-electron | SCF | Post-HF AO | AO→MO | Setup peak MiB |
+|---|---|---:|---:|---:|---:|---:|---:|
+| Be spherical | cached | 1.33 | 0.10 | 5.54 | <0.001 | 0.40 | 13.39 |
+| Be spherical | constructed | 1.31 | 0.09 | 11.66 | 4.78 | 0.41 | 13.52 |
+| RbH⁸⁺ ECP | cached | 3.97 | 5.99 | 48.05 | <0.001 | 10.94 | 39.02 |
+
+The 2,000-equilibration/2,000-sampling HF pilots comparing OS and Auto gave
+identical Hamiltonian and result fingerprints (`f032498d77f973b5` and
+`8884c6b583a040a8`). SCF took 2.39 and 2.30 ms, respectively, and the MO
+transform 0.13 and 0.14 ms. Neither timing establishes an engine advantage.
+
+To repeat an individual measurement and the water reference:
+
+```sh
+OMP_DYNAMIC=false OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1 VECLIB_MAXIMUM_THREADS=1 \
+  tests/run_fciqmc_scaling_profile.sh build/hartree-fock \
+  tests/inputs/exploratory/fciqmc/validation/water_pop_50000.hfinp 4 /tmp/water-50k
+tests/pyscf/.venv/bin/python tests/pyscf/fciqmc_handoff_references.py \
+  tests/inputs/exploratory/fciqmc/validation/water_pop_50000.hfinp
+```
+
+For future CPU sampling, `tests/run_fciqmc_cpu_profile.sh` currently waits one
+second before sampling. Identify the sampled phase explicitly if setup might
+last that long. Kernel A/B runs should alternate the separately built binaries
+and retain dispersion and load observations.
 
 ### R2 — select a bounded optimization from the refreshed evidence
 

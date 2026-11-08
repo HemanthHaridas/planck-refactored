@@ -50,13 +50,20 @@ namespace HartreeFock::Correlation
         std::vector<double> ga;     // transformed two-electron integrals
     };
 
+    struct CIIntegralTimings
+    {
+        double ao_eri_seconds = 0.0;  // post-SCF lookup or construction
+        double mo_eri_seconds = 0.0;  // RI includes fitting and reconstruction
+    };
+
     // Validate the reference, check the packed-orbital and ci_max_dim limits, and
     // build h_eff / ga. `tag` prefixes error messages so the caller's method name
     // appears in them.
     std::expected<AllMOCISetup, std::string> build_all_mo_ci_setup(
         HartreeFock::Calculator &calc,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
-        const std::string &tag);
+        const std::string &tag,
+        CIIntegralTimings *timings = nullptr);
 
     std::expected<void, std::string> run_fci(
         HartreeFock::Calculator &calc,

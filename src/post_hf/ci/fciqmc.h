@@ -693,6 +693,8 @@ namespace HartreeFock::Correlation::CI::QMC
         double canonical_merge_stream_seconds = 0.0;
         double canonical_pairwise_seconds = 0.0;
         std::uint64_t canonical_merge_emitted = 0;
+        std::size_t peak_merge_tagged_bytes = 0;
+        std::size_t peak_merge_output_bytes = 0;
         std::array<FCIQMCBinWork, kFciqmcBins> bins{};
 
         void clear() noexcept { *this = {}; }

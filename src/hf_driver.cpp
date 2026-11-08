@@ -257,6 +257,13 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     const std::string &json_path)
 {
     const auto program_start = SystemClock::now(); // Start time
+    const bool qmc_profile = calculator._correlation == HartreeFock::PostHF::FCIQMC &&
+                             calculator._fciqmc.profile;
+    using ProfileClock = std::chrono::steady_clock;
+    const auto profile_time = [qmc_profile] {
+        return qmc_profile ? ProfileClock::now() : ProfileClock::time_point{};
+    };
+    const auto basis_start = profile_time();
 
     // The caller (main) has already parsed the input into `calculator` and
     // derived the checkpoint path; this driver owns the workflow from here.
@@ -692,6 +699,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     HartreeFock::Logger::blank();
 
     // ── One-electron integrals (or load from checkpoint) ─────────────────────
+    const auto one_electron_start = profile_time();
     bool loaded_from_checkpoint = false;
 
     const bool want_checkpoint =
@@ -834,6 +842,8 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         }
     }
 
+    const auto scf_setup_start = profile_time();
+
     // ── SAO basis for symmetry-blocked Fock diagonalization ──────────────────
     //
     // Suppressed under PCM. The SWIG cavity (src/solvation/pcm.cpp) samples
@@ -945,6 +955,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     }
 
     // ── SCF ───────────────────────────────────────────────────────────────────
+    const auto scf_start = profile_time();
     if (calculator._scf._scf == HartreeFock::SCFType::RHF)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Begin SCF Cycles :", "");
@@ -971,6 +982,18 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "SCF Failed :", res.error());
             return EXIT_FAILURE;
         }
+    }
+
+    if (qmc_profile)
+    {
+        using Seconds = std::chrono::duration<double>;
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "FCIQMC_PROFILE:",
+            std::format("phase=hf basis_setup_s={:.6f} one_electron_s={:.6f} "
+                        "scf_setup_s={:.6f} scf_s={:.6f}",
+                        Seconds(one_electron_start - basis_start).count(),
+                        Seconds(scf_setup_start - one_electron_start).count(),
+                        Seconds(scf_start - scf_setup_start).count(),
+                        Seconds(ProfileClock::now() - scf_start).count()));
     }
 
     // ── Wavefunction stability analysis ────────────────────────────────────────

@@ -96,6 +96,10 @@ namespace HartreeFock::Correlation::CI::QMC
         }
 
         [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }
+        [[nodiscard]] std::size_t retained_bytes() const noexcept
+        {
+            return entries_.capacity() * sizeof(entries_.front());
+        }
         [[nodiscard]] bool empty() const noexcept { return entries_.empty(); }
 
         // Indexed read of finalized output for the canonical cross-bin merge.

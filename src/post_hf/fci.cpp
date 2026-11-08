@@ -8,6 +8,7 @@
 #include "post_hf/integrals.h"
 
 #include <algorithm>
+#include <chrono>
 #include <format>
 #include <numeric>
 
@@ -26,7 +27,8 @@ namespace HartreeFock::Correlation
     std::expected<AllMOCISetup, std::string> build_all_mo_ci_setup(
         HartreeFock::Calculator &calc,
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
-        const std::string &tag)
+        const std::string &tag,
+        CIIntegralTimings *timings)
     {
         // Both solvers consume a common spatial MO set. Check the *final*
         // reference: a stability follow can turn an input RHF into a UHF.
@@ -110,21 +112,36 @@ namespace HartreeFock::Correlation
         // approximate (density-fitting error on the two-electron integrals), so
         // it is strictly opt-in via mp2_use_ri and never the default here.
         std::vector<double> ga;
+        using Clock = std::chrono::steady_clock;
+        using Seconds = std::chrono::duration<double>;
+        const auto ao_start = timings ? Clock::now() : Clock::time_point{};
+        auto mo_start = ao_start;
+        if (timings)
+            timings->ao_eri_seconds = 0.0;
         if (calc._mp2.use_ri)
         {
             auto ga_ri = transform_eri_internal_ri(calc, C);
             if (!ga_ri)
                 return std::unexpected(tag + ": " + ga_ri.error());
             ga = std::move(*ga_ri);
+            if (timings)
+                timings->mo_eri_seconds = Seconds(Clock::now() - mo_start).count();
         }
         else
         {
             std::vector<double> eri_local;
             const std::vector<double> &eri =
                 ensure_eri(calc, shell_pairs, eri_local, tag + " :");
+            if (timings)
+            {
+                mo_start = Clock::now();
+                timings->ao_eri_seconds = Seconds(mo_start - ao_start).count();
+            }
             if (eri.size() != integral_count)
                 return std::unexpected(tag + ": AO ERI tensor does not match the working basis.");
             ga = transform_eri_internal(eri, nbasis, C);
+            if (timings)
+                timings->mo_eri_seconds = Seconds(Clock::now() - mo_start).count();
         }
 
         if (ga.size() != integral_count)

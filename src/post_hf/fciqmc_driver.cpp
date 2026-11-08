@@ -21,6 +21,10 @@
 #include <utility>
 #include <vector>
 
+#if defined(__APPLE__) || defined(__linux__)
+#include <sys/resource.h>
+#endif
+
 namespace HartreeFock::Correlation
 {
     using HartreeFock::LogLevel;
@@ -29,6 +33,24 @@ namespace HartreeFock::Correlation
 
     namespace
     {
+        // Process high-water mark through this point. The units of ru_maxrss
+        // are bytes on Darwin and KiB on Linux.
+        std::int64_t peak_rss_bytes()
+        {
+#if defined(__APPLE__) || defined(__linux__)
+            struct rusage usage{};
+            if (getrusage(RUSAGE_SELF, &usage) == 0)
+            {
+#ifdef __APPLE__
+                return usage.ru_maxrss;
+#else
+                return static_cast<std::int64_t>(usage.ru_maxrss) * 1024;
+#endif
+            }
+#endif
+            return -1;
+        }
+
         // Diagnostic only. FNV-1a on little-endian words, including all bits
         // of every double. An identity for comparing runs, not a physics oracle.
         struct RunFingerprint
@@ -135,7 +157,9 @@ namespace HartreeFock::Correlation
         // slater_condon_element is the SAME matrix-element routine the
         // deterministic CI uses, so the two paths cannot disagree about the
         // Hamiltonian -- only about how they solve it.
-        HamiltonianOps make_ops(const AllMOCISetup &setup)
+        using DiagonalCache = std::unordered_map<DetKey, double, DetKeyHash>;
+        HamiltonianOps make_ops(const AllMOCISetup &setup,
+                                const std::shared_ptr<DiagonalCache> &diag_cache)
         {
             const int n_act = setup.n_act;
             const Eigen::MatrixXd *h = &setup.h_eff;
@@ -175,8 +199,6 @@ namespace HartreeFock::Correlation
             // is threaded it must be prefilled before the parallel region, or made
             // per-bin -- never a shared mutable map. It cannot change any value
             // either way: a memo is a pure cache of a pure function.
-            auto diag_cache =
-                std::make_shared<std::unordered_map<DetKey, double, DetKeyHash>>();
             ops.diagonal = [h, g, n_act, diag_cache](const DetKey &i) {
                 if (const auto it = diag_cache->find(i); it != diag_cache->end())
                     return it->second;
@@ -274,12 +296,26 @@ namespace HartreeFock::Correlation
         const auto &opt = calc._fciqmc;
         using Clock = std::chrono::steady_clock;
         using Seconds = std::chrono::duration<double>;
+        const bool had_ao_eri = !calc._eri.empty();
         const auto setup_start = opt.profile ? Clock::now() : Clock::time_point{};
-        auto setup = build_all_mo_ci_setup(calc, shell_pairs, tag);
+        CIIntegralTimings integral_timings;
+        auto setup = build_all_mo_ci_setup(calc, shell_pairs, tag,
+                                           opt.profile ? &integral_timings : nullptr);
         if (!setup)
             return std::unexpected(setup.error());
         if (opt.profile)
-            log_hamiltonian_identity(*setup, calc, Seconds(Clock::now() - setup_start).count());
+        {
+            const double build_seconds = Seconds(Clock::now() - setup_start).count();
+            const auto setup_peak_rss = peak_rss_bytes();
+            log_hamiltonian_identity(*setup, calc, build_seconds);
+            const char *route = calc._mp2.use_ri ? "ri" :
+                                (had_ao_eri ? "cached" : "constructed");
+            logging(LogLevel::Info, "FCIQMC_PROFILE:",
+                    std::format("phase=integrals route={} ao_eri_s={:.6f} mo_eri_s={:.6f} "
+                                "setup_peak_rss_bytes={}",
+                                route, integral_timings.ao_eri_seconds,
+                                integral_timings.mo_eri_seconds, setup_peak_rss));
+        }
 
         if (!(opt.target_walkers > 0.0))
             return std::unexpected(tag + ": fciqmc_walkers must be positive.");
@@ -288,7 +324,8 @@ namespace HartreeFock::Correlation
         if (opt.sampling_steps < 4)
             return std::unexpected(tag + ": fciqmc_steps must be at least 4.");
 
-        const auto ops = make_ops(*setup);
+        const auto diag_cache = std::make_shared<DiagonalCache>();
+        const auto ops = make_ops(*setup, diag_cache);
         DetKey reference = reference_determinant(setup->n_alpha, setup->n_beta,
                                                  setup->n_act, ops);
         // Print it. The wrong reference produced no error and no warning -- only a
@@ -373,6 +410,7 @@ namespace HartreeFock::Correlation
         FCIQMCDriverWork sampling_work;
         FCIQMCPropagationProfile equilibration_profile;
         FCIQMCPropagationProfile sampling_profile;
+        std::size_t peak_population_bytes = 0;
 
         const auto equilibration_start = opt.profile ? Clock::now() : Clock::time_point{};
         auto sampling_start = equilibration_start;
@@ -446,6 +484,9 @@ namespace HartreeFock::Correlation
                                  opt.walker_granularity,
                                  opt.initiator_threshold, spawn_ws, next_pop,
                                  step_profile);
+            if (opt.profile)
+                peak_population_bytes = std::max(
+                    peak_population_bytes, pop.retained_bytes() + next_pop.retained_bytes());
             pop = std::move(next_pop);
 
             // H2.8.4-b (fold B): compress + ordered L1 norm in one walk of the
@@ -635,6 +676,26 @@ namespace HartreeFock::Correlation
                         Seconds(sampling_start - equilibration_start).count());
             log_profile("sampling", sampling_work, sampling_profile,
                         Seconds(end - sampling_start).count());
+            // Both sets of bins retain capacity across steps. Their final
+            // capacities are high-water marks, even though their sizes reset.
+            std::size_t accumulator_bytes = 0, parent_bytes = 0;
+            for (const auto &bin : spawn_ws.bins)
+                accumulator_bytes += bin.retained_bytes();
+            for (const auto &parents : spawn_ws.parents)
+                parent_bytes += parents.capacity() * sizeof(parents.front());
+            logging(LogLevel::Info, "FCIQMC_PROFILE:",
+                    std::format("phase=memory population_pair_peak_bytes={} "
+                                "accumulator_bytes={} parent_bin_bytes={} merge_tagged_bound_bytes={} "
+                                "merge_output_peak_bytes={} "
+                                "diagonal_entries={} sample_series_bytes={} coefficient_ratio_entries={}",
+                                peak_population_bytes, accumulator_bytes, parent_bytes,
+                                std::max(equilibration_profile.peak_merge_tagged_bytes,
+                                         sampling_profile.peak_merge_tagged_bytes),
+                                std::max(equilibration_profile.peak_merge_output_bytes,
+                                         sampling_profile.peak_merge_output_bytes),
+                                diag_cache->size(), sizeof(double) *
+                                    (shift_samples.capacity() + projected_samples.capacity()),
+                                signed_population.size()));
             // Sample-series and endpoint check, outside the step timings. The
             // canonical population already iterates in determinant order.
             RunFingerprint result;

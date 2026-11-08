@@ -587,9 +587,16 @@ namespace HartreeFock::Correlation::CI::QMC
         {
             const auto start = profile ? std::chrono::steady_clock::now()
                                        : std::chrono::steady_clock::time_point{};
-            auto merged = merge_finalized_spawn_bins_pairwise_parallel(bins);
+            PairwiseSpawnMergeProfile merge_work;
+            auto merged = merge_finalized_spawn_bins_pairwise_parallel(
+                bins, profile ? &merge_work : nullptr);
             if (profile)
             {
+                profile->peak_merge_tagged_bytes = std::max(
+                    profile->peak_merge_tagged_bytes, merge_work.peak_live_bytes);
+                profile->peak_merge_output_bytes = std::max(
+                    profile->peak_merge_output_bytes,
+                    merged.entries.capacity() * sizeof(merged.entries.front()));
                 profile->canonical_merge_emitted += merged.entries.size();
                 profile->canonical_pairwise_seconds += std::chrono::duration<double>(
                     std::chrono::steady_clock::now() - start).count();

@@ -3520,10 +3520,18 @@ static void test_canonical_owner_roundtrips_through_propagation()
                                                map_rng, 3, 1.0, 0.0);
     SpawnWorkspace canonical_workspace;
     CanonicalWalkerPopulation canonical_next;
+    FCIQMCPropagationProfile profile;
     propagate_stochastic(canonical, 4, ops, 0.01, -2.0, canonical_rng,
-                         3, 1.0, 0.0, canonical_workspace, canonical_next);
+                         3, 1.0, 0.0, canonical_workspace, canonical_next, &profile);
+    PairwiseSpawnMergeProfile oracle_profile;
     const auto sequential_oracle = merge_finalized_spawn_bins_pairwise(
-        canonical_workspace.bins);
+        canonical_workspace.bins, &oracle_profile);
+    check(profile.peak_merge_tagged_bytes > 0 &&
+              profile.peak_merge_tagged_bytes == oracle_profile.peak_live_bytes,
+          "production merge reports the sequential tree's tagged storage bound");
+    check(profile.peak_merge_output_bytes ==
+              sequential_oracle.entries.capacity() * sizeof(CanonicalWalkerPopulation::Entry),
+          "production merge reports its intermediate output vector capacity");
     check(canonical_next.size() == sequential_oracle.entries.size(),
           "M1 production population retains sequential merge entry count");
     for (std::size_t i = 0; i < canonical_next.size()

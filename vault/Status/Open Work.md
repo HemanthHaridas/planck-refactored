@@ -291,12 +291,13 @@ None of these blocks correctness. Take each up only with a current profile.
   (`src/post_hf/ci/ci.cpp`, ~0.1–0.2 %). Validate any sigma change on an
   iterative case (`o2_fci_rohf_sto3g`, `be_fci_spherical_631gd`).
 - **FCIQMC** (`docs/FCIQMC_SCALING_INVESTIGATION.md`), in order:
-  - R1 has the spherical Be thread ladder and one four-thread HF/6-31G 50k
-    timing. Repeat the full HF ladder at 1/2/4/8 threads and break down setup
-    and peak memory. Be’s merge cost grew beyond two threads. Test a sequential
-    merge for small tree levels against both workloads.
-  - R2: choose a kernel from current attribution. E2 was rejected. Keep E4
-    test-only until a paired retest passes.
+  - R1: both three-repeat thread sweeps are complete. On this M3, HF/6-31G
+    at 50k walkers was fastest at eight threads (151.51 s; 2.80× over one),
+    while spherical Be was fastest at two. Finish the setup, memory, population
+    and larger-system comparisons before interpreting these as general limits.
+  - R2: test a sequential merge at small tree levels against both workloads;
+    require matching trajectories and a repeatable end-to-end gain. E2 was
+    rejected. Keep E4 test-only until a paired retest passes.
   - R3, conditional: a fixed-orbital active-space adapter.
   - A scientific target and a resource budget are still unselected.
 - **ccgen generated kernels** (`docs/CCGEN_CC_OPENMP.md`,
