@@ -1,66 +1,50 @@
 # What does Planck need for PCM geometry optimizations and frequencies?
 
-Research scope, opened 2026-10-26. It expires when the work lands; rewrite it
-then as the answer. Status lives in `vault/Status/Open Work.md`.
+Answer (2026-11-08). The scope opened 2026-10-26 has landed; this document
+now records what was built and why. Remaining gaps are listed under
+"Not done" and in `vault/Status/Open Work.md`.
 
-## Where it stands (2026-11-08)
+## Answer
 
-**Analytic PCM gradients work.** `calculation gradient` with C-PCM runs for
-RHF, UHF, RKS and UKS, in the Cartesian and spherical bases, in both
-binaries. The gradient matches PySCF 2.13.0 to every printed digit (DFT
-within 1.6e-11 Ha/Bohr), term by term as well as in total, and matches a
-five-point finite difference of the SCF energy to 4.2e-8 Ha/Bohr. It is
-cheap: 0.46 s of a 33 s anthracene/6-31G* gradient run.
+**It needed a smooth cavity, an analytic gradient, and a cavity rebuilt at
+every geometry. All three exist.** C-PCM geometry optimization, frequencies,
+and geometry optimization followed by frequencies run for RHF, UHF, RKS and
+UKS, in the Cartesian and spherical bases, in both binaries. Against PySCF
+2.13.0:
 
-One step remains: 5, geometry optimization and frequencies. That step is
-mostly about the cavity being rebuilt at every geometry, not about new
-derivatives.
+| Quantity | Case | Agreement |
+|---|---|---|
+| Energy | Water RHF/UHF/RKS, C1 H2O2, Cartesian and spherical | every printed digit |
+| Gradient, per term | C1 H2O2 RHF | all ten printed digits for `grad_nuc`, `grad_qv`, `grad_solver` |
+| Gradient, total | H2O2 (both bases), water⁺ UHF; water RKS PBE | every printed digit; 1.6e-11 Ha/Bohr |
+| Gradient vs energy FD | C1 H2O2 RHF | 4.2e-8 Ha/Bohr (printed-energy limit) |
+| Optimized energy | Water RHF / water RKS PBE | 1.3e-9 Eh / every printed digit |
+| Frequencies | Water RHF, against PySCF's analytic PCM Hessian | ≤ 0.31 cm⁻¹ |
 
-| Step | What | Status | Gate |
+The path there:
+
+| Step | What | Landed | Gate |
 |---|---|---|---|
-| 1 | Smooth SWIG cavity | Done 2026-11-07 | Four `*_pcm_swig_631gd` cases match PySCF; `water_rhf_pcm_smoothness_sto3g` |
-| 2 | No stored AO matrices | Done 2026-11-07 | All PCM cases unchanged |
-| 3 | Per-iteration cost back to parity | Done 2026-11-07 | Acene timing ladder |
-| 6 | Spherical basis | Done 2026-11-08 | Three `*_pcm_swig_spherical_631gd` cases match PySCF `cart=False` |
-| 4a | Cavity data for the gradient | Done 2026-11-08 | — |
-| 4b | `grad_nuc`, `grad_solver` | Done 2026-11-08 | `planck-pcm-cavity-gradient-fd`: 2.8e-10 / 1.1e-9 Ha/Bohr |
-| 4c | `grad_qv` | Done 2026-11-08 | `planck-pcm-qv-gradient-fd`: 1.6e-14 (6-31G*) / 7.7e-14 (cc-pVTZ) |
-| 4d | Wired in, PySCF-gated | Done 2026-11-08 | Four `*_pcm_swig_gradient_*` cases match PySCF; `h2o2_rhf_pcm_swig_gradient_fd_631gd` 4.2e-8 |
-| 5 | Geomopt and frequencies | **Next** | — |
+| 1 | Smooth SWIG cavity | 2026-11-07 | Four `*_pcm_swig_631gd` cases; `water_rhf_pcm_smoothness_sto3g` |
+| 2 | No stored AO matrices | 2026-11-07 | All PCM cases unchanged |
+| 3 | Per-iteration cost back to parity | 2026-11-07 | Acene timing ladder |
+| 6 | Spherical basis | 2026-11-08 | Three `*_pcm_swig_spherical_631gd` cases |
+| 4a | Cavity data for the gradient | 2026-11-08 | — |
+| 4b | `grad_nuc`, `grad_solver` | 2026-11-08 | `planck-pcm-cavity-gradient-fd` |
+| 4c | `grad_qv` | 2026-11-08 | `planck-pcm-qv-gradient-fd` |
+| 4d | Gradient wired in | 2026-11-08 | Four `*_pcm_swig_gradient_*` cases; `h2o2_rhf_pcm_swig_gradient_fd_631gd` |
+| 5 | Geomopt and frequencies | 2026-11-08 | `water_rhf_pcm_swig_geomoptfreq_631gd`, `water_rks_pbe_pcm_swig_geomopt_631gd` |
 
-Every term and the wired total have gates, and each gate fails when its
-term is deliberately broken (see the record below).
+Every gate fails when the piece it covers is deliberately broken (see each
+step's record below).
 
-## What remains
+## Not done
 
-### 5. Geometry optimization and frequencies
-
-Lifting the gate is not enough here: the inner loops would lose PCM without
-any error. `src/opt/geomopt.cpp` (`run_*` at ~95–99),
-`src/freq/hessian.cpp` (~84–88) and the post-optimization symmetry SCF in
-`src/hf_driver.cpp` (~1735) all call `run_*` without a PCM state.
-
-- Each displaced geometry needs its own `build_pcm_state`, at 0.08–0.4 s
-  per build on the acene ladder. Put the build in
-  `rebuild_basis_dependent_state` or next to it, so all three loops share
-  one path.
-- The same loops call `compute_{rhf,uhf,rohf}_gradient` directly, so they
-  must also add `Gradient::pcm_gradient` with that geometry's state. In 4d
-  it is added only at the driver's gradient site and in the KS gradient.
-- Check that the DFT geomopt/freq callbacks rebuild through `prepare`
-  (`prepared.pcm`) at every geometry.
-- Gates:
-  - water in water optimized against PySCF's `geometric_solver`;
-  - frequencies against a PySCF Hessian from finite differences of its
-    analytic gradient;
-  - a geomopt case that asserts the final energy is the PCM energy. This
-    catches the silent loss of PCM in the inner loop.
-
-### Small items
-
-- **Stale comment.** The SAO-suppression comment in `src/hf_driver.cpp`
-  (~841) still describes the Fibonacci cavity. The reason it gives (the
-  cavity is not symmetry-adapted) still holds for SWIG.
+- **Imaginary-mode following with PCM** is still rejected by `io.cpp`. The
+  HF loops it uses now carry the cavity, but no case gates it.
+- **Not gated for geomopt and frequencies:** UHF/UKS, the spherical basis,
+  and planck-dft frequencies. They run through the same code paths as the
+  gated cases (`pcm_gradient`, the per-geometry cavity rebuild).
 - **Deferred from step 3:** pair screening by a tolerance-linked prefactor
   bound, and a cheaper φ_el contraction. Take these up only if a larger
   system shows the sweeps dominating again.
@@ -480,6 +464,52 @@ calculation:
 anthracene), even though it takes the VRR one level higher and runs three
 slices, because it groups the tesserae by atom. The serial O(n_tess²)
 `grad_solver` stays well under 0.1 s, so it is not threaded.
+
+### Step 5: geometry optimization and frequencies
+
+Lifting the input gate was not enough. The HF inner loops called `run_*`
+and `compute_*_gradient` without a PCM state, so PCM would have been
+silently dropped. Each now builds its own cavity at its geometry, passes it
+to the SCF, and adds `Gradient::pcm_gradient`. `build_pcm_state` returns a
+disabled state without solvation, so the gas-phase path is unchanged:
+
+- `src/opt/geomopt.cpp`: the energy+gradient step;
+- `src/freq/hessian.cpp`: every displaced geometry;
+- `src/hf_driver.cpp`: the post-optimization symmetry SCF, which reorients
+  the molecule. Without the cavity there, a PCM optimization ended on the
+  gas-phase energy (−76.0107 against −76.0222 Eh on water).
+
+planck-dft needed no new code: `prepare_current_geometry` already rebuilt
+`prepared.pcm` at every geometry, and since 4d `compute_analytic_ks_gradient`
+adds the PCM term. The plan to move the build into
+`rebuild_basis_dependent_state` was dropped: one `build_pcm_state` call per
+loop is shorter than changing that helper's return type for every caller.
+`io.cpp` now rejects only imaginary-mode following under PCM.
+
+`tests/pyscf/pcm_swig_references.py` optimizes `geomopt` inputs with
+`geometric_solver` (`gau_tight`) and, for `geomoptfreq`, takes harmonic
+frequencies from PySCF's analytic PCM Hessian. That is an independent
+check of Planck's finite differences of analytic gradients.
+
+| Case | Planck | PySCF 2.13.0 |
+|---|---|---|
+| `water_rhf_pcm_swig_geomoptfreq_631gd`, E_opt | −76.0222209762 | −76.0222209775 |
+| same, frequencies (cm⁻¹) | 1791.40 / 4044.88 / 4142.97 | 1791.47 / 4044.57 / 4142.67 |
+| `water_rks_pbe_pcm_swig_geomopt_631gd`, E_opt | −76.3327063368 | −76.3327063368 |
+
+Planck's default thresholds stop 1.3e-9 Eh above PySCF's `gau_tight`
+optimum. The reoriented final symmetry SCF reproduces the optimizer's
+energy to every printed digit on water, so the cavity's accepted
+orientation dependence did not show here.
+
+**Mutations.** Each fails `water_rhf_pcm_swig_geomoptfreq_631gd`:
+
+- no cavity in the final symmetry SCF: the energy is −76.0106984804, the
+  gas-phase energy;
+- no PCM term in the geomopt gradient: the run reaches the wrong optimum
+  (−76.021797337) with a bend at 1729.79 cm⁻¹;
+- no cavity in the Hessian loop: gas-phase frequencies (bend 1763.24,
+  stretch 4031.66 cm⁻¹).
 
 ## Not in this scope
 

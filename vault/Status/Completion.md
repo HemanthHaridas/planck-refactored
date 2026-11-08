@@ -36,7 +36,7 @@ historical design context, but they are no longer the source of truth for
 - Symmetry detection, MO irrep labeling, and SAO-blocked Fock diagonalization
 - Wavefunction stability analysis for RHF/UHF, plus optional instability following
 - Mulliken, Lowdin, Mayer, dipole, quadrupole, and related property reporting
-- PCM solvation for single-point RHF/UHF runs
+- C-PCM solvation for RHF/UHF energies, analytic gradients, geometry optimization and frequencies
 - **SOSCF for RHF, UHF, RKS, and UKS** (second-order, augmented-Hessian
   orbital step convergence acceleration), reusing the CASSCF CIAH solver
   and `apply_orbital_rotation` unchanged for all four. Runs as a transient
@@ -396,7 +396,7 @@ historical design context, but they are no longer the source of truth for
 - Grid quality levels: Coarse, Normal, Fine, UltraFine, with explicit
   `grid_radial_points` / `grid_angular_points` overrides and versioned
   `grid_policy` pruning schedules
-- Single-point PCM solvation for RKS/UKS
+- C-PCM solvation for RKS/UKS energies, analytic gradients, geometry optimization and frequencies
 - Linear-response TDDFT / Casida and TDA excited states
 - Hybrid and range-separated TDDFT (2026-10-16, `docs/RS_TDDFT.md`).
   The full-Casida B-matrix exact-exchange term used `(ia|bj)` instead of
@@ -429,6 +429,20 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **PCM geometry optimization and frequencies (2026-11-08,
+  `docs/PCM_GEOMETRY_SCOPE.md` step 5; the scope is now an answer).** The
+  HF geomopt step, every Hessian displacement and the post-optimization
+  symmetry SCF each build the cavity at their own geometry, pass it to the
+  SCF, and add `Gradient::pcm_gradient`. Before this, they ran without PCM
+  and nothing reported it. planck-dft already rebuilt the cavity in
+  `prepare_current_geometry`. Against PySCF 2.13.0 (`geometric_solver`
+  gau_tight, analytic PCM Hessian): water RHF/6-31G* E_opt 1.3e-9 Eh,
+  frequencies within 0.31 cm⁻¹; water RKS PBE E_opt to every printed digit
+  (`water_rhf_pcm_swig_geomoptfreq_631gd`,
+  `water_rks_pbe_pcm_swig_geomopt_631gd`). Removing the cavity from any of
+  the three loops, or the PCM term from the geomopt gradient, fails the
+  gate. Imaginary-mode following under PCM stays rejected (not gated).
+
 - **Analytic PCM gradients (2026-11-08, `docs/PCM_GEOMETRY_SCOPE.md`
   step 4).** `calculation gradient` with C-PCM runs for RHF, UHF, RKS and
   UKS, Cartesian and spherical. `Gradient::pcm_gradient` re-solves the
@@ -444,7 +458,7 @@ historical design context, but they are no longer the source of truth for
   four cases (`*_pcm_swig_gradient_*`; DFT 1.6e-11), and a five-point FD of
   the SCF energy to 4.2e-8 Ha/Bohr. Dropping any one term fails every
   gate. Cost: 0.46 s of a 33 s anthracene/6-31G* run. Geomopt and
-  frequencies with PCM are still rejected (step 5). Found on the way:
+  frequencies followed the same day (step 5, entry above). Found on the way:
   `planck-esp-points` had failed since the SWIG cavity, because its
   hand-built tesserae left ξ = 0; fixed in the test.
 

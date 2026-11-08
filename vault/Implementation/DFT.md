@@ -96,7 +96,7 @@ construction remain serial; any future reduction there must use fixed order.
 
 ## PCM Solvation
 
-`planck-dft` can add a self-consistent C-PCM reaction field for single-point RKS/UKS calculations. The DFT driver builds a reusable `PCMState` once, then adds the reaction potential and solvation energy during each SCF iteration.
+`planck-dft` can add a self-consistent C-PCM reaction field to RKS/UKS calculations. The DFT driver builds a reusable `PCMState` once, then adds the reaction potential and solvation energy during each SCF iteration.
 
 The cavity is SWIG (Lange-Herbert: Lebedev points, a smooth switching
 function, Gaussian surface charges) with f(ε) = (ε−1)/ε, the same scheme as
@@ -107,7 +107,7 @@ Key pieces:
 - per-iteration reaction field: `HartreeFock::Solvation::evaluate_pcm_reaction_field`
 - implementation: `src/solvation/pcm.{h,cpp}`
 
-Analytic KS gradients currently warn/error if PCM geometry response would be required; PCM is not wired through DFT geometry optimization, frequencies, or TDDFT.
+`compute_analytic_ks_gradient` adds the C-PCM geometry response through `HartreeFock::Gradient::pcm_gradient` (grad_nuc + grad_qv + grad_solver), and `prepare_current_geometry` rebuilds the cavity at every geometry, so PCM gradients, geometry optimization and frequencies work for RKS/UKS (`docs/PCM_GEOMETRY_SCOPE.md`). PCM is not wired through TDDFT or the double-hybrid gradients.
 
 ## Supported Functionals
 

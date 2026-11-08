@@ -13,8 +13,8 @@ tags: [architecture, modules, namespace]
 
 | Binary | Entry | Purpose |
 |--------|-------|---------|
-| `hartree-fock` | `src/driver.cpp` | RHF/UHF/ROHF SCF, PCM single points, MP2, CC, CASSCF/RASSCF/FCI, analytic gradients, geomopt, frequencies |
-| `planck-dft` | `src/dft/main.cpp` | Kohn-Sham DFT (RKS/UKS), TDDFT, PCM single points, gradient, geomopt, frequencies |
+| `hartree-fock` | `src/driver.cpp` | RHF/UHF/ROHF SCF, PCM (energies, gradients, geomopt, frequencies), MP2, CC, CASSCF/RASSCF/FCI, analytic gradients, geomopt, frequencies |
+| `planck-dft` | `src/dft/main.cpp` | Kohn-Sham DFT (RKS/UKS), TDDFT, PCM (energies, gradients, geomopt, frequencies), gradient, geomopt, frequencies |
 | `chkdump` | `tools/` | Checkpoint file inspector (BUILD_TOOLS=ON) |
 
 Both share: integrals, basis set handling, symmetry, I/O, checkpointing, PCM implementation, and geometry optimization primitives.

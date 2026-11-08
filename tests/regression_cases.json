@@ -7868,6 +7868,75 @@
    ]
   },
   {
+   "id": "water_rhf_pcm_swig_geomoptfreq_631gd",
+   "_note": "PCM geometry optimization + frequencies (docs/PCM_GEOMETRY_SCOPE.md step 5). Every geomopt step, every Hessian displacement and the post-optimization symmetry SCF rebuild the cavity at their own geometry and add Gradient::pcm_gradient. PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py: geometric_solver gau_tight optimum -76.0222209775 Eh (Planck's default thresholds land 1.3e-9 above), harmonic frequencies from PySCF's analytic PCM Hessian 1791.47 / 4044.57 / 4142.67 cm^-1 (Planck's FD of analytic gradients 1791.40 / 4044.88 / 4142.97). The final energy is checked after the symmetry-reoriented SCF: without the cavity there it would be the gas-phase energy, 0.0127 Eh higher.",
+   "input": "tests/inputs/regression/hf/water_rhf_pcm_swig_geomoptfreq_631gd.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "timeout_s": 900,
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with",
+    "Final Energy",
+    "Vibrational Frequencies"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0222209775,
+     "atol": 1e-08
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 0.0005
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1791.47,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 4044.57,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 4142.67,
+     "atol": 1.0
+    }
+   ]
+  },
+  {
+   "id": "water_rks_pbe_pcm_swig_geomopt_631gd",
+   "_note": "PCM geometry optimization in planck-dft (docs/PCM_GEOMETRY_SCOPE.md step 5): prepare_current_geometry rebuilds the cavity at every step and compute_analytic_ks_gradient adds Gradient::pcm_gradient. PySCF 2.13.0 geometric_solver gau_tight optimum on the unpruned 150 x 590 grid: -76.3327063368 Eh, which Planck reproduces to every printed digit (554 tesserae in both).",
+   "input": "tests/inputs/regression/dft/water_rks_pbe_pcm_swig_geomopt_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended"
+   ],
+   "timeout_s": 900,
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with 554 surface points",
+    "Final Energy"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3327063368,
+     "atol": 1e-08
+    }
+   ]
+  },
+  {
    "id": "water_rhf_pcm_smoothness_sto3g",
    "_note": "SWIG C-PCM smoothness gate (docs/PCM_GEOMETRY_SCOPE.md step 1): 101-point O-H stretch, asserts the fourth difference of E stays below 5e-9 Eh. Measured 2.3e-9 on the SWIG cavity; the pre-SWIG Fibonacci cavity fails it at 4.4e-5 (checked against a pre-change binary).",
    "input": "tests/inputs/regression/hf/water_rhf_pcm_smoothness_sto3g.hfinp",

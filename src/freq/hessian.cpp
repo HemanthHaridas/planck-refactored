@@ -18,6 +18,7 @@
 #include "lookup/elements.h"
 #include "scf/scf.h"
 #include "scf/working_state.h"
+#include "solvation/pcm.h"
 #include "symmetry/integral_symmetry.h"
 #include "symmetry/vibrational_symmetry.h"
 
@@ -79,13 +80,19 @@ static std::expected<Eigen::MatrixXd, std::string> _run_sp_gradient_freq_hf(Hart
         return std::unexpected("Hessian working-state rebuild failed: " + shell_pairs_res.error());
     std::vector<HartreeFock::ShellPair> shell_pairs = std::move(*shell_pairs_res);
 
+    // The PCM cavity moves with the atoms, so it is rebuilt at every geometry
+    // (a disabled state without solvation). Its gradient term is added below.
+    auto pcm = HartreeFock::Solvation::build_pcm_state(calc);
+    if (!pcm)
+        return std::unexpected("Hessian PCM setup failed: " + pcm.error());
+
     std::expected<void, std::string> scf_res;
     if (calc._scf._scf == HartreeFock::SCFType::UHF)
-        scf_res = HartreeFock::SCF::run_uhf(calc, shell_pairs);
+        scf_res = HartreeFock::SCF::run_uhf(calc, shell_pairs, &*pcm);
     else if (calc._scf._scf == HartreeFock::SCFType::ROHF)
-        scf_res = HartreeFock::SCF::run_rohf(calc, shell_pairs);
+        scf_res = HartreeFock::SCF::run_rohf(calc, shell_pairs, &*pcm);
     else
-        scf_res = HartreeFock::SCF::run_rhf(calc, shell_pairs);
+        scf_res = HartreeFock::SCF::run_rhf(calc, shell_pairs, &*pcm);
 
     if (!scf_res)
         return std::unexpected("Hessian SCF failed: " + scf_res.error());
@@ -112,6 +119,11 @@ static std::expected<Eigen::MatrixXd, std::string> _run_sp_gradient_freq_hf(Hart
             return std::unexpected("Hessian RHF gradient failed: " + grad_res.error());
         grad = std::move(*grad_res);
     }
+
+    auto pcm_grad = HartreeFock::Gradient::pcm_gradient(calc, shell_pairs, &*pcm);
+    if (!pcm_grad)
+        return std::unexpected("Hessian PCM gradient failed: " + pcm_grad.error());
+    grad += *pcm_grad;
 
     calc._gradient = grad;
     return grad;

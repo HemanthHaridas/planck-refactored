@@ -836,10 +836,12 @@ std::expected<int, std::string> HartreeFock::Driver::run(
 
     // ── SAO basis for symmetry-blocked Fock diagonalization ──────────────────
     //
-    // Suppressed under PCM. The cavity is tessellated with a Fibonacci
-    // (golden-angle) sphere (src/solvation/pcm.cpp), which has NO point-group
-    // symmetry by construction, so the reaction potential V_pcm is not
-    // symmetry-adapted. SAO block-diagonalization reads only the diagonal irrep
+    // Suppressed under PCM. The SWIG cavity (src/solvation/pcm.cpp) samples
+    // each atomic sphere with a Lebedev grid in the lab frame, which does not
+    // carry the molecule's point group, so the reaction potential V_pcm is not
+    // symmetry-adapted (docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md). (The numbers
+    // below were measured on the earlier Fibonacci cavity, which had the same
+    // property.) SAO block-diagonalization reads only the diagonal irrep
     // blocks of F and silently discards the off-block elements V_pcm puts there:
     // the SCF then converges to a fixed point of a symmetry-PROJECTED problem
     // (ΔE = ΔP = 0 exactly) while ‖FPS-SPF‖ stays pinned at ~4e-5 forever,
@@ -1699,6 +1701,19 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             }
             std::vector<HartreeFock::ShellPair> sp_sym = std::move(*sp_sym_res);
 
+            // The final SCF runs in the symmetry-reoriented frame, so the PCM
+            // cavity is rebuilt there (a disabled state without solvation);
+            // without it a PCM optimization would end on a gas-phase energy.
+            auto pcm_sym = HartreeFock::Solvation::build_pcm_state(calculator);
+            if (!pcm_sym)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning,
+                    "Final Symmetry SCF :",
+                    std::format("PCM setup failed: {}", pcm_sym.error()));
+                goto skip_final_symmetry_scf;
+            }
+
             // Try SAO symmetry blocking. Suppressed under PCM for the same reason
             // as the startup path above: the cavity is not symmetry-adapted.
             if (calculator._solvation._model == HartreeFock::SolvationModel::None &&
@@ -1738,11 +1753,11 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             // Run SCF
             std::expected<void, std::string> scf_sym_res;
             if (calculator._scf._scf == HartreeFock::SCFType::UHF)
-                scf_sym_res = HartreeFock::SCF::run_uhf(calculator, sp_sym);
+                scf_sym_res = HartreeFock::SCF::run_uhf(calculator, sp_sym, &*pcm_sym);
             else if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
-                scf_sym_res = HartreeFock::SCF::run_rohf(calculator, sp_sym);
+                scf_sym_res = HartreeFock::SCF::run_rohf(calculator, sp_sym, &*pcm_sym);
             else
-                scf_sym_res = HartreeFock::SCF::run_rhf(calculator, sp_sym);
+                scf_sym_res = HartreeFock::SCF::run_rhf(calculator, sp_sym, &*pcm_sym);
 
             if (!scf_sym_res)
             {

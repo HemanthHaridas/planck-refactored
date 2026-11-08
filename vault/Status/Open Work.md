@@ -85,16 +85,12 @@ rerun for it.
   Hessian, no CPHF), the response kernel, and VV10. Step 1 must make every
   non-SCF workflow refuse meta-GGA by name: the KS gradient picks its terms by
   `vsigma.cols()` and would otherwise silently drop the τ term.
-- **PCM geometry optimizations and frequencies**
-  (`docs/PCM_GEOMETRY_SCOPE.md`). The smooth SWIG cavity, its memory and
-  cost work, spherical PCM, and analytic PCM gradients (step 4, 2026-11-08)
-  have landed (see Completion). Next is step 5: geomopt and frequencies.
-  Their inner loops (`geomopt.cpp`, `hessian.cpp`, and the post-optimization
-  symmetry SCF in `hf_driver.cpp`) call `run_*` and `compute_*_gradient`
-  without a PCM state, so lifting the input gate alone would silently drop
-  the solvent. Each geometry needs its own cavity plus
-  `Gradient::pcm_gradient`. Deferred from step 3: tolerance-linked pair
-  screening, and a cheaper φ_el contraction.
+- **PCM leftovers** (`docs/PCM_GEOMETRY_SCOPE.md`, now an answer; see
+  Completion). Imaginary-mode following under PCM is rejected (the loops
+  would carry the cavity, but no case gates it). UHF/UKS and spherical
+  geomopt/frequencies, and planck-dft frequencies, run through the gated
+  code paths but have no case of their own. Deferred from step 3:
+  tolerance-linked pair screening, and a cheaper φ_el contraction.
 - **Double hybrids** (`docs/DH_IMPLEMENTATION.md` §9):
   - UKS DH geometry optimization and frequencies are rejected. The gradient
     they would call already passes FD.
