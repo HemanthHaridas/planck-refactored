@@ -43,7 +43,9 @@ def run(path):
     mf.with_solvent.method = "C-PCM"
     mf.with_solvent.eps = 78.3553
     mf.with_solvent.lebedev_order = 29
-    mf.init_guess = "1e"
+    # Follow the input's guess so both codes start in the same basin:
+    # hcore -> 1e, sad -> minao (PySCF's atomic-density guess).
+    mf.init_guess = "minao" if field(text, "guess") == "sad" else "1e"
     mf.conv_tol = 1e-12
     e = mf.kernel()
     assert mf.converged, path.stem

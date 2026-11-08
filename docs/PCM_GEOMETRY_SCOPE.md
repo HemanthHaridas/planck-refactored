@@ -381,13 +381,15 @@ pre-step-3 path, called six times per derivative.
    | Case (6-31G*, `cart=False`) | PySCF 2.13.0 E / Eh | Tesserae |
    |---|---|---|
    | `water_rhf_pcm_swig_spherical_631gd` | −76.0158401249 | 542 |
-   | `water_cation_uhf_pcm_swig_spherical_631gd` | −75.6750550413 | 542 |
+   | `water_cation_uhf_pcm_swig_spherical_631gd` | −75.7488908168 | 542 |
    | `water_rks_pbe_pcm_swig_spherical_631gd` | −76.3201409489 | 542 |
 
    Planck matches each case to every printed digit, which covers the RHF,
-   UHF and DFT call sites. The water cation lands 0.076 Eh above its
-   Cartesian counterpart, in both codes, from the hcore guess. This is the
-   open-shell hcore saddle (vault Open Work), not PCM. When step 4 lands,
+   UHF and DFT call sites. The water cation uses `guess sad` (PySCF
+   `minao`). From `hcore`, both codes stop on the open-shell saddle at
+   −75.6750550413, 0.076 Eh higher (UHF internal λ_min −0.0715; see vault
+   Open Work). SAD reaches the stable minimum, 1.8e-3 above the Cartesian
+   case, close to neutral water's 1.4e-3. When step 4 lands,
    `pcm_gradient` must lift P_total once at entry, the same way.
 
    **Cleanup while here:** the SAO-suppression comment in

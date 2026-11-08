@@ -9,7 +9,7 @@
 
 %begin_scf
     scf_type        uhf
-    guess           hcore
+    guess           sad
     max_cycles      100
     tol_energy      1.0e-10
     tol_density     1.0e-10

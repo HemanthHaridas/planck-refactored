@@ -7654,7 +7654,7 @@
   },
   {
    "id": "water_cation_uhf_pcm_swig_spherical_631gd",
-   "_note": "SWIG C-PCM spherical gate (docs/PCM_GEOMETRY_SCOPE.md step 6). PySCF 2.13.0 C-PCM cart=False reference from tests/pyscf/pcm_swig_references.py (Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). The density is lifted to Cartesian for phi_el and V_rxn is brought back to the working basis inside evaluate_pcm_reaction_field; Planck matches to every printed digit with the same tessera count. Before step 6 this input was refused. Exercises the UHF call site. The state is 0.076 Eh above the Cartesian case's: from the hcore guess both Planck and PySCF land on the same higher water-cation state in the spherical basis (the open-shell hcore saddle, vault Open Work), not a PCM effect.",
+   "_note": "SWIG C-PCM spherical gate (docs/PCM_GEOMETRY_SCOPE.md step 6). PySCF 2.13.0 C-PCM cart=False reference from tests/pyscf/pcm_swig_references.py (Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). The density is lifted to Cartesian for phi_el and V_rxn is brought back to the working basis inside evaluate_pcm_reaction_field; Planck matches to every printed digit with the same tessera count. Before step 6 this input was refused. Exercises the UHF call site. Uses guess sad (PySCF minao): from hcore both codes stop on the open-shell water-cation saddle at -75.6750550413 (UHF internal lambda_min -0.0715, vault Open Work), 0.076 Eh up. SAD reaches the stable minimum (lambda_min +0.0753), 1.8e-3 above the Cartesian case, like neutral water's 1.4e-3.",
    "input": "tests/inputs/regression/hf/water_cation_uhf_pcm_swig_spherical_631gd.hfinp",
    "tags": [
     "extended"
@@ -7667,7 +7667,7 @@
     {
      "type": "metric_close",
      "metric": "rhf_total_energy",
-     "expected": -75.6750550413,
+     "expected": -75.7488908168,
      "atol": 1e-09
     }
    ]
