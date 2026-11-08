@@ -4534,7 +4534,7 @@ namespace DFT::Driver
             if (dft_gradient_debug_enabled())
                 print_gradient_component_report("D3", dispersion->gradient);
 
-            // C-PCM geometry response (docs/PCM_GEOMETRY_SCOPE.md step 4).
+            // C-PCM geometry response (docs/PCM_GEOMETRY.md step 4).
             auto pcm_grad = HartreeFock::Gradient::pcm_gradient(
                 calculator, prepared.shell_pairs, prepared.pcm ? &*prepared.pcm : nullptr);
             if (!pcm_grad)

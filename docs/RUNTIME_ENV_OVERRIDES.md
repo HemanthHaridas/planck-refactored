@@ -1,10 +1,13 @@
 # Which environment overrides may reach a production binary?
 
-**Answer (2026-11-07).** Only ones that change **what is printed**, never
-**what is computed**. Every override that changed a result, a solver, or the
+Answered 2026-11-07 (opened as a scope 2026-10-12). Status lives in
+`vault/Status/`.
+
+## Answer
+
+**Only ones that change what is printed, never what is computed.** Every override that changed a result, a solver, or the
 set of allowed workflows has been deleted or turned into an input keyword.
-Opened as a scope 2026-10-12; E1 and E4 landed that day, E2 and E3 on
-2026-11-07 (PR #181).
+E1 and E4 landed on 2026-10-12, E2 and E3 on 2026-11-07 (PR #181).
 
 ## The rule
 

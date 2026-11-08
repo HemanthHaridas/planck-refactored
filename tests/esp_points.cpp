@@ -589,7 +589,7 @@ namespace
     // b5 gate for SCF::reaction_field_potential -- the PCM reaction field term
     // phi_rxn(r) = sum_i q_i erf(xi_i |r - s_i|) / |r - s_i| that
     // `include_reaction_field` adds to the fitted potential. Since the SWIG
-    // cavity (docs/PCM_GEOMETRY_SCOPE.md step 1) each tessera is a Gaussian
+    // cavity (docs/PCM_GEOMETRY.md step 1) each tessera is a Gaussian
     // charge of width xi_i; this fixture predated that and left xi at its
     // default 0, which made every potential erf(0)/r = 0.
     //

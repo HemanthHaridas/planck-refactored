@@ -46,7 +46,7 @@ largest (valence) region:
 `grid_policy` selects a versioned pruning schedule (`GridPruningPolicy`).
 `legacy` is the default. `g4-3-v4` is a qualified opt-in policy, and it is
 mandatory (with `grid_radial_points 135` and no angular override) for UKS
-double-hybrid gradients. See `docs/DFT_GRID_CONVERGENCE_SCOPE.md`.
+double-hybrid gradients. See `docs/DFT_GRID_CONVERGENCE.md`.
 
 ## AO Evaluation
 
@@ -100,14 +100,14 @@ construction remain serial; any future reduction there must use fixed order.
 
 The cavity is SWIG (Lange-Herbert: Lebedev points, a smooth switching
 function, Gaussian surface charges) with f(ε) = (ε−1)/ε, the same scheme as
-PySCF's default C-PCM. See `docs/PCM_GEOMETRY_SCOPE.md`.
+PySCF's default C-PCM. See `docs/PCM_GEOMETRY.md`.
 
 Key pieces:
 - setup: `HartreeFock::Solvation::build_pcm_state`
 - per-iteration reaction field: `HartreeFock::Solvation::evaluate_pcm_reaction_field`
 - implementation: `src/solvation/pcm.{h,cpp}`
 
-`compute_analytic_ks_gradient` adds the C-PCM geometry response through `HartreeFock::Gradient::pcm_gradient` (grad_nuc + grad_qv + grad_solver), and `prepare_current_geometry` rebuilds the cavity at every geometry, so PCM gradients, geometry optimization and frequencies work for RKS/UKS (`docs/PCM_GEOMETRY_SCOPE.md`). PCM is not wired through TDDFT or the double-hybrid gradients.
+`compute_analytic_ks_gradient` adds the C-PCM geometry response through `HartreeFock::Gradient::pcm_gradient` (grad_nuc + grad_qv + grad_solver), and `prepare_current_geometry` rebuilds the cavity at every geometry, so PCM gradients, geometry optimization and frequencies work for RKS/UKS (`docs/PCM_GEOMETRY.md`). PCM is not wired through TDDFT or the double-hybrid gradients.
 
 ## Supported Functionals
 

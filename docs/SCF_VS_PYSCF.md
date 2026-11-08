@@ -1,12 +1,13 @@
 # Where does a Planck RHF lose to PySCF, and what closed it?
 
-Canonical status lives in `vault/Status/Completion.md` and
-`vault/Status/Open Work.md`. This file answers one question about direct-SCF
+Answered 2026-10-25. Status lives in `vault/Status/`.
+
+This file answers one question about direct-SCF
 RHF on water chains: where is the time lost relative to PySCF, and which
 levers paid? It follows `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`, which had
 already made the Fock build fast and closed.
 
-## Short answer
+## Answer
 
 Not where it looked, twice over.
 
@@ -258,6 +259,20 @@ bitwise against v1.2.0, so checks pinned to exact integral values move.
 7. **The Schwarz table is never density-screened**
    (`docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`, invariant 8).
 
+## Harness fixes made while measuring
+
+`tests/benchmarks/pyscf_bench.py` parsed the SCF table with an 8-field regex
+that also matched MO-energy rows. That inflated the iteration count about 3×
+(45 for a 15-iteration run) and returned a per-iteration time larger than the
+wall clock. It now reads `PLANCK_PHASE_TIMING` lines. It also gained
+`--pyscf-conv-tol-grad` (default 1e-7, matching Planck) and prints
+iteration counts and wall times for both codes. Later it was fixed to run
+PySCF genuinely direct (`_is_mem_enough` overridden, `_eri is None`
+asserted); its docstring had claimed both codes ran direct all along. It
+also gained `--spherical`. It still times PySCF's whole `kernel()`,
+including the first build, so PySCF's per-iteration column reads slightly
+high on small systems.
+
 ## Not done
 
 - **The direct-vs-direct end-to-end table.** Rerun
@@ -273,17 +288,3 @@ bitwise against v1.2.0, so checks pinned to exact integral values move.
   `_compute_2e_k_direct`) do not yet build incrementally.
 - **Gradients:** `docs/GRADIENT_INTEGRAL_PERFORMANCE.md`.
 - **RI-JK:** D3 in `docs/ERI_FOCK_BLAS_SCOPE.md`.
-
-## Harness fixes made while measuring
-
-`tests/benchmarks/pyscf_bench.py` parsed the SCF table with an 8-field regex
-that also matched MO-energy rows. That inflated the iteration count about 3×
-(45 for a 15-iteration run) and returned a per-iteration time larger than the
-wall clock. It now reads `PLANCK_PHASE_TIMING` lines. It also gained
-`--pyscf-conv-tol-grad` (default 1e-7, matching Planck) and prints
-iteration counts and wall times for both codes. Later it was fixed to run
-PySCF genuinely direct (`_is_mem_enough` overridden, `_eri is None`
-asserted); its docstring had claimed both codes ran direct all along. It
-also gained `--spherical`. It still times PySCF's whole `kernel()`,
-including the first build, so PySCF's per-iteration column reads slightly
-high on small systems.

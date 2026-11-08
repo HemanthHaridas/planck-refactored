@@ -1,14 +1,16 @@
 # What separates Planck's direct Fock build from PySCF's on cc-pVXZ?
 
+Answered 2026-10-26 (opened as a scope 2026-10-25). Status lives in
+`vault/Status/`.
+
 The question started as "why does a Planck shell quartet cost 11–16× what it
 costs libcint?" Most of that turned out not to be kernel cost, and the part
 that was has since been worked on. This document records what the gap was
 made of, how each part was measured, and what is left. It follows
 `docs/SCF_VS_PYSCF.md` and `docs/ERI_SHELL_QUARTET_FOCK_BUILD.md`, whose
-measurements are not repeated here. Status of the remaining work is in
-`vault/Status/Open Work.md`.
+measurements are not repeated here.
 
-## The answer
+## Answer
 
 The gap had five parts:
 

@@ -391,7 +391,7 @@ historical design context, but they are no longer the source of truth for
   energy/potential/kernel L1 limits and passed a blind suite frozen before its
   first run. On live UKS DH gradients it cut the rotational-covariance error
   from 2.2e-5 (legacy) to 1.1e-7 Ha/Bohr. Opt-in; `legacy` stays the default
-  (`docs/DFT_GRID_CONVERGENCE_SCOPE.md`).
+  (`docs/DFT_GRID_CONVERGENCE.md`).
 - Treutler-Ahlrichs radial grid, Lebedev angular grid, and Becke partitioning
 - Grid quality levels: Coarse, Normal, Fine, UltraFine, with explicit
   `grid_radial_points` / `grid_angular_points` overrides and versioned
@@ -430,7 +430,7 @@ historical design context, but they are no longer the source of truth for
 ### Recent fixes now considered landed
 
 - **PCM geometry optimization and frequencies (2026-11-08,
-  `docs/PCM_GEOMETRY_SCOPE.md` step 5; the scope is now an answer).** The
+  `docs/PCM_GEOMETRY.md` step 5; the scope is now an answer).** The
   HF geomopt step, every Hessian displacement and the post-optimization
   symmetry SCF each build the cavity at their own geometry, pass it to the
   SCF, and add `Gradient::pcm_gradient`. Before this, they ran without PCM
@@ -443,7 +443,7 @@ historical design context, but they are no longer the source of truth for
   the three loops, or the PCM term from the geomopt gradient, fails the
   gate. Imaginary-mode following under PCM stays rejected (not gated).
 
-- **Analytic PCM gradients (2026-11-08, `docs/PCM_GEOMETRY_SCOPE.md`
+- **Analytic PCM gradients (2026-11-08, `docs/PCM_GEOMETRY.md`
   step 4).** `calculation gradient` with C-PCM runs for RHF, UHF, RKS and
   UKS, Cartesian and spherical. `Gradient::pcm_gradient` re-solves the
   charges at the converged density and adds three terms. `grad_nuc` and
@@ -462,7 +462,7 @@ historical design context, but they are no longer the source of truth for
   `planck-esp-points` had failed since the SWIG cavity, because its
   hand-built tesserae left ξ = 0; fixed in the test.
 
-- **Spherical PCM single points (2026-11-08, `docs/PCM_GEOMETRY_SCOPE.md`
+- **Spherical PCM single points (2026-11-08, `docs/PCM_GEOMETRY.md`
   step 6).** `evaluate_pcm_reaction_field` lifts the working density to
   Cartesian for φ_el and returns V_rxn in the working basis, so every
   caller (HF SCF, DFT SCF, ESP reaction field) works unchanged. The
@@ -471,7 +471,7 @@ historical design context, but they are no longer the source of truth for
   digit (`*_pcm_swig_spherical_631gd`). The Cartesian path is unchanged:
   both lifts are the identity there.
 
-- **Smooth SWIG PCM cavity (2026-11-07, `docs/PCM_GEOMETRY_SCOPE.md` step
+- **Smooth SWIG PCM cavity (2026-11-07, `docs/PCM_GEOMETRY.md` step
   1).** The cavity used Fibonacci points with a hard bury test, so the
   energy jumped as points crossed sphere boundaries. It is now SWIG, as in
   PySCF's C-PCM: Lebedev points, a smooth switching function, and Gaussian
@@ -487,7 +487,7 @@ historical design context, but they are no longer the source of truth for
   (`water_rhf_pcm_smoothness_sto3g`) holds the fourth difference of E to
   2.3e-9; the old cavity fails it at 4.4e-5. The five existing PCM cases
   were re-pinned. The orientation dependence (5.2e-6 Eh at 302 points, the
-  same as PySCF) is accepted: `docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md`.
+  same as PySCF) is accepted: `docs/PCM_ROTATIONAL_INVARIANCE.md`.
 
   Step 2 followed: the cavity stores no AO matrices. S is factored once,
   and φ_el and V_rxn are one fused integral sweep each per SCF iteration.

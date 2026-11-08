@@ -1,7 +1,11 @@
 # Does the PCM energy depend on how the molecule is oriented?
 
-Yes, slightly, and that is accepted. Since the SWIG cavity (2026-11-07,
-`docs/PCM_GEOMETRY_SCOPE.md`) the dependence is smooth, small at the default
+Answered 2026-11-07. Status lives in `vault/Status/`.
+
+## Answer
+
+**Yes, slightly, and that is accepted.** Since the SWIG cavity (2026-11-07,
+`docs/PCM_GEOMETRY.md`) the dependence is smooth, small at the default
 grid, shrinks as the grid gets denser, and is the same as PySCF's.
 Planck does not build the cavity in a frame attached to the molecule, for
 the reasons below.
@@ -28,7 +32,7 @@ about (1,−2,3), 2.6 about (0.3,1,0.2)):
 
 PySCF 2.13.0's default C-PCM on the same molecule and rotations gives
 **5.21e-6 Eh** at 302 points, the same as Planck. Planck's cavity matches
-PySCF's term for term: the four gates in `docs/PCM_GEOMETRY_SCOPE.md` agree
+PySCF's term for term: the four gates in `docs/PCM_GEOMETRY.md` agree
 to every printed digit at 302 points.
 
 The tessera count changes with orientation, but that is harmless now. A point
@@ -61,7 +65,7 @@ at every angle. It is not adopted, for three reasons:
 - **It adds a gradient term.** A frame that depends on the geometry makes
   every tessera position depend on all the atoms, through the frame
   rotation, and not only on its own atom. The analytic gradient (step 4 of
-  `docs/PCM_GEOMETRY_SCOPE.md`) would need the derivative of the eigenvectors of the inertia tensor,
+  `docs/PCM_GEOMETRY.md`) would need the derivative of the eigenvectors of the inertia tensor,
   which diverges at those degeneracies.
 - **It would break the PySCF gate.** PySCF uses the lab-frame grid, so a
   rotated grid would only agree with it loosely.
@@ -82,7 +86,7 @@ error. Where it matters, a denser grid reduces it (590 points: 1.1e-6).
   octahedral symmetry, but after a general rotation it is not adapted to the
   molecule's point group.
 
-## Not answered here
+## Not in this scope
 
 Whether to raise the default grid density. Each step up costs more: the
 influence-matrix factor is n_tess², and each SCF iteration does two integral

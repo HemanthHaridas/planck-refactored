@@ -137,7 +137,7 @@ namespace HartreeFock::Solvation
     Eigen::MatrixXd pcm_influence_matrix(const std::vector<PCMSurfacePoint> &points);
 
     // The two cavity-geometry terms of dG_rxn/dR at fixed apparent charges q
-    // (natoms x 3, Hartree/Bohr; docs/PCM_GEOMETRY_SCOPE.md step 4). Every
+    // (natoms x 3, Hartree/Bohr; docs/PCM_GEOMETRY.md step 4). Every
     // tessera moves rigidly with its owning atom, and xi_i is geometry-free.
     //   grad_nuc:    q . dphi_nuc, phi_nuc_i = sum_J Z_J erf(xi_i r_iJ)/r_iJ
     //   grad_solver: q^T dS q / (2 f), through the tessera positions off the

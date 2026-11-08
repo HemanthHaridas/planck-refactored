@@ -1,7 +1,6 @@
 # Why don't direct or cached Fock builds speed up CASSCF on a large basis?
 
-Canonical status lives in `vault/Status/Completion.md` and
-`vault/Status/Open Work.md`.
+Answered 2026-10-16. Status lives in `vault/Status/`.
 
 This file answers one architecture question:
 
@@ -9,7 +8,7 @@ This file answers one architecture question:
 repeated inactive and active Fock builds inside the MCSCF candidate search, and
 would building them directly, or caching them, fix it?**
 
-## Short answer
+## Answer
 
 No. The repeated Fock builds are dense contractions against an AO ERI tensor
 that is built **once**. Those contractions are cache-friendly and fast, so

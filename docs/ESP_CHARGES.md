@@ -1,5 +1,9 @@
 # How are ESP-derived atomic charges computed, and why is the grid the hard part?
 
+Answered 2026-09-14. Status lives in `vault/Status/`.
+
+## Answer
+
 Mulliken and Löwdin charges partition the density by which basis function owns
 it. That is bookkeeping, not an observable: a Löwdin charge moves by tenths of
 an electron between STO-3G and cc-pVTZ on the same geometry. CHELPG and RESP
@@ -166,7 +170,7 @@ nearly so, trading a bounded variance for a discontinuity. Orientation averaging
 is trivially correct but N× the cost and still only mitigates.
 
 `fibonacci_sphere` lives in `src/base/sphere.h`. The PCM cavity used it too
-until it moved to Lebedev points (SWIG, `docs/PCM_GEOMETRY_SCOPE.md`); these
+until it moved to Lebedev points (SWIG, `docs/PCM_GEOMETRY.md`); these
 shells are now its only consumer.
 
 ---
@@ -317,7 +321,7 @@ Not done, deliberately:
   of forcing atoms to share a charge.
 - **A rotational gate on total-ESP charges.** Any ESP value carrying the
   reaction field inherits the cavity's lab-frame pinning (~6.0e-5 Eh rotational
-  spread, `docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md`). The Connolly grid is
+  spread, `docs/PCM_ROTATIONAL_INVARIANCE.md`). The Connolly grid is
   rotationally symmetric by construction, so with `grid connolly` the cavity is
   the *only* remaining orientation dependence — but it is real, and a tight gate
   would fail for a reason this work does not own. That ceiling is inherited, not

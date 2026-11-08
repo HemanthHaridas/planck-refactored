@@ -1751,7 +1751,7 @@ namespace HartreeFock::IO
 
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)
         {
-            // Analytic PCM gradients (docs/PCM_GEOMETRY_SCOPE.md step 4) drive
+            // Analytic PCM gradients (docs/PCM_GEOMETRY.md step 4) drive
             // geometry optimization and frequencies; every inner loop rebuilds
             // the cavity at its geometry (step 5). Imaginary-mode following
             // is not gated yet.

@@ -1,9 +1,13 @@
 # How does Planck's TDDFT handle range-separated exchange?
 
-It handles it the same way the SCF does. The response matrices carry one exact-exchange term per
+Answered 2026-10-16. Status lives in `vault/Status/`.
+
+## Answer
+
+**It handles it the same way the SCF does.** The response matrices carry one exact-exchange term per
 kernel: full-range Coulomb exchange, plus erf short-range exchange when the functional has it.
 Both coefficients come from the source the SCF reads. Validated against PySCF for HSE06,
-CAM-B3LYP and wB97X (landed 2026-10-16).
+CAM-B3LYP and wB97X.
 
 ## The response matrices
 
@@ -114,7 +118,7 @@ The global-hybrid gates (`water_tddft_b3lyp_{casida,tda}_sto3g`,
 `water_triplet_uks_tddft_b3lyp_sto3g`) sit alongside them. `planck-tddft-exchange` pins the B
 index on a rectangular occupied/virtual tensor: putting `(ia|bj)` back makes it fail.
 
-## Out of scope
+## Not in this scope
 
 - Imaginary-mode following: the DFT driver does not implement it for any functional.
 - Iterative (Davidson) response: the solver stays dense.

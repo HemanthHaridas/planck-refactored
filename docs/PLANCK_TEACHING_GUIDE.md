@@ -5831,7 +5831,7 @@ qualified `g4-3-v4` pruning policy, at 135 radial shells, brings the same
 cases to \(1.1\times10^{-7}\) and \(9.3\times10^{-8}\). The policy was
 selected on fixed-density XC energy, potential, and kernel contractions, and
 then passed a blind suite frozen before its first run
-(`docs/DFT_GRID_CONVERGENCE_SCOPE.md`). The driver therefore refuses a UKS DH
+(`docs/DFT_GRID_CONVERGENCE.md`). The driver therefore refuses a UKS DH
 gradient on any other grid (`validate_qualified_uks_dh_grid`): a displaced or
 user-overridden grid would silently leave the qualified regime. The lesson
 generalizes. Once a method differentiates its own quadrature, grid choice
@@ -9404,7 +9404,7 @@ reaction-field operator) are not implemented.
   once and then did only a Frobenius product per tessera each iteration.
   The per-shell-pair kernel is what brought the sweeps level with it (they
   took about 1.05 s per iteration with a per-component kernel).
-  `docs/PCM_GEOMETRY_SCOPE.md` has the measurements.
+  `docs/PCM_GEOMETRY.md` has the measurements.
 
 ### Code Map
 

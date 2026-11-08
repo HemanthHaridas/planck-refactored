@@ -1,4 +1,4 @@
-"""References for the SWIG C-PCM gates (docs/PCM_GEOMETRY_SCOPE.md steps 1, 6, 4d).
+"""References for the SWIG C-PCM gates (docs/PCM_GEOMETRY.md steps 1, 6, 4d).
 
 PySCF's default C-PCM (SWIG, lebedev_order 29 = 302 points, vdw_scale 1.2,
 modified Bondi, eps 78.3553) on each tests/inputs/regression/*/*pcm_swig*

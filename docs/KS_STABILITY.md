@@ -1,5 +1,10 @@
 # Can `planck-dft` detect, and leave, an unstable Kohn-Sham solution?
 
+Answered 2026-11-06 (opened as a scope 2026-11-05). Status lives in
+`vault/Status/`.
+
+## Answer
+
 **Yes, for RKS and UKS, in the Cartesian and spherical bases.** `stability_check` reports the
 lowest orbital-Hessian eigenvalue of each channel:
 

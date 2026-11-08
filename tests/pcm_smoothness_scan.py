@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PCM cavity smoothness gate (docs/PCM_GEOMETRY_SCOPE.md step 1).
+"""PCM cavity smoothness gate (docs/PCM_GEOMETRY.md step 1).
 
 Stretches the first H of the input along its O-H bond (0.90..1.10 A in
 0.002 A steps) and asserts the energy has no jumps. A hard-pruned cavity

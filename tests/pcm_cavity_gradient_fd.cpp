@@ -1,4 +1,4 @@
-// PCM cavity-gradient gate (docs/PCM_GEOMETRY_SCOPE.md step 4b).
+// PCM cavity-gradient gate (docs/PCM_GEOMETRY.md step 4b).
 //
 // For fixed random apparent charges q, the two geometry-only terms of the
 // C-PCM gradient must match a five-point finite difference of

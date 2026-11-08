@@ -1,7 +1,7 @@
 # Why was an analytic gradient 20–120× the SCF it follows, and what made it cheap?
 
-Canonical status lives in `vault/Status/Completion.md` and
-`vault/Status/Open Work.md`.
+Answered 2026-10-28 (opened as a scope 2026-10-25). Status lives in
+`vault/Status/`.
 
 This file answers one architecture question:
 
@@ -11,7 +11,7 @@ This file answers one architecture question:
 that time go, and which changes to the derivative integrals, the loops and the
 MP2 response machinery actually paid?**
 
-## Short answer
+## Answer
 
 None of the cost was intrinsic, and none of it was one thing.
 - **SCF gradients.** The derivative ERIs were evaluated one AO component at a
@@ -241,30 +241,6 @@ deleted.
 - The conventional MP2 gradients are bounded by their dense nao⁴ tensors
   (D_α, D_β, the ERI) in memory, not time. RI-MP2 is the route past that.
 
-## Not done
-
-Tracked in `vault/Status/Open Work.md`; none is needed at these sizes.
-
-- **G6: RI three-centre integrals.** `compute_3c_eri`, `compute_2c_eri` and
-  `compute_3c_deriv_elem` (`src/post_hf/ri/ri_eri.cpp`) run per component,
-  serial and unscreened. Measure their share on an RI-MP2 gradient and an
-  RI-JK SCF first. D3 (RI pair factors recomputed per iteration,
-  `docs/ERI_FOCK_BLAS_SCOPE.md`) is the larger RI-JK lever.
-- **Block-level density screening** (`Q_ab Q_cd · max|Γ_block| < tol`) in the
-  2e loop.
-- **Screened kernels in the derivative block kernels.** HSE06's long-range
-  term still takes the AO loop.
-- **UMP2 Z-vector from the stored ERI tensor.** The conventional path already
-  holds the AO ERI tensor, so the action could contract against it instead of
-  running direct Fock builds.
-- **The stored nb⁴ tensor.** `_compute_2e_auto`, used by MP2/CC/CASSCF/TDDFT
-  and conventional SCF, still uses the shell-group hoist, not the block
-  kernels. Measure its share of a real MP2/CC run first.
-- **Analytic Hessians.**
-- **Left alone on purpose: the two overlap-only MP2 loops.** Their weight
-  includes `vhf_s1occ`, so routing them through a function that symmetrizes
-  its weight is not obviously safe, and they are cheap.
-
 ## What invariants matter
 
 ### 1. Permutations change Γ, never which atom a derivative belongs to
@@ -410,3 +386,27 @@ Subtract a `calculation energy` run of the same input to get the gradient's
 share, and profile with `sample` on the running process. Build A/B baselines
 as whole targets, and write shell loops in bash or with explicit arrays,
 since zsh does not word-split an unquoted variable.
+
+## Not done
+
+Tracked in `vault/Status/Open Work.md`; none is needed at these sizes.
+
+- **G6: RI three-centre integrals.** `compute_3c_eri`, `compute_2c_eri` and
+  `compute_3c_deriv_elem` (`src/post_hf/ri/ri_eri.cpp`) run per component,
+  serial and unscreened. Measure their share on an RI-MP2 gradient and an
+  RI-JK SCF first. D3 (RI pair factors recomputed per iteration,
+  `docs/ERI_FOCK_BLAS_SCOPE.md`) is the larger RI-JK lever.
+- **Block-level density screening** (`Q_ab Q_cd · max|Γ_block| < tol`) in the
+  2e loop.
+- **Screened kernels in the derivative block kernels.** HSE06's long-range
+  term still takes the AO loop.
+- **UMP2 Z-vector from the stored ERI tensor.** The conventional path already
+  holds the AO ERI tensor, so the action could contract against it instead of
+  running direct Fock builds.
+- **The stored nb⁴ tensor.** `_compute_2e_auto`, used by MP2/CC/CASSCF/TDDFT
+  and conventional SCF, still uses the shell-group hoist, not the block
+  kernels. Measure its share of a real MP2/CC run first.
+- **Analytic Hessians.**
+- **Left alone on purpose: the two overlap-only MP2 loops.** Their weight
+  includes `vhf_s1occ`, so routing them through a function that symmetrizes
+  its weight is not obviously safe, and they are cheap.

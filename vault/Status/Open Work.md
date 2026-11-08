@@ -85,7 +85,7 @@ rerun for it.
   Hessian, no CPHF), the response kernel, and VV10. Step 1 must make every
   non-SCF workflow refuse meta-GGA by name: the KS gradient picks its terms by
   `vsigma.cols()` and would otherwise silently drop the τ term.
-- **PCM leftovers** (`docs/PCM_GEOMETRY_SCOPE.md`, now an answer; see
+- **PCM leftovers** (`docs/PCM_GEOMETRY.md`, now an answer; see
   Completion). Imaginary-mode following under PCM is rejected (the loops
   would carry the cavity, but no case gates it). UHF/UKS and spherical
   geomopt/frequencies, and planck-dft frequencies, run through the gated
@@ -109,7 +109,7 @@ rerun for it.
 - **The default grid is not qualified for differentiated-grid properties.**
   `legacy` failed the UKS DH rotational-covariance check (2.2e-5 Ha/Bohr
   against a 2e-6 limit), where `g4-3-v4` passes (1.1e-7). Migrating the
-  default is a separate, open decision (`docs/DFT_GRID_CONVERGENCE_SCOPE.md`).
+  default is a separate, open decision (`docs/DFT_GRID_CONVERGENCE.md`).
   Coarse grids also show orientation sensitivity under symmetry
   reorientation, which is why the symmetry-on FD gradient gate uses
   `grid ultrafine`.

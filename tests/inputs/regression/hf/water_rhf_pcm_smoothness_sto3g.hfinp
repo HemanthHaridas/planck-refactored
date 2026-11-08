@@ -1,4 +1,4 @@
-# SWIG C-PCM smoothness scan base input (docs/PCM_GEOMETRY_SCOPE.md step 1).
+# SWIG C-PCM smoothness scan base input (docs/PCM_GEOMETRY.md step 1).
 # tests/pcm_smoothness_scan.py stretches the first H along its O-H bond.
 %begin_control
     basis       sto-3g

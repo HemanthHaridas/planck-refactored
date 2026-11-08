@@ -273,7 +273,7 @@ The loop is standard: build G, F = H + G (RHF), α/β Fock (UHF), or the Roothaa
 
 <div align="justify">
 
-**Mayer bond order density convention:** the closed-shell branch contracts the total density with no prefactor (H₂ gives 1); the open-shell branch contracts per-spin densities and needs an explicit factor 2 to agree. PCM is single-point only. Its SWIG cavity is smooth in the geometry, which is the prerequisite for the PCM gradient (see `docs/PCM_GEOMETRY_SCOPE.md`).
+**Mayer bond order density convention:** the closed-shell branch contracts the total density with no prefactor (H₂ gives 1); the open-shell branch contracts per-spin densities and needs an explicit factor 2 to agree. C-PCM supports energies, analytic gradients, geometry optimization and frequencies; its SWIG cavity is smooth in the geometry, which is what makes the gradient possible (see `docs/PCM_GEOMETRY.md`).
 
 </div>
 

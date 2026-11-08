@@ -1,12 +1,15 @@
 # How is a DFT grid pruning policy qualified, and why is V4 the qualified one?
 
+Answered 2026-10-16 (opened as a scope 2026-09-10). Status lives in
+`vault/Status/`.
+
 This file answers one architecture question:
 
 **What does it take for an angular-pruning schedule to be trusted for
 calculations that differentiate the grid (UKS double-hybrid gradients), and
 what is the qualified `g4-3-v4` policy?**
 
-## Short answer
+## Answer
 
 A candidate pruning rule may depend only on atomic number and a fixed physical
 radial coordinate. It is accepted only if, on every fixture, it reproduces a
@@ -280,7 +283,7 @@ manifest: resolved rule/fingerprint, inputs and hashes, reference ladders,
 channel errors, point counts, memory/timing, stationary-root diagnostics, and
 live derivative results. No default changes before that review.
 
-## What remains
+## Not done
 
 - **No committed regression case exercises the production UKS double-hybrid
   gradient on V4.** The qualification evidence comes from runners under

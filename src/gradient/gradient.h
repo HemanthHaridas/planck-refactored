@@ -72,7 +72,7 @@ namespace HartreeFock
             const Eigen::MatrixXd &W = {});
 
         // C-PCM contribution to an SCF/KS nuclear gradient
-        // (docs/PCM_GEOMETRY_SCOPE.md step 4): grad_nuc + grad_qv + grad_solver
+        // (docs/PCM_GEOMETRY.md step 4): grad_nuc + grad_qv + grad_solver
         // at the converged total density, with q re-solved from it. Zero when
         // pcm is null or disabled. No response term: the SCF with PCM is
         // variational in the charges. Prints the three terms at verbose.

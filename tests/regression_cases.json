@@ -132,7 +132,7 @@
   },
   {
    "id": "water_rhf_pcm_esp_sto3g",
-   "_note": "docs/ESP_CHARGES.md section 6 -- ESP under PCM is now LABELLED. The fitted density is solvent-polarized (the reaction field enters the Fock each SCF iteration) but the potential is the gas-phase form phi = nuc - el, excluding the reaction field's own sum_i q_i/|r - s_i|. Both quantities are legitimate -- the force-field (AMBER/RESP) convention wants exactly this one, since the MD solvent supplies the continuum -- and neither was identified before, so a user comparing against another code's in-solvent potential could not tell which they had. Sanity: PCM polarizes water further than gas phase, O -0.73608497 against -0.708804 unrestrained on the identical grid, the expected direction. The charges are pinned so that when item (b) adds the reaction field behind a keyword, this case shows the DEFAULT did not move -- which is the check that would catch the term being wired in unconditionally. Re-pinned 2026-11-07 for the SWIG cavity (docs/PCM_GEOMETRY_SCOPE.md step 1): 302 Lebedev points instead of 24 Fibonacci points, f(eps) = (eps-1)/eps, modified Bondi H. The energy matches PySCF 2.13.0 C-PCM to every printed digit.",
+   "_note": "docs/ESP_CHARGES.md section 6 -- ESP under PCM is now LABELLED. The fitted density is solvent-polarized (the reaction field enters the Fock each SCF iteration) but the potential is the gas-phase form phi = nuc - el, excluding the reaction field's own sum_i q_i/|r - s_i|. Both quantities are legitimate -- the force-field (AMBER/RESP) convention wants exactly this one, since the MD solvent supplies the continuum -- and neither was identified before, so a user comparing against another code's in-solvent potential could not tell which they had. Sanity: PCM polarizes water further than gas phase, O -0.73608497 against -0.708804 unrestrained on the identical grid, the expected direction. The charges are pinned so that when item (b) adds the reaction field behind a keyword, this case shows the DEFAULT did not move -- which is the check that would catch the term being wired in unconditionally. Re-pinned 2026-11-07 for the SWIG cavity (docs/PCM_GEOMETRY.md step 1): 302 Lebedev points instead of 24 Fibonacci points, f(eps) = (eps-1)/eps, modified Bondi H. The energy matches PySCF 2.13.0 C-PCM to every printed digit.",
    "input": "tests/inputs/regression/hf/water_rhf_pcm_esp_sto3g.hfinp",
    "tags": [
     "core"
@@ -157,7 +157,7 @@
   },
   {
    "id": "water_rhf_pcm_esp_rxnfield_sto3g",
-   "_note": "docs/ESP_CHARGES.md section 6 -- 'include_reaction_field' selects the TOTAL in-solvent potential (nuclear + electronic + PCM reaction field) instead of the default solute potential. The charges MUST differ from water_rhf_pcm_esp_sto3g, the same input without the keyword: +0.00429127 against -0.73608497. While the flag was parsed but inert the two cases were byte-identical, so a regression to that state shows up here as the two agreeing again. THE NEAR-ZERO CHARGES AND RRMS ~1.0 ARE THE PHYSICS: a conductor-like continuum screens the solute field outside the cavity, so the total potential there nearly vanishes and an atomic-charge model fits almost none of it -- which is exactly why the default is the solute potential and why AMBER/RESP fits that one. Confirmed at explicit points rather than inferred: at 60 bohr the solute potential is +5.2e-6 and the total -3.5e-5, so the reaction field opposes and overshoots the bare multipole. The RRMS is asserted BECAUSE it is bad -- if this fit ever looks good, screening broke. Re-pinned 2026-11-07 for the SWIG cavity (docs/PCM_GEOMETRY_SCOPE.md step 1): 302 Lebedev points instead of 24 Fibonacci points, f(eps) = (eps-1)/eps, modified Bondi H. The sign of the near-zero charges flipped with it (O -0.00420202 -> +0.00429127): the residual left after near-complete screening is small and its sign is not physical.",
+   "_note": "docs/ESP_CHARGES.md section 6 -- 'include_reaction_field' selects the TOTAL in-solvent potential (nuclear + electronic + PCM reaction field) instead of the default solute potential. The charges MUST differ from water_rhf_pcm_esp_sto3g, the same input without the keyword: +0.00429127 against -0.73608497. While the flag was parsed but inert the two cases were byte-identical, so a regression to that state shows up here as the two agreeing again. THE NEAR-ZERO CHARGES AND RRMS ~1.0 ARE THE PHYSICS: a conductor-like continuum screens the solute field outside the cavity, so the total potential there nearly vanishes and an atomic-charge model fits almost none of it -- which is exactly why the default is the solute potential and why AMBER/RESP fits that one. Confirmed at explicit points rather than inferred: at 60 bohr the solute potential is +5.2e-6 and the total -3.5e-5, so the reaction field opposes and overshoots the bare multipole. The RRMS is asserted BECAUSE it is bad -- if this fit ever looks good, screening broke. Re-pinned 2026-11-07 for the SWIG cavity (docs/PCM_GEOMETRY.md step 1): 302 Lebedev points instead of 24 Fibonacci points, f(eps) = (eps-1)/eps, modified Bondi H. The sign of the near-zero charges flipped with it (O -0.00420202 -> +0.00429127): the residual left after near-complete screening is small and its sign is not physical.",
    "input": "tests/inputs/regression/hf/water_rhf_pcm_esp_rxnfield_sto3g.hfinp",
    "tags": [
     "core"
@@ -182,7 +182,7 @@
   },
   {
    "id": "water_rks_b3lyp_pcm_esp_rxnfield_sto3g",
-   "_note": "docs/ESP_CHARGES.md section 6, DFT side. A DISTINCT code path from water_rhf_pcm_esp_rxnfield_sto3g, not a duplicate: `prepared` (shell pairs + PCM state) is local to the DFT driver's inner run() and already dead when the report runs, so log_esp_report_dft rebuilds BOTH, cavity included (since 2026-11-07 the cavity stores no AO matrices, so the rebuild is cheaper still). The HF driver still holds its state at the call site and rebuilds nothing, so only this case exercises the rebuild. Cost measured rather than assumed, since the scope named it as the one thing that would justify restructuring run()'s return type: 0.3473 s -> 0.3621 s mean of 5, i.e. ~15 ms (~4%) for rebuild + PCM solve + phi_rxn -- the simple rebuild stands. Near-zero charges and RRMS ~1.0 are the screening physics; see the HF case for the explicit-point evidence. Re-pinned 2026-11-07 for the SWIG cavity (docs/PCM_GEOMETRY_SCOPE.md step 1): 302 Lebedev points instead of 24 Fibonacci points, f(eps) = (eps-1)/eps, modified Bondi H.",
+   "_note": "docs/ESP_CHARGES.md section 6, DFT side. A DISTINCT code path from water_rhf_pcm_esp_rxnfield_sto3g, not a duplicate: `prepared` (shell pairs + PCM state) is local to the DFT driver's inner run() and already dead when the report runs, so log_esp_report_dft rebuilds BOTH, cavity included (since 2026-11-07 the cavity stores no AO matrices, so the rebuild is cheaper still). The HF driver still holds its state at the call site and rebuilds nothing, so only this case exercises the rebuild. Cost measured rather than assumed, since the scope named it as the one thing that would justify restructuring run()'s return type: 0.3473 s -> 0.3621 s mean of 5, i.e. ~15 ms (~4%) for rebuild + PCM solve + phi_rxn -- the simple rebuild stands. Near-zero charges and RRMS ~1.0 are the screening physics; see the HF case for the explicit-point evidence. Re-pinned 2026-11-07 for the SWIG cavity (docs/PCM_GEOMETRY.md step 1): 302 Lebedev points instead of 24 Fibonacci points, f(eps) = (eps-1)/eps, modified Bondi H.",
    "input": "tests/inputs/regression/dft/water_rks_b3lyp_pcm_esp_rxnfield_sto3g.hfinp",
    "executable": "planck-dft",
    "tags": [
@@ -1108,7 +1108,7 @@
    "tags": [
     "extended"
    ],
-   "_note": "Re-baselined from -74.9516348658 to -74.9516348849 when SAO blocking was disabled under PCM. The old value was the symmetry-PROJECTED solution: the Fibonacci cavity is not symmetry-adapted, so SAO block-diagonalization discarded V_pcm's off-block elements. That run never actually converged (DIIS residual pinned at 3.758e-05) -- it only passed before the DIIS-error convergence gate was added. Point group is still detected and asserted; only the SAO blocking is off. The energy is frame-dependent at this tessellation density (surface_points_per_atom 24 -> ~5e-5 Eh spread under rigid rotation), so this pins the standardized frame, not a frame-invariant number. Re-pinned 2026-11-07 for the SWIG cavity (docs/PCM_GEOMETRY_SCOPE.md step 1): 302 Lebedev points instead of 24 Fibonacci points, f(eps) = (eps-1)/eps, modified Bondi H. Now matches PySCF 2.13.0 C-PCM to every printed digit; the rotational spread at 302 points is ~5e-6 Eh (docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md).",
+   "_note": "Re-baselined from -74.9516348658 to -74.9516348849 when SAO blocking was disabled under PCM. The old value was the symmetry-PROJECTED solution: the Fibonacci cavity is not symmetry-adapted, so SAO block-diagonalization discarded V_pcm's off-block elements. That run never actually converged (DIIS residual pinned at 3.758e-05) -- it only passed before the DIIS-error convergence gate was added. Point group is still detected and asserted; only the SAO blocking is off. The energy is frame-dependent at this tessellation density (surface_points_per_atom 24 -> ~5e-5 Eh spread under rigid rotation), so this pins the standardized frame, not a frame-invariant number. Re-pinned 2026-11-07 for the SWIG cavity (docs/PCM_GEOMETRY.md step 1): 302 Lebedev points instead of 24 Fibonacci points, f(eps) = (eps-1)/eps, modified Bondi H. Now matches PySCF 2.13.0 C-PCM to every printed digit; the rotational spread at 302 points is ~5e-6 Eh (docs/PCM_ROTATIONAL_INVARIANCE.md).",
    "expected_exit_code": 0,
    "contains": [
     "PCM :",
@@ -3683,7 +3683,7 @@
     }
    ],
    "_pyscf_reference": "PySCF 2.12.1 RKS PBE/STO-3G C2v grid level=3 + C-PCM eps=78.3553 default cavity: SCF=-75.2068690800 Eh. With the SWIG cavity (2026-11-07) Planck UltraFine lands at -75.2068700295 Eh; the remaining 9.5e-7 is the DFT grid (Planck ultrafine vs PySCF level 3), not the cavity, which matches PySCF to every printed digit when the grids are matched (water_rks_pbe_pcm_swig_631gd). Before SWIG the delta was 6.1e-4. Pinned to Planck-current.",
-   "_note": "Re-baselined from -75.2062610742 to -75.2062610942 (2e-8) when SAO blocking was disabled under PCM. The old value was the symmetry-PROJECTED solution: the Fibonacci cavity is not symmetry-adapted, so block-diagonalization discarded the KS matrix's off-block reaction-field elements. Unlike the HF case (whose DIIS-error gate exposed it) the KS convergence test reported success on the wrong energy -- this was a SILENT wrong answer. Point group is still detected and asserted; only SAO blocking is off. Re-pinned 2026-11-07 for the SWIG cavity (docs/PCM_GEOMETRY_SCOPE.md step 1): 302 Lebedev points instead of 24 Fibonacci points, f(eps) = (eps-1)/eps, modified Bondi H."
+   "_note": "Re-baselined from -75.2062610742 to -75.2062610942 (2e-8) when SAO blocking was disabled under PCM. The old value was the symmetry-PROJECTED solution: the Fibonacci cavity is not symmetry-adapted, so block-diagonalization discarded the KS matrix's off-block reaction-field elements. Unlike the HF case (whose DIIS-error gate exposed it) the KS convergence test reported success on the wrong energy -- this was a SILENT wrong answer. Point group is still detected and asserted; only SAO blocking is off. Re-pinned 2026-11-07 for the SWIG cavity (docs/PCM_GEOMETRY.md step 1): 302 Lebedev points instead of 24 Fibonacci points, f(eps) = (eps-1)/eps, modified Bondi H."
   },
   {
    "id": "water_casscf_c2v_b1",
@@ -7553,7 +7553,7 @@
   },
   {
    "id": "water_rhf_pcm_swig_631gd",
-   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY_SCOPE.md step 1). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
+   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
    "input": "tests/inputs/regression/hf/water_rhf_pcm_swig_631gd.hfinp",
    "tags": [
     "extended"
@@ -7573,7 +7573,7 @@
   },
   {
    "id": "h2o2_rhf_pcm_swig_631gd",
-   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY_SCOPE.md step 1). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
+   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
    "input": "tests/inputs/regression/hf/h2o2_rhf_pcm_swig_631gd.hfinp",
    "tags": [
     "extended"
@@ -7593,7 +7593,7 @@
   },
   {
    "id": "water_cation_uhf_pcm_swig_631gd",
-   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY_SCOPE.md step 1). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
+   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
    "input": "tests/inputs/regression/hf/water_cation_uhf_pcm_swig_631gd.hfinp",
    "tags": [
     "extended"
@@ -7613,7 +7613,7 @@
   },
   {
    "id": "water_rks_pbe_pcm_swig_631gd",
-   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY_SCOPE.md step 1). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
+   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
    "input": "tests/inputs/regression/dft/water_rks_pbe_pcm_swig_631gd.hfinp",
    "executable": "planck-dft",
    "tags": [
@@ -7634,7 +7634,7 @@
   },
   {
    "id": "water_rhf_pcm_swig_spherical_631gd",
-   "_note": "SWIG C-PCM spherical gate (docs/PCM_GEOMETRY_SCOPE.md step 6). PySCF 2.13.0 C-PCM cart=False reference from tests/pyscf/pcm_swig_references.py (Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). The density is lifted to Cartesian for phi_el and V_rxn is brought back to the working basis inside evaluate_pcm_reaction_field; Planck matches to every printed digit with the same tessera count. Before step 6 this input was refused.",
+   "_note": "SWIG C-PCM spherical gate (docs/PCM_GEOMETRY.md step 6). PySCF 2.13.0 C-PCM cart=False reference from tests/pyscf/pcm_swig_references.py (Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). The density is lifted to Cartesian for phi_el and V_rxn is brought back to the working basis inside evaluate_pcm_reaction_field; Planck matches to every printed digit with the same tessera count. Before step 6 this input was refused.",
    "input": "tests/inputs/regression/hf/water_rhf_pcm_swig_spherical_631gd.hfinp",
    "tags": [
     "extended"
@@ -7654,7 +7654,7 @@
   },
   {
    "id": "water_cation_uhf_pcm_swig_spherical_631gd",
-   "_note": "SWIG C-PCM spherical gate (docs/PCM_GEOMETRY_SCOPE.md step 6). PySCF 2.13.0 C-PCM cart=False reference from tests/pyscf/pcm_swig_references.py (Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). The density is lifted to Cartesian for phi_el and V_rxn is brought back to the working basis inside evaluate_pcm_reaction_field; Planck matches to every printed digit with the same tessera count. Before step 6 this input was refused. Exercises the UHF call site. Uses guess sad (PySCF minao): from hcore both codes stop on the open-shell water-cation saddle at -75.6750550413 (UHF internal lambda_min -0.0715, vault Open Work), 0.076 Eh up. SAD reaches the stable minimum (lambda_min +0.0753), 1.8e-3 above the Cartesian case, like neutral water's 1.4e-3.",
+   "_note": "SWIG C-PCM spherical gate (docs/PCM_GEOMETRY.md step 6). PySCF 2.13.0 C-PCM cart=False reference from tests/pyscf/pcm_swig_references.py (Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). The density is lifted to Cartesian for phi_el and V_rxn is brought back to the working basis inside evaluate_pcm_reaction_field; Planck matches to every printed digit with the same tessera count. Before step 6 this input was refused. Exercises the UHF call site. Uses guess sad (PySCF minao): from hcore both codes stop on the open-shell water-cation saddle at -75.6750550413 (UHF internal lambda_min -0.0715, vault Open Work), 0.076 Eh up. SAD reaches the stable minimum (lambda_min +0.0753), 1.8e-3 above the Cartesian case, like neutral water's 1.4e-3.",
    "input": "tests/inputs/regression/hf/water_cation_uhf_pcm_swig_spherical_631gd.hfinp",
    "tags": [
     "extended"
@@ -7674,7 +7674,7 @@
   },
   {
    "id": "water_rks_pbe_pcm_swig_spherical_631gd",
-   "_note": "SWIG C-PCM spherical gate (docs/PCM_GEOMETRY_SCOPE.md step 6). PySCF 2.13.0 C-PCM cart=False reference from tests/pyscf/pcm_swig_references.py (Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). The density is lifted to Cartesian for phi_el and V_rxn is brought back to the working basis inside evaluate_pcm_reaction_field; Planck matches to every printed digit with the same tessera count. Before step 6 this input was refused.",
+   "_note": "SWIG C-PCM spherical gate (docs/PCM_GEOMETRY.md step 6). PySCF 2.13.0 C-PCM cart=False reference from tests/pyscf/pcm_swig_references.py (Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). The density is lifted to Cartesian for phi_el and V_rxn is brought back to the working basis inside evaluate_pcm_reaction_field; Planck matches to every printed digit with the same tessera count. Before step 6 this input was refused.",
    "input": "tests/inputs/regression/dft/water_rks_pbe_pcm_swig_spherical_631gd.hfinp",
    "executable": "planck-dft",
    "tags": [
@@ -7695,7 +7695,7 @@
   },
   {
    "id": "h2o2_rhf_pcm_swig_gradient_631gd",
-   "_note": "PCM analytic gradient gate (docs/PCM_GEOMETRY_SCOPE.md step 4d). PySCF 2.13.0 C-PCM gradient from tests/pyscf/pcm_swig_references.py (conv_tol_grad 1e-9; DFT with grid response). Planck's gradient is SCF + Gradient::pcm_gradient (grad_nuc + grad_qv + grad_solver). C1, so every component is independent. Per term at verbosity verbose, grad_nuc, grad_qv and grad_solver each match PySCF's functions of the same name to all ten printed digits.",
+   "_note": "PCM analytic gradient gate (docs/PCM_GEOMETRY.md step 4d). PySCF 2.13.0 C-PCM gradient from tests/pyscf/pcm_swig_references.py (conv_tol_grad 1e-9; DFT with grid response). Planck's gradient is SCF + Gradient::pcm_gradient (grad_nuc + grad_qv + grad_solver). C1, so every component is independent. Per term at verbosity verbose, grad_nuc, grad_qv and grad_solver each match PySCF's functions of the same name to all ten printed digits.",
    "input": "tests/inputs/regression/hf/h2o2_rhf_pcm_swig_gradient_631gd.hfinp",
    "tags": [
     "extended"
@@ -7735,7 +7735,7 @@
   },
   {
    "id": "h2o2_rhf_pcm_swig_gradient_spherical_631gd",
-   "_note": "PCM analytic gradient gate (docs/PCM_GEOMETRY_SCOPE.md step 4d). PySCF 2.13.0 C-PCM gradient from tests/pyscf/pcm_swig_references.py (conv_tol_grad 1e-9; DFT with grid response). Planck's gradient is SCF + Gradient::pcm_gradient (grad_nuc + grad_qv + grad_solver). Spherical basis (PySCF cart=False): the density is lifted to Cartesian inside pcm_grad_qv.",
+   "_note": "PCM analytic gradient gate (docs/PCM_GEOMETRY.md step 4d). PySCF 2.13.0 C-PCM gradient from tests/pyscf/pcm_swig_references.py (conv_tol_grad 1e-9; DFT with grid response). Planck's gradient is SCF + Gradient::pcm_gradient (grad_nuc + grad_qv + grad_solver). Spherical basis (PySCF cart=False): the density is lifted to Cartesian inside pcm_grad_qv.",
    "input": "tests/inputs/regression/hf/h2o2_rhf_pcm_swig_gradient_spherical_631gd.hfinp",
    "tags": [
     "extended"
@@ -7775,7 +7775,7 @@
   },
   {
    "id": "water_cation_uhf_pcm_swig_gradient_631gd",
-   "_note": "PCM analytic gradient gate (docs/PCM_GEOMETRY_SCOPE.md step 4d). PySCF 2.13.0 C-PCM gradient from tests/pyscf/pcm_swig_references.py (conv_tol_grad 1e-9; DFT with grid response). Planck's gradient is SCF + Gradient::pcm_gradient (grad_nuc + grad_qv + grad_solver). UHF: the total density is alpha + beta.",
+   "_note": "PCM analytic gradient gate (docs/PCM_GEOMETRY.md step 4d). PySCF 2.13.0 C-PCM gradient from tests/pyscf/pcm_swig_references.py (conv_tol_grad 1e-9; DFT with grid response). Planck's gradient is SCF + Gradient::pcm_gradient (grad_nuc + grad_qv + grad_solver). UHF: the total density is alpha + beta.",
    "input": "tests/inputs/regression/hf/water_cation_uhf_pcm_swig_gradient_631gd.hfinp",
    "tags": [
     "extended"
@@ -7810,7 +7810,7 @@
   },
   {
    "id": "water_rks_pbe_pcm_swig_gradient_631gd",
-   "_note": "PCM analytic gradient gate (docs/PCM_GEOMETRY_SCOPE.md step 4d). PySCF 2.13.0 C-PCM gradient from tests/pyscf/pcm_swig_references.py (conv_tol_grad 1e-9; DFT with grid response). Planck's gradient is SCF + Gradient::pcm_gradient (grad_nuc + grad_qv + grad_solver). RKS PBE on the unpruned 150 x 590 grid; agrees with PySCF to 1.6e-11.",
+   "_note": "PCM analytic gradient gate (docs/PCM_GEOMETRY.md step 4d). PySCF 2.13.0 C-PCM gradient from tests/pyscf/pcm_swig_references.py (conv_tol_grad 1e-9; DFT with grid response). Planck's gradient is SCF + Gradient::pcm_gradient (grad_nuc + grad_qv + grad_solver). RKS PBE on the unpruned 150 x 590 grid; agrees with PySCF to 1.6e-11.",
    "input": "tests/inputs/regression/dft/water_rks_pbe_pcm_swig_gradient_631gd.hfinp",
    "executable": "planck-dft",
    "tags": [
@@ -7846,7 +7846,7 @@
   },
   {
    "id": "h2o2_rhf_pcm_swig_gradient_fd_631gd",
-   "_note": "PCM analytic gradient against a five-point central difference of the PCM SCF energy (docs/PCM_GEOMETRY_SCOPE.md step 4d): the end-to-end check that the SCF with PCM needs no response term. Measured 4.2e-8 Ha/Bohr at delta 1e-3 Bohr, limited by the printed energy; 48 SCF runs, ~12 s.",
+   "_note": "PCM analytic gradient against a five-point central difference of the PCM SCF energy (docs/PCM_GEOMETRY.md step 4d): the end-to-end check that the SCF with PCM needs no response term. Measured 4.2e-8 Ha/Bohr at delta 1e-3 Bohr, limited by the printed energy; 48 SCF runs, ~12 s.",
    "input": "tests/inputs/regression/hf/h2o2_rhf_pcm_swig_gradient_631gd.hfinp",
    "executable": "tests/hf_gradient_fd.py",
    "args": [
@@ -7869,7 +7869,7 @@
   },
   {
    "id": "water_rhf_pcm_swig_geomoptfreq_631gd",
-   "_note": "PCM geometry optimization + frequencies (docs/PCM_GEOMETRY_SCOPE.md step 5). Every geomopt step, every Hessian displacement and the post-optimization symmetry SCF rebuild the cavity at their own geometry and add Gradient::pcm_gradient. PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py: geometric_solver gau_tight optimum -76.0222209775 Eh (Planck's default thresholds land 1.3e-9 above), harmonic frequencies from PySCF's analytic PCM Hessian 1791.47 / 4044.57 / 4142.67 cm^-1 (Planck's FD of analytic gradients 1791.40 / 4044.88 / 4142.97). The final energy is checked after the symmetry-reoriented SCF: without the cavity there it would be the gas-phase energy, 0.0127 Eh higher.",
+   "_note": "PCM geometry optimization + frequencies (docs/PCM_GEOMETRY.md step 5). Every geomopt step, every Hessian displacement and the post-optimization symmetry SCF rebuild the cavity at their own geometry and add Gradient::pcm_gradient. PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py: geometric_solver gau_tight optimum -76.0222209775 Eh (Planck's default thresholds land 1.3e-9 above), harmonic frequencies from PySCF's analytic PCM Hessian 1791.47 / 4044.57 / 4142.67 cm^-1 (Planck's FD of analytic gradients 1791.40 / 4044.88 / 4142.97). The final energy is checked after the symmetry-reoriented SCF: without the cavity there it would be the gas-phase energy, 0.0127 Eh higher.",
    "input": "tests/inputs/regression/hf/water_rhf_pcm_swig_geomoptfreq_631gd.hfinp",
    "tags": [
     "extended"
@@ -7915,7 +7915,7 @@
   },
   {
    "id": "water_rks_pbe_pcm_swig_geomopt_631gd",
-   "_note": "PCM geometry optimization in planck-dft (docs/PCM_GEOMETRY_SCOPE.md step 5): prepare_current_geometry rebuilds the cavity at every step and compute_analytic_ks_gradient adds Gradient::pcm_gradient. PySCF 2.13.0 geometric_solver gau_tight optimum on the unpruned 150 x 590 grid: -76.3327063368 Eh, which Planck reproduces to every printed digit (554 tesserae in both).",
+   "_note": "PCM geometry optimization in planck-dft (docs/PCM_GEOMETRY.md step 5): prepare_current_geometry rebuilds the cavity at every step and compute_analytic_ks_gradient adds Gradient::pcm_gradient. PySCF 2.13.0 geometric_solver gau_tight optimum on the unpruned 150 x 590 grid: -76.3327063368 Eh, which Planck reproduces to every printed digit (554 tesserae in both).",
    "input": "tests/inputs/regression/dft/water_rks_pbe_pcm_swig_geomopt_631gd.hfinp",
    "executable": "planck-dft",
    "tags": [
@@ -7938,7 +7938,7 @@
   },
   {
    "id": "water_rhf_pcm_smoothness_sto3g",
-   "_note": "SWIG C-PCM smoothness gate (docs/PCM_GEOMETRY_SCOPE.md step 1): 101-point O-H stretch, asserts the fourth difference of E stays below 5e-9 Eh. Measured 2.3e-9 on the SWIG cavity; the pre-SWIG Fibonacci cavity fails it at 4.4e-5 (checked against a pre-change binary).",
+   "_note": "SWIG C-PCM smoothness gate (docs/PCM_GEOMETRY.md step 1): 101-point O-H stretch, asserts the fourth difference of E stays below 5e-9 Eh. Measured 2.3e-9 on the SWIG cavity; the pre-SWIG Fibonacci cavity fails it at 4.4e-5 (checked against a pre-change binary).",
    "input": "tests/inputs/regression/hf/water_rhf_pcm_smoothness_sto3g.hfinp",
    "executable": "tests/pcm_smoothness_scan.py",
    "tags": [

@@ -3153,7 +3153,7 @@ if(BUILD_TESTING)
     add_test(NAME planck-ecp-gradient-fd COMMAND planck-ecp-gradient-fd)
 
     # PCM cavity-gradient terms vs finite differences
-    # (docs/PCM_GEOMETRY_SCOPE.md step 4b).
+    # (docs/PCM_GEOMETRY.md step 4b).
     add_executable(planck-pcm-cavity-gradient-fd
         ${CMAKE_SOURCE_DIR}/tests/pcm_cavity_gradient_fd.cpp
         ${SRC_DIR}/solvation/pcm.cpp
@@ -3175,7 +3175,7 @@ if(BUILD_TESTING)
     add_test(NAME planck-pcm-cavity-gradient-fd COMMAND planck-pcm-cavity-gradient-fd)
 
     # PCM integral gradient term (grad_qv) vs finite differences
-    # (docs/PCM_GEOMETRY_SCOPE.md step 4c).
+    # (docs/PCM_GEOMETRY.md step 4c).
     add_executable(planck-pcm-qv-gradient-fd
         ${CMAKE_SOURCE_DIR}/tests/pcm_qv_gradient_fd.cpp
         ${CMAKE_SOURCE_DIR}/tests/require_boys_library.cpp

@@ -1,4 +1,4 @@
-# SWIG C-PCM gate (docs/PCM_GEOMETRY_SCOPE.md step 1). Reference:
+# SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1). Reference:
 # tests/pyscf/pcm_swig_references.py.
 %begin_control
     basis       6-31g*

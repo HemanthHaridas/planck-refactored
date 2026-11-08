@@ -1,4 +1,4 @@
-// PCM integral-gradient gate (docs/PCM_GEOMETRY_SCOPE.md step 4c).
+// PCM integral-gradient gate (docs/PCM_GEOMETRY.md step 4c).
 //
 // For a fixed random symmetric AO density P and fixed charges q on a subset of
 // the real SWIG cavity's tesserae, pcm_grad_qv must match a five-point finite

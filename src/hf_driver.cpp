@@ -839,7 +839,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     // Suppressed under PCM. The SWIG cavity (src/solvation/pcm.cpp) samples
     // each atomic sphere with a Lebedev grid in the lab frame, which does not
     // carry the molecule's point group, so the reaction potential V_pcm is not
-    // symmetry-adapted (docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md). (The numbers
+    // symmetry-adapted (docs/PCM_ROTATIONAL_INVARIANCE.md). (The numbers
     // below were measured on the earlier Fibonacci cavity, which had the same
     // property.) SAO block-diagonalization reads only the diagonal irrep
     // blocks of F and silently discards the off-block elements V_pcm puts there:
@@ -1452,7 +1452,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             }
             grad = std::move(*grad_res);
         }
-        // C-PCM geometry response (docs/PCM_GEOMETRY_SCOPE.md step 4); zero
+        // C-PCM geometry response (docs/PCM_GEOMETRY.md step 4); zero
         // without solvation. io.cpp admits PCM gradients for RHF/UHF only.
         {
             auto pcm_grad = HartreeFock::Gradient::pcm_gradient(

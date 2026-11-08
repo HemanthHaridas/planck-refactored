@@ -1,7 +1,7 @@
 # How does Planck add Grimme's D3 dispersion correction?
 
-Answer, landed 2026-11-07 (opened as a scope on 2026-10-26). Status lives in
-`vault/Status/Completion.md` and `vault/Status/Open Work.md`.
+Answered 2026-11-07 (opened as a scope 2026-10-26). Status lives in
+`vault/Status/`.
 
 ## Answer
 

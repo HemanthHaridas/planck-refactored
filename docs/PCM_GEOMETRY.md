@@ -1,8 +1,7 @@
 # What does Planck need for PCM geometry optimizations and frequencies?
 
-Answer (2026-11-08). The scope opened 2026-10-26 has landed; this document
-now records what was built and why. Remaining gaps are listed under
-"Not done" and in `vault/Status/Open Work.md`.
+Answered 2026-11-08 (opened as a scope 2026-10-26). Status lives in
+`vault/Status/`.
 
 ## Answer
 
@@ -37,17 +36,6 @@ The path there:
 
 Every gate fails when the piece it covers is deliberately broken (see each
 step's record below).
-
-## Not done
-
-- **Imaginary-mode following with PCM** is still rejected by `io.cpp`. The
-  HF loops it uses now carry the cavity, but no case gates it.
-- **Not gated for geomopt and frequencies:** UHF/UKS, the spherical basis,
-  and planck-dft frequencies. They run through the same code paths as the
-  gated cases (`pcm_gradient`, the per-geometry cavity rebuild).
-- **Deferred from step 3:** pair screening by a tolerance-linked prefactor
-  bound, and a cheaper φ_el contraction. Take these up only if a larger
-  system shows the sweeps dominating again.
 
 ## What the gradient contains
 
@@ -97,7 +85,7 @@ boundaries.
 
 **Orientation.** The energy still depends slightly on orientation:
 5.2e-6 Eh over five rigid rotations of C1 H2O2 at 302 points, the same as
-PySCF. This is accepted; `docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md` gives
+PySCF. This is accepted; `docs/PCM_ROTATIONAL_INVARIANCE.md` gives
 the reasons.
 
 **What the cavity is.** `build_pcm_state` (`src/solvation/pcm.cpp`)
@@ -511,10 +499,21 @@ orientation dependence did not show here.
 - no cavity in the Hessian loop: gas-phase frequencies (bend 1763.24,
   stretch 4031.66 cm⁻¹).
 
+## Not done
+
+- **Imaginary-mode following with PCM** is still rejected by `io.cpp`. The
+  HF loops it uses now carry the cavity, but no case gates it.
+- **Not gated for geomopt and frequencies:** UHF/UKS, the spherical basis,
+  and planck-dft frequencies. They run through the same code paths as the
+  gated cases (`pcm_gradient`, the per-geometry cavity rebuild).
+- **Deferred from step 3:** pair screening by a tolerance-linked prefactor
+  bound, and a cheaper φ_el contraction. Take these up only if a larger
+  system shows the sweeps dominating again.
+
 ## Not in this scope
 
 IEF-PCM, SS(V)PE, COSMO's (ε−1)/(ε+½) as an option, and non-electrostatic
 terms (cavitation, dispersion-repulsion, as in SMD). Also out: PCM for TDDFT
 (linear-response or state-specific), for post-HF, and for ROHF. Restoring
 SAO blocking under PCM is out too: the cavity is not symmetry-adapted
-(`docs/PCM_ROTATIONAL_INVARIANCE_SCOPE.md`).
+(`docs/PCM_ROTATIONAL_INVARIANCE.md`).
