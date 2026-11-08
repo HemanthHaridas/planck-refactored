@@ -7694,6 +7694,180 @@
    ]
   },
   {
+   "id": "h2o2_rhf_pcm_swig_gradient_631gd",
+   "_note": "PCM analytic gradient gate (docs/PCM_GEOMETRY_SCOPE.md step 4d). PySCF 2.13.0 C-PCM gradient from tests/pyscf/pcm_swig_references.py (conv_tol_grad 1e-9; DFT with grid response). Planck's gradient is SCF + Gradient::pcm_gradient (grad_nuc + grad_qv + grad_solver). C1, so every component is independent. Per term at verbosity verbose, grad_nuc, grad_qv and grad_solver each match PySCF's functions of the same name to all ten printed digits.",
+   "input": "tests/inputs/regression/hf/h2o2_rhf_pcm_swig_gradient_631gd.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with"
+   ],
+   "checks": [
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       -0.054436327158,
+       0.006934996642,
+       -0.034878019853
+      ],
+      [
+       0.04323558994,
+       0.011281609123,
+       -0.038000087232
+      ],
+      [
+       0.052128591599,
+       0.003210006391,
+       0.027818628953
+      ],
+      [
+       -0.04092785438,
+       -0.021426612156,
+       0.045059478132
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rhf_pcm_swig_gradient_spherical_631gd",
+   "_note": "PCM analytic gradient gate (docs/PCM_GEOMETRY_SCOPE.md step 4d). PySCF 2.13.0 C-PCM gradient from tests/pyscf/pcm_swig_references.py (conv_tol_grad 1e-9; DFT with grid response). Planck's gradient is SCF + Gradient::pcm_gradient (grad_nuc + grad_qv + grad_solver). Spherical basis (PySCF cart=False): the density is lifted to Cartesian inside pcm_grad_qv.",
+   "input": "tests/inputs/regression/hf/h2o2_rhf_pcm_swig_gradient_spherical_631gd.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with"
+   ],
+   "checks": [
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       -0.053587891927,
+       0.006393788492,
+       -0.034534765871
+      ],
+      [
+       0.042528463786,
+       0.011802505951,
+       -0.037465495744
+      ],
+      [
+       0.051581137025,
+       0.003353862672,
+       0.027449396419
+      ],
+      [
+       -0.040521708884,
+       -0.021550157115,
+       0.044550865196
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uhf_pcm_swig_gradient_631gd",
+   "_note": "PCM analytic gradient gate (docs/PCM_GEOMETRY_SCOPE.md step 4d). PySCF 2.13.0 C-PCM gradient from tests/pyscf/pcm_swig_references.py (conv_tol_grad 1e-9; DFT with grid response). Planck's gradient is SCF + Gradient::pcm_gradient (grad_nuc + grad_qv + grad_solver). UHF: the total density is alpha + beta.",
+   "input": "tests/inputs/regression/hf/water_cation_uhf_pcm_swig_gradient_631gd.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with"
+   ],
+   "checks": [
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.104028630099
+      ],
+      [
+       -0.071393432177,
+       0.0,
+       -0.052014315049
+      ],
+      [
+       0.071393432177,
+       0.0,
+       -0.052014315049
+      ]
+     ],
+     "atol": 2e-08
+    }
+   ]
+  },
+  {
+   "id": "water_rks_pbe_pcm_swig_gradient_631gd",
+   "_note": "PCM analytic gradient gate (docs/PCM_GEOMETRY_SCOPE.md step 4d). PySCF 2.13.0 C-PCM gradient from tests/pyscf/pcm_swig_references.py (conv_tol_grad 1e-9; DFT with grid response). Planck's gradient is SCF + Gradient::pcm_gradient (grad_nuc + grad_qv + grad_solver). RKS PBE on the unpruned 150 x 590 grid; agrees with PySCF to 1.6e-11.",
+   "input": "tests/inputs/regression/dft/water_rks_pbe_pcm_swig_gradient_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with"
+   ],
+   "checks": [
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.101193957979
+      ],
+      [
+       -0.052772684674,
+       0.0,
+       -0.05059697899
+      ],
+      [
+       0.052772684674,
+       0.0,
+       -0.05059697899
+      ]
+     ],
+     "atol": 1e-09
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rhf_pcm_swig_gradient_fd_631gd",
+   "_note": "PCM analytic gradient against a five-point central difference of the PCM SCF energy (docs/PCM_GEOMETRY_SCOPE.md step 4d): the end-to-end check that the SCF with PCM needs no response term. Measured 4.2e-8 Ha/Bohr at delta 1e-3 Bohr, limited by the printed energy; 48 SCF runs, ~12 s.",
+   "input": "tests/inputs/regression/hf/h2o2_rhf_pcm_swig_gradient_631gd.hfinp",
+   "executable": "tests/hf_gradient_fd.py",
+   "args": [
+    "--points",
+    "5",
+    "--delta",
+    "1e-3",
+    "--atol",
+    "1e-7"
+   ],
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Analytic gradient (Ha/Bohr):",
+    "Finite-difference gradient (Ha/Bohr):",
+    "PASS"
+   ]
+  },
+  {
    "id": "water_rhf_pcm_smoothness_sto3g",
    "_note": "SWIG C-PCM smoothness gate (docs/PCM_GEOMETRY_SCOPE.md step 1): 101-point O-H stretch, asserts the fourth difference of E stays below 5e-9 Eh. Measured 2.3e-9 on the SWIG cavity; the pre-SWIG Fibonacci cavity fails it at 4.4e-5 (checked against a pre-change binary).",
    "input": "tests/inputs/regression/hf/water_rhf_pcm_smoothness_sto3g.hfinp",

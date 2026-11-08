@@ -32,8 +32,9 @@
 // where the 1/2 prevents double counting against V_rxn already living inside
 // the Fock matrix.
 //
-// Only the C-PCM dielectric form is implemented here. IEF-PCM, SS(V)PE,
-// analytic gradients, and PCM coupling to post-HF correlation are not.
+// Only the C-PCM dielectric form is implemented here. IEF-PCM, SS(V)PE and
+// PCM coupling to post-HF correlation are not. The analytic gradient terms
+// are below (pcm_grad_*), summed by Gradient::pcm_gradient.
 // ─────────────────────────────────────────────────────────────────────────────
 
 #include <expected>
@@ -125,6 +126,11 @@ namespace HartreeFock::Solvation
         const std::vector<HartreeFock::ShellPair> &shell_pairs,
         const PCMState &state,
         const Eigen::MatrixXd &total_density);
+
+    // The total density the reaction field sees, in the working basis:
+    // alpha + beta for unrestricted references, alpha alone for RHF/RKS (whose
+    // alpha slot already holds the total density).
+    Eigen::MatrixXd pcm_total_density(const HartreeFock::Calculator &calculator);
 
     // S_ij = erf(xi_ij r_ij)/r_ij, S_ii = xi_i sqrt(2/pi)/F_i for the given
     // tesserae: the matrix build_pcm_state factors.

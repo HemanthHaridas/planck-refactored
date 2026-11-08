@@ -429,6 +429,25 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Analytic PCM gradients (2026-11-08, `docs/PCM_GEOMETRY_SCOPE.md`
+  step 4).** `calculation gradient` with C-PCM runs for RHF, UHF, RKS and
+  UKS, Cartesian and spherical. `Gradient::pcm_gradient` re-solves the
+  charges at the converged density and adds three terms. `grad_nuc` and
+  `grad_solver` (the cavity terms, through the tessera positions and the
+  SWIG switching F_i) live in `pcm.cpp`. `grad_qv` is a shell-block
+  derivative kernel, `_compute_electronic_potential_gradient`, that reuses
+  the point-charge VRR with 2α/2β-weighted slices and takes the
+  charge-centre term from translation invariance. Each term matches FD
+  (`planck-pcm-cavity-gradient-fd`, `planck-pcm-qv-gradient-fd`), and each
+  matches PySCF 2.13.0's `grad_nuc`/`grad_qv`/`grad_solver` to all ten
+  printed digits on C1 H2O2. Totals match PySCF to every printed digit on
+  four cases (`*_pcm_swig_gradient_*`; DFT 1.6e-11), and a five-point FD of
+  the SCF energy to 4.2e-8 Ha/Bohr. Dropping any one term fails every
+  gate. Cost: 0.46 s of a 33 s anthracene/6-31G* run. Geomopt and
+  frequencies with PCM are still rejected (step 5). Found on the way:
+  `planck-esp-points` had failed since the SWIG cavity, because its
+  hand-built tesserae left ξ = 0; fixed in the test.
+
 - **Spherical PCM single points (2026-11-08, `docs/PCM_GEOMETRY_SCOPE.md`
   step 6).** `evaluate_pcm_reaction_field` lifts the working density to
   Cartesian for φ_el and returns V_rxn in the working basis, so every

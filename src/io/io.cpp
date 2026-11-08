@@ -1751,10 +1751,14 @@ namespace HartreeFock::IO
 
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)
         {
-            if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+            // Analytic PCM gradients exist (docs/PCM_GEOMETRY_SCOPE.md step 4);
+            // geometry optimization and frequencies need the cavity rebuilt in
+            // their inner loops first (step 5).
+            if (calculator._calculation != HartreeFock::CalculationType::SinglePoint &&
+                calculator._calculation != HartreeFock::CalculationType::Gradient)
             {
                 return std::unexpected(
-                    "PCM is currently implemented only for single-point energy calculations.");
+                    "PCM is currently implemented only for single-point energies and gradients.");
             }
 
             if (calculator._correlation != HartreeFock::PostHF::None)

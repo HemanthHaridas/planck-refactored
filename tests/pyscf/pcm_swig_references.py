@@ -1,15 +1,19 @@
-"""References for the SWIG C-PCM gates (docs/PCM_GEOMETRY_SCOPE.md step 1).
+"""References for the SWIG C-PCM gates (docs/PCM_GEOMETRY_SCOPE.md steps 1, 6, 4d).
 
 PySCF's default C-PCM (SWIG, lebedev_order 29 = 302 points, vdw_scale 1.2,
 modified Bondi, eps 78.3553) on each tests/inputs/regression/*/*pcm_swig*
 input, cart following its basis_type (step 6 added the spherical cases), Planck's GBS and its CODATA 2018 Bohr; DFT on Planck's
-unpruned 150 x 590 grid.
-  tests/pyscf/.venv/bin/python tests/pyscf/pcm_swig_references.py
+unpruned 150 x 590 grid. For a `calculation gradient` input it also prints the
+analytic gradient (with grid response for DFT) and, for RHF, the three PCM
+terms grad_nuc / grad_qv / grad_solver separately.
+  tests/pyscf/.venv/bin/python tests/pyscf/pcm_swig_references.py [name-filter]
 """
 import pathlib
 import re
+import sys
 
 from pyscf import dft, gto, scf
+from pyscf.solvent.grad import pcm as pcm_grad
 from pyscf.gto.basis import parse_gaussian
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -47,11 +51,31 @@ def run(path):
     # hcore -> 1e, sad -> minao (PySCF's atomic-density guess).
     mf.init_guess = "minao" if field(text, "guess") == "sad" else "1e"
     mf.conv_tol = 1e-12
+    mf.conv_tol_grad = 1e-9  # PySCF's default sqrt(conv_tol) leaves ~1e-8 in gradients
     e = mf.kernel()
     assert mf.converged, path.stem
     print(f"{path.stem:42s} E = {e:.10f}  G_pcm = {mf.with_solvent.e:.10f}  "
           f"npts = {len(mf.with_solvent.surface['grid_coords'])}")
+    if field(text, "calculation") != "gradient":
+        return
+
+    def show(label, g):
+        print(f"  {label}")
+        for row in g:
+            print("    [" + ", ".join(f"{x:.12f}" for x in row) + "],")
+
+    g = mf.nuc_grad_method()
+    if exchange:
+        g.grid_response = True
+    show("gradient", g.kernel())
+    if not exchange and scf_type == "rhf":
+        dm = mf.make_rdm1()
+        show("grad_nuc", pcm_grad.grad_nuc(mf.with_solvent, dm))
+        show("grad_qv", pcm_grad.grad_qv(mf.with_solvent, dm))
+        show("grad_solver", pcm_grad.grad_solver(mf.with_solvent, dm))
 
 
+name_filter = sys.argv[1] if len(sys.argv) > 1 else ""
 for p in sorted(ROOT.glob("tests/inputs/regression/*/*pcm_swig*.hfinp")):
-    run(p)
+    if name_filter in p.stem:
+        run(p)

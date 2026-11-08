@@ -129,15 +129,19 @@ def central_difference_gradient(
     multiplicity: int,
     delta_bohr: float,
     workdir: Path,
+    points: int = 3,
 ) -> list[list[float]]:
     delta_ang = delta_bohr / ANGSTROM_TO_BOHR
     natom = len(symbols)
     gradient = [[0.0, 0.0, 0.0] for _ in range(natom)]
+    # (step multiple, weight) of the central-difference stencil.
+    stencil = [(+1.0, 0.5), (-1.0, -0.5)] if points == 3 else \
+        [(+2.0, -1.0 / 12.0), (+1.0, 8.0 / 12.0), (-1.0, -8.0 / 12.0), (-2.0, 1.0 / 12.0)]
 
     for atom in range(natom):
         for axis in range(3):
             energies: list[float] = []
-            for sign in (+1.0, -1.0):
+            for sign, _ in stencil:
                 shifted = [row[:] for row in coords]
                 shifted[atom][axis] += sign * delta_ang
                 input_text = render_input(
@@ -148,13 +152,13 @@ def central_difference_gradient(
                     multiplicity,
                     calculation="energy",
                 )
-                input_path = workdir / f"fd_{atom}_{axis}_{'p' if sign > 0 else 'm'}.hfinp"
+                input_path = workdir / f"fd_{atom}_{axis}_{sign:+.0f}.hfinp"
                 input_path.write_text(input_text, encoding="utf-8")
                 output = run_hartree_fock(executable, input_path)
                 energies.append(parse_hf_energy(output))
 
-            e_plus, e_minus = energies
-            gradient[atom][axis] = (e_plus - e_minus) / (2.0 * delta_bohr)
+            gradient[atom][axis] = sum(
+                w * e for (_, w), e in zip(stencil, energies)) / delta_bohr
 
     return gradient
 
@@ -198,6 +202,13 @@ def main(argv: Iterable[str] | None = None) -> int:
         type=float,
         default=1.0e-3,
         help="finite-difference step in Bohr (default 1e-3)",
+    )
+    parser.add_argument(
+        "--points",
+        type=int,
+        choices=(3, 5),
+        default=3,
+        help="central-difference stencil: 3 (second order, default) or 5 (fourth order)",
     )
     parser.add_argument(
         "--atol",
@@ -244,6 +255,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         multiplicity,
         args.delta,
         workdir,
+        args.points,
     )
 
     print("Analytic gradient (Ha/Bohr):")

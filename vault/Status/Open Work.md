@@ -86,18 +86,15 @@ rerun for it.
   non-SCF workflow refuse meta-GGA by name: the KS gradient picks its terms by
   `vsigma.cols()` and would otherwise silently drop the τ term.
 - **PCM geometry optimizations and frequencies**
-  (`docs/PCM_GEOMETRY_SCOPE.md`). Steps 1–3 landed 2026-11-07: the smooth
-  SWIG cavity, then fused integral sweeps with S factored once, then a
-  shell-block point-charge kernel (see Completion). Spherical PCM (6)
-  landed 2026-11-08, and so did all three gradient terms: the cavity terms
-  (4a–4b: `pcm_grad_nuc` and `pcm_grad_solver`, FD-gated by
-  `planck-pcm-cavity-gradient-fd`) and the integral term (4c: `pcm_grad_qv`,
-  FD-gated by `planck-pcm-qv-gradient-fd`). Next: wire them into the
-  HF/KS gradients with PySCF gates (4d), then geomopt and frequencies (5). The geomopt, frequency and post-optimization symmetry
-  SCF loops call `run_*` without a PCM state, so lifting the input gate
-  alone would silently drop the solvent. Deferred from step 3:
-  tolerance-linked pair screening, and a cheaper φ_el contraction. PCM is
-  still single-point only, in both binaries and in both bases.
+  (`docs/PCM_GEOMETRY_SCOPE.md`). The smooth SWIG cavity, its memory and
+  cost work, spherical PCM, and analytic PCM gradients (step 4, 2026-11-08)
+  have landed (see Completion). Next is step 5: geomopt and frequencies.
+  Their inner loops (`geomopt.cpp`, `hessian.cpp`, and the post-optimization
+  symmetry SCF in `hf_driver.cpp`) call `run_*` and `compute_*_gradient`
+  without a PCM state, so lifting the input gate alone would silently drop
+  the solvent. Each geometry needs its own cavity plus
+  `Gradient::pcm_gradient`. Deferred from step 3: tolerance-linked pair
+  screening, and a cheaper φ_el contraction.
 - **Double hybrids** (`docs/DH_IMPLEMENTATION.md` §9):
   - UKS DH geometry optimization and frequencies are rejected. The gradient
     they would call already passes FD.

@@ -4424,14 +4424,6 @@ namespace DFT::Driver
             const PreparedSystem &prepared,
             const InitializedFunctionals &functionals)
         {
-            if (prepared.pcm && prepared.pcm->enabled())
-            {
-                HartreeFock::Logger::logging(
-                    HartreeFock::LogLevel::Warning,
-                    "DFT Gradient :",
-                    "Analytic KS gradient omits PCM geometry response; use numerical gradient if solvation coupling is required.");
-            }
-
             auto xc_grid = evaluate_current_density_and_xc(
                 calculator,
                 prepared,
@@ -4542,7 +4534,15 @@ namespace DFT::Driver
             if (dft_gradient_debug_enabled())
                 print_gradient_component_report("D3", dispersion->gradient);
 
-            calculator._gradient = *wf_grad + *xc_grad + dispersion->gradient;
+            // C-PCM geometry response (docs/PCM_GEOMETRY_SCOPE.md step 4).
+            auto pcm_grad = HartreeFock::Gradient::pcm_gradient(
+                calculator, prepared.shell_pairs, prepared.pcm ? &*prepared.pcm : nullptr);
+            if (!pcm_grad)
+                return std::unexpected(pcm_grad.error());
+            if (dft_gradient_debug_enabled())
+                print_gradient_component_report("PCM", *pcm_grad);
+
+            calculator._gradient = *wf_grad + *xc_grad + dispersion->gradient + *pcm_grad;
             if (dft_gradient_debug_enabled())
                 print_gradient_component_report("KS-total", calculator._gradient);
 
@@ -5464,12 +5464,8 @@ namespace DFT::Driver
                 {
                     pcm_state = std::move(*state);
 
-                    Eigen::MatrixXd pcm_density =
-                        calculator._info._scf.alpha.density;
-                    if (calculator._scf._scf != HartreeFock::SCFType::RHF &&
-                        calculator._info._scf.beta.density.rows() ==
-                            calculator._info._scf.alpha.density.rows())
-                        pcm_density += calculator._info._scf.beta.density;
+                    const Eigen::MatrixXd pcm_density =
+                        HartreeFock::Solvation::pcm_total_density(calculator);
 
                     auto pcm = HartreeFock::Solvation::evaluate_pcm_reaction_field(
                         calculator, shell_pairs, *pcm_state, pcm_density);

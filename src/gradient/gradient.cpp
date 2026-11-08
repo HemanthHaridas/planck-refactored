@@ -2,6 +2,7 @@
 #include "two_electron_gradient.h"
 
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <format>
 #include <memory>
@@ -16,6 +17,7 @@
 #include "integrals/hgp.h"
 #include "integrals/os.h"
 #include "integrals/shellpair.h"
+#include "io/logging.h"
 #include "post_hf/mp2.h"
 #include "post_hf/mp2_gradient.h"
 #include "scf/scf.h"
@@ -58,6 +60,23 @@ std::expected<std::vector<int>, std::string> HartreeFock::Gradient::detail::buil
             return std::unexpected(std::string("Gradient: shell does not match any atom"));
     }
     return map;
+}
+
+std::expected<std::vector<int>, std::string> HartreeFock::Gradient::detail::build_ao_atom_map(
+    const HartreeFock::Calculator &calc)
+{
+    auto shell_atom = build_shell_atom_map(calc);
+    if (!shell_atom)
+        return std::unexpected(shell_atom.error());
+    const auto &shells = calc._shells._shells;
+    const auto &bfs = calc._shells._basis_functions;
+    std::unordered_map<const HartreeFock::Shell *, int> atom_of_shell; // _shells is a deque
+    for (std::size_t s = 0; s < shells.size(); ++s)
+        atom_of_shell[&shells[s]] = (*shell_atom)[s];
+    std::vector<int> ao_atom(bfs.size());
+    for (std::size_t mu = 0; mu < bfs.size(); ++mu)
+        ao_atom[mu] = atom_of_shell.at(bfs[mu]._shell);
+    return ao_atom;
 }
 
 static std::size_t idx_dm2_grad(int p, int q, int r, int s, int nbf)
@@ -134,14 +153,10 @@ HartreeFock::Gradient::one_electron_gradient(
     auto shell_atom = detail::build_shell_atom_map(calc);
     if (!shell_atom)
         return std::unexpected(shell_atom.error());
-    const auto &shells = calc._shells._shells;
-    const auto &bfs = calc._shells._basis_functions;
-    std::unordered_map<const HartreeFock::Shell *, int> atom_of_shell; // _shells is a deque
-    for (std::size_t s = 0; s < shells.size(); ++s)
-        atom_of_shell[&shells[s]] = (*shell_atom)[s];
-    std::vector<int> ao_atom(bfs.size());
-    for (std::size_t mu = 0; mu < bfs.size(); ++mu)
-        ao_atom[mu] = atom_of_shell.at(bfs[mu]._shell);
+    auto ao_atom_res = detail::build_ao_atom_map(calc);
+    if (!ao_atom_res)
+        return std::unexpected(ao_atom_res.error());
+    const std::vector<int> &ao_atom = *ao_atom_res;
     std::vector<Eigen::Vector3d> centers(mol.natoms);
     for (std::size_t a = 0; a < mol.natoms; ++a)
         centers[a] = mol._standard.row(static_cast<Eigen::Index>(a)).transpose();
@@ -860,4 +875,54 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::compute_ump2_
     if (!grad_res)
         return std::unexpected(std::string("UMP2 gradient build failed: ") + grad_res.error());
     return grad_res->electronic_gradient + compute_nuclear_repulsion_gradient(calc);
+}
+
+std::expected<Eigen::MatrixXd, std::string> HartreeFock::Gradient::pcm_gradient(
+    const HartreeFock::Calculator &calc,
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const HartreeFock::Solvation::PCMState *pcm)
+{
+    const auto natoms = static_cast<Eigen::Index>(calc._molecule.natoms);
+    if (!pcm || !pcm->enabled())
+        return Eigen::MatrixXd::Zero(natoms, 3);
+
+    const Eigen::MatrixXd density = HartreeFock::Solvation::pcm_total_density(calc);
+    auto field = HartreeFock::Solvation::evaluate_pcm_reaction_field(calc, shell_pairs, *pcm, density);
+    if (!field)
+        return std::unexpected("PCM gradient: " + field.error());
+    const Eigen::VectorXd &q = field->apparent_charges;
+
+    auto ao_atom = detail::build_ao_atom_map(calc);
+    if (!ao_atom)
+        return std::unexpected(ao_atom.error());
+    const auto t0 = std::chrono::steady_clock::now();
+    auto qv = HartreeFock::Solvation::pcm_grad_qv(calc, shell_pairs, *pcm, density, q, *ao_atom);
+    if (!qv)
+        return std::unexpected(qv.error());
+    const auto t1 = std::chrono::steady_clock::now();
+    const Eigen::MatrixXd nuc = HartreeFock::Solvation::pcm_grad_nuc(calc._molecule, *pcm, q);
+    const auto t2 = std::chrono::steady_clock::now();
+    const Eigen::MatrixXd solver = HartreeFock::Solvation::pcm_grad_solver(calc._molecule, *pcm, q);
+    const auto t3 = std::chrono::steady_clock::now();
+
+    if (calc._output._verbosity >= HartreeFock::Verbosity::Verbose)
+    {
+        const auto sec = [](auto a, auto b) { return std::chrono::duration<double>(b - a).count(); };
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "PCM Gradient Timing :",
+            std::format("grad_qv {:.3f} s, grad_nuc {:.3f} s, grad_solver {:.3f} s",
+                        sec(t0, t1), sec(t1, t2), sec(t2, t3)));
+        const auto print = [&](const char *label, const Eigen::MatrixXd &g)
+        {
+            HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, std::string("PCM Gradient ") + label + " :", "");
+            for (Eigen::Index a = 0; a < natoms; ++a)
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "",
+                                             std::format("  Atom {:3d}: {:16.10f}  {:16.10f}  {:16.10f}",
+                                                         static_cast<int>(a + 1), g(a, 0), g(a, 1), g(a, 2)));
+        };
+        print("grad_nuc", nuc);
+        print("grad_qv", *qv);
+        print("grad_solver", solver);
+    }
+    return Eigen::MatrixXd(nuc + *qv + solver);
 }

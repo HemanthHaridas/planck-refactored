@@ -463,3 +463,12 @@ std::expected<Eigen::MatrixXd, std::string> HartreeFock::Solvation::pcm_grad_qv(
         return std::unexpected("PCM gradient: " + grad.error());
     return Eigen::MatrixXd(-*grad);
 }
+
+Eigen::MatrixXd HartreeFock::Solvation::pcm_total_density(const HartreeFock::Calculator &calculator)
+{
+    Eigen::MatrixXd density = calculator._info._scf.alpha.density;
+    if (calculator._scf._scf != HartreeFock::SCFType::RHF &&
+        calculator._info._scf.beta.density.rows() == density.rows())
+        density += calculator._info._scf.beta.density;
+    return density;
+}

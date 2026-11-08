@@ -6,6 +6,7 @@
 #include <optional>
 
 #include "base/types.h"
+#include "solvation/pcm.h"
 
 namespace HartreeFock
 {
@@ -69,6 +70,16 @@ namespace HartreeFock
             const std::vector<HartreeFock::ShellPair> &ao_pairs,
             const Eigen::MatrixXd &D,
             const Eigen::MatrixXd &W = {});
+
+        // C-PCM contribution to an SCF/KS nuclear gradient
+        // (docs/PCM_GEOMETRY_SCOPE.md step 4): grad_nuc + grad_qv + grad_solver
+        // at the converged total density, with q re-solved from it. Zero when
+        // pcm is null or disabled. No response term: the SCF with PCM is
+        // variational in the charges. Prints the three terms at verbose.
+        std::expected<Eigen::MatrixXd, std::string> pcm_gradient(
+            const HartreeFock::Calculator &calc,
+            const std::vector<HartreeFock::ShellPair> &shell_pairs,
+            const HartreeFock::Solvation::PCMState *pcm);
 
         // Analytic RHF nuclear gradient.
         // Returns natoms×3 matrix in Ha/Bohr.

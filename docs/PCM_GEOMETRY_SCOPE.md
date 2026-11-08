@@ -5,16 +5,16 @@ then as the answer. Status lives in `vault/Status/Open Work.md`.
 
 ## Where it stands (2026-11-08)
 
-**All three terms of the analytic PCM gradient exist, and each one matches
-finite differences of the energy, but they are not wired into a gradient
-yet.** A user still cannot run `calculation gradient` with PCM. Two steps
-remain: 4d (wire the terms in and gate them against PySCF) and 5 (geometry
-optimization and frequencies).
+**Analytic PCM gradients work.** `calculation gradient` with C-PCM runs for
+RHF, UHF, RKS and UKS, in the Cartesian and spherical bases, in both
+binaries. The gradient matches PySCF 2.13.0 to every printed digit (DFT
+within 1.6e-11 Ha/Bohr), term by term as well as in total, and matches a
+five-point finite difference of the SCF energy to 4.2e-8 Ha/Bohr. It is
+cheap: 0.46 s of a 33 s anthracene/6-31G* gradient run.
 
-The groundwork is done. The C-PCM energy is a smooth function of the
-geometry, matches PySCF's default C-PCM to every printed digit in both the
-Cartesian and spherical bases, and costs the same wall time as the old
-stored-matrix design with 5–7× less memory.
+One step remains: 5, geometry optimization and frequencies. That step is
+mostly about the cavity being rebuilt at every geometry, not about new
+derivatives.
 
 | Step | What | Status | Gate |
 |---|---|---|---|
@@ -25,53 +25,13 @@ stored-matrix design with 5–7× less memory.
 | 4a | Cavity data for the gradient | Done 2026-11-08 | — |
 | 4b | `grad_nuc`, `grad_solver` | Done 2026-11-08 | `planck-pcm-cavity-gradient-fd`: 2.8e-10 / 1.1e-9 Ha/Bohr |
 | 4c | `grad_qv` | Done 2026-11-08 | `planck-pcm-qv-gradient-fd`: 1.6e-14 (6-31G*) / 7.7e-14 (cc-pVTZ) |
-| 4d | Wire in, PySCF-gate | **Next** | — |
-| 5 | Geomopt and frequencies | Open | — |
+| 4d | Wired in, PySCF-gated | Done 2026-11-08 | Four `*_pcm_swig_gradient_*` cases match PySCF; `h2o2_rhf_pcm_swig_gradient_fd_631gd` 4.2e-8 |
+| 5 | Geomopt and frequencies | **Next** | — |
 
-Each finished term has its own gate, and each gate fails under deliberate
-breakage of that term (see the record below). If 4d's total disagrees with
-PySCF, the per-term comparison in 4d can trace the gap to one term.
+Every term and the wired total have gates, and each gate fails when its
+term is deliberately broken (see the record below).
 
 ## What remains
-
-### 4d. Wire the gradient in and gate it against PySCF
-
-RHF/UHF and RKS/UKS, `calculation gradient` only, in both bases.
-
-- **One function:** `Solvation::pcm_gradient(calc, shell_pairs, state,
-  P_total, ao_atom)` returns natoms × 3. It gets q from one
-  `evaluate_pcm_reaction_field` call at the final density, then sums
-  `pcm_grad_nuc + pcm_grad_qv + pcm_grad_solver`. `pcm_grad_qv` already
-  converts a spherical density to Cartesian.
-- **Call it once at each gradient entry point.** `compute_{rhf,uhf}_gradient`
-  take an optional `const PCMState *` and build `ao_atom` from the shell →
-  atom map that `one_electron_gradient` already uses. The DFT
-  `compute_analytic_ks_gradient` replaces its "omits PCM geometry
-  response" warning (`src/dft/driver.cpp`) with the term. That warning is
-  dead code today, because `io.cpp` rejects every PCM run that is not a
-  single point.
-- **Lift the gate in `io.cpp`** for `calculation gradient` only. ROHF and
-  post-HF stay rejected. The DH gradients keep their own solvent refusals:
-  they have no solvent response.
-- **Gates:**
-  - PySCF per term. `solvent/grad/pcm.py` exposes `grad_nuc`, `grad_qv`
-    and `grad_solver` separately. Compare each on C1 H2O2 before comparing
-    the total. When the total is the only check, partial cancellations hide
-    which term is wrong (see the DH KS/PT2-halves lesson in Completion).
-  - PySCF total (`make_grad_object`) on the four Cartesian SWIG cases and
-    at least one spherical case, extending
-    `tests/pyscf/pcm_swig_references.py`. Set `conv_tol_grad` (see the
-    PySCF `conv_tol_grad` memory).
-  - Fourth-order FD of the SCF energy to 1e-7 Ha/Bohr on C1 H2O2. This is
-    the end-to-end check that the SCF's variational response needs no
-    extra term.
-  - The forces sum to zero to roundoff. Torque is not a gate (see
-    Orientation below).
-  - Mutation check: drop each of the three terms in turn and confirm that
-    every gate fails.
-- **Measure the cost** of `grad_qv` and `grad_solver` on the acene ladder.
-  Neither has been timed. `grad_solver` is a serial O(n_tess²) loop marked
-  `ponytail:` with its upgrade path.
 
 ### 5. Geometry optimization and frequencies
 
@@ -84,6 +44,9 @@ any error. `src/opt/geomopt.cpp` (`run_*` at ~95–99),
   per build on the acene ladder. Put the build in
   `rebuild_basis_dependent_state` or next to it, so all three loops share
   one path.
+- The same loops call `compute_{rhf,uhf,rohf}_gradient` directly, so they
+  must also add `Gradient::pcm_gradient` with that geometry's state. In 4d
+  it is added only at the driver's gradient site and in the KS gradient.
 - Check that the DFT geomopt/freq callbacks rebuild through `prepare`
   (`prepared.pcm`) at every geometry.
 - Gates:
@@ -453,6 +416,70 @@ cc-pVTZ, against gradients of about 1e-2. The atom sum is 1e-17.
 - The planned comparison against the per-component point-charge kernels
   was not built. The FD is independent of the kernel and covers Gaussian
   charges, which is the case PCM uses.
+
+### Step 4d: the gradient, wired in and gated
+
+`Gradient::pcm_gradient(calc, shell_pairs, state*)` (`src/gradient/gradient.cpp`)
+returns natoms × 3, or zero without PCM. It re-solves q at the converged
+total density with one `evaluate_pcm_reaction_field` call and returns
+`pcm_grad_nuc + pcm_grad_qv + pcm_grad_solver`. No response term is needed,
+because the SCF with PCM is variational in the charges. At `verbosity
+verbose` it prints the three terms and a `PCM Gradient Timing` line.
+
+- **Call sites.** It is added once in the HF driver's gradient path, after
+  the RHF/UHF gradient, and once in the KS `compute_analytic_ks_gradient`,
+  where it replaces the "omits PCM geometry response" warning. The plan
+  had `compute_{rhf,uhf}_gradient` take a `PCMState *` instead. A sum at
+  the two call sites keeps the SCF gradient functions unchanged, and
+  step 5's inner loops can add the same call.
+- **Two copies removed.** The total density (alpha, plus beta when
+  unrestricted) is now one `Solvation::pcm_total_density(calc)`, which
+  replaces the two copies in the HF and DFT ESP reaction-field reports.
+  The AO → atom map is one `Gradient::detail::build_ao_atom_map`, used by
+  `one_electron_gradient` and `pcm_gradient`.
+- **`io.cpp`** admits PCM with `calculation gradient`. Geometry
+  optimization, frequencies, ROHF and post-HF stay rejected, and the DH
+  gradients keep their own solvent refusals.
+
+**Gates** (references from `tests/pyscf/pcm_swig_references.py`, which now
+prints the gradient, with grid response for DFT and `conv_tol_grad 1e-9`,
+and PySCF's `grad_nuc` / `grad_qv` / `grad_solver` for RHF inputs):
+
+| Case | Against PySCF 2.13.0 |
+|---|---|
+| `h2o2_rhf_pcm_swig_gradient_631gd` (C1) | every printed digit; each term to all ten printed digits at `verbose` |
+| `h2o2_rhf_pcm_swig_gradient_spherical_631gd` | every printed digit |
+| `water_cation_uhf_pcm_swig_gradient_631gd` | every printed digit |
+| `water_rks_pbe_pcm_swig_gradient_631gd` | 1.6e-11 Ha/Bohr |
+
+- **FD gate:** `h2o2_rhf_pcm_swig_gradient_fd_631gd` compares against a
+  five-point central difference of the PCM SCF energy (`tests/hf_gradient_fd.py
+  --points 5`, a stencil option added for this) and agrees to 4.2e-8
+  Ha/Bohr, which is the printed-energy limit; it takes 12 s. This is the
+  end-to-end check that no response term is missing.
+- **Mutations.** Dropping `grad_solver`, `grad_qv` or `grad_nuc` from the
+  sum each fails the H2O2 case, the water⁺ UHF case and the FD case (nine
+  of nine runs fail). `grad_solver` is the smallest term (about 4e-4
+  Ha/Bohr on H2O2), and it is still five orders of magnitude above the
+  2e-8 tolerance.
+- Translation invariance of the total was not gated separately. Each term
+  is translation-invariant to 1e-14 in its unit test, and the total matches
+  PySCF.
+
+**Cost.** Same acene ladder as step 3 (6-31G* RHF, direct SCF, 8 threads,
+302 points), regenerated as the step describes, with a full gradient
+calculation:
+
+| Molecule | Tesserae | grad_qv / s | grad_nuc / s | grad_solver / s | Whole run / s |
+|---|---|---|---|---|---|
+| Benzene | 1538 | 0.058 | 0.000 | 0.014 | 2.7 |
+| Naphthalene | 2160 | 0.185 | 0.000 | 0.027 | 13.2 |
+| Anthracene | 2782 | 0.410 | 0.001 | 0.044 | 33.0 |
+
+`grad_qv` costs about one φ_el sweep (0.41 s against 0.46 s on
+anthracene), even though it takes the VRR one level higher and runs three
+slices, because it groups the tesserae by atom. The serial O(n_tess²)
+`grad_solver` stays well under 0.1 s, so it is not threaded.
 
 ## Not in this scope
 

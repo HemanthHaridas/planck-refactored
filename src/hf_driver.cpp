@@ -1132,11 +1132,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     if (calculator._esp._enabled && calculator._esp._include_reaction_field &&
         pcm_state && pcm_state->enabled())
     {
-        Eigen::MatrixXd pcm_density = calculator._info._scf.alpha.density;
-        if (calculator._scf._scf != HartreeFock::SCFType::RHF &&
-            calculator._info._scf.beta.density.rows() ==
-                calculator._info._scf.alpha.density.rows())
-            pcm_density += calculator._info._scf.beta.density;
+        const Eigen::MatrixXd pcm_density = HartreeFock::Solvation::pcm_total_density(calculator);
 
         auto pcm = HartreeFock::Solvation::evaluate_pcm_reaction_field(
             calculator, shellpairs, *pcm_state, pcm_density);
@@ -1453,6 +1449,18 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                 return EXIT_FAILURE;
             }
             grad = std::move(*grad_res);
+        }
+        // C-PCM geometry response (docs/PCM_GEOMETRY_SCOPE.md step 4); zero
+        // without solvation. io.cpp admits PCM gradients for RHF/UHF only.
+        {
+            auto pcm_grad = HartreeFock::Gradient::pcm_gradient(
+                calculator, shellpairs, pcm_state ? &*pcm_state : nullptr);
+            if (!pcm_grad)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :", pcm_grad.error());
+                return EXIT_FAILURE;
+            }
+            grad += *pcm_grad;
         }
         calculator._gradient = grad;
 
