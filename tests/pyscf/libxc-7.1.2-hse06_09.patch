@@ -1,0 +1,273 @@
+diff --git a/python/gga_exc/gga_x_wpbeh09.py b/python/gga_exc/gga_x_wpbeh09.py
+new file mode 100644
+index 000000000..c1fab33bb
+--- /dev/null
++++ b/python/gga_exc/gga_x_wpbeh09.py
+@@ -0,0 +1,48 @@
++"""
++ wPBEh with the reduced-gradient rescaling of Henderson, Izmaylov, Scalmani
++ and Scuseria, J. Chem. Phys. 131, 044108 (2009), eq. (9) -- the revision
++ that paper recommends over eq. (8) (s_scaling_2, used by gga_x_wpbeh)
++ "due to the discontinuities in s-bar at s = 1".
++
++ Everything except the scaling is gga_x_wpbeh, included verbatim.
++
++ This Source Code Form is subject to the terms of the Mozilla Public
++ License, v. 2.0. If a copy of the MPL was not distributed with this
++ file, You can obtain one at http://mozilla.org/MPL/2.0/.
++"""
++
++# type: gga_exc
++
++from libxc_codegen import *  # noqa: F401, F403
++
++include('gga_x_wpbeh')
++
++# Eq. (9): s_bar = s - (1 - exp(-s)) log(1 + exp(s - smax)), as s_scaling_3.
++# s_scaling_3 overflows exp(s - smax) in density tails (s is unbounded) and,
++# before that, loses all digits to s - log(...) cancellation. For s > smax use
++# the identity log(1 + e^x) = x + log1p(e^-x), which gives the equivalent
++#   s_bar = smax - log1p(e^(smax - s)) + e^(-s) log(1 + e^(s - smax)),
++# every term bounded. Both branches are the same analytic function, so the
++# split at s = smax is C-infinity; each branch's argument is clamped into its
++# own domain, the usual libxc piecewise pattern.
++
++@helper
++def s_scaling_3_safe(s):
++    hi = m_max(s, smax)
++    lo = m_min(s, smax)
++    return (
++        my_piecewise3(
++        s > smax,
++        smax - xc_log1p(exp(smax - hi)) + exp(-hi)*(hi - smax + xc_log1p(exp(smax - hi))),
++        lo + xc_expm1(-lo)*xc_log1p(exp(lo - smax))
++        )
++    )
++
++@helper
++def f_wpbeh09(rs, z, x):
++    return f_wpbeh0(nu(rs, z), m_max(Float('1e-15'), s_scaling_3_safe(gga_s(x))))
++
++def f(rs, z, xt, xs0, xs1):
++    return gga_exchange_nsp(f_wpbeh09, rs, z, xs0, xs1)
++
++TYPE = "gga_exc"
+diff --git a/src/funcs_gga.c b/src/funcs_gga.c
+index e0b99395a..b66c57b5b 100644
+--- a/src/funcs_gga.c
++++ b/src/funcs_gga.c
+@@ -265,6 +265,7 @@ extern xc_func_info_type xc_func_info_gga_x_pbe_erf_gws;
+ extern xc_func_info_type xc_func_info_gga_c_pbe_erf_gws;
+ extern xc_func_info_type xc_func_info_gga_c_mggac;
+ extern xc_func_info_type xc_func_info_gga_x_q1d;
++extern xc_func_info_type xc_func_info_gga_x_wpbeh09;
+ 
+ const xc_func_info_type *xc_gga_known_funct[] = {
+   &xc_func_info_gga_x_gam,
+@@ -532,5 +533,6 @@ const xc_func_info_type *xc_gga_known_funct[] = {
+   &xc_func_info_gga_c_pbe_erf_gws,
+   &xc_func_info_gga_c_mggac,
+   &xc_func_info_gga_x_q1d,
++  &xc_func_info_gga_x_wpbeh09,
+   NULL
+ };
+diff --git a/src/funcs_hyb_gga.c b/src/funcs_hyb_gga.c
+index 581979604..cca52dc24 100644
+--- a/src/funcs_hyb_gga.c
++++ b/src/funcs_hyb_gga.c
+@@ -113,6 +113,7 @@ extern xc_func_info_type xc_func_info_hyb_gga_x_cam_s12h;
+ extern xc_func_info_type xc_func_info_hyb_gga_x_pbe_erf_gws;
+ extern xc_func_info_type xc_func_info_hyb_gga_xc_cam_pbeh;
+ extern xc_func_info_type xc_func_info_hyb_gga_xc_camy_pbeh;
++extern xc_func_info_type xc_func_info_hyb_gga_xc_hse06_09;
+ 
+ const xc_func_info_type *xc_hyb_gga_known_funct[] = {
+   &xc_func_info_hyb_gga_x_n12_sx,
+@@ -228,5 +229,6 @@ const xc_func_info_type *xc_hyb_gga_known_funct[] = {
+   &xc_func_info_hyb_gga_x_pbe_erf_gws,
+   &xc_func_info_hyb_gga_xc_cam_pbeh,
+   &xc_func_info_hyb_gga_xc_camy_pbeh,
++  &xc_func_info_hyb_gga_xc_hse06_09,
+   NULL
+ };
+diff --git a/src/funcs_key.c b/src/funcs_key.c
+index b09f13b18..65d0a1269 100644
+--- a/src/funcs_key.c
++++ b/src/funcs_key.c
+@@ -713,5 +713,7 @@ xc_functional_key_t xc_functional_keys[] = {
+   {"mgga_x_sregtm_v1", 772},
+   {"mgga_x_sregtm_v2", 773},
+   {"mgga_x_sregtm_v3", 774},
++  {"gga_x_wpbeh09", 790},
++  {"hyb_gga_xc_hse06_09", 791},
+ {"", -1}
+ };
+diff --git a/src/gga_x_wpbeh09.c b/src/gga_x_wpbeh09.c
+new file mode 100644
+index 000000000..c41366127
+--- /dev/null
++++ b/src/gga_x_wpbeh09.c
+@@ -0,0 +1,43 @@
++/*
++ This Source Code Form is subject to the terms of the Mozilla Public
++ License, v. 2.0. If a copy of the MPL was not distributed with this
++ file, You can obtain one at http://mozilla.org/MPL/2.0/.
++*/
++
++#include "util.h"
++
++#define XC_GGA_X_WPBEH09 790 /* short-range PBE hole, smooth reduced-gradient scaling of Henderson et al 2009 */
++
++/* gga_x_wpbeh with eq. (9) of TM Henderson, AF Izmaylov, G Scalmani and
++   GE Scuseria, J. Chem. Phys. 131, 044108 (2009) in place of eq. (8).
++   That paper recommends eq. (9) "due to the discontinuities in s-bar at
++   s = 1" of eq. (8). Everything else is gga_x_wpbeh. */
++
++#include "maple2c/gga_exc/gga_x_wpbeh09.c"
++#include "work_gga.c"
++
++static void
++xc_gga_x_wpbeh09_init(xc_func_type *p)
++{
++  xc_hyb_init_hybrid(p, 0.0);
++}
++
++static const char  *omega_names[]  = {"_omega"};
++static const char  *omega_desc[]   = {"screening parameter"};
++static const double omega_values[] = {0.0};
++
++#ifdef __cplusplus
++extern "C"
++#endif
++const xc_func_info_type xc_func_info_gga_x_wpbeh09 = {
++  XC_GGA_X_WPBEH09,
++  XC_EXCHANGE,
++  "short-range part of the PBE, smooth 2009 gradient scaling (default w=0 gives PBEh)",
++  XC_FAMILY_GGA,
++  {&xc_ref_Heyd2003_8207, &xc_ref_Heyd2006_219906, &xc_ref_Ernzerhof1998_3313, &xc_ref_Henderson2009_044108, NULL},
++  XC_FLAGS_3D | MAPLE2C_FLAGS,
++  1e-14,
++  {1, omega_names, omega_desc, omega_values, set_ext_params_cpy_omega},
++  xc_gga_x_wpbeh09_init, NULL,
++  NULL, &work_gga, NULL
++};
+diff --git a/src/hyb_gga_xc_hse06_09.c b/src/hyb_gga_xc_hse06_09.c
+new file mode 100644
+index 000000000..f8c1ddb2b
+--- /dev/null
++++ b/src/hyb_gga_xc_hse06_09.c
+@@ -0,0 +1,70 @@
++/*
++ This Source Code Form is subject to the terms of the Mozilla Public
++ License, v. 2.0. If a copy of the MPL was not distributed with this
++ file, You can obtain one at http://mozilla.org/MPL/2.0/.
++*/
++
++#include "util.h"
++#include "xc_funcs.h"
++
++#define XC_HYB_GGA_XC_HSE06_09 791 /* HSE06 with the smooth reduced-gradient scaling of Henderson et al 2009 */
++
++/* HSE06 (hyb_gga_xc_hse.c) with both wPBEh pieces replaced by
++   gga_x_wpbeh09, i.e. eq. (9) of JCP 131, 044108 (2009). That paper
++   applies the scaling to the screened piece; applying it to the omega = 0
++   piece as well follows what gga_x_wpbeh does for HSE06. */
++
++static const char  *hse_names[]  = {"_beta", "_omega_HF", "_omega_PBE"};
++static const char  *hse_desc[]   = {
++  "Mixing parameter",
++  "Screening parameter for HF",
++  "Screening parameter for PBE"
++};
++static const double hse06_values[] = {0.25, 0.11, 0.11};
++
++static void
++hyb_gga_xc_hse06_09_init(xc_func_type *p)
++{
++  int    funcs_id  [3] = {XC_GGA_X_WPBEH09, XC_GGA_X_WPBEH09, XC_GGA_C_PBE};
++  double funcs_coef[3] = {1.0, 0.0, 1.0};
++
++  /* funcs_coef[1] is set by set_ext_params */
++  xc_mix_init(p, 3, funcs_id, funcs_coef);
++  xc_hyb_init_sr(p, 0.0, 0.0);
++}
++
++static void
++hse06_09_set_ext_params(xc_func_type *p, const double *ext_params)
++{
++  double beta, omega_HF, omega_PBE;
++
++  assert(p != NULL);
++
++  beta      = get_ext_param(p, ext_params, 0);
++  omega_HF  = get_ext_param(p, ext_params, 1);
++  omega_PBE = get_ext_param(p, ext_params, 2);
++
++  p->mix_coef[1] = -beta;
++
++  p->cam_beta  = beta;
++  p->cam_omega = omega_HF;
++
++  xc_func_set_ext_params_name(p->func_aux[0], "_omega", 0.0);
++  xc_func_set_ext_params_name(p->func_aux[1], "_omega", omega_PBE);
++}
++
++#ifdef __cplusplus
++extern "C"
++#endif
++const xc_func_info_type xc_func_info_hyb_gga_xc_hse06_09 = {
++  XC_HYB_GGA_XC_HSE06_09,
++  XC_EXCHANGE_CORRELATION,
++  "HSE06 with the smooth 2009 reduced-gradient scaling",
++  XC_FAMILY_HYB_GGA,
++  {&xc_ref_Heyd2003_8207, &xc_ref_Heyd2006_219906, &xc_ref_Krukau2006_224106, &xc_ref_Henderson2009_044108, NULL},
++  XC_FLAGS_3D | XC_FLAGS_HYB_CAM | XC_FLAGS_I_HAVE_EXC | XC_FLAGS_I_HAVE_VXC | XC_FLAGS_I_HAVE_FXC, /* wpbeh09 is order 2 */
++  1e-15,
++  {3, hse_names, hse_desc, hse06_values, hse06_09_set_ext_params},
++  hyb_gga_xc_hse06_09_init, NULL,
++  NULL, NULL, NULL
++};
+diff --git a/src/libxc_inc.f90 b/src/libxc_inc.f90
+index a71e9b8b6..a46eb11ec 100644
+--- a/src/libxc_inc.f90
++++ b/src/libxc_inc.f90
+@@ -2104,3 +2104,9 @@
+  ! Simplified regularized Tao-Mo exchange (v3)
+  integer(c_int), parameter, public :: XC_MGGA_X_SREGTM_V3  =    774
+ 
++ ! short-range part of the PBE, smooth 2009 gradient scaling (default w=0 gives PBEh)
++ integer(c_int), parameter, public :: XC_GGA_X_WPBEH09  =    790
++
++ ! HSE06 with the smooth 2009 reduced-gradient scaling
++ integer(c_int), parameter, public :: XC_HYB_GGA_XC_HSE06_09  =    791
++
+diff --git a/src/sources.mk b/src/sources.mk
+index cb539d425..de0dfe219 100644
+--- a/src/sources.mk
++++ b/src/sources.mk
+@@ -129,6 +129,7 @@ libxc_la_FUNC_SOURCES = \
+ 	gga_x_vmt84.c \
+ 	gga_x_wc.c \
+ 	gga_x_wpbeh.c \
++	gga_x_wpbeh09.c \
+ 	gga_xc_1w.c \
+ 	gga_xc_b97.c \
+ 	gga_xc_edf1.c \
+@@ -147,6 +148,7 @@ libxc_la_FUNC_SOURCES = \
+ 	hyb_gga_xc_case21.c \
+ 	hyb_gga_xc_edf2.c \
+ 	hyb_gga_xc_hse.c \
++	hyb_gga_xc_hse06_09.c \
+ 	hyb_gga_xc_lc_blyp.c \
+ 	hyb_gga_xc_lcy_blyp.c \
+ 	hyb_gga_xc_lcy_pbe.c \
+diff --git a/src/xc_funcs.h b/src/xc_funcs.h
+index 8a1ad7311..5d12d9e34 100644
+--- a/src/xc_funcs.h
++++ b/src/xc_funcs.h
+@@ -700,3 +700,5 @@
+ #define  XC_MGGA_X_SREGTM_V1               772 /* Simplified regularized Tao-Mo exchange (v1) */
+ #define  XC_MGGA_X_SREGTM_V2               773 /* Simplified regularized Tao-Mo exchange (v2) */
+ #define  XC_MGGA_X_SREGTM_V3               774 /* Simplified regularized Tao-Mo exchange (v3) */
++#define  XC_GGA_X_WPBEH09                  790 /* short-range part of the PBE, smooth 2009 gradient scaling (default w=0 gives PBEh) */
++#define  XC_HYB_GGA_XC_HSE06_09            791 /* HSE06 with the smooth 2009 reduced-gradient scaling */

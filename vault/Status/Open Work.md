@@ -52,7 +52,14 @@ suite was 132/132 at `1b3ffc9b`.
   defect: the analytic gradient matches PySCF to ≤ 1.2e-10. **Decide**
   whether a smooth variant is ever needed (`docs/WPBEH_S_SCALING_SCOPE.md`).
   The research question of characterizing every seam is separate:
-  `docs/WPBEH_SMOOTH_RESEARCH_SCOPE.md`.
+  `docs/WPBEH_SMOOTH_RESEARCH_SCOPE.md`. Found there (2026-11-08): the jump
+  is eq. 8 of Henderson et al., JCP 131, 044108 (2009), which the same
+  paper replaces with a smooth scaling (eq. 9, libxc's unused
+  `s_scaling_3`; Gaussian 09 `HSEH1PBE`). So libxc's HSE06 is the
+  superseded version. Eq. 9 moves atomization energies by 0.006–0.03
+  kcal/mol; a C² blend over |s − 1| < 1e-2 moves them by ≤ 2e-3. Also:
+  libxc 7.1.0 fixed a second wPBEh seam at small s (`EGscut`, issue #627),
+  which Planck's 2023 pin lacks.
 
 - **libecpint is pinned to an unmerged upstream PR** (still open on
   2026-11-08). Planck pins
@@ -156,6 +163,39 @@ suite was 132/132 at `1b3ffc9b`.
 - **`TensorOptimized` RCCSDT** is still treated in-tree as experimental.
 
 ## 3. Build, test and CI
+
+- **The libxc pin sits on an API upstream withdrew** (assessed 2026-11-08
+  against 7.1.2). Planck pins `4bd0e1e3` (5.0.0-799, Feb 2023), a devel
+  commit from between 6.0.0 and 6.1.0. Its multi-term hybrid API
+  (`hyb_type`/`hyb_coeff`/`hyb_omega`, `xc_hyb_type`, the
+  `XC_HYB_FOCK`/`PT2`/`ERF_SR`/`YUKAWA_SR`/`GAUSSIAN_SR` terms) and every
+  double-hybrid definition (B2PLYP etc.) were removed by libxc `8add6f17d`
+  (2024-02-28, "Undo breaking API changes ... rethink the whole interface
+  ... for double hybrids"). No release has them, 7.1.2 included. Double
+  hybrids return only in libxc 8.0.0, with a redesigned C++ API. A bump
+  therefore needs:
+  - **Hybrid API port.** Port `src/dft/base/wrapper.h` to
+    `xc_hyb_cam_coef` / `xc_hyb_exx_coef` and the `XC_FLAGS_HYB_CAM(Y)`
+    flags. Gaussian-attenuated SR has no release equivalent.
+  - **Planck-side double hybrids.** Planck would define the DH functionals
+    itself (components plus PT2 coefficient), as PySCF does, and re-gate
+    the 39 B2PLYP inputs.
+  - **Build arguments.** Pass `-DMAXORDER=3` explicitly: `-DDISABLE_KXC=OFF`
+    alone leaves order 2, compiles out kxc, and the DH gradient hard-exits.
+    Drop `ENABLE_XHOST`, which was removed upstream along with
+    `-march=native`, ending the SIGILL hazard. CMake ≥ 3.21 is required.
+
+  **Values, libxc 7.0.0 → 7.1.2** (PySCF 2.13 vs 2.15, which reproduces
+  the pin to 1e-10):
+  - PBE, B3LYP, PBE0, CAM-B3LYP, ωB97X, CAMY-B3LYP, SVWN and BLYP move only
+    at roundoff (exc ≤ 8e-11 relative, SCF ≤ 4e-13 Eh).
+  - HSE06 moves 1.5–2.7e-10 Eh, from the `EGscut` fix (libxc #627). At
+    s < 0.08 the pin's v_σ is off by up to 4e-6 and f_σσ by up to 7e-4
+    against an exact-hole reference; 7.1.2 agrees with it to about 1e-9.
+
+  **Version choice.** Use 7.1.2, which PySCF ≥ 2.14 ships. Avoid 7.1.0: a
+  10–43× HSE/wPBEh slowdown, and its deprecated `DISABLE_*` switches capped
+  the order at 2.
 
 - **Every executable recompiles the shared sources**
   (`docs/BUILD_SHARED_OBJECTS_SCOPE.md`). The build has no library of Planck
