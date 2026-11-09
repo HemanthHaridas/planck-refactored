@@ -8840,7 +8840,7 @@ exchange is \((ib|ja)\), not \((ia|jb)\). Swapping them leaves TDA untouched
 the defect Planck carried until hybrid TDDFT was gated against PySCF (B3LYP
 root 3 was off by 7.5 meV), so a single helper (`src/dft/tddft_exchange.h`) now
 owns the index for RKS and UKS alike. Functionals whose short-range kernel is
-Yukawa or Gaussian rather than erf are rejected for TDDFT. See
+Yukawa or Gaussian rather than erf are rejected in every workflow. See
 `docs/RS_TDDFT.md`.
 
 For **triplets**, the Coulomb contribution drops out after spin adaptation, so

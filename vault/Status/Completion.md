@@ -429,6 +429,24 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Open decisions and full-symmetry gates settled (2026-11-09).** Three
+  changes, core suite 137/137:
+  - Yukawa and Gaussian screened exchange are refused by name at functional
+    setup, so no workflow evaluates the erf kernel under their name. PySCF does
+    make that substitution, which is why agreeing with it proved nothing. Gated
+    by `water_{scf,tddft}_camy_b3lyp_rejected_sto3g`.
+  - The default guess stays `hcore`. Both binaries warn when a UHF or UKS run
+    with multiplicity above 1 starts from it without `stability_check`
+    (`SCF::warn_open_shell_hcore_guess`). Checked on one UHF and one UKS case,
+    and absent on a case that runs the stability check.
+  - `RYS_MAX_ROOTS` is 13, not 11. (ii|ii) needs 13 roots, so any quartet of
+    total L ≥ 22 indexed past the root table and aborted on the default engine.
+    Only L = 6 reaches it. `planck-rys-roots` covers n = 12 and 13 with the
+    existing bounds (moment error ≤ 1.3e-13).
+  - New RHF/STO-3G gates at D3h, Oh, D∞h, C∞v and Kh match PySCF to ≤ 1.3e-9 Eh.
+    The full-group ERI reduction is active for D3h and Oh only. D∞h, C∞v and Kh
+    detect the group and converge without it.
+
 - **PCM geometry optimization and frequencies (2026-11-08,
   `docs/PCM_GEOMETRY.md` step 5; the scope is now an answer).** The
   HF geomopt step, every Hessian displacement and the post-optimization

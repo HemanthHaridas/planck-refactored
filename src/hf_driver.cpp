@@ -976,6 +976,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     }
     else
     {
+        HartreeFock::SCF::warn_open_shell_hcore_guess(calculator);
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Begin UHF SCF Cycles :", "");
         if (auto res = HartreeFock::SCF::run_uhf(calculator, shellpairs, pcm_state ? &*pcm_state : nullptr); !res)
         {

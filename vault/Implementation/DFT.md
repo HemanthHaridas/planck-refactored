@@ -120,7 +120,7 @@ Support is split by workflow:
 - RKS global double hybrids: single points, analytic gradients, geomopt, frequencies (FD of analytic gradients), geomopt+freq
 - UKS global double hybrids: single points, analytic gradients only (conventional all-active UMP2, no solvent, qualified V4 grid)
 - Range-separated double hybrids: single-point energies only
-- Yukawa/Gaussian screened-exchange functionals: evaluated with the erf kernel; rejected for TDDFT (see Open Work)
+- Yukawa/Gaussian screened-exchange functionals: rejected by name in every workflow (only the erf kernel is implemented)
 
 ## Hybrid / Range-Separated / Double-Hybrid XC
 

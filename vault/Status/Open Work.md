@@ -9,7 +9,8 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-11-08 (rewrite at `8570139a`).
+Last updated: 2026-11-09 (rewrite at `8570139a` on 2026-11-08, then the
+Yukawa and `hcore` decisions and the CI blocker).
 
 This is the canonical list of what remains. What is done lives in
 `vault/Status/Completion.md`. Each item names its scope or answer doc, which
@@ -26,25 +27,12 @@ suite was 132/132 at `1b3ffc9b`.
 
 ## 1. Correctness decisions and external dependencies
 
-- **Yukawa / Gaussian screened exchange is evaluated with the erf kernel.**
-  `cam_coefficients()` (`src/dft/base/wrapper.h`) folds
-  `XC_HYB_YUKAWA_SR` / `XC_HYB_GAUSSIAN_SR` into the short-range coefficient,
-  and the SCF builds it with `ERIKernel::ShortRange`. PySCF does the same
-  (water/STO-3G `camyb3lyp` agrees to 1.4e-6 Eh), so nothing shows that the
-  energy is wrong, but it is not the kernel libxc defines. TDDFT already
-  rejects these functionals (`water_tddft_camy_b3lyp_rejected_sto3g`).
-  **Decide:** reject them for every workflow, or accept and document the erf
-  substitution.
-
-- **The open-shell `hcore` default can land on a symmetry-trapped saddle.**
-  Example: water⁺ UHF and UKS land on ²A₁, 0.069 Eh above ²B₁. The hcore
-  guess fills 1a₁ 2a₁ 1b₂ 1b₁ 3a₁, and the descent direction breaks C₂ᵥ.
-  Both energies match PySCF. `stability_check` + `stability_follow` (HF and
-  KS, Cartesian, spherical and ECP) find the minimum. The same trap hit the
-  spherical water⁺ PCM gate (λ_min −0.0715 from `hcore`, in PySCF too),
-  which now starts from `guess sad`. **Decide:** whether the default guess,
-  or a warning, should change. Making SAD the open-shell default was not
-  pursued. Answer: `docs/KS_STABILITY.md`.
+- **UKS double-hybrid analytic gradients fail in production.** Every run stops
+  with `UDH driver: invalid correction coordinate layout`, since `d72742df`
+  (2026-10-12) left the dense UKS path reading derivative arrays that are no
+  longer filled. Last validated at `039bd2df` (2026-10-09). No regression case
+  ran this path. The fix moves UKS onto the streamed RKS contraction and deletes
+  the dense route: `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md`.
 
 - **HSE06 energy finite differences are unreliable by construction.** libxc's
   wPBEh `s_scaling_2` jumps by 5.15e-4 at s = 1, and grid points crossing the
@@ -206,15 +194,18 @@ suite was 132/132 at `1b3ffc9b`.
   `PLANCK_CC_*` options currently vary per target and decide what can be
   shared. `planck-mpi` also omits two `PLANCK_CC_*` options the other
   binaries define; check whether that was intended.
-- **No build-and-test CI runs.** The "CMake on multiple platforms"
-  workflow (`.github/workflows/cmake-multi-platform.yml`) is
-  `disabled_manually`; its last run was 2026-04-26. It did not run on #181
-  or #183, so the workflow fixes in #181 (build every target, `BASIS_PATH`
-  for every test) have never executed on CI. **Decide:** whether to
-  re-enable it. A first run is also the first Linux build of simple-dftd3
-  with gfortran, and it needs the `PLANCK_LICENSE` secret for the Boys core.
-  Separately, "Callgraph Profiling" failed on the 2026-11-07 `devel` push
-  because the runner ran out of disk, not because of the code.
+- **No build-and-test CI runs, because the runners ran out of disk.** The
+  "CMake on multiple platforms" workflow
+  (`.github/workflows/cmake-multi-platform.yml`) is `disabled_manually`; its
+  last run was 2026-04-26. Its runs failed for lack of space on GitHub, and
+  since #181 it builds every target in two `PLANCK_CC_MAXORDER` jobs, so
+  re-enabling it as it stands would fail the same way. The workflow fixes in
+  #181 (build every target, `BASIS_PATH` for every test) have therefore never
+  executed on CI. **Blocked on** cutting the build's disk use, which the
+  shared-objects item above does by removing the duplicate objects. A first
+  run is also the first Linux build of simple-dftd3 with gfortran. The
+  `PLANCK_LICENSE` secret it needs is set. "Callgraph Profiling" hit the same
+  limit on the 2026-11-07 `devel` push and is disabled too.
 
 ## 4. Verification gaps
 
@@ -223,9 +214,12 @@ suite was 132/132 at `1b3ffc9b`.
   `normalized_pseudoinverse` for the recurrence oracle. The input
   `tests/inputs/regression/spherical/ne_rhf_spherical_ccpv6z_ishell.hfinp`
   and its reference (PySCF −128.5470611007 Eh) are committed but
-  unregistered, because they are too heavy for the suite.
-- **Full-symmetry edge cases:** D3h, Oh, linear groups and lone atoms need
-  durable regression cases. The spherical full-symmetry direct-SCF ladder
+  unregistered, because they are too heavy for the suite. It could not run
+  before `RYS_MAX_ROOTS` was raised to 13 on 2026-11-09; the comparison is
+  still to be done.
+- **Full-symmetry edge cases:** D3h, Oh, linear groups and lone atoms are
+  gated at the energy level (`*_fullsym_direct`). D∞h, C∞v and Kh do not use
+  the full-group ERI reduction. The spherical full-symmetry direct-SCF ladder
   should grow beyond NH3/CH4. Keep in-code comments on the spherical symmetry
   representation in line with the code; they have drifted once.
 - **CASSCF optimizer changes must rerun the PySCF gates and both SA-2 SAD

@@ -442,8 +442,9 @@ Range-separated hybrids are supported for single-point energies, analytic
 gradients, geometry optimization, frequencies, and geomopt+frequency. Global
 RKS double hybrids support those gradient-driven workflows; the qualified UKS
 subset supports gradients only. TDDFT / linear response supports semilocal,
-global-hybrid, and erf range-separated functionals; double hybrids and
-Yukawa/Gaussian screened-exchange functionals are rejected for TDDFT.
+global-hybrid, and erf range-separated functionals; double hybrids are rejected
+for TDDFT. Yukawa/Gaussian screened-exchange functionals are rejected in every
+workflow, because only the erf kernel is implemented.
 `imagfollow` is not implemented in `planck-dft`.
 </p>
 

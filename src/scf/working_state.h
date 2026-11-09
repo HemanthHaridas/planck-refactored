@@ -44,6 +44,10 @@ namespace HartreeFock
         std::expected<std::vector<HartreeFock::ShellPair>, std::string>
         rebuild_basis_dependent_state(HartreeFock::Calculator &calc);
 
+        // Open-shell UHF/UKS from `guess hcore` can converge to a symmetry-
+        // trapped saddle that SCF convergence cannot detect (docs/KS_STABILITY.md).
+        void warn_open_shell_hcore_guess(const HartreeFock::Calculator &calc);
+
         // Steps 2-3 above for shell pairs the caller already built: Cartesian
         // S, T, V (+ ECP) brought to the working basis as _overlap, _hcore.
         std::expected<void, std::string> compute_working_one_electron(

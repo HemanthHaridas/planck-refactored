@@ -1465,11 +1465,6 @@ namespace DFT::Driver
             // Same coefficient source as the SCF (xc_grid.cpp): c_fr K[Coulomb]
             // + c_sr K[erf short-range, omega].  For a global hybrid c_sr = 0
             // and c_fr == exact_exchange_coefficient().
-            if (exchange_functional.has_non_erf_short_range_exchange())
-                return std::unexpected(std::format(
-                    "TDDFT / linear response: {} uses Yukawa or Gaussian screened exchange; "
-                    "only erf range separation is implemented",
-                    exchange_functional.name()));
             const double full_range_exchange_coefficient = exchange_functional.fock_exchange_coefficient();
             const double short_range_exchange_coefficient = exchange_functional.short_range_exchange_coefficient();
 
@@ -3223,6 +3218,14 @@ namespace DFT::Driver
             if (!correlation)
                 return std::unexpected("DFT correlation functional initialization failed: " + correlation.error());
 
+            // cam_coefficients() would fold these into the erf short-range
+            // term, which is a different functional from the one named.
+            if (exchange->has_non_erf_short_range_exchange())
+                return std::unexpected(std::format(
+                    "{} uses Yukawa or Gaussian screened exchange; "
+                    "only erf range separation is implemented",
+                    exchange->name()));
+
             const bool has_range_separation = exchange->is_range_separated();
             const double implemented_exact_exchange_coefficient =
                 exchange->fock_exchange_coefficient();
@@ -3760,6 +3763,7 @@ namespace DFT::Driver
                 HartreeFock::LogLevel::Info,
                 "DFT Driver :",
                 "Preparation complete; entering KS-SCF");
+            HartreeFock::SCF::warn_open_shell_hcore_guess(calculator);
 
             auto result = run_ks_scf_scaffold(
                 calculator,

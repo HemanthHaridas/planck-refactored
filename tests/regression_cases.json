@@ -2367,6 +2367,7 @@
    ],
    "expected_exit_code": 0,
    "contains": [
+    "can converge to a symmetry-trapped saddle",
     "UHF Converged"
    ],
    "not_contains": [
@@ -2937,6 +2938,7 @@
     "[stable]"
    ],
    "not_contains": [
+    "can converge to a symmetry-trapped saddle",
     "UNSTABLE"
    ],
    "checks": [
@@ -3546,6 +3548,7 @@
    ],
    "expected_exit_code": 0,
    "contains": [
+    "can converge to a symmetry-trapped saddle",
     "Reference :                   UKS",
     "DFT Hybrid XC :               B3LYP exact exchange coefficient = 0.200000",
     "DFT Correlation :             Using B3LYP as a combined XC functional; configured correlation is ignored",
@@ -8247,6 +8250,133 @@
    "contains": [
     "PASS"
    ]
+  },
+  {
+   "id": "bh3_d3h_fullsym_direct",
+   "input": "tests/inputs/regression/full_symmetry/bh3_d3h_fullsym_direct.hfinp",
+   "_pyscf_reference": "PySCF 2.13.0 RHF, cart=True, Planck's own sto-3g GBS via parse_gaussian.load, coordinates in Bohr with Planck's constant.",
+   "tags": [
+    "core",
+    "symmetry"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Point Group :                 D3h",
+    "point-group operations enabled for direct-SCF ERI reduction (|G| = 12)",
+    "SCF Converged after"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -26.0689957533,
+     "atol": 5e-09
+    }
+   ]
+  },
+  {
+   "id": "sf6_oh_fullsym_direct",
+   "input": "tests/inputs/regression/full_symmetry/sf6_oh_fullsym_direct.hfinp",
+   "_pyscf_reference": "PySCF 2.13.0 RHF, cart=True, Planck's own sto-3g GBS via parse_gaussian.load, coordinates in Bohr with Planck's constant.",
+   "tags": [
+    "core",
+    "symmetry"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Point Group :                 Oh",
+    "point-group operations enabled for direct-SCF ERI reduction (|G| = 48)",
+    "SCF Converged after"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -980.8945990405,
+     "atol": 5e-09
+    }
+   ]
+  },
+  {
+   "id": "co2_dinfh_fullsym_direct",
+   "input": "tests/inputs/regression/full_symmetry/co2_dinfh_fullsym_direct.hfinp",
+   "_pyscf_reference": "PySCF 2.13.0 RHF, cart=True, Planck's own sto-3g GBS via parse_gaussian.load, coordinates in Bohr with Planck's constant.",
+   "tags": [
+    "core",
+    "symmetry"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Point Group :                 Dinfh",
+    "SCF Converged after"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -185.064695727,
+     "atol": 5e-09
+    }
+   ]
+  },
+  {
+   "id": "hcn_cinfv_fullsym_direct",
+   "input": "tests/inputs/regression/full_symmetry/hcn_cinfv_fullsym_direct.hfinp",
+   "_pyscf_reference": "PySCF 2.13.0 RHF, cart=True, Planck's own sto-3g GBS via parse_gaussian.load, coordinates in Bohr with Planck's constant.",
+   "tags": [
+    "core",
+    "symmetry"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Point Group :                 Cinfv",
+    "SCF Converged after"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -91.6751866448,
+     "atol": 5e-09
+    }
+   ]
+  },
+  {
+   "id": "ne_atom_fullsym_direct",
+   "input": "tests/inputs/regression/full_symmetry/ne_atom_fullsym_direct.hfinp",
+   "_pyscf_reference": "PySCF 2.13.0 RHF, cart=True, Planck's own sto-3g GBS via parse_gaussian.load, coordinates in Bohr with Planck's constant.",
+   "tags": [
+    "core",
+    "symmetry"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "Point Group :                 Kh",
+    "SCF Converged after"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -126.6045250887,
+     "atol": 5e-09
+    }
+   ]
+  },
+  {
+   "id": "water_scf_camy_b3lyp_rejected_sto3g",
+   "input": "tests/inputs/regression/dft/water_scf_camy_b3lyp_rejected_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_note": "Yukawa-screened exchange is rejected at functional setup, so every workflow refuses it rather than evaluating the erf kernel under its name.",
+   "tags": [
+    "smoke",
+    "extended"
+   ],
+   "expected_exit_code": 1,
+   "contains": [
+    "uses Yukawa or Gaussian screened exchange"
+   ],
+   "checks": []
   }
  ]
 }

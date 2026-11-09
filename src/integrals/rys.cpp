@@ -490,7 +490,7 @@ namespace
     // is per-axis (lABx..lCDz) but the Rys quadrature degree depends on the
     // quartet's *total* L = (L_A+L_B)+(L_C+L_D), capped per axis. Deriving n from
     // the summed per-axis box would over-count badly (a g max-box sums to L=48 ->
-    // n=25, past RYS_MAX_ROOTS=11), so the caller passes the correct n. Per-
+    // n=25, past RYS_MAX_ROOTS), so the caller passes the correct n. Per-
     // component, n = L_comp/2+1; the hoist passes the quartet n_max (Gauss
     // over-integration makes n_max >= n_comp exact for every component).
     static void _rys_eri_build_sum(

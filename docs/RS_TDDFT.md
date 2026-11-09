@@ -46,7 +46,7 @@ What the matrices deliberately do not contain:
 - **No Yukawa or Gaussian screening.** libxc also defines `XC_HYB_YUKAWA_SR` and
   `XC_HYB_GAUSSIAN_SR`, and the ERI engines evaluate only erf.
   `Functional::has_non_erf_short_range_exchange` rejects them by name rather than treating them
-  as erf. The SCF does not reject them yet (`vault/Status/Open Work.md`).
+  as erf. The check runs once at functional setup, so it covers the SCF and every later workflow.
 - **No range-separated double hybrids.** The PT2 path is untouched and stays rejected.
 
 ## The B-matrix defect that came first
