@@ -1,6 +1,6 @@
 # FCIQMC scaling investigation
 
-**R3 reached Cr₂ CAS(12,18) within the M3 pilot budget.** Reference drift and disagreement between the two energy estimators remain open at 10,000 walkers. [Cr₂ pilot](#r3-fixed-orbital-cr2-pilot)
+**R3 reached Cr₂ CAS(12,18) within the M3 pilot budget.** At 10,000 walkers, four spawn attempts per occupied determinant stabilized the projection across three seeds. The energy estimators still disagree. [Population and spawn measurements](#r3-walker-population-and-spawn-attempts)
 
 **R2 passed the adoption gate on the Apple M3.** On water, a serial cache lookup took 16.27 ns per parent and distributing a parent to its work bin took 1.85 ns. The driver now skips the serial lookup for determinants occupied on consecutive steps. R0 qualified the HF-to-FCIQMC Hamiltonian handoff. R1 established the timing, memory and correctness baselines on an Apple M3.
 
@@ -81,7 +81,7 @@ Each row reports three full-length pairs on the same build configuration and hos
 
 ## R3 fixed-orbital Cr2 pilot
 
-Cr₂ at 1.68 Å fits the 600 s and 1 GiB per-run pilot budget on the M3. The earlier all-MO path stopped after RHF because the Cartesian STO-3G basis has 38 orbitals and the packed CI representation admits 31. With 18 frozen doubly occupied orbitals and two excluded virtuals, only the 18 active orbitals enter the bitstrings. Six alpha and six beta electrons give 344,622,096 possible determinants. The pilot uses the contiguous RHF orbitals in their returned order. Their chemical character has yet to be checked. [Cr₂ input](../tests/inputs/exploratory/fciqmc/cr2_cas12_18_pilot.hfinp)
+Cr₂ at 1.68 Å fits the 600 s and 1 GiB per-run pilot budget on the M3. The earlier all-MO path stopped after RHF because the Cartesian STO-3G basis has 38 orbitals and the packed CI representation admits 31. With 18 frozen doubly occupied orbitals and two excluded virtuals, only the 18 active orbitals enter the bitstrings. Six alpha and six beta electrons give 344,622,096 possible determinants. The pilot uses the contiguous RHF orbitals in their returned order. Their Cr 3d/4s and 4p character is quantified below. [Cr₂ input](../tests/inputs/exploratory/fciqmc/cr2_cas12_18_pilot.hfinp)
 
 Both runs used four threads, 10,000 target walkers, timestep 0.0005, initiator threshold 3, seed 20250901 and 2,000 sampling steps. Only the equilibration length changed. The table gives process wall time and peak RSS including SCF, and total energies in Eh with the reported blocked standard errors.
 
@@ -94,8 +94,26 @@ Both trajectories re-anchored the projection after the seeded determinant lost w
 
 **Hamiltonian checks.** On the short N₂ control, the previous binary, the new default path and explicit CAS(14,10) all gave Hamiltonian `3d0ae86188394164` and trajectory `af01f83434290758`. LiH/STO-3G CAS(2,4) tests both a frozen core and an excluded virtual. PySCF CASCI on the Planck all-MO FCIDUMP gave −7.863681638749 Eh on exactly the same orbitals. The FCIQMC projected energy was −7.8636881653 ± 0.0000172 Eh and the shift was −7.8636733178 ± 0.00101 Eh. To regenerate the exact reference, add `fcidump lih.FCIDUMP` to the fixture's SCF block, read it with `mf = pyscf.tools.fcidump.to_scf("lih.FCIDUMP")`, then run `pyscf.mcscf.CASCI(mf, 4, 2).kernel(numpy.eye(6))`. The identity coefficients retain Planck's MO order. [LiH regression input](../tests/inputs/regression/post_hf/lih_fciqmc_cas24_sto3g.hfinp)
 
+## R3 walker population and spawn attempts
+
+Increasing the target population from 10,000 to 50,000 at one spawn attempt widened the shift–projected gap for each of three seeds. Each population used seeds 20250901, 20250902 and 20250903 with the pilot's four threads, 2,000 equilibration steps and 2,000 sampling steps. The original 10,000-walker seed reproduced its archived trajectory. Across seeds, the projection re-anchored in two of the three runs at each population.
+
+The second sweep fixed the population at 10,000 and changed the number of spawn attempts per occupied determinant. The profile counts confirm that each phase made exactly the requested number of draws per parent visit. Four draws kept the seeded reference for all three seeds, made every projected sample usable and reduced the estimator gap in each matched run. Sixteen draws also kept the reference throughout sampling. With four draws, the shifts ranged from −2065.564 to −2065.528 Eh and the projected energies from −2064.555 to −2064.515 Eh. All 15 gaps exceeded the driver's warning threshold of five times the larger reported standard error.
+
+| Target walkers | Draws per parent | Gap (Eh) | Usable samples / 2,000 | Mean reference weight | Wall (s) | Max RSS (MiB) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 10,000 | 1 | 2.00–3.73 | 1,899–2,000 | 15.5–25.1 | 7.5–8.4 | 84.3 |
+| 25,000 | 1 | 2.29–4.17 | 1,236–2,000 | 22.9–40.1 | 15.7–17.6 | 124.9 |
+| 50,000 | 1 | 2.47–4.43 | 1,236–2,000 | 32.2–56.9 | 30.3–33.3 | 209.5 |
+| 10,000 | 4 | 1.00–1.01 | 2,000 | 90.5–133.5 | 14.6–15.0 | 76.1 |
+| 10,000 | 16 | 0.89–0.99 | 2,000 | 177.3–183.7 | 39.2–40.4 | 73.7 |
+
+Ranges span three independent seeds at each setting. The gap is the absolute difference between the shift and projected total energies in one run. The driver measures mean absolute reference weight over accepted projected samples. All runs fit the 600 s and 1 GiB budget. The 25,000-walker run at seed 20250903 briefly shared the host with the orbital checkpoint calculation. To reproduce a row, change only `fciqmc_walkers`, `fciqmc_spawn_attempts` and `fciqmc_seed` in the Cr₂ pilot input and use the scaling runner at four threads. [Per-seed estimators, uncertainties, reference determinants and work counters](../tests/benchmarks/fciqmc/cr2_population_spawn_m3_r3.json)
+
+**Orbital character at 1.68 Å.** A checkpoint run reproduced Hamiltonian `3ffac35b4805c0ec`. In its AO overlap metric, the active MOs retained 11.9813 of the 12 nominal Cr 3d/4s valence directions by summed squared overlap (99.84%). The least well represented valence direction had squared overlap 0.9916. The active block also retained 5.9789 of the six 4p directions. The two excluded MOs carried 1.9841 of the two Cartesian d-shell trace directions. The projection orthonormalizes atom-centered shells in the AO metric, starting with the core (1s, 2s, 2p, 3s, 3p), followed by the valence (five traceless 3d functions and 4s per Cr), 4p and finally the two Cartesian traces. The archived weights sum squared overlaps with the frozen, active and excluded RHF columns. [Orbital projection weights](../tests/benchmarks/fciqmc/cr2_population_spawn_m3_r3.json)
+
 ## Next steps
 
-At this Cr₂ geometry, test whether increasing the target walker population stabilizes the projection. Keep the orbitals, timestep, initiator threshold and run lengths fixed. Compare the shift, projected energy, usable sample count and reference weight at each population, then repeat promising settings with independent seeds. Keep each run within 600 s and 1 GiB. Check the orbital character and estimator agreement before using this geometry for a binding curve.
+Use 10,000 walkers and four spawn attempts for the next equilibration test at 1.68 Å. It was the least expensive setting that retained the seeded reference on every run. Increase equilibration from 2,000 to 10,000 steps with the same three seeds, 2,000 sampling steps and all other inputs fixed. Compare each seed's shift, projected energy, reference weight and usable sample count against its short run. If the reference stays populated and the gap persists, test timestep dependence at matched imaginary time. A binding curve still requires converged energies.
 
 The E2 dispatch experiment is closed. E4 remains test-only pending evidence that bit selection merits a new paired trial. The detailed R0 handoff results, R1 reproduction commands and earlier optimization decisions are preserved in the version of this document at commit `7def132a` (`git show 7def132a:docs/FCIQMC_SCALING_INVESTIGATION.md`).

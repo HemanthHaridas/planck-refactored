@@ -370,7 +370,7 @@ namespace HartreeFock::Correlation
                             opt.initiator_threshold));
         logging(LogLevel::Info, tag + " :",
                 std::format("{} equilibration + {} sampling steps, {} spawn "
-                            "attempts per walker",
+                            "attempts per occupied determinant",
                             opt.equilibration_steps, opt.sampling_steps,
                             opt.spawn_attempts));
 

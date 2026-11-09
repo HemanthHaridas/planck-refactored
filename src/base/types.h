@@ -831,7 +831,7 @@ namespace HartreeFock
         double initiator_threshold = 0.0;  // n_add; 0 disables the initiator
         int equilibration_steps = 2000;    // discarded before averaging
         int sampling_steps = 8000;         // averaged
-        int spawn_attempts = 1;            // draws per walker per iteration
+        int spawn_attempts = 1;            // draws per occupied determinant per iteration
 
         // Emit the opt-in scaling ledger.  This changes neither the stochastic
         // evolution nor the estimator; it only records work and wall-time

@@ -146,4 +146,4 @@ Design rule:
 
 ## Remaining scientific question
 
-At the selected Cr₂ geometry, both resource pilots showed reference drift and disagreement between the shift and projected estimators. The next experiment tests population dependence at fixed orbitals and geometry. [Scaling investigation](FCIQMC_SCALING_INVESTIGATION.md#next-steps)
+At the selected Cr₂ geometry, four spawn attempts per occupied determinant stabilized the projected reference at 10,000 walkers. All three seeds still showed disagreement between the shift and projected energies. The next experiment extends equilibration at this setting. [Scaling investigation](FCIQMC_SCALING_INVESTIGATION.md#next-steps)

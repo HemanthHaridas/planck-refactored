@@ -302,10 +302,11 @@ None of these blocks correctness. Take each up only with a current profile.
     Four threads gave the fastest Be median (8.08 s). Use eight for HF 50k
     on this M3. E4 stays test-only.
   - R3 admits Cr₂ CAS(12,18) at 1.68 Å with 18 frozen RHF orbitals.
-    Both 10k-walker pilots fit the 10-minute, 1 GiB M3 budget. Extending
-    equilibration from 2k to 10k steps widened the shift–projected gap
-    from 3.43 to 5.86 Eh. Next, vary walker population at the same geometry
-    and compare reference occupancy and both estimators across seeds.
+    All 15 runs in the population and spawn-attempt sweeps fit the M3 budget.
+    Raising the population to 50k widened the estimator gap at one draw per
+    parent. Four draws at 10k walkers retained the reference across three
+    seeds. Next, repeat that setting with 10k equilibration steps and compare
+    each seed against its 2k baseline. The energy remains unconverged.
 - **ccgen generated kernels** (`docs/CCGEN_CC_OPENMP.md`,
   `docs/CCGEN_KERNEL_PERFORMANCE.md`):
   - Re-profile the generated production configuration, separating
