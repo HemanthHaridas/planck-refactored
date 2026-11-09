@@ -1,6 +1,6 @@
 # FCIQMC scaling investigation
 
-**R3 reached Cr₂ CAS(12,18) within the M3 pilot budget.** At 10,000 walkers, four spawn attempts per occupied determinant stabilized the projection across three seeds. The energy estimators still disagree. [Population and spawn measurements](#r3-walker-population-and-spawn-attempts)
+**R3 reached Cr₂ CAS(12,18) within the M3 pilot budget.** At 10,000 walkers and four spawn attempts, two of three seeds switched projection reference after longer equilibration. All three energy estimates remain unconverged. [Matched equilibration runs](#r3-equilibration-at-four-spawn-attempts)
 
 **R2 passed the adoption gate on the Apple M3.** On water, a serial cache lookup took 16.27 ns per parent and distributing a parent to its work bin took 1.85 ns. The driver now skips the serial lookup for determinants occupied on consecutive steps. R0 qualified the HF-to-FCIQMC Hamiltonian handoff. R1 established the timing, memory and correctness baselines on an Apple M3.
 
@@ -112,8 +112,20 @@ Ranges span three independent seeds at each setting. The gap is the absolute dif
 
 **Orbital character at 1.68 Å.** A checkpoint run reproduced Hamiltonian `3ffac35b4805c0ec`. In its AO overlap metric, the active MOs retained 11.9813 of the 12 nominal Cr 3d/4s valence directions by summed squared overlap (99.84%). The least well represented valence direction had squared overlap 0.9916. The active block also retained 5.9789 of the six 4p directions. The two excluded MOs carried 1.9841 of the two Cartesian d-shell trace directions. The projection orthonormalizes atom-centered shells in the AO metric, starting with the core (1s, 2s, 2p, 3s, 3p), followed by the valence (five traceless 3d functions and 4s per Cr), 4p and finally the two Cartesian traces. The archived weights sum squared overlaps with the frozen, active and excluded RHF columns. [Orbital projection weights](../tests/benchmarks/fciqmc/cr2_population_spawn_m3_r3.json)
 
+## R3 equilibration at four spawn attempts
+
+Extending equilibration from 2,000 to 10,000 steps narrowed the estimator gap on one seed and widened it on two. Each run used 10,000 target walkers, four attempts per occupied determinant, timestep 0.0005 and 2,000 sampling steps. The sampling window therefore moved from imaginary time 1–2 to 5–6 in inverse hartrees. The three short controls reproduced the archived Hamiltonian and trajectories with the current executable.
+
+| Seed | Shift (Eh), short → long | Projected (Eh), short → long | Gap (Eh), short → long | Mean reference weight, short → long | Usable long samples / 2,000 | Long-run reference |
+|---|---:|---:|---:|---:|---:|---|
+| 20250901 | −2065.550 → −2065.342 | −2064.549 → −2064.660 | 1.002 → 0.682 | 133.52 → 11.99 | 2,000 | seeded |
+| 20250902 | −2065.528 → −2065.537 | −2064.515 → −2064.241 | 1.012 → 1.296 | 123.17 → 6.47 | 1,292 | changed |
+| 20250903 | −2065.564 → −2065.755 | −2064.555 → −2064.473 | 1.009 → 1.282 | 90.50 → 5.62 | 1,393 | changed |
+
+All three short runs used the seeded reference on every sampling step. In the longer runs, the driver chose the most populated determinant after equilibration and kept it fixed during sampling. Two seeds switched determinants there. Mean reference weight fell for every seed, even when measured only on accepted samples. All three long-run gaps exceeded five times the larger reported standard error. The long runs took 64.4–68.7 s and peaked at 78.5 MiB. [Per-seed errors, reference determinants and run settings](../tests/benchmarks/fciqmc/cr2_equilibration_m3_r3.json)
+
 ## Next steps
 
-Use 10,000 walkers and four spawn attempts for the next equilibration test at 1.68 Å. It was the least expensive setting that retained the seeded reference on every run. Increase equilibration from 2,000 to 10,000 steps with the same three seeds, 2,000 sampling steps and all other inputs fixed. Compare each seed's shift, projected energy, reference weight and usable sample count against its short run. If the reference stays populated and the gap persists, test timestep dependence at matched imaginary time. A binding curve still requires converged energies.
+Test 25,000 target walkers at the same four spawn attempts, 10,000 equilibration steps and 2,000 sampling steps. Keep the three seeds, timestep and shift controls fixed so that each run has a matched 10,000-walker control above. Compare reference identity, accepted samples, mean reference weight and both energies. The earlier 25,000-walker sweep used one spawn attempt and shorter equilibration. Resume the matched-imaginary-time timestep study once reference occupancy is reliable across seeds. Keep each run within 600 s and 1 GiB.
 
 The E2 dispatch experiment is closed. E4 remains test-only pending evidence that bit selection merits a new paired trial. The detailed R0 handoff results, R1 reproduction commands and earlier optimization decisions are preserved in the version of this document at commit `7def132a` (`git show 7def132a:docs/FCIQMC_SCALING_INVESTIGATION.md`).

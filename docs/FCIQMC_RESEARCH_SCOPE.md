@@ -146,4 +146,4 @@ Design rule:
 
 ## Remaining scientific question
 
-At the selected Cr₂ geometry, four spawn attempts per occupied determinant stabilized the projected reference at 10,000 walkers. All three seeds still showed disagreement between the shift and projected energies. The next experiment extends equilibration at this setting. [Scaling investigation](FCIQMC_SCALING_INVESTIGATION.md#next-steps)
+At 1.68 Å, four draws per occupied determinant retained the seeded reference in all three short runs. With 10,000 equilibration steps two seeds switched projection reference, and both estimators still disagree on every seed. The next population test holds the longer equilibration and four-draw settings fixed. [Scaling investigation](FCIQMC_SCALING_INVESTIGATION.md#next-steps)
