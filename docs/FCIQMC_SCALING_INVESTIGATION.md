@@ -1,5 +1,7 @@
 # FCIQMC scaling investigation
 
+**R3 reached Cr₂ CAS(12,18) within the M3 pilot budget.** Reference drift and disagreement between the two energy estimators remain open at 10,000 walkers. [Cr₂ pilot](#r3-fixed-orbital-cr2-pilot)
+
 **R2 passed the adoption gate on the Apple M3.** On water, a serial cache lookup took 16.27 ns per parent and distributing a parent to its work bin took 1.85 ns. The driver now skips the serial lookup for determinants occupied on consecutive steps. R0 qualified the HF-to-FCIQMC Hamiltonian handoff. R1 established the timing, memory and correctness baselines on an Apple M3.
 
 ## Why start with water
@@ -77,10 +79,23 @@ Use four threads for the cached spherical Be fixture on this M3. At eight thread
 
 Each row reports three full-length pairs on the same build configuration and host, in A/B, B/A, A/B order. At eight threads on Be the three wall-time reductions were 28.9%, 23.9% and 29.0%. Median worker time stayed at 2.46 s while sampling merge time fell from 5.22 to 2.90 s. With profiling disabled, three more pairs gave a 27.9% median paired reduction and identical printed estimators and reference statistics. The HF 50k control passed the 5% regression limit. All 30 profiled runs reproduced the archived Hamiltonians, trajectories, work counters, cache sizes and vector capacities. [Measurements and run settings](../tests/benchmarks/fciqmc/small_tree_merge_m3_r2.json)
 
+## R3 fixed-orbital Cr2 pilot
+
+Cr₂ at 1.68 Å fits the 600 s and 1 GiB per-run pilot budget on the M3. The earlier all-MO path stopped after RHF because the Cartesian STO-3G basis has 38 orbitals and the packed CI representation admits 31. With 18 frozen doubly occupied orbitals and two excluded virtuals, only the 18 active orbitals enter the bitstrings. Six alpha and six beta electrons give 344,622,096 possible determinants. The pilot uses the contiguous RHF orbitals in their returned order. Their chemical character has yet to be checked. [Cr₂ input](../tests/inputs/exploratory/fciqmc/cr2_cas12_18_pilot.hfinp)
+
+Both runs used four threads, 10,000 target walkers, timestep 0.0005, initiator threshold 3, seed 20250901 and 2,000 sampling steps. Only the equilibration length changed. The table gives process wall time and peak RSS including SCF, and total energies in Eh with the reported blocked standard errors.
+
+| Equilibration steps | Wall (s) | Peak RSS (MiB) | Shift (Eh) | Projected (Eh) | Usable projected samples |
+|---:|---:|---:|---:|---:|---:|
+| 2,000 | 8.56 | 84.2 | −2067.269 ± 0.158 | −2063.837 ± 0.026 | 1,994 / 2,000 |
+| 10,000 | 48.65 | 109.8 | −2068.514 ± 0.139 | −2062.651 ± 0.053 | 803 / 2,000 |
+
+Both trajectories re-anchored the projection after the seeded determinant lost weight. The estimator gap grew from 3.43 to 5.86 Eh. These runs establish resource feasibility. Neither provides a converged energy at this geometry. To reproduce them, run the scaling runner on the linked input and change only `fciqmc_equilibration` to 10000 for the second run. [Profiles, timings and reference diagnostics](../tests/benchmarks/fciqmc/cr2_cas12_18_m3_r3.json)
+
+**Hamiltonian checks.** On the short N₂ control, the previous binary, the new default path and explicit CAS(14,10) all gave Hamiltonian `3d0ae86188394164` and trajectory `af01f83434290758`. LiH/STO-3G CAS(2,4) tests both a frozen core and an excluded virtual. PySCF CASCI on the Planck all-MO FCIDUMP gave −7.863681638749 Eh on exactly the same orbitals. The FCIQMC projected energy was −7.8636881653 ± 0.0000172 Eh and the shift was −7.8636733178 ± 0.00101 Eh. To regenerate the exact reference, add `fcidump lih.FCIDUMP` to the fixture's SCF block, read it with `mf = pyscf.tools.fcidump.to_scf("lih.FCIDUMP")`, then run `pyscf.mcscf.CASCI(mf, 4, 2).kernel(numpy.eye(6))`. The identity coefficients retain Planck's MO order. [LiH regression input](../tests/inputs/regression/post_hf/lih_fciqmc_cas24_sto3g.hfinp)
+
 ## Next steps
 
-The measured thread settings for this host are four for spherical Be and eight for HF 50k. Select the scientific target and its time and memory budgets before choosing the next scaling experiment.
-
-**A calculation exceeds all-MO capacity.** Start R3 once a specific molecule, active space and resource budget identify the admission limit. Scope a fixed-orbital adapter that supplies active one- and two-electron integrals, spin counts and the core plus nuclear energy offset. Verify all-MO equivalence with zero frozen orbitals and compare a small frozen-core case with deterministic CASCI at identical orbitals. [FCIQMC research scope](FCIQMC_RESEARCH_SCOPE.md)
+At this Cr₂ geometry, test whether increasing the target walker population stabilizes the projection. Keep the orbitals, timestep, initiator threshold and run lengths fixed. Compare the shift, projected energy, usable sample count and reference weight at each population, then repeat promising settings with independent seeds. Keep each run within 600 s and 1 GiB. Check the orbital character and estimator agreement before using this geometry for a binding curve.
 
 The E2 dispatch experiment is closed. E4 remains test-only pending evidence that bit selection merits a new paired trial. The detailed R0 handoff results, R1 reproduction commands and earlier optimization decisions are preserved in the version of this document at commit `7def132a` (`git show 7def132a:docs/FCIQMC_SCALING_INVESTIGATION.md`).

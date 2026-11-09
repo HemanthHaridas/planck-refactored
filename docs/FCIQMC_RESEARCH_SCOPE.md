@@ -13,14 +13,14 @@ This file answers a narrower architecture question:
 
 ## Short answer
 
-Yes, on technical grounds, with one caveat that has not changed: nothing in this repository currently wants the window FCIQMC opens. `correlation fciqmc` on N2/STO-3G (14400 determinants, 0.69 walkers per determinant) agrees with exact FCI `-107.6529998854` at 0.32 sigma (shift) and 0.41 sigma (projected), gated by `n2_fciqmc_sto3g`. Both prerequisite questions below were answered before any FCIQMC code was written, and both answers held:
+The selected feasibility target is the fixed-orbital Cr₂ CAS(12,18) at 1.68 Å. `correlation fciqmc` on N2/STO-3G (14400 determinants, 0.69 walkers per determinant) agrees with exact FCI `-107.6529998854` at 0.32 sigma (shift) and 0.41 sigma (projected), gated by `n2_fciqmc_sto3g`. Both prerequisite questions below were answered before any FCIQMC code was written, and both answers held:
 
 | | question | answer |
 |---|---|---|
-| **Q1** | Is there a calculation this codebase cannot do that FCIQMC could? | **Yes — Cr2 CAS(12,18).** Two atoms; 344.6M determinants; breaks both the time and memory walls; needs an active-space adapter FCIQMC does not have yet |
+| **Q1** | Is there a calculation this codebase cannot do that FCIQMC could? | **Cr₂ CAS(12,18)** spans 344.6M determinants. The fixed-orbital FCIQMC pilot fits the M3 budget. Estimator agreement remains open. |
 | **Q2** | Can a stochastic method be validated in a codebase gated on exactness? | **Yes — G1-G4 built and passing** as CTest `planck-statistical-gate` |
 
-What remains is a target, not a task: nobody has asked for the Cr2 binding curve, and while parallelism is scoped with its determinism policy already decided, it is worth building only the day a target exists. FCIQMC (Booth/Thom/Alavi, *JCP* **131**, 054106) samples the FCI wavefunction with a population of signed walkers evolving in imaginary time, instead of storing a CI vector, reaching determinant spaces deterministic FCI cannot at the cost of a stochastic error bar. The implementation details live in `FCIQMC_SAMPLING_AND_DYNAMICS.md`, `FCIQMC_POPULATION_CONTROL.md`, and `FCIQMC_DRIVER_AND_VALIDATION.md`; this document keeps the case for the work and the measurements that bound it.
+FCIQMC (Booth/Thom/Alavi, *JCP* **131**, 054106) samples the FCI wavefunction with a population of signed walkers evolving in imaginary time, instead of storing a CI vector, reaching determinant spaces deterministic FCI cannot at the cost of a stochastic error bar. The implementation details live in `FCIQMC_SAMPLING_AND_DYNAMICS.md`, `FCIQMC_POPULATION_CONTROL.md`, and `FCIQMC_DRIVER_AND_VALIDATION.md`; this document keeps the case for the work and the measurements that bound it.
 
 ## Where the logic lives
 
@@ -30,7 +30,8 @@ What remains is a target, not a task: nobody has asked for the Cr2 binding curve
 - `src/post_hf/fci.cpp` — the deterministic reference used for validation below ndet ~10^5
 - `casscf_internal.h:27` — `kMaxPackedSpatialOrbitals` = 31, the existing bitstring ceiling
 - `tests/{statistical_gate,blocking,reproducibility,mc_estimator}.py` — the statistical gate machinery (G1-G4)
-- `tests/inputs/exploratory/fciqmc/cr2_casscf_target.hfinp` — the target case (not a regression case)
+- `tests/inputs/exploratory/fciqmc/cr2_casscf_target.hfinp` — the deterministic CAS(12,12) rung
+- `tests/inputs/exploratory/fciqmc/cr2_cas12_18_pilot.hfinp` — the fixed-RHF-orbital FCIQMC pilot
 - `tests/inputs/exploratory/fciqmc/` — validation fixtures
 - `docs/FCI_SIGMA_BUILD_PERFORMANCE.md` — the determinism precedent this work imitates
 - `FCIQMC_SAMPLING_AND_DYNAMICS.md`, `FCIQMC_POPULATION_CONTROL.md`, `FCIQMC_DRIVER_AND_VALIDATION.md` — the full implementation ladder
@@ -85,7 +86,7 @@ Design rule:
 
 ## What was found
 
-1. **Q1 answered: Cr2 CAS(12,18) is a real, currently-blocked calculation this codebase already handles apart from determinant count.** Surveying standard multireference benchmarks against the measured FCI boundary, almost everything canonical is already reachable (N2/C2 full-valence dissociation, benzene/naphthalene pi systems, [Fe2S2], Cr2 at the textbook CAS(12,12)). Cr2 CAS(12,18) is the sharpest statement of the gap because it is the first case where both the time wall and the memory wall fail at once: 344 622 096 determinants, ~2 year FCI runtime, 2.76 GB per CI vector, ~22 GB for a Davidson subspace. Everywhere below it, time binds and memory does not (at `n_act` 14 a CI vector is only 0.09 GB against a 3-day solve). The 12 active electrons are the 3d^5 4s^1 valence on each Cr, and the sextuple Cr-Cr bond is the textbook case where single-reference methods get the binding curve qualitatively wrong, so the large active space is chemically motivated, not invented to be big. It needs no new determinant layer — `kMaxPackedSpatialOrbitals` is 31, so 18 active orbitals fit the existing bitstring representation. **It does need an active-space Hamiltonian adapter, which does not exist:** `run_fciqmc` builds its Hamiltonian through `build_all_mo_ci_setup` (all MOs, all electrons, `ci_max_dim` admission, dense MO integrals), so FCIQMC cannot run a CAS at all today. Frozen-core energy, orbital selection, and a small-space equivalence check against deterministic CASCI come first. Verified runnable, not merely arithmetic: Cr is present in sto-3g/6-31g/cc-pVDZ/TZ/QZ, Cr2/STO-3G RHF converges in 44 iterations, and the CAS(12,12) rung starts and runs long, consistent with its estimate. That rung is **deterministic CASSCF** (`correlation casscf` in `tests/inputs/exploratory/fciqmc/cr2_casscf_target.hfinp`), not FCIQMC.
+1. **Cr₂ CAS(12,18) exceeds the deterministic pilot budget.** A double-precision CI vector for 344,622,096 determinants occupies 2.76 GB. The table gives historical deterministic cost estimates. The 12 active electrons correspond to the nominal 3d and 4s valence electrons of the two atoms. The R3 pilot freezes 18 doubly occupied orbitals and samples six alpha and six beta electrons in the next 18 fixed RHF orbitals. The deterministic CASSCF input starts at CAS(12,12). [R3 measurements](FCIQMC_SCALING_INVESTIGATION.md#r3-fixed-orbital-cr2-pilot)
 
    | active space | ndet | FCI cost | one CI vector | status |
    |---|---|---|---|---|
@@ -143,6 +144,6 @@ Design rule:
 - Cleland, Booth, Alavi, *JCP* **132**, 041103 (2010) — the initiator approximation, which is what makes it practical.
 - NECI (Alavi group) — reference implementation; most useful for what the excitation generators and population control actually look like.
 
-## Remaining architecture concern
+## Remaining scientific question
 
-What remains is a target, not a task. Cr2 CAS(12,18) is a real blocked calculation on a molecule this code already handles, but nobody has asked for its binding curve. Parallelism is scoped and its determinism policy decided (invariant 5), and would be worth building the day a target exists — but building it before then would be speculative work against no current consumer. The method is implemented, validated, and unused.
+At the selected Cr₂ geometry, both resource pilots showed reference drift and disagreement between the shift and projected estimators. The next experiment tests population dependence at fixed orbitals and geometry. [Scaling investigation](FCIQMC_SCALING_INVESTIGATION.md#next-steps)

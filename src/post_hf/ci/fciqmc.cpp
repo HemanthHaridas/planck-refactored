@@ -120,8 +120,8 @@ namespace HartreeFock::Correlation::CI::QMC
         // showed: the malloc/free family was 29.5 % of the N2/STO-3G profile
         // against slater_condon_element's 40.1 %.
         //
-        // The capacity is a BOUND, not a guess. `build_all_mo_ci_setup` rejects
-        // any basis with n_act > kMaxPackedSpatialOrbitals (= (64-1)/2 = 31)
+        // The capacity is a BOUND, not a guess. `build_fixed_orbital_ci_setup` rejects
+        // any space with n_act > kMaxPackedSpatialOrbitals (= (64-1)/2 = 31)
         // before FCI or FCIQMC runs, so 32 entries can never overflow. The assert
         // states that rather than trusting it.
         //

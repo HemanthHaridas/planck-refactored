@@ -65,14 +65,14 @@ namespace HartreeFock::Correlation
             void real(double x) { word(std::bit_cast<std::uint64_t>(x)); }
         };
 
-        void log_hamiltonian_identity(const AllMOCISetup &setup,
+        void log_hamiltonian_identity(const FixedOrbitalCISetup &setup,
                                       const HartreeFock::Calculator &calc, double build_seconds)
         {
             RunFingerprint id;
             id.word(setup.n_act);
             id.word(setup.n_alpha);
             id.word(setup.n_beta);
-            id.real(calc._nuclear_repulsion);
+            id.real(calc._nuclear_repulsion + setup.core_energy);
             for (int i = 0; i < setup.n_act; ++i)
                 for (int j = 0; j < setup.n_act; ++j)
                     id.real(setup.h_eff(i, j));
@@ -81,7 +81,7 @@ namespace HartreeFock::Correlation
             const auto &C = calc._info._scf.alpha.mo_coefficients;
             const Eigen::MatrixXd metric = C.transpose() * calc._overlap * C;
             const double error = (metric - Eigen::MatrixXd::Identity(
-                setup.n_act, setup.n_act)).cwiseAbs().maxCoeff();
+                metric.rows(), metric.cols())).cwiseAbs().maxCoeff();
             logging(LogLevel::Info, "FCIQMC_PROFILE:",
                     std::format("phase=hamiltonian id={:016x} nuclear_e={:.12f} "
                                 "mo_orthogonality_max_error={:.3e} build_s={:.6f}",
@@ -158,13 +158,13 @@ namespace HartreeFock::Correlation
                                 propagation.bins.size(), min_bin_parents, max_bin_parents));
         }
 
-        // Adapt the shared all-MO setup to the callbacks the propagator wants.
+        // Adapt the shared fixed-orbital setup to the callbacks the propagator wants.
         //
         // slater_condon_element is the SAME matrix-element routine the
         // deterministic CI uses, so the two paths cannot disagree about the
         // Hamiltonian -- only about how they solve it.
         using DiagonalCache = std::unordered_map<DetKey, double, DetKeyHash>;
-        HamiltonianOps make_ops(const AllMOCISetup &setup,
+        HamiltonianOps make_ops(const FixedOrbitalCISetup &setup,
                                 const std::shared_ptr<DiagonalCache> &diag_cache)
         {
             const int n_act = setup.n_act;
@@ -178,7 +178,7 @@ namespace HartreeFock::Correlation
             };
             // MEMOIZED (scope step T4). H_ii is a pure function of the
             // determinant -- `h_eff` and `ga` are built once in
-            // `build_all_mo_ci_setup` and never mutated -- but the spawn loop asks
+            // `build_fixed_orbital_ci_setup` and never mutated -- but the spawn loop asks
             // for it once per parent per iteration, so the same value is recomputed
             // for the life of the run.
             //
@@ -303,10 +303,18 @@ namespace HartreeFock::Correlation
         const bool had_ao_eri = !calc._eri.empty();
         const auto setup_start = opt.profile ? Clock::now() : Clock::time_point{};
         CIIntegralTimings integral_timings;
-        auto setup = build_all_mo_ci_setup(calc, shell_pairs, tag,
-                                           opt.profile ? &integral_timings : nullptr);
+        const auto &as = calc._active_space;
+        const bool active = as.nactele != 0 || as.nactorb != 0;
+        auto setup = build_fixed_orbital_ci_setup(
+            calc, shell_pairs, tag, active ? CIOrbitalSpace::Active : CIOrbitalSpace::All,
+            opt.profile ? &integral_timings : nullptr);
         if (!setup)
             return std::unexpected(setup.error());
+        const double energy_offset = calc._nuclear_repulsion + setup->core_energy;
+        if (active)
+            logging(LogLevel::Info, tag + " :",
+                    std::format("Fixed orbitals: {} frozen core, {} active, core energy {:.12f} Eh",
+                                setup->n_core, setup->n_act, setup->core_energy));
         if (opt.profile)
         {
             const double build_seconds = Seconds(Clock::now() - setup_start).count();
@@ -706,7 +714,7 @@ namespace HartreeFock::Correlation
             return v.empty() ? 0.0 : s / static_cast<double>(v.size());
         };
 
-        const double e_shift = mean_of(shift_samples) + calc._nuclear_repulsion;
+        const double e_shift = mean_of(shift_samples) + energy_offset;
         const double shift_err = blocked_standard_error(shift_samples);
 
         logging(LogLevel::Info, tag + " :",
@@ -774,7 +782,7 @@ namespace HartreeFock::Correlation
         {
             const double e_proj = ops.diagonal(reference)
                                   + proj_numerator_sum / proj_denominator_sum
-                                  + calc._nuclear_repulsion;
+                                  + energy_offset;
             // Error bar from a blocking analysis of the per-step ratios. This
             // OVERSTATES the uncertainty on the ratio-of-sums (which averages the
             // tails away), so it is conservative -- an overestimate fails a gate

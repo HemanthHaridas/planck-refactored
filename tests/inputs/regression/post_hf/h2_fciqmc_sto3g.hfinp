@@ -2,7 +2,7 @@
 #
 # 4 determinants, so deterministic FCI is exact and instant. A disagreement here
 # is INTEGRAL PLUMBING, not sampling: run_fciqmc and run_fci consume the same
-# build_all_mo_ci_setup, so they cannot differ about the Hamiltonian.
+# build_fixed_orbital_ci_setup, so they cannot differ about the Hamiltonian.
 #
 # Reference (correlation fci on this geometry): -1.1372744062 Eh
 #

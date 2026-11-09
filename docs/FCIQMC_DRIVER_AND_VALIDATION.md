@@ -13,10 +13,16 @@ This file answers a narrower architecture question:
 
 `run_fciqmc` mirrors `run_fci` and shares its integral transform, so the two paths cannot disagree about the Hamiltonian, only about how they solve it. FCIQMC reproduces exact FCI on N2/STO-3G (gated by `n2_fciqmc_sto3g`), the first validation on a real molecule at a walker population below saturation (0.69 walkers/determinant) rather than on a synthetic Hamiltonian or a trivially small system. This covers the driver entry point, input keywords, the N2/STO-3G validation, and the threading-determinism decision — step F5 of the ladder in `FCIQMC_RESEARCH_SCOPE.md`. Landed 2026-09-01/02. The layers beneath are `FCIQMC_SAMPLING_AND_DYNAMICS.md` (generator, propagator) and `FCIQMC_POPULATION_CONTROL.md` (shift control, estimators, initiator).
 
+## Fixed-orbital active spaces
+
+With `correlation fciqmc`, set both `nactele` and `nactorb` to sample a CAS in the converged RHF or ROHF orbitals. By default the first `(N − nactele)/2` spatial orbitals form the doubly occupied core and the next `nactorb` form the active block. Explicit `mo_permutation` or orbital irrep counts use the CASSCF orbital selector. The 31-orbital packed limit and `ci_max_dim` apply to the sampled space. Omitting the two dimensions uses all MOs.
+
+The active one-electron integrals include the inactive-core Coulomb and exchange terms. The reported shift and projected total energies both include the inactive electronic energy and nuclear repulsion. The diagonal printed for the reference determinant is in the active Hamiltonian. [Cr₂ pilot and fixed-orbital validation](FCIQMC_SCALING_INVESTIGATION.md#r3-fixed-orbital-cr2-pilot)
+
 ## Where the logic lives
 
 - `src/post_hf/fciqmc_driver.{h,cpp}` — driver entry, estimators, warnings
-- `src/post_hf/fci.{h,cpp}` (`build_all_mo_ci_setup`) — shared integral setup, extracted from `run_fci`
+- `src/post_hf/fci.{h,cpp}` (`build_fixed_orbital_ci_setup`) — shared integral setup, extracted from `run_fci`
 - `src/post_hf/ci/fciqmc.{h,cpp}` — the method itself
 - `src/io/io.cpp` (`_scf_map`) — input keywords
 - `tests/regression_cases.json` — `n2_fciqmc_sto3g`, `h2_fciqmc_threads1`, `h2_fciqmc_threads4`
@@ -26,7 +32,7 @@ This file answers a narrower architecture question:
 
 ### 1. Sharing the integral transform is what makes a sampling-vs-plumbing disagreement attributable
 
-`build_all_mo_ci_setup` — validation, electron counts, the packed-orbital and `ci_max_dim` guards, `h_eff` and `ga` — was extracted from `run_fci`, a move rather than a copy. Both `run_fci` and `run_fciqmc` call it, and both Hamiltonian callbacks wrap the same `slater_condon_element`. Verified behaviour-neutral: the FCI regression cases pass and N2 still gives `-107.6529998854` digit-identical after the extraction.
+`build_fixed_orbital_ci_setup` — validation, electron counts, the packed-orbital and `ci_max_dim` guards, `h_eff` and `ga` — was extracted from `run_fci`, a move rather than a copy. Both `run_fci` and `run_fciqmc` call it, and both Hamiltonian callbacks wrap the same `slater_condon_element`. Verified behaviour-neutral: the FCI regression cases pass and N2 still gives `-107.6529998854` digit-identical after the extraction.
 
 Design rule:
 

@@ -1304,7 +1304,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         {
             corr_tag = "FCIQMC :";
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag,
-                                         "Sampling the full CI wavefunction stochastically");
+                                         "Sampling the CI wavefunction stochastically");
             corr_res = HartreeFock::Correlation::run_fciqmc(calculator, shellpairs);
         }
 

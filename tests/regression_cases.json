@@ -4075,6 +4075,38 @@
    "timeout_s": 180
   },
   {
+   "id": "lih_fciqmc_cas24_sto3g",
+   "input": "tests/inputs/regression/post_hf/lih_fciqmc_cas24_sto3g.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "env": {
+    "OMP_NUM_THREADS": "2"
+   },
+   "expected_exit_code": 0,
+   "contains": [
+    "Fixed orbitals: 1 frozen core, 4 active",
+    "Sampling 4 orbitals, 1 alpha / 1 beta electrons  (CI dim = 16)"
+   ],
+   "checks": [
+    {
+     "type": "metric_within_sigma",
+     "metric": "fciqmc_shift_energy",
+     "sigma_metric": "fciqmc_shift_error",
+     "expected": -7.863681638748557,
+     "n_sigma": 5.0
+    },
+    {
+     "type": "metric_within_sigma",
+     "metric": "fciqmc_projected_energy",
+     "sigma_metric": "fciqmc_projected_error",
+     "expected": -7.863681638748557,
+     "n_sigma": 5.0
+    }
+   ],
+   "timeout_s": 60
+  },
+  {
    "id": "be_fciqmc_spherical_631gd",
    "input": "tests/inputs/regression/post_hf/be_fciqmc_spherical_631gd.hfinp",
    "tags": [
