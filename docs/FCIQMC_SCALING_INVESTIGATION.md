@@ -1,6 +1,6 @@
 # FCIQMC scaling investigation
 
-**R3 reached Cr₂ CAS(12,18) within the M3 pilot budget.** At 25,000 walkers, two of three seeds still switched projection reference. One projected estimate exceeded an independent variational upper bound by 0.690 Eh. The nested CAS(12,10) control shows how early sampling affects both estimators. [Matched population runs](#r3-long-runs-at-25000-walkers) · [Finite-time comparison](#r3-initiator-threshold-and-projection-time-in-cas1210)
+**R3 reached Cr₂ CAS(12,18) within the M3 pilot budget.** At 25,000 walkers, two of three seeds still switched projection reference. One projected estimate exceeded an independent variational upper bound by 0.690 Eh. The nested CAS(12,10) control measures how much the estimated energy varies across seeds after the exact projection comes within 1 mEh of the ground state. [Matched population runs](#r3-long-runs-at-25000-walkers) · [Late sampling results](#r3-sampling-length-and-seed-spread-in-cas1210)
 
 **R2 passed the adoption gate on the Apple M3.** On water, a serial cache lookup took 16.27 ns per parent and distributing a parent to its work bin took 1.85 ns. The driver now skips the serial lookup for determinants occupied on consecutive steps. R0 qualified the HF-to-FCIQMC Hamiltonian handoff. R1 established the timing, memory and correctness baselines on an Apple M3.
 
@@ -163,8 +163,33 @@ At imaginary time 5–6, disabling the initiator rule moved the projected energy
 
 By τ = 55 and 56 the exact projected deviations were +0.875 and +0.830 mEh, and the mean growth deviation was −0.754 mEh. To sample that window, the three threshold-off runs increased equilibration from 10,000 to 110,000 steps and retained 2,000 sampling steps. All six threshold-off runs kept the seeded reference and every projected sample. In the early window disabling the rule reduced the mean accepted reference weight on all three seeds, from 2,415–2,547 to 2,352–2,491 walkers. In the later window it was 1,119–1,284 walkers. The later projected energies were closer to CASCI on all three seeds, although two remained more than five reported standard errors above it. The long runs took 84–88 s and all six runs fit the 600 s and 1 GiB per-run budget. A repeat of the deterministic check briefly shared the host with the second late run. [Per-seed energies, uncertainties, work counts and exact window references](../tests/benchmarks/fciqmc/cr2_cas12_10_initiator_m3_r3.json)
 
+## R3 sampling length and seed spread in CAS(12,10)
+
+The three original seeds repeated the same 110,000-step equilibration, then extended sampling from 2,000 to 10,000 steps (τ = 55–56 to 55–60). The short window is the first 2,000 steps of each matched long run. Only the sampling length changed. Each run used 25,000 walkers, four spawn attempts per occupied determinant, timestep 0.0005 and initiator threshold zero. The table gives signed errors against CASCI and the driver's blocked standard errors in mEh. Reference weights are mean absolute weights over accepted samples.
+
+| Seed | Shift error, short → long | Projected error, short → long | Reference weight, short → long |
+|---|---:|---:|---:|
+| 20250901 | +10.76 ± 15.10 → −2.27 ± 7.92 | +11.01 ± 2.14 → +3.16 ± 2.69 | 1,204 → 1,171 |
+| 20250902 | +12.67 ± 14.50 → −6.21 ± 7.38 | +0.64 ± 0.49 → +6.30 ± 2.27 | 1,284 → 1,252 |
+| 20250903 | +3.99 ± 21.10 → +3.82 ± 8.05 | +9.18 ± 1.65 → −1.89 ± 4.41 | 1,119 → 1,093 |
+
+For these three seeds, the mean projected error fell from +6.94 to +2.52 mEh, although the second seed moved farther from CASCI. Exact continuous propagation from the seeded determinant gave projected errors of +0.875 mEh at τ = 55 and +0.670 mEh at τ = 60. The mean exact L1 growth energy over that window was 0.680 mEh below CASCI.
+
+Five fresh seeds (20250904–20250908) tested the same 10,000-step window. Each row below gives the equally weighted mean signed error, the sample standard deviation across seeds (SD), and the root mean square of the individual runs' reported blocked standard errors (RMS SE). All values are in mEh.
+
+| Seeds and sampling length | Mean shift error | Shift SD / RMS SE | Mean projected error | Projected SD / RMS SE |
+|---|---:|---:|---:|---:|
+| Original three, 2,000 steps | +9.14 | 4.56 / 17.16 | +6.94 | 5.53 / 1.59 |
+| Original three, 10,000 steps | −1.55 | 5.06 / 7.79 | +2.52 | 4.13 / 3.26 |
+| Five fresh, 10,000 steps | +0.40 | 7.75 / 7.51 | −6.02 | 9.82 / 2.48 |
+| All eight, 10,000 steps | −0.33 | 6.53 / 7.62 | −2.82 | 8.92 / 2.80 |
+
+Four of the five fresh projected estimates missed CASCI by more than twice their reported SE, with signed errors ranging from −14.86 to +7.33 mEh. All five shifts fell within two reported SEs. The driver reports a ratio of summed numerator and denominator for the projected energy and computes its error bar by blocking the per-step ratios. On these seeds the reported projected errors understated the observed variation by about a factor of four. The five-seed comparison alone cannot distinguish slow fluctuations from a persistent energy bias.
+
+All eight long runs retained the seeded reference and accepted every projected sample. Mean absolute reference weights ranged from 1,093 to 1,252 walkers. The runs took 90.7–95.3 s each and peaked at 57.6 MiB on the M3. Equilibration accounted for about 90% of total time. Sampling cost 7.9–8.7 s per 10,000 steps, leaving room to lengthen the window within the 600 s budget. To reproduce the runs, apply the settings above to the Cr₂ pilot input and run the scaling profiler at four threads with seeds 20250901–20250908. [Per-seed energies, reference weights, timings and exact controls](../tests/benchmarks/fciqmc/cr2_cas12_10_sampling_m3_r3.json)
+
 ## Next steps
 
-At threshold zero in CAS(12,10), keep the 110,000-step equilibration and extend sampling from 2,000 to 10,000 steps (τ = 55–60) for the same three seeds. Compare both estimators with CASCI, their blocked errors with the spread across seeds, and the reference weights with the shorter late-window runs. This measures sensitivity to sampling length after the deterministic projection is within 1 mEh of the ground state. CAS(12,18) needs its own convergence check.
+Extend the five fresh CAS(12,10) seeds to 50,000 sampling steps (τ = 55–80) with the same 110,000-step equilibration, population, timestep and threshold. Compare the added 40,000 steps separately from the shared 10,000-step prefix. Check whether the projected spread across seeds falls and whether the reported single-run errors track it. CAS(12,18) still needs its own accuracy check.
 
 The E2 dispatch experiment is closed. E4 remains test-only pending evidence that bit selection merits a new paired trial. The detailed R0 handoff results, R1 reproduction commands and earlier optimization decisions are preserved in the version of this document at commit `7def132a` (`git show 7def132a:docs/FCIQMC_SCALING_INVESTIGATION.md`).

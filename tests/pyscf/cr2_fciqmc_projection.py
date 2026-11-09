@@ -61,10 +61,9 @@ def main():
 
     # The negative log change in the signed population's L1 norm is the
     # growth energy integrated over a window. Restore the energy origin
-    # removed from the generator. Both windows have unit duration.
+    # removed from the generator and divide by each window's duration.
     print("tau_start tau_end mean_L1_growth_Eh")
-    for start in (5, 55):
-        end = start + 1
+    for start, end in ((5, 6), (55, 56), (55, 60)):
         norm_start = np.linalg.norm(states[2 * start], ord=1)
         norm_end = np.linalg.norm(states[2 * end], ord=1)
         growth = energy_origin - np.log(norm_end / norm_start) / (end - start)

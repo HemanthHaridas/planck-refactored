@@ -308,9 +308,12 @@ None of these blocks correctness. Take each up only with a current profile.
     remained on opposite sides of exact CASCI at both timesteps.
     Disabling the initiator at 25k changed the early projected energies
     by less than 0.4 mEh. Exact evolution from the seed is still 23–27 mEh
-    above CASCI at τ = 5–6 and within 1 mEh by τ = 55. Next, keep
-    threshold zero and extend the late sampling window to τ = 55–60 in
-    CAS(12,10), comparing blocked errors with the spread across seeds.
+    above CASCI at τ = 5–6 and within 1 mEh by τ = 55. At τ = 55–60,
+    four of five fresh CAS(12,10) projections missed CASCI by more than
+    twice their reported standard error. All five shifts fell within that
+    range. Extend the same five threshold-off seeds to 50,000 sampling
+    steps (τ = 55–80) and compare the added 40,000 steps with the prefix.
+    CAS(12,18) accuracy remains open.
 - **ccgen generated kernels** (`docs/CCGEN_CC_OPENMP.md`,
   `docs/CCGEN_KERNEL_PERFORMANCE.md`):
   - Re-profile the generated production configuration, separating
