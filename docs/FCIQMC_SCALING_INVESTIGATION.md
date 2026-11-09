@@ -1,6 +1,6 @@
 # FCIQMC scaling investigation
 
-**R3 reached Cr₂ CAS(12,18) within the M3 pilot budget.** At 25,000 walkers, two of three seeds still switched projection reference. One projected estimate exceeded an independent variational upper bound by 0.690 Eh. In the nested CAS(12,10) control, extending sampling from 10,000 to 50,000 steps reduced the spread across five projected estimates from 9.82 to 2.61 mEh. [Matched population runs](#r3-long-runs-at-25000-walkers) · [Late sampling results](#r3-sampling-to-50000-steps-in-cas1210)
+**Cr₂ CAS(12,18) fits the M3 pilot budget, but its three 25,000-walker projected energies at τ = 5–6 exceed a verified variational upper bound by 0.108–1.092 Eh.** Two perturbative estimates place the fixed-orbital ground energy near −2064.92 to −2064.93 Eh. Low-weight parents account for over 93% of spawn attempts in both profiled CAS(12,18) runs. [Energy accuracy](#r3-energy-accuracy-in-cas1218) · [Spawn work by parent weight](#r3-spawn-work-by-parent-weight)
 
 **R2 passed the adoption gate on the Apple M3.** On water, a serial cache lookup took 16.27 ns per parent and distributing a parent to its work bin took 1.85 ns. The driver now skips the serial lookup for determinants occupied on consecutive steps. R0 qualified the HF-to-FCIQMC Hamiltonian handoff. R1 established the timing, memory and correctness baselines on an Apple M3.
 
@@ -210,8 +210,46 @@ At the same geometry, seed 20250904 used the first 12 active RHF orbitals, 10,00
 
 The last 2,000 steps cost **11.92 ms per step**. A 110,000 + 50,000-step run has a budget of **3.75 ms per step** on average. If the remaining 148,000 steps ran at the measured sampling rate, total wall time including the pilot's first 12,000 steps would be about 31 minutes. Occupancy and per-step cost can change as the population evolves. [Pilot settings, phase costs and spawn counts](../tests/benchmarks/fciqmc/cr2_cas12_12_cost_m3_r3.json)
 
+## R3 spawn work by parent weight
+
+The profiler groups each occupied determinant by its absolute incoming weight relative to the configured spawn granularity, one walker in these runs. A surviving spawn is a nonzero contribution before merging and annihilation. The three replays reproduced the archived input, Hamiltonian and trajectory fingerprints. In each phase, the two groups' visits and attempts sum to the original counters, and surviving spawns plus diagonal contributions reproduce the raw accumulator record count.
+
+| Sampling phase | Target walkers / draws | Initiator threshold | Visits and attempts below one walker | Absolute parent weight below one walker | Surviving spawns from those parents |
+|---|---:|---:|---:|---:|---:|
+| CAS(12,12), seed 20250904, τ = 5–6 | 25,000 / 4 | 0 | 96.1% | 80.4% | 78.2% |
+| CAS(12,18), seed 20250901, τ = 1–2 | 10,000 / 1 | 3 | 93.6% | 50.9% | 16.9% |
+| CAS(12,18), seed 20250903, τ = 5–6 | 25,000 / 4 | 3 | 93.4% | 62.0% | 46.6% |
+
+Permanently dropping these parents would discard a substantial fraction of the spawned contributions. One candidate is to attempt spawning with probability `q = min(1, |weight| / granularity)` at positive granularity. On selection, scale the spawn contribution by `1/q`, using the original weight for the initiator decision and diagonal propagation. Applied to the observed parents, this would avoid 74.7%, 76.2% and 76.3% of excitation draws in expectation, respectively. The resulting walker distribution, variance and wall time require a trial. [Phase counts and matched trajectory IDs](../tests/benchmarks/fciqmc/cr2_parent_weight_m3_r3.json)
+
+## R3 energy accuracy in CAS(12,18)
+
+**The ground energy at 1.68 Å is at most −2064.896580 Eh.** Starting from the same all-MO FCIDUMP, we froze the same 18 core orbitals and isolated the next 18 RHF orbitals. Within that space, we optimized singlet CASSCF trial states in 10 and 12 orbitals, starting from high-spin valence orbitals. Rotations stayed inside the parent space. Both normalized trial vectors therefore belong to the target CAS(12,18). Contracting their one- and two-body density matrices with the Hamiltonian reproduced each energy within 10⁻⁸ Eh.
+
+| Parent space | Optimized trial orbitals | Variational energy (Eh) | SC-NEVPT2 correction (Eh) | Estimated parent energy (Eh) |
+|---|---:|---:|---:|---:|
+| CAS(12,18) | 10 | −2064.860005 | −0.052832 | −2064.912837 |
+| CAS(12,18) | 12 | −2064.896580 | −0.035204 | −2064.931784 |
+| CAS(12,12) control | 10 | −2064.503320 | −0.012267 | −2064.515586 |
+
+Strongly contracted second-order perturbation theory (SC-NEVPT2) estimates the correlation with the remaining parent orbitals. The two target estimates differ by 18.95 mEh. In the parent formed by the first 12 RHF orbitals, the corrected estimate was 10.98 mEh above direct CI (−2064.526570 Eh). These checks give a scale for sensitivity to the trial space. Only the variational energies provide a one-sided bound. [Reference calculation](../tests/pyscf/cr2_fciqmc_accuracy.py)
+
+| Seed at τ = 5–6, 25,000 walkers | Projected minus upper bound (Eh) | Projected blocked SE (Eh) | Shift minus 12-orbital SC-NEVPT2 estimate (Eh) | Accepted reference weight, mean |
+|---|---:|---:|---:|---:|
+| 20250901 | +0.203 | 0.013 | −0.577 | 13.26 |
+| 20250902 | +0.108 | 0.086 | −0.756 | 5.88 |
+| 20250903 | +1.092 | 0.102 | −1.005 | 4.88 |
+
+The positive distances in the second column are minimum errors of the reported point estimates. Seed 20250902's distance is 1.26 of its blocked SEs. Seeds 20250901 and 20250903 exceed the bound by more than ten each. The shifts lie below both perturbative estimates, and the variational bound alone cannot quantify their errors. Even the three earlier four-draw projections with 10,000 walkers and a stable seeded reference at τ = 1–2 exceeded the bound by 0.341–0.381 Eh.
+
+**Longer sampling widened the error on the seed that retained its original reference.** For seed 20250901, changing only `fciqmc_steps` from 2,000 to 10,000 extended the window from τ = 5–6 to 5–10. The projected estimate moved from −2064.693174 to −2064.633191 ± 0.0313 Eh, increasing its minimum error from 0.203 to 0.263 Eh. The shift was −2065.646618 ± 0.0435 Eh. The first 2,000 steps all gave usable projections, but only 3,483 of the added 8,000 did. Subtracting the prefix using its signed reference-weight sum gives −2064.560102 Eh for the added window alone. The calculation took 338.4 s and 79.5 MiB. This single matched run shows that a longer average can worsen the estimate as the reference loses weight. [Per-seed comparisons, reference calculations and extended run](../tests/benchmarks/fciqmc/cr2_cas12_18_accuracy_m3_r3.json)
+
+To reproduce the references, run `tests/pyscf/cr2_fciqmc_accuracy.py` on the all-MO pilot FCIDUMP with `--trial-orbitals 10` and `--trial-orbitals 12`. Add `--parent-orbitals 12` to the 10-orbital command for the direct CI control. The largest target reference calculation took 216 s and 310 MiB on this M3.
+
 ## Next steps
 
-Profile spawning by absolute parent weight on the CAS(12,12) cost pilot. Split visits, total absolute weight, attempts and nonzero spawns into parents below one walker and those at or above one walker (the configured granularity). Check the instrumented result against the archived trajectory, then collect the same counters on the existing CAS(12,18) pilot at its original initiator threshold. Use the share of visits and surviving spawns in each group to decide whether to test a cheaper way to sample low-weight parents. CAS(12,18) energy accuracy remains open.
+For scaling, test probabilistic spawning from low-weight parents on the exact CAS(12,10) control. Check the mean spawn against the deterministic step, fixed-seed thread identity, and energy spread across seeds at equal wall time before testing the larger spaces.
+
+For accuracy, compare the current single-determinant projection with a fixed multideterminant trial on the same CAS(12,18) walker trajectories. Build the trial in Planck's determinant basis and check its Rayleigh quotient on the shared Hamiltonian. Track the signed trial overlap and usable samples across seeds. This separates sensitivity to the projected estimator from changes to the walker dynamics.
 
 The E2 dispatch experiment is closed. E4 remains test-only pending evidence that bit selection merits a new paired trial. The detailed R0 handoff results, R1 reproduction commands and earlier optimization decisions are preserved in the version of this document at commit `7def132a` (`git show 7def132a:docs/FCIQMC_SCALING_INVESTIGATION.md`).

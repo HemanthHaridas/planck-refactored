@@ -17,7 +17,7 @@ The selected feasibility target is the fixed-orbital Cr₂ CAS(12,18) at 1.68 Å
 
 | | question | answer |
 |---|---|---|
-| **Q1** | Is there a calculation this codebase cannot do that FCIQMC could? | **Cr₂ CAS(12,18)** spans 344.6M determinants. The fixed-orbital FCIQMC pilot fits the M3 budget. Estimator agreement remains open. |
+| **Q1** | Is there a calculation this codebase cannot do that FCIQMC could? | **Cr₂ CAS(12,18)** spans 344.6M determinants. The fixed-orbital pilot fits the M3 budget, but all three 25,000-walker projected energies at τ = 5–6 exceed a variational upper bound. |
 | **Q2** | Can a stochastic method be validated in a codebase gated on exactness? | **Yes — G1-G4 built and passing** as CTest `planck-statistical-gate` |
 
 FCIQMC (Booth/Thom/Alavi, *JCP* **131**, 054106) samples the FCI wavefunction with a population of signed walkers evolving in imaginary time, instead of storing a CI vector, reaching determinant spaces deterministic FCI cannot at the cost of a stochastic error bar. The implementation details live in `FCIQMC_SAMPLING_AND_DYNAMICS.md`, `FCIQMC_POPULATION_CONTROL.md`, and `FCIQMC_DRIVER_AND_VALIDATION.md`; this document keeps the case for the work and the measurements that bound it.
@@ -146,4 +146,4 @@ Design rule:
 
 ## Remaining scientific question
 
-At 1.68 Å, raising the long CAS(12,18) runs to 25,000 walkers left two seeds with a changed projection reference and all three with an estimator-gap warning. A deterministic CAS(12,10) in the same orbitals sets an upper bound of −2064.494324 Eh on the larger-space ground-state energy. In CAS(12,10), extending sampling to τ = 55–80 reduced the projected spread across five seeds to 2.61 mEh with an RMS reported SE of 3.41 mEh. The same walker and spawn settings already cost 11.92 ms per sampling step in a short CAS(12,12) pilot. The next measurement will identify which parent weights account for the spawn work in CAS(12,12) and CAS(12,18). The accuracy of the CAS(12,18) energy remains open. [Late sampling results and cost pilot](FCIQMC_SCALING_INVESTIGATION.md#r3-sampling-to-50000-steps-in-cas1210)
+At 1.68 Å, a singlet trial optimized strictly inside the 18 fixed active RHF orbitals gives an upper bound of −2064.896580 Eh. The three 25,000-walker projected estimates at τ = 5–6 exceed it by 0.108–1.092 Eh. Two SC-NEVPT2 estimates for this same Hamiltonian are −2064.912837 and −2064.931784 Eh. The exact target energy remains unknown. Test whether a multideterminant trial gives a reliable projected estimator on the same walkers. In parallel, the parent-weight profiles motivate an unbiased sampling trial for low-weight parents, which account for over 93% of spawn attempts in both CAS(12,18) profiles. [Accuracy and scaling measurements](FCIQMC_SCALING_INVESTIGATION.md#r3-energy-accuracy-in-cas1218)

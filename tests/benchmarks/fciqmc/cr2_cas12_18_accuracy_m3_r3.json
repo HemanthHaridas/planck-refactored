@@ -1,0 +1,178 @@
+{
+  "fixture": "tests/inputs/exploratory/fciqmc/cr2_cas12_18_pilot.hfinp",
+  "host": "Apple M3",
+  "fcidump_sha256": "5da22635fff234f8f6b2ad6f1889a1fb709a2021746dac7506a476e07bd6b47d",
+  "hamiltonian_id": "3ffac35b4805c0ec",
+  "pyscf_version": "2.13.0",
+  "reference_script": "tests/pyscf/cr2_fciqmc_accuracy.py",
+  "reference_method": "CASSCF subspace variational energy, verified by contracted one- and two-body density matrices. Strongly contracted NEVPT2 estimates the correlation with the remaining parent orbitals. Six alpha and six beta electrons. 18 frozen RHF orbitals.",
+  "reference_runs": [
+    {
+      "parent_orbitals": 12,
+      "trial_orbitals": 10,
+      "spin_squared": 1.6712645135693585e-11,
+      "core_plus_nuclear_Eh": -2035.979864505803,
+      "rayleigh_Eh": -2064.50331985832,
+      "sc_nevpt2_correction_Eh": -0.012266636320992216,
+      "estimated_parent_total_Eh": -2064.515586494641,
+      "direct_ci_total_Eh": -2064.526570162857,
+      "process_wall_s": 20.935239041000386,
+      "peak_rss_bytes": 324878336
+    },
+    {
+      "parent_orbitals": 18,
+      "trial_orbitals": 10,
+      "spin_squared": 3.2216958734734838e-12,
+      "core_plus_nuclear_Eh": -2035.979864505803,
+      "rayleigh_Eh": -2064.8600050891578,
+      "sc_nevpt2_correction_Eh": -0.052832361117749915,
+      "estimated_parent_total_Eh": -2064.9128374502757,
+      "process_wall_s": 8.320695541000532,
+      "peak_rss_bytes": 181583872
+    },
+    {
+      "trial_orbitals": 12,
+      "spin_squared": 6.937448662878369e-11,
+      "core_plus_nuclear_Eh": -2035.979864505803,
+      "rayleigh_Eh": -2064.896580459012,
+      "sc_nevpt2_correction_Eh": -0.03520355428603898,
+      "estimated_parent_total_Eh": -2064.931784013298,
+      "parent_orbitals": 18,
+      "process_wall_s": 215.92357224999978,
+      "peak_rss_bytes": 324616192
+    }
+  ],
+  "upper_bound_Eh": -2064.896580459012,
+  "reference_estimate_Eh": -2064.931784013298,
+  "early_control_archive": "cr2_population_spawn_m3_r3.json",
+  "early_four_draw_10000_walker_runs": [
+    {
+      "seed": 20250901,
+      "result_id": "a14de9d6fb93d713",
+      "shift_Eh": -2065.5503706829,
+      "shift_se_Eh": 0.0527,
+      "projected_Eh": -2064.5487775017,
+      "projected_se_Eh": 0.0183,
+      "projected_minus_variational_bound_Eh": 0.34780295731206934,
+      "projected_minus_12orb_NEVPT2_Eh": 0.38300651159806876,
+      "shift_minus_12orb_NEVPT2_Eh": -0.618586669601882,
+      "sampling_reference": "0x000000000000003f/0x000000000000003f",
+      "accepted_reference_abs_mean": 133.52,
+      "projected_samples": 2000
+    },
+    {
+      "seed": 20250902,
+      "result_id": "cc5ceeae67420777",
+      "shift_Eh": -2065.5275193421,
+      "shift_se_Eh": 0.0571,
+      "projected_Eh": -2064.5151372497,
+      "projected_se_Eh": 0.0105,
+      "projected_minus_variational_bound_Eh": 0.38144320931223774,
+      "projected_minus_12orb_NEVPT2_Eh": 0.41664676359823716,
+      "shift_minus_12orb_NEVPT2_Eh": -0.5957353288017657,
+      "sampling_reference": "0x000000000000003f/0x000000000000003f",
+      "accepted_reference_abs_mean": 123.17,
+      "projected_samples": 2000
+    },
+    {
+      "seed": 20250903,
+      "result_id": "b6f23f70249771bd",
+      "shift_Eh": -2065.5642722067,
+      "shift_se_Eh": 0.0457,
+      "projected_Eh": -2064.555411112,
+      "projected_se_Eh": 0.00971,
+      "projected_minus_variational_bound_Eh": 0.34116934701205537,
+      "projected_minus_12orb_NEVPT2_Eh": 0.3763729012980548,
+      "shift_minus_12orb_NEVPT2_Eh": -0.6324881934019686,
+      "sampling_reference": "0x000000000000003f/0x000000000000003f",
+      "accepted_reference_abs_mean": 90.5,
+      "projected_samples": 2000
+    }
+  ],
+  "control_archive": "cr2_long_25k_m3_r3.json",
+  "late_four_draw_25000_walker_runs": [
+    {
+      "seed": 20250901,
+      "result_id": "5542ea14b7699e34",
+      "shift_Eh": -2065.509182557,
+      "shift_se_Eh": 0.0155,
+      "projected_Eh": -2064.6931738787,
+      "projected_se_Eh": 0.0128,
+      "projected_minus_variational_bound_Eh": 0.20340658031227576,
+      "projected_minus_12orb_NEVPT2_Eh": 0.23861013459827518,
+      "shift_minus_12orb_NEVPT2_Eh": -0.5773985437017473,
+      "sampling_reference": "0x000000000000003f/0x000000000000003f",
+      "accepted_reference_abs_mean": 13.26,
+      "projected_samples": 2000
+    },
+    {
+      "seed": 20250902,
+      "result_id": "c6f52072a28552a2",
+      "shift_Eh": -2065.6875372725,
+      "shift_se_Eh": 0.0219,
+      "projected_Eh": -2064.7884091347,
+      "projected_se_Eh": 0.0858,
+      "projected_minus_variational_bound_Eh": 0.10817132431202481,
+      "projected_minus_12orb_NEVPT2_Eh": 0.14337487859802422,
+      "shift_minus_12orb_NEVPT2_Eh": -0.7557532592018106,
+      "sampling_reference": "0x000000000000102f/0x0000000000000c0f",
+      "accepted_reference_abs_mean": 5.88,
+      "projected_samples": 2000
+    },
+    {
+      "seed": 20250903,
+      "result_id": "2a2aaa409cf957c0",
+      "shift_Eh": -2065.9365578816,
+      "shift_se_Eh": 0.0157,
+      "projected_Eh": -2063.8042027531,
+      "projected_se_Eh": 0.102,
+      "projected_minus_variational_bound_Eh": 1.0923777059119857,
+      "projected_minus_12orb_NEVPT2_Eh": 1.127581260197985,
+      "shift_minus_12orb_NEVPT2_Eh": -1.0047738683019816,
+      "sampling_reference": "0x000000000000102f/0x0000000000011123",
+      "accepted_reference_abs_mean": 4.88,
+      "projected_samples": 1284
+    }
+  ],
+  "binary_sha256": "8233e069b11dddabdd1909d605ccf86faec779398f21fcaade0c1ebbd5be07f1",
+  "thread_env": {
+    "OMP_NUM_THREADS": "4",
+    "OMP_DYNAMIC": "false",
+    "OMP_PROC_BIND": null,
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1"
+  },
+  "budget_per_run": {
+    "wall_s": 600,
+    "peak_rss_bytes": 1073741824
+  },
+  "extended_sampling_run": {
+    "seed": 20250901,
+    "equilibration_steps": 10000,
+    "sampling_steps": 10000,
+    "input_sha256": "db3da12e27efb94dd97f4d8ab7facd7e2528f2689a2bf8b5f14b848272ccf59c",
+    "result_id": "07a45fb6f59297c1",
+    "prefix_result_id": "5542ea14b7699e34",
+    "process_wall_s": 338.393,
+    "peak_rss_bytes": 83394560,
+    "sampling_reference": "0x000000000000003f/0x000000000000003f",
+    "sign_unstable_warning": false,
+    "accepted_reference_abs_mean": 8.81,
+    "accepted_reference_abs_min": 3.0,
+    "shift_Eh": -2065.6466177649,
+    "shift_se_Eh": 0.0435,
+    "shift_samples": 10000,
+    "projected_Eh": -2064.633190954,
+    "projected_se_Eh": 0.0313,
+    "projected_samples": 5483,
+    "prefix_signed_denominator": 26517.09,
+    "full_signed_denominator": 48279.19,
+    "projected_minus_variational_bound_Eh": 0.2633895050121282,
+    "added_8000_steps": {
+      "shift_Eh": -2065.680976566875,
+      "accepted_samples": 3483,
+      "projected_Eh": -2064.5601018397724
+    }
+  }
+}

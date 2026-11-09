@@ -302,19 +302,15 @@ None of these blocks correctness. Take each up only with a current profile.
     Four threads gave the fastest Be median (8.08 s). Use eight for HF 50k
     on this M3. E4 stays test-only.
   - R3 admits Cr₂ CAS(12,18) at 1.68 Å with 18 frozen RHF orbitals.
-    Raising the long four-draw runs to 25k walkers narrowed the estimator
-    gap on one of three seeds. One projection exceeded the nested CAS(12,10)
-    upper bound by 0.690 Eh. In the smaller space the shift and projection
-    remained on opposite sides of exact CASCI at both timesteps.
-    Disabling the initiator at 25k changed the early projected energies
-    by less than 0.4 mEh. Exact evolution from the seed is still 23–27 mEh
-    above CASCI at τ = 5–6 and within 1 mEh by τ = 55. At 50,000 sampling
-    steps the five CAS(12,10) projected estimates had a spread of 2.61 mEh
-    and a mean error of −0.83 mEh. The short CAS(12,12) pilot took 11.92 ms
-    per sampling step, with 99.988% of spawn attempts rounding to zero.
-    Next, measure visits, absolute weight, attempts and nonzero spawns for
-    parents below and above the one-walker boundary in the CAS(12,12) and
-    CAS(12,18) pilots. CAS(12,18) accuracy remains open.
+    The three 25k projections at τ = 5–6 exceed the variational upper
+    bound of −2064.896580 Eh by 0.108–1.092 Eh. Extending the seed that
+    retained its reference to τ = 10 increased its minimum error to
+    0.263 Eh, with 5,483 usable projections in 10,000 steps. Compare a fixed
+    multideterminant projection with the single-reference estimator on
+    identical trajectories. Two SC-NEVPT2 estimates differ by 19 mEh.
+  - Low-weight parents account for 93–96% of visits across three Cr₂
+    profiles. Test probabilistic spawning with compensation for skipped
+    draws on CAS(12,10), using exact CI and error at equal wall time.
 - **ccgen generated kernels** (`docs/CCGEN_CC_OPENMP.md`,
   `docs/CCGEN_KERNEL_PERFORMANCE.md`):
   - Re-profile the generated production configuration, separating

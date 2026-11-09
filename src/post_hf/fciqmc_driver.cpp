@@ -110,8 +110,18 @@ namespace HartreeFock::Correlation
             std::uint64_t finalized_records = 0;
             std::uint64_t min_bin_parents = propagation.bins.front().parents, max_bin_parents = 0;
             double max_bin_seconds = 0.0;
+            FCIQMCParentWeightWork below, at_or_above;
+            const auto add_group = [](FCIQMCParentWeightWork &total,
+                                      const FCIQMCParentWeightWork &group) {
+                total.visits += group.visits;
+                total.absolute_weight += group.absolute_weight;
+                total.attempts += group.attempts;
+                total.nonzero_spawns += group.nonzero_spawns;
+            };
             for (const auto &bin : propagation.bins)
             {
+                add_group(below, bin.below_granularity);
+                add_group(at_or_above, bin.at_or_above_granularity);
                 parents += bin.parents;
                 min_bin_parents = std::min(min_bin_parents, bin.parents);
                 max_bin_parents = std::max(max_bin_parents, bin.parents);
@@ -156,6 +166,15 @@ namespace HartreeFock::Correlation
                                 propagation.parent_cleanup_seconds,
                                 driver.compress_seconds, driver.estimator_seconds, phase_seconds,
                                 propagation.bins.size(), min_bin_parents, max_bin_parents));
+            const auto log_group = [&](const char *group, const FCIQMCParentWeightWork &work) {
+                logging(LogLevel::Info, "FCIQMC_PROFILE:",
+                        std::format("phase=parent_weight window={} group={} visits={} "
+                                    "abs_weight={:.12e} attempts={} nonzero_spawns={}",
+                                    phase, group, work.visits, work.absolute_weight,
+                                    work.attempts, work.nonzero_spawns));
+            };
+            log_group("below_granularity", below);
+            log_group("at_or_above_granularity", at_or_above);
         }
 
         // Adapt the shared fixed-orbital setup to the callbacks the propagator wants.

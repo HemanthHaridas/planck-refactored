@@ -728,8 +728,17 @@ namespace HartreeFock::Correlation::CI::QMC
 
             for (const auto &[det, weight] : bin_parents[bin])
             {
+                FCIQMCParentWeightWork *weight_work = nullptr;
                 if (work)
+                {
                     ++work->parents;
+                    const double magnitude = std::abs(weight);
+                    weight_work = magnitude < granularity ? &work->below_granularity
+                                                         : &work->at_or_above_granularity;
+                    ++weight_work->visits;
+                    weight_work->absolute_weight += magnitude;
+                    weight_work->attempts += n_spawn_attempts;
+                }
                 // DEATH: deterministic, exactly as in propagate_deterministic.
                 // There is one diagonal element per determinant, so sampling it
                 // would add variance and buy nothing.
@@ -807,7 +816,10 @@ namespace HartreeFock::Correlation::CI::QMC
                     }
                     next_bin.add(exc.det, child);
                     if (work)
+                    {
                         ++work->accumulator_records;
+                        weight_work->nonzero_spawns += child != 0.0;
+                    }
                 }
             }
             const std::size_t raw_records = next_bin.size();

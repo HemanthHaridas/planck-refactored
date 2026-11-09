@@ -3270,7 +3270,7 @@ static void test_profile_is_a_passive_trajectory_observer()
     WalkerPopulation start;
     for (std::size_t i = 0; i < toy.dets.size(); ++i)
         if (i % 3 == 0)
-            start.add(toy.dets[i], (i % 2 == 0) ? 2.0 : -1.0);
+            start.add(toy.dets[i], (i % 2 == 0) ? 0.5 : -1.0);
 
     RandomSource plain_rng(741852), profiled_rng(741852);
     const auto plain = propagate_stochastic(start, 4, ops, 0.01, -2.0,
@@ -3289,8 +3289,19 @@ static void test_profile_is_a_passive_trajectory_observer()
           "FCIQMC profile preserves caller RNG consumption");
 
     std::uint64_t parents = 0, attempts = 0, raw = 0, folded = 0;
+    std::uint64_t small = 0, large = 0, spawns = 0;
+    double small_weight = 0.0, large_weight = 0.0;
     for (const auto &bin : profile.bins)
     {
+        const auto &lo = bin.below_granularity;
+        const auto &hi = bin.at_or_above_granularity;
+        small += lo.visits;
+        large += hi.visits;
+        small_weight += lo.absolute_weight;
+        large_weight += hi.absolute_weight;
+        spawns += lo.nonzero_spawns + hi.nonzero_spawns;
+        check(lo.attempts == 3 * lo.visits && hi.attempts == 3 * hi.visits,
+              "FCIQMC parent-weight groups account for attempted draws");
         parents += bin.parents;
         attempts += bin.spawn_attempts;
         raw += bin.accumulator_records;
@@ -3298,6 +3309,9 @@ static void test_profile_is_a_passive_trajectory_observer()
     }
     check(profile.calls == 1, "FCIQMC profile records one propagation call");
     check(parents == start.size(), "FCIQMC profile accounts for every parent");
+    check(small == 6 && large == 6 && small_weight == 3.0 && large_weight == 6.0,
+          "FCIQMC groups use absolute weight and include the boundary in the upper group");
+    check(spawns == raw - parents, "FCIQMC parent groups account for all rounded nonzero spawns");
     check(attempts == 3 * start.size(), "FCIQMC profile accounts for every spawn draw");
     check(raw >= parents && folded <= raw,
           "FCIQMC profile records the accumulator before and after fold");
