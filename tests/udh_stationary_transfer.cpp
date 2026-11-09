@@ -1,6 +1,7 @@
 // U9 common-functional integration oracle. Manufactured unequal-spin AO model,
 // NOT a molecular SCF/gradient acceptance test. No production switches.
 #include "dft/udh_two_particle_density.h"
+#include "udh_dense_oracle.h"
 #include "dft/udh_zvector.h"
 #include <Eigen/Eigenvalues>
 #include <Eigen/LU>
@@ -328,18 +329,19 @@ DHEq33NonXCDerivatives derivatives(const Model &m,const Direction &d)
         for(int l=0;l<3;++l) eri[gi(p,q,r,s)]+=d.factors[l](p,q)*m.factors[l](r,s)+m.factors[l](p,q)*d.factors[l](r,s);
     out.eri_ao={std::move(eri)}; return out;
 }
-struct Contract { UDHTwoParticleDensity gamma; UDHOverlapDensity w; };
+struct Contract { DFT::Gradient::TestOracle::Tensors gamma; UDHOverlapDensity w; };
 Contract contract(const Fixture &x,const V &q,const Orb &z)
 {
     auto t=expand(q); auto dp=require(build_udh_pt2_dprime(t,scale));
     auto pair=require(build_udh_pair_orbital_gradient(t,state(x.model,x.c).full,scale));
     auto relaxed=require(build_udh_relaxed_difference_density(dp,z));
-    return {require(build_udh_two_particle_density(t,scale,relaxed,x.c,x.s,ax)),
+    const auto rho=require(build_udh_two_particle_density(t,scale,relaxed,x.c,x.s,ax));
+    return {DFT::Gradient::TestOracle::materialize(rho,make_udh_two_particle_source(rho,t,x.c)),
             require(build_udh_overlap_density(pair,relaxed,x.c,x.f,x.s,x.model.response(density(x.c))))};
 }
 std::array<double,9> analytic(const Fixture &x,const Direction &d,const Contract &c)
 {
-    auto g=require(build_udh_non_xc_gradient(c.gamma,c.w,derivatives(x.model,d)));
+    const auto g=DFT::Gradient::TestOracle::dense_non_xc(c.gamma,c.w.total_ao,derivatives(x.model,d));
     auto vx=xc_geometry(x.model,d,density(x.c));
     return {g.one_electron(0),g.coulomb(0),g.exchange_alpha(0),g.exchange_beta(0),
             dot(c.gamma.relaxed_ao.spin.alpha,vx.alpha)+dot(c.gamma.relaxed_ao.spin.beta,vx.beta),

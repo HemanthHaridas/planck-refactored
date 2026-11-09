@@ -37,7 +37,8 @@ RKS DH gradients support geometry optimization and semi-numerical frequencies:
 the latter finite-difference the analytic gradient, rather than using an
 analytic DH Hessian. A separate, deliberately narrower UKS DH path has its
 own spin response and grid contracts; it is not an unrestricted version of
-the closed-shell equations documented here.
+the closed-shell equations documented here. Its non-XC gradient assembly and
+AO pair stream are shared with RKS (see §7).
 
 ---
 
@@ -247,7 +248,7 @@ There is no normal-production full MO-ERI tensor.
 
 Eq. 46 is evaluated from quadratic `D`, `P`, and `a_x` data during the
 ERI-derivative traversal. Eq. 47 uses
-`for_each_dh_eq47_nonseparable_raw_ao_block`: it emits bounded AO blocks that
+`for_each_dh_pair_ao_block`, the spin-general generator the UKS path also uses: it emits bounded AO blocks that
 the direct derivative consumer contracts immediately. Neither a final raw nor
 a symmetrized AO four-index pair tensor survives in the production result.
 

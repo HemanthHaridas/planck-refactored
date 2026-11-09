@@ -4,6 +4,7 @@
 #include <limits>
 #include <source_location>
 #include "dft/dh_pt2_gradient.h"
+#include "udh_dense_oracle.h"
 #include "post_hf/mp2_internal.h"
 
 bool test_dh_grid_sigma();
@@ -1133,57 +1134,7 @@ int main()
                 const auto compact46 = DFT::Gradient::build_dh_eq46_47_two_particle_density(
                     *relaxed44, *d40, Eigen::Matrix3d::Identity(), ground_density, 1.0,
                     DFT::Gradient::DHGammaStorage::ContractionOnly);
-                auto factorized_derivatives = derivatives33;
-                factorized_derivatives.eri_ao.clear();
-                factorized_derivatives.direct_two_electron = [&derivatives33](
-                    const DFT::Gradient::DHEq46_47TwoParticleDensity &two,
-                    const DFT::Gradient::DHEq47TiledExecution *tiled)
-                    -> std::expected<DFT::Gradient::DHEq33TwoElectronGradient, std::string>
-                {
-                    const Eigen::Index n = two.n_ao;
-                    const std::size_t n4 = static_cast<std::size_t>(n)*n*n*n;
-                    if (n <= 0 || two.relaxed_difference_ao.rows() != n ||
-                        two.ground_density_ao.rows() != n || !tiled || !tiled->amplitudes || !tiled->mo_coeff)
-                        return std::unexpected("O7.2 factorized fixture received invalid two-particle data.");
-                    const Eigen::Index nc = static_cast<Eigen::Index>(derivatives33.eri_ao.size());
-                    DFT::Gradient::DHEq33TwoElectronGradient out{
-                        Eigen::VectorXd::Zero(nc), Eigen::VectorXd::Zero(nc)};
-                    const auto index = [n](Eigen::Index mu, Eigen::Index nu, Eigen::Index ka, Eigen::Index ta)
-                    { return ((static_cast<std::size_t>(mu)*n+nu)*n+ka)*n+ta; };
-                    for (Eigen::Index x = 0; x < nc; ++x)
-                        for (Eigen::Index mu = 0; mu < n; ++mu)
-                            for (Eigen::Index nu = 0; nu < n; ++nu)
-                                for (Eigen::Index ka = 0; ka < n; ++ka)
-                                    for (Eigen::Index ta = 0; ta < n; ++ta)
-                                    {
-                                        const auto p = index(mu,nu,ka,ta);
-                                        const double sep = two.relaxed_difference_ao(mu,nu) * two.ground_density_ao(ka,ta) -
-                                            0.5 * two.exact_exchange * two.relaxed_difference_ao(mu,ka) * two.ground_density_ao(nu,ta);
-                                        out.separable(x) += sep * derivatives33.eri_ao[x][p];
-                                    }
-                    const auto streamed = DFT::Gradient::for_each_dh_eq47_nonseparable_raw_ao_tile(
-                        *tiled->amplitudes, *tiled->mo_coeff, tiled->transform_tile, tiled->mu_tile,
-                        [&out, &derivatives33, n, nc, &index](int begin, int width, const std::vector<double> &tile)
-                        -> std::expected<void, std::string>
-                        {
-                            const std::size_t suffix = static_cast<std::size_t>(n)*n*n;
-                            if (tile.size() != static_cast<std::size_t>(width)*suffix)
-                                return std::unexpected("O7.4.3 factorized fixture received invalid tile.");
-                            for (Eigen::Index x = 0; x < nc; ++x)
-                                for (int local_mu = 0; local_mu < width; ++local_mu)
-                                    for (Eigen::Index nu = 0; nu < n; ++nu)
-                                        for (Eigen::Index ka = 0; ka < n; ++ka)
-                                            for (Eigen::Index ta = 0; ta < n; ++ta)
-                                            {
-                                                const auto p = index(local_mu,nu,ka,ta);
-                                                const auto global = index(begin+local_mu,nu,ka,ta);
-                                                out.nonseparable(x) += tile[p] * derivatives33.eri_ao[x][global];
-                                            }
-                            return {};
-                        });
-                    if (!streamed) return std::unexpected(streamed.error());
-                    return out;
-                };
+                const auto factorized_derivatives = DFT::Gradient::TestOracle::callbacks_from_dense(derivatives33);
                 const Eigen::MatrixXd compact_coeff = Eigen::Matrix3d::Identity();
                 const DFT::Gradient::DHEq47TiledExecution compact_tiles{
                     &*d40, &compact_coeff, 2, 1};

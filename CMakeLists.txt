@@ -1054,6 +1054,9 @@ if(BUILD_TESTING)
     target_include_directories(planck-udh-pt2-stationary PRIVATE ${SRC_DIR} ${eigen_SOURCE_DIR})
     add_test(NAME planck-udh-pt2-stationary COMMAND planck-udh-pt2-stationary)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME planck-dh-o5-backtransform-contract
+            COMMAND ${Python3_EXECUTABLE} -m unittest discover
+                -s ${CMAKE_SOURCE_DIR}/tests -p test_dh_o5_backtransform.py -v)
         add_test(NAME planck-udh-u0-fixtures
             COMMAND ${Python3_EXECUTABLE} -m unittest discover
                 -s ${CMAKE_SOURCE_DIR}/tests -p test_udh_u0_fixtures.py -v)

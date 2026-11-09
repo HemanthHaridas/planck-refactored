@@ -8377,6 +8377,56 @@
     "uses Yukawa or Gaussian screened exchange"
    ],
    "checks": []
+  },
+  {
+   "id": "h2o2_cation_uks_b2plyp_v4_gradient_sto3g",
+   "input": "tests/inputs/regression/dft/h2o2_cation_uks_b2plyp_v4_gradient_sto3g.hfinp",
+   "executable": "planck-dft",
+   "_note": "Production UKS double-hybrid analytic gradient on the qualified V4 grid. Pinned to Planck's analytic gradient after tests/udh_molecular_audit.py fourth-order energy FD passed on this fixture (worst 4.3e-9 Ha/Bohr). PySCF is not a valid double-hybrid gradient reference.",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "UKS Converged"
+   ],
+   "not_contains": [
+    "invalid correction coordinate layout"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -148.94876447335696,
+     "atol": 1e-08
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.056077485312,
+       0.119087646926,
+       -0.012250213979
+      ],
+      [
+       -0.184823496146,
+       -0.160652840817,
+       0.038419178594
+      ],
+      [
+       -0.056920688061,
+       -0.006168152469,
+       0.010269956417
+      ],
+      [
+       0.185666698894,
+       0.047733346359,
+       -0.036438921032
+      ]
+     ],
+     "atol": 1e-08
+    }
+   ]
   }
  ]
 }

@@ -161,7 +161,8 @@ historical design context, but they are no longer the source of truth for
   with the recurrence oracle — both mutation-verified: re-introducing the defect
   fails exactly L = 3,4,5 (max|∇²| 2.2e-1/1.8e-1/8.4e-2) while L <= 2 and L = 6
   stay green. The i-shell (L=6) path bypasses the pseudoinverse for the
-  recurrence oracle and remains unchecked cross-code; see `vault/Status/Open Work.md`.
+  recurrence oracle; Ne/cc-pV6Z matches PySCF to every printed digit
+  (−128.5470611007 Eh, 2026-11-09, run by hand because it is too heavy for the suite).
 
 ### Post-HF methods
 
@@ -377,7 +378,7 @@ historical design context, but they are no longer the source of truth for
   grid in `039bd2df`), `calculation gradient` only. Same Lagrangian with
   per-spin densities, three amplitude blocks (c, 2c, c), alpha/beta coupling
   only through J and the cross-spin XC kernel, and a joint alpha-then-beta
-  Z-vector (`src/dft/udh_*.cpp`). Dense implementation (see Open Work).
+  Z-vector (`src/dft/udh_*.cpp`). Partly dense (see Open Work).
   Scope: conventional all-active UMP2 with stored T2, no solvent, no range
   separation, and the pinned grid `grid_policy g4-3-v4` + `grid_radial_points
   135` (`validate_qualified_uks_dh_grid`). Fourth-order FD on C1 H2O2+, HO2 and
@@ -429,6 +430,19 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **UKS double-hybrid gradient restored on one streamed path (2026-11-09,
+  `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md`).** Every UKS DH gradient had
+  failed since `d72742df` (2026-10-12), which left the dense UKS consumer reading
+  derivative arrays that were no longer filled. No regression case ran the path.
+  RKS and UKS now share one spin-general pair stream
+  (`for_each_dh_pair_ao_block`), one two-particle source and one assembly
+  (`build_dh_eq33_direct_non_xc_gradient`), and UKS keeps none of its six `n⁴`
+  tensors. Fourth-order energy FD on the V4 grid: C1 H2O2⁺ 4.3e-9, HO2 1.8e-9,
+  asymmetric water cation 9.1e-10 Ha/Bohr; translation ≤ 3.8e-13. RKS gradients
+  are bitwise unchanged. Closed-shell `scf_type uhf` is within 2.4e-11 Ha/Bohr of
+  RKS. Four mutations fail the contract test. Gated by
+  `h2o2_cation_uks_b2plyp_v4_gradient_sto3g`.
+
 - **Open decisions and full-symmetry gates settled (2026-11-09).** Three
   changes, core suite 137/137:
   - Yukawa and Gaussian screened exchange are refused by name at functional
@@ -442,10 +456,14 @@ historical design context, but they are no longer the source of truth for
   - `RYS_MAX_ROOTS` is 13, not 11. (ii|ii) needs 13 roots, so any quartet of
     total L ≥ 22 indexed past the root table and aborted on the default engine.
     Only L = 6 reaches it. `planck-rys-roots` covers n = 12 and 13 with the
-    existing bounds (moment error ≤ 1.3e-13).
+    existing bounds (moment error ≤ 1.3e-13). This is what let the i-shell
+    cross-code check run: Ne/cc-pV6Z equals PySCF to every printed digit.
   - New RHF/STO-3G gates at D3h, Oh, D∞h, C∞v and Kh match PySCF to ≤ 1.3e-9 Eh.
     The full-group ERI reduction is active for D3h and Oh only. D∞h, C∞v and Kh
     detect the group and converge without it.
+  - `test_dh_o5_backtransform.py` had been stale since `d72742df` and nothing ran
+    it. Its assertions now match the tiled streams, and ctest runs it as
+    `planck-dh-o5-backtransform-contract`.
 
 - **PCM geometry optimization and frequencies (2026-11-08,
   `docs/PCM_GEOMETRY.md` step 5; the scope is now an answer).** The

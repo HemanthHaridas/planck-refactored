@@ -27,13 +27,6 @@ suite was 132/132 at `1b3ffc9b`.
 
 ## 1. Correctness decisions and external dependencies
 
-- **UKS double-hybrid analytic gradients fail in production.** Every run stops
-  with `UDH driver: invalid correction coordinate layout`, since `d72742df`
-  (2026-10-12) left the dense UKS path reading derivative arrays that are no
-  longer filled. Last validated at `039bd2df` (2026-10-09). No regression case
-  ran this path. The fix moves UKS onto the streamed RKS contraction and deletes
-  the dense route: `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md`.
-
 - **HSE06 energy finite differences are unreliable by construction.** libxc's
   wPBEh `s_scaling_2` jumps by 5.15e-4 at s = 1, and grid points crossing the
   jump between FD geometries carry the whole FD error. This is not a Planck
@@ -94,11 +87,10 @@ suite was 132/132 at `1b3ffc9b`.
 - **Double hybrids** (`docs/DH_IMPLEMENTATION.md` §9):
   - UKS DH geometry optimization and frequencies are rejected. The gradient
     they would call already passes FD.
-  - The UKS DH path is dense: full α/β MO ERIs, a dense joint Jacobian, and an
-    `N_AO⁴` pair density. It is qualified only on small molecules.
-  - No committed regression case runs the production UKS DH gradient on the
-    V4 grid. The evidence lives in the `tests/g4_3_*` runners, so routing or
-    grid breakage would pass the suite.
+  - The UKS DH path is still partly dense: full α/β MO ERIs, a dense joint
+    Jacobian, and resident amplitudes. It is qualified only on small molecules.
+    The steps to one architecture, with the dense RKS test adapters, are in
+    `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md`.
   - O8 response throughput: paired J/K, blocked XC action, then batched
     Krylov only if a benchmark shows it pays.
   - O9 RI-DH is a separate energy backend. It is the only route to dropping
@@ -209,14 +201,6 @@ suite was 132/132 at `1b3ffc9b`.
 
 ## 4. Verification gaps
 
-- **i-shell (L = 6) spherical path has no cross-code check** (FU2,
-  `docs/SPHERICAL_F_SHELL_ACCURACY_SCOPE.md`). It bypasses
-  `normalized_pseudoinverse` for the recurrence oracle. The input
-  `tests/inputs/regression/spherical/ne_rhf_spherical_ccpv6z_ishell.hfinp`
-  and its reference (PySCF −128.5470611007 Eh) are committed but
-  unregistered, because they are too heavy for the suite. It could not run
-  before `RYS_MAX_ROOTS` was raised to 13 on 2026-11-09; the comparison is
-  still to be done.
 - **Full-symmetry edge cases:** D3h, Oh, linear groups and lone atoms are
   gated at the energy level (`*_fullsym_direct`). D∞h, C∞v and Kh do not use
   the full-group ERI reduction. The spherical full-symmetry direct-SCF ladder

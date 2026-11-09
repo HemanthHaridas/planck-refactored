@@ -3,6 +3,7 @@
 
 #include <expected>
 #include <array>
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <string>
@@ -484,6 +485,34 @@ namespace DFT::Gradient
         std::size_t peak_emitted_tile_elements = 0;
     };
 
+    // One (ia|jb)-paired amplitude block, in either spin treatment. The AO
+    // value is C_s(mu,i) C_s(nu,a) C_t(kappa,j) C_t(tau,b) amplitude(i,a,j,b).
+    // fill_amplitudes writes [local_i,a,j,b] row-major for i_count occupied
+    // indices from i_begin, with its scale and any (1+delta_ij) included.
+    // Non-owning: valid only for the synchronous contraction that reads it.
+    struct DHPairChannel
+    {
+        int n_occ_s = 0, n_virt_s = 0, n_occ_t = 0, n_virt_t = 0;
+        const Eigen::MatrixXd *c_s = nullptr, *c_t = nullptr;
+        std::function<void(int i_begin, int i_count, double *out)> fill_amplitudes;
+
+        [[nodiscard]] bool empty() const
+        { return n_occ_s == 0 || n_virt_s == 0 || n_occ_t == 0 || n_virt_t == 0; }
+    };
+
+    // The closed-shell Eq. (47) block: one channel, Theta=(1+delta_ij)*t_tilde.
+    [[nodiscard]] DHPairChannel make_dh_eq47_pair_channel(
+        const DHPT2AmplitudeDensity &amplitudes, const Eigen::MatrixXd &mo_coeff);
+
+    // Streams bounded AO blocks of the summed channels, so one derivative
+    // traversal serves every channel. A channel with an empty extent adds zero.
+    [[nodiscard]] std::expected<void, std::string>
+    for_each_dh_pair_ao_block(
+        int n_ao, const std::vector<DHPairChannel> &channels,
+        int occupied_tile, int mu_tile, int nu_tile, int kappa_tile, int tau_tile,
+        const DHEq47RawAOBlockConsumer &consumer,
+        DHEq47BlockWorkspace *workspace = nullptr);
+
     [[nodiscard]] std::expected<void, std::string>
     for_each_dh_eq47_nonseparable_raw_ao_block(
         const DHPT2AmplitudeDensity &amplitudes,
@@ -491,6 +520,49 @@ namespace DFT::Gradient
         int occupied_tile, int mu_tile, int nu_tile, int kappa_tile, int tau_tile,
         const DHEq47RawAOBlockConsumer &consumer,
         DHEq47BlockWorkspace *workspace = nullptr);
+
+    // The ERI-derivative coefficient of Eq. (33) for either spin treatment:
+    // separable = D_c(mu,nu) P_c(kappa,tau) + sum_x f_x D_x(mu,kappa) P_x(nu,tau),
+    // pair = the summed channels. RKS has one exchange term (f = -a_x/2, total
+    // densities) and one channel; UKS has two terms (f = -a_x, spin densities)
+    // and aa/ab/bb channels weighted c/2c/c. Literal raw coefficients are safe
+    // because the derivative quartet they contract is eightfold symmetric.
+    struct DHEq33TwoParticleSource
+    {
+        struct Exchange
+        {
+            Eigen::MatrixXd d, p;
+            double factor = 0.0;
+        };
+
+        int n_ao = 0;
+        Eigen::MatrixXd coulomb_d, coulomb_p;
+        std::vector<Exchange> exchange;
+        std::vector<DHPairChannel> pair;
+        int occupied_tile = 16, mu_tile = 32, nu_tile = 16, kappa_tile = 16, tau_tile = 16;
+        DHEq47BlockWorkspace *workspace = nullptr;
+
+        [[nodiscard]] double separable(int mu, int nu, int kappa, int tau) const
+        {
+            double value = coulomb_d(mu, nu) * coulomb_p(kappa, tau);
+            for (const auto &x : exchange)
+                value += x.factor * x.d(mu, kappa) * x.p(nu, tau);
+            return value;
+        }
+
+        [[nodiscard]] bool well_formed() const
+        {
+            const auto square = [this](const Eigen::MatrixXd &m)
+            { return m.rows() == n_ao && m.cols() == n_ao && m.allFinite(); };
+            if (n_ao <= 0 || !square(coulomb_d) || !square(coulomb_p) || occupied_tile <= 0 ||
+                mu_tile <= 0 || nu_tile <= 0 || kappa_tile <= 0 || tau_tile <= 0)
+                return false;
+            for (const auto &x : exchange)
+                if (!square(x.d) || !square(x.p) || !std::isfinite(x.factor))
+                    return false;
+            return true;
+        }
+    };
 
     // O7.4.3: this non-owning context is valid only for the synchronous
     // Eq. (33) assembly call that receives it.  It intentionally is not a
@@ -547,8 +619,7 @@ namespace DFT::Gradient
 
     using DHEq33TwoElectronContraction = std::function<
         std::expected<DHEq33TwoElectronGradient, std::string>(
-            const DHEq46_47TwoParticleDensity &two_particle,
-            const DHEq47TiledExecution *eq47_tiled)>;
+            const DHEq33TwoParticleSource &source)>;
 
     // Non-XC part of paper Eq. (33), evaluated coordinate by coordinate in
     // the AO basis.  All derivative vectors share one coordinate order; each
@@ -574,6 +645,16 @@ namespace DFT::Gradient
         Eigen::VectorXd two_electron;
         Eigen::VectorXd total;
     };
+
+    // The one production assembly of Eq. (33)'s non-XC part, for either spin
+    // treatment: +D:h' + W:S' + Gamma:I', from AO D and W and the two streamed
+    // callbacks. No XC, nuclear repulsion or KS reference gradient.
+    [[nodiscard]] std::expected<DHEq33NonXCGradient, std::string>
+    build_dh_eq33_direct_non_xc_gradient(
+        const Eigen::Ref<const Eigen::MatrixXd> &relaxed_ao,
+        const Eigen::Ref<const Eigen::MatrixXd> &overlap_ao,
+        const DHEq33TwoParticleSource &source,
+        const DHEq33NonXCDerivatives &derivatives);
 
     [[nodiscard]] std::expected<DHEq33NonXCGradient, std::string>
     build_dh_eq33_non_xc_gradient(

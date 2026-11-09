@@ -4816,28 +4816,14 @@ namespace DFT::Driver
         std::expected<Gradient::DHEq33TwoElectronGradient, std::string>
         contract_dh_eq33_two_electron_direct(
             const HartreeFock::Calculator &calculator,
-            const Gradient::DHEq46_47TwoParticleDensity &two_particle,
-            const Gradient::DHEq47TiledExecution *eq47_tiled)
+            const Gradient::DHEq33TwoParticleSource &source)
         {
             if (calculator._basis._basis != HartreeFock::BasisType::Cartesian ||
                 calculator._molecule.natoms == 0 || calculator._shells.nbasis() == 0)
                 return std::unexpected("DH Eq. 33 direct ERI contraction requires a nonempty Cartesian AO basis and molecule.");
             const int nbasis = static_cast<int>(calculator._shells.nbasis());
-            const std::size_t n4 = static_cast<std::size_t>(nbasis) * nbasis * nbasis * nbasis;
-            const auto &nonseparable = two_particle.nonseparable_raw_ao.size() == n4
-                ? two_particle.nonseparable_raw_ao : two_particle.nonseparable_symmetric_ao;
-            const bool has_materialized_eq47 = nonseparable.size() == n4;
-            const bool has_tiled_eq47 = eq47_tiled && eq47_tiled->amplitudes && eq47_tiled->mo_coeff &&
-                eq47_tiled->transform_tile > 0 && eq47_tiled->mu_tile > 0 &&
-                eq47_tiled->occupied_tile > 0 && eq47_tiled->nu_tile > 0 &&
-                eq47_tiled->kappa_tile > 0 && eq47_tiled->tau_tile > 0;
-            if (two_particle.n_ao != nbasis || (!has_materialized_eq47 && !has_tiled_eq47) ||
-                two_particle.relaxed_difference_ao.rows() != nbasis ||
-                two_particle.relaxed_difference_ao.cols() != nbasis ||
-                two_particle.ground_density_ao.rows() != nbasis ||
-                two_particle.ground_density_ao.cols() != nbasis ||
-                !std::isfinite(two_particle.exact_exchange) || two_particle.exact_exchange < 0.0)
-                return std::unexpected("DH Eq. 33 direct ERI contraction: invalid AO two-particle density dimensions.");
+            if (source.n_ao != nbasis || !source.well_formed())
+                return std::unexpected("DH Eq. 33 direct ERI contraction: invalid AO two-particle source.");
             auto bf_atom = dh_eq33_basis_function_atoms(calculator);
             if (!bf_atom) return std::unexpected(bf_atom.error());
 
@@ -4845,8 +4831,6 @@ namespace DFT::Driver
             Gradient::DHEq33TwoElectronGradient out{
                 Eigen::VectorXd::Zero(ncoord), Eigen::VectorXd::Zero(ncoord)};
             const auto &basis_functions = calculator._shells._basis_functions;
-            const auto eri_index = [nbasis](int mu, int nu, int ka, int ta)
-            { return ((static_cast<std::size_t>(mu) * nbasis + nu) * nbasis + ka) * nbasis + ta; };
             const auto accumulate = [&](int mu, int nu, int ka, int ta, double pair)
             {
                 const HartreeFock::ShellPair left(
@@ -4857,13 +4841,9 @@ namespace DFT::Driver
                 const int centers[4] = {
                     (*bf_atom)[static_cast<std::size_t>(mu)], (*bf_atom)[static_cast<std::size_t>(nu)],
                     (*bf_atom)[static_cast<std::size_t>(ka)], (*bf_atom)[static_cast<std::size_t>(ta)]};
-                // d(ERI) is eightfold symmetric. Contracting it with literal
-                // raw Eq. (46)/(47) is exactly the same scalar as using their
-                // symmetric adapters, without allocating either adapter.
-                const double separable =
-                    two_particle.relaxed_difference_ao(mu, nu) * two_particle.ground_density_ao(ka, ta) -
-                    0.5 * two_particle.exact_exchange *
-                    two_particle.relaxed_difference_ao(mu, ka) * two_particle.ground_density_ao(nu, ta);
+                // d(ERI) is eightfold symmetric, so contracting it with the
+                // literal raw coefficient needs no symmetrized tensor.
+                const double separable = source.separable(mu, nu, ka, ta);
                 for (int center = 0; center < 4; ++center)
                     for (int q = 0; q < 3; ++q)
                     {
@@ -4872,40 +4852,30 @@ namespace DFT::Driver
                         out.nonseparable(coordinate) += pair * derivative[3 * center + q];
                     }
             };
-            if (has_materialized_eq47)
-                for (int mu = 0; mu < nbasis; ++mu)
-                    for (int nu = 0; nu < nbasis; ++nu)
-                        for (int ka = 0; ka < nbasis; ++ka)
-                            for (int ta = 0; ta < nbasis; ++ta)
-                                accumulate(mu, nu, ka, ta, nonseparable[eri_index(mu, nu, ka, ta)]);
-            else
-            {
-                const auto tiled = Gradient::for_each_dh_eq47_nonseparable_raw_ao_block(
-                    *eq47_tiled->amplitudes, *eq47_tiled->mo_coeff,
-                    eq47_tiled->occupied_tile, eq47_tiled->mu_tile, eq47_tiled->nu_tile,
-                    eq47_tiled->kappa_tile, eq47_tiled->tau_tile,
-                    [&accumulate](int mu_begin, int mu_count, int nu_begin, int nu_count,
-                        int kappa_begin, int kappa_count, int tau_begin, int tau_count,
-                        const std::vector<double> &tile)
-                    -> std::expected<void, std::string>
-                    {
-                        const std::size_t suffix = static_cast<std::size_t>(nu_count)*kappa_count*tau_count;
-                        if (tile.size() != static_cast<std::size_t>(mu_count) * suffix)
-                            return std::unexpected("DH Eq. 33 direct ERI contraction: invalid Eq. 47 tile extent.");
-                        for (int local_mu = 0; local_mu < mu_count; ++local_mu)
-                            for (int local_nu = 0; local_nu < nu_count; ++local_nu)
-                                for (int local_ka = 0; local_ka < kappa_count; ++local_ka)
-                                    for (int local_ta = 0; local_ta < tau_count; ++local_ta)
-                                    {
-                                        const std::size_t index =
-                                            ((static_cast<std::size_t>(local_mu) * nu_count + local_nu) * kappa_count + local_ka) * tau_count + local_ta;
-                                        accumulate(mu_begin + local_mu, nu_begin + local_nu,
-                                            kappa_begin + local_ka, tau_begin + local_ta, tile[index]);
-                                    }
-                        return {};
-                    },eq47_tiled->workspace);
-                if (!tiled) return std::unexpected(tiled.error());
-            }
+            const auto tiled = Gradient::for_each_dh_pair_ao_block(
+                nbasis, source.pair,
+                source.occupied_tile, source.mu_tile, source.nu_tile, source.kappa_tile, source.tau_tile,
+                [&accumulate](int mu_begin, int mu_count, int nu_begin, int nu_count,
+                    int kappa_begin, int kappa_count, int tau_begin, int tau_count,
+                    const std::vector<double> &tile)
+                -> std::expected<void, std::string>
+                {
+                    const std::size_t suffix = static_cast<std::size_t>(nu_count)*kappa_count*tau_count;
+                    if (tile.size() != static_cast<std::size_t>(mu_count) * suffix)
+                        return std::unexpected("DH Eq. 33 direct ERI contraction: invalid pair tile extent.");
+                    for (int local_mu = 0; local_mu < mu_count; ++local_mu)
+                        for (int local_nu = 0; local_nu < nu_count; ++local_nu)
+                            for (int local_ka = 0; local_ka < kappa_count; ++local_ka)
+                                for (int local_ta = 0; local_ta < tau_count; ++local_ta)
+                                {
+                                    const std::size_t index =
+                                        ((static_cast<std::size_t>(local_mu) * nu_count + local_nu) * kappa_count + local_ka) * tau_count + local_ta;
+                                    accumulate(mu_begin + local_mu, nu_begin + local_nu,
+                                        kappa_begin + local_ka, tau_begin + local_ta, tile[index]);
+                                }
+                    return {};
+                }, source.workspace);
+            if (!tiled) return std::unexpected(tiled.error());
             return out;
         }
     }
@@ -4921,10 +4891,8 @@ namespace DFT::Driver
             const Eigen::Ref<const Eigen::MatrixXd> &relaxed_ao,
             const Eigen::Ref<const Eigen::MatrixXd> &overlap_ao)
         { return contract_dh_eq33_one_electron_overlap_direct(calculator, relaxed_ao, overlap_ao); };
-        out.direct_two_electron = [&calculator](
-            const Gradient::DHEq46_47TwoParticleDensity &two_particle,
-            const Gradient::DHEq47TiledExecution *eq47_tiled)
-        { return contract_dh_eq33_two_electron_direct(calculator, two_particle, eq47_tiled); };
+        out.direct_two_electron = [&calculator](const Gradient::DHEq33TwoParticleSource &source)
+        { return contract_dh_eq33_two_electron_direct(calculator, source); };
         return out;
     }
 

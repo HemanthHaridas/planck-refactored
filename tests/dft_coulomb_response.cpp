@@ -44,6 +44,7 @@
 #include "basis/basis.h"
 #include "dft/dft_gradient.h"
 #include "dft/dh_pt2_gradient.h"
+#include "udh_dense_oracle.h"
 #include "dft/dh_zvector.h"
 #include "dft/xc_grid.h"
 #include "integrals/base.h"
@@ -725,49 +726,10 @@ namespace
         // direct callback and require all Eq. (33) channels to stay bitwise
         // algebraically equivalent; ERI data remains intentionally dense at
         // this stage of O6.
-        auto direct_derivatives = derivatives;
-        direct_derivatives.hamiltonian_ao.clear();
-        direct_derivatives.overlap_ao.clear();
-        direct_derivatives.eri_ao.clear();
-        direct_derivatives.direct_one_electron_overlap = [&derivatives](
-            const Eigen::Ref<const Eigen::MatrixXd> &d,
-            const Eigen::Ref<const Eigen::MatrixXd> &w)
-            -> std::expected<DFT::Gradient::DHEq33OneElectronOverlapGradient, std::string>
-        {
-            const Eigen::Index ncoord = static_cast<Eigen::Index>(derivatives.eri_ao.size());
-            DFT::Gradient::DHEq33OneElectronOverlapGradient out{
-                Eigen::VectorXd::Zero(ncoord), Eigen::VectorXd::Zero(ncoord)};
-            for (Eigen::Index x = 0; x < ncoord; ++x)
-            {
-                out.one_electron(x) = (d.array() * derivatives.hamiltonian_ao[x].array()).sum();
-                out.overlap(x) = (w.array() * derivatives.overlap_ao[x].array()).sum();
-            }
-            return out;
-        };
-        direct_derivatives.direct_two_electron = [&derivatives](
-            const DFT::Gradient::DHEq46_47TwoParticleDensity &two_particle,
-            const DFT::Gradient::DHEq47TiledExecution *)
-            -> std::expected<DFT::Gradient::DHEq33TwoElectronGradient, std::string>
-        {
-            const auto &separable = two_particle.separable_symmetric_ao;
-            const auto &nonseparable = two_particle.nonseparable_symmetric_ao;
-            const Eigen::Index nao = two_particle.n_ao;
-            const Eigen::Index ncoord = static_cast<Eigen::Index>(derivatives.eri_ao.size());
-            const std::size_t n4 = static_cast<std::size_t>(nao) * nao * nao * nao;
-            if (separable.size() != n4 || nonseparable.size() != n4)
-                return std::unexpected("O6.3 direct ERI test received incompatible AO pair densities.");
-            DFT::Gradient::DHEq33TwoElectronGradient out{
-                Eigen::VectorXd::Zero(ncoord), Eigen::VectorXd::Zero(ncoord)};
-            for (Eigen::Index x = 0; x < ncoord; ++x)
-                for (std::size_t q = 0; q < n4; ++q)
-                {
-                    out.separable(x) += separable[q] * derivatives.eri_ao[x][q];
-                    out.nonseparable(x) += nonseparable[q] * derivatives.eri_ao[x][q];
-                }
-            return out;
-        };
+        const auto direct_derivatives = DFT::Gradient::TestOracle::callbacks_from_dense(derivatives);
+        const DFT::Gradient::DHEq47TiledExecution direct_tiles{&*amplitudes, &c};
         const auto direct_eq33 = DFT::Gradient::build_dh_eq33_non_xc_gradient(
-            *relaxed, *overlap_w, *gamma, c, direct_derivatives);
+            *relaxed, *overlap_w, *gamma, c, direct_derivatives, &direct_tiles);
         if (!direct_eq33 || (direct_eq33->one_electron - eq33->one_electron).norm() > 1e-13 ||
             (direct_eq33->overlap - eq33->overlap).norm() > 1e-13 ||
             (direct_eq33->two_electron_separable - eq33->two_electron_separable).norm() > 1e-13 ||
@@ -1493,68 +1455,6 @@ namespace
         scratch_result.t2_pair_packed.clear();
         scratch_result.t2_source = *scratch_t2;
         auto production_derivatives = direct_derivatives;
-        production_derivatives.direct_two_electron = [&derivatives](
-            const DFT::Gradient::DHEq46_47TwoParticleDensity &two_particle,
-            const DFT::Gradient::DHEq47TiledExecution *eq47_tiled)
-            -> std::expected<DFT::Gradient::DHEq33TwoElectronGradient, std::string>
-        {
-            if (!eq47_tiled || !eq47_tiled->amplitudes || !eq47_tiled->mo_coeff)
-                return std::unexpected("O7.6.5 direct ERI consumer requires the Eq. (47) block stream.");
-            const Eigen::Index nao = two_particle.n_ao;
-            const Eigen::Index ncoord = static_cast<Eigen::Index>(derivatives.eri_ao.size());
-            if (two_particle.relaxed_difference_ao.rows() != nao ||
-                two_particle.ground_density_ao.rows() != nao ||
-                derivatives.eri_ao.empty() ||
-                !two_particle.nonseparable_raw_ao.empty() ||
-                !two_particle.nonseparable_symmetric_ao.empty())
-                return std::unexpected("O7.6.5 direct ERI consumer received an invalid compact density.");
-            DFT::Gradient::DHEq33TwoElectronGradient out{
-                Eigen::VectorXd::Zero(ncoord), Eigen::VectorXd::Zero(ncoord)};
-            const auto add = [&](int mu, int nu, int ka, int ta, double separable, double pair)
-            {
-                const std::size_t q = ((static_cast<std::size_t>(mu) * nao + nu) * nao + ka) * nao + ta;
-                for (Eigen::Index x = 0; x < ncoord; ++x)
-                {
-                    out.separable(x) += separable * derivatives.eri_ao[x][q];
-                    out.nonseparable(x) += pair * derivatives.eri_ao[x][q];
-                }
-            };
-            for (int mu = 0; mu < nao; ++mu)
-                for (int nu = 0; nu < nao; ++nu)
-                    for (int ka = 0; ka < nao; ++ka)
-                        for (int ta = 0; ta < nao; ++ta)
-                        {
-                            const double separable =
-                                two_particle.relaxed_difference_ao(mu, nu) * two_particle.ground_density_ao(ka, ta) -
-                                0.5 * two_particle.exact_exchange *
-                                two_particle.relaxed_difference_ao(mu, ka) * two_particle.ground_density_ao(nu, ta);
-                            add(mu, nu, ka, ta, separable, 0.0);
-                        }
-            const auto streamed = DFT::Gradient::for_each_dh_eq47_nonseparable_raw_ao_block(
-                *eq47_tiled->amplitudes, *eq47_tiled->mo_coeff,
-                eq47_tiled->occupied_tile, eq47_tiled->mu_tile, eq47_tiled->nu_tile,
-                eq47_tiled->kappa_tile, eq47_tiled->tau_tile,
-                [&add](int mu_begin, int mu_count, int nu_begin, int nu_count,
-                    int ka_begin, int ka_count, int ta_begin, int ta_count,
-                    const std::vector<double> &tile) -> std::expected<void, std::string>
-                {
-                    const std::size_t expected = static_cast<std::size_t>(mu_count) * nu_count * ka_count * ta_count;
-                    if (tile.size() != expected)
-                        return std::unexpected("O7.6.5 received an Eq. (47) tile with an invalid extent.");
-                    for (int lmu = 0; lmu < mu_count; ++lmu)
-                        for (int lnu = 0; lnu < nu_count; ++lnu)
-                            for (int lka = 0; lka < ka_count; ++lka)
-                                for (int lta = 0; lta < ta_count; ++lta)
-                                {
-                                    const std::size_t q =
-                                        ((static_cast<std::size_t>(lmu) * nu_count + lnu) * ka_count + lka) * ta_count + lta;
-                                    add(mu_begin + lmu, nu_begin + lnu, ka_begin + lka, ta_begin + lta, 0.0, tile[q]);
-                                }
-                    return {};
-                }, eq47_tiled->workspace);
-            if (!streamed) return std::unexpected(streamed.error());
-            return out;
-        };
         const auto production_workspace = std::make_shared<const DFT::Gradient::DHGradientGeometryWorkspace>(
             DFT::Gradient::DHGradientGeometryWorkspace{{}, std::move(production_derivatives)});
         auto production_inputs = driver_inputs;

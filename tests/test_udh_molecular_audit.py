@@ -77,7 +77,7 @@ class U10WiringTests(unittest.TestCase):
                       "make_udh_direct_ks_response_operator", "build_udh_orbital_rhs", "solve_udh_zvector",
                       "build_udh_relaxed_difference_density", "build_udh_overlap_density",
                       "build_udh_two_particle_density", "build_dh_eq33_derivative_integrals",
-                      "build_udh_non_xc_gradient", "build_udh_gga_complete_xc_ii_gradient",
+                      "build_dh_eq33_direct_non_xc_gradient", "build_udh_gga_complete_xc_ii_gradient",
                       "build_udh_lda_complete_xc_ii_gradient", "scaled_z_residual>1e-10"):
             self.assertIn(token, source)
         header = (ROOT/"src/dft/udh_driver.h").read_text()

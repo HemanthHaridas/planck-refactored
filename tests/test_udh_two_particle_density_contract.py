@@ -14,38 +14,31 @@ class U7TwoParticleTests(unittest.TestCase):
 
     def test_spin_factors_and_correction_boundary(self):
         for token in (
-            "out.relaxed_ao.total(mu,nu)*p(ka,ta)",
-            "-ax*out.relaxed_ao.spin.alpha(mu,ka)*out.ground_ao.alpha(nu,ta)",
-            "-ax*out.relaxed_ao.spin.beta(mu,ka)*out.ground_ao.beta(nu,ta)",
-            "pair(t.aa,oa,oa,va,va,coeff.alpha,coeff.alpha,c,n4)",
-            "pair(t.ab,oa,ob,va,vb,coeff.alpha,coeff.beta,2*c,n4)",
-            "pair(t.bb,ob,ob,vb,vb,coeff.beta,coeff.beta,c,n4)",
+            "out.coulomb_d=g.relaxed_ao.total",
+            "out.coulomb_p=g.ground_ao.alpha+g.ground_ao.beta",
+            "out.exchange.push_back({g.relaxed_ao.spin.alpha,g.ground_ao.alpha,-ax})",
+            "out.exchange.push_back({g.relaxed_ao.spin.beta,g.ground_ao.beta,-ax})",
+            "channel(t.aa,oa,oa,va,va,coeff.alpha,coeff.alpha,c)",
+            "channel(t.ab,oa,ob,va,vb,coeff.alpha,coeff.beta,2*c)",
+            "channel(t.bb,ob,ob,vb,vb,coeff.beta,coeff.beta,c)",
         ):
             self.assertIn(token, self.source)
         self.assertNotIn("t_tilde", self.source)
         self.assertNotIn("RMP2", self.source)
 
-    def test_staged_transform_and_explicit_symmetry(self):
-        for token in ("transform_axis(v,shape,3,ct.rightCols(vt))",
-                      "transform_axis(v,shape,2,ct.leftCols(ot))",
-                      "transform_axis(v,shape,1,cs.rightCols(vs))",
-                      "transform_axis(v,shape,0,cs.leftCols(os))"):
-            self.assertIn(token, self.source)
-        self.assertIn("raw_ao,symmetric_ao", self.header)
-        self.assertIn("average(g.raw_ao,p,q,r,s,n)", self.source)
-        self.assertIn("valid_eri(dx.eri_ao[x],n,n4)", self.source)
+    def test_no_retained_dense_tensor_or_second_consumer(self):
+        for token in ("UDHERICoefficients", "build_udh_non_xc_gradient", "raw_ao", "eri_ao"):
+            self.assertNotIn(token, self.source + self.header)
 
-    def test_checked_common_snapshot_and_ao_consumer(self):
+    def test_checked_common_snapshot(self):
         for token in ("build_udh_pt2_dprime(t,c)", "transform_udh_relaxed_density_to_ao(d,coeff,s)",
-                      "relaxed Dprime does not match", "nonfinite gradient channel",
-                      "out.one_electron+out.overlap+out.two_electron"):
+                      "relaxed Dprime does not match"):
             self.assertIn(token, self.source)
-        self.assertIn("const DHEq33NonXCDerivatives &derivatives", self.header)
         self.assertNotIn("const DHRelaxedDifferenceDensity", self.header)
 
     def test_independent_oracles_and_physical_geometry(self):
         scalar = self.oracle.split("std::array<double,8> scalar(", 1)[1].split("Integrals model(", 1)[0]
-        for token in ("build_udh_two_particle", "build_udh_non_xc", "literal_pair", "symmetric_ao"):
+        for token in ("build_udh_two_particle", "dense_non_xc", "literal_pair", "symmetric_ao"):
             self.assertNotIn(token, scalar)
         for token in ("literal_pair(x,spin)", "closed_shell()", "sw.t.ab[ti(j,i,b,a",
                       "for(double ax:{0.,.17,.53,1.})", "for(double step:{1e-3,2e-4})",

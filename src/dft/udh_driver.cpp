@@ -103,7 +103,8 @@ namespace DFT::Driver
         if(!gamma) return error(gamma.error());
         auto dx=build_dh_eq33_derivative_integrals(calc);
         if(!dx) return error(dx.error());
-        auto nonxc=build_udh_non_xc_gradient(*gamma,*w,*dx);
+        auto nonxc=build_dh_eq33_direct_non_xc_gradient(gamma->relaxed_ao.total,w->total_ao,
+            make_udh_two_particle_source(*gamma,t,coeff),*dx);
         if(!nonxc) return error(nonxc.error());
         out.non_xc=std::move(*nonxc);
         const UDHXCIIInputs xci{&calc._molecule,&calc._shells,&prepared.molecular_grid,&prepared.ao_grid,
