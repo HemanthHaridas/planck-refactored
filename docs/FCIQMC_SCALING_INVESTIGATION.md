@@ -1,6 +1,6 @@
 # FCIQMC scaling investigation
 
-**R3 reached Cr₂ CAS(12,18) within the M3 pilot budget.** At 10,000 walkers and four spawn attempts, two of three seeds switched projection reference after longer equilibration. All three energy estimates remain unconverged. [Matched equilibration runs](#r3-equilibration-at-four-spawn-attempts)
+**R3 reached Cr₂ CAS(12,18) within the M3 pilot budget.** At 25,000 walkers, two of three seeds still switched projection reference. One projected estimate exceeded an independent variational upper bound by 0.690 Eh. [Matched population runs and energy check](#r3-long-runs-at-25000-walkers)
 
 **R2 passed the adoption gate on the Apple M3.** On water, a serial cache lookup took 16.27 ns per parent and distributing a parent to its work bin took 1.85 ns. The driver now skips the serial lookup for determinants occupied on consecutive steps. R0 qualified the HF-to-FCIQMC Hamiltonian handoff. R1 established the timing, memory and correctness baselines on an Apple M3.
 
@@ -124,8 +124,33 @@ Extending equilibration from 2,000 to 10,000 steps narrowed the estimator gap on
 
 All three short runs used the seeded reference on every sampling step. In the longer runs, the driver chose the most populated determinant after equilibration and kept it fixed during sampling. Two seeds switched determinants there. Mean reference weight fell for every seed, even when measured only on accepted samples. All three long-run gaps exceeded five times the larger reported standard error. The long runs took 64.4–68.7 s and peaked at 78.5 MiB. [Per-seed errors, reference determinants and run settings](../tests/benchmarks/fciqmc/cr2_equilibration_m3_r3.json)
 
+## R3 long runs at 25,000 walkers
+
+Increasing the target from 10,000 to 25,000 walkers narrowed the shift–projected gap for seed 20250902 and widened it for the other two. Each seed made the same decision about keeping or changing the seeded reference at equilibration. The replacement determinants themselves differed between populations. Only the target walker count changed within each pair. Both populations used 10,000 equilibration and 2,000 sampling steps, four draws per occupied determinant, timestep 0.0005 and initiator threshold 3.
+
+| Seed | Shift (Eh), 10k → 25k | Projected (Eh), 10k → 25k | Gap (Eh), 10k → 25k | Usable samples / 2,000 | Mean accepted reference weight | 25k reference |
+|---|---:|---:|---:|---:|---:|---|
+| 20250901 | −2065.342 → −2065.509 | −2064.660 → −2064.693 | 0.682 → 0.816 | 2,000 → 2,000 | 12.0 → 13.3 | seeded |
+| 20250902 | −2065.537 → −2065.688 | −2064.241 → −2064.788 | 1.296 → 0.899 | 1,292 → 2,000 | 6.5 → 5.9 | changed |
+| 20250903 | −2065.755 → −2065.937 | −2064.473 → −2063.804 | 1.282 → 2.132 | 1,393 → 1,284 | 5.6 → 4.9 | changed |
+
+All three 25k runs triggered the driver's estimator-gap warning. Wall time rose by 2.33–2.37× to 152–163 s and total parent visits rose by 2.31–2.36×. Peak RSS was 96.5–114.7 MiB. During sampling, workers accounted for 87–88% of wall time and the initiator rule rejected about 98% of spawn attempts. Both populations used the same solver binary and four-thread configuration. [Per-seed estimates, errors, work counts and settings](../tests/benchmarks/fciqmc/cr2_long_25k_m3_r3.json)
+
+### Independent energy check
+
+Freezing the same 18 core orbitals and keeping the first ten of the 18 active RHF orbitals gives a 44,100-determinant CAS(12,10). PySCF CASCI on the all-MO Planck FCIDUMP gave **−2064.494324 Eh**. The normalized CI vector reproduced that energy by direct expectation. Embedding this vector in CAS(12,18) assigns zero amplitude to determinants that occupy the eight additional orbitals, so its energy bounds the full-space ground-state energy from above. Seed 20250903's 25k projected estimate was **0.690 Eh above that bound**, with a reported standard error of 0.102 Eh. The bound gives no comparable accuracy certificate for estimates below it.
+
+We also ran the stochastic solver directly in CAS(12,10) at the same 25k settings and seeds. Here the exact reference lets us measure signed error for each estimator. All three runs retained the seeded reference. Halving the timestep doubled the equilibration and sampling step counts to 20,000 and 4,000, and doubled the shift-update interval to ten steps. This preserves both the imaginary-time windows and the time between shift updates. All six controls kept every projected sample.
+
+| Timestep | Shift minus CASCI (mEh), three seeds | Projected minus CASCI (mEh), three seeds | Usable samples per seed |
+|---|---:|---:|---:|
+| 0.0005 | −86.7 to −63.2 | +16.1 to +29.9 | 2,000 / 2,000 |
+| 0.00025 | −75.9 to −65.3 | +24.0 to +35.2 | 4,000 / 4,000 |
+
+To reproduce the deterministic control, export the all-MO FCIDUMP from the Cr₂ pilot. Read it with `pyscf.tools.fcidump.to_scf` and run `mcscf.CASCI(mf, 10, (6, 6)).kernel(numpy.eye(38))` in the input MO order. For the stochastic controls change only `nactorb` to 10 in the respective 25k input and use the timestep and step counts above. [FCIDUMP checksum and individual control results](../tests/benchmarks/fciqmc/cr2_long_25k_m3_r3.json)
+
 ## Next steps
 
-Test 25,000 target walkers at the same four spawn attempts, 10,000 equilibration steps and 2,000 sampling steps. Keep the three seeds, timestep and shift controls fixed so that each run has a matched 10,000-walker control above. Compare reference identity, accepted samples, mean reference weight and both energies. The earlier 25,000-walker sweep used one spawn attempt and shorter equilibration. Resume the matched-imaginary-time timestep study once reference occupancy is reliable across seeds. Keep each run within 600 s and 1 GiB.
+Use the exact CAS(12,10) reference to isolate the effect of the initiator threshold. At 25,000 walkers and timestep 0.0005, change `fciqmc_initiator` from 3 to 0 for the same three seeds. Hold the four spawn attempts and the 10,000/2,000 step counts fixed. Compare the paired changes in both estimators against CASCI, together with reference weight and the number of usable samples. This separates sensitivity to the initiator setting from the timestep comparison above. The CAS(12,18) energy at 1.68 Å remains unresolved.
 
 The E2 dispatch experiment is closed. E4 remains test-only pending evidence that bit selection merits a new paired trial. The detailed R0 handoff results, R1 reproduction commands and earlier optimization decisions are preserved in the version of this document at commit `7def132a` (`git show 7def132a:docs/FCIQMC_SCALING_INVESTIGATION.md`).

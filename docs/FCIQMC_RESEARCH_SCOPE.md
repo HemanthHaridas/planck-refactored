@@ -146,4 +146,4 @@ Design rule:
 
 ## Remaining scientific question
 
-At 1.68 Å, four draws per occupied determinant retained the seeded reference in all three short runs. With 10,000 equilibration steps two seeds switched projection reference, and both estimators still disagree on every seed. The next population test holds the longer equilibration and four-draw settings fixed. [Scaling investigation](FCIQMC_SCALING_INVESTIGATION.md#next-steps)
+At 1.68 Å, raising the long CAS(12,18) runs to 25,000 walkers left two seeds with a changed projection reference and all three with an estimator-gap warning. A deterministic CAS(12,10) in the same orbitals sets an upper bound of −2064.494324 Eh on the larger-space ground-state energy. The next comparison tests the initiator threshold against this smaller space’s exact energy. [Scaling investigation](FCIQMC_SCALING_INVESTIGATION.md#next-steps)
