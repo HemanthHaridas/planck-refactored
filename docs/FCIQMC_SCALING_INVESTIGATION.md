@@ -1,6 +1,6 @@
 # FCIQMC scaling investigation
 
-**R3 reached Cr₂ CAS(12,18) within the M3 pilot budget.** At 25,000 walkers, two of three seeds still switched projection reference. One projected estimate exceeded an independent variational upper bound by 0.690 Eh. [Matched population runs and energy check](#r3-long-runs-at-25000-walkers)
+**R3 reached Cr₂ CAS(12,18) within the M3 pilot budget.** At 25,000 walkers, two of three seeds still switched projection reference. One projected estimate exceeded an independent variational upper bound by 0.690 Eh. The nested CAS(12,10) control shows how early sampling affects both estimators. [Matched population runs](#r3-long-runs-at-25000-walkers) · [Finite-time comparison](#r3-initiator-threshold-and-projection-time-in-cas1210)
 
 **R2 passed the adoption gate on the Apple M3.** On water, a serial cache lookup took 16.27 ns per parent and distributing a parent to its work bin took 1.85 ns. The driver now skips the serial lookup for determinants occupied on consecutive steps. R0 qualified the HF-to-FCIQMC Hamiltonian handoff. R1 established the timing, memory and correctness baselines on an Apple M3.
 
@@ -149,8 +149,22 @@ We also ran the stochastic solver directly in CAS(12,10) at the same 25k setting
 
 To reproduce the deterministic control, export the all-MO FCIDUMP from the Cr₂ pilot. Read it with `pyscf.tools.fcidump.to_scf` and run `mcscf.CASCI(mf, 10, (6, 6)).kernel(numpy.eye(38))` in the input MO order. For the stochastic controls change only `nactorb` to 10 in the respective 25k input and use the timestep and step counts above. [FCIDUMP checksum and individual control results](../tests/benchmarks/fciqmc/cr2_long_25k_m3_r3.json)
 
+## R3 initiator threshold and projection time in CAS(12,10)
+
+At imaginary time 5–6, disabling the initiator rule moved the projected energy by only +0.17 to +0.37 mEh across matched seeds. It remained 16–30 mEh above the exact energy of −2064.494323848 Eh. The shift moved upward by 2.3–9.9 mEh and remained below CASCI. The threshold-off runs recorded zero initiator rejections in both phases. They used the same Hamiltonian, solver binary, 25,000 target walkers, timestep 0.0005 and four draws as the threshold-3 controls. Each table entry gives shift / projected energy as signed deviations from CASCI in mEh.
+
+| Seed | Threshold 3, τ 5–6 | Threshold 0, τ 5–6 | Threshold 0, τ 55–56 |
+|---|---:|---:|---:|
+| 20250901 | −86.7 / +18.1 | −84.3 / +18.4 | +10.8 / +11.0 |
+| 20250902 | −86.2 / +29.9 | −81.6 / +30.1 | +12.7 / +0.6 |
+| 20250903 | −63.2 / +16.1 | −53.3 / +16.3 | +4.0 / +9.2 |
+
+**The initial determinant is still relaxing at τ = 5.** Applying the continuous imaginary-time exponential of the 44,100-determinant Hamiltonian to the seeded determinant gave projected energies 27.345 and 22.999 mEh above CASCI at τ = 5 and 6. The mean growth energy over that window, computed from the change in the log of the exact state's L1 norm, was 59.239 mEh below CASCI. Thus even the deterministic projection and growth energy lie on opposite sides of the ground-state energy in the early window. The stochastic shift also depends on population feedback. The reference script checks each projected energy against the Rayleigh quotient of the state at half the projection time. [Finite-time reference calculation](../tests/pyscf/cr2_fciqmc_projection.py)
+
+By τ = 55 and 56 the exact projected deviations were +0.875 and +0.830 mEh, and the mean growth deviation was −0.754 mEh. To sample that window, the three threshold-off runs increased equilibration from 10,000 to 110,000 steps and retained 2,000 sampling steps. All six threshold-off runs kept the seeded reference and every projected sample. In the early window disabling the rule reduced the mean accepted reference weight on all three seeds, from 2,415–2,547 to 2,352–2,491 walkers. In the later window it was 1,119–1,284 walkers. The later projected energies were closer to CASCI on all three seeds, although two remained more than five reported standard errors above it. The long runs took 84–88 s and all six runs fit the 600 s and 1 GiB per-run budget. A repeat of the deterministic check briefly shared the host with the second late run. [Per-seed energies, uncertainties, work counts and exact window references](../tests/benchmarks/fciqmc/cr2_cas12_10_initiator_m3_r3.json)
+
 ## Next steps
 
-Use the exact CAS(12,10) reference to isolate the effect of the initiator threshold. At 25,000 walkers and timestep 0.0005, change `fciqmc_initiator` from 3 to 0 for the same three seeds. Hold the four spawn attempts and the 10,000/2,000 step counts fixed. Compare the paired changes in both estimators against CASCI, together with reference weight and the number of usable samples. This separates sensitivity to the initiator setting from the timestep comparison above. The CAS(12,18) energy at 1.68 Å remains unresolved.
+At threshold zero in CAS(12,10), keep the 110,000-step equilibration and extend sampling from 2,000 to 10,000 steps (τ = 55–60) for the same three seeds. Compare both estimators with CASCI, their blocked errors with the spread across seeds, and the reference weights with the shorter late-window runs. This measures sensitivity to sampling length after the deterministic projection is within 1 mEh of the ground state. CAS(12,18) needs its own convergence check.
 
 The E2 dispatch experiment is closed. E4 remains test-only pending evidence that bit selection merits a new paired trial. The detailed R0 handoff results, R1 reproduction commands and earlier optimization decisions are preserved in the version of this document at commit `7def132a` (`git show 7def132a:docs/FCIQMC_SCALING_INVESTIGATION.md`).

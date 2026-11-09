@@ -146,4 +146,4 @@ Design rule:
 
 ## Remaining scientific question
 
-At 1.68 Å, raising the long CAS(12,18) runs to 25,000 walkers left two seeds with a changed projection reference and all three with an estimator-gap warning. A deterministic CAS(12,10) in the same orbitals sets an upper bound of −2064.494324 Eh on the larger-space ground-state energy. The next comparison tests the initiator threshold against this smaller space’s exact energy. [Scaling investigation](FCIQMC_SCALING_INVESTIGATION.md#next-steps)
+At 1.68 Å, raising the long CAS(12,18) runs to 25,000 walkers left two seeds with a changed projection reference and all three with an estimator-gap warning. A deterministic CAS(12,10) in the same orbitals sets an upper bound of −2064.494324 Eh on the larger-space ground-state energy. In the smaller space, removing the initiator rule changed the early projected energies by less than 0.4 mEh. Exact propagation from the seeded determinant locates a later window for measuring the remaining stochastic error. [Scaling investigation](FCIQMC_SCALING_INVESTIGATION.md#next-steps)

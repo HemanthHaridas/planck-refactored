@@ -306,8 +306,11 @@ None of these blocks correctness. Take each up only with a current profile.
     gap on one of three seeds. One projection exceeded the nested CAS(12,10)
     upper bound by 0.690 Eh. In the smaller space the shift and projection
     remained on opposite sides of exact CASCI at both timesteps.
-    Next, compare initiator thresholds 3 and 0 in CAS(12,10) at 25k walkers
-    and timestep 0.0005 across the same seeds.
+    Disabling the initiator at 25k changed the early projected energies
+    by less than 0.4 mEh. Exact evolution from the seed is still 23–27 mEh
+    above CASCI at τ = 5–6 and within 1 mEh by τ = 55. Next, keep
+    threshold zero and extend the late sampling window to τ = 55–60 in
+    CAS(12,10), comparing blocked errors with the spread across seeds.
 - **ccgen generated kernels** (`docs/CCGEN_CC_OPENMP.md`,
   `docs/CCGEN_KERNEL_PERFORMANCE.md`):
   - Re-profile the generated production configuration, separating
