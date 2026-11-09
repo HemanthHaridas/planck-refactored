@@ -297,9 +297,10 @@ None of these blocks correctness. Take each up only with a current profile.
   - R2 passed on the M3. Skipping serial diagonal lookups for surviving
     parents cut full water wall time by 25.5% across matched pairs (median),
     HF by 17.4% and small Be by 5.7%. All trajectories matched.
-  - Next, measure the thread curve again on the optimized binary before
-    choosing a thread count. If small-population threading is the target,
-    test a sequential merge for the last tree levels. E4 stays test-only.
+  - The optimized HF 50k sweep is complete. Use 8 threads on this M3
+    (122.92 s median, 3.23× over one thread). If small-population
+    threading is the target, test a sequential merge for the last tree levels
+    against Be and HF. E4 stays test-only.
   - R3, conditional: a fixed-orbital active-space adapter.
   - A scientific target and a resource budget are still unselected.
 - **ccgen generated kernels** (`docs/CCGEN_CC_OPENMP.md`,

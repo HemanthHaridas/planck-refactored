@@ -50,11 +50,22 @@ Every water pair exceeded the 10% end-to-end threshold. The longest candidate ru
 
 To repeat a pair, build the baseline at `7def132a` and the candidate with the same Release flags. Run each binary through `tests/run_fciqmc_scaling_profile.sh BINARY FIXTURE THREADS OUTPUT_DIR` with a separate output directory for each invocation. Set `OMP_DYNAMIC=false` and the Accelerate, OpenBLAS and MKL thread limits to one. The archive gives the input paths, hashes and thread counts. [Scaling runner](../tests/run_fciqmc_scaling_profile.sh)
 
+## Thread selection after R2
+
+Use 8 OpenMP threads for the HF/6-31G 50k fixture on this M3. The optimized solver's median wall time was 122.92 s, 3.23× faster than one thread and 11.7% shorter than the next fastest setting (4 threads). The fixed-seed sweep used three full trajectories at each setting in 1/2/4/8 order. All 12 reproduced Hamiltonian `f032498d77f973b5`, result `ea152a6472c1789b`, the work counters in both phases, and 105,050 final diagonal-cache entries.
+
+| Threads | R1 median wall (s) | R2 median wall (s) | R2 wall range (s) | R2 speedup | Worker (s) | Merge (s) | Prefill (s) |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 424.83 | 396.49 | 390.91–397.01 | 1.00× | 196.18 | 39.81 | 3.22 |
+| 2 | 250.39 | 217.41 | 216.35–220.60 | 1.82× | 97.60 | 28.48 | 3.21 |
+| 4 | 169.38 | 139.24 | 134.77–139.34 | 2.85× | 53.29 | 25.19 | 3.22 |
+| 8 | 151.51 | 122.92 | 120.12–126.20 | 3.23× | 41.90 | 27.02 | 3.25 |
+
+From four to eight threads, median sampling worker time fell by 11.39 s and merge time rose by 1.83 s. Prefill stayed near 3.2 s at every thread count. Worker, merge and prefill are median sampling times. Speedup uses the optimized one-thread run as its baseline. The R1 wall times came from the previous sweep on the same host. The paired R2 measurements above establish the effect of changing the implementation at four threads. [Optimized sweep](../tests/benchmarks/fciqmc/hf50k_m3_r2.json) · [R1 sweep](../tests/benchmarks/fciqmc/hf50k_m3_r1.json) · [Thread sweep runner](../tests/run_fciqmc_e1_profile_ladder.sh)
+
 ## Next steps
 
-Repeat the 1/2/4/8-thread HF sweep on the optimized binary when selecting a thread count. The R2 pairs establish the improvement at four threads for water and HF and at two for Be. The R1 thread sweep measured the previous implementation. [Thread sweep runner](../tests/run_fciqmc_e1_profile_ladder.sh)
-
-**Small populations at high thread counts.** Spherical Be was fastest at two threads. Going from two to four saved 0.73 s in the sampling worker and added 1.36 s to the merge. If this workload is the target, test a sequential merge for the last few tree levels as a separate R2 experiment. Preserve the pair order and check HF 50k as the larger control. HF was fastest at eight threads on this M3, with a 151.51 s median versus 424.83 s at one thread. [HF thread sweep](../tests/benchmarks/fciqmc/hf50k_m3_r1.json)
+**Small populations at high thread counts.** Spherical Be was fastest at two threads. Going from two to four saved 0.73 s in the sampling worker and added 1.36 s to the merge. If this workload is the target, test a sequential merge for the last few tree levels as a separate R2 experiment. Preserve the pair order and check HF 50k as the larger control.
 
 **A calculation exceeds all-MO capacity.** Start R3 once a specific molecule, active space and resource budget identify the admission limit. Scope a fixed-orbital adapter that supplies active one- and two-electron integrals, spin counts and the core plus nuclear energy offset. Verify all-MO equivalence with zero frozen orbitals and compare a small frozen-core case with deterministic CASCI at identical orbitals. [FCIQMC research scope](FCIQMC_RESEARCH_SCOPE.md)
 
