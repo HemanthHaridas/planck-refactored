@@ -305,33 +305,29 @@ namespace HartreeFock::Correlation::CI::QMC
                 profile->tagged_entry_bytes = sizeof(TaggedSpawnEntry);
             std::vector<std::vector<TaggedSpawnEntry>> level;
             level.reserve(bins.size());
+            std::size_t tagged_entries = 0;
             for (std::size_t bin = 0; bin < bins.size(); ++bin)
             {
                 auto &entries = level.emplace_back();
+                tagged_entries += bins[bin].size();
                 entries.reserve(bins[bin].size());
                 for (const auto &[key, weight] : bins[bin])
                     entries.push_back({key, weight, bin});
             }
             while (level.size() > 1)
             {
-                const std::size_t current_entries = [&level] {
-                    std::size_t n = 0;
-                    for (const auto &stream : level)
-                        n += stream.size();
-                    return n;
-                }();
                 const std::size_t next_count = (level.size() + 1) / 2;
                 // Every merge is a permutation, so the next level has exactly
-                // current_entries tagged records. The two simultaneously live
+                // tagged_entries records. The two simultaneously live
                 // levels are the merge's complete tagged-entry high-water mark.
                 if (profile)
                 {
                     ++profile->levels;
                     profile->peak_live_entries = std::max(
-                        profile->peak_live_entries, 2 * current_entries);
+                        profile->peak_live_entries, 2 * tagged_entries);
                     profile->peak_live_bytes = std::max(
                         profile->peak_live_bytes,
-                        2 * current_entries * sizeof(TaggedSpawnEntry));
+                        2 * tagged_entries * sizeof(TaggedSpawnEntry));
                 }
 
                 std::vector<std::vector<TaggedSpawnEntry>> next(next_count);
@@ -343,7 +339,12 @@ namespace HartreeFock::Correlation::CI::QMC
                         next[pair] = merge_tagged_spawn_streams(
                             std::move(level[left]), std::move(level[left + 1]));
                 };
-                if (parallel_levels)
+                // On small populations the last few levels offer too few
+                // independent pairs to amortize another OpenMP team dispatch.
+                constexpr std::size_t small_tree_entries = 4096;
+                constexpr std::size_t serial_pairs = 4;
+                if (parallel_levels && (tagged_entries > small_tree_entries ||
+                                        next_count > serial_pairs))
                 {
 #pragma omp parallel for schedule(static)
                     for (std::ptrdiff_t pair = 0;
@@ -397,10 +398,9 @@ namespace HartreeFock::Correlation::CI::QMC
             bins, false, profile);
     }
 
-    // M1 production tree. It merges independent pairs at a tree level in
-    // parallel, but writes every predetermined pair result to its own slot.
-    // Thus OpenMP schedule cannot alter either the merge tree or equal-key
-    // addition association. The sequential entry point above is its oracle.
+    // The production tree uses OpenMP for larger levels. Both schedules
+    // write each pair to its predetermined slot and preserve equal-key
+    // addition order. The fully sequential entry point above is its oracle.
     inline CanonicalSpawnMerge merge_finalized_spawn_bins_pairwise_parallel(
         const std::vector<SpawnAccumulator> &bins,
         PairwiseSpawnMergeProfile *profile = nullptr)

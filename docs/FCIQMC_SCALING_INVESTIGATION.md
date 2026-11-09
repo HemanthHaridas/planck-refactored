@@ -63,9 +63,23 @@ Use 8 OpenMP threads for the HF/6-31G 50k fixture on this M3. The optimized solv
 
 From four to eight threads, median sampling worker time fell by 11.39 s and merge time rose by 1.83 s. Prefill stayed near 3.2 s at every thread count. Worker, merge and prefill are median sampling times. Speedup uses the optimized one-thread run as its baseline. The R1 wall times came from the previous sweep on the same host. The paired R2 measurements above establish the effect of changing the implementation at four threads. [Optimized sweep](../tests/benchmarks/fciqmc/hf50k_m3_r2.json) · [R1 sweep](../tests/benchmarks/fciqmc/hf50k_m3_r1.json) · [Thread sweep runner](../tests/run_fciqmc_e1_profile_ladder.sh)
 
+## Small-population merge results
+
+Use four threads for the cached spherical Be fixture on this M3. At eight threads, running the last few merge levels sequentially reduced merge time on Be. The production merge now executes levels with four or fewer pairs sequentially when there are at most 4,096 tagged entries. For the 64-bin tree these are the levels with four pairs, two pairs and one pair. Each level keeps its pair slots and addition order. The Be trajectories peaked at 1,812 tagged entries and HF 50k peaked at 50,522. These two fixtures establish the effect of the chosen cutoff over their measured populations.
+
+| Fixture | Threads | Previous wall (s) | New wall (s) | Paired wall reduction | Sampling merge (s) |
+|---|---:|---:|---:|---:|---:|
+| Be | 1 | 11.21 | 11.16 | 0.5% | 0.88 → 0.88 |
+| Be | 2 | 9.44 | 8.53 | 9.6% | 2.02 → 1.53 |
+| Be | 4 | 9.80 | 8.08 | 17.5% | 3.22 → 2.16 |
+| Be | 8 | 13.81 | 9.84 | 28.9% | 5.22 → 2.90 |
+| HF 50k | 8 | 120.06 | 119.70 | 1.3% | 26.70 → 26.72 |
+
+Each row reports three full-length pairs on the same build configuration and host, in A/B, B/A, A/B order. At eight threads on Be the three wall-time reductions were 28.9%, 23.9% and 29.0%. Median worker time stayed at 2.46 s while sampling merge time fell from 5.22 to 2.90 s. With profiling disabled, three more pairs gave a 27.9% median paired reduction and identical printed estimators and reference statistics. The HF 50k control passed the 5% regression limit. All 30 profiled runs reproduced the archived Hamiltonians, trajectories, work counters, cache sizes and vector capacities. [Measurements and run settings](../tests/benchmarks/fciqmc/small_tree_merge_m3_r2.json)
+
 ## Next steps
 
-**Small populations at high thread counts.** Spherical Be was fastest at two threads. Going from two to four saved 0.73 s in the sampling worker and added 1.36 s to the merge. If this workload is the target, test a sequential merge for the last few tree levels as a separate R2 experiment. Preserve the pair order and check HF 50k as the larger control.
+The measured thread settings for this host are four for spherical Be and eight for HF 50k. Select the scientific target and its time and memory budgets before choosing the next scaling experiment.
 
 **A calculation exceeds all-MO capacity.** Start R3 once a specific molecule, active space and resource budget identify the admission limit. Scope a fixed-orbital adapter that supplies active one- and two-electron integrals, spin counts and the core plus nuclear energy offset. Verify all-MO equivalence with zero frozen orbitals and compare a small frozen-core case with deterministic CASCI at identical orbitals. [FCIQMC research scope](FCIQMC_RESEARCH_SCOPE.md)
 
