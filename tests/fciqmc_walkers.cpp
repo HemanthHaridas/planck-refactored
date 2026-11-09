@@ -3492,6 +3492,39 @@ static void test_parent_keyed_stream_is_independent_of_parent_visit_order()
           "parent-keyed stream includes the beta determinant string");
 }
 
+static void test_prefill_handles_new_surviving_and_returning_parents()
+{
+    const DetKey a{1, 2}, b{1, 4}, c{2, 1}, d{4, 1};
+    CanonicalWalkerPopulation first, second, third;
+    first.assign_sorted({{a, 1}, {c, 2}, {d, 3}});
+    second.assign_sorted({{b, 1}, {c, -2}});
+    third.assign_sorted({{a, 2}, {b, -1}, {d, 4}});
+    std::vector<DetKey> calls;
+    HamiltonianOps ops;
+    ops.diagonal = [&](const DetKey &det) {
+        calls.push_back(det);
+        return 0.0;
+    };
+    SpawnWorkspace ws;
+    ws.prepare_canonical_parents(first, {}, ops);
+    check(calls == std::vector<DetKey>{a, c, d}, "initial parents are all prefilled");
+    calls.clear();
+    ws.prepare_canonical_parents(second, first, ops);
+    check(calls == std::vector<DetKey>{b}, "surviving parents avoid the serial lookup");
+    calls.clear();
+    ws.prepare_canonical_parents(third, second, ops);
+    check(calls == std::vector<DetKey>{a, d}, "returning parents enter prefill again");
+    std::size_t count = 0;
+    for (std::size_t bin = 0; bin < ws.parents.size(); ++bin)
+        for (const auto &[det, weight] : ws.parents[bin])
+        {
+            check(DetKeyHash{}(det) % kFciqmcBins == bin && third.weight_at(det) == weight,
+                  "prefilled bins hold current weights in the original partition");
+            ++count;
+        }
+    check(count == third.size(), "prefilled bins contain every current parent");
+}
+
 static void test_canonical_owner_roundtrips_through_propagation()
 {
     // This incremental adapter gate proves the direct read-side transfer:
@@ -4872,6 +4905,7 @@ int main()
     test_literal_canonical_merge_matches_map_output();
     test_level_parallel_pairwise_merge_matches_sequential();
     test_parent_keyed_stream_is_independent_of_parent_visit_order();
+    test_prefill_handles_new_surviving_and_returning_parents();
     test_canonical_owner_roundtrips_through_propagation();
     test_compression_does_not_break_reproducibility();
 

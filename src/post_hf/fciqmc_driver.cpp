@@ -190,12 +190,10 @@ namespace HartreeFock::Correlation
             // slater_condon_element's work by operation count, and that function
             // was 53.1 % of self time.
             //
-            // A bound or eviction policy was considered and is NOT needed: a churn
-            // model suggested the table could reach hundreds of MB, but the real
-            // occupied set is nearly static (1820 entries), so the model was
-            // pessimistic by orders of magnitude. If a future system does churn,
-            // the fix is to clear alongside `pop.compress()` -- only currently
-            // occupied determinants can ever be queried again.
+            // The serial prefill relies on a surviving parent's diagonal
+            // remaining resident between steps. Any future cache eviction must
+            // preserve those entries or arrange to prefill them again before
+            // the workers read the cache.
             //
             // `shared_ptr` because HamiltonianOps holds std::function, which must
             // stay copyable; the cache is shared by every copy, which is what we
@@ -370,6 +368,7 @@ namespace HartreeFock::Correlation
 
         // ── Propagate ──────────────────────────────────────────────────────────
         CanonicalWalkerPopulation pop;
+        CanonicalWalkerPopulation previous_parents;
         pop.assign_sorted({{reference, opt.target_walkers}});
 
         ShiftController ctl;
@@ -441,48 +440,10 @@ namespace HartreeFock::Correlation
             std::chrono::steady_clock::time_point prefill_start;
             if (opt.profile)
                 prefill_start = std::chrono::steady_clock::now();
-            // T2 scope step S3. `ops.diagonal` is memoized (T4) behind an
-            // unordered_map that is NOT thread-safe -- every entry the parallel
-            // region (S4) could possibly need must already be resident before
-            // that region starts, so no thread ever writes to the shared cache.
-            //
-            // A prefill pass over the CURRENT population, calling ops.diagonal
-            // for every determinant it holds, is sufficient: propagate_stochastic
-            // only ever queries the diagonal of determinants already present in
-            // `pop` at the top of the call (the death term, `fciqmc.cpp` around
-            // the `ham.diagonal(det)` line) -- it never queries the diagonal of a
-            // freshly spawned child, only of that child's PARENT, which is always
-            // an existing member of `pop`. So walking `pop` once covers every
-            // query the call is about to make.
-            //
-            // This is a pure mechanical change: it does not add, remove, or
-            // reorder any arithmetic. Every one of these calls would have hit the
-            // cache anyway on its first in-loop use (that is what T4 already
-            // guarantees at the 99.9974 % measured hit rate) -- this only moves
-            // WHEN the entry gets computed, from "first read inside the call" to
-            // "explicitly, just before it". Output must therefore be bitwise
-            // identical to S2, unlike S1->S2 which genuinely reordered summation.
-            //
-            // H2.8.4-b (fold A): this pass ALSO does propagate_stochastic's
-            // partition -- same `DetKeyHash{}(det) % kBins` binning, same
-            // `w == 0.0` skip -- so the propagator does not walk `pop` a second
-            // time to build `bin_parents`. `parents_prefilled` tells it to skip
-            // that loop; it clears the flag and the buckets when done. `pop` is
-            // an unordered_map, so this remains one traversal computing
-            // hash(det) once where it was computed twice (here + inside the
-            // propagator). The bin is a pure function of the determinant and
-            // the canonical owner already supplies a deterministic parent order.
-            spawn_ws.ready(kFciqmcBins);
-            spawn_ws.clear_parents();
-            for (const auto &[det, w] : pop)
-            {
-                (void)ops.diagonal(det);
-                if (w == 0.0)
-                    continue;
-                spawn_ws.parents[DetKeyHash{}(det) % kFciqmcBins]
-                    .push_back({det, w});
-            }
-            spawn_ws.parents_prefilled = true;
+            spawn_ws.prepare_canonical_parents(pop, previous_parents, ops);
+            // Both populations are sorted. Release the old allocation before
+            // propagation constructs the next population and its merge buffers.
+            previous_parents = {};
 
             if (opt.profile)
             {
@@ -500,6 +461,7 @@ namespace HartreeFock::Correlation
             if (opt.profile)
                 peak_population_bytes = std::max(
                     peak_population_bytes, pop.retained_bytes() + next_pop.retained_bytes());
+            previous_parents = std::move(pop);
             pop = std::move(next_pop);
 
             // H2.8.4-b (fold B): compress + ordered L1 norm in one walk of the

@@ -1,0 +1,911 @@
+{
+  "baseline_commit": "7def132acdea4bf3fcfe713eca744e36a59414a8",
+  "host": "Apple M3 (4P/4E), 8 GB",
+  "hashes": {
+    "baseline": "9d091a3afe4ec3f00a882689370f912027ba4ec5ed4b2c650ab8dbf3ad1d3429",
+    "candidate": "42532469a6bd3c3be0da90850c1f67917586809d4285bf62717bbbf72caa6986"
+  },
+  "probe_sha256": "7299535a9f5102b65c029a82ad46ae10165f66ca2199775a5a6de7520d1f0392",
+  "pilot": {
+    "water": {
+      "baseline": {
+        "wall": 51.666,
+        "equil": 21.334215,
+        "sample": 30.31011,
+        "worker": 15.306133,
+        "merge": 5.901835,
+        "prefill": 8.284337,
+        "rss": 243.84375
+      },
+      "probe": {
+        "wall": 45.804,
+        "equil": 16.68583,
+        "sample": 29.104032,
+        "worker": 14.60302,
+        "merge": 5.796394,
+        "prefill": 7.897001,
+        "rss": 333.78125
+      },
+      "candidate": {
+        "wall": 37.779,
+        "equil": 14.109404,
+        "sample": 23.653134,
+        "worker": 16.054437,
+        "merge": 5.839197,
+        "prefill": 0.939414,
+        "rss": 372.078125
+      },
+      "probe_measurements": {
+        "split_parents": 11242267,
+        "fused_parents": 11242494,
+        "misses": 2794,
+        "lookup_s": 0.182885,
+        "bin_s": 0.020854,
+        "worker_lookup_s": 0.051327,
+        "fused_s": 0.241008
+      },
+      "identity": {
+        "input": "37dda065a8268afe794b83518f2ec90af727577bba2527b68b6008cedfacecdc",
+        "hamiltonian": "93c4b956bc9cd24f",
+        "result": "918505f133d70d02",
+        "system": "Darwin",
+        "machine": "arm64",
+        "logical_cpus": 8,
+        "thread_env": {
+          "OMP_DYNAMIC": "false",
+          "OMP_PROC_BIND": null,
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        },
+        "equilibration.steps": 2000,
+        "equilibration.parents": 224829001,
+        "equilibration.attempts": 224829001,
+        "equilibration.invalid": 0,
+        "equilibration.zero_h": 0,
+        "equilibration.initiator_rejected": 0,
+        "equilibration.rounded_zero": 223875148,
+        "equilibration.records_raw": 225782854,
+        "equilibration.records_folded": 225769624,
+        "equilibration.canonical_emitted": 225084010,
+        "equilibration.bin_count": 64,
+        "equilibration.min_bin_parents": 3365187,
+        "equilibration.max_bin_parents": 3660194,
+        "sampling.steps": 2000,
+        "sampling.parents": 356951376,
+        "sampling.attempts": 356951376,
+        "sampling.invalid": 0,
+        "sampling.zero_h": 0,
+        "sampling.initiator_rejected": 0,
+        "sampling.rounded_zero": 355713589,
+        "sampling.records_raw": 358189163,
+        "sampling.records_folded": 358169801,
+        "sampling.canonical_emitted": 357154823,
+        "sampling.bin_count": 64,
+        "sampling.min_bin_parents": 5419573,
+        "sampling.max_bin_parents": 5783945
+      }
+    },
+    "hf": {
+      "baseline": {
+        "wall": 11.132,
+        "equil": 4.344422,
+        "sample": 6.77847,
+        "worker": 3.468696,
+        "merge": 1.655216,
+        "prefill": 1.373252,
+        "rss": 48.09375
+      },
+      "probe": {
+        "wall": 11.526,
+        "equil": 4.49605,
+        "sample": 7.015446,
+        "worker": 3.597109,
+        "merge": 1.699619,
+        "prefill": 1.431581,
+        "rss": 47.890625
+      },
+      "candidate": {
+        "wall": 9.622,
+        "equil": 3.941224,
+        "sample": 5.672995,
+        "worker": 3.510801,
+        "merge": 1.660003,
+        "prefill": 0.220056,
+        "rss": 45.25
+      },
+      "probe_measurements": {
+        "split_parents": 2919863,
+        "fused_parents": 2920059,
+        "misses": 503,
+        "lookup_s": 0.03599,
+        "bin_s": 0.005467,
+        "worker_lookup_s": 0.011951,
+        "fused_s": 0.044725
+      },
+      "identity": {
+        "input": "3cd54e4d289812ebc2625c4aa2cfe2604502331799edfe667fea2caea5a215bc",
+        "hamiltonian": "f032498d77f973b5",
+        "result": "8884c6b583a040a8",
+        "system": "Darwin",
+        "machine": "arm64",
+        "logical_cpus": 8,
+        "thread_env": {
+          "OMP_DYNAMIC": "false",
+          "OMP_PROC_BIND": null,
+          "OPENBLAS_NUM_THREADS": "1",
+          "MKL_NUM_THREADS": "1",
+          "VECLIB_MAXIMUM_THREADS": "1"
+        },
+        "equilibration.steps": 2000,
+        "equilibration.parents": 61074576,
+        "equilibration.attempts": 61074576,
+        "equilibration.invalid": 0,
+        "equilibration.zero_h": 0,
+        "equilibration.initiator_rejected": 0,
+        "equilibration.rounded_zero": 60606047,
+        "equilibration.records_raw": 61543105,
+        "equilibration.records_folded": 61533999,
+        "equilibration.canonical_emitted": 61139659,
+        "equilibration.bin_count": 64,
+        "equilibration.min_bin_parents": 844297,
+        "equilibration.max_bin_parents": 1109356,
+        "sampling.steps": 2000,
+        "sampling.parents": 92743043,
+        "sampling.attempts": 92743043,
+        "sampling.invalid": 0,
+        "sampling.zero_h": 0,
+        "sampling.initiator_rejected": 0,
+        "sampling.rounded_zero": 92185762,
+        "sampling.records_raw": 93300324,
+        "sampling.records_folded": 93288616,
+        "sampling.canonical_emitted": 92790102,
+        "sampling.bin_count": 64,
+        "sampling.min_bin_parents": 1265043,
+        "sampling.max_bin_parents": 1687606
+      }
+    }
+  },
+  "full_identities": {
+    "be": {
+      "input": "f51e859dca109f226b8be4b6a2f4e72436c22dfc957ac9d92b047af0b6926436",
+      "hamiltonian": "79831605c5eb80f2",
+      "result": "db8df0c70201c473",
+      "system": "Darwin",
+      "machine": "arm64",
+      "logical_cpus": 8,
+      "thread_env": {
+        "OMP_DYNAMIC": "false",
+        "OMP_PROC_BIND": null,
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1"
+      },
+      "equilibration.steps": 20000,
+      "equilibration.parents": 31097149,
+      "equilibration.attempts": 31097149,
+      "equilibration.invalid": 0,
+      "equilibration.zero_h": 41929,
+      "equilibration.initiator_rejected": 0,
+      "equilibration.rounded_zero": 30989911,
+      "equilibration.records_raw": 31162458,
+      "equilibration.records_folded": 31160447,
+      "equilibration.canonical_emitted": 31102536,
+      "equilibration.bin_count": 64,
+      "equilibration.min_bin_parents": 314371,
+      "equilibration.max_bin_parents": 765476,
+      "sampling.steps": 30000,
+      "sampling.parents": 50650414,
+      "sampling.attempts": 50650414,
+      "sampling.invalid": 0,
+      "sampling.zero_h": 69865,
+      "sampling.initiator_rejected": 0,
+      "sampling.rounded_zero": 50476927,
+      "sampling.records_raw": 50754036,
+      "sampling.records_folded": 50750940,
+      "sampling.canonical_emitted": 50657057,
+      "sampling.bin_count": 64,
+      "sampling.min_bin_parents": 513454,
+      "sampling.max_bin_parents": 1192309,
+      "diagonal_entries": 3491
+    },
+    "hf": {
+      "input": "72da8718359d16c06f7450afeac39f2bbe322ca681a0f7e3c59f606e08ce4fde",
+      "hamiltonian": "f032498d77f973b5",
+      "result": "ea152a6472c1789b",
+      "system": "Darwin",
+      "machine": "arm64",
+      "logical_cpus": 8,
+      "thread_env": {
+        "OMP_DYNAMIC": "false",
+        "OMP_PROC_BIND": null,
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1"
+      },
+      "equilibration.steps": 20000,
+      "equilibration.parents": 929186695,
+      "equilibration.attempts": 929186695,
+      "equilibration.invalid": 0,
+      "equilibration.zero_h": 0,
+      "equilibration.initiator_rejected": 0,
+      "equilibration.rounded_zero": 923606622,
+      "equilibration.records_raw": 934766768,
+      "equilibration.records_folded": 934652872,
+      "equilibration.canonical_emitted": 929658538,
+      "equilibration.bin_count": 64,
+      "equilibration.min_bin_parents": 12594213,
+      "equilibration.max_bin_parents": 16739275,
+      "sampling.steps": 30000,
+      "sampling.parents": 1454552910,
+      "sampling.attempts": 1454552910,
+      "sampling.invalid": 0,
+      "sampling.zero_h": 0,
+      "sampling.initiator_rejected": 0,
+      "sampling.rounded_zero": 1446049135,
+      "sampling.records_raw": 1463056685,
+      "sampling.records_folded": 1462881695,
+      "sampling.canonical_emitted": 1455228970,
+      "sampling.bin_count": 64,
+      "sampling.min_bin_parents": 19694933,
+      "sampling.max_bin_parents": 26208697,
+      "diagonal_entries": 105050
+    },
+    "water": {
+      "input": "a8fa8bcb77867ec822748cff0192233d85d7d62b72c4706fb6b2065b856ed3e6",
+      "hamiltonian": "93c4b956bc9cd24f",
+      "result": "bc255aa71009d1f4",
+      "system": "Darwin",
+      "machine": "arm64",
+      "logical_cpus": 8,
+      "thread_env": {
+        "OMP_DYNAMIC": "false",
+        "OMP_PROC_BIND": null,
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1"
+      },
+      "equilibration.steps": 20000,
+      "equilibration.parents": 3441018425,
+      "equilibration.attempts": 3441018425,
+      "equilibration.invalid": 0,
+      "equilibration.zero_h": 0,
+      "equilibration.initiator_rejected": 0,
+      "equilibration.rounded_zero": 3429030416,
+      "equilibration.records_raw": 3453006434,
+      "equilibration.records_folded": 3452821303,
+      "equilibration.canonical_emitted": 3443090358,
+      "equilibration.bin_count": 64,
+      "equilibration.min_bin_parents": 52055063,
+      "equilibration.max_bin_parents": 55944165,
+      "sampling.steps": 30000,
+      "sampling.parents": 5367426322,
+      "sampling.attempts": 5367426322,
+      "sampling.invalid": 0,
+      "sampling.zero_h": 0,
+      "sampling.initiator_rejected": 0,
+      "sampling.rounded_zero": 5349017812,
+      "sampling.records_raw": 5385834832,
+      "sampling.records_folded": 5385547786,
+      "sampling.canonical_emitted": 5370455306,
+      "sampling.bin_count": 64,
+      "sampling.min_bin_parents": 81279339,
+      "sampling.max_bin_parents": 86677766,
+      "diagonal_entries": 414055
+    }
+  },
+  "full_runs": [
+    {
+      "case": "be",
+      "pair": 1,
+      "binary": "baseline",
+      "wall": 10.189,
+      "equil": 3.608102,
+      "sample": 6.570795,
+      "worker": 3.261621,
+      "merge": 2.122054,
+      "prefill": 0.394871,
+      "rss": 15.09375,
+      "memory": {
+        "population_pair_peak_bytes": 86688,
+        "accumulator_bytes": 78336,
+        "parent_bin_bytes": 71424,
+        "merge_tagged_bound_bytes": 115968,
+        "merge_output_peak_bytes": 43488,
+        "diagonal_entries": 3491,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 10.262810541000363,
+      "load_before": [
+        5.00830078125,
+        5.57958984375,
+        5.35546875
+      ],
+      "load_after": [
+        4.9072265625,
+        5.533203125,
+        5.34228515625
+      ]
+    },
+    {
+      "case": "be",
+      "pair": 1,
+      "binary": "candidate",
+      "wall": 9.579,
+      "equil": 3.516446,
+      "sample": 6.053869,
+      "worker": 3.119564,
+      "merge": 2.041762,
+      "prefill": 0.119442,
+      "rss": 14.859375,
+      "memory": {
+        "population_pair_peak_bytes": 86688,
+        "accumulator_bytes": 78336,
+        "parent_bin_bytes": 71424,
+        "merge_tagged_bound_bytes": 115968,
+        "merge_output_peak_bytes": 43488,
+        "diagonal_entries": 3491,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 9.644251707999956,
+      "load_before": [
+        4.9072265625,
+        5.533203125,
+        5.34228515625
+      ],
+      "load_after": [
+        4.75439453125,
+        5.49072265625,
+        5.328125
+      ]
+    },
+    {
+      "case": "be",
+      "pair": 2,
+      "binary": "candidate",
+      "wall": 9.481,
+      "equil": 3.405799,
+      "sample": 6.066107,
+      "worker": 3.122508,
+      "merge": 2.05507,
+      "prefill": 0.119484,
+      "rss": 15.171875,
+      "memory": {
+        "population_pair_peak_bytes": 86688,
+        "accumulator_bytes": 78336,
+        "parent_bin_bytes": 71424,
+        "merge_tagged_bound_bytes": 115968,
+        "merge_output_peak_bytes": 43488,
+        "diagonal_entries": 3491,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 9.543305791999956,
+      "load_before": [
+        4.75439453125,
+        5.49072265625,
+        5.328125
+      ],
+      "load_after": [
+        4.41064453125,
+        5.39208984375,
+        5.294921875
+      ]
+    },
+    {
+      "case": "be",
+      "pair": 2,
+      "binary": "baseline",
+      "wall": 9.924,
+      "equil": 3.578515,
+      "sample": 6.325141,
+      "worker": 3.124464,
+      "merge": 2.053336,
+      "prefill": 0.37285,
+      "rss": 15.4375,
+      "memory": {
+        "population_pair_peak_bytes": 86688,
+        "accumulator_bytes": 78336,
+        "parent_bin_bytes": 71424,
+        "merge_tagged_bound_bytes": 115968,
+        "merge_output_peak_bytes": 43488,
+        "diagonal_entries": 3491,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 10.287715666000167,
+      "load_before": [
+        4.41064453125,
+        5.39208984375,
+        5.294921875
+      ],
+      "load_after": [
+        4.26708984375,
+        5.3291015625,
+        5.2734375
+      ]
+    },
+    {
+      "case": "be",
+      "pair": 3,
+      "binary": "baseline",
+      "wall": 10.057,
+      "equil": 3.570521,
+      "sample": 6.477302,
+      "worker": 3.222349,
+      "merge": 2.094275,
+      "prefill": 0.380967,
+      "rss": 15.125,
+      "memory": {
+        "population_pair_peak_bytes": 86688,
+        "accumulator_bytes": 78336,
+        "parent_bin_bytes": 71424,
+        "merge_tagged_bound_bytes": 115968,
+        "merge_output_peak_bytes": 43488,
+        "diagonal_entries": 3491,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 10.121164583999871,
+      "load_before": [
+        4.26708984375,
+        5.3291015625,
+        5.2734375
+      ],
+      "load_after": [
+        4.07177734375,
+        5.251953125,
+        5.24609375
+      ]
+    },
+    {
+      "case": "be",
+      "pair": 3,
+      "binary": "candidate",
+      "wall": 9.488,
+      "equil": 3.430748,
+      "sample": 6.047453,
+      "worker": 3.119318,
+      "merge": 2.03906,
+      "prefill": 0.118375,
+      "rss": 15.203125,
+      "memory": {
+        "population_pair_peak_bytes": 86688,
+        "accumulator_bytes": 78336,
+        "parent_bin_bytes": 71424,
+        "merge_tagged_bound_bytes": 115968,
+        "merge_output_peak_bytes": 43488,
+        "diagonal_entries": 3491,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 9.550595499999872,
+      "load_before": [
+        3.82568359375,
+        5.18115234375,
+        5.22119140625
+      ],
+      "load_after": [
+        3.67919921875,
+        5.1279296875,
+        5.2021484375
+      ]
+    },
+    {
+      "case": "hf",
+      "pair": 1,
+      "binary": "baseline",
+      "wall": 164.159,
+      "equil": 64.397491,
+      "sample": 99.753576,
+      "worker": 51.353403,
+      "merge": 24.603808,
+      "prefill": 19.572319,
+      "rss": 49.921875,
+      "memory": {
+        "population_pair_peak_bytes": 2411016,
+        "accumulator_bytes": 1572864,
+        "parent_bin_bytes": 1572864,
+        "merge_tagged_bound_bytes": 3233408,
+        "merge_output_peak_bytes": 1212528,
+        "diagonal_entries": 105050,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 164.22294558300018,
+      "load_before": [
+        3.67919921875,
+        5.1279296875,
+        5.2021484375
+      ],
+      "load_after": [
+        4.1220703125,
+        4.72265625,
+        5.01416015625
+      ]
+    },
+    {
+      "case": "hf",
+      "pair": 1,
+      "binary": "candidate",
+      "wall": 135.622,
+      "equil": 52.155222,
+      "sample": 83.450309,
+      "worker": 51.410038,
+      "merge": 24.655946,
+      "prefill": 3.162065,
+      "rss": 50.59375,
+      "memory": {
+        "population_pair_peak_bytes": 2411016,
+        "accumulator_bytes": 1572864,
+        "parent_bin_bytes": 1572864,
+        "merge_tagged_bound_bytes": 3233408,
+        "merge_output_peak_bytes": 1212528,
+        "diagonal_entries": 105050,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 135.9090309999997,
+      "load_before": [
+        4.1220703125,
+        4.72265625,
+        5.01416015625
+      ],
+      "load_after": [
+        3.208984375,
+        4.203125,
+        4.763671875
+      ]
+    },
+    {
+      "case": "hf",
+      "pair": 2,
+      "binary": "candidate",
+      "wall": 141.316,
+      "equil": 56.49483,
+      "sample": 84.805653,
+      "worker": 52.526864,
+      "merge": 24.865671,
+      "prefill": 3.168807,
+      "rss": 48.734375,
+      "memory": {
+        "population_pair_peak_bytes": 2411016,
+        "accumulator_bytes": 1572864,
+        "parent_bin_bytes": 1572864,
+        "merge_tagged_bound_bytes": 3233408,
+        "merge_output_peak_bytes": 1212528,
+        "diagonal_entries": 105050,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 141.79270929200038,
+      "load_before": [
+        3.208984375,
+        4.203125,
+        4.763671875
+      ],
+      "load_after": [
+        6.119140625,
+        5.34716796875,
+        5.16748046875
+      ]
+    },
+    {
+      "case": "hf",
+      "pair": 2,
+      "binary": "baseline",
+      "wall": 165.468,
+      "equil": 63.165966,
+      "sample": 102.292612,
+      "worker": 53.018914,
+      "merge": 25.017128,
+      "prefill": 20.004879,
+      "rss": 45.21875,
+      "memory": {
+        "population_pair_peak_bytes": 2411016,
+        "accumulator_bytes": 1572864,
+        "parent_bin_bytes": 1572864,
+        "merge_tagged_bound_bytes": 3233408,
+        "merge_output_peak_bytes": 1212528,
+        "diagonal_entries": 105050,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 165.6225425409998,
+      "load_before": [
+        6.119140625,
+        5.34716796875,
+        5.16748046875
+      ],
+      "load_after": [
+        5.77490234375,
+        5.4326171875,
+        5.2236328125
+      ]
+    },
+    {
+      "case": "hf",
+      "pair": 3,
+      "binary": "baseline",
+      "wall": 161.86,
+      "equil": 63.095559,
+      "sample": 98.749935,
+      "worker": 50.668243,
+      "merge": 24.336252,
+      "prefill": 19.544481,
+      "rss": 44.6875,
+      "memory": {
+        "population_pair_peak_bytes": 2411016,
+        "accumulator_bytes": 1572864,
+        "parent_bin_bytes": 1572864,
+        "merge_tagged_bound_bytes": 3233408,
+        "merge_output_peak_bytes": 1212528,
+        "diagonal_entries": 105050,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 162.18166708299987,
+      "load_before": [
+        5.77490234375,
+        5.4326171875,
+        5.2236328125
+      ],
+      "load_after": [
+        3.8984375,
+        4.87890625,
+        5.03857421875
+      ]
+    },
+    {
+      "case": "hf",
+      "pair": 3,
+      "binary": "candidate",
+      "wall": 133.417,
+      "equil": 51.384897,
+      "sample": 82.023984,
+      "worker": 50.421306,
+      "merge": 24.271367,
+      "prefill": 3.139574,
+      "rss": 46.328125,
+      "memory": {
+        "population_pair_peak_bytes": 2411016,
+        "accumulator_bytes": 1572864,
+        "parent_bin_bytes": 1572864,
+        "merge_tagged_bound_bytes": 3233408,
+        "merge_output_peak_bytes": 1212528,
+        "diagonal_entries": 105050,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 133.49002258300015,
+      "load_before": [
+        3.8984375,
+        4.87890625,
+        5.03857421875
+      ],
+      "load_after": [
+        4.48779296875,
+        4.70361328125,
+        4.93603515625
+      ]
+    },
+    {
+      "case": "water",
+      "pair": 1,
+      "binary": "baseline",
+      "wall": 789.629,
+      "equil": 269.607892,
+      "sample": 519.99197,
+      "worker": 249.614923,
+      "merge": 88.200922,
+      "prefill": 169.912753,
+      "rss": 398.46875,
+      "memory": {
+        "population_pair_peak_bytes": 8775096,
+        "accumulator_bytes": 6291456,
+        "parent_bin_bytes": 6291456,
+        "merge_tagged_bound_bytes": 11734400,
+        "merge_output_peak_bytes": 4400400,
+        "diagonal_entries": 414055,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 789.767136209,
+      "load_before": [
+        4.48779296875,
+        4.70361328125,
+        4.93603515625
+      ],
+      "load_after": [
+        4.56884765625,
+        4.6220703125,
+        4.6728515625
+      ]
+    },
+    {
+      "case": "water",
+      "pair": 1,
+      "binary": "candidate",
+      "wall": 588.313,
+      "equil": 213.51341,
+      "sample": 374.770452,
+      "worker": 262.795759,
+      "merge": 87.115486,
+      "prefill": 12.805775,
+      "rss": 327.640625,
+      "memory": {
+        "population_pair_peak_bytes": 8775096,
+        "accumulator_bytes": 6291456,
+        "parent_bin_bytes": 6291456,
+        "merge_tagged_bound_bytes": 11734400,
+        "merge_output_peak_bytes": 4400400,
+        "diagonal_entries": 414055,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 589.3210735829998,
+      "load_before": [
+        4.56884765625,
+        4.6220703125,
+        4.6728515625
+      ],
+      "load_after": [
+        8.06982421875,
+        6.58056640625,
+        5.5087890625
+      ]
+    },
+    {
+      "case": "water",
+      "pair": 2,
+      "binary": "candidate",
+      "wall": 558.635,
+      "equil": 211.404702,
+      "sample": 347.202236,
+      "worker": 236.597777,
+      "merge": 85.899899,
+      "prefill": 12.716109,
+      "rss": 330.984375,
+      "memory": {
+        "population_pair_peak_bytes": 8775096,
+        "accumulator_bytes": 6291456,
+        "parent_bin_bytes": 6291456,
+        "merge_tagged_bound_bytes": 11734400,
+        "merge_output_peak_bytes": 4400400,
+        "diagonal_entries": 414055,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 559.2768357089999,
+      "load_before": [
+        8.06982421875,
+        6.58056640625,
+        5.5087890625
+      ],
+      "load_after": [
+        4.6015625,
+        4.86083984375,
+        5.02490234375
+      ]
+    },
+    {
+      "case": "water",
+      "pair": 2,
+      "binary": "baseline",
+      "wall": 723.957,
+      "equil": 277.321197,
+      "sample": 446.607822,
+      "worker": 210.392305,
+      "merge": 85.819461,
+      "prefill": 138.412243,
+      "rss": 329.640625,
+      "memory": {
+        "population_pair_peak_bytes": 8775096,
+        "accumulator_bytes": 6291456,
+        "parent_bin_bytes": 6291456,
+        "merge_tagged_bound_bytes": 11734400,
+        "merge_output_peak_bytes": 4400400,
+        "diagonal_entries": 414055,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 724.7047406249994,
+      "load_before": [
+        4.6015625,
+        4.86083984375,
+        5.02490234375
+      ],
+      "load_after": [
+        3.31298828125,
+        3.8134765625,
+        4.29443359375
+      ]
+    },
+    {
+      "case": "water",
+      "pair": 3,
+      "binary": "baseline",
+      "wall": 846.256,
+      "equil": 313.500587,
+      "sample": 532.721573,
+      "worker": 253.895017,
+      "merge": 88.008083,
+      "prefill": 178.548467,
+      "rss": 310.34375,
+      "memory": {
+        "population_pair_peak_bytes": 8775096,
+        "accumulator_bytes": 6291456,
+        "parent_bin_bytes": 6291456,
+        "merge_tagged_bound_bytes": 11734400,
+        "merge_output_peak_bytes": 4400400,
+        "diagonal_entries": 414055,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 846.8569003749999,
+      "load_before": [
+        3.31298828125,
+        3.8134765625,
+        4.29443359375
+      ],
+      "load_after": [
+        4.9140625,
+        4.48486328125,
+        4.3349609375
+      ]
+    },
+    {
+      "case": "water",
+      "pair": 3,
+      "binary": "candidate",
+      "wall": 584.472,
+      "equil": 237.010555,
+      "sample": 347.429629,
+      "worker": 237.059436,
+      "merge": 85.720689,
+      "prefill": 12.640476,
+      "rss": 303.90625,
+      "memory": {
+        "population_pair_peak_bytes": 8775096,
+        "accumulator_bytes": 6291456,
+        "parent_bin_bytes": 6291456,
+        "merge_tagged_bound_bytes": 11734400,
+        "merge_output_peak_bytes": 4400400,
+        "diagonal_entries": 414055,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "process_wall_s": 585.0646018750003,
+      "load_before": [
+        4.9140625,
+        4.48486328125,
+        4.3349609375
+      ],
+      "load_after": [
+        4.20556640625,
+        4.4677734375,
+        4.388671875
+      ]
+    }
+  ],
+  "thread_settings": {
+    "OMP_DYNAMIC": "false",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1"
+  },
+  "full_inputs": {
+    "be": "tests/inputs/regression/post_hf/be_fciqmc_spherical_631gd.hfinp",
+    "hf": "tests/inputs/exploratory/fciqmc/validation/hf_pop_50000.hfinp",
+    "water": "tests/inputs/exploratory/fciqmc/validation/water_pop_50000.hfinp"
+  },
+  "full_threads": {
+    "be": 2,
+    "hf": 4,
+    "water": 4
+  },
+  "units": "Timing fields are seconds. RSS is the peak child process RSS in MiB. The memory record reports capacity bytes or entry counts as named. Phase times nest inside solver wall time.",
+  "pilot_input": "Use the respective full HF or water input with 2000 equilibration and 2000 sampling steps and the same scaling runner."
+}

@@ -450,6 +450,33 @@ namespace HartreeFock::Correlation::CI::QMC
             }
         }
 
+        // Every determinant in the previous population has already entered
+        // this run's persistent diagonal cache. The ordered walk identifies
+        // newly occupied keys before workers start reading the shared cache.
+        void prepare_canonical_parents(const CanonicalWalkerPopulation &population,
+                                       const CanonicalWalkerPopulation &previous,
+                                       const HamiltonianOps &ham)
+        {
+            ready(kFciqmcBins);
+            clear_parents();
+            auto old = previous.begin();
+            for (const auto &[det, weight] : population)
+            {
+                while (old != previous.end() &&
+                       (old->first.alpha < det.alpha ||
+                        (old->first.alpha == det.alpha && old->first.beta < det.beta)))
+                    ++old;
+                if (old != previous.end() && old->first == det)
+                    ++old;
+                else
+                    (void)ham.diagonal(det);
+
+                if (weight != 0.0)
+                    parents[DetKeyHash{}(det) % kFciqmcBins].push_back({det, weight});
+            }
+            parents_prefilled = true;
+        }
+
         // Clear only the spawn OUTPUT (per-bin accumulators). Leaves `parents`
         // untouched so a caller can fill it before calling propagate_stochastic.
         void clear_output()

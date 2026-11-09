@@ -294,12 +294,12 @@ None of these blocks correctness. Take each up only with a current profile.
   - R1 is complete on the M3: HF/6-31G at 50k was fastest at eight threads
     (151.51 s; 2.80× over one); small spherical Be was fastest at two.
     The 10k–100k HF and 50k water controls separate memory and time from setup.
-  - R2 for larger populations: isolate the repeated diagonal lookup and
-    parent binning. Prefill took 34% of sampling on water versus 20% on HF at
-    four threads. Measure a candidate against water, HF and small Be with
-    identical trajectories. If small-population threading is the target, test
-    a sequential merge for the last tree levels separately. E2 was rejected;
-    E4 stays test-only.
+  - R2 passed on the M3. Skipping serial diagonal lookups for surviving
+    parents cut full water wall time by 25.5% across matched pairs (median),
+    HF by 17.4% and small Be by 5.7%. All trajectories matched.
+  - Next, measure the thread curve again on the optimized binary before
+    choosing a thread count. If small-population threading is the target,
+    test a sequential merge for the last tree levels. E4 stays test-only.
   - R3, conditional: a fixed-orbital active-space adapter.
   - A scientific target and a resource budget are still unselected.
 - **ccgen generated kernels** (`docs/CCGEN_CC_OPENMP.md`,
