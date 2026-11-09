@@ -43,14 +43,16 @@ def main():
 
     operator = LinearOperator((dimension, dimension), matvec=generator,
                               rmatvec=generator, dtype=np.float64)
-    states = expm_multiply(operator, initial, start=0, stop=60, num=121,
+    windows = ((5, 6), (55, 56), (55, 60), (55, 80), (60, 80))
+    max_tau = max(end for _, end in windows)
+    states = expm_multiply(operator, initial, start=0, stop=max_tau, num=2 * max_tau + 1,
                            traceA=np.sum(diagonal[0] - diagonal))
     # Hermiticity gives the same projection from the Rayleigh quotient of
     # the state at half the time. Check this independently of the ratio.
     energy_origin = offset + diagonal[0]
     h_reference = -generator(initial)
     print("tau projected_Eh")
-    for tau in range(61):
+    for tau in range(max_tau + 1):
         state = states[2 * tau]
         projected = energy_origin + np.dot(h_reference, state) / state[0]
         half = states[tau]
@@ -63,7 +65,7 @@ def main():
     # growth energy integrated over a window. Restore the energy origin
     # removed from the generator and divide by each window's duration.
     print("tau_start tau_end mean_L1_growth_Eh")
-    for start, end in ((5, 6), (55, 56), (55, 60)):
+    for start, end in windows:
         norm_start = np.linalg.norm(states[2 * start], ord=1)
         norm_end = np.linalg.norm(states[2 * end], ord=1)
         growth = energy_origin - np.log(norm_end / norm_start) / (end - start)

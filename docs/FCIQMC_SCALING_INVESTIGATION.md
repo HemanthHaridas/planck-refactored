@@ -1,6 +1,6 @@
 # FCIQMC scaling investigation
 
-**R3 reached Cr₂ CAS(12,18) within the M3 pilot budget.** At 25,000 walkers, two of three seeds still switched projection reference. One projected estimate exceeded an independent variational upper bound by 0.690 Eh. The nested CAS(12,10) control measures how much the estimated energy varies across seeds after the exact projection comes within 1 mEh of the ground state. [Matched population runs](#r3-long-runs-at-25000-walkers) · [Late sampling results](#r3-sampling-length-and-seed-spread-in-cas1210)
+**R3 reached Cr₂ CAS(12,18) within the M3 pilot budget.** At 25,000 walkers, two of three seeds still switched projection reference. One projected estimate exceeded an independent variational upper bound by 0.690 Eh. In the nested CAS(12,10) control, extending sampling from 10,000 to 50,000 steps reduced the spread across five projected estimates from 9.82 to 2.61 mEh. [Matched population runs](#r3-long-runs-at-25000-walkers) · [Late sampling results](#r3-sampling-to-50000-steps-in-cas1210)
 
 **R2 passed the adoption gate on the Apple M3.** On water, a serial cache lookup took 16.27 ns per parent and distributing a parent to its work bin took 1.85 ns. The driver now skips the serial lookup for determinants occupied on consecutive steps. R0 qualified the HF-to-FCIQMC Hamiltonian handoff. R1 established the timing, memory and correctness baselines on an Apple M3.
 
@@ -188,8 +188,30 @@ Four of the five fresh projected estimates missed CASCI by more than twice their
 
 All eight long runs retained the seeded reference and accepted every projected sample. Mean absolute reference weights ranged from 1,093 to 1,252 walkers. The runs took 90.7–95.3 s each and peaked at 57.6 MiB on the M3. Equilibration accounted for about 90% of total time. Sampling cost 7.9–8.7 s per 10,000 steps, leaving room to lengthen the window within the 600 s budget. To reproduce the runs, apply the settings above to the Cr₂ pilot input and run the scaling profiler at four threads with seeds 20250901–20250908. [Per-seed energies, reference weights, timings and exact controls](../tests/benchmarks/fciqmc/cr2_cas12_10_sampling_m3_r3.json)
 
+## R3 sampling to 50,000 steps in CAS(12,10)
+
+Seeds 20250904–20250908 repeated the 110,000-step equilibration and extended sampling from 10,000 to 50,000 steps. Each pair used the same executable, Hamiltonian, population of 25,000 walkers, four spawn attempts, timestep 0.0005 and initiator threshold zero. The run profiler reproduced each seed's equilibration work counters.
+
+The **prefix** is the original 10,000 steps (τ = 55–60). The **extension** is the subsequent 40,000 steps (τ = 60–80). To isolate the extension, subtract the prefix contribution from the full run, weighting shift energies by sample count and projected energies by the signed reference-weight sums. The driver reports blocked errors for the prefix and full runs. The extension can be assessed using the spread of its five estimates. The three windows share trajectories.
+
+| Sampling window | Mean projected error (mEh) | Projected SD / RMS SE (mEh) | Mean shift error (mEh) | Shift SD / RMS SE (mEh) |
+|---|---:|---:|---:|---:|
+| Prefix, 10,000 steps | −6.02 | 9.82 / 2.48 | +0.40 | 7.75 / 7.51 |
+| Extension, 40,000 steps | +0.45 | 2.17 / — | −3.82 | 5.63 / — |
+| Full, 50,000 steps | −0.83 | 2.61 / 3.41 | −2.97 | 5.72 / 3.48 |
+
+The full-window projected error bars covered CASCI within two reported SEs on four seeds, up from one in the prefix. Four full-window shifts also fell within two reported SEs. Seed 20250904's shift remained 11.83 mEh below CASCI with a reported SE of 3.15 mEh. Five seeds suffice to observe this change in spread but give limited precision for estimating coverage. Exact propagation from the seeded determinant gave a projected error of +0.233 mEh at τ = 80 and mean L1 growth errors of −0.426 and −0.363 mEh over the full window and extension.
+
+All five runs retained the seeded reference and accepted all 50,000 projected samples. Mean absolute reference weights ranged from 1,101 to 1,254 walkers. Five times as many sampling steps cost 1.30–1.32× as much total wall time as the matched prefix runs. Each took 122.3–125.0 s and peaked at or below 57.6 MiB. To reproduce the full runs, change only `fciqmc_steps` to 50000 in the five corresponding 10,000-step inputs. [Seed-level results, signed reference sums and exact controls](../tests/benchmarks/fciqmc/cr2_cas12_10_sampling50k_m3_r3.json)
+
+### Cost of moving to CAS(12,12)
+
+At the same geometry, seed 20250904 used the first 12 active RHF orbitals, 10,000 equilibration steps and 2,000 sampling steps (τ = 5–6). The other solver settings matched the CAS(12,10) run. This 853,776-determinant pilot took **90.7 s and 182.2 MiB**. Occupied parents averaged 51,178 per equilibration step and 94,048 per sampling step. Workers took 84.3% of sampling wall time. Of 752,381,920 spawn attempts in sampling, 752,295,229 rounded to zero (99.988%). The seeded reference averaged 6.08 walkers on the 1,635 usable projected samples out of 2,000.
+
+The last 2,000 steps cost **11.92 ms per step**. A 110,000 + 50,000-step run has a budget of **3.75 ms per step** on average. If the remaining 148,000 steps ran at the measured sampling rate, total wall time including the pilot's first 12,000 steps would be about 31 minutes. Occupancy and per-step cost can change as the population evolves. [Pilot settings, phase costs and spawn counts](../tests/benchmarks/fciqmc/cr2_cas12_12_cost_m3_r3.json)
+
 ## Next steps
 
-Extend the five fresh CAS(12,10) seeds to 50,000 sampling steps (τ = 55–80) with the same 110,000-step equilibration, population, timestep and threshold. Compare the added 40,000 steps separately from the shared 10,000-step prefix. Check whether the projected spread across seeds falls and whether the reported single-run errors track it. CAS(12,18) still needs its own accuracy check.
+Profile spawning by absolute parent weight on the CAS(12,12) cost pilot. Split visits, total absolute weight, attempts and nonzero spawns into parents below one walker and those at or above one walker (the configured granularity). Check the instrumented result against the archived trajectory, then collect the same counters on the existing CAS(12,18) pilot at its original initiator threshold. Use the share of visits and surviving spawns in each group to decide whether to test a cheaper way to sample low-weight parents. CAS(12,18) energy accuracy remains open.
 
 The E2 dispatch experiment is closed. E4 remains test-only pending evidence that bit selection merits a new paired trial. The detailed R0 handoff results, R1 reproduction commands and earlier optimization decisions are preserved in the version of this document at commit `7def132a` (`git show 7def132a:docs/FCIQMC_SCALING_INVESTIGATION.md`).

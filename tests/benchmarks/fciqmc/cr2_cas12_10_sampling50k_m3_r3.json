@@ -1,0 +1,230 @@
+{
+  "fixture": "tests/inputs/exploratory/fciqmc/cr2_cas12_18_pilot.hfinp",
+  "solver_commit": "0ef9d820",
+  "host": "Apple M3",
+  "binary_sha256": "ea03b46e0f5deb9e2be096e2aa61ee69e3557e0451a377cc0cea16541892952c",
+  "thread_env": {
+    "OMP_NUM_THREADS": "4",
+    "OMP_DYNAMIC": "false",
+    "OMP_PROC_BIND": null,
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1"
+  },
+  "budget_per_run": {
+    "wall_s": 600,
+    "peak_rss_bytes": 1073741824
+  },
+  "walkers": 25000,
+  "spawn_attempts": 4,
+  "nactorb": 10,
+  "nactele": 12,
+  "initiator_threshold": 0,
+  "timestep": 0.0005,
+  "hamiltonian_id": "339dffb09993d608",
+  "seeded_reference": "0x000000000000003f/0x000000000000003f",
+  "casci_total_energy_Eh": -2064.494323847805,
+  "fcidump_sha256": "5da22635fff234f8f6b2ad6f1889a1fb709a2021746dac7506a476e07bd6b47d",
+  "equilibration_steps": 110000,
+  "control_archive": "cr2_cas12_10_sampling_m3_r3.json",
+  "sampling_steps": 50000,
+  "prefix_steps": 10000,
+  "exact_continuous_projected_energy_Eh_by_tau": {
+    "55": -2064.493448399903,
+    "60": -2064.493654136044,
+    "80": -2064.494091188854
+  },
+  "exact_continuous_mean_L1_growth_Eh_by_window": {
+    "55_60": -2064.495003619502,
+    "55_80": -2064.494749860962,
+    "60_80": -2064.494686421327
+  },
+  "statistic_definitions": "Equal weight per seed. Across-seed SD uses n-1. RMS blocked SE uses the five single-run standard errors. Added-window shift uses sample counts. Added-window projection uses the signed denominator sums printed by the driver with the matched prefix and full projected energies. The driver reports blocked SE only for the full sampled window.",
+  "seed_statistics": {
+    "prefix_10000": {
+      "shift": {
+        "mean_signed_error_Eh": 0.00040461028493155027,
+        "across_seed_sample_sd_Eh": 0.007745636433322996,
+        "rms_blocked_se_Eh": 0.007509079837103878,
+        "count_within_two_reported_se": 5
+      },
+      "projected": {
+        "mean_signed_error_Eh": -0.00601946033511922,
+        "across_seed_sample_sd_Eh": 0.00981650877662001,
+        "rms_blocked_se_Eh": 0.002477898302997926,
+        "count_within_two_reported_se": 1
+      }
+    },
+    "full_50000": {
+      "shift": {
+        "mean_signed_error_Eh": -0.0029723106150413513,
+        "across_seed_sample_sd_Eh": 0.005718845818153849,
+        "rms_blocked_se_Eh": 0.0034809854926442885,
+        "count_within_two_reported_se": 4
+      },
+      "projected": {
+        "mean_signed_error_Eh": -0.0008326364750246285,
+        "across_seed_sample_sd_Eh": 0.002609188759527394,
+        "rms_blocked_se_Eh": 0.0034111904080540564,
+        "count_within_two_reported_se": 4
+      }
+    },
+    "added_40000": {
+      "shift": {
+        "mean_signed_error_Eh": -0.003816540840125526,
+        "across_seed_sample_sd_Eh": 0.005628831965343254
+      },
+      "projected": {
+        "mean_signed_error_Eh": 0.0004473806949135906,
+        "across_seed_sample_sd_Eh": 0.0021652810105227886
+      }
+    }
+  },
+  "runs": [
+    {
+      "seed": 20250904,
+      "prefix_result_id": "6062074b0211634a",
+      "result_id": "8012f9bf1d10fbe0",
+      "profiled_input_sha256": "5f1caf64bd50d8743ff473c90eff91f563c2383665fba56f7779b702568c49da",
+      "process_wall_s": 124.958,
+      "peak_rss_bytes": 60243968,
+      "equilibration_wall_s": 84.922136,
+      "sampling_wall_s": 39.109183,
+      "equilibration_parent_visits": 601449136,
+      "sampling_parent_visits": 279400000,
+      "shift_Eh": -2064.5061533886,
+      "shift_se_Eh": 0.00315,
+      "shift_samples": 50000,
+      "projected_Eh": -2064.4950790967,
+      "projected_se_Eh": 0.00261,
+      "projected_samples": 50000,
+      "sampling_reference": "0x000000000000003f/0x000000000000003f",
+      "accepted_reference_abs_mean": 1253.82,
+      "accepted_reference_abs_min": 1113.43,
+      "sign_unstable_warning": false,
+      "prefix_projected_signed_denominator": 12254830.0,
+      "full_projected_signed_denominator": 62691140.0,
+      "added_40000": {
+        "shift_Eh": -2064.506988485175,
+        "projected_Eh": -2064.4927675182566,
+        "accepted_samples": 40000
+      }
+    },
+    {
+      "seed": 20250905,
+      "prefix_result_id": "a74730c7568638c0",
+      "result_id": "1fad863b5b7e3813",
+      "profiled_input_sha256": "9acfa8a9a0e5f6d3efda71bea62ecd9f10f49a74ae1e9fcffe430f9e10f6d50b",
+      "process_wall_s": 123.045,
+      "peak_rss_bytes": 59817984,
+      "equilibration_wall_s": 81.881756,
+      "sampling_wall_s": 39.867254,
+      "equilibration_parent_visits": 602305544,
+      "sampling_parent_visits": 279400000,
+      "shift_Eh": -2064.4975921651,
+      "shift_se_Eh": 0.00448,
+      "shift_samples": 50000,
+      "projected_Eh": -2064.4954471786,
+      "projected_se_Eh": 0.00247,
+      "projected_samples": 50000,
+      "sampling_reference": "0x000000000000003f/0x000000000000003f",
+      "accepted_reference_abs_mean": 1116.34,
+      "accepted_reference_abs_min": 1018.9,
+      "sign_unstable_warning": false,
+      "prefix_projected_signed_denominator": 11868760.0,
+      "full_projected_signed_denominator": 55817080.0,
+      "added_40000": {
+        "shift_Eh": -2064.498892071525,
+        "projected_Eh": -2064.496100561017,
+        "accepted_samples": 40000
+      }
+    },
+    {
+      "seed": 20250906,
+      "prefix_result_id": "4f0d12c0f49a23f7",
+      "result_id": "8097ae6eca5ebccf",
+      "profiled_input_sha256": "b80bd72ab90687c3ce0e239505b2f9c0d76ad445744cd728479831e6340e9769",
+      "process_wall_s": 122.337,
+      "peak_rss_bytes": 59654144,
+      "equilibration_wall_s": 82.300174,
+      "sampling_wall_s": 39.106028,
+      "equilibration_parent_visits": 602474449,
+      "sampling_parent_visits": 279400000,
+      "shift_Eh": -2064.4930628474,
+      "shift_se_Eh": 0.00319,
+      "shift_samples": 50000,
+      "projected_Eh": -2064.4913968998,
+      "projected_se_Eh": 0.00112,
+      "projected_samples": 50000,
+      "sampling_reference": "0x000000000000003f/0x000000000000003f",
+      "accepted_reference_abs_mean": 1188.4,
+      "accepted_reference_abs_min": 1129.32,
+      "sign_unstable_warning": false,
+      "prefix_projected_signed_denominator": 11958310.0,
+      "full_projected_signed_denominator": 59420130.0,
+      "added_40000": {
+        "shift_Eh": -2064.495389636525,
+        "projected_Eh": -2064.492507173557,
+        "accepted_samples": 40000
+      }
+    },
+    {
+      "seed": 20250907,
+      "prefix_result_id": "2129da58de3930ad",
+      "result_id": "26d2bb887a61e7ae",
+      "profiled_input_sha256": "ff9d90d29f833e163cd6d32e7b6dcf19865e310e3c896572df9825c0491d4316",
+      "process_wall_s": 123.99,
+      "peak_rss_bytes": 60342272,
+      "equilibration_wall_s": 82.467739,
+      "sampling_wall_s": 40.591292,
+      "equilibration_parent_visits": 602338671,
+      "sampling_parent_visits": 279400000,
+      "shift_Eh": -2064.4981722775,
+      "shift_se_Eh": 0.00322,
+      "shift_samples": 50000,
+      "projected_Eh": -2064.4950968038,
+      "projected_se_Eh": 0.00384,
+      "projected_samples": 50000,
+      "sampling_reference": "0x000000000000003f/0x000000000000003f",
+      "accepted_reference_abs_mean": 1159.57,
+      "accepted_reference_abs_min": 1053.87,
+      "sign_unstable_warning": false,
+      "prefix_projected_signed_denominator": 11283950.0,
+      "full_projected_signed_denominator": 57978410.0,
+      "added_40000": {
+        "shift_Eh": -2064.4976193154753,
+        "projected_Eh": -2064.4916937637095,
+        "accepted_samples": 40000
+      }
+    },
+    {
+      "seed": 20250908,
+      "prefix_result_id": "53745b8545356290",
+      "result_id": "178bdaef6378f186",
+      "profiled_input_sha256": "334ffafd0fdbe93c1cc718c9dffef1ed8a0ceccd3b564a6ee86021e2adbbed8c",
+      "process_wall_s": 122.396,
+      "peak_rss_bytes": 60243968,
+      "equilibration_wall_s": 82.050597,
+      "sampling_wall_s": 39.116717,
+      "equilibration_parent_visits": 602107883,
+      "sampling_parent_visits": 279400000,
+      "shift_Eh": -2064.4915001135,
+      "shift_se_Eh": 0.00317,
+      "shift_samples": 50000,
+      "projected_Eh": -2064.4987624425,
+      "projected_se_Eh": 0.00541,
+      "projected_samples": 50000,
+      "sampling_reference": "0x000000000000003f/0x000000000000003f",
+      "accepted_reference_abs_mean": 1100.84,
+      "accepted_reference_abs_min": 1006.45,
+      "sign_unstable_warning": false,
+      "prefix_projected_signed_denominator": 11607690.0,
+      "full_projected_signed_denominator": 55042110.0,
+      "added_40000": {
+        "shift_Eh": -2064.491812434525,
+        "projected_Eh": -2064.49631331901,
+        "accepted_samples": 40000
+      }
+    }
+  ]
+}
