@@ -9,7 +9,7 @@ tags: [status, completion, validated, canonical]
 
 # Completion Status
 
-Last updated: 2026-11-08
+Last updated: 2026-11-10
 
 This is the canonical completion-status document for the repository.
 Subsystem handoff, plan, benchmark, and fix-summary notes may still exist for
@@ -429,6 +429,18 @@ historical design context, but they are no longer the source of truth for
 - PySCF-validated He2/cc-pVDZ counterpoise decomposition
 
 ### Recent fixes now considered landed
+
+- **One Z-vector solver for RKS and UKS double hybrids (2026-11-10,
+  `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md` step 2).** The UKS gradient
+  built its joint α/β KS Jacobian column by column (1 + 2n response actions)
+  and solved it by pivoted QR. Both spins now call `solve_packed_zvector`, the
+  matrix-free GMRES the RKS path already used. On C1 H2O2⁺ that is 46 actions
+  instead of 119, and the count now tracks GMRES iterations rather than pair
+  count. UKS gradients moved ≤ 6.5e-13 Ha/Bohr on all six `uks_u0` fixtures;
+  RKS is bitwise unchanged. The solver takes `A z = b` (the old UKS solve was
+  `A^T z`); the physical Hessian is self-adjoint, and the tests check that
+  against a dense oracle (`tests/dh_zvector_oracle.h`), which replaces the
+  deleted `DHZVectorBackend::DenseReference`.
 
 - **UKS double-hybrid gradient restored on one streamed path (2026-11-09,
   `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md`).** Every UKS DH gradient had

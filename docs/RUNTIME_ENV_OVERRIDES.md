@@ -54,8 +54,9 @@ promoting matrix-free GMRES into the normal path, which landed in
 `b4175570` with full-coordinate FD maxima 7.9e-9 to 1.7e-8 Ha/Bohr. The
 comparison it made is covered at the operator level: `tests/dh_zvector.cpp`
 requires `|z_gmres − z_dense| < 1e-11`. `tests/test_dh_o3_zvector.py` now
-asserts that `compute_analytic_dh_gradient` contains no `getenv` and no
-`DenseReference`.
+asserts that `compute_analytic_dh_gradient` contains no `getenv`. Since
+2026-11-10 the `DenseReference` backend no longer exists at all: the dense
+solve is a test oracle (`tests/dh_zvector_oracle.h`).
 
 ## The shared-input trap (E2)
 

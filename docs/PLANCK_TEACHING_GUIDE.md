@@ -5452,9 +5452,9 @@ stationary pairing is \(L:X+Z:AX=0\). The production solve
 GMRES calls the action \(AX\) above directly, preconditioned by the
 orbital-energy gaps \(\epsilon_a-\epsilon_i\). It never forms a column of
 \(A\), and if GMRES fails to converge the run fails rather than silently
-switching to a dense solve. A dense reference solve exists, built from the
-*same* action applied to unit directions, but only for the comparisons that
-validated the matrix-free path. After the solve, the gradient contract
+switching to a dense solve. A dense reference solve exists only in the tests,
+built from the *same* action applied to unit directions, to check the
+matrix-free answer. After the solve, the gradient contract
 re-applies \(A\) to \(Z\) and rejects a residual above \(10^{-9}\). A small
 residual verifies the solve; independent directional derivatives are still
 needed to verify the RHS and Hessian themselves.
@@ -5783,17 +5783,17 @@ cross-spin kernel \(f_{xc}^{\alpha\beta}\). The XC part is the same analytic
 polarized Hessian-vector product that UKS SOSCF uses
 (`compute_analytic_xc_hessian_vector_product_polarized`).
 
-**The Z-vector system is joint and checked rather than assumed.** The
+**The Z-vector system is joint, and solved by the restricted solver.** The
 unknowns are packed alpha block first, then beta, in one linear system
-\(A^Tz=-\ell\). The UKS solver (`solve_udh_zvector`) builds \(A\) column by
-column from that action. It then verifies that \(A\) is symmetric to
-\(10^{-10}\) relative, rejects it if the reciprocal condition number falls
-below \(10^{-12}\), solves by column-pivoted QR, and re-evaluates the
-residual. It does not assume positive definiteness or add a shift, so an
-ill-conditioned response is reported as an error instead of returning a
-plausible but wrong \(z\). At the sizes this path is qualified for, the
-dense checks are cheap. The driver rejects a Z residual above \(10^{-10}\),
-scaled by the RHS size.
+\(Az=-\ell\). The UKS solver (`solve_udh_zvector`) hands that packing, the
+action above and the alpha|beta orbital-energy gaps to the same matrix-free
+GMRES the restricted path uses (`solve_packed_zvector`), so \(A\) is never
+formed. Writing \(Az\) rather than \(A^Tz\) relies on \(A\) being symmetric;
+the physical joint Hessian is, and the tests check it on every fixture
+against a dense \(A\) built from the same action. GMRES assumes neither
+positive definiteness nor a shift: a singular response fails to converge and
+is reported as an error, with no dense fallback. The driver rejects a Z
+residual above \(10^{-10}\), scaled by the RHS size.
 
 **Relaxed density, W, and the pair density follow the restricted pattern
 per spin.** The relaxed density puts \(D'^\sigma\) in the \(oo\)/\(vv\)

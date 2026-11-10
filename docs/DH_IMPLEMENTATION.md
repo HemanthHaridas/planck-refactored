@@ -37,8 +37,9 @@ RKS DH gradients support geometry optimization and semi-numerical frequencies:
 the latter finite-difference the analytic gradient, rather than using an
 analytic DH Hessian. A separate, deliberately narrower UKS DH path has its
 own spin response and grid contracts; it is not an unrestricted version of
-the closed-shell equations documented here. Its non-XC gradient assembly and
-AO pair stream are shared with RKS (see §7).
+the closed-shell equations documented here. Its non-XC gradient assembly,
+AO pair stream and Z-vector solver are shared with RKS (see §7 and the Eq. 27
+solver below).
 
 ---
 
@@ -106,7 +107,14 @@ internal expression exists only as a reference oracle; combining it with
 `LiteralEq47` double-counts the stationary transfer.
 
 The ordinary solver is restarted matrix-free GMRES over the typed Eq. 27
-action. A dense Hessian is an explicit test/reference backend only. GMRES has
+action, and it is the only solver: `solve_packed_zvector`
+(`src/dft/dh_zvector.h`) takes a packed action, right-hand side and
+orbital-gap diagonal, and RKS (`solve_dh_zvector`) and UKS
+(`solve_udh_zvector`, alpha then beta) supply only their packing and action.
+It solves `A z = b` and relies on `A` being self-adjoint, which the physical
+KS orbital Hessian is. No dense Hessian exists in production; the tests build
+one column by column from the same public actions
+(`tests/dh_zvector_oracle.h`) and check adjointness there. GMRES has
 one right-hand side and one trial direction per action, so there is no
 production batch of independent orbital-response vectors to exploit.
 

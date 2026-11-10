@@ -45,7 +45,7 @@
 #include "dft/dft_gradient.h"
 #include "dft/dh_pt2_gradient.h"
 #include "udh_dense_oracle.h"
-#include "dft/dh_zvector.h"
+#include "dh_zvector_oracle.h"
 #include "dft/xc_grid.h"
 #include "integrals/base.h"
 #include "integrals/shellpair.h"
@@ -1259,20 +1259,17 @@ namespace
             compare("W-vv",w->w_vv,-0.5*g.bottomRightCorner(nv,nv));
             compare("W-ov",w->w_ia,-g.topRightCorner(no,nv));
         }
-        DFT::Gradient::DHZVectorOptions o3_dense_options;
-        o3_dense_options.backend=DFT::Gradient::DHZVectorBackend::DenseReference;
-        const auto o3_dense=DFT::Gradient::solve_dh_zvector(o3_stationary->lagrangian_rhs.total_ai,
-            c.leftCols(no),c.rightCols(nv),eps,o3_inputs.response_operator,o3_dense_options);
+        const Eigen::MatrixXd o3_dense=DFT::Gradient::TestOracle::dense_dh_zvector(
+            o3_stationary->lagrangian_rhs.total_ai,c.leftCols(no),c.rightCols(nv),eps,o3_inputs.response_operator);
         const auto o3_iterative=DFT::Gradient::solve_dh_zvector(o3_stationary->lagrangian_rhs.total_ai,
             c.leftCols(no),c.rightCols(nv),eps,o3_inputs.response_operator);
-        if (!o3_dense || !o3_iterative)
+        if (!o3_iterative)
         {
             fail("O3 physical water Z solve");
-            if (!o3_dense) std::cerr<<o3_dense.error()<<'\n';
-            if (!o3_iterative) std::cerr<<o3_iterative.error()<<'\n';
+            std::cerr<<o3_iterative.error()<<'\n';
             return;
         }
-        auto o3_reference_inputs=o3_inputs; o3_reference_inputs.z_ai=o3_dense->z_ai;
+        auto o3_reference_inputs=o3_inputs; o3_reference_inputs.z_ai=o3_dense;
         o3_inputs.z_ai=o3_iterative->z_ai;
         const auto o3_reference=DFT::Gradient::build_dh_gradient_driver_contract(o3_reference_inputs);
         const auto o3_production=DFT::Gradient::build_dh_gradient_driver_contract(o3_inputs,std::move(*o3_stationary));
@@ -1283,7 +1280,7 @@ namespace
             std::printf("O3 water %s max_abs=%.12e\n",name,error);
             if (!std::isfinite(error) || error>tol) fail("O3 physical channel mismatch");
         };
-        o3_compare("Z",o3_dense->z_ai,o3_iterative->z_ai,1e-9);
+        o3_compare("Z",o3_dense,o3_iterative->z_ai,1e-9);
         o3_compare("D",o3_reference->relaxed_density.raw_mo,o3_production->relaxed_density.raw_mo,1e-9);
         o3_compare("W",o3_reference->overlap_density.raw_mo,o3_production->overlap_density.raw_mo,1e-9);
         o3_compare("h",o3_reference->non_xc_gradient.one_electron,o3_production->non_xc_gradient.one_electron,1e-9);
@@ -1298,9 +1295,9 @@ namespace
         const auto o3_gprod=DFT::Gradient::build_dh_eq33_pt2_correction_gradient(*o3_production);
         if (!o3_gref || !o3_gprod) { fail("O3 correction assembly"); return; }
         o3_compare("correction",o3_gref->total,o3_gprod->total,1e-9);
-        std::printf("O3 water pairs=%d actions=%d iterations=%d residual=%.12e krylov_matrix_bytes=%zu dense_reference_bytes=%zu seconds=%.6f\n",
+        std::printf("O3 water pairs=%d actions=%d iterations=%d residual=%.12e krylov_matrix_bytes=%zu seconds=%.6f\n",
             no*nv,o3_iterative->action_count,o3_iterative->iterations,o3_iterative->residual_max_abs,
-            o3_iterative->krylov_matrix_bytes,o3_dense->dense_matrix_bytes,o3_iterative->elapsed_seconds);
+            o3_iterative->krylov_matrix_bytes,o3_iterative->elapsed_seconds);
         // O2: same geometry/stationary objects through a move handoff, versus
         // the independent reconstruction above. Observe callback counts and
         // tensor capacities, not timings or a production diagnostic switch.

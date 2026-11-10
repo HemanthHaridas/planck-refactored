@@ -2,7 +2,7 @@
 // NOT a molecular SCF/gradient acceptance test. No production switches.
 #include "dft/udh_two_particle_density.h"
 #include "udh_dense_oracle.h"
-#include "dft/udh_zvector.h"
+#include "dh_zvector_oracle.h"
 #include <Eigen/Eigenvalues>
 #include <Eigen/LU>
 #include <unsupported/Eigen/MatrixFunctions>
@@ -422,7 +422,12 @@ void integration(const Fixture &x)
     auto base=state(x.model,x.c); M amp=amplitude_matrix(base.f); V q=solve(amp,base.b);
     near(maxabs(base.f.alpha-x.f.alpha),0,2e-12); near(maxabs(base.f.beta-x.f.beta),0,2e-12);
     auto rhs=require(build_udh_orbital_rhs(expand(q),base.full,scale,x.c,x.s,x.f,x.model.response(density(x.c))));
-    auto z=require(solve_udh_zvector({x.c,x.f,x.s,oa,ob,x.model.response(density(x.c))},rhs.total_ai));
+    const UDHZVectorInputs zin{x.c,x.f,x.s,oa,ob,x.model.response(density(x.c))};
+    auto z=require(solve_udh_zvector(zin,rhs.total_ai));
+    // Production never forms the KS Jacobian; the FD checks below use the
+    // dense oracle built from the same public action.
+    const M jacobian=TestOracle::dense_udh_jacobian(zin);
+    near(maxabs(jacobian-jacobian.transpose()),0,2e-12);
     check(pack(rhs.total_ai).norm()>1e-6); check(pack(z.z_ai).norm()>1e-6);
     // All independent alpha/beta orbital directions; scalar FD, not analytic
     // RHS contractions, supplies the reference ell and KS Jacobian columns.
@@ -437,10 +442,10 @@ void integration(const Fixture &x)
         double fd_l=(total(scalar(plus,q,z.z_ai))-total(scalar(minus,q,z.z_ai)))/(2*h);
         V column=(pack(fvo(plus))-pack(fvo(minus)))/(2*h);
         near(fd,pack(rhs.total_ai)(k),3e-9);
-        near(maxabs(column-z.jacobian.col(k)),0,1e-7);
+        near(maxabs(column-jacobian.col(k)),0,1e-7);
         near(fd_l,0,3e-9);
         worst_rhs=std::max(worst_rhs,std::abs(fd-pack(rhs.total_ai)(k)));
-        worst_jacobian=std::max(worst_jacobian,maxabs(column-z.jacobian.col(k)));
+        worst_jacobian=std::max(worst_jacobian,maxabs(column-jacobian.col(k)));
         worst_stationarity=std::max(worst_stationarity,std::abs(fd_l));
         if(h==1e-4) { fd_rhs(k)=fd; fd_stationarity(k)=fd_l; fd_jacobian.col(k)=column; }
     }
@@ -450,8 +455,8 @@ void integration(const Fixture &x)
              <<"\nRHS scalar FD:\n"<<fd_rhs.transpose()
              <<"\nRHS error:\n"<<(fd_rhs-pack(rhs.total_ai)).transpose()
              <<"\nL orbital stationarity FD:\n"<<fd_stationarity.transpose()
-             <<"\nKS Jacobian analytic:\n"<<z.jacobian
-             <<"\nKS Jacobian FD error:\n"<<fd_jacobian-z.jacobian<<'\n';
+             <<"\nKS Jacobian analytic:\n"<<jacobian
+             <<"\nKS Jacobian FD error:\n"<<fd_jacobian-jacobian<<'\n';
     auto nonz=contract(x,q,zero_vo()),full=contract(x,q,z.z_ai);
     const std::array<const char*,5> names{"h","ERI","XC_geometry","metric","combined"};
     const std::array<const char*,9> labels{"h","J","Ka","Kb","XC-II","pair-aa","pair-ab","pair-bb","overlap"};
@@ -488,10 +493,10 @@ void integration(const Fixture &x)
             // equations at BOTH endpoints. This is a first-order SCF path,
             // not an endpoint SCF or molecular total-energy FD.
             V forcing=(pack(fvo(plus))-pack(fvo(minus)))/(2*h);
-            V u=solve(z.jacobian,V(-forcing));
+            V u=solve(jacobian,V(-forcing));
             double nonz_response=pack(rhs.total_ai).dot(u);
             double z_explicit=pack(z.z_ai).dot(forcing);
-            double z_response=pack(z.z_ai).dot(z.jacobian*u);
+            double z_response=pack(z.z_ai).dot(jacobian*u);
             near(nonz_response,z_explicit,2e-12); near(nonz_response+z_response,0,2e-12);
             auto livep=state(mp,moved_coeff(x,d,h,unpack(u)));
             auto livem=state(mm,moved_coeff(x,d,-h,unpack(u)));

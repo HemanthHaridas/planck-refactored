@@ -4989,11 +4989,10 @@ namespace DFT::Driver
         out.residual_max_abs=solved->residual_max_abs;
         out.solver=std::move(static_cast<Gradient::DHZVectorStatistics &>(*solved));
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,"DH Z-vector :",
-            std::format("backend={} pairs={} iterations={} actions={} restarts={} residual={:.3e} "
-                        "krylov_matrix_bytes={} dense_matrix_bytes={} seconds={:.6f}",
-                solver_options.backend==Gradient::DHZVectorBackend::MatrixFreeGMRES?"GMRES":"dense-reference",
+            std::format("GMRES pairs={} iterations={} actions={} restarts={} residual={:.3e} "
+                        "krylov_matrix_bytes={} seconds={:.6f}",
                 nocc*nvirt,out.solver.iterations,out.solver.action_count,out.solver.restarts,
-                out.residual_max_abs,out.solver.krylov_matrix_bytes,out.solver.dense_matrix_bytes,out.solver.elapsed_seconds));
+                out.residual_max_abs,out.solver.krylov_matrix_bytes,out.solver.elapsed_seconds));
         return out;
     }
 

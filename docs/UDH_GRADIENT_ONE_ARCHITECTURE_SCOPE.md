@@ -7,11 +7,12 @@ question, or fold the answer into `docs/DH_IMPLEMENTATION.md` and delete it.
 a working state with one derivative architecture shared with RKS, and no dense
 path beside the streamed one?
 
-## Current status (2026-11-09)
+## Current status (2026-11-10)
 
 The fix is accepted: the UKS gradient runs and passes finite differences on all
-three fixtures. The shared streamed path is not yet committed. The steps below
-remove the rest of the second architecture.
+three fixtures. The shared streamed path landed in `16f4047b`, and step 2 (one
+Z-vector solver) on 2026-11-10. The steps below remove the rest of the second
+architecture.
 
 | Gate | Result |
 |---|---|
@@ -43,15 +44,17 @@ Where the two paths still differ:
 | AO derivative contraction | streamed callbacks | same | done |
 | AO pair density | bounded AO tiles | same | done |
 | Dense reference adapters | kept for test oracles | n/a | 1 |
-| Z-vector | matrix-free GMRES | dense joint Jacobian, pivoted QR | 2 |
+| Z-vector | `solve_packed_zvector` (GMRES) | same | done (step 2) |
 | MO integrals | five Eq. 40 sectors | three full `n⁴` transforms | 3 |
 | Amplitudes | source-backed pair tiles | resident `t2_aa/ab/bb` | 4 |
 
 ## Remaining steps
 
-Sizes are estimates. These steps are independent of each other, so the order below
-is by payoff against risk. Each step lands on its own and keeps the gradient
-working.
+Sizes are estimates. These steps are independent of each other. The order taken
+is 2, 3, 1, 4: step 2 removed the cost that limited UKS to small molecules, step 3
+is the next real memory and time saving, step 1 is mostly a test refactor with no
+user-visible gain, and step 4 stays last for the reasons given there. Each step
+lands on its own and keeps the gradient working.
 
 ### 1. Remove the dense adapters (M, mostly test code)
 
@@ -79,29 +82,57 @@ adapters.
 
 Gate: RKS gradient bitwise unchanged on water and C1 H2O2; all contract tests pass.
 
-### 2. One Z-vector solver (S–M)
+### 2. One Z-vector solver — done (2026-11-10)
 
-Extract the packed core of `solve_dh_zvector` (GMRES, no fallback, fresh final
-residual) so it takes an action, a right-hand side and a diagonal. RKS and UKS
-each supply only their packing and action.
+`solve_packed_zvector` (`src/dft/dh_zvector.h`) takes a packed action, a
+right-hand side and an orbital-gap diagonal. It runs the restarted GMRES with no
+fallback and a fresh final residual. `solve_dh_zvector` (RKS, `a*no+i`) and
+`solve_udh_zvector` (UKS, alpha then beta) supply only their packing and action.
+An empty pair space returns an empty `z` before `gmres`, which rejects `n == 0`.
 
-- UKS packs α then β, as `solve_udh_zvector` already does. The diagonal is the
-  orbital-energy gap from `fock_mo`.
-- The empty pair space (`n = 0`, the H2⁺ zero-beta fixture) returns before the
-  solver, because `gmres` rejects `n == 0`.
-- Delete the dense Jacobian, SVD and pivoted QR, and the `jacobian`,
-  `adjoint_max_abs`, `reciprocal_condition` and `rank` result fields.
-- Delete `DHZVectorBackend::DenseReference`. Its oracle moves to the tests, which
-  build columns from the public `apply_dh_eq27_hessian` and
-  `apply_udh_eq27_hessian`. `udh_stationary_transfer.cpp` and `udh_zvector.cpp`
-  read `z.jacobian` directly and need this.
+Deleted from production: the dense UKS Jacobian with its SVD, pivoted QR and
+column-wise transpose residual; the `jacobian`, `adjoint_max_abs`,
+`reciprocal_condition`, `rank` and `residual_ai` result fields;
+`UDHZVectorOptions` (UKS now takes `DHZVectorOptions`); and
+`DHZVectorBackend::DenseReference` with `dense_matrix_bytes`. The dense
+Hessians are now a test oracle, `tests/dh_zvector_oracle.h`, built one column
+per unit trial from `apply_dh_eq27_hessian` and `apply_udh_eq27_hessian`.
 
-What production gives up: the per-run joint-adjointness and condition-number
-checks. A near-singular Hessian then surfaces as GMRES non-convergence, with no
-fallback, as it already does for RKS. The adjointness check stays in the tests.
+**Decision: the solver takes `A z = b`, not `A^T z = b`.** The old UKS solve
+was `A^T z = -ℓ`; RKS was `A z = -L`. They agree because the physical joint KS
+Hessian is self-adjoint. Production no longer checks that per run; the tests
+do: `udh_zvector.cpp` (every audit fixture) and `udh_stationary_transfer.cpp`
+check the oracle Jacobian is symmetric to 2e-12. A nonadjoint control pins the
+convention: on such an operator the result satisfies `A z = -ℓ` and not
+`A^T z = -ℓ`.
 
-Gate: `z` matches the test-side dense solve to 1e-10; UKS gradient unchanged within
-1e-9 Ha/Bohr on all six `uks_u0` fixtures, whose iteration counts get recorded.
+What production gave up: the per-run adjointness and condition-number checks.
+A singular Hessian now surfaces as GMRES non-convergence with no fallback, as
+it already did for RKS (control in `udh_zvector.cpp`).
+
+Results, `planck-dft` before and after on the same tree, V4 grid for UKS:
+
+| Fixture | Pairs | GMRES iterations | Actions | Dense actions (1+2n) | max \|Δg\| (Ha/Bohr) |
+|---|---|---|---|---|---|
+| C1 H2O2⁺ (also the regression case) | 59 | 22 | 46 | 119 | 1.8e-13 |
+| CN radical | 45 | 17 | 36 | 91 | 5.9e-14 |
+| HO2 | 42 | 17 | 36 | 85 | 1.1e-13 |
+| water cation | 22 | 11 | 24 | 45 | 1.1e-13 |
+| water triplet | 18 | 12 | 26 | 37 | 6.5e-13 |
+| H2⁺, zero beta | 1 | 0 | 2 | 3 | bitwise |
+| RKS water, RKS C1 H2O2 | 10, 27 | 4, 12 | 10, 26 | n/a | bitwise |
+
+Energies are unchanged in every case. The action count now grows with the
+GMRES iteration count rather than with the pair count, so the saving widens
+with system size. One timing, C1 H2O2⁺: 40.5 s to 22.0 s total. The baseline
+shared the CPU with a compile, so treat that as indicative only.
+
+Tests: `planck-udh-zvector`, `planck-udh-relaxed-density`,
+`planck-udh-stationary-transfer` and `planck-dft-coulomb-response` pass (RKS
+water GMRES `z` against the dense oracle 2.8e-14, correction 6.7e-14).
+`test_dh_o3_zvector.py` and `test_udh_zvector_contract.py` were rewritten for
+one solver. Not run for this step: the full `udh_molecular_audit.py` FD audit
+(the gradients moved by ≤ 6.5e-13, far below its 5e-8 limit).
 
 ### 3. MO integrals by sector (M)
 

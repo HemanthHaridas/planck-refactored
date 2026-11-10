@@ -1,6 +1,7 @@
 #include "udh_driver.h"
 #include "driver.h"
 #include "base/mpi_env.h"
+#include "io/logging.h"
 #include "post_hf/integrals.h"
 #include <algorithm>
 #include <cmath>
@@ -89,6 +90,10 @@ namespace DFT::Driver
         if(!rhs) return error(rhs.error());
         auto z=solve_udh_zvector({coeff,f,calc._overlap,r.nocca,r.noccb,*response},rhs->total_ai);
         if(!z) return error(z.error());
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,"UDH Z-vector :",
+            std::format("GMRES pairs={} iterations={} actions={} restarts={} residual={:.3e} seconds={:.6f}",
+                rhs->total_ai.alpha.size()+rhs->total_ai.beta.size(),z->iterations,z->action_count,
+                z->restarts,z->residual_max_abs,z->elapsed_seconds));
         out.rhs=rhs->total_ai; out.z=z->z_ai; out.z_residual=z->residual_max_abs;
         double rhs_max=0;
         for(const M *m:{&out.rhs.alpha,&out.rhs.beta}) if(m->size()) rhs_max=std::max(rhs_max,m->cwiseAbs().maxCoeff());

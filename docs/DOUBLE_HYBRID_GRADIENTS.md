@@ -82,8 +82,9 @@ H_{ai,bj}^\mathrm{KS}Z_{bj}=-L_{ai}.
 
 `L_ai` combines the Eq. 41 response-density contribution and the literal
 four-coefficient Eq. 40/Eq. 47 amplitude contribution. The production path
-uses the typed matrix-free Hessian action; the dense Hessian remains a
-reference backend and is checked against the shared action.
+uses the typed matrix-free Hessian action with GMRES, for RKS and UKS alike.
+A dense Hessian is built only in the tests, from the same action, as the
+reference the GMRES solution is checked against.
 
 The crucial implementation rule is that the Eq. 40 four-coefficient orbital
 derivative is the authoritative source of the amplitude RHS and pair-metric
