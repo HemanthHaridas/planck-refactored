@@ -1536,9 +1536,6 @@ namespace HartreeFock
             std::vector<int> active_mo_alpha;  // UMP2 alpha active mask
             std::vector<int> active_mo_beta;   // UMP2 beta active mask
             std::vector<double> t2;            // RMP2 T2[i,j,a,b] (row-major), empty if not computed
-            std::vector<double> ump2_t2_aa;    // UMP2 αα block
-            std::vector<double> ump2_t2_ab;    // UMP2 αβ block
-            std::vector<double> ump2_t2_bb;    // UMP2 ββ block
             double e_corr_ss = 0.0;            // same-spin correlation energy
             double e_corr_os = 0.0;            // opposite-spin correlation energy
             bool converged = true;             // iterative MP2 convergence flag (true = canonical or converged)

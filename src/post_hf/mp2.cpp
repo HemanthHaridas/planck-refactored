@@ -30,9 +30,6 @@ namespace HartreeFock::Correlation
             calculator._mp2_result.t2 = result.t2;
         else
             std::vector<double>().swap(calculator._mp2_result.t2);
-        calculator._mp2_result.ump2_t2_aa.clear();
-        calculator._mp2_result.ump2_t2_ab.clear();
-        calculator._mp2_result.ump2_t2_bb.clear();
         return {};
     }
 
@@ -40,8 +37,9 @@ namespace HartreeFock::Correlation
         HartreeFock::Calculator &calculator,
         const UMP2Result &result)
     {
-        // UMP2 mirrors the same Calculator-level bookkeeping, but its amplitudes
-        // live in aa/ab/bb spin blocks instead of a single RHF t2 tensor.
+        // UMP2 mirrors the same Calculator-level bookkeeping. Its aa/ab/bb
+        // amplitudes are not copied: gradient callers hold the UMP2Result
+        // locally, and nothing reads a Calculator copy.
         calculator._correlation_energy = result.e_corr;
         calculator._mp2_result.e_corr_ss = result.e_corr_ss;
         calculator._mp2_result.e_corr_os = result.e_corr_os;
@@ -53,9 +51,6 @@ namespace HartreeFock::Correlation
         calculator._mp2_result.nvirb = result.nvirb;
         calculator._mp2_result.active_mo_alpha = result.active_mo_alpha;
         calculator._mp2_result.active_mo_beta = result.active_mo_beta;
-        calculator._mp2_result.ump2_t2_aa = result.t2_aa;
-        calculator._mp2_result.ump2_t2_ab = result.t2_ab;
-        calculator._mp2_result.ump2_t2_bb = result.t2_bb;
         calculator._mp2_result.t2.clear();
         return {};
     }
