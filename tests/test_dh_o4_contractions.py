@@ -36,7 +36,7 @@ class O4ContractionTests(unittest.TestCase):
 
     def test_pair_overlap_reuses_stationary_coefficients(self):
         assembly = self.source.split("assemble_dh_gradient_driver_contract(", 1)[1].split(
-            "build_dh_gradient_driver_contract(const DHGradientDriverInputs &inputs)", 1)[0]
+            "build_dh_gradient_driver_contract(const DHGradientDriverInputs &inputs, DHStationaryProducts", 1)[0]
         self.assertIn("out.eq40_amplitude_rhs.pair_coefficients, nocc, nvirt", assembly)
         self.assertNotIn("build_dh_pair_coefficient_gradient(", assembly)
         self.assertIn("pair_coefficients.total.bottomLeftCorner(nvirt,nocc)", assembly)

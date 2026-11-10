@@ -12,8 +12,9 @@ path beside the streamed one?
 The UKS double-hybrid gradient works and passes finite differences. It shares
 every engine with RKS: the AO derivative contraction, the AO pair density, the
 Z-vector solver and the Eq. 40 MO-integral sectors. What still differs is the
-amplitude storage (step 4), and RKS still carries dense reference adapters that
-only tests use (step 1).
+amplitude storage, which is deferred to the RI-DH work (see "Deferred to
+RI-DH" below). RKS no longer carries dense reference adapters
+(step 1); the tests rebuild dense views in `tests/dh_dense_oracle.h`.
 
 | Stage | RKS | UKS | Status |
 |---|---|---|---|
@@ -21,8 +22,8 @@ only tests use (step 1).
 | AO pair density | bounded AO tiles | same | shared (`16f4047b`) |
 | Z-vector | `solve_packed_zvector` (GMRES) | same | shared (`79fe31c7`) |
 | MO integrals | five Eq. 40 sectors | five sectors per spin pair | shared (step 3) |
-| Amplitudes | source-backed pair tiles | resident `t2_aa/ab/bb` | step 4 |
-| Dense reference adapters | kept for test oracles | none | step 1 |
+| Amplitudes | source-backed pair tiles | resident `t2_aa/ab/bb` | deferred to RI-DH |
+| Dense reference adapters | none (test-side oracle) | none | step 1 |
 
 What the gradient is validated against:
 
@@ -53,106 +54,85 @@ Shared so far:
 - `build_dh_eq40_mo_eri_blocks_direct` builds the five Eq. 40 MO-integral
   sectors for both spins; UKS no longer forms three full `n⁴` MO tensors.
 - Test oracles rebuild the dense objects from the production code:
-  `tests/udh_dense_oracle.h` (two-particle tensors), `tests/dh_zvector_oracle.h`
+  `tests/dh_dense_oracle.h` (dense derivatives and their callbacks, the RKS
+  Eq. 46/47 tensors, the reference contract), `tests/udh_dense_oracle.h`
+  (UKS two-particle tensors), `tests/dh_zvector_oracle.h`
   (Eq. 27 Hessians) and `tests/udh_mo_sector_oracle.h` (full MO tensors and
   their sector slices).
 
 ## Next steps
 
-The steps are independent; each lands on its own and keeps the gradient
-working. Order: step 0, step 1, step 4. Step 1 is mostly a test refactor with
-no user-visible gain, but it is lower risk than step 4, which goes last for the
-reasons given there.
+Steps 0 to 3 are done (see the record below), and step 4 is deferred to the
+RI-DH work. What remains is final acceptance: run the full
+`tests/udh_molecular_audit.py` (all `uks_u0` fixtures, the larger-basis water
+cation, closed-shell reduction and the RKS regression), then rewrite this file
+as an answer doc.
 
-### Step 0. Drop the unread Calculator copy of the UMP2 amplitudes (S)
+## Record of landed steps
+
+### Step 1. Dense adapters removed (2026-11-10)
+
+Production never reached the dense path: `build_dh_eq33_derivative_integrals`
+always set the direct callbacks, so the storage switch always chose
+`ContractionOnly`. Removed from `src/dft/dh_pt2_gradient.{h,cpp}`:
+
+- the dense `hamiltonian_ao`/`overlap_ao`/`eri_ao` fields of
+  `DHEq33NonXCDerivatives`, the dense branch of `build_dh_eq33_non_xc_gradient`
+  and `Eq33NonXCAccumulator`. The Eq. 47 tile context is now a required
+  argument;
+- `DHGammaStorage`, the six AO tensors of `DHEq46_47TwoParticleDensity`
+  (it keeps `D`, `P`, `a_x`), `eri_eightfold_symmetrize` and
+  `materialized_eq47_bytes`;
+- `build_dh_eq47_nonseparable_raw_ao`, `for_each_dh_eq47_nonseparable_raw_ao_tile`,
+  `dh_eq47_penultimate` and the `transform_tile` field of
+  `DHEq47TiledExecution`;
+- the one-argument `build_dh_gradient_driver_contract` and the `mo_eri`
+  overload of `build_dh_stationary_products`. The remaining contract overload
+  fails with a named error when the workspace lacks the direct callbacks,
+  instead of falling back to a dense path;
+- `build_dh_ks_fixed_density_fock_derivative` and its struct, which had no
+  caller and read the dense derivative fields.
+
+`build_dh_molecular_eri_blocks` and `for_each_dh_eq47_nonseparable_raw_ao_block`
+stay: the first slices a dense MO tensor into sectors, the second is the
+production pair stream with a one-channel wrapper.
+
+Tests: `tests/dh_dense_oracle.h` holds the spin-agnostic dense views, rebuilt
+from production code: `DenseDerivatives`, `callbacks_from_dense`, the
+stream-to-dense `stream_channel`, `dense_gamma` (the six RKS tensors),
+`dense_non_xc`, and `stationary_from_mo_eri` / `reference_driver_contract` in
+place of the deleted overloads. `tests/udh_dense_oracle.h` builds on it.
+`dft_coulomb_response.cpp`, `dh_pt2_amplitude_density.cpp`,
+`dh_o5_backtransform.cpp`, `udh_two_particle_density.cpp` and
+`udh_stationary_transfer.cpp` moved to it. `dh_o5_backtransform.cpp` now checks
+the block stream against its eighth-order literal oracle instead of the
+deleted direct backtransform. The Python contracts (`test_dh_o2_workspace.py`,
+`test_dh_o4_contractions.py`, `test_dh_o5_backtransform.py`) now assert that no
+dense storage mode, builder or symmetrizer remains.
+
+Production shrinks by 450 lines (`dh_pt2_gradient.{h,cpp}`: 504 removed, 54
+added). Results:
+
+- RKS B2PLYP/STO-3G gradient and energy on water and C1 H2O2 identical to
+  every printed digit before and after.
+- All 29 `planck-dh-*`, `planck-udh-*` and `planck-dft-coulomb-response`
+  ctest entries pass, as do the 99 DH and UDH Python contract tests, and the
+  UKS regression case `h2o2_cation_uks_b2plyp_v4_gradient_sto3g`.
+- Mutation: halving the Eq. 46 exchange factor in the production source fails
+  both `planck-dft-coulomb-response` and `planck-dh-pt2-amplitude-density`,
+  so the rewritten dense-oracle comparisons are live.
+
+### Step 0. Unread UMP2 amplitude copy (2026-11-10, `bea7dd8b`)
 
 `apply_ump2_result` (`src/post_hf/mp2.cpp`) copied `t2_aa/ab/bb` into
 `calculator._mp2_result.ump2_t2_{aa,ab,bb}` on every UMP2 run, and nothing in
 `src/` or `tests/` read them: one full extra amplitude set per run. The copies
 and the three `types.h` fields are deleted. This is the "deliberate copy" item
-step 4 listed, settled by deletion; it saves memory for every UMP2 caller, not
+the former step 4 listed, settled by deletion; it saves memory for every UMP2 caller, not
 only double hybrids.
 
-Gate: UMP2 energies and the `*ump2*` and `*uks_b2plyp*` regression cases unchanged.
+The 11 UMP2 and UKS double-hybrid regression cases pass.
 
-### Step 1. Remove the dense adapters (M, mostly test code)
-
-Production never reaches the dense path: `build_dh_eq33_derivative_integrals`
-(`driver.cpp`) always sets `direct_two_electron`, so the storage switch in the
-production overload of `build_dh_gradient_driver_contract` always picks
-`ContractionOnly`. `ReferenceAll` is reached only from tests and from the
-reference overload.
-
-Production deletions:
-
-- The `hamiltonian_ao`, `overlap_ao` and `eri_ao` fields of
-  `DHEq33NonXCDerivatives`, the dense branch of `build_dh_eq33_non_xc_gradient`,
-  and `Eq33NonXCAccumulator`.
-- `DHGammaStorage` and the six materialized fields of
-  `DHEq46_47TwoParticleDensity`, with `eri_eightfold_symmetrize` and
-  `materialized_eq47_bytes`. The storage switch becomes an error ("no direct
-  two-electron callback"), so a missing callback fails instead of silently
-  taking a dense path.
-- `build_dh_eq47_nonseparable_raw_ao`, `for_each_dh_eq47_nonseparable_raw_ao_tile`
-  and `dh_eq47_penultimate`. The `transform_tile` field of
-  `DHEq47TiledExecution` is a parameter of the tile function and goes with it
-  if nothing else reads it.
-- The `dense_blocks` route through `build_dh_molecular_eri_blocks` in the
-  reference overload of `build_dh_gradient_driver_contract`, which then has no
-  production role. Its tests keep it as a test helper.
-
-Test work is the bulk of the step. The materialized fields are read in
-`dft_coulomb_response.cpp`, `dh_pt2_amplitude_density.cpp`,
-`dh_o5_backtransform.cpp` and `udh_two_particle_density.cpp`. They move to a
-dense view rebuilt from the production stream, the pattern
-`tests/udh_dense_oracle.h` already uses. The reference overload is also used by
-`dft_coulomb_response.cpp` and by `test_dh_o2_workspace.py`,
-`test_dh_o4_contractions.py` and `test_dh_workflow_audit.py`; update those and
-`test_dh_o5_backtransform.py`, and rewrite `docs/DH_IMPLEMENTATION.md` §7 and
-§9 rule 7, which permit retained dense adapters.
-
-Gate: RKS gradient bitwise unchanged on water and C1 H2O2; all `planck-dh-*`,
-`planck-dft-coulomb-response` and `planck-udh-two-particle-density` tests and
-the Python contract tests pass.
-
-### Step 4. Amplitude storage (M–L)
-
-`UMP2Result` has no tile source today. Its `t2_aa/ab/bb` are resident vectors, and
-`RMP2T2TileSource` cannot be reused as it stands, because it packs on the
-closed-shell pair symmetry `t_ij^ab = t_ji^ba`, which the `ab` block does not have.
-
-The HF UMP2 analytic gradient (`mp2_gradient.cpp`) also reads the resident
-`t2_aa/ab/bb`, so the tile source is added beside them, not in their place.
-This follows the RKS precedent, where `RMP2Result` carries `t2_source` beside
-`t2`/`t2_pair_packed`: only the double-hybrid caller asks for tiles and leaves
-the resident vectors empty. Moving the HF UMP2 gradient to tiles is out of
-scope.
-
-- Add a spin-block tile source (ordered `(i,a)`/`(j,b)` tiles, no pair symmetry
-  assumed), scratch-backed as RKS is. `mp2_ump2.cpp` writes it after
-  `canonical_kernel` when the caller requests it, so peak memory during the
-  UMP2 kernel does not change.
-- `UDHPT2Amplitudes` becomes a view over those tiles. Random-access consumers
-  become tile loops: `build_udh_pt2_dprime`, `raw_channel`, `pair_channel`,
-  `sector()` and the channel fill (`udh_driver.cpp`, `udh_pt2_gradient.cpp`).
-- The energy contract also reads the resident vectors and needs the same
-  treatment. (The `calculator._mp2_result` copies went in step 0.)
-
-Do this last. It touches every UKS amplitude consumer and is the only step that
-changes UMP2 itself, and its benefit only shows at sizes where the AO ERI tensor
-is already the larger object.
-
-Gate: tile reads equal the resident amplitudes exactly; UMP2 energies unchanged;
-UKS gradient unchanged within 1e-9 Ha/Bohr; peak RSS measured on a fixture large
-enough to show the saving.
-
-### Final acceptance
-
-After step 4, run the full `tests/udh_molecular_audit.py` (all `uks_u0` fixtures,
-the larger-basis water cation, closed-shell reduction and the RKS regression),
-then rewrite this file as an answer doc.
-
-## Record of landed steps
 
 ### Step 3. MO integrals by sector (2026-11-10)
 
@@ -276,6 +256,41 @@ engine takes both.
 For a closed shell `D_σ = D/2` and `P_σ = P/2`, so the two UKS exchange terms sum
 to `-½ a_x D P`, the RKS form. Both pair layouts are `(i,a,j,b)` →
 `C_i C_a C_j C_b`.
+
+## Deferred to RI-DH: UKS amplitude storage (former step 4)
+
+Decided 2026-11-10: not done under this scope. Its benefit only shows at sizes
+where the AO ERI tensor is already the larger object, and RI-DH is what removes
+that tensor, so the two belong together. The design below is kept for that
+work.
+
+`UMP2Result` has no tile source today. Its `t2_aa/ab/bb` are resident vectors, and
+`RMP2T2TileSource` cannot be reused as it stands, because it packs on the
+closed-shell pair symmetry `t_ij^ab = t_ji^ba`, which the `ab` block does not have.
+
+The HF UMP2 analytic gradient (`mp2_gradient.cpp`) also reads the resident
+`t2_aa/ab/bb`, so the tile source is added beside them, not in their place.
+This follows the RKS precedent, where `RMP2Result` carries `t2_source` beside
+`t2`/`t2_pair_packed`: only the double-hybrid caller asks for tiles and leaves
+the resident vectors empty. Moving the HF UMP2 gradient to tiles is out of
+scope.
+
+- Add a spin-block tile source (ordered `(i,a)`/`(j,b)` tiles, no pair symmetry
+  assumed), scratch-backed as RKS is. `mp2_ump2.cpp` writes it after
+  `canonical_kernel` when the caller requests it, so peak memory during the
+  UMP2 kernel does not change.
+- `UDHPT2Amplitudes` becomes a view over those tiles. Random-access consumers
+  become tile loops: `build_udh_pt2_dprime`, `raw_channel`, `pair_channel`,
+  `sector()` and the channel fill (`udh_driver.cpp`, `udh_pt2_gradient.cpp`).
+- The energy contract also reads the resident vectors and needs the same
+  treatment. (The `calculator._mp2_result` copies went in step 0.)
+
+It touches every UKS amplitude consumer and is the only step that changes
+UMP2 itself.
+
+Gate: tile reads equal the resident amplitudes exactly; UMP2 energies unchanged;
+UKS gradient unchanged within 1e-9 Ha/Bohr; peak RSS measured on a fixture large
+enough to show the saving.
 
 ## Out of scope
 

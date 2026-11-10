@@ -10,23 +10,12 @@ class O5BacktransformTests(unittest.TestCase):
     def setUpClass(cls):
         cls.source = (ROOT / "src/dft/dh_pt2_gradient.cpp").read_text()
 
-    def test_four_successive_axes_and_single_pair_weight(self):
-        penultimate = self.source.split("dh_eq47_penultimate(const DHPT2AmplitudeDensity", 1)[1].split(
-            "for_each_dh_eq47_nonseparable_raw_ao_tile(", 1)[0]
-        self.assertEqual(penultimate.count("transform_pair_axis("), 3)
-        for axis, block in ((3, "rightCols(nv)"), (2, "leftCols(no)"), (1, "rightCols(nv)")):
-            self.assertIn(f"tensor,shape,{axis},mo_coeff.{block},column_tile", penultimate)
-        self.assertIn("(1+(i==j))*tile.values", penultimate)
-        self.assertNotIn("exact_exchange", penultimate)
-        self.assertNotIn("c_pt2", penultimate)
-        self.assertIn("target.noalias()=mo_coeff.middleRows(begin,width).leftCols(no)*source", self.source)
-
     def test_block_stream_axes_and_single_pair_weight(self):
         channel = self.source.split("DHPairChannel make_dh_eq47_pair_channel(", 1)[1].split(
             "for_each_dh_eq47_nonseparable_raw_ao_block(", 1)[0]
         self.assertEqual(channel.count("(1+((i0+il)==j))*amplitudes.tilde(i0+il,j,a,b)"), 1)
         stream = self.source.split("for_each_dh_pair_ao_block(\n        int nao", 1)[1].split(
-            "build_dh_eq47_nonseparable_raw_ao(", 1)[0]
+            "build_dh_eq46_47_two_particle_density(", 1)[0]
         self.assertEqual(stream.count("transform_pair_axis("), 3)
         for token in ("ct.middleRows(tau0,ntile).rightCols(vt),tau_tile",
                       "ct.middleRows(kappa0,ktile).leftCols(ot),kappa_tile",
@@ -44,14 +33,16 @@ class O5BacktransformTests(unittest.TestCase):
         self.assertIn("coefficients * source.middleCols(begin,width)", helper)
         self.assertNotIn("t_tilde", helper)
 
-    def test_production_calls_staged_primitive_and_preserves_storage(self):
+    def test_no_dense_eq47_tensor_in_production(self):
+        header = (ROOT / "src/dft/dh_pt2_gradient.h").read_text()
+        for token in ("build_dh_eq47_nonseparable_raw_ao", "for_each_dh_eq47_nonseparable_raw_ao_tile",
+                      "dh_eq47_penultimate", "eri_eightfold_symmetrize", "DHGammaStorage",
+                      "std::vector<double> nonseparable_raw_ao", "separable_symmetric_ao"):
+            self.assertNotIn(token, self.source + header)
         builder = self.source.split("build_dh_eq46_47_two_particle_density(", 1)[1].split(
             "std::expected<DHEq33NonXCGradient", 1)[0]
-        self.assertEqual(builder.count("build_dh_eq47_nonseparable_raw_ao("), 1)
-        self.assertNotIn("for (int i = 0; i < no; ++i)", builder)
-        self.assertIn("out.nonseparable_raw_ao=std::move(*nonseparable)", builder)
-        self.assertIn("eri_eightfold_symmetrize(out.nonseparable_raw_ao", builder)
-        self.assertEqual(builder.count("if (storage == DHGammaStorage::ReferenceAll)"), 2)
+        self.assertNotIn("assign(", builder)
+        self.assertNotIn("for (int mu", builder)
 
     def test_scalar_oracle_and_timing_ledger_are_test_only(self):
         cmake = (ROOT / "CMakeLists.txt").read_text()

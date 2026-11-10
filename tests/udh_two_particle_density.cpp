@@ -188,7 +188,7 @@ namespace
             near(dot(channels(g)[ch]->raw_ao,base.eri),value[ch+2]);
             near(dot(channels(g)[ch]->symmetric_ao,base.eri),value[ch+2]);
         }
-        const DHEq33NonXCDerivatives dense_direction{{direction.h},{direction.s},{direction.eri}};
+        const DFT::Gradient::TestOracle::DenseDerivatives dense_direction{{direction.h},{direction.s},{direction.eri}};
         const auto grad=dense_non_xc(g,w.total_ao,dense_direction);
         const auto ledger=channels(grad);
         // Production assembly and stream against the channel-by-channel oracle.
@@ -282,7 +282,8 @@ namespace
             sep[k]=g.coulomb.raw_ao[k]+g.exchange_alpha.raw_ao[k]+g.exchange_beta.raw_ao[k];
             pair[k]=g.pair_aa.raw_ao[k]+g.pair_ab.raw_ao[k]+g.pair_bb.raw_ao[k];
         }
-        equal(sep,restricted.separable_raw_ao); equal(pair,restricted.nonseparable_raw_ao);
+        const auto rd=dense_gamma(restricted,a,x.c.alpha);
+        equal(sep,rd.separable_raw_ao); equal(pair,rd.nonseparable_raw_ao);
         std::cout<<"U7 closed-shell raw Eq34/35 reduction to RKS Eq46/47\n";
     }
     void errors()
@@ -324,14 +325,14 @@ namespace
         return {t+_compute_nuclear_attraction(pairs,n,calc._molecule,engine),s,
             _compute_2e(pairs,n,engine,HartreeFock::ERIKernel::Coulomb,0.,0.,nullptr)};
     }
-    DHEq33NonXCDerivatives derivatives(const HartreeFock::Calculator &calc)
+    DFT::Gradient::TestOracle::DenseDerivatives derivatives(const HartreeFock::Calculator &calc)
     {
         const int n=calc._shells.nbasis(); const auto &bfs=calc._shells._basis_functions;
         std::vector<int> owner(n,-1);
         for(int mu=0;mu<n;++mu) for(int a=0;a<3;++a)
             if((bfs[mu]._shell->_center-calc._molecule._standard.row(a).transpose()).squaredNorm()<1e-12) owner[mu]=a;
         if(std::find(owner.begin(),owner.end(),-1)!=owner.end()) throw std::runtime_error("AO owner not found");
-        DHEq33NonXCDerivatives out;
+        DFT::Gradient::TestOracle::DenseDerivatives out;
         out.hamiltonian_ao.assign(9,M::Zero(n,n)); out.overlap_ao.assign(9,M::Zero(n,n));
         out.eri_ao.assign(9,V(static_cast<std::size_t>(n)*n*n*n));
         for(int mu=0;mu<n;++mu) for(int nu=0;nu<n;++nu)

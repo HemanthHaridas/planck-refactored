@@ -6,6 +6,7 @@
 #include <limits>
 #include <numeric>
 #include "dft/dh_pt2_gradient.h"
+#include "dh_dense_oracle.h"
 
 namespace
 {
@@ -93,35 +94,10 @@ namespace
         }
         const auto ref=literal(d,c),sym=symmetric(ref,n);
         double worst=0;
-        for(int tile : {1,3,7,128,4096})
-        {
-            const auto raw=build_dh_eq47_nonseparable_raw_ao(d,c,tile);
-            if(!raw) { std::fprintf(stderr,"%s\n",raw.error().c_str()); return false; }
-            worst=std::max(worst,error(*raw,ref));
-        }
-        // O7.4.1: concatenate bounded final-mu tiles and compare to the
-        // independently literal raw tensor. The producer must not allocate
-        // that final tensor to satisfy this consumer.
-        for(int mu_tile : {1,2,5,128})
-        {
-            std::vector<double> tiled(ref.size(),0.0);
-            const auto streamed=for_each_dh_eq47_nonseparable_raw_ao_tile(
-                d,c,3,mu_tile,[&](int begin,int width,const std::vector<double> &tile)
-                -> std::expected<void,std::string>
-                {
-                    const std::size_t suffix=static_cast<std::size_t>(n)*n*n;
-                    if(tile.size()!=static_cast<std::size_t>(width)*suffix)
-                        return std::unexpected("O7.4 tile extent mismatch.");
-                    std::copy(tile.begin(),tile.end(),tiled.begin()+static_cast<std::size_t>(begin)*suffix);
-                    return {};
-                });
-            if(!streamed) { std::fprintf(stderr,"%s\n",streamed.error().c_str()); return false; }
-            worst=std::max(worst,error(tiled,ref));
-        }
-        // O7.4.4: tile every AO output index and the occupied reduction.
-        // Reconstruct only in this dense oracle; the producer itself has no
-        // [i,nu,kappa,tau] or final [mu,nu,kappa,tau] workspace.
-        for(int width : {1,2,5})
+        // Concatenate bounded blocks of every AO index and the occupied
+        // reduction. Reconstruct only in this dense oracle; the producer
+        // itself has no [i,nu,kappa,tau] or final [mu,nu,kappa,tau] workspace.
+        for(int width : {1,2,5,128})
         {
             std::vector<double> blocked(ref.size(),0.0);
             DHEq47BlockWorkspace workspace;
@@ -135,7 +111,7 @@ namespace
                         return std::unexpected("O7.4 block extent mismatch.");
                     for(int lm=0;lm<mc;++lm) for(int ln=0;ln<nc;++ln)
                         for(int lk=0;lk<kc;++lk) for(int lt=0;lt<tc;++lt)
-                            blocked[(((static_cast<std::size_t>(mu0+lm)*n+(nu0+ln))*n+(ka0+lk))*n+(ta0+lt))]=
+                            blocked[four(mu0+lm,nu0+ln,ka0+lk,ta0+lt,n)]=
                                 tile[(((static_cast<std::size_t>(lm)*nc+ln)*kc+lk)*tc+lt)];
                     return {};
                 },&workspace);
@@ -145,25 +121,23 @@ namespace
                 n,width,workspace.peak_live_elements,workspace.peak_output_slab_elements,
                 workspace.peak_emitted_tile_elements);
         }
-        // O7.4.2: consume raw tiles directly against a symmetric derivative
-        // tensor. This is the scalar operation later used by the live
-        // derivative primitive, but deliberately has no final AO Gamma
-        // reconstruction.
+        // Consume raw blocks directly against a symmetric derivative tensor,
+        // the scalar operation of the live derivative primitive, with no final
+        // AO Gamma reconstruction.
         for(int axis=0;axis<3;++axis)
         {
             std::vector<double> probe(ref.size());
             for(std::size_t p=0;p<probe.size();++p) probe[p]=std::sin(0.17*(axis+1)*(p+1));
             const auto derivative=symmetric(probe,n);
             double tiled_contraction=0.0;
-            const auto streamed=for_each_dh_eq47_nonseparable_raw_ao_tile(
-                d,c,3,2,[&](int begin,int width,const std::vector<double> &tile)
-                -> std::expected<void,std::string>
+            const auto streamed=for_each_dh_eq47_nonseparable_raw_ao_block(
+                d,c,3,2,2,2,2,[&](int mu0,int mc,int nu0,int nc,int ka0,int kc,int ta0,int tc,
+                    const std::vector<double> &tile) -> std::expected<void,std::string>
                 {
-                    const std::size_t suffix=static_cast<std::size_t>(n)*n*n;
-                    for(int local_mu=0;local_mu<width;++local_mu)
-                        for(std::size_t q=0;q<suffix;++q)
-                            tiled_contraction+=tile[static_cast<std::size_t>(local_mu)*suffix+q]*
-                                derivative[(static_cast<std::size_t>(begin+local_mu))*suffix+q];
+                    for(int lm=0;lm<mc;++lm) for(int ln=0;ln<nc;++ln)
+                        for(int lk=0;lk<kc;++lk) for(int lt=0;lt<tc;++lt)
+                            tiled_contraction+=tile[(((static_cast<std::size_t>(lm)*nc+ln)*kc+lk)*tc+lt)]*
+                                derivative[four(mu0+lm,nu0+ln,ka0+lk,ta0+lt,n)];
                     return {};
                 });
             if(!streamed || std::abs(tiled_contraction-dot(ref,derivative))>2e-11)
@@ -173,45 +147,56 @@ namespace
         relaxed.symmetric_mo=Eigen::MatrixXd::Zero(o+v,o+v);
         DHOverlapDensity w; w.symmetric_mo=relaxed.symmetric_mo;
         const Eigen::MatrixXd p=Eigen::MatrixXd::Zero(n,n);
-        const auto full=build_dh_eq46_47_two_particle_density(relaxed,d,c,p,0.53);
-        const auto compact=build_dh_eq46_47_two_particle_density(relaxed,d,c,p,0.0,DHGammaStorage::ContractionOnly);
-        if(!full || !compact) return false;
-        worst=std::max({worst,error(full->nonseparable_raw_ao,ref),error(full->nonseparable_symmetric_ao,sym),
-            error(full->total_raw_ao,ref),error(full->total_symmetric_ao,sym)});
-        bool ok=worst<2e-12 && compact->separable_raw_ao.capacity()==0 &&
-            compact->separable_symmetric_ao.capacity()==0 && compact->ground_density_ao==p &&
-            compact->nonseparable_raw_ao.capacity()==0 && compact->nonseparable_symmetric_ao.capacity()==0 &&
-            compact->total_raw_ao.empty();
-        // Check arbitrary raw-tensor pairing, then symmetric derivative
-        // pairing through the actual Eq. 33 consumer (zero other channels).
-        DHEq33NonXCDerivatives dx;
+        const auto gamma=build_dh_eq46_47_two_particle_density(relaxed,d,c,p,0.53);
+        if(!gamma) return false;
+        const auto dense=TestOracle::dense_gamma(*gamma,d,c);
+        worst=std::max({worst,error(dense.nonseparable_raw_ao,ref),error(dense.nonseparable_symmetric_ao,sym),
+            error(dense.total_raw_ao,ref),error(dense.total_symmetric_ao,sym)});
+        bool ok=worst<2e-12 && gamma->n_ao==n && gamma->ground_density_ao==p && gamma->exact_exchange==0.53;
+        // Symmetric derivative pairing through the actual Eq. 33 consumer
+        // (zero other channels).
+        TestOracle::DenseDerivatives dx;
         for(int axis=0;axis<3;++axis)
         {
             std::vector<double> probe(ref.size());
             for(std::size_t k=0;k<probe.size();++k) probe[k]=std::cos(0.13*(axis+1)*(k+1));
-            ok &= std::abs(dot(ref,probe)-dot(full->nonseparable_raw_ao,probe))<2e-11;
             dx.hamiltonian_ao.push_back(p); dx.overlap_ao.push_back(p);
             dx.eri_ao.push_back(symmetric(probe,n));
             ok &= std::abs(dot(ref,dx.eri_ao.back())-dot(sym,dx.eri_ao.back()))<2e-11;
         }
-        const auto gradient=build_dh_eq33_non_xc_gradient(relaxed,w,*full,c,dx);
+        const auto callbacks=TestOracle::callbacks_from_dense(dx);
+        const DHEq47TiledExecution tiles{&d,&c};
+        const auto gradient=build_dh_eq33_non_xc_gradient(relaxed,w,*gamma,c,callbacks,tiles);
         if(!gradient) return false;
         for(int axis=0;axis<3;++axis)
             ok &= std::abs(gradient->two_electron_nonseparable(axis)-dot(ref,dx.eri_ao[axis]))<2e-11;
-        ok &= !build_dh_eq47_nonseparable_raw_ao(d,c,0);
-        ok &= !build_dh_eq47_nonseparable_raw_ao(d,c,-1);
-        auto bad=d; bad.t_tilde.pop_back(); ok &= !build_dh_eq47_nonseparable_raw_ao(bad,c);
-        bad=d; bad.n_occ=0; ok &= !build_dh_eq47_nonseparable_raw_ao(bad,c);
-        bad=d; bad.n_virt=-1; ok &= !build_dh_eq47_nonseparable_raw_ao(bad,c);
+        const auto rejects=[&](const DHPT2AmplitudeDensity &amplitudes,const Eigen::MatrixXd &coeff,int tile=2)
+        {
+            return !for_each_dh_eq47_nonseparable_raw_ao_block(amplitudes,coeff,tile,tile,tile,tile,tile,
+                [](int,int,int,int,int,int,int,int,const std::vector<double> &)
+                -> std::expected<void,std::string> { return {}; });
+        };
+        ok &= rejects(d,c,0);
+        ok &= rejects(d,c,-1);
+        auto bad=d; bad.t_tilde.pop_back(); ok &= rejects(bad,c);
+        bad=d; bad.n_occ=0; ok &= rejects(bad,c);
+        bad=d; bad.n_virt=-1; ok &= rejects(bad,c);
         bad=d; bad.t_tilde[0]=std::numeric_limits<double>::quiet_NaN();
-        ok &= !build_dh_eq47_nonseparable_raw_ao(bad,c);
+        ok &= rejects(bad,c);
         auto invalid=c; invalid(0,0)=std::numeric_limits<double>::infinity();
-        ok &= !build_dh_eq47_nonseparable_raw_ao(d,invalid);
-        ok &= !build_dh_eq47_nonseparable_raw_ao(d,Eigen::MatrixXd::Zero(n,o+v+1));
-        ok &= !build_dh_eq47_nonseparable_raw_ao(d,Eigen::MatrixXd::Zero(0,o+v));
+        ok &= rejects(d,invalid);
+        ok &= rejects(d,Eigen::MatrixXd::Zero(n,o+v+1));
+        ok &= rejects(d,Eigen::MatrixXd::Zero(0,o+v));
         std::printf("O5 N=%d o=%d v=%d scale=%g basis=%d max_raw_sym_error=%.12e %s\n",
             n,o,v,scale,basis_kind,worst,ok?"PASS":"FAIL");
         return ok;
+    }
+
+    // The full raw Eq. 47 tensor from the production block stream.
+    std::vector<double> streamed_dense(const DHPT2AmplitudeDensity &d,const Eigen::MatrixXd &c)
+    {
+        const int n=static_cast<int>(c.rows());
+        return TestOracle::stream_channel(make_dh_eq47_pair_channel(d,c),n,4);
     }
 
     bool scaling()
@@ -227,8 +212,7 @@ namespace
             // Warm-up and median of three samples. The fast path is batched
             // eight times per sample for timer resolution. Never assert a
             // hardware-dependent speedup; print the measured scaling ledger.
-            const auto warm=build_dh_eq47_nonseparable_raw_ao(d,c);
-            if(!warm) return false;
+            const auto warm=streamed_dense(d,c);
             std::array<double,3> old_times{},new_times{};
             double checksum=0;
             for(int sample=0;sample<3;++sample)
@@ -238,14 +222,13 @@ namespace
                 const auto middle=Clock::now();
                 for(int repeat=0;repeat<8;++repeat)
                 {
-                    const auto staged=build_dh_eq47_nonseparable_raw_ao(d,c);
-                    if(!staged) return false;
-                    checksum+=(*staged)[repeat%staged->size()];
+                    const auto staged=streamed_dense(d,c);
+                    checksum+=staged[repeat%staged.size()];
                 }
                 const auto end=Clock::now();
                 old_times[sample]=std::chrono::duration<double>(middle-start).count();
                 new_times[sample]=std::chrono::duration<double>(end-middle).count()/8;
-                ok &= error(*warm,ref)<2e-11;
+                ok &= error(warm,ref)<2e-11;
             }
             std::sort(old_times.begin(),old_times.end()); std::sort(new_times.begin(),new_times.end());
             const double N=n,O=o,V=v;
@@ -275,11 +258,10 @@ namespace
             const int o = n / 2, v = n - o;
             const auto d = amplitudes(o, v, 0.27);
             const auto c = coefficients(n, n);
-            const auto reference = build_dh_eq47_nonseparable_raw_ao(d, c);
-            if (!reference) return false;
+            const auto reference = literal(d, c);
             for (int block : {1, 2, 3})
             {
-                std::vector<double> actual(reference->size(), 0.0);
+                std::vector<double> actual(reference.size(), 0.0);
                 DHEq47BlockWorkspace workspace;
                 const auto streamed = for_each_dh_eq47_nonseparable_raw_ao_block(
                     d, c, occupied_tile, block, block, block, block,
@@ -311,15 +293,15 @@ namespace
                 const std::size_t exact_bound = output_slab + std::max({
                     initial_panel + tau_panel, tau_panel + kappa_panel,
                     kappa_panel + nu_panel, emitted_tile});
-                const double max_error = error(actual, *reference);
+                const double max_error = error(actual, reference);
                 const bool bounded = workspace.peak_live_elements <= exact_bound &&
                     workspace.peak_output_slab_elements <= output_slab &&
                     workspace.peak_emitted_tile_elements <= emitted_tile &&
-                    workspace.peak_live_elements < reference->size();
+                    workspace.peak_live_elements < reference.size();
                 ok &= streamed && max_error < 2e-11 && bounded;
                 std::printf("O7.7 Eq47 N=%d block=%d reference_bytes=%zu producer_peak_bytes=%zu "
                     "bound_bytes=%zu max_error=%.3e %s\n",
-                    n, block, reference->size() * sizeof(double),
+                    n, block, reference.size() * sizeof(double),
                     workspace.peak_live_elements * sizeof(double), exact_bound * sizeof(double),
                     max_error, streamed && max_error < 2e-11 && bounded ? "PASS" : "FAIL");
             }

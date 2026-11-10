@@ -430,6 +430,34 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **No dense double-hybrid gradient path in production (2026-11-10,
+  `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md` step 1).** The RKS DH code
+  kept dense reference adapters that only tests reached: n_ao^4 Eq. 46/47
+  tensors behind a `DHGammaStorage` switch, dense h/S/ERI derivative arrays,
+  a direct Eq. 47 backtransform, a one-argument reference contract and a
+  `mo_eri` stationary overload. All are gone (`dh_pt2_gradient.{h,cpp}` net
+  -450 lines), with `build_dh_ks_fixed_density_fock_derivative`, which had no
+  caller. A contract built without the direct callbacks now fails with a named
+  error instead of falling back to a dense path. Tests rebuild the dense views
+  from the production stream in `tests/dh_dense_oracle.h`. RKS B2PLYP gradients
+  on water and C1 H2O2 are identical to every printed digit; 29 DH/UDH ctest
+  entries and 99 Python contracts pass; a mutation of the Eq. 46 exchange
+  factor fails the rewritten oracle comparisons.
+
+- **A `types.h` edit no longer recompiles the CC kernel registry (2026-11-10,
+  `aa51df70`).** `cc/common.h` and `cc/tensor_backend.h` included `types.h`
+  (directly and through `shellpair.h`) only for `Calculator&` and
+  `ShellPair` reference parameters; both now forward-declare them. The
+  registry, the largest TU, was recompiled once per target on every
+  `types.h` edit.
+
+- **UMP2 no longer copies its amplitudes into the Calculator (2026-11-10,
+  `bea7dd8b`, `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md` step 0).**
+  `apply_ump2_result` copied `t2_aa/ab/bb` into `calculator._mp2_result` on
+  every UMP2 run and nothing read them: a full extra amplitude set per run,
+  for every UMP2 caller. Deleted with the three `types.h` fields. The 11 UMP2
+  and UKS double-hybrid regression cases pass.
+
 - **UKS double hybrids read Eq. 40 MO sectors, not full MO tensors
   (2026-11-10, `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md` step 3).** The
   UKS gradient transformed three full `n⁴` MO ERI tensors (αα, αβ, ββ).

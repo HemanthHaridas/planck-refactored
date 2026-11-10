@@ -4,6 +4,7 @@
 #include <limits>
 #include <source_location>
 #include "dft/dh_pt2_gradient.h"
+#include "dh_dense_oracle.h"
 #include "udh_dense_oracle.h"
 #include "post_hf/mp2_internal.h"
 
@@ -574,7 +575,7 @@ int main()
         0.0,zero_response,zero_response,zero_response);
     const Eigen::MatrixXd stationary_coeff=Eigen::Matrix3d::Identity();
     const auto stationary_dense=stationary_response
-        ? DFT::Gradient::build_dh_stationary_products(r40,0.5,stationary_coeff,eri40,*stationary_response)
+        ? DFT::Gradient::TestOracle::stationary_from_mo_eri(r40,0.5,stationary_coeff,eri40,*stationary_response)
         : std::expected<DFT::Gradient::DHStationaryProducts,std::string>(
             std::unexpected("O7.5.6 dense stationary setup failed"));
     const auto stationary_compact=(stationary_response && blocks40)
@@ -1008,6 +1009,8 @@ int main()
         ok &= gamma46_47.has_value();
         if (gamma46_47)
         {
+            const Eigen::MatrixXd identity3 = Eigen::Matrix3d::Identity();
+            const auto g4647 = DFT::Gradient::TestOracle::dense_gamma(*gamma46_47, *d40, identity3);
             // Required a_x distinguishes the KS separable complement from
             // the PT2 pair term. Check every raw element, including the zero
             // exchange limit; scaling Eq. (47) here would double-scale PT2.
@@ -1017,13 +1020,14 @@ int main()
                     *relaxed44, *d40, Eigen::Matrix3d::Identity(), ground_density, ax);
                 ok &= hybrid.has_value();
                 if (!hybrid) continue;
-                ok &= hybrid->nonseparable_raw_ao == gamma46_47->nonseparable_raw_ao;
-                ok &= hybrid->nonseparable_symmetric_ao == gamma46_47->nonseparable_symmetric_ao;
+                const auto hybrid_dense = DFT::Gradient::TestOracle::dense_gamma(*hybrid, *d40, identity3);
+                ok &= hybrid_dense.nonseparable_raw_ao == g4647.nonseparable_raw_ao;
+                ok &= hybrid_dense.nonseparable_symmetric_ao == g4647.nonseparable_symmetric_ao;
                 for (int mu = 0; mu < 3; ++mu)
                     for (int nu = 0; nu < 3; ++nu)
                         for (int ka = 0; ka < 3; ++ka)
                             for (int ta = 0; ta < 3; ++ta)
-                                ok &= near(hybrid->separable_raw_ao[eidx(mu,nu,ka,ta)],
+                                ok &= near(hybrid_dense.separable_raw_ao[eidx(mu,nu,ka,ta)],
                                     relaxed44->symmetric_mo(mu,nu) * ground_density(ka,ta) -
                                     0.5 * ax * relaxed44->symmetric_mo(mu,ka) * ground_density(nu,ta));
             }
@@ -1041,14 +1045,14 @@ int main()
                             const double separable_ref =
                                 relaxed44->symmetric_mo(mu,nu) * ground_density(ka,ta) -
                                 0.5 * relaxed44->symmetric_mo(mu,ka) * ground_density(nu,ta);
-                            ok &= near(gamma46_47->separable_raw_ao[eidx(mu,nu,ka,ta)], separable_ref);
-                            ok &= near(gamma46_47->total_raw_ao[eidx(mu,nu,ka,ta)],
-                                gamma46_47->separable_raw_ao[eidx(mu,nu,ka,ta)] +
-                                gamma46_47->nonseparable_raw_ao[eidx(mu,nu,ka,ta)]);
+                            ok &= near(g4647.separable_raw_ao[eidx(mu,nu,ka,ta)], separable_ref);
+                            ok &= near(g4647.total_raw_ao[eidx(mu,nu,ka,ta)],
+                                g4647.separable_raw_ao[eidx(mu,nu,ka,ta)] +
+                                g4647.nonseparable_raw_ao[eidx(mu,nu,ka,ta)]);
                         }
             for (int a = 0; a < 2; ++a)
                 for (int b = 0; b < 2; ++b)
-                    ok &= near(gamma46_47->nonseparable_raw_ao[eidx(0,1+a,0,1+b)],
+                    ok &= near(g4647.nonseparable_raw_ao[eidx(0,1+a,0,1+b)],
                         2.0 * d40->t_tilde[static_cast<std::size_t>(a)*2 + b]);
 
             std::vector<double> derivative_probe(81, 0.0), symmetric_probe(81, 0.0);
@@ -1066,10 +1070,10 @@ int main()
             double raw_contraction = 0.0, symmetric_contraction = 0.0;
             for (std::size_t p = 0; p < derivative_probe.size(); ++p)
             {
-                raw_contraction += gamma46_47->total_raw_ao[p] * symmetric_probe[p];
-                symmetric_contraction += gamma46_47->total_symmetric_ao[p] * derivative_probe[p];
-                ok &= near(gamma46_47->total_symmetric_ao[p],
-                    gamma46_47->separable_symmetric_ao[p] + gamma46_47->nonseparable_symmetric_ao[p]);
+                raw_contraction += g4647.total_raw_ao[p] * symmetric_probe[p];
+                symmetric_contraction += g4647.total_symmetric_ao[p] * derivative_probe[p];
+                ok &= near(g4647.total_symmetric_ao[p],
+                    g4647.separable_symmetric_ao[p] + g4647.nonseparable_symmetric_ao[p]);
             }
             ok &= std::abs(raw_contraction - symmetric_contraction) < 1e-10;
 
@@ -1081,7 +1085,7 @@ int main()
                 ? DFT::Gradient::build_dh_overlap_density_adapter(*w, *w44_45)
                 : std::expected<DFT::Gradient::DHOverlapDensity, std::string>(
                     std::unexpected("Eq. 33 overlap fixture setup failed"));
-            DFT::Gradient::DHEq33NonXCDerivatives derivatives33;
+            DFT::Gradient::TestOracle::DenseDerivatives derivatives33;
             Eigen::Matrix3d h33, s33;
             h33 << 0.2, -0.1, 0.4,
                   -0.1, 0.5, -0.3,
@@ -1098,8 +1102,9 @@ int main()
                 derivatives33.eri_ao[1][p] = -0.01;
             }
             const auto eq33 = overlap33
-                ? DFT::Gradient::build_dh_eq33_non_xc_gradient(
-                    *relaxed44, *overlap33, *gamma46_47, Eigen::Matrix3d::Identity(), derivatives33)
+                ? std::expected<DFT::Gradient::DHEq33NonXCGradient, std::string>(
+                    DFT::Gradient::TestOracle::dense_non_xc(relaxed44->symmetric_mo, overlap33->symmetric_mo,
+                        g4647, derivatives33))
                 : std::expected<DFT::Gradient::DHEq33NonXCGradient, std::string>(
                     std::unexpected("Eq. 33 fixture setup failed"));
             ok &= eq33.has_value();
@@ -1112,8 +1117,8 @@ int main()
                 double sep_ref = 0.0, ns_ref = 0.0;
                 for (std::size_t p = 0; p < 81; ++p)
                 {
-                    sep_ref += 0.01 * gamma46_47->separable_symmetric_ao[p];
-                    ns_ref += 0.01 * gamma46_47->nonseparable_symmetric_ao[p];
+                    sep_ref += 0.01 * g4647.separable_symmetric_ao[p];
+                    ns_ref += 0.01 * g4647.nonseparable_symmetric_ao[p];
                 }
                 ok &= near(eq33->one_electron(0), h_ref);
                 ok &= near(eq33->overlap(0), s_ref);
@@ -1127,25 +1132,21 @@ int main()
                 ok &= eq33->two_electron_nonseparable.sum() == 0.0;
                 ok &= eq33->total.sum() == 0.0;
 
-                // O7.2: retain Eq. (46) as D/P/a_x only, then contract its
-                // literal raw coefficient into the same symmetric derivative
-                // quartets. This must reproduce the dense symmetric tensor
-                // channel independently of Eq. (47).
-                const auto compact46 = DFT::Gradient::build_dh_eq46_47_two_particle_density(
-                    *relaxed44, *d40, Eigen::Matrix3d::Identity(), ground_density, 1.0,
-                    DFT::Gradient::DHGammaStorage::ContractionOnly);
+                // O7.2: Eq. (46) is retained as D/P/a_x only and its literal
+                // raw coefficient contracted into the symmetric derivative
+                // quartets. This must reproduce the dense oracle above.
+                const auto &compact46 = gamma46_47;
                 const auto factorized_derivatives = DFT::Gradient::TestOracle::callbacks_from_dense(derivatives33);
                 const Eigen::MatrixXd compact_coeff = Eigen::Matrix3d::Identity();
                 const DFT::Gradient::DHEq47TiledExecution compact_tiles{
-                    &*d40, &compact_coeff, 2, 1};
+                    &*d40, &compact_coeff, 1};
                 const auto factorized_eq33 = compact46
                     ? DFT::Gradient::build_dh_eq33_non_xc_gradient(
                         *relaxed44, *overlap33, *compact46, Eigen::Matrix3d::Identity(), factorized_derivatives,
-                        &compact_tiles)
+                        compact_tiles)
                     : std::expected<DFT::Gradient::DHEq33NonXCGradient, std::string>(
                         std::unexpected("O7.2 compact Eq. 46 fixture setup failed"));
-                ok &= factorized_eq33.has_value() && compact46->separable_symmetric_ao.empty() &&
-                    compact46->nonseparable_raw_ao.empty() && compact46->nonseparable_symmetric_ao.empty();
+                ok &= factorized_eq33.has_value();
                 if (factorized_eq33)
                 {
                     const double separable_error=(factorized_eq33->two_electron_separable -
@@ -1155,10 +1156,8 @@ int main()
                     const double total_error=(factorized_eq33->total-eq33->total).norm();
                     const bool compact_pass=separable_error<1e-13 && pair_error<1e-13 && total_error<1e-13;
                     ok &= compact_pass;
-                    std::printf("O7.4.3 compact Eq. 47 tile contract sep=%.3e pair=%.3e total=%.3e storage=(%zu,%zu) %s\n",
-                        separable_error,pair_error,total_error,
-                        compact46->nonseparable_raw_ao.capacity(), compact46->nonseparable_symmetric_ao.capacity(),
-                        compact_pass ? "PASS" : "FAIL");
+                    std::printf("O7.4.3 compact Eq. 47 tile contract sep=%.3e pair=%.3e total=%.3e %s\n",
+                        separable_error,pair_error,total_error,compact_pass ? "PASS" : "FAIL");
                 }
             }
 
@@ -1175,10 +1174,13 @@ int main()
             DFT::Gradient::DHOverlapDensity zero_overlap33;
             zero_overlap33.raw_mo = Eigen::Matrix3d::Zero();
             zero_overlap33.symmetric_mo = Eigen::Matrix3d::Zero();
+            const auto zero_callbacks33 = DFT::Gradient::TestOracle::callbacks_from_dense(derivatives33);
+            const DFT::Gradient::DHEq47TiledExecution zero_tiles33{
+                zero_amplitudes33 ? &*zero_amplitudes33 : nullptr, &identity3};
             const auto eq33_zero = zero_gamma33
                 ? DFT::Gradient::build_dh_eq33_non_xc_gradient(
                     *zero_relaxed33, zero_overlap33, *zero_gamma33,
-                    Eigen::Matrix3d::Identity(), derivatives33)
+                    Eigen::Matrix3d::Identity(), zero_callbacks33, zero_tiles33)
                 : std::expected<DFT::Gradient::DHEq33NonXCGradient, std::string>(
                     std::unexpected("Eq. 33 zero-scale fixture setup failed"));
             ok &= eq33_zero.has_value();

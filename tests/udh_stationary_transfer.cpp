@@ -322,9 +322,9 @@ AO xc_geometry(const Model &m,const Direction &d,const AO &p)
     return {((.3*a+.03*b)*da+(.13+.03*a)*db)*m.xa+(.15*a*a+.13*b+.03*a*b)*d.xa,
             ((.13+.03*a)*da+.2*b*db)*m.xb+(.10*b*b+.13*a+.015*a*a)*d.xb};
 }
-DHEq33NonXCDerivatives derivatives(const Model &m,const Direction &d)
+DFT::Gradient::TestOracle::DenseDerivatives derivatives(const Model &m,const Direction &d)
 {
-    DHEq33NonXCDerivatives out; out.hamiltonian_ao={d.h}; out.overlap_ao={d.s};
+    DFT::Gradient::TestOracle::DenseDerivatives out; out.hamiltonian_ao={d.h}; out.overlap_ao={d.s};
     std::vector<double> eri(n*n*n*n);
     for(int p=0;p<n;++p) for(int q=0;q<n;++q) for(int r=0;r<n;++r) for(int s=0;s<n;++s)
         for(int l=0;l<3;++l) eri[gi(p,q,r,s)]+=d.factors[l](p,q)*m.factors[l](r,s)+m.factors[l](p,q)*d.factors[l](r,s);

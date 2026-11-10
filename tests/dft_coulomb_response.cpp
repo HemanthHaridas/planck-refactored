@@ -44,6 +44,7 @@
 #include "basis/basis.h"
 #include "dft/dft_gradient.h"
 #include "dft/dh_pt2_gradient.h"
+#include "dh_dense_oracle.h"
 #include "udh_dense_oracle.h"
 #include "dh_zvector_oracle.h"
 #include "dft/xc_grid.h"
@@ -344,6 +345,7 @@ namespace
             fail("Eq. 46 two-particle density construction failed");
             return;
         }
+        const auto gd = DFT::Gradient::TestOracle::dense_gamma(*gamma, *amplitudes, c);
 
         const Eigen::MatrixXd j = _compute_2e_j_direct(
             shell_pairs, p, nb, HartreeFock::IntegralMethod::ObaraSaika,
@@ -375,8 +377,8 @@ namespace
                             ((static_cast<std::size_t>(mu) * nb + nu) * nb + ka_idx) * nb + ta;
                         reference_gamma += (0.5 * p(mu,nu) * p(ka_idx,ta) -
                             0.25 * p(mu,ka_idx) * p(nu,ta)) * eri[q];
-                        separable_gamma += gamma->separable_symmetric_ao[q] * eri[q];
-                        nonseparable_gamma += gamma->nonseparable_symmetric_ao[q] * eri[q];
+                        separable_gamma += gd.separable_symmetric_ao[q] * eri[q];
+                        nonseparable_gamma += gd.nonseparable_symmetric_ao[q] * eri[q];
                     }
         const Eigen::MatrixXd &d = gamma->relaxed_difference_ao;
         const double correction_jk = (d.array() * j.array()).sum() -
@@ -392,7 +394,7 @@ namespace
         const auto tidx = [no, nv](int i, int j_idx, int a, int b)
         { return ((static_cast<std::size_t>(i) * no + j_idx) * nv + a) * nv + b; };
         double nonseparable_mo = 0.0;
-        std::vector<double> o5_raw_reference(gamma->nonseparable_raw_ao.size(),0.0);
+        std::vector<double> o5_raw_reference(gd.nonseparable_raw_ao.size(),0.0);
         for (int i = 0; i < no; ++i)
             for (int j_idx = 0; j_idx < no; ++j_idx)
                 for (int a = 0; a < nv; ++a)
@@ -425,8 +427,8 @@ namespace
                 const auto q=((static_cast<std::size_t>(mu)*nb+nu)*nb+ka)*nb+ta;
                 const double sym=(o5_at(mu,nu,ka,ta)+o5_at(nu,mu,ka,ta)+o5_at(mu,nu,ta,ka)+o5_at(nu,mu,ta,ka)+
                     o5_at(ka,ta,mu,nu)+o5_at(ta,ka,mu,nu)+o5_at(ka,ta,nu,mu)+o5_at(ta,ka,nu,mu))/8;
-                o5_raw_error=std::max(o5_raw_error,std::abs(o5_raw_reference[q]-gamma->nonseparable_raw_ao[q]));
-                o5_symmetric_error=std::max(o5_symmetric_error,std::abs(sym-gamma->nonseparable_symmetric_ao[q]));
+                o5_raw_error=std::max(o5_raw_error,std::abs(o5_raw_reference[q]-gd.nonseparable_raw_ao[q]));
+                o5_symmetric_error=std::max(o5_symmetric_error,std::abs(sym-gd.nonseparable_symmetric_ao[q]));
             }
         std::printf("O5 water raw_error=%.12e symmetric_error=%.12e\n",o5_raw_error,o5_symmetric_error);
         if(o5_raw_error>1e-11 || o5_symmetric_error>1e-11) fail("O5 physical water tensor mismatch");
@@ -665,7 +667,7 @@ namespace
             return;
         }
 
-        DFT::Gradient::DHEq33NonXCDerivatives derivatives;
+        DFT::Gradient::TestOracle::DenseDerivatives derivatives;
         derivatives.hamiltonian_ao.assign(9, Eigen::MatrixXd::Zero(nb, nb));
         derivatives.overlap_ao.assign(9, Eigen::MatrixXd::Zero(nb, nb));
         derivatives.eri_ao.assign(9, std::vector<double>(static_cast<std::size_t>(nb) * nb * nb * nb, 0.0));
@@ -712,8 +714,8 @@ namespace
                             for (int cart = 0; cart < 3; ++cart)
                                 derivatives.eri_ao[3 * centers[center] + cart][q] += d_eri[3 * center + cart];
                     }
-        const auto eq33 = DFT::Gradient::build_dh_eq33_non_xc_gradient(
-            *relaxed, *overlap_w, *gamma, c, derivatives);
+        const auto eq33 = std::expected<DFT::Gradient::DHEq33NonXCGradient, std::string>(DFT::Gradient::TestOracle::dense_non_xc(
+            c * relaxed->symmetric_mo * c.transpose(), c * overlap_w->symmetric_mo * c.transpose(), gd, derivatives));
         if (!eq33)
         {
             fail("Eq. 33 physical water/STO-3G channel assembly failed");
@@ -729,7 +731,7 @@ namespace
         const auto direct_derivatives = DFT::Gradient::TestOracle::callbacks_from_dense(derivatives);
         const DFT::Gradient::DHEq47TiledExecution direct_tiles{&*amplitudes, &c};
         const auto direct_eq33 = DFT::Gradient::build_dh_eq33_non_xc_gradient(
-            *relaxed, *overlap_w, *gamma, c, direct_derivatives, &direct_tiles);
+            *relaxed, *overlap_w, *gamma, c, direct_derivatives, direct_tiles);
         if (!direct_eq33 || (direct_eq33->one_electron - eq33->one_electron).norm() > 1e-13 ||
             (direct_eq33->overlap - eq33->overlap).norm() > 1e-13 ||
             (direct_eq33->two_electron_separable - eq33->two_electron_separable).norm() > 1e-13 ||
@@ -759,12 +761,12 @@ namespace
                 *relaxed_response, *amplitudes, c, p, 1.0)
             : std::expected<DFT::Gradient::DHEq46_47TwoParticleDensity, std::string>(
                 std::unexpected("Eq. 46 Z-only water response density setup failed"));
-        if (!gamma_response ||
-            gamma_response->nonseparable_symmetric_ao.size() != gamma->nonseparable_symmetric_ao.size())
+        if (!gamma_response)
         {
             fail("Eq. 46 Z-only water two-particle construction failed");
             return;
         }
+        const auto gd_response = DFT::Gradient::TestOracle::dense_gamma(*gamma_response, *amplitudes, c);
         // Hybrid regression: independent direct-J/K first variation of
         // Q(P)=P:J[P]/2-a_x P:K[P]/4. Test D-prime, pure Z, and D-prime+Z
         // separately, so opposite errors cannot cancel in the relaxed sum.
@@ -791,10 +793,12 @@ namespace
                 fail("Hybrid Eq. 46 physical density construction failed");
                 return;
             }
-            if (base->nonseparable_raw_ao != gamma->nonseparable_raw_ao ||
-                base->nonseparable_symmetric_ao != gamma->nonseparable_symmetric_ao ||
-                with_z->nonseparable_raw_ao != gamma->nonseparable_raw_ao ||
-                with_z->nonseparable_symmetric_ao != gamma->nonseparable_symmetric_ao)
+            const auto base_dense = DFT::Gradient::TestOracle::dense_gamma(*base, *amplitudes, c);
+            const auto with_z_dense = DFT::Gradient::TestOracle::dense_gamma(*with_z, *amplitudes, c);
+            if (base_dense.nonseparable_raw_ao != gd.nonseparable_raw_ao ||
+                base_dense.nonseparable_symmetric_ao != gd.nonseparable_symmetric_ao ||
+                with_z_dense.nonseparable_raw_ao != gd.nonseparable_raw_ao ||
+                with_z_dense.nonseparable_symmetric_ao != gd.nonseparable_symmetric_ao)
                 fail("Hybrid a_x or Z incorrectly scaled the Eq. 47 pair tensor");
             for (int direction = 0; direction < 3; ++direction)
             {
@@ -804,9 +808,9 @@ namespace
                 double contraction = 0.0;
                 for (std::size_t q = 0; q < eri.size(); ++q)
                 {
-                    double coefficient = direction == 0 ? base->separable_symmetric_ao[q] :
-                                                          with_z->separable_symmetric_ao[q];
-                    if (direction == 1) coefficient -= base->separable_symmetric_ao[q];
+                    double coefficient = direction == 0 ? base_dense.separable_symmetric_ao[q] :
+                                                          with_z_dense.separable_symmetric_ao[q];
+                    if (direction == 1) coefficient -= base_dense.separable_symmetric_ao[q];
                     contraction += coefficient * eri[q];
                 }
                 const double direct = (dd.array() * (j - 0.5 * ax * k).array()).sum();
@@ -821,13 +825,13 @@ namespace
                 }
             }
         }
-        std::vector<double> gamma_z_separable(gamma->separable_symmetric_ao.size());
+        std::vector<double> gamma_z_separable(gd.separable_symmetric_ao.size());
         for (std::size_t q = 0; q < gamma_z_separable.size(); ++q)
         {
-            gamma_z_separable[q] = gamma_response->separable_symmetric_ao[q] -
-                gamma->separable_symmetric_ao[q];
-            if (std::abs(gamma_response->nonseparable_symmetric_ao[q] -
-                         gamma->nonseparable_symmetric_ao[q]) > 1e-13)
+            gamma_z_separable[q] = gd_response.separable_symmetric_ao[q] -
+                gd.separable_symmetric_ao[q];
+            if (std::abs(gd_response.nonseparable_symmetric_ao[q] -
+                         gd.nonseparable_symmetric_ao[q]) > 1e-13)
             {
                 fail("Eq. 47 changed under a pure Z-vector response");
                 return;
@@ -870,7 +874,7 @@ namespace
         // integrals are rebuilt at the displaced water geometry.
         const Eigen::MatrixXd d_frozen_ao = c * relaxed->symmetric_mo * c.transpose();
         const Eigen::MatrixXd w_frozen_ao = c * overlap_w->symmetric_mo * c.transpose();
-        const auto frozen_non_xc_scalars = [&d_frozen_ao, &w_frozen_ao, &gamma](const HartreeFock::Calculator &displaced)
+        const auto frozen_non_xc_scalars = [&d_frozen_ao, &w_frozen_ao, &gd](const HartreeFock::Calculator &displaced)
             -> std::expected<std::array<double, 4>, std::string>
         {
             const auto displaced_pairs = build_shellpairs(displaced._shells);
@@ -887,8 +891,8 @@ namespace
             double separable = 0.0, nonseparable = 0.0;
             for (std::size_t q = 0; q < eri_displaced.size(); ++q)
             {
-                separable += gamma->separable_symmetric_ao[q] * eri_displaced[q];
-                nonseparable += gamma->nonseparable_symmetric_ao[q] * eri_displaced[q];
+                separable += gd.separable_symmetric_ao[q] * eri_displaced[q];
+                nonseparable += gd.nonseparable_symmetric_ao[q] * eri_displaced[q];
             }
             return std::array<double, 4>{
                 (d_frozen_ao.array() * (t_displaced + v_displaced).array()).sum(),
@@ -1190,10 +1194,10 @@ namespace
         // must reproduce the independently built water objects without
         // rerunning an SCF, PT2 kernel, or Z-vector solve.
         const auto workspace = std::make_shared<const DFT::Gradient::DHGradientGeometryWorkspace>(
-            DFT::Gradient::DHGradientGeometryWorkspace{mo_eri, derivatives});
+            DFT::Gradient::DHGradientGeometryWorkspace{mo_eri, direct_derivatives});
         const DFT::Gradient::DHGradientDriverInputs driver_inputs{
             &result, 0.27, c, eps, workspace, *response, z, xc_inputs};
-        const auto driver_contract = DFT::Gradient::build_dh_gradient_driver_contract(driver_inputs);
+        const auto driver_contract = DFT::Gradient::TestOracle::reference_driver_contract(driver_inputs);
         // O3: identical physical water AO integrals and analytic GGA kernel
         // through explicit dense and matrix-free backends. This fixture uses
         // core-H orbitals, not a converged B2PLYP energy; molecular FD remains
@@ -1205,7 +1209,7 @@ namespace
         o3_inputs.response_operator.xc=*o3_xc;
         o3_inputs.response_operator.exact_exchange=.53;
         o3_inputs.xc_inputs=gga_inputs;
-        auto o3_stationary=DFT::Gradient::build_dh_stationary_products(
+        auto o3_stationary=DFT::Gradient::TestOracle::stationary_from_mo_eri(
             result,.27,c,workspace->mo_eri,o3_inputs.response_operator);
         if (!o3_stationary) { fail("O3 physical stationary preparation"); return; }
         // O4: physical water integrals, with intentionally synthetic fixed
@@ -1271,7 +1275,7 @@ namespace
         }
         auto o3_reference_inputs=o3_inputs; o3_reference_inputs.z_ai=o3_dense;
         o3_inputs.z_ai=o3_iterative->z_ai;
-        const auto o3_reference=DFT::Gradient::build_dh_gradient_driver_contract(o3_reference_inputs);
+        const auto o3_reference=DFT::Gradient::TestOracle::reference_driver_contract(o3_reference_inputs);
         const auto o3_production=DFT::Gradient::build_dh_gradient_driver_contract(o3_inputs,std::move(*o3_stationary));
         if (!o3_reference || !o3_production) { fail("O3 physical contract assembly"); return; }
         const auto o3_compare=[&](const char *name,const Eigen::MatrixXd &a,const Eigen::MatrixXd &b,double tol)
@@ -1323,7 +1327,7 @@ namespace
             return reference_paired ? paired_jk_calls==1 && separate_coulomb_calls==0
                                     : separate_coulomb_calls==1;
         };
-        auto stationary=DFT::Gradient::build_dh_stationary_products(
+        auto stationary=DFT::Gradient::TestOracle::stationary_from_mo_eri(
             result,.27,c,workspace->mo_eri,reused_inputs.response_operator);
         if (!stationary || !one_response_action()) { fail("O2 stationary preparation count"); return; }
         const auto *amplitude_data=stationary->amplitudes.t_tilde.data();
@@ -1364,49 +1368,16 @@ namespace
         matrices_equal(driver_contract->xc_ii_gradient.total,reused->xc_ii_gradient.total);
         const auto &compact_gamma=reused->two_particle_density;
         const auto &full_gamma=driver_contract->two_particle_density;
-        // This fixture intentionally owns dense derivative arrays, so the
-        // driver must retain ReferenceAll. A production workspace has the
-        // direct callback and is the only path entitled to ContractionOnly.
-        const bool expects_compact = static_cast<bool>(reused_inputs.workspace->non_xc_derivatives.direct_two_electron);
-        const bool compact_gamma_ok =
-            compact_gamma.relaxed_difference_ao.rows()==full_gamma.relaxed_difference_ao.rows() &&
-            compact_gamma.relaxed_difference_ao.cols()==full_gamma.relaxed_difference_ao.cols() &&
-            compact_gamma.relaxed_difference_ao.isApprox(full_gamma.relaxed_difference_ao,1e-13) &&
-            compact_gamma.ground_density_ao.isApprox(full_gamma.ground_density_ao,1e-13) &&
-            compact_gamma.exact_exchange==full_gamma.exact_exchange &&
-            (expects_compact
-                ? (compact_gamma.separable_raw_ao.empty() && compact_gamma.separable_symmetric_ao.empty() &&
-                   compact_gamma.nonseparable_raw_ao.empty() && compact_gamma.nonseparable_symmetric_ao.empty() &&
-                   compact_gamma.total_raw_ao.empty() && compact_gamma.total_symmetric_ao.empty())
-                : (compact_gamma.separable_raw_ao==full_gamma.separable_raw_ao &&
-                   compact_gamma.separable_symmetric_ao==full_gamma.separable_symmetric_ao &&
-                   compact_gamma.nonseparable_raw_ao==full_gamma.nonseparable_raw_ao &&
-                   compact_gamma.nonseparable_symmetric_ao==full_gamma.nonseparable_symmetric_ao &&
-                   compact_gamma.total_raw_ao==full_gamma.total_raw_ao &&
-                   compact_gamma.total_symmetric_ao==full_gamma.total_symmetric_ao));
-        if (!compact_gamma_ok)
-        {
-            std::fprintf(stderr,
-                "O7.4.3 compact Gamma detail raw=(%zu,%zu,%zu) symmetric=(%zu,%zu,%zu) D=%tdx%td/%tdx%td Ddelta=%.3e Pdelta=%.3e ax=(%.17g,%.17g)\n",
-                compact_gamma.separable_raw_ao.size(), compact_gamma.nonseparable_raw_ao.size(), compact_gamma.total_raw_ao.size(),
-                compact_gamma.separable_symmetric_ao.size(), compact_gamma.nonseparable_symmetric_ao.size(), compact_gamma.total_symmetric_ao.size(),
-                compact_gamma.relaxed_difference_ao.rows(), compact_gamma.relaxed_difference_ao.cols(),
-                full_gamma.relaxed_difference_ao.rows(), full_gamma.relaxed_difference_ao.cols(),
-                (compact_gamma.relaxed_difference_ao-full_gamma.relaxed_difference_ao).norm(),
-                (compact_gamma.ground_density_ao-full_gamma.ground_density_ao).norm(),
-                compact_gamma.exact_exchange, full_gamma.exact_exchange);
-            fail(expects_compact ? "O7.4.3 compact Gamma storage or value mismatch" :
-                "O2 dense-reference Gamma storage or value mismatch");
-        }
+        // Production retains Eq. (46) as D/P/a_x only; no AO^4 tensor exists.
+        if (!compact_gamma.relaxed_difference_ao.isApprox(full_gamma.relaxed_difference_ao,1e-13) ||
+            !compact_gamma.ground_density_ao.isApprox(full_gamma.ground_density_ao,1e-13) ||
+            compact_gamma.exact_exchange!=full_gamma.exact_exchange)
+            fail("O7.4.3 compact Gamma value mismatch");
         auto owner_copy=reused_inputs;
-        if (owner_copy.workspace.get()!=workspace.get() || owner_copy.workspace->mo_eri.data()!=workspace->mo_eri.data() ||
-            owner_copy.workspace->non_xc_derivatives.eri_ao[0].data()!=workspace->non_xc_derivatives.eri_ao[0].data())
+        if (owner_copy.workspace.get()!=workspace.get() || owner_copy.workspace->mo_eri.data()!=workspace->mo_eri.data())
             fail("O2 driver view copied quartic arrays");
-        std::printf("O7.4.3 water Gamma retained bytes reference=%zu %s=%zu; stationary Eq41 calls=1; downstream calls=%d\n",
-            6*full_gamma.separable_symmetric_ao.size()*sizeof(double),
-            expects_compact ? "direct" : "dense-reference",
-            expects_compact ? static_cast<std::size_t>(2*compact_gamma.n_ao*compact_gamma.n_ao)*sizeof(double) :
-                6*compact_gamma.separable_symmetric_ao.size()*sizeof(double),
+        std::printf("O7.4.3 water Gamma retained bytes=%zu; stationary Eq41 calls=1; downstream calls=%d\n",
+            static_cast<std::size_t>(2*compact_gamma.n_ao*compact_gamma.n_ao)*sizeof(double),
             reference_paired ? paired_jk_calls : separate_coulomb_calls);
         // O7.6.5: exercise the *driver* handoff with the production-shaped
         // owners.  In particular, the PT2 amplitudes are scratch-backed, the
@@ -1466,17 +1437,12 @@ namespace
                 std::unexpected("O7.6.5 compact stationary assembly failed"));
         auto compact_reference_inputs = driver_inputs;
         compact_reference_inputs.pt2_result = &compact_reference_result;
-        const auto compact_reference_contract = DFT::Gradient::build_dh_gradient_driver_contract(
+        const auto compact_reference_contract = DFT::Gradient::TestOracle::reference_driver_contract(
             compact_reference_inputs);
         if (!production_contract ||
             !compact_reference_contract ||
             !production_contract->amplitude_ownership.passes_production() ||
             production_contract->reference_mo_eri_bytes != 0 ||
-            production_contract->materialized_eq47_bytes != 0 ||
-            !production_contract->two_particle_density.separable_raw_ao.empty() ||
-            !production_contract->two_particle_density.separable_symmetric_ao.empty() ||
-            !production_contract->two_particle_density.nonseparable_raw_ao.empty() ||
-            !production_contract->two_particle_density.nonseparable_symmetric_ao.empty() ||
             production_contract->eq47_workspace.peak_live_elements == 0 ||
             production_contract->eq47_workspace.peak_output_slab_elements == 0 ||
             production_contract->eq47_workspace.peak_emitted_tile_elements == 0 ||
@@ -1485,11 +1451,10 @@ namespace
             fail("O7.6.5 production driver ownership or direct Eq. (47) handoff failed");
             return;
         }
-        std::printf("O7.6.5 water production ownership: source=%zu reference_mo_eri=%zu materialized_eq47=%zu "
+        std::printf("O7.6.5 water production ownership: source=%zu reference_mo_eri=%zu "
             "workspace=(%zu,%zu,%zu) PASS\n",
             production_contract->amplitude_ownership.source_resident_bytes,
             production_contract->reference_mo_eri_bytes,
-            production_contract->materialized_eq47_bytes,
             production_contract->eq47_workspace.peak_live_elements,
             production_contract->eq47_workspace.peak_output_slab_elements,
             production_contract->eq47_workspace.peak_emitted_tile_elements);
@@ -1499,14 +1464,21 @@ namespace
         auto hybrid_driver_inputs = driver_inputs;
         hybrid_driver_inputs.response_operator.exact_exchange = 0.53;
         const auto hybrid_driver_contract =
-            DFT::Gradient::build_dh_gradient_driver_contract(hybrid_driver_inputs);
+            DFT::Gradient::TestOracle::reference_driver_contract(hybrid_driver_inputs);
         const auto hybrid_gamma = DFT::Gradient::build_dh_eq46_47_two_particle_density(
             *relaxed, *amplitudes, c, p, 0.53);
-        if (!hybrid_driver_contract || !hybrid_gamma ||
-            hybrid_driver_contract->two_particle_density.separable_raw_ao != hybrid_gamma->separable_raw_ao ||
-            hybrid_driver_contract->two_particle_density.separable_symmetric_ao != hybrid_gamma->separable_symmetric_ao ||
-            hybrid_driver_contract->two_particle_density.nonseparable_symmetric_ao != gamma->nonseparable_symmetric_ao)
-            fail("DH driver did not propagate hybrid exchange exclusively to Eq. 46");
+        if (!hybrid_driver_contract || !hybrid_gamma)
+            fail("DH hybrid driver fixture failed");
+        else
+        {
+            const auto contract_dense = DFT::Gradient::TestOracle::dense_gamma(
+                hybrid_driver_contract->two_particle_density, hybrid_driver_contract->amplitudes, c);
+            const auto hybrid_dense = DFT::Gradient::TestOracle::dense_gamma(*hybrid_gamma, *amplitudes, c);
+            if (contract_dense.separable_raw_ao != hybrid_dense.separable_raw_ao ||
+                contract_dense.separable_symmetric_ao != hybrid_dense.separable_symmetric_ao ||
+                contract_dense.nonseparable_symmetric_ao != gd.nonseparable_symmetric_ao)
+                fail("DH driver did not propagate hybrid exchange exclusively to Eq. 46");
+        }
         const auto literal_pair_metric = DFT::Gradient::build_dh_eq47_pair_metric_overlap_density(
             result, *amplitudes, mo_eri);
         if (!literal_pair_metric)
@@ -1529,8 +1501,9 @@ namespace
             fail("Production overlap adapter fixture failed");
             return;
         }
-        const auto production_non_xc = DFT::Gradient::build_dh_eq33_non_xc_gradient(
-            *relaxed, *production_overlap, *gamma, c, derivatives);
+        const auto production_non_xc = std::expected<DFT::Gradient::DHEq33NonXCGradient, std::string>(
+            DFT::Gradient::TestOracle::dense_non_xc(c * relaxed->symmetric_mo * c.transpose(),
+                c * production_overlap->symmetric_mo * c.transpose(), gd, derivatives));
         const auto pt2_correction = driver_contract
             ? DFT::Gradient::build_dh_eq33_pt2_correction_gradient(*driver_contract)
             : std::expected<DFT::Gradient::DHEq33PT2CorrectionGradient, std::string>(
