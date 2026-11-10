@@ -8,29 +8,81 @@
 
 namespace DFT::Gradient
 {
-    enum class DHZVectorBackend { MatrixFreeGMRES, DenseReference };
     struct DHZVectorOptions
     {
-        DHZVectorBackend backend = DHZVectorBackend::MatrixFreeGMRES;
         double tolerance = 1e-12;
         int restart = 24;
         int max_iterations = 256;
     };
     struct DHZVectorStatistics
     {
-        DHZVectorBackend backend = DHZVectorBackend::MatrixFreeGMRES;
         double residual_max_abs = 0.0, elapsed_seconds = 0.0;
         int iterations = 0, action_count = 0, restarts = 0;
-        std::size_t krylov_matrix_bytes = 0, dense_matrix_bytes = 0;
+        std::size_t krylov_matrix_bytes = 0;
         std::vector<double> true_residuals;
     };
     struct DHZVectorResult : DHZVectorStatistics { Eigen::MatrixXd z_ai; };
 
-    // Synchronous, checked Eq.27 solve AZ=-L. Borrows all inputs only for
-    // this call; no lambda/reference escapes. Uses the SAME physical action
-    // for GMRES, dense reference columns and final residual. MatrixFreeGMRES
-    // never constructs columns or a dense orbital Hessian and never falls
-    // back to DenseReference. The abs-gap floor is a preconditioner only.
+    // The one Eq.27 solver for RKS and UKS: A z = b by matrix-free GMRES,
+    // preconditioned by the orbital-energy gaps, then a fresh final action.
+    // The caller owns the packing and the action. A must be self-adjoint
+    // (the physical KS orbital Hessian is), so A z = b and A^T z = b agree.
+    // Never builds A and never falls back to a dense solve. An empty pair
+    // space (a spin with no ov pairs on both sides) returns an empty z.
+    [[nodiscard]] inline std::expected<Eigen::VectorXd,std::string> solve_packed_zvector(
+        const DFT::Response::Action &action,const Eigen::VectorXd &b,const Eigen::VectorXd &diagonal,
+        const DHZVectorOptions &options,DHZVectorStatistics &stats,const std::string &label)
+    {
+        const auto start=std::chrono::steady_clock::now();
+        if (!action || diagonal.size()!=b.size() || !b.allFinite() ||
+            !std::isfinite(options.tolerance) || options.tolerance<=0 || options.restart<=0 || options.max_iterations<=0)
+            return std::unexpected(label+": invalid right-hand side, action or solver settings.");
+        if (!diagonal.allFinite()) return std::unexpected(label+": nonfinite orbital gaps.");
+        if (!b.size()) return Eigen::VectorXd();
+        const Eigen::Index n=b.size();
+        const DFT::Response::Action counted=[&](const Eigen::VectorXd &x)->std::expected<Eigen::VectorXd,std::string>
+        {
+            ++stats.action_count;
+            if (x.size()!=n || !x.allFinite()) return std::unexpected(label+": invalid action trial.");
+            try
+            {
+                auto value=action(x);
+                if (!value) return std::unexpected(value.error());
+                if (value->size()!=n || !value->allFinite())
+                    return std::unexpected(label+": invalid Eq.27 action result.");
+                return value;
+            }
+            catch(const std::exception &e) { return std::unexpected(label+" action: "+e.what()); }
+            catch(...) { return std::unexpected(label+" action: unknown exception."); }
+        };
+        auto result=DFT::Response::gmres(counted,b,diagonal,options.tolerance,options.restart,options.max_iterations);
+        if (!result) return std::unexpected(label+": "+result.error());
+        if (!result->converged)
+        {
+            std::ostringstream error;
+            error<<label<<" GMRES did not converge: iterations="<<result->iterations
+                 <<" actions="<<stats.action_count<<" residual="<<result->true_residuals.back()
+                 <<"; no dense fallback.";
+            return std::unexpected(error.str());
+        }
+        Eigen::VectorXd z=std::move(result->x);
+        stats.iterations=result->iterations; stats.restarts=result->restarts;
+        stats.krylov_matrix_bytes=result->krylov_matrix_bytes;
+        stats.true_residuals=std::move(result->true_residuals);
+        // Independently refreshed, unpreconditioned residual after the solve.
+        // No preconditioner floor or denominator shift enters this action.
+        auto final=counted(z);
+        if (!final) return std::unexpected(final.error());
+        stats.residual_max_abs=(*final-b).cwiseAbs().maxCoeff();
+        const double limit=options.tolerance*std::max(1.0,b.cwiseAbs().maxCoeff());
+        if (!std::isfinite(limit) || !std::isfinite(stats.residual_max_abs) || stats.residual_max_abs>limit)
+            return std::unexpected(label+": fresh final residual exceeds requested tolerance.");
+        stats.elapsed_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
+        return z;
+    }
+
+    // RKS packing a*no+i around the shared solver. Borrows all inputs only
+    // for this call; no lambda/reference escapes.
     [[nodiscard]] inline std::expected<DHZVectorResult,std::string> solve_dh_zvector(
         const Eigen::Ref<const Eigen::MatrixXd> &rhs_ai,
         const Eigen::Ref<const Eigen::MatrixXd> &c_occ,
@@ -38,7 +90,6 @@ namespace DFT::Gradient
         const Eigen::Ref<const Eigen::VectorXd> &eps,
         const DHEq41ResponseOperator &response,const DHZVectorOptions &options = {})
     {
-        const auto start=std::chrono::steady_clock::now();
         const Eigen::Index no=c_occ.cols(),nv=c_virt.cols(),nao=c_occ.rows();
         if (no<=0 || nv<=0 || nao<=0 || no>std::numeric_limits<int>::max()/nv ||
             c_virt.rows()!=nao || rhs_ai.rows()!=nv || rhs_ai.cols()!=no || eps.size()!=no+nv ||
@@ -48,7 +99,6 @@ namespace DFT::Gradient
             !std::isfinite(options.tolerance) || options.tolerance<=0 || options.restart<=0 || options.max_iterations<=0)
             return std::unexpected("DH Z-vector: invalid dimensions, finite values, callbacks or solver settings.");
         const Eigen::Index n=no*nv;
-        DHZVectorResult out; out.backend=options.backend;
         const auto pack=[no,nv](const Eigen::MatrixXd &m)
         {
             Eigen::VectorXd v(no*nv);
@@ -63,69 +113,19 @@ namespace DFT::Gradient
         };
         const DFT::Response::Action action=[&](const Eigen::VectorXd &x)->std::expected<Eigen::VectorXd,std::string>
         {
-            ++out.action_count;
-            if (x.size()!=n || !x.allFinite()) return std::unexpected("DH Z-vector: invalid action trial.");
-            try
-            {
-                auto value=apply_dh_eq27_hessian(unpack(x),c_occ,c_virt,eps,response);
-                if (!value) return std::unexpected(value.error());
-                if (value->total_ai.rows()!=nv || value->total_ai.cols()!=no || !value->total_ai.allFinite())
-                    return std::unexpected("DH Z-vector: invalid Eq.27 action result.");
-                return pack(value->total_ai);
-            }
-            catch(const std::exception &e) { return std::unexpected(std::string("DH Z-vector action: ")+e.what()); }
-            catch(...) { return std::unexpected("DH Z-vector action: unknown exception."); }
+            auto value=apply_dh_eq27_hessian(unpack(x),c_occ,c_virt,eps,response);
+            if (!value) return std::unexpected(value.error());
+            if (value->total_ai.rows()!=nv || value->total_ai.cols()!=no)
+                return std::unexpected("DH Z-vector: invalid Eq.27 action result.");
+            return pack(value->total_ai);
         };
-        const Eigen::VectorXd b=-pack(rhs_ai);
-        Eigen::VectorXd diagonal(n),z;
+        Eigen::VectorXd diagonal(n);
         for (Eigen::Index a=0;a<nv;++a) for (Eigen::Index i=0;i<no;++i)
             diagonal(a*no+i)=eps(no+a)-eps(i);
-        if (!diagonal.allFinite()) return std::unexpected("DH Z-vector: nonfinite orbital gaps.");
-        if (options.backend==DHZVectorBackend::MatrixFreeGMRES)
-        {
-            auto result=DFT::Response::gmres(action,b,diagonal,options.tolerance,options.restart,options.max_iterations);
-            if (!result) return std::unexpected("DH Z-vector: "+result.error());
-            if (!result->converged)
-            {
-                std::ostringstream error;
-                error<<"DH Z-vector GMRES did not converge: iterations="<<result->iterations
-                     <<" actions="<<out.action_count<<" residual="<<result->true_residuals.back()
-                     <<"; no dense fallback.";
-                return std::unexpected(error.str());
-            }
-            z=std::move(result->x);
-            out.iterations=result->iterations; out.restarts=result->restarts;
-            out.krylov_matrix_bytes=result->krylov_matrix_bytes;
-            out.true_residuals=std::move(result->true_residuals);
-        }
-        else if (options.backend==DHZVectorBackend::DenseReference)
-        {
-            // Explicit oracle only: this allocation is unreachable in the
-            // normal backend. No matrix-free result is used as its RHS/seed.
-            Eigen::MatrixXd hessian(n,n);
-            out.dense_matrix_bytes=sizeof(double)*static_cast<std::size_t>(n)*n;
-            for (Eigen::Index col=0;col<n;++col)
-            {
-                Eigen::VectorXd unit=Eigen::VectorXd::Zero(n); unit(col)=1;
-                auto value=action(unit);
-                if (!value) return std::unexpected(value.error());
-                hessian.col(col)=*value;
-            }
-            const Eigen::ColPivHouseholderQR<Eigen::MatrixXd> qr(hessian);
-            if (qr.rank()!=n) return std::unexpected("DH Z-vector dense reference: rank-deficient Hessian.");
-            z=qr.solve(b);
-        }
-        else return std::unexpected("DH Z-vector: unknown backend.");
-        // Independently refreshed, unpreconditioned residual after the solve.
-        // No preconditioner floor or denominator shift enters this action.
-        auto final=action(z);
-        if (!final) return std::unexpected(final.error());
-        out.residual_max_abs=(*final-b).cwiseAbs().maxCoeff();
-        const double limit=options.tolerance*std::max(1.0,b.cwiseAbs().maxCoeff());
-        if (!std::isfinite(limit) || !std::isfinite(out.residual_max_abs) || out.residual_max_abs>limit)
-            return std::unexpected("DH Z-vector: fresh final residual exceeds requested tolerance.");
-        out.z_ai=unpack(z);
-        out.elapsed_seconds=std::chrono::duration<double>(std::chrono::steady_clock::now()-start).count();
+        DHZVectorResult out;
+        auto z=solve_packed_zvector(action,-pack(rhs_ai),diagonal,options,out,"DH Z-vector");
+        if (!z) return std::unexpected(z.error());
+        out.z_ai=unpack(*z);
         return out;
     }
 }

@@ -9,7 +9,7 @@ tags: [status, completion, validated, canonical]
 
 # Completion Status
 
-Last updated: 2026-11-07
+Last updated: 2026-11-10
 
 This is the canonical completion-status document for the repository.
 Subsystem handoff, plan, benchmark, and fix-summary notes may still exist for
@@ -36,7 +36,7 @@ historical design context, but they are no longer the source of truth for
 - Symmetry detection, MO irrep labeling, and SAO-blocked Fock diagonalization
 - Wavefunction stability analysis for RHF/UHF, plus optional instability following
 - Mulliken, Lowdin, Mayer, dipole, quadrupole, and related property reporting
-- PCM solvation for single-point RHF/UHF runs
+- C-PCM solvation for RHF/UHF energies, analytic gradients, geometry optimization and frequencies
 - **SOSCF for RHF, UHF, RKS, and UKS** (second-order, augmented-Hessian
   orbital step convergence acceleration), reusing the CASSCF CIAH solver
   and `apply_orbital_rotation` unchanged for all four. Runs as a transient
@@ -161,7 +161,8 @@ historical design context, but they are no longer the source of truth for
   with the recurrence oracle — both mutation-verified: re-introducing the defect
   fails exactly L = 3,4,5 (max|∇²| 2.2e-1/1.8e-1/8.4e-2) while L <= 2 and L = 6
   stay green. The i-shell (L=6) path bypasses the pseudoinverse for the
-  recurrence oracle and remains unchecked cross-code; see `vault/Status/Open Work.md`.
+  recurrence oracle; Ne/cc-pV6Z matches PySCF to every printed digit
+  (−128.5470611007 Eh, 2026-11-09, run by hand because it is too heavy for the suite).
 
 ### Post-HF methods
 
@@ -377,7 +378,7 @@ historical design context, but they are no longer the source of truth for
   grid in `039bd2df`), `calculation gradient` only. Same Lagrangian with
   per-spin densities, three amplitude blocks (c, 2c, c), alpha/beta coupling
   only through J and the cross-spin XC kernel, and a joint alpha-then-beta
-  Z-vector (`src/dft/udh_*.cpp`). Dense implementation (see Open Work).
+  Z-vector (`src/dft/udh_*.cpp`). Partly dense (see Open Work).
   Scope: conventional all-active UMP2 with stored T2, no solvent, no range
   separation, and the pinned grid `grid_policy g4-3-v4` + `grid_radial_points
   135` (`validate_qualified_uks_dh_grid`). Fourth-order FD on C1 H2O2+, HO2 and
@@ -391,12 +392,12 @@ historical design context, but they are no longer the source of truth for
   energy/potential/kernel L1 limits and passed a blind suite frozen before its
   first run. On live UKS DH gradients it cut the rotational-covariance error
   from 2.2e-5 (legacy) to 1.1e-7 Ha/Bohr. Opt-in; `legacy` stays the default
-  (`docs/DFT_GRID_CONVERGENCE_SCOPE.md`).
+  (`docs/DFT_GRID_CONVERGENCE.md`).
 - Treutler-Ahlrichs radial grid, Lebedev angular grid, and Becke partitioning
 - Grid quality levels: Coarse, Normal, Fine, UltraFine, with explicit
   `grid_radial_points` / `grid_angular_points` overrides and versioned
   `grid_policy` pruning schedules
-- Single-point PCM solvation for RKS/UKS
+- C-PCM solvation for RKS/UKS energies, analytic gradients, geometry optimization and frequencies
 - Linear-response TDDFT / Casida and TDA excited states
 - Hybrid and range-separated TDDFT (2026-10-16, `docs/RS_TDDFT.md`).
   The full-Casida B-matrix exact-exchange term used `(ia|bj)` instead of
@@ -428,6 +429,189 @@ historical design context, but they are no longer the source of truth for
 - PySCF-validated He2/cc-pVDZ counterpoise decomposition
 
 ### Recent fixes now considered landed
+
+- **UKS double-hybrid gradient: one architecture with RKS, accepted
+  (2026-11-10, `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md`, now an answer).**
+  RKS and UKS share the derivative contraction, pair stream, GMRES Z-vector
+  and Eq. 40 MO sectors; production keeps no dense path. The full
+  `udh_molecular_audit.py` passes on the V4 grid: every open-shell fixture
+  ≤ 4.3e-9 Ha/Bohr (water cation 6-31G 1.1e-9), closed-shell UKS = RKS to
+  1.1e-11, RKS full-coordinate FD ≤ 1.2e-8, all nine scope refusals. Two
+  findings on the way: three refusal expectations in the audit predated
+  production support and aborted it; and the CN fixture had started from
+  `guess hcore` on a UKS saddle (λ_min −0.0173, 9.7 mEh above the SAD-guess
+  ground state), where it missed by ~8e-8 along the bond. From `guess sad`
+  it passes at 7.8e-10. UKS amplitude tiles are deferred to RI-DH.
+
+- **No dense double-hybrid gradient path in production (2026-11-10,
+  `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md` step 1).** The RKS DH code
+  kept dense reference adapters that only tests reached: n_ao^4 Eq. 46/47
+  tensors behind a `DHGammaStorage` switch, dense h/S/ERI derivative arrays,
+  a direct Eq. 47 backtransform, a one-argument reference contract and a
+  `mo_eri` stationary overload. All are gone (`dh_pt2_gradient.{h,cpp}` net
+  -450 lines), with `build_dh_ks_fixed_density_fock_derivative`, which had no
+  caller. A contract built without the direct callbacks now fails with a named
+  error instead of falling back to a dense path. Tests rebuild the dense views
+  from the production stream in `tests/dh_dense_oracle.h`. RKS B2PLYP gradients
+  on water and C1 H2O2 are identical to every printed digit; 29 DH/UDH ctest
+  entries and 99 Python contracts pass; a mutation of the Eq. 46 exchange
+  factor fails the rewritten oracle comparisons.
+
+- **A `types.h` edit no longer recompiles the CC kernel registry (2026-11-10,
+  `aa51df70`).** `cc/common.h` and `cc/tensor_backend.h` included `types.h`
+  (directly and through `shellpair.h`) only for `Calculator&` and
+  `ShellPair` reference parameters; both now forward-declare them. The
+  registry, the largest TU, was recompiled once per target on every
+  `types.h` edit.
+
+- **UMP2 no longer copies its amplitudes into the Calculator (2026-11-10,
+  `bea7dd8b`, `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md` step 0).**
+  `apply_ump2_result` copied `t2_aa/ab/bb` into `calculator._mp2_result` on
+  every UMP2 run and nothing read them: a full extra amplitude set per run,
+  for every UMP2 caller. Deleted with the three `types.h` fields. The 11 UMP2
+  and UKS double-hybrid regression cases pass.
+
+- **UKS double hybrids read Eq. 40 MO sectors, not full MO tensors
+  (2026-11-10, `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md` step 3).** The
+  UKS gradient transformed three full `n⁴` MO ERI tensors (αα, αβ, ββ).
+  `build_dh_eq40_mo_eri_blocks_direct` now takes a separate frame per
+  electron and builds, for each spin pair, the same five sectors RKS uses
+  (ovov, vvov, ooov, ovvv, ovoo). Gradients and energies are bitwise
+  identical on all six `uks_u0` fixtures, the regression case and both RKS
+  inputs. By element count the MO integrals shrink 8.6× for a water cation
+  in cc-pVTZ (409 → 48 MiB); the AO tensor is now the largest UKS object.
+
+- **One Z-vector solver for RKS and UKS double hybrids (2026-11-10,
+  `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md` step 2).** The UKS gradient
+  built its joint α/β KS Jacobian column by column (1 + 2n response actions)
+  and solved it by pivoted QR. Both spins now call `solve_packed_zvector`, the
+  matrix-free GMRES the RKS path already used. On C1 H2O2⁺ that is 46 actions
+  instead of 119, and the count now tracks GMRES iterations rather than pair
+  count. UKS gradients moved ≤ 6.5e-13 Ha/Bohr on all six `uks_u0` fixtures;
+  RKS is bitwise unchanged. The solver takes `A z = b` (the old UKS solve was
+  `A^T z`); the physical Hessian is self-adjoint, and the tests check that
+  against a dense oracle (`tests/dh_zvector_oracle.h`), which replaces the
+  deleted `DHZVectorBackend::DenseReference`.
+
+- **UKS double-hybrid gradient restored on one streamed path (2026-11-09,
+  `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md`).** Every UKS DH gradient had
+  failed since `d72742df` (2026-10-12), which left the dense UKS consumer reading
+  derivative arrays that were no longer filled. No regression case ran the path.
+  RKS and UKS now share one spin-general pair stream
+  (`for_each_dh_pair_ao_block`), one two-particle source and one assembly
+  (`build_dh_eq33_direct_non_xc_gradient`), and UKS keeps none of its six `n⁴`
+  tensors. Fourth-order energy FD on the V4 grid: C1 H2O2⁺ 4.3e-9, HO2 1.8e-9,
+  asymmetric water cation 9.1e-10 Ha/Bohr; translation ≤ 3.8e-13. RKS gradients
+  are bitwise unchanged. Closed-shell `scf_type uhf` is within 2.4e-11 Ha/Bohr of
+  RKS. Four mutations fail the contract test. Gated by
+  `h2o2_cation_uks_b2plyp_v4_gradient_sto3g`.
+
+- **Open decisions and full-symmetry gates settled (2026-11-09).** Three
+  changes, core suite 137/137:
+  - Yukawa and Gaussian screened exchange are refused by name at functional
+    setup, so no workflow evaluates the erf kernel under their name. PySCF does
+    make that substitution, which is why agreeing with it proved nothing. Gated
+    by `water_{scf,tddft}_camy_b3lyp_rejected_sto3g`.
+  - The default guess stays `hcore`. Both binaries warn when a UHF or UKS run
+    with multiplicity above 1 starts from it without `stability_check`
+    (`SCF::warn_open_shell_hcore_guess`). Checked on one UHF and one UKS case,
+    and absent on a case that runs the stability check.
+  - `RYS_MAX_ROOTS` is 13, not 11. (ii|ii) needs 13 roots, so any quartet of
+    total L ≥ 22 indexed past the root table and aborted on the default engine.
+    Only L = 6 reaches it. `planck-rys-roots` covers n = 12 and 13 with the
+    existing bounds (moment error ≤ 1.3e-13). This is what let the i-shell
+    cross-code check run: Ne/cc-pV6Z equals PySCF to every printed digit.
+  - New RHF/STO-3G gates at D3h, Oh, D∞h, C∞v and Kh match PySCF to ≤ 1.3e-9 Eh.
+    The full-group ERI reduction is active for D3h and Oh only. D∞h, C∞v and Kh
+    detect the group and converge without it.
+  - `test_dh_o5_backtransform.py` had been stale since `d72742df` and nothing ran
+    it. Its assertions now match the tiled streams, and ctest runs it as
+    `planck-dh-o5-backtransform-contract`.
+
+- **PCM geometry optimization and frequencies (2026-11-08,
+  `docs/PCM_GEOMETRY.md` step 5; the scope is now an answer).** The
+  HF geomopt step, every Hessian displacement and the post-optimization
+  symmetry SCF each build the cavity at their own geometry, pass it to the
+  SCF, and add `Gradient::pcm_gradient`. Before this, they ran without PCM
+  and nothing reported it. planck-dft already rebuilt the cavity in
+  `prepare_current_geometry`. Against PySCF 2.13.0 (`geometric_solver`
+  gau_tight, analytic PCM Hessian): water RHF/6-31G* E_opt 1.3e-9 Eh,
+  frequencies within 0.31 cm⁻¹; water RKS PBE E_opt to every printed digit
+  (`water_rhf_pcm_swig_geomoptfreq_631gd`,
+  `water_rks_pbe_pcm_swig_geomopt_631gd`). Removing the cavity from any of
+  the three loops, or the PCM term from the geomopt gradient, fails the
+  gate. Imaginary-mode following under PCM stays rejected (not gated).
+
+- **Analytic PCM gradients (2026-11-08, `docs/PCM_GEOMETRY.md`
+  step 4).** `calculation gradient` with C-PCM runs for RHF, UHF, RKS and
+  UKS, Cartesian and spherical. `Gradient::pcm_gradient` re-solves the
+  charges at the converged density and adds three terms. `grad_nuc` and
+  `grad_solver` (the cavity terms, through the tessera positions and the
+  SWIG switching F_i) live in `pcm.cpp`. `grad_qv` is a shell-block
+  derivative kernel, `_compute_electronic_potential_gradient`, that reuses
+  the point-charge VRR with 2α/2β-weighted slices and takes the
+  charge-centre term from translation invariance. Each term matches FD
+  (`planck-pcm-cavity-gradient-fd`, `planck-pcm-qv-gradient-fd`), and each
+  matches PySCF 2.13.0's `grad_nuc`/`grad_qv`/`grad_solver` to all ten
+  printed digits on C1 H2O2. Totals match PySCF to every printed digit on
+  four cases (`*_pcm_swig_gradient_*`; DFT 1.6e-11), and a five-point FD of
+  the SCF energy to 4.2e-8 Ha/Bohr. Dropping any one term fails every
+  gate. Cost: 0.46 s of a 33 s anthracene/6-31G* run. Geomopt and
+  frequencies followed the same day (step 5, entry above). Found on the way:
+  `planck-esp-points` had failed since the SWIG cavity, because its
+  hand-built tesserae left ξ = 0; fixed in the test.
+
+- **Spherical PCM single points (2026-11-08, `docs/PCM_GEOMETRY.md`
+  step 6).** `evaluate_pcm_reaction_field` lifts the working density to
+  Cartesian for φ_el and returns V_rxn in the working basis, so every
+  caller (HF SCF, DFT SCF, ESP reaction field) works unchanged. The
+  refusals in both binaries are removed. Water RHF, water⁺ UHF and water
+  RKS PBE/6-31G* match PySCF 2.13.0 `cart=False` C-PCM to every printed
+  digit (`*_pcm_swig_spherical_631gd`). The Cartesian path is unchanged:
+  both lifts are the identity there.
+
+- **Smooth SWIG PCM cavity (2026-11-07, `docs/PCM_GEOMETRY.md` step
+  1).** The cavity used Fibonacci points with a hard bury test, so the
+  energy jumped as points crossed sphere boundaries. It is now SWIG, as in
+  PySCF's C-PCM: Lebedev points, a smooth switching function, and Gaussian
+  surface charges. `_os_nuclear_primitive` takes the Gaussian exponent; point
+  charges print identical output on eight non-PCM inputs. Three things a
+  user sees change:
+  - f(ε) is (ε−1)/ε (the old factor was COSMO's);
+  - H uses the modified Bondi radius 1.1 Å;
+  - `surface_points_per_atom` is a Lebedev size, default 302.
+
+  Four new 6-31G* gates (water RHF, C1 H2O2 RHF, water⁺ UHF, water RKS PBE)
+  match PySCF 2.13.0 to every printed digit. An O–H stretch gate
+  (`water_rhf_pcm_smoothness_sto3g`) holds the fourth difference of E to
+  2.3e-9; the old cavity fails it at 4.4e-5. The five existing PCM cases
+  were re-pinned. The orientation dependence (5.2e-6 Eh at 302 points, the
+  same as PySCF) is accepted: `docs/PCM_ROTATIONAL_INVARIANCE.md`.
+
+  Step 2 followed: the cavity stores no AO matrices. S is factored once,
+  and φ_el and V_rxn are one fused integral sweep each per SCF iteration.
+  It trades time for memory. With direct SCF and the two binaries run back
+  to back: naphthalene/6-31G* went from 14.3 s and 0.63 GB to 30.1 s and
+  0.13 GB, and anthracene from 37.4 s and 1.40 GB to 76.6 s and 0.20 GB,
+  with the same energies and iteration counts. (A first report of
+  157 → 118 s came from a conventional run whose 6 GB ERI tensor put this
+  8 GiB machine under memory pressure. It was wrong.)
+
+  Step 3 won the time back. Point-charge integrals (V_ne, V_rxn, ESP, φ_el)
+  are now built per shell pair: one VRR per primitive pair and charge,
+  contracted over primitives (and charges), one HRR per component pair, and
+  batched Boys. φ_el is dynamically scheduled. Per iteration, φ_el is
+  2.6–2.8× faster and V_rxn 4.8–5.3× faster. Back to back, naphthalene
+  and anthracene PCM runs take 13.7–13.9 s and 35.8–35.9 s, against
+  13.5–13.7 s and 35.2–35.3 s for the stored-matrix design, with 5–7× less
+  memory. Non-PCM output is unchanged to printed digits, apart from signed
+  zeros and two basin selections. HI⁺'s degenerate π hole picks a different
+  orientation at the same energy. `ethylene_rhf_stability_unstable` was
+  exact D2d twisted ethylene, whose basin roundoff chose (in PySCF too).
+  Its input now pyramidalizes one CH₂ by 0.20 Å and uses SAD, and is
+  re-pinned to −77.3844126695, matching PySCF to every printed digit.
+  Core 132/132; extended 215/219, the failures being the four known RCCSDT
+  routing cases.
 
 - **Test infrastructure: live asserts, no Eigen tests, CI builds the tests
   (2026-11-07).** Three fixes in `CMakeLists.txt` and

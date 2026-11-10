@@ -1,5 +1,7 @@
 #include "post_hf/cc/generated_arbitrary_runtime.h"
 
+#include "base/types.h"
+
 #include <algorithm>
 #include <exception>
 #include <format>

@@ -495,9 +495,8 @@ int main(int argc,const char **argv)
                 std::pair{"xc_point",&ledger.xc.point_translation}})
             { out<<",\""<<name<<"\":"; matrix(out,*m); }
             for(auto [name,v]:{std::pair{"h",&ledger.non_xc.one_electron},std::pair{"overlap_term",&ledger.non_xc.overlap},
-                std::pair{"J",&ledger.non_xc.coulomb},std::pair{"Ka",&ledger.non_xc.exchange_alpha},
-                std::pair{"Kb",&ledger.non_xc.exchange_beta},std::pair{"pair_aa",&ledger.non_xc.pair_aa},
-                std::pair{"pair_ab",&ledger.non_xc.pair_ab},std::pair{"pair_bb",&ledger.non_xc.pair_bb}})
+                std::pair{"two_electron_separable",&ledger.non_xc.two_electron_separable},
+                std::pair{"two_electron_nonseparable",&ledger.non_xc.two_electron_nonseparable}})
             { out<<",\""<<name<<"\":"; matrix(out,*v); }
         }
         out<<"}\n";

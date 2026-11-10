@@ -1,5 +1,7 @@
 #include "post_hf/cc/common.h"
 
+#include "base/types.h"
+
 #include <algorithm>
 #include <cassert>
 #include <limits>

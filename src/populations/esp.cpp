@@ -119,7 +119,9 @@ HartreeFock::SCF::reaction_field_potential(
                     "diverges there (the ESP shells and the PCM cavity "
                     "overlap; check radius_scale against cavity_scale)");
 
-            acc += charges(static_cast<Eigen::Index>(i)) / distance;
+            // Gaussian surface charge (SWIG): erf(xi r)/r, ~1/r outside the cavity.
+            acc += charges(static_cast<Eigen::Index>(i)) *
+                   std::erf(surface_points[i].exponent * distance) / distance;
         }
         phi(static_cast<Eigen::Index>(k)) = acc;
     }

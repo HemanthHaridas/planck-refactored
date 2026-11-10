@@ -1,7 +1,9 @@
 // U9 common-functional integration oracle. Manufactured unequal-spin AO model,
 // NOT a molecular SCF/gradient acceptance test. No production switches.
 #include "dft/udh_two_particle_density.h"
-#include "dft/udh_zvector.h"
+#include "udh_dense_oracle.h"
+#include "dh_zvector_oracle.h"
+#include "udh_mo_sector_oracle.h"
 #include <Eigen/Eigenvalues>
 #include <Eigen/LU>
 #include <unsupported/Eigen/MatrixFunctions>
@@ -205,7 +207,7 @@ struct State
 {
     Orb f;
     std::array<Orb,5> f_channels;
-    UDHFullMOIntegrals full;
+    TestOracle::FullMOIntegrals full;
     UDHPT2DirectIntegrals direct;
     V b;
 };
@@ -320,26 +322,27 @@ AO xc_geometry(const Model &m,const Direction &d,const AO &p)
     return {((.3*a+.03*b)*da+(.13+.03*a)*db)*m.xa+(.15*a*a+.13*b+.03*a*b)*d.xa,
             ((.13+.03*a)*da+.2*b*db)*m.xb+(.10*b*b+.13*a+.015*a*a)*d.xb};
 }
-DHEq33NonXCDerivatives derivatives(const Model &m,const Direction &d)
+DFT::Gradient::TestOracle::DenseDerivatives derivatives(const Model &m,const Direction &d)
 {
-    DHEq33NonXCDerivatives out; out.hamiltonian_ao={d.h}; out.overlap_ao={d.s};
+    DFT::Gradient::TestOracle::DenseDerivatives out; out.hamiltonian_ao={d.h}; out.overlap_ao={d.s};
     std::vector<double> eri(n*n*n*n);
     for(int p=0;p<n;++p) for(int q=0;q<n;++q) for(int r=0;r<n;++r) for(int s=0;s<n;++s)
         for(int l=0;l<3;++l) eri[gi(p,q,r,s)]+=d.factors[l](p,q)*m.factors[l](r,s)+m.factors[l](p,q)*d.factors[l](r,s);
     out.eri_ao={std::move(eri)}; return out;
 }
-struct Contract { UDHTwoParticleDensity gamma; UDHOverlapDensity w; };
+struct Contract { DFT::Gradient::TestOracle::Tensors gamma; UDHOverlapDensity w; };
 Contract contract(const Fixture &x,const V &q,const Orb &z)
 {
     auto t=expand(q); auto dp=require(build_udh_pt2_dprime(t,scale));
-    auto pair=require(build_udh_pair_orbital_gradient(t,state(x.model,x.c).full,scale));
+    auto pair=require(build_udh_pair_orbital_gradient(t,TestOracle::sectors(state(x.model,x.c).full,t),scale));
     auto relaxed=require(build_udh_relaxed_difference_density(dp,z));
-    return {require(build_udh_two_particle_density(t,scale,relaxed,x.c,x.s,ax)),
+    const auto rho=require(build_udh_two_particle_density(t,scale,relaxed,x.c,x.s,ax));
+    return {DFT::Gradient::TestOracle::materialize(rho,make_udh_two_particle_source(rho,t,x.c)),
             require(build_udh_overlap_density(pair,relaxed,x.c,x.f,x.s,x.model.response(density(x.c))))};
 }
 std::array<double,9> analytic(const Fixture &x,const Direction &d,const Contract &c)
 {
-    auto g=require(build_udh_non_xc_gradient(c.gamma,c.w,derivatives(x.model,d)));
+    const auto g=DFT::Gradient::TestOracle::dense_non_xc(c.gamma,c.w.total_ao,derivatives(x.model,d));
     auto vx=xc_geometry(x.model,d,density(x.c));
     return {g.one_electron(0),g.coulomb(0),g.exchange_alpha(0),g.exchange_beta(0),
             dot(c.gamma.relaxed_ao.spin.alpha,vx.alpha)+dot(c.gamma.relaxed_ao.spin.beta,vx.beta),
@@ -419,8 +422,13 @@ void integration(const Fixture &x)
 {
     auto base=state(x.model,x.c); M amp=amplitude_matrix(base.f); V q=solve(amp,base.b);
     near(maxabs(base.f.alpha-x.f.alpha),0,2e-12); near(maxabs(base.f.beta-x.f.beta),0,2e-12);
-    auto rhs=require(build_udh_orbital_rhs(expand(q),base.full,scale,x.c,x.s,x.f,x.model.response(density(x.c))));
-    auto z=require(solve_udh_zvector({x.c,x.f,x.s,oa,ob,x.model.response(density(x.c))},rhs.total_ai));
+    auto rhs=require(build_udh_orbital_rhs(expand(q),TestOracle::sectors(base.full,oa,ob),scale,x.c,x.s,x.f,x.model.response(density(x.c))));
+    const UDHZVectorInputs zin{x.c,x.f,x.s,oa,ob,x.model.response(density(x.c))};
+    auto z=require(solve_udh_zvector(zin,rhs.total_ai));
+    // Production never forms the KS Jacobian; the FD checks below use the
+    // dense oracle built from the same public action.
+    const M jacobian=TestOracle::dense_udh_jacobian(zin);
+    near(maxabs(jacobian-jacobian.transpose()),0,2e-12);
     check(pack(rhs.total_ai).norm()>1e-6); check(pack(z.z_ai).norm()>1e-6);
     // All independent alpha/beta orbital directions; scalar FD, not analytic
     // RHS contractions, supplies the reference ell and KS Jacobian columns.
@@ -435,10 +443,10 @@ void integration(const Fixture &x)
         double fd_l=(total(scalar(plus,q,z.z_ai))-total(scalar(minus,q,z.z_ai)))/(2*h);
         V column=(pack(fvo(plus))-pack(fvo(minus)))/(2*h);
         near(fd,pack(rhs.total_ai)(k),3e-9);
-        near(maxabs(column-z.jacobian.col(k)),0,1e-7);
+        near(maxabs(column-jacobian.col(k)),0,1e-7);
         near(fd_l,0,3e-9);
         worst_rhs=std::max(worst_rhs,std::abs(fd-pack(rhs.total_ai)(k)));
-        worst_jacobian=std::max(worst_jacobian,maxabs(column-z.jacobian.col(k)));
+        worst_jacobian=std::max(worst_jacobian,maxabs(column-jacobian.col(k)));
         worst_stationarity=std::max(worst_stationarity,std::abs(fd_l));
         if(h==1e-4) { fd_rhs(k)=fd; fd_stationarity(k)=fd_l; fd_jacobian.col(k)=column; }
     }
@@ -448,8 +456,8 @@ void integration(const Fixture &x)
              <<"\nRHS scalar FD:\n"<<fd_rhs.transpose()
              <<"\nRHS error:\n"<<(fd_rhs-pack(rhs.total_ai)).transpose()
              <<"\nL orbital stationarity FD:\n"<<fd_stationarity.transpose()
-             <<"\nKS Jacobian analytic:\n"<<z.jacobian
-             <<"\nKS Jacobian FD error:\n"<<fd_jacobian-z.jacobian<<'\n';
+             <<"\nKS Jacobian analytic:\n"<<jacobian
+             <<"\nKS Jacobian FD error:\n"<<fd_jacobian-jacobian<<'\n';
     auto nonz=contract(x,q,zero_vo()),full=contract(x,q,z.z_ai);
     const std::array<const char*,5> names{"h","ERI","XC_geometry","metric","combined"};
     const std::array<const char*,9> labels{"h","J","Ka","Kb","XC-II","pair-aa","pair-ab","pair-bb","overlap"};
@@ -486,10 +494,10 @@ void integration(const Fixture &x)
             // equations at BOTH endpoints. This is a first-order SCF path,
             // not an endpoint SCF or molecular total-energy FD.
             V forcing=(pack(fvo(plus))-pack(fvo(minus)))/(2*h);
-            V u=solve(z.jacobian,V(-forcing));
+            V u=solve(jacobian,V(-forcing));
             double nonz_response=pack(rhs.total_ai).dot(u);
             double z_explicit=pack(z.z_ai).dot(forcing);
-            double z_response=pack(z.z_ai).dot(z.jacobian*u);
+            double z_response=pack(z.z_ai).dot(jacobian*u);
             near(nonz_response,z_explicit,2e-12); near(nonz_response+z_response,0,2e-12);
             auto livep=state(mp,moved_coeff(x,d,h,unpack(u)));
             auto livem=state(mm,moved_coeff(x,d,-h,unpack(u)));

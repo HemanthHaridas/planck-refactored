@@ -92,11 +92,13 @@ Design rule:
 - `tests/spherical_density_lift.cpp` lift-identity check (necessary but not sufficient on its own — see invariant 1)
 - No-regression checks on d-shell and below: cc-pVDZ unchanged at 3.3e-9; spherical 6-31g* regression suite (`be_ccsd`/`be_fci`/`water_rhf_freq`/`geomoptfreq` spherical) all pass
 
-## Remaining architecture concern: FU2, the i-shell (L=6) oracle path is unchecked against another code
+## FU2: the i-shell (L=6) oracle path matches PySCF
 
-`tests/inputs/regression/spherical/ne_rhf_spherical_ccpv6z_ishell.hfinp` exists and carries its reference inline (PySCF 2.13.0 RHF/cc-pV6Z spherical Ne = -128.5470611007 Eh), but is deliberately not registered as a regression case: Ne/cc-pV6Z is 140 spherical AOs, and the conventional `nb^4` ERI build makes it far too heavy for the suite (the h case, at only 91 AOs, already takes ~37 s).
+`tests/inputs/regression/spherical/ne_rhf_spherical_ccpv6z_ishell.hfinp` carries its reference inline (PySCF 2.13.0 RHF/cc-pV6Z spherical Ne = -128.5470611007 Eh). Measured 2026-11-09 with `scf_mode direct`, Planck gives -128.5470611007 Eh, equal to every printed digit, in 12 iterations. It stays unregistered: Ne/cc-pV6Z is 140 spherical AOs, too heavy for the suite (the h case, at only 91 AOs, already takes ~37 s).
 
-L = 6 is a structurally different code path from the L = 3,4,5 fix: it delegates entirely to the recurrence oracle (`cart_to_sph_block_recurrence`) and never touches `normalized_pseudoinverse`. A disagreement there would implicate `spherical_recurrence.cpp`, not the pseudoinverse fix this document describes. `MAX_L = 6` makes this the top of the currently supported angular-momentum range, so closing FU2 would complete cross-code validation across the entire supported range. Expected accuracy, by analogy with f/g/h, is ~1e-9.
+L = 6 is a structurally different code path from the L = 3,4,5 fix: it delegates entirely to the recurrence oracle (`cart_to_sph_block_recurrence`) and never touches `normalized_pseudoinverse`, so a future disagreement there would implicate `spherical_recurrence.cpp`. `MAX_L = 6` is the top of the supported range, so cross-code validation now covers all of it.
+
+The check could not run until `RYS_MAX_ROOTS` was raised from 11 to 13: (ii|ii) needs 13 roots, and the default engine read past the root table and aborted.
 
 ## Historical investigation trail (falsified hypotheses, kept as guardrails)
 

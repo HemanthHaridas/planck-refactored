@@ -5,46 +5,99 @@
 //   build_pcm_state            — one-shot cavity + density-independent setup
 //   evaluate_pcm_reaction_field — per-SCF-iteration density-dependent solve
 //
-// The split is deliberate: every quantity that depends only on the geometry
-// (tesserae positions, areas, influence matrix, nuclear potential at the
-// surface, AO matrices for unit point charges at each tessera) is built once
-// in build_pcm_state. The hot-path evaluator only does:
-//   1. one Frobenius product per tessera against the current density,
-//   2. one Cholesky-class linear solve on the (npts x npts) influence matrix,
-//   3. one weighted sum of the cached unit-charge matrices to assemble V_rxn.
-// No shell-pair integrals are recomputed inside the SCF loop.
+// Everything that depends only on the geometry (tesserae, the LDLT factor of
+// the influence matrix, the nuclear potential at the surface) is built once
+// in build_pcm_state. Each SCF iteration then does:
+//   1. one fused sweep for the electronic potential at every tessera,
+//   2. one back-substitution with the stored factor,
+//   3. one attraction build over all the tessera charges for V_rxn.
+// No per-tessera AO matrix is stored: memory is O(n_tess^2), not
+// O(n_tess * nbasis^2), at the cost of two integral sweeps per iteration
+// (as PySCF does).
 // ─────────────────────────────────────────────────────────────────────────────
 
 #include "pcm.h"
-#include "base/sphere.h"
 
+#include <chrono>
 #include <cmath>
 #include <format>
+#include <map>
 #include <numbers>
 
 #include <Eigen/Cholesky>
 
+#include "basis/spherical.h"
+#include "dft/base/angular.h"
 #include "integrals/base.h"
 #include "io/logging.h"
 #include "lookup/elements.h"
 
 namespace
 {
-    // ISWIG diagonal correction factor for the C-PCM influence matrix
-    // (Pascual-Ahuir, Silla, Tunon). The bare D_ii = sqrt(4 pi / a_i) form
-    // approximates the self-energy of a uniformly charged disc of area a_i;
-    // multiplying by 1.07 was found empirically to give accurate solvation
-    // free energies across a wide range of solvents and cavity tessellations.
-    constexpr double ISWIG_DIAGONAL_SCALE = 1.07;
+    // zeta_N of the SWIG Gaussian width xi_i = zeta_N / (R sqrt(w_i)), per
+    // Lebedev size (York and Karplus, J. Phys. Chem. A 103, 11060 (1999),
+    // Table 1, as tabulated in PySCF solvent/pcm.py). A Lebedev size missing
+    // here (74, 230, 266) has no published zeta and is rejected.
+    const std::map<int, double> SWIG_ZETA = {
+        {6, 4.84566077868}, {14, 4.86458714334}, {26, 4.85478226219},
+        {38, 4.90105812685}, {50, 4.89250673295}, {86, 4.89741372580},
+        {110, 4.90101060987}, {146, 4.89825187392}, {170, 4.90685517725},
+        {194, 4.90337644248}, {302, 4.90498088169}, {350, 4.86879474832},
+        {434, 4.90567349080}, {590, 4.90624071359}, {770, 4.90656435779},
+        {974, 4.90685167998}, {1202, 4.90704098216}, {1454, 4.90721023869},
+        {1730, 4.90733270691}, {2030, 4.90744499142}, {2354, 4.90753082825},
+        {2702, 4.90760972766}, {3074, 4.90767282394}, {3470, 4.90773141371},
+        {3890, 4.90777965981}, {4334, 4.90782469526}, {4802, 4.90749125553},
+        {5294, 4.90762073452}, {5810, 4.90792902522}};
 
+    // Smoothstep h(x) = x^3 (10 - 15x + 6x^2), clamped to [0, 1]
+    // (Lange and Herbert, J. Chem. Phys. 133, 244111 (2010), Eq. 3.19).
+    double switch_h(double x)
+    {
+        if (x <= 0.0)
+            return 0.0;
+        if (x >= 1.0)
+            return 1.0;
+        return x * x * x * (10.0 - 15.0 * x + 6.0 * x * x);
+    }
+
+    // h'(x) = 30 x^2 (1 - x)^2 inside (0, 1), zero outside.
+    double switch_dh(double x)
+    {
+        if (x <= 0.0 || x >= 1.0)
+            return 0.0;
+        return 30.0 * x * x * (1.0 - x) * (1.0 - x);
+    }
+
+    // d/dr [erf(xi r) / r], the radial derivative of the Gaussian-charge
+    // Coulomb kernel.
+    double erf_kernel_dr(double xi, double r)
+    {
+        return 2.0 * xi / std::sqrt(std::numbers::pi) * std::exp(-xi * xi * r * r) / r -
+               std::erf(xi * r) / (r * r);
+    }
 } // namespace
 
 // One-shot cavity + density-independent precomputation. After this returns,
 // PCMState contains everything the per-iteration evaluator needs.
+//
+// SWIG discretization (Lange and Herbert 2010), the scheme PySCF's C-PCM uses
+// by default, so the two agree tightly:
+//   - each atom J carries a sphere of radius R_J = cavity_scale * R_J^vdW
+//     (modified Bondi: Bondi with H = 1.1 A), sampled by an N-point Lebedev
+//     grid with weights w_i (sum 4 pi);
+//   - a point i on atom A's sphere is faded out as it is buried in another
+//     sphere J by F_i = prod_{J != A} h((r_iJ - R_in,J) / R_sw,J), with
+//     R_sw = R sqrt(14/N), alpha = 1/2 + R/R_sw - sqrt((R/R_sw)^2 - 1/28),
+//     R_in = R - alpha R_sw. F is smooth in the geometry, so tesserae fade
+//     in and out instead of appearing and vanishing;
+//   - each tessera carries a normalized Gaussian charge of width
+//     xi_i = zeta_N / (R sqrt(w_i)), which makes every Coulomb element finite
+//     (erf(xi_ij r)/r between tesserae, erf(xi r)/r against the solute).
+// The self term S_ii = xi_i sqrt(2/pi) / F_i diverges as F_i -> 0, so a
+// fading tessera's charge goes smoothly to zero.
 std::expected<HartreeFock::Solvation::PCMState, std::string>
-HartreeFock::Solvation::build_pcm_state(
-    const HartreeFock::Calculator &calculator,
-    const std::vector<HartreeFock::ShellPair> &shell_pairs)
+HartreeFock::Solvation::build_pcm_state(const HartreeFock::Calculator &calculator)
 {
     PCMState state;
     // Solvation off → return an "enabled() == false" state. Callers can pass
@@ -52,169 +105,127 @@ HartreeFock::Solvation::build_pcm_state(
     // operator.
     if (calculator._solvation._model == HartreeFock::SolvationModel::None)
         return state;
+    const auto t_setup = std::chrono::steady_clock::now();
 
-    const int points_per_atom = calculator._solvation._surface_points_per_atom;
-    // Six is the minimum that gives a non-degenerate octahedral-ish coverage
-    // of a sphere; any fewer and the cavity is essentially undefined.
-    if (points_per_atom < 6)
-        return std::unexpected("PCM requires at least 6 surface points per atom");
+    const int ngrid = calculator._solvation._surface_points_per_atom;
+    const auto zeta = SWIG_ZETA.find(ngrid);
+    if (zeta == SWIG_ZETA.end())
+        return std::unexpected(std::format(
+            "PCM surface_points_per_atom {} is not a supported Lebedev size "
+            "(6, 14, 26, 38, 50, 86, 110, 146, 170, 194, 302, 350, 434, 590, ...)",
+            ngrid));
+    const auto lebedev = DFT::MakeLebedevGrid(ngrid);
+    if (!lebedev)
+        return std::unexpected("PCM cavity setup failed: " + lebedev.error());
 
-    // ── Atomic sphere radii ──────────────────────────────────────────────────
-    // Each atom A is wrapped in a sphere of radius R_A = s * R_A^vdW, where
-    // s = cavity_scale (default 1.2 — the standard Bondi-radius PCM choice)
-    // and R_A^vdW comes from the periodic-table lookup table in Angstrom.
-    const auto sphere_directions = fibonacci_sphere(points_per_atom);
-    std::vector<double> radii_bohr;
-    radii_bohr.reserve(calculator._molecule.natoms);
+    const auto &molecule = calculator._molecule;
+    const std::size_t natoms = molecule.natoms;
 
-    for (std::size_t atom = 0; atom < calculator._molecule.natoms; ++atom)
+    std::vector<double> radius(natoms), r_sw(natoms), r_in(natoms);
+    for (std::size_t atom = 0; atom < natoms; ++atom)
     {
         const auto element = element_from_z(static_cast<std::uint64_t>(
-            calculator._molecule.atomic_numbers(static_cast<Eigen::Index>(atom))));
+            molecule.atomic_numbers(static_cast<Eigen::Index>(atom))));
         if (!element)
             return std::unexpected("PCM cavity setup failed: " + element.error());
 
-        radii_bohr.push_back(
-            calculator._solvation._cavity_scale *
-            element->radius *
-            ANGSTROM_TO_BOHR);
+        // Modified Bondi: H is 1.1 A for continuum cavities (Rowland and
+        // Taylor), not the 1.2 A of the general vdW table.
+        const double vdw = element->Z == 1 ? 1.1 : element->radius;
+        radius[atom] = calculator._solvation._cavity_scale * vdw * ANGSTROM_TO_BOHR;
+        r_sw[atom] = radius[atom] * std::sqrt(14.0 / ngrid);
+        const double ratio = radius[atom] / r_sw[atom];
+        r_in[atom] = radius[atom] - (0.5 + ratio - std::sqrt(ratio * ratio - 1.0 / 28.0)) * r_sw[atom];
     }
 
-    // ── Tessellation with bury-test pruning ──────────────────────────────────
-    // For each atom: place points_per_atom Fibonacci-sphere points on the
-    // atom's sphere, then discard any that fall inside another atom's sphere
-    // (that point is "buried" — it's inside the cavity, not on its surface).
-    // What survives is an approximation to the solvent-accessible surface.
-    //
-    // No inter-sphere smoothing is applied. This is simpler than GEPOL/SES
-    // schemes but can introduce small ripples in the energy as a function of
-    // geometry — fine for single-point energies but a reason analytic
-    // gradients are not implemented.
-    for (std::size_t atom = 0; atom < calculator._molecule.natoms; ++atom)
+    for (std::size_t atom = 0; atom < natoms; ++atom)
     {
-        const Eigen::Vector3d center = calculator._molecule._standard.row(static_cast<Eigen::Index>(atom));
-        const double radius = radii_bohr[atom];
-        // Equal-area weights: 4 pi R^2 / N_points. This is exact for the
-        // pre-pruning sphere; surviving points inherit the same area, which
-        // slightly under-counts area near sphere intersections. Acceptable
-        // for typical organic chemistry use cases.
-        const double area_per_point =
-            4.0 * std::numbers::pi * radius * radius / static_cast<double>(points_per_atom);
-
-        for (const auto &direction : sphere_directions)
+        const Eigen::Vector3d center = molecule._standard.row(static_cast<Eigen::Index>(atom));
+        for (Eigen::Index g = 0; g < lebedev->rows(); ++g)
         {
-            const Eigen::Vector3d point = center + radius * direction;
-            bool buried = false;
-            for (std::size_t other = 0; other < calculator._molecule.natoms; ++other)
+            const Eigen::Vector3d direction = lebedev->row(g).head<3>().transpose();
+            const double weight = (*lebedev)(g, 3);
+            const Eigen::Vector3d point = center + radius[atom] * direction;
+
+            double switching = 1.0;
+            for (std::size_t other = 0; other < natoms && switching > 0.0; ++other)
             {
                 if (other == atom)
                     continue;
-
-                const Eigen::Vector3d other_center = calculator._molecule._standard.row(static_cast<Eigen::Index>(other));
-                const double other_radius = radii_bohr[other];
-                // squaredNorm avoids the sqrt — strict interior test.
-                if ((point - other_center).squaredNorm() < other_radius * other_radius)
-                {
-                    buried = true;
-                    break;
-                }
+                const Eigen::Vector3d other_center = molecule._standard.row(static_cast<Eigen::Index>(other));
+                double x = ((point - other_center).norm() - r_in[other]) / r_sw[other];
+                if (x < 1e-8) // PySCF's cutoff, kept so both prune the same points
+                    x = 0.0;
+                switching *= switch_h(x);
             }
 
-            if (!buried)
-            {
-                state.surface_points.push_back(
-                    PCMSurfacePoint{
-                        .position = point,
-                        .area = area_per_point,
-                        .atom_index = atom});
-            }
+            // Same pruning threshold as PySCF: a tessera whose weight has
+            // faded below 1e-16 contributes nothing but a near-singular row.
+            if (weight * switching <= 1e-16)
+                continue;
+
+            state.surface_points.push_back(PCMSurfacePoint{
+                .position = point,
+                .area = weight * radius[atom] * radius[atom] * switching,
+                .exponent = zeta->second / (radius[atom] * std::sqrt(weight)),
+                .switching = switching,
+                .atom_index = atom});
         }
     }
 
-    // Pathological-but-possible case: points_per_atom too small or atoms too
-    // close together to expose any surface. Fail loudly rather than letting
-    // a zero-tessera cavity propagate (which would produce a degenerate D
-    // and a NaN reaction field).
     if (state.surface_points.empty())
         return std::unexpected("PCM cavity generation failed: all surface points were buried");
 
     // ── Density-independent precomputation ───────────────────────────────────
     // For each tessera i:
-    //   - phi_nuc_i: the nuclei's contribution to the total potential at s_i
-    //   - V^(i): the AO matrix of a unit point charge at s_i — this is what
-    //     the SCF loop will weight by the (density-dependent) apparent charge
-    //     q_i to assemble V_rxn
-    //   - influence-matrix row D_i*: 1/|s_i - s_j| off-diagonal, ISWIG diagonal
+    //   - phi_nuc_i = sum_A Z_A erf(xi_i r_iA) / r_iA
+    //   - S_ij = erf(xi_ij r_ij) / r_ij, xi_ij = xi_i xi_j / sqrt(xi_i^2 + xi_j^2);
+    //     S_ii = xi_i sqrt(2/pi) / F_i, factored once here.
+    // No AO integrals: the electronic potential and V_rxn are fused sweeps in
+    // evaluate_pcm_reaction_field, so nothing n_tess x nbasis^2 is stored.
     const Eigen::Index npoints = static_cast<Eigen::Index>(state.surface_points.size());
     state.nuclear_potential = Eigen::VectorXd::Zero(npoints);
-    state.influence_matrix = Eigen::MatrixXd::Zero(npoints, npoints);
-    state.unit_potential_matrices.reserve(static_cast<std::size_t>(npoints));
+    state.switch_inner = std::move(r_in);
+    state.switch_width = std::move(r_sw);
 
     for (Eigen::Index i = 0; i < npoints; ++i)
     {
         const auto &site = state.surface_points[static_cast<std::size_t>(i)];
-
-        // Nuclear potential at this tessera. Coordinates are in Bohr (the
-        // _standard frame) so this gives Hartree atomic units directly.
-        for (std::size_t atom = 0; atom < calculator._molecule.natoms; ++atom)
+        for (std::size_t atom = 0; atom < natoms; ++atom)
         {
-            const Eigen::Vector3d nucleus = calculator._molecule._standard.row(static_cast<Eigen::Index>(atom));
-            const double charge = calculator._molecule.nuclear_charge(atom);
+            const Eigen::Vector3d nucleus = molecule._standard.row(static_cast<Eigen::Index>(atom));
             const double distance = (site.position - nucleus).norm();
-            if (distance < 1.0e-6)
-                return std::unexpected("PCM tessera coincides with a nucleus");
-            state.nuclear_potential(i) += charge / distance;
-        }
-
-        // V^(i) = AO matrix of a single +1 charge at s_i. We re-use the same
-        // Obara-Saika nuclear-attraction kernel that builds V_ne for the
-        // molecule, just with a one-element charge list. No symmetry ops are
-        // passed: the reaction-field operator is built in the full AO basis,
-        // and SAO blocking happens elsewhere when symmetry is enabled.
-        std::vector<HartreeFock::ExternalCharge> unit_charge{
-            HartreeFock::ExternalCharge{.position = site.position, .charge = 1.0}};
-        state.unit_potential_matrices.push_back(
-            _compute_external_charge_attraction(
-                shell_pairs,
-                calculator._shells.nbasis(),
-                unit_charge,
-                calculator._integral._engine,
-                nullptr));
-
-        // Influence-matrix row. The diagonal element is the self-interaction
-        // of a smeared surface charge with itself (the bare 1/r form would
-        // diverge for a true point charge); see the ISWIG_DIAGONAL_SCALE
-        // comment at the top of this file for the empirical 1.07 factor.
-        for (Eigen::Index j = 0; j < npoints; ++j)
-        {
-            if (i == j)
-            {
-                state.influence_matrix(i, j) =
-                    ISWIG_DIAGONAL_SCALE *
-                    std::sqrt(4.0 * std::numbers::pi / site.area);
-            }
-            else
-            {
-                const double distance =
-                    (site.position - state.surface_points[static_cast<std::size_t>(j)].position).norm();
-                state.influence_matrix(i, j) = 1.0 / distance;
-            }
+            state.nuclear_potential(i) +=
+                molecule.nuclear_charge(atom) * std::erf(site.exponent * distance) / distance;
         }
     }
 
-    // f(eps) = (eps - 1) / (eps + 1/2). C-PCM (Klamt-Schuurmann) form:
-    // interpolates between vacuum (eps=1 → f=0, no polarization) and a
-    // perfect conductor (eps→∞ → f=1). The "+ 1/2" is what makes this the
-    // conductor-like flavour rather than the strict-conductor (COSMO) form
-    // (which uses "+ 0").
+    const Eigen::MatrixXd influence = pcm_influence_matrix(state.surface_points);
+    const auto t_factor = std::chrono::steady_clock::now();
+    state.influence_factor.compute(influence);
+    if (state.influence_factor.info() != Eigen::Success)
+        return std::unexpected("PCM surface linear system factorization failed");
+    if (calculator._output._verbosity >= HartreeFock::Verbosity::Verbose)
+    {
+        const auto t_end = std::chrono::steady_clock::now();
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "PCM Setup Timing :",
+            std::format("cavity + S {:.3f} s, LDLT {:.3f} s",
+                        std::chrono::duration<double>(t_factor - t_setup).count(),
+                        std::chrono::duration<double>(t_end - t_factor).count()));
+    }
+
+    // C-PCM: f(eps) = (eps - 1) / eps (Barone and Cossi 1998; PySCF's
+    // 'C-PCM'). Klamt's COSMO uses (eps - 1) / (eps + 1/2); this code used
+    // that factor under the C-PCM name until the SWIG cavity landed.
     const double epsilon = calculator._solvation._dielectric;
-    state.dielectric_factor = (epsilon - 1.0) / (epsilon + 0.5);
+    state.dielectric_factor = (epsilon - 1.0) / epsilon;
 
     HartreeFock::Logger::logging(
         HartreeFock::LogLevel::Info,
         "PCM :",
         std::format(
-            "C-PCM cavity with {} surface points, epsilon = {:.4f}, scale = {:.3f}",
+            "C-PCM (SWIG) cavity with {} surface points, epsilon = {:.4f}, scale = {:.3f}",
             state.surface_points.size(),
             epsilon,
             calculator._solvation._cavity_scale));
@@ -238,63 +249,79 @@ HartreeFock::Solvation::build_pcm_state(
 std::expected<HartreeFock::Solvation::PCMResult, std::string>
 HartreeFock::Solvation::evaluate_pcm_reaction_field(
     const HartreeFock::Calculator &calculator,
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
     const PCMState &state,
     const Eigen::MatrixXd &total_density)
 {
     PCMResult result;
+    // The density arrives and V_rxn leaves in the SCF's working basis; the
+    // integrals run in Cartesian. Both lifts are the identity in Cartesian mode.
+    const auto nbasis = calculator._shells.nbasis();
     // Solvation off → hand back a zero reaction field so the caller can
     // unconditionally do F = F_gas + V_rxn without branching.
     if (!state.enabled())
     {
-        result.reaction_potential =
-            Eigen::MatrixXd::Zero(calculator._shells.nbasis(), calculator._shells.nbasis());
+        const auto nwork = static_cast<Eigen::Index>(calculator.working_nbasis());
+        result.reaction_potential = Eigen::MatrixXd::Zero(nwork, nwork);
         return result;
     }
+    auto cart_density = HartreeFock::BasisFunctions::to_cartesian(calculator._shells, total_density);
+    if (!cart_density)
+        return std::unexpected("PCM density lift failed: " + cart_density.error());
 
-    const Eigen::Index npoints = static_cast<Eigen::Index>(state.surface_points.size());
+    std::vector<Eigen::Vector3d> positions;
+    std::vector<double> exponents;
+    positions.reserve(state.surface_points.size());
+    exponents.reserve(state.surface_points.size());
+    for (const auto &site : state.surface_points)
+    {
+        positions.push_back(site.position);
+        exponents.push_back(site.exponent * site.exponent);
+    }
 
-    // ── 1. phi_tot at each tessera = phi_nuc + phi_elec ──────────────────────
-    // The electronic part is sum_munu P_munu * V^(i)_munu — a single Frobenius
-    // product per tessera against the current density. The nuclear part is
-    // already cached in state.nuclear_potential.
-    //
-    // Sign convention: _compute_external_charge_attraction returns a matrix
-    // with the electron sign already folded in (it is built like a nuclear-
-    // attraction integral, which is conventionally negative). So the
-    // contraction P : V^(i) directly gives the electronic contribution to
-    // phi_tot with the correct sign.
-    result.total_potential = state.nuclear_potential;
-    for (Eigen::Index i = 0; i < npoints; ++i)
-        result.total_potential(i) +=
-            (total_density.array() * state.unit_potential_matrices[static_cast<std::size_t>(i)].array()).sum();
+    const auto t0 = std::chrono::steady_clock::now();
+    // ── 1. phi_tot at each tessera = phi_nuc - P : <mu| erf(xi r)/r |nu> ─────
+    // One fused sweep over the shell pairs, parallel over tesserae. It returns
+    // the positive contraction; the electron's charge is applied here.
+    result.total_potential =
+        state.nuclear_potential -
+        HartreeFock::ObaraSaika::_compute_electronic_potential(
+            shell_pairs, *cart_density, positions, &exponents);
 
-    // ── 2. Solve D q = -f(eps) phi_tot ───────────────────────────────────────
-    // D is symmetric and positive-definite (off-diagonals are 1/r couplings
-    // between distinct tesserae; diagonals are the dominating ISWIG self-
-    // energies), so an LDLT factorization is the natural choice.
-    //
-    // We re-factor D every iteration. It only depends on the cavity (not on
-    // the density), so this could be cached across SCF iterations; we trade a
-    // small amount of repeated work for code clarity.
-    Eigen::LDLT<Eigen::MatrixXd> solver(state.influence_matrix);
-    if (solver.info() != Eigen::Success)
-        return std::unexpected("PCM surface linear system factorization failed");
-
+    const auto t1 = std::chrono::steady_clock::now();
+    // ── 2. Solve S q = -f(eps) phi_tot with the factor from build_pcm_state ──
     result.apparent_charges =
-        solver.solve(-state.dielectric_factor * result.total_potential);
-    if (solver.info() != Eigen::Success)
+        state.influence_factor.solve(-state.dielectric_factor * result.total_potential);
+    if (state.influence_factor.info() != Eigen::Success)
         return std::unexpected("PCM surface linear system solve failed");
 
-    // ── 3. V_rxn_munu = sum_i q_i V^(i)_munu ─────────────────────────────────
-    // A single weighted sum of the cached unit-charge matrices. This is the
-    // operator that gets added to the Fock / Kohn-Sham matrix; it is what
-    // makes the dielectric polarization "feed back" on the solute orbitals
-    // at every SCF iteration.
-    result.reaction_potential =
-        Eigen::MatrixXd::Zero(calculator._shells.nbasis(), calculator._shells.nbasis());
-    for (Eigen::Index i = 0; i < npoints; ++i)
-        result.reaction_potential +=
-            result.apparent_charges(i) * state.unit_potential_matrices[static_cast<std::size_t>(i)];
+    const auto t2 = std::chrono::steady_clock::now();
+    // ── 3. V_rxn_munu = -sum_i q_i <mu| erf(xi_i r)/r |nu> ───────────────────
+    // One attraction build over all the Gaussian charges: the operator that
+    // feeds the dielectric polarization back into the Fock / KS matrix.
+    std::vector<HartreeFock::ExternalCharge> charges;
+    charges.reserve(positions.size());
+    for (std::size_t i = 0; i < positions.size(); ++i)
+        charges.push_back(HartreeFock::ExternalCharge{
+            .position = positions[i],
+            .charge = result.apparent_charges(static_cast<Eigen::Index>(i)),
+            .exponent = exponents[i]});
+    auto working_potential = HartreeFock::BasisFunctions::to_working(
+        calculator._shells,
+        _compute_external_charge_attraction(
+            shell_pairs, nbasis, charges, calculator._integral._engine, nullptr));
+    if (!working_potential)
+        return std::unexpected("PCM reaction-field transform failed: " + working_potential.error());
+    result.reaction_potential = std::move(*working_potential);
+    if (calculator._output._verbosity >= HartreeFock::Verbosity::Verbose)
+    {
+        const auto t3 = std::chrono::steady_clock::now();
+        const auto sec = [](auto a, auto b) { return std::chrono::duration<double>(b - a).count(); };
+        HartreeFock::Logger::logging(
+            HartreeFock::LogLevel::Info, "PCM Timing :",
+            std::format("phi_el {:.3f} s, solve {:.3f} s, V_rxn {:.3f} s",
+                        sec(t0, t1), sec(t1, t2), sec(t2, t3)));
+    }
 
     // ── 4. Solvation energy contribution G_rxn = (1/2) q . phi_tot ───────────
     // The 1/2 is what prevents double counting when V_rxn is also added to F:
@@ -303,4 +330,145 @@ HartreeFock::Solvation::evaluate_pcm_reaction_field(
     // factor of 1/2 makes the total energy stationary at convergence.
     result.solvation_energy = 0.5 * result.apparent_charges.dot(result.total_potential);
     return result;
+}
+
+Eigen::MatrixXd HartreeFock::Solvation::pcm_influence_matrix(const std::vector<PCMSurfacePoint> &points)
+{
+    const Eigen::Index n = static_cast<Eigen::Index>(points.size());
+    Eigen::MatrixXd influence(n, n);
+    for (Eigen::Index i = 0; i < n; ++i)
+    {
+        const auto &site = points[static_cast<std::size_t>(i)];
+        influence(i, i) = site.exponent * std::sqrt(2.0 / std::numbers::pi) / site.switching;
+        for (Eigen::Index j = 0; j < i; ++j)
+        {
+            const auto &other = points[static_cast<std::size_t>(j)];
+            const double xi_ij = site.exponent * other.exponent / std::hypot(site.exponent, other.exponent);
+            const double distance = (site.position - other.position).norm();
+            influence(i, j) = influence(j, i) = std::erf(xi_ij * distance) / distance;
+        }
+    }
+    return influence;
+}
+
+// q . dphi_nuc. phi_nuc_i depends on r = s_i - R_J only; s_i moves with its
+// owning atom A, so each (i, J) term adds k'(r) r_hat to A and subtracts it
+// from J (the J = A term cancels, as it must: that distance is the radius).
+Eigen::MatrixXd HartreeFock::Solvation::pcm_grad_nuc(const HartreeFock::Molecule &molecule,
+                                                     const PCMState &state, const Eigen::VectorXd &q)
+{
+    Eigen::MatrixXd grad = Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(molecule.natoms), 3);
+    for (std::size_t i = 0; i < state.surface_points.size(); ++i)
+    {
+        const auto &site = state.surface_points[i];
+        const double qi = q(static_cast<Eigen::Index>(i));
+        for (std::size_t atom = 0; atom < molecule.natoms; ++atom)
+        {
+            if (atom == site.atom_index)
+                continue;
+            const Eigen::Vector3d d =
+                site.position - molecule._standard.row(static_cast<Eigen::Index>(atom)).transpose();
+            const double r = d.norm();
+            const Eigen::RowVector3d v =
+                (qi * molecule.nuclear_charge(atom) * erf_kernel_dr(site.exponent, r) / r) * d.transpose();
+            grad.row(static_cast<Eigen::Index>(site.atom_index)) += v;
+            grad.row(static_cast<Eigen::Index>(atom)) -= v;
+        }
+    }
+    return grad;
+}
+
+// q^T dS q / (2 f).
+//   off-diagonal: S_ij = k(|s_i - s_j|), both orderings, so 2 q_i q_j k' r_hat
+//     onto A_i and off A_j;
+//   diagonal: S_ii = xi_i sqrt(2/pi) / F_i, F_i = prod_{J != A} h(x_iJ),
+//     x_iJ = (|s_i - R_J| - R_in,J) / R_sw,J, so
+//     dS_ii = -S_ii sum_J (h'(x)/h(x)) dx_iJ, dx_iJ = +-r_hat / R_sw,J on A / J.
+//     Every kept tessera has h(x_iJ) > 0 for all J (else F_i = 0 and it was
+//     pruned), so the division is safe.
+// ponytail: serial O(n_tess^2) pair loop (~2.3M erf/exp on naphthalene, once
+// per gradient); thread it with fixed-order per-thread partials if it shows up.
+Eigen::MatrixXd HartreeFock::Solvation::pcm_grad_solver(const HartreeFock::Molecule &molecule,
+                                                        const PCMState &state, const Eigen::VectorXd &q)
+{
+    const auto &pts = state.surface_points;
+    Eigen::MatrixXd grad = Eigen::MatrixXd::Zero(static_cast<Eigen::Index>(molecule.natoms), 3);
+    for (std::size_t i = 0; i < pts.size(); ++i)
+    {
+        const double qi = q(static_cast<Eigen::Index>(i));
+        const auto Ai = static_cast<Eigen::Index>(pts[i].atom_index);
+        for (std::size_t j = 0; j < i; ++j)
+        {
+            const auto Aj = static_cast<Eigen::Index>(pts[j].atom_index);
+            if (Ai == Aj)
+                continue; // same sphere: the distance is rigid
+            const double xi_ij = pts[i].exponent * pts[j].exponent / std::hypot(pts[i].exponent, pts[j].exponent);
+            const Eigen::Vector3d d = pts[i].position - pts[j].position;
+            const double r = d.norm();
+            const Eigen::RowVector3d v =
+                (2.0 * qi * q(static_cast<Eigen::Index>(j)) * erf_kernel_dr(xi_ij, r) / r) * d.transpose();
+            grad.row(Ai) += v;
+            grad.row(Aj) -= v;
+        }
+
+        const double s_ii = pts[i].exponent * std::sqrt(2.0 / std::numbers::pi) / pts[i].switching;
+        for (std::size_t atom = 0; atom < molecule.natoms; ++atom)
+        {
+            if (atom == pts[i].atom_index)
+                continue;
+            const Eigen::Vector3d d =
+                pts[i].position - molecule._standard.row(static_cast<Eigen::Index>(atom)).transpose();
+            const double r = d.norm();
+            const double x = (r - state.switch_inner[atom]) / state.switch_width[atom];
+            const double dh = switch_dh(x);
+            if (dh == 0.0)
+                continue;
+            const Eigen::RowVector3d v =
+                (-qi * qi * s_ii * dh / switch_h(x) / (state.switch_width[atom] * r)) * d.transpose();
+            grad.row(Ai) += v;
+            grad.row(static_cast<Eigen::Index>(atom)) -= v;
+        }
+    }
+    return grad / (2.0 * state.dielectric_factor);
+}
+
+// q . dphi_el at fixed density and charges: phi_el,k = -P : V^k, so this is
+// -dE/dR of sum_k q_k (P : V^k) from the shell-block kernel, with the
+// working-basis density lifted to Cartesian as in evaluate_pcm_reaction_field.
+std::expected<Eigen::MatrixXd, std::string> HartreeFock::Solvation::pcm_grad_qv(
+    const HartreeFock::Calculator &calculator,
+    const std::vector<HartreeFock::ShellPair> &shell_pairs,
+    const PCMState &state,
+    const Eigen::MatrixXd &total_density,
+    const Eigen::VectorXd &q,
+    const std::vector<int> &ao_atom)
+{
+    auto cart_density = HartreeFock::BasisFunctions::to_cartesian(calculator._shells, total_density);
+    if (!cart_density)
+        return std::unexpected("PCM gradient density lift failed: " + cart_density.error());
+
+    std::vector<Eigen::Vector3d> positions;
+    std::vector<double> exponents;
+    std::vector<std::size_t> owners;
+    for (const auto &site : state.surface_points)
+    {
+        positions.push_back(site.position);
+        exponents.push_back(site.exponent * site.exponent);
+        owners.push_back(site.atom_index);
+    }
+    auto grad = HartreeFock::ObaraSaika::_compute_electronic_potential_gradient(
+        shell_pairs, *cart_density, positions, &exponents, q, owners, ao_atom,
+        calculator._molecule.natoms);
+    if (!grad)
+        return std::unexpected("PCM gradient: " + grad.error());
+    return Eigen::MatrixXd(-*grad);
+}
+
+Eigen::MatrixXd HartreeFock::Solvation::pcm_total_density(const HartreeFock::Calculator &calculator)
+{
+    Eigen::MatrixXd density = calculator._info._scf.alpha.density;
+    if (calculator._scf._scf != HartreeFock::SCFType::RHF &&
+        calculator._info._scf.beta.density.rows() == density.rows())
+        density += calculator._info._scf.beta.density;
+    return density;
 }

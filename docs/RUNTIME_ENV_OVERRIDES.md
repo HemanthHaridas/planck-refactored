@@ -1,10 +1,13 @@
 # Which environment overrides may reach a production binary?
 
-**Answer (2026-11-07).** Only ones that change **what is printed**, never
-**what is computed**. Every override that changed a result, a solver, or the
+Answered 2026-11-07 (opened as a scope 2026-10-12). Status lives in
+`vault/Status/`.
+
+## Answer
+
+**Only ones that change what is printed, never what is computed.** Every override that changed a result, a solver, or the
 set of allowed workflows has been deleted or turned into an input keyword.
-Opened as a scope 2026-10-12; E1 and E4 landed that day, E2 and E3 on
-2026-11-07 (PR #181).
+E1 and E4 landed on 2026-10-12, E2 and E3 on 2026-11-07 (PR #181).
 
 ## The rule
 
@@ -51,8 +54,9 @@ promoting matrix-free GMRES into the normal path, which landed in
 `b4175570` with full-coordinate FD maxima 7.9e-9 to 1.7e-8 Ha/Bohr. The
 comparison it made is covered at the operator level: `tests/dh_zvector.cpp`
 requires `|z_gmres − z_dense| < 1e-11`. `tests/test_dh_o3_zvector.py` now
-asserts that `compute_analytic_dh_gradient` contains no `getenv` and no
-`DenseReference`.
+asserts that `compute_analytic_dh_gradient` contains no `getenv`. Since
+2026-11-10 the `DenseReference` backend no longer exists at all: the dense
+solve is a test oracle (`tests/dh_zvector_oracle.h`).
 
 ## The shared-input trap (E2)
 

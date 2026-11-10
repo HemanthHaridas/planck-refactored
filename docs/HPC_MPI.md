@@ -1,13 +1,14 @@
 # How does `planck-mpi` distribute an SCF, and how well does it scale?
 
-Canonical status lives in `vault/Status/Completion.md` and
-`vault/Status/Open Work.md` (the "HPC campaign — what is left" entry tracks the
-open gaps). This file answers one architecture question:
+Answered 2026-10-16. Status lives in `vault/Status/`. The "HPC campaign — what
+is left" entry in Open Work tracks the open gaps.
+
+This file answers one architecture question:
 
 **What does the MPI front end actually distribute, what stays replicated, and
 what do the cluster measurements show?**
 
-## Short answer
+## Answer
 
 `planck-mpi` is a third executable, built only with `-DBUILD_MPI=ON`. It parses
 the input once and dispatches to the same HF or DFT driver the serial binaries
@@ -197,7 +198,7 @@ A workstation also cannot surface defects that exist only at scale, such as a
 pair index overflowing `int` or imbalance at high rank counts. That is a small,
 nameable set, but it is why the CI gap below matters.
 
-## What remains (tracked in Open Work)
+## Not done
 
 - **Scale gate and engine coverage: done (#181).**
   `water16_rhf_631g_auto_direct_mpi_scale` (16 waters / 6-31G, nb=208, direct

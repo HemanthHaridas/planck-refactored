@@ -1,7 +1,7 @@
 # Why was the memory-direct Fock build slow, and what made it fast?
 
-Canonical status lives in `vault/Status/Completion.md` and
-`vault/Status/Open Work.md`.
+Answered 2026-10-24 (opened as a scope 2026-10-17). Status lives in
+`vault/Status/`.
 
 This file answers one architecture question:
 
@@ -9,7 +9,7 @@ This file answers one architecture question:
 one thread. Where did that time go, and which changes to the integral kernels,
 the digestion loop and the threading actually paid?**
 
-## Short answer
+## Answer
 
 The build evaluated integrals one Cartesian component at a time, and every
 component call reran the whole primitive loop, 27–78× per shell quartet
@@ -255,26 +255,6 @@ brackets where different), before grow-only scratch and the partition:
 | skeleton weight | — | — | — | — | 3 % |
 | idle at four threads (since mostly recovered) | 1 % | 5 % | 3 % | 6 % | 11 % |
 
-## Not done
-
-- **R1b:** the closed-form readout (2–13 %) from a per-AO table built once
-  per build, with `value()` kept lazy, which avoids both of R1's costs.
-  Bitwise; land only at ≥ 1.03× on 8 H2O, timed on the production loop.
-- **C5:** screened kernels in both block kernels, so range-separated hybrids
-  leave per-component HGP. Needs `hgp_vrr`'s scaling (T × `boys_scale`,
-  prefactor × `prefactor_scale`, W−P/W−Q × `screen.rho / rho`, the straddling
-  coupling × `boys_scale`: the `inv_2_delta` gotcha); gate against OS for
-  LongRange and ShortRange on a mixed bra/ket fixture.
-- **F3:** feed the persisted full-group skeleton from the block kernels; a
-  one-time build (0.017–0.054 s small, 1.3–3.4 s near n_b = 100), worth it
-  only if `threshold` is raised routinely.
-- **Outside this work:** D3 (RI-JK recomputes density-independent pair
-  factors, ~61 % of the RI Fock build; `docs/ERI_FOCK_BLAS_SCOPE.md`); K2
-  (batched same-class ket blocks, the only lever left on HGP, if a census
-  shows per-block fixed costs worth it); C4b (a four-raise closed form, 10–16×
-  over per-component HGP but competing with the block kernel at 4–9 % of sp
-  builds).
-
 ## What invariants matter
 
 ### 1. The unit of work is the primitive quartet, not the integral
@@ -437,3 +417,23 @@ and the fingerprints; `--k1 nwater basis` the headline production time;
 whole targets (a binary mixing old and new objects of an inline class crashed
 in `--k1`), and write shell loops in bash, since zsh does not word-split an
 unquoted variable.
+
+## Not done
+
+- **R1b:** the closed-form readout (2–13 %) from a per-AO table built once
+  per build, with `value()` kept lazy, which avoids both of R1's costs.
+  Bitwise; land only at ≥ 1.03× on 8 H2O, timed on the production loop.
+- **C5:** screened kernels in both block kernels, so range-separated hybrids
+  leave per-component HGP. Needs `hgp_vrr`'s scaling (T × `boys_scale`,
+  prefactor × `prefactor_scale`, W−P/W−Q × `screen.rho / rho`, the straddling
+  coupling × `boys_scale`: the `inv_2_delta` gotcha); gate against OS for
+  LongRange and ShortRange on a mixed bra/ket fixture.
+- **F3:** feed the persisted full-group skeleton from the block kernels; a
+  one-time build (0.017–0.054 s small, 1.3–3.4 s near n_b = 100), worth it
+  only if `threshold` is raised routinely.
+- **Outside this work:** D3 (RI-JK recomputes density-independent pair
+  factors, ~61 % of the RI Fock build; `docs/ERI_FOCK_BLAS_SCOPE.md`); K2
+  (batched same-class ket blocks, the only lever left on HGP, if a census
+  shows per-block fixed costs worth it); C4b (a four-raise closed form, 10–16×
+  over per-component HGP but competing with the block kernel at 4–9 % of sp
+  builds).

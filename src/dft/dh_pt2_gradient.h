@@ -3,6 +3,7 @@
 
 #include <expected>
 #include <array>
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <string>
@@ -188,10 +189,17 @@ namespace DFT::Gradient
     // slots. This is a lossless adapter over the dense MO tensor today;
     // production will later construct the sectors directly. Indices are
     // local to their named occupied/virtual spaces.
+    // The five Eq. 40 chemist sectors, row-major in the index order shown.
+    // Electron 1 (first pair) has extents n_occ/n_virt, electron 2 (second
+    // pair) n_occ_2/n_virt_2. RKS uses one frame for both; UKS builds one
+    // block per spin pair (aa, ab, bb). A frame with no occupied or no
+    // virtual orbitals gives empty sectors.
     struct DHMolecularERIBlocks
     {
         int n_occ = 0;
         int n_virt = 0;
+        int n_occ_2 = 0;
+        int n_virt_2 = 0;
         std::vector<double> ovov; // (i a | j b)
         std::vector<double> vvov; // (a b | i c)
         std::vector<double> ooov; // (i j | k a)
@@ -414,57 +422,18 @@ namespace DFT::Gradient
         const DHEq44_45EnergyWeightedDensity &off_diagonal);
 
     // Eqs. (46)-(47), correction-only two-particle PT2 density in AO
-    // chemists' ordering [mu,nu,kappa,tau].  The separable tensor contains
-    // only D P - a_x/2 D P, with a_x from the same KS reference as the
-    // response operator, never the SCF reference terms. The
-    // nonseparable tensor is Eq. (47)'s direct T-tilde backtransformation.
-    // `*_symmetric_ao` are separate eightfold ERI-symmetry adapters retained
-    // by ReferenceAll. The direct production derivative can equivalently use
-    // literal raw Eq. (47) against its symmetric quartet and Eq. (46)'s
-    // quadratic D/P/a_x factorization. Every tensor has n_ao^4 contiguous
-    // elements.
+    // chemists' ordering [mu,nu,kappa,tau], kept factorized: no n_ao^4
+    // tensor exists. The separable Eq. (46) part is D P - a_x/2 D P, with a_x
+    // from the same KS reference as the response operator, never the SCF
+    // reference terms. Eq. (47) is streamed from the amplitudes in bounded AO
+    // blocks (DHEq47TiledExecution) by the direct derivative contraction.
     struct DHEq46_47TwoParticleDensity
     {
         int n_ao = 0;
         Eigen::MatrixXd relaxed_difference_ao;
-        // Eq. (46)'s production factorization.  In ContractionOnly mode the
-        // direct ERI producer uses these O(N^2) objects instead of retaining
-        // the separable symmetric O(N^4) tensor.
         Eigen::MatrixXd ground_density_ao;
         double exact_exchange = 0.0;
-        std::vector<double> separable_raw_ao;
-        std::vector<double> nonseparable_raw_ao;
-        std::vector<double> total_raw_ao;
-        std::vector<double> separable_symmetric_ao;
-        std::vector<double> nonseparable_symmetric_ao;
-        std::vector<double> total_symmetric_ao;
     };
-
-    enum class DHGammaStorage { ReferenceAll, ContractionOnly };
-
-    // O5: exact four-stage Eq. 47 backtransformation, (i,a,j,b) ->
-    // (mu,nu,kappa,tau), replacing b,j,a,i successively. No symmetry or
-    // orthonormality assumption on C. Theta=(1+delta_ij)*t_tilde carries
-    // c_PT2 once. Column tiles bound GEMM panels, not quartic tensor storage.
-    [[nodiscard]] std::expected<std::vector<double>, std::string>
-    build_dh_eq47_nonseparable_raw_ao(
-        const DHPT2AmplitudeDensity &amplitudes,
-        const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
-        int column_tile = 128);
-
-    // O7.4.1: emit bounded mu-row tiles of the raw Eq. (47) AO transform.
-    // Each tile is row-major [local_mu, nu, kappa, tau] and contains
-    // mu_count*n_ao^3 values. The shared [i,nu,kappa,tau] partial transform
-    // is built once; no full final [mu,nu,kappa,tau] output is allocated.
-    using DHEq47RawAOTileConsumer = std::function<std::expected<void, std::string>(
-        int mu_begin, int mu_count, const std::vector<double> &tile)>;
-
-    [[nodiscard]] std::expected<void, std::string>
-    for_each_dh_eq47_nonseparable_raw_ao_tile(
-        const DHPT2AmplitudeDensity &amplitudes,
-        const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
-        int transform_tile, int mu_tile,
-        const DHEq47RawAOTileConsumer &consumer);
 
     // O7.4.4: bounded four-index output tiles.  The producer streams
     // [local_mu, local_nu, local_kappa, local_tau] blocks and never creates
@@ -484,6 +453,34 @@ namespace DFT::Gradient
         std::size_t peak_emitted_tile_elements = 0;
     };
 
+    // One (ia|jb)-paired amplitude block, in either spin treatment. The AO
+    // value is C_s(mu,i) C_s(nu,a) C_t(kappa,j) C_t(tau,b) amplitude(i,a,j,b).
+    // fill_amplitudes writes [local_i,a,j,b] row-major for i_count occupied
+    // indices from i_begin, with its scale and any (1+delta_ij) included.
+    // Non-owning: valid only for the synchronous contraction that reads it.
+    struct DHPairChannel
+    {
+        int n_occ_s = 0, n_virt_s = 0, n_occ_t = 0, n_virt_t = 0;
+        const Eigen::MatrixXd *c_s = nullptr, *c_t = nullptr;
+        std::function<void(int i_begin, int i_count, double *out)> fill_amplitudes;
+
+        [[nodiscard]] bool empty() const
+        { return n_occ_s == 0 || n_virt_s == 0 || n_occ_t == 0 || n_virt_t == 0; }
+    };
+
+    // The closed-shell Eq. (47) block: one channel, Theta=(1+delta_ij)*t_tilde.
+    [[nodiscard]] DHPairChannel make_dh_eq47_pair_channel(
+        const DHPT2AmplitudeDensity &amplitudes, const Eigen::MatrixXd &mo_coeff);
+
+    // Streams bounded AO blocks of the summed channels, so one derivative
+    // traversal serves every channel. A channel with an empty extent adds zero.
+    [[nodiscard]] std::expected<void, std::string>
+    for_each_dh_pair_ao_block(
+        int n_ao, const std::vector<DHPairChannel> &channels,
+        int occupied_tile, int mu_tile, int nu_tile, int kappa_tile, int tau_tile,
+        const DHEq47RawAOBlockConsumer &consumer,
+        DHEq47BlockWorkspace *workspace = nullptr);
+
     [[nodiscard]] std::expected<void, std::string>
     for_each_dh_eq47_nonseparable_raw_ao_block(
         const DHPT2AmplitudeDensity &amplitudes,
@@ -491,6 +488,49 @@ namespace DFT::Gradient
         int occupied_tile, int mu_tile, int nu_tile, int kappa_tile, int tau_tile,
         const DHEq47RawAOBlockConsumer &consumer,
         DHEq47BlockWorkspace *workspace = nullptr);
+
+    // The ERI-derivative coefficient of Eq. (33) for either spin treatment:
+    // separable = D_c(mu,nu) P_c(kappa,tau) + sum_x f_x D_x(mu,kappa) P_x(nu,tau),
+    // pair = the summed channels. RKS has one exchange term (f = -a_x/2, total
+    // densities) and one channel; UKS has two terms (f = -a_x, spin densities)
+    // and aa/ab/bb channels weighted c/2c/c. Literal raw coefficients are safe
+    // because the derivative quartet they contract is eightfold symmetric.
+    struct DHEq33TwoParticleSource
+    {
+        struct Exchange
+        {
+            Eigen::MatrixXd d, p;
+            double factor = 0.0;
+        };
+
+        int n_ao = 0;
+        Eigen::MatrixXd coulomb_d, coulomb_p;
+        std::vector<Exchange> exchange;
+        std::vector<DHPairChannel> pair;
+        int occupied_tile = 16, mu_tile = 32, nu_tile = 16, kappa_tile = 16, tau_tile = 16;
+        DHEq47BlockWorkspace *workspace = nullptr;
+
+        [[nodiscard]] double separable(int mu, int nu, int kappa, int tau) const
+        {
+            double value = coulomb_d(mu, nu) * coulomb_p(kappa, tau);
+            for (const auto &x : exchange)
+                value += x.factor * x.d(mu, kappa) * x.p(nu, tau);
+            return value;
+        }
+
+        [[nodiscard]] bool well_formed() const
+        {
+            const auto square = [this](const Eigen::MatrixXd &m)
+            { return m.rows() == n_ao && m.cols() == n_ao && m.allFinite(); };
+            if (n_ao <= 0 || !square(coulomb_d) || !square(coulomb_p) || occupied_tile <= 0 ||
+                mu_tile <= 0 || nu_tile <= 0 || kappa_tile <= 0 || tau_tile <= 0)
+                return false;
+            for (const auto &x : exchange)
+                if (!square(x.d) || !square(x.p) || !std::isfinite(x.factor))
+                    return false;
+            return true;
+        }
+    };
 
     // O7.4.3: this non-owning context is valid only for the synchronous
     // Eq. (33) assembly call that receives it.  It intentionally is not a
@@ -501,7 +541,6 @@ namespace DFT::Gradient
     {
         const DHPT2AmplitudeDensity *amplitudes = nullptr;
         const Eigen::MatrixXd *mo_coeff = nullptr;
-        int transform_tile = 128;
         int mu_tile = 32;
         int occupied_tile = 16;
         int nu_tile = 16;
@@ -518,8 +557,7 @@ namespace DFT::Gradient
         const DHPT2AmplitudeDensity &amplitudes,
         const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
         const Eigen::Ref<const Eigen::MatrixXd> &ground_density_ao,
-        double exact_exchange,
-        DHGammaStorage storage = DHGammaStorage::ReferenceAll);
+        double exact_exchange);
 
     // The h/S part of Eq. (33), after directly contracting AO derivative
     // primitives at every nuclear Cartesian coordinate.  It has the same
@@ -547,20 +585,15 @@ namespace DFT::Gradient
 
     using DHEq33TwoElectronContraction = std::function<
         std::expected<DHEq33TwoElectronGradient, std::string>(
-            const DHEq46_47TwoParticleDensity &two_particle,
-            const DHEq47TiledExecution *eq47_tiled)>;
+            const DHEq33TwoParticleSource &source)>;
 
-    // Non-XC part of paper Eq. (33), evaluated coordinate by coordinate in
-    // the AO basis.  All derivative vectors share one coordinate order; each
-    // ERI derivative is an n_ao^4 tensor in chemists' ordering.  The legacy
-    // dense arrays are retained as a reference/test adapter. Production may
-    // instead provide exactly one direct callback for h/S and for ERIs. These
-    // are correction-only derivatives: normal KS-gradient terms are excluded.
+    // Non-XC part of paper Eq. (33): one direct callback for h/S and one for
+    // ERIs, each contracting derivative primitives as they are evaluated, in
+    // one atom-major coordinate order. These are correction-only
+    // derivatives: normal KS-gradient terms are excluded. No dense derivative
+    // arrays exist; tests build them in tests/dh_dense_oracle.h.
     struct DHEq33NonXCDerivatives
     {
-        std::vector<Eigen::MatrixXd> hamiltonian_ao;
-        std::vector<Eigen::MatrixXd> overlap_ao;
-        std::vector<std::vector<double>> eri_ao;
         DHEq33OneElectronOverlapContraction direct_one_electron_overlap;
         DHEq33TwoElectronContraction direct_two_electron;
     };
@@ -575,6 +608,16 @@ namespace DFT::Gradient
         Eigen::VectorXd total;
     };
 
+    // The one production assembly of Eq. (33)'s non-XC part, for either spin
+    // treatment: +D:h' + W:S' + Gamma:I', from AO D and W and the two streamed
+    // callbacks. No XC, nuclear repulsion or KS reference gradient.
+    [[nodiscard]] std::expected<DHEq33NonXCGradient, std::string>
+    build_dh_eq33_direct_non_xc_gradient(
+        const Eigen::Ref<const Eigen::MatrixXd> &relaxed_ao,
+        const Eigen::Ref<const Eigen::MatrixXd> &overlap_ao,
+        const DHEq33TwoParticleSource &source,
+        const DHEq33NonXCDerivatives &derivatives);
+
     [[nodiscard]] std::expected<DHEq33NonXCGradient, std::string>
     build_dh_eq33_non_xc_gradient(
         const DHRelaxedDifferenceDensity &relaxed,
@@ -582,7 +625,7 @@ namespace DFT::Gradient
         const DHEq46_47TwoParticleDensity &two_particle,
         const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
         const DHEq33NonXCDerivatives &derivatives,
-        const DHEq47TiledExecution *eq47_tiled = nullptr);
+        const DHEq47TiledExecution &eq47_tiled);
 
     // Explicit XC-II term in Eq. (33): D_relaxed : d V_XC[P] / dx, with
     // both the relaxed density and quadrature grid held fixed.  This is the
@@ -691,32 +734,6 @@ namespace DFT::Gradient
         const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
         const DHEq33XCFixedDensityInputs &inputs);
 
-    // Literal fixed-total-density AO derivative of the restricted KS Fock
-    // matrix, F^(x)_op = h^(x) + J^(x)[P] - 1/2 a_x K^(x)[P] +
-    // (V_XC[P])^(x)_geom.  This is the explicit term of the co-moving-Fock
-    // oracle, not an additional Eq. (33) gradient contribution.  The XC
-    // matrix is reconstructed analytically from the complete XC-II scalar
-    // derivative with symmetric AO test densities; this retains AO-centre,
-    // Becke-partition, and moving-grid channels exactly, at O(n_AO^2) XC
-    // contractions per Cartesian coordinate.  It is consequently an
-    // audit/oracle primitive rather than the production large-basis path.
-    struct DHKSFixedDensityFockDerivative
-    {
-        std::vector<Eigen::MatrixXd> hamiltonian;
-        std::vector<Eigen::MatrixXd> coulomb;
-        std::vector<Eigen::MatrixXd> exact_exchange;
-        std::vector<Eigen::MatrixXd> xc_geometry;
-        std::vector<Eigen::MatrixXd> total;
-    };
-
-    [[nodiscard]] std::expected<DHKSFixedDensityFockDerivative, std::string>
-    build_dh_ks_fixed_density_fock_derivative(
-        const Eigen::Ref<const Eigen::MatrixXd> &ground_density_ao,
-        double exact_exchange_coefficient,
-        const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
-        const DHEq33NonXCDerivatives &derivatives,
-        const DHEq33XCFixedDensityInputs &xc_inputs);
-
     // Driver boundary for the paper-defined, correction-only DH gradient
     // objects.  The caller owns the KS solve, direct response operator,
     // Z-vector solve, and derivative-integral preparation; this builder
@@ -762,14 +779,8 @@ namespace DFT::Gradient
         DHLagrangianRHS lagrangian_rhs;
     };
 
-    [[nodiscard]] std::expected<DHStationaryProducts, std::string>
-    build_dh_stationary_products(const HartreeFock::Correlation::RMP2Result &pt2,
-        double c_pt2, const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
-        const std::vector<double> &mo_eri, const DHEq41ResponseOperator &response,
-        const DHMolecularERIBlocks *eq40_blocks = nullptr);
-
-    // Compact production entry point. The caller provides exactly the five
-    // Eq. (40) sectors; no dense all-MO tensor is retained or required.
+    // The caller provides exactly the five Eq. (40) sectors; no dense all-MO
+    // tensor is retained or required.
     [[nodiscard]] std::expected<DHStationaryProducts, std::string>
     build_dh_stationary_products(const HartreeFock::Correlation::RMP2Result &pt2,
         double c_pt2, const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
@@ -791,15 +802,10 @@ namespace DFT::Gradient
         DHAmplitudeOwnershipAudit amplitude_ownership;
         DHEq47BlockWorkspace eq47_workspace;
         std::size_t reference_mo_eri_bytes = 0;
-        std::size_t materialized_eq47_bytes = 0;
     };
 
-    [[nodiscard]] std::expected<DHGradientDriverContract, std::string>
-    build_dh_gradient_driver_contract(const DHGradientDriverInputs &inputs);
-
-    // Production consumes the same checked stationary products used by the
-    // solve, by move. The one-argument overload independently rebuilds them
-    // and retains all Gamma arrays as a small-system reference adapter.
+    // Consumes the same checked stationary products used by the solve, by
+    // move. The workspace must carry the direct derivative callbacks.
     [[nodiscard]] std::expected<DHGradientDriverContract, std::string>
     build_dh_gradient_driver_contract(const DHGradientDriverInputs &inputs,
         DHStationaryProducts &&stationary);

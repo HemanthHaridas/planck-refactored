@@ -1751,10 +1751,14 @@ namespace HartreeFock::IO
 
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)
         {
-            if (calculator._calculation != HartreeFock::CalculationType::SinglePoint)
+            // Analytic PCM gradients (docs/PCM_GEOMETRY.md step 4) drive
+            // geometry optimization and frequencies; every inner loop rebuilds
+            // the cavity at its geometry (step 5). Imaginary-mode following
+            // is not gated yet.
+            if (calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow)
             {
                 return std::unexpected(
-                    "PCM is currently implemented only for single-point energy calculations.");
+                    "PCM is not yet supported with imaginary-mode following.");
             }
 
             if (calculator._correlation != HartreeFock::PostHF::None)

@@ -16,18 +16,23 @@ class O3ZVectorTests(unittest.TestCase):
         self.assertEqual(self.solver.count("apply_dh_eq27_hessian("), 1)
         self.assertNotIn("build_ks_orbital_hessian_op", self.solver)
         self.assertIn("a*no+i", self.solver)
-        self.assertIn("const Eigen::VectorXd b=-pack(rhs_ai)", self.solver)
-        self.assertIn("auto final=action(z)", self.solver)
+        self.assertIn("solve_packed_zvector(action,-pack(rhs_ai),diagonal", self.solver)
+        self.assertIn("auto final=counted(z)", self.solver)
         self.assertIn("fresh final residual exceeds", self.solver)
         self.assertIn("catch(const std::exception &e)", self.solver)
 
-    def test_dense_only_in_explicit_reference_branch(self):
-        iterative = self.solver.split("if (options.backend==DHZVectorBackend::MatrixFreeGMRES)", 1)[1].split(
-            "else if (options.backend==DHZVectorBackend::DenseReference)", 1)[0]
-        self.assertIn("DFT::Response::gmres", iterative)
-        self.assertIn("no dense fallback", iterative)
-        self.assertNotIn("hessian(n,n)", iterative)
-        self.assertNotIn("qr.solve", iterative)
+    def test_one_matrix_free_solver_no_dense_path(self):
+        # RKS and UKS share solve_packed_zvector; the dense oracle lives in
+        # tests/dh_zvector_oracle.h and production has no route to it.
+        core = self.solver.split("solve_packed_zvector(", 1)[1].split("solve_dh_zvector(", 1)[0]
+        self.assertIn("DFT::Response::gmres", core)
+        self.assertIn("no dense fallback", core)
+        for dense in ("DenseReference", "hessian(n,n)", "qr.solve", "colPivHouseholderQr"):
+            self.assertNotIn(dense, self.solver)
+        udh = (ROOT / "src/dft/udh_zvector.cpp").read_text()
+        self.assertIn("solve_packed_zvector(", udh)
+        for dense in ("jacobian", "JacobiSVD", "HouseholderQR", "gmres("):
+            self.assertNotIn(dense, udh)
         assembly = self.driver.split("build_dh_eq41_response_and_solve_zvector(\n", 2)[-1].split(
             "std::expected<PreparedSystem", 1)[0]
         self.assertIn("Gradient::solve_dh_zvector", assembly)
@@ -44,9 +49,7 @@ class O3ZVectorTests(unittest.TestCase):
         self.assertIn("krylov_matrix_bytes", self.gmres)
 
     def test_production_always_iterative_with_no_env_override(self):
-        # The DenseReference backend is a test oracle (tests/dh_zvector.cpp);
-        # no environment variable may switch the production gradient to it.
-        self.assertIn("backend = DHZVectorBackend::MatrixFreeGMRES", self.solver)
+        # No environment variable may switch the production gradient solver.
         production = self.driver.split("compute_analytic_dh_gradient(", 1)[1].split(
             "run_analytic_gradient_current_geometry(", 1)[0]
         self.assertNotIn("getenv", production)

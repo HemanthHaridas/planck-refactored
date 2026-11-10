@@ -11,7 +11,7 @@
     diis_dim    8
     engine      os
     tol_eri     1.0e-14
-    guess       hcore
+    guess       sad
     max_cycles  200
     scf_soscf_start  5
     scf_soscf_cycles 30

@@ -164,12 +164,6 @@ Each fixed one shared mechanism instead of a DFT-side workaround.
 - **Grid cost.** The grid evaluates n_cart AOs, about 1.2× the spherical count
   at cc-pVTZ. Spherical AOs on the grid were not in scope.
 
-## Not done
-
-PCM in a spherical basis (both binaries); double-hybrid gradients in a
-spherical basis; RI-J/K for DFT. DFT with ECPs is unblocked for every
-supported workflow (`docs/DEF2_ECP.md` step 6).
-
 ## Commit log
 
 | step | commit | what |
@@ -181,3 +175,9 @@ supported workflow (`docs/DEF2_ECP.md` step 6).
 | gradients | `a39f5ee5` | XC nuclear-gradient lift |
 | TDDFT | `10ed19ef` | lifted MOs, analytic f_xc kernel |
 | DH + restart | (this commit) | DH single points; shared restart projection |
+
+## Not done
+
+PCM in a spherical basis (both binaries); double-hybrid gradients in a
+spherical basis; RI-J/K for DFT. DFT with ECPs is unblocked for every
+supported workflow (`docs/DEF2_ECP.md` step 6).

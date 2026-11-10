@@ -422,7 +422,7 @@ Kohn-Sham DFT settings. Only read by `planck-dft`; ignored by `hartree-fock`. Th
 | `grid` / `grid_level` | enum | `coarse`, `normal`, `fine`, `ultrafine` | `normal` | Molecular integration grid quality. Higher quality uses more radial shells and angular points; see grid preset table below. |
 | `grid_angular_points` | int | `0`, or a supported Lebedev size (e.g. `590`, `974`, `1454`, `2030`) | `0` | `0` keeps preset pruning. A nonzero size uses that many angular points on every radial shell of every atom, without light-atom reduction. Radial quadrature and Becke partitioning remain unchanged. Intended for controlled angular convergence; increases grid memory and cost. |
 | `grid_radial_points` | int | `0`, or a positive shell count | `0` | `0` uses the preset’s element-dependent radial count. A positive value uses that many Treutler–Ahlrichs radial shells for every atom, retaining the selected angular policy and Becke partitioning. Intended for controlled radial convergence; fixed throughout SCF and geometry displacements. |
-| `grid_policy` | enum | `legacy`, `legacy-no-light-reduction`, `legacy-unpruned-max`, `pyscf-nwchem-2.13`, `g4-3-v4` | `legacy` | Versioned angular-pruning schedule. `g4-3-v4` is a qualified opt-in policy, required (with `grid_radial_points 135` and no `grid_angular_points`) for UKS double-hybrid gradients; see `docs/DFT_GRID_CONVERGENCE_SCOPE.md`. The other non-legacy choices are diagnostic candidates, not production accuracy presets: use them only in explicit convergence/attribution studies. |
+| `grid_policy` | enum | `legacy`, `legacy-no-light-reduction`, `legacy-unpruned-max`, `pyscf-nwchem-2.13`, `g4-3-v4` | `legacy` | Versioned angular-pruning schedule. `g4-3-v4` is a qualified opt-in policy, required (with `grid_radial_points 135` and no `grid_angular_points`) for UKS double-hybrid gradients; see `docs/DFT_GRID_CONVERGENCE.md`. The other non-legacy choices are diagnostic candidates, not production accuracy presets: use them only in explicit convergence/attribution studies. |
 | `exchange` | enum/string | built-in aliases such as `slater`/`lda`, `b88`/`becke88`, `pw91`, `pbe`, `b3lyp`, `pbe0`/`pbeh`, `hse06`, `b2plyp`; or any libxc name | `pbe` | Exchange or combined exchange-correlation functional. Combined XC entries such as `b3lyp`, `pbe0`, `hse06`, and `b2plyp` ignore the separate `correlation` keyword. Unknown strings are resolved through libxc by name. |
 | `correlation` | enum/string | `vwn`/`vwn5`, `lyp`, `p86`, `pw91`, `pbe`; or any libxc name | `pbe` | Correlation functional |
 | `exchange_id` | int | any libxc integer ID | — | Use an arbitrary libxc exchange functional by its integer identifier. Overrides `exchange`. |
@@ -442,8 +442,9 @@ Range-separated hybrids are supported for single-point energies, analytic
 gradients, geometry optimization, frequencies, and geomopt+frequency. Global
 RKS double hybrids support those gradient-driven workflows; the qualified UKS
 subset supports gradients only. TDDFT / linear response supports semilocal,
-global-hybrid, and erf range-separated functionals; double hybrids and
-Yukawa/Gaussian screened-exchange functionals are rejected for TDDFT.
+global-hybrid, and erf range-separated functionals; double hybrids are rejected
+for TDDFT. Yukawa/Gaussian screened-exchange functionals are rejected in every
+workflow, because only the erf kernel is implemented.
 `imagfollow` is not implemented in `planck-dft`.
 </p>
 
@@ -455,11 +456,11 @@ Optional continuum-solvation settings for a self-consistent conductor-like PCM s
 
 | Keyword | Type | Values | Default | Description |
 |---|---|---|---|---|
-| `model` | enum | `pcm`, `cpcm`, `none` | `none` | Solvation model selector. `pcm` and `cpcm` currently map to the same conductor-like PCM implementation. |
+| `model` | enum | `pcm`, `cpcm`, `none` | `none` | Solvation model selector. `pcm` and `cpcm` map to the same C-PCM: f(ε) = (ε−1)/ε on a SWIG cavity (Lange-Herbert switching function and Gaussian surface charges, the same scheme as PySCF's default C-PCM). |
 | `solvent` | string | `water`, `acetonitrile`, `methanol`, `ethanol`, `dmso`, `dichloromethane`, `chloroform`, `thf`, `toluene`, `benzene`, `hexane` | — | Named solvent shortcut that sets the dielectric constant. |
 | `dielectric` / `epsilon` / `eps` | float | > 1 | `1.0` | Dielectric constant of the continuum. Overrides the solvent preset when both are given. |
-| `cavity_scale` | float | > 0 | `1.2` | Scale factor applied to the atom-centered radii used to build the PCM cavity. |
-| `surface_points` / `surface_points_per_atom` | int | ≥ 6 | `60` | Number of Fibonacci-distributed surface points generated per atom before overlap culling. |
+| `cavity_scale` | float | > 0 | `1.2` | Scale factor applied to the atom-centered radii (modified Bondi: Bondi with H = 1.1 Å) used to build the PCM cavity. |
+| `surface_points` / `surface_points_per_atom` | int | Lebedev size | `302` | Lebedev points per atomic sphere before the switching function fades out buried points. Must be a Lebedev size with a SWIG constant: 6, 14, 26, 38, 50, 86, 110, 146, 170, 194, 302, 350, 434, 590, or larger (74, 230 and 266 are rejected). |
 
 #### DFT grid presets
 
@@ -634,7 +635,7 @@ diagnostic point list into a charge fit.
 | `resp_tightness` | float | > 0 | `0.1` | Restraint width *b* in atomic units |
 | `resp_exempt_hydrogen` | bool | `.true.`, `.false.` | `.true.` | Exempt hydrogens from the restraint. The restraint exists to tame buried heavy atoms that the potential barely constrains; hydrogens sit on the surface where the data is good. |
 | `equivalent` | ints | 1-based atom indices | — | Force the listed atoms to share one charge, repeatable. These are hard constraints in the same Lagrange block as the total charge, so grouped atoms agree exactly rather than approximately. |
-| `include_reaction_field` | bool | `.true.`, `.false.` | `.false.` | Under `%begin_pcm`, add the PCM reaction field `sum_i q_i/\|r - s_i\|` to the fitted potential, giving the total in-solvent potential instead of the solute one. No effect without a solvation model. See below. |
+| `include_reaction_field` | bool | `.true.`, `.false.` | `.false.` | Under `%begin_pcm`, add the PCM reaction field `sum_i q_i erf(xi_i \|r - s_i\|)/\|r - s_i\|` to the fitted potential, giving the total in-solvent potential instead of the solute one. No effect without a solvation model. See below. |
 
 ```
 %begin_esp
@@ -1452,7 +1453,7 @@ On N₂/STO-3G (10 orbitals, 7α/7β, 14 400 determinants — large enough that 
 | `fciqmc_granularity` | stochastic-rounding quantum for spawned weights (0 disables discretization) |
 | `fciqmc_initiator` | initiator weight threshold (0 disables the initiator approximation) |
 | `fciqmc_equilibration` / `fciqmc_steps` | steps discarded before sampling / steps sampled |
-| `fciqmc_spawn_attempts` | spawn draws per walker per step |
+| `fciqmc_spawn_attempts` | spawn draws per occupied determinant per step |
 | `fciqmc_seed` | RNG seed; fixed-seed runs are bitwise reproducible |
 
 ### Coupled cluster — RCCSDT, RCCSDTQ, and UCC on small systems

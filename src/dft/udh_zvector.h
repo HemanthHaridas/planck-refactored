@@ -2,6 +2,7 @@
 #define DFT_UDH_ZVECTOR_H
 
 #include "udh_pt2_orbital.h"
+#include "dh_zvector.h"
 
 namespace DFT::Gradient
 {
@@ -26,33 +27,21 @@ namespace DFT::Gradient
     [[nodiscard]] std::expected<UDHEq27Action,std::string>
     apply_udh_eq27_hessian(const UDHZVectorInputs &inputs,const UDHOrbitalMatrices &trial_ai);
 
-    struct UDHZVectorOptions
-    {
-        double residual_tolerance=1e-12;
-        double adjoint_tolerance=1e-10;
-        double minimum_rcond=1e-12; // singular-value ratio, no spectral shift
-    };
-
-    struct UDHZVectorProducts
+    struct UDHZVectorProducts : DHZVectorStatistics
     {
         // Owned MO/F/S and RHS snapshot; callback captures retain U2's
         // documented borrowed geometry/functionals lifetimes. Never cache
         // this result across a changed geometry or response reference.
         UDHZVectorInputs snapshot;
-        UDHOrbitalMatrices rhs_ai,z_ai,residual_ai;
-        Eigen::MatrixXd jacobian; // Explicit dense U4 reference only
-        double residual_max_abs=0,adjoint_max_abs=0,reciprocal_condition=1;
-        Eigen::Index rank=0;
-        std::size_t action_count=0;
+        UDHOrbitalMatrices rhs_ai,z_ai;
     };
 
-    // Pack alpha then beta, each a*nocc+i. Solve A^T z=-ell explicitly,
-    // using U3's total_ai unchanged (no second c_PT2 or occupation factor).
-    // Checks joint adjointness, numerical rank/condition and a freshly
-    // evaluated transpose residual. No SPD assumption, shift, zero-on-error
-    // or iterative fallback. This dense primitive is NOT UKS driver enablement.
+    // Pack alpha then beta, each a*nocc+i, and solve A z=-ell with the shared
+    // RKS/UKS solver (solve_packed_zvector), using U3's total_ai unchanged (no
+    // second c_PT2 or occupation factor). The joint Hessian is self-adjoint,
+    // which the tests check against a dense oracle; production never builds it.
     [[nodiscard]] std::expected<UDHZVectorProducts,std::string>
     solve_udh_zvector(const UDHZVectorInputs &inputs,const UDHOrbitalMatrices &rhs_ai,
-        const UDHZVectorOptions &options={});
+        const DHZVectorOptions &options={});
 }
 #endif

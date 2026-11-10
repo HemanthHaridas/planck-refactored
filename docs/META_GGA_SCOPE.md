@@ -118,7 +118,7 @@ C1 molecule, RKS and one UKS radical (mirroring `h_dft_uks_b3lyp_sto3g`).
   the grid convergence of each gated functional, not a single grid. Use
   `grid ultrafine` or an explicit radial count for the committed cases, so a
   real defect is not confused with grid error
-  (`docs/DFT_GRID_CONVERGENCE_SCOPE.md`).
+  (`docs/DFT_GRID_CONVERGENCE.md`).
 - Check that 1 and 4 threads give bitwise-identical energies.
 
 ### 2. Analytic nuclear gradients, geomopt, frequencies
@@ -164,7 +164,7 @@ here for it.
   (`docs/DH_IMPLEMENTATION.md`).
 - PCM with meta-GGA, beyond what step 1 inherits. The PCM reaction field does
   not depend on the functional, so single points should work. Gradients wait
-  for `docs/PCM_GEOMETRY_SCOPE.md`.
+  for `docs/PCM_GEOMETRY.md`.
 - r2SCAN-3c-style composite methods. They also need D4 and a special basis.
 
 ## Depends on / enables

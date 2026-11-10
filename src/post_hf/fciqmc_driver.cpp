@@ -7,6 +7,7 @@
 #include "post_hf/ci/spawn_accumulator.h"
 #include "post_hf/fci.h"
 
+#include <bit>
 #include <cmath>
 #include <chrono>
 #include <cstdint>
@@ -14,11 +15,16 @@
 #include <cstdlib>
 #include <limits>
 #include <format>
+#include <iostream>
 #include <algorithm>
 #include <memory>
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+#if defined(__APPLE__) || defined(__linux__)
+#include <sys/resource.h>
+#endif
 
 namespace HartreeFock::Correlation
 {
@@ -28,6 +34,60 @@ namespace HartreeFock::Correlation
 
     namespace
     {
+        // Process high-water mark through this point. The units of ru_maxrss
+        // are bytes on Darwin and KiB on Linux.
+        std::int64_t peak_rss_bytes()
+        {
+#if defined(__APPLE__) || defined(__linux__)
+            struct rusage usage{};
+            if (getrusage(RUSAGE_SELF, &usage) == 0)
+            {
+#ifdef __APPLE__
+                return usage.ru_maxrss;
+#else
+                return static_cast<std::int64_t>(usage.ru_maxrss) * 1024;
+#endif
+            }
+#endif
+            return -1;
+        }
+
+        // Diagnostic only. FNV-1a on little-endian words, including all bits
+        // of every double. An identity for comparing runs, not a physics oracle.
+        struct RunFingerprint
+        {
+            std::uint64_t value = 14695981039346656037ULL;
+            void word(std::uint64_t x)
+            {
+                for (int i = 0; i < 8; ++i, x >>= 8)
+                    value = (value ^ (x & 255)) * 1099511628211ULL;
+            }
+            void real(double x) { word(std::bit_cast<std::uint64_t>(x)); }
+        };
+
+        void log_hamiltonian_identity(const FixedOrbitalCISetup &setup,
+                                      const HartreeFock::Calculator &calc, double build_seconds)
+        {
+            RunFingerprint id;
+            id.word(setup.n_act);
+            id.word(setup.n_alpha);
+            id.word(setup.n_beta);
+            id.real(calc._nuclear_repulsion + setup.core_energy);
+            for (int i = 0; i < setup.n_act; ++i)
+                for (int j = 0; j < setup.n_act; ++j)
+                    id.real(setup.h_eff(i, j));
+            for (double g : setup.ga)
+                id.real(g);
+            const auto &C = calc._info._scf.alpha.mo_coefficients;
+            const Eigen::MatrixXd metric = C.transpose() * calc._overlap * C;
+            const double error = (metric - Eigen::MatrixXd::Identity(
+                metric.rows(), metric.cols())).cwiseAbs().maxCoeff();
+            logging(LogLevel::Info, "FCIQMC_PROFILE:",
+                    std::format("phase=hamiltonian id={:016x} nuclear_e={:.12f} "
+                                "mo_orthogonality_max_error={:.3e} build_s={:.6f}",
+                                id.value, calc._nuclear_repulsion, error, build_seconds));
+        }
+
         struct FCIQMCDriverWork
         {
             std::uint64_t steps = 0;
@@ -38,7 +98,7 @@ namespace HartreeFock::Correlation
 
         void log_profile(const std::string &phase,
                          const FCIQMCDriverWork &driver,
-                         const FCIQMCPropagationProfile &propagation)
+                         const FCIQMCPropagationProfile &propagation, double phase_seconds)
         {
             std::uint64_t parents = 0;
             std::uint64_t attempts = 0;
@@ -48,10 +108,23 @@ namespace HartreeFock::Correlation
             std::uint64_t rounded = 0;
             std::uint64_t raw_records = 0;
             std::uint64_t finalized_records = 0;
+            std::uint64_t min_bin_parents = propagation.bins.front().parents, max_bin_parents = 0;
             double max_bin_seconds = 0.0;
+            FCIQMCParentWeightWork below, at_or_above;
+            const auto add_group = [](FCIQMCParentWeightWork &total,
+                                      const FCIQMCParentWeightWork &group) {
+                total.visits += group.visits;
+                total.absolute_weight += group.absolute_weight;
+                total.attempts += group.attempts;
+                total.nonzero_spawns += group.nonzero_spawns;
+            };
             for (const auto &bin : propagation.bins)
             {
+                add_group(below, bin.below_granularity);
+                add_group(at_or_above, bin.at_or_above_granularity);
                 parents += bin.parents;
+                min_bin_parents = std::min(min_bin_parents, bin.parents);
+                max_bin_parents = std::max(max_bin_parents, bin.parents);
                 attempts += bin.spawn_attempts;
                 invalid += bin.invalid_excitations;
                 zero_h += bin.zero_hamiltonian;
@@ -76,7 +149,8 @@ namespace HartreeFock::Correlation
                                 "canonical_stream_s={:.6f} canonical_emitted={} "
                                 "canonical_pairwise_s={:.6f} "
                                 "parent_cleanup_s={:.6f} compress_s={:.6f} "
-                                "estimator_s={:.6f}",
+                                "estimator_s={:.6f} phase_wall_s={:.6f} "
+                                "bin_count={} min_bin_parents={} max_bin_parents={}",
                                 phase, driver.steps, parents, attempts, invalid,
                                 zero_h, initiator, rounded, raw_records,
                                 finalized_records, driver.prefill_seconds,
@@ -90,15 +164,27 @@ namespace HartreeFock::Correlation
                                 propagation.canonical_merge_emitted,
                                 propagation.canonical_pairwise_seconds,
                                 propagation.parent_cleanup_seconds,
-                                driver.compress_seconds, driver.estimator_seconds));
+                                driver.compress_seconds, driver.estimator_seconds, phase_seconds,
+                                propagation.bins.size(), min_bin_parents, max_bin_parents));
+            const auto log_group = [&](const char *group, const FCIQMCParentWeightWork &work) {
+                logging(LogLevel::Info, "FCIQMC_PROFILE:",
+                        std::format("phase=parent_weight window={} group={} visits={} "
+                                    "abs_weight={:.12e} attempts={} nonzero_spawns={}",
+                                    phase, group, work.visits, work.absolute_weight,
+                                    work.attempts, work.nonzero_spawns));
+            };
+            log_group("below_granularity", below);
+            log_group("at_or_above_granularity", at_or_above);
         }
 
-        // Adapt the shared all-MO setup to the callbacks the propagator wants.
+        // Adapt the shared fixed-orbital setup to the callbacks the propagator wants.
         //
         // slater_condon_element is the SAME matrix-element routine the
         // deterministic CI uses, so the two paths cannot disagree about the
         // Hamiltonian -- only about how they solve it.
-        HamiltonianOps make_ops(const AllMOCISetup &setup)
+        using DiagonalCache = std::unordered_map<DetKey, double, DetKeyHash>;
+        HamiltonianOps make_ops(const FixedOrbitalCISetup &setup,
+                                const std::shared_ptr<DiagonalCache> &diag_cache)
         {
             const int n_act = setup.n_act;
             const Eigen::MatrixXd *h = &setup.h_eff;
@@ -111,7 +197,7 @@ namespace HartreeFock::Correlation
             };
             // MEMOIZED (scope step T4). H_ii is a pure function of the
             // determinant -- `h_eff` and `ga` are built once in
-            // `build_all_mo_ci_setup` and never mutated -- but the spawn loop asks
+            // `build_fixed_orbital_ci_setup` and never mutated -- but the spawn loop asks
             // for it once per parent per iteration, so the same value is recomputed
             // for the life of the run.
             //
@@ -123,12 +209,10 @@ namespace HartreeFock::Correlation
             // slater_condon_element's work by operation count, and that function
             // was 53.1 % of self time.
             //
-            // A bound or eviction policy was considered and is NOT needed: a churn
-            // model suggested the table could reach hundreds of MB, but the real
-            // occupied set is nearly static (1820 entries), so the model was
-            // pessimistic by orders of magnitude. If a future system does churn,
-            // the fix is to clear alongside `pop.compress()` -- only currently
-            // occupied determinants can ever be queried again.
+            // The serial prefill relies on a surviving parent's diagonal
+            // remaining resident between steps. Any future cache eviction must
+            // preserve those entries or arrange to prefill them again before
+            // the workers read the cache.
             //
             // `shared_ptr` because HamiltonianOps holds std::function, which must
             // stay copyable; the cache is shared by every copy, which is what we
@@ -138,8 +222,6 @@ namespace HartreeFock::Correlation
             // is threaded it must be prefilled before the parallel region, or made
             // per-bin -- never a shared mutable map. It cannot change any value
             // either way: a memo is a pure cache of a pure function.
-            auto diag_cache =
-                std::make_shared<std::unordered_map<DetKey, double, DetKeyHash>>();
             ops.diagonal = [h, g, n_act, diag_cache](const DetKey &i) {
                 if (const auto it = diag_cache->find(i); it != diag_cache->end())
                     return it->second;
@@ -234,12 +316,38 @@ namespace HartreeFock::Correlation
         const std::vector<HartreeFock::ShellPair> &shell_pairs)
     {
         const std::string tag = "FCIQMC";
-
-        auto setup = build_all_mo_ci_setup(calc, shell_pairs, tag);
+        const auto &opt = calc._fciqmc;
+        using Clock = std::chrono::steady_clock;
+        using Seconds = std::chrono::duration<double>;
+        const bool had_ao_eri = !calc._eri.empty();
+        const auto setup_start = opt.profile ? Clock::now() : Clock::time_point{};
+        CIIntegralTimings integral_timings;
+        const auto &as = calc._active_space;
+        const bool active = as.nactele != 0 || as.nactorb != 0;
+        auto setup = build_fixed_orbital_ci_setup(
+            calc, shell_pairs, tag, active ? CIOrbitalSpace::Active : CIOrbitalSpace::All,
+            opt.profile ? &integral_timings : nullptr);
         if (!setup)
             return std::unexpected(setup.error());
+        const double energy_offset = calc._nuclear_repulsion + setup->core_energy;
+        if (active)
+            logging(LogLevel::Info, tag + " :",
+                    std::format("Fixed orbitals: {} frozen core, {} active, core energy {:.12f} Eh",
+                                setup->n_core, setup->n_act, setup->core_energy));
+        if (opt.profile)
+        {
+            const double build_seconds = Seconds(Clock::now() - setup_start).count();
+            const auto setup_peak_rss = peak_rss_bytes();
+            log_hamiltonian_identity(*setup, calc, build_seconds);
+            const char *route = calc._mp2.use_ri ? "ri" :
+                                (had_ao_eri ? "cached" : "constructed");
+            logging(LogLevel::Info, "FCIQMC_PROFILE:",
+                    std::format("phase=integrals route={} ao_eri_s={:.6f} mo_eri_s={:.6f} "
+                                "setup_peak_rss_bytes={}",
+                                route, integral_timings.ao_eri_seconds,
+                                integral_timings.mo_eri_seconds, setup_peak_rss));
+        }
 
-        const auto &opt = calc._fciqmc;
         if (!(opt.target_walkers > 0.0))
             return std::unexpected(tag + ": fciqmc_walkers must be positive.");
         if (!(opt.timestep > 0.0))
@@ -247,7 +355,8 @@ namespace HartreeFock::Correlation
         if (opt.sampling_steps < 4)
             return std::unexpected(tag + ": fciqmc_steps must be at least 4.");
 
-        const auto ops = make_ops(*setup);
+        const auto diag_cache = std::make_shared<DiagonalCache>();
+        const auto ops = make_ops(*setup, diag_cache);
         DetKey reference = reference_determinant(setup->n_alpha, setup->n_beta,
                                                  setup->n_act, ops);
         // Print it. The wrong reference produced no error and no warning -- only a
@@ -280,12 +389,13 @@ namespace HartreeFock::Correlation
                             opt.initiator_threshold));
         logging(LogLevel::Info, tag + " :",
                 std::format("{} equilibration + {} sampling steps, {} spawn "
-                            "attempts per walker",
+                            "attempts per occupied determinant",
                             opt.equilibration_steps, opt.sampling_steps,
                             opt.spawn_attempts));
 
         // ── Propagate ──────────────────────────────────────────────────────────
         CanonicalWalkerPopulation pop;
+        CanonicalWalkerPopulation previous_parents;
         pop.assign_sorted({{reference, opt.target_walkers}});
 
         ShiftController ctl;
@@ -332,9 +442,21 @@ namespace HartreeFock::Correlation
         FCIQMCDriverWork sampling_work;
         FCIQMCPropagationProfile equilibration_profile;
         FCIQMCPropagationProfile sampling_profile;
+        std::size_t peak_population_bytes = 0;
 
+        const auto equilibration_start = opt.profile ? Clock::now() : Clock::time_point{};
+        auto sampling_start = equilibration_start;
         for (int step = 0; step < total_steps; ++step)
         {
+            if (opt.profile && step == opt.equilibration_steps)
+            {
+                // The macOS CPU sampler waits for this event in a redirected
+                // log. Emit it once, including for a zero-equilibration run.
+                logging(LogLevel::Info, "FCIQMC_PROFILE:", "phase=sampling_begin");
+                std::cout.flush();
+                if (step > 0)
+                    sampling_start = Clock::now();
+            }
             const bool sampling = step >= opt.equilibration_steps;
             FCIQMCDriverWork &step_work = sampling ? sampling_work : equilibration_work;
             FCIQMCPropagationProfile *step_profile = nullptr;
@@ -345,48 +467,10 @@ namespace HartreeFock::Correlation
             std::chrono::steady_clock::time_point prefill_start;
             if (opt.profile)
                 prefill_start = std::chrono::steady_clock::now();
-            // T2 scope step S3. `ops.diagonal` is memoized (T4) behind an
-            // unordered_map that is NOT thread-safe -- every entry the parallel
-            // region (S4) could possibly need must already be resident before
-            // that region starts, so no thread ever writes to the shared cache.
-            //
-            // A prefill pass over the CURRENT population, calling ops.diagonal
-            // for every determinant it holds, is sufficient: propagate_stochastic
-            // only ever queries the diagonal of determinants already present in
-            // `pop` at the top of the call (the death term, `fciqmc.cpp` around
-            // the `ham.diagonal(det)` line) -- it never queries the diagonal of a
-            // freshly spawned child, only of that child's PARENT, which is always
-            // an existing member of `pop`. So walking `pop` once covers every
-            // query the call is about to make.
-            //
-            // This is a pure mechanical change: it does not add, remove, or
-            // reorder any arithmetic. Every one of these calls would have hit the
-            // cache anyway on its first in-loop use (that is what T4 already
-            // guarantees at the 99.9974 % measured hit rate) -- this only moves
-            // WHEN the entry gets computed, from "first read inside the call" to
-            // "explicitly, just before it". Output must therefore be bitwise
-            // identical to S2, unlike S1->S2 which genuinely reordered summation.
-            //
-            // H2.8.4-b (fold A): this pass ALSO does propagate_stochastic's
-            // partition -- same `DetKeyHash{}(det) % kBins` binning, same
-            // `w == 0.0` skip -- so the propagator does not walk `pop` a second
-            // time to build `bin_parents`. `parents_prefilled` tells it to skip
-            // that loop; it clears the flag and the buckets when done. `pop` is
-            // an unordered_map, so this remains one traversal computing
-            // hash(det) once where it was computed twice (here + inside the
-            // propagator). The bin is a pure function of the determinant and
-            // the canonical owner already supplies a deterministic parent order.
-            spawn_ws.ready(kFciqmcBins);
-            spawn_ws.clear_parents();
-            for (const auto &[det, w] : pop)
-            {
-                (void)ops.diagonal(det);
-                if (w == 0.0)
-                    continue;
-                spawn_ws.parents[DetKeyHash{}(det) % kFciqmcBins]
-                    .push_back({det, w});
-            }
-            spawn_ws.parents_prefilled = true;
+            spawn_ws.prepare_canonical_parents(pop, previous_parents, ops);
+            // Both populations are sorted. Release the old allocation before
+            // propagation constructs the next population and its merge buffers.
+            previous_parents = {};
 
             if (opt.profile)
             {
@@ -401,6 +485,10 @@ namespace HartreeFock::Correlation
                                  opt.walker_granularity,
                                  opt.initiator_threshold, spawn_ws, next_pop,
                                  step_profile);
+            if (opt.profile)
+                peak_population_bytes = std::max(
+                    peak_population_bytes, pop.retained_bytes() + next_pop.retained_bytes());
+            previous_parents = std::move(pop);
             pop = std::move(next_pop);
 
             // H2.8.4-b (fold B): compress + ordered L1 norm in one walk of the
@@ -585,8 +673,53 @@ namespace HartreeFock::Correlation
 
         if (opt.profile)
         {
-            log_profile("equilibration", equilibration_work, equilibration_profile);
-            log_profile("sampling", sampling_work, sampling_profile);
+            const auto end = Clock::now();
+            log_profile("equilibration", equilibration_work, equilibration_profile,
+                        Seconds(sampling_start - equilibration_start).count());
+            log_profile("sampling", sampling_work, sampling_profile,
+                        Seconds(end - sampling_start).count());
+            // Both sets of bins retain capacity across steps. Their final
+            // capacities are high-water marks, even though their sizes reset.
+            std::size_t accumulator_bytes = 0, parent_bytes = 0;
+            for (const auto &bin : spawn_ws.bins)
+                accumulator_bytes += bin.retained_bytes();
+            for (const auto &parents : spawn_ws.parents)
+                parent_bytes += parents.capacity() * sizeof(parents.front());
+            logging(LogLevel::Info, "FCIQMC_PROFILE:",
+                    std::format("phase=memory population_pair_peak_bytes={} "
+                                "accumulator_bytes={} parent_bin_bytes={} merge_tagged_bound_bytes={} "
+                                "merge_output_peak_bytes={} "
+                                "diagonal_entries={} sample_series_bytes={} coefficient_ratio_entries={}",
+                                peak_population_bytes, accumulator_bytes, parent_bytes,
+                                std::max(equilibration_profile.peak_merge_tagged_bytes,
+                                         sampling_profile.peak_merge_tagged_bytes),
+                                std::max(equilibration_profile.peak_merge_output_bytes,
+                                         sampling_profile.peak_merge_output_bytes),
+                                diag_cache->size(), sizeof(double) *
+                                    (shift_samples.capacity() + projected_samples.capacity()),
+                                signed_population.size()));
+            // Sample-series and endpoint check, outside the step timings. The
+            // canonical population already iterates in determinant order.
+            RunFingerprint result;
+            result.word(shift_samples.size());
+            for (double v : shift_samples)
+                result.real(v);
+            result.word(projected_samples.size());
+            for (double v : projected_samples)
+                result.real(v);
+            result.real(proj_numerator_sum);
+            result.real(proj_denominator_sum);
+            result.word(reference.alpha);
+            result.word(reference.beta);
+            result.word(pop.size());
+            for (const auto &[det, weight] : pop)
+            {
+                result.word(det.alpha);
+                result.word(det.beta);
+                result.real(weight);
+            }
+            logging(LogLevel::Info, "FCIQMC_PROFILE:",
+                    std::format("phase=result id={:016x}", result.value));
         }
 
         if (shift_samples.size() < 4)
@@ -600,7 +733,7 @@ namespace HartreeFock::Correlation
             return v.empty() ? 0.0 : s / static_cast<double>(v.size());
         };
 
-        const double e_shift = mean_of(shift_samples) + calc._nuclear_repulsion;
+        const double e_shift = mean_of(shift_samples) + energy_offset;
         const double shift_err = blocked_standard_error(shift_samples);
 
         logging(LogLevel::Info, tag + " :",
@@ -668,7 +801,7 @@ namespace HartreeFock::Correlation
         {
             const double e_proj = ops.diagonal(reference)
                                   + proj_numerator_sum / proj_denominator_sum
-                                  + calc._nuclear_repulsion;
+                                  + energy_offset;
             // Error bar from a blocking analysis of the per-step ratios. This
             // OVERSTATES the uncertainty on the ratio-of-sums (which averages the
             // tails away), so it is conservative -- an overestimate fails a gate

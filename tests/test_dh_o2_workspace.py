@@ -30,7 +30,7 @@ class O2WorkspaceTests(unittest.TestCase):
         self.assertNotIn("build_dh_pt2_amplitude_density", production)
         self.assertIn("contract_residual > 1e-9", production)
         assembly = self.source.split("assemble_dh_gradient_driver_contract(", 1)[1].split(
-            "build_dh_gradient_driver_contract(const DHGradientDriverInputs &inputs)", 1)[0]
+            "build_dh_gradient_driver_contract(const DHGradientDriverInputs &inputs, DHStationaryProducts", 1)[0]
         for forbidden in ("build_dh_pt2_amplitude_density", "build_dh_eq41_response_density",
                           "build_dh_eq40_amplitude_rhs", "build_dh_lagrangian_rhs"):
             self.assertNotIn(forbidden, assembly)
@@ -51,11 +51,12 @@ class O2WorkspaceTests(unittest.TestCase):
         self.assertIn("data->ao=ao", prepare)
         self.assertIn("drop_correlation_if_combined", prepare)
 
-    def test_gamma_reference_is_separate_from_compact_production(self):
-        self.assertIn("DHGammaStorage::ReferenceAll", self.source)
-        self.assertIn("DHGammaStorage::ContractionOnly", self.source)
-        self.assertIn("if (storage == DHGammaStorage::ReferenceAll)", self.source)
-        self.assertIn("ContractionOnly retains no final Eq. (47) AO tensor", self.source)
+    def test_gamma_is_factorized_only(self):
+        # No dense Gamma storage mode or dense derivative fallback remains;
+        # a workspace without the direct callbacks is an error.
+        self.assertNotIn("DHGammaStorage", self.source)
+        self.assertNotIn("ReferenceAll", self.source)
+        self.assertIn("the derivative workspace has no direct h/S and ERI callbacks", self.source)
         self.assertIn("Gradient::solve_dh_zvector(", self.driver)
 
 

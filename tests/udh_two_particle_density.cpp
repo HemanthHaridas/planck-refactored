@@ -1,6 +1,7 @@
 // U7 independent fixed-contract scalars. No SCF, orbital-response solve,
 // molecular total-energy gradient or external quantum-chemistry oracle.
 #include "dft/udh_two_particle_density.h"
+#include "udh_dense_oracle.h"
 #include "base/basis.h"
 #include "basis/basis.h"
 #include "integrals/base.h"
@@ -21,6 +22,7 @@
 namespace
 {
     using namespace DFT::Gradient;
+    using namespace DFT::Gradient::TestOracle;
     using M=Eigen::MatrixXd;
     using V=std::vector<double>;
     bool ok=true;
@@ -89,8 +91,10 @@ namespace
     }
     UDHRelaxedDifferenceDensity relaxed(const Fixture &x)
     { return require(build_udh_relaxed_difference_density(require(build_udh_pt2_dprime(x.t,x.scale)),x.z)); }
-    UDHTwoParticleDensity gamma(const Fixture &x)
+    UDHTwoParticleDensity density(const Fixture &x)
     { return require(build_udh_two_particle_density(x.t,x.scale,relaxed(x),x.c,x.s,x.ax)); }
+    Tensors gamma(const Fixture &x)
+    { const auto g=density(x); return materialize(g,make_udh_two_particle_source(g,x.t,x.c)); }
     UDHOverlapDensity overlap(const Fixture &x)
     {
         // Independent frozen W: U6 already validates how W is built. U7
@@ -103,9 +107,9 @@ namespace
         w.total_ao=w.symmetric_ao.alpha+w.symmetric_ao.beta;
         return w;
     }
-    std::array<const UDHERICoefficients*,6> channels(const UDHTwoParticleDensity &g)
+    std::array<const ERICoefficients*,6> channels(const Tensors &g)
     { return {&g.coulomb,&g.exchange_alpha,&g.exchange_beta,&g.pair_aa,&g.pair_ab,&g.pair_bb}; }
-    std::array<const Eigen::VectorXd*,8> channels(const UDHNonXCGradient &g)
+    std::array<const Eigen::VectorXd*,8> channels(const DenseNonXC &g)
     { return {&g.one_electron,&g.overlap,&g.coulomb,&g.exchange_alpha,&g.exchange_beta,&g.pair_aa,&g.pair_ab,&g.pair_bb}; }
     // Literal eight-index AO coefficient oracle, independent of the staged
     // implementation. Deliberately no eightfold symmetry assumed here.
@@ -184,8 +188,18 @@ namespace
             near(dot(channels(g)[ch]->raw_ao,base.eri),value[ch+2]);
             near(dot(channels(g)[ch]->symmetric_ao,base.eri),value[ch+2]);
         }
-        const auto grad=require(build_udh_non_xc_gradient(g,w,{{direction.h},{direction.s},{direction.eri}}));
+        const DFT::Gradient::TestOracle::DenseDerivatives dense_direction{{direction.h},{direction.s},{direction.eri}};
+        const auto grad=dense_non_xc(g,w.total_ao,dense_direction);
         const auto ledger=channels(grad);
+        // Production assembly and stream against the channel-by-channel oracle.
+        {
+            const auto rho=density(x);
+            const auto production=require(build_dh_eq33_direct_non_xc_gradient(rho.relaxed_ao.total,w.total_ao,
+                make_udh_two_particle_source(rho,x.t,x.c),callbacks_from_dense(dense_direction)));
+            near(production.total(0),grad.total(0));
+            near(production.two_electron_separable(0),grad.coulomb(0)+grad.exchange_alpha(0)+grad.exchange_beta(0));
+            near(production.two_electron_nonseparable(0),grad.pair_aa(0)+grad.pair_ab(0)+grad.pair_bb(0));
+        }
         double worst=0;
         for(double step:{1e-3,2e-4})
         {
@@ -218,7 +232,7 @@ namespace
             for(int ch:{1,2}) for(std::size_t k=0;k<base.eri.size();++k)
                 near(channels(gy)[ch]->raw_ao[k]*x.ax,channels(g)[ch]->raw_ao[k]*ax);
             const auto ref=scalar(y,w,direction);
-            const auto got=require(build_udh_non_xc_gradient(gy,w,{{direction.h},{direction.s},{direction.eri}}));
+            const auto got=dense_non_xc(gy,w.total_ao,dense_direction);
             for(int ch=0;ch<8;++ch) near((*channels(got)[ch])(0),ref[ch]);
         }
         auto zero=x; zero.scale=0; zero.z.alpha.setZero(); zero.z.beta.setZero();
@@ -268,13 +282,13 @@ namespace
             sep[k]=g.coulomb.raw_ao[k]+g.exchange_alpha.raw_ao[k]+g.exchange_beta.raw_ao[k];
             pair[k]=g.pair_aa.raw_ao[k]+g.pair_ab.raw_ao[k]+g.pair_bb.raw_ao[k];
         }
-        equal(sep,restricted.separable_raw_ao); equal(pair,restricted.nonseparable_raw_ao);
+        const auto rd=dense_gamma(restricted,a,x.c.alpha);
+        equal(sep,rd.separable_raw_ao); equal(pair,rd.nonseparable_raw_ao);
         std::cout<<"U7 closed-shell raw Eq34/35 reduction to RKS Eq46/47\n";
     }
     void errors()
     {
-        auto x=fixture(2,1,2,3,M::Identity(4,4)); const auto d=relaxed(x); auto g=gamma(x); auto w=overlap(x);
-        const auto dg=model(4,.5); DHEq33NonXCDerivatives dx{{dg.h},{dg.s},{dg.eri}};
+        auto x=fixture(2,1,2,3,M::Identity(4,4)); const auto d=relaxed(x);
         check(!build_udh_two_particle_density(x.t,x.scale,d,x.c,x.s,-.1));
         check(!build_udh_two_particle_density(x.t,std::numeric_limits<double>::quiet_NaN(),d,x.c,x.s,x.ax));
         check(!build_udh_two_particle_density(x.t,2*x.scale,d,x.c,x.s,x.ax));
@@ -284,15 +298,6 @@ namespace
         auto c=x.c; c.beta(0,0)+=.1; check(!build_udh_two_particle_density(x.t,x.scale,d,c,x.s,x.ax));
         auto bad_d=d; bad_d.symmetric_mo.alpha(0,0)+=.1;
         check(!build_udh_two_particle_density(x.t,x.scale,bad_d,x.c,x.s,x.ax));
-        check(require(build_udh_non_xc_gradient(g,w,{})).total.size()==0);
-        auto bad=dx; bad.overlap_ao.clear(); check(!build_udh_non_xc_gradient(g,w,bad));
-        bad=dx; bad.hamiltonian_ao[0](0,1)+=.1; check(!build_udh_non_xc_gradient(g,w,bad));
-        bad=dx; bad.eri_ao[0][1]+=.1; check(!build_udh_non_xc_gradient(g,w,bad));
-        bad=dx; bad.eri_ao[0][0]=std::numeric_limits<double>::infinity(); check(!build_udh_non_xc_gradient(g,w,bad));
-        auto bad_g=g; bad_g.pair_ab.symmetric_ao[0]+=.1; check(!build_udh_non_xc_gradient(bad_g,w,dx));
-        bad_g=g; bad_g.pair_aa.raw_ao.pop_back(); check(!build_udh_non_xc_gradient(bad_g,w,dx));
-        bad_g=g; bad_g.relaxed_ao.total(0,0)+=.1; check(!build_udh_non_xc_gradient(bad_g,w,dx));
-        w.total_ao(0,0)+=.1; check(!build_udh_non_xc_gradient(g,w,dx));
     }
 
     HartreeFock::Calculator molecule(int atom=-1,int cart=0,double step=0)
@@ -320,14 +325,14 @@ namespace
         return {t+_compute_nuclear_attraction(pairs,n,calc._molecule,engine),s,
             _compute_2e(pairs,n,engine,HartreeFock::ERIKernel::Coulomb,0.,0.,nullptr)};
     }
-    DHEq33NonXCDerivatives derivatives(const HartreeFock::Calculator &calc)
+    DFT::Gradient::TestOracle::DenseDerivatives derivatives(const HartreeFock::Calculator &calc)
     {
         const int n=calc._shells.nbasis(); const auto &bfs=calc._shells._basis_functions;
         std::vector<int> owner(n,-1);
         for(int mu=0;mu<n;++mu) for(int a=0;a<3;++a)
             if((bfs[mu]._shell->_center-calc._molecule._standard.row(a).transpose()).squaredNorm()<1e-12) owner[mu]=a;
         if(std::find(owner.begin(),owner.end(),-1)!=owner.end()) throw std::runtime_error("AO owner not found");
-        DHEq33NonXCDerivatives out;
+        DFT::Gradient::TestOracle::DenseDerivatives out;
         out.hamiltonian_ao.assign(9,M::Zero(n,n)); out.overlap_ao.assign(9,M::Zero(n,n));
         out.eri_ao.assign(9,V(static_cast<std::size_t>(n)*n*n*n));
         for(int mu=0;mu<n;++mu) for(int nu=0;nu<n;++nu)
@@ -358,7 +363,11 @@ namespace
         const auto calc=molecule(); const auto base=integrals(calc); const int n=base.s.rows();
         auto x=fixture(5,4,n-5,n-4,base.s);
         const auto g=gamma(x); const auto w=overlap(x); const auto dx=derivatives(calc);
-        const auto grad=require(build_udh_non_xc_gradient(g,w,dx));
+        const auto grad=dense_non_xc(g,w.total_ao,dx);
+        const auto rho=density(x);
+        const auto production=require(build_dh_eq33_direct_non_xc_gradient(rho.relaxed_ao.total,w.total_ao,
+            make_udh_two_particle_source(rho,x.t,x.c),callbacks_from_dense(dx)));
+        for(int k=0;k<9;++k) near(production.total(k),grad.total(k));
         const auto values=channels(grad);
         // Separate direct Planck J, alpha K and beta K at the reference.
         const auto pairs=build_shellpairs(calc._shells);

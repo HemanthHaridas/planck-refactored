@@ -1,3 +1,10 @@
+# 90-degree twisted ethylene with the second CH2 pyramidalized by 0.20 A.
+# The pyramidalization is deliberate: at the exact D2d geometry the two
+# carbon p orbitals are degenerate, the HOMO/LUMO gap at SCF iteration 2 is
+# ~1e-15, and roundoff alone chose between a zwitterion (unstable in every
+# channel) and a covalent state (stable in the real-internal channel).
+# Breaking D2d makes the zwitterion the only state reached, from every
+# PySCF guess and from Planck SAD (-77.3844126695 in both codes).
 %begin_control
     basis       3-21g
     calculation energy
@@ -10,7 +17,7 @@
     use_diis    .true.
     diis_dim    8
     engine      os
-    guess       hcore
+    guess       sad
     max_cycles  100
     stability_check  .true.
     stability_follow .false.
@@ -29,6 +36,6 @@ C    -0.669500    0.000000    0.000000
 C     0.669500    0.000000    0.000000
 H    -1.233698    0.927942    0.000000
 H    -1.233698   -0.927942    0.000000
-H     1.233698    0.000000    0.927942
-H     1.233698    0.000000   -0.927942
+H     1.233698    0.200000    0.927942
+H     1.233698    0.200000   -0.927942
 %end_coords

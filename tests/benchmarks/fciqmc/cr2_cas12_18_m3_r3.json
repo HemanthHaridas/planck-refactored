@@ -1,0 +1,80 @@
+{
+  "fixture": "tests/inputs/exploratory/fciqmc/cr2_cas12_18_pilot.hfinp",
+  "host": "Apple M3",
+  "budget": {
+    "wall_seconds_per_run": 600,
+    "peak_rss_bytes": 1073741824
+  },
+  "runs": [
+    {
+      "binary_sha256": "9efe8b7aa2545aaecf43f5d14abf6ae94582ccde3c4258d1f29e103ca1a49cd7",
+      "input_sha256": "777def16f8a62e2023cf266285ea4fc33fa8a7bf81612769fcb14d572c246f98",
+      "thread_env": {
+        "OMP_NUM_THREADS": "4",
+        "OMP_DYNAMIC": "false",
+        "OMP_PROC_BIND": null,
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1"
+      },
+      "process_wall_s": 8.56449425000028,
+      "peak_rss_bytes": 88293376,
+      "exit_code": 0,
+      "fciqmc_equilibration": 2000,
+      "profile": [
+        "phase=input parse_s=0.000583",
+        "phase=hf basis_setup_s=0.002202 one_electron_s=0.000864 scf_setup_s=0.000000 scf_s=0.818623",
+        "phase=hamiltonian id=3ffac35b4805c0ec nuclear_e=181.432186595314 mo_orthogonality_max_error=1.269e-14 build_s=0.006292",
+        "phase=integrals route=cached ao_eri_s=0.000001 mo_eri_s=0.005252 setup_peak_rss_bytes=62947328",
+        "phase=sampling_begin",
+        "phase=equilibration steps=2000 parents=19372736 attempts=19372736 invalid=0 zero_h=0 initiator_rejected=18490849 rounded_zero=856738 records_raw=19397885 records_folded=19397778 prefill_s=0.063081 setup_s=0.000395 worker_wall_s=1.076560 max_bin_work_s=0.075035 merge_s=0.536414 merge_insert_s=0.536227 canonical_reserve_s=0.000000 canonical_frontier_s=0.000000 canonical_stream_s=0.000000 canonical_emitted=19392847 canonical_pairwise_s=0.526360 parent_cleanup_s=0.000146 compress_s=0.031465 estimator_s=0.000000 phase_wall_s=1.708209 bin_count=64 min_bin_parents=264838 max_bin_parents=344021",
+        "phase=sampling steps=2000 parents=58535720 attempts=58535720 invalid=0 zero_h=0 initiator_rejected=57381659 rounded_zero=1123614 records_raw=58566167 records_folded=58565934 prefill_s=0.155015 setup_s=0.000441 worker_wall_s=3.343932 max_bin_work_s=0.239777 merge_s=1.275031 merge_insert_s=1.274737 canonical_reserve_s=0.000000 canonical_frontier_s=0.000000 canonical_stream_s=0.000000 canonical_emitted=58554556 canonical_pairwise_s=1.245320 parent_cleanup_s=0.000250 compress_s=0.094651 estimator_s=0.549555 phase_wall_s=5.419188 bin_count=64 min_bin_parents=837826 max_bin_parents=1008796",
+        "phase=memory population_pair_peak_bytes=1869216 accumulator_bytes=1572864 parent_bin_bytes=1572864 merge_tagged_bound_bytes=2493248 merge_output_peak_bytes=934968 diagonal_entries=39063 sample_series_bytes=32768 coefficient_ratio_entries=0",
+        "phase=result id=ffb19ea8518619be"
+      ],
+      "estimators": [
+        "Fixed orbitals: 18 frozen core, 18 active, core energy -2217.412051101117 Eh",
+        "REFERENCE DRIFT: determinant 0x000000000000003f/0x0000000000010139 now carries 82.62 walkers against the seeded reference's 40.76 (2.0x). This is the signature of a degenerate or near-degenerate ground state, in which the population drifts freely between partners. Re-anchoring the projection; the shift energy is unaffected.",
+        "Shift energy     -2067.2689161155 +/- 1.58e-01  (2000 samples)",
+        "reference weight: mean 25.09, min 3.00 walkers",
+        "Projected energy -2063.8367245288 +/- 2.60e-02  (1994 samples)",
+        "shift and projected energies differ by 3.432e+00, beyond 5 sigma (7.897e-01) -- the run may not be equilibrated"
+      ]
+    },
+    {
+      "binary_sha256": "9efe8b7aa2545aaecf43f5d14abf6ae94582ccde3c4258d1f29e103ca1a49cd7",
+      "input_sha256": "a98b334c7f0b1a7f88efce112ca64b0d904b06b32f3f343280ba50ddf3425499",
+      "thread_env": {
+        "OMP_NUM_THREADS": "4",
+        "OMP_DYNAMIC": "false",
+        "OMP_PROC_BIND": null,
+        "OPENBLAS_NUM_THREADS": "1",
+        "MKL_NUM_THREADS": "1",
+        "VECLIB_MAXIMUM_THREADS": "1"
+      },
+      "process_wall_s": 48.65054133299964,
+      "peak_rss_bytes": 115081216,
+      "exit_code": 0,
+      "fciqmc_equilibration": 10000,
+      "profile": [
+        "phase=input parse_s=0.000085",
+        "phase=hf basis_setup_s=0.001490 one_electron_s=0.000670 scf_setup_s=0.000000 scf_s=0.840431",
+        "phase=hamiltonian id=3ffac35b4805c0ec nuclear_e=181.432186595314 mo_orthogonality_max_error=1.269e-14 build_s=0.007550",
+        "phase=integrals route=cached ao_eri_s=0.000000 mo_eri_s=0.006622 setup_peak_rss_bytes=62947328",
+        "phase=sampling_begin",
+        "phase=equilibration steps=10000 parents=445086040 attempts=445086040 invalid=0 zero_h=0 initiator_rejected=437620576 rounded_zero=7272866 records_raw=445278638 records_folded=445276331 prefill_s=1.090289 setup_s=0.002411 worker_wall_s=24.738487 max_bin_work_s=1.634147 merge_s=8.485977 merge_insert_s=8.484690 canonical_reserve_s=0.000000 canonical_frontier_s=0.000000 canonical_stream_s=0.000000 canonical_emitted=445164421 canonical_pairwise_s=8.253280 parent_cleanup_s=0.001085 compress_s=0.715328 estimator_s=0.000000 phase_wall_s=35.034461 bin_count=64 min_bin_parents=6482593 max_bin_parents=7331457",
+        "phase=sampling steps=2000 parents=157707164 attempts=157707164 invalid=0 zero_h=0 initiator_rejected=155294113 rounded_zero=2355047 records_raw=157765168 records_folded=157764194 prefill_s=0.375128 setup_s=0.000700 worker_wall_s=9.098750 max_bin_work_s=0.613654 merge_s=2.800674 merge_insert_s=2.800409 canonical_reserve_s=0.000000 canonical_frontier_s=0.000000 canonical_stream_s=0.000000 canonical_emitted=157715542 canonical_pairwise_s=2.708974 parent_cleanup_s=0.000236 compress_s=0.242020 estimator_s=0.190239 phase_wall_s=12.708219 bin_count=64 min_bin_parents=2249089 max_bin_parents=2594524",
+        "phase=memory population_pair_peak_bytes=3820608 accumulator_bytes=3145728 parent_bin_bytes=3145728 merge_tagged_bound_bytes=5095872 merge_output_peak_bytes=1910952 diagonal_entries=86883 sample_series_bytes=24576 coefficient_ratio_entries=0",
+        "phase=result id=248a1e931b712d90"
+      ],
+      "estimators": [
+        "Fixed orbitals: 18 frozen core, 18 active, core energy -2217.412051101117 Eh",
+        "REFERENCE DRIFT: determinant 0x000000000001c320/0x0000000000004187 now carries 35.44 walkers against the seeded reference's 0.02 (2283.5x). This is the signature of a degenerate or near-degenerate ground state, in which the population drifts freely between partners. Re-anchoring the projection; the shift energy is unaffected.",
+        "Shift energy     -2068.5141509274 +/- 1.39e-01  (2000 samples)",
+        "reference weight: mean 14.13, min 3.01 walkers",
+        "Projected energy -2062.6511094059 +/- 5.33e-02  (803 samples)",
+        "shift and projected energies differ by 5.863e+00, beyond 5 sigma (6.938e-01) -- the run may not be equilibrated"
+      ]
+    }
+  ]
+}

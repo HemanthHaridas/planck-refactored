@@ -9,7 +9,13 @@
 #include <string>
 #include <vector>
 
-#include "base/types.h"
+// Forward declaration, not base/types.h: every CC header (and the generated
+// kernel registry) includes this one, and must not recompile on every
+// types.h edit.
+namespace HartreeFock
+{
+    struct Calculator;
+}
 
 namespace HartreeFock::Correlation::CC
 {

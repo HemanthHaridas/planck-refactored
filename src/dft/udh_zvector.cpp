@@ -1,7 +1,5 @@
 #include "udh_zvector.h"
 #include <Eigen/Cholesky>
-#include <Eigen/QR>
-#include <Eigen/SVD>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -98,64 +96,26 @@ namespace DFT::Gradient
     }
 
     std::expected<UDHZVectorProducts,std::string> solve_udh_zvector(
-        const UDHZVectorInputs &in,const UDHOrbitalMatrices &rhs,const UDHZVectorOptions &options)
+        const UDHZVectorInputs &in,const UDHOrbitalMatrices &rhs,const DHZVectorOptions &options)
     {
         auto dimensions=layout(in); if (!dimensions) return std::unexpected(dimensions.error());
         const auto l=*dimensions;
-        if (!valid_trial(rhs,l) || !std::isfinite(options.residual_tolerance) || options.residual_tolerance<=0 ||
-            !std::isfinite(options.adjoint_tolerance) || options.adjoint_tolerance<=0 ||
-            !std::isfinite(options.minimum_rcond) || options.minimum_rcond<=0 || options.minimum_rcond>1)
-            return std::unexpected("UDH U4: invalid RHS or solve controls.");
+        if (!valid_trial(rhs,l)) return std::unexpected("UDH U4: invalid RHS shapes or values.");
         UDHZVectorProducts out; out.snapshot=in; out.rhs_ai=rhs;
-        const auto apply=[&](const V &v)->std::expected<V,std::string>
+        const DFT::Response::Action apply=[&](const V &v)->std::expected<V,std::string>
         {
-            ++out.action_count;
             auto value=action(in,unpack(v,l),l);
             if (!value) return std::unexpected(value.error());
             return pack(value->total,l);
         };
-        // Enforce homogeneous response, including the empty-pair boundary.
-        auto zero=apply(V::Zero(l.n)); if (!zero) return std::unexpected(zero.error());
-        if (maxabs(*zero)>options.residual_tolerance)
-            return std::unexpected("UDH U4: nonzero action on zero trial.");
-        out.jacobian=M(l.n,l.n);
-        if (!l.n)
-        { out.z_ai=unpack(V(0),l); out.residual_ai=out.z_ai; return out; }
-        for (Eigen::Index col=0;col<l.n;++col)
-        {
-            V unit=V::Zero(l.n); unit(col)=1;
-            auto value=apply(unit); if (!value) return std::unexpected(value.error());
-            out.jacobian.col(col)=*value;
-        }
-        out.adjoint_max_abs=maxabs(out.jacobian-out.jacobian.transpose());
-        if (out.adjoint_max_abs>options.adjoint_tolerance*std::max(1.0,maxabs(out.jacobian)))
-            return std::unexpected("UDH U4: KS Jacobian violates joint-spin adjointness.");
-        const Eigen::JacobiSVD<M> svd(out.jacobian);
-        const V singular=svd.singularValues();
-        if (!singular.allFinite() || singular(0)<=0)
-            return std::unexpected("UDH U4: singular KS Jacobian.");
-        out.reciprocal_condition=singular(l.n-1)/singular(0);
-        if (out.reciprocal_condition<options.minimum_rcond)
-            return std::unexpected("UDH U4: rank-deficient or ill-conditioned KS Jacobian.");
-        const M transpose=out.jacobian.transpose();
-        Eigen::ColPivHouseholderQR<M> qr(transpose); qr.setThreshold(options.minimum_rcond);
-        out.rank=qr.rank();
-        if (out.rank!=l.n) return std::unexpected("UDH U4: transpose solve is rank deficient.");
-        const V b=-pack(rhs,l),z=qr.solve(b);
-        if (!z.allFinite()) return std::unexpected("UDH U4: nonfinite Z solution.");
-        // Fresh A^T z, not A z and not a residual against cached columns.
-        V residual(l.n);
-        for (Eigen::Index col=0;col<l.n;++col)
-        {
-            V unit=V::Zero(l.n); unit(col)=1;
-            auto value=apply(unit); if (!value) return std::unexpected(value.error());
-            residual(col)=z.dot(*value)-b(col);
-        }
-        out.residual_max_abs=maxabs(residual);
-        const double limit=options.residual_tolerance*std::max(1.0,maxabs(b));
-        if (!std::isfinite(limit) || !residual.allFinite() || out.residual_max_abs>limit)
-            return std::unexpected("UDH U4: fresh transpose residual exceeds tolerance.");
-        out.z_ai=unpack(z,l); out.residual_ai=unpack(residual,l);
+        V diagonal(l.n);
+        for (Eigen::Index a=0;a<l.va;++a) for(Eigen::Index i=0;i<l.oa;++i)
+            diagonal(a*l.oa+i)=in.fock_mo.alpha(l.oa+a,l.oa+a)-in.fock_mo.alpha(i,i);
+        for (Eigen::Index a=0;a<l.vb;++a) for(Eigen::Index i=0;i<l.ob;++i)
+            diagonal(l.na+a*l.ob+i)=in.fock_mo.beta(l.ob+a,l.ob+a)-in.fock_mo.beta(i,i);
+        auto z=solve_packed_zvector(apply,-pack(rhs,l),diagonal,options,out,"UDH U4 Z-vector");
+        if (!z) return std::unexpected(z.error());
+        out.z_ai=unpack(*z,l);
         return out;
     }
 }

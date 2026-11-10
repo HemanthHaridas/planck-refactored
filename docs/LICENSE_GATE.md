@@ -1,5 +1,9 @@
 # What does a Planck binary need before it will run?
 
+Answered 2026-09-28. Status lives in `vault/Status/`.
+
+## Answer
+
 Every Planck executable needs a valid license file, and — on a cold cache,
 see [Caching](#caching) — network access at startup. That covers
 `hartree-fock`, `planck-dft`, `planck-mpi` and every test binary built from

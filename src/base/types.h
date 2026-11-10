@@ -325,6 +325,7 @@ namespace HartreeFock
     {
         Eigen::Vector3d position = Eigen::Vector3d::Zero(); // Bohr
         double charge = 0.0;                                // Atomic units (e)
+        double exponent = 0.0; // 0: point charge; > 0: normalized Gaussian exp(-exponent r^2)
     };
 
     struct Shell
@@ -721,15 +722,16 @@ namespace HartreeFock
     //   _cavity_scale             — Multiplier on each atom's vdW radius
     //                               when forming the cavity sphere. 1.2 is
     //                               the standard Bondi-radius PCM choice.
-    //   _surface_points_per_atom  — Fibonacci-sphere tesserae per atom
-    //                               BEFORE bury-test pruning. Minimum 6.
+    //   _surface_points_per_atom  — Lebedev points per atomic sphere before
+    //                               SWIG pruning (302 matches PySCF's default
+    //                               lebedev_order 29).
     struct OptionsSolvation
     {
         SolvationModel _model = SolvationModel::None;
         std::string _solvent = "";
         double _dielectric = 1.0;
         double _cavity_scale = 1.2;
-        int _surface_points_per_atom = 60;
+        int _surface_points_per_atom = 302;
     };
 
     // Optional symmetry-aware orbital selection metadata for active-space setup.
@@ -829,7 +831,7 @@ namespace HartreeFock
         double initiator_threshold = 0.0;  // n_add; 0 disables the initiator
         int equilibration_steps = 2000;    // discarded before averaging
         int sampling_steps = 8000;         // averaged
-        int spawn_attempts = 1;            // draws per walker per iteration
+        int spawn_attempts = 1;            // draws per occupied determinant per iteration
 
         // Emit the opt-in scaling ledger.  This changes neither the stochastic
         // evolution nor the estimator; it only records work and wall-time
@@ -1534,9 +1536,6 @@ namespace HartreeFock
             std::vector<int> active_mo_alpha;  // UMP2 alpha active mask
             std::vector<int> active_mo_beta;   // UMP2 beta active mask
             std::vector<double> t2;            // RMP2 T2[i,j,a,b] (row-major), empty if not computed
-            std::vector<double> ump2_t2_aa;    // UMP2 αα block
-            std::vector<double> ump2_t2_ab;    // UMP2 αβ block
-            std::vector<double> ump2_t2_bb;    // UMP2 ββ block
             double e_corr_ss = 0.0;            // same-spin correlation energy
             double e_corr_os = 0.0;            // opposite-spin correlation energy
             bool converged = true;             // iterative MP2 convergence flag (true = canonical or converged)

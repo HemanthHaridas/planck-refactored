@@ -37,7 +37,9 @@ RKS DH gradients support geometry optimization and semi-numerical frequencies:
 the latter finite-difference the analytic gradient, rather than using an
 analytic DH Hessian. A separate, deliberately narrower UKS DH path has its
 own spin response and grid contracts; it is not an unrestricted version of
-the closed-shell equations documented here.
+the closed-shell equations documented here. Its non-XC gradient assembly,
+AO pair stream and Z-vector solver are shared with RKS (see §7 and the Eq. 27
+solver below).
 
 ---
 
@@ -105,7 +107,14 @@ internal expression exists only as a reference oracle; combining it with
 `LiteralEq47` double-counts the stationary transfer.
 
 The ordinary solver is restarted matrix-free GMRES over the typed Eq. 27
-action. A dense Hessian is an explicit test/reference backend only. GMRES has
+action, and it is the only solver: `solve_packed_zvector`
+(`src/dft/dh_zvector.h`) takes a packed action, right-hand side and
+orbital-gap diagonal, and RKS (`solve_dh_zvector`) and UKS
+(`solve_udh_zvector`, alpha then beta) supply only their packing and action.
+It solves `A z = b` and relies on `A` being self-adjoint, which the physical
+KS orbital Hessian is. No dense Hessian exists in production; the tests build
+one column by column from the same public actions
+(`tests/dh_zvector_oracle.h`) and check adjointness there. GMRES has
 one right-hand side and one trial direction per action, so there is no
 production batch of independent orbital-response vectors to exploit.
 
@@ -247,13 +256,17 @@ There is no normal-production full MO-ERI tensor.
 
 Eq. 46 is evaluated from quadratic `D`, `P`, and `a_x` data during the
 ERI-derivative traversal. Eq. 47 uses
-`for_each_dh_eq47_nonseparable_raw_ao_block`: it emits bounded AO blocks that
+`for_each_dh_pair_ao_block`, the spin-general generator the UKS path also uses: it emits bounded AO blocks that
 the direct derivative consumer contracts immediately. Neither a final raw nor
 a symmetrized AO four-index pair tensor survives in the production result.
 
-Dense `ReferenceAll` objects remain valid diagnostic/reference adapters. They
-are intentionally named and separated so a test allocation cannot silently
-become a production retention requirement.
+There is no dense path. `DHEq46_47TwoParticleDensity` holds only `D`, `P`
+and `a_x`; `DHEq33NonXCDerivatives` holds only the two direct callbacks; and a
+contract built from a workspace without them fails with a named error. The
+dense AO tensors (raw and symmetrized Eq. 46/47, dense h/S/ERI derivatives)
+exist only in the tests, rebuilt from the production stream by
+`tests/dh_dense_oracle.h`, so a test allocation cannot become a production
+retention requirement.
 
 ---
 
@@ -269,7 +282,8 @@ only from cancellation in a final molecular gradient.
 - Dense and matrix-free Eq. 27 actions, Z solutions, sign convention, and
   refreshed residual.
 - Eq. 42–45 raw blocks, orientations, symmetric adapter, and contractions.
-- Eq. 46/47 raw, symmetric, tiled, and direct derivative-contraction equality.
+- Eq. 46/47 raw, symmetric, tiled, and direct derivative-contraction equality,
+  against dense tensors rebuilt test-side from the production stream.
 - Source-view versus materialized tilde values and D-prime matrices.
 - Fixed-grid and moving-grid XC-II channels, including rigid translation.
 - Ownership and storage contracts: no copied T2, no retained legacy MO-ERI,
@@ -305,8 +319,9 @@ Before extending DH gradients:
 4. Preserve correction-only separation from the KS reference.
 5. Preserve the `LiteralEq47` Eq. 40 convention and the `AZ=-L` Z-vector sign.
 6. Run the component contract first, then both molecular Cartesian-FD gates.
-7. Label every retained dense object as a reference adapter and state its
-   lifetime explicitly.
+7. Keep dense reference objects out of production. A dense view a test needs
+   goes in `tests/dh_dense_oracle.h` (or `tests/udh_dense_oracle.h` for the
+   UKS channels), rebuilt from the production producer it checks.
 
 This architecture does not by itself extend the theory to range-separated DH,
 solvent response, arbitrary SCS/DOS coefficients, or general meta-GGA DH

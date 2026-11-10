@@ -9,8 +9,8 @@ namespace HartreeFock
     namespace Rys
     {
 
-        // Maximum Rys roots for MAX_L=6 (H shells): n = floor(4*5/2)+1 = 11.
-        static constexpr int RYS_MAX_ROOTS = 11;
+        // Maximum Rys roots for MAX_L=6 (i shells): n = floor(4*6/2)+1 = 13.
+        static constexpr int RYS_MAX_ROOTS = 13;
 
         // Below this T the one-root rule takes its T = 0 values.
         static constexpr double RYS_T_ZERO = 1.0e-14;

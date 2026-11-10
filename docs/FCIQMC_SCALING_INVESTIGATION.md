@@ -1,227 +1,255 @@
-# FCIQMC Scalability
+# FCIQMC scaling investigation
 
-## Purpose
+**Cr₂ CAS(12,18) fits the M3 pilot budget, but its three 25,000-walker projected energies at τ = 5–6 exceed a verified variational upper bound by 0.108–1.092 Eh.** Two perturbative estimates place the fixed-orbital ground energy near −2064.92 to −2064.93 Eh. Low-weight parents account for over 93% of spawn attempts in both profiled CAS(12,18) runs. [Energy accuracy](#r3-energy-accuracy-in-cas1218) · [Spawn work by parent weight](#r3-spawn-work-by-parent-weight)
 
-This document records the production FCIQMC propagation design, the measured
-performance envelope, and the evidence required before another optimization is
-accepted. It is deliberately a current-state document: superseded experiments
-are not retained as an implementation plan.
+**R2 passed the adoption gate on the Apple M3.** On water, a serial cache lookup took 16.27 ns per parent and distributing a parent to its work bin took 1.85 ns. The driver now skips the serial lookup for determinants occupied on consecutive steps. R0 qualified the HF-to-FCIQMC Hamiltonian handoff. R1 established the timing, memory and correctness baselines on an Apple M3.
 
-The scope is one fixed-seed FCIQMC trajectory. An accepted optimization must
-not change its sampling law, support, `p_gen`, deterministic reduction order,
-or fixed-seed trajectory. Replica throughput, MPI/GPU execution, and
-active-space/frozen-core FCIQMC are separate capability projects.
+## Why start with water
 
-## Production architecture
+These are full trajectories at 50k target weight, four threads and seed 20250901. Each row is one diagnostic run with 20,000 equilibration and 30,000 sampling steps. Prefill includes the serial diagonal lookup and parent binning.
 
-`CanonicalWalkerPopulation` stores the live wavefunction as a sorted vector of
-`(DetKey, weight)` entries. This gives deterministic traversal, binary-search
-lookup for initiator and estimator queries, and in-place compaction.
+| R1 measurement | Water/6-31G | Hydrogen fluoride/6-31G |
+|---|---:|---:|
+| Mean occupied parents per sampling step | 178,914 | 48,485 |
+| Sampling wall time | 557.82 s | 111.14 s |
+| Prefill time | 188.54 s (33.8%) | 22.71 s (20.4%) |
+| Prefill per parent visit | 35.13 ns | 15.61 ns |
+| Merge per parent visit | 16.56 ns | 18.05 ns |
+| Peak process RSS | 295.9 MiB | 46.6 MiB |
 
-One propagation step is:
+Water spent more than twice as long per parent in prefill as hydrogen fluoride. The water pilot's CPU sample also placed the diagonal callback second among application leaf frames. The full water trajectory's projected energy agreed with independent PySCF FCI to 0.38 reported standard errors. [R1 control measurements](../tests/benchmarks/fciqmc/controls_m3_r1.json)
 
-1. Partition parent determinants into 64 fixed bins by parent hash. The bin
-   count does not depend on the OpenMP thread count.
-2. Derive each parent's random stream from its determinant. Excitation and
-   stochastic-rounding draws therefore do not depend on container layout or
-   visitation order.
-3. Accumulate each bin privately, then sort and fold each bin in canonical key
-   order.
-4. Merge the 64 finalized streams through a tagged, balanced pairwise tree.
-   Equal keys retain ascending source-bin association at every tree node.
-5. Store the sorted result in the next canonical population, compact it, then
-   update population control and the projected estimator.
+## R2 lookup and binning measurements
 
-The production merge is
-`merge_finalized_spawn_bins_pairwise_parallel` in
-`src/post_hf/ci/spawn_accumulator.h`. Independent pair merges at a tree level
-run in parallel, but each result is written to a predetermined slot; the tree
-shape and floating-point association are unchanged. The sequential pairwise
-tree is retained only as a test oracle.
+The baseline driver prefilled the run's diagonal cache while binning every occupied parent. The worker then queried the same cache for its death or cloning contribution. On the 2,000-equilibration/2,000-sampling pilots, we split the serial traversal on every 32nd sampling step. The next step timed the usual fused traversal. A separate four-thread pass replayed the worker's cache hits in bin order and included its OpenMP launch and barrier.
 
-## Correctness contract
+| Pilot | Serial lookup | Binning | Worker lookup replay | Adjacent fused pass | Cache misses / sampled parent visits |
+|---|---:|---:|---:|---:|---:|
+| Water | 16.27 ns | 1.85 ns | 4.57 ns | 21.44 ns | 2,794 / 11,242,267 |
+| Hydrogen fluoride | 12.33 ns | 1.87 ns | 4.09 ns | 15.32 ns | 503 / 2,919,863 |
 
-The following properties are non-negotiable.
+Times are wall nanoseconds per parent visit. Splitting the loop changes locality, and replaying the worker lookup warms the cache. The adjacent fused pass measures the actual combined cost. Both probe runs reproduced the baseline Hamiltonian, result and work counts. Single pilot wall times with and without the probes were 45.80 and 51.67 s for water, 11.53 and 11.13 s for HF.
 
-- Parent partitioning, not child partitioning, defines independent work.
-- The 64-bin layout and ascending-bin equal-key reduction association are
-  invariant across OpenMP thread counts.
-- Parent-keyed RNG streams make generated excitations independent of traversal
-  order.
-- `p_gen` equals the probability for the exact generated excitation; support
-  and observed frequency are tested separately.
-- A mechanical optimization reproduces the fixed-seed trajectory bitwise. Any
-  intentional statistical change needs a new, explicitly documented reference.
+## Preparing newly occupied parents
 
-`planck-fciqmc-walkers` covers excitation support, `p_gen`, literal sampler
-equivalence, fixed-seed reproducibility, canonical-population propagation, and
-the parallel-tree raw-bit oracle. `planck-fciqmc-accumulator` covers local
-ordered folding and merge behavior. N2 S5 runs at one and four threads are the
-fixed-seed integration gate; H2/N2 exact-FCI cases remain statistical controls.
+The dominant serial cost was checking diagonals already in the cache. The driver walks the previous and current sorted canonical populations together. A surviving determinant already has a cached diagonal. A newly occupied determinant, including one that returns after an absence, goes through the existing serial lookup before workers start. All nonzero parents are binned in their original order with their current weight. Workers use their usual diagonal callback. [Driver prefill](../src/post_hf/fciqmc_driver.cpp) · [Parent preparation](../src/post_hf/ci/spawn_accumulator.h)
 
-## Measured performance
+This uses the previous population as the record of which keys were prefilled. Its allocation is released before constructing the next population and merge buffers. The test exercises initial, surviving and returning determinants, including equal alpha strings with different beta strings. [Walker tests](../tests/fciqmc_walkers.cpp)
 
-The representative throughput fixture is
-`tests/inputs/exploratory/fciqmc/validation/hf_pop_50000.hfinp`: HF/6-31G,
-50,000 walkers, 20,000 equilibration steps, and 30,000 sampling steps. Each
-accepted figure uses the same seed, timestep, walker target, Hamiltonian, and
-step counts. Timings are three-run alternating medians unless stated otherwise.
+On the water pilot, sampling prefill fell from 8.28 s to 0.94 s and solver wall time from 51.67 s to 37.78 s. On HF, prefill fell from 1.37 s to 0.22 s and wall time from 11.13 s to 9.62 s. Both trajectories reproduced the Hamiltonian, result, stochastic work counters and final diagonal-cache size. The three unit/statistical gates and nine molecular regressions passed, including the N₂ thread-identity and spherical, open-shell and ECP cases.
 
-| configuration | 1 thread wall | 2 thread wall | 4 thread wall | 8 thread wall |
-|---|---:|---:|---:|---:|
-| map population baseline | 565.88 s | 374.18 s | 284.03 s | 258.41 s |
-| canonical population + pairwise merge | 474.54 s | 294.88 s | 203.221 s | 225.07 s |
-| E1 rank-select + M1 parallel tree | 403.748 s | — | **163.958 s** | — |
+## R2 acceptance decision
 
-Four threads are the best measured configuration for this workload. This is a
-recommendation, not a runtime limit; callers continue to select
-`OMP_NUM_THREADS`.
+Adopt the change for canonical FCIQMC propagation. Each fixture ran for three full-length, fixed-seed pairs in A/B, B/A, A/B order. The columns with arrows give independent baseline and candidate medians. The three percentages use the wall times from each matched pair. Sampling prefill and worker times are components of the sampling phase.
 
-At four threads, M1 changed the phase ledger as follows:
+| Fixture, threads | Wall (s) | Paired reductions | Sampling prefill (s) | Sampling worker (s) | Peak RSS (MiB) |
+|---|---:|---|---:|---:|---:|
+| Water, 4 | 789.63 → 584.47 | 25.5%, 22.8%, 30.9% | 169.91 → 12.72 | 249.61 → 237.06 | 329.6 → 327.6 |
+| HF, 4 | 164.16 → 135.62 | 17.4%, 14.6%, 17.6% | 19.57 → 3.16 | 51.35 → 51.41 | 45.2 → 48.7 |
+| Be, 2 | 10.06 → 9.49 | 6.0%, 4.5%, 5.7% | 0.38 → 0.12 | 3.22 → 3.12 | 15.1 → 15.2 |
 
-| phase | E1 median | M1 median | change |
+Every water pair exceeded the 10% end-to-end threshold. The longest candidate run finished sooner than the shortest baseline run. HF and Be passed the 5% control-regression gate. Both builds produced identical Hamiltonian and result fingerprints, integer work counters, cache sizes and recorded vector capacities within each fixture. Process RSS varied across repetitions. The worker still queries the shared cache, and its time includes that lookup. [Individual runs and probe measurements](../tests/benchmarks/fciqmc/diagonal_prefill_m3_r2.json)
+
+To repeat a pair, build the baseline at `7def132a` and the candidate with the same Release flags. Run each binary through `tests/run_fciqmc_scaling_profile.sh BINARY FIXTURE THREADS OUTPUT_DIR` with a separate output directory for each invocation. Set `OMP_DYNAMIC=false` and the Accelerate, OpenBLAS and MKL thread limits to one. The archive gives the input paths, hashes and thread counts. [Scaling runner](../tests/run_fciqmc_scaling_profile.sh)
+
+## Thread selection after R2
+
+Use 8 OpenMP threads for the HF/6-31G 50k fixture on this M3. The optimized solver's median wall time was 122.92 s, 3.23× faster than one thread and 11.7% shorter than the next fastest setting (4 threads). The fixed-seed sweep used three full trajectories at each setting in 1/2/4/8 order. All 12 reproduced Hamiltonian `f032498d77f973b5`, result `ea152a6472c1789b`, the work counters in both phases, and 105,050 final diagonal-cache entries.
+
+| Threads | R1 median wall (s) | R2 median wall (s) | R2 wall range (s) | R2 speedup | Worker (s) | Merge (s) | Prefill (s) |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 424.83 | 396.49 | 390.91–397.01 | 1.00× | 196.18 | 39.81 | 3.22 |
+| 2 | 250.39 | 217.41 | 216.35–220.60 | 1.82× | 97.60 | 28.48 | 3.21 |
+| 4 | 169.38 | 139.24 | 134.77–139.34 | 2.85× | 53.29 | 25.19 | 3.22 |
+| 8 | 151.51 | 122.92 | 120.12–126.20 | 3.23× | 41.90 | 27.02 | 3.25 |
+
+From four to eight threads, median sampling worker time fell by 11.39 s and merge time rose by 1.83 s. Prefill stayed near 3.2 s at every thread count. Worker, merge and prefill are median sampling times. Speedup uses the optimized one-thread run as its baseline. The R1 wall times came from the previous sweep on the same host. The paired R2 measurements above establish the effect of changing the implementation at four threads. [Optimized sweep](../tests/benchmarks/fciqmc/hf50k_m3_r2.json) · [R1 sweep](../tests/benchmarks/fciqmc/hf50k_m3_r1.json) · [Thread sweep runner](../tests/run_fciqmc_e1_profile_ladder.sh)
+
+## Small-population merge results
+
+Use four threads for the cached spherical Be fixture on this M3. At eight threads, running the last few merge levels sequentially reduced merge time on Be. The production merge now executes levels with four or fewer pairs sequentially when there are at most 4,096 tagged entries. For the 64-bin tree these are the levels with four pairs, two pairs and one pair. Each level keeps its pair slots and addition order. The Be trajectories peaked at 1,812 tagged entries and HF 50k peaked at 50,522. These two fixtures establish the effect of the chosen cutoff over their measured populations.
+
+| Fixture | Threads | Previous wall (s) | New wall (s) | Paired wall reduction | Sampling merge (s) |
+|---|---:|---:|---:|---:|---:|
+| Be | 1 | 11.21 | 11.16 | 0.5% | 0.88 → 0.88 |
+| Be | 2 | 9.44 | 8.53 | 9.6% | 2.02 → 1.53 |
+| Be | 4 | 9.80 | 8.08 | 17.5% | 3.22 → 2.16 |
+| Be | 8 | 13.81 | 9.84 | 28.9% | 5.22 → 2.90 |
+| HF 50k | 8 | 120.06 | 119.70 | 1.3% | 26.70 → 26.72 |
+
+Each row reports three full-length pairs on the same build configuration and host, in A/B, B/A, A/B order. At eight threads on Be the three wall-time reductions were 28.9%, 23.9% and 29.0%. Median worker time stayed at 2.46 s while sampling merge time fell from 5.22 to 2.90 s. With profiling disabled, three more pairs gave a 27.9% median paired reduction and identical printed estimators and reference statistics. The HF 50k control passed the 5% regression limit. All 30 profiled runs reproduced the archived Hamiltonians, trajectories, work counters, cache sizes and vector capacities. [Measurements and run settings](../tests/benchmarks/fciqmc/small_tree_merge_m3_r2.json)
+
+## R3 fixed-orbital Cr2 pilot
+
+Cr₂ at 1.68 Å fits the 600 s and 1 GiB per-run pilot budget on the M3. The earlier all-MO path stopped after RHF because the Cartesian STO-3G basis has 38 orbitals and the packed CI representation admits 31. With 18 frozen doubly occupied orbitals and two excluded virtuals, only the 18 active orbitals enter the bitstrings. Six alpha and six beta electrons give 344,622,096 possible determinants. The pilot uses the contiguous RHF orbitals in their returned order. Their Cr 3d/4s and 4p character is quantified below. [Cr₂ input](../tests/inputs/exploratory/fciqmc/cr2_cas12_18_pilot.hfinp)
+
+Both runs used four threads, 10,000 target walkers, timestep 0.0005, initiator threshold 3, seed 20250901 and 2,000 sampling steps. Only the equilibration length changed. The table gives process wall time and peak RSS including SCF, and total energies in Eh with the reported blocked standard errors.
+
+| Equilibration steps | Wall (s) | Peak RSS (MiB) | Shift (Eh) | Projected (Eh) | Usable projected samples |
+|---:|---:|---:|---:|---:|---:|
+| 2,000 | 8.56 | 84.2 | −2067.269 ± 0.158 | −2063.837 ± 0.026 | 1,994 / 2,000 |
+| 10,000 | 48.65 | 109.8 | −2068.514 ± 0.139 | −2062.651 ± 0.053 | 803 / 2,000 |
+
+Both trajectories re-anchored the projection after the seeded determinant lost weight. The estimator gap grew from 3.43 to 5.86 Eh. These runs establish resource feasibility. Neither provides a converged energy at this geometry. To reproduce them, run the scaling runner on the linked input and change only `fciqmc_equilibration` to 10000 for the second run. [Profiles, timings and reference diagnostics](../tests/benchmarks/fciqmc/cr2_cas12_18_m3_r3.json)
+
+**Hamiltonian checks.** On the short N₂ control, the previous binary, the new default path and explicit CAS(14,10) all gave Hamiltonian `3d0ae86188394164` and trajectory `af01f83434290758`. LiH/STO-3G CAS(2,4) tests both a frozen core and an excluded virtual. PySCF CASCI on the Planck all-MO FCIDUMP gave −7.863681638749 Eh on exactly the same orbitals. The FCIQMC projected energy was −7.8636881653 ± 0.0000172 Eh and the shift was −7.8636733178 ± 0.00101 Eh. To regenerate the exact reference, add `fcidump lih.FCIDUMP` to the fixture's SCF block, read it with `mf = pyscf.tools.fcidump.to_scf("lih.FCIDUMP")`, then run `pyscf.mcscf.CASCI(mf, 4, 2).kernel(numpy.eye(6))`. The identity coefficients retain Planck's MO order. [LiH regression input](../tests/inputs/regression/post_hf/lih_fciqmc_cas24_sto3g.hfinp)
+
+## R3 walker population and spawn attempts
+
+Increasing the target population from 10,000 to 50,000 at one spawn attempt widened the shift–projected gap for each of three seeds. Each population used seeds 20250901, 20250902 and 20250903 with the pilot's four threads, 2,000 equilibration steps and 2,000 sampling steps. The original 10,000-walker seed reproduced its archived trajectory. Across seeds, the projection re-anchored in two of the three runs at each population.
+
+The second sweep fixed the population at 10,000 and changed the number of spawn attempts per occupied determinant. The profile counts confirm that each phase made exactly the requested number of draws per parent visit. Four draws kept the seeded reference for all three seeds, made every projected sample usable and reduced the estimator gap in each matched run. Sixteen draws also kept the reference throughout sampling. With four draws, the shifts ranged from −2065.564 to −2065.528 Eh and the projected energies from −2064.555 to −2064.515 Eh. All 15 gaps exceeded the driver's warning threshold of five times the larger reported standard error.
+
+| Target walkers | Draws per parent | Gap (Eh) | Usable samples / 2,000 | Mean reference weight | Wall (s) | Max RSS (MiB) |
+|---:|---:|---:|---:|---:|---:|---:|
+| 10,000 | 1 | 2.00–3.73 | 1,899–2,000 | 15.5–25.1 | 7.5–8.4 | 84.3 |
+| 25,000 | 1 | 2.29–4.17 | 1,236–2,000 | 22.9–40.1 | 15.7–17.6 | 124.9 |
+| 50,000 | 1 | 2.47–4.43 | 1,236–2,000 | 32.2–56.9 | 30.3–33.3 | 209.5 |
+| 10,000 | 4 | 1.00–1.01 | 2,000 | 90.5–133.5 | 14.6–15.0 | 76.1 |
+| 10,000 | 16 | 0.89–0.99 | 2,000 | 177.3–183.7 | 39.2–40.4 | 73.7 |
+
+Ranges span three independent seeds at each setting. The gap is the absolute difference between the shift and projected total energies in one run. The driver measures mean absolute reference weight over accepted projected samples. All runs fit the 600 s and 1 GiB budget. The 25,000-walker run at seed 20250903 briefly shared the host with the orbital checkpoint calculation. To reproduce a row, change only `fciqmc_walkers`, `fciqmc_spawn_attempts` and `fciqmc_seed` in the Cr₂ pilot input and use the scaling runner at four threads. [Per-seed estimators, uncertainties, reference determinants and work counters](../tests/benchmarks/fciqmc/cr2_population_spawn_m3_r3.json)
+
+**Orbital character at 1.68 Å.** A checkpoint run reproduced Hamiltonian `3ffac35b4805c0ec`. In its AO overlap metric, the active MOs retained 11.9813 of the 12 nominal Cr 3d/4s valence directions by summed squared overlap (99.84%). The least well represented valence direction had squared overlap 0.9916. The active block also retained 5.9789 of the six 4p directions. The two excluded MOs carried 1.9841 of the two Cartesian d-shell trace directions. The projection orthonormalizes atom-centered shells in the AO metric, starting with the core (1s, 2s, 2p, 3s, 3p), followed by the valence (five traceless 3d functions and 4s per Cr), 4p and finally the two Cartesian traces. The archived weights sum squared overlaps with the frozen, active and excluded RHF columns. [Orbital projection weights](../tests/benchmarks/fciqmc/cr2_population_spawn_m3_r3.json)
+
+## R3 equilibration at four spawn attempts
+
+Extending equilibration from 2,000 to 10,000 steps narrowed the estimator gap on one seed and widened it on two. Each run used 10,000 target walkers, four attempts per occupied determinant, timestep 0.0005 and 2,000 sampling steps. The sampling window therefore moved from imaginary time 1–2 to 5–6 in inverse hartrees. The three short controls reproduced the archived Hamiltonian and trajectories with the current executable.
+
+| Seed | Shift (Eh), short → long | Projected (Eh), short → long | Gap (Eh), short → long | Mean reference weight, short → long | Usable long samples / 2,000 | Long-run reference |
+|---|---:|---:|---:|---:|---:|---|
+| 20250901 | −2065.550 → −2065.342 | −2064.549 → −2064.660 | 1.002 → 0.682 | 133.52 → 11.99 | 2,000 | seeded |
+| 20250902 | −2065.528 → −2065.537 | −2064.515 → −2064.241 | 1.012 → 1.296 | 123.17 → 6.47 | 1,292 | changed |
+| 20250903 | −2065.564 → −2065.755 | −2064.555 → −2064.473 | 1.009 → 1.282 | 90.50 → 5.62 | 1,393 | changed |
+
+All three short runs used the seeded reference on every sampling step. In the longer runs, the driver chose the most populated determinant after equilibration and kept it fixed during sampling. Two seeds switched determinants there. Mean reference weight fell for every seed, even when measured only on accepted samples. All three long-run gaps exceeded five times the larger reported standard error. The long runs took 64.4–68.7 s and peaked at 78.5 MiB. [Per-seed errors, reference determinants and run settings](../tests/benchmarks/fciqmc/cr2_equilibration_m3_r3.json)
+
+## R3 long runs at 25,000 walkers
+
+Increasing the target from 10,000 to 25,000 walkers narrowed the shift–projected gap for seed 20250902 and widened it for the other two. Each seed made the same decision about keeping or changing the seeded reference at equilibration. The replacement determinants themselves differed between populations. Only the target walker count changed within each pair. Both populations used 10,000 equilibration and 2,000 sampling steps, four draws per occupied determinant, timestep 0.0005 and initiator threshold 3.
+
+| Seed | Shift (Eh), 10k → 25k | Projected (Eh), 10k → 25k | Gap (Eh), 10k → 25k | Usable samples / 2,000 | Mean accepted reference weight | 25k reference |
+|---|---:|---:|---:|---:|---:|---|
+| 20250901 | −2065.342 → −2065.509 | −2064.660 → −2064.693 | 0.682 → 0.816 | 2,000 → 2,000 | 12.0 → 13.3 | seeded |
+| 20250902 | −2065.537 → −2065.688 | −2064.241 → −2064.788 | 1.296 → 0.899 | 1,292 → 2,000 | 6.5 → 5.9 | changed |
+| 20250903 | −2065.755 → −2065.937 | −2064.473 → −2063.804 | 1.282 → 2.132 | 1,393 → 1,284 | 5.6 → 4.9 | changed |
+
+All three 25k runs triggered the driver's estimator-gap warning. Wall time rose by 2.33–2.37× to 152–163 s and total parent visits rose by 2.31–2.36×. Peak RSS was 96.5–114.7 MiB. During sampling, workers accounted for 87–88% of wall time and the initiator rule rejected about 98% of spawn attempts. Both populations used the same solver binary and four-thread configuration. [Per-seed estimates, errors, work counts and settings](../tests/benchmarks/fciqmc/cr2_long_25k_m3_r3.json)
+
+### Independent energy check
+
+Freezing the same 18 core orbitals and keeping the first ten of the 18 active RHF orbitals gives a 44,100-determinant CAS(12,10). PySCF CASCI on the all-MO Planck FCIDUMP gave **−2064.494324 Eh**. The normalized CI vector reproduced that energy by direct expectation. Embedding this vector in CAS(12,18) assigns zero amplitude to determinants that occupy the eight additional orbitals, so its energy bounds the full-space ground-state energy from above. Seed 20250903's 25k projected estimate was **0.690 Eh above that bound**, with a reported standard error of 0.102 Eh. The bound gives no comparable accuracy certificate for estimates below it.
+
+We also ran the stochastic solver directly in CAS(12,10) at the same 25k settings and seeds. Here the exact reference lets us measure signed error for each estimator. All three runs retained the seeded reference. Halving the timestep doubled the equilibration and sampling step counts to 20,000 and 4,000, and doubled the shift-update interval to ten steps. This preserves both the imaginary-time windows and the time between shift updates. All six controls kept every projected sample.
+
+| Timestep | Shift minus CASCI (mEh), three seeds | Projected minus CASCI (mEh), three seeds | Usable samples per seed |
 |---|---:|---:|---:|
-| sampling worker | 50.233810 s | 51.357996 s | +2.2% |
-| sampling pairwise merge | 38.811332 s | 24.049039 s | -38.0% |
-| full wall | 182.431 s | 163.958 s | -10.1% |
+| 0.0005 | −86.7 to −63.2 | +16.1 to +29.9 | 2,000 / 2,000 |
+| 0.00025 | −75.9 to −65.3 | +24.0 to +35.2 | 4,000 / 4,000 |
 
-All three M1 runs have identical parent, attempt, raw-record, folded-record,
-and final-energy values. The small worker increase is the cost of materializing
-tree levels and is more than recovered by the parallel merge.
+To reproduce the deterministic control, export the all-MO FCIDUMP from the Cr₂ pilot. Read it with `pyscf.tools.fcidump.to_scf` and run `mcscf.CASCI(mf, 10, (6, 6)).kernel(numpy.eye(38))` in the input MO order. For the stochastic controls change only `nactorb` to 10 in the respective 25k input and use the timestep and step counts above. [FCIDUMP checksum and individual control results](../tests/benchmarks/fciqmc/cr2_long_25k_m3_r3.json)
 
-## Landed optimization decisions
+## R3 initiator threshold and projection time in CAS(12,10)
 
-| item | decision | evidence |
-|---|---|---|
-| Canonical population | landed | removes hash-layout traversal dependence |
-| Parent-derived RNG | landed | deterministic trajectory across layout and threads |
-| Tagged pairwise merge | landed | raw-bit equality with the heap/reference fold; faster than heap merge |
-| E0 literal excitation oracle | landed, test-only | exact excitation, `p_gen`, phase, validity, and RNG-state equality |
-| E1 rank selection | landed | 1.112x focused benchmark; 10.2% four-thread full-run wall reduction before M1 |
-| M1 level-parallel pairwise tree | landed | sequential-tree raw-bit oracle; N2 S5 1/4-thread gate; 10.1% additional wall reduction |
-| E2 table dispatch | rejected | exact supplied-input descriptor oracle, but 0.968x versus the switch |
-| Reused map populations | rejected | bucket layout changes parent traversal |
-| PMR node recycling | rejected | negligible end-to-end return |
-| Child-hash sharded merge | rejected | second sorting stage loses performance |
+At imaginary time 5–6, disabling the initiator rule moved the projected energy by only +0.17 to +0.37 mEh across matched seeds. It remained 16–30 mEh above the exact energy of −2064.494323848 Eh. The shift moved upward by 2.3–9.9 mEh and remained below CASCI. The threshold-off runs recorded zero initiator rejections in both phases. They used the same Hamiltonian, solver binary, 25,000 target walkers, timestep 0.0005 and four draws as the threshold-3 controls. Each table entry gives shift / projected energy as signed deviations from CASCI in mEh.
 
-E1 replaces a scan-to-the-selected-bit implementation of `nth_set_bit` with
-repeated least-significant-set-bit clearing followed by `countr_zero`. It does
-not change excitation classes, RNG calls, signs, or `p_gen` arithmetic order.
+| Seed | Threshold 3, τ 5–6 | Threshold 0, τ 5–6 | Threshold 0, τ 55–56 |
+|---|---:|---:|---:|
+| 20250901 | −86.7 / +18.1 | −84.3 / +18.4 | +10.8 / +11.0 |
+| 20250902 | −86.2 / +29.9 | −81.6 / +30.1 | +12.7 / +0.6 |
+| 20250903 | −63.2 / +16.1 | −53.3 / +16.3 | +4.0 / +9.2 |
 
-## Profiling and acceptance workflow
+**The initial determinant is still relaxing at τ = 5.** Applying the continuous imaginary-time exponential of the 44,100-determinant Hamiltonian to the seeded determinant gave projected energies 27.345 and 22.999 mEh above CASCI at τ = 5 and 6. The mean growth energy over that window, computed from the change in the log of the exact state's L1 norm, was 59.239 mEh below CASCI. Thus even the deterministic projection and growth energy lie on opposite sides of the ground-state energy in the early window. The stochastic shift also depends on population feedback. The reference script checks each projected energy against the Rayleigh quotient of the state at half the projection time. [Finite-time reference calculation](../tests/pyscf/cr2_fciqmc_projection.py)
 
-Use the phase ledger to establish the dominant phase, then use a CPU sample to
-identify the responsible routine. A stack sample is attribution evidence, not
-a performance result. Do not modify a candidate until both identify a concrete
-mechanism.
+By τ = 55 and 56 the exact projected deviations were +0.875 and +0.830 mEh, and the mean growth deviation was −0.754 mEh. To sample that window, the three threshold-off runs increased equilibration from 10,000 to 110,000 steps and retained 2,000 sampling steps. All six threshold-off runs kept the seeded reference and every projected sample. In the early window disabling the rule reduced the mean accepted reference weight on all three seeds, from 2,415–2,547 to 2,352–2,491 walkers. In the later window it was 1,119–1,284 walkers. The later projected energies were closer to CASCI on all three seeds, although two remained more than five reported standard errors above it. The long runs took 84–88 s and all six runs fit the 600 s and 1 GiB per-run budget. A repeat of the deterministic check briefly shared the host with the second late run. [Per-seed energies, uncertainties, work counts and exact window references](../tests/benchmarks/fciqmc/cr2_cas12_10_initiator_m3_r3.json)
 
-```sh
-tests/run_fciqmc_cpu_profile.sh \
-  build/hartree-fock \
-  tests/inputs/exploratory/fciqmc/validation/hf_pop_50000.hfinp \
-  1 30 /private/tmp/fciqmc-profile
+## R3 sampling length and seed spread in CAS(12,10)
 
-tests/run_fciqmc_cpu_profile.sh \
-  build/hartree-fock \
-  tests/inputs/exploratory/fciqmc/validation/hf_pop_50000.hfinp \
-  4 30 /private/tmp/fciqmc-profile
-```
+The three original seeds repeated the same 110,000-step equilibration, then extended sampling from 2,000 to 10,000 steps (τ = 55–56 to 55–60). The short window is the first 2,000 steps of each matched long run. Only the sampling length changed. Each run used 25,000 walkers, four spawn attempts per occupied determinant, timestep 0.0005 and initiator threshold zero. The table gives signed errors against CASCI and the driver's blocked standard errors in mEh. Reference weights are mean absolute weights over accepted samples.
 
-An accepted change requires:
+| Seed | Shift error, short → long | Projected error, short → long | Reference weight, short → long |
+|---|---:|---:|---:|
+| 20250901 | +10.76 ± 15.10 → −2.27 ± 7.92 | +11.01 ± 2.14 → +3.16 ± 2.69 | 1,204 → 1,171 |
+| 20250902 | +12.67 ± 14.50 → −6.21 ± 7.38 | +0.64 ± 0.49 → +6.30 ± 2.27 | 1,284 → 1,252 |
+| 20250903 | +3.99 ± 21.10 → +3.82 ± 8.05 | +9.18 ± 1.65 → −1.89 ± 4.41 | 1,119 → 1,093 |
 
-1. an isolated, deterministic oracle for the altered operation;
-2. walker and accumulator invariant tests plus fixed-seed N2 S5 at one and
-   four threads;
-3. H2/N2 statistical regression controls when sampling behavior is involved;
-4. three alternating representative fixture runs; and
-5. at least 10% end-to-end improvement beyond noise, no unexplained control
-   regression above 5%, or a documented memory reduction that enables a
-   previously infeasible calculation.
+For these three seeds, the mean projected error fell from +6.94 to +2.52 mEh, although the second seed moved farther from CASCI. Exact continuous propagation from the seeded determinant gave projected errors of +0.875 mEh at τ = 55 and +0.670 mEh at τ = 60. The mean exact L1 growth energy over that window was 0.680 mEh below CASCI.
 
-## Post-M1 attribution and next decision
+Five fresh seeds (20250904–20250908) tested the same 10,000-step window. Each row below gives the equally weighted mean signed error, the sample standard deviation across seeds (SD), and the root mean square of the individual runs' reported blocked standard errors (RMS SE). All values are in mEh.
 
-Fresh 30-second one- and four-thread CPU samples were collected after M1 on
-the representative fixture. Their ledgers preserve the expected trajectory
-counts. At four threads, sampling spends `49.528 s` in worker propagation and
-`23.355 s` in pairwise merging; M1 therefore remains effective, but worker
-propagation is again the dominant scalable cost.
+| Seeds and sampling length | Mean shift error | Shift SD / RMS SE | Mean projected error | Projected SD / RMS SE |
+|---|---:|---:|---:|---:|
+| Original three, 2,000 steps | +9.14 | 4.56 / 17.16 | +6.94 | 5.53 / 1.59 |
+| Original three, 10,000 steps | −1.55 | 5.06 / 7.79 | +2.52 | 4.13 / 3.26 |
+| Five fresh, 10,000 steps | +0.40 | 7.75 / 7.51 | −6.02 | 9.82 / 2.48 |
+| All eight, 10,000 steps | −0.33 | 6.53 / 7.62 | −2.82 | 8.92 / 2.80 |
 
-In the one-thread sample, `draw_excitation` accounts for 7,135 of 16,064
-propagation-stack samples (44.4%); at four threads it accounts for 3,544 of
-8,320 (42.6%). `slater_condon_element` and `SpawnAccumulator::finalize()` /
-sorting remain visible secondary costs. This authorizes an excitation-generator
-attribution benchmark, but not a production dispatch rewrite: the sampled
-frame still includes rank selection, random draws, orbital updates, parity,
-and class selection.
+Four of the five fresh projected estimates missed CASCI by more than twice their reported SE, with signed errors ranging from −14.86 to +7.33 mEh. All five shifts fell within two reported SEs. The driver reports a ratio of summed numerator and denominator for the projected energy and computes its error bar by blocking the per-step ratios. On these seeds the reported projected errors understated the observed variation by about a factor of four. The five-seed comparison alone cannot distinguish slow fluctuations from a persistent energy bias.
 
-### E2 — decomposed excitation-generator benchmark
+All eight long runs retained the seeded reference and accepted every projected sample. Mean absolute reference weights ranged from 1,093 to 1,252 walkers. The runs took 90.7–95.3 s each and peaked at 57.6 MiB on the M3. Equilibration accounted for about 90% of total time. Sampling cost 7.9–8.7 s per 10,000 steps, leaving room to lengthen the window within the 600 s budget. To reproduce the runs, apply the settings above to the Cr₂ pilot input and run the scaling profiler at four threads with seeds 20250901–20250908. [Per-seed energies, reference weights, timings and exact controls](../tests/benchmarks/fciqmc/cr2_cas12_10_sampling_m3_r3.json)
 
-Build a deterministic, test-only benchmark that measures the current literal
-generator and a candidate dispatch mapping separately from orbital updates,
-parity, and RNG generation. Both paths must consume the same supplied class
-and rank values and produce exactly the same excitation descriptor and
-`p_gen`. The benchmark must report a digest and per-component times over the
-same closed-shell, open-shell, and edge active-space corpus used by E0.
+## R3 sampling to 50,000 steps in CAS(12,10)
 
-Only if that benchmark attributes a material fraction to dispatch may a
-branch-only production candidate be written. It must preserve class order, RNG
-calls, signs, and `p_gen` operation order, then pass the normal exact and
-full-trajectory gates.
+Seeds 20250904–20250908 repeated the 110,000-step equilibration and extended sampling from 10,000 to 50,000 steps. Each pair used the same executable, Hamiltonian, population of 25,000 walkers, four spawn attempts, timestep 0.0005 and initiator threshold zero. The run profiler reproduced each seed's equilibration work counters.
 
-**Closed as a non-candidate (2026-10-20):** `planck-fciqmc-walkers` constructs
-plans with a supplied non-empty class and within-class rank. A literal `switch`
-and a table-dispatch candidate receive the same plans; neither path draws RNG,
-selects orbitals, evaluates parity, or updates a determinant. The invariant
-requires raw descriptor and `p_gen` equality, then materializes both results
-to confirm equal excitations. The opt-in benchmark is:
+The **prefix** is the original 10,000 steps (τ = 55–60). The **extension** is the subsequent 40,000 steps (τ = 60–80). To isolate the extension, subtract the prefix contribution from the full run, weighting shift energies by sample count and projected energies by the signed reference-weight sums. The driver reports blocked errors for the prefix and full runs. The extension can be assessed using the spread of its five estimates. The three windows share trajectories.
 
-```sh
-PLANCK_FCIQMC_DISPATCH_BENCHMARK=1 build/planck-fciqmc-walkers
-```
+| Sampling window | Mean projected error (mEh) | Projected SD / RMS SE (mEh) | Mean shift error (mEh) | Shift SD / RMS SE (mEh) |
+|---|---:|---:|---:|---:|
+| Prefix, 10,000 steps | −6.02 | 9.82 / 2.48 | +0.40 | 7.75 / 7.51 |
+| Extension, 40,000 steps | +0.45 | 2.17 / — | −3.82 | 5.63 / — |
+| Full, 50,000 steps | −0.83 | 2.61 / 3.41 | −2.97 | 5.72 / 3.48 |
 
-`PLANCK_FCIQMC_DISPATCH_BENCHMARK_DRAWS` and
-`PLANCK_FCIQMC_DISPATCH_BENCHMARK_ROUNDS` override the defaults. Five
-alternating 10,000,000-draw rounds gave `0.033586 s` for the literal switch
-and `0.034704 s` for table dispatch: **0.968x**, with a matching digest. The
-indirect call loses, so production retains the switch and dispatch is closed.
+The full-window projected error bars covered CASCI within two reported SEs on four seeds, up from one in the prefix. Four full-window shifts also fell within two reported SEs. Seed 20250904's shift remained 11.83 mEh below CASCI with a reported SE of 3.15 mEh. Five seeds suffice to observe this change in spread but give limited precision for estimating coverage. Exact propagation from the seeded determinant gave a projected error of +0.233 mEh at τ = 80 and mean L1 growth errors of −0.426 and −0.363 mEh over the full window and extension.
 
-### E3 — generator-component attribution
+All five runs retained the seeded reference and accepted all 50,000 projected samples. Mean absolute reference weights ranged from 1,101 to 1,254 walkers. Five times as many sampling steps cost 1.30–1.32× as much total wall time as the matched prefix runs. Each took 122.3–125.0 s and peaked at or below 57.6 MiB. To reproduce the full runs, change only `fciqmc_steps` to 50000 in the five corresponding 10,000-step inputs. [Seed-level results, signed reference sums and exact controls](../tests/benchmarks/fciqmc/cr2_cas12_10_sampling50k_m3_r3.json)
 
-**Implemented, awaiting measurement:** the same supplied-input corpus now
-times five test-only stages independently: mask/popcount and class-size setup,
-rank decomposition, rank-to-orbital bit selection, parity/determinant
-materialization, and the recomposed no-RNG pipeline. The recomposed pipeline
-must produce the same final-excitation digest as the precomputed staged path.
+### Cost of moving to CAS(12,12)
 
-```sh
-PLANCK_FCIQMC_COMPONENT_BENCHMARK=1 build/planck-fciqmc-walkers
-```
+At the same geometry, seed 20250904 used the first 12 active RHF orbitals, 10,000 equilibration steps and 2,000 sampling steps (τ = 5–6). The other solver settings matched the CAS(12,10) run. This 853,776-determinant pilot took **90.7 s and 182.2 MiB**. Occupied parents averaged 51,178 per equilibration step and 94,048 per sampling step. Workers took 84.3% of sampling wall time. Of 752,381,920 spawn attempts in sampling, 752,295,229 rounded to zero (99.988%). The seeded reference averaged 6.08 walkers on the 1,635 usable projected samples out of 2,000.
 
-`PLANCK_FCIQMC_COMPONENT_BENCHMARK_DRAWS` and
-`PLANCK_FCIQMC_COMPONENT_BENCHMARK_ROUNDS` override the defaults. This is an
-attribution measurement, not a production candidate. It determines whether to
-investigate a local generator change or to stop generator work and move to
-sorting or the shared Hamiltonian.
+The last 2,000 steps cost **11.92 ms per step**. A 110,000 + 50,000-step run has a budget of **3.75 ms per step** on average. If the remaining 148,000 steps ran at the measured sampling rate, total wall time including the pilot's first 12,000 steps would be about 31 minutes. Occupancy and per-step cost can change as the population evolves. [Pilot settings, phase costs and spawn counts](../tests/benchmarks/fciqmc/cr2_cas12_12_cost_m3_r3.json)
 
-The following table describes the decision after E3:
+## R3 spawn work by parent weight
 
-| observed limit | permitted next investigation | required isolation |
-|---|---|---|
-| setup, bit selection, or parity | local generator candidate | literal sampler oracle and full fixed-seed trajectory gate |
-| orbital updates or parity | local generator work, not dispatch rewrite | literal excitation oracle |
-| `SpawnAccumulator::finalize()` / sorting | local folding or allocation prototype | ordered-fold raw-bit oracle and memory accounting |
-| `slater_condon_element` | separate shared-Hamiltonian project | CI, CASSCF, open-shell, and FCIQMC validation |
-| residual pairwise merge | larger-population merge study | same tagged tree and explicit temporary-memory bound |
+The profiler groups each occupied determinant by its absolute incoming weight relative to the configured spawn granularity, one walker in these runs. A surviving spawn is a nonzero contribution before merging and annihilation. The three replays reproduced the archived input, Hamiltonian and trajectory fingerprints. In each phase, the two groups' visits and attempts sum to the original counters, and surviving spawns plus diagonal contributions reproduce the raw accumulator record count.
 
-Descriptor caching is not authorized without a physical-population prototype
-that reports retained bytes and lookup cost. The reference estimator is not a
-candidate unless the ledger shows it is material.
+| Sampling phase | Target walkers / draws | Initiator threshold | Visits and attempts below one walker | Absolute parent weight below one walker | Surviving spawns from those parents |
+|---|---:|---:|---:|---:|---:|
+| CAS(12,12), seed 20250904, τ = 5–6 | 25,000 / 4 | 0 | 96.1% | 80.4% | 78.2% |
+| CAS(12,18), seed 20250901, τ = 1–2 | 10,000 / 1 | 3 | 93.6% | 50.9% | 16.9% |
+| CAS(12,18), seed 20250903, τ = 5–6 | 25,000 / 4 | 3 | 93.4% | 62.0% | 46.6% |
 
-## Out of scope
+Permanently dropping these parents would discard a substantial fraction of the spawned contributions. One candidate is to attempt spawning with probability `q = min(1, |weight| / granularity)` at positive granularity. On selection, scale the spawn contribution by `1/q`, using the original weight for the initiator decision and diagonal propagation. Applied to the observed parents, this would avoid 74.7%, 76.2% and 76.3% of excitation draws in expectation, respectively. The resulting walker distribution, variance and wall time require a trial. [Phase counts and matched trajectory IDs](../tests/benchmarks/fciqmc/cr2_parent_weight_m3_r3.json)
 
-- Replica trajectories improve time-to-error-bar, not a single-chain step
-  rate, and must be compared at equal total core counts.
-- MPI and GPU work require an explicit CPU or memory target beyond this
-  measured envelope.
-- Active-space/frozen-core FCIQMC requires core-energy, orbital-selection, and
-  small-CASCI equivalence validation; it is not a propagation micro-optimization.
+## R3 energy accuracy in CAS(12,18)
+
+**The ground energy at 1.68 Å is at most −2064.896580 Eh.** Starting from the same all-MO FCIDUMP, we froze the same 18 core orbitals and isolated the next 18 RHF orbitals. Within that space, we optimized singlet CASSCF trial states in 10 and 12 orbitals, starting from high-spin valence orbitals. Rotations stayed inside the parent space. Both normalized trial vectors therefore belong to the target CAS(12,18). Contracting their one- and two-body density matrices with the Hamiltonian reproduced each energy within 10⁻⁸ Eh.
+
+| Parent space | Optimized trial orbitals | Variational energy (Eh) | SC-NEVPT2 correction (Eh) | Estimated parent energy (Eh) |
+|---|---:|---:|---:|---:|
+| CAS(12,18) | 10 | −2064.860005 | −0.052832 | −2064.912837 |
+| CAS(12,18) | 12 | −2064.896580 | −0.035204 | −2064.931784 |
+| CAS(12,12) control | 10 | −2064.503320 | −0.012267 | −2064.515586 |
+
+Strongly contracted second-order perturbation theory (SC-NEVPT2) estimates the correlation with the remaining parent orbitals. The two target estimates differ by 18.95 mEh. In the parent formed by the first 12 RHF orbitals, the corrected estimate was 10.98 mEh above direct CI (−2064.526570 Eh). These checks give a scale for sensitivity to the trial space. Only the variational energies provide a one-sided bound. [Reference calculation](../tests/pyscf/cr2_fciqmc_accuracy.py)
+
+| Seed at τ = 5–6, 25,000 walkers | Projected minus upper bound (Eh) | Projected blocked SE (Eh) | Shift minus 12-orbital SC-NEVPT2 estimate (Eh) | Accepted reference weight, mean |
+|---|---:|---:|---:|---:|
+| 20250901 | +0.203 | 0.013 | −0.577 | 13.26 |
+| 20250902 | +0.108 | 0.086 | −0.756 | 5.88 |
+| 20250903 | +1.092 | 0.102 | −1.005 | 4.88 |
+
+The positive distances in the second column are minimum errors of the reported point estimates. Seed 20250902's distance is 1.26 of its blocked SEs. Seeds 20250901 and 20250903 exceed the bound by more than ten each. The shifts lie below both perturbative estimates, and the variational bound alone cannot quantify their errors. Even the three earlier four-draw projections with 10,000 walkers and a stable seeded reference at τ = 1–2 exceeded the bound by 0.341–0.381 Eh.
+
+**Longer sampling widened the error on the seed that retained its original reference.** For seed 20250901, changing only `fciqmc_steps` from 2,000 to 10,000 extended the window from τ = 5–6 to 5–10. The projected estimate moved from −2064.693174 to −2064.633191 ± 0.0313 Eh, increasing its minimum error from 0.203 to 0.263 Eh. The shift was −2065.646618 ± 0.0435 Eh. The first 2,000 steps all gave usable projections, but only 3,483 of the added 8,000 did. Subtracting the prefix using its signed reference-weight sum gives −2064.560102 Eh for the added window alone. The calculation took 338.4 s and 79.5 MiB. This single matched run shows that a longer average can worsen the estimate as the reference loses weight. [Per-seed comparisons, reference calculations and extended run](../tests/benchmarks/fciqmc/cr2_cas12_18_accuracy_m3_r3.json)
+
+To reproduce the references, run `tests/pyscf/cr2_fciqmc_accuracy.py` on the all-MO pilot FCIDUMP with `--trial-orbitals 10` and `--trial-orbitals 12`. Add `--parent-orbitals 12` to the 10-orbital command for the direct CI control. The largest target reference calculation took 216 s and 310 MiB on this M3.
+
+## Next steps
+
+For scaling, test probabilistic spawning from low-weight parents on the exact CAS(12,10) control. Check the mean spawn against the deterministic step, fixed-seed thread identity, and energy spread across seeds at equal wall time before testing the larger spaces.
+
+For accuracy, compare the current single-determinant projection with a fixed multideterminant trial on the same CAS(12,18) walker trajectories. Build the trial in Planck's determinant basis and check its Rayleigh quotient on the shared Hamiltonian. Track the signed trial overlap and usable samples across seeds. This separates sensitivity to the projected estimator from changes to the walker dynamics.
+
+The E2 dispatch experiment is closed. E4 remains test-only pending evidence that bit selection merits a new paired trial. The detailed R0 handoff results, R1 reproduction commands and earlier optimization decisions are preserved in the version of this document at commit `7def132a` (`git show 7def132a:docs/FCIQMC_SCALING_INVESTIGATION.md`).

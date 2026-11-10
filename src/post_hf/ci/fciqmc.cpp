@@ -120,8 +120,8 @@ namespace HartreeFock::Correlation::CI::QMC
         // showed: the malloc/free family was 29.5 % of the N2/STO-3G profile
         // against slater_condon_element's 40.1 %.
         //
-        // The capacity is a BOUND, not a guess. `build_all_mo_ci_setup` rejects
-        // any basis with n_act > kMaxPackedSpatialOrbitals (= (64-1)/2 = 31)
+        // The capacity is a BOUND, not a guess. `build_fixed_orbital_ci_setup` rejects
+        // any space with n_act > kMaxPackedSpatialOrbitals (= (64-1)/2 = 31)
         // before FCI or FCIQMC runs, so 32 entries can never overflow. The assert
         // states that rather than trusting it.
         //
@@ -587,9 +587,16 @@ namespace HartreeFock::Correlation::CI::QMC
         {
             const auto start = profile ? std::chrono::steady_clock::now()
                                        : std::chrono::steady_clock::time_point{};
-            auto merged = merge_finalized_spawn_bins_pairwise_parallel(bins);
+            PairwiseSpawnMergeProfile merge_work;
+            auto merged = merge_finalized_spawn_bins_pairwise_parallel(
+                bins, profile ? &merge_work : nullptr);
             if (profile)
             {
+                profile->peak_merge_tagged_bytes = std::max(
+                    profile->peak_merge_tagged_bytes, merge_work.peak_live_bytes);
+                profile->peak_merge_output_bytes = std::max(
+                    profile->peak_merge_output_bytes,
+                    merged.entries.capacity() * sizeof(merged.entries.front()));
                 profile->canonical_merge_emitted += merged.entries.size();
                 profile->canonical_pairwise_seconds += std::chrono::duration<double>(
                     std::chrono::steady_clock::now() - start).count();
@@ -721,8 +728,17 @@ namespace HartreeFock::Correlation::CI::QMC
 
             for (const auto &[det, weight] : bin_parents[bin])
             {
+                FCIQMCParentWeightWork *weight_work = nullptr;
                 if (work)
+                {
                     ++work->parents;
+                    const double magnitude = std::abs(weight);
+                    weight_work = magnitude < granularity ? &work->below_granularity
+                                                         : &work->at_or_above_granularity;
+                    ++weight_work->visits;
+                    weight_work->absolute_weight += magnitude;
+                    weight_work->attempts += n_spawn_attempts;
+                }
                 // DEATH: deterministic, exactly as in propagate_deterministic.
                 // There is one diagonal element per determinant, so sampling it
                 // would add variance and buy nothing.
@@ -800,7 +816,10 @@ namespace HartreeFock::Correlation::CI::QMC
                     }
                     next_bin.add(exc.det, child);
                     if (work)
+                    {
                         ++work->accumulator_records;
+                        weight_work->nonzero_spawns += child != 0.0;
+                    }
                 }
             }
             const std::size_t raw_records = next_bin.size();

@@ -1,0 +1,1078 @@
+{
+  "source_commit": "91d6d6029d00e43c0aa1310a94c8d01a57656ec8",
+  "binary_sha256": "8701846674b0df7d6ea4ae68a659ca5e818935ab0e368b1da722aeada9e883a7",
+  "host": "Apple M3, four performance and four efficiency cores, 8 GB, macOS 27.2",
+  "notes": "One observation per configuration. Phase timings are nested: worker, merge, and prefill are parts of propagation; AO and MO times are parts of the post-HF build. Tagged merge bytes are an upper bound.",
+  "thread_settings": {
+    "OMP_DYNAMIC": "false",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1"
+  },
+  "runs": [
+    {
+      "case": "be_fciqmc_spherical_631gd",
+      "threads": 2,
+      "generated_input_sha256": "a961120332451a3f9f1a0eba4a424d28817846f742a4fd7d2141b78369092f55",
+      "hamiltonian_id": "79831605c5eb80f2",
+      "result_id": "182027b7f1d35564",
+      "driver_wall_s": 0.008,
+      "process_wall_s": 0.0678869590000204,
+      "user_s": 0.025092,
+      "system_s": 0.005678,
+      "peak_rss_bytes": 14303232,
+      "load_before": [
+        11.798828125,
+        25.1142578125,
+        14.46728515625
+      ],
+      "load_after": [
+        11.798828125,
+        25.1142578125,
+        14.46728515625
+      ],
+      "setup": {
+        "parse_s": 8.8e-05,
+        "basis_setup_s": 0.001327,
+        "one_electron_s": 9.9e-05,
+        "scf_setup_s": 0.0,
+        "scf_s": 0.00554,
+        "route": "cached",
+        "ao_eri_s": 0.0,
+        "mo_eri_s": 0.000399,
+        "setup_peak_rss_bytes": 14041088,
+        "ci_build_s": 0.000403
+      },
+      "equilibration": {
+        "steps": 0,
+        "parents": 0,
+        "attempts": 0,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 0,
+        "records_raw": 0,
+        "records_folded": 0,
+        "prefill_s": 0.0,
+        "worker_wall_s": 0.0,
+        "max_bin_work_s": 0.0,
+        "merge_s": 0.0,
+        "canonical_emitted": 0,
+        "compress_s": 0.0,
+        "estimator_s": 0.0,
+        "phase_wall_s": 0.0
+      },
+      "sampling": {
+        "steps": 4,
+        "parents": 4,
+        "attempts": 4,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 4,
+        "records_raw": 4,
+        "records_folded": 4,
+        "prefill_s": 1e-06,
+        "worker_wall_s": 3.8e-05,
+        "max_bin_work_s": 3e-06,
+        "merge_s": 0.00018,
+        "canonical_emitted": 4,
+        "compress_s": 0.0,
+        "estimator_s": 2.7e-05,
+        "phase_wall_s": 0.00025
+      },
+      "memory": {
+        "population_pair_peak_bytes": 48,
+        "accumulator_bytes": 24,
+        "parent_bin_bytes": 24,
+        "merge_tagged_bound_bytes": 64,
+        "merge_output_peak_bytes": 24,
+        "diagonal_entries": 49,
+        "sample_series_bytes": 64,
+        "coefficient_ratio_entries": 0
+      }
+    },
+    {
+      "case": "be_fciqmc_spherical_direct_631gd",
+      "threads": 2,
+      "generated_input_sha256": "98b4a9dc6a2882d62e2d7dec08f47d56a43f8496094db601d9e881ae8fc48890",
+      "hamiltonian_id": "cc8c91f608326e28",
+      "result_id": "182027b7f1d35564",
+      "driver_wall_s": 0.019,
+      "process_wall_s": 0.07697291699997777,
+      "user_s": 0.044413999999999995,
+      "system_s": 0.005980999999999999,
+      "peak_rss_bytes": 14417920,
+      "load_before": [
+        11.09375,
+        24.7470703125,
+        14.39990234375
+      ],
+      "load_after": [
+        11.09375,
+        24.7470703125,
+        14.39990234375
+      ],
+      "setup": {
+        "parse_s": 8.5e-05,
+        "basis_setup_s": 0.00131,
+        "one_electron_s": 9.3e-05,
+        "scf_setup_s": 0.0,
+        "scf_s": 0.011655,
+        "route": "constructed",
+        "ao_eri_s": 0.004783,
+        "mo_eri_s": 0.00041,
+        "setup_peak_rss_bytes": 14172160,
+        "ci_build_s": 0.005196
+      },
+      "equilibration": {
+        "steps": 0,
+        "parents": 0,
+        "attempts": 0,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 0,
+        "records_raw": 0,
+        "records_folded": 0,
+        "prefill_s": 0.0,
+        "worker_wall_s": 0.0,
+        "max_bin_work_s": 0.0,
+        "merge_s": 0.0,
+        "canonical_emitted": 0,
+        "compress_s": 0.0,
+        "estimator_s": 0.0,
+        "phase_wall_s": 0.0
+      },
+      "sampling": {
+        "steps": 4,
+        "parents": 4,
+        "attempts": 4,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 4,
+        "records_raw": 4,
+        "records_folded": 4,
+        "prefill_s": 1e-06,
+        "worker_wall_s": 4.3e-05,
+        "max_bin_work_s": 3e-06,
+        "merge_s": 0.000195,
+        "canonical_emitted": 4,
+        "compress_s": 1e-06,
+        "estimator_s": 3e-05,
+        "phase_wall_s": 0.000273
+      },
+      "memory": {
+        "population_pair_peak_bytes": 48,
+        "accumulator_bytes": 24,
+        "parent_bin_bytes": 24,
+        "merge_tagged_bound_bytes": 64,
+        "merge_output_peak_bytes": 24,
+        "diagonal_entries": 49,
+        "sample_series_bytes": 64,
+        "coefficient_ratio_entries": 0
+      }
+    },
+    {
+      "case": "rbh_8plus_fciqmc_def2svp_ecp",
+      "threads": 2,
+      "generated_input_sha256": "12f93149852fb5983ebd799f0a87157817418b43e5e523bbf0c14281018c9a3f",
+      "hamiltonian_id": "4eea2c079072b5b6",
+      "result_id": "7f0d59b0b3f1fc84",
+      "driver_wall_s": 0.076,
+      "process_wall_s": 0.1291202499999713,
+      "user_s": 0.14308099999999999,
+      "system_s": 0.010459999999999999,
+      "peak_rss_bytes": 41123840,
+      "load_before": [
+        11.09375,
+        24.7470703125,
+        14.39990234375
+      ],
+      "load_after": [
+        11.09375,
+        24.7470703125,
+        14.39990234375
+      ],
+      "setup": {
+        "parse_s": 8.2e-05,
+        "basis_setup_s": 0.003971,
+        "one_electron_s": 0.005988,
+        "scf_setup_s": 0.0,
+        "scf_s": 0.048048,
+        "route": "cached",
+        "ao_eri_s": 0.0,
+        "mo_eri_s": 0.010944,
+        "setup_peak_rss_bytes": 40910848,
+        "ci_build_s": 0.010952
+      },
+      "equilibration": {
+        "steps": 0,
+        "parents": 0,
+        "attempts": 0,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 0,
+        "records_raw": 0,
+        "records_folded": 0,
+        "prefill_s": 0.0,
+        "worker_wall_s": 0.0,
+        "max_bin_work_s": 0.0,
+        "merge_s": 0.0,
+        "canonical_emitted": 0,
+        "compress_s": 0.0,
+        "estimator_s": 0.0,
+        "phase_wall_s": 0.0
+      },
+      "sampling": {
+        "steps": 4,
+        "parents": 4,
+        "attempts": 4,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 4,
+        "records_raw": 4,
+        "records_folded": 4,
+        "prefill_s": 4e-06,
+        "worker_wall_s": 4.5e-05,
+        "max_bin_work_s": 5e-06,
+        "merge_s": 0.000213,
+        "canonical_emitted": 4,
+        "compress_s": 0.0,
+        "estimator_s": 3.8e-05,
+        "phase_wall_s": 0.000302
+      },
+      "memory": {
+        "population_pair_peak_bytes": 48,
+        "accumulator_bytes": 24,
+        "parent_bin_bytes": 24,
+        "merge_tagged_bound_bytes": 64,
+        "merge_output_peak_bytes": 24,
+        "diagonal_entries": 57,
+        "sample_series_bytes": 64,
+        "coefficient_ratio_entries": 0
+      }
+    },
+    {
+      "case": "hf_pilot",
+      "threads": 4,
+      "generated_input_sha256": "3cd54e4d289812ebc2625c4aa2cfe2604502331799edfe667fea2caea5a215bc",
+      "hamiltonian_id": "f032498d77f973b5",
+      "result_id": "8884c6b583a040a8",
+      "driver_wall_s": 10.923,
+      "process_wall_s": 10.993480707999993,
+      "user_s": 28.203004,
+      "system_s": 0.513931,
+      "peak_rss_bytes": 39305216,
+      "load_before": [
+        11.09375,
+        24.7470703125,
+        14.39990234375
+      ],
+      "load_after": [
+        10.736328125,
+        24.21337890625,
+        14.3310546875
+      ],
+      "setup": {
+        "parse_s": 0.0001,
+        "basis_setup_s": 0.001631,
+        "one_electron_s": 0.000366,
+        "scf_setup_s": 1e-06,
+        "scf_s": 0.002387,
+        "route": "cached",
+        "ao_eri_s": 0.0,
+        "mo_eri_s": 0.000131,
+        "setup_peak_rss_bytes": 14581760,
+        "ci_build_s": 0.000134
+      },
+      "equilibration": {
+        "steps": 2000,
+        "parents": 61074576,
+        "attempts": 61074576,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 60606047,
+        "records_raw": 61543105,
+        "records_folded": 61533999,
+        "prefill_s": 0.809186,
+        "worker_wall_s": 2.192527,
+        "max_bin_work_s": 0.153003,
+        "merge_s": 1.143655,
+        "canonical_emitted": 61139659,
+        "compress_s": 0.09046,
+        "estimator_s": 0.0,
+        "phase_wall_s": 4.236455
+      },
+      "sampling": {
+        "steps": 2000,
+        "parents": 92743043,
+        "attempts": 92743043,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 92185762,
+        "records_raw": 93300324,
+        "records_folded": 93288616,
+        "prefill_s": 1.36325,
+        "worker_wall_s": 3.403017,
+        "max_bin_work_s": 0.243646,
+        "merge_s": 1.633302,
+        "canonical_emitted": 92790102,
+        "compress_s": 0.137141,
+        "estimator_s": 0.14092,
+        "phase_wall_s": 6.678423
+      },
+      "memory": {
+        "population_pair_peak_bytes": 2283624,
+        "accumulator_bytes": 1572864,
+        "parent_bin_bytes": 1572864,
+        "merge_tagged_bound_bytes": 3062208,
+        "merge_output_peak_bytes": 1148328,
+        "diagonal_entries": 70806,
+        "sample_series_bytes": 32768,
+        "coefficient_ratio_entries": 0
+      },
+      "estimators": {
+        "shift": {
+          "energy_eh": -100.2551412828,
+          "reported_se_eh": 0.215,
+          "samples": 2000
+        },
+        "projected": {
+          "energy_eh": -100.1294718805,
+          "reported_se_eh": 0.0249,
+          "samples": 2000
+        }
+      },
+      "sign_unstable": false,
+      "reference_drift": false,
+      "reference_weight_mean_min": [
+        5110.17,
+        3907.85
+      ]
+    },
+    {
+      "case": "hf_auto_pilot",
+      "threads": 4,
+      "generated_input_sha256": "dcc0e563f1e480db522041055fc03b8f9fc6bd39d83356b3d108855e1e78e622",
+      "hamiltonian_id": "f032498d77f973b5",
+      "result_id": "8884c6b583a040a8",
+      "driver_wall_s": 11.109,
+      "process_wall_s": 11.267859832999989,
+      "user_s": 28.301207,
+      "system_s": 0.578,
+      "peak_rss_bytes": 42401792,
+      "load_before": [
+        10.736328125,
+        24.21337890625,
+        14.3310546875
+      ],
+      "load_after": [
+        11.51318359375,
+        23.94091796875,
+        14.35009765625
+      ],
+      "setup": {
+        "parse_s": 0.000846,
+        "basis_setup_s": 0.001776,
+        "one_electron_s": 0.000369,
+        "scf_setup_s": 0.0,
+        "scf_s": 0.002298,
+        "route": "cached",
+        "ao_eri_s": 0.0,
+        "mo_eri_s": 0.000138,
+        "setup_peak_rss_bytes": 14876672,
+        "ci_build_s": 0.000142
+      },
+      "equilibration": {
+        "steps": 2000,
+        "parents": 61074576,
+        "attempts": 61074576,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 60606047,
+        "records_raw": 61543105,
+        "records_folded": 61533999,
+        "prefill_s": 0.827483,
+        "worker_wall_s": 2.309699,
+        "max_bin_work_s": 0.161879,
+        "merge_s": 1.183261,
+        "canonical_emitted": 61139659,
+        "compress_s": 0.092057,
+        "estimator_s": 0.0,
+        "phase_wall_s": 4.413223
+      },
+      "sampling": {
+        "steps": 2000,
+        "parents": 92743043,
+        "attempts": 92743043,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 92185762,
+        "records_raw": 93300324,
+        "records_folded": 93288616,
+        "prefill_s": 1.34936,
+        "worker_wall_s": 3.433012,
+        "max_bin_work_s": 0.249278,
+        "merge_s": 1.629513,
+        "canonical_emitted": 92790102,
+        "compress_s": 0.137036,
+        "estimator_s": 0.139159,
+        "phase_wall_s": 6.688888
+      },
+      "memory": {
+        "population_pair_peak_bytes": 2283624,
+        "accumulator_bytes": 1572864,
+        "parent_bin_bytes": 1572864,
+        "merge_tagged_bound_bytes": 3062208,
+        "merge_output_peak_bytes": 1148328,
+        "diagonal_entries": 70806,
+        "sample_series_bytes": 32768,
+        "coefficient_ratio_entries": 0
+      },
+      "estimators": {
+        "shift": {
+          "energy_eh": -100.2551412828,
+          "reported_se_eh": 0.215,
+          "samples": 2000
+        },
+        "projected": {
+          "energy_eh": -100.1294718805,
+          "reported_se_eh": 0.0249,
+          "samples": 2000
+        }
+      },
+      "sign_unstable": false,
+      "reference_drift": false,
+      "reference_weight_mean_min": [
+        5110.17,
+        3907.85
+      ]
+    },
+    {
+      "case": "water_pilot",
+      "threads": 4,
+      "generated_input_sha256": "37dda065a8268afe794b83518f2ec90af727577bba2527b68b6008cedfacecdc",
+      "hamiltonian_id": "93c4b956bc9cd24f",
+      "result_id": "918505f133d70d02",
+      "driver_wall_s": 51.011,
+      "process_wall_s": 51.08854479099995,
+      "user_s": 126.1947,
+      "system_s": 1.6511529999999999,
+      "peak_rss_bytes": 275726336,
+      "load_before": [
+        11.51318359375,
+        23.94091796875,
+        14.35009765625
+      ],
+      "load_after": [
+        8.908203125,
+        21.38623046875,
+        13.9541015625
+      ],
+      "setup": {
+        "parse_s": 0.000106,
+        "basis_setup_s": 0.002194,
+        "one_electron_s": 0.00041,
+        "scf_setup_s": 0.0,
+        "scf_s": 0.003057,
+        "route": "cached",
+        "ao_eri_s": 1e-06,
+        "mo_eri_s": 0.000202,
+        "setup_peak_rss_bytes": 14778368,
+        "ci_build_s": 0.000205
+      },
+      "equilibration": {
+        "steps": 2000,
+        "parents": 224829001,
+        "attempts": 224829001,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 223875148,
+        "records_raw": 225782854,
+        "records_folded": 225769624,
+        "prefill_s": 4.700612,
+        "worker_wall_s": 9.622306,
+        "max_bin_work_s": 0.619935,
+        "merge_s": 4.007596,
+        "canonical_emitted": 225084010,
+        "compress_s": 0.344491,
+        "estimator_s": 0.0,
+        "phase_wall_s": 18.681259
+      },
+      "sampling": {
+        "steps": 2000,
+        "parents": 356951376,
+        "attempts": 356951376,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 355713589,
+        "records_raw": 358189163,
+        "records_folded": 358169801,
+        "prefill_s": 8.920069,
+        "worker_wall_s": 16.554205,
+        "max_bin_work_s": 1.05811,
+        "merge_s": 6.005464,
+        "canonical_emitted": 357154823,
+        "compress_s": 0.541827,
+        "estimator_s": 0.284055,
+        "phase_wall_s": 32.308209
+      },
+      "memory": {
+        "population_pair_peak_bytes": 8689104,
+        "accumulator_bytes": 6291456,
+        "parent_bin_bytes": 6291456,
+        "merge_tagged_bound_bytes": 11621120,
+        "merge_output_peak_bytes": 4357920,
+        "diagonal_entries": 322033,
+        "sample_series_bytes": 32768,
+        "coefficient_ratio_entries": 0
+      },
+      "estimators": {
+        "shift": {
+          "energy_eh": -76.0496174087,
+          "reported_se_eh": 0.0535,
+          "samples": 2000
+        },
+        "projected": {
+          "energy_eh": -76.1296442577,
+          "reported_se_eh": 0.0133,
+          "samples": 2000
+        }
+      },
+      "sign_unstable": false,
+      "reference_drift": false,
+      "reference_weight_mean_min": [
+        760.89,
+        713.58
+      ]
+    },
+    {
+      "case": "hf-10000",
+      "threads": 4,
+      "generated_input_sha256": "e4a5c52a5cea4aa8bd828996fc1385914c4b151dc21bda800fe827698504e83e",
+      "hamiltonian_id": "f032498d77f973b5",
+      "result_id": "6cb64947769653ca",
+      "driver_wall_s": 122.519,
+      "process_wall_s": 123.19286833299998,
+      "user_s": 305.940735,
+      "system_s": 7.245186,
+      "peak_rss_bytes": 39354368,
+      "load_before": [
+        5.14697265625,
+        5.2822265625,
+        7.138671875
+      ],
+      "load_after": [
+        5.23974609375,
+        5.13720703125,
+        6.82470703125
+      ],
+      "setup": {
+        "parse_s": 0.001341,
+        "basis_setup_s": 0.005348,
+        "one_electron_s": 0.000898,
+        "scf_setup_s": 0.0,
+        "scf_s": 0.006845,
+        "route": "cached",
+        "ao_eri_s": 1e-06,
+        "mo_eri_s": 0.000308,
+        "setup_peak_rss_bytes": 15122432,
+        "ci_build_s": 0.00033
+      },
+      "equilibration": {
+        "steps": 20000,
+        "parents": 638488053,
+        "attempts": 638488053,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 636731769,
+        "records_raw": 640244337,
+        "records_folded": 640214406,
+        "prefill_s": 8.997822,
+        "worker_wall_s": 23.062568,
+        "max_bin_work_s": 1.727096,
+        "merge_s": 11.921289,
+        "canonical_emitted": 638825293,
+        "compress_s": 0.943691,
+        "estimator_s": 0.0,
+        "phase_wall_s": 44.933301
+      },
+      "sampling": {
+        "steps": 30000,
+        "parents": 1030753696,
+        "attempts": 1030753696,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 1028062229,
+        "records_raw": 1033445163,
+        "records_folded": 1033399073,
+        "prefill_s": 14.962502,
+        "worker_wall_s": 39.170725,
+        "max_bin_work_s": 3.056012,
+        "merge_s": 19.760172,
+        "canonical_emitted": 1031245572,
+        "compress_s": 1.543165,
+        "estimator_s": 2.113479,
+        "phase_wall_s": 77.565936
+      },
+      "memory": {
+        "population_pair_peak_bytes": 1699080,
+        "accumulator_bytes": 1536000,
+        "parent_bin_bytes": 1523712,
+        "merge_tagged_bound_bytes": 2271104,
+        "merge_output_peak_bytes": 851664,
+        "diagonal_entries": 103511,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "estimators": {
+        "shift": {
+          "energy_eh": -100.0950962667,
+          "reported_se_eh": 0.0409,
+          "samples": 30000
+        },
+        "projected": {
+          "energy_eh": -100.1167637117,
+          "reported_se_eh": 0.00853,
+          "samples": 30000
+        }
+      },
+      "sign_unstable": false,
+      "reference_drift": false,
+      "reference_weight_mean_min": [
+        715.26,
+        511.14
+      ]
+    },
+    {
+      "case": "hf-25000",
+      "threads": 4,
+      "generated_input_sha256": "8da4747d1ead6f3772733f0fa1bdca2a2e97cc34155630373d6765a0cd33f534",
+      "hamiltonian_id": "f032498d77f973b5",
+      "result_id": "40837d1db7ca2a8f",
+      "driver_wall_s": 149.685,
+      "process_wall_s": 149.98832320799988,
+      "user_s": 381.363652,
+      "system_s": 7.469573,
+      "peak_rss_bytes": 39403520,
+      "load_before": [
+        5.23974609375,
+        5.13720703125,
+        6.82470703125
+      ],
+      "load_after": [
+        4.01806640625,
+        4.5615234375,
+        6.30517578125
+      ],
+      "setup": {
+        "parse_s": 0.000496,
+        "basis_setup_s": 0.002657,
+        "one_electron_s": 0.000496,
+        "scf_setup_s": 0.0,
+        "scf_s": 0.003392,
+        "route": "cached",
+        "ao_eri_s": 0.0,
+        "mo_eri_s": 0.00017,
+        "setup_peak_rss_bytes": 14614528,
+        "ci_build_s": 0.000174
+      },
+      "equilibration": {
+        "steps": 20000,
+        "parents": 800212548,
+        "attempts": 800212548,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 796780449,
+        "records_raw": 803644647,
+        "records_folded": 803579721,
+        "prefill_s": 12.53462,
+        "worker_wall_s": 31.89163,
+        "max_bin_work_s": 2.446535,
+        "merge_s": 15.144181,
+        "canonical_emitted": 800640978,
+        "compress_s": 1.206407,
+        "estimator_s": 0.0,
+        "phase_wall_s": 60.789405
+      },
+      "sampling": {
+        "steps": 30000,
+        "parents": 1264353651,
+        "attempts": 1264353651,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 1259111711,
+        "records_raw": 1269595591,
+        "records_folded": 1269494828,
+        "prefill_s": 17.288924,
+        "worker_wall_s": 45.356706,
+        "max_bin_work_s": 3.22304,
+        "merge_s": 22.284738,
+        "canonical_emitted": 1264972644,
+        "compress_s": 1.850348,
+        "estimator_s": 2.089344,
+        "phase_wall_s": 88.882617
+      },
+      "memory": {
+        "population_pair_peak_bytes": 2093976,
+        "accumulator_bytes": 1572864,
+        "parent_bin_bytes": 1572864,
+        "merge_tagged_bound_bytes": 2803328,
+        "merge_output_peak_bytes": 1051248,
+        "diagonal_entries": 104362,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "estimators": {
+        "shift": {
+          "energy_eh": -100.0934484323,
+          "reported_se_eh": 0.0501,
+          "samples": 30000
+        },
+        "projected": {
+          "energy_eh": -100.1157481597,
+          "reported_se_eh": 0.00841,
+          "samples": 30000
+        }
+      },
+      "sign_unstable": false,
+      "reference_drift": false,
+      "reference_weight_mean_min": [
+        2373.71,
+        1619.35
+      ]
+    },
+    {
+      "case": "hf",
+      "threads": 4,
+      "generated_input_sha256": "72da8718359d16c06f7450afeac39f2bbe322ca681a0f7e3c59f606e08ce4fde",
+      "hamiltonian_id": "f032498d77f973b5",
+      "result_id": "ea152a6472c1789b",
+      "driver_wall_s": 178.652,
+      "process_wall_s": 178.97168999999997,
+      "user_s": 448.281548,
+      "system_s": 8.439093,
+      "peak_rss_bytes": 48906240,
+      "load_before": [
+        8.908203125,
+        21.38623046875,
+        13.9541015625
+      ],
+      "load_after": [
+        7.671875,
+        14.92626953125,
+        12.619140625
+      ],
+      "setup": {
+        "parse_s": 0.000922,
+        "basis_setup_s": 0.001842,
+        "one_electron_s": 0.000489,
+        "scf_setup_s": 0.0,
+        "scf_s": 0.003006,
+        "route": "cached",
+        "ao_eri_s": 0.0,
+        "mo_eri_s": 0.000151,
+        "setup_peak_rss_bytes": 14647296,
+        "ci_build_s": 0.000165
+      },
+      "equilibration": {
+        "steps": 20000,
+        "parents": 929186695,
+        "attempts": 929186695,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 923606622,
+        "records_raw": 934766768,
+        "records_folded": 934652872,
+        "prefill_s": 13.812138,
+        "worker_wall_s": 35.749318,
+        "max_bin_work_s": 2.693922,
+        "merge_s": 16.545222,
+        "canonical_emitted": 929658538,
+        "compress_s": 1.382855,
+        "estimator_s": 0.0,
+        "phase_wall_s": 67.498671
+      },
+      "sampling": {
+        "steps": 30000,
+        "parents": 1454552910,
+        "attempts": 1454552910,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 1446049135,
+        "records_raw": 1463056685,
+        "records_folded": 1462881695,
+        "prefill_s": 22.71025,
+        "worker_wall_s": 57.759322,
+        "max_bin_work_s": 4.288294,
+        "merge_s": 26.256007,
+        "canonical_emitted": 1455228970,
+        "compress_s": 2.192342,
+        "estimator_s": 2.206304,
+        "phase_wall_s": 111.140299
+      },
+      "memory": {
+        "population_pair_peak_bytes": 2411016,
+        "accumulator_bytes": 1572864,
+        "parent_bin_bytes": 1572864,
+        "merge_tagged_bound_bytes": 3233408,
+        "merge_output_peak_bytes": 1212528,
+        "diagonal_entries": 105050,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "estimators": {
+        "shift": {
+          "energy_eh": -100.0924885914,
+          "reported_se_eh": 0.0523,
+          "samples": 30000
+        },
+        "projected": {
+          "energy_eh": -100.1155051382,
+          "reported_se_eh": 0.00841,
+          "samples": 30000
+        }
+      },
+      "sign_unstable": false,
+      "reference_drift": false,
+      "reference_weight_mean_min": [
+        5189.95,
+        3476.59
+      ]
+    },
+    {
+      "case": "hf-100000",
+      "threads": 4,
+      "generated_input_sha256": "969670d948ec1b150116e4762651ea48d95c50c4119d504ade801e7f4edf8df7",
+      "hamiltonian_id": "f032498d77f973b5",
+      "result_id": "4bb9e3e12d026d4c",
+      "driver_wall_s": 195.237,
+      "process_wall_s": 195.61112170800016,
+      "user_s": 504.330052,
+      "system_s": 8.197561,
+      "peak_rss_bytes": 55164928,
+      "load_before": [
+        4.01806640625,
+        4.5615234375,
+        6.30517578125
+      ],
+      "load_after": [
+        4.60009765625,
+        4.47607421875,
+        5.900390625
+      ],
+      "setup": {
+        "parse_s": 0.000251,
+        "basis_setup_s": 0.002898,
+        "one_electron_s": 0.000606,
+        "scf_setup_s": 1e-06,
+        "scf_s": 0.003878,
+        "route": "cached",
+        "ao_eri_s": 0.0,
+        "mo_eri_s": 0.000182,
+        "setup_peak_rss_bytes": 14614528,
+        "ci_build_s": 0.000185
+      },
+      "equilibration": {
+        "steps": 20000,
+        "parents": 1057307129,
+        "attempts": 1057307129,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 1048417197,
+        "records_raw": 1066197061,
+        "records_folded": 1066005288,
+        "prefill_s": 15.208869,
+        "worker_wall_s": 39.502522,
+        "max_bin_work_s": 2.807718,
+        "merge_s": 18.198417,
+        "canonical_emitted": 1057794948,
+        "compress_s": 1.564288,
+        "estimator_s": 0.0,
+        "phase_wall_s": 74.484453
+      },
+      "sampling": {
+        "steps": 30000,
+        "parents": 1645238974,
+        "attempts": 1645238974,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 1631683725,
+        "records_raw": 1658794223,
+        "records_folded": 1658499992,
+        "prefill_s": 24.641625,
+        "worker_wall_s": 62.898506,
+        "max_bin_work_s": 4.559682,
+        "merge_s": 28.534648,
+        "canonical_emitted": 1645929480,
+        "compress_s": 2.452369,
+        "estimator_s": 2.193332,
+        "phase_wall_s": 120.738328
+      },
+      "memory": {
+        "population_pair_peak_bytes": 2712816,
+        "accumulator_bytes": 1671168,
+        "parent_bin_bytes": 1646592,
+        "merge_tagged_bound_bytes": 3647168,
+        "merge_output_peak_bytes": 1367688,
+        "diagonal_entries": 105685,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "estimators": {
+        "shift": {
+          "energy_eh": -100.0920086152,
+          "reported_se_eh": 0.0535,
+          "samples": 30000
+        },
+        "projected": {
+          "energy_eh": -100.1153356175,
+          "reported_se_eh": 0.00842,
+          "samples": 30000
+        }
+      },
+      "sign_unstable": false,
+      "reference_drift": false,
+      "reference_weight_mean_min": [
+        10852.19,
+        7192.0
+      ]
+    },
+    {
+      "case": "water",
+      "threads": 4,
+      "generated_input_sha256": "a8fa8bcb77867ec822748cff0192233d85d7d62b72c4706fb6b2065b856ed3e6",
+      "hamiltonian_id": "93c4b956bc9cd24f",
+      "result_id": "bc255aa71009d1f4",
+      "driver_wall_s": 904.82,
+      "process_wall_s": 905.200867584,
+      "user_s": 2216.267151,
+      "system_s": 22.892234,
+      "peak_rss_bytes": 310231040,
+      "load_before": [
+        6.0595703125,
+        10.78759765625,
+        11.29833984375
+      ],
+      "load_after": [
+        5.14697265625,
+        5.2822265625,
+        7.138671875
+      ],
+      "setup": {
+        "parse_s": 0.000847,
+        "basis_setup_s": 0.00229,
+        "one_electron_s": 0.000693,
+        "scf_setup_s": 0.0,
+        "scf_s": 0.00604,
+        "route": "cached",
+        "ao_eri_s": 3e-06,
+        "mo_eri_s": 0.000566,
+        "setup_peak_rss_bytes": 14794752,
+        "ci_build_s": 0.000599
+      },
+      "equilibration": {
+        "steps": 20000,
+        "parents": 3441018425,
+        "attempts": 3441018425,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 3429030416,
+        "records_raw": 3453006434,
+        "records_folded": 3452821303,
+        "prefill_s": 112.775912,
+        "worker_wall_s": 171.08848,
+        "max_bin_work_s": 10.848543,
+        "merge_s": 57.855845,
+        "canonical_emitted": 3443090358,
+        "compress_s": 5.215237,
+        "estimator_s": 0.0,
+        "phase_wall_s": 346.966999
+      },
+      "sampling": {
+        "steps": 30000,
+        "parents": 5367426322,
+        "attempts": 5367426322,
+        "invalid": 0,
+        "zero_h": 0,
+        "initiator_rejected": 0,
+        "rounded_zero": 5349017812,
+        "records_raw": 5385834832,
+        "records_folded": 5385547786,
+        "prefill_s": 188.544729,
+        "worker_wall_s": 268.050016,
+        "max_bin_work_s": 16.838873,
+        "merge_s": 88.861185,
+        "canonical_emitted": 5370455306,
+        "compress_s": 8.074166,
+        "estimator_s": 4.248548,
+        "phase_wall_s": 557.820495
+      },
+      "memory": {
+        "population_pair_peak_bytes": 8775096,
+        "accumulator_bytes": 6291456,
+        "parent_bin_bytes": 6291456,
+        "merge_tagged_bound_bytes": 11734400,
+        "merge_output_peak_bytes": 4400400,
+        "diagonal_entries": 414055,
+        "sample_series_bytes": 524288,
+        "coefficient_ratio_entries": 0
+      },
+      "estimators": {
+        "shift": {
+          "energy_eh": -76.110937795,
+          "reported_se_eh": 0.0329,
+          "samples": 30000
+        },
+        "projected": {
+          "energy_eh": -76.1176558035,
+          "reported_se_eh": 0.00846,
+          "samples": 30000
+        }
+      },
+      "sign_unstable": false,
+      "reference_drift": false,
+      "reference_weight_mean_min": [
+        883.83,
+        642.75
+      ]
+    }
+  ],
+  "hf50k_without_profiling": {
+    "driver_wall_s": 178.867,
+    "estimators": {
+      "shift": {
+        "energy_eh": -100.0924885914,
+        "reported_se_eh": 0.0523,
+        "samples": 30000
+      },
+      "projected": {
+        "energy_eh": -100.1155051382,
+        "reported_se_eh": 0.00841,
+        "samples": 30000
+      }
+    }
+  },
+  "water_reference": {
+    "pyscf_fci_eh": -76.120842405967
+  }
+}

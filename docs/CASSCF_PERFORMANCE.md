@@ -1,7 +1,7 @@
 # Why was CASSCF so much slower than PySCF, and what makes it fast?
 
-Canonical status lives in `vault/Status/Completion.md` and
-`vault/Status/Open Work.md`.
+Answered 2026-11-01 (opened as a scope 2026-10-28). Status lives in
+`vault/Status/`.
 
 ## Answer
 
@@ -235,22 +235,6 @@ so a chunk is one bin, bins summed in fixed order. The trace is identical at
 - **Direct or cached Fock builds:** disproven earlier
   (`CASSCF_FOCK_REBUILD_COST.md`).
 
-## Not done
-
-Not scheduled; take one up only with a new target.
-
-1. **Re-profile cc-pVTZ C2v** (1.3x behind PySCF). Whether the remaining time
-   is the H build, the Hessian products (O(nb^3) each, but 28-64 per macro),
-   the SCF before CASSCF, or thread wait has not been measured.
-2. **A better preconditioner for the relaxed solve.** 28-64 vectors per macro
-   at cc-pVTZ; near convergence cc-pVDZ still needs 34-50 of 50 for a
-   relative residual of ~4e-3. The diagonal is F_I + F_A differences only.
-3. **The RI path** has none of this: FD orbital Hessian, full-leg-first
-   transform, dense-density Fock builds (`water_casscf_ri_ccpvdz` 4.1 s). An
-   RI twin of H (`B^Q_{mu i}`) would give it the same structure.
-4. **`CallProbe`** (`PLANCK_CASSCF_CALL_PROBE`, `orbital.h`) is temporary and
-   can be deleted.
-
 ## Gates
 
 - The 19 CASSCF/RASSCF/FCI regression cases (`python3 tests/run_regressions.py
@@ -291,7 +275,23 @@ with `BASIS_PATH=$PWD/basis-sets`, and the PySCF side with
   non-ASCII as `\u` escapes, and `ensure_ascii=False` rewrites unrelated
   cases.
 
-## Out of scope
+## Not done
+
+Not scheduled; take one up only with a new target.
+
+1. **Re-profile cc-pVTZ C2v** (1.3x behind PySCF). Whether the remaining time
+   is the H build, the Hessian products (O(nb^3) each, but 28-64 per macro),
+   the SCF before CASSCF, or thread wait has not been measured.
+2. **A better preconditioner for the relaxed solve.** 28-64 vectors per macro
+   at cc-pVTZ; near convergence cc-pVDZ still needs 34-50 of 50 for a
+   relative residual of ~4e-3. The diagonal is F_I + F_A differences only.
+3. **The RI path** has none of this: FD orbital Hessian, full-leg-first
+   transform, dense-density Fock builds (`water_casscf_ri_ccpvdz` 4.1 s). An
+   RI twin of H (`B^Q_{mu i}`) would give it the same structure.
+4. **`CallProbe`** (`PLANCK_CASSCF_CALL_PROBE`, `orbital.h`) is temporary and
+   can be deleted.
+
+## Not in this scope
 
 - CI cost: irrelevant at CAS(4,4); the large-CAS sigma build is done
   (`docs/FCI_SIGMA_BUILD_PERFORMANCE.md`).

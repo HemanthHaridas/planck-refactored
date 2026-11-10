@@ -46,7 +46,7 @@ largest (valence) region:
 `grid_policy` selects a versioned pruning schedule (`GridPruningPolicy`).
 `legacy` is the default. `g4-3-v4` is a qualified opt-in policy, and it is
 mandatory (with `grid_radial_points 135` and no angular override) for UKS
-double-hybrid gradients. See `docs/DFT_GRID_CONVERGENCE_SCOPE.md`.
+double-hybrid gradients. See `docs/DFT_GRID_CONVERGENCE.md`.
 
 ## AO Evaluation
 
@@ -96,14 +96,18 @@ construction remain serial; any future reduction there must use fixed order.
 
 ## PCM Solvation
 
-`planck-dft` can add a self-consistent C-PCM reaction field for single-point RKS/UKS calculations. The DFT driver builds a reusable `PCMState` once, then adds the reaction potential and solvation energy during each SCF iteration.
+`planck-dft` can add a self-consistent C-PCM reaction field to RKS/UKS calculations. The DFT driver builds a reusable `PCMState` once, then adds the reaction potential and solvation energy during each SCF iteration.
+
+The cavity is SWIG (Lange-Herbert: Lebedev points, a smooth switching
+function, Gaussian surface charges) with f(ε) = (ε−1)/ε, the same scheme as
+PySCF's default C-PCM. See `docs/PCM_GEOMETRY.md`.
 
 Key pieces:
 - setup: `HartreeFock::Solvation::build_pcm_state`
 - per-iteration reaction field: `HartreeFock::Solvation::evaluate_pcm_reaction_field`
 - implementation: `src/solvation/pcm.{h,cpp}`
 
-Analytic KS gradients currently warn/error if PCM geometry response would be required; PCM is not wired through DFT geometry optimization, frequencies, or TDDFT.
+`compute_analytic_ks_gradient` adds the C-PCM geometry response through `HartreeFock::Gradient::pcm_gradient` (grad_nuc + grad_qv + grad_solver), and `prepare_current_geometry` rebuilds the cavity at every geometry, so PCM gradients, geometry optimization and frequencies work for RKS/UKS (`docs/PCM_GEOMETRY.md`). PCM is not wired through TDDFT or the double-hybrid gradients.
 
 ## Supported Functionals
 
@@ -116,7 +120,7 @@ Support is split by workflow:
 - RKS global double hybrids: single points, analytic gradients, geomopt, frequencies (FD of analytic gradients), geomopt+freq
 - UKS global double hybrids: single points, analytic gradients only (conventional all-active UMP2, no solvent, qualified V4 grid)
 - Range-separated double hybrids: single-point energies only
-- Yukawa/Gaussian screened-exchange functionals: evaluated with the erf kernel; rejected for TDDFT (see Open Work)
+- Yukawa/Gaussian screened-exchange functionals: rejected by name in every workflow (only the erf kernel is implemented)
 
 ## Hybrid / Range-Separated / Double-Hybrid XC
 
@@ -133,7 +137,7 @@ The same wrapper layer also exposes `is_range_separated()`, `is_double_hybrid()`
 
 ## Double-Hybrid Analytic Gradients
 
-The restricted path (`src/dft/dh_pt2_gradient.{h,cpp}`) follows the Neese–Schwabe–Grimme (2007) stationary Lagrangian. It uses a matrix-free GMRES Z-vector (`solve_dh_zvector`) and direct (streamed) derivative-integral and Eq. 47 pair-density contractions. Only the five MO-ERI sectors the RHS needs are formed. Analytic-vs-energy-FD error is ≤1.7e-8 Ha/Bohr on water and C1 H2O2 (B2PLYP/STO-3G). The unrestricted path (`src/dft/udh_*.cpp`, `build_udh_gradient_correction`) is a dense implementation: full spin MO ERIs, a dense joint α/β Jacobian solved by pivoted QR, and a dense AO pair density. Worst FD error on the three hard open-shell B2PLYP cases is 2.7e-9 Ha/Bohr on the V4 grid. User-facing scope: `docs/DOUBLE_HYBRID_GRADIENTS.md`. Architecture and remaining scalability work: `docs/DH_IMPLEMENTATION.md`. Teaching derivation: §15 of `docs/PLANCK_TEACHING_GUIDE.md`.
+The restricted path (`src/dft/dh_pt2_gradient.{h,cpp}`) follows the Neese–Schwabe–Grimme (2007) stationary Lagrangian. It uses a matrix-free GMRES Z-vector (`solve_dh_zvector`) and direct (streamed) derivative-integral and Eq. 47 pair-density contractions. Only the five MO-ERI sectors the RHS needs are formed. Analytic-vs-energy-FD error is ≤1.7e-8 Ha/Bohr on water and C1 H2O2 (B2PLYP/STO-3G). The unrestricted path (`src/dft/udh_*.cpp`, `build_udh_gradient_correction`) shares the restricted path's streamed AO pair density, derivative contraction, matrix-free GMRES Z-vector solver and Eq. 40 MO-integral sectors, built once per spin pair (`for_each_dh_pair_ao_block`, `build_dh_eq33_direct_non_xc_gradient`, `solve_packed_zvector`, `build_dh_eq40_mo_eri_blocks_direct`). Its UMP2 amplitudes are still resident arrays (`docs/UDH_GRADIENT_ONE_ARCHITECTURE.md`). Worst FD error on the three hard open-shell B2PLYP cases is 4.3e-9 Ha/Bohr on the V4 grid. User-facing scope: `docs/DOUBLE_HYBRID_GRADIENTS.md`. Architecture and remaining scalability work: `docs/DH_IMPLEMENTATION.md`. Teaching derivation: §15 of `docs/PLANCK_TEACHING_GUIDE.md`.
 
 ## TDDFT / Linear Response
 

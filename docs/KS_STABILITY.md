@@ -1,5 +1,10 @@
 # Can `planck-dft` detect, and leave, an unstable Kohn-Sham solution?
 
+Answered 2026-11-06 (opened as a scope 2026-11-05). Status lives in
+`vault/Status/`.
+
+## Answer
+
 **Yes, for RKS and UKS, in the Cartesian and spherical bases.** `stability_check` reports the
 lowest orbital-Hessian eigenvalue of each channel:
 
@@ -36,7 +41,8 @@ differ by 2.4e-5 before any follow; water differs by 8.5e-7.
 ## Why it matters
 
 The default `hcore` guess can converge an open-shell SCF onto an excited,
-symmetry-trapped saddle and report nothing. Example, water⁺/cc-pVTZ:
+symmetry-trapped saddle, and SCF convergence cannot detect it. Example,
+water⁺/cc-pVTZ:
 
 - The core-Hamiltonian orbitals order 1a₁ 2a₁ 1b₂ 1b₁ 3a₁, so the guess
   already holds the ²A₁ beta hole.
@@ -48,6 +54,10 @@ symmetry-trapped saddle and report nothing. Example, water⁺/cc-pVTZ:
 
 UHF behaves the same and could already escape through its stability follow.
 Kohn-Sham had no stability analysis.
+
+The default guess stays `hcore`. Both binaries print a warning when a UHF or
+UKS run with multiplicity above 1 starts from `hcore` without `stability_check`
+(`SCF::warn_open_shell_hcore_guess`).
 
 ## How it works
 

@@ -1,0 +1,47 @@
+# Larger R1 timing control at the same spin counts and stochastic settings as
+# hf_pop_50000: 13 spatial orbitals, 5 alpha / 5 beta, 1,656,369 determinants.
+# Geometry from the water regression fixtures, in angstrom.
+%begin_control
+    basis       6-31g
+    calculation energy
+    verbosity   normal
+    basis_type  cartesian
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation fciqmc
+    ci_max_dim  1656369
+
+    fciqmc_walkers         50000
+    fciqmc_timestep        0.001
+    fciqmc_shift_damping   0.3
+    fciqmc_shift_restoring 0.05
+    fciqmc_shift_interval  5
+    fciqmc_granularity     1.0
+    fciqmc_initiator       0.0
+    fciqmc_equilibration   20000
+    fciqmc_steps           30000
+    fciqmc_spawn_attempts  1
+    fciqmc_seed            20250901
+
+    use_diis    .true.
+    diis_dim    8
+    save_checkpoint .false.
+    engine      os
+    guess       hcore
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+3
+0   1
+O    0.000000    0.000000    0.117176
+H    0.000000    0.757005   -0.468704
+H    0.000000   -0.757005   -0.468704
+%end_coords

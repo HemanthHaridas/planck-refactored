@@ -587,8 +587,11 @@ namespace
     // comparison is the point, not an incidental detail -- if the CHELPG arm
     // ever stops failing, this gate has stopped measuring the grid.
     // b5 gate for SCF::reaction_field_potential -- the PCM reaction field term
-    // phi_rxn(r) = sum_i q_i / |r - s_i| that `include_reaction_field` adds to
-    // the fitted potential.
+    // phi_rxn(r) = sum_i q_i erf(xi_i |r - s_i|) / |r - s_i| that
+    // `include_reaction_field` adds to the fitted potential. Since the SWIG
+    // cavity (docs/PCM_GEOMETRY.md step 1) each tessera is a Gaussian
+    // charge of width xi_i; this fixture predated that and left xi at its
+    // default 0, which made every potential erf(0)/r = 0.
     //
     // Pure arithmetic against a hand-summed oracle: no SCF, no PCM solve, no
     // cavity. The tesserae and charges are made up, because the identity under
@@ -604,6 +607,14 @@ namespace
         tesserae[1].position = Eigen::Vector3d(-2.1, 1.3, -0.6);
         tesserae[2].position = Eigen::Vector3d(0.3, 2.4, 1.8);
         tesserae[3].position = Eigen::Vector3d(-0.8, -1.9, -2.2);
+        // Widths small enough that erf(xi r) is visibly below 1 at the near
+        // points (real SWIG widths, xi ~ 8 / Bohr, would make them plain 1/r
+        // here and leave the smearing untested). Distinct per tessera, so a
+        // swapped index shows.
+        tesserae[0].exponent = 0.45;
+        tesserae[1].exponent = 0.80;
+        tesserae[2].exponent = 0.30;
+        tesserae[3].exponent = 1.10;
 
         // Mixed signs, summing to a small non-zero net -- a net-zero layer
         // would hide an error that scales the whole vector.
@@ -625,8 +636,10 @@ namespace
         {
             double oracle = 0.0;
             for (std::size_t i = 0; i < tesserae.size(); ++i)
-                oracle += q(static_cast<Eigen::Index>(i)) /
-                          (points[k] - tesserae[i].position).norm();
+            {
+                const double r = (points[k] - tesserae[i].position).norm();
+                oracle += q(static_cast<Eigen::Index>(i)) * std::erf(tesserae[i].exponent * r) / r;
+            }
             worst = std::max(worst,
                              std::abs((*phi)(static_cast<Eigen::Index>(k)) - oracle));
         }

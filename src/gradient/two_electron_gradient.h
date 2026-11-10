@@ -28,6 +28,9 @@ namespace HartreeFock::Gradient
         // Shell index -> atom index (shell centre within 1e-5 Bohr of the atom).
         std::expected<std::vector<int>, std::string> build_shell_atom_map(const HartreeFock::Calculator &calc);
 
+        // Cartesian AO index -> atom index, through build_shell_atom_map.
+        std::expected<std::vector<int>, std::string> build_ao_atom_map(const HartreeFock::Calculator &calc);
+
         // Q(i, j) = sqrt|(ij|ij)| for every AO pair in shell_pairs.
         Eigen::MatrixXd build_pair_schwarz_table(const std::vector<HartreeFock::ShellPair> &shell_pairs,
                                                  std::size_t nbasis);

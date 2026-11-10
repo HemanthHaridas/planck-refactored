@@ -1,3 +1,4 @@
+#include <chrono>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -70,10 +71,17 @@ int main(int argc, const char *argv[])
 
     HartreeFock::Calculator calculator{};
 
+    const auto parse_start = std::chrono::steady_clock::now();
     if (auto res = HartreeFock::IO::parse_input(input_stream, calculator); !res)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Input Parsing Failed :", res.error());
         return EXIT_FAILURE;
+    }
+    if (calculator._correlation == HartreeFock::PostHF::FCIQMC && calculator._fciqmc.profile)
+    {
+        const std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - parse_start;
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "FCIQMC_PROFILE:",
+                                     std::format("phase=input parse_s={:.6f}", elapsed.count()));
     }
 
     HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Input Parsing :", "Successful");

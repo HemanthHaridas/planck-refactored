@@ -13,7 +13,7 @@ namespace DFT::Driver
     struct UDHGradientResult
     {
         Gradient::UDHPT2EnergyContract energy;
-        Gradient::UDHNonXCGradient non_xc;
+        Gradient::DHEq33NonXCGradient non_xc;
         Gradient::UDHCompleteXCIIGradient xc;
         Gradient::UDHOrbitalMatrices rhs,z;
         Eigen::MatrixXd correction,ks,total;

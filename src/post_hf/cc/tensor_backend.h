@@ -8,9 +8,16 @@
 #include <utility>
 #include <vector>
 
-#include "integrals/shellpair.h"
 #include "post_hf/cc/amplitudes.h"
 #include "post_hf/cc/common.h"
+
+// Forward declarations, not base/types.h: the generated kernel registry
+// includes this header, and must not recompile on every types.h edit.
+namespace HartreeFock
+{
+    struct Calculator;
+    struct ShellPair;
+}
 
 namespace HartreeFock::Correlation::CC
 {

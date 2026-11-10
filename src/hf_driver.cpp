@@ -257,6 +257,13 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     const std::string &json_path)
 {
     const auto program_start = SystemClock::now(); // Start time
+    const bool qmc_profile = calculator._correlation == HartreeFock::PostHF::FCIQMC &&
+                             calculator._fciqmc.profile;
+    using ProfileClock = std::chrono::steady_clock;
+    const auto profile_time = [qmc_profile] {
+        return qmc_profile ? ProfileClock::now() : ProfileClock::time_point{};
+    };
+    const auto basis_start = profile_time();
 
     // The caller (main) has already parsed the input into `calculator` and
     // derived the checkpoint path; this driver owns the workflow from here.
@@ -551,8 +558,6 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         case HartreeFock::PostHF::UCCGEN:
             break;
         }
-        if (calculator._solvation._model != HartreeFock::SolvationModel::None)
-            return reject("PCM solvation");
         // Symmetry / SAO blocking is supported in the spherical basis: build_sao_basis
         // now uses the same metric-correct spherical AO representation as the
         // full-symmetry direct-SCF path and returns a working_nbasis()-sized
@@ -694,6 +699,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     HartreeFock::Logger::blank();
 
     // ── One-electron integrals (or load from checkpoint) ─────────────────────
+    const auto one_electron_start = profile_time();
     bool loaded_from_checkpoint = false;
 
     const bool want_checkpoint =
@@ -836,12 +842,16 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         }
     }
 
+    const auto scf_setup_start = profile_time();
+
     // ── SAO basis for symmetry-blocked Fock diagonalization ──────────────────
     //
-    // Suppressed under PCM. The cavity is tessellated with a Fibonacci
-    // (golden-angle) sphere (src/solvation/pcm.cpp), which has NO point-group
-    // symmetry by construction, so the reaction potential V_pcm is not
-    // symmetry-adapted. SAO block-diagonalization reads only the diagonal irrep
+    // Suppressed under PCM. The SWIG cavity (src/solvation/pcm.cpp) samples
+    // each atomic sphere with a Lebedev grid in the lab frame, which does not
+    // carry the molecule's point group, so the reaction potential V_pcm is not
+    // symmetry-adapted (docs/PCM_ROTATIONAL_INVARIANCE.md). (The numbers
+    // below were measured on the earlier Fibonacci cavity, which had the same
+    // property.) SAO block-diagonalization reads only the diagonal irrep
     // blocks of F and silently discards the off-block elements V_pcm puts there:
     // the SCF then converges to a fixed point of a symmetry-PROJECTED problem
     // (ΔE = ΔP = 0 exactly) while ‖FPS-SPF‖ stays pinned at ~4e-5 forever,
@@ -935,7 +945,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     std::optional<HartreeFock::Solvation::PCMState> pcm_state;
     if (calculator._solvation._model != HartreeFock::SolvationModel::None)
     {
-        auto pcm_res = HartreeFock::Solvation::build_pcm_state(calculator, shellpairs);
+        auto pcm_res = HartreeFock::Solvation::build_pcm_state(calculator);
         if (!pcm_res)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "PCM Failed :", pcm_res.error());
@@ -945,6 +955,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     }
 
     // ── SCF ───────────────────────────────────────────────────────────────────
+    const auto scf_start = profile_time();
     if (calculator._scf._scf == HartreeFock::SCFType::RHF)
     {
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Begin SCF Cycles :", "");
@@ -965,12 +976,25 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     }
     else
     {
+        HartreeFock::SCF::warn_open_shell_hcore_guess(calculator);
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "Begin UHF SCF Cycles :", "");
         if (auto res = HartreeFock::SCF::run_uhf(calculator, shellpairs, pcm_state ? &*pcm_state : nullptr); !res)
         {
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "SCF Failed :", res.error());
             return EXIT_FAILURE;
         }
+    }
+
+    if (qmc_profile)
+    {
+        using Seconds = std::chrono::duration<double>;
+        HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, "FCIQMC_PROFILE:",
+            std::format("phase=hf basis_setup_s={:.6f} one_electron_s={:.6f} "
+                        "scf_setup_s={:.6f} scf_s={:.6f}",
+                        Seconds(one_electron_start - basis_start).count(),
+                        Seconds(scf_setup_start - one_electron_start).count(),
+                        Seconds(scf_start - scf_setup_start).count(),
+                        Seconds(ProfileClock::now() - scf_start).count()));
     }
 
     // ── Wavefunction stability analysis ────────────────────────────────────────
@@ -1134,14 +1158,10 @@ std::expected<int, std::string> HartreeFock::Driver::run(
     if (calculator._esp._enabled && calculator._esp._include_reaction_field &&
         pcm_state && pcm_state->enabled())
     {
-        Eigen::MatrixXd pcm_density = calculator._info._scf.alpha.density;
-        if (calculator._scf._scf != HartreeFock::SCFType::RHF &&
-            calculator._info._scf.beta.density.rows() ==
-                calculator._info._scf.alpha.density.rows())
-            pcm_density += calculator._info._scf.beta.density;
+        const Eigen::MatrixXd pcm_density = HartreeFock::Solvation::pcm_total_density(calculator);
 
         auto pcm = HartreeFock::Solvation::evaluate_pcm_reaction_field(
-            calculator, *pcm_state, pcm_density);
+            calculator, shellpairs, *pcm_state, pcm_density);
         if (!pcm)
             // Degrade to the solute potential; log_esp_report labels whichever
             // quantity it actually printed.
@@ -1188,10 +1208,11 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         if (calculator._scf._scf == HartreeFock::SCFType::ROHF &&
             calculator._correlation != HartreeFock::PostHF::None &&
             calculator._correlation != HartreeFock::PostHF::FCI &&
+            calculator._correlation != HartreeFock::PostHF::FCIQMC &&
             calculator._correlation != HartreeFock::PostHF::CASSCF &&
             calculator._correlation != HartreeFock::PostHF::RASSCF)
         {
-            // FCI, CASSCF, and RASSCF are exempt: they consume the common
+            // FCI, FCIQMC, CASSCF, and RASSCF are exempt: they consume the common
             // spatial-orbital set ROHF stores in the alpha channel directly. FCI
             // diagonalizes the full determinant space (reference-invariant); the
             // MCSCF methods carry open-shell occupation in the active-space spin
@@ -1284,7 +1305,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         {
             corr_tag = "FCIQMC :";
             HartreeFock::Logger::logging(HartreeFock::LogLevel::Info, corr_tag,
-                                         "Sampling the full CI wavefunction stochastically");
+                                         "Sampling the CI wavefunction stochastically");
             corr_res = HartreeFock::Correlation::run_fciqmc(calculator, shellpairs);
         }
 
@@ -1455,6 +1476,18 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                 return EXIT_FAILURE;
             }
             grad = std::move(*grad_res);
+        }
+        // C-PCM geometry response (docs/PCM_GEOMETRY.md step 4); zero
+        // without solvation. io.cpp admits PCM gradients for RHF/UHF only.
+        {
+            auto pcm_grad = HartreeFock::Gradient::pcm_gradient(
+                calculator, shellpairs, pcm_state ? &*pcm_state : nullptr);
+            if (!pcm_grad)
+            {
+                HartreeFock::Logger::logging(HartreeFock::LogLevel::Error, "Gradient :", pcm_grad.error());
+                return EXIT_FAILURE;
+            }
+            grad += *pcm_grad;
         }
         calculator._gradient = grad;
 
@@ -1693,6 +1726,19 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             }
             std::vector<HartreeFock::ShellPair> sp_sym = std::move(*sp_sym_res);
 
+            // The final SCF runs in the symmetry-reoriented frame, so the PCM
+            // cavity is rebuilt there (a disabled state without solvation);
+            // without it a PCM optimization would end on a gas-phase energy.
+            auto pcm_sym = HartreeFock::Solvation::build_pcm_state(calculator);
+            if (!pcm_sym)
+            {
+                HartreeFock::Logger::logging(
+                    HartreeFock::LogLevel::Warning,
+                    "Final Symmetry SCF :",
+                    std::format("PCM setup failed: {}", pcm_sym.error()));
+                goto skip_final_symmetry_scf;
+            }
+
             // Try SAO symmetry blocking. Suppressed under PCM for the same reason
             // as the startup path above: the cavity is not symmetry-adapted.
             if (calculator._solvation._model == HartreeFock::SolvationModel::None &&
@@ -1732,11 +1778,11 @@ std::expected<int, std::string> HartreeFock::Driver::run(
             // Run SCF
             std::expected<void, std::string> scf_sym_res;
             if (calculator._scf._scf == HartreeFock::SCFType::UHF)
-                scf_sym_res = HartreeFock::SCF::run_uhf(calculator, sp_sym);
+                scf_sym_res = HartreeFock::SCF::run_uhf(calculator, sp_sym, &*pcm_sym);
             else if (calculator._scf._scf == HartreeFock::SCFType::ROHF)
-                scf_sym_res = HartreeFock::SCF::run_rohf(calculator, sp_sym);
+                scf_sym_res = HartreeFock::SCF::run_rohf(calculator, sp_sym, &*pcm_sym);
             else
-                scf_sym_res = HartreeFock::SCF::run_rhf(calculator, sp_sym);
+                scf_sym_res = HartreeFock::SCF::run_rhf(calculator, sp_sym, &*pcm_sym);
 
             if (!scf_sym_res)
             {

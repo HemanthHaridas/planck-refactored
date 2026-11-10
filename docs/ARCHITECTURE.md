@@ -65,7 +65,7 @@ Public functions return `std::expected<T, std::string>`; callers propagate with 
 
 <div align="justify">
 
-`types.h` (~1700 lines) is the one header every module includes: options structs, data structs, enums, and a few shared helpers (the SCF DIIS containers and their coefficient solve). `tables.h` holds constants, `sphere.h` the Lebedev/sphere point tables used by PCM and ESP, `mpi_env.h` the whole MPI surface (below), and `basis.h.in` the basis path template.
+`types.h` (~1700 lines) is the one header every module includes: options structs, data structs, enums, and a few shared helpers (the SCF DIIS containers and their coefficient solve). `tables.h` holds constants, `sphere.h` the Fibonacci sphere points used by the ESP shells, `mpi_env.h` the whole MPI surface (below), and `basis.h.in` the basis path template.
 
 </div>
 
@@ -267,13 +267,13 @@ The loop is standard: build G, F = H + G (RHF), α/β Fock (UHF), or the Roothaa
 
 | Directory | Role |
 |---|---|
-| `src/solvation/pcm.{h,cpp}` | C-PCM: tessellated cavity, apparent surface charges, reaction field added to the Fock matrix each iteration; shared by HF and DFT single points |
+| `src/solvation/pcm.{h,cpp}` | C-PCM on a SWIG cavity (Lebedev points, smooth switching function, Gaussian surface charges), apparent surface charges, reaction field added to the Fock matrix each iteration; shared by HF and DFT single points |
 | `src/populations/` | Mulliken, Löwdin, Mayer bond orders, multipoles, ESP and CHELPG charges |
 | `src/bsse/counterpoise.{h,cpp}` | Two-fragment Boys-Bernardi counterpoise: five silenced sub-SCFs with ghost atoms, per-fragment charge and multiplicity |
 
 <div align="justify">
 
-**Mayer bond order density convention:** the closed-shell branch contracts the total density with no prefactor (H₂ gives 1); the open-shell branch contracts per-spin densities and needs an explicit factor 2 to agree. PCM is single-point only; its cavity hard-prunes buried points, so the energy is not smooth in the geometry (see `docs/PCM_GEOMETRY_SCOPE.md`).
+**Mayer bond order density convention:** the closed-shell branch contracts the total density with no prefactor (H₂ gives 1); the open-shell branch contracts per-spin densities and needs an explicit factor 2 to agree. C-PCM supports energies, analytic gradients, geometry optimization and frequencies; its SWIG cavity is smooth in the geometry, which is what makes the gradient possible (see `docs/PCM_GEOMETRY.md`).
 
 </div>
 

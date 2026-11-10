@@ -1,0 +1,164 @@
+{
+  "host": "Apple M3",
+  "binary_sha256": "8233e069b11dddabdd1909d605ccf86faec779398f21fcaade0c1ebbd5be07f1",
+  "thread_env": {
+    "OMP_NUM_THREADS": "4",
+    "OMP_DYNAMIC": "false",
+    "OMP_PROC_BIND": null,
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "VECLIB_MAXIMUM_THREADS": "1"
+  },
+  "granularity": 1.0,
+  "definition": "Grouping uses incoming absolute parent weight. Nonzero spawns are counted after acceptance and stochastic rounding, before merging or annihilation.",
+  "timing_note": "Host shared with other validation and reference work during this investigation. Timings are budget checks.",
+  "runs": [
+    {
+      "control_archive": "cr2_cas12_12_cost_m3_r3.json",
+      "seed": 20250904,
+      "active_orbitals": 12,
+      "walkers": 25000,
+      "spawn_attempts": 4,
+      "initiator_threshold": 0,
+      "hamiltonian_id": "e58337b288e84131",
+      "result_id": "78ea31870ee58e42",
+      "profiled_input_sha256": "d8b0818d7f4a83f4c4f5741f3e9809a9e86c232f7c9d15bb576a2612c2ccc5e6",
+      "wall_s": 99.763,
+      "peak_rss_bytes": 106692608,
+      "equilibration": {
+        "steps": 10000,
+        "parents": 511784784,
+        "attempts": 2047139136,
+        "surviving_spawns": 369361,
+        "below_granularity": {
+          "visits": 478527906,
+          "abs_weight": 142623955.7229,
+          "attempts": 1914111624,
+          "nonzero_spawns": 241938
+        },
+        "at_or_above_granularity": {
+          "visits": 33256878,
+          "abs_weight": 107388739.5633,
+          "attempts": 133027512,
+          "nonzero_spawns": 127423
+        }
+      },
+      "sampling": {
+        "steps": 2000,
+        "parents": 188095480,
+        "attempts": 752381920,
+        "surviving_spawns": 86691,
+        "below_granularity": {
+          "visits": 180723676,
+          "abs_weight": 40215299.34727,
+          "attempts": 722894704,
+          "nonzero_spawns": 67765
+        },
+        "at_or_above_granularity": {
+          "visits": 7371804,
+          "abs_weight": 9784166.443294,
+          "attempts": 29487216,
+          "nonzero_spawns": 18926
+        }
+      }
+    },
+    {
+      "control_archive": "cr2_population_spawn_m3_r3.json",
+      "seed": 20250901,
+      "active_orbitals": 18,
+      "walkers": 10000,
+      "spawn_attempts": 1,
+      "initiator_threshold": 3,
+      "hamiltonian_id": "3ffac35b4805c0ec",
+      "result_id": "ffb19ea8518619be",
+      "profiled_input_sha256": "777def16f8a62e2023cf266285ea4fc33fa8a7bf81612769fcb14d572c246f98",
+      "wall_s": 8.666,
+      "peak_rss_bytes": 88457216,
+      "equilibration": {
+        "steps": 2000,
+        "parents": 19372736,
+        "attempts": 19372736,
+        "surviving_spawns": 25149,
+        "below_granularity": {
+          "visits": 16440557,
+          "abs_weight": 5939630.352587,
+          "attempts": 16440557,
+          "nonzero_spawns": 1454
+        },
+        "at_or_above_granularity": {
+          "visits": 2932179,
+          "abs_weight": 14078866.5413,
+          "attempts": 2932179,
+          "nonzero_spawns": 23695
+        }
+      },
+      "sampling": {
+        "steps": 2000,
+        "parents": 58535720,
+        "attempts": 58535720,
+        "surviving_spawns": 30447,
+        "below_granularity": {
+          "visits": 54793294,
+          "abs_weight": 10181743.97684,
+          "attempts": 54793294,
+          "nonzero_spawns": 5142
+        },
+        "at_or_above_granularity": {
+          "visits": 3742426,
+          "abs_weight": 9820132.81862,
+          "attempts": 3742426,
+          "nonzero_spawns": 25305
+        }
+      }
+    },
+    {
+      "control_archive": "cr2_long_25k_m3_r3.json",
+      "seed": 20250903,
+      "active_orbitals": 18,
+      "walkers": 25000,
+      "spawn_attempts": 4,
+      "initiator_threshold": 3,
+      "hamiltonian_id": "3ffac35b4805c0ec",
+      "result_id": "2a2aaa409cf957c0",
+      "profiled_input_sha256": "06a105e6a0504b0fef552c81ce3e995fa204b18f89c525d62528977635eefa7a",
+      "wall_s": 241.015,
+      "peak_rss_bytes": 89292800,
+      "equilibration": {
+        "steps": 10000,
+        "parents": 634145417,
+        "attempts": 2536581668,
+        "surviving_spawns": 538322,
+        "below_granularity": {
+          "visits": 580095328,
+          "abs_weight": 135979682.1657,
+          "attempts": 2320381312,
+          "nonzero_spawns": 188072
+        },
+        "at_or_above_granularity": {
+          "visits": 54050089,
+          "abs_weight": 114037450.0202,
+          "attempts": 216200356,
+          "nonzero_spawns": 350250
+        }
+      },
+      "sampling": {
+        "steps": 2000,
+        "parents": 181450631,
+        "attempts": 725802524,
+        "surviving_spawns": 126766,
+        "below_granularity": {
+          "visits": 169429547,
+          "abs_weight": 31007715.11638,
+          "attempts": 677718188,
+          "nonzero_spawns": 59028
+        },
+        "at_or_above_granularity": {
+          "visits": 12021084,
+          "abs_weight": 18991897.99138,
+          "attempts": 48084336,
+          "nonzero_spawns": 67738
+        }
+      }
+    }
+  ]
+}

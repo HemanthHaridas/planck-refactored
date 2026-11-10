@@ -14,19 +14,16 @@ namespace HartreeFock::Correlation
     // ── FCIQMC ─────────────────────────────────────────────────────────────────
     //
     // Stochastic sampling of the FCI wavefunction with a population of signed
-    // walkers, instead of storing a CI vector. Same determinant space run_fci
-    // uses -- the whole MO space, no inactive core -- and the SAME integrals, via
-    // the shared build_all_mo_ci_setup.
-    //
-    // The two paths therefore differ only in how they solve: run_fci diagonalizes,
-    // run_fciqmc samples. That is what makes a disagreement between them
-    // attributable to sampling rather than to plumbing.
+    // walkers. By default it shares the all-MO Hamiltonian with run_fci.
+    // Setting nactele and nactorb selects a fixed-orbital CAS with a
+    // doubly occupied inactive core. Both estimators include its energy.
     //
     // Reports both estimators with a blocked error bar. The energy is a MEAN WITH
     // AN UNCERTAINTY, not an exact value -- see docs/FCIQMC_POPULATION_CONTROL.md
     // for why the projected energy is biased at finite population and why the
     // error bar must be blocked rather than naive.
     //
+    // Requires a converged RHF or ROHF common spatial-orbital reference.
     // Reads from calc._active_space (ci_max_dim) and calc._fciqmc.
     //
     // Writes to:

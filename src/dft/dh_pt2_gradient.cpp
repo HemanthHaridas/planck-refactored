@@ -45,49 +45,6 @@ namespace
         return out;
     }
 
-    std::vector<double> eri_eightfold_symmetrize(const std::vector<double> &raw, int n)
-    {
-        std::vector<double> symmetric(raw.size(), 0.0);
-        for (int mu = 0; mu < n; ++mu)
-            for (int nu = 0; nu < n; ++nu)
-                for (int ka = 0; ka < n; ++ka)
-                    for (int ta = 0; ta < n; ++ta)
-                    {
-                        const auto get = [&raw, n](int p, int q, int r, int s)
-                        { return raw[eri_idx(p, q, r, s, n)]; };
-                        symmetric[eri_idx(mu, nu, ka, ta, n)] = 0.125 * (
-                            get(mu, nu, ka, ta) + get(nu, mu, ka, ta) +
-                            get(mu, nu, ta, ka) + get(nu, mu, ta, ka) +
-                            get(ka, ta, mu, nu) + get(ta, ka, mu, nu) +
-                            get(ka, ta, nu, mu) + get(ta, ka, nu, mu));
-                    }
-        return symmetric;
-    }
-
-    // Eq. (33)'s non-XC contraction at one nuclear Cartesian coordinate.
-    // Keeping this algebra independent of how h/S/ERI derivatives are
-    // produced is the O6 seam: the legacy dense bundle and the forthcoming
-    // quartet-streaming producer must feed these identical contractions.
-    struct Eq33NonXCAccumulator
-    {
-        const std::vector<double> &separable_ao;
-        const std::vector<double> &nonseparable_ao;
-
-        void accumulate_eri(Eigen::Index coordinate, const std::vector<double> &eri,
-                            DFT::Gradient::DHEq33NonXCGradient &out) const
-        {
-            double separable = 0.0;
-            double nonseparable = 0.0;
-            for (std::size_t q = 0; q < eri.size(); ++q)
-            {
-                separable += separable_ao[q] * eri[q];
-                nonseparable += nonseparable_ao[q] * eri[q];
-            }
-            out.two_electron_separable(coordinate) = separable;
-            out.two_electron_nonseparable(coordinate) = nonseparable;
-        }
-    };
-
     // Preserve row-major tensor order while replacing one index. For each
     // prefix, map [old-index, suffix] and multiply C[new,old] into column
     // panels. Only the input and output tensors coexist; no permuted copy,
@@ -467,7 +424,7 @@ namespace DFT::Gradient
         if (no<=0 || nv<=0 || mo_eri.size()!=n4)
             return std::unexpected("DH MO-ERI blocks: invalid occupied/virtual dimensions or dense tensor extent.");
         DHMolecularERIBlocks out;
-        out.n_occ=no; out.n_virt=nv;
+        out.n_occ=no; out.n_virt=nv; out.n_occ_2=no; out.n_virt_2=nv;
         out.ovov.resize(static_cast<std::size_t>(no)*nv*no*nv);
         out.vvov.resize(static_cast<std::size_t>(nv)*nv*no*nv);
         out.ooov.resize(static_cast<std::size_t>(no)*no*no*nv);
@@ -536,7 +493,7 @@ namespace DFT::Gradient
     {
         const int no=amplitudes.n_occ, nv=amplitudes.n_virt, n=no+nv;
         const std::size_t novov=static_cast<std::size_t>(no)*nv*no*nv;
-        if (no<=0 || nv<=0 || reduction_tile<=0 || b.n_occ!=no || b.n_virt!=nv ||
+        if (no<=0 || nv<=0 || reduction_tile<=0 || b.n_occ!=no || b.n_virt!=nv || b.n_occ_2!=no || b.n_virt_2!=nv ||
             !amplitudes.has_tilde_storage() || b.ovov.size()!=novov ||
             b.vvov.size()!=static_cast<std::size_t>(nv)*nv*no*nv ||
             b.ooov.size()!=static_cast<std::size_t>(no)*no*no*nv ||
@@ -951,82 +908,19 @@ namespace DFT::Gradient
         return out;
     }
 
-    namespace
+    DHPairChannel make_dh_eq47_pair_channel(
+        const DHPT2AmplitudeDensity &amplitudes, const Eigen::MatrixXd &mo_coeff)
     {
-        std::expected<std::vector<double>, std::string>
-        dh_eq47_penultimate(const DHPT2AmplitudeDensity &amplitudes,
-            const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff, int column_tile)
+        const int no=amplitudes.n_occ, nv=amplitudes.n_virt;
+        DHPairChannel channel{no,nv,no,nv,&mo_coeff,&mo_coeff,{}};
+        channel.fill_amplitudes=[&amplitudes,no,nv](int i0,int itile,double *out)
         {
-            const int no=amplitudes.n_occ, nv=amplitudes.n_virt;
-            const Eigen::Index nao=mo_coeff.rows();
-            if(no<=0 || nv<=0 || nao<=0 || column_tile<=0 ||
-                mo_coeff.cols()!=static_cast<Eigen::Index>(no)+nv || !mo_coeff.allFinite())
-                return std::unexpected("DH Eq. 47 backtransform: invalid dimensions, coefficients, or column tile.");
-            std::size_t capacity=1;
-            const auto bound=static_cast<std::size_t>(std::max({nao,static_cast<Eigen::Index>(no),static_cast<Eigen::Index>(nv)}));
-            for(int k=0;k<4;++k)
-            {
-                if(capacity>static_cast<std::size_t>(std::numeric_limits<Eigen::Index>::max())/sizeof(double)/bound)
-                    return std::unexpected("DH Eq. 47 backtransform: tensor extent overflow.");
-                capacity*=bound;
-            }
-            const std::size_t nt=static_cast<std::size_t>(no)*no*nv*nv;
-            if(!amplitudes.has_tilde_storage())
-                return std::unexpected("DH Eq. 47 backtransform: invalid tilde amplitudes.");
-            std::vector<double> tensor(nt);
-            // Eq. (47)'s first transform consumes the bounded source
-            // contract. A recoverable backend changes only this traversal.
-            const auto streamed=amplitudes.for_each_pair_tile(128,[&](const auto &tile)
-            {
-                for(int ip=0;ip<tile.rows;++ip) for(int iq=0;iq<tile.cols;++iq)
-                {
-                    const int p=tile.p0+ip, q=tile.q0+iq;
-                    const int i=p/nv, a=p%nv, j=q/nv, b=q%nv;
-                    tensor[((static_cast<std::size_t>(i)*nv+a)*no+j)*nv+b]=
-                        (1+(i==j))*tile.values[static_cast<std::size_t>(ip)*tile.cols+iq];
-                }
-                return true;
-            });
-            if(!streamed) return std::unexpected(streamed.error());
-            std::array<std::size_t,4> shape{static_cast<std::size_t>(no),static_cast<std::size_t>(nv),
-                                         static_cast<std::size_t>(no),static_cast<std::size_t>(nv)};
-            tensor=transform_pair_axis(tensor,shape,3,mo_coeff.rightCols(nv),column_tile); // i,a,j,tau
-            tensor=transform_pair_axis(tensor,shape,2,mo_coeff.leftCols(no),column_tile);  // i,a,kappa,tau
-            tensor=transform_pair_axis(tensor,shape,1,mo_coeff.rightCols(nv),column_tile); // i,nu,kappa,tau
-            return tensor;
-        }
-    }
-
-    std::expected<void, std::string>
-    for_each_dh_eq47_nonseparable_raw_ao_tile(
-        const DHPT2AmplitudeDensity &amplitudes,
-        const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
-        int transform_tile, int mu_tile,
-        const DHEq47RawAOTileConsumer &consumer)
-    {
-        const int no=amplitudes.n_occ;
-        const Eigen::Index nao=mo_coeff.rows();
-        if(mu_tile<=0 || !consumer)
-            return std::unexpected("DH Eq. 47 tiled backtransform: invalid mu tile or consumer.");
-        auto penultimate=dh_eq47_penultimate(amplitudes,mo_coeff,transform_tile);
-        if(!penultimate) return std::unexpected(penultimate.error());
-        const std::size_t suffix=static_cast<std::size_t>(nao)*nao*nao;
-        if(penultimate->size()!=static_cast<std::size_t>(no)*suffix)
-            return std::unexpected("DH Eq. 47 tiled backtransform: invalid penultimate tensor extent.");
-        using RowMatrix=Eigen::Matrix<double,Eigen::Dynamic,Eigen::Dynamic,Eigen::RowMajor>;
-        const Eigen::Map<const RowMatrix> source(penultimate->data(),no,static_cast<Eigen::Index>(suffix));
-        for(Eigen::Index begin=0;begin<nao;begin+=mu_tile)
-        {
-            const Eigen::Index width=std::min<Eigen::Index>(mu_tile,nao-begin);
-            std::vector<double> tile(static_cast<std::size_t>(width)*suffix);
-            Eigen::Map<RowMatrix> target(tile.data(),width,static_cast<Eigen::Index>(suffix));
-            target.noalias()=mo_coeff.middleRows(begin,width).leftCols(no)*source;
-            if(!std::all_of(tile.begin(),tile.end(),[](double x){return std::isfinite(x);}))
-                return std::unexpected("DH Eq. 47 tiled backtransform: nonfinite tile.");
-            auto consumed=consumer(static_cast<int>(begin),static_cast<int>(width),tile);
-            if(!consumed) return std::unexpected(consumed.error());
-        }
-        return {};
+            for (int il=0; il<itile; ++il) for (int a=0; a<nv; ++a)
+                for (int j=0; j<no; ++j) for (int b=0; b<nv; ++b)
+                    out[((static_cast<std::size_t>(il)*nv+a)*no+j)*nv+b]=
+                        (1+((i0+il)==j))*amplitudes.tilde(i0+il,j,a,b);
+        };
+        return channel;
     }
 
     std::expected<void, std::string>
@@ -1038,12 +932,34 @@ namespace DFT::Gradient
         DHEq47BlockWorkspace *workspace)
     {
         const int no=amplitudes.n_occ, nv=amplitudes.n_virt;
-        const int nao=static_cast<int>(mo_coeff.rows());
-        const std::size_t nt=static_cast<std::size_t>(no)*no*nv*nv;
-        if (no<=0 || nv<=0 || nao<=0 || mo_coeff.cols()!=no+nv || !mo_coeff.allFinite() ||
-            occupied_tile<=0 || mu_tile<=0 || nu_tile<=0 || kappa_tile<=0 || tau_tile<=0 || !consumer ||
-            !amplitudes.has_tilde_storage())
+        if (no<=0 || nv<=0 || mo_coeff.rows()<=0 || mo_coeff.cols()!=no+nv || !amplitudes.has_tilde_storage())
             return std::unexpected("DH Eq. 47 blocked backtransform: invalid dimensions, tiles, coefficients, or amplitudes.");
+        const Eigen::MatrixXd coefficients=mo_coeff;
+        return for_each_dh_pair_ao_block(static_cast<int>(coefficients.rows()),
+            {make_dh_eq47_pair_channel(amplitudes,coefficients)},
+            occupied_tile,mu_tile,nu_tile,kappa_tile,tau_tile,consumer,workspace);
+    }
+
+    std::expected<void, std::string>
+    for_each_dh_pair_ao_block(
+        int nao, const std::vector<DHPairChannel> &channels,
+        int occupied_tile, int mu_tile, int nu_tile, int kappa_tile, int tau_tile,
+        const DHEq47RawAOBlockConsumer &consumer,
+        DHEq47BlockWorkspace *workspace)
+    {
+        if (nao<=0 || occupied_tile<=0 || mu_tile<=0 || nu_tile<=0 || kappa_tile<=0 || tau_tile<=0 || !consumer)
+            return std::unexpected("DH pair AO backtransform: invalid AO extent, tiles, or consumer.");
+        for (const auto &channel : channels)
+        {
+            if (channel.n_occ_s<0 || channel.n_virt_s<0 || channel.n_occ_t<0 || channel.n_virt_t<0)
+                return std::unexpected("DH pair AO backtransform: negative channel extent.");
+            if (channel.empty()) continue;
+            if (!channel.c_s || !channel.c_t || !channel.fill_amplitudes ||
+                channel.c_s->rows()!=nao || channel.c_s->cols()!=channel.n_occ_s+channel.n_virt_s ||
+                channel.c_t->rows()!=nao || channel.c_t->cols()!=channel.n_occ_t+channel.n_virt_t ||
+                !channel.c_s->allFinite() || !channel.c_t->allFinite())
+                return std::unexpected("DH pair AO backtransform: invalid channel coefficients or amplitudes.");
+        }
         if (workspace) *workspace = {};
         const auto record = [workspace](std::size_t live, std::size_t slab, std::size_t emitted)
         {
@@ -1066,33 +982,36 @@ namespace DFT::Gradient
                     std::vector<double> output(static_cast<std::size_t>(nao)*suffix,0.0);
                     record(output.size(),output.size(),0);
                     Eigen::Map<RowMatrix> result(output.data(),nao,static_cast<Eigen::Index>(suffix));
-                    for (int i0=0; i0<no; i0+=occupied_tile)
+                    for (const auto &channel : channels)
                     {
-                        const int itile=std::min(occupied_tile,no-i0);
-                        std::vector<double> tensor(static_cast<std::size_t>(itile)*nv*no*nv);
-                        record(output.size()+tensor.size(),output.size(),0);
-                        for (int il=0; il<itile; ++il) for (int a=0; a<nv; ++a)
-                            for (int j=0; j<no; ++j) for (int b=0; b<nv; ++b)
-                                tensor[((static_cast<std::size_t>(il)*nv+a)*no+j)*nv+b]=
-                                    (1+((i0+il)==j))*amplitudes.tilde(i0+il,j,a,b);
-                        std::array<std::size_t,4> shape{static_cast<std::size_t>(itile),static_cast<std::size_t>(nv),
-                            static_cast<std::size_t>(no),static_cast<std::size_t>(nv)};
-                        record(output.size()+tensor.size()+static_cast<std::size_t>(itile)*nv*no*ntile,output.size(),0);
-                        tensor=transform_pair_axis(tensor,shape,3,
-                            mo_coeff.middleRows(tau0,ntile).rightCols(nv),tau_tile);
-                        record(output.size()+tensor.size()+static_cast<std::size_t>(itile)*nv*ktile*ntile,output.size(),0);
-                        tensor=transform_pair_axis(tensor,shape,2,
-                            mo_coeff.middleRows(kappa0,ktile).leftCols(no),kappa_tile);
-                        record(output.size()+tensor.size()+static_cast<std::size_t>(itile)*vtile*ktile*ntile,output.size(),0);
-                        tensor=transform_pair_axis(tensor,shape,1,
-                            mo_coeff.middleRows(nu0,vtile).rightCols(nv),nu_tile);
-                        if (tensor.size()!=static_cast<std::size_t>(itile)*suffix)
-                            return std::unexpected("DH Eq. 47 blocked backtransform: invalid intermediate extent.");
-                        const Eigen::Map<const RowMatrix> source(tensor.data(),itile,static_cast<Eigen::Index>(suffix));
-                        result.noalias() += mo_coeff.leftCols(no).middleCols(i0,itile)*source;
+                        if (channel.empty()) continue;
+                        const int os=channel.n_occ_s, vs=channel.n_virt_s, ot=channel.n_occ_t, vt=channel.n_virt_t;
+                        const Eigen::MatrixXd &cs=*channel.c_s, &ct=*channel.c_t;
+                        for (int i0=0; i0<os; i0+=occupied_tile)
+                        {
+                            const int itile=std::min(occupied_tile,os-i0);
+                            std::vector<double> tensor(static_cast<std::size_t>(itile)*vs*ot*vt);
+                            record(output.size()+tensor.size(),output.size(),0);
+                            channel.fill_amplitudes(i0,itile,tensor.data());
+                            std::array<std::size_t,4> shape{static_cast<std::size_t>(itile),static_cast<std::size_t>(vs),
+                                static_cast<std::size_t>(ot),static_cast<std::size_t>(vt)};
+                            record(output.size()+tensor.size()+static_cast<std::size_t>(itile)*vs*ot*ntile,output.size(),0);
+                            tensor=transform_pair_axis(tensor,shape,3,
+                                ct.middleRows(tau0,ntile).rightCols(vt),tau_tile);
+                            record(output.size()+tensor.size()+static_cast<std::size_t>(itile)*vs*ktile*ntile,output.size(),0);
+                            tensor=transform_pair_axis(tensor,shape,2,
+                                ct.middleRows(kappa0,ktile).leftCols(ot),kappa_tile);
+                            record(output.size()+tensor.size()+static_cast<std::size_t>(itile)*vtile*ktile*ntile,output.size(),0);
+                            tensor=transform_pair_axis(tensor,shape,1,
+                                cs.middleRows(nu0,vtile).rightCols(vs),nu_tile);
+                            if (tensor.size()!=static_cast<std::size_t>(itile)*suffix)
+                                return std::unexpected("DH pair AO backtransform: invalid intermediate extent.");
+                            const Eigen::Map<const RowMatrix> source(tensor.data(),itile,static_cast<Eigen::Index>(suffix));
+                            result.noalias() += cs.leftCols(os).middleCols(i0,itile)*source;
+                        }
                     }
                     if (!std::all_of(output.begin(),output.end(),[](double x){ return std::isfinite(x); }))
-                        return std::unexpected("DH Eq. 47 blocked backtransform: nonfinite output tile.");
+                        return std::unexpected("DH pair AO backtransform: nonfinite output tile.");
                     for (int mu0=0; mu0<nao; mu0+=mu_tile)
                     {
                         const int mtile=std::min(mu_tile,nao-mu0);
@@ -1109,41 +1028,18 @@ namespace DFT::Gradient
         return {};
     }
 
-    std::expected<std::vector<double>, std::string>
-    build_dh_eq47_nonseparable_raw_ao(const DHPT2AmplitudeDensity &amplitudes,
-        const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff, int column_tile)
-    {
-        const Eigen::Index nao=mo_coeff.rows();
-        const std::size_t n4=static_cast<std::size_t>(nao)*nao*nao*nao;
-        std::vector<double> out(n4);
-        auto streamed=for_each_dh_eq47_nonseparable_raw_ao_tile(
-            amplitudes,mo_coeff,column_tile,column_tile,
-            [&out,nao](int begin,int width,const std::vector<double> &tile)
-            -> std::expected<void,std::string>
-            {
-                const std::size_t suffix=static_cast<std::size_t>(nao)*nao*nao;
-                if(tile.size()!=static_cast<std::size_t>(width)*suffix)
-                    return std::unexpected("DH Eq. 47 raw adapter: invalid tile extent.");
-                std::copy(tile.begin(),tile.end(),out.begin()+static_cast<std::size_t>(begin)*suffix);
-                return {};
-            });
-        if(!streamed) return std::unexpected(streamed.error());
-        return out;
-    }
-
     std::expected<DHEq46_47TwoParticleDensity, std::string>
     build_dh_eq46_47_two_particle_density(
         const DHRelaxedDifferenceDensity &relaxed,
         const DHPT2AmplitudeDensity &amplitudes,
         const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
         const Eigen::Ref<const Eigen::MatrixXd> &ground_density_ao,
-        double exact_exchange, DHGammaStorage storage)
+        double exact_exchange)
     {
         const int no = amplitudes.n_occ;
         const int nv = amplitudes.n_virt;
         const int nmo = no + nv;
         const Eigen::Index nao = mo_coeff.rows();
-        const std::size_t nt = static_cast<std::size_t>(no) * no * nv * nv;
         if (!std::isfinite(exact_exchange) || exact_exchange < 0.0)
             return std::unexpected("DH Eq. 46-47 density: invalid exact-exchange coefficient.");
         if (no <= 0 || nv <= 0 || nao <= 0 || mo_coeff.cols() != nmo ||
@@ -1152,59 +1048,51 @@ namespace DFT::Gradient
             ground_density_ao.cols() != nao)
             return std::unexpected("DH Eq. 46-47 density: incompatible relaxed density, amplitudes, orbitals, or ground density.");
 
+        // Eq. (46), correction only: its 1/2 P P - 1/4 P P terms are the
+        // SCF reference and deliberately do not enter the PT2 correction.
+        // The separable term differentiates D:F_KS, so it must retain the
+        // hybrid coefficient in F_KS=h+J[P]-a_x K[P]/2+V_XC[P]. This also
+        // applies to the Z-dependent part of D. Eq. (47) is unscaled by a_x,
+        // and is streamed by the direct derivative consumer: its AO pair
+        // order (mu nu | ka ta) is C_mu,i C_nu,a C_ka,j C_ta,b t~_ab^ij, the
+        // MP2 (ia|jb) pairing exactly as printed in the paper. t_tilde
+        // already carries c_PT2; the explicit (1+delta_ij) is paper-defined.
         DHEq46_47TwoParticleDensity out;
         out.n_ao = static_cast<int>(nao);
         out.ground_density_ao = ground_density_ao;
         out.exact_exchange = exact_exchange;
         out.relaxed_difference_ao.noalias() =
             mo_coeff * relaxed.symmetric_mo * mo_coeff.transpose();
-        const std::size_t n4 = static_cast<std::size_t>(nao) * nao * nao * nao;
+        return out;
+    }
 
-        // Eq. (46), correction only: its 1/2 P P - 1/4 P P terms are the
-        // SCF reference and deliberately do not enter the PT2 correction.
-        // The separable term differentiates D:F_KS, so it must retain the
-        // hybrid coefficient in F_KS=h+J[P]-a_x K[P]/2+V_XC[P]. This also
-        // applies to the Z-dependent part of D. Eq. (47) is unscaled by a_x.
-        const auto separable_raw = [&](int mu, int nu, int ka, int ta)
-        {
-            return out.relaxed_difference_ao(mu, nu) * ground_density_ao(ka, ta) -
-                0.5 * exact_exchange * out.relaxed_difference_ao(mu, ka) * ground_density_ao(nu, ta);
-        };
-        if (storage == DHGammaStorage::ReferenceAll)
-        {
-            out.separable_raw_ao.assign(n4, 0.0);
-            for (int mu = 0; mu < nao; ++mu)
-                for (int nu = 0; nu < nao; ++nu)
-                    for (int ka = 0; ka < nao; ++ka)
-                        for (int ta = 0; ta < nao; ++ta)
-                            out.separable_raw_ao[eri_idx(mu, nu, ka, ta, nao)] = separable_raw(mu, nu, ka, ta);
-            out.separable_symmetric_ao = eri_eightfold_symmetrize(out.separable_raw_ao, out.n_ao);
-        }
-        // ContractionOnly retains the O(N^2) D/P/a_x factorization above.
-        // O6.3 evaluates this literal raw Eq. (46) value alongside each
-        // derivative quartet; no separable O(N^4) tensor is needed there.
-        // Eq. (47), direct MO-to-AO backtransformation.  The AO pair order
-        // is (mu nu | ka ta), so its closed-shell spatial realization is
-        // C_mu,i C_nu,a C_ka,j C_ta,b t~_ab^ij, exactly as printed in the
-        // paper.  In particular, this is the MP2 (ia|jb) pairing -- it is
-        // not C_mu,i C_nu,j C_ka,a C_ta,b, which would contract t~ with the
-        // unrelated (ij|ab) integral and violates Eq. (47).  t_tilde already
-        // carries c_PT2; the explicit (1+delta_ij) is paper-defined and must
-        // not be folded into the amplitude convention.
-        if (storage == DHGammaStorage::ReferenceAll)
-        {
-            auto nonseparable=build_dh_eq47_nonseparable_raw_ao(amplitudes,mo_coeff);
-            if (!nonseparable) return std::unexpected(nonseparable.error());
-            out.nonseparable_raw_ao=std::move(*nonseparable);
-            out.nonseparable_symmetric_ao = eri_eightfold_symmetrize(out.nonseparable_raw_ao, out.n_ao);
-            out.total_raw_ao = out.separable_raw_ao;
-            for (std::size_t p = 0; p < n4; ++p)
-                out.total_raw_ao[p] += out.nonseparable_raw_ao[p];
-            out.total_symmetric_ao = eri_eightfold_symmetrize(out.total_raw_ao, out.n_ao);
-        }
-        // ContractionOnly retains no final Eq. (47) AO tensor.  O7.4.3
-        // passes a call-scoped tile execution context to the direct ERI
-        // consumer, which immediately contracts each emitted raw tile.
+    std::expected<DHEq33NonXCGradient, std::string>
+    build_dh_eq33_direct_non_xc_gradient(
+        const Eigen::Ref<const Eigen::MatrixXd> &relaxed_ao,
+        const Eigen::Ref<const Eigen::MatrixXd> &overlap_ao,
+        const DHEq33TwoParticleSource &source,
+        const DHEq33NonXCDerivatives &derivatives)
+    {
+        if (!derivatives.direct_one_electron_overlap || !derivatives.direct_two_electron || !source.well_formed() ||
+            relaxed_ao.rows() != source.n_ao || relaxed_ao.cols() != source.n_ao ||
+            overlap_ao.rows() != source.n_ao || overlap_ao.cols() != source.n_ao)
+            return std::unexpected("DH Eq. 33 non-XC gradient: incompatible densities, source, or derivative callbacks.");
+        auto one = derivatives.direct_one_electron_overlap(relaxed_ao, overlap_ao);
+        if (!one || one->one_electron.size() <= 0 || one->overlap.size() != one->one_electron.size() ||
+            !one->one_electron.allFinite() || !one->overlap.allFinite())
+            return std::unexpected("DH Eq. 33 non-XC gradient: direct h/S contraction failed or has invalid dimensions.");
+        auto two = derivatives.direct_two_electron(source);
+        if (!two || two->separable.size() != one->one_electron.size() ||
+            two->nonseparable.size() != one->one_electron.size() ||
+            !two->separable.allFinite() || !two->nonseparable.allFinite())
+            return std::unexpected("DH Eq. 33 non-XC gradient: direct ERI contraction failed or has invalid dimensions.");
+        DHEq33NonXCGradient out;
+        out.one_electron = std::move(one->one_electron);
+        out.overlap = std::move(one->overlap);
+        out.two_electron_separable = std::move(two->separable);
+        out.two_electron_nonseparable = std::move(two->nonseparable);
+        out.two_electron = out.two_electron_separable + out.two_electron_nonseparable;
+        out.total = out.one_electron + out.overlap + out.two_electron;
         return out;
     }
 
@@ -1215,22 +1103,10 @@ namespace DFT::Gradient
         const DHEq46_47TwoParticleDensity &two_particle,
         const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
         const DHEq33NonXCDerivatives &derivatives,
-        const DHEq47TiledExecution *eq47_tiled)
+        const DHEq47TiledExecution &eq47_tiled)
     {
         const Eigen::Index nao = mo_coeff.rows();
         const Eigen::Index nmo = mo_coeff.cols();
-        const std::size_t n4 = static_cast<std::size_t>(nao) * nao * nao * nao;
-        const bool has_dense_one_electron_overlap =
-            !derivatives.hamiltonian_ao.empty() || !derivatives.overlap_ao.empty();
-        const bool dense_one_electron_overlap = has_dense_one_electron_overlap &&
-            derivatives.hamiltonian_ao.size() == derivatives.overlap_ao.size();
-        const bool direct_one_electron_overlap =
-            static_cast<bool>(derivatives.direct_one_electron_overlap);
-        const bool dense_two_electron = !derivatives.eri_ao.empty();
-        const bool direct_two_electron = static_cast<bool>(derivatives.direct_two_electron);
-        const bool separable_tensor = two_particle.separable_symmetric_ao.size() == n4;
-        const bool nonseparable_symmetric = two_particle.nonseparable_symmetric_ao.size() == n4;
-        const bool nonseparable_raw = two_particle.nonseparable_raw_ao.size() == n4;
         const bool separable_factorized = two_particle.ground_density_ao.rows() == nao &&
             two_particle.ground_density_ao.cols() == nao && two_particle.ground_density_ao.allFinite() &&
             two_particle.relaxed_difference_ao.rows() == nao &&
@@ -1238,83 +1114,26 @@ namespace DFT::Gradient
             std::isfinite(two_particle.exact_exchange) && two_particle.exact_exchange >= 0.0;
         if (nao <= 0 || nmo <= 0 || relaxed.symmetric_mo.rows() != nmo ||
             relaxed.symmetric_mo.cols() != nmo || overlap.symmetric_mo.rows() != nmo ||
-            overlap.symmetric_mo.cols() != nmo || two_particle.n_ao != nao ||
-            (!separable_tensor && !separable_factorized) ||
-            (!nonseparable_symmetric && !nonseparable_raw && !eq47_tiled) ||
-            (!two_particle.total_symmetric_ao.empty() && two_particle.total_symmetric_ao.size() != n4) ||
-            (!dense_one_electron_overlap && !direct_one_electron_overlap) ||
-            (dense_one_electron_overlap && direct_one_electron_overlap) ||
-            (has_dense_one_electron_overlap && !dense_one_electron_overlap) ||
-            (!dense_two_electron && !direct_two_electron) ||
-            (dense_two_electron && direct_two_electron) ||
-            (dense_two_electron && (!separable_tensor || !nonseparable_symmetric)))
-            return std::unexpected("DH Eq. 33 non-XC gradient: incompatible densities, orbitals, or derivative dimensions.");
+            overlap.symmetric_mo.cols() != nmo || two_particle.n_ao != nao || !separable_factorized ||
+            !eq47_tiled.amplitudes || !eq47_tiled.mo_coeff)
+            return std::unexpected("DH Eq. 33 non-XC gradient: incompatible densities, orbitals, or Eq. 47 stream.");
 
         const Eigen::MatrixXd d_ao = mo_coeff * relaxed.symmetric_mo * mo_coeff.transpose();
         const Eigen::MatrixXd w_ao = mo_coeff * overlap.symmetric_mo * mo_coeff.transpose();
-        std::size_t ncoord = dense_one_electron_overlap ? derivatives.hamiltonian_ao.size() :
-            (dense_two_electron ? derivatives.eri_ao.size() : 0);
-        std::optional<DHEq33OneElectronOverlapGradient> direct_one_electron;
-        if (direct_one_electron_overlap)
-        {
-            auto direct = derivatives.direct_one_electron_overlap(d_ao, w_ao);
-            if (!direct || direct->one_electron.size() <= 0 ||
-                direct->overlap.size() != direct->one_electron.size() ||
-                !direct->one_electron.allFinite() || !direct->overlap.allFinite())
-                return std::unexpected("DH Eq. 33 non-XC gradient: direct h/S contraction failed or has invalid dimensions.");
-            if (ncoord == 0) ncoord = static_cast<std::size_t>(direct->one_electron.size());
-            if (direct->one_electron.size() != static_cast<Eigen::Index>(ncoord))
-                return std::unexpected("DH Eq. 33 non-XC gradient: direct h/S coordinate count disagrees with derivative data.");
-            direct_one_electron = std::move(*direct);
-        }
-        if (ncoord == 0 || (dense_one_electron_overlap && derivatives.overlap_ao.size() != ncoord) ||
-            (dense_two_electron && derivatives.eri_ao.size() != ncoord))
-            return std::unexpected("DH Eq. 33 non-XC gradient: derivative coordinate counts are inconsistent.");
-        DHEq33NonXCGradient out;
-        out.one_electron = Eigen::VectorXd::Zero(ncoord);
-        out.overlap = Eigen::VectorXd::Zero(ncoord);
-        out.two_electron_separable = Eigen::VectorXd::Zero(ncoord);
-        out.two_electron_nonseparable = Eigen::VectorXd::Zero(ncoord);
-        const Eq33NonXCAccumulator accumulator{
-            two_particle.separable_symmetric_ao,
-            two_particle.nonseparable_symmetric_ao};
-
-        if (direct_one_electron)
-        {
-            out.one_electron = std::move(direct_one_electron->one_electron);
-            out.overlap = std::move(direct_one_electron->overlap);
-        }
-        else for (std::size_t x = 0; x < ncoord; ++x)
-        {
-            if (derivatives.hamiltonian_ao[x].rows() != nao || derivatives.hamiltonian_ao[x].cols() != nao ||
-                derivatives.overlap_ao[x].rows() != nao || derivatives.overlap_ao[x].cols() != nao)
-                return std::unexpected("DH Eq. 33 non-XC gradient: dense h/S AO dimensions are inconsistent.");
-            out.one_electron(static_cast<Eigen::Index>(x)) =
-                (d_ao.array() * derivatives.hamiltonian_ao[x].array()).sum();
-            out.overlap(static_cast<Eigen::Index>(x)) =
-                (w_ao.array() * derivatives.overlap_ao[x].array()).sum();
-        }
-
-        if (direct_two_electron)
-        {
-            auto direct = derivatives.direct_two_electron(two_particle, eq47_tiled);
-            if (!direct || direct->separable.size() != static_cast<Eigen::Index>(ncoord) ||
-                direct->nonseparable.size() != static_cast<Eigen::Index>(ncoord) ||
-                !direct->separable.allFinite() || !direct->nonseparable.allFinite())
-                return std::unexpected("DH Eq. 33 non-XC gradient: direct ERI contraction failed or has invalid dimensions.");
-            out.two_electron_separable = std::move(direct->separable);
-            out.two_electron_nonseparable = std::move(direct->nonseparable);
-        }
-        else for (std::size_t x = 0; x < ncoord; ++x)
-        {
-            const auto &eri = derivatives.eri_ao[x];
-            if (eri.size() != n4)
-                return std::unexpected("DH Eq. 33 non-XC gradient: dense ERI derivative dimensions are inconsistent.");
-            accumulator.accumulate_eri(static_cast<Eigen::Index>(x), eri, out);
-        }
-        out.two_electron = out.two_electron_separable + out.two_electron_nonseparable;
-        out.total = out.one_electron + out.overlap + out.two_electron;
-        return out;
+        DHEq33TwoParticleSource source;
+        source.n_ao = two_particle.n_ao;
+        source.coulomb_d = two_particle.relaxed_difference_ao;
+        source.coulomb_p = two_particle.ground_density_ao;
+        source.exchange.push_back({two_particle.relaxed_difference_ao, two_particle.ground_density_ao,
+            -0.5 * two_particle.exact_exchange});
+        source.pair.push_back(make_dh_eq47_pair_channel(*eq47_tiled.amplitudes, *eq47_tiled.mo_coeff));
+        source.occupied_tile = eq47_tiled.occupied_tile;
+        source.mu_tile = eq47_tiled.mu_tile;
+        source.nu_tile = eq47_tiled.nu_tile;
+        source.kappa_tile = eq47_tiled.kappa_tile;
+        source.tau_tile = eq47_tiled.tau_tile;
+        source.workspace = eq47_tiled.workspace;
+        return build_dh_eq33_direct_non_xc_gradient(d_ao, w_ao, source, derivatives);
     }
 
     std::expected<DHEq33XCFixedDensityGradient, std::string>
@@ -1824,120 +1643,6 @@ namespace DFT::Gradient
         return out;
     }
 
-    std::expected<DHKSFixedDensityFockDerivative, std::string>
-    build_dh_ks_fixed_density_fock_derivative(
-        const Eigen::Ref<const Eigen::MatrixXd> &ground_density_ao,
-        double exact_exchange_coefficient,
-        const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
-        const DHEq33NonXCDerivatives &derivatives,
-        const DHEq33XCFixedDensityInputs &xc_inputs)
-    {
-        const Eigen::Index nao = ground_density_ao.rows();
-        const std::size_t ncoord = derivatives.hamiltonian_ao.size();
-        const std::size_t n4 = static_cast<std::size_t>(nao) * nao * nao * nao;
-        if (nao == 0 || ground_density_ao.cols() != nao || mo_coeff.rows() != nao ||
-            mo_coeff.cols() != nao || !std::isfinite(exact_exchange_coefficient) ||
-            derivatives.overlap_ao.size() != ncoord || derivatives.eri_ao.size() != ncoord ||
-            xc_inputs.ground_density_ao.rows() != nao || xc_inputs.ground_density_ao.cols() != nao ||
-            (xc_inputs.ground_density_ao - ground_density_ao).cwiseAbs().maxCoeff() > 1e-12)
-            return std::unexpected("DH fixed-density KS Fock derivative: inconsistent AO density, MO coefficients, or derivative inputs.");
-        if ((ground_density_ao - ground_density_ao.transpose()).cwiseAbs().maxCoeff() > 1e-10)
-            return std::unexpected("DH fixed-density KS Fock derivative: total AO density must be symmetric.");
-
-        Eigen::FullPivLU<Eigen::MatrixXd> mo_lu(mo_coeff);
-        if (!mo_lu.isInvertible())
-            return std::unexpected("DH fixed-density KS Fock derivative: MO coefficient matrix is not invertible.");
-        const Eigen::MatrixXd mo_inverse = mo_lu.inverse();
-
-        DHKSFixedDensityFockDerivative out;
-        out.hamiltonian.resize(ncoord);
-        out.coulomb.resize(ncoord);
-        out.exact_exchange.resize(ncoord);
-        out.xc_geometry.resize(ncoord);
-        out.total.resize(ncoord);
-        for (std::size_t x = 0; x < ncoord; ++x)
-        {
-            if (derivatives.hamiltonian_ao[x].rows() != nao ||
-                derivatives.hamiltonian_ao[x].cols() != nao ||
-                derivatives.overlap_ao[x].rows() != nao ||
-                derivatives.overlap_ao[x].cols() != nao || derivatives.eri_ao[x].size() != n4)
-                return std::unexpected("DH fixed-density KS Fock derivative: derivative AO dimensions are inconsistent.");
-            out.hamiltonian[x] = derivatives.hamiltonian_ao[x];
-            out.coulomb[x] = Eigen::MatrixXd::Zero(nao, nao);
-            out.exact_exchange[x] = Eigen::MatrixXd::Zero(nao, nao);
-            const auto &eri_x = derivatives.eri_ao[x];
-            for (Eigen::Index mu = 0; mu < nao; ++mu)
-                for (Eigen::Index nu = 0; nu < nao; ++nu)
-                    for (Eigen::Index ka = 0; ka < nao; ++ka)
-                        for (Eigen::Index ta = 0; ta < nao; ++ta)
-                        {
-                            const double p = ground_density_ao(ka, ta);
-                            out.coulomb[x](mu, nu) += p * eri_x[eri_idx(
-                                static_cast<int>(mu), static_cast<int>(nu),
-                                static_cast<int>(ka), static_cast<int>(ta), static_cast<int>(nao))];
-                            out.exact_exchange[x](mu, nu) -= 0.5 * exact_exchange_coefficient * p *
-                                eri_x[eri_idx(static_cast<int>(mu), static_cast<int>(ka),
-                                              static_cast<int>(nu), static_cast<int>(ta), static_cast<int>(nao))];
-                        }
-            out.xc_geometry[x] = Eigen::MatrixXd::Zero(nao, nao);
-        }
-
-        // The complete XC-II scalar is linear in a symmetric test density D:
-        // G_D^(x) = D : (V_XC[P])_geom^(x).  Probe its diagonal with E_mm
-        // and each off-diagonal with 1/2(E_mn + E_nm), then recover the
-        // symmetric AO matrix exactly without omitting the D-side AO or
-        // moving-grid channels.
-        for (Eigen::Index mu = 0; mu < nao; ++mu)
-            for (Eigen::Index nu = 0; nu <= mu; ++nu)
-            {
-                Eigen::MatrixXd probe_ao = Eigen::MatrixXd::Zero(nao, nao);
-                if (mu == nu)
-                    probe_ao(mu, nu) = 1.0;
-                else
-                {
-                    probe_ao(mu, nu) = 0.5;
-                    probe_ao(nu, mu) = 0.5;
-                }
-                DHRelaxedDifferenceDensity probe;
-                probe.symmetric_mo = mo_inverse * probe_ao * mo_inverse.transpose();
-                probe.raw_mo = probe.symmetric_mo;
-                if ((mo_coeff * probe.symmetric_mo * mo_coeff.transpose() - probe_ao).cwiseAbs().maxCoeff() > 1e-10)
-                    return std::unexpected("DH fixed-density KS Fock derivative: AO probe transformation is not reversible.");
-                const auto xc_gradient = build_dh_eq33_complete_xc_ii_gradient(probe, mo_coeff, xc_inputs);
-                if (!xc_gradient)
-                    return std::unexpected("DH fixed-density KS Fock derivative: complete XC geometry probe failed: " +
-                                           xc_gradient.error());
-                if (xc_gradient->total.rows() * xc_gradient->total.cols() != static_cast<Eigen::Index>(ncoord))
-                    return std::unexpected("DH fixed-density KS Fock derivative: XC coordinate layout does not match derivative arrays.");
-                for (std::size_t x = 0; x < ncoord; ++x)
-                {
-                    const Eigen::Index atom = static_cast<Eigen::Index>(x / 3);
-                    const Eigen::Index cartesian = static_cast<Eigen::Index>(x % 3);
-                    const double value = xc_gradient->total(atom, cartesian);
-                    out.xc_geometry[x](mu, nu) = value;
-                    out.xc_geometry[x](nu, mu) = value;
-                }
-            }
-        for (std::size_t x = 0; x < ncoord; ++x)
-            out.total[x] = out.hamiltonian[x] + out.coulomb[x] +
-                out.exact_exchange[x] + out.xc_geometry[x];
-        return out;
-    }
-
-    std::expected<DHStationaryProducts, std::string>
-    build_dh_stationary_products(const HartreeFock::Correlation::RMP2Result &pt2,
-        double c_pt2, const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
-        const std::vector<double> &mo_eri, const DHEq41ResponseOperator &response,
-        const DHMolecularERIBlocks *eq40_blocks)
-    {
-        if (eq40_blocks)
-            return build_dh_stationary_products(pt2, c_pt2, mo_coeff, response, *eq40_blocks);
-        auto dense_blocks=build_dh_molecular_eri_blocks(mo_eri,pt2.n_occ,pt2.n_virt);
-        if(!dense_blocks) return std::unexpected(dense_blocks.error());
-        return build_dh_stationary_products(pt2, c_pt2, mo_coeff, response, *dense_blocks,
-            DHTildeAmplitudeStorage::Materialized);
-    }
-
     std::expected<DHStationaryProducts, std::string>
     build_dh_stationary_products(const HartreeFock::Correlation::RMP2Result &pt2,
         double c_pt2, const Eigen::Ref<const Eigen::MatrixXd> &mo_coeff,
@@ -1966,7 +1671,7 @@ namespace DFT::Gradient
 
     static std::expected<DHGradientDriverContract, std::string>
     assemble_dh_gradient_driver_contract(const DHGradientDriverInputs &inputs,
-        DHStationaryProducts &&stationary, DHGammaStorage storage)
+        DHStationaryProducts &&stationary)
     {
         if (inputs.pt2_result == nullptr || !inputs.workspace || !std::isfinite(inputs.c_pt2))
             return std::unexpected("DH gradient driver contract: missing PT2 result or invalid PT2 coefficient.");
@@ -2020,7 +1725,7 @@ namespace DFT::Gradient
         // The literal Eq. 47 pair-metric replacement below owns the
         // production amplitude pieces of Eqs. 42--45. Passing no MO ERI
         // data proves these builders cannot retain the old legacy-pair
-        // dependency; ReferenceAll callers still request it explicitly.
+        // dependency.
         const std::vector<double> no_legacy_pair_eri;
         auto diagonal = build_dh_eq42_43_energy_weighted_density(
             out.relaxed_density, pt2, out.amplitudes, inputs.mo_coeff,
@@ -2055,7 +1760,7 @@ namespace DFT::Gradient
         out.overlap_density = std::move(*overlap);
         auto pair_density = build_dh_eq46_47_two_particle_density(
             out.relaxed_density, out.amplitudes, inputs.mo_coeff, inputs.xc_inputs.ground_density_ao,
-            inputs.response_operator.exact_exchange, storage);
+            inputs.response_operator.exact_exchange);
         if (!pair_density) return std::unexpected(pair_density.error());
         out.two_particle_density = std::move(*pair_density);
         // This context is deliberately stack-bound to the synchronous Eq. 33
@@ -2064,19 +1769,16 @@ namespace DFT::Gradient
         // address through this O7.4.3 execution handoff.
         DHEq47BlockWorkspace eq47_workspace;
         const DHEq47TiledExecution eq47_tiled{
-            &out.amplitudes, &inputs.mo_coeff, 128, 32, 16, 16, 16, 16,
+            &out.amplitudes, &inputs.mo_coeff, 32, 16, 16, 16, 16,
             &eq47_workspace};
         auto non_xc = build_dh_eq33_non_xc_gradient(
             out.relaxed_density, out.overlap_density, out.two_particle_density,
-            inputs.mo_coeff, inputs.workspace->non_xc_derivatives,
-            storage == DHGammaStorage::ContractionOnly ? &eq47_tiled : nullptr);
+            inputs.mo_coeff, inputs.workspace->non_xc_derivatives, eq47_tiled);
         if (!non_xc) return std::unexpected(non_xc.error());
         out.non_xc_gradient = std::move(*non_xc);
         out.amplitude_ownership=audit_dh_amplitude_ownership(pt2,out.amplitudes);
         out.eq47_workspace=eq47_workspace;
         out.reference_mo_eri_bytes=inputs.workspace->mo_eri.size()*sizeof(double);
-        out.materialized_eq47_bytes=(out.two_particle_density.nonseparable_raw_ao.size()+
-            out.two_particle_density.nonseparable_symmetric_ao.size())*sizeof(double);
         auto xc_ii = build_dh_eq33_complete_xc_ii_gradient(
             out.relaxed_density, inputs.mo_coeff, inputs.xc_inputs);
         if (!xc_ii) return std::unexpected(xc_ii.error());
@@ -2085,25 +1787,12 @@ namespace DFT::Gradient
     }
 
     std::expected<DHGradientDriverContract, std::string>
-    build_dh_gradient_driver_contract(const DHGradientDriverInputs &inputs)
-    {
-        if (!inputs.pt2_result || !inputs.workspace)
-            return std::unexpected("DH gradient reference contract: missing snapshot or workspace.");
-        auto stationary = build_dh_stationary_products(*inputs.pt2_result, inputs.c_pt2,
-            inputs.mo_coeff, inputs.workspace->mo_eri, inputs.response_operator);
-        if (!stationary) return std::unexpected(stationary.error());
-        return assemble_dh_gradient_driver_contract(inputs,std::move(*stationary),DHGammaStorage::ReferenceAll);
-    }
-
-    std::expected<DHGradientDriverContract, std::string>
     build_dh_gradient_driver_contract(const DHGradientDriverInputs &inputs, DHStationaryProducts &&stationary)
     {
-        // Dense ERI derivatives are a retained reference/test adapter and
-        // require the symmetric Eq. (46) tensor. The production driver
-        // provides the O6.3 direct callback and can retain only D/P/a_x.
-        const auto storage = inputs.workspace && inputs.workspace->non_xc_derivatives.direct_two_electron
-            ? DHGammaStorage::ContractionOnly : DHGammaStorage::ReferenceAll;
-        return assemble_dh_gradient_driver_contract(inputs,std::move(stationary),storage);
+        if (!inputs.workspace || !inputs.workspace->non_xc_derivatives.direct_one_electron_overlap ||
+            !inputs.workspace->non_xc_derivatives.direct_two_electron)
+            return std::unexpected("DH gradient driver contract: the derivative workspace has no direct h/S and ERI callbacks.");
+        return assemble_dh_gradient_driver_contract(inputs,std::move(stationary));
     }
 
     std::expected<DHEq33PT2CorrectionGradient, std::string>

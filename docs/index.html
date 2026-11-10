@@ -333,11 +333,14 @@
 <li class="toc-level-3"><a href="#td-dft-linear-response">TD-DFT / Linear Response</a></li>
 <li class="toc-level-2"><a href="#23-polarizable-continuum-solvation-c-pcm">23. Polarizable Continuum Solvation (C-PCM)</a></li>
 <li class="toc-level-3"><a href="#the-apparent-surface-charge-picture">The Apparent-Surface-Charge Picture</a></li>
-<li class="toc-level-3"><a href="#cavity-construction-fibonacci-sphere-tessellation">Cavity Construction (Fibonacci-Sphere Tessellation)</a></li>
+<li class="toc-level-3"><a href="#cavity-construction-swig">Cavity Construction (SWIG)</a></li>
 <li class="toc-level-3"><a href="#the-surface-influence-matrix">The Surface Influence Matrix <span class="math-inline">\(\mathbf{D}\)</span></a></li>
 <li class="toc-level-3"><a href="#total-solute-potential-at-the-surface">Total Solute Potential at the Surface</a></li>
 <li class="toc-level-3"><a href="#apparent-charges-and-the-reaction-field-operator">Apparent Charges and the Reaction-Field Operator</a></li>
 <li class="toc-level-3"><a href="#coupling-to-the-scf-ks-dft-loop">Coupling to the SCF / KS-DFT Loop</a></li>
+<li class="toc-level-3"><a href="#spherical-basis">Spherical Basis</a></li>
+<li class="toc-level-3"><a href="#the-analytic-gradient">The Analytic Gradient</a></li>
+<li class="toc-level-3"><a href="#geometry-optimization-and-frequencies">Geometry Optimization and Frequencies</a></li>
 <li class="toc-level-3"><a href="#input-format-and-solvent-library">Input Format and Solvent Library</a></li>
 <li class="toc-level-3"><a href="#limitations-and-cost">Limitations and Cost</a></li>
 <li class="toc-level-3"><a href="#code-map">Code Map</a></li>
@@ -566,7 +569,7 @@ S    4    13.01  1.962  0.4446  0.1220     (contracted)
 S    1    0.1220                            (uncontracted)
 P    1    0.727
 </code></pre>
-<p>The outermost exponent, 0.1220, appears twice: once inside the contraction and once as its own shell. The second copy lets the variational calculation reshape the valence region, but it also means the first copy adds nothing to the space the basis spans. Call the contraction <span class="math-inline">\(\chi = \sum_p d_p g_p\)</span> and the free shell <span class="math-inline">\(g_u\)</span>, with <span class="math-inline">\(\alpha_u\)</span> equal to one of the <span class="math-inline">\(\alpha_p\)</span>. Then <span class="math-inline">\(\chi' = \chi - d_u g_u\)</span> is a linear combination of functions already in the basis, and <span class="math-inline">\(\{\chi', g_u\}\)</span> spans exactly what <span class="math-inline">\(\{\chi, g_u\}\)</span> did. The same holds component by component for <span class="math-inline">\(L > 0\)</span>, since both shells carry the same Cartesian components.</p>
+<p>The outermost exponent, 0.1220, appears twice: once inside the contraction and once as its own shell. The second copy lets the variational calculation reshape the valence region, but it also means the first copy adds nothing to the space the basis spans. Call the contraction <span class="math-inline">\(\chi = \sum_p d_p g_p\)</span> and the free shell <span class="math-inline">\(g_u\)</span>, with <span class="math-inline">\(\alpha_u\)</span> equal to one of the <span class="math-inline">\(\alpha_p\)</span>. Then <span class="math-inline">\(\chi' = \chi - d_u g_u\)</span> is a linear combination of functions already in the basis, and <span class="math-inline">\(\{\chi', g_u\}\)</span> spans exactly what <span class="math-inline">\(\{\chi, g_u\}\)</span> did. The same holds component by component for <span class="math-inline">\(L &gt; 0\)</span>, since both shells carry the same Cartesian components.</p>
 <p>So the redundant primitive can be <strong>dropped from the contraction</strong>: delete its line and renormalize. Every quantity that is invariant to a change of basis within the same span is unchanged: SCF, MP2, CC and CI energies, densities in real space, gradients. What does change is anything that labels or partitions by individual basis function: MO coefficients, and Mulliken, Löwdin and Mayer analyses, because <span class="math-inline">\(\chi'\)</span> is a different function from <span class="math-inline">\(\chi\)</span>.</p>
 <p>This is the <em>optimized general contraction</em> (Hashimoto, Hirao and Tatewaki, 1995). PySCF ships its cc-pVXZ files in this form. It matters for cost because integral work scales with the number of primitive quartets, i.e. with the fourth power of the primitive counts on the shells involved:</p>
 <div class="table-wrap"><table>
@@ -855,7 +858,7 @@ E(\kappa) - E(0)
 <tr><td>Singlet</td><td><span class="math-inline">\( (\varepsilon_a - \varepsilon_i)\delta + 2(ai|bj) - (ab|ij) \)</span></td><td><span class="math-inline">\( 2(ai|bj) - (aj|bi) \)</span></td></tr>
 <tr><td>Triplet</td><td><span class="math-inline">\( (\varepsilon_a - \varepsilon_i)\delta - (ab|ij) \)</span></td><td><span class="math-inline">\( -(aj|bi) \)</span></td></tr>
 </tbody></table></div>
-<p>The full block-structured Hessian is <span class="math-inline">\(\begin{pmatrix} \mathbf A & \mathbf B \\ \mathbf B & \mathbf A \end{pmatrix}\)</span> in the <span class="math-inline">\((X, Y)\)</span> excitation/de-excitation basis. Its eigenvalues come in <span class="math-inline">\(\pm\)</span>-pairs whose signs are determined by the lowest eigenvalues of <span class="math-inline">\(\mathbf A \pm \mathbf B\)</span>. So three matrix builds answer three physically distinct questions.</p>
+<p>The full block-structured Hessian is <span class="math-inline">\(\begin{pmatrix} \mathbf A &amp; \mathbf B \\ \mathbf B &amp; \mathbf A \end{pmatrix}\)</span> in the <span class="math-inline">\((X, Y)\)</span> excitation/de-excitation basis. Its eigenvalues come in <span class="math-inline">\(\pm\)</span>-pairs whose signs are determined by the lowest eigenvalues of <span class="math-inline">\(\mathbf A \pm \mathbf B\)</span>. So three matrix builds answer three physically distinct questions.</p>
 <h4 id="the-three-standard-rhf-stability-checks">The Three Standard RHF Stability Checks</h4>
 <div class="table-wrap"><table>
 <thead><tr>
@@ -900,9 +903,9 @@ E(\kappa) - E(0)
 <p>When a check fires, one can rotate the orbitals along the lowest unstable eigenvector and re-run SCF. Planck exposes this through <code>stability_follow .true.</code> and implements the rotation with the eigenvector <span class="math-inline">\(R_{ai}\)</span> (reshaped <span class="math-inline">\(n_v \times
 n_o\)</span>) by the standard SVD trick: writing <span class="math-inline">\(R = U_R \Sigma V_R^T\)</span>,</p>
 <p><span class="math-display">\[
-\exp\!\begin{pmatrix} 0 & -R^T \\ R & 0 \end{pmatrix}
-  = \begin{pmatrix} V_R \cos\Sigma\, V_R^T & -V_R \sin\Sigma\, U_R^T \\
-                    U_R \sin\Sigma\, V_R^T &  U_R \cos\Sigma\, U_R^T
+\exp\!\begin{pmatrix} 0 &amp; -R^T \\ R &amp; 0 \end{pmatrix}
+  = \begin{pmatrix} V_R \cos\Sigma\, V_R^T &amp; -V_R \sin\Sigma\, U_R^T \\
+                    U_R \sin\Sigma\, V_R^T &amp;  U_R \cos\Sigma\, U_R^T
     \end{pmatrix}.
 \]</span></p>
 <p>This is exactly unitary at any step size, so the orbitals stay orthonormal.</p>
@@ -911,14 +914,14 @@ n_o\)</span>) by the standard SVD trick: writing <span class="math-inline">\(R =
 <li><strong>RHF → UHF (triplet external)</strong> — the most common case. Planck promotes the calculator to UHF using a two-step broken-symmetry guess:</li>
 </ul>
 <p>1. <strong>HOMO–LUMO mix on beta only.</strong> Rotate <span class="math-inline">\(\beta_{\text{HOMO}}\)</span> and <span class="math-inline">\(\beta_{\text{LUMO}}\)</span> by <span class="math-inline">\(\pi/8\)</span> (22.5°). This makes the alpha and beta occupied spaces explicitly different along the frontier, <em>regardless of what the unstable eigenvector mostly points at</em>. Without this step, unstable modes that pick up mostly core-orbital character leave the frontier closed-shell, and UHF re-symmetrizes back to the starting RHF. 2. <strong>Apply the eigenvector rotation as a sharpening step.</strong> Alpha gets <span class="math-inline">\(+\,s\,R\)</span>, beta gets <span class="math-inline">\(-\,s\,R\)</span>. This guides the SCF toward the specific lower stationary point identified by the analyzer.</p>
-<p>The step <span class="math-inline">\(s\)</span> is adaptive: <span class="math-inline">\(|\lambda| < 10^{-2}\)</span> uses the user-supplied default of <code>0.05 rad</code>; <span class="math-inline">\(|\lambda| \ge 10^{-2}\)</span> bumps to <span class="math-inline">\(\pi/4 = 0.785 rad\)</span>, the standard &quot;break-symmetry-hard&quot; amplitude.</p>
+<p>The step <span class="math-inline">\(s\)</span> is adaptive: <span class="math-inline">\(|\lambda| &lt; 10^{-2}\)</span> uses the user-supplied default of <code>0.05 rad</code>; <span class="math-inline">\(|\lambda| \ge 10^{-2}\)</span> bumps to <span class="math-inline">\(\pi/4 = 0.785 rad\)</span>, the standard &quot;break-symmetry-hard&quot; amplitude.</p>
 <ul>
-<li><strong>Internal RHF→RHF or UHF→UHF</strong> — Planck applies the eigenvector rotation within the same SCF type and re-enters the same <code>run_*</code> entry point. The seeded density is read by SCF via the <code>ReadDensity</code> guess path, so no fresh HCore/SAD step happens. The step follows the same adaptive rule (<code>follow_step</code> in <code>stability.cpp</code>): 0.05 rad, or <span class="math-inline">\(\pi/4\)</span> when <span class="math-inline">\(\lambda < -10^{-2}\)</span>. A fixed 0.05 rad along a normalized mode spread over thousands of <span class="math-inline">\((a,i)\)</span> pairs barely moves any single orbital, and a deep saddle simply pulls the SCF back.</li>
+<li><strong>Internal RHF→RHF or UHF→UHF</strong> — Planck applies the eigenvector rotation within the same SCF type and re-enters the same <code>run_*</code> entry point. The seeded density is read by SCF via the <code>ReadDensity</code> guess path, so no fresh HCore/SAD step happens. The step follows the same adaptive rule (<code>follow_step</code> in <code>stability.cpp</code>): 0.05 rad, or <span class="math-inline">\(\pi/4\)</span> when <span class="math-inline">\(\lambda &lt; -10^{-2}\)</span>. A fixed 0.05 rad along a normalized mode spread over thousands of <span class="math-inline">\((a,i)\)</span> pairs barely moves any single orbital, and a deep saddle simply pulls the SCF back.</li>
 </ul>
 <h4 id="what-following-actually-finds">What Following Actually Finds</h4>
 <p>Following an instability is genuinely re-running SCF from a different starting point — it inherits all the convergence behavior of the underlying solver. In particular, if the rotated reference is close to <em>another</em> instability (e.g. ethylene RHF at small basis is itself unstable to UHF in addition to the broken-symmetry RHF), the follow may land on yet another stationary point lower than the original. This is correct behavior and matches every published stability code: the follow finds <em>some</em> lower stationary point, not necessarily the <em>physical</em> ground state. For ethylene/3-21G specifically, the post-follow UHF lands at <span class="math-inline">\(E = -77.5245\)</span> with <span class="math-inline">\(\langle S^2\rangle \approx 1.04\)</span>, which is a deeply spin-broken biradical solution — real, but unphysical for closed-shell ethylene at equilibrium. Larger basis sets and more correlation eliminate this spurious low UHF.</p>
 <h4 id="worked-example-when-rohf-comes-out-below-uhf">Worked Example: When ROHF Comes Out Below UHF</h4>
-<p>A variational argument says UHF can never lie above ROHF for the same state: an ROHF determinant is a UHF determinant with the extra constraint that the <span class="math-inline">\(\alpha\)</span> and <span class="math-inline">\(\beta\)</span> spatial orbitals coincide. So if a run reports <span class="math-inline">\(E_\text{ROHF} < E_\text{UHF}\)</span>, the UHF did not converge to a minimum. Here is a real case: the doublet cation of a four-water chain in cc-pVDZ (Cartesian), started from the core-Hamiltonian guess.</p>
+<p>A variational argument says UHF can never lie above ROHF for the same state: an ROHF determinant is a UHF determinant with the extra constraint that the <span class="math-inline">\(\alpha\)</span> and <span class="math-inline">\(\beta\)</span> spatial orbitals coincide. So if a run reports <span class="math-inline">\(E_\text{ROHF} &lt; E_\text{UHF}\)</span>, the UHF did not converge to a minimum. Here is a real case: the doublet cation of a four-water chain in cc-pVDZ (Cartesian), started from the core-Hamiltonian guess.</p>
 <div class="table-wrap"><table>
 <thead><tr>
 <th>Solution</th>
@@ -966,6 +969,12 @@ n_o\)</span>) by the standard SVD trick: writing <span class="math-inline">\(R =
 <ol>
 <li><strong>STO-3G is too small to expose the real-internal RHF instability.</strong> The minimal basis only sees the external triplet instability, λ ≈ −2.6 × 10⁻³. No second RHF basin is visible because the basis cannot represent the broken-symmetry RHF.</li>
 <li><strong>3-21G is the only basis where guess choice splits which RHF basin is reached.</strong> Pre-follow, HCore lands on a real-internally unstable RHF stationary point (a saddle on the RHF manifold) and SAD lands on the true RHF minimum 36 mEh lower. 6-31G and cc-pVDZ both have enough flexibility that DIIS funnels both guesses into the same RHF basin (they converge to identical Fock matrices to all printed digits).</li>
+</ol>
+<p><strong>What actually decides the 3-21G basin (found 2026-11-07): roundoff, not only the guess.</strong> At the exact 90° twist the molecule is D2d. The two carbon p orbitals then form a degenerate e pair, and at the second SCF iteration that pair is exactly the HOMO/LUMO pair (gap ~1e-15). Closed-shell RHF must doubly occupy one direction in that pair. The eigensolver&#x27;s choice of direction is set by last-bit noise, and two different solutions lie downhill from it: - a <strong>zwitterion</strong>, with both electrons on one carbon: −77.38375253, dipole 2.78 D, unstable in every channel; - a <strong>covalent</strong> state, with the pair shared by both carbons: −77.41957055, no dipole, real-internally stable.</p>
+<p>PySCF behaves the same way. Its <code>1e</code> and <code>atom</code> guesses give the zwitterion (on opposite carbons) and <code>minao</code>/<code>huckel</code> the covalent state. Adding 1e-15 of random noise to H_core flips its <code>1e</code> result to the covalent state in 9 of 10 seeds. Planck&#x27;s HCore run reached the zwitterion only by roundoff luck. A change to the nuclear-attraction kernel that reordered a sum moved it to the covalent state.</p>
+<p>The regression input is therefore no longer exactly D2d. It pyramidalizes the second CH₂ by 0.20 Å and uses <code>guess sad</code>. That opens the gap to 8.4e-4, and every PySCF guess and noisy seed reaches one zwitterion, −77.3844126695 (dipole −2.83 D). Planck matches it to every printed digit. The tables here were measured on the exact D2d geometry.</p>
+<p><strong>The lesson:</strong> when a test pins a symmetry-broken solution, check whether a degenerate HOMO/LUMO pair exists at some SCF iteration. If it does, break the symmetry in the input, not by luck.</p>
+<ol>
 <li><strong>For 6-31G and cc-pVDZ the converged RHF is itself real-internally unstable.</strong> The guess didn&#x27;t matter because there&#x27;s only one RHF basin reachable from either guess — but that basin is not even an RHF minimum.</li>
 </ol>
 <p><strong>After follow with <code>stability_follow .true., max_cycles 300, use_diis .true.</code></strong>:</p>
@@ -1046,7 +1055,7 @@ n_o\)</span>) by the standard SVD trick: writing <span class="math-inline">\(R =
 <li>Diagonalize <span class="math-inline">\(\mathbf F' \mathbf C' = \mathbf C' \boldsymbol\varepsilon\)</span></li>
 <li>Back-transform: <span class="math-inline">\(\mathbf C = \mathbf X \mathbf C'\)</span></li>
 <li>Build new density <span class="math-inline">\(P_{\mu\nu} = 2\sum_i^{occ} C_{\mu i} C_{\nu i}\)</span></li>
-<li>Test convergence: <span class="math-inline">\(|\Delta E| < \epsilon_E\)</span> and <span class="math-inline">\(\|\Delta P\|_{max} < \epsilon_P\)</span></li>
+<li>Test convergence: <span class="math-inline">\(|\Delta E| &lt; \epsilon_E\)</span> and <span class="math-inline">\(\|\Delta P\|_{max} &lt; \epsilon_P\)</span></li>
 <li>On convergence, if step 4 extrapolated, diagonalize the true <span class="math-inline">\(\mathbf F\)</span> once more and store those orbitals, energies and density (<code>diagonalize_fock</code>; see &quot;The Converged Orbitals Must Come From the True Fock&quot; in §7)</li>
 </ol>
 <p>Convergence is declared when both criteria are simultaneously satisfied.</p>
@@ -1074,7 +1083,7 @@ F'_{ab} \leftarrow F'_{ab} + \Delta
 \]</span></p>
 <p>minimizes <span class="math-inline">\(\|\sum_k c_k \mathbf e_k\|^2\)</span>. Using a Lagrange multiplier <span class="math-inline">\(\lambda\)</span> for the constraint, this becomes the augmented linear system:</p>
 <p><span class="math-display">\[
-\begin{pmatrix} \mathbf B & -\mathbf 1 \\ -\mathbf 1^T & 0 \end{pmatrix}
+\begin{pmatrix} \mathbf B &amp; -\mathbf 1 \\ -\mathbf 1^T &amp; 0 \end{pmatrix}
 \begin{pmatrix} \mathbf c \\ \lambda \end{pmatrix}
 =
 \begin{pmatrix} \mathbf 0 \\ -1 \end{pmatrix}
@@ -1157,7 +1166,7 @@ F^{\text{MO},\beta}_{ai})\)</span> packed into one vector, and the Hessian is th
 \]</span> For orthogonal <span class="math-inline">\(\mathbf O_R\)</span> (i.e. <span class="math-inline">\(s,p\)</span> shells) <span class="math-inline">\(\mathbf O_R^{\mathsf T}=\mathbf O_R^{-1}\)</span> and the two laws coincide, which is why the distinction never surfaces in an <span class="math-inline">\(s,p\)</span> basis. For Cartesian <span class="math-inline">\(d\)</span> and higher under a non-monomial operation (<span class="math-inline">\(C_3\)</span>, <span class="math-inline">\(S_4\)</span>, <span class="math-inline">\(\dots\)</span>) the two laws genuinely differ, and only the contravariant one is the correct density contract — checking or projecting a density with the covariant operator law there wrongly rejects a perfectly symmetric density.</p>
 <p>Working in the symmetry-adapted orbital basis guarantees the (contravariant) requirement: every occupied MO is symmetry-pure, so the density <span class="math-inline">\(\mathbf P = 2\,\mathbf C_{\text{occ}}\mathbf C_{\text{occ}}^{\mathsf T}\)</span> satisfies <span class="math-inline">\(\mathbf O_R\,\mathbf P\,\mathbf O_R^{\mathsf T}=\mathbf P\)</span> by construction. Given such a <span class="math-inline">\(\mathbf P\)</span>, the Coulomb/exchange build is a symmetric operator, so the skeleton Fock obeys the covariant law and the <span class="math-inline">\(\tfrac{1}{|G|}\sum_R\mathbf O_R^{\mathsf T}(\cdot)\mathbf O_R\)</span> projection restores it exactly. The reduction is therefore used together with SAO blocking; a converged SCF in that basis stays in the symmetric subspace throughout. Because the full group contains its D<span class="math-inline">\(_{2h}\)</span> subgroup, this reduction subsumes — and replaces — the coordinate-axis scheme.</p>
 <p>The same petite-list and symmetrization arguments are independent of which integral recurrence evaluates the representative quartets, so they apply equally to the Obara–Saika and Rys engines.</p>
-<p>The petite-list loop carries the same two performance optimizations as the ordinary direct Fock build: it is parallelized over the representative pair-quartets with OpenMP, and each surviving quartet is Schwarz-screened (<span class="math-inline">\(Q(i,j)\,Q(k,l) < \epsilon_{ERI}\)</span>, §9) before its integral is evaluated. Both are value-neutral — the Schwarz bound is symmetry-invariant, so screening a representative screens its whole orbit, and the orbit slots written by distinct representatives are disjoint, so the parallel scatter needs only same-value atomic stores.</p>
+<p>The petite-list loop carries the same two performance optimizations as the ordinary direct Fock build: it is parallelized over the representative pair-quartets with OpenMP, and each surviving quartet is Schwarz-screened (<span class="math-inline">\(Q(i,j)\,Q(k,l) &lt; \epsilon_{ERI}\)</span>, §9) before its integral is evaluated. Both are value-neutral — the Schwarz bound is symmetry-invariant, so screening a representative screens its whole orbit, and the orbit slots written by distinct representatives are disjoint, so the parallel scatter needs only same-value atomic stores.</p>
 <p><strong>Where the skeleton is used, and what happens above it.</strong> The skeleton ERI is a dense <span class="math-inline">\(n_b^4\)</span> array. It is density-independent, so when it fits it is built once and reused every iteration, which makes each iteration a cheap contraction. Planck <em>persists</em> it when <span class="math-inline">\(n_b \le\)</span> <code>threshold</code> (default 100). Below that line it is 6–19× cheaper per iteration than a fused direct build:</p>
 <div class="table-wrap"><table>
 <thead><tr>
@@ -1221,7 +1230,7 @@ S(l_A+1,\,0) = (P_x - A_x)\,S(l_A,\,0) + \frac{l_A}{2\zeta}\,S(l_A-1,\,0)
 <p><span class="math-display">\[
 S(0,\,l_B+1) = (P_x - B_x)\,S(0,\,l_B) + \frac{l_B}{2\zeta}\,S(0,\,l_B-1)
 \]</span></p>
-<p><em>Phase 3 — full table</em> <span class="math-inline">\((l_A > 0,\; l_B > 0)\)</span>: fill remaining entries using the general A-increment, which now has a non-zero <span class="math-inline">\(l_B\)</span> coupling term:</p>
+<p><em>Phase 3 — full table</em> <span class="math-inline">\((l_A &gt; 0,\; l_B &gt; 0)\)</span>: fill remaining entries using the general A-increment, which now has a non-zero <span class="math-inline">\(l_B\)</span> coupling term:</p>
 <p><span class="math-display">\[
 S(l_A+1,\,l_B) = (P_x - A_x)\,S(l_A,\,l_B)
                + \frac{l_A}{2\zeta}\,S(l_A-1,\,l_B)
@@ -1377,7 +1386,7 @@ F_m\!\left(\frac{\zeta\eta}{\zeta+\eta} R_{PQ}^2\right)
 \]</span></p>
 <p>One typically precomputes the Schwarz table <span class="math-inline">\(Q(i,j) = \sqrt{|(ij|ij)|}\)</span> for all unique diagonal pairs and skips any quartet where:</p>
 <p><span class="math-display">\[
-Q(i,j) \cdot Q(k,l) < \epsilon_{ERI}
+Q(i,j) \cdot Q(k,l) &lt; \epsilon_{ERI}
 \]</span></p>
 <p>The same criterion can be used in stored-ERI builds, direct Fock builders, symmetry-reduced quartet loops, and derivative-integral contractions. When symmetry is exploited, the Schwarz bound is constant across each quartet orbit, so screening one representative screens the whole orbit.</p>
 <h3 id="density-weighted-screening-and-the-incremental-fock-build">Density-Weighted Screening and the Incremental Fock Build</h3>
@@ -1385,7 +1394,7 @@ Q(i,j) \cdot Q(k,l) < \epsilon_{ERI}
 <p><span class="math-display">\[
 Q_{\mu\nu} Q_{\lambda\sigma}\,
 \max\bigl(4|D_{\mu\nu}|, 4|D_{\lambda\sigma}|, |D_{\mu\lambda}|,
-|D_{\mu\sigma}|, |D_{\nu\lambda}|, |D_{\nu\sigma}|\bigr) < \epsilon .
+|D_{\mu\sigma}|, |D_{\nu\lambda}|, |D_{\nu\sigma}|\bigr) &lt; \epsilon .
 \]</span></p>
 <p>With the full density <span class="math-inline">\(\mathbf D = \mathbf P\)</span> this buys little: on water chains it skips only 4–11 % more work than Schwarz alone. It pays because <span class="math-inline">\(\mathbf G\)</span> is <strong>linear in the density</strong>:</p>
 <p><span class="math-display">\[
@@ -1509,9 +1518,9 @@ G_{\mu\nu} = \frac{1}{|G|}\sum_R s_R(\mu)\,s_R(\nu)\,G^{\text{skel}}_{R(\mu)\,R(
 \,F_m(T)\)</span>. Let <span class="math-inline">\(d\)</span> be <span class="math-inline">\(P-A\)</span>, <span class="math-inline">\(P-B\)</span>, <span class="math-inline">\(Q-C\)</span> or <span class="math-inline">\(Q-D\)</span> for the raised center, and let <span class="math-inline">\(w\)</span> be <span class="math-inline">\(W-P\)</span> for a bra raise or <span class="math-inline">\(W-Q\)</span> for a ket raise. Then:</p>
 <p><span class="math-display">\[
 \begin{aligned}
-A_i(m) &= d_{1,i}\,\theta_m + w_{1,i}\,\theta_{m+1}\\
-B_{ij}(m) &= d_{2,j}\,A_i(m) + w_{2,j}\,A_i(m{+}1) + [i{=}j]\,\kappa_{12}(\theta; m)\\
-C_{ijk} &= d_{3,k}\,B_{ij}(0) + w_{3,k}\,B_{ij}(1)
+A_i(m) &amp;= d_{1,i}\,\theta_m + w_{1,i}\,\theta_{m+1}\\
+B_{ij}(m) &amp;= d_{2,j}\,A_i(m) + w_{2,j}\,A_i(m{+}1) + [i{=}j]\,\kappa_{12}(\theta; m)\\
+C_{ijk} &amp;= d_{3,k}\,B_{ij}(0) + w_{3,k}\,B_{ij}(1)
  + [k{=}i]\,\kappa_{13}(A^{(2)}_j) + [k{=}j]\,\kappa_{23}(A_i)
 \end{aligned}
 \]</span></p>
@@ -1588,9 +1597,9 @@ double value(ca, cb, cc, cd) const;              // component (ca cb | cc cd)
 <ol>
 <li><strong>VRR, once per primitive quartet</strong>, building <span class="math-inline">\([e0|f0]^{(m)}\)</span> for <span class="math-inline">\(|e| \le L_A+L_B\)</span>, <span class="math-inline">\(|f| \le L_C+L_D\)</span>, in the Obara–Saika W form: <span class="math-display">\[
    \begin{aligned}
-   [e{+}1_i|0]^{(m)} &= PA_i\,[e]^{(m)} + WP_i\,[e]^{(m+1)}
+   [e{+}1_i|0]^{(m)} &amp;= PA_i\,[e]^{(m)} + WP_i\,[e]^{(m+1)}
      + \tfrac{e_i}{2\zeta}\bigl([e{-}1_i]^{(m)} - \tfrac{\rho}{\zeta}[e{-}1_i]^{(m+1)}\bigr)\\
-   [e|f{+}1_j]^{(m)} &= QC_j\,[e|f]^{(m)} + WQ_j\,[e|f]^{(m+1)}
+   [e|f{+}1_j]^{(m)} &amp;= QC_j\,[e|f]^{(m)} + WQ_j\,[e|f]^{(m+1)}
      + \tfrac{f_j}{2\eta}\bigl([e|f{-}1_j]^{(m)} - \tfrac{\rho}{\eta}[e|f{-}1_j]^{(m+1)}\bigr)
      + \tfrac{e_j}{2(\zeta+\eta)}[e{-}1_j|f]^{(m+1)}
    \end{aligned}
@@ -1598,7 +1607,7 @@ double value(ca, cb, cc, cd) const;              // component (ca cb | cc cd)
 <li><strong>Contract</strong> the <span class="math-inline">\(m = 0\)</span> slice over primitive quartets, only for <span class="math-inline">\(|e| \ge L_A\)</span> and <span class="math-inline">\(|f| \ge L_C\)</span>, the cells HRR reads.</li>
 <li><strong>HRR, once per shell quartet</strong>: <span class="math-inline">\((a,b{+}1_i| = (a{+}1_i,b| + (A-B)_i(a,b|\)</span> on the bra for every ket function, then the same on the ket for each final <span class="math-inline">\((a,b)\)</span>. Components are read out by their L-major index and scaled by their norm ratio, exactly as the closed forms are.</li>
 </ol>
-<p><strong>Verifying it.</strong> <code>planck-hgp-engine-smoke</code> sweeps every shell quartet of water in 6-31G, 6-31G\*, cc-pVDZ and cc-pVTZ through the kernel, fed as the fused loop feeds it, and compares every component against per-component HGP: 4.6 million component quartets in 256 classes up to <span class="math-inline">\((ff|ff)\)</span>, worst relative difference <span class="math-inline">\(8.9\times10^{-15}\)</span>, in a few seconds. Six mutations were each caught: dropping any of the three VRR coupling terms, flipping either HRR sign, dropping the norm ratio. The HRR and norm mutations fail only one fixture each: an HRR with <span class="math-inline">\(A \ne B\)</span> and <span class="math-inline">\(L_B > 0\)</span> first appears in cc-pVDZ, whose hydrogen p shells follow the oxygen shells, and the norm ratio matters only for d and higher. A sweep on 6-31G alone would have missed both.</p>
+<p><strong>Verifying it.</strong> <code>planck-hgp-engine-smoke</code> sweeps every shell quartet of water in 6-31G, 6-31G\*, cc-pVDZ and cc-pVTZ through the kernel, fed as the fused loop feeds it, and compares every component against per-component HGP: 4.6 million component quartets in 256 classes up to <span class="math-inline">\((ff|ff)\)</span>, worst relative difference <span class="math-inline">\(8.9\times10^{-15}\)</span>, in a few seconds. Six mutations were each caught: dropping any of the three VRR coupling terms, flipping either HRR sign, dropping the norm ratio. The HRR and norm mutations fail only one fixture each: an HRR with <span class="math-inline">\(A \ne B\)</span> and <span class="math-inline">\(L_B &gt; 0\)</span> first appears in cc-pVDZ, whose hydrogen p shells follow the oxygen shells, and the norm ratio matters only for d and higher. A sweep on 6-31G alone would have missed both.</p>
 <p><strong>Dispatch by measurement.</strong> The probe (<code>planck-eri-class-share</code>) builds <span class="math-inline">\(\mathbf G\)</span> with the block kernel on one total-<span class="math-inline">\(L\)</span> class at a time, on top of the closed forms, against the closed forms alone. Every class from <span class="math-inline">\(L = 4\)</span> to <span class="math-inline">\(12\)</span> won or tied, so Auto uses it for all of them:</p>
 <div class="table-wrap"><table>
 <thead><tr>
@@ -1641,14 +1650,14 @@ double value(ca, cb, cc, cd) const;              // component (ca cb | cc cd)
 <p>With <span class="math-inline">\(v' = \text{deg}\cdot(ab|cd)\)</span>, six writes per component and one symmetrization at the end reproduce the full eight-fold sum:</p>
 <p><span class="math-display">\[
 \begin{aligned}
-G_{ab} &\mathrel{+}= \tfrac12 P_{cd}\,v', & G_{cd} &\mathrel{+}= \tfrac12 P_{ab}\,v',\\
-G_{ac},\ G_{bd},\ G_{ad},\ G_{bc} &\mathrel{-}= \tfrac18 P_{bd}v',\ \tfrac18 P_{ac}v',\ \tfrac18 P_{bc}v',\ \tfrac18 P_{ad}v',
+G_{ab} &amp;\mathrel{+}= \tfrac12 P_{cd}\,v', &amp; G_{cd} &amp;\mathrel{+}= \tfrac12 P_{ab}\,v',\\
+G_{ac},\ G_{bd},\ G_{ad},\ G_{bc} &amp;\mathrel{-}= \tfrac18 P_{bd}v',\ \tfrac18 P_{ac}v',\ \tfrac18 P_{bc}v',\ \tfrac18 P_{ad}v',
 \end{aligned}
 \qquad \mathbf G \leftarrow \tfrac12(\mathbf G + \mathbf G^{\mathsf T}).
 \]</span></p>
 <p>The other modes use the same writes with their own coefficients: raw exchange is <span class="math-inline">\(+\tfrac14\)</span>, and unrestricted exchange is <span class="math-inline">\(-\tfrac14\)</span> per spin density. These weights were derived once and are pinned by a gate that breaks each of them on purpose.</p>
 <p><strong>Why it needs a symmetric density.</strong> The final symmetrization is what lets six writes stand in for eight, and it keeps only the part of <span class="math-inline">\(\mathbf G\)</span> that is symmetric. For a symmetric <span class="math-inline">\(\mathbf P\)</span> that is all of it. For a non-symmetric <span class="math-inline">\(\mathbf P = \mathbf S + \mathbf A\)</span>, exchange built from the antisymmetric part <span class="math-inline">\(\mathbf A\)</span> is itself antisymmetric, and averaging with the transpose deletes it. SCF densities are symmetric, but the J and K entry points also serve response code, which can pass anything. So the dense path is chosen <strong>once per build</strong>, and only when every density is symmetric to <span class="math-inline">\(10^{-10}\)</span>. Anything else takes the per-component loop and is reproduced bit for bit.</p>
-<p>The choice cannot be made per block. The dense loop visits <span class="math-inline">\(p \le q\)</span>, while the per-component canonical filter works on AO indices and needs some kets with <span class="math-inline">\(q < p\)</span>. Mixing the two inside one build would count some integrals twice and drop others. So the build is all-dense or all-per-component, and dense requires that the block kernels accept every block. Each kernel says so itself through <code>covers(total_L, kernel)</code>, and the build asks for every total <span class="math-inline">\(L\)</span> up to four times its largest shell <span class="math-inline">\(L\)</span>. Today that means Auto, the Coulomb kernel, and shells up to f (total <span class="math-inline">\(L \le 12\)</span>). Explicit engines keep the per-component loop, so the cross-engine comparators still compare engines.</p>
+<p>The choice cannot be made per block. The dense loop visits <span class="math-inline">\(p \le q\)</span>, while the per-component canonical filter works on AO indices and needs some kets with <span class="math-inline">\(q &lt; p\)</span>. Mixing the two inside one build would count some integrals twice and drop others. So the build is all-dense or all-per-component, and dense requires that the block kernels accept every block. Each kernel says so itself through <code>covers(total_L, kernel)</code>, and the build asks for every total <span class="math-inline">\(L\)</span> up to four times its largest shell <span class="math-inline">\(L\)</span>. Today that means Auto, the Coulomb kernel, and shells up to f (total <span class="math-inline">\(L \le 12\)</span>). Explicit engines keep the per-component loop, so the cross-engine comparators still compare engines.</p>
 <p><strong>Screening stays exactly the same.</strong> The dense loop still skips a component whose Schwarz product is below the tolerance. Without that mask the new <span class="math-inline">\(\mathbf G\)</span> differs from the old by about <span class="math-inline">\(10^{-10}\)</span>, the size of what the tolerance drops; with it, by at most <span class="math-inline">\(10^{-13}\)</span>, which is summation order. The mask costs about 3 %.</p>
 <p><strong>Specialize the inner loop.</strong> The first version looped over two output channels with a check per component for which writes were active, so that one body served every mode. It gave 1.09–1.18× against the census&#x27;s 1.11–1.26×. Compiling one inner loop per active combination of writes (Coulomb and exchange, into either output) recovered almost all of the gap:</p>
 <div class="table-wrap"><table>
@@ -1844,7 +1853,7 @@ n = \left\lfloor \frac{L}{2} \right\rfloor + 1
 <h3 id="root-finding">Root Finding</h3>
 <p>Computing the roots and weights for a given <span class="math-inline">\(T\)</span> is the central numerical challenge. A common strategy is:</p>
 <p><strong>One-root case</strong>: For <span class="math-inline">\(n = 1\)</span>, use the exact closed-form one-point rule, <span class="math-inline">\(w_1 = F_0(T)\)</span>, <span class="math-inline">\(t_1^2 = F_1(T)/F_0(T)\)</span>. Below <span class="math-inline">\(T = 1\)</span> both moments come from the positive series given below. The closed form <span class="math-inline">\(F_1 = (F_0 - e^{-T})/(2T)\)</span> subtracts two nearly equal numbers there and loses digits (1.3e-10 relative at <span class="math-inline">\(T = 2\times10^{-6}\)</span>).</p>
-<p><strong>General case</strong>: for <span class="math-inline">\(n > 1\)</span> the rule is the <span class="math-inline">\(n\)</span>-point Gauss rule of the measure <span class="math-inline">\(e^{-Tt^2}\,dt\)</span> on <span class="math-inline">\([0,1]\)</span>, in the variable <span class="math-inline">\(u = t^2\)</span>. Every Gauss rule comes from the three-term recurrence of the measure&#x27;s orthogonal polynomials: its coefficients <span class="math-inline">\(\alpha_k, \beta_k\)</span> form a symmetric tridiagonal (Jacobi) matrix <span class="math-inline">\(\mathbf J\)</span> whose eigenvalues are the roots. The question is how to get <span class="math-inline">\(\alpha_k, \beta_k\)</span> accurately, and then how to make the result fast.</p>
+<p><strong>General case</strong>: for <span class="math-inline">\(n &gt; 1\)</span> the rule is the <span class="math-inline">\(n\)</span>-point Gauss rule of the measure <span class="math-inline">\(e^{-Tt^2}\,dt\)</span> on <span class="math-inline">\([0,1]\)</span>, in the variable <span class="math-inline">\(u = t^2\)</span>. Every Gauss rule comes from the three-term recurrence of the measure&#x27;s orthogonal polynomials: its coefficients <span class="math-inline">\(\alpha_k, \beta_k\)</span> form a symmetric tridiagonal (Jacobi) matrix <span class="math-inline">\(\mathbf J\)</span> whose eigenvalues are the roots. The question is how to get <span class="math-inline">\(\alpha_k, \beta_k\)</span> accurately, and then how to make the result fast.</p>
 <p><strong>Not from moments.</strong> The textbook route builds the recurrence from the moments <span class="math-inline">\(F_0, \dots, F_{2n-1}\)</span>. That problem is ill-conditioned (it goes through a Hankel matrix), and it fails in an instructive way. Such a rule reproduces its moments well, to <span class="math-inline">\(\le 5\times10^{-11}\)</span> here, yet its individual roots and weights were off by up to <span class="math-inline">\(10^{-7}\)</span> at <span class="math-inline">\(n = 8\)</span> and <span class="math-inline">\(8\times10^{-3}\)</span> at <span class="math-inline">\(n = 11\)</span>. For an integral that is harmless, because an integral only sees <span class="math-inline">\(\sum_r w_r P(u_r)\)</span> for a polynomial <span class="math-inline">\(P\)</span>, which is a combination of moments. For anything that uses the nodes themselves, such as fitting them as functions of <span class="math-inline">\(T\)</span>, it is fatal. Planck used this route until 2026-10-25.</p>
 <p><strong>Discretized Stieltjes</strong> (Gautschi). Replace the measure by a fine quadrature, here 60 panels of 20-point Gauss–Legendre in <span class="math-inline">\(t\)</span>, and run the Stieltjes procedure on that discrete measure: <span class="math-inline">\(\alpha_k\)</span> and <span class="math-inline">\(\beta_k\)</span> are ratios of sums <span class="math-inline">\(\sum_j W_j\,p_k(u_j)^2\)</span> and <span class="math-inline">\(\sum_j W_j\,u_j\,p_k(u_j)^2\)</span> of positive terms, with each <span class="math-inline">\(p_k\)</span> evaluated by the recurrence at the 1200 grid points. No moments appear, so there is nothing ill-conditioned to amplify. Two details carry the accuracy:</p>
 <ul>
@@ -1989,7 +1998,7 @@ W[a_x][a_y][a_z][c_x][c_y][c_z]
 <p>With three to five roots, a loop over the roots is too short to unroll or vectorize profitably. Two measurement pitfalls also came up:</p>
 <ul>
 <li><strong>A probe can time itself.</strong> An environment switch read with <code>getenv</code> inside a loop condition made the kernel look 10× slower. Read such switches once.</li>
-<li><strong>A fixture can be blind to a term.</strong> In 6-31G\*, hydrogen has no p shell. So every pair with <span class="math-inline">\(l_B > 0\)</span> has <span class="math-inline">\(A = B\)</span> or a hydrogen s on B, and the bra HRR always multiplies a zero distance. A sign error in <span class="math-inline">\(A - B\)</span> passes the gate there and fails it at 2.5 in cc-pVDZ.</li>
+<li><strong>A fixture can be blind to a term.</strong> In 6-31G\*, hydrogen has no p shell. So every pair with <span class="math-inline">\(l_B &gt; 0\)</span> has <span class="math-inline">\(A = B\)</span> or a hydrogen s on B, and the bra HRR always multiplies a zero distance. A sign error in <span class="math-inline">\(A - B\)</span> passes the gate there and fails it at 2.5 in cc-pVDZ.</li>
 </ul>
 <h3 id="auto-dispatch-calibrated-per-bucket-engine-selection">Auto-Dispatch: Calibrated Per-Bucket Engine Selection</h3>
 <p>When the user requests <code>engine auto</code>, every contracted shell quartet is routed to whichever integral engine is empirically fastest for that quartet&#x27;s angular-momentum bucket <span class="math-inline">\((L_{AB}, L_{CD})\)</span>, where <span class="math-inline">\(L_{AB} = l_A + l_B\)</span> and <span class="math-inline">\(L_{CD} = l_C + l_D\)</span>. Which engine that is has changed twice as the engines themselves were optimized, and the calibration machinery is built so the rule tracks those changes automatically rather than being hand-maintained. This section describes both the current data and how the rule is derived from it.</p>
@@ -2067,10 +2076,10 @@ default:                             return HeadGordonPople::_contracted_eri_ele
 <p><strong>Where the table still decides, and where it no longer does.</strong> The table was built for a world in which every engine returned one Cartesian component per call. That world survives in two places, and in both the table chooses the engine per quartet:</p>
 <ul>
 <li><strong>The stored ERI tensor.</strong> <code>_compute_2e_auto</code> (conventional SCF, MP2, CC, CASSCF) and the two-phase Fock builds that contract it (<code>_compute_2e_fock_auto</code>, <code>_compute_2e_fock_uhf_auto</code>). Its HGP fast path fires only when the table picks HGP for the shell-group bucket; OS- and Rys-chosen quartets fall to the per-component path, which re-dispatches through <code>_auto_contracted_eri</code>.</li>
-<li><strong>Whatever the block kernels decline</strong> in the memory-direct Fock build (§9): screened (range-separated) kernels, and shell quartets with total <span class="math-inline">\(L > 12\)</span>.</li>
+<li><strong>Whatever the block kernels decline</strong> in the memory-direct Fock build (§9): screened (range-separated) kernels, and shell quartets with total <span class="math-inline">\(L &gt; 12\)</span>.</li>
 </ul>
 <p>Everything else in the direct build no longer consults the table. Every Coulomb shell quartet with total <span class="math-inline">\(L \le 3\)</span> goes to the closed forms. Above that, a one-primitive block (or a three-quartet block at <span class="math-inline">\(L \ge 7\)</span>) goes to the 2D Rys block kernel, and every other block with <span class="math-inline">\(L \le 12\)</span> to the HGP block kernel (<code>src/integrals/auto_block_eri.h</code>). With symmetric densities, the whole block is then digested at once (&quot;Digesting a whole block at once&quot;). Since direct SCF and every DFT J/K build use this path, the table now governs only a minority of Auto&#x27;s work. The analytic gradient uses the same Rys2D/HGP split for its derivative block kernels (§14), where it was re-measured and also won.</p>
-<p>The engines return identical integrals, so between them the table is purely a speed choice. The block kernels and dense digestion agree with the engines to about <span class="math-inline">\(10^{-15}\)</span>–<span class="math-inline">\(10^{-13}\)</span> in <span class="math-inline">\(\mathbf G\)</span> but are not bitwise-identical, so <code>engine auto</code> matches an explicit engine to machine precision rather than bit for bit. The <code>engine_scf_energy_compare.py</code> comparator checks this (OS == HGP == Rys == Auto to <code>0.000e+00 Eh</code> at printed precision), including a He₂/cc-pV5Z case whose <span class="math-inline">\(L > 12\)</span> quartets reach the corner where the table picks Rys (the high-L buckets listed above).</p>
+<p>The engines return identical integrals, so between them the table is purely a speed choice. The block kernels and dense digestion agree with the engines to about <span class="math-inline">\(10^{-15}\)</span>–<span class="math-inline">\(10^{-13}\)</span> in <span class="math-inline">\(\mathbf G\)</span> but are not bitwise-identical, so <code>engine auto</code> matches an explicit engine to machine precision rather than bit for bit. The <code>engine_scf_energy_compare.py</code> comparator checks this (OS == HGP == Rys == Auto to <code>0.000e+00 Eh</code> at printed precision), including a He₂/cc-pV5Z case whose <span class="math-inline">\(L &gt; 12\)</span> quartets reach the corner where the table picks Rys (the high-L buckets listed above).</p>
 <p>When an engine is re-optimized: re-run <code>planck-auto-dispatch-benchmark</code>, re-run <code>scripts/fit_auto_dispatch.py</code>, then paste the regenerated table from <code>docs/auto_dispatch_fit.json</code>&#x27;s <code>rule_in_code</code> into <code>kAutoEngine</code>. The table is kept verbatim (not reduced to inequalities) precisely so this step is a mechanical copy with no risk of drift.</p>
 <h3 id="implementation-files">Implementation Files</h3>
 <div class="table-wrap"><table>
@@ -2419,9 +2428,9 @@ V^{-1} \mathbf J^{T}\)</span> by the product rule gives two terms, because the m
 <p>Once the correlation energy is in hand, the unrelaxed RMP2 one-particle density matrix can be diagonalized to produce <strong>natural orbitals</strong> (NOs) and their occupation numbers. The unrelaxed density is block-diagonal in the canonical MO basis:</p>
 <p><span class="math-display">\[
 \gamma^{MP2}_{pq} = \begin{cases}
-2\delta_{ij} + P^{occ}_{ij} + P^{occ}_{ji} & p,q \in \text{occupied} \\
-P^{virt}_{ab} + P^{virt}_{ba} & p,q \in \text{virtual} \\
-0 & \text{otherwise (unrelaxed)}
+2\delta_{ij} + P^{occ}_{ij} + P^{occ}_{ji} &amp; p,q \in \text{occupied} \\
+P^{virt}_{ab} + P^{virt}_{ba} &amp; p,q \in \text{virtual} \\
+0 &amp; \text{otherwise (unrelaxed)}
 \end{cases}
 \]</span></p>
 <p>where <span class="math-inline">\(P^{occ}\)</span> and <span class="math-inline">\(P^{virt}\)</span> are the occupied-occupied and virtual-virtual MP2 density corrections. The &quot;unrelaxed&quot; qualifier means the occupied-virtual block (which would require solving the coupled-perturbed HF equations, see <a href="#15-coupled-perturbed-hf-and-the-mp2-gradient">§15</a>) is set to zero — this density gives natural orbitals cheaply but is not the fully relaxed density used for properties like the dipole.</p>
@@ -2493,7 +2502,7 @@ I\)</span>), it does <strong>not</strong> distribute through the triple product:
 E_{KS}
 = E_{1e} + E_J + c_x E_x^{HF} + E_{xc}^{sl} + E_{nuc}
 \]</span></p>
-<p>Here <span class="math-inline">\(c_x\)</span> is the global-hybrid exact-exchange fraction (<span class="math-inline">\(c_x = 0\)</span> for pure LDA/GGA, <span class="math-inline">\(c_x > 0\)</span> for B3LYP/PBE0), and <span class="math-inline">\(E_{xc}^{sl}\)</span> denotes the semilocal libxc contribution evaluated on the numerical grid.</p>
+<p>Here <span class="math-inline">\(c_x\)</span> is the global-hybrid exact-exchange fraction (<span class="math-inline">\(c_x = 0\)</span> for pure LDA/GGA, <span class="math-inline">\(c_x &gt; 0\)</span> for B3LYP/PBE0), and <span class="math-inline">\(E_{xc}^{sl}\)</span> denotes the semilocal libxc contribution evaluated on the numerical grid.</p>
 <p>Planck therefore splits the DFT gradient into two conceptually different parts:</p>
 <ol>
 <li>the <strong>HF-like variational skeleton</strong>, which handles <span class="math-inline">\(T\)</span>, <span class="math-inline">\(V\)</span>, Coulomb, exact exchange, Pulay overlap response, and nuclear repulsion;</li>
@@ -2746,12 +2755,12 @@ L_{ai}=[C_v^TR(CD'C^T)C_o]_{ai}+G_{ai}-G_{ia}.
 (AX)_{ai}=(\epsilon_a-\epsilon_i)X_{ai}
 +[C_v^T\mathscr K[\delta P_X]C_o]_{ai}.
 \]</span></p>
-<p>Planck solves <strong><span class="math-inline">\(AZ=-L\)</span></strong> in this DH convention. This sign belongs to the definition of <span class="math-inline">\(L\)</span> above; it is not inferred from the generic MP2 Z-vector notation earlier in this section. For any direction <span class="math-inline">\(X\)</span>, the stationary pairing is <span class="math-inline">\(L:X+Z:AX=0\)</span>. The production solve (<code>solve_dh_zvector</code>, <code>src/dft/dh_zvector.h</code>) is <strong>matrix-free</strong>: restarted GMRES calls the action <span class="math-inline">\(AX\)</span> above directly, preconditioned by the orbital-energy gaps <span class="math-inline">\(\epsilon_a-\epsilon_i\)</span>. It never forms a column of <span class="math-inline">\(A\)</span>, and if GMRES fails to converge the run fails rather than silently switching to a dense solve. A dense reference solve exists, built from the <em>same</em> action applied to unit directions, but only for the comparisons that validated the matrix-free path. After the solve, the gradient contract re-applies <span class="math-inline">\(A\)</span> to <span class="math-inline">\(Z\)</span> and rejects a residual above <span class="math-inline">\(10^{-9}\)</span>. A small residual verifies the solve; independent directional derivatives are still needed to verify the RHS and Hessian themselves.</p>
+<p>Planck solves <strong><span class="math-inline">\(AZ=-L\)</span></strong> in this DH convention. This sign belongs to the definition of <span class="math-inline">\(L\)</span> above; it is not inferred from the generic MP2 Z-vector notation earlier in this section. For any direction <span class="math-inline">\(X\)</span>, the stationary pairing is <span class="math-inline">\(L:X+Z:AX=0\)</span>. The production solve (<code>solve_dh_zvector</code>, <code>src/dft/dh_zvector.h</code>) is <strong>matrix-free</strong>: restarted GMRES calls the action <span class="math-inline">\(AX\)</span> above directly, preconditioned by the orbital-energy gaps <span class="math-inline">\(\epsilon_a-\epsilon_i\)</span>. It never forms a column of <span class="math-inline">\(A\)</span>, and if GMRES fails to converge the run fails rather than silently switching to a dense solve. A dense reference solve exists only in the tests, built from the <em>same</em> action applied to unit directions, to check the matrix-free answer. After the solve, the gradient contract re-applies <span class="math-inline">\(A\)</span> to <span class="math-inline">\(Z\)</span> and rejects a residual above <span class="math-inline">\(10^{-9}\)</span>. A small residual verifies the solve; independent directional derivatives are still needed to verify the RHS and Hessian themselves.</p>
 <h4 id="relaxed-density-and-the-overlap-blocks">Relaxed Density and the Overlap Blocks</h4>
 <p>Eq. 28 first places Z in a <em>raw vo block</em>. The adapter used for symmetric AO operators is</p>
 <p><span class="math-display">\[
-D_{\mathrm{raw}}=\begin{pmatrix}D'_{oo}&0\\Z&D'_{vv}\end{pmatrix},\qquad
-D_s=\begin{pmatrix}D'_{oo}&Z^T/2\\Z/2&D'_{vv}\end{pmatrix},\qquad
+D_{\mathrm{raw}}=\begin{pmatrix}D'_{oo}&amp;0\\Z&amp;D'_{vv}\end{pmatrix},\qquad
+D_s=\begin{pmatrix}D'_{oo}&amp;Z^T/2\\Z/2&amp;D'_{vv}\end{pmatrix},\qquad
 D_{\mathrm{AO}}=CD_sC^T.
 \]</span></p>
 <p>For symmetric <span class="math-inline">\(M\)</span>, <span class="math-inline">\(D_{\mathrm{raw}}:M=D_s:M\)</span>. Putting a full Z in both off-diagonal blocks doubles its operator contraction. Notice also that this relaxed correction density is not the trial density <span class="math-inline">\(\delta P_X\)</span> used in the Hessian: those objects serve different derivatives.</p>
@@ -2763,10 +2772,10 @@ B_{ia}=-G_{ia},\qquad B_{ai}=0.
 <p>The complete raw Eqs. 42–45 blocks are</p>
 <p><span class="math-display">\[
 \begin{aligned}
-W_{ij}&=-\tfrac12[C^TR(D_{\mathrm{AO}})C]_{ij}
+W_{ij}&amp;=-\tfrac12[C^TR(D_{\mathrm{AO}})C]_{ij}
 -\tfrac12D'_{ij}(\epsilon_i+\epsilon_j)+B_{ij},\\
-W_{ab}&=-\tfrac12D'_{ab}(\epsilon_a+\epsilon_b)+B_{ab},\\
-W_{ia}&=B_{ia},\qquad W_{ai}=-\epsilon_iZ_{ai}.
+W_{ab}&amp;=-\tfrac12D'_{ab}(\epsilon_a+\epsilon_b)+B_{ab},\\
+W_{ia}&amp;=B_{ia},\qquad W_{ai}=-\epsilon_iZ_{ai}.
 \end{aligned}
 \]</span></p>
 <p>Only after assembling these differently oriented blocks does Planck form</p>
@@ -2798,11 +2807,11 @@ W_{\mathrm{AO}}=CW_sC^T,\qquad g_S^x=W_{\mathrm{AO}}:S^x.
 <p>For a GGA, put <span class="math-inline">\(p=\nabla\rho_P\)</span>, <span class="math-inline">\(d=\nabla\rho_D\)</span>, and <span class="math-inline">\(s=p\cdot d\)</span>. The chain rule for any change in these density fields is</p>
 <p><span class="math-display">\[
 \begin{aligned}
-\delta\ell={}&\rho_D(f_{\rho\rho}\delta\rho_P
+\delta\ell={}&amp;\rho_D(f_{\rho\rho}\delta\rho_P
 +2f_{\rho\sigma}p\cdot\delta p)
 +2s(f_{\rho\sigma}\delta\rho_P
 +2f_{\sigma\sigma}p\cdot\delta p)\\
-&+f_\rho\delta\rho_D
+&amp;+f_\rho\delta\rho_D
 +2f_\sigma(\delta p\cdot d+p\cdot\delta d).
 \end{aligned}
 \]</span></p>
@@ -2913,11 +2922,11 @@ D'^\sigma\!:\epsilon^\sigma=-cE_c^{MP2}\)</span>, and their sum is <span class="
 \]</span></p>
 <p>and <span class="math-inline">\((AX)^\sigma_{ai}=(\epsilon^\sigma_a-\epsilon^\sigma_i)X^\sigma_{ai}
 +[C^{\sigma T}_v\delta F^\sigma C^\sigma_o]_{ai}\)</span>. Exact exchange never mixes spins, so all <span class="math-inline">\(\alpha\)</span>–<span class="math-inline">\(\beta\)</span> coupling comes from <span class="math-inline">\(J\)</span> and the cross-spin kernel <span class="math-inline">\(f_{xc}^{\alpha\beta}\)</span>. The XC part is the same analytic polarized Hessian-vector product that UKS SOSCF uses (<code>compute_analytic_xc_hessian_vector_product_polarized</code>).</p>
-<p><strong>The Z-vector system is joint and checked rather than assumed.</strong> The unknowns are packed alpha block first, then beta, in one linear system <span class="math-inline">\(A^Tz=-\ell\)</span>. The UKS solver (<code>solve_udh_zvector</code>) builds <span class="math-inline">\(A\)</span> column by column from that action. It then verifies that <span class="math-inline">\(A\)</span> is symmetric to <span class="math-inline">\(10^{-10}\)</span> relative, rejects it if the reciprocal condition number falls below <span class="math-inline">\(10^{-12}\)</span>, solves by column-pivoted QR, and re-evaluates the residual. It does not assume positive definiteness or add a shift, so an ill-conditioned response is reported as an error instead of returning a plausible but wrong <span class="math-inline">\(z\)</span>. At the sizes this path is qualified for, the dense checks are cheap. The driver rejects a Z residual above <span class="math-inline">\(10^{-10}\)</span>, scaled by the RHS size.</p>
+<p><strong>The Z-vector system is joint, and solved by the restricted solver.</strong> The unknowns are packed alpha block first, then beta, in one linear system <span class="math-inline">\(Az=-\ell\)</span>. The UKS solver (<code>solve_udh_zvector</code>) hands that packing, the action above and the alpha|beta orbital-energy gaps to the same matrix-free GMRES the restricted path uses (<code>solve_packed_zvector</code>), so <span class="math-inline">\(A\)</span> is never formed. Writing <span class="math-inline">\(Az\)</span> rather than <span class="math-inline">\(A^Tz\)</span> relies on <span class="math-inline">\(A\)</span> being symmetric; the physical joint Hessian is, and the tests check it on every fixture against a dense <span class="math-inline">\(A\)</span> built from the same action. GMRES assumes neither positive definiteness nor a shift: a singular response fails to converge and is reported as an error, with no dense fallback. The driver rejects a Z residual above <span class="math-inline">\(10^{-10}\)</span>, scaled by the RHS size.</p>
 <p><strong>Relaxed density, W, and the pair density follow the restricted pattern per spin.</strong> The relaxed density puts <span class="math-inline">\(D'^\sigma\)</span> in the <span class="math-inline">\(oo\)</span>/<span class="math-inline">\(vv\)</span> blocks and <span class="math-inline">\(z^\sigma\)</span> in <span class="math-inline">\(vo\)</span> (<code>build_udh_relaxed_difference_density</code>). The energy-weighted overlap density uses each spin&#x27;s own Fock and response (<code>build_udh_overlap_density</code>). The separable pair term becomes <span class="math-inline">\(D\,P-a_x\sum_\sigma D^\sigma_{\mu\kappa}P^\sigma_{\nu\tau}\)</span>, with total <span class="math-inline">\(D\)</span> and <span class="math-inline">\(P\)</span> in the Coulomb part and same-spin products in the exchange part. The nonseparable term back-transforms the three amplitude blocks with weights <span class="math-inline">\(c,2c,c\)</span> (<code>build_udh_two_particle_density</code>). XC-II differentiates <span class="math-inline">\(\sum_g w_g\sum_\sigma v_{xc}^\sigma(P)\rho_{D^\sigma}\)</span>. For a GGA, the variables are <span class="math-inline">\((\rho_\alpha,\rho_\beta,\sigma_{\alpha\alpha},
 \sigma_{\alpha\beta},\sigma_{\beta\beta})\)</span>. The cross invariant <span class="math-inline">\(\sigma_{\alpha\beta}=\nabla\rho_\alpha\cdot\nabla\rho_\beta\)</span> appears once in the functional, but its density-direction partner is <span class="math-inline">\(\nabla\rho_\alpha\cdot\nabla\rho_{D^\beta}+\nabla\rho_\beta\cdot\nabla\rho_{D^\alpha}\)</span>, and differentiating that produces four chain-rule terms rather than two. That term is the easiest one in the unrestricted XC-II to drop.</p>
-<p><strong>It is a dense implementation.</strong> The memory work of the previous subsection has not been carried over. The UKS path transforms the full <span class="math-inline">\(\alpha\alpha\)</span>, <span class="math-inline">\(\alpha\beta\)</span>, and <span class="math-inline">\(\beta\beta\)</span> MO ERI tensors, builds the Jacobian densely, and stores the AO pair density at <span class="math-inline">\(N_{AO}^4\)</span>. That is acceptable for the small molecules it is qualified on, and it is the reason its scope is narrow.</p>
-<p><strong>Why one grid is pinned.</strong> An analytic gradient includes the motion of the quadrature itself (the Becke and owner-point channels of XC-II). It can only be as good as the grid&#x27;s behaviour under displacement and rotation. On Planck&#x27;s default pruned grid, the UKS DH gradient was not <em>covariant</em>: rotating the molecule changed the computed forces beyond a rigid rotation. The worst errors were <span class="math-inline">\(2.2\times10^{-5}\)</span> Ha/Bohr on C1 H2O2<span class="math-inline">\(^+\)</span> and <span class="math-inline">\(6.9\times10^{-6}\)</span> on HO2, against a <span class="math-inline">\(2\times10^{-6}\)</span> covariance limit. The qualified <code>g4-3-v4</code> pruning policy, at 135 radial shells, brings the same cases to <span class="math-inline">\(1.1\times10^{-7}\)</span> and <span class="math-inline">\(9.3\times10^{-8}\)</span>. The policy was selected on fixed-density XC energy, potential, and kernel contractions, and then passed a blind suite frozen before its first run (<code>docs/DFT_GRID_CONVERGENCE_SCOPE.md</code>). The driver therefore refuses a UKS DH gradient on any other grid (<code>validate_qualified_uks_dh_grid</code>): a displaced or user-overridden grid would silently leave the qualified regime. The lesson generalizes. Once a method differentiates its own quadrature, grid choice stops being a speed/accuracy dial and becomes part of the method&#x27;s correctness contract.</p>
+<p><strong>It shares the restricted engines, except for the amplitudes.</strong> The memory work of the previous subsection carries over spin by spin. The AO pair density is streamed through the same bounded blocks, the Z-vector goes through the same matrix-free GMRES, and the MO integrals are the same five Eq. 40 sectors, built once for each spin pair (<span class="math-inline">\(\alpha\alpha\)</span>, <span class="math-inline">\(\alpha\beta\)</span>, <span class="math-inline">\(\beta\beta\)</span>). What remains is that the UMP2 amplitudes are still resident arrays, and the conventional AO ERI tensor is still formed. The narrow scope is about those two and the pinned grid below (<code>docs/UDH_GRADIENT_ONE_ARCHITECTURE.md</code>).</p>
+<p><strong>Why one grid is pinned.</strong> An analytic gradient includes the motion of the quadrature itself (the Becke and owner-point channels of XC-II). It can only be as good as the grid&#x27;s behaviour under displacement and rotation. On Planck&#x27;s default pruned grid, the UKS DH gradient was not <em>covariant</em>: rotating the molecule changed the computed forces beyond a rigid rotation. The worst errors were <span class="math-inline">\(2.2\times10^{-5}\)</span> Ha/Bohr on C1 H2O2<span class="math-inline">\(^+\)</span> and <span class="math-inline">\(6.9\times10^{-6}\)</span> on HO2, against a <span class="math-inline">\(2\times10^{-6}\)</span> covariance limit. The qualified <code>g4-3-v4</code> pruning policy, at 135 radial shells, brings the same cases to <span class="math-inline">\(1.1\times10^{-7}\)</span> and <span class="math-inline">\(9.3\times10^{-8}\)</span>. The policy was selected on fixed-density XC energy, potential, and kernel contractions, and then passed a blind suite frozen before its first run (<code>docs/DFT_GRID_CONVERGENCE.md</code>). The driver therefore refuses a UKS DH gradient on any other grid (<code>validate_qualified_uks_dh_grid</code>): a displaced or user-overridden grid would silently leave the qualified regime. The lesson generalizes. Once a method differentiates its own quadrature, grid choice stops being a speed/accuracy dial and becomes part of the method&#x27;s correctness contract.</p>
 <p><strong>Validation and scope.</strong> On V4, fourth-order total-energy finite differences agree on the three difficult open-shell B2PLYP/STO-3G cases (C1 H2O2<span class="math-inline">\(^+\)</span>, HO2, an asymmetric water cation) to at worst <span class="math-inline">\(2.7\times10^{-9}\)</span> Ha/Bohr, against the same <span class="math-inline">\(5\times10^{-8}\)</span> threshold the restricted path meets. Translation errors are below <span class="math-inline">\(6\times10^{-13}\)</span>. The acceptance suite also checks coefficient scaling, rotation, and the closed-shell reduction: a singlet run through the UKS path must reproduce the restricted gradient. Production accepts <code>calculation gradient</code> only, with conventional all-active UMP2 with stored T2 (no RI, frozen core, or PT2 level shift), no solvent, no range separation, and the pinned grid. UKS DH geometry optimization and frequencies are rejected. See <a href="DOUBLE_HYBRID_GRADIENTS.md">the double-hybrid gradient guide</a>.</p>
 <hr>
 <h2 id="16-coupled-cluster-in-planck">16. Coupled Cluster in Planck</h2>
@@ -3455,7 +3464,7 @@ exp(-T) H exp(T) |Phi0&gt;
 \]</span></p>
 <p>Students can inspect the Planck output to confirm that the unrestricted triples path lowers the correlation energy relative to UCCSD, and that both alpha and beta spin channels contribute to the triples amplitude tensor.</p>
 <h3 id="the-tensor-only-benchmark-bh3-sto-3g">The Tensor-Only Benchmark: BH3/STO-3G</h3>
-<p><code>BH3/STO-3G</code> is qualitatively different from the two cases above. Boron trihydride in STO-3G has 8 electrons and 8 spatial orbitals (16 spin orbitals: B contributes 1s, 2s and three 2p functions, each H one 1s), so <span class="math-inline">\(o = 4\)</span>, <span class="math-inline">\(v = 4\)</span>. That puts it beyond the determinant-space prototype limit (12 spin orbitals, 1200 determinants) and beyond the backstop window (<span class="math-inline">\(C(16,8) = 12870 > 10000\)</span>), even though it sits exactly at the backstop&#x27;s 16-spin-orbital cap. It can only be solved by the pure restricted tensor <code>RCCSDT</code> path, with no determinant cross-check available.</p>
+<p><code>BH3/STO-3G</code> is qualitatively different from the two cases above. Boron trihydride in STO-3G has 8 electrons and 8 spatial orbitals (16 spin orbitals: B contributes 1s, 2s and three 2p functions, each H one 1s), so <span class="math-inline">\(o = 4\)</span>, <span class="math-inline">\(v = 4\)</span>. That puts it beyond the determinant-space prototype limit (12 spin orbitals, 1200 determinants) and beyond the backstop window (<span class="math-inline">\(C(16,8) = 12870 &gt; 10000\)</span>), even though it sits exactly at the backstop&#x27;s 16-spin-orbital cap. It can only be solved by the pure restricted tensor <code>RCCSDT</code> path, with no determinant cross-check available.</p>
 <p>The input lives at <code>tests/inputs/regression/post_hf/bh3_rccsdt_sto3g.hfinp</code> but is <strong>not</strong> a registered regression case; <code>ch4_rccsdt_sto3g</code> is the case that gates the hand-written tensor path. BH3 remains the best <em>teaching</em> input because it runs in about 0.1 s.</p>
 <p>This makes it the smallest input that exercises the tensor machinery end-to-end without a fallback. The molecule is planar with <span class="math-inline">\(D_{3h}\)</span> symmetry, which constrains the molecular orbitals into irreducible representations of that point group. In STO-3G the occupied space consists of three bonding orbitals (one B–H bond per hydrogen arm) plus the boron 1s core, and the virtual space is dominated by the empty boron <span class="math-inline">\(2p_z\)</span> perpendicular to the molecular plane.</p>
 <p>BH3 is also significant from a correlation standpoint. The boron atom has an incomplete valence shell, and in the planar geometry all three B–H bonds involve the same central atom at roughly the same bond length. The T2 amplitudes are therefore not dominated by a single large pair but spread more evenly across the occupied-virtual pairs, making this a moderately multi-configurational system where triples corrections are non-negligible.</p>
@@ -3581,7 +3590,7 @@ E_{\text{corr}}^{\text{FCI}} = E_{\text{FCI}} - E_{\text{RHF}} .
 <p><span class="math-display">\[
 |\Psi(\tau)\rangle = \sum_i a_i e^{-\tau(E_i - S)} |\phi_i\rangle .
 \]</span></p>
-<p>Because <span class="math-inline">\(E_0 < E_1 \le E_2 \le \dots\)</span>, every excited component decays <em>faster</em> than the ground state. Wait long enough and only <span class="math-inline">\(|\phi_0\rangle\)</span> survives — imaginary-time propagation is a filter that projects onto the ground state. The shift <span class="math-inline">\(S\)</span> is a free parameter fixing the overall normalization; when <span class="math-inline">\(S = E_0\)</span> the surviving component neither grows nor decays.</p>
+<p>Because <span class="math-inline">\(E_0 &lt; E_1 \le E_2 \le \dots\)</span>, every excited component decays <em>faster</em> than the ground state. Wait long enough and only <span class="math-inline">\(|\phi_0\rangle\)</span> survives — imaginary-time propagation is a filter that projects onto the ground state. The shift <span class="math-inline">\(S\)</span> is a free parameter fixing the overall normalization; when <span class="math-inline">\(S = E_0\)</span> the surviving component neither grows nor decays.</p>
 <p>In practice we take small finite steps, first order in <span class="math-inline">\(\mathrm{d}\tau\)</span>:</p>
 <p><span class="math-display">\[
 c_I(\tau + \mathrm{d}\tau) = c_I(\tau)
@@ -3774,7 +3783,7 @@ K = T + T^T,\quad T_{\mu\nu} = \sum_{\lambda i} Y_{\lambda i}\,H[\mu,\lambda,\nu
 <li><strong>its second vector is a fixed generic seed, not a residual.</strong> A Krylov space grown from <span class="math-inline">\(\mathbf g\)</span> can never contain a negative-curvature mode that <span class="math-inline">\(\mathbf g\)</span> is orthogonal to, which is exactly the mode needed to leave a saddle (see below).</li>
 </ul>
 <p>With the low-rank Fock builds above, water/cc-pVTZ C1 went from 51.8 s (dense) to 1.9 s at the same energy (PySCF: 2.3 s). Each energy evaluation reads the full tensor once (to build <span class="math-inline">\(H\)</span>), and the accepted evaluation&#x27;s <span class="math-inline">\(H\)</span> is reused by the next macroiteration&#x27;s Hessian.</p>
-<p><strong>Step control.</strong> The step is scaled to a trust radius <code>trust_rot</code> (element-wise, and <span class="math-inline">\(4\times\)</span> that in the Frobenius norm). The radius follows the ratio of the actual energy change to the model&#x27;s prediction <span class="math-inline">\(\mathbf g\cdot\mathbf s + \tfrac12\mathbf s\cdot\mathbf H\mathbf s\)</span>: it doubles (up to <span class="math-inline">\(5\times\)</span> <code>mcscf_max_rot</code>) when the ratio is <span class="math-inline">\(\ge 0.75\)</span> and the step hit the radius, shrinks <span class="math-inline">\(4\times\)</span> when it is <span class="math-inline">\(< 0.25\)</span>, and halves when no step is accepted. The level shift stays at <span class="math-inline">\(10^{-3}\)</span> unless steps are rejected. Because the model is exact, the ratio sits at 0.9–1.3 and the radius rarely binds; a fixed 0.2 cap plus a decaying 0.2 level shift (both tuned for an approximate Hessian) had halved the convergence rate.</p>
+<p><strong>Step control.</strong> The step is scaled to a trust radius <code>trust_rot</code> (element-wise, and <span class="math-inline">\(4\times\)</span> that in the Frobenius norm). The radius follows the ratio of the actual energy change to the model&#x27;s prediction <span class="math-inline">\(\mathbf g\cdot\mathbf s + \tfrac12\mathbf s\cdot\mathbf H\mathbf s\)</span>: it doubles (up to <span class="math-inline">\(5\times\)</span> <code>mcscf_max_rot</code>) when the ratio is <span class="math-inline">\(\ge 0.75\)</span> and the step hit the radius, shrinks <span class="math-inline">\(4\times\)</span> when it is <span class="math-inline">\(&lt; 0.25\)</span>, and halves when no step is accepted. The level shift stays at <span class="math-inline">\(10^{-3}\)</span> unless steps are rejected. Because the model is exact, the ratio sits at 0.9–1.3 and the radius rarely binds; a fixed 0.2 cap plus a decaying 0.2 level shift (both tuned for an approximate Hessian) had halved the convergence rate.</p>
 <h3 id="macro-iteration-structure">Macro-Iteration Structure</h3>
 <p>The full CASSCF macro-iteration (one pass of <code>run_casscf</code>):</p>
 <ol>
@@ -3786,7 +3795,7 @@ K = T + T^T,\quad T_{\mu\nu} = \sum_{\lambda i} Y_{\lambda i}\,H[\mu,\lambda,\nu
 <li>Solve for the orbital step on the CI-relaxed Hessian (matrix-free subspace solve, above). Each Hessian product carries an <code>OrbitalHessianContext</code> (pointers to <span class="math-inline">\(\mathbf C\)</span>, overlap, core Hamiltonian, AO ERIs and the frozen RDMs) and solves each root&#x27;s CI response to the trial rotation.</li>
 <li>Evaluate the coupled Newton step at full scale and take it if it lowers the energy (and does not hurt the gradient, or lowers the merit <span class="math-inline">\(m = E_{\text{CAS}} + 0.1\,\|\mathbf g\|^2\)</span>). Only if it does not, score the other candidates (an augmented-Hessian step, a gradient step, and under stagnation a diagonal step and single-pair probes) at seven scales each and keep the lowest merit.</li>
 <li>Apply the accepted <span class="math-inline">\(\boldsymbol\kappa\)</span> via the Cayley transform followed by Löwdin re-orthogonalization: <span class="math-inline">\(\mathbf C \leftarrow \mathbf C\,\mathbf U\)</span></li>
-<li>Check convergence: <span class="math-inline">\(\|\mathbf g\| < \epsilon_{\text{grad}}\)</span> and <span class="math-inline">\(|\Delta E| < \epsilon_E\)</span></li>
+<li>Check convergence: <span class="math-inline">\(\|\mathbf g\| &lt; \epsilon_{\text{grad}}\)</span> and <span class="math-inline">\(|\Delta E| &lt; \epsilon_E\)</span></li>
 </ol>
 <p>Every threaded loop in this path writes disjoint outputs (rows of <span class="math-inline">\(H\)</span>, <span class="math-inline">\(J\)</span>, <span class="math-inline">\(T\)</span>, or slabs of a transform) and sums each element in a fixed order, and the 1- and 2-RDM builds bin their partial sums by task index and add the bins in a fixed order. So a CASSCF run is bitwise identical at any thread count; a regression pair (<code>water_casscf44_c1_ccpvdz_threads1/4</code>) holds it there. Merging per-thread partials under <code>omp critical</code> instead had made C1 energies wander by <span class="math-inline">\(10^{-9}\)</span> between identical runs.</p>
 <p>Why each of these choices was needed, with the measurements and the approaches that did not work, is in <code>docs/CASSCF_PERFORMANCE.md</code>.</p>
@@ -3946,7 +3955,7 @@ d\mathbf q \;=\; \mathbf B \, d\mathbf x.
 \]</span></p>
 <p>with <span class="math-inline">\(\hat{\mathbf e}_{AB} = (\mathbf r_A - \mathbf r_B)/|\mathbf r_A -
 \mathbf r_B|\)</span>. For a bend <span class="math-inline">\(\theta_{ABC}\)</span> and a torsion <span class="math-inline">\(\phi_{ABCD}\)</span> the expressions are the standard Pulay/Bakken–Helgaker s-vectors.</p>
-<p><strong>Transforming the gradient.</strong> By the chain rule <span class="math-inline">\(\mathbf g^{\text{Cart}} = \mathbf B^T \mathbf g^{\text{int}}\)</span>, so the gradient transforms <em>against</em> the Jacobian. When <span class="math-inline">\(\mathbf B\)</span> is square and invertible we could read off <span class="math-inline">\(\mathbf g^{\text{int}}\)</span> directly. In the redundant case (<span class="math-inline">\(n_q > 3N - 6\)</span>) <span class="math-inline">\(\mathbf B\)</span> has more rows than columns and is rank-deficient; the correct expression goes through the <strong>Wilson G-matrix</strong></p>
+<p><strong>Transforming the gradient.</strong> By the chain rule <span class="math-inline">\(\mathbf g^{\text{Cart}} = \mathbf B^T \mathbf g^{\text{int}}\)</span>, so the gradient transforms <em>against</em> the Jacobian. When <span class="math-inline">\(\mathbf B\)</span> is square and invertible we could read off <span class="math-inline">\(\mathbf g^{\text{int}}\)</span> directly. In the redundant case (<span class="math-inline">\(n_q &gt; 3N - 6\)</span>) <span class="math-inline">\(\mathbf B\)</span> has more rows than columns and is rank-deficient; the correct expression goes through the <strong>Wilson G-matrix</strong></p>
 <p><span class="math-display">\[
 \mathbf G \;=\; \mathbf B \mathbf B^T \in \mathbb{R}^{n_q \times n_q},
 \]</span></p>
@@ -4001,7 +4010,7 @@ R_{ij} = |\mathbf r_i - \mathbf r_j|,
 <p>Planck uses <strong>redundant primitive internal coordinates</strong> with a Moore–Penrose pseudoinverse, not <em>delocalized</em> internal coordinates. There is no SVD or eigendecomposition of <span class="math-inline">\(\mathbf G = \mathbf B\mathbf B^T\)</span> into a non-redundant basis of <span class="math-inline">\(3N - 6\)</span> eigenvector-combined coordinates (the Baker / Bakken–Helgaker &quot;delocalized internals&quot; construction). Redundancy is handled directly at the gradient-transformation step.</p>
 <p>The coordinate system is built once at the start of <code>run_geomopt_ic</code> (<code>src/opt/geomopt.cpp:519</code>) by <code>IntCoordSystem::build</code> (<code>src/opt/intcoords.cpp:267-345</code>), which:</p>
 <ol>
-<li><strong>Detects bonds</strong> by a covalent-radius criterion. A pair <span class="math-inline">\((i, j)\)</span> is bonded if <span class="math-inline">\(|\mathbf r_i - \mathbf r_j| < 1.3\,(r_{\text{cov}}(Z_i) +
+<li><strong>Detects bonds</strong> by a covalent-radius criterion. A pair <span class="math-inline">\((i, j)\)</span> is bonded if <span class="math-inline">\(|\mathbf r_i - \mathbf r_j| &lt; 1.3\,(r_{\text{cov}}(Z_i) +
    r_{\text{cov}}(Z_j))\)</span>. Covalent radii come from Alvarez (2008), hard-coded for <span class="math-inline">\(Z \in [1, 36]\)</span> with a 1.5 Å fallback above Kr (<code>covalent_radius_ang</code>, <code>src/opt/intcoords.cpp:13-58</code>).</li>
 <li><strong>Adds one stretch per bond</strong>.</li>
 <li><strong>Adds every valence bend</strong> A–B–C with B central and both A–B and B–C bonded, skipping near-linear angles outside <span class="math-inline">\([5°, 175°]\)</span>.</li>
@@ -4023,7 +4032,7 @@ R_{ij} = |\mathbf r_i - \mathbf r_j|,
 <tr><td>Full B-matrix</td><td><code>IntCoordSystem::bmatrix</code></td></tr>
 <tr><td><span class="math-inline">\(\mathbf g^{\text{int}} = \mathbf G^{+} \mathbf B \mathbf g^{\text{Cart}}\)</span></td><td><code>IntCoordSystem::cart_to_ic_grad</code> — <code>src/opt/intcoords.cpp:419-425</code></td></tr>
 <tr><td>Moore–Penrose pseudoinverse</td><td><code>pinv_sym</code> — Jacobi SVD with relative tolerance <span class="math-inline">\(10^{-8}\)</span> times the largest singular value</td></tr>
-<tr><td>Schlegel back-transform (first-order step + microiterations)</td><td><code>IntCoordSystem::ic_to_cart_step</code> — <code>src/opt/intcoords.cpp:434-480</code>; up to 25 microiterations, early exit at residual norm <span class="math-inline">\(< 10^{-10}\)</span></td></tr>
+<tr><td>Schlegel back-transform (first-order step + microiterations)</td><td><code>IntCoordSystem::ic_to_cart_step</code> — <code>src/opt/intcoords.cpp:434-480</code>; up to 25 microiterations, early exit at residual norm <span class="math-inline">\(&lt; 10^{-10}\)</span></td></tr>
 </tbody></table></div>
 <h3 id="planck-specific-note-permutation-invariance-of-the-ic-representation">Planck-Specific Note: Permutation Invariance of the IC Representation</h3>
 <p>*<em>As a </em>set<em> of primitives, yes. As an </em>ordered vector<em> <span class="math-inline">\(\mathbf q\)</span>, no.</em>*</p>
@@ -4031,7 +4040,7 @@ R_{ij} = |\mathbf r_i - \mathbf r_j|,
 <p>The <em>ordering</em> of <code>IntCoordSystem::coords</code> is <strong>not</strong>, and Planck does not canonicalize it. Two failures of strict invariance:</p>
 <ol>
 <li><strong>Outer loop order.</strong> Bonds are appended in the order produced by <code>for (i; ...; ++i) for (j = i+1; ...; ++j)</code> over the input atom indices (<code>src/opt/intcoords.cpp:283-295</code>). Bends are appended in the order produced by iterating <code>adj[B]</code> (<code>src/opt/intcoords.cpp:305-319</code>), and <code>adj[B]</code> itself is built by appending neighbors as the outer i,j scan discovers them. Torsions follow the same pattern over <code>adj[B]</code> and <code>adj[C]</code>. Permuting the input atoms therefore permutes the rows of <span class="math-inline">\(\mathbf q\)</span> and the rows of <span class="math-inline">\(\mathbf B\)</span> — even though the underlying set is the same.</li>
-<li><strong>Per-primitive atom ordering.</strong> A stretch is stored as <code>{i, j}</code> with <span class="math-inline">\(i < j\)</span> (a side effect of the upper-triangular bond scan), so bond orientation <em>is</em> canonical. A bend is stored as <code>{A, B, C}</code> with A and C in the order they appear in <code>adj[B]</code>; a torsion is stored as <code>{A, B, C, D}</code> with A from <code>adj[B]</code> and D from <code>adj[C]</code> in discovery order. The IC value is invariant under the legal reversals, so the <em>gradient</em> row <span class="math-inline">\(\mathbf g^{\text{int}}_k\)</span> is invariant; only the row position changes.</li>
+<li><strong>Per-primitive atom ordering.</strong> A stretch is stored as <code>{i, j}</code> with <span class="math-inline">\(i &lt; j\)</span> (a side effect of the upper-triangular bond scan), so bond orientation <em>is</em> canonical. A bend is stored as <code>{A, B, C}</code> with A and C in the order they appear in <code>adj[B]</code>; a torsion is stored as <code>{A, B, C, D}</code> with A from <code>adj[B]</code> and D from <code>adj[C]</code> in discovery order. The IC value is invariant under the legal reversals, so the <em>gradient</em> row <span class="math-inline">\(\mathbf g^{\text{int}}_k\)</span> is invariant; only the row position changes.</li>
 </ol>
 <p>The downstream consequences are mild but real:</p>
 <ul>
@@ -4042,7 +4051,7 @@ R_{ij} = |\mathbf r_i - \mathbf r_j|,
 <p>If bit-reproducible optimization trajectories across re-orderings are required, the IC list would need a canonicalization pass — for example, sorting bonds, bends, and torsions by a tuple of (type, sorted atom-index tuple). Planck does not currently do this; the <code>add_coord</code> deduplicator exists only to merge user-supplied constraint coordinates with the automatically built set, not to canonicalize the build output.</p>
 <h3 id="internal-coordinate-optimization-bfgs">Internal Coordinate Optimization (BFGS)</h3>
 <p>A BFGS Hessian update is performed in the redundant internal-coordinate space described above. The back-transformation from internal to Cartesian steps uses the Schlegel microiterations of <code>ic_to_cart_step</code>. Geometry constraints (fixed bonds, angles, dihedrals, frozen atoms) are enforced by projecting out the constrained internal-coordinate contributions from the gradient before the BFGS step.</p>
-<p>Convergence criterion: maximum absolute gradient element <span class="math-inline">\(\max_i |\partial E / \partial X_i| < \epsilon_{grad}\)</span> (default <span class="math-inline">\(3 \times 10^{-4}\)</span> Ha/Bohr).</p>
+<p>Convergence criterion: maximum absolute gradient element <span class="math-inline">\(\max_i |\partial E / \partial X_i| &lt; \epsilon_{grad}\)</span> (default <span class="math-inline">\(3 \times 10^{-4}\)</span> Ha/Bohr).</p>
 <hr>
 <h2 id="21-vibrational-analysis">21. Vibrational Analysis</h2>
 <h3 id="semi-numerical-hessian">Semi-Numerical Hessian</h3>
@@ -4231,7 +4240,7 @@ V^{xc}_{\mu\nu} = \sum_g w_g\, v_{\rho,g}\, \phi_\mu(\mathbf r_g)\, \phi_\nu(\ma
 <p>Grimme&#x27;s D3 adds the missing term after the fact, as an explicit pairwise sum over atoms. Nearly every routine DFT geometry, conformer search or interaction energy is run with it (or with its successor D4).</p>
 <p><strong>The two-body energy.</strong> With Becke-Johnson (BJ) damping,</p>
 <p><span class="math-display">\[
-E_\text{disp}^{(2)} = -\sum_{A<B} \sum_{n=6,8} s_n
+E_\text{disp}^{(2)} = -\sum_{A&lt;B} \sum_{n=6,8} s_n
 \frac{C_n^{AB}}{r_{AB}^n + \left(a_1 R_0^{AB} + a_2\right)^n},
 \qquad R_0^{AB} = \sqrt{C_8^{AB}/C_6^{AB}} .
 \]</span></p>
@@ -4289,8 +4298,8 @@ E^{ABC} = C_9^{ABC}\,
 <p>TD-DFT in Planck is formulated in the usual Kohn-Sham orbital-rotation basis. Starting from a converged KS determinant, we consider first-order amplitudes that mix occupied orbitals <span class="math-inline">\(i,j,\dots\)</span> with virtual orbitals <span class="math-inline">\(a,b,\dots\)</span>.  In that basis, the linear-response problem is written in terms of forward and backward amplitudes <span class="math-inline">\(X\)</span> and <span class="math-inline">\(Y\)</span>:</p>
 <p><span class="math-display">\[
 \begin{pmatrix}
-A & B \\
-B & A
+A &amp; B \\
+B &amp; A
 \end{pmatrix}
 \begin{pmatrix}
 X \\
@@ -4299,8 +4308,8 @@ Y
 =
 \omega
 \begin{pmatrix}
-1 & 0 \\
-0 & -1
+1 &amp; 0 \\
+0 &amp; -1
 \end{pmatrix}
 \begin{pmatrix}
 X \\
@@ -4341,7 +4350,7 @@ B^{S}_{ia,jb}
 + L^{S,xc}_{ia,jb}
 \]</span></p>
 <p>where <span class="math-inline">\(c_x\)</span> is the global-hybrid exact-exchange fraction.  Here <span class="math-inline">\(K^{S,xc}\)</span> and <span class="math-inline">\(L^{S,xc}\)</span> are the singlet-projected semilocal XC-kernel contributions.</p>
-<p>For a range-separated hybrid, each exchange integral becomes a sum over kernels, <span class="math-inline">\(c_x(pq|rs) \to c_{fr}(pq|rs) + c_{sr}(pq|rs)_{\mathrm{erfc},\omega}\)</span>, using the same full-range and short-range coefficients the SCF uses. No extra XC-kernel term is added, because libxc&#x27;s <span class="math-inline">\(f_{xc}\)</span> for the functional already contains the screened DFT exchange. Note the index pattern in <span class="math-inline">\(B\)</span>: exchange is <span class="math-inline">\((ib|ja)\)</span>, not <span class="math-inline">\((ia|jb)\)</span>. Swapping them leaves TDA untouched (TDA has no <span class="math-inline">\(B\)</span>) but shifts full-Casida hybrid roots by meV. That is exactly the defect Planck carried until hybrid TDDFT was gated against PySCF (B3LYP root 3 was off by 7.5 meV), so a single helper (<code>src/dft/tddft_exchange.h</code>) now owns the index for RKS and UKS alike. Functionals whose short-range kernel is Yukawa or Gaussian rather than erf are rejected for TDDFT. See <code>docs/RS_TDDFT.md</code>.</p>
+<p>For a range-separated hybrid, each exchange integral becomes a sum over kernels, <span class="math-inline">\(c_x(pq|rs) \to c_{fr}(pq|rs) + c_{sr}(pq|rs)_{\mathrm{erfc},\omega}\)</span>, using the same full-range and short-range coefficients the SCF uses. No extra XC-kernel term is added, because libxc&#x27;s <span class="math-inline">\(f_{xc}\)</span> for the functional already contains the screened DFT exchange. Note the index pattern in <span class="math-inline">\(B\)</span>: exchange is <span class="math-inline">\((ib|ja)\)</span>, not <span class="math-inline">\((ia|jb)\)</span>. Swapping them leaves TDA untouched (TDA has no <span class="math-inline">\(B\)</span>) but shifts full-Casida hybrid roots by meV. That is exactly the defect Planck carried until hybrid TDDFT was gated against PySCF (B3LYP root 3 was off by 7.5 meV), so a single helper (<code>src/dft/tddft_exchange.h</code>) now owns the index for RKS and UKS alike. Functionals whose short-range kernel is Yukawa or Gaussian rather than erf are rejected in every workflow. See <code>docs/RS_TDDFT.md</code>.</p>
 <p>For <strong>triplets</strong>, the Coulomb contribution drops out after spin adaptation, so only exchange and spin-dependent XC-kernel terms remain:</p>
 <p><span class="math-display">\[
 A^{T}_{ia,jb}
@@ -4358,13 +4367,13 @@ B^{T}_{ia,jb}
 <p>For <strong>UKS</strong>, Planck does not attempt a singlet/triplet spin adaptation. Instead, it keeps separate alpha and beta excitation spaces and builds the full spin-conserving block problem</p>
 <p><span class="math-display">\[
 \begin{pmatrix}
-A^{\alpha\alpha} & A^{\alpha\beta} \\
-A^{\beta\alpha}  & A^{\beta\beta}
+A^{\alpha\alpha} &amp; A^{\alpha\beta} \\
+A^{\beta\alpha}  &amp; A^{\beta\beta}
 \end{pmatrix},
 \qquad
 \begin{pmatrix}
-B^{\alpha\alpha} & B^{\alpha\beta} \\
-B^{\beta\alpha}  & B^{\beta\beta}
+B^{\alpha\alpha} &amp; B^{\alpha\beta} \\
+B^{\beta\alpha}  &amp; B^{\beta\beta}
 \end{pmatrix}
 \]</span></p>
 <p>The same-spin blocks contain Coulomb, hybrid exchange, and XC-kernel terms. The opposite-spin blocks contain Coulomb and XC-kernel coupling, but no exact exchange term because there is no alpha-beta Fock exchange in a standard spin-separated KS reference.</p>
@@ -4463,27 +4472,31 @@ I_{\sigma}(E)
 <p>The report printed by <code>print_linear_response_report()</code> includes the root index, excitation energy in Hartree and eV, oscillator strength, Cartesian transition dipole components, the dipole norm in Debye, and the three largest configuration weights.  The UV-Vis helper <code>print_uvvis_spectrum_report()</code> then writes the broadened spectrum file and prints the strongest broadened peaks in energy and wavelength units.</p>
 <hr>
 <h2 id="23-polarizable-continuum-solvation-c-pcm">23. Polarizable Continuum Solvation (C-PCM)</h2>
-<p>Planck implements a conductor-like polarizable continuum model (C-PCM) for single-point HF (RHF/UHF) and KS-DFT (RKS/UKS) calculations. The solvent is treated as a structureless dielectric medium of relative permittivity <span class="math-inline">\(\varepsilon\)</span> that surrounds a molecule-shaped cavity. The solute polarizes the dielectric; the polarized dielectric back-polarizes the solute via a <em>reaction field</em>, which is added self-consistently to the Fock or Kohn-Sham matrix during the SCF iterations.</p>
+<p>Planck implements a conductor-like polarizable continuum model (C-PCM) for HF (RHF/UHF) and KS-DFT (RKS/UKS): energies, analytic gradients, geometry optimization and frequencies, in the Cartesian and spherical bases. The solvent is treated as a structureless dielectric medium of relative permittivity <span class="math-inline">\(\varepsilon\)</span> that surrounds a molecule-shaped cavity. The solute polarizes the dielectric; the polarized dielectric back-polarizes the solute via a <em>reaction field</em>, which is added self-consistently to the Fock or Kohn-Sham matrix during the SCF iterations.</p>
 <p>The electrostatic model and self-consistent coupling described below are general PCM ideas. The implementation-file list, input syntax, and current limitations remain Planck-specific.</p>
 <p>Implementation files:</p>
 <ul>
-<li><code>src/solvation/pcm.{h,cpp}</code> — cavity construction, surface-charge solver, reaction-field assembly</li>
+<li><code>src/solvation/pcm.{h,cpp}</code> — cavity construction, surface-charge solver, reaction-field assembly, and the cavity terms of the gradient</li>
+<li><code>src/integrals/os.cpp</code> — point-charge integrals and their nuclear gradient</li>
 <li><code>src/scf/scf.cpp</code> — RHF/UHF reaction-field coupling inside the SCF loop</li>
 <li><code>src/dft/driver.cpp</code> — RKS/UKS reaction-field coupling</li>
+<li><code>src/gradient/gradient.cpp</code> — <code>pcm_gradient</code>, the PCM term of every SCF/KS gradient</li>
+<li><code>src/opt/geomopt.cpp</code>, <code>src/freq/hessian.cpp</code> — the cavity rebuilt at each geometry</li>
 <li><code>src/io/io.cpp</code> — <code>%begin_pcm</code> block parser</li>
 </ul>
 <h3 id="the-apparent-surface-charge-picture">The Apparent-Surface-Charge Picture</h3>
-<p>In an apparent-surface-charge (ASC) formulation, the polarization of the dielectric is represented by a layer of charges <span class="math-inline">\(q_i\)</span> that lives on the boundary <span class="math-inline">\(\Gamma\)</span> of the molecular cavity. Each surface element (tessera) <span class="math-inline">\(i\)</span> has position <span class="math-inline">\(\mathbf{s}_i\)</span> and area <span class="math-inline">\(a_i\)</span>. The reaction potential felt by the solute is, to a first approximation, the Coulomb potential of these surface charges:</p>
+<p>In an apparent-surface-charge (ASC) formulation, the polarization of the dielectric is represented by a layer of charges <span class="math-inline">\(q_i\)</span> that lives on the boundary <span class="math-inline">\(\Gamma\)</span> of the molecular cavity. Each surface element (tessera) <span class="math-inline">\(i\)</span> has position <span class="math-inline">\(\mathbf{s}_i\)</span> and area <span class="math-inline">\(a_i\)</span>. The reaction potential felt by the solute is the Coulomb potential of these surface charges. Planck smears each one into a normalized Gaussian of width <span class="math-inline">\(\xi_i\)</span> (see the cavity section below), so</p>
 <p><span class="math-display">\[
-\phi^{\text{rxn}}(\mathbf{r}) = \sum_i \frac{q_i}{|\mathbf{r} - \mathbf{s}_i|}.
+\phi^{\text{rxn}}(\mathbf{r}) = \sum_i q_i\,\frac{\operatorname{erf}(\xi_i |\mathbf{r} - \mathbf{s}_i|)}{|\mathbf{r} - \mathbf{s}_i|},
 \]</span></p>
+<p>which is <span class="math-inline">\(\sum_i q_i / |\mathbf{r} - \mathbf{s}_i|\)</span> a few widths away from the surface.</p>
 <p>The surface charges respond to the <em>total</em> electrostatic potential <span class="math-inline">\(\phi^{\text{tot}}(\mathbf{s}_i)\)</span> produced by the solute at each tessera — nuclei plus electrons — through a linear surface integral equation. In C-PCM, that integral equation reduces to a single dense linear system</p>
 <p><span class="math-display">\[
 \mathbf{D}\,\mathbf{q} = -f(\varepsilon)\,\boldsymbol{\phi}^{\text{tot}},
 \qquad
-f(\varepsilon) = \frac{\varepsilon - 1}{\varepsilon + 1/2},
+f(\varepsilon) = \frac{\varepsilon - 1}{\varepsilon},
 \]</span></p>
-<p>where <span class="math-inline">\(\mathbf{D}\)</span> is the <em>surface influence matrix</em> (Coulomb interaction between tesserae) and <span class="math-inline">\(f(\varepsilon)\)</span> is the C-PCM dielectric scaling factor. The form <span class="math-inline">\((\varepsilon - 1)/(\varepsilon + 1/2)\)</span> is Klamt and Schüürmann&#x27;s COSMO/C-PCM choice — it interpolates smoothly between vacuum (<span class="math-inline">\(\varepsilon \to 1\)</span>, <span class="math-inline">\(f \to 0\)</span>, no polarization) and a perfect conductor (<span class="math-inline">\(\varepsilon \to \infty\)</span>, <span class="math-inline">\(f \to 1\)</span>).</p>
+<p>where <span class="math-inline">\(\mathbf{D}\)</span> is the <em>surface influence matrix</em> (Coulomb interaction between tesserae) and <span class="math-inline">\(f(\varepsilon)\)</span> is the C-PCM dielectric scaling factor of Barone and Cossi. It interpolates between vacuum (<span class="math-inline">\(\varepsilon \to 1\)</span>, <span class="math-inline">\(f \to 0\)</span>, no polarization) and a perfect conductor (<span class="math-inline">\(\varepsilon \to \infty\)</span>, <span class="math-inline">\(f \to 1\)</span>). Klamt and Schüürmann&#x27;s COSMO uses <span class="math-inline">\((\varepsilon - 1)/(\varepsilon + 1/2)\)</span> instead. For water the two differ by 0.6 %, about 7e-5 Eh of a typical small-molecule solvation energy. Planck used the COSMO factor under the C-PCM name until the SWIG cavity landed; PySCF&#x27;s <code>C-PCM</code> uses <span class="math-inline">\((\varepsilon - 1)/\varepsilon\)</span>.</p>
 <p>Once the apparent charges are known, the reaction-field contribution to the electronic energy is</p>
 <p><span class="math-display">\[
 G^{\text{rxn}} = \tfrac{1}{2} \sum_i q_i \, \phi^{\text{tot}}(\mathbf{s}_i),
@@ -4492,53 +4505,55 @@ G^{\text{rxn}} = \tfrac{1}{2} \sum_i q_i \, \phi^{\text{tot}}(\mathbf{s}_i),
 <p><span class="math-display">\[
 \hat{V}^{\text{rxn}} = \sum_i q_i \int \frac{\chi_\mu^*(\mathbf{r})\,\chi_\nu(\mathbf{r})}{|\mathbf{r} - \mathbf{s}_i|}\,\mathrm{d}\mathbf{r}.
 \]</span></p>
-<p>In matrix form this is just a weighted sum of one-electron nuclear-attraction- like integrals against unit point charges placed at the tesserae; that is exactly the integral primitive <code>_compute_external_charge_attraction</code> already provides in the Obara-Saika engine.</p>
-<h3 id="cavity-construction-fibonacci-sphere-tessellation">Cavity Construction (Fibonacci-Sphere Tessellation)</h3>
-<p>Each atom <span class="math-inline">\(A\)</span> is wrapped in a sphere of radius</p>
+<p>In matrix form this is a weighted sum of one-electron nuclear-attraction-like integrals against unit Gaussian charges at the tesserae (with <span class="math-inline">\(\operatorname{erf}(\xi_i r)/r\)</span> in place of <span class="math-inline">\(1/r\)</span>). The Obara-Saika primitive <code>_os_nuclear_primitive</code> handles a Gaussian charge of exponent <span class="math-inline">\(\eta = \xi^2\)</span> with one scale factor <span class="math-inline">\(s = \eta/(\zeta + \eta)\)</span>, where <span class="math-inline">\(\zeta\)</span> is the primitive pair&#x27;s exponent. In the point-charge recurrence, <span class="math-inline">\(\mathbf{P}-\mathbf{C}\)</span> becomes <span class="math-inline">\(s(\mathbf{P}-\mathbf{C})\)</span>, the <span class="math-inline">\((m+1)\)</span> term of the <span class="math-inline">\(a/2\zeta\)</span> step is scaled by <span class="math-inline">\(s\)</span>, the Boys argument by <span class="math-inline">\(s\)</span>, and the prefactor by <span class="math-inline">\(\sqrt{s}\)</span>. A point charge is <span class="math-inline">\(s = 1\)</span>. <code>_compute_external_charge_attraction</code> takes the exponent from <code>ExternalCharge::exponent</code> (0 means a point charge).</p>
+<p>These integrals are evaluated per <em>shell</em> pair, not per Cartesian component pair (<code>nuclear_vrr_accumulate</code> and <code>nuclear_block_from_slice</code> in <code>os.cpp</code>). For one primitive pair and one charge, the vertical recurrence <span class="math-inline">\((\mathbf{a}+\mathbf{b}\,|\,0)^{(0)}\)</span> does not depend on how the angular momentum is split between the two shells. The horizontal recurrence that splits it is linear, with a fixed <span class="math-inline">\(\mathbf{A}-\mathbf{B}\)</span>. So the <span class="math-inline">\(m = 0\)</span> slices are summed over primitives first (and over charges, when a summed matrix is wanted), and the horizontal step runs once per shell pair. The component normalizations are applied at the end. Every point-charge integral in Planck takes this path: <span class="math-inline">\(V_{ne}\)</span>, the PCM reaction field and the electrostatic potential.</p>
+<h3 id="cavity-construction-swig">Cavity Construction (SWIG)</h3>
+<p>A cavity whose tesserae appear and vanish as atoms move gives an energy with jumps, and its gradient does not exist at those geometries. Planck therefore uses the switching/Gaussian (SWIG) discretization of Lange and Herbert (J. Chem. Phys. 133, 244111 (2010)), which is also PySCF&#x27;s default C-PCM cavity. Every tessera property is a smooth function of the nuclear coordinates.</p>
+<p>Each atom <span class="math-inline">\(J\)</span> is wrapped in a sphere of radius</p>
 <p><span class="math-display">\[
-R_A = s \cdot R_A^{\text{vdW}},
+R_J = s \cdot R_J^{\text{vdW}},
 \]</span></p>
-<p>where <span class="math-inline">\(R_A^{\text{vdW}}\)</span> is the element&#x27;s van der Waals radius (from <code>src/lookup/elements.cpp</code>, converted to Bohr) and <span class="math-inline">\(s\)</span> is the user-controlled cavity scale (<code>cavity_scale</code>, default <span class="math-inline">\(s = 1.2\)</span>, matching common Bondi-radius PCM conventions). On each sphere, <code>points_per_atom</code> surface points are placed using a <em>Fibonacci-sphere</em> (golden-angle) distribution — <code>fibonacci_sphere</code> in <code>pcm.cpp</code>. This gives a quasi-uniform tiling on the sphere with a single parameter and no special-case handling at the poles.</p>
-<p>Each candidate point gets an area</p>
+<p>where <span class="math-inline">\(R_J^{\text{vdW}}\)</span> is the modified Bondi radius (the table in <code>src/lookup/elements.cpp</code>, with H at 1.1 Å instead of 1.2 Å) and <span class="math-inline">\(s\)</span> is <code>cavity_scale</code> (default 1.2). Each sphere is sampled by an <span class="math-inline">\(N\)</span>-point Lebedev grid (<code>surface_points_per_atom</code>, default 302) with weights <span class="math-inline">\(w_i\)</span> that sum to <span class="math-inline">\(4\pi\)</span>.</p>
+<p><strong>Switching.</strong> Instead of a buried/exposed test, a point <span class="math-inline">\(i\)</span> on atom <span class="math-inline">\(A\)</span>&#x27;s sphere is faded out as it enters other spheres:</p>
 <p><span class="math-display">\[
-a_i = \frac{4\pi R_A^2}{N_{\text{points/atom}}}.
+F_i = \prod_{J \ne A} h\!\left(\frac{r_{iJ} - R_{\text{in},J}}{R_{\text{sw},J}}\right),
+\qquad
+h(x) = x^3(10 - 15x + 6x^2) \text{ on } [0, 1],
 \]</span></p>
-<p>The atomic spheres overlap in molecules. Points that fall <em>inside</em> another atom&#x27;s sphere are <em>buried</em> and discarded — only the exposed surface (the solvent-accessible patches) is kept. After this pruning, the surviving points <span class="math-inline">\(\{\mathbf{s}_i, a_i\}\)</span> form the cavity discretization. If every point is buried (an unlikely pathological case for tiny <code>points_per_atom</code>), the build returns an error rather than silently producing an empty cavity.</p>
-<p>The cavity construction is carried out once at the start of the calculation; because Planck currently restricts PCM to single-point energies, the cavity does not need to be rebuilt at each geometry step.</p>
+<p>with <span class="math-inline">\(h = 0\)</span> below 0 and <span class="math-inline">\(h = 1\)</span> above 1. Here <span class="math-inline">\(R_{\text{sw}} = R\sqrt{14/N}\)</span>, <span class="math-inline">\(\alpha = \tfrac12 + R/R_{\text{sw}} - \sqrt{(R/R_{\text{sw}})^2 - 1/28}\)</span> and <span class="math-inline">\(R_{\text{in}} = R - \alpha R_{\text{sw}}\)</span>. The tessera area is <span class="math-inline">\(a_i = w_i R_A^2 F_i\)</span>. Points with <span class="math-inline">\(w_i F_i \le 10^{-16}\)</span> are dropped; their weight has already faded to zero, so dropping them changes nothing.</p>
+<p><strong>Gaussian charges.</strong> Each tessera carries a normalized Gaussian charge of width</p>
+<p><span class="math-display">\[
+\xi_i = \frac{\zeta_N}{R_A \sqrt{w_i}},
+\]</span></p>
+<p>where <span class="math-inline">\(\zeta_N\)</span> is the York-Karplus constant for the <span class="math-inline">\(N\)</span>-point Lebedev grid (<code>SWIG_ZETA</code> in <code>pcm.cpp</code>). Lebedev sizes with no published constant (74, 230, 266) are rejected.</p>
+<p>The cavity is built once per geometry: once for a single point, and again at every step of a geometry optimization and every displacement of a frequency calculation (see below).</p>
 <h3 id="the-surface-influence-matrix">The Surface Influence Matrix <span class="math-inline">\(\mathbf{D}\)</span></h3>
-<p>For <span class="math-inline">\(i \ne j\)</span>, the off-diagonal element is the Coulomb interaction between two unit charges placed on tesserae <span class="math-inline">\(i\)</span> and <span class="math-inline">\(j\)</span>:</p>
+<p>Two Gaussian charges interact through <span class="math-inline">\(\operatorname{erf}(\xi_{ij} r_{ij})/r_{ij}\)</span>, with <span class="math-inline">\(\xi_{ij} = \xi_i\xi_j/\sqrt{\xi_i^2 + \xi_j^2}\)</span>. This is finite at every separation, so</p>
 <p><span class="math-display">\[
-D_{ij} = \frac{1}{|\mathbf{s}_i - \mathbf{s}_j|}.
+D_{ij} = \frac{\operatorname{erf}(\xi_{ij}\,|\mathbf{s}_i - \mathbf{s}_j|)}{|\mathbf{s}_i - \mathbf{s}_j|},
+\qquad
+D_{ii} = \frac{\xi_i\sqrt{2/\pi}}{F_i}.
 \]</span></p>
-<p>The diagonal elements are <em>singular</em> under a strict point-charge model — a point charge interacting with itself diverges. The standard cure is to spread each surface charge over its tessera and approximate the self-interaction by</p>
-<p><span class="math-display">\[
-D_{ii} = k\,\sqrt{\frac{4\pi}{a_i}},
-\]</span></p>
-<p>which is the Coulomb self-energy of a uniformly charged disc of area <span class="math-inline">\(a_i\)</span> up to a small numerical factor. A common practical choice is</p>
-<p><span class="math-display">\[
-k = 1.07 \quad (\texttt{ISWIG\_DIAGONAL\_SCALE} \text{ in } \texttt{pcm.cpp}),
-\]</span></p>
-<p>the empirical correction of Pascual-Ahuir, Silla and Tuñon (the &quot;ISWIG&quot; prescription), which gives accurate solvation free energies for a range of solvents. The matrix <span class="math-inline">\(\mathbf{D}\)</span> is dense, symmetric, and positive-definite, which is why a Cholesky-class factorization is a natural way to solve for the apparent charges.</p>
+<p>The diagonal is a Gaussian&#x27;s self-energy divided by its switching value. As a tessera fades (<span class="math-inline">\(F_i \to 0\)</span>) its self-energy diverges, so its charge goes smoothly to zero. This is what makes the energy continuous as points cross sphere boundaries. The old scheme&#x27;s empirical disc self-energy (<span class="math-inline">\(1.07\sqrt{4\pi/a_i}\)</span>) is gone. <span class="math-inline">\(\mathbf{D}\)</span> is dense, symmetric and positive-definite, and is solved by LDLT.</p>
 <h3 id="total-solute-potential-at-the-surface">Total Solute Potential at the Surface</h3>
 <p>The right-hand side of the C-PCM linear system is the total electrostatic potential the solute produces at each tessera. It splits into a nuclear and an electronic piece:</p>
 <p><span class="math-display">\[
-\phi^{\text{tot}}(\mathbf{s}_i) = \underbrace{\sum_A \frac{Z_A}{|\mathbf{s}_i - \mathbf{R}_A|}}_{\phi^{\text{nuc}}_i}
+\phi^{\text{tot}}(\mathbf{s}_i) = \underbrace{\sum_A Z_A\,\frac{\operatorname{erf}(\xi_i|\mathbf{s}_i - \mathbf{R}_A|)}{|\mathbf{s}_i - \mathbf{R}_A|}}_{\phi^{\text{nuc}}_i}
 + \sum_{\mu\nu} P_{\mu\nu}\,\Bigl[\!\!\!\!
-\underbrace{- \int \frac{\chi_\mu^*(\mathbf{r})\,\chi_\nu(\mathbf{r})}{|\mathbf{r} - \mathbf{s}_i|}\,\mathrm{d}\mathbf{r}}_{V^{(i)}_{\mu\nu}}
+\underbrace{- \int \chi_\mu^*(\mathbf{r})\,\chi_\nu(\mathbf{r})\,\frac{\operatorname{erf}(\xi_i|\mathbf{r} - \mathbf{s}_i|)}{|\mathbf{r} - \mathbf{s}_i|}\,\mathrm{d}\mathbf{r}}_{V^{(i)}_{\mu\nu}}
 \Bigr],
 \]</span></p>
-<p>where one may choose a sign convention that folds the electron sign into the integral matrix <span class="math-inline">\(\mathbf{V}^{(i)}\)</span>. The matrices <span class="math-inline">\(\mathbf{V}^{(i)}\)</span> are <em>independent of the density</em>: each is just the AO matrix of a unit point charge placed at <span class="math-inline">\(\mathbf{s}_i\)</span>, and is computed exactly once during the cavity build. The cost of one cavity build is therefore <span class="math-inline">\(N_{\text{tess}}\)</span> one-electron nuclear-attraction builds, each cheap relative to the two-electron problem.</p>
-<p>The nuclear potential <span class="math-inline">\(\phi^{\text{nuc}}_i\)</span> is also density-independent and is cached up front. During the SCF loop, the only <span class="math-inline">\(O(N_{\text{tess}})\)</span> work that depends on the current density is the contraction</p>
+<p>where one may choose a sign convention that folds the electron sign into the integral matrix <span class="math-inline">\(\mathbf{V}^{(i)}\)</span>. The matrices <span class="math-inline">\(\mathbf{V}^{(i)}\)</span> are <em>independent of the density</em>: each is the AO matrix of a unit Gaussian charge at <span class="math-inline">\(\mathbf{s}_i\)</span>. Planck does <strong>not</strong> store them. Storing them costs <span class="math-inline">\(N_{\text{tess}} N_{\text{basis}}^2\)</span> doubles: 471 MB for naphthalene/6-31G* (2138 tesserae, 166 functions), and gigabytes for larger molecules. Instead, every SCF iteration contracts the density on the fly in one sweep over the shell pairs, parallel over tesserae:</p>
 <p><span class="math-display">\[
-\phi^{\text{el}}_i = \sum_{\mu\nu} P_{\mu\nu}\,V^{(i)}_{\mu\nu}
+\phi^{\text{el}}_i = \sum_{\mu\nu} P_{\mu\nu}\,V^{(i)}_{\mu\nu}.
 \]</span></p>
-<p>— a single Frobenius product per tessera per SCF iteration.</p>
+<p>This is <code>_compute_electronic_potential</code> with a Gaussian exponent per point. The nuclear potential <span class="math-inline">\(\phi^{\text{nuc}}_i\)</span> and the factor of <span class="math-inline">\(\mathbf{D}\)</span> depend only on the geometry and are built once.</p>
 <h3 id="apparent-charges-and-the-reaction-field-operator">Apparent Charges and the Reaction-Field Operator</h3>
 <p>With the precomputed pieces in hand, each SCF iteration does:</p>
 <ol>
 <li><strong>Total potential at the surface:</strong> <span class="math-inline">\(\phi^{\text{tot}}_i = \phi^{\text{nuc}}_i + \sum_{\mu\nu} P_{\mu\nu}\,V^{(i)}_{\mu\nu}\)</span>.</li>
-<li><strong>Solve C-PCM linear system:</strong> <span class="math-inline">\(\mathbf{D}\,\mathbf{q} = -f(\varepsilon)\,\boldsymbol{\phi}^{\text{tot}}\)</span> via a Cholesky-class factorization built once and re-solved each iteration.</li>
-<li><strong>Reaction-field operator in AO basis:</strong> <span class="math-inline">\(V^{\text{rxn}}_{\mu\nu} = \sum_i q_i \, V^{(i)}_{\mu\nu}\)</span> — a linear combination of the precomputed unit-charge matrices.</li>
+<li><strong>Solve C-PCM linear system:</strong> <span class="math-inline">\(\mathbf{D}\,\mathbf{q} = -f(\varepsilon)\,\boldsymbol{\phi}^{\text{tot}}\)</span> by back-substitution with the LDLT factor stored in <code>PCMState</code>.</li>
+<li><strong>Reaction-field operator in AO basis:</strong> <span class="math-inline">\(V^{\text{rxn}}_{\mu\nu} = \sum_i q_i \, V^{(i)}_{\mu\nu}\)</span> — one nuclear-attraction-like build with all tessera charges at once (<code>_compute_external_charge_attraction</code>).</li>
 <li><strong>Solvation energy contribution:</strong> <span class="math-inline">\(G^{\text{rxn}} = \tfrac{1}{2}\,\mathbf{q}^\top \boldsymbol{\phi}^{\text{tot}}\)</span>.</li>
 </ol>
 <p>Because both <span class="math-inline">\(\mathbf{q}\)</span> and <span class="math-inline">\(\boldsymbol{\phi}^{\text{tot}}\)</span> depend on <span class="math-inline">\(\mathbf{P}\)</span>, <span class="math-inline">\(V^{\text{rxn}}_{\mu\nu}\)</span> depends on the density, and the problem is genuinely self-consistent — the reaction field must be rebuilt at every SCF iteration alongside the Coulomb and exchange terms.</p>
@@ -4559,14 +4574,77 @@ E^{\text{elec}} = E^{\text{gas}}_{\text{elec}} + G^{\text{rxn}},
 \]</span></p>
 <p>because <span class="math-inline">\(V^{\text{rxn}}\)</span> is built from the <em>total</em> density <span class="math-inline">\(\mathbf{P} = \mathbf{P}_\alpha + \mathbf{P}_\beta\)</span> and is spin-independent. The same pattern is used in KS-DFT: RKS adds <span class="math-inline">\(\mathbf{V}^{\text{rxn}}\)</span> to the single Fock matrix; UKS adds the same operator to both spin channels. In every case the solvation energy <span class="math-inline">\(G^{\text{rxn}}\)</span> is added to the electronic part of the total energy <em>once</em>, not twice — the <span class="math-inline">\(\tfrac{1}{2}\)</span> prefactor in <span class="math-inline">\(G^{\text{rxn}}\)</span> is exactly the factor that prevents double counting when the reaction-field operator is also inside <span class="math-inline">\(\mathbf{F}\)</span>.</p>
 <p>Many program outputs also report the converged solvation energy separately so the user can see the dielectric stabilization distinct from the gas-phase total.</p>
+<h3 id="spherical-basis">Spherical Basis</h3>
+<p>The point-charge integrals, like every integral in Planck, are evaluated in the Cartesian basis. In a spherical run the SCF density lives in the spherical working basis, so <code>evaluate_pcm_reaction_field</code> converts it once on entry (<span class="math-inline">\(\mathbf{P}_{\text{cart}} = \mathbf{C}^\top \mathbf{P}_{\text{sph}} \mathbf{C}\)</span>, <code>BasisFunctions::to_cartesian</code>) before the <span class="math-inline">\(\phi^{\text{el}}\)</span> sweep. It returns <span class="math-inline">\(\mathbf{V}^{\text{rxn}}\)</span> in the working basis (<span class="math-inline">\(\mathbf{C}\,\mathbf{V}_{\text{cart}}\,\mathbf{C}^\top\)</span>, <code>to_working</code>). Every caller already passes and expects working-basis matrices, so nothing else changes; in a Cartesian run both conversions are the identity. The gradient term below converts the density the same way.</p>
+<h3 id="the-analytic-gradient">The Analytic Gradient</h3>
+<p><strong>Why no response term is needed.</strong> Write the solvation energy in terms of the potential alone. With <span class="math-inline">\(\mathbf{q} = -f\,\mathbf{D}^{-1}\boldsymbol{\phi}\)</span>,</p>
+<p><span class="math-display">\[
+G^{\text{rxn}} = \tfrac12\,\mathbf{q}^\top\boldsymbol{\phi}
+= -\tfrac{f}{2}\,\boldsymbol{\phi}^\top \mathbf{D}^{-1} \boldsymbol{\phi}.
+\]</span></p>
+<p>The SCF with PCM minimizes the total energy, <span class="math-inline">\(G^{\text{rxn}}\)</span> included, with respect to the orbitals, and <span class="math-inline">\(\mathbf{q}\)</span> is a function of the density. So the energy is stationary in every wavefunction parameter, and its nuclear gradient needs only the <em>explicit</em> geometry dependence at fixed density, as for a plain SCF. No CPHF or Z-vector solve is involved. Differentiating at fixed <span class="math-inline">\(\mathbf{P}\)</span>:</p>
+<p><span class="math-display">\[
+\frac{\partial G^{\text{rxn}}}{\partial R}
+= -f\,\boldsymbol{\phi}^\top \mathbf{D}^{-1}\frac{\partial\boldsymbol{\phi}}{\partial R}
++ \frac{f}{2}\,\boldsymbol{\phi}^\top \mathbf{D}^{-1}\frac{\partial\mathbf{D}}{\partial R}\mathbf{D}^{-1}\boldsymbol{\phi}
+= \mathbf{q}^\top\frac{\partial\boldsymbol{\phi}}{\partial R}
++ \frac{1}{2f}\,\mathbf{q}^\top\frac{\partial\mathbf{D}}{\partial R}\,\mathbf{q}.
+\]</span></p>
+<p>Splitting <span class="math-inline">\(\boldsymbol{\phi} = \boldsymbol{\phi}^{\text{nuc}} + \boldsymbol{\phi}^{\text{el}}\)</span> gives the three terms PySCF also uses (<code>solvent/grad/pcm.py</code>). Planck has one function for each:</p>
+<div class="table-wrap"><table>
+<thead><tr>
+<th>Term</th>
+<th>Expression</th>
+<th>Function</th>
+</tr></thead>
+<tbody>
+<tr><td><code>grad_nuc</code></td><td><span class="math-inline">\(\mathbf{q}^\top\,\partial\boldsymbol{\phi}^{\text{nuc}}/\partial R\)</span></td><td><code>Solvation::pcm_grad_nuc</code></td></tr>
+<tr><td><code>grad_qv</code></td><td><span class="math-inline">\(\mathbf{q}^\top\,\partial\boldsymbol{\phi}^{\text{el}}/\partial R\)</span> at fixed <span class="math-inline">\(\mathbf{P}\)</span></td><td><code>Solvation::pcm_grad_qv</code></td></tr>
+<tr><td><code>grad_solver</code></td><td><span class="math-inline">\(\mathbf{q}^\top(\partial\mathbf{D}/\partial R)\,\mathbf{q}/(2f)\)</span></td><td><code>Solvation::pcm_grad_solver</code></td></tr>
+</tbody></table></div>
+<p><code>Gradient::pcm_gradient</code> re-solves <span class="math-inline">\(\mathbf{q}\)</span> at the converged density with one <code>evaluate_pcm_reaction_field</code> call and returns the sum. The HF driver and the KS gradient each add it once.</p>
+<p><strong>How the geometry enters.</strong> A tessera lives on its owning atom&#x27;s sphere, <span class="math-inline">\(\mathbf{s}_i = \mathbf{R}_A + R_A\mathbf{u}_i\)</span>, so it moves rigidly with atom <span class="math-inline">\(A\)</span>: <span class="math-inline">\(\partial\mathbf{s}_i/\partial\mathbf{R}_A = \mathbf{I}\)</span>. The widths <span class="math-inline">\(\xi_i\)</span> depend only on the Lebedev weights and the radii, so they do not move. Under C-PCM the areas do not enter at all. Every distance-dependent piece goes through the radial derivative of the Gaussian-charge kernel,</p>
+<p><span class="math-display">\[
+\frac{\mathrm{d}}{\mathrm{d}r}\,\frac{\operatorname{erf}(\xi r)}{r}
+= \frac{2\xi}{\sqrt{\pi}}\,\frac{e^{-\xi^2 r^2}}{r} - \frac{\operatorname{erf}(\xi r)}{r^2}.
+\]</span></p>
+<p><strong><code>grad_nuc</code>.</strong> Each pair (tessera <span class="math-inline">\(i\)</span>, nucleus <span class="math-inline">\(J\)</span>) contributes <span class="math-inline">\(q_i Z_J k'(r)\,\hat{\mathbf{r}}\)</span> with <span class="math-inline">\(\mathbf{r} = \mathbf{s}_i - \mathbf{R}_J\)</span>, added to the owning atom <span class="math-inline">\(A\)</span> and subtracted from <span class="math-inline">\(J\)</span>. The <span class="math-inline">\(J = A\)</span> term cancels exactly, because that distance is the sphere radius, so it is skipped.</p>
+<p><strong><code>grad_solver</code>.</strong> Off the diagonal, <span class="math-inline">\(D_{ij}\)</span> depends on <span class="math-inline">\(\mathbf{s}_i - \mathbf{s}_j\)</span> through the same kernel with <span class="math-inline">\(\xi_{ij}\)</span>. Pairs on the same sphere are rigid and skipped. The diagonal is the part a hard cavity would not have: <span class="math-inline">\(D_{ii} = \xi_i\sqrt{2/\pi}/F_i\)</span>, so</p>
+<p><span class="math-display">\[
+\frac{\partial D_{ii}}{\partial R} = -\frac{D_{ii}}{F_i}\frac{\partial F_i}{\partial R}
+= -D_{ii}\sum_{J\ne A}\frac{h'(x_{iJ})}{h(x_{iJ})}\,\frac{\partial x_{iJ}}{\partial R},
+\qquad
+h'(x) = 30x^2(1-x)^2,
+\]</span></p>
+<p>where <span class="math-inline">\(x_{iJ} = (|\mathbf{s}_i - \mathbf{R}_J| - R_{\text{in},J})/R_{\text{sw},J}\)</span> moves with both <span class="math-inline">\(A\)</span> and <span class="math-inline">\(J\)</span>. The division by <span class="math-inline">\(h\)</span> is safe: a tessera that survived pruning has <span class="math-inline">\(h &gt; 0\)</span> for every <span class="math-inline">\(J\)</span>. <code>build_pcm_state</code> keeps <span class="math-inline">\(R_{\text{in}}\)</span> and <span class="math-inline">\(R_{\text{sw}}\)</span> per atom for this.</p>
+<p><strong><code>grad_qv</code>.</strong> The electronic potential at tessera <span class="math-inline">\(i\)</span> is <span class="math-inline">\(\phi^{\text{el}}_i = -\mathbf{P} : \mathbf{V}^{(i)}\)</span>, and <span class="math-inline">\(V^{(i)}_{\mu\nu}\)</span> depends on three centres: the two basis-function centres <span class="math-inline">\(\mathbf{A}\)</span>, <span class="math-inline">\(\mathbf{B}\)</span> and the charge centre <span class="math-inline">\(\mathbf{C} = \mathbf{s}_i\)</span>. Two facts make it cheap:</p>
+<ul>
+<li>The derivative of a Cartesian Gaussian with respect to its centre is two Gaussians with shifted angular momentum: <span class="math-inline">\(\partial_{A_x}\,\chi_{\mathbf{a}} = 2\alpha\,\chi_{\mathbf{a}+1_x} - a_x\,\chi_{\mathbf{a}-1_x}\)</span>, and the same for <span class="math-inline">\(\mathbf{B}\)</span> with <span class="math-inline">\(\beta\)</span>.</li>
+<li>The integral depends only on relative positions, so <span class="math-inline">\(\partial_{\mathbf{C}} = -(\partial_{\mathbf{A}} + \partial_{\mathbf{B}})\)</span>. No separate charge-centre recurrence is needed.</li>
+</ul>
+<p><code>ObaraSaika::_compute_electronic_potential_gradient</code> therefore runs the same shell-block vertical recurrence as the energy, one angular-momentum level higher (to <span class="math-inline">\(L_A + L_B + 1\)</span>). It accumulates three slices per primitive pair, weighted by <span class="math-inline">\(w\)</span>, <span class="math-inline">\(2\alpha w\)</span> and <span class="math-inline">\(2\beta w\)</span>. They cannot share one slice, because <span class="math-inline">\(\alpha\)</span> and <span class="math-inline">\(\beta\)</span> differ between primitives. The horizontal recurrence then reads the shifted components. Tesserae are grouped by owning atom, so the charge-centre term lands on that atom once per (shell pair, atom), and the per-block results are summed in a fixed order, which keeps the gradient independent of the thread count.</p>
+<p><strong>Validation, and two lessons from it.</strong> Each term was checked against a finite difference before the terms were summed. The finite difference of <code>grad_solver</code> taught two things:</p>
+<ul>
+<li><em>Use physical charges.</em> Random charges of size <span class="math-inline">\(10^{-2}\)</span> put a large <span class="math-inline">\(q_i\)</span> on tesserae that have nearly faded out (<span class="math-inline">\(F_i \sim 10^{-16}\)</span>, so <span class="math-inline">\(D_{ii} \sim 10^{16}\)</span>), where a real solve gives <span class="math-inline">\(q_i \sim F_i\)</span>. The term <span class="math-inline">\(q_i^2 D_{ii}\)</span> then dominates and the finite difference means nothing. The test uses <span class="math-inline">\(\mathbf{q} = -f\mathbf{D}^{-1}\boldsymbol{\phi}^{\text{nuc}}\)</span>.</li>
+<li><em>The switching function limits the step.</em> <span class="math-inline">\(h\)</span> is only <span class="math-inline">\(C^2\)</span> at <span class="math-inline">\(x = 0\)</span> and <span class="math-inline">\(x = 1\)</span>, so a stencil that straddles either end is poor. The error fell from <span class="math-inline">\(3\times10^{-4}\)</span> at a step of <span class="math-inline">\(10^{-3}\)</span> Bohr to <span class="math-inline">\(10^{-9}\)</span> at <span class="math-inline">\(10^{-4}\)</span>, converging on the analytic value.</li>
+</ul>
+<p>Against PySCF 2.13.0 each term matches its namesake (<code>grad_nuc</code>, <code>grad_qv</code>, <code>grad_solver</code>) to all ten printed digits on C1 H₂O₂/6-31G<em>. The total matches to every printed digit (DFT to <span class="math-inline">\(1.6\times10^{-11}\)</span> Ha/Bohr), and a five-point finite difference of the SCF energy agrees to <span class="math-inline">\(4.2\times10^{-8}\)</span> Ha/Bohr. That last check is the end-to-end proof that no response term was missed. The PCM terms are cheap: 0.46 s of a 33 s anthracene/6-31G</em> gradient run.</p>
+<h3 id="geometry-optimization-and-frequencies">Geometry Optimization and Frequencies</h3>
+<p>With the gradient in place, optimization and frequencies need no new derivatives, only the right cavity at every geometry. This is easy to get silently wrong: a loop that rebuilds the basis but reuses, or omits, the cavity still converges, just to the wrong answer. Three loops each build their own cavity with <code>build_pcm_state</code>, pass it to the SCF and add <code>pcm_gradient</code>:</p>
+<ul>
+<li>the geometry-optimization step (<code>src/opt/geomopt.cpp</code>);</li>
+<li>every displaced geometry of the semi-numerical Hessian (<code>src/freq/hessian.cpp</code>);</li>
+<li>the final symmetry SCF after an optimization (<code>src/hf_driver.cpp</code>), which reorients the molecule. Without the cavity there, a PCM optimization of water ended on the gas-phase energy, 0.0115 Eh above the solvated one.</li>
+</ul>
+<p><code>build_pcm_state</code> returns a disabled state when no solvent is requested, so the gas-phase path is unchanged. <code>planck-dft</code> already rebuilt the cavity in <code>prepare_current_geometry</code>. Against PySCF&#x27;s <code>geometric_solver</code> and its analytic PCM Hessian, water/6-31G* reaches the same optimum (RHF <span class="math-inline">\(1.3\times10^{-9}\)</span> Eh, RKS PBE to every printed digit) and the RHF frequencies agree within 0.31 cm⁻¹.</p>
 <h3 id="input-format-and-solvent-library">Input Format and Solvent Library</h3>
-<p>PCM is requested with a <code>%begin_pcm</code> block. A representative input (<code>tests/inputs/regression/hf/water_rhf_pcm_water_sto3g.hfinp</code>) reads:</p>
+<p>PCM is requested with a <code>%begin_pcm</code> block. A representative input (<code>tests/inputs/regression/hf/water_rhf_pcm_swig_631gd.hfinp</code>) reads:</p>
 <pre><code>
 %begin_pcm
-    model       pcm
-    solvent     water
-    cavity_scale 1.2
-    surface_points_per_atom 24
+    model                   pcm
+    solvent                 water
+    cavity_scale            1.2
+    surface_points_per_atom 302
 %end_pcm
 </code></pre>
 <p>Recognized keywords (parsed by <code>_parse_pcm</code> in <code>src/io/io.cpp</code>):</p>
@@ -4580,16 +4658,16 @@ E^{\text{elec}} = E^{\text{gas}}_{\text{elec}} + G^{\text{rxn}},
 <tr><td><code>solvent</code></td><td>Named solvent; sets dielectric from a small built-in table</td></tr>
 <tr><td><code>dielectric</code> / <code>epsilon</code> / <code>eps</code></td><td>Override the dielectric directly</td></tr>
 <tr><td><code>cavity_scale</code></td><td>van der Waals radius scale <span class="math-inline">\(s\)</span> (default 1.2)</td></tr>
-<tr><td><code>surface_points</code> / <code>surface_points_per_atom</code></td><td>tesserae per atom (default 60, minimum 6)</td></tr>
+<tr><td><code>surface_points</code> / <code>surface_points_per_atom</code></td><td>Lebedev points per atomic sphere before SWIG pruning (default 302; must be a Lebedev size with a SWIG constant)</td></tr>
 </tbody></table></div>
 <p>Built-in solvent dielectrics (<code>dielectric_from_solvent_name</code> in <code>io.cpp</code>): water (78.3553), acetonitrile (35.688), methanol (32.613), ethanol (24.852), DMSO (46.826), dichloromethane (8.93), chloroform (4.7113), THF (7.4257), toluene (2.3741), benzene (2.2706), hexane (1.8819). Listing a <code>solvent</code> overrides any prior <code>dielectric</code> value; passing both is allowed but the solvent name wins.</p>
-<p>PCM is currently <strong>gated to single-point energy calculations only</strong> (see the check around <code>src/io/io.cpp:1729</code>). Combining <code>model pcm</code> with <code>calculation gradient</code>, <code>geomopt</code>, or <code>frequency</code> produces an explicit input error rather than a silently incomplete result, because analytic PCM gradients (which require derivatives of the cavity, the influence matrix, and the reaction-field operator) are not implemented.</p>
+<p>PCM works with <code>calculation energy</code>, <code>gradient</code>, <code>geomopt</code>, <code>frequency</code> and <code>geomoptfreq</code>. The validation in <code>src/io/io.cpp</code> rejects, with an explicit message, the combinations that are not implemented: imaginary-mode following (not yet tested with PCM), post-HF correlation, and ROHF references.</p>
 <h3 id="limitations-and-cost">Limitations and Cost</h3>
 <ul>
-<li><strong>Single-point only.</strong> No PCM gradient, geometry optimization, or frequencies. Post-HF (MP2, CC, CASSCF) is not coupled to PCM either — the reaction field is enforced only at the SCF/KS level.</li>
-<li><strong>C-PCM only.</strong> The dielectric scaling <span class="math-inline">\((\varepsilon - 1)/(\varepsilon + \tfrac{1}{2})\)</span> is the conductor-like form. IEF-PCM and SS(V)PE are not implemented.</li>
-<li><strong>Vacuum-style cavity.</strong> The cavity uses scaled van der Waals spheres with a Fibonacci-sphere tessellation and bury-test pruning. There is no smoothing layer between spheres (no GEPOL/SES), which can introduce small ripples in the energy as a function of geometry.</li>
-<li><strong>Cost.</strong> Each SCF iteration adds: one <span class="math-inline">\(N_{\text{tess}}\)</span>-by-<span class="math-inline">\(N_{\text{basis}}^2\)</span> Frobenius reduction to build <span class="math-inline">\(\boldsymbol{\phi}^{\text{tot}}\)</span>; one <span class="math-inline">\(O(N_{\text{tess}}^3)\)</span> Cholesky-class solve on <span class="math-inline">\(\mathbf{D}\)</span>; and one <span class="math-inline">\(N_{\text{tess}}\)</span>-by-<span class="math-inline">\(N_{\text{basis}}^2\)</span> accumulation to assemble <span class="math-inline">\(\mathbf{V}^{\text{rxn}}\)</span>. For typical organic molecules with <code>surface_points_per_atom</code> <span class="math-inline">\(\sim 60\)</span>, this is dominated by the precomputation of the unit-charge attraction matrices, which happens once in <code>build_pcm_state</code>.</li>
+<li><strong>SCF/KS level only.</strong> Post-HF (MP2, CC, CASSCF), TDDFT, ROHF and the double-hybrid gradients are not coupled to PCM. Imaginary-mode following is rejected under PCM.</li>
+<li><strong>C-PCM only.</strong> The dielectric scaling is <span class="math-inline">\((\varepsilon - 1)/\varepsilon\)</span>. IEF-PCM, SS(V)PE and COSMO&#x27;s <span class="math-inline">\(\varepsilon + \tfrac12\)</span> form are not implemented.</li>
+<li><strong>Orientation dependence.</strong> The Lebedev grid is fixed to the lab axes, so the energy changes slightly under rigid rotation. A denser grid reduces the change but does not remove it; PySCF behaves the same way.</li>
+<li><strong>Cost.</strong> Setup builds <span class="math-inline">\(\mathbf{D}\)</span> and factors it once (<span class="math-inline">\(O(N_{\text{tess}}^3)\)</span>). Each SCF iteration adds two integral sweeps, each <span class="math-inline">\(O(N_{\text{tess}} \times \text{shell-pair primitives})\)</span>, plus an <span class="math-inline">\(O(N_{\text{tess}}^2)\)</span> back-substitution. Memory is the <span class="math-inline">\(N_{\text{tess}}^2\)</span> factor. With direct SCF, naphthalene/6-31G* RHF with PCM (2160 tesserae) takes 13.7–13.9 s and 0.13 GB; the two sweeps cost about 0.3 s per iteration. The earlier design stored one AO matrix per tessera and took 13.5–13.7 s and 0.63 GB: it paid for the matrices once and then did only a Frobenius product per tessera each iteration. The per-shell-pair kernel is what brought the sweeps level with it (they took about 1.05 s per iteration with a per-component kernel). <code>docs/PCM_GEOMETRY.md</code> has the measurements.</li>
 </ul>
 <h3 id="code-map">Code Map</h3>
 <div class="table-wrap"><table>
@@ -4602,12 +4680,20 @@ E^{\text{elec}} = E^{\text{gas}}_{\text{elec}} + G^{\text{rxn}},
 <tr><td><code>OptionsSolvation</code> (model, dielectric, scale, npoints)</td><td><code>src/base/types.h</code></td><td><code>OptionsSolvation</code></td></tr>
 <tr><td><code>SolvationModel::{None, PCM}</code></td><td><code>src/base/types.h</code></td><td>enum</td></tr>
 <tr><td><code>%begin_pcm</code> parser + solvent table</td><td><code>src/io/io.cpp</code></td><td><code>_parse_pcm</code>, <code>dielectric_from_solvent_name</code></td></tr>
-<tr><td>Cavity build, influence matrix, unit-charge matrices</td><td><code>src/solvation/pcm.cpp</code></td><td><code>build_pcm_state</code>, <code>fibonacci_sphere</code></td></tr>
+<tr><td>SWIG cavity, influence-matrix factor, nuclear potential</td><td><code>src/solvation/pcm.cpp</code></td><td><code>build_pcm_state</code>, <code>switch_h</code>, <code>SWIG_ZETA</code></td></tr>
+<tr><td>Fused electronic potential at the tesserae</td><td><code>src/integrals/os.cpp</code></td><td><code>_compute_electronic_potential</code> (<code>exponents</code>)</td></tr>
+<tr><td>Shell-block point-charge integrals (Gaussian or point)</td><td><code>src/integrals/os.cpp</code></td><td><code>nuclear_shell_blocks</code>, <code>nuclear_vrr_accumulate</code>, <code>nuclear_block_from_slice</code></td></tr>
 <tr><td>SCF reaction field per iteration</td><td><code>src/solvation/pcm.cpp</code></td><td><code>evaluate_pcm_reaction_field</code></td></tr>
 <tr><td>RHF + PCM coupling</td><td><code>src/scf/scf.cpp</code></td><td><code>run_rhf</code> (PCM block near line 286)</td></tr>
 <tr><td>UHF + PCM coupling</td><td><code>src/scf/scf.cpp</code></td><td><code>run_uhf</code> (PCM block near line 589)</td></tr>
 <tr><td>RKS / UKS + PCM coupling</td><td><code>src/dft/driver.cpp</code></td><td>KS Fock assembly with <code>pcm_potential</code></td></tr>
-<tr><td>Single-point gating</td><td><code>src/io/io.cpp</code></td><td>check around line 1266</td></tr>
+<tr><td>Spherical-basis conversion</td><td><code>src/solvation/pcm.cpp</code></td><td><code>evaluate_pcm_reaction_field</code> (<code>to_cartesian</code>, <code>to_working</code>)</td></tr>
+<tr><td>Influence matrix (for the gradient test too)</td><td><code>src/solvation/pcm.cpp</code></td><td><code>pcm_influence_matrix</code></td></tr>
+<tr><td>Cavity gradient terms</td><td><code>src/solvation/pcm.cpp</code></td><td><code>pcm_grad_nuc</code>, <code>pcm_grad_solver</code> (<code>switch_dh</code>, <code>erf_kernel_dr</code>)</td></tr>
+<tr><td>Integral gradient term</td><td><code>src/integrals/os.cpp</code>, <code>src/solvation/pcm.cpp</code></td><td><code>_compute_electronic_potential_gradient</code>, <code>pcm_grad_qv</code></td></tr>
+<tr><td>PCM term of every SCF/KS gradient</td><td><code>src/gradient/gradient.cpp</code></td><td><code>Gradient::pcm_gradient</code></td></tr>
+<tr><td>Cavity rebuilt per geometry</td><td><code>src/opt/geomopt.cpp</code>, <code>src/freq/hessian.cpp</code>, <code>src/hf_driver.cpp</code></td><td><code>build_pcm_state</code> in each loop</td></tr>
+<tr><td>Workflow gating</td><td><code>src/io/io.cpp</code></td><td>PCM block of the input validation</td></tr>
 </tbody></table></div>
 <hr>
 <h2 id="24-basis-set-superposition-error-and-the-counterpoise-correction">24. Basis Set Superposition Error and the Counterpoise Correction</h2>
@@ -4655,8 +4741,8 @@ E^{\text{elec}} = E^{\text{gas}}_{\text{elec}} + G^{\text{rxn}},
 <p><strong>He<span class="math-inline">\(_2\)</span> / cc-pVDZ at 3 Å.</strong> The five energies (Hartree) are</p>
 <p><span class="math-display">\[
 \begin{aligned}
-E_{AB} &= -5.71032009, & E_A = E_B &= -2.85516048, \\
-E_A^{*} = E_B^{*} &= -2.85517107.
+E_{AB} &amp;= -5.71032009, &amp; E_A = E_B &amp;= -2.85516048, \\
+E_A^{*} = E_B^{*} &amp;= -2.85517107.
 \end{aligned}
 \]</span></p>
 <p>Then <span class="math-inline">\(\text{BSSE} = 2(E_A^{*}-E_A) = -2.1\times10^{-5}\)</span> Eh <span class="math-inline">\(= -0.013\)</span> kcal/mol, <span class="math-inline">\(\Delta E_{\text{raw}} = +0.0005\)</span> kcal/mol, and <span class="math-inline">\(\Delta E_{\text{CP}} = \Delta E_{\text{raw}} - \text{BSSE} = +0.014\)</span> kcal/mol. Hartree-Fock has no dispersion, so He<span class="math-inline">\(_2\)</span> is genuinely unbound. The raw number shows a spurious whisper of binding; removing the BSSE restores the correct sign — a small repulsion. This is the diagnostic value of CP: it tells you how much of an apparent interaction is real and how much is the basis cheating.</p>
@@ -4749,7 +4835,7 @@ B_{AB}^{\mathrm{Mayer}} =
 <p>The diagonal <span class="math-inline">\(B_{AA}\)</span> is left at zero in the printed matrix, and the off-diagonal matrix is symmetrized.</p>
 <p><strong>Code path</strong></p>
 <p><code>src/populations/bond-order.cpp</code> — <code>mayer_bond_order_analysis()</code></p>
-<p>The routine first validates the density dimensions and builds the AO lists for each atom.  It then forms either <span class="math-inline">\(\mathbf P\mathbf S\)</span> or the spin-resolved <span class="math-inline">\(\mathbf P^\alpha\mathbf S\)</span> / <span class="math-inline">\(\mathbf P^\beta\mathbf S\)</span> products and loops over atom pairs <span class="math-inline">\(A < B\)</span>.  For each AO pair <span class="math-inline">\(\mu \in A\)</span>, <span class="math-inline">\(\nu \in B\)</span> it accumulates the appropriate product into a dense <code>natoms × natoms</code> bond-order matrix.  <code>src/hf_driver.cpp</code> prints the final matrix below the Mulliken and Löwdin tables whenever population reporting is enabled.</p>
+<p>The routine first validates the density dimensions and builds the AO lists for each atom.  It then forms either <span class="math-inline">\(\mathbf P\mathbf S\)</span> or the spin-resolved <span class="math-inline">\(\mathbf P^\alpha\mathbf S\)</span> / <span class="math-inline">\(\mathbf P^\beta\mathbf S\)</span> products and loops over atom pairs <span class="math-inline">\(A &lt; B\)</span>.  For each AO pair <span class="math-inline">\(\mu \in A\)</span>, <span class="math-inline">\(\nu \in B\)</span> it accumulates the appropriate product into a dense <code>natoms × natoms</code> bond-order matrix.  <code>src/hf_driver.cpp</code> prints the final matrix below the Mulliken and Löwdin tables whenever population reporting is enabled.</p>
 <h3 id="esp-derived-charges-chelpg-and-resp">ESP-Derived Charges (CHELPG and RESP)</h3>
 <p><strong>Theory</strong></p>
 <p>Mulliken and Löwdin charges partition the density by <em>which basis function owns it</em>, which is a bookkeeping choice rather than an observable — a Löwdin charge can move by tenths of an electron between STO-3G and cc-pVTZ on the same geometry. ESP-derived charges instead ask a physical question: what set of point charges on the nuclei best reproduces the potential the molecule actually presents to its surroundings?</p>
@@ -4766,7 +4852,7 @@ R_a|\)</span>, minimizing <span class="math-inline">\(\|\mathbf{Aq} - \boldsymbo
 q_a = q_{\text{tot}}\)</span>.</p>
 <p>The constraint enters as a <strong>Lagrange multiplier</strong>, not a penalty:</p>
 <p><span class="math-display">\[
-\begin{pmatrix} 2\mathbf A^\top \mathbf A & \mathbf 1 \\ \mathbf 1^\top & 0 \end{pmatrix}
+\begin{pmatrix} 2\mathbf A^\top \mathbf A &amp; \mathbf 1 \\ \mathbf 1^\top &amp; 0 \end{pmatrix}
 \begin{pmatrix} \mathbf q \\ \lambda \end{pmatrix}
 =
 \begin{pmatrix} 2\mathbf A^\top \boldsymbol\phi \\ q_{\text{tot}} \end{pmatrix}
@@ -5112,7 +5198,7 @@ driver.cpp
 <tr><td>RMP2 gradient</td><td><code>src/post_hf/mp2_gradient.cpp</code></td><td><code>compute_rmp2_gradient</code></td></tr>
 <tr><td>Restricted double-hybrid gradient</td><td><code>src/dft/dh_pt2_gradient.cpp</code>, <code>src/dft/driver.cpp</code></td><td><code>DHGradientDriverContract</code>; correction-only KS Z-vector, literal pair RHS/overlap, Eq. 33 assembly</td></tr>
 <tr><td>Double-hybrid XC-II geometry response</td><td><code>src/dft/dh_pt2_gradient.cpp</code>, <code>src/dft/dft_gradient.cpp</code></td><td><code>DHEq33CompleteXCIIGradient</code>; P-side, D-side, Becke partition, point translation</td></tr>
-<tr><td>Unrestricted double-hybrid gradient</td><td><code>src/dft/udh_driver.cpp</code>, <code>src/dft/udh_*.cpp</code></td><td><code>build_udh_gradient_correction</code>; <code>build_udh_pt2_stationary_contract</code>, <code>solve_udh_zvector</code>, <code>build_udh_overlap_density</code>, <code>build_udh_two_particle_density</code>, <code>build_udh_{lda,gga}_complete_xc_ii_gradient</code></td></tr>
+<tr><td>Unrestricted double-hybrid gradient</td><td><code>src/dft/udh_driver.cpp</code>, <code>src/dft/udh_*.cpp</code></td><td><code>build_udh_gradient_correction</code>; <code>build_udh_pt2_stationary_contract</code>, <code>solve_udh_zvector</code>, <code>build_udh_overlap_density</code>, <code>build_udh_two_particle_density</code>, <code>make_udh_two_particle_source</code>, <code>build_dh_eq33_direct_non_xc_gradient</code>, <code>build_udh_{lda,gga}_complete_xc_ii_gradient</code></td></tr>
 <tr><td>UMP2 gradient intermediates</td><td><code>src/post_hf/mp2_gradient.cpp</code></td><td><code>build_ump2_gradient_intermediates</code> (separable densities <span class="math-inline">\(D^\sigma\)</span> built once via <code>pair_half_density</code> / <code>back_transform_half_density</code> / <code>add_symmetrized</code>, shared with RMP2; 2e term through <code>two_electron_gradient</code>)</td></tr>
 <tr><td>CI string generation</td><td><code>src/post_hf/ci/strings.cpp</code></td><td><code>generate_strings</code>, <code>parity_between</code>, <code>select_active_orbitals</code></td></tr>
 <tr><td>CI determinant space + sigma</td><td><code>src/post_hf/ci/ci.cpp</code></td><td><code>build_ci_space</code>, <code>apply_ci_hamiltonian</code>, <code>slater_condon_element</code></td></tr>
@@ -5149,8 +5235,9 @@ driver.cpp
 <tr><td>KS-DFT driver</td><td><code>src/dft/driver.cpp</code></td><td><code>DFT::Driver::run</code></td></tr>
 <tr><td>D3 dispersion (simple-dftd3)</td><td><code>src/dft/dispersion.cpp</code></td><td><code>DFT::Dispersion::compute</code>, <code>parameter_set_name</code></td></tr>
 <tr><td>TD-DFT / linear response</td><td><code>src/dft/driver.cpp</code></td><td><code>run_linear_response</code>, <code>print_linear_response_report</code></td></tr>
-<tr><td>C-PCM cavity + influence matrix</td><td><code>src/solvation/pcm.cpp</code></td><td><code>build_pcm_state</code>, <code>fibonacci_sphere</code></td></tr>
+<tr><td>C-PCM cavity + influence matrix</td><td><code>src/solvation/pcm.cpp</code></td><td><code>build_pcm_state</code>, <code>pcm_influence_matrix</code></td></tr>
 <tr><td>C-PCM reaction-field operator</td><td><code>src/solvation/pcm.cpp</code></td><td><code>evaluate_pcm_reaction_field</code></td></tr>
+<tr><td>C-PCM analytic gradient</td><td><code>src/gradient/gradient.cpp</code>, <code>src/solvation/pcm.cpp</code></td><td><code>Gradient::pcm_gradient</code>, <code>pcm_grad_{nuc,qv,solver}</code></td></tr>
 <tr><td>External-charge AO matrices (PCM unit potentials)</td><td><code>src/integrals/os.cpp</code></td><td><code>_compute_external_charge_attraction</code></td></tr>
 <tr><td>PCM input parsing + solvent table</td><td><code>src/io/io.cpp</code></td><td><code>_parse_pcm</code>, <code>dielectric_from_solvent_name</code></td></tr>
 <tr><td>Ghost atoms (BSSE)</td><td><code>src/base/types.h</code></td><td><code>Molecule::is_ghost</code>, <code>nuclear_charge</code>, <code>total_nuclear_charge</code></td></tr>
@@ -5243,10 +5330,9 @@ driver.cpp
 <tr><td>Restricted global-double-hybrid analytic gradient</td><td>Complete for Cartesian AOs and LDA/GGA XC-II: gradient, geometry optimization, frequencies (central differences of analytic gradients) and geomopt+frequency. Water and C1 H2O2 B2PLYP/STO-3G energy-FD validated at two steps (Section 15). Range separation, solvent response, and DH response (TDDFT) workflows remain excluded</td></tr>
 <tr><td>UKS global-double-hybrid analytic gradient</td><td>Complete for <code>calculation gradient</code> only, with conventional all-active UMP2 (stored T2, no RI, no frozen core, no level shift), no solvent, and the qualified grid <code>grid_policy g4-3-v4</code> + <code>grid_radial_points 135</code> with no angular override. UKS DH geometry optimization and frequencies are rejected</td></tr>
 <tr><td>Range-separated double hybrids (for example <span class="math-inline">\(\omega\)</span>B2PLYP)</td><td>Complete for single-point energies</td></tr>
-<tr><td>Spherical harmonic basis</td><td>Complete for <code>hartree-fock</code> (real-spherical AO basis via fixed cart→sph transform; SCF, SAO blocking + MO irreps, full point-group ERI reduction, post-HF, RHF/UHF/ROHF gradients, geomopt and frequencies). <code>planck-dft</code> rejects <code>basis_type spherical</code>; spherical MP2 gradients and spherical PCM are rejected</td></tr>
-<tr><td>C-PCM solvation (RHF/UHF/RKS/UKS, single-point energy)</td><td>Complete</td></tr>
+<tr><td>Spherical harmonic basis</td><td>Complete for <code>hartree-fock</code> (real-spherical AO basis via fixed cart→sph transform; SCF, SAO blocking + MO irreps, full point-group ERI reduction, post-HF, RHF/UHF/ROHF gradients, geomopt and frequencies, PCM). <code>planck-dft</code> runs spherical RKS/UKS single points, gradients, geomopt, frequencies, TDDFT, SOSCF, stability, checkpoint restart and PCM (<code>docs/SPHERICAL_DFT.md</code>). Spherical MP2 and double-hybrid gradients are rejected</td></tr>
+<tr><td>C-PCM solvation (RHF/UHF/RKS/UKS, Cartesian and spherical)</td><td>Complete: energies, analytic gradients, geometry optimization and frequencies (imaginary-mode following rejected)</td></tr>
 <tr><td>ESP-derived charges (CHELPG, RESP)</td><td>Complete for HF and DFT, optionally including the PCM reaction field</td></tr>
-<tr><td>PCM gradients / geometry optimization / frequencies</td><td>Not implemented</td></tr>
 <tr><td>PCM coupling to post-HF (MP2, CC, CASSCF)</td><td>Not implemented</td></tr>
 <tr><td>Ghost atoms (basis-only centers; <code>Gh()</code>/<code>@</code>/<code>:</code> syntax)</td><td>Complete</td></tr>
 <tr><td>Effective core potentials (def2, Rb onward)</td><td>Single points in <code>hartree-fock</code> via libecpint. RHF is PySCF-gated (HI, AgCl, PdCO, AuH·H2O, to 1.1e-9 Eh); post-HF energies take the same H_core but are not gated yet. Checkpoints (version 8) store ECP core counts and refuse to mix cores; FCIDUMP writes the valence-only Hamiltonian (PySCF-checked). RHF/UHF/ROHF ECP gradients, geometry optimization and frequencies are PySCF-gated (≤3e-8 Ha/Bohr, 0.03 cm⁻¹); <code>planck-dft</code> rejects ECP bases</td></tr>

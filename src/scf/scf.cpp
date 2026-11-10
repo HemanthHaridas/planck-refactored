@@ -744,7 +744,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
         double pcm_energy = 0.0;
         if (pcm != nullptr && pcm->enabled())
         {
-            auto pcm_result = HartreeFock::Solvation::evaluate_pcm_reaction_field(calculator, *pcm, P);
+            auto pcm_result = HartreeFock::Solvation::evaluate_pcm_reaction_field(calculator, shell_pairs, *pcm, P);
             if (!pcm_result)
                 return std::unexpected("PCM build failed inside RHF iteration: " + pcm_result.error());
             V_pcm = std::move(pcm_result->reaction_potential);
@@ -1357,7 +1357,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         double pcm_energy = 0.0;
         if (pcm != nullptr && pcm->enabled())
         {
-            auto pcm_result = HartreeFock::Solvation::evaluate_pcm_reaction_field(calculator, *pcm, P_total);
+            auto pcm_result = HartreeFock::Solvation::evaluate_pcm_reaction_field(calculator, shell_pairs, *pcm, P_total);
             if (!pcm_result)
                 return std::unexpected("PCM build failed inside UHF iteration: " + pcm_result.error());
             V_pcm = std::move(pcm_result->reaction_potential);

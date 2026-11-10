@@ -4,19 +4,16 @@
 #include <array>
 #include "udh_pt2_gradient.h"
 #include "udh_ks_response.h"
+#include "dh_pt2_gradient.h"
 
 namespace DFT::Gradient
 {
-    // U3 direct chemist MO integrals, NOT amplitude-order ovov arrays.
-    // aa/bb: [p,q,r,s] in one spin; ab: [p_alpha,q_alpha,r_beta,s_beta].
-    // Offset = ((p*n_sigma+q)*n_tau+r)*n_tau+s. All MO columns are needed
-    // for the literal four-coefficient derivative. This is a dense oracle
-    // boundary, not a blocked/scalable transform or new energy backend.
-    struct UDHFullMOIntegrals
-    {
-        int n_alpha=0,n_beta=0;
-        std::vector<double> aa,ab,bb;
-    };
+    // U3 MO integrals: the five Eq. 40 sectors per spin pair, electron 1 in
+    // the first spin and electron 2 in the second (aa, ab = alpha|beta, bb),
+    // in the RKS DHMolecularERIBlocks layout. These are exactly the reads of
+    // the literal four-coefficient derivative; no full MO tensor is formed.
+    // Production builds them with DFT::Driver::build_dh_eq40_mo_eri_blocks_direct.
+    struct UDHMOIntegrals { DHMolecularERIBlocks aa,ab,bb; };
 
     // Separate MO spaces (square G/F/C columns or rectangular vo blocks as
     // specified by the containing result); not U2's physical AO matrices.
@@ -40,7 +37,7 @@ namespace DFT::Gradient
 
     [[nodiscard]] std::expected<UDHPairOrbitalGradient,std::string>
     build_udh_pair_orbital_gradient(const UDHPT2Amplitudes &amplitudes,
-        const UDHFullMOIntegrals &integrals,double c_pt2);
+        const UDHMOIntegrals &integrals,double c_pt2);
 
     struct UDHOrbitalRHS
     {
@@ -64,7 +61,7 @@ namespace DFT::Gradient
     // or UKS production enablement. Inputs are borrowed only during the call.
     [[nodiscard]] std::expected<UDHOrbitalRHS,std::string>
     build_udh_orbital_rhs(const UDHPT2Amplitudes &amplitudes,
-        const UDHFullMOIntegrals &integrals,double c_pt2,
+        const UDHMOIntegrals &integrals,double c_pt2,
         const UDHOrbitalMatrices &mo_coeff,const Eigen::Ref<const Eigen::MatrixXd> &overlap_ao,
         const UDHOrbitalMatrices &fock_mo,const UDHKSResponseOperator &response);
 }

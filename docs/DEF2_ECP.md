@@ -1,8 +1,8 @@
 # What does Planck need to run def2 basis sets, including the ECPs for heavy elements?
 
-Answered 2026-11-07 (branch `feat/def2-ecp`, PR #180). Status lives in
-`vault/Status/Completion.md`; the one open item, a libecpint repin, is in
-`vault/Status/Open Work.md`.
+Answered 2026-11-07 (opened as a scope 2026-10-26). Status lives in
+`vault/Status/`. Landed in PR #180; the one open item, a libecpint repin, is
+under Not done.
 
 ## Answer
 
@@ -95,16 +95,6 @@ differences of PySCF analytic gradients (1e-3 Bohr):
 | `hi_cation_{uhf,rohf}_def2svp_ecp_gradient` | energy and gradient, every printed digit |
 | `hi_rhf_def2svp_ecp_geomopt` | E_opt 1.6e-9 Eh (r 1.60180 vs 1.60186 Å at Planck's default max\|g\| 2.7e-5) |
 | `hi_rhf_def2svp_ecp_freq` | 2421.83 vs 2421.80 cm⁻¹ |
-
-## Open
-
-- **libecpint PR #81** was still open on 2026-11-06, head `4e8767fc`
-  (exactly Planck's pin). When it merges, repin `LIBECPINT_GIT_TAG` to the
-  merge commit (review may change it) and rerun `planck-ecp-gradient-fd` and
-  every `*_ecp` case.
-- **PySCF's DFT gradient is wrong on ECP atoms**; reporting it upstream is
-  `docs/PYSCF_ECP_GRID_RESPONSE_SCOPE.md`. Planck's reference script
-  corrects it at runtime.
 
 ## How it works
 
@@ -342,6 +332,16 @@ from PySCF, the only cases not matching every digit. At Planck's default
 | — | `100675e4` | eleven more Σ Z electron counts (found by the KS stability sweep); RMP2 with ECPs now correct |
 | 6 | `195399ce` | DFT with ECPs (refusal lifted; PySCF ECP grid-response defect found) |
 | — | working tree | post-HF gates (RMP2, RCCSD, CASSCF); Cl offsets explained; RCCSD F_me fix |
+
+## Not done
+
+- **libecpint PR #81** was still open on 2026-11-06, head `4e8767fc`
+  (exactly Planck's pin). When it merges, repin `LIBECPINT_GIT_TAG` to the
+  merge commit (review may change it) and rerun `planck-ecp-gradient-fd` and
+  every `*_ecp` case.
+- **PySCF's DFT gradient is wrong on ECP atoms**; reporting it upstream is
+  `docs/PYSCF_ECP_GRID_RESPONSE_SCOPE.md`. Planck's reference script
+  corrects it at runtime.
 
 ## Not in this scope
 

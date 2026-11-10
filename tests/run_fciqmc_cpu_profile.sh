@@ -38,23 +38,10 @@ case "$seconds" in
 esac
 
 mkdir -p "$out_dir"
-temporary_input=$(mktemp "${TMPDIR:-/tmp}/planck-fciqmc-cpu-profile.XXXXXX.hfinp")
+temporary_input=$(mktemp "${TMPDIR:-/tmp}/planck-fciqmc-cpu-profile-XXXXXXXX")
 trap 'rm -f "$temporary_input"' EXIT HUP INT TERM
 
-python3 - "$fixture" "$temporary_input" <<'PY'
-from pathlib import Path
-import sys
-
-source = Path(sys.argv[1]).read_text()
-if 'fciqmc_profile' in source:
-    raise SystemExit('fixture already declares fciqmc_profile; refuse to override it')
-if 'fciqmc_seed' not in source:
-    raise SystemExit('fixture has no fciqmc_seed insertion point')
-
-source = source.replace('verbosity   verbose', 'verbosity   normal')
-source = source.replace('fciqmc_seed', 'fciqmc_profile         true\n    fciqmc_seed', 1)
-Path(sys.argv[2]).write_text(source)
-PY
+python3 "$repo/tests/fciqmc_profile_input.py" "$fixture" "$temporary_input"
 
 name=$(basename "$fixture" .hfinp)
 prefix="$out_dir/${name}.threads-${threads}"
@@ -63,14 +50,23 @@ profile="$prefix.sample.txt"
 
 printf 'FCIQMC CPU profile: fixture=%s threads=%s seconds=%s log=%s sample=%s\n' \
     "$fixture" "$threads" "$seconds" "$log" "$profile"
+export BASIS_PATH="${BASIS_PATH:-$repo/basis-sets}"
+cp "$temporary_input" "$prefix.hfinp"
+: > "$log"
 OMP_NUM_THREADS="$threads" "$binary" "$temporary_input" >"$log" 2>&1 &
 pid=$!
 
-# Give the program enough time to pass input setup without guessing at a
-# solver iteration.  `sample` observes the real long-running phase thereafter.
-sleep 1
+# The driver flushes this marker at the first sampling step. Waiting for a
+# log event also works when a large integral build outlasts the sampling window.
+while ! grep -q 'FCIQMC_PROFILE:.*phase=sampling_begin$' "$log"; do
+    if ! kill -0 "$pid" 2>/dev/null; then break; fi
+    sleep 0.2
+done
 sample_status=0
-if sample "$pid" "$seconds" -file "$profile"; then
+if ! kill -0 "$pid" 2>/dev/null || ! grep -q 'FCIQMC_PROFILE:.*phase=sampling_begin$' "$log"; then
+    echo "FCIQMC CPU profile: no live sampling phase observed; check the build and fixture duration" >&2
+    sample_status=1
+elif sample "$pid" "$seconds" -file "$profile"; then
     :
 else
     sample_status=$?

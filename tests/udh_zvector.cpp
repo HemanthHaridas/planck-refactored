@@ -1,6 +1,7 @@
 // U4: independent co-moving Fock and stationary-scalar orbital FDs.
 // Synthetic common AO ERIs/nonlinear two-spin XC, not a molecular DH test.
-#include "dft/udh_zvector.h"
+#include "dh_zvector_oracle.h"
+#include "udh_mo_sector_oracle.h"
 #include "dft/dh_pt2_gradient.h"
 #include <Eigen/Jacobi>
 #include <algorithm>
@@ -128,9 +129,9 @@ namespace
           const M rotation=(eye-.5*step*k).partialPivLu().solve(eye+.5*step*k); return c*rotation; };
         return {move(in.mo_coeff.alpha,x.alpha,in.nocc_alpha),move(in.mo_coeff.beta,x.beta,in.nocc_beta)};
     }
-    UDHFullMOIntegrals full_integrals(const Model &model,const Orb &c)
+    TestOracle::FullMOIntegrals full_integrals(const Model &model,const Orb &c)
     {
-        const int na=c.alpha.cols(),nb=c.beta.cols(); UDHFullMOIntegrals g{na,nb,{},{},{}};
+        const int na=c.alpha.cols(),nb=c.beta.cols(); TestOracle::FullMOIntegrals g{na,nb,{},{},{}};
         for(int spin=0;spin<3;++spin)
         {
             const M &cs=spin==2?c.beta:c.alpha,&ct=spin==0?c.alpha:c.beta;
@@ -143,7 +144,7 @@ namespace
         }
         return g;
     }
-    UDHPT2DirectIntegrals direct(const UDHFullMOIntegrals &g,int oa,int ob)
+    UDHPT2DirectIntegrals direct(const TestOracle::FullMOIntegrals &g,int oa,int ob)
     {
         UDHPT2DirectIntegrals out;
         for(int spin=0;spin<3;++spin)
@@ -206,7 +207,7 @@ namespace
           for(int i=0;i<os;++i) for(int j=0;j<ot;++j) for(int a=os;a<ns;++a) for(int b=ot;b<nt;++b)
           { double value=eri[gi(i,a,j,b,ns,nt)]; if(spin!=1) value-=eri[gi(i,b,j,a,ns,nt)];
             v.push_back(value/(es(i,i)+et(j,j)-es(a,a)-et(b,b))); } }
-        auto rhs=build_udh_orbital_rhs(t,g,.27,in.mo_coeff,in.overlap_ao,in.fock_mo,in.response);
+        auto rhs=build_udh_orbital_rhs(t,TestOracle::sectors(g,t),.27,in.mo_coeff,in.overlap_ao,in.fock_mo,in.response);
         if(in.mo_coeff.alpha.cols()!=in.overlap_ao.rows() || in.mo_coeff.beta.cols()!=in.overlap_ao.rows())
         {
             // U4 permits rectangular response spaces, but the current U1/U3
@@ -217,10 +218,10 @@ namespace
             rectangular_rhs.alpha.setConstant(.17); rectangular_rhs.beta.setConstant(-.23);
             const auto solved=solve_udh_zvector(in,rectangular_rhs);
             check(solved.has_value()); if(!solved) throw std::runtime_error(solved.error());
-            near(solved->jacobian,analytic,2e-12);
+            near(analytic*pack(solved->z_ai),-pack(rectangular_rhs),1e-11);
             const V reference=fd.transpose().colPivHouseholderQr().solve(-pack(rectangular_rhs));
             near(pack(solved->z_ai),reference,2e-9);
-            check(solved->rank==n && solved->action_count==1+2*n);
+            check(solved->iterations>0 && solved->action_count==2+2*solved->iterations);
             std::cout<<"U4 rectangular pairs="<<n<<" Fock-column FD="<<largest<<" channel FD="<<channels
                 <<" Z FD="<<maxabs(pack(solved->z_ai)-reference)<<" residual="<<solved->residual_max_abs
                 <<"; U3 all-active rejection confirmed\n";
@@ -229,8 +230,9 @@ namespace
         check(rhs.has_value()); if(!rhs) throw std::runtime_error(rhs.error());
         auto solved=solve_udh_zvector(in,rhs->total_ai);
         check(solved.has_value()); if(!solved) throw std::runtime_error(solved.error());
-        check(solved->rank==n && solved->action_count==1+2*n && solved->reciprocal_condition>1e-12);
-        near(solved->jacobian,analytic,2e-12);
+        check(solved->action_count==2+2*solved->iterations);
+        near(TestOracle::dense_udh_jacobian(in),analytic,0);
+        near(analytic*pack(solved->z_ai),-pack(rhs->total_ai),1e-11);
         const V reference=fd.transpose().colPivHouseholderQr().solve(-pack(rhs->total_ai));
         near(pack(solved->z_ai),reference,2e-9);
         Orb mixed=zero(in); mixed.alpha.setConstant(.37); mixed.beta.setConstant(-.23);
@@ -262,7 +264,7 @@ namespace
         if(reverse) { near(reverse->z_ai.alpha,solved->z_ai.beta,2e-12); near(reverse->z_ai.beta,solved->z_ai.alpha,2e-12); }
         std::cout<<"U4 pairs="<<n<<" Fock-column FD="<<largest<<" channel FD="<<channels
             <<" stationary FD="<<stationary_error<<" residual="<<solved->residual_max_abs
-            <<" rcond="<<solved->reciprocal_condition<<'\n';
+            <<" iterations="<<solved->iterations<<" actions="<<solved->action_count<<'\n';
     }
     void controls()
     {
@@ -274,8 +276,8 @@ namespace
         check(!solve_udh_zvector(invalid,rhs)); // no hidden recanonicalization
         invalid=in; invalid.overlap_ao(0,0)=-1; check(!solve_udh_zvector(invalid,rhs));
         invalid=in; invalid.nocc_beta=-1; check(!solve_udh_zvector(invalid,rhs));
-        UDHZVectorOptions options; options.residual_tolerance=0; check(!solve_udh_zvector(in,rhs,options));
-        options={}; options.minimum_rcond=.99; check(!solve_udh_zvector(in,rhs,options));
+        DHZVectorOptions options; options.tolerance=0; check(!solve_udh_zvector(in,rhs,options));
+        options={}; options.max_iterations=1; check(!solve_udh_zvector(in,rhs,options)); // no dense fallback
         const auto zero_rhs=solve_udh_zvector(in,zero(in)); check(zero_rhs.has_value());
         if(zero_rhs) near(pack(zero_rhs->z_ai),V::Zero(pack(rhs).size()),1e-14);
         for(int channel=0;channel<3;++channel)
@@ -295,20 +297,23 @@ namespace
         invalid=in;
         invalid.response.xc=[xa=f.model.xa,xb=f.model.xb](const AO &q)->std::expected<AO,std::string>
         { return AO{.9*dot(xb,q.beta)*xa,.1*dot(xa,q.alpha)*xb}; };
-        const auto nonadjoint=solve_udh_zvector(invalid,rhs);
-        check(!nonadjoint && nonadjoint.error().find("adjointness")!=std::string::npos);
-        // Explicitly relaxed adjoint gate solely to test the transpose route
-        // on a nonphysical operator; Az=-ell must NOT satisfy this reference.
-        options={}; options.adjoint_tolerance=1;
-        auto transposed=solve_udh_zvector(invalid,rhs,options); check(transposed.has_value());
-        if(transposed)
-        { near(transposed->jacobian.transpose()*pack(transposed->z_ai),-pack(rhs),2e-12);
-          check(maxabs(transposed->jacobian*pack(transposed->z_ai)+pack(rhs))>1e-6); }
-        invalid=in; int calls=0; const int n=pack(rhs).size(); const auto j=in.response.coulomb;
+        // The solver takes A z=-ell and relies on the physical Hessian being
+        // self-adjoint (checked on every audit fixture above). Pin that
+        // convention on a nonphysical, nonadjoint operator: A z, not A^T z.
+        const auto nonadjoint=solve_udh_zvector(invalid,rhs); check(nonadjoint.has_value());
+        if(nonadjoint)
+        { const M a=TestOracle::dense_udh_jacobian(invalid); check(maxabs(a-a.transpose())>1e-3);
+          near(a*pack(nonadjoint->z_ai),-pack(rhs),1e-11);
+          check(maxabs(a.transpose()*pack(nonadjoint->z_ai)+pack(rhs))>1e-6); }
+        // The final residual is a fresh action: perturb only the last call.
+        invalid=in; int calls=0; const auto j=in.response.coulomb;
         invalid.response.coulomb=[&](const Eigen::Ref<const M> &q)->std::expected<M,std::string>
-        { if(++calls>n+1) return std::unexpected("fresh transpose injection"); return j(q); };
+        { ++calls; return j(q); };
+        check(solve_udh_zvector(invalid,rhs).has_value()); const int total=calls; calls=0;
+        invalid.response.coulomb=[&](const Eigen::Ref<const M> &q)->std::expected<M,std::string>
+        { auto v=j(q); if(++calls==total && v) *v*=1.5; return v; };
         const auto stale=solve_udh_zvector(invalid,rhs);
-        check(!stale && calls==n+2 && stale.error().find("fresh transpose injection")!=std::string::npos);
+        check(!stale && calls==total && stale.error().find("fresh final residual")!=std::string::npos);
         // Rank and indefiniteness are distinct: zero is rejected; negative
         // nonzero gaps are solved without adding a level shift.
         auto no_response=[](const Eigen::Ref<const M> &q)->std::expected<M,std::string>
@@ -320,11 +325,11 @@ namespace
         check(!solve_udh_zvector(invalid,rhs));
         invalid.fock_mo.alpha=in.fock_mo.alpha; invalid.fock_mo.beta=-in.fock_mo.beta;
         const auto indefinite=solve_udh_zvector(invalid,rhs); check(indefinite.has_value());
-        if(indefinite) near(indefinite->jacobian.transpose()*pack(indefinite->z_ai),-pack(rhs),2e-12);
+        if(indefinite) near(TestOracle::dense_udh_jacobian(invalid)*pack(indefinite->z_ai),-pack(rhs),1e-11);
         auto empty=make(4,3,3).in; const auto no_pairs=solve_udh_zvector(empty,zero(empty));
-        check(no_pairs && no_pairs->rank==0 && no_pairs->action_count==1 && no_pairs->z_ai.alpha.rows()==0 &&
+        check(no_pairs && no_pairs->action_count==0 && no_pairs->z_ai.alpha.rows()==0 &&
             no_pairs->z_ai.alpha.cols()==4 && no_pairs->z_ai.beta.rows()==0 && no_pairs->z_ai.beta.cols()==3);
-        std::cout<<"U4 controls: transpose, rank, indefinite, errors, fresh action, empty spaces\n";
+        std::cout<<"U4 controls: A z convention, singular, indefinite, errors, fresh action, empty spaces\n";
     }
     void closed_shell()
     {
@@ -365,6 +370,6 @@ int main()
         controls(); closed_shell();
     }
     catch(const std::exception &e) { std::cerr<<e.what()<<'\n'; ok=false; }
-    std::cout<<(ok?"PASS":"FAIL")<<" U4 coupled canonical KS Jacobian and transpose Z solve\n";
+    std::cout<<(ok?"PASS":"FAIL")<<" U4 coupled canonical KS Jacobian and GMRES Z solve\n";
     return ok?0:1;
 }

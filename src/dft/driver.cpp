@@ -1465,11 +1465,6 @@ namespace DFT::Driver
             // Same coefficient source as the SCF (xc_grid.cpp): c_fr K[Coulomb]
             // + c_sr K[erf short-range, omega].  For a global hybrid c_sr = 0
             // and c_fr == exact_exchange_coefficient().
-            if (exchange_functional.has_non_erf_short_range_exchange())
-                return std::unexpected(std::format(
-                    "TDDFT / linear response: {} uses Yukawa or Gaussian screened exchange; "
-                    "only erf range separation is implemented",
-                    exchange_functional.name()));
             const double full_range_exchange_coefficient = exchange_functional.fock_exchange_coefficient();
             const double short_range_exchange_coefficient = exchange_functional.short_range_exchange_coefficient();
 
@@ -1950,6 +1945,7 @@ namespace DFT::Driver
                     {
                         auto pcm_result = HartreeFock::Solvation::evaluate_pcm_reaction_field(
                             calculator,
+                            prepared.shell_pairs,
                             *prepared.pcm,
                             density);
                         if (!pcm_result)
@@ -2443,6 +2439,7 @@ namespace DFT::Driver
                 {
                     auto pcm_result = HartreeFock::Solvation::evaluate_pcm_reaction_field(
                         calculator,
+                        prepared.shell_pairs,
                         *prepared.pcm,
                         total_density);
                     if (!pcm_result)
@@ -3010,15 +3007,13 @@ namespace DFT::Driver
                 return std::unexpected(what + " is not yet supported by planck-dft with basis_type spherical "
                                               "(docs/SPHERICAL_DFT.md); spherical RKS/UKS single points (double "
                                               "hybrids included), gradients, geometry optimization, frequencies, "
-                                              "TDDFT, SOSCF, stability analysis and checkpoint restart are. Use basis_type cartesian for this calculation.");
+                                              "TDDFT, SOSCF, stability analysis, checkpoint restart and PCM single points are. Use basis_type cartesian for this calculation.");
             };
             if (calculator._calculation == HartreeFock::CalculationType::ImaginaryFollow)
                 return refuse(workflow_label(calculator._calculation));
             if (functionals.has_double_hybrid_pt2 &&
                 calculator._calculation != HartreeFock::CalculationType::SinglePoint)
                 return refuse("A double-hybrid functional with " + workflow_label(calculator._calculation));
-            if (calculator._solvation._model != HartreeFock::SolvationModel::None)
-                return refuse("PCM solvation");
             return {};
         }
 
@@ -3223,6 +3218,14 @@ namespace DFT::Driver
             if (!correlation)
                 return std::unexpected("DFT correlation functional initialization failed: " + correlation.error());
 
+            // cam_coefficients() would fold these into the erf short-range
+            // term, which is a different functional from the one named.
+            if (exchange->has_non_erf_short_range_exchange())
+                return std::unexpected(std::format(
+                    "{} uses Yukawa or Gaussian screened exchange; "
+                    "only erf range separation is implemented",
+                    exchange->name()));
+
             const bool has_range_separation = exchange->is_range_separated();
             const double implemented_exact_exchange_coefficient =
                 exchange->fock_exchange_coefficient();
@@ -3353,7 +3356,7 @@ namespace DFT::Driver
 
             if (calculator._solvation._model != HartreeFock::SolvationModel::None)
             {
-                auto pcm = HartreeFock::Solvation::build_pcm_state(calculator, prepared.shell_pairs);
+                auto pcm = HartreeFock::Solvation::build_pcm_state(calculator);
                 if (!pcm)
                     return std::unexpected("DFT PCM setup failed: " + pcm.error());
                 prepared.pcm = std::move(*pcm);
@@ -3409,7 +3412,7 @@ namespace DFT::Driver
 
             if (calculator._solvation._model != HartreeFock::SolvationModel::None)
             {
-                auto pcm = HartreeFock::Solvation::build_pcm_state(calculator, prepared.shell_pairs);
+                auto pcm = HartreeFock::Solvation::build_pcm_state(calculator);
                 if (!pcm)
                     return std::unexpected("DFT PCM setup failed: " + pcm.error());
                 prepared.pcm = std::move(*pcm);
@@ -3760,6 +3763,7 @@ namespace DFT::Driver
                 HartreeFock::LogLevel::Info,
                 "DFT Driver :",
                 "Preparation complete; entering KS-SCF");
+            HartreeFock::SCF::warn_open_shell_hcore_guess(calculator);
 
             auto result = run_ks_scf_scaffold(
                 calculator,
@@ -4424,14 +4428,6 @@ namespace DFT::Driver
             const PreparedSystem &prepared,
             const InitializedFunctionals &functionals)
         {
-            if (prepared.pcm && prepared.pcm->enabled())
-            {
-                HartreeFock::Logger::logging(
-                    HartreeFock::LogLevel::Warning,
-                    "DFT Gradient :",
-                    "Analytic KS gradient omits PCM geometry response; use numerical gradient if solvation coupling is required.");
-            }
-
             auto xc_grid = evaluate_current_density_and_xc(
                 calculator,
                 prepared,
@@ -4542,7 +4538,15 @@ namespace DFT::Driver
             if (dft_gradient_debug_enabled())
                 print_gradient_component_report("D3", dispersion->gradient);
 
-            calculator._gradient = *wf_grad + *xc_grad + dispersion->gradient;
+            // C-PCM geometry response (docs/PCM_GEOMETRY.md step 4).
+            auto pcm_grad = HartreeFock::Gradient::pcm_gradient(
+                calculator, prepared.shell_pairs, prepared.pcm ? &*prepared.pcm : nullptr);
+            if (!pcm_grad)
+                return std::unexpected(pcm_grad.error());
+            if (dft_gradient_debug_enabled())
+                print_gradient_component_report("PCM", *pcm_grad);
+
+            calculator._gradient = *wf_grad + *xc_grad + dispersion->gradient + *pcm_grad;
             if (dft_gradient_debug_enabled())
                 print_gradient_component_report("KS-total", calculator._gradient);
 
@@ -4812,28 +4816,14 @@ namespace DFT::Driver
         std::expected<Gradient::DHEq33TwoElectronGradient, std::string>
         contract_dh_eq33_two_electron_direct(
             const HartreeFock::Calculator &calculator,
-            const Gradient::DHEq46_47TwoParticleDensity &two_particle,
-            const Gradient::DHEq47TiledExecution *eq47_tiled)
+            const Gradient::DHEq33TwoParticleSource &source)
         {
             if (calculator._basis._basis != HartreeFock::BasisType::Cartesian ||
                 calculator._molecule.natoms == 0 || calculator._shells.nbasis() == 0)
                 return std::unexpected("DH Eq. 33 direct ERI contraction requires a nonempty Cartesian AO basis and molecule.");
             const int nbasis = static_cast<int>(calculator._shells.nbasis());
-            const std::size_t n4 = static_cast<std::size_t>(nbasis) * nbasis * nbasis * nbasis;
-            const auto &nonseparable = two_particle.nonseparable_raw_ao.size() == n4
-                ? two_particle.nonseparable_raw_ao : two_particle.nonseparable_symmetric_ao;
-            const bool has_materialized_eq47 = nonseparable.size() == n4;
-            const bool has_tiled_eq47 = eq47_tiled && eq47_tiled->amplitudes && eq47_tiled->mo_coeff &&
-                eq47_tiled->transform_tile > 0 && eq47_tiled->mu_tile > 0 &&
-                eq47_tiled->occupied_tile > 0 && eq47_tiled->nu_tile > 0 &&
-                eq47_tiled->kappa_tile > 0 && eq47_tiled->tau_tile > 0;
-            if (two_particle.n_ao != nbasis || (!has_materialized_eq47 && !has_tiled_eq47) ||
-                two_particle.relaxed_difference_ao.rows() != nbasis ||
-                two_particle.relaxed_difference_ao.cols() != nbasis ||
-                two_particle.ground_density_ao.rows() != nbasis ||
-                two_particle.ground_density_ao.cols() != nbasis ||
-                !std::isfinite(two_particle.exact_exchange) || two_particle.exact_exchange < 0.0)
-                return std::unexpected("DH Eq. 33 direct ERI contraction: invalid AO two-particle density dimensions.");
+            if (source.n_ao != nbasis || !source.well_formed())
+                return std::unexpected("DH Eq. 33 direct ERI contraction: invalid AO two-particle source.");
             auto bf_atom = dh_eq33_basis_function_atoms(calculator);
             if (!bf_atom) return std::unexpected(bf_atom.error());
 
@@ -4841,8 +4831,6 @@ namespace DFT::Driver
             Gradient::DHEq33TwoElectronGradient out{
                 Eigen::VectorXd::Zero(ncoord), Eigen::VectorXd::Zero(ncoord)};
             const auto &basis_functions = calculator._shells._basis_functions;
-            const auto eri_index = [nbasis](int mu, int nu, int ka, int ta)
-            { return ((static_cast<std::size_t>(mu) * nbasis + nu) * nbasis + ka) * nbasis + ta; };
             const auto accumulate = [&](int mu, int nu, int ka, int ta, double pair)
             {
                 const HartreeFock::ShellPair left(
@@ -4853,13 +4841,9 @@ namespace DFT::Driver
                 const int centers[4] = {
                     (*bf_atom)[static_cast<std::size_t>(mu)], (*bf_atom)[static_cast<std::size_t>(nu)],
                     (*bf_atom)[static_cast<std::size_t>(ka)], (*bf_atom)[static_cast<std::size_t>(ta)]};
-                // d(ERI) is eightfold symmetric. Contracting it with literal
-                // raw Eq. (46)/(47) is exactly the same scalar as using their
-                // symmetric adapters, without allocating either adapter.
-                const double separable =
-                    two_particle.relaxed_difference_ao(mu, nu) * two_particle.ground_density_ao(ka, ta) -
-                    0.5 * two_particle.exact_exchange *
-                    two_particle.relaxed_difference_ao(mu, ka) * two_particle.ground_density_ao(nu, ta);
+                // d(ERI) is eightfold symmetric, so contracting it with the
+                // literal raw coefficient needs no symmetrized tensor.
+                const double separable = source.separable(mu, nu, ka, ta);
                 for (int center = 0; center < 4; ++center)
                     for (int q = 0; q < 3; ++q)
                     {
@@ -4868,40 +4852,30 @@ namespace DFT::Driver
                         out.nonseparable(coordinate) += pair * derivative[3 * center + q];
                     }
             };
-            if (has_materialized_eq47)
-                for (int mu = 0; mu < nbasis; ++mu)
-                    for (int nu = 0; nu < nbasis; ++nu)
-                        for (int ka = 0; ka < nbasis; ++ka)
-                            for (int ta = 0; ta < nbasis; ++ta)
-                                accumulate(mu, nu, ka, ta, nonseparable[eri_index(mu, nu, ka, ta)]);
-            else
-            {
-                const auto tiled = Gradient::for_each_dh_eq47_nonseparable_raw_ao_block(
-                    *eq47_tiled->amplitudes, *eq47_tiled->mo_coeff,
-                    eq47_tiled->occupied_tile, eq47_tiled->mu_tile, eq47_tiled->nu_tile,
-                    eq47_tiled->kappa_tile, eq47_tiled->tau_tile,
-                    [&accumulate](int mu_begin, int mu_count, int nu_begin, int nu_count,
-                        int kappa_begin, int kappa_count, int tau_begin, int tau_count,
-                        const std::vector<double> &tile)
-                    -> std::expected<void, std::string>
-                    {
-                        const std::size_t suffix = static_cast<std::size_t>(nu_count)*kappa_count*tau_count;
-                        if (tile.size() != static_cast<std::size_t>(mu_count) * suffix)
-                            return std::unexpected("DH Eq. 33 direct ERI contraction: invalid Eq. 47 tile extent.");
-                        for (int local_mu = 0; local_mu < mu_count; ++local_mu)
-                            for (int local_nu = 0; local_nu < nu_count; ++local_nu)
-                                for (int local_ka = 0; local_ka < kappa_count; ++local_ka)
-                                    for (int local_ta = 0; local_ta < tau_count; ++local_ta)
-                                    {
-                                        const std::size_t index =
-                                            ((static_cast<std::size_t>(local_mu) * nu_count + local_nu) * kappa_count + local_ka) * tau_count + local_ta;
-                                        accumulate(mu_begin + local_mu, nu_begin + local_nu,
-                                            kappa_begin + local_ka, tau_begin + local_ta, tile[index]);
-                                    }
-                        return {};
-                    },eq47_tiled->workspace);
-                if (!tiled) return std::unexpected(tiled.error());
-            }
+            const auto tiled = Gradient::for_each_dh_pair_ao_block(
+                nbasis, source.pair,
+                source.occupied_tile, source.mu_tile, source.nu_tile, source.kappa_tile, source.tau_tile,
+                [&accumulate](int mu_begin, int mu_count, int nu_begin, int nu_count,
+                    int kappa_begin, int kappa_count, int tau_begin, int tau_count,
+                    const std::vector<double> &tile)
+                -> std::expected<void, std::string>
+                {
+                    const std::size_t suffix = static_cast<std::size_t>(nu_count)*kappa_count*tau_count;
+                    if (tile.size() != static_cast<std::size_t>(mu_count) * suffix)
+                        return std::unexpected("DH Eq. 33 direct ERI contraction: invalid pair tile extent.");
+                    for (int local_mu = 0; local_mu < mu_count; ++local_mu)
+                        for (int local_nu = 0; local_nu < nu_count; ++local_nu)
+                            for (int local_ka = 0; local_ka < kappa_count; ++local_ka)
+                                for (int local_ta = 0; local_ta < tau_count; ++local_ta)
+                                {
+                                    const std::size_t index =
+                                        ((static_cast<std::size_t>(local_mu) * nu_count + local_nu) * kappa_count + local_ka) * tau_count + local_ta;
+                                    accumulate(mu_begin + local_mu, nu_begin + local_nu,
+                                        kappa_begin + local_ka, tau_begin + local_ta, tile[index]);
+                                }
+                    return {};
+                }, source.workspace);
+            if (!tiled) return std::unexpected(tiled.error());
             return out;
         }
     }
@@ -4917,28 +4891,38 @@ namespace DFT::Driver
             const Eigen::Ref<const Eigen::MatrixXd> &relaxed_ao,
             const Eigen::Ref<const Eigen::MatrixXd> &overlap_ao)
         { return contract_dh_eq33_one_electron_overlap_direct(calculator, relaxed_ao, overlap_ao); };
-        out.direct_two_electron = [&calculator](
-            const Gradient::DHEq46_47TwoParticleDensity &two_particle,
-            const Gradient::DHEq47TiledExecution *eq47_tiled)
-        { return contract_dh_eq33_two_electron_direct(calculator, two_particle, eq47_tiled); };
+        out.direct_two_electron = [&calculator](const Gradient::DHEq33TwoParticleSource &source)
+        { return contract_dh_eq33_two_electron_direct(calculator, source); };
         return out;
     }
 
     std::expected<Gradient::DHMolecularERIBlocks, std::string>
     build_dh_eq40_mo_eri_blocks_direct(const std::vector<double> &eri_ao, std::size_t nao,
         const Eigen::Ref<const Eigen::MatrixXd> &c_occ,
-        const Eigen::Ref<const Eigen::MatrixXd> &c_virt)
+        const Eigen::Ref<const Eigen::MatrixXd> &c_virt,
+        const Eigen::Ref<const Eigen::MatrixXd> &c_occ_2,
+        const Eigen::Ref<const Eigen::MatrixXd> &c_virt_2)
     {
-        if (nao==0 || c_occ.rows()!=static_cast<Eigen::Index>(nao) || c_virt.rows()!=static_cast<Eigen::Index>(nao) ||
-            c_occ.cols()==0 || c_virt.cols()==0)
+        const auto rows=static_cast<Eigen::Index>(nao);
+        if (nao==0 || eri_ao.size()!=nao*nao*nao*nao || c_occ.rows()!=rows || c_virt.rows()!=rows ||
+            c_occ_2.rows()!=rows || c_virt_2.rows()!=rows)
             return std::unexpected("DH Eq. 40 direct MO sectors: invalid AO ERIs or coefficient dimensions.");
         Gradient::DHMolecularERIBlocks out;
         out.n_occ=static_cast<int>(c_occ.cols()); out.n_virt=static_cast<int>(c_virt.cols());
-        out.ovov=HartreeFock::Correlation::transform_eri(eri_ao,nao,c_occ,c_virt,c_occ,c_virt);
-        out.vvov=HartreeFock::Correlation::transform_eri(eri_ao,nao,c_virt,c_virt,c_occ,c_virt);
-        out.ooov=HartreeFock::Correlation::transform_eri(eri_ao,nao,c_occ,c_occ,c_occ,c_virt);
-        out.ovvv=HartreeFock::Correlation::transform_eri(eri_ao,nao,c_occ,c_virt,c_virt,c_virt);
-        out.ovoo=HartreeFock::Correlation::transform_eri(eri_ao,nao,c_occ,c_virt,c_occ,c_occ);
+        out.n_occ_2=static_cast<int>(c_occ_2.cols()); out.n_virt_2=static_cast<int>(c_virt_2.cols());
+        // An empty frame (e.g. a spin with no electrons) gives an empty sector.
+        const auto sector=[&](const Eigen::MatrixXd &c1,const Eigen::MatrixXd &c2,
+            const Eigen::MatrixXd &c3,const Eigen::MatrixXd &c4)
+        {
+            if (!c1.cols() || !c2.cols() || !c3.cols() || !c4.cols()) return std::vector<double>();
+            return HartreeFock::Correlation::transform_eri(eri_ao,nao,c1,c2,c3,c4);
+        };
+        const Eigen::MatrixXd o1=c_occ,v1=c_virt,o2=c_occ_2,v2=c_virt_2;
+        out.ovov=sector(o1,v1,o2,v2);
+        out.vvov=sector(v1,v1,o2,v2);
+        out.ooov=sector(o1,o1,o2,v2);
+        out.ovvv=sector(o1,v1,v2,v2);
+        out.ovoo=sector(o1,v1,o2,o2);
         return out;
     }
 
@@ -4987,6 +4971,7 @@ namespace DFT::Driver
         const std::vector<double> &eri_ao = HartreeFock::Correlation::ensure_eri(
             calculator, prepared.shell_pairs, eri_local, "DH Eq. 40:");
         auto direct_blocks=build_dh_eq40_mo_eri_blocks_direct(eri_ao,static_cast<std::size_t>(nao),
+            pt2_result.mo_coeff.leftCols(nocc),pt2_result.mo_coeff.rightCols(nvirt),
             pt2_result.mo_coeff.leftCols(nocc),pt2_result.mo_coeff.rightCols(nvirt));
         if(!direct_blocks) return std::unexpected("DH Eq. 40 direct MO sector construction failed.");
         auto stationary = Gradient::build_dh_stationary_products(
@@ -5017,11 +5002,10 @@ namespace DFT::Driver
         out.residual_max_abs=solved->residual_max_abs;
         out.solver=std::move(static_cast<Gradient::DHZVectorStatistics &>(*solved));
         HartreeFock::Logger::logging(HartreeFock::LogLevel::Info,"DH Z-vector :",
-            std::format("backend={} pairs={} iterations={} actions={} restarts={} residual={:.3e} "
-                        "krylov_matrix_bytes={} dense_matrix_bytes={} seconds={:.6f}",
-                solver_options.backend==Gradient::DHZVectorBackend::MatrixFreeGMRES?"GMRES":"dense-reference",
+            std::format("GMRES pairs={} iterations={} actions={} restarts={} residual={:.3e} "
+                        "krylov_matrix_bytes={} seconds={:.6f}",
                 nocc*nvirt,out.solver.iterations,out.solver.action_count,out.solver.restarts,
-                out.residual_max_abs,out.solver.krylov_matrix_bytes,out.solver.dense_matrix_bytes,out.solver.elapsed_seconds));
+                out.residual_max_abs,out.solver.krylov_matrix_bytes,out.solver.elapsed_seconds));
         return out;
     }
 
@@ -5082,7 +5066,7 @@ namespace DFT::Driver
 
         if (calculator._solvation._model != HartreeFock::SolvationModel::None)
         {
-            auto pcm = HartreeFock::Solvation::build_pcm_state(calculator, prepared.shell_pairs);
+            auto pcm = HartreeFock::Solvation::build_pcm_state(calculator);
             if (!pcm)
                 return std::unexpected("DFT PCM setup failed: " + pcm.error());
             prepared.pcm = std::move(*pcm);
@@ -5453,7 +5437,7 @@ namespace DFT::Driver
                 calculator._esp._include_reaction_field)
             {
                 auto state =
-                    HartreeFock::Solvation::build_pcm_state(calculator, shell_pairs);
+                    HartreeFock::Solvation::build_pcm_state(calculator);
                 if (!state)
                     // Degrade to the solute potential rather than failing the
                     // run; log_esp_report labels whichever it actually printed.
@@ -5464,15 +5448,11 @@ namespace DFT::Driver
                 {
                     pcm_state = std::move(*state);
 
-                    Eigen::MatrixXd pcm_density =
-                        calculator._info._scf.alpha.density;
-                    if (calculator._scf._scf != HartreeFock::SCFType::RHF &&
-                        calculator._info._scf.beta.density.rows() ==
-                            calculator._info._scf.alpha.density.rows())
-                        pcm_density += calculator._info._scf.beta.density;
+                    const Eigen::MatrixXd pcm_density =
+                        HartreeFock::Solvation::pcm_total_density(calculator);
 
                     auto pcm = HartreeFock::Solvation::evaluate_pcm_reaction_field(
-                        calculator, *pcm_state, pcm_density);
+                        calculator, shell_pairs, *pcm_state, pcm_density);
                     if (!pcm)
                         HartreeFock::Logger::logging(
                             HartreeFock::LogLevel::Warning, "ESP Reaction Field :",

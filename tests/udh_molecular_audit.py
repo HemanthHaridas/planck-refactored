@@ -338,8 +338,10 @@ class Audit:
     def rejection(self, template):
         symbols, xyz, charge, mult = parse_geometry(template)
         gradient = render_gradient_input(template, symbols, xyz, charge, mult)
-        cases = {"production": (gradient, self.production, "single-point energies"),
-                 "spherical": (gradient.replace("basis_type  cartesian", "basis_type  spherical"), self.executable, "Spherical basis"),
+        # Production computes UKS DH gradients (V4 grid) since 039bd2df, so it
+        # is no longer a rejection case; the FD fixtures above exercise it.
+        cases = {"spherical": (gradient.replace("basis_type  cartesian", "basis_type  spherical"), self.executable,
+                               "with basis_type spherical"),
                  "roks": (re.sub(r"(scf_type\s+)uhf", r"\g<1>rohf", gradient), self.executable, "ROKS/ROHF"),
                  "optimization": (gradient.replace("calculation gradient", "calculation geomopt"), self.executable, "single-point energies"),
                  "frequency": (gradient.replace("calculation gradient", "calculation frequency"), self.executable, "single-point energies")}
@@ -347,10 +349,11 @@ class Audit:
                               ("missing-t2", "mp2_with_t2 .false."), ("pt2-shift", "mp2_level_shift 0.3")):
             cases[name] = (gradient.replace("%end_scf", setting+"\n%end_scf"), self.executable,
                            "all-active conventional unshifted PT2")
-        # The common PCM workflow guard runs before the UDH-specific guard.
-        # Require its exact scope rejection, not a later unreachable message.
-        cases["solvent"] = (gradient+"\n%begin_pcm\nmodel pcm\n%end_pcm\n", self.executable,
-                            "PCM is currently implemented only for single-point energy calculations")
+        # PCM gradients exist since 2026-11-08, so the UDH solvent guard is the
+        # one that must refuse. The PCM block needs a dielectric, or the input
+        # parser refuses first and the guard is never reached.
+        cases["solvent"] = (gradient+"\n%begin_pcm\nmodel pcm\nsolvent water\n%end_pcm\n", self.executable,
+                            "does not implement solvent response")
         results = []
         for name, (text, binary, message) in cases.items():
             inp = self.root/("reject-"+name+".hfinp"); inp.write_text(text)

@@ -667,8 +667,20 @@ namespace HartreeFock::Correlation::CI::QMC
     // passive side channel: no field is consulted by propagation, so collecting
     // it cannot alter random draws, arithmetic order, or the walker trajectory.
     // A bin is owned by one OpenMP loop iteration, making its counters race-free.
+    struct FCIQMCParentWeightWork
+    {
+        std::uint64_t visits = 0;
+        // Sum of |incoming weight| over visits. The split is at the spawn granularity.
+        double absolute_weight = 0.0;
+        std::uint64_t attempts = 0;
+        // Individual contributions after rounding, before the accumulator folds them.
+        std::uint64_t nonzero_spawns = 0;
+    };
+
     struct FCIQMCBinWork
     {
+        FCIQMCParentWeightWork below_granularity;
+        FCIQMCParentWeightWork at_or_above_granularity;
         std::uint64_t parents = 0;
         std::uint64_t spawn_attempts = 0;
         std::uint64_t invalid_excitations = 0;
@@ -693,6 +705,8 @@ namespace HartreeFock::Correlation::CI::QMC
         double canonical_merge_stream_seconds = 0.0;
         double canonical_pairwise_seconds = 0.0;
         std::uint64_t canonical_merge_emitted = 0;
+        std::size_t peak_merge_tagged_bytes = 0;
+        std::size_t peak_merge_output_bytes = 0;
         std::array<FCIQMCBinWork, kFciqmcBins> bins{};
 
         void clear() noexcept { *this = {}; }

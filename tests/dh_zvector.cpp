@@ -1,4 +1,4 @@
-#include "dft/dh_zvector.h"
+#include "dh_zvector_oracle.h"
 #include <iostream>
 #include <stdexcept>
 
@@ -38,15 +38,13 @@ bool test_dh_zvector()
         (applied->xc_ai-ef).norm()<1e-14 &&
         (applied->total_ai-orbital-ej-ek-ef).norm()<1e-14,"independent Eq27 channels");
     const Eigen::MatrixXd rhs=-(orbital+ej+ek+ef);
-    DHZVectorOptions dense_options; dense_options.backend=DHZVectorBackend::DenseReference;
-    const auto dense=solve_dh_zvector(rhs,co,cv,eps,*response,dense_options);
+    const Eigen::MatrixXd dense=TestOracle::dense_dh_zvector(rhs,co,cv,eps,*response);
     auto gmres_options=DHZVectorOptions{}; gmres_options.restart=2; gmres_options.tolerance=1e-13;
     const auto iterative=solve_dh_zvector(rhs,co,cv,eps,*response,gmres_options);
-    check(dense && iterative && (dense->z_ai-known).norm()<1e-11 &&
-        (iterative->z_ai-known).norm()<1e-11 && (iterative->z_ai-dense->z_ai).norm()<1e-11 &&
-        iterative->restarts>0 && iterative->dense_matrix_bytes==0 && dense->krylov_matrix_bytes==0 &&
-        dense->action_count==no*nv+1 && iterative->action_count==2+2*iterative->iterations &&
-        iterative->residual_max_abs<=1e-13,"typed backends, packing, restart and fresh residual");
+    check(iterative && (dense-known).norm()<1e-11 &&
+        (iterative->z_ai-known).norm()<1e-11 && (iterative->z_ai-dense).norm()<1e-11 &&
+        iterative->restarts>0 && iterative->action_count==2+2*iterative->iterations &&
+        iterative->residual_max_abs<=1e-13,"dense oracle, packing, restart and fresh residual");
     gmres_options.max_iterations=1;
     const auto exhausted=solve_dh_zvector(rhs,co,cv,eps,*response,gmres_options);
     check(!exhausted && exhausted.error().find("no dense fallback")!=std::string::npos,"iteration exhaustion fails closed");
@@ -58,12 +56,8 @@ bool test_dh_zvector()
         DHResponseFn error=[](const Eigen::Ref<const Eigen::MatrixXd>&)
             ->std::expected<Eigen::MatrixXd,std::string> { return std::unexpected("injected channel failure"); };
         (channel==0?failed.coulomb:channel==1?failed.exchange:failed.xc)=error;
-        for (auto backend : {DHZVectorBackend::MatrixFreeGMRES,DHZVectorBackend::DenseReference})
-        {
-            DHZVectorOptions options; options.backend=backend;
-            const auto value=solve_dh_zvector(rhs,co,cv,eps,failed,options);
-            check(!value && value.error().find("injected channel failure")!=std::string::npos,"J/K/XC errors preserved");
-        }
+        const auto value=solve_dh_zvector(rhs,co,cv,eps,failed);
+        check(!value && value.error().find("injected channel failure")!=std::string::npos,"J/K/XC errors preserved");
     }
     auto failed=*response;
     failed.xc=[](const Eigen::Ref<const Eigen::MatrixXd>&)->std::expected<Eigen::MatrixXd,std::string>
@@ -96,12 +90,8 @@ bool test_dh_zvector()
     check(!changed && xc_calls==4 && changed.error().find("fresh final residual")!=std::string::npos,
         "fresh residual detects changed callback after convergence");
     scalar.coulomb=map(Eigen::MatrixXd::Zero(2,2)); scalar.xc=scalar.coulomb;
-    for (auto backend : {DHZVectorBackend::MatrixFreeGMRES,DHZVectorBackend::DenseReference})
-    {
-        DHZVectorOptions options; options.backend=backend;
-        check(!solve_dh_zvector(Eigen::MatrixXd::Ones(1,1),one_c.leftCols(1),one_c.rightCols(1),
-            Eigen::Vector2d::Zero(),scalar,options),"singular solve rejected by both backends");
-    }
+    check(!solve_dh_zvector(Eigen::MatrixXd::Ones(1,1),one_c.leftCols(1),one_c.rightCols(1),
+        Eigen::Vector2d::Zero(),scalar),"singular solve rejected");
     auto invalid_options=DHZVectorOptions{}; invalid_options.restart=0;
     check(!solve_dh_zvector(rhs,co,cv,eps,*response,invalid_options),"invalid restart rejected");
     failed=*response; failed.xc={};

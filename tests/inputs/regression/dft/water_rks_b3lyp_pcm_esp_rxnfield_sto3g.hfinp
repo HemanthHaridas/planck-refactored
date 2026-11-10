@@ -24,7 +24,7 @@
     model       pcm
     solvent     water
     cavity_scale 1.2
-    surface_points_per_atom 24
+    surface_points_per_atom 302
 %end_pcm
 
 %begin_geom

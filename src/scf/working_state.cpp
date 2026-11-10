@@ -7,7 +7,19 @@
 #include "basis/spherical.h"
 #include "integrals/os.h"
 #include "integrals/base.h"
+#include "io/logging.h"
 #include "symmetry/integral_symmetry.h"
+
+void HartreeFock::SCF::warn_open_shell_hcore_guess(const HartreeFock::Calculator &calc)
+{
+    if (calc._scf._scf != HartreeFock::SCFType::UHF || calc._molecule.multiplicity <= 1 ||
+        calc._scf._guess != HartreeFock::SCFGuess::HCore || calc._scf._stability_check)
+        return;
+    HartreeFock::Logger::logging(
+        HartreeFock::LogLevel::Warning, "SCF Guess :",
+        "Open-shell run from 'guess hcore' can converge to a symmetry-trapped saddle. "
+        "Use 'guess sad', or 'stability_check true' with 'stability_follow true'.");
+}
 
 std::expected<void, std::string>
 HartreeFock::SCF::compute_working_one_electron(HartreeFock::Calculator &calc,

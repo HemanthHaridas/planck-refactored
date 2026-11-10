@@ -59,8 +59,14 @@ def _extract_math(text: str) -> tuple[str, dict[str, str]]:
 
 
 def _restore_math(html_text: str, store: dict[str, str]) -> str:
-    """Put math back, wrapped in a <span> so MathJax can locate it."""
+    """Put math back, wrapped in a <span> so MathJax can locate it.
+
+    The LaTeX is HTML-escaped: raw, `\\sum_{A<B}` opens a <b> element (tag names
+    are case-insensitive) and breaks typesetting from there on. MathJax reads
+    the decoded text, so `&lt;` still typesets as `<`.
+    """
     for tok, latex in store.items():
+        latex = html.escape(latex, quote=False)
         if latex.startswith(r"\["):
             replacement = (
                 f'<span class="math-display">{latex}</span>'

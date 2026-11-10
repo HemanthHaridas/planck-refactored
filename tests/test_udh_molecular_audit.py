@@ -77,7 +77,7 @@ class U10WiringTests(unittest.TestCase):
                       "make_udh_direct_ks_response_operator", "build_udh_orbital_rhs", "solve_udh_zvector",
                       "build_udh_relaxed_difference_density", "build_udh_overlap_density",
                       "build_udh_two_particle_density", "build_dh_eq33_derivative_integrals",
-                      "build_udh_non_xc_gradient", "build_udh_gga_complete_xc_ii_gradient",
+                      "build_dh_eq33_direct_non_xc_gradient", "build_udh_gga_complete_xc_ii_gradient",
                       "build_udh_lda_complete_xc_ii_gradient", "scaled_z_residual>1e-10"):
             self.assertIn(token, source)
         header = (ROOT/"src/dft/udh_driver.h").read_text()
@@ -134,7 +134,8 @@ class U10WiringTests(unittest.TestCase):
             self.assertIn(token, runner)
         self.assertNotIn("max_cycles", runner)
         self.assertNotIn("tol_density", runner)
-        self.assertIn("PCM is currently implemented only for single-point energy calculations", runner)
+        self.assertIn("does not implement solvent response", runner)
+        self.assertIn("solvent water", runner)
         main = (ROOT/"tests/udh_gradient_main.cpp").read_text()
         self.assertIn("_compute_cross_overlap(ref._shells,c._shells)", main)
         self.assertIn("dump_results_json(c,json)", main)

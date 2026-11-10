@@ -1,5 +1,6 @@
 #include "dft/udh_overlap_density.h"
 #include "dft/dh_pt2_gradient.h"
+#include "udh_mo_sector_oracle.h"
 #include <Eigen/Eigenvalues>
 #include <Eigen/QR>
 #include <algorithm>
@@ -129,9 +130,9 @@ namespace
         for(std::size_t k=0;k<x.t.ab.size();++k) x.t.ab[k]=.03*std::cos(.27*(k+1));
         return x;
     }
-    UDHFullMOIntegrals integrals(const Fixture &x,const Orb &c)
+    TestOracle::FullMOIntegrals integrals(const Fixture &x,const Orb &c)
     {
-        UDHFullMOIntegrals g; g.n_alpha=c.alpha.cols(); g.n_beta=c.beta.cols();
+        TestOracle::FullMOIntegrals g; g.n_alpha=c.alpha.cols(); g.n_beta=c.beta.cols();
         // Transform fixed AO rank-two ERIs; no amplitude/G/W expression.
         std::array<M,2> aa{c.alpha.transpose()*x.model.a*c.alpha,c.beta.transpose()*x.model.a*c.beta};
         std::array<M,2> bb{c.alpha.transpose()*x.model.b*c.alpha,c.beta.transpose()*x.model.b*c.beta};
@@ -194,14 +195,14 @@ namespace
     void audit(Fixture x)
     {
         const auto dp=build_udh_pt2_dprime(x.t,.27);
-        const auto pair=build_udh_pair_orbital_gradient(x.t,integrals(x,x.c),.27);
+        const auto pair=build_udh_pair_orbital_gradient(x.t,TestOracle::sectors(integrals(x,x.c),x.t),.27);
         check(dp && pair); if(!dp || !pair) return;
         const auto d=build_udh_relaxed_difference_density(*dp,x.z);
         check(d.has_value()); if(!d) return;
         const auto w=build_udh_overlap_density(*pair,*d,x.c,x.f,x.s,x.model.response());
         check(w.has_value()); if(!w) { std::cerr<<w.error()<<'\n'; return; }
         const auto ledger=channels(*w);
-        const auto zero_pair=build_udh_pair_orbital_gradient(x.t,integrals(x,x.c),0.0);
+        const auto zero_pair=build_udh_pair_orbital_gradient(x.t,TestOracle::sectors(integrals(x,x.c),x.t),0.0);
         const auto zero_dp=build_udh_pt2_dprime(x.t,0.0);
         check(zero_pair && zero_dp);
         if(zero_pair && zero_dp)
@@ -222,7 +223,7 @@ namespace
             for(int a=0;a<swapped.t.nvirt_alpha;++a) for(int b=0;b<swapped.t.nvirt_beta;++b)
                 swapped.t.ab.push_back(x.t.ab[idx(j,i,b,a,x.t.nocc_beta,x.t.nvirt_alpha,x.t.nvirt_beta)]);
         const auto sdp=build_udh_pt2_dprime(swapped.t,.27);
-        const auto spair=build_udh_pair_orbital_gradient(swapped.t,integrals(swapped,swapped.c),.27);
+        const auto spair=build_udh_pair_orbital_gradient(swapped.t,TestOracle::sectors(integrals(swapped,swapped.c),swapped.t),.27);
         check(sdp && spair);
         if(sdp && spair)
         {
@@ -319,7 +320,7 @@ namespace
         { r.t2.push_back(at(i,j,a,b)); x.t.ab.push_back(at(i,j,a,b)); x.t.aa.push_back(at(i,j,a,b)-at(i,j,b,a)); }
         x.t.bb=x.t.aa;
         const auto dp=build_udh_pt2_dprime(x.t,.27);
-        const auto pair=build_udh_pair_orbital_gradient(x.t,g,.27);
+        const auto pair=build_udh_pair_orbital_gradient(x.t,TestOracle::sectors(g,x.t),.27);
         const auto rp=build_dh_pt2_amplitude_density(r,.27);
         check(dp && pair && rp); if(!dp || !pair || !rp) return;
         equal(dp->alpha_mo+dp->beta_mo,rp->dprime_mo);

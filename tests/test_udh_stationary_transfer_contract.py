@@ -27,7 +27,7 @@ class U9StationaryTransferTests(unittest.TestCase):
         self.assertIn("2*scale*q(k)*s.b(k)", scalar)
         self.assertNotIn("build_udh_", scalar)
         for token in ("build_udh_orbital_rhs", "solve_udh_zvector", "build_udh_relaxed_difference_density",
-                      "build_udh_overlap_density", "build_udh_two_particle_density", "build_udh_non_xc_gradient"):
+                      "build_udh_overlap_density", "build_udh_two_particle_density", "dense_non_xc"):
             self.assertIn(token, self.oracle)
 
     def test_channel_and_response_ledgers(self):
