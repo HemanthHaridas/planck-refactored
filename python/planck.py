@@ -14,6 +14,8 @@ cannot break this.
 Schema of the returned dict mirrors src/io/results_json.h:
     natoms, charge, multiplicity, atomic_numbers,
     coordinates_bohr, electronic_energy, nuclear_repulsion,
+    dispersion_energy (D3, 0 when off; excluded from electronic_energy),
+    solvation_energy (PCM, 0 when off; included in electronic_energy),
     scf_total_energy, total_energy, has_correlation,
     gradient (only for gradient workflows),
     dipole_au ([x,y,z]) and quadrupole_au (3x3), when a multipole report ran,

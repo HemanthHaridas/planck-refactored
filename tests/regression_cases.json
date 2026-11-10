@@ -7612,6 +7612,27 @@
      "expected": -75.2899128207,
      "atol": 1e-08
     }
+   ],
+   "json_checks": [
+    {
+     "field": "dispersion_energy",
+     "expected": -0.00057366166775,
+     "atol": 1e-11
+    },
+    {
+     "field": "solvation_energy",
+     "expected": 0.0,
+     "atol": 0.0
+    },
+    {
+     "sum": [
+      "electronic_energy",
+      "nuclear_repulsion",
+      "dispersion_energy"
+     ],
+     "equals": "total_energy",
+     "atol": 1e-10
+    }
    ]
   },
   {
@@ -7855,7 +7876,7 @@
   },
   {
    "id": "water_rhf_pcm_swig_631gd",
-   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
+   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1); its json_checks pin the results-JSON solvation_energy to PySCF G_pcm -0.0115156533. PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
    "input": "tests/inputs/regression/hf/water_rhf_pcm_swig_631gd.hfinp",
    "tags": [
     "extended"
@@ -7871,11 +7892,31 @@
      "expected": -76.0172764854,
      "atol": 1e-09
     }
+   ],
+   "json_checks": [
+    {
+     "field": "solvation_energy",
+     "expected": -0.0115156533,
+     "atol": 1e-10
+    },
+    {
+     "field": "dispersion_energy",
+     "expected": 0.0,
+     "atol": 0.0
+    },
+    {
+     "sum": [
+      "electronic_energy",
+      "nuclear_repulsion"
+     ],
+     "equals": "total_energy",
+     "atol": 1e-10
+    }
    ]
   },
   {
    "id": "h2o2_rhf_pcm_swig_631gd",
-   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
+   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1); its json_checks pin the results-JSON solvation_energy to PySCF G_pcm -0.0115156533. PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
    "input": "tests/inputs/regression/hf/h2o2_rhf_pcm_swig_631gd.hfinp",
    "tags": [
     "extended"
@@ -7895,7 +7936,7 @@
   },
   {
    "id": "water_cation_uhf_pcm_swig_631gd",
-   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
+   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1); its json_checks pin the results-JSON solvation_energy to PySCF G_pcm -0.0115156533. PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
    "input": "tests/inputs/regression/hf/water_cation_uhf_pcm_swig_631gd.hfinp",
    "tags": [
     "extended"
@@ -7915,7 +7956,7 @@
   },
   {
    "id": "water_rks_pbe_pcm_swig_631gd",
-   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
+   "_note": "SWIG C-PCM gate (docs/PCM_GEOMETRY.md step 1); its json_checks pin the results-JSON solvation_energy to PySCF G_pcm -0.0115156533. PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (cart=True, Planck's GBS and Bohr, 302 Lebedev points, eps 78.3553). Planck matches to every printed digit with the same tessera count.",
    "input": "tests/inputs/regression/dft/water_rks_pbe_pcm_swig_631gd.hfinp",
    "executable": "planck-dft",
    "tags": [

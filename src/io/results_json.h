@@ -59,8 +59,14 @@ namespace HartreeFock::IO
         out << "],\n";
         // Geometry in Bohr — the frame gradients/energies are consistent with.
         out << "  \"coordinates_bohr\": " << mat_rows(mol._standard) << ",\n";
-        out << "  \"electronic_energy\": " << num(calc._total_energy - calc._nuclear_repulsion) << ",\n";
+        // electronic_energy excludes D3 (a nuclear-coordinate-only term) but
+        // keeps the PCM solvation energy, which is part of the SCF functional.
+        // Both are also reported on their own, zero when off.
+        out << "  \"electronic_energy\": "
+            << num(calc._total_energy - calc._nuclear_repulsion - calc._dispersion_energy) << ",\n";
         out << "  \"nuclear_repulsion\": " << num(calc._nuclear_repulsion) << ",\n";
+        out << "  \"dispersion_energy\": " << num(calc._dispersion_energy) << ",\n";
+        out << "  \"solvation_energy\": " << num(calc._solvation_energy) << ",\n";
         out << "  \"scf_total_energy\": " << num(calc._total_energy) << ",\n";
         out << "  \"total_energy\": " << num(calc.current_total_energy()) << ",\n";
         out << "  \"has_correlation\": " << (calc._have_correlated_total_energy ? "true" : "false");

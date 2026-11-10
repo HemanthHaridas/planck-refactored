@@ -390,8 +390,16 @@ def run_case(
         # basis path and toolchain survive.
         case_env = case.get("env")
         run_env = {**os.environ, **case_env} if case_env else None
+        command = build_command(executable, input_path, repo_root / build_dir, case.get("args"))
+        # `json_checks` asks the binary for its --json results file (the
+        # python/planck.py contract) and checks fields of it after the run.
+        json_path = None
+        if case.get("json_checks"):
+            json_path = repo_root / build_dir / f"{case_id}.results.json"
+            json_path.unlink(missing_ok=True)
+            command += ["--json", str(json_path)]
         proc = subprocess.run(
-            build_command(executable, input_path, repo_root / build_dir, case.get("args")),
+            command,
             cwd=repo_root,
             text=True,
             capture_output=True,
@@ -571,6 +579,37 @@ def run_case(
     if not passed:
         details.append("---- captured output ----")
         details.extend(output.strip().splitlines()[-40:])
+
+    if json_path is not None:
+        try:
+            payload = json.loads(json_path.read_text())
+        except (OSError, ValueError) as exc:
+            payload = None
+            passed = False
+            details.append(f"results JSON unreadable: {exc}")
+        for check in case.get("json_checks", []) if payload is not None else []:
+            # {"field": f, "expected": x, "atol": t}: one field, or
+            # {"sum": [f, ...], "equals": g, "atol": t}: fields add up to field g.
+            atol = float(check.get("atol", 1e-12))
+            if "sum" in check:
+                fields = [*check["sum"], check["equals"]]
+                if any(f not in payload for f in fields):
+                    passed = False
+                    details.append(f"results JSON missing one of {fields}")
+                    continue
+                actual = sum(float(payload[f]) for f in check["sum"])
+                expected = float(payload[check["equals"]])
+                label = " + ".join(check["sum"]) + f" == {check['equals']}"
+            else:
+                label = check["field"]
+                if label not in payload:
+                    passed = False
+                    details.append(f"results JSON missing field {label!r}")
+                    continue
+                actual, expected = float(payload[label]), float(check["expected"])
+            if not approx_equal(actual, expected, atol):
+                passed = False
+                details.append(f"results JSON {label}: expected {expected} +/- {atol:.2e}, got {actual}")
 
     return CaseResult(case_id=case_id, passed=passed, duration_s=duration_s, details=details, metrics=metrics)
 

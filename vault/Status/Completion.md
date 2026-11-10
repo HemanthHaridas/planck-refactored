@@ -430,6 +430,16 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Results JSON reports D3 and PCM energies separately (2026-11-10,
+  `docs/RESULTS_JSON_ENERGY_TERMS.md`).** `electronic_energy` had silently
+  included the D3 energy. It now excludes D3 and still includes PCM, and
+  `dispersion_energy` and `solvation_energy` are their own fields (0 when
+  off), carried on the `Calculator` so both binaries write them. The runner
+  gained `json_checks` (it runs the binary with `--json`). The PCM case pins
+  `solvation_energy` to PySCF's G_pcm to every printed digit, and the D3 case
+  pins `dispersion_energy` to the PySCF D3 reference. Both cases also check
+  that the energy terms add up to the total.
+
 - **UKS double-hybrid gradient: one architecture with RKS, accepted
   (2026-11-10, `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md`, now an answer).**
   RKS and UKS share the derivative contraction, pair stream, GMRES Z-vector

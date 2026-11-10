@@ -758,6 +758,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_rhf(
         // ── Electronic energy  E = E_gas + G_pcm ────────────────────────────
         const double E_gas = 0.5 * (P.array() * (H + F_gas).array()).sum();
         const double E_elec = E_gas + pcm_energy;
+        calculator._solvation_energy = pcm_energy; // reported by the results JSON
         const double E_total = E_elec + calculator._nuclear_repulsion;
 
         // ── DIIS: compute Pulay error and push to subspace ────────────────────
@@ -1372,6 +1373,7 @@ std::expected<void, std::string> HartreeFock::SCF::run_uhf(
         // ── Electronic energy — always from the bare gas-phase Fock plus PCM ──
         const double E_gas = 0.5 * ((Pa.array() * (H + Fa_gas).array()).sum() + (Pb.array() * (H + Fb_gas).array()).sum());
         const double E_elec = E_gas + pcm_energy;
+        calculator._solvation_energy = pcm_energy; // reported by the results JSON
         const double E_total = E_elec + calculator._nuclear_repulsion;
 
         // ── Level shift: build Fa_s/Fb_s before DIIS ─────────────────────────

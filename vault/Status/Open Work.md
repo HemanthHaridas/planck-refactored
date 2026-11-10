@@ -36,38 +36,38 @@ teaching code) reorders it.
 **Necessary.** Without these the product is broken or misleading.
 
 1. **CCSD(T).** Not implemented: CCSD, CCSDT and higher exist, perturbative
-   triples do not. It is the benchmark method users ask for first.
+   triples do not. It is the benchmark method users ask for first. Scope: `docs/CCSD_T_SCOPE.md`.
 2. **SCF robustness on medium systems.** 32-water RKS hits `max_cycles`
-   (§2, DFT).
+   (§2, DFT). Scope: `docs/SCF_CONVERGENCE_MEDIUM_SYSTEMS_SCOPE.md`.
 3. **Meta-GGA**, at least SCF energies with a by-name refusal everywhere else,
    then gradients (§2, DFT). r2SCAN, ωB97M-V, M06-2X and TPSSh are rejected
-   today.
+   today. Scope: `docs/META_GGA_SCOPE.md`.
 4. **Spherical MP2/UMP2 gradients** (§2, HF and post-HF). Every standard
-   basis is spherical; MP2 geometry optimization works only in Cartesian.
+   basis is spherical; MP2 geometry optimization works only in Cartesian. Scope: `docs/SPHERICAL_MP2_GRADIENT_SCOPE.md`.
 5. **Default DFT grid qualified for gradients** (§2, DFT). `legacy` fails the
    rotational-covariance check, so default-settings geometries and
-   frequencies carry grid noise. A decision and a migration, not new code.
+   frequencies carry grid noise. A decision and a migration, not new code. Scope: `docs/DFT_DEFAULT_GRID_SCOPE.md`.
 6. **DFT ghost atoms and counterpoise** (§2, BSSE). Interaction energies are
-   mostly computed with DFT.
-7. **D3 reported separately in the results JSON** (§2, D3 follow-ups).
-   `electronic_energy` includes D3 without saying so. Small fix.
-8. **CI running again** (§3). Blocked on the shared-objects build change.
+   mostly computed with DFT. Scope: `docs/DFT_COUNTERPOISE_SCOPE.md`.
+7. ~~D3 reported separately in the results JSON.~~ Done 2026-11-10
+   (`docs/RESULTS_JSON_ENERGY_TERMS.md`).
+8. **CI running again** (§3). Blocked on the shared-objects build change. Scope: `docs/CI_SCOPE.md`.
 9. **RI-JK validated and usable for routine DFT/HF** (§5, RI-JK and BLAS).
-   Nothing has landed and RI-JK has no regression case.
+   Nothing has landed and RI-JK has no regression case. Scope: `docs/RI_JK_ROUTINE_SCOPE.md`.
 
 **Expected, with a workaround.**
 
 10. Gating cases for PCM with UHF/UKS, spherical basis and `planck-dft`
-    frequencies; the code paths run ungated (§2, PCM leftovers).
+    frequencies; the code paths run ungated (§2, PCM leftovers). Scope: `docs/PCM_GATING_SCOPE.md`.
 11. ROHF-MP2 and ROHF coupled cluster; UHF-based versions exist. Matters more
-    once CCSD(T) exists.
+    once CCSD(T) exists. Scope: `docs/ROHF_CORRELATION_SCOPE.md`.
 12. Analytic Hessian; semi-numerical frequencies work, this is cost on large
-    systems.
+    systems. Scope: `docs/ANALYTIC_HESSIAN_SCOPE.md`.
 13. UKS double-hybrid geometry optimization and frequencies; the gradient
-    passes FD, so this is driver wiring and a gate.
+    passes FD, so this is driver wiring and a gate. Scope: `docs/UKS_DH_GEOMOPT_FREQ_SCOPE.md`.
 14. Spherical double-hybrid gradients, frozen-core PT2 in the gradient, RI-DH.
-    Necessary if double hybrids are a headline feature; spherical first.
-15. D4 dispersion; D3(BJ) covers most uses.
+    Necessary if double hybrids are a headline feature; spherical first. Scope: `docs/DH_GRADIENT_EXTENSIONS_SCOPE.md`.
+15. D4 dispersion; D3(BJ) covers most uses. Scope: `docs/DISPERSION_D4_SCOPE.md`.
 
 **Nice to have.** Imaginary-mode following in `planck-dft` and under PCM;
 HF-D3 and modified D3 damping; counterpoise-corrected gradients and N-body
@@ -169,8 +169,6 @@ further post-HF ghost-atom checks.
   - Modified damping (`d3mbj`, `d3mzero`, `d3op`): one branch each in
     `DFT::Dispersion::compute`.
   - D4, which needs atomic partial charges.
-  - A separate D3 field in the results JSON. `electronic_energy` there is
-    total minus nuclear repulsion, so it currently includes D3.
   - Regenerating the references needs a hand-built shared simple-dftd3
     (`DFTD3_LIBRARY`): pyscf-dispersion 1.0.0 does not load on macOS arm64.
     Replace the workaround when a fixed wheel ships.

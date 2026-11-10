@@ -1604,6 +1604,8 @@ namespace HartreeFock
 
         double _total_energy = 0;                        // Total Energy (SCF + Nuclear Repulsion)
         double _nuclear_repulsion = 0;                   // Nuclear Repulsion Energy (Bohr)
+        double _dispersion_energy = 0.0;                 // D3 energy, included in _total_energy (0 when off)
+        double _solvation_energy = 0.0;                  // PCM solvation energy, included in _total_energy (0 when off)
         double _correlated_total_energy = 0.0;           // Correlated total energy when post-HF augments the SCF reference
         double _correlation_energy = 0.0;                // Post-HF correlation energy (0 if not computed)
         double _ccsd_reference_correlation_energy = 0.0; // CCSD correlation energy cached during CCSDT runs

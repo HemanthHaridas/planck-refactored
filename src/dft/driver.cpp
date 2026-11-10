@@ -5562,6 +5562,8 @@ namespace DFT::Driver
             // The DFT total lives in the driver Result, not on the Calculator;
             // copy it in so the shared serializer reports the log's energy.
             calculator._total_energy = result->total_energy;
+            calculator._dispersion_energy = result->dispersion_energy;
+            calculator._solvation_energy = result->solvation_energy;
             if (auto res = HartreeFock::IO::dump_results_json(calculator, json_path); !res)
             {
                 HartreeFock::Logger::logging(
