@@ -5813,12 +5813,15 @@ the functional, but its density-direction partner is
 and differentiating that produces four chain-rule terms rather than two.
 That term is the easiest one in the unrestricted XC-II to drop.
 
-**It is a dense implementation.** The memory work of the previous
-subsection has not been carried over. The UKS path transforms the full
-\(\alpha\alpha\), \(\alpha\beta\), and \(\beta\beta\) MO ERI tensors,
-builds the Jacobian densely, and stores the AO pair density at
-\(N_{AO}^4\). That is acceptable for the small molecules it is qualified
-on, and it is the reason its scope is narrow.
+**It shares the restricted engines, except for the amplitudes.** The memory
+work of the previous subsection carries over spin by spin. The AO pair
+density is streamed through the same bounded blocks, the Z-vector goes
+through the same matrix-free GMRES, and the MO integrals are the same five
+Eq. 40 sectors, built once for each spin pair (\(\alpha\alpha\),
+\(\alpha\beta\), \(\beta\beta\)). What remains is that the UMP2 amplitudes
+are still resident arrays, and the conventional AO ERI tensor is still
+formed. The narrow scope is about those two and the pinned grid below
+(`docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md`).
 
 **Why one grid is pinned.** An analytic gradient includes the motion of the
 quadrature itself (the Becke and owner-point channels of XC-II). It can only

@@ -63,20 +63,28 @@ namespace DFT::Driver
 
         std::vector<double> storage;
         const auto &eri=HartreeFock::Correlation::ensure_eri(calc,prepared.shell_pairs,storage,"UDH Eq. 22:");
-        UDHFullMOIntegrals full;
-        full.n_alpha=n; full.n_beta=n;
-        full.aa=HartreeFock::Correlation::transform_eri(eri,n,coeff.alpha,coeff.alpha,coeff.alpha,coeff.alpha);
-        full.ab=HartreeFock::Correlation::transform_eri(eri,n,coeff.alpha,coeff.alpha,coeff.beta,coeff.beta);
-        full.bb=HartreeFock::Correlation::transform_eri(eri,n,coeff.beta,coeff.beta,coeff.beta,coeff.beta);
+        // The five Eq. 40 sectors per spin pair, from the RKS builder; no
+        // complete MO tensor is formed. ab is electron 1 alpha, 2 beta.
+        const auto occ=[&](int s)->M { return s?coeff.beta.leftCols(r.noccb):coeff.alpha.leftCols(r.nocca); };
+        const auto vir=[&](int s)->M { return s?coeff.beta.rightCols(r.nvirb):coeff.alpha.rightCols(r.nvira); };
+        UDHMOIntegrals blocks;
+        for(int block=0;block<3;++block)
+        {
+            const int s=block==2,t=block!=0;
+            auto built=build_dh_eq40_mo_eri_blocks_direct(eri,static_cast<std::size_t>(n),occ(s),vir(s),occ(t),vir(t));
+            if(!built) return error(built.error());
+            (block==0?blocks.aa:block==1?blocks.ab:blocks.bb)=std::move(*built);
+        }
+        // U1 reads (i a|j b) in amplitude order [i][j][a][b].
         UDHPT2DirectIntegrals direct;
         for(int block=0;block<3;++block)
         {
-            int os=block==2?r.noccb:r.nocca,ot=block==0?r.nocca:r.noccb;
-            int vs=block==2?r.nvirb:r.nvira,vt=block==0?r.nvira:r.nvirb;
-            const auto &g=block==0?full.aa:block==1?full.ab:full.bb;
+            const int os=block==2?r.noccb:r.nocca,ot=block==0?r.nocca:r.noccb;
+            const int vs=block==2?r.nvirb:r.nvira,vt=block==0?r.nvira:r.nvirb;
+            const auto &g=(block==0?blocks.aa:block==1?blocks.ab:blocks.bb).ovov;
             auto &d=block==0?direct.aa:block==1?direct.ab:direct.bb;
             for(int i=0;i<os;++i) for(int j=0;j<ot;++j) for(int a=0;a<vs;++a) for(int b=0;b<vt;++b)
-                d.push_back(g[((static_cast<std::size_t>(i)*n+os+a)*n+j)*n+ot+b]);
+                d.push_back(g[((static_cast<std::size_t>(i)*vs+a)*ot+j)*vt+b]);
         }
         auto stationary=build_udh_pt2_stationary_contract(r,direct,calc._overlap,calc._mp2,c,scope);
         if(!stationary) return error(stationary.error());
@@ -86,7 +94,7 @@ namespace DFT::Driver
         auto response=make_udh_direct_ks_response_operator({&prepared.shell_pairs,&prepared.molecular_grid,
             &prepared.ao_grid,ground,&exchange,&correlation,ax,calc._integral._engine,calc._integral._tol_eri});
         if(!response) return error(response.error());
-        auto rhs=build_udh_orbital_rhs(t,full,c,coeff,calc._overlap,f,*response);
+        auto rhs=build_udh_orbital_rhs(t,blocks,c,coeff,calc._overlap,f,*response);
         if(!rhs) return error(rhs.error());
         auto z=solve_udh_zvector({coeff,f,calc._overlap,r.nocca,r.noccb,*response},rhs->total_ai);
         if(!z) return error(z.error());

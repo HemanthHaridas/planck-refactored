@@ -467,7 +467,7 @@ namespace DFT::Gradient
         if (no<=0 || nv<=0 || mo_eri.size()!=n4)
             return std::unexpected("DH MO-ERI blocks: invalid occupied/virtual dimensions or dense tensor extent.");
         DHMolecularERIBlocks out;
-        out.n_occ=no; out.n_virt=nv;
+        out.n_occ=no; out.n_virt=nv; out.n_occ_2=no; out.n_virt_2=nv;
         out.ovov.resize(static_cast<std::size_t>(no)*nv*no*nv);
         out.vvov.resize(static_cast<std::size_t>(nv)*nv*no*nv);
         out.ooov.resize(static_cast<std::size_t>(no)*no*no*nv);
@@ -536,7 +536,7 @@ namespace DFT::Gradient
     {
         const int no=amplitudes.n_occ, nv=amplitudes.n_virt, n=no+nv;
         const std::size_t novov=static_cast<std::size_t>(no)*nv*no*nv;
-        if (no<=0 || nv<=0 || reduction_tile<=0 || b.n_occ!=no || b.n_virt!=nv ||
+        if (no<=0 || nv<=0 || reduction_tile<=0 || b.n_occ!=no || b.n_virt!=nv || b.n_occ_2!=no || b.n_virt_2!=nv ||
             !amplitudes.has_tilde_storage() || b.ovov.size()!=novov ||
             b.vvov.size()!=static_cast<std::size_t>(nv)*nv*no*nv ||
             b.ooov.size()!=static_cast<std::size_t>(no)*no*no*nv ||

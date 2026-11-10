@@ -9,26 +9,18 @@ namespace DFT::Gradient
     {
         std::size_t ti(int i,int j,int a,int b,int oj,int va,int vb)
         { return ((static_cast<std::size_t>(i)*oj+j)*va+a)*vb+b; }
-        std::size_t gi(int p,int q,int r,int s,int ns,int nt)
-        { return ((static_cast<std::size_t>(p)*ns+q)*nt+r)*nt+s; }
-        bool near(double a,double b)
-        { return std::isfinite(a) && std::isfinite(b) && std::abs(a-b)<=1e-10*(1+std::max(std::abs(a),std::abs(b))); }
-        bool valid_integrals(const std::vector<double> &g,int ns,int nt,bool same)
+        // Electron 1 extents (o1,v1), electron 2 (o2,v2); sector sizes as
+        // DHMolecularERIBlocks documents them.
+        bool valid_blocks(const DHMolecularERIBlocks &b,int o1,int v1,int o2,int v2)
         {
-            std::size_t n=1;
-            for (int d:{ns,ns,nt,nt})
-            {
-                if (d<0 || (d && n>std::numeric_limits<std::size_t>::max()/d)) return false;
-                n*=static_cast<std::size_t>(d);
-            }
-            if (g.size()!=n) return false;
-            for (int p=0;p<ns;++p) for (int q=0;q<ns;++q)
-                for (int r=0;r<nt;++r) for (int s=0;s<nt;++s)
-                {
-                    double v=g[gi(p,q,r,s,ns,nt)];
-                    if (!near(v,g[gi(q,p,r,s,ns,nt)]) || !near(v,g[gi(p,q,s,r,ns,nt)]) ||
-                        (same && !near(v,g[gi(r,s,p,q,ns,nt)]))) return false;
-                }
+            const auto size=[](std::initializer_list<int> d)
+            { std::size_t n=1; for (int x:d) n*=static_cast<std::size_t>(x); return n; };
+            if (b.n_occ!=o1 || b.n_virt!=v1 || b.n_occ_2!=o2 || b.n_virt_2!=v2 ||
+                b.ovov.size()!=size({o1,v1,o2,v2}) || b.vvov.size()!=size({v1,v1,o2,v2}) ||
+                b.ooov.size()!=size({o1,o1,o2,v2}) || b.ovvv.size()!=size({o1,v1,v2,v2}) ||
+                b.ovoo.size()!=size({o1,v1,o2,o2})) return false;
+            for (const auto *v:{&b.ovov,&b.vvov,&b.ooov,&b.ovvv,&b.ovoo})
+                for (double x:*v) if (!std::isfinite(x)) return false;
             return true;
         }
         UDHOrbitalMatrices zeros(int ra,int ca,int rb,int cb)
@@ -39,34 +31,54 @@ namespace DFT::Gradient
         bool symmetric(const Eigen::MatrixXd &a,int n)
         { return a.rows()==n && a.cols()==n && a.allFinite() && (n==0 || (a-a.transpose()).cwiseAbs().maxCoeff()<1e-10); }
 
-        UDHPairOrbitalSector sector(const std::vector<double> &t,const std::vector<double> &g,
+        UDHPairOrbitalSector sector(const std::vector<double> &t,const DHMolecularERIBlocks &g,
             const UDHPT2Amplitudes &dims,int spin_s,int spin_t,double scale)
         {
             const int oa=dims.nocc_alpha,ob=dims.nocc_beta,va=dims.nvirt_alpha,vb=dims.nvirt_beta;
             const int na=oa+va,nb=ob+vb;
             const int os=spin_s?ob:oa,ot=spin_t?ob:oa,vs=spin_s?vb:va,vt=spin_t?vb:va;
-            const int ns=os+vs,nt=ot+vt;
+            const auto ovov=[&](int i,int a,int j,int b)
+            { return g.ovov[((static_cast<std::size_t>(i)*vs+a)*ot+j)*vt+b]; };
+            const auto vvov=[&](int c,int a,int j,int b)
+            { return g.vvov[((static_cast<std::size_t>(c)*vs+a)*ot+j)*vt+b]; };
+            const auto ooov=[&](int i,int k,int j,int b)
+            { return g.ooov[((static_cast<std::size_t>(i)*os+k)*ot+j)*vt+b]; };
+            const auto ovvv=[&](int i,int a,int c,int b)
+            { return g.ovvv[((static_cast<std::size_t>(i)*vs+a)*vt+c)*vt+b]; };
+            const auto ovoo=[&](int i,int a,int j,int k)
+            { return g.ovoo[((static_cast<std::size_t>(i)*vs+a)*ot+j)*ot+k]; };
             UDHPairOrbitalSector out;
             for (auto &slot:out.slots) slot=zeros(na,na,nb,nb);
             auto &g0=spin_s?out.slots[0].beta:out.slots[0].alpha;
             auto &g1=spin_s?out.slots[1].beta:out.slots[1].alpha;
             auto &g2=spin_t?out.slots[2].beta:out.slots[2].alpha;
             auto &g3=spin_t?out.slots[3].beta:out.slots[3].alpha;
-            // Differentiate each coefficient once: replace its MO index by p
-            // and accumulate in column equal to that coefficient's index.
+            // Differentiate each coefficient of (i a|j b) once: replace its MO
+            // index by p and accumulate in the column of that coefficient. An
+            // occupied or virtual p selects the sector that holds the integral.
             for (int i=0;i<os;++i) for (int j=0;j<ot;++j)
                 for (int a=0;a<vs;++a) for (int b=0;b<vt;++b)
                 {
                     const double w=scale*t[ti(i,j,a,b,ot,vs,vt)];
-                    for (int p=0;p<ns;++p)
+                    for (int p=0;p<os;++p)
                     {
-                        g0(p,i)+=w*g[gi(p,os+a,j,ot+b,ns,nt)];
-                        g1(p,os+a)+=w*g[gi(i,p,j,ot+b,ns,nt)];
+                        g0(p,i)+=w*ovov(p,a,j,b);
+                        g1(p,os+a)+=w*ooov(i,p,j,b);
                     }
-                    for (int p=0;p<nt;++p)
+                    for (int c=0;c<vs;++c)
                     {
-                        g2(p,j)+=w*g[gi(i,os+a,p,ot+b,ns,nt)];
-                        g3(p,ot+b)+=w*g[gi(i,os+a,j,p,ns,nt)];
+                        g0(os+c,i)+=w*vvov(c,a,j,b);
+                        g1(os+c,os+a)+=w*ovov(i,c,j,b);
+                    }
+                    for (int p=0;p<ot;++p)
+                    {
+                        g2(p,j)+=w*ovov(i,a,p,b);
+                        g3(p,ot+b)+=w*ovoo(i,a,j,p);
+                    }
+                    for (int c=0;c<vt;++c)
+                    {
+                        g2(ot+c,j)+=w*ovvv(i,a,c,b);
+                        g3(ot+c,ot+b)+=w*ovov(i,a,j,c);
                     }
                 }
             out.g=zeros(na,na,nb,nb);
@@ -79,14 +91,14 @@ namespace DFT::Gradient
     }
 
     std::expected<UDHPairOrbitalGradient,std::string> build_udh_pair_orbital_gradient(
-        const UDHPT2Amplitudes &t,const UDHFullMOIntegrals &g,double c)
+        const UDHPT2Amplitudes &t,const UDHMOIntegrals &g,double c)
     {
         auto checked=validate_udh_pt2_amplitudes(t);
         if (!checked) return std::unexpected(checked.error());
-        if (!std::isfinite(c) || g.n_alpha!=t.nocc_alpha+t.nvirt_alpha || g.n_beta!=t.nocc_beta+t.nvirt_beta ||
-            !valid_integrals(g.aa,g.n_alpha,g.n_alpha,true) ||
-            !valid_integrals(g.ab,g.n_alpha,g.n_beta,false) || !valid_integrals(g.bb,g.n_beta,g.n_beta,true))
-            return std::unexpected("UDH U3 pair: invalid scale, MO integral dimensions, finite values or chemist symmetry.");
+        const int oa=t.nocc_alpha,ob=t.nocc_beta,va=t.nvirt_alpha,vb=t.nvirt_beta;
+        if (!std::isfinite(c) || !valid_blocks(g.aa,oa,va,oa,va) ||
+            !valid_blocks(g.ab,oa,va,ob,vb) || !valid_blocks(g.bb,ob,vb,ob,vb))
+            return std::unexpected("UDH U3 pair: invalid scale, MO integral sector dimensions or finite values.");
         UDHPairOrbitalGradient out;
         out.aa=sector(t.aa,g.aa,t,0,0,c);
         out.ab=sector(t.ab,g.ab,t,0,1,2*c);
@@ -103,13 +115,14 @@ namespace DFT::Gradient
     }
 
     std::expected<UDHOrbitalRHS,std::string> build_udh_orbital_rhs(
-        const UDHPT2Amplitudes &t,const UDHFullMOIntegrals &g,double c,
+        const UDHPT2Amplitudes &t,const UDHMOIntegrals &g,double c,
         const UDHOrbitalMatrices &coeff,const Eigen::Ref<const Eigen::MatrixXd> &s,
         const UDHOrbitalMatrices &f,const UDHKSResponseOperator &response)
     {
         auto pair=build_udh_pair_orbital_gradient(t,g,c);
         if (!pair) return std::unexpected(pair.error());
-        if (!symmetric(f.alpha,g.n_alpha) || !symmetric(f.beta,g.n_beta) || response.nbasis!=s.rows())
+        if (!symmetric(f.alpha,t.nocc_alpha+t.nvirt_alpha) || !symmetric(f.beta,t.nocc_beta+t.nvirt_beta) ||
+            response.nbasis!=s.rows())
             return std::unexpected("UDH U3 RHS: invalid Fock matrix or response AO dimension.");
         auto d=build_udh_pt2_dprime(t,c);
         if (!d) return std::unexpected(d.error());

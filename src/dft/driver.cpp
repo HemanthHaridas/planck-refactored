@@ -4899,18 +4899,30 @@ namespace DFT::Driver
     std::expected<Gradient::DHMolecularERIBlocks, std::string>
     build_dh_eq40_mo_eri_blocks_direct(const std::vector<double> &eri_ao, std::size_t nao,
         const Eigen::Ref<const Eigen::MatrixXd> &c_occ,
-        const Eigen::Ref<const Eigen::MatrixXd> &c_virt)
+        const Eigen::Ref<const Eigen::MatrixXd> &c_virt,
+        const Eigen::Ref<const Eigen::MatrixXd> &c_occ_2,
+        const Eigen::Ref<const Eigen::MatrixXd> &c_virt_2)
     {
-        if (nao==0 || c_occ.rows()!=static_cast<Eigen::Index>(nao) || c_virt.rows()!=static_cast<Eigen::Index>(nao) ||
-            c_occ.cols()==0 || c_virt.cols()==0)
+        const auto rows=static_cast<Eigen::Index>(nao);
+        if (nao==0 || eri_ao.size()!=nao*nao*nao*nao || c_occ.rows()!=rows || c_virt.rows()!=rows ||
+            c_occ_2.rows()!=rows || c_virt_2.rows()!=rows)
             return std::unexpected("DH Eq. 40 direct MO sectors: invalid AO ERIs or coefficient dimensions.");
         Gradient::DHMolecularERIBlocks out;
         out.n_occ=static_cast<int>(c_occ.cols()); out.n_virt=static_cast<int>(c_virt.cols());
-        out.ovov=HartreeFock::Correlation::transform_eri(eri_ao,nao,c_occ,c_virt,c_occ,c_virt);
-        out.vvov=HartreeFock::Correlation::transform_eri(eri_ao,nao,c_virt,c_virt,c_occ,c_virt);
-        out.ooov=HartreeFock::Correlation::transform_eri(eri_ao,nao,c_occ,c_occ,c_occ,c_virt);
-        out.ovvv=HartreeFock::Correlation::transform_eri(eri_ao,nao,c_occ,c_virt,c_virt,c_virt);
-        out.ovoo=HartreeFock::Correlation::transform_eri(eri_ao,nao,c_occ,c_virt,c_occ,c_occ);
+        out.n_occ_2=static_cast<int>(c_occ_2.cols()); out.n_virt_2=static_cast<int>(c_virt_2.cols());
+        // An empty frame (e.g. a spin with no electrons) gives an empty sector.
+        const auto sector=[&](const Eigen::MatrixXd &c1,const Eigen::MatrixXd &c2,
+            const Eigen::MatrixXd &c3,const Eigen::MatrixXd &c4)
+        {
+            if (!c1.cols() || !c2.cols() || !c3.cols() || !c4.cols()) return std::vector<double>();
+            return HartreeFock::Correlation::transform_eri(eri_ao,nao,c1,c2,c3,c4);
+        };
+        const Eigen::MatrixXd o1=c_occ,v1=c_virt,o2=c_occ_2,v2=c_virt_2;
+        out.ovov=sector(o1,v1,o2,v2);
+        out.vvov=sector(v1,v1,o2,v2);
+        out.ooov=sector(o1,o1,o2,v2);
+        out.ovvv=sector(o1,v1,v2,v2);
+        out.ovoo=sector(o1,v1,o2,o2);
         return out;
     }
 
@@ -4959,6 +4971,7 @@ namespace DFT::Driver
         const std::vector<double> &eri_ao = HartreeFock::Correlation::ensure_eri(
             calculator, prepared.shell_pairs, eri_local, "DH Eq. 40:");
         auto direct_blocks=build_dh_eq40_mo_eri_blocks_direct(eri_ao,static_cast<std::size_t>(nao),
+            pt2_result.mo_coeff.leftCols(nocc),pt2_result.mo_coeff.rightCols(nvirt),
             pt2_result.mo_coeff.leftCols(nocc),pt2_result.mo_coeff.rightCols(nvirt));
         if(!direct_blocks) return std::unexpected("DH Eq. 40 direct MO sector construction failed.");
         auto stationary = Gradient::build_dh_stationary_products(

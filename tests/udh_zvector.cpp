@@ -1,6 +1,7 @@
 // U4: independent co-moving Fock and stationary-scalar orbital FDs.
 // Synthetic common AO ERIs/nonlinear two-spin XC, not a molecular DH test.
 #include "dh_zvector_oracle.h"
+#include "udh_mo_sector_oracle.h"
 #include "dft/dh_pt2_gradient.h"
 #include <Eigen/Jacobi>
 #include <algorithm>
@@ -128,9 +129,9 @@ namespace
           const M rotation=(eye-.5*step*k).partialPivLu().solve(eye+.5*step*k); return c*rotation; };
         return {move(in.mo_coeff.alpha,x.alpha,in.nocc_alpha),move(in.mo_coeff.beta,x.beta,in.nocc_beta)};
     }
-    UDHFullMOIntegrals full_integrals(const Model &model,const Orb &c)
+    TestOracle::FullMOIntegrals full_integrals(const Model &model,const Orb &c)
     {
-        const int na=c.alpha.cols(),nb=c.beta.cols(); UDHFullMOIntegrals g{na,nb,{},{},{}};
+        const int na=c.alpha.cols(),nb=c.beta.cols(); TestOracle::FullMOIntegrals g{na,nb,{},{},{}};
         for(int spin=0;spin<3;++spin)
         {
             const M &cs=spin==2?c.beta:c.alpha,&ct=spin==0?c.alpha:c.beta;
@@ -143,7 +144,7 @@ namespace
         }
         return g;
     }
-    UDHPT2DirectIntegrals direct(const UDHFullMOIntegrals &g,int oa,int ob)
+    UDHPT2DirectIntegrals direct(const TestOracle::FullMOIntegrals &g,int oa,int ob)
     {
         UDHPT2DirectIntegrals out;
         for(int spin=0;spin<3;++spin)
@@ -206,7 +207,7 @@ namespace
           for(int i=0;i<os;++i) for(int j=0;j<ot;++j) for(int a=os;a<ns;++a) for(int b=ot;b<nt;++b)
           { double value=eri[gi(i,a,j,b,ns,nt)]; if(spin!=1) value-=eri[gi(i,b,j,a,ns,nt)];
             v.push_back(value/(es(i,i)+et(j,j)-es(a,a)-et(b,b))); } }
-        auto rhs=build_udh_orbital_rhs(t,g,.27,in.mo_coeff,in.overlap_ao,in.fock_mo,in.response);
+        auto rhs=build_udh_orbital_rhs(t,TestOracle::sectors(g,t),.27,in.mo_coeff,in.overlap_ao,in.fock_mo,in.response);
         if(in.mo_coeff.alpha.cols()!=in.overlap_ao.rows() || in.mo_coeff.beta.cols()!=in.overlap_ao.rows())
         {
             // U4 permits rectangular response spaces, but the current U1/U3

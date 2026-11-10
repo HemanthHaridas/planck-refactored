@@ -87,8 +87,8 @@ suite was 132/132 at `1b3ffc9b`.
 - **Double hybrids** (`docs/DH_IMPLEMENTATION.md` §9):
   - UKS DH geometry optimization and frequencies are rejected. The gradient
     they would call already passes FD.
-  - The UKS DH path is still partly dense: full α/β MO ERIs and resident
-    amplitudes (its Z-vector shares the RKS GMRES solver since 2026-11-10).
+  - The UKS DH path still keeps resident UMP2 amplitudes; it shares the RKS
+    pair stream, GMRES Z-vector and Eq. 40 MO sectors since 2026-11-10.
     It is qualified only on small molecules.
     The steps to one architecture, with the dense RKS test adapters, are in
     `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md`.

@@ -1,6 +1,7 @@
 // U3: literal coefficient FDs and an independent nonlinear stationary model.
 // No SCF, Z solve, geometry derivative, or external chemistry code reference.
 #include "dft/udh_pt2_orbital.h"
+#include "udh_mo_sector_oracle.h"
 #include <Eigen/Jacobi>
 #include <algorithm>
 #include <cmath>
@@ -73,7 +74,7 @@ namespace
     struct Fixture
     {
         UDHPT2Amplitudes t;
-        UDHFullMOIntegrals g;
+        TestOracle::FullMOIntegrals g;
         Orb coeff,eps_matrix;
         M s;
         Model model;
@@ -86,10 +87,10 @@ namespace
         const auto ao=f.model.fock(density(f,c));
         return {c.alpha.transpose()*ao.alpha*c.alpha,c.beta.transpose()*ao.beta*c.beta};
     }
-    UDHFullMOIntegrals integrals(const Model &model,const Orb &c)
+    TestOracle::FullMOIntegrals integrals(const Model &model,const Orb &c)
     {
         int na=c.alpha.cols(),nb=c.beta.cols();
-        UDHFullMOIntegrals out{na,nb,{},{},{}};
+        TestOracle::FullMOIntegrals out{na,nb,{},{},{}};
         for (int block=0;block<3;++block)
         {
             const auto &cs=block==2?c.beta:c.alpha,&ct=block==0?c.alpha:c.beta;
@@ -192,7 +193,7 @@ namespace
     }
     void pair_checks(const Fixture &f)
     {
-        auto built=build_udh_pair_orbital_gradient(f.t,f.g,.27);
+        auto built=build_udh_pair_orbital_gradient(f.t,TestOracle::sectors(f.g,f.t),.27);
         if (!built) { std::cerr<<built.error()<<'\n'; ok=false; return; }
         const int na=f.g.n_alpha,nb=f.g.n_beta;
         for (int block=0;block<3;++block)
@@ -275,7 +276,7 @@ namespace
         const auto ground=density(f,f.coeff);
         auto op=f.model.response(ground);
         const auto fm=mo_fock(f,f.coeff);
-        auto rhs=build_udh_orbital_rhs(f.t,f.g,.27,f.coeff,f.s,fm,op);
+        auto rhs=build_udh_orbital_rhs(f.t,TestOracle::sectors(f.g,f.t),.27,f.coeff,f.s,fm,op);
         if (!rhs) { std::cerr<<rhs.error()<<'\n'; ok=false; return; }
         if (!offshell) { near(rhs->fock_connection_ai.alpha.norm(),0); near(rhs->fock_connection_ai.beta.norm(),0); }
         else check(rhs->fock_connection_ai.alpha.norm()+rhs->fock_connection_ai.beta.norm()>1e-8);
@@ -297,7 +298,7 @@ namespace
             if (!v) return std::unexpected(v.error());
             return AO{v->beta,v->alpha};
         };
-        auto flipped_rhs=build_udh_orbital_rhs(flipped.t,flipped.g,.27,flipped.coeff,f.s,
+        auto flipped_rhs=build_udh_orbital_rhs(flipped.t,TestOracle::sectors(flipped.g,flipped.t),.27,flipped.coeff,f.s,
                                               {fm.beta,fm.alpha},flipped_op);
         check(flipped_rhs.has_value());
         if (flipped_rhs)
@@ -372,19 +373,19 @@ namespace
                  <<" coefficient connection FD="<<connection_worst<<'\n';
         for (double scale:{0.,.54,-.27})
         {
-            auto scaled=build_udh_orbital_rhs(f.t,f.g,scale,f.coeff,f.s,fm,op);
+            auto scaled=build_udh_orbital_rhs(f.t,TestOracle::sectors(f.g,f.t),scale,f.coeff,f.s,fm,op);
             check(scaled.has_value());
             if (scaled) { same(scaled->total_ai.alpha,(scale/.27)*rhs->total_ai.alpha);
                           same(scaled->total_ai.beta,(scale/.27)*rhs->total_ai.beta); }
         }
         auto failure=op;
         failure.xc=[](const AO &)->std::expected<AO,std::string>{return std::unexpected("U3 sentinel");};
-        auto rejected=build_udh_orbital_rhs(f.t,f.g,.27,f.coeff,f.s,fm,failure);
+        auto rejected=build_udh_orbital_rhs(f.t,TestOracle::sectors(f.g,f.t),.27,f.coeff,f.s,fm,failure);
         check(!rejected && rejected.error().find("U3 sentinel")!=std::string::npos);
         auto badc=f.coeff; badc.alpha*=2;
-        check(!build_udh_orbital_rhs(f.t,f.g,.27,badc,f.s,fm,op));
+        check(!build_udh_orbital_rhs(f.t,TestOracle::sectors(f.g,f.t),.27,badc,f.s,fm,op));
         auto badf=fm; badf.alpha(0,1)+=.2;
-        check(!build_udh_orbital_rhs(f.t,f.g,.27,f.coeff,f.s,badf,op));
+        check(!build_udh_orbital_rhs(f.t,TestOracle::sectors(f.g,f.t),.27,f.coeff,f.s,badf,op));
     }
 }
 
@@ -410,7 +411,7 @@ int main()
         const auto empty=make(2,0,4); pair_checks(empty); rhs_checks(empty);
         const auto full=make(4,2,4); pair_checks(full); rhs_checks(full);
         const auto closed=make(2,2,5,true);
-        auto cg=build_udh_pair_orbital_gradient(closed.t,closed.g,.27);
+        auto cg=build_udh_pair_orbital_gradient(closed.t,TestOracle::sectors(closed.g,closed.t),.27);
         check(cg.has_value());
         if (cg)
         {
@@ -428,11 +429,15 @@ int main()
                 near(fd,cg->g.alpha(p,q)+cg->g.beta(p,q),3e-9);
             }
         }
-        auto bad=f.g; bad.ab.pop_back(); check(!build_udh_pair_orbital_gradient(f.t,bad,0));
-        bad=f.g; bad.aa[1]+=.1; check(!build_udh_pair_orbital_gradient(f.t,bad,.27));
-        bad=f.g; bad.bb[0]=std::numeric_limits<double>::infinity(); check(!build_udh_pair_orbital_gradient(f.t,bad,0));
-        auto t=f.t; t.aa[0]=1; check(!build_udh_pair_orbital_gradient(t,f.g,.27));
-        check(!build_udh_pair_orbital_gradient(f.t,f.g,std::numeric_limits<double>::quiet_NaN()));
+        // Sector controls: wrong size, wrong frame extent, nonfinite value.
+        const auto good=TestOracle::sectors(f.g,f.t);
+        check(!good.ab.ovvv.empty() && !good.aa.vvov.empty() && !good.bb.ovov.empty());
+        auto bad=good; bad.ab.ovvv.pop_back(); check(!build_udh_pair_orbital_gradient(f.t,bad,0));
+        bad=good; bad.ab.n_occ_2+=1; check(!build_udh_pair_orbital_gradient(f.t,bad,.27));
+        bad=good; bad.bb.ovov[0]=std::numeric_limits<double>::infinity(); check(!build_udh_pair_orbital_gradient(f.t,bad,0));
+        bad=good; bad.aa.vvov[0]=std::numeric_limits<double>::quiet_NaN(); check(!build_udh_pair_orbital_gradient(f.t,bad,0));
+        auto t=f.t; t.aa[0]=1; check(!build_udh_pair_orbital_gradient(t,TestOracle::sectors(f.g,t),.27));
+        check(!build_udh_pair_orbital_gradient(f.t,TestOracle::sectors(f.g,f.t),std::numeric_limits<double>::quiet_NaN()));
     }
     catch(const std::exception &e) { std::cerr<<e.what()<<'\n'; ok=false; }
     std::cout<<(ok?"PASS":"FAIL")<<" U3 literal pair and stationary orbital RHS\n";

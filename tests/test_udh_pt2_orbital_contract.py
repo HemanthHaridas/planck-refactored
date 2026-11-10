@@ -19,6 +19,17 @@ class U3ContractTests(unittest.TestCase):
         self.assertIn("out.ab=sector(t.ab,g.ab,t,0,1,2*c)", self.source)
         self.assertNotIn("exact_exchange", self.source.split("build_udh_orbital_rhs(", 1)[0])
 
+    def test_sectors_not_full_mo_tensors(self):
+        # Step 3 of docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md: UKS reads the
+        # five RKS Eq. 40 sectors per spin pair; no full MO transform remains.
+        self.assertIn("struct UDHMOIntegrals { DHMolecularERIBlocks aa,ab,bb; }", self.header)
+        self.assertNotIn("UDHFullMOIntegrals", self.header + self.source)
+        driver = (ROOT / "src/dft/udh_driver.cpp").read_text()
+        self.assertIn("build_dh_eq40_mo_eri_blocks_direct(", driver)
+        self.assertNotIn("transform_eri", driver)
+        self.assertIn("valid_blocks(g.ab,oa,va,ob,vb)", self.source)
+        self.assertIn("TestOracle::sectors(", self.test)
+
     def test_checked_u1_u2_composition(self):
         for call in ("validate_udh_pt2_amplitudes(t)", "build_udh_pt2_dprime(t,c)",
                      "transform_udh_pt2_dprime_to_ao", "response.apply_channels"):

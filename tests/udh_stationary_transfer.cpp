@@ -3,6 +3,7 @@
 #include "dft/udh_two_particle_density.h"
 #include "udh_dense_oracle.h"
 #include "dh_zvector_oracle.h"
+#include "udh_mo_sector_oracle.h"
 #include <Eigen/Eigenvalues>
 #include <Eigen/LU>
 #include <unsupported/Eigen/MatrixFunctions>
@@ -206,7 +207,7 @@ struct State
 {
     Orb f;
     std::array<Orb,5> f_channels;
-    UDHFullMOIntegrals full;
+    TestOracle::FullMOIntegrals full;
     UDHPT2DirectIntegrals direct;
     V b;
 };
@@ -333,7 +334,7 @@ struct Contract { DFT::Gradient::TestOracle::Tensors gamma; UDHOverlapDensity w;
 Contract contract(const Fixture &x,const V &q,const Orb &z)
 {
     auto t=expand(q); auto dp=require(build_udh_pt2_dprime(t,scale));
-    auto pair=require(build_udh_pair_orbital_gradient(t,state(x.model,x.c).full,scale));
+    auto pair=require(build_udh_pair_orbital_gradient(t,TestOracle::sectors(state(x.model,x.c).full,t),scale));
     auto relaxed=require(build_udh_relaxed_difference_density(dp,z));
     const auto rho=require(build_udh_two_particle_density(t,scale,relaxed,x.c,x.s,ax));
     return {DFT::Gradient::TestOracle::materialize(rho,make_udh_two_particle_source(rho,t,x.c)),
@@ -421,7 +422,7 @@ void integration(const Fixture &x)
 {
     auto base=state(x.model,x.c); M amp=amplitude_matrix(base.f); V q=solve(amp,base.b);
     near(maxabs(base.f.alpha-x.f.alpha),0,2e-12); near(maxabs(base.f.beta-x.f.beta),0,2e-12);
-    auto rhs=require(build_udh_orbital_rhs(expand(q),base.full,scale,x.c,x.s,x.f,x.model.response(density(x.c))));
+    auto rhs=require(build_udh_orbital_rhs(expand(q),TestOracle::sectors(base.full,oa,ob),scale,x.c,x.s,x.f,x.model.response(density(x.c))));
     const UDHZVectorInputs zin{x.c,x.f,x.s,oa,ob,x.model.response(density(x.c))};
     auto z=require(solve_udh_zvector(zin,rhs.total_ai));
     // Production never forms the KS Jacobian; the FD checks below use the

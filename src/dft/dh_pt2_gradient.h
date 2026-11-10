@@ -189,10 +189,17 @@ namespace DFT::Gradient
     // slots. This is a lossless adapter over the dense MO tensor today;
     // production will later construct the sectors directly. Indices are
     // local to their named occupied/virtual spaces.
+    // The five Eq. 40 chemist sectors, row-major in the index order shown.
+    // Electron 1 (first pair) has extents n_occ/n_virt, electron 2 (second
+    // pair) n_occ_2/n_virt_2. RKS uses one frame for both; UKS builds one
+    // block per spin pair (aa, ab, bb). A frame with no occupied or no
+    // virtual orbitals gives empty sectors.
     struct DHMolecularERIBlocks
     {
         int n_occ = 0;
         int n_virt = 0;
+        int n_occ_2 = 0;
+        int n_virt_2 = 0;
         std::vector<double> ovov; // (i a | j b)
         std::vector<double> vvov; // (a b | i c)
         std::vector<double> ooov; // (i j | k a)

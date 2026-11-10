@@ -430,6 +430,16 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **UKS double hybrids read Eq. 40 MO sectors, not full MO tensors
+  (2026-11-10, `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md` step 3).** The
+  UKS gradient transformed three full `n⁴` MO ERI tensors (αα, αβ, ββ).
+  `build_dh_eq40_mo_eri_blocks_direct` now takes a separate frame per
+  electron and builds, for each spin pair, the same five sectors RKS uses
+  (ovov, vvov, ooov, ovvv, ovoo). Gradients and energies are bitwise
+  identical on all six `uks_u0` fixtures, the regression case and both RKS
+  inputs. By element count the MO integrals shrink 8.6× for a water cation
+  in cc-pVTZ (409 → 48 MiB); the AO tensor is now the largest UKS object.
+
 - **One Z-vector solver for RKS and UKS double hybrids (2026-11-10,
   `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md` step 2).** The UKS gradient
   built its joint α/β KS Jacobian column by column (1 + 2n response actions)

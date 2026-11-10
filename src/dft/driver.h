@@ -94,6 +94,17 @@ namespace DFT::Driver
     [[nodiscard]] std::expected<Gradient::DHEq33NonXCDerivatives, std::string>
     build_dh_eq33_derivative_integrals(const HartreeFock::Calculator &calculator);
 
+    // The five Eq. 40 MO-ERI sectors from the conventional AO tensor, with
+    // electron 1 in (c_occ, c_virt) and electron 2 in (c_occ_2, c_virt_2).
+    // RKS passes one frame twice; UKS passes each spin pair. Empty frames
+    // give empty sectors.
+    [[nodiscard]] std::expected<Gradient::DHMolecularERIBlocks, std::string>
+    build_dh_eq40_mo_eri_blocks_direct(const std::vector<double> &eri_ao, std::size_t nao,
+        const Eigen::Ref<const Eigen::MatrixXd> &c_occ,
+        const Eigen::Ref<const Eigen::MatrixXd> &c_virt,
+        const Eigen::Ref<const Eigen::MatrixXd> &c_occ_2,
+        const Eigen::Ref<const Eigen::MatrixXd> &c_virt_2);
+
     // TDDFT excitation-space and finite-difference XC kernel machinery
     // (docs/DFT_ANALYTIC_FXC_HESSIAN.md, F3.1). These were originally
     // internal-linkage helpers inside driver.cpp's anonymous namespace; moved
