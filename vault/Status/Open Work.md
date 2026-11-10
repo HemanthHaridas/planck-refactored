@@ -9,7 +9,7 @@ tags: [status, open-work, canonical, roadmap]
 
 # Open Work
 
-Last updated: 2026-11-09 (rewrite at `8570139a` on 2026-11-08, then the
+Last updated: 2026-11-10 (UKS DH step list; rewrite at `8570139a` on 2026-11-08, then the
 Yukawa and `hcore` decisions and the CI blocker).
 
 This is the canonical list of what remains. What is done lives in
@@ -24,6 +24,58 @@ PCM, analytic gradients, geometry optimization and frequencies;
 `docs/PCM_GEOMETRY.md`). Every item below was re-checked on 2026-11-08
 against the tree, and the upstream and CI items against GitHub. The core
 suite was 132/132 at `1b3ffc9b`.
+
+## Priority for a final product (2026-11-10)
+
+A ranking of the gaps below, for a general-purpose program that users would
+pick for routine work: single points, geometries, frequencies and interaction
+energies with standard spherical basis sets. The sections that follow keep the
+detail; this is only the order. A narrower target (a double-hybrid showcase, a
+teaching code) reorders it.
+
+**Necessary.** Without these the product is broken or misleading.
+
+1. **CCSD(T).** Not implemented: CCSD, CCSDT and higher exist, perturbative
+   triples do not. It is the benchmark method users ask for first.
+2. **SCF robustness on medium systems.** 32-water RKS hits `max_cycles`
+   (§2, DFT).
+3. **Meta-GGA**, at least SCF energies with a by-name refusal everywhere else,
+   then gradients (§2, DFT). r2SCAN, ωB97M-V, M06-2X and TPSSh are rejected
+   today.
+4. **Spherical MP2/UMP2 gradients** (§2, HF and post-HF). Every standard
+   basis is spherical; MP2 geometry optimization works only in Cartesian.
+5. **Default DFT grid qualified for gradients** (§2, DFT). `legacy` fails the
+   rotational-covariance check, so default-settings geometries and
+   frequencies carry grid noise. A decision and a migration, not new code.
+6. **DFT ghost atoms and counterpoise** (§2, BSSE). Interaction energies are
+   mostly computed with DFT.
+7. **D3 reported separately in the results JSON** (§2, D3 follow-ups).
+   `electronic_energy` includes D3 without saying so. Small fix.
+8. **CI running again** (§3). Blocked on the shared-objects build change.
+9. **RI-JK validated and usable for routine DFT/HF** (§5, RI-JK and BLAS).
+   Nothing has landed and RI-JK has no regression case.
+
+**Expected, with a workaround.**
+
+10. Gating cases for PCM with UHF/UKS, spherical basis and `planck-dft`
+    frequencies; the code paths run ungated (§2, PCM leftovers).
+11. ROHF-MP2 and ROHF coupled cluster; UHF-based versions exist. Matters more
+    once CCSD(T) exists.
+12. Analytic Hessian; semi-numerical frequencies work, this is cost on large
+    systems.
+13. UKS double-hybrid geometry optimization and frequencies; the gradient
+    passes FD, so this is driver wiring and a gate.
+14. Spherical double-hybrid gradients, frozen-core PT2 in the gradient, RI-DH.
+    Necessary if double hybrids are a headline feature; spherical first.
+15. D4 dispersion; D3(BJ) covers most uses.
+
+**Nice to have.** Imaginary-mode following in `planck-dft` and under PCM;
+HF-D3 and modified D3 damping; counterpoise-corrected gradients and N-body
+counterpoise; ROHF stability, SOSCF and PCM; a spin-polarized inactive core in
+ROHF CASSCF; range-separated, solvent, SCS/DOS, meta-GGA and TDDFT
+double-hybrid variants; the incremental KS J/K build and PCM performance
+leftovers; `TensorOptimized` RCCSDT; conventional symmetry-unique ERI storage;
+further post-HF ghost-atom checks.
 
 ## 1. Correctness decisions and external dependencies
 
@@ -89,13 +141,15 @@ suite was 132/132 at `1b3ffc9b`.
     they would call already passes FD.
   - The UKS DH path still keeps resident UMP2 amplitudes; it shares the RKS
     pair stream, GMRES Z-vector and Eq. 40 MO sectors since 2026-11-10.
-    It is qualified only on small molecules.
-    The steps to one architecture, with the dense RKS test adapters, are in
-    `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md`.
+    It is qualified only on small molecules. Only final acceptance remains in
+    `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md`; the dense RKS adapters are
+    gone (step 1).
   - O8 response throughput: paired J/K, blocked XC action, then batched
     Krylov only if a benchmark shows it pays.
   - O9 RI-DH is a separate energy backend. It is the only route to dropping
-    the conventional AO ERI tensor.
+    the conventional AO ERI tensor. It also takes the UKS amplitude tile source
+    (resident `t2_aa/ab/bb` today; design in the scope doc's "Deferred to
+    RI-DH" section), whose saving only shows once the AO tensor is gone.
   - Not covered: range-separated DH gradients, solvent, SCS/DOS spin scaling,
     meta-GGA, frozen-core or RI PT2 in the gradient, DH TDDFT, and spherical
     DH gradients (refused by `water_rks_b2plyp_gradient_spherical_rejected`).
@@ -126,6 +180,8 @@ suite was 132/132 at `1b3ffc9b`.
 
 ### HF and post-HF
 
+- **CCSD(T) is not implemented.** The CC stack has CCSD, CCSDT, CCSDTQ and
+  arbitrary order, but no perturbative triples correction.
 - **ROHF:** RMP2/UMP2, coupled cluster, stability, PCM and SOSCF reject ROHF.
   SOSCF and stability need new orbital-response machinery for the effective
   Roothaan Fock, which does not exist in the tree. ROHF CASSCF and RASSCF
