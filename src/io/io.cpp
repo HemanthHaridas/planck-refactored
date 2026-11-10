@@ -1651,7 +1651,7 @@ namespace HartreeFock::IO
         return lookup_enum(_table, value, "Invalid CoordType : ");
     }
 
-    std::expected<void, std::string> _parse_geom(const std::vector<std::string> &lines, HartreeFock::OptionsGeometry &geom, HartreeFock::OptCoords &opt_coords, double &imag_follow_step)
+    std::expected<void, std::string> _parse_geom(const std::vector<std::string> &lines, HartreeFock::OptionsGeometry &geom, HartreeFock::OptCoords &opt_coords, double &imag_follow_step, double &geomopt_grad_tol)
     {
         // (key, value) pairs
         const std::unordered_map<std::string, ParseHandler> _geom_map =
@@ -1683,6 +1683,17 @@ namespace HartreeFock::IO
                 {"imag_follow_step", [&imag_follow_step](const std::string &value) -> std::expected<void, std::string>
                  {
                      imag_follow_step = std::stod(value);
+                     return std::expected<void, std::string>{};
+                 }},
+                // Max |dE/dx| (Ha/Bohr) at which geometry optimization stops.
+                {"geomopt_grad_tol", [&geomopt_grad_tol](const std::string &value) -> std::expected<void, std::string>
+                 {
+                     double tol = 0.0;
+                     try { tol = std::stod(value); }
+                     catch (const std::exception &) { return std::unexpected("geomopt_grad_tol must be a number, got: " + value); }
+                     if (!std::isfinite(tol) || tol <= 0.0)
+                         return std::unexpected("geomopt_grad_tol must be a positive number (Ha/Bohr), got: " + value);
+                     geomopt_grad_tol = tol;
                      return std::expected<void, std::string>{};
                  }}};
 
@@ -2375,7 +2386,7 @@ namespace HartreeFock::IO
         // geom
         if (auto it = _sections.find("geom"); it != _sections.end())
         {
-            if (auto res = _parse_geom(it->second, calculator._geometry, calculator._opt_coords, calculator._imag_follow_step); !res)
+            if (auto res = _parse_geom(it->second, calculator._geometry, calculator._opt_coords, calculator._imag_follow_step, calculator._geomopt_grad_tol); !res)
                 return std::unexpected(res.error());
         }
         else

@@ -430,6 +430,17 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Every PCM workflow gated against PySCF; three defects fixed on the way
+  (2026-11-10, `docs/PCM_GATING.md`).** Six new water/6-31G* cases: UKS and
+  spherical RKS gradients (≤ 3.6e-11 Ha/Bohr), and UHF, spherical RHF, RKS
+  and UKS geomopt + frequencies (energies ≤ 1e-9 Eh, frequencies ≤ 0.9
+  cm⁻¹ against PySCF's analytic PCM Hessian). Removing the PCM gradient term
+  fails all six. Fixed: `compute_hessian` now rebuilds the reference state
+  (HF frequency runs had published the last displaced geometry to the results
+  JSON); the KS SCF stores the D3/PCM energies so DFT geomopt no longer writes
+  `solvation_energy` 0; and the geometry-optimization force threshold is the
+  new `%begin_geom` keyword `geomopt_grad_tol` (default 3e-4 unchanged).
+
 - **Results JSON reports D3 and PCM energies separately (2026-11-10,
   `docs/RESULTS_JSON_ENERGY_TERMS.md`).** `electronic_energy` had silently
   included the D3 energy. It now excludes D3 and still includes PCM, and

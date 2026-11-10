@@ -369,10 +369,13 @@ HartreeFock::Freq::compute_hessian(
     // Symmetrise to remove numerical noise
     result.hessian = (0.5 * (result.hessian + result.hessian.transpose())).eval();
 
-    // Restore coordinate frames. The callback may retain the last displaced
-    // wavefunction; callers exporting a reference energy/density/gradient must
-    // rebuild that state separately (as the DFT frequency wrapper does).
+    // Restore coordinate frames, then rebuild the reference state. The last
+    // callback left the final -h displacement's wavefunction, energy and
+    // gradient on calc, and every caller (results JSON, properties) reads
+    // those as the reference. One extra gradient out of 2·3N.
     calc.sync_coordinate_frames_from_standard();
+    if (auto reference = gradient_runner(calc); !reference)
+        return std::unexpected("Hessian reference restoration failed: " + reference.error());
 
     // Run vibrational analysis
     vibrational_analysis(result, calc);

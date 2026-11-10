@@ -8468,6 +8468,381 @@
      "atol": 1e-08
     }
    ]
+  },
+  {
+   "id": "water_cation_uks_pbe_pcm_swig_gradient_631gd",
+   "_note": "UKS PCM analytic gradient (PBE, unpruned 150 x 590, SAD guess). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (docs/PCM_GATING.md), with grid response; Planck agrees to 6e-12. G_pcm -0.1471609990.",
+   "input": "tests/inputs/regression/dft/water_cation_uks_pbe_pcm_swig_gradient_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "core",
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with"
+   ],
+   "checks": [
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.134161221198
+      ],
+      [
+       -0.090838957793,
+       0.0,
+       -0.067080610599
+      ],
+      [
+       0.090838957793,
+       0.0,
+       -0.067080610599
+      ]
+     ],
+     "atol": 1e-09
+    }
+   ],
+   "json_checks": [
+    {
+     "field": "solvation_energy",
+     "expected": -0.147160999,
+     "atol": 1e-09
+    },
+    {
+     "sum": [
+      "electronic_energy",
+      "nuclear_repulsion",
+      "dispersion_energy"
+     ],
+     "equals": "total_energy",
+     "atol": 1e-10
+    }
+   ]
+  },
+  {
+   "id": "water_rks_pbe_pcm_swig_gradient_spherical_631gd",
+   "_note": "Spherical RKS PCM analytic gradient (PBE, cart=False). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (docs/PCM_GATING.md), with grid response; Planck agrees to 3.6e-11. G_pcm -0.0102173958.",
+   "input": "tests/inputs/regression/dft/water_rks_pbe_pcm_swig_gradient_spherical_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended"
+   ],
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with"
+   ],
+   "checks": [
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       0.100335391585
+      ],
+      [
+       -0.052850862411,
+       0.0,
+       -0.050167695792
+      ],
+      [
+       0.052850862411,
+       0.0,
+       -0.050167695792
+      ]
+     ],
+     "atol": 1e-09
+    }
+   ],
+   "json_checks": [
+    {
+     "field": "solvation_energy",
+     "expected": -0.0102173958,
+     "atol": 1e-09
+    },
+    {
+     "sum": [
+      "electronic_energy",
+      "nuclear_repulsion",
+      "dispersion_energy"
+     ],
+     "equals": "total_energy",
+     "atol": 1e-10
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uhf_pcm_swig_geomoptfreq_631gd",
+   "_note": "Optimized with geomopt_grad_tol 1.5e-5 (PySCF gau_tight max force); the JSON solvation_energy check is 5e-7 because PySCF's own gau_tight geometry leaves ~1e-7 in G_pcm (UHF: Planck stops at 5.9e-6 Ha/Bohr, energies agree to 1e-10). Exact G_pcm agreement is gated at fixed geometry by the *_pcm_swig_gradient_* cases. UHF PCM geomopt + frequencies (SAD guess). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (docs/PCM_GATING.md): gau_tight optimum -75.7624343663 (Planck 5.3e-9 above), analytic PCM Hessian frequencies 1599.81 / 3624.39 / 3659.78 (Planck 1599.65 / 3625.12 / 3660.56). The energy metric is named rhf_total_energy for UHF too.",
+   "input": "tests/inputs/regression/hf/water_cation_uhf_pcm_swig_geomoptfreq_631gd.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "timeout_s": 900,
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with",
+    "Final Energy",
+    "Vibrational Frequencies"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -75.7624343663,
+     "atol": 1e-08
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 1.5e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1599.81,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 3624.39,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 3659.78,
+     "atol": 1.0
+    }
+   ],
+   "json_checks": [
+    {
+     "field": "total_energy",
+     "expected": -75.7624343663,
+     "atol": 1e-08
+    },
+    {
+     "field": "solvation_energy",
+     "expected": -0.1480744166,
+     "atol": 5e-07
+    },
+    {
+     "sum": [
+      "electronic_energy",
+      "nuclear_repulsion",
+      "dispersion_energy"
+     ],
+     "equals": "total_energy",
+     "atol": 1e-10
+    }
+   ]
+  },
+  {
+   "id": "water_rhf_pcm_swig_spherical_geomoptfreq_631gd",
+   "_note": "Optimized with geomopt_grad_tol 1.5e-5 (PySCF gau_tight max force); the JSON solvation_energy check is 5e-7 because PySCF's own gau_tight geometry leaves ~1e-7 in G_pcm (UHF: Planck stops at 5.9e-6 Ha/Bohr, energies agree to 1e-10). Exact G_pcm agreement is gated at fixed geometry by the *_pcm_swig_gradient_* cases. Spherical RHF PCM geomopt + frequencies (cart=False). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (docs/PCM_GATING.md): optimum -76.0207714671 (Planck 7e-10 above), frequencies 1790.26 / 4028.95 / 4127.09 (Planck 1790.19 / 4029.19 / 4127.32).",
+   "input": "tests/inputs/regression/hf/water_rhf_pcm_swig_spherical_geomoptfreq_631gd.hfinp",
+   "tags": [
+    "extended"
+   ],
+   "timeout_s": 900,
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with",
+    "Final Energy",
+    "Vibrational Frequencies"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "rhf_total_energy",
+     "expected": -76.0207714671,
+     "atol": 1e-08
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 1.5e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1790.26,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 4028.95,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 4127.09,
+     "atol": 1.0
+    }
+   ],
+   "json_checks": [
+    {
+     "field": "total_energy",
+     "expected": -76.0207714671,
+     "atol": 1e-08
+    },
+    {
+     "field": "solvation_energy",
+     "expected": -0.0125887668,
+     "atol": 5e-07
+    },
+    {
+     "sum": [
+      "electronic_energy",
+      "nuclear_repulsion",
+      "dispersion_energy"
+     ],
+     "equals": "total_energy",
+     "atol": 1e-10
+    }
+   ]
+  },
+  {
+   "id": "water_rks_pbe_pcm_swig_geomoptfreq_631gd",
+   "_note": "Optimized with geomopt_grad_tol 1.5e-5 (PySCF gau_tight max force); the JSON solvation_energy check is 5e-7 because PySCF's own gau_tight geometry leaves ~1e-7 in G_pcm (UHF: Planck stops at 5.9e-6 Ha/Bohr, energies agree to 1e-10). Exact G_pcm agreement is gated at fixed geometry by the *_pcm_swig_gradient_* cases. RKS PBE PCM geomopt + frequencies (unpruned 150 x 590). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (docs/PCM_GATING.md): optimum -76.3327063368 (Planck to every printed digit), frequencies 1657.97 / 3626.50 / 3729.76 (Planck 1657.88 / 3626.56 / 3729.82).",
+   "input": "tests/inputs/regression/dft/water_rks_pbe_pcm_swig_geomoptfreq_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended"
+   ],
+   "timeout_s": 900,
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with",
+    "Final Energy",
+    "Vibrational Frequencies"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.3327063368,
+     "atol": 1e-08
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 1.5e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1657.97,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 3626.5,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 3729.76,
+     "atol": 1.0
+    }
+   ],
+   "json_checks": [
+    {
+     "field": "total_energy",
+     "expected": -76.3327063368,
+     "atol": 1e-08
+    },
+    {
+     "field": "solvation_energy",
+     "expected": -0.0113870301,
+     "atol": 5e-07
+    },
+    {
+     "sum": [
+      "electronic_energy",
+      "nuclear_repulsion",
+      "dispersion_energy"
+     ],
+     "equals": "total_energy",
+     "atol": 1e-10
+    }
+   ]
+  },
+  {
+   "id": "water_cation_uks_pbe_pcm_swig_geomoptfreq_631gd",
+   "_note": "Optimized with geomopt_grad_tol 1.5e-5 (PySCF gau_tight max force); the JSON solvation_energy check is 5e-7 because PySCF's own gau_tight geometry leaves ~1e-7 in G_pcm (UHF: Planck stops at 5.9e-6 Ha/Bohr, energies agree to 1e-10). Exact G_pcm agreement is gated at fixed geometry by the *_pcm_swig_gradient_* cases. UKS PBE PCM geomopt + frequencies (SAD guess, unpruned 150 x 590). PySCF 2.13.0 C-PCM reference from tests/pyscf/pcm_swig_references.py (docs/PCM_GATING.md): optimum -76.0208889251 (Planck to every printed digit at geomopt_grad_tol 1.5e-5; 1.2e-8 above at the default 3e-4, with G_pcm 1.5e-6 off), frequencies 1508.68 / 3255.16 / 3290.77 (Planck 1508.96 / 3254.44 / 3289.84).",
+   "input": "tests/inputs/regression/dft/water_cation_uks_pbe_pcm_swig_geomoptfreq_631gd.hfinp",
+   "executable": "planck-dft",
+   "tags": [
+    "extended"
+   ],
+   "timeout_s": 900,
+   "expected_exit_code": 0,
+   "contains": [
+    "C-PCM (SWIG) cavity with",
+    "Final Energy",
+    "Vibrational Frequencies"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "dft_total_energy",
+     "expected": -76.0208889251,
+     "atol": 1e-08
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 1.5e-05
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_1",
+     "expected": 1508.68,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_2",
+     "expected": 3255.16,
+     "atol": 1.0
+    },
+    {
+     "type": "metric_close",
+     "metric": "vib_freq_3",
+     "expected": 3290.77,
+     "atol": 1.0
+    }
+   ],
+   "json_checks": [
+    {
+     "field": "total_energy",
+     "expected": -76.0208889251,
+     "atol": 1e-08
+    },
+    {
+     "field": "solvation_energy",
+     "expected": -0.1470295303,
+     "atol": 5e-07
+    },
+    {
+     "sum": [
+      "electronic_energy",
+      "nuclear_repulsion",
+      "dispersion_energy"
+     ],
+     "equals": "total_energy",
+     "atol": 1e-10
+    }
+   ]
   }
  ]
 }

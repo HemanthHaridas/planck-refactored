@@ -57,8 +57,8 @@ teaching code) reorders it.
 
 **Expected, with a workaround.**
 
-10. Gating cases for PCM with UHF/UKS, spherical basis and `planck-dft`
-    frequencies; the code paths run ungated (§2, PCM leftovers). Scope: `docs/PCM_GATING_SCOPE.md`.
+10. ~~Gating cases for PCM with UHF/UKS, spherical basis and `planck-dft`
+    frequencies.~~ Done 2026-11-10 (`docs/PCM_GATING.md`).
 11. ROHF-MP2 and ROHF coupled cluster; UHF-based versions exist. Matters more
     once CCSD(T) exists. Scope: `docs/ROHF_CORRELATION_SCOPE.md`.
 12. Analytic Hessian; semi-numerical frequencies work, this is cost on large
@@ -132,9 +132,7 @@ further post-HF ghost-atom checks.
   `vsigma.cols()` and would otherwise silently drop the τ term.
 - **PCM leftovers** (`docs/PCM_GEOMETRY.md`, now an answer; see
   Completion). Imaginary-mode following under PCM is rejected (the loops
-  would carry the cavity, but no case gates it). UHF/UKS and spherical
-  geomopt/frequencies, and planck-dft frequencies, run through the gated
-  code paths but have no case of their own. Deferred from step 3:
+  would carry the cavity, but no case gates it). Deferred from step 3:
   tolerance-linked pair screening, and a cheaper φ_el contraction.
 - **Double hybrids** (`docs/DH_IMPLEMENTATION.md` §9):
   - UKS DH geometry optimization and frequencies are rejected. The gradient

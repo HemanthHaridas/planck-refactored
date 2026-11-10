@@ -192,6 +192,13 @@ Negative boundary markers:
 
 Convergence criteria: max force < threshold AND RMS displacement < threshold (ORCA/Gaussian defaults).
 
+The max-force threshold is `geomopt_grad_tol` in `%begin_geom` (Ha/Bohr,
+default 3e-4, `Calculator::_geomopt_grad_tol`), read by both optimizers in both
+binaries. Cases compared with PySCF's `gau_tight` set it to 1.5e-5: the total
+energy is stationary at the minimum, but properties such as the PCM solvation
+energy move linearly with the leftover geometry error (1.5e-6 Eh at 3e-4 on the
+water cation, 1.9e-8 at 1.5e-5).
+
 ## Frequencies (Vibrational Analysis)
 
 `src/freq/hessian.cpp` — semi-numerical Hessian:

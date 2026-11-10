@@ -1850,6 +1850,7 @@ namespace DFT::Driver
 
             Result result;
             result.dispersion_energy = dispersion_energy;
+            calculator._dispersion_energy = dispersion_energy; // results JSON
 
             if (!unrestricted)
             {
@@ -2265,6 +2266,7 @@ namespace DFT::Driver
                                                  static_cast<double>(calculator._molecule.total_nuclear_charge() -
                                                                      calculator._molecule.charge))));
                     result.solvation_energy = pcm_energy;
+                    calculator._solvation_energy = pcm_energy; // results JSON
 
                     if (HartreeFock::SCF::is_converged(calculator._scf, metrics, iter))
                     {
@@ -2835,6 +2837,7 @@ namespace DFT::Driver
                 result.xc_energy = xc_grid->total_energy + ks_potential->exact_exchange_energy;
                 result.integrated_electrons = xc_grid->integrated_electrons;
                 result.solvation_energy = pcm_energy;
+                calculator._solvation_energy = pcm_energy; // results JSON
 
                 // Release the shift on a loose stability test, well before the
                 // full convergence gate: see shift_release_tol above.
@@ -4158,11 +4161,8 @@ namespace DFT::Driver
             calculator.sync_coordinate_frames_from_standard();
             if (!result)
                 return std::unexpected(result.error());
-            // compute_hessian restores coordinates, but its last wavefunction,
-            // energy and gradient still belong to the final -h displacement.
-            // Rebuild the complete reference state before publishing results.
-            if (auto reference = gradient_runner(calculator); !reference)
-                return std::unexpected("DFT frequency reference restoration failed: " + reference.error());
+            // compute_hessian rebuilds the reference wavefunction, energy and
+            // gradient before returning.
             store_frequency_result(calculator, *result);
             print_frequency_report(calculator, *result);
             return result;
@@ -5562,8 +5562,9 @@ namespace DFT::Driver
             // The DFT total lives in the driver Result, not on the Calculator;
             // copy it in so the shared serializer reports the log's energy.
             calculator._total_energy = result->total_energy;
-            calculator._dispersion_energy = result->dispersion_energy;
-            calculator._solvation_energy = result->solvation_energy;
+            // _dispersion_energy and _solvation_energy are set by the KS SCF
+            // itself, so they belong to the last SCF (the optimized geometry
+            // after geomopt, the reference after frequencies).
             if (auto res = HartreeFock::IO::dump_results_json(calculator, json_path); !res)
             {
                 HartreeFock::Logger::logging(
