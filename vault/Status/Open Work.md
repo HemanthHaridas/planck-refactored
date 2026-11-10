@@ -142,7 +142,9 @@ further post-HF ghost-atom checks.
   - The UKS DH path still keeps resident UMP2 amplitudes; it shares the RKS
     pair stream, GMRES Z-vector and Eq. 40 MO sectors since 2026-11-10.
     It is qualified only on small molecules. Only final acceptance remains in
-    `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md`; the dense RKS adapters are
+    `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md`, and it is blocked by the CN
+    radical fixture: a ~8e-8 Ha/Bohr PT2 residual along the C–N bond that
+    predates this work (all other fixtures pass). The dense RKS adapters are
     gone (step 1).
   - O8 response throughput: paired J/K, blocked XC action, then batched
     Krylov only if a benchmark shows it pays.

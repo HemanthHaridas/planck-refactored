@@ -63,10 +63,37 @@ Shared so far:
 ## Next steps
 
 Steps 0 to 3 are done (see the record below), and step 4 is deferred to the
-RI-DH work. What remains is final acceptance: run the full
-`tests/udh_molecular_audit.py` (all `uks_u0` fixtures, the larger-basis water
-cation, closed-shell reduction and the RKS regression), then rewrite this file
-as an answer doc.
+RI-DH work. Final acceptance (the full `tests/udh_molecular_audit.py`, V4 grid,
+`--grid-policy g4-3-v4 --radial-points 135`) ran on 2026-11-10 and is blocked
+by one fixture.
+
+Passed: H2O2⁺, H2⁺ (zero beta), HO2, water cation and water triplet in
+STO-3G, and the water cation in 6-31G (worst 1.1e-9 Ha/Bohr), all within
+5e-8; closed-shell UKS = RKS to 8.5e-14 Eh and 1.1e-11 Ha/Bohr; RKS
+full-coordinate FD on water (9.3e-9) and C1 H2O2 (1.2e-8). Three rejection
+expectations in the audit were stale and are fixed: production now computes
+UKS DH gradients (no longer a rejection case), the spherical refusal comes
+from the spherical-DFT guard, and the solvent case lacked a dielectric, so
+the input parser refused before the solvent guard was reached.
+
+**Blocker: CN radical** (`cn_radical_asymmetric_b2plyp_sto3g`, ⟨S²⟩ 0.886).
+Only the PT2 half along the C–N bond misses; the KS half is within 4e-9.
+
+| FD step (Bohr) | 2e-4 | 1e-4 | 5e-5 | 2.5e-5 |
+|---|---|---|---|---|
+| bond-axis error, V4 grid | 2.2e-6 | 2.1e-7 | 8.7e-8 | 8.1e-8 |
+| same, 590-point unpruned grid | | | −4.5e-7 | 2.2e-7 |
+
+At large steps it is stencil truncation. Below that, on the qualified grid, a
+step-independent ~8e-8 remains: systematic, equal and opposite on the two
+atoms. The unpruned grid does not settle it: the error changes sign between
+steps, so FD along the bond is not resolving a smooth energy there. Not
+caused by this scope's work: step 1 touched no UKS code, step 3 left the CN
+gradient bitwise and step 2 moved it by 5.9e-14, and no earlier CN FD pass is
+recorded. Next: check the stability of the CN UHF state and repeat the FD
+with tighter SCF convergence; decide whether CN belongs in the acceptance set
+if it is a near-instability rather than a gradient defect. Then rewrite this
+file as an answer doc.
 
 ## Record of landed steps
 
