@@ -430,8 +430,21 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **UKS double-hybrid gradient: one architecture with RKS, accepted
+  (2026-11-10, `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md`, now an answer).**
+  RKS and UKS share the derivative contraction, pair stream, GMRES Z-vector
+  and Eq. 40 MO sectors; production keeps no dense path. The full
+  `udh_molecular_audit.py` passes on the V4 grid: every open-shell fixture
+  ≤ 4.3e-9 Ha/Bohr (water cation 6-31G 1.1e-9), closed-shell UKS = RKS to
+  1.1e-11, RKS full-coordinate FD ≤ 1.2e-8, all nine scope refusals. Two
+  findings on the way: three refusal expectations in the audit predated
+  production support and aborted it; and the CN fixture had started from
+  `guess hcore` on a UKS saddle (λ_min −0.0173, 9.7 mEh above the SAD-guess
+  ground state), where it missed by ~8e-8 along the bond. From `guess sad`
+  it passes at 7.8e-10. UKS amplitude tiles are deferred to RI-DH.
+
 - **No dense double-hybrid gradient path in production (2026-11-10,
-  `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md` step 1).** The RKS DH code
+  `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md` step 1).** The RKS DH code
   kept dense reference adapters that only tests reached: n_ao^4 Eq. 46/47
   tensors behind a `DHGammaStorage` switch, dense h/S/ERI derivative arrays,
   a direct Eq. 47 backtransform, a one-argument reference contract and a
@@ -452,14 +465,14 @@ historical design context, but they are no longer the source of truth for
   `types.h` edit.
 
 - **UMP2 no longer copies its amplitudes into the Calculator (2026-11-10,
-  `bea7dd8b`, `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md` step 0).**
+  `bea7dd8b`, `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md` step 0).**
   `apply_ump2_result` copied `t2_aa/ab/bb` into `calculator._mp2_result` on
   every UMP2 run and nothing read them: a full extra amplitude set per run,
   for every UMP2 caller. Deleted with the three `types.h` fields. The 11 UMP2
   and UKS double-hybrid regression cases pass.
 
 - **UKS double hybrids read Eq. 40 MO sectors, not full MO tensors
-  (2026-11-10, `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md` step 3).** The
+  (2026-11-10, `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md` step 3).** The
   UKS gradient transformed three full `n⁴` MO ERI tensors (αα, αβ, ββ).
   `build_dh_eq40_mo_eri_blocks_direct` now takes a separate frame per
   electron and builds, for each spin pair, the same five sectors RKS uses
@@ -469,7 +482,7 @@ historical design context, but they are no longer the source of truth for
   in cc-pVTZ (409 → 48 MiB); the AO tensor is now the largest UKS object.
 
 - **One Z-vector solver for RKS and UKS double hybrids (2026-11-10,
-  `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md` step 2).** The UKS gradient
+  `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md` step 2).** The UKS gradient
   built its joint α/β KS Jacobian column by column (1 + 2n response actions)
   and solved it by pivoted QR. Both spins now call `solve_packed_zvector`, the
   matrix-free GMRES the RKS path already used. On C1 H2O2⁺ that is 46 actions
@@ -481,7 +494,7 @@ historical design context, but they are no longer the source of truth for
   deleted `DHZVectorBackend::DenseReference`.
 
 - **UKS double-hybrid gradient restored on one streamed path (2026-11-09,
-  `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md`).** Every UKS DH gradient had
+  `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md`).** Every UKS DH gradient had
   failed since `d72742df` (2026-10-12), which left the dense UKS consumer reading
   derivative arrays that were no longer filled. No regression case ran the path.
   RKS and UKS now share one spin-general pair stream

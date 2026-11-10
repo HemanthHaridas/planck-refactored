@@ -20,7 +20,7 @@ class U3ContractTests(unittest.TestCase):
         self.assertNotIn("exact_exchange", self.source.split("build_udh_orbital_rhs(", 1)[0])
 
     def test_sectors_not_full_mo_tensors(self):
-        # Step 3 of docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md: UKS reads the
+        # Step 3 of docs/UDH_GRADIENT_ONE_ARCHITECTURE.md: UKS reads the
         # five RKS Eq. 40 sectors per spin pair; no full MO transform remains.
         self.assertIn("struct UDHMOIntegrals { DHMolecularERIBlocks aa,ab,bb; }", self.header)
         self.assertNotIn("UDHFullMOIntegrals", self.header + self.source)

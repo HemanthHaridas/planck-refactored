@@ -5821,7 +5821,7 @@ Eq. 40 sectors, built once for each spin pair (\(\alpha\alpha\),
 \(\alpha\beta\), \(\beta\beta\)). What remains is that the UMP2 amplitudes
 are still resident arrays, and the conventional AO ERI tensor is still
 formed. The narrow scope is about those two and the pinned grid below
-(`docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md`).
+(`docs/UDH_GRADIENT_ONE_ARCHITECTURE.md`).
 
 **Why one grid is pinned.** An analytic gradient includes the motion of the
 quadrature itself (the Becke and owner-point channels of XC-II). It can only

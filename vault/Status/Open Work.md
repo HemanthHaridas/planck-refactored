@@ -139,19 +139,14 @@ further post-HF ghost-atom checks.
 - **Double hybrids** (`docs/DH_IMPLEMENTATION.md` §9):
   - UKS DH geometry optimization and frequencies are rejected. The gradient
     they would call already passes FD.
-  - The UKS DH path still keeps resident UMP2 amplitudes; it shares the RKS
-    pair stream, GMRES Z-vector and Eq. 40 MO sectors since 2026-11-10.
-    It is qualified only on small molecules. Only final acceptance remains in
-    `docs/UDH_GRADIENT_ONE_ARCHITECTURE_SCOPE.md`, and it is blocked by the CN
-    radical fixture: a ~8e-8 Ha/Bohr PT2 residual along the C–N bond that
-    predates this work (all other fixtures pass). The dense RKS adapters are
-    gone (step 1).
+  - The UKS DH gradient is qualified only on small molecules (STO-3G and
+    6-31G fixtures; `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md`).
   - O8 response throughput: paired J/K, blocked XC action, then batched
     Krylov only if a benchmark shows it pays.
   - O9 RI-DH is a separate energy backend. It is the only route to dropping
     the conventional AO ERI tensor. It also takes the UKS amplitude tile source
-    (resident `t2_aa/ab/bb` today; design in the scope doc's "Deferred to
-    RI-DH" section), whose saving only shows once the AO tensor is gone.
+    (resident `t2_aa/ab/bb` today; design in
+    `docs/UDH_GRADIENT_ONE_ARCHITECTURE.md`, "Deferred to RI-DH"), whose saving only shows once the AO tensor is gone.
   - Not covered: range-separated DH gradients, solvent, SCS/DOS spin scaling,
     meta-GGA, frozen-core or RI PT2 in the gradient, DH TDDFT, and spherical
     DH gradients (refused by `water_rks_b2plyp_gradient_spherical_rejected`).
