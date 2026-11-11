@@ -7,9 +7,13 @@ Two independent checks per input in tests/inputs/regression/dft/*d3*.hfinp:
     Bohr and its unpruned 150 x 590 grid; plus the analytic gradient for
     `calculation gradient` inputs.
 Needs pyscf-dispersion (pip) and a shared simple-dftd3 v1.0.0 build
-(cmake -DBUILD_SHARED_LIBS=ON -DWITH_API=ON, gfortran):
+(cmake -DBUILD_SHARED_LIBS=ON -DWITH_API=ON, gfortran). pyscf-dispersion is
+NOT in tests/pyscf/.venv: from PySCF 2.15, `import pyscf` loads it eagerly
+and its 1.0.0 release breaks under NumPy 2, which would break every other
+reference script. Run this one from its own venv with PySCF and
+pyscf-dispersion installed:
   DFTD3_LIBRARY=<prefix>/lib/libs-dftd3.dylib \
-    tests/pyscf/.venv/bin/python tests/pyscf/d3_references.py
+    <d3-venv>/bin/python tests/pyscf/d3_references.py
 """
 import pathlib
 import re

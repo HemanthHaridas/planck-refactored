@@ -197,8 +197,9 @@ further post-HF ghost-atom checks.
 - **PySCF < 2.15 analytic MP2 gradients miss their own energy FD** by up to
   4.2e-7 Ha/Bohr on C1 fixtures. It is fixed in PySCF 2.15.0 by its Krylov /
   CPHF early-termination fix (pyscf/pyscf#3334); 2.14.0 still has it.
-  Planck agrees with the FD. The venv is 2.13.0, so the MP2 gradient
-  references use an energy FD. Revisit when the venv moves to ≥ 2.15.
+  Planck agrees with the FD. `tests/pyscf/.venv` is 2.15.0 since
+  2026-11-11 (CH3 gap 6.5e-9), so PySCF's analytic MP2 gradient is usable
+  again; the committed MP2 gates keep their energy-FD references.
 - **Frozen-core MP2 gradients** (RMP2 and UMP2) are refused by name. The
   builders lack the frozen–active occupied and virtual relaxation blocks and
   see only the active orbitals; the scope doc says why and what to add
