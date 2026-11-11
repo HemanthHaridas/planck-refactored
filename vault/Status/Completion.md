@@ -450,6 +450,28 @@ historical design context, but they are no longer the source of truth for
 
 ### Recent fixes now considered landed
 
+- **Spherical RMP2/UMP2 gradients and geometry optimization (2026-11-11,
+  `docs/SPHERICAL_MP2_GRADIENT_SCOPE.md` steps 1–4).**
+  - **Design.** The MP2 Lagrangian stays in the working basis. Everything
+    the Cartesian derivative kernels contract is lifted once:
+    - the 1e density, the overlap-term matrices and the separable-Γ factors
+      directly;
+    - the pair densities by rebuilding them from Tᵀ C.
+  - **Shared helpers.** One working-basis Fock helper
+    (`SCF::two_electron_fock{,_uhf}`) and one MO lift
+    (`BasisFunctions::mos_to_cartesian`), each replacing copies.
+  - **Gates** (6-31G* spherical): water and C1 H2O2 RMP2, water⁺ and C1
+    CH3 UMP2 gradients against a fourth-order FD of PySCF's MP2 energy
+    (≤ 1e-8, every component). Water RMP2 geomopt E_opt −76.1955706453
+    equals PySCF `geometric` GAU_TIGHT to every printed digit.
+  - **Refusals.** Spherical RI-MP2 gradients stay refused
+    (`water_ri_rmp2_spherical_gradient_rejected`). MP2 frequencies stay
+    refused in every basis (step 5).
+  - **Found.** PySCF < 2.15's analytic `mp2.Gradients` misses its own
+    energy FD by up to 4.2e-7 Ha/Bohr on C1 fixtures, so it was not used as
+    the reference. That is a Krylov/CPHF early-termination bug, fixed in
+    2.15.0 (pyscf/pyscf#3334); 2.14.0 still has it.
+
 - **Frozen-core UMP2 gradients are refused (2026-11-11).** With
   `mp2_frozen`, the UMP2 gradient used to run and print a gradient
   4.5e-2 Ha/Bohr off the energy FD, with no warning (water cation STO-3G,

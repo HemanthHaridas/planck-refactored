@@ -4830,17 +4830,200 @@
    ]
   },
   {
-   "id": "water_rmp2_spherical_gradient_rejected",
-   "input": "tests/inputs/regression/spherical/water_rmp2_spherical_gradient_rejected.hfinp",
+   "id": "water_ri_rmp2_spherical_gradient_rejected",
+   "input": "tests/inputs/regression/spherical/water_ri_rmp2_spherical_gradient_rejected.hfinp",
    "tags": [
     "smoke",
     "core",
     "spherical"
    ],
+   "_note": "Boundary marker: dense spherical MP2 gradients are supported (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md); RI-MP2 gradients stay refused in spherical because the RI 3c/2c derivative tensors are Cartesian-only. Belongs to the RI item in Open Work.",
    "expected_exit_code": 1,
    "contains": [
     "Spherical Basis :",
-    "MP2 analytic gradient is not yet supported"
+    "RI-MP2 analytic gradient is not yet supported"
+   ]
+  },
+  {
+   "id": "water_rmp2_spherical_gradient_631gd",
+   "input": "tests/inputs/regression/spherical/water_rmp2_spherical_gradient_631gd.hfinp",
+   "tags": [
+    "extended",
+    "spherical",
+    "gradient"
+   ],
+   "_note": "Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md). Reference: fourth-order FD (h = 0.005 A) of PySCF 2.13.0's MP2 energy, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py). PySCF's analytic mp2.Gradients misses its own energy FD here by 1.4e-8 Ha/Bohr, so it is not the reference. atol covers the 8-decimal Atom lines plus the FD error.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "mp2_total_energy",
+     "expected": -76.1953214676,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       -0.0140942276
+      ],
+      [
+       0.0,
+       -0.0091562463,
+       0.0070471135
+      ],
+      [
+       0.0,
+       0.0091562462,
+       0.0070471135
+      ]
+     ],
+     "atol": 3e-08
+    }
+   ]
+  },
+  {
+   "id": "h2o2_rmp2_spherical_gradient_631gd",
+   "input": "tests/inputs/regression/spherical/h2o2_rmp2_spherical_gradient_631gd.hfinp",
+   "tags": [
+    "extended",
+    "spherical",
+    "gradient"
+   ],
+   "_note": "Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md). Reference: fourth-order FD (h = 0.005 A) of PySCF 2.13.0's MP2 energy, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py). PySCF's analytic mp2.Gradients misses its own energy FD here by 1.1e-7 Ha/Bohr, so it is not the reference. atol covers the 8-decimal Atom lines plus the FD error.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "mp2_total_energy",
+     "expected": -151.1215293078,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       -0.0271111608,
+       -0.0304275753,
+       -0.0212403143
+      ],
+      [
+       0.0208861491,
+       0.0463196231,
+       -0.0224604543
+      ],
+      [
+       0.0293527053,
+       0.0021735566,
+       0.0165583316
+      ],
+      [
+       -0.0231276934,
+       -0.0180656046,
+       0.0271424367
+      ]
+     ],
+     "atol": 3e-08
+    }
+   ]
+  },
+  {
+   "id": "water_cation_ump2_spherical_gradient_631gd",
+   "input": "tests/inputs/regression/spherical/water_cation_ump2_spherical_gradient_631gd.hfinp",
+   "tags": [
+    "extended",
+    "spherical",
+    "gradient"
+   ],
+   "_note": "Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md). Reference: fourth-order FD (h = 0.005 A) of PySCF 2.13.0's MP2 energy, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py). PySCF's analytic mp2.Gradients misses its own energy FD here by 1.7e-7 Ha/Bohr, so it is not the reference. atol covers the 8-decimal Atom lines plus the FD error.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "mp2_total_energy",
+     "expected": -75.7472669950,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0,
+       0.0,
+       -0.0474273543
+      ],
+      [
+       0.0,
+       -0.0477917627,
+       0.0237136768
+      ],
+      [
+       0.0,
+       0.0477917627,
+       0.0237136768
+      ]
+     ],
+     "atol": 3e-08
+    }
+   ]
+  },
+  {
+   "id": "ch3_radical_ump2_spherical_gradient_631gd",
+   "input": "tests/inputs/regression/spherical/ch3_radical_ump2_spherical_gradient_631gd.hfinp",
+   "tags": [
+    "extended",
+    "spherical",
+    "gradient"
+   ],
+   "_note": "Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md). Reference: fourth-order FD (h = 0.005 A) of PySCF 2.13.0's MP2 energy, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py). PySCF's analytic mp2.Gradients misses its own energy FD here by 4.2e-7 Ha/Bohr, so it is not the reference. atol covers the 8-decimal Atom lines plus the FD error.",
+   "expected_exit_code": 0,
+   "contains": [
+    "Nuclear Gradient (Ha/Bohr) :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "mp2_total_energy",
+     "expected": -39.6577191473,
+     "atol": 1e-09
+    },
+    {
+     "type": "gradient_close",
+     "expected": [
+      [
+       0.0277778758,
+       -0.0255476034,
+       -0.0392421526
+      ],
+      [
+       -0.0254002936,
+       0.0136413853,
+       0.0078848025
+      ],
+      [
+       0.0060737413,
+       0.0005245889,
+       0.0161230292
+      ],
+      [
+       -0.0084513234,
+       0.0113816294,
+       0.015234321
+      ]
+     ],
+     "atol": 3e-08
+    }
    ]
   },
   {
@@ -4988,17 +5171,30 @@
    ]
   },
   {
-   "id": "water_rmp2_spherical_geomopt_rejected",
-   "input": "tests/inputs/regression/spherical/water_rmp2_spherical_geomopt_rejected.hfinp",
+   "id": "water_rmp2_spherical_geomopt_631gd",
+   "input": "tests/inputs/regression/spherical/water_rmp2_spherical_geomopt_631gd.hfinp",
    "tags": [
-    "smoke",
-    "core",
-    "spherical"
+    "extended",
+    "spherical",
+    "geomopt"
    ],
-   "expected_exit_code": 1,
+   "_note": "Spherical RMP2 geometry optimization gate (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md step 4), replacing the boundary marker water_rmp2_spherical_geomopt_rejected. Reference: PySCF 2.13.0 geometric GAU_TIGHT minimum, cart=False, Planck's GBS and Bohr (tests/pyscf/spherical_mp2_gradient_references.py): E_opt -76.1955706453, matched to every printed digit. geomopt_grad_tol 1.5e-5 is PySCF's GAU_TIGHT max force.",
+   "expected_exit_code": 0,
    "contains": [
-    "Spherical Basis :",
-    "MP2 analytic gradient is not yet supported"
+    "Geometry Optimization :"
+   ],
+   "checks": [
+    {
+     "type": "metric_close",
+     "metric": "geomopt_final_energy",
+     "expected": -76.1955706453,
+     "atol": 1e-09
+    },
+    {
+     "type": "metric_le",
+     "metric": "geomopt_final_gradient_max",
+     "value": 1.5e-05
+    }
    ]
   },
   {

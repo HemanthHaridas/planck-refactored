@@ -43,9 +43,9 @@ teaching code) reorders it.
 3. **Meta-GGA**, at least SCF energies with a by-name refusal everywhere else,
    then gradients (§2, DFT). r2SCAN, ωB97M-V, M06-2X and TPSSh are rejected
    today. Scope: `docs/META_GGA_SCOPE.md`.
-4. **Spherical MP2/UMP2 gradients** (§2, HF and post-HF). Every standard
-   basis is spherical; MP2 geometry optimization works only in Cartesian. Scope: `docs/SPHERICAL_MP2_GRADIENT_SCOPE.md`
-   (audited 2026-11-11).
+4. **MP2 frequencies** (§2, HF and post-HF). Spherical MP2/UMP2 gradients and
+   geomopt are done (2026-11-11). What is left of this item is MP2
+   frequencies, in either basis (step 5 of `docs/SPHERICAL_MP2_GRADIENT_SCOPE.md`).
 5. **Default DFT grid qualified for gradients** (§2, DFT). `legacy` fails the
    rotational-covariance check, so default-settings geometries and
    frequencies carry grid noise. A decision and a migration, not new code. Scope: `docs/DFT_DEFAULT_GRID_SCOPE.md`.
@@ -188,26 +188,17 @@ further post-HF ghost-atom checks.
   Roothaan Fock, which does not exist in the tree. ROHF CASSCF and RASSCF
   support only a closed inactive core, and the parity guard rejects a
   spin-polarized one. ROHF is also outside full-symmetry direct SCF.
-- **Spherical MP2/UMP2 gradients** (and geomopt; MP2 frequencies are refused
-  in every basis). Audited 2026-11-11 (`docs/SPHERICAL_MP2_GRADIENT_SCOPE.md`).
-  Step 1, the Cartesian-bitwise refactor, landed 2026-11-11:
-  - **Shared helpers.** One working-basis Fock helper,
-    `SCF::two_electron_fock{,_uhf}`, and one coefficient lift,
-    `BasisFunctions::mos_to_cartesian`.
-  - **`mp2_gradient.cpp`.** It sizes with the working basis and lifts every
-    kernel input once. The pair densities are rebuilt from Tᵀ C in spherical
-    mode.
-
-  Left:
-  - steps 2–3, the RMP2 and UMP2 spherical gates against PySCF `cart=False`;
-  - step 4, converting `water_rmp2_spherical_{gradient,geomopt}_rejected`,
-    which are still refused;
-  - step 5, MP2 frequencies in either basis. The Hessian loop picks the
-    gradient by SCF type only and never calls the MP2 gradient, so they are
-    refused. The fix is to share geomopt's per-geometry SCF → MP2 → gradient
-    routine with the Hessian loop.
-
-  Spherical RI-MP2 gradients belong to the RI item (priority 9).
+- **MP2 frequencies** (either basis; step 5 of
+  `docs/SPHERICAL_MP2_GRADIENT_SCOPE.md`). The Hessian loop picks the
+  gradient by SCF type only and never calls the MP2 gradient, so they are
+  refused. The fix is to share geomopt's per-geometry SCF → MP2 → gradient
+  routine with the Hessian loop. Spherical MP2 gradients and geomopt are
+  done; spherical RI-MP2 gradients belong to the RI item (priority 9).
+- **PySCF < 2.15 analytic MP2 gradients miss their own energy FD** by up to
+  4.2e-7 Ha/Bohr on C1 fixtures. It is fixed in PySCF 2.15.0 by its Krylov /
+  CPHF early-termination fix (pyscf/pyscf#3334); 2.14.0 still has it.
+  Planck agrees with the FD. The venv is 2.13.0, so the MP2 gradient
+  references use an energy FD. Revisit when the venv moves to ≥ 2.15.
 - **Frozen-core MP2 gradients** (RMP2 and UMP2) are refused by name. The
   builders lack the frozen–active occupied and virtual relaxation blocks and
   see only the active orbitals; the scope doc says why and what to add

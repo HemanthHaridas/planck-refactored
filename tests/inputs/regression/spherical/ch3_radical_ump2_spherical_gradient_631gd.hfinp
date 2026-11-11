@@ -1,0 +1,31 @@
+# Spherical MP2 gradient gate (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md steps 2-3).
+# Reference: tests/pyscf/spherical_mp2_gradient_references.py.
+%begin_control
+    basis       6-31g*
+    calculation gradient
+    basis_type  spherical
+%end_control
+
+%begin_scf
+    scf_type    uhf
+    correlation ump2
+    guess       sad
+    max_cycles  100
+    tol_energy  1.0e-12
+    tol_density 1.0e-11
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+%end_geom
+
+%begin_coords
+4
+0   2
+C     0.031000    -0.017000     0.022000
+H     1.079000     0.043000    -0.061000
+H    -0.361000     0.998000     0.104000
+H    -0.402000    -0.552000     0.881000
+%end_coords

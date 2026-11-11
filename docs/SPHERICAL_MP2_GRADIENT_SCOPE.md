@@ -1,7 +1,8 @@
 # What does the RMP2/UMP2 gradient need to run in a spherical basis?
 
-Scope, opened 2026-11-10; audited 2026-11-11 (below). Nothing here is
-built. It expires when the work lands; rewrite it then as the answer.
+Scope, opened 2026-11-10; audited 2026-11-11 (below). Steps 1–4 landed
+2026-11-11: spherical RMP2/UMP2 gradients and geomopt work and are gated.
+Step 5 (MP2 frequencies) remains. Rewrite this as the answer when it lands.
 Status lives in `vault/Status/Open Work.md` (priority 4).
 
 ## Why it matters
@@ -255,17 +256,58 @@ FD. This is what "Not in this scope" below refers to.
    - `water_radical_cation_ump2_gradient_smoke`
    - `water_rmp2_gradient_engine_os_vs_hgp`
    - the RKS double-hybrid gradient cases, which share the Lagrangian.
-2. **RMP2 spherical gate.** Lift the gate for RMP2 only, and keep it for
-   `mp2_use_ri`. Gate against PySCF `cart=False` analytic `mp2.Gradients`
-   on water/6-31G* and C1 H2O2/6-31G*, plus a fourth-order energy FD on one
-   of them. Set PySCF's `conv_tol_grad` (memory
-   `pyscf_conv_tol_grad`).
-3. **UMP2 spherical gate.** Same for UMP2: water⁺ doublet and one C1
-   radical.
-4. **Convert the rejection cases.** Turn the two cases into positive cases:
-   - `water_rmp2_spherical_gradient_rejected` becomes a gradient case;
-   - `water_rmp2_spherical_geomopt_rejected` becomes a geomopt case (PySCF
-     `geometric_solver` E_opt, `geomopt_grad_tol` as in the PCM gates).
+2–4. **Spherical RMP2/UMP2 gradients and geomopt — done 2026-11-11.**
+   - **Gate.** The spherical gate in `hf_driver.cpp` now admits dense RMP2
+     and UMP2 gradients and geomopt. `mp2_use_ri` stays refused by name,
+     gated by `water_ri_rmp2_spherical_gradient_rejected`.
+   - **Gradient gates** (6-31G* spherical, every component, `atol` 3e-8,
+     MP2 energy to 1e-9):
+     - `water_rmp2_spherical_gradient_631gd` (replaces the old rejection
+       case);
+     - `h2o2_rmp2_spherical_gradient_631gd` (C1);
+     - `water_cation_ump2_spherical_gradient_631gd`;
+     - `ch3_radical_ump2_spherical_gradient_631gd` (C1, all 12 components
+       nonzero).
+
+     Each reference is a fourth-order FD (h = 0.005 Å) of PySCF's MP2
+     energy. Planck matches every component to about 1e-8, the print
+     precision of the `Atom` lines; the MP2 energies match to every printed
+     digit.
+   - **Geomopt gate.** `water_rmp2_spherical_geomopt_631gd` (replaces the
+     old rejection case) reaches E_opt −76.1955706453 Eh. That equals PySCF's
+     `geometric` GAU_TIGHT minimum to every printed digit, with
+     `geomopt_grad_tol` 1.5e-5.
+   - **Fixture swap.** The C1 open-shell fixture was meant to be the H2O2
+     cation. Its UHF does not converge from SAD in 6-31G*, even with SOSCF.
+     The CH3 radical (the ROHF gradient fixture's C1 geometry) replaces it;
+     its UHF is stable in both channels.
+
+   **Why the reference is PySCF's energy FD, not its analytic gradient.**
+   PySCF 2.13's analytic `mp2.Gradients` misses the FD of PySCF's own MP2
+   energy:
+
+   | Case | Gap |
+   |---|---|
+   | CH3 radical UMP2 | 4.2e-7 |
+   | H2O2 RMP2 | 1.1e-7 |
+   | water cation UMP2 | 1.7e-7 |
+   | water RMP2 | 1.4e-8 |
+
+   - **Not spherical-specific.** The gap is the same in the Cartesian basis
+     (CH3 C x: analytic 0.0277106087 against FD 0.027710197).
+   - **Not its Z-vector solve.** Tightening its CPHF to 1e-13 / 300
+     iterations does not move it.
+   - **Planck agrees with the FD.** Planck's analytic gradient matches that
+     FD and Planck's own energy FD to ~1e-8, in both bases.
+
+   **Fixed in PySCF 2.15.0** (CH3 C x: gap 6.5e-9; 2.14.0 still 4.1e-7).
+   Neither MP2 gradient file changed between those releases. The fix is in
+   the shared Krylov solver behind its CPHF/Z-vector solve: pyscf/pyscf#3334
+   (merged 2026-08-03, after 2.14.0), where a fixed 1e-14 linear-dependence
+   threshold had stopped the solve early while it reported convergence. That
+   is why tightening `tol` did nothing. #3549 is a follow-up in the same
+   solver. On PySCF < 2.15, use an energy FD as the MP2 gradient reference;
+   from 2.15 the analytic gradient is usable.
 
    Frequency stays refused for MP2 until step 5.
 5. **MP2 frequencies (Cartesian and spherical).** Two loops each compute

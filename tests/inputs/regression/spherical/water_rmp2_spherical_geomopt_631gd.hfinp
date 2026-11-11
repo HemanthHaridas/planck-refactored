@@ -1,0 +1,30 @@
+# Spherical RMP2 geometry optimization gate (docs/SPHERICAL_MP2_GRADIENT_SCOPE.md step 4).
+# Reference: tests/pyscf/spherical_mp2_gradient_references.py (geometric gau_tight).
+%begin_control
+    basis       6-31g*
+    calculation geomopt
+    basis_type  spherical
+%end_control
+
+%begin_scf
+    scf_type    rhf
+    correlation rmp2
+    guess       hcore
+    tol_energy  1.0e-12
+    tol_density 1.0e-11
+%end_scf
+
+%begin_geom
+    coord_type  cartesian
+    coord_units angstrom
+    use_symm    .false.
+    geomopt_grad_tol 1.5e-5   # PySCF gau_tight max force
+%end_geom
+
+%begin_coords
+3
+0   1
+O     0.000000     0.000000     0.117176
+H     0.000000     0.757200    -0.468704
+H     0.000000    -0.757200    -0.468704
+%end_coords

@@ -491,7 +491,7 @@ std::expected<int, std::string> HartreeFock::Driver::run(
                        "(basis_type spherical); currently single-point RHF/UHF/ROHF "
                        "energies (Conventional or Direct), with MP2, CASSCF/RASSCF, "
                        "FCI, or coupled cluster (RCCSD/UCCSD/RCCSDT/UCCSDT/RCCSDTQ), "
-                       "RHF/UHF/ROHF analytic gradients, geometry optimization, "
+                       "RHF/UHF/ROHF and dense RMP2/UMP2 analytic gradients, geometry optimization, "
                        "frequencies, geomopt+freq, and imaginary-mode following, "
                        "and point-group symmetry / SAO blocking are available. Use "
                        "basis_type cartesian for this calculation.");
@@ -532,9 +532,14 @@ std::expected<int, std::string> HartreeFock::Driver::run(
         {
             // ROHF spherical gradients: enabled (compute_rohf_gradient builds W
             // in the spherical basis then lifts once — see gradient.cpp).
-            if (calculator._correlation == HartreeFock::PostHF::RMP2 ||
-                calculator._correlation == HartreeFock::PostHF::UMP2)
-                return reject("MP2 analytic gradient");
+            // Dense RMP2/UMP2 gradients: enabled (mp2_gradient.cpp keeps the
+            // Lagrangian in the working basis and lifts the derivative-kernel
+            // inputs once; docs/SPHERICAL_MP2_GRADIENT_SCOPE.md). The RI 3c/2c
+            // derivative tensors are Cartesian-only, so RI-MP2 stays refused.
+            if ((calculator._correlation == HartreeFock::PostHF::RMP2 ||
+                 calculator._correlation == HartreeFock::PostHF::UMP2) &&
+                calculator._mp2.use_ri)
+                return reject("RI-MP2 analytic gradient");
         }
         // Post-HF energy paths consume only the SCF's spherical AO ERI and spherical
         // MO coefficients: the AO→MO transform is self-consistent in the spherical
